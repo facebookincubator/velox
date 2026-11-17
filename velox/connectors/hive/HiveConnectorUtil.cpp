@@ -625,7 +625,6 @@ void configureReaderOptions(
 
 void configureRowReaderOptions(
     const std::unordered_map<std::string, std::string>& tableParameters,
-    const std::shared_ptr<common::ScanSpec>& scanSpec,
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     const RowTypePtr& rowType,
     const std::shared_ptr<const FileConnectorSplit>& fileSplit,
@@ -635,10 +634,9 @@ void configureRowReaderOptions(
     folly::Executor* const ioExecutor,
     dwio::common::RowReaderOptions& rowReaderOptions) {
   // Call the generic version which handles everything except serde.
-  // Use fully qualified call to the generic overload (9 params, no serde).
+  // Use fully qualified call to the generic overload (8 params, no serde).
   hive::configureRowReaderOptions(
       tableParameters,
-      scanSpec,
       std::move(metadataFilter),
       rowType,
       fileSplit,

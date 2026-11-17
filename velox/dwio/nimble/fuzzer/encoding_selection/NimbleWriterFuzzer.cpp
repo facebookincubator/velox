@@ -1985,19 +1985,17 @@ void NimbleWriterFuzzer::readAndVerify(
     auto scanSpec = std::make_shared<velox::common::ScanSpec>("root");
     scanSpec->addAllChildFields(*schema);
 
-    velox::dwio::common::ReaderOptions readerOptions(leafPool_.get());
+    velox::dwio::common::ReaderOptions readerOptions(leafPool_.get(), scanSpec);
     readerOptions.setDataIoStats(std::make_shared<velox::io::IoStatistics>());
     readerOptions.setMetadataIoStats(
         std::make_shared<velox::io::IoStatistics>());
-    readerOptions.setScanSpec(scanSpec);
     auto reader = factory->createReader(
         std::make_unique<velox::dwio::common::BufferedInput>(
             readFile, *leafPool_),
         readerOptions);
     checkSchema(*reader->rowType());
 
-    velox::dwio::common::RowReaderOptions rowOptions;
-    rowOptions.setScanSpec(scanSpec);
+    velox::dwio::common::RowReaderOptions rowOptions(readerOptions);
     rowOptions.setRequestedType(schema);
     rowOptions.setStringDecoderZeroCopy(
         readerPath == ReaderPath::kSelectiveDefaultDispatch);

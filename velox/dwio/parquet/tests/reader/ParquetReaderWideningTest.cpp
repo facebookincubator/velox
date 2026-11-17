@@ -30,8 +30,10 @@ class ParquetReaderWideningTest : public ParquetTestBase {
   /// Builds widening/narrowing ReaderOptions from the default options.
   dwio::common::ReaderOptions makeWideningReaderOptions(
       const RowTypePtr& readSchema,
-      bool allowInt32Narrowing = false) const {
-    auto opts = makeDefaultReaderOptions();
+      bool allowInt32Narrowing = false,
+      std::shared_ptr<common::ScanSpec> scanSpec = nullptr) const {
+    auto opts = makeDefaultReaderOptions(
+        scanSpec ? std::move(scanSpec) : makeScanSpec(readSchema));
     opts.setFileSchema(readSchema);
     auto parquetOptions = std::make_shared<ParquetReaderOptions>();
     parquetOptions->setAllowInt32Narrowing(allowInt32Narrowing);
@@ -76,13 +78,13 @@ class ParquetReaderWideningTest : public ParquetTestBase {
       const RowVectorPtr& expected,
       bool allowInt32Narrowing = false) {
     auto* sink = write(writeData);
-    auto reader = createReaderInMemory(
-        *sink, makeWideningReaderOptions(readSchema, allowInt32Narrowing));
-    auto rowReaderOpts = makeRowReaderOpts(readSchema);
     auto scanSpec = makeScanSpec(readSchema);
     auto* child = scanSpec->getOrCreateChild(common::Subfield("col"));
     child->setFilter(std::move(filter));
-    rowReaderOpts.setScanSpec(scanSpec);
+    auto readerOptions =
+        makeWideningReaderOptions(readSchema, allowInt32Narrowing, scanSpec);
+    auto reader = createReaderInMemory(*sink, readerOptions);
+    auto rowReaderOpts = makeRowReaderOpts(readSchema, readerOptions);
     auto rowReader = reader->createRowReader(rowReaderOpts);
     assertReadWithReaderAndExpected(
         readSchema, *rowReader, expected, *leafPool_);
@@ -230,20 +232,13 @@ void FloatToDoubleEvolutionTest::runFloatToDoubleScenario(
 
   RowTypePtr readSchema = ROW({"float_col", "id"}, {DOUBLE(), BIGINT()});
 
-  auto readerOptions = makeWideningReaderOptions(readSchema);
+  auto scanSpec = makeScanSpec(readSchema);
+  auto readerOptions = makeWideningReaderOptions(readSchema, false, scanSpec);
 
   std::string dataBuf(sinkPtr->data(), sinkPtr->size());
   auto file = std::make_shared<InMemoryReadFile>(std::move(dataBuf));
   auto buffer = std::make_unique<dwio::common::BufferedInput>(
       file, readerOptions.memoryPool());
-  auto reader =
-      std::make_unique<ParquetReader>(std::move(buffer), readerOptions);
-
-  RowReaderOptions rowReaderOpts;
-  rowReaderOpts.select(
-      std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
-          readSchema, readSchema->names()));
-  auto scanSpec = makeScanSpec(readSchema);
 
   // Apply IsNull or IsNotNull filter if specified
   switch (spec.filter) {
@@ -283,7 +278,12 @@ void FloatToDoubleEvolutionTest::runFloatToDoubleScenario(
     }
   }
 
-  rowReaderOpts.setScanSpec(scanSpec);
+  RowReaderOptions rowReaderOpts(readerOptions);
+  rowReaderOpts.select(
+      std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
+          readSchema, readSchema->names()));
+  auto reader =
+      std::make_unique<ParquetReader>(std::move(buffer), readerOptions);
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   std::vector<bool> deletedFlags(numRows, false);
@@ -1062,7 +1062,7 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
   auto* sink = write(data);
 
   // Default: flag is false.
-  auto readerOptions = makeDefaultReaderOptions();
+  auto readerOptions = makeDefaultReaderOptions(makeScanSpec(data->rowType()));
   auto parquetOptions = std::make_shared<ParquetReaderOptions>();
   ASSERT_FALSE(parquetOptions->allowInt32Narrowing());
   readerOptions.setFormatSpecificOptions(parquetOptions);

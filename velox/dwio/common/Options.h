@@ -258,6 +258,8 @@ class FormatSpecificOptions {
   }
 };
 
+class ReaderOptions;
+
 /// Options for creating a RowReader.
 class RowReaderOptions {
  public:
@@ -266,6 +268,9 @@ class RowReaderOptions {
         dataLength_(std::numeric_limits<uint64_t>::max()),
         preloadStripe_(false),
         projectSelectedType_(false) {}
+
+  /// Shares the ScanSpec used by the owning Reader.
+  explicit RowReaderOptions(const ReaderOptions& readerOptions);
 
   /// For files that have structs as the top-level object, select the fields
   /// to read. The first field is 0, the second 1, and so on. By default,
@@ -380,12 +385,9 @@ class RowReaderOptions {
     requestedType_ = std::move(requestedType);
   }
 
+  /// The ScanSpec inherited from ReaderOptions.
   const std::shared_ptr<velox::common::ScanSpec>& scanSpec() const {
     return scanSpec_;
-  }
-
-  void setScanSpec(std::shared_ptr<velox::common::ScanSpec> scanSpec) {
-    scanSpec_ = std::move(scanSpec);
   }
 
   folly::Executor* ioExecutor() const {
@@ -719,8 +721,12 @@ class ReaderOptions : public io::ReaderOptions {
   static constexpr uint64_t kDefaultFilePreloadThreshold =
       1024 * 1024 * 8; // 8MB
 
-  explicit ReaderOptions(velox::memory::MemoryPool* pool)
-      : io::ReaderOptions(pool) {}
+  /// The ScanSpec is shared by the reader and all its row and index readers.
+  /// A null ScanSpec selects the non-selective reader path where supported.
+  explicit ReaderOptions(
+      velox::memory::MemoryPool* pool,
+      std::shared_ptr<velox::common::ScanSpec> scanSpec = nullptr)
+      : io::ReaderOptions(pool), scanSpec_(std::move(scanSpec)) {}
 
   /// Sets the format of the file, such as "rc" or "dwrf". The default is
   /// "dwrf".
@@ -904,10 +910,6 @@ class ReaderOptions : public io::ReaderOptions {
 
   const std::shared_ptr<velox::common::ScanSpec>& scanSpec() const {
     return scanSpec_;
-  }
-
-  void setScanSpec(std::shared_ptr<velox::common::ScanSpec> scanSpec) {
-    scanSpec_ = std::move(scanSpec);
   }
 
   bool selectiveNimbleReaderEnabled() const {

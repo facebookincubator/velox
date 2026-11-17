@@ -680,7 +680,6 @@ TEST_F(HiveConnectorUtilTest, configureSstRowReaderOptions) {
   };
   configureRowReaderOptions(
       /*tableParameters=*/{},
-      /*scanSpec=*/nullptr,
       /*metadataFilter=*/nullptr,
       /*rowType=*/nullptr,
       /*fileSplit=*/hiveSplit,
@@ -707,7 +706,6 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
 
     configureRowReaderOptions(
         /*tableParameters=*/{},
-        /*scanSpec=*/nullptr,
         /*metadataFilter=*/nullptr,
         /*rowType=*/nullptr,
         /*fileSplit=*/hiveSplit,
@@ -734,7 +732,6 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
 
     configureRowReaderOptions(
         /*tableParameters=*/{},
-        /*scanSpec=*/nullptr,
         /*metadataFilter=*/nullptr,
         /*rowType=*/nullptr,
         /*fileSplit=*/hiveSplit,
@@ -762,7 +759,6 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
 
     configureRowReaderOptions(
         /*tableParameters=*/{},
-        /*scanSpec=*/nullptr,
         /*metadataFilter=*/nullptr,
         /*rowType=*/nullptr,
         /*fileSplit=*/hiveSplit,
@@ -791,7 +787,6 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
 
     configureRowReaderOptions(
         /*tableParameters=*/{},
-        /*scanSpec=*/nullptr,
         /*metadataFilter=*/nullptr,
         /*rowType=*/nullptr,
         /*fileSplit=*/hiveSplit,

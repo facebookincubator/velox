@@ -245,7 +245,8 @@ void FileIndexReader::parseIndexLookupConditions() {
 std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
   VELOX_CHECK_NOT_NULL(hiveSplit_);
 
-  dwio::common::ReaderOptions readerOpts(connectorQueryCtx_->memoryPool());
+  dwio::common::ReaderOptions readerOpts(
+      connectorQueryCtx_->memoryPool(), scanSpec_);
   // TODO: Use separate IoStatistics for data and metadata.
   readerOpts.setDataIoStats(ioStatistics_);
   readerOpts.setMetadataIoStats(ioStatistics_);
@@ -258,7 +259,6 @@ std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
       hiveSplit_->serdeParameters,
       readerOpts);
   readerOpts.setLoadClusterIndex(true);
-  readerOpts.setScanSpec(scanSpec_);
   readerOpts.setFileFormat(hiveSplit_->fileFormat);
   VELOX_CHECK_NULL(readerOpts.randomSkip());
 
@@ -295,10 +295,10 @@ FileIndexReader::createIndexReader() {
           hiveSplit_->fileFormat == dwio::common::FileFormat::SST,
       "FileIndexReader only supports Nimble, Flux and SST file formats");
 
-  dwio::common::RowReaderOptions rowReaderOpts;
+  dwio::common::ReaderOptions readerOpts(pool_, scanSpec_);
+  dwio::common::RowReaderOptions rowReaderOpts(readerOpts);
   configureRowReaderOptions(
       tableHandle_->tableParameters(),
-      scanSpec_,
       /*metadataFilter=*/nullptr,
       outputType_,
       hiveSplit_,

@@ -119,9 +119,10 @@ class ParquetWriterTest : public ParquetTestBase {
       const ParquetWriterOptions& writerOptions = {}) {
     auto schema = asRowType(data->type());
     auto* sinkPtr = write(data, writerOptions);
-    auto reader = createReaderInMemory(*sinkPtr);
+    auto readerOptions = makeDefaultReaderOptions(makeScanSpec(schema));
+    auto reader = createReaderInMemory(*sinkPtr, readerOptions);
     ASSERT_EQ(reader->numberOfRows(), data->size());
-    auto rowReader = createRowReaderFromReader(*reader, schema);
+    auto rowReader = createRowReaderFromReader(*reader, schema, readerOptions);
     assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
   }
 
@@ -537,7 +538,8 @@ TEST_F(ParquetWriterTest, compression) {
 
   auto* sinkPtr = write(data, options, writerOptions);
 
-  auto reader = createReaderInMemory(*sinkPtr);
+  auto readerOptions = makeDefaultReaderOptions(makeScanSpec(schema));
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
   ASSERT_EQ(reader->numberOfRows(), kRows);
   ASSERT_EQ(*reader->rowType(), *schema);
@@ -549,7 +551,7 @@ TEST_F(ParquetWriterTest, compression) {
                             : CompressionKind::CompressionKind_SNAPPY);
   }
 
-  auto rowReader = createRowReaderFromReader(*reader, schema);
+  auto rowReader = createRowReaderFromReader(*reader, schema, readerOptions);
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
 }
 
@@ -608,10 +610,11 @@ TEST_F(ParquetWriterTest, compressionRoundTripAcrossPages) {
 
     auto* sinkPtr = write(data, options, writerOptions);
 
-    auto reader = createReaderInMemory(*sinkPtr);
+    auto readerOptions = makeDefaultReaderOptions(makeScanSpec(schema));
+    auto reader = createReaderInMemory(*sinkPtr, readerOptions);
     ASSERT_EQ(reader->numberOfRows(), kRows);
 
-    auto rowReader = createRowReaderFromReader(*reader, schema);
+    auto rowReader = createRowReaderFromReader(*reader, schema, readerOptions);
     assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
   }
 }
@@ -934,12 +937,13 @@ TEST_F(ParquetWriterTest, preEpochInt96Timestamp) {
 
   auto* sinkPtr = write(data, writerOptions);
 
-  auto reader = createReaderInMemory(*sinkPtr);
+  auto readerOptions = makeDefaultReaderOptions(makeScanSpec(schema));
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
   ASSERT_EQ(reader->numberOfRows(), data->size());
   ASSERT_EQ(*reader->rowType(), *schema);
 
-  auto rowReader = createRowReaderFromReader(*reader, schema);
+  auto rowReader = createRowReaderFromReader(*reader, schema, readerOptions);
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
 
   // Read the Int96 values directly to verify the correctness of the conversion
@@ -1179,12 +1183,13 @@ TEST_F(ParquetWriterTest, configurableWriteSchema) {
 
     ParquetWriterOptions writerOptions;
     const auto* sinkPtr = write(data, writerOptions, newType);
-    auto reader = createReaderInMemory(*sinkPtr);
+    auto readerOptions = makeDefaultReaderOptions(makeScanSpec(newType));
+    auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
     ASSERT_EQ(reader->numberOfRows(), kNumRows);
     EXPECT_EQ(reader->rowType()->toString(), newType->toString());
 
-    auto rowReader = createRowReaderFromReader(*reader, newType);
+    auto rowReader = createRowReaderFromReader(*reader, newType, readerOptions);
     assertReadWithReaderAndExpected(newType, *rowReader, expected, *leafPool_);
   };
 
@@ -1220,13 +1225,14 @@ TEST_F(ParquetWriterTest, updateWriterOptionsFromHiveConfig) {
 
   const auto* sinkPtr = write(data, std::move(configFromFile), {});
 
-  auto reader = createReaderInMemory(*sinkPtr);
+  auto readerOptions = makeDefaultReaderOptions(makeScanSpec(data->rowType()));
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
   ASSERT_EQ(reader->numberOfRows(), data->size());
   ASSERT_EQ(*reader->rowType(), *data->rowType());
 
-  auto rowReaderOpts = makeRowReaderOpts(data->rowType());
-  rowReaderOpts.setScanSpec(makeScanSpec(data->rowType()));
+  auto rowReaderOpts = makeRowReaderOpts(data->rowType(), readerOptions);
+
   rowReaderOpts.setTimestampPrecision(TimestampPrecision::kNanoseconds);
   auto rowReader = reader->createRowReader(rowReaderOpts);
   assertReadWithReaderAndExpected(
@@ -1284,14 +1290,16 @@ TEST_F(ParquetWriterTest, enableStoreDecimalAsInteger) {
         auto* sinkPtr = write(
             data, std::move(configFromFile), std::move(sessionProperties));
 
-        auto reader = createReaderInMemory(*sinkPtr);
+        auto readerOptions = makeDefaultReaderOptions(makeScanSpec(rowType));
+        auto reader = createReaderInMemory(*sinkPtr, readerOptions);
         auto& parquetReader = dynamic_cast<ParquetReader&>(*reader);
 
         const auto& types = parquetReader.typeWithId()->getChildren();
         ASSERT_EQ(types.size(), 3);
         verifyPhysicalTypes(types);
 
-        auto rowReader = createRowReaderFromReader(*reader, rowType);
+        auto rowReader =
+            createRowReaderFromReader(*reader, rowType, readerOptions);
         assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
       };
 
@@ -1585,7 +1593,8 @@ TEST_F(ParquetWriterTest, dictionaryPassthroughMultipleBatches) {
   options.schema = schema;
   auto* sinkPtr = write(batches, options, writerOptions);
 
-  auto reader = createReaderInMemory(*sinkPtr);
+  auto readerOptions = makeDefaultReaderOptions(makeScanSpec(schema));
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
   ASSERT_EQ(
       reader->numberOfRows(),
       static_cast<uint64_t>(kBatchSize) * batches.size());
@@ -1602,7 +1611,7 @@ TEST_F(ParquetWriterTest, dictionaryPassthroughMultipleBatches) {
   auto expected = makeRowVector({makeFlatVector<StringView>(
       totalSize, [&](auto row) { return StringView(expectedStrings[row]); })});
 
-  auto rowReader = createRowReaderFromReader(*reader, schema);
+  auto rowReader = createRowReaderFromReader(*reader, schema, readerOptions);
   assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
 }
 
@@ -1644,7 +1653,8 @@ TEST_F(ParquetWriterTest, multiBatchDictionaryThenFlat) {
   auto* sinkPtr =
       write({dictBatch, flatBatch}, options, ParquetWriterOptions{});
 
-  auto reader = createReaderInMemory(*sinkPtr);
+  auto readerOptions = makeDefaultReaderOptions(makeScanSpec(schema));
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
   ASSERT_EQ(reader->numberOfRows(), static_cast<uint64_t>(kBatchSize) * 2);
 
   const auto total = kBatchSize * 2;
@@ -1653,7 +1663,7 @@ TEST_F(ParquetWriterTest, multiBatchDictionaryThenFlat) {
         return row < kBatchSize ? StringView(dictStrings[row % kDictSize])
                                 : StringView(flatStrings[row - kBatchSize]);
       })});
-  auto rowReader = createRowReaderFromReader(*reader, schema);
+  auto rowReader = createRowReaderFromReader(*reader, schema, readerOptions);
   assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
 }
 
@@ -1700,7 +1710,8 @@ TEST_F(ParquetWriterTest, multiBatchDictionaryThenForcedFlattenDictionary) {
   auto* sinkPtr =
       write({dictBatch, nestedBatch}, options, ParquetWriterOptions{});
 
-  auto reader = createReaderInMemory(*sinkPtr);
+  auto readerOptions = makeDefaultReaderOptions(makeScanSpec(schema));
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
   ASSERT_EQ(reader->numberOfRows(), static_cast<uint64_t>(kBatchSize) * 2);
 
   // Both batches resolve to dictStrings[row % kDictSize].
@@ -1709,7 +1720,7 @@ TEST_F(ParquetWriterTest, multiBatchDictionaryThenForcedFlattenDictionary) {
       makeRowVector({makeFlatVector<StringView>(total, [&](auto row) {
         return StringView(dictStrings[(row % kBatchSize) % kDictSize]);
       })});
-  auto rowReader = createRowReaderFromReader(*reader, schema);
+  auto rowReader = createRowReaderFromReader(*reader, schema, readerOptions);
   assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
 }
 
@@ -2010,11 +2021,12 @@ TEST_F(ParquetWriterTest, allNulls) {
 
   auto sinkPtr = write(vector);
 
-  auto reader = createReaderInMemory(*sinkPtr);
+  auto readerOptions = makeDefaultReaderOptions(makeScanSpec(rowType));
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
   ASSERT_EQ(reader->numberOfRows(), kRows);
   ASSERT_EQ(*reader->rowType(), *rowType);
 
-  auto rowReader = createRowReaderFromReader(*reader, rowType);
+  auto rowReader = createRowReaderFromReader(*reader, rowType, readerOptions);
   assertReadWithReaderAndExpected(rowType, *rowReader, vector, *leafPool_);
 }
 

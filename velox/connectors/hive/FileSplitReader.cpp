@@ -106,7 +106,8 @@ FileSplitReader::FileSplitReader(
       fileSplit_(fileSplit),
       connectorQueryCtx_(connectorQueryCtx),
       readerOutputType_(readerOutputType),
-      baseReaderOpts_(connectorQueryCtx->memoryPool()),
+      baseReaderOpts_(pool_, scanSpec_),
+      baseRowReaderOpts_(baseReaderOpts_),
       emptySplit_(false) {
   baseReaderOpts_.setDataIoStats(dataIoStats_);
   baseReaderOpts_.setMetadataIoStats(metadataIoStats_);
@@ -121,7 +122,6 @@ void FileSplitReader::configureReaderOptions(
     std::shared_ptr<velox::random::RandomSkipTracker> randomSkip) {
   configureBaseReaderOptions();
   baseReaderOpts_.setRandomSkip(std::move(randomSkip));
-  baseReaderOpts_.setScanSpec(scanSpec_);
   baseReaderOpts_.setFileFormat(fileSplit_->fileFormat);
 }
 
@@ -347,7 +347,6 @@ void FileSplitReader::configureBaseRowReaderOptions(
     RowTypePtr rowType) {
   hive::configureRowReaderOptions(
       tableHandle_->tableParameters(),
-      scanSpec_,
       std::move(metadataFilter),
       std::move(rowType),
       fileSplit_,

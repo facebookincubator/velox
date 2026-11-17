@@ -199,7 +199,6 @@ void HiveSplitReader::configureBaseRowReaderOptions(
     RowTypePtr rowType) {
   hive::configureRowReaderOptions(
       tableHandle_->tableParameters(),
-      scanSpec_,
       std::move(metadataFilter),
       rowType,
       fileSplit_,

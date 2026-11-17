@@ -292,8 +292,7 @@ struct BenchmarkState : public velox::test::VectorTestBase {
     auto readFile = std::make_shared<InMemoryReadFile>(file);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
-    dwio::common::ReaderOptions options(pool());
-    options.setScanSpec(scanSpec);
+    dwio::common::ReaderOptions options(pool(), scanSpec);
     options.setDataIoStats(ioStats_);
     options.setMetadataIoStats(ioStats_);
 
@@ -302,8 +301,7 @@ struct BenchmarkState : public velox::test::VectorTestBase {
         std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
         options);
 
-    dwio::common::RowReaderOptions rowOptions;
-    rowOptions.setScanSpec(scanSpec);
+    dwio::common::RowReaderOptions rowOptions(options);
     rowOptions.setRequestedType(
         std::dynamic_pointer_cast<const RowType>(rowType));
     rowOptions.setEagerFirstStripeLoad(false);

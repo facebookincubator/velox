@@ -346,13 +346,11 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptions) {
   auto holder = makeConnectorQueryCtx();
   auto fileConfig = makeFileConfig();
   auto split = makeSplit(dwio::common::FileFormat::DWRF);
-  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
   auto rowType = ROW({"c0"}, {BIGINT()});
 
   dwio::common::RowReaderOptions rowReaderOptions;
   hive::configureRowReaderOptions(
       /*tableParameters=*/{},
-      scanSpec,
       /*metadataFilter=*/nullptr,
       rowType,
       split,
@@ -361,7 +359,6 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptions) {
       /*ioExecutor=*/nullptr,
       rowReaderOptions);
 
-  EXPECT_EQ(rowReaderOptions.scanSpec(), scanSpec);
   EXPECT_EQ(rowReaderOptions.offset(), 0);
   EXPECT_EQ(rowReaderOptions.length(), std::numeric_limits<uint64_t>::max());
 }
@@ -369,7 +366,6 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptions) {
 TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
   auto fileConfig = makeFileConfig();
   auto split = makeSplit(dwio::common::FileFormat::NIMBLE);
-  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
   auto rowType = ROW({"c0"}, {BIGINT()});
 
   // Session flags enabled => RowReaderOptions flags true.
@@ -381,7 +377,6 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
     dwio::common::RowReaderOptions rowReaderOptions;
     hive::configureRowReaderOptions(
         /*tableParameters=*/{},
-        scanSpec,
         /*metadataFilter=*/nullptr,
         rowType,
         split,
@@ -401,7 +396,6 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
     dwio::common::RowReaderOptions rowReaderOptions;
     hive::configureRowReaderOptions(
         /*tableParameters=*/{},
-        scanSpec,
         /*metadataFilter=*/nullptr,
         rowType,
         split,
@@ -420,7 +414,6 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSkipRows) {
   auto holder = makeConnectorQueryCtx();
   auto fileConfig = makeFileConfig();
   auto split = makeSplit(dwio::common::FileFormat::DWRF);
-  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
   auto rowType = ROW({"c0"}, {BIGINT()});
 
   std::unordered_map<std::string, std::string> tableParameters = {
@@ -430,7 +423,6 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSkipRows) {
   dwio::common::RowReaderOptions rowReaderOptions;
   hive::configureRowReaderOptions(
       tableParameters,
-      scanSpec,
       /*metadataFilter=*/nullptr,
       rowType,
       split,
@@ -451,13 +443,11 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSplitRange) {
       dwio::common::FileFormat::DWRF,
       /*start=*/100,
       /*length=*/5000);
-  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
   auto rowType = ROW({"c0"}, {BIGINT()});
 
   dwio::common::RowReaderOptions rowReaderOptions;
   hive::configureRowReaderOptions(
       /*tableParameters=*/{},
-      scanSpec,
       /*metadataFilter=*/nullptr,
       rowType,
       split,
@@ -578,9 +568,8 @@ TEST_F(FileConnectorUtilTest, testFiltersConstantOverridingFileColumn) {
     child->setConstantValue(constant);
     child->setFilter(std::move(filter));
 
-    dwio::common::ReaderOptions readerOpts(pool_.get());
+    dwio::common::ReaderOptions readerOpts(pool_.get(), scanSpec);
     readerOpts.setFileFormat(dwio::common::FileFormat::DWRF);
-    readerOpts.setScanSpec(scanSpec);
     auto reader = dwrf::DwrfReader::create(
         std::make_unique<dwio::common::BufferedInput>(
             std::make_shared<LocalReadFile>(filePath), readerOpts.memoryPool()),

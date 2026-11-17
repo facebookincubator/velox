@@ -146,13 +146,15 @@ class ParquetTestBase : public testing::Test,
   // Creates a ReaderOptions pre-populated with the test's shared IoStatistics
   // and the leaf memory pool. Callers needing extra settings should obtain a
   // copy via this method and then apply their overrides.
-  dwio::common::ReaderOptions makeDefaultReaderOptions() const;
+  dwio::common::ReaderOptions makeDefaultReaderOptions(
+      std::shared_ptr<velox::common::ScanSpec> scanSpec = nullptr) const;
 
   // Returns RowReaderOptions with a ColumnSelector for the given schema.
   dwio::common::RowReaderOptions makeRowReaderOpts(
       const RowTypePtr& rowType,
+      const dwio::common::ReaderOptions& readerOptions,
       bool fileColumnNamesReadAsLowerCase = false) {
-    dwio::common::RowReaderOptions rowReaderOpts;
+    dwio::common::RowReaderOptions rowReaderOpts(readerOptions);
     rowReaderOpts.select(
         std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
             rowType,
@@ -163,7 +165,7 @@ class ParquetTestBase : public testing::Test,
   }
 
   std::shared_ptr<velox::common::ScanSpec> makeScanSpec(
-      const RowTypePtr& rowType) {
+      const RowTypePtr& rowType) const {
     auto scanSpec = std::make_shared<velox::common::ScanSpec>("");
     scanSpec->addAllChildFields(*rowType);
     return scanSpec;
@@ -186,6 +188,7 @@ class ParquetTestBase : public testing::Test,
   void assertReadWithReaderAndFilters(
       dwio::common::Reader& reader,
       const RowTypePtr& fileSchema,
+      const dwio::common::ReaderOptions& readerOptions,
       FilterMap filters,
       const RowVectorPtr& expected);
 
@@ -252,6 +255,7 @@ class ParquetTestBase : public testing::Test,
   std::unique_ptr<dwio::common::RowReader> createRowReaderFromReader(
       dwio::common::Reader& reader,
       const RowTypePtr& rowType,
+      const dwio::common::ReaderOptions& readerOptions,
       bool useColumnSelector = true);
 
   /// exampleFileName is a file under the parquet reader examples directory.

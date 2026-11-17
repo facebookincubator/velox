@@ -70,18 +70,16 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
     auto readFile = std::make_shared<InMemoryReadFile>(file);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
-    dwio::common::ReaderOptions options(pool());
+    dwio::common::ReaderOptions options(pool(), scanSpec);
     options.setDataIoStats(dataIoStats_);
     options.setMetadataIoStats(metadataIoStats_);
-    options.setScanSpec(scanSpec);
 
     Readers readers;
     readers.reader = factory->createReader(
         std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
         options);
 
-    dwio::common::RowReaderOptions rowOptions;
-    rowOptions.setScanSpec(scanSpec);
+    dwio::common::RowReaderOptions rowOptions(options);
     rowOptions.setRequestedType(asRowType(expected->type()));
     rowOptions.setStringDecoderZeroCopy(zeroCopy);
     readers.rowReader = readers.reader->createRowReader(rowOptions);

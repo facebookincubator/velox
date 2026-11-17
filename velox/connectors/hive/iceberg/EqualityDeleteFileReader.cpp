@@ -199,7 +199,7 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
       0,
       deleteFile.fileSizeInBytes);
 
-  dwio::common::ReaderOptions deleteReaderOpts(pool_);
+  dwio::common::ReaderOptions deleteReaderOpts(pool_, scanSpec);
   // TODO: Use separate IoStatistics for data and metadata.
   deleteReaderOpts.setDataIoStats(ioStatistics);
   deleteReaderOpts.setMetadataIoStats(ioStatistics);
@@ -239,10 +239,9 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
     return;
   }
 
-  dwio::common::RowReaderOptions deleteRowReaderOpts;
+  dwio::common::RowReaderOptions deleteRowReaderOpts(deleteReaderOpts);
   configureRowReaderOptions(
       {},
-      scanSpec,
       nullptr,
       deleteFileSchema,
       deleteSplit,

@@ -194,7 +194,6 @@ void configureReaderOptions(
 
 void configureRowReaderOptions(
     const std::unordered_map<std::string, std::string>& tableParameters,
-    const std::shared_ptr<common::ScanSpec>& scanSpec,
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     const RowTypePtr& rowType,
     const std::shared_ptr<const FileConnectorSplit>& fileSplit,
@@ -207,7 +206,6 @@ void configureRowReaderOptions(
   if (skipRowsIt != tableParameters.end()) {
     rowReaderOptions.setSkipRows(folly::to<uint64_t>(skipRowsIt->second));
   }
-  rowReaderOptions.setScanSpec(scanSpec);
   rowReaderOptions.setIOExecutor(ioExecutor);
   rowReaderOptions.setMetadataFilter(std::move(metadataFilter));
   rowReaderOptions.setRequestedType(rowType);

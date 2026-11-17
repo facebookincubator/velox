@@ -96,7 +96,7 @@ std::shared_ptr<ScanSpec> ParquetReaderBenchmark::createScanSpec(
 std::unique_ptr<RowReader> ParquetReaderBenchmark::createReader(
     std::shared_ptr<ScanSpec> scanSpec,
     const RowTypePtr& rowType) {
-  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  dwio::common::ReaderOptions readerOpts(leafPool_.get(), scanSpec);
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   auto input = std::make_unique<BufferedInput>(
@@ -106,11 +106,10 @@ std::unique_ptr<RowReader> ParquetReaderBenchmark::createReader(
   std::unique_ptr<Reader> reader =
       std::make_unique<ParquetReader>(std::move(input), readerOpts);
 
-  dwio::common::RowReaderOptions rowReaderOpts;
+  dwio::common::RowReaderOptions rowReaderOpts(readerOpts);
   rowReaderOpts.select(
       std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
           rowType, rowType->names()));
-  rowReaderOpts.setScanSpec(scanSpec);
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   return rowReader;

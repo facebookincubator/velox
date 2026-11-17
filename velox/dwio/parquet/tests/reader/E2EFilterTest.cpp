@@ -962,29 +962,28 @@ TEST_F(E2EFilterTest, parquetMRVersionStringStatsRowGroupFiltering) {
             {kSanXing, kVivo, kSanXing, kVivo, kSanXing})}));
     writer->close();
 
-    dwio::common::ReaderOptions readerOptions(leafPool_.get());
+    auto scanSpec = std::make_shared<ScanSpec>("");
+    scanSpec->addAllChildFields(*rowType);
+    dwio::common::ReaderOptions readerOptions(leafPool_.get(), scanSpec);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     auto input = std::make_unique<BufferedInput>(
         std::make_shared<InMemoryReadFile>(
             std::string(sinkPtr->data(), sinkPtr->size())),
         readerOptions.memoryPool());
-    auto reader = makeReader(readerOptions, std::move(input));
-    auto& parquetReader = dynamic_cast<ParquetReader&>(*reader);
-    EXPECT_EQ(parquetReader.fileMetaData().numRowGroups(), 2);
-
-    auto scanSpec = std::make_shared<ScanSpec>("");
-    scanSpec->addAllChildFields(*rowType);
     // Equality filter: s = "360手机助手".
     scanSpec->getOrCreateChild(Subfield("s"))
         ->setFilter(
             std::make_unique<BytesRange>(
                 k360, false, false, k360, false, false, false));
 
-    RowReaderOptions rowReaderOpts;
+    auto reader = makeReader(readerOptions, std::move(input));
+    auto& parquetReader = dynamic_cast<ParquetReader&>(*reader);
+    EXPECT_EQ(parquetReader.fileMetaData().numRowGroups(), 2);
+
+    RowReaderOptions rowReaderOpts(readerOptions);
     rowReaderOpts.select(
         std::make_shared<ColumnSelector>(rowType, rowType->names()));
-    rowReaderOpts.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
 
     VectorPtr result = BaseVector::create(rowType, 1, leafPool_.get());

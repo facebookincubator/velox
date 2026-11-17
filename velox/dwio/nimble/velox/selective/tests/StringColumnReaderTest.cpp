@@ -98,17 +98,15 @@ class StringColumnReaderTest
     auto readFile = std::make_shared<InMemoryReadFile>(file);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
-    dwio::common::ReaderOptions options(pool());
+    dwio::common::ReaderOptions options(pool(), scanSpec);
     options.setDataIoStats(dataIoStats_);
     options.setMetadataIoStats(metadataIoStats_);
-    options.setScanSpec(scanSpec);
     Readers readers;
     readers.reader = factory->createReader(
         std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
         options);
     auto type = asRowType(expected->type());
-    dwio::common::RowReaderOptions rowOptions;
-    rowOptions.setScanSpec(scanSpec);
+    dwio::common::RowReaderOptions rowOptions(options);
     rowOptions.setRequestedType(type);
     rowOptions.setStringDecoderZeroCopy(stringDecoderZeroCopy);
     rowOptions.setNimblePreserveDictionaryEncoding(stringDecoderZeroCopy);
@@ -2185,15 +2183,13 @@ TEST_P(StringColumnReaderTest, flatMapStringDictionaryPath) {
   auto readFile = std::make_shared<InMemoryReadFile>(file);
   auto factory =
       dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
-  dwio::common::ReaderOptions options(pool());
+  dwio::common::ReaderOptions options(pool(), scanSpec);
   options.setDataIoStats(dataIoStats_);
   options.setMetadataIoStats(metadataIoStats_);
-  options.setScanSpec(scanSpec);
   auto reader = factory->createReader(
       std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
       options);
-  dwio::common::RowReaderOptions rowOptions;
-  rowOptions.setScanSpec(scanSpec);
+  dwio::common::RowReaderOptions rowOptions(options);
   rowOptions.setRequestedType(asRowType(input->type()));
   rowOptions.setStringDecoderZeroCopy(true);
   rowOptions.setNimblePreserveDictionaryEncoding(true);
@@ -2327,15 +2323,13 @@ TEST_P(
   auto readFile = std::make_shared<InMemoryReadFile>(file);
   auto factory =
       dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
-  dwio::common::ReaderOptions options(pool());
+  dwio::common::ReaderOptions options(pool(), scanSpec);
   options.setDataIoStats(dataIoStats_);
   options.setMetadataIoStats(metadataIoStats_);
-  options.setScanSpec(scanSpec);
   auto reader = factory->createReader(
       std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
       options);
-  dwio::common::RowReaderOptions rowOptions;
-  rowOptions.setScanSpec(scanSpec);
+  dwio::common::RowReaderOptions rowOptions(options);
   rowOptions.setRequestedType(asRowType(input->type()));
   rowOptions.setStringDecoderZeroCopy(true);
   rowOptions.setNimblePreserveDictionaryEncoding(true);
@@ -2459,15 +2453,13 @@ TEST_P(StringColumnReaderTest, flatMapStringDictionaryPathMultiChunk) {
   auto readFile = std::make_shared<InMemoryReadFile>(file);
   auto factory =
       dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
-  dwio::common::ReaderOptions options(pool());
+  dwio::common::ReaderOptions options(pool(), scanSpec);
   options.setDataIoStats(dataIoStats_);
   options.setMetadataIoStats(metadataIoStats_);
-  options.setScanSpec(scanSpec);
   auto reader = factory->createReader(
       std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
       options);
-  dwio::common::RowReaderOptions rowOptions;
-  rowOptions.setScanSpec(scanSpec);
+  dwio::common::RowReaderOptions rowOptions(options);
   rowOptions.setRequestedType(asRowType(chunk1->type()));
   rowOptions.setStringDecoderZeroCopy(true);
   rowOptions.setNimblePreserveDictionaryEncoding(true);

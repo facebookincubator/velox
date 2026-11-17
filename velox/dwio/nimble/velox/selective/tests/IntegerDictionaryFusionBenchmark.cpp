@@ -165,8 +165,7 @@ class IntegerDictionaryFusionBenchmark : public velox::test::VectorTestBase {
 
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
-    dwio::common::ReaderOptions readerOptions(pool());
-    readerOptions.setScanSpec(scanSpec);
+    dwio::common::ReaderOptions readerOptions(pool(), scanSpec);
 
     Readers readers;
     readers.reader = factory->createReader(
@@ -175,8 +174,7 @@ class IntegerDictionaryFusionBenchmark : public velox::test::VectorTestBase {
                 config.valueType, config.indicesEncoding, config.nullPattern)),
             *pool()),
         readerOptions);
-    dwio::common::RowReaderOptions rowReaderOptions;
-    rowReaderOptions.setScanSpec(scanSpec);
+    dwio::common::RowReaderOptions rowReaderOptions(readerOptions);
     rowReaderOptions.setRequestedType(inputType);
     rowReaderOptions.setEagerFirstStripeLoad(true);
     rowReaderOptions.setStringDecoderZeroCopy(true);

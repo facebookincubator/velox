@@ -20,6 +20,11 @@
 
 namespace facebook::velox::dwio::common {
 
+RowReaderOptions::RowReaderOptions(const ReaderOptions& readerOptions)
+    : RowReaderOptions() {
+  scanSpec_ = readerOptions.scanSpec();
+}
+
 namespace {
 
 const auto& fileFormatNames() {

@@ -38,11 +38,11 @@ class ParquetTestFile {
 
   /// Writes 'buffer' to a new temporary file and opens a ParquetReader over
   /// it. 'poolName' names the root and leaf memory pools the reader allocates
-  /// from. Pass the ScanSpec to createRowReader() through RowReaderOptions; the
-  /// Parquet reader never reads the one on ReaderOptions.
+  /// from. The optional ScanSpec is shared with row readers created from it.
   static ParquetTestFile open(
       const std::shared_ptr<::arrow::Buffer>& buffer,
-      const std::string& poolName);
+      const std::string& poolName,
+      std::shared_ptr<common::ScanSpec> scanSpec = nullptr);
 
   ParquetReader& reader() {
     return *reader_;

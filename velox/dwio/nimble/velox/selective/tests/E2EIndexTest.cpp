@@ -320,11 +320,11 @@ class E2EIndexTestBase : public ::testing::Test {
 
   // Creates a reader for the written data with optional random skip.
   virtual std::unique_ptr<Reader> createReader(
+      dwio::common::ReaderOptions& readerOptions,
       double sampleRate = 1.0,
       uint32_t randomSeed = 0) {
     auto readFile =
         std::make_shared<InMemoryReadFile>(std::string_view(sinkData_));
-    dwio::common::ReaderOptions readerOptions(leafPool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setIndexIoStats(indexIoStats_);
@@ -380,21 +380,17 @@ class E2EIndexTestBase : public ::testing::Test {
 
   // Reads all rows with the given filters and optionally disables index.
   std::vector<RowVectorPtr> readWithFilters(
-      Reader& reader,
       const RowTypePtr& requestedType,
       const std::unordered_map<std::string, std::unique_ptr<Filter>>& filters,
       bool indexEnabled,
-      int64_t& numIndexFilterConversions) {
-    RowReaderOptions rowReaderOptions;
+      int64_t& numIndexFilterConversions,
+      double sampleRate = 1.0,
+      uint32_t randomSeed = 0) {
+    dwio::common::ReaderOptions readerOptions(
+        leafPool_.get(), createScanSpec(requestedType, filters));
+    auto reader = createReader(readerOptions, sampleRate, randomSeed);
+    RowReaderOptions rowReaderOptions(readerOptions);
     rowReaderOptions.setRequestedType(requestedType);
-
-    // Clone filters because createScanSpec modifies them.
-    std::unordered_map<std::string, std::unique_ptr<Filter>> filtersCopy;
-    for (const auto& [name, filter] : filters) {
-      filtersCopy[name] = filter->clone();
-    }
-    auto scanSpec = createScanSpec(requestedType, filtersCopy);
-    rowReaderOptions.setScanSpec(std::move(scanSpec));
 
     // Set index enabled option.
     rowReaderOptions.setIndexEnabled(indexEnabled);
@@ -403,7 +399,7 @@ class E2EIndexTestBase : public ::testing::Test {
     ConcurrentRuntimeStatWriter statWriter;
     RuntimeStatWriterScopeGuard guard(&statWriter);
 
-    auto rowReader = reader.createRowReader(rowReaderOptions);
+    auto rowReader = reader->createRowReader(rowReaderOptions);
 
     std::vector<RowVectorPtr> results;
     VectorPtr result = BaseVector::create(requestedType, 1, leafPool_.get());
@@ -477,10 +473,12 @@ class E2EIndexTestBase : public ::testing::Test {
       const std::unordered_map<std::string, std::unique_ptr<Filter>>& filters,
       double sampleRate = 1.0,
       uint32_t randomSeed = 0) {
-    auto reader = createReader(sampleRate, randomSeed);
-    RowReaderOptions rowReaderOptions;
+    dwio::common::ReaderOptions readerOptions(
+        leafPool_.get(), createScanSpec(rowType, filters));
+    auto reader = createReader(readerOptions, sampleRate, randomSeed);
+    RowReaderOptions rowReaderOptions(readerOptions);
     rowReaderOptions.setRequestedType(rowType);
-    rowReaderOptions.setScanSpec(createScanSpec(rowType, filters));
+
     auto rowReader = reader->createRowReader(rowReaderOptions);
 
     ChunkStatsReadResult readResult;
@@ -976,10 +974,11 @@ TEST_F(E2EIndexTestBase, v2ChunkStatsRefreshAfterDynamicFilter) {
 
   auto scanSpec = std::make_shared<ScanSpec>("root");
   auto* valueSpec = scanSpec->addField("value", 0);
-  auto reader = createReader();
-  RowReaderOptions rowReaderOptions;
+  dwio::common::ReaderOptions readerOptions(leafPool_.get(), scanSpec);
+  auto reader = createReader(readerOptions);
+  RowReaderOptions rowReaderOptions(readerOptions);
   rowReaderOptions.setRequestedType(rowType);
-  rowReaderOptions.setScanSpec(scanSpec);
+
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   std::vector<RowVectorPtr> rows;
@@ -1020,10 +1019,11 @@ TEST_F(E2EIndexTestBase, v2ChunkStatsUpdateNextRowNumber) {
     auto scanSpec = std::make_shared<ScanSpec>("root");
     scanSpec->addField("value", 0)
         ->setFilter(std::make_unique<BigintRange>(100, 203, false));
-    auto reader = createReader();
-    RowReaderOptions rowReaderOptions;
+    dwio::common::ReaderOptions readerOptions(leafPool_.get(), scanSpec);
+    auto reader = createReader(readerOptions);
+    RowReaderOptions rowReaderOptions(readerOptions);
     rowReaderOptions.setRequestedType(rowType);
-    rowReaderOptions.setScanSpec(scanSpec);
+
     auto rowReader = reader->createRowReader(rowReaderOptions);
 
     EXPECT_EQ(rowReader->nextRowNumber(), 4);
@@ -1041,10 +1041,11 @@ TEST_F(E2EIndexTestBase, v2ChunkStatsUpdateNextRowNumber) {
     scanSpec->addField("value", 0)
         ->setFilter(
             std::make_unique<BigintMultiRange>(std::move(ranges), false));
-    auto reader = createReader();
-    RowReaderOptions rowReaderOptions;
+    dwio::common::ReaderOptions readerOptions(leafPool_.get(), scanSpec);
+    auto reader = createReader(readerOptions);
+    RowReaderOptions rowReaderOptions(readerOptions);
     rowReaderOptions.setRequestedType(rowType);
-    rowReaderOptions.setScanSpec(scanSpec);
+
     auto rowReader = reader->createRowReader(rowReaderOptions);
 
     VectorPtr result = BaseVector::create(rowType, 1, leafPool_.get());
@@ -1055,10 +1056,11 @@ TEST_F(E2EIndexTestBase, v2ChunkStatsUpdateNextRowNumber) {
   {
     auto scanSpec = std::make_shared<ScanSpec>("root");
     auto* valueSpec = scanSpec->addField("value", 0);
-    auto reader = createReader();
-    RowReaderOptions rowReaderOptions;
+    dwio::common::ReaderOptions readerOptions(leafPool_.get(), scanSpec);
+    auto reader = createReader(readerOptions);
+    RowReaderOptions rowReaderOptions(readerOptions);
     rowReaderOptions.setRequestedType(rowType);
-    rowReaderOptions.setScanSpec(scanSpec);
+
     auto rowReader = reader->createRowReader(rowReaderOptions);
 
     EXPECT_EQ(rowReader->nextRowNumber(), 0);
@@ -1196,11 +1198,8 @@ TEST_P(E2EIndexTest, singleBigintKey) {
     filters["key"] = std::make_unique<BigintRange>(
         testCase.filterLower, testCase.filterUpper, false);
 
-    auto reader = createReader();
-
     int64_t numConversionsWithIndex = 0;
     auto resultsWithIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/true,
@@ -1208,7 +1207,6 @@ TEST_P(E2EIndexTest, singleBigintKey) {
 
     int64_t numConversionsWithoutIndex = 0;
     auto resultsWithoutIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/false,
@@ -1318,11 +1316,8 @@ TEST_P(E2EIndexTest, singleDoubleKey) {
         false,
         false);
 
-    auto reader = createReader();
-
     int64_t numConversionsWithIndex = 0;
     auto resultsWithIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/true,
@@ -1330,7 +1325,6 @@ TEST_P(E2EIndexTest, singleDoubleKey) {
 
     int64_t numConversionsWithoutIndex = 0;
     auto resultsWithoutIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/false,
@@ -1438,11 +1432,8 @@ TEST_P(E2EIndexTest, singleFloatKey) {
         false,
         false);
 
-    auto reader = createReader();
-
     int64_t numConversionsWithIndex = 0;
     auto resultsWithIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/true,
@@ -1450,7 +1441,6 @@ TEST_P(E2EIndexTest, singleFloatKey) {
 
     int64_t numConversionsWithoutIndex = 0;
     auto resultsWithoutIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/false,
@@ -1563,11 +1553,8 @@ TEST_P(E2EIndexTest, singleTimestampKey) {
     filters["key"] = std::make_unique<TimestampRange>(
         testCase.filterLower, testCase.filterUpper, false);
 
-    auto reader = createReader();
-
     int64_t numConversionsWithIndex = 0;
     auto resultsWithIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/true,
@@ -1575,7 +1562,6 @@ TEST_P(E2EIndexTest, singleTimestampKey) {
 
     int64_t numConversionsWithoutIndex = 0;
     auto resultsWithoutIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/false,
@@ -1643,11 +1629,8 @@ TEST_P(E2EIndexTest, singleBoolKey) {
     std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
     filters["key"] = std::make_unique<BoolValue>(testCase.filterValue, false);
 
-    auto reader = createReader();
-
     int64_t numConversionsWithIndex = 0;
     auto resultsWithIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/true,
@@ -1655,7 +1638,6 @@ TEST_P(E2EIndexTest, singleBoolKey) {
 
     int64_t numConversionsWithoutIndex = 0;
     auto resultsWithoutIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/false,
@@ -1791,11 +1773,8 @@ TEST_P(E2EIndexTest, singleVarcharKey) {
           false);
     }
 
-    auto reader = createReader();
-
     int64_t numConversionsWithIndex = 0;
     auto resultsWithIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/true,
@@ -1803,7 +1782,6 @@ TEST_P(E2EIndexTest, singleVarcharKey) {
 
     int64_t numConversionsWithoutIndex = 0;
     auto resultsWithoutIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/false,
@@ -1857,11 +1835,8 @@ TEST_P(E2EIndexTest, twoKeyColumnsPointAndRange) {
   filters["key2"] = std::make_unique<BytesRange>(
       "val_00002", false, false, "val_00008", false, false, false);
 
-  auto reader = createReader();
-
   int64_t numConversionsWithIndex = 0;
   auto resultsWithIndex = readWithFilters(
-      *reader,
       rowType,
       filters,
       /*indexEnabled=*/true,
@@ -1869,7 +1844,6 @@ TEST_P(E2EIndexTest, twoKeyColumnsPointAndRange) {
 
   int64_t numConversionsWithoutIndex = 0;
   auto resultsWithoutIndex = readWithFilters(
-      *reader,
       rowType,
       filters,
       /*indexEnabled=*/false,
@@ -2015,11 +1989,8 @@ TEST_P(E2EIndexTest, twoBigintKeysFilterCombinations) {
       filters["key2"] = testCase.key2Filter->clone();
     }
 
-    auto reader = createReader();
-
     int64_t numConversionsWithIndex = 0;
     auto resultsWithIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/true,
@@ -2027,7 +1998,6 @@ TEST_P(E2EIndexTest, twoBigintKeysFilterCombinations) {
 
     int64_t numConversionsWithoutIndex = 0;
     auto resultsWithoutIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/false,
@@ -2172,11 +2142,8 @@ TEST_P(E2EIndexTest, threeBigintKeysFilterGap) {
       filters["key3"] = testCase.key3Filter->clone();
     }
 
-    auto reader = createReader();
-
     int64_t numConversionsWithIndex = 0;
     auto resultsWithIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/true,
@@ -2184,7 +2151,6 @@ TEST_P(E2EIndexTest, threeBigintKeysFilterGap) {
 
     int64_t numConversionsWithoutIndex = 0;
     auto resultsWithoutIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/false,
@@ -2328,11 +2294,8 @@ TEST_P(E2EIndexTest, twoDoubleKeysFilterCombinations) {
       filters["key2"] = testCase.key2Filter->clone();
     }
 
-    auto reader = createReader();
-
     int64_t numConversionsWithIndex = 0;
     auto resultsWithIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/true,
@@ -2340,7 +2303,6 @@ TEST_P(E2EIndexTest, twoDoubleKeysFilterCombinations) {
 
     int64_t numConversionsWithoutIndex = 0;
     auto resultsWithoutIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/false,
@@ -2484,11 +2446,8 @@ TEST_P(E2EIndexTest, twoFloatKeysFilterCombinations) {
       filters["key2"] = testCase.key2Filter->clone();
     }
 
-    auto reader = createReader();
-
     int64_t numConversionsWithIndex = 0;
     auto resultsWithIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/true,
@@ -2496,7 +2455,6 @@ TEST_P(E2EIndexTest, twoFloatKeysFilterCombinations) {
 
     int64_t numConversionsWithoutIndex = 0;
     auto resultsWithoutIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/false,
@@ -2627,11 +2585,8 @@ TEST_P(E2EIndexTest, twoBoolKeysFilterCombinations) {
       filters["key2"] = testCase.key2Filter->clone();
     }
 
-    auto reader = createReader();
-
     int64_t numConversionsWithIndex = 0;
     auto resultsWithIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/true,
@@ -2639,7 +2594,6 @@ TEST_P(E2EIndexTest, twoBoolKeysFilterCombinations) {
 
     int64_t numConversionsWithoutIndex = 0;
     auto resultsWithoutIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/false,
@@ -2791,11 +2745,8 @@ TEST_P(E2EIndexTest, twoVarcharKeysFilterCombinations) {
       filters["key2"] = testCase.key2Filter->clone();
     }
 
-    auto reader = createReader();
-
     int64_t numConversionsWithIndex = 0;
     auto resultsWithIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/true,
@@ -2803,7 +2754,6 @@ TEST_P(E2EIndexTest, twoVarcharKeysFilterCombinations) {
 
     int64_t numConversionsWithoutIndex = 0;
     auto resultsWithoutIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/false,
@@ -2949,11 +2899,8 @@ TEST_P(E2EIndexTest, twoTimestampKeysFilterCombinations) {
       filters["key2"] = testCase.key2Filter->clone();
     }
 
-    auto reader = createReader();
-
     int64_t numConversionsWithIndex = 0;
     auto resultsWithIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/true,
@@ -2961,7 +2908,6 @@ TEST_P(E2EIndexTest, twoTimestampKeysFilterCombinations) {
 
     int64_t numConversionsWithoutIndex = 0;
     auto resultsWithoutIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/false,
@@ -3576,11 +3522,8 @@ TEST_P(E2EIndexFuzzerTest, randomSchemaAndFilters) {
 
     // Test without random skip first.
     {
-      auto reader = createReader();
-
       int64_t numConversionsWithIndex = 0;
       auto resultsWithIndex = readWithFilters(
-          *reader,
           rowType,
           filters,
           /*indexEnabled=*/true,
@@ -3588,7 +3531,6 @@ TEST_P(E2EIndexFuzzerTest, randomSchemaAndFilters) {
 
       int64_t numConversionsWithoutIndex = 0;
       auto resultsWithoutIndex = readWithFilters(
-          *reader,
           rowType,
           filters,
           /*indexEnabled=*/false,
@@ -3611,23 +3553,23 @@ TEST_P(E2EIndexFuzzerTest, randomSchemaAndFilters) {
           fmt::format(
               "randomSkip: sampleRate={}, seed={}", kSampleRate, randomSeed));
 
-      auto readerWithIndex = createReader(kSampleRate, randomSeed);
       int64_t numConversionsWithIndex = 0;
       auto resultsWithIndex = readWithFilters(
-          *readerWithIndex,
           rowType,
           filters,
           /*indexEnabled=*/true,
-          numConversionsWithIndex);
+          numConversionsWithIndex,
+          kSampleRate,
+          randomSeed);
 
-      auto readerWithoutIndex = createReader(kSampleRate, randomSeed);
       int64_t numConversionsWithoutIndex = 0;
       auto resultsWithoutIndex = readWithFilters(
-          *readerWithoutIndex,
           rowType,
           filters,
           /*indexEnabled=*/false,
-          numConversionsWithoutIndex);
+          numConversionsWithoutIndex,
+          kSampleRate,
+          randomSeed);
 
       verifyResultsEqual(resultsWithIndex, resultsWithoutIndex);
 
@@ -3764,11 +3706,8 @@ TEST_P(E2EIndexTest, filtersNotEligibleForIndexConversion) {
       std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
       filters["key"] = testCase.filter->clone();
 
-      auto reader = createReader();
-
       int64_t numConversionsWithIndex = 0;
       auto resultsWithIndex = readWithFilters(
-          *reader,
           rowType,
           filters,
           /*indexEnabled=*/true,
@@ -3776,7 +3715,6 @@ TEST_P(E2EIndexTest, filtersNotEligibleForIndexConversion) {
 
       int64_t numConversionsWithoutIndex = 0;
       auto resultsWithoutIndex = readWithFilters(
-          *reader,
           rowType,
           filters,
           /*indexEnabled=*/false,
@@ -3823,11 +3761,8 @@ TEST_P(E2EIndexTest, filtersNotEligibleForIndexConversion) {
     std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
     filters["value"] = std::make_unique<BigintRange>(50, 60, false);
 
-    auto reader = createReader();
-
     int64_t numConversionsWithIndex = 0;
     auto resultsWithIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/true,
@@ -3835,7 +3770,6 @@ TEST_P(E2EIndexTest, filtersNotEligibleForIndexConversion) {
 
     int64_t numConversionsWithoutIndex = 0;
     auto resultsWithoutIndex = readWithFilters(
-        *reader,
         rowType,
         filters,
         /*indexEnabled=*/false,
@@ -3904,11 +3838,8 @@ TEST_P(E2EIndexTest, filtersNotEligibleForIndexConversion) {
       std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
       filters["key"] = testCase.filter->clone();
 
-      auto reader = createReader();
-
       int64_t numConversionsWithIndex = 0;
       auto resultsWithIndex = readWithFilters(
-          *reader,
           rowType,
           filters,
           /*indexEnabled=*/true,
@@ -3916,7 +3847,6 @@ TEST_P(E2EIndexTest, filtersNotEligibleForIndexConversion) {
 
       int64_t numConversionsWithoutIndex = 0;
       auto resultsWithoutIndex = readWithFilters(
-          *reader,
           rowType,
           filters,
           /*indexEnabled=*/false,
@@ -4007,27 +3937,25 @@ TEST_P(E2EIndexTest, randomSkipWithIndex) {
     // Read with index enabled and random skip.
     // Create a new reader for each read since random skip is configured in
     // ReaderOptions.
-    auto readerWithIndex =
-        createReader(testCase.sampleRate, testCase.randomSeed);
     int64_t numConversionsWithIndex = 0;
     auto resultsWithIndex = readWithFilters(
-        *readerWithIndex,
         rowType,
         filters,
         /*indexEnabled=*/true,
-        numConversionsWithIndex);
+        numConversionsWithIndex,
+        testCase.sampleRate,
+        testCase.randomSeed);
 
     // Read without index but with same random skip configuration.
     // Using the same seed ensures deterministic comparison.
-    auto readerWithoutIndex =
-        createReader(testCase.sampleRate, testCase.randomSeed);
     int64_t numConversionsWithoutIndex = 0;
     auto resultsWithoutIndex = readWithFilters(
-        *readerWithoutIndex,
         rowType,
         filters,
         /*indexEnabled=*/false,
-        numConversionsWithoutIndex);
+        numConversionsWithoutIndex,
+        testCase.sampleRate,
+        testCase.randomSeed);
 
     // Results should be identical regardless of index usage.
     verifyResultsEqual(resultsWithIndex, resultsWithoutIndex);
@@ -4068,11 +3996,12 @@ TEST_P(E2EIndexTest, filterRestorationAcrossMultipleSplits) {
       std::make_unique<BigintRange>(3'000, 7'000, false));
 
   auto* keySpec = scanSpec->childByName("key");
-  auto reader = createReader();
 
-  RowReaderOptions rowReaderOptions;
+  dwio::common::ReaderOptions readerOptions(leafPool_.get(), scanSpec);
+  auto reader = createReader(readerOptions);
+  RowReaderOptions rowReaderOptions(readerOptions);
   rowReaderOptions.setRequestedType(rowType);
-  rowReaderOptions.setScanSpec(scanSpec);
+
   rowReaderOptions.setIndexEnabled(true);
 
   auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -4112,11 +4041,11 @@ TEST_F(E2EIndexTestBase, createIndexReaderWithoutClusterIndex) {
     }
     writer.close();
 
-    auto reader = createReader();
-    RowReaderOptions rowReaderOpts;
+    dwio::common::ReaderOptions readerOptions(
+        leafPool_.get(), createScanSpec(rowType, {}));
+    auto reader = createReader(readerOptions);
+    RowReaderOptions rowReaderOpts(readerOptions);
     rowReaderOpts.setRequestedType(rowType);
-    auto scanSpec = createScanSpec(rowType, {});
-    rowReaderOpts.setScanSpec(std::move(scanSpec));
 
     // Files without cluster index return nullptr instead of throwing.
     EXPECT_EQ(reader->createIndexReader(rowReaderOpts), nullptr);
@@ -4148,10 +4077,12 @@ TEST_F(E2EIndexTestBase, createIndexReaderRejectsHiddenKeyReadAccess) {
 
   // Hidden key columns are still usable for cluster index bounds.
   {
-    auto reader = createReader();
-    RowReaderOptions rowReaderOpts;
+    dwio::common::ReaderOptions readerOptions(
+        leafPool_.get(), createScanSpec(storedType, {}));
+    auto reader = createReader(readerOptions);
+    RowReaderOptions rowReaderOpts(readerOptions);
     rowReaderOpts.setRequestedType(storedType);
-    rowReaderOpts.setScanSpec(createScanSpec(storedType, {}));
+
     auto indexReader = reader->createIndexReader(rowReaderOpts);
     ASSERT_NE(indexReader, nullptr);
 
@@ -4201,14 +4132,15 @@ TEST_F(E2EIndexTestBase, createIndexReaderRejectsHiddenKeyReadAccess) {
 
   for (const auto& scenario : scenarios) {
     SCOPED_TRACE(fmt::format("scenario={}", scenario.name));
-    auto reader = createReader();
-    RowReaderOptions rowReaderOpts;
-    rowReaderOpts.setRequestedType(scenario.requestedType);
     std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
     if (scenario.remainingFilter) {
       filters["key"] = std::make_unique<BigintRange>(1, 3, false);
     }
-    rowReaderOpts.setScanSpec(createScanSpec(rowType, filters));
+    dwio::common::ReaderOptions readerOptions(
+        leafPool_.get(), createScanSpec(rowType, filters));
+    auto reader = createReader(readerOptions);
+    RowReaderOptions rowReaderOpts(readerOptions);
+    rowReaderOpts.setRequestedType(scenario.requestedType);
 
     NIMBLE_ASSERT_THROW(
         reader->createIndexReader(rowReaderOpts), scenario.expectedMessage);

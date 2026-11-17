@@ -271,17 +271,15 @@ TEST_F(OrcReaderTest, testOrcRlev2) {
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   spec->addAllChildFields(*schema);
 
-  dwio::common::ReaderOptions readerOpts{pool()};
+  dwio::common::ReaderOptions readerOpts{pool(), spec};
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  readerOpts.setScanSpec(spec);
   readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
 
   auto reader = DwrfReader::create(
       createFileBufferedInput(dateOrc, readerOpts.memoryPool()), readerOpts);
 
-  RowReaderOptions rowReaderOptions;
-  rowReaderOptions.setScanSpec(spec);
+  RowReaderOptions rowReaderOptions(readerOpts);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   auto batch = BaseVector::create(schema, 0, &readerOpts.memoryPool());
@@ -433,17 +431,15 @@ TEST_P(OrcReaderTestP, dwrfRowReaderReadAllColumnTypesExpectedRowDataRead) {
   scanSpec->addAllChildFields(*schema);
 
   const std::string dateOrc(getFilename());
-  dwio::common::ReaderOptions readerOpts{pool()};
+  dwio::common::ReaderOptions readerOpts{pool(), scanSpec};
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
-  readerOpts.setScanSpec(scanSpec);
 
   auto reader = DwrfReader::create(
       createFileBufferedInput(dateOrc, readerOpts.memoryPool()), readerOpts);
 
-  RowReaderOptions rowReaderOptions;
-  rowReaderOptions.setScanSpec(scanSpec);
+  RowReaderOptions rowReaderOptions(readerOpts);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   size_t rowCount = 0;

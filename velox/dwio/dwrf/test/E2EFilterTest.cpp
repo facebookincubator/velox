@@ -90,12 +90,10 @@ class E2EFilterTest : public E2EFilterTestBase {
     sinkData_ = std::string_view(sinkPtr->data(), sinkPtr->size());
   }
 
-  void setUpRowReaderOptions(
-      dwio::common::RowReaderOptions& opts,
-      const std::shared_ptr<ScanSpec>& spec) override {
-    E2EFilterTestBase::setUpRowReaderOptions(opts, spec);
+  void setUpRowReaderOptions(dwio::common::RowReaderOptions& opts) override {
+    E2EFilterTestBase::setUpRowReaderOptions(opts);
     for (auto& field : flatMapAsStructFields_) {
-      spec->childByName(field)->setFlatMapAsStruct(true);
+      opts.scanSpec()->childByName(field)->setFlatMapAsStruct(true);
     }
   }
 

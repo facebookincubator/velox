@@ -317,14 +317,12 @@ StripeStatsPruningFuzzerStats StripeStatsPruningFuzzer::run() {
     auto readFile = std::make_shared<InMemoryReadFile>(fileContent);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
-    dwio::common::ReaderOptions readerOptions(leafPool.get());
-    readerOptions.setScanSpec(scanSpec);
+    dwio::common::ReaderOptions readerOptions(leafPool.get(), scanSpec);
     auto reader = factory->createReader(
         std::make_unique<dwio::common::BufferedInput>(readFile, *leafPool),
         readerOptions);
 
-    dwio::common::RowReaderOptions rowOptions;
-    rowOptions.setScanSpec(scanSpec);
+    dwio::common::RowReaderOptions rowOptions(readerOptions);
     rowOptions.setRequestedType(rowType);
     auto rowReader = reader->createRowReader(rowOptions);
 

@@ -1238,7 +1238,8 @@ class E2EEncryptionTest : public E2EWriterTest {
       const std::string& schema,
       const std::shared_ptr<EncryptionSpecification>& spec,
       std::shared_ptr<DecrypterFactory> decrypterFactory =
-          std::make_shared<TestDecrypterFactory>()) {
+          std::make_shared<TestDecrypterFactory>(),
+      std::shared_ptr<facebook::velox::common::ScanSpec> scanSpec = nullptr) {
     HiveTypeParser parser;
     auto type = parser.parse(schema);
 
@@ -1277,7 +1278,7 @@ class E2EEncryptionTest : public E2EWriterTest {
     writer_->close();
 
     // read it back for compare
-    dwio::common::ReaderOptions readerOpts(leafPool_.get());
+    dwio::common::ReaderOptions readerOpts(leafPool_.get(), scanSpec);
     readerOpts.setDataIoStats(dataIoStats_);
     readerOpts.setMetadataIoStats(metadataIoStats_);
     readerOpts.setDecrypterFactory(decrypterFactory);
@@ -1490,14 +1491,14 @@ TEST_F(E2EEncryptionTest, readWithoutKey) {
       "b:float>";
   HiveTypeParser parser;
   auto type = std::dynamic_pointer_cast<const RowType>(parser.parse(schema));
-  auto reader = writeAndRead(schema, spec, nullptr);
 
   // reading unencrypted column should not fail
   {
-    RowReaderOptions rowReaderOpts;
     auto scanSpec = std::make_shared<facebook::velox::common::ScanSpec>("root");
     scanSpec->addFieldRecursively("a", *type->childAt(0), 0);
-    rowReaderOpts.setScanSpec(scanSpec);
+    auto reader = writeAndRead(schema, spec, nullptr, scanSpec);
+    RowReaderOptions rowReaderOpts(
+        reader->testingReaderBase()->readerOptions());
     auto rowReader = reader->createRowReader(rowReaderOpts);
     VectorPtr batch =
         BaseVector::create(ROW("a", type->childAt(0)), 0, leafPool_.get());
@@ -1506,10 +1507,11 @@ TEST_F(E2EEncryptionTest, readWithoutKey) {
 
   // fail when reading encrypted column
   {
-    RowReaderOptions rowReaderOpts;
     auto scanSpec = std::make_shared<facebook::velox::common::ScanSpec>("root");
     scanSpec->addFieldRecursively("b", *type->childAt(1), 0);
-    rowReaderOpts.setScanSpec(scanSpec);
+    dwio::common::ReaderOptions readerOpts(leafPool_.get(), scanSpec);
+    RowReaderOptions rowReaderOpts(readerOpts);
+    auto reader = createReader(*sink_, readerOpts);
     VELOX_ASSERT_THROW(
         reader->createRowReader(rowReaderOpts),
         "Failed to access encrypted data");

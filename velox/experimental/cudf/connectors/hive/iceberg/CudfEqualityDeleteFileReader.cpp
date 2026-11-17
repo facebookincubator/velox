@@ -84,7 +84,7 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
       0,
       deleteFile.fileSizeInBytes);
 
-  dwio::common::ReaderOptions deleteReaderOpts(pool_);
+  dwio::common::ReaderOptions deleteReaderOpts(pool_, scanSpec);
   deleteReaderOpts.setDataIoStats(ioStatistics);
   deleteReaderOpts.setMetadataIoStats(ioStatistics);
   velox_hive::configureReaderOptions(
@@ -136,10 +136,9 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
     return;
   }
 
-  dwio::common::RowReaderOptions deleteRowReaderOpts;
+  dwio::common::RowReaderOptions deleteRowReaderOpts(deleteReaderOpts);
   velox_hive::configureRowReaderOptions(
       {},
-      scanSpec,
       nullptr,
       deleteFileSchema,
       deleteSplit,

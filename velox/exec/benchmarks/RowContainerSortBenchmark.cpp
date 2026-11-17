@@ -37,8 +37,9 @@ std::string getExampleFilePath(const std::string& fileName) {
 
 dwio::common::RowReaderOptions getReaderOpts(
     const RowTypePtr& rowType,
+    const dwio::common::ReaderOptions& readerOptions,
     bool fileColumnNamesReadAsLowerCase = false) {
-  dwio::common::RowReaderOptions rowReaderOpts;
+  dwio::common::RowReaderOptions rowReaderOpts(readerOptions);
   rowReaderOpts.select(
       std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
           rowType, rowType->names(), nullptr, fileColumnNamesReadAsLowerCase));
@@ -67,14 +68,13 @@ std::vector<std::optional<StringView>> getDataFromFile() {
   auto pool = memory::memoryManager()->addLeafPool();
   auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
   auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
-  facebook::velox::dwio::common::ReaderOptions readerOptions(pool.get());
+  facebook::velox::dwio::common::ReaderOptions readerOptions(
+      pool.get(), makeScanSpec(rowType));
   readerOptions.setDataIoStats(dataIoStats);
   readerOptions.setMetadataIoStats(metadataIoStats);
   facebook::velox::parquet::ParquetReader reader =
       createReader(sample, readerOptions);
-  auto rowReaderOpts = getReaderOpts(rowType);
-  auto scanSpec = makeScanSpec(rowType);
-  rowReaderOpts.setScanSpec(scanSpec);
+  auto rowReaderOpts = getReaderOpts(rowType, readerOptions);
   auto rowReader = reader.createRowReader(rowReaderOpts);
   auto data = BaseVector::create(rowType, 50000, pool.get());
   rowReader->next(50000, data);
