@@ -180,6 +180,9 @@ const Metadata* nodeMeta(NodeCP node);
 
 /// Context needed to create and recreate OpKernels. Holds the graph,
 /// weights, and config that KernelFactory and WaveGraph require.
+class DeviceSymbols;
+struct SymShapes;
+
 struct ModelContext {
   /// Exclusively owns the nativert::Graph. WaveGraph and WaveGraphExecutor
   /// mutate the graph internally during compilation (normalization, op
@@ -193,6 +196,10 @@ struct ModelContext {
   /// graph's compilation and execution, so graphs with different configs can
   /// run concurrently. Null => use the global WaveConfig.
   std::shared_ptr<WaveConfig> configOverride;
+
+  /// The export's symbolic shapes, when the loader read them. Needed by
+  /// WaveConfig::deviceSymbols.
+  std::shared_ptr<SymShapes> symShapes;
 
   /// Creates OpKernels for all nodes in the graph.
   std::vector<std::unique_ptr<nativert::OpKernel>> makeKernels() const {
@@ -251,8 +258,16 @@ class WaveGraph {
 
   ~WaveGraph();
 
-  /// Returns an ExecutionState from the pool, creating one if needed.
-  std::unique_ptr<ExecutionState> getState();
+  /// Returns an ExecutionState from the pool whose deviceSymbolsMode is
+  /// 'deviceSymbols', creating one if needed.
+  /// A device-symbols state bound for another 'generation' is dropped.
+  std::unique_ptr<ExecutionState> getState(
+      bool deviceSymbols = false,
+      int64_t generation = 0);
+
+  /// The graph's DeviceSymbols, created on first use; null when the model
+  /// context carries no symbolic shapes.
+  DeviceSymbols* deviceSymbols();
 
   /// Returns 'state' to the pool for reuse.
   void returnState(std::unique_ptr<ExecutionState> state);
@@ -314,6 +329,18 @@ class WaveGraph {
 
   /// Returns true if 'value' was created by newTensorValue or newScalarValue.
   bool isCreatedValue(ValueCP value) const;
+
+  /// Records that a rewrite replaced the value named 'oldName' by the one
+  /// named 'newName', so what is known of the old one (its export shape)
+  /// carries over.
+  void recordReplacement(std::string_view oldName, std::string_view newName) {
+    replacedBy_[std::string(newName)] = std::string(oldName);
+  }
+
+  /// New value name -> the name of the value it replaced.
+  const folly::F14FastMap<std::string, std::string>& replacements() const {
+    return replacedBy_;
+  }
 
   /// Creates a new Value with the same type and dtype as 'original', attached
   /// to an internal placeholder node. Registers it in idToValue_.
@@ -567,6 +594,8 @@ class WaveGraph {
   // newTensorValue/newScalarValue, keyed by value id.
   std::unordered_map<nativert::ValueId, c10::ScalarType> createdValueDtypes_;
 
+  folly::F14FastMap<std::string, std::string> replacedBy_;
+
   // Placeholder node used by duplicateValue to attach new Values.
   nativert::Node* placeholderNode_{nullptr};
 
@@ -646,6 +675,8 @@ class WaveGraph {
   // Pool of reusable ExecutionState objects.
   std::mutex statePoolMutex_;
   std::vector<std::unique_ptr<ExecutionState>> statePool_;
+  std::shared_ptr<DeviceSymbols> deviceSymbols_;
+  folly::once_flag deviceSymbolsOnce_;
 };
 
 nativert::Graph* variantNodeGraph(WaveGraph* waveGraph);
@@ -666,5 +697,19 @@ void copyOriginalOutputs(
     nativert::Node* node,
     NodeCP original,
     WaveGraph* waveGraph);
+
+/// Rewrites a whole graph. Passes run in the WaveGraph constructor in
+/// registration order, after the value types are known and before the graph
+/// is normalized and optimized. A value a pass creates needs an entry in
+/// waveGraph.types().
+using GraphPass = std::function<void(nativert::Graph&, WaveGraph&)>;
+
+/// Adds 'pass' to the passes every WaveGraph runs.
+void registerGraphPass(GraphPass pass);
+
+/// Adds 'pass' to the passes every WaveGraph runs after list ops are
+/// decomposed into per-column nodes, for a rewrite of the nodes the
+/// decompositions make.
+void registerDecomposedGraphPass(GraphPass pass);
 
 } // namespace torch::wave
