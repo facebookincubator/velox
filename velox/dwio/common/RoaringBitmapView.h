@@ -78,6 +78,11 @@ class RoaringBitmapView {
 
   // One Roaring container, kept in its serialized form.
   struct Container {
+    // Encoding of the payload.
+    ContainerKind kind;
+    // Number of values for kArray, number of runs for kRun, unused for
+    // kBitset.
+    uint32_t count;
     // First row position the container covers.
     int64_t base;
     // Largest position in the container, or base - 1 if the container selects
@@ -85,10 +90,6 @@ class RoaringBitmapView {
     int64_t lastPosition;
     // Offset of the container payload within the bitmap bytes.
     size_t dataOffset;
-    // Number of values for kArray, number of runs for kRun, unused for
-    // kBitset.
-    uint32_t count;
-    ContainerKind kind;
   };
 
   // Parses the groups of a Roaring64 bitmap.
