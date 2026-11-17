@@ -1419,14 +1419,17 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
       maxWaitMicros);
 }
 
-std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
-readCursorAsync(
-    const CursorParameters& params,
-    std::function<ContinueFuture(TaskCursor*)> addSplits,
-    uint64_t maxWaitMicros) {
-  auto cursor = TaskCursor::create(params);
-  // 'result' borrows memory from cursor so the life cycle must be shorter.
-  std::vector<RowVectorPtr> result;
+namespace {
+
+// Runs 'cursor' to completion, passing each batch of results to 'callback'.
+// Takes the cursor from the caller rather than creating it, so that the caller
+// controls its lifetime: a caller that retains the batches must destroy them
+// before the cursor, whose memory they borrow.
+void forEachVector(
+    TaskCursor* cursor,
+    const std::function<ContinueFuture(TaskCursor*)>& addSplits,
+    uint64_t maxWaitMicros,
+    const std::function<void(const RowVectorPtr&)>& callback) {
   auto* task = cursor->task().get();
   cursor->start();
   auto future = ContinueFuture::makeEmpty();
@@ -1434,11 +1437,11 @@ readCursorAsync(
     if (future.valid()) {
       future.wait();
     }
-    future = addSplits(cursor.get());
+    future = addSplits(cursor);
     while (cursor->moveNext()) {
       auto vector = cursor->current();
       vector->loadedVector();
-      result.push_back(std::move(vector));
+      callback(vector);
       testingMaybeTriggerAbort(task);
     }
   }
@@ -1459,7 +1462,36 @@ readCursorAsync(
           task->toString());
     }
   }
+}
+
+} // namespace
+
+std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
+readCursorAsync(
+    const CursorParameters& params,
+    std::function<ContinueFuture(TaskCursor*)> addSplits,
+    uint64_t maxWaitMicros) {
+  auto cursor = TaskCursor::create(params);
+  // 'result' borrows memory from cursor so the life cycle must be shorter.
+  std::vector<RowVectorPtr> result;
+  forEachVector(
+      cursor.get(), addSplits, maxWaitMicros, [&](const RowVectorPtr& vector) {
+        result.push_back(vector);
+      });
   return {std::move(cursor), std::move(result)};
+}
+
+std::pair<std::unique_ptr<TaskCursor>, uint64_t> countResults(
+    const CursorParameters& params,
+    std::function<ContinueFuture(TaskCursor*)> addSplits,
+    uint64_t maxWaitMicros) {
+  auto cursor = TaskCursor::create(params);
+  uint64_t numRows{0};
+  forEachVector(
+      cursor.get(), addSplits, maxWaitMicros, [&](const RowVectorPtr& vector) {
+        numRows += vector->size();
+      });
+  return {std::move(cursor), numRows};
 }
 
 bool waitForTaskFinish(

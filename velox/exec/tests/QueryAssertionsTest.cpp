@@ -45,6 +45,61 @@ class QueryAssertionsTest : public OperatorTestBase {
   }
 };
 
+// 'countResults' counts each batch and drops it, while 'readCursorAsync' keeps
+// every batch alive until it returns. Both copy the results into 'outputPool',
+// so that pool's peak shows the difference.
+TEST_F(QueryAssertionsTest, countResultsDoesNotAccumulate) {
+  constexpr int32_t kNumBatches = 100;
+  constexpr int32_t kNumRowsPerBatch = 1'000;
+  const int64_t resultBytes =
+      int64_t(kNumBatches) * kNumRowsPerBatch * sizeof(int64_t);
+
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(kNumBatches);
+  for (auto i = 0; i < kNumBatches; ++i) {
+    batches.push_back(makeRowVector({makeFlatVector<int64_t>(
+        kNumRowsPerBatch, [](auto row) { return row; })}));
+  }
+  auto plan = PlanBuilder().values(batches).planNode();
+
+  auto addSplits = [](TaskCursor* cursor) {
+    if (!cursor->noMoreSplits()) {
+      cursor->setNoMoreSplits();
+    }
+    return ContinueFuture::makeEmpty();
+  };
+
+  int64_t countPeakBytes{0};
+  uint64_t numRows{0};
+  {
+    CursorParameters params;
+    params.planNode = plan;
+    auto outputPool = memory::memoryManager()->addLeafPool();
+    params.outputPool = outputPool;
+
+    auto result = countResults(params, addSplits);
+    numRows = result.second;
+    countPeakBytes = outputPool->peakBytes();
+  }
+  EXPECT_EQ(uint64_t(kNumBatches) * kNumRowsPerBatch, numRows);
+
+  int64_t readPeakBytes{0};
+  {
+    CursorParameters params;
+    params.planNode = plan;
+    auto outputPool = memory::memoryManager()->addLeafPool();
+    params.outputPool = outputPool;
+
+    auto [cursor, results] = readCursorAsync(params, addSplits);
+    EXPECT_EQ(kNumBatches, results.size());
+    readPeakBytes = outputPool->peakBytes();
+  }
+
+  // Collecting holds the whole result set; counting holds one batch at a time.
+  EXPECT_GE(readPeakBytes, resultBytes);
+  EXPECT_LT(countPeakBytes, resultBytes / 10);
+}
+
 TEST_F(QueryAssertionsTest, basic) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>(10, [&](auto row) { return row; }),
