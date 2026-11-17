@@ -328,9 +328,11 @@ class ALPEncoding final
         /*size=*/0, pool, options.bufferPool};
     ScopedVector<physicalType> exceptionValues{
         /*size=*/0, pool, options.bufferPool};
-    const auto [exponent, factor] = findBestExponentFactorByCount(
+    const auto [exponent, factor] = findBestExponentFactor(
         std::span<const cppDataType>{
-            logicalValues.data(), logicalValues.size()});
+            logicalValues.data(), logicalValues.size()},
+        rowCount,
+        options);
 
     const double exponentMultiplier = kPow10Double[exponent];
     const double factorMultiplier = kPow10Double[factor];
@@ -449,11 +451,10 @@ class ALPEncoding final
       uint32_t length,
       Buffer& buffer,
       const Encoding::Options& options = {}) {
-    const auto sourceRowCount =
-        EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
-    NIMBLE_CHECK_LE(offset, sourceRowCount);
-    NIMBLE_CHECK_LE(length, sourceRowCount - offset);
-    NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+    EncodingPrefix::checkSliceRange(
+        EncodingPrefix::readRowCount(encoded, options.useVarintRowCount),
+        offset,
+        length);
 
     const char* pos = encoded.data() +
         EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);
@@ -530,117 +531,18 @@ class ALPEncoding final
     return {reserved, encodingSize};
   }
 
+  /// Estimates the complete input using bounded sampling and scalar child
+  /// estimates with the same size convention as other Nimble estimators.
   static std::optional<uint64_t> estimateSize(
       std::span<const physicalType> values,
-      const Encoding::Options& options = {}) {
-    if (values.empty()) {
-      return std::nullopt;
-    }
+      const Encoding::Options& options = {});
 
-    const uint64_t rowCount = values.size();
-    const uint32_t sampleSize = estimateSampleSize(rowCount);
-
-    std::vector<physicalType> sampledValues;
-    sampledValues.reserve(sampleSize);
-    // Select evenly spaced input positions without accumulating rounding error.
-    for (uint32_t i = 0; i < sampleSize; ++i) {
-      const auto inputIndex = sampledValueIndex(i, rowCount, sampleSize);
-      sampledValues.push_back(values[inputIndex]);
-    }
-
-    return estimateSizeFromSample(rowCount, sampledValues, options);
-  }
-
+  /// Estimates rowCount values from a representative sample. Projects child
+  /// counts before estimating scalar costs and adds ALP metadata once.
   static std::optional<uint64_t> estimateSizeFromSample(
       uint64_t rowCount,
       std::span<const physicalType> sampledValues,
-      const Encoding::Options& options = {}) {
-    NIMBLE_CHECK_GT(rowCount, 0, "ALP estimation requires non-empty input.");
-    NIMBLE_CHECK(
-        !sampledValues.empty(), "ALP estimation requires a non-empty sample.");
-    NIMBLE_CHECK_LE(
-        sampledValues.size(),
-        rowCount,
-        "ALP sample size cannot exceed the input row count.");
-
-    const uint64_t sampleSize = sampledValues.size();
-
-    std::vector<cppDataType> logicalValues;
-    logicalValues.reserve(sampleSize);
-    for (const auto value : sampledValues) {
-      logicalValues.push_back(detail::alp::toLogical<cppDataType>(value));
-    }
-
-    const auto [exponent, factor] = findBestExponentFactorByCount(
-        std::span<const cppDataType>{
-            logicalValues.data(), logicalValues.size()});
-
-    std::vector<uint64_t> encodedValues;
-    encodedValues.reserve(sampleSize);
-    std::vector<uint32_t> exceptionPositions;
-    exceptionPositions.reserve(sampleSize);
-    std::vector<physicalType> exceptionValues;
-    exceptionValues.reserve(sampleSize);
-    uint64_t sampleExceptionCount{0};
-    for (auto i = 0; i < sampleSize; ++i) {
-      if (!canRepresentExactly(
-              logicalValues[i],
-              sampledValues[static_cast<size_t>(i)],
-              exponent,
-              factor)) {
-        encodedValues.push_back(0);
-        exceptionPositions.push_back(
-            sampledValueIndex(i, rowCount, sampleSize));
-        exceptionValues.push_back(sampledValues[static_cast<size_t>(i)]);
-        ++sampleExceptionCount;
-        continue;
-      }
-
-      const auto encoded =
-          encodeValue(static_cast<double>(logicalValues[i]), exponent, factor);
-      encodedValues.push_back(velox::ZigZag::encode(encoded));
-    }
-
-    const auto encodedStats = Statistics<uint64_t>::create(
-        std::span<const uint64_t>{encodedValues.data(), encodedValues.size()});
-    // Model the inexpensive scalar candidates without recursively estimating
-    // complex nested encodings.
-    const uint64_t nestedEncodedValuesSize = std::min(
-        FixedBitWidthEncoding<uint64_t>::estimateSize(
-            rowCount, encodedStats, options),
-        TrivialEncoding<uint64_t>::estimateSize(rowCount));
-    const uint64_t exceptionCount =
-        (sampleExceptionCount * rowCount + sampleSize - 1) / sampleSize;
-    uint64_t exceptionPositionsSize{0};
-    uint64_t exceptionValuesSize{0};
-    if (exceptionCount > 0) {
-      const auto positionStats = Statistics<uint32_t>::create(
-          std::span<const uint32_t>{
-              exceptionPositions.data(), exceptionPositions.size()});
-      exceptionPositionsSize = std::min(
-          TrivialEncoding<uint32_t>::estimateSize(exceptionCount),
-          FixedBitWidthEncoding<uint32_t>::estimateSize(
-              exceptionCount, positionStats, options));
-
-      const auto valueStats = Statistics<physicalType>::create(
-          std::span<const physicalType>{
-              exceptionValues.data(), exceptionValues.size()});
-      exceptionValuesSize = std::min(
-          TrivialEncoding<physicalType>::estimateSize(exceptionCount),
-          FixedBitWidthEncoding<physicalType>::estimateSize(
-              exceptionCount, valueStats, options));
-    }
-    const uint64_t metadataSize = kHeaderSize +
-        (exceptionCount > 0 ? varint::varintSize(exceptionCount) : 0) +
-        varint::varintSize(nestedEncodedValuesSize) +
-        (exceptionCount > 0 ? varint::varintSize(exceptionPositionsSize) +
-                 varint::varintSize(exceptionValuesSize)
-                            : 0);
-    return Encoding::serializePrefixSize(
-               static_cast<uint32_t>(rowCount), options.useVarintRowCount) +
-        metadataSize + nestedEncodedValuesSize + exceptionPositionsSize +
-        exceptionValuesSize;
-  }
+      const Encoding::Options& options = {});
 
   static uint32_t estimateSampleSize(uint64_t rowCount) {
     return std::min(static_cast<uint32_t>(rowCount), kSampleSize);
@@ -924,96 +826,17 @@ class ALPEncoding final
   }
 
  private:
-  // Counts the values exactly representable under (exponent, factor), routing
-  // through the vectorized transform with a scalar tail. Kept out of line
-  // because the candidate grid calls it a few hundred times, so a single
-  // shared body keeps the caller small.
-  FOLLY_NOINLINE static uint32_t countRepresentable(
-      std::span<const cppDataType> logicalValues,
-      const physicalType* physicals,
-      int exponent,
-      int factor) {
-    const double exponentMultiplier = kPow10Double[exponent];
-    const double factorMultiplier = kPow10Double[factor];
-    const uint64_t sampleSize = logicalValues.size();
-    uint32_t representableCount = 0;
-
-    alignas(64) uint64_t zigZagLanes[kBatchSize];
-    alignas(64) bool okLanes[kBatchSize];
-
-    uint64_t i = 0;
-    for (; i + kBatchSize <= sampleSize; i += kBatchSize) {
-      batchTransform(
-          logicalValues.data() + i,
-          physicals + i,
-          exponentMultiplier,
-          factorMultiplier,
-          zigZagLanes,
-          okLanes);
-      for (std::size_t k = 0; k < kBatchSize; ++k) {
-        representableCount += okLanes[k] ? 1 : 0;
-      }
-    }
-    for (; i < sampleSize; ++i) {
-      uint64_t zigZag = 0;
-      if (scalarTransformOne(
-              logicalValues[i],
-              physicals[i],
-              exponentMultiplier,
-              factorMultiplier,
-              zigZag)) {
-        ++representableCount;
-      }
-    }
-    return representableCount;
-  }
-
-  // Selects the sampled (exponent, factor) pair that preserves the most values.
-  static std::pair<uint8_t, uint8_t> findBestExponentFactorByCount(
-      std::span<const cppDataType> values) {
-    const uint32_t sampleSize =
-        std::min(static_cast<uint32_t>(values.size()), kSampleSize);
-    const auto sample = values.subspan(0, sampleSize);
-    // Free: physicalType has the same width as cppDataType, and the cast is
-    // exactly what toPhysical does per value.
-    const physicalType* physicals =
-        EncodingPhysicalType<cppDataType>::asEncodingPhysicalTypeSpan(sample)
-            .data();
-
-    uint8_t bestExponent = 0;
-    uint8_t bestFactor = 0;
-    uint32_t bestRepresentableCount = 0;
-
-    for (int e = 0; e <= kMaxExponent; ++e) {
-      const uint32_t countNoFactor =
-          countRepresentable(sample, physicals, e, /*factor=*/0);
-      if (countNoFactor > bestRepresentableCount) {
-        bestRepresentableCount = countNoFactor;
-        bestExponent = static_cast<uint8_t>(e);
-        bestFactor = 0;
-      }
-      if (bestRepresentableCount == sampleSize) {
-        break;
-      }
-
-      for (int f = 1; f <= std::min(e, kMaxFactor); ++f) {
-        const uint32_t countWithFactor =
-            countRepresentable(sample, physicals, e, f);
-        if (countWithFactor > bestRepresentableCount) {
-          bestRepresentableCount = countWithFactor;
-          bestExponent = static_cast<uint8_t>(e);
-          bestFactor = static_cast<uint8_t>(f);
-        }
-        if (bestRepresentableCount == sampleSize) {
-          break;
-        }
-      }
-      if (bestRepresentableCount == sampleSize) {
-        break;
-      }
-    }
-    return {bestExponent, bestFactor};
-  }
+  // Selects the (exponent, factor) pair with the smallest estimated encoded
+  // size on an evenly spaced sample of 'values': all 'rowCount' values of the
+  // encoding, or the size estimate's sample of them. Each value costs the bit
+  // width of the integer range, and each exception its raw bits and its
+  // position, priced as the size estimate prices positions over 'rowCount'
+  // rows under 'options'. Encoding and size estimation draw the same sample,
+  // so they select the same pair.
+  static std::pair<uint8_t, uint8_t> findBestExponentFactor(
+      std::span<const cppDataType> values,
+      uint32_t rowCount,
+      const Encoding::Options& options);
 
   // Converts a floating-point value to the integer stored by ALP.
   static int64_t encodeValue(double value, int exponent, int factor) {

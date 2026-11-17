@@ -19,6 +19,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <functional>
 #include <optional>
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
@@ -32,6 +33,7 @@
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/type/Type.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 using namespace ::testing;
@@ -1017,14 +1019,12 @@ void testMapWriter(
     } else if (inputType == MapWriterInputType::kFlatMap) {
       transformedInput = batches;
       pBatches = &transformedInput;
-      VectorMaker maker(&pool);
-
       for (size_t i = 0; i < transformedInput.size(); i++) {
         auto mapBatch =
             std::dynamic_pointer_cast<MapVector>(transformedInput[i]);
         ASSERT_TRUE(mapBatch);
 
-        transformedInput[i] = maker.flatMapVector<TKEY>(mapBatch);
+        transformedInput[i] = FlatMapVector::fromMapVector(*mapBatch);
       }
     }
 
@@ -1938,8 +1938,8 @@ TEST_F(ColumnWriterTest, testMapWriterBigBatch) {
 
 TEST_F(ColumnWriterTest, testMapWriterUnalignedKeyValueCount) {
   VectorMaker maker(pool_.get());
-  auto keys = maker.flatVector<int64_t>(11, folly::identity);
-  auto values = maker.flatVector<int64_t>(12, folly::identity);
+  auto keys = maker.flatVector<int64_t>(11, std::identity{});
+  auto values = maker.flatVector<int64_t>(12, std::identity{});
   auto offsets = allocateIndices(3, pool_.get());
   auto sizes = allocateIndices(3, pool_.get());
 

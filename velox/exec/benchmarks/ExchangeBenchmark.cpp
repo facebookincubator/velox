@@ -15,6 +15,7 @@
  */
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
+#include <folly/stop_watch.h>
 
 #include "velox/core/QueryConfig.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -134,7 +135,7 @@ class ExchangeBenchmark : public VectorTestBase {
 
     RowVectorPtr expected;
 
-    const auto startUs = getCurrentTimeMicro();
+    const folly::stop_watch<std::chrono::microseconds> watch;
     BENCHMARK_SUSPEND {
       assert(!vectors.empty());
       configSettings_[core::QueryConfig::kMaxPartitionedOutputBufferSize] =
@@ -195,7 +196,7 @@ class ExchangeBenchmark : public VectorTestBase {
         .assertResults(expected);
 
     BENCHMARK_SUSPEND {
-      wallUs = getCurrentTimeMicro() - startUs;
+      wallUs = watch.elapsed().count();
       std::vector<int64_t> taskWallMs;
 
       for (const auto& task : leafTasks) {
@@ -266,7 +267,7 @@ class ExchangeBenchmark : public VectorTestBase {
       })});
     };
 
-    auto startMicros = getCurrentTimeMicro();
+    const folly::stop_watch<std::chrono::microseconds> localPartitionWatch;
     std::mutex mutex;
     for (int32_t i = 0; i < numTasks; ++i) {
       threads.push_back(std::thread([&]() {
@@ -290,7 +291,7 @@ class ExchangeBenchmark : public VectorTestBase {
     }
 
     BENCHMARK_SUSPEND {
-      localPartitionWallUs = getCurrentTimeMicro() - startMicros;
+      localPartitionWallUs = localPartitionWatch.elapsed().count();
 
       std::vector<core::PlanNodeId> localPartitionNodeIds{
           localPartitionId1, localPartitionId2};

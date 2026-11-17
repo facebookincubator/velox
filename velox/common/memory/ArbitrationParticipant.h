@@ -18,6 +18,8 @@
 
 #include "velox/common/memory/MemoryArbitrator.h"
 
+#include <folly/stop_watch.h>
+
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/future/VeloxPromise.h"
@@ -169,9 +171,7 @@ class ArbitrationParticipant
 
   /// Returns the duration of this arbitration participant since its creation.
   uint64_t durationNs() const {
-    const auto now = getCurrentTimeNano();
-    VELOX_CHECK_GE(now, createTimeNs_);
-    return now - createTimeNs_;
+    return creationWatch_.elapsed().count();
   }
 
   /// Invoked to acquire a shared reference to this arbitration participant
@@ -337,7 +337,7 @@ class ArbitrationParticipant
   MemoryPool* const pool_;
   const Config* const config_;
   const uint64_t maxCapacity_;
-  const uint64_t createTimeNs_;
+  const folly::stop_watch<std::chrono::nanoseconds> creationWatch_;
 
   mutable std::mutex stateLock_;
   bool aborted_{false};

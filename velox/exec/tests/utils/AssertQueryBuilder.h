@@ -73,7 +73,11 @@ class AssertQueryBuilder {
   typename std::enable_if<std::is_arithmetic<T>::value, AssertQueryBuilder&>::
       type
       config(const std::string& key, const T& value) {
-    return config(key, std::to_string(value));
+    if constexpr (std::is_same_v<T, bool>) {
+      return config(key, std::string(value ? "true" : "false"));
+    } else {
+      return config(key, std::to_string(value));
+    }
   }
 
   /// Set multiple configuration properties.
@@ -135,6 +139,12 @@ class AssertQueryBuilder {
   /// Indicate that the splits should be added with sequence numbers to the task
   /// when the query runs.
   AssertQueryBuilder& addSplitWithSequence(bool addWithSequence);
+
+  /// Options for running FixedPointNode loops.
+  AssertQueryBuilder& fixedPointOptions(const FixedPointOptions* options) {
+    params_.fixedPointOptions = options;
+    return *this;
+  }
 
   /// Sets the QueryCtx.
   AssertQueryBuilder& queryCtx(const std::shared_ptr<core::QueryCtx>& ctx) {

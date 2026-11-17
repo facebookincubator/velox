@@ -30,6 +30,8 @@ std::string_view ScanSpec::columnTypeString(ScanSpec::ColumnType columnType) {
       return "ROW_INDEX";
     case ScanSpec::ColumnType::kComposite:
       return "COMPOSITE";
+    case ScanSpec::ColumnType::kReadRange:
+      return "READ_RANGE";
     default:
       VELOX_UNREACHABLE(
           "Unrecognized ColumnType: {}", static_cast<int8_t>(columnType));
@@ -174,12 +176,16 @@ bool ScanSpec::hasFilter() const {
 }
 
 bool ScanSpec::hasFilterApplicableToConstant() const {
+  return hasFilterIgnoringDisabled();
+}
+
+bool ScanSpec::hasFilterIgnoringDisabled() const {
   if (filter_) {
     return true;
   }
   for (auto& child : children_) {
     if (!child->isArrayElementOrMapEntry_ &&
-        child->hasFilterApplicableToConstant()) {
+        child->hasFilterIgnoringDisabled()) {
       return true;
     }
   }

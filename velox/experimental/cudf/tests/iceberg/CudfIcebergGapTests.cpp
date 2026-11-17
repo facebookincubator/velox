@@ -286,6 +286,7 @@ TEST_F(CudfIcebergGapTests, hivePartitionedTable) {
                   .connectorId(kCudfIcebergConnectorId)
                   .outputType(fullType)
                   .dataColumns(ROW({"c0", "c1"}, {BIGINT(), BIGINT()}))
+                  .assignments(makeAssignments(fullType, {"country"}))
                   .endTableScan()
                   .planNode();
 
@@ -336,6 +337,7 @@ TEST_F(CudfIcebergGapTests, hivePartitionWithEqualityDelete) {
                   .connectorId(kCudfIcebergConnectorId)
                   .outputType(fullType)
                   .dataColumns(dataColumns)
+                  .assignments(makeAssignments(fullType, {"region"}))
                   .endTableScan()
                   .planNode();
 
@@ -383,6 +385,7 @@ TEST_F(CudfIcebergGapTests, equalityDeleteOnPartitionColumnNotSupported) {
                   .connectorId(kCudfIcebergConnectorId)
                   .outputType(tableType)
                   .dataColumns(tableType)
+                  .assignments(makeAssignments(tableType, {"region"}))
                   .endTableScan()
                   .planNode();
 
@@ -560,7 +563,7 @@ TEST_F(CudfIcebergGapTests, multipleEqualityDeletesDifferentKeyColumns) {
       getFileSize(eqDelFile1->getPath()),
       /*equalityFieldIds=*/{1});
 
-  auto eqDel2 = makeRowVector({"c1"}, {makeFlatVector<int64_t>({40})});
+  auto eqDel2 = makeNamedRowVector("c1", makeFlatVector<int64_t>({40}));
   auto eqDelFile2 = TempFilePath::create();
   writeDeleteFile(DeleteFileFormat::PARQUET, eqDelFile2->getPath(), {eqDel2});
 
@@ -782,6 +785,7 @@ TEST_F(CudfIcebergGapTests, partitionColumnInt32Type) {
                   .connectorId(kCudfIcebergConnectorId)
                   .outputType(fullType)
                   .dataColumns(dataColumns)
+                  .assignments(makeAssignments(fullType, {"year"}))
                   .endTableScan()
                   .planNode();
 
@@ -817,6 +821,7 @@ TEST_F(CudfIcebergGapTests, partitionColumnInt64Type) {
                   .connectorId(kCudfIcebergConnectorId)
                   .outputType(fullType)
                   .dataColumns(dataColumns)
+                  .assignments(makeAssignments(fullType, {"timestamp_ms"}))
                   .endTableScan()
                   .planNode();
 

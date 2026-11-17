@@ -22,6 +22,7 @@
 #include <glog/logging.h>
 #include "folly/IntrusiveList.h"
 #include "folly/container/F14Map.h"
+#include "folly/stop_watch.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/time/Timer.h"
 
@@ -206,7 +207,9 @@ class SimpleLRUCache {
     Value* value;
     size_t size;
     uint32_t numPins;
-    size_t expireTimeMs;
+    // Started when the element is added. Only used if expireDurationMs_ is not
+    // zero.
+    folly::stop_watch<std::chrono::milliseconds> addWatch;
     folly::IntrusiveListHook lruEntry;
     folly::IntrusiveListHook expireEntry;
   };
@@ -280,10 +283,10 @@ SimpleLRUCache<Key, Value, Comparator, Hash>::removeExpiredEntries() {
   if (expireDurationMs_ == 0) {
     return;
   }
-  const auto currentTimeMs = getCurrentTimeMs();
+  const std::chrono::milliseconds expireDuration{expireDurationMs_};
   auto it = expireList_.begin();
   while (it != expireList_.end()) {
-    if (it->expireTimeMs > currentTimeMs) {
+    if (!it->addWatch.elapsed(expireDuration)) {
       return;
     }
     if (it->numPins > 0) {
@@ -326,7 +329,6 @@ inline bool SimpleLRUCache<Key, Value, Comparator, Hash>::addInternal(
   keys_.emplace(e->key, e);
   lruList_.push_back(*e);
   if (expireDurationMs_ != 0) {
-    e->expireTimeMs = getCurrentTimeMs() + expireDurationMs_;
     expireList_.push_back(*e);
   }
   curSize_ += size;

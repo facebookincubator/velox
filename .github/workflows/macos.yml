@@ -100,6 +100,8 @@ jobs:
           persist-credentials: false
 
       - name: Cache ccache
+        continue-on-error: true
+        timeout-minutes: 30
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: ${{ env.CCACHE_DIR }}
@@ -132,6 +134,9 @@ jobs:
           install_double_conversion
 
           echo "NJOBS=`sysctl -n hw.ncpu`" >> $GITHUB_ENV
+          # Later steps run in a new shell, so the OpenSSL 3 pin from
+          # setup-macos.sh has to be carried over explicitly.
+          echo "OPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR" >> $GITHUB_ENV
           majorVersion=$(sw_vers -productVersion | awk -F '.' '{print $1}')
           echo "$INSTALL_PREFIX/bin" >> $GITHUB_PATH
 
@@ -191,7 +196,9 @@ jobs:
             --target velox "${matched[@]}"
           ccache -s
 
-      - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+      - uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
+        continue-on-error: true
+        timeout-minutes: 20
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-macos-1-macos-15-${{ matrix.type }}

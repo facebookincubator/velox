@@ -20,15 +20,8 @@
 
 namespace facebook::velox::exec {
 
-class NestedLoopJoinBridge : public JoinBridge {
- public:
-  void setData(std::vector<RowVectorPtr> buildVectors);
-
-  std::optional<std::vector<RowVectorPtr>> dataOrFuture(ContinueFuture* future);
-
- private:
-  std::optional<std::vector<RowVectorPtr>> buildVectors_;
-};
+class NestedLoopJoinBridge
+    : public BuildResultBridge<std::vector<RowVectorPtr>> {};
 
 class NestedLoopJoinBuild : public Operator {
  public:

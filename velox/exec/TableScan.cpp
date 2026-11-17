@@ -128,14 +128,15 @@ void TableScan::initialize() {
   VELOX_CHECK_EQ(driverCtx_->driver->operatorIndex(this), 0);
 }
 
-bool TableScan::shouldYield(StopReason taskStopReason, size_t startTimeMs)
-    const {
+bool TableScan::shouldYield(
+    StopReason taskStopReason,
+    const folly::stop_watch<std::chrono::milliseconds>& getOutputWatch) const {
   // Checks task-level yield signal, driver-level yield signal and table scan
   // output processing time limit.
   return taskStopReason == StopReason::kYield ||
       driverCtx_->driver->shouldYield() ||
       ((getOutputTimeLimitMs_ != 0) &&
-       (getCurrentTimeMs() - startTimeMs) >= getOutputTimeLimitMs_);
+       getOutputWatch.elapsed().count() >= getOutputTimeLimitMs_);
 }
 
 bool TableScan::shouldStop(StopReason taskStopReason) const {
@@ -157,14 +158,14 @@ RowVectorPtr TableScan::getOutput() {
     return nullptr;
   }
 
-  const auto startTimeMs = getCurrentTimeMs();
+  const folly::stop_watch<std::chrono::milliseconds> getOutputWatch;
   for (;;) {
     // Check if our Task needs us to yield or we've been running for too long
     // w/o producing a result. In this case we return with the Yield blocking
     // reason and an already fulfilled future.
     const StopReason taskStopReason = driverCtx_->task->shouldStop();
     if (shouldStop(taskStopReason) ||
-        shouldYield(taskStopReason, startTimeMs)) {
+        shouldYield(taskStopReason, getOutputWatch)) {
       blockingReason_ = BlockingReason::kYield;
       blockingFuture_ = ContinueFuture{folly::Unit{}};
       // A point for test code injection.
@@ -237,6 +238,18 @@ RowVectorPtr TableScan::getOutput() {
       lockedStats->rawInputPositions = dataSource_->getCompletedRows();
       lockedStats->rawInputBytes = dataSource_->getCompletedBytes();
 
+      // Report every read, including one whose rows the filters removed or
+      // whose output is dropped, so the events add up to all rows read.
+      const auto completedRowsDelta =
+          dataSource_->getCompletedRows() - prevCompletedRows;
+      if (completedRowsDelta > 0) {
+        core::ScanBatchEvent event;
+        event.numRows = completedRowsDelta;
+        event.wallTimeMicros = ioTimeUs;
+        event.planNodeId = planNodeId();
+        dataSource_->fireScanBatchCallback(event);
+      }
+
       RowVectorPtr data = std::move(dataOptional).value();
       // NOTE: even if we the scan output has been suppressed, we still need to
       // at least read one batch from a split to trigger split fetch inside Meta
@@ -249,14 +262,6 @@ RowVectorPtr TableScan::getOutput() {
             flatSize = data->estimateFlatSize();
           }
           lockedStats->addInputVector(flatSize, data->size());
-          const auto completedRowsDelta =
-              dataSource_->getCompletedRows() - prevCompletedRows;
-          if (completedRowsDelta > 0) {
-            core::ScanBatchEvent event;
-            event.numRows = completedRowsDelta;
-            event.wallTimeMicros = ioTimeUs;
-            dataSource_->fireScanBatchCallback(event);
-          }
           maxFilteringRatio_ = std::max(
               {maxFilteringRatio_,
                1.0 * data->size() / readBatchSize,
@@ -299,7 +304,7 @@ RowVectorPtr TableScan::getOutput() {
     const bool emptySplit = currNumRawInputRows == rawInputRowsSinceLastSplit_;
     rawInputRowsSinceLastSplit_ = currNumRawInputRows;
 
-    driverCtx_->task->splitFinished(true, currentSplitWeight_);
+    driverCtx_->task->splitsFinished(planNodeId(), *driverCtx_);
     needNewSplit_ = true;
 
     // We only update scaled controller when we have finished a non-empty split.
@@ -341,7 +346,7 @@ bool TableScan::getSplit() {
     return false;
   }
 
-  if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
+  if (splitTracer_ != nullptr) [[unlikely]] {
     splitTracer_->write(split);
   }
 
@@ -349,7 +354,6 @@ bool TableScan::getSplit() {
       std::string(TableScan::kConnectorSplitSize),
       RuntimeCounter(static_cast<int64_t>(split.connectorSplit->size())));
   const auto& connectorSplit = split.connectorSplit;
-  currentSplitWeight_ = connectorSplit->splitWeight;
   splitBatchSizeHint_ = connectorSplit->batchSizeHint;
   needNewSplit_ = false;
 
@@ -394,15 +398,16 @@ bool TableScan::getSplit() {
     // The AsyncSource returns a unique_ptr to a shared_ptr. The unique_ptr
     // will be nullptr if there was a cancellation.
     numReadyPreloadedSplits_ += connectorSplit->dataSource->hasValue();
-    auto startTimeNs = getCurrentTimeNano();
+    const folly::stop_watch<std::chrono::nanoseconds> moveWatch;
     auto preparedDataSource = connectorSplit->dataSource->move();
-    auto endTimeNs = getCurrentTimeNano();
     stats_.wlock()->addRuntimeStat(
         std::string(TableScan::kWaitForPreloadSplitNanos),
-        RuntimeCounter(endTimeNs - startTimeNs, RuntimeCounter::Unit::kNanos));
+        RuntimeCounter(
+            moveWatch.elapsed().count(), RuntimeCounter::Unit::kNanos));
     if (preparedDataSource == nullptr) {
       // There must be a cancellation.
       VELOX_CHECK(operatorCtx_->task()->isCancelled());
+      needNewSplit_ = true;
       return false;
     }
     stats_.wlock()->addRuntimeStat(

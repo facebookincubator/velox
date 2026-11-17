@@ -18,6 +18,7 @@
 
 #include <folly/container/F14Set.h>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -231,6 +232,15 @@ struct TableParameter {
 struct RowNumberColumnInfo {
   column_index_t insertPosition;
   std::string name;
+};
+
+/// Rows of a split to read: 'numRows' rows starting at row 'firstRow', counted
+/// from the first row in the split's byte range.
+struct SplitRowRange {
+  uint64_t firstRow{0};
+  uint64_t numRows{std::numeric_limits<uint64_t>::max()};
+
+  bool operator==(const SplitRowRange& other) const = default;
 };
 
 /// Carries format-owned reader and writer options through the common reader
@@ -503,6 +513,16 @@ class RowReaderOptions {
     return skipRows_;
   }
 
+  /// Restricts reading to a range of the split's rows. Only the selective
+  /// Nimble reader supports it.
+  void setSplitRowRange(std::optional<SplitRowRange> splitRowRange) {
+    splitRowRange_ = splitRowRange;
+  }
+
+  const std::optional<SplitRowRange>& splitRowRange() const {
+    return splitRowRange_;
+  }
+
   bool preserveFlatMapsInMemory() const {
     return preserveFlatMapsInMemory_;
   }
@@ -571,14 +591,6 @@ class RowReaderOptions {
     indexEnabled_ = enabled;
   }
 
-  bool stringDecoderZeroCopy() const {
-    return stringDecoderZeroCopy_;
-  }
-
-  void setStringDecoderZeroCopy(bool stringDecoderZeroCopy) {
-    stringDecoderZeroCopy_ = stringDecoderZeroCopy;
-  }
-
   bool nimblePreserveDictionaryEncoding() const {
     return nimblePreserveDictionaryEncoding_;
   }
@@ -593,6 +605,24 @@ class RowReaderOptions {
 
   void setNimbleDictionaryAwareReads(bool value) {
     nimbleDictionaryAwareReads_ = value;
+  }
+
+  bool nimbleScanFastPath() const {
+    return nimbleScanFastPath_;
+  }
+
+  void setNimbleScanFastPath(bool value) {
+    nimbleScanFastPath_ = value;
+  }
+
+  /// Returns whether the FSST decode cache is enabled.
+  bool nimbleFsstDecodeRepeatedPayloads() const {
+    return nimbleFsstDecodeRepeatedPayloads_;
+  }
+
+  /// Enables the FSST decode cache independently of the scan fast path.
+  void setNimbleFsstDecodeRepeatedPayloads(bool value) {
+    nimbleFsstDecodeRepeatedPayloads_ = value;
   }
 
   bool lazyColumnIo() const {
@@ -679,6 +709,7 @@ class RowReaderOptions {
   std::function<void(uint16_t)> stripeCountCallback_;
   bool eagerFirstStripeLoad_{true};
   uint64_t skipRows_{0};
+  std::optional<SplitRowRange> splitRowRange_;
 
   std::shared_ptr<UnitLoaderFactory> unitLoaderFactory_;
 
@@ -689,12 +720,15 @@ class RowReaderOptions {
   bool indexEnabled_{false};
   // Enables zero-copy string decoding in the Nimble selective reader,
   // using the non-legacy encoding path. Controlled via session property.
-  bool stringDecoderZeroCopy_{false};
   // Controls whether dictionary-encoded Nimble string columns return
   // DictionaryVector instead of FlatVector.
   bool nimblePreserveDictionaryEncoding_{false};
   // Enables dictionary-aware reads for Nimble dictionary-encoded columns.
   bool nimbleDictionaryAwareReads_{false};
+  // Routes Nimble encodings through the scan fast path.
+  bool nimbleScanFastPath_{false};
+  // Reuses decoded FSST strings within each encoding read call.
+  bool nimbleFsstDecodeRepeatedPayloads_{false};
   // Defers I/O for projected columns without pushdown or remaining filters.
   bool lazyColumnIo_{false};
   folly::F14FastSet<std::string> remainingFilterColumns_;
@@ -1042,9 +1076,9 @@ class ReaderOptions : public io::ReaderOptions {
   }
 
   /// Process-wide async data cache for Nimble metadata caching. When both
-  /// fileHandle and cache are set, TabletReader creates a
-  /// CachedMetadataInput that caches decompressed footer, stripes, and
-  /// index metadata across readers on the same file.
+  /// fileHandle and cache are set and cacheMetadata() is true, TabletReader
+  /// caches decompressed footer, stripes, and index metadata across readers on
+  /// the same file, in the block cache that Nimble builds on this cache.
   cache::AsyncDataCache* cache() const {
     return cache_;
   }

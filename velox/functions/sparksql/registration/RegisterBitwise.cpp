@@ -49,6 +49,11 @@ void registerBitwiseFunctions(const std::string& prefix) {
       {prefix + "shiftright"});
   registerFunction<ShiftRightFunction, int64_t, int64_t, int32_t>(
       {prefix + "shiftright"});
+
+  registerFunction<ShiftRightUnsignedFunction, int32_t, int32_t, int32_t>(
+      {prefix + "shiftrightunsigned"});
+  registerFunction<ShiftRightUnsignedFunction, int64_t, int64_t, int32_t>(
+      {prefix + "shiftrightunsigned"});
 }
 
 } // namespace facebook::velox::functions::sparksql

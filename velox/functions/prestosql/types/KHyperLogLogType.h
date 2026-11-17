@@ -24,6 +24,8 @@ class KHyperLogLogType final : public VarbinaryType {
   KHyperLogLogType() = default;
 
  public:
+  static std::shared_ptr<const KHyperLogLogType> create() = delete;
+
   static std::shared_ptr<const KHyperLogLogType> get() {
     VELOX_CONSTEXPR_SINGLETON KHyperLogLogType kInstance;
     return {std::shared_ptr<const KHyperLogLogType>{}, &kInstance};

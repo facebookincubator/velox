@@ -211,7 +211,7 @@ Array Functions
         SELECT array_union(array(1, 2, float('nan')), array(1, 3, float('nan'))); -- [1, 2, NaN, 3]
         SELECT array_union(array(array(1)), array(array(null))); -- [[1], [null]]
 
-.. spark::function:: arrays_zip(array(T), array(U),..) -> array(row(T,U, ...))
+.. spark:function:: arrays_zip(array(T), array(U),..) -> array(row(T,U, ...))
 
     Returns the merge of the given arrays, element-wise into a single array of rows.
     The M-th element of the N-th argument will be the N-th field of the M-th output element.

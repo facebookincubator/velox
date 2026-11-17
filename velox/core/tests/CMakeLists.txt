@@ -16,6 +16,7 @@ add_executable(
   velox_core_test
   ConstantTypedExprTest.cpp
   FixedPointPlanNodesTest.cpp
+  MultiStagePlanTest.cpp
   PlanFragmentTest.cpp
   PlanNodeBuilderTest.cpp
   PlanNodeTest.cpp
@@ -25,6 +26,7 @@ add_executable(
   TypeAnalysisTest.cpp
   TypedExprSerdeTest.cpp
   TypedExprToStringTest.cpp
+  TypedExprWithInputsTest.cpp
 )
 
 add_test(velox_core_test velox_core_test)
@@ -38,6 +40,7 @@ target_link_libraries(
     velox_presto_types
     velox_type
     velox_vector_test_lib
+    GTest::gmock
     GTest::gtest
     GTest::gtest_main
 )

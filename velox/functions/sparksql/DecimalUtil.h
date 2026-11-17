@@ -163,7 +163,7 @@ class DecimalUtil {
       VELOX_DCHECK(!overflow);
       R quotient = unsignedDividendRescaled / unsignedDivisor;
       R remainder = unsignedDividendRescaled % unsignedDivisor;
-      if (remainder * 2 >= unsignedDivisor) {
+      if (remainder >= unsignedDivisor - remainder) {
         ++quotient;
       }
       r = quotient * resultSign;

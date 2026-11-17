@@ -510,13 +510,13 @@ struct FromIEEE754Bits32 {
 };
 
 /// lpad(binary, size, padbinary) -> varbinary
-///     Left pads input to size characters with padding.  If size is
+///     Left pads input to size bytes with padding.  If size is
 ///     less than the length of input, the result is truncated to size
-///     characters.  size must not be negative and padding must be non-empty.
+///     bytes.  size must not be negative and padding must be non-empty.
 /// rpad(binary, size, padbinary) -> varbinary
-///     Right pads input to size characters with padding.  If size is
+///     Right pads input to size bytes with padding.  If size is
 ///     less than the length of input, the result is truncated to size
-///     characters.  size must not be negative and padding must be non-empty.
+///     bytes.  size must not be negative and padding must be non-empty.
 template <typename T, bool lpad>
 struct PadFunctionVarbinaryBase {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -526,7 +526,8 @@ struct PadFunctionVarbinaryBase {
       const arg_type<Varbinary>& binary,
       const arg_type<int64_t>& size,
       const arg_type<Varbinary>& padbinary) {
-    stringImpl::pad<lpad, false /*isAscii*/>(result, binary, size, padbinary);
+    // The ASCII path counts one byte per unit, which is the VARBINARY contract.
+    stringImpl::pad<lpad, true /*isAscii*/>(result, binary, size, padbinary);
   }
 };
 

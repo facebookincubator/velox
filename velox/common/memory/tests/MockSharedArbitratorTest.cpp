@@ -453,6 +453,7 @@ class MockSharedArbitrationTest : public testing::Test {
     // Set the globalArbitrationAbortTimeRatio to be very small so that the
     // query can be aborted sooner and the test would not timeout.
     double globalArbitrationAbortTimeRatio{0.005};
+    bool checkUsageLeak{true};
   };
 
   void setupMemory(ArbitratorOptions arbitratorOptions) {
@@ -511,7 +512,9 @@ class MockSharedArbitrationTest : public testing::Test {
              arbitratorOptions.globalArbitrationWithoutSpill)},
         {std::string(ExtraConfig::kGlobalArbitrationAbortTimeRatio),
          folly::to<std::string>(
-             arbitratorOptions.globalArbitrationAbortTimeRatio)}};
+             arbitratorOptions.globalArbitrationAbortTimeRatio)},
+        {std::string(ExtraConfig::kCheckUsageLeak),
+         folly::to<std::string>(arbitratorOptions.checkUsageLeak)}};
     options.arbitrationStateCheckCb =
         std::move(arbitratorOptions.arbitrationStateCheckCb);
     options.checkUsageLeak = true;
@@ -840,6 +843,16 @@ TEST_F(MockSharedArbitrationTest, extraConfigs) {
            .globalArtbitrationEnabled = false,
            .arbitrationTimeoutNs = 0}),
       "(0 vs. 0) maxArbitrationTimeNs can't be zero");
+}
+
+TEST_F(MockSharedArbitrationTest, freeCapacityExceedsMaxCapacity) {
+  // Overflowing the free capacity leaves it inconsistent, which the
+  // arbitrator's destruction-time leak check would otherwise fail on.
+  setupMemory({.checkUsageLeak = false});
+  test::SharedArbitratorTestHelper arbitratorHelper(arbitrator_);
+  VELOX_ASSERT_THROW(
+      arbitratorHelper.freeCapacity(kMemoryCapacity),
+      "Free capacity 1.00GB/0B is larger than the max capacity 512.00MB");
 }
 
 TEST_F(MockSharedArbitrationTest, constructor) {

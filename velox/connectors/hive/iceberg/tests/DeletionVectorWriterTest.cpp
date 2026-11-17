@@ -18,13 +18,17 @@
 
 #include <fstream>
 
+#include <fmt/format.h>
 #include <folly/json.h>
 #include <folly/lang/Bits.h>
 #include <gtest/gtest.h>
 #include <zlib.h>
 
+#include <algorithm>
 #include <cstring>
 #include <limits>
+#include <map>
+#include <numeric>
 #include <random>
 
 #include "velox/common/base/BitUtil.h"
@@ -52,6 +56,71 @@ std::vector<uint64_t> getSetBits(const BufferPtr& bitmap, uint64_t size) {
     }
   }
   return result;
+}
+
+template <typename T>
+void appendLittleEndian(std::string& out, T value) {
+  value = folly::Endian::little(value);
+  out.append(reinterpret_cast<const char*>(&value), sizeof(value));
+}
+
+/// The map-based serializer DeletionVectorWriter used before it switched to a
+/// single pass over sorted positions, kept verbatim as a byte-for-byte oracle.
+std::string mapBasedSerialize(const std::vector<int64_t>& positions) {
+  std::string data;
+  if (positions.empty()) {
+    appendLittleEndian(data, uint64_t{0});
+    return data;
+  }
+  std::vector<int64_t> sorted = positions;
+  std::sort(sorted.begin(), sorted.end());
+  sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+
+  std::map<uint32_t, std::vector<uint32_t>> groups;
+  for (auto pos : sorted) {
+    auto upos = static_cast<uint64_t>(pos);
+    groups[static_cast<uint32_t>(upos >> 32)].push_back(
+        static_cast<uint32_t>(upos & 0xFFFFFFFF));
+  }
+  appendLittleEndian(data, static_cast<uint64_t>(groups.size()));
+  for (auto& [highBits, lowValues] : groups) {
+    appendLittleEndian(data, highBits);
+    std::map<uint16_t, std::vector<uint16_t>> containerMap;
+    for (auto value : lowValues) {
+      containerMap[static_cast<uint16_t>(value >> 16)].push_back(
+          static_cast<uint16_t>(value & 0xFFFF));
+    }
+    const auto numContainers = static_cast<uint32_t>(containerMap.size());
+    appendLittleEndian(data, uint32_t{12'346});
+    appendLittleEndian(data, numContainers);
+    for (const auto& [key, values] : containerMap) {
+      appendLittleEndian(data, key);
+      appendLittleEndian(data, static_cast<uint16_t>(values.size() - 1));
+    }
+    uint32_t offset = 4 + 4 + numContainers * 4 + numContainers * 4;
+    for (const auto& [key, values] : containerMap) {
+      appendLittleEndian(data, offset);
+      offset += values.size() <= 4'096
+          ? static_cast<uint32_t>(values.size()) * 2
+          : 8'192;
+    }
+    for (const auto& [key, values] : containerMap) {
+      if (values.size() <= 4'096) {
+        for (auto value : values) {
+          appendLittleEndian(data, value);
+        }
+      } else {
+        std::vector<uint64_t> bitmap(1'024, 0);
+        for (auto value : values) {
+          bitmap[value / 64] |= 1ULL << (value % 64);
+        }
+        for (auto word : bitmap) {
+          appendLittleEndian(data, word);
+        }
+      }
+    }
+  }
+  return data;
 }
 
 } // namespace
@@ -716,4 +785,96 @@ TEST_F(DeletionVectorWriterTest, rejectsPositionsOutsideRepresentableRange) {
   EXPECT_EQ(
       roundTrip({DeletionVectorWriter::kMaxPosition}),
       std::vector<int64_t>{DeletionVectorWriter::kMaxPosition});
+}
+
+/// The single-pass serializer must produce exactly the bytes the previous
+/// map-based one did, for sorted and unsorted input, duplicates, every
+/// container type and boundary, and multiple 2^32 groups.
+TEST_F(DeletionVectorWriterTest, serializeMatchesMapBasedReference) {
+  constexpr int64_t k2To32 = int64_t{1} << 32;
+  std::vector<std::pair<std::string, std::vector<int64_t>>> cases = {
+      {"empty", {}},
+      {"zero", {0}},
+      {"containerEdges", {65'535, 65'536, 131'071, 131'072}},
+      {"groupEdges", {k2To32 - 1, k2To32, k2To32 + 1, 3 * k2To32}},
+      {"maxPosition", {0, DeletionVectorWriter::kMaxPosition}},
+      {"unsortedWithDuplicates", {9, 3, 9, 70'000, 3, 0, 70'000, 1}},
+  };
+  for (int64_t count : {4'095, 4'096, 4'097, 65'536}) {
+    std::vector<int64_t> positions(count);
+    std::iota(positions.begin(), positions.end(), 7 * 65'536);
+    cases.emplace_back(fmt::format("dense{}", count), std::move(positions));
+  }
+  std::mt19937_64 rng(20'261'102);
+  for (int iteration = 0; iteration < 50; ++iteration) {
+    std::vector<int64_t> positions;
+    const auto numGroups = 1 + rng() % 3;
+    for (uint64_t group = 0; group < numGroups; ++group) {
+      const int64_t base = static_cast<int64_t>(rng() % 5) * k2To32;
+      const auto count = rng() % 20'000;
+      const auto span = 1 + rng() % (1 << 20);
+      for (uint64_t i = 0; i < count; ++i) {
+        positions.push_back(base + static_cast<int64_t>(rng() % span));
+      }
+    }
+    if (iteration % 2 == 0) {
+      std::sort(positions.begin(), positions.end());
+    }
+    cases.emplace_back(
+        fmt::format("random{}", iteration), std::move(positions));
+  }
+
+  for (const auto& [name, positions] : cases) {
+    SCOPED_TRACE(name);
+    DeletionVectorWriter writer;
+    writer.addDeletedPositions(positions);
+    const auto expected = mapBasedSerialize(positions);
+    ASSERT_EQ(writer.serialize(), expected);
+
+    std::vector<int64_t> distinct = positions;
+    std::sort(distinct.begin(), distinct.end());
+    distinct.erase(
+        std::unique(distinct.begin(), distinct.end()), distinct.end());
+    EXPECT_EQ(writer.numDistinctPositions(), distinct.size());
+
+    std::vector<int64_t> reversed(positions.rbegin(), positions.rend());
+    DeletionVectorWriter reversedWriter;
+    reversedWriter.addDeletedPositions(reversed);
+    EXPECT_EQ(reversedWriter.serialize(), expected);
+    EXPECT_EQ(reversedWriter.numDistinctPositions(), distinct.size());
+
+    // An existing DV (every other distinct position) seeded first, then the
+    // rest in sorted order, as IcebergDeletionVectorSink does on a merge.
+    std::vector<int64_t> seeded;
+    std::vector<int64_t> added;
+    for (size_t i = 0; i < distinct.size(); ++i) {
+      (i % 2 == 0 ? seeded : added).push_back(distinct[i]);
+    }
+    added.insert(
+        added.end(), seeded.begin(), seeded.begin() + seeded.size() / 3);
+    std::sort(added.begin(), added.end());
+    DeletionVectorWriter mergeWriter;
+    mergeWriter.addDeletedPositions(seeded);
+    mergeWriter.addDeletedPositions(added);
+    EXPECT_EQ(mergeWriter.numDistinctPositions(), distinct.size());
+    EXPECT_EQ(mergeWriter.serialize(), expected);
+    EXPECT_EQ(mergeWriter.serialize(), expected);
+  }
+}
+
+TEST_F(DeletionVectorWriterTest, addAfterSerialize) {
+  DeletionVectorWriter writer;
+  writer.addDeletedPositions({5, 1, 5, 70'000});
+  EXPECT_EQ(writer.serialize(), mapBasedSerialize({1, 5, 70'000}));
+  EXPECT_EQ(writer.numPositions(), 3);
+
+  writer.addDeletedPositions({3, 70'000, 1 + (int64_t{1} << 32)});
+  EXPECT_EQ(writer.numDistinctPositions(), 5);
+  EXPECT_EQ(
+      writer.serialize(),
+      mapBasedSerialize({1, 3, 5, 70'000, 1 + (int64_t{1} << 32)}));
+
+  writer.clear();
+  writer.addDeletedPositions({9, 2});
+  EXPECT_EQ(writer.serialize(), mapBasedSerialize({2, 9}));
 }

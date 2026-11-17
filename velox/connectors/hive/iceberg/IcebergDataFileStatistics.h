@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <folly/container/F14Map.h>
 #include <folly/json/dynamic.h>
@@ -46,7 +47,9 @@ struct IcebergDataFileStatistics {
     /// total occurrences of the field across all rows, which is not necessarily
     /// related to the top-level record count.
     int64_t valueCount{0};
-    int64_t nullValueCount{0};
+    /// Unset when the file format cannot tell. Iceberg prunes files whose
+    /// null count is 0 for 'IS NULL', so an unknown count must not read as 0.
+    std::optional<int64_t> nullValueCount;
     std::optional<int64_t> nanValueCount;
     /// Base64 encoded lower bound.
     std::optional<std::string> lowerBound;
@@ -57,10 +60,15 @@ struct IcebergDataFileStatistics {
   int64_t numRecords{0};
   folly::F14FastMap<int32_t, ColumnStats> columnStats;
 
+  /// File offsets of row groups, in physical order. Empty when the format
+  /// does not provide split offsets. These belong to the data file.
+  std::vector<int64_t> splitOffsets;
+
   /// Returns a IcebergDataFileStatistics with all values set to zero/empty.
   /// Useful for empty data files that have no actual data.
   static IcebergDataFileStatistics empty() {
-    return IcebergDataFileStatistics{.numRecords = 0, .columnStats = {}};
+    return IcebergDataFileStatistics{
+        .numRecords = 0, .columnStats = {}, .splitOffsets = {}};
   }
 
   folly::dynamic toJson() const;

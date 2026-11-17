@@ -15,6 +15,7 @@
  */
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
+#include <folly/stop_watch.h>
 #include <iostream>
 
 #include "glog/logging.h"
@@ -53,7 +54,7 @@ class OrderByBenchmark {
             uint64_t inputNs = 0;
             uint64_t outputNs = 0;
             uint64_t finishNs = 0;
-            const auto start = getCurrentTimeMicro();
+            const folly::stop_watch<std::chrono::microseconds> watch;
             for (auto i = 0; i < iterations; ++i) {
               std::shared_ptr<Task> task;
               test::AssertQueryBuilder(plan).countResults(task);
@@ -63,7 +64,7 @@ class OrderByBenchmark {
               finishNs += stats.finishTiming.wallNanos;
               outputNs += stats.getOutputTiming.wallNanos;
             }
-            const uint64_t total = getCurrentTimeMicro() - start;
+            const uint64_t total = watch.elapsed().count();
             std::cout << "Total " << succinctMicros(total) << " Input "
                       << succinctNanos(inputNs) << " Output "
                       << succinctNanos(outputNs) << " Finish "

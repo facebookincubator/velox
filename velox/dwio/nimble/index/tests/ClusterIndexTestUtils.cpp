@@ -28,7 +28,7 @@
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/IndexGenerated.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
-#include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
+#include "velox/dwio/nimble/writer/ChunkedStreamWriter.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 
 namespace facebook::nimble::index::test {
@@ -119,8 +119,12 @@ PartitionStats ClusterIndexTestHelper::partitionStats(
     uint32_t partitionIndex) const {
   PartitionStats stats;
 
+  NIMBLE_CHECK_EQ(
+      clusterIndex_->keyStreamLayout(), KeyStreamLayout::kPartition);
   const auto* partition = clusterIndex_->loadPartition(partitionIndex);
-  const auto* index = partition->index;
+  const auto* index =
+      flatbuffers::GetRoot<serialization::ClusterIndexPartition>(
+          partition->metadata().content().data());
 
   stats.keyStreamOffset = index->key_stream_offset();
   stats.keyStreamSize = index->key_stream_size();

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <functional>
 #include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -79,7 +80,7 @@ class ArrayContainsTest : public FunctionBaseTest {
       // Test fast path for flat.
       testContains(arrayVector, kNaN, {false, true, true});
       // Test code path for generic encoded vectors.
-      auto indices = makeIndices(arrayVector->size(), folly::identity);
+      auto indices = makeIndices(arrayVector->size(), std::identity{});
       auto dictOverArray = wrapInDictionary(indices, arrayVector);
       testContainsGeneric(
           dictOverArray,

@@ -151,10 +151,10 @@ class AsyncRPCFunction {
   /// reserves backend capacity. Implementations may resolve and validate
   /// input-dependent transport/admission configuration and cache parsed row
   /// state consumed by dispatchPerRow() or accumulateBatch(). admissionKey()
-  /// and configuredCeiling() must remain stable after the first
-  /// kRequiresAdmission result. A kLocalOnly result promises that dispatch for
-  /// every selected row returns an immediately ready, non-exceptional response
-  /// without contacting a backend.
+  /// configuredCeiling(), and configuredAdaptiveFloor() must remain stable
+  /// after the first kRequiresAdmission result. A kLocalOnly result promises
+  /// that dispatch for every selected row returns an immediately ready,
+  /// non-exceptional response without contacting a backend.
   virtual AdmissionPreparationResult prepareInputForAdmissionAndDispatch(
       const SelectivityVector& /*rows*/,
       const std::vector<VectorPtr>& /*args*/) {
@@ -175,16 +175,41 @@ class AsyncRPCFunction {
   virtual TypePtr resultType() const = 0;
 
   /// Returns the concurrency ceiling requested by function options, or 0 when
-  /// unset. The operator applies it alongside the session properties in a
-  /// single configuration step, so a backend's whole policy lands at once
-  /// rather than in two writes a concurrent query could interleave with.
+  /// unset. It takes precedence over rpc.ratelimiter.max_limit when
+  /// rpc.ratelimiter.hard_limit is 0 or more, and a positive hard limit caps
+  /// it. The operator resolves it with the session properties into the query's
+  /// rate-limiter policy.
   virtual int64_t configuredCeiling() const {
     return 0;
+  }
+
+  /// Whether this function may return a capacity rejection with a retry hint
+  /// (RPCResponse::capacityRetry()). Only then does the PER_ROW operator keep
+  /// each input batch's arguments and retry hinted rows through the shared
+  /// limiter; otherwise a hinted row completes with its error. Read once,
+  /// after initialize().
+  ///
+  /// A retry calls dispatchPerRow() with the arguments of the row's own input
+  /// batch, which may be older than the batch last passed to
+  /// prepareInputForAdmissionAndDispatch(). A function that caches per-batch
+  /// state there must check which batch the arguments belong to.
+  virtual bool mayReturnCapacityRetries() const {
+    return false;
+  }
+
+  /// Returns the adaptive-window floor requested by the resolved backend, or 0
+  /// when unset. The operator resolves it into the query's rate-limiter
+  /// policy. It takes precedence over rpc.ratelimiter.min_limit when
+  /// rpc.ratelimiter.hard_limit is 0 or more.
+  virtual double configuredAdaptiveFloor() const {
+    return 0.0;
   }
 
   /// Identifies the shared admission bucket for this function.
   /// Empty string uses the global default bucket. The key may include more
   /// than a service tier, such as a credential discriminator or tenant.
+  /// Queries whose functions return the same key share a rate limiter when
+  /// they also resolve to the same policy, ceiling and floor included.
   virtual std::string admissionKey() const {
     return "";
   }
@@ -320,23 +345,25 @@ class AsyncRPCFunction {
     /// Unit completed cleanly, but its latency is not a congestion sample.
     /// Recover shared admission without updating the gradient window.
     kSuccessNoLatency,
-    /// Backend shed load (rate limited, or timed out under pressure) — shrink
-    /// the window. Only this signal backs off.
+    /// Backend shed load. Backs off both controllers unless canonical typed
+    /// overload already backed off shared admission at completion time.
     kOverloaded,
     /// Unit failed without explicit evidence of overload. Neither controller
-    /// reacts; reducing admission concurrency would not address this signal.
+    /// shrinks, since reducing admission concurrency would not address this
+    /// signal, but a paced recovery stops until the next success.
     kNonOverloadError,
     /// No congestion evaluation — skip window adjustment.
     kNone,
   };
 
-  /// Evaluates congestion after a unit (a drained set of PER_ROW rows, or one
-  /// BATCH) completes. kSuccess feeds its round-trip latency to the gradient
-  /// and recovers shared admission; kSuccessNoLatency only recovers shared
-  /// admission; kOverloaded applies a multiplicative decrease to both
-  /// controllers; kNonOverloadError reports a failure without moving either
-  /// controller; and kNone skips evaluation. Defaults to kNone (no congestion
-  /// control).
+  /// Evaluates aggregate congestion on the driver after a drained set of
+  /// PER_ROW responses or one BATCH completes. Canonical typed overload may
+  /// already have backed off shared admission at completion time so the permit
+  /// can be released without waiting for downstream output; that marker takes
+  /// precedence and prevents duplicate shared feedback. This method remains
+  /// authoritative for function-specific classification, aggregate success
+  /// recovery, and driver-local feedback when no canonical overload marker is
+  /// present. Defaults to kNone.
   virtual CongestionSignal evaluateCongestion(
       const std::vector<RPCResponse>& /*responses*/) const {
     return CongestionSignal::kNone;

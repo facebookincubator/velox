@@ -85,6 +85,22 @@ TEST_F(QueryConfigProviderTest, knownProperties) {
   ASSERT_TRUE(cpuOverhead.has_value());
   EXPECT_EQ(cpuOverhead->type, ConfigPropertyType::kDouble);
   EXPECT_EQ(cpuOverhead->defaultValue, "1");
+
+  auto rpcRateLimiterMinLimit = findProp(QueryConfig::kRpcRateLimiterMinLimit);
+  ASSERT_TRUE(rpcRateLimiterMinLimit.has_value());
+  EXPECT_EQ(rpcRateLimiterMinLimit->type, ConfigPropertyType::kInteger);
+  EXPECT_EQ(rpcRateLimiterMinLimit->defaultValue, "50");
+
+  auto rpcRateLimiterMaxLimit = findProp(QueryConfig::kRpcRateLimiterMaxLimit);
+  ASSERT_TRUE(rpcRateLimiterMaxLimit.has_value());
+  EXPECT_EQ(rpcRateLimiterMaxLimit->type, ConfigPropertyType::kInteger);
+  EXPECT_EQ(rpcRateLimiterMaxLimit->defaultValue, "200");
+
+  auto rpcRateLimiterHardLimit =
+      findProp(QueryConfig::kRpcRateLimiterHardLimit);
+  ASSERT_TRUE(rpcRateLimiterHardLimit.has_value());
+  EXPECT_EQ(rpcRateLimiterHardLimit->type, ConfigPropertyType::kInteger);
+  EXPECT_EQ(rpcRateLimiterHardLimit->defaultValue, "-1");
 }
 
 TEST(QueryConfigProviderConfigOverridesTest, overridesApplied) {

@@ -47,29 +47,29 @@ class ModeAggregateTest : public AggregationTestBase {
          wrapInDictionary(reverseIndices, num, vector2)});
 
     createDuckDbTable({vectors});
-    testAggregations(
-        {vectors},
-        {"c0"},
-        {"mode(c1)"},
-        "SELECT c0, mode(c1) FROM tmp GROUP BY c0");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c0"})
+        .aggregates({"mode(c1)"})
+        .assertResults("SELECT c0, mode(c1) FROM tmp GROUP BY c0");
 
-    testAggregations(
-        {vectors},
-        {"c0"},
-        {"mode(c3)"},
-        "SELECT c0, mode(c3) FROM tmp GROUP BY c0");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c0"})
+        .aggregates({"mode(c3)"})
+        .assertResults("SELECT c0, mode(c3) FROM tmp GROUP BY c0");
 
-    testAggregations(
-        {vectors},
-        {"c2"},
-        {"mode(c1)"},
-        "SELECT c2, mode(c1) FROM tmp GROUP BY c2");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c2"})
+        .aggregates({"mode(c1)"})
+        .assertResults("SELECT c2, mode(c1) FROM tmp GROUP BY c2");
 
-    testAggregations(
-        {vectors},
-        {"c2"},
-        {"mode(c3)"},
-        "SELECT c2, mode(c3) FROM tmp GROUP BY c2");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c2"})
+        .aggregates({"mode(c3)"})
+        .assertResults("SELECT c2, mode(c3) FROM tmp GROUP BY c2");
   }
 
   void testGlobalModeWithDuck(const VectorPtr& vector) {
@@ -80,9 +80,15 @@ class ModeAggregateTest : public AggregationTestBase {
         makeRowVector({vector, wrapInDictionary(reverseIndices, num, vector)});
 
     createDuckDbTable({vectors});
-    testAggregations({vectors}, {}, {"mode(c0)"}, "SELECT mode(c0) FROM tmp");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({"mode(c0)"})
+        .assertResults("SELECT mode(c0) FROM tmp");
 
-    testAggregations({vectors}, {}, {"mode(c1)"}, "SELECT mode(c1) FROM tmp");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({"mode(c1)"})
+        .assertResults("SELECT mode(c1) FROM tmp");
   }
 
   void testMode(
@@ -92,7 +98,11 @@ class ModeAggregateTest : public AggregationTestBase {
       const VectorPtr& vector2,
       const RowVectorPtr& expected) {
     auto vectors = makeRowVector({vector1, vector2});
-    testAggregations({vectors}, groupKeys, {expression}, {expected});
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy(groupKeys)
+        .aggregates({expression})
+        .assertResults(expected);
   }
 };
 
@@ -390,7 +400,10 @@ TEST_F(ModeAggregateTest, arrays) {
       makeArrayVectorFromJson<int32_t>({"[1, null, 2, null]"}),
   });
 
-  testAggregations({input}, {}, {"mode(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"mode(c1)"})
+      .assertResults(expected);
 
   // Group by.
   expected = makeRowVector({
@@ -400,7 +413,11 @@ TEST_F(ModeAggregateTest, arrays) {
           "[1, 2]",
       }),
   });
-  testAggregations({input}, {"c0"}, {"mode(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .groupBy({"c0"})
+      .aggregates({"mode(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(ModeAggregateTest, maps) {
@@ -426,7 +443,10 @@ TEST_F(ModeAggregateTest, maps) {
       makeMapVectorFromJson<int32_t, int32_t>({"{1: 10, 2: 20, 3: null}"}),
   });
 
-  testAggregations({input}, {}, {"mode(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"mode(c1)"})
+      .assertResults(expected);
 
   // Group by.
   expected = makeRowVector({
@@ -436,7 +456,11 @@ TEST_F(ModeAggregateTest, maps) {
           "{1: 10, 2: 20}",
       }),
   });
-  testAggregations({input}, {"c0"}, {"mode(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .groupBy({"c0"})
+      .aggregates({"mode(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(ModeAggregateTest, rows) {
@@ -464,7 +488,10 @@ TEST_F(ModeAggregateTest, rows) {
       }),
   });
 
-  testAggregations({input}, {}, {"mode(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"mode(c0)"})
+      .assertResults(expected);
 
   // Group by.
   auto input1 = makeRowVector({
@@ -495,7 +522,11 @@ TEST_F(ModeAggregateTest, rows) {
           makeFlatVector<int32_t>({1, 2}),
       }),
   });
-  testAggregations({input1}, {"c0"}, {"mode(c1)"}, {expected1});
+  AggregationTester(*this)
+      .inputs(input1)
+      .groupBy({"c0"})
+      .aggregates({"mode(c1)"})
+      .assertResults(expected1);
 }
 
 } // namespace

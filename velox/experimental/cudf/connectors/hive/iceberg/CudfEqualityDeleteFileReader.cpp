@@ -23,9 +23,9 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/connectors/hive/BufferedInputBuilder.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/ReaderFactory.h"
@@ -87,7 +87,7 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
   dwio::common::ReaderOptions deleteReaderOpts(pool_);
   deleteReaderOpts.setDataIoStats(ioStatistics);
   deleteReaderOpts.setMetadataIoStats(ioStatistics);
-  velox_hive::configureReaderOptions(
+  ::facebook::velox::connector::configureReaderOptions(
       hiveConfig,
       connectorQueryCtx,
       deleteFileSchema,
@@ -100,7 +100,7 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
       .tokenProvider = connectorQueryCtx->fsTokenProvider()};
   auto deleteFileHandleCachePtr = fileHandleFactory->generate(fileHandleKey);
   auto deleteFileInput =
-      velox_hive::BufferedInputBuilder::getInstance()->create(
+      ::facebook::velox::connector::BufferedInputBuilder::getInstance()->create(
           *deleteFileHandleCachePtr,
           deleteReaderOpts,
           connectorQueryCtx,
@@ -123,7 +123,7 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
       dwio::common::getReaderFactory(deleteReaderOpts.fileFormat())
           ->createReader(std::move(deleteFileInput), deleteReaderOpts);
 
-  if (!velox_hive::testFilters(
+  if (!::facebook::velox::connector::testFilters(
           scanSpec.get(),
           deleteReader.get(),
           deleteSplit->filePath,
@@ -137,7 +137,7 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
   }
 
   dwio::common::RowReaderOptions deleteRowReaderOpts;
-  velox_hive::configureRowReaderOptions(
+  ::facebook::velox::connector::configureRowReaderOptions(
       {},
       scanSpec,
       nullptr,

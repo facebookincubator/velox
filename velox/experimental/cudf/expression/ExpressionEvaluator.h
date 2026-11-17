@@ -89,17 +89,24 @@ class CudfFunction {
       rmm::device_async_resource_ref mr) const = 0;
 };
 
+/// Builds a function using the session config. The config is valid only for
+/// this call; copy any settings needed after construction (or copy QueryConfig,
+/// which holds a single shared_ptr).
 using CudfFunctionFactory = std::function<std::shared_ptr<CudfFunction>(
     const std::string& name,
     const core::TypedExprPtr& expr,
-    memory::MemoryPool* pool)>;
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config)>;
 
-// Optional function-specific eligibility check applied after signature
-// matching. Use this for semantic restrictions that cannot be expressed by a
-// FunctionSignature. Both FunctionExpression::canEvaluate and
-// createCudfFunction apply this filter.
-using CudfCanEvaluate = std::function<bool(const core::TypedExprPtr& expr)>;
+/// Optional function-specific eligibility check applied after signature
+/// matching. Use this for semantic restrictions, including unsupported session
+/// settings, that cannot be expressed by a FunctionSignature. Both
+/// FunctionExpression::canEvaluate and createCudfFunction apply this filter
+/// with the session config. The config is valid only for the call.
+using CudfCanEvaluate = std::function<
+    bool(const core::TypedExprPtr& expr, const core::QueryConfig& config)>;
 
+/// A function implementation and the signatures and settings it supports.
 struct CudfFunctionSpec {
   CudfFunctionFactory factory;
   std::vector<exec::FunctionSignaturePtr> signatures;
@@ -107,6 +114,9 @@ struct CudfFunctionSpec {
   CudfCanEvaluate canEvaluate;
 };
 
+/// Registers a function implementation with an optional eligibility predicate.
+/// If overwrite is false, returns false when the name is already registered.
+/// Otherwise appends the implementation; the first matching registration wins.
 bool registerCudfFunction(
     const std::string& name,
     CudfFunctionFactory factory,
@@ -114,6 +124,7 @@ bool registerCudfFunction(
     bool overwrite = true,
     CudfCanEvaluate canEvaluate = nullptr);
 
+/// Registers the same function implementation under each alias.
 void registerCudfFunctions(
     const std::vector<std::string>& aliases,
     CudfFunctionFactory factory,
@@ -121,17 +132,25 @@ void registerCudfFunctions(
     bool overwrite = true,
     CudfCanEvaluate canEvaluate = nullptr);
 
-/// Create a CudfFunction for the given name and expression.
-/// Returns nullptr if no registered function matches the expression's
-/// signature.
+/// Creates a function for the expression and session config. Returns nullptr
+/// if no registered function matches the signature and eligibility predicate.
+/// The config is valid only for this call; see CudfFunctionFactory.
 std::shared_ptr<CudfFunction> createCudfFunction(
     const std::string& name,
     const core::TypedExprPtr& expr,
-    memory::MemoryPool* pool);
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config);
 
 bool registerBuiltinFunctions(const std::string& prefix);
 
 void unregisterFunctions();
+
+/// Turns the GPU casts that follow Presto's rules on or off: the cast from
+/// VARCHAR, whose strings CastFunction parses as Presto does, and the cast
+/// from TIMESTAMP to VARCHAR, which it prints as Presto does.
+/// registerPrestoFunctions() turns them on and registerSparkFunctions() off;
+/// unregisterFunctions() turns them off as well.
+void setPrestoCastEnabled(bool enabled);
 
 class CudfExpression {
  public:
@@ -149,10 +168,12 @@ using CudfExpressionPtr = std::shared_ptr<CudfExpression>;
 
 class FunctionExpression : public CudfExpression {
  public:
+  /// Builds the function and its child evaluators with the session config.
   static std::shared_ptr<FunctionExpression> create(
       const core::TypedExprPtr& expr,
       const RowTypePtr& inputRowSchema,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      const core::QueryConfig& config);
 
   ColumnOrView eval(
       std::vector<cudf::column_view> inputColumnViews,
@@ -162,9 +183,11 @@ class FunctionExpression : public CudfExpression {
 
   void close() override;
 
-  /// Check if this specific operation can be evaluated by FunctionExpression.
-  /// Does not recursively check children.
-  static bool canEvaluate(const core::TypedExprPtr& expr);
+  /// Checks if this operation supports the expression and session config.
+  /// Does not recursively check children or retain the config.
+  static bool canEvaluate(
+      const core::TypedExprPtr& expr,
+      const core::QueryConfig& config);
 
  private:
   static std::unique_ptr<cudf::column> makeStructChildColumn(
@@ -188,10 +211,15 @@ class FunctionExpression : public CudfExpression {
 /// Does not apply expression-level optimization; callers that need
 /// optimization should run expression::optimize at the top-level entry point
 /// first.
+///
+/// `config` is the session query config, used for evaluator eligibility and
+/// function construction. It is valid only for this call; evaluators and
+/// functions must copy settings they need afterwards (or copy QueryConfig).
 std::shared_ptr<CudfExpression> createCudfExpression(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool);
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config);
 
 /// Plan-time GPU eligibility for a top-level operator expression, as invoked by
 /// the OperatorAdapters and the aggregation validators. Optimizes the
@@ -199,16 +227,40 @@ std::shared_ptr<CudfExpression> createCudfExpression(
 /// same form the operator compiles at runtime; e.g. cast(<literal> as DECIMAL)
 /// folds to a plain decimal constant that the structural check accepts, rather
 /// than a live decimal-target cast that it would reject. Then applies the
-/// query-context-dependent timezone fallback (a timezone-sensitive date_trunc
-/// under adjust_timestamp_to_session_timezone must stay on CPU) and a
-/// structural support check on the optimized expression. When
-/// `queryCtx` or `pool` is null, skips optimization and checks `expr` directly.
+/// query-context-dependent fallbacks (a timezone-sensitive date_trunc, and
+/// with a session time zone a cast from TIMESTAMP to VARCHAR, under
+/// adjust_timestamp_to_session_timezone; a cast from VARCHAR, or from
+/// TIMESTAMP to VARCHAR, under legacy_cast; and a cast from VARCHAR to REAL or
+/// DOUBLE under cast_string_to_floating_point_lenient_inf_nan, must stay on
+/// CPU) and evaluator eligibility, including per-function session checks, on
+/// the optimized expression. With a null queryCtx, eligibility uses default
+/// settings. When `queryCtx` or `pool` is null, skips optimization and checks
+/// `expr` directly.
 /// \param pool Leaf pool used for constant folding during optimization,
 ///             typically the operator's own pool.
 bool canExprRunOnGpu(
     const core::TypedExprPtr& expr,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool);
+
+/// Plan-time GPU eligibility for a join filter: canExprRunOnGpu(), and no CAST
+/// from VARCHAR. The GPU precomputes such a cast over every row of a side,
+/// where the CPU casts only the pairs the join matches, so a string that spells
+/// no value in a row the join never matches would fail only on the GPU. A
+/// TRY_CAST gives NULL instead and is fine.
+bool canJoinFilterRunOnGpu(
+    const core::TypedExprPtr& filter,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool);
+
+/// Returns true if 'expr' holds a CAST or TRY_CAST from VARCHAR; with
+/// 'floatingPointOnly', one to REAL or DOUBLE.
+bool containsCastFromVarchar(
+    const core::TypedExprPtr& expr,
+    bool floatingPointOnly);
+
+/// Returns true if 'expr' holds a CAST or TRY_CAST from TIMESTAMP to VARCHAR.
+bool containsTimestampToVarcharCast(const core::TypedExprPtr& expr);
 
 /// Extract the full field path from a field access / dereference chain.
 /// Returns nullopt for non-field expressions.

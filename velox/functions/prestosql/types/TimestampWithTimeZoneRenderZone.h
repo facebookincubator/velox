@@ -17,6 +17,8 @@
 
 #include <string>
 
+#include "velox/common/base/Macros.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/functions/lib/TimeUtils.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
@@ -37,18 +39,18 @@ class TimestampWithTimeZoneRenderZone {
   TimestampWithTimeZoneRenderZone(
       const core::QueryConfig& config,
       SessionZoneResolution resolution)
-      : useSessionTimeZone_(
-            config.useSessionTimezoneForTimestampWithTimezone()),
+      : ignoreTimeZoneLabel_(config.ignoreTimeZoneLabel()),
         sessionTimeZoneName_(config.sessionTimezone()),
         sessionRenderZone_(
-            useSessionTimeZone_ && resolution == SessionZoneResolution::kEager
+            ignoreTimeZoneLabel_ && resolution == SessionZoneResolution::kEager
                 ? functions::getSessionTimeZone(sessionTimeZoneName_)
                 : nullptr) {}
 
-  /// Returns the session zone when enabled and the value's embedded zone
-  /// otherwise.
-  const tz::TimeZone* get(int64_t timestampWithTimeZone) const {
-    if (!useSessionTimeZone_) {
+  /// Returns the session zone when the stored label is ignored and the value's
+  /// stored zone otherwise.
+  VELOX_GPU_COMPATIBLE const tz::TimeZone* get(
+      int64_t timestampWithTimeZone) const {
+    if (!ignoreTimeZoneLabel_) {
       return tz::locateZone(unpackZoneKeyId(timestampWithTimeZone));
     }
     if (sessionRenderZone_ == nullptr) {
@@ -59,7 +61,7 @@ class TimestampWithTimeZoneRenderZone {
 
  private:
   // Captures the render-zone policy at construction.
-  const bool useSessionTimeZone_;
+  const bool ignoreTimeZoneLabel_;
   // Retains the configured name for on-demand resolution.
   const std::string sessionTimeZoneName_;
   // Caches the first successful eager or on-demand session-zone resolution.

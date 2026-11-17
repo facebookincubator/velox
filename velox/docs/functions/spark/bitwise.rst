@@ -48,3 +48,10 @@ Bitwise Functions
 .. spark:function:: shiftright(x, n) -> [same as x]
 
     Returns x bitwise right shifted by n bits. Supported types for 'x' are INTEGER and BIGINT.
+
+.. spark:function:: shiftrightunsigned(x, n) -> [same as x]
+
+    Returns x bitwise unsigned (logical) right shifted by n bits, filling
+    vacated high bits with zeros. Only the low 5 bits for INTEGER or 6 bits
+    for BIGINT of n are used as the shift distance. Supported types for 'x'
+    are INTEGER and BIGINT; 'n' is INTEGER.

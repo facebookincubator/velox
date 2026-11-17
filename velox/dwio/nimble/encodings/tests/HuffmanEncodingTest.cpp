@@ -28,7 +28,6 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
 namespace facebook::nimble::test {
@@ -66,13 +65,9 @@ class HuffmanEncodingTest : public ::testing::Test {
     }
 
     const auto encoded = encodeData(values);
-    for (const auto useLegacy : {false, true}) {
-      SCOPED_TRACE(fmt::format("legacy={}", useLegacy));
-      std::unique_ptr<Encoding> encoding = useLegacy
-          ? legacy::EncodingFactory().create(
-                *pool_, encoded, nullptr, Encoding::Options{})
-          : EncodingFactory().create(
-                *pool_, encoded, nullptr, Encoding::Options{});
+    {
+      std::unique_ptr<Encoding> encoding = EncodingFactory().create(
+          *pool_, encoded, nullptr, Encoding::Options{});
       EXPECT_EQ(encoding->encodingType(), EncodingType::Huffman);
       EXPECT_EQ(encoding->dataType(), TypeTraits<T>::dataType);
       EXPECT_EQ(encoding->rowCount(), values.size());
@@ -235,6 +230,38 @@ TEST_F(HuffmanEncodingTest, skipAndPartialReadsCrossCheckpoints) {
   Vector<uint64_t> second{pool_.get(), 300};
   encoding->materialize(static_cast<uint32_t>(second.size()), second.data());
   EXPECT_TRUE(std::equal(second.begin(), second.end(), values.begin() + 510));
+}
+
+TEST_F(HuffmanEncodingTest, interleavedSkipsAndReads) {
+  Vector<uint64_t> values{pool_.get()};
+  for (uint32_t i = 0; i < 900; ++i) {
+    values.push_back((i * 7) % 23);
+  }
+
+  // Each step skips, then reads. Decoding continues from the previous read
+  // within a 256-row checkpoint interval and restarts at a checkpoint once a
+  // skip leaves the interval.
+  struct Step {
+    uint32_t skip;
+    uint32_t read;
+
+    std::string debugString() const {
+      return fmt::format("skip {}, read {}", skip, read);
+    }
+  };
+  const std::vector<Step> steps{
+      {0, 10}, {5, 3}, {250, 20}, {0, 300}, {300, 12}};
+  auto encoding = encode(values);
+  uint32_t row{0};
+  for (const auto& step : steps) {
+    SCOPED_TRACE(step.debugString());
+    encoding->skip(step.skip);
+    row += step.skip;
+    Vector<uint64_t> result{pool_.get(), step.read};
+    encoding->materialize(step.read, result.data());
+    EXPECT_TRUE(std::equal(result.begin(), result.end(), values.begin() + row));
+    row += step.read;
+  }
 }
 
 TEST_F(HuffmanEncodingTest, skipRejectsPastEnd) {

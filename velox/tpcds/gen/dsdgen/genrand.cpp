@@ -516,6 +516,7 @@ int genrand_date(
     case DIST_EXPONENTIAL:
       imean = dttoj(mean);
       imean -= idt;
+      [[fallthrough]];
     case DIST_UNIFORM:
       genrand_integer(&temp, dist, 0, range, imean, stream, dsdGenContext);
       idt += temp;

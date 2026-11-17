@@ -81,17 +81,44 @@ std::string configPropertyDefaultToString(const T& value) {
   }
 }
 
+template <typename T>
+struct IsOptional : std::false_type {};
+template <typename T>
+struct IsOptional<std::optional<T>> : std::true_type {};
+
+template <typename T>
+struct OptionalValueType {
+  using type = T;
+};
+template <typename T>
+struct OptionalValueType<std::optional<T>> {
+  using type = T;
+};
+
 } // namespace detail
 
 /// Registers a property from a traits struct into a vector.
 /// The traits struct must have: key, type, defaultValue, description.
+/// A std::optional trait type registers the inner type; an empty default
+/// registers no default, in which case the property is omitted unless set.
 template <typename PropertyTraits>
 void registerConfigProperty(std::vector<ConfigProperty>& registry) {
+  using TraitsType = typename PropertyTraits::type;
+  using ValueType = typename detail::OptionalValueType<TraitsType>::type;
+  std::optional<std::string> defaultValue;
+  if constexpr (detail::IsOptional<TraitsType>::value) {
+    if (PropertyTraits::defaultValue.has_value()) {
+      defaultValue = detail::configPropertyDefaultToString<ValueType>(
+          PropertyTraits::defaultValue.value());
+    }
+  } else {
+    defaultValue = detail::configPropertyDefaultToString<TraitsType>(
+        PropertyTraits::defaultValue);
+  }
   registry.push_back({
       PropertyTraits::key,
-      detail::configPropertyTypeOf<typename PropertyTraits::type>(),
-      detail::configPropertyDefaultToString<typename PropertyTraits::type>(
-          PropertyTraits::defaultValue),
+      detail::configPropertyTypeOf<ValueType>(),
+      std::move(defaultValue),
       PropertyTraits::description,
   });
 }

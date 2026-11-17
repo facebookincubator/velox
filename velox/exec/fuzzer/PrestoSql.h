@@ -71,6 +71,10 @@ class PrestoSqlPlanNodeVisitor : public core::PlanNodeVisitor {
       const core::SpatialJoinNode& node,
       core::PlanNodeVisitorContext& ctx) const override;
 
+  void visit(
+      const core::VectorSearchJoinNode& node,
+      core::PlanNodeVisitorContext& ctx) const override;
+
   void visit(const core::TableScanNode& node, core::PlanNodeVisitorContext& ctx)
       const override;
 

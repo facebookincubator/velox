@@ -22,6 +22,7 @@
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/tests/SimpleAggregateFunctionsRegistration.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -184,7 +185,7 @@ TEST_F(WindowTest, spill) {
   TestScopedSpillInjection scopedSpillInjection(100);
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
-          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(core::QueryConfig::kWindowSpillEnabled, "true")
           .spillDirectory(spillDirectory->getPath())
@@ -230,7 +231,7 @@ TEST_F(WindowTest, spillBatchReadTinyPartitions) {
   TestScopedSpillInjection scopedSpillInjection(100);
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
-          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(core::QueryConfig::kWindowSpillEnabled, "true")
           .config(
@@ -283,7 +284,7 @@ TEST_F(WindowTest, spillBatchReadHugePartitions) {
   TestScopedSpillInjection scopedSpillInjection(100);
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
-          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(core::QueryConfig::kWindowSpillEnabled, "true")
           .config(
@@ -332,7 +333,7 @@ TEST_F(WindowTest, spillUnsupported) {
   TestScopedSpillInjection scopedSpillInjection(100);
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
-          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(core::QueryConfig::kWindowSpillEnabled, "true")
           .spillDirectory(spillDirectory->getPath())
@@ -438,9 +439,9 @@ DEBUG_ONLY_TEST_F(WindowTest, aggWindowResultMismatch) {
           }));
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
-      .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, 2)
+      .config(core::QueryConfig::kMaxOutputBatchRows, 2)
       .assertResults(
           "SELECT *, sum(order_num) over (order by order_num DESC) FROM tmp");
   ASSERT_TRUE(isStreamCreated.load());
@@ -451,7 +452,8 @@ DEBUG_ONLY_TEST_F(WindowTest, singlePartitionRowCountLimit) {
   // a count at the limit so the next row append would overflow, and verify the
   // operator fails with a catchable user error rather than overflowing and
   // aborting the process.
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  auto data =
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3, 4, 5}));
 
   auto plan = PlanBuilder()
                   .values({data})
@@ -473,7 +475,8 @@ DEBUG_ONLY_TEST_F(WindowTest, subPartitionedRowCountLimit) {
   // The same limit applies to SubPartitionedSortWindowBuild, whose own counter
   // aggregates all sub-partitions. Force sub-partitioning and inject a count at
   // the limit; the next batch must fail cleanly rather than overflow.
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  auto data =
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3, 4, 5}));
 
   auto plan = PlanBuilder()
                   .values({data})
@@ -488,7 +491,7 @@ DEBUG_ONLY_TEST_F(WindowTest, subPartitionedRowCountLimit) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan)
-          .config(core::QueryConfig::kWindowNumSubPartitions, "4")
+          .config(core::QueryConfig::kWindowNumSubPartitions, 4)
           .copyResults(pool()),
       "Window operator cannot process more than");
 }
@@ -499,7 +502,8 @@ DEBUG_ONLY_TEST_F(WindowTest, operatorRowCountLimit) {
   // counter (e.g. RowsStreamingWindowBuild::pendingRowCount_). The guard runs
   // before delegating to the build, so inject a count at the limit and verify
   // the batch is rejected before it reaches the streaming build.
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  auto data =
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3, 4, 5}));
 
   // orderBy() + streamingWindow() selects RowsStreamingWindowBuild, the path
   // where the operator counter is the only guard.
@@ -533,9 +537,8 @@ DEBUG_ONLY_TEST_F(WindowTest, operatorRowCountLimit) {
 }
 
 DEBUG_ONLY_TEST_F(WindowTest, rankRowStreamingWindowBuild) {
-  auto data = makeRowVector(
-      {"c1"},
-      {makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1, 1, 2, 2})});
+  auto data = makeNamedRowVector(
+      "c1", makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1, 1, 2, 2}));
 
   createDuckDbTable({data});
 
@@ -557,9 +560,9 @@ DEBUG_ONLY_TEST_F(WindowTest, rankRowStreamingWindowBuild) {
           }));
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
-      .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, 2)
+      .config(core::QueryConfig::kMaxOutputBatchRows, 2)
       .assertResults(
           "SELECT *, rank() over (order by c1 rows unbounded preceding) FROM tmp");
 
@@ -600,7 +603,7 @@ DEBUG_ONLY_TEST_F(WindowTest, valuesRowsStreamingWindowBuild) {
           }));
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
       .assertResults(
           "SELECT *, rank() over (partition by c0, c2 order by c1, c3), dense_rank() over (partition by c0, c2 order by c1, c3), row_number() over (partition by c0, c2 order by c1, c3), sum(c4) over (partition by c0, c2 order by c1, c3) FROM tmp");
   ASSERT_TRUE(isStreamCreated.load());
@@ -656,9 +659,9 @@ DEBUG_ONLY_TEST_F(WindowTest, encodedRowsStreamingWindowBuild) {
           }));
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-      .config(core::QueryConfig::kPreferredOutputBatchRows, "4")
-      .config(core::QueryConfig::kMaxOutputBatchRows, "4")
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, 4)
+      .config(core::QueryConfig::kMaxOutputBatchRows, 4)
       .assertResults(
           "SELECT *, rank() over (partition by p order by s), dense_rank() over (partition by p order by s), sum(v) over (partition by p order by s) FROM tmp");
   ASSERT_TRUE(isStreamCreated.load());
@@ -862,13 +865,13 @@ TEST_F(WindowTest, rowsStreamingWindowBuildBudgetPreservesResults) {
   }
 
   auto tiny = AssertQueryBuilder(windowNode)
-                  .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-                  .config(core::QueryConfig::kPreferredOutputBatchRows, "10000")
+                  .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
+                  .config(core::QueryConfig::kPreferredOutputBatchRows, 10'000)
                   .copyResults(pool());
   auto unbounded =
       AssertQueryBuilder(windowNode)
-          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1000000000")
-          .config(core::QueryConfig::kPreferredOutputBatchRows, "10000")
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'000'000'000)
+          .config(core::QueryConfig::kPreferredOutputBatchRows, 10'000)
           .copyResults(pool());
 
   ASSERT_EQ(tiny->size(), size);
@@ -880,8 +883,8 @@ TEST_F(WindowTest, rowsStreamingWindowBuildBudgetPreservesResults) {
   }
 
   AssertQueryBuilder(windowNode, duckDbQueryRunner_)
-      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-      .config(core::QueryConfig::kPreferredOutputBatchRows, "10000")
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, 10'000)
       .assertResults(
           "SELECT p, s, v, "
           "rank() over (partition by p order by s rows between unbounded "
@@ -927,13 +930,14 @@ DEBUG_ONLY_TEST_F(
 
     auto tiny =
         AssertQueryBuilder(windowNode)
-            .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-            .config(core::QueryConfig::kPreferredOutputBatchRows, "10000")
+            .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
+            .config(core::QueryConfig::kPreferredOutputBatchRows, 10'000)
             .copyResults(pool());
     auto unbounded =
         AssertQueryBuilder(windowNode)
-            .config(core::QueryConfig::kPreferredOutputBatchBytes, "1000000000")
-            .config(core::QueryConfig::kPreferredOutputBatchRows, "10000")
+            .config(
+                core::QueryConfig::kPreferredOutputBatchBytes, 1'000'000'000)
+            .config(core::QueryConfig::kPreferredOutputBatchRows, 10'000)
             .copyResults(pool());
 
     // These frames do reach this build; if the gate ever tightens, the
@@ -962,8 +966,8 @@ TEST_F(WindowTest, rowsStreamingWindowBuildWideRowsSinglePartition) {
 
   auto result =
       AssertQueryBuilder(windowNode)
-          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-          .config(core::QueryConfig::kPreferredOutputBatchRows, "10000")
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
+          .config(core::QueryConfig::kPreferredOutputBatchRows, 10'000)
           .copyResults(pool());
   ASSERT_EQ(result->size(), size);
 }
@@ -1472,10 +1476,8 @@ TEST_F(WindowTest, prePartitionedSortBuild) {
           .planNode();
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-      .config(
-          core::QueryConfig::kWindowNumSubPartitions,
-          std::to_string(numSubPartitions))
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
+      .config(core::QueryConfig::kWindowNumSubPartitions, numSubPartitions)
       .assertResults(
           "SELECT *, row_number() over (partition by p order by s desc) FROM tmp ORDER BY s");
 }
@@ -1505,10 +1507,8 @@ TEST_F(WindowTest, prePartitionedSortBuildSkewed) {
           .planNode();
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-      .config(
-          core::QueryConfig::kWindowNumSubPartitions,
-          std::to_string(numSubPartitions))
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
+      .config(core::QueryConfig::kWindowNumSubPartitions, numSubPartitions)
       .assertResults(
           "SELECT *, row_number() over (partition by p order by s desc) FROM tmp ORDER BY s");
 }
@@ -1543,10 +1543,8 @@ TEST_F(WindowTest, prePartitionedBuildWithSpill) {
   TestScopedSpillInjection scopedSpillInjection(100);
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
-          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-          .config(
-              core::QueryConfig::kWindowNumSubPartitions,
-              std::to_string(numSubPartitions))
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
+          .config(core::QueryConfig::kWindowNumSubPartitions, numSubPartitions)
           .config(core::QueryConfig::kSpillEnabled, "true")
           .config(core::QueryConfig::kWindowSpillEnabled, "true")
           .config(core::QueryConfig::kOrderBySpillEnabled, "false")
@@ -1594,7 +1592,7 @@ DEBUG_ONLY_TEST_F(WindowTest, aggregationWithNonDefaultFrame) {
           }));
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
       .assertResults(
           "SELECT *, sum(c4) over (partition by c0, c2 order by c1, c3 range between unbounded preceding and unbounded following) FROM tmp");
 
@@ -1602,9 +1600,8 @@ DEBUG_ONLY_TEST_F(WindowTest, aggregationWithNonDefaultFrame) {
 }
 
 DEBUG_ONLY_TEST_F(WindowTest, nonRowsStreamingWindow) {
-  auto data = makeRowVector(
-      {"c1"},
-      {makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1, 1, 2, 2})});
+  auto data = makeNamedRowVector(
+      "c1", makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1, 1, 2, 2}));
 
   createDuckDbTable({data});
 
@@ -1627,12 +1624,35 @@ DEBUG_ONLY_TEST_F(WindowTest, nonRowsStreamingWindow) {
           }));
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
-      .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+      .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, 2)
+      .config(core::QueryConfig::kMaxOutputBatchRows, 2)
       .assertResults(
           "SELECT *, first_value(c1) over (order by c1 rows unbounded preceding), nth_value(c1, 1) over (order by c1 rows unbounded preceding) FROM tmp");
   ASSERT_FALSE(isStreamCreated.load());
+}
+
+TEST_F(WindowTest, aggregateReceivesConstantInputs) {
+  // An aggregate used as a window function receives its constant arguments.
+  // simple_const_fwd adds its constant to every input value.
+  velox::aggregate::registerSimpleConstantForwardingAggregate(
+      "simple_const_fwd");
+
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"simple_const_fwd(c0, 10) over (order by c0 rows "
+                           "between current row and 1 following)"})
+                  .planNode();
+
+  // Frames: {1, 2} -> 11 + 12, {2, 3} -> 12 + 13, {3} -> 13.
+  auto expected = makeRowVector(
+      {"c0", "w0"},
+      {
+          data->childAt(0),
+          makeFlatVector<int64_t>({23, 25, 13}),
+      });
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
 TEST_F(WindowTest, missingFunctionSignature) {
@@ -1799,7 +1819,7 @@ TEST_F(WindowTest, nagativeFrameArg) {
   }
 }
 
-DEBUG_ONLY_TEST_F(WindowTest, frameColumnNullCheck) {
+TEST_F(WindowTest, frameColumnNullCheck) {
   auto makePlan = [&](const RowVectorPtr& input) {
     return PlanBuilder()
         .values({input})
@@ -1818,8 +1838,9 @@ DEBUG_ONLY_TEST_F(WindowTest, frameColumnNullCheck) {
           makeNullableFlatVector<int64_t>({1, 2, 3, std::nullopt, 5}),
           makeNullableFlatVector<int64_t>({2, std::nullopt, 4, 5, 6}),
       });
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(makePlan(inputThrow)).copyResults(pool()), "");
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(makePlan(inputThrow)).copyResults(pool()),
+      "k RANGE frame bound must be null exactly when the ORDER BY key is null");
 
   // Null values in order-by column 's0' and frame column 'off0' match, so no
   // exception should be thrown.
@@ -1833,6 +1854,48 @@ DEBUG_ONLY_TEST_F(WindowTest, frameColumnNullCheck) {
       });
   ASSERT_NO_THROW(
       AssertQueryBuilder(makePlan(inputNoThrow)).copyResults(pool()));
+}
+
+// A k RANGE frame covers the rows whose keys fall between its bound values,
+// whichever side of the current row each value is on.
+TEST_F(WindowTest, frameBoundOnOtherSide) {
+  auto input = makeRowVector(
+      {"c", "s", "minus_two", "minus_one", "plus_one", "plus_two"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+          makeFlatVector<int64_t>({-1, 0, 1, 2, 3}),
+          makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+          makeFlatVector<int64_t>({2, 3, 4, 5, 6}),
+          makeFlatVector<int64_t>({3, 4, 5, 6, 7}),
+      });
+
+  auto assertFrame = [&](const std::string& frame,
+                         const std::vector<std::optional<int64_t>>& expected) {
+    SCOPED_TRACE(frame);
+    auto plan = PlanBuilder()
+                    .values({input})
+                    .window({fmt::format("sum(c) OVER (ORDER BY s {})", frame)})
+                    .project({"w0"})
+                    .planNode();
+    AssertQueryBuilder(plan).assertResults(
+        makeRowVector({makeNullableFlatVector<int64_t>(expected)}));
+  };
+
+  // Starts after the current row and ends at it: empty.
+  assertFrame(
+      "RANGE BETWEEN plus_one PRECEDING AND CURRENT ROW",
+      {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+
+  // Keys in [s + 1, s + 2].
+  assertFrame(
+      "RANGE BETWEEN plus_one PRECEDING AND plus_two FOLLOWING",
+      {5, 7, 9, 5, std::nullopt});
+
+  // Keys in [s - 2, s - 1].
+  assertFrame(
+      "RANGE BETWEEN minus_two PRECEDING AND minus_one FOLLOWING",
+      {std::nullopt, 1, 3, 5, 7});
 }
 
 DEBUG_ONLY_TEST_F(WindowTest, reserveMemorySort) {
@@ -2014,8 +2077,8 @@ TEST_F(WindowTest, nanFrameBoundAcrossOutputBatches) {
   auto expected = makeRowVector(
       {makeNullableFlatVector<int64_t>({1, 3, std::nullopt, 10})});
   AssertQueryBuilder(plan)
-      .config(core::QueryConfig::kPreferredOutputBatchRows, "2")
-      .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+      .config(core::QueryConfig::kPreferredOutputBatchRows, 2)
+      .config(core::QueryConfig::kMaxOutputBatchRows, 2)
       .assertResults(expected);
 }
 
@@ -2069,7 +2132,7 @@ DEBUG_ONLY_TEST_F(WindowTest, releaseWindowBuildInTime) {
 
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
-          .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+          .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
           .assertResults(
               "SELECT *, row_number() over (partition by p0 order by s) "
               "FROM tmp "

@@ -123,7 +123,14 @@ QueryCtx::QueryCtx(
 }
 
 QueryCtx::~QueryCtx() {
-  for (auto& cb : releaseCallbacks_) {
+  // Move the callbacks out before running them: a callback may re-enter
+  // QueryCtx, which would deadlock on mutex_ if it were held here.
+  std::deque<ReleaseCallback> callbacks;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    callbacks.swap(releaseCallbacks_);
+  }
+  for (auto& cb : callbacks) {
     try {
       cb();
     } catch (const std::exception& e) {
@@ -140,6 +147,21 @@ QueryCtx::~QueryCtx() {
   // name is unique.
   static std::atomic<int64_t> seqNum{0};
   return fmt::format("query.{}.{}", queryId, seqNum++);
+}
+
+void QueryCtx::copyRegistriesFrom(const QueryCtx& source, bool overwrite) {
+  auto sourceRegistries = source.registries_.withRLock(
+      [](const auto& registries) { return registries; });
+  registries_.withWLock([&](auto& registries) {
+    if (!overwrite) {
+      for (const auto& [key, _] : sourceRegistries) {
+        VELOX_CHECK(!registries.contains(key), "Registry already set: {}", key);
+      }
+    }
+    for (const auto& [key, registry] : sourceRegistries) {
+      registries.insert_or_assign(key, registry);
+    }
+  });
 }
 
 void QueryCtx::addCustomPool(

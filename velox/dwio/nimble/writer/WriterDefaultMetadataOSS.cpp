@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/dwio/nimble/writer/WriterOptions.h"
+#include "velox/dwio/nimble/writer/WriterDefaultMetadata.h"
 
 namespace facebook::nimble::detail {
 

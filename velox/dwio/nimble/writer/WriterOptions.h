@@ -19,20 +19,22 @@
 #include "folly/container/F14Set.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/MetricsLogger.h"
+#include "velox/dwio/nimble/common/NimbleConfig.h"
+#include "velox/dwio/nimble/common/SharedDictionaryConfig.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
+#include "velox/dwio/nimble/index/IndexTypes.h"
 #include "velox/dwio/nimble/index/VectorIndexConfig.h"
 #include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/ChunkStatsWriter.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
-#include "velox/dwio/nimble/velox/BufferGrowthPolicy.h"
-#include "velox/dwio/nimble/velox/NimbleConfig.h"
-#include "velox/dwio/nimble/velox/SharedDictionaryConfig.h"
+#include "velox/dwio/nimble/writer/BufferGrowthPolicy.h"
 #include "velox/dwio/nimble/writer/BufferPolicy.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
+#include "velox/dwio/nimble/writer/WriterDefaultMetadata.h"
 
 #include <memory>
 #include <optional>
@@ -45,10 +47,6 @@
 
 namespace facebook::nimble {
 
-namespace detail {
-std::unordered_map<std::string, std::string> defaultMetadata();
-} // namespace detail
-
 /// Options used by Velox writer that affect the output file format.
 /// NOTE: The object could be large when encodingOverrides are supplied. It's
 /// strongly advised to move instead of copying it.
@@ -59,7 +57,7 @@ struct WriterOptions {
         .useVarintRowCount = experimentalCompactRowCountEncoding,
         .blockBitPackingBlockSize = blockBitPackingBlockSize,
         .fixedBitWidthUseExactBits = fixedBitWidthUseExactBits,
-        .allowNestedAlpSelection = allowNestedAlpSelection,
+        .sortDictionaryAlphabet = sortDictionaryAlphabet,
         .subIntSplitDeltaPreTransform =
             FLAGS_nimble_subintsplit_delta_pretransform,
         .sharedDictionaryAlphabet = {},
@@ -92,6 +90,10 @@ struct WriterOptions {
   /// Enable vectorized stats for applicable schema shapes.
   bool enableVectorizedStats{true};
 
+  /// Longest string min/max, in bytes, kept in vectorized stats. Longer values
+  /// are written as absent, matching the DWRF writer's default limit.
+  uint32_t vectorizedStatsStringLengthLimit{64};
+
   /// Legacy alias for enabling V1 chunk statistics. The writer consumes this
   /// alias before passing the canonical chunk stats options to TabletWriter.
   bool enableChunkIndex{false};
@@ -105,9 +107,9 @@ struct WriterOptions {
   ChunkStatsVersion chunkStatsVersion{ChunkStatsVersion::kV2};
 
   /// Skip writing chunk stats for a stripe group if the average number
-  /// of chunks per stream is below this threshold. 0 disables chunk stats
-  /// skipping.
-  float chunkStatsMinAvgChunks{2};
+  /// of chunks per stream is below this threshold. 0 disables this
+  /// threshold; a stripe group with no streams still gets no chunk stats.
+  float chunkStatsMinAvgChunks{0};
 
   /// Maximum string or binary value length retained in per-chunk bounds.
   uint32_t maxChunkStringStatSize{
@@ -125,9 +127,28 @@ struct WriterOptions {
   /// encoding per-stripe-group stream offsets/sizes (kStreamMajor). Only
   /// encodings with O(1) stateless point access (via EncodingView) are valid.
   /// Empty (default) lets the writer pick its own candidate set (Constant,
-  /// Trivial, FixedBitWidth).
+  /// Trivial, FixedBitWidth, Dictionary).
   std::vector<std::pair<EncodingType, float>>
       experimentalStripeGroupEncodingLayoutReadFactors{};
+
+  /// NOTE: !!! This is under experimentation and please do not turn on in
+  /// production use case !!!
+  /// When true, kStreamMajor stripe-group metadata encodes each distinct
+  /// offsets or sizes array once per stripe group, and streams with identical
+  /// arrays reference the same copy. Existing readers read such files.
+  /// Enabling this can increase temporary writer memory.
+  bool experimentalStripeGroupMetadataDeduplication{false};
+
+  /// NOTE: !!! This is under experimentation and please do not turn on in
+  /// production use case !!!
+  /// When true, kStreamMajor stripe groups use the sparse layout: each stream
+  /// holds its stripe list, the stripes where it has data, and stripe-group
+  /// offsets and sizes only for those stripes. Streams with identical arrays
+  /// share one copy. Requires experimentalStripeGroupEncodingLayout to be
+  /// kStreamMajor. A reader that predates it cannot read such a file, except
+  /// when every stream has data in every stripe, so every reader must support
+  /// it before a writer enables it.
+  bool experimentalStripeGroupSparseLayout{false};
 
   /// If set, the cluster index on the specified columns will be built during
   /// writing. It is the primary index over key-ordered data and stores
@@ -142,6 +163,18 @@ struct WriterOptions {
   /// EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
   /// production tables without consulting the Nimble team (oncall: dwios).
   bool experimentalOmitClusterIndexKeyColumnStorage{false};
+
+  /// Where the cluster index stores its key chunks. kStripe stores the keys of
+  /// each stripe as one key chunk in the stripe's first stream, so that one
+  /// read can load a stripe's keys together with its data, and ignores the
+  /// maxRowsPerKeyChunk of clusterIndexConfig. Readers that predate kStripe
+  /// read the stripes of its files, but fail to open the cluster index.
+  /// kStripe requires clusterIndexConfig, and a cluster index implementation
+  /// built on ClusterIndexWriterBase.
+  /// EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
+  /// production tables without consulting the Nimble team (oncall: dwios).
+  index::KeyStreamLayout clusterIndexKeyStreamLayout{
+      index::KeyStreamLayout::kPartition};
 
   /// Enables compact varint row-count encoding for encoded data streams. The
   /// value is persisted in file properties so readers can select the matching
@@ -252,6 +285,12 @@ struct WriterOptions {
   /// are not addressable as literal names through this interface.
   std::vector<std::string> fsstEncodingSubfields{};
 
+  /// INTEGER, BIGINT, REAL and DOUBLE value streams pinned to SubIntSplit.
+  /// Paths use the same syntax as fsstEncodingSubfields. Cluster-index keys,
+  /// duplicate targets and shared dictionary collisions are rejected.
+  /// Explicit encodingLayoutTree entries take precedence.
+  std::vector<std::string> subIntSplitEncodingSubfields{};
+
   /// Compression settings to be used when encoding and compressing data streams
   CompressionOptions compressionOptions{};
 
@@ -272,14 +311,15 @@ struct WriterOptions {
   /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
   bool fixedBitWidthUseExactBits{false};
 
+  /// When true, integer dictionary alphabets are sorted by value. See
+  /// Encoding::Options::sortDictionaryAlphabet.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  bool sortDictionaryAlphabet{false};
+
   /// FSST is kept only when its final encoded size is at most this fraction of
   /// the original string bytes.
   double fsstCompressionTargetRatio{0.6};
-
-  /// EXPERIMENTATION: Allows ALP to participate in nested floating-point
-  /// encoding selection. False by default; do not enable for production until
-  /// ALP is production-ready.
-  bool allowNestedAlpSelection{false};
 
   /// Maximum number of scratch vector buffers retained by each per-encode-task
   /// scratch pool. 0 disables scratch vector buffer caching. Disabled by
@@ -300,7 +340,7 @@ struct WriterOptions {
   /// TODO: This options should be removed and integrated into the
   /// inputGrowthPolicyFactory option (e.g. allow the caller to set an
   /// ExactGrowthPolicy, as defined here:
-  /// velox/dwio/nimble/velox/BufferGrowthPolicy.h)
+  /// velox/dwio/nimble/writer/BufferGrowthPolicy.h)
   bool lowMemoryMode{false};
 
   /// If present, metadata sections above this threshold size will be
@@ -449,11 +489,12 @@ struct WriterOptions {
 
   bool enableStreamDeduplication{true};
 
-  /// When true, records a checksum of each stream's on-disk bytes in the
-  /// stripe group, so a reader can verify an individual stream without reading
-  /// the whole file. Costs 4 bytes per stream per stripe in the footer, and
-  /// the checksums do not compress. The whole-file checksum in the postscript
-  /// is written either way.
+  /// When true, follows each non-empty stream's on-disk bytes with a 4-byte
+  /// checksum of them, so a reader can verify an individual stream without
+  /// reading the whole file. The checksum sits in the stripe data, outside the
+  /// stream's recorded size, and costs no metadata. Readers that predate it
+  /// read such files unverified. The whole-file checksum in the postscript is
+  /// written either way.
   bool enableStreamChecksums{false};
 
   /// When true, string fields use per-field buffers instead of a shared buffer.

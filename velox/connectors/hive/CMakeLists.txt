@@ -12,29 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-velox_add_library(velox_hive_config OBJECT FileConfig.cpp HiveConfig.cpp)
-velox_link_libraries(velox_hive_config velox_core velox_exception)
+velox_add_library(velox_hive_config OBJECT HiveConfig.cpp)
+velox_link_libraries(
+  velox_hive_config
+  velox_file_config
+  velox_core
+  velox_dwio_dwrf_common
+  velox_exception
+)
 
 if(VELOX_ENABLE_PARQUET)
   velox_link_libraries(velox_hive_config velox_dwio_parquet_common)
 endif()
 
 add_subdirectory(iceberg)
-add_subdirectory(paimon)
 
 velox_add_library(
   velox_hive_connector
   OBJECT
-  BufferedInputBuilder.cpp
-  ExtractionUtils.cpp
-  ExtractionUtils.h
-  FileColumnHandle.cpp
-  FileConfig.cpp
-  FileConnectorUtil.cpp
   FileDataSink.cpp
-  FileDataSource.cpp
   FileIndexReader.cpp
-  FileSplitReader.cpp
+  HiveBucketProperty.cpp
   HiveConfig.cpp
   HiveConfigProvider.cpp
   HiveConnector.cpp
@@ -47,24 +45,16 @@ velox_add_library(
   HivePartitionName.cpp
   HiveSplitReader.cpp
   PartitionIdGenerator.cpp
-  PartitionValue.cpp
+  SortingWriter.cpp
   TableHandle.cpp
   HEADERS
-  BufferedInputBuilder.h
-  FileColumnHandle.h
-  FileConfig.h
-  FileConnectorSplit.h
-  FileConnectorUtil.h
   FileDataSink.h
-  FileDataSource.h
   FileHandle.h
   FileIndexReader.h
   FileProperties.h
-  FileSplitReader.h
-  FileTableHandle.h
+  HiveBucketProperty.h
+  HiveBucketPruning.h
   HiveConfig.h
-  HiveConfigMacrosDefine.h
-  HiveConfigMacrosUndef.h
   HiveConfigProvider.h
   HiveConnector.h
   HiveConnectorSplit.h
@@ -78,16 +68,18 @@ velox_add_library(
   HiveSplitReader.h
   IndexReader.h
   PartitionIdGenerator.h
-  PartitionValue.h
+  SortingWriter.h
   TableHandle.h
 )
 
 velox_link_libraries(
   velox_hive_connector
+  PUBLIC velox_file_connector
   PRIVATE
     velox_common_io
     velox_connector
     velox_dwio_catalog_fbhive
+    velox_dwio_dwrf_common
     velox_exec
     velox_hive_partition_function
     velox_key_encoder
@@ -97,7 +89,7 @@ if(VELOX_ENABLE_PARQUET)
   velox_link_libraries(velox_hive_connector PRIVATE velox_dwio_parquet_common)
 endif()
 
-velox_add_library(velox_hive_partition_function HivePartitionFunction.cpp)
+velox_add_library(velox_hive_partition_function HiveBucketPruning.cpp HivePartitionFunction.cpp)
 
 velox_link_libraries(velox_hive_partition_function velox_core velox_exec velox_hive_hash)
 

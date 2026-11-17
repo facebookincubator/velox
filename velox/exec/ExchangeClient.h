@@ -34,7 +34,9 @@ namespace facebook::velox::exec {
 /// factory that understands its data plane.
 ///
 /// Control-plane operations must be thread-safe because Task adds remote tasks
-/// while drivers consume data. Status accessors provide best-effort snapshots
+/// while drivers consume data. Task may call addRemoteTaskId() and
+/// noMoreRemoteTasks() while holding a Task lock, so they must not call back
+/// into the Task synchronously. Status accessors provide best-effort snapshots
 /// for diagnostics.
 class ExchangeClient {
  public:
@@ -46,8 +48,9 @@ class ExchangeClient {
   /// ignored.
   virtual void addRemoteTaskId(std::string_view remoteTaskId) = 0;
 
-  /// Signals that no more calls to addRemoteTaskId() will follow. Must not
-  /// throw.
+  /// Signals that all remote tasks have been added. A terminated task may still
+  /// add remote tasks so the client can release them. Repeated calls are
+  /// ignored. Must not throw.
   virtual void noMoreRemoteTasks() = 0;
 
   /// Releases the producers and unblocks consumers. Idempotent. Must not throw.

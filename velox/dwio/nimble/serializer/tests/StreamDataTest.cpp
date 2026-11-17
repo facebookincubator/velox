@@ -22,6 +22,7 @@
 #include <lz4.h>
 #include <zstd.h>
 
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -30,6 +31,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/selection/tests/RandomEncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/StreamData.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
@@ -1711,6 +1713,289 @@ TEST_F(StreamDataEncodedResetTest, resetUpdatesRowCountEncodingFlag) {
     streamData.reset(fixedEncoded, /*streamEncodingUsesVarintRowCount=*/false);
     expectDecoded(streamData, fixedValues);
   }
+}
+
+TEST_F(StreamDataEncodedResetTest, decodeBoolsAsBits) {
+  constexpr uint32_t kRows = 1'000;
+  const std::vector<uint32_t> setRows{3, 64, 65, 700, 999};
+  std::unique_ptr<bool[]> values{new bool[kRows]()};
+  for (const auto row : setRows) {
+    values[row] = true;
+  }
+  ManualEncodingSelectionPolicyFactory factory{
+      ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors(),
+      /*compressionOptions=*/std::nullopt};
+  auto policyFactory = [&factory](DataType dataType) {
+    return factory.createPolicy(dataType);
+  };
+  const EncodingLayout trivial{
+      EncodingType::Trivial, {}, CompressionType::Uncompressed};
+  // Selection picks a sparse encoding for these rows; Trivial is the dense
+  // case.
+  for (const EncodingLayout* layout :
+       {(const EncodingLayout*)nullptr, &trivial}) {
+    SCOPED_TRACE(layout == nullptr ? "selected" : "trivial");
+    facebook::nimble::Buffer buffer(*pool_);
+    const auto encoded = serde::detail::encodeTyped<bool>(
+        std::span<const bool>{values.get(), kRows},
+        buffer,
+        policyFactory,
+        Encoding::Options{},
+        layout,
+        /*compressionOptions=*/std::nullopt);
+    std::vector<BufferPtr> stringBuffers;
+    serde::StreamData streamData(stringBuffers, pool_.get());
+    streamData.reset(encoded, /*streamEncodingUsesVarintRowCount=*/false);
+
+    // Two reads, so the second starts mid-word and mid-stream; poisoned words
+    // check that the read overwrites rather than ORs.
+    std::vector<uint32_t> decodedRows;
+    for (const uint32_t begin : {0u, 500u}) {
+      std::vector<uint64_t> bits(bits::nwords(500), ~0ULL);
+      streamData.decodeBoolsAsBits(500, bits.data());
+      bits::forEachSetBit(bits.data(), 0, 500, [&](int32_t row) {
+        decodedRows.push_back(begin + row);
+      });
+    }
+    EXPECT_EQ(decodedRows, setRows);
+    EXPECT_EQ(streamData.remainingRows(), 0);
+  }
+}
+
+namespace {
+
+// Encodes `values` as a bool stream, with the encoding selection picks or
+// with `layout`.
+std::string_view encodeBools(
+    std::span<const bool> values,
+    facebook::nimble::Buffer& buffer,
+    const EncodingLayout* layout) {
+  ManualEncodingSelectionPolicyFactory factory{
+      ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors(),
+      /*compressionOptions=*/std::nullopt};
+  return serde::detail::encodeTyped<bool>(
+      values,
+      buffer,
+      [&factory](DataType dataType) { return factory.createPolicy(dataType); },
+      Encoding::Options{},
+      layout,
+      /*compressionOptions=*/std::nullopt);
+}
+
+} // namespace
+
+// Reads of 0, 63, 65 and 64 rows, so reads start and end both on and off
+// 64-bit word boundaries.
+TEST_F(StreamDataEncodedResetTest, decodeBoolsAsBitsWordBoundaries) {
+  constexpr uint32_t kRows = 192;
+  std::unique_ptr<bool[]> values{new bool[kRows]()};
+  for (uint32_t row = 0; row < kRows; ++row) {
+    values[row] = row % 3 == 0 || row == 63 || row == 64 || row == 127;
+  }
+  const EncodingLayout trivial{
+      EncodingType::Trivial, {}, CompressionType::Uncompressed};
+  for (const EncodingLayout* layout :
+       {(const EncodingLayout*)nullptr, &trivial}) {
+    SCOPED_TRACE(layout == nullptr ? "selected" : "trivial");
+    facebook::nimble::Buffer buffer(*pool_);
+    const auto encoded = encodeBools({values.get(), kRows}, buffer, layout);
+    std::vector<BufferPtr> stringBuffers;
+    serde::StreamData streamData(stringBuffers, pool_.get());
+    streamData.reset(encoded, /*streamEncodingUsesVarintRowCount=*/false);
+    uint32_t begin = 0;
+    for (const uint32_t count : {0u, 63u, 65u, 0u, 64u}) {
+      SCOPED_TRACE(fmt::format("read [{}, {})", begin, begin + count));
+      std::vector<uint64_t> bits(bits::nwords(count) + 1, ~0ULL);
+      streamData.decodeBoolsAsBits(count, bits.data());
+      for (uint32_t row = 0; row < count; ++row) {
+        EXPECT_EQ(bits::isBitSet(bits.data(), row), values[begin + row])
+            << "row " << begin + row;
+      }
+      begin += count;
+    }
+    EXPECT_EQ(streamData.remainingRows(), 0);
+  }
+}
+
+namespace {
+
+// A bool pattern over `rows` rows.
+enum class BoolPattern { Sparse, Dense, Alternating, Runs, AllTrue, AllFalse };
+
+std::vector<char> boolPattern(BoolPattern pattern, uint32_t rows) {
+  std::vector<char> values(rows);
+  for (uint32_t row = 0; row < rows; ++row) {
+    switch (pattern) {
+      case BoolPattern::Sparse:
+        values[row] = static_cast<char>(row % 97 == 5 || row == 64);
+        break;
+      case BoolPattern::Dense:
+        values[row] = static_cast<char>(!(row % 89 == 7 || row == 63));
+        break;
+      case BoolPattern::Alternating:
+        values[row] = static_cast<char>(row % 2 == 0);
+        break;
+      case BoolPattern::Runs:
+        values[row] = static_cast<char>((row / 37) % 2 == 1);
+        break;
+      case BoolPattern::AllTrue:
+        values[row] = true;
+        break;
+      case BoolPattern::AllFalse:
+        values[row] = false;
+        break;
+    }
+  }
+  return values;
+}
+
+std::string boolPatternName(BoolPattern pattern) {
+  switch (pattern) {
+    case BoolPattern::Sparse:
+      return "sparse";
+    case BoolPattern::Dense:
+      return "dense";
+    case BoolPattern::Alternating:
+      return "alternating";
+    case BoolPattern::Runs:
+      return "runs";
+    case BoolPattern::AllTrue:
+      return "allTrue";
+    case BoolPattern::AllFalse:
+      return "allFalse";
+  }
+  return "unknown";
+}
+
+} // namespace
+
+// A bool stream encoded with one encoding, the only candidate the selection
+// may pick, and one pattern.
+class StreamDataBoolsAsBitsTest
+    : public StreamDataEncodedResetTest,
+      public ::testing::WithParamInterface<
+          std::tuple<std::string_view, BoolPattern>> {
+ protected:
+  static constexpr uint32_t kRows = 1'000;
+
+  // Encodes the parameter's pattern with only the parameter's encoding.
+  std::string_view encodePattern(
+      const std::vector<char>& values,
+      facebook::nimble::Buffer& buffer) {
+    const auto factory =
+        facebook::nimble::testing::RandomEncodingSelectionPolicyFactory::create(
+            fmt::format("seed:1,encodings:{}", std::get<0>(GetParam())),
+            /*compressionOptions=*/std::nullopt);
+    return serde::detail::encodeTyped<bool>(
+        std::span<const bool>{
+            reinterpret_cast<const bool*>(values.data()), values.size()},
+        buffer,
+        [&factory](DataType dataType) {
+          return factory.createPolicy(dataType);
+        },
+        Encoding::Options{},
+        /*encodingLayout=*/nullptr,
+        /*compressionOptions=*/std::nullopt);
+  }
+};
+
+// Reads of 0, 63, 64, 65 and 300 rows and the rest, starting and ending on and
+// off word boundaries, into poisoned words.
+TEST_P(StreamDataBoolsAsBitsTest, readsAcrossWordBoundaries) {
+  const auto values = boolPattern(std::get<1>(GetParam()), kRows);
+  facebook::nimble::Buffer buffer(*pool_);
+  const auto encoded = encodePattern(values, buffer);
+  // The encoding's first byte names it: the selection had no other choice.
+  ASSERT_EQ(
+      static_cast<EncodingType>(encoded[0]),
+      toEncodingType(std::get<0>(GetParam())));
+  std::vector<BufferPtr> stringBuffers;
+  serde::StreamData streamData(stringBuffers, pool_.get());
+  streamData.reset(encoded, /*streamEncodingUsesVarintRowCount=*/false);
+  uint32_t begin = 0;
+  for (const uint32_t count : {0u, 63u, 64u, 65u, 300u, kRows - 492u}) {
+    SCOPED_TRACE(fmt::format("read [{}, {})", begin, begin + count));
+    std::vector<uint64_t> bits(bits::nwords(count) + 1, ~0ULL);
+    streamData.decodeBoolsAsBits(count, bits.data());
+    for (uint32_t row = 0; row < count; ++row) {
+      ASSERT_EQ(bits::isBitSet(bits.data(), row), values[begin + row] != 0)
+          << "row " << begin + row;
+    }
+    begin += count;
+  }
+  EXPECT_EQ(streamData.remainingRows(), 0);
+}
+
+// Bit reads and bool reads interleaved on one stream continue from each
+// other's position.
+TEST_P(StreamDataBoolsAsBitsTest, interleavedWithDecode) {
+  const auto values = boolPattern(std::get<1>(GetParam()), kRows);
+  facebook::nimble::Buffer buffer(*pool_);
+  const auto encoded = encodePattern(values, buffer);
+  std::vector<BufferPtr> stringBuffers;
+  serde::StreamData streamData(stringBuffers, pool_.get());
+  streamData.reset(encoded, /*streamEncodingUsesVarintRowCount=*/false);
+  uint32_t begin = 0;
+  bool asBits = false;
+  for (const uint32_t count : {10u, 70u, 1u, 129u, 64u, 3u, 200u, 523u}) {
+    SCOPED_TRACE(
+        fmt::format(
+            "{} [{}, {})", asBits ? "bits" : "bools", begin, begin + count));
+    if (asBits) {
+      std::vector<uint64_t> bits(bits::nwords(count) + 1, ~0ULL);
+      streamData.decodeBoolsAsBits(count, bits.data());
+      for (uint32_t row = 0; row < count; ++row) {
+        ASSERT_EQ(bits::isBitSet(bits.data(), row), values[begin + row] != 0)
+            << "row " << begin + row;
+      }
+    } else {
+      std::unique_ptr<bool[]> decoded{new bool[count]};
+      streamData.decode(decoded.get(), count);
+      for (uint32_t row = 0; row < count; ++row) {
+        ASSERT_EQ(decoded[row], values[begin + row] != 0)
+            << "row " << begin + row;
+      }
+    }
+    begin += count;
+    asBits = !asBits;
+  }
+  EXPECT_EQ(begin, kRows);
+  EXPECT_EQ(streamData.remainingRows(), 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    BoolEncodings,
+    StreamDataBoolsAsBitsTest,
+    ::testing::Values(
+        std::make_tuple("Trivial", BoolPattern::Sparse),
+        std::make_tuple("Trivial", BoolPattern::Dense),
+        std::make_tuple("Trivial", BoolPattern::Alternating),
+        std::make_tuple("SparseBool", BoolPattern::Sparse),
+        std::make_tuple("SparseBool", BoolPattern::Dense),
+        std::make_tuple("RLE", BoolPattern::Runs),
+        std::make_tuple("RLE", BoolPattern::Alternating),
+        std::make_tuple("Constant", BoolPattern::AllTrue),
+        std::make_tuple("Constant", BoolPattern::AllFalse)),
+    [](const auto& info) {
+      return fmt::format(
+          "{}_{}",
+          std::get<0>(info.param),
+          boolPatternName(std::get<1>(info.param)));
+    });
+
+TEST_F(StreamDataEncodedResetTest, decodeBoolsAsBitsPastEndThrows) {
+  std::unique_ptr<bool[]> values{new bool[10]()};
+  values[4] = true;
+  facebook::nimble::Buffer buffer(*pool_);
+  const auto encoded = encodeBools({values.get(), 10}, buffer, nullptr);
+  std::vector<BufferPtr> stringBuffers;
+  serde::StreamData streamData(stringBuffers, pool_.get());
+  streamData.reset(encoded, /*streamEncodingUsesVarintRowCount=*/false);
+  uint64_t bits = 0;
+  streamData.decodeBoolsAsBits(4, &bits);
+  NIMBLE_ASSERT_THROW(
+      streamData.decodeBoolsAsBits(7, &bits),
+      "StreamData::decodeBoolsAsBits past end of segment");
 }
 
 class EncodeTypedCompressionTest : public ::testing::Test {

@@ -145,8 +145,8 @@ class ExprTestTraceCtx : public TraceCtx {
 class CustomTraceTest : public exec::test::HiveConnectorTestBase {};
 
 TEST_F(CustomTraceTest, customTrace) {
-  auto vector = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(10, [](auto row) { return row; })});
+  auto vector = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(10, [](auto row) { return row; }));
 
   core::PlanNodeId traceNodeId1;
   core::PlanNodeId traceNodeId2;
@@ -184,11 +184,10 @@ TEST_F(CustomTraceTest, customTrace) {
   ASSERT_TRUE(it1 != tracedVectors.end());
   ASSERT_TRUE(it2 != tracedVectors.end());
 
-  auto expected1 = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(10, [](auto row) { return row; })});
-  auto expected2 = makeRowVector(
-      {"a"},
-      {makeFlatVector<int64_t>(10, [](auto row) { return row * 10 * 10; })});
+  auto expected1 = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(10, [](auto row) { return row; }));
+  auto expected2 = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(10, [](auto row) { return row * 10 * 10; }));
 
   assertEqualVectors(it1->second, expected1);
   assertEqualVectors(it2->second, expected2);
@@ -198,8 +197,8 @@ TEST_F(CustomTraceTest, customTrace) {
 }
 
 TEST_F(CustomTraceTest, exprOutputTrace) {
-  auto vector = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(10, [](auto row) { return row; })});
+  auto vector = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(10, [](auto row) { return row; }));
 
   auto plan =
       PlanBuilder().values({vector}).project({"a * 10 as a"}).planNode();
@@ -231,8 +230,8 @@ TEST_F(CustomTraceTest, exprOutputTrace) {
 }
 
 TEST_F(CustomTraceTest, exprTraceOnlyMatchingFunctions) {
-  auto vector = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(10, [](auto row) { return row; })});
+  auto vector = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(10, [](auto row) { return row; }));
 
   // Two projections: multiply then plus. Only trace "plus".
   auto plan = PlanBuilder()
@@ -307,8 +306,8 @@ TEST_F(CustomTraceTest, exprTraceMultipleInstances) {
 }
 
 TEST_F(CustomTraceTest, exprTraceCseSharedNode) {
-  auto vector = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(10, [](auto row) { return row; })});
+  auto vector = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(10, [](auto row) { return row; }));
 
   // Both projections share the "a * 10" subexpression (CSE). The visited set
   // should ensure the shared multiply node is only traced once.
@@ -341,9 +340,9 @@ TEST_F(CustomTraceTest, exprTraceCseSharedNode) {
 }
 
 TEST_F(CustomTraceTest, exprTraceNullResult) {
-  auto vector = makeRowVector(
-      {"a"},
-      {makeNullableFlatVector<int64_t>({1, std::nullopt, 3, std::nullopt, 5})});
+  auto vector = makeNamedRowVector(
+      "a",
+      makeNullableFlatVector<int64_t>({1, std::nullopt, 3, std::nullopt, 5}));
 
   // try(a / 0) produces all nulls without throwing.
   auto plan =
@@ -373,8 +372,8 @@ TEST_F(CustomTraceTest, exprTraceNullResult) {
 }
 
 TEST_F(CustomTraceTest, exprTraceOperatorScoping) {
-  auto vector = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(10, [](auto row) { return row; })});
+  auto vector = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(10, [](auto row) { return row; }));
 
   auto plan =
       PlanBuilder().values({vector}).project({"a * 10 as b"}).planNode();
@@ -435,8 +434,8 @@ class ThrowingExprTraceCtx : public TraceCtx {
 };
 
 TEST_F(CustomTraceTest, exprTraceThrowingWriter) {
-  auto vector = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(10, [](auto row) { return row; })});
+  auto vector = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(10, [](auto row) { return row; }));
 
   auto plan =
       PlanBuilder().values({vector}).project({"a * 10 as a"}).planNode();
@@ -495,8 +494,8 @@ class IntraExprTraceCtx : public TraceCtx {
 };
 
 TEST_F(CustomTraceTest, intraExprTracingCalledForTracedFunctions) {
-  auto vector = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(10, [](auto row) { return row; })});
+  auto vector = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(10, [](auto row) { return row; }));
 
   auto plan =
       PlanBuilder().values({vector}).project({"a * 10 as a"}).planNode();
@@ -521,8 +520,8 @@ TEST_F(CustomTraceTest, intraExprTracingCalledForTracedFunctions) {
 }
 
 TEST_F(CustomTraceTest, intraExprTracingNotCalledForUntracedFunctions) {
-  auto vector = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(10, [](auto row) { return row; })});
+  auto vector = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(10, [](auto row) { return row; }));
 
   auto plan = PlanBuilder()
                   .values({vector})
@@ -549,8 +548,8 @@ TEST_F(CustomTraceTest, intraExprTracingNotCalledForUntracedFunctions) {
 }
 
 TEST_F(CustomTraceTest, intraExprTracingNotCalledWhenOperatorNotTraced) {
-  auto vector = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(10, [](auto row) { return row; })});
+  auto vector = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(10, [](auto row) { return row; }));
 
   // TraceCtx where shouldTrace returns false for all operators.
   class NoOpTraceCtx : public TraceCtx {
@@ -633,8 +632,8 @@ void assertCursorOutput(
 TEST_F(CustomTraceTest, taskDebuggerCursor) {
   const size_t size = 10;
   auto makeData = [&](std::function<int64_t(vector_size_t)> values) {
-    return makeRowVector(
-        {"a"}, {makeFlatVector<int64_t>(size, std::move(values))});
+    return makeNamedRowVector(
+        "a", makeFlatVector<int64_t>(size, std::move(values)));
   };
 
   // Two input vectors.
@@ -712,11 +711,10 @@ TEST_F(CustomTraceTest, taskDebuggerCursor) {
 
 TEST_F(CustomTraceTest, cursorAt) {
   const size_t size = 10;
-  auto input1 = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
-  auto input2 = makeRowVector(
-      {"a"},
-      {makeFlatVector<int64_t>(size, [](auto row) { return row + 10; })});
+  auto input1 = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(size, [](auto row) { return row; }));
+  auto input2 = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(size, [](auto row) { return row + 10; }));
 
   core::PlanNodeId project1, project2, project3, project4;
   auto plan = PlanBuilder()
@@ -788,8 +786,8 @@ TEST_F(CustomTraceTest, cursorAt) {
 
 TEST_F(CustomTraceTest, breakpointCallbackAlwaysStop) {
   const size_t size = 10;
-  auto input = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+  auto input = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(size, [](auto row) { return row; }));
 
   core::PlanNodeId project1;
   auto plan = PlanBuilder()
@@ -827,8 +825,8 @@ TEST_F(CustomTraceTest, breakpointCallbackAlwaysStop) {
 
 TEST_F(CustomTraceTest, breakpointCallbackNeverStop) {
   const size_t size = 10;
-  auto input = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+  auto input = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(size, [](auto row) { return row; }));
 
   core::PlanNodeId project1;
   auto plan = PlanBuilder()
@@ -862,11 +860,10 @@ TEST_F(CustomTraceTest, breakpointCallbackNeverStop) {
 
 TEST_F(CustomTraceTest, breakpointCallbackConditional) {
   const size_t size = 10;
-  auto input1 = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
-  auto input2 = makeRowVector(
-      {"a"},
-      {makeFlatVector<int64_t>(size, [](auto row) { return row + 100; })});
+  auto input1 = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(size, [](auto row) { return row; }));
+  auto input2 = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(size, [](auto row) { return row + 100; }));
 
   core::PlanNodeId project1;
   auto plan = PlanBuilder()
@@ -911,8 +908,8 @@ TEST_F(CustomTraceTest, breakpointCallbackConditional) {
 
 TEST_F(CustomTraceTest, breakpointMixedCallbacks) {
   const size_t size = 10;
-  auto input = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+  auto input = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(size, [](auto row) { return row; }));
 
   core::PlanNodeId project1, project2;
   auto plan = PlanBuilder()
@@ -958,14 +955,12 @@ TEST_F(CustomTraceTest, breakpointMixedCallbacks) {
 // non-deterministic order across drivers.
 TEST_F(CustomTraceTest, parallelSingleBreakpoint) {
   const size_t size = 10;
-  auto input1 = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
-  auto input2 = makeRowVector(
-      {"a"},
-      {makeFlatVector<int64_t>(size, [](auto row) { return row + 10; })});
-  auto input3 = makeRowVector(
-      {"a"},
-      {makeFlatVector<int64_t>(size, [](auto row) { return row + 20; })});
+  auto input1 = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(size, [](auto row) { return row; }));
+  auto input2 = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(size, [](auto row) { return row + 10; }));
+  auto input3 = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(size, [](auto row) { return row + 20; }));
 
   core::PlanNodeId project1;
   auto plan = PlanBuilder()
@@ -1005,14 +1000,12 @@ TEST_F(CustomTraceTest, parallelSingleBreakpoint) {
 // final task outputs.
 TEST_F(CustomTraceTest, parallelMoveNext) {
   const size_t size = 10;
-  auto input1 = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
-  auto input2 = makeRowVector(
-      {"a"},
-      {makeFlatVector<int64_t>(size, [](auto row) { return row + 10; })});
-  auto input3 = makeRowVector(
-      {"a"},
-      {makeFlatVector<int64_t>(size, [](auto row) { return row + 20; })});
+  auto input1 = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(size, [](auto row) { return row; }));
+  auto input2 = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(size, [](auto row) { return row + 10; }));
+  auto input3 = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(size, [](auto row) { return row + 20; }));
 
   core::PlanNodeId project1;
   auto plan = PlanBuilder()
@@ -1050,8 +1043,8 @@ TEST_F(CustomTraceTest, parallelMoveNext) {
 TEST_F(CustomTraceTest, parallelMultipleBreakpoints) {
   const size_t size = 10;
   auto makeData = [&](std::function<int64_t(vector_size_t)> values) {
-    return makeRowVector(
-        {"a"}, {makeFlatVector<int64_t>(size, std::move(values))});
+    return makeNamedRowVector(
+        "a", makeFlatVector<int64_t>(size, std::move(values)));
   };
 
   auto input1 = makeData([](auto row) { return row; });
@@ -1177,11 +1170,10 @@ TEST_F(CustomTraceTest, parallelHashJoinBreakpoints) {
 // plan node ID, skipping breakpoints for other nodes.
 TEST_F(CustomTraceTest, moveStepWithPlanId) {
   const size_t size = 10;
-  auto input1 = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
-  auto input2 = makeRowVector(
-      {"a"},
-      {makeFlatVector<int64_t>(size, [](auto row) { return row + 10; })});
+  auto input1 = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(size, [](auto row) { return row; }));
+  auto input2 = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(size, [](auto row) { return row + 10; }));
 
   core::PlanNodeId project1, project2, project3;
   auto plan = PlanBuilder()
@@ -1237,8 +1229,8 @@ TEST_F(CustomTraceTest, moveStepWithPlanId) {
 // behavior is preserved (stop at any breakpoint).
 TEST_F(CustomTraceTest, moveStepWithPlanIdDefaultBehavior) {
   const size_t size = 10;
-  auto input = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+  auto input = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(size, [](auto row) { return row; }));
 
   core::PlanNodeId project1, project2;
   auto plan = PlanBuilder()

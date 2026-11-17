@@ -16,9 +16,7 @@
 
 #include <fmt/format.h>
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/exec/Aggregate.h"
 #include "velox/exec/PlanNodeStats.h"
-#include "velox/exec/RowContainer.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
@@ -409,7 +407,10 @@ class MinMaxByGlobalByAggregationTest
         "{}({}, {})", aggName, valueColumnName, comparisonColumnName);
     SCOPED_TRACE(
         fmt::format("{}\nverifyDuckDbSql: {}", aggregate, verifyDuckDbSql));
-    testAggregations(vectors, {}, {aggregate}, {}, verifyDuckDbSql);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({aggregate})
+        .assertResults(verifyDuckDbSql);
   }
 
   template <typename T, typename U>
@@ -499,12 +500,10 @@ class MinMaxByGlobalByAggregationTest
       SCOPED_TRACE(testData.debugString());
       // Skip testing with TableScan because the result for some testData
       // depends on input order that is non-deterministic with two splits.
-      testAggregations(
-          {testData.inputRowVector},
-          {},
-          {"min_by(c0, c1)"},
-          {},
-          testData.verifyDuckDbSql);
+      AggregationTester(*this)
+          .inputs(testData.inputRowVector)
+          .aggregates({"min_by(c0, c1)"})
+          .assertResults(testData.verifyDuckDbSql);
     }
   }
 
@@ -595,12 +594,10 @@ class MinMaxByGlobalByAggregationTest
       SCOPED_TRACE(testData.debugString());
       // Skip testing with TableScan because the result for some testData
       // depends on input order that is non-deterministic with two splits.
-      testAggregations(
-          {testData.inputRowVector},
-          {},
-          {"max_by(c0, c1)"},
-          {},
-          testData.verifyDuckDbSql);
+      AggregationTester(*this)
+          .inputs(testData.inputRowVector)
+          .aggregates({"max_by(c0, c1)"})
+          .assertResults(testData.verifyDuckDbSql);
     }
   }
 };
@@ -737,8 +734,11 @@ class MinMaxByGroupByAggregationTest
             aggregate,
             groupByColumnName,
             verifyDuckDbSql));
-    testAggregations(
-        vectors, {groupByColumnName}, {aggregate}, {}, verifyDuckDbSql);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({groupByColumnName})
+        .aggregates({aggregate})
+        .assertResults(verifyDuckDbSql);
   }
 
   template <typename T, typename U>
@@ -884,12 +884,11 @@ class MinMaxByGroupByAggregationTest
       SCOPED_TRACE(testData.debugString());
       // Skip testing with TableScan because the result for some testData
       // depends on input order that is non-deterministic with two splits.
-      testAggregations(
-          {testData.inputRowVector},
-          {"c2"},
-          {"min_by(c0, c1)"},
-          {},
-          testData.verifyDuckDbSql);
+      AggregationTester(*this)
+          .inputs(testData.inputRowVector)
+          .groupBy({"c2"})
+          .aggregates({"min_by(c0, c1)"})
+          .assertResults(testData.verifyDuckDbSql);
     }
   }
 
@@ -1035,12 +1034,11 @@ class MinMaxByGroupByAggregationTest
       SCOPED_TRACE(testData.debugString());
       // Skip testing with TableScan because the result for some testData
       // depends on input order that is non-deterministic with two splits.
-      testAggregations(
-          {testData.inputRowVector},
-          {"c2"},
-          {"max_by(c0, c1)"},
-          {},
-          testData.verifyDuckDbSql);
+      AggregationTester(*this)
+          .inputs(testData.inputRowVector)
+          .groupBy({"c2"})
+          .aggregates({"max_by(c0, c1)"})
+          .assertResults(testData.verifyDuckDbSql);
     }
   }
 };
@@ -1204,48 +1202,6 @@ TEST_F(MinMaxByComplexTypes, trackRowSize) {
   }
 }
 
-// The tracker above can only write a size because RowContainer reserved a slot
-// for it, and it reserves one only for an accumulator that reports itself as
-// not fixed size. Check that a real container does so, since
-// aggregateAndReadRowSize lays the row out by hand and would keep passing even
-// if the accumulator claimed to be fixed size.
-TEST_F(MinMaxByComplexTypes, rowContainerReservesRowSize) {
-  core::QueryConfig queryConfig({});
-  for (const auto& name : {"min_by", "max_by"}) {
-    SCOPED_TRACE(name);
-    for (const auto& valueType :
-         std::vector<TypePtr>{VARCHAR(), ARRAY(BIGINT()), BIGINT()}) {
-      SCOPED_TRACE(valueType->toString());
-      auto fn = exec::Aggregate::create(
-          name,
-          core::AggregationNode::Step::kSingle,
-          std::vector<TypePtr>{valueType, BIGINT()},
-          valueType,
-          queryConfig);
-      std::vector<exec::Accumulator> accumulators;
-      accumulators.emplace_back(fn.get(), valueType);
-      exec::RowContainer container(
-          {BIGINT()},
-          /*nullableKeys=*/false,
-          accumulators,
-          /*dependentTypes=*/std::vector<TypePtr>{},
-          /*hasNext=*/false,
-          /*isJoinBuild=*/false,
-          /*hasProbedFlag=*/false,
-          /*hasCountFlag=*/false,
-          /*hasNormalizedKey=*/false,
-          /*useListRowIndex=*/false,
-          pool());
-      // A numeric accumulator holds everything inline, so it needs no slot.
-      if (valueType->isFixedWidth()) {
-        EXPECT_EQ(container.rowSizeOffset(), 0);
-      } else {
-        EXPECT_NE(container.rowSizeOffset(), 0);
-      }
-    }
-  }
-}
-
 TEST_F(MinMaxByComplexTypes, array) {
   auto data = makeRowVector({
       makeArrayVector<int64_t>({
@@ -1271,8 +1227,10 @@ TEST_F(MinMaxByComplexTypes, array) {
       }),
   });
 
-  testAggregations(
-      {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(c0, c1)", "max_by(c0, c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByComplexTypes, arrayGroupBy) {
@@ -1299,8 +1257,11 @@ TEST_F(MinMaxByComplexTypes, arrayGroupBy) {
       }),
   });
 
-  testAggregations(
-      {data}, {"c0"}, {"min_by(c1, c2)", "max_by(c1, c2)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"min_by(c1, c2)", "max_by(c1, c2)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByComplexTypes, map) {
@@ -1323,8 +1284,10 @@ TEST_F(MinMaxByComplexTypes, map) {
       }),
   });
 
-  testAggregations(
-      {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(c0, c1)", "max_by(c0, c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByComplexTypes, mapGroupBy) {
@@ -1351,8 +1314,11 @@ TEST_F(MinMaxByComplexTypes, mapGroupBy) {
       }),
   });
 
-  testAggregations(
-      {data}, {"c0"}, {"min_by(c1, c2)", "max_by(c1, c2)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"min_by(c1, c2)", "max_by(c1, c2)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByComplexTypes, arrayCompare) {
@@ -1376,8 +1342,10 @@ TEST_F(MinMaxByComplexTypes, arrayCompare) {
           {6, 7, 8},
       }),
   });
-  testAggregations(
-      {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(c0, c1)", "max_by(c0, c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByComplexTypes, rowCompare) {
@@ -1399,8 +1367,10 @@ TEST_F(MinMaxByComplexTypes, rowCompare) {
       }),
   });
 
-  testAggregations(
-      {data}, {}, {"min_by(c0, c1)", "max_by(c0, c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(c0, c1)", "max_by(c0, c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByComplexTypes, arrayCheckNulls) {
@@ -1425,16 +1395,17 @@ TEST_F(MinMaxByComplexTypes, arrayCheckNulls) {
   });
 
   for (const auto& expr : {"min_by(c0, c1)", "max_by(c0, c1)"}) {
-    testFailingAggregations(
-        {batch, batchWithNull},
-        {},
-        {expr},
-        "ARRAY comparison not supported for values that contain nulls");
-    testFailingAggregations(
-        {batch, batchWithNull},
-        {"c2"},
-        {expr},
-        "ARRAY comparison not supported for values that contain nulls");
+    AggregationTester(*this)
+        .inputs({batch, batchWithNull})
+        .aggregates({expr})
+        .assertError(
+            "ARRAY comparison not supported for values that contain nulls");
+    AggregationTester(*this)
+        .inputs({batch, batchWithNull})
+        .groupBy({"c2"})
+        .aggregates({expr})
+        .assertError(
+            "ARRAY comparison not supported for values that contain nulls");
   }
 }
 
@@ -1457,16 +1428,17 @@ TEST_F(MinMaxByComplexTypes, rowCheckNull) {
   });
 
   for (const auto& expr : {"min_by(c0, c1)", "max_by(c0, c1)"}) {
-    testFailingAggregations(
-        {batch, batchWithNull},
-        {},
-        {expr},
-        "ROW comparison not supported for values that contain nulls");
-    testFailingAggregations(
-        {batch, batchWithNull},
-        {"c2"},
-        {expr},
-        "ROW comparison not supported for values that contain nulls");
+    AggregationTester(*this)
+        .inputs({batch, batchWithNull})
+        .aggregates({expr})
+        .assertError(
+            "ROW comparison not supported for values that contain nulls");
+    AggregationTester(*this)
+        .inputs({batch, batchWithNull})
+        .groupBy({"c2"})
+        .aggregates({expr})
+        .assertError(
+            "ROW comparison not supported for values that contain nulls");
   }
 }
 
@@ -1513,11 +1485,16 @@ TEST_F(MinMaxByUnknownTest, unknown) {
   });
 
   // Both value and compare are UNKNOWN.
-  testAggregations(
-      {data}, {}, {"min_by(vn, cn)", "max_by(vn, cn)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(vn, cn)", "max_by(vn, cn)"})
+      .assertResults(expected);
 
   // Only value is UNKNOWN.
-  testAggregations({data}, {}, {"min_by(vn, c)", "max_by(vn, c)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(vn, c)", "max_by(vn, c)"})
+      .assertResults(expected);
 
   // Only compare is UNKNOWN.
   expected = makeRowVector({
@@ -1525,7 +1502,10 @@ TEST_F(MinMaxByUnknownTest, unknown) {
       makeAllNullFlatVector<int64_t>(1),
   });
 
-  testAggregations({data}, {}, {"min_by(v, cn)", "max_by(v, cn)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(v, cn)", "max_by(v, cn)"})
+      .assertResults(expected);
 
   // Group by.
   expected = makeRowVector({
@@ -1535,12 +1515,18 @@ TEST_F(MinMaxByUnknownTest, unknown) {
   });
 
   // Both value and compare are UNKNOWN.
-  testAggregations(
-      {data}, {"k"}, {"min_by(vn, cn)", "max_by(vn, cn)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"k"})
+      .aggregates({"min_by(vn, cn)", "max_by(vn, cn)"})
+      .assertResults(expected);
 
   // Only value is UNKNOWN.
-  testAggregations(
-      {data}, {"k"}, {"min_by(vn, c)", "max_by(vn, c)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"k"})
+      .aggregates({"min_by(vn, c)", "max_by(vn, c)"})
+      .assertResults(expected);
 
   // Only compare is UNKNOWN.
   expected = makeRowVector({
@@ -1549,15 +1535,17 @@ TEST_F(MinMaxByUnknownTest, unknown) {
       makeAllNullFlatVector<int64_t>(2),
   });
 
-  testAggregations(
-      {data}, {"k"}, {"min_by(v, cn)", "max_by(v, cn)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"k"})
+      .aggregates({"min_by(v, cn)", "max_by(v, cn)"})
+      .assertResults(expected);
 }
 
 class MinMaxByNTest : public AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    AggregationTestBase::enableTestStreaming();
   }
 
   template <typename T>
@@ -1588,16 +1576,15 @@ class MinMaxByNTest : public AggregationTestBase {
           makeArrayVectorFromJson<int32_t>({"[5, 2]"}),
       });
 
-      testAggregations(
-          {data},
-          {},
-          {
+      AggregationTester(*this)
+          .inputs(data)
+          .aggregates({
               "max_by(c0, c2, 2)",
               "max_by(c0, c3, 2)",
               "min_by(c0, c2, 2)",
               "min_by(c0, c3, 2)",
-          },
-          {expected});
+          })
+          .assertResults(expected);
     }
 
     // group-by aggregation.
@@ -1610,16 +1597,16 @@ class MinMaxByNTest : public AggregationTestBase {
           makeArrayVectorFromJson<int32_t>({"[2, 1]", "[5, 4]"}),
       });
 
-      testAggregations(
-          {data},
-          {"c1"},
-          {
+      AggregationTester(*this)
+          .inputs(data)
+          .groupBy({"c1"})
+          .aggregates({
               "max_by(c0, c2, 2)",
               "max_by(c0, c3, 2)",
               "min_by(c0, c2, 2)",
               "min_by(c0, c3, 2)",
-          },
-          {expected});
+          })
+          .assertResults(expected);
     }
   }
 };
@@ -1647,8 +1634,10 @@ TEST_F(MinMaxByNTest, global) {
       }),
   });
 
-  testAggregations(
-      {data}, {}, {"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"})
+      .assertResults(expected);
 
   // Some nulls in values.
   data = makeRowVector({
@@ -1666,8 +1655,10 @@ TEST_F(MinMaxByNTest, global) {
       }),
   });
 
-  testAggregations(
-      {data}, {}, {"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"})
+      .assertResults(expected);
 
   // bool type of comparison
   data = makeRowVector({
@@ -1684,8 +1675,10 @@ TEST_F(MinMaxByNTest, global) {
       }),
   });
 
-  testAggregations(
-      {data}, {}, {"min_by(c0, c1, 1)", "max_by(c0, c1, 1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(c0, c1, 1)", "max_by(c0, c1, 1)"})
+      .assertResults(expected);
 
   // bool type of value
   data = makeRowVector({
@@ -1702,8 +1695,10 @@ TEST_F(MinMaxByNTest, global) {
       }),
   });
 
-  testAggregations(
-      {data}, {}, {"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByNTest, globalWithNullCompare) {
@@ -1723,8 +1718,10 @@ TEST_F(MinMaxByNTest, globalWithNullCompare) {
       }),
   });
 
-  testAggregations(
-      {data}, {}, {"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"})
+      .assertResults(expected);
 
   // All 'compare' values are null.
   data = makeRowVector({
@@ -1737,8 +1734,10 @@ TEST_F(MinMaxByNTest, globalWithNullCompare) {
       makeAllNullArrayVector(1, INTEGER()),
   });
 
-  testAggregations(
-      {data}, {}, {"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByNTest, globalWithNullN) {
@@ -1758,8 +1757,10 @@ TEST_F(MinMaxByNTest, globalWithNullN) {
       }),
   });
 
-  testAggregations(
-      {data}, {}, {"min_by(c0, c1, c2)", "max_by(c0, c1, c2)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(c0, c1, c2)", "max_by(c0, c1, c2)"})
+      .assertResults(expected);
 
   // All 'N' are null.
   data = makeRowVector({
@@ -1773,8 +1774,10 @@ TEST_F(MinMaxByNTest, globalWithNullN) {
       makeAllNullArrayVector(1, INTEGER()),
   });
 
-  testAggregations(
-      {data}, {}, {"min_by(c0, c1, c2)", "max_by(c0, c1, c2)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(c0, c1, c2)", "max_by(c0, c1, c2)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByNTest, sortedGlobal) {
@@ -1821,8 +1824,11 @@ TEST_F(MinMaxByNTest, groupBy) {
       }),
   });
 
-  testAggregations(
-      {data}, {"c0"}, {"min_by(c1, c2, 3)", "max_by(c1, c2, 4)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"min_by(c1, c2, 3)", "max_by(c1, c2, 4)"})
+      .assertResults(expected);
 
   // Some nulls in values.
   data = makeRowVector({
@@ -1844,8 +1850,11 @@ TEST_F(MinMaxByNTest, groupBy) {
       }),
   });
 
-  testAggregations(
-      {data}, {"c0"}, {"min_by(c1, c2, 3)", "max_by(c1, c2, 4)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"min_by(c1, c2, 3)", "max_by(c1, c2, 4)"})
+      .assertResults(expected);
 
   // bool type of comparison
   // Make input size at least 8 to ensure drivers get 2 input batches for
@@ -1869,8 +1878,11 @@ TEST_F(MinMaxByNTest, groupBy) {
       }),
   });
 
-  testAggregations(
-      {data}, {"c0"}, {"min_by(c1, c2, 1)", "max_by(c1, c2, 1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"min_by(c1, c2, 1)", "max_by(c1, c2, 1)"})
+      .assertResults(expected);
 
   // bool type of value
   data = makeRowVector({
@@ -1891,8 +1903,11 @@ TEST_F(MinMaxByNTest, groupBy) {
       }),
   });
 
-  testAggregations(
-      {data}, {"c0"}, {"min_by(c1, c2, 3)", "max_by(c1, c2, 4)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"min_by(c1, c2, 3)", "max_by(c1, c2, 4)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByNTest, groupByWithNullCompare) {
@@ -1916,8 +1931,11 @@ TEST_F(MinMaxByNTest, groupByWithNullCompare) {
       }),
   });
 
-  testAggregations(
-      {data}, {"c0"}, {"min_by(c1, c2, 3)", "max_by(c1, c2, 4)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"min_by(c1, c2, 3)", "max_by(c1, c2, 4)"})
+      .assertResults(expected);
 
   // All 'compare' values are null for one group.
   data = makeRowVector({
@@ -1939,8 +1957,11 @@ TEST_F(MinMaxByNTest, groupByWithNullCompare) {
       }),
   });
 
-  testAggregations(
-      {data}, {"c0"}, {"min_by(c1, c2, 3)", "max_by(c1, c2, 4)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"min_by(c1, c2, 3)", "max_by(c1, c2, 4)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByNTest, groupByWithNullN) {
@@ -1965,8 +1986,11 @@ TEST_F(MinMaxByNTest, groupByWithNullN) {
       }),
   });
 
-  testAggregations(
-      {data}, {"c0"}, {"min_by(c1, c2, c3)", "max_by(c1, c2, c3)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"min_by(c1, c2, c3)", "max_by(c1, c2, c3)"})
+      .assertResults(expected);
 
   // All 'N' values are null for one group.
   data = makeRowVector({
@@ -1989,8 +2013,11 @@ TEST_F(MinMaxByNTest, groupByWithNullN) {
       }),
   });
 
-  testAggregations(
-      {data}, {"c0"}, {"min_by(c1, c2, c3)", "max_by(c1, c2, c3)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"min_by(c1, c2, c3)", "max_by(c1, c2, c3)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByNTest, sortedGroupBy) {
@@ -2021,8 +2048,6 @@ TEST_F(MinMaxByNTest, sortedGroupBy) {
 TEST_F(MinMaxByNTest, variableN) {
   // Tests below check the error behavior on invalid inputs, so testIncremental
   // is not needed for these cases.
-  AggregationTestBase::disableTestIncremental();
-
   auto data = makeRowVector({
       makeFlatVector<int32_t>({1, 2, 3, 4, 5, 6, 7}),
       makeFlatVector<int64_t>({77, 66, 55, 44, 33, 22, 11}),
@@ -2059,8 +2084,12 @@ TEST_F(MinMaxByNTest, variableN) {
       }),
   });
 
-  testAggregations(
-      {data}, {"c0"}, {"min_by(c1, c2, c3)", "max_by(c1, c2, c3)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"min_by(c1, c2, c3)", "max_by(c1, c2, c3)"})
+      .disableIncremental()
+      .assertResults(expected);
 
   // Variable value of 'n' within a group is not allowed.
   data = makeRowVector({
@@ -2078,8 +2107,6 @@ TEST_F(MinMaxByNTest, variableN) {
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),
       "third argument of max_by/min_by must be a constant for all rows in a group");
-
-  AggregationTestBase::enableTestIncremental();
 }
 
 TEST_F(MinMaxByNTest, globalRow) {
@@ -2106,8 +2133,10 @@ TEST_F(MinMaxByNTest, globalRow) {
           })),
   });
 
-  testAggregations(
-      {data}, {}, {"min_by(c1, c0, 3)", "max_by(c1, c0, 4)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(c1, c0, 3)", "max_by(c1, c0, 4)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByNTest, globalRowWithNulls) {
@@ -2140,8 +2169,10 @@ TEST_F(MinMaxByNTest, globalRowWithNulls) {
               nullEvery(2, 1))),
   });
 
-  testAggregations(
-      {data}, {}, {"min_by(c1, c0, 3)", "max_by(c1, c0, 4)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(c1, c0, 3)", "max_by(c1, c0, 4)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByNTest, groupByRow) {
@@ -2170,8 +2201,11 @@ TEST_F(MinMaxByNTest, groupByRow) {
           })),
   });
 
-  testAggregations(
-      {data}, {"c0"}, {"min_by(c2, c1, 2)", "max_by(c2, c1, 2)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"min_by(c2, c1, 2)", "max_by(c2, c1, 2)"})
+      .assertResults(expected);
 }
 
 namespace {
@@ -2211,8 +2245,10 @@ TEST_F(MinMaxByNTest, globalVarchar) {
       }),
   });
 
-  testAggregations(
-      {data}, {}, {"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByNTest, groupByVarchar) {
@@ -2255,8 +2291,11 @@ TEST_F(MinMaxByNTest, groupByVarchar) {
       }),
   });
 
-  testAggregations(
-      {data}, {"c0"}, {"min_by(c1, c2, 3)", "max_by(c1, c2, 4)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"min_by(c1, c2, 3)", "max_by(c1, c2, 4)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByNTest, varbinaryCompare) {
@@ -2276,10 +2315,10 @@ TEST_F(MinMaxByNTest, varbinaryCompare) {
           {7, 6, 5, 4},
       }),
   });
-  testAggregations(
-      {data}, {}, {"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"}, {expected});
-  testReadFromFiles(
-      {data}, {}, {"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min_by(c0, c1, 3)", "max_by(c0, c1, 4)"})
+      .assertResults(expected);
 
   // Group-by.
   expected = makeRowVector({
@@ -2287,10 +2326,11 @@ TEST_F(MinMaxByNTest, varbinaryCompare) {
       makeArrayVector<int32_t>({{1, 2}, {5, 6}}),
       makeArrayVector<int32_t>({{4, 3}, {7, 6}}),
   });
-  testAggregations(
-      {data}, {"c2"}, {"min_by(c0, c1, 2)", "max_by(c0, c1, 2)"}, {expected});
-  testReadFromFiles(
-      {data}, {"c2"}, {"min_by(c0, c1, 2)", "max_by(c0, c1, 2)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c2"})
+      .aggregates({"min_by(c0, c1, 2)", "max_by(c0, c1, 2)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxByNTest, stringComparison) {
@@ -2327,10 +2367,10 @@ TEST_F(MinMaxByNTest, stringComparison) {
                 makeFlatVector<int32_t>({60, 50, 40, 30}),
             })),
     });
-    testAggregations(
-        {data}, {}, {"min_by(c1, c0, 3)", "max_by(c1, c0, 4)"}, {expected});
-    testReadFromFiles(
-        {data}, {}, {"min_by(c1, c0, 3)", "max_by(c1, c0, 4)"}, {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({"min_by(c1, c0, 3)", "max_by(c1, c0, 4)"})
+        .assertResults(expected);
 
     // Group-by.
     expected = makeRowVector({
@@ -2348,10 +2388,11 @@ TEST_F(MinMaxByNTest, stringComparison) {
                 makeFlatVector<int32_t>({60, 50, 30, 20}),
             })),
     });
-    testAggregations(
-        {data}, {"c4"}, {"min_by(c1, c0, 2)", "max_by(c1, c0, 2)"}, {expected});
-    testReadFromFiles(
-        {data}, {"c4"}, {"min_by(c1, c0, 2)", "max_by(c1, c0, 2)"}, {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .groupBy({"c4"})
+        .aggregates({"min_by(c1, c0, 2)", "max_by(c1, c0, 2)"})
+        .assertResults(expected);
   }
 
   // Test min_by(smallint, varchar, n) and max_by(smallint, varchar, n).
@@ -2361,10 +2402,10 @@ TEST_F(MinMaxByNTest, stringComparison) {
         makeArrayVector({0}, makeFlatVector<int16_t>({1, 2, 3})),
         makeArrayVector({0}, makeFlatVector<int16_t>({6, 5, 4, 3})),
     });
-    testAggregations(
-        {data}, {}, {"min_by(c2, c0, 3)", "max_by(c2, c0, 4)"}, {expected});
-    testReadFromFiles(
-        {data}, {}, {"min_by(c2, c0, 3)", "max_by(c2, c0, 4)"}, {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({"min_by(c2, c0, 3)", "max_by(c2, c0, 4)"})
+        .assertResults(expected);
 
     // Group-by.
     expected = makeRowVector({
@@ -2372,10 +2413,11 @@ TEST_F(MinMaxByNTest, stringComparison) {
         makeArrayVector({0, 2}, makeFlatVector<int16_t>({4, 5, 1, 2})),
         makeArrayVector({0, 2}, makeFlatVector<int16_t>({6, 5, 3, 2})),
     });
-    testAggregations(
-        {data}, {"c4"}, {"min_by(c2, c0, 2)", "max_by(c2, c0, 2)"}, {expected});
-    testReadFromFiles(
-        {data}, {"c4"}, {"min_by(c2, c0, 2)", "max_by(c2, c0, 2)"}, {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .groupBy({"c4"})
+        .aggregates({"min_by(c2, c0, 2)", "max_by(c2, c0, 2)"})
+        .assertResults(expected);
   }
 
   // Test min_by(varchar, varchar, n) and max_by(varchar, varchar, n).
@@ -2386,10 +2428,10 @@ TEST_F(MinMaxByNTest, stringComparison) {
         makeArrayVector(
             {0}, makeFlatVector<std::string>({s[0], s[1], s[2], s[3]})),
     });
-    testAggregations(
-        {data}, {}, {"min_by(c3, c0, 3)", "max_by(c3, c0, 4)"}, {expected});
-    testReadFromFiles(
-        {data}, {}, {"min_by(c3, c0, 3)", "max_by(c3, c0, 4)"}, {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({"min_by(c3, c0, 3)", "max_by(c3, c0, 4)"})
+        .assertResults(expected);
 
     // Group-by.
     expected = makeRowVector({
@@ -2399,10 +2441,11 @@ TEST_F(MinMaxByNTest, stringComparison) {
         makeArrayVector(
             {0, 2}, makeFlatVector<std::string>({s[0], s[1], s[3], s[4]})),
     });
-    testAggregations(
-        {data}, {"c4"}, {"min_by(c3, c0, 2)", "max_by(c3, c0, 2)"}, {expected});
-    testReadFromFiles(
-        {data}, {"c4"}, {"min_by(c3, c0, 2)", "max_by(c3, c0, 2)"}, {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .groupBy({"c4"})
+        .aggregates({"min_by(c3, c0, 2)", "max_by(c3, c0, 2)"})
+        .assertResults(expected);
   }
 }
 
@@ -2578,16 +2621,15 @@ class MinMaxByTest : public AggregationTestBase {
           makeFlatVector<int32_t>(std::vector<int32_t>({5})),
       });
 
-      testAggregations(
-          {data},
-          {},
-          {
+      AggregationTester(*this)
+          .inputs(data)
+          .aggregates({
               "max_by(c0, c2)",
               "max_by(c0, c3)",
               "min_by(c0, c2)",
               "min_by(c0, c3)",
-          },
-          {expected});
+          })
+          .assertResults(expected);
     }
 
     // group-by aggregation.
@@ -2600,16 +2642,16 @@ class MinMaxByTest : public AggregationTestBase {
           makeFlatVector<int32_t>({2, 5}),
       });
 
-      testAggregations(
-          {data},
-          {"c1"},
-          {
+      AggregationTester(*this)
+          .inputs(data)
+          .groupBy({"c1"})
+          .aggregates({
               "max_by(c0, c2)",
               "max_by(c0, c3)",
               "min_by(c0, c2)",
               "min_by(c0, c3)",
-          },
-          {expected});
+          })
+          .assertResults(expected);
     }
 
     // Test for float point values nested inside complex type.
@@ -2631,8 +2673,10 @@ class MinMaxByTest : public AggregationTestBase {
           makeFlatVector<int32_t>(std::vector<int32_t>({5})),
       });
 
-      testAggregations(
-          {data}, {}, {"max_by(c0, c2)", "min_by(c0, c2)"}, {expected});
+      AggregationTester(*this)
+          .inputs(data)
+          .aggregates({"max_by(c0, c2)", "min_by(c0, c2)"})
+          .assertResults(expected);
     }
 
     // group-by aggregation.
@@ -2643,8 +2687,11 @@ class MinMaxByTest : public AggregationTestBase {
           makeFlatVector<int32_t>({1, 5}),
       });
 
-      testAggregations(
-          {data}, {"c1"}, {"max_by(c0, c2)", "min_by(c0, c2)"}, {expected});
+      AggregationTester(*this)
+          .inputs(data)
+          .groupBy({"c1"})
+          .aggregates({"max_by(c0, c2)", "min_by(c0, c2)"})
+          .assertResults(expected);
     }
   }
 };
@@ -2692,16 +2739,15 @@ TEST_F(MinMaxByTest, timestampWithTimezone) {
         makeFlatVector<int32_t>(std::vector<int32_t>({1})),
     });
 
-    testAggregations(
-        {data},
-        {},
-        {
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({
             "max_by(c0, c2)",
             "max_by(c0, c3)",
             "min_by(c0, c2)",
             "min_by(c0, c3)",
-        },
-        {expected});
+        })
+        .assertResults(expected);
   }
 
   // group-by aggregation.
@@ -2714,16 +2760,16 @@ TEST_F(MinMaxByTest, timestampWithTimezone) {
         makeFlatVector<int32_t>({1, 3}),
     });
 
-    testAggregations(
-        {data},
-        {"c1"},
-        {
+    AggregationTester(*this)
+        .inputs(data)
+        .groupBy({"c1"})
+        .aggregates({
             "max_by(c0, c2)",
             "max_by(c0, c3)",
             "min_by(c0, c2)",
             "min_by(c0, c3)",
-        },
-        {expected});
+        })
+        .assertResults(expected);
   }
 
   // Test for float point values nested inside complex type.
@@ -2751,8 +2797,10 @@ TEST_F(MinMaxByTest, timestampWithTimezone) {
         makeFlatVector<int32_t>(std::vector<int32_t>({6})),
     });
 
-    testAggregations(
-        {data}, {}, {"max_by(c0, c2)", "min_by(c0, c2)"}, {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({"max_by(c0, c2)", "min_by(c0, c2)"})
+        .assertResults(expected);
   }
 
   // group-by aggregation.
@@ -2763,8 +2811,11 @@ TEST_F(MinMaxByTest, timestampWithTimezone) {
         makeFlatVector<int32_t>({6, 2}),
     });
 
-    testAggregations(
-        {data}, {"c1"}, {"max_by(c0, c2)", "min_by(c0, c2)"}, {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .groupBy({"c1"})
+        .aggregates({"max_by(c0, c2)", "min_by(c0, c2)"})
+        .assertResults(expected);
   }
 }
 } // namespace

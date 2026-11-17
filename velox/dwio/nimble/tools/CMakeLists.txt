@@ -53,6 +53,9 @@ target_link_libraries(
   nimble_serialization_header
   nimble_stream_data_parser
   nimble_legacy
+  # Supplies StreamLabels, which SerializationDump names directly. Consumers
+  # linked it themselves until now, which left the gap invisible here.
+  nimble_batch_reader
   Folly::folly
 )
 

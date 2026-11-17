@@ -111,9 +111,9 @@ class CustomJoinBuild : public Operator {
     // The last Driver to hit CustomJoinBuild::finish gathers the data from
     // all build Drivers and hands it over to the probe side. At this
     // point all build Drivers are continued and will free their
-    // state. allPeersFinished is true only for the last Driver of the
+    // state. allPeersArrived is true only for the last Driver of the
     // build pipeline.
-    if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
+    if (!operatorCtx_->allPeersArrived(&future_, promises, peerOperators)) {
       return;
     }
 
@@ -347,8 +347,7 @@ TEST_F(CustomJoinTest, parallelism) {
 TEST_F(CustomJoinTest, mixedGroupedExecution) {
   auto rowType = ROW({"c0"}, {INTEGER()});
   auto vectors = makeVectors(rowType, 4, 20);
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors);
+  auto filePath = writeToFile(vectors);
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId probeScanNodeId;

@@ -30,9 +30,6 @@ class ScopedTestTime {
   void setCurrentTestTimeMicro(uint64_t currentTimeUs);
   void setCurrentTestTimeNano(uint64_t currentTimeNs);
 
-  static std::optional<uint64_t> getCurrentTestTimeSec();
-  static std::optional<uint64_t> getCurrentTestTimeMs();
-  static std::optional<uint64_t> getCurrentTestTimeMicro();
   static std::optional<uint64_t> getCurrentTestTimeNano();
 
  private:

@@ -104,21 +104,22 @@ void Acceptor::cStyleAMCallback(
           << " tag=" << std::hex << responseTag;
 
   // Fire-and-forget: we don't need to track this request completion
-  epRef->endpoint_->tagSend(
-      response.get(),
-      sizeof(*response),
-      ucxx::Tag{responseTag},
-      false,
-      [response, keyStr = key.toString()](
-          ucs_status_t status, std::shared_ptr<void> arg) {
-        if (status == UCS_OK) {
-          VLOG(3) << "HandshakeResponse sent successfully to " << keyStr;
-        } else {
-          VLOG(0) << "Failed to send HandshakeResponse to " << keyStr << ": "
-                  << ucs_status_string(status);
-        }
-      },
-      response);
+  [[maybe_unused]] auto sendRequest =
+      epRef->endpoint_
+          ->tagSendBuilder(
+              response.get(), sizeof(*response), ucxx::Tag{responseTag})
+          .callbackFunction([response, keyStr = key.toString()](
+                                ucs_status_t status,
+                                std::shared_ptr<void> arg) {
+            if (status == UCS_OK) {
+              VLOG(3) << "HandshakeResponse sent successfully to " << keyStr;
+            } else {
+              VLOG(0) << "Failed to send HandshakeResponse to " << keyStr
+                      << ": " << ucs_status_string(status);
+            }
+          })
+          .callbackData(response)
+          .build();
 }
 
 // Add endpoint reference to ucp_cp -> epRef map.

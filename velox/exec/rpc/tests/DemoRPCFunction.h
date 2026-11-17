@@ -64,6 +64,10 @@ class DemoAsyncRPCFunction : public AsyncRPCFunction {
     return VARCHAR();
   }
 
+  double configuredAdaptiveFloor() const override {
+    return 0.25;
+  }
+
   /// Dispatch one simulated RPC per active row. Null-input rows short-circuit
   /// to an error response so buildOutput() produces SQL NULL.
   std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>

@@ -17,15 +17,16 @@
 #include "velox/dwio/nimble/index/HierarchicalClusterIndex.h"
 
 #include "velox/common/io/Options.h"
-#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/nimble/index/HierarchicalKeyReader.h"
 
 namespace facebook::nimble::index {
 
 std::unique_ptr<HierarchicalClusterIndex> HierarchicalClusterIndex::create(
     Section rootSection,
+    std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
     velox::memory::MemoryPool* pool,
     const Options& options) {
+  NIMBLE_CHECK_NOT_NULL(keyCodec);
   const auto* root = flatbuffers::GetRoot<serialization::ClusterIndex>(
       rootSection.content().data());
   NIMBLE_CHECK_NOT_NULL(root);
@@ -35,27 +36,58 @@ std::unique_ptr<HierarchicalClusterIndex> HierarchicalClusterIndex::create(
           &velox::checkedNotNull(options.ioOptions)->memoryPool()),
       static_cast<const void*>(pool),
       "ioOptions pool must match the provided pool");
+
+  // Hierarchical key chunks search per-column integer levels, whose order is
+  // the order of the keys of the codec: bytewise by default.
+  if (keyCodec->keyComparator() == nullptr) {
+    NIMBLE_CHECK_NULL(
+        options.keyComparator,
+        "Hierarchical cluster index requires bytewise key order");
+  } else {
+    NIMBLE_CHECK_EQ(
+        static_cast<const void*>(options.keyComparator),
+        static_cast<const void*>(keyCodec->keyComparator()),
+        "Hierarchical cluster index requires the key order of its codec");
+  }
   return std::unique_ptr<HierarchicalClusterIndex>(new HierarchicalClusterIndex(
       std::move(rootSection),
+      std::move(keyCodec),
       createIndexMetadataInput(options),
       createIndexDataInput(options),
+      options.keyStreamLocator,
       options.pinIndex,
       options.preloadIndex,
+      options.cacheKeyEncodingViews,
       pool));
 }
 
 HierarchicalClusterIndex::HierarchicalClusterIndex(
     Section rootSection,
+    std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
     std::shared_ptr<MetadataInput> metadataInput,
-    std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
+    std::shared_ptr<DataInput> dataInput,
+    KeyStreamLocator keyStreamLocator,
     bool pinIndex,
     bool preloadIndex,
+    bool cacheKeyEncodingViews,
     velox::memory::MemoryPool* pool)
     : ClusterIndexBase(
           std::move(rootSection),
           std::move(metadataInput),
           std::move(dataInput),
-          createHierarchicalKeyReader,
+          std::move(keyStreamLocator),
+          [cacheKeyEncodingViews, keyCodec](
+              std::string_view encodedKeys,
+              std::function<void*(uint32_t)> stringBufferFactory,
+              velox::memory::MemoryPool* keyPool) {
+            return createHierarchicalKeyReader(
+                encodedKeys,
+                stringBufferFactory,
+                cacheKeyEncodingViews,
+                keyCodec,
+                keyPool);
+          },
+          keyCodec->keyComparator(),
           pinIndex,
           preloadIndex,
           pool) {}

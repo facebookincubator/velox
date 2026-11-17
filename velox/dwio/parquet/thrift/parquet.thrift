@@ -690,6 +690,15 @@ struct KeyValue {
 }
 
 /**
+ * Statistics for estimating the unencoded, uncompressed column size.
+ */
+struct SizeStatistics {
+  1: optional i64 unencoded_byte_array_data_bytes;
+  2: optional list<i64> repetition_level_histogram;
+  3: optional list<i64> definition_level_histogram;
+}
+
+/**
  * Wrapper struct to specify sort order
  */
 struct SortingColumn {
@@ -767,6 +776,9 @@ struct ColumnMetaData {
 
   /** Byte offset from beginning of file to Bloom filter data. **/
   14: optional i64 bloom_filter_offset;
+
+  /** Size statistics for this column chunk. */
+  16: optional SizeStatistics size_statistics;
 }
 
 struct EncryptionWithFooterKey {}
@@ -932,6 +944,9 @@ struct OffsetIndex {
    * that page_locations[i].first_row_index < page_locations[i+1].first_row_index.
    */
   1: list<PageLocation> page_locations;
+
+  /** Unencoded/uncompressed size for BYTE_ARRAY types. */
+  2: optional list<i64> unencoded_byte_array_data_bytes
 }
 
 /**
@@ -970,6 +985,16 @@ struct ColumnIndex {
 
   /** A list containing the number of null values for each page **/
   5: optional list<i64> null_counts;
+
+  /**
+   * Contains repetition level histograms for each page
+   * concatenated together.  The repetition_level_histogram field on
+   * SizeStatistics contains more details.
+   */
+  6: optional list<i64> repetition_level_histograms;
+
+  /** Same as repetition_level_histograms except for definitions levels. **/
+  7: optional list<i64> definition_level_histograms;
 }
 
 struct AesGcmV1 {

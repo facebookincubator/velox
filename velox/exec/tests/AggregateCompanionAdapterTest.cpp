@@ -113,7 +113,8 @@ TEST_F(AggregateCompanionRegistryTest, basic) {
           core::AggregationNode::Step::kPartial,
           {BIGINT()},
           ARRAY(BIGINT()),
-          config)
+          config,
+          /*constantInputs=*/{})
           ->isReducing());
 
   checkAggregateSignaturesCount("aggregateFunc1_partial", 2);
@@ -133,6 +134,15 @@ TEST_F(AggregateCompanionRegistryTest, basic) {
       {ARRAY(BIGINT())},
       ARRAY(BIGINT()),
       ARRAY(BIGINT()));
+  EXPECT_FALSE(
+      Aggregate::create(
+          "aggregateFunc1_merge",
+          core::AggregationNode::Step::kSingle,
+          {ARRAY(BIGINT())},
+          ARRAY(BIGINT()),
+          config,
+          /*constantInputs=*/{})
+          ->supportsToIntermediate());
 
   checkAggregateSignaturesCount("aggregateFunc1_merge_extract", 2);
   checkAggregateTypeResolution(

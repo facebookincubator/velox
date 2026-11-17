@@ -62,36 +62,50 @@ class RandomEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       std::span<const physicalType> values,
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options) override {
-    // Empty streams (e.g. the values of an all-null column, or an empty nested
-    // stream) can only be encoded trivially; several encodings hard-fail on
-    // zero rows. Matches Manual/Learned selection.
+    return select(values, statistics, values.size(), options).value();
+  }
+
+  /// Selects among candidates that can estimate the target row count.
+  std::optional<EncodingSelectionResult> select(
+      std::span<const physicalType> values,
+      const Statistics<physicalType>& statistics,
+      size_t numValues,
+      const Encoding::Options& options) override {
+    NIMBLE_CHECK_LE(values.size(), numValues);
     if (values.empty()) {
-      return {
+      NIMBLE_CHECK_EQ(numValues, 0);
+      return EncodingSelectionResult{
           .encodingType = EncodingType::Trivial,
-          .encodingConfig = {},
-          .estimatedSize = std::nullopt,
+          .estimatedSize = 0,
       };
     }
 
-    // Keep only encodings that can estimate a size for this data. An absent
-    // estimate means the encoding is incompatible with the physical type or the
-    // data's statistics, so excluding it here is what keeps the random pick
-    // compatible.
-    std::vector<EncodingType> compatibleEncodings;
+    // Keep the selected size available to parent estimators.
+    std::vector<EncodingSelectionResult> compatibleEncodings;
     compatibleEncodings.reserve(candidateEncodingTypes_.size());
     for (const auto& encodingType : candidateEncodingTypes_) {
-      if (detail::EncodingSizeEstimation<T>::estimateSize(
-              encodingType, values, statistics, options)
-              .has_value()) {
-        compatibleEncodings.push_back(encodingType);
+      const auto size =
+          estimateSize(encodingType, values, statistics, numValues, options);
+      if (size.has_value()) {
+        compatibleEncodings.push_back(
+            EncodingSelectionResult{
+                .encodingType = encodingType,
+                .estimatedSize = size,
+            });
       }
     }
 
     if (compatibleEncodings.empty()) {
-      return {
+      // A fallback size lets parent estimators account for streams whose
+      // configured candidates cannot estimate the target row count.
+      const auto size = estimateSize(
+          EncodingType::Trivial, values, statistics, numValues, options);
+      if (values.size() != numValues && !size.has_value()) {
+        return std::nullopt;
+      }
+      return EncodingSelectionResult{
           .encodingType = EncodingType::Trivial,
-          .encodingConfig = {},
-          .estimatedSize = std::nullopt,
+          .estimatedSize = size,
       };
     }
 
@@ -100,27 +114,17 @@ class RandomEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
     std::mt19937_64 generator{selectionSeed};
     std::uniform_int_distribution<size_t> distribution(
         0, compatibleEncodings.size() - 1);
-    const auto selectedEncoding = compatibleEncodings[distribution(generator)];
+    auto selected = compatibleEncodings[distribution(generator)];
 
-    if (!compressionOptions_.has_value()) {
-      return {
-          .encodingType = selectedEncoding,
-          .encodingConfig = {},
-          .estimatedSize = std::nullopt,
-      };
+    if (compressionOptions_.has_value()) {
+      selected.compressionPolicyFactory =
+          [compressionOptions = compressionOptions_.value(),
+           selectedEncoding = selected.encodingType]() {
+            return std::make_unique<ConfiguredCompressionPolicy>(
+                compressionOptions, selectedEncoding);
+          };
     }
-    // Encoding selection optimizes the in-memory layout. Compression is still
-    // attempted for leaf data streams to reduce persistent storage size.
-    return {
-        .encodingType = selectedEncoding,
-        .encodingConfig = {},
-        .estimatedSize = std::nullopt,
-        .compressionPolicyFactory = [compressionOptions =
-                                         compressionOptions_.value(),
-                                     selectedEncoding]() {
-          return std::make_unique<ConfiguredCompressionPolicy>(
-              compressionOptions, selectedEncoding);
-        }};
+    return selected;
   }
 
   EncodingSelectionResult selectNullable(
@@ -133,6 +137,15 @@ class RandomEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
         .encodingConfig = {},
         .estimatedSize = std::nullopt,
     };
+  }
+
+  bool hasAlpLikeCandidates() const override {
+    return std::any_of(
+        candidateEncodingTypes_.begin(),
+        candidateEncodingTypes_.end(),
+        [](EncodingType type) {
+          return type == EncodingType::ALP || type == EncodingType::ALPRD;
+        });
   }
 
  protected:
@@ -167,6 +180,25 @@ class RandomEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
   }
 
  private:
+  // Only encodings with statistics-based estimates support projection.
+  std::optional<uint64_t> estimateSize(
+      EncodingType encodingType,
+      std::span<const physicalType> values,
+      const Statistics<physicalType>& statistics,
+      size_t numValues,
+      const Encoding::Options& options) {
+    using Estimator = detail::EncodingSizeEstimation<T>;
+    if (values.size() == numValues) {
+      return Estimator::estimateSize(
+          *this, encodingType, values, statistics, options);
+    }
+    if (!detail::canProjectSizeEstimation<physicalType>(encodingType)) {
+      return std::nullopt;
+    }
+    return Estimator::estimateSize(
+        encodingType, numValues, statistics, options);
+  }
+
   const uint64_t seed_;
   const std::vector<EncodingType> candidateEncodingTypes_;
   const std::optional<CompressionOptions> compressionOptions_;

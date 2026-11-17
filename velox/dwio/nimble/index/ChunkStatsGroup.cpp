@@ -312,7 +312,7 @@ std::unique_ptr<TypedEncodingView<T>> createEncodedStreamView(
       actualRowCount,
       expectedRowCount);
   return detail::createTypedEncodingView<T>(
-      encodedView, &pool, Encoding::Options{});
+      encodedView, &pool, Encoding::Options{.cacheEncodingView = true});
 }
 
 using ChunkBoundViews =
@@ -512,8 +512,22 @@ std::shared_ptr<ChunkStatsGroupV2> ChunkStatsGroupV2::create(
   NIMBLE_CHECK_NOT_NULL(metadataPtr, "Chunk stats metadata must not be null.");
   NIMBLE_CHECK_GT(stripeCount, 0);
   const auto content = metadataPtr->content();
+
+  // A group holds a min and a max EncodedStream table per stream, so a group
+  // with more than ~500k streams (e.g. a wide flat map) exceeds the verifier's
+  // default limit of 1M tables and a valid buffer fails verification. Every
+  // table takes at least 4 bytes (its vtable offset), so a limit of one table
+  // per 4 bytes never rejects a valid buffer and still bounds the work.
+  constexpr uint64_t kDefaultMaxTables{1'000'000};
+  const auto maxTables = static_cast<flatbuffers::uoffset_t>(std::min<uint64_t>(
+      std::max<uint64_t>(
+          kDefaultMaxTables, content.size() / sizeof(flatbuffers::soffset_t)),
+      std::numeric_limits<flatbuffers::uoffset_t>::max()));
   flatbuffers::Verifier verifier{
-      reinterpret_cast<const uint8_t*>(content.data()), content.size()};
+      reinterpret_cast<const uint8_t*>(content.data()),
+      content.size(),
+      /*max_depth=*/64,
+      maxTables};
   NIMBLE_CHECK_FILE(
       verifier.VerifyBuffer<serialization::StripeChunkStatsV2>(nullptr),
       "Invalid V2 chunk stats metadata.");

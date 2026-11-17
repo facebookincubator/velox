@@ -51,6 +51,14 @@ void assertEqualVectors(
 /// Verify that 'vector' is copyable, by copying all rows.
 void assertCopyableVector(const VectorPtr& vector);
 
+/// Returns 'input' with its base map converted to a FlatMapVector, keeping any
+/// dictionary or constant wrapping. Other encodings are returned as is.
+VectorPtr withFlatMapBase(const VectorPtr& input);
+
+/// Returns 'input' with its base map converted to a MapVector, keeping any
+/// dictionary or constant wrapping. Other encodings are returned as is.
+VectorPtr withMapBase(const VectorPtr& input);
+
 class VectorTestBase {
  protected:
   VectorTestBase() = default;
@@ -114,6 +122,15 @@ class VectorTestBase {
       setNulls(rowVector, isNullAt);
     }
     return rowVector;
+  }
+
+  /// Makes a RowVector from (name, child) pairs.
+  RowVectorPtr makeNamedRowVector(
+      const std::vector<std::pair<std::string, VectorPtr>>& children);
+
+  /// Makes a RowVector with a single column.
+  RowVectorPtr makeNamedRowVector(std::string name, VectorPtr child) {
+    return makeRowVector({std::move(name)}, {std::move(child)});
   }
 
   RowVectorPtr makeRowVector(

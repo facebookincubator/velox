@@ -21,8 +21,11 @@
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 
+#include <stdexcept>
+
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/external/tzdb/exception.h"
 #include "velox/external/tzdb/tzdb_list.h"
 #include "velox/external/tzdb/zoned_time.h"
 #include "velox/type/tz/TimeZoneNames.h"
@@ -385,15 +388,22 @@ void validateRange(time_point<std::chrono::milliseconds> timePoint) {
 }
 
 std::string getTimeZoneName(int64_t timeZoneID) {
-  return locateZone(timeZoneID, true)->name();
+  // Reject ids that do not fit in int16_t before narrowing; otherwise an id
+  // such as 65536 + 1825 would alias id 1825.
+  if (timeZoneID < 0 || timeZoneID > std::numeric_limits<int16_t>::max()) {
+    VELOX_FAIL("Unable to resolve timeZoneID '{}'", timeZoneID);
+  }
+  return locateZone(static_cast<int16_t>(timeZoneID), true)->name();
 }
 
 const TimeZone* locateZone(int16_t timeZoneID, bool failOnError) {
   const auto& timeZoneDatabase = getTimeZoneDatabase();
 
-  // Check if timeZoneID does not exceed the vector size or is one of the
-  // "holes".
-  if (timeZoneID > timeZoneDatabase.size() ||
+  // Reject ids outside the vector, then the "holes" left by zones that are
+  // missing from the local tzdata. The sign check comes first so the size
+  // comparison is between two non-negative values.
+  if (timeZoneID < 0 ||
+      static_cast<size_t>(timeZoneID) >= timeZoneDatabase.size() ||
       timeZoneDatabase[timeZoneID] == nullptr) {
     if (failOnError) {
       VELOX_FAIL("Unable to resolve timeZoneID '{}'", timeZoneID);
@@ -510,6 +520,35 @@ TimeZone::seconds TimeZone::correct_nonexistent_time(
   const auto adjustment = localInfo.second.offset - localInfo.first.offset;
 
   return timestamp + adjustment;
+}
+
+TimeZone::seconds TimeZone::toLocalChecked(TimeZone::seconds timestamp) const {
+  try {
+    return to_local(timestamp);
+  } catch (const std::invalid_argument& error) {
+    // Invalid argument means we hit a conversion not supported by
+    // external/date. This is a special case where we intentionally throw
+    // VeloxRuntimeError to avoid it being suppressed by TRY().
+    VELOX_FAIL_UNSUPPORTED_INPUT_UNCATCHABLE(error.what());
+  }
+}
+
+TimeZone::seconds TimeZone::toSysChecked(TimeZone::seconds timestamp) const {
+  try {
+    return to_sys(timestamp);
+  } catch (const tzdb::ambiguous_local_time&) {
+    // If the time is ambiguous, pick the earlier possibility to be consistent
+    // with Presto.
+    return to_sys(timestamp, TChoose::kEarliest);
+  } catch (const tzdb::nonexistent_local_time& error) {
+    // If the time does not exist, fail the conversion.
+    VELOX_USER_FAIL(error.what());
+  } catch (const std::invalid_argument& error) {
+    // Invalid argument means we hit a conversion not supported by
+    // external/date. Need to throw a RuntimeError so that try() statements do
+    // not suppress it.
+    VELOX_FAIL_UNSUPPORTED_INPUT_UNCATCHABLE(error.what());
+  }
 }
 
 std::string TimeZone::getShortName(

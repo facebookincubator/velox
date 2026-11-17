@@ -532,16 +532,18 @@ TEST_P(MemoryPoolTest, reportExternalAllocationRejectsNonPositiveSize) {
   ASSERT_EQ(child->reservedBytes(), 0);
 }
 
-TEST_P(MemoryPoolTest, DISABLED_memoryLeakCheck) {
-  gflags::FlagSaver flagSaver;
-  testing::FLAGS_gtest_death_test_style = "fast";
+DEBUG_ONLY_TEST_P(MemoryPoolTest, memoryLeakCheck) {
   auto manager = getMemoryManager();
   auto root = manager->addRootPool();
 
   auto child = root->addLeafChild("elastic_quota", isLeafThreadSafe_);
   const int64_t kChunkSize{32L * MB};
   void* oneChunk = child->allocate(kChunkSize);
-  ASSERT_DEATH(child.reset(), "");
+  // The libstdc++ terminate handler prints the exception type before it calls
+  // what(), so the match does not depend on what() building its message.
+  // EXPECT_DEATH keeps going when the match fails, so the chunk is freed and
+  // destroying 'child' does not abort the test binary.
+  EXPECT_DEATH(child.reset(), "VeloxRuntimeError");
   child->free(oneChunk, kChunkSize);
 }
 
@@ -4283,6 +4285,39 @@ TEST_P(MemoryPoolTest, overuseUnderArbitration) {
   child->release();
   ASSERT_EQ(child->usedBytes(), 0);
   ASSERT_EQ(child->reservedBytes(), 0);
+}
+
+TEST_P(MemoryPoolTest, shrinkWithReservationAboveCapacity) {
+  constexpr int64_t kMaxSize = 128 * MB;
+  MemoryManager::Options options;
+  options.allocatorCapacity = kMaxSize;
+  options.arbitratorCapacity = kMaxSize;
+  options.arbitratorKind = "SHARED";
+  setupMemory(options);
+  MemoryManager& manager = *getMemoryManager();
+  auto root = manager.addRootPool(
+      "shrinkWithReservationAboveCapacity",
+      kMaxSize,
+      MemoryReclaimer::create());
+  auto child = root->addLeafChild("shrinkWithReservationAboveCapacity");
+  const int64_t capacity = root->capacity();
+  {
+    // The reservation can exceed the capacity only under memory arbitration.
+    ScopedMemoryArbitrationContext scopedMemoryArbitration(root.get());
+    ASSERT_TRUE(child->maybeReserve(capacity + 8 * MB));
+  }
+  ASSERT_GT(root->reservedBytes(), root->capacity());
+  {
+    SCOPED_TRACE("shrink all free capacity");
+    ASSERT_EQ(MemoryArbitratorTestHelper::shrinkPool(root.get(), 0), 0);
+    ASSERT_EQ(root->capacity(), capacity);
+  }
+  {
+    SCOPED_TRACE("shrink with target");
+    ASSERT_EQ(MemoryArbitratorTestHelper::shrinkPool(root.get(), 4 * MB), 0);
+    ASSERT_EQ(root->capacity(), capacity);
+  }
+  child->release();
 }
 
 TEST_P(MemoryPoolTest, allocationWithCoveredCollateral) {

@@ -16,7 +16,7 @@
 
 #include "velox/dwio/nimble/index/VectorIndexUtility.h"
 
-#include <cmath>
+#include <faiss/utils/distances.h>
 
 #include "velox/dwio/nimble/common/Exceptions.h"
 
@@ -45,19 +45,7 @@ void normalizeVectors(
     return;
   }
 
-  for (uint64_t i = 0; i < numVectors; ++i) {
-    float* vector = vectors + i * dimensions;
-    float squaredNorm{0};
-    for (uint32_t j = 0; j < dimensions; ++j) {
-      squaredNorm += vector[j] * vector[j];
-    }
-    const auto norm = std::sqrt(squaredNorm);
-    if (norm > 0) {
-      for (uint32_t j = 0; j < dimensions; ++j) {
-        vector[j] /= norm;
-      }
-    }
-  }
+  faiss::fvec_renorm_L2(dimensions, numVectors, vectors);
 }
 
 serialization::VectorDistanceMetric toSerializedMetric(
@@ -103,6 +91,8 @@ serialization::VectorIndexType toSerializedIndexType(
       return serialization::VectorIndexType_IVF_PQ;
     case VectorIndexType::kIvfRaBitQ:
       return serialization::VectorIndexType_IVF_RABITQ;
+    case VectorIndexType::kIvfRaBitQFastScan:
+      return serialization::VectorIndexType_IVF_RABITQ_FAST_SCAN;
     case VectorIndexType::kHnswSq8:
       return serialization::VectorIndexType_HNSW_SQ8;
     default:
@@ -121,6 +111,9 @@ VectorIndexType fromSerializedIndexType(int8_t indexType) {
       return VectorIndexType::kIvfPq;
     case static_cast<int8_t>(serialization::VectorIndexType_IVF_RABITQ):
       return VectorIndexType::kIvfRaBitQ;
+    case static_cast<int8_t>(
+        serialization::VectorIndexType_IVF_RABITQ_FAST_SCAN):
+      return VectorIndexType::kIvfRaBitQFastScan;
     case static_cast<int8_t>(serialization::VectorIndexType_HNSW_SQ8):
       return VectorIndexType::kHnswSq8;
     default:

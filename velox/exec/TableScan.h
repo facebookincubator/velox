@@ -17,6 +17,8 @@
 
 #include <string_view>
 
+#include <folly/stop_watch.h>
+
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/ScaledScanController.h"
@@ -104,7 +106,9 @@ class TableScan : public SourceOperator {
  private:
   // Checks if this table scan operator needs to yield before processing the
   // next split.
-  bool shouldYield(StopReason taskStopReason, size_t startTimeMs) const;
+  bool shouldYield(
+      StopReason taskStopReason,
+      const folly::stop_watch<std::chrono::milliseconds>& getOutputWatch) const;
 
   // Checks if this table scan operator needs to stop because the task has been
   // terminated.
@@ -157,7 +161,6 @@ class TableScan : public SourceOperator {
 
   ContinueFuture blockingFuture_{ContinueFuture::makeEmpty()};
   BlockingReason blockingReason_{BlockingReason::kNotBlocked};
-  int64_t currentSplitWeight_{0};
   bool needNewSplit_ = true;
   std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
   std::unique_ptr<connector::DataSource> dataSource_;

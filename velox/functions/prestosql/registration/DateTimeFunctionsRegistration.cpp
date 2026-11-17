@@ -16,6 +16,7 @@
 
 #include "velox/functions/Registerer.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
+#include "velox/functions/prestosql/TimeIntervalYearMonth.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneRegistration.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
 
@@ -91,7 +92,8 @@ void registerFromUnixtime(
 
 void registerSimpleFunctions(
     const std::string& prefix,
-    std::string_view defaultOwner) {
+    std::string_view defaultOwner,
+    bool ignoreTimeZoneLabel) {
   // Date time functions.
   registerFunction<ToUnixtimeFunction, double, Timestamp>(
       {prefix + "to_unixtime"}, {}, true, defaultOwner);
@@ -189,23 +191,11 @@ void registerSimpleFunctions(
 
   // Use optimized vector function for Time + IntervalYearMonth (identity
   // function)
-  exec::registerVectorFunction(
-      prefix + "plus",
-      TimeIntervalYearMonthVectorFunction::signaturesPlus(),
-      std::make_unique<TimeIntervalYearMonthVectorFunction>(),
-      {},
-      /*overwrite=*/true,
-      defaultOwner);
+  registerTimePlusIntervalYearMonth(prefix + "plus", defaultOwner);
 
   // Use optimized vector function for Time - IntervalYearMonth (identity
   // function). Only supports (time, interval), not (interval, time).
-  exec::registerVectorFunction(
-      prefix + "minus",
-      TimeIntervalYearMonthVectorFunction::signaturesMinus(),
-      std::make_unique<TimeIntervalYearMonthVectorFunction>(),
-      {},
-      /*overwrite=*/true,
-      defaultOwner);
+  registerTimeMinusIntervalYearMonth(prefix + "minus", defaultOwner);
 
   registerFunction<
       TimestampMinusFunction,
@@ -358,29 +348,35 @@ void registerSimpleFunctions(
   registerFunction<ToISO8601Function, Varchar, TimestampWithTimezone>(
       {prefix + "to_iso8601"}, {}, true, defaultOwner);
 
-  registerFunction<
-      AtTimezoneFunction,
-      TimestampWithTimezone,
-      TimestampWithTimezone,
-      Varchar>({prefix + "at_timezone"}, {}, true, defaultOwner);
+  if (ignoreTimeZoneLabel) {
+    registerFunction<
+        AtTimezoneToTimestampFunction,
+        Timestamp,
+        TimestampWithTimezone,
+        Varchar>({prefix + "at_timezone"}, {}, true, defaultOwner);
+    registerFunction<
+        AtTimezoneFromTimestampToTimestampFunction,
+        Timestamp,
+        Timestamp,
+        Varchar>({prefix + "at_timezone"}, {}, true, defaultOwner);
+  } else {
+    registerFunction<
+        AtTimezoneFunction,
+        TimestampWithTimezone,
+        TimestampWithTimezone,
+        Varchar>({prefix + "at_timezone"}, {}, true, defaultOwner);
+    registerFunction<
+        AtTimezoneFromTimestampFunction,
+        TimestampWithTimezone,
+        Timestamp,
+        Varchar>({prefix + "at_timezone"}, {}, true, defaultOwner);
+  }
 
   registerFunction<
       AtTimezoneTimeWithTimezoneFunction,
       TimeWithTimezone,
       TimeWithTimezone,
       Varchar>({prefix + "at_timezone"}, {}, true, defaultOwner);
-
-  registerFunction<
-      AtTimezoneConvertToTimestampFunction,
-      Timestamp,
-      TimestampWithTimezone,
-      Varchar>({prefix + "at_timezone_convert"});
-
-  registerFunction<
-      AtTimezoneTimeWithTimezoneFunction,
-      TimeWithTimezone,
-      TimeWithTimezone,
-      Varchar>({prefix + "at_timezone_convert"});
 
   registerFunction<ToMillisecondFunction, int64_t, IntervalDayTime>(
       {prefix + "to_milliseconds"}, {}, true, defaultOwner);
@@ -404,9 +400,10 @@ void registerSimpleFunctions(
 
 void registerDateTimeFunctions(
     const std::string& prefix,
-    std::string_view defaultOwner) {
+    std::string_view defaultOwner,
+    bool ignoreTimeZoneLabel) {
   registerTimestampWithTimeZoneType();
   registerTimeWithTimezoneType();
-  registerSimpleFunctions(prefix, defaultOwner);
+  registerSimpleFunctions(prefix, defaultOwner, ignoreTimeZoneLabel);
 }
 } // namespace facebook::velox::functions

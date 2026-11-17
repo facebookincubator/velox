@@ -17,17 +17,18 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 
 #include <folly/FBString.h>
-#include <folly/Format.h>
 #include <folly/Range.h>
 
 #include <fmt/format.h>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Macros.h"
 
 namespace folly {
 struct dynamic;
@@ -76,7 +77,10 @@ struct StringView {
   static constexpr size_t kPrefixSize = 4 * sizeof(char);
   static constexpr size_t kInlineSize = 12;
 
-  StringView() {
+  // The empty view and the accessors are device-callable, so a function body
+  // compiled for the GPU can take a StringView argument; a view over data is
+  // still built on the host.
+  VELOX_GPU_COMPATIBLE StringView() {
     static_assert(sizeof(StringView) == 16);
     memset(this, 0, sizeof(StringView));
   }
@@ -89,12 +93,11 @@ struct StringView {
       // this makes sure that inline strings can be compared for equality with 2
       // int64 compares.
       memset(prefix_, 0, kPrefixSize);
+      value_.data = nullptr;
       if (size_ == 0) {
         return;
       }
-      // small string: inlined. Zero the last 8 bytes first to allow for whole
-      // word comparison.
-      value_.data = nullptr;
+      // small string: inlined.
 #ifdef __GNUC__
       // Use asm volatile to prevent GCC's interprocedural analysis from
       // incorrectly concluding that size could exceed kInlineSize. This is a
@@ -135,7 +138,7 @@ struct StringView {
   explicit StringView(std::string_view value)
       : StringView(value.data(), value.size()) {}
 
-  bool isInline() const {
+  VELOX_GPU_COMPATIBLE bool isInline() const {
     return isInline(size_);
   }
 
@@ -156,11 +159,11 @@ struct StringView {
   }
 
   const char* data() const&& = delete;
-  const char* data() const& {
+  VELOX_GPU_COMPATIBLE const char* data() const& {
     return isInline() ? prefix_ : value_.data;
   }
 
-  size_t size() const {
+  VELOX_GPU_COMPATIBLE size_t size() const {
     return size_;
   }
 
@@ -197,23 +200,28 @@ struct StringView {
   ///       < 0, if this < other
   ///       > 0, if this > other
   int32_t compare(const StringView& other) const {
+    if (auto result = comparePrefix(other)) {
+      return *result;
+    }
+    const int32_t size = std::min(size_, other.size_) - kPrefixSize;
+    int32_t result =
+        memcmp(data() + kPrefixSize, other.data() + kPrefixSize, size);
+    return (result != 0) ? result : size_ - other.size_;
+  }
+
+  /// Returns compare(other) if the sizes and prefixes decide it, std::nullopt
+  /// otherwise.
+  std::optional<int32_t> comparePrefix(const StringView& other) const {
     if (prefixAsInt() != other.prefixAsInt()) {
       // The result is decided on prefix. The shorter will be less because the
       // prefix is padded with zeros.
       return memcmp(prefix_, other.prefix_, kPrefixSize);
     }
-    int32_t size = std::min(size_, other.size_) - kPrefixSize;
-    if (size <= 0) {
+    if (std::min(size_, other.size_) <= kPrefixSize) {
       // One ends within the prefix.
-      return size_ - other.size_;
+      return static_cast<int32_t>(size_ - other.size_);
     }
-    if (isInline() && other.isInline()) {
-      int32_t result = memcmp(value_.inlined, other.value_.inlined, size);
-      return (result != 0) ? result : size_ - other.size_;
-    }
-    int32_t result =
-        memcmp(data() + kPrefixSize, other.data() + kPrefixSize, size);
-    return (result != 0) ? result : size_ - other.size_;
+    return std::nullopt;
   }
 
   auto operator<=>(const StringView& other) const {
@@ -261,7 +269,7 @@ struct StringView {
   /// are not from a temporary (rvalue) StringView, for the same reasons
   /// described above.
   /* implicit */ operator std::string_view() const&& = delete;
-  /* implicit */ operator std::string_view() const& {
+  /* implicit */ VELOX_GPU_COMPATIBLE operator std::string_view() const& {
     return std::string_view(data(), size());
   }
 

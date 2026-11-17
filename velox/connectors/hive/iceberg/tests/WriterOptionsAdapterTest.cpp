@@ -100,20 +100,16 @@ TEST(WriterOptionsAdapterTest, isSupportedFileFormatMatchesDispatch) {
 }
 
 // Verifies the manifest format string written into Iceberg commit messages
-// matches the cross-engine convention. Iceberg's manifest vocabulary has no
-// DWRF/NIMBLE enum, so both report "ORC" (matching the Java planner's
-// FileFormat.{DWRF,NIMBLE}.toIceberg()) so downstream Iceberg consumers can
-// interpret the message. Parquet reports "PARQUET" because Iceberg has a
-// native enum for it. The on-disk format is identified at read time via
-// the file extension and on-disk magic bytes, so writing "ORC" for NIMBLE
-// is safe.
+// matches the cross-engine convention shared with the Java coordinator's
+// FileFormat.toIceberg(): DWRF reports "ORC" because Iceberg has no DWRF enum,
+// while PARQUET and NIMBLE report their own first-class Iceberg enums.
 TEST(WriterOptionsAdapterTest, toManifestFormatString) {
   EXPECT_EQ(
       toManifestFormatString(dwio::common::FileFormat::PARQUET), "PARQUET");
   EXPECT_EQ(toManifestFormatString(dwio::common::FileFormat::ORC), "ORC");
   EXPECT_EQ(toManifestFormatString(dwio::common::FileFormat::DWRF), "ORC");
 #ifdef VELOX_ENABLE_NIMBLE
-  EXPECT_EQ(toManifestFormatString(dwio::common::FileFormat::NIMBLE), "ORC");
+  EXPECT_EQ(toManifestFormatString(dwio::common::FileFormat::NIMBLE), "NIMBLE");
 #endif
 }
 

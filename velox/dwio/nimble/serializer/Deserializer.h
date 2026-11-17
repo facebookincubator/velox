@@ -24,9 +24,10 @@
 
 #include "folly/Range.h"
 #include "folly/container/F14Map.h"
+#include "velox/common/base/IdentityProjection.h"
+#include "velox/dwio/nimble/common/RowRange.h"
+#include "velox/dwio/nimble/reader/FieldReader.h"
 #include "velox/dwio/nimble/serializer/Options.h"
-#include "velox/dwio/nimble/velox/FieldReader.h"
-#include "velox/dwio/nimble/velox/RowRange.h"
 #include "velox/type/Subfield.h"
 #include "velox/vector/BaseVector.h"
 
@@ -203,23 +204,12 @@ class Deserializer {
     uint32_t batches{0};
   };
 
-  // Channel mapping for one projected Row child. The reader decodes selected
-  // fields into their original source channels; projection wraps them into the
-  // compact output Row using outputChannel.
-  struct IdentityProjection {
-    IdentityProjection(
-        velox::column_index_t inputChannel,
-        velox::column_index_t outputChannel)
-        : inputChannel{inputChannel}, outputChannel{outputChannel} {}
-
-    velox::column_index_t inputChannel;
-    velox::column_index_t outputChannel;
-  };
-
-  // Maps projected Row children to decoded channels. Nested plans are present
-  // only for recursively projected Row children.
+  // Maps projected Row children to decoded channels. The reader decodes
+  // selected fields into their original source channels; identity projections
+  // wrap them into the compact output Row. Nested plans are present only for
+  // recursively projected Row children.
   struct OutputProjection {
-    std::vector<IdentityProjection> identityProjections;
+    std::vector<velox::IdentityProjection> identityProjections;
     std::vector<OutputProjection> childProjections;
   };
 
@@ -275,6 +265,10 @@ class Deserializer {
       uint32_t rowCount,
       uint32_t startRow,
       bool requiredBarrier) const;
+
+  // Returns whether FlatMap or Hybrid FlatMap value-stream presence needs
+  // per-batch tracking.
+  bool shouldTrackMapValueStreams() const;
 
   // Appends a decoded run to the accumulated output vector.
   void appendToOutput(velox::VectorPtr&& decoded, velox::VectorPtr& output)
@@ -332,9 +326,11 @@ class Deserializer {
   // disabled.
   std::vector<bool> selectedStreamOffsetFlags_;
 
-  // --- FlatMap omitted in-map stream reconstruction ---
+  // --- Omitted FlatMap/Hybrid FlatMap stream state ---
   // Maps FlatMap in-map stream offsets to their child value types.
-  folly::F14FastMap<uint32_t, const Type*> inMapChildTypes_;
+  folly::F14FastMap<uint32_t, const Type*> inMapValueTypes_;
+  // Maps Hybrid FlatMap group in-map offsets to their value subtrees.
+  folly::F14FastMap<uint32_t, const Type*> hybridFlatMapGroupValueTypes_;
 
   static constexpr uint32_t kInvalidInMapOffset =
       std::numeric_limits<uint32_t>::max();
@@ -343,11 +339,18 @@ class Deserializer {
   // stream offset. Entries that are not FlatMap child presence streams use
   // kInvalidInMapOffset.
   std::vector<uint32_t> valueOffsetToInMap_;
+  // Reverse lookup from a Hybrid FlatMap value-subtree stream offset to its
+  // group's in-map stream offset.
+  std::vector<uint32_t> hybridValueOffsetToInMap_;
 
   // Per-batch stream presence, indexed by stream offset.
   mutable std::vector<bool> streamPresentFlags_;
-  // Stream offsets present in the current batch. Used to find omitted FlatMap
-  // in-map streams.
+  // Per-batch OR of value-subtree stream presence, indexed by group in-map
+  // offset. streamPresentFlags_ tracks individual streams, so it cannot answer
+  // this group-level query without rescanning each subtree.
+  mutable std::vector<bool> hybridFlatMapValueStreamsPresent_;
+  // Stream offsets present in the current batch. Used to reconstruct omitted
+  // FlatMap in-map streams and record Hybrid FlatMap value-stream presence.
   mutable std::vector<uint32_t> presentStreamOffsets_;
 };
 

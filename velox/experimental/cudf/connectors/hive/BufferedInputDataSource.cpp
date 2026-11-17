@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/BufferedInputDataSource.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 
 #include "velox/common/base/Exceptions.h"
 
@@ -107,6 +108,7 @@ std::future<size_t> BufferedInputDataSource::device_read_async(
   return submitDeviceRead(
       input_->executor(), [this, offset, size, dst, stream]() {
         auto hostBuffer = host_read(offset, size);
+        ensureCudaContextForThread();
         CUDF_CUDA_TRY(cudaMemcpyAsync(
             dst,
             hostBuffer->data(),

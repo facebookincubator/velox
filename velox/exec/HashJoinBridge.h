@@ -144,15 +144,27 @@ class HashJoinBridge : public JoinBridge {
 
   bool testingHasMoreSpilledPartitions();
 
-  /// Return the next unclaimed row container id in the current hash table for
-  /// HashProbe drivers to output build-side rows.
-  int getAndIncrementUnclaimedRowContainerId() {
-    return unclaimedRowContainerId_.fetch_add(1);
+  /// Claims the next row container of the current hash table for a HashProbe
+  /// driver to output build-side rows from, so that drivers output different
+  /// containers in parallel. Returns its id, which can be past the last.
+  int claimRowContainer() {
+    return nextRowContainerId_.fetch_add(1);
   }
 
-  /// Reset the next unclaimed row container id to 0.
-  void resetUnclaimedRowContainerId() {
-    unclaimedRowContainerId_.store(0);
+  /// Makes all row containers unclaimed, for the next hash table.
+  void resetRowContainerClaims() {
+    nextRowContainerId_.store(0);
+  }
+
+  /// Records that a HashProbe closed before consuming all probe input. Build
+  /// rows without a recorded match cannot be treated as unmatched afterwards.
+  void setProbeFinishedEarly() {
+    probeFinishedEarly_.store(true);
+  }
+
+  /// Returns true if any HashProbe closed before consuming all probe input.
+  bool probeFinishedEarly() const {
+    return probeFinishedEarly_.load();
   }
 
  private:
@@ -195,12 +207,13 @@ class HashJoinBridge : public JoinBridge {
   // processing.
   bool probeStarted_;
 
-  // Keep track of the next row container id in a hash table that has not been
-  // processed by any hash probe driver. This is used when hash probe drivers
-  // output build-side rows. When drivers are allowed to output build-side rows
-  // in parallel, drivers call getAndIncrementClaimedRowContainerId() to ensure
-  // the row containers they process do not overlap with each other.
-  std::atomic_int unclaimedRowContainerId_{0};
+  // The id of the next row container of the current hash table that no
+  // HashProbe driver has claimed.
+  std::atomic_int nextRowContainerId_{0};
+
+  // Records whether any HashProbe closed before consuming all probe input. It
+  // remains true across all spill restoration rounds once set.
+  std::atomic_bool probeFinishedEarly_{false};
 
   friend test::HashJoinBridgeTestHelper;
 };

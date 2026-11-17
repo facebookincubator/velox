@@ -15,8 +15,8 @@
  */
 #pragma once
 
+#include "velox/expression/CaseExprBase.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
-#include "velox/expression/SpecialForm.h"
 #include "velox/expression/VectorFunction.h"
 
 namespace facebook::velox::exec {
@@ -43,7 +43,7 @@ namespace facebook::velox::exec {
 /// directly) preserves dictionary peeling, the registered eq variant's
 /// semantic differences (e.g. Spark vs Presto null-handling), and per-row
 /// error reporting via TRY.
-class CaseExpr : public SpecialForm {
+class CaseExpr : public CaseExprBase {
  public:
   /// @param eqExpr Pre-built 'eq' Expr whose children are FieldReferences
   /// over a synthetic two-column row (subject, when). Invoked at evaluation
@@ -68,18 +68,9 @@ class CaseExpr : public SpecialForm {
       bool trackCpuUsage,
       const core::QueryConfig& config);
 
-  void evalSpecialForm(
-      const SelectivityVector& rows,
-      EvalCtx& context,
-      VectorPtr& result) override;
-
-  bool isConditional() const override {
-    return true;
-  }
-
   void clearCache() override {
-    Expr::clearCache();
-    tempValues_.reset();
+    CaseExprBase::clearCache();
+    eqRow_.reset();
   }
 
   /// Generates standard SQL CASE syntax so that the round-trip in testToSql
@@ -89,10 +80,12 @@ class CaseExpr : public SpecialForm {
       std::vector<VectorPtr>* complexConstants = nullptr) const override;
 
  private:
-  void computePropagatesNulls() override;
-
-  const size_t numCases_;
-  const bool hasElseClause_;
+  void evalCondition(
+      size_t index,
+      const SelectivityVector& rows,
+      const VectorPtr& subject,
+      EvalCtx& context,
+      VectorPtr& result) override;
 
   // Pre-built 'eq' Expr used to compare the cached subject vector against
   // each WHEN value vector. Holds two FieldReferences over eqInputType_.
@@ -102,8 +95,9 @@ class CaseExpr : public SpecialForm {
   // comparisonType, named "c0" (subject) and "c1" (when).
   const RowTypePtr eqInputType_;
 
-  // Scratch buffer reused across calls by getFlatBool.
-  BufferPtr tempValues_;
+  // Row of type eqInputType_ that holds the subject and a WHEN value while
+  // eqExpr_ compares them. Reused across calls.
+  RowVectorPtr eqRow_;
 };
 
 class CaseCallToSpecialForm : public FunctionCallToSpecialForm {

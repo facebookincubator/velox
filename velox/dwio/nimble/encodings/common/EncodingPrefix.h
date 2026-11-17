@@ -17,6 +17,7 @@
 
 #include <string_view>
 
+#include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
@@ -104,6 +105,15 @@ struct EncodingPrefix {
       return varint::readVarint32(&pos);
     }
     return *reinterpret_cast<const uint32_t*>(data.data() + kRowCountOffset);
+  }
+
+  /// Checks that rows [offset, offset + length) are a non-empty range within
+  /// 'rowCount' rows.
+  static void
+  checkSliceRange(uint32_t rowCount, uint32_t offset, uint32_t length) {
+    NIMBLE_CHECK_LE(offset, rowCount, "Slice starts past the last row.");
+    NIMBLE_CHECK_LE(length, rowCount - offset, "Slice ends past the last row.");
+    NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
   }
 
   static uint32_t prefixSize(std::string_view data, bool useVarint) {

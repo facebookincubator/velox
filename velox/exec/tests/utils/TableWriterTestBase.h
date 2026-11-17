@@ -60,6 +60,12 @@ class TableWriterTestBase : public HiveConnectorTestBase {
 
   static std::string testModeString(TestMode mode);
 
+  /// Builds a statistics specification containing a single min aggregate.
+  static core::ColumnStatsSpec generateColumnStatsSpec(
+      const std::string& name,
+      const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
+      AggregationNode::Step step);
+
   // NOTE: google parameterized test framework can't handle complex test
   // parameters properly. So we encode the different test parameters into one
   // integer value.
@@ -115,11 +121,6 @@ class TableWriterTestBase : public HiveConnectorTestBase {
       const std::vector<std::string>& partitionedKeys,
       const RowTypePtr& rowType);
 
-  static core::ColumnStatsSpec generateColumnStatsSpec(
-      const std::string& name,
-      const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
-      AggregationNode::Step step);
-
   std::shared_ptr<Task> assertQueryWithWriterConfigs(
       const core::PlanNodePtr& plan,
       std::vector<std::shared_ptr<TempFilePath>> filePaths,
@@ -144,8 +145,7 @@ class TableWriterTestBase : public HiveConnectorTestBase {
       uint32_t bucketCount,
       const std::vector<std::string>& bucketedBy,
       const std::vector<TypePtr>& bucketedTypes,
-      const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortedBy =
-          {});
+      const std::vector<HiveSortingColumnPtr>& sortedBy = {});
 
   void setDataTypes(
       const RowTypePtr& inputType,

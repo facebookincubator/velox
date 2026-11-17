@@ -51,7 +51,7 @@ class ChunkStatsWriter {
 
     /// Skips a stripe group below this average chunks-per-stream threshold.
     /// Zero disables this threshold.
-    float minAvgChunksPerStream{2};
+    float minAvgChunksPerStream{0};
 
     /// Limits the string or binary value length retained in chunk bounds.
     uint32_t maxStringStatSize{kDefaultMaxChunkStringStatSize};

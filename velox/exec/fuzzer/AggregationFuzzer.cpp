@@ -350,7 +350,7 @@ void AggregationFuzzer::go() {
       std::vector<std::string> names;
 
       auto groupingKeys = generateKeys("g", names, types);
-      auto input = generateInputData(names, types, std::nullopt);
+      auto input = generateInputData(names, types, std::nullopt, groupingKeys);
       auto [convertedInput, projections] =
           referenceQueryRunner_->inputProjections(input);
 
@@ -417,7 +417,8 @@ void AggregationFuzzer::go() {
         groupingKeys = generateKeys("g", argNames, argTypes);
       }
 
-      auto input = generateInputData(argNames, argTypes, signature);
+      auto input =
+          generateInputData(argNames, argTypes, signature, groupingKeys);
       auto [convertedInput, projections] =
           referenceQueryRunner_->inputProjections(input);
 

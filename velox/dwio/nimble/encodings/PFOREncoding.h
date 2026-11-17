@@ -28,7 +28,6 @@
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
-#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -128,17 +127,21 @@ class PFOREncoding final
     const uint64_t baseValuesSize = baseBitWidth == 0
         ? 0
         : FixedBitArray::bufferSize(rowCount, baseBitWidth);
-    const uint64_t positionsSize = std::min(
-        TrivialEncoding<uint32_t>::estimateSize(numExceptions),
-        FixedBitWidthEncoding<uint32_t>::estimateSize(
-            numExceptions,
-            /*minValue=*/0,
-            /*maxValue=*/rowCount == 0 ? 0 : rowCount - 1,
-            options));
-    const uint64_t valuesSize = std::min(
-        TrivialEncoding<physicalType>::estimateSize(numExceptions),
-        FixedBitWidthEncoding<physicalType>::estimateSize(
-            numExceptions, statistics, options));
+    const uint64_t positionsSize = numExceptions == 0
+        ? 0
+        : std::min(
+              TrivialEncoding<uint32_t>::estimateSize(numExceptions),
+              FixedBitWidthEncoding<uint32_t>::estimateSize(
+                  numExceptions,
+                  /*minValue=*/0,
+                  /*maxValue=*/rowCount == 0 ? 0 : rowCount - 1,
+                  options));
+    const uint64_t valuesSize = numExceptions == 0
+        ? 0
+        : std::min(
+              TrivialEncoding<physicalType>::estimateSize(numExceptions),
+              FixedBitWidthEncoding<physicalType>::estimateSize(
+                  numExceptions, statistics, options));
     const uint64_t outerEncodingSize = EncodingPrefix::kFixedPrefixSize +
         kFixedHeaderSize + varint::varintSize(numExceptions) +
         varint::varintSize(positionsSize) + varint::varintSize(valuesSize);
@@ -244,8 +247,8 @@ PFOREncoding<T>::PFOREncoding(
     const std::function<void*(uint32_t)>& stringBufferFactory,
     const Encoding::Options& options)
     : TypedEncoding<T, physicalType>{pool, data, options},
-      exceptionPositions_{this->template getVectorBuffer<uint32_t>()},
-      exceptionValues_{this->template getVectorBuffer<physicalType>()} {
+      exceptionPositions_{&pool},
+      exceptionValues_{&pool} {
   if constexpr (!isIntegralType<physicalType>()) {
     NIMBLE_INCOMPATIBLE_ENCODING(
         "Pfor encoding only supports integral data types.");
@@ -262,6 +265,12 @@ PFOREncoding<T>::PFOREncoding(
         numExceptions_,
         this->rowCount_,
         "Pfor exception count exceeds row count.");
+
+    // Leave unused scratch buffers in the pool for other decoders to reuse.
+    if (numExceptions_ != 0) {
+      exceptionPositions_ = this->template getVectorBuffer<uint32_t>();
+      exceptionValues_ = this->template getVectorBuffer<physicalType>();
+    }
 
     auto readExceptionStream = [&](auto& subStream) {
       subStream.resize(numExceptions_);
@@ -558,8 +567,8 @@ typename PFOREncoding<T>::ExceptionSlice PFOREncoding<T>::sliceExceptions(
 
   // Locate exception-position bounds covering rows [offset, offset + length)
   // through the shared detail::findSortedPositionSlots helper. Slice the
-  // retained range positionally through EncodingFactory::slice and hand the
-  // result to SliceEncoding::wrap. When the sliced inner encoding supports
+  // retained range positionally through EncodingFactory::slice with the
+  // value delta. When the sliced inner encoding supports
   // push-down (FixedBitWidth / PFOR / Constant / Nullable / Trivial), the
   // wrapper folds |valueDelta| into the inner bytes at write time and the
   // on-wire delta is zero. Otherwise the delta rides on the wire and the
@@ -571,18 +580,12 @@ typename PFOREncoding<T>::ExceptionSlice PFOREncoding<T>::sliceExceptions(
   if (slicedExceptionCount == 0) {
     return {};
   }
-  const auto slicedInnerPositions = EncodingFactory::slice(
+  const auto slicedPositions = EncodingFactory::slice(
       exceptionPositions,
       exceptionOffset,
       slicedExceptionCount,
-      scratchBuffer,
-      options);
-  const auto slicedPositions = SliceEncoding<uint32_t>::wrap(
-      slicedInnerPositions,
-      /*offset=*/0,
-      /*length=*/slicedExceptionCount,
-      scratchBuffer,
       valueDelta,
+      scratchBuffer,
       options);
 
   return {
@@ -606,11 +609,9 @@ std::string_view PFOREncoding<T>::slice(
     uint32_t length,
     Buffer& buffer,
     const Encoding::Options& options) {
-  const auto sourceRowCount =
+  const uint32_t sourceRowCount =
       EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
-  NIMBLE_CHECK_LE(offset, sourceRowCount);
-  NIMBLE_CHECK_LE(length, sourceRowCount - offset);
-  NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+  EncodingPrefix::checkSliceRange(sourceRowCount, offset, length);
 
   auto* pool = &buffer.getMemoryPool();
   const char* readPos = encoded.data() +

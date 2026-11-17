@@ -31,6 +31,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 namespace velox_iceberg = ::facebook::velox::connector::hive::iceberg;
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
@@ -88,8 +89,9 @@ constexpr T inline readBigEndian(const uint8_t* p)
 } // namespace
 
 CudfDeletionVectorReader::CudfDeletionVectorReader(
-    const velox_iceberg::IcebergDeleteFile& dvFile)
-    : dvFile_(dvFile) {
+    const velox_iceberg::IcebergDeleteFile& dvFile,
+    std::shared_ptr<const config::ConfigBase> connectorConfig)
+    : dvFile_(dvFile), connectorConfig_(std::move(connectorConfig)) {
   VELOX_CHECK(
       dvFile_.content == velox_iceberg::FileContent::kDeletionVector,
       "Expected deletion vector file but got content type: {}",
@@ -200,8 +202,14 @@ CudfDeletionVectorReader::loadBlobSource() {
   }
 
   // Open the puffin file
-  auto fs = filesystems::getFileSystem(dvFile_.filePath, nullptr);
+  auto fs = filesystems::getFileSystem(dvFile_.filePath, connectorConfig_);
+  VELOX_CHECK_NOT_NULL(
+      fs,
+      "No filesystem registered for deletion vector file: {}",
+      dvFile_.filePath);
   source.file = fs->openFileForRead(dvFile_.filePath);
+  VELOX_CHECK_NOT_NULL(
+      source.file, "Failed to open deletion vector file: {}", dvFile_.filePath);
   auto fileSize = source.file->size();
 
   VELOX_CHECK_LE(

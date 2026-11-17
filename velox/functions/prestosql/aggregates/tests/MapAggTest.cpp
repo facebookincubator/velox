@@ -54,7 +54,11 @@ TEST_F(MapAggTest, groupBy) {
       }),
   });
 
-  testAggregations(vectors, {"c0"}, {"map_agg(c1, c2)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"map_agg(c1, c2)"})
+      .assertResults(expectedResult);
 
   expectedResult = makeRowVector({
       makeFlatVector<int32_t>({0, 1, 2, 3}),
@@ -66,8 +70,11 @@ TEST_F(MapAggTest, groupBy) {
       }),
   });
 
-  testAggregations(
-      vectors, {"c0"}, {"map_agg(c1, c2) filter (where c3)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"map_agg(c1, c2) filter (where c3)"})
+      .assertResults(expectedResult);
 }
 
 // Verify that null keys are skipped.
@@ -92,7 +99,11 @@ TEST_F(MapAggTest, groupByNullKeys) {
       }),
   });
 
-  testAggregations(vectors, {"c0"}, {"map_agg(c1, c2)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"map_agg(c1, c2)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(MapAggTest, groupByWithNullValues) {
@@ -118,7 +129,11 @@ TEST_F(MapAggTest, groupByWithNullValues) {
           nullEvery(7)),
   })};
 
-  testAggregations(vectors, {"c0"}, {"map_agg(c1, c2)"}, expectedResult);
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"map_agg(c1, c2)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(MapAggTest, groupByWithDuplicates) {
@@ -144,7 +159,11 @@ TEST_F(MapAggTest, groupByWithDuplicates) {
 
   // We don't test with TableScan because when there are duplicate keys in
   // different splits, the result is non-deterministic.
-  testAggregations(vectors, {"c0"}, {"map_agg(c1, c2)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"map_agg(c1, c2)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(MapAggTest, groupByNoData) {
@@ -158,7 +177,11 @@ TEST_F(MapAggTest, groupByNoData) {
   auto expectedResult = {makeRowVector(
       {makeFlatVector<int32_t>({}), makeMapVector<int32_t, double>({})})};
 
-  testAggregations(vectors, {"c0"}, {"map_agg(c1, c2)"}, expectedResult);
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"map_agg(c1, c2)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(MapAggTest, global) {
@@ -189,7 +212,10 @@ TEST_F(MapAggTest, global) {
       }),
   });
 
-  testAggregations(vectors, {}, {"map_agg(c0, c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"map_agg(c0, c1)"})
+      .assertResults(expectedResult);
 
   expectedResult = makeRowVector({
       makeMapVector<int32_t, double>({
@@ -203,8 +229,10 @@ TEST_F(MapAggTest, global) {
       }),
   });
 
-  testAggregations(
-      vectors, {}, {"map_agg(c0, c1) FILTER (WHERE c2)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"map_agg(c0, c1) FILTER (WHERE c2)"})
+      .assertResults(expectedResult);
 }
 
 // Verify that null keys are skipped.
@@ -234,7 +262,10 @@ TEST_F(MapAggTest, globalWithNullKeys) {
       }),
   });
 
-  testAggregations(vectors, {}, {"map_agg(c0, c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"map_agg(c0, c1)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(MapAggTest, globalWithNullValues) {
@@ -261,14 +292,20 @@ TEST_F(MapAggTest, globalWithNullValues) {
       }),
   });
 
-  testAggregations(vectors, {}, {"map_agg(c0, c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"map_agg(c0, c1)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(MapAggTest, globalNoData) {
   auto vectors = {makeRowVector(
       {makeFlatVector<int32_t>({}), makeFlatVector<int32_t>({})})};
 
-  testAggregations(vectors, {}, {"map_agg(c0, c1)"}, "SELECT null");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"map_agg(c0, c1)"})
+      .assertResults("SELECT null");
 }
 
 TEST_F(MapAggTest, globalDuplicateKeys) {
@@ -298,7 +335,10 @@ TEST_F(MapAggTest, globalDuplicateKeys) {
 
   // We don't test with TableScan because when there are duplicate keys in
   // different splits, the result is non-deterministic.
-  testAggregations(vectors, {}, {"map_agg(c0, c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"map_agg(c0, c1)"})
+      .assertResults(expectedResult);
 }
 
 /// Reproduces the bug reported in
@@ -354,10 +394,16 @@ TEST_F(MapAggTest, unknownKey) {
       makeConstant<int32_t>(123, 10),
   });
 
-  testAggregations(
-      {data}, {"c0"}, {"map_agg(c1, c2)"}, "VALUES (1, NULL), (2, NULL)");
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"map_agg(c1, c2)"})
+      .assertResults("VALUES (1, NULL), (2, NULL)");
 
-  testAggregations({data}, {}, {"map_agg(c1, c2)"}, "VALUES (NULL)");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_agg(c1, c2)"})
+      .assertResults("VALUES (NULL)");
 }
 
 TEST_F(MapAggTest, stringLifeCycle) {
@@ -380,7 +426,10 @@ TEST_F(MapAggTest, stringLifeCycle) {
       [&](vector_size_t i) { return StringView(s[i]); },
       [&](vector_size_t i) { return i + 0.05; })});
 
-  testReadFromFiles(vectors, {}, {"map_agg(c0, c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"map_agg(c0, c1)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(MapAggTest, arrayCheckNulls) {
@@ -420,16 +469,17 @@ TEST_F(MapAggTest, arrayCheckNulls) {
       }),
   });
 
-  testFailingAggregations(
-      {batch, batchWithNull},
-      {},
-      {"map_agg(c0, c1)"},
-      "ARRAY comparison not supported for values that contain nulls");
-  testFailingAggregations(
-      {batch, batchWithNull},
-      {"c2"},
-      {"map_agg(c0, c1)"},
-      "ARRAY comparison not supported for values that contain nulls");
+  AggregationTester(*this)
+      .inputs({batch, batchWithNull})
+      .aggregates({"map_agg(c0, c1)"})
+      .assertError(
+          "ARRAY comparison not supported for values that contain nulls");
+  AggregationTester(*this)
+      .inputs({batch, batchWithNull})
+      .groupBy({"c2"})
+      .aggregates({"map_agg(c0, c1)"})
+      .assertError(
+          "ARRAY comparison not supported for values that contain nulls");
 }
 
 TEST_F(MapAggTest, rowCheckNull) {
@@ -467,16 +517,17 @@ TEST_F(MapAggTest, rowCheckNull) {
       makeFlatVector<int8_t>({1, 2, 3}),
   });
 
-  testFailingAggregations(
-      {batch, batchWithNull},
-      {},
-      {"map_agg(c0, c1)"},
-      "ROW comparison not supported for values that contain nulls");
-  testFailingAggregations(
-      {batch, batchWithNull},
-      {"c2"},
-      {"map_agg(c0, c1)"},
-      "ROW comparison not supported for values that contain nulls");
+  AggregationTester(*this)
+      .inputs({batch, batchWithNull})
+      .aggregates({"map_agg(c0, c1)"})
+      .assertError(
+          "ROW comparison not supported for values that contain nulls");
+  AggregationTester(*this)
+      .inputs({batch, batchWithNull})
+      .groupBy({"c2"})
+      .aggregates({"map_agg(c0, c1)"})
+      .assertError(
+          "ROW comparison not supported for values that contain nulls");
 }
 
 TEST_F(MapAggTest, nans) {
@@ -497,7 +548,10 @@ TEST_F(MapAggTest, nans) {
       }),
   });
 
-  testAggregations({data}, {}, {"map_agg(c0, c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_agg(c0, c1)"})
+      .assertResults(expectedResult);
 
   // Group by Aggregation, Primitive type
   expectedResult = makeRowVector(
@@ -505,8 +559,12 @@ TEST_F(MapAggTest, nans) {
            {"{ 1: 1, 2: 4, NaN: 2}", "{ 3: 5, NaN: 6}"}),
        makeFlatVector<int32_t>({1, 2})});
 
-  testAggregations(
-      {data}, {"c2"}, {"map_agg(c0, c1)"}, {"a0", "c2"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c2"})
+      .aggregates({"map_agg(c0, c1)"})
+      .project({"a0", "c2"})
+      .assertResults(expectedResult);
 
   // Global Aggregation, Complex type(Row)
   // The complex input values that are to be used as keys are {1, 1}, {NaN, 2},
@@ -528,7 +586,10 @@ TEST_F(MapAggTest, nans) {
            makeFlatVector<int32_t>({1, 4, 5, 2})}),
       makeFlatVector<int32_t>({1, 4, 5, 2}))});
 
-  testAggregations({data}, {}, {"map_agg(c0, c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_agg(c0, c1)"})
+      .assertResults(expectedResult);
 
   // Group by Aggregation, Complex type(Row)
   // The expected result is
@@ -544,8 +605,12 @@ TEST_F(MapAggTest, nans) {
            makeFlatVector<int32_t>({1, 4, 2, 5, 6})),
        makeFlatVector<int32_t>({1, 2})});
 
-  testAggregations(
-      {data}, {"c2"}, {"map_agg(c0, c1)"}, {"a0", "c2"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c2"})
+      .aggregates({"map_agg(c0, c1)"})
+      .project({"a0", "c2"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(MapAggTest, timestampWithTimeZone) {
@@ -570,7 +635,10 @@ TEST_F(MapAggTest, timestampWithTimeZone) {
       {{{pack(0, 0), 1}, {pack(1, 0), 2}, {pack(2, 0), 3}, {pack(3, 3), 8}}},
       MAP(TIMESTAMP_WITH_TIME_ZONE(), INTEGER()))});
 
-  testAggregations({data}, {}, {"map_agg(c0, c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_agg(c0, c1)"})
+      .assertResults(expectedResult);
 
   // Group by Aggregation, Primitive type
   expectedResult = makeRowVector(
@@ -580,8 +648,12 @@ TEST_F(MapAggTest, timestampWithTimeZone) {
            MAP(TIMESTAMP_WITH_TIME_ZONE(), INTEGER())),
        makeFlatVector<int32_t>({1, 2})});
 
-  testAggregations(
-      {data}, {"c2"}, {"map_agg(c0, c1)"}, {"a0", "c2"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c2"})
+      .aggregates({"map_agg(c0, c1)"})
+      .project({"a0", "c2"})
+      .assertResults(expectedResult);
 
   // Global Aggregation, Complex type(Row)
   data = makeRowVector(
@@ -607,7 +679,10 @@ TEST_F(MapAggTest, timestampWithTimeZone) {
           TIMESTAMP_WITH_TIME_ZONE())}),
       makeFlatVector<int32_t>({1, 2, 3, 8}))});
 
-  testAggregations({data}, {}, {"map_agg(c0, c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_agg(c0, c1)"})
+      .assertResults(expectedResult);
 
   // Group by Aggregation, Complex type(Row)
   expectedResult = makeRowVector(
@@ -624,8 +699,12 @@ TEST_F(MapAggTest, timestampWithTimeZone) {
            makeFlatVector<int32_t>({1, 2, 3, 8, 6, 7})),
        makeFlatVector<int32_t>({1, 2})});
 
-  testAggregations(
-      {data}, {"c2"}, {"map_agg(c0, c1)"}, {"a0", "c2"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c2"})
+      .aggregates({"map_agg(c0, c1)"})
+      .project({"a0", "c2"})
+      .assertResults(expectedResult);
 }
 
 } // namespace

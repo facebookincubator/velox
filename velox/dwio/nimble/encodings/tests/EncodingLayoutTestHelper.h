@@ -143,6 +143,26 @@ std::unique_ptr<Encoding> createFromCustomLayout(
 }
 
 // ===========================================================================
+// encodeFromCustomLayout — encode data using an EncodingLayout tree and return
+// the encoded bytes, for readers that take them, such as encoding views.
+// ===========================================================================
+
+template <typename T>
+std::string_view encodeFromCustomLayout(
+    const EncodingLayout& layout,
+    std::span<const T> data,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  auto policy = std::make_unique<ReplayedEncodingSelectionPolicy<T>>(
+      layout,
+      CompressionOptions{},
+      [](DataType type) -> std::unique_ptr<EncodingSelectionPolicyBase> {
+        UNIQUE_PTR_FACTORY(type, TrivialNestedPolicy);
+      });
+  return EncodingFactory::encode<T>(std::move(policy), data, buffer, options);
+}
+
+// ===========================================================================
 // createNullableFromCustomLayout — encode nullable data using a layout for
 // the non-null values child.
 // ===========================================================================
@@ -153,28 +173,23 @@ std::unique_ptr<Encoding> createNullableFromCustomLayout(
     const std::vector<std::optional<T>>& data,
     velox::memory::MemoryPool& pool,
     Buffer& buffer) {
-  using physicalType = typename TypeTraits<T>::physicalType;
-
-  std::vector<physicalType> nonNullValues;
+  std::vector<T> nonNullValues;
   Vector<bool> nulls(&pool);
   nulls.resize(data.size());
   for (size_t i = 0; i < data.size(); ++i) {
     nulls[i] = data[i].has_value();
     if (data[i].has_value()) {
-      nonNullValues.push_back(
-          reinterpret_cast<const physicalType&>(data[i].value()));
+      nonNullValues.push_back(data[i].value());
     }
   }
 
-  std::span<const physicalType> valuesSpan(
-      nonNullValues.data(), nonNullValues.size());
+  std::span<const T> valuesSpan(nonNullValues.data(), nonNullValues.size());
   std::span<const bool> nullsSpan(nulls.data(), nulls.size());
 
-  NullableEnc nullableEnc{.data = dataLayout};
-  EncodingLayout nullableLayout = nullableEnc;
-
+  // ReplayedEncodingSelectionPolicy::selectNullable() wraps the data layout in
+  // a Nullable parent itself.
   auto policy = std::make_unique<ReplayedEncodingSelectionPolicy<T>>(
-      nullableLayout,
+      dataLayout,
       CompressionOptions{},
       [](DataType type) -> std::unique_ptr<EncodingSelectionPolicyBase> {
         UNIQUE_PTR_FACTORY(type, TrivialNestedPolicy);

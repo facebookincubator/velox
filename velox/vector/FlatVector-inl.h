@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <folly/hash/Hash.h>
+#include <folly/lang/Assume.h>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
@@ -90,7 +91,23 @@ std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
       AlignedBuffer::allocate<uint64_t>(BaseVector::length_, BaseVector::pool_);
   auto hashData = hashBuffer->asMutable<uint64_t>();
 
+#ifdef _MSC_VER
+  // MSVC eagerly instantiates this method for unsupported element types.
+  // Only instantiate folly::hasher for supported scalar types.
+  const auto hasher = [](T value) -> uint64_t {
+    if constexpr (
+        std::is_arithmetic_v<T> || std::is_same_v<T, StringView> ||
+        std::is_same_v<T, Timestamp> || std::is_same_v<T, int128_t>) {
+      return folly::hasher<T>()(value);
+    } else {
+      VELOX_UNREACHABLE("FlatVector::hashAll cannot hash this element type");
+      // MSVC does not infer noreturn through the templated exception helper.
+      folly::assume_unreachable();
+    }
+  };
+#else
   folly::hasher<T> hasher;
+#endif
   if (!BaseVector::rawNulls_) {
     VELOX_DCHECK_NOT_NULL(rawValues_);
     for (len_type i = 0; i < BaseVector::length_; ++i) {
@@ -116,7 +133,8 @@ std::unique_ptr<SimpleVector<uint64_t>> FlatVector<T>::hashAll() const {
       std::nullopt /*distinctValueCount*/,
       0 /*nullCount*/,
       false /*sorted*/,
-      sizeof(uint64_t) * BaseVector::length_ /*representedBytes*/);
+      static_cast<ByteCount>(
+          sizeof(uint64_t) * BaseVector::length_) /*representedBytes*/);
 }
 
 #ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
@@ -505,8 +523,7 @@ void FlatVector<T>::ensureWritable(const SelectivityVector& rows) {
           std::min(values_->size(), newValues->size()));
     } else {
       auto rawNewValues = newValues->asMutable<T>();
-      SelectivityVector rowsToCopy(BaseVector::length_);
-      rowsToCopy.deselect(rows);
+      auto rowsToCopy = rows.complement(BaseVector::length_);
       rowsToCopy.applyToSelected(
           [&](vector_size_t row) { rawNewValues[row] = rawValues_[row]; });
     }

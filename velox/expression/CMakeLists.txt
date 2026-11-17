@@ -17,6 +17,14 @@ velox_add_library(velox_type_signature OBJECT TypeSignature.cpp HEADERS TypeSign
 velox_link_libraries(velox_type_signature velox_common_base)
 
 velox_add_library(
+  velox_expression_exception_properties
+  INTERFACE
+  HEADERS
+  ExpressionExceptionProperties.h
+)
+velox_link_libraries(velox_expression_exception_properties INTERFACE velox_exception)
+
+velox_add_library(
   velox_expression_functions
   FunctionSignature.cpp
   ReverseSignatureBinder.cpp
@@ -42,6 +50,7 @@ velox_add_library(
   velox_expression
   BooleanMix.cpp
   CaseExpr.cpp
+  CaseExprBase.cpp
   CastExpr.cpp
   CastHooks.cpp
   CoalesceExpr.cpp
@@ -74,6 +83,7 @@ velox_add_library(
   HEADERS
   BooleanMix.h
   CaseExpr.h
+  CaseExprBase.h
   CastExpr-inl.h
   CastExpr.h
   CastHooks.h
@@ -132,6 +142,8 @@ velox_link_libraries(
   FastFloat::fast_float
   Folly::folly
 )
+
+velox_link_libraries(velox_expression velox_expression_exception_properties)
 
 add_subdirectory(rpc)
 add_subdirectory(type_calculation)

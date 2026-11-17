@@ -260,7 +260,7 @@ RowVectorPtr NestedLoopJoinProbe::getOutput() {
     // driver threads to get stuck in long-running processing loops that exceed
     // their allocated CPU time slice limits, preventing other tasks from being
     // scheduled and degrading overall system responsiveness.
-    if (FOLLY_UNLIKELY(shouldYield())) {
+    if (shouldYield()) [[unlikely]] {
       break;
     }
   }
@@ -810,7 +810,7 @@ void NestedLoopJoinProbe::beginBuildMismatch() {
   // this code will survive and move on to process build mismatches.
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Operator>> peerOperators;
-  if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
+  if (!operatorCtx_->allPeersArrived(&future_, promises, peerOperators)) {
     VELOX_CHECK(future_.valid());
     setState(ProbeOperatorState::kWaitForPeers);
     return;

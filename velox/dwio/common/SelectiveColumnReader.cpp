@@ -118,6 +118,25 @@ void SelectiveColumnReader::seekTo(int64_t offset, bool readsNullsOnly) {
   }
 }
 
+bool SelectiveColumnReader::hasRowFilter() const {
+  if (!scanSpec_->hasFilter()) {
+    return false;
+  }
+  const auto* filter = scanSpec_->filter();
+  return filter == nullptr ||
+      filter->kind() != velox::common::FilterKind::kAlwaysTrue ||
+      !scanSpec_->children().empty();
+}
+
+bool SelectiveColumnReader::useBulkPath(bool hasNulls) const {
+  auto* filter = scanSpec_->filter();
+  return hasBulkPath() && process::hasSimd() &&
+      (!filter ||
+       (filter->isDeterministic() && (!hasNulls || !filter->testNull()))) &&
+      (!scanSpec_->valueHook() || !hasNulls ||
+       !scanSpec_->valueHook()->acceptsNulls());
+}
+
 void SelectiveColumnReader::setReturnNullsMode(const RowSet& rows) {
   if (useBulkPath() && !scanSpec_->hasFilter()) {
     anyNulls_ = nullsInReadRange_ != nullptr;

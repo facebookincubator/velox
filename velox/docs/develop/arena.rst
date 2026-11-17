@@ -9,7 +9,7 @@ and aggregations. It is also used to back byte streams used to serialize and
 deserialize shuffle data.
 
 This implementation is inspired by `TLSF: a New Dynamic Memory Allocator for
-Real-Time Systems <http://www.gii.upv.es/tlsf/files/ecrts04_tlsf.pdf>`_ paper and
+Real-Time Systems <http://www.gii.upv.es/tlsf/files/papers/ecrts04_tlsf.pdf>`_ paper and
 `GitHub implementation <https://github.com/mattconte/tlsf>`_.
 
 If you want to implement aggregate functions with variable width accumulators,

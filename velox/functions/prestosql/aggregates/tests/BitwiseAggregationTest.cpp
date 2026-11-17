@@ -39,26 +39,30 @@ TEST_F(BitwiseAggregationTest, bitwiseOr) {
   createDuckDbTable(vectors);
 
   // Global aggregation.
-  testAggregations(
-      vectors,
-      {},
-      {"bitwise_or_agg(c1)",
-       "bitwise_or_agg(c2)",
-       "bitwise_or_agg(c3)",
-       "bitwise_or_agg(c4)"},
-      "SELECT bit_or(c1), bit_or(c2), bit_or(c3), bit_or(c4) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates(
+          {"bitwise_or_agg(c1)",
+           "bitwise_or_agg(c2)",
+           "bitwise_or_agg(c3)",
+           "bitwise_or_agg(c4)"})
+      .assertResults(
+          "SELECT bit_or(c1), bit_or(c2), bit_or(c3), bit_or(c4) FROM tmp");
 
   // Group by partial aggregation.
-  testAggregations(
-      [&](auto& builder) {
-        builder.values(vectors).project({"c0 % 10", "c1", "c2", "c3", "c4"});
-      },
-      {"p0"},
-      {"bitwise_or_agg(c1)",
-       "bitwise_or_agg(c2)",
-       "bitwise_or_agg(c3)",
-       "bitwise_or_agg(c4)"},
-      "SELECT c0 % 10, bit_or(c1), bit_or(c2), bit_or(c3), bit_or(c4) FROM tmp GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) {
+        builder.project({"c0 % 10", "c1", "c2", "c3", "c4"});
+      })
+      .groupBy({"p0"})
+      .aggregates(
+          {"bitwise_or_agg(c1)",
+           "bitwise_or_agg(c2)",
+           "bitwise_or_agg(c3)",
+           "bitwise_or_agg(c4)"})
+      .assertResults(
+          "SELECT c0 % 10, bit_or(c1), bit_or(c2), bit_or(c3), bit_or(c4) FROM tmp GROUP BY 1");
 }
 
 TEST_F(BitwiseAggregationTest, bitwiseAnd) {
@@ -66,26 +70,30 @@ TEST_F(BitwiseAggregationTest, bitwiseAnd) {
   createDuckDbTable(vectors);
 
   // Global aggregation.
-  testAggregations(
-      vectors,
-      {},
-      {"bitwise_and_agg(c1)",
-       "bitwise_and_agg(c2)",
-       "bitwise_and_agg(c3)",
-       "bitwise_and_agg(c4)"},
-      "SELECT bit_and(c1), bit_and(c2), bit_and(c3), bit_and(c4) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates(
+          {"bitwise_and_agg(c1)",
+           "bitwise_and_agg(c2)",
+           "bitwise_and_agg(c3)",
+           "bitwise_and_agg(c4)"})
+      .assertResults(
+          "SELECT bit_and(c1), bit_and(c2), bit_and(c3), bit_and(c4) FROM tmp");
 
   // Group by aggregation.
-  testAggregations(
-      [&](auto& builder) {
-        builder.values(vectors).project({"c0 % 10", "c1", "c2", "c3", "c4"});
-      },
-      {"p0"},
-      {"bitwise_and_agg(c1)",
-       "bitwise_and_agg(c2)",
-       "bitwise_and_agg(c3)",
-       "bitwise_and_agg(c4)"},
-      "SELECT c0 % 10, bit_and(c1), bit_and(c2), bit_and(c3), bit_and(c4) FROM tmp GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) {
+        builder.project({"c0 % 10", "c1", "c2", "c3", "c4"});
+      })
+      .groupBy({"p0"})
+      .aggregates(
+          {"bitwise_and_agg(c1)",
+           "bitwise_and_agg(c2)",
+           "bitwise_and_agg(c3)",
+           "bitwise_and_agg(c4)"})
+      .assertResults(
+          "SELECT c0 % 10, bit_and(c1), bit_and(c2), bit_and(c3), bit_and(c4) FROM tmp GROUP BY 1");
 }
 
 TEST_F(BitwiseAggregationTest, bitwiseXor) {
@@ -93,26 +101,30 @@ TEST_F(BitwiseAggregationTest, bitwiseXor) {
   createDuckDbTable(vectors);
 
   // Global aggregation.
-  testAggregations(
-      vectors,
-      {},
-      {"bitwise_xor_agg(c1)",
-       "bitwise_xor_agg(c2)",
-       "bitwise_xor_agg(c3)",
-       "bitwise_xor_agg(c4)"},
-      "SELECT bit_xor(c1), bit_xor(c2), bit_xor(c3), bit_xor(c4) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates(
+          {"bitwise_xor_agg(c1)",
+           "bitwise_xor_agg(c2)",
+           "bitwise_xor_agg(c3)",
+           "bitwise_xor_agg(c4)"})
+      .assertResults(
+          "SELECT bit_xor(c1), bit_xor(c2), bit_xor(c3), bit_xor(c4) FROM tmp");
 
   // Group by aggregation.
-  testAggregations(
-      [&](auto& builder) {
-        builder.values(vectors).project({"c0 % 10", "c1", "c2", "c3", "c4"});
-      },
-      {"p0"},
-      {"bitwise_xor_agg(c1)",
-       "bitwise_xor_agg(c2)",
-       "bitwise_xor_agg(c3)",
-       "bitwise_xor_agg(c4)"},
-      "SELECT c0 % 10, bit_xor(c1), bit_xor(c2), bit_xor(c3), bit_xor(c4) FROM tmp GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) {
+        builder.project({"c0 % 10", "c1", "c2", "c3", "c4"});
+      })
+      .groupBy({"p0"})
+      .aggregates(
+          {"bitwise_xor_agg(c1)",
+           "bitwise_xor_agg(c2)",
+           "bitwise_xor_agg(c3)",
+           "bitwise_xor_agg(c4)"})
+      .assertResults(
+          "SELECT c0 % 10, bit_xor(c1), bit_xor(c2), bit_xor(c3), bit_xor(c4) FROM tmp GROUP BY 1");
 }
 
 } // namespace

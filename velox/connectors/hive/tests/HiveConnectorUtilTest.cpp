@@ -808,31 +808,37 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
 TEST_F(HiveConnectorUtilTest, checkColumnHandleConsistent) {
   // Create two consistent column handles
   auto handle1 = std::make_shared<hive::HiveColumnHandle>(
-      "col1", hive::FileColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
+      "col1",
+      connector::FileColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      BIGINT());
   auto handle2 = std::make_shared<hive::HiveColumnHandle>(
-      "col1", hive::FileColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
+      "col1",
+      connector::FileColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      BIGINT());
 
   // Should not throw for consistent handles
-  EXPECT_NO_THROW(hive::checkColumnHandleConsistent(*handle1, *handle2));
+  EXPECT_NO_THROW(connector::checkColumnHandleConsistent(*handle1, *handle2));
 
   // Test inconsistent column type
   auto handlePartition = std::make_shared<hive::HiveColumnHandle>(
       "col1",
-      hive::FileColumnHandle::ColumnType::kPartitionKey,
+      connector::FileColumnHandle::ColumnType::kPartitionKey,
       BIGINT(),
       BIGINT());
   VELOX_ASSERT_THROW(
-      hive::checkColumnHandleConsistent(*handle1, *handlePartition),
+      connector::checkColumnHandleConsistent(*handle1, *handlePartition),
       "Inconsistent column handle type: col1, expected Regular, got PartitionKey");
 
   // Test inconsistent data type
   auto handleVarchar = std::make_shared<hive::HiveColumnHandle>(
       "col1",
-      hive::FileColumnHandle::ColumnType::kRegular,
+      connector::FileColumnHandle::ColumnType::kRegular,
       VARCHAR(),
       VARCHAR());
   VELOX_ASSERT_THROW(
-      hive::checkColumnHandleConsistent(*handle1, *handleVarchar),
+      connector::checkColumnHandleConsistent(*handle1, *handleVarchar),
       "Inconsistent column handle data type: col1, expected BIGINT, got VARCHAR");
 }
 
@@ -965,7 +971,7 @@ TEST_F(HiveConnectorUtilTest, makeScanSpecWithIndexColumns) {
       subfieldFilters = testCase.makeSubfieldFilters();
     }
 
-    auto scanSpec = hive::makeScanSpec(
+    auto scanSpec = connector::makeScanSpec(
         testCase.rowType,
         testCase.outputSubfields,
         subfieldFilters,
@@ -994,7 +1000,7 @@ TEST_F(HiveConnectorUtilTest, makeScanSpecWithIndexColumnsError) {
   const auto rowType = ROW({"a", "b"}, {BIGINT(), VARCHAR()});
 
   VELOX_ASSERT_THROW(
-      hive::makeScanSpec(
+      connector::makeScanSpec(
           rowType,
           /*outputSubfields=*/{},
           /*subfieldFilters=*/{},
@@ -1030,7 +1036,7 @@ TEST_F(HiveConnectorUtilTest, shouldEagerlyMaterialize) {
     auto exprSet = compileExpression("a > 10 OR b > 20", rowType);
     auto& expr = *exprSet->exprs().front();
     for (const auto& field : expr.distinctFields()) {
-      EXPECT_TRUE(hive::shouldEagerlyMaterialize(expr, *field));
+      EXPECT_TRUE(connector::shouldEagerlyMaterialize(expr, *field));
     }
   }
 
@@ -1041,7 +1047,7 @@ TEST_F(HiveConnectorUtilTest, shouldEagerlyMaterialize) {
     auto exprSet = compileExpression("a > 10 AND b > 20", rowType);
     auto& expr = *exprSet->exprs().front();
     for (const auto& field : expr.distinctFields()) {
-      EXPECT_FALSE(hive::shouldEagerlyMaterialize(expr, *field));
+      EXPECT_FALSE(connector::shouldEagerlyMaterialize(expr, *field));
     }
   }
 
@@ -1053,9 +1059,9 @@ TEST_F(HiveConnectorUtilTest, shouldEagerlyMaterialize) {
     auto& expr = *exprSet->exprs().front();
     for (const auto& field : expr.distinctFields()) {
       if (field->field() == "c" || field->field() == "b") {
-        EXPECT_TRUE(hive::shouldEagerlyMaterialize(expr, *field));
+        EXPECT_TRUE(connector::shouldEagerlyMaterialize(expr, *field));
       } else {
-        EXPECT_FALSE(hive::shouldEagerlyMaterialize(expr, *field));
+        EXPECT_FALSE(connector::shouldEagerlyMaterialize(expr, *field));
       }
     }
   }
@@ -1068,7 +1074,7 @@ TEST_F(HiveConnectorUtilTest, shouldEagerlyMaterialize) {
     auto& expr = *exprSet->exprs().front();
     // Find field 'a' which is used in simple comparison, not in conditional.
     for (const auto& field : expr.distinctFields()) {
-      EXPECT_TRUE(hive::shouldEagerlyMaterialize(expr, *field));
+      EXPECT_TRUE(connector::shouldEagerlyMaterialize(expr, *field));
     }
   }
 }
@@ -1076,7 +1082,7 @@ TEST_F(HiveConnectorUtilTest, shouldEagerlyMaterialize) {
 TEST_F(HiveConnectorUtilTest, createPointFilter) {
   // Test BIGINT point filter.
   {
-    auto filter = hive::createPointFilter(
+    auto filter = connector::createPointFilter(
         BIGINT(), variant::create<TypeKind::BIGINT>(42));
     ASSERT_NE(filter, nullptr);
     EXPECT_TRUE(filter->testInt64(42));
@@ -1087,7 +1093,7 @@ TEST_F(HiveConnectorUtilTest, createPointFilter) {
 
   // Test INTEGER point filter.
   {
-    auto filter = hive::createPointFilter(INTEGER(), variant(100));
+    auto filter = connector::createPointFilter(INTEGER(), variant(100));
     ASSERT_NE(filter, nullptr);
     EXPECT_TRUE(filter->testInt64(100));
     EXPECT_FALSE(filter->testInt64(99));
@@ -1096,7 +1102,7 @@ TEST_F(HiveConnectorUtilTest, createPointFilter) {
 
   // Test DOUBLE point filter.
   {
-    auto filter = hive::createPointFilter(DOUBLE(), variant(3.14));
+    auto filter = connector::createPointFilter(DOUBLE(), variant(3.14));
     ASSERT_NE(filter, nullptr);
     EXPECT_TRUE(filter->testDouble(3.14));
     EXPECT_FALSE(filter->testDouble(3.15));
@@ -1105,7 +1111,7 @@ TEST_F(HiveConnectorUtilTest, createPointFilter) {
 
   // Test VARCHAR point filter.
   {
-    auto filter = hive::createPointFilter(VARCHAR(), variant("hello"));
+    auto filter = connector::createPointFilter(VARCHAR(), variant("hello"));
     ASSERT_NE(filter, nullptr);
     EXPECT_TRUE(filter->testBytes("hello", 5));
     EXPECT_FALSE(filter->testBytes("world", 5));
@@ -1114,7 +1120,7 @@ TEST_F(HiveConnectorUtilTest, createPointFilter) {
 
   // Test BOOLEAN point filter.
   {
-    auto filter = hive::createPointFilter(BOOLEAN(), variant(true));
+    auto filter = connector::createPointFilter(BOOLEAN(), variant(true));
     ASSERT_NE(filter, nullptr);
     EXPECT_TRUE(filter->testBool(true));
     EXPECT_FALSE(filter->testBool(false));
@@ -1124,7 +1130,7 @@ TEST_F(HiveConnectorUtilTest, createPointFilter) {
   // Test null value throws.
   {
     VELOX_ASSERT_THROW(
-        hive::createPointFilter(BIGINT(), variant::null(TypeKind::BIGINT)),
+        connector::createPointFilter(BIGINT(), variant::null(TypeKind::BIGINT)),
         "Value cannot be null");
   }
 
@@ -1133,14 +1139,14 @@ TEST_F(HiveConnectorUtilTest, createPointFilter) {
     SCOPED_TRACE(
         fmt::format("Unsupported type: {}", unsupported.type->toString()));
     VELOX_ASSERT_THROW(
-        hive::createPointFilter(unsupported.type, unsupported.value), "");
+        connector::createPointFilter(unsupported.type, unsupported.value), "");
   }
 }
 
 TEST_F(HiveConnectorUtilTest, createRangeFilter) {
   // Test BIGINT range filter.
   {
-    auto filter = hive::createRangeFilter(
+    auto filter = connector::createRangeFilter(
         BIGINT(),
         variant::create<TypeKind::BIGINT>(10),
         variant::create<TypeKind::BIGINT>(20));
@@ -1155,7 +1161,8 @@ TEST_F(HiveConnectorUtilTest, createRangeFilter) {
 
   // Test INTEGER range filter.
   {
-    auto filter = hive::createRangeFilter(INTEGER(), variant(0), variant(100));
+    auto filter =
+        connector::createRangeFilter(INTEGER(), variant(0), variant(100));
     ASSERT_NE(filter, nullptr);
     EXPECT_TRUE(filter->testInt64(0));
     EXPECT_TRUE(filter->testInt64(50));
@@ -1166,7 +1173,8 @@ TEST_F(HiveConnectorUtilTest, createRangeFilter) {
 
   // Test DOUBLE range filter.
   {
-    auto filter = hive::createRangeFilter(DOUBLE(), variant(1.0), variant(2.0));
+    auto filter =
+        connector::createRangeFilter(DOUBLE(), variant(1.0), variant(2.0));
     ASSERT_NE(filter, nullptr);
     EXPECT_TRUE(filter->testDouble(1.0));
     EXPECT_TRUE(filter->testDouble(1.5));
@@ -1177,8 +1185,8 @@ TEST_F(HiveConnectorUtilTest, createRangeFilter) {
 
   // Test VARCHAR range filter.
   {
-    auto filter =
-        hive::createRangeFilter(VARCHAR(), variant("apple"), variant("banana"));
+    auto filter = connector::createRangeFilter(
+        VARCHAR(), variant("apple"), variant("banana"));
     ASSERT_NE(filter, nullptr);
     EXPECT_TRUE(filter->testBytes("apple", 5));
     EXPECT_TRUE(filter->testBytes("ball", 4));
@@ -1189,7 +1197,7 @@ TEST_F(HiveConnectorUtilTest, createRangeFilter) {
 
   // Test lower bound only (upper unbounded) - BIGINT.
   {
-    auto filter = hive::createRangeFilter(
+    auto filter = connector::createRangeFilter(
         BIGINT(),
         variant::create<TypeKind::BIGINT>(10),
         variant::null(TypeKind::BIGINT));
@@ -1203,7 +1211,7 @@ TEST_F(HiveConnectorUtilTest, createRangeFilter) {
 
   // Test upper bound only (lower unbounded) - BIGINT.
   {
-    auto filter = hive::createRangeFilter(
+    auto filter = connector::createRangeFilter(
         BIGINT(),
         variant::null(TypeKind::BIGINT),
         variant::create<TypeKind::BIGINT>(20));
@@ -1217,7 +1225,7 @@ TEST_F(HiveConnectorUtilTest, createRangeFilter) {
 
   // Test lower bound only - DOUBLE.
   {
-    auto filter = hive::createRangeFilter(
+    auto filter = connector::createRangeFilter(
         DOUBLE(), variant(1.5), variant::null(TypeKind::DOUBLE));
     ASSERT_NE(filter, nullptr);
     EXPECT_TRUE(filter->testDouble(1.5));
@@ -1227,7 +1235,7 @@ TEST_F(HiveConnectorUtilTest, createRangeFilter) {
 
   // Test upper bound only - VARCHAR.
   {
-    auto filter = hive::createRangeFilter(
+    auto filter = connector::createRangeFilter(
         VARCHAR(), variant::null(TypeKind::VARCHAR), variant("banana"));
     ASSERT_NE(filter, nullptr);
     EXPECT_TRUE(filter->testBytes("banana", 6));
@@ -1238,7 +1246,7 @@ TEST_F(HiveConnectorUtilTest, createRangeFilter) {
   // Test both bounds null throws.
   {
     VELOX_ASSERT_THROW(
-        hive::createRangeFilter(
+        connector::createRangeFilter(
             BIGINT(),
             variant::null(TypeKind::BIGINT),
             variant::null(TypeKind::BIGINT)),
@@ -1250,7 +1258,7 @@ TEST_F(HiveConnectorUtilTest, createRangeFilter) {
     SCOPED_TRACE(
         fmt::format("Unsupported type: {}", unsupported.type->toString()));
     VELOX_ASSERT_THROW(
-        hive::createRangeFilter(
+        connector::createRangeFilter(
             unsupported.type, unsupported.value, unsupported.value),
         "");
   }

@@ -22,11 +22,11 @@
 #include "velox/dwio/common/ColumnSelector.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
+#include "velox/dwio/nimble/reader/Decoder.h"
 #include "velox/dwio/nimble/serializer/BatchedStreamDecoder.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
-#include "velox/dwio/nimble/velox/Decoder.h"
-#include "velox/dwio/nimble/velox/SchemaReader.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
 
 #include <algorithm>
 #include <limits>
@@ -52,11 +52,27 @@ const StreamDescriptor& getMainDescriptor(const Type& type) {
       return type.asFlatMap().nullsDescriptor();
     case Kind::HybridFlatMap:
       return type.asHybridFlatMap().nullsDescriptor();
+    case Kind::ArrayWithOffsets:
+      return type.asArrayWithOffsets().offsetsDescriptor();
+    case Kind::SlidingWindowMap:
+      return type.asSlidingWindowMap().offsetsDescriptor();
     default:
-      // ArrayWithOffsets and SlidingWindowMap are not supported.
-      NIMBLE_UNSUPPORTED(
-          "Schema type {} is not supported.", toString(type.kind()));
+      NIMBLE_UNREACHABLE("Unknown schema type: {}.", type.kind());
   }
+}
+
+// Returns the offset of the stream of the dedup kinds, ArrayWithOffsets and
+// SlidingWindowMap, that holds the lengths of their distinct arrays or maps,
+// next to the per-row offsets of their main stream. Returns std::nullopt for
+// other types.
+std::optional<offset_size> getDedupLengthsOffset(const Type& type) {
+  if (type.isArrayWithOffsets()) {
+    return type.asArrayWithOffsets().lengthsDescriptor().offset();
+  }
+  if (type.isSlidingWindowMap()) {
+    return type.asSlidingWindowMap().lengthsDescriptor().offset();
+  }
+  return std::nullopt;
 }
 
 bool checkColumnProjectionSubfield(
@@ -234,6 +250,10 @@ velox::RowTypePtr Deserializer::buildProjectedType(
 FieldReaderParams Deserializer::createFieldReaderParams() const {
   FieldReaderParams params;
   params.flatMapFeatureSelector = flatMapFeatureSelector_;
+  params.hybridFlatMapValueStreamsPresent = [this](uint32_t inMapOffset) {
+    return inMapOffset < hybridFlatMapValueStreamsPresent_.size() &&
+        hybridFlatMapValueStreamsPresent_[inMapOffset];
+  };
   params.decodeExecutor = options_.decodeExecutor;
   params.maxDecodeParallelism = options_.maxDecodeParallelism;
   params.minStreamsPerDecodeTask = options_.minStreamsPerDecodeTask;
@@ -410,9 +430,15 @@ void Deserializer::initialize(
     deserializers_[offset] = decoder.get();
   }
 
-  if (!inMapChildTypes_.empty()) {
+  if (shouldTrackMapValueStreams()) {
     streamPresentFlags_.resize(maxOffset + 1, false);
-    valueOffsetToInMap_.resize(maxOffset + 1, kInvalidInMapOffset);
+    if (!inMapValueTypes_.empty()) {
+      valueOffsetToInMap_.resize(maxOffset + 1, kInvalidInMapOffset);
+    }
+    if (!hybridFlatMapGroupValueTypes_.empty()) {
+      hybridValueOffsetToInMap_.resize(maxOffset + 1, kInvalidInMapOffset);
+      hybridFlatMapValueStreamsPresent_.resize(maxOffset + 1, false);
+    }
     // Populate the reverse-lookup table: for each top-level FlatMap child,
     // record its inMap stream offset at every one of its presence-stream
     // anchors. The per-batch in-map inference reads this to map a present
@@ -430,25 +456,38 @@ void Deserializer::initialize(
     // writer ever made Row children conditionally absent, the in-map
     // inference below would over-attribute presence to keys whose first
     // child was absent but a sibling was present.
-    for (const auto& [inMapOffset, childType] : inMapChildTypes_) {
-      visitPresenceStreamOffsets(
-          *childType,
-          [this, _inMapOffset = inMapOffset](offset_size presenceOffset) {
-            // This lookup is only indexed by presentStreamOffsets_, which is
-            // populated from decoded streams and therefore bounded by
-            // deserializerMap_. visitPresenceStreamOffsets() walks schema
-            // anchors too, including projected-away streams with no decoder.
-            if (presenceOffset >= valueOffsetToInMap_.size()) {
-              return false;
-            }
-            valueOffsetToInMap_[presenceOffset] = _inMapOffset;
-            return false;
-          });
+    for (const auto& [inMapOffset, childType] : inMapValueTypes_) {
+      visitPresenceStreamOffsets(*childType, [&](offset_size presenceOffset) {
+        // This lookup is only indexed by presentStreamOffsets_, which is
+        // populated from decoded streams and therefore bounded by
+        // deserializerMap_. visitPresenceStreamOffsets() also visits
+        // projected-away schema streams.
+        if (presenceOffset < valueOffsetToInMap_.size()) {
+          valueOffsetToInMap_[presenceOffset] = inMapOffset;
+        }
+        return false;
+      });
+    }
+    // Map each Hybrid FlatMap value-subtree stream back to its group, mirroring
+    // the FlatMap child lookup above. Hybrid tracks group-level presence
+    // because its in-map bitmap carries row cardinality and cannot be
+    // synthesized here.
+    for (const auto& [inMapOffset, valueType] : hybridFlatMapGroupValueTypes_) {
+      visitPresenceStreamOffsets(*valueType, [&](offset_size presenceOffset) {
+        if (presenceOffset < hybridValueOffsetToInMap_.size()) {
+          hybridValueOffsetToInMap_[presenceOffset] = inMapOffset;
+        }
+        return false;
+      });
     }
   }
 }
 
 Deserializer::~Deserializer() = default;
+
+bool Deserializer::shouldTrackMapValueStreams() const {
+  return !inMapValueTypes_.empty() || !hybridFlatMapGroupValueTypes_.empty();
+}
 
 void Deserializer::createDeserializersForType(
     const Type& type,
@@ -468,6 +507,47 @@ void Deserializer::createDeserializersForType(
         inserted,
         "Duplicate stream offset in deserializer schema: {}.",
         streamOffset);
+  }
+  // A timestamp keeps its sub-microsecond nanoseconds in a stream of its own,
+  // next to the microseconds of its main stream. Their values are narrower than
+  // the microseconds, so the stream is decoded as a scalar stream.
+  if (type.isTimestampMicroNano()) {
+    const ScalarType nanosType{type.asTimestampMicroNano().nanosDescriptor()};
+    const auto nanosOffset = nanosType.scalarDescriptor().offset();
+    if (shouldDecodeStream(nanosOffset)) {
+      const bool inserted = deserializerMap_
+                                .emplace(
+                                    nanosOffset,
+                                    std::make_unique<BatchedStreamDecoder>(
+                                        nanosType,
+                                        /*isInMapStream=*/false,
+                                        options_.bufferPoolCapacity,
+                                        pool_))
+                                .second;
+      NIMBLE_CHECK(
+          inserted,
+          "Duplicate stream offset in deserializer schema: {}.",
+          nanosOffset);
+    }
+  }
+  if (const auto lengthsOffset = getDedupLengthsOffset(type)) {
+    // Both the offsets and the lengths streams hold 32-bit values, which the
+    // decoder of the type reads.
+    if (shouldDecodeStream(*lengthsOffset)) {
+      const bool inserted = deserializerMap_
+                                .emplace(
+                                    *lengthsOffset,
+                                    std::make_unique<BatchedStreamDecoder>(
+                                        type,
+                                        /*isInMapStream=*/false,
+                                        options_.bufferPoolCapacity,
+                                        pool_))
+                                .second;
+      NIMBLE_CHECK(
+          inserted,
+          "Duplicate stream offset in deserializer schema: {}.",
+          *lengthsOffset);
+    }
   }
   // FlatMap is only supported at depth 1 (top-level columns). Register each
   // child in-map stream so it is decoded like other physical streams.
@@ -493,7 +573,7 @@ void Deserializer::createDeserializersForType(
           inserted,
           "Duplicate stream offset in deserializer schema: {}.",
           inMapOffset);
-      inMapChildTypes_[inMapOffset] = flatMap.childAt(i).get();
+      inMapValueTypes_[inMapOffset] = flatMap.childAt(i).get();
     }
   }
 
@@ -548,6 +628,14 @@ void Deserializer::createDeserializersForType(
           insertedInMap,
           "Duplicate hybrid FlatMap stream offset {}.",
           inMapOffset);
+      const bool insertedValueType =
+          hybridFlatMapGroupValueTypes_
+              .emplace(inMapOffset, group.valueType.get())
+              .second;
+      NIMBLE_CHECK(
+          insertedValueType,
+          "Duplicate hybrid FlatMap stream offset {}.",
+          inMapOffset);
     }
   }
 }
@@ -578,7 +666,7 @@ void Deserializer::deserialize(
 void Deserializer::appendToOutput(
     velox::VectorPtr&& decoded,
     velox::VectorPtr& output) const {
-  if (FOLLY_LIKELY(output == nullptr)) {
+  if (output == nullptr) [[likely]] {
     output = std::move(decoded);
     return;
   }
@@ -634,7 +722,7 @@ velox::VectorPtr Deserializer::projectOutput(
 }
 
 void Deserializer::decodeRun(DecodeRun& run, velox::VectorPtr& output) const {
-  if (FOLLY_UNLIKELY(run.batches == 0)) {
+  if (run.batches == 0) [[unlikely]] {
     return;
   }
   const auto ops = buildDecodeOps(runRanges_);
@@ -660,19 +748,23 @@ void Deserializer::appendStreamSegments(
   const auto maxStreamOffset = deserializers_.size() - 1;
   const auto streamEncodingUsesVarintRowCount =
       parser_->streamEncodingUsesVarintRowCount();
-  const bool hasInMapChildren = !inMapChildTypes_.empty();
-  if (hasInMapChildren) {
+  const bool trackMapValueStreams = shouldTrackMapValueStreams();
+  if (trackMapValueStreams) {
     std::fill(streamPresentFlags_.begin(), streamPresentFlags_.end(), false);
     presentStreamOffsets_.clear();
+    std::fill(
+        hybridFlatMapValueStreamsPresent_.begin(),
+        hybridFlatMapValueStreamsPresent_.end(),
+        false);
   }
   parser_->iterateStreams([&](uint32_t offset, std::string_view streamData) {
-    if (FOLLY_UNLIKELY(offset > maxStreamOffset)) {
+    if (offset > maxStreamOffset) [[unlikely]] {
       return;
     }
-    if (FOLLY_UNLIKELY(!shouldDecodeStream(offset))) {
+    if (!shouldDecodeStream(offset)) [[unlikely]] {
       return;
     }
-    if (hasInMapChildren) {
+    if (trackMapValueStreams) {
       if (!streamPresentFlags_[offset]) {
         streamPresentFlags_[offset] = true;
         presentStreamOffsets_.emplace_back(offset);
@@ -687,12 +779,22 @@ void Deserializer::appendStreamSegments(
         streamEncodingUsesVarintRowCount);
   });
 
-  if (!hasInMapChildren) {
+  if (!trackMapValueStreams) {
     return;
   }
   const auto presentStreamCount = presentStreamOffsets_.size();
   for (size_t i = 0; i < presentStreamCount; ++i) {
-    const auto inMapOffset = valueOffsetToInMap_[presentStreamOffsets_[i]];
+    const auto valueOffset = presentStreamOffsets_[i];
+    if (!hybridValueOffsetToInMap_.empty()) {
+      const auto hybridInMapOffset = hybridValueOffsetToInMap_[valueOffset];
+      if (hybridInMapOffset != kInvalidInMapOffset) {
+        hybridFlatMapValueStreamsPresent_[hybridInMapOffset] = true;
+      }
+    }
+    if (valueOffsetToInMap_.empty()) {
+      continue;
+    }
+    const auto inMapOffset = valueOffsetToInMap_[valueOffset];
     if (inMapOffset == kInvalidInMapOffset ||
         streamPresentFlags_[inMapOffset]) {
       continue;
@@ -716,7 +818,7 @@ uint32_t Deserializer::appendBatch(
     velox::VectorPtr& output) const {
   const auto rowCount = parser_->initialize(batch);
   const auto requiredBarrier = parser_->requiredBarrier();
-  if (FOLLY_UNLIKELY(requiredBarrier)) {
+  if (requiredBarrier) [[unlikely]] {
     decodeRun(run, output);
   }
 
@@ -762,7 +864,7 @@ uint32_t Deserializer::appendBatch(
   }
   run.rows += rowCount;
   ++run.batches;
-  if (FOLLY_UNLIKELY(requiredBarrier)) {
+  if (requiredBarrier) [[unlikely]] {
     decodeRun(run, output);
     parser_->reset();
   }

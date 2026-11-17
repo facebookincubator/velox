@@ -82,6 +82,7 @@ OperatorCtx::createConnectorQueryCtx(
               driverCtx_->queryConfig().adjustTimestampToTimezone())
           .cancellationToken(task->getCancellationToken())
           .tokenProvider(task->queryCtx()->fsTokenProvider())
+          .customPools(customPools_)
           .build();
   connectorQueryCtx->setSelectiveNimbleReaderEnabled(
       driverCtx_->queryConfig().selectiveNimbleReaderEnabled());
@@ -138,7 +139,7 @@ void Operator::maybeSetTracer() {
 }
 
 bool Operator::traceInput(const RowVectorPtr& input, ContinueFuture* future) {
-  if (FOLLY_UNLIKELY(inputTracer_ != nullptr)) {
+  if (inputTracer_ != nullptr) [[unlikely]] {
     return inputTracer_->write(input, future);
   }
   return false;
@@ -266,12 +267,12 @@ int32_t OperatorCtx::numPeers() const {
   return numDrivers - 1;
 }
 
-bool OperatorCtx::allPeersFinished(
+bool OperatorCtx::allPeersArrived(
     ContinueFuture* future,
     std::vector<ContinuePromise>& promises,
     std::vector<std::shared_ptr<Operator>>& peerOperators) const {
   std::vector<std::shared_ptr<Driver>> peerDrivers;
-  if (!driverCtx_->task->allPeersFinished(
+  if (!driverCtx_->task->allPeersArrived(
           planNodeId_, driverCtx_->driver, future, promises, peerDrivers)) {
     return false;
   }
@@ -388,11 +389,8 @@ void Operator::loadLazyReclaimable(RowVectorPtr& vector) {
 }
 
 void Operator::recordBlockingTime(uint64_t start, BlockingReason reason) {
-  uint64_t now =
-      std::chrono::duration_cast<std::chrono::microseconds>(
-          std::chrono::high_resolution_clock::now().time_since_epoch())
-          .count();
-  const auto wallNanos = (now - start) * 1000;
+  const auto wallNanos =
+      (SteadyTime::now<std::chrono::microseconds>() - start) * 1000;
   const auto blockReason = BlockingReasonName::toName(reason).substr(1);
 
   auto lockedStats = stats_.wlock();
@@ -711,7 +709,7 @@ std::unique_ptr<memory::MemoryReclaimer> Operator::MemoryReclaimer::create(
 
 void Operator::MemoryReclaimer::enterArbitration() {
   DriverThreadContext* driverThreadCtx = driverThreadContext();
-  if (FOLLY_UNLIKELY(driverThreadCtx == nullptr)) {
+  if (driverThreadCtx == nullptr) [[unlikely]] {
     // Skips the driver suspension handling if this memory arbitration request
     // is not issued from a driver thread. For example, async streaming shuffle
     // and table scan prefetch execution path might initiate memory arbitration
@@ -744,7 +742,7 @@ void Operator::MemoryReclaimer::enterArbitration() {
 
 void Operator::MemoryReclaimer::leaveArbitration() noexcept {
   DriverThreadContext* driverThreadCtx = driverThreadContext();
-  if (FOLLY_UNLIKELY(driverThreadCtx == nullptr)) {
+  if (driverThreadCtx == nullptr) [[unlikely]] {
     // Skips the driver suspension handling if this memory arbitration request
     // is not issued from a driver thread.
     return;
@@ -766,7 +764,7 @@ bool Operator::MemoryReclaimer::reclaimableBytes(
     uint64_t& reclaimableBytes) const {
   reclaimableBytes = 0;
   std::shared_ptr<Driver> driver = ensureDriver();
-  if (FOLLY_UNLIKELY(driver == nullptr)) {
+  if (driver == nullptr) [[unlikely]] {
     return false;
   }
   VELOX_CHECK_EQ(pool.name(), op_->pool()->name());
@@ -779,7 +777,7 @@ uint64_t Operator::MemoryReclaimer::reclaim(
     uint64_t /*unused*/,
     memory::MemoryReclaimer::Stats& stats) {
   std::shared_ptr<Driver> driver = ensureDriver();
-  if (FOLLY_UNLIKELY(driver == nullptr)) {
+  if (driver == nullptr) [[unlikely]] {
     return 0;
   }
   if (!op_->canReclaim()) {

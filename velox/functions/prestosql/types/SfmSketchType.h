@@ -23,6 +23,8 @@ class SfmSketchType final : public VarbinaryType {
   SfmSketchType() = default;
 
  public:
+  static std::shared_ptr<const SfmSketchType> create() = delete;
+
   static std::shared_ptr<const SfmSketchType> get() {
     VELOX_CONSTEXPR_SINGLETON SfmSketchType kInstance;
     return {std::shared_ptr<const SfmSketchType>{}, &kInstance};
