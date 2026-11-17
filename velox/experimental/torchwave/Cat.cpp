@@ -663,6 +663,7 @@ void concatSpecialForm(
   }
 
   auto& op = *ctx->generatingOp();
+  const bool parallelFill = concatFillsInParallel(node, types);
 
   bool needsViewFixup = false;
   // int64_t: the accumulator sums the operands' join-axis extents, which for a
@@ -703,9 +704,27 @@ void concatSpecialForm(
     // so the offsets of any that remain stay right.
     const bool copiedByOwnOp =
         ctx->concatOperandIsCopied(node, static_cast<int32_t>(i));
-    if (copiedByOwnOp) {
+    // An operand the allocation group carves was written into its band by its
+    // own launch before this kernel runs. For a concat of more than two
+    // operands the group pass applies placement's carve or fails the build, so
+    // there is no fallback to copy for. A narrower concat forms no group, and
+    // the copy below finds its source already in place only by chance.
+    const auto* carve = ctx->concatCarve(node, static_cast<int32_t>(i));
+    const bool carved = parallelFill && carve != nullptr && carve->groupCarves;
+    if (copiedByOwnOp || carved) {
       // Nothing to emit.
     } else if (isCopyInput) {
+      TORCH_CHECK(
+          !parallelFill,
+          node->target(),
+          " of ",
+          elements.size(),
+          " operands would copy operand ",
+          i,
+          " (%",
+          elem->id(),
+          ") in its own kernel. Placement gives every operand of a concat "
+          "this wide a band of its own or a copy op of its own.");
       // A view element (e.g. slice(cumsum(...)) in an exclusive-prefix
       // cat([zeros, cumsum[:-1]])) is metadata-only, but its producer chain
       // holds interior fused compute that must still run -- otherwise the copy
