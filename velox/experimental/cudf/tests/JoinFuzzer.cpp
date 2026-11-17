@@ -97,7 +97,23 @@ int main(int argc, char** argv) {
     serializer::spark::UnsafeRowVectorSerde::registerNamedVectorSerde();
   }
 
-  exec::joinFuzzer(initialSeed, std::move(referenceQueryRunner));
+  // Fail if every hash join fell back to CPU.
+  bool ranGpuHashJoin = false;
+  exec::joinFuzzer(
+      initialSeed,
+      std::move(referenceQueryRunner),
+      [&](const exec::TaskStats& stats) {
+        bool ranBuild = false;
+        bool ranProbe = false;
+        for (const auto& pipeline : stats.pipelineStats) {
+          for (const auto& op : pipeline.operatorStats) {
+            ranBuild |= op.operatorType == "CudfHashJoinBuild";
+            ranProbe |= op.operatorType == "CudfHashJoinProbe";
+          }
+        }
+        ranGpuHashJoin |= ranBuild && ranProbe;
+      });
+  VELOX_CHECK(ranGpuHashJoin, "No hash join ran on GPU");
 
   cudf_velox::unregisterCudf();
 }
