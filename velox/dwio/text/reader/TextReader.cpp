@@ -866,7 +866,6 @@ T TextRowReader::getFloatingPoint(
   if (negative || literal.front() == '+') {
     literal.remove_prefix(1);
   }
-  // Use a canonical quiet NaN regardless of the input sign.
   if (literal == "NaN") {
     return std::numeric_limits<T>::quiet_NaN();
   }

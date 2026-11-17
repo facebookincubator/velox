@@ -184,7 +184,7 @@ class TextRowReader : public dwio::common::RowReader {
 
   static bool getBoolean(TextRowReader& th, bool& isNull, DelimType& delim);
 
-  // Parse at the file column's precision before any widening conversion.
+  // Parses one field as T and sets isNull for malformed input.
   template <typename T>
   static T getFloatingPoint(TextRowReader& th, bool& isNull, DelimType& delim);
 
