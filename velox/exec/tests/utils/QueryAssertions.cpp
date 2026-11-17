@@ -1030,18 +1030,6 @@ bool assertEqualResults(
   return assertEqualResults(results1, results2);
 }
 
-void assertEqualTypeAndNumRows(
-    const TypePtr& expectedType,
-    vector_size_t expectedNumRows,
-    const std::vector<RowVectorPtr>& actual) {
-  size_t actualNumRows = 0;
-  for (const auto& result : actual) {
-    EXPECT_EQ(*expectedType, *result->type());
-    actualNumRows += result->size();
-  }
-  EXPECT_EQ(expectedNumRows, actualNumRows);
-}
-
 bool containsFloatingPoint(const TypePtr& type) {
   if (type->isPrimitiveType()) {
     return type->isReal() || type->isDouble();
@@ -1384,35 +1372,37 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
     const CursorParameters& params,
     std::function<void(TaskCursor*)> addSplits,
     uint64_t maxWaitMicros) {
-  return readCursorAsync(
-      params,
+  auto cursor = TaskCursor::create(params);
+  // Declared after 'cursor' so that it is destroyed first, also on exception.
+  std::vector<RowVectorPtr> result;
+  readCursorAsync(
+      *cursor,
       [addSplitsVoid = std::move(addSplits)](TaskCursor* cursor) {
         addSplitsVoid(cursor);
         return ContinueFuture::makeEmpty();
       },
-      maxWaitMicros);
+      maxWaitMicros,
+      [&](const RowVectorPtr& vector) { result.push_back(vector); });
+  return {std::move(cursor), std::move(result)};
 }
 
-std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
-readCursorAsync(
-    const CursorParameters& params,
+void readCursorAsync(
+    TaskCursor& cursor,
     std::function<ContinueFuture(TaskCursor*)> addSplits,
-    uint64_t maxWaitMicros) {
-  auto cursor = TaskCursor::create(params);
-  // 'result' borrows memory from cursor so the life cycle must be shorter.
-  std::vector<RowVectorPtr> result;
-  auto* task = cursor->task().get();
-  cursor->start();
+    uint64_t maxWaitMicros,
+    const std::function<void(const RowVectorPtr&)>& onBatch) {
+  auto* task = cursor.task().get();
+  cursor.start();
   auto future = ContinueFuture::makeEmpty();
-  while (!cursor->noMoreSplits()) {
+  while (!cursor.noMoreSplits()) {
     if (future.valid()) {
       future.wait();
     }
-    future = addSplits(cursor.get());
-    while (cursor->moveNext()) {
-      auto vector = cursor->current();
+    future = addSplits(&cursor);
+    while (cursor.moveNext()) {
+      const auto& vector = cursor.current();
       vector->loadedVector();
-      result.push_back(std::move(vector));
+      onBatch(vector);
       testingMaybeTriggerAbort(task);
     }
   }
@@ -1433,7 +1423,6 @@ readCursorAsync(
           task->toString());
     }
   }
-  return {std::move(cursor), std::move(result)};
 }
 
 bool waitForTaskFinish(

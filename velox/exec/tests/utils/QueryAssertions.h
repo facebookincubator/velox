@@ -197,18 +197,15 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
         },
     uint64_t maxWaitMicros = 5'000'000);
 
-std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
-readCursorAsync(
-    const CursorParameters& params,
-    std::function<ContinueFuture(TaskCursor*)> addSplits =
-        [](TaskCursor* taskCursor) {
-          if (taskCursor->noMoreSplits()) {
-            return ContinueFuture::makeEmpty();
-          }
-          taskCursor->setNoMoreSplits();
-          return ContinueFuture::makeEmpty();
-        },
-    uint64_t maxWaitMicros = 5'000'000);
+/// Runs the query of 'cursor', passing each output batch to 'onBatch' as it
+/// arrives. The batches borrow memory from 'cursor', so any batch 'onBatch'
+/// keeps must be released before 'cursor' is destroyed, including when this
+/// function throws.
+void readCursorAsync(
+    TaskCursor& cursor,
+    std::function<ContinueFuture(TaskCursor*)> addSplits,
+    uint64_t maxWaitMicros,
+    const std::function<void(const RowVectorPtr&)>& onBatch);
 
 /// The Task can return results before the Driver is finished executing.
 /// Wait upto maxWaitMicros for the Task to finish as 'expectedState' before
@@ -335,12 +332,6 @@ bool assertEqualResults(
     const MaterializedRowMultiset& actualRows,
     const TypePtr& actualType,
     const std::string& message);
-
-/// Ensure both datasets have the same type and number of rows.
-void assertEqualTypeAndNumRows(
-    const TypePtr& expectedType,
-    vector_size_t expectedNumRows,
-    const std::vector<RowVectorPtr>& actual);
 
 /// Aggregates operator stats by operator type. If a task has more than one plan
 /// nodes having the same operator types, then their operator stats are merged
