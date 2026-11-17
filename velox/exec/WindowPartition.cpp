@@ -319,7 +319,6 @@ void WindowPartition::computeKRangeFrameBounds(
   window::KRangeFrameBound::compute(
       rows,
       isStartBound,
-      isPreceding,
       frameColumn,
       sortOrder,
       frameType,

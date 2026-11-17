@@ -358,7 +358,6 @@ void VectorWindowPartition::computeKRangeFrameBounds(
   KRangeFrameBound::compute(
       rows,
       isStartBound,
-      isPreceding,
       frameColumn,
       sortOrder,
       frameType,

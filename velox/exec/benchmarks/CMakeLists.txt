@@ -240,6 +240,19 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
+add_executable(velox_k_range_window_benchmark KRangeWindowBenchmark.cpp)
+
+target_link_libraries(
+  velox_k_range_window_benchmark
+  velox_aggregates
+  velox_exec
+  velox_exec_test_lib
+  velox_functions_prestosql
+  velox_vector_test_lib
+  velox_window
+  Folly::follybenchmark
+)
+
 add_executable(velox_mark_sorted_benchmark MarkSortedBenchmark.cpp)
 
 target_link_libraries(

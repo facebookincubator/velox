@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/Window.h"
+#include <folly/Random.h>
 #include <folly/system/HardwareConcurrency.h>
 #include <gmock/gmock.h>
 #include "velox/common/base/Exceptions.h"
@@ -35,6 +36,7 @@
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 #include <limits>
+#include <random>
 #include "velox/exec/WindowStatNames.h"
 
 using namespace facebook::velox::exec::test;
@@ -1883,6 +1885,193 @@ TEST_F(WindowTest, frameBoundOnOtherSide) {
   assertFrame(
       "RANGE BETWEEN minus_two PRECEDING AND minus_one FOLLOWING",
       {std::nullopt, 1, 3, 5, 7});
+}
+
+// Checks k RANGE frames against frames found by brute force.
+class KRangeFrameTest : public WindowTest {
+ protected:
+  enum class Bound { kPreceding, kCurrentRow, kFollowing };
+
+  struct Input {
+    std::vector<int32_t> partitions;
+    std::vector<std::optional<int64_t>> keys;
+    // True where the key is NaN. Only used with floating-point keys.
+    std::vector<bool> nanKeys;
+    // Per-row offsets of the start and end bounds.
+    std::vector<int64_t> startOffsets;
+    std::vector<int64_t> endOffsets;
+  };
+
+  // Makes 'size' rows in 3 partitions with keys in [0, 'numKeys'), 10% of them
+  // null and, if 'withNans', 5% NaN. With 600 rows and 40 keys, a key has
+  // about 5 peers. Offsets are in [-3, 6], so some bound values fall on the
+  // other side of the current row and the bound values are out of key order.
+  static Input
+  makeRandomInput(vector_size_t size, int32_t numKeys, bool withNans) {
+    std::mt19937 rng(1);
+    Input input;
+    for (auto i = 0; i < size; ++i) {
+      input.partitions.push_back(folly::Random::rand32(3, rng));
+      input.keys.push_back(
+          folly::Random::oneIn(10, rng)
+              ? std::nullopt
+              : std::optional<int64_t>(folly::Random::rand32(numKeys, rng)));
+      input.nanKeys.push_back(
+          withNans && input.keys.back().has_value() &&
+          folly::Random::oneIn(20, rng));
+      input.startOffsets.push_back(
+          static_cast<int64_t>(folly::Random::rand32(10, rng)) - 3);
+      input.endOffsets.push_back(
+          static_cast<int64_t>(folly::Random::rand32(10, rng)) - 3);
+    }
+    return input;
+  }
+
+  // Checks count() and sum() over k RANGE frames against brute force, for all
+  // frame shapes, sort orders, null orders and two output batch sizes. The
+  // keys have type 'keyType', and the frames refer to columns of bound values
+  // computed from the per-row offsets of 'input'.
+  void testFrames(const Input& input, const TypePtr& keyType) {
+    const auto size = static_cast<vector_size_t>(input.keys.size());
+    const auto keyTypeName = keyType->toString();
+    // Casts a BIGINT column to the key type, or to NaN where 'is_nan' is true.
+    const auto toKeyType = [&](const std::string& column) {
+      if (!keyType->isReal() && !keyType->isDouble()) {
+        return fmt::format("cast({} as {})", column, keyTypeName);
+      }
+      return fmt::format(
+          "if(is_nan, cast(nan() as {0}), cast({1} as {0}))",
+          keyTypeName,
+          column);
+    };
+    const std::vector<std::string> projections{
+        "c as c",
+        "p as p",
+        toKeyType("s") + " as s",
+        toKeyType("off0") + " as off0",
+        toKeyType("off1") + " as off1",
+    };
+
+    for (const auto& [start, end] : std::vector<std::pair<Bound, Bound>>{
+             {Bound::kPreceding, Bound::kPreceding},
+             {Bound::kPreceding, Bound::kCurrentRow},
+             {Bound::kPreceding, Bound::kFollowing},
+             {Bound::kCurrentRow, Bound::kFollowing},
+             {Bound::kFollowing, Bound::kFollowing}}) {
+      for (const bool ascending : {true, false}) {
+        // The bound value of 'row', null exactly when the key is.
+        const auto boundValue =
+            [&](Bound bound,
+                int64_t offset,
+                vector_size_t row) -> std::optional<int64_t> {
+          const auto& key = input.keys[row];
+          if (!key.has_value() || bound == Bound::kCurrentRow) {
+            return key;
+          }
+          return ascending == (bound == Bound::kPreceding) ? *key - offset
+                                                           : *key + offset;
+        };
+
+        std::vector<std::optional<int64_t>> startValues(size);
+        std::vector<std::optional<int64_t>> endValues(size);
+        for (auto i = 0; i < size; ++i) {
+          startValues[i] = boundValue(start, input.startOffsets[i], i);
+          endValues[i] = boundValue(end, input.endOffsets[i], i);
+        }
+
+        // Null and NaN keys frame their own peers. Any other row frames the
+        // rows whose keys fall between its bound values in sort order.
+        const auto inFrame = [&](vector_size_t row, vector_size_t other) {
+          const auto& key = input.keys[other];
+          if (!input.keys[row].has_value() || !key.has_value()) {
+            return !input.keys[row].has_value() && !key.has_value();
+          }
+          if (input.nanKeys[row] || input.nanKeys[other]) {
+            return input.nanKeys[row] && input.nanKeys[other];
+          }
+          return ascending
+              ? *startValues[row] <= *key && *key <= *endValues[row]
+              : *startValues[row] >= *key && *key >= *endValues[row];
+        };
+        std::vector<int64_t> expectedCounts(size);
+        std::vector<std::optional<int64_t>> expectedSums(size);
+        for (auto i = 0; i < size; ++i) {
+          for (auto j = 0; j < size; ++j) {
+            if (input.partitions[i] == input.partitions[j] && inFrame(i, j)) {
+              ++expectedCounts[i];
+              expectedSums[i] = expectedSums[i].value_or(0) + j;
+            }
+          }
+        }
+
+        auto data = makeRowVector(
+            {"c", "p", "s", "off0", "off1", "is_nan"},
+            {
+                makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+                makeFlatVector<int32_t>(input.partitions),
+                makeNullableFlatVector<int64_t>(input.keys),
+                makeNullableFlatVector<int64_t>(startValues),
+                makeNullableFlatVector<int64_t>(endValues),
+                makeFlatVector<bool>(
+                    size, [&](auto row) { return input.nanKeys[row]; }),
+            });
+        auto expected = makeRowVector({
+            data->childAt(0),
+            makeFlatVector<int64_t>(expectedCounts),
+            makeNullableFlatVector<int64_t>(expectedSums),
+        });
+
+        const auto frameBound = [](Bound bound, const std::string& column) {
+          switch (bound) {
+            case Bound::kPreceding:
+              return column + " preceding";
+            case Bound::kCurrentRow:
+              return std::string("current row");
+            case Bound::kFollowing:
+              return column + " following";
+          }
+          VELOX_UNREACHABLE();
+        };
+        for (const bool nullsFirst : {true, false}) {
+          const auto over = fmt::format(
+              "over (partition by p order by s {} nulls {} range between {} and {})",
+              ascending ? "asc" : "desc",
+              nullsFirst ? "first" : "last",
+              frameBound(start, "off0"),
+              frameBound(end, "off1"));
+          SCOPED_TRACE(fmt::format("{} {}", keyTypeName, over));
+
+          auto plan = PlanBuilder()
+                          .values(split(data, 7))
+                          .project(projections)
+                          .window({"count(c) " + over, "sum(c) " + over})
+                          .project({"c", "w0", "w1"})
+                          .planNode();
+          for (const auto* batchRows : {"1000", "7"}) {
+            SCOPED_TRACE(fmt::format("output batch rows: {}", batchRows));
+            AssertQueryBuilder(plan)
+                .config(core::QueryConfig::kPreferredOutputBatchRows, batchRows)
+                .config(core::QueryConfig::kMaxOutputBatchRows, batchRows)
+                .assertResults(expected);
+          }
+        }
+      }
+    }
+  }
+};
+
+// Bound columns with null keys, keys with several peers, and bound values on
+// either side of the current row and out of key order.
+TEST_F(KRangeFrameTest, boundColumns) {
+  testFrames(makeRandomInput(600, 40, false), BIGINT());
+}
+
+// Same as above with NaN keys, which sort after every other value.
+TEST_F(KRangeFrameTest, floatingPointBoundColumns) {
+  const auto input = makeRandomInput(600, 40, true);
+  for (const auto& keyType : std::vector<TypePtr>{REAL(), DOUBLE()}) {
+    testFrames(input, keyType);
+  }
 }
 
 DEBUG_ONLY_TEST_F(WindowTest, reserveMemorySort) {
