@@ -66,6 +66,10 @@ class CudfFromVelox : public CudfOperatorBase {
 
 class CudfToVelox : public CudfOperatorBase {
  public:
+  /// When true, each GPU batch is emitted as a single Velox batch, however
+  /// large. When false (default), output is sized like other operators'
+  /// output (preferred output batch bytes / max output batch rows), so CPU
+  /// operators downstream of a GPU pipeline receive bounded batches.
   static constexpr const char* kPassthroughMode =
       "velox.cudf.to_velox.passthrough_mode";
 
