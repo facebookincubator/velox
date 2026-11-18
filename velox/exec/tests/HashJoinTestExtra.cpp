@@ -34,6 +34,7 @@
 #include "velox/exec/tests/utils/HashJoinTestBase.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -2455,7 +2456,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, buildReservationReleaseCheck) {
     }
   };
   VELOX_ASSERT_THROW(runTask(), "");
-  ASSERT_TRUE(waitForTaskAborted(task, 5'000'000));
+  ASSERT_TRUE(TaskMonitor::waitForAbort(*task, 5'000'000));
 }
 
 TEST_P(HashJoinTest, dynamicFilterOnPartitionKey) {
@@ -3397,7 +3398,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashBuildAbortDuringOutputProcessing) {
                 "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
             .run(),
         "Manual MemoryPool Abortion");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -3475,7 +3476,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashBuildAbortDuringInputProcessing) {
             .run(),
         "Manual MemoryPool Abortion");
 
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -3554,7 +3555,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashBuildAbortDuringAllocation) {
             .run(),
         "Manual MemoryPool Abortion");
 
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -3627,7 +3628,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeAbortDuringInputProcessing) {
                 "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
             .run(),
         "Manual MemoryPool Abortion");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -4091,7 +4092,7 @@ TEST_P(HashJoinTest, reclaimFromJoinBuilderWithMultiDrivers) {
   // This test uses on-demand created memory manager instead of the global
   // one. We need to make sure any used memory got cleaned up before exiting
   // the scope
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   ASSERT_GT(arbitrator->stats().numRequests, 0);
   ASSERT_GT(arbitrator->stats().reclaimedUsedBytes, 0);
 }
@@ -4304,7 +4305,7 @@ DEBUG_ONLY_TEST_P(
   // This test uses on-demand created memory manager instead of the global
   // one. We need to make sure any used memory got cleaned up before exiting
   // the scope
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   ASSERT_EQ(
       memory::memoryManager()->arbitrator()->stats().numNonReclaimableAttempts,
       2);
@@ -4455,7 +4456,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, exceptionDuringFinishJoinBuild) {
   // This test uses on-demand created memory manager instead of the global
   // one. We need to make sure any used memory got cleaned up before exiting
   // the scope
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   ASSERT_EQ(arbitrator->stats().freeCapacityBytes, expectedFreeCapacityBytes);
 }
 
@@ -4571,7 +4572,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, arbitrationTriggeredDuringParallelJoinBuild) {
   // This test uses on-demand created memory manager instead of the global
   // one. We need to make sure any used memory got cleaned up before exiting
   // the scope
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_P(HashJoinTest, arbitrationTriggeredByEnsureJoinTableFit) {
@@ -4657,13 +4658,13 @@ DEBUG_ONLY_TEST_P(HashJoinTest, joinBuildSpillError) {
           .copyResults(pool()),
       injectedErrorMsg);
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   ASSERT_EQ(arbitrator->stats().numFailures, 1);
 
   // Wait again here as this test uses on-demand created memory manager instead
   // of the global one. We need to make sure any used memory got cleaned up
   // before exiting the scope
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_P(HashJoinTest, probeSpillOnWaitForPeers) {
@@ -4773,7 +4774,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, probeSpillOnWaitForPeers) {
     const auto* arbitrator = memory::memoryManager()->arbitrator();
     ASSERT_GT(arbitrator->stats().reclaimedUsedBytes, 0);
   }
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_P(HashJoinTest, taskWaitTimeout) {
@@ -4875,7 +4876,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, taskWaitTimeout) {
     // This test uses on-demand created memory manager instead of the global
     // one. We need to make sure any used memory got cleaned up before exiting
     // the scope
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -5607,7 +5608,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, spillOnBlockedProbe) {
     ASSERT_GT(buildSpillStats.spilledBytes, 0);
   }
   arbitrationThread.join();
-  waitForAllTasksToBeDeleted(30'000'000);
+  TaskMonitor::waitForAllTasksDeleted(30'000'000);
   Operator::unregisterAllOperators();
 }
 

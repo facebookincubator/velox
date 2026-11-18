@@ -36,6 +36,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/expression/Expr.h"
 #include "velox/vector/DecodedVector.h"
 
@@ -1476,7 +1477,7 @@ TEST_F(PaimonConnectorTest, taskCancellationAndLimit) {
     ASSERT_EQ(cursor->task()->state(), exec::TaskState::kCanceled);
     EXPECT_THROW(cursor->moveNext(), folly::OperationCancelled);
     cursor.reset();
-    exec::test::waitForAllTasksToBeDeleted();
+    exec::test::TaskMonitor::waitForAllTasksDeleted();
     const auto limitPlan =
         exec::test::PlanBuilder(
             plan, std::make_shared<core::PlanNodeIdGenerator>(1))
@@ -1484,7 +1485,7 @@ TEST_F(PaimonConnectorTest, taskCancellationAndLimit) {
             .planNode();
     exec::test::AssertQueryBuilder(limitPlan).split(split).assertTypeAndNumRows(
         input->type(), 1);
-    exec::test::waitForAllTasksToBeDeleted();
+    exec::test::TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -1826,7 +1827,7 @@ TEST_F(PaimonConnectorTest, requiresPaimonTableHandle) {
     VELOX_ASSERT_THROW(
         exec::test::AssertQueryBuilder(plan).split(split).copyResults(pool()),
         "Failed to cast from");
-    exec::test::waitForAllTasksToBeDeleted();
+    exec::test::TaskMonitor::waitForAllTasksDeleted();
   }
   EXPECT_EQ(fileSystem->openedFiles, 0);
 }
@@ -1870,7 +1871,7 @@ TEST_F(PaimonConnectorTest, rejectsPrimaryKeySplits) {
     VELOX_ASSERT_USER_THROW(
         exec::test::AssertQueryBuilder(plan).split(split).copyResults(pool()),
         "Paimon split table type does not match table handle");
-    exec::test::waitForAllTasksToBeDeleted();
+    exec::test::TaskMonitor::waitForAllTasksDeleted();
   }
   EXPECT_EQ(fileSystem->openedFiles, 0);
 }

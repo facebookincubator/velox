@@ -55,6 +55,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TableScanTestBase.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/functions/lib/IsNull.h"
 #include "velox/type/Timestamp.h"
@@ -1974,7 +1975,7 @@ TEST_F(TableScanTest, waitForSplit) {
         });
     assertResults(
         results, plan->outputType(), "SELECT * FROM tmp", duckDbQueryRunner_);
-    EXPECT_TRUE(waitForTaskCompletion(queryCursor->task().get()));
+    EXPECT_TRUE(TaskMonitor::waitForCompletion(*queryCursor->task()));
   });
 
   addSplitWait.await([&] { return !addSplitWaitFlag.load(); });
@@ -2127,8 +2128,8 @@ DEBUG_ONLY_TEST_F(TableScanTest, tableScanSplitsAndWeights) {
   while (cursor->moveNext()) {
     result.push_back(cursor->current());
   }
-  EXPECT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
-  EXPECT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+  EXPECT_TRUE(TaskMonitor::waitForCompletion(*leafTask)) << leafTask->taskId();
+  EXPECT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
 
   // Check task stats again.
   stats = task->taskStats();
@@ -4263,7 +4264,7 @@ TEST_F(TableScanTest, remainingFilterLazyWithMultiReferences) {
     }
   }
   ASSERT_EQ(i, vector->size());
-  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*cursor->task()));
 }
 
 TEST_F(TableScanTest, sharedNullBufferFromComplexResult) {
@@ -4303,7 +4304,7 @@ TEST_F(TableScanTest, sharedNullBufferFromComplexResult) {
       nullBufferHolder = result->childAt(0)->nulls();
     }
   }
-  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*cursor->task()));
 }
 
 // When the multi-referenced fields are in AND clauses without any other
@@ -4345,7 +4346,7 @@ TEST_F(
   c1Dict = c1Dict->valueVector()->asUnchecked<DictionaryVector<int64_t>>();
   ASSERT_EQ(c1Dict->valueVector()->size(), 2);
   ASSERT_FALSE(cursor->moveNext());
-  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*cursor->task()));
 }
 
 TEST_F(TableScanTest, remainingFilterSkippedStrides) {
@@ -4434,7 +4435,7 @@ TEST_F(TableScanTest, randomSample) {
     VELOX_CHECK_GT(result->size(), 0);
     numRows += result->size();
   }
-  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*cursor->task()));
   ASSERT_GT(getSkippedStridesStat(cursor->task()), 0);
   double expectedNumRows = 0.01 * numTotalRows;
   ASSERT_LT(abs(numRows - expectedNumRows) / expectedNumRows, 0.1);
@@ -6157,7 +6158,7 @@ TEST_F(TableScanTest, noCacheRetention) {
     AssertQueryBuilder(tableScanNode(), duckDbQueryRunner_)
         .split(std::move(split))
         .assertResults("SELECT * FROM tmp");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
 
     const auto asyncDataCacheHelper =
         cache::test::AsyncDataCacheTestHelper(asyncDataCache_.get());
@@ -6223,7 +6224,7 @@ DEBUG_ONLY_TEST_F(TableScanTest, cancellationToken) {
             .split(std::move(split))
             .assertResults("SELECT * FROM tmp"),
         folly::OperationCancelled);
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   });
 
   while (task == nullptr) {

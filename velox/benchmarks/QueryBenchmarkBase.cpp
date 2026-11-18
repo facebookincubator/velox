@@ -26,6 +26,7 @@
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
@@ -152,7 +153,7 @@ std::string RunStats::toString(bool detail) const {
 // static
 void QueryBenchmarkBase::ensureTaskCompletion(exec::Task* task) {
   // ASSERT_TRUE requires a function with return type void.
-  ASSERT_TRUE(exec::test::waitForTaskCompletion(task));
+  ASSERT_TRUE(exec::test::TaskMonitor::waitForCompletion(*task));
 }
 
 // static

@@ -22,6 +22,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 #include "folly/synchronization/EventCount.h"
 
@@ -1059,7 +1060,7 @@ TEST_F(MergeJoinTest, dictionaryOutput) {
       });
 
   task->start(2);
-  waitForTaskCompletion(task.get());
+  TaskMonitor::waitForCompletion(*task);
 
   for (const auto& child : output->children()) {
     EXPECT_TRUE(isDictionary(child->encoding()));
@@ -2368,7 +2369,7 @@ DEBUG_ONLY_TEST_F(MergeJoinTest, failureOnRightSide) {
           "SELECT t.c0, t.c1, u.c1 FROM t, u WHERE t.c0 = u.c0"),
       "Expected");
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(MergeJoinTest, barrier) {
@@ -2627,7 +2628,7 @@ TEST_F(MergeJoinTest, barrier) {
           (testData.hasBarrier || !testData.serialExecution) ? 2 : 1);
     }
   }
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(MergeJoinTest, antiJoinWithFilterWithMultiMatchedRows) {

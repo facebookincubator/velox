@@ -18,6 +18,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -109,7 +110,7 @@ TEST_F(LimitTest, limitOverLocalExchange) {
   // receiving that message.
 
   ASSERT_EQ(20, numRead);
-  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*cursor->task()));
 }
 
 TEST_F(LimitTest, partialLimitEagerFlush) {

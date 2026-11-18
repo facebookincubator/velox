@@ -19,6 +19,10 @@
 #include "velox/exec/Cursor.h"
 #include "velox/vector/ComplexVector.h"
 
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+#include "velox/exec/tests/utils/TaskMonitor.h"
+#endif
+
 #ifdef BLOCK_SIZE
 #undef BLOCK_SIZE
 #endif
@@ -134,41 +138,31 @@ void readCursorAsync(
     uint64_t maxWaitMicros,
     const std::function<void(const RowVectorPtr&)>& onBatch);
 
-/// The Task can return results before the Driver is finished executing.
-/// Wait upto maxWaitMicros for the Task to finish as 'expectedState' before
-/// returning to ensure it's stable e.g. the Driver isn't updating it anymore.
-/// Returns true if the task is completed before maxWaitMicros expires.
-bool waitForTaskFinish(
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+/// Legacy forms of TaskMonitor methods. Removed once Prestissimo migrates.
+inline bool waitForTaskCompletion(
     exec::Task* task,
-    TaskState expectedState,
-    uint64_t maxWaitMicros = 1'000'000);
+    uint64_t maxWaitMicros = TaskMonitor::kDefaultMaxWaitMicros) {
+  return TaskMonitor::waitForCompletion(*task, maxWaitMicros);
+}
 
-/// Similar to waitForTaskFinish but wait for the task to succeed.
-bool waitForTaskCompletion(
+inline bool waitForTaskFailure(
     exec::Task* task,
-    uint64_t maxWaitMicros = 1'000'000);
+    uint64_t maxWaitMicros = TaskMonitor::kDefaultMaxWaitMicros) {
+  return TaskMonitor::waitForFailure(*task, maxWaitMicros);
+}
 
-/// Similar to waitForTaskFinish but wait for the task to fail.
-bool waitForTaskFailure(exec::Task* task, uint64_t maxWaitMicros = 1'000'000);
-
-/// Similar to waitForTaskFinish but wait for the task to abort.
-bool waitForTaskAborted(exec::Task* task, uint64_t maxWaitMicros = 1'000'000);
-
-/// Similar to waitForTaskFinish but wait for the task to cancel.
-bool waitForTaskCancelled(exec::Task* task, uint64_t maxWaitMicros = 1'000'000);
-
-/// Wait up to maxWaitMicros for 'task' state changes to 'state'. The function
-/// returns true if 'task' has changed to the expected 'state', otherwise false.
-bool waitForTaskStateChange(
+inline bool waitForTaskStateChange(
     exec::Task* task,
     TaskState state,
-    uint64_t maxWaitMicros = 1'000'000);
+    uint64_t maxWaitMicros = TaskMonitor::kDefaultMaxWaitMicros) {
+  return TaskMonitor::waitForStateChange(*task, state, maxWaitMicros);
+}
 
-/// Invoked to wait for all the tasks created by the test to be deleted.
-///
-/// NOTE: it is assumed that there is no more task to be created after or
-/// during this wait call. This is for testing purpose for now.
-void waitForAllTasksToBeDeleted(uint64_t maxWaitUs = 3'000'000);
+inline void waitForAllTasksToBeDeleted(uint64_t maxWaitUs = 3'000'000) {
+  TaskMonitor::waitForAllTasksDeleted(maxWaitUs);
+}
+#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
 
 void assertResults(
     const std::vector<RowVectorPtr>& results,
@@ -183,7 +177,7 @@ void assertResultsOrdered(
     DuckDbQueryRunner& duckDbQueryRunner,
     const std::vector<uint32_t>& sortingKeys);
 
-velox::variant readSingleValue(
+velox::Variant readSingleValue(
     const core::PlanNodePtr& plan,
     int32_t maxDrivers = 1);
 

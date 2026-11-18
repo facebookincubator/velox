@@ -40,6 +40,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 namespace velox::exec::test {
 using namespace facebook::velox::common::testutil;
@@ -3205,7 +3206,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromTableWriter) {
             arbitrator->stats().numNonReclaimableAttempts,
             numPrevNonReclaimableAttempts);
       }
-      waitForAllTasksToBeDeleted(3'000'000);
+      TaskMonitor::waitForAllTasksDeleted(3'000'000);
     }
   }
 }
@@ -3316,7 +3317,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
           arbitrator->stats().numNonReclaimableAttempts,
           numPrevNonReclaimableAttempts);
 
-      waitForAllTasksToBeDeleted(3'000'000);
+      TaskMonitor::waitForAllTasksDeleted(3'000'000);
       const auto updatedSpillStats = globalSpillStats();
       if (writerSpillEnabled) {
         ASSERT_GT(updatedSpillStats.spilledBytes, spillStats.spilledBytes);
@@ -3441,7 +3442,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, writerFlushThreshold) {
         arbitrator->stats().numNonReclaimableAttempts,
         numPrevNonReclaimableAttempts);
     ASSERT_GE(arbitrator->stats().reclaimedUsedBytes, testParam.bytesToReserve);
-    waitForAllTasksToBeDeleted(3'000'000);
+    TaskMonitor::waitForAllTasksDeleted(3'000'000);
     queryCtx.reset();
   }
 }
@@ -3535,7 +3536,7 @@ DEBUG_ONLY_TEST_F(
   ASSERT_EQ(
       arbitrator->stats().numNonReclaimableAttempts,
       numPrevNonReclaimableAttempts + 1);
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(
@@ -3640,7 +3641,7 @@ DEBUG_ONLY_TEST_F(
       numPrevArbitrationFailures);
   ASSERT_EQ(arbitrator->stats().numFailures, numPrevNonReclaimableAttempts);
   ASSERT_GT(arbitrator->stats().reclaimedUsedBytes, numPrevReclaimedBytes);
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(
@@ -3751,7 +3752,7 @@ DEBUG_ONLY_TEST_F(
       numPrevNonReclaimableAttempts + 1);
   const auto updatedSpillStats = globalSpillStats();
   ASSERT_EQ(updatedSpillStats, spillStats);
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableFileWriteError) {
@@ -3829,7 +3830,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableFileWriteError) {
           .copyResults(pool()),
       "inject writer error");
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteSpillUseMoreMemory) {
@@ -3921,7 +3922,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteSpillUseMoreMemory) {
           .copyResults(pool()),
       "");
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteReclaimOnClose) {
@@ -4028,7 +4029,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteReclaimOnClose) {
       .plan(std::move(writerPlan))
       .assertResults(fmt::format("SELECT {}", numRows));
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(
@@ -4084,6 +4085,6 @@ DEBUG_ONLY_TEST_F(
   memory::testingRunArbitration();
 
   queryThread.join();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 } // namespace velox::exec::test

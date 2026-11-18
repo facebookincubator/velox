@@ -21,6 +21,7 @@
 #include "velox/duckdb/conversion/DuckConversion.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/type/Type.h"
 #include "velox/vector/VariantToVector.h"
 #include "velox/vector/VectorTypeUtils.h"
@@ -1384,7 +1385,7 @@ void readCursorAsync(
     }
   }
 
-  if (!waitForTaskCompletion(task, maxWaitMicros)) {
+  if (!TaskMonitor::waitForCompletion(*task, maxWaitMicros)) {
     // NOTE: there is async memory arbitration might fail the task after all the
     // results have been consumed and before the task finishes. So we might run
     // into the failed task state in some rare case such as exposed by
@@ -1400,74 +1401,6 @@ void readCursorAsync(
           task->toString());
     }
   }
-}
-
-bool waitForTaskFinish(
-    exec::Task* task,
-    TaskState expectedState,
-    uint64_t maxWaitMicros) {
-  // Wait for task to transition to finished state.
-  if (!waitForTaskStateChange(task, expectedState, maxWaitMicros)) {
-    return false;
-  }
-  return waitForTaskDriversToFinish(task, maxWaitMicros);
-}
-
-bool waitForTaskCompletion(exec::Task* task, uint64_t maxWaitMicros) {
-  return waitForTaskFinish(task, TaskState::kFinished, maxWaitMicros);
-}
-
-bool waitForTaskFailure(exec::Task* task, uint64_t maxWaitMicros) {
-  return waitForTaskFinish(task, TaskState::kFailed, maxWaitMicros);
-}
-
-bool waitForTaskAborted(exec::Task* task, uint64_t maxWaitMicros) {
-  return waitForTaskFinish(task, TaskState::kAborted, maxWaitMicros);
-}
-
-bool waitForTaskCancelled(exec::Task* task, uint64_t maxWaitMicros) {
-  return waitForTaskFinish(task, TaskState::kCanceled, maxWaitMicros);
-}
-
-bool waitForTaskStateChange(
-    exec::Task* task,
-    TaskState state,
-    uint64_t maxWaitMicros) {
-  // Wait for task to transition to finished state.
-  if (task->state() != state) {
-    auto& executor = folly::QueuedImmediateExecutor::instance();
-    auto future = task->taskCompletionFuture()
-                      .within(std::chrono::microseconds(maxWaitMicros))
-                      .via(&executor);
-    future.wait();
-  }
-
-  return task->state() == state;
-}
-
-void waitForAllTasksToBeDeleted(uint64_t maxWaitUs) {
-  uint64_t waitUs = 0;
-  while (Task::numRunningTasks() != 0) {
-    constexpr uint64_t kWaitInternalUs = 50'000;
-    std::this_thread::sleep_for(std::chrono::microseconds(kWaitInternalUs));
-    waitUs += kWaitInternalUs;
-    if (waitUs >= maxWaitUs) {
-      break;
-    }
-  }
-  std::vector<std::shared_ptr<Task>> pendingTasks = Task::getRunningTasks();
-  if (pendingTasks.empty()) {
-    return;
-  }
-  std::vector<std::string> pendingTaskStats;
-  pendingTaskStats.reserve(pendingTasks.size());
-  for (const auto& task : pendingTasks) {
-    pendingTaskStats.push_back(task->toString());
-  }
-  VELOX_FAIL(
-      "{} pending tasks\n{}",
-      pendingTasks.size(),
-      folly::join("\n", pendingTaskStats));
 }
 
 variant readSingleValue(const core::PlanNodePtr& plan, int32_t maxDrivers) {
