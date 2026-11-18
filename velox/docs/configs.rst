@@ -197,6 +197,13 @@ Generic Configuration
      - bool
      - false
      - Whether hash probe can generate dynamic filter for string types and push down to upstream operators.
+   * - dynamic_filter_pushdown_through_non_deterministic_enabled
+     - bool
+     - true
+     - Whether dynamic filters can be pushed through a FilterProject or ParallelProject that evaluates a
+       non-deterministic expression. Set to false when a non-deterministic function depends on the row's position in
+       its input, e.g. Spark's rand(seed) and monotonically_increasing_id(): removing rows below it changes its
+       results for the rows that remain.
    * - hash_probe_bloom_filter_pushdown_max_size
      - integer
      - 0

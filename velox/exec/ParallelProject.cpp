@@ -100,6 +100,19 @@ void ParallelProject::initialize() {
     }
   }
 
+  if (!operatorCtx_->driverCtx()
+           ->queryConfig()
+           .dynamicFilterPushdownThroughNonDeterministicEnabled()) {
+    for (const auto& work : work_) {
+      if (work.exprSet == nullptr) {
+        continue;
+      }
+      for (const auto& expr : work.exprSet->exprs()) {
+        canPushDynamicFilterThrough_ &= expr->isDeterministic();
+      }
+    }
+  }
+
   int32_t outputIdx = node_->exprNames().size();
   auto sourceType = node_->sources()[0]->outputType();
   for (auto& name : node_->noLoadIdentities()) {

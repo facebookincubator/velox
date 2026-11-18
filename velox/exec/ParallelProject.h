@@ -51,6 +51,10 @@ class ParallelProject : public Operator {
 
   bool isFinished() override;
 
+  bool canPushDynamicFilterThrough() const override {
+    return canPushDynamicFilterThrough_;
+  }
+
   void close() override {
     Operator::close();
     for (auto& work : work_) {
@@ -93,6 +97,12 @@ class ParallelProject : public Operator {
   bool initialized_{false};
 
   std::vector<WorkUnit> work_;
+
+  // False if a projection is non-deterministic and
+  // dynamic_filter_pushdown_through_non_deterministic_enabled is false. Set in
+  // initialize().
+  bool canPushDynamicFilterThrough_{true};
+
   SelectivityVector allRows_;
   int32_t numProcessedInputRows_{0};
 };

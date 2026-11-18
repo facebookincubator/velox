@@ -970,6 +970,20 @@ class QueryConfig {
       false,
       "Enable dynamic filter pushdown for string types from hash probe.")
 
+  /// Whether dynamic filters can be pushed through a FilterProject or
+  /// ParallelProject that evaluates a non-deterministic expression. Removing
+  /// rows below such an expression changes its results for the rows that
+  /// remain when the expression depends on the row's position in its input,
+  /// e.g. Spark's rand(seed) and monotonically_increasing_id(). Engines with
+  /// such functions should set this to false.
+  VELOX_QUERY_CONFIG(
+      kDynamicFilterPushdownThroughNonDeterministicEnabled,
+      dynamicFilterPushdownThroughNonDeterministicEnabled,
+      "dynamic_filter_pushdown_through_non_deterministic_enabled",
+      bool,
+      true,
+      "Enable dynamic filter pushdown through non-deterministic expressions.")
+
   /// The maximum byte size of Bloom filter from hash probe. 0 = disabled.
   VELOX_QUERY_CONFIG(
       kHashProbeBloomFilterPushdownMaxSize,

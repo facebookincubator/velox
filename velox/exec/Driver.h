@@ -465,14 +465,16 @@ class Driver : public std::enable_shared_from_this<Driver> {
   bool mayPushdownAggregation(Operator* aggregation) const;
 
   /// Returns a subset of channels for which there are operators upstream from
-  /// filterSource that accept dynamically generated filters.
+  /// filterSource that accept dynamically generated filters. See
+  /// findDynamicFilterTarget() for which operator receives each filter.
   std::unordered_set<column_index_t> canPushdownFilters(
       const Operator* filterSource,
       const std::vector<column_index_t>& channels) const;
 
   /// Try to add new dynamic filters from `filterSource' to its upstream
   /// operator which accept dynamic filters.  `channels' are the inputs for
-  /// `filterSource'.
+  /// `filterSource'. See findDynamicFilterTarget() for which operator receives
+  /// each filter.
   ///
   /// `makeFilter' is called with a position in `channels' and a lock held on
   /// the node of `filterSource' in `pushdownFilters_'. It returns the filter
@@ -642,6 +644,15 @@ class Driver : public std::enable_shared_from_this<Driver> {
   /// Records operator blocked time ins case the driver was off the thrread and
   /// blocked when terminated.
   void updateOperatorBlockingStats();
+
+  // Walks upstream from the operator at 'filterSourceIndex' along identity
+  // projections of 'channel'. Returns the index of the operator that accepts a
+  // dynamic filter on that column and the column's channel in its output, or
+  // std::nullopt if there is none or the walk reaches an operator that dynamic
+  // filters must not be pushed through.
+  std::optional<std::pair<int, column_index_t>> findDynamicFilterTarget(
+      int filterSourceIndex,
+      column_index_t channel) const;
 
   // Defines the driver barrier processing state.
   struct BarrierState {

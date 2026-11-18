@@ -189,6 +189,21 @@ columns support filter pushdown (e.g. which columns come unmodified from an
 operator which accepts dynamic filters) and generates filters only for such
 columns.
 
+Some engines have non-deterministic functions whose result depends on the
+row's position in their input, e.g. Spark's rand(seed) and
+monotonically_increasing_id(). Removing rows below such a function changes its
+results for the rows that remain. When
+``dynamic_filter_pushdown_through_non_deterministic_enabled`` is false, dynamic
+filters are not pushed through a FilterProject or ParallelProject that
+evaluates a non-deterministic expression, even if the join key column passes
+through it unmodified. The default is true: an unseeded random() has no
+reproducible result, so each row that remains still gets a valid random value
+when rows are filtered first. Velox only knows whether a function is
+deterministic, not whether it depends on row position, so the check applies to
+all non-deterministic expressions. The Hive connector applies dynamic filters
+while reading, before the remaining filter, so a plan that needs the same
+guarantee should not put a non-deterministic remaining filter in the scan.
+
 In cases when the join has a single join key and no dependent columns and all
 join key values on the build side are unique it is possible to replace the join
 completely with the pushed down filter. Velox detects such opportunities and

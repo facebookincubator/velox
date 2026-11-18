@@ -56,6 +56,10 @@ class FilterProject : public Operator {
 
   bool isFinished() override;
 
+  bool canPushDynamicFilterThrough() const override {
+    return canPushDynamicFilterThrough_;
+  }
+
   void close() override {
     Operator::close();
     if (exprs_ != nullptr) {
@@ -116,6 +120,11 @@ class FilterProject : public Operator {
 
   std::unique_ptr<ExprSet> exprs_;
   int32_t numExprs_;
+
+  // False if the filter or a projection is non-deterministic and
+  // dynamic_filter_pushdown_through_non_deterministic_enabled is false. Set in
+  // initialize().
+  bool canPushDynamicFilterThrough_{true};
 
   FilterEvalCtx filterEvalCtx_;
 

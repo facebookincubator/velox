@@ -36,6 +36,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
+#include "velox/functions/Registerer.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -2262,6 +2263,173 @@ TEST_P(HashJoinTest, dynamicFiltersPushDownThroughStreamingAgg) {
           ASSERT_EQ(
               dynamicFilterStats.producerNodeIds,
               std::unordered_set({joinNodeId}));
+        })
+        .run();
+  }
+}
+
+// Returns 0, 1, 2, ... for the rows it is called on, in call order.
+template <typename T>
+struct RowCounterFunction {
+  static constexpr bool is_deterministic = false;
+
+  void call(int64_t& result) {
+    result = count_++;
+  }
+
+ private:
+  int64_t count_{0};
+};
+
+TEST_P(HashJoinTest, noDynamicFiltersPushDownThroughNonDeterministicExpr) {
+  const int32_t numRowsProbe = 300;
+  const int32_t numRowsBuild = 100;
+
+  // c1 is the row's position in the probe input.
+  std::vector<RowVectorPtr> probeVectors{makeRowVector({
+      makeFlatVector<int32_t>(numRowsProbe, [&](auto row) { return row - 10; }),
+      makeFlatIdentityVector<int64_t>(numRowsProbe),
+  })};
+  auto probeFile = writeToFile(probeVectors);
+
+  std::vector<RowVectorPtr> buildVectors{makeNamedRowVector(
+      "u0", makeFlatVector<int32_t>(numRowsBuild, [&](auto row) {
+        return 35 + 2 * (row + numRowsBuild / 5);
+      }))};
+
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  core::PlanNodeId scanNodeId;
+  core::PlanNodeId exprNodeId;
+  core::PlanNodeId joinNodeId;
+  const auto makePlan = [&](const std::function<void(PlanBuilder&)>&
+                                addOperators,
+                            const std::vector<std::string>& outputLayout) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto buildSide =
+        PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode();
+    auto builder = PlanBuilder(planNodeIdGenerator, pool_.get())
+                       .tableScan(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
+                       .capturePlanNodeId(scanNodeId);
+    addOperators(builder);
+    return builder.capturePlanNodeId(exprNodeId)
+        .hashJoin(
+            {"c0"}, {"u0"}, buildSide, "", outputLayout, core::JoinType::kInner)
+        .capturePlanNodeId(joinNodeId)
+        .planNode();
+  };
+
+  // Checks whether the join's filter reached the scan, and whether the
+  // operators between them saw every row the scan returns.
+  const auto verifyPushdown = [&](const TaskPtr& task, bool pushdown) {
+    const auto scanStats =
+        PlanNodeStats::extract(task->taskStats(), scanNodeId);
+    const auto exprStats =
+        PlanNodeStats::extract(task->taskStats(), exprNodeId);
+    if (pushdown) {
+      ASSERT_EQ(
+          scanStats.dynamicFilterStats.producerNodeIds,
+          std::unordered_set<core::PlanNodeId>({joinNodeId}));
+      ASSERT_LT(exprStats.inputRows, static_cast<uint64_t>(numRowsProbe));
+    } else {
+      ASSERT_TRUE(scanStats.dynamicFilterStats.empty());
+      ASSERT_EQ(static_cast<uint64_t>(numRowsProbe), exprStats.inputRows);
+    }
+  };
+
+  // With dynamic_filter_pushdown_through_non_deterministic_enabled=false, a
+  // non-deterministic expression between the scan and the probe sees every row
+  // the scan returns: the join's filter is not pushed below it, even if the
+  // expression does not use the join key. A deterministic one lets the filter
+  // through either way.
+  struct {
+    std::string name;
+    std::function<void(PlanBuilder&)> addOperators;
+    bool deterministic;
+  } testSettings[] = {
+      {"deterministic projection",
+       [](PlanBuilder& builder) {
+         builder.project({"c0", "c1", "c1 + 1 AS r"});
+       },
+       true},
+      {"non-deterministic projection",
+       [](PlanBuilder& builder) {
+         builder.project({"c0", "c1", "rand() AS r"});
+       },
+       false},
+      {"non-deterministic filter",
+       [](PlanBuilder& builder) { builder.filter("rand() < 2.0"); },
+       false},
+      {"deterministic parallel projection",
+       [](PlanBuilder& builder) {
+         builder.parallelProject({{"c1 + 1"}}, {"c0", "c1"});
+       },
+       true},
+      {"non-deterministic parallel projection",
+       [](PlanBuilder& builder) {
+         builder.parallelProject({{"rand()"}}, {"c0", "c1"});
+       },
+       false},
+      {"deterministic filter and non-deterministic projection",
+       [](PlanBuilder& builder) {
+         builder.filter("c1 >= 0").project({"c0", "c1", "rand() AS r"});
+       },
+       false},
+      {"non-deterministic projection below a deterministic one",
+       [](PlanBuilder& builder) {
+         builder.project({"c0", "c1", "rand() AS r"})
+             .project({"c0", "c1", "r", "c1 + 1 AS s"});
+       },
+       false},
+  };
+
+  for (const auto& testData : testSettings) {
+    for (const bool throughNonDeterministic : {true, false}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "{}, throughNonDeterministic: {}",
+              testData.name,
+              throughNonDeterministic));
+      const bool pushdown = testData.deterministic || throughNonDeterministic;
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .planNode(makePlan(testData.addOperators, {"c0", "c1"}))
+          .inputSplits({{scanNodeId, {probeFile->getPath()}}})
+          .injectSpill(false)
+          .checkSpillStats(false)
+          .config(
+              core::QueryConfig::
+                  kDynamicFilterPushdownThroughNonDeterministicEnabled,
+              throughNonDeterministic ? "true" : "false")
+          .referenceQuery("SELECT c0, c1 FROM t, u WHERE c0 = u0")
+          .verifier([&](const TaskPtr& task, bool /*hasSpill*/) {
+            verifyPushdown(task, pushdown);
+          })
+          .run();
+    }
+  }
+
+  {
+    // A function whose result depends on the row's position keeps its values:
+    // r numbers every probe row, so it equals c1.
+    SCOPED_TRACE("row counter");
+    registerFunction<RowCounterFunction, int64_t>({"test_row_counter"});
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .planNode(makePlan(
+            [](PlanBuilder& builder) {
+              builder.project({"c0", "c1", "test_row_counter() AS r"});
+            },
+            {"c0", "c1", "r"}))
+        .inputSplits({{scanNodeId, {probeFile->getPath()}}})
+        .injectSpill(false)
+        .checkSpillStats(false)
+        .config(
+            core::QueryConfig::
+                kDynamicFilterPushdownThroughNonDeterministicEnabled,
+            "false")
+        .referenceQuery("SELECT c0, c1, c1 FROM t, u WHERE c0 = u0")
+        .verifier([&](const TaskPtr& task, bool /*hasSpill*/) {
+          verifyPushdown(task, false);
         })
         .run();
   }

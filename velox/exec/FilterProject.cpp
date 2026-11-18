@@ -164,6 +164,13 @@ void FilterProject::initialize() {
   numExprs_ = allExprs.size();
   exprs_ = makeExprSetFromFlag(
       std::move(allExprs), operatorCtx_->execCtx(), lazyDereference_);
+  if (!operatorCtx_->driverCtx()
+           ->queryConfig()
+           .dynamicFilterPushdownThroughNonDeterministicEnabled()) {
+    for (const auto& expr : exprs_->exprs()) {
+      canPushDynamicFilterThrough_ &= expr->isDeterministic();
+    }
+  }
 
   if (numExprs_ > 0 && !identityProjections_.empty()) {
     const auto inputType = project_ ? project_->sources()[0]->outputType()
