@@ -318,7 +318,8 @@ void SelectiveStructColumnReaderBase::advanceFieldReaderFixedRowsPerRowGroup(
     dwio::common::SelectiveColumnReader* reader,
     const int64_t offset,
     const int32_t rowsPerRowGroup) {
-  if (!reader->isTopLevel()) {
+  // A file without a row index has no row groups to seek to.
+  if (!reader->isTopLevel() || rowsPerRowGroup == 0) {
     return;
   }
   const auto rowGroup = reader->readOffset() / rowsPerRowGroup;
