@@ -338,6 +338,16 @@ class FlatMapVector : public BaseVector {
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
 
+  /// Runtime stat counting the conversions of a flat map into a map.
+  static constexpr std::string_view kNumMapConversions{
+      "flatMap.numMapConversions"};
+  /// Runtime stat counting the map entries produced by those conversions.
+  static constexpr std::string_view kNumMapConversionEntries{
+      "flatMap.numMapConversionEntries"};
+  /// Runtime stat with the wall time of those conversions, in nanoseconds.
+  static constexpr std::string_view kMapConversionWallNanos{
+      "flatMap.mapConversionWallNanos"};
+
   /// Converts and copies `this` into a MapVector.
   ///
   /// It does so by wrapping the distinctKeys_ vector into a dictionary to
