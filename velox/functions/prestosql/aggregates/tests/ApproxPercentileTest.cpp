@@ -344,13 +344,6 @@ TEST_F(ApproxPercentileTest, largeWeightsGroupBy) {
 /// EvalCtx::moveOrCopyResult needlessly flattening constant vector result of a
 /// constant expression.
 TEST_F(ApproxPercentileTest, partialFull) {
-  // Make sure partial aggregation runs out of memory after first batch.
-  CursorParameters params;
-  params.queryCtx = velox::core::QueryCtx::create(executor_.get());
-  params.queryCtx->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kMaxPartialAggregationMemory, "300000"},
-  });
-
   auto data = {
       makeRowVector({
           makeFlatVector<int32_t>(1'024, [](auto row) { return row % 117; }),
@@ -366,7 +359,7 @@ TEST_F(ApproxPercentileTest, partialFull) {
       }),
   };
 
-  params.planNode =
+  auto plan =
       PlanBuilder()
           .values(data)
           .project({"c0", "c1", "1", "0.9995", "0.001"})
@@ -378,7 +371,10 @@ TEST_F(ApproxPercentileTest, partialFull) {
       makeFlatVector<int32_t>(117, [](auto row) { return row; }),
       makeFlatVector<int32_t>(117, [](auto row) { return row < 7 ? 20 : 10; }),
   });
-  assertQuery(params, expected);
+  // Make sure partial aggregation runs out of memory after first batch.
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kMaxPartialAggregationMemory, "300000")
+      .assertResults(expected);
   TaskMonitor::waitForAllTasksDeleted();
 }
 

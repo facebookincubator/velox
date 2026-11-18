@@ -13,7 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/HashBuild.h"
+#include "velox/exec/HashProbe.h"
 #include "velox/exec/JoinBridge.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -354,23 +357,23 @@ class OperatorReplacementTest : public OperatorTestBase {
 
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
-    CursorParameters params;
-    params.maxDrivers = numThreads;
-    params.planNode = PlanBuilder(planNodeIdGenerator)
-                          .values({leftBatch}, false)
-                          .hashJoin(
-                              {"c0"},
-                              {"u1"},
-                              PlanBuilder(planNodeIdGenerator)
-                                  .values(rightBatch, false)
-                                  .project({"c0 AS u1"})
-                                  .planNode(),
-                              "",
-                              {"c0"})
-                          .project({"c0"})
-                          .planNode();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values({leftBatch}, false)
+                    .hashJoin(
+                        {"c0"},
+                        {"u1"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values(rightBatch, false)
+                            .project({"c0 AS u1"})
+                            .planNode(),
+                        "",
+                        {"c0"})
+                    .project({"c0"})
+                    .planNode();
 
-    OperatorTestBase::assertQuery(params, referenceQuery);
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .maxDrivers(numThreads)
+        .assertResults(referenceQuery);
   }
 };
 
