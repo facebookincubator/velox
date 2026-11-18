@@ -22,7 +22,8 @@
 #include <limits>
 #include <optional>
 #include <string>
-#include <string_view>
+#include <utility>
+#include <vector>
 
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -86,10 +87,14 @@ class TextReaderTest : public testing::Test,
 
   std::unique_ptr<dwio::common::Reader> createReader(
       const RowTypePtr& type,
-      std::shared_ptr<ReadFile> readFile,
-      const dwio::common::SerDeOptions& serDeOptions) {
+      const std::string& fileName,
+      const dwio::common::SerDeOptions& serDeOptions =
+          dwio::common::SerDeOptions()) {
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+    auto path =
+        velox::test::getDataFilePath("velox/dwio/text/tests/reader/", fileName);
+    auto readFile = std::make_shared<LocalReadFile>(path);
     dwio::common::ReaderOptions readerOptions(pool());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
@@ -98,17 +103,6 @@ class TextReaderTest : public testing::Test,
     auto input = std::make_unique<dwio::common::BufferedInput>(
         std::move(readFile), *pool());
     return factory->createReader(std::move(input), readerOptions);
-  }
-
-  std::unique_ptr<dwio::common::Reader> createReader(
-      const RowTypePtr& type,
-      const std::string& fileName,
-      const dwio::common::SerDeOptions& serDeOptions =
-          dwio::common::SerDeOptions()) {
-    auto path =
-        velox::test::getDataFilePath("velox/dwio/text/tests/reader/", fileName);
-    return createReader(
-        type, std::make_shared<LocalReadFile>(path), serDeOptions);
   }
 
   void assertReadsAs(
@@ -183,11 +177,22 @@ class TextReaderTest : public testing::Test,
     ASSERT_NO_FATAL_FAILURE(assertReadsAs(inputs, expectedReal, expected));
   }
 
-  void assertReadText(std::string_view text, const RowVectorPtr& expected) {
+  template <typename T>
+  void assertReadText(
+      const std::vector<std::pair<std::string, std::optional<T>>>& testCases,
+      const TypePtr& type) {
+    auto textFile = createTextFile(
+        testCases.size(), [&](size_t row) { return testCases[row].first; });
+    std::vector<std::optional<T>> expectedValues;
+    expectedValues.reserve(testCases.size());
+    for (const auto& testCase : testCases) {
+      expectedValues.push_back(testCase.second);
+    }
+    auto expected =
+        makeRowVector({makeNullableFlatVector<T>(expectedValues, type)});
     for (const auto batchSize : {1, 3}) {
       SCOPED_TRACE(batchSize);
-      auto reader = createReader(
-          expected->rowType(), std::make_shared<InMemoryReadFile>(text), {});
+      auto reader = createReader(expected->rowType(), textFile->getPath());
       dwio::common::RowReaderOptions rowReaderOptions;
       setScanSpec(*expected->type(), rowReaderOptions);
       auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -1248,57 +1253,40 @@ TEST_F(TextReaderTest, readIntegerWithLeadingPlus) {
 }
 
 TEST_F(TextReaderTest, dateParsing) {
-  assertReadText(
-      "2024-01-01\n"
-      "2024-01-01T10:00\n"
-      "2024-01-01Tnot-a-time\n"
-      "2024-01-01 ignored\n"
-      " \t2024-01-01\tignored\n"
-      "2024-02-29T23:59:59\n"
-      "1969-12-31T23:59:59\n"
-      "2024-1-2T10:00\n"
-      "\\N\n",
-      makeRowVector({makeNullableFlatVector<int32_t>(
-          {19'723,
-           19'723,
-           19'723,
-           19'723,
-           19'723,
-           19'782,
-           -1,
-           19'724,
-           std::nullopt},
-          DATE())}));
+  assertReadText<int32_t>(
+      {
+          {"2024-01-01", 19'723},
+          {"2024-01-01T10:00", 19'723},
+          {"2024-01-01Tnot-a-time", 19'723},
+          {"2024-01-01 ignored", 19'723},
+          {" \t2024-01-01\tignored", 19'723},
+          {"2024-02-29T23:59:59", 19'782},
+          {"1969-12-31T23:59:59", -1},
+          {"2024-1-2T10:00", 19'724},
+          {"\\N", std::nullopt},
+      },
+      DATE());
 }
 
 TEST_F(TextReaderTest, timestampParsing) {
-  assertReadText(
-      "2024-01-01 00:00:00\n"
-      "2024-01-01T00:00:00\n"
-      "2024-01-01T10:00\n"
-      " \t2024-01-01T00:00:00 \t\n"
-      "2024-01-01T00:00:00.123456789\n"
-      "2024-01-01T00:00:00.1\n"
-      "2024-01-01T23:59:59.999999999\n"
-      "2024-01-01 00:00:001\n"
-      "2024-01-01 00:00:60\n"
-      "2024-07-01 00:00:00\n"
-      "2024-07-01T00:00:00\n"
-      "\\N\n",
-      makeRowVector({makeNullableFlatVector<Timestamp>({
-          Timestamp(1'704'096'000, 0),
-          Timestamp(1'704'096'000, 0),
-          Timestamp(1'704'132'000, 0),
-          Timestamp(1'704'096'000, 0),
-          Timestamp(1'704'096'000, 123'456'000),
-          Timestamp(1'704'096'000, 100'000'000),
-          Timestamp(1'704'182'399, 999'999'000),
-          Timestamp(1'704'096'000, 100'000'000),
-          Timestamp(1'704'096'060, 0),
-          Timestamp(1'719'817'200, 0),
-          Timestamp(1'719'817'200, 0),
-          std::nullopt,
-      })}));
+  assertReadText<Timestamp>(
+      {
+          {"2024-01-01 00:00:00", Timestamp(1'704'096'000, 0)},
+          {"2024-01-01T00:00:00", Timestamp(1'704'096'000, 0)},
+          {"2024-01-01T10:00", Timestamp(1'704'132'000, 0)},
+          {" \t2024-01-01T00:00:00 \t", Timestamp(1'704'096'000, 0)},
+          {"2024-01-01T00:00:00.123456789",
+           Timestamp(1'704'096'000, 123'456'000)},
+          {"2024-01-01T00:00:00.1", Timestamp(1'704'096'000, 100'000'000)},
+          {"2024-01-01T23:59:59.999999999",
+           Timestamp(1'704'182'399, 999'999'000)},
+          {"2024-01-01 00:00:001", Timestamp(1'704'096'000, 100'000'000)},
+          {"2024-01-01 00:00:60", Timestamp(1'704'096'060, 0)},
+          {"2024-07-01 00:00:00", Timestamp(1'719'817'200, 0)},
+          {"2024-07-01T00:00:00", Timestamp(1'719'817'200, 0)},
+          {"\\N", std::nullopt},
+      },
+      TIMESTAMP());
 }
 
 TEST_F(TextReaderTest, invalidDateAndTimestampParsing) {
@@ -1310,10 +1298,7 @@ TEST_F(TextReaderTest, invalidDateAndTimestampParsing) {
        }) {
     SCOPED_TRACE(input);
     VELOX_ASSERT_THROW(
-        assertReadText(
-            std::string(input) + "\n",
-            makeRowVector(
-                {makeNullableFlatVector<int32_t>({std::nullopt}, DATE())})),
+        assertReadText<int32_t>({{input, std::nullopt}}, DATE()),
         fmt::format(
             "Unable to parse date value. "
             "Valid date string pattern is (YYYY-MM-DD), "
@@ -1335,9 +1320,7 @@ TEST_F(TextReaderTest, invalidDateAndTimestampParsing) {
        }) {
     SCOPED_TRACE(input);
     VELOX_ASSERT_THROW(
-        assertReadText(
-            std::string(input) + "\n",
-            makeRowVector({makeNullableFlatVector<Timestamp>({std::nullopt})})),
+        assertReadText<Timestamp>({{input, std::nullopt}}, TIMESTAMP()),
         fmt::format(
             "Unable to parse timestamp value: \"{}\", "
             "expected format is (YYYY-MM-DD HH:MM:SS[.MS])",
