@@ -1361,17 +1361,67 @@ TEST_F(RPCStateTest, closeReleasesQueuedPayloadAndIgnoresLateCompletion) {
   EXPECT_EQ(pool->usedBytes(), baseline);
   state->close();
 
-  auto lateState = std::make_shared<RPCState>(pool);
-  lateState->setStreamingMode(RPCStreamingMode::kPerRow);
-  auto [latePromise, lateFuture] = folly::makePromiseContract<RPCResponse>();
-  lateState->addPendingRow(
-      lateState, 2, RPCState::RowLocation{0, 0}, std::move(lateFuture));
-  lateState->close();
-  RPCResponse lateResponse;
-  lateResponse.setPayload(makeTextPayload(std::string(4096, 'y')));
-  latePromise.setValue(std::move(lateResponse));
-  waitFor([&]() { return lateState->numInFlight() == 0; });
-  EXPECT_EQ(pool->usedBytes(), baseline);
+  for (const bool fail : {false, true}) {
+    SCOPED_TRACE(fail);
+    auto lateState = std::make_shared<RPCState>(pool);
+    lateState->setStreamingMode(RPCStreamingMode::kPerRow);
+    auto [latePromise, lateFuture] = folly::makePromiseContract<RPCResponse>();
+    lateState->addPendingRow(
+        lateState, 2, RPCState::RowLocation{0, 0}, std::move(lateFuture));
+    lateState->close();
+    EXPECT_EQ(lateState->numInFlight(), 0);
+    if (fail) {
+      latePromise.setException(std::runtime_error("Late row failure"));
+    } else {
+      RPCResponse lateResponse;
+      lateResponse.setPayload(makeTextPayload(std::string(4096, 'y')));
+      latePromise.setValue(std::move(lateResponse));
+    }
+    EXPECT_EQ(lateState->operatorSnapshot().numCompletionsSignaled, 0);
+    EXPECT_EQ(pool->usedBytes(), baseline);
+  }
+}
+
+TEST_F(RPCStateTest, pendingCompletionsDoNotRetainClosedState) {
+  for (const bool fail : {false, true}) {
+    SCOPED_TRACE(fail);
+    auto root = memory::memoryManager()->addRootPool();
+    auto pool = root->addLeafChild("rpc");
+    std::weak_ptr<memory::MemoryPool> weakPool = root;
+
+    auto rowState = std::make_shared<RPCState>(pool);
+    rowState->setStreamingMode(RPCStreamingMode::kPerRow);
+    auto [rowPromise, rowFuture] = folly::makePromiseContract<RPCResponse>();
+    rowState->addPendingRow(
+        rowState, 1, RPCState::RowLocation{0, 0}, std::move(rowFuture));
+    std::weak_ptr<RPCState> weakRowState = rowState;
+
+    auto batchState = std::make_shared<RPCState>(pool);
+    batchState->setStreamingMode(RPCStreamingMode::kBatch);
+    auto [batchPromise, batchFuture] =
+        folly::makePromiseContract<std::vector<RPCResponse>>();
+    batchState->addPendingBatch(
+        batchState, std::move(batchFuture), {}, /*admissionUnits=*/1);
+    std::weak_ptr<RPCState> weakBatchState = batchState;
+
+    rowState->close();
+    batchState->close();
+    rowState.reset();
+    batchState.reset();
+    pool.reset();
+    root.reset();
+    EXPECT_TRUE(weakRowState.expired());
+    EXPECT_TRUE(weakBatchState.expired());
+    EXPECT_TRUE(weakPool.expired());
+
+    if (fail) {
+      rowPromise.setException(std::runtime_error("Late row failure"));
+      batchPromise.setException(std::runtime_error("Late batch failure"));
+    } else {
+      rowPromise.setValue(RPCResponse{});
+      batchPromise.setValue(std::vector<RPCResponse>(1));
+    }
+  }
 }
 
 TEST_F(RPCStateTest, closeReleasesPerRowAndBatchAdmission) {
@@ -1395,7 +1445,7 @@ TEST_F(RPCStateTest, closeReleasesPerRowAndBatchAdmission) {
   rowState->close();
   EXPECT_EQ(rowLimiter->stats().pending, 0);
   rowPromise.setValue(RPCResponse{});
-  waitFor([&]() { return rowState->numInFlight() == 0; });
+  EXPECT_EQ(rowState->numInFlight(), 0);
   EXPECT_EQ(rowLimiter->stats().pending, 0);
 
   auto batchLimiter = std::make_shared<RPCRateLimiter>("test.close.batch");
@@ -1443,20 +1493,26 @@ TEST_F(RPCStateTest, closeReleasesReadyBatchAndIgnoresLateBatch) {
   state->close();
   EXPECT_EQ(pool->usedBytes(), baseline);
 
-  auto lateState = std::make_shared<RPCState>(pool);
-  lateState->setStreamingMode(RPCStreamingMode::kBatch);
-  auto [latePromise, lateFuture] =
-      folly::makePromiseContract<std::vector<RPCResponse>>();
-  lateState->addPendingBatch(
-      lateState, std::move(lateFuture), {}, /*admissionUnits=*/1);
-  lateState->close();
-  std::vector<RPCResponse> lateResponses(1);
-  lateResponses[0].setPayload(makeTextPayload(std::string(4096, 'y')));
-  latePromise.setValue(std::move(lateResponses));
-  waitFor([&]() {
-    return lateState->operatorSnapshot().numCompletionsSignaled == 1;
-  });
-  EXPECT_EQ(pool->usedBytes(), baseline);
+  for (const bool fail : {false, true}) {
+    SCOPED_TRACE(fail);
+    auto lateState = std::make_shared<RPCState>(pool);
+    lateState->setStreamingMode(RPCStreamingMode::kBatch);
+    auto [latePromise, lateFuture] =
+        folly::makePromiseContract<std::vector<RPCResponse>>();
+    lateState->addPendingBatch(
+        lateState, std::move(lateFuture), {}, /*admissionUnits=*/1);
+    lateState->close();
+    EXPECT_EQ(lateState->numInFlight(), 0);
+    if (fail) {
+      latePromise.setException(std::runtime_error("Late batch failure"));
+    } else {
+      std::vector<RPCResponse> lateResponses(1);
+      lateResponses[0].setPayload(makeTextPayload(std::string(4096, 'y')));
+      latePromise.setValue(std::move(lateResponses));
+    }
+    EXPECT_EQ(lateState->operatorSnapshot().numCompletionsSignaled, 0);
+    EXPECT_EQ(pool->usedBytes(), baseline);
+  }
 }
 
 TEST_F(RPCStateTest, payloadAccountingFailureFailsTheQuery) {
@@ -1568,8 +1624,13 @@ TEST_F(RPCStateTest, closeRacingRowCompletionLeavesNoCharge) {
     });
     start.store(true, std::memory_order_release);
     state->close();
+    const auto afterClose = state->operatorSnapshot();
     completer.join();
-    waitFor([&]() { return state->numInFlight() == 0; });
+    const auto afterCompletion = state->operatorSnapshot();
+    EXPECT_EQ(afterCompletion.inFlight, 0);
+    EXPECT_EQ(
+        afterCompletion.numCompletionsSignaled,
+        afterClose.numCompletionsSignaled);
     EXPECT_EQ(pool->usedBytes(), baseline) << "iteration " << i;
   }
 }
@@ -1599,10 +1660,13 @@ TEST_F(RPCStateTest, closeRacingBatchCompletionLeavesNoCharge) {
     });
     start.store(true, std::memory_order_release);
     state->close();
+    const auto afterClose = state->operatorSnapshot();
     completer.join();
-    waitFor([&]() {
-      return state->operatorSnapshot().numCompletionsSignaled == 1;
-    });
+    const auto afterCompletion = state->operatorSnapshot();
+    EXPECT_EQ(afterCompletion.inFlight, 0);
+    EXPECT_EQ(
+        afterCompletion.numCompletionsSignaled,
+        afterClose.numCompletionsSignaled);
     EXPECT_EQ(pool->usedBytes(), baseline) << "iteration " << i;
   }
 }
