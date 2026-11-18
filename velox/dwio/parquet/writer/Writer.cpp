@@ -135,6 +135,7 @@ void ParquetWriterOptions::merge(
   mergeIfSet(dataPageSize, parquetOverrides->dataPageSize);
   mergeIfSet(batchSize, parquetOverrides->batchSize);
   mergeIfSet(rowGroupSizeBytes, parquetOverrides->rowGroupSizeBytes);
+  mergeIfSet(rowGroupRows, parquetOverrides->rowGroupRows);
   mergeIfSet(createdBy, parquetOverrides->createdBy);
 }
 
@@ -491,7 +492,9 @@ Writer::Writer(
         parquetWriterOptions.rowGroupSizeBytes.value_or(
             DefaultFlushPolicy::kDefaultBytesInRowGroup);
     flushPolicy_ = std::make_unique<DefaultFlushPolicy>(
-        DefaultFlushPolicy::kDefaultRowsInGroup, bytesInRowGroup);
+        parquetWriterOptions.rowGroupRows.value_or(
+            DefaultFlushPolicy::kDefaultRowsInGroup),
+        bytesInRowGroup);
   }
   options_.timestampUnit = static_cast<TimestampUnit>(
       parquetWriteTimestampUnit.value_or(TimestampPrecision::kNanoseconds));
@@ -887,6 +890,14 @@ ParquetWriterFactory::createFormatOptions(
       ParquetConfig::writerPageSize(connectorConfig, session));
   parquetOptions->rowGroupSizeBytes = toParquetRowGroupSize(
       ParquetConfig::writerRowGroupSize(connectorConfig, session));
+  parquetOptions->rowGroupRows =
+      ParquetConfig::writerRowGroupRows(connectorConfig, session);
+  if (parquetOptions->rowGroupRows.has_value()) {
+    VELOX_USER_CHECK_GT(
+        *parquetOptions->rowGroupRows,
+        0,
+        "Parquet writer row group rows must be greater than zero");
+  }
   parquetOptions->batchSize = toParquetBatchSize(
       ParquetConfig::writerBatchSize(connectorConfig, session));
   parquetOptions->createdBy = ParquetConfig::writerCreatedBy(connectorConfig);
