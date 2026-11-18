@@ -922,6 +922,65 @@ TEST_F(CudfDecimalTest, streamingDecimalSumAndAvg) {
   }
 }
 
+TEST_F(CudfDecimalTest, streamingDecimalSumAndAvgThroughDoubling) {
+  // Doubling feeds the decimal sums and counts back in as input, so they must
+  // give the same answer after the tables double. One table with a limit of
+  // one key per table makes the tables double until each key has its own
+  // table.
+  auto& config = CudfConfig::getInstance();
+  const auto savedEnabled = config.streamingGroupbyEnabled;
+  const auto savedTables = config.streamingGroupbyTables;
+  config.streamingGroupbyEnabled = true;
+  config.streamingGroupbyTables = 1;
+  CudfGroupby::testingSetStreamingGroupbyMaxTableKeys(1);
+  SCOPE_EXIT {
+    config.streamingGroupbyEnabled = savedEnabled;
+    config.streamingGroupbyTables = savedTables;
+    CudfGroupby::testingSetStreamingGroupbyMaxTableKeys(std::nullopt);
+  };
+
+  auto input = makeRowVector({
+      makeFlatVector<int32_t>({0, 1, 2, 3}),
+      makeNullableFlatVector<int64_t>(
+          {999'999'999'999'999'999, -200, std::nullopt, 0}, DECIMAL(18, 2)),
+      makeNullableFlatVector<int128_t>(
+          {100, -200, std::nullopt, 0}, DECIMAL(20, 2)),
+  });
+  const std::vector<RowVectorPtr> batches(12, input);
+  auto plan = exec::test::PlanBuilder()
+                  .values(batches)
+                  .partialAggregation(
+                      {"c0"}, {"sum(c1)", "sum(c2)", "avg(c1)", "avg(c2)"})
+                  .finalAggregation()
+                  .planNode();
+  auto task = exec::test::AssertQueryBuilder(plan)
+                  .maxDrivers(1)
+                  .config(CudfFromVelox::kGpuBatchSizeRows, 1)
+                  .config(core::QueryConfig::kMaxPartialAggregationMemory, 1)
+                  .assertResults(makeRowVector({
+                      makeFlatVector<int32_t>({0, 1, 2, 3}),
+                      makeNullableFlatVector<int128_t>(
+                          {int128_t{999'999'999'999'999'999} * 12,
+                           -2400,
+                           std::nullopt,
+                           0},
+                          DECIMAL(38, 2)),
+                      makeNullableFlatVector<int128_t>(
+                          {1200, -2400, std::nullopt, 0}, DECIMAL(38, 2)),
+                      makeNullableFlatVector<int64_t>(
+                          {999'999'999'999'999'999, -200, std::nullopt, 0},
+                          DECIMAL(18, 2)),
+                      makeNullableFlatVector<int128_t>(
+                          {100, -200, std::nullopt, 0}, DECIMAL(20, 2)),
+                  }));
+  const auto stats = exec::toPlanStats(task->taskStats());
+  EXPECT_GT(
+      stats.at(plan->id())
+          .customStats.at(std::string{kStreamingGroupbyDoublingsStat})
+          .sum,
+      0);
+}
+
 TEST_F(CudfDecimalTest, streamingDecimalAvgUnequalCounts) {
   auto& config = CudfConfig::getInstance();
   const auto savedEnabled = config.streamingGroupbyEnabled;

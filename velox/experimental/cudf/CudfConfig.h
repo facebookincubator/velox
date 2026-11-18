@@ -56,6 +56,8 @@ struct CudfConfig {
       "cudf.streaming_groupby_enabled"};
   static constexpr const char* kCudfStreamingGroupbyCapacityMultiplier{
       "cudf.streaming_groupby_capacity_multiplier"};
+  static constexpr const char* kCudfStreamingGroupbyTables{
+      "cudf.streaming_groupby_tables"};
   static constexpr const char* kCudfTimestampUnit{"cudf.timestamp_unit"};
   static constexpr const char* kUcxExchange{"cudf.exchange"};
   static constexpr const char* kUcxxErrorHandling{"ucxx.error_handling"};
@@ -174,6 +176,13 @@ struct CudfConfig {
   /// Multiplier used to derive streaming_groupby's initial logical capacity
   /// from the first batch and to grow capacity when it is exhausted.
   double streamingGroupbyCapacityMultiplier{2.0};
+
+  /// Number of tables a final streaming aggregation starts with: 1, 2, 4, 8,
+  /// 16, 32 or 64. Each key lives in exactly one table, picked by a hash of
+  /// the key. Only one table grows or produces output at a time, so more
+  /// tables lower the peak GPU memory. When a table holds too many keys, the
+  /// tables double, up to 64.
+  int32_t streamingGroupbyTables{8};
 
   /// Minimum rows to accumulate before GPU-side concatenation (default 100k).
   /// Applies when batchSizeMinBytes is unset, and always to zero-column

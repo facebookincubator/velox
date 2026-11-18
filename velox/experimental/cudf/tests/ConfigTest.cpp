@@ -38,6 +38,7 @@ TEST(ConfigTest, cudfConfig) {
       {CudfConfig::kCudfFunctionNamePrefix, "presto"},
       {CudfConfig::kCudfStreamingGroupbyEnabled, "true"},
       {CudfConfig::kCudfStreamingGroupbyCapacityMultiplier, "3.5"},
+      {CudfConfig::kCudfStreamingGroupbyTables, "16"},
       {CudfConfig::kCudfAllowCpuFallback, "false"},
       {CudfConfig::kCudfBatchSizeMinThreshold, "123456"},
       {CudfConfig::kCudfBatchSizeMinBytes, "2147483648"}};
@@ -45,6 +46,7 @@ TEST(ConfigTest, cudfConfig) {
   CudfConfig config;
   ASSERT_FALSE(config.streamingGroupbyEnabled);
   ASSERT_EQ(config.streamingGroupbyCapacityMultiplier, 2.0);
+  ASSERT_EQ(config.streamingGroupbyTables, 8);
   config.initialize(std::move(options));
   ASSERT_EQ(config.enabled, false);
   ASSERT_EQ(config.debugEnabled, true);
@@ -53,6 +55,7 @@ TEST(ConfigTest, cudfConfig) {
   ASSERT_EQ(config.functionNamePrefix, "presto");
   ASSERT_EQ(config.streamingGroupbyEnabled, true);
   ASSERT_EQ(config.streamingGroupbyCapacityMultiplier, 3.5);
+  ASSERT_EQ(config.streamingGroupbyTables, 16);
   ASSERT_EQ(config.allowCpuFallback, false);
   ASSERT_EQ(config.batchSizeMinThreshold, 123'456);
   ASSERT_EQ(config.batchSizeMinBytes.value(), 2'147'483'648);
