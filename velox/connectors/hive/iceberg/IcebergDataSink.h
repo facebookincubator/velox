@@ -41,11 +41,9 @@ namespace facebook::velox::connector::hive::iceberg {
 
 class IcebergFileNameGenerator : public FileNameGenerator {
  public:
-  IcebergFileNameGenerator() {}
-
   std::pair<std::string, std::string> gen(
       std::optional<uint32_t> bucketId,
-      const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const HiveInsertTableHandlePtr& insertTableHandle,
       const ConnectorQueryCtx& connectorQueryCtx,
       uint32_t maxNumBuckets,
       bool commitRequired) const override;
@@ -145,7 +143,7 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
       WriteKind writeKind = WriteKind::kData,
       std::unordered_map<std::string, ExistingDeletionVector>
           existingDeletionVectors = {},
-      std::shared_ptr<const FileNameGenerator> fileNameGenerator =
+      FileNameGeneratorPtr fileNameGenerator =
           std::make_shared<const IcebergFileNameGenerator>(),
       std::vector<std::string> insertedColumns = {},
       bool includePartitionPaths = true);

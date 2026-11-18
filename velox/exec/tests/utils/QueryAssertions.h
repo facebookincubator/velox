@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 #pragma once
-#include <chrono>
 
-#include "velox/common/testutil/TestValue.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Cursor.h"
-#include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+#include "velox/exec/tests/utils/TaskMonitor.h"
+#endif
 
 #ifdef BLOCK_SIZE
 #undef BLOCK_SIZE
@@ -29,8 +30,7 @@
 
 namespace facebook::velox::exec::test {
 
-using MaterializedRow = std::vector<velox::variant>;
-using DuckDBQueryResult = std::unique_ptr<::duckdb::MaterializedQueryResult>;
+using MaterializedRow = std::vector<velox::Variant>;
 
 /// Multiset that compares floating-point values directly.
 using MaterializedRowMultiset = std::multiset<MaterializedRow>;
@@ -52,7 +52,9 @@ class DuckDbQueryRunner {
       const std::string& name,
       const std::vector<RowVectorPtr>& data);
 
-  DuckDBQueryResult execute(const std::string& sql);
+  using QueryResult = std::unique_ptr<::duckdb::MaterializedQueryResult>;
+
+  QueryResult execute(const std::string& sql);
 
   MaterializedRowMultiset execute(
       const std::string& sql,
@@ -115,77 +117,6 @@ class TestScopedAbortInjection {
   ~TestScopedAbortInjection();
 };
 
-// This class leverages TestValue to inject OOMs into query execution.
-// Therefore, it can only be used in debug builds, and only one instance
-// of this class can be enabled at a time.
-class ScopedOOMInjector {
- public:
-  ScopedOOMInjector(
-      const std::function<bool()>& oomConditionChecker,
-      uint64_t oomCheckIntervalMs)
-      : oomConditionChecker_(oomConditionChecker),
-        oomCheckIntervalMs_(oomCheckIntervalMs) {}
-
-  inline static const std::string kErrorMessage = "Injected OOM";
-
-  void enable() {
-    // Since this relies on TestValue to trigger the OOMs, it only supports
-    // debug builds.
-#ifdef NDEBUG
-    VELOX_FAIL("OOM injection can only be used in debug builds");
-#endif
-
-    if (enabled_.exchange(true)) {
-      VELOX_FAIL("Already enabled");
-    }
-
-    // Make sure TestValues are enabled.
-    common::testutil::TestValue::enable();
-
-    common::testutil::TestValue::set(
-        kInjectionPoint,
-        std::function<void(memory::MemoryPool*)>([&](memory::MemoryPool*) {
-          const auto currentTime = now();
-          if (currentTime - lastOomCheckTime_ >= oomCheckIntervalMs_) {
-            lastOomCheckTime_ = currentTime;
-            if (oomConditionChecker_()) {
-              LOG(INFO) << "<-- Triggering OOM --";
-              VELOX_MEM_POOL_CAP_EXCEEDED(kErrorMessage);
-            }
-          }
-        }));
-  }
-
-  ~ScopedOOMInjector() {
-    common::testutil::TestValue::clear(kInjectionPoint);
-    enabled_ = false;
-  }
-
- private:
-  inline static const std::string kInjectionPoint =
-      "facebook::velox::memory::MemoryPoolImpl::reserveThreadSafe";
-  // If more than one instance of this class is enabled, they'll overwrite
-  // each other, so make sure no one does this by accident.
-  inline static std::atomic_bool enabled_{false};
-
-  static size_t now() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::system_clock::now().time_since_epoch())
-        .count();
-  }
-
-  // When this function returns true, an OOM will be triggered.
-  const std::function<bool()> oomConditionChecker_;
-  // The interval between each check of the condition.
-  const uint64_t oomCheckIntervalMs_;
-
-  std::atomic<size_t> lastOomCheckTime_{0};
-};
-
-/// Test utility that might trigger task abort. The function returns true if
-/// abortion triggers otherwise false.
-bool testingMaybeTriggerAbort(exec::Task* task);
-
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
     const CursorParameters& params,
     std::function<void(TaskCursor*)> addSplits =
@@ -197,87 +128,41 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
         },
     uint64_t maxWaitMicros = 5'000'000);
 
-std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
-readCursorAsync(
-    const CursorParameters& params,
-    std::function<ContinueFuture(TaskCursor*)> addSplits =
-        [](TaskCursor* taskCursor) {
-          if (taskCursor->noMoreSplits()) {
-            return ContinueFuture::makeEmpty();
-          }
-          taskCursor->setNoMoreSplits();
-          return ContinueFuture::makeEmpty();
-        },
-    uint64_t maxWaitMicros = 5'000'000);
+/// Runs the query of 'cursor', passing each output batch to 'onBatch' as it
+/// arrives. The batches borrow memory from 'cursor', so any batch 'onBatch'
+/// keeps must be released before 'cursor' is destroyed, including when this
+/// function throws.
+void readCursorAsync(
+    TaskCursor& cursor,
+    std::function<ContinueFuture(TaskCursor*)> addSplits,
+    uint64_t maxWaitMicros,
+    const std::function<void(const RowVectorPtr&)>& onBatch);
 
-/// The Task can return results before the Driver is finished executing.
-/// Wait upto maxWaitMicros for the Task to finish as 'expectedState' before
-/// returning to ensure it's stable e.g. the Driver isn't updating it anymore.
-/// Returns true if the task is completed before maxWaitMicros expires.
-bool waitForTaskFinish(
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+/// Legacy forms of TaskMonitor methods. Removed once Prestissimo migrates.
+inline bool waitForTaskCompletion(
     exec::Task* task,
-    TaskState expectedState,
-    uint64_t maxWaitMicros = 1'000'000);
+    uint64_t maxWaitMicros = TaskMonitor::kDefaultMaxWaitMicros) {
+  return TaskMonitor::waitForCompletion(*task, maxWaitMicros);
+}
 
-/// Similar to waitForTaskFinish but wait for the task to succeed.
-bool waitForTaskCompletion(
+inline bool waitForTaskFailure(
     exec::Task* task,
-    uint64_t maxWaitMicros = 1'000'000);
+    uint64_t maxWaitMicros = TaskMonitor::kDefaultMaxWaitMicros) {
+  return TaskMonitor::waitForFailure(*task, maxWaitMicros);
+}
 
-/// Similar to waitForTaskFinish but wait for the task to fail.
-bool waitForTaskFailure(exec::Task* task, uint64_t maxWaitMicros = 1'000'000);
-
-/// Similar to waitForTaskFinish but wait for the task to abort.
-bool waitForTaskAborted(exec::Task* task, uint64_t maxWaitMicros = 1'000'000);
-
-/// Similar to waitForTaskFinish but wait for the task to cancel.
-bool waitForTaskCancelled(exec::Task* task, uint64_t maxWaitMicros = 1'000'000);
-
-/// Wait up to maxWaitMicros for 'task' state changes to 'state'. The function
-/// returns true if 'task' has changed to the expected 'state', otherwise false.
-bool waitForTaskStateChange(
+inline bool waitForTaskStateChange(
     exec::Task* task,
     TaskState state,
-    uint64_t maxWaitMicros = 1'000'000);
+    uint64_t maxWaitMicros = TaskMonitor::kDefaultMaxWaitMicros) {
+  return TaskMonitor::waitForStateChange(*task, state, maxWaitMicros);
+}
 
-/// Invoked to wait for all the tasks created by the test to be deleted.
-///
-/// NOTE: it is assumed that there is no more task to be created after or
-/// during this wait call. This is for testing purpose for now.
-void waitForAllTasksToBeDeleted(uint64_t maxWaitUs = 3'000'000);
-
-/// Cancels all currently running tasks across all available task managers.
-/// This is primarily used in testing scenarios to clean up active tasks
-/// and ensure test isolation between test cases.
-void cancelAllTasks();
-
-std::shared_ptr<Task> assertQuery(
-    const core::PlanNodePtr& plan,
-    const std::string& duckDbSql,
-    DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
-
-std::shared_ptr<Task> assertQuery(
-    const core::PlanNodePtr& plan,
-    std::function<void(exec::TaskCursor*)> addSplits,
-    const std::string& duckDbSql,
-    DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
-
-std::shared_ptr<Task> assertQuery(
-    const CursorParameters& params,
-    std::function<void(exec::TaskCursor*)> addSplits,
-    const std::string& duckDbSql,
-    DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
-
-std::shared_ptr<Task> assertQueryReturnsEmptyResult(
-    const core::PlanNodePtr& plan);
-
-std::shared_ptr<Task> assertQueryReturnsEmptyResult(
-    const CursorParameters& params);
-
-void assertEmptyResults(const std::vector<RowVectorPtr>& results);
+inline void waitForAllTasksToBeDeleted(uint64_t maxWaitUs = 3'000'000) {
+  TaskMonitor::waitForAllTasksDeleted(maxWaitUs);
+}
+#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
 
 void assertResults(
     const std::vector<RowVectorPtr>& results,
@@ -292,15 +177,7 @@ void assertResultsOrdered(
     DuckDbQueryRunner& duckDbQueryRunner,
     const std::vector<uint32_t>& sortingKeys);
 
-std::shared_ptr<Task> assertQuery(
-    const core::PlanNodePtr& plan,
-    const std::vector<RowVectorPtr>& expectedResults);
-
-std::shared_ptr<Task> assertQuery(
-    const CursorParameters& params,
-    const std::vector<RowVectorPtr>& expectedResults);
-
-velox::variant readSingleValue(
+velox::Variant readSingleValue(
     const core::PlanNodePtr& plan,
     int32_t maxDrivers = 1);
 
@@ -332,30 +209,11 @@ bool assertEqualResults(
     const TypePtr& expectedRowType,
     const std::vector<RowVectorPtr>& actual);
 
-/// Ensure both plans have the same results.
-bool assertEqualResults(
-    const core::PlanNodePtr& plan1,
-    const core::PlanNodePtr& plan2);
-
 bool assertEqualResults(
     const MaterializedRowMultiset& expectedRows,
     const TypePtr& expectedType,
     const MaterializedRowMultiset& actualRows,
     const TypePtr& actualType,
     const std::string& message);
-
-/// Ensure both datasets have the same type and number of rows.
-void assertEqualTypeAndNumRows(
-    const TypePtr& expectedType,
-    vector_size_t expectedNumRows,
-    const std::vector<RowVectorPtr>& actual);
-
-void printResults(const RowVectorPtr& result, std::ostream& out);
-
-/// Aggregates operator stats by operator type. If a task has more than one plan
-/// nodes having the same operator types, then their operator stats are merged
-/// together.
-std::unordered_map<std::string, OperatorStats> toOperatorStats(
-    const TaskStats& taskStats);
 
 } // namespace facebook::velox::exec::test

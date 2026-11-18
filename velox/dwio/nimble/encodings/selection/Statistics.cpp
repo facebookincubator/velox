@@ -242,6 +242,25 @@ void Statistics<T, InputType>::populateSignedOrderNonDecreasing()
 }
 
 template <typename T, typename InputType>
+template <bool kSignedOrder>
+void Statistics<T, InputType>::populateAdjacentOrder() const noexcept {
+  using CompareType = std::
+      conditional_t<kSignedOrder, std::make_signed_t<InputType>, InputType>;
+  AdjacentOrder order;
+  for (size_t i = 1; i < data_.size(); ++i) {
+    const auto previous = static_cast<CompareType>(data_[i - 1]);
+    const auto current = static_cast<CompareType>(data_[i]);
+    order.numDescending += current < previous;
+    order.numAscending += current > previous;
+  }
+  if constexpr (kSignedOrder) {
+    signedAdjacentOrder_ = order;
+  } else {
+    physicalAdjacentOrder_ = order;
+  }
+}
+
+template <typename T, typename InputType>
 void Statistics<T, InputType>::populateSequenceStep() const noexcept {
   if (data_.empty()) {
     sequenceStep_ = std::optional<T>{};
@@ -524,6 +543,23 @@ template void Statistics<uint16_t>::populateSignedOrderNonDecreasing()
 template void Statistics<uint32_t>::populateSignedOrderNonDecreasing()
     const noexcept;
 template void Statistics<uint64_t>::populateSignedOrderNonDecreasing()
+    const noexcept;
+
+// populateAdjacentOrder works on unsigned physical input only.
+template void Statistics<uint8_t>::populateAdjacentOrder<false>()
+    const noexcept;
+template void Statistics<uint16_t>::populateAdjacentOrder<false>()
+    const noexcept;
+template void Statistics<uint32_t>::populateAdjacentOrder<false>()
+    const noexcept;
+template void Statistics<uint64_t>::populateAdjacentOrder<false>()
+    const noexcept;
+template void Statistics<uint8_t>::populateAdjacentOrder<true>() const noexcept;
+template void Statistics<uint16_t>::populateAdjacentOrder<true>()
+    const noexcept;
+template void Statistics<uint32_t>::populateAdjacentOrder<true>()
+    const noexcept;
+template void Statistics<uint64_t>::populateAdjacentOrder<true>()
     const noexcept;
 
 // populateSequenceStep works on integral types only.

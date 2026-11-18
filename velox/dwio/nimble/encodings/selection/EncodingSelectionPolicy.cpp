@@ -226,6 +226,7 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
       EncodingType::Sequence,
       EncodingType::Fsst,
       EncodingType::Huffman,
+      EncodingType::Reversed,
   };
 }
 

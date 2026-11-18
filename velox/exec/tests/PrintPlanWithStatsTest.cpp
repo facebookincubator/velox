@@ -20,6 +20,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 #include <gtest/gtest.h>
 #include <re2/re2.h>
@@ -83,7 +84,7 @@ void compareOutputs(
 
 void ensureTaskCompletion(exec::Task* task) {
   // ASSERT_TRUE requires a function with return type void.
-  ASSERT_TRUE(waitForTaskCompletion(task));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*task));
 }
 
 // The test outputs of "innerJoinWithTableScan" and
@@ -602,6 +603,6 @@ TEST_F(PrintPlanWithStatsTest, taskAPI) {
   checkOutput(task.get());
 
   task->requestAbort();
-  ASSERT_TRUE(waitForTaskAborted(task.get()));
+  ASSERT_TRUE(TaskMonitor::waitForAbort(*task));
   checkOutput(task.get());
 }

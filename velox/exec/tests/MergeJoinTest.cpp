@@ -22,6 +22,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 #include "folly/synchronization/EventCount.h"
 
@@ -34,18 +35,15 @@ class MergeJoinTest : public HiveConnectorTestBase {
  protected:
   using OperatorTestBase::assertQuery;
 
-  CursorParameters makeCursorParameters(
-      const std::shared_ptr<const core::PlanNode>& planNode,
+  // Returns a builder that runs 'planNode' with the specified output batch
+  // size.
+  AssertQueryBuilder queryBuilder(
+      const core::PlanNodePtr& planNode,
       uint32_t preferredOutputBatchSize) {
-    auto queryCtx = core::QueryCtx::create(executor_.get());
-
-    CursorParameters params;
-    params.planNode = planNode;
-    params.queryCtx = queryCtx;
-    params.queryCtx->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(preferredOutputBatchSize)}});
-    return params;
+    AssertQueryBuilder builder(planNode, duckDbQueryRunner_);
+    builder.config(
+        core::QueryConfig::kPreferredOutputBatchRows, preferredOutputBatchSize);
+    return builder;
   }
 
   std::vector<RowVectorPtr> generateInput(const std::vector<VectorPtr>& keys) {
@@ -234,19 +232,18 @@ class MergeJoinTest : public HiveConnectorTestBase {
     ASSERT_TRUE(mergeJoinNode->supportsBarrier());
 
     // Use very small output batch size.
-    assertQuery(
-        makeCursorParameters(plan, 16),
+    queryBuilder(plan, 16).assertResults(
         "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM t, u WHERE t.c0 = u.c0");
 
     // Use regular output batch size.
-    assertQuery(
-        makeCursorParameters(plan, 1024),
-        "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM t, u WHERE t.c0 = u.c0");
+    queryBuilder(plan, 1024)
+        .assertResults(
+            "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM t, u WHERE t.c0 = u.c0");
 
     // Use very large output batch size.
-    assertQuery(
-        makeCursorParameters(plan, 10'000),
-        "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM t, u WHERE t.c0 = u.c0");
+    queryBuilder(plan, 10'000)
+        .assertResults(
+            "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM t, u WHERE t.c0 = u.c0");
 
     // Test LEFT join.
     planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -269,19 +266,19 @@ class MergeJoinTest : public HiveConnectorTestBase {
                         .planNode();
 
     // Use very small output batch size.
-    assertQuery(
-        makeCursorParameters(leftPlan, 16),
-        "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0");
+    queryBuilder(leftPlan, 16)
+        .assertResults(
+            "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0");
 
     // Use regular output batch size.
-    assertQuery(
-        makeCursorParameters(leftPlan, 1024),
-        "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0");
+    queryBuilder(leftPlan, 1024)
+        .assertResults(
+            "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0");
 
     // Use very large output batch size.
-    assertQuery(
-        makeCursorParameters(leftPlan, 10'000),
-        "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0");
+    queryBuilder(leftPlan, 10'000)
+        .assertResults(
+            "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM t LEFT JOIN u ON t.c0 = u.c0");
 
     // Test RIGHT join.
     planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -304,19 +301,19 @@ class MergeJoinTest : public HiveConnectorTestBase {
                          .planNode();
 
     // Use very small output batch size.
-    assertQuery(
-        makeCursorParameters(rightPlan, 16),
-        "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM u RIGHT JOIN t ON t.c0 = u.c0");
+    queryBuilder(rightPlan, 16)
+        .assertResults(
+            "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM u RIGHT JOIN t ON t.c0 = u.c0");
 
     // Use regular output batch size.
-    assertQuery(
-        makeCursorParameters(rightPlan, 1024),
-        "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM u RIGHT JOIN t ON t.c0 = u.c0");
+    queryBuilder(rightPlan, 1024)
+        .assertResults(
+            "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM u RIGHT JOIN t ON t.c0 = u.c0");
 
     // Use very large output batch size.
-    assertQuery(
-        makeCursorParameters(rightPlan, 10'000),
-        "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM u RIGHT JOIN t ON t.c0 = u.c0");
+    queryBuilder(rightPlan, 10'000)
+        .assertResults(
+            "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM u RIGHT JOIN t ON t.c0 = u.c0");
 
     // Test right join and left join with same result.
     auto expectedResult = AssertQueryBuilder(leftPlan).copyResults(pool_.get());
@@ -343,19 +340,19 @@ class MergeJoinTest : public HiveConnectorTestBase {
                         .planNode();
 
     // Use very small output batch size.
-    assertQuery(
-        makeCursorParameters(fullPlan, 16),
-        "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM u FULL OUTER JOIN t ON t.c0 = u.c0");
+    queryBuilder(fullPlan, 16)
+        .assertResults(
+            "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM u FULL OUTER JOIN t ON t.c0 = u.c0");
 
     // Use regular output batch size.
-    assertQuery(
-        makeCursorParameters(fullPlan, 1024),
-        "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM u FULL OUTER JOIN t ON t.c0 = u.c0");
+    queryBuilder(fullPlan, 1024)
+        .assertResults(
+            "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM u FULL OUTER JOIN t ON t.c0 = u.c0");
 
     // Use very large output batch size.
-    assertQuery(
-        makeCursorParameters(fullPlan, 10'000),
-        "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM u FULL OUTER JOIN t ON t.c0 = u.c0");
+    queryBuilder(fullPlan, 10'000)
+        .assertResults(
+            "SELECT t.c0, t.c1, u.c1, t.c2, u.c2, t.c3, u.c3 FROM u FULL OUTER JOIN t ON t.c0 = u.c0");
   }
 
   void testJoin(
@@ -638,9 +635,9 @@ TEST_F(MergeJoinTest, innerJoinFilter) {
       "SELECT t_c0, u_c0, u_c1 FROM t, u WHERE t_c0 = u_c0 AND (t_c1 + u_c0) % 2 = 0");
 
   // Very small output batch size.
-  assertQuery(
-      makeCursorParameters(plan("(t_c1 + u_c1) % 2 = 0"), 16),
-      "SELECT t_c0, u_c0, u_c1 FROM t, u WHERE t_c0 = u_c0 AND (t_c1 + u_c1) % 2 = 0");
+  queryBuilder(plan("(t_c1 + u_c1) % 2 = 0"), 16)
+      .assertResults(
+          "SELECT t_c0, u_c0, u_c1 FROM t, u WHERE t_c0 = u_c0 AND (t_c1 + u_c1) % 2 = 0");
 }
 
 TEST_F(MergeJoinTest, leftAndRightJoinFilter) {
@@ -691,13 +688,13 @@ TEST_F(MergeJoinTest, leftAndRightJoinFilter) {
 
   // Test with different output batch sizes.
   for (auto batchSize : {1, 3, 16}) {
-    assertQuery(
-        makeCursorParameters(leftPlan("(t_c1 + u_c1) % 2 = 0"), batchSize),
-        "SELECT t_c0, t_c1, u_c1 FROM t LEFT JOIN u ON t_c0 = u_c0 AND (t_c1 + u_c1) % 2 = 0");
+    queryBuilder(leftPlan("(t_c1 + u_c1) % 2 = 0"), batchSize)
+        .assertResults(
+            "SELECT t_c0, t_c1, u_c1 FROM t LEFT JOIN u ON t_c0 = u_c0 AND (t_c1 + u_c1) % 2 = 0");
 
-    assertQuery(
-        makeCursorParameters(rightPlan("(t_c1 + u_c1) % 2 = 0"), batchSize),
-        "SELECT t_c0, t_c1, u_c1 FROM u RIGHT JOIN t ON t_c0 = u_c0 AND (t_c1 + u_c1) % 2 = 0");
+    queryBuilder(rightPlan("(t_c1 + u_c1) % 2 = 0"), batchSize)
+        .assertResults(
+            "SELECT t_c0, t_c1, u_c1 FROM u RIGHT JOIN t ON t_c0 = u_c0 AND (t_c1 + u_c1) % 2 = 0");
   }
 
   // A left-side row with multiple matches on the right side.
@@ -725,16 +722,16 @@ TEST_F(MergeJoinTest, leftAndRightJoinFilter) {
           "t_c1 + u_c1 < 3",
           "t_c1 + u_c1 > 100",
           "t_c1 + u_c1 < 100"}) {
-      assertQuery(
-          makeCursorParameters(leftPlan(filter), batchSize),
-          fmt::format(
-              "SELECT t_c0, t_c1, u_c1 FROM t LEFT JOIN u ON t_c0 = u_c0 AND {}",
-              filter));
-      assertQuery(
-          makeCursorParameters(rightPlan(filter), batchSize),
-          fmt::format(
-              "SELECT t_c0, t_c1, u_c1 FROM u RIGHT JOIN t ON t_c0 = u_c0 AND {}",
-              filter));
+      queryBuilder(leftPlan(filter), batchSize)
+          .assertResults(
+              fmt::format(
+                  "SELECT t_c0, t_c1, u_c1 FROM t LEFT JOIN u ON t_c0 = u_c0 AND {}",
+                  filter));
+      queryBuilder(rightPlan(filter), batchSize)
+          .assertResults(
+              fmt::format(
+                  "SELECT t_c0, t_c1, u_c1 FROM u RIGHT JOIN t ON t_c0 = u_c0 AND {}",
+                  filter));
     }
   }
 }
@@ -764,10 +761,10 @@ TEST_F(MergeJoinTest, outerJoinRejectedRowsAtOutputBoundary) {
                 rightJoin ? core::JoinType::kRight : core::JoinType::kLeft)
             .planNode();
     for (auto batchSize : {3, 4}) {
-      assertQuery(
-          makeCursorParameters(plan, batchSize),
-          "SELECT t_c0, t_c1, u_c1 FROM t LEFT JOIN u "
-          "ON t_c0 = u_c0 AND u_c1 > t_c1 + 10");
+      queryBuilder(plan, batchSize)
+          .assertResults(
+              "SELECT t_c0, t_c1, u_c1 FROM t LEFT JOIN u "
+              "ON t_c0 = u_c0 AND u_c1 > t_c1 + 10");
     }
   }
 }
@@ -796,10 +793,10 @@ TEST_F(MergeJoinTest, fullOuterJoinRejectedRowsAtOutputBoundary) {
                   .planNode();
   for (auto batchSize : {3, 4, 6}) {
     SCOPED_TRACE(fmt::format("batchSize: {}", batchSize));
-    assertQuery(
-        makeCursorParameters(plan, batchSize),
-        "SELECT t_c0, t_c1, u_c0, u_c1 FROM t FULL OUTER JOIN u "
-        "ON t_c0 = u_c0 AND u_c1 > t_c1 + 10");
+    queryBuilder(plan, batchSize)
+        .assertResults(
+            "SELECT t_c0, t_c1, u_c0, u_c1 FROM t FULL OUTER JOIN u "
+            "ON t_c0 = u_c0 AND u_c1 > t_c1 + 10");
   }
 }
 
@@ -1059,7 +1056,7 @@ TEST_F(MergeJoinTest, dictionaryOutput) {
       });
 
   task->start(2);
-  waitForTaskCompletion(task.get());
+  TaskMonitor::waitForCompletion(*task);
 
   for (const auto& child : output->children()) {
     EXPECT_TRUE(isDictionary(child->encoding()));
@@ -2225,12 +2222,12 @@ TEST_F(MergeJoinTest, complexTypedFilter) {
         }
 
         for (size_t outputBatchSize : {1000, 1024, 13}) {
-          assertQuery(
-              makeCursorParameters(plan, outputBatchSize),
-              fmt::format(
-                  "SELECT {} FROM t LEFT JOIN u ON t_c0 = u_c0 AND {}",
-                  outputs,
-                  queryFilter));
+          queryBuilder(plan, outputBatchSize)
+              .assertResults(
+                  fmt::format(
+                      "SELECT {} FROM t LEFT JOIN u ON t_c0 = u_c0 AND {}",
+                      outputs,
+                      queryFilter));
         }
       };
 
@@ -2363,12 +2360,11 @@ DEBUG_ONLY_TEST_F(MergeJoinTest, failureOnRightSide) {
 
   // Use very small output batch size.
   VELOX_ASSERT_THROW(
-      assertQuery(
-          makeCursorParameters(plan, 16),
+      queryBuilder(plan, 16).assertResults(
           "SELECT t.c0, t.c1, u.c1 FROM t, u WHERE t.c0 = u.c0"),
       "Expected");
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(MergeJoinTest, barrier) {
@@ -2627,7 +2623,7 @@ TEST_F(MergeJoinTest, barrier) {
           (testData.hasBarrier || !testData.serialExecution) ? 2 : 1);
     }
   }
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(MergeJoinTest, antiJoinWithFilterWithMultiMatchedRows) {

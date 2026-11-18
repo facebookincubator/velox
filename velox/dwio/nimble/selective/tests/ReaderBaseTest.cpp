@@ -90,6 +90,50 @@ class ReaderBaseTest : public ::testing::TestWithParam<CreationMode> {
     return file;
   }
 
+  // Writes a file with each statistics kind, nulls and nested types.
+  std::string writeStatsTestFile(bool enableVectorizedStats) {
+    std::string file;
+    velox::test::VectorMaker vectorMaker(pool_.get());
+    constexpr velox::vector_size_t kSize{100};
+    auto vector = vectorMaker.rowVector(
+        {"ints", "doubles", "strings", "bools", "arrays", "maps"},
+        {vectorMaker.flatVector<int64_t>(
+             kSize,
+             [](auto row) { return row * 3 - 50; },
+             [](auto row) { return row % 7 == 0; }),
+         vectorMaker.flatVector<double>(
+             kSize, [](auto row) { return row * 1.5; }),
+         vectorMaker.flatVector<velox::StringView>(
+             kSize,
+             [](auto row) {
+               return velox::StringView::makeInline(
+                   "val" + std::to_string(row));
+             },
+             [](auto row) { return row % 5 == 0; }),
+         vectorMaker.flatVector<bool>(
+             kSize, [](auto row) { return row % 2 == 0; }),
+         vectorMaker.arrayVector<int32_t>(
+             kSize,
+             [](auto row) { return row % 4; },
+             [](auto index) { return index; }),
+         vectorMaker.mapVector<int64_t, double>(
+             kSize,
+             [](auto row) { return row % 3; },
+             [](auto index) { return index; },
+             [](auto index) { return index * 0.5; })});
+
+    WriterOptions writerOptions;
+    writerOptions.enableVectorizedStats = enableVectorizedStats;
+    auto writer = std::make_unique<Writer>(
+        vector->type(),
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *pool_,
+        std::move(writerOptions));
+    writer->write(vector);
+    writer->close();
+    return file;
+  }
+
   velox::dwio::common::ReaderOptions makeReaderOptions() {
     velox::dwio::common::ReaderOptions opts(pool_.get());
     opts.setDataIoStats(std::make_shared<velox::io::IoStatistics>());
@@ -309,6 +353,42 @@ TEST_P(ReaderBaseTest, equivalentAcrossModes) {
   EXPECT_EQ(direct->tablet().stripeCount(), fromCache->tablet().stripeCount());
   EXPECT_EQ(
       direct->tablet().tabletRowCount(), fromCache->tablet().tabletRowCount());
+}
+
+TEST_P(ReaderBaseTest, fileColumnStatistics) {
+  const auto reader =
+      createReaderBase(writeStatsTestFile(/*enableVectorizedStats=*/true));
+  EXPECT_TRUE(reader->hasFileColumnStatistics());
+
+  // Node IDs index the file schema: 'ints' has a null every 7 rows and
+  // 'strings' one every 5 rows.
+  const auto& schemaWithId = *reader->fileSchemaWithId();
+  const auto* ints =
+      reader->fileColumnStatistics(schemaWithId.childAt(0)->id());
+  ASSERT_NE(ints, nullptr);
+  EXPECT_EQ(ints->getNullCount(), 15);
+  const auto* strings =
+      reader->fileColumnStatistics(schemaWithId.childAt(2)->id());
+  ASSERT_NE(strings, nullptr);
+  EXPECT_EQ(strings->getNullCount(), 20);
+
+  const uint32_t numNodes = schemaWithId.maxId() + 1;
+  for (uint32_t nodeId = 0; nodeId < numNodes; ++nodeId) {
+    SCOPED_TRACE(fmt::format("nodeId {}", nodeId));
+    const auto* stats = reader->fileColumnStatistics(nodeId);
+    ASSERT_NE(stats, nullptr);
+    EXPECT_EQ(reader->fileColumnLogicalSize(nodeId), stats->getLogicalSize());
+  }
+  EXPECT_EQ(reader->fileColumnStatistics(numNodes), nullptr);
+  EXPECT_EQ(reader->fileColumnLogicalSize(numNodes), std::nullopt);
+}
+
+TEST_P(ReaderBaseTest, fileStatsAbsent) {
+  const auto reader =
+      createReaderBase(writeStatsTestFile(/*enableVectorizedStats=*/false));
+  EXPECT_FALSE(reader->hasFileColumnStatistics());
+  EXPECT_EQ(reader->fileColumnStatistics(1), nullptr);
+  EXPECT_EQ(reader->fileColumnLogicalSize(1), std::nullopt);
 }
 
 TEST_P(ReaderBaseTest, locateStreams) {

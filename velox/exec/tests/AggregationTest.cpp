@@ -42,6 +42,7 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/SumNonPODAggregate.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/LazyVector.h"
@@ -1205,7 +1206,7 @@ TEST_F(AggregationTest, largeValueRangeArray) {
                 .capturePlanNodeId(finalAggId)
                 .project({"c0", "cardinality(a0) as l"})
                 .planNode();
-  auto task = test::assertQuery(op, expected);
+  auto task = AssertQueryBuilder(op).assertResults(expected);
   auto stats = toPlanStats(task->taskStats());
   auto runtimeStats = stats.at(partialAggId).customStats;
 
@@ -1314,23 +1315,21 @@ TEST_F(AggregationTest, partialAggregationMaybeReservationReleaseCheck) {
   constexpr int64_t kGB = 1 << 30;
   const int64_t kMaxPartialMemoryUsage = 1 * kGB;
   // Make sure partial aggregation runs out of memory after first batch.
-  CursorParameters params;
-  params.queryCtx = core::QueryCtx::create(executor_.get());
-  params.queryCtx->testingOverrideConfigUnsafe({
-      {QueryConfig::kMaxPartialAggregationMemory,
-       std::to_string(kMaxPartialMemoryUsage)},
-      {QueryConfig::kMaxExtendedPartialAggregationMemory,
-       std::to_string(kMaxPartialMemoryUsage)},
-  });
-
   core::PlanNodeId aggNodeId;
-  params.planNode = PlanBuilder()
-                        .values(vectors)
-                        .partialAggregation({"c0"}, {})
-                        .capturePlanNodeId(aggNodeId)
-                        .finalAggregation()
-                        .planNode();
-  auto task = assertQuery(params, "SELECT distinct c0 FROM tmp");
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"c0"}, {})
+                  .capturePlanNodeId(aggNodeId)
+                  .finalAggregation()
+                  .planNode();
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(
+              QueryConfig::kMaxPartialAggregationMemory, kMaxPartialMemoryUsage)
+          .config(
+              QueryConfig::kMaxExtendedPartialAggregationMemory,
+              kMaxPartialMemoryUsage)
+          .assertResults("SELECT distinct c0 FROM tmp");
   const auto runtimeStats =
       PlanNodeStats::extract(task->taskStats(), aggNodeId).customStats;
   EXPECT_EQ(0, runtimeStats.count("flushRowCount"));
@@ -3992,7 +3991,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringOutputProcessing) {
             .maxDrivers(testData.numDrivers)
             .assertResults(expectedResult),
         "Memory pool manually aborted");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -4058,7 +4057,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringInputgProcessing) {
             .maxDrivers(testData.numDrivers)
             .assertResults(expectedResult),
         "Memory pool manually aborted");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -4427,7 +4426,7 @@ TEST_F(AggregationTest, maxSpillBytes) {
       ASSERT_EQ(
           e.errorCode(), facebook::velox::error_code::kSpillLimitExceeded);
     }
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -4481,7 +4480,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregation) {
             .sum,
         0);
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -4526,7 +4525,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromDistinctAggregation) {
     auto& planStats = taskStats.at(aggrNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -4565,7 +4564,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregationOnNoMoreInput) {
     auto stats = task->taskStats().pipelineStats;
     ASSERT_GT(stats[0].operatorStats[1].spilledBytes, 0);
   }
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregationDuringOutput) {
@@ -4611,7 +4610,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregationDuringOutput) {
     auto stats = task->taskStats().pipelineStats;
     ASSERT_GT(stats[0].operatorStats[1].spilledBytes, 0);
   }
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(AggregationTest, reclaimFromCompletedAggregation) {
@@ -4631,7 +4630,7 @@ TEST_F(AggregationTest, reclaimFromCompletedAggregation) {
                     .planNode())
             .assertResults(
                 "SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
-    waitForTaskCompletion(task.get());
+    TaskMonitor::waitForCompletion(*task);
     arbitrationWaitFlag = false;
     arbitrationWait.notifyAll();
   });
@@ -4639,7 +4638,7 @@ TEST_F(AggregationTest, reclaimFromCompletedAggregation) {
 
   memory::testingRunArbitration();
   aggregationThread.join();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithCompact) {
@@ -4740,7 +4739,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithCompact) {
       ASSERT_EQ(planStats.spilledBytes, 0);
     }
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 

@@ -510,11 +510,6 @@ class RPCOperator : public exec::Operator {
   // Whether we've detected the finish condition.
   bool finished_{false};
 
-  // Ceiling for batch RPC calls; the operator returns as soon as results are
-  // ready. An offline batch job can take many minutes in backend queueing and
-  // scheduling, so this needs generous headroom.
-  static constexpr auto kBatchRpcTimeout = std::chrono::milliseconds(3'600'000);
-
   // Block wait time tracking for runtime stats. Started when the operator
   // parks and reset when the wait ends.
   std::optional<folly::stop_watch<std::chrono::nanoseconds>> blockWaitWatch_;

@@ -20,6 +20,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
 using facebook::velox::test::BatchMaker;
@@ -71,19 +72,6 @@ class LocalPartitionTest : public HiveConnectorTestBase {
       std::this_thread::sleep_for(std::chrono::seconds(1));
     }
     ASSERT_EQ(expected, task.use_count());
-  }
-
-  void waitForTaskCompletion(
-      const std::shared_ptr<exec::Task>& task,
-      exec::TaskState expected) {
-    if (task->state() != expected) {
-      auto& executor = folly::QueuedImmediateExecutor::instance();
-      auto future = task->taskCompletionFuture()
-                        .within(std::chrono::microseconds(1'000'000))
-                        .via(&executor);
-      future.wait();
-      EXPECT_EQ(expected, task->state());
-    }
   }
 };
 
@@ -815,7 +803,7 @@ TEST_F(LocalPartitionTest, earlyCancelation) {
   }
 
   // Wait for task to transition to final state.
-  waitForTaskCompletion(task, exec::TaskState::kCanceled);
+  EXPECT_TRUE(TaskMonitor::waitForStateChange(*task, TaskState::kCanceled));
 
   // Make sure there is only one reference to Task left, i.e. no Driver is
   // blocked forever.
@@ -851,7 +839,7 @@ TEST_F(LocalPartitionTest, producerError) {
   ASSERT_THROW(while (cursor->moveNext()) { ; }, VeloxException);
 
   // Wait for task to transition to failed state.
-  waitForTaskCompletion(task, exec::TaskState::kFailed);
+  EXPECT_TRUE(TaskMonitor::waitForStateChange(*task, TaskState::kFailed));
 
   // Make sure there is only one reference to Task left, i.e. no Driver is
   // blocked forever.

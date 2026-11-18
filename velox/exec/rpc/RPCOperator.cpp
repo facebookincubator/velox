@@ -62,7 +62,7 @@ RPCOperator::RPCOperator(
           rpcNode->outputType(),
           operatorId,
           rpcNode->id(),
-          "RPC"),
+          std::string(rpcNode->name())),
       rpcNode_(std::move(rpcNode)),
       state_(
           std::make_shared<RPCState>(operatorCtx_->pool()->shared_from_this())),
@@ -81,6 +81,9 @@ RPCOperator::RPCOperator(
 }
 
 RPCOperator::~RPCOperator() {
+  if (function_) {
+    function_->close();
+  }
   if (state_ == nullptr) {
     return;
   }
@@ -157,6 +160,7 @@ void RPCOperator::initialize() {
   auto* driverCtx = operatorCtx_->driverCtx();
   VELOX_CHECK_NOT_NULL(driverCtx);
   const auto& queryConfig = driverCtx->queryConfig();
+  function_->setMemoryPool(operatorCtx_->pool()->shared_from_this());
   function_->initialize(
       queryConfig, inputTypes, constantInputs, rpcNode_->streamingMode());
   capacityRetryEnabled_ =
@@ -453,7 +457,8 @@ void RPCOperator::dispatchDueRetries() {
         state_->addRetriedRow(
             state_,
             retry,
-            wrapRowFuture(std::move(future), retry.rowId, kBatchRpcTimeout),
+            wrapRowFuture(
+                std::move(future), retry.rowId, function_->requestTimeout()),
             limiter_->makeLease(std::move(reserved[i])));
       }
     }
@@ -512,7 +517,7 @@ void RPCOperator::dispatchRowsUnderAdmission() {
           state_,
           rowId,
           RPCState::RowLocation{pendingBatchIndex_, originalRowIndex},
-          wrapRowFuture(std::move(future), rowId, kBatchRpcTimeout),
+          wrapRowFuture(std::move(future), rowId, function_->requestTimeout()),
           std::move(admissionLease));
     }
     pendingCursor_ += numRowsInChunk;
@@ -592,7 +597,7 @@ void checkNoFrameworkFailures(
     const std::string& functionName,
     const std::vector<RPCResponse>& responses) {
   for (const auto& response : responses) {
-    const auto kind = response.errorKind();
+    const auto kind = response.completionErrorKind();
     if (velox::rpc::errorCategory(kind) !=
         velox::rpc::RPCErrorCategory::kFramework) {
       continue;
@@ -607,7 +612,8 @@ void checkNoFrameworkFailures(
         "RPC function failed internally: function '{}', row {}, error: {}",
         functionName,
         response.rowId,
-        response.error().message);
+        response.hasError() ? response.error().message
+                            : "encoded lifecycle failure");
   }
 }
 
@@ -803,7 +809,7 @@ bool RPCOperator::flushBatchRequests(int32_t maxRows) {
   auto rowIdsPtr = std::make_shared<std::vector<int64_t>>(std::move(rowIds));
   auto wrapped =
       std::move(future)
-          .within(kBatchRpcTimeout)
+          .within(function_->requestTimeout())
           .deferError([rowIdsPtr](const folly::exception_wrapper& error) {
             return degradeBatchFailureToRowErrors(*rowIdsPtr, error);
           })
@@ -984,16 +990,17 @@ RowVectorPtr RPCOperator::outputPerRow() {
   locations.reserve(claimedRows_.size());
   roundTripTimesNs.reserve(claimedRows_.size());
   for (auto& row : claimedRows_) {
-    const bool hasError = row.response.hasError();
+    const auto kind = row.response.completionErrorKind();
+    const bool hasError = kind != velox::rpc::RPCErrorKind::kNone;
     if (hasError) {
       numErrors_++;
-      recordErrorKind(row.response.errorKind());
+      recordErrorKind(kind);
     }
     // Only successful rows feed the gradient. Errored rows (e.g. null_input,
     // client-side rejections) complete without a real round trip, so their
     // artificially small RTT would pull down the per-window minimum and skew
     // the gradient/baseline.
-    if (!hasError) {
+    if (!hasError && row.response.isBackendOutcome()) {
       roundTripTimesNs.push_back(row.rttNs);
       if (row.admissionEpoch.has_value()) {
         const auto overloadEpoch = row.admissionEpoch.value();
@@ -1057,24 +1064,27 @@ RowVectorPtr RPCOperator::outputBatch() {
   checkNoFrameworkFailures(function_->name(), claimedBatch_->responses);
 
   const auto numRows = static_cast<int64_t>(claimedBatch_->responses.size());
-  int64_t numFailedRows{0};
+  bool backendSucceeded{false};
   for (const auto& response : claimedBatch_->responses) {
-    if (response.hasError()) {
+    const auto kind = response.completionErrorKind();
+    if (kind != velox::rpc::RPCErrorKind::kNone) {
       numErrors_++;
-      ++numFailedRows;
-      recordErrorKind(response.errorKind());
+      recordErrorKind(kind);
+    } else if (response.isBackendOutcome()) {
+      backendSucceeded = true;
     }
   }
 
   // One measured round trip is recorded for the completed flush. Shared-cap
   // recovery is credited by the exact backend units reserved: one for a
-  // native batch, or one per emitted RPC for a fan-out batch. A flush in which
-  // no row succeeded earns no credit, as errored PER_ROW rows earn none:
-  // crediting it would restart a paced recovery that its failure ends.
+  // native batch, or one per emitted RPC for a fan-out batch. Only current,
+  // error-free backend outcomes earn credit. An empty credit set sends no
+  // success notification; explicit congestion feedback controls backoff.
+  // Completion releases admission leases independently of this feedback.
   const std::vector<int64_t> roundTripTimesNs{claimedBatch_->rttNs};
   if (claimedBatch_->admissionUnits > 0) {
     std::vector<std::pair<uint64_t, int64_t>> successUnitsByEpoch;
-    if (claimedBatch_->admissionEpoch.has_value() && numFailedRows < numRows) {
+    if (claimedBatch_->admissionEpoch.has_value() && backendSucceeded) {
       successUnitsByEpoch.emplace_back(
           claimedBatch_->admissionEpoch.value(), claimedBatch_->admissionUnits);
     }
@@ -1362,6 +1372,9 @@ void RPCOperator::close() {
   // sample has finished reading RPCState, so the reset below cannot free it
   // underneath the collector thread.
   *liveStatsSources_.wlock() = LiveStatsSources{};
+  if (function_) {
+    function_->close();
+  }
   claimedRows_.clear();
   claimedBatch_.reset();
   if (state_ != nullptr) {

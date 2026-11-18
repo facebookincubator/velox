@@ -34,6 +34,7 @@
 #include "velox/exec/tests/utils/HashJoinTestBase.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/VectorPrinter.h"
@@ -390,7 +391,7 @@ TEST_F(HashJoinTest, unsupportedTypeProjectedOutBeforeHashJoin) {
   auto expected = makeNamedRowVector("p_key", makeFlatVector<int64_t>({2, 3}));
   facebook::velox::test::assertEqualVectors(expected, result);
 
-  const auto operatorStats = toOperatorStats(task->taskStats());
+  const auto operatorStats = task->taskStats().operatorStats();
   EXPECT_EQ(operatorStats.count("HashBuild"), 1);
   EXPECT_EQ(operatorStats.count("HashProbe"), 1);
   EXPECT_EQ(operatorStats.count("CudfHashJoinBuild"), 0);
@@ -6612,7 +6613,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, buildReservationReleaseCheck) {
     }
   };
   VELOX_ASSERT_THROW(runTask(), "");
-  ASSERT_TRUE(waitForTaskAborted(task, 5'000'000));
+  ASSERT_TRUE(TaskMonitor::waitForAbort(*task, 5'000'000));
 }
 
 TEST_F(HashJoinTest, DISABLED_dynamicFilterOnPartitionKey) {
@@ -7546,7 +7547,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringOutputProcessing) {
                 "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
             .run(),
         "Manual MemoryPool Abortion");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -7623,7 +7624,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringInputProcessing) {
             .run(),
         "Manual MemoryPool Abortion");
 
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -7701,7 +7702,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashBuildAbortDuringAllocation) {
             .run(),
         "Manual MemoryPool Abortion");
 
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -7773,7 +7774,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeAbortDuringInputProcessing) {
                 "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
             .run(),
         "Manual MemoryPool Abortion");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -7998,6 +7999,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, exceededMaxSpillLevel) {
 
   core::PlanNodeId probeScanId;
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId joinNodeId;
   auto plan = PlanBuilder(planNodeIdGenerator)
                   .values(probeVectors, false)
                   .hashJoin(
@@ -8008,6 +8010,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, exceededMaxSpillLevel) {
                           .planNode(),
                       "",
                       concat(probeType_->names(), buildType_->names()))
+                  .capturePlanNodeId(joinNodeId)
                   .planNode();
 
   auto tempDirectory = TempDirectoryPath::create();
@@ -8042,25 +8045,26 @@ DEBUG_ONLY_TEST_F(HashJoinTest, exceededMaxSpillLevel) {
           "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
       .config(core::QueryConfig::kSpillStartPartitionBit, "29")
       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
-        auto opStats = toOperatorStats(task->taskStats());
+        const auto joinStats =
+            PlanNodeStats::extract(task->taskStats(), joinNodeId);
         ASSERT_EQ(
-            opStats.at("HashProbe")
-                .runtimeStats[std::string(Operator::kExceededMaxSpillLevel)]
+            joinStats.operatorStatsFor("HashProbe")
+                .customStat(Operator::kExceededMaxSpillLevel)
                 .sum,
             8);
         ASSERT_EQ(
-            opStats.at("HashProbe")
-                .runtimeStats[std::string(Operator::kExceededMaxSpillLevel)]
+            joinStats.operatorStatsFor("HashProbe")
+                .customStat(Operator::kExceededMaxSpillLevel)
                 .count,
             1);
         ASSERT_EQ(
-            opStats.at("HashBuild")
-                .runtimeStats[std::string(Operator::kExceededMaxSpillLevel)]
+            joinStats.operatorStatsFor("HashBuild")
+                .customStat(Operator::kExceededMaxSpillLevel)
                 .sum,
             8);
         ASSERT_EQ(
-            opStats.at("HashBuild")
-                .runtimeStats[std::string(Operator::kExceededMaxSpillLevel)]
+            joinStats.operatorStatsFor("HashBuild")
+                .customStat(Operator::kExceededMaxSpillLevel)
                 .count,
             1);
       })
@@ -8230,7 +8234,7 @@ TEST_F(HashJoinTest, DISABLED_reclaimFromJoinBuilderWithMultiDrivers) {
   // This test uses on-demand created memory manager instead of the global
   // one. We need to make sure any used memory got cleaned up before exiting
   // the scope
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   ASSERT_GT(arbitrator->stats().numRequests, 0);
   ASSERT_GT(arbitrator->stats().reclaimedUsedBytes, 0);
 }
@@ -8322,7 +8326,7 @@ DEBUG_ONLY_TEST_F(
   // This test uses on-demand created memory manager instead of the global
   // one. We need to make sure any used memory got cleaned up before exiting
   // the scope
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   ASSERT_EQ(
       memory::memoryManager()->arbitrator()->stats().numNonReclaimableAttempts,
       2);
@@ -8346,6 +8350,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringTableBuild) {
 
   core::PlanNodeId probeScanId;
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId joinNodeId;
   auto plan = PlanBuilder(planNodeIdGenerator)
                   .values(probeVectors, false)
                   .hashJoin(
@@ -8356,6 +8361,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringTableBuild) {
                           .planNode(),
                       "",
                       concat(probeType_->names(), buildType_->names()))
+                  .capturePlanNodeId(joinNodeId)
                   .planNode();
 
   std::atomic_bool injectSpillOnce{true};
@@ -8380,10 +8386,11 @@ DEBUG_ONLY_TEST_F(HashJoinTest, reclaimDuringTableBuild) {
           "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
       .config(core::QueryConfig::kSpillStartPartitionBit, "29")
       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
-        auto opStats = toOperatorStats(task->taskStats());
+        const auto joinStats =
+            PlanNodeStats::extract(task->taskStats(), joinNodeId);
         ASSERT_GT(
-            opStats.at("HashBuild")
-                .runtimeStats[std::string(Operator::kSpillWrites)]
+            joinStats.operatorStatsFor("HashBuild")
+                .customStat(Operator::kSpillWrites)
                 .sum,
             0);
       })
@@ -8470,7 +8477,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, exceptionDuringFinishJoinBuild) {
   // This test uses on-demand created memory manager instead of the global
   // one. We need to make sure any used memory got cleaned up before exiting
   // the scope
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   ASSERT_EQ(arbitrator->stats().freeCapacityBytes, expectedFreeCapacityBytes);
 }
 
@@ -8586,7 +8593,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, arbitrationTriggeredDuringParallelJoinBuild) {
   // This test uses on-demand created memory manager instead of the global
   // one. We need to make sure any used memory got cleaned up before exiting
   // the scope
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, arbitrationTriggeredByEnsureJoinTableFit) {
@@ -8671,13 +8678,13 @@ DEBUG_ONLY_TEST_F(HashJoinTest, joinBuildSpillError) {
           .copyResults(pool()),
       injectedErrorMsg);
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   ASSERT_EQ(arbitrator->stats().numFailures, 1);
 
   // Wait again here as this test uses on-demand created memory manager instead
   // of the global one. We need to make sure any used memory got cleaned up
   // before exiting the scope
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, probeSpillOnWaitForPeers) {
@@ -8752,6 +8759,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, probeSpillOnWaitForPeers) {
   createDuckDbTable(totalVectors);
   auto spillDirectory = TempDirectoryPath::create();
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId joinNodeId;
   auto plan = PlanBuilder(planNodeIdGenerator)
                   .values(vectors, true)
                   .project({"c0 AS t0", "c1 AS t1"})
@@ -8765,6 +8773,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, probeSpillOnWaitForPeers) {
                       "",
                       {"t1"},
                       core::JoinType::kInner)
+                  .capturePlanNodeId(joinNodeId)
                   .planNode();
 
   {
@@ -8777,14 +8786,15 @@ DEBUG_ONLY_TEST_F(HashJoinTest, probeSpillOnWaitForPeers) {
             .maxDrivers(numDrivers)
             .assertResults("SELECT a.c1 from tmp a join tmp b on a.c0 = b.c0");
 
-    auto opStats = toOperatorStats(task->taskStats());
-    ASSERT_GT(opStats.at("HashProbe").spilledBytes, 0);
-    ASSERT_EQ(opStats.at("HashBuild").spilledBytes, 0);
+    const auto joinStats =
+        PlanNodeStats::extract(task->taskStats(), joinNodeId);
+    ASSERT_GT(joinStats.operatorStatsFor("HashProbe").spilledBytes, 0);
+    ASSERT_EQ(joinStats.operatorStatsFor("HashBuild").spilledBytes, 0);
 
     const auto* arbitrator = memory::memoryManager()->arbitrator();
     ASSERT_GT(arbitrator->stats().reclaimedUsedBytes, 0);
   }
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, taskWaitTimeout) {
@@ -8873,7 +8883,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, taskWaitTimeout) {
     // This test uses on-demand created memory manager instead of the global
     // one. We need to make sure any used memory got cleaned up before exiting
     // the scope
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -8966,7 +8976,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpill) {
             "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t RIGHT JOIN u ON t.t_k1 = u.u_k1")
         .injectSpill(false)
         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
-          auto opStats = toOperatorStats(task->taskStats());
+          auto opStats = task->taskStats().operatorStats();
           ASSERT_GT(opStats.at("HashProbe").spilledBytes, 0);
           if (testData.triggerBuildSpill) {
             ASSERT_GT(opStats.at("HashBuild").spilledBytes, 0);
@@ -9023,7 +9033,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillInMiddeOfLastOutputProcessing) {
           "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t RIGHT JOIN u ON t.t_k1 = u.u_k1")
       .injectSpill(false)
       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
-        auto opStats = toOperatorStats(task->taskStats());
+        auto opStats = task->taskStats().operatorStats();
         ASSERT_GT(opStats.at("HashProbe").spilledBytes, 0);
         // Verifies that we only spill the output which is single partitioned
         // but not the hash table.
@@ -9097,7 +9107,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillInMiddeOfOutputProcessing) {
             "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t RIGHT JOIN u ON t.t_k1 = u.u_k1")
         .injectSpill(false)
         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
-          auto opStats = toOperatorStats(task->taskStats());
+          auto opStats = task->taskStats().operatorStats();
           ASSERT_GT(opStats.at("HashProbe").spilledBytes, 0);
           ASSERT_GT(opStats.at("HashProbe").spilledPartitions, 1);
         })
@@ -9150,7 +9160,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillWhenOneOfProbeFinish) {
             "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 = u.u_k0")
         .injectSpill(false)
         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
-          auto opStats = toOperatorStats(task->taskStats());
+          auto opStats = task->taskStats().operatorStats();
           ASSERT_EQ(opStats.at("HashBuild").spilledBytes, 0);
           ASSERT_GT(opStats.at("HashProbe").spilledBytes, 0);
         })
@@ -9211,7 +9221,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillExceedLimit) {
             "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t RIGHT JOIN u ON t.t_k1 = u.u_k1")
         .injectSpill(false)
         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
-          auto opStats = toOperatorStats(task->taskStats());
+          auto opStats = task->taskStats().operatorStats();
           if (buildTriggerSpill) {
             ASSERT_GT(opStats.at("HashProbe").spilledBytes, 0);
             ASSERT_GT(opStats.at("HashBuild").spilledBytes, 0);
@@ -9268,7 +9278,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashProbeSpillUnderNonReclaimableSection) {
           "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 = u.u_k0")
       .injectSpill(false)
       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
-        auto opStats = toOperatorStats(task->taskStats());
+        auto opStats = task->taskStats().operatorStats();
         ASSERT_EQ(opStats.at("HashProbe").spilledBytes, 0);
         ASSERT_EQ(opStats.at("HashBuild").spilledBytes, 0);
       })
@@ -9489,7 +9499,7 @@ DEBUG_ONLY_TEST_F(
         if (!injectSpill) {
           return;
         }
-        auto opStats = toOperatorStats(task->taskStats());
+        auto opStats = task->taskStats().operatorStats();
         ASSERT_GT(opStats.at("HashProbe").spilledBytes, 0);
         ASSERT_GE(opStats.at("HashProbe").spilledPartitions, 1);
       })
@@ -9603,7 +9613,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, spillOnBlockedProbe) {
     ASSERT_GT(buildSpillStats.spilledBytes, 0);
   }
   arbitrationThread.join();
-  waitForAllTasksToBeDeleted(30'000'000);
+  TaskMonitor::waitForAllTasksDeleted(30'000'000);
 }
 
 DEBUG_ONLY_TEST_F(HashJoinTest, buildReclaimedMemoryReport) {

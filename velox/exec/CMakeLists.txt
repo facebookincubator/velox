@@ -112,6 +112,7 @@ velox_add_library(
   TableWriteMerge.cpp
   TableWriter.cpp
   Task.cpp
+  TaskStats.cpp
   TaskStructs.cpp
   TaskTraceReader.cpp
   TaskTraceWriter.cpp

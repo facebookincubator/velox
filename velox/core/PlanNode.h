@@ -6954,6 +6954,8 @@ class RPCNode : public PlanNode {
   /// @param streamingMode The streaming mode for RPC execution.
   /// @param dispatchBatchSize For BATCH mode pipelining: fire callBatch()
   ///        every N rows during addInput() instead of collecting all rows.
+  /// @param executionPhase Backend lifecycle phase. SUBMIT, POLL and COLLECT
+  ///        require BATCH dispatch; INLINE executes the original RPC call.
   RPCNode(
       const PlanNodeId& id,
       PlanNodePtr source,
@@ -6961,7 +6963,8 @@ class RPCNode : public PlanNode {
       std::string outputColumn,
       RowTypePtr outputType,
       rpc::RPCStreamingMode streamingMode = rpc::RPCStreamingMode::kPerRow,
-      int32_t dispatchBatchSize = 0);
+      int32_t dispatchBatchSize = 0,
+      std::string executionPhase = "INLINE");
 
   const PlanNodePtr& source() const {
     return sources_[0];
@@ -6992,9 +6995,12 @@ class RPCNode : public PlanNode {
     return dispatchBatchSize_;
   }
 
-  std::string_view name() const override {
-    return "RPC";
+  const std::string& executionPhase() const {
+    return executionPhase_;
   }
+
+  /// Returns the operator name used in phase reporting and plan serialization.
+  std::string_view name() const override;
 
   const RowTypePtr& outputType() const override {
     return outputType_;
@@ -7017,6 +7023,8 @@ class RPCNode : public PlanNode {
   RowTypePtr outputType_;
   rpc::RPCStreamingMode streamingMode_;
   int32_t dispatchBatchSize_{0};
+  // Preserves the lifecycle phase across plan serialization.
+  std::string executionPhase_;
 };
 
 using RPCNodePtr = std::shared_ptr<RPCNode>;

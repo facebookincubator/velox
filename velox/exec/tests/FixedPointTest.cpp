@@ -51,6 +51,7 @@
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/LocalFixedPoint.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/exec/tests/utils/TestIndexStorageConnector.h"
 #include "velox/type/Filter.h"
 
@@ -180,7 +181,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   // memory; drain the one the tasks here run on as well, since exchange and
   // scan work queued on it can still hold task memory after the tasks are gone.
   void TearDown() override {
-    exec::test::waitForAllTasksToBeDeleted();
+    exec::test::TaskMonitor::waitForAllTasksDeleted();
     cpuExecutor_->join();
     HiveConnectorTestBase::TearDown();
   }

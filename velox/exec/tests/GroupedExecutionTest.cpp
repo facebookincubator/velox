@@ -22,9 +22,11 @@
 #include "velox/exec/Cursor.h"
 #include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::exec::test {
@@ -494,11 +496,11 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecution) {
           exec::DefaultOutputBufferManager::getInstanceRef();
       outputBufferManager->deleteResults(task->taskId(), 0);
 
-      waitForTaskCompletion(task.get());
+      TaskMonitor::waitForCompletion(*task);
       // Task must be finished at this stage.
       ASSERT_EQ(task->state(), exec::TaskState::kFinished);
     }
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 

@@ -19,6 +19,7 @@
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 #include <re2/re2.h>
 
@@ -267,7 +268,7 @@ TEST_P(MemoryCapExceededTest, allocatorCapacityExceededError) {
             << "', but received '" << errorMessage << "'.";
       }
     }
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 

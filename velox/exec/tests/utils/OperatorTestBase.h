@@ -18,14 +18,17 @@
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <gtest/gtest.h>
 
-#include "velox/common/caching/SsdCache.h"
+#include "velox/common/caching/AsyncDataCache.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
-#include "velox/exec/HashProbe.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/parse/ExpressionsParser.h"
-#include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+// TODO: Remove once Prestissimo migrates.
+#include "velox/exec/HashProbe.h"
+#endif
 
 namespace facebook::velox::exec::test {
 class OperatorTestBase : public virtual testing::Test,
@@ -75,87 +78,26 @@ class OperatorTestBase : public virtual testing::Test,
     duckDbQueryRunner_.createTable(tableName, data);
   }
 
-  std::shared_ptr<Task> assertQueryOrdered(
+  TaskPtr assertQuery(
       const core::PlanNodePtr& plan,
-      const std::string& duckDbSql,
-      const std::vector<uint32_t>& sortingKeys) {
-    return test::assertQuery(plan, duckDbSql, duckDbQueryRunner_, sortingKeys);
-  }
+      const std::string& duckDbSql);
 
-  std::shared_ptr<Task> assertQueryOrdered(
-      const CursorParameters& params,
-      const std::string& duckDbSql,
-      const std::vector<uint32_t>& sortingKeys) {
-    return test::assertQuery(
-        params,
-        [&](TaskCursor* taskCursor) { taskCursor->setNoMoreSplits(); },
-        duckDbSql,
-        duckDbQueryRunner_,
-        sortingKeys);
-  }
+  TaskPtr assertQuery(
+      const core::PlanNodePtr& plan,
+      const RowVectorPtr& expectedResults);
 
   /// Assumes plan has a single leaf node. All splits are added to that node.
-  std::shared_ptr<Task> assertQueryOrdered(
-      const core::PlanNodePtr& plan,
-      const std::vector<std::shared_ptr<connector::ConnectorSplit>>& splits,
-      const std::string& duckDbSql,
-      const std::vector<uint32_t>& sortingKeys) {
-    return assertQuery(plan, splits, duckDbSql, sortingKeys);
-  }
-
-  std::shared_ptr<Task> assertQuery(
-      const CursorParameters& params,
-      const std::string& duckDbSql) {
-    return test::assertQuery(
-        params,
-        [&](exec::TaskCursor* taskCursor) { taskCursor->setNoMoreSplits(); },
-        duckDbSql,
-        duckDbQueryRunner_);
-  }
-
-  std::shared_ptr<Task> assertQuery(
-      const core::PlanNodePtr& plan,
-      const std::string& duckDbSql) {
-    return test::assertQuery(plan, duckDbSql, duckDbQueryRunner_);
-  }
-
-  std::shared_ptr<Task> assertQuery(
-      const core::PlanNodePtr& plan,
-      const RowVectorPtr& expectedResults) {
-    return test::assertQuery(plan, {expectedResults});
-  }
-
-  std::shared_ptr<Task> assertQuery(
-      const CursorParameters& params,
-      const RowVectorPtr& expectedResults) {
-    return test::assertQuery(params, {expectedResults});
-  }
-
-  /// Assumes plan has a single leaf node. All splits are added to that node.
-  std::shared_ptr<Task> assertQuery(
+  TaskPtr assertQuery(
       const core::PlanNodePtr& plan,
       const std::vector<std::shared_ptr<connector::ConnectorSplit>>&
           connectorSplits,
-      const std::string& duckDbSql,
-      std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
+      const std::string& duckDbSql);
 
   /// Assumes plan has a single leaf node. All splits are added to that node.
-  std::shared_ptr<Task> assertQuery(
+  TaskPtr assertQuery(
       const core::PlanNodePtr& plan,
       std::vector<exec::Split>&& splits,
-      const std::string& duckDbSql,
-      std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
-
-  std::shared_ptr<Task> assertQuery(
-      const core::PlanNodePtr& plan,
-      std::unordered_map<core::PlanNodeId, std::vector<exec::Split>>&& splits,
-      const std::string& duckDbSql,
-      std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
-
-  static RowTypePtr makeRowType(std::vector<TypePtr>&& types) {
-    return velox::test::VectorMaker::rowType(
-        std::forward<std::vector<TypePtr>&&>(types));
-  }
+      const std::string& duckDbSql);
 
   static std::shared_ptr<core::FieldAccessTypedExpr> toFieldExpr(
       const std::string& name,
@@ -167,7 +109,7 @@ class OperatorTestBase : public virtual testing::Test,
       const parse::ParseOptions& options = {});
 
  public:
-  static void deleteTaskAndCheckSpillDirectory(std::shared_ptr<Task>& task);
+  static void deleteTaskAndCheckSpillDirectory(TaskPtr& task);
 
  protected:
   // Used as default AsyncDataCache.

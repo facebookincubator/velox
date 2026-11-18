@@ -27,11 +27,6 @@
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/SortBuffer.h"
 
-#include <boost/lexical_cast.hpp>
-#include <boost/uuid/uuid_generators.hpp>
-#include <boost/uuid/uuid_io.hpp>
-#include <re2/re2.h>
-
 namespace facebook::velox::connector::hive {
 namespace {
 #define WRITER_NON_RECLAIMABLE_SECTION_GUARD(index)       \
@@ -110,26 +105,6 @@ std::string makePartitionDirectory(
   return tableDirectory;
 }
 
-std::string makeUuid() {
-  return boost::lexical_cast<std::string>(boost::uuids::random_generator()());
-}
-
-std::unordered_map<LocationHandle::TableType, std::string> tableTypeNames() {
-  return {
-      {LocationHandle::TableType::kNew, "kNew"},
-      {LocationHandle::TableType::kExisting, "kExisting"},
-  };
-}
-
-template <typename K, typename V>
-std::unordered_map<V, K> invertMap(const std::unordered_map<K, V>& mapping) {
-  std::unordered_map<V, K> inverted;
-  for (const auto& [key, value] : mapping) {
-    inverted.emplace(value, key);
-  }
-  return inverted;
-}
-
 std::unique_ptr<core::PartitionFunction> createBucketFunction(
     const HiveBucketProperty& bucketProperty,
     const RowTypePtr& inputType) {
@@ -159,17 +134,6 @@ std::unique_ptr<core::PartitionFunction> createBucketFunction(
       bucketProperty.bucketCount(), bucketedByChannels);
 }
 
-std::string computeBucketedFileName(
-    const std::string& queryId,
-    uint32_t maxNumBuckets,
-    uint32_t bucket) {
-  const uint32_t kMaxBucketCountPadding =
-      std::to_string(maxNumBuckets - 1).size();
-  const std::string bucketValueStr = std::to_string(bucket);
-  return fmt::format(
-      "0{:0>{}}_0_{}", bucketValueStr, kMaxBucketCountPadding, queryId);
-}
-
 uint64_t getFinishTimeSliceLimitMsFromHiveConfig(
     const std::shared_ptr<const HiveConfig>& config,
     const config::ConfigBase* sessions) {
@@ -187,89 +151,7 @@ getBucketCount(const HiveBucketProperty* bucketProperty) {
   return bucketProperty == nullptr ? 0 : bucketProperty->bucketCount();
 }
 
-std::vector<column_index_t> computePartitionChannels(
-    const std::vector<std::shared_ptr<const HiveColumnHandle>>& inputColumns) {
-  std::vector<column_index_t> channels;
-  for (auto i = 0; i < inputColumns.size(); i++) {
-    if (inputColumns[i]->isPartitionKey()) {
-      channels.push_back(i);
-    }
-  }
-  return channels;
-}
-
-std::vector<column_index_t> computeNonPartitionChannels(
-    const std::vector<std::shared_ptr<const HiveColumnHandle>>& inputColumns) {
-  std::vector<column_index_t> channels;
-  for (auto i = 0; i < inputColumns.size(); i++) {
-    if (!inputColumns[i]->isPartitionKey()) {
-      channels.push_back(i);
-    }
-  }
-  return channels;
-}
-
 } // namespace
-
-const std::string LocationHandle::tableTypeName(
-    LocationHandle::TableType type) {
-  static const auto tableTypes = tableTypeNames();
-  return tableTypes.at(type);
-}
-
-LocationHandle::TableType LocationHandle::tableTypeFromName(
-    const std::string& name) {
-  static const auto nameTableTypes = invertMap(tableTypeNames());
-  return nameTableTypes.at(name);
-}
-
-HiveInsertTableHandle::HiveInsertTableHandle(
-    std::vector<std::shared_ptr<const HiveColumnHandle>> inputColumns,
-    std::shared_ptr<const LocationHandle> locationHandle,
-    dwio::common::FileFormat storageFormat,
-    HiveBucketPropertyPtr bucketProperty,
-    std::optional<common::CompressionKind> compressionKind,
-    const std::unordered_map<std::string, std::string>& serdeParameters,
-    const std::shared_ptr<dwio::common::WriterOptions>& writerOptions,
-    // When this option is set the HiveDataSink will always write a file even
-    // if there's no data. This is useful when the table is bucketed, but the
-    // engine handles ensuring a 1 to 1 mapping from task to bucket.
-    const bool ensureFiles,
-    std::shared_ptr<const FileNameGenerator> fileNameGenerator,
-    const std::unordered_map<std::string, std::string>& storageParameters)
-    : inputColumns_(std::move(inputColumns)),
-      locationHandle_(std::move(locationHandle)),
-      storageFormat_(storageFormat),
-      bucketProperty_(std::move(bucketProperty)),
-      compressionKind_(compressionKind),
-      serdeParameters_(serdeParameters),
-      writerOptions_(writerOptions),
-      ensureFiles_(ensureFiles),
-      fileNameGenerator_(std::move(fileNameGenerator)),
-      storageParameters_(storageParameters),
-      partitionChannels_(computePartitionChannels(inputColumns_)),
-      nonPartitionChannels_(computeNonPartitionChannels(inputColumns_)) {
-  if (compressionKind.has_value()) {
-    VELOX_CHECK(
-        compressionKind.value() != common::CompressionKind_MAX,
-        "Unsupported compression type: CompressionKind_MAX");
-  }
-
-  if (ensureFiles_) {
-    // If ensureFiles is set and either the bucketProperty is set or some
-    // partition keys are in the data, there is not a 1:1 mapping from Task to
-    // files so we can't proactively create writers.
-    VELOX_CHECK(
-        bucketProperty_ == nullptr || bucketProperty_->bucketCount() == 0,
-        "ensureFiles is not supported with bucketing");
-
-    for (const auto& inputColumn : inputColumns_) {
-      VELOX_CHECK(
-          !inputColumn->isPartitionKey(),
-          "ensureFiles is not supported with partition keys in the data");
-    }
-  }
-}
 
 HiveDataSink::HiveDataSink(
     RowTypePtr inputType,
@@ -346,10 +228,10 @@ HiveDataSink::HiveDataSink(
       "Unsupported commit strategy: {}",
       CommitStrategyName::toName(commitStrategy_));
 
-  if (insertTableHandle_->ensureFiles()) {
+  if (insertTableHandle_->writeEmptyFile()) {
     VELOX_CHECK(
         !isPartitioned() && !isBucketed(),
-        "ensureFiles is not supported with bucketing or partition keys in the data");
+        "writeEmptyFile is not supported with bucketing or partition keys in the data");
     ensureWriter(WriterId::unpartitionedId());
   }
 
@@ -470,17 +352,12 @@ std::shared_ptr<dwio::common::WriterOptions> HiveDataSink::createWriterOptions(
     size_t writerIndex) const {
   VELOX_CHECK_LT(writerIndex, writerInfo_.size());
 
-  // Take the writer options provided by the user as a starting point, or
-  // allocate a new one.
-  auto options = insertTableHandle_->writerOptions();
-  if (!options) {
-    options = writerFactory_->createWriterOptions();
-  }
+  std::shared_ptr<dwio::common::WriterOptions> options =
+      writerFactory_->createWriterOptions();
 
   const auto* connectorSessionProperties =
       connectorQueryCtx_->sessionProperties();
 
-  // Only overwrite options in case they were not already provided.
   if (options->schema == nullptr) {
     options->schema = getNonPartitionTypes(dataChannels_, inputType_);
   }
@@ -493,9 +370,6 @@ std::shared_ptr<dwio::common::WriterOptions> HiveDataSink::createWriterOptions(
     options->spillConfig = spillConfig_;
   }
 
-  // Always set per-writer options to the current writer's values.
-  // Since insertTableHandle_->writerOptions() returns a shared_ptr, each writer
-  // needs its own memory pool and nonReclaimableSection pointer.
   options->memoryPool = writerInfo_[writerIndex]->writerPool.get();
   options->nonReclaimableSection =
       writerInfo_[writerIndex]->nonReclaimableSectionHolder.get();
@@ -629,92 +503,22 @@ std::pair<std::string, std::string> HiveDataSink::getWriterFileNames(
       isCommitRequired());
 }
 
-std::pair<std::string, std::string> HiveInsertFileNameGenerator::gen(
-    std::optional<uint32_t> bucketId,
-    const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
-    const ConnectorQueryCtx& connectorQueryCtx,
-    uint32_t maxNumBuckets,
-    bool commitRequired) const {
-  auto targetFileName = insertTableHandle->locationHandle()->targetFileName();
-  const bool generateFileName = targetFileName.empty();
-  if (bucketId.has_value()) {
-    VELOX_CHECK(generateFileName);
-    // TODO: add hive.file_renaming_enabled support.
-    targetFileName = computeBucketedFileName(
-        connectorQueryCtx.queryId(), maxNumBuckets, bucketId.value());
-    // queryId may contain unsafe characters.
-    sanitizeFileName(targetFileName);
-  } else if (generateFileName) {
-    // targetFileName includes planNodeId and Uuid. As a result, different
-    // table writers run by the same task driver or the same table writer
-    // run in different task tries would have different targetFileNames.
-    targetFileName = fmt::format(
-        "{}_{}_{}_{}",
-        connectorQueryCtx.taskId(),
-        connectorQueryCtx.driverId(),
-        connectorQueryCtx.planNodeId(),
-        makeUuid());
-    // taskId, planNodeId may contain unsafe characters.
-    sanitizeFileName(targetFileName);
-  }
-  // do not try to sanitize user provided targetFileName
-  VELOX_CHECK(!targetFileName.empty());
-  const std::string writeFileName = commitRequired
-      ? fmt::format(".tmp.velox.{}_{}", targetFileName, makeUuid())
-      : targetFileName;
-  if (generateFileName &&
-      insertTableHandle->storageFormat() == dwio::common::FileFormat::PARQUET) {
-    return {
-        fmt::format("{}{}", targetFileName, ".parquet"),
-        fmt::format("{}{}", writeFileName, ".parquet")};
-  }
-  return {targetFileName, writeFileName};
-}
-
-void HiveInsertFileNameGenerator::sanitizeFileName(std::string& name) {
-  static const re2::RE2 re("[^a-zA-Z0-9._-]");
-  re2::RE2::GlobalReplace(&name, re, "_");
-}
-
-folly::dynamic HiveInsertFileNameGenerator::serialize() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = "HiveInsertFileNameGenerator";
-  return obj;
-}
-
-std::shared_ptr<HiveInsertFileNameGenerator>
-HiveInsertFileNameGenerator::deserialize(
-    const folly::dynamic& /* obj */,
-    void* /* context */) {
-  return std::make_shared<HiveInsertFileNameGenerator>();
-}
-
-void HiveInsertFileNameGenerator::registerSerDe() {
-  auto& registry = DeserializationWithContextRegistryForSharedPtr();
-  registry.Register(
-      "HiveInsertFileNameGenerator", HiveInsertFileNameGenerator::deserialize);
-}
-
-std::string HiveInsertFileNameGenerator::toString() const {
-  return "HiveInsertFileNameGenerator";
-}
-
 WriterParameters::UpdateMode HiveDataSink::getUpdateMode() const {
   if (insertTableHandle_->isExistingTable()) {
     if (insertTableHandle_->isPartitioned()) {
-      const auto insertBehavior = hiveConfig_->insertExistingPartitionsBehavior(
-          connectorQueryCtx_->sessionProperties());
-      switch (insertBehavior) {
+      auto insertBehavior =
+          insertTableHandle_->insertExistingPartitionsBehavior();
+      if (!insertBehavior.has_value()) {
+        insertBehavior = hiveConfig_->insertExistingPartitionsBehavior(
+            connectorQueryCtx_->sessionProperties());
+      }
+      switch (insertBehavior.value()) {
         case HiveConfig::InsertExistingPartitionsBehavior::kOverwrite:
           return WriterParameters::UpdateMode::kOverwrite;
         case HiveConfig::InsertExistingPartitionsBehavior::kError:
           return WriterParameters::UpdateMode::kNew;
-        default:
-          VELOX_UNSUPPORTED(
-              "Unsupported insert existing partitions behavior: {}",
-              HiveConfig::insertExistingPartitionsBehaviorString(
-                  insertBehavior));
       }
+      VELOX_UNREACHABLE();
     } else {
       if (hiveConfig_->immutablePartitions()) {
         VELOX_USER_FAIL("Unpartitioned Hive tables are immutable.");
@@ -724,182 +528,6 @@ WriterParameters::UpdateMode HiveDataSink::getUpdateMode() const {
   } else {
     return WriterParameters::UpdateMode::kNew;
   }
-}
-
-bool HiveInsertTableHandle::isPartitioned() const {
-  return std::any_of(
-      inputColumns_.begin(), inputColumns_.end(), [](auto column) {
-        return column->isPartitionKey();
-      });
-}
-
-const HiveBucketProperty* HiveInsertTableHandle::bucketProperty() const {
-  return bucketProperty_.get();
-}
-
-bool HiveInsertTableHandle::isBucketed() const {
-  return bucketProperty() != nullptr;
-}
-
-bool HiveInsertTableHandle::isExistingTable() const {
-  return locationHandle_->tableType() == LocationHandle::TableType::kExisting;
-}
-
-folly::dynamic HiveInsertTableHandle::serialize() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = "HiveInsertTableHandle";
-  folly::dynamic arr = folly::dynamic::array;
-  for (const auto& ic : inputColumns_) {
-    arr.push_back(ic->serialize());
-  }
-
-  obj["inputColumns"] = arr;
-  obj["locationHandle"] = locationHandle_->serialize();
-  obj["tableStorageFormat"] =
-      dwio::common::FileFormatName::toName(storageFormat_);
-
-  if (bucketProperty_) {
-    obj["bucketProperty"] = bucketProperty_->serialize();
-  }
-
-  if (compressionKind_.has_value()) {
-    obj["compressionKind"] = common::compressionKindToString(*compressionKind_);
-  }
-
-  folly::dynamic params = folly::dynamic::object;
-  for (const auto& [key, value] : serdeParameters_) {
-    params[key] = value;
-  }
-  obj["serdeParameters"] = params;
-
-  folly::dynamic storageParams = folly::dynamic::object;
-  for (const auto& [key, value] : storageParameters_) {
-    storageParams[key] = value;
-  }
-  obj["storageParameters"] = storageParams;
-
-  obj["ensureFiles"] = ensureFiles_;
-  obj["fileNameGenerator"] = fileNameGenerator_->serialize();
-  return obj;
-}
-
-HiveInsertTableHandlePtr HiveInsertTableHandle::create(
-    const folly::dynamic& obj) {
-  auto inputColumns = ISerializable::deserialize<std::vector<HiveColumnHandle>>(
-      obj["inputColumns"]);
-  auto locationHandle =
-      ISerializable::deserialize<LocationHandle>(obj["locationHandle"]);
-  auto storageFormat =
-      dwio::common::toFileFormat(obj["tableStorageFormat"].asString());
-
-  std::optional<common::CompressionKind> compressionKind = std::nullopt;
-  if (obj.count("compressionKind") > 0) {
-    compressionKind =
-        common::stringToCompressionKind(obj["compressionKind"].asString());
-  }
-
-  HiveBucketPropertyPtr bucketProperty;
-  if (obj.count("bucketProperty") > 0) {
-    bucketProperty =
-        ISerializable::deserialize<HiveBucketProperty>(obj["bucketProperty"]);
-  }
-
-  std::unordered_map<std::string, std::string> serdeParameters;
-  for (const auto& pair : obj["serdeParameters"].items()) {
-    serdeParameters.emplace(pair.first.asString(), pair.second.asString());
-  }
-
-  std::unordered_map<std::string, std::string> storageParameters;
-  if (obj.count("storageParameters") > 0) {
-    for (const auto& pair : obj["storageParameters"].items()) {
-      storageParameters.emplace(pair.first.asString(), pair.second.asString());
-    }
-  }
-
-  bool ensureFiles = obj["ensureFiles"].asBool();
-
-  auto fileNameGenerator =
-      ISerializable::deserialize<FileNameGenerator>(obj["fileNameGenerator"]);
-  return std::make_shared<HiveInsertTableHandle>(
-      inputColumns,
-      locationHandle,
-      storageFormat,
-      bucketProperty,
-      compressionKind,
-      serdeParameters,
-      nullptr, // writerOptions is not serializable
-      ensureFiles,
-      fileNameGenerator,
-      storageParameters);
-}
-
-void HiveInsertTableHandle::registerSerDe() {
-  auto& registry = DeserializationRegistryForSharedPtr();
-  registry.Register("HiveInsertTableHandle", HiveInsertTableHandle::create);
-}
-
-std::string HiveInsertTableHandle::toString() const {
-  std::ostringstream out;
-  out << "HiveInsertTableHandle ["
-      << dwio::common::FileFormatName::toName(storageFormat_);
-  if (compressionKind_.has_value()) {
-    out << " " << common::compressionKindToString(compressionKind_.value());
-  } else {
-    out << " none";
-  }
-  out << "], [inputColumns: [";
-  for (const auto& i : inputColumns_) {
-    out << " " << i->toString();
-  }
-  out << " ], locationHandle: " << locationHandle_->toString();
-  if (bucketProperty_) {
-    out << ", bucketProperty: " << bucketProperty_->toString();
-  }
-
-  if (serdeParameters_.size() > 0) {
-    std::map<std::string, std::string> sortedSerdeParams(
-        serdeParameters_.begin(), serdeParameters_.end());
-    out << ", serdeParameters: ";
-    for (const auto& [key, value] : sortedSerdeParams) {
-      out << "[" << key << ", " << value << "] ";
-    }
-  }
-  out << ", fileNameGenerator: " << fileNameGenerator_->toString();
-  out << "]";
-  return out.str();
-}
-
-std::string LocationHandle::toString() const {
-  return fmt::format(
-      "LocationHandle [targetPath: {}, writePath: {}, tableType: {}, tableFileName: {}]",
-      targetPath_,
-      writePath_,
-      tableTypeName(tableType_),
-      targetFileName_);
-}
-
-void LocationHandle::registerSerDe() {
-  auto& registry = DeserializationRegistryForSharedPtr();
-  registry.Register("LocationHandle", LocationHandle::create);
-}
-
-folly::dynamic LocationHandle::serialize() const {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["name"] = "LocationHandle";
-  obj["targetPath"] = targetPath_;
-  obj["writePath"] = writePath_;
-  obj["tableType"] = tableTypeName(tableType_);
-  obj["targetFileName"] = targetFileName_;
-  return obj;
-}
-
-LocationHandlePtr LocationHandle::create(const folly::dynamic& obj) {
-  auto targetPath = obj["targetPath"].asString();
-  auto writePath = obj["writePath"].asString();
-  auto tableType = tableTypeFromName(obj["tableType"].asString());
-  auto targetFileName = obj["targetFileName"].asString();
-  return std::make_shared<LocationHandle>(
-      targetPath, writePath, tableType, targetFileName);
 }
 
 std::unique_ptr<memory::MemoryReclaimer> HiveDataSink::WriterReclaimer::create(

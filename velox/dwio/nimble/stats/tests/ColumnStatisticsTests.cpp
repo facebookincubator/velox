@@ -96,6 +96,25 @@ void testFloatingPointMinMaxAcrossBatches() {
       static_cast<double>(std::numeric_limits<T>::max()));
 }
 
+void expectNoBounds(FloatingPointStatisticsCollector& collector) {
+  auto* stats = collector.getStatsView()->as<FloatingPointStatistics>();
+  ASSERT_NE(stats, nullptr);
+  EXPECT_FALSE(stats->getMin().has_value());
+  EXPECT_FALSE(stats->getMax().has_value());
+}
+
+// Checks that later finite values, added or merged, leave both bounds absent.
+void expectBoundsStayDropped(FloatingPointStatisticsCollector& collector) {
+  expectNoBounds(collector);
+  std::vector<double> finiteValues = {-100.0, 100.0};
+  collector.addValues(std::span<double>(finiteValues));
+  expectNoBounds(collector);
+  FloatingPointStatisticsCollector finite;
+  finite.addValues(std::span<double>(finiteValues));
+  collector.merge(finite);
+  expectNoBounds(collector);
+}
+
 } // namespace
 
 class ColumnStatisticsTests : public ::testing::Test {};
@@ -395,6 +414,19 @@ TEST_F(ColumnStatisticsTests, toCommonStatisticsFloatingPointNoMinMax) {
 
   ASSERT_TRUE(common->hasNull().has_value());
   EXPECT_FALSE(common->hasNull().value());
+
+  auto* fpStats =
+      dynamic_cast<velox::dwio::common::DoubleColumnStatistics*>(common.get());
+  ASSERT_NE(fpStats, nullptr);
+  EXPECT_EQ(fpStats->getMinimum(), std::nullopt);
+  EXPECT_EQ(fpStats->getMaximum(), std::nullopt);
+}
+
+TEST_F(ColumnStatisticsTests, toCommonStatisticsFloatingPointNanMinMax) {
+  const auto nan = std::numeric_limits<double>::quiet_NaN();
+  FloatingPointStatistics stat(30, 0, 240, 120, nan, nan);
+  auto common = stat.toCommonStatistics();
+  ASSERT_NE(common, nullptr);
 
   auto* fpStats =
       dynamic_cast<velox::dwio::common::DoubleColumnStatistics*>(common.get());
@@ -730,6 +762,54 @@ TEST_F(
   EXPECT_EQ(sbPtr->getNullCount(), 15);
 }
 
+TEST_F(StatisticsCollectorTests, floatingPointStatisticsCollectorMergeWithNan) {
+  const auto nan = std::numeric_limits<double>::quiet_NaN();
+  std::vector<double> finiteValues = {-5.0, 5.0};
+  std::vector<double> nanValues = {1.0, nan};
+  {
+    // NaN on the other side.
+    FloatingPointStatisticsCollector target;
+    target.addCounts(3, 1);
+    target.addValues(std::span<double>(finiteValues));
+    FloatingPointStatisticsCollector other;
+    other.addCounts(3, 1);
+    other.addValues(std::span<double>(nanValues));
+
+    target.merge(other);
+
+    EXPECT_EQ(target.getValueCount(), 4);
+    EXPECT_EQ(target.getNullCount(), 2);
+    EXPECT_EQ(target.getLogicalSize(), 4 * sizeof(double));
+    expectBoundsStayDropped(target);
+  }
+  {
+    // NaN already in the target.
+    FloatingPointStatisticsCollector target;
+    target.addCounts(3, 1);
+    target.addValues(std::span<double>(nanValues));
+    FloatingPointStatisticsCollector other;
+    other.addCounts(3, 1);
+    other.addValues(std::span<double>(finiteValues));
+
+    target.merge(other);
+
+    EXPECT_EQ(target.getValueCount(), 4);
+    EXPECT_EQ(target.getNullCount(), 2);
+    EXPECT_EQ(target.getLogicalSize(), 4 * sizeof(double));
+    expectBoundsStayDropped(target);
+  }
+  {
+    // Target with no values, so its bounds are absent before the merge too.
+    FloatingPointStatisticsCollector target;
+    FloatingPointStatisticsCollector other;
+    other.addValues(std::span<double>(nanValues));
+
+    target.merge(other);
+
+    expectBoundsStayDropped(target);
+  }
+}
+
 // Regression test: same as IntegralMinMaxAfterAddCounts but for floating-point.
 TEST_F(StatisticsCollectorTests, floatingPointMinMaxAfterAddCounts) {
   FloatingPointStatisticsCollector collector;
@@ -752,24 +832,16 @@ TEST_F(StatisticsCollectorTests, floatingPointNanBehavior) {
     std::vector<double> values = {1.0, nan, -2.0, 3.0};
     collector.addValues(std::span<double>(values));
 
-    auto* stats = collector.getStatsView()->as<FloatingPointStatistics>();
-    ASSERT_NE(stats, nullptr);
-    ASSERT_TRUE(stats->getMin().has_value());
-    EXPECT_DOUBLE_EQ(stats->getMin().value(), -2.0);
-    ASSERT_TRUE(stats->getMax().has_value());
-    EXPECT_DOUBLE_EQ(stats->getMax().value(), 3.0);
+    expectNoBounds(collector);
   }
   {
     FloatingPointStatisticsCollector collector;
-    std::vector<double> values = {nan, -2.0, 3.0};
-    collector.addValues(std::span<double>(values));
+    std::vector<double> firstValues = {nan, -2.0, 3.0};
+    collector.addValues(std::span<double>(firstValues));
+    std::vector<double> secondValues = {-10.0, 20.0};
+    collector.addValues(std::span<double>(secondValues));
 
-    auto* stats = collector.getStatsView()->as<FloatingPointStatistics>();
-    ASSERT_NE(stats, nullptr);
-    ASSERT_TRUE(stats->getMin().has_value());
-    EXPECT_TRUE(std::isnan(stats->getMin().value()));
-    ASSERT_TRUE(stats->getMax().has_value());
-    EXPECT_TRUE(std::isnan(stats->getMax().value()));
+    expectNoBounds(collector);
   }
   {
     FloatingPointStatisticsCollector collector;
@@ -778,12 +850,7 @@ TEST_F(StatisticsCollectorTests, floatingPointNanBehavior) {
     std::vector<double> secondValues = {nan, -5.0, 15.0};
     collector.addValues(std::span<double>(secondValues));
 
-    auto* stats = collector.getStatsView()->as<FloatingPointStatistics>();
-    ASSERT_NE(stats, nullptr);
-    ASSERT_TRUE(stats->getMin().has_value());
-    EXPECT_DOUBLE_EQ(stats->getMin().value(), -5.0);
-    ASSERT_TRUE(stats->getMax().has_value());
-    EXPECT_DOUBLE_EQ(stats->getMax().value(), 15.0);
+    expectNoBounds(collector);
   }
 }
 
