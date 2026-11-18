@@ -1161,7 +1161,7 @@ Parquet Options (prefix ``hive.parquet.``)
        Session: ``parquet_writer_max_target_file_size``.
 
        Row-group sizing is independent of this setting. The soft byte target is configured by
-       ``writer.row-group-size``, while the row count is capped at 1,048,576. When
+       ``writer.row-group-size``, and the row count by ``writer.row-group-rows``. When
        ``writer.max-target-file-size`` is set, the writer may flush the current row group early so
        the accumulated file size is visible and rotation can occur.
    * - ``writer.enable-dictionary``
@@ -1199,6 +1199,10 @@ Parquet Options (prefix ``hive.parquet.``)
      - Soft target for the serialized row group size. The estimate includes compressed bytes for
        encoded pages and estimated bytes for data that has not yet been serialized into pages, so a
        row group may slightly exceed the target. Session: ``parquet_writer_row_group_size``.
+   * - ``writer.row-group-rows``
+     - integer
+     - 1048576
+     - Maximum number of rows in a row group. Session: ``parquet_writer_row_group_rows``.
    * - ``writer.created-by``
      - string
      - parquet-cpp-velox version 0.0.0

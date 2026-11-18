@@ -668,13 +668,6 @@ class PlanBuilder {
       return *this;
     }
 
-    /// @param Option objects passed to the writer.
-    TableWriterBuilder& options(
-        std::shared_ptr<dwio::common::WriterOptions> options) {
-      options_ = std::move(options);
-      return *this;
-    }
-
     /// @param fileFormat File format to use for the written data.
     TableWriterBuilder& fileFormat(dwio::common::FileFormat fileFormat) {
       fileFormat_ = fileFormat;
@@ -689,10 +682,10 @@ class PlanBuilder {
       return *this;
     }
 
-    /// @param ensureFiles When set the Task will always output a file, even if
-    /// it's empty.
-    TableWriterBuilder& ensureFiles(bool ensureFiles) {
-      ensureFiles_ = ensureFiles;
+    /// @param writeEmptyFile When set the Task will always output a file, even
+    /// if it's empty.
+    TableWriterBuilder& writeEmptyFile(bool writeEmptyFile) {
+      writeEmptyFile_ = writeEmptyFile;
       return *this;
     }
 
@@ -737,12 +730,11 @@ class PlanBuilder {
 
     std::unordered_map<std::string, std::string> serdeParameters_;
     std::unordered_map<std::string, std::string> storageParameters_;
-    std::shared_ptr<dwio::common::WriterOptions> options_;
 
     dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
     common::CompressionKind compressionKind_{common::CompressionKind_NONE};
 
-    bool ensureFiles_{false};
+    bool writeEmptyFile_{false};
     connector::CommitStrategy commitStrategy_{
         connector::CommitStrategy::kNoCommit};
     folly::F14FastSet<std::string> notNullColumns_;
@@ -898,7 +890,6 @@ class PlanBuilder {
   /// @param outputDirectoryPath Path to a directory to write data to.
   /// @param fileFormat File format to use for the written data.
   /// @param aggregates Aggregations for column statistics collection during
-  /// @param polymorphic options object to be passed to the writer.
   /// write, supported aggregation types vary for different column types.
   /// @param outputFileName Optional file name of the output. If specified
   /// (non-empty), use it instead of generating the file name in Velox. Should
@@ -913,7 +904,6 @@ class PlanBuilder {
       const dwio::common::FileFormat fileFormat =
           dwio::common::FileFormat::DWRF,
       const std::vector<std::string>& aggregates = {},
-      const std::shared_ptr<dwio::common::WriterOptions>& options = nullptr,
       const std::string& outputFileName = "");
 
   /// Adds a TableWriteNode to write all input columns into a partitioned Hive
@@ -924,14 +914,12 @@ class PlanBuilder {
   /// @param fileFormat File format to use for the written data.
   /// @param aggregates Aggregations for column statistics collection during
   /// write.
-  /// @param polymorphic options object to be passed to the writer.
   PlanBuilder& tableWrite(
       const std::string& outputDirectoryPath,
       const std::vector<std::string>& partitionBy,
       const dwio::common::FileFormat fileFormat =
           dwio::common::FileFormat::DWRF,
-      const std::vector<std::string>& aggregates = {},
-      const std::shared_ptr<dwio::common::WriterOptions>& options = nullptr);
+      const std::vector<std::string>& aggregates = {});
 
   /// Adds a TableWriteNode to write all input columns into a non-sorted
   /// bucketed Hive table without compression.
@@ -943,7 +931,6 @@ class PlanBuilder {
   /// @param fileFormat File format to use for the written data.
   /// @param aggregates Aggregations for column statistics collection during
   /// write.
-  /// @param polymorphic options object to be passed to the writer.
   PlanBuilder& tableWrite(
       const std::string& outputDirectoryPath,
       const std::vector<std::string>& partitionBy,
@@ -951,8 +938,7 @@ class PlanBuilder {
       const std::vector<std::string>& bucketedBy,
       const dwio::common::FileFormat fileFormat =
           dwio::common::FileFormat::DWRF,
-      const std::vector<std::string>& aggregates = {},
-      const std::shared_ptr<dwio::common::WriterOptions>& options = nullptr);
+      const std::vector<std::string>& aggregates = {});
 
   /// Adds a TableWriteNode to write all input columns into a sorted bucket Hive
   /// table without compression.
@@ -967,7 +953,6 @@ class PlanBuilder {
   /// write.
   /// @param connectorId Name used to register the connector.
   /// @param serdeParameters Additional parameters passed to the writer.
-  /// @param Option objects passed to the writer.
   /// @param outputFileName Optional file name of the output. If specified
   /// (non-empty), use it instead of generating the file name in Velox. Should
   /// only be specified in non-bucketing write.
@@ -975,7 +960,7 @@ class PlanBuilder {
   /// output data files.
   /// @param schema Output schema to be passed to the writer. By default use the
   /// output of the previous operator.
-  /// @param ensureFiles When this option is set the HiveDataSink will always
+  /// @param writeEmptyFile When this option is set the HiveDataSink will always
   /// create a file even if there is no data.
   /// @param commitStrategy The commit strategy to use for the table write
   /// operation, default is kNoCommit.
@@ -996,11 +981,10 @@ class PlanBuilder {
       const std::vector<std::string>& aggregates = {},
       const std::string_view& connectorId = kHiveDefaultConnectorId,
       const std::unordered_map<std::string, std::string>& serdeParameters = {},
-      const std::shared_ptr<dwio::common::WriterOptions>& options = nullptr,
       const std::string& outputFileName = "",
       const common::CompressionKind = common::CompressionKind_NONE,
       const RowTypePtr& schema = nullptr,
-      const bool ensureFiles = false,
+      const bool writeEmptyFile = false,
       const connector::CommitStrategy commitStrategy =
           connector::CommitStrategy::kNoCommit,
       connector::ConnectorInsertTableHandlePtr insertTableHandle = nullptr,
