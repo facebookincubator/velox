@@ -19,6 +19,9 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <optional>
+#include <span>
+#include <vector>
 
 #include <folly/ScopeGuard.h>
 
@@ -29,18 +32,22 @@
 namespace facebook::nimble {
 namespace {
 
-// Copies selected strings into tracked storage that can outlive the decoder.
-void retainStringContent(
+// Copies the selected strings into one new buffer, which it adds to
+// 'stringBuffers', so that they stay valid after the decoder is gone.
+void copyStrings(
     const void* notNulls,
     uint32_t count,
     velox::memory::MemoryPool* pool,
     void* values,
     std::vector<velox::BufferPtr>& stringBuffers) {
   auto* source = static_cast<std::string_view*>(values);
+  const auto selected = [&](uint32_t row) {
+    return notNulls == nullptr ||
+        velox::bits::isBitSet(static_cast<const uint8_t*>(notNulls), row);
+  };
   uint64_t totalBytes{0};
   for (uint32_t i{0}; i < count; ++i) {
-    if (notNulls == nullptr ||
-        velox::bits::isBitSet(static_cast<const uint8_t*>(notNulls), i)) {
+    if (selected(i)) {
       totalBytes += source[i].size();
     }
   }
@@ -53,15 +60,110 @@ void retainStringContent(
   auto* rawBuffer = buffer->asMutable<char>();
   NIMBLE_CHECK_NOT_NULL(rawBuffer);
   for (uint32_t i{0}; i < count; ++i) {
-    if (notNulls != nullptr &&
-        !velox::bits::isBitSet(static_cast<const uint8_t*>(notNulls), i)) {
+    if (!selected(i)) {
       continue;
     }
-    if (!source[i].empty()) {
-      std::copy(source[i].cbegin(), source[i].cend(), rawBuffer);
-    }
+    std::copy(source[i].cbegin(), source[i].cend(), rawBuffer);
     source[i] = std::string_view{rawBuffer, source[i].size()};
     rawBuffer += source[i].size();
+  }
+  stringBuffers.push_back(std::move(buffer));
+}
+
+// Keeps the selected strings valid after the decoder is gone. Adds to
+// 'stringBuffers' each of 'owners' that holds a selected string, and copies
+// the strings that lie in none of them into one new buffer, which it also
+// adds.
+void retainStrings(
+    const void* notNulls,
+    uint32_t count,
+    std::span<const velox::BufferPtr> owners,
+    velox::memory::MemoryPool* pool,
+    void* values,
+    std::vector<velox::BufferPtr>& stringBuffers) {
+  if (owners.empty()) {
+    copyStrings(notNulls, count, pool, values, stringBuffers);
+    return;
+  }
+  // The byte range of each owner, ordered by start, to find the owner of a
+  // string by binary search.
+  struct OwnerRange {
+    const char* begin;
+    const char* end;
+    size_t ownerIndex;
+  };
+  std::vector<OwnerRange> ranges;
+  ranges.reserve(owners.size());
+  for (size_t i{0}; i < owners.size(); ++i) {
+    if (owners[i] != nullptr && owners[i]->size() > 0) {
+      const auto* begin = owners[i]->as<char>();
+      ranges.push_back({begin, begin + owners[i]->size(), i});
+    }
+  }
+  std::sort(ranges.begin(), ranges.end(), [](const auto& lhs, const auto& rhs) {
+    return lhs.begin < rhs.begin;
+  });
+  // Returns the index in 'owners' of an owner that holds all of 'value'.
+  // Checks the owner of the last string first, since the strings of a read
+  // mostly come one after another from the same buffer.
+  auto lastRange = ranges.end();
+  const auto findOwner = [&](std::string_view value) -> std::optional<size_t> {
+    if (lastRange != ranges.end() && value.data() >= lastRange->begin &&
+        value.data() + value.size() <= lastRange->end) {
+      return lastRange->ownerIndex;
+    }
+    auto it = std::upper_bound(
+        ranges.begin(),
+        ranges.end(),
+        value.data(),
+        [](const char* data, const OwnerRange& range) {
+          return data < range.begin;
+        });
+    if (it == ranges.begin()) {
+      return std::nullopt;
+    }
+    --it;
+    if (value.data() + value.size() > it->end) {
+      return std::nullopt;
+    }
+    lastRange = it;
+    return it->ownerIndex;
+  };
+
+  auto* source = static_cast<std::string_view*>(values);
+  std::vector<bool> usedOwners(owners.size(), false);
+  std::vector<uint32_t> copiedRows;
+  uint64_t copiedBytes{0};
+  for (uint32_t i{0}; i < count; ++i) {
+    if (source[i].empty() ||
+        (notNulls != nullptr &&
+         !velox::bits::isBitSet(static_cast<const uint8_t*>(notNulls), i))) {
+      continue;
+    }
+    if (const auto owner = findOwner(source[i]); owner.has_value()) {
+      usedOwners[*owner] = true;
+      continue;
+    }
+    copiedRows.push_back(i);
+    copiedBytes += source[i].size();
+  }
+  for (size_t i{0}; i < owners.size(); ++i) {
+    if (usedOwners[i]) {
+      stringBuffers.push_back(owners[i]);
+    }
+  }
+  if (copiedBytes == 0) {
+    return;
+  }
+
+  auto buffer = velox::AlignedBuffer::allocate<char>(copiedBytes, pool);
+  NIMBLE_CHECK_NOT_NULL(buffer);
+  auto* rawBuffer = buffer->asMutable<char>();
+  NIMBLE_CHECK_NOT_NULL(rawBuffer);
+  for (const auto row : copiedRows) {
+    std::copy(source[row].cbegin(), source[row].cend(), rawBuffer);
+    source[row] = std::string_view{rawBuffer, source[row].size()};
+    rawBuffer += source[row].size();
   }
   stringBuffers.push_back(std::move(buffer));
 }
@@ -85,7 +187,10 @@ uint32_t countRows(std::span<const RowRange> ranges) {
   return static_cast<uint32_t>(numRows);
 }
 
-template <typename ReadFunction>
+// Reads with readFunction, then keeps the strings valid with the buffers that
+// getOwners returns. Calls getOwners after the read, because views can
+// allocate the buffers that hold their values while they read.
+template <typename ReadFunction, typename OwnersFunction>
 uint32_t readSelected(
     uint32_t numRows,
     DataType dataType,
@@ -93,7 +198,8 @@ uint32_t readSelected(
     void* output,
     const std::function<void*()>& getOutputNulls,
     std::vector<velox::BufferPtr>& stringBuffers,
-    ReadFunction readFunction) {
+    ReadFunction readFunction,
+    OwnersFunction getOwners) {
   if (numRows == 0) {
     return 0;
   }
@@ -116,9 +222,8 @@ uint32_t readSelected(
 
   const auto numNonNulls = readFunction(setNull);
   if (dataType == DataType::String) {
-    // TODO: Avoid this copy when EncodingView can transfer an ownership handle
-    // for its encoded bytes to the output vector.
-    retainStringContent(outputNulls, numRows, pool, output, stringBuffers);
+    retainStrings(
+        outputNulls, numRows, getOwners(), pool, output, stringBuffers);
   }
   return numNonNulls;
 }
@@ -171,7 +276,42 @@ void EncodingViewDecoder::rebind(
 
 void EncodingViewDecoder::release() {
   chunks_.clear();
+  chunkOwners_.clear();
   nextRow_ = 0;
+}
+
+void EncodingViewDecoder::setChunkOwners(std::vector<velox::BufferPtr> owners) {
+  chunkOwners_ = std::move(owners);
+}
+
+std::vector<velox::BufferPtr> EncodingViewDecoder::valueOwners(
+    uint32_t numSelectedRows,
+    uint32_t firstRow,
+    uint32_t lastRow) const {
+  // A read must select at least one in this many of the rows of the chunks it
+  // spans to hold their buffers instead of copying its values.
+  constexpr uint64_t kMaxSpannedRowsPerSelectedRow{4};
+  if (dataType() != DataType::String) {
+    return {};
+  }
+  // The rows from firstRow to lastRow are fewer than the rows of the chunks
+  // they span, so this skips looking up the chunks of a sparse read.
+  if (numSelectedRows * kMaxSpannedRowsPerSelectedRow <
+      static_cast<uint64_t>(lastRow - firstRow) + 1) {
+    return {};
+  }
+  const auto firstChunk = findChunkIndex(firstRow);
+  const auto lastChunk = findChunkIndex(lastRow);
+  const uint64_t numSpannedRows =
+      chunks_[lastChunk].endRow - chunkStartRow(firstChunk);
+  if (numSelectedRows * kMaxSpannedRowsPerSelectedRow < numSpannedRows) {
+    return {};
+  }
+  auto owners = chunkOwners_;
+  for (auto chunkIndex = firstChunk; chunkIndex <= lastChunk; ++chunkIndex) {
+    chunks_[chunkIndex].view->addValueBuffers(owners);
+  }
+  return owners;
 }
 
 uint32_t EncodingViewDecoder::next(
@@ -324,7 +464,12 @@ uint32_t EncodingViewDecoder::read(
       output,
       getOutputNulls,
       stringBuffers,
-      [&](const auto& setNull) { return readRows(rows, setNull, output); });
+      [&](const auto& setNull) { return readRows(rows, setNull, output); },
+      [&]() {
+        const auto [first, last] =
+            std::minmax_element(rows.begin(), rows.end());
+        return valueOwners(static_cast<uint32_t>(rows.size()), *first, *last);
+      });
 }
 
 uint32_t EncodingViewDecoder::read(
@@ -345,7 +490,11 @@ uint32_t EncodingViewDecoder::read(
       output,
       getOutputNulls,
       stringBuffers,
-      [&](const auto& setNull) { return readRanges(ranges, setNull, output); });
+      [&](const auto& setNull) { return readRanges(ranges, setNull, output); },
+      [&]() {
+        return valueOwners(
+            numRows, ranges.front().startRow, ranges.back().endRow - 1);
+      });
 }
 
 uint32_t EncodingViewDecoder::readRows(

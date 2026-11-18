@@ -66,6 +66,11 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
       const std::function<void(uint32_t)>& setNull,
       void* output) const final;
 
+  /// Adds the decoded chunks and the strings decoded alone to the buffers of
+  /// the base view. The strings of the first few rows decoded alone are held
+  /// in the view itself, in no buffer.
+  void addValueBuffers(std::vector<velox::BufferPtr>& buffers) const final;
+
  private:
   static constexpr uint32_t kRowsPerChunk = 1'024;
 
@@ -214,6 +219,9 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
     // Keeps the first 'size' bytes of the space that the last reserve()
     // returned as the string of 'row', and returns the string.
     std::string_view add(uint32_t row, size_t size);
+
+    // Adds the blocks from the pool that hold strings to 'buffers'.
+    void addBlocks(std::vector<velox::BufferPtr>& buffers) const;
 
    private:
     // Bytes of 'firstBlock_': the strings of a read of a few rows of the view,

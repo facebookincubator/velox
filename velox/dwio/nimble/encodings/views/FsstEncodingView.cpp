@@ -391,6 +391,25 @@ std::string_view FsstEncodingView::DecodedStrings::add(
   return value;
 }
 
+void FsstEncodingView::DecodedStrings::addBlocks(
+    std::vector<velox::BufferPtr>& buffers) const {
+  buffers.insert(buffers.end(), blocks_.begin(), blocks_.end());
+}
+
+void FsstEncodingView::addValueBuffers(
+    std::vector<velox::BufferPtr>& buffers) const {
+  TypedEncodingView<std::string_view>::addValueBuffers(buffers);
+  {
+    const auto chunks = decodedChunks_.rlock();
+    for (const auto& chunk : *chunks) {
+      if (chunk != nullptr && chunk->data != nullptr) {
+        buffers.push_back(chunk->data);
+      }
+    }
+  }
+  decodedStrings_.rlock()->addBlocks(buffers);
+}
+
 std::string_view FsstEncodingView::valueAt(
     const DecodedChunk& chunk,
     uint32_t rowInChunk) {

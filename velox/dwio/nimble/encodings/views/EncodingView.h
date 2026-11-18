@@ -26,6 +26,7 @@
 #include <span>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -73,6 +74,14 @@ class EncodingView {
       std::span<const RowRange> ranges,
       const std::function<void(uint32_t)>& setNull,
       void* output) const = 0;
+
+  /// Adds to `buffers` the buffers this view holds that the string values it
+  /// returns can point into, such as its decompressed payload or the strings
+  /// it decoded. A caller that holds these buffers can keep such values after
+  /// the view is destroyed instead of copying them. Values can also point into
+  /// bytes the view does not hold, such as its input, so a caller must check
+  /// that a value lies in one of the buffers before relying on it.
+  virtual void addValueBuffers(std::vector<velox::BufferPtr>& buffers) const;
 
   /// Returns the number of rows in the encoded stream.
   uint32_t rowCount() const {

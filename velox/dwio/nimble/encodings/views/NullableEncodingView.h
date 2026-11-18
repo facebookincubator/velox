@@ -278,6 +278,11 @@ class NullableEncodingView final : public TypedEncodingView<T> {
     return detail::castFromPhysicalType<T>(readPhysicalAt(index));
   }
 
+  void addValueBuffers(std::vector<velox::BufferPtr>& buffers) const final {
+    TypedEncodingView<T>::addValueBuffers(buffers);
+    nonNullValues_->addValueBuffers(buffers);
+  }
+
  private:
   // The non-null flags of the rows [startRow, startRow + numRows) and the
   // number of non-null rows before each of them, as arrays that someone else

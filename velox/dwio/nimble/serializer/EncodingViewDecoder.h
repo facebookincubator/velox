@@ -63,6 +63,17 @@ class EncodingViewDecoder final : public Decoder {
   /// decoder must be rebound before it is used again.
   void release();
 
+  /// Sets the buffers that hold the bytes of the bound chunks, such as the
+  /// stream they were split from or their decompressed bytes. A read of
+  /// strings that covers at least a quarter of the rows of the chunks it spans
+  /// adds the buffers that hold its values, these or the buffers of the
+  /// chunks' views, to `stringBuffers` instead of copying the values, and
+  /// copies only the values that lie in none of them. A sparser read copies
+  /// every value, so that its output does not keep whole chunks alive.
+  /// Without owners, the values in the chunks' bytes are copied. The next
+  /// rebind() or release() clears them.
+  void setChunkOwners(std::vector<velox::BufferPtr> owners);
+
   uint32_t next(
       uint32_t count,
       void* output,
@@ -145,6 +156,16 @@ class EncodingViewDecoder final : public Decoder {
     return chunks_.back().endRow;
   }
 
+  // Returns the buffers that can hold the strings of a read of
+  // `numSelectedRows` rows from stream rows `firstRow` to `lastRow`, both
+  // included: the chunk owners and the buffers of the views of the chunks
+  // that the rows span. Returns nothing for other data types, or when the read
+  // selects fewer than a quarter of the rows of those chunks.
+  std::vector<velox::BufferPtr> valueOwners(
+      uint32_t numSelectedRows,
+      uint32_t firstRow,
+      uint32_t lastRow) const;
+
   // Returns the data type that every bound chunk stores.
   DataType dataType() const {
     return chunks_.front().view->dataType();
@@ -162,6 +183,9 @@ class EncodingViewDecoder final : public Decoder {
 
   // Bound chunks in stream order.
   std::vector<Chunk> chunks_;
+
+  // Hold the bytes of the bound chunks, as setChunkOwners() sets them.
+  std::vector<velox::BufferPtr> chunkOwners_;
 
   // Next stream row consumed by the sequential interface.
   uint32_t nextRow_{0};

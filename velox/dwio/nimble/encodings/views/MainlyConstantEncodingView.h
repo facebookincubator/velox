@@ -83,6 +83,11 @@ class MainlyConstantEncodingView final : public TypedEncodingView<T> {
     this->releaseVectorBuffer(isCommonBits_);
   }
 
+  void addValueBuffers(std::vector<velox::BufferPtr>& buffers) const final {
+    TypedEncodingView<T>::addValueBuffers(buffers);
+    otherValues_->addValueBuffers(buffers);
+  }
+
  private:
   void buildLookupStructures(
       std::string_view isCommon,
