@@ -15,6 +15,7 @@
  */
 #include <gtest/gtest-spi.h>
 
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
@@ -32,15 +33,12 @@ class QueryAssertionsTest : public OperatorTestBase {
   void assertQueryWithThreadingConfigs(
       const core::PlanNodePtr& plan,
       const std::string& duckDbSql) {
-    CursorParameters parallelParams{};
-    parallelParams.planNode = plan;
-    parallelParams.serialExecution = false;
-    assertQuery(parallelParams, duckDbSql);
-
-    CursorParameters serialParams{};
-    serialParams.planNode = plan;
-    serialParams.serialExecution = true;
-    assertQuery(serialParams, duckDbSql);
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .serialExecution(false)
+        .assertResults(duckDbSql);
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .serialExecution(true)
+        .assertResults(duckDbSql);
   }
 };
 

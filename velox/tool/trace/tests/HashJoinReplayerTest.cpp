@@ -27,6 +27,7 @@
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/PlanNodeStats.h"

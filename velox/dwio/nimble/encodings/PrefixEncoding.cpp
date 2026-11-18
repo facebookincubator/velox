@@ -26,12 +26,12 @@ PrefixEncoding::PrefixEncoding(
     std::function<void*(uint32_t)> stringBufferFactory,
     const Encoding::Options& options)
     : TypedEncoding<std::string_view, std::string_view>{pool, data, options},
-      stringBufferFactory_{std::move(stringBufferFactory)},
       restartInterval_{readRestartInterval(data, dataOffset())},
       numRestarts_{computeNumRestarts(rowCount_, restartInterval_)},
       restartOffsets_{restartOffsets(data, dataOffset())},
       dataStart_{dataStart(data, dataOffset(), numRestarts_)},
-      decodedValue_{pool_} {
+      decodedValue_{pool_},
+      stringPages_{pool_, std::move(stringBufferFactory), kStringPageSize} {
   reset();
 }
 
@@ -69,15 +69,8 @@ void PrefixEncoding::reset() {
   currentPos_ = dataStart_;
   currentRow_ = 0;
   decodedValue_.clear();
-  pageUsed_ = 0;
-  currentPageIndex_ = 0;
-  if (stringPages_.empty()) {
-    currentPage_ = nullptr;
-    pageCapacity_ = 0;
-  } else {
-    currentPage_ = stringPages_.front().data;
-    pageCapacity_ = stringPages_.front().capacity;
-  }
+  previousValue_ = {};
+  stringPages_.reset();
 }
 
 void PrefixEncoding::skip(uint32_t rowCount) {
@@ -113,12 +106,17 @@ std::string_view PrefixEncoding::decodeEntry() {
   // Decode suffix length
   const uint32_t suffixLen = encoding::readUint32(currentPos_);
 
-  // The shared prefix is already at the beginning of decodedValue_ from the
-  // previous decode. We just need to resize and append the suffix.
+  // If decodeEntry() decoded the previous value, the shared prefix is already
+  // at the beginning of decodedValue_, and we just need to resize and append
+  // the suffix. If decodeToStringBuffer() did, the prefix is in a string page.
   const uint32_t fullLen = sharedPrefixLen + suffixLen;
   NIMBLE_CHECK_LE(
-      sharedPrefixLen, decodedValue_.size(), "Invalid shared prefix length");
+      sharedPrefixLen, previousValue_.size(), "Invalid shared prefix length");
+  const bool prefixInPlace = previousValue_.data() == decodedValue_.data();
   decodedValue_.resize(fullLen);
+  if (!prefixInPlace && sharedPrefixLen > 0) {
+    std::memcpy(decodedValue_.data(), previousValue_.data(), sharedPrefixLen);
+  }
 
   // Copy suffix
   if (suffixLen > 0) {
@@ -126,45 +124,33 @@ std::string_view PrefixEncoding::decodeEntry() {
     currentPos_ += suffixLen;
   }
   ++currentRow_;
-  return std::string_view(decodedValue_.data(), fullLen);
-}
-
-void PrefixEncoding::acquireStringPage(size_t minSize) {
-  const auto size = std::max(kStringPageSize, minSize);
-  const size_t nextPageIndex =
-      currentPage_ == nullptr ? 0 : currentPageIndex_ + 1;
-  if (nextPageIndex < stringPages_.size() &&
-      stringPages_[nextPageIndex].capacity >= size) {
-    currentPage_ = stringPages_[nextPageIndex].data;
-    pageCapacity_ = stringPages_[nextPageIndex].capacity;
-  } else {
-    StringPageSlot page{
-        .data = static_cast<char*>(stringBufferFactory_(size)),
-        .capacity = size};
-    if (nextPageIndex < stringPages_.size()) {
-      stringPages_[nextPageIndex] = page;
-    } else {
-      stringPages_.push_back(page);
-    }
-    currentPage_ = page.data;
-    pageCapacity_ = page.capacity;
-  }
-  currentPageIndex_ = nextPageIndex;
-  pageUsed_ = 0;
+  previousValue_ = std::string_view(decodedValue_.data(), fullLen);
+  return previousValue_;
 }
 
 std::string_view PrefixEncoding::decodeToStringBuffer() {
-  const auto decoded = decodeEntry();
-  if (decoded.empty()) {
-    return decoded;
-  }
-  if (pageUsed_ + decoded.size() > pageCapacity_) {
-    acquireStringPage(decoded.size());
-  }
-  std::memcpy(currentPage_ + pageUsed_, decoded.data(), decoded.size());
-  auto result = std::string_view(currentPage_ + pageUsed_, decoded.size());
-  pageUsed_ += decoded.size();
-  return result;
+  const uint32_t sharedPrefixLen = encoding::readUint32(currentPos_);
+  const uint32_t suffixLen = encoding::readUint32(currentPos_);
+  NIMBLE_CHECK_LE(
+      sharedPrefixLen, previousValue_.size(), "Invalid shared prefix length");
+
+  // Decode straight into the page, so that the copy never loads bytes that it
+  // has just stored: loading them waits for the stores to complete.
+  const std::string_view previous = previousValue_;
+  const char* const suffix = currentPos_;
+  const size_t fullLen = size_t{sharedPrefixLen} + suffixLen;
+  previousValue_ = stringPages_.write(fullLen, [&](char* output) {
+    if (sharedPrefixLen > 0) {
+      std::memcpy(output, previous.data(), sharedPrefixLen);
+    }
+    if (suffixLen > 0) {
+      std::memcpy(output + sharedPrefixLen, suffix, suffixLen);
+    }
+    return fullLen;
+  });
+  currentPos_ += suffixLen;
+  ++currentRow_;
+  return previousValue_;
 }
 
 void PrefixEncoding::materialize(uint32_t rowCount, void* buffer) {
@@ -189,6 +175,7 @@ void PrefixEncoding::seekToRestartPoint(uint32_t restartIndex) {
   currentPos_ = restartPosition(restartIndex);
   currentRow_ = restartIndex * restartInterval_;
   decodedValue_.clear();
+  previousValue_ = {};
 }
 
 // static

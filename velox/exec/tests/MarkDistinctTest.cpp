@@ -19,6 +19,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"

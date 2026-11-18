@@ -17,6 +17,7 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/common/base/PeriodicStatsReporter.h"
 #include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/SharedArbitrator.h"
@@ -165,7 +166,7 @@ void OperatorTestBase::TearDown() {
   resetMemory();
 }
 
-std::shared_ptr<Task> OperatorTestBase::assertQuery(
+TaskPtr OperatorTestBase::assertQuery(
     const core::PlanNodePtr& plan,
     const std::vector<std::shared_ptr<connector::ConnectorSplit>>&
         connectorSplits,
@@ -193,41 +194,19 @@ core::PlanNodeId getOnlyLeafPlanNodeId(const core::PlanNodePtr& root) {
 }
 } // namespace
 
-std::shared_ptr<Task> OperatorTestBase::assertQuery(
-    const CursorParameters& params,
-    const std::string& duckDbSql) {
-  auto [cursor, actualResults] = readCursor(params);
-  assertResults(
-      actualResults,
-      params.planNode->outputType(),
-      duckDbSql,
-      duckDbQueryRunner_);
-  auto task = cursor->task();
-  EXPECT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
-  return task;
-}
-
-std::shared_ptr<Task> OperatorTestBase::assertQuery(
-    const CursorParameters& params,
-    const RowVectorPtr& expectedResults) {
-  auto [cursor, results] = readCursor(params);
-  assertEqualResults({expectedResults}, results);
-  return cursor->task();
-}
-
-std::shared_ptr<Task> OperatorTestBase::assertQuery(
+TaskPtr OperatorTestBase::assertQuery(
     const core::PlanNodePtr& plan,
     const std::string& duckDbSql) {
   return AssertQueryBuilder(plan, duckDbQueryRunner_).assertResults(duckDbSql);
 }
 
-std::shared_ptr<Task> OperatorTestBase::assertQuery(
+TaskPtr OperatorTestBase::assertQuery(
     const core::PlanNodePtr& plan,
     const RowVectorPtr& expectedResults) {
   return AssertQueryBuilder(plan).assertResults(expectedResults);
 }
 
-std::shared_ptr<Task> OperatorTestBase::assertQuery(
+TaskPtr OperatorTestBase::assertQuery(
     const core::PlanNodePtr& plan,
     std::vector<exec::Split>&& splits,
     const std::string& duckDbSql) {
@@ -253,7 +232,7 @@ core::TypedExprPtr OperatorTestBase::parseExpr(
 }
 
 /*static*/ void OperatorTestBase::deleteTaskAndCheckSpillDirectory(
-    std::shared_ptr<Task>& task) {
+    TaskPtr& task) {
   const auto spillDirectoryStr = task->spillDirectory();
   // Nothing to do if there is no spilling directory was set.
   if (spillDirectoryStr.empty()) {
