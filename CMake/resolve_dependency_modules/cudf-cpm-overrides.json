@@ -1,16 +1,10 @@
 {
   "packages": {
-    "rtcx": {
-      "version": "0.1",
-      "git_url": "https://github.com/rapidsai/librtcx.git",
-      "git_tag": "4895b97ed96dce0df7c55b6943ac62fee4c8582e",
-      "patches": [
-        {
-          "file": "${current_json_dir}/rtcx/rtcx-hash-target.patch",
-          "issue": "Rename the rtcx hash target, which collides with Abseil's hash target",
-          "fixed_in": ""
-        }
-      ]
+    "spdlog": {
+      "version": "1.15.3",
+      "git_url": "https://github.com/gabime/spdlog.git",
+      "git_tag": "v1.15.3",
+      "git_shallow": true
     }
   }
 }

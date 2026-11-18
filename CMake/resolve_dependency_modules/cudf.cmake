@@ -132,13 +132,6 @@ block(SCOPE_FOR VARIABLES)
   set(BUILD_SHARED_LIBS ON)
   set(KvikIO_BUILD_NSYS_PLUGIN OFF)
 
-  # cuDF fetches librtcx, whose hash target collides with the hash target of a
-  # bundled Abseil. The override patches librtcx to rename it; keep its git_tag
-  # in sync with cuDF's cpp/cmake/thirdparty/get_rtcx.cmake.
-  # RAPIDS_CMAKE_CPM_OVERRIDE_VERSION_FILE is honored by every rapids_cpm_init,
-  # so the override applies before cuDF fetches librtcx.
-  set(RAPIDS_CMAKE_CPM_OVERRIDE_VERSION_FILE "${CMAKE_CURRENT_LIST_DIR}/cudf-cpm-overrides.json")
-
   FetchContent_Declare(
     rapids-cmake
     URL ${VELOX_rapids_cmake_SOURCE_URL}
