@@ -55,6 +55,21 @@ RowVectorPtr createRowVector(
       pool, ROW(std::move(names), std::move(types)), nullptr, size, vectors);
 }
 
+// Prints each row of 'result' on its own line, with its values as JSON
+// separated by " | ".
+void printResults(const RowVectorPtr& result, std::ostream& out) {
+  const auto& type = result->type();
+  for (const auto& row : exec::test::materialize(result)) {
+    for (size_t i = 0; i < row.size(); ++i) {
+      if (i > 0) {
+        out << " | ";
+      }
+      out << row[i].toJson(type->childAt(i));
+    }
+    out << std::endl;
+  }
+}
+
 RowVectorPtr evaluateAndPrintResults(
     exec::ExprSet& exprSet,
     const RowVectorPtr& data,
@@ -68,7 +83,7 @@ RowVectorPtr evaluateAndPrintResults(
   // Print the results.
   auto rowResult = createRowVector(results, rows.size(), execCtx.pool());
   std::cout << "Result: " << rowResult->type()->toString() << std::endl;
-  exec::test::printResults(rowResult, std::cout);
+  printResults(rowResult, std::cout);
   return rowResult;
 }
 
@@ -264,7 +279,7 @@ void ExpressionRunner::run(
 
     // Print the results.
     std::cout << "Result: " << results->type()->toString() << std::endl;
-    exec::test::printResults(results, std::cout);
+    printResults(results, std::cout);
 
     if (!storeResultPath.empty()) {
       saveResults(results, storeResultPath, "resultVector");
