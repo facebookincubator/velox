@@ -403,6 +403,8 @@ write entry 5 before writing entry 3.</p>
 is considered undefined and can be any value. Consider using zero for the
 offset of an empty array.</p>
 <p>Null array and empty array are not the same.</p>
+<p>The offset and size of a null array are undefined and can be any value.
+Elements that no non-null array covers are undefined as well.</p>
 <p>Elements vector may have a nulls buffer independent of the nulls buffer of the
 array vector itself. This allows us to specify non-null arrays with some or all
 null elements. Null array and array of all null elements are not the same.</p>
@@ -429,6 +431,8 @@ do not need to appear just before the map entries for the top-level map #5.</p>
 considered undefined and can be any value. Consider using zero for the offset
 of an empty map.</p>
 <p>Null map and empty map are not the same.</p>
+<p>The offset and size of a null map are undefined and can be any value. Keys and
+values that no non-null map covers are undefined as well.</p>
 <p>Keys and values vectors may have nulls buffer independent of each other and of
 the nulls buffer of the map vector itself. This allows us to specify non-null
 maps with some or all values being null. Technically speaking a map may have a
