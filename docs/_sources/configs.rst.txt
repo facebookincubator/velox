@@ -967,6 +967,11 @@ Common Options
      - bool
      - true
      - Enable selective Nimble reader. Session: ``selective_nimble_reader_enabled``.
+   * - ``nimble-lazy-file-stats``
+     - bool
+     - false
+     - Decode Nimble file column statistics on first use, and only those a read needs, instead of all
+       of them when the file is opened. Do not prepend ``hive.``. Session: ``nimble_lazy_file_stats``.
    * - ``index-enabled``
      - bool
      - false
