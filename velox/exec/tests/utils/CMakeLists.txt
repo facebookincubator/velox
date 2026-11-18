@@ -31,6 +31,7 @@ add_library(
   SumNonPODAggregate.cpp
   TableWriterTestBase.cpp
   TableScanTestBase.cpp
+  TaskMonitor.cpp
   TestIndexStorageConnector.cpp
   TpchQueryBuilder.cpp
   TpcdsQueryBuilder.cpp
@@ -61,6 +62,7 @@ velox_add_test_headers(
   SumNonPODAggregate.h
   TableScanTestBase.h
   TableWriterTestBase.h
+  TaskMonitor.h
   TestIndexStorageConnector.h
   TpchQueryBuilder.h
   TpcdsQueryBuilder.h

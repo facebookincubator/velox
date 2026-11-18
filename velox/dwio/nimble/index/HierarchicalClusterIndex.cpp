@@ -17,7 +17,6 @@
 #include "velox/dwio/nimble/index/HierarchicalClusterIndex.h"
 
 #include "velox/common/io/Options.h"
-#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/nimble/index/HierarchicalKeyReader.h"
 
 namespace facebook::nimble::index {
@@ -55,6 +54,7 @@ std::unique_ptr<HierarchicalClusterIndex> HierarchicalClusterIndex::create(
       std::move(keyCodec),
       createIndexMetadataInput(options),
       createIndexDataInput(options),
+      options.keyStreamLocator,
       options.pinIndex,
       options.preloadIndex,
       options.cacheKeyEncodingViews,
@@ -65,7 +65,8 @@ HierarchicalClusterIndex::HierarchicalClusterIndex(
     Section rootSection,
     std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
     std::shared_ptr<MetadataInput> metadataInput,
-    std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
+    std::shared_ptr<DataInput> dataInput,
+    KeyStreamLocator keyStreamLocator,
     bool pinIndex,
     bool preloadIndex,
     bool cacheKeyEncodingViews,
@@ -74,6 +75,7 @@ HierarchicalClusterIndex::HierarchicalClusterIndex(
           std::move(rootSection),
           std::move(metadataInput),
           std::move(dataInput),
+          std::move(keyStreamLocator),
           [cacheKeyEncodingViews, keyCodec](
               std::string_view encodedKeys,
               std::function<void*(uint32_t)> stringBufferFactory,

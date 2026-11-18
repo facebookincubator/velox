@@ -29,8 +29,8 @@ class AsyncDataCache;
 namespace facebook::nimble {
 
 /// Stores contiguous byte ranges keyed by (fileId, offset): one entry per
-/// CachedDataInput load group, and one per metadata section or footer that
-/// CachedMetadataInput caches.
+/// CachedDataInput load group or read() region, and one per metadata section
+/// or footer that CachedMetadataInput caches.
 ///
 /// Exists so the same Input can run over velox's AsyncDataCache or a foreign
 /// cache such as RocksDB's block cache, which differ in who allocates the

@@ -40,6 +40,7 @@
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/SumNonPODAggregate.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 DECLARE_bool(velox_memory_leak_check_enabled);
 DECLARE_bool(velox_suppress_memory_capacity_exceeding_error_message);
@@ -373,7 +374,7 @@ DEBUG_ONLY_TEST_P(
   newQueryBuilder()
       .queryCtx(queryCtx)
       .spillDirectory(spillDirectory->getPath())
-      .config(core::QueryConfig::kSpillEnabled, "true")
+      .config(core::QueryConfig::kSpillEnabled, true)
       .plan(
           PlanBuilder()
               .values(vectors)
@@ -383,7 +384,7 @@ DEBUG_ONLY_TEST_P(
       .assertResults("SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
   ASSERT_TRUE(queryCtxStateChecked);
   ASSERT_FALSE(queryCtx->testingUnderArbitration());
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   ASSERT_FALSE(queryCtx->testingUnderArbitration());
 }
 
@@ -427,7 +428,7 @@ DEBUG_ONLY_TEST_P(
         newQueryBuilder(plan)
             .queryCtx(queryCtx)
             .spillDirectory(spillDirectory->getPath())
-            .config(core::QueryConfig::kSpillEnabled, "true")
+            .config(core::QueryConfig::kSpillEnabled, true)
             .copyResults(pool()),
         errorMsg);
   });
@@ -440,7 +441,7 @@ DEBUG_ONLY_TEST_P(
     task.load()->pool()->abort(std::current_exception());
   }
   queryThread.join();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_P(
@@ -531,7 +532,7 @@ DEBUG_ONLY_TEST_P(
   // task.
   ASSERT_EQ(taskPausedCount, 1);
   ASSERT_FALSE(queryCtx->testingUnderArbitration());
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   ASSERT_FALSE(queryCtx->testingUnderArbitration());
   ASSERT_EQ(taskPausedCount, 1);
 }
@@ -630,7 +631,7 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, reclaimToOrderBy) {
 
     orderByThread.join();
     memThread.join();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
     const auto newStats = arbitrator_->stats();
     ASSERT_GT(newStats.reclaimedUsedBytes, oldStats.reclaimedUsedBytes);
     ASSERT_GT(orderByQueryCtx->pool()->stats().numCapacityGrowths, 0);
@@ -734,7 +735,7 @@ DEBUG_ONLY_TEST_P(
 
     aggregationThread.join();
     memThread.join();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
 
     const auto newStats = arbitrator_->stats();
     ASSERT_GT(newStats.reclaimedUsedBytes, oldStats.reclaimedUsedBytes);
@@ -848,7 +849,7 @@ DEBUG_ONLY_TEST_P(
 
     joinThread.join();
     memThread.join();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
 
     const auto newStats = arbitrator_->stats();
     ASSERT_GT(newStats.reclaimedUsedBytes, oldStats.reclaimedUsedBytes);
@@ -882,7 +883,7 @@ DEBUG_ONLY_TEST_P(
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   newQueryBuilder()
-      .config(core::QueryConfig::kSpillEnabled, "false")
+      .config(core::QueryConfig::kSpillEnabled, false)
       .queryCtx(queryCtx)
       .plan(PlanBuilder(planNodeIdGenerator, pool())
                 .values(vectors)
@@ -891,12 +892,12 @@ DEBUG_ONLY_TEST_P(
                 .project({"1+1+4 as t0", "1+3+3 as t1"})
                 .planNode())
       .assertResults(expectedVector);
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_P(
-    SharedArbitrationTestWithThreadingModes,
-    DISABLED_raceBetweenTaskTerminateAndReclaim) {
+    SharedArbitrationTestWithParallelExecutionModeOnly,
+    raceBetweenTaskTerminateAndReclaim) {
   setupMemory(kMemoryCapacity, 0);
   const int numVectors = 10;
   std::vector<RowVectorPtr> vectors;
@@ -918,16 +919,34 @@ DEBUG_ONLY_TEST_P(
       fakeLeafPool->allocate(fakeAllocationSize),
       fakeAllocationSize};
 
+  // Reclaim skips an operator with no reclaimable memory, so the arbitration
+  // must start only after the aggregation holds input. The hook runs before
+  // each addInput, so its second call means the first batch has been added.
+  std::atomic_int numAggregationInputs{0};
+  folly::EventCount aggregationInputWait;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::addInput",
+      std::function<void(Operator*)>(([&](Operator* op) {
+        if (op->operatorType() != "Aggregation") {
+          return;
+        }
+        ++numAggregationInputs;
+        aggregationInputWait.notifyAll();
+      })));
+
   // Set test injection to enforce memory arbitration based on the fake
-  // allocation size and the total available memory.
+  // allocation size and the total available memory. Values has produced two
+  // batches by its third getOutput call.
   std::shared_ptr<Task> task;
-  std::atomic<bool> injectAllocationOnce{true};
+  std::atomic_int numValuesOutputs{0};
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Values::getOutput",
       std::function<void(const exec::Values*)>([&](const exec::Values* values) {
-        if (!injectAllocationOnce.exchange(false)) {
+        if (numValuesOutputs++ != 2) {
           return;
         }
+        aggregationInputWait.await(
+            [&]() { return numAggregationInputs.load() >= 2; });
         task = values->operatorCtx()->task();
         memory::MemoryPool* pool = values->pool();
         VELOX_ASSERT_THROW(
@@ -961,8 +980,8 @@ DEBUG_ONLY_TEST_P(
         newQueryBuilder()
             .queryCtx(queryCtx)
             .spillDirectory(spillDirectory->getPath())
-            .config(core::QueryConfig::kSpillEnabled, "true")
-            .config(core::QueryConfig::kJoinSpillEnabled, "true")
+            .config(core::QueryConfig::kSpillEnabled, true)
+            .config(core::QueryConfig::kJoinSpillEnabled, true)
             .config(core::QueryConfig::kSpillNumPartitionBits, 2)
             .maxDrivers(numDrivers)
             .plan(
@@ -989,7 +1008,7 @@ DEBUG_ONLY_TEST_P(
   queryThread.join();
   fakeAllocation.free();
   task.reset();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_P(
@@ -1035,8 +1054,8 @@ DEBUG_ONLY_TEST_P(
     task = newQueryBuilder()
                .queryCtx(queryCtx)
                .spillDirectory(spillDirectory->getPath())
-               .config(core::QueryConfig::kSpillEnabled, "true")
-               .config(core::QueryConfig::kJoinSpillEnabled, "true")
+               .config(core::QueryConfig::kSpillEnabled, true)
+               .config(core::QueryConfig::kJoinSpillEnabled, true)
                .config(core::QueryConfig::kSpillNumPartitionBits, 2)
                .plan(
                    PlanBuilder()
@@ -1068,7 +1087,7 @@ DEBUG_ONLY_TEST_P(
   fakeAllocation.free();
 
   task.reset();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, runtimeStats) {
@@ -1118,8 +1137,8 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, runtimeStats) {
             .queryCtx(queryCtx)
             .maxDrivers(1)
             .spillDirectory(spillDirectory->getPath())
-            .config(core::QueryConfig::kSpillEnabled, "true")
-            .config(core::QueryConfig::kWriterSpillEnabled, "true")
+            .config(core::QueryConfig::kSpillEnabled, true)
+            .config(core::QueryConfig::kWriterSpillEnabled, true)
             // Set 0 file writer flush threshold to always trigger flush in
             // test.
             .config(core::QueryConfig::kWriterFlushThresholdBytes, 0)
@@ -1149,7 +1168,7 @@ DEBUG_ONLY_TEST_P(SharedArbitrationTestWithThreadingModes, runtimeStats) {
     // Values Operator won't be set stripeSize in its runtimeStats.
     ASSERT_EQ(stats[0].runtimeStats["stripeSize"].count, 0);
   }
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_P(
@@ -1249,7 +1268,7 @@ DEBUG_ONLY_TEST_P(
     bufferPool.load()->free(buffer, initialBufferLen);
 
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -1412,7 +1431,7 @@ TEST_P(
       queryThread.join();
     }
     zombieTasks.clear();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
     ASSERT_GT(arbitrator_->stats().numRequests, 0);
   }
 }

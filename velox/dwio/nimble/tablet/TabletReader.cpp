@@ -98,7 +98,6 @@ TabletReader::Options TabletReader::configureOptions(
   tabletOptions.pinIndex = options.pinIndex();
   tabletOptions.cacheIndex = options.cacheIndex();
   tabletOptions.fileHandle = options.fileHandle();
-  tabletOptions.cache = options.cache();
 
   // Velox reader options carry the async data cache, not a block cache. The
   // block cache is keyed by fileHandle->uuid, so it needs the handle too.
@@ -206,9 +205,9 @@ uint64_t decompressedSize(const MetadataSection& section) {
   return section.uncompressedSize().value_or(section.size());
 }
 
-// Both caches key their entries by fileHandle->uuid, so a handle of another
-// file would make the reader serve that file's bytes. Without a cache the
-// handle is unused, and the file may be a copy, such as the in-memory file of a
+// blockCache keys its entries by fileHandle->uuid, so a handle of another file
+// would make the reader serve that file's bytes. Without blockCache the handle
+// is unused, and the file may be a copy, such as the in-memory file of a
 // preloaded small file.
 void checkFileHandle(
     const TabletReader::Options& options,
@@ -216,7 +215,7 @@ void checkFileHandle(
   if (options.fileHandle == nullptr) {
     return;
   }
-  if (options.cache == nullptr && options.blockCache == nullptr) {
+  if (options.blockCache == nullptr) {
     return;
   }
   NIMBLE_USER_CHECK_EQ(
@@ -248,21 +247,33 @@ TabletReader::TabletReader(
       }()},
       fileIoContext_{options.fileIoContext},
       indexOptions_{[&]() {
-        // cacheIndex takes effect only when fileHandle and cache are provided.
-        const bool cacheEnabled = options.cacheIndex &&
-            options.fileHandle != nullptr && options.cache != nullptr;
-        return index::IndexLookup::Options{
+        index::IndexLookup::Options indexOptions{
             .file = file_,
             .ioOptions = &ioOptions_,
-            .fileHandle = cacheEnabled ? options.fileHandle : nullptr,
-            .cache = cacheEnabled ? options.cache : nullptr,
             .maxCacheEntrySize = options.maxCacheEntrySize,
             // preloadIndex requires pinIndex; auto-promote so the caller only
             // needs to flip one knob.
             .pinIndex = options.pinIndex || options.preloadIndex,
             .preloadIndex = options.preloadIndex,
             .cacheKeyEncodingViews = options.cacheKeyEncodingViews,
-            .fileIoContext = fileIoContext_};
+            .fileIoContext = fileIoContext_,
+            .keyStreamLocator = [this](
+                                    uint32_t stripeGroupIndex,
+                                    std::span<const uint32_t> keyStreamIds) {
+              return stripeMetadata(stripeGroupIndex, keyStreamIds);
+            }};
+        if (!options.cacheIndex) {
+          return indexOptions;
+        }
+
+        indexOptions.blockCache = options.blockCache;
+
+        // Only a cache uses the handle. Without one, the handle's file may not
+        // be the reader's file.
+        if (indexOptions.blockCache != nullptr) {
+          indexOptions.fileHandle = options.fileHandle;
+        }
+        return indexOptions;
       }()},
       metadataInput_{[&]() {
         MetadataInput::Options metadataOptions{
@@ -737,12 +748,31 @@ void TabletReader::initStripes(
   stripeOffsets_ = stripes->offsets()->data();
   stripeSizes_ = stripes->sizes()->data();
 
-  // Build prefix sum for O(log n) rowToStripe lookup.
+  // Build prefix sum for O(log n) rowToStripe lookup. Check that group_indices
+  // starts at 0 and grows by 0 or 1 per stripe: firstStripe(), stripeCount()
+  // and StripeGroup binary search it, and every stripe group must hold a
+  // stripe.
   const auto* rowCounts = stripes->row_counts()->data();
+  const auto* groupIndices = stripes->group_indices();
   stripeRows_.resize(stripeCount_ + 1);
   stripeRows_[0] = 0;
   for (uint32_t i = 0; i < stripeCount_; ++i) {
     stripeRows_[i + 1] = stripeRows_[i] + rowCounts[i];
+    if (i == 0) {
+      NIMBLE_CHECK_FILE_EQ(
+          groupIndices->Get(0),
+          0,
+          "The first stripe must be in stripe group 0.");
+      continue;
+    }
+    NIMBLE_CHECK_FILE_LE(
+        groupIndices->Get(i - 1),
+        groupIndices->Get(i),
+        "Stripe group indices must be non-decreasing.");
+    NIMBLE_CHECK_FILE_LE(
+        groupIndices->Get(i),
+        groupIndices->Get(i - 1) + 1,
+        "Stripe group indices must grow by at most one per stripe.");
   }
 
   // Eagerly pin the first stripe group if covered by the speculative buffer.
@@ -964,6 +994,27 @@ std::shared_ptr<StripeGroup> TabletReader::loadStripeGroup(
 std::shared_ptr<StripeGroup> TabletReader::stripeGroup(
     uint32_t stripeGroupIndex) const {
   return stripeGroupCache_.getOrCreate(stripeGroupIndex);
+}
+
+std::vector<StripeMetadata> TabletReader::stripeMetadata(
+    uint32_t stripeGroupIndex,
+    std::span<const uint32_t> streamIds) const {
+  const auto group = stripeGroup(stripeGroupIndex);
+  std::vector<StripeMetadata> stripes;
+  stripes.reserve(group->stripeCount());
+  const uint32_t endStripe = group->firstStripe() + group->stripeCount();
+  for (uint32_t stripe = group->firstStripe(); stripe < endStripe; ++stripe) {
+    auto& metadata = stripes.emplace_back(
+        StripeMetadata{
+            .stripe = stripe,
+            .offset = stripeOffset(stripe),
+            .numRows = stripeRowCount(stripe),
+            .streams =
+                std::vector<StripeGroup::StreamMetadata>(streamIds.size()),
+        });
+    group->streamLocations(stripe, streamIds, metadata.streams);
+  }
+  return stripes;
 }
 
 std::shared_ptr<ChunkStatsGroup> TabletReader::createChunkStatsGroup(
@@ -1556,13 +1607,17 @@ uint32_t TabletReader::firstStripe(uint32_t stripeGroupIndex) const {
   const auto* groupIndices = stripesRoot->group_indices();
   NIMBLE_CHECK_NOT_NULL(groupIndices);
 
-  for (uint32_t s = 0; s < stripeCount_; ++s) {
-    if (groupIndices->Get(s) == stripeGroupIndex) {
-      return s;
-    }
-  }
-  NIMBLE_UNREACHABLE(
-      fmt::format("No stripes found for group {}", stripeGroupIndex));
+  // Stripes are assigned to groups in order, so group_indices is
+  // non-decreasing.
+  const auto first = std::lower_bound(
+      groupIndices->begin(), groupIndices->end(), stripeGroupIndex);
+  NIMBLE_CHECK(
+      first != groupIndices->end(),
+      "No stripes found for stripe group {}.",
+      stripeGroupIndex);
+  NIMBLE_CHECK_EQ(
+      *first, stripeGroupIndex, "No stripes found for stripe group.");
+  return static_cast<uint32_t>(first - groupIndices->begin());
 }
 
 uint32_t TabletReader::rowToStripe(uint64_t row) const {
@@ -1587,13 +1642,9 @@ uint32_t TabletReader::stripeCount(uint32_t stripeGroupIndex) const {
   const auto* groupIndices = stripesRoot->group_indices();
   NIMBLE_CHECK_NOT_NULL(groupIndices);
 
-  uint32_t count = 0;
-  for (uint32_t s = 0; s < stripeCount_; ++s) {
-    if (groupIndices->Get(s) == stripeGroupIndex) {
-      ++count;
-    }
-  }
-  return count;
+  const auto [first, last] = std::equal_range(
+      groupIndices->begin(), groupIndices->end(), stripeGroupIndex);
+  return static_cast<uint32_t>(last - first);
 }
 
 std::shared_ptr<ChunkStatsGroup> TabletReader::chunkStats(

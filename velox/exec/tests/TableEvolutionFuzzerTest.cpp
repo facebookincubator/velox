@@ -22,6 +22,7 @@
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -83,7 +84,7 @@ class TableEvolutionFuzzerTest : public testing::Test {
   // 'pool_' must outlive every task. TearDown() runs before the fixture's
   // members are destroyed.
   void TearDown() override {
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 
   const std::shared_ptr<memory::MemoryPool> pool_{

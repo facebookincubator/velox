@@ -25,6 +25,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/exec/tests/utils/SerializedPageUtil.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/UnsafeRowSerializer.h"
@@ -70,7 +71,7 @@ class InMemoryExchangeClientTest
 
   void TearDown() override {
     executor_->stop();
-    exec::test::waitForAllTasksToBeDeleted();
+    exec::test::TaskMonitor::waitForAllTasksDeleted();
     test::testingShutdownLocalExchangeSource();
   }
 

@@ -38,8 +38,7 @@ namespace {
       }                                                                      \
       default:                                                               \
         VELOX_FAIL(                                                          \
-            "not a rank function kind: {}",                                  \
-            core::TopNRowNumberNode::rankFunctionName(functionKind));        \
+            "not a rank function kind: {}", static_cast<int>(functionKind)); \
     }                                                                        \
   }()
 

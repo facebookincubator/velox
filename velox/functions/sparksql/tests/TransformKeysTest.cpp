@@ -410,7 +410,7 @@ TEST_F(TransformKeysTest, keyTypeContainingMap) {
       maps,
       maps,
       makeArrayVector({0}, maps),
-      makeRowVector({"m"}, {maps}),
+      makeNamedRowVector("m", maps),
   });
 
   VELOX_ASSERT_USER_THROW(

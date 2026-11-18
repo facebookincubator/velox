@@ -215,7 +215,7 @@ class HierarchicalKeyReaderTest : public testing::Test {
               CompressionType::Uncompressed,
               static_cast<uint32_t>(metadata.size())};
         };
-    writer->flush(writeDataFn, createMetadataFn);
+    writer->finishStripeGroup(writeDataFn, createMetadataFn);
 
     const char* position = chunkData_.data();
     const auto header = readChunkHeader(position);

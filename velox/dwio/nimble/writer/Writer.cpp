@@ -55,7 +55,6 @@
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/index/ClusterIndexFactory.h"
 #include "velox/dwio/nimble/index/DenseIndexFactory.h"
-#include "velox/dwio/nimble/index/HashIndexWriter.h"
 #include "velox/dwio/nimble/index/IndexSerialization.h"
 #include "velox/dwio/nimble/index/SortedIndexWriter.h"
 #include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
@@ -1983,8 +1982,14 @@ std::unique_ptr<index::VectorIndexWriter> createVectorIndexWriter(
 std::unique_ptr<index::IndexWriter> Writer::createClusterIndexWriter(
     const WriterOptions& options,
     const velox::TypePtr& type,
-    velox::memory::MemoryPool* pool) {
+    velox::memory::MemoryPool* pool,
+    SchemaBuilder& schemaBuilder) {
+  const auto keyStreamLayout = options.clusterIndexKeyStreamLayout;
   if (options.clusterIndexConfig == nullptr) {
+    NIMBLE_USER_CHECK_NE(
+        keyStreamLayout,
+        index::KeyStreamLayout::kStripe,
+        "The Stripe cluster index key stream layout requires a cluster index");
     return nullptr;
   }
   const auto& config = *options.clusterIndexConfig;
@@ -1993,8 +1998,13 @@ std::unique_ptr<index::IndexWriter> Writer::createClusterIndexWriter(
       index::IndexFamily::Cluster,
       "Cluster index configuration must use the cluster family: {}",
       config.name);
-  auto writer =
-      index::clusterIndexFactory(config.name).createWriter(config, type, pool);
+  index::ClusterIndexFactory::Options writerOptions{
+      .keyStreamLayout = keyStreamLayout};
+  if (keyStreamLayout == index::KeyStreamLayout::kStripe) {
+    writerOptions.keyStreamId = schemaBuilder.createClusterIndexKeyStream();
+  }
+  auto writer = index::clusterIndexFactory(config.name)
+                    .createWriter(config, type, pool, writerOptions);
   NIMBLE_CHECK_NOT_NULL(
       writer, "Cluster index factory returned a null writer: {}", config.name);
   return writer;
@@ -2098,7 +2108,8 @@ Writer::Writer(
       clusterIndexWriter_{createClusterIndexWriter(
           context_->options(),
           type,
-          &(*context_->bufferMemoryPool()))},
+          &(*context_->bufferMemoryPool()),
+          context_->schemaBuilder())},
       denseIndexWriters_{createDenseIndexWriters(
           context_->options(),
           type,
@@ -2133,6 +2144,8 @@ Writer::Writer(
                    .experimentalStripeGroupEncodingLayoutReadFactors,
            .stripeGroupMetadataDeduplicationEnabled =
                context_->options().experimentalStripeGroupMetadataDeduplication,
+           .stripeGroupSparseLayoutEnabled =
+               context_->options().experimentalStripeGroupSparseLayout,
            .stripeGroupFlushCallback =
                (clusterIndexWriter_ != nullptr || !denseIndexWriters_.empty())
                ? TabletWriter::StripeGroupFlushCallback(
@@ -2140,11 +2153,11 @@ Writer::Writer(
                          const WriteDataFn& writeDataFn,
                          const CreateMetadataSectionFn& createMetadataFn) {
                        if (clusterIndexWriter_ != nullptr) {
-                         clusterIndexWriter_->flush(
+                         clusterIndexWriter_->finishStripeGroup(
                              writeDataFn, createMetadataFn);
                        }
                        for (const auto& denseIndex : denseIndexWriters_) {
-                         denseIndex.writer->flush(
+                         denseIndex.writer->finishStripeGroup(
                              writeDataFn, createMetadataFn);
                        }
                      })
@@ -2510,6 +2523,31 @@ void Writer::writeDictionarySection(
           fileDictionaryReferences,
           externalDictionaryReferences,
           fileDictionaries));
+}
+
+void Writer::writeStripeKeyStream() {
+  if (clusterIndexWriter_ == nullptr) {
+    return;
+  }
+  ensureEncodingBuffer();
+  auto chunks = clusterIndexWriter_->finishStripe(*encodingBuffer_);
+  const auto keyStreamOffset =
+      context_->schemaBuilder().clusterIndexKeyStreamOffset();
+  if (!keyStreamOffset.has_value()) {
+    NIMBLE_CHECK(
+        chunks.empty(),
+        "A cluster index without a key stream stores nothing in stripes");
+    return;
+  }
+  // The ClusterIndexGroup records the last key of one key chunk per stripe.
+  NIMBLE_CHECK_EQ(
+      chunks.size(), 1, "The key stream of a stripe must be one key chunk");
+  NIMBLE_CHECK_LT(keyStreamOffset.value(), encodedStreams_.size());
+  auto& keyStream = encodedStreams_[keyStreamOffset.value()];
+  NIMBLE_CHECK(keyStream.chunks.empty());
+  const uint64_t keyStreamBytes = chunks.front().contentSize();
+  keyStream.chunks = std::move(chunks);
+  context_->updateStripeEncodedPhysicalSize(keyStreamBytes);
 }
 
 void Writer::addIndexKey(const velox::VectorPtr& input) {
@@ -3648,6 +3686,7 @@ bool Writer::writeStripe() {
     writeStreams();
   }
   writeStripeDictionaryStreams();
+  writeStripeKeyStream();
 
   uint64_t stripeSize{0};
   {

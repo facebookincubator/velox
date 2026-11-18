@@ -38,6 +38,7 @@ std::unique_ptr<ClusterIndex> ClusterIndex::create(
       std::move(rootSection),
       createIndexMetadataInput(options),
       createIndexDataInput(options),
+      options.keyStreamLocator,
       options.keyComparator,
       options.pinIndex,
       options.preloadIndex,
@@ -47,7 +48,8 @@ std::unique_ptr<ClusterIndex> ClusterIndex::create(
 ClusterIndex::ClusterIndex(
     Section rootSection,
     std::shared_ptr<MetadataInput> metadataInput,
-    std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
+    std::shared_ptr<DataInput> dataInput,
+    KeyStreamLocator keyStreamLocator,
     const KeyComparator* keyComparator,
     bool pinIndex,
     bool preloadIndex,
@@ -56,6 +58,7 @@ ClusterIndex::ClusterIndex(
           std::move(rootSection),
           std::move(metadataInput),
           std::move(dataInput),
+          std::move(keyStreamLocator),
           [keyComparator](
               std::string_view encodedKeys,
               std::function<void*(uint32_t)> stringBufferFactory,

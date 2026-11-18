@@ -614,7 +614,7 @@ TEST_F(KeyEncoderTest, indexBoundsType) {
           .name = "lower_bound_only_single_column",
           .indexColumns = {"key"},
           .lowerBoundRow =
-              makeRowVector({"key"}, {makeNullableFlatVector<int32_t>({42})}),
+              makeNamedRowVector("key", makeNullableFlatVector<int32_t>({42})),
           .upperBoundRow = std::nullopt,
           .lowerInclusive = true,
           .upperInclusive = false,
@@ -625,7 +625,7 @@ TEST_F(KeyEncoderTest, indexBoundsType) {
           .indexColumns = {"key"},
           .lowerBoundRow = std::nullopt,
           .upperBoundRow =
-              makeRowVector({"key"}, {makeNullableFlatVector<int64_t>({100})}),
+              makeNamedRowVector("key", makeNullableFlatVector<int64_t>({100})),
           .lowerInclusive = false,
           .upperInclusive = true,
       },
@@ -634,9 +634,9 @@ TEST_F(KeyEncoderTest, indexBoundsType) {
           .name = "both_bounds_single_column",
           .indexColumns = {"col"},
           .lowerBoundRow =
-              makeRowVector({"col"}, {makeNullableFlatVector<double>({1.5})}),
+              makeNamedRowVector("col", makeNullableFlatVector<double>({1.5})),
           .upperBoundRow =
-              makeRowVector({"col"}, {makeNullableFlatVector<double>({10.5})}),
+              makeNamedRowVector("col", makeNullableFlatVector<double>({10.5})),
           .lowerInclusive = true,
           .upperInclusive = false,
       },
@@ -684,9 +684,8 @@ TEST_F(KeyEncoderTest, indexBoundsType) {
       {
           .name = "timestamp_type",
           .indexColumns = {"ts"},
-          .lowerBoundRow = makeRowVector(
-              {"ts"},
-              {makeNullableFlatVector<Timestamp>({Timestamp(1000, 500)})}),
+          .lowerBoundRow = makeNamedRowVector(
+              "ts", makeNullableFlatVector<Timestamp>({Timestamp(1000, 500)})),
           .upperBoundRow = std::nullopt,
           .lowerInclusive = true,
           .upperInclusive = false,
@@ -696,8 +695,8 @@ TEST_F(KeyEncoderTest, indexBoundsType) {
           .name = "varchar_type",
           .indexColumns = {"name"},
           .lowerBoundRow = std::nullopt,
-          .upperBoundRow = makeRowVector(
-              {"name"}, {makeNullableFlatVector<std::string>({"hello"})}),
+          .upperBoundRow = makeNamedRowVector(
+              "name", makeNullableFlatVector<std::string>({"hello"})),
           .lowerInclusive = false,
           .upperInclusive = true,
       },

@@ -662,8 +662,7 @@ TEST_F(VectorSearchJoinTest, dynamicFilters) {
     const bool indexOnProbe = probe->rowType()->containsChild("i_ds");
     const std::vector<std::string> indexKeys{"i_ds", "i_cluster_id"};
     const std::vector<std::string> queryKeys{"ds", "cluster_id"};
-    const auto file = TempFilePath::create();
-    writeToFile(file->getPath(), probe);
+    const auto file = writeToFile(probe);
     core::PlanNodeId scanId;
     PlanBuilder builder;
     builder.tableScan(probe->rowType()).capturePlanNodeId(scanId);

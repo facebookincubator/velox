@@ -339,19 +339,12 @@ TEST_F(WindowTest, spillUnsupported) {
           .spillDirectory(spillDirectory->getPath())
           .assertResults("SELECT *, row_number() over (order by s) FROM tmp");
 
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  const auto& stats = taskStats.at(windowId);
-
+  const auto stats = PlanNodeStats::extract(task->taskStats(), windowId);
   ASSERT_EQ(stats.spilledBytes, 0);
   ASSERT_EQ(stats.spilledRows, 0);
   ASSERT_EQ(stats.spilledFiles, 0);
   ASSERT_EQ(stats.spilledPartitions, 0);
-  auto opStats = toOperatorStats(task->taskStats());
-  ASSERT_GT(
-      opStats.at("Window")
-          .runtimeStats[std::string(Operator::kSpillNotSupported)]
-          .sum,
-      1);
+  ASSERT_GT(stats.customStat(Operator::kSpillNotSupported).sum, 1);
 }
 
 TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
@@ -452,7 +445,8 @@ DEBUG_ONLY_TEST_F(WindowTest, singlePartitionRowCountLimit) {
   // a count at the limit so the next row append would overflow, and verify the
   // operator fails with a catchable user error rather than overflowing and
   // aborting the process.
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  auto data =
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3, 4, 5}));
 
   auto plan = PlanBuilder()
                   .values({data})
@@ -474,7 +468,8 @@ DEBUG_ONLY_TEST_F(WindowTest, subPartitionedRowCountLimit) {
   // The same limit applies to SubPartitionedSortWindowBuild, whose own counter
   // aggregates all sub-partitions. Force sub-partitioning and inject a count at
   // the limit; the next batch must fail cleanly rather than overflow.
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  auto data =
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3, 4, 5}));
 
   auto plan = PlanBuilder()
                   .values({data})
@@ -500,7 +495,8 @@ DEBUG_ONLY_TEST_F(WindowTest, operatorRowCountLimit) {
   // counter (e.g. RowsStreamingWindowBuild::pendingRowCount_). The guard runs
   // before delegating to the build, so inject a count at the limit and verify
   // the batch is rejected before it reaches the streaming build.
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  auto data =
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3, 4, 5}));
 
   // orderBy() + streamingWindow() selects RowsStreamingWindowBuild, the path
   // where the operator counter is the only guard.
@@ -534,9 +530,8 @@ DEBUG_ONLY_TEST_F(WindowTest, operatorRowCountLimit) {
 }
 
 DEBUG_ONLY_TEST_F(WindowTest, rankRowStreamingWindowBuild) {
-  auto data = makeRowVector(
-      {"c1"},
-      {makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1, 1, 2, 2})});
+  auto data = makeNamedRowVector(
+      "c1", makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1, 1, 2, 2}));
 
   createDuckDbTable({data});
 
@@ -1598,9 +1593,8 @@ DEBUG_ONLY_TEST_F(WindowTest, aggregationWithNonDefaultFrame) {
 }
 
 DEBUG_ONLY_TEST_F(WindowTest, nonRowsStreamingWindow) {
-  auto data = makeRowVector(
-      {"c1"},
-      {makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1, 1, 2, 2})});
+  auto data = makeNamedRowVector(
+      "c1", makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1, 1, 2, 2}));
 
   createDuckDbTable({data});
 

@@ -73,7 +73,11 @@ class AssertQueryBuilder {
   typename std::enable_if<std::is_arithmetic<T>::value, AssertQueryBuilder&>::
       type
       config(const std::string& key, const T& value) {
-    return config(key, std::to_string(value));
+    if constexpr (std::is_same_v<T, bool>) {
+      return config(key, std::string(value ? "true" : "false"));
+    } else {
+      return config(key, std::to_string(value));
+    }
   }
 
   /// Set multiple configuration properties.
@@ -240,6 +244,15 @@ class AssertQueryBuilder {
  private:
   std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
   readCursor();
+
+  // Creates a cursor for the query, applying configs and session properties.
+  std::unique_ptr<TaskCursor> createCursor();
+
+  // Runs the query of 'cursor', passing each output batch to 'onBatch' instead
+  // of collecting the batches.
+  void readCursor(
+      TaskCursor& cursor,
+      const std::function<void(const RowVectorPtr&)>& onBatch);
 
   static std::unique_ptr<folly::Executor> newExecutor() {
     return std::make_unique<folly::CPUThreadPoolExecutor>(

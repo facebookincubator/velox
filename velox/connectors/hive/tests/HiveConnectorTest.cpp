@@ -77,17 +77,19 @@ bool mapKeyIsNotNull(const ScanSpec& mapSpec) {
 
 TEST_F(HiveConnectorTest, hiveConfig) {
   ASSERT_EQ(
-      HiveConfig::insertExistingPartitionsBehaviorString(
-          HiveConfig::InsertExistingPartitionsBehavior::kError),
+      HiveConfig::toName(HiveConfig::InsertExistingPartitionsBehavior::kError),
       "ERROR");
   ASSERT_EQ(
-      HiveConfig::insertExistingPartitionsBehaviorString(
+      HiveConfig::toName(
           HiveConfig::InsertExistingPartitionsBehavior::kOverwrite),
       "OVERWRITE");
   ASSERT_EQ(
-      HiveConfig::insertExistingPartitionsBehaviorString(
+      HiveConfig::toInsertExistingPartitionsBehavior("OVERWRITE"),
+      HiveConfig::InsertExistingPartitionsBehavior::kOverwrite);
+  VELOX_ASSERT_THROW(
+      HiveConfig::toName(
           static_cast<HiveConfig::InsertExistingPartitionsBehavior>(100)),
-      "UNKNOWN BEHAVIOR 100");
+      "Invalid enum value: 100");
 }
 
 TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMultilevel) {
@@ -906,9 +908,8 @@ TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
 
   // Write test data to a local temp file.
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto vector = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vector);
+  auto vector = makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3}));
+  auto filePath = writeToFile(vector);
 
   // Create a table handle with dbName and tableName set.
   auto tableHandle = std::make_shared<HiveTableHandle>(
@@ -976,7 +977,7 @@ TEST_F(HiveConnectorTest, setFileReadOpsForwardsToFileSystem) {
         auto filePath = TempFilePath::create();
         writeToFile(
             filePath->getPath(),
-            makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})}));
+            makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3})));
         auto connectorQueryCtx = ConnectorQueryCtx::Builder()
                                      .operatorPool(pool_.get())
                                      .connectorPool(pool_.get())
@@ -1026,7 +1027,7 @@ TEST_F(HiveConnectorTest, splitFileReadOpsAddKeys) {
   const auto filePath = TempFilePath::create();
   writeToFile(
       filePath->getPath(),
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})}));
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3})));
   const auto tableHandle = makeTableHandle(
       SubfieldFilters{},
       /*remainingFilter=*/nullptr,

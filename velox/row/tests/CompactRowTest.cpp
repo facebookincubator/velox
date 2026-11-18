@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/row/CompactRow.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -561,6 +562,16 @@ TEST_F(CompactRowTest, map) {
   });
 
   testRoundTrip(data);
+}
+
+TEST_F(CompactRowTest, flatMapUnsupported) {
+  auto data = makeRowVector({makeFlatMapVector<int32_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{1, 11}},
+  })});
+  VELOX_ASSERT_THROW(
+      CompactRow{data},
+      "Unsupported map vector encoding for CompactRow: FLAT_MAP");
 }
 
 TEST_F(CompactRowTest, row) {

@@ -49,6 +49,15 @@ class UnnestTest : public HiveConnectorTestBase,
     return params;
   }
 
+  // Asserts that 'planNode' returns no rows with this test's batch size.
+  void assertEmptyResults(const core::PlanNodePtr& planNode) const {
+    AssertQueryBuilder(planNode)
+        .config(
+            core::QueryConfig::kPreferredOutputBatchRows,
+            std::to_string(batchSize_))
+        .assertEmptyResults();
+  }
+
   const vector_size_t batchSize_{GetParam()};
 };
 
@@ -88,7 +97,7 @@ TEST_P(UnnestTest, skipArrayElement) {
                   .planNode();
 
   auto expected =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 1, 1, 2, 2})});
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 1, 1, 2, 2}));
   AssertQueryBuilder(plan)
       .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(expected);
@@ -263,7 +272,7 @@ TEST_P(UnnestTest, skipArrayOfRowElement) {
                           std::vector<std::optional<std::string>>{std::nullopt})
                       .planNode();
   auto skipExpected =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 1, 1, 2, 2})});
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 1, 1, 2, 2}));
   AssertQueryBuilder(skipPlan)
       .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(skipExpected);
@@ -956,16 +965,13 @@ TEST_P(UnnestTest, allEmptyOrNullArrays) {
            [](auto /* row */, auto index) { return index; },
            nullEvery(7))});
 
-  auto op =
-      PlanBuilder().values({vector}).unnest({"c0"}, {"c1", "c2"}).planNode();
-  auto params = makeCursorParameters(op);
-  assertQueryReturnsEmptyResult(params);
-
-  op = PlanBuilder()
-           .values({vector})
-           .unnest({"c0"}, {"c1", "c2"}, "ordinal")
-           .planNode();
-  assertQueryReturnsEmptyResult(params);
+  assertEmptyResults(
+      PlanBuilder().values({vector}).unnest({"c0"}, {"c1", "c2"}).planNode());
+  assertEmptyResults(
+      PlanBuilder()
+          .values({vector})
+          .unnest({"c0"}, {"c1", "c2"}, "ordinal")
+          .planNode());
 }
 
 TEST_P(UnnestTest, allEmptyOrNullMaps) {
@@ -984,17 +990,13 @@ TEST_P(UnnestTest, allEmptyOrNullMaps) {
            [](auto /* row */) { return 0; },
            nullEvery(7))});
 
-  auto op =
-      PlanBuilder().values({vector}).unnest({"c0"}, {"c1", "c2"}).planNode();
-  auto params = makeCursorParameters(op);
-  assertQueryReturnsEmptyResult(params);
-
-  op = PlanBuilder()
-           .values({vector})
-           .unnest({"c0"}, {"c1", "c2"}, "ordinal")
-           .planNode();
-  params = makeCursorParameters(op);
-  assertQueryReturnsEmptyResult(params);
+  assertEmptyResults(
+      PlanBuilder().values({vector}).unnest({"c0"}, {"c1", "c2"}).planNode());
+  assertEmptyResults(
+      PlanBuilder()
+          .values({vector})
+          .unnest({"c0"}, {"c1", "c2"}, "ordinal")
+          .planNode());
 }
 
 TEST_P(UnnestTest, batchSize) {
@@ -1031,7 +1033,6 @@ TEST_P(UnnestTest, batchSize) {
 
 TEST_P(UnnestTest, barrier) {
   std::vector<RowVectorPtr> vectors;
-  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
   const int numSplits{5};
   const int numRowsPerSplit{1'00};
   for (int32_t i = 0; i < 5; ++i) {
@@ -1039,9 +1040,8 @@ TEST_P(UnnestTest, barrier) {
         makeFlatVector<int64_t>(numRowsPerSplit, [](auto row) { return row; }),
     });
     vectors.push_back(vector);
-    tempFiles.push_back(TempFilePath::create());
   }
-  writeToFiles(toFilePaths(tempFiles), vectors);
+  auto tempFiles = writeToFiles(vectors);
   createDuckDbTable(vectors);
 
   // Unnest 1K rows into 3K rows.

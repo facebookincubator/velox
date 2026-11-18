@@ -795,8 +795,8 @@ TEST_F(CudfAggregationSelectionTest, orderByAggregations) {
 // aggregator on the groupby path alone and approx_distinct on the reduce path
 // alone, and each is mask-capable there alone: an aggregator added later for
 // the other path accepts no mask until its registration declares one.
-// array_agg collects every row or every non-null row of a group and cannot
-// honor a mask (see GroupbyArrayAggAggregator).
+// array_agg has an aggregator on the groupby path alone, so its global masked
+// form stays on the CPU.
 TEST_F(CudfAggregationSelectionTest, maskedAggregatesByPath) {
   struct Case {
     std::string aggregate;
@@ -812,7 +812,7 @@ TEST_F(CudfAggregationSelectionTest, maskedAggregatesByPath) {
       {"stddev_samp(c1)", true, false},
       {"stddev(c1)", true, false},
       {"approx_distinct(c1)", false, true},
-      {"array_agg(c1)", false, false},
+      {"array_agg(c1)", true, false},
   };
   for (const auto& testCase : cases) {
     SCOPED_TRACE(testCase.aggregate);

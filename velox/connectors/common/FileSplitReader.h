@@ -123,6 +123,11 @@ class FileSplitReader {
 
   void resetSplit();
 
+  /// Returns the file row number the next read starts at, or
+  /// dwio::common::RowReader::kAtEnd at the end of the split or when no file is
+  /// open yet.
+  int64_t nextRowNumber() const;
+
   int64_t estimatedRowSize() const;
 
   void updateRuntimeStats(dwio::common::RuntimeStats& stats) const;

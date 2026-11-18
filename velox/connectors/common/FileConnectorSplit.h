@@ -37,6 +37,11 @@ struct FileConnectorSplit : public ConnectorSplit {
   /// place. Empty when there is none. The split builders set it.
   std::string physicalFilePath;
 
+  /// Rows of the split to read, counted from the first row in the byte range.
+  /// Reads every row in the byte range when unset. HiveConnectorSplitBuilder
+  /// sets it.
+  std::optional<dwio::common::SplitRowRange> splitRowRange;
+
   dwio::common::FileFormat fileFormat;
   const uint64_t start;
   const uint64_t length;

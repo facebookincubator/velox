@@ -1302,7 +1302,7 @@ TEST_F(PlanNodeSerdeTest, fixedPointSequence) {
   auto schema = ROW("x", BIGINT());
   auto seed =
       PlanBuilder(idGenerator)
-          .values({makeRowVector({"x"}, {makeFlatVector<int64_t>({1})})})
+          .values({makeNamedRowVector("x", makeFlatVector<int64_t>({1}))})
           .planNode();
   auto plan =
       PlanBuilder(idGenerator)

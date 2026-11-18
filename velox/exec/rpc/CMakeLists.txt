@@ -61,6 +61,21 @@ velox_link_libraries(
   glog::glog
 )
 
+velox_add_library(
+  velox_deferred_rpc_phase_function
+  DeferredRpcPhaseFunction.cpp
+  HEADERS
+  DeferredRpcPhaseFunction.h
+)
+
+velox_link_libraries(
+  velox_deferred_rpc_phase_function
+  velox_async_rpc_function
+  velox_rpc_state
+  velox_memory
+  Folly::folly
+)
+
 velox_add_library(velox_rpc_operator RPCOperator.cpp HEADERS RPCOperator.h)
 
 velox_link_libraries(

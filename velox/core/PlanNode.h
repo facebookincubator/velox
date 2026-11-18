@@ -6386,9 +6386,7 @@ class TopNRowNumberNode : public PlanNode {
     kDenseRank,
   };
 
-  static const char* rankFunctionName(RankFunction function);
-
-  static RankFunction rankFunctionFromName(std::string_view name);
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(RankFunction);
 
   /// @param rankFunction RanksFunction (row_number, rank, dense_rank) for TopN.
   /// @param partitionKeys Partitioning keys. May be empty.
@@ -6956,6 +6954,8 @@ class RPCNode : public PlanNode {
   /// @param streamingMode The streaming mode for RPC execution.
   /// @param dispatchBatchSize For BATCH mode pipelining: fire callBatch()
   ///        every N rows during addInput() instead of collecting all rows.
+  /// @param executionPhase Backend lifecycle phase. SUBMIT, POLL and COLLECT
+  ///        require BATCH dispatch; INLINE executes the original RPC call.
   RPCNode(
       const PlanNodeId& id,
       PlanNodePtr source,
@@ -6963,7 +6963,8 @@ class RPCNode : public PlanNode {
       std::string outputColumn,
       RowTypePtr outputType,
       rpc::RPCStreamingMode streamingMode = rpc::RPCStreamingMode::kPerRow,
-      int32_t dispatchBatchSize = 0);
+      int32_t dispatchBatchSize = 0,
+      std::string executionPhase = "INLINE");
 
   const PlanNodePtr& source() const {
     return sources_[0];
@@ -6994,9 +6995,12 @@ class RPCNode : public PlanNode {
     return dispatchBatchSize_;
   }
 
-  std::string_view name() const override {
-    return "RPC";
+  const std::string& executionPhase() const {
+    return executionPhase_;
   }
+
+  /// Returns the operator name used in phase reporting and plan serialization.
+  std::string_view name() const override;
 
   const RowTypePtr& outputType() const override {
     return outputType_;
@@ -7019,48 +7023,25 @@ class RPCNode : public PlanNode {
   RowTypePtr outputType_;
   rpc::RPCStreamingMode streamingMode_;
   int32_t dispatchBatchSize_{0};
+  // Preserves the lifecycle phase across plan serialization.
+  std::string executionPhase_;
 };
 
 using RPCNodePtr = std::shared_ptr<RPCNode>;
 
 } // namespace facebook::velox::core
 
-template <>
-struct fmt::formatter<facebook::velox::core::PartitionedOutputNode::Kind>
-    : formatter<std::string_view> {
-  auto format(
-      facebook::velox::core::PartitionedOutputNode::Kind s,
-      format_context& ctx) const {
-    return formatter<std::string_view>::format(
-        facebook::velox::core::PartitionedOutputNode::toName(s), ctx);
-  }
-};
-
-template <>
-struct fmt::formatter<facebook::velox::core::JoinType> : formatter<int> {
-  auto format(facebook::velox::core::JoinType s, format_context& ctx) const {
-    return formatter<int>::format(static_cast<int>(s), ctx);
-  }
-};
-
-template <>
-struct fmt::formatter<facebook::velox::core::TopNRowNumberNode::RankFunction>
-    : formatter<std::string> {
-  auto format(
-      facebook::velox::core::TopNRowNumberNode::RankFunction f,
-      format_context& ctx) const {
-    return formatter<std::string>::format(
-        facebook::velox::core::TopNRowNumberNode::rankFunctionName(f), ctx);
-  }
-};
-
-template <>
-struct fmt::formatter<facebook::velox::core::AggregationNode::Step>
-    : formatter<std::string_view> {
-  auto format(
-      facebook::velox::core::AggregationNode::Step s,
-      format_context& ctx) const {
-    return formatter<std::string_view>::format(
-        facebook::velox::core::AggregationNode::toName(s), ctx);
-  }
-};
+VELOX_EMBEDDED_ENUM_FORMATTER(facebook::velox::core::AggregationNode, Step);
+VELOX_EMBEDDED_ENUM_FORMATTER(facebook::velox::core::LocalPartitionNode, Type);
+VELOX_EMBEDDED_ENUM_FORMATTER(
+    facebook::velox::core::PartitionedOutputNode,
+    Kind);
+VELOX_ENUM_FORMATTER(facebook::velox::core::JoinType);
+VELOX_EMBEDDED_ENUM_FORMATTER(
+    facebook::velox::core::VectorSearchJoinNode,
+    IndexSide);
+VELOX_EMBEDDED_ENUM_FORMATTER(facebook::velox::core::WindowNode, WindowType);
+VELOX_EMBEDDED_ENUM_FORMATTER(facebook::velox::core::WindowNode, BoundType);
+VELOX_EMBEDDED_ENUM_FORMATTER(
+    facebook::velox::core::TopNRowNumberNode,
+    RankFunction);

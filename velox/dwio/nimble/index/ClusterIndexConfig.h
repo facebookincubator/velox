@@ -71,7 +71,8 @@ struct ClusterIndexConfig : IndexConfig {
   /// of each key sequence from hierarchicalKeyEncodingReadFactors.
   EncodingLayout encodingLayout;
   /// Maximum rows per key chunk. Smaller values improve lookup granularity at
-  /// the cost of additional metadata.
+  /// the cost of additional metadata. Ignored in the Stripe key stream layout,
+  /// where the keys of each stripe are one key chunk.
   uint64_t maxRowsPerKeyChunk;
   /// Chunk compression for encoded keys. Only Uncompressed, Zstd, and Lz4 are
   /// supported.

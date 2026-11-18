@@ -34,6 +34,7 @@
 #include "velox/exec/tests/utils/HashJoinTestBase.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -1875,17 +1876,16 @@ TEST_P(HashJoinTest, customTypeStringDynamicFilterNotPushedDown) {
       {"c0", "c1"},
       {makeFlatVector<StringView>(kNumRows, keyAt, nullptr, VARBINARY()),
        makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; })});
-  auto probeFile = TempFilePath::create();
-  writeToFile(probeFile->getPath(), probeVector);
+  auto probeFile = writeToFile(probeVector);
 
   // Only three build keys, so a pushed-down filter would be highly selective
   // and its absence is visible in the scan's input positions.
   const std::vector<vector_size_t> buildRows = {7, 42, 91};
 
-  auto expected = makeRowVector(
-      {"c1"}, {makeFlatVector<int64_t>(buildRows.size(), [&](auto row) {
+  auto expected = makeNamedRowVector(
+      "c1", makeFlatVector<int64_t>(buildRows.size(), [&](auto row) {
         return buildRows[row];
-      })});
+      }));
 
   // 'keyType' is the type the scan is asked to produce for c0, and the type of
   // the build key it is joined against.
@@ -1896,13 +1896,13 @@ TEST_P(HashJoinTest, customTypeStringDynamicFilterNotPushedDown) {
     // custom type is only equivalent to itself.
     auto buildSide =
         PlanBuilder(planNodeIdGenerator, pool_.get())
-            .values({makeRowVector(
-                {"u_c0"},
-                {makeFlatVector<StringView>(
+            .values({makeNamedRowVector(
+                "u_c0",
+                makeFlatVector<StringView>(
                     buildRows.size(),
                     [&](auto row) { return keyAt(buildRows[row]); },
                     nullptr,
-                    keyType)})})
+                    keyType))})
             .planNode();
     auto plan =
         PlanBuilder(planNodeIdGenerator, pool_.get())
@@ -2005,7 +2005,7 @@ TEST_P(HashJoinTest, dynamicFiltersAppliedToPreloadedSplits) {
 
   // Prepare build side table.
   std::vector<RowVectorPtr> buildVectors{
-      makeRowVector({"b0"}, {makeFlatVector<int64_t>({0, numSplits})})};
+      makeNamedRowVector("b0", makeFlatVector<int64_t>({0, numSplits}))};
   createDuckDbTable("b", buildVectors);
 
   // Executing the join with p1=b0, we expect a dynamic filter for p1 to prune
@@ -2063,14 +2063,13 @@ TEST_P(HashJoinTest, dynamicFiltersPushDownThroughAgg) {
       makeFlatVector<int32_t>(numRowsProbe, [&](auto row) { return row - 10; }),
       makeFlatIdentityVector<int64_t>(numRowsProbe),
   })};
-  std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-  writeToFile(probeFile->getPath(), probeVectors);
+  auto probeFile = writeToFile(probeVectors);
 
   // Create build data
-  std::vector<RowVectorPtr> buildVectors{makeRowVector(
-      {"u0"}, {makeFlatVector<int32_t>(numRowsBuild, [&](auto row) {
+  std::vector<RowVectorPtr> buildVectors{makeNamedRowVector(
+      "u0", makeFlatVector<int32_t>(numRowsBuild, [&](auto row) {
         return 35 + 2 * (row + numRowsBuild / 5);
-      })})};
+      }))};
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
@@ -2132,14 +2131,13 @@ TEST_P(HashJoinTest, dynamicFiltersPushDownThroughStreamingAgg) {
       makeFlatVector<int32_t>(numRowsProbe, [&](auto row) { return row - 10; }),
       makeFlatIdentityVector<int64_t>(numRowsProbe),
   })};
-  std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-  writeToFile(probeFile->getPath(), probeVectors);
+  auto probeFile = writeToFile(probeVectors);
 
   // Create build data
-  std::vector<RowVectorPtr> buildVectors{makeRowVector(
-      {"u0"}, {makeFlatVector<int32_t>(numRowsBuild, [&](auto row) {
+  std::vector<RowVectorPtr> buildVectors{makeNamedRowVector(
+      "u0", makeFlatVector<int32_t>(numRowsBuild, [&](auto row) {
         return 35 + 2 * (row + numRowsBuild / 5);
-      })})};
+      }))};
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
@@ -2219,8 +2217,7 @@ TEST_P(HashJoinTest, noDynamicFiltersPushDownThroughRightJoin) {
           makeFlatIdentityVector<int64_t>(10),
           makeFlatIdentityVector<int64_t>(10),
       })};
-  auto file = TempFilePath::create();
-  writeToFile(file->getPath(), rightProbe);
+  auto file = writeToFile(rightProbe);
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId scanNodeId;
   auto plan =
@@ -2459,7 +2456,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, buildReservationReleaseCheck) {
     }
   };
   VELOX_ASSERT_THROW(runTask(), "");
-  ASSERT_TRUE(waitForTaskAborted(task, 5'000'000));
+  ASSERT_TRUE(TaskMonitor::waitForAbort(*task, 5'000'000));
 }
 
 TEST_P(HashJoinTest, dynamicFilterOnPartitionKey) {
@@ -2470,7 +2467,7 @@ TEST_P(HashJoinTest, dynamicFilterOnPartitionKey) {
   createDuckDbTable("u", {rowVector});
   writeToFile(filePaths[0]->getPath(), rowVector);
   std::vector<RowVectorPtr> buildVectors{
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({0, 1, 2})})};
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({0, 1, 2}))};
   createDuckDbTable("t", buildVectors);
   auto outputType = ROW({"n1_0", "n1_1"}, {BIGINT(), BIGINT()});
   connector::ColumnHandleMap assignments = {
@@ -3401,7 +3398,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashBuildAbortDuringOutputProcessing) {
                 "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
             .run(),
         "Manual MemoryPool Abortion");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -3479,7 +3476,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashBuildAbortDuringInputProcessing) {
             .run(),
         "Manual MemoryPool Abortion");
 
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -3558,7 +3555,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashBuildAbortDuringAllocation) {
             .run(),
         "Manual MemoryPool Abortion");
 
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -3631,7 +3628,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeAbortDuringInputProcessing) {
                 "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
             .run(),
         "Manual MemoryPool Abortion");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -3643,7 +3640,7 @@ TEST_P(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
       {makeFlatVector<int32_t>(20, [](auto row) { return 1 + row % 2; }),
        makeFlatVector<int32_t>(20, [](auto row) { return row; })})};
   auto buildVectors = std::vector<RowVectorPtr>{
-      makeRowVector({"u_k1"}, {makeFlatVector<int32_t>({1, 2})})};
+      makeNamedRowVector("u_k1", makeFlatVector<int32_t>({1, 2}))};
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", {buildVectors});
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -3695,7 +3692,7 @@ TEST_P(HashJoinTest, leftJoinWithMissAtEndOfBatchMultipleBuildMatches) {
       {makeFlatVector<int32_t>(10, [](auto row) { return 1 + row % 2; }),
        makeFlatVector<int32_t>(10, [](auto row) { return row; })})};
   auto buildVectors = std::vector<RowVectorPtr>{
-      makeRowVector({"u_k1"}, {makeFlatVector<int32_t>({1, 2, 1, 2})})};
+      makeNamedRowVector("u_k1", makeFlatVector<int32_t>({1, 2, 1, 2}))};
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", {buildVectors});
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -3863,6 +3860,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, exceededMaxSpillLevel) {
 
   core::PlanNodeId probeScanId;
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId joinNodeId;
   auto plan = PlanBuilder(planNodeIdGenerator)
                   .values(probeVectors, false)
                   .hashJoin(
@@ -3873,6 +3871,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, exceededMaxSpillLevel) {
                           .planNode(),
                       "",
                       concat(probeType_->names(), buildType_->names()))
+                  .capturePlanNodeId(joinNodeId)
                   .planNode();
 
   auto tempDirectory = TempDirectoryPath::create();
@@ -3907,25 +3906,26 @@ DEBUG_ONLY_TEST_P(HashJoinTest, exceededMaxSpillLevel) {
           "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
       .config(core::QueryConfig::kSpillStartPartitionBit, "29")
       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
-        auto opStats = toOperatorStats(task->taskStats());
+        const auto joinStats =
+            PlanNodeStats::extract(task->taskStats(), joinNodeId);
         ASSERT_EQ(
-            opStats.at("HashProbe")
-                .runtimeStats[std::string(Operator::kExceededMaxSpillLevel)]
+            joinStats.operatorStatsFor("HashProbe")
+                .customStat(Operator::kExceededMaxSpillLevel)
                 .sum,
             8);
         ASSERT_EQ(
-            opStats.at("HashProbe")
-                .runtimeStats[std::string(Operator::kExceededMaxSpillLevel)]
+            joinStats.operatorStatsFor("HashProbe")
+                .customStat(Operator::kExceededMaxSpillLevel)
                 .count,
             1);
         ASSERT_EQ(
-            opStats.at("HashBuild")
-                .runtimeStats[std::string(Operator::kExceededMaxSpillLevel)]
+            joinStats.operatorStatsFor("HashBuild")
+                .customStat(Operator::kExceededMaxSpillLevel)
                 .sum,
             8);
         ASSERT_EQ(
-            opStats.at("HashBuild")
-                .runtimeStats[std::string(Operator::kExceededMaxSpillLevel)]
+            joinStats.operatorStatsFor("HashBuild")
+                .customStat(Operator::kExceededMaxSpillLevel)
                 .count,
             1);
       })
@@ -4092,7 +4092,7 @@ TEST_P(HashJoinTest, reclaimFromJoinBuilderWithMultiDrivers) {
   // This test uses on-demand created memory manager instead of the global
   // one. We need to make sure any used memory got cleaned up before exiting
   // the scope
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   ASSERT_GT(arbitrator->stats().numRequests, 0);
   ASSERT_GT(arbitrator->stats().reclaimedUsedBytes, 0);
 }
@@ -4305,7 +4305,7 @@ DEBUG_ONLY_TEST_P(
   // This test uses on-demand created memory manager instead of the global
   // one. We need to make sure any used memory got cleaned up before exiting
   // the scope
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   ASSERT_EQ(
       memory::memoryManager()->arbitrator()->stats().numNonReclaimableAttempts,
       2);
@@ -4329,6 +4329,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, reclaimDuringTableBuild) {
 
   core::PlanNodeId probeScanId;
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId joinNodeId;
   auto plan = PlanBuilder(planNodeIdGenerator)
                   .values(probeVectors, false)
                   .hashJoin(
@@ -4339,6 +4340,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, reclaimDuringTableBuild) {
                           .planNode(),
                       "",
                       concat(probeType_->names(), buildType_->names()))
+                  .capturePlanNodeId(joinNodeId)
                   .planNode();
 
   std::atomic_bool injectSpillOnce{true};
@@ -4363,10 +4365,11 @@ DEBUG_ONLY_TEST_P(HashJoinTest, reclaimDuringTableBuild) {
           "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
       .config(core::QueryConfig::kSpillStartPartitionBit, "29")
       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
-        auto opStats = toOperatorStats(task->taskStats());
+        const auto joinStats =
+            PlanNodeStats::extract(task->taskStats(), joinNodeId);
         ASSERT_GT(
-            opStats.at("HashBuild")
-                .runtimeStats[std::string(Operator::kSpillWrites)]
+            joinStats.operatorStatsFor("HashBuild")
+                .customStat(Operator::kSpillWrites)
                 .sum,
             0);
       })
@@ -4453,7 +4456,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, exceptionDuringFinishJoinBuild) {
   // This test uses on-demand created memory manager instead of the global
   // one. We need to make sure any used memory got cleaned up before exiting
   // the scope
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   ASSERT_EQ(arbitrator->stats().freeCapacityBytes, expectedFreeCapacityBytes);
 }
 
@@ -4569,7 +4572,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, arbitrationTriggeredDuringParallelJoinBuild) {
   // This test uses on-demand created memory manager instead of the global
   // one. We need to make sure any used memory got cleaned up before exiting
   // the scope
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_P(HashJoinTest, arbitrationTriggeredByEnsureJoinTableFit) {
@@ -4655,13 +4658,13 @@ DEBUG_ONLY_TEST_P(HashJoinTest, joinBuildSpillError) {
           .copyResults(pool()),
       injectedErrorMsg);
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   ASSERT_EQ(arbitrator->stats().numFailures, 1);
 
   // Wait again here as this test uses on-demand created memory manager instead
   // of the global one. We need to make sure any used memory got cleaned up
   // before exiting the scope
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_P(HashJoinTest, probeSpillOnWaitForPeers) {
@@ -4736,6 +4739,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, probeSpillOnWaitForPeers) {
   createDuckDbTable(totalVectors);
   auto spillDirectory = TempDirectoryPath::create();
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId joinNodeId;
   auto plan = PlanBuilder(planNodeIdGenerator)
                   .values(vectors, true)
                   .project({"c0 AS t0", "c1 AS t1"})
@@ -4749,6 +4753,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, probeSpillOnWaitForPeers) {
                       "",
                       {"t1"},
                       core::JoinType::kInner)
+                  .capturePlanNodeId(joinNodeId)
                   .planNode();
 
   {
@@ -4761,14 +4766,15 @@ DEBUG_ONLY_TEST_P(HashJoinTest, probeSpillOnWaitForPeers) {
             .maxDrivers(numDrivers)
             .assertResults("SELECT a.c1 from tmp a join tmp b on a.c0 = b.c0");
 
-    auto opStats = toOperatorStats(task->taskStats());
-    ASSERT_GT(opStats.at("HashProbe").spilledBytes, 0);
-    ASSERT_EQ(opStats.at("HashBuild").spilledBytes, 0);
+    const auto joinStats =
+        PlanNodeStats::extract(task->taskStats(), joinNodeId);
+    ASSERT_GT(joinStats.operatorStatsFor("HashProbe").spilledBytes, 0);
+    ASSERT_EQ(joinStats.operatorStatsFor("HashBuild").spilledBytes, 0);
 
     const auto* arbitrator = memory::memoryManager()->arbitrator();
     ASSERT_GT(arbitrator->stats().reclaimedUsedBytes, 0);
   }
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_P(HashJoinTest, taskWaitTimeout) {
@@ -4870,7 +4876,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, taskWaitTimeout) {
     // This test uses on-demand created memory manager instead of the global
     // one. We need to make sure any used memory got cleaned up before exiting
     // the scope
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -4963,7 +4969,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeSpill) {
             "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t RIGHT JOIN u ON t.t_k1 = u.u_k1")
         .injectSpill(false)
         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
-          auto opStats = toOperatorStats(task->taskStats());
+          auto opStats = task->taskStats().operatorStats();
           if (!parallelBuildSideRowsEnabled_) {
             ASSERT_GT(opStats.at("HashProbe").spilledBytes, 0);
           }
@@ -5022,7 +5028,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeSpillInMiddleOfLastOutputProcessing) {
           "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t RIGHT JOIN u ON t.t_k1 = u.u_k1")
       .injectSpill(false)
       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
-        auto opStats = toOperatorStats(task->taskStats());
+        auto opStats = task->taskStats().operatorStats();
         ASSERT_GT(opStats.at("HashProbe").spilledBytes, 0);
         // Verifies that we only spill the output which is single partitioned
         // but not the hash table.
@@ -5096,7 +5102,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeSpillInMiddleOfOutputProcessing) {
             "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t RIGHT JOIN u ON t.t_k1 = u.u_k1")
         .injectSpill(false)
         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
-          auto opStats = toOperatorStats(task->taskStats());
+          auto opStats = task->taskStats().operatorStats();
           ASSERT_GT(opStats.at("HashProbe").spilledBytes, 0);
           ASSERT_GT(opStats.at("HashProbe").spilledPartitions, 1);
         })
@@ -5149,7 +5155,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeSpillWhenOneOfProbeFinish) {
             "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 = u.u_k0")
         .injectSpill(false)
         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
-          auto opStats = toOperatorStats(task->taskStats());
+          auto opStats = task->taskStats().operatorStats();
           ASSERT_EQ(opStats.at("HashBuild").spilledBytes, 0);
           ASSERT_GT(opStats.at("HashProbe").spilledBytes, 0);
         })
@@ -5210,7 +5216,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeSpillExceedLimit) {
             "SELECT t.t_k1, t.t_k2, u.u_k1, t.t_v1 FROM t RIGHT JOIN u ON t.t_k1 = u.u_k1")
         .injectSpill(false)
         .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
-          auto opStats = toOperatorStats(task->taskStats());
+          auto opStats = task->taskStats().operatorStats();
           if (buildTriggerSpill) {
             ASSERT_GT(opStats.at("HashProbe").spilledBytes, 0);
             ASSERT_GT(opStats.at("HashBuild").spilledBytes, 0);
@@ -5267,7 +5273,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeSpillUnderNonReclaimableSection) {
           "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 = u.u_k0")
       .injectSpill(false)
       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
-        auto opStats = toOperatorStats(task->taskStats());
+        auto opStats = task->taskStats().operatorStats();
         ASSERT_EQ(opStats.at("HashProbe").spilledBytes, 0);
         ASSERT_EQ(opStats.at("HashBuild").spilledBytes, 0);
       })
@@ -5488,7 +5494,7 @@ DEBUG_ONLY_TEST_P(
         if (!injectSpill) {
           return;
         }
-        auto opStats = toOperatorStats(task->taskStats());
+        auto opStats = task->taskStats().operatorStats();
         ASSERT_GT(opStats.at("HashProbe").spilledBytes, 0);
         ASSERT_GE(opStats.at("HashProbe").spilledPartitions, 1);
       })
@@ -5602,7 +5608,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, spillOnBlockedProbe) {
     ASSERT_GT(buildSpillStats.spilledBytes, 0);
   }
   arbitrationThread.join();
-  waitForAllTasksToBeDeleted(30'000'000);
+  TaskMonitor::waitForAllTasksDeleted(30'000'000);
   Operator::unregisterAllOperators();
 }
 
@@ -7376,11 +7382,9 @@ TEST_P(HashJoinTest, nullAwareRightSemiProjectOverScan) {
   for (int i = 0; i < probes.size(); i++) {
     RowVectorPtr& probe = probes[i];
     RowVectorPtr& build = builds[i];
-    std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-    writeToFile(probeFile->getPath(), {probe});
+    auto probeFile = writeToFile(probe);
 
-    std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
-    writeToFile(buildFile->getPath(), {build});
+    auto buildFile = writeToFile(build);
 
     createDuckDbTable("t", {probe});
     createDuckDbTable("u", {build});
@@ -8055,11 +8059,9 @@ TEST_P(HashJoinTest, semiProjectOverLazyVectors) {
         });
   });
 
-  std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-  writeToFile(probeFile->getPath(), probeVectors);
+  auto probeFile = writeToFile(probeVectors);
 
-  std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
-  writeToFile(buildFile->getPath(), buildVectors);
+  auto buildFile = writeToFile(buildVectors);
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);

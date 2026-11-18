@@ -22,6 +22,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 #include "folly/synchronization/EventCount.h"
 
@@ -377,11 +378,9 @@ class MergeJoinTest : public HiveConnectorTestBase {
   void testJoinTwoKeysWithNulls(
       RowVectorPtr& leftVectors,
       RowVectorPtr& rightVectors) {
-    auto leftFile = TempFilePath::create();
-    writeToFile(leftFile->getPath(), leftVectors);
+    auto leftFile = writeToFile(leftVectors);
     createDuckDbTable("t", {leftVectors});
-    auto rightFile = TempFilePath::create();
-    writeToFile(rightFile->getPath(), rightVectors);
+    auto rightFile = writeToFile(rightVectors);
     createDuckDbTable("u", {rightVectors});
 
     auto joinTypes = {
@@ -521,8 +520,8 @@ TEST_F(MergeJoinTest, keySkew) {
 
 TEST_F(MergeJoinTest, aggregationOverJoin) {
   auto left =
-      makeRowVector({"t_c0"}, {makeFlatVector<int32_t>({1, 2, 3, 4, 5})});
-  auto right = makeRowVector({"u_c0"}, {makeFlatVector<int32_t>({2, 4, 6})});
+      makeNamedRowVector("t_c0", makeFlatVector<int32_t>({1, 2, 3, 4, 5}));
+  auto right = makeNamedRowVector("u_c0", makeFlatVector<int32_t>({2, 4, 6}));
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan =
@@ -930,8 +929,8 @@ TEST_F(MergeJoinTest, fisrtRowsNull) {
 // Verify that both left-side and right-side pipelines feeding the merge join
 // always run single-threaded.
 TEST_F(MergeJoinTest, numDrivers) {
-  auto left = makeRowVector({"t_c0"}, {makeFlatVector<int32_t>({1, 2, 3})});
-  auto right = makeRowVector({"u_c0"}, {makeFlatVector<int32_t>({0, 2, 5})});
+  auto left = makeNamedRowVector("t_c0", makeFlatVector<int32_t>({1, 2, 3}));
+  auto right = makeNamedRowVector("u_c0", makeFlatVector<int32_t>({0, 2, 5}));
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan =
@@ -980,12 +979,10 @@ TEST_F(MergeJoinTest, lazyVectors) {
           makeFlatVector<int64_t>(10'000, [](auto row) { return row % 31; }),
       });
 
-  auto leftFile = TempFilePath::create();
-  writeToFile(leftFile->getPath(), leftVectors);
+  auto leftFile = writeToFile(leftVectors);
   createDuckDbTable("t", {leftVectors});
 
-  auto rightFile = TempFilePath::create();
-  writeToFile(rightFile->getPath(), rightVectors);
+  auto rightFile = writeToFile(rightVectors);
   createDuckDbTable("u", {rightVectors});
 
   auto joinTypes = {
@@ -1029,8 +1026,8 @@ TEST_F(MergeJoinTest, lazyVectors) {
 // Ensures the output of merge joins are dictionaries.
 TEST_F(MergeJoinTest, dictionaryOutput) {
   auto left =
-      makeRowVector({"t_c0"}, {makeFlatVector<int32_t>({1, 2, 3, 4, 5})});
-  auto right = makeRowVector({"u_c0"}, {makeFlatVector<int32_t>({2, 4, 6})});
+      makeNamedRowVector("t_c0", makeFlatVector<int32_t>({1, 2, 3, 4, 5}));
+  auto right = makeNamedRowVector("u_c0", makeFlatVector<int32_t>({2, 4, 6}));
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan =
@@ -1063,7 +1060,7 @@ TEST_F(MergeJoinTest, dictionaryOutput) {
       });
 
   task->start(2);
-  waitForTaskCompletion(task.get());
+  TaskMonitor::waitForCompletion(*task);
 
   for (const auto& child : output->children()) {
     EXPECT_TRUE(isDictionary(child->encoding()));
@@ -1074,13 +1071,13 @@ TEST_F(MergeJoinTest, dictionaryOutput) {
 }
 
 TEST_F(MergeJoinTest, semiJoin) {
-  auto left = makeRowVector(
-      {"t0"}, {makeNullableFlatVector<int64_t>({1, 2, 2, 6, std::nullopt})});
+  auto left = makeNamedRowVector(
+      "t0", makeNullableFlatVector<int64_t>({1, 2, 2, 6, std::nullopt}));
 
-  auto right = makeRowVector(
-      {"u0"},
-      {makeNullableFlatVector<int64_t>(
-          {1, 2, 2, 7, std::nullopt, std::nullopt})});
+  auto right = makeNamedRowVector(
+      "u0",
+      makeNullableFlatVector<int64_t>(
+          {1, 2, 2, 7, std::nullopt, std::nullopt}));
 
   createDuckDbTable("t", {left});
   createDuckDbTable("u", {right});
@@ -1119,13 +1116,13 @@ TEST_F(MergeJoinTest, semiJoin) {
 TEST_F(MergeJoinTest, semiJoinWithMultipleMatchVectors) {
   std::vector<RowVectorPtr> leftVectors;
   for (int i = 0; i < 10; ++i) {
-    leftVectors.push_back(makeRowVector(
-        {"t0"}, {makeFlatVector<int64_t>({i / 2, i / 2, i / 2})}));
+    leftVectors.push_back(makeNamedRowVector(
+        "t0", makeFlatVector<int64_t>({i / 2, i / 2, i / 2})));
   }
   std::vector<RowVectorPtr> rightVectors;
   for (int i = 0; i < 10; ++i) {
-    rightVectors.push_back(makeRowVector(
-        {"u0"}, {makeFlatVector<int64_t>({i / 2, i / 2, i / 2})}));
+    rightVectors.push_back(makeNamedRowVector(
+        "u0", makeFlatVector<int64_t>({i / 2, i / 2, i / 2})));
   }
 
   createDuckDbTable("t", leftVectors);
@@ -1270,15 +1267,15 @@ TEST_F(MergeJoinTest, semiJoinWithOneMatchedRowWithFilter) {
 }
 
 TEST_F(MergeJoinTest, rightJoin) {
-  auto left = makeRowVector(
-      {"t0"},
-      {makeNullableFlatVector<int64_t>(
-          {1, 2, std::nullopt, 5, 6, std::nullopt})});
+  auto left = makeNamedRowVector(
+      "t0",
+      makeNullableFlatVector<int64_t>(
+          {1, 2, std::nullopt, 5, 6, std::nullopt}));
 
-  auto right = makeRowVector(
-      {"u0"},
-      {makeNullableFlatVector<int64_t>(
-          {1, 5, 6, 8, std::nullopt, std::nullopt})});
+  auto right = makeNamedRowVector(
+      "u0",
+      makeNullableFlatVector<int64_t>(
+          {1, 5, 6, 8, std::nullopt, std::nullopt}));
 
   createDuckDbTable("t", {left});
   createDuckDbTable("u", {right});
@@ -1316,12 +1313,12 @@ TEST_F(MergeJoinTest, rightJoin) {
 }
 
 TEST_F(MergeJoinTest, nullKeys) {
-  auto left = makeRowVector(
-      {"t0"}, {makeNullableFlatVector<int64_t>({1, 2, 5, std::nullopt})});
+  auto left = makeNamedRowVector(
+      "t0", makeNullableFlatVector<int64_t>({1, 2, 5, std::nullopt}));
 
-  auto right = makeRowVector(
-      {"u0"},
-      {makeNullableFlatVector<int64_t>({1, 5, std::nullopt, std::nullopt})});
+  auto right = makeNamedRowVector(
+      "u0",
+      makeNullableFlatVector<int64_t>({1, 5, std::nullopt, std::nullopt}));
 
   createDuckDbTable("t", {left});
   createDuckDbTable("u", {right});
@@ -1358,15 +1355,15 @@ TEST_F(MergeJoinTest, nullKeys) {
 }
 
 TEST_F(MergeJoinTest, antiJoinWithFilter) {
-  auto left = makeRowVector(
-      {"t0"},
-      {makeNullableFlatVector<int64_t>(
-          {1, 2, 4, 5, 8, 9, std::nullopt, 10, std::nullopt})});
+  auto left = makeNamedRowVector(
+      "t0",
+      makeNullableFlatVector<int64_t>(
+          {1, 2, 4, 5, 8, 9, std::nullopt, 10, std::nullopt}));
 
-  auto right = makeRowVector(
-      {"u0"},
-      {makeNullableFlatVector<int64_t>(
-          {1, 5, 6, 7, std::nullopt, std::nullopt, 8, 9, 10})});
+  auto right = makeNamedRowVector(
+      "u0",
+      makeNullableFlatVector<int64_t>(
+          {1, 5, 6, 7, std::nullopt, std::nullopt, 8, 9, 10}));
 
   createDuckDbTable("t", {left});
   createDuckDbTable("u", {right});
@@ -1392,11 +1389,11 @@ TEST_F(MergeJoinTest, antiJoinWithFilter) {
 
 TEST_F(MergeJoinTest, antiJoinFailed) {
   auto size = 1'00;
-  auto left = makeRowVector(
-      {"t0"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+  auto left = makeNamedRowVector(
+      "t0", makeFlatVector<int64_t>(size, [](auto row) { return row; }));
 
-  auto right = makeRowVector(
-      {"u0"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+  auto right = makeNamedRowVector(
+      "u0", makeFlatVector<int64_t>(size, [](auto row) { return row; }));
 
   createDuckDbTable("t", {left});
   createDuckDbTable("u", {right});
@@ -1464,10 +1461,10 @@ TEST_F(MergeJoinTest, matchRatioStats) {
 
   // Inner join with full match (all rows match).
   {
-    auto left = makeRowVector(
-        {"t0"}, {makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5})});
-    auto right = makeRowVector(
-        {"u0"}, {makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5})});
+    auto left = makeNamedRowVector(
+        "t0", makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5}));
+    auto right = makeNamedRowVector(
+        "u0", makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5}));
 
     createDuckDbTable("t", {left});
     createDuckDbTable("u", {right});
@@ -1500,10 +1497,10 @@ TEST_F(MergeJoinTest, matchRatioStats) {
 
   // Inner join with partial match.
   {
-    auto left = makeRowVector(
-        {"t0"}, {makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8})});
-    auto right = makeRowVector(
-        {"u0"}, {makeNullableFlatVector<int64_t>({2, 4, 6, 10, 12})});
+    auto left = makeNamedRowVector(
+        "t0", makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8}));
+    auto right = makeNamedRowVector(
+        "u0", makeNullableFlatVector<int64_t>({2, 4, 6, 10, 12}));
 
     createDuckDbTable("t", {left});
     createDuckDbTable("u", {right});
@@ -1538,10 +1535,10 @@ TEST_F(MergeJoinTest, matchRatioStats) {
 
   // Left join - all left rows appear in output.
   {
-    auto left = makeRowVector(
-        {"t0"}, {makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5})});
+    auto left = makeNamedRowVector(
+        "t0", makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5}));
     auto right =
-        makeRowVector({"u0"}, {makeNullableFlatVector<int64_t>({2, 4})});
+        makeNamedRowVector("u0", makeNullableFlatVector<int64_t>({2, 4}));
 
     createDuckDbTable("t", {left});
     createDuckDbTable("u", {right});
@@ -1576,10 +1573,10 @@ TEST_F(MergeJoinTest, matchRatioStats) {
 
   // Join with duplicate keys (cartesian product).
   {
-    auto left = makeRowVector(
-        {"t0"}, {makeNullableFlatVector<int64_t>({1, 1, 1, 2, 2})});
-    auto right = makeRowVector(
-        {"u0"}, {makeNullableFlatVector<int64_t>({1, 1, 2, 2, 2})});
+    auto left = makeNamedRowVector(
+        "t0", makeNullableFlatVector<int64_t>({1, 1, 1, 2, 2}));
+    auto right = makeNamedRowVector(
+        "u0", makeNullableFlatVector<int64_t>({1, 1, 2, 2, 2}));
 
     createDuckDbTable("t", {left});
     createDuckDbTable("u", {right});
@@ -1616,10 +1613,10 @@ TEST_F(MergeJoinTest, matchRatioStats) {
 TEST_F(MergeJoinTest, planNodeStats) {
   // A MergeJoin node is implemented by two operators sharing its plan node id:
   // the MergeJoin operator (left input) and a CallbackSink feeding the right.
-  auto left =
-      makeRowVector({"t0"}, {makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5})});
-  auto right =
-      makeRowVector({"u0"}, {makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  auto left = makeNamedRowVector(
+      "t0", makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5}));
+  auto right = makeNamedRowVector(
+      "u0", makeNullableFlatVector<int64_t>({1, 2, 3, 4, 5}));
 
   createDuckDbTable("t", {left});
   createDuckDbTable("u", {right});
@@ -2036,15 +2033,15 @@ TEST_F(MergeJoinTest, antiJoinWithUniqueJoinKeys) {
 }
 
 TEST_F(MergeJoinTest, antiJoinNoFilter) {
-  auto left = makeRowVector(
-      {"t0"},
-      {makeNullableFlatVector<int64_t>(
-          {1, 2, 4, 5, 8, 9, std::nullopt, 10, std::nullopt})});
+  auto left = makeNamedRowVector(
+      "t0",
+      makeNullableFlatVector<int64_t>(
+          {1, 2, 4, 5, 8, 9, std::nullopt, 10, std::nullopt}));
 
-  auto right = makeRowVector(
-      {"u0"},
-      {makeNullableFlatVector<int64_t>(
-          {1, 5, 6, 7, std::nullopt, std::nullopt, 8, 9, 10})});
+  auto right = makeNamedRowVector(
+      "u0",
+      makeNullableFlatVector<int64_t>(
+          {1, 5, 6, 7, std::nullopt, std::nullopt, 8, 9, 10}));
 
   createDuckDbTable("t", {left});
   createDuckDbTable("u", {right});
@@ -2069,15 +2066,15 @@ TEST_F(MergeJoinTest, antiJoinNoFilter) {
 }
 
 TEST_F(MergeJoinTest, fullOuterJoin) {
-  auto left = makeRowVector(
-      {"t0"},
-      {makeNullableFlatVector<int64_t>(
-          {1, 2, std::nullopt, 5, 6, std::nullopt})});
+  auto left = makeNamedRowVector(
+      "t0",
+      makeNullableFlatVector<int64_t>(
+          {1, 2, std::nullopt, 5, 6, std::nullopt}));
 
-  auto right = makeRowVector(
-      {"u0"},
-      {makeNullableFlatVector<int64_t>(
-          {1, 5, 6, 8, std::nullopt, std::nullopt})});
+  auto right = makeNamedRowVector(
+      "u0",
+      makeNullableFlatVector<int64_t>(
+          {1, 5, 6, 8, std::nullopt, std::nullopt}));
 
   createDuckDbTable("t", {left});
   createDuckDbTable("u", {right});
@@ -2196,9 +2193,8 @@ TEST_F(MergeJoinTest, fullOuterJoinWithNullCompare) {
 TEST_F(MergeJoinTest, complexTypedFilter) {
   constexpr vector_size_t size{1000};
 
-  auto right = makeRowVector(
-      {"u_c0"},
-      {makeFlatVector<int32_t>(size, [](auto row) { return row * 2; })});
+  auto right = makeNamedRowVector(
+      "u_c0", makeFlatVector<int32_t>(size, [](auto row) { return row * 2; }));
 
   auto testComplexTypedFilter =
       [&](const std::vector<RowVectorPtr>& left,
@@ -2373,7 +2369,7 @@ DEBUG_ONLY_TEST_F(MergeJoinTest, failureOnRightSide) {
           "SELECT t.c0, t.c1, u.c1 FROM t, u WHERE t.c0 = u.c0"),
       "Expected");
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(MergeJoinTest, barrier) {
@@ -2387,10 +2383,8 @@ TEST_F(MergeJoinTest, barrier) {
       {makeFlatVector<int32_t>(1'024, [](auto row) { return row / 6; }),
        makeFlatVector<int32_t>(1'024, [](auto row) { return row; })});
 
-  auto leftFile = TempFilePath::create();
-  HiveConnectorTestBase::writeToFile(leftFile->getPath(), left);
-  auto rightFile = TempFilePath::create();
-  HiveConnectorTestBase::writeToFile(rightFile->getPath(), right);
+  auto leftFile = writeToFile(left);
+  auto rightFile = writeToFile(right);
 
   createDuckDbTable("t", {left});
   createDuckDbTable("u", {right});
@@ -2634,14 +2628,14 @@ TEST_F(MergeJoinTest, barrier) {
           (testData.hasBarrier || !testData.serialExecution) ? 2 : 1);
     }
   }
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(MergeJoinTest, antiJoinWithFilterWithMultiMatchedRows) {
-  auto left = makeRowVector({"t0"}, {makeNullableFlatVector<int64_t>({1, 2})});
+  auto left = makeNamedRowVector("t0", makeNullableFlatVector<int64_t>({1, 2}));
 
   auto right =
-      makeRowVector({"u0"}, {makeNullableFlatVector<int64_t>({1, 2, 2, 2})});
+      makeNamedRowVector("u0", makeNullableFlatVector<int64_t>({1, 2, 2, 2}));
 
   createDuckDbTable("t", {left});
   createDuckDbTable("u", {right});

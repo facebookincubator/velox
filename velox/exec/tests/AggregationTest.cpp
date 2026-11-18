@@ -42,6 +42,7 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/SumNonPODAggregate.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/LazyVector.h"
@@ -1205,7 +1206,7 @@ TEST_F(AggregationTest, largeValueRangeArray) {
                 .capturePlanNodeId(finalAggId)
                 .project({"c0", "cardinality(a0) as l"})
                 .planNode();
-  auto task = test::assertQuery(op, expected);
+  auto task = AssertQueryBuilder(op).assertResults(expected);
   auto stats = toPlanStats(task->taskStats());
   auto runtimeStats = stats.at(partialAggId).customStats;
 
@@ -1952,8 +1953,8 @@ TEST_F(AggregationTest, groupingSetsEmptyInput) {
 // set, not one per empty driver. The barrier fires on both the single-step and
 // the partial step.
 TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverEmpty) {
-  auto data = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(std::vector<int64_t>{1, 2, 3, 4})});
+  auto data = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(std::vector<int64_t>{1, 2, 3, 4}));
 
   // One default row: a null for the () set, group_id 1, count 0.
   auto expected = makeRowVector({
@@ -1998,8 +1999,8 @@ TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverEmpty) {
 // count==0 default row from the starved drivers, for either the single-step or
 // the partial + final aggregation.
 TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverNonEmpty) {
-  auto data = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1})});
+  auto data = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1}));
 
   // Two rows: per-key (1, 0, 4) and grand total (null, 1, 4). No count==0 row.
   auto expected = makeRowVector({
@@ -2418,10 +2419,10 @@ TEST_F(AggregationTest, distinctWithSpilling) {
        8,
        [](uint32_t spilledFiles) { ASSERT_GE(spilledFiles, 100); }},
 
-      {{makeRowVector(
-           {"c0"},
-           {makeFlatVector<int64_t>(
-               2'000, [](vector_size_t /* unused */) { return 100; })})},
+      {{makeNamedRowVector(
+           "c0",
+           makeFlatVector<int64_t>(
+               2'000, [](vector_size_t /* unused */) { return 100; }))},
        1,
        [](uint32_t spilledFiles) { ASSERT_EQ(spilledFiles, 1); }}};
 
@@ -3992,7 +3993,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringOutputProcessing) {
             .maxDrivers(testData.numDrivers)
             .assertResults(expectedResult),
         "Memory pool manually aborted");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -4058,7 +4059,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringInputgProcessing) {
             .maxDrivers(testData.numDrivers)
             .assertResults(expectedResult),
         "Memory pool manually aborted");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -4427,7 +4428,7 @@ TEST_F(AggregationTest, maxSpillBytes) {
       ASSERT_EQ(
           e.errorCode(), facebook::velox::error_code::kSpillLimitExceeded);
     }
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -4481,7 +4482,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregation) {
             .sum,
         0);
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -4526,7 +4527,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromDistinctAggregation) {
     auto& planStats = taskStats.at(aggrNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -4565,7 +4566,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregationOnNoMoreInput) {
     auto stats = task->taskStats().pipelineStats;
     ASSERT_GT(stats[0].operatorStats[1].spilledBytes, 0);
   }
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregationDuringOutput) {
@@ -4611,7 +4612,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregationDuringOutput) {
     auto stats = task->taskStats().pipelineStats;
     ASSERT_GT(stats[0].operatorStats[1].spilledBytes, 0);
   }
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(AggregationTest, reclaimFromCompletedAggregation) {
@@ -4631,7 +4632,7 @@ TEST_F(AggregationTest, reclaimFromCompletedAggregation) {
                     .planNode())
             .assertResults(
                 "SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
-    waitForTaskCompletion(task.get());
+    TaskMonitor::waitForCompletion(*task);
     arbitrationWaitFlag = false;
     arbitrationWait.notifyAll();
   });
@@ -4639,7 +4640,7 @@ TEST_F(AggregationTest, reclaimFromCompletedAggregation) {
 
   memory::testingRunArbitration();
   aggregationThread.join();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithCompact) {
@@ -4740,7 +4741,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithCompact) {
       ASSERT_EQ(planStats.spilledBytes, 0);
     }
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -5115,10 +5116,8 @@ TEST_F(AggregationTest, barrierExecutionSingleAggregation) {
   });
   createDuckDbTable({data1, data2});
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
@@ -5147,10 +5146,8 @@ TEST_F(AggregationTest, barrierExecutionDistinct) {
       makeFlatVector<int64_t>({50, 60, 70, 80}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
@@ -5178,10 +5175,8 @@ TEST_F(AggregationTest, barrierExecutionGlobalAggregation) {
       makeFlatVector<int64_t>({50, 60, 70, 80}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
@@ -5209,10 +5204,8 @@ TEST_F(AggregationTest, barrierExecutionGlobalDistinctAggregation) {
       makeFlatVector<int64_t>({50, 60, 70, 80}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
@@ -5240,10 +5233,8 @@ TEST_F(AggregationTest, barrierExecutionGlobalSortedAggregation) {
       makeFlatVector<int64_t>({50, 60, 70, 80}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
@@ -5277,10 +5268,8 @@ TEST_F(AggregationTest, barrierExecutionPartialAggregation) {
       makeFlatVector<int64_t>({50, 60, 70, 80}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId partialNodeId;
   core::PlanNodeId scanNodeId;
@@ -5322,12 +5311,9 @@ TEST_F(AggregationTest, barrierExecutionAbandonedPartialAggregation) {
       makeFlatVector<int64_t>({90, 100, 110}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
-  auto file3 = TempFilePath::create();
-  writeToFile(file3->getPath(), data3);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
+  auto file3 = writeToFile(data3);
 
   core::PlanNodeId partialNodeId;
   core::PlanNodeId scanNodeId;
@@ -5376,10 +5362,8 @@ TEST_F(AggregationTest, barrierExecutionDistinctAggregation) {
       makeFlatVector<int64_t>({50, 60, 60, 80}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
@@ -5408,10 +5392,8 @@ TEST_F(AggregationTest, barrierExecutionSortedAggregation) {
       makeFlatVector<int64_t>({50, 70, 60, 80}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
@@ -5446,10 +5428,8 @@ TEST_F(AggregationTest, barrierExecutionPartiallyPreGroupedAggregation) {
       makeFlatVector<int64_t>({7, 8, 9, 10, 11, 12}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
@@ -5492,10 +5472,8 @@ TEST_F(AggregationTest, barrierExecutionFullyPreGroupedAggregation) {
       makeFlatVector<int64_t>({7, 8, 9, 10, 11, 12}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
@@ -5534,8 +5512,7 @@ TEST_F(AggregationTest, barrierExecutionSpillEnabledAggregationUnsupported) {
   VectorFuzzer fuzzer(options, pool());
   auto data = fuzzer.fuzzRow(rowType_);
 
-  auto file = TempFilePath::create();
-  writeToFile(file->getPath(), data);
+  auto file = writeToFile(data);
   auto spillDirectory = TempDirectoryPath::create();
   TestScopedSpillInjection scopedSpillInjection(100);
 

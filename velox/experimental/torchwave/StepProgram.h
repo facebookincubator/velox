@@ -35,6 +35,7 @@
 namespace torch::wave {
 
 class AllocGroupCollector;
+struct SymbolFixups;
 struct OutputDesc;
 struct ValueTypes;
 
@@ -130,6 +131,15 @@ struct FillOp {
   int32_t kernel{-1};
 };
 
+/// A shape the generated code of a launch assumes for one of its tensors,
+/// checked before every launch.
+struct ShapeCheck {
+  int32_t valueId{-1};
+  std::vector<int64_t> dims;
+  /// The code also reads the tensor as densely laid out.
+  bool contiguous{false};
+};
+
 /// One kernel launch of the step.
 struct BoundLaunch {
   /// Index into StepVectors::kernels.
@@ -139,6 +149,10 @@ struct BoundLaunch {
   /// is.
   int32_t countSize{-1};
   bool countFromReserve{false};
+  /// The count reads a value one of the launch's outputs writes (an op sized
+  /// from its own output, e.g. index_select), so it is taken again after the
+  /// outputs are written.
+  bool recount{false};
   /// Outputs when the launch is sized by its largest input and one exists,
   /// and the outputs otherwise.
   int32_t largestShapeSize{-1};
@@ -190,6 +204,9 @@ struct SizeOp {
   int32_t blockSize{0};
   /// Index into StepProgram::sizes, for messages.
   int32_t source{-1};
+  /// True when the result depends only on shapes the graph fixes. Bind wrote
+  /// it into 'shapes' once and no call runs.
+  bool constant{false};
 };
 
 /// How one output of a kernel launch gets its shape and memory: a packed
@@ -220,6 +237,7 @@ struct LaunchOp {
   int32_t countSize{-1};
   int32_t largestShapeSize{-1};
   bool countFromReserve{false};
+  bool recount{false};
   /// Into StepCode::outputs.
   Span outputs;
   Span largestOutputs;
@@ -294,7 +312,8 @@ struct StepCode {
         .constants = {consts + op.constants.begin, op.constants.size},
         .intList = {consts + op.intList.begin, op.intList.size},
         .outputs = {ids + op.outputs.begin, op.outputs.size},
-        .elements = {ids + op.elements.begin, op.elements.size}};
+        .elements = {ids + op.elements.begin, op.elements.size},
+        .wholeExtent = op.wholeExtent};
   }
 };
 
@@ -312,6 +331,8 @@ struct StepProgram {
   /// What the dependent launches read, for the wait.
   folly::F14FastSet<int32_t> waitReads;
   std::vector<FillOp> fills;
+  /// Tensor shapes the step's kernels were compiled for.
+  std::vector<ShapeCheck> shapeChecks;
   /// The step's metadata shortcuts that run over the table, and the launches
   /// they stand for: when an operand is not in the table, the shortcut runs
   /// over the frame instead.
@@ -328,6 +349,9 @@ struct StepProgram {
   /// Collects the step's allocation groups. Built at bind, installed for each
   /// execution of the step.
   std::shared_ptr<AllocGroupCollector> collector;
+  /// Rewrites of the step's parameters from symbol values the device holds;
+  /// null when the step reads none.
+  std::shared_ptr<SymbolFixups> symbolFixups;
   /// The sizes, launches and fills above, packed. 'sizes' and 'launches' are
   /// kept for messages and the bind passes that follow; the run reads 'code'.
   StepCode code;

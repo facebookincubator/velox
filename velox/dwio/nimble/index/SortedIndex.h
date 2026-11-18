@@ -23,7 +23,6 @@
 
 #include <fmt/format.h>
 
-#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/nimble/index/IndexLookup.h"
 #include "velox/dwio/nimble/index/KeyChunkDecoder.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
@@ -70,14 +69,14 @@ class SortedIndex : public IndexLookup {
   static std::unique_ptr<SortedIndex> create(
       std::vector<std::string> columns,
       std::unique_ptr<MetadataBuffer> indexMetadata,
-      std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
+      std::shared_ptr<DataInput> dataInput,
       velox::memory::MemoryPool* pool);
 
  private:
   SortedIndex(
       std::vector<std::string> columns,
       std::unique_ptr<MetadataBuffer> indexMetadata,
-      std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
+      std::shared_ptr<DataInput> dataInput,
       velox::memory::MemoryPool* pool);
 
   // Finds the chunk index for the given key via binary search on chunk keys.
@@ -143,14 +142,12 @@ class SortedIndex : public IndexLookup {
   velox::memory::MemoryPool* const pool_;
   const uint8_t rowIdWidth_;
 
-  const std::shared_ptr<velox::dwio::common::BufferedInput> dataInput_;
+  // Reads the key stream. Lookups use its thread-safe read().
+  const std::shared_ptr<DataInput> dataInput_;
 
   // Parsed from the FlatBuffer.
   const serialization::SortedIndex* const sortedIndex_;
   const uint32_t numChunks_;
-
-  // Reusable buffer for multi-buffer chunk reads.
-  mutable velox::BufferPtr chunkBuffer_;
 
   mutable std::atomic_uint64_t numPointLookups_{0};
   mutable std::atomic_uint64_t numRangeScans_{0};

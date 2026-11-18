@@ -22,6 +22,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 using namespace facebook::velox;
@@ -146,7 +147,7 @@ class MarkDistinctTest : public OperatorTestBase {
     ASSERT_GT(planStats.spilledPartitions, 0);
 
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 
  protected:
@@ -374,7 +375,7 @@ DEBUG_ONLY_TEST_F(MarkDistinctTest, reclaimDuringInputOrOutput) {
     ASSERT_GT(planStats.spilledPartitions, 0);
 
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   };
 
   for (const auto& testData : testSettings) {
@@ -487,7 +488,7 @@ DEBUG_ONLY_TEST_F(MarkDistinctTest, recursiveSpill) {
     }
 
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   };
 
   for (const auto& testData : testSettings) {
@@ -590,7 +591,7 @@ TEST_F(MarkDistinctTest, memoryUsage) {
           .config(core::QueryConfig::kSpillEnabled, spillEnableConfig)
           .config(
               core::QueryConfig::kMarkDistinctSpillEnabled, spillEnableConfig)
-          .config(core::QueryConfig::kAggregationSpillEnabled, "false")
+          .config(core::QueryConfig::kAggregationSpillEnabled, false)
           .copyResults(pool_.get(), task);
 
       if (spillEnable) {

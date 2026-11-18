@@ -118,7 +118,8 @@ std::vector<Stream> DefaultLayoutPlanner::getLayout(
   auto& root = type->asRow();
 
   // Layout logic:
-  // 1. Root stream (Row nulls) is always first
+  // 1. Root stream (Row nulls) is always first, after the cluster index key
+  //    stream when the schema builder has one.
   // 2. Later, all flat maps included in config are layed out.
   //    For each map, we layout all the features included in the config for
   //    that map, in the order they appeared in the config. For each feature, we
@@ -222,7 +223,15 @@ std::vector<Stream> DefaultLayoutPlanner::getLayout(
   // try and find matching streams for each type builder and append them to the
   // final ordered stream list.
 
-  // First add the root's null stream
+  // Lead with the cluster index key stream, so that a read of a stripe's keys
+  // and of the streams after them can be one read.
+  const auto keyStreamOffset =
+      velox::checkedNotNull(schemaBuilder_)->clusterIndexKeyStreamOffset();
+  if (keyStreamOffset.has_value()) {
+    tryAppendStream(keyStreamOffset.value());
+  }
+
+  // Then add the root's null stream
   appendStream(root.nullsDescriptor().offset());
 
   // Then, add all ordered flat maps

@@ -69,9 +69,15 @@ ClusterIndexWriterBase::ClusterIndexWriterBase(
       keyColumnIndices_{getKeyColumnIndices({columns_}, inputType)},
       maxRowsPerKeyChunk_{options.maxRowsPerKeyChunk},
       keyCompressionParams_{.type = options.keyChunkCompressionType},
+      keyStreamLayout_{options.keyStreamLayout},
+      keyStreamId_{options.keyStreamId},
       keyChunkBuilder_{std::move(keyChunkBuilder)} {
   NIMBLE_CHECK_NOT_NULL(pool_, "memory pool must not be null");
   NIMBLE_CHECK_NOT_NULL(keyChunkBuilder_);
+  NIMBLE_CHECK_EQ(
+      keyStreamId_.has_value(),
+      keyStreamLayout_ == KeyStreamLayout::kStripe,
+      "Only the Stripe key stream layout has a key stream id, which it needs");
   NIMBLE_USER_CHECK(
       !columns_.empty(), "Cluster index must have at least one column");
   NIMBLE_USER_CHECK(
@@ -91,8 +97,30 @@ void ClusterIndexWriterBase::write(const velox::VectorPtr& input) {
 
   keyChunkBuilder_->append(input);
 
+  // In the Stripe layout, finishStripe() encodes the keys of each stripe at
+  // once, into the buffer of the stripe's streams.
+  if (keyStreamLayout_ == KeyStreamLayout::kStripe) {
+    return;
+  }
+
   // Encode chunks when enough keys have accumulated.
   encodeKeyChunks();
+}
+
+std::vector<Chunk> ClusterIndexWriterBase::finishStripe(Buffer& buffer) {
+  checkNotClosed();
+  if (keyStreamLayout_ == KeyStreamLayout::kPartition) {
+    return {};
+  }
+  NIMBLE_CHECK_GT(keyChunkBuilder_->size(), 0, "A stripe must have keys");
+
+  ensureIndexPartition();
+
+  // The key chunk of a stripe is its whole key stream.
+  auto chunks = encodeBufferedKeys(/*maxRowsPerChunk=*/0, buffer);
+  NIMBLE_CHECK_EQ(chunks.size(), 1);
+  indexPartition_->keyStreamOffset = 0;
+  return chunks;
 }
 
 void ClusterIndexWriterBase::encodeKeyChunks(bool force) {
@@ -107,11 +135,26 @@ void ClusterIndexWriterBase::encodeKeyChunks(bool force) {
     }
   }
 
-  const uint64_t maxRows =
-      maxRowsPerKeyChunk_ > 0 ? maxRowsPerKeyChunk_ : numKeys;
-
   ensureIndexPartition();
 
+  // Only the Partition layout encodes keys into a buffer of the partition.
+  NIMBLE_CHECK_NOT_NULL(indexPartition_->encodingBuffer);
+  for (const auto& chunk : encodeBufferedKeys(
+           maxRowsPerKeyChunk_, *indexPartition_->encodingBuffer)) {
+    indexPartition_->encodedChunks.insert(
+        indexPartition_->encodedChunks.end(),
+        chunk.content.begin(),
+        chunk.content.end());
+  }
+}
+
+std::vector<Chunk> ClusterIndexWriterBase::encodeBufferedKeys(
+    uint64_t maxRowsPerChunk,
+    Buffer& buffer) {
+  const auto numKeys = keyChunkBuilder_->size();
+  const uint64_t maxRows = maxRowsPerChunk > 0 ? maxRowsPerChunk : numKeys;
+
+  std::vector<Chunk> chunks;
   for (size_t offset = 0; offset < numKeys;) {
     const auto remaining = static_cast<uint64_t>(numKeys - offset);
     // Absorb tail if splitting would create a chunk smaller than maxRows.
@@ -120,7 +163,7 @@ void ClusterIndexWriterBase::encodeKeyChunks(bool force) {
     const auto chunkRowCount = static_cast<uint32_t>(chunkSize);
 
     KeyChunk keyChunk;
-    encodeKeyChunk(offset, chunkRowCount, keyChunk);
+    encodeKeyChunk(offset, chunkRowCount, buffer, keyChunk);
 
     // Push first key to partition keys for root-level early pruning.
     // Layout: [firstKey, lastKey0, lastKey1, ..., lastKeyN]
@@ -131,36 +174,37 @@ void ClusterIndexWriterBase::encodeKeyChunks(bool force) {
 
     // Record chunk metadata directly in the partition.
     const auto chunkOffset = indexPartition_->keyStreamOffset;
-    uint32_t chunkEncodedSize = 0;
-    for (const auto& content : keyChunk.content) {
-      indexPartition_->encodedChunks.emplace_back(content);
-      chunkEncodedSize += content.size();
-    }
-    indexPartition_->keyStreamOffset += chunkEncodedSize;
+    indexPartition_->keyStreamOffset += keyChunk.contentSize();
 
     indexPartition_->chunkRows.emplace_back(
         accumulateRowCount(indexPartition_->chunkRows, chunkRowCount));
     indexPartition_->chunkOffsets.emplace_back(chunkOffset);
     indexPartition_->chunkKeys.emplace_back(std::move(keyChunk.key));
+    chunks.emplace_back(
+        Chunk{
+            .rowCount = keyChunk.rowCount,
+            .content = std::move(keyChunk.content),
+        });
 
     offset += chunkSize;
   }
 
   keyChunkBuilder_->clear();
+  return chunks;
 }
 
 void ClusterIndexWriterBase::encodeKeyChunk(
     size_t offset,
     uint32_t count,
+    Buffer& buffer,
     KeyChunk& chunk) {
-  auto& encodingBuffer = *indexPartition_->encodingBuffer;
-  const auto encoded = keyChunkBuilder_->encode(offset, count, encodingBuffer);
+  const auto encoded = keyChunkBuilder_->encode(offset, count, buffer);
   NIMBLE_CHECK(!encoded.empty());
 
   chunk.rowCount = count;
   chunk.key = keyChunkBuilder_->keyAt(offset + count - 1);
 
-  ChunkedStreamWriter chunkWriter{encodingBuffer, keyCompressionParams_};
+  ChunkedStreamWriter chunkWriter{buffer, keyCompressionParams_};
   for (auto& contentBuffer : chunkWriter.encode(encoded)) {
     chunk.content.push_back(std::move(contentBuffer));
   }
@@ -225,14 +269,23 @@ std::optional<IndexDescriptor> ClusterIndexWriterBase::close(
   auto partitionRowCountsVector =
       builder.CreateVector(indexRoot_->partitionRowCounts);
 
+  // A Stripe layout index locates the ClusterIndexGroup of each stripe group
+  // in index_groups, and leaves index_partitions unset.
+  const bool stripeLayout = keyStreamLayout_ == KeyStreamLayout::kStripe;
+  const decltype(partitionsVector) noSections;
   builder.Finish(
       serialization::CreateClusterIndex(
           builder,
           indexColumnsVector,
           sortOrdersVector,
-          partitionsVector,
+          stripeLayout ? noSections : partitionsVector,
           partitionKeysVector,
-          partitionRowCountsVector));
+          partitionRowCountsVector,
+          static_cast<uint8_t>(
+              stripeLayout ? serialization::KeyStreamLayout_Stripe
+                           : serialization::KeyStreamLayout_Partition),
+          keyStreamId_.value_or(0),
+          stripeLayout ? partitionsVector : noSections));
 
   return IndexDescriptor{
       .family = IndexFamily::Cluster,
@@ -247,18 +300,31 @@ void ClusterIndexWriterBase::ensureIndexRoot() {
 }
 
 void ClusterIndexWriterBase::ensureIndexPartition() {
-  if (indexPartition_ == nullptr) {
-    indexPartition_ = std::make_unique<IndexPartition>();
+  if (indexPartition_ != nullptr) {
+    return;
+  }
+  indexPartition_ = std::make_unique<IndexPartition>();
+  if (keyStreamLayout_ == KeyStreamLayout::kPartition) {
     indexPartition_->encodingBuffer =
         std::make_unique<Buffer>(*velox::checkedNotNull(pool_));
   }
 }
 
-void ClusterIndexWriterBase::flush(
+void ClusterIndexWriterBase::finishStripeGroup(
     const WriteDataFn& writeDataFn,
     const CreateMetadataSectionFn& createMetadataFn) {
   checkNotClosed();
 
+  if (keyStreamLayout_ == KeyStreamLayout::kStripe) {
+    writeIndexGroup(createMetadataFn);
+    return;
+  }
+  writeIndexPartition(writeDataFn, createMetadataFn);
+}
+
+void ClusterIndexWriterBase::writeIndexPartition(
+    const WriteDataFn& writeDataFn,
+    const CreateMetadataSectionFn& createMetadataFn) {
   // Force-encode any remaining accumulated keys. This must happen before the
   // indexPartition_ null check because when key chunking is disabled
   // (maxRowsPerKeyChunk_ == 0), encodeKeyChunks() returns early during write()
@@ -297,7 +363,36 @@ void ClusterIndexWriterBase::flush(
           chunkOffsetsVec,
           chunkKeysVec));
 
-  indexRoot_->indexPartitions.push_back(createMetadataFn(asView(indexBuilder)));
+  finishPartition(createMetadataFn(asView(indexBuilder)));
+}
+
+void ClusterIndexWriterBase::writeIndexGroup(
+    const CreateMetadataSectionFn& createMetadataFn) {
+  NIMBLE_CHECK_EQ(
+      keyChunkBuilder_->size(),
+      0,
+      "Keys written after the last finishStripe() belong to no stripe");
+  NIMBLE_CHECK_NOT_NULL(indexPartition_);
+  NIMBLE_CHECK(!indexPartition_->empty());
+
+  // Each stripe holds one key chunk, so the chunk keys are the stripe keys.
+  // Readers find the key stream and the rows of each stripe through the stripe
+  // group metadata.
+  ensureIndexRoot();
+  flatbuffers::FlatBufferBuilder indexBuilder(kInitialFooterSize);
+  auto stripeKeysVec =
+      indexBuilder.CreateVector<flatbuffers::Offset<flatbuffers::String>>(
+          indexPartition_->chunkKeys.size(), [&indexBuilder, this](size_t i) {
+            return indexBuilder.CreateString(indexPartition_->chunkKeys[i]);
+          });
+  indexBuilder.Finish(
+      serialization::CreateClusterIndexGroup(indexBuilder, stripeKeysVec));
+
+  finishPartition(createMetadataFn(asView(indexBuilder)));
+}
+
+void ClusterIndexWriterBase::finishPartition(MetadataSection partitionSection) {
+  indexRoot_->indexPartitions.push_back(std::move(partitionSection));
 
   // Record last key and row count for root-level index.
   NIMBLE_CHECK(!indexPartition_->chunkKeys.empty());
