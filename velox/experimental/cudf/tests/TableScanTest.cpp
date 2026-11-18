@@ -3133,7 +3133,7 @@ TEST_F(TableScanTest, unsupportedScanColumnProjectedOut) {
   auto expected = makeNamedRowVector("k", makeFlatVector<int64_t>({1, 2}));
   facebook::velox::test::assertEqualVectors(expected, result);
 
-  const auto operatorStats = toOperatorStats(task->taskStats());
+  const auto operatorStats = task->taskStats().operatorStats();
   EXPECT_EQ(operatorStats.count("CudfFilterProject"), 0);
   EXPECT_EQ(operatorStats.count("FilterProject"), 1);
 }

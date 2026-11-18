@@ -26,6 +26,7 @@
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/JoinMaker.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
+#include "velox/exec/fuzzer/ScopedOOMInjector.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 

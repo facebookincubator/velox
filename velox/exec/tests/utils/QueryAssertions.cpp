@@ -833,7 +833,9 @@ std::string generateUserFriendlyDiff(
       missingRows, extraRows, expectedRows.size(), actualRows.size(), type);
 }
 
-void verifyDuckDBResult(const DuckDBQueryResult& result, std::string_view sql) {
+void verifyDuckDBResult(
+    const DuckDbQueryRunner::QueryResult& result,
+    std::string_view sql) {
   VELOX_CHECK(
       !result->HasError(),
       "DuckDB query failed: {}\n{}",
@@ -935,7 +937,8 @@ void DuckDbQueryRunner::createTable(
   }
 }
 
-DuckDBQueryResult DuckDbQueryRunner::execute(const std::string& sql) {
+DuckDbQueryRunner::QueryResult DuckDbQueryRunner::execute(
+    const std::string& sql) {
   ::duckdb::Connection con(database());
   // Changing the default null order of NULLS FIRST used by DuckDB. Velox uses
   // NULLS LAST.
@@ -960,19 +963,6 @@ void DuckDbQueryRunner::execute(
     auto rows = materialize(dataChunk.get(), resultRowType);
     resultCallback(rows);
   }
-}
-
-std::shared_ptr<Task> assertQuery(
-    const core::PlanNodePtr& plan,
-    const std::string& duckDbSql,
-    DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys) {
-  return assertQuery(
-      plan,
-      [](TaskCursor* taskCursor) { taskCursor->setNoMoreSplits(); },
-      duckDbSql,
-      duckDbQueryRunner,
-      sortingKeys);
 }
 
 // Compare left and right without epsilon and returns true if they are equal.
@@ -1015,31 +1005,6 @@ bool assertEqualResults(
   const auto& expectedType =
       (expected.size() == 0) ? nullptr : expected.at(0)->type();
   return assertEqualResults(expectedRows, expectedType, actual);
-}
-
-bool assertEqualResults(
-    const core::PlanNodePtr& plan1,
-    const core::PlanNodePtr& plan2) {
-  CursorParameters params1;
-  params1.planNode = plan1;
-  auto [cursor1, results1] = readCursor(params1);
-
-  CursorParameters params2;
-  params2.planNode = plan2;
-  auto [cursor2, results2] = readCursor(params2);
-  return assertEqualResults(results1, results2);
-}
-
-void assertEqualTypeAndNumRows(
-    const TypePtr& expectedType,
-    vector_size_t expectedNumRows,
-    const std::vector<RowVectorPtr>& actual) {
-  size_t actualNumRows = 0;
-  for (const auto& result : actual) {
-    EXPECT_EQ(*expectedType, *result->type());
-    actualNumRows += result->size();
-  }
-  EXPECT_EQ(expectedNumRows, actualNumRows);
 }
 
 bool containsFloatingPoint(const TypePtr& type) {
@@ -1332,6 +1297,7 @@ void assertResultsOrdered(
   }
 }
 
+namespace {
 tsan_atomic<int32_t>& testingAbortPct() {
   static tsan_atomic<int32_t> abortPct = 0;
   return abortPct;
@@ -1346,6 +1312,23 @@ std::function<void(Task*)>& testingAbortHook() {
   static std::function<void(Task*)> hook = nullptr;
   return hook;
 }
+
+// Aborts 'task' with the probability set by TestScopedAbortInjection.
+void testingMaybeTriggerAbort(exec::Task* task) {
+  if (testingAbortPct() <= 0 || testingAbortCounter() <= 0) {
+    return;
+  }
+
+  if ((folly::Random::rand32() % 100) < testingAbortPct()) {
+    if (testingAbortCounter()-- > 0) {
+      if (testingAbortHook() != nullptr) {
+        testingAbortHook()(task);
+      }
+      task->requestAbort();
+    }
+  }
+}
+} // namespace
 
 TestScopedAbortInjection::TestScopedAbortInjection(
     int32_t abortPct,
@@ -1362,57 +1345,41 @@ TestScopedAbortInjection::~TestScopedAbortInjection() {
   testingAbortHook() = nullptr;
 }
 
-bool testingMaybeTriggerAbort(exec::Task* task) {
-  if (testingAbortPct() <= 0 || testingAbortCounter() <= 0) {
-    return false;
-  }
-
-  if ((folly::Random::rand32() % 100) < testingAbortPct()) {
-    if (testingAbortCounter()-- > 0) {
-      if (testingAbortHook() != nullptr) {
-        testingAbortHook()(task);
-      }
-      task->requestAbort();
-      return true;
-    }
-  }
-
-  return false;
-}
-
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
     const CursorParameters& params,
     std::function<void(TaskCursor*)> addSplits,
     uint64_t maxWaitMicros) {
-  return readCursorAsync(
-      params,
+  auto cursor = TaskCursor::create(params);
+  // Declared after 'cursor' so that it is destroyed first, also on exception.
+  std::vector<RowVectorPtr> result;
+  readCursorAsync(
+      *cursor,
       [addSplitsVoid = std::move(addSplits)](TaskCursor* cursor) {
         addSplitsVoid(cursor);
         return ContinueFuture::makeEmpty();
       },
-      maxWaitMicros);
+      maxWaitMicros,
+      [&](const RowVectorPtr& vector) { result.push_back(vector); });
+  return {std::move(cursor), std::move(result)};
 }
 
-std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
-readCursorAsync(
-    const CursorParameters& params,
+void readCursorAsync(
+    TaskCursor& cursor,
     std::function<ContinueFuture(TaskCursor*)> addSplits,
-    uint64_t maxWaitMicros) {
-  auto cursor = TaskCursor::create(params);
-  // 'result' borrows memory from cursor so the life cycle must be shorter.
-  std::vector<RowVectorPtr> result;
-  auto* task = cursor->task().get();
-  cursor->start();
+    uint64_t maxWaitMicros,
+    const std::function<void(const RowVectorPtr&)>& onBatch) {
+  auto* task = cursor.task().get();
+  cursor.start();
   auto future = ContinueFuture::makeEmpty();
-  while (!cursor->noMoreSplits()) {
+  while (!cursor.noMoreSplits()) {
     if (future.valid()) {
       future.wait();
     }
-    future = addSplits(cursor.get());
-    while (cursor->moveNext()) {
-      auto vector = cursor->current();
+    future = addSplits(&cursor);
+    while (cursor.moveNext()) {
+      const auto& vector = cursor.current();
       vector->loadedVector();
-      result.push_back(std::move(vector));
+      onBatch(vector);
       testingMaybeTriggerAbort(task);
     }
   }
@@ -1433,7 +1400,6 @@ readCursorAsync(
           task->toString());
     }
   }
-  return {std::move(cursor), std::move(result)};
 }
 
 bool waitForTaskFinish(
@@ -1504,72 +1470,6 @@ void waitForAllTasksToBeDeleted(uint64_t maxWaitUs) {
       folly::join("\n", pendingTaskStats));
 }
 
-void cancelAllTasks() {
-  std::vector<std::shared_ptr<Task>> pendingTasks = Task::getRunningTasks();
-  for (const auto& task : pendingTasks) {
-    if (task->isRunning()) {
-      task->requestCancel();
-    }
-  }
-}
-
-std::shared_ptr<Task> assertQuery(
-    const core::PlanNodePtr& plan,
-    std::function<void(exec::TaskCursor*)> addSplits,
-    const std::string& duckDbSql,
-    DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys) {
-  CursorParameters params;
-  params.planNode = plan;
-  return assertQuery(
-      params, addSplits, duckDbSql, duckDbQueryRunner, sortingKeys);
-}
-
-std::shared_ptr<Task> assertQuery(
-    const CursorParameters& params,
-    std::function<void(TaskCursor*)> addSplits,
-    const std::string& duckDbSql,
-    DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys) {
-  auto [cursor, actualResults] = readCursor(params, addSplits);
-
-  if (sortingKeys) {
-    assertResultsOrdered(
-        actualResults,
-        params.planNode->outputType(),
-        duckDbSql,
-        duckDbQueryRunner,
-        sortingKeys.value());
-  } else {
-    assertResults(
-        actualResults,
-        params.planNode->outputType(),
-        duckDbSql,
-        duckDbQueryRunner);
-  }
-  auto task = cursor->task();
-
-  EXPECT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
-  return task;
-}
-
-std::shared_ptr<Task> assertQuery(
-    const core::PlanNodePtr& plan,
-    const std::vector<RowVectorPtr>& expectedResults) {
-  CursorParameters params;
-  params.planNode = plan;
-  return assertQuery(params, expectedResults);
-}
-
-std::shared_ptr<Task> assertQuery(
-    const CursorParameters& params,
-    const std::vector<RowVectorPtr>& expectedResults) {
-  auto result = readCursor(params);
-
-  assertEqualResults(expectedResults, result.second);
-  return result.first->task();
-}
-
 variant readSingleValue(const core::PlanNodePtr& plan, int32_t maxDrivers) {
   CursorParameters params;
   params.planNode = plan;
@@ -1581,24 +1481,6 @@ variant readSingleValue(const core::PlanNodePtr& plan, int32_t maxDrivers) {
   EXPECT_EQ(
       *plan->outputType()->childAt(0), *(result.second[0]->type()->childAt(0)));
   return materialize(result.second[0])[0][0];
-}
-
-std::unordered_map<std::string, OperatorStats> toOperatorStats(
-    const TaskStats& taskStats) {
-  std::unordered_map<std::string, OperatorStats> opStatsMap;
-
-  for (const auto& pipelineStats : taskStats.pipelineStats) {
-    for (const auto& opStats : pipelineStats.operatorStats) {
-      const auto& opType = opStats.operatorType;
-      auto it = opStatsMap.find(opType);
-      if (it != opStatsMap.end()) {
-        it->second.add(opStats);
-      } else {
-        opStatsMap.emplace(opType, opStats);
-      }
-    }
-  }
-  return opStatsMap;
 }
 
 } // namespace facebook::velox::exec::test

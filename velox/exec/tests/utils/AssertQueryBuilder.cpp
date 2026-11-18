@@ -238,11 +238,10 @@ std::shared_ptr<Task> AssertQueryBuilder::assertResults(
 }
 
 std::shared_ptr<Task> AssertQueryBuilder::assertEmptyResults() {
-  auto [cursor, results] = readCursor();
   size_t numRows{0};
-  for (const auto& vector : results) {
-    numRows += vector->size();
-  }
+  auto cursor = createCursor();
+  readCursor(
+      *cursor, [&](const RowVectorPtr& vector) { numRows += vector->size(); });
   EXPECT_EQ(0, numRows) << "Expected empty result but received " << numRows
                         << " rows";
   return cursor->task();
@@ -251,9 +250,13 @@ std::shared_ptr<Task> AssertQueryBuilder::assertEmptyResults() {
 std::shared_ptr<Task> AssertQueryBuilder::assertTypeAndNumRows(
     const TypePtr& expectedType,
     vector_size_t expectedNumRows) {
-  auto [cursor, results] = readCursor();
-
-  assertEqualTypeAndNumRows(expectedType, expectedNumRows, results);
+  size_t numRows{0};
+  auto cursor = createCursor();
+  readCursor(*cursor, [&](const RowVectorPtr& vector) {
+    EXPECT_EQ(*expectedType, *vector->type());
+    numRows += vector->size();
+  });
+  EXPECT_EQ(expectedNumRows, numRows);
   return cursor->task();
 }
 
@@ -309,11 +312,10 @@ std::vector<RowVectorPtr> AssertQueryBuilder::copyResultBatches(
 }
 
 uint64_t AssertQueryBuilder::countResults(std::shared_ptr<Task>& task) {
-  auto [cursor, results] = readCursor();
-  uint64_t count = 0;
-  for (const auto& result : results) {
-    count += result->size();
-  }
+  uint64_t count{0};
+  auto cursor = createCursor();
+  readCursor(
+      *cursor, [&](const RowVectorPtr& vector) { count += vector->size(); });
   task = cursor->task();
   return count;
 }
@@ -325,6 +327,15 @@ uint64_t AssertQueryBuilder::countResults() {
 
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
 AssertQueryBuilder::readCursor() {
+  auto cursor = createCursor();
+  // Declared after 'cursor' so that it is destroyed first, also on exception.
+  std::vector<RowVectorPtr> results;
+  readCursor(
+      *cursor, [&](const RowVectorPtr& vector) { results.push_back(vector); });
+  return {std::move(cursor), std::move(results)};
+}
+
+std::unique_ptr<TaskCursor> AssertQueryBuilder::createCursor() {
   VELOX_CHECK_NOT_NULL(params_.planNode);
 
   if (!configs_.empty() || !connectorSessionProperties_.empty()) {
@@ -354,8 +365,14 @@ AssertQueryBuilder::readCursor() {
     }
   }
 
-  return test::readCursorAsync(
-      params_,
+  return TaskCursor::create(params_);
+}
+
+void AssertQueryBuilder::readCursor(
+    TaskCursor& cursor,
+    const std::function<void(const RowVectorPtr&)>& onBatch) {
+  test::readCursorAsync(
+      cursor,
       [&](exec::TaskCursor* taskCursor) {
         if (taskCursor->noMoreSplits()) {
           return ContinueFuture::makeEmpty();
@@ -403,6 +420,7 @@ AssertQueryBuilder::readCursor() {
         }
         return ContinueFuture::makeEmpty();
       },
-      maxWaitMicros_);
+      maxWaitMicros_,
+      onBatch);
 }
 } // namespace facebook::velox::exec::test
