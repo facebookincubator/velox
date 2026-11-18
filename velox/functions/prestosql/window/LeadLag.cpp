@@ -67,7 +67,7 @@ class LeadLagFunction : public exec::WindowFunction {
       const BufferPtr& /*frameEnds*/,
       const SelectivityVector& /*validRows*/,
       int32_t resultOffset,
-      const VectorPtr& result) override {
+      VectorPtr& result) override {
     const auto numRows = frameStarts->size() / sizeof(vector_size_t);
 
     rowNumbers_.resize(numRows);
