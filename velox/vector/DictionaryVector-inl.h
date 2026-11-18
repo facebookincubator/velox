@@ -23,7 +23,7 @@ namespace facebook::velox {
 
 template <typename T>
 void DictionaryVector<T>::setInternalState() {
-  VELOX_DCHECK_BUFFER_ALIGNMENT(indices_, vector_size_t);
+  VELOX_DCHECK_BUFFER_ALIGNED(indices_, vector_size_t);
   rawIndices_ = indices_->as<vector_size_t>();
 
   // Sanity check indices for non-null positions. Enabled in debug mode only to

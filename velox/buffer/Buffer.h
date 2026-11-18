@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <bit>
 #include <iomanip>
 #include <type_traits>
 
@@ -188,7 +187,7 @@ class Buffer {
 
   /// Returns the largest power of 2 that the start address is a multiple of.
   /// A buffer with no memory, whose start is null, is aligned to any power of
-  /// 2. Vector buffers check it (see VELOX_DCHECK_BUFFER_ALIGNMENT).
+  /// 2. Vector buffers check it (see VELOX_DCHECK_BUFFER_ALIGNED).
   size_t alignment() const;
 
   friend std::ostream& operator<<(std::ostream& os, const Buffer& buffer) {
@@ -852,33 +851,20 @@ class BufferView : public Buffer {
   [[no_unique_address]] const Releaser releaser_;
 };
 
-/// Returns the alignment that a vector buffer of 'T' must start at (see
-/// Buffer): 8 bytes for a bitmap of bool, the width of 'T' otherwise.
-template <typename T>
-constexpr size_t vectorBufferAlignment() {
-  if constexpr (std::is_same_v<T, bool>) {
-    return sizeof(uint64_t);
-  } else {
-    static_assert(
-        std::has_single_bit(sizeof(T)),
-        "The width of a vector element must be a power of 2.");
-    return sizeof(T);
-  }
-}
-
 } // namespace facebook::velox
 
 /// Checks in debug builds that 'buffer', a BufferPtr, is null or starts at the
-/// alignment that a vector buffer of 'T' needs (see vectorBufferAlignment()).
-/// A failure names the line that calls it.
-#define VELOX_DCHECK_BUFFER_ALIGNMENT(buffer, T)            \
-  do {                                                      \
-    if ((buffer) != nullptr) {                              \
-      VELOX_DCHECK_GE(                                      \
-          (buffer)->alignment(),                            \
-          ::facebook::velox::vectorBufferAlignment<T>(),    \
-          "Vector buffer starts at a misaligned address."); \
-    }                                                       \
+/// alignment that a vector buffer of 'T' needs (see Buffer): 8 bytes for a
+/// bitmap of bool, the width of 'T' otherwise. A failure names the line that
+/// calls it.
+#define VELOX_DCHECK_BUFFER_ALIGNED(buffer, T)                      \
+  do {                                                              \
+    if ((buffer) != nullptr) {                                      \
+      VELOX_DCHECK_GE(                                              \
+          (buffer)->alignment(),                                    \
+          (std::is_same_v<T, bool> ? sizeof(uint64_t) : sizeof(T)), \
+          "Vector buffer starts at a misaligned address.");         \
+    }                                                               \
   } while (false)
 
 // fmt formatter specialization for Buffer::Type

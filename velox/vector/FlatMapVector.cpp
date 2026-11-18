@@ -66,7 +66,7 @@ FlatMapVector::FlatMapVector(
   VELOX_CHECK_LE(
       inMaps_.size(), numDistinctKeys(), "Wrong number of in map buffers.");
   for (const auto& inMap : inMaps_) {
-    VELOX_DCHECK_BUFFER_ALIGNMENT(inMap, bool);
+    VELOX_DCHECK_BUFFER_ALIGNED(inMap, bool);
   }
 }
 

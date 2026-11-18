@@ -20,6 +20,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/type/StringView.h"
+#include "velox/type/Timestamp.h"
 
 #include <glog/logging.h>
 #include <gmock/gmock.h>
@@ -528,6 +529,44 @@ TEST_F(BufferTest, alignment) {
   EXPECT_GE(empty->alignment(), size_t{1} << 32);
 }
 
+DEBUG_ONLY_TEST_F(BufferTest, dcheckBufferAligned) {
+  auto checkBitmap = [](const BufferPtr& buffer) {
+    VELOX_DCHECK_BUFFER_ALIGNED(buffer, bool);
+  };
+  auto checkInt32 = [](const BufferPtr& buffer) {
+    VELOX_DCHECK_BUFFER_ALIGNED(buffer, int32_t);
+  };
+  auto checkTimestamp = [](const BufferPtr& buffer) {
+    VELOX_DCHECK_BUFFER_ALIGNED(buffer, Timestamp);
+  };
+  checkBitmap(nullptr);
+  checkTimestamp(nullptr);
+
+  auto buffer = AlignedBuffer::allocate<Timestamp>(4, pool_.get());
+  ASSERT_GE(buffer->alignment(), 16);
+  MockCachePin pin;
+  auto view = [&](size_t offset) {
+    return BufferView<MockCachePin&>::create(
+        buffer->as<uint8_t>() + offset, sizeof(Timestamp), pin);
+  };
+
+  // Bitmaps need 8 bytes.
+  checkBitmap(view(8));
+  VELOX_ASSERT_THROW(
+      checkBitmap(view(4)),
+      "(4 vs. 8) Vector buffer starts at a misaligned address.");
+  // Other buffers need their element width.
+  checkInt32(view(4));
+  VELOX_ASSERT_THROW(
+      checkInt32(view(2)),
+      "(2 vs. 4) Vector buffer starts at a misaligned address.");
+  // Timestamp is 16 bytes wide, which is more than its natural alignment.
+  checkTimestamp(buffer);
+  VELOX_ASSERT_THROW(
+      checkTimestamp(view(8)),
+      "(8 vs. 16) Vector buffer starts at a misaligned address.");
+}
+
 TEST_F(BufferTest, sliceBigintBuffer) {
   auto bufferPtr = AlignedBuffer::allocate<int64_t>(10, pool_.get());
   auto sliceBufferPtr = Buffer::slice<int64_t>(bufferPtr, 1, 5, pool_.get());
@@ -564,8 +603,7 @@ TEST_F(BufferTest, sliceBooleanBuffer) {
     SCOPED_TRACE(fmt::format("offset: {}", offset));
     sliceBufferPtr = Buffer::slice<bool>(bufferPtr, offset, 100, pool_.get());
     ASSERT_FALSE(sliceBufferPtr->isView());
-    ASSERT_EQ(
-        reinterpret_cast<uintptr_t>(sliceBufferPtr->as<uint8_t>()) % 8, 0);
+    ASSERT_GE(sliceBufferPtr->alignment(), 8);
     auto sliceData = sliceBufferPtr->asRange<bool>();
     for (int i = 0; i < 100; ++i) {
       ASSERT_EQ(sliceData[i], (offset + i) % 2 != 0) << i;
