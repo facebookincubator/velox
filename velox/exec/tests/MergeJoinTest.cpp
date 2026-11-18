@@ -533,9 +533,7 @@ TEST_F(MergeJoinTest, aggregationOverJoin) {
           .singleAggregation({}, {"count(1)"})
           .planNode();
 
-  auto result = readSingleValue(plan);
-  ASSERT_FALSE(result.isNull());
-  ASSERT_EQ(2, result.value<int64_t>());
+  AssertQueryBuilder(plan).assertSingleResult(int64_t{2});
 }
 
 TEST_F(MergeJoinTest, nonFirstJoinKeys) {
