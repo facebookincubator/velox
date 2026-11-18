@@ -37,6 +37,8 @@
 #include "velox/exec/Exchange.h"
 #include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Spill.h"
+#include "velox/exec/Spiller.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"

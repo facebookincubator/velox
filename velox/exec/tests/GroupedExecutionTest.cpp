@@ -22,6 +22,7 @@
 #include "velox/exec/Cursor.h"
 #include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"

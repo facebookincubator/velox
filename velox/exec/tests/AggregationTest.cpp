@@ -1315,23 +1315,21 @@ TEST_F(AggregationTest, partialAggregationMaybeReservationReleaseCheck) {
   constexpr int64_t kGB = 1 << 30;
   const int64_t kMaxPartialMemoryUsage = 1 * kGB;
   // Make sure partial aggregation runs out of memory after first batch.
-  CursorParameters params;
-  params.queryCtx = core::QueryCtx::create(executor_.get());
-  params.queryCtx->testingOverrideConfigUnsafe({
-      {QueryConfig::kMaxPartialAggregationMemory,
-       std::to_string(kMaxPartialMemoryUsage)},
-      {QueryConfig::kMaxExtendedPartialAggregationMemory,
-       std::to_string(kMaxPartialMemoryUsage)},
-  });
-
   core::PlanNodeId aggNodeId;
-  params.planNode = PlanBuilder()
-                        .values(vectors)
-                        .partialAggregation({"c0"}, {})
-                        .capturePlanNodeId(aggNodeId)
-                        .finalAggregation()
-                        .planNode();
-  auto task = assertQuery(params, "SELECT distinct c0 FROM tmp");
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"c0"}, {})
+                  .capturePlanNodeId(aggNodeId)
+                  .finalAggregation()
+                  .planNode();
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(
+              QueryConfig::kMaxPartialAggregationMemory, kMaxPartialMemoryUsage)
+          .config(
+              QueryConfig::kMaxExtendedPartialAggregationMemory,
+              kMaxPartialMemoryUsage)
+          .assertResults("SELECT distinct c0 FROM tmp");
   const auto runtimeStats =
       PlanNodeStats::extract(task->taskStats(), aggNodeId).customStats;
   EXPECT_EQ(0, runtimeStats.count("flushRowCount"));

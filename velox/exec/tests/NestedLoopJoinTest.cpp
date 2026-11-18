@@ -146,14 +146,6 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
       size_t preferredOutputBatchSize = 1024) {
     createDuckDbTable("t", probeVectors);
     createDuckDbTable("u", buildVectors);
-    auto queryCtx = core::QueryCtx::create(executor_.get());
-
-    CursorParameters params;
-    params.queryCtx = queryCtx;
-    params.queryCtx->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(preferredOutputBatchSize)}});
-    params.maxDrivers = numDrivers;
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
     for (const auto joinType : joinTypes_) {
@@ -165,7 +157,7 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
                 core::JoinTypeName::toName(joinType),
                 comparison));
 
-        params.planNode =
+        auto plan =
             PlanBuilder(planNodeIdGenerator)
                 .values(probeVectors)
                 .localPartition({probeKeyName_})
@@ -179,12 +171,16 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
                     joinType)
                 .planNode();
 
-        assertQuery(
-            params,
-            fmt::format(
-                fmt::runtime(queryStr_),
-                core::JoinTypeName::toName(joinType),
-                comparison));
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .config(
+                core::QueryConfig::kPreferredOutputBatchRows,
+                preferredOutputBatchSize)
+            .maxDrivers(numDrivers)
+            .assertResults(
+                fmt::format(
+                    fmt::runtime(queryStr_),
+                    core::JoinTypeName::toName(joinType),
+                    comparison));
       }
     }
   }
@@ -387,24 +383,23 @@ TEST_F(NestedLoopJoinTest, basicCrossJoin) {
 
   // Multi-threaded build side.
   planNodeIdGenerator->reset();
-  CursorParameters params;
-  params.maxDrivers = 4;
-  params.planNode = PlanBuilder(planNodeIdGenerator)
-                        .values({probeVectors})
-                        .nestedLoopJoin(
-                            PlanBuilder(planNodeIdGenerator, pool_.get())
-                                .values({buildVectors}, true)
-                                .filter("c0 in (10, 17)")
-                                .project({"c0 AS u_c0"})
-                                .planNode(),
-                            {"c0", "u_c0"})
-                        .limit(0, 100'000, false)
-                        .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator, pool_.get())
+                          .values({buildVectors}, true)
+                          .filter("c0 in (10, 17)")
+                          .project({"c0 AS u_c0"})
+                          .planNode(),
+                      {"c0", "u_c0"})
+                  .limit(0, 100'000, false)
+                  .planNode();
 
-  OperatorTestBase::assertQuery(
-      params,
-      "SELECT * FROM t, "
-      "(SELECT * FROM UNNEST (ARRAY[10, 17, 10, 17, 10, 17, 10, 17])) u");
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .maxDrivers(4)
+      .assertResults(
+          "SELECT * FROM t, "
+          "(SELECT * FROM UNNEST (ARRAY[10, 17, 10, 17, 10, 17, 10, 17])) u");
 }
 
 TEST_F(NestedLoopJoinTest, outerJoinWithoutCondition) {
