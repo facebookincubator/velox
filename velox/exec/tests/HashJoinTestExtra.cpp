@@ -472,6 +472,80 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeEnsureLazyInputLoaded) {
   }
 }
 
+DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeSpillWhileLoadingLazyInput) {
+  const auto probe = makeRowVector(
+      {"t_k", "t_v"},
+      {makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+       makeFlatVector<int64_t>(1'000, [](auto row) { return row; })});
+  // The build rows share one key, so only the probe rows in its spill partition
+  // are spilled.
+  const auto build = makeRowVector(
+      {"u_k", "u_v"},
+      {makeFlatVector<int64_t>(2'000, [](auto /*row*/) { return 1; }),
+       makeFlatVector<int64_t>(2'000, [](auto row) { return row; })});
+  createDuckDbTable("t", {probe});
+  createDuckDbTable("u", {build});
+
+  struct {
+    core::JoinType joinType;
+    std::vector<std::string> outputLayout;
+    std::string referenceQuery;
+  } testSettings[] = {
+      {core::JoinType::kInner,
+       {"t_k", "t_v", "u_k", "u_v"},
+       "SELECT * FROM t, u WHERE t_k = u_k AND t_v <> u_v"},
+      {core::JoinType::kLeft,
+       {"t_k", "t_v", "u_k", "u_v"},
+       "SELECT * FROM t LEFT JOIN u ON t_k = u_k AND t_v <> u_v"},
+      {core::JoinType::kFull,
+       {"t_k", "t_v", "u_k", "u_v"},
+       "SELECT * FROM t FULL OUTER JOIN u ON t_k = u_k AND t_v <> u_v"},
+      {core::JoinType::kAnti,
+       {"t_k", "t_v"},
+       "SELECT * FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t_k = u_k AND t_v <> u_v)"},
+      {core::JoinType::kLeftSemiProject,
+       {"t_k", "t_v", "match"},
+       "SELECT *, EXISTS (SELECT * FROM u WHERE t_k = u_k AND t_v <> u_v) FROM t"},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(core::JoinTypeName::toName(testData.joinType));
+
+    std::atomic_bool spillTriggered{false};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::HashProbe::ensureLazyInputLoaded",
+        std::function<void(HashProbe*)>([&](HashProbe* probeOp) {
+          if (!spillTriggered.exchange(true)) {
+            memory::testingRunArbitration(probeOp->pool());
+          }
+        }));
+
+    // Anti and left semi project joins load lazy probe input only with a
+    // filter.
+    PlanBuilder plan;
+    plan.values({VectorFuzzer::fuzzRowChildrenToLazy(probe, {1})})
+        .hashJoin(
+            {"t_k"},
+            {"u_k"},
+            plan.newPlan().values({build}).planNode(),
+            "t_v <> u_v",
+            testData.outputLayout,
+            testData.joinType);
+
+    const auto spillDirectory = TempDirectoryPath::create();
+    const auto task = AssertQueryBuilder(plan.planNode(), duckDbQueryRunner_)
+                          .spillDirectory(spillDirectory->getPath())
+                          .config(core::QueryConfig::kSpillEnabled, true)
+                          .config(core::QueryConfig::kJoinSpillEnabled, true)
+                          .assertResults(testData.referenceQuery);
+
+    ASSERT_TRUE(spillTriggered);
+    const auto spilledRows = taskSpilledStats(*task).second.spilledRows.load();
+    ASSERT_GT(spilledRows, build->size());
+    ASSERT_LT(spilledRows, build->size() + probe->size());
+  }
+}
+
 TEST_P(HashJoinTest, dynamicFilters) {
   const int32_t numSplits = 10;
   const int32_t numRowsProbe = 333;
