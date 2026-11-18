@@ -59,6 +59,7 @@ TEST_P(
       nimble::EncodingType::EliasFano,
       nimble::EncodingType::PartitionedEliasFano,
       nimble::EncodingType::Sequence,
+      nimble::EncodingType::Reversed,
       nimble::EncodingType::Huffman,
       nimble::EncodingType::PFOR,
       nimble::EncodingType::SimdForBitpack,

@@ -365,6 +365,7 @@ bool canApplyValueDeltaPushdown(
     case EncodingType::Slice:
     case EncodingType::EliasFano:
     case EncodingType::PartitionedEliasFano:
+    case EncodingType::Reversed:
       return false;
   }
   NIMBLE_UNREACHABLE(
@@ -451,6 +452,7 @@ size_t applyValueDeltaPushdown(
     case EncodingType::Slice:
     case EncodingType::EliasFano:
     case EncodingType::PartitionedEliasFano:
+    case EncodingType::Reversed:
       NIMBLE_UNREACHABLE(
           "SliceEncoding push-down invoked on unsupported inner encoding: {}",
           encodingType);

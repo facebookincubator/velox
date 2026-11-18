@@ -60,6 +60,7 @@ struct WriterOptions {
         .sortDictionaryAlphabet = sortDictionaryAlphabet,
         .subIntSplitDeltaPreTransform =
             FLAGS_nimble_subintsplit_delta_pretransform,
+        .reversedMinDescendingRatio = reversedMinDescendingRatio,
         .sharedDictionaryAlphabet = {},
         .fsstCompressionTargetRatio = fsstCompressionTargetRatio};
   }
@@ -320,6 +321,11 @@ struct WriterOptions {
   /// FSST is kept only when its final encoded size is at most this fraction of
   /// the original string bytes.
   double fsstCompressionTargetRatio{0.6};
+
+  /// Reversed estimates a stream only when its values descend between adjacent
+  /// rows more than this many times as often as they ascend. See
+  /// Encoding::Options::reversedMinDescendingRatio.
+  double reversedMinDescendingRatio{1.0};
 
   /// Maximum number of scratch vector buffers retained by each per-encode-task
   /// scratch pool. 0 disables scratch vector buffer caching. Disabled by

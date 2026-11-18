@@ -245,6 +245,34 @@ class Statistics {
     }
   }
 
+  /// Numbers of adjacent pairs of values that descend and that ascend.
+  struct AdjacentOrder {
+    uint64_t numDescending{0};
+    uint64_t numAscending{0};
+  };
+
+  /// Returns how many adjacent pairs of the unsigned physical input values
+  /// descend and how many ascend when interpreted as LogicalType. Equal pairs
+  /// count as neither. LogicalType must be explicit because signed values use
+  /// unsigned physical storage.
+  template <typename LogicalType>
+  AdjacentOrder adjacentOrder() const noexcept {
+    static_assert(std::is_unsigned_v<InputType>);
+    static_assert(nimble::isIntegralType<LogicalType>());
+    static_assert(nimble::isIntegralType<InputType>());
+    static_assert(sizeof(LogicalType) == sizeof(InputType));
+    if constexpr (std::is_unsigned_v<LogicalType>) {
+      if (!physicalAdjacentOrder_.has_value()) {
+        populateAdjacentOrder</*kSignedOrder=*/false>();
+      }
+      return physicalAdjacentOrder_.value();
+    }
+    if (!signedAdjacentOrder_.has_value()) {
+      populateAdjacentOrder</*kSignedOrder=*/true>();
+    }
+    return signedAdjacentOrder_.value();
+  }
+
   /// Returns the step when the values form an arithmetic progression, i.e.
   /// value i equals value 0 + i * step in the wraparound arithmetic of the
   /// input type, such as row ids 0, 1, 2, ... with step 1. A single value and
@@ -335,6 +363,11 @@ class Statistics {
   // Checks signed logical order over unsigned physical input values.
   void populateSignedOrderNonDecreasing() const noexcept;
 
+  // Counts the descending and ascending pairs, comparing unsigned input as the
+  // signed values it stores if 'kSignedOrder'.
+  template <bool kSignedOrder>
+  void populateAdjacentOrder() const noexcept;
+
   // Compares each difference of adjacent values with the first one and stops
   // at the first mismatch.
   void populateSequenceStep() const noexcept;
@@ -354,6 +387,12 @@ class Statistics {
 
   // Caches signed logical order for unsigned physical input.
   mutable std::optional<bool> signedOrderNonDecreasing_;
+
+  // Caches adjacentOrder() in the physical input order.
+  mutable std::optional<AdjacentOrder> physicalAdjacentOrder_;
+
+  // Caches adjacentOrder() in signed logical order for unsigned physical input.
+  mutable std::optional<AdjacentOrder> signedAdjacentOrder_;
 
   // Caches sequenceStep(): unset until computed, then the step or nullopt.
   mutable std::optional<std::optional<T>> sequenceStep_;
