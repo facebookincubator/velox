@@ -422,7 +422,8 @@ bool tryParseTimeString(
   }
 
   if (pos >= len || buf[pos] != sep) {
-    if (parseMode == TimestampParseMode::kIso8601) {
+    if (parseMode == TimestampParseMode::kIso8601 ||
+        (parseMode == TimestampParseMode::kSparkCast && pos == len)) {
       result = fromTime(hour, 0, 0, 0);
       return true;
     }
@@ -449,7 +450,12 @@ bool tryParseTimeString(
     if (!parseDoubleDigit(buf, len, pos, sec)) {
       return false;
     }
-    if (sec < 0 || sec > 60) {
+    if (sec < 0 || sec > 60 ||
+        (parseMode == TimestampParseMode::kSparkCast && sec == 60)) {
+      return false;
+    }
+    if (parseMode == TimestampParseMode::kSparkCast && pos < len &&
+        characterIsDigit(buf[pos])) {
       return false;
     }
 
@@ -472,6 +478,11 @@ bool tryParseTimeString(
           micros += (buf[pos] - '0') * mult;
         }
       }
+    }
+  } else if (parseMode == TimestampParseMode::kSparkCast && pos < len) {
+    skipSpaces(buf, len, pos);
+    if (pos != len) {
+      return false;
     }
   }
 
@@ -979,6 +990,15 @@ Expected<ParsedTimestampWithTimeZone> fromTimestampWithTimezoneString(
         return folly::makeUnexpected(
             Status::UserError("Unknown timezone value: \"{}\"", timeZoneName));
       }
+    }
+
+    // Spark's region IDs are case-sensitive. UTC and fixed-offset aliases
+    // are normalized by the timezone lookup.
+    if (parseMode == TimestampParseMode::kSparkCast && timeZone &&
+        timeZone->name() != "UTC" && !timeZone->offset().has_value() &&
+        timeZoneName != timeZone->name()) {
+      return folly::makeUnexpected(
+          Status::UserError("Unknown timezone value: \"{}\"", timeZoneName));
     }
 
     // Skip any spaces at the end.

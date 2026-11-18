@@ -15,6 +15,7 @@
  */
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/JsonTestUtil.h"
+#include "velox/type/TimestampConversion.h"
 
 using namespace facebook::velox::test;
 
@@ -316,6 +317,72 @@ TEST_F(FromJsonTest, timestampWithSessionTimeZone) {
        R"({"a": "2021-07-01"})",
        R"({"a": 1625134830})"});
   testFromJson(input, makeRowVector({"a"}, {expected}));
+}
+
+TEST_F(FromJsonTest, timestampStringCompatibility) {
+  setQueryTimeZone("UTC");
+  testFromJson(
+      makeFlatVector<std::string>(
+          {R"({"a":"1970-01-01T01"})",
+           R"({"a":"1970-01-01T01Z"})",
+           R"({"a":"T01Z"})",
+           R"({"a":"10:20Z"})",
+           R"({"a":"10:20:300"})",
+           R"({"a":"1970-01-01T00:00:59Z"})",
+           R"({"a":"1970-01-01T00:00:60Z"})",
+           R"({"a":"1970-01-01T00:00:00 America/Los_Angeles"})",
+           R"({"a":"1970-01-01T00:00:00 america/los_angeles"})",
+           R"({"a":"1970-01-01T00:00:00 US/Pacific"})"}),
+      makeRowVector(
+          {"a"},
+          {makeNullableFlatVector<Timestamp>(
+              {Timestamp(3600, 0),
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               std::nullopt,
+               Timestamp(59, 0),
+               std::nullopt,
+               Timestamp(28800, 0),
+               std::nullopt,
+               Timestamp(28800, 0)})}));
+  testFromJson(
+      makeFlatVector<std::string>(
+          {R"({"a":"10:20:30"})",
+           R"({"a":"T01"})",
+           R"({"a":"1970-01-01T01"})"}),
+      makeRowVector(
+          {"a"},
+          {makeNullableFlatVector<Timestamp>(
+              {std::nullopt, std::nullopt, Timestamp(3600, 0)},
+              TIMESTAMP_UTC())}));
+
+  setQueryTimeZone("America/Los_Angeles");
+  const auto checkTimeOnly = [&](const std::string& json,
+                                 const std::string& effectiveZone,
+                                 int64_t secondsOfDay) {
+    const auto* zone = tz::locateZone(effectiveZone);
+    const auto before = util::toDate(Timestamp::now(), zone);
+    const auto result = evaluate(
+        createFromJson(ROW({"a"}, {TIMESTAMP()})),
+        makeRowVector({makeFlatVector<std::string>({json})}));
+    const auto after = util::toDate(Timestamp::now(), zone);
+    ASSERT_FALSE(result->isNullAt(0));
+    DecodedVector decoded(*result->as<RowVector>()->childAt(0));
+    ASSERT_FALSE(decoded.isNullAt(0));
+    const auto actual = decoded.valueAt<Timestamp>(0);
+    const auto expected = [&](int32_t day) {
+      Timestamp timestamp(int64_t{day} * 86400 + secondsOfDay, 0);
+      timestamp.toGMT(*zone);
+      return timestamp;
+    };
+    // Permit evaluation to cross midnight in the effective timezone.
+    EXPECT_TRUE(actual == expected(before) || actual == expected(after))
+        << actual.toString();
+  };
+  checkTimeOnly(R"({"a":"10:20:30"})", "America/Los_Angeles", 37230);
+  checkTimeOnly(R"({"a":"T01"})", "America/Los_Angeles", 3600);
+  checkTimeOnly(R"({"a":"10:20:30 Asia/Tokyo"})", "Asia/Tokyo", 37230);
 }
 
 TEST_F(FromJsonTest, timestampUtcJsonRules) {
