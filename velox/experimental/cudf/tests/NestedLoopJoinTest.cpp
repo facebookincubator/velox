@@ -605,26 +605,25 @@ TEST_F(CudfNestedLoopJoinTest, multiDriverBuild) {
   createDuckDbTable("t", {probeVectors});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  CursorParameters params;
-  params.maxDrivers = 4;
-  params.planNode = PlanBuilder(planNodeIdGenerator)
-                        .values({probeVectors})
-                        .nestedLoopJoin(
-                            PlanBuilder(planNodeIdGenerator)
-                                .values({buildVectors}, true)
-                                .filter("c0 = 100")
-                                .project({"c0 AS u_c0"})
-                                .planNode(),
-                            {"c0", "u_c0"})
-                        .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildVectors}, true)
+                          .filter("c0 = 100")
+                          .project({"c0 AS u_c0"})
+                          .planNode(),
+                      {"c0", "u_c0"})
+                  .planNode();
 
   // Build side: 4 drivers × 1 matching row = 4 build rows (all value 100)
   // Probe side: 1 driver × 20 rows = 20 probe rows
   // Result: 20 * 4 = 80 rows
-  assertQuery(
-      params,
-      "SELECT * FROM t, "
-      "(SELECT * FROM UNNEST(ARRAY[100, 100, 100, 100]) AS t(c0)) u");
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .maxDrivers(4)
+      .assertResults(
+          "SELECT * FROM t, "
+          "(SELECT * FROM UNNEST(ARRAY[100, 100, 100, 100]) AS t(c0)) u");
 }
 
 // Multi-driver with filter.
@@ -641,28 +640,27 @@ TEST_F(CudfNestedLoopJoinTest, multiDriverWithFilter) {
   createDuckDbTable("t", {probeVectors});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  CursorParameters params;
-  params.maxDrivers = 2;
-  params.planNode = PlanBuilder(planNodeIdGenerator)
-                        .values({probeVectors})
-                        .nestedLoopJoin(
-                            PlanBuilder(planNodeIdGenerator)
-                                .values({buildVectors}, true)
-                                .project({"c0 AS u_c0"})
-                                .planNode(),
-                            "c0 < u_c0",
-                            {"c0", "u_c0"},
-                            core::JoinType::kInner)
-                        .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildVectors}, true)
+                          .project({"c0 AS u_c0"})
+                          .planNode(),
+                      "c0 < u_c0",
+                      {"c0", "u_c0"},
+                      core::JoinType::kInner)
+                  .planNode();
 
   // Build side: 2 drivers × {3, 7} = {3, 7, 3, 7}
   // Probe: {1, 5, 10}
   // Matches (c0 < u_c0): 1<3, 1<7, 5<7, 1<3, 1<7, 5<7 = 6 rows
-  assertQuery(
-      params,
-      "SELECT t.c0, u.c0 FROM t "
-      "INNER JOIN (SELECT * FROM UNNEST(ARRAY[3, 7, 3, 7]) AS t(c0)) u "
-      "ON t.c0 < u.c0");
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .maxDrivers(2)
+      .assertResults(
+          "SELECT t.c0, u.c0 FROM t "
+          "INNER JOIN (SELECT * FROM UNNEST(ARRAY[3, 7, 3, 7]) AS t(c0)) u "
+          "ON t.c0 < u.c0");
 }
 
 // All-null columns on both sides.
@@ -967,26 +965,25 @@ TEST_F(CudfNestedLoopJoinTest, leftJoinMultiDriver) {
   createDuckDbTable("t", {probeVectors});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  CursorParameters params;
-  params.maxDrivers = 2;
-  params.planNode = PlanBuilder(planNodeIdGenerator)
-                        .values({probeVectors})
-                        .nestedLoopJoin(
-                            PlanBuilder(planNodeIdGenerator)
-                                .values({buildVectors}, true)
-                                .project({"c0 AS u_c0"})
-                                .planNode(),
-                            "c0 < u_c0",
-                            {"c0", "u_c0"},
-                            core::JoinType::kLeft)
-                        .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildVectors}, true)
+                          .project({"c0 AS u_c0"})
+                          .planNode(),
+                      "c0 < u_c0",
+                      {"c0", "u_c0"},
+                      core::JoinType::kLeft)
+                  .planNode();
 
   // Build side: 2 drivers × {3, 7} = {3, 7, 3, 7}
-  assertQuery(
-      params,
-      "SELECT t.c0, u.c0 FROM t "
-      "LEFT JOIN (SELECT * FROM UNNEST(ARRAY[3, 7, 3, 7]) AS t(c0)) u "
-      "ON t.c0 < u.c0");
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .maxDrivers(2)
+      .assertResults(
+          "SELECT t.c0, u.c0 FROM t "
+          "LEFT JOIN (SELECT * FROM UNNEST(ARRAY[3, 7, 3, 7]) AS t(c0)) u "
+          "ON t.c0 < u.c0");
 }
 
 // ============================================================================
@@ -1189,26 +1186,25 @@ TEST_F(CudfNestedLoopJoinTest, rightJoinMultiDriver) {
   createDuckDbTable("t", {probeVectors});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  CursorParameters params;
-  params.maxDrivers = 2;
-  params.planNode = PlanBuilder(planNodeIdGenerator)
-                        .values({probeVectors})
-                        .nestedLoopJoin(
-                            PlanBuilder(planNodeIdGenerator)
-                                .values({buildVectors}, true)
-                                .project({"c0 AS u_c0"})
-                                .planNode(),
-                            "c0 < u_c0",
-                            {"c0", "u_c0"},
-                            core::JoinType::kRight)
-                        .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildVectors}, true)
+                          .project({"c0 AS u_c0"})
+                          .planNode(),
+                      "c0 < u_c0",
+                      {"c0", "u_c0"},
+                      core::JoinType::kRight)
+                  .planNode();
 
   // Build side: 2 drivers × {3, 7} = {3, 7, 3, 7}
-  assertQuery(
-      params,
-      "SELECT t.c0, u.c0 FROM t "
-      "RIGHT JOIN (SELECT * FROM UNNEST(ARRAY[3, 7, 3, 7]) AS t(c0)) u "
-      "ON t.c0 < u.c0");
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .maxDrivers(2)
+      .assertResults(
+          "SELECT t.c0, u.c0 FROM t "
+          "RIGHT JOIN (SELECT * FROM UNNEST(ARRAY[3, 7, 3, 7]) AS t(c0)) u "
+          "ON t.c0 < u.c0");
 }
 
 // --- Full outer join tests ---
@@ -1414,26 +1410,25 @@ TEST_F(CudfNestedLoopJoinTest, fullJoinMultiDriver) {
   createDuckDbTable("t", {probeVectors});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  CursorParameters params;
-  params.maxDrivers = 2;
-  params.planNode = PlanBuilder(planNodeIdGenerator)
-                        .values({probeVectors})
-                        .nestedLoopJoin(
-                            PlanBuilder(planNodeIdGenerator)
-                                .values({buildVectors}, true)
-                                .project({"c0 AS u_c0"})
-                                .planNode(),
-                            "c0 < u_c0",
-                            {"c0", "u_c0"},
-                            core::JoinType::kFull)
-                        .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildVectors}, true)
+                          .project({"c0 AS u_c0"})
+                          .planNode(),
+                      "c0 < u_c0",
+                      {"c0", "u_c0"},
+                      core::JoinType::kFull)
+                  .planNode();
 
   // Build side: 2 drivers × {3, 7} = {3, 7, 3, 7}
-  assertQuery(
-      params,
-      "SELECT t.c0, u.c0 FROM t "
-      "FULL OUTER JOIN (SELECT * FROM UNNEST(ARRAY[3, 7, 3, 7]) AS t(c0)) u "
-      "ON t.c0 < u.c0");
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .maxDrivers(2)
+      .assertResults(
+          "SELECT t.c0, u.c0 FROM t "
+          "FULL OUTER JOIN (SELECT * FROM UNNEST(ARRAY[3, 7, 3, 7]) AS t(c0)) u "
+          "ON t.c0 < u.c0");
 }
 
 // Full join with output columns from only one side: exercises the mismatch
@@ -1695,26 +1690,25 @@ TEST_F(CudfNestedLoopJoinTest, leftSemiProjectMultiDriver) {
   createDuckDbTable("t", {probeVectors});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  CursorParameters params;
-  params.maxDrivers = 2;
-  params.planNode = PlanBuilder(planNodeIdGenerator)
-                        .values({probeVectors})
-                        .nestedLoopJoin(
-                            PlanBuilder(planNodeIdGenerator)
-                                .values({buildVectors}, true)
-                                .project({"c0 AS u_c0"})
-                                .planNode(),
-                            "c0 < u_c0",
-                            {"c0", "match"},
-                            core::JoinType::kLeftSemiProject)
-                        .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildVectors}, true)
+                          .project({"c0 AS u_c0"})
+                          .planNode(),
+                      "c0 < u_c0",
+                      {"c0", "match"},
+                      core::JoinType::kLeftSemiProject)
+                  .planNode();
 
   // Build side: 2 drivers × {3, 7} = {3, 7, 3, 7}. Existence is the same.
-  assertQuery(
-      params,
-      "SELECT t.c0, EXISTS "
-      "(SELECT 1 FROM UNNEST(ARRAY[3, 7, 3, 7]) AS u(c0) "
-      "WHERE t.c0 < u.c0) FROM t");
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .maxDrivers(2)
+      .assertResults(
+          "SELECT t.c0, EXISTS "
+          "(SELECT 1 FROM UNNEST(ARRAY[3, 7, 3, 7]) AS u(c0) "
+          "WHERE t.c0 < u.c0) FROM t");
 }
 
 // LeftSemiProject with a cross-side LIKE condition: like
