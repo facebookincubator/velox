@@ -98,19 +98,12 @@ BufferPtr Buffer::slice<bool>(
   return ans;
 }
 
-namespace detail {
-void checkVectorBufferAlignment(const BufferPtr& buffer, size_t alignment) {
-  if (buffer == nullptr) {
-    return;
+size_t Buffer::alignment() const {
+  const auto address = reinterpret_cast<uintptr_t>(data_);
+  if (address == 0) {
+    return size_t{1} << (sizeof(size_t) * 8 - 1);
   }
-  const auto address = reinterpret_cast<uintptr_t>(buffer->as<void>());
-  VELOX_CHECK_EQ(
-      address % alignment,
-      0,
-      "Vector buffer starts at a misaligned address. Required alignment: {}, address: {:#x}",
-      alignment,
-      address);
+  return address & (~address + 1);
 }
-} // namespace detail
 
 } // namespace facebook::velox

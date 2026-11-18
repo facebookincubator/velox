@@ -513,6 +513,21 @@ TEST_F(BufferTest, testAllocateSizeOverflow) {
       AlignedBuffer::reallocate<int64_t>(&buf, 1ull << 62), VeloxException);
 }
 
+TEST_F(BufferTest, alignment) {
+  auto buffer = AlignedBuffer::allocate<int64_t>(4, pool_.get());
+  ASSERT_GE(buffer->alignment(), alignof(int64_t));
+  MockCachePin pin;
+  for (const size_t offset : {1, 2, 4, 8}) {
+    SCOPED_TRACE(offset);
+    auto view = BufferView<MockCachePin&>::create(
+        buffer->as<uint8_t>() + offset, sizeof(int64_t), pin);
+    EXPECT_EQ(view->alignment(), offset);
+  }
+  // A null start is aligned to any power of 2.
+  auto empty = BufferView<MockCachePin&>::create(nullptr, 0, pin);
+  EXPECT_GE(empty->alignment(), size_t{1} << 32);
+}
+
 TEST_F(BufferTest, sliceBigintBuffer) {
   auto bufferPtr = AlignedBuffer::allocate<int64_t>(10, pool_.get());
   auto sliceBufferPtr = Buffer::slice<int64_t>(bufferPtr, 1, 5, pool_.get());

@@ -16,7 +16,9 @@
 
 #pragma once
 
+#include <bit>
 #include <iomanip>
+#include <type_traits>
 
 #include <boost/intrusive_ptr.hpp>
 #include <fmt/format.h>
@@ -183,6 +185,11 @@ class Buffer {
   bool isPOD() const {
     return (static_cast<uint8_t>(type_) & kPODMask) != 0;
   }
+
+  /// Returns the largest power of 2 that the start address is a multiple of.
+  /// A buffer with no memory, whose start is null, is aligned to any power of
+  /// 2. Vector buffers check it (see VELOX_DCHECK_BUFFER_ALIGNMENT).
+  size_t alignment() const;
 
   friend std::ostream& operator<<(std::ostream& os, const Buffer& buffer) {
     std::ios_base::fmtflags f(os.flags());
@@ -845,23 +852,34 @@ class BufferView : public Buffer {
   [[no_unique_address]] const Releaser releaser_;
 };
 
-namespace detail {
-// Checks that 'buffer', if not null, starts aligned to 'alignment'.
-void checkVectorBufferAlignment(const BufferPtr& buffer, size_t alignment);
-} // namespace detail
-
-/// Checks in debug builds that 'buffer', if not null, starts aligned to
-/// 'alignment', as buffers held by vectors must (see Buffer). Compiles to
-/// nothing in release builds, where vectors are built on hot paths.
-inline void dcheckVectorBufferAlignment(
-    [[maybe_unused]] const BufferPtr& buffer,
-    [[maybe_unused]] size_t alignment) {
-#ifndef NDEBUG
-  detail::checkVectorBufferAlignment(buffer, alignment);
-#endif
+/// Returns the alignment that a vector buffer of 'T' must start at (see
+/// Buffer): 8 bytes for a bitmap of bool, the width of 'T' otherwise.
+template <typename T>
+constexpr size_t vectorBufferAlignment() {
+  if constexpr (std::is_same_v<T, bool>) {
+    return sizeof(uint64_t);
+  } else {
+    static_assert(
+        std::has_single_bit(sizeof(T)),
+        "The width of a vector element must be a power of 2.");
+    return sizeof(T);
+  }
 }
 
 } // namespace facebook::velox
+
+/// Checks in debug builds that 'buffer', a BufferPtr, is null or starts at the
+/// alignment that a vector buffer of 'T' needs (see vectorBufferAlignment()).
+/// A failure names the line that calls it.
+#define VELOX_DCHECK_BUFFER_ALIGNMENT(buffer, T)            \
+  do {                                                      \
+    if ((buffer) != nullptr) {                              \
+      VELOX_DCHECK_GE(                                      \
+          (buffer)->alignment(),                            \
+          ::facebook::velox::vectorBufferAlignment<T>(),    \
+          "Vector buffer starts at a misaligned address."); \
+    }                                                       \
+  } while (false)
 
 // fmt formatter specialization for Buffer::Type
 template <>
