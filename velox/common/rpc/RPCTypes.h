@@ -394,6 +394,8 @@ struct RPCResponse {
       result_ = RpcPayload{std::forward<T>(payload)};
     }
     capacityRetry_.reset();
+    completionErrorKind_.reset();
+    backendOutcome_ = true;
   }
 
   /// Stores a typed failure and rejects the non-error sentinel.
@@ -424,6 +426,23 @@ struct RPCResponse {
     return result_.hasError() ? result_.error().kind : RPCErrorKind::kNone;
   }
 
+  /// Returns the lifecycle outcome used by accounting and admission. A
+  /// function may encode a failed job as a payload needed by a later phase.
+  RPCErrorKind completionErrorKind() const {
+    return completionErrorKind_.value_or(errorKind());
+  }
+
+  /// Reports whether this outcome describes work attempted in this phase.
+  /// Replayed terminal outcomes must not drive backend congestion or recovery.
+  bool isBackendOutcome() const {
+    return backendOutcome_;
+  }
+
+  /// Declares a lifecycle outcome independently of its payload representation.
+  /// Allows failed receipts to remain payloads for downstream phases.
+  /// Attach after setPayload() or setError(), which reset this metadata.
+  void setCompletionOutcome(RPCErrorKind kind, bool backendOutcome);
+
   /// Returns the function-owned payload. Only valid when !hasError().
   const RpcPayload& payload() const {
     return result_.value();
@@ -445,6 +464,10 @@ struct RPCResponse {
       folly::makeUnexpected(RpcError{RPCErrorKind::kUnset, "unset response"})};
   // Set only on an overload error; cleared whenever the outcome changes.
   std::optional<CapacityRetry> capacityRetry_;
+  // Overrides accounting for payloads that encode lifecycle failures.
+  std::optional<RPCErrorKind> completionErrorKind_;
+  // Distinguishes current backend work from locally replayed results.
+  bool backendOutcome_{true};
 };
 
 /// Returns the checked sum of bytes retained by a response collection.

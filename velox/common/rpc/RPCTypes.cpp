@@ -64,6 +64,16 @@ void RPCResponse::setError(RPCErrorKind kind, std::string errorMessage) {
       "RPC response error kind must name a cause, not kNone");
   result_ = folly::makeUnexpected(RpcError{kind, std::move(errorMessage)});
   capacityRetry_.reset();
+  completionErrorKind_.reset();
+  backendOutcome_ = true;
+}
+
+void RPCResponse::setCompletionOutcome(RPCErrorKind kind, bool backendOutcome) {
+  VELOX_CHECK(
+      !hasError() || kind == errorKind(),
+      "Completion metadata must preserve the response error kind");
+  completionErrorKind_ = kind;
+  backendOutcome_ = backendOutcome;
 }
 
 void RPCResponse::setCapacityRetry(CapacityRetry retry) {
