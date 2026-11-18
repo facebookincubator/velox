@@ -26,7 +26,7 @@ using namespace facebook::velox;
 
 namespace {
 
-// Compares constant and per-row standard charsets in both error-action modes.
+// Compares standard encoders across ASCII, validation, and conversion paths.
 class EncodeBenchmark : public ExpressionBenchmarkBuilder {
  public:
   void addBenchmarks(bool replaceUnmappable) {
@@ -66,7 +66,19 @@ class EncodeBenchmark : public ExpressionBenchmarkBuilder {
             .addExpression("per_row_charset", "encode(input, charset)")
             .withIterations(100);
       };
-      for (const size_t length : {1, 8, 32, 256}) {
+      const auto addNonAsciiWorkloads = [&](const std::string& name,
+                                            const std::string& sample,
+                                            size_t length) {
+        const std::string padding(length - sample.size(), 'A');
+        const std::string alternatePadding(length - sample.size(), 'B');
+        addWorkload(
+            name + "_non_ascii_leading",
+            {sample + padding, sample + alternatePadding});
+        addWorkload(
+            name + "_ascii_leading",
+            {padding + sample, alternatePadding + sample});
+      };
+      for (const size_t length : {1, 8, 11, 12, 13, 32, 256}) {
         addWorkload(
             fmt::format("ascii_{}bytes", length),
             {std::string(length, 'A'), std::string(length, 'B')});
@@ -79,8 +91,26 @@ class EncodeBenchmark : public ExpressionBenchmarkBuilder {
       } else if (!singleByte) {
         addWorkload("non_ascii", {"\xE2\x82\xAC", "A\xF0\x9F\x98\x80"});
       }
+      if (!singleByte || charsetName == "ISO-8859-1" || replaceUnmappable) {
+        const std::string sample =
+            charsetName == "ISO-8859-1" ? "\xC3\xA9" : "\xF0\x9F\x98\x80";
+        addNonAsciiWorkloads("non_ascii_long", sample, 256);
+      }
+      if (charsetName == "UTF-8" || charsetName == "UTF-32") {
+        for (const size_t length : {11, 12, 13, 63, 64, 65}) {
+          const std::string sample = "\xF0\x9F\x98\x80";
+          addNonAsciiWorkloads(
+              fmt::format("non_ascii_{}bytes", length), sample, length);
+        }
+      }
       if (replaceUnmappable || !singleByte) {
         addWorkload("malformed_utf8", {"A\xFF", "\xC3"});
+        if (charsetName == "UTF-8" || charsetName == "UTF-32") {
+          for (const size_t length : {11, 12, 13, 63, 64, 65}) {
+            addNonAsciiWorkloads(
+                fmt::format("malformed_utf8_{}bytes", length), "\xFF", length);
+          }
+        }
       }
       if (replaceUnmappable && singleByte) {
         addWorkload("unmappable", {"A\xF0\x9F\x98\x80", "\xE2\x80\x8D"});
