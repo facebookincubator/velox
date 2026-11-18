@@ -231,6 +231,10 @@ class AssertQueryBuilder {
       memory::MemoryPool* pool,
       std::shared_ptr<Task>& task);
 
+  /// Runs a query that returns a single row with a single column and returns
+  /// that value.
+  Variant copySingleValue();
+
   /// Run the query and copy the result Vectors as their original batches.
   std::vector<RowVectorPtr> copyResultBatches(memory::MemoryPool* pool);
 
@@ -244,6 +248,15 @@ class AssertQueryBuilder {
  private:
   std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
   readCursor();
+
+  // Creates a cursor for the query, applying configs and session properties.
+  std::unique_ptr<TaskCursor> createCursor();
+
+  // Runs the query of 'cursor', passing each output batch to 'onBatch' instead
+  // of collecting the batches.
+  void readCursor(
+      TaskCursor& cursor,
+      const std::function<void(const RowVectorPtr&)>& onBatch);
 
   static std::unique_ptr<folly::Executor> newExecutor() {
     return std::make_unique<folly::CPUThreadPoolExecutor>(

@@ -30,6 +30,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h" // @manual
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -510,7 +511,7 @@ TEST_F(ParquetTableScanTest, lazy) {
     rows += result->size();
   }
   ASSERT_EQ(rows, 20);
-  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*cursor->task()));
 }
 
 TEST_F(ParquetTableScanTest, aggregatePushdown) {
@@ -1021,7 +1022,7 @@ TEST_F(ParquetTableScanTest, readAsLowerCase) {
 
   // Wait for all tasks to be deleted to avoid race condition between async IO
   // preloading and TempFilePath destruction.
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 
   // Test reading table with non-ascii names.
   auto vectorsNonAsciiNames = {makeRowVector(
@@ -1051,7 +1052,7 @@ TEST_F(ParquetTableScanTest, readAsLowerCase) {
       .split(makeSplit(filePath2->getPath()))
       .assertResults("SELECT * FROM tmp");
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(ParquetTableScanTest, rowIndex) {
@@ -2491,7 +2492,7 @@ TEST_F(ParquetTableScanTest, fileFormatRuntimeStats) {
   ASSERT_EQ(stats.at("fileFormat.dwrf").sum, 1);
 
   task.reset();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(ParquetTableScanTest, structSkipNulls) {

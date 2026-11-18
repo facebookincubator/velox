@@ -29,6 +29,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 #include <folly/ScopeGuard.h>
@@ -39,6 +40,7 @@
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 namespace velox::exec::test {
 using namespace facebook::velox::common::testutil;
@@ -142,7 +144,6 @@ TEST_F(BasicTableWriterTest, structAsMap) {
                           {"orc.map.flat.cols", "0"},
                           {"orc.map.flat.cols.struct.keys", "[[\"1\", \"2\"]]"},
                       },
-                      nullptr,
                       fileName,
                       common::CompressionKind_NONE,
                       outputType)
@@ -176,7 +177,6 @@ TEST_F(BasicTableWriterTest, targetFileName) {
                       directory->getPath(),
                       dwio::common::FileFormat::DWRF,
                       {},
-                      nullptr,
                       kFileName)
                   .planNode();
   auto results = AssertQueryBuilder(plan).copyResults(pool());
@@ -244,6 +244,44 @@ TEST_F(BasicTableWriterTest, writerRuntimeStatsReachOperatorStats) {
           .at(std::string{Operator::kBackgroundCpuTimeNanos})
           .sum,
       kInjectedNanos);
+}
+
+TEST_F(BasicTableWriterTest, flatMapConversionRuntimeStats) {
+  std::vector<RowVectorPtr> batches;
+  int64_t numEntries{0};
+  for (auto i = 0; i < 3; ++i) {
+    auto map = makeMapVector<int64_t, int64_t>(
+        100,
+        [i](auto row) { return (row + i) % 4; },
+        [](auto row) { return row; },
+        [](auto row) { return row * 2; });
+    numEntries += map->mapKeys()->size();
+    batches.push_back(makeRowVector({FlatMapVector::fromMapVector(*map)}));
+  }
+
+  auto directory = TempDirectoryPath::create();
+  core::PlanNodeId tableWriteNodeId;
+  auto plan = PlanBuilder()
+                  .values(batches)
+                  .tableWrite(directory->getPath())
+                  .capturePlanNodeId(tableWriteNodeId)
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).copyResults(pool(), task);
+
+  const auto stats =
+      toPlanStats(task->taskStats()).at(tableWriteNodeId).customStats;
+  const auto& conversions =
+      stats.at(std::string{FlatMapVector::kNumMapConversions});
+  ASSERT_EQ(conversions.count, batches.size());
+  ASSERT_EQ(conversions.sum, batches.size());
+  ASSERT_EQ(
+      stats.at(std::string{FlatMapVector::kNumMapConversionEntries}).sum,
+      numEntries);
+  ASSERT_EQ(
+      stats.at(std::string{FlatMapVector::kMapConversionWallNanos}).count,
+      batches.size());
 }
 
 class PartitionedTableWriterTest
@@ -3168,7 +3206,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromTableWriter) {
             arbitrator->stats().numNonReclaimableAttempts,
             numPrevNonReclaimableAttempts);
       }
-      waitForAllTasksToBeDeleted(3'000'000);
+      TaskMonitor::waitForAllTasksDeleted(3'000'000);
     }
   }
 }
@@ -3279,7 +3317,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
           arbitrator->stats().numNonReclaimableAttempts,
           numPrevNonReclaimableAttempts);
 
-      waitForAllTasksToBeDeleted(3'000'000);
+      TaskMonitor::waitForAllTasksDeleted(3'000'000);
       const auto updatedSpillStats = globalSpillStats();
       if (writerSpillEnabled) {
         ASSERT_GT(updatedSpillStats.spilledBytes, spillStats.spilledBytes);
@@ -3404,7 +3442,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, writerFlushThreshold) {
         arbitrator->stats().numNonReclaimableAttempts,
         numPrevNonReclaimableAttempts);
     ASSERT_GE(arbitrator->stats().reclaimedUsedBytes, testParam.bytesToReserve);
-    waitForAllTasksToBeDeleted(3'000'000);
+    TaskMonitor::waitForAllTasksDeleted(3'000'000);
     queryCtx.reset();
   }
 }
@@ -3498,7 +3536,7 @@ DEBUG_ONLY_TEST_F(
   ASSERT_EQ(
       arbitrator->stats().numNonReclaimableAttempts,
       numPrevNonReclaimableAttempts + 1);
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(
@@ -3603,7 +3641,7 @@ DEBUG_ONLY_TEST_F(
       numPrevArbitrationFailures);
   ASSERT_EQ(arbitrator->stats().numFailures, numPrevNonReclaimableAttempts);
   ASSERT_GT(arbitrator->stats().reclaimedUsedBytes, numPrevReclaimedBytes);
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(
@@ -3714,7 +3752,7 @@ DEBUG_ONLY_TEST_F(
       numPrevNonReclaimableAttempts + 1);
   const auto updatedSpillStats = globalSpillStats();
   ASSERT_EQ(updatedSpillStats, spillStats);
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableFileWriteError) {
@@ -3792,7 +3830,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableFileWriteError) {
           .copyResults(pool()),
       "inject writer error");
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteSpillUseMoreMemory) {
@@ -3884,7 +3922,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteSpillUseMoreMemory) {
           .copyResults(pool()),
       "");
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteReclaimOnClose) {
@@ -3991,7 +4029,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteReclaimOnClose) {
       .plan(std::move(writerPlan))
       .assertResults(fmt::format("SELECT {}", numRows));
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(
@@ -4047,6 +4085,6 @@ DEBUG_ONLY_TEST_F(
   memory::testingRunArbitration();
 
   queryThread.join();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 } // namespace velox::exec::test

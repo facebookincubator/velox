@@ -35,6 +35,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 namespace facebook::nimble::test {
 namespace {
@@ -84,7 +85,7 @@ class FsstQueryTest : public HiveConnectorTestBase,
   }
 
   void TearDown() override {
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
     unregisterSelectiveNimbleReaderFactory();
     HiveConnectorTestBase::TearDown();
   }

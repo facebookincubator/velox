@@ -144,8 +144,9 @@ TEST(AllocGroupTest, valuesBorrowedByTheirOwnNodeAreNotGrouped) {
 
 // Graph outputs are never released, so they are grouped only among themselves:
 // the outputs a step produces form one group with no release point, apart from
-// the values the same step produces that are freed later. A value nothing reads
-// and that is not a graph output still stays out.
+// the values the same step produces that are freed later. A never-released
+// value that is not a graph output gets a group of its own kind, apart from the
+// outputs, whose buffers the caller keeps.
 TEST(AllocGroupTest, graphOutputsAreGroupedAmongThemselves) {
   const std::vector<NodeFootprint> nodes = {
       {.node = 0,
@@ -174,19 +175,22 @@ TEST(AllocGroupTest, graphOutputsAreGroupedAmongThemselves) {
   auto groups = buildAllocGroups(lifetimes, &ungrouped);
 
   EXPECT_EQ(stats.numAllocated, 6);
-  EXPECT_EQ(stats.numGrouped, 5);
+  EXPECT_EQ(stats.numGrouped, 6);
   EXPECT_EQ(stats.numGraphOutputsGrouped, 4);
-  EXPECT_EQ(stats.numEscaping, 1);
-  EXPECT_THAT(ungrouped, ElementsAre(14));
-  ASSERT_EQ(groups.size(), 3);
-  // At node 0 step 0: the graph outputs, whose missing release point sorts
-  // first, then the freed value.
-  EXPECT_THAT(groups[0].actualIds, ElementsAre(11, 12, 13));
-  EXPECT_EQ(groups[0].freeStep, -1);
-  EXPECT_THAT(groups[1].actualIds, ElementsAre(10));
-  EXPECT_EQ(groups[1].freeNode, 1);
-  EXPECT_THAT(groups[2].actualIds, ElementsAre(15));
-  EXPECT_EQ(groups[2].allocStep, 1);
+  EXPECT_EQ(stats.numUnreleasedGrouped, 1);
+  EXPECT_EQ(stats.numEscaping, 0);
+  EXPECT_TRUE(ungrouped.empty());
+  ASSERT_EQ(groups.size(), 4);
+  // At node 0 step 0: the never-released value and the graph outputs, whose
+  // missing release points sort first, then the freed value.
+  EXPECT_THAT(groups[0].actualIds, ElementsAre(14));
+  EXPECT_EQ(groups[0].freeStep, -2);
+  EXPECT_THAT(groups[1].actualIds, ElementsAre(11, 12, 13));
+  EXPECT_EQ(groups[1].freeStep, -1);
+  EXPECT_THAT(groups[2].actualIds, ElementsAre(10));
+  EXPECT_EQ(groups[2].freeNode, 1);
+  EXPECT_THAT(groups[3].actualIds, ElementsAre(15));
+  EXPECT_EQ(groups[3].allocStep, 1);
 }
 
 // The point of the whole-graph scan: a value produced by one node and released
@@ -213,16 +217,20 @@ TEST(AllocGroupTest, lifetimesAcrossNodes) {
   auto lifetimes = graphAllocLifetimes(nodes, &stats);
   auto groups = buildAllocGroups(lifetimes);
 
-  // %12 is read but never released -- a graph output -- so it stays out.
+  // %12 is read but never released, so it lives to the end in a group of its
+  // own kind.
   EXPECT_EQ(stats.numAllocated, 3);
-  EXPECT_EQ(stats.numGrouped, 2);
-  EXPECT_EQ(stats.numEscaping, 1);
+  EXPECT_EQ(stats.numGrouped, 3);
+  EXPECT_EQ(stats.numUnreleasedGrouped, 1);
+  EXPECT_EQ(stats.numEscaping, 0);
   EXPECT_EQ(stats.numBorrowedInOwnNode, 0);
-  ASSERT_EQ(groups.size(), 1);
-  EXPECT_THAT(groups[0].actualIds, ElementsAre(10, 11));
-  EXPECT_EQ(groups[0].allocNode, 0);
-  EXPECT_EQ(groups[0].freeNode, 1);
-  EXPECT_EQ(groups[0].freeStep, 1);
+  ASSERT_EQ(groups.size(), 2);
+  EXPECT_THAT(groups[0].actualIds, ElementsAre(12));
+  EXPECT_EQ(groups[0].freeNode, -2);
+  EXPECT_THAT(groups[1].actualIds, ElementsAre(10, 11));
+  EXPECT_EQ(groups[1].allocNode, 0);
+  EXPECT_EQ(groups[1].freeNode, 1);
+  EXPECT_EQ(groups[1].freeStep, 1);
 }
 
 // Two values released by different nodes have different lifetimes, however
@@ -249,8 +257,9 @@ TEST(AllocGroupTest, differentReleaseNodesDoNotShare) {
   EXPECT_EQ(groups[1].freeNode, 2);
 }
 
-// A value no node releases lives to the end of the graph, so it gets no release
-// point and buildAllocGroups will keep it out of every group.
+// A value no node releases lives to the end of the graph. It gets no release
+// point, and is marked to be grouped only with values that live as long. With
+// the grouping off it escapes every group.
 TEST(AllocGroupTest, unreleasedValueEscapes) {
   const std::vector<NodeFootprint> nodes = {
       {.node = 0,
@@ -267,7 +276,17 @@ TEST(AllocGroupTest, unreleasedValueEscapes) {
 
   ASSERT_EQ(lifetimes.size(), 1);
   EXPECT_EQ(lifetimes[0].freeStep, -1);
-  EXPECT_EQ(stats.numEscaping, 1);
+  EXPECT_TRUE(lifetimes[0].unreleased);
+  EXPECT_EQ(stats.numUnreleasedGrouped, 1);
+  EXPECT_EQ(stats.numEscaping, 0);
+
+  WaveConfig::get().groupUnreleasedValues = false;
+  AllocGroupStats offStats;
+  auto offLifetimes = graphAllocLifetimes(nodes, &offStats);
+  WaveConfig::get().groupUnreleasedValues = true;
+  ASSERT_EQ(offLifetimes.size(), 1);
+  EXPECT_FALSE(offLifetimes[0].unreleased);
+  EXPECT_EQ(offStats.numEscaping, 1);
 }
 
 // A release the grid contradicts -- a launch reads the value after the point it
@@ -870,8 +889,8 @@ TEST(AllocGroupTest, concatDoesNotCarveAPromotedOperand) {
 }
 
 // cat([x, y, x]) joins one value at two positions, and one buffer cannot be two
-// regions of the result. Neither occurrence is carved; the value keeps its own
-// buffer and the concat copies it into both.
+// regions of the result. Placement carves neither occurrence; the value keeps
+// its own buffer and the concat copies it into both.
 TEST(AllocGroupTest, concatDoesNotCarveARepeatedOperand) {
   const std::vector<NodeFootprint> nodes = {
       {.node = 0,
@@ -888,9 +907,9 @@ TEST(AllocGroupTest, concatDoesNotCarveARepeatedOperand) {
              .writeNeedsSync = {false},
              .concats = {oneDimCat(
                  13,
-                 {boundaryOperand(10),
+                 {boundaryOperand(10, /*carve=*/false),
                   boundaryOperand(11),
-                  boundaryOperand(10)})}}}},
+                  boundaryOperand(10, /*carve=*/false)})}}}},
   };
 
   folly::F14FastSet<nativert::ValueId> claimed;
@@ -1045,27 +1064,30 @@ TEST(AllocGroupTest, planIndexesGroupsByStep) {
   ASSERT_EQ(graphPlan.perNode.size(), 3);
   const auto& plan = graphPlan.perNode[0];
 
-  // %24 is never released. Everything else is allocated by node 0, so every
-  // group is node 0's however far downstream it goes.
-  EXPECT_THAT(plan.ungrouped, ElementsAre(24));
+  // %24 is never released, so it has a group of its own kind. Everything is
+  // allocated by node 0, so every group is node 0's however far downstream it
+  // goes.
+  EXPECT_TRUE(plan.ungrouped.empty());
   EXPECT_TRUE(graphPlan.perNode[1].groups.empty());
   ASSERT_EQ(plan.groupsByStep.size(), 3);
-  // Step 0 holds the sync-free pair and, after it, the one that must wait.
-  ASSERT_EQ(plan.groupsByStep[0].size(), 2);
-  EXPECT_FALSE(plan.groups[plan.groupsByStep[0][0]].needsSync);
+  // Step 0 holds the never-released value, the sync-free pair and, after
+  // them, the one that must wait.
+  ASSERT_EQ(plan.groupsByStep[0].size(), 3);
+  EXPECT_THAT(plan.groups[plan.groupsByStep[0][0]].actualIds, ElementsAre(24));
+  EXPECT_FALSE(plan.groups[plan.groupsByStep[0][1]].needsSync);
   EXPECT_THAT(
-      plan.groups[plan.groupsByStep[0][0]].actualIds, ElementsAre(20, 21));
-  EXPECT_TRUE(plan.groups[plan.groupsByStep[0][1]].needsSync);
+      plan.groups[plan.groupsByStep[0][1]].actualIds, ElementsAre(20, 21));
+  EXPECT_TRUE(plan.groups[plan.groupsByStep[0][2]].needsSync);
   EXPECT_TRUE(plan.groupsByStep[1].empty());
   ASSERT_EQ(plan.groupsByStep[2].size(), 1);
   EXPECT_EQ(plan.groups[plan.groupsByStep[2][0]].freeNode, 2);
 
-  EXPECT_EQ(plan.groupOfValue.count(24), 0);
+  EXPECT_EQ(plan.groupOfValue.count(24), 1);
   EXPECT_EQ(plan.groupOfValue.at(20), plan.groupOfValue.at(21));
   EXPECT_NE(plan.groupOfValue.at(20), plan.groupOfValue.at(22));
 
   EXPECT_EQ(graphPlan.stats.numAllocated, 5);
-  EXPECT_EQ(graphPlan.stats.numGroups, 3);
+  EXPECT_EQ(graphPlan.stats.numGroups, 4);
   EXPECT_EQ(graphPlan.stats.numCrossNodeGroups, 3);
   EXPECT_EQ(graphPlan.stats.largestGroup, 2);
 }

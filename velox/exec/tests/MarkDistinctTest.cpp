@@ -19,9 +19,11 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
 
 using namespace facebook::velox;
@@ -146,7 +148,7 @@ class MarkDistinctTest : public OperatorTestBase {
     ASSERT_GT(planStats.spilledPartitions, 0);
 
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 
  protected:
@@ -374,7 +376,7 @@ DEBUG_ONLY_TEST_F(MarkDistinctTest, reclaimDuringInputOrOutput) {
     ASSERT_GT(planStats.spilledPartitions, 0);
 
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   };
 
   for (const auto& testData : testSettings) {
@@ -487,7 +489,7 @@ DEBUG_ONLY_TEST_F(MarkDistinctTest, recursiveSpill) {
     }
 
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   };
 
   for (const auto& testData : testSettings) {

@@ -339,19 +339,12 @@ TEST_F(WindowTest, spillUnsupported) {
           .spillDirectory(spillDirectory->getPath())
           .assertResults("SELECT *, row_number() over (order by s) FROM tmp");
 
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  const auto& stats = taskStats.at(windowId);
-
+  const auto stats = PlanNodeStats::extract(task->taskStats(), windowId);
   ASSERT_EQ(stats.spilledBytes, 0);
   ASSERT_EQ(stats.spilledRows, 0);
   ASSERT_EQ(stats.spilledFiles, 0);
   ASSERT_EQ(stats.spilledPartitions, 0);
-  auto opStats = toOperatorStats(task->taskStats());
-  ASSERT_GT(
-      opStats.at("Window")
-          .runtimeStats[std::string(Operator::kSpillNotSupported)]
-          .sum,
-      1);
+  ASSERT_GT(stats.customStat(Operator::kSpillNotSupported).sum, 1);
 }
 
 TEST_F(WindowTest, rowBasedStreamingWindowOOM) {

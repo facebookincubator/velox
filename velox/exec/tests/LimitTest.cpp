@@ -18,6 +18,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -76,7 +77,7 @@ TEST_F(LimitTest, basic) {
   assertQuery(
       makePlan(1'234, 2'000), "SELECT * FROM tmp OFFSET 1234 LIMIT 2000");
 
-  assertQueryReturnsEmptyResult(makePlan(12'345, 10));
+  AssertQueryBuilder(makePlan(12'345, 10)).assertEmptyResults();
 }
 
 TEST_F(LimitTest, limitOverLocalExchange) {
@@ -109,7 +110,7 @@ TEST_F(LimitTest, limitOverLocalExchange) {
   // receiving that message.
 
   ASSERT_EQ(20, numRead);
-  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*cursor->task()));
 }
 
 TEST_F(LimitTest, partialLimitEagerFlush) {

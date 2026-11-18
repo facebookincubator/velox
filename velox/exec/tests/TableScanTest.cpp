@@ -24,6 +24,7 @@
 #include <folly/synchronization/Baton.h>
 #include <folly/synchronization/EventCount.h>
 #include <folly/synchronization/Latch.h>
+#include <gmock/gmock.h>
 #include <filesystem>
 
 #include "velox/common/base/Fs.h"
@@ -54,6 +55,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TableScanTestBase.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/functions/lib/IsNull.h"
 #include "velox/type/Timestamp.h"
@@ -1953,9 +1955,10 @@ TEST_F(TableScanTest, waitForSplit) {
   const auto scanNodeId = plan->id();
   std::atomic_int32_t fileIndex = 0;
   std::thread queryThread([&]() {
-    ::assertQuery(
-        plan,
-        [&](TaskCursor* taskCursor) {
+    CursorParameters params;
+    params.planNode = plan;
+    auto [queryCursor, results] =
+        readCursor(params, [&](TaskCursor* taskCursor) {
           if (taskCursor->noMoreSplits()) {
             return;
           }
@@ -1969,9 +1972,10 @@ TEST_F(TableScanTest, waitForSplit) {
           cursor = taskCursor;
           addSplitWaitFlag = false;
           addSplitWait.notifyAll();
-        },
-        "SELECT * FROM tmp",
-        duckDbQueryRunner_);
+        });
+    assertResults(
+        results, plan->outputType(), "SELECT * FROM tmp", duckDbQueryRunner_);
+    EXPECT_TRUE(TaskMonitor::waitForCompletion(*queryCursor->task()));
   });
 
   addSplitWait.await([&] { return !addSplitWaitFlag.load(); });
@@ -2124,8 +2128,8 @@ DEBUG_ONLY_TEST_F(TableScanTest, tableScanSplitsAndWeights) {
   while (cursor->moveNext()) {
     result.push_back(cursor->current());
   }
-  EXPECT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
-  EXPECT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+  EXPECT_TRUE(TaskMonitor::waitForCompletion(*leafTask)) << leafTask->taskId();
+  EXPECT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
 
   // Check task stats again.
   stats = task->taskStats();
@@ -4260,7 +4264,7 @@ TEST_F(TableScanTest, remainingFilterLazyWithMultiReferences) {
     }
   }
   ASSERT_EQ(i, vector->size());
-  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*cursor->task()));
 }
 
 TEST_F(TableScanTest, sharedNullBufferFromComplexResult) {
@@ -4300,7 +4304,7 @@ TEST_F(TableScanTest, sharedNullBufferFromComplexResult) {
       nullBufferHolder = result->childAt(0)->nulls();
     }
   }
-  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*cursor->task()));
 }
 
 // When the multi-referenced fields are in AND clauses without any other
@@ -4342,7 +4346,7 @@ TEST_F(
   c1Dict = c1Dict->valueVector()->asUnchecked<DictionaryVector<int64_t>>();
   ASSERT_EQ(c1Dict->valueVector()->size(), 2);
   ASSERT_FALSE(cursor->moveNext());
-  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*cursor->task()));
 }
 
 TEST_F(TableScanTest, remainingFilterSkippedStrides) {
@@ -4431,7 +4435,7 @@ TEST_F(TableScanTest, randomSample) {
     VELOX_CHECK_GT(result->size(), 0);
     numRows += result->size();
   }
-  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*cursor->task()));
   ASSERT_GT(getSkippedStridesStat(cursor->task()), 0);
   double expectedNumRows = 0.01 * numTotalRows;
   ASSERT_LT(abs(numRows - expectedNumRows) / expectedNumRows, 0.1);
@@ -6154,7 +6158,7 @@ TEST_F(TableScanTest, noCacheRetention) {
     AssertQueryBuilder(tableScanNode(), duckDbQueryRunner_)
         .split(std::move(split))
         .assertResults("SELECT * FROM tmp");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
 
     const auto asyncDataCacheHelper =
         cache::test::AsyncDataCacheTestHelper(asyncDataCache_.get());
@@ -6220,7 +6224,7 @@ DEBUG_ONLY_TEST_F(TableScanTest, cancellationToken) {
             .split(std::move(split))
             .assertResults("SELECT * FROM tmp"),
         folly::OperationCancelled);
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   });
 
   while (task == nullptr) {
@@ -7791,6 +7795,112 @@ TEST_F(TableScanTest, scanBatchCallbackStorageReadBytesPreload) {
   const auto operatorBytes = stats.at("storageReadBytes").sum;
   EXPECT_GT(operatorBytes, 0);
   EXPECT_EQ(summedEventBytes, operatorBytes);
+}
+
+namespace {
+
+// The split and read of one FileScanBatchEvent, copied out of the callback.
+struct BatchRead {
+  std::string filePath;
+  int64_t rowStart;
+  uint64_t numRows;
+
+  bool operator==(const BatchRead&) const = default;
+};
+
+// Returns a QueryCtx whose scan batch callback appends the read of each event
+// to 'reads'.
+std::shared_ptr<core::QueryCtx> queryCtxRecordingReads(
+    folly::Executor* executor,
+    std::vector<BatchRead>& reads) {
+  auto queryCtx = core::QueryCtx::create(executor);
+  queryCtx->setScanBatchCallback([&reads](const core::ScanBatchEvent& event) {
+    const auto* fileEvent =
+        dynamic_cast<const connector::FileScanBatchEvent*>(&event);
+    ASSERT_TRUE(fileEvent != nullptr);
+    ASSERT_TRUE(fileEvent->split != nullptr);
+    reads.push_back(
+        {.filePath = fileEvent->split->filePath,
+         .rowStart = fileEvent->rowStart,
+         .numRows = fileEvent->numRows});
+  });
+  return queryCtx;
+}
+
+} // namespace
+
+TEST_F(TableScanTest, scanBatchCallbackReadRanges) {
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), makeVectors(1, 300));
+
+  std::vector<BatchRead> reads;
+  auto queryCtx = queryCtxRecordingReads(executor_.get(), reads);
+
+  AssertQueryBuilder(tableScanNode())
+      .splits(makeHiveConnectorSplits({filePath}))
+      .queryCtx(queryCtx)
+      .config(QueryConfig::kTableScanOutputBatchRowsOverride, "100")
+      .copyResults(pool_.get());
+
+  const auto& path = filePath->getPath();
+  EXPECT_THAT(
+      reads,
+      ::testing::ElementsAre(
+          BatchRead{path, 0, 100},
+          BatchRead{path, 100, 100},
+          BatchRead{path, 200, 100}));
+}
+
+TEST_F(TableScanTest, scanBatchCallbackReportsReadsTheFilterEmptied) {
+  // Filter value 4 is between the min and max, so stats skip nothing. The first
+  // read of c0 = 0, 2, 4 keeps one row, and the second read of c0 = 6, 8 keeps
+  // none.
+  auto vector = makeRowVector({makeFlatVector<int64_t>({0, 2, 4, 6, 8})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {vector});
+
+  std::vector<BatchRead> reads;
+  auto queryCtx = queryCtxRecordingReads(executor_.get(), reads);
+
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(asRowType(vector->type()), {"c0 = 4"})
+                  .planNode();
+  auto result = AssertQueryBuilder(plan)
+                    .splits(makeHiveConnectorSplits({filePath}))
+                    .queryCtx(queryCtx)
+                    .config(QueryConfig::kTableScanOutputBatchRowsOverride, "3")
+                    .copyResults(pool_.get());
+
+  EXPECT_EQ(result->size(), 1);
+  const auto& path = filePath->getPath();
+  EXPECT_THAT(
+      reads,
+      ::testing::ElementsAre(BatchRead{path, 0, 3}, BatchRead{path, 3, 2}));
+}
+
+TEST_F(TableScanTest, scanBatchCallbackPreloadedSplits) {
+  auto filePaths = makeFilePaths(4);
+  std::vector<BatchRead> expected;
+  for (int32_t i = 0; i < filePaths.size(); ++i) {
+    const auto numRows = 100 * (i + 1);
+    writeToFile(filePaths[i]->getPath(), makeVectors(1, numRows));
+    expected.push_back(
+        {filePaths[i]->getPath(), 0, static_cast<uint64_t>(numRows)});
+  }
+
+  std::vector<BatchRead> reads;
+  auto queryCtx = queryCtxRecordingReads(executor_.get(), reads);
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(tableScanNode())
+      .splits(makeHiveConnectorSplits(filePaths))
+      .queryCtx(queryCtx)
+      .config(core::QueryConfig::kMaxSplitPreloadPerDriver, 2)
+      .maxDrivers(1)
+      .copyResults(pool_.get(), task);
+
+  ASSERT_GT(getTableScanRuntimeStats(task).at("preloadedSplits").sum, 0);
+  EXPECT_THAT(reads, ::testing::ElementsAreArray(expected));
 }
 
 // --- Column extraction pushdown table scan tests ---

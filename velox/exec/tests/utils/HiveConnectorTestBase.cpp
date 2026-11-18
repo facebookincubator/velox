@@ -335,8 +335,7 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     std::shared_ptr<connector::hive::LocationHandle> locationHandle,
     const dwio::common::FileFormat tableStorageFormat,
     const std::optional<common::CompressionKind> compressionKind,
-    const std::shared_ptr<dwio::common::WriterOptions>& writerOptions,
-    const bool ensureFiles) {
+    const bool writeEmptyFile) {
   return makeHiveInsertTableHandle(
       tableColumnNames,
       tableColumnTypes,
@@ -346,8 +345,7 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
       tableStorageFormat,
       compressionKind,
       {}, // serdeParameters
-      writerOptions,
-      ensureFiles);
+      writeEmptyFile);
 }
 
 // static
@@ -361,9 +359,10 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     const dwio::common::FileFormat tableStorageFormat,
     const std::optional<common::CompressionKind> compressionKind,
     const std::unordered_map<std::string, std::string>& serdeParameters,
-    const std::shared_ptr<dwio::common::WriterOptions>& writerOptions,
-    const bool ensureFiles,
-    const std::unordered_map<std::string, std::string>& storageParameters) {
+    const bool writeEmptyFile,
+    const std::unordered_map<std::string, std::string>& storageParameters,
+    connector::hive::HiveConfig::InsertExistingPartitionsBehavior
+        insertExistingPartitionsBehavior) {
   std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
       columnHandles;
   std::vector<std::string> bucketedBy;
@@ -415,12 +414,12 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
   return std::make_shared<connector::hive::HiveInsertTableHandle>(
       columnHandles,
       locationHandle,
+      insertExistingPartitionsBehavior,
       tableStorageFormat,
       bucketProperty,
       compressionKind,
       serdeParameters,
-      writerOptions,
-      ensureFiles,
+      writeEmptyFile,
       std::make_shared<const connector::hive::HiveInsertFileNameGenerator>(),
       storageParameters);
 }

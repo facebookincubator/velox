@@ -30,6 +30,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/IndexLookupJoinTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/exec/tests/utils/TestIndexStorageConnector.h"
 
 using namespace facebook::velox;
@@ -1834,7 +1835,7 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, abortDuringIndexSplitWait) {
   queryThread.join();
 
   // Verify the task terminated properly.
-  ASSERT_TRUE(waitForTaskAborted(task.get()));
+  ASSERT_TRUE(TaskMonitor::waitForAbort(*task));
 }
 
 TEST_P(IndexLookupJoinTest, multiDriverWithIndexSplits) {
@@ -2017,7 +2018,7 @@ TEST_P(IndexLookupJoinTest, groupedExecution) {
         exec::DefaultOutputBufferManager::getInstanceRef();
     outputBufferManager->deleteResults(task->taskId(), 0);
 
-    waitForTaskCompletion(task.get());
+    TaskMonitor::waitForCompletion(*task);
     ASSERT_EQ(task->state(), TaskState::kFinished);
 
     auto taskStats = toPlanStats(task->taskStats());
@@ -2132,7 +2133,7 @@ TEST_P(IndexLookupJoinTest, groupedExecutionWithEmptyIndexSplits) {
         exec::DefaultOutputBufferManager::getInstanceRef();
     outputBufferManager->deleteResults(task->taskId(), 0);
 
-    waitForTaskCompletion(task.get());
+    TaskMonitor::waitForCompletion(*task);
     ASSERT_EQ(task->state(), TaskState::kFinished);
 
     auto taskStats = toPlanStats(task->taskStats());
@@ -2192,7 +2193,7 @@ TEST_P(IndexLookupJoinTest, groupedExecutionLeafValidation) {
   ASSERT_NO_THROW(task->start(1));
 
   task->requestAbort().wait();
-  ASSERT_TRUE(waitForTaskAborted(task.get()));
+  ASSERT_TRUE(TaskMonitor::waitForAbort(*task));
 }
 
 } // namespace

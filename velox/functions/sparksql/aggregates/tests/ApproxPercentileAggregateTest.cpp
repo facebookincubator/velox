@@ -22,6 +22,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/functions/lib/aggregates/ApproxPercentileAggregateBase.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
@@ -277,13 +278,6 @@ TEST_F(ApproxPercentileAggregateTest, groupByAgg) {
 
 // Test Partial + Final aggregation mode (simulating distributed execution).
 TEST_F(ApproxPercentileAggregateTest, partialFinal) {
-  // Make sure partial aggregation runs out of memory after first batch.
-  CursorParameters params;
-  params.queryCtx = velox::core::QueryCtx::create(executor_.get());
-  params.queryCtx->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kMaxPartialAggregationMemory, "300000"},
-  });
-
   auto data = {
       makeRowVector({
           makeFlatVector<int32_t>(1'024, [](auto row) { return row % 117; }),
@@ -300,7 +294,7 @@ TEST_F(ApproxPercentileAggregateTest, partialFinal) {
   };
 
   // Build partial + final aggregation plan.
-  params.planNode =
+  auto plan =
       PlanBuilder()
           .values(data)
           .project({"c0", "c1", "0.9995"})
@@ -312,8 +306,11 @@ TEST_F(ApproxPercentileAggregateTest, partialFinal) {
       makeFlatVector<int32_t>(117, [](auto row) { return row; }),
       makeFlatVector<int32_t>(117, [](auto row) { return row < 7 ? 20 : 10; }),
   });
-  exec::test::assertQuery(params, {expected});
-  waitForAllTasksToBeDeleted();
+  // Make sure partial aggregation runs out of memory after first batch.
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kMaxPartialAggregationMemory, "300000")
+      .assertResults(expected);
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 // Test Partial + Final group-by aggregation.

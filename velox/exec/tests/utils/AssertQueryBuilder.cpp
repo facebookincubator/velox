@@ -15,6 +15,9 @@
  */
 
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+
+#include <gtest/gtest.h>
+
 #include "velox/exec/Cursor.h"
 
 namespace facebook::velox::exec::test {
@@ -235,17 +238,25 @@ std::shared_ptr<Task> AssertQueryBuilder::assertResults(
 }
 
 std::shared_ptr<Task> AssertQueryBuilder::assertEmptyResults() {
-  auto [cursor, results] = readCursor();
-  test::assertEmptyResults(results);
+  size_t numRows{0};
+  auto cursor = createCursor();
+  readCursor(
+      *cursor, [&](const RowVectorPtr& vector) { numRows += vector->size(); });
+  EXPECT_EQ(0, numRows) << "Expected empty result but received " << numRows
+                        << " rows";
   return cursor->task();
 }
 
 std::shared_ptr<Task> AssertQueryBuilder::assertTypeAndNumRows(
     const TypePtr& expectedType,
     vector_size_t expectedNumRows) {
-  auto [cursor, results] = readCursor();
-
-  assertEqualTypeAndNumRows(expectedType, expectedNumRows, results);
+  size_t numRows{0};
+  auto cursor = createCursor();
+  readCursor(*cursor, [&](const RowVectorPtr& vector) {
+    EXPECT_EQ(*expectedType, *vector->type());
+    numRows += vector->size();
+  });
+  EXPECT_EQ(expectedNumRows, numRows);
   return cursor->task();
 }
 
@@ -281,6 +292,25 @@ RowVectorPtr AssertQueryBuilder::copyResults(
   return copy;
 }
 
+Variant AssertQueryBuilder::copySingleValue() {
+  VELOX_CHECK_EQ(
+      params_.planNode->outputType()->size(),
+      1,
+      "Query must return a single column");
+
+  auto [cursor, results] = readCursor();
+  RowVectorPtr batch;
+  vector_size_t numRows{0};
+  for (const auto& result : results) {
+    if (result->size() > 0) {
+      batch = result;
+      numRows += result->size();
+    }
+  }
+  VELOX_CHECK_EQ(numRows, 1, "Query must return a single row");
+  return materialize(batch)[0][0];
+}
+
 std::vector<RowVectorPtr> AssertQueryBuilder::copyResultBatches(
     memory::MemoryPool* pool) {
   auto [cursor, results] = readCursor();
@@ -301,11 +331,10 @@ std::vector<RowVectorPtr> AssertQueryBuilder::copyResultBatches(
 }
 
 uint64_t AssertQueryBuilder::countResults(std::shared_ptr<Task>& task) {
-  auto [cursor, results] = readCursor();
-  uint64_t count = 0;
-  for (const auto& result : results) {
-    count += result->size();
-  }
+  uint64_t count{0};
+  auto cursor = createCursor();
+  readCursor(
+      *cursor, [&](const RowVectorPtr& vector) { count += vector->size(); });
   task = cursor->task();
   return count;
 }
@@ -317,6 +346,15 @@ uint64_t AssertQueryBuilder::countResults() {
 
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
 AssertQueryBuilder::readCursor() {
+  auto cursor = createCursor();
+  // Declared after 'cursor' so that it is destroyed first, also on exception.
+  std::vector<RowVectorPtr> results;
+  readCursor(
+      *cursor, [&](const RowVectorPtr& vector) { results.push_back(vector); });
+  return {std::move(cursor), std::move(results)};
+}
+
+std::unique_ptr<TaskCursor> AssertQueryBuilder::createCursor() {
   VELOX_CHECK_NOT_NULL(params_.planNode);
 
   if (!configs_.empty() || !connectorSessionProperties_.empty()) {
@@ -346,8 +384,14 @@ AssertQueryBuilder::readCursor() {
     }
   }
 
-  return test::readCursorAsync(
-      params_,
+  return TaskCursor::create(params_);
+}
+
+void AssertQueryBuilder::readCursor(
+    TaskCursor& cursor,
+    const std::function<void(const RowVectorPtr&)>& onBatch) {
+  test::readCursorAsync(
+      cursor,
       [&](exec::TaskCursor* taskCursor) {
         if (taskCursor->noMoreSplits()) {
           return ContinueFuture::makeEmpty();
@@ -395,6 +439,7 @@ AssertQueryBuilder::readCursor() {
         }
         return ContinueFuture::makeEmpty();
       },
-      maxWaitMicros_);
+      maxWaitMicros_,
+      onBatch);
 }
 } // namespace facebook::velox::exec::test

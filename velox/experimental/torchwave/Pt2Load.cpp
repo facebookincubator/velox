@@ -106,6 +106,8 @@ LoadedModel loadPt2Model(
   loaded.modelName = modelName;
   loaded.tensorPaths = std::move(tensorPaths);
   loaded.constantPaths = std::move(constantPaths);
+  loaded.symShapes =
+      symbolicShapes(exportedProgram.get_graph_module().get_graph());
   return loaded;
 }
 

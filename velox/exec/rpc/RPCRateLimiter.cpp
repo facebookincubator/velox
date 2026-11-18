@@ -56,7 +56,16 @@ constexpr double kMaxProbeFloor{0.5};
 constexpr double kProbeJitter{0.2};
 
 constexpr int64_t kServiceHorizonEwmaWeight{8};
-constexpr double kInitialAdaptiveLimit{200.0};
+// CAPACITY_PROBING keeps this share of the calls the backend held on a
+// capacity rejection rather than WINDOW_AIMD's half, so the window stays near
+// the backend's limit.
+constexpr double kCapacityDecreaseFactor{0.8};
+// Most units CAPACITY_PROBING adds in one round after a capacity rejection,
+// which bounds how far one round can overshoot the backend.
+constexpr double kMaxGrowthPerRound{16.0};
+// CAPACITY_PROBING's slow start ends once a round's fastest response is
+// slower than the fastest so far by more than this fraction of it.
+constexpr int64_t kSlowStartExitDivisor{8};
 
 // Reports a contained teardown failure without allowing diagnostics to escape
 // the noexcept token-release path.
@@ -132,7 +141,9 @@ RPCRateLimiter::AdmissionLease::~AdmissionLease() {
 }
 
 RPCRateLimiter::AdmissionLease::Completion
-RPCRateLimiter::AdmissionLease::completeAndRelease(bool hardOverload) noexcept {
+RPCRateLimiter::AdmissionLease::completeAndRelease(
+    bool hardOverload,
+    bool capacityRejection) noexcept {
   std::shared_ptr<RPCRateLimiter> owner;
   std::vector<Token> tokens;
   try {
@@ -151,7 +162,10 @@ RPCRateLimiter::AdmissionLease::completeAndRelease(bool hardOverload) noexcept {
   bool handled = false;
   if (hardOverload && !tokens.empty()) {
     try {
-      handled = owner->handleOverloadForEpoch(overloadEpoch_);
+      handled = owner->handleOverloadForEpoch(
+          overloadEpoch_,
+          capacityRejection,
+          static_cast<int64_t>(tokens.size()));
     } catch (...) {
       try {
         RPC_RATE_LIMITER_LOG(ERROR)
@@ -225,7 +239,11 @@ double RPCRateLimiter::floorLocked(double ceiling) const {
                 std::chrono::duration<double, std::nano>(
                     config_.maxProbeInterval)
                     .count());
-  return std::min(std::max({0.001, config_.floor, probeFloor}), ceiling);
+  const double configuredFloor =
+      config_.flowControlPolicy == RPCFlowControlPolicy::kCapacityProbing
+      ? 0.0
+      : config_.floor;
+  return std::min(std::max({0.001, configuredFloor, probeFloor}), ceiling);
 }
 
 double RPCRateLimiter::limitLocked() const {
@@ -336,6 +354,9 @@ RPCRateLimiter::Config clamped(RPCRateLimiter::Config config) {
       : std::clamp(config.decreaseFactor, 0.01, 0.99);
   config.maxProbeInterval =
       std::max(config.maxProbeInterval, std::chrono::milliseconds{0});
+  if (!config.adaptive) {
+    config.flowControlPolicy = RPCFlowControlPolicy::kWindowAimd;
+  }
   return config;
 }
 
@@ -343,7 +364,8 @@ RPCRateLimiter::Config clamped(RPCRateLimiter::Config config) {
 // in fields it ignores compare equal.
 RPCRateLimiter::Config canonicalize(const RPCRateLimiter::Config& policy) {
   auto canonical = clamped(policy);
-  if (canonical.ceiling > 0 &&
+  if (canonical.flowControlPolicy == RPCFlowControlPolicy::kWindowAimd &&
+      canonical.ceiling > 0 &&
       canonical.floor >= static_cast<double>(canonical.ceiling)) {
     canonical.adaptive = false;
   }
@@ -352,6 +374,7 @@ RPCRateLimiter::Config canonicalize(const RPCRateLimiter::Config& policy) {
     canonical.floor = defaults.floor;
     canonical.decreaseFactor = defaults.decreaseFactor;
     canonical.maxProbeInterval = defaults.maxProbeInterval;
+    canonical.flowControlPolicy = RPCFlowControlPolicy::kWindowAimd;
   }
   return canonical;
 }
@@ -394,6 +417,7 @@ void RPCRateLimiter::testingReset() {
   limitChangedAt_ = std::chrono::steady_clock::time_point{};
   recovering_ = false;
   lowWaterLimit_ = 0.0;
+  resetProbingLocked();
   pacingTime_ = std::chrono::steady_clock::duration::zero();
   windowUnitSeconds_ = 0.0;
   lastAccrual_ = now_();
@@ -520,17 +544,33 @@ void RPCRateLimiter::onPacingTimerFailure(
   failWaitersNoThrow(toFail, error, admissionKey_);
 }
 
+void RPCRateLimiter::resetProbingLocked() {
+  doubling_ = true;
+  growthTarget_ = 0.0;
+  fastestRttNanos_ = 0;
+  roundFastestRttNanos_ = 0;
+  roundSuccessesLeft_ = 0;
+  roundPeakPending_ = pending_.load();
+  lastRoundPeakPending_ = 0;
+}
+
 void RPCRateLimiter::applyMutationLocked(
     const std::function<void(Config&)>& mutate) {
   const bool wasAdaptive = config_.adaptive;
+  const auto previousPolicy = config_.flowControlPolicy;
   accrueLocked();
   mutate(config_);
   config_ = clamped(config_);
+  if (!wasAdaptive || config_.flowControlPolicy != previousPolicy) {
+    resetProbingLocked();
+  }
   if (!config_.adaptive) {
     setLimitLocked(0.0);
   } else if (!wasAdaptive) {
     setLimitLocked(
-        std::min(kInitialAdaptiveLimit, static_cast<double>(ceilingLocked())));
+        std::min(
+            static_cast<double>(kInitialAdaptiveLimit),
+            static_cast<double>(ceilingLocked())));
     if (lowWaterLimit_ == 0.0 || limitLocked() < lowWaterLimit_) {
       lowWaterLimit_ = limitLocked();
     }
@@ -596,8 +636,7 @@ std::shared_ptr<RPCRateLimiter::AdmissionLease> RPCRateLimiter::makeLease(
 }
 
 void RPCRateLimiter::notePeakPending(int64_t pending) {
-  // Relaxed ordering: a best-effort max for stats, not a synchronization
-  // point.
+  // Relaxed ordering: a best-effort max, not a synchronization point.
   int64_t peak = peakPending_.load(std::memory_order_relaxed);
   while (pending > peak &&
          !peakPending_.compare_exchange_weak(
@@ -615,6 +654,7 @@ RPCRateLimiter::Token RPCRateLimiter::acquire() {
         "Unconditional acquisition cannot bypass paced admission");
     lastAdmission_ = now_();
     pending = ++pending_;
+    roundPeakPending_ = std::max(roundPeakPending_, pending);
     overloadEpoch = overloadEpoch_;
   }
   notePeakPending(pending);
@@ -638,6 +678,7 @@ std::vector<RPCRateLimiter::Token> RPCRateLimiter::tryAcquireUpTo(
     }
     commitGrowthLocked();
     const int64_t pending = ++pending_;
+    roundPeakPending_ = std::max(roundPeakPending_, pending);
     ++pacingGeneration_;
     pacingTimerArmed_ = false;
     lastAdmission_ = now;
@@ -665,6 +706,7 @@ std::vector<RPCRateLimiter::Token> RPCRateLimiter::tryAcquireUpTo(
     // rather than its own stale read.
   } while (!pending_.compare_exchange_weak(pending, pending + take));
   lastAdmission_ = now;
+  roundPeakPending_ = std::max(roundPeakPending_, pending + take);
 
   // The post-exchange total, not the caller's pre-read: reporting the stale
   // value would hide exactly the overshoot this loop exists to prevent, and
@@ -745,7 +787,9 @@ void RPCRateLimiter::onOutcome(Outcome outcome, int64_t units, int64_t rttNs) {
   }
 }
 
-void RPCRateLimiter::applyOverloadLocked() {
+void RPCRateLimiter::applyOverloadLocked(
+    bool capacityRejection,
+    int64_t rejectedUnits) {
   if (!config_.adaptive) {
     return;
   }
@@ -754,9 +798,25 @@ void RPCRateLimiter::applyOverloadLocked() {
   // late, as timeouts and transport-retried rate limits do, must still cut.
   recovering_ = false;
   const double current = limitLocked();
-  const double next = std::max(
-      floorLocked(static_cast<double>(ceilingLocked())),
-      current * config_.decreaseFactor);
+  const double ceiling = static_cast<double>(ceilingLocked());
+  double target = current * config_.decreaseFactor;
+  if (config_.flowControlPolicy == RPCFlowControlPolicy::kCapacityProbing) {
+    doubling_ = false;
+    if (capacityRejection) {
+      // The backend held the calls in flight besides the rejected ones, which
+      // may be fewer than the window allows. Cut from them, and grow back to
+      // them.
+      const auto held = static_cast<double>(
+          std::max<int64_t>(1, pending_.load() - rejectedUnits));
+      growthTarget_ = std::min(current, held);
+      target = growthTarget_ * kCapacityDecreaseFactor;
+    } else {
+      growthTarget_ = 0.0;
+      target =
+          std::min(current, std::max(target, std::min(config_.floor, ceiling)));
+    }
+  }
+  const double next = std::max(floorLocked(ceiling), target);
   // Reschedule even when the window is already at its floor, so the next
   // probe waits the back-off interval rather than the recovery one.
   setLimitLocked(next);
@@ -770,13 +830,42 @@ void RPCRateLimiter::applyOverloadLocked() {
   }
 }
 
+void RPCRateLimiter::refineCapacityCutLocked(int64_t rejectedUnits) {
+  if (!config_.adaptive ||
+      config_.flowControlPolicy != RPCFlowControlPolicy::kCapacityProbing ||
+      growthTarget_ <= 0.0) {
+    return;
+  }
+  const auto held = static_cast<double>(
+      std::max<int64_t>(1, pending_.load() - rejectedUnits));
+  if (held >= growthTarget_) {
+    return;
+  }
+  growthTarget_ = held;
+  const double current = limitLocked();
+  const double ceiling = static_cast<double>(ceilingLocked());
+  const double next = std::max(
+      floorLocked(ceiling), std::min(current, held * kCapacityDecreaseFactor));
+  if (next >= current) {
+    return;
+  }
+  recovering_ = false;
+  setLimitLocked(next);
+  if (lowWaterLimit_ == 0.0 || next < lowWaterLimit_) {
+    lowWaterLimit_ = next;
+  }
+  RPC_RATE_LIMITER_VLOG(1) << "RPC congestion: limit[" << admissionKey_ << "] "
+                           << current << " -> " << next
+                           << " (capacity rejection of a round already cut)";
+}
+
 void RPCRateLimiter::onOverload() {
   std::vector<ContinuePromise> toNotify;
   std::optional<PacingTimerRequest> timerRequest;
   {
     std::lock_guard<std::mutex> l(mutex_);
     ++overloadEpoch_;
-    applyOverloadLocked();
+    applyOverloadLocked(/*capacityRejection=*/false, /*rejectedUnits=*/0);
     timerRequest = collectWakeableLocked(toNotify);
   }
   fulfillWaitersNoThrow(toNotify, admissionKey_);
@@ -785,16 +874,22 @@ void RPCRateLimiter::onOverload() {
   }
 }
 
-bool RPCRateLimiter::handleOverloadForEpoch(uint64_t overloadEpoch) {
+bool RPCRateLimiter::handleOverloadForEpoch(
+    uint64_t overloadEpoch,
+    bool capacityRejection,
+    int64_t rejectedUnits) {
   std::vector<ContinuePromise> toNotify;
   std::optional<PacingTimerRequest> timerRequest;
   {
     std::lock_guard<std::mutex> l(mutex_);
     if (overloadEpoch != overloadEpoch_) {
+      if (capacityRejection) {
+        refineCapacityCutLocked(rejectedUnits);
+      }
       return true;
     }
     ++overloadEpoch_;
-    applyOverloadLocked();
+    applyOverloadLocked(capacityRejection, rejectedUnits);
     timerRequest = collectWakeableLocked(toNotify);
   }
   fulfillWaitersNoThrow(toNotify, admissionKey_);
@@ -844,9 +939,59 @@ void RPCRateLimiter::applySuccessLocked(int64_t units, int64_t rttNs) {
     return;
   }
   const double current = limitLocked();
-  const double next =
-      std::sqrt(current * current + 2.0 * static_cast<double>(units));
+  if (config_.flowControlPolicy == RPCFlowControlPolicy::kCapacityProbing) {
+    if (doubling_ && rttNs > 0) {
+      roundFastestRttNanos_ = roundFastestRttNanos_ == 0
+          ? rttNs
+          : std::min(roundFastestRttNanos_, rttNs);
+    }
+    roundSuccessesLeft_ -= units;
+    if (roundSuccessesLeft_ <= 0) {
+      if (doubling_ && fastestRttNanos_ > 0 &&
+          roundFastestRttNanos_ >
+              fastestRttNanos_ + fastestRttNanos_ / kSlowStartExitDivisor) {
+        doubling_ = false;
+      }
+      if (roundFastestRttNanos_ > 0) {
+        fastestRttNanos_ = fastestRttNanos_ == 0
+            ? roundFastestRttNanos_
+            : std::min(fastestRttNanos_, roundFastestRttNanos_);
+      }
+      roundFastestRttNanos_ = 0;
+      lastRoundPeakPending_ = roundPeakPending_;
+      roundPeakPending_ = pending_.load();
+      roundSuccessesLeft_ = static_cast<int64_t>(current);
+    }
+  }
+  const double next = grownWindowLocked(current, units);
   setLimitLocked(next >= static_cast<double>(ceilingLocked()) ? 0.0 : next);
+}
+
+double RPCRateLimiter::grownWindowLocked(double current, int64_t units) const {
+  const auto successes = static_cast<double>(units);
+  if (config_.flowControlPolicy != RPCFlowControlPolicy::kCapacityProbing) {
+    return std::sqrt(current * current + 2.0 * successes);
+  }
+  double next{current + successes};
+  if (!doubling_ && growthTarget_ <= 0.0) {
+    next = std::sqrt(current * current + 2.0 * successes);
+  } else if (!doubling_) {
+    // Each round adds half the distance to the level the backend last held,
+    // up to it; past it, a step that doubles every round. A round is a window
+    // of successes.
+    const double perRound = current < growthTarget_
+        ? std::clamp((growthTarget_ - current) / 2.0, 1.0, kMaxGrowthPerRound)
+        : std::clamp(current - growthTarget_ + 1.0, 1.0, kMaxGrowthPerRound);
+    next = current + perRound * successes / current;
+    if (current < growthTarget_) {
+      next = std::min(growthTarget_, next);
+    }
+  }
+  // Growth stops at twice the most calls in flight this round or the last, so
+  // a worker that uses little of its window does not build up a window it
+  // could later burst into.
+  const auto peak = std::max(roundPeakPending_, lastRoundPeakPending_);
+  return std::min(next, std::max(current, 2.0 * static_cast<double>(peak)));
 }
 
 void RPCRateLimiter::onFailure() {
@@ -976,6 +1121,7 @@ RPCRateLimiter::Stats RPCRateLimiter::stats() const {
       .clockNanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
                         now.time_since_epoch())
                         .count(),
+      .flowControlPolicy = config_.flowControlPolicy,
   };
 }
 

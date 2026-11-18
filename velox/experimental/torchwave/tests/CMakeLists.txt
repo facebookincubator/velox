@@ -68,6 +68,19 @@ add_test(
 )
 set_tests_properties(torchwave_executor_test PROPERTIES LABELS cuda_driver ENVIRONMENT FB_TEST=1)
 
+add_executable(torchwave_packed_input_test PackedInputTest.cpp)
+
+target_link_libraries(
+  torchwave_packed_input_test
+  torchwave_executor_test_base
+  torch_wave
+  GTest::gtest
+  Folly::folly
+  CUDA::cudart
+)
+
+add_test(NAME torchwave_packed_input_test COMMAND torchwave_packed_input_test)
+
 add_executable(torchwave_alloc_group_test AllocGroupTest.cpp)
 
 target_link_libraries(torchwave_alloc_group_test torch_wave GTest::gtest Folly::folly CUDA::cudart)

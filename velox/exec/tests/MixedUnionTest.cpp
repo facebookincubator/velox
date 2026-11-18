@@ -53,10 +53,7 @@ TEST_F(MixedUnionTest, basicUnion) {
       planNodeIdGenerator);
 
   assertQuery(
-      CursorParameters{
-          .planNode = unionNode,
-          .maxDrivers = 1,
-      },
+      unionNode,
       "VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e'), (6, 'f')");
 }
 
@@ -71,12 +68,7 @@ TEST_F(MixedUnionTest, singleSource) {
       {PlanBuilder(planNodeIdGenerator).values({data}).planNode()},
       planNodeIdGenerator);
 
-  assertQuery(
-      CursorParameters{
-          .planNode = unionNode,
-          .maxDrivers = 1,
-      },
-      "VALUES (1, 'a'), (2, 'b'), (3, 'c')");
+  assertQuery(unionNode, "VALUES (1, 'a'), (2, 'b'), (3, 'c')");
 }
 
 TEST_F(MixedUnionTest, emptyFirstSource) {
@@ -93,12 +85,7 @@ TEST_F(MixedUnionTest, emptyFirstSource) {
        PlanBuilder(planNodeIdGenerator).values({data}).planNode()},
       planNodeIdGenerator);
 
-  assertQuery(
-      CursorParameters{
-          .planNode = unionNode,
-          .maxDrivers = 1,
-      },
-      "VALUES (1, 'a'), (2, 'b')");
+  assertQuery(unionNode, "VALUES (1, 'a'), (2, 'b')");
 }
 
 TEST_F(MixedUnionTest, emptyLastSource) {
@@ -115,12 +102,7 @@ TEST_F(MixedUnionTest, emptyLastSource) {
        PlanBuilder(planNodeIdGenerator).values({emptyData}).planNode()},
       planNodeIdGenerator);
 
-  assertQuery(
-      CursorParameters{
-          .planNode = unionNode,
-          .maxDrivers = 1,
-      },
-      "VALUES (1, 'a'), (2, 'b')");
+  assertQuery(unionNode, "VALUES (1, 'a'), (2, 'b')");
 }
 
 TEST_F(MixedUnionTest, allEmptySources) {
@@ -158,12 +140,7 @@ TEST_F(MixedUnionTest, multipleInputs) {
        PlanBuilder(planNodeIdGenerator).values({data3}).planNode()},
       planNodeIdGenerator);
 
-  assertQuery(
-      CursorParameters{
-          .planNode = unionNode,
-          .maxDrivers = 1,
-      },
-      "VALUES (1, 'a'), (2, 'b'), (3, 'c')");
+  assertQuery(unionNode, "VALUES (1, 'a'), (2, 'b'), (3, 'c')");
 }
 
 TEST_F(MixedUnionTest, manySources) {

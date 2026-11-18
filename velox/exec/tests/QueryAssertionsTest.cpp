@@ -15,11 +15,11 @@
  */
 #include <gtest/gtest-spi.h>
 
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/type/Variant.h"
-#include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox::exec;
@@ -33,15 +33,12 @@ class QueryAssertionsTest : public OperatorTestBase {
   void assertQueryWithThreadingConfigs(
       const core::PlanNodePtr& plan,
       const std::string& duckDbSql) {
-    CursorParameters parallelParams{};
-    parallelParams.planNode = plan;
-    parallelParams.serialExecution = false;
-    assertQuery(parallelParams, duckDbSql);
-
-    CursorParameters serialParams{};
-    serialParams.planNode = plan;
-    serialParams.serialExecution = true;
-    assertQuery(serialParams, duckDbSql);
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .serialExecution(false)
+        .assertResults(duckDbSql);
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .serialExecution(true)
+        .assertResults(duckDbSql);
   }
 };
 
@@ -585,31 +582,6 @@ TEST_F(QueryAssertionsTest, intervalDayTime) {
   createDuckDbTable({data});
   plan = PlanBuilder().values({data}).planNode();
   assertQueryWithThreadingConfigs(plan, "SELECT * FROM tmp");
-}
-
-TEST_F(QueryAssertionsTest, plansWithEqualResults) {
-  VectorFuzzer::Options opts;
-  VectorFuzzer fuzzer(opts, pool());
-
-  auto input = fuzzer.fuzzInputRow(ROW({"c0"}, {INTEGER()}));
-  auto plan1 = PlanBuilder().values({input}).orderBy({"c0"}, false).planNode();
-
-  // The input plan has 100 rows. So the limit has no effect here.
-  auto plan2 = PlanBuilder()
-                   .values({input})
-                   .orderBy({"c0"}, false)
-                   .limit(0, 100, false)
-                   .planNode();
-  assertEqualResults(plan1, plan2);
-
-  // The limit drops 50 result rows from the original plan.
-  plan2 = PlanBuilder()
-              .values({input})
-              .orderBy({"c0"}, false)
-              .limit(0, 50, false)
-              .planNode();
-  EXPECT_NONFATAL_FAILURE(
-      assertEqualResults(plan1, plan2), "Expected 100, got 50");
 }
 
 } // namespace facebook::velox::test

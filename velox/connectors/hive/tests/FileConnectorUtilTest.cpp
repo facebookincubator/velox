@@ -342,6 +342,46 @@ TEST_F(FileConnectorUtilTest, configureReaderOptionsWithoutReaderFactory) {
   EXPECT_EQ(readerOptions.formatSpecificOptions(), nullptr);
 }
 
+TEST_F(FileConnectorUtilTest, configureReaderOptionsNimbleLazyFileStats) {
+  auto fileConfig = makeFileConfig();
+  auto split = makeSplit(dwio::common::FileFormat::NIMBLE);
+
+  // Set in the session.
+  {
+    auto holder = makeConnectorQueryCtx(
+        {{connector::FileConfig::kNimbleLazyFileStatsSession, "true"}});
+    dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    connector::configureReaderOptions(
+        fileConfig,
+        holder.ctx.get(),
+        /*fileSchema=*/nullptr,
+        split,
+        /*tableParameters=*/{},
+        readerOptions);
+
+    EXPECT_TRUE(readerOptions.nimbleLazyFileStats());
+  }
+
+  // Absent: defaults to false.
+  {
+    auto holder = makeConnectorQueryCtx();
+    dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    connector::configureReaderOptions(
+        fileConfig,
+        holder.ctx.get(),
+        /*fileSchema=*/nullptr,
+        split,
+        /*tableParameters=*/{},
+        readerOptions);
+
+    EXPECT_FALSE(readerOptions.nimbleLazyFileStats());
+  }
+}
+
 TEST_F(FileConnectorUtilTest, configureRowReaderOptions) {
   auto holder = makeConnectorQueryCtx();
   auto fileConfig = makeFileConfig();
@@ -471,6 +511,43 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSplitRange) {
 
   EXPECT_EQ(rowReaderOptions.offset(), 100);
   EXPECT_EQ(rowReaderOptions.length(), 5000);
+  EXPECT_FALSE(rowReaderOptions.splitRowRange().has_value());
+}
+
+TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSplitRowRange) {
+  auto holder = makeConnectorQueryCtx();
+  auto fileConfig = makeFileConfig();
+  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+  auto rowType = ROW({"c0"}, {BIGINT()});
+  const dwio::common::SplitRowRange splitRowRange{
+      .firstRow = 8'000, .numRows = 8'000};
+
+  auto configure = [&](dwio::common::FileFormat fileFormat) {
+    auto split = std::make_shared<connector::FileConnectorSplit>(
+        "testConnectorId", "/tmp/testfile", fileFormat);
+    split->splitRowRange = splitRowRange;
+    dwio::common::RowReaderOptions rowReaderOptions;
+    connector::configureRowReaderOptions(
+        /*tableParameters=*/{},
+        scanSpec,
+        /*metadataFilter=*/nullptr,
+        rowType,
+        split,
+        fileConfig,
+        holder.ctx->sessionProperties(),
+        /*ioExecutor=*/nullptr,
+        rowReaderOptions);
+    return rowReaderOptions;
+  };
+
+  EXPECT_EQ(
+      configure(dwio::common::FileFormat::NIMBLE).splitRowRange(),
+      splitRowRange);
+  EXPECT_EQ(
+      configure(dwio::common::FileFormat::DWRF).splitRowRange(), splitRowRange);
+  VELOX_ASSERT_THROW(
+      configure(dwio::common::FileFormat::PARQUET),
+      "Split row ranges are only supported for Nimble and DWRF files");
 }
 
 TEST_F(FileConnectorUtilTest, testFiltersNoFilters) {

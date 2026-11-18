@@ -2612,6 +2612,10 @@ void registerBuiltins() {
       .elementwise()
       .normalize(resolveNanToNumDefaults)
       .registerOp();
+  MetadataBuilder("torch.ops.aten.nan_to_num_.default")
+      .elementwise()
+      .normalize(resolveNanToNumDefaults)
+      .registerOp();
 
   // logit (inverse sigmoid): log(self / (1 - self)), with an optional eps that
   // clamps self to [eps, 1 - eps]. Elementwise; resolveLogitDefault turns a
@@ -3022,6 +3026,34 @@ void registerBuiltins() {
       .deviceFunc("arange_mem")
       .outputConstraints(rank1Constraint)
       .hasDtypeTemplateParam()
+      .registerOp();
+
+  // tw.unpack_slot: the 'size' int64 values of slot 'slot' of a packed input
+  // (PackedInput.h), decoded to memory by a device function. It replaces one
+  // output of the split of a packed input, so 'size' is that output's split
+  // size. Like tw.arange_mem, it is sized by its reserve from 'size', a size
+  // argument whose value is on the host when the reserve runs. 'slot' is a
+  // constant, so the decodes of all slots of a packed input are one op.
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.unpack_slot",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("size", c10::IntType::get()),
+              c10::Argument("packed", c10::TensorType::get()),
+              c10::Argument("slot", c10::IntType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .argumentMeta(
+          {{.isRegister = false}, {.isRegister = false}, {.isRegister = false}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserve = scalarLengthReserve,
+            .reserveInputs = {.scalars = {"size"}}}})
+      .headerFile("velox/experimental/torchwave/Unpack.cuh")
+      .deviceFunc("unpack_slot")
+      .outputConstraints(rank1Constraint)
       .registerOp();
 
   MetadataBuilder("torch.ops.aten.arange.start")
@@ -4433,6 +4465,44 @@ void registerBuiltins() {
             constraint.rank =
                 static_cast<int8_t>(inputRank - (endDim - startDim));
             return {constraint};
+          })
+      // A flatten that merges nothing is its input. One that merges every dim
+      // is reshape(self, [-1]), which is a view of a contiguous input and a
+      // copy of any other.
+      .maybeReplace(
+          [](NodeCP node,
+             ValueTypes& types,
+             WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
+            auto* self = inputAt(node, 0);
+            const auto selfId = self->id();
+            if (selfId >= static_cast<int>(types.types.size()) ||
+                !types.types[selfId] || types.rank(self) < 1) {
+              return {};
+            }
+            const int64_t inputRank = types.rank(self);
+            auto dim = [&](const char* name, int64_t defaultDim) {
+              const auto* attr = node->tryGetAttribute(name);
+              const auto value =
+                  attr ? std::get<int64_t>(attr->value) : defaultDim;
+              return value < 0 ? value + inputRank : value;
+            };
+            const auto startDim = dim("start_dim", 0);
+            const auto endDim = dim("end_dim", -1);
+            if (startDim >= endDim) {
+              return {{node->outputs()[0], self}};
+            }
+            if (startDim != 0 || endDim != inputRank - 1) {
+              return {};
+            }
+            auto* graph = waveGraph.graph();
+            auto* reshape = graph->createNode(
+                "torch.ops.aten.reshape.default", {{"self", self}});
+            reshape->addAttribute({"shape", std::vector<int64_t>{-1}});
+            graph->insertBefore(reshape, const_cast<nativert::Node*>(node));
+            auto* output = waveGraph.newTensorValue(
+                reshape, "flatten", types.types[selfId]->dtype());
+            types.constraints.at(output->id()).rank = 1;
+            return {{node->outputs()[0], output}};
           })
       .registerOp();
 

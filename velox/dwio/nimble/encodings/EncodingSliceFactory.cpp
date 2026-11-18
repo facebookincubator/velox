@@ -36,6 +36,7 @@
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/ReversedEncoding.h"
 #include "velox/dwio/nimble/encodings/SequenceEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
@@ -308,6 +309,20 @@ std::string_view slicePartitionedEliasFano(
           encoded, offset, length, buffer, options));
 }
 
+std::string_view sliceReversed(
+    std::string_view encoded,
+    DataType dataType,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  // NOLINTNEXTLINE(clang-diagnostic-switch-enum)
+  NIMBLE_RETURN_BY_INTEGER_DATA_TYPE(
+      dataType,
+      T,
+      ReversedEncoding<T>::slice(encoded, offset, length, buffer, options));
+}
+
 std::string_view slicePFOR(
     std::string_view encoded,
     DataType dataType,
@@ -441,6 +456,8 @@ std::string_view EncodingSliceFactory::slice(
           encoded, dataType, offset, length, buffer, options);
     case EncodingType::Sequence:
       return sliceSequence(encoded, dataType, offset, length, buffer, options);
+    case EncodingType::Reversed:
+      return sliceReversed(encoded, dataType, offset, length, buffer, options);
     case EncodingType::PFOR:
       return slicePFOR(encoded, dataType, offset, length, buffer, options);
     case EncodingType::SimdForBitpack:

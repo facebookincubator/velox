@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
+#include "velox/dwio/common/RoaringBitmapView.h"
 
 namespace facebook::velox::config {
 class ConfigBase;
@@ -46,9 +47,10 @@ namespace facebook::velox::connector::hive::iceberg {
 ///   Detected by checking if the first 8 bytes match a 32-bit cookie (12346
 ///   or 12347).
 ///
-/// Loading validates the container headers and keeps each container in its
-/// serialized form instead of expanding every deleted row. Each batch's delete
-/// bitmap is then filled straight from the containers it overlaps.
+/// Loading unwraps the blob and parses the bitmap with RoaringBitmapView, which
+/// keeps each container in its serialized form instead of expanding every
+/// deleted row. Each batch's delete bitmap is then filled straight from the
+/// containers it overlaps.
 class DeletionVectorReader {
  public:
   /// @param dvFile Iceberg delete file metadata containing the Puffin file
@@ -91,33 +93,11 @@ class DeletionVectorReader {
   static constexpr int32_t kDvLengthFieldId = 101;
 
  private:
-  // Encoding of one 64K-row container in the portable Roaring format.
-  enum class ContainerKind : uint8_t { kArray, kBitset, kRun };
-
-  // One Roaring container, kept in its serialized form.
-  struct Container {
-    // First row position the container covers.
-    int64_t base;
-    // Largest deleted row position in the container, or base - 1 if the
-    // container selects nothing.
-    int64_t lastPosition;
-    // Offset of the container payload within the roaring bitmap bytes.
-    size_t dataOffset;
-    // Number of values for kArray, number of runs for kRun, unused for
-    // kBitset.
-    uint32_t count;
-    ContainerKind kind;
-  };
-
   void loadBitmap();
 
-  // Parses the container headers of a 64-bit or legacy 32-bit roaring bitmap.
+  // Detects whether the bitmap is a 64-bit or legacy 32-bit roaring bitmap and
+  // parses it into bitmap_.
   void parseRoaringBitmap();
-
-  // Parses one 32-bit roaring bitmap starting at 'offset' within the bitmap
-  // bytes and returns the offset just past it. Positions are offset by
-  // 'highBitsOffset' (upper 32 bits for 64-bit mode, 0 for legacy mode).
-  size_t parse32BitRoaringBitmap(size_t offset, int64_t highBitsOffset);
 
   const uint8_t* bitmapData() const {
     return reinterpret_cast<const uint8_t*>(blob_.data()) + bitmapOffset_;
@@ -148,11 +128,8 @@ class DeletionVectorReader {
   size_t bitmapOffset_{0};
   size_t bitmapSize_{0};
 
-  // Containers in increasing row order.
-  std::vector<Container> containers_;
-
-  // First container that may still hold positions at or after the next batch.
-  size_t containerIndex_{0};
+  // The roaring bitmap inside 'blob_'.
+  dwio::common::RoaringBitmapView bitmap_;
 
   // Expanded positions, built only by deletedPositions().
   std::vector<int64_t> deletedPositions_;
