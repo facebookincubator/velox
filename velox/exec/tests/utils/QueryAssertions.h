@@ -271,14 +271,6 @@ std::shared_ptr<Task> assertQuery(
     DuckDbQueryRunner& duckDbQueryRunner,
     std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
 
-std::shared_ptr<Task> assertQueryReturnsEmptyResult(
-    const core::PlanNodePtr& plan);
-
-std::shared_ptr<Task> assertQueryReturnsEmptyResult(
-    const CursorParameters& params);
-
-void assertEmptyResults(const std::vector<RowVectorPtr>& results);
-
 void assertResults(
     const std::vector<RowVectorPtr>& results,
     const RowTypePtr& resultType,
@@ -349,8 +341,6 @@ void assertEqualTypeAndNumRows(
     const TypePtr& expectedType,
     vector_size_t expectedNumRows,
     const std::vector<RowVectorPtr>& actual);
-
-void printResults(const RowVectorPtr& result, std::ostream& out);
 
 /// Aggregates operator stats by operator type. If a task has more than one plan
 /// nodes having the same operator types, then their operator stats are merged
