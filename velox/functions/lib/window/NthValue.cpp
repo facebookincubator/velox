@@ -83,7 +83,7 @@ class NthValueFunction : public exec::WindowFunction {
       const BufferPtr& frameEnds,
       const SelectivityVector& validRows,
       int32_t resultOffset,
-      const VectorPtr& result) override {
+      VectorPtr& result) override {
     auto numRows = frameStarts->size() / sizeof(vector_size_t);
 
     // When value is a constant null and IGNORE NULLS is set, the result is

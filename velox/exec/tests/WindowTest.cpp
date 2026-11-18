@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/Window.h"
+#include <folly/String.h>
 #include <folly/system/HardwareConcurrency.h>
 #include <gmock/gmock.h>
 #include "velox/common/base/Exceptions.h"
@@ -30,6 +31,7 @@
 #include "velox/exec/window/SortWindowBuild.h"
 #include "velox/exec/window/VectorWindowPartition.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
+#include "velox/vector/DecodedVector.h"
 #include "velox/vector/LazyVector.h"
 #include "velox/vector/SimpleVector.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -41,6 +43,17 @@ using namespace facebook::velox::exec::test;
 namespace facebook::velox::exec {
 using namespace facebook::velox::common::testutil;
 namespace {
+
+// Formats a window function whose frame covers the entire partition.
+std::string wholePartitionFunction(
+    std::string_view function,
+    std::string_view frameType) {
+  return fmt::format(
+      "{} over (partition by p order by s {} between unbounded "
+      "preceding and unbounded following)",
+      function,
+      frameType);
+}
 
 class WindowTest : public OperatorTestBase {
  public:
@@ -74,6 +87,123 @@ class WindowTest : public OperatorTestBase {
         "none",
         0,
         prefixSortConfig);
+  }
+
+  RowVectorPtr makePartitionResultInput(
+      const std::vector<vector_size_t>& partitionSizes,
+      bool nullable = false,
+      bool peers = false) {
+    std::vector<int32_t> partitions;
+    std::vector<int32_t> order;
+    std::vector<std::optional<int64_t>> values;
+    for (auto p = 0; p < partitionSizes.size(); ++p) {
+      for (vector_size_t i = 0; i < partitionSizes[p]; ++i) {
+        partitions.push_back(p);
+        order.push_back(peers ? i / 2 : i);
+        values.push_back(
+            nullable && (p % 3 == 0 || (p == 1 && i % 2 == 0))
+                ? std::nullopt
+                : std::optional<int64_t>(100 * p + i + 1));
+      }
+    }
+    return makeRowVector(
+        {"p", "s", "d"},
+        {makeFlatVector<int32_t>(partitions),
+         makeFlatVector<int32_t>(order),
+         makeNullableFlatVector<int64_t>(values)});
+  }
+
+  void assertWindowResultBatches(
+      CursorParameters params,
+      const std::string& sql,
+      const std::function<void(const std::vector<RowVectorPtr>&)>& check) {
+    // Keep original outputs, including their encodings, until the query ends.
+    params.copyResult = false;
+    params.maxDrivers = 1;
+    auto [cursor, results] = readCursor(params);
+    test::assertResults(
+        results, params.planNode->outputType(), sql, duckDbQueryRunner_);
+    check(results);
+  }
+
+  void checkPartitionResultEncoding(const RowVectorPtr& batch) {
+    DecodedVector partitions(*batch->childAt(0));
+    vector_size_t numPartitions = 1;
+    for (vector_size_t row = 1; row < batch->size(); ++row) {
+      numPartitions += partitions.valueAt<int32_t>(row) !=
+          partitions.valueAt<int32_t>(row - 1);
+    }
+    for (auto column : {3, 4}) {
+      const auto& result = batch->childAt(column);
+      if (numPartitions == 1) {
+        EXPECT_TRUE(result->isConstantEncoding());
+        continue;
+      }
+      ASSERT_EQ(result->encoding(), VectorEncoding::Simple::DICTIONARY);
+      EXPECT_EQ(result->valueVector()->size(), numPartitions);
+      const auto* indices = result->wrapInfo()->as<vector_size_t>();
+      vector_size_t expectedIndex = 0;
+      for (vector_size_t row = 0; row < batch->size(); ++row) {
+        if (row > 0 &&
+            partitions.valueAt<int32_t>(row) !=
+                partitions.valueAt<int32_t>(row - 1)) {
+          ++expectedIndex;
+        }
+        EXPECT_EQ(indices[row], expectedIndex) << "row " << row;
+      }
+    }
+  }
+
+  void assertPartitionResults(
+      const std::vector<RowVectorPtr>& input,
+      const std::vector<std::string>& functions,
+      bool streaming,
+      const std::vector<vector_size_t>& expectedBatchSizes = {}) {
+    PlanBuilder builder;
+    builder.values(input);
+    if (streaming) {
+      builder.streamingWindow(functions);
+    } else {
+      builder.window(functions);
+    }
+    CursorParameters params;
+    params.planNode = builder.planNode();
+    params.queryConfigs = {
+        {core::QueryConfig::kPreferredOutputBatchRows, "4"},
+        {core::QueryConfig::kMaxOutputBatchRows, "4"},
+        {core::QueryConfig::kPreferredOutputBatchBytes, "1048576"}};
+    assertWindowResultBatches(
+        params,
+        fmt::format("SELECT *, {} FROM tmp", folly::join(", ", functions)),
+        [&](const auto& batches) {
+          std::vector<vector_size_t> sizes;
+          for (const auto& batch : batches) {
+            sizes.push_back(batch->size());
+            checkPartitionResultEncoding(batch);
+          }
+          if (!streaming && !expectedBatchSizes.empty()) {
+            EXPECT_EQ(sizes, expectedBatchSizes);
+          }
+        });
+  }
+
+  void testPartitionResultEncoding(
+      const std::vector<vector_size_t>& partitionSizes,
+      const std::vector<vector_size_t>& expectedBatchSizes) {
+    auto data = makePartitionResultInput(partitionSizes);
+    createDuckDbTable({data});
+    for (bool streaming : {false, true}) {
+      for (const auto* frameType : {"rows", "range"}) {
+        SCOPED_TRACE(
+            fmt::format("streaming={}, frame={}", streaming, frameType));
+        std::vector<std::string> functions;
+        for (const auto* function : {"sum(d)", "count(d)"}) {
+          functions.push_back(wholePartitionFunction(function, frameType));
+        }
+        assertPartitionResults(
+            split(data, 2), functions, streaming, expectedBatchSizes);
+      }
+    }
   }
 
   const std::shared_ptr<folly::Executor> executor_{
@@ -158,6 +288,70 @@ class TestingRowsStreamingWindowBuild
     return data_ != nullptr;
   }
 };
+
+TEST_F(WindowTest, aggregatePartitionResultSinglePartition) {
+  testPartitionResultEncoding({9}, {4, 4, 1});
+}
+
+TEST_F(WindowTest, aggregatePartitionResultAcrossPartitions) {
+  testPartitionResultEncoding({3, 4, 5, 1, 1, 2, 2}, {4, 4, 4, 4, 2});
+}
+
+TEST_F(WindowTest, aggregatePartitionResultSingleRowPartitions) {
+  testPartitionResultEncoding({1, 1, 1, 1}, {4});
+}
+
+TEST_F(WindowTest, aggregatePartitionResultRetainedComplexValues) {
+  for (const auto& partitionSizes :
+       {std::vector<vector_size_t>{9},
+        std::vector<vector_size_t>{3, 4, 5, 1, 1, 2, 2}}) {
+    auto keys = makePartitionResultInput(partitionSizes);
+    auto strings = makeFlatVector<std::string>(keys->size(), [](auto row) {
+      return std::string(256, 'a' + row % 26) + std::to_string(row);
+    });
+    auto data = makeRowVector(
+        {"p", "s", "d"}, {keys->childAt(0), keys->childAt(1), strings});
+    createDuckDbTable({data});
+    for (bool streaming : {false, true}) {
+      for (const auto* frameType : {"rows", "range"}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "partitions={}, streaming={}, frame={}",
+                partitionSizes.size(),
+                streaming,
+                frameType));
+        std::vector<std::string> functions;
+        for (const auto* function : {"array_agg(d)", "max(d)"}) {
+          functions.push_back(wholePartitionFunction(function, frameType));
+        }
+        // Retain every original batch until execution finishes, then verify
+        // array elements and out-of-line string buffers against DuckDB.
+        assertPartitionResults(split(data, 2), functions, streaming);
+      }
+    }
+  }
+}
+
+TEST_F(WindowTest, aggregatePartitionResultMixedFrames) {
+  for (bool peers : {false, true}) {
+    auto data = makePartitionResultInput({3, 5, 1, 6}, true, peers);
+    createDuckDbTable({data});
+    std::vector<std::string> functions = {
+        "sum(d) over (partition by p order by s rows between unbounded preceding and unbounded following)",
+        "count(d) over (partition by p order by s rows between unbounded preceding and unbounded following)",
+        "sum(d) over (partition by p order by s)"};
+    // ROWS frames and row_number require unique ordering against DuckDB.
+    if (!peers) {
+      functions.push_back(
+          "sum(d) over (partition by p order by s rows between unbounded preceding and 2 following)");
+      functions.push_back("row_number() over (partition by p order by s)");
+    }
+    for (bool streaming : {false, true}) {
+      SCOPED_TRACE(fmt::format("streaming={}, peers={}", streaming, peers));
+      assertPartitionResults(split(data, 3), functions, streaming);
+    }
+  }
+}
 
 TEST_F(WindowTest, spill) {
   const vector_size_t size = 1'000;
