@@ -22,6 +22,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -706,7 +707,7 @@ TEST_F(ScaleWriterLocalPartitionTest, unpartitionBasic) {
     task.reset();
 
     verifyResults(inputVectors, {result});
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -772,7 +773,7 @@ TEST_P(ScaleWriterLocalPartitionTestParametrized, unpartitionFuzzer) {
                 "256")
             .copyResults(pool_.get());
     verifyResults(inputVectors, {result});
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -946,7 +947,7 @@ TEST_F(ScaleWriterLocalPartitionTest, partitionBasic) {
     task.reset();
 
     verifyResults(inputVectors, {result});
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -1017,7 +1018,7 @@ TEST_P(ScaleWriterLocalPartitionTestParametrized, partitionFuzzer) {
                 "32")
             .copyResults(pool_.get());
     verifyResults(inputVectors, {result});
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 

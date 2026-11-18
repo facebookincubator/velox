@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -40,10 +41,10 @@ class TopNTest : public OperatorTestBase {
       auto plan =
           PlanBuilder().values(input).topN({sql}, limit, false).planNode();
 
-      assertQueryOrdered(
-          plan,
-          fmt::format("SELECT * FROM tmp ORDER BY {} LIMIT {}", sql, limit),
-          {keyIndex});
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .assertResults(
+              fmt::format("SELECT * FROM tmp ORDER BY {} LIMIT {}", sql, limit),
+              std::vector<uint32_t>{keyIndex});
     }
   }
 
@@ -64,11 +65,13 @@ class TopNTest : public OperatorTestBase {
                       .topN({sql}, 10, false)
                       .planNode();
 
-      assertQueryOrdered(
-          plan,
-          fmt::format(
-              "SELECT * FROM tmp WHERE {} ORDER BY {} LIMIT 10", filter, sql),
-          {keyIndex});
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .assertResults(
+              fmt::format(
+                  "SELECT * FROM tmp WHERE {} ORDER BY {} LIMIT 10",
+                  filter,
+                  sql),
+              std::vector<uint32_t>{keyIndex});
     }
   }
 
@@ -92,14 +95,14 @@ class TopNTest : public OperatorTestBase {
                         .topN({sql1, sql2}, limit, false)
                         .planNode();
 
-        assertQueryOrdered(
-            plan,
-            fmt::format(
-                "SELECT * FROM tmp ORDER BY {}, {} LIMIT {}",
-                sql1,
-                sql2,
-                limit),
-            keyIndices);
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .assertResults(
+                fmt::format(
+                    "SELECT * FROM tmp ORDER BY {}, {} LIMIT {}",
+                    sql1,
+                    sql2,
+                    limit),
+                keyIndices);
       }
     }
   }

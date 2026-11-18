@@ -27,6 +27,7 @@
 
 #include <cstddef>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <bit>
 
@@ -1246,8 +1247,8 @@ class ReadWithVisitorTest : public ::testing::Test,
       bool nullable,
       bool nullAllowed) {
     using Bits = std::conditional_t<sizeof(T) == 4, uint32_t, uint64_t>;
-    constexpr Bits kNaNBits =
-        sizeof(T) == 4 ? 0x7fc00000ULL : 0x7ff8000000000000ULL;
+    constexpr Bits kNaNBits = static_cast<Bits>(
+        sizeof(T) == 4 ? 0x7fc00000ULL : 0x7ff8000000000000ULL);
     constexpr Bits kSignBit = Bits{1} << (sizeof(T) * 8 - 1);
     constexpr vector_size_t kRows{257};
     std::vector<T> data(kRows);
@@ -4445,6 +4446,181 @@ TEST_F(ReadWithVisitorTest, encodingLevelFixedBitWidthBigintRangeSparse) {
     EXPECT_GE(values[i], 5);
     EXPECT_LE(values[i], 10);
   }
+}
+
+TEST_F(ReadWithVisitorTest, encodingLevelReversedBigintRangeSparse) {
+  // Descends across zero over several of the batches Reversed decodes at once,
+  // so the sparse rows skip within and across batches. With nulls, the visitor
+  // also counts the non-null rows to skip in the nested Reversed stream.
+  constexpr int kRows = 3'000;
+  const auto value = [](auto row) { return int64_t{1'000} - row; };
+  const EncodingLayout layout{
+      EncodingType::Reversed,
+      {},
+      CompressionType::Uncompressed,
+      {EncodingLayout{
+          EncodingType::EliasFano, {}, CompressionType::Uncompressed}}};
+
+  for (const bool nullable : {false, true}) {
+    SCOPED_TRACE(fmt::format("nullable={}", nullable));
+    const auto isNull = [&](auto row) { return nullable && row % 7 == 0; };
+
+    auto input = makeRowVector({makeFlatVector<int64_t>(kRows, value)});
+    auto rowType = asRowType(input->type());
+    auto ctx = makeFileContext(input);
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*rowType);
+    scanSpec->childByName("c0")->setFilter(
+        std::make_unique<common::BigintRange>(-1'500, 500, false));
+    auto root = buildReader(*ctx, rowType, *scanSpec);
+
+    auto* structReader =
+        dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(
+            root.get());
+    auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+        dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+    ASSERT_NE(reader, nullptr);
+
+    std::vector<vector_size_t> rowVec;
+    for (int i = 0; i < kRows; i += 3) {
+      rowVec.push_back(i);
+    }
+    RowSet rows(rowVec.data(), rowVec.size());
+
+    reader->doPrepareRead<int64_t>(0, rows, nullptr);
+
+    std::vector<int64_t> nonNullValues;
+    Vector<bool> notNulls(pool(), kRows, true);
+    for (int row = 0; row < kRows; ++row) {
+      notNulls[row] = !isNull(row);
+      if (!isNull(row)) {
+        nonNullValues.push_back(value(row));
+      }
+    }
+    Buffer buffer(*pool());
+    const auto encoded = encodeConstantTestChunk(
+        layout, nonNullValues, notNulls, nullable, buffer);
+    auto encoding = EncodingFactory().create(
+        *pool(), encoded, nullptr, Encoding::Options{});
+    ASSERT_EQ(
+        encoding->encodingType(),
+        nullable ? EncodingType::Nullable : EncodingType::Reversed);
+
+    common::BigintRange filter(-1'500, 500, false);
+    dwio::common::ExtractToReader extractValues(reader);
+    constexpr bool kIsDense = false;
+    DecoderVisitor<
+        int64_t,
+        common::BigintRange,
+        dwio::common::ExtractToReader,
+        kIsDense>
+        visitor(filter, reader, rows, extractValues);
+    auto params = makeReadWithVisitorParams(visitor, rows, pool());
+
+    dispatchCallReadWithVisitor(*encoding, visitor, params);
+
+    std::vector<int64_t> expectedValues;
+    for (const auto row : rowVec) {
+      if (!isNull(row) && value(row) >= -1'500 && value(row) <= 500) {
+        expectedValues.push_back(value(row));
+      }
+    }
+    ASSERT_EQ(reader->numValues(), expectedValues.size());
+    EXPECT_THAT(
+        getValues<int64_t>(reader), testing::ElementsAreArray(expectedValues));
+  }
+}
+
+TEST_F(
+    ReadWithVisitorTest,
+    encodingLevelReversedMixedReadOperationsPreservePosition) {
+  constexpr uint32_t kRows = 3'000;
+  const auto value = [](auto row) { return int64_t{1'000} - row; };
+  std::vector<int64_t> data(kRows);
+  for (uint32_t row = 0; row < kRows; ++row) {
+    data[row] = value(row);
+  }
+  auto input = makeRowVector({makeFlatVector<int64_t>(kRows, value)});
+  auto rowType = asRowType(input->type());
+  auto ctx = makeFileContext(input);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  auto root = buildReader(*ctx, rowType, *scanSpec);
+  auto* structReader =
+      dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(root.get());
+  ASSERT_NE(structReader, nullptr);
+  auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+      dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+  ASSERT_NE(reader, nullptr);
+
+  const EncodingLayout layout{
+      EncodingType::Reversed,
+      {},
+      CompressionType::Uncompressed,
+      {EncodingLayout{
+          EncodingType::EliasFano, {}, CompressionType::Uncompressed}}};
+  Buffer buffer(*pool());
+  auto encoding = createFromCustomLayout(layout, data, *pool(), buffer);
+  ASSERT_EQ(encoding->encodingType(), EncodingType::Reversed);
+  const std::vector<vector_size_t> rowNumbers{0, 1, 2};
+  const RowSet rows(rowNumbers.data(), rowNumbers.size());
+  const auto readFirstRows = [&]() {
+    reader->doPrepareRead<int64_t>(0, rows, nullptr);
+    common::AlwaysTrue filter;
+    dwio::common::ExtractToReader extractValues(reader);
+    DecoderVisitor<
+        int64_t,
+        common::AlwaysTrue,
+        dwio::common::ExtractToReader,
+        /*isDense=*/true>
+        visitor(filter, reader, rows, extractValues);
+    auto params = makeReadWithVisitorParams(visitor, rows, pool());
+    dispatchCallReadWithVisitor(*encoding, visitor, params);
+    ASSERT_EQ(visitor.rowIndex(), rows.size());
+    ASSERT_EQ(reader->numValues(), rows.size());
+    EXPECT_THAT(
+        getValues<int64_t>(reader),
+        testing::ElementsAreArray(data.begin(), data.begin() + rows.size()));
+  };
+  uint32_t position{0};
+  const auto checkMaterialize = [&](uint32_t numRows) {
+    SCOPED_TRACE(fmt::format("position={}, numRows={}", position, numRows));
+    std::vector<int64_t> output(numRows);
+    encoding->materialize(numRows, output.data());
+    EXPECT_THAT(
+        output,
+        testing::ElementsAreArray(
+            data.begin() + position, data.begin() + position + numRows));
+    position += numRows;
+  };
+
+  // Leave unread rows in the visitor's first decoded batch.
+  readFirstRows();
+  position = static_cast<uint32_t>(rows.size());
+  checkMaterialize(7);
+  encoding->skip(1'010);
+  position += 1'010;
+
+  // Consume both the decoded batch's tail and rows from the nested stream.
+  checkMaterialize(20);
+  encoding->skip(1'100);
+  position += 1'100;
+  checkMaterialize(kRows - position);
+
+  // Skip across the decoded batch's tail into the nested stream.
+  encoding->reset();
+  readFirstRows();
+  position = static_cast<uint32_t>(rows.size());
+  encoding->skip(1'050);
+  position += 1'050;
+  checkMaterialize(17);
+
+  // Reset while the visitor still has unread rows in its decoded batch.
+  encoding->reset();
+  readFirstRows();
+  encoding->reset();
+  position = 0;
+  checkMaterialize(kRows);
 }
 
 TEST_F(ReadWithVisitorTest, encodingLevelAlpFloatingPointRangeSparse) {

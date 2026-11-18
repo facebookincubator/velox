@@ -75,87 +75,34 @@ class OperatorTestBase : public virtual testing::Test,
     duckDbQueryRunner_.createTable(tableName, data);
   }
 
-  std::shared_ptr<Task> assertQueryOrdered(
-      const core::PlanNodePtr& plan,
-      const std::string& duckDbSql,
-      const std::vector<uint32_t>& sortingKeys) {
-    return test::assertQuery(plan, duckDbSql, duckDbQueryRunner_, sortingKeys);
-  }
-
-  std::shared_ptr<Task> assertQueryOrdered(
+  std::shared_ptr<Task> assertQuery(
       const CursorParameters& params,
-      const std::string& duckDbSql,
-      const std::vector<uint32_t>& sortingKeys) {
-    return test::assertQuery(
-        params,
-        [&](TaskCursor* taskCursor) { taskCursor->setNoMoreSplits(); },
-        duckDbSql,
-        duckDbQueryRunner_,
-        sortingKeys);
-  }
+      const std::string& duckDbSql);
 
-  /// Assumes plan has a single leaf node. All splits are added to that node.
-  std::shared_ptr<Task> assertQueryOrdered(
+  std::shared_ptr<Task> assertQuery(
       const core::PlanNodePtr& plan,
-      const std::vector<std::shared_ptr<connector::ConnectorSplit>>& splits,
-      const std::string& duckDbSql,
-      const std::vector<uint32_t>& sortingKeys) {
-    return assertQuery(plan, splits, duckDbSql, sortingKeys);
-  }
+      const std::string& duckDbSql);
+
+  std::shared_ptr<Task> assertQuery(
+      const core::PlanNodePtr& plan,
+      const RowVectorPtr& expectedResults);
 
   std::shared_ptr<Task> assertQuery(
       const CursorParameters& params,
-      const std::string& duckDbSql) {
-    return test::assertQuery(
-        params,
-        [&](exec::TaskCursor* taskCursor) { taskCursor->setNoMoreSplits(); },
-        duckDbSql,
-        duckDbQueryRunner_);
-  }
-
-  std::shared_ptr<Task> assertQuery(
-      const core::PlanNodePtr& plan,
-      const std::string& duckDbSql) {
-    return test::assertQuery(plan, duckDbSql, duckDbQueryRunner_);
-  }
-
-  std::shared_ptr<Task> assertQuery(
-      const core::PlanNodePtr& plan,
-      const RowVectorPtr& expectedResults) {
-    return test::assertQuery(plan, {expectedResults});
-  }
-
-  std::shared_ptr<Task> assertQuery(
-      const CursorParameters& params,
-      const RowVectorPtr& expectedResults) {
-    return test::assertQuery(params, {expectedResults});
-  }
+      const RowVectorPtr& expectedResults);
 
   /// Assumes plan has a single leaf node. All splits are added to that node.
   std::shared_ptr<Task> assertQuery(
       const core::PlanNodePtr& plan,
       const std::vector<std::shared_ptr<connector::ConnectorSplit>>&
           connectorSplits,
-      const std::string& duckDbSql,
-      std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
+      const std::string& duckDbSql);
 
   /// Assumes plan has a single leaf node. All splits are added to that node.
   std::shared_ptr<Task> assertQuery(
       const core::PlanNodePtr& plan,
       std::vector<exec::Split>&& splits,
-      const std::string& duckDbSql,
-      std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
-
-  std::shared_ptr<Task> assertQuery(
-      const core::PlanNodePtr& plan,
-      std::unordered_map<core::PlanNodeId, std::vector<exec::Split>>&& splits,
-      const std::string& duckDbSql,
-      std::optional<std::vector<uint32_t>> sortingKeys = std::nullopt);
-
-  static RowTypePtr makeRowType(std::vector<TypePtr>&& types) {
-    return velox::test::VectorMaker::rowType(
-        std::forward<std::vector<TypePtr>&&>(types));
-  }
+      const std::string& duckDbSql);
 
   static std::shared_ptr<core::FieldAccessTypedExpr> toFieldExpr(
       const std::string& name,

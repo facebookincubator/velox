@@ -55,13 +55,11 @@ class MergeTest : public OperatorTestBase {
                                .planNode()})
                       .planNode();
       // Use single source for local merge.
-      CursorParameters params;
-      params.planNode = plan;
-      params.maxDrivers = 1;
-      assertQueryOrdered(
-          params,
-          "SELECT * FROM (SELECT * FROM tmp) ORDER BY " + orderByClause,
-          {keyIndex});
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .maxDrivers(1)
+          .assertResults(
+              "SELECT * FROM (SELECT * FROM tmp) ORDER BY " + orderByClause,
+              std::vector<uint32_t>{keyIndex});
 
       // Use multiple sources for local merge.
       std::vector<std::shared_ptr<const core::PlanNode>> sources;
@@ -75,8 +73,10 @@ class MergeTest : public OperatorTestBase {
                  .localMerge({orderByClause}, std::move(sources))
                  .planNode();
 
-      assertQueryOrdered(
-          plan, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .assertResults(
+              "SELECT * FROM tmp ORDER BY " + orderByClause,
+              std::vector<uint32_t>{keyIndex});
     }
   }
 
@@ -113,13 +113,10 @@ class MergeTest : public OperatorTestBase {
                                  .planNode()})
                         .planNode();
         // Use single source for local merge.
-        CursorParameters params;
-        params.planNode = plan;
-        params.maxDrivers = 1;
-        assertQueryOrdered(
-            params,
-            "SELECT * FROM (SELECT * FROM tmp) " + orderBySql,
-            sortingKeys);
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .maxDrivers(1)
+            .assertResults(
+                "SELECT * FROM (SELECT * FROM tmp) " + orderBySql, sortingKeys);
 
         // Use multiple sources for local merge.
         std::vector<std::shared_ptr<const core::PlanNode>> sources;
@@ -133,8 +130,8 @@ class MergeTest : public OperatorTestBase {
                    .localMerge(orderByClauses, std::move(sources))
                    .planNode();
 
-        assertQueryOrdered(
-            plan, "SELECT * FROM tmp " + orderBySql, sortingKeys);
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .assertResults("SELECT * FROM tmp " + orderBySql, sortingKeys);
       }
     }
   }
@@ -165,16 +162,16 @@ class MergeTest : public OperatorTestBase {
                             .localMerge({orderByClause}, std::move(sources))
                             .capturePlanNodeId(nodeId)
                             .planNode();
-      CursorParameters params;
-      params.planNode = plan;
-      params.maxDrivers = 2;
-      params.queryCtx = createQueryCtx(
-          {{"spill_enabled", "true"},
-           {"local_merge_spill_enabled", "true"},
-           {"local_merge_max_num_merge_sources", "2"}});
-      params.spillDirectory = spillDirectory->getPath();
-      auto task = assertQueryOrdered(
-          params, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
+      auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                      .maxDrivers(2)
+                      .queryCtx(createQueryCtx(
+                          {{"spill_enabled", "true"},
+                           {"local_merge_spill_enabled", "true"},
+                           {"local_merge_max_num_merge_sources", "2"}}))
+                      .spillDirectory(spillDirectory->getPath())
+                      .assertResults(
+                          "SELECT * FROM tmp ORDER BY " + orderByClause,
+                          std::vector<uint32_t>{keyIndex});
       auto taskStats = toPlanStats(task->taskStats());
       auto& planStats = taskStats.at(nodeId);
       auto expectedNumSpillFiles = (inputVectors.size() + 2 - 1) / 2;
@@ -224,16 +221,15 @@ class MergeTest : public OperatorTestBase {
                               .localMerge({orderByClauses}, std::move(sources))
                               .capturePlanNodeId(nodeId)
                               .planNode();
-        CursorParameters params;
-        params.planNode = plan;
-        params.maxDrivers = 2;
-        params.queryCtx = createQueryCtx(
-            {{"spill_enabled", "true"},
-             {"local_merge_spill_enabled", "true"},
-             {"local_merge_max_num_merge_sources", "2"}});
-        params.spillDirectory = spillDirectory->getPath();
-        auto task = assertQueryOrdered(
-            params, "SELECT * FROM tmp " + orderBySql, sortingKeys);
+        auto task =
+            AssertQueryBuilder(plan, duckDbQueryRunner_)
+                .maxDrivers(2)
+                .queryCtx(createQueryCtx(
+                    {{"spill_enabled", "true"},
+                     {"local_merge_spill_enabled", "true"},
+                     {"local_merge_max_num_merge_sources", "2"}}))
+                .spillDirectory(spillDirectory->getPath())
+                .assertResults("SELECT * FROM tmp " + orderBySql, sortingKeys);
         auto taskStats = toPlanStats(task->taskStats());
         auto& planStats = taskStats.at(nodeId);
         auto expectedNumSpillFiles = (inputVectors.size() + 2 - 1) / 2;
@@ -300,17 +296,19 @@ class MergeTest : public OperatorTestBase {
                           .localMerge({orderByClause}, std::move(sources))
                           .capturePlanNodeId(localMergeNodeId)
                           .planNode();
-    CursorParameters params;
-    params.planNode = plan;
-    params.maxDrivers = numInputSources;
-    params.queryCtx = createQueryCtx(
-        {{"spill_enabled", "false"},
-         {"local_merge_spill_enabled", "false"},
-         {"preferred_output_batch_bytes", std::to_string(maxBatchBytes)},
-         {"preferred_output_batch_rows", std::to_string(maxBatchRows)}},
-        false);
-    auto task = assertQueryOrdered(
-        params, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
+    auto task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .maxDrivers(numInputSources)
+            .queryCtx(createQueryCtx(
+                {{"spill_enabled", "false"},
+                 {"local_merge_spill_enabled", "false"},
+                 {"preferred_output_batch_bytes",
+                  std::to_string(maxBatchBytes)},
+                 {"preferred_output_batch_rows", std::to_string(maxBatchRows)}},
+                false))
+            .assertResults(
+                "SELECT * FROM tmp ORDER BY " + orderByClause,
+                std::vector<uint32_t>{keyIndex});
 
     auto taskStats = toPlanStats(task->taskStats());
     const auto& mergeStats = taskStats.at(localMergeNodeId);
@@ -379,20 +377,22 @@ class MergeTest : public OperatorTestBase {
                           .localMerge({orderByClause}, std::move(sources))
                           .capturePlanNodeId(nodeId)
                           .planNode();
-    CursorParameters params;
-    params.planNode = plan;
-    params.maxDrivers = 2;
-    params.queryCtx = createQueryCtx(
-        {{"spill_enabled", "true"},
-         {"local_merge_spill_enabled", "true"},
-         {"local_merge_max_num_merge_sources",
-          std::to_string(numMaxMergeSources)},
-         {"preferred_output_batch_bytes", std::to_string(maxBatchBytes)},
-         {"preferred_output_batch_rows", std::to_string(maxBatchRows)}},
-        hasSpillExecutor);
-    params.spillDirectory = spillDirectory->getPath();
-    auto task = assertQueryOrdered(
-        params, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
+    auto task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .maxDrivers(2)
+            .queryCtx(createQueryCtx(
+                {{"spill_enabled", "true"},
+                 {"local_merge_spill_enabled", "true"},
+                 {"local_merge_max_num_merge_sources",
+                  std::to_string(numMaxMergeSources)},
+                 {"preferred_output_batch_bytes",
+                  std::to_string(maxBatchBytes)},
+                 {"preferred_output_batch_rows", std::to_string(maxBatchRows)}},
+                hasSpillExecutor))
+            .spillDirectory(spillDirectory->getPath())
+            .assertResults(
+                "SELECT * FROM tmp ORDER BY " + orderByClause,
+                std::vector<uint32_t>{keyIndex});
 
     auto taskStats = toPlanStats(task->taskStats());
     auto& planStats = taskStats.at(nodeId);
@@ -590,16 +590,16 @@ TEST_F(MergeTest, localMergeSpillPartialEmpty) {
                         .localMerge({orderByClause}, std::move(sources))
                         .capturePlanNodeId(nodeId)
                         .planNode();
-  CursorParameters params;
-  params.planNode = plan;
-  params.maxDrivers = 2;
-  params.queryCtx = createQueryCtx(
-      {{"spill_enabled", "true"},
-       {"local_merge_spill_enabled", "true"},
-       {"local_merge_max_num_merge_sources", "2"}});
-  params.spillDirectory = spillDirectory->getPath();
-  auto task = assertQueryOrdered(
-      params, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .maxDrivers(2)
+                  .queryCtx(createQueryCtx(
+                      {{"spill_enabled", "true"},
+                       {"local_merge_spill_enabled", "true"},
+                       {"local_merge_max_num_merge_sources", "2"}}))
+                  .spillDirectory(spillDirectory->getPath())
+                  .assertResults(
+                      "SELECT * FROM tmp ORDER BY " + orderByClause,
+                      std::vector<uint32_t>{keyIndex});
 
   auto taskStats = toPlanStats(task->taskStats());
   auto& planStats = taskStats.at(nodeId);
@@ -706,10 +706,10 @@ DEBUG_ONLY_TEST_F(MergeTest, localMergeSmallBatch) {
     promise.setValue();
   });
 
-  CursorParameters params;
-  params.planNode = plan;
-  auto task = assertQueryOrdered(
-      params, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .assertResults(
+                      "SELECT * FROM tmp ORDER BY " + orderByClause,
+                      std::vector<uint32_t>{keyIndex});
   auto taskStats = toPlanStats(task->taskStats());
   ASSERT_EQ(taskStats[nodeId].outputRows, 30);
   ASSERT_EQ(taskStats[nodeId].outputVectors, 1);
@@ -863,11 +863,11 @@ DEBUG_ONLY_TEST_F(MergeTest, localMergeStart) {
           .planNode();
 
   std::thread queryThread([&]() {
-    CursorParameters params;
-    params.planNode = plan;
-    params.queryCtx = core::QueryCtx::create(executor_.get());
-    assertQueryOrdered(
-        params, "VALUES (0), (1), (2), (3), (4), (5), (10)", {0});
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .queryCtx(core::QueryCtx::create(executor_.get()))
+        .assertResults(
+            "VALUES (0), (1), (2), (3), (4), (5), (10)",
+            std::vector<uint32_t>{0});
   });
   sourceStartCallWait.await([&]() { return !sourceStartCallWaitFlag.load(); });
   std::this_thread::sleep_for(std::chrono::milliseconds(1'000)); // NOLINT
@@ -901,12 +901,11 @@ TEST_F(MergeTest, offByOne) {
               })
           .planNode();
 
-  CursorParameters params;
-  params.planNode = plan;
-  params.queryCtx = core::QueryCtx::create(executor_.get());
-  params.queryCtx->testingOverrideConfigUnsafe(
-      {{core::QueryConfig::kPreferredOutputBatchRows, "6"}});
-  assertQueryOrdered(params, "VALUES (0), (1), (2), (3), (4), (5), (10)", {0});
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "6")
+      .assertResults(
+          "VALUES (0), (1), (2), (3), (4), (5), (10)",
+          std::vector<uint32_t>{0});
 }
 
 TEST_F(MergeTest, localMergeOutputSizeWithoutSpill) {

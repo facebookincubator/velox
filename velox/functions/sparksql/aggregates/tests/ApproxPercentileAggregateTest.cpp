@@ -22,6 +22,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/functions/lib/aggregates/ApproxPercentileAggregateBase.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
@@ -312,8 +313,8 @@ TEST_F(ApproxPercentileAggregateTest, partialFinal) {
       makeFlatVector<int32_t>(117, [](auto row) { return row; }),
       makeFlatVector<int32_t>(117, [](auto row) { return row < 7 ? 20 : 10; }),
   });
-  exec::test::assertQuery(params, {expected});
-  waitForAllTasksToBeDeleted();
+  assertQuery(params, expected);
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 // Test Partial + Final group-by aggregation.

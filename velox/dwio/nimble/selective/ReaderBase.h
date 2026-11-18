@@ -126,12 +126,16 @@ class ReaderBase {
     return fileSchemaWithId_;
   }
 
-  /// File-level column statistics from the vectorized stats optional section.
-  /// Empty if absent.
-  const std::vector<std::unique_ptr<ColumnStatistics>>& fileColumnStats()
-      const {
-    return fileColumnStats_;
-  }
+  /// Returns whether the file has a vectorized stats section.
+  bool hasFileColumnStatistics() const;
+
+  /// Returns the file-level statistics of a schema node, or null if the file
+  /// has none for it.
+  const ColumnStatistics* fileColumnStatistics(uint32_t nodeId) const;
+
+  /// Returns the logical size from the node's file-level statistics, or
+  /// std::nullopt if the file has none for it.
+  std::optional<uint64_t> fileColumnLogicalSize(uint32_t nodeId) const;
 
  private:
   ReaderBase(

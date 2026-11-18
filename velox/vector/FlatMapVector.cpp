@@ -20,6 +20,7 @@
 
 #include "velox/vector/FlatMapVector.h"
 
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/SimpleVector.h"
@@ -1053,6 +1054,7 @@ FlatMapVectorPtr FlatMapVector::fromMapVector(const MapVector& map) {
 // scatter-like operation. This prevents the lack of cache locality for reads in
 // a gather-like operation.
 MapVectorPtr FlatMapVector::toMapVector() const {
+  RuntimeStatWallTimer timer{kMapConversionWallNanos};
   // We first need to count how many key/value pairs per row. We do so by
   // couting how many "full" maps we have (when inMap buffers are not
   // materialized), then counting the ones that have inMap buffers.
@@ -1107,20 +1109,26 @@ MapVectorPtr FlatMapVector::toMapVector() const {
 
   // The main scatter loop. Scan each map values vector, and copy the elements
   // to the right offsets in the flattened output.
+  std::vector<CopyRange> ranges;
   for (vector_size_t i = 0; i < mapValues_.size(); i++) {
     if (mapValues_[i] != nullptr) {
+      ranges.clear();
       for (vector_size_t j = 0; j < length_; j++) {
         // If needed, this check could be unrolled out of the loop (in many
         // cases the inMap buffer doesn't exist).
         if (isInMap(i, j)) {
-          mapValues->copy(
-              mapValues_[i].get(), rawOffsets[j] + rawSizes[j], j, 1);
+          ranges.push_back({j, rawOffsets[j] + rawSizes[j], 1});
           rawKeyDictIndices[rawOffsets[j] + rawSizes[j]] = i;
           ++rawSizes[j];
         }
       }
+      mapValues->copyRanges(mapValues_[i].get(), ranges);
     }
   }
+
+  addThreadLocalRuntimeStat(kNumMapConversions, RuntimeCounter(1));
+  addThreadLocalRuntimeStat(
+      kNumMapConversionEntries, RuntimeCounter(totalElements));
 
   auto mapKeys = distinctKeys_
       ? BaseVector::wrapInDictionary(
