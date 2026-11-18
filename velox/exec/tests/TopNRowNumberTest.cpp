@@ -651,14 +651,13 @@ TEST_P(MultiTopNRowNumberTest, planNodeValidation) {
       plan({"a", "b"}, {"c"}, 0), "Limit must be greater than zero");
 
   const auto source = PlanBuilder().values({data}).planNode();
-  const auto& rowType = source->outputType();
   VELOX_ASSERT_THROW(
-      std::make_shared<core::TopNRowNumberNode>(
+      core::TopNRowNumberNode(
           "1",
           core::TopNRowNumberNode::toRankFunction(functionName_),
-          std::vector<core::FieldAccessTypedExprPtr>{toFieldExpr("a", rowType)},
-          std::vector<core::FieldAccessTypedExprPtr>{toFieldExpr("b", rowType)},
-          std::vector<core::SortOrder>{core::kAscNullsLast},
+          {std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a")},
+          {std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "b")},
+          {core::kAscNullsLast},
           "row_number",
           10,
           /*partial=*/true,

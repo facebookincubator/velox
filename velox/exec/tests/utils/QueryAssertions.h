@@ -16,86 +16,20 @@
 #pragma once
 
 #include "velox/exec/Cursor.h"
+#include "velox/exec/tests/utils/DuckDbQueryRunner.h"
 #include "velox/vector/ComplexVector.h"
 
 #ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 #include "velox/exec/tests/utils/TaskMonitor.h"
 #endif
 
-#ifdef BLOCK_SIZE
-#undef BLOCK_SIZE
-#endif
-#include <duckdb.hpp> // @manual
-
 namespace facebook::velox::exec::test {
-
-using MaterializedRow = std::vector<velox::Variant>;
-
-/// Multiset that compares floating-point values directly.
-using MaterializedRowMultiset = std::multiset<MaterializedRow>;
 
 /// Converts input 'RowVector' into a list of 'MaterializedRow's.
 std::vector<MaterializedRow> materialize(const RowVectorPtr& vector);
 
 /// Converts a list of 'RowVector's into 'MaterializedRowMultiset'.
 MaterializedRowMultiset materialize(const std::vector<RowVectorPtr>& vectors);
-
-/// Runs SQL queries against an in-memory DuckDB to compute expected results in
-/// tests. Not thread-safe: a single instance must be accessed from one thread
-/// at a time.
-class DuckDbQueryRunner {
- public:
-  DuckDbQueryRunner() = default;
-
-  void createTable(
-      const std::string& name,
-      const std::vector<RowVectorPtr>& data);
-
-  using QueryResult = std::unique_ptr<::duckdb::MaterializedQueryResult>;
-
-  QueryResult execute(const std::string& sql);
-
-  MaterializedRowMultiset execute(
-      const std::string& sql,
-      const RowTypePtr& resultRowType) {
-    MaterializedRowMultiset allRows;
-    execute(
-        sql,
-        resultRowType,
-        [&allRows](std::vector<MaterializedRow>& rows) mutable {
-          std::copy(
-              rows.begin(), rows.end(), std::inserter(allRows, allRows.end()));
-        });
-    return allRows;
-  }
-
-  std::vector<MaterializedRow> executeOrdered(
-      const std::string& sql,
-      const RowTypePtr& resultRowType) {
-    std::vector<MaterializedRow> allRows;
-    execute(
-        sql,
-        resultRowType,
-        [&allRows](std::vector<MaterializedRow>& rows) mutable {
-          std::copy(rows.begin(), rows.end(), std::back_inserter(allRows));
-        });
-    return allRows;
-  }
-
- private:
-  // Returns the in-memory DuckDB, building it on the first call. Construction
-  // is expensive, so it is deferred until the first query.
-  ::duckdb::DuckDB& database();
-
-  // shared_ptr (not unique_ptr) keeps DuckDbQueryRunner copyable; some callers
-  // hold it by value and rely on copy semantics.
-  std::shared_ptr<::duckdb::DuckDB> db_;
-
-  void execute(
-      const std::string& sql,
-      const RowTypePtr& resultRowType,
-      std::function<void(std::vector<MaterializedRow>&)> resultCallback);
-};
 
 /// Scoped abort percentage utility that allows user to trigger abort during the
 ///  query execution.
