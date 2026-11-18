@@ -16,6 +16,7 @@
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -1076,19 +1077,107 @@ std::string_view FsstEncoding::slice(
 }
 
 uint64_t FsstEncoding::estimateSize(
-    uint64_t rowCount,
+    std::span<const std::string_view> values,
     const Statistics<std::string_view>& statistics,
     const Encoding::Options& options) {
-  const uint64_t estimatedBlobSize = static_cast<uint64_t>(
-      statistics.totalStringsLength() * options.fsstCompressionTargetRatio);
-  const uint64_t estimatedMaxCompressedLength = static_cast<uint64_t>(
-      std::ceil(statistics.max().size() * options.fsstCompressionTargetRatio));
+  NIMBLE_USER_CHECK_LE(
+      values.size(),
+      std::numeric_limits<uint32_t>::max(),
+      "FSST row count exceeds the supported size.");
+  const auto rowCount = static_cast<uint32_t>(values.size());
+  if (values.empty()) {
+    return 0;
+  }
+  const auto numSamples = std::min(values.size(), kEstimateSampleRows);
+  std::array<size_t, kEstimateSampleRows> inputLengths{};
+  std::array<const unsigned char*, kEstimateSampleRows> inputPointers{};
+  std::array<size_t, kEstimateSampleRows> originalLengths{};
+  size_t totalSampleBytes{0};
+  for (size_t i = 0; i < numSamples; ++i) {
+    const auto row =
+        numSamples == 1 ? 0 : i * (values.size() - 1) / (numSamples - 1);
+    const auto value = values[row];
+    const auto length = std::min(value.size(), kEstimateSampleStringBytes);
+
+    // Spread windows across long strings to avoid sampling only their prefixes.
+    const auto offset = numSamples == 1
+        ? (value.size() - length) / 2
+        : i * (value.size() - length) / (numSamples - 1);
+    inputLengths[i] = length;
+    originalLengths[i] = value.size();
+    inputPointers[i] = reinterpret_cast<const unsigned char*>(
+        value.substr(offset, length).data());
+    totalSampleBytes += length;
+  }
+  if (totalSampleBytes == 0) {
+    // Use Trivial's size when the sample has no bytes to measure compression.
+    return TrivialEncoding<std::string_view>::estimateSize(
+        rowCount, statistics, options);
+  }
+
+  std::unique_ptr<fsst_encoder_t, decltype(&nimble_fsst_destroy)> encoder{
+      nimble_fsst_create(
+          numSamples,
+          inputLengths.data(),
+          inputPointers.data(),
+          /*zeroTerminated=*/0),
+      &nimble_fsst_destroy};
+  NIMBLE_CHECK_NOT_NULL(encoder, "FSST sample encoder creation failed.");
+  std::array<unsigned char, FSST_MAXHEADER> symbolTable{};
+  const auto symbolTableSize =
+      nimble_fsst_export(encoder.get(), symbolTable.data());
+  NIMBLE_CHECK_LE(symbolTableSize, symbolTable.size());
+
+  // Reuse the output buffer across batches to bound stack space. FSST needs at
+  // most two bytes per input byte plus seven bytes of SIMD tail space.
+  constexpr size_t kCompressionBatchRows = 32;
+  std::array<
+      unsigned char,
+      7 + 2 * kCompressionBatchRows * kEstimateSampleStringBytes>
+      compressedBuffer{};
+  std::array<size_t, kEstimateSampleRows> compressedLengths{};
+  std::array<unsigned char*, kCompressionBatchRows> compressedPointers{};
+  size_t totalCompressedBytes{0};
+  uint64_t estimatedMaxCompressedLength{0};
+  for (size_t offset = 0; offset < numSamples;
+       offset += kCompressionBatchRows) {
+    const auto numRows = std::min(kCompressionBatchRows, numSamples - offset);
+    const auto numCompressed = nimble_fsst_compress(
+        encoder.get(),
+        numRows,
+        inputLengths.data() + offset,
+        inputPointers.data() + offset,
+        compressedBuffer.size(),
+        compressedBuffer.data(),
+        compressedLengths.data() + offset,
+        compressedPointers.data());
+    NIMBLE_CHECK_EQ(
+        numCompressed, numRows, "FSST sample compression missed strings.");
+    for (size_t i = offset; i < offset + numRows; ++i) {
+      totalCompressedBytes += compressedLengths[i];
+      if (inputLengths[i] != 0) {
+        estimatedMaxCompressedLength = std::max(
+            estimatedMaxCompressedLength,
+            static_cast<uint64_t>(std::ceil(
+                static_cast<long double>(compressedLengths[i]) *
+                originalLengths[i] / inputLengths[i])));
+      }
+    }
+  }
+  const auto compressionRatio =
+      static_cast<long double>(totalCompressedBytes) / totalSampleBytes;
+  const auto estimatedBlobSize = static_cast<uint64_t>(
+      std::ceil(statistics.totalStringsLength() * compressionRatio));
+  estimatedMaxCompressedLength = std::max(
+      estimatedMaxCompressedLength,
+      static_cast<uint64_t>(
+          std::ceil(statistics.max().size() * compressionRatio)));
   const uint64_t estimatedLengthsSize =
       FixedBitWidthEncoding<uint32_t>::estimateSize(
           rowCount, 0, estimatedMaxCompressedLength, options);
   return Encoding::serializePrefixSize(rowCount, options.useVarintRowCount) +
-      kCompressionTypeSize + varint::varintSize(kSymbolTableOverhead) +
-      kSymbolTableOverhead + varint::varintSize(estimatedLengthsSize) +
+      kCompressionTypeSize + varint::varintSize(symbolTableSize) +
+      symbolTableSize + varint::varintSize(estimatedLengthsSize) +
       estimatedLengthsSize + estimatedBlobSize;
 }
 
