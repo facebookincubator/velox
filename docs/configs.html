@@ -1458,7 +1458,7 @@ closes the current file and starts writing to a new file. Accepts human-readable
 sorted writes.</p>
 <p>Session: <code class="docutils literal notranslate"><span class="pre">parquet_writer_max_target_file_size</span></code>.</p>
 <p>Row-group sizing is independent of this setting. The soft byte target is configured by
-<code class="docutils literal notranslate"><span class="pre">writer.row-group-size</span></code>, while the row count is capped at 1,048,576. When
+<code class="docutils literal notranslate"><span class="pre">writer.row-group-size</span></code>, and the row count by <code class="docutils literal notranslate"><span class="pre">writer.row-group-rows</span></code>. When
 <code class="docutils literal notranslate"><span class="pre">writer.max-target-file-size</span></code> is set, the writer may flush the current row group early so
 the accumulated file size is visible and rotation can occur.</p>
 </td>
@@ -1505,19 +1505,24 @@ Valid values are “V1” and “V2”. Session: <code class="docutils literal n
 encoded pages and estimated bytes for data that has not yet been serialized into pages, so a
 row group may slightly exceed the target. Session: <code class="docutils literal notranslate"><span class="pre">parquet_writer_row_group_size</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.created-by</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.row-group-rows</span></code></p></td>
+<td><p>integer</p></td>
+<td><p>1048576</p></td>
+<td><p>Maximum number of rows in a row group. Session: <code class="docutils literal notranslate"><span class="pre">parquet_writer_row_group_rows</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.created-by</span></code></p></td>
 <td><p>string</p></td>
 <td><p>parquet-cpp-velox version 0.0.0</p></td>
 <td><p>Created-by value used when writing to Parquet.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-store-decimal-as-integer</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-store-decimal-as-integer</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.
 When false, all DECIMAL values are stored as FIXED_LEN_BYTE_ARRAY regardless of precision.
 Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.enable_store_decimal_as_integer</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-page-index</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.enable-page-index</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>Whether to write the Parquet page index (column index and offset index) when writing into
@@ -1525,7 +1530,7 @@ Parquet through the Arrow bridge. When enabled, per-page statistics are stored i
 index instead of the data page headers, letting readers skip pages that cannot match a filter.
 Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.enable_page_index</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.size-statistics-level</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.size-statistics-level</span></code></p></td>
 <td><p>string</p></td>
 <td><p>PAGE_AND_COLUMN_CHUNK</p></td>
 <td><p>Controls Parquet size statistics written by the Arrow bridge. <code class="docutils literal notranslate"><span class="pre">NONE</span></code> disables size
