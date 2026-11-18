@@ -362,6 +362,18 @@ TEST_F(HiveConnectorSerDeTest, hiveConnectorSplit) {
   ASSERT_EQ(clone4->physicalFilePath, split4.physicalFilePath);
   ASSERT_EQ(clone4->readPath(), split4.physicalFilePath);
   ASSERT_EQ(clone4->filePath, filePath);
+
+  auto split5 = HiveConnectorSplitBuilder(filePath)
+                    .connectorId(connectorId)
+                    .fileFormat(dwio::common::FileFormat::NIMBLE)
+                    .splitRowRange({.firstRow = 16'000})
+                    .build();
+  testSerde(*split5);
+  const auto clone5 =
+      ISerializable::deserialize<HiveConnectorSplit>(split5->serialize());
+  ASSERT_EQ(clone5->splitRowRange, split5->splitRowRange);
+  ASSERT_EQ(
+      clone5->splitRowRange->numRows, std::numeric_limits<uint64_t>::max());
 }
 
 TEST_F(HiveConnectorSerDeTest, hiveConnectorSplitFileProperties) {
