@@ -18,6 +18,7 @@
 #include "velox/experimental/torchwave/AllocGroup.h"
 #include "velox/experimental/torchwave/Compile.h"
 #include "velox/experimental/torchwave/CompiledOp.h"
+#include "velox/experimental/torchwave/DeviceSymbols.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/GraphOptimizer.h"
 #include "velox/experimental/torchwave/ParallelExpr.h"
@@ -220,6 +221,28 @@ std::unique_ptr<WaveGraph> WaveGraph::optimizeOnly(
   return wg;
 }
 
+namespace {
+std::vector<GraphPass>& graphPasses() {
+  static std::vector<GraphPass> passes;
+  return passes;
+}
+} // namespace
+
+void registerGraphPass(GraphPass pass) {
+  graphPasses().push_back(std::move(pass));
+}
+
+namespace {
+std::vector<GraphPass>& decomposedGraphPasses() {
+  static std::vector<GraphPass> passes;
+  return passes;
+}
+} // namespace
+
+void registerDecomposedGraphPass(GraphPass pass) {
+  decomposedGraphPasses().push_back(std::move(pass));
+}
+
 WaveGraph::WaveGraph(ModelContext* modelContext)
     : graph_(modelContext->graph.get()),
       modelContext_(modelContext),
@@ -239,6 +262,9 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
   }
   if (WaveConfig::get().recognizeDisjointCopies) {
     rewriteDisjointCopies(*graph_, *this);
+  }
+  for (const auto& pass : graphPasses()) {
+    pass(*graph_, *this);
   }
   normalizeAndAnnotateGraph();
   for (auto* v : graph_->values()) {
@@ -269,6 +295,9 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
   // each column visible to the partitioner as its own cost.
   if (WaveConfig::get().decomposeLists) {
     decomposeListOps(*graph_, *this);
+  }
+  for (const auto& pass : decomposedGraphPasses()) {
+    pass(*graph_, *this);
   }
 
   // Last of the pre-partition passes: the clone CSE above merges equal values,
@@ -414,14 +443,36 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
 
 WaveGraph::~WaveGraph() = default;
 
-std::unique_ptr<ExecutionState> WaveGraph::getState() {
+std::unique_ptr<ExecutionState> WaveGraph::getState(
+    bool deviceSymbols,
+    int64_t generation) {
   std::lock_guard<std::mutex> lock(statePoolMutex_);
-  if (!statePool_.empty()) {
-    auto state = std::move(statePool_.back());
-    statePool_.pop_back();
-    return state;
+  if (deviceSymbols) {
+    std::erase_if(statePool_, [&](const auto& state) {
+      return state->deviceSymbolsMode && state->symbolGeneration != generation;
+    });
   }
-  return std::make_unique<ExecutionState>();
+  for (auto it = statePool_.rbegin(); it != statePool_.rend(); ++it) {
+    if ((*it)->deviceSymbolsMode == deviceSymbols) {
+      auto state = std::move(*it);
+      statePool_.erase(std::next(it).base());
+      return state;
+    }
+  }
+  auto state = std::make_unique<ExecutionState>();
+  state->deviceSymbolsMode = deviceSymbols;
+  state->symbolGeneration = generation;
+  return state;
+}
+
+DeviceSymbols* WaveGraph::deviceSymbols() {
+  folly::call_once(deviceSymbolsOnce_, [&] {
+    if (modelContext_ != nullptr && modelContext_->symShapes != nullptr) {
+      deviceSymbols_ =
+          std::make_shared<DeviceSymbols>(modelContext_->symShapes, *this);
+    }
+  });
+  return deviceSymbols_.get();
 }
 
 void WaveGraph::returnState(std::unique_ptr<ExecutionState> state) {

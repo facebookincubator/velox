@@ -22,6 +22,7 @@
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/ScanTracker.h"
@@ -35,6 +36,7 @@
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
+#include "velox/dwio/nimble/reader/NimbleReaderFactory.h"
 #include "velox/dwio/nimble/selective/SelectiveNimbleReader.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/type/Filter.h"
@@ -384,9 +386,11 @@ class E2EIndexTestBase : public ::testing::Test {
       const RowTypePtr& requestedType,
       const std::unordered_map<std::string, std::unique_ptr<Filter>>& filters,
       bool indexEnabled,
-      int64_t& numIndexFilterConversions) {
+      int64_t& numIndexFilterConversions,
+      std::optional<SplitRowRange> splitRowRange = std::nullopt) {
     RowReaderOptions rowReaderOptions;
     rowReaderOptions.setRequestedType(requestedType);
+    rowReaderOptions.setSplitRowRange(splitRowRange);
 
     // Clone filters because createScanSpec modifies them.
     std::unordered_map<std::string, std::unique_ptr<Filter>> filtersCopy;
@@ -490,13 +494,19 @@ class E2EIndexTestBase : public ::testing::Test {
       double sampleRate = 1.0,
       uint32_t randomSeed = 0,
       bool lazyColumnIo = false,
-      bool indexEnabled = false) {
+      bool indexEnabled = false,
+      std::optional<SplitRowRange> splitRowRange = std::nullopt,
+      std::optional<std::pair<uint64_t, uint64_t>> byteRange = std::nullopt) {
     auto reader = createReader(sampleRate, randomSeed);
     RowReaderOptions rowReaderOptions;
+    if (byteRange.has_value()) {
+      rowReaderOptions.range(byteRange->first, byteRange->second);
+    }
     rowReaderOptions.setRequestedType(rowType);
     rowReaderOptions.setScanSpec(createScanSpec(rowType, filters));
     rowReaderOptions.setLazyColumnIo(lazyColumnIo);
     rowReaderOptions.setIndexEnabled(indexEnabled);
+    rowReaderOptions.setSplitRowRange(splitRowRange);
     ConcurrentRuntimeStatWriter statWriter;
     RuntimeStatWriterScopeGuard guard(&statWriter);
     auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -512,6 +522,19 @@ class E2EIndexTestBase : public ::testing::Test {
     const auto it = runtimeStats.find(std::string(RowReader::kNumStripeLoads));
     readResult.numStripeLoads = it != runtimeStats.end() ? it->second.sum : 0;
     return readResult;
+  }
+
+  static std::vector<int64_t> bigintValues(
+      const std::vector<RowVectorPtr>& batches,
+      const std::string& column) {
+    std::vector<int64_t> values;
+    for (const auto& batch : batches) {
+      auto* flat = batch->childAt(column)->asFlatVector<int64_t>();
+      for (vector_size_t i = 0; i < batch->size(); ++i) {
+        values.push_back(flat->valueAt(i));
+      }
+    }
+    return values;
   }
 
   static size_t countRows(const std::vector<RowVectorPtr>& batches) {
@@ -1217,6 +1240,250 @@ TEST_F(E2EIndexTestBase, v2SingleChunkUsesNullCountsWithoutBounds) {
   EXPECT_EQ(countRows(result.rows), 0);
   EXPECT_EQ(result.stats.chunkSkippedRows, 4);
   EXPECT_EQ(result.stats.processedRows, 4);
+}
+
+// Two stripes of 8 rows: [0..3, 100..103] and [200..203, 300..303].
+class SplitRowRangeTest : public E2EIndexTestBase {
+ protected:
+  void SetUp() override {
+    E2EIndexTestBase::SetUp();
+    for (int64_t base : {0, 100, 200, 300}) {
+      batches_.push_back(vectorMaker_->rowVector(
+          {"value"},
+          {vectorMaker_->flatVector<int64_t>(
+              {base, base + 1, base + 2, base + 3})}));
+    }
+    writeChunkStatsData(
+        batches_,
+        /*enableChunkStats=*/true,
+        ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize,
+        /*minStreamChunkRawSize=*/0,
+        /*batchesPerStripe=*/2);
+  }
+
+  void TearDown() override {
+    batches_.clear();
+    E2EIndexTestBase::TearDown();
+  }
+
+  ChunkStatsReadResult read(
+      SplitRowRange splitRowRange,
+      std::unordered_map<std::string, std::unique_ptr<Filter>> filters = {},
+      std::optional<std::pair<uint64_t, uint64_t>> byteRange = std::nullopt) {
+    return readChunkStatsData(
+        rowType_,
+        filters,
+        /*sampleRate=*/1.0,
+        /*randomSeed=*/0,
+        /*lazyColumnIo=*/false,
+        /*indexEnabled=*/false,
+        splitRowRange,
+        byteRange);
+  }
+
+  const RowTypePtr rowType_ = ROW("value", BIGINT());
+  std::vector<RowVectorPtr> batches_;
+};
+
+TEST_F(SplitRowRangeTest, readsOnlyRowsInRange) {
+  struct TestCase {
+    SplitRowRange range;
+    std::vector<int64_t> expected;
+    int64_t expectedStripeLoads;
+  };
+  const std::vector<TestCase> testCases = {
+      {{3, 7}, {3, 100, 101, 102, 103, 200, 201}, 2},
+      {{9, 2}, {201, 202}, 1},
+      {{0, 8}, {0, 1, 2, 3, 100, 101, 102, 103}, 1},
+      {{14, 100}, {302, 303}, 1},
+      {{16, 4}, {}, 0},
+      {{5, 0}, {}, 0},
+  };
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(
+        fmt::format(
+            "firstRow={}, numRows={}",
+            testCase.range.firstRow,
+            testCase.range.numRows));
+    const auto result = read(testCase.range);
+    EXPECT_EQ(bigintValues(result.rows, "value"), testCase.expected);
+    EXPECT_EQ(result.numStripeLoads, testCase.expectedStripeLoads);
+  }
+}
+
+TEST_F(SplitRowRangeTest, adjacentRangesReadEveryRowOnce) {
+  std::vector<int64_t> values;
+  for (uint64_t firstRow = 0; firstRow < 16; firstRow += 3) {
+    const auto result = read({firstRow, 3});
+    const auto rangeValues = bigintValues(result.rows, "value");
+    values.insert(values.end(), rangeValues.begin(), rangeValues.end());
+  }
+  EXPECT_EQ(
+      values,
+      std::vector<int64_t>(
+          {0,
+           1,
+           2,
+           3,
+           100,
+           101,
+           102,
+           103,
+           200,
+           201,
+           202,
+           203,
+           300,
+           301,
+           302,
+           303}));
+}
+
+TEST_F(SplitRowRangeTest, appliesFiltersInsideRange) {
+  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+  filters["value"] = std::make_unique<BigintRange>(100, 300, false);
+  const auto result = read({2, 8}, std::move(filters));
+  EXPECT_EQ(
+      bigintValues(result.rows, "value"),
+      std::vector<int64_t>({100, 101, 102, 103, 200, 201}));
+}
+
+TEST_F(SplitRowRangeTest, batchReaderRejectsRange) {
+  auto readFile =
+      std::make_shared<InMemoryReadFile>(std::string_view(sinkData_));
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setFileFormat(FileFormat::NIMBLE);
+  auto reader = velox::nimble::detail::createBatchReader(
+      readerOptions, readFile, FileIoContext{});
+  RowReaderOptions rowReaderOptions;
+  rowReaderOptions.setRequestedType(rowType_);
+  rowReaderOptions.setScanSpec(createScanSpec(rowType_, {}));
+  rowReaderOptions.setSplitRowRange(SplitRowRange{0, 2});
+  VELOX_ASSERT_THROW(
+      reader->createRowReader(rowReaderOptions),
+      "Split row ranges require the selective Nimble reader");
+}
+
+TEST_F(SplitRowRangeTest, countsRowsFromSplitStart) {
+  // The first stripe starts at byte 0, so a split starting at byte 1 holds
+  // only the second stripe, and a split of byte 0 only the first.
+  const std::pair<uint64_t, uint64_t> secondStripe{
+      1, std::numeric_limits<uint64_t>::max()};
+  const std::pair<uint64_t, uint64_t> firstStripe{0, 1};
+  EXPECT_EQ(
+      bigintValues(read({}, {}, secondStripe).rows, "value"),
+      std::vector<int64_t>({200, 201, 202, 203, 300, 301, 302, 303}));
+
+  struct TestCase {
+    std::pair<uint64_t, uint64_t> byteRange;
+    SplitRowRange range;
+    std::vector<int64_t> expected;
+  };
+  const std::vector<TestCase> testCases = {
+      {secondStripe, {0, 2}, {200, 201}},
+      {secondStripe, {6, 100}, {302, 303}},
+      {secondStripe, {8, 1}, {}},
+      // Stops at the end of the split instead of reading the next stripe.
+      {firstStripe, {6, 100}, {102, 103}},
+  };
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(
+        fmt::format(
+            "offset={}, firstRow={}, numRows={}",
+            testCase.byteRange.first,
+            testCase.range.firstRow,
+            testCase.range.numRows));
+    const auto result = read(testCase.range, {}, testCase.byteRange);
+    EXPECT_EQ(bigintValues(result.rows, "value"), testCase.expected);
+  }
+}
+
+// Index bounds on a split that doesn't start at the file's first stripe: the
+// split row range counts from the split's first row, the index from the
+// file's, and the reader reads their intersection within the split.
+TEST_F(E2EIndexTestBase, splitRowRangeWithIndexCountsFromSplitStart) {
+  // Three stripes of 8 rows; 'key' is the file row number.
+  const auto rowType = ROW("key", BIGINT());
+  std::vector<RowVectorPtr> batches;
+  for (int64_t firstKey = 0; firstKey < 24; firstKey += 4) {
+    batches.push_back(vectorMaker_->rowVector(
+        {"key"}, {vectorMaker_->flatVector<int64_t>(4, [firstKey](auto row) {
+          return firstKey + row;
+        })}));
+  }
+  writeChunkStatsData(
+      batches,
+      /*enableChunkStats=*/true,
+      ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize,
+      /*minStreamChunkRawSize=*/0,
+      /*batchesPerStripe=*/2,
+      ChunkStatsVersion::kV2,
+      /*indexColumns=*/{"key"});
+
+  // The first stripe starts at byte 0, so a split starting at byte 1 holds
+  // the second and third stripes, and a split of byte 0 only the first.
+  const std::pair<uint64_t, uint64_t> wholeFile{
+      0, std::numeric_limits<uint64_t>::max()};
+  const std::pair<uint64_t, uint64_t> fromSecondStripe{
+      1, std::numeric_limits<uint64_t>::max()};
+  const std::pair<uint64_t, uint64_t> firstStripe{0, 1};
+
+  struct TestCase {
+    std::pair<uint64_t, uint64_t> byteRange;
+    SplitRowRange range;
+    int64_t minKey;
+    int64_t maxKey;
+    std::vector<int64_t> expected;
+    int64_t expectedStripeLoads;
+  };
+  const std::vector<TestCase> testCases = {
+      {wholeFile, {4, 10}, 6, 20, {6, 7, 8, 9, 10, 11, 12, 13}, 2},
+      {fromSecondStripe, {2, 6}, 12, 30, {12, 13, 14, 15}, 1},
+      {fromSecondStripe, {0, 16}, 0, 9, {8, 9}, 1},
+      {fromSecondStripe,
+       {3, 10},
+       0,
+       100,
+       {11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
+       2},
+      // The index range starts where the split row range ends.
+      {fromSecondStripe, {0, 4}, 12, 13, {}, 0},
+      // The index range is before the split.
+      {fromSecondStripe, {0, 16}, 0, 7, {}, 0},
+      // Stops at the end of the split although the index range goes on.
+      {firstStripe, {4, 100}, 6, 20, {6, 7}, 1},
+      // The index range is after the split.
+      {firstStripe, {0, 8}, 8, 10, {}, 0},
+  };
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(
+        fmt::format(
+            "offset={}, firstRow={}, numRows={}, keys=[{}, {}]",
+            testCase.byteRange.first,
+            testCase.range.firstRow,
+            testCase.range.numRows,
+            testCase.minKey,
+            testCase.maxKey));
+    for (const bool indexEnabled : {true, false}) {
+      SCOPED_TRACE(fmt::format("indexEnabled={}", indexEnabled));
+      std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+      filters["key"] = std::make_unique<BigintRange>(
+          testCase.minKey, testCase.maxKey, false);
+      const auto result = readChunkStatsData(
+          rowType,
+          filters,
+          /*sampleRate=*/1.0,
+          /*randomSeed=*/0,
+          /*lazyColumnIo=*/false,
+          indexEnabled,
+          testCase.range,
+          testCase.byteRange);
+      EXPECT_EQ(bigintValues(result.rows, "key"), testCase.expected);
+      if (indexEnabled) {
+        EXPECT_EQ(result.numStripeLoads, testCase.expectedStripeLoads);
+      }
+    }
+  }
 }
 
 // Test with single bigint key column covering various boundary conditions.
@@ -2056,8 +2323,8 @@ TEST_P(E2EIndexTest, twoBigintKeysFilterCombinations) {
           "name={}, expectedConversions={}, key1Filter={}, key2Filter={}",
           name,
           expectedConversions,
-          key1Filter ? key1Filter->serialize() : "null",
-          key2Filter ? key2Filter->serialize() : "null");
+          key1Filter ? key1Filter->toString() : "null",
+          key2Filter ? key2Filter->toString() : "null");
     }
   };
 
@@ -2821,8 +3088,8 @@ TEST_P(E2EIndexTest, twoVarcharKeysFilterCombinations) {
           "name={}, expectedConversions={}, key1Filter={}, key2Filter={}",
           name,
           expectedConversions,
-          key1Filter ? key1Filter->serialize() : "null",
-          key2Filter ? key2Filter->serialize() : "null");
+          key1Filter ? key1Filter->toString() : "null",
+          key2Filter ? key2Filter->toString() : "null");
     }
   };
 
@@ -4143,6 +4410,265 @@ TEST_P(E2EIndexTest, randomSkipWithIndex) {
     // Index should be used when enabled.
     EXPECT_EQ(numConversionsWithIndex, 1);
     EXPECT_EQ(numConversionsWithoutIndex, 0);
+  }
+}
+
+// A split row range and index bounds both narrow the rows; the reader reads
+// their intersection.
+TEST_P(E2EIndexTest, splitRowRangeWithIndex) {
+  auto rowType =
+      ROW({"key", "data", "nested"},
+          {BIGINT(),
+           ARRAY(INTEGER()),
+           ROW({{"nested", MAP(INTEGER(), VARCHAR())}})});
+  auto batches = generateKeyData(BIGINT(), 10'000, 1'000, /*startValue=*/1'000);
+  writeDataWithParam(batches, {"key"});
+
+  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+  filters["key"] = std::make_unique<BigintRange>(3'000, 7'000, false);
+  const SplitRowRange range{2'500, 3'000};
+
+  int64_t numConversionsWithIndex = 0;
+  auto withIndex = readWithFilters(
+      *createReader(),
+      rowType,
+      filters,
+      /*indexEnabled=*/true,
+      numConversionsWithIndex,
+      range);
+  int64_t numConversionsWithoutIndex = 0;
+  auto withoutIndex = readWithFilters(
+      *createReader(),
+      rowType,
+      filters,
+      /*indexEnabled=*/false,
+      numConversionsWithoutIndex,
+      range);
+  int64_t numConversionsNoRange = 0;
+  auto noRange = readWithFilters(
+      *createReader(),
+      rowType,
+      filters,
+      /*indexEnabled=*/true,
+      numConversionsNoRange);
+
+  EXPECT_EQ(numConversionsWithIndex, 1);
+  EXPECT_EQ(numConversionsWithoutIndex, 0);
+  verifyResultsEqual(withIndex, withoutIndex);
+  EXPECT_GT(countRows(withIndex), 0);
+  EXPECT_LT(countRows(withIndex), countRows(noRange));
+}
+
+// Checks the rows read for split row ranges and index bounds that overlap in
+// different ways. The index bounds are given as file row positions and turned
+// into key bounds, so the cases hold for both sort orders.
+TEST_P(E2EIndexTest, splitRowRangeIntersectsIndexBounds) {
+  constexpr size_t kNumRows = 10'000;
+  auto rowType =
+      ROW({"key", "data", "nested"},
+          {BIGINT(),
+           ARRAY(INTEGER()),
+           ROW({{"nested", MAP(INTEGER(), VARCHAR())}})});
+  auto batches =
+      generateKeyData(BIGINT(), kNumRows, 1'000, /*startValue=*/1'000);
+  writeDataWithParam(batches, {"key"});
+  const auto fileKeys = bigintValues(batches, "key");
+  constexpr auto kUnbounded = std::numeric_limits<uint64_t>::max();
+
+  struct TestCase {
+    std::string name;
+    SplitRowRange range;
+    // File rows [firstIndexRow, lastIndexRow] whose keys the index bounds
+    // select.
+    size_t firstIndexRow;
+    size_t lastIndexRow;
+  };
+  const std::vector<TestCase> testCases = {
+      {"indexInsideRange", {2'000, 5'000}, 3'000, 4'000},
+      {"rangeInsideIndex", {4'000, 500}, 1'000, 8'000},
+      {"indexOverlapsRangeStart", {3'000, 3'000}, 1'000, 4'000},
+      {"indexOverlapsRangeEnd", {3'000, 3'000}, 5'000, 9'000},
+      {"sameRows", {2'500, 1'000}, 2'500, 3'499},
+      {"indexBeforeRange", {5'000, 1'000}, 1'000, 2'000},
+      {"indexAfterRange", {0, 1'000}, 5'000, 6'000},
+      {"indexStartsAtRangeEnd", {0, 1'000}, 1'000, 2'000},
+      {"indexEndsBeforeRangeStart", {1'000, 1'000}, 0, 999},
+      {"singleRow", {4'321, 1}, 4'000, 5'000},
+      {"singleIndexRow", {4'000, 1'000}, 4'321, 4'321},
+      {"unboundedRange", {9'000, kUnbounded}, 8'500, kNumRows - 1},
+      {"emptyRange", {4'000, 0}, 0, kNumRows - 1},
+      {"rangePastEnd", {20'000, 10}, 0, kNumRows - 1},
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.name);
+    const auto lowerKey = std::min(
+        fileKeys[testCase.firstIndexRow], fileKeys[testCase.lastIndexRow]);
+    const auto upperKey = std::max(
+        fileKeys[testCase.firstIndexRow], fileKeys[testCase.lastIndexRow]);
+    std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+    filters["key"] = std::make_unique<BigintRange>(lowerKey, upperKey, false);
+
+    std::vector<int64_t> expected;
+    const auto firstRow = std::min<uint64_t>(testCase.range.firstRow, kNumRows);
+    const auto endRow = firstRow +
+        std::min<uint64_t>(testCase.range.numRows, kNumRows - firstRow);
+    for (auto row = firstRow; row < endRow; ++row) {
+      if (fileKeys[row] >= lowerKey && fileKeys[row] <= upperKey) {
+        expected.push_back(fileKeys[row]);
+      }
+    }
+
+    for (const bool indexEnabled : {true, false}) {
+      SCOPED_TRACE(fmt::format("indexEnabled={}", indexEnabled));
+      int64_t numConversions = 0;
+      const auto rows = readWithFilters(
+          *createReader(),
+          rowType,
+          filters,
+          indexEnabled,
+          numConversions,
+          testCase.range);
+      EXPECT_EQ(bigintValues(rows, "key"), expected);
+      // An empty split row range ends the read before the index lookup.
+      EXPECT_EQ(numConversions, indexEnabled && endRow > firstRow ? 1 : 0);
+    }
+  }
+}
+
+// A key the index can't find, so the index lookup itself returns no rows.
+TEST_P(E2EIndexTest, splitRowRangeWithEmptyIndexLookup) {
+  auto rowType =
+      ROW({"key", "data", "nested"},
+          {BIGINT(),
+           ARRAY(INTEGER()),
+           ROW({{"nested", MAP(INTEGER(), VARCHAR())}})});
+  auto batches = generateKeyData(BIGINT(), 10'000, 1'000, /*startValue=*/1'000);
+  writeDataWithParam(batches, {"key"});
+
+  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+  filters["key"] = std::make_unique<BigintRange>(50'000, 60'000, false);
+  int64_t numConversions = 0;
+  const auto rows = readWithFilters(
+      *createReader(),
+      rowType,
+      filters,
+      /*indexEnabled=*/true,
+      numConversions,
+      SplitRowRange{2'000, 3'000});
+  EXPECT_EQ(countRows(rows), 0);
+  EXPECT_EQ(numConversions, 1);
+}
+
+// Sampling with both a split row range and index bounds keeps the same rows as
+// sampling with the range alone: rows skipped by either narrowing must advance
+// the random skip tracker exactly once.
+TEST_P(E2EIndexTest, randomSkipWithSplitRowRangeAndIndex) {
+  auto rowType =
+      ROW({"key", "data", "nested"},
+          {BIGINT(),
+           ARRAY(INTEGER()),
+           ROW({{"nested", MAP(INTEGER(), VARCHAR())}})});
+  auto batches = generateKeyData(BIGINT(), 10'000, 1'000, /*startValue=*/1'000);
+  writeDataWithParam(batches, {"key"});
+
+  struct TestCase {
+    SplitRowRange range;
+    int64_t lowerKey;
+    int64_t upperKey;
+    double sampleRate;
+    uint32_t randomSeed;
+  };
+  const std::vector<TestCase> testCases = {
+      {{2'000, 5'000}, 3'000, 7'000, 0.5, 42},
+      {{2'000, 5'000}, 3'000, 7'000, 0.1, 123},
+      {{4'000, 500}, 1'000, 10'999, 0.5, 42},
+      {{0, 3'000}, 2'500, 9'000, 0.25, 456},
+      {{6'000, 4'000}, 1'000, 7'500, 0.75, 789},
+      {{0, 1'000}, 6'000, 7'000, 0.5, 42},
+  };
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(
+        fmt::format(
+            "firstRow={}, numRows={}, keys=[{}, {}], sampleRate={}, seed={}",
+            testCase.range.firstRow,
+            testCase.range.numRows,
+            testCase.lowerKey,
+            testCase.upperKey,
+            testCase.sampleRate,
+            testCase.randomSeed));
+    std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+    filters["key"] = std::make_unique<BigintRange>(
+        testCase.lowerKey, testCase.upperKey, false);
+
+    int64_t numConversionsWithIndex = 0;
+    const auto withIndex = readWithFilters(
+        *createReader(testCase.sampleRate, testCase.randomSeed),
+        rowType,
+        filters,
+        /*indexEnabled=*/true,
+        numConversionsWithIndex,
+        testCase.range);
+    int64_t numConversionsWithoutIndex = 0;
+    const auto withoutIndex = readWithFilters(
+        *createReader(testCase.sampleRate, testCase.randomSeed),
+        rowType,
+        filters,
+        /*indexEnabled=*/false,
+        numConversionsWithoutIndex,
+        testCase.range);
+    verifyResultsEqual(withIndex, withoutIndex);
+    EXPECT_EQ(numConversionsWithIndex, 1);
+    EXPECT_EQ(numConversionsWithoutIndex, 0);
+  }
+}
+
+// The filter converted to index bounds is restored on the shared scan spec
+// after the read, also when the split row range leaves no rows to read.
+TEST_P(E2EIndexTest, filterRestorationWithSplitRowRange) {
+  auto rowType =
+      ROW({"key", "data", "nested"},
+          {BIGINT(),
+           ARRAY(INTEGER()),
+           ROW({{"nested", MAP(INTEGER(), VARCHAR())}})});
+  auto batches = generateKeyData(BIGINT(), 10'000, 1'000, /*startValue=*/1'000);
+  writeDataWithParam(batches, {"key"});
+  const auto fileKeys = bigintValues(batches, "key");
+  // Index bounds selecting file rows 3'000 to 7'000 in either sort order.
+  const auto lowerKey = std::min(fileKeys[3'000], fileKeys[7'000]);
+  const auto upperKey = std::max(fileKeys[3'000], fileKeys[7'000]);
+
+  auto scanSpec = std::make_shared<ScanSpec>("root");
+  for (size_t i = 0; i < rowType->size(); ++i) {
+    auto* childSpec =
+        scanSpec->addField(rowType->nameOf(i), static_cast<column_index_t>(i));
+    addChildSpecs(childSpec, rowType->childAt(i));
+  }
+  auto* keySpec = scanSpec->childByName("key");
+  keySpec->setFilter(std::make_unique<BigintRange>(lowerKey, upperKey, false));
+
+  // Overlapping, disjoint, empty, and past the end of the file.
+  for (const auto& range : std::vector<SplitRowRange>{
+           {2'000, 5'000}, {0, 1'000}, {5'000, 0}, {20'000, 10}}) {
+    SCOPED_TRACE(
+        fmt::format("firstRow={}, numRows={}", range.firstRow, range.numRows));
+    RowReaderOptions rowReaderOptions;
+    rowReaderOptions.setRequestedType(rowType);
+    rowReaderOptions.setScanSpec(scanSpec);
+    rowReaderOptions.setIndexEnabled(true);
+    rowReaderOptions.setSplitRowRange(range);
+    auto reader = createReader();
+    auto rowReader = reader->createRowReader(rowReaderOptions);
+
+    VectorPtr result = BaseVector::create(rowType, 1, leafPool_.get());
+    while (rowReader->next(1'000, result) > 0) {
+    }
+
+    ASSERT_NE(keySpec->filter(), nullptr);
+    ASSERT_EQ(keySpec->filter()->kind(), FilterKind::kBigintRange);
+    const auto* filter = static_cast<const BigintRange*>(keySpec->filter());
+    EXPECT_EQ(filter->lower(), lowerKey);
+    EXPECT_EQ(filter->upper(), upperKey);
   }
 }
 

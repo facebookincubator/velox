@@ -72,6 +72,7 @@ add_library(
   views/DeltaBlockEncodingView.h
   views/EliasFanoEncodingView.h
   views/PartitionedEliasFanoEncodingView.h
+  views/ReversedEncodingView.h
   views/EncodingViewFactory.cpp
   views/FsstEncodingView.cpp
   views/HuffmanEncodingView.h
@@ -82,6 +83,7 @@ add_library(
   views/SubIntSplitEncodingView.h
   views/RLEEncodingView.h
   views/SentinelEncodingView.h
+  views/SequenceEncodingView.h
   views/PFOREncodingView.h
   views/MainlyConstantEncodingView.h
   views/NullableEncodingView.h
@@ -122,6 +124,8 @@ add_library(
   SharedDictionaryEncoding.h
   SharedDictionaryBuilder.h
   SentinelEncoding.h
+  SequenceEncoding.h
+  ReversedEncoding.h
   RLEEncoding.h
   PrefixEncoding.h
   PFOREncoding.h

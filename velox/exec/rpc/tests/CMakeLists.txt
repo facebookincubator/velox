@@ -43,6 +43,7 @@ add_executable(velox_rpc_node_test RPCNodeTest.cpp Main.cpp)
 target_link_libraries(
   velox_rpc_node_test
   velox_response_simulator
+  velox_gtest_utils
   velox_core
   velox_memory
   velox_process
@@ -103,6 +104,7 @@ add_executable(velox_rpc_operator_test RPCOperatorTest.cpp Main.cpp)
 
 target_link_libraries(
   velox_rpc_operator_test
+  velox_deferred_rpc_phase_function
   velox_demo_batch_rpc_function
   velox_demo_rpc_function
   velox_rpc_plan_node_translator
@@ -113,6 +115,22 @@ target_link_libraries(
 )
 
 add_test(NAME velox_rpc_operator_test COMMAND velox_rpc_operator_test)
+
+add_executable(velox_deferred_rpc_phase_function_test DeferredRpcPhaseFunctionTest.cpp Main.cpp)
+
+target_link_libraries(
+  velox_deferred_rpc_phase_function_test
+  velox_deferred_rpc_phase_function
+  velox_async_rpc_function_registry
+  velox_memory
+  velox_process
+  velox_vector
+  GTest::gmock
+  GTest::gtest
+  Folly::folly
+)
+
+add_test(NAME velox_deferred_rpc_phase_function_test COMMAND velox_deferred_rpc_phase_function_test)
 
 add_executable(velox_rpc_aimd_under_load_test RPCAimdUnderLoadTest.cpp Main.cpp)
 

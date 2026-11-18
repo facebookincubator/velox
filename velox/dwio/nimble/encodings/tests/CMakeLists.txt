@@ -46,6 +46,7 @@ add_executable(
   EliasFanoEncodingViewTest.cpp
   PartitionedEliasFanoEncodingTest.cpp
   PartitionedEliasFanoEncodingViewTest.cpp
+  ReversedEncodingTest.cpp
   EncodingLayoutTest.cpp
   EncodingSelectionTest.cpp
   EncodingSliceTest.cpp
@@ -76,6 +77,8 @@ add_executable(
   RLEEncodingTest.cpp
   SentinelEncodingTest.cpp
   SentinelEncodingViewTest.cpp
+  SequenceEncodingTest.cpp
+  SequenceEncodingViewTest.cpp
   SharedDictionaryBuilderTest.cpp
   SharedDictionaryEncodingTest.cpp
   SimdForBitpackEncodingViewTest.cpp

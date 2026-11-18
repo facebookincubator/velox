@@ -13,8 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Values.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -315,6 +318,39 @@ TEST_F(FilterProjectTest, nestedFieldReferenceSharedChild) {
     expected->set(i, (i % 2 == 0 ? 0 : i) + (i % 3 == 0 ? 0 : i));
   }
   test::AssertQueryBuilder(plan).assertResults(makeRowVector({expected}));
+}
+
+DEBUG_ONLY_TEST_F(FilterProjectTest, sharedSubexprResultsReleasedAfterBatch) {
+  auto input = makeRowVector({
+      makeMapVector<int64_t, int64_t>({
+          {{1, 10}},
+          {{1, 20}, {2, 30}},
+          {{2, 40}, {1, 50}},
+      }),
+  });
+  const auto& mapValues =
+      input->childAt(0)->asUnchecked<MapVector>()->mapValues();
+
+  auto plan = test::PlanBuilder()
+                  .values({input})
+                  .project({"c0[1] + 1", "c0[1] * 2"})
+                  .planNode();
+
+  int numValuesCalls{0};
+  std::optional<int64_t> mapValuesUseCount;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Values::getOutput",
+      std::function<void(const exec::Values*)>([&](const exec::Values*) {
+        if (numValuesCalls++ == 1) {
+          mapValuesUseCount = mapValues.use_count();
+        }
+      }));
+
+  test::AssertQueryBuilder(plan).assertResults(makeRowVector({
+      makeFlatVector<int64_t>({11, 21, 51}),
+      makeFlatVector<int64_t>({20, 40, 100}),
+  }));
+  ASSERT_EQ(mapValuesUseCount, 1);
 }
 
 TEST_F(FilterProjectTest, numSilentThrow) {

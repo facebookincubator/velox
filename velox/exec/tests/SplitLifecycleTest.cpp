@@ -30,6 +30,7 @@
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common::testutil;
@@ -123,7 +124,7 @@ finishScan(TaskCursor& cursor, const core::PlanNodeId& scanId, Split split) {
     result->loadedVector();
     results.push_back(result);
   }
-  VELOX_CHECK(test::waitForTaskCompletion(task.get()));
+  VELOX_CHECK(test::TaskMonitor::waitForCompletion(*task));
   return results;
 }
 
@@ -243,7 +244,7 @@ TEST_F(SplitLifecycleTest, admissionResumesAfterLimit) {
 
   readRows(*cursor, data->size() + 2);
   ASSERT_FALSE(cursor->moveNext());
-  ASSERT_TRUE(test::waitForTaskCompletion(task.get()));
+  ASSERT_TRUE(test::TaskMonitor::waitForCompletion(*task));
   expectNoOutstandingSplits(task->taskStats());
 }
 
@@ -366,7 +367,7 @@ TEST_F(SplitLifecycleTest, cancellationDiscardsUnstartedGroup) {
   waitForDrivers(*task, 1);
 
   task->requestCancel();
-  ASSERT_TRUE(test::waitForTaskCancelled(task.get()));
+  ASSERT_TRUE(test::TaskMonitor::waitForCancel(*task));
   const auto stats = task->taskStats();
   expectNoOutstandingSplits(stats);
   EXPECT_EQ(stats.numAbandonedSplits, 4);
@@ -458,7 +459,7 @@ DEBUG_ONLY_TEST_F(SplitLifecycleTest, cancellationDiscardsAcquiredSplit) {
       },
       testing::ThrowsMessage<folly::OperationCancelled>(
           testing::StrEq("coroutine operation cancelled")));
-  ASSERT_TRUE(test::waitForTaskCancelled(task.get()));
+  ASSERT_TRUE(test::TaskMonitor::waitForCancel(*task));
   const auto stats = task->taskStats();
   expectNoOutstandingSplits(stats);
   EXPECT_EQ(stats.numAbandonedSplits, 3);
@@ -524,7 +525,7 @@ TEST_F(SplitLifecycleTest, exchangeSource) {
     EXPECT_EQ(stats.numFinishedSplits, 1);
   }
 
-  ASSERT_TRUE(test::waitForTaskCompletion(upstream.get()));
+  ASSERT_TRUE(test::TaskMonitor::waitForCompletion(*upstream));
 }
 
 } // namespace

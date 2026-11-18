@@ -3508,7 +3508,6 @@ TEST_P(SelectiveNimbleReaderTest, metadataReuseWithSameReader) {
       fileHandle->file = trackingFile;
       fileHandle->uuid = StringIdLease(ids, fileIdStr);
       fileHandle->groupId = StringIdLease(ids, fileIdStr + "_group");
-      tabletOptions.cache = cache_.get();
       tabletOptions.blockCache = getBlockCache(cache_.get());
       tabletOptions.fileHandle = fileHandle.get();
     }
@@ -3635,7 +3634,6 @@ TEST_P(SelectiveNimbleReaderTest, metadataReuseCrossReaders) {
             fileHandleOut->file = trackingFile;
             fileHandleOut->uuid = fileId;
             fileHandleOut->groupId = groupId;
-            tabletOptions.cache = cache_.get();
             tabletOptions.blockCache = getBlockCache(cache_.get());
             tabletOptions.fileHandle = fileHandleOut.get();
           }

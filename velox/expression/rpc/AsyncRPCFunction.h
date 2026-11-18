@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <utility>
@@ -117,6 +118,13 @@ class AsyncRPCFunction {
  public:
   virtual ~AsyncRPCFunction() = default;
 
+  /// Supplies the query allocator before initialization or input preparation.
+  virtual void setMemoryPool(std::shared_ptr<memory::MemoryPool> /*pool*/) {}
+
+  /// Releases undispatched state and stops local work. Live continuations
+  /// retain only the state they need; repeated calls must be safe.
+  virtual void close() noexcept {}
+
   /// Initializes the RPC function with query configuration and constant
   /// arguments.
   /// Called by RPCOperator during initialize(), before any dispatch.
@@ -173,6 +181,11 @@ class AsyncRPCFunction {
 
   /// Returns the Velox type of the result column.
   virtual TypePtr resultType() const = 0;
+
+  /// Maximum wait for one dispatched logical call or batch.
+  virtual std::chrono::milliseconds requestTimeout() const {
+    return std::chrono::hours(1);
+  }
 
   /// Returns the concurrency ceiling requested by function options, or 0 when
   /// unset. It takes precedence over rpc.ratelimiter.max_limit when

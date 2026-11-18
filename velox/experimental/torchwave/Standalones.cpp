@@ -126,8 +126,10 @@ void runStandaloneShortcut(
       const auto extent = geometry.sizes[dim];
       // An omitted end is aten's open-ended INT64_MAX, which the clamp below
       // turns into 'extent'; it must not be confused with a negative bound.
-      auto start = optIntAt(2).value_or(0);
-      auto end = optIntAt(3).value_or(std::numeric_limits<int64_t>::max());
+      auto start = data.wholeExtent ? 0 : optIntAt(2).value_or(0);
+      auto end = data.wholeExtent
+          ? extent
+          : optIntAt(3).value_or(std::numeric_limits<int64_t>::max());
       if (start < 0) {
         start += extent;
       }

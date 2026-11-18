@@ -446,7 +446,7 @@ TEST_P(NimbleIndexProjectorTest, projectorLoadsContiguousStripeStreams) {
 
   for (const auto& stripe : stripes) {
     SCOPED_TRACE(fmt::format("stripeIndex={}", stripe.selection.stripeIndex));
-    StreamReader reader(schema, leafPool_.get());
+    StreamReader reader(schema, leafPool_.get(), /*options=*/{});
     reader.setStreams(stripe.streams, encodingOptions);
     velox::VectorPtr actual;
     folly::coro::blockingWait(reader.co_next(kRowsPerStripe, actual));
@@ -457,60 +457,6 @@ TEST_P(NimbleIndexProjectorTest, projectorLoadsContiguousStripeStreams) {
         })});
     velox::test::assertEqualVectors(expected, actual);
   }
-}
-
-TEST_P(NimbleIndexProjectorTest, stripeReadAheadRespectsByteBudget) {
-  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
-  const auto tablet = openSinkTablet();
-  const auto twoStripeBytes =
-      tablet->stripeOffset(1) + tablet->stripeSize(1) - tablet->stripeOffset(0);
-  const auto tailBytes =
-      tablet->stripeOffset(2) + tablet->stripeSize(2) - tablet->stripeOffset(1);
-
-  struct TestCase {
-    uint64_t readAheadBytes;
-    uint32_t firstStripe;
-    uint32_t expectedStripes;
-  };
-  const TestCase testCases[] = {
-      {0, 0, 1},
-      {tablet->stripeSize(0) - 1, 0, 1},
-      {twoStripeBytes - 1, 0, 1},
-      {twoStripeBytes, 0, 2},
-      {tailBytes, 1, 2},
-      {tailBytes, 2, 1},
-  };
-  std::vector<Subfield> projectedSubfields;
-  projectedSubfields.emplace_back("value");
-  dwio::common::ReaderOptions readerOptions(leafPool_.get());
-  configureReaderOptions(
-      readerOptions,
-      /*setDataIoStats=*/true,
-      /*setMetadataIoStats=*/true,
-      /*setIndexIoStats=*/true,
-      /*cacheData=*/false,
-      /*verifyStreamChecksums=*/false);
-  readerOptions.setPrefetchMode(velox::io::PrefetchMode::PRELOAD);
-  ensureTabletReaderCache();
-  const auto fileHandle = makeFileHandle();
-  for (const auto& testCase : testCases) {
-    SCOPED_TRACE(
-        fmt::format(
-            "readAheadBytes={}, firstStripe={}",
-            testCase.readAheadBytes,
-            testCase.firstStripe));
-    readerOptions.setAutoPreloadLength(testCase.readAheadBytes);
-    auto projector = NimbleIndexProjector::create(
-        *tabletReaderCache_,
-        fileHandle,
-        projectedSubfields,
-        /*blockCache=*/nullptr,
-        readerOptions);
-    EXPECT_EQ(
-        projector->numStripesToRead(testCase.firstStripe),
-        testCase.expectedStripes);
-  }
-  EXPECT_EQ(dataIoStats_->read().count(), 0);
 }
 
 TEST_P(NimbleIndexProjectorTest, projectorValidatesStripeLoadRange) {
@@ -4608,6 +4554,18 @@ DEBUG_ONLY_TEST_P(NimbleIndexProjectorTest, statsDuringProjection) {
       velox::common::testutil::TestValue::disable();
     }
   });
+
+  // The cluster index reads its key chunk through a DirectDataInput too. One
+  // projection up front decodes it in the cached tablet that every projector
+  // below shares, so the stripe load is the only allocation the hook sees.
+  {
+    std::vector<Subfield> subfields;
+    subfields.emplace_back("value");
+    NimbleIndexProjector::Request request;
+    request.keyBounds = {makeRangeLookup(rowType, {"key"}, 0, kNumRows)};
+    createProjector(subfields)->projectStreams(request, {});
+  }
+
   for (const std::string_view method :
        {"projectStreams", "co_projectRows", "loadStripeStreams"}) {
     SCOPED_TRACE(method);

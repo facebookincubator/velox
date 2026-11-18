@@ -23,13 +23,13 @@
 #include <unordered_map>
 #include <vector>
 
-#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/nimble/common/ChunkedStream.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/index/ChunkStatsGroup.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
 #include "velox/dwio/nimble/index/HierarchicalClusterIndex.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
+#include "velox/dwio/nimble/tablet/DataInput.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
@@ -182,7 +182,7 @@ class ClusterIndexTestHelper {
       Section rootSection,
       velox::memory::MemoryPool* pool,
       std::shared_ptr<MetadataInput> metadataInput,
-      std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
+      std::shared_ptr<DataInput> dataInput,
       bool pinIndex = false,
       bool preloadIndex = false,
       IndexLookup::KeyStreamLocator keyStreamLocator = nullptr) {

@@ -63,13 +63,11 @@ class LocalMergeTest : public OperatorTestBase {
                                .orderBy({orderByClause}, true)
                                .planNode()})
                       .planNode();
-      CursorParameters params;
-      params.planNode = plan;
-      params.maxDrivers = 1;
-      assertQueryOrdered(
-          params,
-          "SELECT * FROM (SELECT * FROM tmp) ORDER BY " + orderByClause,
-          {keyIndex});
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .maxDrivers(1)
+          .assertResults(
+              "SELECT * FROM (SELECT * FROM tmp) ORDER BY " + orderByClause,
+              std::vector<uint32_t>{keyIndex});
 
       std::vector<std::shared_ptr<const core::PlanNode>> sources;
       for (const auto& input : inputVectors) {
@@ -82,8 +80,10 @@ class LocalMergeTest : public OperatorTestBase {
                  .localMerge({orderByClause}, std::move(sources))
                  .planNode();
 
-      assertQueryOrdered(
-          plan, "SELECT * FROM tmp ORDER BY " + orderByClause, {keyIndex});
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .assertResults(
+              "SELECT * FROM tmp ORDER BY " + orderByClause,
+              std::vector<uint32_t>{keyIndex});
     }
   }
 
@@ -114,13 +114,10 @@ class LocalMergeTest : public OperatorTestBase {
                                  .orderBy(orderByClauses, true)
                                  .planNode()})
                         .planNode();
-        CursorParameters params;
-        params.planNode = plan;
-        params.maxDrivers = 1;
-        assertQueryOrdered(
-            params,
-            "SELECT * FROM (SELECT * FROM tmp) " + orderBySql,
-            sortingKeys);
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .maxDrivers(1)
+            .assertResults(
+                "SELECT * FROM (SELECT * FROM tmp) " + orderBySql, sortingKeys);
 
         std::vector<std::shared_ptr<const core::PlanNode>> sources;
         for (const auto& input : inputVectors) {
@@ -133,8 +130,8 @@ class LocalMergeTest : public OperatorTestBase {
                    .localMerge(orderByClauses, std::move(sources))
                    .planNode();
 
-        assertQueryOrdered(
-            plan, "SELECT * FROM tmp " + orderBySql, sortingKeys);
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .assertResults("SELECT * FROM tmp " + orderBySql, sortingKeys);
       }
     }
   }
@@ -187,12 +184,11 @@ TEST_F(LocalMergeTest, offByOne) {
               })
           .planNode();
 
-  CursorParameters params;
-  params.planNode = plan;
-  params.queryCtx = core::QueryCtx::create(executor_.get());
-  params.queryCtx->testingOverrideConfigUnsafe(
-      {{core::QueryConfig::kPreferredOutputBatchRows, "6"}});
-  assertQueryOrdered(params, "VALUES (0), (1), (2), (3), (4), (5), (10)", {0});
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, "6")
+      .assertResults(
+          "VALUES (0), (1), (2), (3), (4), (5), (10)",
+          std::vector<uint32_t>{0});
 }
 
 } // namespace

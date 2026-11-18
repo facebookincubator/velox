@@ -365,6 +365,17 @@ void SelectiveStructColumnReaderBase::next(
   const RowSet rows(iota(numValues, rows_), numValues);
 
   if (!children_.empty()) {
+    if (result.use_count() == 1 &&
+        result->encoding() == VectorEncoding::Simple::ROW) {
+      auto* resultRow = result->asUnchecked<RowVector>();
+      for (const auto& childSpec : scanSpec_->children()) {
+        if (childSpec->keepValues() && childSpec->readFromFile() &&
+            !childSpec->deltaUpdate() && !isChildConstant(*childSpec)) {
+          children_[childSpec->subscript()]->releaseReusableResult(
+              resultRow->childAt(childSpec->channel()));
+        }
+      }
+    }
     read(readOffset_, rows, nullptr);
     getValues(outputRows(), &result);
     return;

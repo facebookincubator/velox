@@ -40,13 +40,10 @@ makeHiveInsertTableHandle(
       tracedHandle->compressionKind().value_or(common::CompressionKind_NONE);
   const auto storageFormat = tracedHandle->storageFormat();
   const auto serdeParameters = tracedHandle->serdeParameters();
-  const auto writerOptions = tracedHandle->writerOptions();
   LOG(INFO) << "Traced serde parameters:";
   for (const auto& [key, value] : serdeParameters) {
     LOG(INFO) << fmt::format("\t{}: {}", key, value);
   }
-  LOG(INFO) << fmt::format(
-      "Traced writer options: {}", writerOptions ? "present" : "null");
   LOG(INFO) << "Traced storage parameters:";
   for (const auto& [key, value] : tracedHandle->storageParameters()) {
     LOG(INFO) << fmt::format("\t{}: {}", key, value);
@@ -60,6 +57,7 @@ makeHiveInsertTableHandle(
           targetDir,
           targetDir,
           connector::hive::LocationHandle::TableType::kNew),
+      connector::hive::HiveConfig::InsertExistingPartitionsBehavior::kError,
       storageFormat,
       tracedHandle->bucketProperty() == nullptr
           ? nullptr
@@ -67,8 +65,7 @@ makeHiveInsertTableHandle(
                 *tracedHandle->bucketProperty()),
       compressionKind,
       serdeParameters,
-      writerOptions,
-      tracedHandle->ensureFiles(),
+      tracedHandle->writeEmptyFile(),
       tracedHandle->fileNameGenerator(),
       tracedHandle->storageParameters());
 }

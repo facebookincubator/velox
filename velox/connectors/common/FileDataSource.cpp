@@ -484,6 +484,9 @@ std::optional<RowVectorPtr> FileDataSource::next(
     output_ = BaseVector::create(outputRowType, 0, pool_);
   }
 
+  if (scanBatchCallback_) {
+    lastReadStart_ = splitReader_->nextRowNumber();
+  }
   const auto rowsScanned = splitReader_->next(size, output_);
   completedRows_ += rowsScanned;
   if (rowsScanned == 0) {
@@ -583,6 +586,8 @@ void FileDataSource::fireScanBatchCallback(core::ScanBatchEvent event) {
     if (!split_->partitionKeys.empty()) {
       fileEvent.partitionKeys = &split_->partitionKeys;
     }
+    fileEvent.split = split_.get();
+    fileEvent.rowStart = lastReadStart_;
   }
   scanBatchCallback_(fileEvent);
 }

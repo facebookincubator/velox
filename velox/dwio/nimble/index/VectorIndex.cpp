@@ -560,9 +560,9 @@ struct VectorIndexDirectory::InputState {
         options{
             .file = sourceOptions.file,
             .ioOptions = ioOptions.get(),
-            .fileHandle = sourceOptions.fileHandle,
-            .cache = sourceOptions.cache,
             .maxCacheEntrySize = sourceOptions.maxCacheEntrySize,
+            .blockCache = sourceOptions.blockCache,
+            .fileHandle = sourceOptions.fileHandle,
             .pinIndex = sourceOptions.pinIndex,
             .preloadIndex = sourceOptions.preloadIndex,
             .fileIoContext = sourceOptions.fileIoContext,

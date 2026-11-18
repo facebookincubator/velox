@@ -183,6 +183,15 @@ class Encoding {
     /// until restatement points are added.
     bool subIntSplitDeltaPreTransform{false};
 
+    /// Reversed estimates a stream only when its values descend between
+    /// adjacent rows more than this many times as often as they ascend. Each
+    /// ascending pair starts a new partition in the reversed values, so
+    /// Reversed rarely shrinks a stream that ascends often. The default of 1
+    /// estimates every stream that descends more often than it ascends. A
+    /// larger ratio skips more streams, saving the copy and the nested
+    /// estimates on each. Only the writer reads this option.
+    double reversedMinDescendingRatio{1.0};
+
     /// Per-column decoding statistics for timing decompression.
     velox::dwio::common::DecodingStats* decodingStats = nullptr;
 

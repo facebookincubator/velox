@@ -28,6 +28,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 using namespace facebook::velox;
 
@@ -156,7 +157,7 @@ TEST_F(OutputTransportTest, usesDefaultAfterRegistryClear) {
   EXPECT_TRUE(task->updateOutputBuffers(10, true /*noMoreBuffers*/));
 
   task->requestCancel();
-  waitForTaskCompletion(task.get());
+  TaskMonitor::waitForCompletion(*task);
 }
 
 TEST_F(OutputTransportTest, errorsOnUnregisteredTransport) {
@@ -229,7 +230,7 @@ TEST_F(OutputTransportTest, selectsOperatorByTransportKind) {
   EXPECT_TRUE(task->updateOutputBuffers(10, true /*noMoreBuffers*/));
 
   task->requestCancel();
-  waitForTaskCompletion(task.get());
+  TaskMonitor::waitForCompletion(*task);
   OutputTransportRegistry::unregisterAll();
 }
 
