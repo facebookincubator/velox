@@ -833,7 +833,9 @@ std::string generateUserFriendlyDiff(
       missingRows, extraRows, expectedRows.size(), actualRows.size(), type);
 }
 
-void verifyDuckDBResult(const DuckDBQueryResult& result, std::string_view sql) {
+void verifyDuckDBResult(
+    const DuckDbQueryRunner::QueryResult& result,
+    std::string_view sql) {
   VELOX_CHECK(
       !result->HasError(),
       "DuckDB query failed: {}\n{}",
@@ -935,7 +937,8 @@ void DuckDbQueryRunner::createTable(
   }
 }
 
-DuckDBQueryResult DuckDbQueryRunner::execute(const std::string& sql) {
+DuckDbQueryRunner::QueryResult DuckDbQueryRunner::execute(
+    const std::string& sql) {
   ::duckdb::Connection con(database());
   // Changing the default null order of NULLS FIRST used by DuckDB. Velox uses
   // NULLS LAST.
@@ -1467,15 +1470,6 @@ void waitForAllTasksToBeDeleted(uint64_t maxWaitUs) {
       folly::join("\n", pendingTaskStats));
 }
 
-void cancelAllTasks() {
-  std::vector<std::shared_ptr<Task>> pendingTasks = Task::getRunningTasks();
-  for (const auto& task : pendingTasks) {
-    if (task->isRunning()) {
-      task->requestCancel();
-    }
-  }
-}
-
 variant readSingleValue(const core::PlanNodePtr& plan, int32_t maxDrivers) {
   CursorParameters params;
   params.planNode = plan;
@@ -1487,24 +1481,6 @@ variant readSingleValue(const core::PlanNodePtr& plan, int32_t maxDrivers) {
   EXPECT_EQ(
       *plan->outputType()->childAt(0), *(result.second[0]->type()->childAt(0)));
   return materialize(result.second[0])[0][0];
-}
-
-std::unordered_map<std::string, OperatorStats> toOperatorStats(
-    const TaskStats& taskStats) {
-  std::unordered_map<std::string, OperatorStats> opStatsMap;
-
-  for (const auto& pipelineStats : taskStats.pipelineStats) {
-    for (const auto& opStats : pipelineStats.operatorStats) {
-      const auto& opType = opStats.operatorType;
-      auto it = opStatsMap.find(opType);
-      if (it != opStatsMap.end()) {
-        it->second.add(opStats);
-      } else {
-        opStatsMap.emplace(opType, opStats);
-      }
-    }
-  }
-  return opStatsMap;
 }
 
 } // namespace facebook::velox::exec::test

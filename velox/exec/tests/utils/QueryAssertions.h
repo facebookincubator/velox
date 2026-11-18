@@ -17,7 +17,6 @@
 
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Cursor.h"
-#include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"
 
 #ifdef BLOCK_SIZE
@@ -27,8 +26,7 @@
 
 namespace facebook::velox::exec::test {
 
-using MaterializedRow = std::vector<velox::variant>;
-using DuckDBQueryResult = std::unique_ptr<::duckdb::MaterializedQueryResult>;
+using MaterializedRow = std::vector<velox::Variant>;
 
 /// Multiset that compares floating-point values directly.
 using MaterializedRowMultiset = std::multiset<MaterializedRow>;
@@ -50,7 +48,9 @@ class DuckDbQueryRunner {
       const std::string& name,
       const std::vector<RowVectorPtr>& data);
 
-  DuckDBQueryResult execute(const std::string& sql);
+  using QueryResult = std::unique_ptr<::duckdb::MaterializedQueryResult>;
+
+  QueryResult execute(const std::string& sql);
 
   MaterializedRowMultiset execute(
       const std::string& sql,
@@ -170,11 +170,6 @@ bool waitForTaskStateChange(
 /// during this wait call. This is for testing purpose for now.
 void waitForAllTasksToBeDeleted(uint64_t maxWaitUs = 3'000'000);
 
-/// Cancels all currently running tasks across all available task managers.
-/// This is primarily used in testing scenarios to clean up active tasks
-/// and ensure test isolation between test cases.
-void cancelAllTasks();
-
 void assertResults(
     const std::vector<RowVectorPtr>& results,
     const RowTypePtr& resultType,
@@ -226,11 +221,5 @@ bool assertEqualResults(
     const MaterializedRowMultiset& actualRows,
     const TypePtr& actualType,
     const std::string& message);
-
-/// Aggregates operator stats by operator type. If a task has more than one plan
-/// nodes having the same operator types, then their operator stats are merged
-/// together.
-std::unordered_map<std::string, OperatorStats> toOperatorStats(
-    const TaskStats& taskStats);
 
 } // namespace facebook::velox::exec::test
