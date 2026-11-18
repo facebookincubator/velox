@@ -22,6 +22,7 @@
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/Exchange.h"
+#include "velox/exec/fuzzer/ScopedOOMInjector.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"

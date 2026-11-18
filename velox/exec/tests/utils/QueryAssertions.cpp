@@ -962,19 +962,6 @@ void DuckDbQueryRunner::execute(
   }
 }
 
-std::shared_ptr<Task> assertQuery(
-    const core::PlanNodePtr& plan,
-    const std::string& duckDbSql,
-    DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys) {
-  return assertQuery(
-      plan,
-      [](TaskCursor* taskCursor) { taskCursor->setNoMoreSplits(); },
-      duckDbSql,
-      duckDbQueryRunner,
-      sortingKeys);
-}
-
 // Compare left and right without epsilon and returns true if they are equal.
 static bool compareMaterializedRows(
     const MaterializedRowMultiset& left,
@@ -1015,19 +1002,6 @@ bool assertEqualResults(
   const auto& expectedType =
       (expected.size() == 0) ? nullptr : expected.at(0)->type();
   return assertEqualResults(expectedRows, expectedType, actual);
-}
-
-bool assertEqualResults(
-    const core::PlanNodePtr& plan1,
-    const core::PlanNodePtr& plan2) {
-  CursorParameters params1;
-  params1.planNode = plan1;
-  auto [cursor1, results1] = readCursor(params1);
-
-  CursorParameters params2;
-  params2.planNode = plan2;
-  auto [cursor2, results2] = readCursor(params2);
-  return assertEqualResults(results1, results2);
 }
 
 bool containsFloatingPoint(const TypePtr& type) {
@@ -1320,6 +1294,7 @@ void assertResultsOrdered(
   }
 }
 
+namespace {
 tsan_atomic<int32_t>& testingAbortPct() {
   static tsan_atomic<int32_t> abortPct = 0;
   return abortPct;
@@ -1335,6 +1310,23 @@ std::function<void(Task*)>& testingAbortHook() {
   return hook;
 }
 
+// Aborts 'task' with the probability set by TestScopedAbortInjection.
+void testingMaybeTriggerAbort(exec::Task* task) {
+  if (testingAbortPct() <= 0 || testingAbortCounter() <= 0) {
+    return;
+  }
+
+  if ((folly::Random::rand32() % 100) < testingAbortPct()) {
+    if (testingAbortCounter()-- > 0) {
+      if (testingAbortHook() != nullptr) {
+        testingAbortHook()(task);
+      }
+      task->requestAbort();
+    }
+  }
+}
+} // namespace
+
 TestScopedAbortInjection::TestScopedAbortInjection(
     int32_t abortPct,
     int32_t maxInjections,
@@ -1348,24 +1340,6 @@ TestScopedAbortInjection::~TestScopedAbortInjection() {
   testingAbortPct() = 0;
   testingAbortCounter() = 0;
   testingAbortHook() = nullptr;
-}
-
-bool testingMaybeTriggerAbort(exec::Task* task) {
-  if (testingAbortPct() <= 0 || testingAbortCounter() <= 0) {
-    return false;
-  }
-
-  if ((folly::Random::rand32() % 100) < testingAbortPct()) {
-    if (testingAbortCounter()-- > 0) {
-      if (testingAbortHook() != nullptr) {
-        testingAbortHook()(task);
-      }
-      task->requestAbort();
-      return true;
-    }
-  }
-
-  return false;
 }
 
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
@@ -1500,63 +1474,6 @@ void cancelAllTasks() {
       task->requestCancel();
     }
   }
-}
-
-std::shared_ptr<Task> assertQuery(
-    const core::PlanNodePtr& plan,
-    std::function<void(exec::TaskCursor*)> addSplits,
-    const std::string& duckDbSql,
-    DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys) {
-  CursorParameters params;
-  params.planNode = plan;
-  return assertQuery(
-      params, addSplits, duckDbSql, duckDbQueryRunner, sortingKeys);
-}
-
-std::shared_ptr<Task> assertQuery(
-    const CursorParameters& params,
-    std::function<void(TaskCursor*)> addSplits,
-    const std::string& duckDbSql,
-    DuckDbQueryRunner& duckDbQueryRunner,
-    std::optional<std::vector<uint32_t>> sortingKeys) {
-  auto [cursor, actualResults] = readCursor(params, addSplits);
-
-  if (sortingKeys) {
-    assertResultsOrdered(
-        actualResults,
-        params.planNode->outputType(),
-        duckDbSql,
-        duckDbQueryRunner,
-        sortingKeys.value());
-  } else {
-    assertResults(
-        actualResults,
-        params.planNode->outputType(),
-        duckDbSql,
-        duckDbQueryRunner);
-  }
-  auto task = cursor->task();
-
-  EXPECT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
-  return task;
-}
-
-std::shared_ptr<Task> assertQuery(
-    const core::PlanNodePtr& plan,
-    const std::vector<RowVectorPtr>& expectedResults) {
-  CursorParameters params;
-  params.planNode = plan;
-  return assertQuery(params, expectedResults);
-}
-
-std::shared_ptr<Task> assertQuery(
-    const CursorParameters& params,
-    const std::vector<RowVectorPtr>& expectedResults) {
-  auto result = readCursor(params);
-
-  assertEqualResults(expectedResults, result.second);
-  return result.first->task();
 }
 
 variant readSingleValue(const core::PlanNodePtr& plan, int32_t maxDrivers) {

@@ -24,6 +24,7 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/Spill.h"
+#include "velox/exec/fuzzer/ScopedOOMInjector.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/fuzzer/ArgumentTypeFuzzer.h"
 #include "velox/vector/VectorSaver.h"

@@ -377,7 +377,7 @@ TEST_F(ApproxPercentileTest, partialFull) {
       makeFlatVector<int32_t>(117, [](auto row) { return row; }),
       makeFlatVector<int32_t>(117, [](auto row) { return row < 7 ? 20 : 10; }),
   });
-  exec::test::assertQuery(params, {expected});
+  assertQuery(params, expected);
   waitForAllTasksToBeDeleted();
 }
 

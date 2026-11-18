@@ -30,6 +30,7 @@
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/exec/Cursor.h"
+#include "velox/exec/fuzzer/ScopedOOMInjector.h"
 #include "velox/exec/tests/utils/FilterToExpression.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
