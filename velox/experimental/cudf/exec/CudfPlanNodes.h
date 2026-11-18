@@ -537,7 +537,7 @@ class CudfTopNRowNumberNode : public CudfUnaryPlanNode {
 
  private:
   void addDetails(std::stringstream& stream) const override {
-    stream << core::TopNRowNumberNode::rankFunctionName(rankFunction_)
+    stream << core::TopNRowNumberNode::toName(rankFunction_)
            << ", limit=" << limit_ << ", rowNumber=" << generateRowNumber_;
   }
 
@@ -608,15 +608,17 @@ class CudfLocalPartitionNode : public core::LocalPartitionNode {
     return "CudfLocalPartition";
   }
 
+  /// Returns a cuDF local partition that partitions like 'node' and reads
+  /// from 'sources'. Throws if 'node' scales writers.
+  static std::shared_ptr<const CudfLocalPartitionNode> create(
+      const core::LocalPartitionNode& node,
+      std::vector<core::PlanNodePtr> sources);
+
   core::PlanNodePtr withSources(std::vector<core::PlanNodePtr> sources) const {
-    return detail::rebuildCudfLocalPartition(*this, std::move(sources));
+    return create(*this, std::move(sources));
   }
 
  private:
-  friend core::PlanNodePtr detail::rebuildCudfLocalPartition(
-      const core::LocalPartitionNode&,
-      std::vector<core::PlanNodePtr>);
-
   // Preserve opaque partition specs without retaining a CPU plan node.
   explicit CudfLocalPartitionNode(const core::LocalPartitionNode& node)
       : LocalPartitionNode(node) {}

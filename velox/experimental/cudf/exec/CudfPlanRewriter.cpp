@@ -18,7 +18,6 @@
 #include "velox/experimental/cudf/exec/CudfPlanNodeDefinitions.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
-#include "velox/experimental/cudf/exec/CudfScanUtils.h"
 #include "velox/experimental/cudf/exec/GpuPlacement.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"

@@ -84,9 +84,6 @@ void validateCudfPlan(
     VectorRepresentation taskOutput = VectorRepresentation::kVelox);
 
 namespace detail {
-core::PlanNodePtr rebuildCudfLocalPartition(
-    const core::LocalPartitionNode& node,
-    std::vector<core::PlanNodePtr> sources);
 std::optional<CudfPlanNodeTraits> customCudfPlanNodeTraits(
     const core::PlanNodePtr& node,
     const core::QueryCtx& queryCtx);

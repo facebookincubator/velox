@@ -2548,6 +2548,34 @@ TEST_F(AggregationTest, arrayAggCompanionFunctions) {
   }
 }
 
+// The input of avg_merge and avg_merge_extract_double is the state of avg,
+// ROW(DOUBLE, BIGINT), which is not an input type of avg itself.
+TEST_F(AggregationTest, avgCompanionFunctions) {
+  auto values = makeRowVector(
+      {"k", "v"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2}),
+          makeFlatVector<double>({1.0, 2.0, 5.0}),
+      });
+  auto partialPlan = PlanBuilder()
+                         .values({values})
+                         .singleAggregation({"k"}, {"avg_partial(v)"})
+                         .planNode();
+  auto states = cpuResults(partialPlan);
+  {
+    SCOPED_TRACE("avg_partial(v)");
+    AssertQueryBuilder(partialPlan).assertResults(states);
+  }
+  for (const auto* merge : {"avg_merge(a0)", "avg_merge_extract_double(a0)"}) {
+    SCOPED_TRACE(merge);
+    auto plan = PlanBuilder()
+                    .values({states})
+                    .singleAggregation({"k"}, {merge})
+                    .planNode();
+    AssertQueryBuilder(plan).assertResults(cpuResults(plan));
+  }
+}
+
 // A node with array_agg skips incremental aggregation, which would copy every
 // element collected so far with each batch: its partial step emits each
 // batch's lists as they come, where a count(v) partial compacts the batches

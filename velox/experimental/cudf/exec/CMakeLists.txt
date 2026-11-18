@@ -39,7 +39,6 @@ add_library(
   CudfPlanNodeTranslator.cpp
   CudfPlanRewriter.cpp
   CudfReduce.cpp
-  CudfScanUtils.cpp
   CudfTopN.cpp
   CudfTopNRowNumber.cpp
   CudfWindow.cpp

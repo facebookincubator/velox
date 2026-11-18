@@ -22,7 +22,7 @@
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
-#include "velox/experimental/cudf/tests/utils/CudfPlanTestUtils.h"
+#include "velox/experimental/cudf/tests/utils/CudfPlanBuilder.h"
 
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/core/FixedPointPlanNodes.h"

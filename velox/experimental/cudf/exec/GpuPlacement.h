@@ -15,7 +15,9 @@
  */
 #pragma once
 
+#include "velox/connectors/Connector.h"
 #include "velox/core/PlanNode.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/core/QueryCtx.h"
 
 #include <string>
@@ -25,9 +27,10 @@ namespace facebook::velox::cudf_velox {
 /// Rules that decide whether a plan node can run on the GPU. The cuDF operator
 /// adapters and the cuDF plan rewriter both use them, so the two paths place
 /// nodes the same way. Each function returns false and sets 'reason' when the
-/// node has to stay on the CPU. The rules look only at the plan node. Checks
-/// that exist because the driver adapter sees one pipeline at a time stay in
-/// the operator adapters.
+/// node has to stay on the CPU. The rules look only at the plan node, except
+/// isGpuTableScan(), which also asks the connector of the scan. Checks that
+/// exist because the driver adapter sees one pipeline at a time stay in the
+/// operator adapters.
 
 /// 'filter' and 'project' are the parts of one FilterProject operator: a
 /// Filter, a Project, or a Filter fused under a Project. LocalPlanner fuses a
@@ -64,6 +67,32 @@ bool canRunTopNRowNumberOnGpu(
 
 bool canRunLocalPartitionOnGpu(
     const std::shared_ptr<const core::LocalPartitionNode>& node,
+    std::string* reason);
+
+/// Returns whether the scan of 'node' produces CudfVectors: its connector is a
+/// cuDF Hive or Iceberg connector, cuDF supports its output type and the cuDF
+/// data source accepts its table handle. Sets 'reason' when the scan stays on
+/// the CPU. Shared by physical planning and the transitional driver adapters.
+///
+/// 'connectorQueryCtx' is the context the scan gives the connector, so that
+/// the answer matches the data source the connector picks.
+///
+/// Throws if the scan runs on the GPU, 'queryConfig' sets legacy_cast and the
+/// remaining filter has a cast that legacy_cast may change. The cuDF data
+/// source folds the remaining filter without legacy_cast, and the connector
+/// cannot see the setting to fall back.
+bool isGpuTableScan(
+    const core::TableScanNode& node,
+    const velox::connector::ConnectorQueryCtx& connectorQueryCtx,
+    const core::QueryConfig& queryConfig,
+    std::string* reason);
+
+/// Variant for a plan that has no task yet. Asks with a ConnectorQueryCtx that
+/// carries what the check reads from one: the session timezone settings of
+/// 'queryCtx' and an expression evaluator with its QueryConfig.
+bool isGpuTableScan(
+    const core::TableScanNode& node,
+    const core::QueryCtx& queryCtx,
     std::string* reason);
 
 } // namespace facebook::velox::cudf_velox

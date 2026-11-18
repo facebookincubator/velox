@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/utils/CudfPlanBuilder.h"
 
 #include "velox/dwio/common/Options.h"
@@ -99,3 +101,18 @@ std::function<PlanNodePtr(std::string, PlanNodePtr)> cudfTableWrite(
 }
 
 } // namespace facebook::velox::cudf_velox::exec::test
+
+namespace facebook::velox::cudf_velox::test {
+
+core::PlanNodePtr rewriteToCudfPlan(
+    const core::PlanNodePtr& plan,
+    std::shared_ptr<core::QueryCtx> queryCtx) {
+  VELOX_CHECK(
+      cudfIsRegistered(),
+      "cuDF must be registered before rewriting a plan for cuDF execution");
+  CudfPlanRewriter::Config config;
+  config.queryCtx = queryCtx ? std::move(queryCtx) : core::QueryCtx::create();
+  return CudfPlanRewriter::rewrite(plan, config);
+}
+
+} // namespace facebook::velox::cudf_velox::test

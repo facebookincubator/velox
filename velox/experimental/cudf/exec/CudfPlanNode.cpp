@@ -15,7 +15,7 @@
  */
 #include "velox/experimental/cudf/exec/CudfPlanNode.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodes.h"
-#include "velox/experimental/cudf/exec/CudfScanUtils.h"
+#include "velox/experimental/cudf/exec/GpuPlacement.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include <algorithm>
@@ -71,18 +71,22 @@ void unregisterCudfPlanNodeDescriptor(const std::string& name) {
       descriptors, [&](const auto& entry) { return entry.first == name; });
 }
 
-namespace detail {
-core::PlanNodePtr rebuildCudfLocalPartition(
+// static
+std::shared_ptr<const CudfLocalPartitionNode> CudfLocalPartitionNode::create(
     const core::LocalPartitionNode& node,
     std::vector<core::PlanNodePtr> sources) {
   VELOX_USER_CHECK(
       !node.scaleWriter(), "GPU local exchange cannot scale writers");
+  // The core node hands out its partition function only by reference, so the
+  // Builder is the one way to copy it.
   auto rebuilt = core::LocalPartitionNode::Builder(node)
                      .sources(std::move(sources))
                      .build();
   return std::shared_ptr<const CudfLocalPartitionNode>(
       new CudfLocalPartitionNode(*rebuilt));
 }
+
+namespace detail {
 
 std::optional<CudfPlanNodeTraits> customCudfPlanNodeTraits(
     const core::PlanNodePtr& node,
@@ -107,7 +111,7 @@ CudfPlanNodeTraits cudfPlanNodeTraits(
     return *traits;
   }
   if (auto* scan = dynamic_cast<const core::TableScanNode*>(node.get());
-      scan && isGpuTableScan(*scan, queryCtx)) {
+      scan && isGpuTableScan(*scan, queryCtx, /*reason=*/nullptr)) {
     return deviceTraits(0);
   }
   if (auto* exchange = dynamic_cast<const core::ExchangeNode*>(node.get());

@@ -105,8 +105,7 @@ struct AggregationDefinition {
     for (const auto& aggregate : node->aggregates()) {
       intermediateTypes.push_back(
           exec::resolveIntermediateType(
-              getOriginalName(aggregate.call->name()),
-              aggregate.rawInputTypes));
+              aggregate.call->name(), aggregate.rawInputTypes));
     }
     return std::make_shared<CudfNode>(
         node->id(),
@@ -541,7 +540,7 @@ struct LocalPartitionDefinition {
   static core::PlanNodePtr lower(
       const std::shared_ptr<const CoreNode>& node,
       std::vector<core::PlanNodePtr> sources) {
-    return detail::rebuildCudfLocalPartition(*node, std::move(sources));
+    return CudfLocalPartitionNode::create(*node, std::move(sources));
   }
 };
 
