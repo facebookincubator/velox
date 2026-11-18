@@ -86,22 +86,29 @@ class TextReaderTest : public testing::Test,
 
   std::unique_ptr<dwio::common::Reader> createReader(
       const RowTypePtr& type,
-      const std::string& fileName,
-      const dwio::common::SerDeOptions& serDeOptions =
-          dwio::common::SerDeOptions()) {
+      std::shared_ptr<ReadFile> readFile,
+      const dwio::common::SerDeOptions& serDeOptions) {
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-    auto path =
-        velox::test::getDataFilePath("velox/dwio/text/tests/reader/", fileName);
-    auto readFile = std::make_shared<LocalReadFile>(path);
     dwio::common::ReaderOptions readerOptions(pool());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setFileSchema(type);
     readerOptions.setSerDeOptions(serDeOptions);
-    auto input =
-        std::make_unique<dwio::common::BufferedInput>(readFile, *pool());
+    auto input = std::make_unique<dwio::common::BufferedInput>(
+        std::move(readFile), *pool());
     return factory->createReader(std::move(input), readerOptions);
+  }
+
+  std::unique_ptr<dwio::common::Reader> createReader(
+      const RowTypePtr& type,
+      const std::string& fileName,
+      const dwio::common::SerDeOptions& serDeOptions =
+          dwio::common::SerDeOptions()) {
+    auto path =
+        velox::test::getDataFilePath("velox/dwio/text/tests/reader/", fileName);
+    return createReader(
+        type, std::make_shared<LocalReadFile>(path), serDeOptions);
   }
 
   void assertReadsAs(
@@ -179,14 +186,8 @@ class TextReaderTest : public testing::Test,
   void assertReadText(std::string_view text, const RowVectorPtr& expected) {
     for (const auto batchSize : {1, 3}) {
       SCOPED_TRACE(batchSize);
-      auto readFile = std::make_shared<InMemoryReadFile>(text);
-      dwio::common::ReaderOptions readerOptions(pool());
-      readerOptions.setFileSchema(expected->rowType());
-      auto input =
-          std::make_unique<dwio::common::BufferedInput>(readFile, *pool());
-      auto reader =
-          dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT)
-              ->createReader(std::move(input), readerOptions);
+      auto reader = createReader(
+          expected->rowType(), std::make_shared<InMemoryReadFile>(text), {});
       dwio::common::RowReaderOptions rowReaderOptions;
       setScanSpec(*expected->type(), rowReaderOptions);
       auto rowReader = reader->createRowReader(rowReaderOptions);
