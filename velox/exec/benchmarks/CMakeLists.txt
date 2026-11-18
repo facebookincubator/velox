@@ -130,12 +130,24 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
-add_executable(velox_hash_join_right_semi_benchmark HashJoinRightSemiBenchmark.cpp)
+add_library(velox_hash_join_benchmark_base HashJoinBenchmarkBase.cpp)
+velox_add_test_headers(velox_hash_join_benchmark_base HashJoinBenchmarkBase.h)
 
 target_link_libraries(
-  velox_hash_join_right_semi_benchmark
+  velox_hash_join_benchmark_base
   velox_exec
   velox_exec_test_lib
+  velox_vector_test_lib
+  Folly::follybenchmark
+)
+
+add_executable(velox_hash_join_semi_anti_benchmark HashJoinSemiAntiBenchmark.cpp)
+
+target_link_libraries(
+  velox_hash_join_semi_anti_benchmark
+  velox_exec
+  velox_exec_test_lib
+  velox_hash_join_benchmark_base
   velox_vector_test_lib
   Folly::follybenchmark
 )
@@ -146,6 +158,7 @@ target_link_libraries(
   velox_hash_join_left_benchmark
   velox_exec
   velox_exec_test_lib
+  velox_hash_join_benchmark_base
   velox_vector_test_lib
   Folly::follybenchmark
 )
