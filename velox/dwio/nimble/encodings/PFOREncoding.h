@@ -28,7 +28,6 @@
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
-#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -568,8 +567,8 @@ typename PFOREncoding<T>::ExceptionSlice PFOREncoding<T>::sliceExceptions(
 
   // Locate exception-position bounds covering rows [offset, offset + length)
   // through the shared detail::findSortedPositionSlots helper. Slice the
-  // retained range positionally through EncodingFactory::slice and hand the
-  // result to SliceEncoding::wrap. When the sliced inner encoding supports
+  // retained range positionally through EncodingFactory::slice with the
+  // value delta. When the sliced inner encoding supports
   // push-down (FixedBitWidth / PFOR / Constant / Nullable / Trivial), the
   // wrapper folds |valueDelta| into the inner bytes at write time and the
   // on-wire delta is zero. Otherwise the delta rides on the wire and the
@@ -581,18 +580,12 @@ typename PFOREncoding<T>::ExceptionSlice PFOREncoding<T>::sliceExceptions(
   if (slicedExceptionCount == 0) {
     return {};
   }
-  const auto slicedInnerPositions = EncodingFactory::slice(
+  const auto slicedPositions = EncodingFactory::slice(
       exceptionPositions,
       exceptionOffset,
       slicedExceptionCount,
-      scratchBuffer,
-      options);
-  const auto slicedPositions = SliceEncoding<uint32_t>::wrap(
-      slicedInnerPositions,
-      /*offset=*/0,
-      /*length=*/slicedExceptionCount,
-      scratchBuffer,
       valueDelta,
+      scratchBuffer,
       options);
 
   return {
@@ -616,11 +609,9 @@ std::string_view PFOREncoding<T>::slice(
     uint32_t length,
     Buffer& buffer,
     const Encoding::Options& options) {
-  const auto sourceRowCount =
+  const uint32_t sourceRowCount =
       EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
-  NIMBLE_CHECK_LE(offset, sourceRowCount);
-  NIMBLE_CHECK_LE(length, sourceRowCount - offset);
-  NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+  EncodingPrefix::checkSliceRange(sourceRowCount, offset, length);
 
   auto* pool = &buffer.getMemoryPool();
   const char* readPos = encoded.data() +

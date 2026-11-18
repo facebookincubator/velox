@@ -206,6 +206,11 @@ class Checker : public PlanNodeVisitor {
     visitSources(&node, ctx);
   }
 
+  void visit(const VectorSearchJoinNode& node, PlanNodeVisitorContext& ctx)
+      const override {
+    visitSources(&node, ctx);
+  }
+
   void visit(const OrderByNode& node, PlanNodeVisitorContext& ctx)
       const override {
     visitSources(&node, ctx);

@@ -1277,9 +1277,9 @@ std::vector<CudfHashJoinProbe::JoinOutput> CudfHashJoinProbe::fullJoin(
   auto numProbeRows = leftTableView.num_rows();
 
   // For now, AST support is necessary to filter join output
-  if (joinNode_->filter() && !useAstFilter_) {
-    VELOX_NYI("Full join requires AST support for filtering");
-  }
+  VELOX_NYI_CHECK(
+      !joinNode_->filter() || useAstFilter_,
+      "Full join requires AST support for filtering");
 
   // Track which probe rows matched in any build batch so that unmatched probe
   // rows can be emitted with NULL build columns after the loop.
@@ -1577,9 +1577,9 @@ CudfHashJoinProbe::leftSemiProjectJoin(
   std::vector<JoinOutput> cudfOutputs;
 
   // For now, AST support is necessary to filter join output
-  if (joinNode_->filter() && !useAstFilter_) {
-    VELOX_NYI("Left semi project join requires AST support for filtering");
-  }
+  VELOX_NYI_CHECK(
+      !joinNode_->filter() || useAstFilter_,
+      "Left semi project join requires AST support for filtering");
 
   auto& rightTables = hashObject_.value().first;
   auto& hbs = hashObject_.value().second;

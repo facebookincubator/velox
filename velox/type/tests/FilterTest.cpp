@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -76,6 +77,35 @@ TEST(FilterTest, isNotNull) {
   EXPECT_TRUE(notNull.testInt128Range(0, 0, true));
 
   EXPECT_FALSE(notNull.testNull());
+}
+
+TEST(FilterTest, isNotNullTestValues) {
+  IsNotNull notNull;
+  // Also call through the base class interface.
+  const Filter* filter = &notNull;
+
+  // Every non-null value passes, whatever the lane values are.
+  const auto check = [&](auto first, auto second) {
+    using T = decltype(first);
+    std::array<T, xsimd::batch<T>::size> values;
+    for (size_t i = 0; i < values.size(); ++i) {
+      values[i] = (i & 1) ? first : second;
+    }
+
+    const auto batch = xsimd::load_unaligned(values.data());
+    const auto expected = simd::allSetBitMask<T>();
+
+    EXPECT_EQ(expected, simd::toBitMask(notNull.testValues(batch)));
+    EXPECT_EQ(expected, simd::toBitMask(filter->testValues(batch)));
+  };
+
+  check(int64_t{0}, std::numeric_limits<int64_t>::min());
+  check(int32_t{-1}, std::numeric_limits<int32_t>::max());
+  check(int16_t{0}, std::numeric_limits<int16_t>::min());
+  check(
+      std::numeric_limits<double>::quiet_NaN(),
+      std::numeric_limits<double>::infinity());
+  check(std::numeric_limits<float>::quiet_NaN(), -0.0f);
 }
 
 TEST(FilterTest, isNull) {
@@ -2165,6 +2195,27 @@ TEST(FilterTest, clone) {
   auto filter10 =
       createBigintValues({1, 10, 100, 10'000}, /*nullAllowed=*/false);
   EXPECT_TRUE(filter10->clone(/*nullAllowed*/ true)->testNull());
+
+  // A clone must work after the original is destroyed. The bounds are over 12
+  // bytes so that StringView does not inline them.
+  {
+    auto filter = between("2026-09-15 07:00:00", "2026-10-02 15:00:00");
+    auto copy = filter->clone();
+    filter.reset();
+    EXPECT_TRUE(testBytes(*copy, "2026-09-15 07:00:00"));
+    EXPECT_TRUE(testBytes(*copy, "2026-10-02 15:00:00"));
+    EXPECT_FALSE(testBytes(*copy, "2026-09-15 06:59:59"));
+    EXPECT_FALSE(testBytes(*copy, "2026-10-02 15:00:01"));
+  }
+  {
+    auto filter = notBetween("2026-09-15 07:00:00", "2026-10-02 15:00:00");
+    auto copy = filter->clone();
+    filter.reset();
+    EXPECT_TRUE(testBytes(*copy, "2026-09-15 06:59:59"));
+    EXPECT_TRUE(testBytes(*copy, "2026-10-02 15:00:01"));
+    EXPECT_FALSE(testBytes(*copy, "2026-09-15 07:00:00"));
+    EXPECT_FALSE(testBytes(*copy, "2026-10-02 15:00:00"));
+  }
 }
 
 TEST(FilterTest, mergeWithBytesValues) {

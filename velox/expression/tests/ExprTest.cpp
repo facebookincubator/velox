@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <exception>
 #include <fstream>
+#include <functional>
 #include <stdexcept>
 #include <vector>
 #include "glog/logging.h"
@@ -25,6 +26,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/core/Expressions.h"
+#include "velox/exec/tests/utils/ExpressionBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/expression/CoalesceExpr.h"
 #include "velox/expression/ConjunctExpr.h"
@@ -407,7 +409,20 @@ class ExprTest : public testing::Test, public VectorTestBase {
   }
 
   void testToSql(const std::string& expression, const RowTypePtr& rowType) {
-    auto exprSet = compileExpression(expression, rowType);
+    testToSql(compileExpression(expression, rowType), rowType);
+  }
+
+  void testToSql(const core::ExprPtr& expression, const RowTypePtr& rowType) {
+    testToSql(
+        compileExpression(
+            core::Expressions::inferTypes(
+                expression, rowType, execCtx_->pool())),
+        rowType);
+  }
+
+  void testToSql(
+      const std::unique_ptr<exec::ExprSet>& exprSet,
+      const RowTypePtr& rowType) {
     auto sql = exprSet->expr(0)->toSql();
     auto copy = compileExpression(sql, rowType);
     ASSERT_EQ(
@@ -3457,8 +3472,18 @@ TEST_P(ParameterizedExprTest, toSql) {
   // Array, map and row literals.
   testToSql("contains(array[1, 2, 3], a)", rowType);
   testToSql("map(array[a, b, 5], array[10, 20, 30])", rowType);
+
+  // Not a SQL string: the parser folds a map() call over constant arrays into
+  // a map constant with flat keys and values. toSql() writes that constant as
+  // a map() call, which compiles to the same map with dictionary-encoded keys
+  // and values, so the two would print differently. Building the call
+  // directly makes both sides evaluate map().
   testToSql(
-      "element_at(map(array[1, 2, 3], array['a', 'b', 'c']), a)", rowType);
+      expr_builder::call(
+          "map",
+          expr_builder::call("array_constructor", 1L, 2L, 3L),
+          expr_builder::call("array_constructor", "a", "b", "c")),
+      rowType);
   testToSql("row_constructor(a, b, 'test')", rowType);
   testToSql("row_constructor(true, 1.5, 'abc', array[1, 2, 3])", rowType);
 
@@ -3472,7 +3497,7 @@ TEST_P(ParameterizedExprTest, toSql) {
   testToSql("pi()", rowType);
 
   // Field dereference.
-  rowType = ROW({"o"}, {ROW({"i"}, {std::move(rowType)})});
+  rowType = ROW("o", ROW("i", std::move(rowType)));
   testToSql("o.i", rowType);
   testToSql("(o).i.e", rowType);
 }
@@ -3665,9 +3690,9 @@ TEST_P(ParameterizedExprTest, invalidInputs) {
 TEST_P(ParameterizedExprTest, lambdaWithRowField) {
   auto array = makeArrayVector<int64_t>(
       10, [](auto /*row*/) { return 5; }, [](auto row) { return row * 3; });
-  auto row = makeRowVector(
-      {"val"},
-      {makeFlatVector<int64_t>(10, [](vector_size_t row) { return row; })});
+  auto row = makeNamedRowVector(
+      "val",
+      makeFlatVector<int64_t>(10, [](vector_size_t row) { return row; }));
 
   auto rowVector = makeRowVector({"c0", "c1"}, {row, array});
 
@@ -4233,7 +4258,7 @@ TEST_P(ParameterizedExprTest, mapKeysAndValues) {
       MAP(BIGINT(), BIGINT()),
       makeNulls(vectorSize, nullEvery(3)),
       vectorSize,
-      makeIndices(vectorSize, folly::identity),
+      makeIndices(vectorSize, std::identity{}),
       makeIndices(vectorSize, [](auto /* row */) { return 1; }),
       makeFlatIdentityVector<int64_t>(vectorSize),
       makeFlatVector<int64_t>(vectorSize, [](auto i) { return 10 * i; }));
@@ -5100,14 +5125,14 @@ TEST_P(ParameterizedExprTest, dereference) {
   // the outer dereference expression (i.e., dereference of f0) receive
   // dictionary-encoded input without peeling.
   auto child = makeFlatVector<int64_t>({1, 2});
-  auto d0 = makeRowVector({"f0"}, {child});
+  auto d0 = makeNamedRowVector("f0", child);
   auto constantD0 = BaseVector::wrapInConstant(6, 0, d0);
   auto indices = makeIndices({0, 1, 2, 3, 4, 5});
   auto nulls = makeNulls(6, [](auto row) { return row == 5; });
   auto dictionaryD0 =
       BaseVector::wrapInDictionary(nulls, indices, 6, constantD0);
-  auto c0 = makeRowVector({"d0"}, {dictionaryD0});
-  auto input = makeRowVector({"c0"}, {c0});
+  auto c0 = makeNamedRowVector("d0", dictionaryD0);
+  auto input = makeNamedRowVector("c0", c0);
 
   // Skip row 4 during evaluation. FieldReference should not have errors dealing
   // with this situation.
@@ -5129,7 +5154,7 @@ TEST_P(ParameterizedExprTest, dereference) {
   // constant-encoded input.
   auto rowType = ROW({"f0"}, {BIGINT()});
   constantD0 = BaseVector::createNullConstant(rowType, 6, pool());
-  c0 = makeRowVector({"d0"}, {constantD0});
+  c0 = makeNamedRowVector("d0", constantD0);
   auto result = evaluate("(c0).d0.f0", makeRowVector({c0}));
   auto expected = makeNullConstant(TypeKind::BIGINT, 6);
   assertEqualVectors(expected, result);
@@ -5548,6 +5573,77 @@ TEST_F(ExprTest, disablePeeling) {
       makeRowVector({constantArray}),
       {},
       execCtx.get()));
+}
+
+TEST_F(ExprTest, smallBatchFlattenOrPeel) {
+  // Batches below 'expression.min_rows_for_peeling' flatten a single
+  // dictionary input of small rows and peel one of large rows. A flattened
+  // input is processed once per dictionary row and gives a flat result. A
+  // peeled input is processed once per distinct base row and gives a
+  // dictionary result.
+  constexpr vector_size_t kDictionarySize = 4;
+  constexpr vector_size_t kNumBaseRows = 2;
+
+  auto makeExecCtx = [&](std::unordered_map<std::string, std::string> config) {
+    config.emplace(core::QueryConfig::kMinRowsForPeeling, "16");
+    auto queryCtx =
+        core::QueryCtx::create(nullptr, core::QueryConfig(std::move(config)));
+    return std::make_pair(
+        queryCtx, std::make_unique<core::ExecCtx>(pool_.get(), queryCtx.get()));
+  };
+
+  // Wraps 'kNumBaseRows' rows of arrays of arrays, each inner array holding
+  // 'innerSize' bigints, in a dictionary of 'kDictionarySize' rows.
+  auto makeInput = [&](vector_size_t innerSize) {
+    auto inner = makeArrayVector<int64_t>(
+        2 * kNumBaseRows,
+        [&](auto /*row*/) { return innerSize; },
+        [](auto row) { return row; });
+    auto base = makeArrayVector({0, 2}, inner);
+    return makeRowVector({wrapInDictionary(
+        makeIndices(kDictionarySize, [](auto row) { return row % 2; }),
+        kDictionarySize,
+        base)});
+  };
+
+  auto expectFlattened = [&](const RowVectorPtr& input,
+                             core::ExecCtx* execCtx) {
+    auto [results, stats] =
+        evaluateMultipleWithStats({"cardinality(c0)"}, input, {}, execCtx);
+    ASSERT_EQ(results[0]->encoding(), VectorEncoding::Simple::FLAT);
+    ASSERT_EQ(stats["cardinality"].numProcessedRows, kDictionarySize);
+    assertEqualVectors(makeConstant<int64_t>(2, kDictionarySize), results[0]);
+  };
+
+  auto expectPeeled = [&](const RowVectorPtr& input, core::ExecCtx* execCtx) {
+    auto [results, stats] =
+        evaluateMultipleWithStats({"cardinality(c0)"}, input, {}, execCtx);
+    ASSERT_EQ(results[0]->encoding(), VectorEncoding::Simple::DICTIONARY);
+    ASSERT_EQ(stats["cardinality"].numProcessedRows, kNumBaseRows);
+    assertEqualVectors(makeConstant<int64_t>(2, kDictionarySize), results[0]);
+  };
+
+  // Rows of 16 bytes and of 64KB.
+  auto smallRows = makeInput(1);
+  auto largeRows = makeInput(4'096);
+  const auto maxFlattenBytes =
+      kDictionarySize * exec::EvalCtx::kMaxFlattenRowBytes;
+  ASSERT_LE(smallRows->childAt(0)->estimateFlatSize(), maxFlattenBytes);
+  ASSERT_GT(largeRows->childAt(0)->estimateFlatSize(), maxFlattenBytes);
+
+  // Small rows are flattened and large rows are peeled.
+  {
+    auto [queryCtx, execCtx] = makeExecCtx({});
+    expectFlattened(smallRows, execCtx.get());
+    expectPeeled(largeRows, execCtx.get());
+  }
+
+  // Peeling disabled for debugging flattens large rows too.
+  {
+    auto [queryCtx, execCtx] = makeExecCtx(
+        {{core::QueryConfig::kDebugDisableExpressionWithPeeling, "true"}});
+    expectFlattened(largeRows, execCtx.get());
+  }
 }
 
 TEST_F(ExprTest, disableSharedSubExpressionReuse) {

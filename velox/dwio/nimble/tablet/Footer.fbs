@@ -39,11 +39,9 @@ table StripeGroup {
   stripe_count:uint32;
   stream_offsets:[uint32];
   stream_sizes:[uint32];
-  /// Optional per-stream checksum of the stream's on-disk bytes, laid out
-  /// stripe-major alongside stream_offsets / stream_sizes and of equal length.
-  /// Legacy: current writers put each stream's checksum in its trailer
-  /// (FileProperties.stream_trailer) and leave this absent.
-  stream_checksums:[uint32];
+  /// Deprecated: per-stream checksums are stored in stream trailers
+  /// (FileProperties.stream_trailer). Never reuse this slot.
+  stream_checksums:[uint32] (deprecated);
 }
 
 /// One independently encoded array. Wraps the raw encoded bytes in a sub-table
@@ -63,14 +61,22 @@ table StreamMajorStripeGroup {
   stream_count:uint32;
   stream_offsets:[EncodedStream];
   stream_sizes:[EncodedStream];
-  /// Optional per-stream checksums: one encoded array of
-  /// stream_count * stripe_count values, stream-major, so stream S of stripe T
-  /// sits at S * stripe_count + T. A single blob rather than one per stream,
-  /// because checksums are uniformly distributed and have no per-stream value
-  /// range for a tighter bit width to exploit. Legacy: current writers put each
-  /// stream's checksum in its trailer (FileProperties.stream_trailer) and leave
-  /// this absent.
-  stream_checksums:EncodedStream;
+  /// Deprecated: per-stream checksums are stored in stream trailers
+  /// (FileProperties.stream_trailer). Never reuse this slot.
+  stream_checksums:EncodedStream (deprecated);
+  /// Each stream's stripe list: the stripes of the group where the stream has
+  /// data (a non-zero size), in strictly ascending order. Present only in a
+  /// group with the sparse layout, where each stream holds offsets and sizes
+  /// only for the stripes in its list. For a group of 4 stripes where stream 7 has
+  /// data only in stripes 1 and 3:
+  ///   stream_stripes[7] = [1, 3]
+  ///   stream_offsets[7] = [offset in stripe 1, offset in stripe 3]
+  ///   stream_sizes[7]   = [size in stripe 1, size in stripe 3]
+  /// An entry without data omits its array. A stream with data in every stripe
+  /// omits its stripe list. A stream with data in no stripe omits all three
+  /// arrays. A reader that predates this field fails on such a group, unless
+  /// every stream has data in every stripe, which it then reads correctly.
+  stream_stripes:[EncodedStream];
 }
 
 table MetadataSection {

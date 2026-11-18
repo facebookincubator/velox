@@ -36,23 +36,6 @@ namespace {
 
 constexpr int32_t kSparkDefaultAccuracy = 10000;
 
-std::vector<TypePtr>
-getArgTypes(const TypePtr& dataType, int32_t accuracy, bool isArray) {
-  std::vector<TypePtr> argTypes;
-  argTypes.push_back(dataType);
-  if (!isArray) {
-    argTypes.push_back(DOUBLE());
-  } else {
-    argTypes.push_back(ARRAY(DOUBLE()));
-  }
-  // Always pass accuracy parameter to ensure consistency across aggregation
-  // stages.
-  if (accuracy >= 0) {
-    argTypes.push_back(BIGINT());
-  }
-  return argTypes;
-}
-
 // Build a function call string for spark_approx_percentile.
 std::string
 functionCall(bool keyed, double percentile, int32_t accuracy, bool isArray) {
@@ -88,10 +71,6 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
     // Register Spark aggregate functions with "spark_" prefix.
     registerAggregateFunctions("spark_");
     random::setSeed(0);
-    // Set fixed random seed for reproducible test results.
-    queryConfig_
-        [core::QueryConfig::kDebugAggregationApproxPercentileFixedRandomSeed] =
-            "0";
   }
 
   // Test global aggregation (no grouping keys).
@@ -137,34 +116,23 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
     }
 
     // Test single percentile.
-    enableTestStreaming();
-    testAggregations(
-        {rows},
-        {},
-        {functionCall(false, percentile, accuracy, false)},
-        expected,
-        queryConfig_);
+    AggregationTester(*this)
+        .inputs(rows)
+        .aggregates({functionCall(false, percentile, accuracy, false)})
+        .config(
+            core::QueryConfig::kDebugAggregationApproxPercentileFixedRandomSeed,
+            "0")
+        .withCompanion()
+        .assertResults(expected);
 
     // Test percentile array (3 identical percentiles).
-    testAggregations(
-        {rows},
-        {},
-        {functionCall(false, percentile, accuracy, true)},
-        expectedArray,
-        queryConfig_);
-
-    // Companion functions of approx_percentile do not support test streaming
-    // because intermediate results are KLL that has non-deterministic shape.
-    disableTestStreaming();
-    testAggregationsWithCompanion(
-        {rows},
-        [](PlanBuilder& /*builder*/) {},
-        {},
-        {functionCall(false, percentile, accuracy, false)},
-        {getArgTypes(values->type(), accuracy, false)},
-        {},
-        expected,
-        queryConfig_);
+    AggregationTester(*this)
+        .inputs(rows)
+        .aggregates({functionCall(false, percentile, accuracy, true)})
+        .config(
+            core::QueryConfig::kDebugAggregationApproxPercentileFixedRandomSeed,
+            "0")
+        .assertResults(expectedArray);
   }
 
   // Test global aggregation with NaN and Infinity values for floating point.
@@ -200,26 +168,15 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
       const RowVectorPtr& expectedResult) {
     auto rows = makeRowVector({keys, values});
 
-    enableTestStreaming();
-    testAggregations(
-        {rows},
-        {"c0"},
-        {functionCall(true, percentile, accuracy, false)},
-        {expectedResult},
-        queryConfig_);
-
-    // Companion functions of approx_percentile do not support test streaming
-    // because intermediate results are KLL that has non-deterministic shape.
-    disableTestStreaming();
-    testAggregationsWithCompanion(
-        {rows},
-        [](PlanBuilder& /*builder*/) {},
-        {"c0"},
-        {functionCall(true, percentile, accuracy, false)},
-        {getArgTypes(values->type(), accuracy, false)},
-        {},
-        {expectedResult},
-        queryConfig_);
+    AggregationTester(*this)
+        .inputs(rows)
+        .groupBy({"c0"})
+        .aggregates({functionCall(true, percentile, accuracy, false)})
+        .config(
+            core::QueryConfig::kDebugAggregationApproxPercentileFixedRandomSeed,
+            "0")
+        .withCompanion()
+        .assertResults(expectedResult);
 
     // Test percentile array.
     {
@@ -259,18 +216,17 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
                  elements)});
       }
 
-      enableTestStreaming();
-      testAggregations(
-          {rows},
-          {"c0"},
-          {functionCall(true, percentile, accuracy, true)},
-          {expected},
-          queryConfig_);
+      AggregationTester(*this)
+          .inputs(rows)
+          .groupBy({"c0"})
+          .aggregates({functionCall(true, percentile, accuracy, true)})
+          .config(
+              core::QueryConfig::
+                  kDebugAggregationApproxPercentileFixedRandomSeed,
+              "0")
+          .assertResults(expected);
     }
   }
-
- private:
-  std::unordered_map<std::string, std::string> queryConfig_;
 };
 
 // Test global aggregation with basic integer values.
@@ -535,10 +491,10 @@ TEST_F(ApproxPercentileAggregateTest, nullPercentile) {
   auto rows = makeRowVector({values, percentileOfDouble});
 
   // Test null percentile for spark_approx_percentile(value, percentile).
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          {rows}, {}, {"spark_approx_percentile(c0, c1)"}, "SELECT NULL"),
-      "Percentile cannot be null");
+  AggregationTester(*this)
+      .inputs(rows)
+      .aggregates({"spark_approx_percentile(c0, c1)"})
+      .assertError("Percentile cannot be null");
 
   // Test null array percentile (entire array is null, not array with null
   // elements). Note: Spark does not allow null elements within the percentile
@@ -551,10 +507,10 @@ TEST_F(ApproxPercentileAggregateTest, nullPercentile) {
   // Test null array percentile for spark_approx_percentile(value, percentiles).
   // When the entire percentile array is null, it triggers the null check
   // in ArrayVector and throws "Percentile array cannot contain nulls".
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          {rows}, {}, {"spark_approx_percentile(c0, c1)"}, "SELECT NULL"),
-      "Percentile array cannot contain nulls");
+  AggregationTester(*this)
+      .inputs(rows)
+      .aggregates({"spark_approx_percentile(c0, c1)"})
+      .assertError("Percentile array cannot contain nulls");
 }
 
 // Test with NaN values in floating point inputs.
@@ -668,10 +624,10 @@ TEST_F(ApproxPercentileAggregateTest, invalidAccuracy) {
   auto rows = makeRowVector({values});
 
   // Accuracy = 0 is invalid.
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          {rows}, {}, {"spark_approx_percentile(c0, 0.5, 0)"}, "SELECT 3"),
-      "The accuracy must be between (0, 2147483647]");
+  AggregationTester(*this)
+      .inputs(rows)
+      .aggregates({"spark_approx_percentile(c0, 0.5, 0)"})
+      .assertError("The accuracy must be between (0, 2147483647]");
 }
 
 // Test single row input.

@@ -782,8 +782,70 @@ TEST_F(ParquetTableScanTest, array) {
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .connectorSessionProperty(
-          kHiveConnectorId, FileConfig::kUseColumnNamesSession, "true")
+          kHiveConnectorId,
+          connector::FileConfig::kUseColumnNamesSession,
+          "true")
       .splits({makeSplit(getExampleFilePath("nested_array_struct.parquet"))})
+      .assertResults(expected);
+}
+
+TEST_F(ParquetTableScanTest, legacyThriftListOfRow) {
+  // In parquet-thrift-compat.parquet, complexColumn is a MAP whose value is a
+  // legacy two-level LIST. Its two-field repeated group "value_tuple" is the
+  // list element, so it reads as ARRAY<ROW>.
+  const auto rowType =
+      ROW("complexColumn",
+          MAP(INTEGER(),
+              ARRAY(ROW({
+                  {"nestedIntsColumn", ARRAY(INTEGER())},
+                  {"nestedStringColumn", VARCHAR()},
+              }))));
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(rowType, {}, "", rowType, {})
+                  .planNode();
+
+  auto genOffsets = [](vector_size_t size) {
+    std::vector<vector_size_t> offsets;
+    for (auto i = 0; i < size; ++i) {
+      if (i % 3 == 0) {
+        offsets.emplace_back(i);
+      }
+    }
+    return offsets;
+  };
+
+  const vector_size_t size = 10;
+  auto arrayOfInts = makeArrayVector(
+      genOffsets(size * 27), makeFlatVector<int32_t>(size * 27, [](auto row) {
+        return row / 27 + (row % 9) / 3 + row % 3;
+      }));
+  auto rowOfArray = makeRowVector(
+      {"nestedIntsColumn", "nestedStringColumn"},
+      {
+          arrayOfInts,
+          makeFlatVector<std::string>(
+              size * 9,
+              [](auto row) {
+                return "val_" + std::to_string(row / 9 + row % 3);
+              }),
+      });
+  auto arrayOfRow = makeArrayVector(genOffsets(size * 9), rowOfArray);
+  auto expected = makeRowVector(
+      rowType->names(),
+      {
+          makeMapVector(
+              genOffsets(size * 3),
+              makeFlatVector<int32_t>(
+                  size * 3, [](auto row) { return row / 3 + row % 3; }),
+              arrayOfRow),
+      });
+
+  AssertQueryBuilder(plan)
+      .connectorSessionProperty(
+          kHiveConnectorId,
+          connector::FileConfig::kUseColumnNamesSession,
+          "true")
+      .splits({makeSplit(getExampleFilePath("parquet-thrift-compat.parquet"))})
       .assertResults(expected);
 }
 
@@ -810,7 +872,7 @@ TEST_F(ParquetTableScanTest, legacyArrayOfStructOfArray) {
            makeArrayVector<int64_t>({{}, {11, 22}}),
            makeArrayVector<int64_t>({{9001, 9002}, {9101}})}));
 
-  auto expected = makeRowVector({"ads"}, {adsArray});
+  auto expected = makeNamedRowVector("ads", adsArray);
 
   AssertQueryBuilder(plan)
       .split(makeSplit(
@@ -1011,19 +1073,19 @@ TEST_F(ParquetTableScanTest, rowIndex) {
   connector::ColumnHandleMap assignments;
   assignments["a"] = std::make_shared<connector::hive::HiveColumnHandle>(
       "a",
-      connector::hive::FileColumnHandle::ColumnType::kRegular,
+      connector::FileColumnHandle::ColumnType::kRegular,
       BIGINT(),
       BIGINT());
   assignments["b"] = std::make_shared<connector::hive::HiveColumnHandle>(
       "b",
-      connector::hive::FileColumnHandle::ColumnType::kRegular,
+      connector::FileColumnHandle::ColumnType::kRegular,
       DOUBLE(),
       DOUBLE());
   assignments[kPath] = synthesizedColumn(kPath, VARCHAR());
   assignments["_tmp_metadata_row_index"] =
       std::make_shared<connector::hive::HiveColumnHandle>(
           "_tmp_metadata_row_index",
-          connector::hive::FileColumnHandle::ColumnType::kRowIndex,
+          connector::FileColumnHandle::ColumnType::kRowIndex,
           BIGINT(),
           BIGINT());
 
@@ -1112,13 +1174,17 @@ TEST_F(ParquetTableScanTest, filterNullIcebergPartition) {
           }));
 
   std::shared_ptr<connector::ColumnHandle> c0 = makeColumnHandle(
-      "c0", BIGINT(), BIGINT(), {}, FileColumnHandle::ColumnType::kRegular);
+      "c0",
+      BIGINT(),
+      BIGINT(),
+      {},
+      connector::FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c1 = makeColumnHandle(
       "c1",
       BIGINT(),
       BIGINT(),
       {},
-      FileColumnHandle::ColumnType::kPartitionKey);
+      connector::FileColumnHandle::ColumnType::kPartitionKey);
 
   const auto filePath =
       getExampleFilePath("icebergNullIcebergPartition.parquet");
@@ -1424,7 +1490,7 @@ TEST_F(ParquetTableScanTest, structFilterByIndex) {
                             "not(is_null(name)) AND not(is_null(nickname))",
                             dataColumns)
                         .planNode();
-  const auto expected = makeRowVector({"id"}, {makeFlatVector<int64_t>({1})});
+  const auto expected = makeNamedRowVector("id", makeFlatVector<int64_t>({1}));
   AssertQueryBuilder(plan)
       // The null-struct policy is name-mapping-only. Empty child specs under
       // position mapping must preserve the physical structs' nullness.
@@ -1468,7 +1534,7 @@ TEST_F(ParquetTableScanTest, mapStructFilterByIndex) {
           .tableScan(outputType, {}, "not(is_null(name))", vector->rowType())
           .planNode();
   const auto expected =
-      makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 3, 4})});
+      makeNamedRowVector("id", makeFlatVector<int64_t>({1, 3, 4}));
   AssertQueryBuilder(plan)
       .split(makeSplit(file->getPath()))
       .assertResults(expected);
@@ -1547,21 +1613,23 @@ TEST_F(ParquetTableScanTest, structElementsByName) {
   AssertQueryBuilder(plan)
       // Force multiple reads within each row group so preset nulls and lengths
       // are consumed and refreshed without a row-group transition.
-      .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
-      .config(core::QueryConfig::kMaxOutputBatchRows, "1")
+      .config(core::QueryConfig::kPreferredOutputBatchRows, 1)
+      .config(core::QueryConfig::kMaxOutputBatchRows, 1)
       .connectorSessionProperty(
-          kHiveConnectorId, FileConfig::kUseColumnNamesSession, "true")
+          kHiveConnectorId,
+          connector::FileConfig::kUseColumnNamesSession,
+          "true")
       .split(makeSplit(file->getPath()))
       .assertResults(expected);
 }
 
 TEST_F(ParquetTableScanTest, deltaByteArray) {
   auto a = makeFlatVector<StringView>({"axis", "axle", "babble", "babyhood"});
-  auto expected = makeRowVector({"a"}, {a});
+  auto expected = makeNamedRowVector("a", a);
   createDuckDbTable("expected", {expected});
 
   auto vector = makeFlatVector<StringView>({{}});
-  loadData(ROW({"a"}, {VARCHAR()}), makeRowVector({"a"}, {vector}));
+  loadData(ROW({"a"}, {VARCHAR()}), makeNamedRowVector("a", vector));
   assertSelect(
       {makeSplit(getExampleFilePath("delta_byte_array.parquet"))},
       {"a"},
@@ -1575,9 +1643,9 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedConstantDelta) {
       facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
 
   constexpr vector_size_t kSize = 1024;
-  auto vector = makeRowVector(
-      {"c"},
-      {makeFlatVector<int64_t>(kSize, [](auto row) { return 100 + 7 * row; })});
+  auto vector = makeNamedRowVector(
+      "c",
+      makeFlatVector<int64_t>(kSize, [](auto row) { return 100 + 7 * row; }));
   auto file = TempFilePath::create();
   writeToParquetFile(file->getPath(), {vector}, options);
   loadData(vector->rowType(), vector);
@@ -1588,9 +1656,10 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedConstantDelta) {
 TEST_F(ParquetTableScanTest, deltaBinaryPackedNarrowBitWidth) {
   auto run = [&]<typename T>() {
     constexpr vector_size_t kSize = 4096;
-    auto vector = makeRowVector({"c"}, {makeFlatVector<T>(kSize, [](auto row) {
-                                  return static_cast<T>(row + row / 2);
-                                })});
+    auto vector =
+        makeNamedRowVector("c", makeFlatVector<T>(kSize, [](auto row) {
+                             return static_cast<T>(row + row / 2);
+                           }));
 
     for (bool useV2 : {false, true}) {
       SCOPED_TRACE(fmt::format("T=int{} useV2={}", sizeof(T) * 8, useV2));
@@ -1623,10 +1692,10 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedBitWidth32) {
 
   constexpr vector_size_t kSize = 1024;
   constexpr int64_t kStep = (1LL << 32) - 1;
-  auto vector = makeRowVector(
-      {"c"}, {makeFlatVector<int64_t>(kSize, [](auto row) {
+  auto vector = makeNamedRowVector(
+      "c", makeFlatVector<int64_t>(kSize, [](auto row) {
         return static_cast<int64_t>((row / 2) * kStep + (row % 2 ? kStep : 0));
-      })});
+      }));
   auto file = TempFilePath::create();
   writeToParquetFile(file->getPath(), {vector}, options);
   loadData(vector->rowType(), vector);
@@ -1673,10 +1742,10 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedBitWidth33) {
 
   constexpr vector_size_t kSize = 1024;
   constexpr int64_t kStep = 1LL << 32;
-  auto vector = makeRowVector(
-      {"c"}, {makeFlatVector<int64_t>(kSize, [](auto row) {
+  auto vector = makeNamedRowVector(
+      "c", makeFlatVector<int64_t>(kSize, [](auto row) {
         return static_cast<int64_t>((row / 2) * kStep + (row % 2 ? kStep : 0));
-      })});
+      }));
   auto file = TempFilePath::create();
   writeToParquetFile(file->getPath(), {vector}, options);
   loadData(vector->rowType(), vector);
@@ -1692,24 +1761,24 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedMixedMiniblockWidths) {
 
   constexpr vector_size_t kSize = 128;
   auto vector =
-      makeRowVector({"c"}, {makeFlatVector<int64_t>(kSize, [](auto row) {
-                      auto deltaForRow = [](vector_size_t r) -> int64_t {
-                        const int mb = (r / 32) % 4;
-                        const int parity = r % 2;
-                        if (mb == 0)
-                          return parity;
-                        if (mb == 1)
-                          return parity ? 200LL : 0LL;
-                        if (mb == 2)
-                          return parity ? 50'000LL : 0LL;
-                        return parity ? 12'000'000LL : 0LL;
-                      };
-                      int64_t v = 0;
-                      for (vector_size_t i = 0; i < row; ++i) {
-                        v += deltaForRow(i);
-                      }
-                      return v;
-                    })});
+      makeNamedRowVector("c", makeFlatVector<int64_t>(kSize, [](auto row) {
+                           auto deltaForRow = [](vector_size_t r) -> int64_t {
+                             const int mb = (r / 32) % 4;
+                             const int parity = r % 2;
+                             if (mb == 0)
+                               return parity;
+                             if (mb == 1)
+                               return parity ? 200LL : 0LL;
+                             if (mb == 2)
+                               return parity ? 50'000LL : 0LL;
+                             return parity ? 12'000'000LL : 0LL;
+                           };
+                           int64_t v = 0;
+                           for (vector_size_t i = 0; i < row; ++i) {
+                             v += deltaForRow(i);
+                           }
+                           return v;
+                         }));
   auto file = TempFilePath::create();
   writeToParquetFile(file->getPath(), {vector}, options);
   loadData(vector->rowType(), vector);
@@ -1751,12 +1820,12 @@ TEST_F(ParquetTableScanTest, deltaBinaryPackedWideAndNegative) {
       facebook::velox::parquet::arrow::Encoding::kDeltaBinaryPacked;
 
   constexpr vector_size_t kSize = 1024;
-  auto vector = makeRowVector(
-      {"c"}, {makeFlatVector<int64_t>(kSize, [](auto row) {
+  auto vector = makeNamedRowVector(
+      "c", makeFlatVector<int64_t>(kSize, [](auto row) {
         const int64_t steps[] = {
             -1'000'000'000LL, 2'000'000'000LL, -500'000LL, 1'500'000'000LL};
         return steps[row % 4] * row;
-      })});
+      }));
   auto file = TempFilePath::create();
   writeToParquetFile(file->getPath(), {vector}, options);
   loadData(vector->rowType(), vector);
@@ -1795,15 +1864,35 @@ TEST_F(ParquetTableScanTest, booleanRle) {
   loadData(schema, vector);
 
   std::shared_ptr<connector::ColumnHandle> c0 = makeColumnHandle(
-      "c0", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
+      "c0",
+      BOOLEAN(),
+      BOOLEAN(),
+      {},
+      connector::FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c1 = makeColumnHandle(
-      "c1", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
+      "c1",
+      BOOLEAN(),
+      BOOLEAN(),
+      {},
+      connector::FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c2 = makeColumnHandle(
-      "c2", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
+      "c2",
+      BOOLEAN(),
+      BOOLEAN(),
+      {},
+      connector::FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c3 = makeColumnHandle(
-      "c3", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
+      "c3",
+      BOOLEAN(),
+      BOOLEAN(),
+      {},
+      connector::FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c4 = makeColumnHandle(
-      "c4", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
+      "c4",
+      BOOLEAN(),
+      BOOLEAN(),
+      {},
+      connector::FileColumnHandle::ColumnType::kRegular);
 
   assertSelect({makeSplit(file->getPath())}, {"c0"}, "SELECT c0 FROM tmp");
   assertSelect({makeSplit(file->getPath())}, {"c1"}, "SELECT c1 FROM tmp");
@@ -1831,11 +1920,23 @@ TEST_F(ParquetTableScanTest, singleBooleanRle) {
   loadData(schema, vector);
 
   std::shared_ptr<connector::ColumnHandle> c0 = makeColumnHandle(
-      "c0", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
+      "c0",
+      BOOLEAN(),
+      BOOLEAN(),
+      {},
+      connector::FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c1 = makeColumnHandle(
-      "c1", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
+      "c1",
+      BOOLEAN(),
+      BOOLEAN(),
+      {},
+      connector::FileColumnHandle::ColumnType::kRegular);
   std::shared_ptr<connector::ColumnHandle> c2 = makeColumnHandle(
-      "c2", BOOLEAN(), BOOLEAN(), {}, FileColumnHandle::ColumnType::kRegular);
+      "c2",
+      BOOLEAN(),
+      BOOLEAN(),
+      {},
+      connector::FileColumnHandle::ColumnType::kRegular);
 
   assertSelect({makeSplit(file->getPath())}, {"c0"}, "SELECT c0 FROM tmp");
   assertSelect({makeSplit(file->getPath())}, {"c1"}, "SELECT c1 FROM tmp");
@@ -1844,11 +1945,11 @@ TEST_F(ParquetTableScanTest, singleBooleanRle) {
 
 TEST_F(ParquetTableScanTest, intToBigintRead) {
   vector_size_t kSize = 100;
-  RowVectorPtr intDataFileVectors = makeRowVector(
-      {"c1"}, {makeFlatVector<int32_t>(kSize, [](auto row) { return row; })});
+  RowVectorPtr intDataFileVectors = makeNamedRowVector(
+      "c1", makeFlatVector<int32_t>(kSize, [](auto row) { return row; }));
 
-  RowVectorPtr bigintDataFileVectors = makeRowVector(
-      {"c1"}, {makeFlatVector<int64_t>(kSize, [](auto row) { return row; })});
+  RowVectorPtr bigintDataFileVectors = makeNamedRowVector(
+      "c1", makeFlatVector<int64_t>(kSize, [](auto row) { return row; }));
 
   const std::shared_ptr<TempDirectoryPath> dataFileFolder =
       TempDirectoryPath::create();
@@ -1878,7 +1979,7 @@ TEST_F(ParquetTableScanTest, intNarrowingRejectedByDefault) {
   // type, expecting an exception from convertType.
   auto assertNarrowingThrows = [&](const VectorPtr& sourceVector,
                                    const TypePtr& targetType) {
-    auto vectors = makeRowVector({"c1"}, {sourceVector});
+    auto vectors = makeNamedRowVector("c1", sourceVector);
     auto dataFile = TempFilePath::create();
     writeToParquetFile(dataFile->getPath(), {vectors}, ParquetWriterOptions{});
     auto rowType = ROW({"c1"}, {targetType});
@@ -2366,8 +2467,7 @@ TEST_F(ParquetTableScanTest, fileFormatRuntimeStats) {
   ParquetWriterOptions parquetOptions;
   writeToParquetFile(parquetFile->getPath(), vectors, parquetOptions);
 
-  auto dwrfFile = TempFilePath::create();
-  writeToFile(dwrfFile->getPath(), vectors);
+  auto dwrfFile = writeToFile(vectors);
 
   // DuckDB reference table with data from both files.
   std::vector<RowVectorPtr> allVectors = {vector, vector};
@@ -2435,8 +2535,8 @@ TEST_F(ParquetTableScanTest, structSkipNulls) {
   // 'id >= 200' filters out entirely, so the nulls-only 's' column lags and is
   // then skipped forward.
   AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .config(core::QueryConfig::kPreferredOutputBatchRows, "64")
-      .config(core::QueryConfig::kMaxOutputBatchRows, "64")
+      .config(core::QueryConfig::kPreferredOutputBatchRows, 64)
+      .config(core::QueryConfig::kMaxOutputBatchRows, 64)
       .splits(splits)
       .assertResults("SELECT id, s FROM tmp WHERE id >= 200 AND s IS NULL");
 }

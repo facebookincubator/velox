@@ -118,6 +118,7 @@ INTERVAL YEAR TO MONTH  INTEGER
 TIME                    BIGINT
 TIME_MICRO_UTC          BIGINT
 TIMESTAMP_UTC           TIMESTAMP
+VECTOR_INDEX            VARBINARY
 ======================  ======================================================
 
 DECIMAL type carries additional `precision`,
@@ -138,6 +139,11 @@ TIME_MICRO_UTC represents time in microseconds since midnight in UTC, not subjec
 The TIME and TIME_MICRO_UTC types are backed by BIGINT physical type.
 
 TIMESTAMP represents a timestamp subject to session timezone interpretation. TIMESTAMP_UTC represents a timestamp in UTC, not subject to session timezone adjustment. Both types are backed by TIMESTAMP physical type.
+
+VECTOR_INDEX represents a local vector index: a FAISS index over embeddings,
+with each embedding's id, serialized as ``faiss::write_index`` writes it. It is
+backed by VARBINARY physical type. See :doc:`/functions/presto/vectorindex`
+for the functions that produce and read it.
 
 Custom Types
 ~~~~~~~~~~~~
@@ -292,7 +298,7 @@ format and is what the Presto coordinator interprets; it is neither WKT nor WKB.
 
 An Iceberg v3 ``geometry`` column is stored on disk as a plain ``binary`` column holding standard ISO WKB. The Iceberg
 connector, and only the Iceberg connector, re-encodes those bytes into Velox's internal encoding while reading a split
-(see ``velox/connectors/hive/iceberg/IcebergGeometryConverter.h``). The format-generic Parquet, DWRF and ORC readers
+(see ``velox/connectors/hive/iceberg/IcebergGeospatialConverter.h``). The format-generic Parquet, DWRF and ORC readers
 never inspect GEOMETRY: they read the column by its physical file type. An unannotated ``binary`` column, a non-Iceberg
 table, or a file written from an existing Velox GEOMETRY vector is therefore never reinterpreted as WKB.
 
@@ -311,6 +317,14 @@ converts internal encoding to WKB.
 SPHERICALGEOGRAPHY represents a geometry on a spherical model of the Earth. It is internally represented the same
 way as GEOMETRY, but only certain functions are supported.  Moreover, these functions will return values in meters
 as opposed to the units of the coordinate space.
+
+An Iceberg v3 ``geography`` column is read as SPHERICALGEOGRAPHY. It holds the same ISO WKB as a ``geometry`` column
+and takes the same re-encoding, with the same scope: two-dimensional, Parquet only, ``VELOX_ENABLE_GEO=ON``, and
+read-only. Iceberg geography coordinates are WGS84 longitude/latitude, so each value is also held to the checks of
+Presto's ``to_spherical_geography``: every longitude must lie in [-180, 180] and every latitude in [-90, 90], and a
+NaN or infinite ordinate is rejected. Empty values are accepted. The connector does not check the column's CRS or
+edge interpolation algorithm; the engine that maps the Iceberg schema to SPHERICALGEOGRAPHY is expected to accept
+only WGS84 with spherical edges, the semantics SPHERICALGEOGRAPHY models.
 
 Spark Types
 ~~~~~~~~~~~~
@@ -338,6 +352,12 @@ key differences are listed below.
       SELECT cast('12:30:45.123456' as time)  -- 12:30:45.123456
 
 * Spark uses TIMESTAMP_UTC to support TimestampNTZType. TIMESTAMP_UTC is not subject to session timezone adjustment.
+  The Parquet reader supports widening DATE columns to TIMESTAMP_UTC, producing
+  midnight on the same calendar date without a session timezone adjustment.
+  Widening rejects dates whose midnight is outside the signed 64-bit
+  microsecond range, including when the column is used only in a value filter.
+  This does not enable widening DATE to the session-timezone-adjusted TIMESTAMP
+  type.
 
 * In function comparisons, nested null values are handled as values.
   Example::

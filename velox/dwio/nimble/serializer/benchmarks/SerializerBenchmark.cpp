@@ -20,11 +20,11 @@
 #include <folly/init/Init.h>
 
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/nimble/common/OrderedRanges.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/serializer/Deserializer.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
-#include "velox/dwio/nimble/velox/OrderedRanges.h"
-#include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"

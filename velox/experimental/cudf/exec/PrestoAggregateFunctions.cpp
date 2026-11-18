@@ -118,6 +118,29 @@ void registerPrestoAggregateFunctions(const std::string& prefix) {
           .returnType("real")
           .argumentType("row(double,bigint)")
           .build());
+
+  // array_agg takes any element type the GPU operators convert; the result
+  // type check of the registry validation keeps the other types on the CPU.
+  // The function is grouped only: CudfReduce has no aggregator for it, so the
+  // global form stays on the CPU.
+  auto registerArrayAgg = [&](core::AggregationNode::Step step,
+                              const std::string& argumentType) {
+    appendGroupbyAggregationFunctionForStep(
+        prefix + "array_agg",
+        step,
+        FunctionSignatureBuilder()
+            .typeVariable("T")
+            .returnType("array(T)")
+            .argumentType(argumentType)
+            .build());
+  };
+  registerArrayAgg(core::AggregationNode::Step::kSingle, "T");
+  registerArrayAgg(core::AggregationNode::Step::kPartial, "T");
+  registerArrayAgg(core::AggregationNode::Step::kFinal, "array(T)");
+  registerArrayAgg(core::AggregationNode::Step::kIntermediate, "array(T)");
+  // array_agg honors a FILTER mask on the grouped path, its only one.
+  maskSupportedAggregations(getGroupbyAggregationRegistry())
+      .insert(prefix + "array_agg");
 }
 
 } // namespace facebook::velox::cudf_velox

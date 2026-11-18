@@ -774,6 +774,71 @@ uint64_t* FlatMapVector::ensureInMapAt(column_index_t channel) {
   return inMap->asMutable<uint64_t>();
 }
 
+bool FlatMapVector::mergeChannels(
+    const SelectivityVector& rows,
+    const VectorPtr& values,
+    BufferPtr inMap,
+    bool isShared,
+    vector_size_t size,
+    memory::MemoryPool* pool,
+    bool throwOnDuplicateKeys,
+    const BaseVector& keys,
+    vector_size_t keyIndex,
+    VectorPtr& resultValues,
+    BufferPtr& resultInMap) {
+  SelectivityVector keyRows(rows);
+  if (inMap != nullptr) {
+    keyRows.deselectNulls(inMap->as<uint64_t>(), rows.begin(), rows.end());
+  }
+  SelectivityVector resultKeyRows(rows);
+  if (resultInMap != nullptr) {
+    resultKeyRows.deselectNulls(
+        resultInMap->as<uint64_t>(), rows.begin(), rows.end());
+  }
+  if (throwOnDuplicateKeys &&
+      bits::hasIntersection(
+          keyRows.asRange().bits(),
+          resultKeyRows.asRange().bits(),
+          rows.begin(),
+          rows.end())) {
+    VELOX_USER_FAIL("Duplicate map key was found: {}", keys.toString(keyIndex));
+  }
+
+  // When the later channel holds the key in every row the earlier one does,
+  // its values win in all of them, so the merged channel shares them instead.
+  if (bits::isSubset(
+          resultKeyRows.asRange().bits(),
+          keyRows.asRange().bits(),
+          rows.begin(),
+          rows.end())) {
+    resultValues = values;
+    resultInMap = std::move(inMap);
+    return true;
+  }
+
+  if (isShared) {
+    auto mergedInMap = AlignedBuffer::allocate<bool>(size, pool, false);
+    bits::copyBits(
+        resultKeyRows.asRange().bits(),
+        0,
+        mergedInMap->asMutable<uint64_t>(),
+        0,
+        rows.end());
+    resultKeyRows.deselect(keyRows);
+    auto mergedValues = BaseVector::create(resultValues->type(), size, pool);
+    mergedValues->copy(resultValues.get(), resultKeyRows, nullptr);
+    resultValues = std::move(mergedValues);
+    resultInMap = std::move(mergedInMap);
+  }
+  resultValues->copy(values.get(), keyRows, nullptr);
+  bits::orBits(
+      resultInMap->asMutable<uint64_t>(),
+      keyRows.asRange().bits(),
+      rows.begin(),
+      rows.end());
+  return false;
+}
+
 void FlatMapVector::copyRanges(
     const BaseVector* source,
     const folly::Range<const CopyRange*>& ranges) {

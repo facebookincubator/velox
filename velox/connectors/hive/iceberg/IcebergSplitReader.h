@@ -19,7 +19,7 @@
 #include <folly/container/F14Set.h>
 
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileSplitReader.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/iceberg/DeletionVectorReader.h"
 #include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
@@ -42,14 +42,15 @@ struct IcebergScanSpecState {
   folly::F14FastSet<std::string> splitConstantColumns;
 };
 
-class IcebergSplitReader : public FileSplitReader {
+class IcebergSplitReader : public connector::FileSplitReader {
  public:
   IcebergSplitReader(
       const std::shared_ptr<const HiveIcebergSplit>& icebergSplit,
-      const FileTableHandlePtr& tableHandle,
-      const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
+      const connector::FileTableHandlePtr& tableHandle,
+      const std::unordered_map<std::string, connector::FileColumnHandlePtr>*
+          partitionKeys,
       const ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<const FileConfig>& fileConfig,
+      const std::shared_ptr<const connector::FileConfig>& fileConfig,
       const RowTypePtr& readerOutputType,
       const std::shared_ptr<io::IoStatistics>& dataIoStats,
       const std::shared_ptr<io::IoStatistics>& metadataIoStats,
@@ -300,8 +301,8 @@ class IcebergSplitReader : public FileSplitReader {
   // Resolved once per split in prepareSplit() from 'readerOutputType_', which
   // mirrors the Iceberg column assignments, so next() pays nothing for tables
   // without a geometry column. The Iceberg connector is the sole owner of the
-  // WKB -> internal-geometry conversion; see IcebergGeometryConverter.h.
-  std::vector<column_index_t> geometryOutputChannels_;
+  // WKB -> internal-geometry conversion; see IcebergGeospatialConverter.h.
+  std::vector<column_index_t> geospatialOutputChannels_;
   // Whether the reader appends a row-number column, the source of the file
   // positions for _row_id and $target_table_row_id.
   bool useRowNumberColumn_{false};

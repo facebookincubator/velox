@@ -238,8 +238,7 @@ TEST_F(AggregationReplayerTest, hashAggregationTest) {
     const auto data = generateInput(groupingKeys_, keyTypes_);
     const auto planWithNames =
         aggregatePlans(asRowType(data[0]->type()), prefix);
-    const auto sourceFilePath = TempFilePath::create();
-    writeToFile(sourceFilePath->getPath(), data);
+    const auto sourceFilePath = writeToFile(data);
 
     if (!prefix.empty()) {
       functions::prestosql::registerAllScalarFunctions(prefix);
@@ -307,8 +306,7 @@ TEST_F(AggregationReplayerTest, streamingAggregateTest) {
     const auto data = generateInput(groupingKeys_, keyTypes_);
     const auto planWithNames =
         streamingAggregatePlans(asRowType(data[0]->type()), prefix);
-    const auto sourceFilePath = TempFilePath::create();
-    writeToFile(sourceFilePath->getPath(), data);
+    const auto sourceFilePath = writeToFile(data);
 
     if (!prefix.empty()) {
       functions::prestosql::registerAllScalarFunctions(prefix);

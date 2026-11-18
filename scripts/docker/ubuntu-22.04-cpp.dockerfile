@@ -26,7 +26,7 @@
 # presto-java images and are governed by CENTOS_TZDATA_VERSION, not this
 # pin, so this version can move independently. To bump: set it to the
 # current 22.04 build and rebuild to confirm before merging.
-ARG UBUNTU_TZDATA_VERSION=2026c-0ubuntu0.22.04.1
+ARG UBUNTU_TZDATA_VERSION=2026e-0ubuntu0.22.04.1
 
 ARG base=ubuntu:22.04
 FROM ${base}

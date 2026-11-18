@@ -241,8 +241,9 @@ class OutputBuffer {
       DataAvailableCallback notify,
       DataConsumerActiveCheckCallback activeCheck);
 
-  /// Continues any possibly waiting producers. Called when the producer task
-  /// has an error or cancellation.
+  /// Continues any possibly waiting producers and notifies any waiting
+  /// consumers with no data. Called when the producer task has an error or
+  /// cancellation.
   void terminate();
 
   std::string toString();

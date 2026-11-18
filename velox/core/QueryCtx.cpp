@@ -149,6 +149,21 @@ QueryCtx::~QueryCtx() {
   return fmt::format("query.{}.{}", queryId, seqNum++);
 }
 
+void QueryCtx::copyRegistriesFrom(const QueryCtx& source, bool overwrite) {
+  auto sourceRegistries = source.registries_.withRLock(
+      [](const auto& registries) { return registries; });
+  registries_.withWLock([&](auto& registries) {
+    if (!overwrite) {
+      for (const auto& [key, _] : sourceRegistries) {
+        VELOX_CHECK(!registries.contains(key), "Registry already set: {}", key);
+      }
+    }
+    for (const auto& [key, registry] : sourceRegistries) {
+      registries.insert_or_assign(key, registry);
+    }
+  });
+}
+
 void QueryCtx::addCustomPool(
     std::string tag,
     std::shared_ptr<memory::MemoryPool> pool) {

@@ -21,7 +21,7 @@
 
 #include "folly/Likely.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
-#include "velox/dwio/nimble/velox/SchemaReader.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
 
 namespace facebook::nimble {
 
@@ -56,7 +56,9 @@ inline uint32_t getTypeStorageWidth(const Type& type) {
       break;
     }
     case Kind::TimestampMicroNano:
-      return 10;
+      // The main stream holds the microseconds. The nanoseconds stream is
+      // decoded as a scalar stream of its own.
+      return sizeof(int64_t);
     case Kind::Row:
     case Kind::FlatMap:
     case Kind::HybridFlatMap:
@@ -67,7 +69,7 @@ inline uint32_t getTypeStorageWidth(const Type& type) {
     case Kind::SlidingWindowMap:
       return 4;
   }
-  NIMBLE_UNREACHABLE("Unsupported type kind: {}.", toString(type.kind()));
+  NIMBLE_UNREACHABLE("Unsupported type kind: {}.", type.kind());
 }
 
 // Get the ScalarKind for a type based on its storage format. Types the legacy
@@ -186,7 +188,7 @@ void BatchedStreamDecoder::skip(uint32_t count) {
   // For non-in-map streams, an empty `streamSegments_` is only valid
   // for complex-type null streams that the writer omitted (all-non-null).
   // Nothing decoded → nothing to advance; just bump the cursor.
-  if (FOLLY_UNLIKELY(!isInMapStream() && streamSegments_.empty())) {
+  if (!isInMapStream() && streamSegments_.empty()) [[unlikely]] {
     NIMBLE_CHECK(
         typeKind_ == Kind::Row || typeKind_ == Kind::FlatMap ||
             typeKind_ == Kind::HybridFlatMap,
@@ -429,7 +431,7 @@ uint32_t BatchedStreamDecoder::denseRead(
     const std::function<void*()>& getOutputNulls,
     std::vector<velox::BufferPtr>& stringBuffers) {
   const auto width = typeStorageWidth_;
-  if (FOLLY_UNLIKELY(streamSegments_.empty())) {
+  if (streamSegments_.empty()) [[unlikely]] {
     NIMBLE_CHECK(
         typeKind_ == Kind::Row || typeKind_ == Kind::FlatMap ||
             typeKind_ == Kind::HybridFlatMap,
@@ -467,7 +469,7 @@ uint32_t BatchedStreamDecoder::denseRead(
     const bool segmentAllNonNull =
         result.nonNullOutputRows == result.numOutputRows;
     const bool needsNullHandling = !segmentAllNonNull || nullsInitialized;
-    if (FOLLY_UNLIKELY(needsNullHandling)) {
+    if (needsNullHandling) [[unlikely]] {
       NIMBLE_CHECK_NOT_NULL(
           getOutputNulls, "nullable segment requires output nulls callback");
       if (!segmentAllNonNull && !nullsInitialized) {
@@ -489,7 +491,7 @@ uint32_t BatchedStreamDecoder::denseRead(
     }
     rowsRead += result.numOutputRows;
     nonNullCount += result.nonNullOutputRows;
-    if (FOLLY_LIKELY(result.segmentExhausted)) {
+    if (result.segmentExhausted) [[likely]] {
       attachEncodingBuffers(stringBuffers);
       advanceSegment();
     }
@@ -554,7 +556,7 @@ uint32_t BatchedStreamDecoder::inMapRead(
         "FlatMap in-map stream must not contain nulls");
     rowsRead += result.numOutputRows;
     nonNullCount += result.numOutputRows;
-    if (FOLLY_LIKELY(result.segmentExhausted)) {
+    if (result.segmentExhausted) [[likely]] {
       attachEncodingBuffers(stringBuffers);
       advanceSegment();
     }
@@ -633,7 +635,7 @@ uint32_t BatchedStreamDecoder::scatteredRead(
     rowsRead += result.numOutputRows;
     nonNullCount += result.nonNullOutputRows;
     offset = endOffset;
-    if (FOLLY_LIKELY(result.segmentExhausted)) {
+    if (result.segmentExhausted) [[likely]] {
       attachEncodingBuffers(stringBuffers);
       advanceSegment();
     }

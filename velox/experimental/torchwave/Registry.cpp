@@ -17,6 +17,7 @@
 #include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/CompiledOp.h"
 #include "velox/experimental/torchwave/Utils.h"
+#include "velox/experimental/torchwave/WaveConfig.h"
 
 #include <c10/util/StringUtil.h>
 
@@ -295,6 +296,11 @@ MetadataBuilder& MetadataBuilder::multiBlockReturnBarrier(bool val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::rowReduction(RowReduction reduction) {
+  md_.rowReduction = std::move(reduction);
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::scanOutputReturnBarrier(bool val) {
   md_.scanOutputReturnBarrier = val;
   return *this;
@@ -508,13 +514,33 @@ MetadataBuilder& MetadataBuilder::dynamicSharedDecls(
 }
 
 MetadataBuilder& MetadataBuilder::dynamicSharedMemory(
-    std::function<int64_t(NodeCP)> func) {
+    std::function<int64_t(NodeCP, int32_t blockSize)> func) {
   md_.dynamicSharedMemory = std::move(func);
   return *this;
 }
 
 MetadataBuilder& MetadataBuilder::minBlocksPerSm(int32_t blocks) {
   md_.minBlocksPerSm = blocks;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::sharedWithinNode(bool value) {
+  md_.sharedWithinNode = value;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::blockSize(int32_t threads) {
+  TORCH_CHECK(
+      threads > 0 && threads <= 1024 && (threads & (threads - 1)) == 0,
+      "block size must be a power of two up to 1024, got ",
+      threads);
+  md_.blockSize = [threads](NodeCP) { return threads; };
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::blockSize(
+    std::function<int32_t(NodeCP)> func) {
+  md_.blockSize = std::move(func);
   return *this;
 }
 

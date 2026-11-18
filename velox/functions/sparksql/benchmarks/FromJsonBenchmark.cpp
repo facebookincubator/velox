@@ -123,6 +123,19 @@ BENCHMARK(bm_json_depth4_2col) {
           {ROW({"c"}, {ROW({"e"}, {ROW({"g", "h"}, {BIGINT(), BIGINT()})})}),
            ROW({"b"}, {ROW({"d"}, {ROW({"i", "j"}, {BIGINT(), BIGINT()})})})}));
 }
+
+BENCHMARK(bm_json_staged_fields) {
+  FromJsonBenchmark benchmark;
+  benchmark.run(
+      StringView(
+          R"({"s":"abcdefghijklmnopqrstuvwx","a":[1,2,3],"m":{"x":1,"y":2},"r":{"a":[4,5]}})"),
+      ROW({
+          {"s", VARCHAR()},
+          {"a", ARRAY(BIGINT())},
+          {"m", MAP(VARCHAR(), BIGINT())},
+          {"r", ROW("a", ARRAY(BIGINT()))},
+      }));
+}
 } // namespace
 
 int main(int argc, char** argv) {

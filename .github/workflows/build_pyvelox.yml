@@ -89,6 +89,7 @@ jobs:
           echo "DYLD_LIBRARY_PATH=$INSTALL_PREFIX/lib:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
 
           source scripts/setup-macos.sh
+          echo "OPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR" >> $GITHUB_ENV
           install_build_prerequisites
           install_velox_deps_from_brew
           # CMake 4.0 causes issues with arrows bundled dependencies
@@ -106,7 +107,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 20
         if: ${{ startsWith(matrix.os, 'macos') && steps.restore-deps.outputs.stash-hit != 'true' }}
-        uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
+        uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         with:
           path: dependencies
           key: dependencies-pyvelox-${{ matrix.os }}-${{ hashFiles('scripts/setup-macos.sh') }}
@@ -121,7 +122,7 @@ jobs:
           uv build --sdist --out-dir wheelhouse
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074 # v4.2.0
+        uses: pypa/cibuildwheel@b9e566a2b284570af229f6c2a33673410d0389a3 # v4.3.4
         env:
           BUILD_VERSION: ${{ inputs.version }}
           CIBW_BUILD: cp310-* cp311-* cp312-* cp313-*
@@ -136,7 +137,7 @@ jobs:
       - name: Save ccache
         continue-on-error: true
         timeout-minutes: 20
-        uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
+        uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         with:
           path: ccache
           key: ccache-wheels-${{ matrix.os }}

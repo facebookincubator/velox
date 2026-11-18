@@ -15,10 +15,11 @@
  */
 #pragma once
 
+#include <deque>
 #include <memory>
 #include <vector>
 
-#include "velox/dwio/nimble/velox/RowRange.h"
+#include "velox/dwio/nimble/common/RowRange.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::nimble {
@@ -96,6 +97,42 @@ class BufferPolicy {
   /// must emit any residual open buffer content rather than continuing to
   /// wait for a boundary.
   virtual void finalize() = 0;
+};
+
+/// Cuts a stripe once its rows reach a raw-size target, slicing an input batch
+/// when the target falls inside it. A FlushPolicy ends stripes only between
+/// write() calls, so a batch larger than its target becomes one stripe: 1,024
+/// rows of 3,072 floats make a 12 MB stripe under a 1 MB
+/// StripeRawSizeFlushPolicy. This policy cuts the same batch into 1 MB stripes.
+///
+/// Raw sizes come from getRawSizeFromVector(), averaged over the rows of each
+/// input. Stripes of fixed-width rows end within one row of the target, and
+/// stripes of rows of varying size end near it. Batches smaller than the target
+/// accumulate across write() calls.
+class StripeRawSizeBufferPolicy final : public BufferPolicy {
+ public:
+  explicit StripeRawSizeBufferPolicy(uint64_t stripeRawSize);
+
+  void bufferInput(velox::VectorPtr input) override;
+
+  BufferRange flushInput() override;
+
+  void finalize() override;
+
+ private:
+  // Queues the buffered rows as a stripe for flushInput().
+  void flushRange();
+
+  // Raw bytes at which a stripe is cut.
+  const uint64_t stripeRawSize_;
+  // Stripes ready for flushInput(), oldest first.
+  std::deque<BufferRange> flushQueue_;
+  // Rows of the stripe being filled.
+  BufferRange bufferedRange_;
+  // Estimated raw bytes of bufferedRange_.
+  double bufferedRawSize_{0};
+  // Set by finalize(); flushInput() then also returns a partly filled stripe.
+  bool finalized_{false};
 };
 
 } // namespace facebook::nimble

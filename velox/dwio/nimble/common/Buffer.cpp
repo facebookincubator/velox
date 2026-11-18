@@ -49,10 +49,11 @@ void Buffer::reset() {
 }
 
 bool Buffer::tryAdvanceToNextChunk(uint64_t bytes) {
-  while (chunkIndex_ + 1 < chunks_.size()) {
-    ++chunkIndex_;
-    auto& chunk = chunks_[chunkIndex_];
-    if (chunk->capacity() >= bytes) {
+  for (uint32_t index = chunkIndex_ + 1; index < chunks_.size(); ++index) {
+    if (chunks_[index]->capacity() >= bytes) {
+      ++chunkIndex_;
+      std::swap(chunks_[chunkIndex_], chunks_[index]);
+      auto& chunk = chunks_[chunkIndex_];
       pos_ = chunk->asMutable<char>();
       chunkEnd_ = pos_ + chunk->capacity();
       reserveEnd_ = pos_ + bytes;
@@ -63,13 +64,15 @@ bool Buffer::tryAdvanceToNextChunk(uint64_t bytes) {
 }
 
 void Buffer::addChunk(uint64_t bytes) {
+  const uint32_t nextIndex = chunks_.empty() ? 0 : chunkIndex_ + 1;
   const uint64_t chunkSize = std::max(bytes, kMinChunkSize);
   auto bufferPtr = velox::AlignedBuffer::allocateExact<char>(chunkSize, pool_);
   pos_ = bufferPtr->asMutable<char>();
   chunkEnd_ = pos_ + chunkSize;
   reserveEnd_ = pos_ + bytes;
   chunks_.emplace_back(std::move(bufferPtr));
-  chunkIndex_ = chunks_.size() - 1;
+  std::swap(chunks_[nextIndex], chunks_.back());
+  chunkIndex_ = nextIndex;
 }
 
 EncodingBufferPool::EncodingBufferPool(

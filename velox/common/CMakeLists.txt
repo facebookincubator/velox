@@ -27,6 +27,7 @@ add_subdirectory(process)
 add_subdirectory(rpc)
 add_subdirectory(serialization)
 add_subdirectory(time)
+add_subdirectory(vectorindex)
 add_subdirectory(testutil)
 add_subdirectory(fuzzer)
 

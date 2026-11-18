@@ -74,6 +74,11 @@ core::TypedExprPtr CoalesceRewrite::rewrite(const core::TypedExprPtr& expr) {
     return deduplicatedInputs.front();
   }
 
+  // Nothing was flattened, deduplicated or dropped: report no rewrite.
+  if (utils::sameInputs(expr, deduplicatedInputs)) {
+    return nullptr;
+  }
+
   return std::make_shared<core::CallTypedExpr>(
       expr->type(), std::move(deduplicatedInputs), kCoalesce);
 }

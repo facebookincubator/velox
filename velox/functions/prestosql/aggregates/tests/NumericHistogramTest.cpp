@@ -26,7 +26,6 @@ class NumericHistogramTest : public AggregationTestBase {
  protected:
   template <typename TValue>
   void runTwoArgsTests() {
-    disableTestIncremental();
     {
       auto valuesAndWeights = makeRowVector({
           makeNullableFlatVector<TValue>({10, 20, 30, 80, 90, 100}),
@@ -48,21 +47,21 @@ class NumericHistogramTest : public AggregationTestBase {
           }),
       });
 
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(5, c0)"},
-          {expectedFiveBuckets});
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(2, c0)"},
-          {expectedTwoBuckets});
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(4, c0)"},
-          {expectedFourBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(5, c0)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(2, c0)"})
+          .disableIncremental()
+          .assertResults(expectedTwoBuckets);
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(4, c0)"})
+          .disableIncremental()
+          .assertResults(expectedFourBuckets);
     }
 
     {
@@ -75,11 +74,11 @@ class NumericHistogramTest : public AggregationTestBase {
               {{15.0, 2}, {35.0, 2}, {55.0, 2}, {70.0, 1}, {80.0, 1}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(5, c0)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(5, c0)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
 
     {
@@ -91,11 +90,11 @@ class NumericHistogramTest : public AggregationTestBase {
               {{10.0, 1}, {55.0, 2}, {100.0, 1}, {75.0, 2}, {90.0, 1}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(5, c0)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(5, c0)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
 
     {
@@ -108,11 +107,11 @@ class NumericHistogramTest : public AggregationTestBase {
               {{10, 1}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(5, c0)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(5, c0)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
 
     {
@@ -125,11 +124,11 @@ class NumericHistogramTest : public AggregationTestBase {
               {{15, 2}, {35.0, 2}, {55, 2}, {75, 2}, {90.0, 1}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(5, c0)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(5, c0)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
 
     {
@@ -141,11 +140,11 @@ class NumericHistogramTest : public AggregationTestBase {
               {{1.0, 5}, {2.0, 5}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(4, c0)"},
-          {expectedFourBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(4, c0)"})
+          .disableIncremental()
+          .assertResults(expectedFourBuckets);
     }
 
     {
@@ -174,11 +173,11 @@ class NumericHistogramTest : public AggregationTestBase {
           }),
       });
 
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(5, c0)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(5, c0)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
 
     {
@@ -193,11 +192,11 @@ class NumericHistogramTest : public AggregationTestBase {
               {{1.0, 4}, {2.0, 4}},
           }),
       });
-      testAggregations(
-          {variousBuckets},
-          {},
-          {"numeric_histogram(c0, c1)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(variousBuckets)
+          .aggregates({"numeric_histogram(c0, c1)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
     {
       auto variousBuckets = makeRowVector({
@@ -210,11 +209,11 @@ class NumericHistogramTest : public AggregationTestBase {
               {{15, 2}, {35.0, 2}, {55, 2}, {75, 2}, {90.0, 1}},
           }),
       });
-      testAggregations(
-          {variousBuckets},
-          {},
-          {"numeric_histogram(c0, c1)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(variousBuckets)
+          .aggregates({"numeric_histogram(c0, c1)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
     {
       auto valuesAndWeights = makeRowVector({
@@ -227,11 +226,11 @@ class NumericHistogramTest : public AggregationTestBase {
               {{std::numeric_limits<TValue>::quiet_NaN(), 1}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(2, c0)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(2, c0)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
     {
       auto valuesAndWeights = makeRowVector({
@@ -244,11 +243,11 @@ class NumericHistogramTest : public AggregationTestBase {
               {{std::numeric_limits<TValue>::quiet_NaN(), 1}, {2, 2}, {3, 1}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(3, c0)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(3, c0)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
     {
       auto valuesAndWeights = makeRowVector({
@@ -268,11 +267,11 @@ class NumericHistogramTest : public AggregationTestBase {
                {std::numeric_limits<TValue>::infinity(), 2}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(3, c0)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(3, c0)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
     {
       auto valuesAndWeights = makeRowVector({
@@ -294,17 +293,16 @@ class NumericHistogramTest : public AggregationTestBase {
                {std::numeric_limits<TValue>::infinity(), 2}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(3, c0)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(3, c0)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
   }
 
   template <typename TValue, typename TWeight>
   void runThreeArgsTests() {
-    disableTestIncremental();
     {
       auto valuesAndWeights = makeRowVector({
           makeNullableFlatVector<TValue>({10, 20, 30, 80, 90, 100}),
@@ -328,21 +326,21 @@ class NumericHistogramTest : public AggregationTestBase {
           }),
       });
 
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(2, c0, c1)"},
-          {expectedTwoBuckets});
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(4, c0, c1)"},
-          {expectedFourBuckets});
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(5, c0, c1)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(2, c0, c1)"})
+          .disableIncremental()
+          .assertResults(expectedTwoBuckets);
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(4, c0, c1)"})
+          .disableIncremental()
+          .assertResults(expectedFourBuckets);
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(5, c0, c1)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
 
     {
@@ -360,11 +358,11 @@ class NumericHistogramTest : public AggregationTestBase {
                {74.0, 5}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(5, c0, c1)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(5, c0, c1)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
 
     {
@@ -381,11 +379,11 @@ class NumericHistogramTest : public AggregationTestBase {
                {83.33333333333333, 3}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(5, c0, c1)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(5, c0, c1)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
 
     {
@@ -399,11 +397,11 @@ class NumericHistogramTest : public AggregationTestBase {
               {{10, 2}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(5, c0, c1)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(5, c0, c1)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
 
     {
@@ -421,11 +419,11 @@ class NumericHistogramTest : public AggregationTestBase {
                {83.33333333333333, 3}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(5, c0, c1)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(5, c0, c1)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
 
     {
@@ -440,11 +438,11 @@ class NumericHistogramTest : public AggregationTestBase {
               {{1.0, 15}, {2.0, 25}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(4, c0, c1)"},
-          {expectedFourBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(4, c0, c1)"})
+          .disableIncremental()
+          .assertResults(expectedFourBuckets);
     }
     {
       auto variousBuckets = makeRowVector({
@@ -460,11 +458,11 @@ class NumericHistogramTest : public AggregationTestBase {
               {{1.0, 4}, {2.0, 4}},
           }),
       });
-      testAggregations(
-          {variousBuckets},
-          {},
-          {"numeric_histogram(c0, c1, c2)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(variousBuckets)
+          .aggregates({"numeric_histogram(c0, c1, c2)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
     {
       auto variousBuckets = makeRowVector({
@@ -479,11 +477,11 @@ class NumericHistogramTest : public AggregationTestBase {
               {{15, 2}, {35.0, 2}, {55, 2}, {75, 2}, {90.0, 1}},
           }),
       });
-      testAggregations(
-          {variousBuckets},
-          {},
-          {"numeric_histogram(c0, c1, c2)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(variousBuckets)
+          .aggregates({"numeric_histogram(c0, c1, c2)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
     {
       auto valuesAndWeights = makeRowVector({
@@ -506,11 +504,11 @@ class NumericHistogramTest : public AggregationTestBase {
                {std::numeric_limits<TValue>::infinity(), 2}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(3, c0, c1)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(3, c0, c1)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
     {
       auto valuesAndWeights = makeRowVector({
@@ -524,11 +522,11 @@ class NumericHistogramTest : public AggregationTestBase {
               {{1, std::numeric_limits<TValue>::quiet_NaN()}, {2.5, 2}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(2, c0, c1)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(2, c0, c1)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
     {
       auto valuesAndWeights = makeRowVector({
@@ -558,11 +556,11 @@ class NumericHistogramTest : public AggregationTestBase {
                {std::numeric_limits<TValue>::infinity(), 1}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(3, c0, c1)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(3, c0, c1)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
     // Java implementation has some correctness issues and will fail this test
     {
@@ -579,11 +577,11 @@ class NumericHistogramTest : public AggregationTestBase {
               {{std::numeric_limits<TValue>::quiet_NaN(), 2}, {2, 1}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(2, c0, c1)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(2, c0, c1)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
     {
       auto valuesAndWeights = makeRowVector({
@@ -596,11 +594,11 @@ class NumericHistogramTest : public AggregationTestBase {
               {{-std::numeric_limits<TValue>::infinity(), 0}, {50, 1}},
           }),
       });
-      testAggregations(
-          {valuesAndWeights},
-          {},
-          {"numeric_histogram(2, c0, c1)"},
-          {expectedFiveBuckets});
+      AggregationTester(*this)
+          .inputs(valuesAndWeights)
+          .aggregates({"numeric_histogram(2, c0, c1)"})
+          .disableIncremental()
+          .assertResults(expectedFiveBuckets);
     }
   }
 };
@@ -632,7 +630,6 @@ TEST_F(NumericHistogramTest, threeArgsFloatFloat) {
 // Verify all-null input produces null output without crashing.
 // Exercises the mergeSameBuckets fix for nextIndex_ == 0.
 TEST_F(NumericHistogramTest, allNullInputTwoArgs) {
-  disableTestIncremental();
   auto valuesAndWeights = makeRowVector({
       makeNullableFlatVector<double>(
           {std::nullopt, std::nullopt, std::nullopt}),
@@ -641,13 +638,15 @@ TEST_F(NumericHistogramTest, allNullInputTwoArgs) {
   auto expected = makeRowVector({
       makeNullableMapVector<double, double>({std::nullopt}),
   });
-  testAggregations(
-      {valuesAndWeights}, {}, {"numeric_histogram(3, c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(valuesAndWeights)
+      .aggregates({"numeric_histogram(3, c0)"})
+      .disableIncremental()
+      .assertResults(expected);
 }
 
 // Verify all-null input produces null output for 3-arg variant.
 TEST_F(NumericHistogramTest, allNullInputThreeArgs) {
-  disableTestIncremental();
   auto valuesAndWeights = makeRowVector({
       makeNullableFlatVector<double>(
           {std::nullopt, std::nullopt, std::nullopt}),
@@ -657,14 +656,16 @@ TEST_F(NumericHistogramTest, allNullInputThreeArgs) {
   auto expected = makeRowVector({
       makeNullableMapVector<double, double>({std::nullopt}),
   });
-  testAggregations(
-      {valuesAndWeights}, {}, {"numeric_histogram(3, c0, c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(valuesAndWeights)
+      .aggregates({"numeric_histogram(3, c0, c1)"})
+      .disableIncremental()
+      .assertResults(expected);
 }
 
 // Verify grouped aggregation where one group has all-null values.
 // Exercises the empty histogram code path in compact().
 TEST_F(NumericHistogramTest, groupedWithEmptyGroup) {
-  disableTestIncremental();
   auto data = makeRowVector({
       // group keys: group 0 gets all nulls, group 1 gets real values
       makeNullableFlatVector<int32_t>({0, 0, 1, 1, 1}),
@@ -677,13 +678,17 @@ TEST_F(NumericHistogramTest, groupedWithEmptyGroup) {
       makeNullableMapVector<double, double>(
           {std::nullopt, {{{10.0, 1}, {20.0, 1}, {30.0, 1}}}}),
   });
-  testAggregations({data}, {"c0"}, {"numeric_histogram(3, c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"numeric_histogram(3, c1)"})
+      .disableIncremental()
+      .assertResults(expected);
 }
 
 // Stress-test with a large number of entries that forces multiple compact
 // cycles. Validates unique_ptr cleanup in mergeAndReduceBuckets.
 TEST_F(NumericHistogramTest, largeInputStressTest) {
-  disableTestIncremental();
   // Create 200 identical values. This forces multiple compact+reduce cycles
   // with only 2 buckets, then mergeSameBuckets collapses them all.
   std::vector<std::optional<double>> values(200, 42.0);
@@ -697,13 +702,15 @@ TEST_F(NumericHistogramTest, largeInputStressTest) {
           {{42.0, 200}},
       }),
   });
-  testAggregations(
-      {valuesAndWeights}, {}, {"numeric_histogram(2, c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(valuesAndWeights)
+      .aggregates({"numeric_histogram(2, c0)"})
+      .disableIncremental()
+      .assertResults(expected);
 }
 
 // Verify duplicate values are merged correctly by mergeSameBuckets.
 TEST_F(NumericHistogramTest, allDuplicateValues) {
-  disableTestIncremental();
   auto valuesAndWeights = makeRowVector({
       makeNullableFlatVector<double>({5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0}),
   });
@@ -713,8 +720,11 @@ TEST_F(NumericHistogramTest, allDuplicateValues) {
           {{5.0, 8}},
       }),
   });
-  testAggregations(
-      {valuesAndWeights}, {}, {"numeric_histogram(3, c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(valuesAndWeights)
+      .aggregates({"numeric_histogram(3, c0)"})
+      .disableIncremental()
+      .assertResults(expected);
 }
 
 } // namespace

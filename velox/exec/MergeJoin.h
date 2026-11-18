@@ -401,8 +401,8 @@ class MergeJoin : public Operator {
   // right group, so a left row is dead once emitted. Every other supported
   // type revisits the left group: right and full joins drive from the right,
   // and the semi/anti variants decide a left row from the whole group. The
-  // filter path is excluded because joinTracker_ resolves a left row's
-  // no-match output only after the group has been walked.
+  // filtered left join path is excluded because joinTracker_ resolves a left
+  // row's no-match output only after the group has been walked.
   bool canStreamLeftSide() const;
 
   // Drops the left batch whose rows have all been emitted, keeping the last one
@@ -568,10 +568,9 @@ class MergeJoin : public Operator {
       }
     }
 
-    // Returns whether `row` corresponds to the same left key as the last
-    // left match evaluated.
-    bool isCurrentLeftMatch(vector_size_t row) {
-      return currentLeftRowNumber_ == rawLeftRowNumbers_[row];
+    // Tests whether the resume cursor continues the last tracked outer row.
+    bool isLastMatch(const RowVectorPtr& batch, vector_size_t row) const {
+      return lastVector_ == batch && lastIndex_ == row;
     }
 
     // Called when all rows from the current output batch are processed and the

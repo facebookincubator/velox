@@ -62,6 +62,14 @@ class CompactRow {
       const RowTypePtr& rowType,
       memory::MemoryPool* pool);
 
+  /// Deserializes rows with top-level nulls specified by 'nulls'. Serialized
+  /// data for null rows is ignored and may be empty.
+  static RowVectorPtr deserialize(
+      const std::vector<std::string_view>& data,
+      const BufferPtr& nulls,
+      const RowTypePtr& rowType,
+      memory::MemoryPool* pool);
+
  private:
   explicit CompactRow(const VectorPtr& vector);
 

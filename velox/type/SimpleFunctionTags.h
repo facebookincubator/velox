@@ -334,6 +334,14 @@ struct TimestampUtcT {
 
 using TimestampUtc = CustomType<TimestampUtcT>;
 
+struct VectorIndexT {
+  using type = Varbinary;
+
+  static constexpr const char* typeName = "vector_index";
+};
+
+using VectorIndex = CustomType<VectorIndexT>;
+
 // Type to use for inputs and outputs of simple functions with BigintEnum types.
 // E.g. arg_type<BigintEnum<E1>> and out_type<BigintEnum<E1>>.
 template <typename E>

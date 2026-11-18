@@ -19,6 +19,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <functional>
 #include <optional>
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
@@ -1937,8 +1938,8 @@ TEST_F(ColumnWriterTest, testMapWriterBigBatch) {
 
 TEST_F(ColumnWriterTest, testMapWriterUnalignedKeyValueCount) {
   VectorMaker maker(pool_.get());
-  auto keys = maker.flatVector<int64_t>(11, folly::identity);
-  auto values = maker.flatVector<int64_t>(12, folly::identity);
+  auto keys = maker.flatVector<int64_t>(11, std::identity{});
+  auto values = maker.flatVector<int64_t>(12, std::identity{});
   auto offsets = allocateIndices(3, pool_.get());
   auto sizes = allocateIndices(3, pool_.get());
 

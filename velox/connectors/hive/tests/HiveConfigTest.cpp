@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "gtest/gtest.h"
 #include "velox/common/config/Config.h"
+#include "velox/connectors/hive/HiveConfigProvider.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/common/Config.h"
 
@@ -91,7 +92,6 @@ TEST(HiveConfigTest, defaultConfig) {
   ASSERT_FALSE(hiveConfig.useColumnNames(emptySession.get()));
   ASSERT_EQ(
       hiveConfig.nimbleFooterSpeculativeIoSize(emptySession.get()), 8UL << 20);
-  ASSERT_FALSE(hiveConfig.nimbleStringDecoderZeroCopy(emptySession.get()));
   ASSERT_FALSE(hiveConfig.nimblePreserveDictionaryEncoding(emptySession.get()));
 }
 
@@ -122,7 +122,6 @@ TEST(HiveConfigTest, overrideConfig) {
       {HiveConfig::kOrcFooterSpeculativeIoSize, std::to_string(512UL << 10)},
       {"hive.use-column-names", "true"},
       {HiveConfig::kNimbleFooterSpeculativeIoSize, std::to_string(4UL << 20)},
-      {HiveConfig::kNimbleStringDecoderZeroCopy, "true"},
       {HiveConfig::kNimblePreserveDictionaryEncoding, "true"},
   };
   HiveConfig hiveConfig(
@@ -163,7 +162,6 @@ TEST(HiveConfigTest, overrideConfig) {
   ASSERT_TRUE(hiveConfig.useColumnNames(emptySession.get()));
   ASSERT_EQ(
       hiveConfig.nimbleFooterSpeculativeIoSize(emptySession.get()), 4UL << 20);
-  ASSERT_TRUE(hiveConfig.nimbleStringDecoderZeroCopy(emptySession.get()));
   ASSERT_TRUE(hiveConfig.nimblePreserveDictionaryEncoding(emptySession.get()));
 }
 
@@ -192,7 +190,6 @@ TEST(HiveConfigTest, overrideSession) {
       {HiveConfig::kUseColumnNamesSession, "true"},
       {HiveConfig::kNimbleFooterSpeculativeIoSizeSession,
        std::to_string(2UL << 20)},
-      {HiveConfig::kNimbleStringDecoderZeroCopySession, "true"},
       {HiveConfig::kNimblePreserveDictionaryEncodingSession, "true"},
   };
   const auto session =
@@ -226,7 +223,6 @@ TEST(HiveConfigTest, overrideSession) {
   ASSERT_EQ(hiveConfig.orcFooterSpeculativeIoSize(session.get()), 128UL << 10);
   ASSERT_TRUE(hiveConfig.useColumnNames(session.get()));
   ASSERT_EQ(hiveConfig.nimbleFooterSpeculativeIoSize(session.get()), 2UL << 20);
-  ASSERT_TRUE(hiveConfig.nimbleStringDecoderZeroCopy(session.get()));
   ASSERT_TRUE(hiveConfig.nimblePreserveDictionaryEncoding(session.get()));
 }
 
@@ -348,4 +344,36 @@ TEST(HiveConfigTest, registeredPropertiesHaveUniqueNames) {
       countProperty(
           properties, HiveConfig::kNimbleFooterSpeculativeIoSizeSession),
       1);
+}
+
+TEST(HiveConfigTest, configProviderDefaultsAndOverrides) {
+  const auto& expected = HiveConfig::registeredProperties();
+  const auto defaults = HiveConfigProvider().properties();
+  ASSERT_EQ(defaults.size(), expected.size());
+  for (size_t i = 0; i < expected.size(); ++i) {
+    EXPECT_EQ(defaults[i].name, expected[i].name);
+    EXPECT_EQ(defaults[i].type, expected[i].type);
+    EXPECT_EQ(defaults[i].defaultValue, expected[i].defaultValue);
+    EXPECT_EQ(defaults[i].description, expected[i].description);
+  }
+  const config::ConfigBase config(
+      std::unordered_map<std::string, std::string>{
+          {HiveConfig::kCacheMetadata, "true"},
+          {HiveConfig::kInsertExistingPartitionsBehavior, "OVERWRITE"}});
+  const HiveConfigProvider provider("hive-config", &config);
+  const auto properties = provider.properties();
+  ASSERT_EQ(properties.size(), expected.size());
+  for (size_t i = 0; i < expected.size(); ++i) {
+    EXPECT_EQ(properties[i].name, expected[i].name);
+    if (properties[i].name == HiveConfig::kCacheMetadataSession) {
+      EXPECT_EQ(properties[i].defaultValue, "true");
+    } else if (
+        properties[i].name ==
+        HiveConfig::kInsertExistingPartitionsBehaviorSession) {
+      EXPECT_EQ(properties[i].defaultValue, "OVERWRITE");
+    } else {
+      EXPECT_EQ(properties[i].defaultValue, expected[i].defaultValue);
+    }
+  }
+  EXPECT_EQ(provider.normalize("cache_metadata", "false"), "false");
 }

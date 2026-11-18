@@ -1442,6 +1442,225 @@ TEST_F(FlatMapVectorTest, appendDistinctKey) {
   }
 }
 
+TEST_F(FlatMapVectorTest, mergeChannels) {
+  const SelectivityVector rows(6);
+  auto makeInMap = [&](const std::vector<vector_size_t>& keyRows) {
+    auto inMap = AlignedBuffer::allocate<bool>(rows.size(), pool_.get(), false);
+    for (const auto row : keyRows) {
+      bits::setBit(inMap->asMutable<uint64_t>(), row);
+    }
+    return inMap;
+  };
+  auto toMaps = [&](const VectorPtr& values, const BufferPtr& inMap) {
+    return std::make_shared<FlatMapVector>(
+               pool_.get(),
+               MAP(BIGINT(), BIGINT()),
+               nullptr,
+               rows.size(),
+               maker_.flatVector<int64_t>({1}),
+               std::vector<VectorPtr>{values},
+               std::vector<BufferPtr>{inMap})
+        ->toMapVector();
+  };
+  const auto keys = maker_.flatVector<int64_t>({1});
+  const VectorPtr earlierValues =
+      maker_.flatVector<int64_t>({1, 2, 3, 4, 5, 6});
+  const VectorPtr laterValues =
+      maker_.flatVector<int64_t>({10, 20, 30, 40, 50, 60});
+  const VectorPtr lastValues =
+      maker_.flatVector<int64_t>({100, 200, 300, 400, 500, 600});
+
+  {
+    const auto earlierInMap = makeInMap({0, 1, 2});
+    VectorPtr values = earlierValues;
+    BufferPtr inMap = earlierInMap;
+    EXPECT_FALSE(
+        FlatMapVector::mergeChannels(
+            rows,
+            laterValues,
+            makeInMap({2, 3}),
+            true,
+            rows.size(),
+            pool_.get(),
+            false,
+            *keys,
+            0,
+            values,
+            inMap));
+    assertEqualVectors(
+        makeMapVectorFromJson<int64_t, int64_t>({
+            "{1: 1}",
+            "{1: 2}",
+            "{1: 30}",
+            "{1: 40}",
+            "{}",
+            "{}",
+        }),
+        toMaps(values, inMap));
+    EXPECT_NE(values, earlierValues);
+    EXPECT_NE(inMap, earlierInMap);
+    assertEqualVectors(
+        makeMapVectorFromJson<int64_t, int64_t>({
+            "{1: 1}",
+            "{1: 2}",
+            "{1: 3}",
+            "{}",
+            "{}",
+            "{}",
+        }),
+        toMaps(earlierValues, earlierInMap));
+  }
+
+  {
+    VectorPtr values = earlierValues;
+    BufferPtr inMap = makeInMap({0, 1});
+    bool isShared = FlatMapVector::mergeChannels(
+        rows,
+        laterValues,
+        makeInMap({1, 2}),
+        true,
+        rows.size(),
+        pool_.get(),
+        false,
+        *keys,
+        0,
+        values,
+        inMap);
+    EXPECT_FALSE(isShared);
+    const auto* mergedValues = values.get();
+    isShared = FlatMapVector::mergeChannels(
+        rows,
+        lastValues,
+        makeInMap({2, 3, 4}),
+        isShared,
+        rows.size(),
+        pool_.get(),
+        false,
+        *keys,
+        0,
+        values,
+        inMap);
+    EXPECT_FALSE(isShared);
+    EXPECT_EQ(values.get(), mergedValues);
+    assertEqualVectors(
+        makeMapVectorFromJson<int64_t, int64_t>({
+            "{1: 1}",
+            "{1: 20}",
+            "{1: 300}",
+            "{1: 400}",
+            "{1: 500}",
+            "{}",
+        }),
+        toMaps(values, inMap));
+  }
+
+  {
+    VectorPtr values = earlierValues;
+    BufferPtr inMap = makeInMap({1});
+    EXPECT_TRUE(
+        FlatMapVector::mergeChannels(
+            rows,
+            laterValues,
+            makeInMap({1, 2}),
+            true,
+            rows.size(),
+            pool_.get(),
+            false,
+            *keys,
+            0,
+            values,
+            inMap));
+    EXPECT_EQ(values, laterValues);
+    assertEqualVectors(
+        makeMapVectorFromJson<int64_t, int64_t>({
+            "{}",
+            "{1: 20}",
+            "{1: 30}",
+            "{}",
+            "{}",
+            "{}",
+        }),
+        toMaps(values, inMap));
+  }
+
+  {
+    VectorPtr values = earlierValues;
+    BufferPtr inMap;
+    EXPECT_FALSE(
+        FlatMapVector::mergeChannels(
+            rows,
+            laterValues,
+            makeInMap({1}),
+            true,
+            rows.size(),
+            pool_.get(),
+            false,
+            *keys,
+            0,
+            values,
+            inMap));
+    assertEqualVectors(
+        makeMapVectorFromJson<int64_t, int64_t>({
+            "{1: 1}",
+            "{1: 20}",
+            "{1: 3}",
+            "{1: 4}",
+            "{1: 5}",
+            "{1: 6}",
+        }),
+        toMaps(values, inMap));
+  }
+
+  {
+    VectorPtr values = earlierValues;
+    BufferPtr inMap = makeInMap({0});
+    FlatMapVector::mergeChannels(
+        rows,
+        laterValues,
+        makeInMap({1}),
+        true,
+        rows.size(),
+        pool_.get(),
+        true,
+        *keys,
+        0,
+        values,
+        inMap);
+    assertEqualVectors(
+        makeMapVectorFromJson<int64_t, int64_t>({
+            "{1: 1}",
+            "{1: 20}",
+            "{}",
+            "{}",
+            "{}",
+            "{}",
+        }),
+        toMaps(values, inMap));
+  }
+
+  {
+    const auto earlierInMap = makeInMap({0, 1, 2});
+    VectorPtr values = earlierValues;
+    BufferPtr inMap = earlierInMap;
+    VELOX_ASSERT_THROW(
+        FlatMapVector::mergeChannels(
+            rows,
+            laterValues,
+            makeInMap({2, 3}),
+            true,
+            rows.size(),
+            pool_.get(),
+            true,
+            *keys,
+            0,
+            values,
+            inMap),
+        "Duplicate map key was found: 1");
+    EXPECT_EQ(values, earlierValues);
+    EXPECT_EQ(inMap, earlierInMap);
+  }
+}
+
 TEST_F(FlatMapVectorTest, sortedKeyIndices) {
   auto flatMapVector = maker_.flatMapVectorNullable<int64_t, int64_t>({
       {{{101, 1}, {105, 5}, {100, 0}, {102, 2}}},

@@ -586,8 +586,7 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
     }
     rowsToCopy.updateBounds();
 
-    SelectivityVector rowsToKeep(size);
-    rowsToKeep.deselect(rowsToCopy);
+    auto rowsToKeep = rowsToCopy.complement(size);
 
     // Copy from row N to N - 10 for N >= 0 and from row N to N for N < 10;
     std::vector<vector_size_t> toSourceRow(size);
@@ -846,7 +845,7 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
   void testSerialization(VectorPtr source) {
     // Serialization functions expect loaded vectors.
     source = BaseVector::loadedVectorShared(source);
-    auto sourceRow = makeRowVector({"c"}, {source});
+    auto sourceRow = makeNamedRowVector("c", source);
     auto sourceRowType = asRowType(sourceRow->type());
 
     VectorStreamGroup even(pool(), nullptr);
@@ -857,15 +856,11 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
 
     std::vector<IndexRange> evenIndices;
     std::vector<IndexRange> oddIndices;
-    std::vector<vector_size_t> evenRows;
-    std::vector<vector_size_t> oddRows;
     for (vector_size_t i = 0; i < source->size(); ++i) {
       if (i % 2 == 0) {
         evenIndices.push_back(IndexRange{i, 1});
-        evenRows.push_back(i);
       } else {
         oddIndices.push_back(IndexRange{i, 1});
-        oddRows.push_back(i);
       }
     }
 
@@ -881,19 +876,10 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
       oddSizePointers[i] = &oddSizes[i];
     }
 
-    Scratch scratch;
     VectorStreamGroup::estimateSerializedSize(
-        source.get(),
-        folly::Range(evenRows.data(), evenRows.size()),
-        nullptr,
-        evenSizePointers.data(),
-        scratch);
+        source.get(), evenIndices, nullptr, evenSizePointers.data());
     VectorStreamGroup::estimateSerializedSize(
-        source.get(),
-        folly::Range(oddRows.data(), oddRows.size()),
-        nullptr,
-        oddSizePointers.data(),
-        scratch);
+        source.get(), oddIndices, nullptr, oddSizePointers.data());
     even.append(
         sourceRow, folly::Range(evenIndices.data(), evenIndices.size() / 2));
     even.append(
@@ -2296,7 +2282,7 @@ TEST_F(VectorTest, wrapInDictionaryOverLoadedLazy) {
       std::make_unique<TestingLoader>(makeFlatIdentityVector<int64_t>(size)));
   lazy->loadedVector();
   EXPECT_TRUE(lazy->isLoaded());
-  auto dict = wrapInDictionary(makeIndices(size, folly::identity), size, lazy);
+  auto dict = wrapInDictionary(makeIndices(size, std::identity{}), size, lazy);
   auto valuesVector = dict->valueVector();
   EXPECT_FALSE(valuesVector->isLazy());
 }
@@ -2628,6 +2614,58 @@ TEST_F(VectorTest, arraySliceMutability) {
 TEST_F(VectorTest, mapSliceMutability) {
   testArrayOrMapSliceMutability(
       std::dynamic_pointer_cast<MapVector>(createMap(vectorSize_, false)));
+}
+
+TEST_F(VectorTest, rowSliceOverShortChild) {
+  // Rows 2 to 5 are null, so the child only covers rows 0 and 1. Its offsets
+  // and sizes buffers have room for 6 rows, and the entries past row 1 point
+  // past its elements, as in a buffer kept after the vector shrank.
+  auto offsets = allocateOffsets(6, pool());
+  auto sizes = allocateSizes(6, pool());
+  auto* rawOffsets = offsets->asMutable<vector_size_t>();
+  auto* rawSizes = sizes->asMutable<vector_size_t>();
+  rawOffsets[1] = 2;
+  rawSizes[0] = 2;
+  rawSizes[1] = 1;
+  std::fill(rawOffsets + 2, rawOffsets + 6, 3);
+  std::fill(rawSizes + 2, rawSizes + 6, 2);
+  auto child = std::make_shared<ArrayVector>(
+      pool(),
+      ARRAY(BIGINT()),
+      nullptr,
+      2,
+      offsets,
+      sizes,
+      makeFlatVector<int64_t>({1, 2, 3}));
+  auto row = std::make_shared<RowVector>(
+      pool(),
+      ROW("a", ARRAY(BIGINT())),
+      makeNulls({false, false, true, true, true, true}),
+      6,
+      std::vector<VectorPtr>{child});
+  row->validate({});
+
+  {
+    SCOPED_TRACE("Slice that ends past the child");
+    auto slice = row->slice(1, 4);
+    slice->validate({});
+    auto expected = makeRowVector(
+        {"a"}, {makeArrayVector<int64_t>({{3}, {}, {}, {}})}, [](auto index) {
+          return index > 0;
+        });
+    test::assertEqualVectors(expected, slice);
+  }
+
+  {
+    SCOPED_TRACE("Slice that starts past the child");
+    auto slice = row->slice(3, 3);
+    slice->validate({});
+    auto expected = makeRowVector(
+        {"a"}, {makeArrayVector<int64_t>({{}, {}, {}})}, [](auto /*row*/) {
+          return true;
+        });
+    test::assertEqualVectors(expected, slice);
+  }
 }
 
 // Demonstrates incorrect usage of the memory pool. The pool is destroyed

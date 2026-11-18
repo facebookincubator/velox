@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/caching/FileProperties.h"
 #include "velox/connectors/Connector.h"
 #include "velox/dwio/common/Options.h"
 
@@ -51,6 +52,12 @@ struct CudfHiveConnectorSplit
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys =
       {};
 
+  /// File properties such as the size, used while opening the file. A known
+  /// size lets an S3 or KvikIO open skip the request for it. Presto's Hive
+  /// splits carry the size in the $file_size info column instead, and
+  /// fileSize() reads either place.
+  std::optional<FileProperties> properties;
+
   CudfHiveConnectorSplit(
       const std::string& connectorId,
       const std::string& _filePath,
@@ -59,10 +66,15 @@ struct CudfHiveConnectorSplit
       int64_t _splitWeight = 0,
       const std::unordered_map<std::string, std::string>& _infoColumns = {},
       const std::unordered_map<std::string, std::optional<std::string>>&
-          _partitionKeys = {});
+          _partitionKeys = {},
+      std::optional<FileProperties> _properties = std::nullopt);
 
   std::string toString() const override;
   std::string getFileName() const;
+
+  /// Returns the file size when the split carries a non-negative one, from
+  /// 'properties' first and else from the $file_size info column.
+  std::optional<int64_t> fileSize() const;
 
   const cudf::io::source_info& getCudfSourceInfo() const {
     return *cudfSourceInfo;
@@ -110,6 +122,11 @@ class CudfHiveConnectorSplitBuilder {
     return *this;
   }
 
+  CudfHiveConnectorSplitBuilder& fileProperties(FileProperties fileProperties) {
+    fileProperties_ = std::move(fileProperties);
+    return *this;
+  }
+
   CudfHiveConnectorSplitBuilder& connectorId(const std::string& connectorId) {
     connectorId_ = connectorId;
     return *this;
@@ -123,7 +140,8 @@ class CudfHiveConnectorSplitBuilder {
         length_,
         splitWeight_,
         infoColumns_,
-        partitionKeys_);
+        partitionKeys_,
+        fileProperties_);
   }
 
  private:
@@ -135,6 +153,7 @@ class CudfHiveConnectorSplitBuilder {
   std::unordered_map<std::string, std::string> infoColumns_ = {};
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys_ =
       {};
+  std::optional<FileProperties> fileProperties_;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive

@@ -30,6 +30,9 @@ struct Split {
   /// Indicates if this is a barrier split.
   std::optional<BarrierSplit> barrier;
 
+  /// Creates an empty split. Task::getSplitOrFuture() returns this value to
+  /// signal end of stream; it has neither a connector split nor a barrier.
+  /// Producers signal completion with Task::noMoreSplits().
   Split() = default;
 
   explicit Split(

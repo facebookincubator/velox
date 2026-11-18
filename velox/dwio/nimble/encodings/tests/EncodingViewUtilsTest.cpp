@@ -134,7 +134,7 @@ TEST_P(EncodingViewUtilsTest, readEncodingViewAtFallbackEliasFano) {
   // Sanity-check that EliasFano really goes through the fallback branch --
   // if a future refactor puts it on NIMBLE_FAST_VIEW_TYPES, correctness stays
   // but this test stops covering the fallback; add another off-list type
-  // (BitRangeSplit, SparseBool for bool, ALP for floats) to keep coverage.
+  // (SubIntSplit, SparseBool for bool, ALP for floats) to keep coverage.
   for (uint32_t i = 0; i < values.size(); i += 41) {
     EXPECT_EQ(nimble::readEncodingViewAt<uint32_t>(view.get(), i), values[i])
         << "i=" << i;

@@ -54,21 +54,13 @@ TEST_F(CollectListAggregateTest, groupBy) {
        makeArrayVectorFromJson<int64_t>(
            {"[1, 2]", "[1, 3]", "[2, 3]", "[3, 4, 5]", "[4, 5, 6]"})});
 
-  testAggregations(
-      batches,
-      {"c0"},
-      {"spark_collect_list(c1)"},
-      {"c0", "array_sort(a0)"},
-      {expected});
-  testAggregationsWithCompanion(
-      batches,
-      [](auto& /*builder*/) {},
-      {"c0"},
-      {"spark_collect_list(c1)"},
-      {{BIGINT()}},
-      {"c0", "array_sort(a0)"},
-      {expected},
-      {});
+  AggregationTester(*this)
+      .inputs(batches)
+      .groupBy({"c0"})
+      .aggregates({"spark_collect_list(c1)"})
+      .project({"c0", "array_sort(a0)"})
+      .withCompanion()
+      .assertResults(expected);
 }
 
 TEST_F(CollectListAggregateTest, global) {
@@ -77,16 +69,12 @@ TEST_F(CollectListAggregateTest, global) {
   auto expected =
       makeRowVector({makeArrayVectorFromJson<int32_t>({"[1, 2, 4, 5]"})});
 
-  testAggregations(
-      {data}, {}, {"spark_collect_list(c0)"}, {"array_sort(a0)"}, {expected});
-  testAggregationsWithCompanion(
-      {data},
-      [](auto& /*builder*/) {},
-      {},
-      {"spark_collect_list(c0)"},
-      {{INTEGER()}},
-      {"array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"spark_collect_list(c0)"})
+      .project({"array_sort(a0)"})
+      .withCompanion()
+      .assertResults(expected);
 }
 
 TEST_F(CollectListAggregateTest, ignoreNulls) {
@@ -95,37 +83,23 @@ TEST_F(CollectListAggregateTest, ignoreNulls) {
   // Spark will ignore all null values in the input.
   auto expected =
       makeRowVector({makeArrayVectorFromJson<int32_t>({"[1, 2, 4, 6]"})});
-  testAggregations(
-      {input}, {}, {"spark_collect_list(c0)"}, {"array_sort(a0)"}, {expected});
-  testAggregationsWithCompanion(
-      {input},
-      [](auto& /*builder*/) {},
-      {},
-      {"spark_collect_list(c0)"},
-      {{INTEGER()}},
-      {"array_sort(a0)"},
-      {expected},
-      {});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"spark_collect_list(c0)"})
+      .project({"array_sort(a0)"})
+      .withCompanion()
+      .assertResults(expected);
 }
 
 TEST_F(CollectListAggregateTest, allNullsInput) {
   auto input = makeRowVector({makeAllNullFlatVector<int64_t>(100)});
   // If all input data is null, Spark will output an empty array.
   auto expected = makeRowVector({makeArrayVectorFromJson<int32_t>({"[]"})});
-  testAggregations({input}, {}, {"spark_collect_list(c0)"}, {expected});
-  testAggregationsWithCompanion(
-      {input},
-      [](auto& /*builder*/) {},
-      {},
-      {"spark_collect_list(c0)"},
-      {{BIGINT()}},
-      {},
-      {expected},
-      {});
-}
-
-std::unordered_map<std::string, std::string> makeConfig(bool ignoreNulls) {
-  return {{"spark.collect_list.ignore_nulls", ignoreNulls ? "true" : "false"}};
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"spark_collect_list(c0)"})
+      .withCompanion()
+      .assertResults(expected);
 }
 
 TEST_F(CollectListAggregateTest, respectNulls) {
@@ -136,12 +110,11 @@ TEST_F(CollectListAggregateTest, respectNulls) {
       std::vector<std::vector<std::optional<int32_t>>>{
           {1, 2, std::nullopt, 4, std::nullopt, 6}})});
   std::vector<RowVectorPtr> expectedResult{expected};
-  testAggregations(
-      {input},
-      {},
-      {"spark_collect_list(c0)"},
-      expectedResult,
-      makeConfig(false));
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"spark_collect_list(c0)"})
+      .config("spark.collect_list.ignore_nulls", "false")
+      .assertResults(expectedResult);
 }
 
 TEST_F(CollectListAggregateTest, respectNullsGroupBy) {
@@ -154,13 +127,13 @@ TEST_F(CollectListAggregateTest, respectNullsGroupBy) {
            std::vector<std::vector<std::optional<int64_t>>>{
                {std::nullopt, 1}, {2, std::nullopt, 3}})});
   std::vector<RowVectorPtr> expectedResult{expected};
-  testAggregations(
-      {data},
-      {"c0"},
-      {"spark_collect_list(c1)"},
-      {"c0", "a0"},
-      expectedResult,
-      makeConfig(false));
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"spark_collect_list(c1)"})
+      .project({"c0", "a0"})
+      .config("spark.collect_list.ignore_nulls", "false")
+      .assertResults(expectedResult);
 }
 
 TEST_F(CollectListAggregateTest, respectNullsAllNulls) {
@@ -171,12 +144,11 @@ TEST_F(CollectListAggregateTest, respectNullsAllNulls) {
       std::vector<std::vector<std::optional<int32_t>>>{
           {std::nullopt, std::nullopt, std::nullopt}})});
   std::vector<RowVectorPtr> expectedResult{expected};
-  testAggregations(
-      {input},
-      {},
-      {"spark_collect_list(c0)"},
-      expectedResult,
-      makeConfig(false));
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"spark_collect_list(c0)"})
+      .config("spark.collect_list.ignore_nulls", "false")
+      .assertResults(expectedResult);
 }
 } // namespace
 } // namespace facebook::velox::functions::aggregate::sparksql::test

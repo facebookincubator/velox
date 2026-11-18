@@ -17,6 +17,7 @@
 #include "velox/dwio/common/tests/utils/E2EFilterTestBase.h"
 
 #include <fmt/format.h>
+#include <functional>
 #include <random>
 
 #include "velox/dwio/common/tests/utils/DataSetBuilder.h"
@@ -1045,8 +1046,8 @@ void E2EFilterTestBase::testMetadataFilter() {
 
   {
     SCOPED_TRACE("Values not unique in row group");
-    auto a = vectorMaker.flatVector<int64_t>(batchSize_, folly::identity);
-    auto c = vectorMaker.flatVector<int64_t>(batchSize_, folly::identity);
+    auto a = vectorMaker.flatVector<int64_t>(batchSize_, std::identity{});
+    auto c = vectorMaker.flatVector<int64_t>(batchSize_, std::identity{});
     auto b = vectorMaker.rowVector({"c"}, {c});
     batches = {vectorMaker.rowVector({"a", "b"}, {a, b})};
     writeToMemory(batches[0]->type(), batches, false);
@@ -1060,7 +1061,7 @@ void E2EFilterTestBase::testMetadataFilter() {
   }
   {
     SCOPED_TRACE("Leaf node lifecycle");
-    auto column = vectorMaker.flatVector<int64_t>(batchSize_, folly::identity);
+    auto column = vectorMaker.flatVector<int64_t>(batchSize_, std::identity{});
     batches = {
         vectorMaker.rowVector({"a", "b", "c"}, {column, column, column})};
     writeToMemory(batches[0]->type(), batches, false);

@@ -488,39 +488,6 @@ TEST(ManualEncodingSelectionPolicyFactoryTest, nestedReadFactorsInheritRoot) {
           {nimble::EncodingType::FixedBitWidth, 1.0}}));
 }
 
-TEST(
-    ManualEncodingSelectionPolicyFactoryTest,
-    bitRangeSplitExcludesSequentialChildEncodings) {
-  nimble::ManualEncodingSelectionPolicyFactory factory{
-      {
-          {nimble::EncodingType::Constant, 1.0},
-          {nimble::EncodingType::Trivial, 1.0},
-          {nimble::EncodingType::FixedBitWidth, 1.0},
-          {nimble::EncodingType::BlockBitPacking, 1.0},
-          {nimble::EncodingType::RLE, 1.0},
-          {nimble::EncodingType::MainlyConstant, 1.0},
-          {nimble::EncodingType::BitRangeSplit, 1.0},
-      },
-      /*compressionOptions=*/std::nullopt};
-
-  auto root = factory.createPolicy(nimble::DataType::Uint64);
-  auto childBase = root->create<uint32_t>(
-      nimble::EncodingType::BitRangeSplit, /*nestedEncodingIdentifier=*/0);
-  auto* child = dynamic_cast<nimble::ManualEncodingSelectionPolicy<uint32_t>*>(
-      childBase.get());
-  ASSERT_NE(child, nullptr);
-  // Section point lookups exclude recursive and sequential child encodings
-  // from automatic selection, while retaining random-access encodings.
-  EXPECT_EQ(
-      child->candidateEncodingReadFactors(),
-      (std::vector<std::pair<nimble::EncodingType, float>>{
-          {nimble::EncodingType::Constant, 1.0},
-          {nimble::EncodingType::Trivial, 1.0},
-          {nimble::EncodingType::FixedBitWidth, 1.0},
-          {nimble::EncodingType::BlockBitPacking, 1.0},
-      }));
-}
-
 TEST(ManualEncodingSelectionPolicyFactoryTest, nestedReadFactorsOverrideRoot) {
   nimble::ManualEncodingSelectionPolicyFactory factory{
       {{nimble::EncodingType::Trivial, 1.0}},
@@ -1490,6 +1457,33 @@ TEST(ManualEncodingSelectionPolicyTest, perEncodingCompressionAcceptRatio) {
   // Trivial uses default ratio 0.98: accept compression that saves 20%.
   EXPECT_TRUE(trivialCompressionPolicy->shouldAccept(
       nimble::CompressionType::MetaInternal, 100, 80));
+}
+
+TEST(
+    ManualEncodingSelectionPolicyTest,
+    blockBitPackingV2CompressionAcceptRatio) {
+  // BlockBitPackingV2 can be named in read factors, is selectable, and shares
+  // the 0.7 accept ratio of BlockBitPacking.
+  auto policy = std::make_unique<
+      nimble::ManualEncodingSelectionPolicy<uint32_t>>(
+      nimble::ManualEncodingSelectionPolicyFactory::parseEncodingReadFactors(
+          "BlockBitPackingV2=1.0"),
+      nimble::CompressionOptions{},
+      std::nullopt);
+  std::vector<uint32_t> data(2048);
+  for (uint32_t i = 0; i < data.size(); ++i) {
+    data[i] = i % 100;
+  }
+  auto result = policy->select(
+      data,
+      nimble::Statistics<uint32_t>::create(data),
+      nimble::Encoding::Options{});
+  EXPECT_EQ(result.encodingType, nimble::EncodingType::BlockBitPackingV2);
+  auto compressionPolicy = result.compressionPolicyFactory();
+  EXPECT_FALSE(compressionPolicy->shouldAccept(
+      nimble::CompressionType::MetaInternal, 100, 80));
+  EXPECT_TRUE(compressionPolicy->shouldAccept(
+      nimble::CompressionType::MetaInternal, 100, 60));
 }
 
 TEST(ManualEncodingSelectionPolicyTest, customCompressionAcceptRatioOverride) {

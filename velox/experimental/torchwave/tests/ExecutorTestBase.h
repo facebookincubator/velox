@@ -33,6 +33,8 @@
 #include "velox/experimental/torchwave/AllocGroup.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/GraphPrep.h"
+#include "velox/experimental/torchwave/PackRewrite.h"
+#include "velox/experimental/torchwave/PackedInput.h"
 #include "velox/experimental/torchwave/Pt2Load.h"
 #include "velox/experimental/torchwave/tests/CompiledPlan.h"
 #include "velox/experimental/torchwave/tests/DataGen.h"
@@ -46,7 +48,7 @@ struct RunTiming {
   /// Execution time excluding data transfer.
   int64_t executeUs{0};
   /// Per-launch debug info (outer = launches, inner = blocks).
-  std::vector<std::vector<DebugInfo>> debugInfo;
+  std::vector<std::vector<BlockDebugInfo>> debugInfo;
 };
 
 /// Holds the loaded model and weights shared across test methods.
@@ -128,10 +130,33 @@ void saveModelArchive(
     caffe2::serialize::PyTorchStreamReader& reader,
     const std::string& outPath);
 
+/// Leaves the grid mode open (isCg and useSingleBlock unset) for its lifetime
+/// when the mode in effect is exactly what --cg / --single_block set, and
+/// restores it afterwards. A forced mode compiles only that mode's grid into
+/// the main slot, so a plan assertion about a particular variant would read
+/// the wrong grid or an empty one. A mode the test set itself is kept.
+class ScopedPlanMode {
+ public:
+  ScopedPlanMode();
+  ~ScopedPlanMode();
+
+  ScopedPlanMode(const ScopedPlanMode&) = delete;
+  ScopedPlanMode& operator=(const ScopedPlanMode&) = delete;
+
+ private:
+  std::optional<bool> savedCg_;
+  std::optional<bool> savedSingleBlock_;
+};
+
 /// Base test fixture for running .pt2 models through serial and wave executors.
 class ExecutorTestBase : public ::testing::Test {
  protected:
   static void SetUpTestSuite();
+
+  /// Re-applies --cg and --single_block before every test. Tests switch
+  /// modes and reset them to auto when done, which would otherwise leave
+  /// every later test of the binary running in auto mode.
+  void SetUp() override;
 
   /// Runs a .pt2 model through the nativert SerialGraphExecutor on CPU.
   /// Verifies outputs match 'expected' and returns timing.
@@ -195,6 +220,21 @@ class ExecutorTestBase : public ::testing::Test {
       std::unique_ptr<ModelFixture> fixture,
       const std::vector<c10::IValue>& expected,
       const std::string& label = "");
+
+  /// Runs each --batch_inputs file through 'executor': a first run checked
+  /// against the file's <name>_results.pt, if present, then --num_repeats
+  /// timed runs. Logs each batch's times and the sum of their medians.
+  void runBatchInputs(
+      WaveGraphExecutor& executor,
+      const nativert::Graph& graph);
+
+  /// With --pack_inputs, encodes the packed inputs among 'inputs' (user
+  /// inputs on the host, in graph order) for the rewritten wave graph, and
+  /// logs the encode time on --pack_threads threads and the host-to-device
+  /// time of each packed input from pinned memory, plain and encoded.
+  void encodePackedInputsForWave(
+      std::vector<c10::IValue>& inputs,
+      std::string_view label);
 
   /// Executes a pre-filled frame node by node using the given kernels,
   /// tracing values in trace_values. Returns the user outputs. When
@@ -307,6 +347,9 @@ class ExecutorTestBase : public ::testing::Test {
   /// Display name for the current test, included in failure messages.
   std::string displayName_;
 
+  // The packed inputs rewritten in the wave graph under --pack_inputs.
+  std::vector<PackRecipe> packRecipes_;
+
   // Snapshot of the serial frame's initial state (after filling user inputs,
   // before execution). Maps value id to shape string or "none"/"scalar".
   // Used to verify that the wave frame has the same slots populated.
@@ -343,8 +386,15 @@ class ExecutorTestBase : public ::testing::Test {
 
   /// Compiles 'pt2File' and returns a CompiledPlan for each grid variant. Only
   /// the multi-kernel grid contains every op; the single-block and cg grids
-  /// hold only the ops that have such a variant (e.g. masked_select).
+  /// hold only the ops that have such a variant (e.g. masked_select). A mode
+  /// that only --cg / --single_block set is left open while compiling (see
+  /// ScopedPlanMode), so the variant grids are populated.
   ModePlans compilePlans(const std::string& pt2File);
+
+  /// Like compilePlans, but compiles under the mode in effect even when it
+  /// came from the command line. For a test that forces a mode on purpose and
+  /// reads the single grid that mode builds.
+  ModePlans compilePlansAsConfigured(const std::string& pt2File);
 
   /// Compiles 'pt2File' for the grid 'cg' names and returns what the
   /// allocation-group pass makes of it, so a test can assert on the plan --

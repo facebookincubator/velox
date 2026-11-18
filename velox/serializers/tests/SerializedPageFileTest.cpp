@@ -386,6 +386,39 @@ TEST_P(SerializedPageFileTest, writeBufferSizeBoundsEachPage) {
   }
 }
 
+// Only the Presto serde estimates per-row sizes, so the writer appends the rows
+// of other serdes without splitting them.
+TEST_P(SerializedPageFileTest, writeWithoutRowSizeEstimates) {
+  serializer::CompactRowVectorSerde::registerNamedVectorSerde();
+  auto* serde = getNamedVectorSerde("CompactRow");
+  auto makeOptions = [&]() {
+    return std::make_unique<VectorSerde::Options>(compressionKind_, 0.8);
+  };
+  SerializedPageFileWriter writer(
+      getTestFilePath(), kMB, kKB, "", makeOptions(), serde, pool());
+  const auto input = createTestVector(100);
+  IndexRange range{0, input->size()};
+  writer.write(input, folly::Range<IndexRange*>(&range, 1));
+  const auto fileInfos = writer.finish();
+  ASSERT_EQ(fileInfos.size(), 1);
+
+  SerializedPageFileReader reader(
+      fileInfos[0].path,
+      kKB,
+      asRowType(input->type()),
+      serde,
+      makeOptions(),
+      pool(),
+      /*ioStats=*/nullptr);
+  std::vector<RowVectorPtr> readVectors;
+  RowVectorPtr readVector;
+  while (reader.nextBatch(readVector)) {
+    readVectors.push_back(readVector);
+  }
+  test::assertEqualVectors(input, fuzzer::mergeRowVectors(readVectors, pool()));
+  ASSERT_FALSE(writer.canEstimateWrites(*input->type()));
+}
+
 TEST_P(SerializedPageFileTest, serializedPageRoundTripMultipleBatches) {
   const uint64_t kTargetFileSize = 256;
   const uint64_t kWriteBufferSize = 100;

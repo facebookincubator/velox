@@ -17,6 +17,7 @@
 
 #include <fast_float/fast_float.h>
 #include <re2/re2.h>
+#include <functional>
 #include <string_view>
 #include "velox/common/base/XxHashInline.h"
 #include "velox/functions/lib/DateTimeFormatter.h"
@@ -223,7 +224,7 @@ struct DateFormatFunction : public TimestampWithTimezoneSupport<T> {
     mysqlDateTime_ =
         buildMysqlDateTimeFormatter(
             std::string_view(formatString.data(), formatString.size()))
-            .thenOrThrow(folly::identity, [&](const Status& status) {
+            .thenOrThrow(std::identity{}, [&](const Status& status) {
               VELOX_USER_FAIL("{}", status.message());
             });
     maxResultSize_ = mysqlDateTime_->maxResultSize(sessionTimeZone_);
@@ -310,7 +311,7 @@ struct DateParseFunction {
       format_ =
           buildMysqlDateTimeFormatter(
               std::string_view(formatString->data(), formatString->size()))
-              .thenOrThrow(folly::identity, [&](const Status& status) {
+              .thenOrThrow(std::identity{}, [&](const Status& status) {
                 VELOX_USER_FAIL("{}", status.message());
               });
       isConstFormat_ = true;
@@ -329,7 +330,7 @@ struct DateParseFunction {
     if (!isConstFormat_) {
       format_ = buildMysqlDateTimeFormatter(
                     std::string_view(format.data(), format.size()))
-                    .thenOrThrow(folly::identity, [&](const Status& status) {
+                    .thenOrThrow(std::identity{}, [&](const Status& status) {
                       VELOX_USER_FAIL("{}", status.message());
                     });
     }
@@ -445,7 +446,7 @@ struct ParseDateTimeFunction {
     if (format != nullptr) {
       format_ = buildJodaDateTimeFormatter(
                     std::string_view(format->data(), format->size()))
-                    .thenOrThrow(folly::identity, [&](const Status& status) {
+                    .thenOrThrow(std::identity{}, [&](const Status& status) {
                       VELOX_USER_FAIL("{}", status.message());
                     });
       isConstFormat_ = true;
@@ -464,7 +465,7 @@ struct ParseDateTimeFunction {
     if (!isConstFormat_) {
       format_ = buildJodaDateTimeFormatter(
                     std::string_view(format.data(), format.size()))
-                    .thenOrThrow(folly::identity, [&](const Status& status) {
+                    .thenOrThrow(std::identity{}, [&](const Status& status) {
                       VELOX_USER_FAIL("{}", status.message());
                     });
     }

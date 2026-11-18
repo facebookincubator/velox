@@ -18,6 +18,8 @@
 
 #include <fmt/format.h>
 #include <folly/Likely.h>
+#include <folly/container/F14Map.h>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 
@@ -38,6 +40,7 @@
 #include "velox/vector/FunctionVector.h"
 #include "velox/vector/LazyVector.h"
 #include "velox/vector/SelectivityVector.h"
+#include "velox/vector/VectorMap.h"
 
 namespace facebook::velox::exec {
 
@@ -175,7 +178,7 @@ VectorPtr CastExpr::castFromDate(
         // enabled.
         rows.applyToSelected([&](vector_size_t row) {
           const auto date = inputFlatVector->valueAt(row);
-          if (FOLLY_UNLIKELY(hooks_->isDateOverflowForTimestampUtc(date))) {
+          if (hooks_->isDateOverflowForTimestampUtc(date)) [[unlikely]] {
             if (hooks_->truncate()) {
               VELOX_USER_FAIL(
                   makeErrorMessage(input, row, toType) +
@@ -255,7 +258,7 @@ VectorPtr CastExpr::castToDate(
         rows.applyToSelected([&](vector_size_t row) {
           const auto& timestamp = inputVector->valueAt(row);
           const auto days = timestamp.getSeconds() / 86'400;
-          if (FOLLY_UNLIKELY(hooks_->isDateOverflowForTimestampUtc(days))) {
+          if (hooks_->isDateOverflowForTimestampUtc(days)) [[unlikely]] {
             if (hooks_->truncate()) {
               VELOX_USER_FAIL(
                   makeErrorMessage(input, row, DATE()) +
@@ -695,6 +698,232 @@ VectorPtr CastExpr::applyMap(
   return result;
 }
 
+namespace {
+// The channels of a cast flat map: the input channel each kept key comes
+// from, and the values and in-map of each kept key.
+struct FlatMapChannels {
+  std::vector<vector_size_t> keptKeyIndices;
+  std::vector<VectorPtr> mapValues;
+  std::vector<BufferPtr> inMaps;
+};
+
+// Casts every distinct key of a flat map once without throwing and returns
+// the cast keys. Keys that fail to cast are recorded in the key errors.
+VectorPtr castFlatMapKeys(
+    CastExpr& castExpr,
+    const FlatMapVector& input,
+    exec::EvalCtx& context,
+    const TypePtr& fromType,
+    const TypePtr& toType,
+    EvalErrorsPtr& keyErrors) {
+  VectorPtr newKeys;
+  {
+    ScopedVarSetter noThrow(context.mutableThrowOnError(), false);
+    ScopedVarSetter details(context.mutableCaptureErrorDetails(), true);
+    castExpr.apply(
+        SelectivityVector(input.numDistinctKeys()),
+        input.distinctKeys(),
+        context,
+        fromType,
+        toType,
+        newKeys);
+  }
+  context.swapErrors(keyErrors);
+  return newKeys;
+}
+
+// Casts the values of every flat map key on the rows that hold the key. Keys
+// that failed to cast throw or record their error on those rows, and keys
+// that cast to the same value are merged into one channel.
+FlatMapChannels castFlatMapValues(
+    CastExpr& castExpr,
+    const SelectivityVector& rows,
+    const FlatMapVector& input,
+    const BaseVector& newDistinctKeys,
+    const EvalErrors* keyErrors,
+    exec::EvalCtx& context,
+    const MapType& fromType,
+    const MapType& toType) {
+  const auto numDistinctKeys = input.numDistinctKeys();
+  const bool castKeys = *fromType.keyType() != *toType.keyType();
+  const bool castValues = *fromType.valueType() != *toType.valueType();
+  const bool throwOnError = *context.mutableThrowOnError();
+  bool throwOnDuplicateKeys{false};
+  if (auto* queryCtx = context.execCtx()->queryCtx()) {
+    throwOnDuplicateKeys =
+        queryCtx->queryConfig().throwExceptionOnDuplicateMapKeys();
+  }
+
+  auto rowsToCast = [&](vector_size_t channel) {
+    SelectivityVector rowsWithKey = rows;
+    if (const auto* rawInMap = input.rawInMapsAt(channel)) {
+      rowsWithKey.deselectNulls(rawInMap, rows.begin(), rows.end());
+    }
+    return rowsWithKey;
+  };
+
+  folly::F14FastMap<
+      VectorValueSetEntry,
+      vector_size_t,
+      VectorValueSetHasher,
+      VectorValueSetComparer>
+      channelByKey(numDistinctKeys);
+  FlatMapChannels channels;
+  channels.keptKeyIndices.reserve(numDistinctKeys);
+  channels.mapValues.reserve(numDistinctKeys);
+  channels.inMaps.reserve(numDistinctKeys);
+  for (vector_size_t channel = 0; channel < numDistinctKeys; ++channel) {
+    const auto rowsWithKey = rowsToCast(channel);
+    if (keyErrors && keyErrors->hasErrorAt(channel)) {
+      if (throwOnError && rowsWithKey.hasSelections()) {
+        keyErrors->throwIfErrorAt(channel);
+      }
+      context.ensureErrorsVectorSize(rows.end());
+      rowsWithKey.applyToSelected([&](vector_size_t row) {
+        context.errors()->copyError(*keyErrors, channel, row);
+      });
+      continue;
+    }
+    if (!rowsWithKey.hasSelections()) {
+      continue;
+    }
+    std::optional<vector_size_t> collidedChannel;
+    if (castKeys) {
+      auto [it, inserted] = channelByKey.try_emplace(
+          VectorValueSetEntry{&newDistinctKeys, channel},
+          channels.keptKeyIndices.size());
+      if (!inserted) {
+        collidedChannel = it->second;
+      }
+    }
+    const auto& values = input.mapValuesAt(channel);
+    VectorPtr newValues = values;
+    if (castValues && values != nullptr) {
+      newValues = nullptr;
+      castExpr.apply(
+          rowsWithKey,
+          values,
+          context,
+          fromType.valueType(),
+          toType.valueType(),
+          newValues);
+      if (newValues->size() < input.size()) {
+        newValues->resize(input.size());
+      }
+    }
+    auto inMap =
+        channel < input.inMaps().size() ? input.inMaps()[channel] : nullptr;
+    if (collidedChannel.has_value()) {
+      auto& collidedValues = channels.mapValues[*collidedChannel];
+      auto& collidedInMap = channels.inMaps[*collidedChannel];
+      if (newValues != nullptr && collidedValues == nullptr) {
+        collidedValues = std::move(newValues);
+        collidedInMap = std::move(inMap);
+      } else if (newValues != nullptr) {
+        FlatMapVector::mergeChannels(
+            rows,
+            newValues,
+            std::move(inMap),
+            true,
+            input.size(),
+            context.pool(),
+            throwOnDuplicateKeys,
+            newDistinctKeys,
+            channel,
+            collidedValues,
+            collidedInMap);
+      }
+      channels.keptKeyIndices[*collidedChannel] = channel;
+    } else {
+      channels.keptKeyIndices.push_back(channel);
+      channels.inMaps.push_back(std::move(inMap));
+      channels.mapValues.push_back(std::move(newValues));
+    }
+  }
+  return channels;
+}
+} // namespace
+
+VectorPtr CastExpr::applyFlatMap(
+    const SelectivityVector& rows,
+    const FlatMapVector* input,
+    exec::EvalCtx& context,
+    const MapType& fromType,
+    const MapType& toType) {
+  const auto numDistinctKeys = input->numDistinctKeys();
+  auto* pool = context.pool();
+
+  EvalErrorsPtr oldErrors;
+  context.swapErrors(oldErrors);
+
+  VectorPtr newDistinctKeys = input->distinctKeys();
+  EvalErrorsPtr keyErrors;
+  // Skip casting the keys if the key type doesn't change.
+  if (*fromType.keyType() != *toType.keyType()) {
+    ScopedVarSetter holder(&inTopLevel, false);
+    newDistinctKeys = castFlatMapKeys(
+        *this,
+        *input,
+        context,
+        fromType.keyType(),
+        toType.keyType(),
+        keyErrors);
+  }
+
+  FlatMapChannels channels;
+  {
+    ScopedVarSetter holder(&inTopLevel, false);
+    channels = castFlatMapValues(
+        *this,
+        rows,
+        *input,
+        *newDistinctKeys,
+        keyErrors.get(),
+        context,
+        fromType,
+        toType);
+  }
+
+  // Wrap the keys in a dictionary over the kept channels if any were dropped
+  // by collisions, failed key casts or keys with no selected rows.
+  if (channels.keptKeyIndices.size() < numDistinctKeys) {
+    auto indices = allocateIndices(channels.keptKeyIndices.size(), pool);
+    std::copy(
+        channels.keptKeyIndices.begin(),
+        channels.keptKeyIndices.end(),
+        indices->asMutable<vector_size_t>());
+    newDistinctKeys = BaseVector::wrapInDictionary(
+        nullptr, indices, channels.keptKeyIndices.size(), newDistinctKeys);
+  }
+
+  auto result = std::make_shared<FlatMapVector>(
+      pool,
+      MAP(toType.keyType(), toType.valueType()),
+      input->nulls(),
+      input->size(),
+      std::move(newDistinctKeys),
+      std::move(channels.mapValues),
+      std::move(channels.inMaps));
+  result->shareKeyIndex(*input);
+
+  if (context.errors()) {
+    if (setNullInResultAtError()) {
+      auto* rawNulls = result->mutableRawNulls();
+      rows.applyToSelected([&](vector_size_t row) {
+        if (context.errors()->hasErrorAt(row)) {
+          bits::setNull(rawNulls, row, true);
+        }
+      });
+    } else {
+      context.addErrors(rows, *context.errorsPtr(), oldErrors);
+    }
+  }
+
+  // Restore original state.
+  context.swapErrors(oldErrors);
+  return result;
+}
+
 VectorPtr CastExpr::applyArray(
     const SelectivityVector& rows,
     const ArrayVector* input,
@@ -1092,12 +1321,21 @@ void CastExpr::applyPeeled(
   } else {
     switch (toType->kind()) {
       case TypeKind::MAP:
-        result = applyMap(
-            rows,
-            input.asUnchecked<MapVector>(),
-            context,
-            fromType->asMap(),
-            toType->asMap());
+        if (input.encoding() == VectorEncoding::Simple::FLAT_MAP) {
+          result = applyFlatMap(
+              rows,
+              input.asUnchecked<FlatMapVector>(),
+              context,
+              fromType->asMap(),
+              toType->asMap());
+        } else {
+          result = applyMap(
+              rows,
+              input.asUnchecked<MapVector>(),
+              context,
+              fromType->asMap(),
+              toType->asMap());
+        }
         break;
       case TypeKind::ARRAY:
         result = applyArray(

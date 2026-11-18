@@ -17,7 +17,9 @@
 #include "velox/serializers/SerializedPageFile.h"
 #include <cstdint>
 #include <memory>
+#include "velox/common/base/SpillConfig.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TestValue.h"
 
 namespace facebook::velox::serializer {
 std::unique_ptr<SerializedPageFile> SerializedPageFile::create(
@@ -143,7 +145,7 @@ uint64_t SerializedPageFileWriter::flush() {
 folly::Range<const vector_size_t*> SerializedPageFileWriter::estimateRowSizes(
     const RowVectorPtr& rows,
     const folly::Range<IndexRange*>& indices) {
-  vector_size_t numRows = 0;
+  vector_size_t numRows{0};
   for (const auto& range : indices) {
     numRows += range.size;
   }
@@ -154,7 +156,7 @@ folly::Range<const vector_size_t*> SerializedPageFileWriter::estimateRowSizes(
     std::iota(sizePointers_.begin(), sizePointers_.end(), rowSizes_.data());
   }
 
-  vector_size_t rowIndex = 0;
+  vector_size_t rowIndex{0};
   for (const auto& range : indices) {
     for (vector_size_t offset = 0; offset < range.size; ++offset) {
       rowNumbers_[rowIndex++] = range.begin + offset;
@@ -167,7 +169,32 @@ folly::Range<const vector_size_t*> SerializedPageFileWriter::estimateRowSizes(
       folly::Range(rowNumbers_.data(), numRows),
       sizePointers_.data(),
       scratch);
+  common::testutil::TestValue::adjust(
+      "facebook::velox::serializer::SerializedPageFileWriter::estimateRowSizes",
+      &rowSizes_);
   return folly::Range<const vector_size_t*>(rowSizes_.data(), numRows);
+}
+
+namespace {
+// Returns true if 'type' or any type nested in it is OPAQUE, whose serialized
+// size the serde can't estimate.
+bool containsOpaque(const Type& type) {
+  if (type.isOpaque()) {
+    return true;
+  }
+  for (uint32_t i = 0; i < type.size(); ++i) {
+    if (containsOpaque(*type.childAt(i))) {
+      return true;
+    }
+  }
+  return false;
+}
+} // namespace
+
+bool SerializedPageFileWriter::canEstimateWrites(const Type& type) const {
+  // Only the Presto serde estimates the serialized size of individual rows.
+  return writeBufferSize_ > 0 && serde_->kind() == "Presto" &&
+      !containsOpaque(type);
 }
 
 uint64_t SerializedPageFileWriter::write(
@@ -194,19 +221,34 @@ uint64_t SerializedPageFileWriter::write(
   };
 
   uint64_t writtenBytes{0};
-  if (writeBufferSize_ == 0) {
+  if (!canEstimateWrites(*rows->type())) {
+    // The rows stay in one page, which they start if their flat size would take
+    // the pending page past 'writeBufferSize_'.
+    if (batch_ != nullptr &&
+        batch_->size() + rows->estimateFlatSize() > writeBufferSize_) {
+      writtenBytes += flush();
+    }
     for (const auto& range : indices) {
       append(range.begin, range.size);
     }
-    writtenBytes += flush();
+    if (batch_->size() >= writeBufferSize_) {
+      writtenBytes += flush();
+    }
   } else {
     const auto rowSizes = estimateRowSizes(rows, indices);
+    // The serializer can't write a row of 2GB or more, and appending one can
+    // overflow its offsets. The serde caps a row estimate at INT32_MAX.
+    for (const auto rowSize : rowSizes) {
+      if (rowSize >= std::numeric_limits<int32_t>::max()) {
+        VELOX_GENERIC_SPILL_FAILURE("Serialized row exceeds 2GB");
+      }
+    }
     uint64_t bufferedSize = batch_ == nullptr ? 0 : batch_->size();
-    vector_size_t rowIndex = 0;
+    vector_size_t rowIndex{0};
     for (const auto& range : indices) {
       vector_size_t chunkBegin = range.begin;
-      vector_size_t chunkSize = 0;
-      uint64_t chunkBytes = 0;
+      vector_size_t chunkSize{0};
+      uint64_t chunkBytes{0};
       if (range.size > 0 && bufferedSize > 0 &&
           bufferedSize + rowSizes[rowIndex] > writeBufferSize_) {
         writtenBytes += flush();

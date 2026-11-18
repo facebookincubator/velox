@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <functional>
 #include <map>
 
 #include <fmt/format.h>
@@ -1001,7 +1002,7 @@ struct VariantConverter {
 
     const auto converted =
         util::Converter<ToKind>::tryCast(value.value<FromKind>())
-            .thenOrThrow(folly::identity, [&](const Status& status) {
+            .thenOrThrow(std::identity{}, [&](const Status& status) {
               VELOX_USER_FAIL("{}", status.message());
             });
     return {converted};

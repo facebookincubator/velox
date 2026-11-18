@@ -37,20 +37,22 @@ TEST_F(BitwiseXorAggregationTest, bitwiseXor) {
   createDuckDbTable(vectors);
 
   // Global aggregation.
-  testAggregations(
-      vectors,
-      {},
-      {"bit_xor(c1)", "bit_xor(c2)", "bit_xor(c3)", "bit_xor(c4)"},
-      "SELECT bit_xor(c1), bit_xor(c2), bit_xor(c3), bit_xor(c4) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"bit_xor(c1)", "bit_xor(c2)", "bit_xor(c3)", "bit_xor(c4)"})
+      .assertResults(
+          "SELECT bit_xor(c1), bit_xor(c2), bit_xor(c3), bit_xor(c4) FROM tmp");
 
   // Group by aggregation.
-  testAggregations(
-      [&](auto& builder) {
-        builder.values(vectors).project({"c0 % 10", "c1", "c2", "c3", "c4"});
-      },
-      {"p0"},
-      {"bit_xor(c1)", "bit_xor(c2)", "bit_xor(c3)", "bit_xor(c4)"},
-      "SELECT c0 % 10, bit_xor(c1), bit_xor(c2), bit_xor(c3), bit_xor(c4) FROM tmp GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) {
+        builder.project({"c0 % 10", "c1", "c2", "c3", "c4"});
+      })
+      .groupBy({"p0"})
+      .aggregates({"bit_xor(c1)", "bit_xor(c2)", "bit_xor(c3)", "bit_xor(c4)"})
+      .assertResults(
+          "SELECT c0 % 10, bit_xor(c1), bit_xor(c2), bit_xor(c3), bit_xor(c4) FROM tmp GROUP BY 1");
 }
 
 } // namespace

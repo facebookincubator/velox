@@ -407,7 +407,10 @@ TEST_F(MergeAggregateTest, unknownType) {
 
   auto expected = makeRowVector({makeAllNullFlatVector<UnknownValue>(1)});
 
-  testAggregations({data}, {}, {"merge(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"merge(c0)"})
+      .assertResults(expected);
 }
 } // namespace
 } // namespace facebook::velox::aggregate::test

@@ -23,9 +23,9 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
 
 namespace facebook::nimble {
 
@@ -138,6 +138,7 @@ std::shared_ptr<CachedTabletReader> TabletReaderCache::Generator::create(
   ioOptions.setIndexIoStats(indexIoStats);
   ioOptions.setIOExecutor(executor_);
   options.ioOptions = std::move(ioOptions);
+  options.fileIoContext = {};
   auto tablet = TabletReader::create(
       properties.readFile, pools_[shardIdx].get(), options);
   auto section = tablet->loadOptionalSection(

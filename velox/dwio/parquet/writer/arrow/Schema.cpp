@@ -962,6 +962,23 @@ bool ColumnDescriptor::equals(const ColumnDescriptor& other) const {
       maxDefinitionLevel() == other.maxDefinitionLevel();
 }
 
+LevelInfo ColumnDescriptor::levelInfo() const {
+  LevelInfo levelInfo;
+  levelInfo.defLevel = maxDefinitionLevel_;
+  levelInfo.repLevel = maxRepetitionLevel_;
+
+  int16_t minSpacedDefLevel = maxDefinitionLevel_;
+  const schema::Node* node = node_.get();
+  while (node != nullptr && !node->isRepeated()) {
+    if (node->isOptional()) {
+      minSpacedDefLevel--;
+    }
+    node = node->parent();
+  }
+  levelInfo.repeatedAncestorDefLevel = minSpacedDefLevel;
+  return levelInfo;
+}
+
 const ColumnDescriptor* SchemaDescriptor::column(int i) const {
   checkColumnBounds(i, leaves_.size());
   return &leaves_[i];

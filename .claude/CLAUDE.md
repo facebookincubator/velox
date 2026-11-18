@@ -166,17 +166,34 @@ are summarized below.
 - Put runtime information (names, values, types) at the **end** of error messages, after the static description.
   - ❌ `VELOX_USER_FAIL("Column '{}' is ambiguous", name);`
   - ✅ `VELOX_USER_FAIL("Column is ambiguous: {}", name);`
+- Name the mistake in an error message, or the requirement it broke with "must"; a sentence describing only the correct state reads as documentation.
+  - ❌ `VELOX_USER_FAIL("A placeholder's type is declared with CAST, not TRY_CAST: {}", name);`
+  - ✅ `VELOX_USER_FAIL("TRY_CAST of a placeholder is not supported: {}", name);`
+- Pass a value whose type has an `fmt::formatter`, such as `TypeKind`, to a formatted message or `fmt::format` as is, not converted to a string first.
+  - ❌ `VELOX_FAIL("Unsupported type: {}", TypeKindName::toName(kind));`
+  - ✅ `VELOX_FAIL("Unsupported type: {}", kind);`
 
 ### Variables
+
+- Declare one variable per line, except in for-loop initializers.
 
 - Prefer value types, then `std::optional`, then `std::unique_ptr`.
 - Prefer `std::string_view` over `const std::string&` for function parameters.
 - Use uniform initialization: `size_t size{0}` over `size_t size = 0`.
 - Declare variables in the smallest scope, as close to usage as possible.
 - Use digit separators (`'`) for numeric literals with 4 or more digits: `10'000`, not `10000`.
-- Use trailing commas in multi-line initializer lists, enum definitions, and
-  function-call argument lists that span multiple lines. This produces cleaner
-  diffs when items are added or reordered.
+- Use trailing commas in multi-line initializer lists and enum definitions.
+  This produces cleaner diffs when items are added or reordered.
+
+### Types
+
+- Use the short `ROW` forms rather than spelling out parallel vectors:
+  - One field: `ROW("a", BIGINT())`, not `ROW({"a"}, {BIGINT()})`.
+  - Fields sharing a type: `ROW({"a", "b"}, BIGINT())`, not
+    `ROW({"a", "b"}, {BIGINT(), BIGINT()})`.
+  - Mixed types: `ROW({{"a", BIGINT()}, {"b", VARCHAR()}})`, not
+    `ROW({"a", "b"}, {BIGINT(), VARCHAR()})`, which leaves the reader pairing
+    up two lists by position.
 
 ### API Design
 
@@ -193,6 +210,9 @@ are summarized below.
 - Convert epoch seconds to calendar time with `Timestamp::epochToCalendarUtc()`. `gmtime` is not thread-safe, and glibc's `gmtime_r` serializes threads on a global lock.
 
 ### Tests
+
+- Each test file should have one test suite with a matching name. For example,
+  `FooTest.cpp` contains the `FooTest` suite.
 
 - Place new tests next to related existing tests, not at the end of the file. Group tests by topic (e.g., place `tryCast` next to `types`, `notBetween` next to `ifClause` which uses `between`).
 
@@ -217,6 +237,18 @@ Common matchers:
 - `SizeIs(n)` - collection has n elements
 
 Requires `#include <gmock/gmock.h>`.
+
+- Assert the error message, not just the type. Use
+  `VELOX_ASSERT_THROW(expression, "message")` from
+  `velox/common/base/tests/GTestUtils.h`. Spelling the message out in the test
+  forces you to read it and judge whether it is informative and actionable; in
+  production that text is the whole diagnosis.
+  `EXPECT_THROW(expression, VeloxRuntimeError)` checks the type and leaves the
+  message unread.
+- Scope each case instead of numbering names. When a test walks through several
+  cases, wrap each in braces and reuse one name. `rowType1`, `rowType2` and
+  `expected1` make the reader track which one is live, and keep dead values in
+  scope.
 
 ## Common Mistakes
 

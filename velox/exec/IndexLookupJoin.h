@@ -166,6 +166,9 @@ class IndexLookupJoin : public Operator {
   void initLookupInput();
   void initLookupOutput();
   void initOutputProjections();
+  // Compiles the join filter and maps the columns it reads to the probe input
+  // and the lookup output. Appends the lookup columns only the filter reads to
+  // 'lookupOutputType_'.
   void initFilter();
 
   // Collects splits for the index source until no more splits signal is
@@ -369,7 +372,8 @@ class IndexLookupJoin : public Operator {
   uint64_t startBatchIndex_{0};
   uint64_t endBatchIndex_{0};
 
-  // The data type of the lookup output from the lookup source.
+  // The data type of the lookup output from the lookup source: the lookup
+  // columns of the join output, followed by the ones only the filter reads.
   RowTypePtr lookupOutputType_;
 
   // Used to project output columns from the probe input and lookup output.

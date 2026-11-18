@@ -16,6 +16,8 @@
 #pragma once
 #include <folly/IPAddressV6.h>
 
+#include <limits>
+
 #include "velox/common/memory/ByteStream.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -112,15 +114,19 @@ inline int32_t rangesTotalSize(const folly::Range<const IndexRange*>& ranges) {
 
 // Returns ranges for the non-null rows of an array  or map. 'rows' gives the
 // rows. nulls is the nulls of the array/map or nullptr if no nulls. 'offsets'
-// and 'sizes' are the offsets and sizes of the array/map. Returns the number
-// of index ranges and obtains them from 'rangesHolder'. If 'stream' is
-// non-null, writes the lengths and nulls for the array/map into 'stream'.
+// and 'sizes' are the offsets and sizes of the array/map.Returns the number of
+// index ranges. Obtains the ranges from 'rangesHolder'. If 'sizesPtr' is
+// non-null, gets returns  the sizes for the inner ranges in 'sizesHolder'. If
+// 'stream' is non-null, writes the lengths and nulls for the array/map into
+// 'stream'.
 int32_t rowsToRanges(
     folly::Range<const vector_size_t*> rows,
     const uint64_t* rawNulls,
     const vector_size_t* offsets,
     const vector_size_t* sizes,
+    vector_size_t** sizesPtr,
     ScratchPtr<IndexRange>& rangesHolder,
+    ScratchPtr<vector_size_t*>* sizesHolder,
     VectorStream* stream,
     Scratch& scratch);
 
@@ -158,6 +164,16 @@ struct FlushSizes {
 FOLLY_ALWAYS_INLINE bool needCompression(
     const folly::compression::Codec& codec) {
   return codec.type() != folly::compression::CodecType::NO_COMPRESSION;
+}
+
+// Returns 'bytes' as the 32-bit size a page header records. Throws for a page
+// of 2GB or more, whose size the header cannot hold.
+inline int32_t checkedPageSize(int64_t bytes) {
+  VELOX_CHECK_LE(
+      bytes,
+      std::numeric_limits<int32_t>::max(),
+      "Serialized page exceeds 2GB");
+  return static_cast<int32_t>(bytes);
 }
 
 inline int64_t computeChecksum(
@@ -203,7 +219,7 @@ inline void flushSerialization(
   if (listener) {
     listener->pause();
   }
-  const int32_t endSize = output->tellp();
+  const auto endSize = output->tellp();
   // Fill in crc
   int64_t crc = 0;
   if (listener) {
@@ -220,7 +236,7 @@ inline int64_t flushUncompressed(
     int32_t numRows,
     OutputStream* out,
     PrestoOutputStreamListener* listener) {
-  int32_t offset = out->tellp();
+  const int64_t offset = out->tellp();
 
   char codecMask = 0;
   if (listener) {
@@ -256,8 +272,8 @@ inline int64_t flushUncompressed(
   }
 
   // Fill in uncompressedSizeInBytes & sizeInBytes
-  int32_t size = (int32_t)out->tellp() - offset;
-  const int32_t uncompressedSize = size - kHeaderSize;
+  const int64_t size = static_cast<int64_t>(out->tellp()) - offset;
+  const int32_t uncompressedSize = checkedPageSize(size - kHeaderSize);
   int64_t crc = 0;
   if (listener) {
     crc = computeChecksum(listener, codecMask, numRows, uncompressedSize);
@@ -299,14 +315,15 @@ inline FlushSizes flushCompressed(
     stream.flush(&out);
   }
 
-  const int32_t uncompressedSize = out.tellp();
+  const int32_t uncompressedSize = checkedPageSize(out.tellp());
   VELOX_CHECK_LE(
       uncompressedSize,
       codec.maxUncompressedLength(),
       "UncompressedSize exceeds limit");
   auto iobuf = out.getIOBuf();
   const auto compressedBuffer = codec.compress(iobuf.get());
-  const int32_t compressedSize = compressedBuffer->computeChainDataLength();
+  const auto compressedSize =
+      static_cast<int64_t>(compressedBuffer->computeChainDataLength());
   if (compressedSize > uncompressedSize * minCompressionRatio) {
     flushSerialization(
         numRows,
@@ -321,7 +338,7 @@ inline FlushSizes flushCompressed(
   flushSerialization(
       numRows,
       uncompressedSize,
-      compressedSize,
+      checkedPageSize(compressedSize),
       codecMask,
       compressedBuffer,
       output,

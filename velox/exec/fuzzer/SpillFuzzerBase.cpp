@@ -221,6 +221,15 @@ RowVectorPtr SpillFuzzerBase::execute(
     builder.config(core::QueryConfig::kSpillEnabled, true)
         .config(core::QueryConfig::kMaxSpillLevel, maxSpillLevel)
         .config(spillConfig.value(), true)
+        .config(
+            core::QueryConfig::kSpillNumMaxMergeFiles,
+            test::randomSpillNumMaxMergeFiles(rng_))
+        .config(
+            core::QueryConfig::kSpillNumPartitionBits,
+            test::randomSpillNumPartitionBits(rng_))
+        .config(
+            core::QueryConfig::kMaxSpillRunRows,
+            test::randomMaxSpillRunRows(rng_))
         .spillDirectory(spillDirectory->getPath());
     spillPct = 10;
   }

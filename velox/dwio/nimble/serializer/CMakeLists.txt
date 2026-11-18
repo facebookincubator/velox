@@ -98,7 +98,13 @@ target_link_libraries(
 )
 
 add_library(nimble_encoding_view_decoder EncodingViewDecoder.cpp EncodingViewDecoder.h)
-target_link_libraries(nimble_encoding_view_decoder nimble_common nimble_encodings velox_memory)
+target_link_libraries(
+  nimble_encoding_view_decoder
+  nimble_common
+  nimble_encodings
+  velox_memory
+  Folly::folly
+)
 
 add_library(nimble_stream_reader StreamReader.cpp StreamReader.h)
 target_link_libraries(
@@ -126,6 +132,7 @@ target_link_libraries(
   nimble_velox_common
   nimble_velox_field_reader
   nimble_common
+  velox_common_base
   velox_vector
   velox_memory
   Folly::folly

@@ -31,11 +31,11 @@
 #include "velox/common/encode/Base64.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/connectors/hive/FileSplitReader.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergFieldId.h"
-#include "velox/connectors/hive/iceberg/IcebergGeometryConverter.h"
+#include "velox/connectors/hive/iceberg/IcebergGeospatialConverter.h"
 #include "velox/connectors/hive/iceberg/IcebergStatsCollector.h"
 
 #ifdef VELOX_ENABLE_PARQUET
@@ -144,7 +144,8 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
     std::unordered_map<std::string, ExistingDeletionVector>
         existingDeletionVectors,
     std::shared_ptr<const FileNameGenerator> fileNameGenerator,
-    std::vector<std::string> insertedColumns)
+    std::vector<std::string> insertedColumns,
+    bool includePartitionPaths)
     : HiveInsertTableHandle(
           std::vector<HiveColumnHandlePtr>(
               inputColumns.begin(),
@@ -160,7 +161,8 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
       partitionSpec_(partitionSpec),
       writeKind_(writeKind),
       existingDeletionVectors_(std::move(existingDeletionVectors)),
-      insertedColumns_(std::move(insertedColumns)) {
+      insertedColumns_(std::move(insertedColumns)),
+      includePartitionPaths_(includePartitionPaths) {
   // Data-file writes and merge writes both require the input row type to
   // have inputColumns populated (the data file sub-sink consumes them and
   // the merge sink projects them into a narrow data batch). The
@@ -368,20 +370,22 @@ IcebergDataSink::IcebergDataSink(
               : nullptr),
       partitionRowType_(std::move(partitionRowType)),
       icebergInsertTableHandle_(insertTableHandle) {
-  // Reading an Iceberg geometry column re-encodes the file's ISO WKB into
-  // Velox's internal GEOMETRY encoding (see IcebergGeometryConverter). The
-  // write side does not perform the inverse conversion yet, and GEOMETRY is
-  // VARBINARY-backed, so a GEOMETRY vector written here would land on disk as
+  // Reading an Iceberg geometry or geography column re-encodes the file's ISO
+  // WKB into Velox's internal geometry encoding (see
+  // IcebergGeospatialConverter). The write side does not perform the inverse
+  // conversion yet, and both GEOMETRY and SPHERICALGEOGRAPHY are
+  // VARBINARY-backed, so such a vector written here would land on disk as
   // Velox's internal bytes rather than the ISO WKB the Iceberg spec requires.
   // That file would be unreadable by this reader and by every other Iceberg
   // engine. Reject the write instead of silently producing a non-conforming
   // file; this mirrors the read-side guards that reject non-Parquet formats and
   // non-XY geometries.
   VELOX_USER_CHECK(
-      !containsGeometry(inputType_),
-      "Writing an Iceberg geometry column is not supported: the Iceberg writer "
-      "does not convert Velox's internal geometry encoding to ISO WKB. Geometry "
-      "support in the Iceberg connector is currently read-only.");
+      !containsGeospatial(inputType_),
+      "Writing an Iceberg geometry or geography column is not supported: the "
+      "Iceberg writer does not convert Velox's internal geometry encoding to "
+      "ISO WKB. Geospatial support in the Iceberg connector is currently "
+      "read-only.");
 
   commitPartitionValue_.resize(maxOpenWriters_);
 
@@ -415,7 +419,7 @@ IcebergDataSink::IcebergDataSink(
     if (writeDefaultValue.has_value() && isOmittedColumn) {
       writeDefaultColumns_.push_back(
           {static_cast<column_index_t>(i),
-           newConstantFromString(
+           connector::newConstantFromString(
                inputType_->childAt(i),
                writeDefaultValue.value(),
                connectorQueryCtx_->memoryPool(),
@@ -527,6 +531,11 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
           toManifestFormatString(icebergInsertTableHandle_->storageFormat()),
           icebergInsertTableHandle_->writeKind() ==
               IcebergInsertTableHandle::WriteKind::kDeletionVector);
+      const auto& splitOffsets = dataFileStats_[i][fileIdx]->splitOffsets;
+      if (!splitOffsets.empty()) {
+        commitData["splitOffsets"] =
+            folly::dynamic::array(splitOffsets.begin(), splitOffsets.end());
+      }
       if (!commitPartitionValue_.empty() &&
           !commitPartitionValue_[i].isNull()) {
         commitData["partitionDataJson"] = folly::toJson(
@@ -564,6 +573,23 @@ std::string IcebergDataSink::getPartitionName(uint32_t partitionId) const {
       partitionId,
       partitionIdGenerator_->partitionValues(),
       partitionKeyAsLowerCase_);
+}
+
+WriterParameters IcebergDataSink::getWriterParameters(
+    const std::optional<std::string>& partition,
+    std::optional<uint32_t> bucketId) const {
+  auto parameters = HiveDataSink::getWriterParameters(partition, bucketId);
+  if (icebergInsertTableHandle_->includePartitionPaths()) {
+    return parameters;
+  }
+  const auto& locationHandle = icebergInsertTableHandle_->locationHandle();
+  return WriterParameters{
+      parameters.updateMode(),
+      parameters.partitionName(),
+      parameters.targetFileName(),
+      locationHandle->targetPath(),
+      parameters.writeFileName(),
+      locationHandle->writePath()};
 }
 
 uint32_t IcebergDataSink::ensureWriter(const WriterId& id) {

@@ -28,7 +28,6 @@
 #include <vector>
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/dwio/nimble/common/Constants.h"
-#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingIdentifier.h"
@@ -357,11 +356,7 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
         : candidateEncodingReadFactors_;
     nestedEncodingReadFactors.reserve(sourceEncodingReadFactors.size());
     for (const auto& entry : sourceEncodingReadFactors) {
-      const bool isCandidate = parentEncodingType == EncodingType::BitRangeSplit
-          ? detail::BitRangeSplitEncodingBase::isValidSectionEncodingCandidate(
-                entry.first)
-          : entry.first != parentEncodingType;
-      if (isCandidate) {
+      if (entry.first != parentEncodingType) {
         nestedEncodingReadFactors.emplace_back(entry);
       }
     }

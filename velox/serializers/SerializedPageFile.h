@@ -125,14 +125,26 @@ class SerializedPageFileWriter {
 
   virtual ~SerializedPageFileWriter() = default;
 
-  /// Appends the rows selected by 'indices', splitting them into pages based on
-  /// per-row serialized size estimates. Each page stays within
-  /// 'writeBufferSize' unless a single row exceeds the limit. A
-  /// 'writeBufferSize' of 0 flushes after each call. Returns the actual bytes
-  /// written by flushes during this call, excluding data that remains buffered.
+  /// Appends the rows selected by 'indices', grouping them into pages so that
+  /// each page's estimated size stays within 'writeBufferSize', unless a single
+  /// row's estimate exceeds it. The per-row estimates exclude page and stream
+  /// overhead such as null bitmaps, so a written page can be somewhat larger
+  /// than 'writeBufferSize'. A row estimated at 2GB or more fails the call with
+  /// a spill failure before any row is appended. If canEstimateWrites() is
+  /// false for the type of 'rows', the rows go in one page: the pending page is
+  /// flushed first if their flat size would take it past 'writeBufferSize',
+  /// and after them once it reaches 'writeBufferSize'. A 'writeBufferSize' of 0
+  /// flushes after each call. Returns the actual bytes written by flushes
+  /// during this call, excluding data that remains buffered.
   uint64_t write(
       const RowVectorPtr& rows,
       const folly::Range<IndexRange*>& indices);
+
+  /// Returns true if write() splits rows of 'type' into pages by their
+  /// serialized size estimates. It does not if 'writeBufferSize' is 0, if the
+  /// serde is not Presto, the only one that estimates rows, or if 'type'
+  /// contains OPAQUE, whose serialized size the serde can't estimate.
+  bool canEstimateWrites(const Type& type) const;
 
   /// Closes the current output file if any. Subsequent calls to write will
   /// start a new one.

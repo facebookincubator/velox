@@ -154,6 +154,7 @@ set(
   VectorWindowPartitionTest.cpp
   FileExchangeTest.cpp
   CursorTest.cpp
+  SplitLifecycleTest.cpp
 )
 
 set(
@@ -216,6 +217,21 @@ if(VELOX_ENABLE_GEO)
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   )
   target_link_libraries(velox_exec_SpatialJoinTest ${VELOX_EXEC_TEST_DEPS})
+endif()
+
+if(VELOX_ENABLE_FAISS)
+  add_executable(
+    velox_exec_VectorSearchJoinTest
+    VectorSearchJoinTest.cpp
+    VectorSearchTest.cpp
+    Main.cpp
+  )
+  add_test(
+    NAME velox_exec_VectorSearchJoinTest
+    COMMAND velox_exec_VectorSearchJoinTest
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+  target_link_libraries(velox_exec_VectorSearchJoinTest ${VELOX_EXEC_TEST_DEPS} velox_vector_index)
 endif()
 
 add_executable(

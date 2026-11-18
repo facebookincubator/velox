@@ -75,9 +75,12 @@ void registerGeneralFunctions(
     const std::string& prefix = "",
     std::string_view defaultOwner = {});
 
+/// Registers date-time functions. When 'ignoreTimeZoneLabel' is true,
+/// at_timezone returns TIMESTAMP for TIMESTAMP and TIMESTAMP WITH TIME ZONE.
 void registerDateTimeFunctions(
     const std::string& prefix = "",
-    std::string_view defaultOwner = {});
+    std::string_view defaultOwner = {},
+    bool ignoreTimeZoneLabel = false);
 
 void registerURLFunctions(
     const std::string& prefix = "",
@@ -95,9 +98,11 @@ void registerBitwiseFunctions(
     const std::string& prefix = "",
     std::string_view defaultOwner = {});
 
+/// Registers all scalar functions with the selected at_timezone semantics.
 void registerAllScalarFunctions(
     const std::string& prefix = "",
-    std::string_view defaultOwner = {});
+    std::string_view defaultOwner = {},
+    bool ignoreTimeZoneLabel = false);
 
 void registerMapAllowingDuplicates(
     const std::string& name,

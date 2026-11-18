@@ -13,4 +13,3 @@
 # limitations under the License.
 add_subdirectory(encoding)
 add_subdirectory(encoding_selection)
-add_subdirectory(stripe_stats_pruning)

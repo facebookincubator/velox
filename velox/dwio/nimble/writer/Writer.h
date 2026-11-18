@@ -28,10 +28,10 @@
 #include "velox/dwio/nimble/index/IndexWriter.h"
 #include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
-#include "velox/dwio/nimble/velox/FieldWriter.h"
-#include "velox/dwio/nimble/velox/SharedDictionaryWriter.h"
 #include "velox/dwio/nimble/writer/BufferPolicy.h"
+#include "velox/dwio/nimble/writer/FieldWriter.h"
 #include "velox/dwio/nimble/writer/NimbleFileMetadata.h"
+#include "velox/dwio/nimble/writer/SharedDictionaryWriter.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/DecodedVector.h"
@@ -214,10 +214,15 @@ class Writer : public velox::dwio::common::Writer {
   // runtime stats at file close.
   void reportRuntimeStats() const;
 
+  // Creates the cluster index writer, or returns null without a cluster index.
+  // When the options pick the Stripe key stream layout, first allocates the
+  // stream of each stripe that holds the stripe's key chunk from
+  // 'schemaBuilder', so it must run before the field writers allocate theirs.
   static std::unique_ptr<index::IndexWriter> createClusterIndexWriter(
       const WriterOptions& options,
       const velox::TypePtr& type,
-      velox::memory::MemoryPool* pool);
+      velox::memory::MemoryPool* pool,
+      SchemaBuilder& schemaBuilder);
 
   static std::vector<DenseIndexWriter> createDenseIndexWriters(
       const WriterOptions& options,
@@ -226,6 +231,10 @@ class Writer : public velox::dwio::common::Writer {
 
   // Adds index keys to all configured index writers.
   void addIndexKey(const velox::VectorPtr& input);
+
+  // Adds the cluster index key chunk of the stripe being written to its
+  // encoded streams, when the cluster index stores its keys in stripes.
+  void writeStripeKeyStream();
 
   void writeProperties(const WriteOptionalSectionFn& writeMetadataFn);
 

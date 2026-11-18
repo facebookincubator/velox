@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <functional>
+
 #include "velox/serializers/PrestoSerializerSerializationUtils.h"
 
 #include "velox/vector/BiasVector.h"
@@ -561,7 +563,7 @@ void serializeIPPrefix(
   }
 }
 
-template <typename T, typename Conv = folly::Identity>
+template <typename T, typename Conv = std::identity>
 void copyWords(
     uint8_t* destination,
     const int32_t* indices,
@@ -574,7 +576,7 @@ void copyWords(
   }
 }
 
-template <typename T, typename Conv = folly::Identity>
+template <typename T, typename Conv = std::identity>
 void copyWordsWithRows(
     uint8_t* destination,
     const int32_t* rows,
@@ -931,7 +933,9 @@ void serializeArrayVector(
       arrayVector->rawNulls(),
       arrayVector->rawOffsets(),
       arrayVector->rawSizes(),
+      nullptr,
       rangesHolder,
+      nullptr,
       stream,
       scratch);
   if (numRanges == 0) {
@@ -957,7 +961,9 @@ void serializeMapVector(
       mapVector->rawNulls(),
       mapVector->rawOffsets(),
       mapVector->rawSizes(),
+      nullptr,
       rangesHolder,
+      nullptr,
       stream,
       scratch);
   if (numRanges == 0) {
@@ -1091,6 +1097,8 @@ void serializeColumn(
     case VectorEncoding::Simple::MAP:
       serializeMapVectorRanges(vector, ranges, stream, scratch);
       break;
+    case VectorEncoding::Simple::FLAT_MAP:
+      VELOX_NYI("PrestoVectorSerde does not support flat map vectors");
     case VectorEncoding::Simple::LAZY:
       serializeColumn(
           BaseVector::loadedVectorShared(vector), ranges, stream, scratch);
@@ -1135,6 +1143,8 @@ void serializeColumn(
     case VectorEncoding::Simple::MAP:
       serializeMapVector(vector, rows, stream, scratch);
       break;
+    case VectorEncoding::Simple::FLAT_MAP:
+      VELOX_NYI("PrestoVectorSerde does not support flat map vectors");
     case VectorEncoding::Simple::LAZY:
       serializeColumn(
           BaseVector::loadedVectorShared(vector), rows, stream, scratch);
@@ -1149,11 +1159,14 @@ int32_t rowsToRanges(
     const uint64_t* rawNulls,
     const vector_size_t* offsets,
     const vector_size_t* sizes,
+    vector_size_t** sizesPtr,
     ScratchPtr<IndexRange>& rangesHolder,
+    ScratchPtr<vector_size_t*>* sizesHolder,
     VectorStream* stream,
     Scratch& scratch) {
   auto numRows = rows.size();
   auto* innerRows = rows.data();
+  auto* nonNullRows = innerRows;
   int32_t numInner = rows.size();
   ScratchPtr<vector_size_t, 64> nonNullHolder(scratch);
   ScratchPtr<vector_size_t, 64> innerRowsHolder(scratch);
@@ -1172,6 +1185,7 @@ int32_t rowsToRanges(
         rows.data(),
         folly::Range<const vector_size_t*>(mutableNonNullRows, numInner),
         mutableInnerRows);
+    nonNullRows = mutableNonNullRows;
     innerRows = mutableInnerRows;
   } else if (stream) {
     stream->appendNonNull(rows.size());
@@ -1179,11 +1193,22 @@ int32_t rowsToRanges(
       stream->appendLength(sizes[rows[i]]);
     }
   }
+  vector_size_t** sizesOut = nullptr;
+  if (sizesPtr) {
+    sizesOut = sizesHolder->get(numInner);
+  }
   auto ranges = rangesHolder.get(numInner);
   int32_t fill = 0;
   for (auto i = 0; i < numInner; ++i) {
+    // Add the size of the length.
+    if (sizesPtr) {
+      *sizesPtr[rawNulls ? nonNullRows[i] : i] += sizeof(int32_t);
+    }
     if (sizes[innerRows[i]] == 0) {
       continue;
+    }
+    if (sizesOut) {
+      sizesOut[fill] = sizesPtr[rawNulls ? nonNullRows[i] : i];
     }
     ranges[fill].begin = offsets[innerRows[i]];
     ranges[fill].size = sizes[innerRows[i]];

@@ -15,8 +15,8 @@
  */
 #pragma once
 
+#include "velox/expression/CaseExprBase.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
-#include "velox/expression/SpecialForm.h"
 
 namespace facebook::velox::exec {
 
@@ -34,7 +34,7 @@ namespace facebook::velox::exec {
 ///
 /// IF expression can be represented as a CASE expression with a single
 /// condition.
-class SwitchExpr : public SpecialForm {
+class SwitchExpr : public CaseExprBase {
  public:
   /// Inputs are concatenated conditions and results with an optional "else" at
   /// the end, e.g. {condition1, result1, condition2, result2,..else}
@@ -43,26 +43,13 @@ class SwitchExpr : public SpecialForm {
       const std::vector<ExprPtr>& inputs,
       bool inputsSupportFlatNoNullsFastPath);
 
-  void evalSpecialForm(
+ private:
+  void evalCondition(
+      size_t index,
       const SelectivityVector& rows,
+      const VectorPtr& subject,
       EvalCtx& context,
       VectorPtr& result) override;
-
-  bool isConditional() const override {
-    return true;
-  }
-
-  void clearCache() override {
-    Expr::clearCache();
-    tempValues_.reset();
-  }
-
- private:
-  void computePropagatesNulls() override;
-
-  const size_t numCases_;
-  const bool hasElseClause_;
-  BufferPtr tempValues_;
 };
 
 class SwitchCallToSpecialForm : public FunctionCallToSpecialForm {

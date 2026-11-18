@@ -28,7 +28,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/fuzzer/encoding_selection/NimbleWriterFuzzer.h"
-#include "velox/dwio/nimble/velox/selective/SelectiveNimbleReader.h"
+#include "velox/dwio/nimble/selective/SelectiveNimbleReader.h"
 
 // Defined here and only here: the runner library, the gtest and the standalone
 // binary all link this translation unit, and a second definition would abort
@@ -106,6 +106,7 @@ void runNimbleWriterFuzzer() {
     fuzzer.logCoverage();
     fuzzer.logPairCoverage();
     fuzzer.logChunkStatsCoverage();
+    fuzzer.logPointLookupCoverage();
   };
 
   // Catch and rethrow rather than a scope guard: an exception that escapes

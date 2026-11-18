@@ -15,7 +15,6 @@
  */
 
 #include "velox/functions/prestosql/aggregates/MaxSizeForStatsAggregate.h"
-#include "velox/common/memory/RawVector.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/lib/aggregates/SimpleNumericAggregate.h"
@@ -39,8 +38,7 @@ class MaxSizeForStatsAggregate
  private:
   std::vector<vector_size_t> elementSizes_;
   std::vector<vector_size_t*> elementSizePtrs_;
-  raw_vector<vector_size_t> elementIndices_;
-  Scratch scratch_;
+  std::vector<IndexRange> elementIndices_;
   DecodedVector decoded_;
 
  public:
@@ -162,7 +160,7 @@ class MaxSizeForStatsAggregate
 
     vector_size_t i = 0;
     rows.testSelected([&](auto row) {
-      elementIndices_[i] = row;
+      elementIndices_[i] = IndexRange{row, 1};
       elementSizePtrs_[i] = &elementSizes_[i];
       return ++i < numToProcess;
     });
@@ -170,8 +168,7 @@ class MaxSizeForStatsAggregate
     getVectorSerde()->estimateSerializedSize(
         vector.get(),
         folly::Range(elementIndices_.data(), elementIndices_.size()),
-        elementSizePtrs_.data(),
-        scratch_);
+        elementSizePtrs_.data());
   }
 
   void doUpdateSingleGroup(

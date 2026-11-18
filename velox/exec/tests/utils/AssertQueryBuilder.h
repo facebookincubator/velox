@@ -73,7 +73,11 @@ class AssertQueryBuilder {
   typename std::enable_if<std::is_arithmetic<T>::value, AssertQueryBuilder&>::
       type
       config(const std::string& key, const T& value) {
-    return config(key, std::to_string(value));
+    if constexpr (std::is_same_v<T, bool>) {
+      return config(key, std::string(value ? "true" : "false"));
+    } else {
+      return config(key, std::to_string(value));
+    }
   }
 
   /// Set multiple configuration properties.

@@ -66,7 +66,7 @@ jobs:
 
       - name: Restore Dependencies
         if: ${{ github.event_name != 'pull_request' || steps.setup-script-changes.outputs.setup_scripts != 'true' }}
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: restore-deps
         with:
           path: ${{ env.INSTALL_PREFIX }}
@@ -133,7 +133,7 @@ jobs:
       - name: Save ccache"
         continue-on-error: true
         timeout-minutes: 20
-        uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
+        uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         with:
           path: ccache
           key: ccache-benchmark

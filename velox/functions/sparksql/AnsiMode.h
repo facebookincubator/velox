@@ -36,7 +36,7 @@ void ansiUserFail(
     bool ansiEnabled,
     fmt::format_string<Args...> formatString,
     Args&&... args) {
-  if (FOLLY_UNLIKELY(ansiEnabled)) {
+  if (ansiEnabled) [[unlikely]] {
     VELOX_USER_FAIL(
         "{}", fmt::format(formatString, std::forward<Args>(args)...));
   }

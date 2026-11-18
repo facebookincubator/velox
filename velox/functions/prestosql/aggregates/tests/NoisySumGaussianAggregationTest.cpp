@@ -52,12 +52,16 @@ TEST_F(NoisySumGaussianAggregationTest, simpleTestNoNoise) {
 
   // Expect the result to be 15.0
   auto expectedResult = makeRowVector({makeConstant(15.0, 1)});
-  testAggregations(
-      {vectors}, {}, {"noisy_sum_gaussian(c2, 0.0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"noisy_sum_gaussian(c2, 0.0)"})
+      .assertResults(expectedResult);
 
   // test nosie scale of bigint type.
-  testAggregations(
-      {vectors}, {}, {"noisy_sum_gaussian(c2, 0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"noisy_sum_gaussian(c2, 0)"})
+      .assertResults(expectedResult);
 }
 
 // Test cases where the noise scale is invalid.
@@ -66,11 +70,10 @@ TEST_F(NoisySumGaussianAggregationTest, inValidNoise) {
   createDuckDbTable(vectors);
 
   // Test should fail and output expected error message.
-  testFailingAggregations(
-      vectors,
-      {},
-      {"noisy_sum_gaussian(c2, -1.0)"},
-      "Noise scale must be a non-negative value.");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"noisy_sum_gaussian(c2, -1.0)"})
+      .assertError("Noise scale must be a non-negative value.");
 }
 
 TEST_F(NoisySumGaussianAggregationTest, nullTestNoNoise) {
@@ -82,16 +85,20 @@ TEST_F(NoisySumGaussianAggregationTest, nullTestNoNoise) {
 
   // Expect the result to be 11.0
   auto expectedResult = makeRowVector({makeConstant(11.0, 1)});
-  testAggregations(
-      {vectors}, {}, {"noisy_sum_gaussian(c2, 0.0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"noisy_sum_gaussian(c2, 0.0)"})
+      .assertResults(expectedResult);
 
   // Test all null values.
   auto vectors2 = makeRowVector({makeAllNullFlatVector<double>(10)});
 
   // Expect the result to be NULL
   auto expectedResult2 = makeRowVector({makeNullConstant(TypeKind::DOUBLE, 1)});
-  testAggregations(
-      {vectors2}, {}, {"noisy_sum_gaussian(c0, 0.0)"}, {expectedResult2});
+  AggregationTester(*this)
+      .inputs(vectors2)
+      .aggregates({"noisy_sum_gaussian(c0, 0.0)"})
+      .assertResults(expectedResult2);
 }
 
 TEST_F(NoisySumGaussianAggregationTest, emptyTestNoNoise) {
@@ -103,8 +110,10 @@ TEST_F(NoisySumGaussianAggregationTest, emptyTestNoNoise) {
 
   // Expect the result to be NULL
   auto expectedResult = makeRowVector({makeNullConstant(TypeKind::DOUBLE, 1)});
-  testAggregations(
-      {vectors}, {}, {"noisy_sum_gaussian(c2, 0.0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"noisy_sum_gaussian(c2, 0.0)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(
@@ -114,11 +123,11 @@ TEST_F(
   createDuckDbTable(vectors);
 
   // Single group by key, multiple aggregation functions.
-  testAggregations(
-      vectors,
-      {},
-      {"noisy_sum_gaussian(c1, 0.0)", "noisy_sum_gaussian(c2, 0.0)"},
-      "SELECT SUM(c1), SUM(c2) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates(
+          {"noisy_sum_gaussian(c1, 0.0)", "noisy_sum_gaussian(c2, 0.0)"})
+      .assertResults("SELECT SUM(c1), SUM(c2) FROM tmp");
 }
 
 TEST_F(
@@ -128,11 +137,11 @@ TEST_F(
   createDuckDbTable(vectors);
 
   // Multiple group by keys, single aggregation functions.
-  testAggregations(
-      vectors,
-      {"c0", "c1"},
-      {"noisy_sum_gaussian(c2, 0.0)"},
-      "SELECT c0, c1, SUM(c2) FROM tmp GROUP BY c0, c1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0", "c1"})
+      .aggregates({"noisy_sum_gaussian(c2, 0.0)"})
+      .assertResults("SELECT c0, c1, SUM(c2) FROM tmp GROUP BY c0, c1");
 }
 
 TEST_F(
@@ -142,11 +151,12 @@ TEST_F(
   createDuckDbTable(vectors);
 
   // Multiple group by keys, multiple aggregation functions.
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"noisy_sum_gaussian(c1, 0.0)", "noisy_sum_gaussian(c2, 0.0)"},
-      "SELECT c0, SUM(c1), SUM(c2) FROM tmp GROUP BY c0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates(
+          {"noisy_sum_gaussian(c1, 0.0)", "noisy_sum_gaussian(c2, 0.0)"})
+      .assertResults("SELECT c0, SUM(c1), SUM(c2) FROM tmp GROUP BY c0");
 }
 
 TEST_F(NoisySumGaussianAggregationTest, groupByNullTestNoNoise) {
@@ -163,8 +173,11 @@ TEST_F(NoisySumGaussianAggregationTest, groupByNullTestNoNoise) {
   auto expectedResult = makeRowVector(
       {makeNullableFlatVector<double>({std::nullopt, 2}),
        makeNullableFlatVector<double>({4, 7})});
-  testAggregations(
-      {vectors}, {"c0"}, {"noisy_sum_gaussian(c1, 0.0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"noisy_sum_gaussian(c1, 0.0)"})
+      .assertResults(expectedResult);
 
   // Group by c0, aggregate c2, expect the result:
   // c0   | noisy_sum_gaussian(c2, 0.0)
@@ -174,8 +187,11 @@ TEST_F(NoisySumGaussianAggregationTest, groupByNullTestNoNoise) {
       {makeNullableFlatVector<double>({std::nullopt, 2}),
        makeNullableFlatVector<double>({std::nullopt, 6})});
 
-  testAggregations(
-      {vectors}, {"c0"}, {"noisy_sum_gaussian(c2, 0.0)"}, {expectedResult2});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"noisy_sum_gaussian(c2, 0.0)"})
+      .assertResults(expectedResult2);
 }
 
 TEST_F(NoisySumGaussianAggregationTest, inputTypeTestNoNoise) {
@@ -189,53 +205,46 @@ TEST_F(NoisySumGaussianAggregationTest, inputTypeTestNoNoise) {
   auto tinyintVector = makeVectors(tinyintRowType_, 5, 3);
 
   createDuckDbTable(doubleVector);
-  testAggregations(
-      doubleVector,
-      {},
-      {"noisy_sum_gaussian(c2, 0.0)"}, // double noise_scale
-      "SELECT sum(c2) FROM tmp");
+  AggregationTester(*this)
+      .inputs(doubleVector)
+      .aggregates({"noisy_sum_gaussian(c2, 0.0)"})
+      .assertResults("SELECT sum(c2) FROM tmp");
 
   createDuckDbTable(bigintVector);
-  testAggregations(
-      bigintVector,
-      {},
-      {"noisy_sum_gaussian(c2, 0.0)"},
-      "SELECT sum(c2) FROM tmp");
+  AggregationTester(*this)
+      .inputs(bigintVector)
+      .aggregates({"noisy_sum_gaussian(c2, 0.0)"})
+      .assertResults("SELECT sum(c2) FROM tmp");
 
   createDuckDbTable(decimalVector);
-  testAggregations(
-      decimalVector,
-      {},
-      {"noisy_sum_gaussian(c2, 0.0)"},
-      "SELECT sum(c2) FROM tmp");
+  AggregationTester(*this)
+      .inputs(decimalVector)
+      .aggregates({"noisy_sum_gaussian(c2, 0.0)"})
+      .assertResults("SELECT sum(c2) FROM tmp");
 
   createDuckDbTable(realVector);
-  testAggregations(
-      realVector,
-      {},
-      {"noisy_sum_gaussian(c2, 0)"}, // bigint noise_scale
-      "SELECT sum(c2) FROM tmp");
+  AggregationTester(*this)
+      .inputs(realVector)
+      .aggregates({"noisy_sum_gaussian(c2, 0)"})
+      .assertResults("SELECT sum(c2) FROM tmp");
 
   createDuckDbTable(integerVector);
-  testAggregations(
-      integerVector,
-      {},
-      {"noisy_sum_gaussian(c2, 0)"},
-      "SELECT sum(c2) FROM tmp");
+  AggregationTester(*this)
+      .inputs(integerVector)
+      .aggregates({"noisy_sum_gaussian(c2, 0)"})
+      .assertResults("SELECT sum(c2) FROM tmp");
 
   createDuckDbTable(smallintVector);
-  testAggregations(
-      smallintVector,
-      {},
-      {"noisy_sum_gaussian(c2, 0)"},
-      "SELECT sum(c2) FROM tmp");
+  AggregationTester(*this)
+      .inputs(smallintVector)
+      .aggregates({"noisy_sum_gaussian(c2, 0)"})
+      .assertResults("SELECT sum(c2) FROM tmp");
 
   createDuckDbTable(tinyintVector);
-  testAggregations(
-      tinyintVector,
-      {},
-      {"noisy_sum_gaussian(c2, 0)"},
-      "SELECT sum(c2) FROM tmp");
+  AggregationTester(*this)
+      .inputs(tinyintVector)
+      .aggregates({"noisy_sum_gaussian(c2, 0)"})
+      .assertResults("SELECT sum(c2) FROM tmp");
 }
 
 TEST_F(NoisySumGaussianAggregationTest, randomSeedTestNoNoise) {
@@ -243,12 +252,12 @@ TEST_F(NoisySumGaussianAggregationTest, randomSeedTestNoNoise) {
   auto vectors = makeVectors(integerRowType_, 5, 3);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      // noisy_sum_gaussian(col, noise_scale, randon_seed)
-      {"noisy_sum_gaussian(c2, 0.0, 12345)"},
-      "SELECT SUM(CASE WHEN c2 IS NOT NULL THEN c2 END) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates( // noisy_sum_gaussian(col, noise_scale, randon_seed)
+          {"noisy_sum_gaussian(c2, 0.0, 12345)"})
+      .assertResults(
+          "SELECT SUM(CASE WHEN c2 IS NOT NULL THEN c2 END) FROM tmp");
 }
 
 TEST_F(NoisySumGaussianAggregationTest, randomSeedTestWithNoise) {
@@ -267,8 +276,10 @@ TEST_F(NoisySumGaussianAggregationTest, randomSeedTestWithNoise) {
 
   int numRuns = 10;
   for (int i = 0; i < numRuns; i++) {
-    testAggregations(
-        vectors, {}, {"noisy_sum_gaussian(c2, 20, 12345)"}, {expectedResult});
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({"noisy_sum_gaussian(c2, 20, 12345)"})
+        .assertResults(expectedResult);
   }
 }
 
@@ -282,50 +293,48 @@ TEST_F(NoisySumGaussianAggregationTest, boundsTestNoNoise) {
   // With lower bound = 3.0 and upper bound = 5.0
   // Expect the result to be 18.0
   auto expectedResult = makeRowVector({makeConstant(18.0, 1)});
-  testAggregations(
-      {vectors1},
-      {},
-      {"noisy_sum_gaussian(c2, 0.0, 3.0, 5.0)"},
-      {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors1)
+      .aggregates({"noisy_sum_gaussian(c2, 0.0, 3.0, 5.0)"})
+      .assertResults(expectedResult);
 
   // Test against DuckDB.
   auto vectors2 = makeVectors(doubleRowType_, 5, 3);
   createDuckDbTable(vectors2);
 
   // Test double lower bound and double upper bound.
-  testAggregations(
-      vectors2,
-      {},
-      {"noisy_sum_gaussian(c2, 0.0, 0.1, 0.8)"},
-      "SELECT SUM(CASE WHEN c2 IS NOT NULL THEN GREATEST(LEAST(c2, 0.8), 0.1) END) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors2)
+      .aggregates({"noisy_sum_gaussian(c2, 0.0, 0.1, 0.8)"})
+      .assertResults(
+          "SELECT SUM(CASE WHEN c2 IS NOT NULL THEN GREATEST(LEAST(c2, 0.8), 0.1) END) FROM tmp");
 
   // Test double lower bound and bigint upper bound.
-  testAggregations(
-      vectors2,
-      {},
-      {"noisy_sum_gaussian(c2, 0.0, 0.1, 800)"},
-      "SELECT SUM(CASE WHEN c2 IS NOT NULL THEN GREATEST(LEAST(c2, 800), 0.1) END) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors2)
+      .aggregates({"noisy_sum_gaussian(c2, 0.0, 0.1, 800)"})
+      .assertResults(
+          "SELECT SUM(CASE WHEN c2 IS NOT NULL THEN GREATEST(LEAST(c2, 800), 0.1) END) FROM tmp");
 
   // Test bigint lower bound and double upper bound.
-  testAggregations(
-      vectors2,
-      {},
-      {"noisy_sum_gaussian(c2, 0.0, 10, 50.8)"},
-      "SELECT SUM(CASE WHEN c2 IS NOT NULL THEN GREATEST(LEAST(c2, 50.8), 10) END) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors2)
+      .aggregates({"noisy_sum_gaussian(c2, 0.0, 10, 50.8)"})
+      .assertResults(
+          "SELECT SUM(CASE WHEN c2 IS NOT NULL THEN GREATEST(LEAST(c2, 50.8), 10) END) FROM tmp");
 
   // Test bigint lower bound and bigint upper bound.
-  testAggregations(
-      vectors2,
-      {},
-      {"noisy_sum_gaussian(c2, 0.0, 100, 800)"},
-      "SELECT SUM(CASE WHEN c2 IS NOT NULL THEN GREATEST(LEAST(c2, 800), 100) END) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors2)
+      .aggregates({"noisy_sum_gaussian(c2, 0.0, 100, 800)"})
+      .assertResults(
+          "SELECT SUM(CASE WHEN c2 IS NOT NULL THEN GREATEST(LEAST(c2, 800), 100) END) FROM tmp");
 
   // Test lower bound > upper bound.
-  testFailingAggregations(
-      vectors2,
-      {},
-      {"noisy_sum_gaussian(c2, 0.0, 100, 80)"},
-      "Lower bound must be less than or equal to upper bound.");
+  AggregationTester(*this)
+      .inputs(vectors2)
+      .aggregates({"noisy_sum_gaussian(c2, 0.0, 100, 80)"})
+      .assertError("Lower bound must be less than or equal to upper bound.");
 }
 
 TEST_F(NoisySumGaussianAggregationTest, boundsTestWithNoise) {
@@ -345,11 +354,10 @@ TEST_F(NoisySumGaussianAggregationTest, boundsTestWithNoise) {
           .copyResults(pool());
 
   for (int i = 0; i < 10; i++) {
-    testAggregations(
-        vectors,
-        {},
-        {"noisy_sum_gaussian(c2, 20, 10, 100, 12345)"},
-        {expectedResult});
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({"noisy_sum_gaussian(c2, 20, 10, 100, 12345)"})
+        .assertResults(expectedResult);
   }
 }
 

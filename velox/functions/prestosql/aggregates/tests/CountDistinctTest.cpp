@@ -46,10 +46,14 @@ TEST_F(CountDistinctTest, global) {
       makeFlatVector<int64_t>(std::vector<int64_t>{7}),
   });
 
-  testAggregations(
-      {data}, {}, {"\"$internal$count_distinct\"(c0)"}, {expected});
-  testAggregations(
-      {data}, {}, {"\"$internal$count_distinct\"(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"\"$internal$count_distinct\"(c0)"})
+      .assertResults(expected);
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"\"$internal$count_distinct\"(c1)"})
+      .assertResults(expected);
 
   // Null inputs.
   data = makeRowVector({
@@ -63,10 +67,14 @@ TEST_F(CountDistinctTest, global) {
       makeFlatVector<int64_t>(std::vector<int64_t>{6}),
   });
 
-  testAggregations(
-      {data}, {}, {"\"$internal$count_distinct\"(c0)"}, {expected});
-  testAggregations(
-      {data}, {}, {"\"$internal$count_distinct\"(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"\"$internal$count_distinct\"(c0)"})
+      .assertResults(expected);
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"\"$internal$count_distinct\"(c1)"})
+      .assertResults(expected);
 
   // All inputs are null.
   data = makeRowVector({
@@ -78,10 +86,14 @@ TEST_F(CountDistinctTest, global) {
       makeFlatVector<int64_t>(std::vector<int64_t>{0}),
   });
 
-  testAggregations(
-      {data}, {}, {"\"$internal$count_distinct\"(c0)"}, {expected});
-  testAggregations(
-      {data}, {}, {"\"$internal$count_distinct\"(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"\"$internal$count_distinct\"(c0)"})
+      .assertResults(expected);
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"\"$internal$count_distinct\"(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(CountDistinctTest, groupBy) {
@@ -97,16 +109,16 @@ TEST_F(CountDistinctTest, groupBy) {
       makeFlatVector<int64_t>({4, 4}),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"\"$internal$count_distinct\"(c1)"},
-      {expected});
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"\"$internal$count_distinct\"(c2)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"\"$internal$count_distinct\"(c1)"})
+      .assertResults(expected);
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"\"$internal$count_distinct\"(c2)"})
+      .assertResults(expected);
 
   // Null inputs.
   data = makeRowVector({
@@ -140,16 +152,16 @@ TEST_F(CountDistinctTest, groupBy) {
       makeFlatVector<int64_t>({1, 3}),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"\"$internal$count_distinct\"(c1)"},
-      {expected});
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"\"$internal$count_distinct\"(c2)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"\"$internal$count_distinct\"(c1)"})
+      .assertResults(expected);
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"\"$internal$count_distinct\"(c2)"})
+      .assertResults(expected);
 
   // All inputs are null for a group.
   data = makeRowVector({
@@ -183,16 +195,16 @@ TEST_F(CountDistinctTest, groupBy) {
       makeFlatVector<int64_t>({1, 0}),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"\"$internal$count_distinct\"(c1)"},
-      {expected});
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"\"$internal$count_distinct\"(c2)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"\"$internal$count_distinct\"(c1)"})
+      .assertResults(expected);
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"\"$internal$count_distinct\"(c2)"})
+      .assertResults(expected);
 }
 
 TEST_F(CountDistinctTest, globalArray) {
@@ -211,8 +223,10 @@ TEST_F(CountDistinctTest, globalArray) {
       makeFlatVector<int64_t>(std::vector<int64_t>{3}),
   });
 
-  testAggregations(
-      {data}, {}, {"\"$internal$count_distinct\"(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"\"$internal$count_distinct\"(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(CountDistinctTest, groupByArray) {
@@ -233,11 +247,11 @@ TEST_F(CountDistinctTest, groupByArray) {
       makeFlatVector<int64_t>({2, 2}),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"\"$internal$count_distinct\"(c1)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"\"$internal$count_distinct\"(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(CountDistinctTest, timestampWithTimeZone) {
@@ -260,16 +274,21 @@ TEST_F(CountDistinctTest, timestampWithTimeZone) {
       makeFlatVector<int64_t>(std::vector<int64_t>{4}),
   });
 
-  testAggregations(
-      {data}, {}, {"\"$internal$count_distinct\"(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"\"$internal$count_distinct\"(c1)"})
+      .assertResults(expected);
 
   expected = makeRowVector({
       makeFlatVector<int16_t>({1, 2}),
       makeFlatVector<int64_t>({3, 2}),
   });
 
-  testAggregations(
-      {data}, {"c0"}, {"\"$internal$count_distinct\"(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"\"$internal$count_distinct\"(c1)"})
+      .assertResults(expected);
 }
 
 } // namespace

@@ -43,6 +43,7 @@
 #include <re2/re2.h>
 
 #include <atomic>
+#include <functional>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -103,8 +104,8 @@ core::PlanNodePtr countStarOverZeroColumnHashJoinPlan(
 }
 
 TEST_F(HashJoinTest, countStarOverInnerJoinWithZeroColumnOutput) {
-  auto probe = makeRowVector({"k"}, {makeFlatVector<int32_t>({1, 2, 2, 3})});
-  auto build = makeRowVector({"u_k"}, {makeFlatVector<int32_t>({2, 2, 4})});
+  auto probe = makeNamedRowVector("k", makeFlatVector<int32_t>({1, 2, 2, 3}));
+  auto build = makeNamedRowVector("u_k", makeFlatVector<int32_t>({2, 2, 4}));
 
   auto plan =
       countStarOverZeroColumnHashJoinPlan(probe, build, core::JoinType::kInner);
@@ -114,8 +115,8 @@ TEST_F(HashJoinTest, countStarOverInnerJoinWithZeroColumnOutput) {
 }
 
 TEST_F(HashJoinTest, countStarOverRightSemiFilterJoinWithZeroColumnOutput) {
-  auto probe = makeRowVector({"k"}, {makeFlatVector<int32_t>({1, 2, 3})});
-  auto build = makeRowVector({"u_k"}, {makeFlatVector<int32_t>({2, 2, 3, 4})});
+  auto probe = makeNamedRowVector("k", makeFlatVector<int32_t>({1, 2, 3}));
+  auto build = makeNamedRowVector("u_k", makeFlatVector<int32_t>({2, 2, 3, 4}));
 
   auto plan = countStarOverZeroColumnHashJoinPlan(
       probe, build, core::JoinType::kRightSemiFilter);
@@ -125,8 +126,8 @@ TEST_F(HashJoinTest, countStarOverRightSemiFilterJoinWithZeroColumnOutput) {
 }
 
 TEST_F(HashJoinTest, countStarOverAstFilteredJoinWithZeroColumnOutput) {
-  auto probe = makeRowVector({"k"}, {makeFlatVector<int32_t>({1, 2, 2, 3})});
-  auto build = makeRowVector({"u_k"}, {makeFlatVector<int32_t>({2, 2, 3, 4})});
+  auto probe = makeNamedRowVector("k", makeFlatVector<int32_t>({1, 2, 2, 3}));
+  auto build = makeNamedRowVector("u_k", makeFlatVector<int32_t>({2, 2, 3, 4}));
 
   auto plan = countStarOverZeroColumnHashJoinPlan(
       probe, build, core::JoinType::kInner, "k + u_k > 4");
@@ -157,6 +158,98 @@ TEST_F(HashJoinTest, countStarOverNonAstFilteredJoinWithZeroColumnOutput) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
+// Join filters that cast VARCHAR to a number, the shape of
+// TRY_CAST(r.result AS DOUBLE) > d.threshold. The AST has no cast from
+// strings, so each side's cast is precomputed by CastFunction over the whole
+// side, which is why a TRY_CAST runs on the GPU and a CAST stays on the CPU.
+TEST_F(HashJoinTest, countStarOverJoinFilterCastingVarchar) {
+  // The GPU cast from VARCHAR follows Presto's rules and is on in a session
+  // with the Presto functions registered.
+  cudf_velox::registerPrestoFunctions(
+      cudf_velox::CudfConfig::getInstance().functionNamePrefix);
+
+  auto probe = makeRowVector(
+      {"k", "t_val"},
+      {makeFlatVector<int32_t>({1, 2, 2, 3, 3}),
+       makeNullableFlatVector<std::string>(
+           {"x", " 6", "2.5", "-1e1", std::nullopt})});
+  auto build = makeRowVector(
+      {"u_k", "u_threshold", "u_val"},
+      {makeFlatVector<int32_t>({2, 2, 3, 4}),
+       makeFlatVector<double>({2.0, 5.0, -20.0, 1.0}),
+       makeFlatVector<std::string>({"5.5", "+7", "-10", "1"})});
+  const auto four = makeRowVector({makeFlatVector<int64_t>({4})});
+
+  // Matches: (k=2, " 6") x 2.0 and 5.0; (k=2, "2.5") x 2.0; (k=3, "-1e1") x
+  // -20.0. NULL never passes, and "x" sits in a row the join never matches.
+  auto plan = countStarOverZeroColumnHashJoinPlan(
+      probe,
+      build,
+      core::JoinType::kInner,
+      "try_cast(t_val as double) > u_threshold");
+  AssertQueryBuilder(plan).assertResults(four);
+
+  // Both sides cast; only " 6" > "5.5" passes.
+  plan = countStarOverZeroColumnHashJoinPlan(
+      probe,
+      build,
+      core::JoinType::kInner,
+      "try_cast(t_val as real) > try_cast(u_val as real)");
+  AssertQueryBuilder(plan).assertResults(
+      makeRowVector({makeFlatVector<int64_t>({1})}));
+
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  config.allowCpuFallback = true;
+  SCOPE_EXIT {
+    config.allowCpuFallback = false;
+  };
+  // Counts the matches of the join with 'filter', expecting four, and returns
+  // the types of the operators that ran the join.
+  const auto joinOperatorTypes = [&](const std::string& filter) {
+    core::PlanNodeId joinId;
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto countPlan =
+        PlanBuilder(planNodeIdGenerator)
+            .values({probe})
+            .hashJoin(
+                {"k"},
+                {"u_k"},
+                PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                filter,
+                {},
+                core::JoinType::kInner)
+            .capturePlanNodeId(joinId)
+            .partialAggregation({}, {"count(*)"})
+            .finalAggregation()
+            .planNode();
+    std::shared_ptr<Task> task;
+    auto result = AssertQueryBuilder(countPlan).copyResults(pool(), task);
+    facebook::velox::test::assertEqualVectors(four, result);
+    std::string operatorTypes;
+    for (const auto& pipeline : task->taskStats().pipelineStats) {
+      for (const auto& op : pipeline.operatorStats) {
+        if (op.planNodeId == joinId) {
+          operatorTypes += op.operatorType + " ";
+        }
+      }
+    }
+    return operatorTypes;
+  };
+
+  // A CAST keeps the join on the CPU, which casts only the pairs the join
+  // matches; the GPU would cast "x" in the row it never matches and fail.
+  auto operatorTypes = joinOperatorTypes("cast(t_val as double) > u_threshold");
+  EXPECT_NE(operatorTypes.find("HashProbe "), std::string::npos)
+      << operatorTypes;
+  EXPECT_EQ(operatorTypes.find("Cudf"), std::string::npos) << operatorTypes;
+
+  // A cast of a literal folds away before the check and leaves the join on the
+  // GPU.
+  operatorTypes = joinOperatorTypes(
+      "try_cast(t_val as double) > u_threshold * cast('1' as double)");
+  EXPECT_NE(operatorTypes.find("Cudf"), std::string::npos) << operatorTypes;
+}
+
 TEST_F(HashJoinTest, countStarOverLikeFilterSpanningBothSidesJoin) {
   // The LIKE value comes from the probe side and the pattern comes from the
   // build side, so this cross-side, non-AST-supported filter should exercise
@@ -181,8 +274,8 @@ TEST_F(HashJoinTest, countStarOverLikeFilterSpanningBothSidesJoin) {
 }
 
 TEST_F(HashJoinTest, countStarOverFullJoinWithZeroColumnOutput) {
-  auto probe = makeRowVector({"k"}, {makeFlatVector<int32_t>({1, 2, 2, 3})});
-  auto build = makeRowVector({"u_k"}, {makeFlatVector<int32_t>({2, 2, 3, 4})});
+  auto probe = makeNamedRowVector("k", makeFlatVector<int32_t>({1, 2, 2, 3}));
+  auto build = makeNamedRowVector("u_k", makeFlatVector<int32_t>({2, 2, 3, 4}));
 
   auto plan =
       countStarOverZeroColumnHashJoinPlan(probe, build, core::JoinType::kFull);
@@ -196,7 +289,7 @@ TEST_F(HashJoinTest, rightJoinNullPadsIntervalDayTime) {
       {"p_key", "p_interval"},
       {makeFlatVector<int64_t>({1}),
        makeFlatVector<int64_t>({86'400'000}, INTERVAL_DAY_TIME())});
-  auto build = makeRowVector({"b_key"}, {makeFlatVector<int64_t>({2})});
+  auto build = makeNamedRowVector("b_key", makeFlatVector<int64_t>({2}));
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan = PlanBuilder(idGenerator)
                   .values({probe})
@@ -222,7 +315,7 @@ TEST_F(HashJoinTest, rightJoinNullPadsRowWithArray) {
       {makeFlatVector<int64_t>({10}), makeArrayVector<int32_t>({{1, 2}})});
   auto probe = makeRowVector(
       {"p_key", "payload"}, {makeFlatVector<int64_t>({1}), payload});
-  auto build = makeRowVector({"b_key"}, {makeFlatVector<int64_t>({2})});
+  auto build = makeNamedRowVector("b_key", makeFlatVector<int64_t>({2}));
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan = PlanBuilder(idGenerator)
                   .values({probe})
@@ -250,7 +343,7 @@ TEST_F(HashJoinTest, rightJoinNullPadsArrayOfVarbinary) {
       {"p_key", "payload"},
       {makeFlatVector<int64_t>({1}),
        makeArrayVector<StringView>({{"x"_sv}}, VARBINARY())});
-  auto build = makeRowVector({"b_key"}, {makeFlatVector<int64_t>({2})});
+  auto build = makeNamedRowVector("b_key", makeFlatVector<int64_t>({2}));
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan = PlanBuilder(idGenerator)
                   .values({probe})
@@ -270,7 +363,7 @@ TEST_F(HashJoinTest, rightJoinNullPadsArrayOfVarbinary) {
 }
 
 TEST_F(HashJoinTest, unsupportedTypeProjectedOutBeforeHashJoin) {
-  auto probe = makeRowVector({"p_key"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto probe = makeNamedRowVector("p_key", makeFlatVector<int64_t>({1, 2, 3}));
   auto build = makeRowVector(
       {"b_key", "marker"},
       {makeFlatVector<int64_t>({2, 3, 4}),
@@ -294,7 +387,7 @@ TEST_F(HashJoinTest, unsupportedTypeProjectedOutBeforeHashJoin) {
   auto result = AssertQueryBuilder(plan)
                     .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
                     .copyResults(pool(), task);
-  auto expected = makeRowVector({"p_key"}, {makeFlatVector<int64_t>({2, 3})});
+  auto expected = makeNamedRowVector("p_key", makeFlatVector<int64_t>({2, 3}));
   facebook::velox::test::assertEqualVectors(expected, result);
 
   const auto operatorStats = toOperatorStats(task->taskStats());
@@ -1691,7 +1784,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
           {"t0", "t1"},
           {
               makeFlatVector<int32_t>(200, [](auto row) { return row % 11; }),
-              makeFlatVector<int32_t>(200, folly::identity, nullEvery(97)),
+              makeFlatVector<int32_t>(200, std::identity{}, nullEvery(97)),
           });
     });
     auto buildVectors = makeBatches(3, [&](int32_t /*unused*/) {
@@ -1699,7 +1792,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
           {"u0", "u1"},
           {
               makeFlatVector<int32_t>(234, [](auto row) { return row % 5; }),
-              makeFlatVector<int32_t>(234, folly::identity, nullEvery(91)),
+              makeFlatVector<int32_t>(234, std::identity{}, nullEvery(91)),
           });
     });
     // null-anti join with filter not supported
@@ -1743,7 +1836,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
           {
               makeFlatVector<int32_t>(
                   200, [](auto row) { return row % 11; }, nullEvery(23)),
-              makeFlatVector<int32_t>(200, folly::identity, nullEvery(29)),
+              makeFlatVector<int32_t>(200, std::identity{}, nullEvery(29)),
           });
     });
     auto buildVectors = makeBatches(3, [&](int32_t /*unused*/) {
@@ -1752,7 +1845,7 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithFilterOnNullableColumn) {
           {
               makeFlatVector<int32_t>(
                   234, [](auto row) { return row % 5; }, nullEvery(31)),
-              makeFlatVector<int32_t>(234, folly::identity, nullEvery(37)),
+              makeFlatVector<int32_t>(234, std::identity{}, nullEvery(37)),
           });
     });
     // null-anti join with filter not supported
@@ -6149,7 +6242,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersAppliedToPreloadedSplits) {
 
   // Prepare build side table.
   std::vector<RowVectorPtr> buildVectors{
-      makeRowVector({"b0"}, {makeFlatVector<int64_t>({0, numSplits})})};
+      makeNamedRowVector("b0", makeFlatVector<int64_t>({0, numSplits}))};
   createDuckDbTable("b", buildVectors);
 
   // Executing the join with p1=b0, we expect a dynamic filter for p1 to prune
@@ -6211,10 +6304,10 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersPushDownThroughAgg) {
   writeToFile(probeFile->getPath(), probeVectors);
 
   // Create build data
-  std::vector<RowVectorPtr> buildVectors{makeRowVector(
-      {"u0"}, {makeFlatVector<int32_t>(numRowsBuild, [&](auto row) {
+  std::vector<RowVectorPtr> buildVectors{makeNamedRowVector(
+      "u0", makeFlatVector<int32_t>(numRowsBuild, [&](auto row) {
         return 35 + 2 * (row + numRowsBuild / 5);
-      })})};
+      }))};
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
@@ -6530,7 +6623,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFilterOnPartitionKey) {
   createDuckDbTable("u", {rowVector});
   writeToFile(filePaths[0]->getPath(), rowVector);
   std::vector<RowVectorPtr> buildVectors{
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({0, 1, 2})})};
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({0, 1, 2}))};
   createDuckDbTable("t", buildVectors);
   auto outputType = ROW({"n1_0", "n1_1"}, {BIGINT(), BIGINT()});
   connector::ColumnHandleMap assignments = {
@@ -7692,7 +7785,7 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
       {makeFlatVector<int32_t>(20, [](auto row) { return 1 + row % 2; }),
        makeFlatVector<int32_t>(20, [](auto row) { return row; })})};
   auto buildVectors = std::vector<RowVectorPtr>{
-      makeRowVector({"u_k1"}, {makeFlatVector<int32_t>({1, 2})})};
+      makeNamedRowVector("u_k1", makeFlatVector<int32_t>({1, 2}))};
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", {buildVectors});
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -7744,7 +7837,7 @@ TEST_F(HashJoinTest, leftJoinWithMissAtEndOfBatchMultipleBuildMatches) {
       {makeFlatVector<int32_t>(10, [](auto row) { return 1 + row % 2; }),
        makeFlatVector<int32_t>(10, [](auto row) { return row; })})};
   auto buildVectors = std::vector<RowVectorPtr>{
-      makeRowVector({"u_k1"}, {makeFlatVector<int32_t>({1, 2, 1, 2})})};
+      makeNamedRowVector("u_k1", makeFlatVector<int32_t>({1, 2, 1, 2}))};
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", {buildVectors});
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();

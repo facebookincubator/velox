@@ -16,6 +16,7 @@
 #pragma once
 
 #include <array>
+#include <optional>
 #include <vector>
 
 #include "velox/common/base/Portability.h"
@@ -138,6 +139,36 @@ class BaseHashTable {
 #endif
 
   using MaskType = uint16_t;
+
+  /// What a HashTable is for and what its rows hold besides the keys,
+  /// accumulators and dependent columns.
+  struct Options {
+    /// Whether the table is the build side of a join. An aggregation table can
+    /// double as a build side.
+    bool isJoinBuild{false};
+
+    /// Whether a join build keeps every row with the same keys, linking each to
+    /// the next. If false, a second row with the same keys is ignored or must
+    /// not occur.
+    bool allowDuplicates{false};
+
+    /// Whether each row has a probed flag, for right and full outer joins.
+    bool hasProbedFlag{false};
+
+    /// Whether each row has a count, for counting joins.
+    bool hasCountFlag{false};
+
+    /// The minimum number of rows for building a join table in parallel.
+    uint32_t minTableSizeForParallelJoinBuild{0};
+
+    /// The maximum size of a bloom filter over the keys of a join build. 0 for
+    /// no bloom filter.
+    uint64_t bloomFilterMaxSize{0};
+
+    /// The number of bytes per row for the caller to manage. See
+    /// RowContainer::Options::rawDependentSize.
+    int32_t rawDependentSize{0};
+  };
 
   /// The load factor of the hash table.
   static constexpr double kHashTableLoadFactor = 0.7;
@@ -302,11 +333,6 @@ class BaseHashTable {
     std::string toString() const;
   };
 
-  struct NullKeyRowsIterator {
-    bool initialized = false;
-    char* nextHit;
-  };
-
   /// Takes ownership of 'hashers'. These are used to keep key-level
   /// encodings like distinct values, ranges. These are stateful for
   /// kArray and kNormalizedKey hash modes and track the data
@@ -316,6 +342,10 @@ class BaseHashTable {
       : hashers_(std::move(hashers)) {}
 
   virtual ~BaseHashTable() = default;
+
+  const std::vector<std::unique_ptr<VectorHasher>>& hashers() const {
+    return hashers_;
+  }
 
   virtual HashStringAllocator* stringAllocator() = 0;
 
@@ -336,11 +366,6 @@ class BaseHashTable {
       HashLookup& lookup,
       int8_t spillInputStartPartitionBit) = 0;
 
-  /// Returns the first hit for each key in 'lookup'. The keys are in
-  /// 'lookup.hits' with a nullptr representing a miss. This is for use in hash
-  /// join probe. Use listJoinResults to iterate over the results.
-  virtual void joinProbe(HashLookup& lookup) = 0;
-
   /// Populates 'hashes' and 'rows' fields in 'lookup' in preparation for
   /// 'joinProbe' call. If hash mode is not kHash, populates 'hashes' with
   /// values IDs. Rows which do not have value IDs are removed from 'rows'
@@ -355,6 +380,11 @@ class BaseHashTable {
       SelectivityVector& rows,
       bool decodeAndRemoveNulls) = 0;
 
+  /// Returns the first hit for each key in 'lookup'. The keys are in
+  /// 'lookup.hits' with a nullptr representing a miss. This is for use in hash
+  /// join probe. Use listJoinResults to iterate over the results.
+  virtual void joinProbe(HashLookup& lookup) = 0;
+
   /// Fills 'hits' with consecutive hash join results. The corresponding element
   /// of 'inputRows' is set to the corresponding row number in probe keys.
   /// Returns the number of hits produced. If this is less than hits.size() then
@@ -368,66 +398,50 @@ class BaseHashTable {
   virtual int32_t listJoinResults(
       JoinResultIterator& iter,
       bool includeMisses,
-      folly::Range<vector_size_t*> inputRows,
-      folly::Range<char**> hits,
+      std::span<vector_size_t> inputRows,
+      std::span<char*> hits,
       uint64_t maxBytes) = 0;
 
-  /// Returns rows with 'probed' flag unset. Used by the right/full join.
-  virtual int32_t listNotProbedRows(
+  /// Sets the probed flag of all rows whose key matched a probe row in
+  /// 'lookup' after joinProbe(). For joins without a filter that need probed
+  /// flags but no per-probe output, which can skip listing the matches.
+  virtual void setProbedFlagsForMatchedKeys(const HashLookup& lookup) = 0;
+
+  /// Lists rows that pass 'filter', from all row containers: this table's and
+  /// those of the tables merged into it. Writes them to 'rows', up to its size,
+  /// and stops after their total size exceeds 'maxBytes'. Returns the number
+  /// of rows written, 0 at the end. Right and full joins list the rows not
+  /// probed, right semi joins those probed or all.
+  virtual int32_t listRows(
       RowsIterator* iter,
-      int32_t maxRows,
-      uint64_t maxBytes,
-      char** rows) = 0;
+      RowContainer::ProbedFilter filter,
+      std::span<char*> rows,
+      uint64_t maxBytes) = 0;
 
-  /// Same as above, but only return rows from the row container of
-  /// 'rowContainerId'.
-  virtual int32_t listNotProbedRows(
-      RowContainerIterator& rowContainerIt,
+  /// Same as above, from the row container of 'rowContainerId' only: 0 for
+  /// this table's, i for that of the i-th table merged into it.
+  virtual int32_t listRows(
+      RowContainerIterator& iter,
       int rowContainerId,
-      int32_t maxRows,
-      uint64_t maxBytes,
-      char** rows) = 0;
+      RowContainer::ProbedFilter filter,
+      std::span<char*> rows,
+      uint64_t maxBytes) = 0;
 
-  /// Returns rows with 'probed' flag set. Used by the right semi join.
-  virtual int32_t listProbedRows(
-      RowsIterator* iter,
-      int32_t maxRows,
-      uint64_t maxBytes,
-      char** rows) = 0;
-
-  /// Same as above, but only return rows from the row container of
-  /// 'rowContainerId'.
-  virtual int32_t listProbedRows(
-      RowContainerIterator& rowContainerIt,
-      int rowContainerId,
-      int32_t maxRows,
-      uint64_t maxBytes,
-      char** rows) = 0;
-
-  /// Returns all rows. Used by the right semi join project.
-  virtual int32_t listAllRows(
-      RowsIterator* iter,
-      int32_t maxRows,
-      uint64_t maxBytes,
-      char** rows) = 0;
-
-  /// Same as above, but only return rows from the row container of
-  /// 'rowContainerId'.
-  virtual int32_t listAllRows(
-      RowContainerIterator& rowContainerIt,
-      int rowContainerId,
-      int32_t maxRows,
-      uint64_t maxBytes,
-      char** rows) = 0;
-
-  /// Returns all rows with null keys.  Used by null-aware joins (e.g. anti or
-  /// left semi project).
+  /// Lists the rows whose key is null, up to 'rows.size()' at a time. 'next'
+  /// is the next row to return: std::nullopt before the first call, nullptr
+  /// after the last row. Used by null-aware joins (anti and left semi project)
+  /// with a filter. Requires a join table with a single key that does not
+  /// ignore null keys.
   virtual int32_t listNullKeyRows(
-      NullKeyRowsIterator* iter,
-      int32_t maxRows,
-      char** rows,
-      const std::vector<std::unique_ptr<VectorHasher>>& hashers) = 0;
+      std::optional<char*>& next,
+      std::span<char*> rows) = 0;
 
+  /// Moves the rows and hashers of 'tables', filled by the other build
+  /// drivers, into this table and prepares it for probing: decides the hash
+  /// mode from the combined key statistics and inserts all rows, in parallel
+  /// on 'executor' if not null. Each build driver accumulates a random share
+  /// of the build input in its own table, whose hashers track whether the
+  /// keys fit kArray or kNormalizedKey mode.
   virtual void prepareJoinTable(
       std::vector<std::unique_ptr<BaseHashTable>> tables,
       int8_t spillInputStartPartitionBit,
@@ -470,6 +484,14 @@ class BaseHashTable {
   /// profiling.
   virtual HashTableStats stats() const = 0;
 
+  const ParallelJoinBuildStats& parallelJoinBuildStats() const {
+    return parallelJoinBuildStats_;
+  }
+
+  const CpuWallTiming& vectorHasherMergeTiming() const {
+    return vectorHasherMergeTiming_;
+  }
+
   /// Returns table growth in bytes after adding 'numNewDistinct' distinct
   /// entries. This only concerns the hash table, not the payload rows.
   virtual uint64_t hashTableSizeIncrease(int32_t numNewDistinct) const = 0;
@@ -511,21 +533,27 @@ class BaseHashTable {
 
   /// Removes 'rows' from the hash table and its RowContainer. 'rows' must exist
   /// and be unique.
-  virtual void erase(folly::Range<char**> rows) = 0;
+  virtual void erase(std::span<char*> rows) = 0;
 
   /// Returns a brief description for use in debugging.
   virtual std::string toString() = 0;
 
-  const std::vector<std::unique_ptr<VectorHasher>>& hashers() const {
-    return hashers_;
-  }
+  /// For a join build that has not settled its hash mode: runs the keys of
+  /// 'rows', already decoded by hashers(), through the hashers to collect
+  /// their value ranges. Returns false once a key cannot use value ids; there
+  /// is no need to call it after that.
+  virtual bool analyzeKeys(const SelectivityVector& rows) = 0;
 
+  /// Returns the container this table inserts new rows into. A join table
+  /// after prepareJoinTable() also owns the containers of the other build
+  /// drivers; see allRows(). All these containers share one row layout, so the
+  /// row accessors of this container work on rows from any of them.
   RowContainer* rows() const {
     return rows_.get();
   }
 
-  /// Returns all the row containers of a composed hash table such as for hash
-  /// join use.
+  /// Returns rows() followed by the containers taken over from the other build
+  /// drivers in prepareJoinTable().
   virtual std::vector<RowContainer*> allRows() const = 0;
 
   /// Static functions for processing internals. Public because used in
@@ -547,11 +575,7 @@ class BaseHashTable {
   /// inserts the entries that would have overflowed past the
   /// inserting thread's range. There is a sync barrier between but
   /// tsan does not recognize this.
-#if defined(__has_feature)
-#if __has_feature(thread_sanitizer)
-  __attribute__((__no_sanitize__("thread")))
-#endif
-#endif
+  FOLLY_DISABLE_THREAD_SANITIZER
   static TagVector loadTags(uint8_t* tags, int64_t tagIndex) {
     // Cannot use xsimd::batch::unaligned here because we need to skip TSAN.
     auto src = tags + tagIndex;
@@ -562,21 +586,11 @@ class BaseHashTable {
 #endif
   }
 
-  const ParallelJoinBuildStats& parallelJoinBuildStats() const {
-    return parallelJoinBuildStats_;
-  }
-
-  const CpuWallTiming& vectorHasherMergeTiming() const {
-    return vectorHasherMergeTiming_;
-  }
-
   /// Copies the values at 'columnIndex' into 'result' for the 'rows.size' rows
   /// pointed to by 'rows'. If an entry in 'rows' is null, sets corresponding
   /// row in 'result' to null.
-  virtual void extractColumn(
-      folly::Range<char* const*> rows,
-      int32_t columnIndex,
-      const VectorPtr& result) = 0;
+  virtual void
+  extractColumn(RowSpan rows, int32_t columnIndex, const VectorPtr& result) = 0;
 
  protected:
   static FOLLY_ALWAYS_INLINE size_t tableSlotSize() {
@@ -612,24 +626,14 @@ class HashTableTestHelper;
 template <bool ignoreNullKeys>
 class HashTable : public BaseHashTable {
  public:
-  // Can be used for aggregation or join. An aggregation hash table
-  // can also double as a join build side. 'isJoinBuild' is true if
-  // this is a build side. 'allowDuplicates' is false for a build side if
-  // second occurrences of a key are to be silently ignored or will
-  // not occur. In this case the row does not need a link to the next
-  // match. 'hasProbedFlag' adds an extra bit in every row for tracking rows
-  // that matches join condition for right and full outer joins.
+  /// Makes a table for aggregation or join, keyed by what 'hashers' hash,
+  /// with rows of 'accumulators' or 'dependentTypes' and what 'options' adds.
   HashTable(
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
       const std::vector<Accumulator>& accumulators,
       const std::vector<TypePtr>& dependentTypes,
-      bool allowDuplicates,
-      bool isJoinBuild,
-      bool hasProbedFlag,
-      bool hasCountFlag,
-      uint32_t minTableSizeForParallelJoinBuild,
       memory::MemoryPool* pool,
-      uint64_t bloomFilterMaxSize = 0);
+      const Options& options);
 
   ~HashTable() override = default;
 
@@ -640,35 +644,24 @@ class HashTable : public BaseHashTable {
     return std::make_unique<HashTable>(
         std::move(hashers),
         accumulators,
-        std::vector<TypePtr>{},
-        false, // allowDuplicates
-        false, // isJoinBuild
-        false, // hasProbedFlag
-        false, // hasCountFlag
-        0, // minTableSizeForParallelJoinBuild
-        pool);
+        /*dependentTypes=*/std::vector<TypePtr>{},
+        pool,
+        Options{});
   }
 
+  /// Makes a join build side. Sets 'isJoinBuild' in 'options'.
   static std::unique_ptr<HashTable> createForJoin(
       std::vector<std::unique_ptr<VectorHasher>>&& hashers,
       const std::vector<TypePtr>& dependentTypes,
-      bool allowDuplicates,
-      bool hasProbedFlag,
-      bool hasCountFlag,
-      uint32_t minTableSizeForParallelJoinBuild,
       memory::MemoryPool* pool,
-      uint64_t bloomFilterMaxSize = 0) {
+      Options options) {
+    options.isJoinBuild = true;
     return std::make_unique<HashTable>(
         std::move(hashers),
         std::vector<Accumulator>{},
         dependentTypes,
-        allowDuplicates,
-        true, // isJoinBuild
-        hasProbedFlag,
-        hasCountFlag,
-        minTableSizeForParallelJoinBuild,
         pool,
-        bloomFilterMaxSize);
+        options);
   }
 
   void groupProbe(HashLookup& lookup, int8_t spillInputStartPartitionBit)
@@ -679,54 +672,29 @@ class HashTable : public BaseHashTable {
   int32_t listJoinResults(
       JoinResultIterator& iter,
       bool includeMisses,
-      folly::Range<vector_size_t*> inputRows,
-      folly::Range<char**> hits,
+      std::span<vector_size_t> inputRows,
+      std::span<char*> hits,
       uint64_t maxBytes) override;
 
-  int32_t listNotProbedRows(
+  void setProbedFlagsForMatchedKeys(const HashLookup& lookup) override;
+
+  bool analyzeKeys(const SelectivityVector& rows) override;
+
+  int32_t listRows(
       RowsIterator* iter,
-      int32_t maxRows,
-      uint64_t maxBytes,
-      char** rows) override;
+      RowContainer::ProbedFilter filter,
+      std::span<char*> rows,
+      uint64_t maxBytes) override;
 
-  int32_t listProbedRows(
-      RowsIterator* iter,
-      int32_t maxRows,
-      uint64_t maxBytes,
-      char** rows) override;
-
-  int32_t listAllRows(
-      RowsIterator* iter,
-      int32_t maxRows,
-      uint64_t maxBytes,
-      char** rows) override;
-
-  int32_t listNotProbedRows(
-      RowContainerIterator& rowContainerIt,
+  int32_t listRows(
+      RowContainerIterator& iter,
       int rowContainerId,
-      int32_t maxRows,
-      uint64_t maxBytes,
-      char** rows) override;
+      RowContainer::ProbedFilter filter,
+      std::span<char*> rows,
+      uint64_t maxBytes) override;
 
-  int32_t listProbedRows(
-      RowContainerIterator& rowContainerIt,
-      int rowContainerId,
-      int32_t maxRows,
-      uint64_t maxBytes,
-      char** rows) override;
-
-  int32_t listAllRows(
-      RowContainerIterator& rowContainerIt,
-      int rowContainerId,
-      int32_t maxRows,
-      uint64_t maxBytes,
-      char** rows) override;
-
-  int32_t listNullKeyRows(
-      NullKeyRowsIterator* iter,
-      int32_t maxRows,
-      char** rows,
-      const std::vector<std::unique_ptr<VectorHasher>>& hashers) override;
+  int32_t listNullKeyRows(std::optional<char*>& next, std::span<char*> rows)
+      override;
 
   void clear(bool freeTable) override;
 
@@ -787,18 +755,8 @@ class HashTable : public BaseHashTable {
       int8_t spillInputStartPartitionBit,
       bool disableRangeArrayHash = false) override;
 
-  void erase(folly::Range<char**> rows) override;
+  void erase(std::span<char*> rows) override;
 
-  /// Moves the contents of 'tables' into 'this' and prepares 'this'
-  /// for use in hash join probe. A hash join build side is prepared as
-  /// follows: 1. Each build side thread gets a random selection of the
-  /// build stream. Each accumulates rows into its own
-  /// HashTable'sRowContainer and updates the VectorHashers of the
-  /// table to reflect the data as long as the data shows promise for
-  /// kArray or kNormalizedKey representation. After all the build
-  /// tables are filled, they are combined into one top level table
-  /// with prepareJoinTable. This then takes ownership of all the data
-  /// and VectorHashers and decides the hash mode and representation.
   void prepareJoinTable(
       std::vector<std::unique_ptr<BaseHashTable>> tables,
       int8_t spillInputStartPartitionBit,
@@ -857,10 +815,8 @@ class HashTable : public BaseHashTable {
   /// purpose.
   void checkConsistency() const;
 
-  void extractColumn(
-      folly::Range<char* const*> rows,
-      int32_t columnIndex,
-      const VectorPtr& result) override {
+  void extractColumn(RowSpan rows, int32_t columnIndex, const VectorPtr& result)
+      override {
     RowContainer::extractColumn(
         rows.data(),
         rows.size(),
@@ -955,18 +911,6 @@ class HashTable : public BaseHashTable {
     return numNewEntries;
   }
 
-  template <RowContainer::ProbeType probeType>
-  int32_t
-  listRows(RowsIterator* iter, int32_t maxRows, uint64_t maxBytes, char** rows);
-
-  template <RowContainer::ProbeType probeType>
-  int32_t listRows(
-      RowContainerIterator& rowContainerIt,
-      int rowContainerId,
-      int32_t maxRows,
-      uint64_t maxBytes,
-      char** rows);
-
   char*& nextRow(char* row) {
     return *reinterpret_cast<char**>(row + nextOffset_);
   }
@@ -983,8 +927,8 @@ class HashTable : public BaseHashTable {
   int32_t listJoinResultsFastPath(
       JoinResultIterator& iter,
       bool includeMisses,
-      folly::Range<vector_size_t*> inputRows,
-      folly::Range<char**> hits,
+      std::span<vector_size_t> inputRows,
+      std::span<char*> hits,
       uint64_t maxBytes);
 
   // Returns the projected size in bytes of one build-side row, used for the
@@ -1000,8 +944,8 @@ class HashTable : public BaseHashTable {
   int32_t listJoinResultsSingleHit(
       JoinResultIterator& iter,
       bool includeMisses,
-      folly::Range<vector_size_t*> inputRows,
-      folly::Range<char**> hits,
+      std::span<vector_size_t> inputRows,
+      std::span<char*> hits,
       uint64_t maxBytes);
 
   // Interleaves K chain walks to overlap next-pointer loads while preserving
@@ -1009,8 +953,8 @@ class HashTable : public BaseHashTable {
   int32_t listJoinResultsInterleaved(
       JoinResultIterator& iter,
       bool includeMisses,
-      folly::Range<vector_size_t*> inputRows,
-      folly::Range<char**> hits,
+      std::span<vector_size_t> inputRows,
+      std::span<char*> hits,
       uint64_t maxBytes);
 
   // Tries to use as many range hashers as can in a normalized key situation.
@@ -1140,10 +1084,8 @@ class HashTable : public BaseHashTable {
   // normalized keys mode, the keys are retrieved from the row and the hash is
   // made from this, without recomputing the normalized key. Returns false if
   // the hash keys are not mappable via the VectorHashers.
-  bool hashRows(
-      folly::Range<char**> rows,
-      bool initNormalizedKeys,
-      raw_vector<uint64_t>& hashes);
+  bool
+  hashRows(RowSpan rows, bool initNormalizedKeys, raw_vector<uint64_t>& hashes);
 
   char* insertEntry(HashLookup& lookup, uint64_t index, vector_size_t row);
 
@@ -1207,7 +1149,7 @@ class HashTable : public BaseHashTable {
 
   // Erases the entries of rows from the hash table and its RowContainer.
   // 'hashes' must be computed according to 'hashMode_'.
-  void eraseWithHashes(folly::Range<char**> rows, uint64_t* hashes);
+  void eraseWithHashes(std::span<char*> rows, uint64_t* hashes);
 
   // Returns the percentage of values to reserve for new keys in range
   // or distinct mode VectorHashers in a group by hash table. 0 for
@@ -1350,6 +1292,10 @@ class HashTable : public BaseHashTable {
   // range of partition i starts at [i] and ends at [i +1]. Bounds are multiple
   // of cache line  size.
   raw_vector<PartitionBoundIndexType> buildPartitionBounds_;
+
+  // The value ids analyzeKeys() computes and discards: the final ones are
+  // known only after all rows are added.
+  raw_vector<uint64_t> analyzedValueIds_;
 
   // Executor for parallelizing hash join build. This may be the
   // executor for Drivers. If this executor is indefinitely taken by

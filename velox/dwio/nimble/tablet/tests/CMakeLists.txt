@@ -17,8 +17,10 @@ add_executable(
   CompressionTest.cpp
   FilePropertiesTest.cpp
   FileLayoutTest.cpp
+  IoAlignmentTest.cpp
   MetadataBufferTest.cpp
   SharedDictionaryReaderTest.cpp
+  StripeGroupFlushPolicyTest.cpp
   TabletTest.cpp
   TabletTestUtils.h
 )
@@ -35,7 +37,6 @@ target_link_libraries(
   nimble_common
   nimble_writer
   velox_dwio_common
-  velox_dwio_common_test_utils
   velox_memory
   velox_file
   velox_vector

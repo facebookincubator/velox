@@ -18,9 +18,10 @@
 
 #include <utility>
 
+#include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/hive/HiveBucketPruning.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/HiveSplitReader.h"
 
 namespace facebook::velox::connector::hive {
@@ -33,7 +34,7 @@ HiveDataSource::HiveDataSource(
     folly::Executor* ioExecutor,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<HiveConfig>& hiveConfig)
-    : FileDataSource(
+    : connector::FileDataSource(
           outputType,
           tableHandle,
           assignments,
@@ -41,7 +42,58 @@ HiveDataSource::HiveDataSource(
           ioExecutor,
           connectorQueryCtx,
           hiveConfig),
-      hiveConfig_(hiveConfig) {}
+      hiveConfig_(hiveConfig) {
+  updateAllowedBuckets();
+}
+
+void HiveDataSource::updateAllowedBuckets() {
+  allowedBuckets_.reset();
+  const auto& bucketProperty =
+      checkedPointerCast<const HiveTableHandle>(tableHandle_)->bucketProperty();
+  if (bucketProperty == nullptr) {
+    return;
+  }
+
+  std::vector<const common::Filter*> filters;
+  filters.reserve(bucketProperty->bucketedBy().size());
+  for (const auto& name : bucketProperty->bucketedBy()) {
+    const auto* spec = fileScanState_->scanSpec->childByName(name);
+    filters.push_back(spec == nullptr ? nullptr : spec->filter());
+  }
+  allowedBuckets_ = HiveBucketPruning::allowedBuckets(*bucketProperty, filters);
+}
+
+void HiveDataSource::addDynamicFilter(
+    column_index_t outputChannel,
+    const std::shared_ptr<common::Filter>& filter) {
+  connector::FileDataSource::addDynamicFilter(outputChannel, filter);
+
+  const auto& bucketProperty =
+      checkedPointerCast<const HiveTableHandle>(tableHandle_)->bucketProperty();
+  if (bucketProperty == nullptr) {
+    return;
+  }
+  const auto& name =
+      fileScanState_->scanSpec->getChildByChannel(outputChannel).fieldName();
+  const auto& bucketedBy = bucketProperty->bucketedBy();
+  if (std::find(bucketedBy.begin(), bucketedBy.end(), name) !=
+      bucketedBy.end()) {
+    updateAllowedBuckets();
+  }
+}
+
+bool HiveDataSource::skipSplit() {
+  if (!allowedBuckets_.has_value()) {
+    return false;
+  }
+  const auto& bucket =
+      checkedPointerCast<const HiveConnectorSplit>(split_)->tableBucketNumber;
+  if (!bucket.has_value()) {
+    return false;
+  }
+  VELOX_CHECK_LT(*bucket, allowedBuckets_->size());
+  return !(*allowedBuckets_)[*bucket];
+}
 
 std::vector<column_index_t> HiveDataSource::setupBucketConversion() {
   auto hiveSplit = checkedPointerCast<const HiveConnectorSplit>(split_);
@@ -56,7 +108,9 @@ std::vector<column_index_t> HiveDataSource::setupBucketConversion() {
   std::vector<TypePtr> types;
   std::vector<column_index_t> bucketChannels;
   for (auto& handle : hiveSplit->bucketConversion->bucketColumnHandles) {
-    VELOX_CHECK(handle->columnType() == FileColumnHandle::ColumnType::kRegular);
+    VELOX_CHECK(
+        handle->columnType() ==
+        connector::FileColumnHandle::ColumnType::kRegular);
     if (subfields_.erase(handle->name()) > 0) {
       rebuildScanSpec = true;
     }
@@ -77,10 +131,10 @@ std::vector<column_index_t> HiveDataSource::setupBucketConversion() {
     readerOutputType_ = ROW(std::move(names), std::move(types));
   }
   if (rebuildScanSpec) {
-    auto newScanSpec = makeScanSpec(
+    auto newScanSpec = connector::makeScanSpec(
         readerOutputType_,
         subfields_,
-        filters_,
+        fileScanState_->filters,
         /*indexColumns=*/{},
         tableHandle_->dataColumns(),
         partitionKeys_,
@@ -89,8 +143,8 @@ std::vector<column_index_t> HiveDataSource::setupBucketConversion() {
         fileConfig_->readStatsBasedFilterReorderDisabled(
             connectorQueryCtx_->sessionProperties()),
         pool_);
-    newScanSpec->moveAdaptationFrom(*scanSpec_);
-    scanSpec_ = std::move(newScanSpec);
+    newScanSpec->moveAdaptationFrom(*fileScanState_->scanSpec);
+    fileScanState_->scanSpec = std::move(newScanSpec);
   }
   return bucketChannels;
 }
@@ -99,7 +153,7 @@ void HiveDataSource::setupRowIdColumn() {
   auto hiveSplit = checkedPointerCast<const HiveConnectorSplit>(split_);
   VELOX_CHECK(hiveSplit->rowIdProperties.has_value());
   const auto& props = *hiveSplit->rowIdProperties;
-  auto* rowId = scanSpec_->childByName(*specialColumns_.rowId);
+  auto* rowId = fileScanState_->scanSpec->childByName(*specialColumns_.rowId);
   VELOX_CHECK_NOT_NULL(rowId);
   auto& rowIdType =
       readerOutputType_->findChild(*specialColumns_.rowId)->asRow();
@@ -133,7 +187,8 @@ std::vector<column_index_t> HiveDataSource::prepareSplit() {
   return bucketChannels;
 }
 
-std::unique_ptr<FileSplitReader> HiveDataSource::createSplitReader() {
+std::unique_ptr<connector::FileSplitReader>
+HiveDataSource::createSplitReader() {
   auto bucketChannels = prepareSplit();
   auto hiveSplit = checkedPointerCast<const HiveConnectorSplit>(split_);
 
@@ -149,15 +204,15 @@ std::unique_ptr<FileSplitReader> HiveDataSource::createSplitReader() {
       ioStats_,
       fileHandleFactory_,
       ioExecutor_,
-      scanSpec_,
+      fileScanState_->scanSpec,
       &infoColumns_,
       std::move(bucketChannels),
-      /*subfieldFiltersForValidation=*/&filters_);
+      /*subfieldFiltersForValidation=*/&fileScanState_->filters);
 }
 
 std::unordered_map<std::string, RuntimeMetric>
 HiveDataSource::getRuntimeStats() {
-  auto result = FileDataSource::getRuntimeStats();
+  auto result = connector::FileDataSource::getRuntimeStats();
   if (numBucketConversion_ > 0) {
     result.insert(
         {std::string(kNumBucketConversion),
@@ -175,11 +230,12 @@ HiveDataSource::getRuntimeStats() {
 void HiveDataSource::setFromDataSource(
     std::unique_ptr<DataSource> sourceUnique) {
   auto* source = checkedPointerCast<HiveDataSource>(sourceUnique.get());
+  allowedBuckets_ = std::move(source->allowedBuckets_);
   numBucketConversion_ += source->numBucketConversion_;
   for (const auto& [format, count] : source->numSplitsByFileFormat_) {
     numSplitsByFileFormat_[format] += count;
   }
-  FileDataSource::setFromDataSource(std::move(sourceUnique));
+  connector::FileDataSource::setFromDataSource(std::move(sourceUnique));
 }
 
 HiveDataSource::WaveDelegateHookFunction HiveDataSource::waveDelegateHook_;
@@ -191,7 +247,7 @@ std::shared_ptr<wave::WaveDataSource> HiveDataSource::toWaveDataSource() {
         checkedPointerCast<const HiveTableHandle>(tableHandle_);
     waveDataSource_ = waveDelegateHook_(
         hiveTableHandle,
-        scanSpec_,
+        fileScanState_->scanSpec,
         readerOutputType_,
         &partitionKeys_,
         fileHandleFactory_,
