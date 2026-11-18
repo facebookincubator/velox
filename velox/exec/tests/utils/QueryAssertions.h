@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include "velox/core/PlanNode.h"
 #include "velox/exec/Cursor.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -139,7 +138,8 @@ void readCursorAsync(
     const std::function<void(const RowVectorPtr&)>& onBatch);
 
 #ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-/// Legacy forms of TaskMonitor methods. Removed once Prestissimo migrates.
+// TODO: Remove once Prestissimo migrates.
+/// Legacy forms of TaskMonitor methods.
 inline bool waitForTaskCompletion(
     exec::Task* task,
     uint64_t maxWaitMicros = TaskMonitor::kDefaultMaxWaitMicros) {
@@ -176,10 +176,6 @@ void assertResultsOrdered(
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner,
     const std::vector<uint32_t>& sortingKeys);
-
-velox::Variant readSingleValue(
-    const core::PlanNodePtr& plan,
-    int32_t maxDrivers = 1);
 
 /// assertEqualResults() has limited support for results with floating-point
 /// columns.

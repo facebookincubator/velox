@@ -1403,19 +1403,6 @@ void readCursorAsync(
   }
 }
 
-variant readSingleValue(const core::PlanNodePtr& plan, int32_t maxDrivers) {
-  CursorParameters params;
-  params.planNode = plan;
-  params.maxDrivers = maxDrivers;
-  auto result = readCursor(params);
-
-  EXPECT_EQ(1, result.second.size());
-  EXPECT_EQ(1, result.second[0]->size());
-  EXPECT_EQ(
-      *plan->outputType()->childAt(0), *(result.second[0]->type()->childAt(0)));
-  return materialize(result.second[0])[0][0];
-}
-
 } // namespace facebook::velox::exec::test
 
 template <>
