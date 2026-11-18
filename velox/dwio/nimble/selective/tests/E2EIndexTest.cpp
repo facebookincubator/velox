@@ -1058,6 +1058,48 @@ TEST_F(E2EIndexTestBase, v2ChunkStatsMergeRangesAcrossColumns) {
   EXPECT_EQ(result.stats.processedRows, 12);
 }
 
+// The scan spec names only the last of the file's columns, as a query of a wide
+// table names few of its columns.
+TEST_F(E2EIndexTestBase, v2ChunkStatsPruneWithPartialScanSpec) {
+  const auto fileType = ROW({"first", "second", "value"}, BIGINT());
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(3);
+  for (int64_t batch = 0; batch < 3; ++batch) {
+    batches.push_back(vectorMaker_->rowVector(
+        {"first", "second", "value"},
+        {vectorMaker_->flatVector<int64_t>(
+             4, [batch](auto row) { return batch * 10 + row; }),
+         vectorMaker_->flatVector<int64_t>(
+             4, [batch](auto row) { return batch * 20 + row; }),
+         vectorMaker_->flatVector<int64_t>(
+             4, [batch](auto row) { return batch * 100 + row; })}));
+  }
+  writeChunkStatsData(batches);
+
+  const auto scanType = ROW("value", BIGINT());
+  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+  filters["value"] = std::make_unique<BigintRange>(100, 103, false);
+  auto reader = createReader(/*sampleRate=*/1.0, /*randomSeed=*/0);
+  RowReaderOptions rowReaderOptions;
+  rowReaderOptions.setRequestedType(fileType);
+  rowReaderOptions.setScanSpec(createScanSpec(scanType, filters));
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  std::vector<RowVectorPtr> rows;
+  VectorPtr result = BaseVector::create(scanType, 1, leafPool_.get());
+  while (rowReader->next(1'000, result) > 0) {
+    result->loadedVector();
+    rows.push_back(std::dynamic_pointer_cast<RowVector>(result));
+  }
+  RuntimeStats stats;
+  rowReader->updateRuntimeStats(stats);
+
+  verifyResultsEqual(
+      rows, {vectorMaker_->rowVector({"value"}, {batches[1]->childAt(2)})});
+  EXPECT_EQ(stats.chunkSkippedRows, 8);
+  EXPECT_EQ(stats.processedRows, 12);
+}
+
 TEST_F(E2EIndexTestBase, v2ChunkStatsUnalignedChunksAcrossStripes) {
   const auto rowType = ROW({{"narrow", TINYINT()}, {"wide", BIGINT()}});
   std::vector<RowVectorPtr> batches;
