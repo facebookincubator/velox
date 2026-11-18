@@ -35,6 +35,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 
 namespace facebook::velox::exec::test {
@@ -559,7 +560,7 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, probeOOMWithCachedTable) {
           .copyResults(pool()),
       "Exceeded memory pool capacity");
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   queryCtx.reset();
   // Cache should be cleaned up by QueryCtx destructor via release callback.
 }
@@ -675,7 +676,7 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, cachePoolArbitration) {
 
   ASSERT_TRUE(injected) << "TestValue injection was not triggered";
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   queryCtx.reset();
 }
 

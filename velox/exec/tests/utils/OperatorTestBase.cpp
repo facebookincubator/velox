@@ -23,6 +23,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/ExpressionsParser.h"
@@ -57,7 +58,7 @@ void OperatorTestBase::registerVectorSerde() {
 
 OperatorTestBase::~OperatorTestBase() {
   // Wait for all the tasks to be deleted.
-  exec::test::waitForAllTasksToBeDeleted();
+  exec::test::TaskMonitor::waitForAllTasksDeleted();
 }
 
 void OperatorTestBase::SetUpTestCase() {
@@ -72,7 +73,7 @@ void OperatorTestBase::SetUpTestCase() {
 
 void OperatorTestBase::TearDownTestCase() {
   asyncDataCache_->shutdown();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   memory::SharedArbitrator::unregisterFactory();
 }
 
@@ -152,7 +153,7 @@ void OperatorTestBase::SetUp() {
 }
 
 void OperatorTestBase::TearDown() {
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   stopPeriodicStatsReporter();
   executor_.reset();
   // There might be lingering exchange source on executor even after all tasks
@@ -202,7 +203,7 @@ std::shared_ptr<Task> OperatorTestBase::assertQuery(
       duckDbSql,
       duckDbQueryRunner_);
   auto task = cursor->task();
-  EXPECT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+  EXPECT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
   return task;
 }
 
@@ -261,7 +262,7 @@ core::TypedExprPtr OperatorTestBase::parseExpr(
 
   // Wait for the task to go.
   task.reset();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 
   // If a spilling directory was set, ensure it was removed after the task is
   // gone.

@@ -25,6 +25,7 @@
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -197,7 +198,7 @@ class HashJoinBuildBenchmark : public VectorTestBase {
       auto* task = cursor->task().get();
       while (cursor->moveNext()) {
       }
-      waitForTaskCompletion(task);
+      TaskMonitor::waitForCompletion(*task);
       result.isBuildNoDupHashTableAbandon = isBuildNoDupHashTableAbandon(task);
     }
     result.totalClock = totalClocks;

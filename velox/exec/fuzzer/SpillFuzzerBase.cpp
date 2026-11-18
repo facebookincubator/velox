@@ -25,6 +25,7 @@
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/ScopedOOMInjector.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/UnsafeRowSerializer.h"
@@ -246,7 +247,7 @@ RowVectorPtr SpillFuzzerBase::execute(
   // avoid the potential interference of the background activities across query
   // executions.
   auto stopGuard =
-      folly::makeGuard([&]() { test::waitForAllTasksToBeDeleted(); });
+      folly::makeGuard([&]() { test::TaskMonitor::waitForAllTasksDeleted(); });
 
   TestScopedSpillInjection scopedSpillInjection(spillPct);
   RowVectorPtr result;

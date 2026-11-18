@@ -32,6 +32,7 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
@@ -1117,7 +1118,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringOutputProcessing) {
             .maxDrivers(1)
             .assertResults(expectedResult),
         "Manual MemoryPool Abortion");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -1183,7 +1184,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringInputgProcessing) {
             .maxDrivers(1)
             .assertResults(expectedResult),
         "Manual MemoryPool Abortion");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -1322,7 +1323,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimFromOrderBy) {
   auto& planStats = taskStats.at(orderById);
   ASSERT_GT(planStats.spilledBytes, 0);
   task.reset();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(OrderByTest, reclaimFromEmptyOrderBy) {

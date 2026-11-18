@@ -28,6 +28,7 @@
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 #include "velox/exec/fuzzer/ScopedOOMInjector.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 DEFINE_int32(steps, 10, "Number of plans to generate and test.");
@@ -437,7 +438,7 @@ RowVectorPtr JoinFuzzer::execute(
   // Wait for the task to be destroyed before start next query execution to
   // avoid the potential interference of the background activities across query
   // executions.
-  test::waitForAllTasksToBeDeleted();
+  test::TaskMonitor::waitForAllTasksDeleted();
   return result;
 }
 
