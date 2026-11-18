@@ -136,9 +136,9 @@ class FsstEncoding final
       Buffer& buffer,
       const Encoding::Options& options = {});
 
-  /// Returns the estimated encoded size used by encoding selection.
+  /// Estimates the full input by compressing a bounded sample of values.
   static uint64_t estimateSize(
-      uint64_t rowCount,
+      std::span<const std::string_view> values,
       const Statistics<std::string_view>& statistics,
       const Encoding::Options& options);
 
@@ -188,8 +188,11 @@ class FsstEncoding final
   std::string debugString(int offset) const final;
 
  private:
-  // Approximate serialized symbol table size in bytes (~2KB typical).
-  static constexpr uint32_t kSymbolTableOverhead = 2048;
+  // Bound selection work to 64 KiB, including when individual strings are huge.
+  static constexpr size_t kEstimateSampleRows = 256;
+
+  // Bound each sampled row while retaining enough bytes for eight-byte symbols.
+  static constexpr size_t kEstimateSampleStringBytes = 256;
 
   // Maximum bytes represented by one FSST symbol.
   static constexpr size_t kMaxSymbolLength = 8;
