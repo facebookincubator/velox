@@ -25,6 +25,9 @@ namespace facebook::velox::connector::paimon {
 /// file at a time and reuses FileSplitReader for per-file preparation and batch
 /// reads, advancing past exhausted, empty or skipped files. The same ScanSpec
 /// is reused across files.
+/// File readers match top-level fields by ID; historical schema definitions
+/// and physical column order are not used for field identity. Nested field
+/// evolution is not handled here.
 class PaimonSplitReader : public connector::FileSplitReader {
  public:
   /// @param fileSplit FileConnectorSplit for the first data file.
@@ -70,6 +73,8 @@ class PaimonSplitReader : public connector::FileSplitReader {
   }
 
  private:
+  void configureBaseReaderOptions() override;
+
   // Builds a FileConnectorSplit from a PaimonDataFile.
   std::shared_ptr<connector::FileConnectorSplit> makeFileConnectorSplit(
       const PaimonDataFile& dataFile) const;

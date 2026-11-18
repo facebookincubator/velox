@@ -59,6 +59,21 @@ PaimonSplitReader::PaimonSplitReader(
   }
 }
 
+void PaimonSplitReader::configureBaseReaderOptions() {
+  connector::FileSplitReader::configureBaseReaderOptions();
+  const auto& table = static_cast<const PaimonTableHandle&>(*tableHandle_);
+  std::vector<dwio::common::ParquetFieldId> fieldIds;
+  fieldIds.reserve(table.fieldIds().size());
+  for (auto id : table.fieldIds()) {
+    fieldIds.push_back({id, {}});
+  }
+  baseReaderOpts_.setFileSchema(table.rowType());
+  baseReaderOpts_.setFieldIds(std::move(fieldIds));
+  baseReaderOpts_.setFieldIdAttributeKey(dwio::common::kPaimonFieldIdKey);
+  baseReaderOpts_.setColumnMappingMode(
+      dwio::common::ColumnMappingMode::kFieldId);
+}
+
 void PaimonSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStats& runtimeStats,
@@ -69,7 +84,16 @@ void PaimonSplitReader::prepareSplit(
 }
 
 uint64_t PaimonSplitReader::next(uint64_t size, VectorPtr& output) {
-  while (ensureFileSplitReader()) {
+  while (currentFileIndex_ < fileSplits_.size()) {
+    const bool newFile = baseReader_ == nullptr;
+    if (!ensureFileSplitReader()) {
+      break;
+    }
+    if (newFile && output) {
+      // Keep the logical output required by selective readers, but discard
+      // batch-reader private vectors tied to the previous physical layout.
+      output->asUnchecked<RowVector>()->rawVectorForBatchReader().reset();
+    }
     // TODO: Apply deletion vectors using original physical file row positions.
     // TODO: Decode internal columns and row kinds for primary-key/changelog
     // files.
@@ -94,7 +118,6 @@ bool PaimonSplitReader::ensureFileSplitReader() {
     // Point to the current file.
     fileSplit_ = fileSplits_[currentFileIndex_];
 
-    // TODO: Add historical-schema adaptation using per-file schema metadata.
     connector::FileSplitReader::prepareSplit(metadataFilter_, *runtimeStats_);
     if (!emptySplit_) {
       return true;
