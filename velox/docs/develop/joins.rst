@@ -342,10 +342,14 @@ Skipping Duplicate Keys
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 When building a hash table for left semi or anti join, HashBuild operator skips
-entries with duplicate keys as these are not needed. This is achieved by
-configuring exec::HashTable to set the "allowDuplicates" flag to false. This
-optimization reduces memory usage of the hash table in case the build side
-contains duplicate join keys.
+entries with duplicate keys as these are not needed. This applies when the join
+has no filter. It also applies when the filter is deterministic and reads only
+probe-side columns. Such a filter gives the same result for every build row
+with the same key. Null-aware joins with a filter keep the duplicates. This is
+achieved by configuring exec::HashTable to set the "allowDuplicates" flag to
+false. This optimization reduces memory usage of the hash table in case the
+build side contains duplicate join keys. With a filter, it also reduces the
+number of build rows that the probe side evaluates the filter on.
 
 Counting Joins
 ~~~~~~~~~~~~~~

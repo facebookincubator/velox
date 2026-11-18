@@ -271,10 +271,6 @@ RowTypePtr hashJoinTableType(
     const RowTypePtr& inputType,
     bool dropDuplicates);
 
-/// Returns the type of the hash table associated with this join.
-RowTypePtr hashJoinTableType(
-    const std::shared_ptr<const core::HashJoinNode>& joinNode);
-
 struct HashJoinTableSpillResult {
   HashBuildSpiller* spiller{nullptr};
   const std::exception_ptr error{nullptr};
