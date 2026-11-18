@@ -462,6 +462,36 @@ TEST_F(CompactRowTest, mix) {
   testRoundTrip(data);
 }
 
+TEST_F(CompactRowTest, unknownArrayBeforeValue) {
+  auto arrays =
+      makeArrayVector({0, 1, 3, 3}, makeAllNullFlatVector<UnknownValue>(13));
+  arrays->setNull(1, true);
+  auto data = makeRowVector({
+      arrays,
+      makeFlatVector<int64_t>({11, 22, 33, 44}),
+  });
+
+  CompactRow row(data);
+  // Non-null arrays use just their element count, regardless of length.
+  constexpr auto kRowWithArraySize = 1 + sizeof(int64_t) + sizeof(int32_t);
+  EXPECT_EQ(kRowWithArraySize, row.rowSize(0));
+  EXPECT_EQ(1 + sizeof(int64_t), row.rowSize(1));
+  EXPECT_EQ(kRowWithArraySize, row.rowSize(2));
+  EXPECT_EQ(kRowWithArraySize, row.rowSize(3));
+
+  testRoundTrip(data);
+}
+
+TEST_F(CompactRowTest, unknownArrayBeforeLongString) {
+  auto data = makeRowVector({
+      makeArrayVector({0}, makeAllNullFlatVector<UnknownValue>(1)),
+      makeFlatVector<int64_t>({-1}),
+      makeFlatVector<std::string>({std::string(1 << 23, 'x')}),
+  });
+
+  testRoundTrip(data);
+}
+
 TEST_F(CompactRowTest, arrayOfBigint) {
   auto data = makeRowVector({
       makeArrayVector<int64_t>({
