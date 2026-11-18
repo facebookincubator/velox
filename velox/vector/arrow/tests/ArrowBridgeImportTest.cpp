@@ -98,7 +98,8 @@ class ArrowBridgeImportTest : public testing::TestWithParam<bool>,
   }
 
   void exportToArrow(const TypePtr& type, ArrowSchema& out) {
-    velox::exportToArrow(BaseVector::create(type, 0, pool()), out, options_);
+    velox::exportToArrow(
+        BaseVector::create(type, 0, pool()), out, ArrowOptions{});
   }
 
   // Helper structure to hold buffers required by an ArrowArray.
@@ -507,8 +508,6 @@ class ArrowBridgeImportTest : public testing::TestWithParam<bool>,
       EXPECT_EQ(vec.size(), expectedSize);
     });
   }
-
-  ArrowOptions options_;
 };
 
 TEST_P(ArrowBridgeImportTest, scalar) {
@@ -612,8 +611,8 @@ TEST_P(ArrowBridgeImportTest, timestampUtc) {
   auto roundtripVector = [&](const VectorPtr& input) {
     ArrowSchema schema;
     ArrowArray data;
-    velox::exportToArrow(input, schema, options_);
-    velox::exportToArrow(input, data, pool(), options_);
+    velox::exportToArrow(input, schema, ArrowOptions{});
+    velox::exportToArrow(input, data, pool(), ArrowOptions{});
 
     auto output = importFromArrow(schema, data, pool());
     facebook::velox::test::assertEqualVectors(input, output);
