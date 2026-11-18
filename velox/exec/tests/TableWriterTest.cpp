@@ -29,6 +29,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 #include <folly/ScopeGuard.h>
@@ -242,6 +243,44 @@ TEST_F(BasicTableWriterTest, writerRuntimeStatsReachOperatorStats) {
           .at(std::string{Operator::kBackgroundCpuTimeNanos})
           .sum,
       kInjectedNanos);
+}
+
+TEST_F(BasicTableWriterTest, flatMapConversionRuntimeStats) {
+  std::vector<RowVectorPtr> batches;
+  int64_t numEntries{0};
+  for (auto i = 0; i < 3; ++i) {
+    auto map = makeMapVector<int64_t, int64_t>(
+        100,
+        [i](auto row) { return (row + i) % 4; },
+        [](auto row) { return row; },
+        [](auto row) { return row * 2; });
+    numEntries += map->mapKeys()->size();
+    batches.push_back(makeRowVector({FlatMapVector::fromMapVector(*map)}));
+  }
+
+  auto directory = TempDirectoryPath::create();
+  core::PlanNodeId tableWriteNodeId;
+  auto plan = PlanBuilder()
+                  .values(batches)
+                  .tableWrite(directory->getPath())
+                  .capturePlanNodeId(tableWriteNodeId)
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).copyResults(pool(), task);
+
+  const auto stats =
+      toPlanStats(task->taskStats()).at(tableWriteNodeId).customStats;
+  const auto& conversions =
+      stats.at(std::string{FlatMapVector::kNumMapConversions});
+  ASSERT_EQ(conversions.count, batches.size());
+  ASSERT_EQ(conversions.sum, batches.size());
+  ASSERT_EQ(
+      stats.at(std::string{FlatMapVector::kNumMapConversionEntries}).sum,
+      numEntries);
+  ASSERT_EQ(
+      stats.at(std::string{FlatMapVector::kMapConversionWallNanos}).count,
+      batches.size());
 }
 
 class PartitionedTableWriterTest
