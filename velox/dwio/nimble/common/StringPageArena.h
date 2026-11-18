@@ -26,6 +26,7 @@
 #include "velox/buffer/Buffer.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/Vector.h"
 
 namespace facebook::nimble {
 
@@ -58,10 +59,13 @@ class StringPageArena {
       std::span<char> inlinePage);
 
   /// Takes pages from 'pageFactory', which owns them, so that the strings
-  /// outlive the arena. Fails the first write that needs a page if
-  /// 'pageFactory' is empty, so that a decoder that writes no strings needs no
-  /// factory.
-  StringPageArena(PageFactory pageFactory, size_t minPageBytes);
+  /// outlive the arena. Uses 'pool' only for scratch space. Fails the first
+  /// write that needs a page if 'pageFactory' is empty, so that a decoder that
+  /// writes no strings needs no factory.
+  StringPageArena(
+      velox::memory::MemoryPool* pool,
+      PageFactory pageFactory,
+      size_t minPageBytes);
 
   StringPageArena(const StringPageArena&) = delete;
   StringPageArena(StringPageArena&&) = delete;
@@ -76,11 +80,12 @@ class StringPageArena {
   std::string_view writeString(std::string_view value);
 
   /// Calls 'writer' with room for 'maxBytes' bytes and keeps the first n,
-  /// where n is what 'writer' returns. Writes into the current page if it has
-  /// room for 'maxBytes'. Otherwise writes into the next page, which has at
-  /// least max(minPageBytes, maxBytes) bytes, and leaves the rest of the
-  /// current page unused. Returns an empty string without calling 'writer' if
-  /// 'maxBytes' is 0.
+  /// where n is what 'writer' returns. Writes in place when the current page
+  /// has room for 'maxBytes'. Before the first page, takes one for the write
+  /// if 'maxBytes' fits in minPageBytes. Otherwise writes into scratch and
+  /// keeps the n bytes with writeString(), so that a loose bound neither
+  /// abandons the current page's tail nor allocates a page of 'maxBytes'.
+  /// Returns an empty string without calling 'writer' if 'maxBytes' is 0.
   template <typename Writer>
   std::string_view write(size_t maxBytes, Writer&& writer);
 
@@ -116,7 +121,8 @@ class StringPageArena {
   Page newPage(size_t bytes);
 
   // Allocates the pages, which the arena owns. Null when the pages come from
-  // 'pageFactory_'.
+  // 'pageFactory_', in which case the pool passed to the constructor backs
+  // only 'scratch_'.
   velox::memory::MemoryPool* const pool_;
   // Allocates the pages, which its owner owns, if 'pool_' is null.
   const PageFactory pageFactory_;
@@ -133,6 +139,8 @@ class StringPageArena {
   char* free_{nullptr};
   // The end of the current page, or null before the first page.
   char* pageEnd_{nullptr};
+  // Holds the output of a write() whose bound does not fit the current page.
+  Vector<char> scratch_;
 };
 
 // Decoders call writeString() and write() for every string, so both stay in
@@ -153,9 +161,26 @@ std::string_view StringPageArena::write(size_t maxBytes, Writer&& writer) {
   if (maxBytes == 0) {
     return {};
   }
-  char* const output = fits(maxBytes) ? free_ : nextPage(maxBytes);
+  char* output = free_;
+  if (!fits(maxBytes)) {
+    if (pages_.empty() && maxBytes <= minPageBytes_) {
+      output = nextPage(maxBytes);
+    } else {
+      // Writes into scratch, since the output size is known only after the
+      // write. writeString() then keeps the output in the current page's tail
+      // if it fits, or else in a page sized for it, so that a loose bound
+      // neither abandons the tail nor takes a page of 'maxBytes'.
+      scratch_.resize(maxBytes);
+      output = scratch_.data();
+    }
+  }
   const size_t bytes = writer(output);
   NIMBLE_CHECK_LE(bytes, maxBytes, "Write exceeds its bound.");
+
+  // The write went into scratch.
+  if (output != free_) {
+    return writeString({output, bytes});
+  }
   free_ = output + bytes;
   return {output, bytes};
 }
