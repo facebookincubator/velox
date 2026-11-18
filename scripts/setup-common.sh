@@ -462,7 +462,8 @@ function install_gcs_sdk_cpp {
   wget_and_untar https://github.com/googleapis/google-cloud-cpp/archive/refs/tags/v"${GOOGLE_CLOUD_CPP_VERSION}".tar.gz google-cloud-cpp
   cmake_install_dir google-cloud-cpp \
     -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \
-    -DGOOGLE_CLOUD_CPP_ENABLE=storage,-opentelemetry,-monitoring,-trace
+    -DGOOGLE_CLOUD_CPP_ENABLE=storage,-opentelemetry,-monitoring,-trace \
+    -DGOOGLE_CLOUD_CPP_WITH_MOCKS=OFF
 }
 
 function install_azure_storage_sdk_cpp {
