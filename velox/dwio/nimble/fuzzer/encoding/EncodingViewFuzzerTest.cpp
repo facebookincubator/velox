@@ -35,6 +35,7 @@
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/ReversedEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -473,6 +474,33 @@ TYPED_TEST(DeltaBlockEncodingViewFuzzerTest, readAtMatchesMaterialize) {
       FLAGS_view_fuzzer_seed,
       Encoding::Options{},
       CompressionType::Uncompressed);
+}
+
+using ReversedViewTypes = ::testing::Types<
+    ReversedEncoding<int8_t>,
+    ReversedEncoding<uint8_t>,
+    ReversedEncoding<int16_t>,
+    ReversedEncoding<uint16_t>,
+    ReversedEncoding<int32_t>,
+    ReversedEncoding<uint32_t>,
+    ReversedEncoding<int64_t>,
+    ReversedEncoding<uint64_t>>;
+
+template <typename E>
+class ReversedEncodingViewFuzzerTest : public ::testing::Test {};
+TYPED_TEST_SUITE(ReversedEncodingViewFuzzerTest, ReversedViewTypes);
+
+TYPED_TEST(ReversedEncodingViewFuzzerTest, readAtMatchesMaterialize) {
+  // The view passes cacheEncodingView to the view of its nested stream.
+  for (const auto cacheEnabled : {false, true}) {
+    SCOPED_TRACE(::testing::Message() << "cache=" << cacheEnabled);
+    runEncodingViewFuzzer<TypeParam>(
+        FLAGS_view_fuzzer_iterations,
+        FLAGS_view_fuzzer_max_rows,
+        FLAGS_view_fuzzer_seed,
+        Encoding::Options{.cacheEncodingView = cacheEnabled},
+        CompressionType::Uncompressed);
+  }
 }
 
 using HuffmanViewTypes = ::testing::Types<

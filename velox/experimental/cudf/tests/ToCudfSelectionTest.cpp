@@ -235,7 +235,7 @@ TEST_F(ToCudfSelectionTest, timeToVarcharCastFallsBack) {
   facebook::velox::test::assertEqualVectors(expected, result);
   EXPECT_FALSE(wasCudfFilterProjectUsed(task));
   EXPECT_TRUE(wasDefaultFilterProjectUsed(task));
-  EXPECT_EQ(toOperatorStats(task->taskStats()).count("CudfFromVelox"), 0);
+  EXPECT_EQ(task->taskStats().operatorStats().count("CudfFromVelox"), 0);
 }
 
 TEST_F(ToCudfSelectionTest, fallbackDoesNotInsertGpuConversion) {
@@ -261,7 +261,7 @@ TEST_F(ToCudfSelectionTest, fallbackDoesNotInsertGpuConversion) {
       {makeFlatVector<int64_t>({1, 2}), makeFlatVector<int64_t>({2, 1})});
   facebook::velox::test::assertEqualVectors(expected, result);
 
-  const auto stats = toOperatorStats(task->taskStats());
+  const auto stats = task->taskStats().operatorStats();
   EXPECT_EQ(stats.count("RowNumber"), 1);
   EXPECT_EQ(stats.count("OrderBy"), 1);
   EXPECT_EQ(stats.count("CudfFromVelox"), 0);

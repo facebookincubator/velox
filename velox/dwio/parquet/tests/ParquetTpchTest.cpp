@@ -129,28 +129,19 @@ class ParquetTpchTest : public testing::Test {
       const std::optional<std::vector<uint32_t>>& sortingKeys) const {
     constexpr int kNumSplits = 10;
     constexpr int kNumDrivers = 4;
-    auto addSplits = [&](TaskCursor* taskCursor) {
-      if (taskCursor->noMoreSplits()) {
-        return;
-      }
-      auto& task = taskCursor->task();
-      for (const auto& entry : tpchPlan.dataFiles) {
-        for (const auto& path : entry.second) {
-          auto const splits = HiveConnectorTestBase::makeHiveConnectorSplits(
-              path, kNumSplits, tpchPlan.dataFileFormat);
-          for (const auto& split : splits) {
-            task->addSplit(entry.first, Split(split));
-          }
+    AssertQueryBuilder builder(tpchPlan.plan, *duckDb_);
+    builder.maxDrivers(kNumDrivers);
+    for (const auto& [nodeId, paths] : tpchPlan.dataFiles) {
+      std::vector<Split> splits;
+      for (const auto& path : paths) {
+        for (const auto& split : HiveConnectorTestBase::makeHiveConnectorSplits(
+                 path, kNumSplits, tpchPlan.dataFileFormat)) {
+          splits.emplace_back(split);
         }
-        task->noMoreSplits(entry.first);
       }
-      taskCursor->setNoMoreSplits();
-    };
-    CursorParameters params;
-    params.maxDrivers = kNumDrivers;
-    params.planNode = tpchPlan.plan;
-    return exec::test::assertQuery(
-        params, addSplits, duckQuery, *duckDb_, sortingKeys);
+      builder.splits(nodeId, std::move(splits));
+    }
+    return builder.assertResults(duckQuery, sortingKeys);
   }
 
   static std::shared_ptr<DuckDbQueryRunner> duckDb_;

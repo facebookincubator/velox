@@ -76,7 +76,7 @@ TEST_F(
   auto expected = makeNamedRowVector("p_key", makeFlatVector<int64_t>({2, 3}));
   facebook::velox::test::assertEqualVectors(expected, result);
 
-  const auto operatorStats = toOperatorStats(task->taskStats());
+  const auto operatorStats = task->taskStats().operatorStats();
   EXPECT_EQ(operatorStats.count("NestedLoopJoinBuild"), 1);
   EXPECT_EQ(operatorStats.count("NestedLoopJoinProbe"), 1);
   EXPECT_EQ(operatorStats.count("CudfNestedLoopJoinBuild"), 0);
@@ -108,7 +108,7 @@ TEST_F(CudfNestedLoopJoinTest, customComparisonConditionFallsBack) {
       "p_key", makeFlatVector<int64_t>({1, 257}, customType));
   facebook::velox::test::assertEqualVectors(expected, result);
 
-  const auto operatorStats = toOperatorStats(task->taskStats());
+  const auto operatorStats = task->taskStats().operatorStats();
   EXPECT_EQ(operatorStats.count("NestedLoopJoinBuild"), 1);
   EXPECT_EQ(operatorStats.count("NestedLoopJoinProbe"), 1);
   EXPECT_EQ(operatorStats.count("CudfNestedLoopJoinBuild"), 0);

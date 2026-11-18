@@ -451,12 +451,10 @@ DEBUG_ONLY_TEST_F(HashJoinReplayerTest, hashBuildSpill) {
   }
 
   auto traceResult = traceBuilder.copyResults(pool(), task);
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  const auto& stats = taskStats.at(traceNodeId_);
-  auto opStats = toOperatorStats(task->taskStats());
+  const auto stats = PlanNodeStats::extract(task->taskStats(), traceNodeId_);
   ASSERT_GT(
-      opStats.at("HashBuild")
-          .runtimeStats[std::string(Operator::kSpillWrites)]
+      stats.operatorStatsFor("HashBuild")
+          .customStat(Operator::kSpillWrites)
           .sum,
       0);
   ASSERT_GT(stats.spilledBytes, 0);
@@ -536,12 +534,10 @@ DEBUG_ONLY_TEST_F(HashJoinReplayerTest, hashProbeSpill) {
   }
 
   auto traceResult = traceBuilder.copyResults(pool(), task);
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  const auto& stats = taskStats.at(traceNodeId_);
-  auto opStats = toOperatorStats(task->taskStats());
+  const auto stats = PlanNodeStats::extract(task->taskStats(), traceNodeId_);
   ASSERT_GT(
-      opStats.at("HashProbe")
-          .runtimeStats[std::string(Operator::kSpillWrites)]
+      stats.operatorStatsFor("HashProbe")
+          .customStat(Operator::kSpillWrites)
           .sum,
       0);
 

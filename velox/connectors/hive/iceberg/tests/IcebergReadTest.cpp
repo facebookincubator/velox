@@ -3075,6 +3075,61 @@ TEST_F(IcebergReadTest, flatMapAsStruct) {
       .assertResults({expected});
 }
 
+TEST_F(IcebergReadTest, missingFlatMapAsStruct) {
+  auto mapType = MAP(BIGINT(), DOUBLE());
+  auto structType = ROW({"1", "2"}, DOUBLE());
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(
+      dataFilePath->getPath(),
+      {makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2})})});
+
+  ColumnHandleMap assignments;
+  assignments["id"] =
+      exec::test::HiveConnectorTestBase::makeColumnHandle("id", BIGINT(), {});
+  assignments["features"] = exec::test::HiveConnectorTestBase::makeColumnHandle(
+      "features", mapType, mapType, {"features.1", "features.2"});
+
+  auto expected = makeRowVector(
+      {"id", "features"},
+      {makeFlatVector<int64_t>({1, 2}),
+       BaseVector::createNullConstant(structType, 2, pool())});
+  test::IcebergPlanBuilder planBuilder;
+  auto plan = planBuilder.startTableScan()
+                  .outputType(ROW({{"id", BIGINT()}, {"features", structType}}))
+                  .dataColumns(ROW({{"id", BIGINT()}, {"features", mapType}}))
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+  exec::test::AssertQueryBuilder(plan)
+      .splits(makeIcebergSplits(dataFilePath->getPath()))
+      .assertResults({expected});
+}
+
+TEST_F(IcebergReadTest, filterOnlyMissingColumn) {
+  auto data = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2})});
+  auto dataFilePath = TempFilePath::create();
+  writeToFile(dataFilePath->getPath(), {data});
+
+  for (const auto& filter : {"country IS NULL", "country IS NOT NULL"}) {
+    test::IcebergPlanBuilder planBuilder;
+    auto plan =
+        planBuilder.startTableScan()
+            .outputType(ROW({{"id", BIGINT()}}))
+            .dataColumns(ROW({{"id", BIGINT()}, {"country", VARCHAR()}}))
+            .subfieldFilters({filter})
+            .assignments({{"id", makeIcebergHandle("id", BIGINT(), 1)}})
+            .filterColumnHandles({makeIcebergHandle("country", VARCHAR(), 2)})
+            .endTableScan()
+            .planNode();
+    exec::test::AssertQueryBuilder(plan)
+        .splits(makeIcebergSplits(dataFilePath->getPath()))
+        .assertResults(
+            filter == std::string("country IS NULL")
+                ? std::vector<RowVectorPtr>{data}
+                : std::vector<RowVectorPtr>{});
+  }
+}
+
 TEST_F(IcebergReadTest, filterPushdownWithInitialDefaultInFilterColumnHandles) {
   // Test's a scenario where filter on default value column is used in the query
   // TABLE = [id int , country varchar(defaultValue='IN')]

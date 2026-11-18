@@ -213,7 +213,7 @@ constexpr uint64_t kMinPairFiles = 10;
 // Encodings EncodingSizeEstimation can decline on the values rather than on
 // the stream type alone: Constant needs a single-valued stream, DeltaBlock a
 // per-block non-decreasing one, Sequence an arithmetic progression, Huffman an
-// alphabet of at least two values.
+// alphabet of at least two values, Reversed values that mostly descend.
 // Whether they land is therefore a property of the data draw rather than of
 // the schema, so unappliedPairs() reports them but does not demand them.
 bool hasDataPrecondition(EncodingType encodingType) {
@@ -222,6 +222,7 @@ bool hasDataPrecondition(EncodingType encodingType) {
       encodingType == EncodingType::EliasFano ||
       encodingType == EncodingType::PartitionedEliasFano ||
       encodingType == EncodingType::Sequence ||
+      encodingType == EncodingType::Reversed ||
       encodingType == EncodingType::Huffman;
 }
 
@@ -1309,7 +1310,8 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
   if (encodingType == EncodingType::DeltaBlock ||
       encodingType == EncodingType::EliasFano ||
       encodingType == EncodingType::PartitionedEliasFano ||
-      encodingType == EncodingType::Sequence) {
+      encodingType == EncodingType::Sequence ||
+      encodingType == EncodingType::Reversed) {
     return !isFloatingPointDataType(dataType);
   }
   // Varint's gate is isIntegralType<physicalType>() && sizeof(T) >= 4, so the
@@ -1326,6 +1328,7 @@ bool isIntegralOnlyEncoding(EncodingType encodingType) {
       encodingType == EncodingType::EliasFano ||
       encodingType == EncodingType::PartitionedEliasFano ||
       encodingType == EncodingType::Sequence ||
+      encodingType == EncodingType::Reversed ||
       encodingType == EncodingType::PFOR ||
       encodingType == EncodingType::SimdForBitpack ||
       encodingType == EncodingType::Huffman;
@@ -1737,6 +1740,7 @@ struct ExpectedNodeStats {
   std::optional<int64_t> integralMax;
   std::optional<double> floatingMin;
   std::optional<double> floatingMax;
+  bool floatingHasNanValues{false};
   std::optional<std::string> stringMin;
   std::optional<std::string> stringMax;
 
@@ -1753,7 +1757,7 @@ struct ExpectedNodeStats {
           integralMax,
           std::nullopt);
     }
-    if (floatingMin.has_value()) {
+    if (floatingMin.has_value() || floatingHasNanValues) {
       return std::make_unique<velox::dwio::common::DoubleColumnStatistics>(
           valueCount,
           hasNull,
@@ -1777,6 +1781,26 @@ struct ExpectedNodeStats {
         valueCount, hasNull, std::nullopt, std::nullopt);
   }
 };
+
+// Drops both bounds once a value is NaN, as the writer's statistics do.
+void addFloatingPointValue(ExpectedNodeStats& stats, double value) {
+  if (stats.floatingHasNanValues) {
+    return;
+  }
+  if (std::isnan(value)) {
+    stats.floatingHasNanValues = true;
+    stats.floatingMin.reset();
+    stats.floatingMax.reset();
+    return;
+  }
+  if (!stats.floatingMin.has_value()) {
+    stats.floatingMin = value;
+    stats.floatingMax = value;
+    return;
+  }
+  stats.floatingMin = std::min(*stats.floatingMin, value);
+  stats.floatingMax = std::max(*stats.floatingMax, value);
+}
 
 /// Accumulates expected stats for one batch into the per-node vector.
 /// 'validRows' are row indices where all ancestors are non-null.
@@ -1891,22 +1915,12 @@ void accumulateNodeStats(
       case velox::TypeKind::REAL: {
         double value = static_cast<double>(
             vector->as<velox::SimpleVector<float>>()->valueAt(row));
-        stats.floatingMin = stats.floatingMin.has_value()
-            ? std::min(*stats.floatingMin, value)
-            : value;
-        stats.floatingMax = stats.floatingMax.has_value()
-            ? std::max(*stats.floatingMax, value)
-            : value;
+        addFloatingPointValue(stats, value);
         break;
       }
       case velox::TypeKind::DOUBLE: {
         double value = vector->as<velox::SimpleVector<double>>()->valueAt(row);
-        stats.floatingMin = stats.floatingMin.has_value()
-            ? std::min(*stats.floatingMin, value)
-            : value;
-        stats.floatingMax = stats.floatingMax.has_value()
-            ? std::max(*stats.floatingMax, value)
-            : value;
+        addFloatingPointValue(stats, value);
         break;
       }
       case velox::TypeKind::VARCHAR:
@@ -2017,26 +2031,27 @@ void NimbleWriterFuzzer::verifyColumnStatistics(
     auto* expectedDbl =
         dynamic_cast<velox::dwio::common::DoubleColumnStatistics*>(
             expectedCommon.get());
-    if (actualDbl != nullptr && expectedDbl != nullptr &&
-        expectedDbl->getMinimum().has_value()) {
-      // Both bounds are NaN whenever the column carries one, because the
-      // fuzzer generates NaN on purpose. Comparing with == would report those
-      // agreeing statistics as a mismatch, so reuse the round-trip
-      // comparison's NaN handling.
-      const auto checkBound = [&](std::string_view bound,
-                                  double actualValue,
-                                  double expectedValue) {
-        NIMBLE_CHECK(
-            decodedValueEquals(actualValue, expectedValue),
-            "Node {} double {} mismatch ({} vs. {}, seed {}).",
+    if (actualDbl != nullptr && expectedDbl != nullptr) {
+      NIMBLE_CHECK_EQ(
+          actualDbl->getMinimum().has_value(),
+          expectedDbl->getMinimum().has_value(),
+          "Node {} double bounds presence mismatch (seed {}).",
+          node,
+          options_.seed);
+      if (expectedDbl->getMinimum().has_value()) {
+        NIMBLE_CHECK_EQ(
+            *actualDbl->getMinimum(),
+            *expectedDbl->getMinimum(),
+            "Node {} double min mismatch (seed {}).",
             node,
-            bound,
-            actualValue,
-            expectedValue,
             options_.seed);
-      };
-      checkBound("min", *actualDbl->getMinimum(), *expectedDbl->getMinimum());
-      checkBound("max", *actualDbl->getMaximum(), *expectedDbl->getMaximum());
+        NIMBLE_CHECK_EQ(
+            *actualDbl->getMaximum(),
+            *expectedDbl->getMaximum(),
+            "Node {} double max mismatch (seed {}).",
+            node,
+            options_.seed);
+      }
     }
 
     auto* actualStr =

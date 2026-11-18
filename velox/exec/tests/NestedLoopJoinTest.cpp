@@ -20,6 +20,7 @@
 #include "velox/exec/tests/utils/BackpressureTestNode.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -382,7 +383,7 @@ TEST_F(NestedLoopJoinTest, basicCrossJoin) {
                {"c0", "u_c0"})
            .planNode();
 
-  assertQueryReturnsEmptyResult(op);
+  AssertQueryBuilder(op).assertEmptyResults();
 
   // Multi-threaded build side.
   planNodeIdGenerator->reset();
@@ -1015,7 +1016,7 @@ TEST_F(NestedLoopJoinTest, mergeBuildVectors) {
     assertEqualVectors(makeExpected(2, 45), cursor->current());
   }
   ASSERT_FALSE(cursor->moveNext());
-  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*cursor->task()));
 }
 
 TEST_F(NestedLoopJoinTest, leftSemiJoinProjectDataValidation) {

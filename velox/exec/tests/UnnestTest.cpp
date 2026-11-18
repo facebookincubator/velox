@@ -49,6 +49,15 @@ class UnnestTest : public HiveConnectorTestBase,
     return params;
   }
 
+  // Asserts that 'planNode' returns no rows with this test's batch size.
+  void assertEmptyResults(const core::PlanNodePtr& planNode) const {
+    AssertQueryBuilder(planNode)
+        .config(
+            core::QueryConfig::kPreferredOutputBatchRows,
+            std::to_string(batchSize_))
+        .assertEmptyResults();
+  }
+
   const vector_size_t batchSize_{GetParam()};
 };
 
@@ -956,16 +965,13 @@ TEST_P(UnnestTest, allEmptyOrNullArrays) {
            [](auto /* row */, auto index) { return index; },
            nullEvery(7))});
 
-  auto op =
-      PlanBuilder().values({vector}).unnest({"c0"}, {"c1", "c2"}).planNode();
-  auto params = makeCursorParameters(op);
-  assertQueryReturnsEmptyResult(params);
-
-  op = PlanBuilder()
-           .values({vector})
-           .unnest({"c0"}, {"c1", "c2"}, "ordinal")
-           .planNode();
-  assertQueryReturnsEmptyResult(params);
+  assertEmptyResults(
+      PlanBuilder().values({vector}).unnest({"c0"}, {"c1", "c2"}).planNode());
+  assertEmptyResults(
+      PlanBuilder()
+          .values({vector})
+          .unnest({"c0"}, {"c1", "c2"}, "ordinal")
+          .planNode());
 }
 
 TEST_P(UnnestTest, allEmptyOrNullMaps) {
@@ -984,17 +990,13 @@ TEST_P(UnnestTest, allEmptyOrNullMaps) {
            [](auto /* row */) { return 0; },
            nullEvery(7))});
 
-  auto op =
-      PlanBuilder().values({vector}).unnest({"c0"}, {"c1", "c2"}).planNode();
-  auto params = makeCursorParameters(op);
-  assertQueryReturnsEmptyResult(params);
-
-  op = PlanBuilder()
-           .values({vector})
-           .unnest({"c0"}, {"c1", "c2"}, "ordinal")
-           .planNode();
-  params = makeCursorParameters(op);
-  assertQueryReturnsEmptyResult(params);
+  assertEmptyResults(
+      PlanBuilder().values({vector}).unnest({"c0"}, {"c1", "c2"}).planNode());
+  assertEmptyResults(
+      PlanBuilder()
+          .values({vector})
+          .unnest({"c0"}, {"c1", "c2"}, "ordinal")
+          .planNode());
 }
 
 TEST_P(UnnestTest, batchSize) {

@@ -77,17 +77,19 @@ bool mapKeyIsNotNull(const ScanSpec& mapSpec) {
 
 TEST_F(HiveConnectorTest, hiveConfig) {
   ASSERT_EQ(
-      HiveConfig::insertExistingPartitionsBehaviorString(
-          HiveConfig::InsertExistingPartitionsBehavior::kError),
+      HiveConfig::toName(HiveConfig::InsertExistingPartitionsBehavior::kError),
       "ERROR");
   ASSERT_EQ(
-      HiveConfig::insertExistingPartitionsBehaviorString(
+      HiveConfig::toName(
           HiveConfig::InsertExistingPartitionsBehavior::kOverwrite),
       "OVERWRITE");
   ASSERT_EQ(
-      HiveConfig::insertExistingPartitionsBehaviorString(
+      HiveConfig::toInsertExistingPartitionsBehavior("OVERWRITE"),
+      HiveConfig::InsertExistingPartitionsBehavior::kOverwrite);
+  VELOX_ASSERT_THROW(
+      HiveConfig::toName(
           static_cast<HiveConfig::InsertExistingPartitionsBehavior>(100)),
-      "UNKNOWN BEHAVIOR 100");
+      "Invalid enum value: 100");
 }
 
 TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMultilevel) {

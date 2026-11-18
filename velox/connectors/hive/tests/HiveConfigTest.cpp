@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/HiveConfig.h"
 #include "gtest/gtest.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/HiveConfigProvider.h"
 #include "velox/dwio/common/Options.h"
@@ -224,6 +225,25 @@ TEST(HiveConfigTest, overrideSession) {
   ASSERT_TRUE(hiveConfig.useColumnNames(session.get()));
   ASSERT_EQ(hiveConfig.nimbleFooterSpeculativeIoSize(session.get()), 2UL << 20);
   ASSERT_TRUE(hiveConfig.nimblePreserveDictionaryEncoding(session.get()));
+}
+
+// The session property names a behavior case-insensitively.
+TEST(HiveConfigTest, insertExistingPartitionsBehaviorSession) {
+  const HiveConfig hiveConfig(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()));
+  const auto behavior = [&](const std::string& value) {
+    const config::ConfigBase session(
+        std::unordered_map<std::string, std::string>{
+            {HiveConfig::kInsertExistingPartitionsBehaviorSession, value}});
+    return hiveConfig.insertExistingPartitionsBehavior(&session);
+  };
+  EXPECT_EQ(
+      behavior("overwrite"),
+      HiveConfig::InsertExistingPartitionsBehavior::kOverwrite);
+  VELOX_ASSERT_USER_THROW(
+      behavior("append"),
+      "Unsupported insert existing partitions behavior: append");
 }
 
 TEST(HiveConfigTest, maxTargetFileSizeConfigAndSessionKeys) {

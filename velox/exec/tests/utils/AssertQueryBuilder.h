@@ -245,6 +245,15 @@ class AssertQueryBuilder {
   std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
   readCursor();
 
+  // Creates a cursor for the query, applying configs and session properties.
+  std::unique_ptr<TaskCursor> createCursor();
+
+  // Runs the query of 'cursor', passing each output batch to 'onBatch' instead
+  // of collecting the batches.
+  void readCursor(
+      TaskCursor& cursor,
+      const std::function<void(const RowVectorPtr&)>& onBatch);
+
   static std::unique_ptr<folly::Executor> newExecutor() {
     return std::make_unique<folly::CPUThreadPoolExecutor>(
         folly::available_concurrency());

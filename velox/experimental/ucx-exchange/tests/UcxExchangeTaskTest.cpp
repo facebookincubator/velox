@@ -45,6 +45,7 @@
 #include "velox/exec/TaskStats.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -199,7 +200,7 @@ class TaskShuffleResults {
 };
 
 // The UCX round trip goes through the communicator's event loop, so allow well
-// over waitForTaskCompletion's 1s default.
+// over TaskMonitor::waitForCompletion's 1s default.
 constexpr uint64_t kTaskShuffleMaxWaitMicros = 60'000'000;
 
 // Cancels the Tasks a case started, and waits for their drivers to stop, when
@@ -447,14 +448,14 @@ std::vector<RowVectorPtr> runTaskShuffle(
   consumerTask->noMoreSplits(consumerNodeId);
 
   VELOX_CHECK(
-      exec::test::waitForTaskCompletion(
-          consumerTask.get(), kTaskShuffleMaxWaitMicros),
+      exec::test::TaskMonitor::waitForCompletion(
+          *consumerTask, kTaskShuffleMaxWaitMicros),
       "Consumer task did not complete for transport: {}",
       transportKind);
   for (const auto& task : producerTasks) {
     VELOX_CHECK(
-        exec::test::waitForTaskCompletion(
-            task.get(), kTaskShuffleMaxWaitMicros),
+        exec::test::TaskMonitor::waitForCompletion(
+            *task, kTaskShuffleMaxWaitMicros),
         "Producer task did not complete: {}",
         task->taskId());
   }
@@ -617,13 +618,13 @@ TEST_F(UcxExchangeTaskTest, zeroColumnPayloadKeepsItsRowCount) {
   consumerTask->noMoreSplits(exchangeNodeId);
 
   ASSERT_TRUE(
-      exec::test::waitForTaskCompletion(
-          consumerTask.get(), kTaskShuffleMaxWaitMicros))
+      exec::test::TaskMonitor::waitForCompletion(
+          *consumerTask, kTaskShuffleMaxWaitMicros))
       << "Consumer task did not complete";
   for (const auto& task : producerTasks) {
     ASSERT_TRUE(
-        exec::test::waitForTaskCompletion(
-            task.get(), kTaskShuffleMaxWaitMicros))
+        exec::test::TaskMonitor::waitForCompletion(
+            *task, kTaskShuffleMaxWaitMicros))
         << "Producer task did not complete: " << task->taskId();
   }
 
@@ -814,17 +815,17 @@ TEST_F(UcxExchangeTaskTest, mergeExchangeOverUcxNumbersOperatorsConsecutively) {
   drainTask->noMoreSplits(drainNodeId);
 
   ASSERT_TRUE(
-      exec::test::waitForTaskCompletion(
-          drainTask.get(), kTaskShuffleMaxWaitMicros))
+      exec::test::TaskMonitor::waitForCompletion(
+          *drainTask, kTaskShuffleMaxWaitMicros))
       << "Drain task did not complete";
   ASSERT_TRUE(
-      exec::test::waitForTaskCompletion(
-          sorterTask.get(), kTaskShuffleMaxWaitMicros))
+      exec::test::TaskMonitor::waitForCompletion(
+          *sorterTask, kTaskShuffleMaxWaitMicros))
       << "Sorter task did not complete";
   for (const auto& task : producerTasks) {
     ASSERT_TRUE(
-        exec::test::waitForTaskCompletion(
-            task.get(), kTaskShuffleMaxWaitMicros))
+        exec::test::TaskMonitor::waitForCompletion(
+            *task, kTaskShuffleMaxWaitMicros))
         << "Producer task did not complete: " << task->taskId();
   }
 

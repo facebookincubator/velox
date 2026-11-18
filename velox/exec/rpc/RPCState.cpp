@@ -97,8 +97,10 @@ void fulfillWaiters(std::vector<ContinuePromise>& waiters) {
 // Completion callbacks can safely classify protocol-level overload errors.
 // Function-specific payload interpretation remains on the driver thread.
 bool isHardOverload(const RPCResponse& response) {
-  return response.hasError() &&
-      velox::rpc::errorCategory(response.errorKind()) ==
+  // Only current backend observations justify backoff; replaying a materialized
+  // failure must not apply the original backoff again.
+  return response.isBackendOutcome() &&
+      velox::rpc::errorCategory(response.completionErrorKind()) ==
       velox::rpc::RPCErrorCategory::kOverload;
 }
 
