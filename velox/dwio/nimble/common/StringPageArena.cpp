@@ -26,7 +26,7 @@ StringPageArena::StringPageArena(
     velox::memory::MemoryPool* pool,
     size_t minPageBytes,
     std::span<char> inlinePage)
-    : pool_{pool}, minPageBytes_{minPageBytes} {
+    : pool_{pool}, minPageBytes_{minPageBytes}, scratch_{pool} {
   NIMBLE_CHECK_NOT_NULL(pool, "Memory pool must not be null.");
   NIMBLE_CHECK_GT(minPageBytes_, 0, "Minimum page size must be positive.");
   if (!inlinePage.empty()) {
@@ -41,10 +41,15 @@ StringPageArena::StringPageArena(
   }
 }
 
-StringPageArena::StringPageArena(PageFactory pageFactory, size_t minPageBytes)
+StringPageArena::StringPageArena(
+    velox::memory::MemoryPool* pool,
+    PageFactory pageFactory,
+    size_t minPageBytes)
     : pool_{nullptr},
       pageFactory_{std::move(pageFactory)},
-      minPageBytes_{minPageBytes} {
+      minPageBytes_{minPageBytes},
+      scratch_{pool} {
+  NIMBLE_CHECK_NOT_NULL(pool, "Memory pool must not be null.");
   NIMBLE_CHECK_GT(minPageBytes_, 0, "Minimum page size must be positive.");
 }
 
