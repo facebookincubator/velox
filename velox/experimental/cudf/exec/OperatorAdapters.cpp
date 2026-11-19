@@ -38,6 +38,7 @@
 #include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -226,6 +227,17 @@ class TableScanAdapter : public OperatorAdapter {
         tableScanNode->tableHandle()->connectorId(),
         planNode->id(),
         /*connectorPool=*/nullptr);
+
+    // The switch the connector reads, from the same place, so that a scan it
+    // reads on the CPU is not compiled as a GPU scan.
+    if (!facebook::velox::cudf_velox::cudfIsEnabled(*connectorQueryCtx)) {
+      LOG_FALLBACK(
+          "cuDF is turned off in the session properties of the TableScan's connector {}, PlanNode id: {}",
+          tableScanNode->tableHandle()->connectorId(),
+          planNode->id());
+      return false;
+    }
+
     if (const auto reason = facebook::velox::cudf_velox::connector::hive::
             CudfHiveDataSource::unsupportedReason(
                 tableScanNode->tableHandle(), *connectorQueryCtx)) {

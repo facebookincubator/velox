@@ -75,8 +75,10 @@ struct CudfConfig {
   /// Initialize from a map with the above keys.
   void initialize(std::unordered_map<std::string, std::string>&&);
 
-  /// Enable cudf by default.
-  /// Clients can disable here and enable it via the QueryConfig as well.
+  /// Enable cuDF by default. A query overrides it with the kCudfEnabled key,
+  /// which it has to set in both the QueryConfig and the connector session
+  /// properties of every catalog it reads; see 'cudf.enabled' in
+  /// docs/configs.rst for why, and for what setting only one of them does.
   bool enabled{true};
 
   /// Enable debug printing.

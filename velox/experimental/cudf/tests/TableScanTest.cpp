@@ -657,6 +657,101 @@ TEST_F(TableScanTest, dataSourceFollowsQueryCudfEnabled) {
       nullptr);
 }
 
+// A real scan is what puts the adapter's decision and the connector's in one
+// pipeline, so it is what catches them disagreeing; wasCudfScanUsed() asserts
+// they agree. See 'cudf.enabled' in docs/configs.rst for the two inputs.
+TEST_F(TableScanTest, scanFollowsQueryCudfEnabledEndToEnd) {
+  const auto rowType = ROW("c0", BIGINT());
+  const auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  const auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+
+  // 'sessionProperty' is what an engine copies into the catalog the scan
+  // reads, std::nullopt when it copies nothing.
+  const auto testScan = [&](bool processWideEnabled,
+                            bool queryConfigEnabled,
+                            std::optional<bool> sessionProperty,
+                            bool expectCudfScan) {
+    SCOPED_TRACE(
+        fmt::format(
+            "process-wide: {}, query config: {}, session property: {}",
+            processWideEnabled,
+            queryConfigEnabled,
+            sessionProperty.has_value() ? (*sessionProperty ? "true" : "false")
+                                        : "absent"));
+
+    auto& config = CudfConfig::getInstance();
+    const bool savedEnabled = config.enabled;
+    SCOPE_EXIT {
+      config.enabled = savedEnabled;
+    };
+    config.enabled = processWideEnabled;
+
+    const auto scanPlan = PlanBuilder(pool_.get())
+                              .startTableScan()
+                              .connectorId(kCudfHiveConnectorId)
+                              .outputType(rowType)
+                              .dataColumns(rowType)
+                              .assignments(assignments)
+                              .endTableScan()
+                              .planNode();
+
+    // A file no earlier scan read; see wasCudfScanUsed().
+    const auto filePath = TempFilePath::create();
+    writeToFile(filePath->getPath(), data);
+
+    AssertQueryBuilder builder(scanPlan);
+    builder.config(CudfConfig::kCudfEnabled, queryConfigEnabled);
+    if (sessionProperty.has_value()) {
+      builder.connectorSessionProperty(
+          kCudfHiveConnectorId,
+          CudfConfig::kCudfEnabled,
+          *sessionProperty ? "true" : "false");
+    }
+
+    std::shared_ptr<Task> task;
+    const auto actual = builder.splits(makeCudfHiveConnectorSplits({filePath}))
+                            .copyResults(pool(), task);
+
+    assertEqualResults({data}, {actual});
+    EXPECT_EQ(wasCudfScanUsed(task, scanPlan->id()), expectCudfScan);
+  };
+
+  // The baseline the other cases vary from: both inputs say the query may use
+  // the GPU.
+  testScan(
+      /*processWideEnabled=*/true,
+      /*queryConfigEnabled=*/true,
+      /*sessionProperty=*/true,
+      /*expectCudfScan=*/true);
+
+  // The catalog turns cuDF off for a query the adapter converts. The scan has
+  // to stay on the CPU, and the adapter has to know that.
+  testScan(
+      /*processWideEnabled=*/true,
+      /*queryConfigEnabled=*/true,
+      /*sessionProperty=*/false,
+      /*expectCudfScan=*/false);
+
+  // "Disable globally, enable per query", the setup CudfConfig::enabled
+  // documents. The engine copied nothing into the catalog, so the connector
+  // reads the process-wide default and leaves the scan on the CPU.
+  testScan(
+      /*processWideEnabled=*/false,
+      /*queryConfigEnabled=*/true,
+      /*sessionProperty=*/std::nullopt,
+      /*expectCudfScan=*/false);
+
+  // The query turned cuDF off and the engine copied that to the catalog. The
+  // whole pipeline is CPU, which is the case the connector gating added.
+  testScan(
+      /*processWideEnabled=*/true,
+      /*queryConfigEnabled=*/false,
+      /*sessionProperty=*/false,
+      /*expectCudfScan=*/false);
+}
+
 // Splits prepared in the background by the preloader must produce the same
 // results as splits prepared on the driver thread.
 TEST_F(TableScanTest, preloadSplits) {
@@ -1836,8 +1931,7 @@ TEST_F(TableScanTest, decimalFilterPushdown) {
           .add(
               "c1",
               common::createHugeintValues(
-                  {int128_t{200}, int128_t{700}},
-                  /*nullAllowed*/ false))
+                  {int128_t{200}, int128_t{700}}, /*nullAllowed*/ false))
           .build();
 
   auto tableHandle = makeTableHandle(

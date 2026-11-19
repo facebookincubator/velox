@@ -322,10 +322,17 @@ struct CudfDriverAdapter {
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
     const auto& queryConfig = driver.driverCtx()->queryConfig();
-    // A query that turns cuDF off stays on the CPU whatever
-    // kCudfAllowCpuFallback says. That switch decides what happens when a GPU
-    // conversion fails, not whether one is attempted, so letting it override
-    // the request would compile a plan the query asked to keep off the GPU.
+    // Checked on its own: kCudfAllowCpuFallback governs failed conversions
+    // only, not whether one is attempted.
+    //
+    // TODO: Returning here leaves the query on the CPU, but a connector whose
+    // catalog did not get the same value still hands out a GPU data source,
+    // and that only fails later, inside a CPU operator reading a CudfVector.
+    // Raise a named user error here instead. The test has to be the whole
+    // decision the connector makes, cudfIsEnabled() and isTypeSupportedByCudf()
+    // and CudfHiveDataSource::isSupported(): a scan the connector rejects for
+    // an unsupported type or filter reads on the CPU already, and failing it
+    // would reject a query that runs correctly today.
     if (!queryConfig.get<bool>(
             CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled)) {
       return false;
@@ -345,14 +352,11 @@ bool cudfIsRegistered() {
 }
 
 bool cudfIsEnabled(
-    const ::facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx) {
+    const ::facebook::velox::connector::ConnectorQueryCtx& connectorQueryCtx) {
   if (!cudfIsRegistered()) {
     return false;
   }
-  if (connectorQueryCtx == nullptr) {
-    return CudfConfig::getInstance().enabled;
-  }
-  return connectorQueryCtx->sessionProperties()->get<bool>(
+  return connectorQueryCtx.sessionProperties()->get<bool>(
       CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled);
 }
 

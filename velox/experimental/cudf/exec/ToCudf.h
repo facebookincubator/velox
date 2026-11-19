@@ -60,16 +60,13 @@ bool cudfIsRegistered();
 /// Returns true when the query behind 'connectorQueryCtx' may use cuDF: cuDF
 /// is registered in this process and the query did not turn it off through the
 /// 'cudf.enabled' (CudfConfig::kCudfEnabled) session property of the catalog
-/// being read. An absent value, which includes a null 'connectorQueryCtx',
-/// means the process-wide CudfConfig default.
+/// being read. An absent value means the process-wide CudfConfig default.
 ///
-/// A cuDF connector has to ask this before handing out a GPU data source,
-/// because the data source and the driver adapter must reach the same answer:
-/// a query the adapter leaves on the CPU cannot be fed CudfVectors. The two
-/// read the same switch, the adapter from the query config and the connector
-/// from the catalog's session properties, which is where the engine copies it
-/// to -- ConnectorQueryCtx has no access to the query config.
+/// Both a cuDF connector, before it hands out a GPU data source, and the table
+/// scan adapter, before it reports that scan as producing GPU output, have to
+/// ask this and get the same answer, or the scan and the operators after it
+/// disagree about where the query runs.
 bool cudfIsEnabled(
-    const ::facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx);
+    const ::facebook::velox::connector::ConnectorQueryCtx& connectorQueryCtx);
 
 } // namespace facebook::velox::cudf_velox

@@ -569,7 +569,7 @@ TEST_F(CudfIcebergReadTest, dataSourceFollowsQueryCudfEnabled) {
           kCudfIcebergConnectorId);
   ASSERT_NE(icebergConnector, nullptr);
 
-  auto rowType = ROW({"c0"}, {BIGINT()});
+  auto rowType = ROW("c0", BIGINT());
   auto tableHandle =
       std::make_shared<facebook::velox::connector::hive::HiveTableHandle>(
           kCudfIcebergConnectorId,

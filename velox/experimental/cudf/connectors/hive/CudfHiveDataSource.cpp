@@ -935,9 +935,12 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     cudfTable = std::make_unique<cudf::table>(std::move(outputColumns));
   }
 
-  // TODO (dm): Should we only enable table scan if cudf is registered?
-  // Earlier we could enable cudf table scans without using other cudf operators
-  // We still can, but I'm wondering if this is the right thing to do
+  // Only a cuDF connector constructs this data source, and only when
+  // cudfIsEnabled() held, so cuDF was registered when the scan started. The
+  // host branches below are reached only if unregisterCudf() runs while this
+  // scan does, which is not supported: it leaves the operators this driver
+  // was already compiled with, so they would be handed a host vector, and it
+  // resets memory resources the scan's stream is still using.
   RowVectorPtr output;
   if (cudfIsRegistered()) {
     output = std::make_shared<CudfVector>(
