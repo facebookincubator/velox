@@ -62,6 +62,7 @@
 #include <folly/synchronization/Baton.h>
 #include <folly/synchronization/Latch.h>
 
+#include <filesystem>
 #include <functional>
 
 using namespace facebook::velox;
@@ -178,6 +179,32 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
     writer.write(input);
     writer.close();
     return filePath;
+  }
+
+  // Returns splits of whole 'files', which a connector with split batching
+  // reads together when added with Task::addSplits().
+  static std::vector<std::shared_ptr<ConnectorSplit>> makeWholeFileSplits(
+      const std::vector<std::string>& files) {
+    std::vector<std::shared_ptr<ConnectorSplit>> splits;
+    for (const auto& file : files) {
+      splits.push_back(
+          hive::HiveConnectorSplitBuilder(file)
+              .connectorId(kCudfHiveConnectorId)
+              .fileFormat(dwio::common::FileFormat::PARQUET)
+              .build());
+    }
+    return splits;
+  }
+
+  // Resets the connector with split batching enabled.
+  void resetCudfHiveConnectorWithSplitBatching(bool useBufferedInput = true) {
+    using cudf_velox::connector::hive::CudfHiveConfig;
+    resetCudfHiveConnector(
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>{
+                {CudfHiveConfig::kUseBufferedInput,
+                 useBufferedInput ? "true" : "false"},
+                {CudfHiveConfig::kSplitBatching, "true"}}));
   }
 
   Split makeCudfHiveSplit(std::string path, int64_t splitWeight = 0) {
@@ -446,6 +473,156 @@ TEST_P(TableScanTestParameterized, ignoreMissingFiles) {
     EXPECT_EQ(stats.count("skippedSplits"), 0);
     EXPECT_EQ(stats.count("skippedSplitBytes"), 0);
     EXPECT_EQ(stats.at("processedSplits").sum, 2);
+  }
+}
+
+TEST_P(TableScanTestParameterized, splitBatch) {
+  using cudf_velox::connector::hive::CudfHiveDataSource;
+  resetCudfHiveConnectorWithSplitBatching(GetParam());
+  auto vectors = makeVectors(4, 100);
+  std::vector<std::string> files;
+  std::vector<std::shared_ptr<TempFilePath>> filePaths = makeFilePaths(4);
+  for (size_t i = 0; i < filePaths.size(); ++i) {
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
+    files.push_back(filePaths[i]->getPath());
+  }
+  createDuckDbTable(vectors);
+
+  // Keeps rows with c0 > 0, which prunes row groups by statistics.
+  auto filteredPlan =
+      PlanBuilder()
+          .startTableScan()
+          .outputType(rowType_)
+          .tableHandle(makeTableHandle(
+              "parquet_table",
+              rowType_,
+              SubfieldFiltersBuilder()
+                  .add(
+                      "c0",
+                      std::make_unique<common::BigintRange>(
+                          1, std::numeric_limits<int32_t>::max(), false))
+                  .build()))
+          .assignments(HiveConnectorTestBase::allRegularColumns(rowType_))
+          .endTableScan()
+          .planNode();
+
+  // One batch of all files, then two batches, the second preloaded.
+  for (const auto& [batchSize, preload] :
+       std::vector<std::pair<size_t, int32_t>>{{4, 0}, {2, 2}}) {
+    for (const auto& [plan, sql] :
+         std::vector<std::pair<PlanNodePtr, std::string>>{
+             {tableScanNode(), "SELECT * FROM tmp"},
+             {filteredPlan, "SELECT * FROM tmp WHERE c0 > 0"}}) {
+      SCOPED_TRACE(fmt::format("batchSize {} sql {}", batchSize, sql));
+      auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                      .maxDrivers(1)
+                      .config(QueryConfig::kMaxSplitPreloadPerDriver, preload)
+                      .splits(makeWholeFileSplits(files))
+                      .addSplitsInBatches(batchSize)
+                      .assertResults(sql);
+      const int64_t numBatches = files.size() / batchSize;
+      EXPECT_EQ(getTableScanStats(task).numSplits, numBatches);
+      EXPECT_EQ(
+          getTableScanRuntimeStat(
+              task, CudfHiveDataSource::kNumMultiFileReaders),
+          numBatches);
+      EXPECT_EQ(
+          getTableScanRuntimeStat(task, CudfHiveDataSource::kNumBatchedFiles),
+          files.size());
+      EXPECT_EQ(getTableScanRuntimeStat(task, "processedSplits"), 4);
+    }
+  }
+}
+
+TEST_F(TableScanTest, splitBatchFallbacks) {
+  using cudf_velox::connector::hive::CudfHiveConfig;
+  using cudf_velox::connector::hive::CudfHiveDataSource;
+  resetCudfHiveConnectorWithSplitBatching();
+  auto vectors = makeVectors(3, 100);
+  std::vector<std::string> files;
+  auto filePaths = makeFilePaths(3);
+  for (size_t i = 0; i < filePaths.size(); ++i) {
+    writeToFile(filePaths[i]->getPath(), vectors[i]);
+    files.push_back(filePaths[i]->getPath());
+  }
+  createDuckDbTable(vectors);
+
+  // The rows of the last file, in a file with an extra column.
+  auto extraColumnFile = TempFilePath::create();
+  auto extraColumns = vectors[2]->children();
+  extraColumns.push_back(
+      makeFlatVector<int64_t>(100, [](auto row) { return row; }));
+  auto names = rowType_->names();
+  names.push_back("extra");
+  writeToFile(extraColumnFile->getPath(), makeRowVector(names, extraColumns));
+
+  auto directory = TempDirectoryPath::create();
+  const auto missingFile = directory->getPath() + "/missing.parquet";
+
+  // Byte range of the last file that covers the whole file.
+  const auto lastFileSize = std::filesystem::file_size(files[2]);
+  const std::shared_ptr<ConnectorSplit> lastFileRange =
+      makeCudfHiveConnectorSplit(files[2], 0, lastFileSize);
+  // Byte range of the last file that does not cover the whole file, so the
+  // batch is read file by file.
+  const std::shared_ptr<ConnectorSplit> lastFilePart =
+      makeCudfHiveConnectorSplit(files[2], 0, lastFileSize - 1);
+
+  struct TestCase {
+    std::string name;
+    std::vector<std::shared_ptr<ConnectorSplit>> splits;
+    bool sessionSplitBatching;
+    int64_t numMultiFileReaders;
+    int64_t numBatchedFiles;
+  };
+  auto wholeFiles = makeWholeFileSplits({files[0], files[1]});
+  const auto withSplit = [&](std::shared_ptr<ConnectorSplit> split) {
+    auto splits = makeWholeFileSplits({files[0], files[1]});
+    splits.push_back(std::move(split));
+    return splits;
+  };
+  const std::vector<TestCase> testCases{
+      {"sessionDisabled", makeWholeFileSplits(files), false, 0, 0},
+      {"byteRange", withSplit(lastFileRange), true, 1, 3},
+      {"partialByteRange", withSplit(lastFilePart), true, 0, 0},
+      {"schemaMismatch",
+       withSplit(makeWholeFileSplits({extraColumnFile->getPath()})[0]),
+       true,
+       0,
+       0},
+      {"missingFile",
+       [&]() {
+         auto splits = makeWholeFileSplits({missingFile});
+         auto rest = makeWholeFileSplits(files);
+         splits.insert(splits.end(), rest.begin(), rest.end());
+         return splits;
+       }(),
+       true,
+       1,
+       3},
+  };
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.name);
+    auto task = AssertQueryBuilder(tableScanNode(), duckDbQueryRunner_)
+                    .connectorSessionProperty(
+                        kCudfHiveConnectorId,
+                        CudfHiveConfig::kSplitBatchingSession,
+                        testCase.sessionSplitBatching ? "true" : "false")
+                    .connectorSessionProperty(
+                        kCudfHiveConnectorId,
+                        hive::HiveConfig::kIgnoreMissingFilesSession,
+                        "true")
+                    .splits(testCase.splits)
+                    .addSplitsInBatches(testCase.splits.size())
+                    .assertResults("SELECT * FROM tmp");
+    EXPECT_EQ(getTableScanStats(task).numSplits, 1);
+    EXPECT_EQ(
+        getTableScanRuntimeStat(task, CudfHiveDataSource::kNumMultiFileReaders),
+        testCase.numMultiFileReaders);
+    EXPECT_EQ(
+        getTableScanRuntimeStat(task, CudfHiveDataSource::kNumBatchedFiles),
+        testCase.numBatchedFiles);
+    EXPECT_EQ(getTableScanRuntimeStat(task, "processedSplits"), 3);
   }
 }
 

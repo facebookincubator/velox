@@ -640,11 +640,12 @@ std::unique_ptr<CudfSplitReader> CudfHiveDataSource::createCudfSplitReader() {
       subfieldFilterAst_);
 }
 
-void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
+std::shared_ptr<CudfHiveConnectorSplit> CudfHiveDataSource::toCudfHiveSplit(
+    const std::shared_ptr<ConnectorSplit>& split) {
   // Dynamic cast split to `CudfHiveConnectorSplit`
-  if (std::dynamic_pointer_cast<CudfHiveConnectorSplit>(split)) {
-    split_ = std::dynamic_pointer_cast<CudfHiveConnectorSplit>(split);
-    return;
+  if (auto cudfSplit =
+          std::dynamic_pointer_cast<CudfHiveConnectorSplit>(split)) {
+    return cudfSplit;
   }
 
   // Convert `HiveConnectorSplit` to `CudfHiveConnectorSplit`
@@ -680,23 +681,100 @@ void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
   if (hiveSplit->properties.has_value()) {
     cudfHiveSplitBuilder.fileProperties(hiveSplit->properties.value());
   }
-  split_ = cudfHiveSplitBuilder.build();
+  return cudfHiveSplitBuilder.build();
+}
 
+void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
+  split_ = toCudfHiveSplit(split);
   VLOG(1) << "Adding split " << split_->toString();
 }
 
 void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   ensureCudaContextForThread();
+  const bool isPreloadedSplit = split->dataSource != nullptr;
+  prepareSplits({std::move(split)}, isPreloadedSplit);
+}
+
+void CudfHiveDataSource::addSplits(
+    const std::vector<std::shared_ptr<ConnectorSplit>>& splits) {
+  VELOX_CHECK(!splits.empty(), "Split batch must not be empty");
+  ensureCudaContextForThread();
+
+  // Gather the splits read together. The others are read one by one.
+  std::vector<std::shared_ptr<ConnectorSplit>> batch;
+  std::optional<std::unordered_map<std::string, std::optional<std::string>>>
+      batchPartitionKeys;
+  const bool splitBatching = cudfHiveConfig_->splitBatchingSession(
+      connectorQueryCtx_->sessionProperties());
+  for (const auto& split : splits) {
+    if (splitBatching) {
+      const auto cudfSplit = toCudfHiveSplit(split);
+      if (canBatch(*split, *cudfSplit) &&
+          batchPartitionKeys.value_or(cudfSplit->partitionKeys) ==
+              cudfSplit->partitionKeys) {
+        batchPartitionKeys = cudfSplit->partitionKeys;
+        batch.push_back(split);
+        continue;
+      }
+    }
+    pendingSplits_.push_back(split);
+  }
+  if (batch.size() == 1) {
+    pendingSplits_.push_front(std::move(batch.front()));
+    batch.clear();
+  }
+  if (batch.empty()) {
+    batch.push_back(std::move(pendingSplits_.front()));
+    pendingSplits_.pop_front();
+  }
+  prepareSplits(std::move(batch), /*isPreloadedSplit=*/false);
+}
+
+bool CudfHiveDataSource::canBatch(
+    const ConnectorSplit& /*split*/,
+    const CudfHiveConnectorSplit& cudfSplit) const {
+  // Whether the split covers its whole file is known once the file is open.
+  if (cudfSplit.fileFormat != dwio::common::FileFormat::PARQUET ||
+      cudfSplit.start != 0) {
+    return false;
+  }
+  // A known file size the split does not cover rules out the whole file.
+  const auto fileSize = cudfSplit.fileSize();
+  return !fileSize.has_value() ||
+      cudfSplit.length >= static_cast<uint64_t>(*fileSize);
+}
+
+void CudfHiveDataSource::prepareSplits(
+    std::vector<std::shared_ptr<ConnectorSplit>> splits,
+    bool isPreloadedSplit) {
   // Virtual method for class-specific conversion of the split
-  convertSplit(split);
+  convertSplit(splits.front());
   partitionKeyScalars_.clear();
+
+  // The batch shares the partition key values of its first split.
+  std::vector<std::shared_ptr<CudfHiveConnectorSplit>> batch;
+  if (splits.size() > 1) {
+    batch.reserve(splits.size());
+    batch.push_back(split_);
+    for (size_t i = 1; i < splits.size(); ++i) {
+      batch.push_back(toCudfHiveSplit(splits[i]));
+    }
+  }
+  const auto recordSkippedSplits = [&]() {
+    if (batch.empty()) {
+      recordSkippedSplit(*split_);
+    }
+    for (const auto& split : batch) {
+      recordSkippedSplit(*split);
+    }
+  };
 
   // A partition key filter the split fails rejects every row of it, so open
   // nothing.
   splitSkipped_ = !partitionKeyFiltersAcceptSplit();
   if (splitSkipped_) {
     cudfSplitReader_.reset();
-    recordSkippedSplit();
+    recordSkippedSplits();
     return;
   }
 
@@ -704,8 +782,29 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   // No row of the split can pass the filter, so open nothing.
   if (remainingFilterRejectsAllRows_) {
-    recordSkippedSplit();
+    recordSkippedSplits();
     return;
+  }
+
+  if (!batch.empty()) {
+    cudfSplitReader_->setBatchSplits(std::move(batch));
+    // A multi-file reader reads whole files of one schema, and the pushdown
+    // filter is built from the schema of the first. Read the files one by one
+    // otherwise.
+    if (!cudfSplitReader_->canReadSplitsTogether()) {
+      cudfSplitReader_.reset();
+      pendingSplits_.insert(
+          pendingSplits_.begin(),
+          std::make_move_iterator(splits.begin() + 1),
+          std::make_move_iterator(splits.end()));
+      splits.resize(1);
+      prepareSplits(std::move(splits), isPreloadedSplit);
+      return;
+    }
+    if (!cudfSplitReader_->emptySplit()) {
+      ++numMultiFileReaders_;
+      numBatchedFiles_ += cudfSplitReader_->splits().size();
+    }
   }
 
   // An empty split has no footer to build the filter from.
@@ -744,16 +843,22 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   // Check if preloaded splits should start pre-fetching the first pass of
   // column chunks.
-  const bool isPreloadedSplit = split->dataSource != nullptr;
   if (isPreloadedSplit &&
       cudfHiveConfig_->preloadColumnChunksSession(
           connectorQueryCtx_->sessionProperties())) {
     cudfSplitReader_->startColumnChunkFetch();
   }
 
+  for (const auto& split : cudfSplitReader_->splits()) {
+    addCompletedBytes(*split);
+  }
+}
+
+void CudfHiveDataSource::addCompletedBytes(
+    const CudfHiveConnectorSplit& split) {
   // TODO: `completedBytes_` should be updated in `next()` as we read more and
   // more table bytes
-  if (const auto fileSize = split_->fileSize()) {
+  if (const auto fileSize = split.fileSize()) {
     completedBytes_ += static_cast<size_t>(*fileSize);
     return;
   }
@@ -761,7 +866,7 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   // open costs a HEAD request.
   try {
     const auto fileHandleKey = FileHandleKey{
-        .filename = split_->filePath,
+        .filename = split.filePath,
         .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
     auto fileProperties = FileProperties{};
     auto const fileHandleCachePtr = fileHandleFactory_->generate(
@@ -771,7 +876,7 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     }
   } catch (const std::exception& e) {
     // Unable to get the file size, log a warning and continue
-    LOG(WARNING) << "Failed to get file size for " << split_->filePath << ": "
+    LOG(WARNING) << "Failed to get file size for " << split.filePath << ": "
                  << e.what();
   }
 }
@@ -782,6 +887,9 @@ void CudfHiveDataSource::setFromDataSource(std::unique_ptr<DataSource> source) {
 
   split_ = std::move(preparedSource->split_);
   splitSkipped_ = preparedSource->splitSkipped_;
+  pendingSplits_ = std::move(preparedSource->pendingSplits_);
+  numMultiFileReaders_ += preparedSource->numMultiFileReaders_;
+  numBatchedFiles_ += preparedSource->numBatchedFiles_;
   runtimeStats_.skippedSplits += preparedSource->runtimeStats_.skippedSplits;
   runtimeStats_.processedSplits +=
       preparedSource->runtimeStats_.processedSplits;
@@ -831,19 +939,27 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     uint64_t size,
     velox::ContinueFuture& /* future */) {
   VELOX_CHECK_NOT_NULL(split_, "No split present. Call addSplit() first.");
-  if (splitSkipped_) {
-    return nullptr;
-  }
-  VELOX_CHECK_NOT_NULL(cudfSplitReader_, "No split to process.");
-  if (remainingFilterRejectsAllRows_ or cudfSplitReader_->emptySplit()) {
-    cudfSplitReader_->resetSplit();
-    return nullptr;
-  }
-  ensureCudaContextForThread();
-  auto chunkOpt = cudfSplitReader_->next(size);
-  if (!chunkOpt.has_value()) {
-    cudfSplitReader_->resetSplit();
-    return nullptr;
+  std::optional<CudfSplitReader::TableChunk> chunkOpt;
+  // Move on to the next split of a batch until one returns a chunk.
+  while (true) {
+    if (!splitSkipped_) {
+      VELOX_CHECK_NOT_NULL(cudfSplitReader_, "No split to process.");
+      if (!remainingFilterRejectsAllRows_ and !cudfSplitReader_->emptySplit()) {
+        ensureCudaContextForThread();
+        chunkOpt = cudfSplitReader_->next(size);
+        if (chunkOpt.has_value()) {
+          break;
+        }
+      }
+      cudfSplitReader_->resetSplit();
+    }
+    if (pendingSplits_.empty()) {
+      return nullptr;
+    }
+    ensureCudaContextForThread();
+    auto split = std::move(pendingSplits_.front());
+    pendingSplits_.pop_front();
+    prepareSplits({std::move(split)}, /*isPreloadedSplit=*/false);
   }
   auto nRows = chunkOpt.value().numRows;
   auto cudfTable = std::move(chunkOpt.value().table);
@@ -980,6 +1096,12 @@ CudfHiveDataSource::getRuntimeStats() {
            totalRemainingFilterTime_.load(std::memory_order_relaxed),
            RuntimeCounter::Unit::kNanos)},
   });
+  if (numMultiFileReaders_ > 0) {
+    result.emplace(
+        std::string(kNumMultiFileReaders), RuntimeMetric(numMultiFileReaders_));
+    result.emplace(
+        std::string(kNumBatchedFiles), RuntimeMetric(numBatchedFiles_));
+  }
   const auto& ioStats = ioStats_->stats();
   for (const auto& [key, value] : ioStats) {
     // Keep the ReadFile-layer value under the established key.
@@ -1086,12 +1208,13 @@ CudfHiveDataSource::makePartitionKeyColumns(
   return columns;
 }
 
-void CudfHiveDataSource::recordSkippedSplit() {
+void CudfHiveDataSource::recordSkippedSplit(
+    const CudfHiveConnectorSplit& split) {
   runtimeStats_.skippedSplits++;
   // An unbounded length means the whole file, whose size the split does not
   // carry, so it contributes no byte count.
-  if (split_->length != std::numeric_limits<uint64_t>::max()) {
-    runtimeStats_.skippedSplitBytes += static_cast<int64_t>(split_->length);
+  if (split.length != std::numeric_limits<uint64_t>::max()) {
+    runtimeStats_.skippedSplitBytes += static_cast<int64_t>(split.length);
   }
 }
 

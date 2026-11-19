@@ -85,6 +85,23 @@ class CudfSplitReader : public NvtxHelper {
 
   virtual ~CudfSplitReader();
 
+  /// Makes the reader read the files of 'splits' together, the split it was
+  /// created with first, with one multi-file reader. Must be called before
+  /// the footers are read. Check canReadSplitsTogether() before reading.
+  void setBatchSplits(
+      std::vector<std::shared_ptr<CudfHiveConnectorSplit>> splits);
+
+  /// Returns the splits the reader reads: the batch set by setBatchSplits()
+  /// less the files an ignored missing file drops, else the split it was
+  /// created with.
+  std::span<const std::shared_ptr<CudfHiveConnectorSplit>> splits() const;
+
+  /// Returns whether the splits cover their whole files and the Parquet
+  /// footers of the files have the same schema, as reading them with one
+  /// multi-file reader requires. Opens the files and reads the footers if not
+  /// yet done.
+  bool canReadSplitsTogether();
+
   /// Reads and returns the Parquet file metadatas, cached until prepareSplit()
   /// hands them to the cuDF reader. Returns no metadata when the split is
   /// empty.
@@ -158,15 +175,24 @@ class CudfSplitReader : public NvtxHelper {
   // row-index column is not part of the logical read schema.
   virtual std::optional<TableChunk> readNextChunk();
 
-  // Setup the cuDF data source. Marks the split empty when its missing data
-  // file is ignored.
+  // Setup the cuDF data sources. Marks the split empty when its missing data
+  // file is ignored. Drops an ignored missing file of a batch from the batch.
   void setupCudfDataSource();
+
+  // Opens a cuDF data source for the file of 'split'. Returns nullptr when the
+  // file is missing and ignored.
+  std::shared_ptr<cudf::io::datasource> openDataSource(
+      const CudfHiveConnectorSplit& split);
+
+  // Reads the footer of each data source on its own, dropping the files found
+  // missing, which must be ignored.
+  void readFootersDroppingMissingFiles();
 
   // Returns whether the session ignores missing files.
   bool ignoreMissingFiles() const;
 
-  // Marks the split empty after an ignored missing data file, dropping its
-  // data source and footer metadata.
+  // Marks the split empty after ignored missing data files, dropping the data
+  // sources and footer metadata.
   void markSplitEmpty();
 
   // Create the parquet reader and select the row group passes to read.
@@ -176,7 +202,8 @@ class CudfSplitReader : public NvtxHelper {
   // `splitRowCount_` from the Parquet footer.
   void cacheSchemaFromMetadata();
 
-  // Returns the {start row, row count} covered by the split.
+  // Returns the {start row, row count} covered by the split. A batch covers
+  // all rows of its files.
   std::pair<std::size_t, std::size_t> computeSplitRowRange() const;
 
   // Return the logical subfield filter AST used after reading.
@@ -271,8 +298,13 @@ class CudfSplitReader : public NvtxHelper {
   std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
   memory::MemoryPool* pool_;
 
-  // cuDF split reader stuff.
-  std::shared_ptr<cudf::io::datasource> dataSource_;
+  // Splits of the files read together, the first being 'split_'. Empty when
+  // reading 'split_' alone.
+  std::vector<std::shared_ptr<CudfHiveConnectorSplit>> batchSplits_;
+
+  // cuDF split reader stuff. One data source per file read, in 'splits()'
+  // order.
+  std::vector<std::shared_ptr<cudf::io::datasource>> dataSources_;
   cudf::io::parquet_reader_options readerOptions_;
   CudfParquetReaderPtr splitReader_;
 

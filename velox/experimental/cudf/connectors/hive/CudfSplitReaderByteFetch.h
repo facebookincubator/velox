@@ -27,6 +27,7 @@
 
 #include <future>
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace facebook::velox::cudf_velox::connector::hive {
@@ -55,12 +56,25 @@ ByteRangeFetch fetchByteRangesAsync(
     cuda::stream_ref stream,
     cudf::memory_resources mr);
 
-// Reads page-index ranges into host buffers and returns them with their views.
+// Starts cuDF's asynchronous fetch of byte ranges spread over 'dataSources'.
+// 'sourceIndices' holds the data source of each range. The fetch's data
+// follows the order of 'byteRanges'. Wait for the returned fetch before using
+// its data.
+ByteRangeFetch fetchByteRangesAsync(
+    std::span<const std::shared_ptr<cudf::io::datasource>> dataSources,
+    cudf::host_span<const cudf::io::text::byte_range_info> byteRanges,
+    cudf::host_span<const cudf::size_type> sourceIndices,
+    bool serializeSubmissions,
+    cuda::stream_ref stream,
+    cudf::memory_resources mr);
+
+// Reads the page-index range of each data source into host buffers and
+// returns them with their views, one per data source.
 std::pair<
     std::vector<std::unique_ptr<cudf::io::datasource::buffer>>,
     std::vector<cudf::host_span<const uint8_t>>>
 fetchPageIndexes(
-    const std::shared_ptr<cudf::io::datasource>& dataSource,
+    std::span<const std::shared_ptr<cudf::io::datasource>> dataSources,
     cudf::host_span<const cudf::io::text::byte_range_info> pageIndexByteRanges);
 
 } // namespace facebook::velox::cudf_velox::connector::hive

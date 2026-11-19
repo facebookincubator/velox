@@ -24,6 +24,8 @@
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 
+#include <algorithm>
+
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
 namespace velox_connector = ::facebook::velox::connector;
@@ -81,6 +83,21 @@ void CudfIcebergDataSource::convertSplit(
 
   // Convert `ConnectorSplit` to `CudfHiveConnectorSplit`
   CudfHiveDataSource::convertSplit(split);
+}
+
+bool CudfIcebergDataSource::canBatch(
+    const velox_connector::ConnectorSplit& split,
+    const CudfHiveConnectorSplit& cudfSplit) const {
+  if (!CudfHiveDataSource::canBatch(split, cudfSplit)) {
+    return false;
+  }
+  const auto* icebergSplit = split.asChecked<velox_iceberg::HiveIcebergSplit>();
+  return icebergSplit->deleteFiles.empty() &&
+      icebergSplit->partitionKeys.empty() &&
+      icebergSplit->identityPartitionKeys.empty() &&
+      std::ranges::none_of(readColumnNames_, [&](const auto& name) {
+           return cudfSplit.infoColumns.contains(name);
+         });
 }
 
 void CudfIcebergDataSource::setFromDataSource(

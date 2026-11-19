@@ -59,6 +59,10 @@ class CudfIcebergConnector final
     return true;
   }
 
+  bool supportsSplitBatch() const override {
+    return cudfHiveConfig_->splitBatching();
+  }
+
  private:
   const std::shared_ptr<CudfHiveConfig> cudfHiveConfig_;
   const std::shared_ptr<velox::connector::hive::iceberg::IcebergConfig>

@@ -307,6 +307,12 @@ class Task : public std::enable_shared_from_this<Task> {
       const core::PlanNodeId& planNodeId,
       long maxSequenceId);
 
+  /// Returns the max split sequence id set by setMaxSplitSequenceId(), or the
+  /// lowest long when none is set or the Task is not running. Callers that
+  /// use it to drop splits sent again before addSplits() must serialize it
+  /// with setMaxSplitSequenceId() and addSplits().
+  long maxSplitSequenceId(const core::PlanNodeId& planNodeId) const;
+
   /// Adds split for a source operator corresponding to plan node with
   /// specified ID.
   /// It requires sequential id of the split and, when that id is NOT greater
@@ -332,6 +338,16 @@ class Task : public std::enable_shared_from_this<Task> {
   /// as in addSplitWithSequence(). Throws if 'split' has neither a connector
   /// split nor a barrier.
   void addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split);
+
+  /// Adds 'splits' for the table scan with the specified plan node ID as one
+  /// connector::ConnectorSplitBatch when there are several, its connector
+  /// supports split batches, and the splits all have connector splits of that
+  /// connector with the same batch size hint, no group and no barrier. The
+  /// batch counts as one split in the Task stats. Otherwise adds the splits
+  /// one by one as addSplit() does. Does nothing if 'splits' is empty.
+  void addSplits(
+      const core::PlanNodeId& planNodeId,
+      std::vector<exec::Split>&& splits);
 
   /// We mark that for the given group there would be no more splits coming.
   void noMoreSplitsForGroup(
@@ -1254,6 +1270,11 @@ class Task : public std::enable_shared_from_this<Task> {
   void onTaskCompletion();
 
   void onAddSplit(const core::PlanNodeId& planNodeId, const exec::Split& split);
+
+  // Returns whether addSplits() adds 'splits' as one split batch.
+  bool shouldBatchSplits(
+      const core::PlanNodeId& planNodeId,
+      const std::vector<exec::Split>& splits) const;
 
   // Returns true if all splits are finished processing and there are no more
   // splits coming for the task.

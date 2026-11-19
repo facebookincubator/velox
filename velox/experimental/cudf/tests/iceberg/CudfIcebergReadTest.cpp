@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfDeletionVectorTestUtils.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfIcebergTestBase.h"
@@ -26,6 +27,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/common/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -676,6 +678,76 @@ TEST_F(CudfIcebergReadTest, multipleSplits) {
                   .planNode();
 
   assertQuery(plan, allSplits, "SELECT * FROM tmp", 0);
+}
+
+/// Reads data files together with one multi-file reader when the connector
+/// takes split batches. A file with deletes is read on its own.
+TEST_F(CudfIcebergReadTest, splitBatch) {
+  using facebook::velox::cudf_velox::connector::hive::CudfHiveConfig;
+  using facebook::velox::cudf_velox::connector::hive::CudfHiveDataSource;
+  facebook::velox::connector::ConnectorRegistry::global().erase(
+      kCudfIcebergConnectorId);
+  facebook::velox::connector::ConnectorRegistry::global().insert(
+      kCudfIcebergConnectorId,
+      cudf_velox::connector::hive::iceberg::CudfIcebergConnectorFactory()
+          .newConnector(
+              kCudfIcebergConnectorId,
+              std::make_shared<facebook::velox::config::ConfigBase>(
+                  std::unordered_map<std::string, std::string>{
+                      {CudfHiveConfig::kSplitBatching, "true"}}),
+              ioExecutor_.get()));
+
+  std::vector<RowVectorPtr> data;
+  std::vector<std::shared_ptr<TempFilePath>> files;
+  for (int64_t i = 0; i < 3; ++i) {
+    data.push_back(makeRowVector(
+        {makeFlatVector<int64_t>({3 * i, 3 * i + 1, 3 * i + 2})}));
+    files.push_back(TempFilePath::create());
+    writeToFile(files.back()->getPath(), data.back());
+  }
+  createDuckDbTable(data);
+
+  // Deletes the row with c0 = 8 from the last file.
+  auto deleteFile = TempFilePath::create();
+  writeDeleteFile(
+      DeleteFileFormat::PARQUET,
+      deleteFile->getPath(),
+      {makeRowVector({"c0"}, {makeFlatVector<int64_t>({8})})});
+  const IcebergDeleteFile equalityDelete(
+      FileContent::kEqualityDeletes,
+      deleteFile->getPath(),
+      dwio::common::FileFormat::PARQUET,
+      1,
+      getFileSize(deleteFile->getPath()),
+      /*equalityFieldIds=*/{1});
+
+  for (const bool withDeletes : {false, true}) {
+    SCOPED_TRACE(fmt::format("withDeletes {}", withDeletes));
+    std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
+        splits;
+    for (size_t i = 0; i < files.size(); ++i) {
+      const auto fileSplits = makeIcebergSplits(
+          files[i]->getPath(),
+          withDeletes && i == files.size() - 1
+              ? std::vector<IcebergDeleteFile>{equalityDelete}
+              : std::vector<IcebergDeleteFile>{});
+      splits.insert(splits.end(), fileSplits.begin(), fileSplits.end());
+    }
+    const auto plan = makeTableScanPlan(ROW({"c0"}, {BIGINT()}));
+    auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                    .splits(splits)
+                    .addSplitsInBatches(splits.size())
+                    .assertResults(
+                        withDeletes ? "SELECT * FROM tmp WHERE c0 <> 8"
+                                    : "SELECT * FROM tmp");
+    const auto stats =
+        toPlanStats(task->taskStats()).at(plan->id()).customStats;
+    EXPECT_EQ(
+        stats.at(std::string(CudfHiveDataSource::kNumMultiFileReaders)).sum, 1);
+    EXPECT_EQ(
+        stats.at(std::string(CudfHiveDataSource::kNumBatchedFiles)).sum,
+        withDeletes ? 2 : 3);
+  }
 }
 
 /// Read a single data file as multiple byte-range sub-splits with no deletes
