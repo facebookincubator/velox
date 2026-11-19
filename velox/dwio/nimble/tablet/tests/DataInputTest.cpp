@@ -128,7 +128,6 @@ class DataInputTest : public ::testing::Test {
     velox::IoUringReader::setOptions({
         .submissionQueueDepth = 8,
         .completionQueueDepth = 8,
-        .registeredFileSlots = 8,
     });
     pool_ = velox::memory::memoryManager()->addLeafPool("DataInputTest");
     ioStats_ = std::make_shared<velox::io::IoStatistics>();
