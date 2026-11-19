@@ -75,18 +75,10 @@ void UcxPartitionedOutputMock::publishDataChunks() {
       // the data through the queue and synchronize on the event before calling
       // into UCXX.
       stream.sync();
-      // removeTask() wakes blocked producers and leaves no queue behind, so a
-      // producer of a removed task stops here, as the drivers of an aborted
-      // task stop feeding UcxPartitionedOutput.
-      if (!taskHasQueue()) {
-        return;
-      }
       queueManager_->enqueue(
           taskId_, partition, std::move(packedCols), numRowsPerChunk_);
-      // Honor the queue's backpressure as UcxPartitionedOutput does: once the
-      // task's queued bytes reach its maxOutputBufferSize, wait until the
-      // consumers have drained it before producing the next chunk. Without
-      // this every chunk of every producer is resident at once.
+      // Blocks while the task's queue is over capacity, as UcxPartitionedOutput
+      // does after a flush.
       ContinueFuture future;
       if (queueManager_->checkBlocked(taskId_, &future)) {
         future.wait();
@@ -94,13 +86,7 @@ void UcxPartitionedOutputMock::publishDataChunks() {
     }
   }
   // tell the queue manager that we are done.
-  if (taskHasQueue()) {
-    queueManager_->noMoreData(taskId_);
-  }
-}
-
-bool UcxPartitionedOutputMock::taskHasQueue() const {
-  return queueManager_->stats(taskId_).has_value();
+  queueManager_->noMoreData(taskId_);
 }
 
 } // namespace facebook::velox::ucx_exchange

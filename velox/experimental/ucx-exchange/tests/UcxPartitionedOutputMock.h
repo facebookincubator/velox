@@ -26,6 +26,13 @@ namespace facebook::velox::ucx_exchange {
 /// capacity, so the data a test keeps on the GPU at once is bounded by the
 /// task's maxOutputBufferSize rather than by the data it sends.
 /// The operators run in separate threads, one thread per driver.
+///
+/// A test that sends more than maxOutputBufferSize needs a consumer draining
+/// the queue while the operators run: joinThreads() returns only once every
+/// operator has enqueued all its data. The task must stay running and
+/// registered with the queue manager until then. The operators do not expect
+/// an aborted or removed task, and enqueueing into one throws on their
+/// threads.
 class UcxPartitionedOutputMock {
  public:
   UcxPartitionedOutputMock(
@@ -47,10 +54,6 @@ class UcxPartitionedOutputMock {
   // creates numPartitions_ x numDataChunks_ data chunks and
   // pushes it into the destination queues identified by the taskId.
   void publishDataChunks();
-
-  // Whether the queue manager still has a queue for the task; removeTask()
-  // drops it.
-  bool taskHasQueue() const;
 
   const std::shared_ptr<UcxOutputQueueManager> queueManager_;
   const std::string taskId_;

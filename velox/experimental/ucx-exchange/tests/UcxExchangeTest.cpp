@@ -1472,8 +1472,10 @@ TEST_F(UcxExchangeFocusedTest, deferredRequestCleanupOnTaskAbort) {
   sourceMock->run();
   sinkDriver->run();
 
-  // 4. Wait for UCXX transfers to be actively in-flight.
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  // 4. The sink drains while the mock runs, so joining leaves up to the
+  //    queue's capacity queued with its UCXX transfers in flight. The mock
+  //    must be done before the abort: it cannot enqueue into an aborted task.
+  sourceMock->joinThreads();
 
   // 5. Abort the source task while transfers are in-flight.
   //    This triggers UcxExchangeServer::close() which cancels tagSend,
@@ -1495,10 +1497,7 @@ TEST_F(UcxExchangeFocusedTest, deferredRequestCleanupOnTaskAbort) {
            << " — possible hang in UCXX request cleanup";
   }
 
-  // 7. Join source mock threads.
-  sourceMock->joinThreads();
-
-  // 8. Allow Communicator's event loop to sweep deferred requests.
+  // 7. Allow Communicator's event loop to sweep deferred requests.
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
   // If we reach here without crashing, the deferred cleanup is working.

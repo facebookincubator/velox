@@ -22,7 +22,10 @@
 #include <folly/synchronization/EventCount.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
+#include <chrono>
+#include <future>
 #include <memory>
+#include <thread>
 #include <type_traits>
 #include <vector>
 #include "velox/common/memory/MemoryPool.h"
@@ -31,6 +34,7 @@
 #include "velox/exec/OutputTransportRegistry.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeRegistration.h"
+#include "velox/experimental/ucx-exchange/tests/UcxPartitionedOutputMock.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestHelpers.h"
 
 using namespace facebook::velox::ucx_exchange;
@@ -601,6 +605,68 @@ TEST_F(UcxOutputQueueManagerTest, multiFetchers) {
     }
     queueManager_->removeTask(taskId);
   }
+}
+
+// UcxPartitionedOutputMock waits while the queue is over capacity, as
+// UcxPartitionedOutput does. A task then keeps at most its capacity plus one
+// chunk per driver queued, however much the mock has left to send, which is
+// what bounds the GPU memory of the exchange tests.
+TEST_F(UcxOutputQueueManagerTest, mockProducersWaitOverCapacity) {
+  const std::string taskId = "mockBackpressure";
+  const int numDrivers = 4;
+  const int numPartitions = 1;
+  const int numChunks = 100;
+  const vector_size_t numRowsPerChunk = 10'000;
+  // Chunks of the same number of rows have the same size.
+  const int64_t chunkBytes =
+      makePackedColumns(numRowsPerChunk)->gpu_data->size();
+  const int64_t capacity = 4 * chunkBytes;
+  initializeTask(
+      taskId,
+      numPartitions,
+      numDrivers,
+      true,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      capacity);
+
+  UcxPartitionedOutputMock mock(
+      taskId, numDrivers, numPartitions, numChunks, numRowsPerChunk);
+  mock.run();
+
+  // Without a consumer the producers fill the queue and wait. The queue stops
+  // growing then; without the wait it would stop growing only once it holds
+  // every chunk.
+  int64_t bufferedBytes = 0;
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (true) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    const auto current = queueManager_->stats(taskId)->bufferedBytes;
+    if (current >= capacity && current == bufferedBytes) {
+      break;
+    }
+    bufferedBytes = current;
+    if (std::chrono::steady_clock::now() > deadline) {
+      ADD_FAILURE() << "The queue did not reach its capacity";
+      break;
+    }
+  }
+  const auto stats = queueManager_->stats(taskId);
+  EXPECT_LE(stats->bufferedBytes, capacity + numDrivers * chunkBytes);
+  EXPECT_LT(stats->totalPagesSent, numDrivers * numChunks);
+  EXPECT_FALSE(stats->noMoreData);
+
+  // A consumer that drains the queue lets the producers finish.
+  int64_t fetchedChunks = 0;
+  std::thread consumer([&]() { dataFetcher(taskId, 0, fetchedChunks, false); });
+  auto joined = std::async(std::launch::async, [&]() { mock.joinThreads(); });
+  EXPECT_EQ(
+      joined.wait_for(std::chrono::seconds(60)), std::future_status::ready)
+      << "The producers did not finish while the queue was drained";
+  joined.wait();
+  consumer.join();
+  EXPECT_EQ(fetchedChunks, numDrivers * numChunks);
+  queueManager_->removeTask(taskId);
 }
 
 // Test BUG B scenario (a): Producer never starts / never calls
