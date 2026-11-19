@@ -60,6 +60,10 @@ MergeJoin::MergeJoin(
           driverCtx->queryConfig().preferredOutputBatchRows()},
       dynamicOutputBatchSizeEnabled_{
           driverCtx->queryConfig().mergeJoinOutputBatchStartSize() != 0},
+      maxDynamicOutputBatchRows_{
+          dynamicOutputBatchSizeEnabled_
+              ? driverCtx->queryConfig().maxOutputBatchRows()
+              : 0},
       streamLeftSideEnabled_{
           driverCtx->queryConfig().mergeJoinStreamLeftSide()},
       joinType_{joinNode->joinType()},
@@ -67,9 +71,17 @@ MergeJoin::MergeJoin(
       rightNodeId_{joinNode->sources()[1]->id()},
       outputBatchSize_{
           dynamicOutputBatchSizeEnabled_
-              ? driverCtx->queryConfig().mergeJoinOutputBatchStartSize()
+              ? std::min(
+                    driverCtx->queryConfig().mergeJoinOutputBatchStartSize(),
+                    maxDynamicOutputBatchRows_)
               : preferredOutputBatchRows_},
       joinNode_(joinNode) {
+  if (dynamicOutputBatchSizeEnabled_) {
+    VELOX_USER_CHECK_GT(
+        maxDynamicOutputBatchRows_,
+        0,
+        "max_output_batch_rows must be positive for dynamic MergeJoin batching");
+  }
   VELOX_USER_CHECK(
       core::MergeJoinNode::isSupported(joinType_),
       "The join type is not supported by merge join: {}",
@@ -1544,27 +1556,11 @@ void MergeJoin::updateOutputBatchSize(const RowVectorPtr& output) {
     return;
   }
 
-  VELOX_CHECK_NOT_NULL(output);
-
-  const auto outputSize = output->size();
-  VELOX_CHECK_GT(outputSize, 0);
-
-  // Calculate average row size from the current output batch.
-  const auto avgRowSize = output->estimateFlatSize() / outputSize;
-
-  if (avgRowSize == 0) {
-    // Avoid division by zero; keep current batch size.
-    return;
-  }
-
-  outputBatchSize_ = std::min(
-      static_cast<uint64_t>(preferredOutputBatchBytes_ / avgRowSize),
-      static_cast<uint64_t>(preferredOutputBatchRows_));
-
-  // Ensure we have at least 1 row.
-  if (outputBatchSize_ == 0) {
-    outputBatchSize_ = 1;
-  }
+  const auto estimatedRows = outputBatchRowsFromOutput(
+      *output,
+      preferredOutputBatchBytes_,
+      std::clamp(preferredOutputBatchRows_, 1, maxDynamicOutputBatchRows_));
+  outputBatchSize_ = estimatedRows.value_or(outputBatchSize_);
 }
 
 RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {

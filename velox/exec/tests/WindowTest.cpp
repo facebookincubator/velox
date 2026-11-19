@@ -347,6 +347,163 @@ TEST_F(WindowTest, spillUnsupported) {
   ASSERT_GT(stats.customStat(Operator::kSpillNotSupported).sum, 1);
 }
 
+// Compares every output row at its expected position across batch boundaries.
+void assertOrderedBatches(
+    const RowVectorPtr& expected,
+    const std::vector<RowVectorPtr>& batches) {
+  vector_size_t offset{0};
+  for (const auto& batch : batches) {
+    ASSERT_LE(offset + batch->size(), expected->size());
+    velox::test::assertEqualVectors(
+        expected->slice(offset, batch->size()), batch);
+    offset += batch->size();
+  }
+  EXPECT_EQ(offset, expected->size());
+}
+
+namespace {
+
+// Builds a row-number plan over sorted c0 input in either window mode.
+core::PlanNodePtr rowNumberPlan(const RowVectorPtr& input, bool streaming) {
+  PlanBuilder builder;
+  builder.values({input});
+  const std::vector<std::string> functions{
+      "row_number() over (order by c0 rows unbounded preceding)"};
+  if (streaming) {
+    return builder.streamingWindow(functions).planNode();
+  }
+  return builder.window(functions).planNode();
+}
+
+} // namespace
+
+TEST_F(WindowTest, fixedWidthOutputBatchSizes) {
+  const vector_size_t size{64};
+  const vector_size_t preferredRows{8};
+  auto input = makeRowVector(
+      {"c0"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+  auto expected = makeRowVector(
+      {input->childAt(0),
+       makeFlatVector<int64_t>(size, [](auto row) { return row + 1; })});
+  const struct {
+    vector_size_t maxRows;
+    std::vector<vector_size_t> expectedBatchSizes;
+  } testCases[] = {
+      {10'000, {64}},
+      {17, {17, 17, 17, 13}},
+  };
+  for (bool streaming : {false, true}) {
+    SCOPED_TRACE(streaming);
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.maxRows);
+      const auto batches =
+          AssertQueryBuilder(rowNumberPlan(input, streaming))
+              .config(
+                  core::QueryConfig::kPreferredOutputBatchRows, preferredRows)
+              .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'048'576)
+              .config(core::QueryConfig::kMaxOutputBatchRows, testCase.maxRows)
+              .copyResultBatches(pool());
+      std::vector<vector_size_t> batchSizes;
+      for (const auto& batch : batches) {
+        batchSizes.push_back(batch->size());
+      }
+      EXPECT_THAT(
+          batchSizes, testing::ElementsAreArray(testCase.expectedBatchSizes));
+      assertOrderedBatches(expected, batches);
+    }
+  }
+}
+
+TEST_F(WindowTest, zeroMaxOutputBatchRows) {
+  auto input = makeRowVector({"c0"}, {makeFlatVector<int64_t>({})});
+  for (bool streaming : {false, true}) {
+    SCOPED_TRACE(streaming);
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(rowNumberPlan(input, streaming))
+            .config(core::QueryConfig::kMaxOutputBatchRows, 0)
+            .copyResultBatches(pool()),
+        "max_output_batch_rows must be positive for Window batching");
+  }
+}
+
+TEST_F(WindowTest, outputBatchRowSizeChangesPreserveFrames) {
+  const vector_size_t phaseRows{128};
+  const vector_size_t size{3 * phaseRows};
+  const vector_size_t preferredRows{64};
+  const uint64_t preferredBytes{2'048};
+  const int64_t precedingRows{32};
+  const int64_t peerGroupSize{4};
+  const auto precedingForRow = [&](vector_size_t row) {
+    return row >= phaseRows && row < 2 * phaseRows ? precedingRows : 0;
+  };
+  for (const auto& frameType : {"rows", "range"}) {
+    SCOPED_TRACE(frameType);
+    const bool isRows = std::string_view(frameType) == "rows";
+    auto input = makeRowVector(
+        {"c0", "c1", "id"},
+        {makeFlatVector<int64_t>(
+             size, [&](auto row) { return row / peerGroupSize; }),
+         makeFlatVector<int64_t>(
+             size,
+             [&](auto row) {
+               const auto preceding = precedingForRow(row);
+               // RANGE bounds contain precomputed sort-key values; ROWS bounds
+               // contain row offsets.
+               return isRows ? preceding : row / peerGroupSize - preceding;
+             }),
+         makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+    createDuckDbTable({input});
+
+    auto plan = PlanBuilder()
+                    .values({input})
+                    .streamingWindow({fmt::format(
+                        "array_agg(c0) over (order by c0 {} between c1 "
+                        "preceding and current row)",
+                        frameType)})
+                    .planNode();
+    auto batches =
+        AssertQueryBuilder(plan)
+            .config(core::QueryConfig::kPreferredOutputBatchRows, preferredRows)
+            .config(
+                core::QueryConfig::kPreferredOutputBatchBytes, preferredBytes)
+            .copyResultBatches(pool());
+
+    ASSERT_FALSE(batches.empty());
+    vector_size_t offset{0};
+    vector_size_t smallestWideBatch{preferredRows};
+    vector_size_t largestRecoveredBatch{0};
+    for (const auto& batch : batches) {
+      // Measure batches wholly inside a phase so a boundary does not dilute
+      // the observed row width. Peer groups cross the smaller batch boundaries.
+      if (offset >= phaseRows && offset + batch->size() <= 2 * phaseRows) {
+        smallestWideBatch = std::min(smallestWideBatch, batch->size());
+      }
+      if (offset >= 2 * phaseRows) {
+        largestRecoveredBatch = std::max(largestRecoveredBatch, batch->size());
+      }
+      offset += batch->size();
+    }
+    EXPECT_EQ(offset, size);
+    EXPECT_LT(smallestWideBatch, preferredRows);
+    EXPECT_GT(largestRecoveredBatch, smallestWideBatch);
+
+    // DuckDB takes a RANGE offset and can aggregate RANGE peers first. Sort
+    // the reference arrays into the window order and break ROWS ties by id.
+    const auto sql = fmt::format(
+        "SELECT c0, c1, id, array_sort(array_agg(c0) OVER (ORDER BY {} {} "
+        "BETWEEN {} PRECEDING AND CURRENT ROW)) FROM tmp ORDER BY id",
+        isRows ? "c0, id" : "c0",
+        frameType,
+        isRows ? "c1" : "c0 - c1");
+    assertResultsOrdered(
+        batches,
+        plan->outputType(),
+        sql,
+        duckDbQueryRunner_,
+        {plan->outputType()->getChildIdx("id")});
+  }
+}
+
 TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
   const vector_size_t size = 1'000'000;
   auto data = makeRowVector(

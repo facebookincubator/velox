@@ -176,19 +176,6 @@ SubPartitionedSortWindowBuild::nextPartition() {
   return subWindowBuilds_[currentSubPartition_]->nextPartition();
 }
 
-std::optional<int64_t> SubPartitionedSortWindowBuild::estimateRowSize() {
-  auto subPartition = std::max(currentSubPartition_, 0);
-  if (subPartition >= numSubPartitions_) {
-    return std::nullopt;
-  }
-
-  if (subWindowBuilds_[subPartition]) {
-    return subWindowBuilds_[subPartition]->estimateRowSize();
-  }
-
-  return std::nullopt;
-}
-
 bool SubPartitionedSortWindowBuild::hasNextPartition() {
   // Check if the build hasn't begun or has finished.
   if (currentSubPartition_ < 0 || currentSubPartition_ >= numSubPartitions_) {
