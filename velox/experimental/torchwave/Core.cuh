@@ -234,24 +234,42 @@ struct Int32X32 {
 
 // Thread 0 loads BlockInfo from params (inlined in TorchWaveParams or from a
 // separate device allocation) into shared memory; all threads sync before use.
+// The block returns first if an earlier step failed or this one did: the
+// failure word is constant during a launch, so all blocks of an op agree.
 // LEAVE records the block's timing in params.clocks and params.barrierClocks,
 // and counts the block in params.errorCount when it recorded an error in its
 // DebugInfo. A kDebugNoOp block records its time, so that every block of a
 // timed launch has a clock word, but leaves its DebugInfo alone.
-#define ENTRY                                                                  \
-  __shared__ BlockInfo blockInfo;                                              \
-  if (threadIdx.x == 0) {                                                      \
-    blockInfo =                                                                \
-        params.info ? params.info[blockIdx.x] : params.inlineInfo[blockIdx.x]; \
-    blockInfo.debugInfo =                                                      \
-        params.debugInfo ? &params.debugInfo[blockIdx.x] : nullptr;            \
-    blockInfo.barrierClocks = 0;                                               \
-    blockInfo.start = clock64();                                               \
-    if (blockInfo.debugInfo && blockInfo.op != kDebugNoOp) {                   \
-      memset(blockInfo.debugInfo, 0, sizeof(DebugInfo));                       \
-    }                                                                          \
-  }                                                                            \
-  __syncthreads();
+#define ENTRY                                                         \
+  __shared__ BlockState blockInfo;                                    \
+  __shared__ bool stepFailed;                                         \
+  if (threadIdx.x == 0) {                                             \
+    stepFailed = params.failure &&                                    \
+        *reinterpret_cast<const volatile int32_t*>(params.failure) <= \
+            params.stepOrdinal;                                       \
+    if (stepFailed) {                                                 \
+      if (params.debugInfo) {                                         \
+        memset(&params.debugInfo[blockIdx.x], 0, sizeof(DebugInfo));  \
+      }                                                               \
+    } else {                                                          \
+      static_cast<BlockInfo&>(blockInfo) = params.info                \
+          ? params.info[blockIdx.x]                                   \
+          : params.inlineInfo[blockIdx.x];                            \
+      blockInfo.failure = params.failure;                             \
+      blockInfo.stepOrdinal = params.stepOrdinal;                     \
+      blockInfo.debugInfo =                                           \
+          params.debugInfo ? &params.debugInfo[blockIdx.x] : nullptr; \
+      blockInfo.barrierClocks = 0;                                    \
+      blockInfo.start = clock64();                                    \
+      if (blockInfo.debugInfo && blockInfo.op != kDebugNoOp) {        \
+        memset(blockInfo.debugInfo, 0, sizeof(DebugInfo));            \
+      }                                                               \
+    }                                                                 \
+  }                                                                   \
+  __syncthreads();                                                    \
+  if (stepFailed) {                                                   \
+    return;                                                           \
+  }
 
 #define LEAVE()                                                                \
   __syncthreads();                                                             \
@@ -459,7 +477,7 @@ __device__ void __masked_put(
     auto maskN = mask->numEl;
     if (maskN != destN && maskN != 1) {
       size = 0;
-      if (block.debugInfo) {
+      if (kernelError(block, __LINE__)) {
         block.debugInfo->line = __LINE__;
         block.debugInfo->extra[0] = destN;
         block.debugInfo->extra[1] = maskN;
