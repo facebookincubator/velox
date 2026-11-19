@@ -587,7 +587,6 @@ class LocalFileIoUringTest : public ::testing::Test {
     IoUringReader::Options options;
     options.submissionQueueDepth = 8;
     options.completionQueueDepth = 8;
-    options.registeredFileSlots = 8;
     IoUringReader::setOptions(options);
 
     tempFile_ = TempFilePath::create();
