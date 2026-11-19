@@ -61,6 +61,7 @@
 #include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::cache;
@@ -1973,8 +1974,10 @@ TEST_F(TableScanTest, waitForSplit) {
           addSplitWaitFlag = false;
           addSplitWait.notifyAll();
         });
-    assertResults(
-        results, plan->outputType(), "SELECT * FROM tmp", duckDbQueryRunner_);
+    velox::test::VectorAssertions::equalMultisets(
+        duckDbQueryRunner_.execute("SELECT * FROM tmp", plan->outputType()),
+        plan->outputType(),
+        results);
     EXPECT_TRUE(TaskMonitor::waitForCompletion(*queryCursor->task()));
   });
 
@@ -5961,6 +5964,86 @@ TEST_F(TableScanTest, flatMapLazyRowValue) {
         })});
     auto split = makeHiveConnectorSplit(file->getPath());
     AssertQueryBuilder(plan).split(split).assertResults(expected);
+  }
+}
+
+TEST_F(TableScanTest, flatMapReuseWithRemainingFilter) {
+  constexpr vector_size_t kNumRows{1'000};
+  constexpr int32_t kNumKeys{20};
+  constexpr vector_size_t kBatchRows{20};
+  auto vector = makeRowVector({
+      makeMapVector<int64_t, int64_t>(
+          kNumRows,
+          [&](auto /*row*/) { return kNumKeys; },
+          [&](auto index) { return index % kNumKeys; },
+          [&](auto index) {
+            return index / kNumKeys * 100 + index % kNumKeys;
+          }),
+      makeFlatVector<int64_t>(kNumRows, std::identity{}),
+  });
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set<const std::vector<uint32_t>>(dwrf::Config::MAP_FLAT_COLS, {0});
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {vector}, config);
+  auto schema = asRowType(vector->type());
+
+  auto runScan = [&](std::string_view remainingFilter,
+                     const RowVectorPtr& expected) {
+    core::PlanNodeId scanId;
+    auto plan = PlanBuilder()
+                    .tableScan(schema, {}, std::string(remainingFilter))
+                    .capturePlanNodeId(scanId)
+                    .project({"c0[1] + 1"})
+                    .planNode();
+    auto task = AssertQueryBuilder(plan)
+                    .split(makeHiveConnectorSplit(file->getPath()))
+                    .config(
+                        QueryConfig::kMaxOutputBatchRows,
+                        folly::to<std::string>(kBatchRows))
+                    .config(
+                        QueryConfig::kPreferredOutputBatchRows,
+                        folly::to<std::string>(kBatchRows))
+                    .connectorSessionProperty(
+                        kHiveConnectorId,
+                        connector::FileConfig::kPreserveFlatMapsInMemorySession,
+                        "true")
+                    .assertResults(expected);
+    const auto planStats = toPlanStats(task->taskStats());
+    const auto& scanStats = planStats.at(scanId);
+    EXPECT_GE(scanStats.outputVectors, kNumRows / kBatchRows);
+    return scanStats.numMemoryAllocations;
+  };
+
+  std::vector<int64_t> allValues;
+  std::vector<int64_t> filteredValues;
+  for (vector_size_t row = 0; row < kNumRows; ++row) {
+    allValues.push_back(row * 100 + 2);
+    if (row % 7 != 3) {
+      filteredValues.push_back(row * 100 + 2);
+    }
+  }
+  const auto numAllocsWithoutFilter =
+      runScan("", makeRowVector({makeFlatVector(allValues)}));
+
+  {
+    SCOPED_TRACE("Flat map loaded for the rows a remaining filter passes");
+    const auto numAllocs =
+        runScan("c1 % 7 <> 3", makeRowVector({makeFlatVector(filteredValues)}));
+    EXPECT_LT(
+        numAllocs,
+        numAllocsWithoutFilter + kNumRows / kBatchRows * kNumKeys / 2);
+  }
+
+  {
+    SCOPED_TRACE(
+        "Flat map subscripted through the remaining filter dictionary");
+    const auto numAllocs = runScan(
+        "c0[0] / 100 % 7 <> 3",
+        makeRowVector({makeFlatVector(filteredValues)}));
+    EXPECT_LT(
+        numAllocs,
+        numAllocsWithoutFilter + kNumRows / kBatchRows * kNumKeys / 2);
   }
 }
 

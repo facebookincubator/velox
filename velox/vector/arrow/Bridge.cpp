@@ -1392,14 +1392,26 @@ void exportRows(
   }
 }
 
+// Returns true if the offsets of the first 'numRows' rows of 'vec' can be
+// exported as they are, along with all its 'numElements' elements: the rows are
+// back to back from 0 to 'numElements', and null rows are empty. The offsets
+// and sizes of null rows, and elements that no non-null row covers, are
+// undefined. 'nulls' are the nulls to export, see nullsToExport().
 template <typename Vector>
-bool isCompact(const Vector& vec) {
-  for (vector_size_t i = 1; i < vec.size(); ++i) {
-    if (vec.offsetAt(i - 1) + vec.sizeAt(i - 1) != vec.offsetAt(i)) {
+bool isCompact(
+    const Vector& vec,
+    vector_size_t numRows,
+    vector_size_t numElements,
+    const uint64_t* nulls) {
+  int64_t end = 0;
+  for (vector_size_t i = 0; i < numRows; ++i) {
+    const auto size = vec.sizeAt(i);
+    if (vec.offsetAt(i) != end || (size != 0 && isNull(nulls, i))) {
       return false;
     }
+    end += size;
   }
-  return true;
+  return end == numElements;
 }
 
 template <typename Vector>
@@ -1417,7 +1429,9 @@ void exportOffsets(
       checkedPlus<size_t>(out.length, 1), pool);
   auto rawOffsets = offsets->asMutable<vector_size_t>();
 
-  if (!rows.changed() && isCompact(vec)) {
+  // 'childRows' still selects every element, so its count is their number.
+  if (!rows.changed() &&
+      isCompact(vec, rows.count(), childRows.count(), nulls)) {
     vector_size_t rowCount = rows.count();
     memcpy(rawOffsets, vec.rawOffsets(), sizeof(vector_size_t) * rowCount);
     rawOffsets[rowCount] = rowCount == 0
@@ -2915,8 +2929,11 @@ VectorPtr importFromArrowImpl(
         arrowArray.n_buffers,
         2,
         "Primitive types expect two buffers as input.");
+    // BOOLEAN values are a bitmap, one bit per row.
     auto values = wrapInBufferView(
-        arrowArray.buffers[1], arrowArray.length * type->cppSizeInBytes());
+        arrowArray.buffers[1],
+        type->isBoolean() ? bits::nbytes(arrowArray.length)
+                          : arrowArray.length * type->cppSizeInBytes());
 
     return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         createFlatVector,

@@ -47,6 +47,7 @@
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common::testutil;
@@ -2348,11 +2349,10 @@ DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
     while (cursor->moveNext()) {
       result.push_back(cursor->current());
     }
-    assertResults(
-        result,
+    velox::test::VectorAssertions::equalMultisets(
+        duckDbQueryRunner_.execute("VALUES (0)", params.planNode->outputType()),
         params.planNode->outputType(),
-        "VALUES (0)",
-        duckDbQueryRunner_);
+        result);
     ASSERT_TRUE(
         TaskMonitor::waitForStateChange(
             *task, TaskState::kFinished, 3'000'000));

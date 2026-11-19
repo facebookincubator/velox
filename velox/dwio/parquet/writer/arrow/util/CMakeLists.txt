@@ -27,6 +27,7 @@ velox_add_library(
   CompressionInternal.h
   Crc32.h
   Hashing.h
+  Spaced.h
   VisitArrayInline.h
 )
 

@@ -293,9 +293,9 @@ TEST_F(CollectSetAggregateTest, unknownType) {
       makeNullConstant(TypeKind::UNKNOWN, 3),
   });
 
-  auto expected = makeRowVector({
-      makeArrayVectorFromJson<int32_t>({"[]"}),
-  });
+  const auto emptyArray =
+      makeArrayVector({0}, BaseVector::create(UNKNOWN(), 0, pool()));
+  auto expected = makeRowVector({emptyArray});
   AggregationTester(*this)
       .inputs(data)
       .aggregates({"collect_set(c0, true)"})
@@ -304,7 +304,7 @@ TEST_F(CollectSetAggregateTest, unknownType) {
   // The grouping key is of UNKNOWN type.
   expected = makeRowVector({
       makeNullConstant(TypeKind::UNKNOWN, 1),
-      makeArrayVectorFromJson<int32_t>({"[]"}),
+      emptyArray,
   });
   AggregationTester(*this)
       .inputs(data)

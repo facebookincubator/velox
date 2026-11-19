@@ -1089,6 +1089,35 @@ std::string ClusterIndexBase::keyAtRow(uint32_t row) const {
   return decodedChunk.data->reader->get(rowInChunk);
 }
 
+std::string ClusterIndexBase::keyAtRow(
+    uint32_t rowInChunk,
+    const KeyChunk& keyChunk) const {
+  NIMBLE_CHECK_EQ(
+      keyStreamLayout_,
+      KeyStreamLayout::kStripe,
+      "Only a Stripe layout index reads keys from a given key chunk");
+  const auto decodedChunk = decodeKeyChunk(
+      keyChunk.data, DataInput::Handle{}, keyReaderFactory_, pool_);
+  NIMBLE_CHECK_LT(
+      rowInChunk,
+      decodedChunk->reader->rowCount(),
+      "Row is past the key chunk of stripe {}",
+      keyChunk.stripe);
+  return decodedChunk->reader->get(rowInChunk);
+}
+
+std::optional<uint32_t> ClusterIndexBase::seekRow(
+    std::string_view key,
+    const KeyChunk& keyChunk) const {
+  NIMBLE_CHECK_EQ(
+      keyStreamLayout_,
+      KeyStreamLayout::kStripe,
+      "Only a Stripe layout index seeks keys in a given key chunk");
+  const auto decodedChunk = decodeKeyChunk(
+      keyChunk.data, DataInput::Handle{}, keyReaderFactory_, pool_);
+  return decodedChunk->reader->seek(key, /*inclusive=*/true);
+}
+
 // ---------------------------------------------------------------------------
 // ClusterIndexBase::KeyIterator
 // ---------------------------------------------------------------------------

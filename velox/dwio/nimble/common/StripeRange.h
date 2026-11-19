@@ -36,6 +36,12 @@ struct StripeRange {
     return startStripe >= endStripe;
   }
 
+  /// Returns how many stripes the range holds, none when it ends at or before
+  /// its start.
+  inline uint32_t numStripes() const {
+    return empty() ? 0 : endStripe - startStripe;
+  }
+
   inline bool contains(uint32_t stripe) const {
     return stripe >= startStripe && stripe < endStripe;
   }
