@@ -22,7 +22,10 @@
 namespace facebook::velox::ucx_exchange {
 
 /// @brief Mocks one or more cudf partitioned output operators. Each
-/// operator pushes data into a set of partitions.
+/// operator pushes data into a set of partitions and, like
+/// UcxPartitionedOutput, waits while the task's output queue is over its
+/// capacity, so the data a test keeps on the GPU at once is bounded by the
+/// task's maxOutputBufferSize rather than by the data it sends.
 /// The operators run in separate threads, one thread per driver.
 class UcxPartitionedOutputMock {
  public:
@@ -50,6 +53,10 @@ class UcxPartitionedOutputMock {
   // creates numPartitions_ x numDataChunks_ data chunks and
   // pushes it into the destination queues identified by the taskId.
   void publishDataChunks();
+
+  // Whether the queue manager still has a queue for the task; removeTask()
+  // drops it.
+  bool taskHasQueue() const;
 
   const std::shared_ptr<UcxOutputQueueManager> queueManager_;
   const std::string taskId_;

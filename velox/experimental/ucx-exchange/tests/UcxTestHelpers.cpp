@@ -33,7 +33,7 @@ std::shared_ptr<Task> createSourceTask(
     std::string_view taskId,
     std::shared_ptr<memory::MemoryPool> pool,
     RowTypePtr rowType,
-    uint64_t kMaxOutputBufferSize) {
+    std::optional<uint64_t> maxOutputBufferBytes) {
   VLOG(3) << "Testing SourceTask";
   const size_t vectorSize = 10;
 
@@ -59,9 +59,12 @@ std::shared_ptr<Task> createSourceTask(
       std::make_shared<folly::CPUThreadPoolExecutor>(
           std::thread::hardware_concurrency()));
 
-  std::unordered_map<std::string, std::string> configSettings{
-      {velox::core::QueryConfig::kMaxOutputBufferSize,
-       std::to_string(kMaxOutputBufferSize)}};
+  std::unordered_map<std::string, std::string> configSettings;
+  if (maxOutputBufferBytes.has_value()) {
+    configSettings.emplace(
+        velox::core::QueryConfig::kMaxOutputBufferSize,
+        std::to_string(*maxOutputBufferBytes));
+  }
 
   auto queryCtx = core::QueryCtx::create(
       executor.get(), core::QueryConfig(std::move(configSettings)));
@@ -107,7 +110,7 @@ std::shared_ptr<Task> createPartitionedOutputTask(
     RowTypePtr rowType,
     int numPartitions,
     const std::vector<std::string>& partitionKeys,
-    uint64_t kMaxOutputBufferSize,
+    std::optional<uint64_t> maxOutputBufferBytes,
     const std::unordered_map<std::string, std::string>& extraConfig,
     bool replicateNullsAndAny) {
   VLOG(3) << "Creating PartitionedOutput task with " << numPartitions
@@ -137,9 +140,12 @@ std::shared_ptr<Task> createPartitionedOutputTask(
       std::make_shared<folly::CPUThreadPoolExecutor>(
           std::thread::hardware_concurrency()));
 
-  std::unordered_map<std::string, std::string> configSettings{
-      {velox::core::QueryConfig::kMaxOutputBufferSize,
-       std::to_string(kMaxOutputBufferSize)}};
+  std::unordered_map<std::string, std::string> configSettings;
+  if (maxOutputBufferBytes.has_value()) {
+    configSettings.emplace(
+        velox::core::QueryConfig::kMaxOutputBufferSize,
+        std::to_string(*maxOutputBufferBytes));
+  }
   configSettings.insert(extraConfig.begin(), extraConfig.end());
 
   auto queryCtx = core::QueryCtx::create(
