@@ -835,7 +835,7 @@ namespace {
 template <typename T>
 void partitionBloomFilterRowsImpl(
     int32_t offset,
-    const common::BigintValuesUsingBloomFilter& filter,
+    const common::SplitBlockBloomFilterBackend& bloomFilterBackend,
     const RowContainer& rowContainer,
     uint8_t partitionMask,
     RowPartitions& rowPartitions) {
@@ -846,7 +846,7 @@ void partitionBloomFilterRowsImpl(
              &iter, std::span(rows), RowContainer::kUnlimited)) {
     for (int i = 0; i < numRows; ++i) {
       auto value = folly::loadUnaligned<T>(rows[i] + offset);
-      partitions[i] = filter.blockIndex(value) & partitionMask;
+      partitions[i] = bloomFilterBackend.blockIndex(value) & partitionMask;
     }
     rowPartitions.appendPartitions(
         std::span<const uint8_t>(partitions, numRows));
@@ -856,7 +856,7 @@ void partitionBloomFilterRowsImpl(
 void partitionBloomFilterRows(
     const VectorHasher& hasher,
     int32_t offset,
-    const common::BigintValuesUsingBloomFilter& filter,
+    const common::SplitBlockBloomFilterBackend& bloomFilterBackend,
     const RowContainer& rowContainer,
     uint8_t numPartitions,
     RowPartitions& rowPartitions) {
@@ -865,11 +865,19 @@ void partitionBloomFilterRows(
   switch (hasher.typeKind()) {
     case TypeKind::INTEGER:
       partitionBloomFilterRowsImpl<int32_t>(
-          offset, filter, rowContainer, numPartitions - 1, rowPartitions);
+          offset,
+          bloomFilterBackend,
+          rowContainer,
+          numPartitions - 1,
+          rowPartitions);
       break;
     case TypeKind::BIGINT:
       partitionBloomFilterRowsImpl<int64_t>(
-          offset, filter, rowContainer, numPartitions - 1, rowPartitions);
+          offset,
+          bloomFilterBackend,
+          rowContainer,
+          numPartitions - 1,
+          rowPartitions);
       break;
     default:
       VELOX_UNREACHABLE();
@@ -939,7 +947,7 @@ void syncWorkItems(
 template <>
 bool HashTable<true>::bloomFilterSupported() const {
   if (!(bloomFilterMaxSize_ > 0 &&
-        common::BigintValuesUsingBloomFilter::numBlocks(numDistinct_) *
+        common::SplitBlockBloomFilterBackend::numBlocks(numDistinct_) *
                 sizeof(SplitBlockBloomFilter::Block) <=
             bloomFilterMaxSize_)) {
     return false;
@@ -1112,8 +1120,10 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
       if (!hashers_[i]->supportsBloomFilter()) {
         continue;
       }
+      auto bloomFilterBackend =
+          std::make_shared<common::SplitBlockBloomFilterBackend>(numDistinct_);
       auto filter = std::make_shared<common::BigintValuesUsingBloomFilter>(
-          numDistinct_, false);
+          bloomFilterBackend, false);
       hashers_[i]->setBloomFilter(filter);
       for (auto j = 0; j < numPartitions; ++j) {
         bool last = j == numPartitions - 1;
@@ -1123,14 +1133,14 @@ void HashTable<ignoreNullKeys>::parallelJoinBuild() {
             bloomFilterPartitionSteps,
             [hasher = hashers_[i].get(),
              offset = rows->columnAt(i).offset(),
-             filter,
+             bloomFilterBackend,
              rows,
              numBloomFilterPartitions,
              rowPartitions = rowPartitions[j].get()] {
               partitionBloomFilterRows(
                   *hasher,
                   offset,
-                  *filter,
+                  *bloomFilterBackend,
                   *rows,
                   numBloomFilterPartitions,
                   *rowPartitions);
@@ -1533,8 +1543,10 @@ void HashTable<ignoreNullKeys>::rehash(
       if (!hashers_[i]->supportsBloomFilter()) {
         continue;
       }
+      auto bloomFilterBackend =
+          std::make_shared<common::SplitBlockBloomFilterBackend>(numDistinct_);
       auto filter = std::make_shared<common::BigintValuesUsingBloomFilter>(
-          numDistinct_, false);
+          std::move(bloomFilterBackend), false);
       bloomFilters[i] = filter.get();
       hashers_[i]->setBloomFilter(filter);
     }
