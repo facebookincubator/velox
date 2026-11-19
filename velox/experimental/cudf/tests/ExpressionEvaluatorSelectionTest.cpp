@@ -720,6 +720,7 @@ TEST_F(CudfExpressionSelectionTest, constantLookupEligibility) {
        {"d", DOUBLE()},
        {"i", BIGINT()},
        {"t", TIMESTAMP()},
+       {"m", MAP(VARCHAR(), BIGINT())},
        {"arr", ARRAY(BIGINT())}});
   const auto canRunOnGpu = [&](const std::string& sql) {
     return canExprRunOnGpu(
@@ -740,7 +741,8 @@ TEST_F(CudfExpressionSelectionTest, constantLookupEligibility) {
   EXPECT_FALSE(canRunOnGpu("contains(array[1, null, 7], i)"));
   // An empty array stays on the CPU too.
   EXPECT_FALSE(canRunOnGpu("contains(array_constructor()::bigint[], i)"));
-  // So does an array that is not constant.
+  // So do collections that are not constant.
+  EXPECT_FALSE(canRunOnGpu("element_at(m, s)"));
   EXPECT_FALSE(canRunOnGpu("contains(arr, i)"));
 
   // TIMESTAMP keys stay distinct on the GPU only with nanoseconds.
