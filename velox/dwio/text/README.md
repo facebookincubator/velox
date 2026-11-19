@@ -1,5 +1,34 @@
 # Delimited Text Format
 
+## INTEGER
+
+These rules apply to TINYINT, SMALLINT, INTEGER, and BIGINT file columns.
+Unlike REAL and DOUBLE, integer parsing does not trim whitespace.
+
+### Accepted forms
+
+Decimal integers have an optional `+` or `-` sign followed by one or more
+decimal digits. Leading zeros are allowed. Examples include `0`, `42`, `+42`,
+`-42`, and `+00042`.
+
+A decimal point followed by zero or more digits is also allowed after the
+integer digits. The fractional part is discarded, truncating toward zero:
+`+12.9` reads as `12`, `-12.9` reads as `-12`, and `1.` reads as `1`.
+The integer part must fit the file column's signed range: 8 bits for TINYINT,
+16 bits for SMALLINT, 32 bits for INTEGER, and 64 bits for BIGINT.
+
+### Inputs that read as NULL
+
+- Empty fields and the configured null marker.
+- Fields containing whitespace, including leading or trailing whitespace.
+- A sign without digits, repeated signs, or a decimal point without preceding
+  digits, such as `+`, `-`, `++1`, `+-1`, and `.5`.
+- Exponents, type suffixes, hexadecimal forms, and other trailing characters,
+  such as `1e2`, `1f`, `0x10`, `1x`, and `1.2x`.
+- Multiple decimal points, such as `1.2.3`.
+- Integer parts outside the file column's range. For example, `+128` reads as
+  NULL for TINYINT, and `+9223372036854775808` reads as NULL for BIGINT.
+
 ## REAL and DOUBLE
 
 The reader trims leading and trailing bytes whose unsigned value is at most

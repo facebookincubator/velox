@@ -45,17 +45,6 @@ class TestScopedAbortInjection {
   ~TestScopedAbortInjection();
 };
 
-std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
-    const CursorParameters& params,
-    std::function<void(TaskCursor*)> addSplits =
-        [](TaskCursor* taskCursor) {
-          if (taskCursor->noMoreSplits()) {
-            return;
-          }
-          taskCursor->setNoMoreSplits();
-        },
-    uint64_t maxWaitMicros = 5'000'000);
-
 /// Runs the query of 'cursor', passing each output batch to 'onBatch' as it
 /// arrives. The batches borrow memory from 'cursor', so any batch 'onBatch'
 /// keeps must be released before 'cursor' is destroyed, including when this
@@ -68,6 +57,32 @@ void readCursorAsync(
 
 #ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 // TODO: Remove once Prestissimo migrates.
+/// Legacy query runner. Use AssertQueryBuilder instead.
+inline std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
+readCursor(
+    const CursorParameters& params,
+    std::function<void(TaskCursor*)> addSplits =
+        [](TaskCursor* taskCursor) {
+          if (taskCursor->noMoreSplits()) {
+            return;
+          }
+          taskCursor->setNoMoreSplits();
+        },
+    uint64_t maxWaitMicros = 5'000'000) {
+  auto cursor = TaskCursor::create(params);
+  // Declared after 'cursor' so that it is destroyed first, also on exception.
+  std::vector<RowVectorPtr> result;
+  readCursorAsync(
+      *cursor,
+      [addSplitsVoid = std::move(addSplits)](TaskCursor* cursor) {
+        addSplitsVoid(cursor);
+        return ContinueFuture::makeEmpty();
+      },
+      maxWaitMicros,
+      [&](const RowVectorPtr& vector) { result.push_back(vector); });
+  return {std::move(cursor), std::move(result)};
+}
+
 /// Legacy forms of TaskMonitor methods.
 inline bool waitForTaskCompletion(
     exec::Task* task,

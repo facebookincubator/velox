@@ -194,32 +194,31 @@ class AssertQueryBuilder {
 
   /// Run the query and verify results against DuckDB. Requires
   /// duckDbQueryRunner to be provided in the constructor.
-  std::shared_ptr<Task> assertResults(
+  TaskPtr assertResults(
       const std::string& duckDbSql,
       const std::optional<std::vector<uint32_t>>& sortingKeys = std::nullopt);
 
   /// Run the query and compare results with 'expected'.
-  std::shared_ptr<Task> assertResults(const RowVectorPtr& expected);
+  TaskPtr assertResults(const RowVectorPtr& expected);
 
   /// Run the query and compare results with 'expected'.
-  std::shared_ptr<Task> assertResults(
-      const std::vector<RowVectorPtr>& expected);
+  TaskPtr assertResults(const std::vector<RowVectorPtr>& expected);
 
   /// Run the query and compare its single-row result with 'expected'.
-  std::shared_ptr<Task> assertResults(std::initializer_list<Variant> expected);
+  TaskPtr assertResults(std::initializer_list<Variant> expected);
 
   /// Run the query and compare its single-value result with 'expected'.
   template <typename T>
-  std::shared_ptr<Task> assertSingleResult(T expected) {
+  TaskPtr assertSingleResult(T expected) {
     return assertResults({Variant(std::move(expected))});
   }
 
   /// Run the query and test that it returns no results (empty result set).
-  std::shared_ptr<Task> assertEmptyResults();
+  TaskPtr assertEmptyResults();
 
   /// Run the query and ensure it returns batches of `expectedType`, and exactly
   /// `numRows`.
-  std::shared_ptr<Task> assertTypeAndNumRows(
+  TaskPtr assertTypeAndNumRows(
       const TypePtr& expectedType,
       vector_size_t expectedNumRows);
 
@@ -227,9 +226,7 @@ class AssertQueryBuilder {
   RowVectorPtr copyResults(memory::MemoryPool* pool);
 
   /// Similar to above method and also returns the task.
-  RowVectorPtr copyResults(
-      memory::MemoryPool* pool,
-      std::shared_ptr<Task>& task);
+  RowVectorPtr copyResults(memory::MemoryPool* pool, TaskPtr& task);
 
   /// Runs a query that returns a single row with a single column and returns
   /// that value.
@@ -238,8 +235,13 @@ class AssertQueryBuilder {
   /// Run the query and copy the result Vectors as their original batches.
   std::vector<RowVectorPtr> copyResultBatches(memory::MemoryPool* pool);
 
+  /// Runs the query and returns its output batches as produced, without
+  /// copying. The batches use the memory of 'task', so the caller must hold
+  /// 'task' while using them.
+  std::vector<RowVectorPtr> results(TaskPtr& task);
+
   /// Run the query and return the number of result rows.
-  uint64_t countResults(std::shared_ptr<Task>& task);
+  uint64_t countResults(TaskPtr& task);
 
   /// Run the query and return the number of result rows without requiring a
   /// task parameter.
@@ -250,7 +252,9 @@ class AssertQueryBuilder {
   readCursor();
 
   // Creates a cursor for the query, applying configs and session properties.
-  std::unique_ptr<TaskCursor> createCursor();
+  // 'copyResult' says whether the cursor copies each output batch into memory
+  // of its own.
+  std::unique_ptr<TaskCursor> createCursor(bool copyResult);
 
   // Runs the query of 'cursor', passing each output batch to 'onBatch' instead
   // of collecting the batches.

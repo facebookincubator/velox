@@ -193,8 +193,11 @@ std::unique_ptr<KernelCache> makeCache() {
       std::move(generator));
 }
 
+// Never destroyed: kernels of models that outlive static destruction, e.g.
+// ones a Python process still holds at exit, keep their entries pinned, and
+// destroying the cache with pinned entries aborts.
 KernelCache& kernelCache() {
-  static std::unique_ptr<KernelCache> cache = makeCache();
+  static KernelCache* cache = makeCache().release();
   return *cache;
 }
 } // namespace
