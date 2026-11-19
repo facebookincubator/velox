@@ -141,8 +141,6 @@ VELOX_GPU_COMPATIBLE inline Timestamp truncateTimestamp(
   switch (unit) {
     // Units up to a minute truncate the UTC value directly: when time zone
     // offsets are whole minutes, UTC and local minute boundaries coincide.
-    // Spark handles minute truncation separately in DateTruncFunction for
-    // historical non-whole-minute offsets.
     case DateTimeUnit::kMicrosecond:
     case DateTimeUnit::kMillisecond:
     case DateTimeUnit::kSecond:

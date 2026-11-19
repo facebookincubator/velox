@@ -2426,8 +2426,8 @@ TEST_F(TableScanTest, remainingFilterTimestampTimezoneEligibility) {
       noRows,
       false);
 
-  // Minute truncation must use CPU session-timezone semantics when adjustment
-  // is enabled due to historical non-whole-minute offsets. With adjustment
+  // Minute truncation falls back to CPU when adjustment is enabled because
+  // DateTruncFunction treats minute as timezone-sensitive. With adjustment
   // enabled the literal is Asia/Kolkata time, so 01:30 on January 2 there is
   // the first row's 20:00 UTC on January 1.
   testFilter(
