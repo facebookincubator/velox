@@ -215,19 +215,11 @@ TaskPtr OperatorTestBase::assertQuery(
       .assertResults(duckDbSql);
 }
 
-// static
-std::shared_ptr<core::FieldAccessTypedExpr> OperatorTestBase::toFieldExpr(
-    const std::string& name,
-    const RowTypePtr& rowType) {
-  return std::make_shared<core::FieldAccessTypedExpr>(
-      rowType->findChild(name), name);
-}
-
 core::TypedExprPtr OperatorTestBase::parseExpr(
-    const std::string& text,
-    RowTypePtr rowType,
+    const std::string& sql,
+    const RowTypePtr& rowType,
     const parse::ParseOptions& options) {
-  auto untyped = parse::DuckSqlExpressionsParser(options).parseExpr(text);
+  auto untyped = parse::DuckSqlExpressionsParser(options).parseExpr(sql);
   return core::Expressions::inferTypes(untyped, rowType, pool_.get());
 }
 

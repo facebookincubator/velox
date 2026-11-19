@@ -21,6 +21,7 @@ add_library(
   AggregationResolver.cpp
   AssertQueryBuilder.cpp
   ArbitratorTestUtil.cpp
+  DuckDbQueryRunner.cpp
   FilterToExpression.cpp
   HiveConnectorTestBase.cpp
   IndexLookupJoinTestBase.cpp
@@ -46,6 +47,7 @@ velox_add_test_headers(
   ArbitratorTestUtil.h
   AssertQueryBuilder.h
   BackpressureTestNode.h
+  DuckDbQueryRunner.h
   ExpressionBuilder.h
   FilterToExpression.h
   HashJoinTestBase.h

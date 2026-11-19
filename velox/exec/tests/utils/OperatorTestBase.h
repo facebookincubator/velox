@@ -34,11 +34,14 @@ namespace facebook::velox::exec::test {
 class OperatorTestBase : public virtual testing::Test,
                          public velox::test::VectorTestBase {
  public:
-  /// The following methods are used by google unit test framework to do
-  /// one-time setup/teardown for all the unit tests from OperatorTestBase. We
-  /// make them public as some benchmark like ReduceAgg also call these methods
-  /// to setup/teardown benchmark test environment.
+  /// Sets up the memory system with leak checks and the shared arbitrator,
+  /// registers Presto scalar and aggregate functions, and enables TestValue.
+  /// Called once per test suite. Public because benchmarks such as ReduceAgg
+  /// call it to set up the same environment.
   static void SetUpTestCase();
+
+  /// Shuts down the async data cache, waits for all tasks to be deleted, and
+  /// unregisters the shared arbitrator. Called once per test suite.
   static void TearDownTestCase();
 
   /// Sets up the velox memory system.
@@ -60,8 +63,14 @@ class OperatorTestBase : public virtual testing::Test,
   OperatorTestBase();
   ~OperatorTestBase() override;
 
+  /// Registers the default vector serde via registerVectorSerde() and the
+  /// named Presto, CompactRow and UnsafeRow serdes, creates driver and IO
+  /// executors, and starts the periodic stats reporter and the local exchange
+  /// source.
   void SetUp() override;
 
+  /// Waits for all tasks to be deleted, stops the stats reporter and the local
+  /// exchange source, releases memory pools, and resets the memory system.
   void TearDown() override;
 
   /// Allow base classes to register custom vector serde.
@@ -99,13 +108,10 @@ class OperatorTestBase : public virtual testing::Test,
       std::vector<exec::Split>&& splits,
       const std::string& duckDbSql);
 
-  static std::shared_ptr<core::FieldAccessTypedExpr> toFieldExpr(
-      const std::string& name,
-      const RowTypePtr& rowType);
-
+  /// Parses a DuckDB SQL expression and resolves its types against 'rowType'.
   core::TypedExprPtr parseExpr(
-      const std::string& text,
-      RowTypePtr rowType,
+      const std::string& sql,
+      const RowTypePtr& rowType,
       const parse::ParseOptions& options = {});
 
  public:
