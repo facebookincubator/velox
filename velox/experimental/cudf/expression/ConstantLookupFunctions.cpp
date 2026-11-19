@@ -59,8 +59,7 @@ bool isSupportedConstantLookupKeyType(const TypePtr& type) {
       isTypeSupportedByCudf(type);
 }
 
-// Copies 'columns' of a constant collection to the GPU. toCudfTable()
-// synchronizes 'stream' before it returns.
+// Copies 'columns' of a constant collection to the GPU.
 std::unique_ptr<cudf::table> copyConstantLookupColumnsToGpu(
     std::vector<VectorPtr> columns,
     memory::MemoryPool* pool,
@@ -131,7 +130,7 @@ class ConstantMapElementAtFunction : public CudfFunction {
     keyIndex_ = std::make_unique<cudf::distinct_hash_join>(
         entries_->view().select({0}),
         cudf::null_equality::UNEQUAL,
-        0.5,
+        /*load_factor=*/0.5,
         stream,
         get_temp_mr());
     stream.sync();
@@ -191,10 +190,13 @@ class ConstantArrayContainsFunction : public CudfFunction {
         canEvaluate(expr), "Unsupported contains: {}", expr->toString());
     const auto [array, row] =
         constantCollection<ArrayVector>(expr->inputs()[0]);
+    auto stream = getDefaultStreamForCurrentThread();
     elements_ = copyConstantLookupColumnsToGpu(
         {array->elements()->slice(array->offsetAt(row), array->sizeAt(row))},
         pool,
-        getDefaultStreamForCurrentThread());
+        stream);
+    // elements_ is read on whatever stream eval() gets.
+    stream.sync();
   }
 
   ColumnOrView eval(
@@ -233,7 +235,7 @@ void registerConstantMapElementAtFunction(const std::string& name) {
            .argumentType("map(K,V)")
            .argumentType("K")
            .build()},
-      true,
+      /*overwrite=*/true,
       [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
         return ConstantMapElementAtFunction::canEvaluate(expr);
       });
@@ -256,7 +258,7 @@ void registerConstantArrayContainsFunction(const std::string& name) {
            .argumentType("array(T)")
            .argumentType("T")
            .build()},
-      true,
+      /*overwrite=*/true,
       [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
         return ConstantArrayContainsFunction::canEvaluate(expr);
       });

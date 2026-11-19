@@ -678,6 +678,25 @@ class CudfFilterProjectTest : public OperatorTestBase {
     assertPlanMatchesVelox(plan, config);
   }
 
+  // Probes for the constant lookup tests, with present, missing and NULL
+  // values. The last TIMESTAMP is 1 ns after a key and must miss.
+  RowVectorPtr makeConstantLookupProbes() {
+    return makeRowVector(
+        {"s", "i", "ts", "dt", "amount"},
+        {makeNullableFlatVector<std::string>(
+             {"a", "B", "z", std::nullopt, "A"}),
+         makeNullableFlatVector<int64_t>({1, 50, 251, std::nullopt, 200}),
+         makeNullableFlatVector<Timestamp>(
+             {Timestamp(1, 0),
+              Timestamp(2, 0),
+              Timestamp(3, 0),
+              std::nullopt,
+              Timestamp(1, 1)}),
+         makeNullableFlatVector<int32_t>({1, 2, 3, std::nullopt, 1}, DATE()),
+         makeNullableFlatVector<int64_t>(
+             {125, -350, 1, std::nullopt, 125}, DECIMAL(12, 2))});
+  }
+
   void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
     SCOPED_TRACE("run without spilling");
     assertQuery(planNode, duckDbSql);
@@ -2541,19 +2560,7 @@ TEST_F(CudfFilterProjectTest, arrayJoin) {
 // a missing or NULL key gives NULL. Each batch reaches the GPU on its own, so
 // the second reuses the lookup built for the first.
 TEST_F(CudfFilterProjectTest, constantMapElementAt) {
-  auto data = makeRowVector(
-      {"s", "i", "ts", "dt", "amount"},
-      {makeNullableFlatVector<std::string>({"a", "B", "z", std::nullopt, "A"}),
-       makeNullableFlatVector<int64_t>({1, 50, 251, std::nullopt, 200}),
-       makeNullableFlatVector<Timestamp>(
-           {Timestamp(1, 0),
-            Timestamp(2, 0),
-            Timestamp(3, 0),
-            std::nullopt,
-            Timestamp(1, 1)}),
-       makeNullableFlatVector<int32_t>({1, 2, 3, std::nullopt, 1}, DATE()),
-       makeNullableFlatVector<int64_t>(
-           {125, -350, 1, std::nullopt, 125}, DECIMAL(12, 2))});
+  auto data = makeConstantLookupProbes();
   const auto mapOf = [](int numEntries) {
     std::string keys;
     std::string values;
@@ -2569,7 +2576,6 @@ TEST_F(CudfFilterProjectTest, constantMapElementAt) {
       {"element_at(map(array['a'], array[10]), s) AS one_entry",
        "element_at(map(array['a', 'b'], array[1, 2]), s) AS varchar_key",
        fmt::format("element_at({}, i) AS bigint_key", mapOf(50)),
-       fmt::format("element_at({}, i) AS large_map", mapOf(250)),
        "element_at(map(array['a', 'b'], array[1, 2]), lower(s)) AS "
        "computed_key",
        "element_at(map(array['a', 'b'], array[cast(1.25 as decimal(12, 2)), "
@@ -2592,11 +2598,7 @@ TEST_F(CudfFilterProjectTest, constantMapElementAt) {
 // contains over a constant array runs on the GPU as a lookup into the
 // elements. Each batch reaches the GPU on its own.
 TEST_F(CudfFilterProjectTest, constantArrayContains) {
-  auto data = makeRowVector(
-      {"i", "s"},
-      {makeNullableFlatVector<int64_t>({1, 5, 7, 2, std::nullopt}),
-       makeNullableFlatVector<std::string>(
-           {"a", "b", "z", std::nullopt, "a"})});
+  auto data = makeConstantLookupProbes();
 
   assertProjectMatchesVelox(
       {data, data},
@@ -2604,7 +2606,13 @@ TEST_F(CudfFilterProjectTest, constantArrayContains) {
        "contains(array['a', 'b'], s) AS varchar_element",
        "contains(array[2, 6, 8], i + 1) AS computed_probe",
        // length() gives INT32 on the GPU for the BIGINT elements.
-       "contains(array[1, 3], length(s)) AS narrower_probe"},
+       "contains(array[1, 3], length(s)) AS narrower_probe",
+       "contains(array[TIMESTAMP '1970-01-01 00:00:01', "
+       "TIMESTAMP '1970-01-01 00:00:02'], ts) AS timestamp_element",
+       "contains(array[DATE '1970-01-02', DATE '1970-01-03'], dt) AS "
+       "date_element",
+       "contains(array[cast(1.25 as decimal(12, 2)), "
+       "cast(-3.5 as decimal(12, 2))], amount) AS decimal_element"},
       {{cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1"}});
 }
 

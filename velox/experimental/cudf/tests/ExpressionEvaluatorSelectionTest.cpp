@@ -714,9 +714,13 @@ TEST_F(CudfExpressionSelectionTest, castAndTryCast) {
 
 // element_at and contains over a constant collection run on the GPU, except
 // in the unsupported forms below.
-TEST_F(CudfExpressionSelectionTest, constantLookupFallbacks) {
+TEST_F(CudfExpressionSelectionTest, constantLookupEligibility) {
   const auto rowType = ROW(
-      {{"s", VARCHAR()}, {"d", DOUBLE()}, {"i", BIGINT()}, {"t", TIMESTAMP()}});
+      {{"s", VARCHAR()},
+       {"d", DOUBLE()},
+       {"i", BIGINT()},
+       {"t", TIMESTAMP()},
+       {"arr", ARRAY(BIGINT())}});
   const auto canRunOnGpu = [&](const std::string& sql) {
     return canExprRunOnGpu(
         optimizeTypedExpr(sql, rowType, queryCtx_.get(), execCtx_.get()),
@@ -736,6 +740,8 @@ TEST_F(CudfExpressionSelectionTest, constantLookupFallbacks) {
   EXPECT_FALSE(canRunOnGpu("contains(array[1, null, 7], i)"));
   // An empty array stays on the CPU too.
   EXPECT_FALSE(canRunOnGpu("contains(array_constructor()::bigint[], i)"));
+  // So does an array that is not constant.
+  EXPECT_FALSE(canRunOnGpu("contains(arr, i)"));
 
   // TIMESTAMP keys stay distinct on the GPU only with nanoseconds.
   const auto timestampLookup =
