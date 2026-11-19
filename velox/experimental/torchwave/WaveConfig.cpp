@@ -95,6 +95,12 @@ std::string WaveConfig::toString() const {
   addBool("groupArena", &WaveConfig::groupArena);
   addInt("groupArenaMaxBytes", &WaveConfig::groupArenaMaxBytes);
   addBool("deviceSymbols", &WaveConfig::deviceSymbols);
+  addBool("checkGridDescriptor", &WaveConfig::checkGridDescriptor);
+  addBool("gridEqualFinish", &WaveConfig::gridEqualFinish);
+  addBool("deviceGrid", &WaveConfig::deviceGrid);
+  addBool("setupStream", &WaveConfig::setupStream);
+  addBool("checkSizeExprs", &WaveConfig::checkSizeExprs);
+  addBool("sizeExprsFromInputs", &WaveConfig::sizeExprsFromInputs);
   addBool("uniformCost", &WaveConfig::uniformCost);
   addBool("launchPerOp", &WaveConfig::launchPerOp);
   addBool("dedupProjectOps", &WaveConfig::dedupProjectOps);
