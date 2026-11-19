@@ -61,6 +61,7 @@
 #include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::cache;
@@ -1973,8 +1974,10 @@ TEST_F(TableScanTest, waitForSplit) {
           addSplitWaitFlag = false;
           addSplitWait.notifyAll();
         });
-    assertResults(
-        results, plan->outputType(), "SELECT * FROM tmp", duckDbQueryRunner_);
+    velox::test::VectorAssertions::equalMultisets(
+        duckDbQueryRunner_.execute("SELECT * FROM tmp", plan->outputType()),
+        plan->outputType(),
+        results);
     EXPECT_TRUE(TaskMonitor::waitForCompletion(*queryCursor->task()));
   });
 

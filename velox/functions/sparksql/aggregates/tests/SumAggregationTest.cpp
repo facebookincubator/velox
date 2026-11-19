@@ -351,17 +351,17 @@ TEST_F(SumAggregationTest, decimalSum) {
           {makeNullableFlatVector<int32_t>({1}),
            makeFlatVector<int128_t>(
                std::vector<int128_t>{HugeInt::build(56, 190476)},
-               DECIMAL(38, 2))}),
+               DECIMAL(30, 2))}),
       makeRowVector(
           {makeNullableFlatVector<int32_t>({2}),
            makeFlatVector<int128_t>(
                std::vector<int128_t>{HugeInt::build(145, 70776)},
-               DECIMAL(38, 2))}),
+               DECIMAL(30, 2))}),
       makeRowVector(
           {makeNullableFlatVector<int32_t>({3}),
            makeFlatVector<int128_t>(
                std::vector<int128_t>{HugeInt::build(87, 18073)},
-               DECIMAL(38, 2))})};
+               DECIMAL(30, 2))})};
 
   AggregationTester(*this)
       .inputs(inputLongDecimalRows)
