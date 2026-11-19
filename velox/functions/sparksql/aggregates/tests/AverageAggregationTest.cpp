@@ -168,7 +168,7 @@ TEST_F(AverageAggregationTest, avgDecimal) {
   AggregationTester(*this)
       .inputs(shortDecimalInput)
       .aggregates({"spark_avg(c0)"})
-      .withCompanion(CompanionPlans::kMergeOnly)
+      .withCompanion(CompanionPlans::kMergeAndSingleMergeExtract)
       .assertResults(shortDecimalExpected);
 
   // Long decimal aggregation.
@@ -185,7 +185,7 @@ TEST_F(AverageAggregationTest, avgDecimal) {
   AggregationTester(*this)
       .inputs(longDecimalInput)
       .aggregates({"spark_avg(c0)"})
-      .withCompanion(CompanionPlans::kMergeOnly)
+      .withCompanion(CompanionPlans::kMergeAndSingleMergeExtract)
       .assertResults(longDecimalExpected);
 
   // The total sum overflows the max int128_t limit.
@@ -254,6 +254,7 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       .inputs(inputRows)
       .groupBy({"c0"})
       .aggregates({"spark_avg(c1)"})
+      .withCompanion(CompanionPlans::kMergeAndSingleMergeExtract)
       .assertResults(expectedResult);
 
   // dividePrecision greater than resultScale in computeFinalResult.
@@ -275,6 +276,7 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       .inputs(longDecimalInputRows)
       .groupBy({"c0"})
       .aggregates({"spark_avg(c1)"})
+      .withCompanion(CompanionPlans::kMergeAndSingleMergeExtract)
       .assertResults(longDecimalExpectedResult);
 }
 
