@@ -507,6 +507,52 @@ NodeCP FOLLY_NULLABLE isExclusiveSumPattern(NodeCP node) {
 // another dtype cannot be written through a view that would have to convert it;
 // and a pitched band needs a producer that indexes its output through strides.
 
+// Whether cat([operand]) can be replaced by 'operand': the cat only copies
+// it. The copy stays when either side is written in place later, when the
+// result would alias a graph input, or when both would be the same graph
+// output twice.
+bool isRedundantCat(NodeCP node, ValueCP operand, const ValueTypes& types) {
+  auto writtenInPlace = [](ValueCP value) {
+    for (const auto* user : value->users()) {
+      const auto target = user->target();
+      if (target.find("_.") != std::string_view::npos ||
+          target.ends_with("_")) {
+        return true;
+      }
+    }
+    return false;
+  };
+  auto isGraphOutput = [&](ValueCP value) {
+    const auto id = value->id();
+    return id >= 0 && static_cast<size_t>(id) < types.constraints.size() &&
+        types.constraints[id].graphOutput;
+  };
+  const auto* result = node->outputs()[0];
+  const auto* producer = operand->producer();
+  const bool fromInput = producer == nullptr ||
+      producer->target() == "prim.Input" ||
+      producer->target() == "tw.placeholder";
+  if (writtenInPlace(operand) || writtenInPlace(result)) {
+    return false;
+  }
+  // A view may be strided where the cat's result is dense.
+  if (producer != nullptr) {
+    const auto* metadata = Registry::metadata(producer->target());
+    if (metadata != nullptr && metadata->isView()) {
+      return false;
+    }
+  }
+  if (isGraphOutput(result) && (fromInput || isGraphOutput(operand))) {
+    return false;
+  }
+  const auto operandId = operand->id();
+  const auto resultId = result->id();
+  return operandId >= 0 && resultId >= 0 &&
+      static_cast<size_t>(std::max(operandId, resultId)) < types.types.size() &&
+      types.types[operandId] != nullptr && types.types[resultId] != nullptr &&
+      types.types[operandId]->dtype() == types.types[resultId]->dtype();
+}
+
 std::vector<std::pair<ValueCP, ValueCP>>
 concatMaybeReplace(NodeCP node, ValueTypes& types, WaveGraph& waveGraph) {
   normalizeConcatDim(node, types);
@@ -569,6 +615,9 @@ concatMaybeReplace(NodeCP node, ValueTypes& types, WaveGraph& waveGraph) {
   }
 
   auto elements = node->inputs()[0].value->getListElements();
+  if (elements.size() == 1 && isRedundantCat(node, elements[0], types)) {
+    return {{node->outputs()[0], elements[0]}};
+  }
   bool hasNestedCat = false;
   for (auto* elem : elements) {
     auto* producer = elem->producer();

@@ -55,6 +55,16 @@ struct DeviceGrid {
   int64_t floatsOffset{0};
   int64_t intsOffset{0};
   int64_t longsOffset{0};
+
+  /// For a wide setup, the term table its grid block evaluates the counts
+  /// with (DeviceSymbols::wideCountTerms), on the device, and the host plan
+  /// it was made for. Undefined when the table could not be made.
+  at::Tensor wideTerms;
+  const std::vector<int32_t>* wideTermsPlan{nullptr};
+  /// The dynamic shared memory of the step's wide setup and whether the
+  /// device fits it, as last checked.
+  int32_t wideSharedBytes{-1};
+  bool wideFits{false};
 };
 
 /// Whether the grid kernel can hold a step of 'numLaunches' launches whose
@@ -100,12 +110,58 @@ void runDeviceGrid(
     const int32_t* failure,
     int32_t firstStep);
 
+/// One step of a setup batch: what runDeviceGrid takes for the step, the
+/// ordinal its setup marks a failure with, and the earlier members of the
+/// batch whose setups store table words its setup loads.
+struct SetupMemberArgs {
+  DeviceGrid* grid{nullptr};
+  uint8_t* deviceBase{nullptr};
+  int64_t blockInfoOffset{0};
+  int32_t launchBlocks{0};
+  DebugInfo* deviceDebugBase{nullptr};
+  /// As runDeviceGrid's 'deviceClocks' and 'previousClocks'.
+  int64_t* deviceClocks{nullptr};
+  bool previousClocks{false};
+  const FixupArgs* fixups{nullptr};
+  int32_t ordinal{0};
+  std::vector<int32_t> waitsFor;
+  /// Whether the members that wait for this one load only words its store
+  /// records write, so it can signal them before the rest of its setup.
+  bool signalAfterStores{false};
+};
+
+/// The device state of a setup batch, kept between its launches.
+struct SetupBatchDevice {
+  /// The packed members and their waits as last uploaded.
+  std::vector<uint8_t> words;
+  at::Tensor device;
+  /// One flag per member, set to 'generation' when its setup is done.
+  at::Tensor done;
+  int32_t generation{0};
+};
+
+/// Runs the setups of several steps, fixups and grid, as the blocks of one
+/// kernel on 'stream', before the first member's launch. Block i sets up
+/// member i once the members it waits for are done. Returns at once when a
+/// step before 'firstStep' failed.
+void runSetupBatch(
+    SetupBatchDevice& batch,
+    const std::vector<SetupMemberArgs>& members,
+    facebook::velox::wave::Stream* stream,
+    const int32_t* failure,
+    int32_t firstStep);
+
 /// What the last grid kernel of 'grid' computed, copied back after a stream
 /// sync: per launch the element count, the multiplier and the blocks.
 struct DeviceGridResult {
   std::vector<int64_t> counts;
   std::vector<float> multipliers;
   std::vector<int32_t> blocks;
+  /// Executions since the last full grid: 0 when this one computed the grid,
+  /// else it kept the previous block table.
+  int32_t sinceFullGrid{0};
+  /// The grids the step skipped so far.
+  int32_t numSkipped{0};
 };
 
 DeviceGridResult readDeviceGrid(const DeviceGrid& grid);

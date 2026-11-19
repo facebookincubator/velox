@@ -708,7 +708,9 @@ __device__ inline bool sortKeyBefore(double a, double b) {
 // over the op's blocks, and bitonic-sorts a row's (key, index) pairs in the
 // kernel's dynamic shared memory, padded to a power of two with entries that
 // sort last. Ordering equal keys by index makes the sort stable, as aten's
-// radix sort of rows is. The launch provides room for 'kMaxRow' pairs.
+// radix sort of rows is. The launch provides room for 'kMaxRow' pairs: the
+// row length rounded up but at least a few hundred, or the cap when the data
+// decides the length.
 template <int32_t kBlockSize, typename T, int32_t kDescending, int32_t kMaxRow>
 __device__ void
 sort_rows(Tensor* input, Tensor* values, Tensor* indices, BlockInfo& block) {
@@ -719,64 +721,87 @@ sort_rows(Tensor* input, Tensor* values, Tensor* indices, BlockInfo& block) {
   for (int32_t d = 0; d < lastDim; ++d) {
     numRows *= input->dims[d];
   }
-  int32_t padded = 1;
-  while (padded < size) {
-    padded <<= 1;
+  // A row length only the data decides is bounded by the room the launch
+  // has; a longer row cannot be sorted here.
+  if (size > kMaxRow) {
+    if (kernelError(block, __LINE__)) {
+      block.debugInfo->line = __LINE__;
+      block.debugInfo->extra[0] = size;
+      block.debugInfo->extra[1] = kMaxRow;
+      SET_MSG(block.debugInfo, "Sort row too long\0");
+    }
+    return;
   }
+  int32_t padShift = 0;
+  while ((1 << padShift) < size) {
+    ++padShift;
+  }
+  const int32_t padded = 1 << padShift;
+  // Short rows are sorted several at a time, one group of 'padded' entries
+  // per row, so that a block's threads have work.
+  const int32_t passEntries =
+      max(padded, min(static_cast<int32_t>(blockDim.x), kMaxRow));
+  const int32_t rowsPerPass = passEntries >> padShift;
   T* keys = reinterpret_cast<T*>(sortShared);
   int32_t* positions = reinterpret_cast<int32_t*>(
       reinterpret_cast<char*>(sortShared) + kMaxRow * sizeof(int64_t));
   const T* in = storage<T>(input);
   // Another op of the block may have used the same memory before.
   __syncthreads();
-  for (int64_t row = block.blockInOp; row < numRows;
-       row += block.numBlocksInOp) {
-    for (uint32_t i = threadIdx.x; i < static_cast<uint32_t>(padded);
-         i += blockDim.x) {
-      if (i < static_cast<uint32_t>(size)) {
-        keys[i] = in[rowOffset(input, lastDim, row, i)];
+  for (int64_t firstRow = block.blockInOp * static_cast<int64_t>(rowsPerPass);
+       firstRow < numRows;
+       firstRow += static_cast<int64_t>(block.numBlocksInOp) * rowsPerPass) {
+    for (auto e = threadIdx.x; e < passEntries; e += blockDim.x) {
+      const int32_t i = e & (padded - 1);
+      const int64_t row = firstRow + (e >> padShift);
+      if (i < size && row < numRows) {
+        keys[e] = in[rowOffset(input, lastDim, row, i)];
       }
-      positions[i] = static_cast<int32_t>(i);
+      positions[e] = i;
     }
     __syncthreads();
     for (int32_t k = 2; k <= padded; k <<= 1) {
       for (int32_t j = k >> 1; j > 0; j >>= 1) {
-        for (uint32_t i = threadIdx.x; i < static_cast<uint32_t>(padded);
-             i += blockDim.x) {
-          const uint32_t other = i ^ static_cast<uint32_t>(j);
-          if (other <= i) {
+        for (auto e = threadIdx.x; e < passEntries; e += blockDim.x) {
+          const int32_t other = e ^ j;
+          if (other <= e) {
             continue;
           }
-          const int32_t pi = positions[i];
+          const int32_t i = e & (padded - 1);
+          const int32_t pi = positions[e];
           const int32_t po = positions[other];
-          // Whether the pair at 'other' sorts before the one at 'i'.
+          // Whether the pair at 'other' sorts before the one at 'e'. The
+          // entries of a row past the end of the data are never read.
           bool otherFirst;
           if (pi >= size || po >= size) {
             otherFirst = po < pi;
-          } else if (sortKeyBefore<kDescending != 0>(keys[other], keys[i])) {
+          } else if (sortKeyBefore<kDescending != 0>(keys[other], keys[e])) {
             otherFirst = true;
-          } else if (sortKeyBefore<kDescending != 0>(keys[i], keys[other])) {
+          } else if (sortKeyBefore<kDescending != 0>(keys[e], keys[other])) {
             otherFirst = false;
           } else {
             otherFirst = po < pi;
           }
           if (otherFirst == ((i & k) == 0)) {
             // A padding entry's key is never read.
-            const T key = keys[i];
-            keys[i] = keys[other];
+            const T key = keys[e];
+            keys[e] = keys[other];
             keys[other] = key;
-            positions[i] = po;
+            positions[e] = po;
             positions[other] = pi;
           }
         }
         __syncthreads();
       }
     }
-    for (uint32_t i = threadIdx.x; i < static_cast<uint32_t>(size);
-         i += blockDim.x) {
-      storage<T>(values)[rowOffset(values, lastDim, row, i)] = keys[i];
-      storage<int64_t>(indices)[rowOffset(indices, lastDim, row, i)] =
-          positions[i];
+    for (auto e = threadIdx.x; e < passEntries; e += blockDim.x) {
+      const int32_t i = e & (padded - 1);
+      const int64_t row = firstRow + (e >> padShift);
+      if (i < size && row < numRows) {
+        storage<T>(values)[rowOffset(values, lastDim, row, i)] = keys[e];
+        storage<int64_t>(indices)[rowOffset(indices, lastDim, row, i)] =
+            positions[e];
+      }
     }
     __syncthreads();
   }

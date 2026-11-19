@@ -21,9 +21,11 @@
 #include "velox/experimental/torchwave/GroupAlloc.h"
 #include "velox/experimental/wave/common/Cuda.h"
 
+#include <cuda_runtime.h>
 #include <glog/logging.h>
-
+#include <limits>
 #include "velox/experimental/torchwave/Cat.h"
+#include "velox/experimental/torchwave/KernelParams.h"
 #include "velox/experimental/torchwave/Utils.h"
 
 namespace torch::wave {
@@ -164,12 +166,25 @@ void noteGroupBase(
   }
 }
 
+void poisonGroupBytes(const at::Tensor& buffer) {
+  if (!WaveConfig::get().poisonGroups || !buffer.defined() ||
+      buffer.numel() == 0) {
+    return;
+  }
+  auto err = cudaMemsetAsync(buffer.data_ptr(), 0xff, buffer.numel(), nullptr);
+  TORCH_CHECK(err == cudaSuccess, cudaGetErrorString(err));
+  err = cudaStreamSynchronize(nullptr);
+  TORCH_CHECK(err == cudaSuccess, cudaGetErrorString(err));
+}
+
 namespace {
 
 at::Tensor allocateGroupBytes(int64_t bytes) {
   ScopedAllocCall timed;
-  return at::empty(
+  auto buffer = at::empty(
       {bytes}, at::TensorOptions().dtype(at::kByte).device(at::kCUDA));
+  poisonGroupBytes(buffer);
+  return buffer;
 }
 
 // True when no thread outside the execution still has work queued on the
@@ -287,7 +302,11 @@ groupBuffer(ExecutionState& state, const AllocGroup* group, int64_t bytes) {
 
 } // namespace
 
-void allocateDeviceGroup(ExecutionState& state, const AllocGroup& group) {
+void allocateDeviceGroup(
+    ExecutionState& state,
+    const AllocGroup& group,
+    int32_t sequenceNumber,
+    int32_t stepIdx) {
   const auto slot = state.groupBaseSlot.at(&group);
   const auto demand = state.recordedDemand.at(slot);
   TORCH_CHECK(demand >= 0, "No recorded demand to size group slot: ", slot);
@@ -321,6 +340,55 @@ void allocateDeviceGroup(ExecutionState& state, const AllocGroup& group) {
   if (group.concat != nullptr) {
     own(group.concat->resultId);
   }
+  const auto numSlots = state.recordedDemand.size();
+  if (state.deviceGroupStep.size() < numSlots) {
+    state.deviceGroupStep.resize(numSlots, {-1, -1});
+    state.deviceGroupOwner.resize(numSlots, -1);
+    state.deviceGroupOf.resize(numSlots, nullptr);
+  }
+  state.deviceGroupStep.at(slot) = {sequenceNumber, stepIdx};
+  state.deviceGroupOwner.at(slot) = owner;
+  state.deviceGroupOf.at(slot) = &group;
+}
+
+void regrowDeviceGroup(ExecutionState& state, int32_t slot, int64_t demand) {
+  const auto owner = state.deviceGroupOwner.at(slot);
+  const auto* group = state.deviceGroupOf.at(slot);
+  TORCH_CHECK(
+      owner >= 0 && group != nullptr &&
+          state.allocations.at(owner).buffer.defined(),
+      "Group slot ",
+      slot,
+      " failed its capacity check but holds no allocation");
+  const auto bytes = std::max<int64_t>(
+      alignAllocSize(1),
+      alignAllocSize(
+          demand + demand * WaveConfig::get().deviceAllocMarginPct / 100));
+  // A slot of the packed arena cannot grow in place, since its neighbors are
+  // live: the group gets a buffer of its own for the rest of the execution,
+  // and the next execution lays the arena out for the new demand.
+  auto buffer = allocateGroupBytes(bytes);
+  if (state.groupArena != nullptr) {
+    auto& arena = *state.groupArena;
+    auto it = arena.index.find(group);
+    if (it != arena.index.end() && arena.entries[it->second].bytes < bytes) {
+      arena.entries[it->second].bytes = bytes;
+      arena.changed = true;
+    }
+  }
+  noteGroupBase(state, group, buffer);
+  state.groupHostBytes.at(slot) = -1;
+  if (group->concat != nullptr) {
+    setAddress(
+        state,
+        state.valueAddressBase + group->concat->resultId,
+        reinterpret_cast<int64_t>(buffer.data_ptr()));
+  }
+  auto& recorded = state.recordedDemand.at(slot);
+  recorded = std::max(recorded, demand);
+  // The values that own the old buffer now own this one. The old one held
+  // only what the failed setup placed, which nothing reads.
+  state.allocations.at(owner).buffer = std::move(buffer);
 }
 
 void setAddress(ExecutionState& state, int32_t slot, int64_t address) {
@@ -493,6 +561,51 @@ void endGroupArena(ExecutionState& state) {
   arena->executing = false;
 }
 
+namespace {
+
+// A group larger than the free device memory may be sized from values a step
+// on the device path never made: a step that finds a group over its capacity
+// fails, and the steps after it do not run, but the host still sizes the steps
+// off the path from what they would have written. Names the failed step
+// instead of running out of memory. A restart (recoverFailedSetup) issues the
+// device launches again but cannot redo host sizing that already read their
+// results, so a group sized this way stays an error.
+// cudaMemGetInfo takes a driver lock that other processes hold for tens of
+// milliseconds at a time, so it is asked only for a group that is a sizable
+// part of the device.
+void checkFailedBeforeGroup(ExecutionState& state, int64_t bytes) {
+  static const int64_t kDeviceBytes = [] {
+    size_t freeBytes = 0;
+    size_t totalBytes = 0;
+    return cudaMemGetInfo(&freeBytes, &totalBytes) == cudaSuccess
+        ? static_cast<int64_t>(totalBytes)
+        : std::numeric_limits<int64_t>::max();
+  }();
+  size_t freeBytes = 0;
+  size_t totalBytes = 0;
+  if (!state.failureWords.defined() || bytes <= kDeviceBytes / 8 ||
+      cudaMemGetInfo(&freeBytes, &totalBytes) != cudaSuccess ||
+      bytes <= static_cast<int64_t>(freeBytes)) {
+    return;
+  }
+  int32_t failed{kNoFailedStep};
+  state.stream->deviceToHostAsync(
+      &failed, state.failureWords.data_ptr<int32_t>(), sizeof(failed));
+  state.stream->wait();
+  TORCH_CHECK(
+      failed == kNoFailedStep,
+      "Step ",
+      failed,
+      " of the execution needs more memory than its allocation group was "
+      "given, so the sizes of the steps after it are not valid; a restart "
+      "cannot redo host sizing that read them. The host was sizing a ",
+      bytes,
+      " byte group at step ",
+      state.stepOrdinal);
+}
+
+} // namespace
+
 AllocGroupBuffer materializeAllocGroupTable(
     const std::vector<AllocRequest>& requests,
     nativert::ExecutionFrame& frame,
@@ -511,6 +624,7 @@ AllocGroupBuffer materializeAllocGroupTable(
         numel * static_cast<int64_t>(c10::elementSize(request.dtype)));
   }
   result.totalBytes = cursor;
+  checkFailedBeforeGroup(state, result.totalBytes);
   result.base = groupBuffer(state, group, result.totalBytes);
   result.slots.assign(requests.size(), at::Tensor());
   auto* base = static_cast<uint8_t*>(result.base.data_ptr());

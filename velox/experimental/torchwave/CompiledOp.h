@@ -18,6 +18,7 @@
 
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -64,6 +65,10 @@ struct Launch {
   /// Initialized from the op's Metadata, or true for prim.ListPack (which has
   /// no registry entry).
   bool metadataOnly{false};
+
+  /// For a kEmptyFactory shortcut, the output's static dtype. Lets the factory
+  /// run without its self operand when only the device holds that.
+  std::optional<c10::ScalarType> emptyFactoryDtype;
 
   /// Blocks per SM this op would rather run at, or 0 for unspecified. Taken
   /// from WaveConfig::preferBlocksPerSm by opcode when the launch is built, so
@@ -531,6 +536,12 @@ class CompositeInvocation {
     return allocGroupPlan_.get();
   }
 
+  /// Fills and allocates for step 'stepIdx' of this node ahead of its turn,
+  /// for the setup batch of an earlier step. Returns whether the batch's
+  /// setup kernel can set the step up: it is on the device path, its device
+  /// grid is laid, and it needs no demand probe.
+  bool prepareStepEarly(ExecutionState& state, int32_t stepIdx);
+
  private:
   /// Launches the kernel. In debug_single_ops mode, launches once per block
   /// with all other blocks' opcodes set to -1 and waits after each launch.
@@ -625,6 +636,23 @@ class CompositeInvocation {
 
   /// Runs the node's steps from their bound programs.
   void executeBound(ExecutionState& state);
+
+  /// Whether the device makes the grid of 'sv' in this execution. If so,
+  /// writes the launches' empty flags where the block table goes and the
+  /// blocks the step launches with.
+  static bool layDeviceGrid(StepVectors& sv, uint8_t* pinnedBase);
+
+  /// When step 'stepIdx' starts a setup batch: fills and allocates for the
+  /// later steps of the batch, up to the first that cannot join it, and
+  /// records in 'state' how many steps the batch's setup kernel sets up.
+  void prepareSetupBatch(ExecutionState& state, int32_t stepIdx);
+
+  /// Uploads the parameters of the later steps of the active setup batch and
+  /// launches the batch's setups on 'stream', for the batch's first step 'sv'.
+  void launchSetupBatch(
+      ExecutionState& state,
+      const StepVectors& sv,
+      facebook::velox::wave::Stream* stream);
 
   /// The host part of a step on the device path: its groups from their
   /// recorded demands, and no sizing.

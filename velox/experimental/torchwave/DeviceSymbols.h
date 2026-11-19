@@ -60,6 +60,31 @@ struct SymbolFixups {
   int32_t numRecords{0};
   at::Tensor deviceRecords;
   at::Tensor deviceCode;
+  /// Under WaveConfig::convergedSetup, the results the converged evaluation
+  /// writes and the records read.
+  at::Tensor deviceResults;
+  /// Words of 'deviceCode'.
+  int32_t numDeviceCode{0};
+  /// Records in 'deviceRecords'.
+  int32_t numDeviceRecords{0};
+  /// Under WaveConfig::wideSetup, the plan of the step's setup over several
+  /// blocks, when the step has one, and the blocks' flags.
+  at::Tensor deviceWide;
+  std::vector<int32_t> wideHostWords;
+  at::Tensor wideFlags;
+  int32_t numWideBlocks{0};
+  /// Words of the plan's shape table and code.
+  int32_t wideShapeWords{0};
+  /// The bytes from the start of the step's parameters that the wide setup
+  /// may write, and the addresses its programs load. A symbol or load there
+  /// would see another block's writes, so the step then runs the one-block
+  /// setup.
+  int32_t wideWriteEnd{0};
+  std::vector<int64_t> wideLoadAddresses;
+  /// The words the wide setup's placement block stores, sorted. A symbol
+  /// there would see them before the stores or after, depending on the
+  /// block.
+  std::vector<int64_t> wideStoreAddresses;
 };
 
 /// What the fixup kernel of one step reads besides the step's parameters.
@@ -72,6 +97,14 @@ struct FixupArgs {
   int32_t numSymbols{0};
   /// Words of 'code'.
   int32_t numCode{0};
+  /// The wide setup's plan, or nullptr for the one-block setup; see
+  /// SymbolFixups::deviceWide.
+  int32_t* wide{nullptr};
+  /// The plan's words on the host.
+  const std::vector<int32_t>* wideHost{nullptr};
+  int32_t* wideFlags{nullptr};
+  int32_t numWideBlocks{0};
+  int32_t wideShapeWords{0};
 };
 
 /// Lets a step that would wait for an integer the device returns -- an
@@ -134,8 +167,13 @@ class DeviceSymbols {
   /// value exceeded the capacity the execution ran on.
   bool endExecution(ExecutionState& state);
 
-  /// Makes the fixups of a step ready to run on the device.
-  FixupArgs prepareFixups(ExecutionState& state, SymbolFixups& fixups);
+  /// Makes the fixups of a step ready to run on the device. With
+  /// 'deviceBase', the step's parameters on the device, the fixups may run as
+  /// a wide setup.
+  FixupArgs prepareFixups(
+      ExecutionState& state,
+      SymbolFixups& fixups,
+      const uint8_t* deviceBase);
 
   /// Launches the fixups of a step on 'stream', after its parameters have
   /// been copied to 'deviceBase'.
@@ -170,6 +208,14 @@ class DeviceSymbols {
   /// Logs and zeroes the counts the check records added over the previous
   /// execution of 'state'. The streams must be idle.
   void reportSizeChecks(ExecutionState& state) const;
+
+  /// Finds the runs of consecutive steps on the device path whose setups can
+  /// run as the blocks of one kernel before the first of them: no setup reads
+  /// a value a kernel of an earlier step in the run leaves, and only the last
+  /// step runs standalones. A setup that loads a table word the setup of an
+  /// earlier step in the run stores waits for it. Puts the runs in
+  /// state.setupBatches and logs them. Once per state, after an execution.
+  void planSetupBatches(ExecutionState& state) const;
 
   /// Under WaveConfig::deviceSizingPoison: zeroes the dims the host wrote at
   /// 'params' for the tensor parameters whose every dim 'fixups' writes.
@@ -232,6 +278,19 @@ class DeviceSymbols {
   /// The dynamic shared memory fixupBody uses for 'numCode' words of
   /// programs: all of them, or none when they do not fit.
   static int32_t fixupSharedBytes(int32_t numCode);
+
+  /// The dynamic shared memory a wide setup's placement block uses for the
+  /// temps, before the symbols.
+  static constexpr int32_t kWideAreaBytes = 8 * 1024;
+
+  /// The term table a wide setup's grid block evaluates the count terms of
+  /// the packed grid descriptor 'gridWords' with, over the wide plan 'plan':
+  /// per term its flags, offset, and the slot entry or value code that sets
+  /// what it reads. Empty when a term reads what the plan writes in a way the
+  /// table cannot give; the grid block then waits for the other blocks.
+  static std::vector<int32_t> wideCountTerms(
+      const std::vector<int32_t>& plan,
+      const std::vector<int32_t>& gridWords);
 
   /// Logs, for each step that still waits, the returned values it waits for
   /// and why each was not picked. For TW_DEVICE_SYMBOLS_TRACE.

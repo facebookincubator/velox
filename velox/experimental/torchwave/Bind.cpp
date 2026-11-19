@@ -336,6 +336,35 @@ bool isTensorOutput(const LaunchData& data, size_t i) {
       data.actualOutputTypes[i] == nativert::Type::Kind::Tensor;
 }
 
+// The elements of 'list' when a prim.ListPack of SymInts makes it, else empty.
+std::vector<int32_t> intListElements(const nativert::Value* list) {
+  std::vector<int32_t> elements;
+  const auto* pack = list != nullptr ? list->producer() : nullptr;
+  if (pack == nullptr || pack->target() != "prim.ListPack" ||
+      list->type().kind() != nativert::Type::Kind::SymIntList) {
+    return elements;
+  }
+  for (const auto& input : pack->inputs()) {
+    if (input.value == nullptr) {
+      return {};
+    }
+    elements.push_back(input.value->id());
+  }
+  return elements;
+}
+
+// The list elements of a view or expand whose sizes are not constant.
+std::vector<int32_t> sizeListElements(const LaunchData& data) {
+  const auto kind = data.launch->standaloneShortcut;
+  if (!WaveConfig::get().deviceAlloc ||
+      (kind != StandaloneShortcut::kView &&
+       kind != StandaloneShortcut::kExpand) ||
+      !data.intList.empty() || data.args.size() < 2) {
+    return {};
+  }
+  return intListElements(data.args[1]);
+}
+
 // A kView output: a DeriveOp over the table when a metadata shortcut covers the
 // view, else the view over the frame.
 BoundOutput viewOutput(
@@ -353,6 +382,7 @@ BoundOutput viewOutput(
   DeriveOp op{
       .kind = recipe->launch.standaloneShortcut,
       .intList = data.intList,
+      .listElements = sizeListElements(data),
       .output = actualId};
   for (size_t i = 0; i < data.args.size(); ++i) {
     op.operands.push_back(data.args[i] ? data.args[i]->id() : -1);
@@ -979,6 +1009,8 @@ void bindTableOnly(ExecutionState& state, WaveGraph& waveGraph) {
       candidate[id] = 1;
     }
   };
+  // In-place outputs and their selves.
+  std::vector<std::pair<nativert::ValueId, nativert::ValueId>> inPlaceAliases;
   for (const auto& node : waveGraph.nodes()) {
     const auto* invocation = node->kernels();
     if (invocation == nullptr) {
@@ -1034,12 +1066,13 @@ void bindTableOnly(ExecutionState& state, WaveGraph& waveGraph) {
             markHostRead(data.returnValues[r]);
           }
         }
-        // An in-place output is a view of its self, made over the frame.
+        // An in-place output shares its self's buffer: over the table it has
+        // its self's entry, over the frame it is a view of its self.
         for (size_t i = 0; i < data.actualOutputDescs.size(); ++i) {
           const auto& desc = data.actualOutputDescs[i];
           if (desc.aliasSelfId) {
-            markHostRead(*desc.aliasSelfId);
-            markHostRead(data.actualOutputs[i]);
+            inPlaceAliases.emplace_back(
+                data.actualOutputs[i], *desc.aliasSelfId);
           }
         }
       }
@@ -1082,14 +1115,27 @@ void bindTableOnly(ExecutionState& state, WaveGraph& waveGraph) {
                 markHostRead(output.valueId);
               }
             }
+            // A shape-only output has no memory: its shape alone can live
+            // in the table.
             if ((output.kind == BoundOutput::kTensor ||
-                 output.kind == BoundOutput::kListElement) &&
+                 output.kind == BoundOutput::kListElement ||
+                 output.kind == BoundOutput::kShapeOnly) &&
                 output.aliasOf < 0) {
               markCandidate(output.valueId);
             }
           }
         }
       }
+    }
+  }
+  // An alias of a self that has no entry is made over the frame.
+  for (const auto& [alias, self] : inPlaceAliases) {
+    if (self < 0 || static_cast<size_t>(self) >= numValues ||
+        candidate[self] == 0) {
+      markHostRead(self);
+      markHostRead(alias);
+    } else {
+      markCandidate(alias);
     }
   }
   // The values the host reads only as graph outputs, at the end.
@@ -1200,7 +1246,13 @@ void bindTableOnly(ExecutionState& state, WaveGraph& waveGraph) {
             .wholeExtent = data.wholeExtent};
         bool derive = false;
         if (kind == StandaloneShortcut::kListPack) {
-          derive = packDerives(data);
+          // A SymInt list's elements are integers the table or the frame
+          // holds: the derive makes the frame's list when the host reads it.
+          derive = packDerives(data) ||
+              (data.actualOutputs.size() == 1 &&
+               !data.standalone->outputs().empty() &&
+               data.standalone->outputs()[0]->type().kind() ==
+                   nativert::Type::Kind::SymIntList);
           op.output = data.actualOutputs.empty() ? -1 : data.actualOutputs[0];
         } else if (kind == StandaloneShortcut::kListUnpack) {
           op.elements = elementsOf(
@@ -1219,11 +1271,15 @@ void bindTableOnly(ExecutionState& state, WaveGraph& waveGraph) {
           derive = derivable(kind) && !data.args.empty() &&
               data.args[0] != nullptr && data.actualOutputs.size() == 1;
           op.output = derive ? data.actualOutputs[0] : -1;
+          op.listElements = sizeListElements(data);
         }
         if (!derive) {
-          for (auto* arg : data.args) {
-            if (arg != nullptr) {
-              markHostRead(arg->id());
+          // An empty factory runs without its self when the frame lacks it.
+          const bool selfUnread = kind == StandaloneShortcut::kEmptyFactory &&
+              data.launch->emptyFactoryDtype.has_value();
+          for (size_t i = selfUnread ? 1 : 0; i < data.args.size(); ++i) {
+            if (data.args[i] != nullptr) {
+              markHostRead(data.args[i]->id());
             }
           }
           for (auto id : data.actualOutputs) {
@@ -1263,6 +1319,14 @@ void bindTableOnly(ExecutionState& state, WaveGraph& waveGraph) {
     for (auto& sv : steps) {
       if (sv.program == nullptr) {
         continue;
+      }
+      // A size list's elements are read when the view is derived, which
+      // waits for the ones the device returns.
+      for (const auto* derives :
+           {&sv.program->derives, &sv.program->viewDerives}) {
+        for (const auto& op : *derives) {
+          sv.readIds.insert(op.listElements.begin(), op.listElements.end());
+        }
       }
       for (auto& op : sv.program->viewDerives) {
         op.materialize = hostRead[op.output] != 0;
@@ -1449,6 +1513,7 @@ void packStepCode(
            .materializeOutputs = addIds(materializeOutputs),
            .constants = addConsts(op.constants),
            .intList = addConsts(op.intList),
+           .listElements = addIds(op.listElements),
            .shortcut = op.shortcut,
            .secondShortcut = op.secondShortcut,
            .wholeExtent = op.wholeExtent});

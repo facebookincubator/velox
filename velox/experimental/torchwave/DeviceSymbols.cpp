@@ -19,11 +19,14 @@
 #include <fmt/format.h>
 #include <folly/synchronization/CallOnce.h>
 #include <glog/logging.h>
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstring>
 #include <deque>
 #include <functional>
 #include <map>
+#include <optional>
 
 #include <torch/nativert/executor/ExecutionFrame.h>
 #include "velox/experimental/torchwave/AllocGroup.h"
@@ -162,7 +165,7 @@ __shared__ int fixupMark[3];
 #else
 #define FIXUP_MARK(k)
 #endif
-constexpr int kSharedCode = 2048;
+constexpr int kSharedCode = 12288;
 constexpr int kDenseStride = -2;
 
 __device__ inline long long operandOf(long long word) {
@@ -234,6 +237,389 @@ __device__ long long evalProgram(
   }
 }
 
+// The converged evaluation; see DeviceSymbols::prepareFixups. A shape is a
+// program whose operands are literals or, with bit 6 of the opcode set,
+// indices into the operands of the instance. Besides the opcodes of
+// evalProgram it has 14 shift right, 15 shift left and 16 and, which replace a
+// division, multiplication and modulo by a power of two.
+__device__ inline long long shapeOperand(long long word, const long long* ops) {
+  const long long operand = operandOf(word);
+  return ((word >> 56) & 0x40) ? ops[operand] : operand;
+}
+
+// Evaluates the shape at 'code' over the operands at 'ops'. 'library' names a
+// shape evaluated without interpretation, as LibraryShape in the host code.
+__device__ long long evalShape(
+    const long long* code,
+    int library,
+    const long long* ops,
+    const long long* values,
+    const long long* temps,
+    const long long* caps) {
+  switch (library) {
+    case 1:
+      return shapeOperand(code[0], ops);
+    case 2:
+      return values[shapeOperand(code[0], ops)];
+    case 3:
+      return *reinterpret_cast<const long long*>(shapeOperand(code[0], ops));
+    case 4:
+      // A group member's address: base + temp - temp of the first member.
+      return *reinterpret_cast<const long long*>(shapeOperand(code[0], ops)) +
+          temps[shapeOperand(code[2], ops)] +
+          shapeOperand(code[4], ops) * temps[shapeOperand(code[5], ops)];
+    case 5:
+      // A group member's aligned bytes over one symbol.
+      return static_cast<long long>(
+          static_cast<unsigned long long>(
+              (shapeOperand(code[0], ops) * values[shapeOperand(code[1], ops)] +
+               shapeOperand(code[3], ops)) >>
+              shapeOperand(code[5], ops))
+          << shapeOperand(code[6], ops));
+    case 6: {
+      // The same over the larger of two symbols.
+      const long long a = values[shapeOperand(code[1], ops)];
+      const long long b = values[shapeOperand(code[2], ops)];
+      return static_cast<long long>(
+          static_cast<unsigned long long>(
+              (shapeOperand(code[0], ops) * (a > b ? a : b) +
+               shapeOperand(code[5], ops)) >>
+              shapeOperand(code[7], ops))
+          << shapeOperand(code[8], ops));
+    }
+    default:
+      break;
+  }
+  long long stack[16];
+  int top = 0;
+  for (;; ++code) {
+    const long long word = *code;
+    const long long op = (word >> 56) & 0x3f;
+    if (op == 10) {
+      return top > 0 ? stack[top - 1] : 0;
+    }
+    const long long operand = shapeOperand(word, ops);
+    switch (op) {
+      case 1: stack[top++] = operand; continue;
+      case 2: stack[top++] = values[operand]; continue;
+      case 11: stack[top - 1] = *reinterpret_cast<const long long*>(stack[top - 1]); continue;
+      case 12: stack[top++] = temps[operand]; continue;
+      case 13: stack[top++] = caps[operand]; continue;
+      case 14: stack[top - 1] >>= operand; continue;
+      case 15: stack[top - 1] = static_cast<long long>(static_cast<unsigned long long>(stack[top - 1]) << operand); continue;
+      case 16: stack[top - 1] &= operand; continue;
+      default: break;
+    }
+    const long long b = stack[--top];
+    const long long a = stack[--top];
+    long long r = 0;
+    switch (op) {
+      case 3: r = a + b; break;
+      case 4: r = a * b; break;
+      case 5: r = a > b ? a : b; break;
+      case 6: r = a < b ? a : b; break;
+      case 7: { r = 1; for (long long i = 0; i < b && i < 64; ++i) r *= a; break; }
+      case 8: { r = b == 0 ? 0 : a / b; if (b != 0 && (a % b != 0) && ((a < 0) != (b < 0))) --r; break; }
+      case 9: { long long q = b == 0 ? 0 : a / b; if (b != 0 && (a % b != 0) && ((a < 0) != (b < 0))) --q; r = a - q * b; break; }
+    }
+    stack[top++] = r;
+  }
+}
+
+// Instances of each phase a thread loads before the first barrier.
+constexpr int kPreloaded = 2;
+
+// Loads the first kPreloaded instances of each phase that thread 'tid' runs
+// into 'preloaded' and prefetches their operands. None of it depends on what
+// the setup computes, so it overlaps the loads of the symbols.
+__device__ void preloadPhases(
+    const long long* code,
+    int at,
+    int tid,
+    int numThreads,
+    long long (&preloaded)[3][kPreloaded]) {
+  const long long* section = code + at;
+  const long long* entries = code + section[6];
+  const long long* operands = code + section[7];
+  int begin = 0;
+  for (int phase = 0; phase < 3; ++phase) {
+    const int count = static_cast<int>(section[2 + phase]);
+    for (int k = 0; k < kPreloaded; ++k) {
+      const int i = tid + k * numThreads;
+      if (i < count) {
+        preloaded[phase][k] = entries[begin + i];
+        asm volatile("prefetch.global.L1 [%0];" ::"l"(
+            operands + (preloaded[phase][k] & 0xffffffff)));
+      }
+    }
+    begin += count;
+  }
+}
+
+// Evaluates the instances of phase 'phase' (0 temps, 1 stores, 2 the other
+// records) of the converged section at code[at], each thread a run of
+// consecutive instances, which the host sorts by shape. Phase 0 writes the
+// temps, the others the results.
+__device__ void evalPhase(
+    const long long* code,
+    int at,
+    int phase,
+    int tid,
+    int numThreads,
+    const long long* values,
+    long long* temps,
+    const long long* caps,
+    const long long* preloaded,
+    long long* results) {
+  const long long* section = code + at;
+  const int begin = phase == 0 ? 0
+      : phase == 1             ? static_cast<int>(section[2])
+                               : static_cast<int>(section[2] + section[3]);
+  const int count = static_cast<int>(section[2 + phase]);
+  const long long* shapes = code + section[5];
+  const long long* entries = code + section[6] + begin;
+  const long long* operands = code + section[7];
+  for (int i = tid, k = 0; i < count; i += numThreads, ++k) {
+    const long long entry = k < kPreloaded ? preloaded[k] : entries[i];
+    const long long* shape = shapes + 2 * ((entry >> 48) & 0x3fff);
+    const long long value = evalShape(
+        code + shape[1],
+        static_cast<int>(shape[0]),
+        operands + (entry & 0xffffffff),
+        ((entry >> 62) & 1) ? caps : values,
+        temps,
+        caps);
+    const int dest = static_cast<int>((entry >> 32) & 0xffff);
+    if (phase == 0) {
+      temps[dest] = value;
+    } else {
+      results[dest] = value;
+    }
+  }
+}
+
+// Words of a tensor parameter the setup writes, storage to contiguous.
+constexpr int kSlotWords = 7;
+
+// The 32 bits at 'byte' of the words of a tensor parameter. 'byte' is a
+// constant after unrolling, so the words stay in registers.
+__device__ __forceinline__ int slotGet(const long long (&words)[kSlotWords], int byte) {
+  return static_cast<int>(words[byte >> 3] >> ((byte & 7) * 8));
+}
+
+__device__ __forceinline__ void slotSet(long long (&words)[kSlotWords], int byte, int value) {
+  const int shift = (byte & 7) * 8;
+  words[byte >> 3] = (words[byte >> 3] & ~(0xffffffffLL << shift)) |
+      (static_cast<long long>(static_cast<unsigned>(value)) << shift);
+}
+
+// The values a slot entry gives a tensor parameter, evaluated: the placed
+// address and its offset in elements, the band's start over the values and
+// over the capacities, dims and strides. Bit d of 'keepDims' keeps the host's
+// dim d, of 'setStrides' writes stride d, of 'denseStrides' makes stride d
+// the dense stride of the real dims.
+struct SlotValues {
+  long long placedAddress;
+  long long placedOffset;
+  long long bandStart;
+  long long bandCapacity;
+  long long dims[4];
+  long long strides[4];
+  int keepDims;
+  int setStrides;
+  int denseStrides;
+};
+
+// Applies 'values' to the words of a tensor parameter: storage at byte 0,
+// the element size at 9, the dims at 12, the strides at 28, numEl at 44,
+// status at 48, contiguous at 52. 'flags' are a slot entry's, as
+// kSlotEntryWords in the host code.
+__device__ __forceinline__ void applySlot(
+    long long (&words)[kSlotWords],
+    int flags,
+    const SlotValues& v,
+    int over) {
+  const int rank = flags & 15;
+  const int recordOver = (flags & 0x40) ? 0 : over;
+  const long long elementSize = (words[1] >> 8) & 0xff;
+  if (flags & 0x200) {
+    words[0] = v.placedAddress + v.placedOffset * elementSize;
+  }
+  if ((flags & 0x100) && !recordOver) {
+    words[0] += (v.bandStart - v.bandCapacity) * elementSize;
+  }
+  if (flags & 0x800) {
+    slotSet(words, 48, 0);
+  }
+  if ((flags & 0x10) == 0) {
+    return;
+  }
+  bool hostDense = true;
+  long long hostExpected = 1;
+#pragma unroll
+  for (int d = 3; d >= 0; --d) {
+    if (d < rank) {
+      const int dim = slotGet(words, 12 + 4 * d);
+      if (dim != 1 && slotGet(words, 28 + 4 * d) != hostExpected) {
+        hostDense = false;
+      }
+      hostExpected *= dim;
+    }
+  }
+  long long numEl = 1;
+#pragma unroll
+  for (int d = 0; d < 4; ++d) {
+    if (d < rank) {
+      const long long dim = recordOver ? 0
+          : (v.keepDims >> d) & 1      ? slotGet(words, 12 + 4 * d)
+                                       : v.dims[d];
+      slotSet(words, 12 + 4 * d, static_cast<int>(dim));
+      if ((v.setStrides >> d) & 1) {
+        slotSet(words, 28 + 4 * d, static_cast<int>(v.strides[d]));
+      }
+      numEl *= dim;
+    }
+  }
+  long long dense = 1;
+#pragma unroll
+  for (int d = 3; d >= 0; --d) {
+    if (d < rank) {
+      const int dim = slotGet(words, 12 + 4 * d);
+      if ((v.denseStrides >> d) & 1) {
+        slotSet(words, 28 + 4 * d, hostDense ? static_cast<int>(dense) : 0);
+      }
+      dense *= dim > 1 ? dim : 1;
+      if (dim == 1) {
+        slotSet(words, 28 + 4 * d, 0);
+      }
+    }
+  }
+  bool contiguous = true;
+  long long expected = 1;
+#pragma unroll
+  for (int d = 3; d >= 0; --d) {
+    if (d < rank) {
+      const int dim = slotGet(words, 12 + 4 * d);
+      if (dim != 1 && slotGet(words, 28 + 4 * d) != expected) {
+        contiguous = false;
+      }
+      expected *= dim;
+    }
+  }
+  slotSet(words, 44, static_cast<int>(numEl));
+  slotSet(words, 48, 0);
+  if ((flags & 0x20) == 0) {
+    words[6] = (words[6] & ~(0xffLL << 32)) |
+        (static_cast<long long>(contiguous ? 1 : 0) << 32);
+  }
+}
+
+// Applies the slot entry 'entry' (see kSlotEntryWords in the host code) to the
+// words of a tensor parameter.
+__device__ __forceinline__ void updateSlot(
+    long long (&words)[kSlotWords],
+    const int* entry,
+    const long long* results,
+    int over) {
+  const int flags = entry[1];
+  const int rank = flags & 15;
+  auto dimCode = [&](int d) { return (entry[4 + d / 2] >> (16 * (d & 1))) & 0xffff; };
+  auto strideCode = [&](int d) { return (entry[6 + d / 2] >> (16 * (d & 1))) & 0xffff; };
+  // All loads of results first, so that they overlap.
+  const int placed = entry[3];
+  const int band = entry[2];
+  SlotValues v;
+  v.placedAddress = (flags & 0x200) ? results[placed & 0xffff] : 0;
+  v.placedOffset = (flags & 0x400) ? results[(placed >> 16) & 0xffff] : 0;
+  v.bandStart = (flags & 0x100) ? results[band & 0xffff] : 0;
+  v.bandCapacity =
+      (flags & 0x100) && !(flags & 0x80) ? results[(band >> 16) & 0xffff] : 0;
+  v.keepDims = 0;
+  v.setStrides = 0;
+  v.denseStrides = 0;
+#pragma unroll
+  for (int d = 0; d < 4; ++d) {
+    const int dim = dimCode(d);
+    const int stride = strideCode(d);
+    v.dims[d] = d < rank && dim < 0x8000 ? results[dim] : 0;
+    v.strides[d] = d < rank && stride < 0x8000 ? results[stride] : 0;
+    v.keepDims |= (dim == 0xffff ? 1 : 0) << d;
+    v.setStrides |= (stride < 0x8000 ? 1 : 0) << d;
+    v.denseStrides |= (stride == 0xfffe ? 1 : 0) << d;
+  }
+  applySlot(words, flags, v, over);
+}
+
+// Updates the tensor parameters of the converged section's slot entries, a
+// slot per thread at a time. A thread loads the words of its next slot before
+// it updates the current one, so that each slot costs about one round trip to
+// memory.
+__device__ void updateSlots(
+    unsigned char* params,
+    const long long* code,
+    int at,
+    int tid,
+    int numThreads,
+    const long long* results,
+    int over) {
+  const long long* section = code + at;
+  const int numSlots = static_cast<int>(section[8]);
+  const int* entries = reinterpret_cast<const int*>(code + section[9]);
+  int slot = tid;
+  if (slot >= numSlots) {
+    return;
+  }
+  long long words[kSlotWords];
+  {
+    const auto* from =
+        reinterpret_cast<const long long*>(params + entries[8 * slot]);
+#pragma unroll
+    for (int i = 0; i < kSlotWords; ++i) {
+      words[i] = from[i];
+    }
+  }
+  for (;;) {
+    const int next = slot + numThreads;
+    long long nextWords[kSlotWords];
+    if (next < numSlots) {
+      const auto* from =
+          reinterpret_cast<const long long*>(params + entries[8 * next]);
+#pragma unroll
+      for (int i = 0; i < kSlotWords; ++i) {
+        nextWords[i] = from[i];
+      }
+    }
+    updateSlot(words, entries + 8 * slot, results, over);
+    auto* to = reinterpret_cast<long long*>(params + entries[8 * slot]);
+#pragma unroll
+    for (int i = 0; i < kSlotWords; ++i) {
+      to[i] = words[i];
+    }
+    if (next >= numSlots) {
+      break;
+    }
+    slot = next;
+#pragma unroll
+    for (int i = 0; i < kSlotWords; ++i) {
+      words[i] = nextWords[i];
+    }
+  }
+}
+
+__device__ inline int loadAcquire(const int* flag) {
+  int value;
+  asm volatile("ld.acquire.gpu.global.b32 %0, [%1];"
+               : "=r"(value)
+               : "l"(flag)
+               : "memory");
+  return value;
+}
+
+__device__ inline void storeRelease(int* flag, int value) {
+  asm volatile("st.release.gpu.global.b32 [%0], %1;" ::"l"(flag), "r"(value)
+               : "memory");
+}
+
 // Waits for 'count' threads at named barrier 'id'; 0 is __syncthreads.
 __device__ inline void barrier(int id, int count) {
   asm volatile("bar.sync %0, %1;" ::"r"(id), "r"(count) : "memory");
@@ -251,9 +637,58 @@ __device__ inline int barrierOr(int id, int count, int predicate) {
   return result;
 }
 
+// The value of the symbol whose source address is 'address': with bit 1,
+// element (address >> 48) of the integer tensor whose parameter is at the
+// address; with bit 0, the int32 at the address; else the int64 there.
+__device__ inline long long symbolValue(long long address) {
+  if (address & 2) {
+    const auto* slot =
+        reinterpret_cast<const unsigned char*>(address & 0xfffffffffffcLL);
+    const long long index = (address >> 48) & 0x7fff;
+    const void* data = *reinterpret_cast<void* const*>(slot);
+    return slot[9] == 4 ? static_cast<const int*>(data)[index]
+                        : static_cast<const long long*>(data)[index];
+  }
+  if (address == 0) {
+    return 0;
+  }
+  return (address & 1) ? *reinterpret_cast<const int*>(address - 1)
+                       : *reinterpret_cast<const long long*>(address);
+}
+
+// Loads the values of the 'numUsed' symbols 'used' names into 'values' and
+// their capacities into 'capacities', a symbol per thread at a time.
+// 'symbols' holds numSymbols source addresses, then their capacities. Returns
+// 1 when a value this thread loads is negative or over its capacity.
+__device__ inline int loadSymbols(
+    const long long* used,
+    int numUsed,
+    const long long* symbols,
+    int numSymbols,
+    long long* values,
+    long long* capacities,
+    int tid,
+    int numThreads) {
+  int anyOver = 0;
+  for (int j = tid; j < numUsed; j += numThreads) {
+    const int i = static_cast<int>(used[j] & (kCapacityOnly - 1));
+    const long long address = (used[j] & kCapacityOnly) ? 0 : symbols[i];
+    const long long capacity = symbols[numSymbols + i];
+    capacities[i] = capacity;
+    if (used[j] & kCapacityOnly) {
+      continue;
+    }
+    const long long v = symbolValue(address);
+    values[i] = v;
+    anyOver |= v < 0 || v > capacity ? 1 : 0;
+  }
+  return anyOver;
+}
+
 // Run by 'numThreads' threads from 'firstThread' on, which meet at named
 // barrier 'barrierId'; the rest of the block may do other work. The programs
-// go to 'codeBuffer' in shared memory when it is given.
+// go to 'codeBuffer' in shared memory when it is given. With 'storedFlag', sets
+// it to 'generation' once the table words the records store are written.
 __device__ void fixupBody(
     unsigned char* params,
     const int* records,
@@ -267,7 +702,9 @@ __device__ void fixupBody(
     int numThreads,
     int barrierId,
     const int* failure,
-    int step) {
+    int step,
+    int* storedFlag = nullptr,
+    int generation = 0) {
   const int tid = threadIdx.x - firstThread;
   // 'symbols' holds numSymbols source addresses, then their capacities.
   __shared__ long long values[kMaxSymbols];
@@ -283,36 +720,30 @@ __device__ void fixupBody(
     }
     code = codeBuffer;
   }
-  int anyOver = 0;
-  // code[0] is how many symbols the programs read, code[1...] their indices.
+  // The low half of code[0] is how many symbols the programs read,
+  // code[1...] their indices. The high half, when not 0, is the offset of the
+  // converged section; the records then name results in place of programs.
   const long long* used = code_ + 1;
-  const int numUsed = static_cast<int>(code_[0]);
-  for (int j = tid; j < numUsed; j += numThreads) {
-    const int i = static_cast<int>(used[j] & (kCapacityOnly - 1));
-    const long long address = (used[j] & kCapacityOnly) ? 0 : symbols[i];
-    const long long capacity = symbols[numSymbols + i];
-    capacities[i] = capacity;
-    if (used[j] & kCapacityOnly) {
-      continue;
-    }
-    long long v = 0;
-    if (address & 2) {
-      // Element (address >> 48) of the integer tensor whose parameter is at
-      // the address.
-      const auto* slot = reinterpret_cast<const unsigned char*>(
-          address & 0xfffffffffffcLL);
-      const long long index = (address >> 48) & 0x7fff;
-      const void* data = *reinterpret_cast<void* const*>(slot);
-      v = slot[9] == 4 ? static_cast<const int*>(data)[index]
-                       : static_cast<const long long*>(data)[index];
-
-    } else if (address != 0) {
-      v = (address & 1) ? *reinterpret_cast<const int*>(address - 1)
-                        : *reinterpret_cast<const long long*>(address);
-    }
-    values[i] = v;
-    anyOver |= v < 0 || v > capacity ? 1 : 0;
+  const int numUsed = static_cast<int>(code_[0] & 0xffffffff);
+  const int evalAt = static_cast<int>(code_[0] >> 32);
+  // The results go after the section in shared memory when the code is
+  // there, else to their global buffer.
+  long long* results = evalAt <= 0 ? nullptr
+      : codeBuffer != nullptr      ? codeBuffer + code_[evalAt + 10]
+                                   : reinterpret_cast<long long*>(code_[evalAt]);
+  long long preloaded[3][kPreloaded];
+  if (evalAt > 0) {
+    // From global memory: the copy in shared memory is not complete before
+    // the barrier.
+    preloadPhases(code_, evalAt, tid, numThreads, preloaded);
   }
+  auto program = [&](int field) {
+    return evalAt > 0
+        ? results[field]
+        : evalProgram(code + field, values, nullptr, capacities);
+  };
+  const int anyOver = loadSymbols(
+      used, numUsed, symbols, numSymbols, values, capacities, tid, numThreads);
   if (firstRecord >= 0) {
     asm volatile("prefetch.global.L1 [%0];" ::"l"(params + firstRecord));
   }
@@ -322,10 +753,24 @@ __device__ void fixupBody(
   // into 'temps', an exclusive scan per group, then each address to its
   // table slot, which the records below load.
   __shared__ long long temps[kMaxTemps];
-  for (int r = tid; r < numRecords; r += numThreads) {
-    const int* rec = records + r * 12;
-    if (rec[1] == 11) {
-      temps[rec[3]] = evalProgram(code + rec[4], values, temps, capacities);
+  if (evalAt > 0) {
+    evalPhase(
+        code,
+        evalAt,
+        0,
+        tid,
+        numThreads,
+        values,
+        temps,
+        capacities,
+        preloaded[0],
+        results);
+  } else {
+    for (int r = tid; r < numRecords; r += numThreads) {
+      const int* rec = records + r * 12;
+      if (rec[1] == 11) {
+        temps[rec[3]] = evalProgram(code + rec[4], values, temps, capacities);
+      }
     }
   }
   barrier(barrierId, numThreads);
@@ -341,6 +786,20 @@ __device__ void fixupBody(
     }
   }
   barrier(barrierId, numThreads);
+  if (evalAt > 0) {
+    evalPhase(
+        code,
+        evalAt,
+        1,
+        tid,
+        numThreads,
+        values,
+        temps,
+        capacities,
+        preloaded[1],
+        results);
+    barrier(barrierId, numThreads);
+  }
   for (int r = tid; r < numRecords; r += numThreads) {
     const int* rec = records + r * 12;
     if (rec[1] == 13 || rec[1] == 15) {
@@ -348,7 +807,9 @@ __device__ void fixupBody(
           static_cast<unsigned long long>(static_cast<unsigned>(rec[5])) |
           (static_cast<unsigned long long>(static_cast<unsigned>(rec[6])) << 32));
       if (rec[1] == 13) {
-        *dest = evalProgram(code + rec[4], values, temps, capacities);
+        *dest = evalAt > 0
+            ? results[rec[4]]
+            : evalProgram(code + rec[4], values, temps, capacities);
         continue;
       }
       // The setup runs to its end either way; the demand tells the host what
@@ -356,13 +817,37 @@ __device__ void fixupBody(
       const long long demand = temps[rec[3]];
       *dest = demand;
       if (failure != nullptr &&
-          demand > evalProgram(code + rec[4], values, temps, capacities)) {
+          demand >
+              (evalAt > 0
+                   ? results[rec[4]]
+                   : evalProgram(code + rec[4], values, temps, capacities))) {
         atomicMin(const_cast<int*>(failure), step);
       }
     }
   }
   barrier(barrierId, numThreads);
+  if (storedFlag != nullptr && tid == 0) {
+    __threadfence();
+    storeRelease(storedFlag, generation);
+  }
   FIXUP_MARK(1);
+  if (evalAt > 0) {
+    evalPhase(
+        code,
+        evalAt,
+        2,
+        tid,
+        numThreads,
+        values,
+        temps,
+        capacities,
+        preloaded[2],
+        results);
+    barrier(barrierId, numThreads);
+    if (code[evalAt + 8] > 0) {
+      updateSlots(params, code, evalAt, tid, numThreads, results, over);
+    }
+  }
   for (int r = tid; r < numRecords; r += numThreads) {
     const int* rec = records + r * 12;
     if (rec[1] >= 11 && rec[1] <= 13 || rec[1] == 15) {
@@ -380,7 +865,7 @@ __device__ void fixupBody(
       continue;
     }
     if (rec[1] == 1) {
-      *reinterpret_cast<long long*>(slot) = over ? 0 : evalProgram(code + rec[4], values, nullptr, capacities);
+      *reinterpret_cast<long long*>(slot) = over ? 0 : program(rec[4]);
       continue;
     }
     if (rec[1] == 6) {
@@ -390,11 +875,7 @@ __device__ void fixupBody(
     if (rec[1] == 9 || rec[1] == 10) {
       // rec[5], when set, is an offset in elements of the parameter's size.
       const long long device =
-          evalProgram(code + rec[4], values, nullptr, capacities) +
-          (rec[5] >= 0
-               ? evalProgram(code + rec[5], values, nullptr, capacities) *
-                   slot[9]
-               : 0);
+          program(rec[4]) + (rec[5] >= 0 ? program(rec[5]) * slot[9] : 0);
       if (rec[1] == 10) {
         *reinterpret_cast<long long*>(slot) = device;
         continue;
@@ -443,14 +924,14 @@ __device__ void fixupBody(
       long long device = 0;
       long long deviceStride = 0;
       for (int d = 0; d < rank; ++d) {
-        const long long dim = evalProgram(code + rec[4 + d], values, nullptr, capacities);
+        const long long dim = program(rec[4 + d]);
         if (dim != hostDims[d] && differ < 0) {
           differ = d;
           device = dim;
         }
         // The host reads a size-1 dim through stride 0.
         if (rec[8 + d] >= 0 && hostDims[d] != 1 && !empty) {
-          const long long stride = evalProgram(code + rec[8 + d], values, nullptr, capacities);
+          const long long stride = program(rec[8 + d]);
           if (stride != hostStrides[d] && strideDiffer < 0) {
             strideDiffer = d;
             deviceStride = stride;
@@ -493,8 +974,12 @@ __device__ void fixupBody(
     // A band the host placed at its start over the capacities moves to its
     // start over the real values.
     if (rec[3] >= 0 && !recordOver) {
-      const long long move = evalProgram(code + rec[3], values, nullptr, capacities) -
-          (kind == 4 ? 0 : evalProgram(code + rec[3], capacities));
+      // A converged record names the result over the values in the low 15
+      // bits, the one over the capacities above them.
+      const long long move = evalAt > 0
+          ? results[rec[3] & 0x7fff] - (kind == 4 ? 0 : results[rec[3] >> 15])
+          : evalProgram(code + rec[3], values, nullptr, capacities) -
+              (kind == 4 ? 0 : evalProgram(code + rec[3], capacities));
       *reinterpret_cast<unsigned char**>(slot) += move * slot[9];
     }
     if (kind == 3) {
@@ -517,11 +1002,11 @@ __device__ void fixupBody(
     for (int d = 0; d < rank; ++d) {
       // A dim coded kHostValue keeps what the host wrote.
       const long long dim = recordOver ? 0
-          : rec[4 + d] >= 0 ? evalProgram(code + rec[4 + d], values, nullptr, capacities)
+          : rec[4 + d] >= 0 ? program(rec[4 + d])
                             : dims[d];
       dims[d] = static_cast<int>(dim);
       if (rec[8 + d] >= 0) {
-        strides[d] = static_cast<int>(evalProgram(code + rec[8 + d], values, nullptr, capacities));
+        strides[d] = static_cast<int>(program(rec[8 + d]));
       }
       numEl *= dim;
     }
@@ -557,11 +1042,437 @@ __device__ void fixupBody(
 // True when a step at or before 'firstStep' failed: the setup returns, and
 // the composite kernels that follow return at entry.
 __device__ inline bool stepAlreadyFailed(const int* failure, int firstStep) {
-  return failure != nullptr &&
-      *reinterpret_cast<const volatile int*>(failure) < firstStep;
+  if (failure == nullptr) {
+    return false;
+  }
+  // Relaxed at GPU scope: the earlier kernels on the stream wrote the word.
+  // A volatile load would be a system-scope strong load, which is slow.
+  int value;
+  asm volatile("ld.relaxed.gpu.global.b32 %0, [%1];"
+               : "=r"(value)
+               : "l"(failure)
+               : "memory");
+  return value < firstStep;
 }
 
-extern "C" __global__ void fixupSymbols(
+// The wide setup: a step's setup over several blocks, from the plan
+// buildWidePlan makes in the host code. Threads of a block, words of a plan's
+// header, a slot entry and a placement record, as there.
+constexpr int kWideThreads = 512;
+constexpr int kWideHeaderWords = 16;
+constexpr int kWideSlotWords = 16;
+constexpr int kWidePlacementWords = 4;
+constexpr int kWidePlacementsPerThread = 4;
+// In a wide slot entry's flags: the entry loads words the placement block
+// stores.
+constexpr int kWideWait = 1 << 12;
+
+// TW_SETUP_CLOCKS marks of the wide setup, in the grid's state words 2-10.
+#ifdef TW_SETUP_CLOCKS
+#define WIDE_MARK(ints, k)                                              \
+  if (threadIdx.x == 0) {                                               \
+    (ints)[2 + (k)] = static_cast<int>(clock64() - setupStart);         \
+  }
+#else
+#define WIDE_MARK(ints, k)
+#endif
+
+// Evaluates a value code of shape kind; see evalCode.
+__device__ __noinline__ long long evalWideShape(
+    int code,
+    const long long* shapes,
+    const long long* operands,
+    const long long* values,
+    const long long* temps,
+    const long long* caps) {
+  const long long* shape = shapes + 2 * ((code >> 23) & 63);
+  return evalShape(
+      shapes + shape[1],
+      static_cast<int>(shape[0]),
+      operands + (code & 0x3fffff),
+      ((code >> 22) & 1) ? caps : values,
+      temps,
+      caps);
+}
+
+// A value code is -1 for none, -2 for a dense stride, else bits 29-30 give
+// its kind: 1 a symbol, bits 0-27, its capacity with bit 28; 2 a constant,
+// bits 0-28 signed; 0 a shape of the plan's, bits 23-28, over the operands at
+// bits 0-21, over the capacities with bit 22. 'shapes' is the plan's shape
+// table and code.
+__device__ __forceinline__ long long evalCode(
+    int code,
+    const long long* shapes,
+    const long long* operands,
+    const long long* values,
+    const long long* temps,
+    const long long* caps) {
+  if (code < 0) {
+    return 0;
+  }
+  const int kind = (code >> 29) & 3;
+  if (kind == 1) {
+    const int symbol = code & 0x0fffffff;
+    return ((code >> 28) & 1) ? caps[symbol] : values[symbol];
+  }
+  if (kind == 2) {
+    return static_cast<long long>(
+               static_cast<unsigned long long>(static_cast<unsigned>(code))
+               << 35) >>
+        35;
+  }
+  return evalWideShape(code, shapes, operands, values, temps, caps);
+}
+
+__device__ __forceinline__ void prefetchCode(int code, const long long* operands) {
+  if (code >= 0 && ((code >> 29) & 3) == 0) {
+    asm volatile("prefetch.global.L1 [%0];" ::"l"(operands + (code & 0x3fffff)));
+  }
+}
+
+__device__ inline void waitFlag(const int* flag, int generation) {
+  while (loadAcquire(flag) != generation) {
+    __nanosleep(32);
+  }
+}
+
+// The first symbol a thread of a wide block loads, in steps, so that the
+// block's other loads go between them: 'load' loads which symbol, 'locate'
+// its source address and capacity, 'finish' the value. Symbols past the
+// block's threads go through loadSymbols.
+struct WideSymbol {
+  int index;
+  int valid;
+  int capacityOnly;
+  long long word;
+  long long address;
+  long long capacity;
+
+  __device__ void load(const long long* used, int numUsed) {
+    valid = threadIdx.x < numUsed;
+    word = valid ? used[threadIdx.x] : 0;
+  }
+
+  __device__ void locate(const long long* symbols, int numSymbols) {
+    index = static_cast<int>(word & (kCapacityOnly - 1));
+    capacityOnly = (word & kCapacityOnly) ? 1 : 0;
+    address = valid && !capacityOnly ? symbols[index] : 0;
+    capacity = valid ? symbols[numSymbols + index] : 0;
+  }
+
+  __device__ void begin(
+      const long long* used,
+      int numUsed,
+      const long long* symbols,
+      int numSymbols) {
+    load(used, numUsed);
+    locate(symbols, numSymbols);
+  }
+
+  // Returns 1 when the value is negative or over the capacity.
+  __device__ int finish(
+      const long long* used,
+      int numUsed,
+      const long long* symbols,
+      int numSymbols,
+      long long* values,
+      long long* capacities) {
+    int anyOver = 0;
+    if (valid) {
+      capacities[index] = capacity;
+      if (!capacityOnly) {
+        const long long v = symbolValue(address);
+        values[index] = v;
+        anyOver = v < 0 || v > capacity ? 1 : 0;
+      }
+    }
+    if (numUsed > static_cast<int>(blockDim.x)) {
+      anyOver |= loadSymbols(
+          used + blockDim.x,
+          numUsed - blockDim.x,
+          symbols,
+          numSymbols,
+          values,
+          capacities,
+          threadIdx.x,
+          blockDim.x);
+    }
+    return anyOver;
+  }
+};
+
+// Copies the plan's shape table and code to 'shapes' in shared memory.
+__device__ inline void copyShapes(const int* plan, long long* shapes) {
+  const auto* from = reinterpret_cast<const long long*>(plan + plan[9]);
+  for (int i = threadIdx.x; i < plan[8]; i += blockDim.x) {
+    shapes[i] = from[i];
+  }
+}
+
+// Block 0 of a wide setup when the step places allocation group members:
+// each member's aligned size into a temp, two temps per thread, an exclusive
+// scan of each group's temps, then the store and capacity records over the
+// scanned temps. A step has at most 2 * kWideThreads temps, so one block
+// holds them all.
+__device__ void widePlacement(
+    const int* plan,
+    const long long* code,
+    const long long* symbols,
+    int numSymbols,
+    long long* values,
+    long long* caps,
+    long long* shapes,
+    long long* temps,
+    const int* failure,
+    int step,
+    int* ints) {
+  const int tid = threadIdx.x;
+  const int numTemps = plan[0];
+  const int* members = plan + plan[1];
+  const int numPlacements = plan[2];
+  const int* placements = plan + plan[3];
+  const long long* operands = code + plan[10];
+  const long long* used = code + 1;
+  const int numUsed = plan[11];
+  WideSymbol symbol;
+  symbol.begin(used, numUsed, symbols, numSymbols);
+  int memberCode[2];
+  int memberFlags[2];
+#pragma unroll
+  for (int k = 0; k < 2; ++k) {
+    const int i = 2 * tid + k;
+    memberCode[k] = i < numTemps ? members[2 * i] : -1;
+    memberFlags[k] = i < numTemps ? members[2 * i + 1] : 0;
+  }
+  int4 placement = make_int4(0, 0, 0, 0);
+  if (tid < numPlacements) {
+    placement = reinterpret_cast<const int4*>(placements)[tid];
+  }
+  copyShapes(plan, shapes);
+#pragma unroll
+  for (int k = 0; k < 2; ++k) {
+    prefetchCode(memberCode[k], operands);
+  }
+  prefetchCode(placement.x, operands);
+  symbol.finish(used, numUsed, symbols, numSymbols, values, caps);
+  __syncthreads();
+  WIDE_MARK(ints, 0);
+  long long size[2];
+#pragma unroll
+  for (int k = 0; k < 2; ++k) {
+    size[k] = evalCode(memberCode[k], shapes, operands, values, temps, caps);
+  }
+  // A segmented inclusive scan of the threads' pairs: a head starts a
+  // segment. A group's first member is a head, and so is a temp in no group,
+  // which keeps its size.
+  int head[2];
+#pragma unroll
+  for (int k = 0; k < 2; ++k) {
+    head[k] = (memberFlags[k] & 1) || !(memberFlags[k] & 2) ? 1 : 0;
+  }
+  int flag = head[0] | head[1];
+  long long sum = head[1] ? size[1] : size[0] + size[1];
+  const int lane = tid & 31;
+  const int warp = tid >> 5;
+  for (int offset = 1; offset < 32; offset <<= 1) {
+    const int otherFlag = __shfl_up_sync(0xffffffffu, flag, offset);
+    const long long otherSum = __shfl_up_sync(0xffffffffu, sum, offset);
+    if (lane >= offset) {
+      sum = flag ? sum : otherSum + sum;
+      flag |= otherFlag;
+    }
+  }
+  __shared__ int warpFlag[kWideThreads / 32];
+  __shared__ long long warpSum[kWideThreads / 32];
+  if (lane == 31) {
+    warpFlag[warp] = flag;
+    warpSum[warp] = sum;
+  }
+  int beforeFlag = __shfl_up_sync(0xffffffffu, flag, 1);
+  long long beforeSum = __shfl_up_sync(0xffffffffu, sum, 1);
+  if (lane == 0) {
+    beforeFlag = 0;
+    beforeSum = 0;
+  }
+  __syncthreads();
+  long long prefixSum = 0;
+  for (int w = 0; w < warp; ++w) {
+    prefixSum = warpFlag[w] ? warpSum[w] : prefixSum + warpSum[w];
+  }
+  // The sum of the segment before this thread's first temp.
+  const long long running = beforeFlag ? beforeSum : prefixSum + beforeSum;
+  long long inclusive[2];
+  inclusive[0] = head[0] ? size[0] : running + size[0];
+  inclusive[1] = head[1] ? size[1] : inclusive[0] + size[1];
+#pragma unroll
+  for (int k = 0; k < 2; ++k) {
+    const int i = 2 * tid + k;
+    if (i < numTemps) {
+      temps[i] = (memberFlags[k] & 2) ? inclusive[k] - size[k] : size[k];
+    }
+  }
+  __syncthreads();
+  WIDE_MARK(ints, 1);
+  // All records evaluate before any stores, as in fixupBody: a store's
+  // program may load another's destination.
+  int4 record[kWidePlacementsPerThread];
+  long long value[kWidePlacementsPerThread];
+#pragma unroll
+  for (int k = 0; k < kWidePlacementsPerThread; ++k) {
+    const int r = tid + k * blockDim.x;
+    if (r < numPlacements) {
+      record[k] =
+          k == 0 ? placement : reinterpret_cast<const int4*>(placements)[r];
+      value[k] = evalCode(record[k].x, shapes, operands, values, temps, caps);
+    }
+  }
+  __syncthreads();
+#pragma unroll
+  for (int k = 0; k < kWidePlacementsPerThread; ++k) {
+    const int r = tid + k * blockDim.x;
+    if (r >= numPlacements) {
+      continue;
+    }
+    auto* dest = reinterpret_cast<long long*>(
+        static_cast<unsigned long long>(static_cast<unsigned>(record[k].z)) |
+        (static_cast<unsigned long long>(static_cast<unsigned>(record[k].w))
+         << 32));
+    if ((record[k].y >> 16) == 13) {
+      *dest = value[k];
+      continue;
+    }
+    // The setup runs to its end either way; the demand tells the host what
+    // the group needs.
+    const long long demand = temps[record[k].y & 0xffff];
+    *dest = demand;
+    if (failure != nullptr && demand > value[k]) {
+      atomicMin(const_cast<int*>(failure), step);
+    }
+  }
+}
+
+// Tensor block 'block' of a wide setup: thread i updates slot entry
+// block * blockDim.x + i, or runs a remaining record past the slot entries.
+// An entry or record that loads what the placement block stores waits for
+// 'placedFlag' to reach 'generation'.
+__device__ void wideTensors(
+    int block,
+    const int* plan,
+    unsigned char* params,
+    const long long* code,
+    const long long* symbols,
+    int numSymbols,
+    long long* values,
+    long long* caps,
+    long long* shapes,
+    const int* placedFlag,
+    int generation,
+    int* ints) {
+  const int tid = threadIdx.x;
+  const int item = block * blockDim.x + tid;
+  const int numSlots = plan[4];
+  const int numKept = plan[6];
+  const long long* operands = code + plan[10];
+  const long long* used = code + 1;
+  const int numUsed = plan[11];
+  const bool isSlot = item < numSlots;
+  const bool isKept = !isSlot && item - numSlots < numKept;
+  // The loads that need nothing else first: the entry or record and the
+  // symbols' sources, then the slot's words with the symbols' values.
+  WideSymbol symbol;
+  symbol.begin(used, numUsed, symbols, numSymbols);
+  int entry[kWideSlotWords];
+  if (isSlot || isKept) {
+    const auto* from = isSlot
+        ? reinterpret_cast<const int4*>(plan + plan[5] + kWideSlotWords * item)
+        : reinterpret_cast<const int4*>(plan + plan[7] + 12 * (item - numSlots));
+#pragma unroll
+    for (int q = 0; q < kWideSlotWords / 4; ++q) {
+      if (isSlot || q < 3) {
+        const int4 v = from[q];
+        entry[4 * q] = v.x;
+        entry[4 * q + 1] = v.y;
+        entry[4 * q + 2] = v.z;
+        entry[4 * q + 3] = v.w;
+      }
+    }
+  }
+  copyShapes(plan, shapes);
+  long long words[kSlotWords];
+  if (isSlot) {
+    const auto* from = reinterpret_cast<const long long*>(params + entry[0]);
+#pragma unroll
+    for (int i = 0; i < kSlotWords; ++i) {
+      words[i] = from[i];
+    }
+#pragma unroll
+    for (int c = 2; c < 14; ++c) {
+      prefetchCode(entry[c], operands);
+    }
+  } else if (isKept) {
+    prefetchCode(entry[4], operands);
+  }
+  const int anyOver =
+      symbol.finish(used, numUsed, symbols, numSymbols, values, caps);
+  const int over = __syncthreads_or(anyOver);
+  if (block == 0) {
+    WIDE_MARK(ints, 3);
+  }
+  if (isSlot) {
+    const int flags = entry[1];
+    if (flags & kWideWait) {
+      waitFlag(placedFlag, generation);
+    }
+    auto value = [&](int c) {
+      return evalCode(c, shapes, operands, values, nullptr, caps);
+    };
+    SlotValues v;
+    v.placedAddress = (flags & 0x200) ? value(entry[4]) : 0;
+    v.placedOffset = (flags & 0x400) ? value(entry[5]) : 0;
+    v.bandStart = (flags & 0x100) ? value(entry[2]) : 0;
+    v.bandCapacity = (flags & 0x100) && !(flags & 0x80) ? value(entry[3]) : 0;
+    v.keepDims = 0;
+    v.setStrides = 0;
+    v.denseStrides = 0;
+#pragma unroll
+    for (int d = 0; d < 4; ++d) {
+      const int dim = entry[6 + d];
+      const int stride = entry[10 + d];
+      v.dims[d] = value(dim);
+      v.strides[d] = value(stride);
+      v.keepDims |= (dim < 0 ? 1 : 0) << d;
+      v.setStrides |= (stride >= 0 ? 1 : 0) << d;
+      v.denseStrides |= (stride == -2 ? 1 : 0) << d;
+    }
+    applySlot(words, flags, v, over);
+    auto* to = reinterpret_cast<long long*>(params + entry[0]);
+#pragma unroll
+    for (int i = 0; i < kSlotWords; ++i) {
+      to[i] = words[i];
+    }
+  } else if (isKept) {
+    // As the remaining records of fixupBody: 14 volatile, 1 scalar.
+    unsigned char* slot = params + entry[0];
+    if (entry[1] == 14) {
+      if (entry[2] == 0) {
+        *reinterpret_cast<long long*>(slot) = 0;
+      } else if (entry[2] == 1) {
+        *reinterpret_cast<int*>(slot) = 0;
+      } else {
+        *reinterpret_cast<unsigned*>(slot + 48) = 0;
+      }
+    } else if (entry[1] == 1) {
+      if (entry[2] & 1) {
+        waitFlag(placedFlag, generation);
+      }
+      *reinterpret_cast<long long*>(slot) = over
+          ? 0
+          : evalCode(entry[4], shapes, operands, values, nullptr, caps);
+    }
+  }
+}
+
+extern "C" __global__ void __launch_bounds__(1024) fixupSymbols(
     unsigned char* params,
     const int* records,
     const long long* code,
@@ -766,6 +1677,15 @@ SymExpr binary(SymExpr::Kind kind, SymExpr lhs, SymExpr rhs) {
   result.args.push_back(std::move(lhs));
   result.args.push_back(std::move(rhs));
   return result;
+}
+
+// Whether 'name' is a symbol the export minted for a value only the data
+// decides: u<N>.
+bool isTracedDataSymbol(const std::string& name) {
+  return name.size() > 1 && name[0] == 'u' &&
+      std::all_of(name.begin() + 1, name.end(), [](char c) {
+           return c >= '0' && c <= '9';
+         });
 }
 
 void renameSymbols(
@@ -1101,8 +2021,22 @@ DeviceSymbols::shapeOf(nativert::ValueId id) const {
 std::vector<DeviceSymbols::HostConcat> DeviceSymbols::hostConcats(
     const ExecutionState& state) const {
   std::vector<HostConcat> concats;
+  // Whether the extent of 'id' along 'dim' is a constant, which the kernel
+  // that sets it on device cannot change.
+  auto fixedExtent = [&](nativert::ValueId id, int64_t dim) {
+    const auto* shapes = derivedShapes_ ? derivedShapes_.get() : shapes_.get();
+    auto value = waveGraph_.idToValue().find(id);
+    if (value == waveGraph_.idToValue().end()) {
+      return false;
+    }
+    auto it = shapes->byName.find(std::string(value->second->name()));
+    return it != shapes->byName.end() && dim >= 0 &&
+        static_cast<size_t>(dim) < it->second.dims.size() &&
+        it->second.dims[dim].isConstant();
+  };
   // Concats a kernel lays out: the host places the bands of the operands the
-  // kernel writes in place, up to the first whose extent the kernel sets.
+  // kernel writes in place, up to and including the first whose extent the
+  // kernel sets, which starts where the extents before it end.
   for (const auto& steps : state.stepVectors) {
     for (const auto& sv : steps) {
       for (const auto& data : sv.kernels) {
@@ -1127,10 +2061,11 @@ std::vector<DeviceSymbols::HostConcat> DeviceSymbols::hostConcats(
             if (info.isSubgraphInput || info.isView) {
               continue;
             }
-            hostPlaces = hostPlaces && !info.hasShapeOnDevice;
             if (hostPlaces) {
               concat.bands.back().push_back(id);
             }
+            hostPlaces = hostPlaces &&
+                (!info.hasShapeOnDevice || fixedExtent(id, spec.dim));
           }
           concats.push_back(std::move(concat));
         }
@@ -1918,6 +2853,7 @@ void DeviceSymbols::selectSubstitutions(
   state.capacityScalars.clear();
   state.numUnreturnedLists = 0;
   state.symbolSources.clear();
+  state.symbolProducers.clear();
   state.bandStarts.clear();
   state.viewStarts.clear();
   // For bisecting: a comma-separated list of the symbols to pick, or empty.
@@ -1969,6 +2905,11 @@ void DeviceSymbols::selectSubstitutions(
       }
     }
     state.symbolSources.at(index) = source;
+    if (state.symbolProducers.size() <= static_cast<size_t>(index)) {
+      state.symbolProducers.resize(index + 1, {-1, -1});
+    }
+    state.symbolProducers.at(index) = {
+        std::get<0>(source), std::get<1>(source)};
   }
   // A returned integer in a region whose expression uses only picked symbols
   // (u1 + u2) takes its value from the capacities as well; the fixups give
@@ -2524,25 +3465,1025 @@ void addSymbolHeader(SymbolFixups& fixups) {
   }
 }
 
+// Opcodes of the converged evaluation besides those of emitProgram: a shift
+// right, a shift left and an and that replace a division, multiplication and
+// modulo by a power of two.
+constexpr int64_t kShr = 14;
+constexpr int64_t kShl = 15;
+constexpr int64_t kAndMask = 16;
+// In a shape's word: the operand is an index into the operands of the
+// instance rather than a literal.
+constexpr int64_t kVarOperand = 0x40;
+// Phases of the converged evaluation: group member sizes into the temps, the
+// store and capacity records after the scans, the other records after the
+// stores.
+constexpr int32_t kTempPhase = 0;
+constexpr int32_t kStorePhase = 1;
+constexpr int32_t kRecordPhase = 2;
+constexpr int32_t kNumPhases = 3;
+// Words of the converged section's header: the results' device address, the
+// number of shapes, the instances of each phase, the offsets of the shapes,
+// the instances and the operands, the number and offset of the slot entries,
+// then the offset of room for the results, used when the code is in shared
+// memory.
+constexpr int32_t kSectionWords = 11;
+// A slot entry: the tensor parameter a warp updates as a whole. Eight int32:
+// the slot's offset, flags, the band's results (over the values, over the
+// capacities above bit 16), the placed address's results (the address, the
+// element offset above bit 16), then four dim and four stride codes of 16
+// bits: a result, kKeepCode or kDenseCode. As updateSlot in the kernel source.
+constexpr int32_t kSlotEntryWords = 8;
+constexpr int32_t kKeepCode = 0xffff;
+constexpr int32_t kDenseCode = 0xfffe;
+// Flags of a slot entry above the rank in bits 0-3.
+constexpr int32_t kSlotTensor = 1 << 4;
+constexpr int32_t kSlotShape = 1 << 5;
+constexpr int32_t kSlotSized = 1 << 6;
+constexpr int32_t kSlotView = 1 << 7;
+constexpr int32_t kSlotBand = 1 << 8;
+constexpr int32_t kSlotPlaced = 1 << 9;
+constexpr int32_t kSlotPlacedOffset = 1 << 10;
+constexpr int32_t kSlotZeroStatus = 1 << 11;
+// Bytes of a tensor parameter the setup writes, storage to contiguous.
+constexpr int32_t kSlotBytes = 56;
+
+// Shapes the kernel evaluates without interpreting, by opcode sequence. As
+// evalShape in the kernel source.
+enum LibraryShape : int64_t {
+  kGenericShape = 0,
+  kConstShape = 1,
+  kSymbolShape = 2,
+  kLoadShape = 3,
+  // base + temp - temp of the group's first member.
+  kStoreShape = 4,
+  // (c * symbol + align - 1) >> k << k.
+  kAlignedShape = 5,
+  // The same over Max(symbol, symbol).
+  kAlignedMaxShape = 6,
+};
+
+struct ShapeWord {
+  int64_t op;
+  int64_t operand;
+};
+
+// An evaluation of the converged section: a shape over operands, in a phase,
+// to a temp or a result. 'operands' has all of the shape's operands;
+// 'operandOffset' is where those that vary from instance to instance are in
+// the section's operands.
+struct ConvergedInstance {
+  int32_t shape;
+  int32_t phase;
+  bool overCapacities;
+  int32_t dest;
+  std::vector<int64_t> operands;
+  int64_t operandOffset{0};
+};
+
+// A tensor parameter whose records merge into one slot entry, and how many
+// tensor and placed records it takes.
+struct SlotEntry {
+  std::array<int32_t, kSlotEntryWords> words{};
+  int32_t numTensors{0};
+  int32_t numPlaced{0};
+};
+
+// Words of a wide plan's header and entries, as in the kernel source.
+constexpr int32_t kWideThreads = 512;
+constexpr int32_t kWideHeaderWords = 16;
+constexpr int32_t kWideSlotWords = 16;
+constexpr int32_t kWidePlacementWords = 4;
+// In a wide slot entry's flags: the entry loads words the placement block
+// stores. In a scalar record's rank word, the same.
+constexpr int32_t kWideWait = 1 << 12;
+// Bounds of a value code's shape and operand offset fields.
+constexpr int32_t kWideMaxShapes = 64;
+constexpr int64_t kWideMaxOperands = int64_t{1} << 22;
+// Value codes that are not values: none (or keep the host's), and a dense
+// stride.
+constexpr int32_t kNoValue = -1;
+constexpr int32_t kDenseValue = -2;
+// Store and capacity records a placement thread keeps between evaluating
+// and storing them.
+constexpr int32_t kWidePlacementsPerThread = 4;
+
+// The plan of a wide setup and what the host checks before each launch.
+struct WidePlan {
+  std::vector<int32_t> words;
+  int32_t numBlocks{0};
+  int32_t shapeWords{0};
+  // As SymbolFixups::wideWriteEnd and wideLoadAddresses.
+  int32_t writeEnd{0};
+  std::vector<int64_t> loadAddresses;
+  // The words the placement block stores.
+  std::vector<int64_t> storeAddresses;
+  std::string summary;
+};
+
+// What buildWidePlan reads of a converged evaluation: its instances, sorted
+// and with their operand offsets, its shapes and their library ids, its code
+// with the section at 'at', its slot entries and the records the entries do
+// not take.
+struct ConvergedParts {
+  const std::vector<ConvergedInstance>& instances;
+  const std::vector<std::vector<ShapeWord>>& shapes;
+  const std::vector<int64_t>& libraryOf;
+  const std::vector<int64_t>& code;
+  int64_t at;
+  const std::map<int32_t, SlotEntry>& slots;
+  const std::vector<int32_t>& records;
+};
+
+// Appends 'words' to 'plan' from a multiple of 4 words, for 16-byte loads,
+// and returns where they start.
+int32_t appendAligned(
+    std::vector<int32_t>& plan,
+    const std::vector<int32_t>& words) {
+  plan.resize((plan.size() + 3) / 4 * 4, 0);
+  const auto begin = static_cast<int32_t>(plan.size());
+  plan.insert(plan.end(), words.begin(), words.end());
+  return begin;
+}
+
+// The plan of the wide setup (wideSetup in the kernel source) of a converged
+// evaluation. Header: the temps, the offset of their member table (code and
+// flags each: 1 a group's first member, 2 in a group), the store and capacity
+// records and their offset (value code, kind << 16 | temp, the destination's
+// low and high words), the slot entries and their offset (offset, flags, band
+// start over the values and over the capacities, placed address and offset,
+// four dims, four strides, as value codes, then a bit per dim that waits for
+// the placement block), the remaining records and their
+// offset, the words and offset of the shapes (library and code offset per
+// shape, then the code), the offset of the operands in the code, the symbols
+// used, the placement blocks and the tensor blocks. nullopt, with 'why', when
+// the evaluation has what the wide setup does not run.
+std::optional<WidePlan> buildWidePlan(
+    const ConvergedParts& parts,
+    std::string& why) {
+  const auto& instances = parts.instances;
+  const auto numShapes = static_cast<int32_t>(parts.shapes.size());
+  if (numShapes > kWideMaxShapes) {
+    why = "too many shapes";
+    return std::nullopt;
+  }
+  std::vector<bool> shapeTemps(numShapes, false);
+  for (int32_t s = 0; s < numShapes; ++s) {
+    for (const auto& word : parts.shapes.at(s)) {
+      shapeTemps[s] = shapeTemps[s] || word.op == kPushTemp;
+    }
+  }
+  const auto& records = parts.records;
+  const auto numRecords = static_cast<int32_t>(records.size() / kRecordWords);
+  WidePlan plan;
+  for (int32_t r = 0; r < numRecords; ++r) {
+    const auto* rec = records.data() + r * kRecordWords;
+    if (rec[1] == kStoreRecord || rec[1] == kCapacityRecord) {
+      plan.storeAddresses.push_back(
+          static_cast<int64_t>(static_cast<uint32_t>(rec[5])) |
+          (static_cast<int64_t>(static_cast<uint32_t>(rec[6])) << 32));
+    }
+  }
+  const folly::F14FastSet<int64_t> stored(
+      plan.storeAddresses.begin(), plan.storeAddresses.end());
+  folly::F14FastMap<int32_t, int32_t> resultOf;
+  // Whether each instance loads a word the placement block stores.
+  std::vector<bool> loadsStored(instances.size(), false);
+  for (size_t i = 0; i < instances.size(); ++i) {
+    const auto& instance = instances[i];
+    if (instance.phase != kTempPhase) {
+      resultOf[instance.dest] = static_cast<int32_t>(i);
+    }
+    const auto& words = parts.shapes.at(instance.shape);
+    for (size_t k = 0; k < words.size(); ++k) {
+      if (words[k].op != kLoad) {
+        continue;
+      }
+      if (k == 0 || words[k - 1].op != kPushConst) {
+        why = "a computed load address";
+        return std::nullopt;
+      }
+      const auto address = instance.operands.at(k - 1);
+      plan.loadAddresses.push_back(address);
+      if (stored.count(address)) {
+        loadsStored[i] = true;
+      }
+    }
+  }
+  bool failed = false;
+  // The shape codes whose instance loads a stored word.
+  folly::F14FastSet<int32_t> codesLoadingStored;
+  auto codeOf = [&](int32_t index) {
+    const auto& instance = instances[index];
+    const auto library = parts.libraryOf.at(instance.shape);
+    const auto first = instance.operands.empty() ? 0 : instance.operands[0];
+    constexpr int64_t kLimit = int64_t{1} << 28;
+    if (library == kConstShape && first >= -kLimit && first < kLimit) {
+      return (2 << 29) | (static_cast<int32_t>(first) & 0x1fffffff);
+    }
+    if (library == kSymbolShape && first >= 0 && first < kLimit) {
+      return (1 << 29) | (instance.overCapacities ? 1 << 28 : 0) |
+          static_cast<int32_t>(first);
+    }
+    if (instance.operandOffset >= kWideMaxOperands) {
+      failed = true;
+      return kNoValue;
+    }
+    const int32_t code = (instance.shape << 23) |
+        (instance.overCapacities ? 1 << 22 : 0) |
+        static_cast<int32_t>(instance.operandOffset);
+    if (loadsStored[index]) {
+      codesLoadingStored.insert(code);
+    }
+    return code;
+  };
+  auto resultCode = [&](int32_t result) {
+    auto it = resultOf.find(result);
+    if (it == resultOf.end()) {
+      failed = true;
+      return kNoValue;
+    }
+    return codeOf(it->second);
+  };
+  auto isShape = [](int32_t code) {
+    return code >= 0 && ((code >> 29) & 3) == 0;
+  };
+  // Loads what the placement block stores, so waits for its flag.
+  auto loads = [&](int32_t code) {
+    return isShape(code) && codesLoadingStored.count(code) > 0;
+  };
+  // The tensor blocks have no temps.
+  auto readsTemps = [&](int32_t code) {
+    return isShape(code) && shapeTemps[(code >> 23) & 63];
+  };
+
+  // Members and placement records.
+  int32_t numTemps = 0;
+  for (const auto& instance : instances) {
+    if (instance.phase == kTempPhase) {
+      numTemps = std::max(numTemps, instance.dest + 1);
+    }
+  }
+  std::vector<int32_t> placements;
+  for (int32_t r = 0; r < numRecords; ++r) {
+    const auto* rec = records.data() + r * kRecordWords;
+    if (rec[1] == kScanRecord) {
+      numTemps = std::max(numTemps, rec[3] + rec[4]);
+    } else if (rec[1] == kStoreRecord || rec[1] == kCapacityRecord) {
+      if (rec[1] == kCapacityRecord) {
+        numTemps = std::max(numTemps, rec[3] + 1);
+      }
+      placements.push_back(resultCode(rec[4]));
+      placements.push_back(
+          (rec[1] << 16) | (rec[1] == kCapacityRecord ? rec[3] : 0));
+      placements.push_back(rec[5]);
+      placements.push_back(rec[6]);
+    }
+  }
+  const auto numPlacements =
+      static_cast<int32_t>(placements.size()) / kWidePlacementWords;
+  if (numTemps > 2 * kWideThreads ||
+      numPlacements > kWidePlacementsPerThread * kWideThreads) {
+    why = "too many temps or placement records";
+    return std::nullopt;
+  }
+  const bool hasPlacement = numTemps > 0 || numPlacements > 0;
+  std::vector<int32_t> members(2 * numTemps, 0);
+  for (int32_t t = 0; t < numTemps; ++t) {
+    members[2 * t] = kNoValue;
+  }
+  for (size_t i = 0; i < instances.size(); ++i) {
+    if (instances[i].phase == kTempPhase) {
+      members[2 * instances[i].dest] = codeOf(static_cast<int32_t>(i));
+    }
+  }
+  for (int32_t r = 0; r < numRecords; ++r) {
+    const auto* rec = records.data() + r * kRecordWords;
+    if (rec[1] != kScanRecord) {
+      continue;
+    }
+    for (int32_t t = rec[3]; t < rec[3] + rec[4]; ++t) {
+      if (members[2 * t + 1] & 2) {
+        why = "overlapping groups";
+        return std::nullopt;
+      }
+      members[2 * t + 1] |= 2;
+    }
+    if (rec[4] > 0) {
+      members[2 * rec[3] + 1] |= 1;
+    }
+  }
+
+  // Remaining records.
+  std::vector<int32_t> kept;
+  for (int32_t r = 0; r < numRecords; ++r) {
+    const auto* rec = records.data() + r * kRecordWords;
+    switch (rec[1]) {
+      case kTempRecord:
+      case kScanRecord:
+      case kStoreRecord:
+      case kCapacityRecord:
+        break;
+      case kScalarRecord: {
+        const auto code = resultCode(rec[4]);
+        if (readsTemps(code)) {
+          why = "a record reads temps";
+          return std::nullopt;
+        }
+        const auto begin = kept.size();
+        kept.insert(kept.end(), rec, rec + kRecordWords);
+        kept[begin + 2] = loads(code) && hasPlacement ? 1 : 0;
+        kept[begin + 4] = code;
+        plan.writeEnd = std::max(plan.writeEnd, rec[0] + 8);
+        break;
+      }
+      case kVolatileRecord:
+        kept.insert(kept.end(), rec, rec + kRecordWords);
+        plan.writeEnd =
+            std::max(plan.writeEnd, rec[0] + (rec[2] == 2 ? kSlotBytes : 8));
+        break;
+      default:
+        why = fmt::format("record kind {}", rec[1]);
+        return std::nullopt;
+    }
+  }
+
+  // Slot entries.
+  std::vector<int32_t> slots;
+  int32_t numWait = 0;
+  for (const auto& [offset, slot] : parts.slots) {
+    const auto& w = slot.words;
+    int32_t flags = w[1];
+    std::array<int32_t, kWideSlotWords> entry{};
+    entry.fill(kNoValue);
+    entry[0] = offset;
+    entry[14] = 0;
+    entry[15] = 0;
+    if (flags & kSlotBand) {
+      entry[2] = resultCode(w[2] & 0xffff);
+      if (!(flags & kSlotView)) {
+        entry[3] = resultCode((w[2] >> 16) & 0xffff);
+      }
+    }
+    if (flags & kSlotPlaced) {
+      entry[4] = resultCode(w[3] & 0xffff);
+      if (flags & kSlotPlacedOffset) {
+        entry[5] = resultCode((w[3] >> 16) & 0xffff);
+      }
+    }
+    const int32_t rank = flags & 15;
+    for (int32_t d = 0; d < kMaxDims && (flags & kSlotTensor) && d < rank;
+         ++d) {
+      const int32_t dim = (w[4 + d / 2] >> (16 * (d & 1))) & 0xffff;
+      const int32_t stride = (w[6 + d / 2] >> (16 * (d & 1))) & 0xffff;
+      entry[6 + d] = dim < 0x8000 ? resultCode(dim) : kNoValue;
+      entry[10 + d] = stride < 0x8000 ? resultCode(stride)
+          : stride == kDenseCode      ? kDenseValue
+                                      : kNoValue;
+    }
+    for (int32_t c = 2; c < 14; ++c) {
+      if (readsTemps(entry[c])) {
+        why = "a slot reads temps";
+        return std::nullopt;
+      }
+      if (loads(entry[c]) && hasPlacement) {
+        flags |= kWideWait;
+        // Which dims wait, for the grid's count terms.
+        if (c >= 6 && c < 10) {
+          entry[14] |= 1 << (c - 6);
+        }
+      }
+    }
+    numWait += (flags & kWideWait) ? 1 : 0;
+    entry[1] = flags;
+    slots.insert(slots.end(), entry.begin(), entry.end());
+    plan.writeEnd = std::max(plan.writeEnd, offset + kSlotBytes);
+  }
+  if (failed) {
+    why = "a value has no code";
+    return std::nullopt;
+  }
+
+  // Shapes: library and offset per shape, then their code.
+  std::vector<int64_t> shapes(2 * numShapes, 0);
+  for (int32_t s = 0; s < numShapes; ++s) {
+    shapes[2 * s] = parts.libraryOf.at(s);
+    shapes[2 * s + 1] = static_cast<int64_t>(shapes.size());
+    for (auto i = parts.code[parts.at + kSectionWords + 2 * s + 1];; ++i) {
+      shapes.push_back(parts.code[i]);
+      if (((parts.code[i] >> kOperandBits) & 0x3f) == kEnd) {
+        break;
+      }
+    }
+  }
+  std::vector<int32_t> shapeWords(2 * shapes.size());
+  std::memcpy(
+      shapeWords.data(), shapes.data(), shapes.size() * sizeof(int64_t));
+
+  const auto numSlots = static_cast<int32_t>(parts.slots.size());
+  const auto numKept = static_cast<int32_t>(kept.size()) / kRecordWords;
+  const int32_t numTensorBlocks =
+      (numSlots + numKept + kWideThreads - 1) / kWideThreads;
+  auto& words = plan.words;
+  words.assign(kWideHeaderWords, 0);
+  words[0] = numTemps;
+  words[1] = appendAligned(words, members);
+  words[2] = numPlacements;
+  words[3] = appendAligned(words, placements);
+  words[4] = numSlots;
+  words[5] = appendAligned(words, slots);
+  words[6] = numKept;
+  words[7] = appendAligned(words, kept);
+  words[8] = static_cast<int32_t>(shapes.size());
+  words[9] = appendAligned(words, shapeWords);
+  words[10] = static_cast<int32_t>(parts.code[parts.at + 7]);
+  words[11] = static_cast<int32_t>(parts.code[0] & 0xffffffff);
+  words[12] = hasPlacement ? 1 : 0;
+  words[13] = numTensorBlocks;
+  plan.numBlocks = words[12] + numTensorBlocks + 1;
+  plan.shapeWords = words[8];
+  plan.summary = fmt::format(
+      "wide: {} temps, {} placement records, {} slots ({} wait), {} records, "
+      "{} blocks",
+      numTemps,
+      numPlacements,
+      numSlots,
+      numWait,
+      numKept,
+      plan.numBlocks);
+  return plan;
+}
+
+// The records and code the fixup kernel reads for the converged evaluation of
+// 'fixups', whose code starts with its symbol header. The records name
+// results in place of programs. nullopt when the step has more results or
+// shapes than the encoding holds.
+struct ConvergedFixups {
+  std::vector<int32_t> records;
+  std::vector<int64_t> code;
+  // The index in 'code' of the word that takes the results' address.
+  int32_t resultsWord{0};
+  int32_t numResults{0};
+  int32_t numRecords{0};
+  std::string summary;
+  // With 'wide', the wide setup's plan when the step has one.
+  std::optional<WidePlan> wide;
+};
+
+std::optional<ConvergedFixups> convergeFixups(
+    const SymbolFixups& fixups,
+    bool wide) {
+  const auto& code = fixups.code;
+  // The program at 'offset' with a push of a power of two before a division,
+  // multiplication or modulo replaced by one shift or mask.
+  auto shapeWords = [&](int32_t offset) {
+    std::vector<ShapeWord> words;
+    for (auto i = static_cast<size_t>(offset); i < code.size(); ++i) {
+      const auto op = code[i] >> kOperandBits;
+      if (op == kEnd) {
+        break;
+      }
+      int64_t operand = code[i] & kOperandMask;
+      if (operand & (int64_t{1} << (kOperandBits - 1))) {
+        operand -= int64_t{1} << kOperandBits;
+      }
+      const auto c = words.empty() ? 0 : words.back().operand;
+      if ((op == kFloorDiv || op == kMul || op == kMod) && !words.empty() &&
+          words.back().op == kPushConst && c > 1 && (c & (c - 1)) == 0) {
+        words.pop_back();
+        if (op == kMod) {
+          words.push_back({kAndMask, c - 1});
+        } else {
+          words.push_back(
+              {op == kFloorDiv ? kShr : kShl,
+               static_cast<int64_t>(__builtin_ctzll(c))});
+        }
+        continue;
+      }
+      words.push_back({op, operand});
+    }
+    return words;
+  };
+  using Instance = ConvergedInstance;
+  folly::F14FastMap<std::string, int32_t> shapeByKey;
+  std::vector<std::vector<ShapeWord>> shapes;
+  std::vector<Instance> instances;
+  folly::F14FastMap<std::string, int32_t> resultByKey;
+  int32_t numResults = 0;
+  int32_t numPrograms = 0;
+  // Adds the evaluation of the program at 'offset' and returns the result it
+  // writes, or 'dest' in the temps phase. Identical evaluations of a phase
+  // share a result.
+  auto add =
+      [&](int32_t phase, bool overCapacities, int32_t offset, int32_t dest) {
+        ++numPrograms;
+        auto words = shapeWords(offset);
+        std::string key;
+        std::vector<int64_t> operands;
+        for (const auto& word : words) {
+          key.push_back(static_cast<char>(word.op));
+          operands.push_back(word.operand);
+        }
+        const auto shape =
+            shapeByKey.try_emplace(key, static_cast<int32_t>(shapes.size()))
+                .first->second;
+        if (shape == static_cast<int32_t>(shapes.size())) {
+          shapes.push_back(words);
+        }
+        if (phase != kTempPhase) {
+          std::string resultKey =
+              fmt::format("{}{}{}:", phase, overCapacities ? 1 : 0, key);
+          resultKey.append(
+              reinterpret_cast<const char*>(operands.data()),
+              operands.size() * sizeof(int64_t));
+          auto [it, fresh] = resultByKey.try_emplace(resultKey, numResults);
+          if (!fresh) {
+            return it->second;
+          }
+          dest = numResults++;
+        }
+        instances.push_back(
+            {shape, phase, overCapacities, dest, std::move(operands), 0});
+        return dest;
+      };
+  ConvergedFixups result;
+  result.records = fixups.records;
+  for (int32_t r = 0; r < fixups.numRecords; ++r) {
+    auto* rec = result.records.data() + r * kRecordWords;
+    switch (rec[1]) {
+      case kTempRecord:
+        add(kTempPhase, false, rec[4], rec[3]);
+        break;
+      case kStoreRecord:
+      case kCapacityRecord:
+        rec[4] = add(kStorePhase, false, rec[4], 0);
+        break;
+      case kScanRecord:
+      case kVolatileRecord:
+      case kCopyRecord:
+        break;
+      case kScalarRecord:
+        rec[4] = add(kRecordPhase, false, rec[4], 0);
+        break;
+      case kPlacementRecord:
+      case kPlacedRecord:
+        rec[4] = add(kRecordPhase, false, rec[4], 0);
+        if (rec[5] >= 0) {
+          rec[5] = add(kRecordPhase, false, rec[5], 0);
+        }
+        break;
+      case kCheckRecord:
+        for (int32_t d = 0; d < (rec[2] & 0xff); ++d) {
+          for (auto i : {4 + d, 8 + d}) {
+            if (rec[i] >= 0) {
+              rec[i] = add(kRecordPhase, false, rec[i], 0);
+            }
+          }
+        }
+        break;
+      default:
+        if (rec[3] >= 0) {
+          const auto overValues = add(kRecordPhase, false, rec[3], 0);
+          const auto overCaps = add(kRecordPhase, true, rec[3], 0);
+          if (overValues >= (1 << 15) || overCaps >= (1 << 15)) {
+            return std::nullopt;
+          }
+          rec[3] = overValues | (overCaps << 15);
+        }
+        for (int32_t i = 4; i < kRecordWords; ++i) {
+          if (rec[i] >= 0) {
+            rec[i] = add(kRecordPhase, false, rec[i], 0);
+          }
+        }
+        break;
+    }
+  }
+  if (numResults >= (1 << 15) || shapes.size() >= (1 << 14)) {
+    return std::nullopt;
+  }
+  // An operand is a literal of its shape when every instance has it.
+  const auto numShapes = static_cast<int32_t>(shapes.size());
+  std::vector<std::vector<int32_t>> varIndex(numShapes);
+  std::vector<int32_t> numInstances(numShapes, 0);
+  for (int32_t s = 0; s < numShapes; ++s) {
+    varIndex[s].assign(shapes[s].size(), -1);
+  }
+  for (const auto& instance : instances) {
+    ++numInstances[instance.shape];
+    auto& first = shapes[instance.shape];
+    for (size_t i = 0; i < first.size(); ++i) {
+      if (instance.operands[i] != first[i].operand) {
+        varIndex[instance.shape][i] = 0;
+      }
+    }
+  }
+  std::vector<int32_t> numVars(numShapes, 0);
+  for (int32_t s = 0; s < numShapes; ++s) {
+    for (auto& index : varIndex[s]) {
+      if (index == 0) {
+        index = numVars[s]++;
+      }
+    }
+  }
+  static const std::vector<std::pair<std::vector<int64_t>, LibraryShape>>
+      kLibrary{
+          {{kPushConst}, kConstShape},
+          {{kPushSymbol}, kSymbolShape},
+          {{kPushConst, kLoad}, kLoadShape},
+          {{kPushConst,
+            kLoad,
+            kPushTemp,
+            kAdd,
+            kPushConst,
+            kPushTemp,
+            kMul,
+            kAdd},
+           kStoreShape},
+          {{kPushConst, kPushSymbol, kMul, kPushConst, kAdd, kShr, kShl},
+           kAlignedShape},
+          {{kPushConst,
+            kPushSymbol,
+            kPushSymbol,
+            kMax,
+            kMul,
+            kPushConst,
+            kAdd,
+            kShr,
+            kShl},
+           kAlignedMaxShape},
+      };
+  // The section: header, shapes as (library, code offset), the shapes' code,
+  // the instances of each phase sorted by shape, then their operands.
+  auto& out = result.code;
+  const auto numUsed = code[0];
+  out.assign(code.begin(), code.begin() + 1 + numUsed);
+  const auto at = static_cast<int64_t>(out.size());
+  out[0] = numUsed | (at << 32);
+  result.resultsWord = static_cast<int32_t>(at);
+  out.resize(at + kSectionWords + 2 * numShapes, 0);
+  out[at + 1] = numShapes;
+  out[at + 5] = at + kSectionWords;
+  std::vector<int32_t> libraryCount(7, 0);
+  std::string genericText;
+  std::vector<int64_t> libraryOf(numShapes, kGenericShape);
+  for (int32_t s = 0; s < numShapes; ++s) {
+    std::vector<int64_t> ops;
+    for (const auto& word : shapes[s]) {
+      ops.push_back(word.op);
+    }
+    int64_t library = kGenericShape;
+    for (const auto& [pattern, id] : kLibrary) {
+      if (pattern == ops) {
+        library = id;
+      }
+    }
+    libraryCount[library] += numInstances[s];
+    libraryOf[s] = library;
+    if (library == kGenericShape) {
+      std::string text;
+      for (const auto& word : shapes[s]) {
+        text += fmt::format("{}{}", text.empty() ? "" : " ", word.op);
+      }
+      genericText += fmt::format(" [{}: {}]", numInstances[s], text);
+    }
+    out[at + kSectionWords + 2 * s] = library;
+    out[at + kSectionWords + 2 * s + 1] = static_cast<int64_t>(out.size());
+    for (size_t i = 0; i < shapes[s].size(); ++i) {
+      const auto var = varIndex[s][i];
+      const auto op = shapes[s][i].op | (var >= 0 ? kVarOperand : 0);
+      out.push_back(
+          (op << kOperandBits) |
+          ((var >= 0 ? var : shapes[s][i].operand) & kOperandMask));
+    }
+    out.push_back(word(kEnd));
+  }
+  std::stable_sort(
+      instances.begin(),
+      instances.end(),
+      [](const Instance& a, const Instance& b) {
+        return a.phase != b.phase ? a.phase < b.phase : a.shape < b.shape;
+      });
+  out[at + 6] = static_cast<int64_t>(out.size());
+  std::vector<int64_t> operands;
+  std::array<int32_t, kNumPhases> genericByPhase{};
+  for (auto& instance : instances) {
+    instance.operandOffset = static_cast<int64_t>(operands.size());
+    ++out[at + 2 + instance.phase];
+    if (libraryOf[instance.shape] == kGenericShape) {
+      ++genericByPhase[instance.phase];
+    }
+    out.push_back(
+        static_cast<int64_t>(operands.size()) |
+        (static_cast<int64_t>(instance.dest) << 32) |
+        (static_cast<int64_t>(instance.shape) << 48) |
+        (instance.overCapacities ? int64_t{1} << 62 : 0));
+    for (size_t i = 0; i < instance.operands.size(); ++i) {
+      if (varIndex[instance.shape][i] >= 0) {
+        operands.push_back(instance.operands[i]);
+      }
+    }
+  }
+  out[at + 7] = static_cast<int64_t>(out.size());
+  out.insert(out.end(), operands.begin(), operands.end());
+  result.numResults = numResults;
+  result.numRecords = fixups.numRecords;
+  // The tensor parameters the records write, one entry each, which a warp
+  // loads, updates and stores as whole slots. The records the entries take
+  // leave the list. Not done when a slot takes records an entry cannot merge,
+  // or when another record writes into a slot.
+  out[at + 9] = static_cast<int64_t>(out.size());
+  std::string slotText = "slots not staged";
+  std::map<int32_t, SlotEntry> slots;
+  bool staged = true;
+  {
+    // A slot can get the same record twice, and a shape record next to a
+    // tensor record with the same dims, which writes what the shape record
+    // does: those leave, so that each slot has one record of each kind.
+    {
+      std::vector<int32_t> unique;
+      std::map<int32_t, std::vector<const int32_t*>> bySlot;
+      auto isTensor = [](int32_t kind) {
+        return kind == kTensorRecord || kind == kSizedTensorRecord;
+      };
+      for (int32_t r = 0; r < fixups.numRecords; ++r) {
+        const auto* rec = result.records.data() + r * kRecordWords;
+        bySlot[rec[0]].push_back(rec);
+      }
+      for (int32_t r = 0; r < fixups.numRecords; ++r) {
+        const auto* rec = result.records.data() + r * kRecordWords;
+        const auto kind = rec[1];
+        bool covered = false;
+        if (kind != kScalarRecord && kind != kVolatileRecord &&
+            kind != kTempRecord && kind != kScanRecord &&
+            kind != kStoreRecord && kind != kCapacityRecord &&
+            kind != kCopyRecord) {
+          for (const auto* other : bySlot[rec[0]]) {
+            if (other == rec) {
+              continue;
+            }
+            const bool same =
+                std::equal(rec, rec + kRecordWords, other) && other < rec;
+            // A shape record with the same rank, band and dims (words 4-7,
+            // one per dim up to kMaxDims) as a tensor record of its slot
+            // writes nothing the tensor record does not, provided each of its
+            // strides (words 8-11) is kHostValue, which keeps the host's, or
+            // the tensor record's own. Dropping it also lets the slot take
+            // the tensor record's contiguity, which kSlotShape would
+            // suppress.
+            auto stridesCovered = [&]() {
+              for (int32_t d = 0; d < rec[2] && d < kMaxDims; ++d) {
+                if (rec[8 + d] != kHostValue && rec[8 + d] != other[8 + d]) {
+                  return false;
+                }
+              }
+              return true;
+            };
+            const bool shapeOfTensor =
+                (kind == kShapeRecord || kind == kSizedShapeRecord) &&
+                isTensor(other[1]) && other[2] == rec[2] &&
+                other[3] == rec[3] && std::equal(rec + 4, rec + 8, other + 4) &&
+                stridesCovered();
+            if (same || shapeOfTensor) {
+              covered = true;
+              break;
+            }
+          }
+        }
+        if (!covered) {
+          unique.insert(unique.end(), rec, rec + kRecordWords);
+        }
+      }
+      result.records = std::move(unique);
+      result.numRecords =
+          static_cast<int32_t>(result.records.size() / kRecordWords);
+    }
+    const auto numUnique = result.numRecords;
+    std::vector<int32_t> kept;
+    std::vector<int32_t> otherWrites;
+    auto codeOf = [](int32_t field) {
+      return field == kHostValue  ? kKeepCode
+          : field == kDenseStride ? kDenseCode
+                                  : field;
+    };
+    for (int32_t r = 0; r < numUnique; ++r) {
+      const auto* rec = result.records.data() + r * kRecordWords;
+      const auto kind = rec[1];
+      const bool tensor = kind == kTensorRecord || kind == kShapeRecord ||
+          kind == kBandRecord || kind == kViewRecord ||
+          kind == kSizedTensorRecord || kind == kSizedShapeRecord;
+      const bool status = kind == kVolatileRecord && rec[2] == 2;
+      if (!tensor && kind != kPlacedRecord && !status) {
+        kept.insert(kept.end(), rec, rec + kRecordWords);
+        if (kind == kScalarRecord || kind == kVolatileRecord) {
+          otherWrites.push_back(rec[0]);
+        }
+        continue;
+      }
+      auto [it, fresh] = slots.try_emplace(rec[0]);
+      auto& slot = it->second;
+      auto& words = slot.words;
+      if (fresh) {
+        words = {rec[0], 0, -1, -1, -1, -1, -1, -1};
+      }
+      if (status) {
+        words[1] |= kSlotZeroStatus;
+      } else if (kind == kPlacedRecord) {
+        ++slot.numPlaced;
+        words[1] |= kSlotPlaced | (rec[5] >= 0 ? kSlotPlacedOffset : 0);
+        words[3] = rec[4] | ((rec[5] >= 0 ? rec[5] : 0) << 16);
+      } else {
+        ++slot.numTensors;
+        const auto rank = rec[2];
+        staged &= rank >= 0 && rank <= kMaxDims;
+        words[1] |= (kind == kSizedTensorRecord || kind == kSizedShapeRecord
+                         ? kSlotSized
+                         : 0) |
+            (kind == kShapeRecord || kind == kSizedShapeRecord ? kSlotShape
+                                                               : 0) |
+            (kind == kViewRecord ? kSlotView : 0);
+        if (kind != kBandRecord) {
+          words[1] |= kSlotTensor | (rank & 15);
+          words[4] = codeOf(rec[4]) | (codeOf(rec[5]) << 16);
+          words[5] = codeOf(rec[6]) | (codeOf(rec[7]) << 16);
+          words[6] = codeOf(rec[8]) | (codeOf(rec[9]) << 16);
+          words[7] = codeOf(rec[10]) | (codeOf(rec[11]) << 16);
+        }
+        if (rec[3] >= 0) {
+          words[1] |= kSlotBand;
+          words[2] = (rec[3] & 0x7fff) | ((rec[3] >> 15) << 16);
+        }
+      }
+    }
+    int32_t previousEnd = 0;
+    for (const auto& [offset, slot] : slots) {
+      staged &= slot.numTensors <= 1 && slot.numPlaced <= 1 &&
+          offset % 8 == 0 && offset >= previousEnd;
+      previousEnd = offset + kSlotBytes;
+    }
+    for (const auto write : otherWrites) {
+      auto it = slots.upper_bound(write);
+      if (it != slots.begin() && write < std::prev(it)->first + kSlotBytes) {
+        staged = false;
+      }
+    }
+    if (staged && !slots.empty()) {
+      out[at + 8] = static_cast<int64_t>(slots.size());
+      for (const auto& [offset, slot] : slots) {
+        for (int32_t i = 0; i < kSlotEntryWords; i += 2) {
+          out.push_back(
+              static_cast<int64_t>(static_cast<uint32_t>(slot.words[i])) |
+              (static_cast<int64_t>(slot.words[i + 1]) << 32));
+        }
+      }
+      result.records = std::move(kept);
+      result.numRecords =
+          static_cast<int32_t>(result.records.size() / kRecordWords);
+      slotText = fmt::format(
+          "{} slots staged, {} records left", slots.size(), result.numRecords);
+    }
+  }
+  out[at + 10] = static_cast<int64_t>(out.size());
+  out.resize(out.size() + numResults, 0);
+  std::string wideText;
+  if (wide) {
+    std::string why = "slots not staged";
+    if (staged) {
+      result.wide = buildWidePlan(
+          {instances, shapes, libraryOf, out, at, slots, result.records}, why);
+    }
+    wideText = result.wide ? "; " + result.wide->summary : "; no wide: " + why;
+  }
+  result.summary = fmt::format(
+      "{} programs, {} evaluations ({} temps, {} stores, {} records), {} shapes, "
+      "{} code words for {} before; library: const {} symbol {} load {} "
+      "store {} aligned {} aligned max {}, interpreted {} ({}/{}/{} by phase); {}{}{}",
+      numPrograms,
+      instances.size(),
+      out[at + 2],
+      out[at + 3],
+      out[at + 4],
+      numShapes,
+      out.size(),
+      code.size(),
+      libraryCount[kConstShape],
+      libraryCount[kSymbolShape],
+      libraryCount[kLoadShape],
+      libraryCount[kStoreShape],
+      libraryCount[kAlignedShape],
+      libraryCount[kAlignedMaxShape],
+      libraryCount[kGenericShape],
+      genericByPhase[0],
+      genericByPhase[1],
+      genericByPhase[2],
+      slotText,
+      wideText,
+      genericText);
+  return result;
+}
+
+// Whether the blocks of the wide setup of 'fixups' read nothing another block
+// writes: no symbol and no load in the parameters the setup writes from
+// 'deviceBase', and no symbol in the words the placement block stores. The
+// one-block setup reads all of those before it writes any. 'symbols' are the
+// symbols' source addresses, as prepareFixups gives the kernel.
+bool wideSetupSafe(
+    const SymbolFixups& fixups,
+    const std::vector<int64_t>& symbols,
+    const uint8_t* deviceBase) {
+  const auto begin = reinterpret_cast<int64_t>(deviceBase);
+  const auto end = begin + fixups.wideWriteEnd;
+  auto written = [&](int64_t address) {
+    if (address >= begin && address < end) {
+      return true;
+    }
+    return std::binary_search(
+        fixups.wideStoreAddresses.begin(),
+        fixups.wideStoreAddresses.end(),
+        address);
+  };
+  const auto numUsed = static_cast<int32_t>(fixups.code.at(0) & 0xffffffff);
+  for (int32_t j = 1; j <= numUsed; ++j) {
+    const auto code = fixups.code.at(j);
+    if (code & kCapacityOnly) {
+      continue;
+    }
+    // Without the flag bits and, for an element, the index.
+    const auto address =
+        symbols.at(code & (kCapacityOnly - 1)) & 0xfffffffffffcLL;
+    if (written(address)) {
+      LOG_FIRST_N(INFO, 10) << "Wide setup off: a symbol reads a word the "
+                               "setup writes";
+      return false;
+    }
+  }
+  for (const auto address : fixups.wideLoadAddresses) {
+    if (address >= begin && address < end) {
+      LOG_FIRST_N(INFO, 10) << "Wide setup off: a program loads a word the "
+                               "setup writes";
+      return false;
+    }
+  }
+  return true;
+}
+
 } // namespace
 
 FixupArgs DeviceSymbols::prepareFixups(
     ExecutionState& state,
-    SymbolFixups& fixups) {
+    SymbolFixups& fixups,
+    const uint8_t* deviceBase) {
   if (!fixups.deviceRecords.defined()) {
     addSymbolHeader(fixups);
     auto options = at::TensorOptions().device(at::kCUDA);
+    std::optional<ConvergedFixups> converged;
+    if (WaveConfig::get().convergedSetup) {
+      converged = convergeFixups(fixups, WaveConfig::get().wideSetup);
+      if (converged.has_value()) {
+        fixups.deviceResults = at::empty(
+            {std::max<int64_t>(converged->numResults, 1)},
+            options.dtype(at::kLong));
+        converged->code[converged->resultsWord] =
+            reinterpret_cast<int64_t>(fixups.deviceResults.data_ptr());
+        LOG(INFO) << "Converged setup: " << converged->summary;
+        if (converged->wide.has_value() &&
+            static_cast<int32_t>(state.symbolSources.size()) <= kMaxSymbols) {
+          auto& plan = *converged->wide;
+          fixups.wideHostWords = plan.words;
+          fixups.deviceWide = at::from_blob(
+                                  plan.words.data(),
+                                  {static_cast<int64_t>(plan.words.size())},
+                                  at::TensorOptions().dtype(at::kInt))
+                                  .to(options.dtype(at::kInt));
+          // The blocks' flags, the count of setups run, then the learned
+          // multipliers' flag and result.
+          fixups.wideFlags =
+              at::zeros({plan.numBlocks + 3}, options.dtype(at::kInt));
+          fixups.numWideBlocks = plan.numBlocks;
+          fixups.wideShapeWords = plan.shapeWords;
+          fixups.wideWriteEnd = plan.writeEnd;
+          fixups.wideLoadAddresses = std::move(plan.loadAddresses);
+          fixups.wideStoreAddresses = std::move(plan.storeAddresses);
+          std::sort(
+              fixups.wideStoreAddresses.begin(),
+              fixups.wideStoreAddresses.end());
+        }
+      }
+    }
+    auto& records = converged ? converged->records : fixups.records;
+    auto& code = converged ? converged->code : fixups.code;
     fixups.deviceRecords = at::from_blob(
-                               fixups.records.data(),
-                               {static_cast<int64_t>(fixups.records.size())},
+                               records.data(),
+                               {static_cast<int64_t>(records.size())},
                                at::TensorOptions().dtype(at::kInt))
                                .to(options.dtype(at::kInt));
     fixups.deviceCode =
         at::from_blob(
-            fixups.code.data(),
-            {static_cast<int64_t>(std::max<size_t>(fixups.code.size(), 1))},
+            code.data(),
+            {static_cast<int64_t>(std::max<size_t>(code.size(), 1))},
             at::TensorOptions().dtype(at::kLong))
             .to(options.dtype(at::kLong));
+    fixups.numDeviceCode = static_cast<int32_t>(code.size());
+    fixups.numDeviceRecords =
+        converged ? converged->numRecords : fixups.numRecords;
   }
   int32_t numSymbols = static_cast<int32_t>(state.symbolSources.size());
   std::vector<int64_t> symbols(2 * static_cast<size_t>(numSymbols), 0);
@@ -2576,13 +4517,111 @@ FixupArgs DeviceSymbols::prepareFixups(
             at::TensorOptions().dtype(at::kLong))
             .to(at::TensorOptions().device(at::kCUDA).dtype(at::kLong));
   }
-  return {
+  FixupArgs args{
       .records = fixups.deviceRecords.data_ptr<int32_t>(),
       .code = fixups.deviceCode.data_ptr<int64_t>(),
-      .numRecords = fixups.numRecords,
+      .numRecords = fixups.numDeviceRecords,
       .symbols = state.symbolArgsDevice.data_ptr<int64_t>(),
       .numSymbols = numSymbols,
-      .numCode = static_cast<int32_t>(fixups.code.size())};
+      .numCode = fixups.numDeviceCode};
+  if (deviceBase != nullptr && fixups.deviceWide.defined() &&
+      wideSetupSafe(fixups, symbols, deviceBase)) {
+    args.wide = fixups.deviceWide.data_ptr<int32_t>();
+    args.wideHost = &fixups.wideHostWords;
+    args.wideFlags = fixups.wideFlags.data_ptr<int32_t>();
+    args.numWideBlocks = fixups.numWideBlocks;
+    args.wideShapeWords = fixups.wideShapeWords;
+  }
+  return args;
+}
+
+std::vector<int32_t> DeviceSymbols::wideCountTerms(
+    const std::vector<int32_t>& plan,
+    const std::vector<int32_t>& gridWords) {
+  // As kTerm* in the kernel source.
+  constexpr int32_t kTermScalar = 1;
+  constexpr int32_t kTermStatic = 2;
+  constexpr int32_t kTermSized = 4;
+  constexpr int32_t kTermWait = 8;
+  const int32_t numSlots = plan[4];
+  const int32_t* slots = plan.data() + plan[5];
+  const int32_t numKept = plan[6];
+  const int32_t* kept = plan.data() + plan[7];
+  std::map<int32_t, int32_t> slotAt;
+  for (int32_t i = 0; i < numSlots; ++i) {
+    slotAt[slots[kWideSlotWords * i]] = i;
+  }
+  folly::F14FastMap<int32_t, int32_t> scalarAt;
+  // The bytes the remaining records write.
+  std::vector<std::pair<int32_t, int32_t>> writes;
+  for (int32_t r = 0; r < numKept; ++r) {
+    const int32_t* rec = kept + kRecordWords * r;
+    if (rec[1] == kScalarRecord) {
+      scalarAt[rec[0]] = r;
+      writes.emplace_back(rec[0], rec[0] + 8);
+    } else if (rec[1] == kVolatileRecord) {
+      const int32_t begin = rec[0] + (rec[2] == 2 ? 48 : 0);
+      writes.emplace_back(begin, begin + (rec[2] == 0 ? 8 : 4));
+    }
+  }
+  // Whether a slot entry other than one at 'except', or a remaining record
+  // other than a scalar at 'except', writes in [begin, end).
+  auto written = [&](int32_t begin, int32_t end, int32_t except) {
+    for (auto it = slotAt.lower_bound(begin - kSlotBytes + 1);
+         it != slotAt.end() && it->first < end;
+         ++it) {
+      if (it->first != except) {
+        return true;
+      }
+    }
+    for (const auto& [writeBegin, writeEnd] : writes) {
+      if (writeBegin < end && begin < writeEnd &&
+          !(writeBegin == except && scalarAt.count(except))) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const int32_t termBase = gridWords[4];
+  const int32_t numTerms = (gridWords[5] - gridWords[4]) / 2;
+  std::vector<int32_t> terms(4 * static_cast<size_t>(numTerms), 0);
+  for (int32_t t = 0; t < numTerms; ++t) {
+    const int32_t offset = gridWords[termBase + 2 * t];
+    int32_t* term = terms.data() + 4 * t;
+    term[1] = offset;
+    if (gridWords[termBase + 2 * t + 1]) {
+      if (written(offset, offset + 8, offset)) {
+        return {};
+      }
+      auto it = scalarAt.find(offset);
+      if (it == scalarAt.end()) {
+        term[0] = kTermScalar | kTermStatic;
+        continue;
+      }
+      const int32_t* rec = kept + kRecordWords * it->second;
+      term[0] = kTermScalar | ((rec[2] & 1) ? kTermWait : 0);
+      term[2] = rec[4];
+      continue;
+    }
+    // A tensor term reads the rank, dims and numEl, bytes 8 to 48.
+    if (written(offset + 8, offset + 48, offset)) {
+      return {};
+    }
+    auto it = slotAt.find(offset);
+    const int32_t* entry =
+        it != slotAt.end() ? slots + kWideSlotWords * it->second : nullptr;
+    if (entry == nullptr || !(entry[1] & kSlotTensor)) {
+      term[0] = kTermStatic;
+      continue;
+    }
+    const int32_t rank = entry[1] & 15;
+    // Word 14 of the entry has a bit for each dim that waits.
+    const bool wait = (entry[14] & ((1 << std::min(rank, kMaxDims)) - 1)) != 0;
+    term[0] = (rank << 8) | ((entry[1] & kSlotSized) ? kTermSized : 0) |
+        (wait ? kTermWait : 0);
+    term[2] = it->second;
+  }
+  return terms;
 }
 
 void DeviceSymbols::runFixups(
@@ -2591,7 +4630,7 @@ void DeviceSymbols::runFixups(
     uint8_t* deviceBase,
     facebook::velox::wave::Stream* stream,
     bool checkFailure) {
-  auto args = prepareFixups(state, fixups);
+  auto args = prepareFixups(state, fixups, nullptr);
   const int* failure = checkFailure && state.failureWords.defined()
       ? state.failureWords.data_ptr<int32_t>()
       : nullptr;
@@ -2636,6 +4675,62 @@ void unfixDims(const std::string& name, SymShape& shape) {
   }
   if (contiguous) {
     shape.strides = denseShape(shape.dims).strides;
+  }
+}
+
+} // namespace
+
+namespace {
+
+// Renames the symbols the rules mint for data-decided dims to the export's
+// u<N> for the same dims. A sym_size keeps the export's u<N>, which has the
+// traced capacity, while the rules give its tensor a symbol of their own;
+// both are the same count. A symbol the export disagrees on is left alone.
+void unifyTracedSymbols(
+    const SymShapes& exported,
+    const folly::F14FastSet<std::string>& hostShaped,
+    SymShapes& derived) {
+  folly::F14FastMap<std::string, SymExpr> toTraced;
+  folly::F14FastSet<std::string> conflicting;
+  for (const auto& [name, shape] : derived.byName) {
+    auto traced = exported.byName.find(name);
+    if (traced == exported.byName.end() || hostShaped.count(name) != 0 ||
+        traced->second.dims.size() != shape.dims.size()) {
+      continue;
+    }
+    for (size_t d = 0; d < shape.dims.size(); ++d) {
+      const auto& from = shape.dims[d];
+      const auto& to = traced->second.dims[d];
+      if (from.kind != SymExpr::Kind::kSymbol ||
+          to.kind != SymExpr::Kind::kSymbol || !isTracedDataSymbol(to.symbol) ||
+          isTracedDataSymbol(from.symbol) || from.symbol[0] != 'u') {
+        continue;
+      }
+      auto [it, added] = toTraced.try_emplace(from.symbol, to);
+      if (!added && it->second.symbol != to.symbol) {
+        conflicting.insert(from.symbol);
+      }
+    }
+  }
+  for (const auto& name : conflicting) {
+    toTraced.erase(name);
+  }
+  if (toTraced.empty()) {
+    return;
+  }
+  VLOG(1) << "Device symbols: " << toTraced.size()
+          << " derived data symbols renamed to the export's, "
+          << conflicting.size() << " left for disagreeing";
+  for (auto& [name, scalar] : derived.scalarByName) {
+    substituteSymbols(scalar, toTraced);
+  }
+  for (auto& [name, shape] : derived.byName) {
+    for (auto* exprs : {&shape.dims, &shape.strides}) {
+      for (auto& expr : *exprs) {
+        substituteSymbols(expr, toTraced);
+      }
+    }
+    substituteSymbols(shape.offset, toTraced);
   }
 }
 
@@ -2873,6 +4968,7 @@ std::shared_ptr<SymShapes> DeviceSymbols::deriveOnce(
     }
     converge();
   }
+  unifyTracedSymbols(*shapes_, hostShaped_, *derived);
   return derived;
 }
 
@@ -3918,6 +6014,36 @@ std::vector<int32_t> groupValues(const AllocGroup& group) {
   return ids;
 }
 
+// The values the host sizing of 'program' reads: the operands of its
+// reserves and the operands of its concats.
+std::vector<int32_t> sizeReads(const StepProgram& program) {
+  std::vector<int32_t> ids;
+  auto addScalar = [&](const ScalarRef& scalar) {
+    if (scalar.kind == ScalarRef::kValue) {
+      ids.push_back(scalar.valueId);
+    }
+  };
+  for (const auto& size : program.sizes) {
+    for (const auto& group : size.args.tensors) {
+      ids.insert(ids.end(), group.begin(), group.end());
+    }
+    for (const auto& scalar : size.args.scalars) {
+      addScalar(scalar);
+    }
+    for (const auto& list : size.args.intLists) {
+      for (const auto& scalar : list) {
+        addScalar(scalar);
+      }
+    }
+    ids.insert(
+        ids.end(), size.args.hostTensors.begin(), size.args.hostTensors.end());
+  }
+  for (const auto& concat : program.concats) {
+    ids.insert(ids.end(), concat.operandIds.begin(), concat.operandIds.end());
+  }
+  return ids;
+}
+
 // Puts on the device path the steps of 'candidates' (fully set up, every
 // group's demand from the setup, every output in a group, no output the host
 // reads) that also need no host work from the steps around them: no step off
@@ -3942,11 +6068,36 @@ void selectDeviceAllocSteps(
       }
     }
   }
+  auto hasHostShape = [&](int32_t id) {
+    return id < static_cast<int32_t>(state.valueShapeSlot.size()) &&
+        state.valueShapeSlot[id] >= 0;
+  };
+  auto isRoot = [&](int32_t id) {
+    return id < static_cast<int32_t>(state.hasValueAddress.size()) &&
+        (state.hasValueAddress[id] & ExecutionState::kRootAddress) != 0;
+  };
   auto isHostWritten = [&](int32_t id) {
-    return (id < static_cast<int32_t>(state.valueShapeSlot.size()) &&
-            state.valueShapeSlot[id] >= 0) ||
+    return hasHostShape(id) || isRoot(id) ||
         (id < static_cast<int32_t>(state.hasValueAddress.size()) &&
          state.hasValueAddress[id] != 0 && concatResults.count(id) == 0);
+  };
+  // A group's values but the graph inputs a concat copies into its bands: no
+  // step makes those.
+  auto producedGroupValues = [&](const AllocGroup& group) {
+    auto ids = groupValues(group);
+    const auto& idToValue = state.waveGraph->idToValue();
+    ids.erase(
+        std::remove_if(
+            ids.begin(),
+            ids.end(),
+            [&](auto id) {
+              auto it = idToValue.find(id);
+              return it != idToValue.end() &&
+                  (it->second->producer() == nullptr ||
+                   it->second->producer()->target() == "prim.Input");
+            }),
+        ids.end());
+    return ids;
   };
   folly::F14FastMap<int32_t, int64_t> producerOf;
   // The step of each tensor a launch writes, bound or not: a kernel variant's
@@ -3954,6 +6105,19 @@ void selectDeviceAllocSteps(
   folly::F14FastMap<int32_t, int64_t> writerOf;
   // The base of each view the steps make.
   folly::F14FastMap<int32_t, int32_t> viewBaseOf;
+  // The elements of each list a pack derives. The host makes such a list
+  // from its elements when it needs it.
+  folly::F14FastMap<int32_t, std::vector<int32_t>> packElements;
+  // The view each derive makes, which the host can derive again.
+  folly::F14FastMap<int32_t, StepVectors::HostDerive> hostDerivable;
+  // The tensor list each pack derives: no table entry the setup writes, so a
+  // host reader packs it again from its elements.
+  folly::F14FastMap<int32_t, StepVectors::HostDerive> packDerivable;
+  auto isTensorList = [&](int32_t id) {
+    auto value = state.waveGraph->idToValue().find(id);
+    return value != state.waveGraph->idToValue().end() &&
+        value->second->type().kind() == nativert::Type::Kind::TensorList;
+  };
   for (size_t node = 0; node < state.stepVectors.size(); ++node) {
     for (size_t step = 0; step < state.stepVectors[node].size(); ++step) {
       const auto& sv = state.stepVectors[node][step];
@@ -3988,6 +6152,33 @@ void selectDeviceAllocSteps(
         }
       }
       for (const auto& derive : sv.program->derives) {
+        if (derive.kind == StandaloneShortcut::kListPack &&
+            derive.output >= 0) {
+          packElements.emplace(derive.output, derive.operands);
+        }
+      }
+      for (size_t d = 0; d < sv.program->derives.size(); ++d) {
+        const auto& derive = sv.program->derives[d];
+        if (derive.kind == StandaloneShortcut::kListPack &&
+            derive.output >= 0 && isTensorList(derive.output)) {
+          packDerivable.emplace(
+              derive.output,
+              StepVectors::HostDerive{
+                  .program = sv.program.get(),
+                  .derive = static_cast<int32_t>(d)});
+        }
+        if (derive.output >= 0 && derive.outputs.empty() &&
+            derive.kind != StandaloneShortcut::kListPack &&
+            derive.kind != StandaloneShortcut::kSymSize &&
+            derive.kind != StandaloneShortcut::kSymNumel) {
+          hostDerivable.emplace(
+              derive.output,
+              StepVectors::HostDerive{
+                  .program = sv.program.get(),
+                  .derive = static_cast<int32_t>(d)});
+        }
+      }
+      for (const auto& derive : sv.program->derives) {
         if (derive.kind == StandaloneShortcut::kListPack ||
             derive.kind == StandaloneShortcut::kSymSize ||
             derive.kind == StandaloneShortcut::kSymNumel) {
@@ -4012,6 +6203,21 @@ void selectDeviceAllocSteps(
   // Where the producer's parameters hold each kernel output's descriptor,
   // which a step off the path can fetch.
   folly::F14FastMap<int32_t, int32_t> descriptorOffset;
+  folly::F14FastSet<int32_t> shapeOnly;
+  for (const auto& steps : state.stepVectors) {
+    for (const auto& sv : steps) {
+      if (sv.program == nullptr) {
+        continue;
+      }
+      for (const auto& launch : sv.program->launches) {
+        for (const auto& bound : launch.outputs) {
+          if (bound.kind == BoundOutput::kShapeOnly) {
+            shapeOnly.insert(bound.valueId);
+          }
+        }
+      }
+    }
+  }
   state.fetchHostShapes.clear();
   for (size_t node = 0; node < state.stepVectors.size(); ++node) {
     for (size_t step = 0; step < state.stepVectors[node].size(); ++step) {
@@ -4041,8 +6247,10 @@ void selectDeviceAllocSteps(
       // gives it those when it can evaluate them.
       for (const auto& fill : sv.program->fills) {
         auto it = producerOf.find(fill.valueId);
-        // A kernel output, or a view the setup writes in an export slot.
+        // A kernel output, or a view the setup writes in an export slot. A
+        // step that launches nothing runs no setup.
         const bool exported = fill.kernel == FillOp::kExport &&
+            !sv.program->launches.empty() &&
             sv.program->placedExports.count(fill.offset) != 0;
         if (fill.kind != FillOp::kTensor ||
             (outputs.count(fill.valueId) == 0 && !exported) ||
@@ -4078,6 +6286,11 @@ void selectDeviceAllocSteps(
     return id >= 0 && id < static_cast<int32_t>(state.tableOnly.size()) &&
         state.tableOnly[id] == 0;
   };
+  auto readOnlyAtEnd = [&](int32_t id) {
+    return state.waveGraph->isGraphOutput(id) &&
+        static_cast<size_t>(id) < state.outputOnly.size() &&
+        state.outputOnly[id] != 0;
+  };
   // Which values lack a static header, by producer and by what is missing.
   folly::F14FastMap<std::string, int64_t> noHeaderWhy;
   auto noteNoHeader = [&](int32_t id) {
@@ -4087,6 +6300,66 @@ void selectDeviceAllocSteps(
         types->types[id] == nullptr;
     ++noHeaderWhy[fmt::format(
         "{} ({})", producerOf_(id), noType ? "no type" : "rank -1")];
+  };
+  // The derives do not run: the setups of the steps that read their outputs
+  // place them. A host reader fetches a derived tensor from its export slot.
+  auto deriveReason = [&](const StepProgram& program) -> const char* {
+    auto unfetchable = [&](int32_t id) {
+      return descriptorOffset.count(id) == 0;
+    };
+    for (const auto& derive : program.derives) {
+      // A list is no table entry: only a host reader of the list itself
+      // needs it made.
+      const bool list = derive.kind == StandaloneShortcut::kListPack;
+      bool hostRead =
+          (derive.materialize || (!list && isFrameRead(derive.output))) &&
+          unfetchable(derive.output);
+      for (size_t i = 0; i < derive.outputs.size(); ++i) {
+        hostRead = hostRead ||
+            (((i < derive.materializeOutputs.size() &&
+               derive.materializeOutputs[i]) ||
+              isFrameRead(derive.outputs[i])) &&
+             unfetchable(derive.outputs[i]));
+      }
+      if (hostRead) {
+        VLOG(1) << "Device alloc: derive of %" << derive.output << " ("
+                << producerOf_(derive.output) << ", "
+                << static_cast<int>(derive.kind) << ") is read by the host"
+                << [&] {
+                     std::string users;
+                     const auto& idToValue = state.waveGraph->idToValue();
+                     auto it = idToValue.find(derive.output);
+                     if (it != idToValue.end()) {
+                       for (const auto* user : it->second->users()) {
+                         users += fmt::format(" {}", user->target());
+                       }
+                     }
+                     return users;
+                   }();
+        return "derived value the host reads";
+      }
+      // A sym_size or sym_numel is a scalar: no tensor header, its readers
+      // get it from a scalar record. A list has no header either: its
+      // readers take the elements.
+      const bool noHeader = derive.kind == StandaloneShortcut::kSymSize ||
+          derive.kind == StandaloneShortcut::kSymNumel ||
+          derive.kind == StandaloneShortcut::kListPack;
+      if (derive.output >= 0 && !noHeader && !staticHeader(derive.output)) {
+        noteNoHeader(derive.output);
+        return "derived value without a static rank and dtype";
+      }
+      // The host writes the slot at its fill, which a step on the path
+      // does not run.
+      if (derive.output >= 0 && isHostWritten(derive.output)) {
+        return "derived value with a host-written slot";
+      }
+      for (auto id : derive.outputs) {
+        if (id >= 0 && isHostWritten(id)) {
+          return "derived value with a host-written slot";
+        }
+      }
+    }
+    return nullptr;
   };
   folly::F14FastSet<int64_t> onPath;
   folly::F14FastMap<std::string, int64_t> why;
@@ -4102,7 +6375,10 @@ void selectDeviceAllocSteps(
     // capacities like the rest of the host, and an empty factory needs no
     // size. An eager one computes on real sizes the path does not fetch, and
     // a host view needs its base in the frame.
-    bool eagerStandalone = false;
+    // An eager standalone waits for the device values it reads, which the
+    // path does not fetch before its step: off the path, the step resolves
+    // them first.
+    bool eagerStandalone = !sv.standalones.empty();
     for (const auto* list : {&sv.standalones, &sv.shortcutStandalones}) {
       for (const auto& data : *list) {
         const auto* launch = data.launch;
@@ -4131,34 +6407,8 @@ void selectDeviceAllocSteps(
         : eagerStandalone        ? "standalones"
         : !sv.hostCopies.empty() ? "host copies"
                                  : nullptr;
-    // The derives do not run: the setups of the steps that read their
-    // outputs place them.
-    // A host reader fetches a derived tensor from its export slot.
-    for (const auto& derive : program.derives) {
-      auto unfetchable = [&](int32_t id) {
-        return descriptorOffset.count(id) == 0;
-      };
-      bool hostRead = (derive.materialize || isFrameRead(derive.output)) &&
-          unfetchable(derive.output);
-      for (size_t i = 0; i < derive.outputs.size(); ++i) {
-        hostRead = hostRead ||
-            (((i < derive.materializeOutputs.size() &&
-               derive.materializeOutputs[i]) ||
-              isFrameRead(derive.outputs[i])) &&
-             unfetchable(derive.outputs[i]));
-      }
-      if (reason == nullptr && hostRead) {
-        reason = "derived value the host reads";
-      }
-      // A sym_size or sym_numel is a scalar: no tensor header, its readers
-      // get it from a scalar record.
-      const bool scalarOutput = derive.kind == StandaloneShortcut::kSymSize ||
-          derive.kind == StandaloneShortcut::kSymNumel;
-      if (reason == nullptr && derive.output >= 0 && !scalarOutput &&
-          !staticHeader(derive.output)) {
-        reason = "derived value without a static rank and dtype";
-        noteNoHeader(derive.output);
-      }
+    if (reason == nullptr) {
+      reason = deriveReason(program);
     }
     for (const auto& launch : program.launches) {
       for (const auto* outputs : {&launch.outputs, &launch.largestOutputs}) {
@@ -4177,7 +6427,10 @@ void selectDeviceAllocSteps(
             reason = "view output the host reads";
           } else if (
               reason == nullptr && bound.kind != BoundOutput::kTensor &&
-              !tableView && !tableConcat) {
+              bound.kind != BoundOutput::kShapeOnly && !tableView &&
+              !tableConcat &&
+              !(bound.kind == BoundOutput::kAlias &&
+                !isFrameRead(bound.valueId))) {
             reason = bound.kind == BoundOutput::kView
                 ? "view output over the frame"
                 : bound.kind == BoundOutput::kListElement
@@ -4185,12 +6438,28 @@ void selectDeviceAllocSteps(
                 : bound.kind == BoundOutput::kShapeOnly ? "shape-only output"
                 : bound.kind == BoundOutput::kAlias     ? "alias output"
                                                         : "concat output";
-          } else if (reason == nullptr && bound.aliasOf >= 0) {
-            reason = "in-place output";
+          } else if (
+              reason == nullptr && bound.aliasOf >= 0 &&
+              isFrameRead(bound.valueId)) {
+            // Over the table an in-place output is its self's entry, which
+            // the setup places; over the frame it is the host's view.
+            reason = "in-place output the host reads";
           } else if (reason == nullptr && !staticHeader(bound.valueId)) {
             reason = "output without a static rank and dtype";
             noteNoHeader(bound.valueId);
-          } else if (reason == nullptr && isHostWritten(bound.valueId)) {
+          } else if (
+              reason == nullptr && bound.kind == BoundOutput::kShapeOnly &&
+              isFrameRead(bound.valueId)) {
+            // The host reads the shape from the fake tensor it makes at the
+            // step's own sizing.
+            reason = "shape-only output the host reads";
+          } else if (
+              reason == nullptr &&
+              (bound.kind == BoundOutput::kShapeOnly
+                   ? hasHostShape(bound.valueId) || isRoot(bound.valueId)
+                   : isHostWritten(bound.valueId))) {
+            // A shape-only output has no memory: the address the host writes
+            // is the producer's, unless a setup places a view of it.
             VLOG(1) << "Device alloc: output %" << bound.valueId << " from "
                     << producerOf_(bound.valueId) << " has a host-written "
                     << (bound.valueId < static_cast<int32_t>(
@@ -4200,9 +6469,14 @@ void selectDeviceAllocSteps(
                             : "address");
             reason = "output with a host-written slot";
           } else if (
-              reason == nullptr && isFrameRead(bound.valueId) &&
+              reason == nullptr && bound.kind != BoundOutput::kShapeOnly &&
+              isFrameRead(bound.valueId) &&
               (descriptorOffset.count(bound.valueId) == 0 ||
-               state.fetchHostShapes.count(bound.valueId) != 0)) {
+               (state.fetchHostShapes.count(bound.valueId) != 0 &&
+                !readOnlyAtEnd(bound.valueId)))) {
+            // A shape-only output has no memory to read. A region member the
+            // host reads only as a graph output is fetched at the end, with
+            // the real dims its descriptor has.
             reason = "graph output without a descriptor to fetch";
           }
         }
@@ -4225,10 +6499,68 @@ void selectDeviceAllocSteps(
       onPath.insert(stepKey(node, step));
     }
   }
+  // A step of derives alone has nothing for the host to do on the path: the
+  // setups of the steps that read its outputs place them.
+  int32_t numDeriveSteps = 0;
+  for (size_t node = 0; node < state.stepVectors.size(); ++node) {
+    auto planIt = planOf.find(static_cast<int32_t>(node));
+    const auto* plan = planIt != planOf.end() ? planIt->second : nullptr;
+    for (size_t step = 0; step < state.stepVectors[node].size(); ++step) {
+      const auto& sv = state.stepVectors[node][step];
+      if (sv.program == nullptr || !sv.program->launches.empty() ||
+          !sv.kernels.empty() || sv.program->derives.empty()) {
+        continue;
+      }
+      const auto key =
+          stepKey(static_cast<int32_t>(node), static_cast<int32_t>(step));
+      const bool groups = plan != nullptr && step < plan->groupsByStep.size() &&
+          !plan->groupsByStep[step].empty();
+      const char* reason =
+          !sv.standalones.empty() || !sv.shortcutStandalones.empty()
+          ? "derive step with standalones"
+          : !sv.hostCopies.empty()       ? "derive step with host copies"
+          : groups                       ? "derive step with groups"
+          : !sv.program->concats.empty() ? "derive step with concats"
+                                         : deriveReason(*sv.program);
+      if (reason != nullptr) {
+        ++why[reason];
+        offWhy[key] = reason;
+        continue;
+      }
+      onPath.insert(key);
+      ++numDeriveSteps;
+    }
+  }
   const auto numCandidates = onPath.size();
   // A value the reader copies back stays on the path: a kernel output or a
   // view the setup writes in an export slot, or what the host makes of such
   // values.
+  // A value the host holds only as a capacity: a device symbol's carrier,
+  // whose return the host does not keep.
+  auto onCapacity = [&](int32_t id) {
+    return state.capacityScalars.count(id) != 0 ||
+        state.substitutedSymbol.count(id) != 0;
+  };
+  // False when 'id', or an element of the list the host packs as 'id', is
+  // held on a capacity: the host cannot derive a view of its real shape.
+  auto hostHasElements = [&](int32_t id) {
+    if (onCapacity(id)) {
+      return false;
+    }
+    const auto& idToValue = state.waveGraph->idToValue();
+    auto value = idToValue.find(id);
+    const auto* pack =
+        value != idToValue.end() ? value->second->producer() : nullptr;
+    if (pack == nullptr || pack->target() != "prim.ListPack") {
+      return true;
+    }
+    for (const auto& input : pack->inputs()) {
+      if (input.value != nullptr && onCapacity(input.value->id())) {
+        return false;
+      }
+    }
+    return true;
+  };
   folly::F14FastMap<int32_t, bool> fetchable;
   std::function<bool(int32_t)> isFetchable = [&](int32_t id) -> bool {
     if (descriptorOffset.count(id) != 0) {
@@ -4243,6 +6575,16 @@ void selectDeviceAllocSteps(
       return known->second;
     }
     fetchable[id] = false;
+    auto pack = packElements.find(id);
+    if (pack != packElements.end()) {
+      for (auto element : pack->second) {
+        if (element >= 0 && !isFetchable(element)) {
+          return false;
+        }
+      }
+      fetchable[id] = true;
+      return true;
+    }
     if (producer == producerOf.end()) {
       // Made on the host, such as a size list: known when what it is made
       // of is. A value the host computes from one the path makes would hold
@@ -4255,6 +6597,22 @@ void selectDeviceAllocSteps(
       if (node != nullptr) {
         for (const auto& input : node->inputs()) {
           if (input.value != nullptr && !isFetchable(input.value->id())) {
+            return false;
+          }
+        }
+      }
+      fetchable[id] = true;
+      return true;
+    }
+    // A view with no descriptor: the host derives it again from its
+    // operands.
+    auto derived = hostDerivable.find(id);
+    if (derived != hostDerivable.end()) {
+      const auto& op = derived->second.program->derives[derived->second.derive];
+      for (const auto* ids : {&op.operands, &op.listElements}) {
+        for (auto operand : *ids) {
+          if (operand >= 0 &&
+              (!isFetchable(operand) || !hostHasElements(operand))) {
             return false;
           }
         }
@@ -4275,6 +6633,27 @@ void selectDeviceAllocSteps(
       }
     };
     std::string readerWhy;
+    int64_t readerKey = -1;
+    // A view the host would derive again from an operand the reading step or
+    // a later one makes: the operand does not exist yet when the step starts.
+    auto derivedFromReader = [&](int32_t id) {
+      auto derived = hostDerivable.find(id);
+      if (derived == hostDerivable.end() || descriptorOffset.count(id) != 0) {
+        return false;
+      }
+      const auto& op = derived->second.program->derives[derived->second.derive];
+      for (const auto* ids : {&op.operands, &op.listElements}) {
+        for (auto operand : *ids) {
+          auto producer = producerOf.find(operand);
+          auto writer = writerOf.find(operand);
+          if ((producer != producerOf.end() && producer->second >= readerKey) ||
+              (writer != writerOf.end() && writer->second >= readerKey)) {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
     auto dropProducer = [&](int32_t id, const char* reason) {
       auto it = producerOf.find(id);
       if (it != producerOf.end()) {
@@ -4283,7 +6662,8 @@ void selectDeviceAllocSteps(
     };
     fetchable.clear();
     auto readOff = [&](int32_t id, const char* reason) {
-      if (!isFetchable(id)) {
+      // A constant operand has no producer.
+      if (id >= 0 && (!isFetchable(id) || derivedFromReader(id))) {
         dropProducer(id, reason);
       }
     };
@@ -4296,14 +6676,22 @@ void selectDeviceAllocSteps(
             stepKey(static_cast<int32_t>(node), static_cast<int32_t>(step));
         if (sv.program != nullptr && onPath.count(key) == 0) {
           auto off = offWhy.find(key);
-          readerWhy = off != offWhy.end() ? off->second.substr(0, 40)
-              : !sv.allWordsFromSetup     ? "reader not fully set up"
-                                          : "reader sized on the host";
+          readerKey = key;
+          readerWhy = fmt::format(
+              "{} at {}.{}",
+              off != offWhy.end()         ? off->second.substr(0, 40)
+                  : !sv.allWordsFromSetup ? "reader not fully set up"
+                                          : "reader sized on the host",
+              node,
+              step);
           for (auto id : sv.readIds) {
             readOff(id, "read by a kernel off the path");
           }
           for (const auto& fill : sv.program->fills) {
             readOff(fill.valueId, "filled into a step off the path");
+          }
+          for (auto id : sizeReads(*sv.program)) {
+            readOff(id, "sized from off the path");
           }
           for (const auto* derives :
                {&sv.program->derives, &sv.program->viewDerives}) {
@@ -4321,7 +6709,7 @@ void selectDeviceAllocSteps(
         for (auto g : plan->groupsByStep[step]) {
           std::vector<int64_t> keys = {key};
           const char* reason = nullptr;
-          for (auto id : groupValues(plan->groups[g])) {
+          for (auto id : producedGroupValues(plan->groups[g])) {
             auto it = producerOf.find(id);
             auto written = writerOf.find(id);
             if (it != producerOf.end()) {
@@ -4340,6 +6728,19 @@ void selectDeviceAllocSteps(
             if (reason == nullptr && onPath.count(k) == 0) {
               reason = k == key ? "group carved off the path"
                                 : "group value produced off the path";
+              VLOG(1) << "Device alloc: group " << g << " carved at " << node
+                      << "." << step << ": " << reason << " by step "
+                      << (k >> 32) << "." << (k & 0xffffffff) << " ("
+                      << (offWhy.count(k) != 0 ? std::string_view(offWhy.at(k))
+                                               : std::string_view("?"))
+                      << ")" << [&] {
+                           std::string text = "; steps";
+                           for (auto other : keys) {
+                             text += fmt::format(
+                                 " {}.{}", other >> 32, other & 0xffffffff);
+                           }
+                           return text;
+                         }();
             }
           }
           if (reason != nullptr) {
@@ -4375,6 +6776,7 @@ void selectDeviceAllocSteps(
     }
   };
   int32_t numOnPath = 0;
+  int32_t numDeriveStepsOnPath = 0;
   for (size_t node = 0; node < state.stepVectors.size(); ++node) {
     auto planIt = planOf.find(static_cast<int32_t>(node));
     const auto* plan = planIt != planOf.end() ? planIt->second : nullptr;
@@ -4396,11 +6798,18 @@ void selectDeviceAllocSteps(
           VLOG(1) << "Device alloc: step " << node << "." << step
                   << " off the path: " << sv.offPathReason
                   << (sv.hostWordReason.empty() ? "" : "; ")
-                  << sv.hostWordReason;
+                  << sv.hostWordReason << " [launches "
+                  << sv.program->launches.size() << ", kernels "
+                  << sv.kernels.size() << ", standalones "
+                  << sv.standalones.size() << ", shortcuts "
+                  << sv.shortcutStandalones.size() << ", derives "
+                  << sv.program->code.numDerives << ", fixups "
+                  << (sv.program->symbolFixups != nullptr) << "]";
         }
         continue;
       }
       ++numOnPath;
+      numDeriveStepsOnPath += sv.program->launches.empty() ? 1 : 0;
       for (const auto& launch : sv.program->launches) {
         for (const auto* outputs : {&launch.outputs, &launch.largestOutputs}) {
           for (const auto& bound : *outputs) {
@@ -4425,7 +6834,7 @@ void selectDeviceAllocSteps(
       }
       if (plan != nullptr && step < plan->groupsByStep.size()) {
         for (auto g : plan->groupsByStep[step]) {
-          for (auto id : groupValues(plan->groups[g])) {
+          for (auto id : producedGroupValues(plan->groups[g])) {
             mark(id);
           }
         }
@@ -4443,11 +6852,13 @@ void selectDeviceAllocSteps(
   };
   // The path values each step off the path reads, fetched from their
   // producers' parameters.
+  state.hostFetchRecipes.clear();
   int32_t numFetches = 0;
   int32_t numFetchingSteps = 0;
   for (auto& steps : state.stepVectors) {
     for (auto& sv : steps) {
       sv.deviceFetches.clear();
+      sv.hostDerives.clear();
       sv.fetchBegin = -1;
       sv.fetchEnd = -1;
     }
@@ -4461,6 +6872,9 @@ void selectDeviceAllocSteps(
       folly::F14FastSet<int32_t> reads(sv.readIds.begin(), sv.readIds.end());
       for (const auto& fill : sv.program->fills) {
         reads.insert(fill.valueId);
+      }
+      for (auto id : sizeReads(*sv.program)) {
+        reads.insert(id);
       }
       for (const auto& data : sv.standalones) {
         reads.insert(data.actualInputs.begin(), data.actualInputs.end());
@@ -4476,10 +6890,69 @@ void selectDeviceAllocSteps(
       folly::F14FastSet<int32_t> fetched;
       // Fetches 'id' from its producer's parameters if a step on the path
       // makes it.
-      auto fetch = [&](int32_t id) {
+      std::function<void(int32_t)> fetch = [&](int32_t id) {
         auto producer = producerOf.find(id);
         if (id < 0 || producer == producerOf.end() ||
             onPath.count(producer->second) == 0 || !fetched.insert(id).second) {
+          return;
+        }
+        // The host makes a derived list from its elements.
+        auto pack = packElements.find(id);
+        if (pack != packElements.end()) {
+          for (auto element : pack->second) {
+            if (element >= 0 && isFetchable(element)) {
+              fetch(element);
+            }
+          }
+          auto list = packDerivable.find(id);
+          if (list != packDerivable.end()) {
+            sv.hostDerives.push_back(
+                {list->second.program,
+                 list->second.derive,
+                 isFrameRead(id),
+                 pack->second});
+            VLOG(1) << "Device alloc: step " << node << "." << step
+                    << " packs %" << id << " again on the host";
+          }
+          return;
+        }
+        auto derived = hostDerivable.find(id);
+        if (descriptorOffset.count(id) == 0 && derived != hostDerivable.end()) {
+          const auto& op =
+              derived->second.program->derives[derived->second.derive];
+          std::vector<int32_t> hostReads;
+          for (const auto* ids : {&op.operands, &op.listElements}) {
+            for (auto operand : *ids) {
+              fetch(operand);
+              hostReads.push_back(operand);
+              auto list = packElements.find(operand);
+              if (list != packElements.end()) {
+                hostReads.insert(
+                    hostReads.end(), list->second.begin(), list->second.end());
+                continue;
+              }
+              // A list the host packs from its elements.
+              auto value = state.waveGraph->idToValue().find(operand);
+              const auto* listPack = value != state.waveGraph->idToValue().end()
+                  ? value->second->producer()
+                  : nullptr;
+              if (listPack != nullptr &&
+                  listPack->target() == "prim.ListPack") {
+                for (const auto& input : listPack->inputs()) {
+                  if (input.value != nullptr) {
+                    hostReads.push_back(input.value->id());
+                  }
+                }
+              }
+            }
+          }
+          sv.hostDerives.push_back(
+              {derived->second.program,
+               derived->second.derive,
+               isFrameRead(id),
+               std::move(hostReads)});
+          VLOG(1) << "Device alloc: step " << node << "." << step
+                  << " derives %" << id << " again on the host";
           return;
         }
         auto offsetIt = descriptorOffset.find(id);
@@ -4492,6 +6965,42 @@ void selectDeviceAllocSteps(
         const auto pStep = static_cast<int32_t>(producer->second & 0xffffffff);
         sv.deviceFetches.push_back(
             {id, pNode, pStep, offset, isFrameRead(id), rootOf(id)});
+        if (WaveConfig::get().hostFetch != 0) {
+          auto address = state.hostFetchAddress.find(id);
+          auto shape = hostShapeOf(id);
+          auto header = staticHeader(id);
+          if (address != state.hostFetchAddress.end() && shape && header &&
+              static_cast<size_t>(header->first) == shape->dims.size()) {
+            sv.deviceFetches.back().recipe =
+                static_cast<int32_t>(state.hostFetchRecipes.size());
+            state.hostFetchRecipes.push_back(
+                {address->second,
+                 std::move(shape->dims),
+                 std::move(shape->strides),
+                 static_cast<uint8_t>(c10::elementSize(header->second)),
+                 static_cast<uint8_t>(header->second)});
+          } else {
+            std::string shapeText;
+            if (const auto* known = shapeOf(id)) {
+              for (const auto& dim : known->dims) {
+                shapeText += " " + dim.toString();
+              }
+              shapeText += " /";
+              for (const auto& stride : known->strides) {
+                shapeText += " " + stride.toString();
+              }
+            }
+            VLOG(1) << "Device alloc: host fetch of %" << id << " from "
+                    << producerOf_(id) << " needs a wait:"
+                    << (address == state.hostFetchAddress.end() ? " address"
+                                                                : "")
+                    << (shape ? "" : " shape") << (header ? "" : " header")
+                    << "; shape" << shapeText;
+          }
+        }
+        VLOG(1) << "Device alloc: step " << node << "." << step << " ("
+                << sv.offPathReason << ") fetches %" << id << " from step "
+                << pNode << "." << pStep;
         auto& from = state.stepVectors[pNode][pStep];
         const auto end = offset + static_cast<int32_t>(sizeof(TableTensor));
         from.fetchBegin =
@@ -4502,15 +7011,18 @@ void selectDeviceAllocSteps(
       for (auto id : sorted) {
         fetch(id);
       }
-      numFetchingSteps += sv.deviceFetches.empty() ? 0 : 1;
+      numFetchingSteps +=
+          sv.deviceFetches.empty() && sv.hostDerives.empty() ? 0 : 1;
     }
   }
   // The graph outputs path steps make, fetched at the end.
   state.outputFetches.clear();
   for (const auto& [id, key] : producerOf) {
+    // A shape-only output has no descriptor and nothing to fetch.
     if (onPath.count(key) == 0 || !isFrameRead(id) ||
         (static_cast<size_t>(id) < state.standaloneReadOnly.size() &&
-         state.standaloneReadOnly[id] != 0)) {
+         state.standaloneReadOnly[id] != 0) ||
+        shapeOnly.count(id) != 0 || packElements.count(id) != 0) {
       continue;
     }
     auto offsetIt = descriptorOffset.find(id);
@@ -4523,6 +7035,8 @@ void selectDeviceAllocSteps(
     const auto pStep = static_cast<int32_t>(key & 0xffffffff);
     state.outputFetches.push_back(
         {id, pNode, pStep, offset, /*frame=*/true, rootOf(id)});
+    VLOG(1) << "Device alloc: graph output %" << id << " (" << producerOf_(id)
+            << ") fetched at the end from step " << pNode << "." << pStep;
     auto& from = state.stepVectors.at(pNode).at(pStep);
     const auto end = offset + static_cast<int32_t>(sizeof(TableTensor));
     from.fetchBegin =
@@ -4537,7 +7051,9 @@ void selectDeviceAllocSteps(
       << largestCounts(noHeaderWhy, 12);
   LOG(INFO) << "Device alloc: " << numOnPath << " steps on the device path, of "
             << numCandidates << " eligible and " << candidates.size()
-            << " candidates; off the path:" << largestCounts(why, 12);
+            << " candidates (" << numDeriveStepsOnPath << " of "
+            << numDeriveSteps << " derive-only steps on it); off the path:"
+            << largestCounts(why, 12);
 }
 
 } // namespace
@@ -4569,9 +7085,11 @@ void DeviceSymbols::bindSizeChecks(ExecutionState& state) {
   // A pass keeps the first source of each symbol, some of them in tables
   // the next pass makes again.
   const auto savedSources = state.symbolSources;
+  const auto savedProducers = state.symbolProducers;
   const auto savedSizeCheckSymbols = state.sizeCheckSymbols;
   auto restore = [&]() {
     state.symbolSources = savedSources;
+    state.symbolProducers = savedProducers;
     state.sizeCheckSymbols = savedSizeCheckSymbols;
     for (auto& [program, fixups] : saved) {
       program->symbolFixups =
@@ -4603,10 +7121,13 @@ void DeviceSymbols::bindSizeChecks(ExecutionState& state) {
     }
     return groups;
   };
+  VLOG(1) << "Device alloc: path pass, region members placed everywhere";
   bindSizeChecksPass(state, nullptr, true);
   auto pathGroups = groupsOnPath();
   for (int32_t pass = 0; pass < 3; ++pass) {
     restore();
+    VLOG(1) << "Device alloc: path pass " << pass << ", region members placed "
+            << "in the path's groups";
     bindSizeChecksPass(state, &pathGroups, false);
     auto groups = groupsOnPath();
     if (groups == pathGroups) {
@@ -4644,6 +7165,12 @@ void DeviceSymbols::bindSizeChecksPass(
     // A symbol device symbols picked keeps the source the kernels leave.
     if (std::get<0>(state.symbolSources[index]) != -1) {
       return;
+    }
+    if (state.symbolProducers.size() <= static_cast<size_t>(index)) {
+      state.symbolProducers.resize(index + 1, {-1, -1});
+    }
+    if (source.afterStep) {
+      state.symbolProducers[index] = source.at();
     }
     if (source.address != 0) {
       state.symbolSources[index] = {kAddressSource, 0, source.address};
@@ -4716,6 +7243,10 @@ void DeviceSymbols::bindSizeChecksPass(
   // By member of an allocation group: its data pointer, as its group's base
   // plus the aligned bytes of the members before it.
   folly::F14FastMap<int32_t, SymExpr> addressOfMember;
+  // By placement table word: the address the setup stores there, as its
+  // group's base plus the aligned capacity bytes of the members before it.
+  folly::F14FastMap<int64_t, SymExpr> placementAddress;
+  state.hostFetchAddress.clear();
   // By member name: its address and element size, for the views of it.
   folly::F14FastMap<std::string, std::pair<SymExpr, int64_t>> memberByName;
   const bool writePlacement =
@@ -4726,7 +7257,7 @@ void DeviceSymbols::bindSizeChecksPass(
   // Returns the result's size in bytes, the group's demand, when the setup
   // places the group.
   auto placeConcatGroup =
-      [&](Step /*here*/,
+      [&](Step here,
           size_t /*g*/,
           const ConcatGroupLayout& layout,
           const folly::F14FastMap<int32_t, int32_t>& /*paramOf*/,
@@ -4736,6 +7267,8 @@ void DeviceSymbols::bindSizeChecksPass(
     if (result == nullptr || layout.outRank <= 0 ||
         static_cast<int32_t>(result->dims.size()) != layout.outRank ||
         result->strides.size() != result->dims.size()) {
+      VLOG(1) << "Device size check: concat %" << layout.resultId
+              << " unplaced: result shape";
       ++numUnplaced;
       return std::nullopt;
     }
@@ -4753,6 +7286,8 @@ void DeviceSymbols::bindSizeChecksPass(
       const auto* shape = found.shapeOf(operand.valueId);
       if (shape == nullptr ||
           static_cast<int32_t>(shape->dims.size()) != layout.outRank) {
+        VLOG(1) << "Device size check: concat %" << layout.resultId
+                << " unplaced: operand %" << operand.valueId << " shape";
         ++numUnplaced;
         return std::nullopt;
       }
@@ -4778,7 +7313,7 @@ void DeviceSymbols::bindSizeChecksPass(
     std::optional<SymExpr> resultAddress;
     if (layout.resultId >= 0 &&
         layout.resultId < static_cast<int32_t>(state.hasValueAddress.size())) {
-      state.hasValueAddress[layout.resultId] = 1;
+      state.hasValueAddress[layout.resultId] |= 1;
       resultAddress = SymExpr{
           .kind = SymExpr::Kind::kSymbol,
           .symbol = kLoadPrefix +
@@ -4801,6 +7336,18 @@ void DeviceSymbols::bindSizeChecksPass(
          std::any_of(names.begin(), names.end(), [&](const auto& n) {
            return picked.count(n) != 0;
          }))) {
+      VLOG(1) << "Device size check: concat %" << layout.resultId
+              << " unplaced at step " << here.first << "." << here.second
+              << ": " << (!resultAddress ? "no result slot" : "start symbols")
+              << [&] {
+                   std::string text;
+                   for (const auto& n : names) {
+                     if (!sourced(n) || picked.count(n) != 0) {
+                       text += " " + n;
+                     }
+                   }
+                   return text;
+                 }();
       ++numUnplaced;
       return std::nullopt;
     }
@@ -4817,6 +7364,8 @@ void DeviceSymbols::bindSizeChecksPass(
       dim.collectSymbols(sizeNames);
     }
     if (!std::all_of(sizeNames.begin(), sizeNames.end(), isSourced)) {
+      VLOG(1) << "Device size check: concat %" << layout.resultId
+              << " has no device size";
       return std::nullopt;
     }
     for (const auto& name : sizeNames) {
@@ -4860,6 +7409,8 @@ void DeviceSymbols::bindSizeChecksPass(
   state.groupHostBytes.assign(numGroups, -1);
   state.groupHasDemand.assign(numGroups, 0);
   state.recordedDemand.assign(numGroups, -1);
+  state.groupHostDemand.assign(numGroups, std::nullopt);
+  state.hostSymbolsKey.clear();
   state.groupBaseSlot.clear();
   state.groupSlotText.clear();
   // A shape slot per value the host shapes.
@@ -4912,6 +7463,22 @@ void DeviceSymbols::bindSizeChecksPass(
   }
   int64_t numPlacedSlots = 0;
   const auto concats = hostConcats(state);
+  // In-place outputs and their selves: an output is placed where its self is.
+  folly::F14FastMap<int32_t, int32_t> aliasSelfOf;
+  for (const auto& steps : state.stepVectors) {
+    for (const auto& sv : steps) {
+      if (sv.program == nullptr) {
+        continue;
+      }
+      for (const auto& launch : sv.program->launches) {
+        for (const auto& bound : launch.outputs) {
+          if (bound.aliasOf >= 0) {
+            aliasSelfOf.emplace(bound.valueId, bound.aliasOf);
+          }
+        }
+      }
+    }
+  }
   std::vector<bool> concatPlaced(concats.size(), false);
   // A concat the host carves as a group writes its result's address slot at
   // the carve, before any band of it is filled.
@@ -4920,7 +7487,7 @@ void DeviceSymbols::bindSizeChecksPass(
       if (group.concat != nullptr && group.concat->resultId >= 0 &&
           group.concat->resultId <
               static_cast<int32_t>(state.hasValueAddress.size())) {
-        state.hasValueAddress[group.concat->resultId] = 1;
+        state.hasValueAddress[group.concat->resultId] |= 1;
       }
     }
   }
@@ -4937,6 +7504,16 @@ void DeviceSymbols::bindSizeChecksPass(
   // whose address the setup writes: the result's value slot plus the band's
   // real start.
   folly::F14FastSet<int32_t> absoluteBands;
+  // By absolute band parameter: the start code its record had as a relative
+  // band, restored when its result is not placed after all.
+  folly::F14FastMap<int32_t, int32_t> relativeStart;
+  // The members of all allocation groups, which the setup may place.
+  folly::F14FastSet<int32_t> groupMemberIds;
+  for (const auto& [sequence, plan] : planOf) {
+    for (const auto& group : plan->groups) {
+      groupMemberIds.insert(group.actualIds.begin(), group.actualIds.end());
+    }
+  }
   // Why a tensor parameter got no address record, for the coverage report.
   folly::F14FastMap<int32_t, const char*> addressWhy;
   std::deque<SymShape> kernelLeft;
@@ -4954,6 +7531,65 @@ void DeviceSymbols::bindSizeChecksPass(
     }
     return result;
   };
+  // Bounds of 'expr' over the real values of the symbols device symbols
+  // picks, which lie between 0 and their capacities; other symbols are their
+  // real values. A size over capacities must bound the real size, so a
+  // symbol subtracted from it takes its lower bound, not its capacity. A
+  // form the bounds do not follow keeps every symbol at its capacity.
+  std::function<SymExpr(const SymExpr&, bool)> capacityBound =
+      [&](const SymExpr& expr, bool upper) -> SymExpr {
+    using Kind = SymExpr::Kind;
+    switch (expr.kind) {
+      case Kind::kConst:
+        return expr;
+      case Kind::kSymbol:
+        return upper || picked.count(expr.symbol) == 0 ? atCapacity(expr)
+                                                       : SymExpr::constant(0);
+      case Kind::kAdd: {
+        SymExpr sum = SymExpr::constant(0);
+        for (const auto& arg : expr.args) {
+          sum = symAdd(sum, capacityBound(arg, upper));
+        }
+        return sum;
+      }
+      case Kind::kMul: {
+        int64_t factor = 1;
+        std::vector<const SymExpr*> rest;
+        for (const auto& arg : expr.args) {
+          if (arg.isConstant()) {
+            factor *= arg.value;
+          } else {
+            rest.push_back(&arg);
+          }
+        }
+        // A product of sizes is non-negative in each factor.
+        const bool restUpper = factor >= 0 ? upper : !upper;
+        SymExpr product = SymExpr::constant(factor);
+        for (const auto* arg : rest) {
+          product = symMul(product, capacityBound(*arg, restUpper));
+        }
+        return product;
+      }
+      case Kind::kMax:
+      case Kind::kMin: {
+        auto result = expr;
+        for (auto& arg : result.args) {
+          arg = capacityBound(arg, upper);
+        }
+        return result;
+      }
+      case Kind::kFloorDiv:
+        if (expr.args.size() == 2 && expr.args[1].isConstant() &&
+            expr.args[1].value > 0) {
+          return symFloorDiv(capacityBound(expr.args[0], upper), expr.args[1]);
+        }
+        return atCapacity(expr);
+      case Kind::kPow:
+      case Kind::kMod:
+        return atCapacity(expr);
+    }
+    return atCapacity(expr);
+  };
   // Each value by name, for the storage roots of views. A root that is not a
   // member of a group the setup places is made on the host, by an eager op or
   // a step off the path, and the host knows its address before a step reads
@@ -4962,10 +7598,120 @@ void DeviceSymbols::bindSizeChecksPass(
   for (const auto& [id, value] : found.idToValue) {
     idByName.emplace(std::string(value->name()), id);
   }
+  // 'expr', an address the setup computes, over the symbols the host
+  // evaluates (see HostFetchRecipe), or nullopt when it depends on a value
+  // only the device has.
+  std::function<std::optional<SymExpr>(const SymExpr&)> hostAddressOf =
+      [&](const SymExpr& expr) -> std::optional<SymExpr> {
+    if (expr.kind != SymExpr::Kind::kSymbol) {
+      auto result = expr;
+      for (auto& arg : result.args) {
+        auto host = hostAddressOf(arg);
+        if (!host) {
+          return std::nullopt;
+        }
+        arg = std::move(*host);
+      }
+      return result;
+    }
+    auto symbol = [](std::string name) {
+      return SymExpr{.kind = SymExpr::Kind::kSymbol, .symbol = std::move(name)};
+    };
+    if (expr.symbol.starts_with(kLoadPrefix)) {
+      const auto address =
+          std::stoll(expr.symbol.substr(std::strlen(kLoadPrefix)));
+      const auto inTable = [&](const at::Tensor& table) {
+        return address >= addressOf(table) &&
+            address < addressOf(table, table.numel());
+      };
+      if (inTable(state.addressTable)) {
+        return symbol(
+            "a" +
+            std::to_string((address - addressOf(state.addressTable)) / 8));
+      }
+      auto placed = placementAddress.find(address);
+      if (inTable(state.placementTable) && placed != placementAddress.end()) {
+        return hostAddressOf(placed->second);
+      }
+      return std::nullopt;
+    }
+    if (expr.symbol.starts_with(kCapacityPrefix)) {
+      auto index =
+          symbolIndex_.find(expr.symbol.substr(std::strlen(kCapacityPrefix)));
+      if (index == symbolIndex_.end()) {
+        return std::nullopt;
+      }
+      return symbol("c" + std::to_string(index->second));
+    }
+    auto source = found.sources.find(expr.symbol);
+    if (source != found.sources.end() && source->second.node == kInputSource) {
+      return symbol("i" + std::to_string(source->second.offset));
+    }
+    return std::nullopt;
+  };
+  // A group's demand in bytes over the capacities and input sizes alone,
+  // which the host knows when the execution starts.
+  auto hostDemandOf = [&](const SymExpr& bytes) -> std::optional<SymExpr> {
+    auto host = hostAddressOf(bytes);
+    if (!host) {
+      return std::nullopt;
+    }
+    std::vector<std::string> names;
+    host->collectSymbols(names);
+    for (const auto& name : names) {
+      if (name[0] != 'c' && name[0] != 'i') {
+        return std::nullopt;
+      }
+    }
+    return host;
+  };
+  // The values that have a shape and no memory: an elementwise result fused
+  // into its consumer's kernel. A view of one has no memory either.
+  folly::F14FastSet<int32_t> shapeOnlyIds;
+  for (const auto& steps : state.stepVectors) {
+    for (const auto& sv : steps) {
+      if (sv.program == nullptr) {
+        continue;
+      }
+      for (const auto& launch : sv.program->launches) {
+        for (const auto& bound : launch.outputs) {
+          if (bound.kind == BoundOutput::kShapeOnly) {
+            shapeOnlyIds.insert(bound.valueId);
+          }
+        }
+      }
+    }
+  }
+  // The values a launch allocates as a dense tensor of their own.
+  folly::F14FastSet<int32_t> denseOutputIds;
+  for (const auto& steps : state.stepVectors) {
+    for (const auto& sv : steps) {
+      if (sv.program == nullptr) {
+        continue;
+      }
+      // Also what a kernel variant's stages write, which the program does
+      // not bind.
+      for (const auto& data : sv.kernels) {
+        for (size_t i = 0;
+             i < data.actualOutputs.size() && i < data.actualOutputDescs.size();
+             ++i) {
+          const auto& desc = data.actualOutputDescs[i];
+          if (desc.viewNode == nullptr && !desc.aliasSelfId &&
+              !desc.delegated && desc.concatLayout == nullptr) {
+            denseOutputIds.insert(data.actualOutputs[i]);
+          }
+        }
+      }
+    }
+  }
+  // The parameters of the current step that need no address: views of a
+  // value with no memory.
+  folly::F14FastSet<int32_t> memorylessParams;
   auto placeGroupMembers = [&](Step here,
                                StepProgram& program,
                                SymbolFixups& fixups) {
     program.rootAddressIds.clear();
+    memorylessParams.clear();
     auto planIt = planOf.find(here.first);
     const auto* plan = planIt != planOf.end() ? planIt->second : nullptr;
     // Where a launch of the step reads each tensor; an export is only
@@ -5026,6 +7772,7 @@ void DeviceSymbols::bindSizeChecksPass(
                 fixups.records.end(), record.begin(), record.end());
             fixups.numRecords += 2;
             state.groupHasDemand[slot] = 2;
+            state.groupHostDemand[slot] = hostDemandOf(*bytes);
             ++numTemps;
           }
           continue;
@@ -5061,7 +7808,7 @@ void DeviceSymbols::bindSizeChecksPass(
           std::vector<std::string> names;
           if (shape != nullptr) {
             for (const auto& dim : shape->dims) {
-              dims.push_back(atCapacity(dim));
+              dims.push_back(capacityBound(dim, true));
               dims.back().collectSymbols(names);
             }
             table.route(here, dims, names, found);
@@ -5198,20 +7945,29 @@ void DeviceSymbols::bindSizeChecksPass(
                           state.groupCapacityBase + slotIt->second))},
               fixups.code);
           state.groupHasDemand[slotIt->second] = 1;
+          SymExpr total = SymExpr::constant(0);
+          for (const auto& size : sizes) {
+            total = symAdd(total, size);
+          }
+          state.groupHostDemand[slotIt->second] = hostDemandOf(total);
           if (state.groupSlotText.size() <=
               static_cast<size_t>(slotIt->second)) {
             state.groupSlotText.resize(slotIt->second + 1);
           }
-          state.groupSlotText[slotIt->second] = memberText;
+          state.groupSlotText[slotIt->second] = fmt::format(
+              "{} (carved at step {}.{})", memberText, here.first, here.second);
           const auto demand = addressOf(state.demandTable, slotIt->second);
           record[5] = static_cast<int32_t>(demand & 0xffffffff);
           record[6] = static_cast<int32_t>(static_cast<uint64_t>(demand) >> 32);
           addRecord(std::move(record));
         }
         const SymExpr base{.kind = SymExpr::Kind::kSymbol, .symbol = baseName};
+        SymExpr bytesBefore = SymExpr::constant(0);
         for (int32_t i = 0; i < numAddressed; ++i) {
           const auto id = group.actualIds[i];
           const auto dest = addressOf(placementTable, numPlacedSlots + i);
+          placementAddress[dest] = symAdd(base, bytesBefore);
+          bytesBefore = symAdd(bytesBefore, sizes[i]);
           std::vector<int32_t> record(kRecordWords, kHostValue);
           record[1] = kStoreRecord;
           record[4] = emitProgram(
@@ -5270,6 +8026,18 @@ void DeviceSymbols::bindSizeChecksPass(
         }
       }
     }
+    // An in-place output is where its self is placed.
+    for (const auto& [alias, self] : aliasSelfOf) {
+      auto member = addressOfMember.find(self);
+      if (member != addressOfMember.end() &&
+          addressOfMember.count(alias) == 0) {
+        addressOfMember.emplace(alias, member->second);
+        auto byName = memberByName.find(found.nameOf(self));
+        if (byName != memberByName.end()) {
+          memberByName[found.nameOf(alias)] = byName->second;
+        }
+      }
+    }
     // Every parameter of a placed member or of a view of one, in its
     // group's step and later. Device symbols moves the starts of some views
     // and bands itself.
@@ -5290,7 +8058,29 @@ void DeviceSymbols::bindSizeChecksPass(
       auto input = view != nullptr && !view->base.empty()
           ? found.inputAddress.find(view->base)
           : found.inputAddress.find(found.nameOf(id));
-      if (it != addressOfMember.end()) {
+      // A slice the host views over its whole base, which device symbols
+      // moves by its real start: the host's pointer is its self's.
+      std::optional<SymExpr> selfAddress;
+      if (state.viewStarts.count(id) != 0) {
+        const auto* value =
+            found.idToValue.count(id) != 0 ? found.idToValue.at(id) : nullptr;
+        const auto* self = value != nullptr && value->producer() != nullptr
+            ? value->producer()->tryGetInput("self")
+            : nullptr;
+        if (self != nullptr && self->value != nullptr) {
+          const auto selfId = self->value->id();
+          const auto* selfView = found.shapeOf(selfId);
+          auto selfMember = addressOfMember.find(selfId);
+          if (selfMember != addressOfMember.end() &&
+              (selfView == nullptr || selfView->base.empty())) {
+            selfAddress = selfMember->second;
+          }
+        }
+      }
+      if (selfAddress) {
+        placed = selfAddress;
+        elements = state.viewStarts.at(id);
+      } else if (it != addressOfMember.end()) {
         placed = it->second;
       } else if (
           view != nullptr && !view->base.empty() &&
@@ -5315,6 +8105,10 @@ void DeviceSymbols::bindSizeChecksPass(
         // address to its slot before the step, so the view needs no address
         // of its own.
         const auto root = idByName.at(view->base);
+        if (shapeOnlyIds.count(root) != 0) {
+          memorylessParams.insert(param);
+          continue;
+        }
         placed = SymExpr{
             .kind = SymExpr::Kind::kSymbol,
             .symbol = kLoadPrefix +
@@ -5335,18 +8129,51 @@ void DeviceSymbols::bindSizeChecksPass(
         valueSlot = true;
       }
       const bool absoluteBand = absoluteBands.count(param) != 0;
+      // An absolute view starts at its real start: the setup's move of the
+      // host's pointer goes, since the setup places the pointer.
+      if (selfAddress && writePlacement) {
+        for (int32_t r = 0; r < fixups.numRecords; ++r) {
+          auto* rec = fixups.records.data() + r * kRecordWords;
+          if (rec[0] == param && rec[1] == kViewRecord) {
+            rec[3] = kHostValue;
+          }
+        }
+      }
+      const auto resultId = absoluteBand ? bandResult.at(id) : -1;
+      const bool resultSlot =
+          absoluteBand && state.hasValueAddress[resultId] != 0;
+      auto resultMember = absoluteBand && !resultSlot
+          ? memberByName.find(found.nameOf(resultId))
+          : memberByName.end();
+      if (absoluteBand && !resultSlot && resultMember == memberByName.end()) {
+        // The result is not placed in this pass after all: the band moves
+        // the host's pointer as before.
+        for (int32_t r = 0; r < fixups.numRecords; ++r) {
+          auto* rec = fixups.records.data() + r * kRecordWords;
+          if (rec[0] == param && rec[1] != kPlacedRecord &&
+              rec[1] != kPlacementRecord) {
+            rec[3] = relativeStart.at(param);
+          }
+        }
+        addressWhy[param] = "address: band of an unplaced result";
+        continue;
+      }
       if (absoluteBand) {
-        placed = SymExpr{
-            .kind = SymExpr::Kind::kSymbol,
-            .symbol = kLoadPrefix +
-                std::to_string(addressOf(
-                    state.addressTable,
-                    state.valueAddressBase + bandResult.at(id)))};
+        // The band's address: its result's, from the slot the host writes
+        // or where the setup places the result, plus its real start.
+        placed = resultSlot
+            ? SymExpr{
+                  .kind = SymExpr::Kind::kSymbol,
+                  .symbol = kLoadPrefix +
+                      std::to_string(addressOf(
+                          state.addressTable,
+                          state.valueAddressBase + resultId))}
+            : resultMember->second.first;
         elements = state.bandStarts.at(id);
         valueSlot = false;
         rootAddress = -1;
       } else if (
-          !placed || state.viewStarts.count(id) != 0 ||
+          !placed || (state.viewStarts.count(id) != 0 && !selfAddress) ||
           state.bandStarts.count(id) != 0) {
         addressWhy[param] = !placed           ? "address: none"
             : state.viewStarts.count(id) != 0 ? "address: view start"
@@ -5360,8 +8187,31 @@ void DeviceSymbols::bindSizeChecksPass(
       // A band's start is its real one: the kernels write the concat with
       // the real extents.
       if (!absoluteBand) {
-        for (auto& part : address) {
-          part = atCapacity(part);
+        for (size_t p = 0; p < address.size(); ++p) {
+          if (p == 0 || !selfAddress) {
+            address[p] = atCapacity(address[p]);
+          }
+        }
+      }
+      if (writePlacement && state.hostFetchAddress.count(id) == 0) {
+        auto host = hostAddressOf(address[0]);
+        const auto* types = state.valueTypes;
+        if (host && address.size() > 1) {
+          auto start = hostAddressOf(address[1]);
+          host = start && types != nullptr &&
+                  static_cast<size_t>(id) < types->types.size() &&
+                  types->types[id] != nullptr
+              ? std::optional<SymExpr>(symAdd(
+                    *host,
+                    symMul(
+                        *start,
+                        SymExpr::constant(
+                            static_cast<int64_t>(
+                                c10::elementSize(types->types[id]->dtype()))))))
+              : std::nullopt;
+        }
+        if (host) {
+          state.hostFetchAddress.emplace(id, std::move(*host));
         }
       }
       std::vector<std::string> names;
@@ -5395,12 +8245,15 @@ void DeviceSymbols::bindSizeChecksPass(
         addSource(symbolIndex(name), found.sources.at(name));
       }
       if (valueSlot) {
-        state.hasValueAddress[id] = 1;
+        state.hasValueAddress[id] |= 1;
       }
       if (rootAddress >= 0) {
         VLOG(1) << "Device alloc: %" << id << " at step " << here.first << "."
                 << here.second << " over host-made %" << rootAddress;
         program.rootAddressIds.push_back(rootAddress);
+        // The host writes the root's address: its producer stays off the
+        // path, even when the root is a concat result.
+        state.hasValueAddress[rootAddress] |= ExecutionState::kRootAddress;
       }
       std::vector<int32_t> record(kRecordWords, kHostValue);
       record[0] = param;
@@ -5433,6 +8286,7 @@ void DeviceSymbols::bindSizeChecksPass(
           : std::make_shared<SymbolFixups>();
       folly::F14FastSet<int32_t> sized;
       absoluteBands.clear();
+      relativeStart.clear();
       // The device symbols record of each parameter, by offset; the records
       // before 'numSymbolRecords' are device symbols'.
       folly::F14FastMap<int32_t, int32_t> symbolRecordOf;
@@ -5694,6 +8548,24 @@ void DeviceSymbols::bindSizeChecksPass(
           }
           table.route(here, strides, strideNames, found);
         }
+        const bool noStrides = std::all_of(
+            strides.begin(), strides.end(), [](const SymExpr& stride) {
+              return stride.isConstant() && stride.value == 0;
+            });
+        // A kernel output is dense over its dims, and a shape-only one has
+        // no strides to write; the shape a reserve gives either carries dims
+        // only.
+        if (!capacity && inRegion && noStrides && !dims.empty() &&
+            (fill.kind == FillOp::kShapeOnly ||
+             (fill.kind == FillOp::kTensor &&
+              denseOutputIds.count(fill.valueId) != 0))) {
+          strides.resize(dims.size());
+          SymExpr stride = SymExpr::constant(1);
+          for (size_t d = dims.size(); d-- > 0;) {
+            strides[d] = stride;
+            stride = symMul(stride, dims[d]);
+          }
+        }
         std::vector<int32_t> record(kRecordWords, kHostValue);
         record[0] = fill.offset;
         if (WaveConfig::get().deviceSizing) {
@@ -5733,7 +8605,8 @@ void DeviceSymbols::bindSizeChecksPass(
                   result->second >= 0 &&
                   result->second <
                       static_cast<int32_t>(state.hasValueAddress.size()) &&
-                  state.hasValueAddress[result->second] != 0) {
+                  (state.hasValueAddress[result->second] != 0 ||
+                   groupMemberIds.count(result->second) != 0)) {
                 for (const auto& stride : resultShape->strides) {
                   bandStrides.push_back(atCapacity(stride));
                   bandStrides.back().collectSymbols(bandNames);
@@ -5750,6 +8623,31 @@ void DeviceSymbols::bindSizeChecksPass(
               }
             }
             const bool absolute = !bandStrides.empty();
+            // A slice over its whole base has its base's strides, which the
+            // host lays out over the capacities.
+            std::vector<SymExpr> viewStrides;
+            if (fill.kind == FillOp::kTensor &&
+                state.viewStarts.count(fill.valueId) != 0 &&
+                shape->strides.size() == dims.size()) {
+              std::vector<std::string> viewNames;
+              for (const auto& stride : shape->strides) {
+                viewStrides.push_back(atCapacity(stride));
+                viewStrides.back().collectSymbols(viewNames);
+              }
+              table.route(here, viewStrides, viewNames, found);
+              if (!std::all_of(
+                      viewNames.begin(), viewNames.end(), [&](const auto& n) {
+                        return picked.count(n) != 0 || isSourced(n);
+                      })) {
+                viewStrides.clear();
+              }
+              for (const auto& name : viewNames) {
+                if (!name.starts_with(kCapacityPrefix) &&
+                    !name.starts_with(kLoadPrefix) && isSourced(name)) {
+                  addSource(symbolIndex(name), found.sources.at(name));
+                }
+              }
+            }
             bool full = (region || absolute) && strides.size() == dims.size() &&
                 (fill.kind == FillOp::kShapeOnly || !strides.empty());
             for (size_t d = 0; full && !band && d < strides.size(); ++d) {
@@ -5759,6 +8657,19 @@ void DeviceSymbols::bindSizeChecksPass(
                   strideNames.begin(), strideNames.end(), isSourced);
             }
             if (!full) {
+              VLOG(1) << "Device size check: %" << fill.valueId
+                      << " not fully sized at " << here.first << "."
+                      << here.second << " region " << region << " setOnDevice "
+                      << isSetOnDevice(fill.valueId) << " dense output "
+                      << denseOutputIds.count(fill.valueId) << " capacity "
+                      << capacity << " dims " << dims.size() << " strides "
+                      << [&] {
+                           std::string text;
+                           for (const auto& stride : strides) {
+                             text += " " + stride.toString();
+                           }
+                           return text;
+                         }();
               unsizedWhy[fill.offset] = region ? "device symbols: region"
                                                : "device symbols: has record";
               continue;
@@ -5772,6 +8683,8 @@ void DeviceSymbols::bindSizeChecksPass(
                 previous != nullptr && !absolute ? previous[3] : kHostValue;
             if (absolute) {
               absoluteBands.insert(fill.offset);
+              relativeStart[fill.offset] =
+                  previous != nullptr ? previous[3] : kHostValue;
               for (auto& stride : bandStrides) {
                 std::vector<std::string> strideNames;
                 stride.collectSymbols(strideNames);
@@ -5788,8 +8701,11 @@ void DeviceSymbols::bindSizeChecksPass(
               record[8 + d] = absolute
                   ? emitProgram(bandStrides[d], fixups->code)
                   : band || fill.kind == FillOp::kShapeOnly
-                  ? (previous != nullptr && previous[1] != kBandRecord
+                  ? (previous != nullptr && previous[1] != kBandRecord &&
+                             previous[8 + d] != kHostValue
                          ? previous[8 + d]
+                         : !viewStrides.empty()
+                         ? emitProgram(viewStrides[d], fixups->code)
                          : kHostValue)
                   : emitProgram(strides[d], fixups->code);
             }
@@ -5881,7 +8797,8 @@ void DeviceSymbols::bindSizeChecksPass(
         // written, a record that adjusts a host word.
         folly::F14FastSet<int32_t> withShape;
         folly::F14FastMap<int32_t, const char*> partShape;
-        folly::F14FastSet<int32_t> withAddress;
+        folly::F14FastSet<int32_t> withAddress(
+            memorylessParams.begin(), memorylessParams.end());
         folly::F14FastSet<int32_t> relative;
         for (int32_t r = 0; r < fixups->numRecords; ++r) {
           const auto* rec = fixups->records.data() + r * kRecordWords;
@@ -5940,7 +8857,10 @@ void DeviceSymbols::bindSizeChecksPass(
           if (unsized != unsizedWhy.end() && unsized->second == nullptr) {
             withShape.insert(fill.offset);
           }
-          const char* reason = relative.count(fill.offset) != 0 ? "relative"
+          // A move of a pointer the setup places itself needs no host word.
+          const char* reason = relative.count(fill.offset) != 0 &&
+                  withAddress.count(fill.offset) == 0
+              ? "relative"
               : partShape.count(fill.offset) != 0
               ? (partShape.at(fill.offset)[5] == 's' &&
                          strideWhy.count(fill.offset) != 0
@@ -6003,6 +8923,17 @@ void DeviceSymbols::bindSizeChecksPass(
           if (otherWritten.count(fill.offset) != 0) {
             continue;
           }
+          // An omitted optional scalar, such as a clamp bound: nothing
+          // writes it to the frame, so its fill writes the same 0 every
+          // execution and a resident block keeps it from the first upload.
+          if (fill.kind == FillOp::kScalar) {
+            auto value = found.idToValue.find(fill.valueId);
+            if (value != found.idToValue.end() &&
+                value->second->producer() == nullptr &&
+                value->second->type().kind() == nativert::Type::Kind::None) {
+              continue;
+            }
+          }
           bool symbolRecord = false;
           for (int32_t r = 0; r < fixups->numRecords && !symbolRecord; ++r) {
             const auto* rec = fixups->records.data() + r * kRecordWords;
@@ -6027,6 +8958,8 @@ void DeviceSymbols::bindSizeChecksPass(
             getStepVectors(state.stepVectors, here.first, here.second);
         coveredSv.allWordsFromSetup =
             allWords && WaveConfig::get().deviceSizing && writePlacement;
+        VLOG_IF(1, covered && !allWords) << "Device alloc: step " << node << "."
+                                         << step << " keeps a " << hostWord;
         coveredSv.hostWordReason = std::move(hostWord);
         coveredSv.deviceWordsReady = (allWords || inputScalarsOnly) &&
             WaveConfig::get().deviceSizing && writePlacement;
@@ -6146,7 +9079,9 @@ void DeviceSymbols::bindSizeChecksPass(
         }
         for (const auto& launch : sv.program->launches) {
           for (const auto& bound : launch.outputs) {
-            if (ungroupedIds.count(bound.valueId) != 0) {
+            // A concat operand is placed in its concat group's band.
+            if (ungroupedIds.count(bound.valueId) != 0 &&
+                !waveGraph_.isConcatPlaced(bound.valueId)) {
               notSized = notSized ? notSized : "output outside any group";
             }
           }
@@ -6180,18 +9115,32 @@ void DeviceSymbols::bindSizeChecksPass(
                             picked.count(n) != 0;
                       });
             }
+            // A shape-only output has no memory for the host to read.
             const bool frameRead = id >= 0 &&
                 id < static_cast<int32_t>(state.tableOnly.size()) &&
-                state.tableOnly[id] == 0;
+                state.tableOnly[id] == 0 &&
+                bound.kind != BoundOutput::kShapeOnly;
             const bool uncoveredRead = readByUncovered.count(id) != 0;
             // A graph output the host reads only at the end can be fetched,
             // and so can an input of standalones of later steps.
-            hostReadAny = hostReadAny ||
-                (frameRead &&
-                 (static_cast<size_t>(id) >= state.outputOnly.size() ||
-                  state.outputOnly[id] == 0) &&
-                 (static_cast<size_t>(id) >= state.standaloneReadOnly.size() ||
-                  state.standaloneReadOnly[id] == 0));
+            const bool hostReadHere = frameRead &&
+                (static_cast<size_t>(id) >= state.outputOnly.size() ||
+                 state.outputOnly[id] == 0) &&
+                (static_cast<size_t>(id) >= state.standaloneReadOnly.size() ||
+                 state.standaloneReadOnly[id] == 0);
+            if (hostReadHere && VLOG_IS_ON(1)) {
+              std::string users;
+              auto value = found.idToValue.find(id);
+              if (value != found.idToValue.end()) {
+                for (const auto* user : value->second->users()) {
+                  users += fmt::format(" {}", user->target());
+                }
+              }
+              VLOG(1) << "Device alloc: step " << node << "." << step
+                      << " output %" << id
+                      << " is read by the host; users:" << users;
+            }
+            hostReadAny = hostReadAny || hostReadHere;
             if (!frameRead && !uncoveredRead) {
               continue;
             }
@@ -6670,6 +9619,185 @@ void DeviceSymbols::writeInputSymbols(
   state.inputSymbolValues = std::move(values);
 }
 
+void DeviceSymbols::planSetupBatches(ExecutionState& state) const {
+  if (state.setupBatchesPlanned) {
+    return;
+  }
+  state.setupBatchesPlanned = true;
+  // A launch's blocks beyond this many need not be resident at once; the
+  // waits then still progress, blocks starting in order.
+  constexpr size_t kMaxBatchSteps = 64;
+  // What the setup of a step reads: the symbols' producing steps and the
+  // table words it loads; and the table words it writes.
+  struct Access {
+    std::vector<Step> producers;
+    folly::F14FastSet<int64_t> loads;
+    folly::F14FastSet<int64_t> stores;
+    // The stores of copy records, which run after the setup's other records.
+    folly::F14FastSet<int64_t> copyStores;
+  };
+  auto accessOf = [&](const SymbolFixups& fixups) {
+    Access access;
+    auto useSymbol = [&](int64_t index) {
+      if (index < static_cast<int64_t>(state.symbolProducers.size()) &&
+          state.symbolProducers[index].first >= 0) {
+        access.producers.push_back(state.symbolProducers[index]);
+      }
+      if (index < static_cast<int64_t>(state.symbolSources.size()) &&
+          std::get<0>(state.symbolSources[index]) == kAddressSource) {
+        access.loads.insert(std::get<2>(state.symbolSources[index]));
+      }
+    };
+    const auto& code = fixups.code;
+    for (size_t i = 0; i < code.size(); ++i) {
+      const auto op = code[i] >> kOperandBits;
+      if (op == kPushSymbol) {
+        useSymbol(code[i] & kOperandMask);
+      } else if (
+          op == kLoad && i > 0 && (code[i - 1] >> kOperandBits) == kPushConst) {
+        access.loads.insert(code[i - 1] & kOperandMask);
+      }
+    }
+    for (int32_t r = 0; r < fixups.numRecords; ++r) {
+      const auto* rec = fixups.records.data() + r * kRecordWords;
+      if (rec[1] == kStoreRecord || rec[1] == kCapacityRecord) {
+        access.stores.insert(
+            static_cast<int64_t>(
+                static_cast<uint64_t>(static_cast<uint32_t>(rec[5])) |
+                (static_cast<uint64_t>(static_cast<uint32_t>(rec[6])) << 32)));
+      } else if (rec[1] == kCopyRecord) {
+        useSymbol(rec[3]);
+        if (rec[5] < static_cast<int32_t>(state.symbolSources.size())) {
+          const auto address = std::get<2>(state.symbolSources[rec[5]]) +
+              rec[4] * static_cast<int64_t>(sizeof(int64_t));
+          access.stores.insert(address);
+          access.copyStores.insert(address);
+        }
+      }
+    }
+    return access;
+  };
+  // A step whose setup runs as its own kernel before its launch.
+  auto setsUp = [&](const StepVectors& sv) {
+    return sv.deviceAllocStep && sv.onDeviceGrid && sv.program != nullptr &&
+        sv.program->symbolFixups != nullptr;
+  };
+  folly::F14FastMap<std::string, int32_t> breaks;
+  std::string text;
+  int32_t numSetups = 0;
+  int32_t numWaits = 0;
+  state.setupBatches.clear();
+  state.setupBatchAt.clear();
+  ExecutionState::SetupBatch batch;
+  // The member whose setup stores each table word, in the open batch, and
+  // whether a copy record stores it.
+  folly::F14FastMap<int64_t, std::pair<int32_t, bool>> storedBy;
+  bool lastHasStandalones = false;
+  auto close = [&]() {
+    if (batch.steps.empty()) {
+      return;
+    }
+    const auto first = batch.steps.front();
+    const auto last = batch.steps.back();
+    text += batch.steps.size() > 1
+        ? fmt::format(
+              " {}.{}-{}.{}",
+              first.first,
+              first.second,
+              last.first,
+              last.second)
+        : fmt::format(" {}.{}", first.first, first.second);
+    if (batch.steps.size() > 1) {
+      state.setupBatchAt
+          [(static_cast<int64_t>(first.first) << 32) | first.second] =
+          static_cast<int32_t>(state.setupBatches.size());
+      state.setupBatches.push_back(std::move(batch));
+    }
+    batch = ExecutionState::SetupBatch{};
+    storedBy.clear();
+  };
+  for (int32_t node = 0; node < static_cast<int32_t>(state.stepVectors.size());
+       ++node) {
+    const auto& steps = state.stepVectors[node];
+    const int32_t numSteps = steps.empty() ? 0 : steps[0].boundSteps;
+    for (int32_t step = 0;
+         step < numSteps && step < static_cast<int32_t>(steps.size());
+         ++step) {
+      const auto& sv = steps[step];
+      const Step here{node, step};
+      const bool standalones =
+          !sv.standalones.empty() || !sv.shortcutStandalones.empty();
+      if (!setsUp(sv)) {
+        if (!sv.kernels.empty() || standalones) {
+          if (!batch.steps.empty()) {
+            ++breaks
+                [sv.deviceAllocStep ? "path step without a setup kernel"
+                                    : "step off the path"];
+          }
+          close();
+        }
+        continue;
+      }
+      ++numSetups;
+      const auto access = accessOf(*sv.program->symbolFixups);
+      const char* reason = nullptr;
+      if (!batch.steps.empty()) {
+        if (lastHasStandalones) {
+          reason = "standalones in the step before";
+        } else if (batch.steps.size() >= kMaxBatchSteps) {
+          reason = "batch full";
+        }
+        for (const auto& producer : access.producers) {
+          if (reason == nullptr && producer >= batch.steps.front() &&
+              producer < here) {
+            reason = "reads what a kernel in the run leaves";
+          }
+        }
+      }
+      if (reason != nullptr) {
+        ++breaks[reason];
+        close();
+      }
+      std::vector<int32_t> waits;
+      for (auto load : access.loads) {
+        auto it = storedBy.find(load);
+        if (it == storedBy.end()) {
+          continue;
+        }
+        const auto [member, copied] = it->second;
+        if (copied) {
+          batch.signalAfterStores[member] = 0;
+        }
+        if (std::find(waits.begin(), waits.end(), member) == waits.end()) {
+          waits.push_back(member);
+        }
+      }
+      std::sort(waits.begin(), waits.end());
+      numWaits += static_cast<int32_t>(waits.size());
+      const auto index = static_cast<int32_t>(batch.steps.size());
+      for (auto store : access.stores) {
+        storedBy[store] = {index, access.copyStores.count(store) != 0};
+      }
+      batch.steps.push_back(here);
+      batch.waitsFor.push_back(std::move(waits));
+      batch.signalAfterStores.push_back(1);
+      lastHasStandalones = standalones;
+    }
+  }
+  close();
+  std::string why;
+  for (const auto& [reason, count] : breaks) {
+    why += fmt::format(" {} x{};", reason, count);
+  }
+  int32_t numLaunches = numSetups;
+  for (const auto& run : state.setupBatches) {
+    numLaunches -= static_cast<int32_t>(run.steps.size()) - 1;
+  }
+  LOG(INFO) << "Setup batches: " << numSetups << " setup kernels in "
+            << numLaunches << " launches, " << numWaits << " waits:" << text
+            << "; breaks:" << why;
+}
+
 void DeviceSymbols::reportSizeChecks(ExecutionState& state) const {
   if (!state.sizeCheckCounts.defined()) {
     return;
@@ -6690,7 +9818,7 @@ void DeviceSymbols::reportSizeChecks(ExecutionState& state) const {
 }
 
 int32_t DeviceSymbols::fixupSharedBytes(int32_t numCode) {
-  constexpr int32_t kSharedCodeWords = 2048;
+  constexpr int32_t kSharedCodeWords = 12288;
   return numCode <= kSharedCodeWords
       ? numCode * static_cast<int32_t>(sizeof(int64_t))
       : 0;

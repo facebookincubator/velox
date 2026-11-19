@@ -282,6 +282,30 @@ std::vector<AllocLifetime> graphAllocLifetimes(
   // Only the node matters, and a borrow cannot precede the write, so the first
   // borrow's node is the one that answers "does the allocating node take it".
   folly::F14FastMap<nativert::ValueId, int32_t> firstBorrowNode;
+  // The value whose buffer an in-place output shares, through chains of them.
+  folly::F14FastMap<nativert::ValueId, nativert::ValueId> aliasOf;
+  for (const auto& node : nodes) {
+    for (const auto& launch : node.launches) {
+      for (const auto& [alias, self] : launch.aliases) {
+        aliasOf.emplace(alias, self);
+      }
+    }
+  }
+  auto bufferOf = [&](nativert::ValueId id) {
+    for (auto it = aliasOf.find(id); it != aliasOf.end() && it->second != id;
+         it = aliasOf.find(id)) {
+      id = it->second;
+    }
+    return id;
+  };
+  auto later = [](folly::F14FastMap<nativert::ValueId, ExecPoint>& map,
+                  nativert::ValueId id,
+                  ExecPoint at) {
+    auto [it, inserted] = map.try_emplace(id, at);
+    if (!inserted && it->second < at) {
+      it->second = at;
+    }
+  };
 
   for (const auto& node : nodes) {
     for (auto borrowedId : node.borrowedIds) {
@@ -293,20 +317,21 @@ std::vector<AllocLifetime> graphAllocLifetimes(
     for (const auto& launch : node.launches) {
       const ExecPoint at{node.node, launch.step};
       for (auto readId : launch.reads) {
-        auto [it, inserted] = lastRead.try_emplace(readId, at);
-        if (!inserted && it->second < at) {
-          it->second = at;
+        later(lastRead, readId, at);
+        if (bufferOf(readId) != readId) {
+          later(lastRead, bufferOf(readId), at);
         }
       }
     }
     for (size_t i = 0; i < node.releasedIds.size(); ++i) {
       const ExecPoint at{
           node.node, i < node.releaseSteps.size() ? node.releaseSteps[i] : 0};
-      auto [it, inserted] = released.try_emplace(node.releasedIds[i], at);
       // A value named by two nodes' last-use sets is released by the later of
-      // them; the earlier one would free a buffer the later still reads.
-      if (!inserted && it->second < at) {
-        it->second = at;
+      // them; the earlier one would free a buffer the later still reads. The
+      // release of an in-place output is one of the buffer it shares.
+      later(released, node.releasedIds[i], at);
+      if (bufferOf(node.releasedIds[i]) != node.releasedIds[i]) {
+        later(released, bufferOf(node.releasedIds[i]), at);
       }
     }
   }
@@ -1100,6 +1125,20 @@ std::vector<LaunchFootprint> collectLaunchFootprints(
         LaunchFootprint footprint;
         footprint.step = static_cast<int32_t>(stepIdx);
         footprint.reads = data.actualInputs;
+        // A view a standalone shortcut makes shares its base's buffer. Under
+        // device alloc the step derives it on the device, so nothing on the
+        // host holds the base: reads of the view keep the base's group live.
+        const auto shortcut = launch.standaloneShortcut;
+        if (WaveConfig::get().deviceAlloc && derivable(shortcut) &&
+            shortcut != StandaloneShortcut::kListPack &&
+            shortcut != StandaloneShortcut::kListUnpack &&
+            shortcut != StandaloneShortcut::kSymSize &&
+            shortcut != StandaloneShortcut::kSymNumel && !data.args.empty() &&
+            data.args[0] != nullptr) {
+          for (auto output : data.actualOutputs) {
+            footprint.aliases.emplace_back(output, data.args[0]->id());
+          }
+        }
         // The kernel's own inputs are not everything the host touches while it
         // sizes this launch. A reserve function or a size expression reads the
         // operands of the subgraph nodes, and a host-side view output is built
@@ -1117,22 +1156,32 @@ std::vector<LaunchFootprint> collectLaunchFootprints(
         // another value's and carving it one of its own would drop the
         // mutation. Nothing in the descriptor says so -- the aliasing is done
         // by the reserve at execution time -- but the registration does. The
-        // arguments of such an op are borrowed for the same reason: the reserve
-        // takes self's tensor and stores it as the output.
+        // argument such an op mutates is borrowed for the same reason: the
+        // reserve takes its tensor and stores it as the output. When an output
+        // names it as its alias self it is only read: the alias of a member
+        // that is not carved yet waits for the carve (see runBoundOutput).
         folly::F14FastSet<nativert::ValueId> inPlaceOutputs;
+        folly::F14FastSet<nativert::ValueId> aliasSelves;
+        for (const auto& desc : data.actualOutputDescs) {
+          if (desc.aliasSelfId.has_value()) {
+            aliasSelves.insert(*desc.aliasSelfId);
+          }
+        }
         if (launch.op != nullptr) {
           for (const auto* node : launch.op->allNodes()) {
             const auto* meta = Registry::metadata(node->target());
             const bool mutates =
                 meta != nullptr && meta->mutatesArg.has_value();
-            for (const auto& input : node->inputs()) {
-              if (input.value == nullptr) {
+            const auto& inputs = node->inputs();
+            for (size_t k = 0; k < inputs.size(); ++k) {
+              if (inputs[k].value == nullptr) {
                 continue;
               }
-              auto it = bindings.find(input.value->id());
+              auto it = bindings.find(inputs[k].value->id());
               const auto actualId =
-                  it != bindings.end() ? it->second : input.value->id();
-              if (mutates) {
+                  it != bindings.end() ? it->second : inputs[k].value->id();
+              if (mutates && static_cast<int32_t>(k) == *meta->mutatesArg &&
+                  aliasSelves.count(actualId) == 0) {
                 addBorrow(actualId);
               } else {
                 footprint.reads.push_back(actualId);
@@ -1167,7 +1216,16 @@ std::vector<LaunchFootprint> collectLaunchFootprints(
             }
           }
           if (desc.aliasSelfId.has_value()) {
-            addBorrow(*desc.aliasSelfId);
+            footprint.reads.push_back(*desc.aliasSelfId);
+          }
+        }
+        for (size_t i = 0;
+             i < data.actualOutputDescs.size() && i < data.actualOutputs.size();
+             ++i) {
+          const auto& desc = data.actualOutputDescs[i];
+          if (desc.aliasSelfId.has_value()) {
+            footprint.aliases.emplace_back(
+                data.actualOutputs[i], *desc.aliasSelfId);
           }
         }
         auto addWrite = [&](nativert::ValueId actualId, bool needsSync) {

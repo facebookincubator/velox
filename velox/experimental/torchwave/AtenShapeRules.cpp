@@ -960,6 +960,17 @@ int32_t selectedCountRule(SymShapes& shapes, const Node& node) {
         node,
         {count, SymExpr::constant(static_cast<int64_t>(self->dims.size()))});
   }
+  // An operand with a constant 0 dim selects nothing.
+  for (const char* name : {"self", "mask"}) {
+    const auto* operand = inputShape(shapes, node, name);
+    if (operand != nullptr &&
+        std::any_of(
+            operand->dims.begin(), operand->dims.end(), [](const auto& dim) {
+              return dim.isConstant() && dim.value == 0;
+            })) {
+      return setOutput(shapes, node, {SymExpr::constant(0)});
+    }
+  }
   return setOutput(shapes, node, {count});
 }
 
@@ -970,6 +981,20 @@ int32_t allLikeSelfRule(SymShapes& shapes, const Node& node) {
     return 0;
   }
   const auto dims = self->dims;
+  int32_t numAdded = 0;
+  for (size_t i = 0; i < node.outputs().size(); ++i) {
+    numAdded += setOutput(shapes, node, dims, i);
+  }
+  return numAdded;
+}
+
+// Every output drops the last dim of 'self': min_rows' values and indices.
+int32_t allButLastLikeSelfRule(SymShapes& shapes, const Node& node) {
+  const auto* self = inputShape(shapes, node, "self");
+  if (self == nullptr || self->dims.empty()) {
+    return 0;
+  }
+  const std::vector<SymExpr> dims(self->dims.begin(), self->dims.end() - 1);
   int32_t numAdded = 0;
   for (size_t i = 0; i < node.outputs().size(); ++i) {
     numAdded += setOutput(shapes, node, dims, i);
@@ -1374,6 +1399,7 @@ void registerAtenShapeRules() {
   registerSymShapeRule("tw.searchsorted", searchsortedRule);
   registerSymShapeRule("tw.bucketize", sameShapeRule);
   registerSymShapeRule("tw.cumsum_rows", sameShapeRule);
+  registerSymShapeRule("tw.min_rows", allButLastLikeSelfRule);
   registerSymShapeRule("tw.gather", indexShapedRule);
   registerSymShapeRule("torch.ops.aten.gather.default", indexShapedRule);
   registerSymShapeRule("tw.repeat_interleave_index_final", lengthOperandRule);

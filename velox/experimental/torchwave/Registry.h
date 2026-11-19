@@ -127,6 +127,11 @@ enum class StandaloneShortcut {
   kExpand,
   kSymSize,
   kSymNumel,
+  // squeeze.default: drops every dim of extent 1.
+  kSqueeze,
+  // t.default: swaps dims 0 and 1 of a 2-d tensor.
+  kT,
+  kDiagonal,
   // A new_* factory with a constant size of zero elements: an empty tensor
   // with no kernel and no storage.
   kEmptyFactory,

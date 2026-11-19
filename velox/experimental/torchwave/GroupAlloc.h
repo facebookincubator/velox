@@ -60,10 +60,21 @@ void noteGroupBase(
     const AllocGroup* group,
     const at::Tensor& buffer);
 
-/// Allocates 'group' on the device path: its recorded demand plus the margin,
-/// with its base and capacity in the address table. Its values get no table
-/// entries; they own the buffer, which goes when the last of them is freed.
-void allocateDeviceGroup(ExecutionState& state, const AllocGroup& group);
+/// Allocates 'group' on the device path for step 'stepIdx' of node
+/// 'sequenceNumber': its recorded demand plus the margin, with its base and
+/// capacity in the address table. Its values get no table entries; they own
+/// the buffer, which goes when the last of them is freed.
+void allocateDeviceGroup(
+    ExecutionState& state,
+    const AllocGroup& group,
+    int32_t sequenceNumber,
+    int32_t stepIdx);
+
+/// Gives the device-path group of 'slot', whose setup demanded 'demand' bytes
+/// over its capacity, a buffer of its own of the demand plus the margin, in
+/// place of its undersized one, and writes its base and capacity. The group's
+/// values keep their allocation, which now holds the new buffer.
+void regrowDeviceGroup(ExecutionState& state, int32_t slot, int64_t demand);
 
 /// Allocates a tensor of 'dims' and 'dtype' for 'id' as an allocation of its
 /// own and writes only its table entry.
@@ -142,6 +153,9 @@ void beginGroupArena(ExecutionState& state);
 
 /// Marks the end of the execution that beginGroupArena started.
 void endGroupArena(ExecutionState& state);
+
+/// Under WaveConfig::poisonGroups, fills 'buffer' with 0xff bytes and waits.
+void poisonGroupBytes(const at::Tensor& buffer);
 
 /// Carves a lifetime group like materializeAllocGroup, except that a member
 /// in ExecutionState::tableOnly gets only its table entry. Its frame slot

@@ -457,7 +457,9 @@ std::optional<LaunchPlan> maybePartition(
   // blocks against a 540-block cooperative capacity.
   const bool mustSplit =
       exceedsCooperativeCapacity(ops, sv.numBlocksPerLaunch, device);
-  if (!config.partitionLaunches) {
+  // A step on the device path runs on its device grid, which has one
+  // segment.
+  if (!config.partitionLaunches || (sv.deviceAllocStep && !mustSplit)) {
     return std::nullopt;
   }
   if (!mustSplit && !shouldPartition(sv.gridStats, params)) {
@@ -1098,6 +1100,7 @@ void checkDeviceGrid(
   static std::atomic<int64_t> numCompared{0};
   static std::atomic<int64_t> numCountDiffs{0};
   static std::atomic<int64_t> numBlockDiffs{0};
+  static std::atomic<int64_t> numSkipped{0};
   stream.wait();
   const auto result = readDeviceGrid(*sv.deviceGrid);
   const auto& grid = sv.program->grid;
@@ -1115,6 +1118,12 @@ void checkDeviceGrid(
     }
   }
   ++numChecked;
+  // A skipped grid keeps the blocks of the last full grid.
+  if (result.sinceFullGrid > 0) {
+    ++numSkipped;
+    ++gSkippedDeviceGrids;
+    comparable = false;
+  }
   if (comparable) {
     ++numCompared;
     std::vector<float> costs(numLaunches);
@@ -1150,8 +1159,9 @@ void checkDeviceGrid(
   }
   if (numChecked % 200 == 0) {
     LOG(INFO) << "Device grid check: " << numChecked << " steps, "
-              << numCompared << " compared, " << numCountDiffs << " count and "
-              << numBlockDiffs << " block differences";
+              << numCompared << " compared, " << numSkipped << " skipped, "
+              << numCountDiffs << " count and " << numBlockDiffs
+              << " block differences";
   }
 }
 
@@ -1586,6 +1596,20 @@ StandaloneShortcut standaloneShortcutForTarget(std::string_view target) {
   if (target == "torch.ops.aten.sym_numel.default") {
     return StandaloneShortcut::kSymNumel;
   }
+  // The device setup computes these views. The host keeps running them
+  // eagerly when it sets every step up itself.
+  if (!WaveConfig::get().deviceAlloc) {
+    return StandaloneShortcut::kNone;
+  }
+  if (target == "torch.ops.aten.squeeze.default") {
+    return StandaloneShortcut::kSqueeze;
+  }
+  if (target == "torch.ops.aten.t.default") {
+    return StandaloneShortcut::kT;
+  }
+  if (target == "torch.ops.aten.diagonal.default") {
+    return StandaloneShortcut::kDiagonal;
+  }
   return StandaloneShortcut::kNone;
 }
 } // namespace
@@ -1596,14 +1620,17 @@ Launch::Launch(
     WaveGraph& waveGraph)
     : standalone(standaloneNode) {
   standaloneShortcut = standaloneShortcutForTarget(standaloneNode->target());
-  // prim.ListPack is metadata-only only when it builds a TensorList; a SymInt /
-  // int list packs scalars, which the kListPack shortcut cannot handle, so
-  // leave those on the generic path. The same holds for the unpack: its input
-  // is the list, so the type to check is the operand's, not the output's.
+  // prim.ListPack is a shortcut when it builds a TensorList, or a SymInt list
+  // under device setup, where the views that read the list take their sizes
+  // from the elements. The same holds for the unpack: its input is the list,
+  // so the type to check is the operand's, not the output's.
+  const auto packKind = standaloneNode->outputs().empty()
+      ? nativert::Type::Kind::None
+      : standaloneNode->outputs()[0]->type().kind();
   if (standaloneShortcut == StandaloneShortcut::kListPack &&
-      (standaloneNode->outputs().empty() ||
-       standaloneNode->outputs()[0]->type().kind() !=
-           nativert::Type::Kind::TensorList)) {
+      packKind != nativert::Type::Kind::TensorList &&
+      !(packKind == nativert::Type::Kind::SymIntList &&
+        WaveConfig::get().deviceAlloc)) {
     standaloneShortcut = StandaloneShortcut::kNone;
   }
   if (standaloneShortcut == StandaloneShortcut::kListUnpack &&
@@ -1615,6 +1642,10 @@ Launch::Launch(
   if (isEmptyFactory(standaloneNode)) {
     standaloneShortcut = StandaloneShortcut::kEmptyFactory;
     metadataOnly = true;
+    const auto id = standaloneNode->outputs()[0]->id();
+    if (static_cast<size_t>(id) < types.types.size() && types.types[id]) {
+      emptyFactoryDtype = types.types[id]->dtype();
+    }
     return;
   }
   auto* meta = Registry::metadata(standaloneNode->target());
@@ -1909,6 +1940,9 @@ void collectShortcutArgs(NodeCP node, LaunchData& data) {
         } else {
           pushValue(nullptr);
         }
+      } else if (
+          arg.default_value().has_value() && arg.default_value()->isInt()) {
+        pushInt(arg.default_value()->toInt());
       } else {
         pushValue(nullptr);
       }
@@ -4039,6 +4073,50 @@ void CompositeInvocation::addElidedClones(NodeRun& run, StepVectors& sv) {
   }
 }
 
+bool CompositeInvocation::layDeviceGrid(StepVectors& sv, uint8_t* pinnedBase) {
+  sv.onDeviceGrid = sv.deviceGrid != nullptr &&
+      sv.deviceGridChoices == sv.gridChoiceBitmap &&
+      sv.deviceGrid->numLaunches == static_cast<int32_t>(sv.kernels.size()) &&
+      sv.segments.size() <= 1 && !WaveConfig::get().debugSingleOps &&
+      !WaveConfig::get().launchPerOp;
+  if (sv.onDeviceGrid) {
+    // The device writes the block table over the empty flags.
+    auto* empty = pinnedBase + sv.blockInfoOffset;
+    for (size_t i = 0; i < sv.kernels.size(); ++i) {
+      empty[i] = sv.kernels[i].numElements == 0 ? 1 : 0;
+    }
+    sv.deviceGridBlocks = deviceGridBound(sv);
+  }
+  return sv.onDeviceGrid;
+}
+
+namespace {
+
+// Gives 'sv' the clocks of its launch of 'numBlocks' blocks in the execution's
+// clock buffer, unless the setup batch that sets it up already did for as many
+// blocks.
+void reserveStepClocks(
+    ExecutionState& state,
+    StepVectors& sv,
+    int32_t numBlocks) {
+  if (sv.clockGeneration == state.tableGeneration &&
+      sv.clockBlocks == numBlocks) {
+    return;
+  }
+  const auto offset = reserveLaunchClocks(
+      state, numBlocks, sv.clockBlocks == numBlocks ? sv.clockOffset : -1);
+  sv.previousClocksInPlace =
+      offset == sv.clockOffset && numBlocks == sv.clockBlocks;
+  sv.clockOffset = offset;
+  sv.clockBlocks = numBlocks;
+  sv.clockGeneration = state.tableGeneration;
+  if (sv.onDeviceGrid && !sv.previousClocksInPlace) {
+    ++state.numSetupsWithoutClocks;
+  }
+}
+
+} // namespace
+
 void CompositeInvocation::finishStep(
     NodeRun& run,
     int32_t stepIdx,
@@ -4103,6 +4181,8 @@ void CompositeInvocation::finishStep(
     releaseLastUseAtStep(state, stepIdx, sv, lastUseReleaseStep);
   }
 
+  sv.stepOrdinal = -1;
+  sv.issueOrdinal = state.nextStepOrdinal - 1;
   if (sv.kernels.empty()) {
     if (WaveConfig::get().trace &
         (WaveConfig::kNodes | WaveConfig::kLaunches)) {
@@ -4120,6 +4200,9 @@ void CompositeInvocation::finishStep(
       }
     }
     auto tStandalone = doTiming ? Clock::now() : Clock::time_point{};
+    if (!sv.standalones.empty()) {
+      syncForSetupFailure(state);
+    }
     runStandalones(
         sv.standalones,
         state,
@@ -4190,20 +4273,9 @@ void CompositeInvocation::finishStep(
     }
   }
 
-  sv.onDeviceGrid = sv.deviceGrid != nullptr &&
-      sv.deviceGridChoices == sv.gridChoiceBitmap &&
-      sv.deviceGrid->numLaunches == static_cast<int32_t>(sv.kernels.size()) &&
-      sv.segments.size() <= 1 && !WaveConfig::get().debugSingleOps &&
-      !WaveConfig::get().launchPerOp;
-  if (sv.onDeviceGrid) {
-    // The device writes the block table over the empty flags.
-    auto* empty = pinnedBase + sv.blockInfoOffset;
-    for (size_t i = 0; i < sv.kernels.size(); ++i) {
-      empty[i] = sv.kernels[i].numElements == 0 ? 1 : 0;
-    }
+  if (layDeviceGrid(sv, pinnedBase)) {
     blockSize = sv.cachedBlockSize;
     sv.blockInfoPinned = nullptr;
-    sv.deviceGridBlocks = deviceGridBound(sv);
     sv.gridUs = 0;
   } else {
     auto t0 = Clock::now();
@@ -4265,12 +4337,7 @@ void CompositeInvocation::finishStep(
     traceStep(stepIdx, sv, currentGridChoices);
   }
 
-  const auto clockOffset =
-      reserveLaunchClocks(state, static_cast<int32_t>(numBlocks));
-  sv.previousClocksInPlace = clockOffset == sv.clockOffset &&
-      static_cast<int32_t>(numBlocks) == sv.clockBlocks;
-  sv.clockOffset = clockOffset;
-  sv.clockBlocks = static_cast<int32_t>(numBlocks);
+  reserveStepClocks(state, sv, static_cast<int32_t>(numBlocks));
   state.launchDebugInfos.push_back({
       reinterpret_cast<DebugInfo*>(pinnedBase + totalPinnedBytes),
       deviceDebugBase,
@@ -4291,6 +4358,8 @@ void CompositeInvocation::finishStep(
           sv.shortcutStandalones, state, doTiming, sv.shortcutUs);
     }
     if (!sv.standalones.empty()) {
+      // An eager op reads the step's results: a restart must come first.
+      syncForSetupFailure(state);
       if (state.lastWaveDone != nullptr) {
         waitOnce(state.lastWaveDone, torchStream(), state.torchWaitedFor);
       }
@@ -4329,21 +4398,65 @@ void CompositeInvocation::finishStep(
   prepareHostCopies(state, sv);
   state.stepOrdinal = state.nextStepOrdinal++;
   state.ordinalSteps.emplace_back(sequenceNumber_, stepIdx);
+  sv.stepOrdinal = state.stepOrdinal;
+  sv.issueOrdinal = state.stepOrdinal;
   const bool hasTransfer = returnBegin >= 0 || !sv.hostCopies.empty();
   const bool deferReturn = WaveConfig::get().deferD2h && hasTransfer &&
       !WaveConfig::get().debugSingleOps;
   {
     auto tLaunch = Clock::now();
     sv.setup = threadSetupCounters() - setupBefore;
+    const int64_t h2dBytes = sv.blockInfoOffset +
+        (sv.onDeviceGrid ? static_cast<int64_t>(sv.kernels.size())
+                         : static_cast<int64_t>(numBlocks) *
+                 static_cast<int64_t>(sizeof(BlockInfo)));
+    if (state.deviceAllocActive) {
+      if (sv.deviceAllocStep && sv.setupCanFail) {
+        state.lastFallibleOrdinal = state.stepOrdinal;
+        state.fallibleOrdinals.push_back(state.stepOrdinal);
+      }
+      // A restart issues the launch again, without the standalones, which
+      // run once the launches before them are known to have succeeded.
+      logLaunch(
+          state,
+          &stepEvents,
+          [this,
+           numBlocks = static_cast<int32_t>(numBlocks),
+           blockSize,
+           pinnedBase,
+           deviceBase,
+           h2dBytes,
+           returnBegin,
+           returnEnd,
+           deviceDebugBase,
+           stream = state.stream.get(),
+           svPtr = &sv,
+           stepIdx,
+           deferReturn,
+           events = &stepEvents]() {
+            launch(
+                numBlocks,
+                blockSize,
+                pinnedBase,
+                deviceBase,
+                h2dBytes,
+                returnBegin,
+                returnEnd,
+                deviceDebugBase,
+                stream,
+                *svPtr,
+                stepIdx,
+                deferReturn,
+                {},
+                events);
+          });
+    }
     launch(
         static_cast<int32_t>(numBlocks),
         blockSize,
         pinnedBase,
         deviceBase,
-        sv.blockInfoOffset +
-            (sv.onDeviceGrid ? static_cast<int64_t>(sv.kernels.size())
-                             : static_cast<int64_t>(numBlocks) *
-                     static_cast<int64_t>(sizeof(BlockInfo))),
+        h2dBytes,
         returnBegin,
         returnEnd,
         deviceDebugBase,
@@ -4370,6 +4483,7 @@ void CompositeInvocation::finishStep(
            sv.executedStep,
            stepEvents.waveDone.get()});
     } else if (hasTransfer) {
+      checkSetupFailure(state, sv.stepOrdinal);
       processReturnData(sv, frame, pinnedBase);
     }
     if (doTiming) {
@@ -4457,6 +4571,75 @@ void CompositeInvocation::finishNode(NodeRun& run) {
               << (gElementwiseReuseBytes - reuseBytes0) / 1024
               << " KB written in place" << std::endl;
   }
+}
+
+void CompositeInvocation::launchSetupBatch(
+    ExecutionState& state,
+    const StepVectors& sv,
+    facebook::velox::wave::Stream* stream) {
+  auto& batch = state.setupBatches.at(state.activeSetupBatch);
+  const int32_t numSteps = state.numActiveSetupSteps;
+  state.activeSetupBatch = -1;
+  state.numActiveSetupSteps = 0;
+  auto* deviceSymbols = CHECK_NOTNULL(state.waveGraph->deviceSymbols());
+  std::vector<FixupArgs> fixups(numSteps);
+  std::vector<SetupMemberArgs> members(numSteps);
+  for (int32_t i = 0; i < numSteps; ++i) {
+    const auto [node, step] = batch.steps[i];
+    auto& member = i == 0 ? const_cast<StepVectors&>(sv)
+                          : getStepVectors(state.stepVectors, node, step);
+    auto& fixupsOf = *member.program->symbolFixups;
+    if (i > 0) {
+      // As launch() does for a step it sets up itself; the first step's
+      // parameters and the addresses are already on the device.
+      if (WaveConfig::get().deviceSizingPoison) {
+        DeviceSymbols::poisonSizedParams(fixupsOf, member.pinnedBase);
+      }
+      const bool resident = member.allWordsFromSetup &&
+          (WaveConfig::get().residentBlocks || state.deviceAllocActive);
+      const int64_t h2dBegin =
+          resident && member.residentBase == member.deviceBase
+          ? member.blockInfoOffset
+          : 0;
+      const int64_t h2dBytes =
+          member.blockInfoOffset + static_cast<int64_t>(member.kernels.size());
+      stream->hostToDeviceAsync(
+          member.deviceBase + h2dBegin,
+          member.pinnedBase + h2dBegin,
+          h2dBytes - h2dBegin);
+      ++state.numPathLaunches;
+      state.numPathParamUploads += h2dBegin == 0 ? 1 : 0;
+      member.residentBase = resident ? member.deviceBase : nullptr;
+      member.setUpInBatch = true;
+      member.batchOrdinal = state.stepOrdinal + i;
+    }
+    fixups[i] = deviceSymbols->prepareFixups(state, fixupsOf, nullptr);
+    auto& args = members[i];
+    args.grid = member.deviceGrid.get();
+    args.deviceBase = member.deviceBase;
+    args.blockInfoOffset = member.blockInfoOffset;
+    args.launchBlocks = member.deviceGridBlocks;
+    args.deviceDebugBase = reinterpret_cast<DebugInfo*>(
+        member.deviceBase + member.program->totalPinnedBytes);
+    reserveStepClocks(state, member, member.deviceGridBlocks);
+    args.deviceClocks =
+        state.blockClocks.device->as<int64_t>() + member.clockOffset;
+    args.previousClocks =
+        member.previousClocksInPlace && WaveConfig::get().deviceGridLearn;
+    args.fixups = &fixups[i];
+    args.ordinal = state.stepOrdinal + i;
+    args.waitsFor = batch.waitsFor[i];
+    args.signalAfterStores = batch.signalAfterStores[i] != 0;
+  }
+  runSetupBatch(
+      batch.device,
+      members,
+      stream,
+      state.failureWords.defined() ? state.failureWords.data_ptr<int32_t>()
+                                   : nullptr,
+      state.stepOrdinal);
+  ++state.numSetupBatches;
+  gBatchedSetups += numSteps - 1;
 }
 
 void CompositeInvocation::launch(
@@ -4734,65 +4917,85 @@ void CompositeInvocation::launch(
         "A step with symbol fixups runs outside a device-symbols execution");
     auto* setupStream = stream;
     // Without an execution state the setup runs on the step's stream.
-    if (sv.onDeviceGrid && WaveConfig::get().setupStream && state != nullptr) {
-      if (state->setupStream == nullptr) {
-        state->setupStream = state->streamPool->get();
-        state->setupDone =
-            std::make_unique<facebook::velox::wave::Event>(/*withTime=*/false);
+    if (sv.setUpInBatch) {
+      // The setup kernel of an earlier step uploaded and set up this one.
+      sv.setUpInBatch = false;
+      if (state->stepOrdinal != sv.batchOrdinal) {
+        LOG_FIRST_N(ERROR, 5)
+            << "Setup batch: step " << sequenceNumber_ << "." << stepIdx
+            << " runs as ordinal " << state->stepOrdinal
+            << ", its setup marked " << sv.batchOrdinal;
       }
-      setupStream = state->setupStream.get();
-      // The fixups read symbols earlier steps produce.
-      if (hasFixups && state->lastWaveDone != nullptr) {
-        state->lastWaveDone->wait(*setupStream);
+    } else {
+      if (sv.onDeviceGrid && WaveConfig::get().setupStream &&
+          state != nullptr) {
+        if (state->setupStream == nullptr) {
+          state->setupStream = state->streamPool->get();
+          state->setupDone = std::make_unique<facebook::velox::wave::Event>(
+              /*withTime=*/false);
+        }
+        setupStream = state->setupStream.get();
+        // The fixups read symbols earlier steps produce.
+        if (hasFixups && state->lastWaveDone != nullptr) {
+          state->lastWaveDone->wait(*setupStream);
+        }
       }
-    }
-    if (hasFixups && WaveConfig::get().deviceSizingPoison) {
-      DeviceSymbols::poisonSizedParams(*sv.program->symbolFixups, pinnedBase);
-    }
-    copyAddresses(*state, *setupStream);
-    // A resident block gets only its block table part.
-    const bool resident = hasFixups && sv.allWordsFromSetup &&
-        (WaveConfig::get().residentBlocks || state->deviceAllocActive);
-    const int64_t h2dBegin =
-        resident && sv.residentBase == deviceBase ? sv.blockInfoOffset : 0;
-    if (h2dBytes > h2dBegin) {
-      setupStream->hostToDeviceAsync(
-          deviceBase + h2dBegin, pinnedBase + h2dBegin, h2dBytes - h2dBegin);
-    }
-    if (state->deviceAllocActive && sv.deviceAllocStep) {
-      ++state->numPathLaunches;
-      state->numPathParamUploads += h2dBegin == 0 ? 1 : 0;
-    }
-    sv.residentBase = resident ? deviceBase : nullptr;
-    if (sv.onDeviceGrid) {
-      // One kernel runs the fixups and then the grid.
-      FixupArgs fixups;
-      if (hasFixups) {
-        fixups = state->waveGraph->deviceSymbols()->prepareFixups(
-            *state, *sv.program->symbolFixups);
+      if (hasFixups && WaveConfig::get().deviceSizingPoison) {
+        DeviceSymbols::poisonSizedParams(*sv.program->symbolFixups, pinnedBase);
       }
-      runDeviceGrid(
-          *sv.deviceGrid,
-          deviceBase,
-          sv.blockInfoOffset,
-          numBlocks,
-          deviceDebugBase,
-          CHECK_NOTNULL(deviceClocks),
-          sv.previousClocksInPlace,
-          hasFixups ? &fixups : nullptr,
-          setupStream,
-          state->failureWords.defined()
-              ? state->failureWords.data_ptr<int32_t>()
-              : nullptr,
-          state->stepOrdinal);
-      if (setupStream != stream) {
-        // Safe to re-record at the next step: the wait has captured it.
-        state->setupDone->record(*setupStream);
-        state->setupDone->wait(*stream);
+      copyAddresses(*state, *setupStream);
+      // A resident block gets only its block table part.
+      // A restart copies the whole block: a band record moves a
+      // host-written address relative to its value.
+      const bool resident = hasFixups && sv.allWordsFromSetup &&
+          (WaveConfig::get().residentBlocks || state->deviceAllocActive) &&
+          !state->replayingLaunches;
+      const int64_t h2dBegin =
+          resident && sv.residentBase == deviceBase ? sv.blockInfoOffset : 0;
+      if (h2dBytes > h2dBegin) {
+        setupStream->hostToDeviceAsync(
+            deviceBase + h2dBegin, pinnedBase + h2dBegin, h2dBytes - h2dBegin);
       }
-    } else if (hasFixups) {
-      state->waveGraph->deviceSymbols()->runFixups(
-          *state, *sv.program->symbolFixups, deviceBase, stream);
+      if (state->deviceAllocActive && sv.deviceAllocStep) {
+        ++state->numPathLaunches;
+        state->numPathParamUploads += h2dBegin == 0 ? 1 : 0;
+      }
+      sv.residentBase = resident ? deviceBase : nullptr;
+      if (sv.onDeviceGrid) {
+        // One kernel runs the fixups and then the grid.
+        if (state->activeSetupBatch >= 0) {
+          launchSetupBatch(*state, sv, setupStream);
+        } else {
+          FixupArgs fixups;
+          if (hasFixups) {
+            fixups = CHECK_NOTNULL(state->waveGraph->deviceSymbols())
+                         ->prepareFixups(
+                             *state, *sv.program->symbolFixups, deviceBase);
+          }
+          runDeviceGrid(
+              *sv.deviceGrid,
+              deviceBase,
+              sv.blockInfoOffset,
+              numBlocks,
+              deviceDebugBase,
+              CHECK_NOTNULL(deviceClocks),
+              sv.previousClocksInPlace,
+              hasFixups ? &fixups : nullptr,
+              setupStream,
+              state->failureWords.defined()
+                  ? state->failureWords.data_ptr<int32_t>()
+                  : nullptr,
+              state->stepOrdinal);
+        }
+        if (setupStream != stream) {
+          // Safe to re-record at the next step: the wait has captured it.
+          state->setupDone->record(*setupStream);
+          state->setupDone->wait(*stream);
+        }
+      } else if (hasFixups) {
+        CHECK_NOTNULL(state->waveGraph->deviceSymbols())
+            ->runFixups(*state, *sv.program->symbolFixups, deviceBase, stream);
+      }
     }
     for (const auto& segment : segments) {
       if (!WaveConfig::get().launchPerOp) {
@@ -4815,6 +5018,9 @@ void CompositeInvocation::launch(
         launchSegment(opSegment);
         runStart = runEnd;
       }
+    }
+    if (sv.deviceAllocStep && sv.setupCanFail) {
+      copyFailureSlot(*state, *stream);
     }
     if (returnBegin >= 0 || !sv.hostCopies.empty()) {
       if (returnBegin >= 0) {

@@ -240,6 +240,9 @@ struct LaunchFootprint {
   /// lifetime -- but they are not in the frame before this point either, and
   /// anything that measures one earlier reads an empty slot.
   std::vector<nativert::ValueId> binds;
+  /// In-place outputs and the values they alias, whose buffer they share: a
+  /// read or release of the output is one of the value's.
+  std::vector<std::pair<nativert::ValueId, nativert::ValueId>> aliases;
 
   /// Fused concats this launch runs. Empty for all but the few launches that
   /// hold one.

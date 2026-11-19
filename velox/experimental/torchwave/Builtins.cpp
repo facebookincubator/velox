@@ -408,20 +408,27 @@ bool isLastDimOfRows(NodeCP node, const ValueTypes& types) {
 // The longest row tw.sort_rows sorts in shared memory.
 constexpr int64_t kMaxSortRow = 2048;
 
-// sort along the last dim of an input of rank 2 or more with rows of a static
-// length of at most kMaxSortRow runs as tw.sort_rows.
+// The fewest entries tw.sort_rows has room for, so that a block sorts several
+// short rows at a time.
+constexpr int64_t kMinSortRoom = 256;
+
+// Runs a sort along the last dim of an input of rank 2 or more as
+// tw.sort_rows when its rows have a static length of at most kMaxSortRow, or a
+// length only the data decides, which the kernel checks against kMaxSortRow.
 std::vector<std::pair<ValueCP, ValueCP>>
 replaceSortOfRows(NodeCP node, ValueTypes& types, WaveGraph& /*waveGraph*/) {
   auto* self = inputAt(node, 0);
   const auto* dimAttr = node->tryGetAttribute("dim");
-  if (dimAttr == nullptr || !isLastDimOfRows(node, types)) {
+  if (dimAttr == nullptr || !isLastDimOfRows(node, types) ||
+      static_cast<size_t>(self->id()) >= types.types.size() ||
+      types.types[self->id()] == nullptr) {
     return {};
   }
   const auto dims = staticDimsOf(types, self);
-  if (!dims.has_value() || dims->empty() || dims->back() < 1 ||
-      dims->back() > kMaxSortRow ||
-      static_cast<size_t>(self->id()) >= types.types.size() ||
-      types.types[self->id()] == nullptr) {
+  const int64_t rowLength =
+      dims.has_value() && !dims->empty() && dims->back() >= 0 ? dims->back()
+                                                              : kMaxSortRow;
+  if (rowLength < 1 || rowLength > kMaxSortRow) {
     return {};
   }
   const auto dtype = types.types[self->id()]->dtype();
@@ -431,8 +438,8 @@ replaceSortOfRows(NodeCP node, ValueTypes& types, WaveGraph& /*waveGraph*/) {
       dtype != c10::ScalarType::Double) {
     return {};
   }
-  int64_t maxRow = 1;
-  while (maxRow < dims->back()) {
+  int64_t maxRow = kMinSortRoom;
+  while (maxRow < rowLength) {
     maxRow <<= 1;
   }
   bool descending = false;
@@ -2407,10 +2414,10 @@ void registerRowBuiltins(const std::string& scanHeader) {
       .multiBlockReturnBarrier()
       .outputConstraints(rowReduceConstraint(2))
       .registerOp();
-  // sort(dim=-1) of an input of rank 2 or more whose rows have a static
-  // length of at most kMaxSortRow: one block per row, the row sorted in the
-  // kernel's dynamic shared memory. 'max_row' is the row length rounded up to
-  // a power of two, 'sort_descending' 0 or 1.
+  // sort(dim=-1) of an input of rank 2 or more whose rows have at most
+  // kMaxSortRow elements: a block sorts whole rows in the kernel's dynamic
+  // shared memory. 'max_row' is the entries it has room for, a power of two,
+  // 'sort_descending' 0 or 1.
   auto rowShapeReturn = ArgumentMeta{
       .isRegister = false,
       .reserve = maxShapeReserve,
@@ -2441,6 +2448,9 @@ void registerRowBuiltins(const std::string& scanHeader) {
         // An 8-byte key and a 4-byte position per element.
         return rows != nullptr ? *rows * 12 : 0;
       })
+      // Keeps the registers of the row loop from costing every op sharing a
+      // cooperative kernel a block per SM.
+      .minBlocksPerSm(4)
       .multiBlockReturnBarrier()
       .outputConstraints(
           [](NodeCP node,

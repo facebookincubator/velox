@@ -315,6 +315,7 @@ struct StepCode {
         .operands = {ids + op.operands.begin, op.operands.size},
         .constants = {consts + op.constants.begin, op.constants.size},
         .intList = {consts + op.intList.begin, op.intList.size},
+        .listElements = {ids + op.listElements.begin, op.listElements.size},
         .outputs = {ids + op.outputs.begin, op.outputs.size},
         .elements = {ids + op.elements.begin, op.elements.size},
         .wholeExtent = op.wholeExtent};

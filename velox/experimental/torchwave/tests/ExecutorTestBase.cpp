@@ -204,6 +204,14 @@ DEFINE_bool(
     false,
     "Compute each step's grid on the device from the counts the device holds");
 DEFINE_int32(
+    grid_skip_refresh,
+    0,
+    "With --device_grid, keep a step's block table when its counts moved less than --grid_skip_tolerance, computing the grid at least every N executions");
+DEFINE_double(
+    grid_skip_tolerance,
+    0.1,
+    "The relative change of a launch's count that --grid_skip_refresh tolerates");
+DEFINE_int32(
     test_failed_step,
     -1,
     "Start each execution with this step marked failed, to test the failure words");
@@ -212,6 +220,10 @@ DEFINE_bool(
     false,
     "Compare each group's demand from its setup with the host's buffer size");
 DEFINE_bool(
+    device_setup,
+    false,
+    "Run step setup on the device: --device_alloc with --converged_setup, --wide_setup and --host_fetch=1");
+DEFINE_bool(
     device_alloc,
     false,
     "Size the groups of steps on the device path from their setups' recorded demands; implies the device sizing, placement and grid flags");
@@ -219,6 +231,14 @@ DEFINE_int32(
     device_alloc_margin,
     25,
     "With --device_alloc, percent added to each recorded demand");
+DEFINE_int32(
+    host_fetch,
+    0,
+    "With --device_alloc, 1 computes the entries of path values a step off the path reads on the host instead of waiting for them, 2 also waits and compares");
+DEFINE_bool(
+    host_sized_groups,
+    true,
+    "With --device_alloc, size the groups whose demand the host computes from capacities and input sizes on the host; their setups cannot fail");
 DEFINE_bool(
     resident_blocks,
     false,
@@ -227,6 +247,18 @@ DEFINE_bool(
     setup_stream,
     false,
     "Run device-grid steps' parameter copies and setup kernels on a second stream");
+DEFINE_bool(
+    setup_batches,
+    false,
+    "With --device_alloc, run the setups of consecutive device-path steps as the blocks of one kernel");
+DEFINE_bool(
+    converged_setup,
+    false,
+    "Evaluate device setup programs grouped by shape, converged within a warp");
+DEFINE_bool(
+    wide_setup,
+    false,
+    "With --converged_setup, run a step's device setup on several blocks");
 DEFINE_bool(
     check_size_exprs,
     false,
@@ -243,6 +275,27 @@ DEFINE_bool(
     device_sizing_poison,
     false,
     "With --device_sizing, zero the host's dims of the parameters the device sizes");
+DEFINE_bool(
+    poison_groups,
+    false,
+    "Fill group buffers with 0xff bytes at allocation and the group arena at "
+    "the start of each execution");
+DEFINE_int32(
+    stall_report_seconds,
+    0,
+    "Log the incomplete steps when an execution takes longer than this");
+DEFINE_bool(
+    device_grid_learn,
+    true,
+    "With --device_grid, learn the cost multipliers from the previous execution's clocks");
+DEFINE_int32(
+    device_grid_jitter,
+    0,
+    "If non-zero, seed for random scaling of the previous block clocks the device grids learn from");
+DEFINE_bool(
+    test_shrink_demands,
+    false,
+    "With --device_alloc, record half of each group's demand so that every execution restarts");
 DEFINE_bool(
     device_placement,
     false,
@@ -337,6 +390,10 @@ DEFINE_bool(
     run_ahead,
     true,
     "Drop the host stream waits that are not a real data or memory dependency (the per-node default-stream drain), so the host can queue steps arbitrarily far ahead of the device");
+DEFINE_bool(
+    print_repeat_times,
+    false,
+    "Log the wall time of every timed wave repeat, so a caller can drop the warm-up repeats");
 DEFINE_bool(
     pack_inputs,
     false,
@@ -1000,6 +1057,12 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().gridEqualFinish = FLAGS_grid_equal_finish;
   WaveConfig::get().deviceGrid = FLAGS_device_grid;
   WaveConfig::get().setupStream = FLAGS_setup_stream;
+  WaveConfig::get().setupBatches = FLAGS_setup_batches;
+  WaveConfig::get().convergedSetup = FLAGS_converged_setup;
+  WaveConfig::get().wideSetup = FLAGS_wide_setup;
+  WaveConfig::get().gridSkipRefresh = FLAGS_grid_skip_refresh;
+  WaveConfig::get().gridSkipTolerance =
+      static_cast<float>(FLAGS_grid_skip_tolerance);
   WaveConfig::get().residentBlocks = FLAGS_resident_blocks;
   WaveConfig::get().testFailedStep = FLAGS_test_failed_step;
   WaveConfig::get().checkDemands = FLAGS_check_demands;
@@ -1008,14 +1071,24 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().deviceSizeCheck = FLAGS_device_size_check;
   WaveConfig::get().deviceSizing = FLAGS_device_sizing;
   WaveConfig::get().deviceSizingPoison = FLAGS_device_sizing_poison;
+  WaveConfig::get().poisonGroups = FLAGS_poison_groups;
+  WaveConfig::get().deviceGridLearn = FLAGS_device_grid_learn;
+  WaveConfig::get().deviceGridJitter = FLAGS_device_grid_jitter;
+  WaveConfig::get().stallReportSeconds = FLAGS_stall_report_seconds;
+  WaveConfig::get().testShrinkDemands = FLAGS_test_shrink_demands;
   WaveConfig::get().devicePlacement = FLAGS_device_placement;
   WaveConfig::get().deviceAlloc = FLAGS_device_alloc;
   WaveConfig::get().deviceAllocMarginPct = FLAGS_device_alloc_margin;
+  WaveConfig::get().hostFetch = FLAGS_host_fetch;
+  WaveConfig::get().hostSizedGroups = FLAGS_host_sized_groups;
   if (FLAGS_device_alloc) {
     WaveConfig::get().deviceSizeCheck = true;
     WaveConfig::get().deviceSizing = true;
     WaveConfig::get().devicePlacement = true;
     WaveConfig::get().deviceGrid = true;
+  }
+  if (FLAGS_device_setup) {
+    WaveConfig::get().enableDeviceSetup();
   }
   WaveConfig::get().uniformCost = FLAGS_uniform_cost;
   WaveConfig::get().launchPerOp = FLAGS_launch_per_op;
@@ -1616,6 +1689,9 @@ void ExecutorTestBase::runTestWithFixture(
             outputsToHost(repeatOutputs, "wave repeat"),
             expected,
             "wave repeat");
+      }
+      if (FLAGS_print_repeat_times) {
+        LOG(INFO) << "wave repeat " << i << " us=" << us;
       }
       waveTimes[i] = us;
       waveMin = std::min(waveMin, us);

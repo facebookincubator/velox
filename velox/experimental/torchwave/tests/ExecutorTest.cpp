@@ -22,6 +22,7 @@
 
 #include <cuda_runtime.h> // @manual
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <folly/ScopeGuard.h>
 #include <folly/init/Init.h>
 #include <glog/logging.h>
@@ -29,6 +30,7 @@
 #include <functional>
 #include <numeric>
 
+#include "velox/experimental/torchwave/Derive.h"
 #include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/StaticDims.h"
 #include "velox/experimental/torchwave/StepProgram.h"
@@ -134,12 +136,13 @@ makeTensorMeta(c10::ScalarType dtype, int64_t rank, int64_t sizeValue = 1) {
 // each execution while the executor, and so the waveThreadInfo() clocks that
 // point into its buffers, is still alive. Returns the last run's host output
 // tensors.
-std::vector<at::Tensor> runWaveProgrammatic(
+// The outputs of each of 'runs', on the host.
+std::vector<std::vector<at::Tensor>> runWaveProgrammaticRuns(
     std::unique_ptr<nativert::Graph> graph,
     const std::unordered_map<std::string, torch::_export::TensorMeta>& meta,
     const std::vector<std::vector<at::Tensor>>& runs,
     std::shared_ptr<SymShapes> symShapes,
-    const std::function<void()>& afterRun = nullptr) {
+    const std::function<void()>& afterRun) {
   graph->setTensorValuesMeta(meta);
   setGraphDevice(graph.get(), /*isCuda=*/true);
 
@@ -152,7 +155,7 @@ std::vector<at::Tensor> runWaveProgrammatic(
   const auto& runGraph = exec.graph();
   const auto& inputNames = runGraph.signature().userInputs();
 
-  std::vector<at::Tensor> hostOutputs;
+  std::vector<std::vector<at::Tensor>> hostOutputs;
   for (const auto& inputs : runs) {
     // Move only defined inputs to device; an undefined (default-constructed)
     // input is left as None in the frame, so it reaches an op as a null-storage
@@ -183,12 +186,24 @@ std::vector<at::Tensor> runWaveProgrammatic(
     }
 
     auto host = outputsToHost(outputs, "programmatic");
-    hostOutputs.clear();
+    auto& runOutputs = hostOutputs.emplace_back();
     for (auto& iv : host) {
-      hostOutputs.push_back(iv.toTensor());
+      runOutputs.push_back(iv.toTensor());
     }
   }
   return hostOutputs;
+}
+
+std::vector<at::Tensor> runWaveProgrammatic(
+    std::unique_ptr<nativert::Graph> graph,
+    const std::unordered_map<std::string, torch::_export::TensorMeta>& meta,
+    const std::vector<std::vector<at::Tensor>>& runs,
+    std::shared_ptr<SymShapes> symShapes,
+    const std::function<void()>& afterRun = nullptr) {
+  auto outputs = runWaveProgrammaticRuns(
+      std::move(graph), meta, runs, std::move(symShapes), afterRun);
+  return outputs.empty() ? std::vector<at::Tensor>{}
+                         : std::move(outputs.back());
 }
 
 std::vector<at::Tensor> runWaveProgrammatic(
@@ -732,6 +747,76 @@ TEST_F(ExecutorTest, staticShapeCheckTest) {
           "stride 400 instead of 200")));
 }
 
+// The metadata ops device setup takes off the host derive their entries over
+// the table: squeeze, t, diagonal, and a view sized by a list of integers.
+TEST_F(ExecutorTest, metadataDeriveTest) {
+  int64_t storage[12];
+  std::vector<ValueEntry> entries(8);
+  ValueTable table{
+      .entries = entries.data(),
+      .size = static_cast<int32_t>(entries.size()),
+      .generation = 1};
+  auto setTensor =
+      [&](int32_t id, std::vector<int32_t> dims, std::vector<int32_t> strides) {
+        auto& entry = entries[id];
+        entry.kind = ValueEntry::kTensor;
+        entry.generation = 1;
+        entry.t.storage = storage;
+        entry.t.elementSize = sizeof(int64_t);
+        entry.t.rank = static_cast<int8_t>(dims.size());
+        entry.t.numEl = 1;
+        for (size_t d = 0; d < dims.size(); ++d) {
+          entry.t.dims[d] = dims[d];
+          entry.t.strides[d] = strides[d];
+          entry.t.numEl *= dims[d];
+        }
+      };
+  auto setInt = [&](int32_t id, int64_t value) {
+    entries[id].kind = ValueEntry::kInt;
+    entries[id].scalar = value;
+    entries[id].generation = 1;
+  };
+  // Dims, strides and the element offset from 'storage' of entry 'id'.
+  auto layoutOf = [&](int32_t id) {
+    const auto& t = table.tensor(id);
+    std::vector<int32_t> dims(t.dims, t.dims + t.rank);
+    std::vector<int32_t> strides(t.strides, t.strides + t.rank);
+    return fmt::format(
+        "[{}] / [{}] @{}",
+        fmt::join(dims, ", "),
+        fmt::join(strides, ", "),
+        (static_cast<int64_t*>(t.storage) - storage));
+  };
+  auto derive = [&](StandaloneShortcut kind,
+                    std::vector<int32_t> operands,
+                    std::vector<int64_t> constants,
+                    std::vector<int32_t> listElements = {}) {
+    const DeriveView op{
+        .kind = kind,
+        .output = 7,
+        .operands = {operands.data(), static_cast<int32_t>(operands.size())},
+        .constants = {constants.data(), static_cast<int32_t>(constants.size())},
+        .listElements = {
+            listElements.data(), static_cast<int32_t>(listElements.size())}};
+    EXPECT_TRUE(runDerive(op, table));
+    return layoutOf(7);
+  };
+  setTensor(0, {3, 1, 4}, {4, 4, 1});
+  setTensor(1, {3, 4}, {4, 1});
+  setInt(2, 6);
+  setInt(3, 2);
+
+  EXPECT_EQ(
+      derive(StandaloneShortcut::kSqueeze, {0}, {0}), "[3, 4] / [4, 1] @0");
+  EXPECT_EQ(derive(StandaloneShortcut::kT, {1}, {0}), "[4, 3] / [1, 4] @0");
+  EXPECT_EQ(
+      derive(StandaloneShortcut::kDiagonal, {1, -1, -1, -1}, {0, 1, 0, 1}),
+      "[3] / [5] @1");
+  EXPECT_EQ(
+      derive(StandaloneShortcut::kView, {1, 4}, {0, 0}, {2, 3}),
+      "[6, 2] / [2, 1] @0");
+}
+
 // A sizing call folded to a constant at bind is still run with
 // --verify_static_sizes, which fails when its result differs from the
 // constant.
@@ -805,6 +890,63 @@ TEST_F(ExecutorTest, viewBroadcastGatherSizingTest) {
       padded.index_select(0, index.reshape({-1})).view({1000, 40000});
   EXPECT_TRUE(tensorsMatch(outputs[0], reference))
       << firstDifference(outputs[0], reference);
+}
+
+// A cat of one tensor only copies it: the wave graph reads the tensor itself.
+// A cat of a graph input that is itself a graph output stays, so the output
+// does not alias the input.
+const char* kSingleCatGraph = R"(graph(%x, %y):
+%m = torch.ops.aten.gt.Scalar(self=%x, other=5)
+%w = torch.ops.aten.where.self(condition=%m, self=%x, other=%y)
+%l[] = prim.ListPack(l0=%w)
+%cat = torch.ops.aten.cat.default(tensors=%l, dim=0)
+%o = torch.ops.aten.add.Scalar(self=%cat, other=1)
+%il[] = prim.ListPack(l0=%y)
+%icat = torch.ops.aten.cat.default(tensors=%il, dim=0)
+return(%o, %icat)
+)";
+
+TEST_F(ExecutorTest, singleCatRemovedTest) {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto* name : {"x", "y", "w", "cat", "o", "icat"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  meta["m"] = makeTensorMeta(c10::ScalarType::Bool, 1);
+  {
+    auto graph = nativert::stringToGraph(kSingleCatGraph);
+    graph->setTensorValuesMeta(meta);
+    setGraphDevice(graph.get(), /*isCuda=*/true);
+    auto ctx = std::make_unique<ModelContext>();
+    ctx->weights = std::make_shared<nativert::Weights>(graph.get());
+    ctx->graph = std::move(graph);
+    WaveGraphExecutor exec(std::move(ctx));
+    // The add reads the where itself; the graph output is still the cat.
+    std::vector<std::string> addInputs;
+    std::vector<std::string> outputProducers;
+    for (const auto& node : exec.graph().nodes()) {
+      if (node.target() == "torch.ops.aten.add.Scalar") {
+        addInputs.emplace_back(node.inputs()[0].value->name());
+      }
+    }
+    for (const auto* output : exec.graph().outputs()) {
+      outputProducers.emplace_back(output->producer()->target());
+    }
+    EXPECT_THAT(addInputs, testing::ElementsAre("w"));
+    EXPECT_THAT(
+        outputProducers,
+        testing::ElementsAre(
+            "torch.ops.aten.add.Scalar", "torch.ops.aten.cat.default"));
+  }
+
+  auto x = at::arange(1'000, at::kLong) % 11;
+  auto y = at::arange(1'000, at::kLong) * 3;
+  auto outputs = runWaveProgrammatic(
+      nativert::stringToGraph(kSingleCatGraph), meta, {{x, y}});
+  ASSERT_EQ(outputs.size(), 2);
+  auto reference = at::where(x > 5, x, y) + 1;
+  EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+      << firstDifference(outputs[0], reference);
+  EXPECT_TRUE(tensorsMatch(outputs[1], y)) << firstDifference(outputs[1], y);
 }
 
 // The same gather with its offsets made by a 1-D cumsum, which builds a cg
@@ -1127,6 +1269,60 @@ return(%s, %i)
       EXPECT_TRUE(at::equal(outputs[1], indices))
           << firstDifference(outputs[1], indices);
       EXPECT_TRUE(at::allclose(outputs[0], values, 0, 0, /*equal_nan=*/true));
+    }
+  }
+}
+
+// sort over the last dim of rows whose length the data decides also runs as
+// tw.sort_rows: short rows several to a block, long ones one at a time.
+TEST_F(ExecutorTest, sortRowsDynamicLengthTest) {
+  auto resetConfig =
+      folly::makeGuard([] { WaveConfig::get().isCg = std::nullopt; });
+  const char* kGraph = R"(graph(%x, %m, %r):
+%l[] = prim.ListPack(l0=%m)
+%s = torch.ops.aten.index.Tensor(self=%x, indices=%l)
+%u = torch.ops.aten.unsqueeze.default(self=%s, dim=0)
+%e = torch.ops.aten.expand.default(self=%u, size=[300, -1])
+%a = torch.ops.aten.mul.Tensor(self=%e, other=%r)
+%v, %i = torch.ops.aten.sort.default(self=%a, dim=1, descending=false)
+return(%v, %i)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["x"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["m"] = makeTensorMeta(c10::ScalarType::Bool, 1);
+  meta["s"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  for (const char* name : {"r", "u", "e", "a", "v", "i"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 2);
+  }
+  const auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kGraph), meta, CompiledPlan::Mode::kMultiKernel);
+  int32_t sortKernels = 0;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        sortKernels += kernel.has("tw.sort_rows") ? 1 : 0;
+      }
+    }
+  }
+  EXPECT_EQ(sortKernels, 1) << plan.describe();
+  for (int64_t length : {6, 3'000}) {
+    SCOPED_TRACE(fmt::format("length {}", length));
+    auto x = at::randint(0, 20, {length}, at::kLong);
+    auto m = at::arange(length, at::kLong) % 2 == 0;
+    // Negative multipliers reverse some rows' order.
+    auto r = at::randint(-3, 4, {300, 1}, at::kLong);
+    auto [values, indices] =
+        at::sort(x.index({m}).unsqueeze(0) * r, /*stable=*/true, 1, false);
+    for (bool cg : {false, true}) {
+      SCOPED_TRACE(fmt::format("cg {}", cg));
+      WaveConfig::get().isCg = cg;
+      auto outputs = runWaveProgrammatic(
+          nativert::stringToGraph(kGraph), meta, {{x, m, r}});
+      ASSERT_EQ(outputs.size(), 2);
+      EXPECT_TRUE(at::equal(outputs[0], values))
+          << firstDifference(outputs[0], values);
+      EXPECT_TRUE(at::equal(outputs[1], indices))
+          << firstDifference(outputs[1], indices);
     }
   }
 }
@@ -5134,13 +5330,17 @@ TEST_F(ExecutorTest, elidedCloneInputReferenceFrame) {
 // repeat over unchanged inputs then still verifies -- the skipped op's stale
 // output is the right answer -- so only the frame state shows the defect.
 // index_put_chain's a -> b -> c -> d -> e chain returns only 'e', which leaves
-// the rest behind as intermediates.
+// the rest behind as intermediates. Those are in-place outputs, which stay
+// out of the frame when the table holds them, so the ops run as standalones.
 TEST_F(ExecutorTest, frameReuseResetTest) {
   const bool savedFree = WaveConfig::get().freeIntermediates;
+  const bool savedSingleOps = WaveConfig::get().debugSingleOps;
   SCOPE_EXIT {
     WaveConfig::get().freeIntermediates = savedFree;
+    WaveConfig::get().debugSingleOps = savedSingleOps;
   };
   WaveConfig::get().freeIntermediates = false;
+  WaveConfig::get().debugSingleOps = true;
 
   auto fixture = ModelFixture::load(
       getDataFilePath(dataDir(), "data/index_put_chain_test.pt2"));
@@ -5532,6 +5732,40 @@ TEST_F(ExecutorTest, deviceAllocRepeatsMatch) {
   EXPECT_GT(gDeviceAllocStepRuns - before, 0);
 }
 
+// A device grid whose blocks add up to more than the grid has must give blocks
+// back before it writes the block table. Cut off at the end of the grid, the
+// last launch would keep a numBlocksInOp larger than its blocks and skip the
+// elements of the missing ones. The test hook makes every grid overshoot.
+TEST_F(ExecutorTest, deviceGridOvershootFits) {
+  auto& config = WaveConfig::get();
+  const auto savedRepeats = FLAGS_num_repeats;
+  const auto savedVerify = FLAGS_verify_repeats;
+  auto resetConfig = folly::makeGuard([&, savedRepeats, savedVerify] {
+    config.deviceAlloc = false;
+    config.deviceSizeCheck = false;
+    config.deviceSizing = false;
+    config.devicePlacement = false;
+    config.deviceGrid = false;
+    config.deviceGridTestExtraBlocks = 0;
+    config.isCg = std::nullopt;
+    FLAGS_num_repeats = savedRepeats;
+    FLAGS_verify_repeats = savedVerify;
+  });
+  config.deviceAlloc = true;
+  config.deviceSizeCheck = true;
+  config.deviceSizing = true;
+  config.devicePlacement = true;
+  config.deviceGrid = true;
+  config.deviceGridTestExtraBlocks = 10'000;
+  config.isCg = false;
+  FLAGS_num_repeats = 3;
+  FLAGS_verify_repeats = true;
+  const int64_t before = gDeviceAllocStepRuns;
+  runTest("data/cat_nd_test.pt2", "data/cat_nd_test_results.pt");
+  runTest("data/scatter_add_test.pt2", "data/scatter_add_test_results.pt");
+  EXPECT_GT(gDeviceAllocStepRuns - before, 0);
+}
+
 // Turns on device alloc for the scope: the executions after the first run the
 // steps on the device path.
 class DeviceAllocScope {
@@ -5649,6 +5883,43 @@ return(%y, %v)
       {v * v, v});
 }
 
+// An in-place write into a clone, read through a view after steps that
+// allocate buffers of the clone's size: the clone's group stays live while the
+// view is, though its members' last direct reads are long past.
+TEST_F(ExecutorTest, deviceAllocViewOfInPlaceOutputOutlivesBase) {
+  const auto graph = std::string(kMaskedPrefix) + R"(
+%a = torch.ops.aten.mul.Tensor(self=%s, other=%s)
+%c = torch.ops.aten.clone.default(self=%a)
+%z = torch.ops.aten.select.int(self=%a, dim=0, index=1)
+%w = torch.ops.aten.select_scatter.default(self=%c, src=%z, dim=0, index=0)
+%v = torch.ops.aten.unsqueeze.default(self=%w, dim=1)
+%b = torch.ops.aten.cumsum.default(self=%s, dim=0)
+%d = torch.ops.aten.cumsum.default(self=%b, dim=0)
+%e = torch.ops.aten.cumsum.default(self=%d, dim=0)
+%u = torch.ops.aten.unsqueeze.default(self=%e, dim=1)
+%y = torch.ops.aten.add.Tensor(self=%v, other=%u)
+return(%y)
+)";
+  auto x = at::randint(0, 1'000, {20'000}, at::kLong);
+  auto m = x > 300;
+  auto s = x.index({m});
+  auto a = s * s;
+  auto w = a.clone();
+  w.select(0, 0).copy_(a.select(0, 1));
+  auto e = at::cumsum(at::cumsum(at::cumsum(s, 0), 0), 0);
+  auto meta = maskedMeta({"x", "s", "a", "c", "w", "b", "d", "e"});
+  meta["z"] = makeTensorMeta(c10::ScalarType::Long, 0);
+  for (const char* name : {"v", "u", "y"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 2);
+  }
+  expectDeviceAllocOutputs(
+      [&] { return nativert::stringToGraph(graph); },
+      meta,
+      *maskedSymShapes({"s", "a", "c", "w", "b", "d", "e"}),
+      {x, m},
+      {w.unsqueeze(1) + e.unsqueeze(1)});
+}
+
 // A custom op with no kernel and no shape rule, which runs eagerly.
 TORCH_LIBRARY(tw_test, m) {
   m.def("reverse(Tensor self) -> Tensor");
@@ -5701,6 +5972,101 @@ return(%t)
       *maskedSymShapes({"s", "a", "b"}),
       {x, m},
       {at::stack({s + s, s * s}, 1)});
+}
+
+// Scans over x[m] in several steps on the device path, each sized from the
+// count the first step leaves: their setups run as the blocks of one kernel.
+TEST_F(ExecutorTest, deviceAllocSetupBatch) {
+  const auto graph = std::string(kMaskedPrefix) + R"(
+%a = torch.ops.aten.mul.Tensor(self=%s, other=%s)
+%c = torch.ops.aten.cumsum.default(self=%a, dim=0)
+%d = torch.ops.aten.add.Tensor(self=%c, other=%s)
+%e = torch.ops.aten.cumsum.default(self=%d, dim=0)
+%f = torch.ops.aten.sub.Tensor(self=%e, other=%a)
+return(%f)
+)";
+  auto x = at::randint(0, 1000, {2000}, at::kLong);
+  auto m = x > 300;
+  auto s = x.index({m});
+  auto a = s * s;
+  auto e = at::cumsum(at::cumsum(a, 0) + s, 0);
+  WaveConfig::get().setupBatches = true;
+  const int64_t before = gBatchedSetups;
+  expectDeviceAllocOutputs(
+      [&] { return nativert::stringToGraph(graph); },
+      maskedMeta({"x", "s", "a", "c", "d", "e", "f"}),
+      *maskedSymShapes({"s", "a", "c", "d", "e", "f"}),
+      {x, m},
+      {e - a});
+  WaveConfig::get().setupBatches = false;
+  EXPECT_GT(gBatchedSetups - before, 0);
+}
+
+// Counts within the tolerance of the last full grid keep its block table, so
+// a launch runs over more or fewer elements than its blocks were sized for;
+// a count outside it computes the grid again. Every execution must still be
+// right, and some grids must be skipped. 'numScans' cumsums are the launches
+// of one step: up to 32 take the one-warp grid.
+void expectGridSkipOutputs(int32_t numScans) {
+  SCOPED_TRACE(fmt::format("{} scans", numScans));
+  std::string graph = kMaskedPrefix;
+  std::string returns;
+  std::vector<std::string> longs = {"x", "s"};
+  for (int32_t i = 0; i < numScans; ++i) {
+    graph += fmt::format(
+        "%a{0} = torch.ops.aten.add.Scalar(self=%s, other={0})\n"
+        "%c{0} = torch.ops.aten.cumsum.default(self=%a{0}, dim=0)\n",
+        i);
+    returns += fmt::format("{}%c{}", i == 0 ? "" : ", ", i);
+    longs.push_back(fmt::format("a{}", i));
+    longs.push_back(fmt::format("c{}", i));
+  }
+  graph += "return(" + returns + ")\n";
+  auto x = at::randint(0, 1'000'000, {200'000}, at::kLong);
+  // Kept fractions: within 10% of the first, then half, within 10% of that,
+  // then back. The first is the largest: the device path does not grow an
+  // allocation group past its first execution's capacity.
+  const std::vector<double> kept = {
+      0.62, 0.60, 0.58, 0.61, 0.59, 0.30, 0.32, 0.28, 0.31, 0.60};
+  std::vector<std::vector<at::Tensor>> runs;
+  std::vector<at::Tensor> masked;
+  for (const auto fraction : kept) {
+    auto m = x < static_cast<int64_t>(1'000'000 * fraction);
+    runs.push_back({x, m});
+    masked.push_back(x.index({m}));
+  }
+  std::vector<std::string> sameAsS(longs.begin() + 1, longs.end());
+  auto& config = WaveConfig::get();
+  config.gridSkipRefresh = 16;
+  config.gridSkipTolerance = 0.1f;
+  config.checkGridDescriptor = true;
+  const int64_t before = gSkippedDeviceGrids;
+  {
+    DeviceAllocScope scope(/*cg=*/true);
+    const auto outputs = runWaveProgrammaticRuns(
+        nativert::stringToGraph(graph),
+        maskedMeta(longs),
+        runs,
+        maskedSymShapes(sameAsS),
+        nullptr);
+    ASSERT_EQ(outputs.size(), runs.size());
+    for (size_t run = 0; run < runs.size(); ++run) {
+      for (int32_t i = 0; i < numScans; ++i) {
+        const auto expected = at::cumsum(masked[run] + i, 0);
+        EXPECT_TRUE(tensorsMatch(outputs[run][i], expected))
+            << "run " << run << " scan " << i << ": "
+            << firstDifference(outputs[run][i], expected);
+      }
+    }
+  }
+  config.gridSkipRefresh = 0;
+  config.checkGridDescriptor = false;
+  EXPECT_GT(gSkippedDeviceGrids - before, 0);
+}
+
+TEST_F(ExecutorTest, deviceGridSkip) {
+  expectGridSkipOutputs(4);
+  expectGridSkipOutputs(36);
 }
 
 // A view a step on the device path makes, returned and read by an eager op:
@@ -5771,6 +6137,164 @@ TEST_F(ExecutorTest, deviceAllocSymSize) {
       *maskedSymShapes({"s"}),
       {x, m},
       {at::cat({s, at::full({1}, s.size(0), at::kLong)})});
+}
+
+// Runs 'graph', whose inputs are x, m, y and q of kTwoMasksGraph's shapes, on
+// 'few', 'few', 'many' and 'many' under device alloc for each of 'cgModes'.
+// The groups the executions on 'few' size are too small for 'many': the third
+// execution restarts at least 'minRestarts' times, the fourth not at all, and
+// both give 'expected'.
+void expectCapacityRestarts(
+    const char* graph,
+    const std::vector<at::Tensor>& few,
+    const std::vector<at::Tensor>& many,
+    const std::vector<at::Tensor>& expected,
+    const std::vector<bool>& cgModes,
+    int64_t minRestarts) {
+  auto meta = maskedMeta({"x", "s", "a", "y", "t", "b", "f", "g"});
+  meta["q"] = makeTensorMeta(c10::ScalarType::Bool, 1);
+  auto shapes = maskedSymShapes({"s", "a"});
+  const std::string second("Symbol('s1', integer=True, positive=True)");
+  addSymShape(*shapes, "y", {second}, {int64_t{1}});
+  addSymShape(*shapes, "q", {second}, {int64_t{1}});
+  for (const char* name : {"t", "b", "f", "g"}) {
+    addSymShape(
+        *shapes,
+        name,
+        {std::string("Symbol('u1', integer=True)")},
+        {int64_t{1}});
+  }
+  for (const bool cg : cgModes) {
+    SCOPED_TRACE(fmt::format("cg {}", cg));
+    DeviceAllocScope scope(cg);
+    std::vector<int64_t> restarts{gDeviceAllocRestarts};
+    const auto runs = runWaveProgrammaticRuns(
+        nativert::stringToGraph(graph),
+        meta,
+        {few, few, many, many},
+        shapes,
+        [&] { restarts.push_back(gDeviceAllocRestarts); });
+    ASSERT_EQ(runs.size(), 4);
+    for (size_t run : {2, 3}) {
+      SCOPED_TRACE(fmt::format("run {}", run));
+      ASSERT_EQ(runs[run].size(), expected.size());
+      for (size_t i = 0; i < expected.size(); ++i) {
+        EXPECT_TRUE(tensorsMatch(runs[run][i], expected[i]))
+            << "output " << i << ": "
+            << firstDifference(runs[run][i], expected[i]);
+      }
+    }
+    EXPECT_EQ(restarts[2] - restarts[0], 0);
+    EXPECT_GE(restarts[3] - restarts[2], minRestarts);
+    EXPECT_EQ(restarts[4] - restarts[3], 0);
+  }
+}
+
+// x[m] and y[q] and their squares. After executions with few selected
+// elements, one with many finds a group over its capacity: the setup fails,
+// its groups get the memory it demanded, and the launches from it on run
+// again. Under cg the selections run on the device path; without cg they are
+// sized on the host, and the next test covers that mode.
+TEST_F(ExecutorTest, deviceAllocCapacityRestart) {
+  auto x = at::randint(0, 1000, {4000}, at::kLong);
+  auto y = at::randint(0, 1000, {3000}, at::kLong);
+  auto s = x.index({x > 100});
+  auto t = y.index({y > 100});
+  expectCapacityRestarts(
+      R"(graph(%x, %m, %y, %q):
+%l[] = prim.ListPack(l0=%m)
+%s = torch.ops.aten.index.Tensor(self=%x, indices=%l)
+%a = torch.ops.aten.mul.Tensor(self=%s, other=%s)
+%k[] = prim.ListPack(l0=%q)
+%t = torch.ops.aten.index.Tensor(self=%y, indices=%k)
+%b = torch.ops.aten.mul.Tensor(self=%t, other=%t)
+return(%a, %b, %s, %t)
+)",
+      {x, x > 900, y, y > 900},
+      {x, x > 100, y, y > 100},
+      {s.pow(2), t.pow(2), s, t},
+      {true},
+      1);
+}
+
+// An eager op after the step that fails: flip has no kernel, so it runs on
+// the host once the launches before it are known not to have failed, and
+// reads the outputs of the launches the restart issued again.
+TEST_F(ExecutorTest, deviceAllocCapacityRestartEagerAfter) {
+  auto x = at::randint(0, 1000, {4000}, at::kLong);
+  auto y = at::randint(0, 1000, {3000}, at::kLong);
+  auto s = x.index({x > 100});
+  auto t = y.index({y > 100});
+  expectCapacityRestarts(
+      R"(graph(%x, %m, %y, %q):
+%l[] = prim.ListPack(l0=%m)
+%s = torch.ops.aten.index.Tensor(self=%x, indices=%l)
+%a = torch.ops.aten.mul.Tensor(self=%s, other=%s)
+%k[] = prim.ListPack(l0=%q)
+%t = torch.ops.aten.index.Tensor(self=%y, indices=%k)
+%b = torch.ops.aten.mul.Tensor(self=%t, other=%t)
+%f = torch.ops.aten.flip.default(self=%b, dims=[0])
+return(%a, %f)
+)",
+      {x, x > 900, y, y > 900},
+      {x, x > 100, y, y > 100},
+      {s.pow(2), at::flip(t.pow(2), {0})},
+      {true},
+      1);
+}
+
+// A cumsum of y[q] runs in steps after the selection: two setups of one
+// execution fail, each restarting from its own step. Only without cg: under
+// cg the selection fuses with the cumsum and gives the mask's length, with or
+// without device alloc.
+TEST_F(ExecutorTest, deviceAllocCapacityRestartTwice) {
+  auto x = at::randint(0, 1000, {4000}, at::kLong);
+  auto y = at::randint(0, 1000, {3000}, at::kLong);
+  expectCapacityRestarts(
+      R"(graph(%x, %m, %y, %q):
+%l[] = prim.ListPack(l0=%m)
+%s = torch.ops.aten.index.Tensor(self=%x, indices=%l)
+%a = torch.ops.aten.mul.Tensor(self=%s, other=%s)
+%k[] = prim.ListPack(l0=%q)
+%t = torch.ops.aten.index.Tensor(self=%y, indices=%k)
+%b = torch.ops.aten.cumsum.default(self=%t, dim=0)
+return(%a, %b)
+)",
+      {x, x > 900, y, y > 900},
+      {x, x > 100, y, y > 100},
+      {x.index({x > 100}).pow(2), at::cumsum(y.index({y > 100}), 0)},
+      {false},
+      2);
+}
+
+// Restarts with setups in batches: scans of y[q] around an eager flip. A
+// restart that comes after only some members of a batch are issued, as in
+// ROO, is not reproduced at this size.
+TEST_F(ExecutorTest, deviceAllocCapacityRestartSetupBatches) {
+  auto x = at::randint(0, 1000, {4000}, at::kLong);
+  auto y = at::randint(0, 1000, {3000}, at::kLong);
+  WaveConfig::get().setupBatches = true;
+  const int64_t before = gBatchedSetups;
+  expectCapacityRestarts(
+      R"(graph(%x, %m, %y, %q):
+%l[] = prim.ListPack(l0=%m)
+%s = torch.ops.aten.index.Tensor(self=%x, indices=%l)
+%a = torch.ops.aten.mul.Tensor(self=%s, other=%s)
+%k[] = prim.ListPack(l0=%q)
+%t = torch.ops.aten.index.Tensor(self=%y, indices=%k)
+%b = torch.ops.aten.cumsum.default(self=%t, dim=0)
+%f = torch.ops.aten.flip.default(self=%b, dims=[0])
+%g = torch.ops.aten.cumsum.default(self=%f, dim=0)
+return(%a, %g)
+)",
+      {x, x > 900, y, y > 900},
+      {x, x > 100, y, y > 100},
+      {x.index({x > 100}).pow(2),
+       at::cumsum(at::flip(at::cumsum(y.index({y > 100}), 0), {0}), 0)},
+      {false, true},
+      1);
+  WaveConfig::get().setupBatches = false;
+  EXPECT_GT(gBatchedSetups - before, 0);
 }
 
 // A gather with an index out of range raises a kernel error at the end of the

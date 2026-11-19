@@ -66,6 +66,16 @@ struct DeferredView {
 // NOLINTNEXTLINE(facebook-avoid-non-const-global-variables)
 thread_local std::vector<DeferredView> tDeferredViews;
 
+// An in-place output whose self is a member the step's groups have not carved:
+// the output becomes an alias of the self once the carve gives it storage.
+struct DeferredAlias {
+  int32_t output;
+  int32_t self;
+};
+
+// NOLINTNEXTLINE(facebook-avoid-non-const-global-variables)
+thread_local std::vector<DeferredAlias> tDeferredAliases;
+
 // Lays out 'concat' over the table: sizes the operands, gives the result an
 // entry of the joined shape, which goes in 'resultShape', and gives every
 // operand the kernel writes in place the entry of its band.
@@ -546,60 +556,259 @@ void runFills(
 
 const std::string kDynamicSizeKey{"dyn"};
 
-// Runs the step's DeriveOps; one whose operands the table cannot answer runs
-// as its shortcut over the frame.
-void runDerives(StepProgram& program, ExecutionState& state) {
+// The node and the steps that make 'id', for error messages.
+std::string describeProducer(const ExecutionState& state, int32_t id) {
+  const auto& idToValue = state.waveGraph->idToValue();
+  auto it = idToValue.find(id);
+  const auto* node = it != idToValue.end() ? it->second->producer() : nullptr;
+  std::string where = ", made by " +
+      (node != nullptr ? std::string(node->target()) : std::string("no node"));
+  if (static_cast<size_t>(id) < state.deviceOnlyValue.size() &&
+      state.deviceOnlyValue[id] != 0) {
+    where += ", made on the device path";
+  }
+  for (size_t n = 0; n < state.stepVectors.size(); ++n) {
+    for (size_t k = 0; k < state.stepVectors[n].size(); ++k) {
+      const auto& producer = state.stepVectors[n][k];
+      for (const auto* launches :
+           {&producer.kernels,
+            &producer.standalones,
+            &producer.shortcutStandalones}) {
+        for (const auto& data : *launches) {
+          const bool out =
+              std::find(
+                  data.actualOutputs.begin(), data.actualOutputs.end(), id) !=
+              data.actualOutputs.end();
+          const bool ret =
+              std::find(
+                  data.returnValues.begin(), data.returnValues.end(), id) !=
+              data.returnValues.end();
+          if (out || ret) {
+            where += fmt::format(
+                "; step {}.{}{}{}{}",
+                n,
+                k,
+                out ? " output" : "",
+                ret ? " returned" : "",
+                producer.deviceAllocStep ? " on the path" : "");
+          }
+        }
+      }
+      if (producer.program != nullptr) {
+        for (const auto& derive : producer.program->derives) {
+          if (derive.output == id) {
+            where += fmt::format(
+                "; step {}.{} derive{}",
+                n,
+                k,
+                producer.deviceAllocStep ? " on the path" : "");
+          }
+        }
+      }
+    }
+  }
+  return where;
+}
+
+// Writes the SymInt list 'list' to the frame from its elements, each an
+// integer of the table or the frame.
+void writeIntList(
+    ExecutionState& state,
+    int32_t list,
+    ArrayView<int32_t> elements) {
   auto& frame = *state.frame;
-  const auto& code = program.code;
-  for (int32_t d = 0; d < code.numDerives; ++d) {
-    const auto& rec = code.derives[d];
-    const auto op = code.viewOf(rec);
-    const auto input = op.operands.empty() ? -1 : op.operands[0];
-    if (runDerive(op, state.valueTable)) {
-      if (op.output >= 0 && op.kind != StandaloneShortcut::kListPack) {
-        takeOwner(state, op.output, input);
-        if (rec.materialize || !state.tableOnlyActive) {
-          materializeEntry(state, op.output, input);
-        }
-      }
-      const auto* materializeOutputs = code.idsOf(rec.materializeOutputs);
-      for (size_t i = 0; i < op.outputs.size(); ++i) {
-        const auto source =
-            op.kind == StandaloneShortcut::kListUnpack ? op.elements[i] : input;
-        if (state.valueEntries[op.outputs[i]].kind == ValueEntry::kTensor) {
-          takeOwner(state, op.outputs[i], source);
-        }
-        if (materializeOutputs[i] != 0 || !state.tableOnlyActive) {
-          materializeEntry(state, op.outputs[i], source);
-        }
-      }
+  std::vector<int64_t> ints;
+  ints.reserve(elements.size());
+  for (auto id : elements) {
+    if (state.valueTable.valid(id) && state.valueTable.isInt(id)) {
+      ints.push_back(state.valueTable.scalar(id));
       continue;
     }
-    if (input >= 0 && !frame.getIValue(input).isTensor() &&
-        state.valueTable.valid(input) && state.valueTable.isTensor(input)) {
-      materializeEntry(state, input, input);
+    const auto& value = frame.getIValue(id);
+    TORCH_CHECK(
+        value.isSymInt() || value.isInt(),
+        "Element %",
+        id,
+        " of SymInt list %",
+        list,
+        " is in neither the table nor the frame: ",
+        value.tagKind(),
+        state.valueTable.valid(id) ? ", table entry not an int" : "",
+        describeProducer(state, id));
+    ints.push_back(
+        value.isSymInt() ? value.toSymInt().guard_int(__FILE__, __LINE__)
+                         : value.toInt());
+  }
+  writeFrame(frame, list, c10::IValue(std::move(ints)));
+}
+
+// Writes to the frame each operand that a prim.ListPack of SymInts makes and
+// the frame does not hold: a pack that derives makes the frame's list only
+// when host code reads it.
+void writeIntListOperands(ExecutionState& state, ArrayView<int32_t> operands) {
+  const auto& idToValue = state.waveGraph->idToValue();
+  for (auto id : operands) {
+    if (id < 0 || !state.frame->getIValue(id).isNone()) {
+      continue;
     }
-    // The frame does not hold values the device path makes.
-    for (auto id : op.operands) {
-      TORCH_CHECK(
-          !state.deviceAllocActive || id < 0 ||
-              static_cast<size_t>(id) >= state.deviceOnlyValue.size() ||
-              state.deviceOnlyValue[id] == 0 || state.valueTable.valid(id),
-          "A derive off the device path reads %",
-          id,
-          ", which the device path makes, with no entry for it");
+    auto it = idToValue.find(id);
+    const auto* pack = it != idToValue.end() ? it->second->producer() : nullptr;
+    if (pack == nullptr || pack->target() != "prim.ListPack" ||
+        it->second->type().kind() != nativert::Type::Kind::SymIntList) {
+      continue;
     }
-    runStandaloneShortcut(program.derivedShortcuts[rec.shortcut], frame);
-    if (rec.secondShortcut >= 0) {
-      runStandaloneShortcut(
-          program.derivedShortcuts[rec.secondShortcut], frame);
+    std::vector<int32_t> elements;
+    bool allValues = true;
+    for (const auto& input : pack->inputs()) {
+      if (input.value == nullptr) {
+        allValues = false;
+        break;
+      }
+      elements.push_back(input.value->id());
     }
+    // A pack with an element that is not a value is not one the host derives.
+    if (!allValues) {
+      continue;
+    }
+    writeIntList(
+        state, id, {elements.data(), static_cast<int32_t>(elements.size())});
+  }
+}
+
+// Runs derive 'd' of 'program'; one whose operands the table cannot answer
+// runs as its shortcut over the frame. 'materialize' makes the frame's tensor
+// of the output even when the derive does not.
+void runDeriveRec(
+    StepProgram& program,
+    int32_t d,
+    bool materialize,
+    ExecutionState& state) {
+  auto& frame = *state.frame;
+  const auto& code = program.code;
+  const auto& rec = code.derives[d];
+  const auto op = code.viewOf(rec);
+  const auto input = op.operands.empty() ? -1 : op.operands[0];
+  materialize = materialize || rec.materialize || !state.tableOnlyActive;
+  if (op.kind == StandaloneShortcut::kListPack && materialize) {
+    const auto& pack = program.derivedShortcuts.at(rec.shortcut);
+    if (!pack.standalone->outputs().empty() &&
+        pack.standalone->outputs()[0]->type().kind() ==
+            nativert::Type::Kind::SymIntList) {
+      std::vector<int32_t> elements;
+      elements.reserve(pack.args.size());
+      for (const auto* arg : pack.args) {
+        elements.push_back(arg->id());
+      }
+      writeIntList(
+          state,
+          op.output,
+          {elements.data(), static_cast<int32_t>(elements.size())});
+    }
+  }
+  if (runDerive(op, state.valueTable)) {
+    if (op.output >= 0 && op.kind != StandaloneShortcut::kListPack) {
+      // NOLINTNEXTLINE(facebook-hte-ParameterUncheckedArrayBounds)
+      if (state.valueCold[op.output].owner < 0) {
+        takeOwner(state, op.output, input);
+      }
+      if (materialize) {
+        materializeEntry(state, op.output, input);
+      }
+    }
+    const auto* materializeOutputs = code.idsOf(rec.materializeOutputs);
+    for (size_t i = 0; i < op.outputs.size(); ++i) {
+      const auto source =
+          op.kind == StandaloneShortcut::kListUnpack ? op.elements[i] : input;
+      if (state.valueEntries[op.outputs[i]].kind == ValueEntry::kTensor) {
+        takeOwner(state, op.outputs[i], source);
+      }
+      if (materializeOutputs[i] != 0 || !state.tableOnlyActive) {
+        materializeEntry(state, op.outputs[i], source);
+      }
+    }
+    return;
+  }
+  if (input >= 0 && !frame.getIValue(input).isTensor() &&
+      state.valueTable.valid(input) && state.valueTable.isTensor(input)) {
+    materializeEntry(state, input, input);
+  }
+  // A SymInt list the host packs from its elements, which the frame holds.
+  writeIntListOperands(state, op.operands);
+  // The frame does not hold values the device path makes.
+  for (auto id : op.operands) {
+    TORCH_CHECK(
+        !state.deviceAllocActive || id < 0 ||
+            static_cast<size_t>(id) >= state.deviceOnlyValue.size() ||
+            state.deviceOnlyValue[id] == 0 || state.valueTable.valid(id) ||
+            !frame.getIValue(id).isNone(),
+        "A derive off the device path reads %",
+        id,
+        ", which the device path makes, with no entry for it",
+        describeProducer(state, id),
+        "; the derive makes %",
+        op.output);
+  }
+  runStandaloneShortcut(program.derivedShortcuts.at(rec.shortcut), frame);
+  if (rec.secondShortcut >= 0) {
+    runStandaloneShortcut(
+        program.derivedShortcuts.at(rec.secondShortcut), frame);
+  }
+}
+
+// The in-place outputs and views a step on the device path makes keep their
+// bases' allocations live, as a host derive's takeOwner does: the host does
+// not run them, and a group released at its members' last direct reads would
+// be carved again under a view still to be read.
+void ownDerivedViews(
+    const StepVectors& sv,
+    StepProgram& program,
+    ExecutionState& state) {
+  const auto& code = program.code;
+  auto own = [&](int32_t id, int32_t base) {
+    if (id >= 0 && base >= 0 && state.valueCold[id].owner < 0) {
+      takeOwner(state, id, base);
+    }
+  };
+  // In-place outputs share their selves' buffers.
+  for (const auto& data : sv.kernels) {
+    for (size_t i = 0;
+         i < data.actualOutputDescs.size() && i < data.actualOutputs.size();
+         ++i) {
+      if (data.actualOutputDescs[i].aliasSelfId.has_value()) {
+        own(data.actualOutputs[i], *data.actualOutputDescs[i].aliasSelfId);
+      }
+    }
+  }
+  for (int32_t d = 0; d < code.numDerives; ++d) {
+    const auto op = code.viewOf(code.derives[d]);
+    if (op.kind == StandaloneShortcut::kListPack ||
+        op.kind == StandaloneShortcut::kListUnpack ||
+        op.kind == StandaloneShortcut::kSymSize ||
+        op.kind == StandaloneShortcut::kSymNumel || op.operands.empty()) {
+      continue;
+    }
+    own(op.output, op.operands[0]);
+    for (auto id : op.outputs) {
+      own(id, op.operands[0]);
+    }
+  }
+}
+
+// Runs the step's DeriveOps.
+void runDerives(StepProgram& program, ExecutionState& state) {
+  for (int32_t d = 0; d < program.code.numDerives; ++d) {
+    runDeriveRec(program, d, false, state);
   }
 }
 
 // True when 'base' has a shape this step but no storage yet: a member of a
 // group still to be carved, or a value whose entry waits for one.
 bool baseUncarved(const ExecutionState& state, nativert::ValueId base) {
+  for (const auto& alias : tDeferredAliases) {
+    if (alias.output == base) {
+      return true;
+    }
+  }
   for (const auto& view : tDeferredViews) {
     if (view.output->valueId == base) {
       return true;
@@ -683,6 +892,7 @@ void runBoundView(
                 at::TensorOptions()
                     .dtype(static_cast<c10::ScalarType>(t.elementType))
                     .device(at::kMeta)));
+        writeIntListOperands(state, op.operands);
         runViewOverFrame(desc, state);
       }
       tDeferredViews.push_back({&output, &program});
@@ -702,8 +912,67 @@ void runBoundView(
         state.valueTable.isTensor(base)) {
       materializeEntry(state, base, base);
     }
+    writeIntListOperands(state, op.operands);
   }
   runViewOverFrame(desc, state);
+}
+
+// Gives in-place output 'alias' its self's entry when the self has storage in
+// the table, and makes the frame's view of it only for a host reader. False
+// when the self is not in the table.
+bool aliasOverTable(
+    ExecutionState& state,
+    nativert::ValueId alias,
+    nativert::ValueId self) {
+  if (!state.tableOnlyActive || !state.valueTable.valid(self) ||
+      !state.valueTable.isTensor(self) ||
+      state.valueTable.tensor(self).storage == nullptr) {
+    return false;
+  }
+  // NOLINTNEXTLINE(facebook-hte-ParameterUncheckedArrayBounds)
+  state.valueEntries[alias] = state.valueEntries[self];
+  state.valueEntries[alias].generation = state.tableGeneration;
+  takeOwner(state, alias, self);
+  if (!isTableOnly(state, alias)) {
+    materializeEntry(state, alias, self);
+  }
+  return true;
+}
+
+// Makes the deferred in-place outputs aliases of their selves once those are
+// carved; with 'last', all of them.
+void finishDeferredAliases(ExecutionState& state, bool last) {
+  auto pending = std::move(tDeferredAliases);
+  tDeferredAliases.clear();
+  auto& frame = *state.frame;
+  for (const auto& deferred : pending) {
+    if (!last && baseUncarved(state, deferred.self)) {
+      tDeferredAliases.push_back(deferred);
+      continue;
+    }
+    TORCH_CHECK(
+        !baseUncarved(state, deferred.self),
+        "In-place output %",
+        deferred.output,
+        " of %",
+        deferred.self,
+        " outlived its step's carve without storage");
+    if (isTableOnly(state, deferred.output)) {
+      writeFrame(frame, deferred.output, c10::IValue());
+    }
+    if (aliasOverTable(state, deferred.output, deferred.self)) {
+      continue;
+    }
+    if (!frame.getIValue(deferred.self).isTensor() &&
+        state.valueTable.valid(deferred.self) &&
+        state.valueTable.isTensor(deferred.self)) {
+      materializeEntry(state, deferred.self, deferred.self);
+    }
+    writeFrame(
+        frame,
+        deferred.output,
+        frame.getIValue(deferred.self).toTensor().alias());
+  }
 }
 
 // Derives the deferred views whose bases a carve has placed, in sizing order.
@@ -806,6 +1075,32 @@ void CompositeInvocation::runBoundOutput(
     StepProgram& program,
     ExecutionState& state) {
   auto& frame = *state.frame;
+  if (output.aliasOf >= 0 && baseUncarved(state, output.aliasOf)) {
+    // The sizing after this reads only the shape, which the self has.
+    const auto& t = state.valueTable.tensor(output.aliasOf);
+    int64_t dims[kMaxDims];
+    std::copy(t.dims, t.dims + t.rank, dims);
+    writeFrame(
+        frame,
+        output.valueId,
+        at::empty(
+            c10::IntArrayRef(dims, t.rank),
+            at::TensorOptions()
+                .dtype(static_cast<c10::ScalarType>(t.elementType))
+                .device(at::kMeta)));
+    if (isTableOnly(state, output.valueId)) {
+      // The shape is what sizing reads; the carve gives the storage.
+      // NOLINTNEXTLINE(facebook-hte-ParameterUncheckedArrayBounds)
+      state.valueEntries[output.valueId] = state.valueEntries[output.aliasOf];
+      state.valueEntries[output.valueId].generation = state.tableGeneration;
+    }
+    tDeferredAliases.push_back({output.valueId, output.aliasOf});
+    return;
+  }
+  if (output.aliasOf >= 0 &&
+      aliasOverTable(state, output.valueId, output.aliasOf)) {
+    return;
+  }
   if (output.aliasOf >= 0) {
     const auto& self = frame.getIValue(output.aliasOf);
     if (self.isTensor()) {
@@ -1009,8 +1304,78 @@ void fetchDeviceValues(ExecutionState& state, const StepVectors& sv) {
   if (!any) {
     return;
   }
+  // The entries come from setups that may have failed, also those the host
+  // computes from the capacity layout: check the producers first. This waits
+  // only for a setup before them that can fail.
+  int32_t through = -1;
+  for (const auto& fetch : sv.deviceFetches) {
+    if (!table.valid(fetch.id) || fetch.frame) {
+      through = std::max(
+          through, state.stepVectors[fetch.node][fetch.step].stepOrdinal);
+    }
+  }
+  checkSetupFailure(state, through);
+  // Under hostFetch, the entries the host computes from the capacity layout,
+  // which need no wait. In check mode they are compared with the fetched
+  // descriptors below.
+  const auto hostFetch = WaveConfig::get().hostFetch;
+  std::vector<std::pair<int32_t, TableTensor>> computed;
+  if (hostFetch != 0) {
+    auto& hostSymbols = state.hostSymbols;
+    const auto* addresses = state.addressPinned.data_ptr<int64_t>();
+    std::vector<std::string> names;
+    for (const auto& fetch : sv.deviceFetches) {
+      if (fetch.recipe < 0 || table.valid(fetch.id)) {
+        continue;
+      }
+      const auto& recipe = state.hostFetchRecipes[fetch.recipe];
+      names.clear();
+      recipe.address.collectSymbols(names);
+      for (const auto& name : names) {
+        if (name[0] == 'a') {
+          hostSymbols[name] = addresses[std::stoll(name.substr(1))];
+        }
+      }
+      TableTensor t;
+      const auto address = recipe.address.evaluate(hostSymbols);
+      bool known = address.has_value();
+      // NOLINTNEXTLINE(performance-no-int-to-ptr)
+      t.storage = reinterpret_cast<void*>(address.value_or(0));
+      t.rank = static_cast<int8_t>(recipe.dims.size());
+      t.elementSize = recipe.elementSize;
+      t.elementType = recipe.elementType;
+      int64_t numEl = 1;
+      for (size_t d = 0; known && d < recipe.dims.size(); ++d) {
+        const auto dim = recipe.dims[d].evaluate(hostSymbols);
+        const auto stride = recipe.strides[d].evaluate(hostSymbols);
+        known = dim.has_value() && stride.has_value();
+        if (known) {
+          t.dims[d] = static_cast<int32_t>(*dim);
+          t.strides[d] = static_cast<int32_t>(*stride);
+          numEl *= *dim;
+        }
+      }
+      t.numEl = static_cast<uint32_t>(numEl);
+      if (!known) {
+        continue;
+      }
+      if (hostFetch == 2) {
+        computed.emplace_back(fetch.id, t);
+        continue;
+      }
+      auto& entry = state.valueEntries[fetch.id];
+      entry.t = t;
+      entry.kind = ValueEntry::kTensor;
+      entry.flags = 0;
+      entry.generation = state.tableGeneration;
+      ++state.numHostFetches;
+      if (fetch.frame) {
+        materializeEntry(state, fetch.id, fetch.id);
+      }
+    }
+  }
   waitForFetches(state, sv.deviceFetches);
-  folly::F14FastMap<std::string, int64_t> symbols;
+  const auto& symbols = state.hostSymbols;
   for (const auto& fetch : sv.deviceFetches) {
     if (table.valid(fetch.id)) {
       if (fetch.frame) {
@@ -1023,14 +1388,6 @@ void fetchDeviceValues(ExecutionState& state, const StepVectors& sv) {
     std::memcpy(&entry.t, from.pinnedBase + fetch.offset, sizeof(TableTensor));
     auto hostShape = state.fetchHostShapes.find(fetch.id);
     if (hostShape != state.fetchHostShapes.end()) {
-      if (symbols.empty()) {
-        for (size_t i = 0; i < state.symbolCapacities.size(); ++i) {
-          symbols["c" + std::to_string(i)] = state.symbolCapacities[i];
-        }
-        for (size_t i = 0; i < state.inputSymbolValues.size(); ++i) {
-          symbols["i" + std::to_string(i)] = state.inputSymbolValues[i];
-        }
-      }
       const auto& [dims, strides] = hostShape->second;
       TORCH_CHECK(
           static_cast<int32_t>(dims.size()) == entry.t.rank,
@@ -1059,6 +1416,26 @@ void fetchDeviceValues(ExecutionState& state, const StepVectors& sv) {
     entry.generation = state.tableGeneration;
     if (fetch.frame) {
       materializeEntry(state, fetch.id, fetch.id);
+    }
+  }
+  for (const auto& [id, t] : computed) {
+    const auto& fetched = state.valueEntries[id].t;
+    bool same = fetched.storage == t.storage && fetched.rank == t.rank &&
+        fetched.elementType == t.elementType;
+    for (int32_t d = 0; same && d < t.rank; ++d) {
+      same = fetched.dims[d] == t.dims[d] &&
+          (fetched.dims[d] == 1 || fetched.strides[d] == t.strides[d]);
+    }
+    ++state.numHostFetches;
+    if (!same) {
+      ++state.numHostFetchMismatches;
+      LOG_EVERY_N(WARNING, 1)
+          << "Host fetch of %" << id << " differs: host " << t.storage
+          << " rank " << int(t.rank) << " dims " << t.dims[0] << ","
+          << t.dims[1] << " strides " << t.strides[0] << "," << t.strides[1]
+          << "; device " << fetched.storage << " rank " << int(fetched.rank)
+          << " dims " << fetched.dims[0] << "," << fetched.dims[1]
+          << " strides " << fetched.strides[0] << "," << fetched.strides[1];
     }
   }
 }
@@ -1103,9 +1480,14 @@ void CompositeInvocation::runDeviceAllocStep(
       }
     }
   }
+  sv.setupCanFail = false;
   if (hasGroups) {
     for (auto g : plan->groupsByStep[stepIdx]) {
-      allocateDeviceGroup(state, plan->groups[g]);
+      const auto slot = state.groupBaseSlot.at(&plan->groups[g]);
+      sv.setupCanFail = sv.setupCanFail ||
+          static_cast<size_t>(slot) >= state.hostDemand.size() ||
+          state.hostDemand[slot] < 0;
+      allocateDeviceGroup(state, plan->groups[g], sequenceNumber_, stepIdx);
     }
   }
   ++gDeviceAllocStepRuns;
@@ -1123,6 +1505,81 @@ void CompositeInvocation::runDeviceAllocStep(
   sv.gatherUs = 0;
   sv.refCheckUs = 0;
   sv.elidedCloneBytes = 0;
+}
+
+bool CompositeInvocation::prepareStepEarly(
+    ExecutionState& state,
+    int32_t stepIdx) {
+  if (static_cast<size_t>(sequenceNumber_) >= state.stepVectors.size() ||
+      static_cast<size_t>(stepIdx) >=
+          state.stepVectors[sequenceNumber_].size()) {
+    return false;
+  }
+  auto& sv = getStepVectors(state.stepVectors, sequenceNumber_, stepIdx);
+  if (!sv.deviceAllocStep || sv.program == nullptr ||
+      sv.program->symbolFixups == nullptr ||
+      sv.program->code.numLaunches == 0 || sv.preparedEarly) {
+    return false;
+  }
+  const int64_t totalAllocBytes = sv.program->totalPinnedBytes +
+      static_cast<int64_t>(sv.blockCapacity) *
+          static_cast<int64_t>(sizeof(DebugInfo));
+  if (totalAllocBytes > sv.bufferBytes) {
+    return false;
+  }
+  // A group without a recorded demand waits for a probe of the setup.
+  const auto* plan = allocGroupPlan();
+  if (plan != nullptr &&
+      static_cast<size_t>(stepIdx) < plan->groupsByStep.size()) {
+    for (auto g : plan->groupsByStep[stepIdx]) {
+      if (state.recordedDemand.at(state.groupBaseSlot.at(&plan->groups[g])) <
+          0) {
+        return false;
+      }
+    }
+  }
+  runFills(*sv.program, sv, state, *state.frame, sv.pinnedBase);
+  runDeviceAllocStep(stepIdx, sv, state);
+  sv.preparedEarly = true;
+  return layDeviceGrid(sv, sv.pinnedBase);
+}
+
+void CompositeInvocation::prepareSetupBatch(
+    ExecutionState& state,
+    int32_t stepIdx) {
+  state.activeSetupBatch = -1;
+  state.numActiveSetupSteps = 0;
+  if (!WaveConfig::get().setupBatches || WaveConfig::get().setupStream) {
+    return;
+  }
+  auto it = state.setupBatchAt.find(
+      (static_cast<int64_t>(sequenceNumber_) << 32) | stepIdx);
+  auto& head = getStepVectors(state.stepVectors, sequenceNumber_, stepIdx);
+  if (it == state.setupBatchAt.end() || head.program == nullptr ||
+      head.program->symbolFixups == nullptr ||
+      !layDeviceGrid(head, head.pinnedBase)) {
+    return;
+  }
+  const auto& batch = state.setupBatches.at(it->second);
+  int32_t numSteps = 1;
+  for (; numSteps < static_cast<int32_t>(batch.steps.size()); ++numSteps) {
+    const auto [node, step] = batch.steps[numSteps];
+    CompositeInvocation* invocation = nullptr;
+    for (const auto& compiled : state.waveGraph->nodes()) {
+      auto* kernels = compiled->kernels();
+      if (kernels != nullptr && kernels->sequenceNumber() == node) {
+        invocation = kernels;
+        break;
+      }
+    }
+    if (invocation == nullptr || !invocation->prepareStepEarly(state, step)) {
+      break;
+    }
+  }
+  if (numSteps > 1) {
+    state.activeSetupBatch = it->second;
+    state.numActiveSetupSteps = numSteps;
+  }
 }
 
 void CompositeInvocation::executeBound(ExecutionState& state) {
@@ -1177,8 +1634,18 @@ void CompositeInvocation::executeBound(ExecutionState& state) {
     auto* deviceBase = sv.deviceBase;
     const SetupCounters setupBefore = threadSetupCounters();
     if (state.deviceAllocActive && sv.deviceAllocStep) {
-      runFills(program, sv, state, frame, pinnedBase);
-      runDeviceAllocStep(stepIdx, sv, state);
+      // A step of derives alone sets nothing up: the setups of their readers
+      // place them.
+      const bool launches = program.code.numLaunches > 0;
+      if (!sv.preparedEarly && launches) {
+        runFills(program, sv, state, frame, pinnedBase);
+        runDeviceAllocStep(stepIdx, sv, state);
+      }
+      sv.preparedEarly = false;
+      if (launches) {
+        prepareSetupBatch(state, stepIdx);
+      }
+      ownDerivedViews(sv, program, state);
       run.lastExecStep = stepIdx;
       sampleRunAhead(state);
       finishStep(
@@ -1193,15 +1660,17 @@ void CompositeInvocation::executeBound(ExecutionState& state) {
           setupBefore,
           gridChoices);
       if (sv.fetchEnd > sv.fetchBegin) {
-        state.stream->deviceToHostAsync(
-            pinnedBase + sv.fetchBegin,
-            deviceBase + sv.fetchBegin,
-            sv.fetchEnd - sv.fetchBegin);
         if (sv.fetchDone == nullptr) {
           sv.fetchDone = std::make_shared<facebook::velox::wave::Event>(
               /*withTime=*/false);
         }
-        sv.fetchDone->record(*state.stream);
+        issueLogged(state, [&state, &sv, pinnedBase, deviceBase]() {
+          state.stream->deviceToHostAsync(
+              pinnedBase + sv.fetchBegin,
+              deviceBase + sv.fetchBegin,
+              sv.fetchEnd - sv.fetchBegin);
+          sv.fetchDone->record(*state.stream);
+        });
       }
       // The counts the device grid read, which bound the next launch.
       if (sv.deviceGrid != nullptr && sv.onDeviceGrid) {
@@ -1212,17 +1681,39 @@ void CompositeInvocation::executeBound(ExecutionState& state) {
               {numLaunches},
               at::TensorOptions().dtype(at::kLong).pinned_memory(true));
         }
-        state.stream->deviceToHostAsync(
-            sv.gridCountsPinned.data_ptr<int64_t>(),
-            sv.deviceGrid->device.data_ptr<int32_t>() +
-                sv.deviceGrid->longsOffset,
-            numLaunches * sizeof(int64_t));
+        issueLogged(state, [&state, &sv, numLaunches]() {
+          state.stream->deviceToHostAsync(
+              sv.gridCountsPinned.data_ptr<int64_t>(),
+              sv.deviceGrid->device.data_ptr<int32_t>() +
+                  sv.deviceGrid->longsOffset,
+              numLaunches * sizeof(int64_t));
+        });
         sv.gridCountsPending = true;
       }
       continue;
     }
     if (state.deviceAllocActive && !sv.deviceFetches.empty()) {
       fetchDeviceValues(state, sv);
+    }
+    if (state.deviceAllocActive && !sv.hostDerives.empty()) {
+      folly::F14FastSet<nativert::ValueId> reads;
+      for (const auto& derive : sv.hostDerives) {
+        reads.insert(derive.reads.begin(), derive.reads.end());
+      }
+      resolvePendingReturns(state, neededPendingStep(state, reads));
+      for (const auto& derive : sv.hostDerives) {
+        // An earlier step's derive made it this execution: its operands may
+        // since have been released.
+        const auto& code = derive.program->code;
+        const auto output = code.derives[derive.derive].output;
+        if (output >= 0 && state.valueTable.valid(output)) {
+          if (derive.frame && !state.frame->getIValue(output).isTensor()) {
+            materializeEntry(state, output, output);
+          }
+          continue;
+        }
+        runDeriveRec(*derive.program, derive.derive, derive.frame, state);
+      }
     }
     {
       auto& collector = *program.collector;
@@ -1231,6 +1722,7 @@ void CompositeInvocation::executeBound(ExecutionState& state) {
       // execution on this thread.
       auto clearDeferred = folly::makeGuard([&state] {
         tDeferredConcats.clear();
+        tDeferredAliases.clear();
         dropDeferredViews(state);
       });
       auto t0 = Clock::now();
@@ -1247,6 +1739,7 @@ void CompositeInvocation::executeBound(ExecutionState& state) {
       materializeStepGroups(
           state, collector, sv, /*afterWait=*/false, run.doTiming);
       finishDeferredConcats(state, /*last=*/false);
+      finishDeferredAliases(state, /*last=*/false);
       finishDeferredViews(state, /*last=*/false);
       int64_t waitUs = 0;
       if (program.numIndependent < numLaunches) {
@@ -1269,6 +1762,7 @@ void CompositeInvocation::executeBound(ExecutionState& state) {
       materializeStepGroups(
           state, collector, sv, /*afterWait=*/true, run.doTiming);
       finishDeferredConcats(state, /*last=*/true);
+      finishDeferredAliases(state, /*last=*/true);
       finishDeferredViews(state, /*last=*/true);
       if (run.doTiming) {
         sv.gatherUs = elapsed(t0) - sv.allocUs - waitUs;
