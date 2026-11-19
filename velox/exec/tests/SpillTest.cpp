@@ -17,7 +17,9 @@
 #include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <chrono>
 #include <memory>
+#include <thread>
 
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/RuntimeMetrics.h"
@@ -829,6 +831,44 @@ TEST_P(SpillTest, spillStateWithSmallTargetFileSize) {
   hybridSpillStateTest(1, 2, 8, 8, {CompareFlags{false, false}}, 8 * 2);
   hybridSpillStateTest(1, 2, 8, 8, {CompareFlags{false, true}}, 8 * 2);
   hybridSpillStateTest(1, 2, 8, 8, {}, 8 * 2);
+}
+
+// Buffered writes may finish uploading during close.
+DEBUG_ONLY_TEST_P(SpillTest, writeTimeIncludesFileClose) {
+  const auto closeDelay = std::chrono::milliseconds(100);
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::serializer::SerializedPageFile::finish",
+      std::function<void(void*)>(
+          [&](void*) { std::this_thread::sleep_for(closeDelay); }));
+
+  auto tempDirectory = TempDirectoryPath::create();
+  SpillState state(
+      [&]() -> const std::string& { return tempDirectory->getPath(); },
+      updateSpilledBytesCb_,
+      "test",
+      {},
+      kGB,
+      0,
+      compressionKind_,
+      std::nullopt,
+      pool(),
+      &spillStats_,
+      "");
+  const SpillPartitionId partitionId{0};
+  state.setPartitionSpilled(partitionId);
+  const auto prevGlobalStats = globalSpillStats();
+  state.appendToPartition(
+      partitionId, makeRowVector({makeFlatVector<int64_t>({1, 2, 3})}));
+  ASSERT_EQ(state.finish(partitionId).size(), 1);
+
+  ASSERT_EQ(spillStats_.spillWrites, 1);
+  ASSERT_GE(
+      spillStats_.spillWriteTimeNanos,
+      std::chrono::nanoseconds(closeDelay).count());
+  ASSERT_GE(
+      globalSpillStats().spillWriteTimeNanos -
+          prevGlobalStats.spillWriteTimeNanos,
+      spillStats_.spillWriteTimeNanos);
 }
 
 TEST_P(SpillTest, spillPartitionId) {
