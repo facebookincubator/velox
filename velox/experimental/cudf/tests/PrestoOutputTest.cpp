@@ -17,8 +17,11 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfPrestoOutput.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
+#include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/compression/Compression.h"
@@ -27,6 +30,7 @@
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/DefaultOutputBufferManager.h"
+#include "velox/exec/FilterProject.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/SerializedPage.h"
 #include "velox/exec/Task.h"
@@ -38,6 +42,10 @@
 #include "velox/serializers/PrestoSerializerSerializationUtils.h"
 #include "velox/vector/VectorStream.h"
 
+#include <cudf/column/column.hpp>
+#include <cudf/copying.hpp>
+#include <cudf/null_mask.hpp>
+#include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
 #include <cudf/utilities/pinned_memory.hpp>
 
@@ -45,6 +53,7 @@
 #include <rmm/resource_ref.hpp>
 
 #include <cuda/stream>
+#include <cuda_runtime_api.h>
 
 #include <fmt/format.h>
 #include <folly/ScopeGuard.h>
@@ -128,6 +137,133 @@ class CountingPinnedResource {
  private:
   rmm::host_device_async_resource_ref upstream_;
   std::shared_ptr<std::atomic<int64_t>> live_;
+};
+
+/// Passes its GPU input on with the rows ['begin', 'end') of every strings
+/// column set to null. Only the null mask changes, so the null rows keep the
+/// bytes of their strings, which cuDF allows in a column.
+class NullMaskedStrings : public cudf_velox::CudfOperatorBase {
+ public:
+  NullMaskedStrings(
+      int32_t operatorId,
+      DriverCtx* ctx,
+      const core::PlanNodePtr& planNode,
+      cudf::size_type begin,
+      cudf::size_type end)
+      : CudfOperatorBase(
+            operatorId,
+            ctx,
+            planNode->outputType(),
+            planNode->id(),
+            "NullMaskedStrings"),
+        begin_(begin),
+        end_(end) {}
+
+  bool needsInput() const override {
+    return !noMoreInput_ && input_ == nullptr;
+  }
+
+  BlockingReason isBlocked(ContinueFuture* /*future*/) override {
+    return BlockingReason::kNotBlocked;
+  }
+
+  bool isFinished() override {
+    return noMoreInput_ && input_ == nullptr;
+  }
+
+ protected:
+  void doAddInput(RowVectorPtr input) override {
+    input_ = std::move(input);
+  }
+
+  RowVectorPtr doGetOutput() override {
+    if (input_ == nullptr) {
+      return nullptr;
+    }
+    auto input = std::dynamic_pointer_cast<cudf_velox::CudfVector>(input_);
+    VELOX_CHECK_NOT_NULL(input);
+    const auto stream = input->stream();
+    const auto mr = cudf_velox::get_output_mr();
+    const auto numRows = input->size();
+    auto columns = input->release()->release();
+    for (auto& column : columns) {
+      if (column->type().id() != cudf::type_id::STRING) {
+        continue;
+      }
+      auto mask = cudf::create_null_mask(
+          numRows,
+          cudf::mask_state::ALL_VALID,
+          stream,
+          cudf::memory_resources{mr, mr});
+      cudf::set_null_mask(
+          reinterpret_cast<cudf::bitmask_type*>(mask.data()),
+          begin_,
+          end_,
+          false,
+          stream);
+      column->set_null_mask(std::move(mask), end_ - begin_);
+      VELOX_CHECK(
+          cudf::has_nonempty_nulls(column->view(), stream),
+          "The null strings must keep their bytes");
+    }
+    auto output = std::make_shared<cudf_velox::CudfVector>(
+        input_->pool(),
+        input_->type(),
+        numRows,
+        std::make_unique<cudf::table>(std::move(columns)),
+        stream);
+    input_ = nullptr;
+    return output;
+  }
+
+ private:
+  const cudf::size_type begin_;
+  const cudf::size_type end_;
+};
+
+/// Replaces a FilterProject with NullMaskedStrings. Registered ahead of the
+/// built-in adapter of FilterProject.
+class NullMaskedStringsAdapter : public cudf_velox::OperatorAdapter {
+ public:
+  NullMaskedStringsAdapter(cudf::size_type begin, cudf::size_type end)
+      : cudf_velox::OperatorAdapter("NullMaskedStrings"),
+        begin_(begin),
+        end_(end) {}
+
+  bool canHandle(const Operator* op) const override {
+    return dynamic_cast<const FilterProject*>(op) != nullptr;
+  }
+
+  bool canRunOnGPU(
+      const Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      DriverCtx* /*ctx*/) const override {
+    return true;
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<Operator>> createReplacements(
+      const Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      DriverCtx* ctx,
+      int32_t operatorId) const override {
+    std::vector<std::unique_ptr<Operator>> result;
+    result.push_back(
+        std::make_unique<NullMaskedStrings>(
+            operatorId, ctx, planNode, begin_, end_));
+    return result;
+  }
+
+ private:
+  const cudf::size_type begin_;
+  const cudf::size_type end_;
 };
 
 /// The cuDF Hive fixture registers cuDF with CPU fallback disabled and the
@@ -312,6 +448,17 @@ class PrestoOutputTest
         ++sequence;
         onPage(std::move(page));
       }
+    }
+  }
+
+  /// Waits until a driver of 'task' is blocked on the consumer.
+  void waitForConsumerBlock(const Task& task) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (task.taskStats().numBlockedDrivers.count(
+               BlockingReason::kWaitForConsumer) == 0) {
+      ASSERT_LT(std::chrono::steady_clock::now(), deadline);
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
   }
 
@@ -773,6 +920,46 @@ TEST_F(PrestoOutputTest, slicedInput) {
   assertEqualVectors(concat(inputs)->slice(13, 1'496), concat(run.pages()));
 }
 
+TEST_F(PrestoOutputTest, nullStringsWithBytes) {
+  // A null string may keep its bytes in a cuDF column. A Presto page repeats
+  // the previous offset for a null row, so the page holds the bytes of the
+  // non-null rows only, as the page of the CPU path does.
+  constexpr vector_size_t kRows = 1'024;
+  constexpr vector_size_t kNullBegin = 100;
+  constexpr vector_size_t kNullEnd = 357;
+  cudf_velox::OperatorAdapterRegistry::getInstance().registerAdapterFront(
+      std::make_unique<NullMaskedStringsAdapter>(kNullBegin, kNullEnd));
+
+  auto makeStrings = [&](std::function<bool(vector_size_t)> isNullAt) {
+    return makeFlatVector<StringView>(
+        kRows,
+        [&](auto row) {
+          stringBuffer_ =
+              fmt::format("row-{}-{}", row, std::string(row % 23, 'y'));
+          return StringView(stringBuffer_);
+        },
+        isNullAt);
+  };
+  auto keys = makeFlatVector<int64_t>(kRows, folly::identity);
+  auto input = makeRowVector({"k", "v"}, {keys, makeStrings(nullptr)});
+  auto expected =
+      makeRowVector({"k", "v"}, {keys, makeStrings([](auto row) {
+                                   return row >= kNullBegin && row < kNullEnd;
+                                 })});
+
+  core::PlanNodeId outputId;
+  PlanBuilder builder;
+  builder.values({input});
+  auto plan = passThrough(builder)
+                  .partitionedOutput({}, 1)
+                  .capturePlanNodeId(outputId)
+                  .planNode();
+  // One page of a multiple of 8 rows on both paths: the same bytes.
+  auto run = assertSameRowsAsCpuPath(plan, outputId);
+  ASSERT_EQ(run.pages().size(), 1);
+  assertEqualVectors(expected, run.pages()[0]);
+}
+
 TEST_F(PrestoOutputTest, eagerFlushUnderPartialLimit) {
   // A small partial limit makes the output flush every batch, so each GPU
   // batch becomes its own page although all fit in one.
@@ -923,6 +1110,53 @@ TEST_F(PrestoOutputTest, consumerBackpressure) {
           static_cast<int64_t>(maxBytesPerFetch_) + kMaxPage);
 }
 
+TEST_F(PrestoOutputTest, deviceMemoryWhileBlocked) {
+  // The values of the non-null rows are compacted for one wave of pages at a
+  // time. Blocked on the consumer, the operator holds the batch and the pages
+  // of a wave on the device, with no compacted copy of the batch.
+  constexpr vector_size_t kRows = 400'000;
+  constexpr int32_t kNumColumns = 4;
+  constexpr int64_t kPageBytes = 64 << 10;
+  // A wave holds at most 32 pages, and a page exceeds kPageBytes by less than
+  // one row plus its headers.
+  constexpr int64_t kMaxWaveBytes = 32 * (kPageBytes + 2'048);
+  std::vector<VectorPtr> columns;
+  for (int32_t i = 0; i < kNumColumns; ++i) {
+    columns.push_back(
+        makeFlatVector<int64_t>(
+            kRows, [i](auto row) { return row * (i + 1LL); }, nullEvery(10)));
+  }
+  auto input = makeRowVector(columns);
+  PlanBuilder builder;
+  builder.values({input});
+  auto plan = passThrough(builder).partitionedOutput({}, 1).planNode();
+
+  const auto bytesBefore = cudf_velox::cudfAllocatedBytes();
+  auto task = makeTask(
+      plan,
+      {{cudf_velox::CudfConfig::kCudfPrestoOutputPageBytes,
+        std::to_string(kPageBytes)},
+       {core::QueryConfig::kMaxOutputBufferSize, std::to_string(256 << 10)}});
+  task->start(1);
+  waitForConsumerBlock(*task);
+  const auto bytesHeld = cudf_velox::cudfAllocatedBytes() - bytesBefore;
+  // The batch has 8 bytes and a validity bit per value; cuDF pads a validity
+  // mask to 64 bytes.
+  const int64_t batchBytes = kNumColumns *
+      (kRows * sizeof(int64_t) + bits::roundUp(bits::nbytes(kRows), 64));
+  EXPECT_GE(bytesHeld, batchBytes);
+  EXPECT_LE(bytesHeld, batchBytes + kMaxWaveBytes);
+
+  std::vector<RowVectorPtr> pages;
+  const auto rowType = asRowType(plan->outputType());
+  serializer::presto::PrestoVectorSerde::PrestoOptions options;
+  drain(*task, 0, [&](std::unique_ptr<folly::IOBuf> page) {
+    pages.push_back(deserialize(std::move(page), rowType, options));
+  });
+  ASSERT_TRUE(waitForTaskCompletion(task.get(), 10'000'000));
+  assertEqualVectors(input, concat(pages));
+}
+
 TEST_F(PrestoOutputTest, abortWhileBlocked) {
   // The task is aborted while pages wait in the full output buffer and in the
   // operator; all pinned memory comes back.
@@ -956,6 +1190,64 @@ TEST_F(PrestoOutputTest, abortWhileBlocked) {
   task.reset();
   waitForAllTasksToBeDeleted();
   EXPECT_EQ(pinned.live(), 0);
+}
+
+TEST_F(PrestoOutputTest, pagesFreedOnConsumerThread) {
+  // The consumer drops the last reference to a page on a thread of its own,
+  // an HTTP thread in Prestissimo, which has not bound cuDF's device. Handing
+  // the page back to the pinned pool calls CUDA, which uses device 0 on such
+  // a thread unless the release binds cuDF's device first.
+  int numDevices = 0;
+  ASSERT_EQ(cudaSuccess, cudaGetDeviceCount(&numDevices));
+  if (numDevices < 2) {
+    GTEST_SKIP() << "Requires two GPUs";
+  }
+  int originalDevice = -1;
+  ASSERT_EQ(cudaSuccess, cudaGetDevice(&originalDevice));
+  const int cudfDevice = numDevices - 1;
+  cudf_velox::unregisterCudf();
+  SCOPE_EXIT {
+    cudf_velox::unregisterCudf();
+    EXPECT_EQ(cudaSuccess, cudaSetDevice(originalDevice));
+    cudf_velox::registerCudf();
+  };
+  ASSERT_EQ(cudaSuccess, cudaSetDevice(cudfDevice));
+  cudf_velox::registerCudf();
+
+  CountingPinnedResource pinned(cudf::get_pinned_memory_resource());
+  const auto previous = cudf::set_pinned_memory_resource(pinned);
+  auto restore =
+      folly::makeGuard([&] { cudf::set_pinned_memory_resource(previous); });
+
+  auto input = makeFlatRows(1'000, 29, true);
+  core::PlanNodeId outputId;
+  PlanBuilder builder;
+  builder.values({input});
+  auto plan = passThrough(builder)
+                  .partitionedOutput({}, 1)
+                  .capturePlanNodeId(outputId)
+                  .planNode();
+  auto task = makeTask(plan, {});
+  task->start(1);
+  // The pages outlive the output buffer and the task.
+  std::vector<std::unique_ptr<folly::IOBuf>> pages;
+  drain(*task, 0, [&](std::unique_ptr<folly::IOBuf> page) {
+    pages.push_back(std::move(page));
+  });
+  ASSERT_TRUE(waitForTaskCompletion(task.get(), 10'000'000));
+  EXPECT_EQ(
+      operatorTypes(*task, outputId),
+      std::set<std::string>{"CudfPrestoOutput"});
+  ASSERT_GT(pinned.live(), 0);
+
+  int consumerDevice = -1;
+  std::thread consumer([&] {
+    pages.clear();
+    EXPECT_EQ(cudaSuccess, cudaGetDevice(&consumerDevice));
+  });
+  consumer.join();
+  EXPECT_EQ(pinned.live(), 0);
+  EXPECT_EQ(consumerDevice, cudfDevice);
 }
 
 TEST_F(PrestoOutputTest, runtimeStats) {

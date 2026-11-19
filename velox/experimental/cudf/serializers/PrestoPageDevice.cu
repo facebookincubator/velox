@@ -160,6 +160,15 @@ __global__ void stringOffsetsKernel(
   }
 }
 
+// Whether a bit of a cuDF validity mask is set.
+struct IsValid {
+  const cudf::bitmask_type* mask;
+
+  __device__ bool operator()(cudf::size_type bit) const {
+    return cudf::bit_is_set(mask, bit);
+  }
+};
+
 // One of mul, div is 1. Flags a product outside int64.
 struct ToMillis {
   int64_t mul;
@@ -445,6 +454,63 @@ std::vector<int64_t> device::gatherStringOffsets(
       out.data());
   return cudf::detail::make_std_vector(
       cudf::device_span<int64_t const>{out.data(), out.size()}, stream);
+}
+
+namespace {
+
+template <typename T>
+void compactValid(
+    const void* src,
+    const cudf::bitmask_type* mask,
+    int64_t firstBit,
+    int32_t numRows,
+    void* dst,
+    cuda::stream_ref stream) {
+  // cub leaves the number of values on the device, where thrust::copy_if
+  // would wait for it. Nothing reads it: the caller has the null count.
+  auto mr = get_temp_mr();
+  rmm::device_scalar<int32_t> numValues(stream, mr);
+  CUDF_CUDA_TRY(
+      cub::DeviceSelect::FlaggedIf(
+          static_cast<const T*>(src),
+          cuda::counting_iterator<cudf::size_type>(
+              static_cast<cudf::size_type>(firstBit)),
+          static_cast<T*>(dst),
+          numValues.data(),
+          numRows,
+          IsValid{mask},
+          cubEnv(stream, mr)));
+  CUDF_CHECK_CUDA(stream.get());
+}
+
+} // namespace
+
+void device::compactValidValues(
+    const void* src,
+    int32_t width,
+    const cudf::bitmask_type* mask,
+    int64_t firstBit,
+    int32_t numRows,
+    void* dst,
+    cuda::stream_ref stream) {
+  if (numRows == 0) {
+    return;
+  }
+  switch (width) {
+    case 1:
+      return compactValid<uint8_t>(src, mask, firstBit, numRows, dst, stream);
+    case 2:
+      return compactValid<uint16_t>(src, mask, firstBit, numRows, dst, stream);
+    case 4:
+      return compactValid<uint32_t>(src, mask, firstBit, numRows, dst, stream);
+    case 8:
+      return compactValid<uint64_t>(src, mask, firstBit, numRows, dst, stream);
+    case 16:
+      return compactValid<unsigned __int128>(
+          src, mask, firstBit, numRows, dst, stream);
+    default:
+      CUDF_UNREACHABLE("PrestoPageDevice.cpp checks the width");
+  }
 }
 
 bool device::timestampsToMillis(

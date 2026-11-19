@@ -55,6 +55,10 @@ namespace facebook::velox::cudf_velox {
 /// manager has a Presto output stream listener, as the pages of
 /// exec::PartitionedOutput do.
 ///
+/// The pages are laid out on the device a wave at a time. Besides the batch
+/// being serialized, the device holds the pages of one wave and, while that
+/// wave is laid out, the compacted and converted values of its rows.
+///
 /// The pages are copied into pinned memory from cuDF's pinned memory resource
 /// in batches of at most kPagesPerHostBatch pages and max_output_buffer_size
 /// bytes, or one page when a page is larger, so a driver holds at most that
@@ -142,6 +146,9 @@ class CudfPrestoOutput : public CudfOperatorBase {
   // A batch of pages that share one device buffer.
   struct Wave {
     rmm::device_buffer data;
+    // The compacted and converted values the layout of the wave reads. Empty
+    // once the layout has run.
+    std::vector<rmm::device_buffer> denseValues;
     std::vector<PageRange> pages;
     // The small fields of the pages: page headers, encoding names, position
     // counts, has-nulls bytes and string byte counts.
@@ -159,6 +166,14 @@ class CudfPrestoOutput : public CudfOperatorBase {
 
   // Turns the pending inputs into a Serializer over one table.
   void startSerializer();
+
+  // Returns the values of a fixed-width column that the pages ['firstPage',
+  // 'lastPage') of the current Serializer hold: those of the non-null rows,
+  // converted to what the Presto block carries. They are the column's own
+  // values unless the rows have nulls or the type needs conversion; the copy
+  // made then goes into 'wave', so it is as large as the wave at most.
+  const uint8_t*
+  waveValues(size_t columnIndex, size_t firstPage, size_t lastPage, Wave& wave);
 
   // Lays out the next wave of pages of the current Serializer on the device.
   void buildNextWave();

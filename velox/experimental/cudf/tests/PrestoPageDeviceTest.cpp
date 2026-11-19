@@ -222,6 +222,68 @@ TEST_F(PrestoPageDeviceTest, nullBytes) {
   }
 }
 
+TEST_F(PrestoPageDeviceTest, compactValidValues) {
+  constexpr int64_t kNumBits = 200;
+  auto valid = [](int64_t bit) { return bit % 3 != 0 && bit != 77; };
+  auto mask = toDevice(makeMask(kNumBits, valid));
+  struct Range {
+    int64_t firstBit;
+    int32_t numRows;
+  };
+  const std::vector<Range> ranges = {
+      // Crosses two mask words and starts inside one.
+      {37, 70},
+      {0, 8},
+      // The last bits of the mask.
+      {191, 9},
+      {0, kNumBits},
+      // Only null rows, and no rows.
+      {77, 1},
+      {40, 0},
+  };
+  // The value of a row is its mask bit plus one, repeated in every byte, so a
+  // value of any width tells the row it came from.
+  auto check = [&](auto zero) {
+    using T = decltype(zero);
+    SCOPED_TRACE(testing::Message() << "width = " << sizeof(T));
+    std::vector<T> values(kNumBits);
+    for (int64_t i = 0; i < kNumBits; ++i) {
+      std::memset(&values[i], static_cast<int>(i + 1), sizeof(T));
+    }
+    auto src = toDevice(values);
+    for (const auto& range : ranges) {
+      SCOPED_TRACE(
+          testing::Message()
+          << "rows " << range.firstBit << " + " << range.numRows);
+      // The value after the last one must stay as it is.
+      std::vector<T> expected;
+      for (int32_t row = 0; row < range.numRows; ++row) {
+        if (valid(range.firstBit + row)) {
+          expected.push_back(values[range.firstBit + row]);
+        }
+      }
+      expected.push_back(static_cast<T>(~zero));
+      cuda::device_buffer<T> dst(stream_, mr_, expected.size(), cuda::no_init);
+      CUDF_CUDA_TRY(cudaMemsetAsync(
+          dst.data(), 0xff, dst.size() * sizeof(T), stream_.get()));
+      detail::compactValidValues(
+          src.data() + range.firstBit,
+          sizeof(T),
+          mask.data(),
+          range.firstBit,
+          range.numRows,
+          dst.data(),
+          stream_);
+      EXPECT_TRUE(toHost(dst) == expected);
+    }
+  };
+  check(uint8_t{0});
+  check(uint16_t{0});
+  check(uint32_t{0});
+  check(uint64_t{0});
+  check(static_cast<unsigned __int128>(0));
+}
+
 TEST_F(PrestoPageDeviceTest, stringOffsets) {
   auto offsets32 = toDevice(offsets32_);
   auto offsets64 = toDevice(offsets64_);
@@ -308,6 +370,20 @@ TEST_F(PrestoPageDeviceTest, alignmentAndArgumentChecks) {
   VELOX_ASSERT_THROW(
       detail::decimalsToJava(i128Shifted, 2, i128, stream_),
       "'src' must be 16-byte aligned");
+
+  // A compaction copies whole values of a width the Presto blocks have.
+  auto mask = toDevice(makeMask(32, [](int64_t) { return true; }));
+  VELOX_ASSERT_THROW(
+      detail::compactValidValues(
+          i64, 8, mask.data(), 0, 2, i64Shifted, stream_),
+      "'dst' must be aligned to 'width'");
+  VELOX_ASSERT_THROW(
+      detail::compactValidValues(
+          i64Shifted, 8, mask.data(), 0, 2, i64, stream_),
+      "'src' must be aligned to 'width'");
+  VELOX_ASSERT_THROW(
+      detail::compactValidValues(i64, 3, mask.data(), 0, 2, i64 + 2, stream_),
+      "'width' must be 1, 2, 4, 8 or 16: 3");
 
   // The offsets of a strings column are INT32 or INT64.
   auto offsets = toDevice(std::vector<int32_t>{0, 1, 2});

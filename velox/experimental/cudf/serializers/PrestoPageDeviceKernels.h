@@ -44,6 +44,16 @@ std::vector<int64_t> gatherStringOffsets(
     cudf::host_span<const int64_t> rows,
     cuda::stream_ref stream);
 
+/// compactValidValues() without the width and alignment checks.
+void compactValidValues(
+    const void* src,
+    int32_t width,
+    const cudf::bitmask_type* mask,
+    int64_t firstBit,
+    int32_t numRows,
+    void* dst,
+    cuda::stream_ref stream);
+
 /// timestampsToMillis() with the scale resolved: dst[i] = floor(src[i] * mul /
 /// div), where one of 'mul' and 'div' is 1 and both are positive.
 bool timestampsToMillis(

@@ -112,6 +112,22 @@ std::vector<int64_t> gatherStringOffsets(
     cudf::host_span<const int64_t> rows,
     cuda::stream_ref stream);
 
+/// Copies the values of the non-null rows of a row range to 'dst', next to
+/// each other and in row order, as a Presto block holds them. A value has
+/// 'width' bytes: 1, 2, 4, 8 or 16. 'src' holds the value of the first row of
+/// the range, and bit 'firstBit' of the cuDF validity 'mask' (1 = valid) is
+/// that row's. 'dst' has room for the non-null rows, whose number the caller
+/// knows from the null count. 'src' and 'dst' are aligned to 'width' and do
+/// not overlap. The values of the null rows do not matter.
+void compactValidValues(
+    const void* src,
+    int32_t width,
+    const cudf::bitmask_type* mask,
+    int64_t firstBit,
+    int32_t numRows,
+    void* dst,
+    cuda::stream_ref stream);
+
 /// Converts timestamps to the milliseconds Presto carries: dst[i] is src[i],
 /// a tick count in the unit of 'timestampType', scaled to milliseconds and
 /// rounded towards negative infinity, as Timestamp::toMillis() rounds.

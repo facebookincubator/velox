@@ -33,7 +33,6 @@
 #include <cudf/detail/utilities/host_vector.hpp>
 #include <cudf/detail/utilities/vector_factories.hpp>
 #include <cudf/null_mask.hpp>
-#include <cudf/stream_compaction.hpp>
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/pinned_memory.hpp>
@@ -48,6 +47,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <numeric>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -120,6 +120,10 @@ struct PageRelease {
 void releasePage(void* data, void* userData) {
   auto* release = static_cast<PageRelease*>(userData);
   try {
+    // The consumer's thread has not bound cuDF's device, and the pinned pool
+    // calls CUDA to take the page back: without the device, CUDA would create
+    // a context on device 0 for the thread.
+    ensureCudaContextForThread();
     release->mr.deallocate_sync(data, release->bytes, kPinnedAlignment);
   } catch (const std::exception& e) {
     LOG(ERROR) << "Failed to free a pinned Presto page: " << e.what();
@@ -139,13 +143,25 @@ void putValue(std::vector<uint8_t>& out, T value) {
 
 // Device layout of one output column of the table being serialized.
 struct CudfPrestoOutput::Column {
+  // What turns the device values of a fixed-width column into the values of
+  // its Presto block.
+  enum class Conversion {
+    kNone,
+    // TIMESTAMP ticks of another unit to milliseconds.
+    kToMillis,
+    // Long decimals to the sign-magnitude values Presto Java reads.
+    kToJavaDecimal,
+  };
+
   std::string_view encodingName;
   // Value size in bytes, 0 for strings.
   int32_t width{0};
-  // Fixed width: values of row 0 on the device; dense valid rows when
-  // 'compacted'.
+  // Fixed width: values of row 0 on the device. Those of null rows are
+  // undefined.
   const uint8_t* values{nullptr};
-  bool compacted{false};
+  Conversion conversion{Conversion::kNone};
+  // The unit of the ticks that kToMillis converts.
+  cudf::type_id timestampType{cudf::type_id::EMPTY};
   // Strings: chars addressed by the absolute cuDF offsets.
   const char* chars{nullptr};
   detail::StringOffsets offsets{};
@@ -153,12 +169,10 @@ struct CudfPrestoOutput::Column {
   const cudf::bitmask_type* mask{nullptr};
   int64_t firstBit{0};
   std::vector<int32_t> pageNulls;
-  std::vector<int64_t> validBefore;
   // Strings: absolute chars offset at each page boundary (numPages + 1).
   std::vector<int64_t> charsBounds;
-  // Owned conversions: a purged strings column, and dense value buffers.
+  // Strings: the column without the bytes of its null rows, when it had some.
   std::unique_ptr<cudf::column> owned;
-  rmm::device_buffer dense;
 
   bool isString() const {
     return width == 0;
@@ -416,50 +430,16 @@ void CudfPrestoOutput::startSerializer() {
           column.width,
           "Unexpected cuDF value width for {}",
           type->toString());
-      const uint8_t* raw = col.head<uint8_t>() +
+      column.values = col.head<uint8_t>() +
           static_cast<int64_t>(col.offset()) * column.width;
-      int32_t numValues = numRows;
-      if (col.null_count() > 0) {
-        // Presto blocks hold the values of the non-null rows only. The values
-        // of null rows are undefined, so nothing below may read them.
-        numValues = numRows - col.null_count();
-        auto compacted =
-            cudf::drop_nulls(cudf::table_view{{col}}, {0}, stream, mr);
-        VELOX_CHECK_EQ(compacted->num_rows(), numValues);
-        column.dense = std::move(*compacted->release().front()->release().data);
-        raw = static_cast<const uint8_t*>(column.dense.data());
-        column.compacted = true;
-      }
-      // Converted values go into the compacted copy in place, or into a copy
-      // of their own.
-      auto converted = [&]() -> uint8_t* {
-        if (!column.compacted) {
-          column.dense = rmm::device_buffer(
-              static_cast<size_t>(numValues) * column.width, stream, mr);
-        }
-        return static_cast<uint8_t*>(column.dense.data());
-      };
       if (type->kind() == TypeKind::TIMESTAMP &&
           col.type().id() != cudf::type_id::TIMESTAMP_MILLISECONDS) {
-        auto* millis = reinterpret_cast<int64_t*>(converted());
-        VELOX_USER_CHECK(
-            detail::timestampsToMillis(
-                reinterpret_cast<const int64_t*>(raw),
-                numValues,
-                col.type().id(),
-                millis,
-                stream),
-            "Could not convert the TIMESTAMP values of {} to milliseconds",
-            outputType_->nameOf(i));
-        raw = reinterpret_cast<const uint8_t*>(millis);
+        column.conversion = Column::Conversion::kToMillis;
+        column.timestampType = col.type().id();
       } else if (type->isLongDecimal()) {
-        auto* java = reinterpret_cast<__int128_t*>(converted());
-        detail::decimalsToJava(
-            reinterpret_cast<const __int128_t*>(raw), numValues, java, stream);
-        raw = reinterpret_cast<const uint8_t*>(java);
+        column.conversion = Column::Conversion::kToJavaDecimal;
       }
       fixedBitsPerRow += 8 * column.width;
-      column.values = raw;
     }
 
     if (col.null_count() > 0) {
@@ -492,14 +472,6 @@ void CudfPrestoOutput::startSerializer() {
       column.pageNulls =
           cudf::segmented_null_count(column.mask, ranges, stream);
       VELOX_CHECK_EQ(column.pageNulls.size(), numPages);
-      if (!column.isString()) {
-        column.validBefore.resize(numPages);
-        int64_t valid = 0;
-        for (size_t p = 0; p < numPages; ++p) {
-          column.validBefore[p] = valid;
-          valid += (bounds[p + 1] - bounds[p]) - column.pageNulls[p];
-        }
-      }
     }
     if (column.isString()) {
       column.charsBounds =
@@ -536,6 +508,68 @@ void CudfPrestoOutput::startSerializer() {
   }
 
   serializer_ = std::move(serializer);
+}
+
+const uint8_t* CudfPrestoOutput::waveValues(
+    size_t columnIndex,
+    size_t firstPage,
+    size_t lastPage,
+    Wave& wave) {
+  const auto& serializer = *serializer_;
+  const auto& column = serializer.columns[columnIndex];
+  auto stream = serializer.stream;
+
+  const int64_t firstRow = serializer.bounds[firstPage];
+  const int64_t numRows = serializer.bounds[lastPage] - firstRow;
+  int64_t numNulls = 0;
+  if (column.mask != nullptr) {
+    numNulls = std::accumulate(
+        column.pageNulls.begin() + firstPage,
+        column.pageNulls.begin() + lastPage,
+        int64_t{0});
+  }
+  const auto numValues = static_cast<int32_t>(numRows - numNulls);
+  const uint8_t* values = column.values + firstRow * column.width;
+  const bool converts = column.conversion != Column::Conversion::kNone;
+  if (numValues == 0 || (numNulls == 0 && !converts)) {
+    return values;
+  }
+
+  wave.denseValues.emplace_back(
+      static_cast<size_t>(numValues) * column.width, stream, get_temp_mr());
+  auto* dense = wave.denseValues.back().data();
+  if (numNulls > 0) {
+    // Presto blocks hold the values of the non-null rows only. The values of
+    // null rows are undefined, so the conversions below must not see them.
+    detail::compactValidValues(
+        values,
+        column.width,
+        column.mask,
+        column.firstBit + firstRow,
+        static_cast<int32_t>(numRows),
+        dense,
+        stream);
+    values = static_cast<const uint8_t*>(dense);
+  }
+  // Compacted values are converted in place.
+  if (column.conversion == Column::Conversion::kToMillis) {
+    VELOX_USER_CHECK(
+        detail::timestampsToMillis(
+            reinterpret_cast<const int64_t*>(values),
+            numValues,
+            column.timestampType,
+            static_cast<int64_t*>(dense),
+            stream),
+        "Could not convert the TIMESTAMP values of {} to milliseconds",
+        outputType_->nameOf(columnIndex));
+  } else if (column.conversion == Column::Conversion::kToJavaDecimal) {
+    detail::decimalsToJava(
+        reinterpret_cast<const __int128_t*>(values),
+        numValues,
+        static_cast<__int128_t*>(dense),
+        stream);
+  }
+  return static_cast<const uint8_t*>(dense);
 }
 
 void CudfPrestoOutput::buildNextWave() {
@@ -591,6 +625,16 @@ void CudfPrestoOutput::buildNextWave() {
     }
   };
 
+  // The values the fixed-width columns have for the rows of the wave, and how
+  // many of them the pages laid out so far have taken.
+  std::vector<const uint8_t*> values(numColumns, nullptr);
+  std::vector<int64_t> numValuesTaken(numColumns, 0);
+  for (size_t i = 0; i < numColumns; ++i) {
+    if (!serializer.columns[i].isString()) {
+      values[i] = waveValues(i, first, last, wave);
+    }
+  }
+
   size_t waveOffset = 0;
   for (size_t p = first; p < last; ++p) {
     const auto begin = serializer.bounds[p];
@@ -612,7 +656,8 @@ void CudfPrestoOutput::buildNextWave() {
     putValue<int32_t>(fieldBytes, static_cast<int32_t>(numColumns));
     pos += kHeaderSize + sizeof(int32_t);
 
-    for (const auto& column : serializer.columns) {
+    for (size_t i = 0; i < numColumns; ++i) {
+      const auto& column = serializer.columns[i];
       const auto& name = column.encodingName;
       putValue<int32_t>(fieldBytes, static_cast<int32_t>(name.size()));
       fieldBytes.insert(fieldBytes.end(), name.begin(), name.end());
@@ -652,14 +697,16 @@ void CudfPrestoOutput::buildNextWave() {
         pos += bytes;
         beginRun(pos);
       } else {
-        const int64_t bytes = static_cast<int64_t>(rows - nulls) * column.width;
+        const int64_t numValues = rows - nulls;
+        const int64_t bytes = numValues * column.width;
         endRun();
         if (bytes > 0) {
-          const uint8_t* src = column.compacted
-              ? column.values + column.validBefore[p] * column.width
-              : column.values + begin * column.width;
-          copies.push_back({src, page + pos, static_cast<size_t>(bytes)});
+          copies.push_back(
+              {values[i] + numValuesTaken[i] * column.width,
+               page + pos,
+               static_cast<size_t>(bytes)});
         }
+        numValuesTaken[i] += numValues;
         pos += bytes;
         beginRun(pos);
       }
@@ -725,6 +772,8 @@ void CudfPrestoOutput::copyPagesToHost() {
     }
     throw;
   }
+  // The layout of the wave has run, so the values it read can go.
+  wave.denseValues.clear();
   for (size_t i = 0; i < batch.size(); ++i) {
     auto& page = batch[i];
     writeHostFields(wave, wave.pages[firstPage + i], page);

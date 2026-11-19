@@ -77,6 +77,29 @@ std::vector<int64_t> gatherStringOffsets(
   return device::gatherStringOffsets(offsets, rows, stream);
 }
 
+void compactValidValues(
+    const void* src,
+    int32_t width,
+    const cudf::bitmask_type* mask,
+    int64_t firstBit,
+    int32_t numRows,
+    void* dst,
+    cuda::stream_ref stream) {
+  VELOX_CHECK(
+      width == 1 || width == 2 || width == 4 || width == 8 || width == 16,
+      "'width' must be 1, 2, 4, 8 or 16: {}",
+      width);
+  VELOX_CHECK_EQ(
+      reinterpret_cast<uintptr_t>(src) % width,
+      0,
+      "'src' must be aligned to 'width'");
+  VELOX_CHECK_EQ(
+      reinterpret_cast<uintptr_t>(dst) % width,
+      0,
+      "'dst' must be aligned to 'width'");
+  device::compactValidValues(src, width, mask, firstBit, numRows, dst, stream);
+}
+
 bool timestampsToMillis(
     const int64_t* src,
     int32_t numRows,
