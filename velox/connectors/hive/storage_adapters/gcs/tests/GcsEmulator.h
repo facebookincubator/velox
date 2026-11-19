@@ -24,7 +24,8 @@
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/storage_adapters/gcs/GcsUtil.h"
-#include "velox/exec/tests/utils/PortUtil.h"
+#include "velox/connectors/hive/storage_adapters/test_common/ServerStartup.h"
+#include "velox/exec/tests/utils/Ports.h"
 
 namespace bp = boost::process;
 namespace gc = google::cloud;
@@ -43,7 +44,7 @@ static std::string_view kLoremIpsum =
 class GcsEmulator : public testing::Environment {
  public:
   GcsEmulator() {
-    const auto portNumber = exec::test::PortUtil::getFreePort();
+    const auto portNumber = exec::test::Ports::findFreePort();
     auto port = std::to_string(portNumber);
     endpoint_ = "http://localhost:" + port;
     std::vector<std::string> names{"python3", "python"};
@@ -73,9 +74,12 @@ class GcsEmulator : public testing::Environment {
           group_);
       if (serverProcess_.valid()) {
         try {
-          exec::test::PortUtil::waitForPort(portNumber, "GcsEmulator", [this] {
-            return serverProcess_.running();
-          });
+          velox::test::ServerStartup::wait(
+              fmt::format("GcsEmulator on port {}", portNumber),
+              [portNumber] {
+                return exec::test::Ports::isListening(portNumber);
+              },
+              [this] { return serverProcess_.running(); });
         } catch (const std::exception&) {
           group_.terminate();
           serverProcess_.wait();

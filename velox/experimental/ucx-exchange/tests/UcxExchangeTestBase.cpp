@@ -17,11 +17,9 @@
 
 #include <fmt/format.h>
 
-#include <limits>
-
 #include "velox/common/memory/Memory.h"
 #include "velox/exec/Exchange.h"
-#include "velox/exec/tests/utils/PortUtil.h"
+#include "velox/exec/tests/utils/Ports.h"
 
 namespace facebook::velox::ucx_exchange {
 
@@ -40,10 +38,8 @@ void UcxExchangeTestEnvironment::initializeExchangeState() {
   // UcxExchangeSource derives the UCX port as the split URL's port + 3, and
   // remoteSplit() advertises splitUrlPort() to match, so the offset must stay
   // below the chosen port.
-  const auto freePort = exec::test::PortUtil::getFreePort();
-  ASSERT_GT(freePort, kSplitUrlPortOffset);
-  ASSERT_LE(freePort, std::numeric_limits<uint16_t>::max());
-  communicatorPort_ = static_cast<uint16_t>(freePort);
+  communicatorPort_ = exec::test::Ports::findFreePort();
+  ASSERT_GT(communicatorPort_, kSplitUrlPortOffset);
 
   queueManager_ = UcxOutputQueueManager::getInstanceRef();
   ContinueFuture future;

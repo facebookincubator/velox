@@ -16,10 +16,10 @@
 
 #include "velox/connectors/hive/storage_adapters/hdfs/tests/HdfsMiniCluster.h"
 
-#include "velox/exec/tests/utils/PortUtil.h"
+#include "velox/connectors/hive/storage_adapters/test_common/ServerStartup.h"
+#include "velox/exec/tests/utils/Ports.h"
 
 #include <filesystem>
-#include <thread>
 
 namespace facebook::velox::filesystems::test {
 void HdfsMiniCluster::start() {
@@ -47,21 +47,14 @@ void HdfsMiniCluster::start() {
   // The NameNode port opens before the DataNode registers, so a write right
   // after the port opens can fail. The minicluster writes the details file
   // once the cluster is active.
-  const auto deadline = std::chrono::steady_clock::now() + kStartTimeout;
-  while (std::chrono::steady_clock::now() < deadline) {
-    if (!serverProcess_->running()) {
-      VELOX_FAIL(
-          "Minicluster process exited, code: {}", serverProcess_->exit_code());
-    }
-    std::error_code ec;
-    if (std::filesystem::file_size(detailsPath_, ec) > 0 && !ec) {
-      return;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  }
-  VELOX_FAIL(
-      "Timed out after {} seconds waiting for Minicluster to start",
-      kStartTimeout.count());
+  velox::test::ServerStartup::wait(
+      "Minicluster",
+      [this] {
+        std::error_code ec;
+        return std::filesystem::file_size(detailsPath_, ec) > 0 && !ec;
+      },
+      [this] { return serverProcess_->running(); },
+      kStartTimeout);
 }
 
 void HdfsMiniCluster::stop() {
@@ -93,7 +86,7 @@ HdfsMiniCluster::HdfsMiniCluster() {
         kMiniClusterExecutableName);
   }
   constexpr auto kHostAddressTemplate = "hdfs://{}:{}";
-  auto ports = facebook::velox::exec::test::PortUtil::getFreePorts(2);
+  auto ports = facebook::velox::exec::test::Ports::findFreePorts(2);
   nameNodePort_ = fmt::format("{}", ports[0]);
   httpPort_ = fmt::format("{}", ports[1]);
   filesystemUrl_ = fmt::format(kHostAddressTemplate, host(), nameNodePort_);

@@ -14,19 +14,18 @@
  * limitations under the License.
  */
 
-#include "velox/exec/tests/utils/PortUtil.h"
+#include "velox/exec/tests/utils/Ports.h"
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include "velox/common/base/Exceptions.h"
-#include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::velox::exec::test {
 
 // Try binding to port. Return false if it couldn't.
-bool tryBind(int port) {
+bool tryBind(uint16_t port) {
   int sock = socket(PF_INET, SOCK_STREAM, 0);
   VELOX_CHECK_NE(sock, -1, "Error while creating socket: {}", errno);
 
@@ -40,7 +39,7 @@ bool tryBind(int port) {
   return result != -1;
 }
 
-TEST(PortUtilTest, ensureAvailablePort) {
+TEST(PortsTest, ensureAvailablePort) {
   const size_t trials = 100;
   const size_t retries = 5;
 
@@ -50,7 +49,7 @@ TEST(PortUtilTest, ensureAvailablePort) {
     bool trialSucceeded = false;
 
     for (size_t j = 0; j < retries; j++) {
-      auto port = PortUtil::getFreePort();
+      auto port = Ports::findFreePort();
       if (tryBind(port)) {
         trialSucceeded = true;
         break;
@@ -63,41 +62,33 @@ TEST(PortUtilTest, ensureAvailablePort) {
   }
 }
 
-TEST(PortUtilTest, uniquePorts) {
+TEST(PortsTest, uniquePorts) {
   const size_t trials = 100;
   const size_t numPorts = 100;
 
   for (size_t i = 0; i < trials; i++) {
-    auto ports = PortUtil::getFreePorts(numPorts);
-    std::unordered_set<int> set(ports.begin(), ports.end());
+    auto ports = Ports::findFreePorts(numPorts);
+    std::unordered_set<uint16_t> set(ports.begin(), ports.end());
     EXPECT_EQ(set.size(), numPorts)
-        << "getFreePorts() returned non-unique ports.";
+        << "findFreePorts() returned non-unique ports.";
   }
 }
 
-TEST(PortUtilTest, waitForPort) {
+TEST(PortsTest, isListening) {
+  const auto port = Ports::findFreePort();
+  EXPECT_FALSE(Ports::isListening(port));
+
   const int sock = socket(AF_INET, SOCK_STREAM, 0);
   ASSERT_NE(sock, -1);
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
-  addr.sin_port = 0;
+  addr.sin_port = htons(port);
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  socklen_t len = sizeof(addr);
-  ASSERT_EQ(::bind(sock, reinterpret_cast<sockaddr*>(&addr), len), 0);
-  ASSERT_EQ(getsockname(sock, reinterpret_cast<sockaddr*>(&addr), &len), 0);
-  const int port = ntohs(addr.sin_port);
-
-  // Bound but not listening.
-  VELOX_ASSERT_THROW(
-      PortUtil::waitForPort(
-          port, "testServer", [] { return true; }, std::chrono::seconds(1)),
-      "Timed out after 1 seconds waiting for testServer to listen on port");
-  VELOX_ASSERT_THROW(
-      PortUtil::waitForPort(port, "testServer", [] { return false; }),
-      "testServer exited before listening on port");
+  ASSERT_EQ(::bind(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)), 0);
+  EXPECT_FALSE(Ports::isListening(port));
 
   ASSERT_EQ(listen(sock, 1), 0);
-  PortUtil::waitForPort(port, "testServer", [] { return true; });
+  EXPECT_TRUE(Ports::isListening(port));
   close(sock);
 }
 

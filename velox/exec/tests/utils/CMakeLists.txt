@@ -36,7 +36,7 @@ add_library(
   TpcdsQueryBuilder.cpp
   VeloxPlanLoader.cpp
   VectorTestUtil.cpp
-  PortUtil.cpp
+  Ports.cpp
   SerializedPageUtil.cpp
 )
 velox_add_test_headers(
@@ -55,6 +55,7 @@ velox_add_test_headers(
   OperatorTestBase.h
   PlanBuilder.h
   PortUtil.h
+  Ports.h
   QueryAssertions.h
   RowContainerTestBase.h
   SerializedPageUtil.h

@@ -155,7 +155,7 @@ set(
   FileExchangeTest.cpp
   CursorTest.cpp
   SplitLifecycleTest.cpp
-  PortUtilTest.cpp
+  PortsTest.cpp
 )
 
 set(

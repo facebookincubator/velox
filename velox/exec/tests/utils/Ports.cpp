@@ -14,21 +14,20 @@
  * limitations under the License.
  */
 
-#include "velox/exec/tests/utils/PortUtil.h"
+#include "velox/exec/tests/utils/Ports.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <memory>
-#include <thread>
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::exec::test {
 namespace {
 
-void getFreePortsImpl(int numPorts, int* ports) {
+void getFreePortsImpl(size_t numPorts, uint16_t* ports) {
   const std::unique_ptr<int[]> sockets(new int[numPorts]);
-  for (int i = 0; i < numPorts; i++) {
+  for (size_t i = 0; i < numPorts; i++) {
     int sock = socket(PF_INET, SOCK_STREAM, 0);
     VELOX_CHECK_NE(sock, -1, "Error while creating socket: {}", errno);
     sockets[i] = sock;
@@ -48,12 +47,27 @@ void getFreePortsImpl(int numPorts, int* ports) {
     ports[i] = ntohs(addr.sin_port);
   }
 
-  for (int i = 0; i < numPorts; i++) {
+  for (size_t i = 0; i < numPorts; i++) {
     close(sockets[i]);
   }
 }
 
-bool isPortReady(int port) {
+} // namespace
+
+std::vector<uint16_t> Ports::findFreePorts(size_t numPorts) {
+  std::vector<uint16_t> ports;
+  ports.resize(numPorts);
+  getFreePortsImpl(numPorts, &ports[0]);
+  return ports;
+}
+
+uint16_t Ports::findFreePort() {
+  uint16_t port;
+  getFreePortsImpl(1, &port);
+  return port;
+}
+
+bool Ports::isListening(uint16_t port) {
   const int sock = socket(AF_INET, SOCK_STREAM, 0);
   if (sock < 0) {
     return false;
@@ -61,49 +75,12 @@ bool isPortReady(int port) {
 
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
-  addr.sin_port = htons(static_cast<uint16_t>(port));
+  addr.sin_port = htons(port);
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  const bool ready =
+  const bool listening =
       ::connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0;
   close(sock);
-  return ready;
-}
-
-} // namespace
-
-std::vector<int> PortUtil::getFreePorts(std::size_t numPorts) {
-  std::vector<int> ports;
-  ports.resize(numPorts);
-  getFreePortsImpl(numPorts, &ports[0]);
-  return ports;
-}
-
-int PortUtil::getFreePort() {
-  int port;
-  getFreePortsImpl(1, &port);
-  return port;
-}
-
-void PortUtil::waitForPort(
-    int port,
-    std::string_view serverName,
-    const std::function<bool()>& isRunning,
-    std::chrono::seconds timeout) {
-  const auto deadline = std::chrono::steady_clock::now() + timeout;
-  while (std::chrono::steady_clock::now() < deadline) {
-    if (!isRunning()) {
-      VELOX_FAIL("{} exited before listening on port {}", serverName, port);
-    }
-    if (isPortReady(port)) {
-      return;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  }
-  VELOX_FAIL(
-      "Timed out after {} seconds waiting for {} to listen on port {}",
-      timeout.count(),
-      serverName,
-      port);
+  return listening;
 }
 
 } // namespace facebook::velox::exec::test

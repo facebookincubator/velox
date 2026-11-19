@@ -16,47 +16,16 @@
 
 #pragma once
 
-#include <chrono>
-#include <functional>
-#include <string_view>
-#include <vector>
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+#include "velox/exec/tests/utils/Ports.h"
 
 namespace facebook::velox::exec::test {
 
-class PortUtil {
- public:
-  static constexpr std::chrono::seconds kWaitForPortTimeout{30};
-
-  /// Find one or more free ports.
-  ///
-  /// Of course, there's no guarantee it won't be snatched by the time you
-  /// actually want to use it, but it is safer than hard coding a port or
-  /// randomly choosing one.
-  ///
-  /// NOTE: If you need multiple free ports, use getFreePorts() rather than
-  /// calling getFreePort() multiple times. The latter may give you a same
-  /// port multiple times, unless you started listening to the provided port
-  /// before calling the function again.
-  static int getFreePort();
-  static std::vector<int> getFreePorts(std::size_t numPorts);
-
-  /// Wait until a server accepts connections on the given port of 127.0.0.1.
-  /// Throws if 'isRunning' returns false first, or if 'timeout' passes.
-  static void waitForPort(
-      int port,
-      std::string_view serverName,
-      const std::function<bool()>& isRunning,
-      std::chrono::seconds timeout = kWaitForPortTimeout);
-};
-
-/// Deprecated: use PortUtil::getFreePort().
+/// Legacy API. Prefer Ports::findFreePort(). Removed once Prestissimo
+/// migrates.
 inline int getFreePort() {
-  return PortUtil::getFreePort();
-}
-
-/// Deprecated: use PortUtil::getFreePorts().
-inline std::vector<int> getFreePorts(std::size_t numPorts) {
-  return PortUtil::getFreePorts(numPorts);
+  return Ports::findFreePort();
 }
 
 } // namespace facebook::velox::exec::test
+#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
