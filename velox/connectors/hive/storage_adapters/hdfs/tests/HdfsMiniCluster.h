@@ -44,8 +44,6 @@ static const std::string kWriteDetailsOption{"-writeDetails"};
 
 class HdfsMiniCluster {
  public:
-  static constexpr std::chrono::seconds kStartTimeout{60};
-
   HdfsMiniCluster();
 
   void start();
@@ -71,6 +69,8 @@ class HdfsMiniCluster {
   }
 
  private:
+  static constexpr std::chrono::seconds kStartTimeout{60};
+
   void setupEnvironment(const std::string& homeDirectory);
 
   std::unique_ptr<::boost::process::child> serverProcess_;
