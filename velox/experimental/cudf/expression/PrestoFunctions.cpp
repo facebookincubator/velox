@@ -141,7 +141,7 @@ constexpr std::string_view kPrestoWhitespace{
 // preceding character, so rtrim('x \x80') returns 'x' where Presto returns
 // 'x \x80'.
 // TODO: Match Presto on invalid UTF-8 by porting stringImpl's byte-level
-// whitespace checks.
+// whitespace checks (https://github.com/facebookincubator/velox/issues/20475).
 class TrimFunction : public CudfFunction {
  public:
   explicit TrimFunction(cudf::strings::side_type side) : side_(side) {
@@ -149,7 +149,7 @@ class TrimFunction : public CudfFunction {
     // stream.
     auto stream = getDefaultStreamForCurrentThread();
     whitespace_ = std::make_unique<cudf::string_scalar>(
-        std::string(kPrestoWhitespace), true, stream, get_temp_mr());
+        kPrestoWhitespace, true, stream, get_temp_mr());
     stream.sync();
   }
 

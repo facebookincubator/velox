@@ -673,7 +673,9 @@ TEST_F(CudfStringExprTest, splitOverlappingDelimiter) {
 }
 
 TEST_F(CudfStringExprTest, splitLongStrings) {
-  // Keep long strings in their own batch so the average exceeds 120 bytes.
+  // cuDF's split_record leaves its per-string kernel for the global-scan
+  // tokenizer once the average string reaches AVG_CHAR_BYTES_THRESHOLD (120
+  // bytes). Keep long strings in their own batch so they take that path.
   const auto rowType = ROW("c0", VARCHAR());
   const std::string part(128, 'a');
   const auto input = makeRowVector(
@@ -703,7 +705,9 @@ TEST_F(CudfStringExprTest, splitEligibility) {
         "split(c0, ',', 1)",
         "split(c0, ',', 0)",
         "split(c0, ',', -1)",
-        "split(c0, ',', 2147483648)"}) {
+        "split(c0, ',', 2147483648)",
+        "split(c0, cast(null as varchar))",
+        "split(c0, ',', cast(null as bigint))"}) {
     SCOPED_TRACE(sql);
     EXPECT_FALSE(canRunOnGpu(sql));
   }
