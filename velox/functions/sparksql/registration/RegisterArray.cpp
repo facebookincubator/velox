@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/expression/ExprRewriteRegistry.h"
+#include "velox/functions/lib/ArrayContains.h"
 #include "velox/functions/lib/ArrayRemoveNullFunction.h"
 #include "velox/functions/lib/ArrayShuffle.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
@@ -39,7 +40,11 @@ namespace facebook::velox::functions {
 void registerSparkArrayFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_reduce, prefix + "aggregate");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_constructor, prefix + "array");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_contains, prefix + "array_contains");
+  // Spark compares nulls nested in complex types as values.
+  exec::registerVectorFunction(
+      prefix + "array_contains",
+      arrayContainsSignatures(),
+      makeArrayContains(/*throwOnNestedNull=*/false));
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_distinct, prefix + "array_distinct");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_except, prefix + "array_except");
   VELOX_REGISTER_VECTOR_FUNCTION(
