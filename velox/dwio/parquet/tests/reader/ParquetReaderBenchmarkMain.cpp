@@ -146,6 +146,38 @@ PARQUET_BENCHMARKS_NO_FILTER(ARRAY(BIGINT()), List);
 
 // TODO: Add all data types
 
+// Plain pages decode values through fixedWidthScan. With the dictionary
+// enabled, the random values overflow the dictionary page and most pages of
+// each row group fall back to plain.
+#define PARQUET_IS_NOT_NULL_BENCHMARKS(_type_, _name_, _null_) \
+  BENCHMARK_NAMED_PARAM(                                       \
+      runIsNotNull,                                            \
+      _name_##_IsNotNull_Nulls_##_null_##_next_10k_dict,       \
+      #_name_,                                                 \
+      _type_,                                                  \
+      _null_,                                                  \
+      10'000,                                                  \
+      false);                                                  \
+  BENCHMARK_NAMED_PARAM(                                       \
+      runIsNotNull,                                            \
+      _name_##_IsNotNull_Nulls_##_null_##_next_10k_plain,      \
+      #_name_,                                                 \
+      _type_,                                                  \
+      _null_,                                                  \
+      10'000,                                                  \
+      true);
+
+#define PARQUET_IS_NOT_NULL_BENCHMARKS_NULLS(_type_, _name_) \
+  PARQUET_IS_NOT_NULL_BENCHMARKS(_type_, _name_, 0)          \
+  PARQUET_IS_NOT_NULL_BENCHMARKS(_type_, _name_, 20)         \
+  PARQUET_IS_NOT_NULL_BENCHMARKS(_type_, _name_, 50)         \
+  BENCHMARK_DRAW_LINE();
+
+PARQUET_IS_NOT_NULL_BENCHMARKS_NULLS(INTEGER(), Integer);
+PARQUET_IS_NOT_NULL_BENCHMARKS_NULLS(BIGINT(), BigInt);
+PARQUET_IS_NOT_NULL_BENCHMARKS_NULLS(REAL(), Real);
+PARQUET_IS_NOT_NULL_BENCHMARKS_NULLS(DOUBLE(), Double);
+
 int main(int argc, char** argv) {
   folly::Init init{&argc, &argv};
   memory::MemoryManager::initialize(memory::MemoryManager::Options{});

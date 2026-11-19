@@ -104,6 +104,15 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::follybenchmark
   )
 
+  add_executable(velox_dwio_common_decoder_util_benchmark DecoderUtilBenchmark.cpp)
+  target_link_libraries(
+    velox_dwio_common_decoder_util_benchmark
+    velox_dwio_common
+    velox_type
+    Folly::folly
+    Folly::follybenchmark
+  )
+
   if(VELOX_ENABLE_ARROW)
     add_subdirectory(Lemire)
     add_executable(velox_dwio_common_bitpack_decoder_benchmark BitPackDecoderBenchmark.cpp)
