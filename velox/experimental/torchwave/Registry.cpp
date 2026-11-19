@@ -316,6 +316,13 @@ MetadataBuilder& MetadataBuilder::gridSizeSumsInputs(bool val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::gridCount(
+    SizeShortcut kind,
+    std::vector<OperandName> operands) {
+  md_.gridCount = Metadata::GridCount{kind, std::move(operands)};
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::metadataGetter(bool val) {
   md_.isMetadataGetter = val;
   return *this;

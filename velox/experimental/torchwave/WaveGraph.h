@@ -710,11 +710,14 @@ class WaveGraph {
 
 nativert::Graph* variantNodeGraph(WaveGraph* waveGraph);
 
+/// A tensor output of a kernel variant's stage, by default 1-d: the stages'
+/// scratch is per block (counts, partials, look-back state).
 nativert::Value* newVariantTensorValue(
     nativert::Node* node,
     WaveGraph* waveGraph,
     std::string_view name,
-    c10::ScalarType dtype);
+    c10::ScalarType dtype,
+    int8_t rank = 1);
 
 nativert::Value* newVariantScalarValue(
     nativert::Node* node,

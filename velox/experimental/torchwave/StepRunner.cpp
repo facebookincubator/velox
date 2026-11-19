@@ -28,6 +28,8 @@
 
 #include "velox/experimental/torchwave/AllocGroup.h"
 #include "velox/experimental/torchwave/CompiledOp.h"
+#include "velox/experimental/torchwave/DeviceGrid.h"
+#include "velox/experimental/torchwave/DeviceSymbols.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/GroupAlloc.h"
 #include "velox/experimental/torchwave/Standalones.h"
@@ -427,10 +429,75 @@ void runFills(
     uint8_t* pinnedBase) {
   const auto& table = state.valueTable;
   auto& counters = threadSetupCounters();
+  for (auto id : program.rootAddressIds) {
+    TORCH_CHECK(
+        table.valid(id) && table.isTensor(id),
+        "The setup places a view of %",
+        id,
+        ", which the host has not made");
+    setAddress(
+        state,
+        state.valueAddressBase + id,
+        reinterpret_cast<int64_t>(table.tensor(id).storage));
+  }
   const auto* fills = program.code.fills;
   for (int32_t f = 0; f < program.code.numFills; ++f) {
     const auto& fill = fills[f];
     auto* dest = pinnedBase + fill.offset;
+    // Only the setup of a step on the path writes an export, over the header.
+    const bool deviceOnly = fill.valueId >= 0 &&
+        fill.valueId < static_cast<int32_t>(state.deviceOnlyValue.size()) &&
+        state.deviceOnlyValue[fill.valueId] != 0;
+    if (fill.kernel == FillOp::kExport &&
+        !(state.deviceAllocActive && sv.deviceAllocStep && deviceOnly)) {
+      continue;
+    }
+    if (state.deviceAllocActive && fill.valueId >= 0 &&
+        fill.valueId < static_cast<int32_t>(state.deviceOnlyValue.size()) &&
+        state.deviceOnlyValue[fill.valueId] != 0 &&
+        fill.kind <= FillOp::kScalar) {
+      // A step on the path has the setup write it over a static header:
+      // rank, element type, and unit dims, which read as a dense layout.
+      // A step off the path has fetched its entry.
+      if (sv.deviceAllocStep) {
+        if (fill.kind == FillOp::kScalar) {
+          continue;
+        }
+        // NOLINTNEXTLINE(facebook-hte-ParameterUncheckedArrayBounds)
+        const auto& header = state.staticHeaders[fill.valueId];
+        const auto rank = header.rank;
+        const auto dtype = header.dtype;
+        TORCH_CHECK(rank >= 0, "No static header for %", fill.valueId);
+        auto* to = reinterpret_cast<Tensor*>(dest);
+        std::memset(dest, 0, sizeof(TableTensor));
+        to->rank = rank;
+        if (fill.kind == FillOp::kTensor) {
+          to->elementSize = static_cast<uint8_t>(
+              c10::elementSize(static_cast<c10::ScalarType>(dtype)));
+          to->elementType = static_cast<uint8_t>(dtype);
+        }
+        int64_t numEl = 1;
+        for (int32_t d = 0; d < rank; ++d) {
+          to->dims[d] = header.dims[d];
+          numEl *= header.dims[d];
+        }
+        // Dense strides over these dims, so the host layout reads as dense.
+        int64_t stride = 1;
+        for (int32_t d = rank - 1; d >= 0; --d) {
+          to->strides[d] =
+              header.dims[d] == 1 ? 0 : static_cast<int32_t>(stride);
+          stride *= header.dims[d];
+        }
+        to->numEl = static_cast<uint32_t>(numEl);
+        to->status = Tensor::kUninited;
+        continue;
+      }
+      TORCH_CHECK(
+          table.valid(fill.valueId),
+          "A step off the device path reads a value a step on the device "
+          "path produces, without fetching it: %",
+          fill.valueId);
+    }
     switch (fill.kind) {
       case FillOp::kTensor:
         if (copyTensor(table, fill.valueId, dest)) {
@@ -439,12 +506,23 @@ void runFills(
           fillEmptyTensorParam(dest);
           sv.kernels[fill.kernel].numElements = 0;
         }
+        // The setup kernel places this value from the address table.
+        if (fill.valueId >= 0 &&
+            fill.valueId < static_cast<int32_t>(state.hasValueAddress.size()) &&
+            state.hasValueAddress[fill.valueId] != 0) {
+          setAddress(
+              state,
+              state.valueAddressBase + fill.valueId,
+              *reinterpret_cast<const int64_t*>(dest));
+        }
+        setValueShape(state, fill.valueId, dest);
         break;
       case FillOp::kShapeOnly:
         if (!copyShapeOnly(table, fill.valueId, dest)) {
           fillEmptyTensorParam(dest);
           sv.kernels[fill.kernel].numElements = 0;
         }
+        setValueShape(state, fill.valueId, dest);
         break;
       case FillOp::kScalar:
         if (table.valid(fill.valueId) && table.isInt(fill.valueId)) {
@@ -467,26 +545,6 @@ void runFills(
 }
 
 const std::string kDynamicSizeKey{"dyn"};
-
-// Gives the derived entry of 'id' the owner of 'source', whose storage it
-// views: the source's allocation, or a new one holding the source's frame
-// tensor so the derived value can be materialized and outlives the source.
-void takeOwner(
-    ExecutionState& state,
-    nativert::ValueId id,
-    nativert::ValueId source) {
-  auto& out = state.valueCold[id];
-  out.owner = source >= 0 ? state.valueCold[source].owner : -1;
-  if (out.owner < 0 && source >= 0) {
-    const auto& base = state.frame->getIValue(source);
-    if (base.isTensor()) {
-      out.owner = addAllocation(state, base.toTensor());
-    }
-  }
-  if (out.owner >= 0) {
-    ++state.allocations[out.owner].liveValues;
-  }
-}
 
 // Runs the step's DeriveOps; one whose operands the table cannot answer runs
 // as its shortcut over the frame.
@@ -520,6 +578,16 @@ void runDerives(StepProgram& program, ExecutionState& state) {
     if (input >= 0 && !frame.getIValue(input).isTensor() &&
         state.valueTable.valid(input) && state.valueTable.isTensor(input)) {
       materializeEntry(state, input, input);
+    }
+    // The frame does not hold values the device path makes.
+    for (auto id : op.operands) {
+      TORCH_CHECK(
+          !state.deviceAllocActive || id < 0 ||
+              static_cast<size_t>(id) >= state.deviceOnlyValue.size() ||
+              state.deviceOnlyValue[id] == 0 || state.valueTable.valid(id),
+          "A derive off the device path reads %",
+          id,
+          ", which the device path makes, with no entry for it");
     }
     runStandaloneShortcut(program.derivedShortcuts[rec.shortcut], frame);
     if (rec.secondShortcut >= 0) {
@@ -887,7 +955,34 @@ void CompositeInvocation::runBoundLaunch(
     evaluateSize(count, program, state);
     data.numElements = static_cast<int64_t>(firstShape(program, count).dims[0]);
   }
+  if (data.numElements > 0 && countsOutputs(data.sizeExpr)) {
+    const auto& table = state.valueTable;
+    for (auto id : data.actualOutputs) {
+      if (id >= 0 && table.valid(id) && table.isTensor(id)) {
+        data.numElements =
+            std::max<int64_t>(data.numElements, table.tensor(id).numEl);
+      }
+    }
+  }
   checkUnreadyOperands(launch, code, data, state);
+}
+
+void waitForFetches(
+    ExecutionState& state,
+    const std::vector<StepVectors::DeviceFetch>& fetches) {
+  for (const auto& fetch : fetches) {
+    if (state.valueTable.valid(fetch.id)) {
+      continue;
+    }
+    const auto& event =
+        state.stepVectors.at(fetch.node).at(fetch.step).fetchDone;
+    if (event != nullptr && !event->query()) {
+      VLOG(1) << "Device alloc: wait for %" << fetch.id << " from step "
+              << fetch.node << "." << fetch.step;
+      event->wait();
+      ++state.numFetchWaits;
+    }
+  }
 }
 
 namespace {
@@ -898,7 +993,137 @@ bool stepHasWork(const StepVectors& sv) {
       !sv.shortcutStandalones.empty() || sv.program->code.numDerives > 0;
 }
 
+// Writes the table entries of the path values the step reads from the
+// descriptors their producers' setups wrote, after the copies back land.
+void fetchDeviceValues(ExecutionState& state, const StepVectors& sv) {
+  auto& table = state.valueTable;
+  bool any = false;
+  for (const auto& fetch : sv.deviceFetches) {
+    any = any || !table.valid(fetch.id) || fetch.frame;
+    // The setup placed the view; the host never took its owner.
+    // NOLINTNEXTLINE(facebook-hte-ParameterUncheckedArrayBounds)
+    if (fetch.base >= 0 && state.valueCold[fetch.id].owner < 0) {
+      takeOwner(state, fetch.id, fetch.base);
+    }
+  }
+  if (!any) {
+    return;
+  }
+  waitForFetches(state, sv.deviceFetches);
+  folly::F14FastMap<std::string, int64_t> symbols;
+  for (const auto& fetch : sv.deviceFetches) {
+    if (table.valid(fetch.id)) {
+      if (fetch.frame) {
+        materializeEntry(state, fetch.id, fetch.id);
+      }
+      continue;
+    }
+    const auto& from = state.stepVectors[fetch.node][fetch.step];
+    auto& entry = state.valueEntries[fetch.id];
+    std::memcpy(&entry.t, from.pinnedBase + fetch.offset, sizeof(TableTensor));
+    auto hostShape = state.fetchHostShapes.find(fetch.id);
+    if (hostShape != state.fetchHostShapes.end()) {
+      if (symbols.empty()) {
+        for (size_t i = 0; i < state.symbolCapacities.size(); ++i) {
+          symbols["c" + std::to_string(i)] = state.symbolCapacities[i];
+        }
+        for (size_t i = 0; i < state.inputSymbolValues.size(); ++i) {
+          symbols["i" + std::to_string(i)] = state.inputSymbolValues[i];
+        }
+      }
+      const auto& [dims, strides] = hostShape->second;
+      TORCH_CHECK(
+          static_cast<int32_t>(dims.size()) == entry.t.rank,
+          "Device alloc: fetched %",
+          fetch.id,
+          " has rank ",
+          static_cast<int32_t>(entry.t.rank),
+          ", its derived shape ",
+          dims.size());
+      int64_t numEl = 1;
+      for (size_t d = 0; d < dims.size(); ++d) {
+        const auto dim = dims[d].evaluate(symbols);
+        const auto stride = strides[d].evaluate(symbols);
+        TORCH_CHECK(
+            dim.has_value() && stride.has_value(),
+            "Device alloc: no capacity shape for fetched %",
+            fetch.id);
+        entry.t.dims[d] = static_cast<int32_t>(*dim);
+        entry.t.strides[d] = static_cast<int32_t>(*stride);
+        numEl *= *dim;
+      }
+      entry.t.numEl = static_cast<uint32_t>(numEl);
+    }
+    entry.kind = ValueEntry::kTensor;
+    entry.flags = 0;
+    entry.generation = state.tableGeneration;
+    if (fetch.frame) {
+      materializeEntry(state, fetch.id, fetch.id);
+    }
+  }
+}
+
 } // namespace
+
+void CompositeInvocation::runDeviceAllocStep(
+    int32_t stepIdx,
+    StepVectors& sv,
+    ExecutionState& state) {
+  const auto* plan = allocGroupPlan();
+  const bool hasGroups = plan != nullptr &&
+      static_cast<size_t>(stepIdx) < plan->groupsByStep.size();
+  // A group with no recorded demand yet: run the setup once for its demands
+  // and wait for them.
+  bool probe = false;
+  if (hasGroups) {
+    for (auto g : plan->groupsByStep[stepIdx]) {
+      probe = probe ||
+          state.recordedDemand.at(state.groupBaseSlot.at(&plan->groups[g])) < 0;
+    }
+  }
+  if (probe && sv.program->symbolFixups != nullptr) {
+    state.stream->hostToDeviceAsync(
+        sv.deviceBase, sv.pinnedBase, sv.blockInfoOffset);
+    copyAddresses(state, *state.stream);
+    state.waveGraph->deviceSymbols()->runFixups(
+        state,
+        *sv.program->symbolFixups,
+        sv.deviceBase,
+        state.stream.get(),
+        /*checkFailure=*/false);
+    state.stream->wait();
+    ++state.numDemandProbes;
+    const auto demands = state.demandTable.cpu();
+    const auto* demand = demands.data_ptr<int64_t>();
+    for (auto g : plan->groupsByStep[stepIdx]) {
+      const auto slot = state.groupBaseSlot.at(&plan->groups[g]);
+      auto& recorded = state.recordedDemand.at(slot);
+      if (recorded < 0) {
+        recorded = demand[slot];
+      }
+    }
+  }
+  if (hasGroups) {
+    for (auto g : plan->groupsByStep[stepIdx]) {
+      allocateDeviceGroup(state, plan->groups[g]);
+    }
+  }
+  ++gDeviceAllocStepRuns;
+  // The device grid counts the elements. The counts of the last execution
+  // the host sized bound its blocks, as on the host path; more blocks slow a
+  // cooperative kernel's grid barriers. None is marked empty.
+  for (auto& data : sv.kernels) {
+    data.numElements = std::max<int64_t>(data.numElements, 1);
+  }
+  sv.allocUs = 0;
+  sv.allocCallUs = 0;
+  sv.fillUs = 0;
+  sv.allocGroups = 0;
+  sv.allocGroupTensors = 0;
+  sv.gatherUs = 0;
+  sv.refCheckUs = 0;
+  sv.elidedCloneBytes = 0;
+}
 
 void CompositeInvocation::executeBound(ExecutionState& state) {
   auto& frame = *state.frame;
@@ -951,6 +1176,54 @@ void CompositeInvocation::executeBound(ExecutionState& state) {
     auto* pinnedBase = sv.pinnedBase;
     auto* deviceBase = sv.deviceBase;
     const SetupCounters setupBefore = threadSetupCounters();
+    if (state.deviceAllocActive && sv.deviceAllocStep) {
+      runFills(program, sv, state, frame, pinnedBase);
+      runDeviceAllocStep(stepIdx, sv, state);
+      run.lastExecStep = stepIdx;
+      sampleRunAhead(state);
+      finishStep(
+          run,
+          stepIdx,
+          sv,
+          pinnedBase,
+          deviceBase,
+          program.totalPinnedBytes,
+          program.returnBegin,
+          program.returnEnd,
+          setupBefore,
+          gridChoices);
+      if (sv.fetchEnd > sv.fetchBegin) {
+        state.stream->deviceToHostAsync(
+            pinnedBase + sv.fetchBegin,
+            deviceBase + sv.fetchBegin,
+            sv.fetchEnd - sv.fetchBegin);
+        if (sv.fetchDone == nullptr) {
+          sv.fetchDone = std::make_shared<facebook::velox::wave::Event>(
+              /*withTime=*/false);
+        }
+        sv.fetchDone->record(*state.stream);
+      }
+      // The counts the device grid read, which bound the next launch.
+      if (sv.deviceGrid != nullptr && sv.onDeviceGrid) {
+        const auto numLaunches = sv.deviceGrid->numLaunches;
+        if (!sv.gridCountsPinned.defined() ||
+            sv.gridCountsPinned.numel() < numLaunches) {
+          sv.gridCountsPinned = at::empty(
+              {numLaunches},
+              at::TensorOptions().dtype(at::kLong).pinned_memory(true));
+        }
+        state.stream->deviceToHostAsync(
+            sv.gridCountsPinned.data_ptr<int64_t>(),
+            sv.deviceGrid->device.data_ptr<int32_t>() +
+                sv.deviceGrid->longsOffset,
+            numLaunches * sizeof(int64_t));
+        sv.gridCountsPending = true;
+      }
+      continue;
+    }
+    if (state.deviceAllocActive && !sv.deviceFetches.empty()) {
+      fetchDeviceValues(state, sv);
+    }
     {
       auto& collector = *program.collector;
       AllocGroupCollector::Scope collecting(collector);

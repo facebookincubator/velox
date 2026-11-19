@@ -46,7 +46,7 @@ __device__ inline void setViewError(
     int64_t a,
     int64_t b,
     const char* msg) {
-  if (!block.debugInfo) {
+  if (!kernelError(block, line)) {
     return;
   }
   block.debugInfo->line = line;
