@@ -39,7 +39,8 @@ namespace facebook::nimble::serde {
 /// Parsed flags shared across serialization header layouts.
 struct HeaderFlags {
   /// The batch must be decoded independently. This is required by native
-  /// Hybrid FlatMap layout and by Row/FlatMap null streams with real nulls.
+  /// Hybrid FlatMap layout, by Row/FlatMap null streams with real nulls, and
+  /// by ArrayWithOffsets and SlidingWindowMap streams.
   bool requiredBarrier{false};
   /// Encoding stream prefixes store row counts as varints instead of fixed u32.
   bool streamEncodingUsesVarintRowCount{true};

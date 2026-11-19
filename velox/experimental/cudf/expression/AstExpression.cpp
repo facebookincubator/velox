@@ -150,7 +150,7 @@ void registerAstEvaluator(int priority) {
   registerCudfExpressionEvaluator(
       kAstEvaluatorName,
       priority,
-      [](const core::TypedExprPtr& expr) {
+      [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
         return ASTExpression::canEvaluate(expr);
       },
       [](const core::TypedExprPtr& expr,

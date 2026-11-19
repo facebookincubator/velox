@@ -198,7 +198,6 @@ class HashJoinPrepareJoinTableBenchmark : public VectorTestBase {
     }
     rows.applyToSelected([&](auto rowIndex) {
       char* newRow = rowContainer->newRow();
-      *reinterpret_cast<char**>(newRow + rowContainer->nextOffset()) = nullptr;
       for (auto i = 0; i < numKeys; ++i) {
         rowContainer->store(hashers[i]->decodedVector(), rowIndex, newRow, i);
       }
@@ -219,11 +218,8 @@ class HashJoinPrepareJoinTableBenchmark : public VectorTestBase {
       auto table = HashTable<true>::createForJoin(
           std::move(keyHashers),
           dependentTypes,
-          true,
-          false,
-          false, // hasCountFlag
-          1'000,
-          pool_.get());
+          pool_.get(),
+          {.allowDuplicates = true, .minTableSizeForParallelJoinBuild = 1'000});
 
       copyVectorsToTable(batches[i], table.get());
       if (i == 0) {

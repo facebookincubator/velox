@@ -48,6 +48,11 @@ struct EncodingIdentifiers {
     static constexpr NestedEncodingIdentifier Indices = 0;
   };
 
+  struct Reversed {
+    /// The values with the order-reversing mask applied.
+    static constexpr NestedEncodingIdentifier Values = 0;
+  };
+
   struct SharedDictionary {
     static constexpr NestedEncodingIdentifier Indices = 0;
   };
@@ -136,10 +141,9 @@ struct EncodingIdentifiers {
 
   struct PartitionedEliasFano {
     // Nested sub-streams for PartitionedEliasFano: the first row and the first
-    // value of each partition, and the first partition of each group.
+    // value of each partition.
     static constexpr NestedEncodingIdentifier PartitionOffsets = 0;
     static constexpr NestedEncodingIdentifier PartitionBases = 1;
-    static constexpr NestedEncodingIdentifier PartitionGroupOffsets = 2;
   };
 
   struct Fsst {

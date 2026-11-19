@@ -33,9 +33,9 @@
 #include "arrow/util/bit_util.h"
 #include "arrow/util/checked_cast.h"
 #include "arrow/util/future.h"
-#include "arrow/util/int_util_overflow.h"
 #include "arrow/util/ubsan.h"
 
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/dwio/parquet/writer/arrow/EncryptionInternal.h"
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
 #include "velox/dwio/parquet/writer/arrow/FileDecryptorInternal.h"
@@ -50,8 +50,6 @@
 #include "velox/dwio/parquet/writer/arrow/tests/BloomFilterReader.h"
 #include "velox/dwio/parquet/writer/arrow/tests/ColumnReader.h"
 #include "velox/dwio/parquet/writer/arrow/tests/ColumnScanner.h"
-
-using arrow::internal::AddWithOverflow;
 
 namespace facebook::velox::parquet::arrow {
 
@@ -181,7 +179,7 @@ const RowGroupMetaData* RowGroupReader::metadata() const {
     throw ParquetException("Invalid column metadata (corrupt file?)");
   }
 
-  if (AddWithOverflow(colStart, colLength, &colEnd) || colEnd > sourceSize) {
+  if (addWithOverflow(colStart, colLength, &colEnd) || colEnd > sourceSize) {
     throw ParquetException("Invalid column metadata (corrupt file?)");
   }
 

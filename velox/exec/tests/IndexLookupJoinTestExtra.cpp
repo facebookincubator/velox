@@ -30,6 +30,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/IndexLookupJoinTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/exec/tests/utils/TestIndexStorageConnector.h"
 
 using namespace facebook::velox;
@@ -241,13 +242,10 @@ TEST_P(IndexLookupJoinTest, leftJoinTrailingMissesWithNoSplitOutput) {
     queryBuilder.plan(plan)
         .config(
             core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-            std::to_string(GetParam().numPrefetches))
+            GetParam().numPrefetches)
         .config(
-            core::QueryConfig::kPreferredOutputBatchRows,
-            std::to_string(testData.maxBatchRows))
-        .config(
-            core::QueryConfig::kPreferredOutputBatchBytes,
-            std::to_string(1ULL << 30))
+            core::QueryConfig::kPreferredOutputBatchRows, testData.maxBatchRows)
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1ULL << 30)
         .config(
             core::QueryConfig::kIndexLookupJoinSplitOutput,
             testData.splitOutput ? "true" : "false")
@@ -1362,9 +1360,9 @@ TEST_P(IndexLookupJoinTest, mixedFilterBatches) {
   queryBuilder.plan(plan)
       .config(
           core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-          std::to_string(GetParam().numPrefetches))
-      .config(core::QueryConfig::kPreferredOutputBatchRows, "4")
-      .config(core::QueryConfig::kIndexLookupJoinSplitOutput, "true")
+          GetParam().numPrefetches)
+      .config(core::QueryConfig::kPreferredOutputBatchRows, 4)
+      .config(core::QueryConfig::kIndexLookupJoinSplitOutput, true)
       .splits(probeScanNodeId_, makeHiveConnectorSplits(probeFiles))
       .serialExecution(GetParam().serialExecution)
       .barrierExecution(GetParam().serialExecution);
@@ -1837,7 +1835,7 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, abortDuringIndexSplitWait) {
   queryThread.join();
 
   // Verify the task terminated properly.
-  ASSERT_TRUE(waitForTaskAborted(task.get()));
+  ASSERT_TRUE(TaskMonitor::waitForAbort(*task));
 }
 
 TEST_P(IndexLookupJoinTest, multiDriverWithIndexSplits) {
@@ -2020,7 +2018,7 @@ TEST_P(IndexLookupJoinTest, groupedExecution) {
         exec::DefaultOutputBufferManager::getInstanceRef();
     outputBufferManager->deleteResults(task->taskId(), 0);
 
-    waitForTaskCompletion(task.get());
+    TaskMonitor::waitForCompletion(*task);
     ASSERT_EQ(task->state(), TaskState::kFinished);
 
     auto taskStats = toPlanStats(task->taskStats());
@@ -2135,7 +2133,7 @@ TEST_P(IndexLookupJoinTest, groupedExecutionWithEmptyIndexSplits) {
         exec::DefaultOutputBufferManager::getInstanceRef();
     outputBufferManager->deleteResults(task->taskId(), 0);
 
-    waitForTaskCompletion(task.get());
+    TaskMonitor::waitForCompletion(*task);
     ASSERT_EQ(task->state(), TaskState::kFinished);
 
     auto taskStats = toPlanStats(task->taskStats());
@@ -2195,7 +2193,7 @@ TEST_P(IndexLookupJoinTest, groupedExecutionLeafValidation) {
   ASSERT_NO_THROW(task->start(1));
 
   task->requestAbort().wait();
-  ASSERT_TRUE(waitForTaskAborted(task.get()));
+  ASSERT_TRUE(TaskMonitor::waitForAbort(*task));
 }
 
 } // namespace

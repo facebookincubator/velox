@@ -43,7 +43,7 @@ struct CovarSampResultAccessor {
           "NaN is returned only when m2 is 0 and nullOnDivideByZero is false.");
       return std::numeric_limits<double>::quiet_NaN();
     }
-    if (FOLLY_UNLIKELY(std::isinf(accumulator.c2()))) {
+    if (std::isinf(accumulator.c2())) [[unlikely]] {
       return std::numeric_limits<double>::quiet_NaN();
     }
     return accumulator.c2() / (accumulator.count() - 1);
@@ -78,9 +78,8 @@ struct CorrResultAccessor {
       }
     }
 
-    if (FOLLY_UNLIKELY(
-            std::isnan(accumulator.m2Y()) || std::isnan(accumulator.m2X()) ||
-            std::isnan(accumulator.c2()))) {
+    if (std::isnan(accumulator.m2Y()) || std::isnan(accumulator.m2X()) ||
+        std::isnan(accumulator.c2())) [[unlikely]] {
       return std::numeric_limits<double>::quiet_NaN();
     }
     double stddevX = std::sqrt(accumulator.m2X());

@@ -51,17 +51,20 @@ TEST_F(CountAggregationTest, count) {
   AggregationTester(*this)
       .inputs(vectors)
       .aggregates({"count()"})
+      .withCompanion()
       .assertResults("SELECT count(1) FROM tmp");
 
   AggregationTester(*this)
       .inputs(vectors)
       .aggregates({"count(1)"})
+      .withCompanion()
       .assertResults("SELECT count(1) FROM tmp");
 
   // count over column with nulls; only non-null rows should be counted
   AggregationTester(*this)
       .inputs(vectors)
       .aggregates({"count(c1)"})
+      .withCompanion()
       .assertResults("SELECT count(c1) FROM tmp");
 
   // count over zero rows; the result should be 0, not null
@@ -183,8 +186,8 @@ TEST_F(CountAggregationTest, mask) {
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
           .maxDrivers(1)
-          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
-          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
           .assertResults(
               "SELECT k, count(c) FILTER (where m) FROM tmp GROUP BY k");
   auto taskStats = toPlanStats(task->taskStats());
@@ -460,8 +463,8 @@ TEST_F(CountAggregationTest, toIntermediate) {
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
           .maxDrivers(1)
-          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
-          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
           .assertResults(
               "SELECT k, count(v), count(1) FILTER (WHERE m), count(c) "
               "FROM tmp GROUP BY k");

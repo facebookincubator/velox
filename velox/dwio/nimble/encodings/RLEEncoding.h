@@ -235,11 +235,10 @@ class RLEEncodingBase
       uint32_t length,
       Buffer& buffer,
       const Encoding::Options& options = {}) {
-    const auto sourceRowCount =
-        EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
-    NIMBLE_CHECK_LE(offset, sourceRowCount);
-    NIMBLE_CHECK_LE(length, sourceRowCount - offset);
-    NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+    EncodingPrefix::checkSliceRange(
+        EncodingPrefix::readRowCount(encoded, options.useVarintRowCount),
+        offset,
+        length);
 
     const auto sourcePrefixSize =
         EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);
@@ -1046,7 +1045,7 @@ void RLEEncoding<T>::bulkScan(
         vector_size_t numRows;
         if constexpr (kScatterValues) {
           auto end = selectedRowIndex + numInRun;
-          if (FOLLY_UNLIKELY(end == numSelected)) {
+          if (end == numSelected) [[unlikely]] {
             numRows = visitor.numRows() - visitor.rowIndex();
           } else {
             numRows = scatterRows[end] - visitor.rowIndex();
@@ -1069,7 +1068,7 @@ void RLEEncoding<T>::bulkScan(
       currentRow += consumed;
       selectedRowIndex += numInRun;
     }
-    if (FOLLY_UNLIKELY(selectedRowIndex == numSelected)) {
+    if (selectedRowIndex == numSelected) [[unlikely]] {
       break;
     }
     currentRow += this->copiesRemaining_;

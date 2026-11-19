@@ -27,6 +27,7 @@
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/exec/trace/TraceUtil.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/tool/trace/PartitionedOutputReplayer.h"
@@ -276,7 +277,7 @@ TEST_P(PartitionedOutputReplayerTest, basic) {
     originalPartitionedResults.clear();
 
     // Wait for the producer tasks to all finish.
-    exec::test::waitForAllTasksToBeDeleted(5'000'000);
+    exec::test::TaskMonitor::waitForAllTasksDeleted(5'000'000);
 
     const auto opTraceDir = exec::trace::getOpTraceDirectory(
         taskTraceDir,

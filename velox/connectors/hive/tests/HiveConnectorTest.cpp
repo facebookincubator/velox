@@ -77,17 +77,19 @@ bool mapKeyIsNotNull(const ScanSpec& mapSpec) {
 
 TEST_F(HiveConnectorTest, hiveConfig) {
   ASSERT_EQ(
-      HiveConfig::insertExistingPartitionsBehaviorString(
-          HiveConfig::InsertExistingPartitionsBehavior::kError),
+      HiveConfig::toName(HiveConfig::InsertExistingPartitionsBehavior::kError),
       "ERROR");
   ASSERT_EQ(
-      HiveConfig::insertExistingPartitionsBehaviorString(
+      HiveConfig::toName(
           HiveConfig::InsertExistingPartitionsBehavior::kOverwrite),
       "OVERWRITE");
   ASSERT_EQ(
-      HiveConfig::insertExistingPartitionsBehaviorString(
+      HiveConfig::toInsertExistingPartitionsBehavior("OVERWRITE"),
+      HiveConfig::InsertExistingPartitionsBehavior::kOverwrite);
+  VELOX_ASSERT_THROW(
+      HiveConfig::toName(
           static_cast<HiveConfig::InsertExistingPartitionsBehavior>(100)),
-      "UNKNOWN BEHAVIOR 100");
+      "Invalid enum value: 100");
 }
 
 TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMultilevel) {
@@ -906,9 +908,8 @@ TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
 
   // Write test data to a local temp file.
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto vector = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vector);
+  auto vector = makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3}));
+  auto filePath = writeToFile(vector);
 
   // Create a table handle with dbName and tableName set.
   auto tableHandle = std::make_shared<HiveTableHandle>(
@@ -976,7 +977,7 @@ TEST_F(HiveConnectorTest, setFileReadOpsForwardsToFileSystem) {
         auto filePath = TempFilePath::create();
         writeToFile(
             filePath->getPath(),
-            makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})}));
+            makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3})));
         auto connectorQueryCtx = ConnectorQueryCtx::Builder()
                                      .operatorPool(pool_.get())
                                      .connectorPool(pool_.get())
@@ -1017,6 +1018,68 @@ TEST_F(HiveConnectorTest, setFileReadOpsForwardsToFileSystem) {
               {"test.key", "test.value"},
           }),
       expected);
+}
+
+TEST_F(HiveConnectorTest, splitFileReadOpsAddKeys) {
+  registerCapturingFileSystem();
+
+  const auto rowType = ROW({"c0"}, {BIGINT()});
+  const auto filePath = TempFilePath::create();
+  writeToFile(
+      filePath->getPath(),
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3})));
+  const auto tableHandle = makeTableHandle(
+      SubfieldFilters{},
+      /*remainingFilter=*/nullptr,
+      "test_table",
+      /*dataColumns=*/nullptr,
+      /*indexColumns=*/{},
+      /*storageParameters=*/{},
+      "test_db");
+  const config::ConfigBase sessionProperties({});
+  const auto connectorQueryCtx = ConnectorQueryCtx::Builder()
+                                     .operatorPool(pool_.get())
+                                     .connectorPool(pool_.get())
+                                     .sessionProperties(&sessionProperties)
+                                     .queryId("query.HiveConnectorTest")
+                                     .taskId("task.HiveConnectorTest")
+                                     .planNodeId("planNodeId.HiveConnectorTest")
+                                     .build();
+  auto dataSource = ConnectorRegistry::tryGet(kHiveConnectorId)
+                        ->createDataSource(
+                            rowType,
+                            tableHandle,
+                            allRegularColumns(rowType),
+                            connectorQueryCtx.get());
+  checkedPointerCast<FileDataSource>(dataSource.get())
+      ->setFileReadOps(
+          folly::F14FastMap<std::string, std::string>{
+              {"readerKey", "readerValue"},
+              {"sharedKey", "readerValue"},
+          });
+
+  FileProperties fileProperties;
+  fileProperties.fileReadOps = {
+      {"splitKey", "splitValue"},
+      {"sharedKey", "splitValue"},
+      {std::string(kTableNameKey), "split_table"},
+  };
+  CapturingFileSystem::capturedFileReadOps().clear();
+  dataSource->addSplit(
+      exec::test::HiveConnectorSplitBuilder(
+          fmt::format("capture:{}", filePath->getPath()))
+          .fileFormat(dwio::common::FileFormat::DWRF)
+          .fileProperties(fileProperties)
+          .build());
+
+  const folly::F14FastMap<std::string, std::string> expected{
+      {"splitKey", "splitValue"},
+      {"readerKey", "readerValue"},
+      {"sharedKey", "readerValue"},
+      {std::string(kDbNameKey), "test_db"},
+      {std::string(kTableNameKey), "test_table"},
+  };
+  EXPECT_EQ(CapturingFileSystem::capturedFileReadOps(), expected);
 }
 
 /// Verifies that getRuntimeStats() merge logic allows IoStats (ReadFile-layer)

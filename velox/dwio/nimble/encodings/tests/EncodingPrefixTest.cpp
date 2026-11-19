@@ -129,6 +129,24 @@ TEST(EncodingPrefixTest, readsVarintRowCountPrefix) {
       data.size());
 }
 
+TEST(EncodingPrefixTest, checksSliceRange) {
+  EXPECT_NO_THROW(
+      nimble::EncodingPrefix::checkSliceRange(
+          /*rowCount=*/10, /*offset=*/3, /*length=*/7));
+  NIMBLE_ASSERT_THROW(
+      nimble::EncodingPrefix::checkSliceRange(
+          /*rowCount=*/10, /*offset=*/11, /*length=*/1),
+      "Slice starts past the last row.");
+  NIMBLE_ASSERT_THROW(
+      nimble::EncodingPrefix::checkSliceRange(
+          /*rowCount=*/10, /*offset=*/3, /*length=*/8),
+      "Slice ends past the last row.");
+  NIMBLE_ASSERT_THROW(
+      nimble::EncodingPrefix::checkSliceRange(
+          /*rowCount=*/10, /*offset=*/10, /*length=*/0),
+      "Cannot slice zero rows.");
+}
+
 TEST(EncodingPrefixTest, consumesCheckedPrefix) {
   for (const bool useVarint : {false, true}) {
     SCOPED_TRACE(useVarint);

@@ -98,13 +98,14 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// @brief
   void deleteResults(std::string_view taskId, int destination);
 
-  /// @brief Asynchronously returns the head of the queue. If data is available,
-  /// the callback function is triggered immediately and true is returned.
-  /// Otherwise, the callback function is registered and called once data is
-  /// available. If the queue is closed and no more data is available, then the
-  /// callback function is called immediately with a nullptr, and with the
-  /// producerError the task was removed with. If the destination
-  /// doesn't exist, then additional queues will be added for this task.
+  /// @brief Asynchronously returns data through 'notify', immediately if
+  /// available. Keeps unpublished readers pending until task initialization or
+  /// a buffer update publishes their destination. Published broadcast readers
+  /// receive earlier data and the end marker. Invokes 'notify' with nullptr
+  /// when the final destination count excludes the reader, results have been
+  /// deleted, or the task has terminated. Negative destinations also receive
+  /// nullptr. A task removed before sending all its output passes the reason
+  /// as producerError with that nullptr.
   /// @param taskId The unique taskId.
   /// @param destination The destination.
   /// @param notify The callback function.
@@ -176,11 +177,9 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
       std::mutex>
       queues_;
 
-  // Tasks that have been removed via removeTask(). Prevents getData() from
-  // re-creating placeholder queues for tasks that are already dead, which
-  // would cause crashes when deleteResults() is called with destinations
-  // that exceed the placeholder's undersized queues_ vector. Maps each to the
-  // producerError it was removed with, which a late getData() reports.
+  // Tracks removed tasks so late readers receive EOS instead of waiting on
+  // a recreated placeholder. Maps each to the producerError it was removed
+  // with, which a late getData() reports.
   folly::Synchronized<
       std::unordered_map<std::string, std::optional<std::string>>,
       std::mutex>

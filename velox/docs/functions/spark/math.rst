@@ -75,10 +75,14 @@ Mathematical Functions
 
     Returns the cube root of ``x``.
 
-.. spark:function:: ceil(x) -> [same as x]
+.. spark:function:: ceil(x) -> [same as x] (ANSI compliant)
 
     Returns ``x`` rounded up to the nearest integer.
     Supported types are: BIGINT, DOUBLE and DECIMAL.
+    For DOUBLE input the result is BIGINT: NaN returns 0, and a result outside the
+    BIGINT range saturates to the BIGINT limits, or is an error when Spark ANSI mode
+    is enabled (``spark.ansi_enabled``).
+    The error matches Spark 4.3 and later; Spark 3.5 to 4.2 saturate in both modes.
 
 .. spark:function:: checked_add(x, y) -> [same as x]
    :noindex:
@@ -143,11 +147,11 @@ Mathematical Functions
     errors per row.
 
     Shares scale handling and result typing with :spark:func:`decimal_round`.
-    All constant INTEGER scales are accepted. Scales beyond decimal precision
-    are handled without constructing an unrepresentable power of ten.
+    All constant INTEGER scales are accepted.
     For example, rounding DECIMAL(38,38) 0.1 to scale -1 returns 10, not zero.
-    When the quantum is outside the result precision, positive nonzero inputs
-    raise an error; negative inputs and zero return zero.
+    When a negative scale requests a quantum larger than the result precision,
+    positive nonzero inputs raise an error; negative inputs and zero return
+    zero.
 
     A typed NULL scale returns NULL without evaluating the runtime decimal
     child; its result type uses scale zero.
@@ -284,10 +288,14 @@ Mathematical Functions
         SELECT factorial(21); -- NULL
         SELECT factorial(-1); -- NULL
 
-.. spark:function:: floor(x) -> [same as x]
+.. spark:function:: floor(x) -> [same as x] (ANSI compliant)
 
     Returns ``x`` rounded down to the nearest integer.
-    Supported types are: BIGINT,  DOUBLE and DECIMAL.
+    Supported types are: BIGINT, DOUBLE and DECIMAL.
+    For DOUBLE input the result is BIGINT: NaN returns 0, and a result outside the
+    BIGINT range saturates to the BIGINT limits, or is an error when Spark ANSI mode
+    is enabled (``spark.ansi_enabled``).
+    The error matches Spark 4.3 and later; Spark 3.5 to 4.2 saturate in both modes.
 
 .. spark:function:: hex(x) -> varchar
 

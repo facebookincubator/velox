@@ -14,20 +14,21 @@
  * limitations under the License.
  */
 
-#include "velox/common/base/IdentityProjection.h"
+#include "velox/common/testutil/PageBeforeGuard.h"
 
 #include <gtest/gtest.h>
 
-namespace facebook::velox {
+namespace facebook::velox::common::testutil {
+namespace {
 
-TEST(IdentityProjectionTest, designatedInitialization) {
-  const IdentityProjection projection{
-      .inputChannel = 3,
-      .outputChannel = 7,
-  };
-
-  EXPECT_EQ(projection.inputChannel, 3);
-  EXPECT_EQ(projection.outputChannel, 7);
+TEST(PageBeforeGuardTest, readPastEndDies) {
+  PageBeforeGuard page;
+  // Volatile, so that the compiler keeps the reads.
+  volatile uint8_t* end = page.end();
+  end[-1] = 7;
+  EXPECT_EQ(end[-1], 7);
+  EXPECT_DEATH({ [[maybe_unused]] uint8_t value = end[0]; }, "");
 }
 
-} // namespace facebook::velox
+} // namespace
+} // namespace facebook::velox::common::testutil

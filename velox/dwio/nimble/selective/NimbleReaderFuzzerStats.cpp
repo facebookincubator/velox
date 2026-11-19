@@ -19,6 +19,9 @@
 #ifdef NIMBLE_READER_FUZZER_STATS_ENABLED
 
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/type/Filter.h"
+
+#include <utility>
 
 namespace facebook::nimble::fuzzer {
 
@@ -26,6 +29,36 @@ namespace {
 
 void update(std::string_view name) {
   velox::addThreadLocalRuntimeStat(name, velox::RuntimeCounter(1));
+}
+
+// Counts one read under:
+// - 'typeStat' and its stat for the kind of 'filter'.
+// - dictionaryAwareReadsWithFilterAcceptingNull() and the stat of each hook
+//   path in 'paths', if 'filter' accepts nulls and is not AlwaysTrue (no
+//   filter).
+void updateDictionaryAwareReads(
+    std::string_view typeStat,
+    const velox::common::Filter& filter,
+    const DictionaryAwareReadPaths& paths) {
+  update(typeStat);
+  update(dictionaryAwareReadsByFilterKind(typeStat, filter.kindName()));
+  if (filter.kind() == velox::common::FilterKind::kAlwaysTrue ||
+      !filter.nullAllowed()) {
+    return;
+  }
+  update(
+      dictionaryAwareReadsWithFilterAcceptingNull(typeStat, filter.kindName()));
+  const std::pair<bool, std::string_view> pathsTaken[]{
+      {paths.addValue(), kAddValuePath},
+      {paths.addValues(), kAddValuesPath},
+      {paths.mergeBulkNullsDense(), kMergeBulkNullsDensePath},
+      {paths.mergeBulkNullsSparse(), kMergeBulkNullsSparsePath},
+  };
+  for (const auto& [taken, path] : pathsTaken) {
+    if (taken) {
+      update(dictionaryAwareReadsWithFilterAcceptingNullByPath(typeStat, path));
+    }
+  }
 }
 
 } // namespace
@@ -38,24 +71,34 @@ void updateStringDictionaryEncodingAbandoned() {
   update(kStringDictionaryEncodingAbandoned);
 }
 
-void updateSmallintDictionaryAwareReads() {
-  update(kSmallintDictionaryAwareReads);
+void updateSmallintDictionaryAwareReads(
+    const velox::common::Filter& filter,
+    const DictionaryAwareReadPaths& paths) {
+  updateDictionaryAwareReads(kSmallintDictionaryAwareReads, filter, paths);
 }
 
-void updateIntegerDictionaryAwareReads() {
-  update(kIntegerDictionaryAwareReads);
+void updateIntegerDictionaryAwareReads(
+    const velox::common::Filter& filter,
+    const DictionaryAwareReadPaths& paths) {
+  updateDictionaryAwareReads(kIntegerDictionaryAwareReads, filter, paths);
 }
 
-void updateBigintDictionaryAwareReads() {
-  update(kBigintDictionaryAwareReads);
+void updateBigintDictionaryAwareReads(
+    const velox::common::Filter& filter,
+    const DictionaryAwareReadPaths& paths) {
+  updateDictionaryAwareReads(kBigintDictionaryAwareReads, filter, paths);
 }
 
-void updateRealDictionaryAwareReads() {
-  update(kRealDictionaryAwareReads);
+void updateRealDictionaryAwareReads(
+    const velox::common::Filter& filter,
+    const DictionaryAwareReadPaths& paths) {
+  updateDictionaryAwareReads(kRealDictionaryAwareReads, filter, paths);
 }
 
-void updateDoubleDictionaryAwareReads() {
-  update(kDoubleDictionaryAwareReads);
+void updateDoubleDictionaryAwareReads(
+    const velox::common::Filter& filter,
+    const DictionaryAwareReadPaths& paths) {
+  updateDictionaryAwareReads(kDoubleDictionaryAwareReads, filter, paths);
 }
 
 } // namespace facebook::nimble::fuzzer

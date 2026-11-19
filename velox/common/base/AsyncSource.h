@@ -337,7 +337,7 @@ class AsyncSource {
       VELOX_CHECK_NULL(item_);
       VELOX_CHECK_NULL(itemMaker_);
       checkState(state(), State::kMaking);
-      if (FOLLY_LIKELY(exceptionPtr == nullptr)) {
+      if (exceptionPtr == nullptr) [[likely]] {
         item_ = std::move(item);
         setState(State::kPrepared);
       } else {
@@ -348,6 +348,8 @@ class AsyncSource {
     for (auto& promise : promises) {
       promise.setValue();
     }
+    common::testutil::TestValue::adjust(
+        "facebook::velox::AsyncSource::makeItem::afterNotify", this);
   }
 
   inline void setExceptionLocked(std::exception_ptr exception) {

@@ -24,6 +24,7 @@ add_library(
   StreamChunker.cpp
   Writer.cpp
   WriterDefaultMetadataOSS.cpp
+  WriterDefaultMetadata.h
   WriterMemoryReclaimer.cpp
   WriterOptions.h
   WriterFactory.h

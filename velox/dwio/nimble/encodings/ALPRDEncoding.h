@@ -536,9 +536,7 @@ class ALPRDEncoding final
       const Encoding::Options& options = {}) {
     const auto metadata = readMetadata(encoded, options);
     NIMBLE_CHECK_EQ(metadata.dataType, TypeTraits<T>::dataType);
-    NIMBLE_CHECK_LE(offset, metadata.rowCount);
-    NIMBLE_CHECK_LE(length, metadata.rowCount - offset);
-    NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+    EncodingPrefix::checkSliceRange(metadata.rowCount, offset, length);
     auto* pool = &buffer.getMemoryPool();
     ScopedEncodingBuffer scratch(pool, options.encodingBufferPool);
     std::array<std::string_view, 4> children;

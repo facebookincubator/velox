@@ -148,6 +148,8 @@ void configureReaderOptions(
   }
   readerOptions.setNimbleDirectBufferedInputEnabled(
       fileConfig->nimbleDirectBufferedInputEnabled(sessionProperties));
+  readerOptions.setNimbleLazyFileStats(
+      fileConfig->nimbleLazyFileStats(sessionProperties));
   readerOptions.setCacheMetadata(
       fileConfig->cacheMetadata(sessionProperties) && fileSplit->cacheable);
   readerOptions.setPinMetadata(fileConfig->pinMetadata(sessionProperties));
@@ -219,6 +221,16 @@ void configureRowReaderOptions(
   rowReaderOptions.setMetadataFilter(std::move(metadataFilter));
   rowReaderOptions.setRequestedType(rowType);
   rowReaderOptions.range(fileSplit->start, fileSplit->length);
+  if (fileSplit->splitRowRange.has_value()) {
+    VELOX_CHECK(
+        fileSplit->fileFormat == dwio::common::FileFormat::NIMBLE ||
+            fileSplit->fileFormat == dwio::common::FileFormat::DWRF ||
+            fileSplit->fileFormat == dwio::common::FileFormat::ORC ||
+            fileSplit->fileFormat == dwio::common::FileFormat::PARQUET,
+        "Split row ranges are only supported for Nimble, DWRF, ORC and Parquet files: {}",
+        fileSplit->toString());
+    rowReaderOptions.setSplitRowRange(fileSplit->splitRowRange);
+  }
   if (fileConfig && sessionProperties) {
     rowReaderOptions.setTimestampPrecision(
         static_cast<TimestampPrecision>(
@@ -233,6 +245,8 @@ void configureRowReaderOptions(
         fileConfig->nimbleLazyColumnIo(sessionProperties));
     rowReaderOptions.setCollectColumnCpuMetrics(
         fileConfig->readerCollectColumnCpuMetrics(sessionProperties));
+    rowReaderOptions.setNimbleFsstDecodeRepeatedPayloads(
+        fileConfig->nimbleFsstDecodeRepeatedPayloads(sessionProperties));
     rowReaderOptions.setNimblePreserveDictionaryEncoding(
         fileConfig->nimblePreserveDictionaryEncoding(sessionProperties));
     rowReaderOptions.setNimbleDictionaryAwareReads(
@@ -737,6 +751,7 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
         partitionKeys.count(name) == 0) {
       VELOX_CHECK(!isSpecialColumn(name, specialColumns.rowIndex));
       VELOX_CHECK(!isSpecialColumn(name, specialColumns.rowId));
+      VELOX_CHECK(!isSpecialColumn(name, specialColumns.readRange));
       filterSubfields[getColumnName(subfield)].push_back(&subfield);
     }
   }
@@ -758,6 +773,15 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
       fieldSpec->setColumnType(common::ScanSpec::ColumnType::kComposite);
       fieldSpec->childByName(rowIdType.nameOf(0))
           ->setColumnType(common::ScanSpec::ColumnType::kRowIndex);
+      continue;
+    }
+    if (isSpecialColumn(name, specialColumns.readRange)) {
+      VELOX_USER_CHECK(
+          type->kindEquals(ROW({BIGINT(), INTEGER()})),
+          "Read range column must be ROW(BIGINT, INTEGER): {}",
+          type->toString());
+      auto* fieldSpec = spec->addField(name, i);
+      fieldSpec->setColumnType(common::ScanSpec::ColumnType::kReadRange);
       continue;
     }
     auto it = outputSubfields.find(name);

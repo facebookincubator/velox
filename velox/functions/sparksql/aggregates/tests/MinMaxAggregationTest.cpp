@@ -70,6 +70,7 @@ class MinMaxAggregationTest
     AggregationTester(*this)
         .inputs(vectors)
         .aggregates({min(c1), max(c1)})
+        .withCompanion()
         .assertResults("SELECT min(c1), max(c1) FROM tmp");
 
     // Group by aggregation.
@@ -502,8 +503,8 @@ TEST_F(MinMaxAggregationTest, partialCompanionAbandonPartialAggregation) {
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
           .maxDrivers(1)
-          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
-          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
           .assertResults("SELECT k, min(v) FROM tmp GROUP BY k");
 
   const auto stats = exec::toPlanStats(task->taskStats());

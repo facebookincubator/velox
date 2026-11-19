@@ -164,6 +164,24 @@ uint32_t readFsstHeaderVarint(std::string_view encoding, size_t& offset) {
   NIMBLE_FAIL("Overlong FSST header varint.");
 }
 
+// Decompresses 'compressed' into 'output', which has room for 'capacity' bytes,
+// and returns the decompressed size. Inlines FSST's decoder and starts at a
+// cache line, so that the speed of the decode loop, which depends on its
+// alignment, does not depend on where the linker puts the decoder's
+// out-of-line copy.
+[[gnu::flatten]] [[gnu::aligned(64)]] FOLLY_NOINLINE size_t decompressValue(
+    const fsst_decoder_t& decoder,
+    std::string_view compressed,
+    size_t capacity,
+    char* output) {
+  return nimble_fsst_decompress(
+      &decoder,
+      compressed.size(),
+      reinterpret_cast<const unsigned char*>(compressed.data()),
+      capacity,
+      reinterpret_cast<unsigned char*>(output));
+}
+
 } // namespace
 
 FsstEncoding::CompressedValues::CompressedValues(
@@ -409,9 +427,8 @@ FsstEncoding::FsstEncoding(
           std::string_view,
           std::
               string_view>{pool, validateEncodedPrefix(data, options), options},
-      stringBufferFactory_{std::move(stringBufferFactory)},
       lengthBuffer_{&pool},
-      decompressBuffer_{&pool},
+      stringPages_{&pool, stringBufferFactory, kStringPageSize},
       decodeCacheEntries_{&pool},
       decodeCacheBuckets_{&pool},
       decodeCacheHashFilter_{&pool} {
@@ -427,7 +444,7 @@ FsstEncoding::FsstEncoding(
       "FSST symbol table import size mismatch.");
 
   lengths_ = EncodingFactory().create(
-      pool, header.lengths, stringBufferFactory_, options);
+      pool, header.lengths, std::move(stringBufferFactory), options);
   const auto* lengths = velox::checkedNotNull(lengths_.get());
   NIMBLE_CHECK_FILE_EQ(
       lengths->dataType(),
@@ -477,15 +494,7 @@ void FsstEncoding::reset() {
   row_ = 0;
   blobOffset_ = 0;
   lengths_->reset();
-  pageUsedBytes_ = 0;
-  currentPageIndex_ = 0;
-  if (stringPages_.empty()) {
-    currentPage_ = nullptr;
-    pageCapacityBytes_ = 0;
-  } else {
-    currentPage_ = stringPages_.front().data;
-    pageCapacityBytes_ = stringPages_.front().capacity;
-  }
+  stringPages_.reset();
 }
 
 void FsstEncoding::checkReadRange(uint32_t rowCount, const char* operation)
@@ -721,7 +730,7 @@ std::string_view FsstEncoding::decompressToStringBuffer(
   }
 
   // Bound the conservative expansion calculation and the uint32-sized page
-  // allocation requested by ensurePage().
+  // allocation requested from the string buffer factory.
   NIMBLE_CHECK_FILE_LE(
       compressed.size(),
       std::numeric_limits<uint32_t>::max() / kMaxSymbolLength,
@@ -732,14 +741,17 @@ std::string_view FsstEncoding::decompressToStringBuffer(
   // byte preserves that final payload byte while retaining the conservative
   // maximum-expansion bound below.
   const size_t requiredDecompressionCapacity = maxDecompressedSize + 1;
-  // Both callers below provide requiredDecompressionCapacity writable bytes.
-  const auto decompress = [&](unsigned char* output) {
-    const auto decompressedSize = nimble_fsst_decompress(
-        &decoder_,
-        compressed.size(),
-        reinterpret_cast<const unsigned char*>(compressed.data()),
-        requiredDecompressionCapacity,
-        output);
+
+  // The arena decodes the first small value into a new page directly, and a
+  // large value into scratch rather than allocating the conservative maximum
+  // expansion. FSST does not reliably report the required size after decoding
+  // into an undersized buffer, so scratch gets the conservative capacity too.
+  // Decoding first preserves a partially filled page when the actual output
+  // fits its tail, and cache entries and returned views reference stable
+  // output pages, never scratch.
+  return stringPages_.write(requiredDecompressionCapacity, [&](char* output) {
+    const auto decompressedSize = decompressValue(
+        decoder_, compressed, requiredDecompressionCapacity, output);
     NIMBLE_CHECK_GT(
         decompressedSize,
         0,
@@ -749,36 +761,7 @@ std::string_view FsstEncoding::decompressToStringBuffer(
         maxDecompressedSize,
         "FSST decompressed string exceeds the maximum expansion bound.");
     return decompressedSize;
-  };
-
-  // Seed a normal page so the first small value can decode directly. Keep
-  // large values on the scratch path to avoid allocating the conservative
-  // maximum expansion when the actual decoded value may be much smaller.
-  if (currentPage_ == nullptr &&
-      requiredDecompressionCapacity <= kStringPageSize) {
-    ensurePage(requiredDecompressionCapacity);
-  }
-  if (const auto output = availablePageRange(requiredDecompressionCapacity)) {
-    auto* const outputData = output->data();
-    const auto decompressedSize =
-        decompress(reinterpret_cast<unsigned char*>(outputData));
-    pageUsedBytes_ += decompressedSize;
-    return {outputData, decompressedSize};
-  }
-
-  // FSST does not reliably report the required size after decoding into an
-  // undersized buffer, so use the conservative capacity for the scratch path.
-  // Decoding first also preserves a partially filled page when the actual
-  // output fits its tail, rather than abandoning it based on the loose bound.
-  decompressBuffer_.resize(requiredDecompressionCapacity);
-  const auto decompressedSize =
-      decompress(reinterpret_cast<unsigned char*>(decompressBuffer_.data()));
-  auto* const outputData = ensurePage(decompressedSize);
-  // Cache entries and returned views must reference stable output pages. Copy
-  // the scratch result before its buffer can be resized or overwritten.
-  std::memcpy(outputData, decompressBuffer_.data(), decompressedSize);
-  pageUsedBytes_ += decompressedSize;
-  return {outputData, decompressedSize};
+  });
 }
 
 bool FsstEncoding::testCompressedRange(
@@ -847,55 +830,6 @@ bool FsstEncoding::testCompressedRange(
     }
   }
   return true;
-}
-
-std::optional<std::span<char>> FsstEncoding::availablePageRange(
-    size_t requiredBytes) const {
-  NIMBLE_CHECK_LE(
-      pageUsedBytes_, pageCapacityBytes_, "Invalid FSST string page position.");
-  if (currentPage_ == nullptr ||
-      requiredBytes > pageCapacityBytes_ - pageUsedBytes_) {
-    return std::nullopt;
-  }
-  return std::span<char>{currentPage_ + pageUsedBytes_, requiredBytes};
-}
-
-char* FsstEncoding::ensurePage(size_t requiredBytes) {
-  if (const auto output = availablePageRange(requiredBytes)) {
-    return output->data();
-  }
-  const auto pageSize = std::max(kStringPageSize, requiredBytes);
-  const size_t nextPageIndex =
-      currentPage_ == nullptr ? 0 : currentPageIndex_ + 1;
-  if (nextPageIndex < stringPages_.size()) {
-    const auto& page = stringPages_[nextPageIndex];
-    if (page.capacity >= pageSize) {
-      currentPage_ = page.data;
-      pageCapacityBytes_ = page.capacity;
-      currentPageIndex_ = nextPageIndex;
-      pageUsedBytes_ = 0;
-      return currentPage_;
-    }
-  }
-
-  NIMBLE_CHECK_FILE_LE(
-      pageSize,
-      std::numeric_limits<uint32_t>::max(),
-      "FSST string page exceeds the supported size.");
-  auto* nextPage =
-      static_cast<char*>(stringBufferFactory_(static_cast<uint32_t>(pageSize)));
-  NIMBLE_CHECK_NOT_NULL(nextPage, "FSST string buffer factory returned null.");
-  StringPageSlot page{.data = nextPage, .capacity = pageSize};
-  if (nextPageIndex < stringPages_.size()) {
-    stringPages_[nextPageIndex] = page;
-  } else {
-    stringPages_.push_back(page);
-  }
-  currentPage_ = nextPage;
-  pageCapacityBytes_ = pageSize;
-  currentPageIndex_ = nextPageIndex;
-  pageUsedBytes_ = 0;
-  return currentPage_;
 }
 
 std::string_view FsstEncoding::encode(
@@ -972,11 +906,9 @@ std::string_view FsstEncoding::slice(
     Buffer& buffer,
     const Encoding::Options& options) {
   validateEncodedPrefix(encoded, options);
-  const auto sourceRowCount =
+  const uint32_t sourceRowCount =
       EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
-  NIMBLE_CHECK_LE(offset, sourceRowCount);
-  NIMBLE_CHECK_LE(length, sourceRowCount - offset);
-  NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+  EncodingPrefix::checkSliceRange(sourceRowCount, offset, length);
 
   const auto header = parseHeader(
       encoded, EncodingPrefix::prefixSize(encoded, options.useVarintRowCount));

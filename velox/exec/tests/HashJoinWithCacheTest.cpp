@@ -35,6 +35,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 
 namespace facebook::velox::exec::test {
@@ -129,52 +130,35 @@ TEST_F(HashJoinWithCacheTest, sequential) {
   auto task1 = runTask();
 
   // Get stats from first task - expect cache miss.
-  auto opStats1 = toOperatorStats(task1->taskStats());
-  ASSERT_EQ(opStats1.count("HashBuild"), 1);
-  auto& hashBuildStats1 = opStats1.at("HashBuild");
+  const auto joinStats1 =
+      PlanNodeStats::extract(task1->taskStats(), joinNode->id());
+  const auto& hashBuildStats1 = joinStats1.operatorStatsFor("HashBuild");
 
   // The last driver that finishes building reports the cache miss stat.
-  ASSERT_EQ(
-      hashBuildStats1.runtimeStats.count(
-          std::string(BaseHashTable::kHashTableCacheMiss)),
-      1)
+  ASSERT_TRUE(hashBuildStats1.hasCustomStat(BaseHashTable::kHashTableCacheMiss))
       << "First task should report cache miss";
   EXPECT_EQ(
-      hashBuildStats1.runtimeStats
-          .at(std::string(BaseHashTable::kHashTableCacheMiss))
-          .count,
-      1)
+      hashBuildStats1.customStat(BaseHashTable::kHashTableCacheMiss).count, 1)
       << "Exactly one driver should report cache miss (the one that builds)";
-  EXPECT_EQ(
-      hashBuildStats1.runtimeStats.count(
-          std::string(BaseHashTable::kHashTableCacheHit)),
-      0)
+  EXPECT_FALSE(hashBuildStats1.hasCustomStat(BaseHashTable::kHashTableCacheHit))
       << "First task should not have any cache hits";
 
   // Second task - should reuse the cached table (cache hit).
   auto task2 = runTask();
 
   // Get stats from second task - expect cache hit.
-  auto opStats2 = toOperatorStats(task2->taskStats());
-  ASSERT_EQ(opStats2.count("HashBuild"), 1);
-  auto& hashBuildStats2 = opStats2.at("HashBuild");
+  const auto joinStats2 =
+      PlanNodeStats::extract(task2->taskStats(), joinNode->id());
+  const auto& hashBuildStats2 = joinStats2.operatorStatsFor("HashBuild");
 
   // The last driver that finishes reports the cache hit stat.
-  ASSERT_EQ(
-      hashBuildStats2.runtimeStats.count(
-          std::string(BaseHashTable::kHashTableCacheHit)),
-      1)
+  ASSERT_TRUE(hashBuildStats2.hasCustomStat(BaseHashTable::kHashTableCacheHit))
       << "Second task should report cache hit";
   EXPECT_EQ(
-      hashBuildStats2.runtimeStats
-          .at(std::string(BaseHashTable::kHashTableCacheHit))
-          .count,
-      1)
+      hashBuildStats2.customStat(BaseHashTable::kHashTableCacheHit).count, 1)
       << "Exactly one driver should report cache hit (the one after barrier)";
-  EXPECT_EQ(
-      hashBuildStats2.runtimeStats.count(
-          std::string(BaseHashTable::kHashTableCacheMiss)),
-      0)
+  EXPECT_FALSE(
+      hashBuildStats2.hasCustomStat(BaseHashTable::kHashTableCacheMiss))
       << "Second task should not have any cache misses";
 
   // Clean up cache entry before tasks are destroyed.
@@ -309,22 +293,17 @@ TEST_F(HashJoinWithCacheTest, concurrent) {
   int totalCacheHits = 0;
 
   for (const auto& task : allTasks) {
-    auto opStats = toOperatorStats(task->taskStats());
-    ASSERT_EQ(opStats.count("HashBuild"), 1);
-    auto& hashBuildStats = opStats.at("HashBuild");
+    const auto joinStats =
+        PlanNodeStats::extract(task->taskStats(), joinNode->id());
+    const auto& hashBuildStats = joinStats.operatorStatsFor("HashBuild");
 
-    if (hashBuildStats.runtimeStats.count(
-            std::string(BaseHashTable::kHashTableCacheMiss))) {
+    if (hashBuildStats.hasCustomStat(BaseHashTable::kHashTableCacheMiss)) {
       totalCacheMisses +=
-          hashBuildStats.runtimeStats
-              .at(std::string(BaseHashTable::kHashTableCacheMiss))
-              .count;
+          hashBuildStats.customStat(BaseHashTable::kHashTableCacheMiss).count;
     }
-    if (hashBuildStats.runtimeStats.count(
-            std::string(BaseHashTable::kHashTableCacheHit))) {
-      totalCacheHits += hashBuildStats.runtimeStats
-                            .at(std::string(BaseHashTable::kHashTableCacheHit))
-                            .count;
+    if (hashBuildStats.hasCustomStat(BaseHashTable::kHashTableCacheHit)) {
+      totalCacheHits +=
+          hashBuildStats.customStat(BaseHashTable::kHashTableCacheHit).count;
     }
   }
 
@@ -448,9 +427,9 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, probeCannotSpillWithCachedTable) {
   ASSERT_TRUE(hashProbeChecked) << "HashProbe canReclaim check was not reached";
 
   // Verify that HashProbe operator stats show no spilling.
-  auto opStats = toOperatorStats(task->taskStats());
-  ASSERT_EQ(opStats.count("HashProbe"), 1);
-  auto& probeStats = opStats.at("HashProbe");
+  const auto joinStats =
+      PlanNodeStats::extract(task->taskStats(), joinNode->id());
+  const auto& probeStats = joinStats.operatorStatsFor("HashProbe");
 
   EXPECT_EQ(probeStats.spilledInputBytes, 0)
       << "HashProbe should not spill when using cached hash table";
@@ -581,7 +560,7 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, probeOOMWithCachedTable) {
           .copyResults(pool()),
       "Exceeded memory pool capacity");
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   queryCtx.reset();
   // Cache should be cleaned up by QueryCtx destructor via release callback.
 }
@@ -697,7 +676,7 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, cachePoolArbitration) {
 
   ASSERT_TRUE(injected) << "TestValue injection was not triggered";
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   queryCtx.reset();
 }
 

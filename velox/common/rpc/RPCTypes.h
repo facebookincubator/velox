@@ -303,10 +303,25 @@ enum class CapacityRetryJitter {
   kEqual,
 };
 
+/// Which limit a capacity rejection hit. A quota limits the rate of requests
+/// or tokens, whatever their concurrency; a capacity limit bounds the requests
+/// a backend can serve at once.
+enum class CapacityRetryCause {
+  /// Not reported by the function. Flow control answers it as it answers
+  /// kQuota.
+  kUnknown,
+  /// A rate quota, such as requests or tokens per minute.
+  kQuota,
+  /// Serving capacity, such as an overloaded backend.
+  kCapacity,
+};
+
 /// Asks the caller to retry a capacity rejection itself. The function returns
 /// this instead of retrying internally, so the caller can give back the
 /// request's admission slot while it waits and admit the retry again.
 struct CapacityRetry {
+  /// Which limit the rejection hit.
+  CapacityRetryCause cause{CapacityRetryCause::kUnknown};
   /// The nominal wait before the row's first retry.
   std::chrono::milliseconds retryAfter{0};
   /// How long, from the row's first attempt, the row may keep retrying, for a
@@ -394,6 +409,8 @@ struct RPCResponse {
       result_ = RpcPayload{std::forward<T>(payload)};
     }
     capacityRetry_.reset();
+    completionErrorKind_.reset();
+    backendOutcome_ = true;
   }
 
   /// Stores a typed failure and rejects the non-error sentinel.
@@ -407,6 +424,13 @@ struct RPCResponse {
   /// Returns the caller-retry hint, if the function set one.
   const std::optional<CapacityRetry>& capacityRetry() const {
     return capacityRetry_;
+  }
+
+  /// Returns true if the function handed this rejection back for the caller
+  /// to retry and named a lack of serving capacity as its cause.
+  bool isCapacityRejection() const {
+    return capacityRetry_.has_value() &&
+        capacityRetry_->cause == CapacityRetryCause::kCapacity;
   }
 
   /// Returns true if this response represents an error.
@@ -423,6 +447,23 @@ struct RPCResponse {
   RPCErrorKind errorKind() const {
     return result_.hasError() ? result_.error().kind : RPCErrorKind::kNone;
   }
+
+  /// Returns the lifecycle outcome used by accounting and admission. A
+  /// function may encode a failed job as a payload needed by a later phase.
+  RPCErrorKind completionErrorKind() const {
+    return completionErrorKind_.value_or(errorKind());
+  }
+
+  /// Reports whether this outcome describes work attempted in this phase.
+  /// Replayed terminal outcomes must not drive backend congestion or recovery.
+  bool isBackendOutcome() const {
+    return backendOutcome_;
+  }
+
+  /// Declares a lifecycle outcome independently of its payload representation.
+  /// Allows failed receipts to remain payloads for downstream phases.
+  /// Attach after setPayload() or setError(), which reset this metadata.
+  void setCompletionOutcome(RPCErrorKind kind, bool backendOutcome);
 
   /// Returns the function-owned payload. Only valid when !hasError().
   const RpcPayload& payload() const {
@@ -445,6 +486,10 @@ struct RPCResponse {
       folly::makeUnexpected(RpcError{RPCErrorKind::kUnset, "unset response"})};
   // Set only on an overload error; cleared whenever the outcome changes.
   std::optional<CapacityRetry> capacityRetry_;
+  // Overrides accounting for payloads that encode lifecycle failures.
+  std::optional<RPCErrorKind> completionErrorKind_;
+  // Distinguishes current backend work from locally replayed results.
+  bool backendOutcome_{true};
 };
 
 /// Returns the checked sum of bytes retained by a response collection.

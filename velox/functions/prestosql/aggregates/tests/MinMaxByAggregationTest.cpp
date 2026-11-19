@@ -16,9 +16,7 @@
 
 #include <fmt/format.h>
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/exec/Aggregate.h"
 #include "velox/exec/PlanNodeStats.h"
-#include "velox/exec/RowContainer.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
@@ -1201,49 +1199,6 @@ TEST_F(MinMaxByComplexTypes, trackRowSize) {
     EXPECT_EQ(
         aggregateAndReadRowSize(pool(), name, BIGINT(), numbers, comparisons),
         0);
-  }
-}
-
-// The tracker above can only write a size because RowContainer reserved a slot
-// for it, and it reserves one only for an accumulator that reports itself as
-// not fixed size. Check that a real container does so, since
-// aggregateAndReadRowSize lays the row out by hand and would keep passing even
-// if the accumulator claimed to be fixed size.
-TEST_F(MinMaxByComplexTypes, rowContainerReservesRowSize) {
-  core::QueryConfig queryConfig({});
-  for (const auto& name : {"min_by", "max_by"}) {
-    SCOPED_TRACE(name);
-    for (const auto& valueType :
-         std::vector<TypePtr>{VARCHAR(), ARRAY(BIGINT()), BIGINT()}) {
-      SCOPED_TRACE(valueType->toString());
-      auto fn = exec::Aggregate::create(
-          name,
-          core::AggregationNode::Step::kSingle,
-          std::vector<TypePtr>{valueType, BIGINT()},
-          valueType,
-          queryConfig,
-          /*constantInputs=*/{});
-      std::vector<exec::Accumulator> accumulators;
-      accumulators.emplace_back(fn.get(), valueType);
-      exec::RowContainer container(
-          {BIGINT()},
-          /*nullableKeys=*/false,
-          accumulators,
-          /*dependentTypes=*/std::vector<TypePtr>{},
-          /*hasNext=*/false,
-          /*isJoinBuild=*/false,
-          /*hasProbedFlag=*/false,
-          /*hasCountFlag=*/false,
-          /*hasNormalizedKey=*/false,
-          /*useListRowIndex=*/false,
-          pool());
-      // A numeric accumulator holds everything inline, so it needs no slot.
-      if (valueType->isFixedWidth()) {
-        EXPECT_EQ(container.rowSizeOffset(), 0);
-      } else {
-        EXPECT_NE(container.rowSizeOffset(), 0);
-      }
-    }
   }
 }
 

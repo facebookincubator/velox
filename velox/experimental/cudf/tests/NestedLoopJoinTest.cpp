@@ -53,7 +53,7 @@ class CudfNestedLoopJoinTest : public HiveConnectorTestBase {
 TEST_F(
     CudfNestedLoopJoinTest,
     unsupportedTypeProjectedOutBeforeNestedLoopJoin) {
-  auto probe = makeRowVector({"p_key"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto probe = makeNamedRowVector("p_key", makeFlatVector<int64_t>({1, 2, 3}));
   auto build = makeRowVector(
       {"b_key", "marker"},
       {makeFlatVector<int64_t>({2, 3, 4}),
@@ -73,10 +73,10 @@ TEST_F(
   auto result = AssertQueryBuilder(plan)
                     .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
                     .copyResults(pool(), task);
-  auto expected = makeRowVector({"p_key"}, {makeFlatVector<int64_t>({2, 3})});
+  auto expected = makeNamedRowVector("p_key", makeFlatVector<int64_t>({2, 3}));
   facebook::velox::test::assertEqualVectors(expected, result);
 
-  const auto operatorStats = toOperatorStats(task->taskStats());
+  const auto operatorStats = task->taskStats().operatorStats();
   EXPECT_EQ(operatorStats.count("NestedLoopJoinBuild"), 1);
   EXPECT_EQ(operatorStats.count("NestedLoopJoinProbe"), 1);
   EXPECT_EQ(operatorStats.count("CudfNestedLoopJoinBuild"), 0);
@@ -86,10 +86,10 @@ TEST_F(
 TEST_F(CudfNestedLoopJoinTest, customComparisonConditionFallsBack) {
   const auto customType =
       facebook::velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON();
-  auto probe = makeRowVector(
-      {"p_key"}, {makeFlatVector<int64_t>({1, 257, 2}, customType)});
+  auto probe = makeNamedRowVector(
+      "p_key", makeFlatVector<int64_t>({1, 257, 2}, customType));
   auto build =
-      makeRowVector({"b_key"}, {makeFlatVector<int64_t>({1}, customType)});
+      makeNamedRowVector("b_key", makeFlatVector<int64_t>({1}, customType));
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan = PlanBuilder(idGenerator)
                   .values({probe})
@@ -104,11 +104,11 @@ TEST_F(CudfNestedLoopJoinTest, customComparisonConditionFallsBack) {
   auto result = AssertQueryBuilder(plan)
                     .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
                     .copyResults(pool(), task);
-  auto expected =
-      makeRowVector({"p_key"}, {makeFlatVector<int64_t>({1, 257}, customType)});
+  auto expected = makeNamedRowVector(
+      "p_key", makeFlatVector<int64_t>({1, 257}, customType));
   facebook::velox::test::assertEqualVectors(expected, result);
 
-  const auto operatorStats = toOperatorStats(task->taskStats());
+  const auto operatorStats = task->taskStats().operatorStats();
   EXPECT_EQ(operatorStats.count("NestedLoopJoinBuild"), 1);
   EXPECT_EQ(operatorStats.count("NestedLoopJoinProbe"), 1);
   EXPECT_EQ(operatorStats.count("CudfNestedLoopJoinBuild"), 0);
@@ -605,26 +605,25 @@ TEST_F(CudfNestedLoopJoinTest, multiDriverBuild) {
   createDuckDbTable("t", {probeVectors});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  CursorParameters params;
-  params.maxDrivers = 4;
-  params.planNode = PlanBuilder(planNodeIdGenerator)
-                        .values({probeVectors})
-                        .nestedLoopJoin(
-                            PlanBuilder(planNodeIdGenerator)
-                                .values({buildVectors}, true)
-                                .filter("c0 = 100")
-                                .project({"c0 AS u_c0"})
-                                .planNode(),
-                            {"c0", "u_c0"})
-                        .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildVectors}, true)
+                          .filter("c0 = 100")
+                          .project({"c0 AS u_c0"})
+                          .planNode(),
+                      {"c0", "u_c0"})
+                  .planNode();
 
   // Build side: 4 drivers × 1 matching row = 4 build rows (all value 100)
   // Probe side: 1 driver × 20 rows = 20 probe rows
   // Result: 20 * 4 = 80 rows
-  assertQuery(
-      params,
-      "SELECT * FROM t, "
-      "(SELECT * FROM UNNEST(ARRAY[100, 100, 100, 100]) AS t(c0)) u");
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .maxDrivers(4)
+      .assertResults(
+          "SELECT * FROM t, "
+          "(SELECT * FROM UNNEST(ARRAY[100, 100, 100, 100]) AS t(c0)) u");
 }
 
 // Multi-driver with filter.
@@ -641,28 +640,27 @@ TEST_F(CudfNestedLoopJoinTest, multiDriverWithFilter) {
   createDuckDbTable("t", {probeVectors});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  CursorParameters params;
-  params.maxDrivers = 2;
-  params.planNode = PlanBuilder(planNodeIdGenerator)
-                        .values({probeVectors})
-                        .nestedLoopJoin(
-                            PlanBuilder(planNodeIdGenerator)
-                                .values({buildVectors}, true)
-                                .project({"c0 AS u_c0"})
-                                .planNode(),
-                            "c0 < u_c0",
-                            {"c0", "u_c0"},
-                            core::JoinType::kInner)
-                        .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildVectors}, true)
+                          .project({"c0 AS u_c0"})
+                          .planNode(),
+                      "c0 < u_c0",
+                      {"c0", "u_c0"},
+                      core::JoinType::kInner)
+                  .planNode();
 
   // Build side: 2 drivers × {3, 7} = {3, 7, 3, 7}
   // Probe: {1, 5, 10}
   // Matches (c0 < u_c0): 1<3, 1<7, 5<7, 1<3, 1<7, 5<7 = 6 rows
-  assertQuery(
-      params,
-      "SELECT t.c0, u.c0 FROM t "
-      "INNER JOIN (SELECT * FROM UNNEST(ARRAY[3, 7, 3, 7]) AS t(c0)) u "
-      "ON t.c0 < u.c0");
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .maxDrivers(2)
+      .assertResults(
+          "SELECT t.c0, u.c0 FROM t "
+          "INNER JOIN (SELECT * FROM UNNEST(ARRAY[3, 7, 3, 7]) AS t(c0)) u "
+          "ON t.c0 < u.c0");
 }
 
 // All-null columns on both sides.
@@ -967,26 +965,25 @@ TEST_F(CudfNestedLoopJoinTest, leftJoinMultiDriver) {
   createDuckDbTable("t", {probeVectors});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  CursorParameters params;
-  params.maxDrivers = 2;
-  params.planNode = PlanBuilder(planNodeIdGenerator)
-                        .values({probeVectors})
-                        .nestedLoopJoin(
-                            PlanBuilder(planNodeIdGenerator)
-                                .values({buildVectors}, true)
-                                .project({"c0 AS u_c0"})
-                                .planNode(),
-                            "c0 < u_c0",
-                            {"c0", "u_c0"},
-                            core::JoinType::kLeft)
-                        .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildVectors}, true)
+                          .project({"c0 AS u_c0"})
+                          .planNode(),
+                      "c0 < u_c0",
+                      {"c0", "u_c0"},
+                      core::JoinType::kLeft)
+                  .planNode();
 
   // Build side: 2 drivers × {3, 7} = {3, 7, 3, 7}
-  assertQuery(
-      params,
-      "SELECT t.c0, u.c0 FROM t "
-      "LEFT JOIN (SELECT * FROM UNNEST(ARRAY[3, 7, 3, 7]) AS t(c0)) u "
-      "ON t.c0 < u.c0");
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .maxDrivers(2)
+      .assertResults(
+          "SELECT t.c0, u.c0 FROM t "
+          "LEFT JOIN (SELECT * FROM UNNEST(ARRAY[3, 7, 3, 7]) AS t(c0)) u "
+          "ON t.c0 < u.c0");
 }
 
 // ============================================================================
@@ -1189,26 +1186,25 @@ TEST_F(CudfNestedLoopJoinTest, rightJoinMultiDriver) {
   createDuckDbTable("t", {probeVectors});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  CursorParameters params;
-  params.maxDrivers = 2;
-  params.planNode = PlanBuilder(planNodeIdGenerator)
-                        .values({probeVectors})
-                        .nestedLoopJoin(
-                            PlanBuilder(planNodeIdGenerator)
-                                .values({buildVectors}, true)
-                                .project({"c0 AS u_c0"})
-                                .planNode(),
-                            "c0 < u_c0",
-                            {"c0", "u_c0"},
-                            core::JoinType::kRight)
-                        .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildVectors}, true)
+                          .project({"c0 AS u_c0"})
+                          .planNode(),
+                      "c0 < u_c0",
+                      {"c0", "u_c0"},
+                      core::JoinType::kRight)
+                  .planNode();
 
   // Build side: 2 drivers × {3, 7} = {3, 7, 3, 7}
-  assertQuery(
-      params,
-      "SELECT t.c0, u.c0 FROM t "
-      "RIGHT JOIN (SELECT * FROM UNNEST(ARRAY[3, 7, 3, 7]) AS t(c0)) u "
-      "ON t.c0 < u.c0");
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .maxDrivers(2)
+      .assertResults(
+          "SELECT t.c0, u.c0 FROM t "
+          "RIGHT JOIN (SELECT * FROM UNNEST(ARRAY[3, 7, 3, 7]) AS t(c0)) u "
+          "ON t.c0 < u.c0");
 }
 
 // --- Full outer join tests ---
@@ -1414,26 +1410,25 @@ TEST_F(CudfNestedLoopJoinTest, fullJoinMultiDriver) {
   createDuckDbTable("t", {probeVectors});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  CursorParameters params;
-  params.maxDrivers = 2;
-  params.planNode = PlanBuilder(planNodeIdGenerator)
-                        .values({probeVectors})
-                        .nestedLoopJoin(
-                            PlanBuilder(planNodeIdGenerator)
-                                .values({buildVectors}, true)
-                                .project({"c0 AS u_c0"})
-                                .planNode(),
-                            "c0 < u_c0",
-                            {"c0", "u_c0"},
-                            core::JoinType::kFull)
-                        .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildVectors}, true)
+                          .project({"c0 AS u_c0"})
+                          .planNode(),
+                      "c0 < u_c0",
+                      {"c0", "u_c0"},
+                      core::JoinType::kFull)
+                  .planNode();
 
   // Build side: 2 drivers × {3, 7} = {3, 7, 3, 7}
-  assertQuery(
-      params,
-      "SELECT t.c0, u.c0 FROM t "
-      "FULL OUTER JOIN (SELECT * FROM UNNEST(ARRAY[3, 7, 3, 7]) AS t(c0)) u "
-      "ON t.c0 < u.c0");
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .maxDrivers(2)
+      .assertResults(
+          "SELECT t.c0, u.c0 FROM t "
+          "FULL OUTER JOIN (SELECT * FROM UNNEST(ARRAY[3, 7, 3, 7]) AS t(c0)) u "
+          "ON t.c0 < u.c0");
 }
 
 // Full join with output columns from only one side: exercises the mismatch
@@ -1695,26 +1690,25 @@ TEST_F(CudfNestedLoopJoinTest, leftSemiProjectMultiDriver) {
   createDuckDbTable("t", {probeVectors});
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  CursorParameters params;
-  params.maxDrivers = 2;
-  params.planNode = PlanBuilder(planNodeIdGenerator)
-                        .values({probeVectors})
-                        .nestedLoopJoin(
-                            PlanBuilder(planNodeIdGenerator)
-                                .values({buildVectors}, true)
-                                .project({"c0 AS u_c0"})
-                                .planNode(),
-                            "c0 < u_c0",
-                            {"c0", "match"},
-                            core::JoinType::kLeftSemiProject)
-                        .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator)
+                          .values({buildVectors}, true)
+                          .project({"c0 AS u_c0"})
+                          .planNode(),
+                      "c0 < u_c0",
+                      {"c0", "match"},
+                      core::JoinType::kLeftSemiProject)
+                  .planNode();
 
   // Build side: 2 drivers × {3, 7} = {3, 7, 3, 7}. Existence is the same.
-  assertQuery(
-      params,
-      "SELECT t.c0, EXISTS "
-      "(SELECT 1 FROM UNNEST(ARRAY[3, 7, 3, 7]) AS u(c0) "
-      "WHERE t.c0 < u.c0) FROM t");
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .maxDrivers(2)
+      .assertResults(
+          "SELECT t.c0, EXISTS "
+          "(SELECT 1 FROM UNNEST(ARRAY[3, 7, 3, 7]) AS u(c0) "
+          "WHERE t.c0 < u.c0) FROM t");
 }
 
 // LeftSemiProject with a cross-side LIKE condition: like
@@ -1726,12 +1720,12 @@ TEST_F(CudfNestedLoopJoinTest, leftSemiProjectMultiDriver) {
 // ("c0 < u_c0") is AST-representable and takes the useAstFilter_ path, so it
 // never reaches this branch.
 TEST_F(CudfNestedLoopJoinTest, leftSemiProjectLikeConditionSpanningBothSides) {
-  auto probe = makeRowVector(
-      {"t_val"},
-      {makeFlatVector<std::string>({"apple", "banana", "cherry", "date"})});
-  auto build = makeRowVector(
-      {"u_pattern"},
-      {makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"})});
+  auto probe = makeNamedRowVector(
+      "t_val",
+      makeFlatVector<std::string>({"apple", "banana", "cherry", "date"}));
+  auto build = makeNamedRowVector(
+      "u_pattern",
+      makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"}));
   createDuckDbTable("t", {probe});
   createDuckDbTable("u", {build});
 
@@ -1857,12 +1851,12 @@ TEST_F(CudfNestedLoopJoinTest, emptyBuildConsumeInput) {
 // silent CPU fallback would also produce the correct result and this test
 // would pass without proving the GPU path works.
 TEST_F(CudfNestedLoopJoinTest, likeConditionSpanningBothSides) {
-  auto probe = makeRowVector(
-      {"t_val"},
-      {makeFlatVector<std::string>({"apple", "banana", "cherry", "date"})});
-  auto build = makeRowVector(
-      {"u_pattern"},
-      {makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"})});
+  auto probe = makeNamedRowVector(
+      "t_val",
+      makeFlatVector<std::string>({"apple", "banana", "cherry", "date"}));
+  auto build = makeNamedRowVector(
+      "u_pattern",
+      makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"}));
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan =
@@ -1898,12 +1892,12 @@ TEST_F(CudfNestedLoopJoinTest, likeConditionSpanningBothSides) {
 // buildMatchedFlags_ mismatch-row emission for left, right, and full outer
 // joins.
 TEST_F(CudfNestedLoopJoinTest, likeConditionSpanningBothSidesOuterJoins) {
-  auto probe = makeRowVector(
-      {"t_val"},
-      {makeFlatVector<std::string>({"apple", "banana", "cherry", "date"})});
-  auto build = makeRowVector(
-      {"u_pattern"},
-      {makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"})});
+  auto probe = makeNamedRowVector(
+      "t_val",
+      makeFlatVector<std::string>({"apple", "banana", "cherry", "date"}));
+  auto build = makeNamedRowVector(
+      "u_pattern",
+      makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"}));
   createDuckDbTable("t", {probe});
   createDuckDbTable("u", {build});
 
@@ -1956,14 +1950,14 @@ TEST_F(
     CudfNestedLoopJoinTest,
     likeConditionSpanningBothSidesFullJoinMultiBatch) {
   std::vector<RowVectorPtr> probeVectors = {
-      makeRowVector(
-          {"t_val"}, {makeFlatVector<std::string>({"apple", "banana"})}),
-      makeRowVector(
-          {"t_val"}, {makeFlatVector<std::string>({"cherry", "date"})}),
+      makeNamedRowVector(
+          "t_val", makeFlatVector<std::string>({"apple", "banana"})),
+      makeNamedRowVector(
+          "t_val", makeFlatVector<std::string>({"cherry", "date"})),
   };
-  auto build = makeRowVector(
-      {"u_pattern"},
-      {makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"})});
+  auto build = makeNamedRowVector(
+      "u_pattern",
+      makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"}));
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", {build});
 
@@ -1996,8 +1990,8 @@ TEST_F(
 }
 
 TEST_F(CudfNestedLoopJoinTest, crossJoinZeroColumnBuild) {
-  auto probeData = makeRowVector({"p0"}, {makeFlatVector<int64_t>({4, 5})});
-  auto buildData = makeRowVector({"b0"}, {makeFlatVector<int32_t>({1, 2, 3})});
+  auto probeData = makeNamedRowVector("p0", makeFlatVector<int64_t>({4, 5}));
+  auto buildData = makeNamedRowVector("b0", makeFlatVector<int32_t>({1, 2, 3}));
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan = PlanBuilder(planNodeIdGenerator)
@@ -2011,7 +2005,7 @@ TEST_F(CudfNestedLoopJoinTest, crossJoinZeroColumnBuild) {
                   .planNode();
 
   auto expected =
-      makeRowVector({"p0"}, {makeFlatVector<int64_t>({4, 4, 4, 5, 5, 5})});
+      makeNamedRowVector("p0", makeFlatVector<int64_t>({4, 4, 4, 5, 5, 5}));
   AssertQueryBuilder(plan).assertResults(expected);
 }
 

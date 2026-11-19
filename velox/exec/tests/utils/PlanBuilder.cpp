@@ -54,7 +54,7 @@ std::shared_ptr<HiveBucketProperty> buildHiveBucketProperty(
     const RowTypePtr rowType,
     int32_t bucketCount,
     const std::vector<std::string>& bucketColumns,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy) {
+    const std::vector<HiveSortingColumnPtr>& sortBy) {
   std::vector<TypePtr> bucketTypes;
   bucketTypes.reserve(bucketColumns.size());
   for (const auto& bucketColumn : bucketColumns) {
@@ -471,12 +471,12 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
     insertHandle_ = std::make_shared<connector::hive::HiveInsertTableHandle>(
         columnHandles,
         locationHandle,
+        connector::hive::HiveConfig::InsertExistingPartitionsBehavior::kError,
         fileFormat_,
         bucketProperty,
         compressionKind_,
         serdeParameters_,
-        options_,
-        ensureFiles_,
+        writeEmptyFile_,
         // Repeats the constructor's default so that storageParameters, which
         // follows it positionally, can be passed.
         std::make_shared<const connector::hive::HiveInsertFileNameGenerator>(),
@@ -777,14 +777,12 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::string& outputDirectoryPath,
     const dwio::common::FileFormat fileFormat,
     const std::vector<std::string>& aggregates,
-    const std::shared_ptr<dwio::common::WriterOptions>& options,
     const std::string& outputFileName) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .outputFileName(outputFileName)
       .fileFormat(fileFormat)
       .aggregates(aggregates)
-      .options(options)
       .endTableWriter();
 }
 
@@ -792,14 +790,12 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::string& outputDirectoryPath,
     const std::vector<std::string>& partitionBy,
     const dwio::common::FileFormat fileFormat,
-    const std::vector<std::string>& aggregates,
-    const std::shared_ptr<dwio::common::WriterOptions>& options) {
+    const std::vector<std::string>& aggregates) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .partitionBy(partitionBy)
       .fileFormat(fileFormat)
       .aggregates(aggregates)
-      .options(options)
       .endTableWriter();
 }
 
@@ -809,8 +805,7 @@ PlanBuilder& PlanBuilder::tableWrite(
     int32_t bucketCount,
     const std::vector<std::string>& bucketedBy,
     const dwio::common::FileFormat fileFormat,
-    const std::vector<std::string>& aggregates,
-    const std::shared_ptr<dwio::common::WriterOptions>& options) {
+    const std::vector<std::string>& aggregates) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .partitionBy(partitionBy)
@@ -818,7 +813,6 @@ PlanBuilder& PlanBuilder::tableWrite(
       .bucketedBy(bucketedBy)
       .fileFormat(fileFormat)
       .aggregates(aggregates)
-      .options(options)
       .endTableWriter();
 }
 
@@ -827,16 +821,15 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::vector<std::string>& partitionBy,
     int32_t bucketCount,
     const std::vector<std::string>& bucketedBy,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy,
+    const std::vector<HiveSortingColumnPtr>& sortBy,
     const dwio::common::FileFormat fileFormat,
     const std::vector<std::string>& aggregates,
     const std::string_view& connectorId,
     const std::unordered_map<std::string, std::string>& serdeParameters,
-    const std::shared_ptr<dwio::common::WriterOptions>& options,
     const std::string& outputFileName,
     const common::CompressionKind compressionKind,
     const RowTypePtr& schema,
-    const bool ensureFiles,
+    const bool writeEmptyFile,
     const connector::CommitStrategy commitStrategy,
     connector::ConnectorInsertTableHandlePtr insertTableHandle,
     const std::unordered_map<std::string, std::string>& storageParameters) {
@@ -853,9 +846,8 @@ PlanBuilder& PlanBuilder::tableWrite(
       .connectorId(connectorId)
       .serdeParameters(serdeParameters)
       .storageParameters(storageParameters)
-      .options(options)
       .compressionKind(compressionKind)
-      .ensureFiles(ensureFiles)
+      .writeEmptyFile(writeEmptyFile)
       .commitStrategy(commitStrategy)
       .insertHandle(insertTableHandle)
       .endTableWriter();
@@ -1369,6 +1361,13 @@ PlanBuilder& PlanBuilder::localMerge(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::mixedUnion(std::vector<core::PlanNodePtr> sources) {
+  VELOX_CHECK_NULL(planNode_, "mixedUnion() must be the first call");
+  planNode_ = std::make_shared<core::MixedUnionNode>(
+      nextPlanNodeId(), std::move(sources));
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::orderBy(
     const std::vector<std::string>& keys,
     bool isPartial) {
@@ -1419,6 +1418,24 @@ PlanBuilder& PlanBuilder::fixedPoint(
       nextPlanNodeId(),
       std::move(stateDeclarations),
       std::move(plans),
+      std::move(convergenceConfig),
+      std::move(outputStateEntry),
+      outputOnWorkerZero);
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::fixedPoint(
+    std::vector<core::StateDeclarationPtr> stateDeclarations,
+    core::MultiStagePlan body,
+    core::ConvergenceConfig convergenceConfig,
+    std::string outputStateEntry,
+    bool outputOnWorkerZero) {
+  VELOX_CHECK_NULL(
+      planNode_, "FixedPoint is a leaf node and cannot have an input");
+  planNode_ = std::make_shared<core::FixedPointNode>(
+      nextPlanNodeId(),
+      std::move(stateDeclarations),
+      std::move(body),
       std::move(convergenceConfig),
       std::move(outputStateEntry),
       outputOnWorkerZero);
@@ -2049,8 +2066,8 @@ PlanBuilder& PlanBuilder::vectorSearchJoin(
     const std::vector<std::string>& leftKeys,
     const std::vector<std::string>& rightKeys,
     const core::PlanNodePtr& right,
-    const std::string& probeEmbedding,
-    const std::string& buildIndex,
+    const std::string& embedding,
+    const std::string& index,
     int64_t k,
     const std::vector<std::string>& outputLayout,
     const std::optional<std::string>& id,
@@ -2074,13 +2091,16 @@ PlanBuilder& PlanBuilder::vectorSearchJoin(
     }
   }
 
+  const bool indexOnProbe = !buildType->containsChild(index);
   planNode_ = std::make_shared<core::VectorSearchJoinNode>(
       nextPlanNodeId(),
       joinType,
       fields(probeType, leftKeys),
       fields(buildType, rightKeys),
-      field(probeType, probeEmbedding),
-      field(buildType, buildIndex),
+      indexOnProbe ? core::VectorSearchJoinNode::IndexSide::kProbe
+                   : core::VectorSearchJoinNode::IndexSide::kBuild,
+      field(indexOnProbe ? buildType : probeType, embedding),
+      field(indexOnProbe ? probeType : buildType, index),
       std::move(format),
       metric,
       k,
@@ -2717,24 +2737,28 @@ PlanBuilder& PlanBuilder::topNRank(
     const std::vector<std::string>& sortingKeys,
     int32_t limit,
     bool generateRowNumber) {
-  VELOX_CHECK_NOT_NULL(planNode_, "TopNRowNumber cannot be the source node");
-  auto [sortingFields, sortingOrders] =
-      parseOrderByClauses(sortingKeys, planNode_->outputType(), pool_);
-  std::optional<std::string> rowNumberColumnName;
-  if (generateRowNumber) {
-    rowNumberColumnName = "row_number";
-  }
-  planNode_ = std::make_shared<core::TopNRowNumberNode>(
-      nextPlanNodeId(),
-      core::TopNRowNumberNode::rankFunctionFromName(function),
-      fields(partitionKeys),
-      sortingFields,
-      sortingOrders,
-      rowNumberColumnName,
+  return addTopNRowNumber(
+      function,
+      partitionKeys,
+      sortingKeys,
       limit,
-      planNode_);
-  VELOX_CHECK(!planNode_->supportsBarrier());
-  return *this;
+      generateRowNumber ? std::optional<std::string>("row_number")
+                        : std::nullopt,
+      /*partial=*/false);
+}
+
+PlanBuilder& PlanBuilder::topNRankPartial(
+    std::string_view function,
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    int32_t limit) {
+  return addTopNRowNumber(
+      function,
+      partitionKeys,
+      sortingKeys,
+      limit,
+      /*rowNumberColumnName=*/std::nullopt,
+      /*partial=*/true);
 }
 
 PlanBuilder& PlanBuilder::topNRowNumber(
@@ -2744,6 +2768,37 @@ PlanBuilder& PlanBuilder::topNRowNumber(
     bool generateRowNumber) {
   return topNRank(
       "row_number", partitionKeys, sortingKeys, limit, generateRowNumber);
+}
+
+PlanBuilder& PlanBuilder::topNRowNumberPartial(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    int32_t limit) {
+  return topNRankPartial("row_number", partitionKeys, sortingKeys, limit);
+}
+
+PlanBuilder& PlanBuilder::addTopNRowNumber(
+    std::string_view function,
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    int32_t limit,
+    const std::optional<std::string>& rowNumberColumnName,
+    bool partial) {
+  VELOX_CHECK_NOT_NULL(planNode_, "TopNRowNumber cannot be the source node");
+  auto [sortingFields, sortingOrders] =
+      parseOrderByClauses(sortingKeys, planNode_->outputType(), pool_);
+  planNode_ = std::make_shared<core::TopNRowNumberNode>(
+      nextPlanNodeId(),
+      core::TopNRowNumberNode::toRankFunction(function),
+      fields(partitionKeys),
+      sortingFields,
+      sortingOrders,
+      rowNumberColumnName,
+      limit,
+      partial,
+      planNode_);
+  VELOX_CHECK(!planNode_->supportsBarrier());
+  return *this;
 }
 
 PlanBuilder& PlanBuilder::markDistinct(

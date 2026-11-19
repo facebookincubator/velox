@@ -44,7 +44,7 @@ void registerIcebergInternalFunctions(const std::string& prefix) {
   static std::once_flag registerFlag;
 
   std::call_once(registerFlag, [prefix]() {
-    functions::iceberg::registerFunctions(prefix);
+    functions::iceberg::registerFunctions(prefix, "velox");
   });
 }
 

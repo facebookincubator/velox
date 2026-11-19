@@ -113,6 +113,7 @@ if(VELOX_ENABLE_FAISS)
     velox_aggregates_VectorIndexTest
     VectorIndexBuildTest.cpp
     VectorIndexPackTest.cpp
+    VectorIndexTrainTest.cpp
     Main.cpp
   )
   add_test(

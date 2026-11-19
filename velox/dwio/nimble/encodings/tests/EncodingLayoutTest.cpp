@@ -416,14 +416,14 @@ TEST(EncodingLayoutTests, blockBitPackingV2) {
 }
 
 TEST(EncodingLayoutTests, partitionedEliasFano) {
-  // PartitionedEliasFano nests three directories (partition starts, partition
-  // bases, group starts). Its group streams are always EliasFano, so capture
-  // records only the directories.
+  // PartitionedEliasFano nests two directories (partition starts, partition
+  // bases). Its group streams are always EliasFano, so capture records only
+  // the directories.
   nimble::EncodingLayout pefLayout{
       nimble::EncodingType::PartitionedEliasFano,
       {},
       nimble::CompressionType::Uncompressed,
-      {std::nullopt, std::nullopt, std::nullopt}};
+      {std::nullopt, std::nullopt}};
   testSerialization(pefLayout);
 
   // Three ascending runs of 300 rows, each starting below the previous end.
@@ -438,10 +438,25 @@ TEST(EncodingLayoutTests, partitionedEliasFano) {
   auto captured = encodeAndCapture<uint32_t>(pefLayout, data);
   ASSERT_EQ(
       captured.encodingType(), nimble::EncodingType::PartitionedEliasFano);
-  ASSERT_EQ(captured.childrenCount(), 3);
+  ASSERT_EQ(captured.childrenCount(), 2);
   EXPECT_TRUE(captured.child(0).has_value());
   EXPECT_TRUE(captured.child(1).has_value());
-  EXPECT_TRUE(captured.child(2).has_value());
+}
+
+TEST(EncodingLayoutTests, reversed) {
+  nimble::EncodingLayout expected{
+      nimble::EncodingType::Reversed,
+      {},
+      nimble::CompressionType::Uncompressed,
+      {
+          nimble::EncodingLayout{
+              nimble::EncodingType::EliasFano,
+              {},
+              nimble::CompressionType::Uncompressed},
+      }};
+
+  testSerialization(expected);
+  testCapture<uint32_t>(expected, {50, 40, 40, 7, 3, 0});
 }
 
 TEST(EncodingLayoutTests, sparseBool) {

@@ -31,6 +31,7 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/vector/VectorStream.h"
 
 using namespace facebook::velox;
@@ -145,9 +146,9 @@ class MaterializedPartitionedOutputTest : public OperatorTestBase {
         Consumer{});
     task->start(numDrivers);
     if (expectFailure) {
-      EXPECT_TRUE(waitForTaskFailure(task.get(), 10'000'000));
+      EXPECT_TRUE(TaskMonitor::waitForFailure(*task, 10'000'000));
     } else {
-      EXPECT_TRUE(waitForTaskCompletion(task.get(), 10'000'000));
+      EXPECT_TRUE(TaskMonitor::waitForCompletion(*task, 10'000'000));
     }
     return {std::move(task), std::move(sink)};
   }

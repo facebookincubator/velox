@@ -30,6 +30,7 @@
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
 #include "velox/dwio/dwrf/common/Config.h"
 #include "velox/exec/Cursor.h"
+#include "velox/exec/fuzzer/ScopedOOMInjector.h"
 #include "velox/exec/tests/utils/FilterToExpression.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
@@ -76,12 +77,11 @@ DEFINE_int64(
 DEFINE_int32(
     input_file_query_shapes,
     4,
-    "Number of query shapes run per call when reading an existing file. Kept "
-    "well below the count used for generated files: there is no expensive "
-    "write to amortize here, and a caller loops until its own deadline, so "
-    "this is the granularity at which that deadline can be honoured. Each "
-    "shape scans the whole file twice, which on a production file is not "
-    "cheap.");
+    "Maximum number of query shapes run per call when reading an existing "
+    "file. Kept well below the count used for generated files: there is no "
+    "expensive write to amortize here. A call stops early, after at least one "
+    "shape, once the caller's deadline passes. Each shape scans the whole file "
+    "twice, which on a production file is not cheap.");
 
 DEFINE_int32(
     input_file_sample_rows,
@@ -1744,7 +1744,9 @@ RowVectorPtr TableEvolutionFuzzer::readInputFileSample(
   return fuzzer::mergeRowVectors(batches, config_.pool);
 }
 
-bool TableEvolutionFuzzer::runOnInputFile(const InputFile& inputFile) {
+bool TableEvolutionFuzzer::runOnInputFile(
+    const InputFile& inputFile,
+    std::chrono::steady_clock::time_point deadline) {
   inputFile_ = &inputFile;
   SCOPE_EXIT {
     inputFile_ = nullptr;
@@ -1789,6 +1791,10 @@ bool TableEvolutionFuzzer::runOnInputFile(const InputFile& inputFile) {
 
   auto executor = folly::getGlobalCPUExecutor();
   for (int shape = 0; shape < FLAGS_input_file_query_shapes; ++shape) {
+    if (shape > 0 && std::chrono::steady_clock::now() >= deadline) {
+      LOG(INFO) << "Deadline reached after " << shape << " query shapes";
+      break;
+    }
     VLOG(1) << "Running query shape " << shape;
     runQueryShape(
         noWriteResults,

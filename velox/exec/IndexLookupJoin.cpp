@@ -386,7 +386,7 @@ void IndexLookupJoin::createIndexSplitTracer() {
 }
 
 void IndexLookupJoin::traceIndexSplit(const exec::Split& split) {
-  if (FOLLY_UNLIKELY(indexSplitTracer_ != nullptr)) {
+  if (indexSplitTracer_ != nullptr) [[unlikely]] {
     auto connectorSplit = split.connectorSplit;
     indexSplitTracer_->write(exec::Split(std::move(connectorSplit)));
   }
@@ -439,7 +439,7 @@ void IndexLookupJoin::initLookupInput() {
     VELOX_CHECK(lookupKeyOrConditionHashers_.empty());
     VELOX_CHECK(!lookupInputChannels_.empty());
     lookupKeyOrConditionHashers_ =
-        createVectorHashers(probeType_, lookupInputChannels_);
+        VectorHasher::createForKeys(probeType_, lookupInputChannels_);
   };
 
   for (const auto& condition : joinConditions_) {

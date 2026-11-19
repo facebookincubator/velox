@@ -123,12 +123,12 @@ class SpatialJoinTest : public OperatorTestBase {
     std::vector<RowVectorPtr> buildBatches;
     if (separateBatches) {
       for (const auto& wkt : probeWktsStr) {
-        probeBatches.push_back(makeRowVector(
-            {"left_g"}, {makeNullableFlatVector<std::string>({wkt})}));
+        probeBatches.push_back(makeNamedRowVector(
+            "left_g", makeNullableFlatVector<std::string>({wkt})));
       }
       if (probeBatches.empty()) {
-        probeBatches.push_back(makeRowVector(
-            {"left_g"}, {makeNullableFlatVector<std::string>({})}));
+        probeBatches.push_back(makeNamedRowVector(
+            "left_g", makeNullableFlatVector<std::string>({})));
       }
 
       for (size_t idx = 0; idx < buildWktsStr.size(); ++idx) {
@@ -145,8 +145,8 @@ class SpatialJoinTest : public OperatorTestBase {
              makeNullableFlatVector<double>({})}));
       }
     } else {
-      probeBatches.push_back(makeRowVector(
-          {"left_g"}, {makeNullableFlatVector<std::string>(probeWktsStr)}));
+      probeBatches.push_back(makeNamedRowVector(
+          "left_g", makeNullableFlatVector<std::string>(probeWktsStr)));
       buildBatches.push_back(makeRowVector(
           {"right_g", "radius"},
           {makeNullableFlatVector<std::string>(buildWktsStr),
@@ -675,7 +675,7 @@ TEST_F(SpatialJoinTest, testEmptyProbe) {
 
 TEST_F(SpatialJoinTest, failOnGroupedExecution) {
   std::vector<RowVectorPtr> batches{
-      makeRowVector({"wkt"}, {makeFlatVector<std::string>({"POINT(0 0)"})})};
+      makeNamedRowVector("wkt", makeFlatVector<std::string>({"POINT(0 0)"}))};
   core::PlanNodeId groupedScanNodeId;
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto planFragment =

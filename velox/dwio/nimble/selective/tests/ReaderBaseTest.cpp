@@ -90,6 +90,50 @@ class ReaderBaseTest : public ::testing::TestWithParam<CreationMode> {
     return file;
   }
 
+  // Writes a file with each statistics kind, nulls and nested types.
+  std::string writeStatsTestFile(bool enableVectorizedStats) {
+    std::string file;
+    velox::test::VectorMaker vectorMaker(pool_.get());
+    constexpr velox::vector_size_t kSize{100};
+    auto vector = vectorMaker.rowVector(
+        {"ints", "doubles", "strings", "bools", "arrays", "maps"},
+        {vectorMaker.flatVector<int64_t>(
+             kSize,
+             [](auto row) { return row * 3 - 50; },
+             [](auto row) { return row % 7 == 0; }),
+         vectorMaker.flatVector<double>(
+             kSize, [](auto row) { return row * 1.5; }),
+         vectorMaker.flatVector<velox::StringView>(
+             kSize,
+             [](auto row) {
+               return velox::StringView::makeInline(
+                   "val" + std::to_string(row));
+             },
+             [](auto row) { return row % 5 == 0; }),
+         vectorMaker.flatVector<bool>(
+             kSize, [](auto row) { return row % 2 == 0; }),
+         vectorMaker.arrayVector<int32_t>(
+             kSize,
+             [](auto row) { return row % 4; },
+             [](auto index) { return index; }),
+         vectorMaker.mapVector<int64_t, double>(
+             kSize,
+             [](auto row) { return row % 3; },
+             [](auto index) { return index; },
+             [](auto index) { return index * 0.5; })});
+
+    WriterOptions writerOptions;
+    writerOptions.enableVectorizedStats = enableVectorizedStats;
+    auto writer = std::make_unique<Writer>(
+        vector->type(),
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *pool_,
+        std::move(writerOptions));
+    writer->write(vector);
+    writer->close();
+    return file;
+  }
+
   velox::dwio::common::ReaderOptions makeReaderOptions() {
     velox::dwio::common::ReaderOptions opts(pool_.get());
     opts.setDataIoStats(std::make_shared<velox::io::IoStatistics>());
@@ -311,6 +355,42 @@ TEST_P(ReaderBaseTest, equivalentAcrossModes) {
       direct->tablet().tabletRowCount(), fromCache->tablet().tabletRowCount());
 }
 
+TEST_P(ReaderBaseTest, fileColumnStatistics) {
+  const auto reader =
+      createReaderBase(writeStatsTestFile(/*enableVectorizedStats=*/true));
+  EXPECT_TRUE(reader->hasFileColumnStatistics());
+
+  // Node IDs index the file schema: 'ints' has a null every 7 rows and
+  // 'strings' one every 5 rows.
+  const auto& schemaWithId = *reader->fileSchemaWithId();
+  const auto* ints =
+      reader->fileColumnStatistics(schemaWithId.childAt(0)->id());
+  ASSERT_NE(ints, nullptr);
+  EXPECT_EQ(ints->getNullCount(), 15);
+  const auto* strings =
+      reader->fileColumnStatistics(schemaWithId.childAt(2)->id());
+  ASSERT_NE(strings, nullptr);
+  EXPECT_EQ(strings->getNullCount(), 20);
+
+  const uint32_t numNodes = schemaWithId.maxId() + 1;
+  for (uint32_t nodeId = 0; nodeId < numNodes; ++nodeId) {
+    SCOPED_TRACE(fmt::format("nodeId {}", nodeId));
+    const auto* stats = reader->fileColumnStatistics(nodeId);
+    ASSERT_NE(stats, nullptr);
+    EXPECT_EQ(reader->fileColumnLogicalSize(nodeId), stats->getLogicalSize());
+  }
+  EXPECT_EQ(reader->fileColumnStatistics(numNodes), nullptr);
+  EXPECT_EQ(reader->fileColumnLogicalSize(numNodes), std::nullopt);
+}
+
+TEST_P(ReaderBaseTest, fileStatsAbsent) {
+  const auto reader =
+      createReaderBase(writeStatsTestFile(/*enableVectorizedStats=*/false));
+  EXPECT_FALSE(reader->hasFileColumnStatistics());
+  EXPECT_EQ(reader->fileColumnStatistics(1), nullptr);
+  EXPECT_EQ(reader->fileColumnLogicalSize(1), std::nullopt);
+}
+
 TEST_P(ReaderBaseTest, locateStreams) {
   auto reader = createReaderBase();
   StripeStreams streams(reader);
@@ -337,17 +417,30 @@ TEST_P(ReaderBaseTest, locateStreams) {
       {{}},
   };
 
+  const auto& tablet = reader->tablet();
+  const auto stripe = tablet.stripeIdentifier(0);
   for (const auto& testCase : testCases) {
     SCOPED_TRACE(testCase.debugString());
     auto locations = streams.locateStreams(testCase.streamIds);
     ASSERT_EQ(locations.size(), testCase.streamIds.size());
 
     for (size_t i = 0; i < locations.size(); ++i) {
-      SCOPED_TRACE(fmt::format("streamId={}", testCase.streamIds[i]));
-      if (locations[i].has_value()) {
-        EXPECT_EQ(locations[i]->streamId, testCase.streamIds[i]);
-        EXPECT_GT(locations[i]->region.length, 0);
+      const auto streamId = testCase.streamIds[i];
+      SCOPED_TRACE(fmt::format("streamId={}", streamId));
+      if (streamId >= tablet.streamCount(stripe) ||
+          tablet.streamSize(stripe, streamId) == 0) {
+        EXPECT_FALSE(locations[i].has_value());
+        EXPECT_FALSE(streams.hasStream(streamId));
+        continue;
       }
+      ASSERT_TRUE(locations[i].has_value());
+      EXPECT_EQ(locations[i]->streamId, streamId);
+      EXPECT_EQ(
+          locations[i]->region.offset,
+          tablet.stripeOffset(0) + tablet.streamOffset(stripe, streamId));
+      EXPECT_EQ(
+          locations[i]->region.length, tablet.streamSize(stripe, streamId));
+      EXPECT_TRUE(streams.hasStream(streamId));
     }
   }
 }
@@ -429,8 +522,22 @@ INSTANTIATE_TEST_CASE_P(
       return info.param == CreationMode::kDirect ? "direct" : "cached";
     });
 
+// A StripeGroup metadata format: a layout, and for kStreamMajor whether it uses
+// the sparse layout.
+struct StripeGroupFormat {
+  StripeGroup::EncodingLayout layout;
+  bool sparseLayout{false};
+
+  std::string debugString() const {
+    if (layout == StripeGroup::EncodingLayout::kRaw) {
+      return "raw";
+    }
+    return sparseLayout ? "streamMajorSparse" : "streamMajor";
+  }
+};
+
 class StripeStreamsMultiStripeTest
-    : public ::testing::TestWithParam<StripeGroup::EncodingLayout> {
+    : public ::testing::TestWithParam<StripeGroupFormat> {
  protected:
   static void SetUpTestSuite() {
     velox::memory::MemoryManager::testingSetInstance({});
@@ -446,7 +553,8 @@ class StripeStreamsMultiStripeTest
     velox::test::VectorMaker vectorMaker(pool_.get());
 
     WriterOptions writerOptions;
-    writerOptions.experimentalStripeGroupEncodingLayout = GetParam();
+    writerOptions.experimentalStripeGroupEncodingLayout = GetParam().layout;
+    writerOptions.experimentalStripeGroupSparseLayout = GetParam().sparseLayout;
     writerOptions.flushPolicyFactory = []() {
       return std::make_unique<LambdaFlushPolicy>(
           [](const StripeProgress&) { return true; });
@@ -576,9 +684,11 @@ INSTANTIATE_TEST_CASE_P(
     MetadataFormats,
     StripeStreamsMultiStripeTest,
     ::testing::Values(
-        StripeGroup::EncodingLayout::kRaw,
-        StripeGroup::EncodingLayout::kStreamMajor),
-    [](const ::testing::TestParamInfo<StripeGroup::EncodingLayout>& info) {
-      return info.param == StripeGroup::EncodingLayout::kRaw ? "raw"
-                                                             : "streamMajor";
+        StripeGroupFormat{StripeGroup::EncodingLayout::kRaw},
+        StripeGroupFormat{StripeGroup::EncodingLayout::kStreamMajor},
+        StripeGroupFormat{
+            StripeGroup::EncodingLayout::kStreamMajor,
+            /*sparseLayout=*/true}),
+    [](const ::testing::TestParamInfo<StripeGroupFormat>& info) {
+      return info.param.debugString();
     });

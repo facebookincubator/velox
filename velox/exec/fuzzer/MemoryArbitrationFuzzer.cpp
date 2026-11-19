@@ -32,6 +32,7 @@
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/UnsafeRowSerializer.h"
@@ -926,7 +927,7 @@ void MemoryArbitrationFuzzer::verify() {
   auto plans = allPlans(tableScanDir->getPath());
 
   SCOPE_EXIT {
-    test::waitForAllTasksToBeDeleted();
+    test::TaskMonitor::waitForAllTasksDeleted();
     if (auto faultyFileSystem = std::dynamic_pointer_cast<FaultyFileSystem>(
             filesystems::getFileSystem(spillDirectory->getPath(), nullptr))) {
       faultyFileSystem->clearFileFaultInjections();

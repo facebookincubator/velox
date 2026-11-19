@@ -13,17 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/dwio/nimble/reader/NimbleReaderFactory.h"
+#pragma once
 
-namespace facebook::velox::nimble::detail {
+#include <string>
+#include <unordered_map>
 
-// The batch reader reaches into internal-only code, so it is not part of the
-// open-source build. Returning nullptr makes the factory report a clear error
-// rather than fail to link.
-std::unique_ptr<dwio::common::Reader> createBatchReader(
-    const dwio::common::ReaderOptions& /*options*/,
-    const std::shared_ptr<ReadFile>& /*readFile*/) {
-  return nullptr;
-}
+namespace facebook::nimble::detail {
 
-} // namespace facebook::velox::nimble::detail
+/// Returns the key-value metadata that WriterOptions stores in every file by
+/// default. Each build links exactly one definition; the open-source build
+/// (WriterDefaultMetadataOSS.cpp) adds none.
+std::unordered_map<std::string, std::string> defaultMetadata();
+
+} // namespace facebook::nimble::detail

@@ -131,23 +131,20 @@ void SortWindowBuild::ensureInputFits(const RowVectorPtr& input) {
     return;
   }
 
-  auto [freeRows, outOfLineFreeBytes] = data_->freeSpace();
-  const auto outOfLineBytes =
-      data_->stringAllocator().retainedSize() - outOfLineFreeBytes;
+  const auto outOfLineBytes = data_->usedVariableWidthBytes();
   const auto outOfLineBytesPerRow = outOfLineBytes / data_->numRows();
 
-  const auto currentUsage = data_->pool()->usedBytes();
+  const auto currentUsage = data_->stringAllocator().pool()->usedBytes();
   const auto minReservationBytes =
       currentUsage * spillConfig_->minSpillableReservationPct / 100;
-  const auto availableReservationBytes = data_->pool()->availableReservation();
-  const auto incrementBytes =
-      data_->sizeIncrement(input->size(), outOfLineBytesPerRow * input->size());
+  const auto availableReservationBytes =
+      data_->stringAllocator().pool()->availableReservation();
+  const auto incrementBytes = data_->maxGrowthBytes(
+      input->size(), outOfLineBytesPerRow * input->size());
 
   // First to check if we have sufficient minimal memory reservation.
   if (availableReservationBytes >= minReservationBytes) {
-    if ((freeRows > input->size()) &&
-        (outOfLineBytes == 0 ||
-         outOfLineFreeBytes >= outOfLineBytesPerRow * input->size())) {
+    if (incrementBytes == 0) {
       // Enough free rows for input rows and enough variable length free space.
       return;
     }
@@ -161,19 +158,22 @@ void SortWindowBuild::ensureInputFits(const RowVectorPtr& input) {
       currentUsage * spillConfig_->spillableReservationGrowthPct / 100);
   {
     memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
-    if (data_->pool()->maybeReserve(targetIncrementBytes)) {
+    if (data_->stringAllocator().pool()->maybeReserve(targetIncrementBytes)) {
       return;
     }
   }
 
   LOG(WARNING) << "Failed to reserve " << succinctBytes(targetIncrementBytes)
-               << " for memory pool " << data_->pool()->name()
-               << ", root pool: " << data_->pool()->root()->name()
-               << ", used: " << succinctBytes(data_->pool()->usedBytes())
+               << " for memory pool " << data_->stringAllocator().pool()->name()
+               << ", root pool: "
+               << data_->stringAllocator().pool()->root()->name() << ", used: "
+               << succinctBytes(data_->stringAllocator().pool()->usedBytes())
                << ", reservation: "
-               << succinctBytes(data_->pool()->reservedBytes())
+               << succinctBytes(
+                      data_->stringAllocator().pool()->reservedBytes())
                << ", root pool reservation: "
-               << succinctBytes(data_->pool()->root()->reservedBytes());
+               << succinctBytes(
+                      data_->stringAllocator().pool()->root()->reservedBytes());
 }
 
 void SortWindowBuild::ensureSortFits() {
@@ -227,7 +227,7 @@ void SortWindowBuild::spill() {
 
   spiller_->spill();
   data_->clear();
-  data_->pool()->release();
+  data_->stringAllocator().pool()->release();
 }
 
 std::optional<exec::SpillStats> SortWindowBuild::spilledStats() const {
@@ -291,7 +291,7 @@ void SortWindowBuild::sortPartitions() {
   // the rows.
   sortedRows_.resize(numRows_);
   RowContainerIterator iter;
-  data_->listRows(&iter, numRows_, sortedRows_.data());
+  data_->listRows(&iter, std::span(sortedRows_.data(), numRows_));
 
   PrefixSort::sort(
       data_.get(), compareFlags_, prefixSortConfig_, pool_, sortedRows_);

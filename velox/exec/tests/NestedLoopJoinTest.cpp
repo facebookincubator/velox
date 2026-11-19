@@ -20,6 +20,7 @@
 #include "velox/exec/tests/utils/BackpressureTestNode.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -145,14 +146,6 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
       size_t preferredOutputBatchSize = 1024) {
     createDuckDbTable("t", probeVectors);
     createDuckDbTable("u", buildVectors);
-    auto queryCtx = core::QueryCtx::create(executor_.get());
-
-    CursorParameters params;
-    params.queryCtx = queryCtx;
-    params.queryCtx->testingOverrideConfigUnsafe(
-        {{core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(preferredOutputBatchSize)}});
-    params.maxDrivers = numDrivers;
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
     for (const auto joinType : joinTypes_) {
@@ -164,7 +157,7 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
                 core::JoinTypeName::toName(joinType),
                 comparison));
 
-        params.planNode =
+        auto plan =
             PlanBuilder(planNodeIdGenerator)
                 .values(probeVectors)
                 .localPartition({probeKeyName_})
@@ -178,12 +171,16 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
                     joinType)
                 .planNode();
 
-        assertQuery(
-            params,
-            fmt::format(
-                fmt::runtime(queryStr_),
-                core::JoinTypeName::toName(joinType),
-                comparison));
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .config(
+                core::QueryConfig::kPreferredOutputBatchRows,
+                preferredOutputBatchSize)
+            .maxDrivers(numDrivers)
+            .assertResults(
+                fmt::format(
+                    fmt::runtime(queryStr_),
+                    core::JoinTypeName::toName(joinType),
+                    comparison));
       }
     }
   }
@@ -209,8 +206,8 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
 };
 
 TEST_F(NestedLoopJoinTest, emptyBuildOrProbeWithoutFilter) {
-  auto empty = makeRowVector({"u0"}, {makeFlatVector<StringView>({})});
-  auto nonEmpty = makeRowVector({"t0"}, {makeFlatVector<StringView>({"foo"})});
+  auto empty = makeNamedRowVector("u0", makeFlatVector<StringView>({}));
+  auto nonEmpty = makeNamedRowVector("t0", makeFlatVector<StringView>({"foo"}));
   auto expected = makeRowVector({makeFlatVector<StringView>({"foo", "foo"})});
 
   auto testJoin = [&](const std::vector<RowVectorPtr>& leftVectors,
@@ -382,28 +379,27 @@ TEST_F(NestedLoopJoinTest, basicCrossJoin) {
                {"c0", "u_c0"})
            .planNode();
 
-  assertQueryReturnsEmptyResult(op);
+  AssertQueryBuilder(op).assertEmptyResults();
 
   // Multi-threaded build side.
   planNodeIdGenerator->reset();
-  CursorParameters params;
-  params.maxDrivers = 4;
-  params.planNode = PlanBuilder(planNodeIdGenerator)
-                        .values({probeVectors})
-                        .nestedLoopJoin(
-                            PlanBuilder(planNodeIdGenerator, pool_.get())
-                                .values({buildVectors}, true)
-                                .filter("c0 in (10, 17)")
-                                .project({"c0 AS u_c0"})
-                                .planNode(),
-                            {"c0", "u_c0"})
-                        .limit(0, 100'000, false)
-                        .planNode();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({probeVectors})
+                  .nestedLoopJoin(
+                      PlanBuilder(planNodeIdGenerator, pool_.get())
+                          .values({buildVectors}, true)
+                          .filter("c0 in (10, 17)")
+                          .project({"c0 AS u_c0"})
+                          .planNode(),
+                      {"c0", "u_c0"})
+                  .limit(0, 100'000, false)
+                  .planNode();
 
-  OperatorTestBase::assertQuery(
-      params,
-      "SELECT * FROM t, "
-      "(SELECT * FROM UNNEST (ARRAY[10, 17, 10, 17, 10, 17, 10, 17])) u");
+  AssertQueryBuilder(plan, duckDbQueryRunner_)
+      .maxDrivers(4)
+      .assertResults(
+          "SELECT * FROM t, "
+          "(SELECT * FROM UNNEST (ARRAY[10, 17, 10, 17, 10, 17, 10, 17])) u");
 }
 
 TEST_F(NestedLoopJoinTest, outerJoinWithoutCondition) {
@@ -629,7 +625,7 @@ TEST_F(NestedLoopJoinTest, outputOrderWithMultipleBuildVectors) {
   AssertQueryBuilder(
       makeOutputOrderPlan(probeVector, buildVectors, core::JoinType::kInner),
       duckDbQueryRunner_)
-      .config(core::QueryConfig::kMaxOutputBatchRows, "5")
+      .config(core::QueryConfig::kMaxOutputBatchRows, 5)
       .assertResults(
           "SELECT probe_ordinal, l1, l2, build_ordinal, r1, r2 "
           "FROM t JOIN u_multi ON l1 < r1 "
@@ -639,7 +635,7 @@ TEST_F(NestedLoopJoinTest, outputOrderWithMultipleBuildVectors) {
   AssertQueryBuilder(
       makeOutputOrderPlan(probeVector, buildVectors, core::JoinType::kLeft),
       duckDbQueryRunner_)
-      .config(core::QueryConfig::kMaxOutputBatchRows, "5")
+      .config(core::QueryConfig::kMaxOutputBatchRows, 5)
       .assertResults(
           "SELECT probe_ordinal, l1, l2, build_ordinal, r1, r2 "
           "FROM t LEFT JOIN u_multi ON l1 < r1 "
@@ -922,13 +918,13 @@ TEST_F(NestedLoopJoinTest, leftSemiFilterAndProjectEmitOnceOverflow) {
   // kLeftSemiProject) past the output-batch boundary. Guards against
   // rawProbeOutputIndices_ overflowing its outputBatchSize_ capacity.
   const vector_size_t numProbeRows = 2'048;
-  const auto probeVector = makeRowVector(
-      {"t0"},
-      {makeFlatVector<int64_t>(numProbeRows, [](auto row) { return row; })});
+  const auto probeVector = makeNamedRowVector(
+      "t0",
+      makeFlatVector<int64_t>(numProbeRows, [](auto row) { return row; }));
   // Single build row for which every probe row matches (t0 < u0), so the whole
   // probe batch is emitted in one short-circuited pass.
   const auto buildVector =
-      makeRowVector({"u0"}, {makeFlatVector<int64_t>({numProbeRows})});
+      makeNamedRowVector("u0", makeFlatVector<int64_t>({numProbeRows}));
 
   createDuckDbTable("t", {probeVector});
   createDuckDbTable("u", {buildVector});
@@ -950,8 +946,8 @@ TEST_F(NestedLoopJoinTest, leftSemiFilterAndProjectEmitOnceOverflow) {
     // Output batch far smaller than the probe batch forces the single
     // short-circuited pass to span multiple output batches.
     AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .config(core::QueryConfig::kPreferredOutputBatchRows, "128")
-        .config(core::QueryConfig::kMaxOutputBatchRows, "128")
+        .config(core::QueryConfig::kPreferredOutputBatchRows, 128)
+        .config(core::QueryConfig::kMaxOutputBatchRows, 128)
         .assertResults(duckDbSql);
   };
 
@@ -1015,13 +1011,13 @@ TEST_F(NestedLoopJoinTest, mergeBuildVectors) {
     assertEqualVectors(makeExpected(2, 45), cursor->current());
   }
   ASSERT_FALSE(cursor->moveNext());
-  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*cursor->task()));
 }
 
 TEST_F(NestedLoopJoinTest, leftSemiJoinProjectDataValidation) {
-  auto probeVectors = makeRowVector({"t0"}, {sequence<int32_t>(5)});
+  auto probeVectors = makeNamedRowVector("t0", sequence<int32_t>(5));
 
-  auto buildVectors = makeRowVector({"u0"}, {sequence<int32_t>(3, 2)});
+  auto buildVectors = makeNamedRowVector("u0", sequence<int32_t>(3, 2));
 
   auto expected = makeRowVector(
       {"t0", "match"},
@@ -1047,11 +1043,11 @@ TEST_F(NestedLoopJoinTest, leftSemiJoinProjectDataValidation) {
 }
 
 TEST_F(NestedLoopJoinTest, leftSemiJoinWithNullsAndFilter) {
-  auto probeVectors = makeRowVector(
-      {"t0"}, {makeNullableFlatVector<int32_t>({0, 1, std::nullopt, 3, 4})});
+  auto probeVectors = makeNamedRowVector(
+      "t0", makeNullableFlatVector<int32_t>({0, 1, std::nullopt, 3, 4}));
 
-  auto buildVectors = makeRowVector(
-      {"u0"}, {makeNullableFlatVector<int32_t>({3, std::nullopt, 4})});
+  auto buildVectors = makeNamedRowVector(
+      "u0", makeNullableFlatVector<int32_t>({3, std::nullopt, 4}));
 
   auto expected = makeRowVector(
       {"t0", "match"},
@@ -1222,14 +1218,13 @@ TEST_F(NestedLoopJoinTest, lazyVectorStaleUnderBackpressure) {
       {"t0", "t1"},
       {makeFlatVector<int64_t>(90'000, [](auto i) { return i % 100; }),
        makeFlatVector<int64_t>(90'000, [](auto i) { return i; })});
-  auto probeFile = TempFilePath::create();
-  writeToFile(probeFile->getPath(), {probeVector});
+  auto probeFile = writeToFile(probeVector);
 
   // Small build side: the cross product multiplies each 10k-row probe batch by
   // these rows, so one probe batch yields many output chunks -> a long drain
   // window during which the scan reader advances.
-  auto buildVector = makeRowVector(
-      {"u0"}, {makeFlatVector<int64_t>(std::vector<int64_t>{0, 1, 2, 3})});
+  auto buildVector = makeNamedRowVector(
+      "u0", makeFlatVector<int64_t>(std::vector<int64_t>{0, 1, 2, 3}));
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId scanNodeId;

@@ -87,11 +87,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
     singleGroupRowSize_ = bits::roundUp(
         singleGroupRowSize_, aggregate_->accumulatorAlignmentSize());
     aggregate_->setOffsets(
-        singleGroupRowSize_,
-        exec::RowContainer::nullByte(kAccumulatorFlagsOffset),
-        exec::RowContainer::nullMask(kAccumulatorFlagsOffset),
-        exec::RowContainer::initializedByte(kAccumulatorFlagsOffset),
-        exec::RowContainer::initializedMask(kAccumulatorFlagsOffset),
+        exec::RowColumn(singleGroupRowSize_, kAccumulatorFlagsOffset),
         /* needed for out of line allocations */ kRowSizeOffset);
     singleGroupRowSize_ += aggregate_->accumulatorFixedWidthSize();
 

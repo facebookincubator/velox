@@ -32,6 +32,7 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
@@ -187,7 +188,8 @@ class OrderByTest : public OperatorTestBase {
       const std::vector<uint32_t>& sortingKeys) {
     {
       SCOPED_TRACE("run without spilling");
-      assertQueryOrdered(planNode, duckDbSql, sortingKeys);
+      AssertQueryBuilder(planNode, duckDbQueryRunner_)
+          .assertResults(duckDbSql, sortingKeys);
     }
     {
       SCOPED_TRACE("run with spilling");
@@ -198,12 +200,12 @@ class OrderByTest : public OperatorTestBase {
           {core::QueryConfig::kSpillEnabled, "true"},
           {core::QueryConfig::kOrderBySpillEnabled, "true"},
       });
-      CursorParameters params;
-      params.planNode = planNode;
-      params.queryCtx = queryCtx;
-      params.spillDirectory = spillDirectory->getPath();
-      auto task = assertQueryOrdered(params, duckDbSql, sortingKeys);
-      auto inputRows = toPlanStats(task->taskStats()).at(orderById).inputRows;
+      auto task = AssertQueryBuilder(planNode, duckDbQueryRunner_)
+                      .queryCtx(queryCtx)
+                      .spillDirectory(spillDirectory->getPath())
+                      .assertResults(duckDbSql, sortingKeys);
+      auto inputRows =
+          PlanNodeStats::extract(task->taskStats(), orderById).inputRows;
       const uint64_t peakSpillMemoryUsage =
           memory::spillMemoryPool()->stats().peakBytes;
       ASSERT_EQ(memory::spillMemoryPool()->stats().usedBytes, 0);
@@ -466,14 +468,14 @@ TEST_F(OrderByTest, outputBatchRows) {
           std::to_string(testData.preferredOutBatchBytes)},
          {core::QueryConfig::kMaxOutputBatchRows,
           std::to_string(testData.maxOutBatchRows)}});
-    CursorParameters params;
-    params.planNode = plan;
-    params.queryCtx = queryCtx;
-    auto task = assertQueryOrdered(
-        params, "SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST", {0});
+    auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                    .queryCtx(queryCtx)
+                    .assertResults(
+                        "SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST",
+                        std::vector<uint32_t>{0});
     EXPECT_EQ(
         testData.expectedOutputVectors,
-        toPlanStats(task->taskStats()).at(orderById).outputVectors);
+        PlanNodeStats::extract(task->taskStats(), orderById).outputVectors);
   }
 }
 
@@ -1116,7 +1118,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringOutputProcessing) {
             .maxDrivers(1)
             .assertResults(expectedResult),
         "Manual MemoryPool Abortion");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -1182,7 +1184,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringInputgProcessing) {
             .maxDrivers(1)
             .assertResults(expectedResult),
         "Manual MemoryPool Abortion");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -1321,7 +1323,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimFromOrderBy) {
   auto& planStats = taskStats.at(orderById);
   ASSERT_GT(planStats.spilledBytes, 0);
   task.reset();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(OrderByTest, reclaimFromEmptyOrderBy) {

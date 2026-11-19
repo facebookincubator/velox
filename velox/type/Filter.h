@@ -1965,6 +1965,12 @@ class BytesRange final : public AbstractRange {
     VELOX_CHECK(!lowerUnbounded_ || !upperUnbounded_);
   }
 
+  /// A member-wise copy or move would leave the views pointing into 'other'.
+  BytesRange(const BytesRange& other)
+      : BytesRange(other, other.nullAllowed()) {}
+
+  BytesRange& operator=(const BytesRange&) = delete;
+
   BytesRange(const BytesRange& other, bool nullAllowed)
       : AbstractRange(
             other.lowerUnbounded_,

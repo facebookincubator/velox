@@ -562,8 +562,8 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
     }
 
     for (auto row = std::max<size_t>(newKeyStart, 1); row < size(); ++row) {
-      if (FOLLY_UNLIKELY(
-              !isKeyOrdered(compareRowKeys(row, row - 1), noDuplicateKey_))) {
+      if (!isKeyOrdered(compareRowKeys(row, row - 1), noDuplicateKey_))
+          [[unlikely]] {
         const auto currentKey = keyColumnsAt(row);
         const auto previousKey = keyColumnsAt(row - 1);
         failKeyOrder(noDuplicateKey_, row, currentKey, row - 1, previousKey);
@@ -624,7 +624,8 @@ HierarchicalClusterIndexWriter::create(
     const IndexConfig& config,
     const velox::TypePtr& inputType,
     std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
-    velox::memory::MemoryPool* pool) {
+    velox::memory::MemoryPool* pool,
+    const ClusterIndexFactory::Options& options) {
   NIMBLE_USER_CHECK_EQ(config.family, IndexFamily::Cluster);
   NIMBLE_CHECK_NOT_NULL(pool, "memory pool must not be null");
   const auto& hierarchicalConfig =
@@ -635,7 +636,8 @@ HierarchicalClusterIndexWriter::create(
           velox::asRowType(inputType),
           getSortOrders(hierarchicalConfig),
           std::move(keyCodec),
-          pool));
+          pool,
+          options));
 }
 
 HierarchicalClusterIndexWriter::HierarchicalClusterIndexWriter(
@@ -643,7 +645,8 @@ HierarchicalClusterIndexWriter::HierarchicalClusterIndexWriter(
     const velox::RowTypePtr& inputType,
     std::vector<SortOrder> sortOrders,
     std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
-    velox::memory::MemoryPool* pool)
+    velox::memory::MemoryPool* pool,
+    const ClusterIndexFactory::Options& options)
     : ClusterIndexWriterBase{
           inputType,
           Options{
@@ -652,6 +655,8 @@ HierarchicalClusterIndexWriter::HierarchicalClusterIndexWriter(
               .sortOrders = sortOrders,
               .maxRowsPerKeyChunk = config.maxRowsPerKeyChunk,
               .keyChunkCompressionType = config.keyChunkCompressionType,
+              .keyStreamLayout = options.keyStreamLayout,
+              .keyStreamId = options.keyStreamId,
           },
           createHierarchicalKeyChunkBuilder(
               std::move(keyCodec),

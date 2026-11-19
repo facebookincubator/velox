@@ -577,6 +577,62 @@ TEST_F(CeilFloorTest, limits) {
   EXPECT_EQ(std::nullopt, floor<int64_t>(std::nullopt));
 }
 
+TEST_F(CeilFloorTest, ansiOverflow) {
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "true"}});
+  constexpr auto kInt64Max = std::numeric_limits<int64_t>::max();
+  constexpr auto kInt64Min = std::numeric_limits<int64_t>::min();
+  constexpr auto kInfinity = std::numeric_limits<double>::infinity();
+
+  // Values in the BIGINT range are unchanged.
+  EXPECT_EQ(3, ceil<double>(2.878));
+  EXPECT_EQ(2, floor<double>(2.878));
+  EXPECT_EQ(-2, ceil<double>(-2.878));
+  EXPECT_EQ(-3, floor<double>(-2.878));
+  EXPECT_EQ(kInt64Min, floor<double>(-9223372036854775808.0));
+  EXPECT_EQ(kInt64Min, ceil<double>(-9223372036854775808.0));
+  EXPECT_EQ(std::nullopt, ceil<double>(std::nullopt));
+  EXPECT_EQ(std::nullopt, floor<double>(std::nullopt));
+
+  // BIGINT input cannot overflow.
+  EXPECT_EQ(kInt64Max, ceil<int64_t>(kInt64Max));
+  EXPECT_EQ(kInt64Min, floor<int64_t>(kInt64Min));
+
+  // NaN is not an overflow in Spark: it maps to 0.
+  EXPECT_EQ(0, ceil<double>(std::numeric_limits<double>::quiet_NaN()));
+  EXPECT_EQ(0, floor<double>(std::numeric_limits<double>::quiet_NaN()));
+
+  // Values outside the BIGINT range throw instead of saturating.
+  VELOX_ASSERT_USER_THROW(
+      ceil<double>(1e30), "Arithmetic overflow: ceil(1e+30)");
+  VELOX_ASSERT_USER_THROW(
+      floor<double>(1e30), "Arithmetic overflow: floor(1e+30)");
+  VELOX_ASSERT_USER_THROW(
+      ceil<double>(-1e30), "Arithmetic overflow: ceil(-1e+30)");
+  VELOX_ASSERT_USER_THROW(
+      floor<double>(-1e30), "Arithmetic overflow: floor(-1e+30)");
+  VELOX_ASSERT_USER_THROW(
+      ceil<double>(kInfinity), "Arithmetic overflow: ceil(inf)");
+  VELOX_ASSERT_USER_THROW(
+      floor<double>(-kInfinity), "Arithmetic overflow: floor(-inf)");
+  // 2^63 is the smallest double above the BIGINT range, like Spark's
+  // `value >= Long.MaxValue.toDouble`.
+  VELOX_ASSERT_USER_THROW(
+      ceil<double>(9223372036854775808.0),
+      "Arithmetic overflow: ceil(9.223372036854776e+18)");
+  VELOX_ASSERT_USER_THROW(
+      floor<double>(9223372036854775808.0),
+      "Arithmetic overflow: floor(9.223372036854776e+18)");
+
+  // try() turns the error into NULL.
+  EXPECT_EQ(
+      std::nullopt,
+      evaluateOnce<int64_t>("try(ceil(c0))", std::optional<double>(1e30)));
+  EXPECT_EQ(
+      std::nullopt,
+      evaluateOnce<int64_t>("try(floor(c0))", std::optional<double>(-1e30)));
+}
+
 TEST_F(ArithmeticTest, sinh) {
   const auto sinh = [&](std::optional<double> a) {
     return evaluateOnce<double>("sinh(c0)", a);

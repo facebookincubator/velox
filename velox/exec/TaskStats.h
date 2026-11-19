@@ -130,6 +130,12 @@ struct TaskStats {
   uint32_t memoryReclaimCount{0};
   /// The total memory reclamation time.
   uint64_t memoryReclaimMs{0};
+
+  /// Returns operator stats keyed by operator type, e.g.
+  /// OperatorType::kHashBuild. Stats of operators of the same type from
+  /// different plan nodes are merged together. OperatorType lists the types of
+  /// built-in operators; extensions such as cudf define their own.
+  std::unordered_map<std::string, OperatorStats> operatorStats() const;
 };
 
 } // namespace facebook::velox::exec

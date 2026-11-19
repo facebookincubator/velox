@@ -136,6 +136,7 @@ TEST_F(AverageAggregationTest, avgAllNulls) {
       .inputs(vectors)
       .groupBy({"c0"})
       .aggregates({"spark_avg(c1)"})
+      .withCompanion()
       .assertResults("SELECT c0, avg(c1) FROM tmp GROUP BY c0");
 
   plan = PlanBuilder()
@@ -164,8 +165,11 @@ TEST_F(AverageAggregationTest, avgDecimal) {
   auto shortDecimalInput = makeRowVector({shortDecimal});
   auto shortDecimalExpected = makeRowVector(
       {makeConstant<int64_t>(3'000 * kRescale, 1, DECIMAL(16, 5))});
-  testGlobalAverage(
-      {shortDecimalInput}, {shortDecimalExpected}, {DECIMAL(12, 1)});
+  AggregationTester(*this)
+      .inputs(shortDecimalInput)
+      .aggregates({"spark_avg(c0)"})
+      .withCompanion(CompanionPlans::kMergeOnly)
+      .assertResults(shortDecimalExpected);
 
   // Long decimal aggregation.
   auto longDecimalInput = makeRowVector({makeNullableFlatVector<int128_t>(
@@ -178,8 +182,11 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       DECIMAL(23, 4))});
   auto longDecimalExpected = makeRowVector({makeConstant<int128_t>(
       HugeInt::build(10, 300) * kRescale, 1, DECIMAL(27, 8))});
-  testGlobalAverage(
-      {longDecimalInput}, {longDecimalExpected}, {DECIMAL(23, 4)});
+  AggregationTester(*this)
+      .inputs(longDecimalInput)
+      .aggregates({"spark_avg(c0)"})
+      .withCompanion(CompanionPlans::kMergeOnly)
+      .assertResults(longDecimalExpected);
 
   // The total sum overflows the max int128_t limit.
   std::vector<int128_t> rawVector;
@@ -383,6 +390,12 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
   }
   createDuckDbTable(data);
 
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"spark_avg(i)", "spark_avg(d)"})
+      .withCompanion()
+      .assertResults("SELECT avg(i), avg(d) FROM tmp");
+
   core::PlanNodeId partialNodeId;
   auto plan = PlanBuilder()
                   .values(data)
@@ -394,8 +407,8 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
           .maxDrivers(1)
-          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
-          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
           .assertResults(
               "SELECT k, avg(i) FILTER (WHERE m), "
               "avg(d) FILTER (WHERE m) FROM tmp GROUP BY k");
@@ -421,8 +434,8 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
              .planNode();
   task = AssertQueryBuilder(plan, duckDbQueryRunner_)
              .maxDrivers(1)
-             .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
-             .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+             .config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+             .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
              .assertResults("SELECT k, avg(b), avg(v) FROM tmp GROUP BY k");
 
   const auto fastStats = exec::toPlanStats(task->taskStats());

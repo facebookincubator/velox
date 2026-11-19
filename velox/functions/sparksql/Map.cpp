@@ -20,6 +20,7 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/sparksql/LastWin.h"
 #include "velox/functions/sparksql/MapFromArrays.h"
+#include "velox/vector/FlatMapVector.h"
 
 // The description of the map function in Spark
 // https://kontext.tech/article/586/spark-sql-map-functions
@@ -293,6 +294,9 @@ std::pair<VectorPtr, VectorPtr> toArrays(
 
 class MapFunction : public exec::VectorFunction {
  public:
+  explicit MapFunction(bool generateConstantMapsAsFlatMaps)
+      : generateConstantMapsAsFlatMaps_{generateConstantMapsAsFlatMaps} {}
+
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -331,11 +335,26 @@ class MapFunction : public exec::VectorFunction {
       constantKeys = constantKeys && args[i * 2]->isConstantEncoding();
     }
 
-    auto* pool = context.pool();
-    auto [keys, values] = toArrays(rows, args, mapSize, constantKeys, pool);
-    std::vector<VectorPtr> arrays{std::move(keys), std::move(values)};
-    MapFromArraysFunction(throwExceptionOnDuplicateMapKeys)
-        .apply(rows, arrays, outputType, context, result);
+    // TODO Remove float check once Gluten supports Spark 4.
+    if (generateConstantMapsAsFlatMaps_ && constantKeys &&
+        keyType->kind() != TypeKind::REAL &&
+        keyType->kind() != TypeKind::DOUBLE) {
+      buildFlatMap(
+          rows,
+          args,
+          keyType,
+          outputType,
+          mapSize,
+          throwExceptionOnDuplicateMapKeys,
+          context,
+          result);
+    } else {
+      auto* pool = context.pool();
+      auto [keys, values] = toArrays(rows, args, mapSize, constantKeys, pool);
+      std::vector<VectorPtr> arrays{std::move(keys), std::move(values)};
+      MapFromArraysFunction(throwExceptionOnDuplicateMapKeys)
+          .apply(rows, arrays, outputType, context, result);
+    }
   }
 
   static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
@@ -365,14 +384,65 @@ class MapFunction : public exec::VectorFunction {
             .build());
     return signatures;
   }
+
+ private:
+  // Builds a flat map from the constant keys in 'args', with the value
+  // arguments as the map values of the distinct keys.
+  void buildFlatMap(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      const TypePtr& keyType,
+      const TypePtr& outputType,
+      vector_size_t mapSize,
+      bool throwExceptionOnDuplicateMapKeys,
+      exec::EvalCtx& context,
+      VectorPtr& result) const {
+    auto* pool = context.pool();
+    auto keys = BaseVector::create(keyType, mapSize, pool);
+    for (vector_size_t i = 0; i < mapSize; ++i) {
+      keys->copy(args[i * 2].get(), i, rows.begin(), 1);
+    }
+    DecodedVector decodedKeys(*keys);
+    LastWin<SparkMapKeyEquality> lastWin;
+    const auto& entries = lastWin.resolve(
+        decodedKeys, 0, mapSize, throwExceptionOnDuplicateMapKeys);
+    VectorPtr distinctKeys = keys;
+    if (entries.size() < mapSize) {
+      distinctKeys = BaseVector::create(keyType, entries.size(), pool);
+      for (vector_size_t i = 0; i < entries.size(); ++i) {
+        distinctKeys->copy(keys.get(), i, entries[i].key, 1);
+      }
+    }
+    std::vector<VectorPtr> mapValues;
+    mapValues.reserve(entries.size());
+    for (const auto& entry : entries) {
+      mapValues.push_back(args[entry.value * 2 + 1]);
+    }
+    auto flatMap = std::make_shared<FlatMapVector>(
+        pool,
+        outputType,
+        nullptr,
+        rows.end(),
+        std::move(distinctKeys),
+        std::move(mapValues),
+        std::vector<BufferPtr>{});
+    context.moveOrCopyResult(flatMap, rows, result);
+  }
+
+  bool generateConstantMapsAsFlatMaps_;
 };
 } // namespace
 
 void registerMapFunction(const std::string& name) {
-  exec::registerVectorFunction(
+  exec::registerStatefulVectorFunction(
       name,
       MapFunction::signatures(),
-      std::make_unique<MapFunction>(),
+      [](const std::string& /*name*/,
+         const std::vector<exec::VectorFunctionArg>& /*inputArgs*/,
+         const core::QueryConfig& config) {
+        return std::make_shared<MapFunction>(
+            config.generateConstantMapsAsFlatMaps());
+      },
       exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
 }
 

@@ -19,10 +19,12 @@
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/BackpressureTestNode.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 namespace facebook::velox::exec::test {
 using namespace facebook::velox::common::testutil;
@@ -250,7 +252,7 @@ TEST_F(RowNumberTest, spill) {
         0);
 
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -428,7 +430,7 @@ DEBUG_ONLY_TEST_F(RowNumberTest, spillOnlyDuringInputOrOutput) {
     ASSERT_GT(planStats.spilledRows, 0);
 
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -521,7 +523,7 @@ DEBUG_ONLY_TEST_F(RowNumberTest, recursiveSpill) {
     }
 
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -573,7 +575,7 @@ TEST_F(RowNumberTest, spillWithYield) {
     ASSERT_GT(planStats.spilledRows, 0);
 
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 

@@ -46,6 +46,7 @@
 #include "velox/exec/TaskStats.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
@@ -65,7 +66,7 @@ class UcxExchangeTaskTest : public UcxExchangeTestBase {
   // A Task can be destroyed on a driver thread after the case drops its
   // references; its plan's vectors come from 'pool_'.
   void TearDown() override {
-    exec::test::waitForAllTasksToBeDeleted();
+    exec::test::TaskMonitor::waitForAllTasksDeleted();
     UcxExchangeTestBase::TearDown();
   }
 };
@@ -209,7 +210,7 @@ class TaskShuffleResults {
 };
 
 // The UCX round trip goes through the communicator's event loop, so allow well
-// over waitForTaskCompletion's 1s default.
+// over TaskMonitor::waitForCompletion's 1s default.
 constexpr uint64_t kTaskShuffleMaxWaitMicros = 60'000'000;
 
 // Cancels the Tasks a case started, and waits for their drivers to stop, when
@@ -457,14 +458,14 @@ std::vector<RowVectorPtr> runTaskShuffle(
   consumerTask->noMoreSplits(consumerNodeId);
 
   VELOX_CHECK(
-      exec::test::waitForTaskCompletion(
-          consumerTask.get(), kTaskShuffleMaxWaitMicros),
+      exec::test::TaskMonitor::waitForCompletion(
+          *consumerTask, kTaskShuffleMaxWaitMicros),
       "Consumer task did not complete for transport: {}",
       transportKind);
   for (const auto& task : producerTasks) {
     VELOX_CHECK(
-        exec::test::waitForTaskCompletion(
-            task.get(), kTaskShuffleMaxWaitMicros),
+        exec::test::TaskMonitor::waitForCompletion(
+            *task, kTaskShuffleMaxWaitMicros),
         "Producer task did not complete: {}",
         task->taskId());
   }
@@ -677,8 +678,8 @@ TEST_F(UcxExchangeTaskTest, producerFailureMidStreamFailsConsumer) {
     producer->setError("Injected producer failure");
 
     ASSERT_TRUE(
-        exec::test::waitForTaskFailure(
-            consumer.get(), kTaskShuffleMaxWaitMicros))
+        exec::test::TaskMonitor::waitForFailure(
+            *consumer, kTaskShuffleMaxWaitMicros))
         << exec::taskStateString(consumer->state());
     EXPECT_THAT(
         consumer->errorMessage(),
@@ -723,7 +724,8 @@ TEST_F(UcxExchangeTaskTest, oversizedProducerErrorFailsConsumer) {
       "Injected producer failure: " + std::string(2'000'000, 'x'));
 
   ASSERT_TRUE(
-      exec::test::waitForTaskFailure(consumer.get(), kTaskShuffleMaxWaitMicros))
+      exec::test::TaskMonitor::waitForFailure(
+          *consumer, kTaskShuffleMaxWaitMicros))
       << exec::taskStateString(consumer->state());
   EXPECT_THAT(
       consumer->errorMessage(),
@@ -750,7 +752,8 @@ TEST_F(UcxExchangeTaskTest, lateConsumerOfFailedProducerFails) {
   startedTasks.add(producer);
   producer->setError("Injected producer failure");
   ASSERT_TRUE(
-      exec::test::waitForTaskFailure(producer.get(), kTaskShuffleMaxWaitMicros))
+      exec::test::TaskMonitor::waitForFailure(
+          *producer, kTaskShuffleMaxWaitMicros))
       << exec::taskStateString(producer->state());
 
   core::PlanNodeId exchangeNodeId;
@@ -764,7 +767,8 @@ TEST_F(UcxExchangeTaskTest, lateConsumerOfFailedProducerFails) {
   consumer->noMoreSplits(exchangeNodeId);
 
   ASSERT_TRUE(
-      exec::test::waitForTaskFailure(consumer.get(), kTaskShuffleMaxWaitMicros))
+      exec::test::TaskMonitor::waitForFailure(
+          *consumer, kTaskShuffleMaxWaitMicros))
       << exec::taskStateString(consumer->state());
   EXPECT_THAT(
       consumer->errorMessage(),
@@ -800,8 +804,8 @@ TEST_F(UcxExchangeTaskTest, limitBeforeProducerFinishesStillSucceeds) {
   consumer->noMoreSplits(exchangeNodeId);
 
   ASSERT_TRUE(
-      exec::test::waitForTaskCompletion(
-          consumer.get(), kTaskShuffleMaxWaitMicros))
+      exec::test::TaskMonitor::waitForCompletion(
+          *consumer, kTaskShuffleMaxWaitMicros))
       << exec::taskStateString(consumer->state()) << ": "
       << consumer->errorMessage();
   EXPECT_EQ(totalRows(results.batches()), 10);
@@ -877,13 +881,13 @@ TEST_F(UcxExchangeTaskTest, zeroColumnPayloadKeepsItsRowCount) {
   consumerTask->noMoreSplits(exchangeNodeId);
 
   ASSERT_TRUE(
-      exec::test::waitForTaskCompletion(
-          consumerTask.get(), kTaskShuffleMaxWaitMicros))
+      exec::test::TaskMonitor::waitForCompletion(
+          *consumerTask, kTaskShuffleMaxWaitMicros))
       << "Consumer task did not complete";
   for (const auto& task : producerTasks) {
     ASSERT_TRUE(
-        exec::test::waitForTaskCompletion(
-            task.get(), kTaskShuffleMaxWaitMicros))
+        exec::test::TaskMonitor::waitForCompletion(
+            *task, kTaskShuffleMaxWaitMicros))
         << "Producer task did not complete: " << task->taskId();
   }
 
@@ -1074,17 +1078,17 @@ TEST_F(UcxExchangeTaskTest, mergeExchangeOverUcxNumbersOperatorsConsecutively) {
   drainTask->noMoreSplits(drainNodeId);
 
   ASSERT_TRUE(
-      exec::test::waitForTaskCompletion(
-          drainTask.get(), kTaskShuffleMaxWaitMicros))
+      exec::test::TaskMonitor::waitForCompletion(
+          *drainTask, kTaskShuffleMaxWaitMicros))
       << "Drain task did not complete";
   ASSERT_TRUE(
-      exec::test::waitForTaskCompletion(
-          sorterTask.get(), kTaskShuffleMaxWaitMicros))
+      exec::test::TaskMonitor::waitForCompletion(
+          *sorterTask, kTaskShuffleMaxWaitMicros))
       << "Sorter task did not complete";
   for (const auto& task : producerTasks) {
     ASSERT_TRUE(
-        exec::test::waitForTaskCompletion(
-            task.get(), kTaskShuffleMaxWaitMicros))
+        exec::test::TaskMonitor::waitForCompletion(
+            *task, kTaskShuffleMaxWaitMicros))
         << "Producer task did not complete: " << task->taskId();
   }
 

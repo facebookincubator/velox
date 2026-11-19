@@ -184,9 +184,9 @@ class Task : public std::enable_shared_from_this<Task> {
   }
 
   /// Returns the pool of unique row ids shared by all AssignUniqueId operators
-  /// in this task. Each operator atomically claims disjoint ranges from it, so
-  /// the ids it generates never collide across operators or drivers of the same
-  /// task.
+  /// in this task, and in the sub-tasks of a fixed point it runs. Each operator
+  /// atomically claims disjoint ranges from it, so the ids it generates never
+  /// collide across operators or drivers of the same task.
   const std::shared_ptr<std::atomic_int64_t>& uniqueRowIdPool() const {
     return uniqueRowIdPool_;
   }
@@ -1012,7 +1012,8 @@ class Task : public std::enable_shared_from_this<Task> {
       std::function<void(std::exception_ptr)> onError = nullptr,
       std::weak_ptr<PersistentState> fixedPointState = {},
       std::shared_ptr<memory::MemoryPool> fixedPointStatePool = nullptr,
-      std::shared_ptr<TaskDeletionLatch> ownerDeletionLatch = nullptr);
+      std::shared_ptr<TaskDeletionLatch> ownerDeletionLatch = nullptr,
+      std::shared_ptr<std::atomic_int64_t> uniqueRowIdPool = nullptr);
 
   // Invoked to do post-create initialization.
   void init(std::optional<common::SpillDiskOptions>&& spillDiskOpts);
@@ -1492,10 +1493,9 @@ class Task : public std::enable_shared_from_this<Task> {
   std::vector<std::shared_ptr<ExchangeTransportEntry>>
       exchangeTransportEntries_;
 
-  // Pool of unique row ids shared by all AssignUniqueId operators in this task.
-  // See uniqueRowIdPool().
-  const std::shared_ptr<std::atomic_int64_t> uniqueRowIdPool_{
-      std::make_shared<std::atomic_int64_t>(0)};
+  // Pool of unique row ids, shared with the sub-tasks of this task's fixed
+  // point. See uniqueRowIdPool().
+  const std::shared_ptr<std::atomic_int64_t> uniqueRowIdPool_;
 
   ConsumerSupplier consumerSupplier_;
 

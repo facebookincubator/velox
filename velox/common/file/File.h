@@ -183,7 +183,9 @@ class ReadFile {
   }
 
   /// Returns true if this file requires direct-I/O alignment. Sets alignment to
-  /// the byte alignment required for positioned reads, or 1 otherwise.
+  /// the byte alignment required for positioned reads, or 1 otherwise. A
+  /// direct-I/O read may run past the end of the file, and the bytes it returns
+  /// past the end are unspecified.
   virtual bool directIo(uint64_t& alignment) const {
     alignment = 1;
     return false;

@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
@@ -641,8 +642,8 @@ TEST_F(FirstAggregateTest, spillingAndSorting) {
 
   exec::TestScopedSpillInjection scopedSpillInjection(100);
   results = AssertQueryBuilder(plan)
-                .config(core::QueryConfig::kSpillEnabled, "true")
-                .config(core::QueryConfig::kAggregationSpillEnabled, "true")
+                .config(core::QueryConfig::kSpillEnabled, true)
+                .config(core::QueryConfig::kAggregationSpillEnabled, true)
                 .spillDirectory(spillDirectory->getPath())
                 .copyResults(pool());
   exec::test::assertEqualResults({expected}, {results});

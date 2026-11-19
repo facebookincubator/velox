@@ -524,7 +524,7 @@ bool matchExactPattern(
     StringView input,
     const std::string& pattern,
     size_t length) {
-  if (FOLLY_LIKELY(pattern.size() > 0)) {
+  if (pattern.size() > 0) [[likely]] {
     return input.size() == pattern.size() &&
         std::memcmp(input.data(), pattern.data(), length) == 0;
   }
@@ -2075,7 +2075,7 @@ std::optional<std::string> parsePattern(
 
     // Set the 'previousKind' to currentKind if it has not been set yet, which
     // only occur once(the first char) during parsing.
-    if (FOLLY_UNLIKELY(!previousKind.has_value())) {
+    if (!previousKind.has_value()) [[unlikely]] {
       previousKind = currentKind;
     }
 
@@ -2110,7 +2110,7 @@ std::optional<std::string> parsePattern(
 PatternMetadata determinePatternKind(
     std::string_view pattern,
     std::optional<char> escapeChar) {
-  if (FOLLY_UNLIKELY(pattern.empty())) {
+  if (pattern.empty()) [[unlikely]] {
     return PatternMetadata::fixed("");
   }
 

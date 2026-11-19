@@ -22,10 +22,9 @@
 
 #include "velox/common/base/Nulls.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/core/QueryCtx.h"
+#include "velox/common/testutil/PageBeforeGuard.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/arrow/Bridge.h"
-#include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::test {
@@ -57,6 +56,26 @@ void validateOffsets(
   }
 }
 
+// Overwrites the timestamps at 'rows' with bytes that do not convert to
+// milli-, micro- or nanoseconds, like bytes left over in a reused buffer.
+void setOutOfRange(
+    FlatVector<Timestamp>& timestamps,
+    const std::vector<vector_size_t>& rows) {
+  for (auto row : rows) {
+    std::memset(&timestamps.mutableRawValues()[row], 0x71, sizeof(Timestamp));
+  }
+}
+
+// Overwrites the strings at 'rows' with bytes that make long strings pointing
+// nowhere, like bytes left over in a reused buffer.
+void setDangling(
+    FlatVector<StringView>& strings,
+    const std::vector<vector_size_t>& rows) {
+  for (auto row : rows) {
+    std::memset(&strings.mutableRawValues()[row], 0x01, sizeof(StringView));
+  }
+}
+
 template <typename T>
 struct VeloxToArrowType {
   using type = T;
@@ -67,7 +86,7 @@ struct VeloxToArrowType<Timestamp> {
   using type = int64_t;
 };
 
-class ArrowBridgeArrayExportTest : public testing::Test {
+class ArrowBridgeArrayExportTest : public testing::Test, public VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
@@ -77,10 +96,10 @@ class ArrowBridgeArrayExportTest : public testing::Test {
   void testFlatVector(
       const std::vector<std::optional<T>>& inputData,
       const TypePtr& type = CppToType<T>::create()) {
-    auto flatVector = vectorMaker_.flatVectorNullable(inputData, type);
+    auto flatVector = makeNullableFlatVector(inputData, type);
     auto expected = BaseVector::copy(*flatVector);
     ArrowArray arrowArray;
-    velox::exportToArrow(flatVector, arrowArray, pool_.get(), options_);
+    velox::exportToArrow(flatVector, arrowArray, pool(), options_);
 
     validateArray(inputData, arrowArray);
 
@@ -94,9 +113,9 @@ class ArrowBridgeArrayExportTest : public testing::Test {
 
   template <typename T>
   void testArrayVector(const T& inputData) {
-    auto arrayVector = vectorMaker_.arrayVectorNullable(inputData);
+    auto arrayVector = makeNullableArrayVector(inputData);
     ArrowArray arrowArray;
-    velox::exportToArrow(arrayVector, arrowArray, pool_.get(), options_);
+    velox::exportToArrow(arrayVector, arrowArray, pool(), options_);
 
     validateListArray(inputData, arrowArray);
 
@@ -111,19 +130,13 @@ class ArrowBridgeArrayExportTest : public testing::Test {
   void testArrayVectorWithGap(
       const std::vector<std::optional<T>>& elementData,
       const std::shared_ptr<arrow::DataType>& elementType) {
-    auto elements = vectorMaker_.flatVectorNullable(elementData);
+    auto elements = makeNullableFlatVector(elementData);
     auto expectedElements = BaseVector::copy(*elements);
     auto offsets = makeBuffer<vector_size_t>({0, 3});
     auto sizes = makeBuffer<vector_size_t>({2, 2});
     auto arrayVector = std::make_shared<ArrayVector>(
-        pool_.get(),
-        ARRAY(elements->type()),
-        nullptr,
-        2,
-        offsets,
-        sizes,
-        elements);
-    auto array = toArrow(arrayVector, options_, pool_.get());
+        pool(), ARRAY(elements->type()), nullptr, 2, offsets, sizes, elements);
+    auto array = toArrow(arrayVector, options_, pool());
     ASSERT_OK(array->ValidateFull());
     EXPECT_EQ(array->null_count(), 0);
     ASSERT_EQ(*array->type(), *arrow::list(elementType));
@@ -173,8 +186,8 @@ class ArrowBridgeArrayExportTest : public testing::Test {
       const T& input,
       size_t vectorSize = 1000,
       const TypePtr& type = CppToType<T>::create()) {
-    VectorPtr vector = BaseVector::createConstant(
-        type, variant(input), vectorSize, pool_.get());
+    VectorPtr vector =
+        BaseVector::createConstant(type, variant(input), vectorSize, pool());
     testConstantVector<true /*isScalar*/, T>(vector, input);
   }
 
@@ -184,12 +197,8 @@ class ArrowBridgeArrayExportTest : public testing::Test {
       const VectorPtr& constantVector,
       const TInput& input) {
     ArrowArray arrowArray;
-    velox::exportToArrow(constantVector, arrowArray, pool_.get(), options_);
-    validateConstant<isScalar, T>(
-        input,
-        constantVector->size(),
-        constantVector->mayHaveNulls(),
-        arrowArray);
+    velox::exportToArrow(constantVector, arrowArray, pool(), options_);
+    validateConstant<isScalar, T>(input, constantVector->size(), arrowArray);
 
     arrowArray.release(&arrowArray);
     EXPECT_EQ(nullptr, arrowArray.release);
@@ -335,6 +344,10 @@ class ArrowBridgeArrayExportTest : public testing::Test {
         const char* data;
         if (StringView::isInline(size)) {
           data = reinterpret_cast<const char*>(view + 1);
+          // Arrow requires the unused bytes of an inline view to be zero.
+          for (auto j = size; j < StringView::kInlineSize; ++j) {
+            EXPECT_EQ(data[j], 0) << "nonzero padding at index " << i;
+          }
         } else {
           ASSERT_LT(view[2], numDataBuffers) << "mismatch at index " << i;
           data = static_cast<const char*>(arrowArray.buffers[2 + view[2]]) +
@@ -424,17 +437,13 @@ class ArrowBridgeArrayExportTest : public testing::Test {
   void validateConstant(
       const TInput& inputData,
       size_t vectorSize,
-      bool isNullConstant,
       const ArrowArray& arrowArray) {
     using TRunEnds = int32_t;
 
-    // Validate base REE array.
+    // Validate base REE array. It has no validity buffer: the null of a null
+    // constant is in the values child.
     EXPECT_EQ(vectorSize, arrowArray.length);
-    if (isNullConstant) {
-      EXPECT_EQ(vectorSize, arrowArray.null_count);
-    } else {
-      EXPECT_EQ(0, arrowArray.null_count);
-    }
+    EXPECT_EQ(0, arrowArray.null_count);
     EXPECT_EQ(0, arrowArray.offset);
     EXPECT_EQ(0, arrowArray.n_buffers);
     EXPECT_EQ(nullptr, arrowArray.buffers);
@@ -457,6 +466,79 @@ class ArrowBridgeArrayExportTest : public testing::Test {
 
     // Validate run ends - single run of the vector size.
     validateArray<TRunEnds>({vectorSize}, runEnds);
+  }
+
+  // Exports an array and a map with these offsets, sizes and nulls over
+  // 'numElements' timestamps, and checks the exported offsets. The nulls are
+  // the vector's own, then those of a struct around it. Only the elements of
+  // non-null rows may be exported: the offsets and sizes of null rows are
+  // undefined, and so are the other elements, which are out of range here.
+  void testExportOffsets(
+      const std::vector<vector_size_t>& offsets,
+      const std::vector<vector_size_t>& sizes,
+      const std::vector<bool>& nulls,
+      vector_size_t numElements,
+      const std::vector<int32_t>& expectedOffsets) {
+    auto elements = makeFlatVector<Timestamp>(
+        numElements, [](vector_size_t row) { return Timestamp(row, 0); });
+    std::vector<bool> covered(numElements, false);
+    for (size_t row = 0; row < nulls.size(); ++row) {
+      if (!nulls[row]) {
+        std::fill_n(covered.begin() + offsets[row], sizes[row], true);
+      }
+    }
+    std::vector<vector_size_t> uncovered;
+    for (vector_size_t i = 0; i < numElements; ++i) {
+      if (!covered[i]) {
+        uncovered.push_back(i);
+      }
+    }
+    setOutOfRange(*elements, uncovered);
+
+    auto makeVectors = [&](const BufferPtr& vectorNulls) {
+      return std::vector<VectorPtr>{
+          std::make_shared<ArrayVector>(
+              pool(),
+              ARRAY(TIMESTAMP()),
+              vectorNulls,
+              offsets.size(),
+              makeBuffer(offsets),
+              makeBuffer(sizes),
+              elements),
+          std::make_shared<MapVector>(
+              pool(),
+              MAP(TIMESTAMP(), TIMESTAMP()),
+              vectorNulls,
+              offsets.size(),
+              makeBuffer(offsets),
+              makeBuffer(sizes),
+              elements,
+              elements),
+      };
+    };
+    auto checkLists = [&](const arrow::Array& array) {
+      const auto& lists = static_cast<const arrow::ListArray&>(array);
+      for (size_t row = 0; row < nulls.size(); ++row) {
+        EXPECT_EQ(nulls[row], lists.IsNull(row));
+      }
+      validateOffsets(lists, expectedOffsets);
+    };
+    for (const auto& vector : makeVectors(makeNulls(nulls))) {
+      SCOPED_TRACE(vector->type()->toString());
+      auto array = toArrow(vector, options_, pool());
+      ASSERT_OK(array->ValidateFull());
+      checkLists(*array);
+    }
+    for (const auto& vector : makeVectors(nullptr)) {
+      SCOPED_TRACE("Under a struct: " + vector->type()->toString());
+      auto array = toArrow(
+          makeRowVector(
+              {vector}, [&](vector_size_t row) { return nulls[row]; }),
+          options_,
+          pool());
+      ASSERT_OK(array->ValidateFull());
+      checkLists(*static_cast<const arrow::StructArray&>(*array).field(0));
+    }
   }
 
   ArrowSchema makeArrowSchema(const char* format) {
@@ -494,7 +576,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
 
   template <typename T>
   BufferPtr makeBuffer(const std::vector<T>& data) {
-    auto ans = AlignedBuffer::allocate<T>(data.size(), pool_.get());
+    auto ans = AlignedBuffer::allocate<T>(data.size(), pool());
     auto buf = ans->template asMutable<T>();
     for (int i = 0; i < data.size(); ++i) {
       buf[i] = data[i];
@@ -503,17 +585,49 @@ class ArrowBridgeArrayExportTest : public testing::Test {
   }
 
   void exportToArrow(const TypePtr& type, ArrowSchema& out) {
-    velox::exportToArrow(
-        BaseVector::create(type, 0, pool_.get()), out, options_);
+    velox::exportToArrow(BaseVector::create(type, 0, pool()), out, options_);
   }
 
-  // Boiler plate structures required by vectorMaker.
+  // Exports 'vector', a struct, once for each timestamp unit and calls
+  // 'validate' with the result and the number of units in a second.
+  void exportForEachTimestampUnit(
+      const VectorPtr& vector,
+      const std::function<void(const arrow::StructArray&, int64_t)>& validate) {
+    for (const auto& [unit, unitsPerSecond] :
+         std::vector<std::pair<TimestampUnit, int64_t>>{
+             {TimestampUnit::kSecond, 1},
+             {TimestampUnit::kMilli, 1'000},
+             {TimestampUnit::kMicro, 1'000'000},
+             {TimestampUnit::kNano, 1'000'000'000}}) {
+      SCOPED_TRACE(fmt::format("unitsPerSecond: {}", unitsPerSecond));
+      options_.timestampUnit = unit;
+      auto array = toArrow(vector, options_, pool());
+      ASSERT_OK(array->ValidateFull());
+      validate(static_cast<const arrow::StructArray&>(*array), unitsPerSecond);
+    }
+  }
+
+  // Exports 'vector', checks the result with Arrow, imports it back and
+  // compares it with 'vector'. Concatenating the result reads every slot, null
+  // or not, as a consumer can. The export allocates from 'exportPool' if set.
+  void testRoundTrip(
+      const VectorPtr& vector,
+      memory::MemoryPool* exportPool = nullptr) {
+    ArrowSchema schema;
+    ArrowArray array;
+    velox::exportToArrow(vector, schema, options_);
+    velox::exportToArrow(
+        vector, array, exportPool ? exportPool : pool(), options_);
+    ASSERT_OK_AND_ASSIGN(auto arrowArray, arrow::ImportArray(&array, &schema));
+    ASSERT_OK(arrowArray->ValidateFull());
+    ASSERT_OK(arrow::Concatenate({arrowArray, arrowArray}).status());
+
+    ASSERT_OK(arrow::ExportArray(*arrowArray, &array, &schema));
+    test::assertEqualVectors(
+        vector, importFromArrowAsOwner(schema, array, pool()));
+  }
+
   ArrowOptions options_;
-  std::shared_ptr<core::QueryCtx> queryCtx_{velox::core::QueryCtx::create()};
-  std::shared_ptr<memory::MemoryPool> pool_{
-      memory::memoryManager()->addLeafPool()};
-  core::ExecCtx execCtx_{pool_.get(), queryCtx_.get()};
-  facebook::velox::test::VectorMaker vectorMaker_{execCtx_.pool()};
 
  private:
   // Converts timestamp as bigint according to unit, and compares it with the
@@ -547,8 +661,8 @@ TEST_F(ArrowBridgeArrayExportTest, flatNotNull) {
   {
     // Make sure that ArrowArray is correctly acquiring ownership, even after
     // the initial vector shared_ptr is gone.
-    auto flatVector = vectorMaker_.flatVector(inputData);
-    velox::exportToArrow(flatVector, arrowArray, pool_.get(), options_);
+    auto flatVector = makeFlatVector(inputData);
+    velox::exportToArrow(flatVector, arrowArray, pool(), options_);
   }
 
   EXPECT_EQ(inputData.size(), arrowArray.length);
@@ -690,10 +804,10 @@ TEST_F(ArrowBridgeArrayExportTest, flatTime) {
       86'399'999L,
       std::nullopt};
 
-  auto flatVector = vectorMaker_.flatVectorNullable(inputData, TIME());
+  auto flatVector = makeNullableFlatVector(inputData, TIME());
   ArrowArray arrowArray;
   ArrowSchema arrowSchema;
-  velox::exportToArrow(flatVector, arrowArray, pool_.get(), options_);
+  velox::exportToArrow(flatVector, arrowArray, pool(), options_);
   velox::exportToArrow(flatVector, arrowSchema, options_);
 
   EXPECT_STREQ(arrowSchema.format, "ttm"); // time32 milliseconds.
@@ -751,14 +865,14 @@ TEST_F(ArrowBridgeArrayExportTest, rowVector) {
   std::vector<std::optional<std::string>> col3 = {
       "my", "string", "column", "Longer string so it's not inlined."};
 
-  auto vector = vectorMaker_.rowVector({
-      vectorMaker_.flatVectorNullable(col1),
-      vectorMaker_.flatVectorNullable(col2),
-      vectorMaker_.flatVectorNullable(col3),
+  auto vector = makeRowVector({
+      makeNullableFlatVector(col1),
+      makeNullableFlatVector(col2),
+      makeNullableFlatVector(col3),
   });
 
   ArrowArray arrowArray;
-  velox::exportToArrow(vector, arrowArray, pool_.get(), options_);
+  velox::exportToArrow(vector, arrowArray, pool(), options_);
 
   EXPECT_EQ(col1.size(), arrowArray.length);
   EXPECT_EQ(0, arrowArray.null_count);
@@ -783,8 +897,8 @@ TEST_F(ArrowBridgeArrayExportTest, rowVector) {
 TEST_F(ArrowBridgeArrayExportTest, rowVectorNullable) {
   std::vector<std::optional<int64_t>> col1 = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
 
-  auto vector = vectorMaker_.rowVector({
-      vectorMaker_.flatVectorNullable(col1),
+  auto vector = makeRowVector({
+      makeNullableFlatVector(col1),
   });
 
   // Setting a few null elements.
@@ -792,10 +906,8 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorNullable) {
   vector->setNull(3, true);
   vector->setNull(7, true);
 
-  vector->setNullCount(3);
-
   ArrowArray arrowArray;
-  velox::exportToArrow(vector, arrowArray, pool_.get(), options_);
+  velox::exportToArrow(vector, arrowArray, pool(), options_);
 
   EXPECT_EQ(col1.size(), arrowArray.length);
   EXPECT_EQ(3, arrowArray.null_count);
@@ -806,8 +918,12 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorNullable) {
   EXPECT_NE(nullptr, arrowArray.children);
   EXPECT_EQ(nullptr, arrowArray.dictionary);
 
-  // Validate data in the children arrays.
-  validateNumericalArray(col1, *arrowArray.children[0]);
+  // Validate data in the children arrays. The child is null where the struct
+  // is null.
+  validateNumericalArray(
+      std::vector<std::optional<int64_t>>{
+          0, std::nullopt, 2, std::nullopt, 4, 5, 6, std::nullopt, 8, 9},
+      *arrowArray.children[0]);
 
   // Check if the null buffer has the correct bits set.
   const uint64_t* nulls = static_cast<const uint64_t*>(arrowArray.buffers[0]);
@@ -823,8 +939,7 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorNullable) {
 
 TEST_F(ArrowBridgeArrayExportTest, rowVectorEmpty) {
   ArrowArray arrowArray;
-  velox::exportToArrow(
-      vectorMaker_.rowVector({}), arrowArray, pool_.get(), options_);
+  velox::exportToArrow(makeRowVector({}), arrowArray, pool(), options_);
   EXPECT_EQ(0, arrowArray.n_children);
   EXPECT_EQ(1, arrowArray.n_buffers);
   EXPECT_EQ(nullptr, arrowArray.children);
@@ -842,23 +957,20 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorLongerChildren) {
   const size_t rowVectorSize = 2;
   const size_t longerChildSize = 1024;
 
-  auto longerNullableChild = vectorMaker_.flatVector<double>(longerChildSize);
+  auto longerNullableChild = makeFlatVector<double>(longerChildSize);
   longerNullableChild->setNull(0, true);
   longerNullableChild->setNull(longerChildSize - 1, true);
-  longerNullableChild->setNullCount(2);
 
-  auto vector = vectorMaker_.rowVector({
-      vectorMaker_.flatVector<int64_t>(rowVectorSize),
+  auto vector = makeRowVector({
+      makeFlatVector<int64_t>(rowVectorSize),
       longerNullableChild,
-      vectorMaker_.arrayVector<int64_t>(128, identity, identity),
-      vectorMaker_.mapVector<int64_t, int64_t>(
-          64, identity, identity, identity),
+      makeArrayVector<int64_t>(128, identity, identity),
+      makeMapVector<int64_t, int64_t>(64, identity, identity, identity),
   });
   vector->setNull(rowVectorSize - 1, true);
-  vector->setNullCount(1);
 
   ArrowArray arrowArray;
-  velox::exportToArrow(vector, arrowArray, pool_.get(), options_);
+  velox::exportToArrow(vector, arrowArray, pool(), options_);
 
   EXPECT_EQ(vector->size(), arrowArray.length);
   EXPECT_EQ(1, arrowArray.null_count);
@@ -873,13 +985,545 @@ TEST_F(ArrowBridgeArrayExportTest, rowVectorLongerChildren) {
   EXPECT_EQ(2, arrowArray.children[1]->length);
   EXPECT_EQ(2, arrowArray.children[2]->length);
   EXPECT_EQ(2, arrowArray.children[3]->length);
-  // Only row 0 is null in the exported range. The null at the end of the
-  // longer child must not be counted.
-  EXPECT_EQ(1, arrowArray.children[1]->null_count);
+  // In the exported range, the child is null at row 0 and the struct at row 1.
+  // The null at the end of the longer child must not be counted.
+  EXPECT_EQ(2, arrowArray.children[1]->null_count);
 
   arrowArray.release(&arrowArray);
   EXPECT_EQ(nullptr, arrowArray.release);
   EXPECT_EQ(nullptr, arrowArray.private_data);
+}
+
+// Child values at rows where a parent struct is null are undefined, e.g. bytes
+// left over from an earlier use of the buffer. Export must not read them, so it
+// exports the children as null at these rows.
+TEST_F(ArrowBridgeArrayExportTest, timestampUnderNullStruct) {
+  // The struct is null at rows 1 and 3, where the timestamps are not valid.
+  auto timestamps = makeFlatVector<Timestamp>(
+      {Timestamp(1, 0),
+       Timestamp(),
+       Timestamp(3, 0),
+       Timestamp(),
+       Timestamp(5, 0)});
+  setOutOfRange(*timestamps, {1, 3});
+  auto vector = makeRowVector(
+      {timestamps}, [](vector_size_t row) { return row == 1 || row == 3; });
+
+  exportForEachTimestampUnit(
+      vector, [](const auto& array, int64_t unitsPerSecond) {
+        EXPECT_EQ(2, array.null_count());
+        EXPECT_TRUE(array.IsNull(1));
+        EXPECT_TRUE(array.IsNull(3));
+        const auto& values =
+            static_cast<const arrow::TimestampArray&>(*array.field(0));
+        EXPECT_EQ(2, values.null_count());
+        EXPECT_TRUE(values.IsNull(1));
+        EXPECT_TRUE(values.IsNull(3));
+        EXPECT_EQ(1 * unitsPerSecond, values.Value(0));
+        EXPECT_EQ(3 * unitsPerSecond, values.Value(2));
+        EXPECT_EQ(5 * unitsPerSecond, values.Value(4));
+      });
+}
+
+TEST_F(ArrowBridgeArrayExportTest, nullableTimestampUnderNullStruct) {
+  // The timestamps are null at row 4 and the struct at rows 1 and 3. Only rows
+  // 0 and 2 hold valid timestamps.
+  auto timestamps = makeNullableFlatVector<Timestamp>(
+      {Timestamp(1, 0),
+       Timestamp(),
+       Timestamp(3, 0),
+       Timestamp(),
+       std::nullopt});
+  setOutOfRange(*timestamps, {1, 3, 4});
+  auto vector = makeRowVector(
+      {timestamps}, [](vector_size_t row) { return row == 1 || row == 3; });
+
+  exportForEachTimestampUnit(
+      vector, [](const auto& array, int64_t unitsPerSecond) {
+        EXPECT_EQ(2, array.null_count());
+        const auto& values =
+            static_cast<const arrow::TimestampArray&>(*array.field(0));
+        EXPECT_EQ(3, values.null_count());
+        EXPECT_TRUE(values.IsNull(1));
+        EXPECT_TRUE(values.IsNull(3));
+        EXPECT_TRUE(values.IsNull(4));
+        EXPECT_EQ(1 * unitsPerSecond, values.Value(0));
+        EXPECT_EQ(3 * unitsPerSecond, values.Value(2));
+      });
+}
+
+TEST_F(ArrowBridgeArrayExportTest, timestampUnderNestedNullStructs) {
+  // The outer struct is null at rows 1 and 3 and the inner struct at row 4.
+  // Only rows 0 and 2 hold valid timestamps.
+  auto timestamps = makeFlatVector<Timestamp>(
+      {Timestamp(1, 0),
+       Timestamp(),
+       Timestamp(3, 0),
+       Timestamp(),
+       Timestamp()});
+  setOutOfRange(*timestamps, {1, 3, 4});
+  auto vector = makeRowVector(
+      {makeRowVector({timestamps}, [](vector_size_t row) { return row == 4; })},
+      [](vector_size_t row) { return row == 1 || row == 3; });
+
+  exportForEachTimestampUnit(
+      vector, [](const auto& array, int64_t unitsPerSecond) {
+        EXPECT_EQ(2, array.null_count());
+        const auto& inner =
+            static_cast<const arrow::StructArray&>(*array.field(0));
+        EXPECT_EQ(3, inner.null_count());
+        EXPECT_TRUE(inner.IsNull(4));
+        const auto& values =
+            static_cast<const arrow::TimestampArray&>(*inner.field(0));
+        EXPECT_EQ(3, values.null_count());
+        EXPECT_EQ(1 * unitsPerSecond, values.Value(0));
+        EXPECT_EQ(3 * unitsPerSecond, values.Value(2));
+      });
+}
+
+TEST_F(ArrowBridgeArrayExportTest, timestampUnderNullStructInArray) {
+  // Structs as array elements. The arrays are not back to back, so their
+  // elements are exported as a subset, in the order 3, 4, 0, 1, 2. The struct
+  // is null at element 1, where the timestamp is not valid, and the timestamp
+  // is null at element 3.
+  auto timestamps = makeNullableFlatVector<Timestamp>(
+      {Timestamp(1, 0),
+       Timestamp(),
+       Timestamp(3, 0),
+       std::nullopt,
+       Timestamp(5, 0)});
+  setOutOfRange(*timestamps, {1, 3});
+  auto structs =
+      makeRowVector({timestamps}, [](vector_size_t row) { return row == 1; });
+  auto arrays = std::make_shared<ArrayVector>(
+      pool(),
+      ARRAY(structs->type()),
+      nullptr,
+      2,
+      makeBuffer<vector_size_t>({3, 0}),
+      makeBuffer<vector_size_t>({2, 3}),
+      structs);
+
+  options_.timestampUnit = TimestampUnit::kMicro;
+  auto array = toArrow(arrays, options_, pool());
+  ASSERT_OK(array->ValidateFull());
+  const auto& elements = static_cast<const arrow::StructArray&>(
+      *static_cast<const arrow::ListArray&>(*array).values());
+  EXPECT_TRUE(elements.IsNull(3));
+  const auto& values =
+      static_cast<const arrow::TimestampArray&>(*elements.field(0));
+  EXPECT_EQ(2, values.null_count());
+  EXPECT_TRUE(values.IsNull(0));
+  EXPECT_TRUE(values.IsNull(3));
+  EXPECT_EQ(5'000'000, values.Value(1));
+  EXPECT_EQ(1'000'000, values.Value(2));
+  EXPECT_EQ(3'000'000, values.Value(4));
+}
+
+TEST_F(ArrowBridgeArrayExportTest, shorterChildUnderNullStruct) {
+  // A child can be shorter than its struct when the struct is null at the rows
+  // past the child's end. The children here, of each type and encoding, have 3
+  // rows. The struct has 1'000 rows and is null from row 3 on.
+  const std::vector<VectorPtr> children{
+      makeNullableFlatVector<int64_t>({1, std::nullopt, 3}),
+      makeNullableFlatVector<bool>({true, std::nullopt, false}),
+      makeNullableFlatVector<int64_t>({100, std::nullopt, 300}, DECIMAL(5, 2)),
+      makeNullableFlatVector<int128_t>(
+          {100, std::nullopt, 300}, DECIMAL(20, 2)),
+      makeNullableFlatVector<int64_t>({1'000, std::nullopt, 3'000}, TIME()),
+      makeNullableFlatVector<Timestamp>(
+          {Timestamp(1, 0), std::nullopt, Timestamp(3, 0)}),
+      makeNullableFlatVector<StringView>(
+          {"a", std::nullopt, "a string that is not inlined"}),
+      BaseVector::create(UNKNOWN(), 3, pool()),
+      makeArrayVectorFromJson<int64_t>({"[1, 2]", "null", "[3]"}),
+      makeMapVectorFromJson<int64_t, int64_t>({"{1: 10}", "null", "{3: 30}"}),
+      makeRowVector(
+          {makeFlatVector<int64_t>({1, 2, 3}), makeConstant<int64_t>(4, 3)},
+          [](vector_size_t row) { return row == 1; }),
+      BaseVector::wrapInDictionary(
+          makeNulls({false, true, false}),
+          makeIndices({2, 0, 1}),
+          3,
+          makeFlatVector<int64_t>({10, 20, 30})),
+      makeConstant<int64_t>(5, 3),
+      makeNullConstant(TypeKind::BIGINT, 3),
+  };
+  constexpr vector_size_t kSize = 1'000;
+  for (const auto& child : children) {
+    SCOPED_TRACE(child->toString());
+    auto structs = std::make_shared<RowVector>(
+        pool(),
+        ROW({"c0"}, {child->type()}),
+        makeNulls(kSize, [](vector_size_t row) { return row >= 3; }),
+        kSize,
+        std::vector<VectorPtr>{child});
+    // As array elements, the structs are exported as a subset of their rows,
+    // in the order 500, 501, 0, 1 and 2.
+    auto arrays = std::make_shared<ArrayVector>(
+        pool(),
+        ARRAY(structs->type()),
+        nullptr,
+        2,
+        makeBuffer<vector_size_t>({500, 0}),
+        makeBuffer<vector_size_t>({2, 3}),
+        structs);
+    for (auto flatten : {false, true}) {
+      for (auto layout :
+           {ArrowOptions::VarTypeLayout::kDefault,
+            ArrowOptions::VarTypeLayout::kStringView}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "flatten: {}, layout: {}", flatten, static_cast<int>(layout)));
+        options_.flattenDictionary = flatten;
+        options_.flattenConstant = flatten;
+        options_.varTypeLayout = layout;
+        testRoundTrip(structs);
+        testRoundTrip(arrays);
+      }
+    }
+  }
+}
+
+TEST_F(ArrowBridgeArrayExportTest, emptyArrayAtLargeOffset) {
+  // An empty array can have any offset. It selects no struct, so the 3-row
+  // child is not extended to its offset: the export pool has room for far
+  // fewer rows.
+  auto structs = std::make_shared<RowVector>(
+      pool(),
+      ROW({"c0"}, {BIGINT()}),
+      makeNulls(4, [](vector_size_t row) { return row == 3; }),
+      4,
+      std::vector<VectorPtr>{makeFlatVector<int64_t>({1, 2, 3})});
+  auto arrays = std::make_shared<ArrayVector>(
+      pool(),
+      ARRAY(structs->type()),
+      nullptr,
+      2,
+      makeBuffer<vector_size_t>({0, 10'000'000}),
+      makeBuffer<vector_size_t>({3, 0}),
+      structs);
+
+  auto exportRoot = memory::memoryManager()->addRootPool("", 1 << 20);
+  auto exportPool = exportRoot->addLeafChild("");
+  testRoundTrip(arrays, exportPool.get());
+}
+
+TEST_F(ArrowBridgeArrayExportTest, stringUnderNullStruct) {
+  // The struct is null at rows 1 and 3, where the strings point nowhere.
+  auto strings = makeFlatVector<StringView>(
+      {"a", "", "a string that is not inlined", "", "c"});
+  setDangling(*strings, {1, 3});
+  auto vector = makeRowVector(
+      {strings}, [](vector_size_t row) { return row == 1 || row == 3; });
+
+  for (auto layout :
+       {ArrowOptions::VarTypeLayout::kDefault,
+        ArrowOptions::VarTypeLayout::kLarge,
+        ArrowOptions::VarTypeLayout::kStringView}) {
+    SCOPED_TRACE(fmt::format("layout: {}", static_cast<int>(layout)));
+    options_.varTypeLayout = layout;
+    auto array = toArrow(vector, options_, pool());
+    ASSERT_OK(array->ValidateFull());
+    const auto& field =
+        *static_cast<const arrow::StructArray&>(*array).field(0);
+    EXPECT_EQ(2, field.null_count());
+    EXPECT_TRUE(field.IsNull(1));
+    EXPECT_TRUE(field.IsNull(3));
+    auto valueAt = [&](int64_t row) {
+      auto scalar = field.GetScalar(row).ValueOrDie();
+      return std::string(
+          static_cast<const arrow::BaseBinaryScalar&>(*scalar).view());
+    };
+    EXPECT_EQ("a", valueAt(0));
+    EXPECT_EQ("a string that is not inlined", valueAt(2));
+    EXPECT_EQ("c", valueAt(4));
+  }
+}
+
+TEST_F(ArrowBridgeArrayExportTest, timeUnderNullStruct) {
+  // The struct is null at row 1, where the time is out of range.
+  auto times = makeFlatVector<int64_t>(
+      {1'000, std::numeric_limits<int64_t>::max(), 3'000}, TIME());
+  auto vector =
+      makeRowVector({times}, [](vector_size_t row) { return row == 1; });
+
+  auto array = toArrow(vector, options_, pool());
+  ASSERT_OK(array->ValidateFull());
+  const auto& values = static_cast<const arrow::Time32Array&>(
+      *static_cast<const arrow::StructArray&>(*array).field(0));
+  EXPECT_TRUE(values.IsNull(1));
+  EXPECT_EQ(1'000, values.Value(0));
+  EXPECT_EQ(3'000, values.Value(2));
+}
+
+TEST_F(ArrowBridgeArrayExportTest, decimalUnderNullStruct) {
+  // The struct is null at row 1, where the decimals don't fit their precision.
+  auto shortDecimals = makeFlatVector<int64_t>(
+      {100, std::numeric_limits<int64_t>::max(), 300}, DECIMAL(5, 2));
+  auto longDecimals =
+      makeFlatVector<int128_t>({100, int128_t(1) << 100, 300}, DECIMAL(20, 2));
+  auto vector = makeRowVector(
+      {shortDecimals, longDecimals},
+      [](vector_size_t row) { return row == 1; });
+
+  auto array = toArrow(vector, options_, pool());
+  ASSERT_OK(array->ValidateFull());
+  const auto& structArray = static_cast<const arrow::StructArray&>(*array);
+  for (int i = 0; i < 2; ++i) {
+    const auto& values =
+        static_cast<const arrow::Decimal128Array&>(*structArray.field(i));
+    EXPECT_TRUE(values.IsNull(1));
+    EXPECT_EQ("1.00", values.FormatValue(0));
+    EXPECT_EQ("3.00", values.FormatValue(2));
+  }
+}
+
+TEST_F(ArrowBridgeArrayExportTest, arrayUnderNullStruct) {
+  // The struct is null at row 1, where the offset and size of the array point
+  // past the elements.
+  auto arrays = makeArrayVector<int64_t>({{1, 2}, {}, {3}});
+  arrays->offsets()->asMutable<vector_size_t>()[1] = 1'000;
+  arrays->sizes()->asMutable<vector_size_t>()[1] = 1'000;
+  auto vector =
+      makeRowVector({arrays}, [](vector_size_t row) { return row == 1; });
+
+  auto array = toArrow(vector, options_, pool());
+  ASSERT_OK(array->ValidateFull());
+  const auto& lists = static_cast<const arrow::ListArray&>(
+      *static_cast<const arrow::StructArray&>(*array).field(0));
+  EXPECT_TRUE(lists.IsNull(1));
+  // Only the elements of rows 0 and 2 are exported.
+  EXPECT_EQ(3, lists.values()->length());
+  validateOffsets(lists, {0, 2, 2, 3});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, mapUnderNullStruct) {
+  // The struct is null at row 1, where the offset and size of the map point
+  // past the entries.
+  auto maps =
+      makeMapVector<int64_t, int64_t>({{{1, 10}, {2, 20}}, {}, {{3, 30}}});
+  maps->offsets()->asMutable<vector_size_t>()[1] = 1'000;
+  maps->sizes()->asMutable<vector_size_t>()[1] = 1'000;
+  auto vector =
+      makeRowVector({maps}, [](vector_size_t row) { return row == 1; });
+
+  auto array = toArrow(vector, options_, pool());
+  ASSERT_OK(array->ValidateFull());
+  const auto& field = static_cast<const arrow::MapArray&>(
+      *static_cast<const arrow::StructArray&>(*array).field(0));
+  EXPECT_TRUE(field.IsNull(1));
+  // Only the entries of rows 0 and 2 are exported.
+  EXPECT_EQ(3, field.keys()->length());
+  validateOffsets(field, {0, 2, 2, 3});
+}
+
+TEST_F(
+    ArrowBridgeArrayExportTest,
+    flattenedDictionaryTimestampUnderNullStruct) {
+  // The struct is null at rows 1 and 3, which point to rows 0 and 2 of the
+  // dictionary base, where the timestamps are not valid.
+  auto base = makeFlatVector<Timestamp>(
+      {Timestamp(),
+       Timestamp(2, 0),
+       Timestamp(),
+       Timestamp(4, 0),
+       Timestamp(5, 0)});
+  setOutOfRange(*base, {0, 2});
+  auto vector = makeRowVector(
+      {wrapInDictionary(makeIndices({4, 0, 1, 2, 3}), base)},
+      [](vector_size_t row) { return row == 1 || row == 3; });
+
+  options_.flattenDictionary = true;
+  exportForEachTimestampUnit(
+      vector, [](const auto& array, int64_t unitsPerSecond) {
+        EXPECT_EQ(2, array.null_count());
+        const auto& values =
+            static_cast<const arrow::TimestampArray&>(*array.field(0));
+        EXPECT_EQ(2, values.null_count());
+        EXPECT_TRUE(values.IsNull(1));
+        EXPECT_TRUE(values.IsNull(3));
+        EXPECT_EQ(5 * unitsPerSecond, values.Value(0));
+        EXPECT_EQ(2 * unitsPerSecond, values.Value(2));
+        EXPECT_EQ(4 * unitsPerSecond, values.Value(4));
+      });
+}
+
+TEST_F(ArrowBridgeArrayExportTest, dictionaryTimestampUnderNullStruct) {
+  // The struct is null at rows 1 and 3, the only rows that point to rows 0 and
+  // 2 of the dictionary base, where the timestamps are not valid. The whole
+  // base is exported.
+  auto base = makeFlatVector<Timestamp>(
+      {Timestamp(),
+       Timestamp(2, 0),
+       Timestamp(),
+       Timestamp(4, 0),
+       Timestamp(5, 0)});
+  setOutOfRange(*base, {0, 2});
+  auto vector = makeRowVector(
+      {wrapInDictionary(makeIndices({4, 0, 1, 2, 3}), base)},
+      [](vector_size_t row) { return row == 1 || row == 3; });
+
+  exportForEachTimestampUnit(
+      vector, [](const auto& array, int64_t unitsPerSecond) {
+        EXPECT_EQ(2, array.null_count());
+        const auto& dictionary =
+            static_cast<const arrow::DictionaryArray&>(*array.field(0));
+        EXPECT_TRUE(dictionary.IsNull(1));
+        EXPECT_TRUE(dictionary.IsNull(3));
+        const auto& values =
+            static_cast<const arrow::TimestampArray&>(*dictionary.dictionary());
+        EXPECT_EQ(
+            5 * unitsPerSecond, values.Value(dictionary.GetValueIndex(0)));
+        EXPECT_EQ(
+            2 * unitsPerSecond, values.Value(dictionary.GetValueIndex(2)));
+        EXPECT_EQ(
+            4 * unitsPerSecond, values.Value(dictionary.GetValueIndex(4)));
+        // Base rows that only the rows under the null struct point to are
+        // exported as null.
+        EXPECT_TRUE(values.IsNull(0));
+        EXPECT_TRUE(values.IsNull(2));
+      });
+}
+
+TEST_F(ArrowBridgeArrayExportTest, dictionaryIndicesUnderNullStruct) {
+  // The struct is null at rows 1 and 3, where the dictionary indices are not
+  // valid, like bytes left over in a reused buffer.
+  auto indices = makeIndices({2, 0, 1, 0, 0});
+  auto dictionary =
+      wrapInDictionary(indices, makeFlatVector<int64_t>({10, 20, 30}));
+  indices->asMutable<vector_size_t>()[1] = 1'000;
+  indices->asMutable<vector_size_t>()[3] = -1;
+  auto vector = makeRowVector(
+      {dictionary}, [](vector_size_t row) { return row == 1 || row == 3; });
+
+  auto array = toArrow(vector, options_, pool());
+  ASSERT_OK(array->ValidateFull());
+  const auto& field = static_cast<const arrow::DictionaryArray&>(
+      *static_cast<const arrow::StructArray&>(*array).field(0));
+  EXPECT_TRUE(field.IsNull(1));
+  EXPECT_TRUE(field.IsNull(3));
+  EXPECT_EQ(2, field.GetValueIndex(0));
+  EXPECT_EQ(1, field.GetValueIndex(2));
+  EXPECT_EQ(0, field.GetValueIndex(4));
+}
+
+TEST_F(ArrowBridgeArrayExportTest, flattenedDictionaryIndicesUnderNullStruct) {
+  // As above, but flattened: export must not read the values that the indices
+  // under the null struct point to.
+  auto indices = makeIndices({2, 0, 1, 0, 0});
+  auto dictionary =
+      wrapInDictionary(indices, makeFlatVector<StringView>({"a", "b", "c"}));
+  indices->asMutable<vector_size_t>()[1] = 100'000'000;
+  indices->asMutable<vector_size_t>()[3] = -100'000'000;
+  auto vector = makeRowVector(
+      {dictionary}, [](vector_size_t row) { return row == 1 || row == 3; });
+  options_.flattenDictionary = true;
+
+  auto array = toArrow(vector, options_, pool());
+  ASSERT_OK(array->ValidateFull());
+  const auto& field = static_cast<const arrow::StringArray&>(
+      *static_cast<const arrow::StructArray&>(*array).field(0));
+  EXPECT_TRUE(field.IsNull(1));
+  EXPECT_TRUE(field.IsNull(3));
+  EXPECT_EQ("c", field.GetView(0));
+  EXPECT_EQ("b", field.GetView(2));
+  EXPECT_EQ("a", field.GetView(4));
+}
+
+TEST_F(ArrowBridgeArrayExportTest, emptyDictionaryUnderNullStruct) {
+  // Every row of the struct is null and the dictionary has no base rows, so no
+  // index is valid. Debug builds check the index of every non-null row when a
+  // dictionary is built, so build the rows null and then clear their nulls.
+  auto dictionary = BaseVector::wrapInDictionary(
+      makeNulls(3, [](vector_size_t /*row*/) { return true; }),
+      makeIndices({0, 0, 0}),
+      3,
+      makeFlatVector<int64_t>(std::vector<int64_t>{}));
+  for (vector_size_t row = 0; row < 3; ++row) {
+    dictionary->setNull(row, false);
+  }
+  auto vector =
+      makeRowVector({dictionary}, [](vector_size_t /*row*/) { return true; });
+
+  auto array = toArrow(vector, options_, pool());
+  ASSERT_OK(array->ValidateFull());
+  const auto& field = *static_cast<const arrow::StructArray&>(*array).field(0);
+  EXPECT_EQ(3, field.null_count());
+}
+
+TEST_F(ArrowBridgeArrayExportTest, nestedDictionaryTimestampUnderNullStruct) {
+  // The struct is null at rows 1 and 3. Through two dictionaries they are the
+  // only rows that point to rows 1 and 2 of the base, where the timestamps are
+  // not valid. Rows 0, 2 and 4 point to base rows 3, 0 and 4.
+  auto base = makeFlatVector<Timestamp>(
+      {Timestamp(1, 0),
+       Timestamp(),
+       Timestamp(),
+       Timestamp(4, 0),
+       Timestamp(5, 0)});
+  setOutOfRange(*base, {1, 2});
+  auto vector = makeRowVector(
+      {wrapInDictionary(
+          makeIndices({4, 0, 1, 2, 3}),
+          wrapInDictionary(makeIndices({2, 0, 1, 4, 3}), base))},
+      [](vector_size_t row) { return row == 1 || row == 3; });
+
+  exportForEachTimestampUnit(
+      vector, [](const auto& array, int64_t unitsPerSecond) {
+        EXPECT_EQ(2, array.null_count());
+        const auto& outer =
+            static_cast<const arrow::DictionaryArray&>(*array.field(0));
+        const auto& inner =
+            static_cast<const arrow::DictionaryArray&>(*outer.dictionary());
+        const auto& values =
+            static_cast<const arrow::TimestampArray&>(*inner.dictionary());
+        auto valueAt = [&](int64_t row) {
+          return values.Value(inner.GetValueIndex(outer.GetValueIndex(row)));
+        };
+        EXPECT_EQ(4 * unitsPerSecond, valueAt(0));
+        EXPECT_EQ(1 * unitsPerSecond, valueAt(2));
+        EXPECT_EQ(5 * unitsPerSecond, valueAt(4));
+        EXPECT_TRUE(values.IsNull(1));
+        EXPECT_TRUE(values.IsNull(2));
+      });
+}
+
+TEST_F(ArrowBridgeArrayExportTest, dictionaryUnderStructWithoutNulls) {
+  // The struct has a nulls buffer, but no row is null, so the dictionary is
+  // exported as without one: base rows that no row points to keep their values.
+  auto vector = makeRowVector({wrapInDictionary(
+      makeIndices({0, 0}), makeFlatVector<StringView>({"a", "b", "c"}))});
+  vector->setNull(0, true);
+  vector->setNull(0, false);
+  ASSERT_NE(nullptr, vector->nulls());
+
+  auto array = toArrow(vector, options_, pool());
+  ASSERT_OK(array->ValidateFull());
+  const auto& field = static_cast<const arrow::DictionaryArray&>(
+      *static_cast<const arrow::StructArray&>(*array).field(0));
+  EXPECT_EQ(3, field.dictionary()->length());
+  EXPECT_EQ(0, field.dictionary()->null_count());
+}
+
+TEST_F(ArrowBridgeArrayExportTest, timestampWithStaleNullCount) {
+  // makeFlatVector records a null count of 0, and setNull leaves it there. The
+  // null row holds a timestamp that is not valid.
+  auto timestamps = makeFlatVector<Timestamp>(
+      {Timestamp(1, 0), Timestamp(), Timestamp(3, 0)});
+  timestamps->setNull(1, true);
+  setOutOfRange(*timestamps, {1});
+  auto vector = makeRowVector({timestamps});
+
+  exportForEachTimestampUnit(
+      vector, [](const auto& array, int64_t unitsPerSecond) {
+        const auto& values =
+            static_cast<const arrow::TimestampArray&>(*array.field(0));
+        EXPECT_EQ(1, values.null_count());
+        EXPECT_TRUE(values.IsNull(1));
+        EXPECT_EQ(1 * unitsPerSecond, values.Value(0));
+        EXPECT_EQ(3 * unitsPerSecond, values.Value(2));
+      });
 }
 
 template <typename T>
@@ -899,8 +1543,8 @@ TEST_F(ArrowBridgeArrayExportTest, arraySimple) {
 }
 
 TEST_F(ArrowBridgeArrayExportTest, arrayCrossValidate) {
-  auto vec = vectorMaker_.arrayVector<int64_t>({{1, 2, 3}, {4, 5}});
-  auto array = toArrow(vec, options_, pool_.get());
+  auto vec = makeArrayVector<int64_t>({{1, 2, 3}, {4, 5}});
+  auto array = toArrow(vec, options_, pool());
   ASSERT_OK(array->ValidateFull());
   EXPECT_EQ(array->null_count(), 0);
   ASSERT_EQ(*array->type(), *arrow::list(arrow::int64()));
@@ -917,12 +1561,12 @@ TEST_F(ArrowBridgeArrayExportTest, arrayCrossValidate) {
 TEST_F(ArrowBridgeArrayExportTest, arrayDictionary) {
   auto vec = ({
     auto indices = makeBuffer<vector_size_t>({1, 2, 0});
-    auto wrapped = vectorMaker_.flatVector<int64_t>({1, 2, 3});
+    auto wrapped = makeFlatVector<int64_t>({1, 2, 3});
     auto inner = BaseVector::wrapInDictionary(nullptr, indices, 3, wrapped);
     auto offsets = makeBuffer<vector_size_t>({2, 0});
     auto sizes = makeBuffer<vector_size_t>({1, 1});
     std::make_shared<ArrayVector>(
-        pool_.get(), ARRAY(inner->type()), nullptr, 2, offsets, sizes, inner);
+        pool(), ARRAY(inner->type()), nullptr, 2, offsets, sizes, inner);
   });
 
   ArrowSchema schema;
@@ -962,9 +1606,9 @@ TEST_F(ArrowBridgeArrayExportTest, arrayGap) {
 
 TEST_F(ArrowBridgeArrayExportTest, allNullTimestampValues) {
   constexpr vector_size_t kSize = 5;
-  auto nulls = allocateNulls(kSize, pool_.get(), bits::kNull);
+  auto nulls = allocateNulls(kSize, pool(), bits::kNull);
   auto vec = std::make_shared<FlatVector<Timestamp>>(
-      pool_.get(),
+      pool(),
       TIMESTAMP(),
       nulls,
       kSize,
@@ -974,7 +1618,7 @@ TEST_F(ArrowBridgeArrayExportTest, allNullTimestampValues) {
   ArrowSchema schema;
   ArrowArray data;
   velox::exportToArrow(vec, schema, options_);
-  velox::exportToArrow(vec, data, pool_.get(), options_);
+  velox::exportToArrow(vec, data, pool(), options_);
 
   ASSERT_NE(nullptr, data.buffers[1]);
   const auto* rawValues = static_cast<const int64_t*>(data.buffers[1]);
@@ -991,9 +1635,9 @@ TEST_F(ArrowBridgeArrayExportTest, allNullTimestampValues) {
 
 TEST_F(ArrowBridgeArrayExportTest, arrayGapAllNullBigintChild) {
   constexpr vector_size_t kElementCount = 5;
-  auto nulls = allocateNulls(kElementCount, pool_.get(), bits::kNull);
+  auto nulls = allocateNulls(kElementCount, pool(), bits::kNull);
   auto elements = std::make_shared<FlatVector<int64_t>>(
-      pool_.get(),
+      pool(),
       BIGINT(),
       nulls,
       kElementCount,
@@ -1003,12 +1647,12 @@ TEST_F(ArrowBridgeArrayExportTest, arrayGapAllNullBigintChild) {
   auto offsets = makeBuffer<vector_size_t>({0, 3});
   auto sizes = makeBuffer<vector_size_t>({2, 2});
   auto vec = std::make_shared<ArrayVector>(
-      pool_.get(), ARRAY(BIGINT()), nullptr, 2, offsets, sizes, elements);
+      pool(), ARRAY(BIGINT()), nullptr, 2, offsets, sizes, elements);
 
   ArrowSchema schema;
   ArrowArray data;
   velox::exportToArrow(vec, schema, options_);
-  velox::exportToArrow(vec, data, pool_.get(), options_);
+  velox::exportToArrow(vec, data, pool(), options_);
 
   ASSERT_EQ(1, data.n_children);
   ASSERT_NE(nullptr, data.children[0]);
@@ -1031,14 +1675,13 @@ TEST_F(ArrowBridgeArrayExportTest, arrayGapAllNullBigintChild) {
 }
 
 TEST_F(ArrowBridgeArrayExportTest, arrayReorder) {
-  auto elements = vectorMaker_.flatVector<int64_t>({1, 2, 3, 4, 5});
+  auto elements = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
   elements->setNull(3, true);
-  elements->setNullCount(1);
   auto offsets = makeBuffer<vector_size_t>({3, 0});
   auto sizes = makeBuffer<vector_size_t>({2, 2});
   auto vec = std::make_shared<ArrayVector>(
-      pool_.get(), ARRAY(BIGINT()), nullptr, 2, offsets, sizes, elements);
-  auto array = toArrow(vec, options_, pool_.get());
+      pool(), ARRAY(BIGINT()), nullptr, 2, offsets, sizes, elements);
+  auto array = toArrow(vec, options_, pool());
   ASSERT_OK(array->ValidateFull());
   EXPECT_EQ(array->null_count(), 0);
   ASSERT_EQ(*array->type(), *arrow::list(arrow::int64()));
@@ -1054,21 +1697,70 @@ TEST_F(ArrowBridgeArrayExportTest, arrayReorder) {
   EXPECT_EQ(values.Value(3), 2);
 }
 
+TEST_F(ArrowBridgeArrayExportTest, nullRowPastElements) {
+  testExportOffsets(
+      {0, 2, 4}, {2, 2, 5}, {false, false, true}, 4, {0, 2, 4, 4});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, nullRowNegativeOffset) {
+  testExportOffsets({-3, 0}, {3, 2}, {true, false}, 2, {0, 0, 2});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, nullRowNegativeSize) {
+  testExportOffsets(
+      {0, 2, 1}, {2, -1, 0}, {false, true, false}, 2, {0, 2, 2, 2});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, elementsBeforeFirstRow) {
+  testExportOffsets({1, 3}, {2, 1}, {false, false}, 4, {0, 2, 3});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, elementsPastLastRow) {
+  testExportOffsets({0, 2}, {2, 1}, {false, false}, 4, {0, 2, 3});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, elementsInNullRow) {
+  testExportOffsets(
+      {0, 2, 3}, {2, 1, 1}, {false, true, false}, 4, {0, 2, 2, 3});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, elementsPastStructEnd) {
+  // The array is longer than its struct. Element 3 is out of range, and only
+  // row 2, past the end of the struct, covers it.
+  auto elements = makeFlatVector<Timestamp>(
+      4, [](vector_size_t row) { return Timestamp(row, 0); });
+  setOutOfRange(*elements, {3});
+  auto arrays = makeArrayVector({0, 2, 3}, elements);
+  auto vector = std::make_shared<RowVector>(
+      pool(),
+      ROW("c0", arrays->type()),
+      nullptr,
+      2,
+      std::vector<VectorPtr>{arrays});
+
+  auto array = toArrow(vector, options_, pool());
+  ASSERT_OK(array->ValidateFull());
+  const auto& lists = static_cast<const arrow::ListArray&>(
+      *static_cast<const arrow::StructArray&>(*array).field(0));
+  EXPECT_EQ(3, lists.values()->length());
+  validateOffsets(lists, {0, 2, 3});
+}
+
 TEST_F(ArrowBridgeArrayExportTest, arrayNested) {
-  auto elements = vectorMaker_.flatVector<int64_t>({1, 2, 3, 4, 5});
+  auto elements = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
   auto vec = ({
     auto inner = ({
       auto offsets = makeBuffer<vector_size_t>({0, 4, 2});
       auto sizes = makeBuffer<vector_size_t>({1, 1, 1});
       std::make_shared<ArrayVector>(
-          pool_.get(), ARRAY(BIGINT()), nullptr, 3, offsets, sizes, elements);
+          pool(), ARRAY(BIGINT()), nullptr, 3, offsets, sizes, elements);
     });
     auto offsets = makeBuffer<vector_size_t>({2, 0});
     auto sizes = makeBuffer<vector_size_t>({1, 1});
     std::make_shared<ArrayVector>(
-        pool_.get(), ARRAY(inner->type()), nullptr, 2, offsets, sizes, inner);
+        pool(), ARRAY(inner->type()), nullptr, 2, offsets, sizes, inner);
   });
-  auto array = toArrow(vec, options_, pool_.get());
+  auto array = toArrow(vec, options_, pool());
   ASSERT_OK(array->ValidateFull());
   ASSERT_EQ(*array->type(), *arrow::list(arrow::list(arrow::int64())));
   auto& listArray = static_cast<const arrow::ListArray&>(*array);
@@ -1083,9 +1775,8 @@ TEST_F(ArrowBridgeArrayExportTest, arrayNested) {
 
 TEST_F(ArrowBridgeArrayExportTest, mapSimple) {
   auto allOnes = [](vector_size_t) { return 1; };
-  auto vec =
-      vectorMaker_.mapVector<int64_t, int64_t>(2, allOnes, allOnes, allOnes);
-  auto array = toArrow(vec, options_, pool_.get());
+  auto vec = makeMapVector<int64_t, int64_t>(2, allOnes, allOnes, allOnes);
+  auto array = toArrow(vec, options_, pool());
   ASSERT_OK(array->ValidateFull());
   EXPECT_EQ(array->null_count(), 0);
   ASSERT_EQ(*array->type(), *arrow::map(arrow::int64(), arrow::int64()));
@@ -1105,22 +1796,22 @@ TEST_F(ArrowBridgeArrayExportTest, mapNested) {
   auto vec = ({
     auto ident = [](vector_size_t i) { return i; };
     auto inner = ({
-      auto keys = vectorMaker_.flatVector<int32_t>(5, ident);
+      auto keys = makeFlatVector<int32_t>(5, ident);
       auto values = keys;
       auto offsets = makeBuffer<vector_size_t>({0, 4, 2});
       auto sizes = makeBuffer<vector_size_t>({1, 1, 1});
       auto type = MAP(INTEGER(), INTEGER());
       std::make_shared<MapVector>(
-          pool_.get(), type, nullptr, 3, offsets, sizes, keys, values);
+          pool(), type, nullptr, 3, offsets, sizes, keys, values);
     });
     auto offsets = makeBuffer<vector_size_t>({2, 0});
     auto sizes = makeBuffer<vector_size_t>({1, 1});
-    auto keys = vectorMaker_.flatVector<int32_t>(3, ident);
+    auto keys = makeFlatVector<int32_t>(3, ident);
     auto type = MAP(INTEGER(), MAP(INTEGER(), INTEGER()));
     std::make_shared<MapVector>(
-        pool_.get(), type, nullptr, 2, offsets, sizes, keys, inner);
+        pool(), type, nullptr, 2, offsets, sizes, keys, inner);
   });
-  auto array = toArrow(vec, options_, pool_.get());
+  auto array = toArrow(vec, options_, pool());
   ASSERT_OK(array->ValidateFull());
   EXPECT_EQ(array->null_count(), 0);
   ASSERT_EQ(
@@ -1148,15 +1839,15 @@ TEST_F(ArrowBridgeArrayExportTest, mapNested) {
 
 TEST_F(ArrowBridgeArrayExportTest, mapTimestamp) {
   const auto keys =
-      vectorMaker_.flatVector<int32_t>(5, [](vector_size_t i) { return i; });
-  auto values = vectorMaker_.flatVector<Timestamp>(
+      makeFlatVector<int32_t>(5, [](vector_size_t i) { return i; });
+  auto values = makeFlatVector<Timestamp>(
       5, [](vector_size_t row) { return Timestamp(row, row); });
   const auto offsets = makeBuffer<vector_size_t>({1, 4, 2});
   const auto sizes = makeBuffer<vector_size_t>({1, 1, 1});
   const auto type = MAP(INTEGER(), TIMESTAMP());
   auto vec = std::make_shared<MapVector>(
-      pool_.get(), type, nullptr, 3, offsets, sizes, keys, values);
-  auto array = toArrow(vec, options_, pool_.get());
+      pool(), type, nullptr, 3, offsets, sizes, keys, values);
+  auto array = toArrow(vec, options_, pool());
   ASSERT_OK(array->ValidateFull());
   EXPECT_EQ(array->null_count(), 0);
   ASSERT_EQ(
@@ -1172,13 +1863,13 @@ TEST_F(ArrowBridgeArrayExportTest, mapTimestamp) {
   }
 
   // Nullable timestamp vector.
-  values = vectorMaker_.flatVector<Timestamp>(
+  values = makeFlatVector<Timestamp>(
       5,
       [](vector_size_t row) { return Timestamp(row, row); },
       [](vector_size_t row) { return row % 2 == 1; });
   vec = std::make_shared<MapVector>(
-      pool_.get(), type, nullptr, 3, offsets, sizes, keys, values);
-  array = toArrow(vec, options_, pool_.get());
+      pool(), type, nullptr, 3, offsets, sizes, keys, values);
+  array = toArrow(vec, options_, pool());
   ASSERT_OK(array->ValidateFull());
   EXPECT_EQ(array->null_count(), 0);
   ASSERT_EQ(
@@ -1197,10 +1888,10 @@ TEST_F(ArrowBridgeArrayExportTest, mapTimestamp) {
 TEST_F(ArrowBridgeArrayExportTest, dictionarySimple) {
   auto vec = BaseVector::wrapInDictionary(
       nullptr,
-      allocateIndices(3, pool_.get()),
+      allocateIndices(3, pool()),
       3,
-      vectorMaker_.flatVector<int64_t>({1, 2, 3}));
-  auto array = toArrow(vec, options_, pool_.get());
+      makeFlatVector<int64_t>({1, 2, 3}));
+  auto array = toArrow(vec, options_, pool());
   ASSERT_OK(array->ValidateFull());
   ASSERT_EQ(*array->type(), *arrow::dictionary(arrow::int32(), arrow::int64()));
   auto& dict = static_cast<const arrow::DictionaryArray&>(*array);
@@ -1219,14 +1910,14 @@ TEST_F(ArrowBridgeArrayExportTest, dictionarySimple) {
 TEST_F(ArrowBridgeArrayExportTest, dictionaryNested) {
   auto vec = ({
     auto indices = makeBuffer<vector_size_t>({1, 2, 0});
-    auto wrapped = vectorMaker_.flatVector<int64_t>({1, 2, 3});
+    auto wrapped = makeFlatVector<int64_t>({1, 2, 3});
     auto inner = BaseVector::wrapInDictionary(nullptr, indices, 3, wrapped);
     auto offsets = makeBuffer<vector_size_t>({2, 0});
     auto sizes = makeBuffer<vector_size_t>({1, 1});
     std::make_shared<ArrayVector>(
-        pool_.get(), ARRAY(inner->type()), nullptr, 2, offsets, sizes, inner);
+        pool(), ARRAY(inner->type()), nullptr, 2, offsets, sizes, inner);
   });
-  auto array = toArrow(vec, options_, pool_.get());
+  auto array = toArrow(vec, options_, pool());
   ASSERT_OK(array->ValidateFull());
   ASSERT_EQ(
       *array->type(),
@@ -1246,8 +1937,7 @@ TEST_F(ArrowBridgeArrayExportTest, dictionaryNested) {
 }
 
 TEST_F(ArrowBridgeArrayExportTest, unknownType) {
-  VectorPtr vector =
-      BaseVector::createNullConstant(UNKNOWN(), 2048, pool_.get());
+  VectorPtr vector = makeNullConstant(TypeKind::UNKNOWN, 2048);
   testConstantVector<true, UnknownValue>(
       vector, std::vector<std::optional<UnknownValue>>{std::nullopt});
 }
@@ -1257,18 +1947,36 @@ TEST_F(ArrowBridgeArrayExportTest, constants) {
   testConstant((int32_t)1234);
   testConstant((float)44.3);
   testConstant(true);
-  testConstant(StringView("inlined"));
+  for (auto layout :
+       {ArrowOptions::VarTypeLayout::kDefault,
+        ArrowOptions::VarTypeLayout::kLarge,
+        ArrowOptions::VarTypeLayout::kStringView}) {
+    SCOPED_TRACE(fmt::format("varTypeLayout {}", static_cast<int>(layout)));
+    options_.varTypeLayout = layout;
+    testConstant(StringView("inlined"));
+    testConstant(StringView("a string that is not inline"));
+  }
 
   // Null constant.
-  VectorPtr vector =
-      BaseVector::createNullConstant(TINYINT(), 2048, pool_.get());
+  VectorPtr vector = makeNullConstant(TypeKind::TINYINT, 2048);
   testConstantVector<true, int8_t>(
       vector, std::vector<std::optional<int8_t>>{std::nullopt});
 }
 
+TEST_F(ArrowBridgeArrayExportTest, nullConstant) {
+  // A run-end encoded array has no validity buffer, so its null count must be
+  // 0. The null is in the values child.
+  auto vector = makeNullConstant(TypeKind::BIGINT, 100);
+  ArrowArray arrowArray;
+  velox::exportToArrow(vector, arrowArray, pool(), options_);
+  EXPECT_EQ(0, arrowArray.null_count);
+  ASSERT_EQ(2, arrowArray.n_children);
+  EXPECT_EQ(1, arrowArray.children[1]->null_count);
+  arrowArray.release(&arrowArray);
+}
+
 TEST_F(ArrowBridgeArrayExportTest, constantComplex) {
-  auto innerArray =
-      vectorMaker_.arrayVector<int64_t>({{1, 2, 3}, {4, 5}, {6, 7, 8, 9}});
+  auto innerArray = makeArrayVector<int64_t>({{1, 2, 3}, {4, 5}, {6, 7, 8, 9}});
 
   // Wrap around different indices.
   VectorPtr vector = BaseVector::wrapInConstant(100, 1, innerArray);
@@ -1281,9 +1989,8 @@ TEST_F(ArrowBridgeArrayExportTest, constantComplex) {
 }
 
 TEST_F(ArrowBridgeArrayExportTest, constantCrossValidate) {
-  auto vector =
-      BaseVector::createConstant(VARCHAR(), "hello", 100, pool_.get());
-  auto array = toArrow(vector, options_, pool_.get());
+  auto vector = makeConstant("hello", 100);
+  auto array = toArrow(vector, options_, pool());
 
   ASSERT_OK(array->ValidateFull());
   EXPECT_EQ(array->null_count(), 0);
@@ -1337,8 +2044,8 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     int64_t length = inputValues.size();
     int64_t nullCount = 0;
 
-    holder.values = AlignedBuffer::allocate<TArrow>(length, pool_.get());
-    holder.nulls = AlignedBuffer::allocate<uint64_t>(length, pool_.get());
+    holder.values = AlignedBuffer::allocate<TArrow>(length, pool());
+    holder.nulls = AlignedBuffer::allocate<uint64_t>(length, pool());
 
     auto rawValues = holder.values->asMutable<TArrow>();
     auto rawNulls = holder.nulls->asMutable<uint64_t>();
@@ -1377,9 +2084,9 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
       }
     }
 
-    holder.nulls = AlignedBuffer::allocate<uint64_t>(length, pool_.get());
-    holder.offsets = AlignedBuffer::allocate<TOffsets>(length + 1, pool_.get());
-    holder.values = AlignedBuffer::allocate<char>(bufferSize, pool_.get());
+    holder.nulls = AlignedBuffer::allocate<uint64_t>(length, pool());
+    holder.offsets = AlignedBuffer::allocate<TOffsets>(length + 1, pool());
+    holder.values = AlignedBuffer::allocate<char>(bufferSize, pool());
 
     auto rawNulls = holder.nulls->asMutable<uint64_t>();
     auto rawOffsets = holder.offsets->asMutable<TOffsets>();
@@ -1439,7 +2146,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     }
 
     auto arrowSchema = makeArrowSchema(format);
-    auto output = importFromArrow(arrowSchema, arrowArray, pool_.get());
+    auto output = importFromArrow(arrowSchema, arrowArray, pool());
     if constexpr (
         std::is_same_v<TInput, int64_t> && std::is_same_v<TOutput, Timestamp>) {
       assertTimestampVectorContent(
@@ -1500,7 +2207,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     EXPECT_EQ(nullCount, *convertedVector->getNullCount());
     EXPECT_EQ(inputValues.size(), convertedVector->size());
 
-    auto expected = vectorMaker_.flatVectorNullable(inputValues);
+    auto expected = makeNullableFlatVector(inputValues);
 
     // Assert new vector contents.
     for (vector_size_t i = 0; i < convertedVector->size(); ++i) {
@@ -1593,10 +2300,10 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
         holder.buffers[1] = nullptr;
       }
       auto schema = makeArrowSchema("d:9,2,32");
-      auto actual = importFromArrow(schema, array, pool_.get());
+      auto actual = importFromArrow(schema, array, pool());
       std::vector<std::optional<int64_t>> expectedValues(
           input.begin(), input.end());
-      auto expected = vectorMaker_.flatVectorNullable(expectedValues, type);
+      auto expected = makeNullableFlatVector(expectedValues, type);
       facebook::velox::test::assertEqualVectors(expected, actual);
       const auto* rawValues = actual->asFlatVector<int64_t>()->rawValues();
       for (vector_size_t i = 0; i < actual->size(); ++i) {
@@ -1612,9 +2319,9 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
       ArrowSchema schema;
       ArrowArray data;
       velox::exportToArrow(input, schema, options_);
-      velox::exportToArrow(input, data, pool_.get(), options_);
+      velox::exportToArrow(input, data, pool(), options_);
 
-      auto output = importFromArrow(schema, data, pool_.get());
+      auto output = importFromArrow(schema, data, pool());
       facebook::velox::test::assertEqualVectors(input, output);
 
       if (isViewer()) {
@@ -1626,7 +2333,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
       }
     };
 
-    auto flatVector = vectorMaker_.flatVectorNullable<Timestamp>(
+    auto flatVector = makeNullableFlatVector<Timestamp>(
         {
             Timestamp(0, 0),
             std::nullopt,
@@ -1637,7 +2344,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
         TIMESTAMP_UTC());
     roundtripVector(flatVector);
 
-    auto dictionaryValues = vectorMaker_.flatVector<Timestamp>(
+    auto dictionaryValues = makeFlatVector<Timestamp>(
         {
             Timestamp(0, 0),
             Timestamp(1699300965, 12'349),
@@ -1645,7 +2352,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
         },
         TIMESTAMP_UTC());
     auto dictionaryVector = BaseVector::wrapInDictionary(
-        nullptr, makeIndicesInReverse(3, pool_.get()), 3, dictionaryValues);
+        nullptr, makeIndicesInReverse(3), 3, dictionaryValues);
     roundtripVector(dictionaryVector);
 
     using NullableTimestampArray =
@@ -1660,7 +2367,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
         std::vector<std::optional<Timestamp>>{Timestamp(-2208960000, 0)},
         std::vector<std::optional<Timestamp>>{},
     };
-    auto nestedVector = vectorMaker_.arrayVectorNullable<Timestamp>(
+    auto nestedVector = makeNullableArrayVector<Timestamp>(
         nestedValues, ARRAY(TIMESTAMP_UTC()));
     roundtripVector(nestedVector);
   }
@@ -1673,7 +2380,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
 
     // Construct Arrow array without nulls value and nulls buffer
     ArrowContextHolder holder1;
-    holder1.values = AlignedBuffer::allocate<TInput>(length, pool_.get());
+    holder1.values = AlignedBuffer::allocate<TInput>(length, pool());
     auto rawValues1 = holder1.values->asMutable<TInput>();
     for (size_t i = 0; i < length; ++i) {
       rawValues1[i] = *inputValues[i];
@@ -1684,7 +2391,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     auto arrowArray1 = makeArrowArray(holder1.buffers, 2, length, 0);
     auto arrowSchema1 = makeArrowSchema(format);
 
-    auto output = importFromArrow(arrowSchema1, arrowArray1, pool_.get());
+    auto output = importFromArrow(arrowSchema1, arrowArray1, pool());
     if constexpr (
         std::is_same_v<TInput, int64_t> && std::is_same_v<TOutput, Timestamp>) {
       assertTimestampVectorContent(
@@ -1707,7 +2414,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     // However, convert from an Arrow array without nulls buffer but non-zero
     // null count should fail
     ArrowContextHolder holder2;
-    holder2.values = AlignedBuffer::allocate<TInput>(length, pool_.get());
+    holder2.values = AlignedBuffer::allocate<TInput>(length, pool());
     auto rawValues2 = holder2.values->asMutable<TInput>();
     for (size_t i = 0; i < length; ++i) {
       rawValues2[i] = *inputValues[i];
@@ -1718,8 +2425,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     auto arrowSchema2 = makeArrowSchema(format);
     auto arrowArray2 = makeArrowArray(holder2.buffers, 2, length, 1);
     EXPECT_THROW(
-        importFromArrow(arrowSchema2, arrowArray2, pool_.get()),
-        VeloxUserError);
+        importFromArrow(arrowSchema2, arrowArray2, pool()), VeloxUserError);
   }
 
   void testImportString() {
@@ -1788,7 +2494,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     ArrowSchema arrowSchema = makeArrowSchema("n");
     ArrowArray arrowArray = makeArrowArray(nullptr, 0, 4, nullCount);
 
-    auto output = importFromArrow(arrowSchema, arrowArray, pool_.get());
+    auto output = importFromArrow(arrowSchema, arrowArray, pool());
 
     EXPECT_TRUE(output->type()->kindEquals(UNKNOWN()));
     EXPECT_EQ(4, output->size());
@@ -1811,7 +2517,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     ArrowArray dictionaryArray = makeArrowArray(nullptr, 0, 1, 1);
     arrowArray.dictionary = &dictionaryArray;
 
-    auto output = importFromArrow(arrowSchema, arrowArray, pool_.get());
+    auto output = importFromArrow(arrowSchema, arrowArray, pool());
 
     ASSERT_EQ(*UNKNOWN(), *output->type());
     EXPECT_EQ(4, output->size());
@@ -1879,7 +2585,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
         timeValues.emplace_back(millis);
       }
     }
-    auto expected = vectorMaker_.flatVectorNullable(timeValues, TIME());
+    auto expected = makeNullableFlatVector(timeValues, TIME());
     assertVectorContent(timeValues, actual, nullCount);
   }
 
@@ -1955,7 +2661,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     arrowArray.children[2] = &childArray3;
 
     // Import and validate output.
-    auto outputVector = importFromArrow(arrowSchema, arrowArray, pool_.get());
+    auto outputVector = importFromArrow(arrowSchema, arrowArray, pool());
     auto rowVector = std::dynamic_pointer_cast<RowVector>(outputVector);
 
     EXPECT_TRUE(rowVector != nullptr);
@@ -1985,7 +2691,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     auto arrowArray = makeArrowArray(parentHolder.buffers, 0, 0, 0);
 
     // Import and validate output.
-    auto outputVector = importFromArrow(arrowSchema, arrowArray, pool_.get());
+    auto outputVector = importFromArrow(arrowSchema, arrowArray, pool());
     auto rowVector = std::dynamic_pointer_cast<RowVector>(outputVector);
 
     EXPECT_TRUE(rowVector != nullptr);
@@ -2022,7 +2728,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
       VectorPtr vector;
       toVeloxVector(*array, vector);
       test::assertEqualVectors(
-          vectorMaker_.flatVectorNullable(values, VARBINARY()), vector);
+          makeNullableFlatVector(values, VARBINARY()), vector);
     }
   }
 
@@ -2032,7 +2738,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     ArrowArray data;
     ASSERT_OK(arrow::ExportType(*array.type(), &schema));
     ASSERT_OK(arrow::ExportArray(array, &data));
-    outVector = importFromArrow(schema, data, pool_.get());
+    outVector = importFromArrow(schema, data, pool());
     if (isViewer()) {
       // These release calls just decrease the refcount; there are still
       // references to keep the data alive from the original Arrow array.
@@ -2056,7 +2762,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     ArrowSchema schema;
     ArrowArray data;
     velox::exportToArrow(vec, schema, options);
-    velox::exportToArrow(vec, data, pool_.get(), options);
+    velox::exportToArrow(vec, data, pool(), options);
     ASSERT_OK_AND_ASSIGN(auto arrowType, arrow::ImportType(&schema));
     ASSERT_OK_AND_ASSIGN(auto array2, arrow::ImportArray(&data, arrowType));
     ASSERT_OK(array2->ValidateFull());
@@ -2117,6 +2823,30 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
       EXPECT_EQ(vec.encoding(), VectorEncoding::Simple::DICTIONARY);
       EXPECT_EQ(vec.size(), 60);
     });
+  }
+
+  // Imports BOOLEAN values that end right before an unmapped page. The values
+  // buffer covers the bitmap, one bit per row, so copying it reads only the
+  // bitmap.
+  void testImportBooleanValuesSize() {
+    constexpr int64_t kLength = 4'096;
+    common::testutil::PageBeforeGuard page;
+    auto* rawValues = page.end() - bits::nbytes(kLength);
+    for (int64_t i = 0; i < kLength; ++i) {
+      bits::setBit(rawValues, i, i % 3 == 0);
+    }
+
+    const void* buffers[2] = {nullptr, rawValues};
+    auto arrowArray = makeArrowArray(buffers, 2, kLength, 0);
+    auto arrowSchema = makeArrowSchema("b");
+    auto output = importFromArrow(arrowSchema, arrowArray, pool_.get());
+
+    auto* flat = output->asFlatVector<bool>();
+    EXPECT_EQ(flat->values()->size(), bits::nbytes(kLength));
+    auto copy = AlignedBuffer::copy(pool_.get(), flat->values());
+    for (int64_t i = 0; i < kLength; ++i) {
+      EXPECT_EQ(bits::isBitSet(copy->as<uint64_t>(), i), i % 3 == 0) << i;
+    }
   }
 
   void testImportStringView() {
@@ -2288,7 +3018,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     arrowArray = makeArrowArray(buffers, 2, 4, 0);
     arrowArray.offset = 1;
     EXPECT_THROW(
-        importFromArrow(arrowSchema, arrowArray, pool_.get()), VeloxUserError);
+        importFromArrow(arrowSchema, arrowArray, pool()), VeloxUserError);
 
     // Broken input.
 
@@ -2298,42 +3028,39 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     arrowArray = makeArrowArray(buffers, 2, 4, 0);
     arrowSchema.release = nullptr;
     EXPECT_THROW(
-        importFromArrow(arrowSchema, arrowArray, pool_.get()), VeloxUserError);
+        importFromArrow(arrowSchema, arrowArray, pool()), VeloxUserError);
 
     arrowSchema = makeArrowSchema("i");
     arrowArray = makeArrowArray(buffers, 2, 4, 0);
     arrowArray.release = nullptr;
     EXPECT_THROW(
-        importFromArrow(arrowSchema, arrowArray, pool_.get()), VeloxUserError);
+        importFromArrow(arrowSchema, arrowArray, pool()), VeloxUserError);
 
     // Expect two buffers.
     arrowSchema = makeArrowSchema("i");
     arrowArray = makeArrowArray(buffers, 2, 4, 0);
     arrowArray.n_buffers = 1;
     EXPECT_THROW(
-        importFromArrow(arrowSchema, arrowArray, pool_.get()), VeloxUserError);
+        importFromArrow(arrowSchema, arrowArray, pool()), VeloxUserError);
 
     // Can't have nulls without null buffer.
     arrowSchema = makeArrowSchema("i");
     arrowArray = makeArrowArray(buffers, 2, 4, 1);
     arrowArray.null_count = 1;
     EXPECT_THROW(
-        importFromArrow(arrowSchema, arrowArray, pool_.get()), VeloxUserError);
+        importFromArrow(arrowSchema, arrowArray, pool()), VeloxUserError);
 
     // Non-existing type.
     arrowSchema = makeArrowSchema("a");
     arrowArray = makeArrowArray(buffers, 2, 4, 0);
     EXPECT_THROW(
-        importFromArrow(arrowSchema, arrowArray, pool_.get()), VeloxUserError);
+        importFromArrow(arrowSchema, arrowArray, pool()), VeloxUserError);
 
     // Ensure the baseline works.
     arrowSchema = makeArrowSchema("i");
     arrowArray = makeArrowArray(buffers, 2, 4, 0);
-    EXPECT_NO_THROW(importFromArrow(arrowSchema, arrowArray, pool_.get()));
+    EXPECT_NO_THROW(importFromArrow(arrowSchema, arrowArray, pool()));
   }
-
-  std::shared_ptr<memory::MemoryPool> pool_{
-      memory::memoryManager()->addLeafPool()};
 };
 
 class ArrowBridgeArrayImportAsViewerTest : public ArrowBridgeArrayImportTest {
@@ -2401,6 +3128,10 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, map) {
   testImportMap();
 }
 
+TEST_F(ArrowBridgeArrayImportAsViewerTest, booleanValuesSize) {
+  testImportBooleanValuesSize();
+}
+
 TEST_F(ArrowBridgeArrayImportAsViewerTest, dictionary) {
   testImportDictionary();
 }
@@ -2458,7 +3189,7 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, utf8ViewOobBufferIndex) {
   auto arrowArray = makeArrowArray(buffers, 4, 1, 0);
 
   VELOX_ASSERT_THROW(
-      importFromArrowAsViewer(arrowSchema, arrowArray, pool_.get()),
+      importFromArrowAsViewer(arrowSchema, arrowArray, pool()),
       "Arrow Utf8View buffer index out of range");
 }
 
@@ -2528,6 +3259,10 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, map) {
   testImportMap();
 }
 
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, booleanValuesSize) {
+  testImportBooleanValuesSize();
+}
+
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, dictionary) {
   testImportDictionary();
 }
@@ -2551,7 +3286,7 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, inputsMarkedReleased) {
   ArrowSchema arrowSchema = makeArrowSchema("i");
   ArrowArray arrowArray = makeArrowArray(buffers, 2, 4, 0);
 
-  auto _ = importFromArrowAsOwner(arrowSchema, arrowArray, pool_.get());
+  auto _ = importFromArrowAsOwner(arrowSchema, arrowArray, pool());
 
   EXPECT_EQ(arrowSchema.release, nullptr);
   EXPECT_EQ(arrowArray.release, nullptr);
@@ -2585,7 +3320,7 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, releaseCalled) {
   // Create a Velox Vector from Arrow and then destruct it to trigger the
   // release callback calling
   {
-    auto _ = importFromArrowAsOwner(arrowSchema, arrowArray, pool_.get());
+    auto _ = importFromArrowAsOwner(arrowSchema, arrowArray, pool());
   }
 
   EXPECT_TRUE(TestReleaseCalled::schemaReleaseCalled);

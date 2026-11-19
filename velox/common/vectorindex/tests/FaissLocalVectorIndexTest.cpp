@@ -16,6 +16,8 @@
 
 #include "velox/common/vectorindex/FaissLocalVectorIndex.h"
 
+#include <random>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -113,6 +115,55 @@ TEST_F(FaissLocalVectorIndexTest, searchOptions) {
   EXPECT_THAT(ids, testing::ElementsAre(10));
   hnsw.search(Embeddings(query, 2), 1, ids, scores);
   EXPECT_THAT(ids, testing::ElementsAre(10));
+}
+
+// trainCentroids returns the requested number of unit-length centroids, the
+// same for the same embeddings on the same number of threads, whether it trains
+// in one level or, for more clusters than the codec options allow, in two.
+// Fewer embeddings than clusters give one centroid per embedding.
+TEST_F(FaissLocalVectorIndexTest, trainCentroids) {
+  constexpr int32_t kDimension{8};
+  const CodecOptions options{.maxFlatClusters = 100};
+  constexpr int64_t kNumEmbeddings{2'000};
+  std::mt19937 random(1);
+  std::normal_distribution<float> normal;
+  std::vector<float> embeddings(kNumEmbeddings * kDimension);
+  for (auto& value : embeddings) {
+    value = normal(random);
+  }
+  for (int64_t i = 0; i < kNumEmbeddings; ++i) {
+    EmbeddingNormalizer::normalize(
+        VectorIndexMetric::kCosine,
+        std::span(embeddings).subspan(i * kDimension, kDimension));
+  }
+  const auto train = [&](int64_t numClusters, int32_t numThreads) {
+    return FaissLocalVectorIndex::trainCentroids(
+        VectorIndexMetric::kCosine,
+        numClusters,
+        Embeddings(embeddings, kDimension),
+        options,
+        numThreads);
+  };
+
+  for (const auto& [numClusters, numThreads] :
+       {std::pair<int64_t, int32_t>{16, 1},
+        {options.maxFlatClusters + 50, 1},
+        {options.maxFlatClusters + 50, 2},
+        {kNumEmbeddings + 1, 1}}) {
+    SCOPED_TRACE(
+        fmt::format("{} clusters, {} threads", numClusters, numThreads));
+    const auto centroids = train(numClusters, numThreads);
+    ASSERT_EQ(
+        std::min(numClusters, kNumEmbeddings) * kDimension, centroids.size());
+    for (size_t i = 0; i < centroids.size(); i += kDimension) {
+      float norm{0};
+      for (auto j = i; j < i + kDimension; ++j) {
+        norm += centroids[j] * centroids[j];
+      }
+      EXPECT_NEAR(1, norm, 1e-5);
+    }
+    EXPECT_EQ(centroids, train(numClusters, numThreads));
+  }
 }
 
 TEST_F(FaissLocalVectorIndexTest, errors) {
@@ -213,6 +264,22 @@ TEST_F(FaissLocalVectorIndexTest, parseSearchOptions) {
   VELOX_ASSERT_THROW(
       Options::parseSearch({{Options::kEfSearch, "0"}}),
       "Vector index option must be positive: hnsw.efSearch");
+}
+
+TEST_F(FaissLocalVectorIndexTest, parseCodecOptions) {
+  EXPECT_EQ(CodecOptions{}, CodecOptions::parse({}));
+  EXPECT_EQ(
+      CodecOptions{.maxFlatClusters = 500},
+      CodecOptions::parse({{CodecOptions::kMaxFlatClusters, "500"}}));
+  VELOX_ASSERT_THROW(
+      CodecOptions::parse({{"ivf.nlist", "5"}}),
+      "Unknown vector index codec option: ivf.nlist");
+  VELOX_ASSERT_THROW(
+      CodecOptions::parse({{CodecOptions::kMaxFlatClusters, "x"}}),
+      "Vector index codec option must be an integer: train.maxFlatClusters=x");
+  VELOX_ASSERT_THROW(
+      CodecOptions::parse({{CodecOptions::kMaxFlatClusters, "0"}}),
+      "Vector index codec option must be positive: train.maxFlatClusters");
 }
 
 } // namespace

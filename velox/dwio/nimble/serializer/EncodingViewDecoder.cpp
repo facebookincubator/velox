@@ -131,16 +131,18 @@ EncodingViewDecoder::EncodingViewDecoder(
     velox::BufferPool* bufferPool,
     const EncodingViewFactory& encodingViewFactory)
     : pool_{velox::checkedNotNull(pool)},
-      bufferPool_{bufferPool},
       encodingViewFactory_{encodingViewFactory} {
   NIMBLE_CHECK(
       encodingViewFactory_ != nullptr,
       "EncodingViewDecoder requires an EncodingView factory");
-  rebind(chunks);
+  rebind(chunks, bufferPool);
 }
 
-void EncodingViewDecoder::rebind(std::span<const std::string_view> chunks) {
+void EncodingViewDecoder::rebind(
+    std::span<const std::string_view> chunks,
+    velox::BufferPool* bufferPool) {
   release();
+  bufferPool_ = bufferPool;
   NIMBLE_CHECK(
       !chunks.empty(), "EncodingViewDecoder requires at least one chunk");
   SCOPE_FAIL {

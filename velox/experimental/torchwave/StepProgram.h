@@ -35,6 +35,7 @@
 namespace torch::wave {
 
 class AllocGroupCollector;
+struct SymbolFixups;
 struct OutputDesc;
 struct ValueTypes;
 
@@ -130,6 +131,15 @@ struct FillOp {
   int32_t kernel{-1};
 };
 
+/// A shape the generated code of a launch assumes for one of its tensors,
+/// checked before every launch.
+struct ShapeCheck {
+  int32_t valueId{-1};
+  std::vector<int64_t> dims;
+  /// The code also reads the tensor as densely laid out.
+  bool contiguous{false};
+};
+
 /// One kernel launch of the step.
 struct BoundLaunch {
   /// Index into StepVectors::kernels.
@@ -139,6 +149,10 @@ struct BoundLaunch {
   /// is.
   int32_t countSize{-1};
   bool countFromReserve{false};
+  /// The count reads a value one of the launch's outputs writes (an op sized
+  /// from its own output, e.g. index_select), so it is taken again after the
+  /// outputs are written.
+  bool recount{false};
   /// Outputs when the launch is sized by its largest input and one exists,
   /// and the outputs otherwise.
   int32_t largestShapeSize{-1};
@@ -190,6 +204,9 @@ struct SizeOp {
   int32_t blockSize{0};
   /// Index into StepProgram::sizes, for messages.
   int32_t source{-1};
+  /// True when the result depends only on shapes the graph fixes. Bind wrote
+  /// it into 'shapes' once and no call runs.
+  bool constant{false};
 };
 
 /// How one output of a kernel launch gets its shape and memory: a packed
@@ -220,6 +237,7 @@ struct LaunchOp {
   int32_t countSize{-1};
   int32_t largestShapeSize{-1};
   bool countFromReserve{false};
+  bool recount{false};
   /// Into StepCode::outputs.
   Span outputs;
   Span largestOutputs;
@@ -294,8 +312,51 @@ struct StepCode {
         .constants = {consts + op.constants.begin, op.constants.size},
         .intList = {consts + op.intList.begin, op.intList.size},
         .outputs = {ids + op.outputs.begin, op.outputs.size},
-        .elements = {ids + op.elements.begin, op.elements.size}};
+        .elements = {ids + op.elements.begin, op.elements.size},
+        .wholeExtent = op.wholeExtent};
   }
+};
+
+/// What a grid computed on the device reads of one launch.
+struct GridLaunchDesc {
+  /// The op the launch's blocks run, as its BlockInfo records it.
+  int32_t opCode{0};
+  /// The op's unit cost times the launch's cost adjustment.
+  float costPerInput{1};
+  /// Elements one thread handles, so one block covers blockSize times this.
+  int32_t elementsPerThread{1};
+  /// The launch's preferred blocks per SM, or 0.
+  int32_t blocksPerSm{0};
+  /// Whether the launch always runs in one block.
+  bool singleBlock{false};
+  /// How the launch's element count combines its terms: the largest, their
+  /// sum, or the product of their broadcast dims. kHost when the count needs
+  /// what the parameters do not carry, such as a nested expression.
+  enum class Count : uint8_t { kHost, kMax, kSum, kBroadcast };
+  Count count{Count::kHost};
+  /// The terms: offsets in the step's parameter region of a tensor, whose
+  /// numEl or dims count, or of an integer, whose value counts.
+  std::vector<int32_t> countOffsets;
+  /// Per term, 1 when its offset is of an integer, 0 when of a tensor.
+  std::vector<uint8_t> countIsScalar;
+  /// Constant shapes broadcast in with the tensors.
+  std::vector<std::vector<int32_t>> constShapes;
+};
+
+/// What a grid computed on the device reads of one step: everything makeGrid
+/// takes from the host, with each launch's element count left to the
+/// parameters the device holds.
+struct GridDescriptor {
+  /// One per launch of the step, in launch order.
+  std::vector<GridLaunchDesc> launches;
+  /// The number of blocks the grid spreads the launches over.
+  int32_t targetBlocks{0};
+  /// Threads per block.
+  int32_t blockSize{0};
+  /// Whether the step runs as a cooperative grid, all blocks resident.
+  bool cooperative{false};
+  /// The most blocks the step's parameter region has BlockInfos for.
+  int32_t blockCapacity{0};
 };
 
 /// One step of one node.
@@ -312,6 +373,8 @@ struct StepProgram {
   /// What the dependent launches read, for the wait.
   folly::F14FastSet<int32_t> waitReads;
   std::vector<FillOp> fills;
+  /// Tensor shapes the step's kernels were compiled for.
+  std::vector<ShapeCheck> shapeChecks;
   /// The step's metadata shortcuts that run over the table, and the launches
   /// they stand for: when an operand is not in the table, the shortcut runs
   /// over the frame instead.
@@ -328,6 +391,11 @@ struct StepProgram {
   /// Collects the step's allocation groups. Built at bind, installed for each
   /// execution of the step.
   std::shared_ptr<AllocGroupCollector> collector;
+  /// Rewrites of the step's parameters from symbol values the device holds;
+  /// null when the step reads none.
+  std::shared_ptr<SymbolFixups> symbolFixups;
+  /// Built at the step's first grid; see GridDescriptor.
+  GridDescriptor grid;
   /// The sizes, launches and fills above, packed. 'sizes' and 'launches' are
   /// kept for messages and the bind passes that follow; the run reads 'code'.
   StepCode code;

@@ -281,18 +281,23 @@ Decimal Special Forms
     A null scale returns null without evaluating the runtime decimal child;
     its resolved output type is the same as for scale zero.
     The expression must supply the resolved decimal result type, which is
-    validated against the native precision and scale rules below. Native type
-    calculation widens scale arithmetic before negation, avoiding integer
-    overflow across the full INTEGER domain. This can differ from Spark/JVM
-    result metadata at the most-negative scales; integrations requiring exact
-    Spark type parity must retain compatibility validation and fallback.
+    validated against the native precision and scale rules below.
     The result precision and scale are decided with the precision and scale of input ``decimal`` and ``scale``.
     After rounding we may need one more digit in the integral part.
     If a negative scale causes the rounded value to exceed decimal precision
     38, evaluation raises a user error regardless of ANSI mode. ``try`` catches
     that error per row.
-    Dropping more than 38 digits returns zero; dropping exactly 38 digits can
-    still round away from zero and overflow.
+    A scale at or above the input scale returns the value unchanged. If the
+    input scale minus the target scale is greater than 38, every non-null input
+    rounds to zero. Dropping exactly 38 digits can still round away from zero
+    and overflow.
+
+    At scales ``-2147483648`` and ``-2147483647``, the native result type is
+    ``DECIMAL(38, 0)``. Spark 4.1 computes part of this metadata using 32-bit
+    arithmetic and resolves ``DECIMAL(min(p - s + 1, 38), 0)`` for input
+    ``DECIMAL(p, s)``. The types differ when ``p - s + 1 < 38``. Integrations
+    requiring exact Spark type parity must retain compatibility validation and
+    fallback for these scales.
 
     ::
 

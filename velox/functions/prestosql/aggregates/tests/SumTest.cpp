@@ -51,6 +51,7 @@ TEST_F(SumTest, sumTinyint) {
   AggregationTester(*this)
       .inputs(vectors)
       .aggregates({"sum(c1)"})
+      .withCompanion()
       .assertResults("SELECT sum(c1) FROM tmp");
 
   // Group by aggregation.
@@ -130,6 +131,7 @@ TEST_F(SumTest, sumDoubleAndFloat) {
     AggregationTester(*this)
         .inputs(vectors)
         .aggregates({"sum(c0)", "sum(c1)"})
+        .withCompanion()
         .assertResults("SELECT sum(c0), sum(c1) FROM tmp");
   }
 }

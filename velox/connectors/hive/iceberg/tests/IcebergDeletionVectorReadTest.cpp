@@ -55,9 +55,7 @@ TEST_F(IcebergDeletionVectorReadTest, deletionVectorFiltersDeletedRowsInScan) {
   // Data file: 10 rows whose value equals their row position (0..9).
   std::vector<int64_t> values(10);
   std::iota(values.begin(), values.end(), 0);
-  auto dataFile = TempFilePath::create();
-  writeToFile(
-      dataFile->getPath(), {makeRowVector({makeFlatVector<int64_t>(values)})});
+  auto dataFile = writeToFile(makeRowVector({makeFlatVector<int64_t>(values)}));
 
   // Delete positions 8 and 9 (mirrors the issue's DELETE of ids 8, 9).
   auto [puffinDir, dvFile] = writeDeletionVector(dataFile->getPath(), {8, 9});
@@ -87,10 +85,8 @@ TEST_F(IcebergDeletionVectorReadTest, deletionVectorFiltersDeletedRowsInScan) {
 // column on, the rewritten deletion vector recorded 0..N-1 instead of the true
 // positions and left the trailing rows of the file undeleted.
 TEST_F(IcebergDeletionVectorReadTest, rowIdIsFileAbsoluteWithDeletionVector) {
-  auto dataFile = TempFilePath::create();
-  writeToFile(
-      dataFile->getPath(),
-      {makeRowVector({makeFlatVector<int64_t>({10, 20, 30, 40, 50})})});
+  auto dataFile = writeToFile(
+      makeRowVector({makeFlatVector<int64_t>({10, 20, 30, 40, 50})}));
 
   auto [puffinDir, dvFile] = writeDeletionVector(dataFile->getPath(), {1, 3});
 

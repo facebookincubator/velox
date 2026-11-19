@@ -20,9 +20,11 @@
 #include <memory>
 #include <span>
 #include <string_view>
+#include <vector>
 
 #include <folly/Function.h>
 
+#include "velox/common/vectorindex/CodecOptions.h"
 #include "velox/common/vectorindex/Embeddings.h"
 #include "velox/common/vectorindex/LocalVectorIndex.h"
 #include "velox/common/vectorindex/LocalVectorIndexOptions.h"
@@ -69,8 +71,8 @@ class FaissLocalVectorIndex : public LocalVectorIndex {
   /// 'ivf.nlist' defaults to 4 * sqrt(number of embeddings), between 8 and
   /// 16384. The build reduces it, even when set, to give each list at least 39
   /// embeddings, the fewest FAISS recommends for training a list; a group of
-  /// fewer than 39 embeddings gets one list. 'ivf.nprobe' defaults to a tenth
-  /// of the lists, rounded up, and is capped at the number of lists. 'hnsw.M',
+  /// fewer than 39 embeddings gets one list. 'ivf.nprobe' defaults to all the
+  /// lists and is capped at the number of lists. 'hnsw.M',
   /// 'hnsw.efConstruction' and 'hnsw.efSearch' default to 32, 200 and 64.
   static void build(
       VectorIndexKind kind,
@@ -79,6 +81,44 @@ class FaissLocalVectorIndex : public LocalVectorIndex {
       const Embeddings& embeddings,
       std::span<const int64_t> ids,
       folly::FunctionRef<void(std::string_view)> write);
+
+  /// Names of the runtime stats trainCentroids() records on the operator that
+  /// calls it, when it runs k-means.
+  struct TrainStats {
+    /// The number of embeddings it trains on.
+    static constexpr std::string_view kEmbeddings{"trainEmbeddings"};
+
+    /// The number of threads it trains on.
+    static constexpr std::string_view kThreads{"trainThreads"};
+
+    /// The number of levels it trains in: 1, or 2 for more clusters than the
+    /// codec options' maxFlatClusters.
+    static constexpr std::string_view kLevels{"trainLevels"};
+
+    /// Its wall time, in nanoseconds.
+    static constexpr std::string_view kWallNanos{"trainWallNanos"};
+  };
+
+  /// Clusters 'embeddings' with k-means on 'numThreads' threads and returns the
+  /// centroids, one after another, normalized for 'metric'. The embeddings
+  /// must be normalized for 'metric' (see EmbeddingNormalizer). Returns
+  /// min('numClusters', number of embeddings) centroids; with no more
+  /// embeddings than clusters, the centroids are the embeddings. The same
+  /// embeddings in the same order give the same centroids on the same number
+  /// of threads. For kCosine the k-means is spherical: an embedding goes to the
+  /// centroid with the largest inner product, and each centroid is the
+  /// normalized mean of its embeddings.
+  ///
+  /// More than 'options.maxFlatClusters' clusters train in two levels: about
+  /// sqrt('numClusters') coarse clusters, then within each a share of
+  /// 'numClusters' in proportion to its embeddings. That cuts the work by about
+  /// sqrt('numClusters') / 2.
+  static std::vector<float> trainCentroids(
+      VectorIndexMetric metric,
+      int64_t numClusters,
+      const Embeddings& embeddings,
+      const CodecOptions& options,
+      int32_t numThreads);
 
   /// Reads a local index that build() wrote for 'metric'. The index refers to
   /// its embeddings, codes and graph in 'bytes' rather than copying them, so

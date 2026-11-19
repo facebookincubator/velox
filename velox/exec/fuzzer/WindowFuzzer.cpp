@@ -627,6 +627,17 @@ void WindowFuzzer::testAlternativePlans(
          {}});
   }
 
+  // Non-streaming window from values. The only plan here that WindowNode
+  // considers spillable regardless of the input types or the sanitizer build,
+  // so it is what gives the spilled runs below something to do.
+  plans.push_back(
+      {PlanBuilder()
+           .values(input)
+           .projectExpressions(projections)
+           .window({fmt::format("{} over ({})", functionCall, frame)})
+           .planNode(),
+       {}});
+
   // With TableScan.
   auto directory = TempDirectoryPath::create();
   const auto inputRowType = asRowType(input[0]->type());
@@ -665,6 +676,28 @@ void WindowFuzzer::testAlternativePlans(
   for (const auto& plan : plans) {
     testPlan(
         plan, false, false, customVerification, {customVerifier}, expected);
+
+    // A streaming window never spills -- WindowNode::canSpill() requires
+    // unsorted input -- so a spilled run over one would just repeat the
+    // execution above.
+    const auto* windowNode =
+        dynamic_cast<const core::WindowNode*>(plan.plan.get());
+    const bool spillable = (windowNode != nullptr) &&
+        !windowNode->inputsSorted() && !windowNode->partitionKeys().empty();
+
+    // Custom verifiers cover functions whose result legitimately varies
+    // between executions, such as approx_percentile, so they cannot validate a
+    // run that took a different execution path.
+    if (spillable && !customVerification) {
+      LOG(INFO) << "Testing plan with spilling";
+      testPlan(
+          plan,
+          true /*injectSpill*/,
+          false,
+          customVerification,
+          {customVerifier},
+          expected);
+    }
   }
 }
 

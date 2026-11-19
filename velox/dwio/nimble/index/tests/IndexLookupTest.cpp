@@ -24,9 +24,11 @@
 #include "velox/common/io/Options.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/common/tests/TestUtils.h"
 #include "velox/dwio/nimble/index/IndexLookup.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
+#include "velox/dwio/nimble/tablet/DataInput.h"
 #include "velox/dwio/nimble/tablet/MetadataInput.h"
 
 namespace facebook::nimble::index::test {
@@ -233,46 +235,31 @@ TEST_F(IndexLookupTest, optionsValidateIndexIoStats) {
   NIMBLE_ASSERT_THROW(options.validate(), "indexIoStats must be set");
 }
 
-TEST_F(IndexLookupTest, optionsValidateFileHandleAndCache) {
+TEST_F(IndexLookupTest, optionsValidateFileHandle) {
   auto file = std::make_shared<velox::InMemoryReadFile>(std::string{});
   auto pool = velox::memory::memoryManager()->addLeafPool();
-  auto indexIoStats = std::make_shared<velox::io::IoStatistics>();
   velox::io::ReaderOptions ioOptions(pool.get());
-  ioOptions.setIndexIoStats(indexIoStats);
+  ioOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
 
   {
-    SCOPED_TRACE("direct path (no fileHandle, no cache)");
+    SCOPED_TRACE("no fileHandle");
     IndexLookup::Options options{.file = file, .ioOptions = &ioOptions};
     EXPECT_NO_THROW(options.validate());
   }
   {
-    SCOPED_TRACE("fileHandle without cache");
+    SCOPED_TRACE("fileHandle->file is file");
     velox::FileHandle fileHandle;
     fileHandle.file = file;
     IndexLookup::Options options{
         .file = file, .ioOptions = &ioOptions, .fileHandle = &fileHandle};
-    NIMBLE_ASSERT_THROW(
-        options.validate(), "fileHandle and cache must both be set or neither");
-  }
-  {
-    SCOPED_TRACE("cache without fileHandle");
-    IndexLookup::Options options{
-        .file = file,
-        .ioOptions = &ioOptions,
-        .cache = reinterpret_cast<velox::cache::AsyncDataCache*>(0x1)};
-    NIMBLE_ASSERT_THROW(
-        options.validate(), "fileHandle and cache must both be set or neither");
+    EXPECT_NO_THROW(options.validate());
   }
   {
     SCOPED_TRACE("file mismatch with fileHandle->file");
-    auto file2 = std::make_shared<velox::InMemoryReadFile>(std::string{});
-    velox::FileHandle fileHandle2;
-    fileHandle2.file = file2;
+    velox::FileHandle fileHandle;
+    fileHandle.file = std::make_shared<velox::InMemoryReadFile>(std::string{});
     IndexLookup::Options options{
-        .file = file,
-        .ioOptions = &ioOptions,
-        .fileHandle = &fileHandle2,
-        .cache = reinterpret_cast<velox::cache::AsyncDataCache*>(0x1)};
+        .file = file, .ioOptions = &ioOptions, .fileHandle = &fileHandle};
     NIMBLE_ASSERT_THROW(
         options.validate(),
         "file and fileHandle->file must point to the same file");
@@ -280,73 +267,191 @@ TEST_F(IndexLookupTest, optionsValidateFileHandleAndCache) {
 }
 
 TEST_F(IndexLookupTest, createIndexMetadataInput) {
-  struct TestParam {
-    bool cached;
-    std::string debugString() const {
-      return cached ? "cached" : "direct";
-    }
-  };
-  std::vector<TestParam> testSettings = {{false}, {true}};
-  for (const auto& testData : testSettings) {
-    SCOPED_TRACE(testData.debugString());
-    auto file = std::make_shared<velox::InMemoryReadFile>(std::string{});
-    auto pool = velox::memory::memoryManager()->addLeafPool();
-    velox::io::ReaderOptions ioOptions(pool.get());
-    ioOptions.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
-    ioOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
-
-    std::shared_ptr<velox::memory::MallocAllocator> allocator;
-    std::shared_ptr<velox::cache::AsyncDataCache> cache;
-    std::unique_ptr<velox::FileHandle> fileHandle;
-    if (testData.cached) {
-      allocator = std::make_shared<velox::memory::MallocAllocator>(
-          velox::memory::MemoryAllocator::Options{.capacity = 1UL << 30});
-      cache = velox::cache::AsyncDataCache::create(allocator.get());
-      fileHandle = std::make_unique<velox::FileHandle>();
-      fileHandle->file = file;
-      fileHandle->uuid = velox::StringIdLease(velox::fileIds(), "testFile");
-    }
-
+  auto file = std::make_shared<velox::InMemoryReadFile>(std::string{});
+  auto pool = velox::memory::memoryManager()->addLeafPool();
+  velox::io::ReaderOptions ioOptions(pool.get());
+  ioOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
+  auto allocator = std::make_shared<velox::memory::MallocAllocator>(
+      velox::memory::MemoryAllocator::Options{.capacity = 1UL << 30});
+  auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
+  velox::FileHandle fileHandle;
+  fileHandle.file = file;
+  fileHandle.uuid = velox::StringIdLease(
+      velox::fileIds(), "IndexLookupTest.createIndexMetadataInput");
+  {
+    SCOPED_TRACE("direct");
+    IndexLookup::Options options{.file = file, .ioOptions = &ioOptions};
+    auto metadataInput = createIndexMetadataInput(options);
+    EXPECT_NE(dynamic_cast<DirectMetadataInput*>(metadataInput.get()), nullptr);
+  }
+  {
+    SCOPED_TRACE("blockCache");
     IndexLookup::Options options{
         .file = file,
         .ioOptions = &ioOptions,
-        .fileHandle = fileHandle.get(),
-        .cache = cache.get()};
+        .blockCache = getBlockCache(cache.get()),
+        .fileHandle = &fileHandle};
     auto metadataInput = createIndexMetadataInput(options);
-    ASSERT_NE(metadataInput, nullptr);
-    EXPECT_EQ(metadataInput->cached(), testData.cached);
+    EXPECT_NE(dynamic_cast<CachedMetadataInput*>(metadataInput.get()), nullptr);
   }
+  testingResetBlockCache();
+  cache->shutdown();
 }
 
 TEST_F(IndexLookupTest, createIndexDataInput) {
-  for (bool cached : {false, true}) {
-    SCOPED_TRACE(cached ? "cached" : "direct");
-    auto file = std::make_shared<velox::InMemoryReadFile>(std::string{});
-    auto pool = velox::memory::memoryManager()->addLeafPool();
+  std::string data(1'000, '\0');
+  for (size_t i = 0; i < data.size(); ++i) {
+    data[i] = static_cast<char>(i % 251);
+  }
+  auto file = std::make_shared<velox::InMemoryReadFile>(data);
+  auto pool = velox::memory::memoryManager()->addLeafPool();
+  auto allocator = std::make_shared<velox::memory::MallocAllocator>(
+      velox::memory::MemoryAllocator::Options{.capacity = 1UL << 30});
+  auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
+  velox::FileHandle fileHandle;
+  fileHandle.file = file;
+  fileHandle.uuid = velox::StringIdLease(
+      velox::fileIds(), "IndexLookupTest.createIndexDataInput");
+  const DataInput::Region region{100, 200};
+
+  for (const bool blockCache : {false, true}) {
+    SCOPED_TRACE(fmt::format("blockCache={}", blockCache));
     velox::io::ReaderOptions ioOptions(pool.get());
-    ioOptions.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
-    ioOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
-
-    std::shared_ptr<velox::memory::MallocAllocator> allocator;
-    std::shared_ptr<velox::cache::AsyncDataCache> cache;
-    std::unique_ptr<velox::FileHandle> fileHandle;
-    if (cached) {
-      allocator = std::make_shared<velox::memory::MallocAllocator>(
-          velox::memory::MemoryAllocator::Options{.capacity = 1UL << 30});
-      cache = velox::cache::AsyncDataCache::create(allocator.get());
-      fileHandle = std::make_unique<velox::FileHandle>();
-      fileHandle->file = file;
-      fileHandle->uuid = velox::StringIdLease(velox::fileIds(), "testFile");
-    }
-
+    auto ioStats = std::make_shared<velox::io::IoStatistics>();
+    ioOptions.setIndexIoStats(ioStats);
     IndexLookup::Options options{
         .file = file,
         .ioOptions = &ioOptions,
-        .fileHandle = fileHandle.get(),
-        .cache = cache.get()};
-    auto dataInput = createIndexDataInput(options);
-    ASSERT_NE(dataInput, nullptr);
+        .blockCache = blockCache ? getBlockCache(cache.get()) : nullptr,
+        .fileHandle = &fileHandle};
+
+    // Two inputs read the same region. A cached input finds the bytes the
+    // first one read in the cache.
+    for (int i = 0; i < 2; ++i) {
+      const auto input = createIndexDataInput(options);
+      EXPECT_EQ(input->cached(), blockCache);
+      const auto [bytes, handle] = input->read(region);
+      EXPECT_EQ(bytes, data.substr(region.offset, region.length));
+    }
+    EXPECT_EQ(ioStats->read().count(), blockCache ? 1 : 2);
+    EXPECT_EQ(ioStats->ramHit().count(), blockCache ? 1 : 0);
+    if (blockCache) {
+      // The entry is keyed by fileHandle->uuid.
+      velox::io::IoStatistics probeStats;
+      EXPECT_FALSE(getBlockCache(cache.get())
+                       ->find(fileHandle.uuid.id(), region.offset, probeStats)
+                       .empty());
+    }
   }
+  {
+    velox::io::ReaderOptions ioOptions(pool.get());
+    ioOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
+    IndexLookup::Options options{
+        .file = file,
+        .ioOptions = &ioOptions,
+        .blockCache = getBlockCache(cache.get())};
+    NIMBLE_ASSERT_USER_THROW(
+        createIndexDataInput(options), "blockCache requires fileHandle");
+
+    velox::FileHandle fileHandleWithoutId;
+    fileHandleWithoutId.file = file;
+    options.fileHandle = &fileHandleWithoutId;
+    NIMBLE_ASSERT_USER_THROW(
+        createIndexDataInput(options), "blockCache requires fileHandle->uuid");
+  }
+
+  testingResetBlockCache();
+  cache->shutdown();
+}
+
+TEST_F(IndexLookupTest, createIndexDataInputOwnsFile) {
+  std::string data(1'000, '\0');
+  for (size_t i = 0; i < data.size(); ++i) {
+    data[i] = static_cast<char>(i % 251);
+  }
+  auto pool = velox::memory::memoryManager()->addLeafPool();
+  auto allocator = std::make_shared<velox::memory::MallocAllocator>(
+      velox::memory::MemoryAllocator::Options{.capacity = 1UL << 30});
+  auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
+  // Holds no file, so that only the input can keep the file alive.
+  velox::FileHandle fileHandle;
+  fileHandle.uuid = velox::StringIdLease(
+      velox::fileIds(), "IndexLookupTest.createIndexDataInputOwnsFile");
+  const DataInput::Region region{100, 200};
+
+  for (const bool blockCache : {false, true}) {
+    SCOPED_TRACE(fmt::format("blockCache={}", blockCache));
+    velox::io::ReaderOptions ioOptions(pool.get());
+    ioOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
+    IndexLookup::Options options{
+        .file = std::make_shared<velox::InMemoryReadFile>(data),
+        .ioOptions = &ioOptions,
+        .blockCache = blockCache ? getBlockCache(cache.get()) : nullptr,
+        .fileHandle = &fileHandle};
+    const std::weak_ptr<velox::ReadFile> file{options.file};
+    auto input = createIndexDataInput(options);
+
+    // The caller may drop the file once the input exists.
+    options.file.reset();
+    ASSERT_FALSE(file.expired());
+    const auto [bytes, handle] = input->read(region);
+    EXPECT_EQ(bytes, data.substr(region.offset, region.length));
+
+    input.reset();
+    EXPECT_TRUE(file.expired());
+  }
+
+  testingResetBlockCache();
+  cache->shutdown();
+}
+
+TEST_F(IndexLookupTest, createIndexDataInputPassesFileIoContext) {
+  std::string data(1'000, '\0');
+  for (size_t i = 0; i < data.size(); ++i) {
+    data[i] = static_cast<char>(i % 251);
+  }
+  auto pool = velox::memory::memoryManager()->addLeafPool();
+  auto allocator = std::make_shared<velox::memory::MallocAllocator>(
+      velox::memory::MemoryAllocator::Options{.capacity = 1UL << 30});
+  auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
+  const folly::F14FastMap<std::string, std::string> fileOpts{{"key", "value"}};
+  const DataInput::Region region{100, 200};
+
+  for (const bool blockCache : {false, true}) {
+    SCOPED_TRACE(fmt::format("blockCache={}", blockCache));
+    auto file =
+        std::make_shared<nimble::testing::FileOptsRecordingReadFile>(data);
+    velox::io::ReaderOptions ioOptions(pool.get());
+    ioOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
+    velox::FileHandle fileHandle;
+    fileHandle.file = file;
+    fileHandle.uuid = velox::StringIdLease(
+        velox::fileIds(),
+        fmt::format(
+            "IndexLookupTest.createIndexDataInputPassesFileIoContext{}",
+            blockCache));
+    IndexLookup::Options options{
+        .file = file,
+        .ioOptions = &ioOptions,
+        .blockCache = blockCache ? getBlockCache(cache.get()) : nullptr,
+        .fileHandle = &fileHandle};
+    options.fileIoContext.fileOpts = fileOpts;
+
+    const auto input = createIndexDataInput(options);
+    const auto [bytes, handle] = input->read(region);
+    EXPECT_EQ(bytes, data.substr(region.offset, region.length));
+    const std::vector<folly::F14FastMap<std::string, std::string>> expected{
+        fileOpts,
+    };
+    EXPECT_EQ(file->fileOpts(), expected);
+  }
+
+  testingResetBlockCache();
+  cache->shutdown();
 }
 
 } // namespace

@@ -218,10 +218,10 @@ class StreamDataParser {
     return streamEncodingUsesVarintRowCount_;
   }
 
-  /// Returns true when this batch must be deserialized independently, either
-  /// for native Hybrid FlatMap layout or for Row/FlatMap null streams with
-  /// real nulls. Always false for versions without a flags byte. Only valid
-  /// after initialize().
+  /// Returns true when this batch must be deserialized independently: for
+  /// native Hybrid FlatMap layout, for Row/FlatMap null streams with real
+  /// nulls, or for ArrayWithOffsets and SlidingWindowMap streams. Always false
+  /// for versions without a flags byte. Only valid after initialize().
   bool requiredBarrier() const {
     return requiredBarrier_;
   }

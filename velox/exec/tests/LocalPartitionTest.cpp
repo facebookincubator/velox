@@ -20,6 +20,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
 using facebook::velox::test::BatchMaker;
@@ -44,15 +45,6 @@ class LocalPartitionTest : public HiveConnectorTestBase {
   FlatVectorPtr<T> makeFlatSequence(T start, T max, vector_size_t size) {
     return makeFlatVector<T>(
         size, [start, max](auto row) { return (start + row) % max; });
-  }
-
-  std::vector<std::shared_ptr<TempFilePath>> writeToFiles(
-      const std::vector<RowVectorPtr>& vectors) {
-    auto filePaths = makeFilePaths(vectors.size());
-    for (auto i = 0; i < vectors.size(); i++) {
-      writeToFile(filePaths[i]->getPath(), vectors[i]);
-    }
-    return filePaths;
   }
 
   void verifyExchangeSourceOperatorStats(
@@ -81,19 +73,6 @@ class LocalPartitionTest : public HiveConnectorTestBase {
     }
     ASSERT_EQ(expected, task.use_count());
   }
-
-  void waitForTaskCompletion(
-      const std::shared_ptr<exec::Task>& task,
-      exec::TaskState expected) {
-    if (task->state() != expected) {
-      auto& executor = folly::QueuedImmediateExecutor::instance();
-      auto future = task->taskCompletionFuture()
-                        .within(std::chrono::microseconds(1'000'000))
-                        .via(&executor);
-      future.wait();
-      EXPECT_EQ(expected, task->state());
-    }
-  }
 };
 
 struct TestParam {
@@ -110,11 +89,10 @@ class LocalPartitionTestParametrized
     const auto& params = GetParam();
     queryBuilder.config(
         core::QueryConfig::kMinLocalExchangePartitionCountToUsePartitionBuffer,
-        std::to_string(
-            params.minLocalExchangePartitionCountToUsePartitionBuffer));
+        params.minLocalExchangePartitionCountToUsePartitionBuffer);
     queryBuilder.config(
         core::QueryConfig::kMaxLocalExchangePartitionBufferSize,
-        std::to_string(params.maxLocalExchangePartitionBufferSize));
+        params.maxLocalExchangePartitionBufferSize);
   }
 };
 
@@ -255,7 +233,7 @@ TEST_P(LocalPartitionTestParametrized, partition) {
   AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
   applyTestParameters(queryBuilder);
   queryBuilder.maxDrivers(4);
-  queryBuilder.config(core::QueryConfig::kMaxLocalExchangePartitionCount, "2");
+  queryBuilder.config(core::QueryConfig::kMaxLocalExchangePartitionCount, 2);
   for (auto i = 0; i < filePaths.size(); ++i) {
     queryBuilder.split(
         scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->getPath()));
@@ -296,10 +274,10 @@ TEST_F(LocalPartitionTest, planNodeStats) {
 
 TEST_F(LocalPartitionTest, partitionBuffering) {
   std::vector<RowVectorPtr> vectors = {
-      makeRowVector({"c0"}, {makeFlatSequence<int32_t>(0, 100)}),
-      makeRowVector({"c0"}, {makeFlatSequence<int32_t>(53, 100)}),
-      makeRowVector({"c0"}, {makeFlatSequence<int32_t>(-71, 1000)}),
-      makeRowVector({"c0"}, {makeFlatSequence<int32_t>(-69, 1000)}),
+      makeNamedRowVector("c0", makeFlatSequence<int32_t>(0, 100)),
+      makeNamedRowVector("c0", makeFlatSequence<int32_t>(53, 100)),
+      makeNamedRowVector("c0", makeFlatSequence<int32_t>(-71, 1000)),
+      makeNamedRowVector("c0", makeFlatSequence<int32_t>(-69, 1000)),
   };
 
   std::string query{"SELECT c0, count(1) FROM tmp GROUP BY 1"};
@@ -435,10 +413,10 @@ TEST_F(LocalPartitionTest, partitionBufferingWithStringBuffers) {
 
 TEST_F(LocalPartitionTest, partitionBufferingPreserveEncoding) {
   std::vector<RowVectorPtr> vectors = {
-      makeRowVector({"c0"}, {makeConstant<int32_t>(0, 100)}),
-      makeRowVector({"c0"}, {makeConstant<int32_t>(0, 100)}),
-      makeRowVector({"c0"}, {makeConstant<int32_t>(1, 100)}),
-      makeRowVector({"c0"}, {makeConstant<int32_t>(1, 100)}),
+      makeNamedRowVector("c0", makeConstant<int32_t>(0, 100)),
+      makeNamedRowVector("c0", makeConstant<int32_t>(0, 100)),
+      makeNamedRowVector("c0", makeConstant<int32_t>(1, 100)),
+      makeNamedRowVector("c0", makeConstant<int32_t>(1, 100)),
   };
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -511,7 +489,7 @@ TEST_F(LocalPartitionTest, maxBufferSizeGather) {
 
   auto task =
       AssertQueryBuilder(op)
-          .config(core::QueryConfig::kMaxLocalExchangeBufferSize, "100")
+          .config(core::QueryConfig::kMaxLocalExchangeBufferSize, 100)
           .assertResults({Variant(2'100LL), Variant(-71), Variant(228)});
 
   verifyExchangeSourceOperatorStats(task, 2100, 21, 1);
@@ -686,8 +664,7 @@ TEST_F(LocalPartitionTest, blockingOnLocalExchangeQueue) {
                         localExchangeBufferSize)
                     .assertResults("SELECT c0, count(1) FROM tmp GROUP BY c0");
     ASSERT_EQ(
-        exec::toPlanStats(task->taskStats())
-            .at(nodeId)
+        exec::PlanNodeStats::extract(task->taskStats(), nodeId)
             .customStats["blockedWaitForConsumerTimes"]
             .sum,
         test.numBlocked);
@@ -826,7 +803,7 @@ TEST_F(LocalPartitionTest, earlyCancelation) {
   }
 
   // Wait for task to transition to final state.
-  waitForTaskCompletion(task, exec::TaskState::kCanceled);
+  EXPECT_TRUE(TaskMonitor::waitForStateChange(*task, TaskState::kCanceled));
 
   // Make sure there is only one reference to Task left, i.e. no Driver is
   // blocked forever.
@@ -862,7 +839,7 @@ TEST_F(LocalPartitionTest, producerError) {
   ASSERT_THROW(while (cursor->moveNext()) { ; }, VeloxException);
 
   // Wait for task to transition to failed state.
-  waitForTaskCompletion(task, exec::TaskState::kFailed);
+  EXPECT_TRUE(TaskMonitor::waitForStateChange(*task, TaskState::kFailed));
 
   // Make sure there is only one reference to Task left, i.e. no Driver is
   // blocked forever.
@@ -901,8 +878,8 @@ TEST_F(LocalPartitionTest, unionAll) {
 }
 
 TEST_P(LocalPartitionTestParametrized, unionAllLocalExchange) {
-  auto data1 = makeRowVector({"d0"}, {makeFlatVector<StringView>({"x"})});
-  auto data2 = makeRowVector({"e0"}, {makeFlatVector<StringView>({"y"})});
+  auto data1 = makeNamedRowVector("d0", makeFlatVector<StringView>({"x"}));
+  auto data2 = makeNamedRowVector("e0", makeFlatVector<StringView>({"y"}));
   for (bool serialExecutionMode : {false, true}) {
     SCOPED_TRACE(fmt::format("serialExecutionMode {}", serialExecutionMode));
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -1025,8 +1002,10 @@ class BlockingNodeFactory : public Operator::PlanNodeTranslator {
 } // namespace
 
 TEST_F(LocalPartitionTest, unionAllLocalExchangeWithInterDependency) {
-  const auto data1 = makeRowVector({"d0"}, {makeFlatVector<StringView>({"x"})});
-  const auto data2 = makeRowVector({"e0"}, {makeFlatVector<StringView>({"y"})});
+  const auto data1 =
+      makeNamedRowVector("d0", makeFlatVector<StringView>({"x"}));
+  const auto data2 =
+      makeNamedRowVector("e0", makeFlatVector<StringView>({"y"}));
 
   for (bool serialExecutionMode : {false, true}) {
     SCOPED_TRACE(fmt::format("serialExecutionMode {}", serialExecutionMode));
@@ -1116,8 +1095,10 @@ TEST_F(LocalPartitionTest, unionAllLocalExchangeWithInterDependency) {
 TEST_F(
     LocalPartitionTest,
     taskErrorWithBlockedDriverFutureUnderSerializedExecutionMode) {
-  const auto data1 = makeRowVector({"d0"}, {makeFlatVector<StringView>({"x"})});
-  const auto data2 = makeRowVector({"e0"}, {makeFlatVector<StringView>({"y"})});
+  const auto data1 =
+      makeNamedRowVector("d0", makeFlatVector<StringView>({"x"}));
+  const auto data2 =
+      makeNamedRowVector("e0", makeFlatVector<StringView>({"y"}));
 
   Operator::unregisterAllOperators();
 
@@ -1222,10 +1203,8 @@ TEST_F(LocalPartitionTest, barrier) {
       auto vector = std::dynamic_pointer_cast<RowVector>(
           BatchMaker::createBatch(rowType, 100, *pool_));
       sourceVectors.push_back(vector);
-      tempFiles[i].push_back(TempFilePath::create());
     }
-    HiveConnectorTestBase::writeToFiles(
-        toFilePaths(tempFiles[i]), sourceVectors);
+    tempFiles[i] = writeToFiles(sourceVectors);
     std::copy(
         sourceVectors.begin(),
         sourceVectors.end(),

@@ -141,6 +141,18 @@ bool shouldSkipBySequenceNumber(
                           : (deleteFileSeqNum < dataSeqNum);
 }
 
+// Returns the fileReadOps to open 'deleteFile' with: its own, then
+// 'readerFileReadOps', whose keys win.
+folly::F14FastMap<std::string, std::string> deleteFileReadOps(
+    const IcebergDeleteFile& deleteFile,
+    const folly::F14FastMap<std::string, std::string>& readerFileReadOps) {
+  auto fileReadOps = deleteFile.fileReadOps;
+  for (const auto& [key, value] : readerFileReadOps) {
+    fileReadOps.insert_or_assign(key, value);
+  }
+  return fileReadOps;
+}
+
 // Removes the rows whose bit is set in 'rowsToRemove' from 'output'. The
 // caller keeps reporting the rows it read: 0 means end of split.
 void removeRows(
@@ -624,7 +636,7 @@ void IcebergSplitReader::prepareSplit(
                 runtimeStats,
                 splitOffset_,
                 fileSplit_->connectorId,
-                effectiveFileReadOps));
+                deleteFileReadOps(deleteFile, effectiveFileReadOps)));
       }
     } else if (deleteFile.content == FileContent::kEqualityDeletes) {
       if (deleteFile.recordCount > 0 && !deleteFile.equalityFieldIds.empty()) {
@@ -654,7 +666,7 @@ void IcebergSplitReader::prepareSplit(
                   ioStats_,
                   runtimeStats,
                   fileSplit_->connectorId,
-                  effectiveFileReadOps));
+                  deleteFileReadOps(deleteFile, effectiveFileReadOps)));
         }
       }
     } else if (deleteFile.content == FileContent::kDeletionVector) {
@@ -688,7 +700,8 @@ void IcebergSplitReader::prepareSplit(
                 splitOffset_,
                 connectorQueryCtx_->memoryPool(),
                 fileConfig_->config(),
-                effectiveFileReadOps));
+                deleteFileReadOps(deleteFile, effectiveFileReadOps),
+                connectorQueryCtx_->fsTokenProvider()));
       }
     } else {
       VELOX_NYI(
@@ -1453,6 +1466,11 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
                     /*isDaysSinceEpoch=*/false));
           } else {
             // Fall back to NULL if no default value.
+            // Feature projection can request a MAP column as a ROW.
+            if (auto outputTypeIndex =
+                    readerOutputType_->getChildIdxIfExists(fieldName)) {
+              columnType = readerOutputType_->childAt(outputTypeIndex.value());
+            }
             VELOX_CHECK_NOT_NULL(
                 columnType, "Column '{}' not found in table schema", fieldName);
             childSpec->setConstantValue(

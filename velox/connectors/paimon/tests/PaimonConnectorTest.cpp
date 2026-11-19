@@ -36,6 +36,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/expression/Expr.h"
 #include "velox/vector/DecodedVector.h"
 
@@ -669,6 +670,63 @@ TEST_F(PaimonConnectorTest, physicalPartitionColumnsUseSplitConstants) {
       {"id", "p"},
       {input->childAt(0),
        makeFlatVector<std::string>({"split-value", "split-value"})});
+  for (auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto files = makeFilePaths(1);
+    writeFile(files[0]->getPath(), input, format);
+    exec::test::AssertQueryBuilder(plan)
+        .split(makePaimonSplit(
+            {files[0]->getPath()},
+            PaimonTableType::kAppendOnly,
+            format,
+            {{"p", "split-value"}}))
+        .assertResults(expected);
+  }
+}
+
+TEST_F(PaimonConnectorTest, leadingPhysicalPartitionColumn) {
+  // Paimon data files store partition columns at their table positions, so a
+  // leading partition column must not shift the data columns after it.
+  const auto rowType =
+      ROW({{"p", VARCHAR()}, {"id", BIGINT()}, {"value", DOUBLE()}});
+  const auto table = makePaimonTableHandle(rowType, {}, nullptr, {"p"});
+  const ColumnHandleMap assignments{
+      {"p",
+       std::make_shared<PaimonColumnHandle>(
+           "p",
+           10,
+           connector::FileColumnHandle::ColumnType::kPartitionKey,
+           VARCHAR())},
+      {"id",
+       std::make_shared<PaimonColumnHandle>(
+           "id",
+           11,
+           connector::FileColumnHandle::ColumnType::kRegular,
+           BIGINT())},
+      {"value",
+       std::make_shared<PaimonColumnHandle>(
+           "value",
+           12,
+           connector::FileColumnHandle::ColumnType::kRegular,
+           DOUBLE())}};
+  const auto plan = exec::test::PlanBuilder()
+                        .startTableScan()
+                        .connectorId(kPaimonConnectorId)
+                        .outputType(rowType)
+                        .tableHandle(table)
+                        .assignments(assignments)
+                        .endTableScan()
+                        .planNode();
+  const auto input = makeRowVector(
+      {"p", "id", "value"},
+      {makeFlatVector<std::string>({"physical-copy", "physical-copy"}),
+       makeFlatVector<int64_t>({1, 2}),
+       makeFlatVector<double>({1.5, 2.5})});
+  const auto expected = makeRowVector(
+      {"p", "id", "value"},
+      {makeFlatVector<std::string>({"split-value", "split-value"}),
+       input->childAt(1),
+       input->childAt(2)});
   for (auto format : fileFormats()) {
     SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
     const auto files = makeFilePaths(1);
@@ -1419,7 +1477,7 @@ TEST_F(PaimonConnectorTest, taskCancellationAndLimit) {
     ASSERT_EQ(cursor->task()->state(), exec::TaskState::kCanceled);
     EXPECT_THROW(cursor->moveNext(), folly::OperationCancelled);
     cursor.reset();
-    exec::test::waitForAllTasksToBeDeleted();
+    exec::test::TaskMonitor::waitForAllTasksDeleted();
     const auto limitPlan =
         exec::test::PlanBuilder(
             plan, std::make_shared<core::PlanNodeIdGenerator>(1))
@@ -1427,7 +1485,7 @@ TEST_F(PaimonConnectorTest, taskCancellationAndLimit) {
             .planNode();
     exec::test::AssertQueryBuilder(limitPlan).split(split).assertTypeAndNumRows(
         input->type(), 1);
-    exec::test::waitForAllTasksToBeDeleted();
+    exec::test::TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -1769,7 +1827,7 @@ TEST_F(PaimonConnectorTest, requiresPaimonTableHandle) {
     VELOX_ASSERT_THROW(
         exec::test::AssertQueryBuilder(plan).split(split).copyResults(pool()),
         "Failed to cast from");
-    exec::test::waitForAllTasksToBeDeleted();
+    exec::test::TaskMonitor::waitForAllTasksDeleted();
   }
   EXPECT_EQ(fileSystem->openedFiles, 0);
 }
@@ -1813,7 +1871,7 @@ TEST_F(PaimonConnectorTest, rejectsPrimaryKeySplits) {
     VELOX_ASSERT_USER_THROW(
         exec::test::AssertQueryBuilder(plan).split(split).copyResults(pool()),
         "Paimon split table type does not match table handle");
-    exec::test::waitForAllTasksToBeDeleted();
+    exec::test::TaskMonitor::waitForAllTasksDeleted();
   }
   EXPECT_EQ(fileSystem->openedFiles, 0);
 }

@@ -220,6 +220,10 @@ void CompactRow::initialize(const TypePtr& type) {
     }
     case TypeKind::MAP: {
       auto* mapBase = base->as<MapVector>();
+      VELOX_CHECK_NOT_NULL(
+          mapBase,
+          "Unsupported map vector encoding for CompactRow: {}",
+          base->encoding());
       children_.push_back(CompactRow(mapBase->mapKeys()));
       children_.push_back(CompactRow(mapBase->mapValues()));
       childIsFixedWidth_.push_back(mapBase->mapKeys()->type()->isFixedWidth());
@@ -474,6 +478,10 @@ int32_t CompactRow::arrayRowSize(
     vector_size_t offset,
     vector_size_t size,
     bool fixedWidth) const {
+  if (elements.typeKind_ == TypeKind::UNKNOWN) {
+    return kSizeBytes;
+  }
+
   const int32_t nullBytes = bits::nbytes(size);
 
   // array size | null bits | elements
@@ -547,6 +555,9 @@ int32_t CompactRow::serializeAsArray(
 
   // Write array size.
   writeInt32(buffer, size);
+  if (elements.typeKind_ == TypeKind::UNKNOWN) {
+    return kSizeBytes;
+  }
 
   // Write null flags.
   const int32_t nullBytes = bits::nbytes(size);
@@ -776,7 +787,10 @@ VectorPtr deserializeFixedWidth(
   for (auto i = 0; i < numRows; ++i) {
     const bool isNull = bits::isBitNull(rawNulls, i);
     readFixedWidthValue<T>(
-        isNull, data[i].data() + offsets[i], flatVector.get(), i);
+        isNull,
+        isNull ? nullptr : data[i].data() + offsets[i],
+        flatVector.get(),
+        i);
   }
 
   return flatVector;
@@ -889,19 +903,6 @@ VectorPtr deserializeStrings(
   }
 
   return flatVector;
-}
-
-VectorPtr deserializeUnknownArrays(
-    const TypePtr& type,
-    const std::vector<std::string_view>& data,
-    const BufferPtr& sizes,
-    std::vector<size_t>& offsets,
-    memory::MemoryPool* pool) {
-  const auto numRows = data.size();
-  auto* rawSizes = sizes->as<vector_size_t>();
-  const auto total = totalSize(rawSizes, numRows);
-
-  return BaseVector::createNullConstant(UNKNOWN(), total, pool);
 }
 
 // Deserializes multiple strings from each 'row' in 'data'.
@@ -1018,6 +1019,7 @@ VectorPtr deserializeComplexArrays(
 // size | element nulls | serialized size (if complex type elements)
 // | element offsets (if complex type elements) | e1 | e2 | e3 |...
 //
+// UNKNOWN elements have no null flags or value bytes.
 // Advances the offsets past the arrays.
 ArrayVectorPtr deserializeArrays(
     const TypePtr& type,
@@ -1052,8 +1054,7 @@ ArrayVectorPtr deserializeArrays(
   VectorPtr elements;
   const auto& elementType = type->childAt(0);
   if (elementType->isUnknown()) {
-    elements =
-        deserializeUnknownArrays(elementType, data, arraySizes, offsets, pool);
+    elements = BaseVector::createNullConstant(elementType, arrayOffset, pool);
   } else if (elementType->isFixedWidth()) {
     elements = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         deserializeFixedWidthArrays,
@@ -1177,10 +1178,11 @@ RowVectorPtr deserializeRows(
     fieldNulls.emplace_back(allocateNulls(numRows, pool));
     auto* rawFieldNulls = fieldNulls.back()->asMutable<uint8_t>();
     for (auto row = 0; row < numRows; ++row) {
-      auto* serializedNulls = readNulls(data[row].data() + offsets[row]);
+      // Callers provide one offset per input row.
       const auto isNull =
           (rawNulls != nullptr && bits::isBitNull(rawNulls, row)) ||
-          bits::isBitSet(serializedNulls, i);
+          // NOLINTNEXTLINE(facebook-hte-ParameterUncheckedArrayBounds)
+          bits::isBitSet(readNulls(data[row].data() + offsets[row]), i);
       bits::setBit(rawFieldNulls, row, !isNull);
     }
   }
@@ -1221,10 +1223,19 @@ RowVectorPtr CompactRow::deserialize(
     const std::vector<std::string_view>& data,
     const RowTypePtr& rowType,
     memory::MemoryPool* pool) {
+  return deserialize(data, nullptr, rowType, pool);
+}
+
+// static
+RowVectorPtr CompactRow::deserialize(
+    const std::vector<std::string_view>& data,
+    const BufferPtr& nulls,
+    const RowTypePtr& rowType,
+    memory::MemoryPool* pool) {
   const auto numRows = data.size();
   std::vector<size_t> offsets(numRows, 0);
 
-  return deserializeRows(rowType, data, nullptr, offsets, pool);
+  return deserializeRows(rowType, data, nulls, offsets, pool);
 }
 
 } // namespace facebook::velox::row

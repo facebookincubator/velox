@@ -182,9 +182,8 @@ are summarized below.
 - Use uniform initialization: `size_t size{0}` over `size_t size = 0`.
 - Declare variables in the smallest scope, as close to usage as possible.
 - Use digit separators (`'`) for numeric literals with 4 or more digits: `10'000`, not `10000`.
-- Use trailing commas in multi-line initializer lists, enum definitions, and
-  function-call argument lists that span multiple lines. This produces cleaner
-  diffs when items are added or reordered.
+- Use trailing commas in multi-line initializer lists and enum definitions.
+  This produces cleaner diffs when items are added or reordered.
 
 ### Types
 

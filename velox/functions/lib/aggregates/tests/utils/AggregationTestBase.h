@@ -44,6 +44,20 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
       const std::vector<VectorPtr>& rawInput2,
       const std::unordered_map<std::string, std::string>& config = {});
 
+  /// Which companion plans AggregationTester::withCompanion() runs.
+  enum class CompanionPlans {
+    /// No companion plans.
+    kNone,
+    /// The plans that end with the '_extract', '_merge_extract' and '_merge'
+    /// companions.
+    kAll,
+    /// Only the plans that end with the '_merge' companion, which compare
+    /// partial states. For functions whose '_extract' and '_merge_extract'
+    /// companions cannot resolve their result type from the intermediate type
+    /// alone, such as Spark's decimal avg.
+    kMergeOnly,
+  };
+
   /// Runs an aggregation through the plans that AggregationTestBase generates
   /// and checks that they all produce the same results. Set the input, the
   /// aggregation and the options, then call one of the assert methods:
@@ -113,9 +127,11 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
     /// Also runs the plans that compute the aggregates with their companion
     /// functions: '_partial', '_merge', '_merge_extract' and '_extract'. These
     /// plans group the partial step by an extra key 'k0', so that the merge
-    /// step has several values to merge for each group.
-    AggregationTester& withCompanion() {
-      companion_ = true;
+    /// step has several values to merge for each group. 'plans' selects which
+    /// of them run; each call overrides the previous one.
+    AggregationTester& withCompanion(
+        CompanionPlans plans = CompanionPlans::kAll) {
+      companionPlans_ = plans;
       return *this;
     }
 
@@ -167,7 +183,7 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
     std::vector<std::string> aggregates_;
     std::vector<std::string> projections_;
     std::unordered_map<std::string, std::string> config_;
-    bool companion_{false};
+    CompanionPlans companionPlans_{CompanionPlans::kNone};
     bool streaming_{true};
     bool incremental_{true};
   };
@@ -239,20 +255,35 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
       const std::unordered_map<std::string, std::string>& config,
       bool streaming);
 
-  // Runs the companion plans of AggregationTester::withCompanion().
-  // 'makeSource' builds the input of the aggregation, including the extra
-  // grouping key 'k0'.
-  void testAggregationsWithCompanionImpl(
-      const std::vector<RowVectorPtr>& data,
-      const std::function<void(exec::test::PlanBuilder&)>& makeSource,
-      const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates,
-      const std::vector<std::vector<TypePtr>>& aggregatesArgTypes,
+  // Input and companion aggregates that the companion plans are built from.
+  // Defined in the .cpp.
+  struct CompanionPlanInputs;
+
+  // Runs the companion plans that end with the extract companion, including
+  // the streaming check, and checks their results with 'assertResults'.
+  void testCompanionExtract(
+      const CompanionPlanInputs& inputs,
       const std::vector<std::string>& postAggregationProjections,
       const std::function<std::shared_ptr<exec::Task>(
           exec::test::AssertQueryBuilder&)>& assertResults,
       const std::unordered_map<std::string, std::string>& config,
       bool streaming);
+
+  // Runs the companion plans that end with the merge_extract companion and
+  // checks their results with 'assertResults'.
+  void testCompanionMergeExtract(
+      const CompanionPlanInputs& inputs,
+      const std::vector<std::string>& postAggregationProjections,
+      const std::function<std::shared_ptr<exec::Task>(
+          exec::test::AssertQueryBuilder&)>& assertResults,
+      const std::unordered_map<std::string, std::string>& config);
+
+  // Runs the companion plans that end with the merge companion: partial merges
+  // with and without abandoning partial aggregation, which compare partial
+  // states.
+  void testCompanionMerge(
+      const CompanionPlanInputs& inputs,
+      const std::unordered_map<std::string, std::string>& config);
 
   void testAggregationsImpl(
       std::function<void(exec::test::PlanBuilder&)> makeSource,
@@ -274,8 +305,8 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
       const std::unordered_map<std::string, std::string>& config);
 };
 
-/// Runs 'name' over a single group of ('values', 'comparisons') in a row laid
-/// out by hand, and returns the variable-length size the aggregate tracked for
+/// Runs 'name' over a single group of ('values', 'comparisons') in a row of a
+/// RowContainer, and returns the variable-length size the aggregate tracked for
 /// that row. Zero means the aggregate never moved the row size counter, which
 /// for an accumulator holding out-of-line bytes is the bug this measures.
 uint32_t aggregateAndReadRowSize(

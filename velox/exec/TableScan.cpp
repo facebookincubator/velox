@@ -238,6 +238,18 @@ RowVectorPtr TableScan::getOutput() {
       lockedStats->rawInputPositions = dataSource_->getCompletedRows();
       lockedStats->rawInputBytes = dataSource_->getCompletedBytes();
 
+      // Report every read, including one whose rows the filters removed or
+      // whose output is dropped, so the events add up to all rows read.
+      const auto completedRowsDelta =
+          dataSource_->getCompletedRows() - prevCompletedRows;
+      if (completedRowsDelta > 0) {
+        core::ScanBatchEvent event;
+        event.numRows = completedRowsDelta;
+        event.wallTimeMicros = ioTimeUs;
+        event.planNodeId = planNodeId();
+        dataSource_->fireScanBatchCallback(event);
+      }
+
       RowVectorPtr data = std::move(dataOptional).value();
       // NOTE: even if we the scan output has been suppressed, we still need to
       // at least read one batch from a split to trigger split fetch inside Meta
@@ -250,15 +262,6 @@ RowVectorPtr TableScan::getOutput() {
             flatSize = data->estimateFlatSize();
           }
           lockedStats->addInputVector(flatSize, data->size());
-          const auto completedRowsDelta =
-              dataSource_->getCompletedRows() - prevCompletedRows;
-          if (completedRowsDelta > 0) {
-            core::ScanBatchEvent event;
-            event.numRows = completedRowsDelta;
-            event.wallTimeMicros = ioTimeUs;
-            event.planNodeId = planNodeId();
-            dataSource_->fireScanBatchCallback(event);
-          }
           maxFilteringRatio_ = std::max(
               {maxFilteringRatio_,
                1.0 * data->size() / readBatchSize,
@@ -343,7 +346,7 @@ bool TableScan::getSplit() {
     return false;
   }
 
-  if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
+  if (splitTracer_ != nullptr) [[unlikely]] {
     splitTracer_->write(split);
   }
 

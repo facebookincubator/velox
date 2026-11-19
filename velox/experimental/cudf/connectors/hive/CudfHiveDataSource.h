@@ -34,6 +34,8 @@
 #include <cudf/ast/expressions.hpp>
 
 #include <mutex>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <unordered_set>
 
@@ -46,6 +48,29 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   /// DWIO bytes read, preserved separately from ReadFile bytes.
   static constexpr std::string_view kDwioStorageReadBytes{
       "dwio.storageReadBytes"};
+
+  /// Returns whether this data source can scan 'tableHandle' on the GPU:
+  ///  - 'tableHandle' is a Hive table handle,
+  ///  - no rows are sampled,
+  ///  - every subfield filter is on a top-level column the cuDF AST converts,
+  ///  - the remaining filter folds to a constant or references a column, and
+  ///  - cuDF evaluates the remaining filter.
+  /// The filters are split and folded with 'connectorQueryCtx', and the
+  /// constructor fails for a scan this rejects.
+  /// NOTE: A remaining filter that casts from VARCHAR, or from TIMESTAMP to
+  /// VARCHAR, is not supported, since such a cast depends on session settings
+  /// a connector does not see.
+  /// NOTE: Partition key filters are checked too, although the Hive data source
+  /// tests them per split instead of compiling them.
+  static bool isSupported(
+      const ConnectorTableHandlePtr& tableHandle,
+      const ConnectorQueryCtx& connectorQueryCtx);
+
+  /// Returns why isSupported() rejects 'tableHandle', or std::nullopt if it
+  /// accepts it.
+  static std::optional<std::string> unsupportedReason(
+      const ConnectorTableHandlePtr& tableHandle,
+      const ConnectorQueryCtx& connectorQueryCtx);
 
   CudfHiveDataSource(
       const RowTypePtr& outputType,
