@@ -26,6 +26,7 @@
 #include <span>
 #include <string>
 #include <utility>
+#include <variant>
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -64,6 +65,7 @@
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
 #include "velox/type/Filter.h"
+#include "velox/type/FloatingPointUtil.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::nimble::fuzzer {
@@ -629,7 +631,88 @@ enum class MissingBoundsReason {
 struct DecodedChunkBounds {
   std::optional<std::pair<ChunkStatValue, ChunkStatValue>> bounds{};
   std::optional<MissingBoundsReason> missingReason{};
+
+  // Smallest and largest non-null values, compared with
+  // lessThanInFilterOrder():
+  // - NaN counts as a value.
+  // - Empty exactly when every row is null.
+  // - Follows none of the writer's rules for when to store bounds, unlike
+  //   'bounds'.
+  std::optional<std::pair<ChunkStatValue, ChunkStatValue>> extremes{};
 };
+
+// Orders values as Velox filters compare them:
+// - NaN is larger than every other value, so x > 1 accepts a NaN row.
+// - Bounds that leave a NaN out would let that filter skip the row.
+template <typename T>
+bool lessThanInFilterOrder(const T& lhs, const T& rhs) {
+  if constexpr (std::is_floating_point_v<T>) {
+    return velox::util::floating_point::NaNAwareLessThan<T>{}(lhs, rhs);
+  } else {
+    return lhs < rhs;
+  }
+}
+
+template <typename T>
+bool isNaNValue(const T& value) {
+  if constexpr (std::is_floating_point_v<T>) {
+    return std::isnan(value);
+  } else {
+    return false;
+  }
+}
+
+// Returns how bounds break the contract that readers rely on to skip data by
+// them, or nothing when they keep it:
+// - No bound may be NaN.
+// - 'lowest' and 'highest', the extremes of the values the bounds describe,
+//   must lie within them, compared with lessThanInFilterOrder().
+// The check predicts nothing, so it holds whatever rules the writer uses to
+// decide when to store bounds.
+template <typename T>
+std::optional<std::string> findBoundsViolation(
+    const std::optional<T>& min,
+    const std::optional<T>& max,
+    const std::optional<T>& lowest,
+    const std::optional<T>& highest) {
+  if (min.has_value()) {
+    if (isNaNValue(*min)) {
+      return "min is NaN";
+    }
+    if (lowest.has_value() && lessThanInFilterOrder(*lowest, *min)) {
+      return fmt::format("min {} is above the value {}", *min, *lowest);
+    }
+  }
+  if (max.has_value()) {
+    if (isNaNValue(*max)) {
+      return "max is NaN";
+    }
+    if (highest.has_value() && lessThanInFilterOrder(*max, *highest)) {
+      return fmt::format("max {} is below the value {}", *max, *highest);
+    }
+  }
+  return std::nullopt;
+}
+
+// Checks the bounds a V2 chunk index stores for a chunk against the extremes
+// of its decoded values. See findBoundsViolation().
+std::optional<std::string> findChunkBoundsViolation(
+    const std::pair<ChunkStatValue, ChunkStatValue>& bounds,
+    const std::pair<ChunkStatValue, ChunkStatValue>& extremes) {
+  NIMBLE_CHECK_EQ(bounds.first.index(), bounds.second.index());
+  NIMBLE_CHECK_EQ(extremes.first.index(), bounds.first.index());
+  NIMBLE_CHECK_EQ(extremes.second.index(), bounds.first.index());
+  return std::visit(
+      [&](const auto& min) {
+        using T = std::decay_t<decltype(min)>;
+        return findBoundsViolation<T>(
+            min,
+            std::get<T>(bounds.second),
+            std::get<T>(extremes.first),
+            std::get<T>(extremes.second));
+      },
+      bounds.first);
+}
 
 template <typename T>
 DecodedChunkBounds materializedChunkBounds(
@@ -655,6 +738,7 @@ DecodedChunkBounds materializedChunkBounds(
 
   std::optional<T> min;
   std::optional<T> max;
+  bool hasNaN{false};
   for (uint32_t row = 0; row < rowCount; ++row) {
     const bool isNonNull = !encoding.isNullable() || numNonNulls == rowCount ||
         velox::bits::isBitSet(
@@ -663,28 +747,35 @@ DecodedChunkBounds materializedChunkBounds(
       continue;
     }
     const auto value = values[row];
-    if constexpr (std::is_floating_point_v<T>) {
-      if (std::isnan(value)) {
-        return {.missingReason = MissingBoundsReason::kNaN};
-      }
+    hasNaN |= isNaNValue(value);
+    if (!min.has_value() || lessThanInFilterOrder(value, *min)) {
+      min = value;
     }
-    min = min.has_value() ? std::min(*min, value) : value;
-    max = max.has_value() ? std::max(*max, value) : value;
+    if (!max.has_value() || lessThanInFilterOrder(*max, value)) {
+      max = value;
+    }
   }
   NIMBLE_CHECK(min.has_value());
   NIMBLE_CHECK(max.has_value());
-  if constexpr (std::is_same_v<T, std::string_view>) {
-    if (min->size() > maxStringStatSize || max->size() > maxStringStatSize) {
-      return {.missingReason = MissingBoundsReason::kLongString};
-    }
-  }
-  return {
-      .bounds =
+  DecodedChunkBounds result{
+      .extremes =
           std::pair{
               toChunkStatValue(*min),
               toChunkStatValue(*max),
           },
   };
+  if (hasNaN) {
+    result.missingReason = MissingBoundsReason::kNaN;
+    return result;
+  }
+  if constexpr (std::is_same_v<T, std::string_view>) {
+    if (min->size() > maxStringStatSize || max->size() > maxStringStatSize) {
+      result.missingReason = MissingBoundsReason::kLongString;
+      return result;
+    }
+  }
+  result.bounds = result.extremes;
+  return result;
 }
 
 DecodedChunkBounds decodedChunkBounds(
@@ -1639,6 +1730,18 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
         NIMBLE_CHECK(indexedNullCount.has_value());
         NIMBLE_CHECK_EQ(*indexedNullCount, nullCount);
         const auto indexedBounds = streamIndex->chunkBounds(first.chunkIndex);
+        if (indexedBounds.has_value() && decodedBounds.extremes.has_value()) {
+          const auto violation =
+              findChunkBoundsViolation(*indexedBounds, *decodedBounds.extremes);
+          NIMBLE_CHECK(
+              !violation.has_value(),
+              "Chunk bounds at offset {} in stripe {}, stream {} do not hold every value: {} (seed {}).",
+              offset,
+              stripe,
+              streamId,
+              violation.value_or(""),
+              options_.seed);
+        }
         const auto indexedMin = streamIndex->chunkMinValue(first.chunkIndex);
         const auto indexedMax = streamIndex->chunkMaxValue(first.chunkIndex);
         NIMBLE_CHECK_EQ(indexedBounds.has_value(), bounds.has_value());
@@ -1744,6 +1847,16 @@ struct ExpectedNodeStats {
   std::optional<std::string> stringMin;
   std::optional<std::string> stringMax;
 
+  // Smallest and largest floating-point values, compared with
+  // lessThanInFilterOrder():
+  // - NaN counts as a value.
+  // - Follow none of the writer's rules for when to store bounds, unlike
+  //   'floatingMin' and 'floatingMax'.
+  // The integer and string bounds above need no separate extremes, because
+  // the writer applies no such rules to them.
+  std::optional<double> floatingLowest;
+  std::optional<double> floatingHighest;
+
   std::unique_ptr<velox::dwio::common::ColumnStatistics> toCommonStatistics()
       const {
     bool hasNull = nullCount > 0;
@@ -1782,8 +1895,20 @@ struct ExpectedNodeStats {
   }
 };
 
-// Drops both bounds once a value is NaN, as the writer's statistics do.
+// Tracks two things for a floating-point value:
+// - The extremes, compared with lessThanInFilterOrder().
+// - The bounds the writer stores. Drops both once a value is NaN, as the
+//   writer's statistics do.
 void addFloatingPointValue(ExpectedNodeStats& stats, double value) {
+  if (!stats.floatingLowest.has_value() ||
+      lessThanInFilterOrder(value, *stats.floatingLowest)) {
+    stats.floatingLowest = value;
+  }
+  if (!stats.floatingHighest.has_value() ||
+      lessThanInFilterOrder(*stats.floatingHighest, value)) {
+    stats.floatingHighest = value;
+  }
+
   if (stats.floatingHasNanValues) {
     return;
   }
@@ -1942,6 +2067,44 @@ void accumulateNodeStats(
   }
 }
 
+// Checks the bounds of a node's file statistics against the extremes of its
+// values. See findBoundsViolation().
+std::optional<std::string> findFileBoundsViolation(
+    const velox::dwio::common::ColumnStatistics& actual,
+    const ExpectedNodeStats& values) {
+  if (const auto* integers =
+          dynamic_cast<const velox::dwio::common::IntegerColumnStatistics*>(
+              &actual);
+      integers != nullptr) {
+    return findBoundsViolation(
+        integers->getMinimum(),
+        integers->getMaximum(),
+        values.integralMin,
+        values.integralMax);
+  }
+  if (const auto* doubles =
+          dynamic_cast<const velox::dwio::common::DoubleColumnStatistics*>(
+              &actual);
+      doubles != nullptr) {
+    return findBoundsViolation(
+        doubles->getMinimum(),
+        doubles->getMaximum(),
+        values.floatingLowest,
+        values.floatingHighest);
+  }
+  if (const auto* strings =
+          dynamic_cast<const velox::dwio::common::StringColumnStatistics*>(
+              &actual);
+      strings != nullptr) {
+    return findBoundsViolation(
+        strings->getMinimum(),
+        strings->getMaximum(),
+        values.stringMin,
+        values.stringMax);
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 void NimbleWriterFuzzer::verifyColumnStatistics(
@@ -1988,6 +2151,13 @@ void NimbleWriterFuzzer::verifyColumnStatistics(
       continue;
     }
     auto actual = nimbleActual->toCommonStatistics();
+    const auto violation = findFileBoundsViolation(*actual, expected[node]);
+    NIMBLE_CHECK(
+        !violation.has_value(),
+        "Node {} file statistics do not hold every value: {} (seed {}).",
+        node,
+        violation.value_or(""),
+        options_.seed);
     auto expectedCommon = expected[node].toCommonStatistics();
 
     NIMBLE_CHECK_EQ(

@@ -449,7 +449,11 @@ class NimbleWriterFuzzer {
       uint64_t iterationSeed);
 
   // Validates the chunk-stats section against independently parsed and decoded
-  // physical chunks, and records which metadata shapes were exercised.
+  // physical chunks, and records which metadata shapes were exercised. Checks
+  // two things about the bounds of every chunk:
+  // - They equal the bounds predicted with the writer's rules.
+  // - They hold every value of the chunk, NaN counting as larger than every
+  //   other value, whatever those rules are.
   // 'flushRegime' and 'metadataFlushThreshold' name the writer settings drawn
   // for the file, which key its stripe and stripe-group counts.
   void verifyChunkStatsMetadata(
@@ -459,8 +463,12 @@ class NimbleWriterFuzzer {
       std::string_view flushRegime,
       std::string_view metadataFlushThreshold);
 
-  // Verifies file-level column statistics (value count, null count, min, max)
-  // against the data that was actually written.
+  // Verifies file-level column statistics against the data that was actually
+  // written:
+  // - Value count, null count, min and max equal the values predicted with the
+  //   writer's rules.
+  // - Every stored min/max holds the node's values, NaN counting as larger than
+  //   every other value, whatever those rules are.
   void verifyColumnStatistics(
       const std::string& file,
       const velox::RowTypePtr& schema,
