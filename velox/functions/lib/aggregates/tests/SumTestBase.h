@@ -91,9 +91,12 @@ void verifyAggregates(
   for (const auto& [agg, expectedResult] : aggsToTest) {
     if (expectOverflow) {
       VELOX_ASSERT_THROW(
-          facebook::velox::exec::test::readSingleValue(agg), "overflow");
+          facebook::velox::exec::test::AssertQueryBuilder(agg)
+              .copySingleValue(),
+          "overflow");
     } else {
-      auto result = facebook::velox::exec::test::readSingleValue(agg);
+      auto result = facebook::velox::exec::test::AssertQueryBuilder(agg)
+                        .copySingleValue();
       if constexpr (std::is_same_v<ResultType, float>) {
         ASSERT_FLOAT_EQ(
             result.template value<TypeKind::REAL>(), expectedResult);

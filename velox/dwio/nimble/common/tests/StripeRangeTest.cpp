@@ -36,6 +36,15 @@ TEST(StripeRangeTest, empty) {
   EXPECT_TRUE(StripeRange(5, 2).empty());
 }
 
+TEST(StripeRangeTest, numStripes) {
+  EXPECT_EQ(StripeRange(2, 5).numStripes(), 3);
+  EXPECT_EQ(StripeRange(2, 3).numStripes(), 1);
+  EXPECT_EQ(StripeRange(3, 3).numStripes(), 0);
+  EXPECT_EQ(StripeRange().numStripes(), 0);
+  // A range that ends before it starts holds no stripe either.
+  EXPECT_EQ(StripeRange(5, 2).numStripes(), 0);
+}
+
 TEST(StripeRangeTest, contains) {
   // Holds its start stripe, and ends before its end stripe.
   const StripeRange range(2, 5);

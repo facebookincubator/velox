@@ -22,6 +22,7 @@
 
 #include "velox/common/base/Nulls.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/PageBeforeGuard.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/arrow/Bridge.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -465,6 +466,79 @@ class ArrowBridgeArrayExportTest : public testing::Test, public VectorTestBase {
 
     // Validate run ends - single run of the vector size.
     validateArray<TRunEnds>({vectorSize}, runEnds);
+  }
+
+  // Exports an array and a map with these offsets, sizes and nulls over
+  // 'numElements' timestamps, and checks the exported offsets. The nulls are
+  // the vector's own, then those of a struct around it. Only the elements of
+  // non-null rows may be exported: the offsets and sizes of null rows are
+  // undefined, and so are the other elements, which are out of range here.
+  void testExportOffsets(
+      const std::vector<vector_size_t>& offsets,
+      const std::vector<vector_size_t>& sizes,
+      const std::vector<bool>& nulls,
+      vector_size_t numElements,
+      const std::vector<int32_t>& expectedOffsets) {
+    auto elements = makeFlatVector<Timestamp>(
+        numElements, [](vector_size_t row) { return Timestamp(row, 0); });
+    std::vector<bool> covered(numElements, false);
+    for (size_t row = 0; row < nulls.size(); ++row) {
+      if (!nulls[row]) {
+        std::fill_n(covered.begin() + offsets[row], sizes[row], true);
+      }
+    }
+    std::vector<vector_size_t> uncovered;
+    for (vector_size_t i = 0; i < numElements; ++i) {
+      if (!covered[i]) {
+        uncovered.push_back(i);
+      }
+    }
+    setOutOfRange(*elements, uncovered);
+
+    auto makeVectors = [&](const BufferPtr& vectorNulls) {
+      return std::vector<VectorPtr>{
+          std::make_shared<ArrayVector>(
+              pool(),
+              ARRAY(TIMESTAMP()),
+              vectorNulls,
+              offsets.size(),
+              makeBuffer(offsets),
+              makeBuffer(sizes),
+              elements),
+          std::make_shared<MapVector>(
+              pool(),
+              MAP(TIMESTAMP(), TIMESTAMP()),
+              vectorNulls,
+              offsets.size(),
+              makeBuffer(offsets),
+              makeBuffer(sizes),
+              elements,
+              elements),
+      };
+    };
+    auto checkLists = [&](const arrow::Array& array) {
+      const auto& lists = static_cast<const arrow::ListArray&>(array);
+      for (size_t row = 0; row < nulls.size(); ++row) {
+        EXPECT_EQ(nulls[row], lists.IsNull(row));
+      }
+      validateOffsets(lists, expectedOffsets);
+    };
+    for (const auto& vector : makeVectors(makeNulls(nulls))) {
+      SCOPED_TRACE(vector->type()->toString());
+      auto array = toArrow(vector, options_, pool());
+      ASSERT_OK(array->ValidateFull());
+      checkLists(*array);
+    }
+    for (const auto& vector : makeVectors(nullptr)) {
+      SCOPED_TRACE("Under a struct: " + vector->type()->toString());
+      auto array = toArrow(
+          makeRowVector(
+              {vector}, [&](vector_size_t row) { return nulls[row]; }),
+          options_,
+          pool());
+      ASSERT_OK(array->ValidateFull());
+      checkLists(*static_cast<const arrow::StructArray&>(*array).field(0));
+    }
   }
 
   ArrowSchema makeArrowSchema(const char* format) {
@@ -1623,6 +1697,55 @@ TEST_F(ArrowBridgeArrayExportTest, arrayReorder) {
   EXPECT_EQ(values.Value(3), 2);
 }
 
+TEST_F(ArrowBridgeArrayExportTest, nullRowPastElements) {
+  testExportOffsets(
+      {0, 2, 4}, {2, 2, 5}, {false, false, true}, 4, {0, 2, 4, 4});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, nullRowNegativeOffset) {
+  testExportOffsets({-3, 0}, {3, 2}, {true, false}, 2, {0, 0, 2});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, nullRowNegativeSize) {
+  testExportOffsets(
+      {0, 2, 1}, {2, -1, 0}, {false, true, false}, 2, {0, 2, 2, 2});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, elementsBeforeFirstRow) {
+  testExportOffsets({1, 3}, {2, 1}, {false, false}, 4, {0, 2, 3});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, elementsPastLastRow) {
+  testExportOffsets({0, 2}, {2, 1}, {false, false}, 4, {0, 2, 3});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, elementsInNullRow) {
+  testExportOffsets(
+      {0, 2, 3}, {2, 1, 1}, {false, true, false}, 4, {0, 2, 2, 3});
+}
+
+TEST_F(ArrowBridgeArrayExportTest, elementsPastStructEnd) {
+  // The array is longer than its struct. Element 3 is out of range, and only
+  // row 2, past the end of the struct, covers it.
+  auto elements = makeFlatVector<Timestamp>(
+      4, [](vector_size_t row) { return Timestamp(row, 0); });
+  setOutOfRange(*elements, {3});
+  auto arrays = makeArrayVector({0, 2, 3}, elements);
+  auto vector = std::make_shared<RowVector>(
+      pool(),
+      ROW("c0", arrays->type()),
+      nullptr,
+      2,
+      std::vector<VectorPtr>{arrays});
+
+  auto array = toArrow(vector, options_, pool());
+  ASSERT_OK(array->ValidateFull());
+  const auto& lists = static_cast<const arrow::ListArray&>(
+      *static_cast<const arrow::StructArray&>(*array).field(0));
+  EXPECT_EQ(3, lists.values()->length());
+  validateOffsets(lists, {0, 2, 3});
+}
+
 TEST_F(ArrowBridgeArrayExportTest, arrayNested) {
   auto elements = makeFlatVector<int64_t>({1, 2, 3, 4, 5});
   auto vec = ({
@@ -2702,6 +2825,30 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     });
   }
 
+  // Imports BOOLEAN values that end right before an unmapped page. The values
+  // buffer covers the bitmap, one bit per row, so copying it reads only the
+  // bitmap.
+  void testImportBooleanValuesSize() {
+    constexpr int64_t kLength = 4'096;
+    common::testutil::PageBeforeGuard page;
+    auto* rawValues = page.end() - bits::nbytes(kLength);
+    for (int64_t i = 0; i < kLength; ++i) {
+      bits::setBit(rawValues, i, i % 3 == 0);
+    }
+
+    const void* buffers[2] = {nullptr, rawValues};
+    auto arrowArray = makeArrowArray(buffers, 2, kLength, 0);
+    auto arrowSchema = makeArrowSchema("b");
+    auto output = importFromArrow(arrowSchema, arrowArray, pool_.get());
+
+    auto* flat = output->asFlatVector<bool>();
+    EXPECT_EQ(flat->values()->size(), bits::nbytes(kLength));
+    auto copy = AlignedBuffer::copy(pool_.get(), flat->values());
+    for (int64_t i = 0; i < kLength; ++i) {
+      EXPECT_EQ(bits::isBitSet(copy->as<uint64_t>(), i), i % 3 == 0) << i;
+    }
+  }
+
   void testImportStringView() {
     arrow::StringViewBuilder sb(arrow::default_memory_pool());
     ASSERT_OK(sb.Append("hello world", 11));
@@ -2981,6 +3128,10 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, map) {
   testImportMap();
 }
 
+TEST_F(ArrowBridgeArrayImportAsViewerTest, booleanValuesSize) {
+  testImportBooleanValuesSize();
+}
+
 TEST_F(ArrowBridgeArrayImportAsViewerTest, dictionary) {
   testImportDictionary();
 }
@@ -3106,6 +3257,10 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, array) {
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, map) {
   testImportMap();
+}
+
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, booleanValuesSize) {
+  testImportBooleanValuesSize();
 }
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, dictionary) {

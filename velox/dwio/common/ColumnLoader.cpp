@@ -103,6 +103,14 @@ void ColumnLoader::loadInternal(
        structReader_});
   raw_vector<vector_size_t> selectedRows(fieldReader_->memoryPool());
   if (!hook) {
+    if (*result && result->use_count() == 1 &&
+        (*result)->encoding() == VectorEncoding::Simple::DICTIONARY) {
+      const auto innerEncoding = (*result)->valueVector()->encoding();
+      if (innerEncoding == VectorEncoding::Simple::FLAT_MAP ||
+          innerEncoding == VectorEncoding::Simple::DICTIONARY) {
+        *result = (*result)->valueVector();
+      }
+    }
     fieldReader_->releaseReusableResult(*result);
   }
   auto effectiveRows =

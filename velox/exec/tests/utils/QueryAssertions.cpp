@@ -15,494 +15,25 @@
  */
 
 #include <gtest/gtest.h>
-#include <chrono>
 
-#include "duckdb/common/types.hpp" // @manual
-#include "velox/duckdb/conversion/DuckConversion.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/type/Type.h"
-#include "velox/vector/VariantToVector.h"
-#include "velox/vector/VectorTypeUtils.h"
-
-using facebook::velox::duckdb::duckdbTimestampToVelox;
-using facebook::velox::duckdb::veloxTimestampToDuckDB;
 
 DEFINE_int32(max_error_rows, 10, "Max number of listed error rows");
 
 namespace facebook::velox::exec::test {
 namespace {
 
-static const std::string kDuckDbTimestampWarning =
+const std::string kDuckDbTimestampWarning =
     "Note: DuckDB only supports timestamps of millisecond precision. If this "
     "test involves timestamp inputs, please make sure you use the right"
     " precision.";
 
-template <TypeKind kind>
-::duckdb::Value duckValueAt(const VectorPtr& vector, vector_size_t index) {
-  using T = typename KindToFlatVector<kind>::WrapperType;
-  return ::duckdb::Value(vector->as<SimpleVector<T>>()->valueAt(index));
-}
-
-// Forward declarations of the complex-type specializations. Nested complex
-// types dispatch through these before their definitions appear below, so the
-// declarations must precede any such instantiation.
-template <>
-::duckdb::Value duckValueAt<TypeKind::ARRAY>(
-    const VectorPtr& vector,
-    int32_t row);
-template <>
-::duckdb::Value duckValueAt<TypeKind::ROW>(
-    const VectorPtr& vector,
-    int32_t row);
-template <>
-::duckdb::Value duckValueAt<TypeKind::MAP>(
-    const VectorPtr& vector,
-    int32_t row);
-
-template <>
-::duckdb::Value duckValueAt<TypeKind::TINYINT>(
-    const VectorPtr& vector,
-    vector_size_t index) {
-  return ::duckdb::Value::TINYINT(
-      vector->as<SimpleVector<int8_t>>()->valueAt(index));
-}
-
-template <>
-::duckdb::Value duckValueAt<TypeKind::SMALLINT>(
-    const VectorPtr& vector,
-    vector_size_t index) {
-  return ::duckdb::Value::SMALLINT(
-      vector->as<SimpleVector<int16_t>>()->valueAt(index));
-}
-
-template <>
-::duckdb::Value duckValueAt<TypeKind::BOOLEAN>(
-    const VectorPtr& vector,
-    vector_size_t index) {
-  return ::duckdb::Value::BOOLEAN(
-      vector->as<SimpleVector<bool>>()->valueAt(index));
-}
-
-template <>
-::duckdb::Value duckValueAt<TypeKind::VARCHAR>(
-    const VectorPtr& vector,
-    vector_size_t index) {
-  // DuckDB requires zero-ending string
-  auto copy = vector->as<SimpleVector<StringView>>()->valueAt(index).str();
-  return ::duckdb::Value(copy);
-}
-
-template <>
-::duckdb::Value duckValueAt<TypeKind::VARBINARY>(
-    const VectorPtr& vector,
-    vector_size_t index) {
-  // DuckDB requires zero-ending string
-  auto stringView = vector->as<SimpleVector<StringView>>()->valueAt(index);
-  return ::duckdb::Value::BLOB(
-      reinterpret_cast<const uint8_t*>(stringView.begin()), stringView.size());
-}
-
-template <>
-::duckdb::Value duckValueAt<TypeKind::TIMESTAMP>(
-    const VectorPtr& vector,
-    vector_size_t index) {
-  using T = typename KindToFlatVector<TypeKind::TIMESTAMP>::WrapperType;
-  return ::duckdb::Value::TIMESTAMP(
-      veloxTimestampToDuckDB(vector->as<SimpleVector<T>>()->valueAt(index)));
-}
-
-template <>
-::duckdb::Value duckValueAt<TypeKind::INTEGER>(
-    const VectorPtr& vector,
-    vector_size_t index) {
-  auto type = vector->type();
-  if (type->isDate()) {
-    return ::duckdb::Value::DATE(
-        ::duckdb::Date::EpochDaysToDate(
-            vector->as<SimpleVector<int32_t>>()->valueAt(index)));
-  }
-  return ::duckdb::Value(vector->as<SimpleVector<int32_t>>()->valueAt(index));
-}
-
-template <>
-::duckdb::Value duckValueAt<TypeKind::BIGINT>(
-    const VectorPtr& vector,
-    vector_size_t index) {
-  using T = typename KindToFlatVector<TypeKind::BIGINT>::WrapperType;
-  auto type = vector->type();
-  if (type->isShortDecimal()) {
-    const auto& decimalType = type->asShortDecimal();
-    return ::duckdb::Value::DECIMAL(
-        vector->as<SimpleVector<T>>()->valueAt(index),
-        decimalType.precision(),
-        decimalType.scale());
-  }
-
-  if (type->isIntervalDayTime()) {
-    static constexpr int64_t kMicrosecondsInDay =
-        1000L * 1000L * 60L * 60L * 24L;
-    const auto interval = vector->as<SimpleVector<int64_t>>()->valueAt(index);
-    const int64_t microseconds = interval % kMicrosecondsInDay;
-    const int64_t days = interval / kMicrosecondsInDay;
-    return ::duckdb::Value::INTERVAL(0, days, microseconds);
-  }
-
-  if (type->isTime()) {
-    VELOX_DCHECK(type->equivalent(*TIME()));
-    // TIME is stored as milliseconds since midnight in Velox.
-    // DuckDB TIME is stored as microseconds since midnight.
-    const auto timeMillis = vector->as<SimpleVector<int64_t>>()->valueAt(index);
-    return ::duckdb::Value::TIME(::duckdb::dtime_t(timeMillis * 1000L));
-  }
-
-  return ::duckdb::Value(vector->as<SimpleVector<T>>()->valueAt(index));
-}
-
-template <>
-::duckdb::Value duckValueAt<TypeKind::HUGEINT>(
-    const VectorPtr& vector,
-    vector_size_t index) {
-  using T = typename KindToFlatVector<TypeKind::HUGEINT>::WrapperType;
-  auto val = vector->as<SimpleVector<T>>()->valueAt(index);
-  auto duckVal = ::duckdb::hugeint_t();
-  duckVal.lower = (val << 64) >> 64;
-  duckVal.upper = (val >> 64);
-  if (vector->type()->isLongDecimal()) {
-    auto type = vector->type()->asLongDecimal();
-    return ::duckdb::Value::DECIMAL(
-        std::move(duckVal), type.precision(), type.scale());
-  }
-  // Flat vector is HUGEINT type and not the logical decimal type.
-  return ::duckdb::Value::HUGEINT(std::move(duckVal));
-}
-
-template <>
-::duckdb::Value duckValueAt<TypeKind::ARRAY>(
-    const VectorPtr& vector,
-    int32_t row) {
-  auto arrayVector = vector->wrappedVector()->as<ArrayVector>();
-  auto arrayRow = vector->wrappedIndex(row);
-  auto& elements = arrayVector->elements();
-  auto offset = arrayVector->offsetAt(arrayRow);
-  auto size = arrayVector->sizeAt(arrayRow);
-
-  if (size == 0) {
-    return ::duckdb::Value::EMPTYLIST(duckdb::fromVeloxType(elements->type()));
-  }
-
-  ::duckdb::vector<::duckdb::Value> array;
-  array.reserve(size);
-  for (auto i = 0; i < size; i++) {
-    auto innerRow = offset + i;
-    if (elements->isNullAt(innerRow)) {
-      array.emplace_back(
-          ::duckdb::Value(duckdb::fromVeloxType(elements->type())));
-    } else {
-      array.emplace_back(VELOX_DYNAMIC_TYPE_DISPATCH(
-          duckValueAt, elements->typeKind(), elements, innerRow));
-    }
-  }
-
-  return ::duckdb::Value::LIST(array);
-}
-
-template <>
-::duckdb::Value duckValueAt<TypeKind::ROW>(
-    const VectorPtr& vector,
-    int32_t row) {
-  auto rowVector = vector->wrappedVector()->as<RowVector>();
-  auto rowRow = vector->wrappedIndex(row);
-  auto rowType = asRowType(rowVector->type());
-
-  ::duckdb::vector<std::pair<std::string, ::duckdb::Value>> fields;
-  for (auto i = 0; i < rowType->size(); ++i) {
-    if (rowVector->childAt(i)->isNullAt(rowRow)) {
-      fields.push_back({rowType->nameOf(i), ::duckdb::Value(nullptr)});
-    } else {
-      fields.push_back(
-          {rowType->nameOf(i),
-           VELOX_DYNAMIC_TYPE_DISPATCH(
-               duckValueAt,
-               rowType->childAt(i)->kind(),
-               rowVector->childAt(i),
-               rowRow)});
-    }
-  }
-
-  return ::duckdb::Value::STRUCT(fields);
-}
-
-template <>
-::duckdb::Value duckValueAt<TypeKind::MAP>(
-    const VectorPtr& vector,
-    int32_t row) {
-  auto mapVector = vector->wrappedVector()->as<MapVector>();
-  auto mapRow = vector->wrappedIndex(row);
-  const auto& mapKeys = mapVector->mapKeys();
-  const auto& mapValues = mapVector->mapValues();
-  auto offset = mapVector->offsetAt(mapRow);
-  auto size = mapVector->sizeAt(mapRow);
-  auto mapType = ::duckdb::ListType::GetChildType(
-      ::duckdb::LogicalType::MAP(
-          duckdb::fromVeloxType(mapKeys->type()),
-          duckdb::fromVeloxType(mapValues->type())));
-  if (size == 0) {
-    return ::duckdb::Value::MAP(mapType, ::duckdb::vector<::duckdb::Value>());
-  }
-
-  ::duckdb::vector<::duckdb::Value> duckMap;
-  for (auto i = 0; i < size; i++) {
-    auto innerRow = offset + i;
-    auto key = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-        duckValueAt, mapKeys->typeKind(), mapKeys, innerRow);
-    ::duckdb::Value value;
-    if (mapValues->isNullAt(innerRow)) {
-      value = ::duckdb::Value(duckdb::fromVeloxType(mapValues->type()));
-    } else {
-      value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          duckValueAt, mapValues->typeKind(), mapValues, innerRow);
-    }
-    ::duckdb::child_list_t<::duckdb::Value> mapStruct;
-    mapStruct.push_back(make_pair("key", key));
-    mapStruct.push_back(make_pair("value", value));
-    duckMap.push_back(::duckdb::Value::STRUCT(mapStruct));
-  }
-  return ::duckdb::Value::MAP(mapType, duckMap);
-}
-
-template <TypeKind kind>
-variant variantAt(::duckdb::DataChunk* dataChunk, int32_t row, int32_t column) {
-  using T = typename KindToFlatVector<kind>::WrapperType;
-  return variant(dataChunk->GetValue(column, row).GetValue<T>());
-}
-
-template <>
-variant variantAt<TypeKind::VARCHAR>(
-    ::duckdb::DataChunk* dataChunk,
-    int32_t row,
-    int32_t column) {
-  return variant(
-      StringView(::duckdb::StringValue::Get(dataChunk->GetValue(column, row))));
-}
-
-template <>
-velox::variant variantAt<TypeKind::HUGEINT>(
-    ::duckdb::DataChunk* dataChunk,
-    int32_t row,
-    int32_t column) {
-  auto unscaledValue =
-      dataChunk->GetValue(column, row).GetValue<::duckdb::hugeint_t>();
-  return variant(HugeInt::build(unscaledValue.upper, unscaledValue.lower));
-}
-
-template <>
-variant variantAt<TypeKind::VARBINARY>(
-    ::duckdb::DataChunk* dataChunk,
-    int32_t row,
-    int32_t column) {
-  return variant::binary(
-      std::string(
-          ::duckdb::StringValue::Get(dataChunk->GetValue(column, row))));
-}
-
-template <>
-variant variantAt<TypeKind::TIMESTAMP>(
-    ::duckdb::DataChunk* dataChunk,
-    int32_t row,
-    int32_t column) {
-  return variant::timestamp(duckdbTimestampToVelox(
-      dataChunk->GetValue(column, row).GetValue<::duckdb::timestamp_t>()));
-}
-
-template <TypeKind kind>
-variant variantAt(const ::duckdb::Value& value) {
-  if (value.type() == ::duckdb::LogicalType::INTERVAL) {
-    return ::duckdb::Interval::GetMicro(value.GetValue<::duckdb::interval_t>());
-  } else if (value.type() == ::duckdb::LogicalType::DATE) {
-    return ::duckdb::Date::EpochDays(value.GetValue<::duckdb::date_t>());
-  } else {
-    // NOTE: duckdb only support native cpp type for GetValue so we need to use
-    // DeepCopiedType instead of WrapperType here.
-    using T = typename TypeTraits<kind>::DeepCopiedType;
-    return variant(value.GetValue<T>());
-  }
-}
-
-template <>
-velox::variant variantAt<TypeKind::HUGEINT>(const ::duckdb::Value& value) {
-  auto hugeInt = ::duckdb::HugeIntValue::Get(value);
-  return velox::variant(HugeInt::build(hugeInt.upper, hugeInt.lower));
-}
-
-template <>
-variant variantAt<TypeKind::TIMESTAMP>(const ::duckdb::Value& value) {
-  return variant::timestamp(
-      duckdbTimestampToVelox(value.GetValue<::duckdb::timestamp_t>()));
-}
-
-template <>
-variant variantAt<TypeKind::VARCHAR>(const ::duckdb::Value& value) {
-  return variant(StringView(::duckdb::StringValue::Get(value)));
-}
-
-template <>
-variant variantAt<TypeKind::VARBINARY>(const ::duckdb::Value& value) {
-  return variant::binary(std::string(::duckdb::StringValue::Get(value)));
-}
-
-variant nullVariant(const TypePtr& type) {
-  return variant(type->kind());
-}
-
-variant arrayVariantAt(const ::duckdb::Value& vector, const TypePtr& arrayType);
-
-variant rowVariantAt(const ::duckdb::Value& vector, const TypePtr& rowType) {
-  std::vector<variant> values;
-  const auto& structValue = ::duckdb::StructValue::GetChildren(vector);
-  for (size_t i = 0; i < structValue.size(); ++i) {
-    auto currChild = structValue[i];
-    auto currType = rowType->childAt(i);
-    if (currChild.IsNull()) {
-      values.push_back(nullVariant(currType));
-    } else if (currType->kind() == TypeKind::ROW) {
-      values.push_back(rowVariantAt(currChild, currType));
-    } else if (currType->kind() == TypeKind::ARRAY) {
-      values.push_back(arrayVariantAt(currChild, currType));
-    } else if (currType->isDecimal()) {
-      values.push_back(duckdb::decimalVariant(currChild));
-    } else {
-      auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          variantAt, currType->kind(), currChild);
-      values.push_back(value);
-    }
-  }
-  return variant::row(std::move(values));
-}
-
-variant mapVariantAt(const ::duckdb::Value& vector, const TypePtr& mapType) {
-  std::map<variant, variant> map;
-
-  auto mapTypePtr = dynamic_cast<const MapType*>(mapType.get());
-  auto keyType = mapTypePtr->keyType();
-  auto valueType = mapTypePtr->valueType();
-
-  VELOX_CHECK_EQ(vector.type().id(), ::duckdb::LogicalTypeId::MAP);
-
-  const auto& valueList = ::duckdb::ListValue::GetChildren(vector);
-  for (int i = 0; i < valueList.size(); i++) {
-    variant variantKey;
-    variant variantValue;
-    auto value = ::duckdb::StructValue::GetChildren(valueList[i]);
-    // Map key cannot be null.
-    VELOX_CHECK(!value[0].IsNull());
-    if (keyType->isDecimal()) {
-      variantKey = duckdb::decimalVariant(value[0]);
-    } else {
-      variantKey = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          variantAt, keyType->kind(), value[0]);
-    }
-
-    if (value[1].IsNull()) {
-      variantValue = nullVariant(valueType);
-    } else if (valueType->isDecimal()) {
-      variantValue = duckdb::decimalVariant(value[1]);
-    } else {
-      variantValue = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          variantAt, valueType->kind(), value[1]);
-    }
-    map.insert({variantKey, variantValue});
-  }
-  return variant::map(map);
-}
-
-variant arrayVariantAt(
-    const ::duckdb::Value& vector,
-    const TypePtr& arrayType) {
-  std::vector<variant> array;
-
-  const auto& elementList = ::duckdb::ListValue::GetChildren(vector);
-
-  auto arrayTypePtr = dynamic_cast<const ArrayType*>(arrayType.get());
-  auto elementType = arrayTypePtr->elementType();
-  for (int i = 0; i < elementList.size(); i++) {
-    if (elementList[i].IsNull()) {
-      array.push_back(nullVariant(elementType));
-    } else if (elementType->kind() == TypeKind::ARRAY) {
-      array.push_back(
-          arrayVariantAt(elementList[i], arrayTypePtr->elementType()));
-    } else if (elementType->kind() == TypeKind::ROW) {
-      array.push_back(rowVariantAt(elementList[i], elementType));
-    } else if (elementType->isDecimal()) {
-      array.push_back(duckdb::decimalVariant(elementList[i]));
-    } else {
-      auto variant = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-          variantAt, elementType->kind(), elementList[i]);
-      array.push_back(variant);
-    }
-  }
-  return variant::array(std::move(array));
-}
-
-std::vector<MaterializedRow> materialize(
-    ::duckdb::DataChunk* dataChunk,
-    const RowTypePtr& rowType) {
-  VELOX_CHECK_EQ(
-      rowType->size(), dataChunk->GetTypes().size(), "Wrong number of columns");
-
-  auto size = dataChunk->size();
-  std::vector<MaterializedRow> rows;
-  rows.reserve(size);
-
-  // Pre-compute null values for all columns.
-  std::vector<variant> nulls;
-  for (size_t j = 0; j < rowType->size(); ++j) {
-    nulls.emplace_back(nullVariant(rowType->childAt(j)));
-  }
-
-  for (size_t i = 0; i < size; ++i) {
-    MaterializedRow row;
-    row.reserve(rowType->size());
-    for (size_t j = 0; j < rowType->size(); ++j) {
-      auto type = rowType->childAt(j);
-      auto typeKind = type->kind();
-      if (dataChunk->GetValue(j, i).IsNull()) {
-        row.push_back(nulls[j]);
-      } else if (typeKind == TypeKind::ARRAY) {
-        row.push_back(arrayVariantAt(dataChunk->GetValue(j, i), type));
-      } else if (typeKind == TypeKind::MAP) {
-        row.push_back(mapVariantAt(dataChunk->GetValue(j, i), type));
-      } else if (typeKind == TypeKind::ROW) {
-        row.push_back(rowVariantAt(dataChunk->GetValue(j, i), type));
-      } else if (type->isDecimal()) {
-        row.push_back(duckdb::decimalVariant(dataChunk->GetValue(j, i)));
-      } else if (type->isIntervalDayTime()) {
-        auto value = variant(
-            ::duckdb::Interval::GetMicro(
-                dataChunk->GetValue(j, i).GetValue<::duckdb::interval_t>()));
-        row.push_back(value);
-      } else if (type->isDate()) {
-        auto value = variant(
-            ::duckdb::Date::EpochDays(
-                dataChunk->GetValue(j, i).GetValue<::duckdb::date_t>()));
-        row.push_back(value);
-      } else if (type->isTime()) {
-        VELOX_DCHECK(type->equivalent(*TIME()));
-        // DuckDB TIME is in microseconds, Velox TIME is in milliseconds.
-        auto value = variant(
-            dataChunk->GetValue(j, i).GetValue<::duckdb::dtime_t>().micros /
-            1000L);
-        row.push_back(value);
-      } else {
-        auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-            variantAt, typeKind, dataChunk, i, j);
-        row.push_back(value);
-      }
-    }
-    rows.push_back(row);
-  }
-  return rows;
+// Returns the type of the first vector, or nullptr if 'vectors' is empty.
+TypePtr typeOf(const std::vector<RowVectorPtr>& vectors) {
+  return vectors.empty() ? nullptr : vectors.front()->type();
 }
 
 MaterializedRow getColumns(
@@ -834,16 +365,6 @@ std::string generateUserFriendlyDiff(
       missingRows, extraRows, expectedRows.size(), actualRows.size(), type);
 }
 
-void verifyDuckDBResult(
-    const DuckDbQueryRunner::QueryResult& result,
-    std::string_view sql) {
-  VELOX_CHECK(
-      !result->HasError(),
-      "DuckDB query failed: {}\n{}",
-      result->GetError(),
-      sql);
-}
-
 } // namespace
 
 std::vector<MaterializedRow> materialize(const RowVectorPtr& vector) {
@@ -872,102 +393,10 @@ std::vector<MaterializedRow> materialize(const RowVectorPtr& vector) {
   return rows;
 }
 
-::duckdb::DuckDB& DuckDbQueryRunner::database() {
-  if (db_ == nullptr) {
-    db_ = std::make_shared<::duckdb::DuckDB>(nullptr);
-  }
-  return *db_;
-}
-
-void DuckDbQueryRunner::createTable(
-    const std::string& name,
-    const std::vector<RowVectorPtr>& data) {
-  auto query = fmt::format("DROP TABLE IF EXISTS {}", name);
-  execute(query);
-
-  auto& rowType = data[0]->type()->as<TypeKind::ROW>();
-  ::duckdb::Connection con(database());
-  auto sql = duckdb::makeCreateTableSql(name, rowType);
-  auto res = con.Query(sql);
-  verifyDuckDBResult(res, sql);
-
-  ::duckdb::Appender appender(con, name);
-  for (auto& vector : data) {
-    // Resolve lazy vectors once per batch. duckValueAt casts each column to
-    // SimpleVector, which returns null for a LazyVector, so materialize any
-    // lazy child before the per-row loop.
-    std::vector<VectorPtr> columnVectors;
-    columnVectors.reserve(rowType.size());
-    for (int32_t column = 0; column < rowType.size(); column++) {
-      auto columnVector = vector->childAt(column);
-      if (columnVector->isLazy()) {
-        columnVector = BaseVector::loadedVectorShared(columnVector);
-      }
-      columnVectors.push_back(std::move(columnVector));
-    }
-    for (int32_t row = 0; row < vector->size(); row++) {
-      appender.BeginRow();
-      for (int32_t column = 0; column < rowType.size(); column++) {
-        const auto& columnVector = columnVectors[column];
-        auto type = rowType.childAt(column);
-        if (columnVector->isNullAt(row)) {
-          appender.Append(nullptr);
-        } else if (type->isArray()) {
-          appender.Append(duckValueAt<TypeKind::ARRAY>(columnVector, row));
-        } else if (type->isMap()) {
-          appender.Append(duckValueAt<TypeKind::MAP>(columnVector, row));
-        } else if (type->isRow()) {
-          appender.Append(duckValueAt<TypeKind::ROW>(columnVector, row));
-        } else if (rowType.childAt(column)->isShortDecimal()) {
-          appender.Append(duckValueAt<TypeKind::BIGINT>(columnVector, row));
-        } else if (rowType.childAt(column)->isLongDecimal()) {
-          appender.Append(duckValueAt<TypeKind::HUGEINT>(columnVector, row));
-        } else {
-          VELOX_CHECK(
-              type->equivalent(*columnVector->type()),
-              "{} vs. {}",
-              type->toString(),
-              columnVector->toString());
-          auto value = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
-              duckValueAt, type->kind(), columnVector, row);
-          appender.Append(value);
-        }
-      }
-      appender.EndRow();
-    }
-  }
-}
-
-DuckDbQueryRunner::QueryResult DuckDbQueryRunner::execute(
-    const std::string& sql) {
-  ::duckdb::Connection con(database());
-  // Changing the default null order of NULLS FIRST used by DuckDB. Velox uses
-  // NULLS LAST.
-  con.Query("PRAGMA default_null_order='NULLS LAST'");
-  auto duckDbResult = con.Query(sql);
-  verifyDuckDBResult(duckDbResult, sql);
-  return std::move(duckDbResult);
-}
-
-void DuckDbQueryRunner::execute(
-    const std::string& sql,
-    const RowTypePtr& resultRowType,
-    std::function<void(std::vector<MaterializedRow>&)> resultCallback) {
-  auto duckDbResult = execute(sql);
-
-  for (;;) {
-    auto dataChunk = duckDbResult->Fetch();
-    verifyDuckDBResult(duckDbResult, sql);
-    if (!dataChunk || (dataChunk->size() == 0)) {
-      break;
-    }
-    auto rows = materialize(dataChunk.get(), resultRowType);
-    resultCallback(rows);
-  }
-}
+namespace {
 
 // Compare left and right without epsilon and returns true if they are equal.
-static bool compareMaterializedRows(
+bool compareMaterializedRows(
     const MaterializedRowMultiset& left,
     const MaterializedRowMultiset& right) {
   if (left.size() != right.size()) {
@@ -992,36 +421,36 @@ static bool compareMaterializedRows(
   return true;
 }
 
+} // namespace
+
 bool assertEqualResults(
     const std::vector<RowVectorPtr>& expected,
     const std::vector<RowVectorPtr>& actual) {
-  MaterializedRowMultiset expectedRows;
-  for (auto vector : expected) {
-    auto rows = materialize(vector);
-    std::copy(
-        rows.begin(),
-        rows.end(),
-        std::inserter(expectedRows, expectedRows.end()));
-  }
-  const auto& expectedType =
-      (expected.size() == 0) ? nullptr : expected.at(0)->type();
-  return assertEqualResults(expectedRows, expectedType, actual);
+  return assertEqualResults(materialize(expected), typeOf(expected), actual);
 }
+
+namespace {
 
 bool containsFloatingPoint(const TypePtr& type) {
   if (type->isPrimitiveType()) {
     return type->isReal() || type->isDouble();
-  } else if (type->isArray()) {
+  }
+
+  if (type->isArray()) {
     return containsFloatingPoint(type->as<TypeKind::ARRAY>().elementType());
-  } else if (type->isMap()) {
+  }
+
+  if (type->isMap()) {
     // We currently don't support comparing maps with floating-point keys with
     // epsilon. This is because fuzzer can generate floating-point keys that are
     // very close, causing one key incorrectly match another during the
     // comparison.
     return containsFloatingPoint(type->as<TypeKind::MAP>().valueType());
-  } else if (type->isRow()) {
-    for (auto& child : type->as<TypeKind::ROW>().children()) {
-      if (containsFloatingPoint(child)) {
+  }
+
+  if (type->isRow()) {
+    for (auto i = 0; i < type->size(); i++) {
+      if (containsFloatingPoint(type->childAt(i))) {
         return true;
       }
     }
@@ -1029,28 +458,70 @@ bool containsFloatingPoint(const TypePtr& type) {
   return false;
 }
 
-/// Returns the number of floating-point columns and a list of columns indices
-/// with floating-point columns placed at the end.
+// Returns the number of floating-point columns and a list of columns indices
+// with floating-point columns placed at the end.
 std::tuple<uint32_t, std::vector<velox::column_index_t>>
 findFloatingPointColumns(const TypePtr& type) {
-  const auto rowType = asRowType(type);
   uint32_t numFloatingPointColumns = 0;
   std::vector<velox::column_index_t> indices;
-  for (auto i = 0; i < rowType->children().size(); ++i) {
-    if (containsFloatingPoint(rowType->childAt(i))) {
+  for (auto i = 0; i < type->size(); ++i) {
+    if (containsFloatingPoint(type->childAt(i))) {
       ++numFloatingPointColumns;
     } else {
       indices.push_back(i);
     }
   }
 
-  for (auto i = 0; i < rowType->children().size(); ++i) {
-    if (containsFloatingPoint(rowType->childAt(i))) {
+  for (auto i = 0; i < type->size(); ++i) {
+    if (containsFloatingPoint(type->childAt(i))) {
       indices.push_back(i);
     }
   }
   return std::make_tuple(numFloatingPointColumns, indices);
 }
+
+// Compares non-empty 'expectedRows' and 'actualRows' of 'type'. Uses epsilon
+// for floating-point columns when the other columns form a unique key.
+// Otherwise, compares values directly, which may report a false mismatch for
+// floating-point values computed during evaluation. Returns std::nullopt if the
+// rows match, or a description of the mismatch.
+std::optional<std::string> compareRows(
+    const MaterializedRowMultiset& expectedRows,
+    const MaterializedRowMultiset& actualRows,
+    const TypePtr& type) {
+  if (!equalTypeKinds(*expectedRows.begin(), *actualRows.begin())) {
+    return fmt::format(
+        "Types of expected and actual results do not match: {} vs. {}",
+        toTypeString(*expectedRows.begin()),
+        toTypeString(*actualRows.begin()));
+  }
+
+  auto [numFloatingPointColumns, columns] = findFloatingPointColumns(type);
+  if (numFloatingPointColumns > 0) {
+    MaterializedRowEpsilonComparator comparator{
+        numFloatingPointColumns, columns};
+    if (auto result = comparator.areEqual(expectedRows, actualRows)) {
+      if (result.value()) {
+        return std::nullopt;
+      }
+      return comparator.getUserFriendlyDiff(type);
+    }
+  }
+
+  if (compareMaterializedRows(expectedRows, actualRows)) {
+    return std::nullopt;
+  }
+
+  auto diff = generateUserFriendlyDiff(expectedRows, actualRows, type);
+  if (numFloatingPointColumns > 0) {
+    diff +=
+        "\nNote: results are compared without epsilon "
+        "because values at non-floating-point columns do not form unique keys.";
+  }
+  return diff;
+}
+
+} // namespace
 
 // Compare actualRows with expectedRows and return whether they match. Compare
 // actualRows and expectedRows with epsilon if needed and allowed. Otherwise,
@@ -1076,37 +547,8 @@ bool assertEqualResults(
     return true;
   }
 
-  if (!equalTypeKinds(*expectedRows.begin(), *actualRows.begin())) {
-    ADD_FAILURE() << "Types of expected and actual results do not match: "
-                  << toTypeString(*expectedRows.begin()) << " vs. "
-                  << toTypeString(*actualRows.begin());
-    return false;
-  }
-
-  auto [numFloatingPointColumns, columns] = findFloatingPointColumns(type);
-  if (numFloatingPointColumns) {
-    MaterializedRowEpsilonComparator comparator{
-        numFloatingPointColumns, columns};
-    if (auto result = comparator.areEqual(expectedRows, actualRows)) {
-      if (!result.value()) {
-        ADD_FAILURE() << comparator.getUserFriendlyDiff(expectedType)
-                      << message;
-        return false;
-      }
-      return true;
-    }
-  }
-
-  // Compare the results directly without epsilon. This may cause false alarm
-  // if there are floating-point columns that are computed during the
-  // evaluation.
-  if (not compareMaterializedRows(expectedRows, actualRows)) {
-    std::string note = numFloatingPointColumns > 0
-        ? "\nNote: results are compared without epsilon because values at non-floating-point columns do not form unique keys."
-        : "";
-    ADD_FAILURE() << generateUserFriendlyDiff(
-                         expectedRows, actualRows, expectedType)
-                  << message << note;
+  if (auto mismatch = compareRows(expectedRows, actualRows, type)) {
+    ADD_FAILURE() << *mismatch << message;
     return false;
   }
   return true;
@@ -1114,7 +556,7 @@ bool assertEqualResults(
 
 MaterializedRowMultiset materialize(const std::vector<RowVectorPtr>& vectors) {
   MaterializedRowMultiset materialized;
-  for (auto vector : vectors) {
+  for (const auto& vector : vectors) {
     auto rows = materialize(vector);
     std::copy(
         rows.begin(),
@@ -1128,13 +570,11 @@ bool assertEqualResults(
     const MaterializedRowMultiset& expectedRows,
     const TypePtr& expectedType,
     const std::vector<RowVectorPtr>& actual) {
-  const auto& actualType =
-      (actual.size() == 0) ? nullptr : actual.at(0)->type();
   return assertEqualResults(
       expectedRows,
       expectedType,
       materialize(actual),
-      actualType,
+      typeOf(actual),
       "Unexpected results");
 }
 
@@ -1143,26 +583,20 @@ void assertResults(
     const RowTypePtr& resultType,
     const std::string& duckDbSql,
     DuckDbQueryRunner& duckDbQueryRunner) {
-  MaterializedRowMultiset actualRows;
+  const auto actualRows = materialize(results);
   MaterializedRowMultiset expectedRows;
-  for (const auto& vector : results) {
-    auto rows = materialize(vector);
-    std::copy(
-        rows.begin(), rows.end(), std::inserter(actualRows, actualRows.end()));
-  }
-
   if (!duckDbSql.empty()) {
     expectedRows = duckDbQueryRunner.execute(duckDbSql, resultType);
   }
-  const auto& actualType =
-      (results.size() == 0) ? nullptr : results.at(0)->type();
   assertEqualResults(
       expectedRows,
       resultType,
       actualRows,
-      actualType,
+      typeOf(results),
       kDuckDbTimestampWarning + "\nDuckDB query: " + duckDbSql);
 }
+
+namespace {
 
 // To handle the case when the sorting keys are not unique and the order
 // within the same key is not deterministic, we partition the results with
@@ -1172,7 +606,7 @@ using OrderedPartition = std::pair<MaterializedRow, MaterializedRowMultiset>;
 // Special function to compare ordered partitions in a way that
 // we compare all floating point values inside using 'epsilon' constant.
 // Returns true if equal. valueType is the type of expected.second.
-static bool compareOrderedPartitions(
+bool compareOrderedPartitions(
     const OrderedPartition& expected,
     const OrderedPartition& actual,
     const RowTypePtr& valueType) {
@@ -1182,7 +616,7 @@ static bool compareOrderedPartitions(
   }
 
   for (size_t i = 0; i < expected.first.size(); ++i) {
-    if (not expected.first[i].equalsWithEpsilon(actual.first[i])) {
+    if (!expected.first[i].equalsWithEpsilon(actual.first[i])) {
       return false;
     }
   }
@@ -1191,31 +625,28 @@ static bool compareOrderedPartitions(
     return true;
   }
 
-  if (!equalTypeKinds(*expected.second.begin(), *actual.second.begin())) {
-    ADD_FAILURE() << "Types of expected and actual results do not match";
-    return false;
-  }
+  return !compareRows(expected.second, actual.second, valueType).has_value();
+}
 
-  // valueType is needed by findFloatingPointColumns() to avoid having to infer
-  // the type from expected.second.
-  auto [numFloatingPointColumns, columns] = findFloatingPointColumns(valueType);
-  if (numFloatingPointColumns) {
-    MaterializedRowEpsilonComparator comparator{
-        numFloatingPointColumns, columns};
-    if (auto result = comparator.areEqual(expected.second, actual.second)) {
-      return result.value();
+// Appends 'rows' to 'partitions', grouping consecutive rows with equal values
+// in 'sortingKeys' columns into one partition.
+void appendOrderedPartitions(
+    const std::vector<MaterializedRow>& rows,
+    const std::vector<uint32_t>& sortingKeys,
+    std::vector<OrderedPartition>& partitions) {
+  for (const auto& row : rows) {
+    auto keys = getColumns(row, sortingKeys);
+    if (partitions.empty() || partitions.back().first != keys) {
+      partitions.emplace_back(std::move(keys), MaterializedRowMultiset());
     }
+    partitions.back().second.insert(row);
   }
-  // Compare the results directly without epsilon. This may cause false alarm
-  // if there are floating-point columns that are computed during the
-  // evaluation.
-  return compareMaterializedRows(expected.second, actual.second);
 }
 
 // Special function to compare vectors of ordered partitions in a way that
 // we compare all floating point values inside using 'epsilon' constant.
 // Returns true if equal. valueType is the type of expected[i].second.
-static bool compareOrderedPartitionsVectors(
+bool compareOrderedPartitionsVectors(
     const std::vector<OrderedPartition>& expected,
     const std::vector<OrderedPartition>& actual,
     const RowTypePtr& valueType) {
@@ -1224,13 +655,15 @@ static bool compareOrderedPartitionsVectors(
   }
 
   for (size_t i = 0; i < expected.size(); ++i) {
-    if (not compareOrderedPartitions(expected[i], actual[i], valueType)) {
+    if (!compareOrderedPartitions(expected[i], actual[i], valueType)) {
       return false;
     }
   }
 
   return true;
 }
+
+} // namespace
 
 void assertResultsOrdered(
     const std::vector<RowVectorPtr>& results,
@@ -1242,38 +675,27 @@ void assertResultsOrdered(
   std::vector<OrderedPartition> expectedPartitions;
 
   for (const auto& vector : results) {
-    auto rows = materialize(vector);
-    for (const auto& row : rows) {
-      auto keys = getColumns(row, sortingKeys);
-      if (actualPartitions.empty() || actualPartitions.back().first != keys) {
-        actualPartitions.emplace_back(keys, MaterializedRowMultiset());
-      }
-      actualPartitions.back().second.insert(row);
-    }
+    appendOrderedPartitions(materialize(vector), sortingKeys, actualPartitions);
   }
+  appendOrderedPartitions(
+      duckDbQueryRunner.executeOrdered(duckDbSql, resultType),
+      sortingKeys,
+      expectedPartitions);
 
-  auto expectedRows = duckDbQueryRunner.executeOrdered(duckDbSql, resultType);
-  for (const auto& row : expectedRows) {
-    auto keys = getColumns(row, sortingKeys);
-    if (expectedPartitions.empty() || expectedPartitions.back().first != keys) {
-      expectedPartitions.emplace_back(keys, MaterializedRowMultiset());
-    }
-    expectedPartitions.back().second.insert(row);
-  }
-
-  if (not compareOrderedPartitionsVectors(
+  if (!compareOrderedPartitionsVectors(
           expectedPartitions, actualPartitions, resultType)) {
     auto actualPartIter = actualPartitions.begin();
     auto expectedPartIter = expectedPartitions.begin();
     while (expectedPartIter != expectedPartitions.end() &&
            actualPartIter != actualPartitions.end()) {
-      if (not compareOrderedPartitions(
+      if (!compareOrderedPartitions(
               *expectedPartIter, *actualPartIter, resultType)) {
         break;
       }
       ++expectedPartIter;
       ++actualPartIter;
     }
+
     std::ostringstream oss;
     if (expectedPartIter == expectedPartitions.end()) {
       oss << "Got extra rows: keys: "
@@ -1288,9 +710,10 @@ void assertResultsOrdered(
             << ", actual: " << toString(actualPartIter->first, resultType)
             << std::endl;
       } else {
-        oss << "Keys: " << toString(expectedPartIter->first, resultType) << " ";
-        oss << generateUserFriendlyDiff(
-            expectedPartIter->second, actualPartIter->second, resultType);
+        oss << "Keys: " << toString(expectedPartIter->first, resultType) << " "
+            << compareRows(
+                   expectedPartIter->second, actualPartIter->second, resultType)
+                   .value_or("");
       }
       ADD_FAILURE() << oss.str() << kDuckDbTimestampWarning
                     << "\nDuckDB query: " << duckDbSql;
@@ -1403,24 +826,4 @@ void readCursorAsync(
   }
 }
 
-variant readSingleValue(const core::PlanNodePtr& plan, int32_t maxDrivers) {
-  CursorParameters params;
-  params.planNode = plan;
-  params.maxDrivers = maxDrivers;
-  auto result = readCursor(params);
-
-  EXPECT_EQ(1, result.second.size());
-  EXPECT_EQ(1, result.second[0]->size());
-  EXPECT_EQ(
-      *plan->outputType()->childAt(0), *(result.second[0]->type()->childAt(0)));
-  return materialize(result.second[0])[0][0];
-}
-
 } // namespace facebook::velox::exec::test
-
-template <>
-struct fmt::formatter<::duckdb::LogicalTypeId> : formatter<int> {
-  auto format(::duckdb::LogicalTypeId s, format_context& ctx) const {
-    return formatter<int>::format(static_cast<int>(s), ctx);
-  }
-};

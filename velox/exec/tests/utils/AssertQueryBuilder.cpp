@@ -292,6 +292,25 @@ RowVectorPtr AssertQueryBuilder::copyResults(
   return copy;
 }
 
+Variant AssertQueryBuilder::copySingleValue() {
+  VELOX_CHECK_EQ(
+      params_.planNode->outputType()->size(),
+      1,
+      "Query must return a single column");
+
+  auto [cursor, results] = readCursor();
+  RowVectorPtr batch;
+  vector_size_t numRows{0};
+  for (const auto& result : results) {
+    if (result->size() > 0) {
+      batch = result;
+      numRows += result->size();
+    }
+  }
+  VELOX_CHECK_EQ(numRows, 1, "Query must return a single row");
+  return materialize(batch)[0][0];
+}
+
 std::vector<RowVectorPtr> AssertQueryBuilder::copyResultBatches(
     memory::MemoryPool* pool) {
   auto [cursor, results] = readCursor();
