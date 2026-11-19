@@ -55,6 +55,16 @@ bool canRunHashJoinOnGpu(
     memory::MemoryPool* pool,
     std::string* reason);
 
+/// Returns whether cuDF implements a hash join of this join type, null
+/// awareness and filter presence. Needs no QueryCtx, so the constructor of
+/// CudfHashJoinNode checks it too and a CudfHashJoinNode an engine builds
+/// directly cannot skip it.
+bool isHashJoinSupportedByCudf(
+    core::JoinType joinType,
+    bool nullAware,
+    bool hasFilter,
+    std::string* reason);
+
 bool canRunNestedLoopJoinOnGpu(
     const core::NestedLoopJoinNode& node,
     core::QueryCtx* queryCtx,
@@ -63,6 +73,10 @@ bool canRunNestedLoopJoinOnGpu(
 
 bool canRunTopNRowNumberOnGpu(
     const core::TopNRowNumberNode& node,
+    std::string* reason);
+
+bool canRunMarkDistinctOnGpu(
+    const core::MarkDistinctNode& node,
     std::string* reason);
 
 bool canRunLocalPartitionOnGpu(

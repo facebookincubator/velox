@@ -938,8 +938,17 @@ class MarkDistinctAdapter : public OperatorAdapter {
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* /*ctx*/) const override {
-    return std::dynamic_pointer_cast<const core::MarkDistinctNode>(planNode) !=
-        nullptr;
+    auto node =
+        std::dynamic_pointer_cast<const core::MarkDistinctNode>(planNode);
+    if (!node) {
+      return false;
+    }
+    std::string reason;
+    if (!canRunMarkDistinctOnGpu(*node, &reason)) {
+      LOG_FALLBACK("{}, PlanNode id: {}", reason, planNode->id());
+      return false;
+    }
+    return true;
   }
 
   bool acceptsGpuInput() const override {

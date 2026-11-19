@@ -317,6 +317,81 @@ TEST_F(PhysicalPlanTest, localMergeSplitsEverySourceWithBoundaryAdapter) {
   }
 }
 
+TEST_F(PhysicalPlanTest, constructorsRejectUnsupportedArguments) {
+  using Keys = std::vector<core::FieldAccessTypedExprPtr>;
+  using Orders = std::vector<core::SortOrder>;
+  auto source = std::make_shared<CudfFromVeloxNode>("upload", values());
+  auto key = std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "k");
+  auto orderBy = [&](Keys keys, Orders orders) {
+    return std::make_shared<CudfOrderByNode>(
+        "sort",
+        source,
+        input_->rowType(),
+        std::move(keys),
+        std::move(orders),
+        /*isPartial=*/false);
+  };
+  auto topN = [&](Keys keys, Orders orders, int32_t count) {
+    return std::make_shared<CudfTopNNode>(
+        "topn",
+        source,
+        input_->rowType(),
+        std::move(keys),
+        std::move(orders),
+        count,
+        /*isPartial=*/false);
+  };
+
+  VELOX_ASSERT_USER_THROW(
+      orderBy({}, {}), "CudfOrderBy must specify sorting keys");
+  VELOX_ASSERT_USER_THROW(
+      orderBy({key}, {}),
+      "Number of sorting keys and sorting orders in CudfOrderBy must be the same");
+  VELOX_ASSERT_USER_THROW(
+      orderBy({nullptr}, {core::kAscNullsLast}),
+      "CudfOrderBy sorting keys must not be null");
+  VELOX_ASSERT_USER_THROW(
+      orderBy({key, key}, {core::kAscNullsLast, core::kAscNullsLast}),
+      "CudfOrderBy must specify unique sorting keys. Found duplicate key: k");
+
+  VELOX_ASSERT_USER_THROW(
+      topN({}, {}, 1), "CudfTopN must specify sorting keys");
+  VELOX_ASSERT_USER_THROW(
+      topN({key}, {}, 1),
+      "Number of sorting keys and sorting orders in CudfTopN must be the same");
+  VELOX_ASSERT_USER_THROW(
+      topN({key, key}, {core::kAscNullsLast, core::kAscNullsLast}, 1),
+      "CudfTopN must specify unique sorting keys. Found duplicate key: k");
+  VELOX_ASSERT_USER_THROW(
+      topN({key}, {core::kAscNullsLast}, 0),
+      "CudfTopN must specify greater than zero number of rows to keep");
+
+  // The placement rules of a hash join that need no QueryCtx.
+  auto hashJoin = [&](core::JoinType joinType, bool nullAware, bool filter) {
+    return std::make_shared<CudfHashJoinNode>(
+        "join",
+        source,
+        std::make_shared<CudfFromVeloxNode>("build-upload", values()),
+        input_->rowType(),
+        joinType,
+        nullAware,
+        Keys{key},
+        Keys{key},
+        filter ? std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), true)
+               : core::TypedExprPtr{});
+  };
+  VELOX_ASSERT_USER_THROW(
+      hashJoin(core::JoinType::kAnti, true, true),
+      "HashJoin null-aware anti join with filter not implemented");
+  EXPECT_NE(hashJoin(core::JoinType::kAnti, true, false), nullptr);
+  EXPECT_NE(hashJoin(core::JoinType::kAnti, false, true), nullptr);
+
+  VELOX_ASSERT_THROW(source->serialize(), "is not serializable");
+  VELOX_ASSERT_THROW(
+      orderBy({key}, {core::kAscNullsLast})->serialize(),
+      "CudfOrderBy plan node is not serializable");
+}
+
 TEST_F(PhysicalPlanTest, constructTopNRowNumberWithoutCpuCounterpart) {
   auto data = makeRowVector(
       {"c0", "c1"},

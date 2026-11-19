@@ -152,19 +152,33 @@ bool canRunAggregationOnGpu(
   return true;
 }
 
+bool isHashJoinSupportedByCudf(
+    core::JoinType joinType,
+    bool nullAware,
+    bool hasFilter,
+    std::string* reason) {
+  if (!CudfHashJoinProbe::isSupportedJoinType(joinType)) {
+    return reject(reason, "HashJoin unsupported join type");
+  }
+  // Disabling null-aware anti join with filter until we implement it right
+  if (joinType == core::JoinType::kAnti && nullAware && hasFilter) {
+    return reject(
+        reason, "HashJoin null-aware anti join with filter not implemented");
+  }
+  return true;
+}
+
 bool canRunHashJoinOnGpu(
     const core::HashJoinNode& node,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool,
     std::string* reason) {
-  if (!CudfHashJoinProbe::isSupportedJoinType(node.joinType())) {
-    return reject(reason, "HashJoin unsupported join type");
-  }
-  // Disabling null-aware anti join with filter until we implement it right
-  if (node.joinType() == core::JoinType::kAnti && node.isNullAware() &&
-      node.filter()) {
-    return reject(
-        reason, "HashJoin null-aware anti join with filter not implemented");
+  if (!isHashJoinSupportedByCudf(
+          node.joinType(),
+          node.isNullAware(),
+          node.filter() != nullptr,
+          reason)) {
+    return false;
   }
   if (node.filter() && !canJoinFilterRunOnGpu(node.filter(), queryCtx, pool)) {
     return reject(reason, "HashJoin join filter cannot be evaluated by cuDF");
@@ -208,9 +222,21 @@ bool canRunTopNRowNumberOnGpu(
   return true;
 }
 
+bool canRunMarkDistinctOnGpu(
+    const core::MarkDistinctNode& node,
+    std::string* reason) {
+  if (!node.masks().empty()) {
+    return reject(reason, "MarkDistinct masks are not supported by cuDF");
+  }
+  return true;
+}
+
 bool canRunLocalPartitionOnGpu(
     const std::shared_ptr<const core::LocalPartitionNode>& node,
     std::string* reason) {
+  if (node->scaleWriter()) {
+    return reject(reason, "LocalPartition scale writer is unsupported by cuDF");
+  }
   if (!CudfLocalPartition::shouldReplace(node)) {
     return reject(
         reason, "LocalPartition partition spec is unsupported by cuDF");

@@ -24,6 +24,7 @@
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 #include "velox/experimental/cudf/tests/utils/CudfPlanBuilder.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
@@ -297,6 +298,19 @@ class PlanRewriterTest
               .singleAggregation({"c0"}, {"sum(c1)"})
               .planNode(),
           "LocalPartition"}},
+        {"ScaleWriterLocalPartition",
+         {values()
+              .project({"c0", "c1"})
+              .scaleWriterlocalPartitionRoundRobin()
+              .singleAggregation({"c0"}, {"sum(c1)"})
+              .planNode(),
+          "LocalPartition"}},
+        {"MaskedMarkDistinct",
+         {values()
+              .project({"c0", "c1 > 15 AS mask"})
+              .markDistinct({"m0", "m1"}, {"c0"}, {"mask"})
+              .planNode(),
+          "MarkDistinct"}},
         {"UnsupportedWindowFunction",
          {values()
               .window({"lag(c1, 1 IGNORE NULLS) over "
@@ -422,6 +436,23 @@ TEST_F(PlanRewriterTest, loweringBuildsOverTheGivenSources) {
       detail::findCudfPlanNodeLowering(
           std::make_shared<CudfFromVeloxNode>("from-velox", values)),
       nullptr);
+
+  // MarkDistinct lowering rejects masks even if called directly.
+  const auto maskedMarkDistinct =
+      PlanBuilder()
+          .values({input_})
+          .project({"c0", "c1 > 15 AS mask"})
+          .markDistinct({"m0", "m1"}, {"c0"}, {"mask"})
+          .planNode();
+  const auto* markDistinctLowering =
+      detail::findCudfPlanNodeLowering(maskedMarkDistinct);
+  ASSERT_NE(markDistinctLowering, nullptr);
+  VELOX_ASSERT_THROW(
+      markDistinctLowering->lower(
+          maskedMarkDistinct,
+          {std::make_shared<CudfFromVeloxNode>(
+              "masked_gpu", maskedMarkDistinct->sources()[0])}),
+      "MarkDistinct masks are not supported by cuDF");
 }
 
 TEST_F(PlanRewriterTest, batchConcatGoesBelowAggregationAndJoinProbe) {
@@ -595,7 +626,60 @@ TEST_F(PlanRewriterTest, filterProjectPreservesCustomFilterContract) {
       }
     }
     EXPECT_TRUE(foundCpuFilterProject);
+
+    // With CPU fallback disabled the Project runs on the GPU by itself, above
+    // the Filter of the application.
+    auto strictQueryCtx = core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig({{CudfConfig::kCudfAllowCpuFallback, "false"}}));
+    auto strict = rewriteToCudfPlan(plan, strictQueryCtx);
+    ASSERT_TRUE(strict->is<CudfToVeloxNode>());
+    auto gpuProject = strict->sources()[0];
+    ASSERT_TRUE(gpuProject->is<CudfFilterProjectNode>());
+    EXPECT_EQ(gpuProject->id(), plan->id());
+    ASSERT_TRUE(gpuProject->sources()[0]->is<CudfFromVeloxNode>());
+    auto strictFilter = gpuProject->sources()[0]->sources()[0];
+    ASSERT_TRUE(strictFilter->is<HostOnlyFilterNode>());
+    EXPECT_EQ(strictFilter->id(), custom->id());
+    AssertQueryBuilder(strict)
+        .queryCtx(strictQueryCtx)
+        .maxDrivers(1)
+        .assertResults(makeRowVector(
+            {"c0", "x"},
+            {makeFlatVector<int64_t>({2, 3}),
+             makeFlatVector<int64_t>({21 + gpuSource, 41 + gpuSource})}));
   }
+}
+
+// A subclass of a core plan node may add behaviour, so it does not run as the
+// cuDF plan node of its base class.
+TEST_F(PlanRewriterTest, subclassOfCoreNodeStaysOnCpu) {
+  class CustomLimitNode final : public core::LimitNode {
+   public:
+    using core::LimitNode::LimitNode;
+  };
+  class CustomFilterNode final : public core::FilterNode {
+   public:
+    using core::FilterNode::FilterNode;
+  };
+  auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+  auto values = PlanBuilder(ids).values({input_}).planNode();
+
+  auto limit = std::make_shared<CustomLimitNode>("limit", 0, 2, false, values);
+  EXPECT_EQ(rewriteToCudfPlan(limit), limit);
+
+  // The Project still runs on the GPU, but not fused with the Filter.
+  auto filter = PlanBuilder().values({input_}).filter("c0 > 1").planNode();
+  core::PlanNodePtr customFilter = std::make_shared<CustomFilterNode>(
+      "filter", filter->as<core::FilterNode>()->filter(), values);
+  auto plan =
+      PlanBuilder(customFilter, ids).project({"c0 + 1 AS x"}).planNode();
+  auto physical = rewriteToCudfPlan(plan);
+  ASSERT_TRUE(physical->is<CudfToVeloxNode>());
+  auto project = physical->sources()[0]->as<CudfFilterProjectNode>();
+  ASSERT_NE(project, nullptr);
+  ASSERT_TRUE(project->sources()[0]->is<CudfFromVeloxNode>());
+  EXPECT_EQ(project->sources()[0]->sources()[0], customFilter);
 }
 
 TEST_F(PlanRewriterTest, cpuNodesAboveGpuRegionsAreRebuilt) {
@@ -633,18 +717,48 @@ TEST_F(PlanRewriterTest, cpuNodesAboveGpuRegionsAreRebuilt) {
               true)
           .planNode(),
   };
-  // These need an RPC service or fixed-point state to run.
+  // These need an RPC service, vector index format, or fixed-point state to
+  // run.
+  auto queries = makeRowVector(
+      {"t0", "t1"},
+      {makeFlatVector<int64_t>({1}), makeArrayVector<float>({{1.0f, 0.0f}})});
+  auto indexes = makeRowVector(
+      {"u0", "u1"},
+      {makeFlatVector<int64_t>({1}),
+       makeFlatVector<std::string>({"index"}, VARBINARY())});
+  const auto rpcPlan = std::make_shared<core::RPCNode>(
+      "rpc",
+      gpuRegion().planNode(),
+      std::make_shared<core::CallTypedExpr>(
+          BIGINT(),
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0")},
+          "test_rpc"),
+      "r",
+      ROW({"c0", "c1", "r"}, BIGINT()),
+      rpc::RPCStreamingMode::kBatch,
+      /*dispatchBatchSize=*/16,
+      /*executionPhase=*/"SUBMIT");
+  const auto vectorSearchPlan =
+      PlanBuilder(ids)
+          .values({queries})
+          .limit(0, 10, false)
+          .vectorSearchJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(ids).values({indexes}).limit(0, 10, false).planNode(),
+              "t1",
+              "u1",
+              /*k=*/5,
+              {"t0", "id", "score"},
+              "id",
+              "score",
+              core::JoinType::kLeft,
+              {{"ivf.nprobe", "4"}})
+          .planNode();
   const std::vector<core::PlanNodePtr> planOnly{
-      std::make_shared<core::RPCNode>(
-          "rpc",
-          gpuRegion().planNode(),
-          std::make_shared<core::CallTypedExpr>(
-              BIGINT(),
-              std::vector<core::TypedExprPtr>{
-                  std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0")},
-              "test_rpc"),
-          "r",
-          ROW({"c0", "c1", "r"}, {BIGINT(), BIGINT(), BIGINT()})),
+      rpcPlan,
+      vectorSearchPlan,
       std::make_shared<core::StateHashJoinNode>(
           "state_join",
           "state",
@@ -661,6 +775,7 @@ TEST_F(PlanRewriterTest, cpuNodesAboveGpuRegionsAreRebuilt) {
     for (const auto& source : physical->sources()) {
       EXPECT_TRUE(source->is<CudfToVeloxNode>());
     }
+    return physical;
   };
   for (const auto& plan : executable) {
     checkRewrite(plan);
@@ -672,7 +787,56 @@ TEST_F(PlanRewriterTest, cpuNodesAboveGpuRegionsAreRebuilt) {
             {legacy.results}, {physical.results}));
   }
   for (const auto& plan : planOnly) {
-    checkRewrite(plan);
+    auto physical = checkRewrite(plan);
+    if (const auto* rpc = dynamic_cast<const core::RPCNode*>(physical.get())) {
+      EXPECT_EQ(rpc->executionPhase(), "SUBMIT");
+    }
+  }
+
+  // LazyDereferenceNode derives from ProjectNode without its own accept()
+  // overload; verify it is rebuilt as LazyDereferenceNode when kept on CPU.
+  {
+    const auto fieldType = ROW("a", BIGINT());
+    const auto structType = ROW("s", fieldType);
+    auto ucxMerge = std::make_shared<core::MergeExchangeNode>(
+        "ucx_merge",
+        structType,
+        std::vector<core::FieldAccessTypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(fieldType, "s")},
+        std::vector<core::SortOrder>{core::kAscNullsLast},
+        "Presto",
+        std::string{core::TransportKind::kUcx});
+    auto lazy = std::make_shared<core::LazyDereferenceNode>(
+        "lazy",
+        std::vector<std::string>{"s"},
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(fieldType, "s")},
+        ucxMerge);
+    auto cpuQueryCtx = core::QueryCtx::create(
+        executor_.get(),
+        core::QueryConfig({{CudfConfig::kCudfEnabled, "false"}}));
+    auto physical = rewriteToCudfPlan(lazy, cpuQueryCtx);
+    EXPECT_TRUE(typeid(*physical) == typeid(core::LazyDereferenceNode));
+    ASSERT_EQ(physical->sources().size(), 1);
+    EXPECT_TRUE(physical->sources()[0]->is<CudfToVeloxNode>());
+  }
+
+  // An unregistered subclass of a core node is rejected rather than sliced to
+  // its base class.
+  {
+    class UnregisteredRowNumberNode final : public core::RowNumberNode {
+     public:
+      using core::RowNumberNode::RowNumberNode;
+    };
+    auto custom = std::make_shared<UnregisteredRowNumberNode>(
+        "custom_rn",
+        std::vector<core::FieldAccessTypedExprPtr>{},
+        std::nullopt,
+        /*generateRowNumber=*/true,
+        gpuRegion().planNode());
+    VELOX_ASSERT_THROW(
+        rewriteToCudfPlan(custom),
+        "No rebuilding support for RowNumber (custom_rn)");
   }
 }
 

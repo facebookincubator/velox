@@ -44,6 +44,31 @@ Descriptor findDescriptor(const core::PlanNode& node) {
   return nullptr;
 }
 
+// The operators index the sorting orders by sorting key, so a node with
+// fewer orders than keys would read past the end.
+void checkSortingKeys(
+    std::string_view nodeName,
+    const std::vector<core::FieldAccessTypedExprPtr>& sortingKeys,
+    const std::vector<core::SortOrder>& sortingOrders) {
+  VELOX_USER_CHECK(
+      !sortingKeys.empty(), "{} must specify sorting keys", nodeName);
+  VELOX_USER_CHECK_EQ(
+      sortingKeys.size(),
+      sortingOrders.size(),
+      "Number of sorting keys and sorting orders in {} must be the same",
+      nodeName);
+  std::unordered_set<std::string> names;
+  for (const auto& sortingKey : sortingKeys) {
+    VELOX_USER_CHECK_NOT_NULL(
+        sortingKey, "{} sorting keys must not be null", nodeName);
+    VELOX_USER_CHECK(
+        names.insert(sortingKey->name()).second,
+        "{} must specify unique sorting keys. Found duplicate key: {}",
+        nodeName,
+        sortingKey->name());
+  }
+}
+
 CudfPlanNodeTraits deviceTraits(size_t sources) {
   return {
       std::vector<InputRepresentation>(sources, InputRepresentation::kCudf),
@@ -69,6 +94,66 @@ void unregisterCudfPlanNodeDescriptor(const std::string& name) {
   std::lock_guard lock(descriptorMutex);
   std::erase_if(
       descriptors, [&](const auto& entry) { return entry.first == name; });
+}
+
+CudfHashJoinNode::CudfHashJoinNode(
+    const core::PlanNodeId& id,
+    core::PlanNodePtr probeSource,
+    core::PlanNodePtr buildSource,
+    RowTypePtr outputType,
+    core::JoinType joinType,
+    bool nullAware,
+    std::vector<core::FieldAccessTypedExprPtr> leftKeys,
+    std::vector<core::FieldAccessTypedExprPtr> rightKeys,
+    core::TypedExprPtr filter)
+    : CudfPlanNode(id),
+      joinType_(joinType),
+      nullAware_(nullAware),
+      leftKeys_(std::move(leftKeys)),
+      rightKeys_(std::move(rightKeys)),
+      filter_(std::move(filter)),
+      sources_{std::move(probeSource), std::move(buildSource)},
+      outputType_(std::move(outputType)) {
+  std::string reason;
+  VELOX_USER_CHECK(
+      isHashJoinSupportedByCudf(
+          joinType_, nullAware_, filter_ != nullptr, &reason),
+      "{}",
+      reason);
+}
+
+CudfOrderByNode::CudfOrderByNode(
+    const core::PlanNodeId& id,
+    core::PlanNodePtr source,
+    RowTypePtr outputType,
+    std::vector<core::FieldAccessTypedExprPtr> sortingKeys,
+    std::vector<core::SortOrder> sortingOrders,
+    bool isPartial)
+    : CudfUnaryPlanNode(id, std::move(source), std::move(outputType)),
+      sortingKeys_(std::move(sortingKeys)),
+      sortingOrders_(std::move(sortingOrders)),
+      isPartial_(isPartial) {
+  checkSortingKeys("CudfOrderBy", sortingKeys_, sortingOrders_);
+}
+
+CudfTopNNode::CudfTopNNode(
+    const core::PlanNodeId& id,
+    core::PlanNodePtr source,
+    RowTypePtr outputType,
+    std::vector<core::FieldAccessTypedExprPtr> sortingKeys,
+    std::vector<core::SortOrder> sortingOrders,
+    int32_t count,
+    bool isPartial)
+    : CudfUnaryPlanNode(id, std::move(source), std::move(outputType)),
+      sortingKeys_(std::move(sortingKeys)),
+      sortingOrders_(std::move(sortingOrders)),
+      count_(count),
+      isPartial_(isPartial) {
+  checkSortingKeys("CudfTopN", sortingKeys_, sortingOrders_);
+  VELOX_USER_CHECK_GT(
+      count_,
+      0,
+      "CudfTopN must specify greater than zero number of rows to keep");
 }
 
 // static

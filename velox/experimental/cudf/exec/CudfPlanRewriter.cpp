@@ -41,136 +41,397 @@ struct RewriteResult {
   bool hasOutput{true};
 };
 
-// Returns 'node' as a 'T' only when 'T' is its exact type. Rebuilding a
-// subclass through the base class Builder would drop the subclass.
-template <typename T>
-std::shared_ptr<const T> asExactly(const core::PlanNodePtr& node) {
-  if (typeid(*node) != typeid(T)) {
-    return nullptr;
-  }
-  return std::static_pointer_cast<const T>(node);
-}
+struct RebuildContext : public core::PlanNodeVisitorContext {
+  const core::PlanNodePtr& node;
+  const std::vector<core::PlanNodePtr>& sources;
+  core::PlanNodePtr rebuilt;
 
-template <typename T>
-core::PlanNodePtr rebuildWithSource(
-    const core::PlanNodePtr& node,
-    const std::vector<core::PlanNodePtr>& sources) {
-  if (auto typed = asExactly<T>(node)) {
-    VELOX_CHECK_EQ(sources.size(), 1);
-    return typename T::Builder(*typed).source(sources[0]).build();
-  }
-  return nullptr;
-}
-
-template <typename T>
-core::PlanNodePtr rebuildWithLeftAndRight(
-    const core::PlanNodePtr& node,
-    const std::vector<core::PlanNodePtr>& sources) {
-  if (auto typed = asExactly<T>(node)) {
-    VELOX_CHECK_EQ(sources.size(), 2);
-    return
-        typename T::Builder(*typed).left(sources[0]).right(sources[1]).build();
-  }
-  return nullptr;
-}
-
-template <typename T>
-core::PlanNodePtr rebuildWithSources(
-    const core::PlanNodePtr& node,
-    const std::vector<core::PlanNodePtr>& sources) {
-  if (auto typed = asExactly<T>(node)) {
-    return typename T::Builder(*typed).sources(sources).build();
-  }
-  return nullptr;
-}
+  RebuildContext(
+      const core::PlanNodePtr& nodeIn,
+      const std::vector<core::PlanNodePtr>& sourcesIn)
+      : node(nodeIn), sources(sourcesIn) {}
+};
 
 // Rebuilds a core plan node that stays on the CPU with rewritten sources.
-// Returns nullptr for any other node type.
-core::PlanNodePtr rebuildCoreNode(
-    const core::PlanNodePtr& node,
-    const std::vector<core::PlanNodePtr>& sources) {
-  using Rebuild = core::PlanNodePtr (*)(
-      const core::PlanNodePtr&, const std::vector<core::PlanNodePtr>&);
-  static const Rebuild kRebuilders[] = {
-      rebuildWithSource<core::FilterNode>,
-      rebuildWithSource<core::ProjectNode>,
-      rebuildWithSource<core::AggregationNode>,
-      rebuildWithSource<core::TableWriteNode>,
-      rebuildWithSource<core::TableWriteMergeNode>,
-      rebuildWithSource<core::ExpandNode>,
-      rebuildWithSource<core::GroupIdNode>,
-      rebuildWithSource<core::PartitionedOutputNode>,
-      rebuildWithSource<core::OrderByNode>,
-      rebuildWithSource<core::TopNNode>,
-      rebuildWithSource<core::LimitNode>,
-      rebuildWithSource<core::UnnestNode>,
-      rebuildWithSource<core::EnforceSingleRowNode>,
-      rebuildWithSource<core::AssignUniqueIdNode>,
-      rebuildWithSource<core::WindowNode>,
-      rebuildWithSource<core::RowNumberNode>,
-      rebuildWithSource<core::MarkDistinctNode>,
-      rebuildWithSource<core::MarkSortedNode>,
-      rebuildWithSource<core::TopNRowNumberNode>,
-      rebuildWithLeftAndRight<core::HashJoinNode>,
-      rebuildWithLeftAndRight<core::MergeJoinNode>,
-      rebuildWithLeftAndRight<core::IndexLookupJoinNode>,
-      rebuildWithLeftAndRight<core::NestedLoopJoinNode>,
-      rebuildWithLeftAndRight<core::SpatialJoinNode>,
-      rebuildWithSources<core::LocalMergeNode>,
-      rebuildWithSources<core::LocalPartitionNode>,
-      rebuildWithSources<core::MixedUnionNode>,
-  };
-  for (auto rebuild : kRebuilders) {
-    if (auto rebuilt = rebuild(node, sources)) {
-      return rebuilt;
+// Deriving from PlanNodeVisitor makes adding a new core PlanNode a compile
+// error here rather than a runtime failure. Each overload verifies exact
+// dynamic type so subclasses are not silently sliced to their base class.
+class CoreNodeRebuilder : public core::PlanNodeVisitor {
+ public:
+  void visit(
+      const core::AggregationNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSource(node, context);
+  }
+
+  void visit(
+      const core::ArrowStreamNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildLeaf(node, context);
+  }
+
+  void visit(
+      const core::AssignUniqueIdNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSource(node, context);
+  }
+
+  void visit(
+      const core::EnforceSingleRowNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSource(node, context);
+  }
+
+  void visit(
+      const core::ExchangeNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildLeaf(node, context);
+  }
+
+  void visit(
+      const core::ExpandNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSource(node, context);
+  }
+
+  void visit(
+      const core::FilterNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSource(node, context);
+  }
+
+  void visit(
+      const core::GroupIdNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSource(node, context);
+  }
+
+  void visit(
+      const core::HashJoinNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithLeftAndRight(node, context);
+  }
+
+  void visit(
+      const core::IndexLookupJoinNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithLeftAndRight(node, context);
+  }
+
+  void visit(const core::LimitNode& node, core::PlanNodeVisitorContext& context)
+      const override {
+    rebuildWithSource(node, context);
+  }
+
+  void visit(
+      const core::LocalMergeNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSources(node, context);
+  }
+
+  void visit(
+      const core::LocalPartitionNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSources(node, context);
+  }
+
+  void visit(
+      const core::MarkDistinctNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSource(node, context);
+  }
+
+  void visit(
+      const core::EnforceDistinctNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    if (!isExactly<core::EnforceDistinctNode>(node)) {
+      return;
+    }
+    auto& ctx = static_cast<RebuildContext&>(context);
+    VELOX_CHECK_EQ(ctx.sources.size(), 1);
+    ctx.rebuilt = std::make_shared<core::EnforceDistinctNode>(
+        node.id(),
+        node.distinctKeys(),
+        node.preGroupedKeys(),
+        node.errorMessage(),
+        ctx.sources[0]);
+  }
+
+  void visit(
+      const core::MarkSortedNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSource(node, context);
+  }
+
+  void visit(
+      const core::MergeExchangeNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildLeaf(node, context);
+  }
+
+  void visit(
+      const core::MergeJoinNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithLeftAndRight(node, context);
+  }
+
+  void visit(
+      const core::NestedLoopJoinNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithLeftAndRight(node, context);
+  }
+
+  void visit(
+      const core::SpatialJoinNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithLeftAndRight(node, context);
+  }
+
+  void visit(
+      const core::VectorSearchJoinNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    if (!isExactly<core::VectorSearchJoinNode>(node)) {
+      return;
+    }
+    auto& ctx = static_cast<RebuildContext&>(context);
+    VELOX_CHECK_EQ(ctx.sources.size(), 2);
+    ctx.rebuilt = std::make_shared<core::VectorSearchJoinNode>(
+        node.id(),
+        node.joinType(),
+        node.leftKeys(),
+        node.rightKeys(),
+        node.indexSide(),
+        node.embedding(),
+        node.index(),
+        node.format(),
+        node.metric(),
+        node.k(),
+        node.searchOptions(),
+        node.idName(),
+        node.scoreName(),
+        ctx.sources[0],
+        ctx.sources[1],
+        node.outputType());
+  }
+
+  void visit(
+      const core::OrderByNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSource(node, context);
+  }
+
+  void visit(
+      const core::PartitionedOutputNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSource(node, context);
+  }
+
+  void visit(
+      const core::ProjectNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    if (isExactly<core::LazyDereferenceNode>(node)) {
+      auto& ctx = static_cast<RebuildContext&>(context);
+      VELOX_CHECK_EQ(ctx.sources.size(), 1);
+      const auto& lazy = static_cast<const core::LazyDereferenceNode&>(node);
+      ctx.rebuilt = std::make_shared<core::LazyDereferenceNode>(
+          lazy.id(), lazy.names(), lazy.projections(), ctx.sources[0]);
+      return;
+    }
+    rebuildWithSource(node, context);
+  }
+
+  void visit(
+      const core::ParallelProjectNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    if (!isExactly<core::ParallelProjectNode>(node)) {
+      return;
+    }
+    auto& ctx = static_cast<RebuildContext&>(context);
+    VELOX_CHECK_EQ(ctx.sources.size(), 1);
+    ctx.rebuilt = std::make_shared<core::ParallelProjectNode>(
+        node.id(),
+        node.exprNames(),
+        node.exprGroups(),
+        node.noLoadIdentities(),
+        ctx.sources[0]);
+  }
+
+  void visit(
+      const core::RowNumberNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSource(node, context);
+  }
+
+  void visit(
+      const core::TableScanNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildLeaf(node, context);
+  }
+
+  void visit(
+      const core::TableWriteNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSource(node, context);
+  }
+
+  void visit(
+      const core::TableWriteMergeNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSource(node, context);
+  }
+
+  void visit(const core::TopNNode& node, core::PlanNodeVisitorContext& context)
+      const override {
+    rebuildWithSource(node, context);
+  }
+
+  void visit(
+      const core::TopNRowNumberNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSource(node, context);
+  }
+
+  void visit(
+      const core::TraceScanNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildLeaf(node, context);
+  }
+
+  void visit(
+      const core::UnnestNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSource(node, context);
+  }
+
+  void visit(
+      const core::ValuesNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildLeaf(node, context);
+  }
+
+  void visit(
+      const core::WindowNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSource(node, context);
+  }
+
+  void visit(
+      const core::MixedUnionNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildWithSources(node, context);
+  }
+
+  void visit(
+      const core::FixedPointNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildLeaf(node, context);
+  }
+
+  void visit(
+      const core::StateSourceNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    rebuildLeaf(node, context);
+  }
+
+  void visit(
+      const core::StateHashJoinNode& node,
+      core::PlanNodeVisitorContext& context) const override {
+    if (!isExactly<core::StateHashJoinNode>(node)) {
+      return;
+    }
+    auto& ctx = static_cast<RebuildContext&>(context);
+    VELOX_CHECK_EQ(ctx.sources.size(), 1);
+    ctx.rebuilt = std::make_shared<core::StateHashJoinNode>(
+        node.id(),
+        node.stateName(),
+        node.probeKeys(),
+        node.outputType(),
+        ctx.sources[0]);
+  }
+
+  void visit(const core::PlanNode& node, core::PlanNodeVisitorContext& context)
+      const override {
+    // RPCNode does not override PlanNode::accept(), so it dispatches here.
+    if (isExactly<core::RPCNode>(node)) {
+      auto& ctx = static_cast<RebuildContext&>(context);
+      VELOX_CHECK_EQ(ctx.sources.size(), 1);
+      const auto& rpc = static_cast<const core::RPCNode&>(node);
+      ctx.rebuilt = std::make_shared<core::RPCNode>(
+          rpc.id(),
+          ctx.sources[0],
+          rpc.call(),
+          rpc.outputColumn(),
+          rpc.outputType(),
+          rpc.streamingMode(),
+          rpc.dispatchBatchSize(),
+          rpc.executionPhase());
     }
   }
 
-  // Core nodes without a Builder.
-  if (auto lazy = asExactly<core::LazyDereferenceNode>(node)) {
-    VELOX_CHECK_EQ(sources.size(), 1);
-    return std::make_shared<core::LazyDereferenceNode>(
-        lazy->id(), lazy->names(), lazy->projections(), sources[0]);
+ private:
+  template <typename T>
+  static bool isExactly(const core::PlanNode& node) {
+    return typeid(node) == typeid(T);
   }
-  if (auto project = asExactly<core::ParallelProjectNode>(node)) {
-    VELOX_CHECK_EQ(sources.size(), 1);
-    return std::make_shared<core::ParallelProjectNode>(
-        project->id(),
-        project->exprNames(),
-        project->exprGroups(),
-        project->noLoadIdentities(),
-        sources[0]);
+
+  template <typename T>
+  static void rebuildWithSource(
+      const T& node,
+      core::PlanNodeVisitorContext& context) {
+    if (!isExactly<T>(node)) {
+      return;
+    }
+    auto& ctx = static_cast<RebuildContext&>(context);
+    VELOX_CHECK_EQ(ctx.sources.size(), 1);
+    ctx.rebuilt = typename T::Builder(node).source(ctx.sources[0]).build();
   }
-  if (auto distinct = asExactly<core::EnforceDistinctNode>(node)) {
-    VELOX_CHECK_EQ(sources.size(), 1);
-    return std::make_shared<core::EnforceDistinctNode>(
-        distinct->id(),
-        distinct->distinctKeys(),
-        distinct->preGroupedKeys(),
-        distinct->errorMessage(),
-        sources[0]);
+
+  template <typename T>
+  static void rebuildWithLeftAndRight(
+      const T& node,
+      core::PlanNodeVisitorContext& context) {
+    if (!isExactly<T>(node)) {
+      return;
+    }
+    auto& ctx = static_cast<RebuildContext&>(context);
+    VELOX_CHECK_EQ(ctx.sources.size(), 2);
+    ctx.rebuilt = typename T::Builder(node)
+                      .left(ctx.sources[0])
+                      .right(ctx.sources[1])
+                      .build();
   }
-  if (auto rpc = asExactly<core::RPCNode>(node)) {
-    VELOX_CHECK_EQ(sources.size(), 1);
-    return std::make_shared<core::RPCNode>(
-        rpc->id(),
-        sources[0],
-        rpc->call(),
-        rpc->outputColumn(),
-        rpc->outputType(),
-        rpc->streamingMode(),
-        rpc->dispatchBatchSize());
+
+  template <typename T>
+  static void rebuildWithSources(
+      const T& node,
+      core::PlanNodeVisitorContext& context) {
+    if (!isExactly<T>(node)) {
+      return;
+    }
+    auto& ctx = static_cast<RebuildContext&>(context);
+    ctx.rebuilt = typename T::Builder(node).sources(ctx.sources).build();
   }
-  if (auto join = asExactly<core::StateHashJoinNode>(node)) {
-    VELOX_CHECK_EQ(sources.size(), 1);
-    return std::make_shared<core::StateHashJoinNode>(
-        join->id(),
-        join->stateName(),
-        join->probeKeys(),
-        join->outputType(),
-        sources[0]);
+
+  template <typename T>
+  static void rebuildLeaf(
+      const T& node,
+      core::PlanNodeVisitorContext& context) {
+    if (!isExactly<T>(node)) {
+      return;
+    }
+    auto& ctx = static_cast<RebuildContext&>(context);
+    VELOX_CHECK(ctx.sources.empty());
+    ctx.rebuilt = ctx.node;
   }
-  return nullptr;
+};
+
+core::PlanNodePtr rebuildCoreNode(
+    const core::PlanNodePtr& node,
+    const std::vector<core::PlanNodePtr>& sources) {
+  static const CoreNodeRebuilder kRebuilder;
+  RebuildContext context{node, sources};
+  node->accept(kRebuilder, context);
+  return context.rebuilt;
 }
 
 bool typesSupported(const core::PlanNodePtr& node, std::string* reason) {
@@ -288,9 +549,9 @@ class Rewriter {
       auto source = rewriteNode(output->sources()[0], inputMode);
       VELOX_USER_CHECK(source.hasOutput);
       return {
-          core::PartitionedOutputNode::Builder(*output)
-              .source(source.node)
-              .build(),
+          source.node == output->sources()[0]
+              ? node
+              : rebuildCpuNode(node, {source.node}),
           inputMode,
           false};
     }
@@ -343,7 +604,12 @@ class Rewriter {
         return rewriteFilterProject(filter, project);
       }
     }
+    return rewriteAlone(node);
+  }
 
+  // Places 'node' by itself: on the GPU if a definition lowers it and its
+  // placement rule allows it, otherwise on the CPU.
+  RewriteResult rewriteAlone(const core::PlanNodePtr& node) {
     std::string reason;
     if (!typesSupported(node, &reason)) {
       return rewriteGenericNode(node, reason);
@@ -384,8 +650,21 @@ class Rewriter {
     // For a host Filter, LocalPlanner can still fuse the pair on CPU.
     if (facebook::velox::cudf_velox::detail::customCudfPlanNodeTraits(
             filter, *queryCtx_)) {
+      // Keeping the Project on the CPU is our choice, not something cuDF
+      // cannot do, so it must not fail a query that disables CPU fallback.
+      if (!cpuFallbackAllowed()) {
+        return rewriteAlone(project);
+      }
       return rewriteGenericNode(
           project, "Filter has an application-provided vector contract");
+    }
+
+    // The fused cuDF FilterProject implements the nodes the definitions list.
+    // A subclass of FilterNode or ProjectNode they do not list may add
+    // behaviour the fused operator would drop.
+    if (detail::findCudfPlanNodeLowering(filter) == nullptr ||
+        detail::findCudfPlanNodeLowering(project) == nullptr) {
+      return rewriteAlone(project);
     }
 
     std::string reason;
@@ -464,6 +743,12 @@ class Rewriter {
         CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled);
   }
 
+  bool cpuFallbackAllowed() const {
+    return queryCtx_->queryConfig().get<bool>(
+        CudfConfig::kCudfAllowCpuFallback,
+        CudfConfig::getInstance().allowCpuFallback);
+  }
+
   void checkCpuFallback(
       const core::PlanNodePtr& node,
       const std::string& reason) const {
@@ -471,9 +756,7 @@ class Rewriter {
       return;
     }
     VELOX_USER_CHECK(
-        queryCtx_->queryConfig().get<bool>(
-            CudfConfig::kCudfAllowCpuFallback,
-            CudfConfig::getInstance().allowCpuFallback),
+        cpuFallbackAllowed(),
         "CPU fallback is disabled for unsupported plan node {} ({}): {}",
         node->name(),
         node->id(),

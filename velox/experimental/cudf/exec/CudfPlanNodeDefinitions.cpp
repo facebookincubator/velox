@@ -37,6 +37,8 @@
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/Task.h"
 
+#include <typeinfo>
+
 namespace facebook::velox::cudf_velox {
 namespace {
 
@@ -335,11 +337,19 @@ struct MarkDistinctDefinition {
   using CoreNode = core::MarkDistinctNode;
   using CudfNode = CudfMarkDistinctNode;
 
-  static constexpr auto canRunOnGpu = noPlacementRule<CoreNode>;
+  static bool canRunOnGpu(
+      const std::shared_ptr<const CoreNode>& node,
+      core::QueryCtx* /*queryCtx*/,
+      memory::MemoryPool* /*pool*/,
+      std::string* reason) {
+    return canRunMarkDistinctOnGpu(*node, reason);
+  }
 
   static std::shared_ptr<const CudfNode> lower(
       const std::shared_ptr<const CoreNode>& node,
       core::PlanNodePtr source) {
+    VELOX_CHECK(
+        node->masks().empty(), "MarkDistinct masks are not supported by cuDF");
     return std::make_shared<CudfNode>(
         node->id(),
         std::move(source),
@@ -527,13 +537,6 @@ struct LocalPartitionDefinition {
       core::QueryCtx* /*queryCtx*/,
       memory::MemoryPool* /*pool*/,
       std::string* reason) {
-    // CudfLocalPartitionNode cannot carry scale-writer state.
-    if (node->scaleWriter()) {
-      if (reason != nullptr) {
-        *reason = "LocalPartition scale writer is unsupported by cuDF";
-      }
-      return false;
-    }
     return canRunLocalPartitionOnGpu(node, reason);
   }
 
@@ -611,14 +614,22 @@ std::shared_ptr<const typename TDefinition::CoreNode> coreNode(
   return typed;
 }
 
+// Returns whether 'node' is a 'T' and not a subclass of 'T'.
+template <typename T>
+bool isExactly(const core::PlanNode& node) {
+  return typeid(node) == typeid(T);
+}
+
 // The part of lowering() and unaryLowering() that does not depend on how
-// lower() takes the sources.
-template <typename TDefinition>
+// lower() takes the sources. The definition applies to its core plan node and
+// to 'TSubclasses' only. Any other subclass of the core plan node may add
+// behaviour that the cuDF plan node does not have, so it stays on the CPU.
+template <typename TDefinition, typename... TSubclasses>
 Entry coreNodeAndPlacement() {
   Entry entry;
   entry.isCoreNode = [](const core::PlanNodePtr& node) {
-    return std::dynamic_pointer_cast<const typename TDefinition::CoreNode>(
-               node) != nullptr;
+    return isExactly<typename TDefinition::CoreNode>(*node) ||
+        (isExactly<TSubclasses>(*node) || ...);
   };
   entry.lowering.canRunOnGpu = [](const core::PlanNodePtr& node,
                                   core::QueryCtx* queryCtx,
@@ -645,9 +656,9 @@ Entry lowering() {
 }
 
 // Same for a node with one source, where lower() takes that source.
-template <typename TDefinition>
+template <typename TDefinition, typename... TSubclasses>
 Entry unaryLowering() {
-  auto entry = coreNodeAndPlacement<TDefinition>();
+  auto entry = coreNodeAndPlacement<TDefinition, TSubclasses...>();
   entry.lowering.lower =
       [](const core::PlanNodePtr& node,
          std::vector<core::PlanNodePtr> sources) -> core::PlanNodePtr {
@@ -707,7 +718,8 @@ const std::vector<Entry>& definitions() {
 
       // Two core plan nodes that share a cuDF plan node and its operator.
       unaryLowering<FilterDefinition>(),
-      unaryLowering<ProjectDefinition>(),
+      // lowerFilterProject() keeps what a LazyDereferenceNode adds.
+      unaryLowering<ProjectDefinition, core::LazyDereferenceNode>(),
       operatorFactory<FilterProjectDefinition>(),
 
       // Joins and local exchanges. Their definitions say where their operators

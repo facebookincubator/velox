@@ -194,6 +194,8 @@ class CudfAggregationNode : public CudfUnaryPlanNode {
 
 class CudfHashJoinNode : public CudfPlanNode {
  public:
+  /// Throws if cuDF does not implement the join, see
+  /// isHashJoinSupportedByCudf().
   CudfHashJoinNode(
       const core::PlanNodeId& id,
       core::PlanNodePtr probeSource,
@@ -203,15 +205,7 @@ class CudfHashJoinNode : public CudfPlanNode {
       bool nullAware,
       std::vector<core::FieldAccessTypedExprPtr> leftKeys,
       std::vector<core::FieldAccessTypedExprPtr> rightKeys,
-      core::TypedExprPtr filter)
-      : CudfPlanNode(id),
-        joinType_(joinType),
-        nullAware_(nullAware),
-        leftKeys_(std::move(leftKeys)),
-        rightKeys_(std::move(rightKeys)),
-        filter_(std::move(filter)),
-        sources_{std::move(probeSource), std::move(buildSource)},
-        outputType_(std::move(outputType)) {}
+      core::TypedExprPtr filter);
 
   const RowTypePtr& outputType() const override {
     return outputType_;
@@ -373,17 +367,15 @@ class CudfNestedLoopJoinNode : public CudfPlanNode {
 
 class CudfOrderByNode : public CudfUnaryPlanNode {
  public:
+  /// Throws if there is no sorting key, a sorting key is null or repeated, or
+  /// the number of sorting orders differs from the number of sorting keys.
   CudfOrderByNode(
       const core::PlanNodeId& id,
       core::PlanNodePtr source,
       RowTypePtr outputType,
       std::vector<core::FieldAccessTypedExprPtr> sortingKeys,
       std::vector<core::SortOrder> sortingOrders,
-      bool isPartial)
-      : CudfUnaryPlanNode(id, std::move(source), std::move(outputType)),
-        sortingKeys_(std::move(sortingKeys)),
-        sortingOrders_(std::move(sortingOrders)),
-        isPartial_(isPartial) {}
+      bool isPartial);
 
   core::PlanNodePtr withSources(
       std::vector<core::PlanNodePtr> sources) const override {
@@ -422,6 +414,8 @@ class CudfOrderByNode : public CudfUnaryPlanNode {
 
 class CudfTopNNode : public CudfUnaryPlanNode {
  public:
+  /// Throws for the sorting keys and orders CudfOrderByNode rejects, and if
+  /// 'count' is not positive.
   CudfTopNNode(
       const core::PlanNodeId& id,
       core::PlanNodePtr source,
@@ -429,12 +423,7 @@ class CudfTopNNode : public CudfUnaryPlanNode {
       std::vector<core::FieldAccessTypedExprPtr> sortingKeys,
       std::vector<core::SortOrder> sortingOrders,
       int32_t count,
-      bool isPartial)
-      : CudfUnaryPlanNode(id, std::move(source), std::move(outputType)),
-        sortingKeys_(std::move(sortingKeys)),
-        sortingOrders_(std::move(sortingOrders)),
-        count_(count),
-        isPartial_(isPartial) {}
+      bool isPartial);
 
   core::PlanNodePtr withSources(
       std::vector<core::PlanNodePtr> sources) const override {
@@ -575,6 +564,12 @@ class CudfLocalMergeNode : public core::LocalMergeNode {
     return "CudfLocalMerge";
   }
 
+  /// Throws, like CudfPlanNode::serialize(). The core base class would write
+  /// its fields under a name that has no deserializer.
+  folly::dynamic serialize() const override {
+    VELOX_UNSUPPORTED("CudfLocalMerge plan node is not serializable");
+  }
+
   core::PlanNodePtr withSources(std::vector<core::PlanNodePtr> sources) const {
     VELOX_USER_CHECK(!sources.empty());
     auto type = sources[0]->outputType();
@@ -606,6 +601,12 @@ class CudfLocalPartitionNode : public core::LocalPartitionNode {
 
   std::string_view name() const override {
     return "CudfLocalPartition";
+  }
+
+  /// Throws, like CudfPlanNode::serialize(). The core base class would write
+  /// its fields under a name that has no deserializer.
+  folly::dynamic serialize() const override {
+    VELOX_UNSUPPORTED("CudfLocalPartition plan node is not serializable");
   }
 
   /// Returns a cuDF local partition that partitions like 'node' and reads

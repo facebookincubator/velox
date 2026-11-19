@@ -44,6 +44,12 @@ class CudfPlanNode : public core::PlanNode {
  public:
   using PlanNode::PlanNode;
 
+  /// cuDF plan nodes cannot be serialized yet. Throws rather than writing
+  /// only the name, ID and sources that the base class knows.
+  folly::dynamic serialize() const override {
+    VELOX_UNSUPPORTED("{} plan node is not serializable", name());
+  }
+
   virtual CudfPlanNodeTraits cudfTraits() const = 0;
 
   /// Returns the same physical operation with the supplied sources. Retains
