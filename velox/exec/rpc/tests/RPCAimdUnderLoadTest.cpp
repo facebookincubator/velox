@@ -696,58 +696,6 @@ class RPCAimdUnderLoadTest : public OperatorTestBase {
     CapacityRPCFunction::resetBackends();
     OperatorTestBase::TearDown();
   }
-
-  core::PlanNodePtr makeRPCNode(
-      const core::PlanNodePtr& source,
-      const std::string& functionName) {
-    const auto& sourceType = source->outputType();
-
-    // The sole argument is the prompt column, read from the source at runtime.
-    std::vector<core::TypedExprPtr> callInputs;
-    callInputs.push_back(
-        std::make_shared<core::FieldAccessTypedExpr>(
-            sourceType->findChild("prompt"), "prompt"));
-    auto call = std::make_shared<core::CallTypedExpr>(
-        VARCHAR(), std::move(callInputs), functionName);
-
-    auto outputNames = sourceType->names();
-    auto outputTypes = sourceType->children();
-    outputNames.emplace_back("__rpc_result");
-    outputTypes.push_back(VARCHAR());
-    auto outputType = ROW(std::move(outputNames), std::move(outputTypes));
-
-    // Default streaming mode is PER_ROW.
-    return std::make_shared<core::RPCNode>(
-        "rpc-0", source, std::move(call), "__rpc_result", outputType);
-  }
-
-  core::PlanNodePtr makeBatchRPCNode(
-      const core::PlanNodePtr& source,
-      int32_t dispatchBatchSize,
-      const std::string& functionName) {
-    const auto& sourceType = source->outputType();
-    std::vector<core::TypedExprPtr> callInputs;
-    callInputs.push_back(
-        std::make_shared<core::FieldAccessTypedExpr>(
-            sourceType->findChild("prompt"), "prompt"));
-    auto call = std::make_shared<core::CallTypedExpr>(
-        VARCHAR(), std::move(callInputs), functionName);
-
-    auto outputNames = sourceType->names();
-    auto outputTypes = sourceType->children();
-    outputNames.emplace_back("__rpc_result");
-    outputTypes.push_back(VARCHAR());
-    auto outputType = ROW(std::move(outputNames), std::move(outputTypes));
-
-    return std::make_shared<core::RPCNode>(
-        "rpc-0",
-        source,
-        std::move(call),
-        "__rpc_result",
-        outputType,
-        RPCStreamingMode::kBatch,
-        dispatchBatchSize);
-  }
 };
 
 TEST_F(RPCAimdUnderLoadTest, windowAndRateLimiterBackOffThenRecover) {
@@ -766,12 +714,10 @@ TEST_F(RPCAimdUnderLoadTest, windowAndRateLimiterBackOffThenRecover) {
   auto input =
       makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
-  auto plan =
-      makeRPCNode(PlanBuilder().values({input}).planNode(), "burst_rpc");
+  auto plan = PlanBuilder().values(input).rpc("burst_rpc(prompt)").planNode();
 
   std::shared_ptr<Task> task;
   auto result = AssertQueryBuilder(plan)
-                    .maxDrivers(1)
                     .config("rpc.ratelimiter.adaptive_enabled", "true")
                     .config("rpc.ratelimiter.max_limit", kMaxLimit)
                     .config("rpc.ratelimiter.min_limit", kMinLimit)
@@ -795,15 +741,12 @@ TEST_F(RPCAimdUnderLoadTest, windowAndRateLimiterBackOffThenRecover) {
   EXPECT_EQ(numNulls, kBurstRows)
       << "exactly the burst window should error out to NULL";
 
-  auto planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(planStats.count("rpc-0"), 1);
-  const auto& customStats = planStats.at("rpc-0").customStats;
+  const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
 
   // Returns the stat's summed value, or -1 when the stat was never emitted
   // (several are only emitted when the corresponding event actually happened).
   auto statSum = [&](const std::string& key) -> int64_t {
-    auto it = customStats.find(key);
-    return it == customStats.end() ? -1 : it->second.sum;
+    return stats.hasCustomStat(key) ? stats.customSum(key) : -1;
   };
 
   // (1) The mock injected exactly the burst window of rate-limit errors, and
@@ -854,11 +797,12 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesBoundAttemptsToCapacity) {
   auto run = [&](const std::string& functionName) {
     RPCRateLimiterRegistry::global().testingReset();
     CapacityRPCFunction::resetBackends();
-    auto plan =
-        makeRPCNode(PlanBuilder().values({input}).planNode(), functionName);
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .rpc(fmt::format("{}(prompt)", functionName))
+                    .planNode();
     std::shared_ptr<Task> task;
     auto result = AssertQueryBuilder(plan)
-                      .maxDrivers(1)
                       .config("rpc.ratelimiter.adaptive_enabled", "true")
                       .config("rpc.ratelimiter.max_limit", kMaxWindow)
                       .config("rpc.ratelimiter.min_limit", 1)
@@ -871,15 +815,15 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesBoundAttemptsToCapacity) {
     for (vector_size_t i = 0; i < result->size(); ++i) {
       EXPECT_FALSE(results->isNullAt(i)) << "row " << i << " failed";
     }
-    const auto planStats = toPlanStats(task->taskStats());
-    const auto& customStats = planStats.at("rpc-0").customStats;
-    const auto it = customStats.find(RPCOperator::kRpcCapacityRetries);
+    const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
     return Run{
         .numAttempts = CapacityRPCFunction::backendFor(kCapacityStepBackend)
                            ->numAttempts(),
-        .numCapacityRetries = it == customStats.end() ? 0 : it->second.sum,
-        .numBlockedCalls =
-            static_cast<int64_t>(planStats.at("rpc-0").isBlockedTiming.count),
+        .numCapacityRetries =
+            stats.hasCustomStat(RPCOperator::kRpcCapacityRetries)
+            ? stats.customSum(RPCOperator::kRpcCapacityRetries)
+            : 0,
+        .numBlockedCalls = static_cast<int64_t>(stats.isBlockedTiming.count),
     };
   };
 
@@ -912,12 +856,13 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesStopAtBudget) {
   std::vector<StringView> prompts(storage.begin(), storage.end());
   auto input =
       makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
-  auto plan = makeRPCNode(
-      PlanBuilder().values({input}).planNode(), "capacity_exhausted_rpc");
+  auto plan = PlanBuilder()
+                  .values(input)
+                  .rpc("capacity_exhausted_rpc(prompt)")
+                  .planNode();
 
   std::shared_ptr<Task> task;
   auto result = AssertQueryBuilder(plan)
-                    .maxDrivers(1)
                     .config("rpc.ratelimiter.min_limit", 1)
                     .copyResults(pool(), task);
   ASSERT_EQ(result->size(), kCapacityExhaustedRows);
@@ -925,12 +870,11 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesStopAtBudget) {
   for (vector_size_t i = 0; i < result->size(); ++i) {
     EXPECT_TRUE(results->isNullAt(i));
   }
-  const auto planStats = toPlanStats(task->taskStats());
-  const auto& customStats = planStats.at("rpc-0").customStats;
+  const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   EXPECT_EQ(
-      customStats.at(RPCOperator::kRpcErrorKindRateLimited).sum,
+      stats.customSum(RPCOperator::kRpcErrorKindRateLimited),
       kCapacityExhaustedRows);
-  EXPECT_GT(customStats.at(RPCOperator::kRpcCapacityRetries).sum, 0);
+  EXPECT_GT(stats.customSum(RPCOperator::kRpcCapacityRetries), 0);
 }
 
 // A function that returns hints without declaring them in
@@ -939,17 +883,19 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesStopAtBudget) {
 TEST_F(RPCAimdUnderLoadTest, undeclaredCapacityRetriesAreIgnored) {
   auto input = makeNamedRowVector(
       "prompt", makeFlatVector<StringView>({"a", "b", "c", "d"}));
-  auto plan = makeRPCNode(
-      PlanBuilder().values({input}).planNode(), "capacity_undeclared_hint_rpc");
+  auto plan = PlanBuilder()
+                  .values(input)
+                  .rpc("capacity_undeclared_hint_rpc(prompt)")
+                  .planNode();
   std::shared_ptr<Task> task;
-  auto result = AssertQueryBuilder(plan)
-                    .config("rpc.ratelimiter.min_limit", 1)
-                    .copyResults(pool(), task);
-  ASSERT_EQ(result->size(), 4);
-  const auto planStats = toPlanStats(task->taskStats());
-  const auto& customStats = planStats.at("rpc-0").customStats;
-  EXPECT_EQ(customStats.at(RPCOperator::kRpcErrorKindRateLimited).sum, 4);
-  EXPECT_EQ(customStats.count(RPCOperator::kRpcCapacityRetries), 0);
+  ASSERT_EQ(
+      AssertQueryBuilder(plan)
+          .config("rpc.ratelimiter.min_limit", 1)
+          .countResults(task),
+      4);
+  const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
+  EXPECT_EQ(stats.customSum(RPCOperator::kRpcErrorKindRateLimited), 4);
+  EXPECT_FALSE(stats.hasCustomStat(RPCOperator::kRpcCapacityRetries));
   EXPECT_EQ(
       CapacityRPCFunction::backendFor("layer2.test.capacity.undeclared.backend")
           ->numAttempts(),
@@ -967,21 +913,24 @@ TEST_F(RPCAimdUnderLoadTest, batchIgnoresCapacityRetries) {
   std::vector<StringView> prompts(storage.begin(), storage.end());
   auto input =
       makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
-  auto plan = makeBatchRPCNode(
-      PlanBuilder().values({input}).planNode(), 16, "burst_batch_hint_rpc");
+  auto plan = PlanBuilder()
+                  .values(input)
+                  .rpc(
+                      "burst_batch_hint_rpc(prompt)",
+                      RPCStreamingMode::kBatch,
+                      /*dispatchBatchSize=*/16)
+                  .planNode();
   std::shared_ptr<Task> task;
-  auto result = AssertQueryBuilder(plan)
-                    .maxDrivers(1)
-                    .config("rpc.ratelimiter.adaptive_enabled", "true")
-                    .config("rpc.ratelimiter.max_limit", kMaxLimit)
-                    .config("rpc.ratelimiter.min_limit", kMinLimit)
-                    .copyResults(pool(), task);
-  ASSERT_EQ(result->size(), kTotalRows);
-  const auto planStats = toPlanStats(task->taskStats());
-  const auto& customStats = planStats.at("rpc-0").customStats;
-  EXPECT_EQ(
-      customStats.at(RPCOperator::kRpcErrorKindRateLimited).sum, kBurstRows);
-  EXPECT_EQ(customStats.count(RPCOperator::kRpcCapacityRetries), 0);
+  ASSERT_EQ(
+      AssertQueryBuilder(plan)
+          .config("rpc.ratelimiter.adaptive_enabled", "true")
+          .config("rpc.ratelimiter.max_limit", kMaxLimit)
+          .config("rpc.ratelimiter.min_limit", kMinLimit)
+          .countResults(task),
+      kTotalRows);
+  const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
+  EXPECT_EQ(stats.customSum(RPCOperator::kRpcErrorKindRateLimited), kBurstRows);
+  EXPECT_FALSE(stats.hasCustomStat(RPCOperator::kRpcCapacityRetries));
 }
 
 // Several drivers share one backend and one limiter; every row is output
@@ -997,9 +946,10 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesWithSeveralDrivers) {
   std::vector<StringView> prompts(storage.begin(), storage.end());
   auto input =
       makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
-  auto plan = makeRPCNode(
-      PlanBuilder().values({input}, /*parallelizable=*/true).planNode(),
-      "capacity_step_hint_rpc");
+  auto plan = PlanBuilder()
+                  .values({input}, /*parallelizable=*/true)
+                  .rpc("capacity_step_hint_rpc(prompt)")
+                  .planNode();
   std::shared_ptr<Task> task;
   auto result = AssertQueryBuilder(plan)
                     .maxDrivers(kDrivers)
@@ -1014,11 +964,9 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesWithSeveralDrivers) {
     ASSERT_FALSE(results->isNullAt(i)) << "row " << i << " failed";
     EXPECT_EQ(results->valueAt(i).str(), "served:" + inputs->valueAt(i).str());
   }
-  const auto planStats = toPlanStats(task->taskStats());
   EXPECT_GT(
-      planStats.at("rpc-0")
-          .customStats.at(RPCOperator::kRpcCapacityRetries)
-          .sum,
+      PlanNodeStats::extract(task->taskStats(), plan->id())
+          .customSum(RPCOperator::kRpcCapacityRetries),
       0);
 }
 
@@ -1040,11 +988,12 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesKeepRowIdentityAcrossBatches) {
     batches.push_back(
         makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts)));
   }
-  auto plan = makeRPCNode(
-      PlanBuilder().values(batches).planNode(), "capacity_step_hint_rpc");
+  auto plan = PlanBuilder()
+                  .values(batches)
+                  .rpc("capacity_step_hint_rpc(prompt)")
+                  .planNode();
   std::shared_ptr<Task> task;
   auto result = AssertQueryBuilder(plan)
-                    .maxDrivers(1)
                     .config("rpc.ratelimiter.adaptive_enabled", "true")
                     .config("rpc.ratelimiter.max_limit", kMaxWindow)
                     .config("rpc.ratelimiter.min_limit", 1)
@@ -1059,9 +1008,8 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesKeepRowIdentityAcrossBatches) {
     EXPECT_TRUE(seen.insert(inputs->valueAt(i).str()).second);
   }
   EXPECT_GT(
-      PlanNodeStats::extract(task->taskStats(), "rpc-0")
-          .customStats.at(RPCOperator::kRpcCapacityRetries)
-          .sum,
+      PlanNodeStats::extract(task->taskStats(), plan->id())
+          .customSum(RPCOperator::kRpcCapacityRetries),
       0);
 }
 
@@ -1084,15 +1032,17 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesBoundRetainedInput) {
     batches.push_back(
         makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts)));
   }
-  auto plan = makeRPCNode(
-      PlanBuilder().values(batches).planNode(), "capacity_tight_hint_rpc");
-  auto result = AssertQueryBuilder(plan)
-                    .maxDrivers(1)
-                    .config("rpc.ratelimiter.min_limit", 1)
-                    .config("rpc.congestion.max_window", kWindow)
-                    .config("rpc.congestion.min_window", 1)
-                    .copyResults(pool());
-  ASSERT_EQ(result->size(), kBatches * kRowsPerBatch);
+  auto plan = PlanBuilder()
+                  .values(batches)
+                  .rpc("capacity_tight_hint_rpc(prompt)")
+                  .planNode();
+  ASSERT_EQ(
+      AssertQueryBuilder(plan)
+          .config("rpc.ratelimiter.min_limit", 1)
+          .config("rpc.congestion.max_window", kWindow)
+          .config("rpc.congestion.min_window", 1)
+          .countResults(),
+      kBatches * kRowsPerBatch);
   EXPECT_LE(
       CapacityRPCFunction::backendFor("layer2.test.capacity.tight.backend")
           ->peakRejected(),
@@ -1112,12 +1062,11 @@ TEST_F(RPCAimdUnderLoadTest, perRowBackendErrorsDoNotBackOff) {
   }
   auto input =
       makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
-  auto plan = makeRPCNode(
-      PlanBuilder().values({input}).planNode(), "backend_error_rpc");
+  auto plan =
+      PlanBuilder().values(input).rpc("backend_error_rpc(prompt)").planNode();
 
   std::shared_ptr<Task> task;
   auto result = AssertQueryBuilder(plan)
-                    .maxDrivers(1)
                     .config("rpc.ratelimiter.adaptive_enabled", "true")
                     .config("rpc.ratelimiter.max_limit", kMaxLimit)
                     .config("rpc.ratelimiter.min_limit", kMinLimit)
@@ -1135,12 +1084,9 @@ TEST_F(RPCAimdUnderLoadTest, perRowBackendErrorsDoNotBackOff) {
   }
   EXPECT_EQ(numNulls, kBurstRows);
 
-  auto planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(planStats.count("rpc-0"), 1);
-  const auto& customStats = planStats.at("rpc-0").customStats;
+  const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   auto statSum = [&](const std::string& key) -> int64_t {
-    auto it = customStats.find(key);
-    return it == customStats.end() ? -1 : it->second.sum;
+    return stats.hasCustomStat(key) ? stats.customSum(key) : -1;
   };
 
   EXPECT_EQ(statSum(RPCOperator::kRpcErrorKindBackendError), kBurstRows);
@@ -1175,30 +1121,29 @@ TEST_F(RPCAimdUnderLoadTest, batchRateLimiterBacksOffThenRecovers) {
   // Chunks small enough that the burst window spans several flushes, so the
   // cap shrinks more than once, and small enough that many clean batches
   // follow it -- recovery is one step per batch, so it needs batches to count.
-  auto plan = makeBatchRPCNode(
-      PlanBuilder().values({input}).planNode(),
-      /*dispatchBatchSize=*/16,
-      "burst_batch_rpc");
+  auto plan = PlanBuilder()
+                  .values(input)
+                  .rpc(
+                      "burst_batch_rpc(prompt)",
+                      RPCStreamingMode::kBatch,
+                      /*dispatchBatchSize=*/16)
+                  .planNode();
 
   std::shared_ptr<Task> task;
-  auto result = AssertQueryBuilder(plan)
-                    .maxDrivers(1)
-                    .config("rpc.ratelimiter.adaptive_enabled", "true")
-                    .config("rpc.ratelimiter.max_limit", kMaxLimit)
-                    .config("rpc.ratelimiter.min_limit", kMinLimit)
-                    .config("rpc.ratelimiter.decrease_factor", "0.5")
-                    .config("rpc.congestion.max_window", kMaxWindow)
-                    .config("rpc.congestion.min_window", 1)
-                    .copyResults(pool(), task);
+  ASSERT_EQ(
+      AssertQueryBuilder(plan)
+          .config("rpc.ratelimiter.adaptive_enabled", "true")
+          .config("rpc.ratelimiter.max_limit", kMaxLimit)
+          .config("rpc.ratelimiter.min_limit", kMinLimit)
+          .config("rpc.ratelimiter.decrease_factor", "0.5")
+          .config("rpc.congestion.max_window", kMaxWindow)
+          .config("rpc.congestion.min_window", 1)
+          .countResults(task),
+      kTotalRows);
 
-  ASSERT_EQ(result->size(), kTotalRows);
-
-  auto planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(planStats.count("rpc-0"), 1);
-  const auto& customStats = planStats.at("rpc-0").customStats;
+  const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   auto statSum = [&](const std::string& key) -> int64_t {
-    auto it = customStats.find(key);
-    return it == customStats.end() ? -1 : it->second.sum;
+    return stats.hasCustomStat(key) ? stats.customSum(key) : -1;
   };
 
   // The burst actually landed and was classified by typed cause.
@@ -1236,14 +1181,16 @@ TEST_F(RPCAimdUnderLoadTest, batchBackendErrorsDoNotBackOff) {
   }
   auto input =
       makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
-  auto plan = makeBatchRPCNode(
-      PlanBuilder().values({input}).planNode(),
-      /*dispatchBatchSize=*/16,
-      "backend_error_batch_rpc");
+  auto plan = PlanBuilder()
+                  .values(input)
+                  .rpc(
+                      "backend_error_batch_rpc(prompt)",
+                      RPCStreamingMode::kBatch,
+                      /*dispatchBatchSize=*/16)
+                  .planNode();
 
   std::shared_ptr<Task> task;
   auto result = AssertQueryBuilder(plan)
-                    .maxDrivers(1)
                     .config("rpc.ratelimiter.adaptive_enabled", "true")
                     .config("rpc.ratelimiter.max_limit", kMaxLimit)
                     .config("rpc.ratelimiter.min_limit", kMinLimit)
@@ -1260,12 +1207,9 @@ TEST_F(RPCAimdUnderLoadTest, batchBackendErrorsDoNotBackOff) {
   }
   EXPECT_EQ(numNulls, kBurstRows);
 
-  auto planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(planStats.count("rpc-0"), 1);
-  const auto& customStats = planStats.at("rpc-0").customStats;
+  const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   auto statSum = [&](const std::string& key) -> int64_t {
-    auto it = customStats.find(key);
-    return it == customStats.end() ? -1 : it->second.sum;
+    return stats.hasCustomStat(key) ? stats.customSum(key) : -1;
   };
 
   EXPECT_EQ(statSum(RPCOperator::kRpcErrorKindBackendError), kBurstRows);

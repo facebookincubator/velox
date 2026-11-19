@@ -1202,17 +1202,19 @@ TEST_F(AggregationTest, largeValueRangeArray) {
                 .project({"c0", "cardinality(a0) as l"})
                 .planNode();
   auto task = AssertQueryBuilder(op).assertResults(expected);
-  auto stats = toPlanStats(task->taskStats());
-  auto runtimeStats = stats.at(partialAggId).customStats;
+  const auto partialStats =
+      exec::PlanNodeStats::extract(task->taskStats(), partialAggId);
 
   // The partial agg is expected to exceed max size after the first batch and
   // see that it has an oversize range based array with just 2 entries. It is
   // then expected to change hash mode and rehash.
-  EXPECT_EQ(1, runtimeStats.at("hashtable.numRehashes").count);
+  EXPECT_EQ(1, partialStats.customStat("hashtable.numRehashes").count);
 
   // The partial agg is expected to flush just once. The final agg gets one
   // batch.
-  EXPECT_EQ(1, stats.at(finalAggId).inputVectors);
+  EXPECT_EQ(
+      1,
+      exec::PlanNodeStats::extract(task->taskStats(), finalAggId).inputVectors);
 }
 
 TEST_F(AggregationTest, partialAggregationMemoryLimitIncrease) {
@@ -1271,26 +1273,25 @@ TEST_F(AggregationTest, partialAggregationMemoryLimitIncrease) {
                             .finalAggregation()
                             .planNode())
                     .assertResults("SELECT distinct c0 FROM tmp");
-    const auto runtimeStats =
-        PlanNodeStats::extract(task->taskStats(), aggNodeId).customStats;
+    const auto aggStats = PlanNodeStats::extract(task->taskStats(), aggNodeId);
     if (testData.expectedPartialOutputFlush > 0) {
-      EXPECT_LT(0, runtimeStats.at("flushRowCount").count);
-      EXPECT_LT(0, runtimeStats.at("flushRowCount").max);
-      EXPECT_LT(0, runtimeStats.at("partialAggregationPct").max);
+      EXPECT_LT(0, aggStats.customStat("flushRowCount").count);
+      EXPECT_LT(0, aggStats.customStat("flushRowCount").max);
+      EXPECT_LT(0, aggStats.customStat("partialAggregationPct").max);
     } else {
-      EXPECT_EQ(0, runtimeStats.count("flushRowCount"));
-      EXPECT_EQ(0, runtimeStats.count("partialAggregationPct"));
+      EXPECT_FALSE(aggStats.hasCustomStat("flushRowCount"));
+      EXPECT_FALSE(aggStats.hasCustomStat("partialAggregationPct"));
     }
     if (testData.expectedPartialAggregationMemoryLimitIncrease) {
       EXPECT_LT(
           testData.initialPartialMemoryLimit,
-          runtimeStats.at("maxExtendedPartialAggregationMemoryUsage").max);
+          aggStats.customStat("maxExtendedPartialAggregationMemoryUsage").max);
       EXPECT_GE(
           testData.extendedPartialMemoryLimit,
-          runtimeStats.at("maxExtendedPartialAggregationMemoryUsage").max);
+          aggStats.customStat("maxExtendedPartialAggregationMemoryUsage").max);
     } else {
-      EXPECT_EQ(
-          0, runtimeStats.count("maxExtendedPartialAggregationMemoryUsage"));
+      EXPECT_FALSE(
+          aggStats.hasCustomStat("maxExtendedPartialAggregationMemoryUsage"));
     }
   }
 }
@@ -1517,7 +1518,7 @@ TEST_F(AggregationTest, distinctSpillWithCappedMergeFiles) {
         PlanNodeStats::extract(task->taskStats(), aggregationNodeId);
     ASSERT_GT(stats.spilledFiles, 4);
     ASSERT_EQ(stats.spilledPartitions, 4);
-    ASSERT_GT(stats.customStat(Operator::kSpillRuns).sum, kNumBatches);
+    ASSERT_GT(stats.customSum(Operator::kSpillRuns), kNumBatches);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   }
 }
@@ -1600,8 +1601,10 @@ TEST_F(AggregationTest, memoryAllocations) {
 
   // Verify memory allocations. Aggregation should make 2 allocations: 1 for the
   // RowContainer holding single accumulator and 1 for the result.
-  auto planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(5, planStats.at(aggNodeId).numMemoryAllocations);
+  ASSERT_EQ(
+      5,
+      exec::PlanNodeStats::extract(task->taskStats(), aggNodeId)
+          .numMemoryAllocations);
 
   plan = PlanBuilder()
              .values(data)
@@ -1616,8 +1619,10 @@ TEST_F(AggregationTest, memoryAllocations) {
   // Verify memory allocations. Aggregation should make 4 allocations: 1 for the
   // hash table, 1 for the RowContainer holding accumulators, 2 for results (1
   // for values of the grouping key column, 1 for sum column).
-  planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(8, planStats.at(aggNodeId).numMemoryAllocations);
+  ASSERT_EQ(
+      8,
+      exec::PlanNodeStats::extract(task->taskStats(), aggNodeId)
+          .numMemoryAllocations);
 }
 
 TEST_F(AggregationTest, groupingSets) {
@@ -2487,8 +2492,7 @@ TEST_P(DistinctAggregationTest, spillingForAggrsWithDistinct) {
                     .plan(plan)
                     .assertResults(sql);
 
-    auto taskStats = exec::toPlanStats(task->taskStats());
-    auto& stats = taskStats.at(aggrNodeId);
+    auto stats = exec::PlanNodeStats::extract(task->taskStats(), aggrNodeId);
     checkSpillStats(stats, true);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   };
@@ -2571,8 +2575,7 @@ TEST_F(AggregationTest, spillingForAggrsWithSorting) {
                     .plan(plan)
                     .assertResults(sql);
 
-    auto taskStats = exec::toPlanStats(task->taskStats());
-    auto& stats = taskStats.at(aggrNodeId);
+    auto stats = exec::PlanNodeStats::extract(task->taskStats(), aggrNodeId);
     checkSpillStats(stats, true);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   };
@@ -2780,12 +2783,11 @@ TEST_F(AggregationTest, spillPrefixSortOptimization) {
               .plan(plan)
               .assertResults(sql);
 
-      auto taskStats = exec::toPlanStats(task->taskStats());
-      auto& stats = taskStats.at(aggrNodeId);
+      auto stats = exec::PlanNodeStats::extract(task->taskStats(), aggrNodeId);
       checkSpillStats(stats, true);
       if (testData.expectedNumPrefixSortKeys > 0) {
         ASSERT_GE(
-            stats.customStat(PrefixSort::kNumPrefixSortKeys).sum,
+            stats.customSum(PrefixSort::kNumPrefixSortKeys),
             testData.expectedNumPrefixSortKeys);
         ASSERT_EQ(
             stats.customStat(PrefixSort::kNumPrefixSortKeys).max,
@@ -4285,8 +4287,9 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyInput) {
           .config(QueryConfig::kSpillEnabled, true)
           .config(QueryConfig::kAggregationSpillEnabled, true)
           .assertEmptyResults();
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  ASSERT_EQ(taskStats.at(aggNodeId).spilledBytes, 0);
+  const auto taskStats =
+      exec::PlanNodeStats::extract(task->taskStats(), aggNodeId);
+  ASSERT_EQ(taskStats.spilledBytes, 0);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
@@ -4361,8 +4364,9 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyOutput) {
                   .assertResults(expectedResult);
   // Since the spilling is triggered after the aggregation operator has produced
   // all the output, we don't expect any spilled data.
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  ASSERT_EQ(taskStats.at(aggNodeId).spilledBytes, 0);
+  const auto taskStats =
+      exec::PlanNodeStats::extract(task->taskStats(), aggNodeId);
+  ASSERT_EQ(taskStats.spilledBytes, 0);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
@@ -4450,8 +4454,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregation) {
                     .planNode())
             .assertResults(
                 "SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
-    auto taskStats = exec::toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(aggrNodeId);
+    auto planStats =
+        exec::PlanNodeStats::extract(task->taskStats(), aggrNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
     // The actual ime resolution is millisecond so we might see zero nanos
     // reporting in unit test.
@@ -4503,8 +4507,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromDistinctAggregation) {
                     .capturePlanNodeId(aggrNodeId)
                     .planNode())
             .assertResults("SELECT distinct c0 FROM tmp");
-    auto taskStats = exec::toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(aggrNodeId);
+    const auto planStats =
+        exec::PlanNodeStats::extract(task->taskStats(), aggrNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
     task.reset();
     TaskMonitor::waitForAllTasksDeleted();
@@ -4713,8 +4717,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithCompact) {
                     .planNode())
             .assertResults(
                 "SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
-    auto taskStats = exec::toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(aggrNodeId);
+    const auto planStats =
+        exec::PlanNodeStats::extract(task->taskStats(), aggrNodeId);
     if (testData.expectSpill) {
       ASSERT_GT(planStats.spilledBytes, 0);
     } else {

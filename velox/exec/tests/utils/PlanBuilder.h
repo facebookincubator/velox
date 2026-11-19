@@ -1344,6 +1344,22 @@ class PlanBuilder {
   /// Column type is assumed as BIGINT.
   PlanBuilder& assignUniqueId(const std::string& idName = "unique");
 
+  /// Add an RPCNode that calls a registered AsyncRPCFunction and appends its
+  /// result to the input columns, e.g. rpc("demo_rpc(prompt) as result").
+  ///
+  /// @param call SQL call of the RPC function. An optional alias names the
+  /// result column, which defaults to '__rpc_result'. The result type is
+  /// resolved from the signatures the function is registered with.
+  /// @param streamingMode Whether the function is called per row or per batch.
+  /// @param dispatchBatchSize See core::RPCNode.
+  /// @param executionPhase See core::RPCNode.
+  PlanBuilder& rpc(
+      std::string_view call,
+      velox::rpc::RPCStreamingMode streamingMode =
+          velox::rpc::RPCStreamingMode::kPerRow,
+      int32_t dispatchBatchSize = 0,
+      std::string executionPhase = "INLINE");
+
   /// Add a PartitionedOutputNode to hash-partition the input on the specified
   /// keys using exec::HashPartitionFunction.
   ///

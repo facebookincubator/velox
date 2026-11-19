@@ -825,7 +825,7 @@ TEST_F(RPCRateLimiterTest, flowControlPolicyNamesParseCaseInsensitively) {
   for (const auto& [name, policy] : policies) {
     SCOPED_TRACE(name);
     EXPECT_EQ(parseRPCFlowControlPolicy(name), policy);
-    EXPECT_EQ(rpcFlowControlPolicyName(policy), name);
+    EXPECT_EQ(RPCFlowControlPolicyName::toName(policy), name);
   }
   EXPECT_EQ(static_cast<int>(RPCFlowControlPolicy::kWindowAimd), 0);
   EXPECT_EQ(static_cast<int>(RPCFlowControlPolicy::kCapacityProbing), 1);
@@ -1387,7 +1387,7 @@ TEST_F(RPCRateLimiterTest, capacityProbingDoublesUntilFirstOverload) {
            {RPCFlowControlPolicy::kWindowAimd, 200},
            {RPCFlowControlPolicy::kCapacityProbing, 400},
        }) {
-    SCOPED_TRACE(rpcFlowControlPolicyName(policy));
+    SCOPED_TRACE(RPCFlowControlPolicyName::toName(policy));
     auto limiter = makeAdaptiveLimiter("test.doubling", policy);
     const auto inFlight = acquire(*limiter, 200);
     limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 200);
@@ -1401,7 +1401,7 @@ TEST_F(RPCRateLimiterTest, capacityProbingGrowsOnlyWhileTheWindowIsInUse) {
            {RPCFlowControlPolicy::kWindowAimd, 201},
            {RPCFlowControlPolicy::kCapacityProbing, 300},
        }) {
-    SCOPED_TRACE(rpcFlowControlPolicyName(policy));
+    SCOPED_TRACE(RPCFlowControlPolicyName::toName(policy));
     // Doubling stops at twice the 150 calls in flight.
     auto limiter = makeAdaptiveLimiter("test.in-use", policy);
     const auto inFlight = acquire(*limiter, 150);
@@ -1413,7 +1413,7 @@ TEST_F(RPCRateLimiterTest, capacityProbingGrowsOnlyWhileTheWindowIsInUse) {
            {RPCFlowControlPolicy::kWindowAimd, 458},
            {RPCFlowControlPolicy::kCapacityProbing, 300},
        }) {
-    SCOPED_TRACE(rpcFlowControlPolicyName(policy));
+    SCOPED_TRACE(RPCFlowControlPolicyName::toName(policy));
     // So does growth after a quota rejection: twice the 150 calls of the
     // round before.
     auto limiter = makeAdaptiveLimiter("test.in-use-after-quota", policy);
@@ -1481,7 +1481,7 @@ TEST_F(
            {RPCFlowControlPolicy::kWindowAimd, 100},
            {RPCFlowControlPolicy::kCapacityProbing, 79},
        }) {
-    SCOPED_TRACE(rpcFlowControlPolicyName(policy));
+    SCOPED_TRACE(RPCFlowControlPolicyName::toName(policy));
     // The backend held 99 of the 100 calls in flight.
     auto limiter = makeAdaptiveLimiter("test.capacity-cut", policy);
     rejectOneOf(*limiter, 100, /*capacityRejection=*/true);
@@ -1527,7 +1527,7 @@ TEST_F(RPCRateLimiterTest, capacityProbingQuotaRejectionCutsAsWindowAimd) {
   for (const auto policy :
        {RPCFlowControlPolicy::kWindowAimd,
         RPCFlowControlPolicy::kCapacityProbing}) {
-    SCOPED_TRACE(rpcFlowControlPolicyName(policy));
+    SCOPED_TRACE(RPCFlowControlPolicyName::toName(policy));
     auto limiter = makeAdaptiveLimiter("test.quota-cut", policy);
     std::vector<int64_t> capacities;
     for (int32_t i = 0; i < 3; ++i) {
@@ -1548,7 +1548,7 @@ TEST_F(RPCRateLimiterTest, laterCapacityRejectionsOfARoundRefineItsCut) {
            {RPCFlowControlPolicy::kWindowAimd, 100},
            {RPCFlowControlPolicy::kCapacityProbing, 80},
        }) {
-    SCOPED_TRACE(rpcFlowControlPolicyName(policy));
+    SCOPED_TRACE(RPCFlowControlPolicyName::toName(policy));
     auto limiter = makeAdaptiveLimiter("test.capacity-refine", policy);
     auto tokens = acquire(*limiter, 200);
     ASSERT_EQ(tokens.size(), 200);
