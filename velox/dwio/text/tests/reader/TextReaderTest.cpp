@@ -1156,6 +1156,63 @@ TEST_F(TextReaderTest, readFloatingPointValues) {
   assertReadsAs({"-1e-400f"}, 0.0f, 0.0);
 }
 
+TEST_F(TextReaderTest, readIntegerWithLeadingPlus) {
+  struct TestCase {
+    std::string line;
+    std::optional<int8_t> tinyint;
+    std::optional<int16_t> smallint;
+    std::optional<int32_t> integer;
+    std::optional<int64_t> bigint;
+  };
+  const std::vector<TestCase> testCases = {
+      {"+1,+2,+3,+4", 1, 2, 3, 4},
+      {"+127,+32767,+2147483647,+9223372036854775807",
+       127,
+       32'767,
+       2'147'483'647,
+       9'223'372'036'854'775'807LL},
+      {"+1.5,+2.5,+3.5,+4.5", 1, 2, 3, 4},
+      {"+128,+2,+3,+4", std::nullopt, 2, 3, 4},
+      {"+1,+32768,+3,+4", 1, std::nullopt, 3, 4},
+      {"+1,+2,+2147483648,+4", 1, 2, std::nullopt, 4},
+      {"+1,+2,+3,+9223372036854775808", 1, 2, 3, std::nullopt},
+      {"+,+2,+3,+4", std::nullopt, 2, 3, 4},
+      {"+1,++2,+3,+4", 1, std::nullopt, 3, 4},
+      {"+1,+2,+3x,+4", 1, 2, std::nullopt, 4},
+      {"+1,+2,+3,+-4", 1, 2, 3, std::nullopt},
+  };
+  std::vector<std::optional<int8_t>> tinyintValues;
+  std::vector<std::optional<int16_t>> smallintValues;
+  std::vector<std::optional<int32_t>> integerValues;
+  std::vector<std::optional<int64_t>> bigintValues;
+  for (const auto& testCase : testCases) {
+    tinyintValues.push_back(testCase.tinyint);
+    smallintValues.push_back(testCase.smallint);
+    integerValues.push_back(testCase.integer);
+    bigintValues.push_back(testCase.bigint);
+  }
+
+  auto expected = makeNamedRowVector({
+      {"tinyint", makeNullableFlatVector<int8_t>(tinyintValues)},
+      {"smallint", makeNullableFlatVector<int16_t>(smallintValues)},
+      {"integer", makeNullableFlatVector<int32_t>(integerValues)},
+      {"bigint", makeNullableFlatVector<int64_t>(bigintValues)},
+  });
+  auto textFile = createTextFile(
+      testCases.size(), [&](size_t row) { return testCases[row].line; });
+  auto type = expected->rowType();
+  auto reader = createReader(
+      type, textFile->getPath(), dwio::common::SerDeOptions(',', '\2', '\3'));
+  dwio::common::RowReaderOptions rowReaderOptions;
+  setScanSpec(*type, rowReaderOptions);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(testCases.size(), result), testCases.size());
+  assertEqualVectors(expected, result);
+  ASSERT_EQ(rowReader->next(1, result), 0);
+}
+
 TEST_F(TextReaderTest, simpleTypes) {
   const auto tzOffsetPST = 28'800;
   const auto tzOffsetPDT = 25'200;
