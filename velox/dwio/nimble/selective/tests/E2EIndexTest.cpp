@@ -31,6 +31,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
+#include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/tests/utils/E2EFilterTestBase.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
@@ -324,6 +325,18 @@ class E2EIndexTestBase : public ::testing::Test {
   virtual std::unique_ptr<Reader> createReader(
       double sampleRate = 1.0,
       uint32_t randomSeed = 0) {
+    std::shared_ptr<random::RandomSkipTracker> randomSkip;
+    if (sampleRate < 1.0) {
+      random::setSeed(randomSeed);
+      randomSkip = std::make_shared<random::RandomSkipTracker>(sampleRate);
+    }
+    return createReader(std::move(randomSkip));
+  }
+
+  // Creates a reader for the written data that samples with 'randomSkip', if
+  // set.
+  std::unique_ptr<Reader> createReader(
+      std::shared_ptr<random::RandomSkipTracker> randomSkip) {
     auto readFile =
         std::make_shared<InMemoryReadFile>(std::string_view(sinkData_));
     dwio::common::ReaderOptions readerOptions(leafPool_.get());
@@ -333,13 +346,7 @@ class E2EIndexTestBase : public ::testing::Test {
     readerOptions.setFileFormat(FileFormat::NIMBLE);
     readerOptions.setLoadClusterIndex(true);
     setUpReaderOptions(readerOptions);
-
-    // Set up random skip if sample rate is less than 1.0.
-    if (sampleRate < 1.0) {
-      random::setSeed(randomSeed);
-      auto randomSkip = std::make_shared<random::RandomSkipTracker>(sampleRate);
-      readerOptions.setRandomSkip(randomSkip);
-    }
+    readerOptions.setRandomSkip(std::move(randomSkip));
 
     std::unique_ptr<BufferedInput> input;
     auto& ids = fileIds();
@@ -1395,6 +1402,110 @@ TEST_F(SplitRowRangeTest, countsRowsFromSplitStart) {
             testCase.range.numRows));
     const auto result = read(testCase.range, {}, testCase.byteRange);
     EXPECT_EQ(bigintValues(result.rows, "value"), testCase.expected);
+  }
+}
+
+// Sampling a split row range picks the rows that one trial per row of the
+// split, in order, picks inside the range. Reading the range twice with one
+// sampler also checks the trials for the rows after the range.
+TEST_F(SplitRowRangeTest, randomSampling) {
+  // Four stripes of 2'500 rows; 'value' is the file row number.
+  constexpr int64_t kNumRows = 10'000;
+  constexpr int64_t kStripeRows = 2'500;
+  std::vector<RowVectorPtr> batches;
+  for (int64_t firstRow = 0; firstRow < kNumRows; firstRow += 500) {
+    batches.push_back(vectorMaker_->rowVector(
+        {"value"},
+        {vectorMaker_->flatVector<int64_t>(
+            500, [firstRow](auto row) { return firstRow + row; })}));
+  }
+  writeChunkStatsData(
+      batches,
+      /*enableChunkStats=*/true,
+      ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize,
+      /*minStreamChunkRawSize=*/0,
+      /*batchesPerStripe=*/5);
+
+  constexpr auto kAll = std::numeric_limits<uint64_t>::max();
+  // The first stripe starts at byte 0, so a split starting at byte 1 holds
+  // the last three stripes.
+  const std::pair<uint64_t, uint64_t> wholeFile{0, kAll};
+  const std::pair<uint64_t, uint64_t> fromSecondStripe{1, kAll};
+  struct TestCase {
+    std::pair<uint64_t, uint64_t> byteRange;
+    int64_t splitStartRow;
+    SplitRowRange range;
+  };
+  const std::vector<TestCase> testCases = {
+      {wholeFile, 0, {0, kAll}},
+      {wholeFile, 0, {1, 2}},
+      {wholeFile, 0, {2'000, 1'000}},
+      {wholeFile, 0, {2'600, 2'000}},
+      {wholeFile, 0, {3'000, 5'000}},
+      {wholeFile, 0, {9'000, kAll}},
+      {fromSecondStripe, kStripeRows, {0, 2'500}},
+      {fromSecondStripe, kStripeRows, {100, 4'000}},
+      {fromSecondStripe, kStripeRows, {6'000, kAll}},
+  };
+  const std::unordered_map<std::string, std::unique_ptr<Filter>> noFilters;
+  for (const auto& testCase : testCases) {
+    const auto splitNumRows = kNumRows - testCase.splitStartRow;
+    for (const double sampleRate : {0.5, 0.1, 0.001, 0.0002}) {
+      for (uint32_t seed = 1; seed <= 20; ++seed) {
+        SCOPED_TRACE(
+            fmt::format(
+                "offset={}, firstRow={}, numRows={}, sampleRate={}, seed={}",
+                testCase.byteRange.first,
+                testCase.range.firstRow,
+                testCase.range.numRows,
+                sampleRate,
+                seed));
+        random::setSeed(seed);
+        auto randomSkip =
+            std::make_shared<random::RandomSkipTracker>(sampleRate);
+        auto reader = createReader(randomSkip);
+        dwio::common::Mutation mutation;
+        mutation.randomSkip = randomSkip.get();
+        std::vector<int64_t> actual;
+        for (int pass = 0; pass < 2; ++pass) {
+          RowReaderOptions rowReaderOptions;
+          rowReaderOptions.range(
+              testCase.byteRange.first, testCase.byteRange.second);
+          rowReaderOptions.setRequestedType(rowType_);
+          rowReaderOptions.setScanSpec(createScanSpec(rowType_, noFilters));
+          rowReaderOptions.setSplitRowRange(testCase.range);
+          auto rowReader = reader->createRowReader(rowReaderOptions);
+          VectorPtr result = BaseVector::create(rowType_, 1, leafPool_.get());
+          while (rowReader->next(1'000, result, &mutation) > 0) {
+            // Sampled rows can come back wrapped in a dictionary.
+            const auto* values = result->as<RowVector>()
+                                     ->childAt(0)
+                                     ->loadedVector()
+                                     ->as<SimpleVector<int64_t>>();
+            for (vector_size_t i = 0; i < result->size(); ++i) {
+              actual.push_back(values->valueAt(i));
+            }
+          }
+        }
+
+        random::setSeed(seed);
+        random::RandomSkipTracker sampler(sampleRate);
+        const auto firstRow = static_cast<int64_t>(
+            std::min<uint64_t>(testCase.range.firstRow, splitNumRows));
+        const auto endRow = firstRow +
+            static_cast<int64_t>(std::min<uint64_t>(
+                testCase.range.numRows, splitNumRows - firstRow));
+        std::vector<int64_t> expected;
+        for (int pass = 0; pass < 2; ++pass) {
+          for (int64_t row = 0; row < splitNumRows; ++row) {
+            if (sampler.testOne() && row >= firstRow && row < endRow) {
+              expected.push_back(testCase.splitStartRow + row);
+            }
+          }
+        }
+        EXPECT_EQ(actual, expected);
+      }
+    }
   }
 }
 
