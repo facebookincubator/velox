@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/common/base/SimdUtil.h"
 #include "velox/dwio/dwrf/common/ByteRLE.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
 
@@ -73,8 +74,12 @@ void decodeAndVerify(
   std::unique_ptr<ByteRleDecoder> decoder =
       createByteRleDecoder(std::move(inStream), EncodingKey{0, 0});
 
-  char* decodedData = new char[numValues];
-  decoder->next(decodedData, numValues, nulls);
+  // next() needs padding after its output. The callers pad 'nulls'.
+  char* decodedData = new char[numValues + simd::kPadding];
+  decoder->next(
+      Padded<char>::assumePadded(decodedData),
+      numValues,
+      Padded<const uint64_t>::assumePadded(nulls));
 
   for (uint64_t i = 0; i < numValues; ++i) {
     if (!nulls || !bits::isBitNull(nulls, i)) {
@@ -96,8 +101,12 @@ void decodeAndVerifyBoolean(
   std::unique_ptr<ByteRleDecoder> decoder =
       createBooleanRleDecoder(std::move(inStream), EncodingKey{0, 0});
 
-  char* decodedData = new char[bits::nbytes(numValues)];
-  decoder->next(decodedData, numValues, nulls);
+  // next() needs padding after its output. The callers pad 'nulls'.
+  char* decodedData = new char[bits::nbytes(numValues) + simd::kPadding];
+  decoder->next(
+      Padded<char>::assumePadded(decodedData),
+      numValues,
+      Padded<const uint64_t>::assumePadded(nulls));
 
   for (uint64_t i = 0; i < numValues; ++i) {
     if (!nulls || !bits::isBitNull(nulls, i)) {
@@ -148,7 +157,7 @@ TEST_F(ByteRleEncoderTest, randomCharsWithNull) {
   std::unique_ptr<ByteRleEncoder> encoder =
       createByteRleEncoder(std::move(outStream));
 
-  uint64_t* nulls = new uint64_t[1600];
+  uint64_t* nulls = new uint64_t[1600 + simd::kPadding / sizeof(uint64_t)];
   char* data = new char[102400];
   generateData(102400, data, 377, nulls);
   encoder->add(data, common::Ranges::of(0, 102400), nulls);
@@ -217,7 +226,7 @@ TEST_F(BooleanRleEncoderTest, randomBitsAlignedWithNull) {
   std::unique_ptr<ByteRleEncoder> encoder =
       createBooleanRleEncoder(std::move(outStream));
 
-  uint64_t* nulls = new uint64_t[125];
+  uint64_t* nulls = new uint64_t[125 + simd::kPadding / sizeof(uint64_t)];
   char* data = new char[8000];
   generateBoolData(8000, data, 515, nulls);
   encoder->add(data, common::Ranges::of(0, 8000), nulls);

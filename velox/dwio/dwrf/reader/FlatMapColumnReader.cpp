@@ -472,9 +472,9 @@ void FlatMapColumnReader<StringView>::initStringKeyBuffer() {
 template <typename T>
 uint64_t KeyNode<T>::readInMapData(uint64_t numValues) {
   // load a batch for current request
-  inMapData_.reserve(bits::nwords(numValues) * 8);
+  inMapData_.reserve(bits::nwords(numValues) * 8 + simd::kPadding);
   auto data = inMapData_.data();
-  inMap_->next(data, numValues, nullptr);
+  inMap_->next(Padded<char>::assumePadded(data), numValues, nullptr);
   return bits::countBits(reinterpret_cast<uint64_t*>(data), 0, numValues);
 }
 

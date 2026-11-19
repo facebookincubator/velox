@@ -219,8 +219,10 @@ class BlockTest : public testing::Test {
 
   void scatterBitsTest(int32_t numBits, int32_t setPct, bool useSmem = false) {
     auto numWords = bits::nwords(numBits);
-    auto maskBuffer = arena_->allocate<uint64_t>(numWords);
-    auto sourceBuffer = arena_->allocate<uint64_t>(numWords + 1);
+    // bits::scatterBits reads past the last bit, into this padding.
+    const auto paddingWords = simd::kPadding / sizeof(uint64_t);
+    auto maskBuffer = arena_->allocate<uint64_t>(numWords + paddingWords);
+    auto sourceBuffer = arena_->allocate<uint64_t>(numWords + 1 + paddingWords);
     auto resultBuffer = arena_->allocate<uint64_t>(numWords);
     auto smemBuffer = arena_->allocate<uint32_t>(
         BlockTestStream::scatterBitsSize(256) / sizeof(int32_t));
@@ -261,7 +263,7 @@ class BlockTest : public testing::Test {
       source[i] = seed;
       seed *= 0x5cdf;
     }
-    std::vector<uint64_t> reference(numWords);
+    std::vector<uint64_t> reference(numWords + paddingWords);
     auto sourceAsChar = sourceBuffer->as<char>() + 1;
     uint64_t cpuTime = 0;
     {
@@ -269,9 +271,10 @@ class BlockTest : public testing::Test {
       bits::scatterBits(
           numInMask,
           numBits,
-          sourceAsChar,
-          maskData,
-          reinterpret_cast<char*>(reference.data()));
+          Padded<const char>::assumePadded(sourceAsChar),
+          Padded<const uint64_t>::assumePadded(maskData),
+          Padded<char>::assumePadded(
+              reinterpret_cast<char*>(reference.data())));
     }
     prefetch(stream, maskBuffer);
     prefetch(stream, resultBuffer);

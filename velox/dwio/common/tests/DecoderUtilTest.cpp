@@ -119,7 +119,12 @@ class DecoderUtilTest : public testing::Test {
     std::vector<uint64_t> testNulls(bits::nwords(rows.size()), ~0ULL);
     int32_t testSkip;
     auto testAnyNull = nonNullRowsFromSparse<isFilter, outputNulls>(
-        nulls, rows, testInner, testOuter, testNulls.data(), testSkip);
+        Padded<const uint64_t>::assumePadded(nulls),
+        rows,
+        testInner,
+        testOuter,
+        testNulls.data(),
+        testSkip);
 
     EXPECT_EQ(testAnyNull, referenceAnyNull);
     EXPECT_EQ(testSkip, referenceSkip);
@@ -156,7 +161,9 @@ TEST_F(DecoderUtilTest, nonNullsFromSparse) {
     for (auto rowsIn1000 = 1; rowsIn1000 < 1011; rowsIn1000 += 10) {
       raw_vector<int32_t> rows;
       // Have an extra word at the end to allow 64 bit access.
-      std::vector<uint64_t> nulls(bits::nwords(kSize) + 1);
+      // nonNullRowsFromSparse reads past the last bit, into this padding.
+      std::vector<uint64_t> nulls(
+          bits::nwords(kSize) + simd::kPadding / sizeof(uint64_t));
       randomBits(nulls, 1000 - nullsIn1000);
       randomRows(kSize, rowsIn1000, rows);
       if (rows.empty()) {
@@ -207,12 +214,13 @@ TEST_F(DecoderUtilTest, processFixedWithRun) {
 
     NoHook noHook;
     processFixedWidthRun<int32_t, false, true, false>(
-        rows,
+        rows.paddedData(),
+        rows.size(),
         rowIndex,
         numInput,
-        scatter.data(),
-        results.data(),
-        hits.data(),
+        scatter.paddedData(),
+        results.paddedData(),
+        hits.paddedData(),
         numValues,
         *filter,
         noHook);
@@ -249,7 +257,12 @@ TEST_F(DecoderUtilTest, columnVisitorSmallintRowIndices) {
       filter, nullptr, rows, ExtractToReader(nullptr));
   int32_t numValues = 0;
   visitor.processRun<true, false, false>(
-      values.data(), kWidth, nullptr, hits.data(), values.data(), numValues);
+      values.paddedData(),
+      kWidth,
+      nullptr,
+      hits.paddedData(),
+      values.paddedData(),
+      numValues);
   EXPECT_EQ(visitor.rowIndex(), kWidth);
   ASSERT_EQ(numValues, kWidth);
   for (int32_t i = 0; i < kWidth; ++i) {
@@ -264,11 +277,17 @@ TEST_F(DecoderUtilTest, columnVisitorSparseRunUnsupported) {
   const common::AlwaysTrue filter;
   ColumnVisitor<int32_t, common::AlwaysTrue, DropValues, false> visitor(
       filter, nullptr, rows, DropValues{});
-  int32_t value = 42;
+  raw_vector<int32_t> value(1);
+  value[0] = 42;
   int32_t numValues = 0;
   VELOX_ASSERT_THROW(
       (visitor.processRun<false, false, false>(
-          &value, 1, nullptr, nullptr, &value, numValues)),
+          value.paddedData(),
+          1,
+          nullptr,
+          nullptr,
+          value.paddedData(),
+          numValues)),
       "Unsupported ColumnVisitor::processRun configuration");
   EXPECT_EQ(visitor.rowIndex(), 0);
   EXPECT_EQ(numValues, 0);
@@ -289,8 +308,8 @@ TEST_F(DecoderUtilTest, columnVisitorInt128Run) {
   }
 
   const auto test = [&](auto extractValues) {
-    std::vector<int128_t> values(kNumRows + 1);
-    std::vector<int32_t> hits(kNumRows + 1);
+    raw_vector<int128_t> values(kNumRows + 1);
+    raw_vector<int32_t> hits(kNumRows + 1);
     values[0] = -1;
     hits[0] = -1;
     int32_t numValues = 1;
@@ -303,19 +322,21 @@ TEST_F(DecoderUtilTest, columnVisitorInt128Run) {
         values[numValues + i] = base + row + i;
       }
       visitor.template processRun<true, false, false>(
-          values.data() + numValues,
+          values.paddedData() + numValues,
           numInput,
           nullptr,
-          hits.data(),
-          values.data(),
+          hits.paddedData(),
+          values.paddedData(),
           numValues);
       EXPECT_EQ(visitor.rowIndex(), row + numInput);
     }
-    values.resize(numValues);
-    hits.resize(numValues);
-    EXPECT_THAT(hits, testing::ElementsAreArray(expectedRows));
+    EXPECT_THAT(
+        std::vector<int32_t>(hits.begin(), hits.begin() + numValues),
+        testing::ElementsAreArray(expectedRows));
     if constexpr (!std::is_same_v<decltype(extractValues), DropValues>) {
-      EXPECT_THAT(values, testing::ElementsAreArray(expectedValues));
+      EXPECT_THAT(
+          std::vector<int128_t>(values.begin(), values.begin() + numValues),
+          testing::ElementsAreArray(expectedValues));
     }
   };
   test(ExtractToReader(nullptr));
@@ -342,12 +363,13 @@ TEST_F(DecoderUtilTest, processFixedWidthRunSmallintRowIndices) {
   int32_t numValues = 0;
 
   processFixedWidthRun<int16_t, false, false, true>(
-      rows,
+      rows.paddedData(),
+      rows.size(),
       0,
       kWidth,
       nullptr,
-      values.data(),
-      hits.data(),
+      values.paddedData(),
+      hits.paddedData(),
       numValues,
       filter,
       noHook);
@@ -388,10 +410,11 @@ TEST_F(DecoderUtilTest, fixedWidthScanSmallintRowIndices) {
   NoHook noHook;
   int32_t numValues = 0;
   fixedWidthScan<int16_t, false, false>(
-      {rows.data(), kWidth},
+      rows.paddedData(),
+      kWidth,
       nullptr,
-      values.data(),
-      hits.data(),
+      values.paddedData(),
+      hits.paddedData(),
       numValues,
       input,
       bufferStart,
@@ -408,9 +431,10 @@ TEST_F(DecoderUtilTest, fixedWidthScanSmallintRowIndices) {
 
 TEST_F(DecoderUtilTest, fixedWidthScanMemcpyFastPath) {
   constexpr int kSize = 10;
-  int32_t rows[kSize];
-  std::iota(std::begin(rows), std::end(rows), 0);
-  float expectedValues[kSize], actualValues[kSize];
+  raw_vector<int32_t> rows(kSize);
+  std::iota(rows.begin(), rows.end(), 0);
+  float expectedValues[kSize];
+  raw_vector<float> actualValues(kSize);
   for (int i = 0; i < kSize; ++i) {
     expectedValues[i] = std::sin(i);
     actualValues[i] = NAN;
@@ -422,9 +446,10 @@ TEST_F(DecoderUtilTest, fixedWidthScanMemcpyFastPath) {
   const char* bufferEnd = nullptr;
   NoHook noHook;
   fixedWidthScan<float, false, false>(
-      {rows, kSize},
+      rows.paddedData(),
+      kSize,
       nullptr,
-      actualValues,
+      actualValues.paddedData(),
       nullptr,
       numValues,
       input,
@@ -523,12 +548,12 @@ FilterRunResult runFilterRun(
   };
 
   const int32_t returnedNumValues = filterDictionaryRunSimd<kFilterOnly>(
-      input.data(),
+      Padded<const int32_t>::assumePadded(input.data()),
       numInput,
-      rows.data(),
+      Padded<const int32_t>::assumePadded(rows.data()),
       filterCache.data(),
-      hits.data(),
-      values.data(),
+      Padded<int32_t>::assumePadded(hits.data()),
+      Padded<int32_t>::assumePadded(values.data()),
       startNumValues,
       testIndex);
 

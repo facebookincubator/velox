@@ -87,7 +87,8 @@ void estimateFlatSerializedSize(
     auto nulls = nullsHolder.get(bits::nwords(numRows));
     simd::gatherBits(rawNulls, rows, nulls);
     auto nonNulls = nonNullsHolder.get(numRows);
-    const auto numNonNull = simd::indicesOfSetBits(nulls, 0, numRows, nonNulls);
+    const auto numNonNull =
+        simd::indicesOfSetBits(nulls, 0, numRows, nonNullsHolder.paddedData());
     for (int32_t i = 0; i < numNonNull; ++i) {
       addToSize(sizes[nonNulls[i]], valueSize);
     }
@@ -122,7 +123,8 @@ void estimateFlatSerializedSizeVarcharOrVarbinary(
     auto nulls = nullsHolder.get(bits::nwords(numRows));
     simd::gatherBits(rawNulls, rows, nulls);
     auto* nonNulls = nonNullsHolder.get(numRows);
-    auto numNonNull = simd::indicesOfSetBits(nulls, 0, numRows, nonNulls);
+    auto numNonNull =
+        simd::indicesOfSetBits(nulls, 0, numRows, nonNullsHolder.paddedData());
 
     for (int32_t i = 0; i < numNonNull; ++i) {
       addToSize(
@@ -278,7 +280,7 @@ ParentRows collectNonNullRows(
     simd::gatherBits(rawNulls, rows, nulls);
     auto* positions = positionsHolder.get(numRows);
     const auto numNonNull =
-        simd::indicesOfSetBits(nulls, 0, numRows, positions);
+        simd::indicesOfSetBits(nulls, 0, numRows, positionsHolder.paddedData());
     auto* nonNullRows = nonNullRowsHolder.get(numNonNull);
     auto* nonNullSizes = nonNullSizesHolder.get(numNonNull);
     for (auto i = 0; i < numNonNull; ++i) {
@@ -726,7 +728,8 @@ void estimateSerializedSizeInt(
         auto nulls = nullsHolder.get(bits::nwords(numRows));
         simd::gatherBits(vector->rawNulls(), rows, nulls);
         auto mutableInnerRows = innerRowsHolder.get(numRows);
-        numInner = simd::indicesOfSetBits(nulls, 0, numRows, mutableInnerRows);
+        numInner = simd::indicesOfSetBits(
+            nulls, 0, numRows, innerRowsHolder.paddedData());
         innerSizes = innerSizesHolder.get(numInner);
         for (auto i = 0; i < numInner; ++i) {
           innerSizes[i] = sizes[mutableInnerRows[i]];

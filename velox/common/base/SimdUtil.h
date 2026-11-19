@@ -22,6 +22,7 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Padded.h"
 
 #include <folly/Likely.h>
 #include <xsimd/xsimd.hpp>
@@ -50,12 +51,16 @@ bool initializeSimdUtil();
 // 'begin' to 'end' are considered and the return value is the number
 // of found set bits. For bits 0xff and begin 2 and end 5 we have a return value
 // of 3 and indices is set to {2, 3, 4}.
+//
+// Alignment: 'bits' must be 8-byte aligned and 'indices' 4-byte aligned.
+// Padding: simd::kPadding bytes after 'indices'. A dense byte of 'bits' stores
+// a full batch of indices, up to 7 past the last one written.
 template <typename A = xsimd::default_arch>
 int32_t indicesOfSetBits(
     const uint64_t* bits,
     int32_t begin,
     int32_t end,
-    int32_t* indices,
+    Padded<int32_t> indices,
     const A& = {});
 
 namespace detail {
@@ -108,14 +113,20 @@ struct Batch64 {
     return ans;
   }
 
+  /// Alignment: 'out' must be aligned to alignof(T).
+  /// Padding: not required.
   void store_unaligned(T* out) const {
     std::copy(std::begin(data), std::end(data), out);
   }
 
+  /// Alignment: 'mem' must be aligned to alignof(T).
+  /// Padding: not required.
   static Batch64 load_aligned(const T* mem) {
     return load_unaligned(mem);
   }
 
+  /// Alignment: 'mem' must be aligned to alignof(T).
+  /// Padding: not required.
   static Batch64 load_unaligned(const T* mem) {
     Batch64 ans;
     std::copy(mem, mem + size, ans.data);
@@ -152,14 +163,20 @@ struct Batch128 {
     return ans;
   }
 
+  /// Alignment: 'out' must be aligned to alignof(T).
+  /// Padding: not required.
   void store_unaligned(T* out) const {
     std::copy(std::begin(data), std::end(data), out);
   }
 
+  /// Alignment: 'mem' must be aligned to alignof(T).
+  /// Padding: not required.
   static Batch128 load_aligned(const T* mem) {
     return load_unaligned(mem);
   }
 
+  /// Alignment: 'mem' must be aligned to alignof(T).
+  /// Padding: not required.
   static Batch128 load_unaligned(const T* mem) {
     Batch128 ans;
     std::copy(mem, mem + size, ans.data);
@@ -191,6 +208,9 @@ struct Gather;
 // T = int64_t and IndexType = int32_t, 'gather' will return a
 // batch<int64_t> which has 4 lanes, so this function will load 4
 // 32-bits indices.
+//
+// Alignment: 'indices' must be aligned to alignof(IndexType).
+// Padding: not required. Reads the indices of exactly one gather.
 template <typename T, typename IndexType, typename A = xsimd::default_arch>
 auto loadGatherIndices(const IndexType* indices, const A& arch = {}) {
   return detail::Gather<T, IndexType, A>::loadIndices(indices, arch);
@@ -200,6 +220,9 @@ auto loadGatherIndices(const IndexType* indices, const A& arch = {}) {
 // into a batch, i.e. returning 'dst' where
 //
 //   dst[i] = *(base + vindex[i])
+//
+// Alignment: 'base' must be aligned to alignof(T).
+// Padding: not required.
 template <
     typename T,
     typename IndexType,
@@ -214,6 +237,8 @@ xsimd::batch<T, A> gather(
   return Impl::template apply<kScale>(base, vindex, arch);
 }
 
+/// Alignment: 'base' must be aligned to alignof(T).
+/// Padding: not required.
 template <
     typename T,
     typename IndexType,
@@ -225,6 +250,8 @@ gather(const T* base, Batch64<IndexType> vindex, const A& arch = {}) {
   return Impl::template apply<kScale>(base, vindex.data, arch);
 }
 
+/// Alignment: 'base' must be aligned to alignof(T).
+/// Padding: not required.
 template <
     typename T,
     typename IndexType,
@@ -237,6 +264,10 @@ gather(const T* base, Batch128<IndexType> vindex, const A& arch = {}) {
 }
 
 // Same as 'gather' above except the indices are read from memory.
+//
+// Alignment: 'base' must be aligned to alignof(T) and 'indices' to
+// alignof(IndexType).
+// Padding: not required. Reads exactly xsimd::batch<T, A>::size indices.
 template <
     typename T,
     typename IndexType,
@@ -250,6 +281,9 @@ gather(const T* base, const IndexType* indices, const A& arch = {}) {
 
 // Gather only data where mask[i] is set; otherwise keep the data in
 // src[i].
+//
+// Alignment: 'base' must be aligned to alignof(T).
+// Padding: not required.
 template <
     typename T,
     typename IndexType,
@@ -266,6 +300,8 @@ xsimd::batch<T, A> maskGather(
   return Impl::template maskApply<kScale>(src, mask, base, vindex, arch);
 }
 
+/// Alignment: 'base' must be aligned to alignof(T).
+/// Padding: not required.
 template <
     typename T,
     typename IndexType,
@@ -281,6 +317,8 @@ xsimd::batch<T, A> maskGather(
   return Impl::template maskApply<kScale>(src, mask, base, vindex.data, arch);
 }
 
+/// Alignment: 'base' must be aligned to alignof(T).
+/// Padding: not required.
 template <
     typename T,
     typename IndexType,
@@ -297,6 +335,11 @@ xsimd::batch<T, A> maskGather(
 }
 
 // Same as 'maskGather' above but read indices from memory.
+//
+// Alignment: 'base' must be aligned to alignof(T) and 'indices' to
+// alignof(IndexType).
+// Padding: simd::kPadding bytes after 'indices' on AVX2, which loads a full
+// batch of indices whatever 'mask' is.
 template <
     typename T,
     typename IndexType,
@@ -306,13 +349,19 @@ xsimd::batch<T, A> maskGather(
     xsimd::batch<T, A> src,
     xsimd::batch_bool<T, A> mask,
     const T* base,
-    const IndexType* indices,
+    Padded<const IndexType> indices,
     const A& arch = {}) {
   using Impl = detail::Gather<T, IndexType, A>;
-  return Impl::template maskApply<kScale>(src, mask, base, indices, arch);
+  return Impl::template maskApply<kScale>(src, mask, base, indices.get(), arch);
 }
 
 // Loads up to 16 non-contiguous 16 bit values from 32-bit indices at 'indices'.
+//
+// Alignment: 'base' must be 2-byte aligned and 'indices' 4-byte aligned. On
+// targets without AVX2, each element is read as an int32_t at 'base' plus 2
+// times its index, which can be misaligned.
+// Padding: simd::kPadding bytes after 'base', whose elements are read 4 bytes
+// at a time, and on AVX2 after 'indices', which are loaded 8 at a time.
 template <int kScale = sizeof(int16_t), typename A = xsimd::default_arch>
 xsimd::batch<int16_t, A> gather(
     const int16_t* base,
@@ -345,10 +394,15 @@ template <typename T, typename A, size_t kSizeT = sizeof(T)>
 struct MaskLoad;
 }
 
+/// Alignment: 'addr' must be aligned to alignof(T).
+/// Padding: simd::kPadding bytes on targets without AVX2, whose fallback loads
+/// a full batch and then masks it.
 template <typename T, typename A = xsimd::default_arch>
-xsimd::batch<T, A>
-maskLoad(const T* addr, xsimd::batch_bool<T, A> mask, const A& arch = {}) {
-  return detail::MaskLoad<T, A>::apply(addr, mask, arch);
+xsimd::batch<T, A> maskLoad(
+    Padded<const T> addr,
+    xsimd::batch_bool<T, A> mask,
+    const A& arch = {}) {
+  return detail::MaskLoad<T, A>::apply(addr.get(), mask, arch);
 }
 
 namespace detail {
@@ -489,6 +543,9 @@ xsimd::batch<T, A> setAll(T value, const A& = {}) {
 // to specify contiguous lower lanes of 'batch'. For non-SIMD cases, 'mask' is
 // not used but rather the number of leading lanes of 'batch' to store is given
 // by 'n'.
+//
+// Alignment: 'destination' must be aligned to alignof(T).
+// Padding: not required.
 template <typename T, typename A = xsimd::default_arch>
 inline void storeLeading(
     const xsimd::batch<T, A>& data,
@@ -553,6 +610,9 @@ void gatherBits(
     uint64_t* result);
 
 // Adds 'bytes' bytes to an address of arbitrary type.
+//
+// Alignment: not required.
+// Padding: not required.
 template <typename T>
 inline T* addBytes(T* pointer, int32_t bytes) {
   return reinterpret_cast<T*>(reinterpret_cast<uint64_t>(pointer) + bytes);
@@ -560,11 +620,21 @@ inline T* addBytes(T* pointer, int32_t bytes) {
 
 // 'memcpy' implementation that copies at maximum width and unrolls
 // when 'bytes' is constant.
+//
+// Alignment: not required on x86. The scalar tail copies 8-, 4- and 2-byte
+// words through typed pointers, which other targets may require aligned and
+// which UBSan's alignment check flags at unaligned addresses.
+// Padding: not required.
 template <typename A = xsimd::default_arch>
 inline void memcpy(void* to, const void* from, int64_t bytes, const A& = {});
 
 // memset implementation that writes at maximum width and unrolls for
 // constant values of 'bytes'.
+//
+// Alignment: not required on x86. The scalar tail stores 8-, 4- and 2-byte
+// words through typed pointers, which other targets may require aligned and
+// which UBSan's alignment check flags at unaligned addresses.
+// Padding: not required.
 template <typename A = xsimd::default_arch>
 void memset(void* to, char data, int32_t bytes, const A& = {});
 
@@ -575,6 +645,9 @@ void memset(void* to, char data, int32_t bytes, const A& = {});
 // Uses a simpler structure than std::fill's auto-vectorized code — broadcast +
 // tight store loop + overlapping tail — that performs better for repeated calls
 // with small variable-length fills.
+//
+// Alignment: 'output' must be aligned to alignof(T).
+// Padding: not required.
 template <typename T>
 inline void simdFill(T* output, T value, uint32_t count) {
   if constexpr (
@@ -629,6 +702,9 @@ inline void simdFill(T* output, T value, uint32_t count) {
 
 // Returns true if 'values[0]' to 'values[size - 1]' are consecutive
 // values of T. The values are expected to be sorted.
+//
+// Alignment: 'values' must be aligned to alignof(T).
+// Padding: not required.
 template <typename T>
 inline bool isDense(const T* values, int32_t size) {
   return (values[size - 1] - values[0] == size - 1);
@@ -640,9 +716,15 @@ xsimd::batch<T, A> reinterpretBatch(xsimd::batch<U, A>, const A& = {});
 
 // Compares memory at 'x' and 'y' and returns true if 'size' leading bytes are
 // equal. May address up to SIMD width -1 past end of either 'x' or 'y'.
+//
+// Alignment: not required.
+// Padding: simd::kPadding bytes after 'x' and 'y'. Compares full batches, up to
+// a batch minus one byte past 'size'.
 template <typename A = xsimd::default_arch>
 inline bool memEqualUnsafe(const void* x, const void* y, int32_t size);
 
+/// Alignment: not required.
+/// Padding: not required.
 FOLLY_ALWAYS_INLINE size_t
 simdStrstr(const char* s, size_t n, const char* needle, size_t k);
 

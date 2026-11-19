@@ -453,7 +453,10 @@ class HashTableBenchmark : public VectorTestBase {
         constexpr int32_t kPadding = simd::kPadding / sizeof(int32_t);
         lookup->rows.resize(bits::roundUp(rows.size() + kPadding, kPadding));
         auto numRows = simd::indicesOfSetBits(
-            rows.asRange().bits(), 0, batch->size(), lookup->rows.data());
+            rows.asRange().bits(),
+            0,
+            batch->size(),
+            Padded<int32_t>::assumePadded(lookup->rows.data()));
         lookup->rows.resize(numRows);
       }
       auto startOffset = batchIndex * batchSize;
@@ -525,7 +528,10 @@ class HashTableBenchmark : public VectorTestBase {
         constexpr int32_t kPadding = simd::kPadding / sizeof(int32_t);
         lookup->rows.resize(bits::roundUp(rows.size() + kPadding, kPadding));
         auto numRows = simd::indicesOfSetBits(
-            rows.asRange().bits(), 0, batch->size(), lookup->rows.data());
+            rows.asRange().bits(),
+            0,
+            batch->size(),
+            Padded<int32_t>::assumePadded(lookup->rows.data()));
         lookup->rows.resize(numRows);
       }
       auto startOffset = batchIndex * batchSize;

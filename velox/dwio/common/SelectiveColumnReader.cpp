@@ -38,7 +38,10 @@ void ScanState::updateRawState() {
   rawState.dictionary2.values =
       dictionary2.values ? dictionary2.values->as<void*>() : nullptr;
   rawState.dictionary2.numValues = dictionary2.numValues;
-  rawState.inDictionary = inDictionary ? inDictionary->as<uint64_t>() : nullptr;
+  // Readers load 'inDictionary' 8 bits at a time from byte offsets, which
+  // needs padding.
+  rawState.inDictionary =
+      inDictionary ? paddedData<uint64_t>(*inDictionary).get() : nullptr;
   rawState.filterCache = filterCache.data();
 }
 

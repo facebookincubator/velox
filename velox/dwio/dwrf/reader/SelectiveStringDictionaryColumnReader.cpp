@@ -236,12 +236,14 @@ void SelectiveStringDictionaryColumnReader::read(
         scanState_.inDictionary, bits::nwords(numFlags), pool_);
     // The in dict buffer may have changed. If no change in
     // dictionary, the raw state will not be updated elsewhere.
-    scanState_.rawState.inDictionary = scanState_.inDictionary->as<uint64_t>();
+    scanState_.rawState.inDictionary =
+        paddedData<uint64_t>(*scanState_.inDictionary).get();
 
     inDictionaryReader_->next(
-        scanState_.inDictionary->asMutable<char>(),
+        paddedMutableData<char>(*scanState_.inDictionary),
         numFlags,
-        isBulk ? nullptr : nullsPtr);
+        isBulk || !nullsPtr ? nullptr
+                            : paddedData<uint64_t>(*nullsInReadRange_));
     loadStrideDictionary();
   }
 

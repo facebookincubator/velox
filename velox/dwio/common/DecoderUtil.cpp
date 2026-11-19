@@ -28,37 +28,49 @@ int32_t nonNullRowsFromDense(
     int32_t numRows,
     raw_vector<int32_t>& nonNullRows) {
   nonNullRows.resize(numRows);
-  auto size = simd::indicesOfSetBits(nulls, 0, numRows, nonNullRows.data());
+  auto size =
+      simd::indicesOfSetBits(nulls, 0, numRows, nonNullRows.paddedData());
   nonNullRows.resize(size);
   return size;
 }
+
 // Returns 8 bits starting at bit 'index'.
-uint8_t load8Bits(const uint64_t* bits, int32_t index) {
+//
+// Alignment: not required.
+// Padding: simd::kPadding bytes after 'bits', which is read 2 bytes at a time
+// from byte offsets.
+uint8_t load8Bits(Padded<const uint64_t> bits, int32_t index) {
   uint8_t shift = index & 7;
   uint32_t byte = index >> 3;
-  auto asBytes = reinterpret_cast<const uint8_t*>(bits);
+  auto asBytes = reinterpret_cast<const uint8_t*>(bits.get());
   return (folly::loadUnaligned<int16_t>(asBytes + byte) >> shift);
 }
 
 // Loads 'width' bits starting at bit 'index' in 'bits'. 'width is
 // 56 bits or less, so that we can for any index load all the bits
 // in a 64 bit load.
-uint64_t loadUpTo56Bits(const uint64_t* bits, int32_t index, int32_t width) {
+//
+// Alignment: not required.
+// Padding: simd::kPadding bytes after 'bits', which is read 8 bytes at a time
+// from byte offsets.
+uint64_t
+loadUpTo56Bits(Padded<const uint64_t> bits, int32_t index, int32_t width) {
   uint8_t shift = index & 7;
   uint32_t byte = index >> 3;
-  auto asBytes = reinterpret_cast<const uint8_t*>(bits);
+  auto asBytes = reinterpret_cast<const uint8_t*>(bits.get());
   return (folly::loadUnaligned<uint64_t>(asBytes + byte) >> shift) &
       bits::lowMask(width);
 }
 
 template <bool isFilter, bool outputNulls>
 bool nonNullRowsFromSparse(
-    const uint64_t* nulls,
+    Padded<const uint64_t> paddedNulls,
     RowSet rows,
     raw_vector<int32_t>& innerRows,
     raw_vector<int32_t>& outerRows,
     uint8_t* resultNullBytes,
     int32_t& tailSkip) {
+  const uint64_t* nulls = paddedNulls.get();
   constexpr int32_t kStep = xsimd::batch<int32_t>::size;
   bool anyNull = false;
   auto numIn = rows.size();
@@ -79,7 +91,7 @@ bool nonNullRowsFromSparse(
     if (!skip) {
       // Consecutive non-nulls
     } else if (skip < 56) {
-      auto bits = loadUpTo56Bits(nulls, lastNonNull + 1, skip);
+      auto bits = loadUpTo56Bits(paddedNulls, lastNonNull + 1, skip);
       numNulls += skip - __builtin_popcountll(bits);
     } else {
       numNulls += skip -
@@ -92,7 +104,7 @@ bool nonNullRowsFromSparse(
     int32_t width = i + kStep > numIn ? numIn - i : kStep;
     int16_t widthMask = bits::lowMask(width);
     if (isDense(rows.data() + i, width)) {
-      uint16_t flags = load8Bits(nulls, rows[i]) & widthMask;
+      uint16_t flags = load8Bits(paddedNulls, rows[i]) & widthMask;
       if (outputNulls) {
         bits::storeBitsToByte<kStep>(flags, resultNullBytes, i);
         anyNull |= flags != widthMask;
@@ -156,7 +168,7 @@ bool nonNullRowsFromSparse(
 }
 
 template bool nonNullRowsFromSparse<true, false>(
-    const uint64_t* nulls,
+    Padded<const uint64_t> nulls,
     RowSet rows,
     raw_vector<int32_t>& innerRows,
     raw_vector<int32_t>& outerRows,
@@ -164,7 +176,7 @@ template bool nonNullRowsFromSparse<true, false>(
     int32_t& tailSkip);
 
 template bool nonNullRowsFromSparse<false, true>(
-    const uint64_t* nulls,
+    Padded<const uint64_t> nulls,
     RowSet rows,
     raw_vector<int32_t>& innerRows,
     raw_vector<int32_t>& outerRows,
@@ -172,7 +184,7 @@ template bool nonNullRowsFromSparse<false, true>(
     int32_t& tailSkip);
 
 template bool nonNullRowsFromSparse<false, false>(
-    const uint64_t* nulls,
+    Padded<const uint64_t> nulls,
     RowSet rows,
     raw_vector<int32_t>& innerRows,
     raw_vector<int32_t>& outerRows,

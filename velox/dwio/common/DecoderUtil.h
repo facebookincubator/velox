@@ -51,32 +51,33 @@ enum FilterResult { kUnknown = 0x40, kSuccess = 0x80, kFailure = 0 };
 /// to skip indices already known to pass or fail, resolves cache-unknown
 /// indices by invoking 'testIndex' (which the kernel then records into
 /// 'filterCache' as kSuccess/kFailure), and compacts the passing entries. For
-/// each passing entry the corresponding 'rows' value is appended to
-/// 'filterHits'; unless 'kFilterOnly' is set, the passing dictionary index is
-/// also appended to 'values'. The caller supplies 'rows' already offset to the
-/// current position. Returns the updated number of output values.
+/// each passing entry the corresponding 'paddedRows' value is appended to
+/// 'paddedFilterHits'; unless 'kFilterOnly' is set, the passing dictionary
+/// index is also appended to 'paddedValues'. The caller supplies 'paddedRows'
+/// already offset to the current position. Returns the updated number of output
+/// values.
 ///
-/// Caller-side buffer contracts -- the kernel reads and writes a full SIMD
-/// width at the tail and gathers the cache through a misaligned load, none of
-/// which is bounds-checked:
-///  - 'input' and 'rows' must each have at least kWidth
-///    (= xsimd::batch<int32_t>::size) readable elements beyond 'numInput'.
-///  - 'filterHits', and unless 'kFilterOnly' also 'values', must have room for
-///    at least 'numValues' + 'numInput' + kWidth entries.
-///  - 'filterCache' must have >= 3 bytes of valid leading padding, because each
-///    verdict is gathered via 'filterCache + index - 3'. The Nimble and Velox
-///    callers satisfy this with raw_vector<uint8_t>, whose data() is offset by
-///    velox::simd::kPadding (>= 16).
+/// Alignment: 'paddedInput', 'paddedRows', 'paddedFilterHits' and
+/// 'paddedValues' must be 4-byte aligned. 'filterCache' need not be aligned on
+/// AVX2. On other targets, it is read as int32_t words at byte offsets.
+/// Padding: simd::kPadding bytes after 'paddedInput' and 'paddedRows', and
+/// after the last entry written to 'paddedFilterHits' and 'paddedValues', which
+/// are read and written a full batch at a time. 'filterCache' must have 3
+/// readable bytes before it, which a raw_vector<uint8_t> provides.
 template <bool kFilterOnly, typename TestIndex>
 int32_t filterDictionaryRunSimd(
-    const int32_t* input,
+    Padded<const int32_t> paddedInput,
     int32_t numInput,
-    const int32_t* rows,
+    Padded<const int32_t> paddedRows,
     uint8_t* filterCache,
-    int32_t* filterHits,
-    int32_t* values,
+    Padded<int32_t> paddedFilterHits,
+    Padded<int32_t> paddedValues,
     int32_t numValues,
     TestIndex&& testIndex) {
+  const int32_t* input = paddedInput.get();
+  const int32_t* rows = paddedRows.get();
+  int32_t* filterHits = paddedFilterHits.get();
+  int32_t* values = paddedValues.get();
   constexpr int32_t kWidth = xsimd::batch<int32_t>::size;
   for (auto i = 0; i < numInput; i += kWidth) {
     auto indices = xsimd::load_unaligned(input + i);
@@ -141,6 +142,8 @@ int32_t filterDictionaryRunSimd(
   return numValues;
 }
 
+/// Alignment: 'nulls' must be 8-byte aligned.
+/// Padding: not required.
 inline int32_t firstNullIndex(const uint64_t* nulls, int32_t numRows) {
   int32_t first = -1;
   bits::testUnsetBits(nulls, 0, numRows, [&](int32_t row) {
@@ -151,12 +154,18 @@ inline int32_t firstNullIndex(const uint64_t* nulls, int32_t numRows) {
 }
 
 // Returns raw bytes because fixed-width page data may be unaligned.
+//
+// Alignment: not required.
+// Padding: not required.
 template <typename T>
 const char*
 fixedWidthValueBytes(const T* buffer, int32_t row, int32_t rowOffset) {
   return reinterpret_cast<const char*>(buffer) + (row - rowOffset) * sizeof(T);
 }
 
+/// Alignment: 'indices' must be 4-byte aligned, 'target' aligned to alignof(T),
+/// and 'data' aligned to alignof(T) unless 'Any' is char.
+/// Padding: not required.
 template <typename T, typename Any>
 void scatterDense(
     const Any* data,
@@ -194,15 +203,20 @@ auto bitMaskIndices(uint8_t bits, const A& arch = {}) {
 // Filters and writes a SIMD register worth of values into scan
 // output. T is the element type of 'values'. 'width' is the number
 // of valid leading elements in 'values'.  Appends the row numbers
-// of passing values to 'filterHits', starting at 'numValues'. If
+// of passing values to 'paddedFilterHits', starting at 'numValues'. If
 // 'filterOnly' is false, also appends the passing values themselves
-// into 'rawValues', starting at 'numValues'. Increments 'numValues'
+// into 'paddedRawValues', starting at 'numValues'. Increments 'numValues'
 // with the count of passing values. 'loadIndices' is a lambda that
 // returns the row numbers corresponding to the elements in
 // 'values'. These are not necessarily contiguous since values from
 // non-contiguous rows may have been gathered for a single call to
 // this. loadIndices is called with the zero-based index of the
 // row-index SIMD batch corresponding to 'values'.
+//
+// Alignment: not required.
+// Padding: simd::kPadding bytes after the last entry stored in
+// 'paddedRawValues' and 'paddedFilterHits', which are written a full batch at a
+// time.
 template <
     typename T,
     bool filterOnly,
@@ -216,9 +230,11 @@ inline void processFixedFilter(
     int32_t firstRow,
     TFilter& filter,
     LoadIndices loadIndices,
-    T* rawValues,
-    int32_t* filterHits,
+    Padded<T> paddedRawValues,
+    Padded<int32_t> paddedFilterHits,
     int32_t& numValues) {
+  T* rawValues = paddedRawValues.get();
+  int32_t* filterHits = paddedFilterHits.get();
   constexpr int32_t kWidth = xsimd::batch<T>::size;
   constexpr int32_t kIndexLaneCount = xsimd::batch<int32_t>::size;
   constexpr bool kHasSecondIndexBatch = kWidth > kIndexLaneCount;
@@ -273,6 +289,12 @@ inline void processFixedFilter(
 
 struct NoHook;
 
+/// Alignment: 'paddedRows', 'paddedScatterRows' and 'paddedFilterHits' must be
+/// 4-byte aligned, and 'voidValues' aligned to alignof(T). The stream buffer
+/// need not be aligned on AVX2. On other targets, its values are read through
+/// typed pointers, as 32-bit words for 16-bit T.
+/// Padding: simd::kPadding bytes after 'paddedRows' and 'paddedScatterRows',
+/// and after the last value written to 'voidValues' and 'paddedFilterHits'.
 template <
     typename T,
     bool filterOnly,
@@ -280,10 +302,11 @@ template <
     typename TFilter,
     typename THook>
 void fixedWidthScan(
-    folly::Range<const int32_t*> rows,
-    const int32_t* scatterRows,
-    void* voidValues,
-    int32_t* filterHits,
+    Padded<const int32_t> paddedRows,
+    int32_t numRows,
+    Padded<const int32_t> paddedScatterRows,
+    Padded<void> voidValues,
+    Padded<int32_t> paddedFilterHits,
     int32_t& numValues,
     dwio::common::SeekableInputStream& input,
     const char*& bufferStart,
@@ -298,7 +321,12 @@ void fixedWidthScan(
   constexpr bool hasFilter =
       !std::is_same_v<TFilter, velox::common::AlwaysTrue>;
   constexpr bool hasHook = !std::is_same_v<THook, NoHook>;
-  auto rawValues = reinterpret_cast<T*>(voidValues);
+  const folly::Range<const int32_t*> rows(paddedRows.get(), numRows);
+  const int32_t* scatterRows = paddedScatterRows.get();
+  auto rawValues = reinterpret_cast<T*>(voidValues.get());
+  // The same memory as 'voidValues', with the same padding.
+  const auto paddedRawValues = Padded<T>::assumePadded(rawValues);
+  int32_t* filterHits = paddedFilterHits.get();
   loopOverBuffers<T>(
       rows,
       0,
@@ -377,8 +405,8 @@ void fixedWidthScan(
                             (scatter ? scatterRows : rows) + rowIndex +
                             kIndexLaneCount * offset);
                       },
-                      rawValues,
-                      filterHits,
+                      paddedRawValues,
+                      paddedFilterHits,
                       numValues);
                   firstRow += kWidth;
                   rowIndex += kWidth;
@@ -432,8 +460,8 @@ void fixedWidthScan(
                             ? simd::loadGatherIndices<T>(scatterRows + rowIndex)
                             : indices;
                       },
-                      rawValues,
-                      filterHits,
+                      paddedRawValues,
+                      paddedFilterHits,
                       numValues);
                 }
                 rowIndex += kWidth;
@@ -484,8 +512,8 @@ void fixedWidthScan(
                             (scatter ? scatterRows : rows) + rowIndex +
                             kIndexLaneCount * offset);
                       },
-                      rawValues,
-                      filterHits,
+                      paddedRawValues,
+                      paddedFilterHits,
                       numValues);
                 }
                 rowIndex += width;
@@ -495,6 +523,8 @@ void fixedWidthScan(
       });
 }
 
+/// Alignment: 'nulls' must be 8-byte aligned.
+/// Padding: not required.
 int32_t nonNullRowsFromDense(
     const uint64_t* nulls,
     int32_t numRows,
@@ -520,18 +550,25 @@ int32_t nonNullRowsFromDense(
 // non-null row numbers in the original 'rows'.. In other words, the
 // filter case produces row numbers for the passing rows. A filter
 // cannot pass for a null on this code path.
+//
+// Alignment: 'nulls' must be 8-byte aligned.
+// Padding: simd::kPadding bytes after 'nulls', which is read 8 bytes at a time
+// from byte offsets, and after 'rows', which is loaded a SIMD batch at a time.
 template <bool isFilter, bool outputNulls>
 bool nonNullRowsFromSparse(
-    const uint64_t* nulls,
+    Padded<const uint64_t> nulls,
     RowSet rows,
     raw_vector<int32_t>& innerRows,
     raw_vector<int32_t>& outerRows,
     uint8_t* resultNulls,
     int32_t& tailSkip);
 
+/// Alignment: 'nulls' must be 8-byte aligned.
+/// Padding: simd::kPadding bytes after 'nulls' and 'rows', as for the overload
+/// above.
 template <bool isFilter, bool outputNulls>
 bool nonNullRowsFromSparse(
-    const uint64_t* nulls,
+    Padded<const uint64_t> nulls,
     RowSet rows,
     raw_vector<int32_t>& innerRows,
     raw_vector<int32_t>& outerRows,
@@ -567,6 +604,9 @@ bool useFastPath(Visitor& visitor, bool hasNulls) {
 // higher indices. data[target[targetBegin + numValues - 1] = data[sourceBegin +
 // numValues - 1] is the first copy in execution order and
 // data[target[targetBegin]] = data[sourceBegin] is the last copy.
+//
+// Alignment: 'target' must be 4-byte aligned, and 'data' aligned to alignof(T).
+// Padding: not required.
 template <typename T>
 void scatterNonNulls(
     int32_t targetBegin,
@@ -575,8 +615,8 @@ void scatterNonNulls(
     const int32_t* target,
     T* data);
 
-// Processes a run of contiguous Ts in 'values'. 'values', starting at
-// 'numValues' have been decoded from consecutive (dense case) or
+// Processes a run of contiguous Ts in 'paddedValues'. 'paddedValues', starting
+// at 'numValues' have been decoded from consecutive (dense case) or
 // non-consecutive places in the encoding. The row number in the
 // non-null space for values[numValues + i] is rows[rowIndex +i ].
 // If hook, call it on
@@ -585,12 +625,18 @@ void scatterNonNulls(
 // values so that there is a gap for the nulls.
 //
 // If filter, filter the values and shift them down so that there are
-// no gaps. Produce the passing row numbers in 'filterHits'. If there
+// no gaps. Produce the passing row numbers in 'paddedFilterHits'. If there
 // are nulls, scatter the passing row numbers.
 //
 // 'numInput' is the number of new values to process. The first of these is in
 // values[numValues]. 'rowIndex' is the index of the corresponding value in
-// 'scatterRows'
+// 'paddedScatterRows'
+//
+// Alignment: 'paddedRows', 'paddedScatterRows' and 'paddedFilterHits' must be
+// 4-byte aligned, and 'paddedValues' aligned to alignof(T).
+// Padding: simd::kPadding bytes after 'paddedRows', 'paddedScatterRows' and
+// 'paddedValues', which are read a full batch at a time, and after the last
+// entry written to 'paddedValues' and 'paddedFilterHits'.
 template <
     typename T,
     bool filterOnly,
@@ -599,15 +645,19 @@ template <
     typename TFilter,
     typename THook>
 void processFixedWidthRun(
-    folly::Range<const int32_t*> rows,
+    Padded<const int32_t> paddedRows,
+    int32_t numRows,
     int32_t rowIndex,
     int32_t numInput,
-    const int32_t* scatterRows,
-    T* values,
-    int32_t* filterHits,
+    Padded<const int32_t> paddedScatterRows,
+    Padded<T> paddedValues,
+    Padded<int32_t> paddedFilterHits,
     int32_t& numValues,
     const TFilter& filter,
     THook& hook) {
+  const folly::Range<const int32_t*> rows(paddedRows.get(), numRows);
+  const int32_t* scatterRows = paddedScatterRows.get();
+  T* values = paddedValues.get();
   constexpr int32_t kWidth = xsimd::batch<T>::size;
   constexpr int32_t kIndexLaneCount = xsimd::batch<int32_t>::size;
   constexpr bool hasFilter =
@@ -641,8 +691,8 @@ void processFixedWidthRun(
               (scatter ? scatterRows : rows.data()) + rowIndex + row +
               offset * kIndexLaneCount);
         },
-        values,
-        filterHits,
+        paddedValues,
+        paddedFilterHits,
         numValues);
   }
   if (numInput > end) {
@@ -657,8 +707,8 @@ void processFixedWidthRun(
               (scatter ? scatterRows : rows.data()) + row + rowIndex +
               offset * kIndexLaneCount);
         },
-        values,
-        filterHits,
+        paddedValues,
+        paddedFilterHits,
         numValues);
   }
 }

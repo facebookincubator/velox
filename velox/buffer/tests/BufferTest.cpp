@@ -513,6 +513,25 @@ TEST_F(BufferTest, testAllocateSizeOverflow) {
       AlignedBuffer::reallocate<int64_t>(&buf, 1ull << 62), VeloxException);
 }
 
+TEST_F(BufferTest, paddedData) {
+  auto buffer = AlignedBuffer::allocate<int32_t>(10, pool_.get(), 7);
+  EXPECT_EQ(paddedData<int32_t>(*buffer).get(), buffer->as<int32_t>());
+  EXPECT_EQ(
+      paddedMutableData<int32_t>(*buffer).get(), buffer->asMutable<int32_t>());
+
+  // A BufferView, which can wrap external memory, has no padding.
+  MockCachePin pin;
+  const int32_t data[4] = {1, 2, 3, 4};
+  auto view = BufferView<MockCachePin&>::create(
+      reinterpret_cast<const uint8_t*>(data), sizeof(data), pin);
+  VELOX_ASSERT_THROW(
+      paddedData<int32_t>(*view),
+      "Padded data must not come from a BufferView.");
+  VELOX_ASSERT_THROW(
+      paddedMutableData<int32_t>(*view),
+      "Padded data must not come from a BufferView.");
+}
+
 TEST_F(BufferTest, sliceBigintBuffer) {
   auto bufferPtr = AlignedBuffer::allocate<int64_t>(10, pool_.get());
   auto sliceBufferPtr = Buffer::slice<int64_t>(bufferPtr, 1, 5, pool_.get());

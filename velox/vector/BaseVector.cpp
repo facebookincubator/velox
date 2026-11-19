@@ -1485,9 +1485,10 @@ std::string printIndices(
 void BaseVector::transposeIndices(
     const vector_size_t* baseIndices,
     vector_size_t wrapSize,
-    const vector_size_t* wrapIndices,
+    Padded<const vector_size_t> paddedWrapIndices,
     vector_size_t* resultIndices) {
 #if XSIMD_WITH_AVX2
+  const vector_size_t* wrapIndices = paddedWrapIndices.get();
 
   constexpr int32_t kBatch = xsimd::batch<int32_t>::size;
   static_assert(kBatch == 8);
@@ -1499,10 +1500,13 @@ void BaseVector::transposeIndices(
   }
   if (i < wrapSize) {
     auto indexBatch = xsimd::load_unaligned(wrapIndices + i);
-    auto mask = simd::leadingMask<int32_t>(wrapSize - i);
-    simd::maskGather(
-        xsimd::batch<int32_t>::broadcast(0), mask, baseIndices, indexBatch)
-        .store_unaligned(resultIndices + i);
+    const auto numLeft = wrapSize - i;
+    const auto mask = simd::leadingMask<int32_t>(numLeft);
+    const auto values = simd::maskGather(
+        xsimd::batch<int32_t>::broadcast(0), mask, baseIndices, indexBatch);
+    // Stores only the valid lanes: 'resultIndices' may have no capacity past
+    // them.
+    simd::storeLeading(values, mask, numLeft, resultIndices + i);
   }
 #else
   VELOX_NYI();
@@ -1514,11 +1518,12 @@ void BaseVector::transposeIndicesWithNulls(
     const vector_size_t* baseIndices,
     const uint64_t* baseNulls,
     vector_size_t wrapSize,
-    const vector_size_t* wrapIndices,
+    Padded<const vector_size_t> paddedWrapIndices,
     const uint64_t* wrapNulls,
     vector_size_t* resultIndices,
     uint64_t* resultNulls) {
 #if XSIMD_WITH_AVX2
+  const vector_size_t* wrapIndices = paddedWrapIndices.get();
 
   constexpr int32_t kBatch = xsimd::batch<int32_t>::size;
   static_assert(kBatch == 8);
@@ -1541,8 +1546,18 @@ void BaseVector::transposeIndicesWithNulls(
       wrapNullsByte &= baseNullBits;
     }
     reinterpret_cast<uint8_t*>(resultNulls)[i / 8] = wrapNullsByte;
-    simd::gather<int32_t>(baseIndices, indexBatch)
-        .store_unaligned(resultIndices + i);
+    const auto values = simd::gather<int32_t>(baseIndices, indexBatch);
+    if (i + kBatch > wrapSize) {
+      // Stores only the valid lanes: 'resultIndices' may have no capacity past
+      // them.
+      simd::storeLeading(
+          values,
+          simd::leadingMask<int32_t>(wrapSize - i),
+          wrapSize - i,
+          resultIndices + i);
+    } else {
+      values.store_unaligned(resultIndices + i);
+    }
   }
 #else
   VELOX_NYI();
@@ -1555,7 +1570,8 @@ void BaseVector::transposeDictionaryValues(
     BufferPtr& wrapNulls,
     BufferPtr& wrapIndices,
     std::shared_ptr<BaseVector>& dictionaryValues) {
-  if (!wrapIndices->unique()) {
+  // The transposes need padding, which a BufferView lacks.
+  if (!wrapIndices->unique() || wrapIndices->isView()) {
     wrapIndices = AlignedBuffer::copy(dictionaryValues->pool(), wrapIndices);
   }
   auto* rawBaseNulls = dictionaryValues->rawNulls();
@@ -1564,7 +1580,7 @@ void BaseVector::transposeDictionaryValues(
     transposeIndices(
         baseIndices->as<vector_size_t>(),
         wrapSize,
-        wrapIndices->as<vector_size_t>(),
+        paddedData<vector_size_t>(*wrapIndices),
         wrapIndices->asMutable<vector_size_t>());
   } else {
     BufferPtr newNulls;
@@ -1578,7 +1594,7 @@ void BaseVector::transposeDictionaryValues(
         baseIndices->as<vector_size_t>(),
         rawBaseNulls,
         wrapSize,
-        wrapIndices->as<vector_size_t>(),
+        paddedData<vector_size_t>(*wrapIndices),
         wrapNulls ? wrapNulls->as<uint64_t>() : nullptr,
         wrapIndices->asMutable<vector_size_t>(),
         newNulls->asMutable<uint64_t>());

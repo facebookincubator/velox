@@ -256,7 +256,7 @@ void serializeDictionaryVectorRanges(
   auto* mutableSelectedIndices =
       selectedIndicesHolder.get(dictionaryVector->valueVector()->size());
   auto numUsed = computeSelectedIndices(
-      dictionaryVector, ranges, scratch, mutableSelectedIndices);
+      dictionaryVector, ranges, scratch, selectedIndicesHolder.paddedData());
 
   if (!stream->preserveEncodings()) {
     // If the values are fixed width and we aren't getting enough reuse to
@@ -483,7 +483,7 @@ void appendTimestamps(
   ScratchPtr<vector_size_t, 64> nonNullHolder(scratch);
   auto* nonNullRows = nonNullHolder.get(rows.size());
   const auto numNonNull =
-      simd::indicesOfSetBits(nulls, 0, rows.size(), nonNullRows);
+      simd::indicesOfSetBits(nulls, 0, rows.size(), nonNullHolder.paddedData());
   stream->appendNulls(nulls, 0, rows.size(), numNonNull);
   for (auto i = 0; i < numNonNull; ++i) {
     stream->appendOne(timestamps[rows[nonNullRows[i]]]);
@@ -511,7 +511,7 @@ void appendStrings(
   ScratchPtr<vector_size_t, 64> nonNullHolder(scratch);
   auto* nonNull = nonNullHolder.get(rows.size());
   const auto numNonNull =
-      simd::indicesOfSetBits(nulls, 0, rows.size(), nonNull);
+      simd::indicesOfSetBits(nulls, 0, rows.size(), nonNullHolder.paddedData());
   stream->appendLengths(
       nulls, rows, numNonNull, [&](auto row) { return views[row].size(); });
   for (auto i = 0; i < numNonNull; ++i) {
@@ -617,7 +617,8 @@ void appendNonNull(
     // Convert null flags to indices. This is much faster than checking bits one
     // by one, several bits per clock specially if mostly null or non-null. Even
     // worst case of half nulls is more than one row per clock.
-    numNonNull = simd::indicesOfSetBits(nulls, 0, numRows, mutableIndices);
+    numNonNull =
+        simd::indicesOfSetBits(nulls, 0, numRows, nonNullHolder.paddedData());
     nonNullIndices = numNonNull == numRows ? nullptr : mutableIndices;
   }
   stream->appendNulls(nulls, 0, rows.size(), numNonNull);
@@ -751,7 +752,8 @@ void serializeFlatVector<TypeKind::BOOLEAN>(
     simd::gatherBits(vector->rawNulls(), rows, nulls);
     ScratchPtr<vector_size_t, 64> nonNullsHolder(scratch);
     auto* nonNulls = nonNullsHolder.get(rows.size());
-    numValueBits = simd::indicesOfSetBits(nulls, 0, rows.size(), nonNulls);
+    numValueBits = simd::indicesOfSetBits(
+        nulls, 0, rows.size(), nonNullsHolder.paddedData());
     stream->appendNulls(nulls, 0, rows.size(), numValueBits);
     valueBits = nulls;
     simd::transpose(
@@ -899,8 +901,8 @@ void serializeRowVector(
     auto nulls = nullsHolder.get(bits::nwords(rows.size()));
     simd::gatherBits(rawNulls, rows, nulls);
     auto* mutableInnerRows = innerRowsHolder.get(rows.size());
-    numInnerRows =
-        simd::indicesOfSetBits(nulls, 0, rows.size(), mutableInnerRows);
+    numInnerRows = simd::indicesOfSetBits(
+        nulls, 0, rows.size(), innerRowsHolder.paddedData());
     stream->appendLengths(nulls, rows, numInnerRows, [](int32_t) { return 1; });
     simd::transpose(
         rows.data(),
@@ -1176,7 +1178,8 @@ int32_t rowsToRanges(
     simd::gatherBits(rawNulls, rows, nulls);
     auto* mutableNonNullRows = nonNullHolder.get(numRows);
     auto* mutableInnerRows = innerRowsHolder.get(numRows);
-    numInner = simd::indicesOfSetBits(nulls, 0, numRows, mutableNonNullRows);
+    numInner =
+        simd::indicesOfSetBits(nulls, 0, numRows, nonNullHolder.paddedData());
     if (stream) {
       stream->appendLengths(
           nulls, rows, numInner, [&](auto row) { return sizes[row]; });

@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <numeric>
 #include <optional>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -2285,6 +2286,55 @@ TEST_F(VectorTest, wrapInDictionaryOverLoadedLazy) {
   auto dict = wrapInDictionary(makeIndices(size, std::identity{}), size, lazy);
   auto valuesVector = dict->valueVector();
   EXPECT_FALSE(valuesVector->isLazy());
+}
+
+TEST_F(VectorTest, transposeIndicesWritesOnlyResult) {
+#if !XSIMD_WITH_AVX2
+  GTEST_SKIP() << "The transposes need AVX2.";
+#endif
+  // The transposes store only into the 'wrapSize' result indices. A buffer
+  // whose pool allocates exact sizes has no capacity after them.
+  constexpr vector_size_t kSentinel = -7;
+  std::vector<vector_size_t> baseIndices(100);
+  std::iota(baseIndices.begin(), baseIndices.end(), 1'000);
+  // Room for a full batch of indices, so that the loads stay in bounds.
+  raw_vector<vector_size_t> wrapIndices(16);
+  for (auto i = 0; i < wrapIndices.size(); ++i) {
+    wrapIndices[i] = 99 - i * 7;
+  }
+  uint64_t baseNulls[2] = {~0ULL, ~0ULL};
+  for (const vector_size_t size : {5, 13}) {
+    SCOPED_TRACE(fmt::format("size {}", size));
+    {
+      std::vector<vector_size_t> result(16, kSentinel);
+      BaseVector::transposeIndices(
+          baseIndices.data(), size, wrapIndices.paddedData(), result.data());
+      for (auto i = 0; i < size; ++i) {
+        EXPECT_EQ(result[i], baseIndices[wrapIndices[i]]) << i;
+      }
+      for (auto i = size; i < result.size(); ++i) {
+        EXPECT_EQ(result[i], kSentinel) << i;
+      }
+    }
+    {
+      std::vector<vector_size_t> result(16, kSentinel);
+      uint64_t resultNulls[2]{};
+      BaseVector::transposeIndicesWithNulls(
+          baseIndices.data(),
+          baseNulls,
+          size,
+          wrapIndices.paddedData(),
+          nullptr,
+          result.data(),
+          resultNulls);
+      for (auto i = 0; i < size; ++i) {
+        EXPECT_EQ(result[i], baseIndices[wrapIndices[i]]) << i;
+      }
+      for (auto i = size; i < result.size(); ++i) {
+        EXPECT_EQ(result[i], kSentinel) << i;
+      }
+    }
+  }
 }
 
 TEST_F(VectorTest, dictionaryResize) {

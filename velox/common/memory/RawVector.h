@@ -18,6 +18,7 @@
 
 #include <folly/Range.h>
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/base/Padded.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/MemoryPool.h"
 
@@ -114,6 +115,11 @@ class raw_vector {
 
   T* data() const {
     return data_;
+  }
+
+  /// Returns data() as Padded: the data is followed by simd::kPadding bytes.
+  Padded<T> paddedData() const {
+    return Padded<T>::assumePadded(data_);
   }
 
   T& operator[](int64_t index) {

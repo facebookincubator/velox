@@ -411,14 +411,24 @@ class ColumnVisitor {
   /// Processes a run of values. Dense deterministic filters append matches to
   /// the supplied buffers and update numValues, using SIMD where supported.
   /// Requires dense rows, a deterministic filter, and no hook or scatter.
+  ///
+  /// Alignment: the rows must be 4-byte aligned and the values aligned to
+  /// their type.
+  /// Padding: simd::kPadding bytes after 'paddedInput' and
+  /// 'paddedScatterRows', which are read a full batch at a time, and after the
+  /// last entry written to 'paddedFilterHits' and 'paddedValues'.
   template <bool hasFilter, bool hasHook, bool scatter>
   FOLLY_ALWAYS_INLINE void processRun(
-      const T* input,
+      Padded<const T> paddedInput,
       int32_t numInput,
-      const int32_t* scatterRows,
-      int32_t* filterHits,
-      T* values,
+      Padded<const int32_t> paddedScatterRows,
+      Padded<int32_t> paddedFilterHits,
+      Padded<T> paddedValues,
       int32_t& numValues) {
+    const T* input = paddedInput.get();
+    const int32_t* scatterRows = paddedScatterRows.get();
+    int32_t* filterHits = paddedFilterHits.get();
+    T* values = paddedValues.get();
     DCHECK_EQ(input, values + numValues);
     if constexpr (
         !hasFilter && !hasHook && !scatter && isDense &&
@@ -452,8 +462,8 @@ class ColumnVisitor {
                 return simd::loadGatherIndices<T>(
                     rows_ + rowIndex_ + i + offset * kIndexLaneCount);
               },
-              values,
-              filterHits,
+              paddedValues,
+              paddedFilterHits,
               numValues);
           i += kWidth;
         }
@@ -1084,14 +1094,24 @@ class DictionaryColumnVisitor
   // to leave gaps  for nulls. If scatterRows is given, the ith value goes to
   // values[scatterRows[i]], else it goes to 'values[i]'. If 'hasFilter' is
   // true, the passing values are written to consecutive places in 'values'.
+  //
+  // Alignment: the rows must be 4-byte aligned and the values aligned to their
+  // type.
+  // Padding: simd::kPadding bytes after 'paddedInput' and 'paddedScatterRows',
+  // which are read a full batch at a time, and after the last entry written to
+  // 'paddedFilterHits' and 'paddedValues'.
   template <bool hasFilter, bool hasHook, bool scatter>
   void processRun(
-      const T* input,
+      Padded<const T> paddedInput,
       int32_t numInput,
-      const int32_t* scatterRows,
-      int32_t* filterHits,
-      T* values,
+      Padded<const int32_t> paddedScatterRows,
+      Padded<int32_t> paddedFilterHits,
+      Padded<T> paddedValues,
       int32_t& numValues) {
+    const T* input = paddedInput.get();
+    const int32_t* scatterRows = paddedScatterRows.get();
+    int32_t* filterHits = paddedFilterHits.get();
+    T* values = paddedValues.get();
     DCHECK_EQ(input, values + numValues);
     if constexpr (!DictionaryColumnVisitor::hasFilter()) {
       if (hasHook) {
@@ -1152,12 +1172,17 @@ class DictionaryColumnVisitor
       auto indices = loadIndices(input + i);
       xsimd::batch_bool<int32_t> dictMask;
       if (inDict()) {
+        // The reader keeps 'inDict()' and its row set in padded memory.
+        const auto inDictBits = Padded<const uint64_t>::assumePadded(inDict());
         if (simd::isDense(super::rows_ + super::rowIndex_ + i, width)) {
           dictMask = load8MaskDense(
-              inDict(), super::rows_[super::rowIndex_ + i], width);
+              inDictBits, super::rows_[super::rowIndex_ + i], width);
         } else {
           dictMask = load8MaskSparse(
-              inDict(), super::rows_ + super::rowIndex_ + i, width);
+              inDictBits,
+              Padded<const int32_t>::assumePadded(
+                  super::rows_ + super::rowIndex_ + i),
+              width);
         }
       } else {
         dictMask = simd::leadingMask<int32_t>(width);
@@ -1248,16 +1273,24 @@ class DictionaryColumnVisitor
     super::rowIndex_ += numInput;
   }
 
+  // Alignment: the rows must be 4-byte aligned and the values aligned to their
+  // type.
+  // Padding: simd::kPadding bytes after 'paddedScatterRows', which is read a
+  // full batch at a time, and after the last entry written to
+  // 'paddedFilterHits' and 'paddedValues'.
   template <bool hasFilter, bool hasHook, bool scatter>
   void processRle(
       typename make_index<T>::type value,
       typename make_index<T>::type delta,
       int32_t numRows,
       int32_t currentRow,
-      const int32_t* scatterRows,
-      int32_t* filterHits,
-      T* values,
+      Padded<const int32_t> paddedScatterRows,
+      Padded<int32_t> paddedFilterHits,
+      Padded<T> paddedValues,
       int32_t& numValues) {
+    const int32_t* scatterRows = paddedScatterRows.get();
+    int32_t* filterHits = paddedFilterHits.get();
+    T* values = paddedValues.get();
     auto indices = reinterpret_cast<typename make_index<T>::type*>(values);
     if (sizeof(T) == 8) {
       constexpr int32_t kWidth = xsimd::batch<int64_t>::size;
@@ -1288,11 +1321,11 @@ class DictionaryColumnVisitor
     }
 
     processRun<hasFilter, hasHook, scatter>(
-        values + numValues,
+        paddedValues + numValues,
         numRows,
-        scatterRows,
-        filterHits,
-        values,
+        paddedScatterRows,
+        paddedFilterHits,
+        paddedValues,
         numValues);
   }
 
@@ -1399,11 +1432,16 @@ class DictionaryColumnVisitor
   // Returns 'numBits' bits starting at bit 'index' in 'bits' as a
   // 8x32 mask. This is used as a mask for maskGather to load selected
   // lanes from a dictionary.
+  //
+  // Alignment: not required on x86. 'bits' is read as an int16_t at byte
+  // offsets, which other targets may require 2-byte aligned.
+  // Padding: simd::kPadding bytes after 'bits', which is read 2 bytes at a time
+  // from byte offsets.
   xsimd::batch_bool<int32_t>
-  load8MaskDense(const uint64_t* bits, int32_t index, int8_t numBits) {
+  load8MaskDense(Padded<const uint64_t> bits, int32_t index, int8_t numBits) {
     uint8_t shift = index & 7;
     uint32_t byte = index >> 3;
-    auto asBytes = reinterpret_cast<const uint8_t*>(bits);
+    auto asBytes = reinterpret_cast<const uint8_t*>(bits.get());
     auto mask = (*reinterpret_cast<const int16_t*>(asBytes + byte) >> shift) &
         bits::lowMask(numBits);
     return simd::fromBitMask<int32_t>(mask);
@@ -1411,9 +1449,17 @@ class DictionaryColumnVisitor
 
   // Returns 'numBits' bits at bit offsets in 'rows' from 'bits' as a
   // 8x32 mask for use in maskGather.
-  xsimd::batch_bool<int32_t>
-  load8MaskSparse(const uint64_t* bits, const int32_t* rows, int8_t numRows) {
-    return simd::fromBitMask<int32_t>(simd::gather8Bits(bits, rows, numRows));
+  //
+  // Alignment: not required.
+  // Padding: simd::kPadding bytes after 'bits', which is read 4 bytes at a time
+  // from byte offsets, and after 'rows', which is loaded a full batch at a
+  // time.
+  xsimd::batch_bool<int32_t> load8MaskSparse(
+      Padded<const uint64_t> bits,
+      Padded<const int32_t> rows,
+      int8_t numRows) {
+    return simd::fromBitMask<int32_t>(
+        simd::gather8Bits(bits.get(), rows.get(), numRows));
   }
 
   void translateByDict(const T* values, int numValues, T* out) {
@@ -1594,14 +1640,24 @@ class StringDictionaryColumnVisitor
   // remove non-passing. Returns the number of values in the result
   // after processing.
   // TODO: Deduplicate with filterDictionaryRunSimd() in DecoderUtil.h.
+  //
+  // Alignment: the rows must be 4-byte aligned and the values aligned to their
+  // type.
+  // Padding: simd::kPadding bytes after 'paddedInput' and 'paddedScatterRows',
+  // which are read a full batch at a time, and after the last entry written to
+  // 'paddedFilterHits' and 'paddedValues'.
   template <bool hasFilter, bool hasHook, bool scatter>
   void processRun(
-      const int32_t* input,
+      Padded<const int32_t> paddedInput,
       int32_t numInput,
-      const int32_t* scatterRows,
-      int32_t* filterHits,
-      int32_t* values,
+      Padded<const int32_t> paddedScatterRows,
+      Padded<int32_t> paddedFilterHits,
+      Padded<int32_t> paddedValues,
       int32_t& numValues) {
+    const int32_t* input = paddedInput.get();
+    const int32_t* scatterRows = paddedScatterRows.get();
+    int32_t* filterHits = paddedFilterHits.get();
+    int32_t* values = paddedValues.get();
     DCHECK(input == values + numValues);
     setByInDict(values + numValues, numInput);
     if constexpr (!DictSuper::hasFilter()) {
@@ -1694,16 +1750,25 @@ class StringDictionaryColumnVisitor
   // selected rows that fall in this RLE. If value is 10 and delta is 3
   // and rows is {20, 30}, then this processes a 25 at 20 and a 40 at
   // 30.
+  //
+  // Alignment: the rows must be 4-byte aligned and the values aligned to their
+  // type.
+  // Padding: simd::kPadding bytes after 'paddedScatterRows', which is read a
+  // full batch at a time, and after the last entry written to
+  // 'paddedFilterHits' and 'paddedValues'.
   template <bool hasFilter, bool hasHook, bool scatter>
   void processRle(
       int32_t value,
       int32_t delta,
       int32_t numRows,
       int32_t currentRow,
-      const int32_t* scatterRows,
-      int32_t* filterHits,
-      int32_t* values,
+      Padded<const int32_t> paddedScatterRows,
+      Padded<int32_t> paddedFilterHits,
+      Padded<int32_t> paddedValues,
       int32_t& numValues) {
+    const int32_t* scatterRows = paddedScatterRows.get();
+    int32_t* filterHits = paddedFilterHits.get();
+    int32_t* values = paddedValues.get();
     constexpr int32_t kWidth = xsimd::batch<int32_t>::size;
     for (auto i = 0; i < numRows; i += kWidth) {
       ((xsimd::load_unaligned(super::rows_ + super::rowIndex_ + i) -
@@ -1714,11 +1779,11 @@ class StringDictionaryColumnVisitor
     }
 
     processRun<hasFilter, hasHook, scatter>(
-        values + numValues,
+        paddedValues + numValues,
         numRows,
-        scatterRows,
-        filterHits,
-        values,
+        paddedScatterRows,
+        paddedFilterHits,
+        paddedValues,
         numValues);
   }
 
@@ -1771,25 +1836,37 @@ class DirectRleColumnVisitor
   // values[scatterRows[i]], else it goes to 'values[i]'. If
   // 'hasFilter' is true, the passing values are written to
   // consecutive places in 'values'.
+  //
+  // Alignment: the rows must be 4-byte aligned and the values aligned to their
+  // type.
+  // Padding: simd::kPadding bytes after 'paddedInput' and 'paddedScatterRows',
+  // which are read a full batch at a time, and after the last entry written to
+  // 'paddedFilterHits' and 'paddedValues'.
   template <bool hasFilter, bool hasHook, bool scatter>
   void processRun(
-      const T* input,
+      Padded<const T> paddedInput,
       int32_t numInput,
-      const int32_t* scatterRows,
-      int32_t* filterHits,
-      T* values,
+      Padded<const int32_t> paddedScatterRows,
+      Padded<int32_t> paddedFilterHits,
+      Padded<T> paddedValues,
       int32_t& numValues) {
+    const T* input = paddedInput.get();
+    const int32_t* scatterRows = paddedScatterRows.get();
+    int32_t* filterHits = paddedFilterHits.get();
+    T* values = paddedValues.get();
     DCHECK_EQ(input, values + numValues);
     constexpr bool filterOnly =
         std::is_same_v<typename super::Extract, DropValues>;
 
+    // The reader keeps its rows in padded memory.
     dwio::common::processFixedWidthRun<T, filterOnly, scatter, isDense>(
-        folly::Range<const vector_size_t*>(super::rows_, super::numRows_),
+        Padded<const int32_t>::assumePadded(super::rows_),
+        super::numRows_,
         super::rowIndex_,
         numInput,
-        scatterRows,
-        values,
-        filterHits,
+        paddedScatterRows,
+        paddedValues,
+        paddedFilterHits,
         numValues,
         super::filter_,
         super::values_.hook());
@@ -1797,16 +1874,24 @@ class DirectRleColumnVisitor
     super::rowIndex_ += numInput;
   }
 
+  // Alignment: the rows must be 4-byte aligned and the values aligned to their
+  // type.
+  // Padding: simd::kPadding bytes after 'paddedScatterRows', which is read a
+  // full batch at a time, and after the last entry written to
+  // 'paddedFilterHits' and 'paddedValues'.
   template <bool hasFilter, bool hasHook, bool scatter>
   void processRle(
       T value,
       T delta,
       int32_t numRows,
       int32_t currentRow,
-      const int32_t* scatterRows,
-      int32_t* filterHits,
-      T* values,
+      Padded<const int32_t> paddedScatterRows,
+      Padded<int32_t> paddedFilterHits,
+      Padded<T> paddedValues,
       int32_t& numValues) {
+    const int32_t* scatterRows = paddedScatterRows.get();
+    int32_t* filterHits = paddedFilterHits.get();
+    T* values = paddedValues.get();
     if (sizeof(T) == 8) {
       constexpr int32_t kWidth = xsimd::batch<int64_t>::size;
       for (auto i = 0; i < numRows; i += kWidth) {
@@ -1836,11 +1921,11 @@ class DirectRleColumnVisitor
     }
 
     processRun<hasFilter, hasHook, scatter>(
-        values + numValues,
+        paddedValues + numValues,
         numRows,
-        scatterRows,
-        filterHits,
-        values,
+        paddedScatterRows,
+        paddedFilterHits,
+        paddedValues,
         numValues);
   }
 };

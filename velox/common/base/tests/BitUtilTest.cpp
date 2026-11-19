@@ -16,6 +16,7 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Crc.h"
+#include "velox/common/base/SimdUtil.h"
 #include "velox/type/HugeInt.h"
 
 #include <cstring>
@@ -694,7 +695,9 @@ TEST_F(BitUtilTest, toString) {
 TEST_F(BitUtilTest, scatterBits) {
   constexpr int32_t kSize = 100;
   constexpr int32_t kNumBits = kSize * 64 - 2;
-  std::vector<uint64_t> mask(kSize);
+  // scatterBits reads and writes past the last bit, into this padding.
+  constexpr int32_t kPaddingWords = simd::kPadding / sizeof(uint64_t);
+  std::vector<uint64_t> mask(kSize + kPaddingWords);
   auto maskData = mask.data();
 
   // Ranges of tens of set and unset bits.
@@ -718,23 +721,35 @@ TEST_F(BitUtilTest, scatterBits) {
   }
 
   auto numInMask = bits::countBits(maskData, 0, kNumBits);
-  std::vector<uint64_t> source(kSize);
+  std::vector<uint64_t> source(kSize + kPaddingWords);
   uint64_t seed = 0x123456789abcdef0LL;
   for (auto& item : source) {
     item = seed;
     seed *= 0x5cdf;
   }
-  std::vector<char> test(kSize * 8);
-  std::vector<char> reference(kSize * 8);
+  std::vector<char> test(kSize * 8 + simd::kPadding);
+  std::vector<char> reference(kSize * 8 + simd::kPadding);
   auto sourceAsChar = reinterpret_cast<char*>(source.data());
-  scatterBits(numInMask, kNumBits, sourceAsChar, maskData, test.data());
+  const auto paddedSource = Padded<char>::assumePadded(sourceAsChar);
+  const auto paddedMask = Padded<const uint64_t>::assumePadded(maskData);
+  scatterBits(
+      numInMask,
+      kNumBits,
+      paddedSource,
+      paddedMask,
+      Padded<char>::assumePadded(test.data()));
   // Generate the reference output with the non-BMI implementation.
   FLAGS_bmi2 = false; // NOLINT
-  scatterBits(numInMask, kNumBits, sourceAsChar, maskData, reference.data());
+  scatterBits(
+      numInMask,
+      kNumBits,
+      paddedSource,
+      paddedMask,
+      Padded<char>::assumePadded(reference.data()));
   FLAGS_bmi2 = true; // NOLINT
   EXPECT_EQ(reference, test);
   // Repeat the same in place.
-  scatterBits(numInMask, kNumBits, sourceAsChar, maskData, sourceAsChar);
+  scatterBits(numInMask, kNumBits, paddedSource, paddedMask, paddedSource);
   for (int32_t i = kNumBits - 1; i >= 0; --i) {
     EXPECT_EQ(
         bits::isBitSet(reference.data(), i), bits::isBitSet(sourceAsChar, i));

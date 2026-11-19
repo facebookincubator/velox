@@ -967,3 +967,33 @@ TEST_F(OperatorUtilsTest, wrapMany) {
   EXPECT_EQ(
       projected[6]->valueVector()->encoding(), VectorEncoding::Simple::FLAT);
 }
+
+TEST_F(OperatorUtilsTest, wrapOneWithSlicedMapping) {
+#if !XSIMD_WITH_AVX2
+  GTEST_SKIP();
+#endif
+  // A mapping sliced from a larger one is a BufferView, which has no padding
+  // for the transposes.
+  constexpr vector_size_t kSize = 100;
+  auto mapping = makeIndicesInReverse(2 * kSize);
+  auto slicedMapping =
+      Buffer::slice<vector_size_t>(mapping, kSize, kSize, pool_.get());
+  ASSERT_TRUE(slicedMapping->isView());
+  auto base = makeFlatVector<int32_t>(2 * kSize, [](auto row) { return row; });
+  auto indices = makeIndices(2 * kSize, [](auto row) { return row; });
+  for (const bool hasBaseNulls : {false, true}) {
+    SCOPED_TRACE(fmt::format("hasBaseNulls {}", hasBaseNulls));
+    BufferPtr nulls;
+    if (hasBaseNulls) {
+      nulls = AlignedBuffer::allocate<bool>(2 * kSize, pool_.get(), true);
+      bits::setNull(nulls->asMutable<uint64_t>(), 7);
+    }
+    auto dictionary =
+        BaseVector::wrapInDictionary(nulls, indices, 2 * kSize, base);
+    WrapState state;
+    auto wrapped = wrapOne(kSize, slicedMapping, dictionary, nullptr, state);
+    facebook::velox::test::assertEqualVectors(
+        BaseVector::wrapInDictionary(nullptr, slicedMapping, kSize, dictionary),
+        wrapped);
+  }
+}

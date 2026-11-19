@@ -381,9 +381,11 @@ void ByteRleDecoder::skipBytes(size_t count) {
 }
 
 void ByteRleDecoder::next(
-    char* data,
+    Padded<char> paddedData,
     uint64_t numValues,
-    const uint64_t* nulls) {
+    Padded<const uint64_t> paddedNulls) {
+  char* data = paddedData.get();
+  const uint64_t* nulls = paddedNulls.get();
   skipPending();
 
   uint64_t position = 0;
@@ -480,8 +482,10 @@ void BooleanRleDecoder::skipPending() {
     ByteRleDecoder::skipPending();
     uint64_t bitsToSkip = numValues % 8;
     if (bitsToSkip) {
-      ByteRleDecoder::next(
-          reinterpret_cast<char*>(&reversedLastByte_), 1, nullptr);
+      // next() needs padding after its output.
+      char lastByte[1 + simd::kPadding];
+      ByteRleDecoder::next(Padded<char>::assumePadded(lastByte), 1, nullptr);
+      reversedLastByte_ = lastByte[0];
       bits::reverseBits(&reversedLastByte_, 1);
       remainingBits_ = 8 - bitsToSkip;
     }
@@ -489,9 +493,11 @@ void BooleanRleDecoder::skipPending() {
 }
 
 void BooleanRleDecoder::next(
-    char* data,
+    Padded<char> paddedData,
     uint64_t numValues,
-    const uint64_t* nulls) {
+    Padded<const uint64_t> paddedNulls) {
+  char* data = paddedData.get();
+  const uint64_t* nulls = paddedNulls.get();
   skipPending();
 
   uint64_t nonNulls = numValues;
@@ -522,7 +528,7 @@ void BooleanRleDecoder::next(
     // We need to read in (nonNulls - remainingBits) values and it must be a
     // positive number if nonNulls is positive
     const uint64_t bytesRead = bits::divRoundUp(nonNulls - remainingBits_, 8);
-    ByteRleDecoder::next(data, bytesRead, nullptr);
+    ByteRleDecoder::next(paddedData, bytesRead, nullptr);
 
     bits::reverseBits(reinterpret_cast<uint8_t*>(data), bytesRead);
     reversedLastByte_ = data[bytesRead - 1];
@@ -553,7 +559,7 @@ void BooleanRleDecoder::next(
 
   // Unpack data for nulls.
   if (numValues > nonNulls) {
-    bits::scatterBits(nonNulls, numValues, data, nulls, data);
+    bits::scatterBits(nonNulls, numValues, paddedData, paddedNulls, paddedData);
   }
 
   // Clear the most significant bits in the last byte which will be processed in
