@@ -129,7 +129,8 @@ HybridFlatMap makeHybridFlatMapConfig(
   }
   groups.push_back(
       {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}});
-  return HybridFlatMap{keyKind, std::move(groups)};
+  return HybridFlatMap{
+      keyKind, std::move(groups), HybridFlatMap::KeyPresenceMode::kBitmap};
 }
 
 NimbleIndexProjector::RowProjectionResult projectRows(
@@ -237,6 +238,7 @@ void NimbleIndexProjectorTestBase::writeData(
   };
   options.skipConstantFlatMapInMapStreams = skipConstantFlatMapInMapStreams;
   options.clusterIndexConfig = makeClusterIndexConfig(indexColumns);
+  options.clusterIndexKeyStreamLayout = currentTestParam().keyStreamLayout;
 
   options.flushPolicyFactory = [stripeSize]() {
     return std::make_unique<LambdaFlushPolicy>(
@@ -259,6 +261,21 @@ NimbleIndexProjectorTestBase::makeClusterIndexConfig(
       .withEnforceKeyOrder(true)
       .withNoDuplicateKey(true)
       .build();
+}
+
+void NimbleIndexProjectorTestBase::writeStripeKeyStreamData(
+    const std::vector<RowVectorPtr>& batches,
+    bool enableStreamChecksums) {
+  WriterOptions options;
+  options.encodingSelectionPolicyCreator = encodingViewSelectionPolicy();
+  options.clusterIndexConfig = makeClusterIndexConfig({"key"});
+  options.clusterIndexKeyStreamLayout = index::KeyStreamLayout::kStripe;
+  options.enableStreamChecksums = enableStreamChecksums;
+  options.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        [](const StripeProgress& /*progress*/) { return true; });
+  };
+  writeBatches(batches, std::move(options));
 }
 
 void NimbleIndexProjectorTestBase::writeBatches(
@@ -315,6 +332,22 @@ std::vector<TestParam> NimbleIndexProjectorTestBase::getIteratorTestParams() {
           {readerParam.cacheMetadata,
            readerParam.pinMetadata,
            cacheEncodingView});
+    }
+  }
+  return params;
+}
+
+std::vector<TestParam>
+NimbleIndexProjectorTestBase::getKeyStreamLayoutTestParams() {
+  std::vector<TestParam> params;
+  for (const auto& readerParam : getTestParams()) {
+    for (const auto keyStreamLayout :
+         {index::KeyStreamLayout::kPartition,
+          index::KeyStreamLayout::kStripe}) {
+      params.push_back(
+          {.cacheMetadata = readerParam.cacheMetadata,
+           .pinMetadata = readerParam.pinMetadata,
+           .keyStreamLayout = keyStreamLayout});
     }
   }
   return params;

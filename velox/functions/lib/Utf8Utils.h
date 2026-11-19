@@ -15,7 +15,9 @@
  */
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 #include "folly/CPortability.h"
 
@@ -111,6 +113,14 @@ void writeUtf16Escape(char16_t value, char*& out);
 /// UTF-16 surrogate pair for a supplementary-plane code point (>= U+10000). The
 /// caller must ensure `out` has room (6 bytes for BMP, 12 for supplementary).
 void encodeUtf16Hex(char32_t codePoint, char*& out);
+
+/// Reads the unicode escape of four hexadecimal digits that starts at the
+/// given position of the input into the UTF-16 code unit. Returns false if
+/// there is no complete escape at that position.
+bool parseUnicodeEscape(
+    std::string_view input,
+    size_t position,
+    uint16_t& codeUnit);
 
 /// Invalid character replacement matrix.
 constexpr std::array<std::string_view, 6> kReplacementCharacterStrings{

@@ -93,7 +93,7 @@ class PlanNodeSerdeTest : public testing::Test,
   void topNRankSerdeTest(std::string_view function) {
     auto plan = PlanBuilder()
                     .values({data_})
-                    .topNRank(function, {}, {"c0", "c2"}, 10, false)
+                    .topNRankPartial(function, {}, {"c0", "c2"}, 10)
                     .planNode();
     testSerde(plan);
 
@@ -105,9 +105,33 @@ class PlanNodeSerdeTest : public testing::Test,
 
     plan = PlanBuilder()
                .values({data_})
+               .topNRankPartial(function, {"c0"}, {"c1", "c2"}, 10)
+               .planNode();
+    testSerde(plan);
+
+    plan = PlanBuilder()
+               .values({data_})
                .topNRank(function, {"c0"}, {"c1", "c2"}, 10, false)
                .planNode();
     testSerde(plan);
+
+    // A plan serialized without 'partial' is partial when it has no rank
+    // column.
+    for (const bool generateRowNumber : {true, false}) {
+      SCOPED_TRACE(fmt::format("generateRowNumber: {}", generateRowNumber));
+      plan = PlanBuilder()
+                 .values({data_})
+                 .topNRank(function, {"c0"}, {"c1"}, 10, generateRowNumber)
+                 .planNode();
+      auto serialized = plan->serialize();
+      serialized.erase("partial");
+      const auto copy =
+          std::dynamic_pointer_cast<const core::TopNRowNumberNode>(
+              velox::ISerializable::deserialize<core::PlanNode>(
+                  serialized, pool()));
+      ASSERT_NE(copy, nullptr);
+      ASSERT_EQ(copy->isPartial(), !generateRowNumber);
+    }
   }
 
   std::vector<RowVectorPtr> data_;
@@ -648,6 +672,21 @@ TEST_F(PlanNodeSerdeTest, vectorSearchJoin) {
                  "score",
                  core::JoinType::kLeft,
                  {{"ivf.nprobe", "4"}})
+             .planNode();
+  testSerde(plan);
+
+  // The index on the left.
+  plan = PlanBuilder(planNodeIdGenerator)
+             .values({build})
+             .vectorSearchJoin(
+                 {"u0"},
+                 {"t0"},
+                 PlanBuilder(planNodeIdGenerator).values({probe}).planNode(),
+                 "t1",
+                 "u1",
+                 /*k=*/2,
+                 {"cluster_id", "t0", "u2"},
+                 "cluster_id")
              .planNode();
   testSerde(plan);
 }
@@ -1263,7 +1302,7 @@ TEST_F(PlanNodeSerdeTest, fixedPointSequence) {
   auto schema = ROW("x", BIGINT());
   auto seed =
       PlanBuilder(idGenerator)
-          .values({makeRowVector({"x"}, {makeFlatVector<int64_t>({1})})})
+          .values({makeNamedRowVector("x", makeFlatVector<int64_t>({1}))})
           .planNode();
   auto plan =
       PlanBuilder(idGenerator)

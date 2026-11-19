@@ -32,6 +32,18 @@ enum class IndexFamily : uint8_t {
 
 std::string_view toString(IndexFamily family);
 
+/// Where a cluster index stores its key chunks. Mirrors the on-disk
+/// KeyStreamLayout in ClusterIndex.fbs.
+enum class KeyStreamLayout : uint8_t {
+  /// Each partition, one stripe group flush, writes its key chunks in one blob
+  /// after its stripes.
+  kPartition = 0,
+  /// Each stripe stores its keys as one key chunk in a stream of that stripe.
+  kStripe = 1,
+};
+
+std::string_view toString(KeyStreamLayout layout);
+
 struct IndexDescriptor {
   IndexFamily family;
   std::string name;
@@ -42,8 +54,10 @@ struct IndexDescriptor {
 /// Offsets are relative to the containing unit:
 /// - For chunk index: relative to the stripe (stream start offset and stripe
 ///   start row).
-/// - For cluster index: relative to the index partition (key data blob offset
-///   and partition start row).
+/// - For cluster index: the offset is relative to the key stream that holds
+///   the chunk (the partition's key data blob in the Partition layout, the
+///   stripe's key stream in the Stripe layout), and the row is relative to
+///   the partition start row.
 /// chunkIndex is the absolute position within the FlatBuffers array searched
 /// during lookup:
 /// - For chunk index: position in the stripe-scoped chunkRows array (offset
@@ -78,5 +92,16 @@ struct fmt::formatter<facebook::nimble::index::IndexFamily>
       format_context& context) const {
     return formatter<std::string_view>::format(
         facebook::nimble::index::toString(family), context);
+  }
+};
+
+template <>
+struct fmt::formatter<facebook::nimble::index::KeyStreamLayout>
+    : formatter<std::string_view> {
+  auto format(
+      facebook::nimble::index::KeyStreamLayout layout,
+      format_context& context) const {
+    return formatter<std::string_view>::format(
+        facebook::nimble::index::toString(layout), context);
   }
 };

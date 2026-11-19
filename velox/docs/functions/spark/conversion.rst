@@ -138,8 +138,20 @@ Invalid examples
 From decimal
 ^^^^^^^^^^^^
 
+*(ANSI compliant)*
+
 The decimal part will be truncated for casting to an integer.
-It is allowed when the truncated result exceeds the range of result type.
+It is allowed when the truncated result exceeds the range of result type when ANSI mode
+is disabled; throws an error when ANSI mode is enabled.
+
+.. note::
+
+    When ANSI mode is enabled, Spark converts a long decimal (precision greater than
+    18) to DOUBLE before casting it to TINYINT, SMALLINT or INTEGER, while Velox
+    truncates the exact decimal value. Short decimals are cast exactly in both. Results can differ when the DOUBLE conversion rounds the
+    value up to the next integer. For example,
+    ``cast(cast(127.999999999999999999 as DECIMAL(21, 18)) as tinyint)`` throws an
+    error in Spark but returns 127 in Velox. Casting to BIGINT is exact in both.
 
 Valid examples
 
@@ -147,9 +159,9 @@ Valid examples
 
   SELECT cast(cast(2.56 as DECIMAL(6, 2)) as bigint); -- 2
   SELECT cast(cast(3.46 as DECIMAL(6, 2)) as bigint); -- 3
-  SELECT cast(cast(5500.0 as DECIMAL(5, 1)) as tinyint); -- 124
-  SELECT cast(cast(2147483648.90 as DECIMAL(12, 2)) as tinyint); -- 0
-  SELECT cast(cast(2147483648.90 as DECIMAL(12, 2)) as integer); -- -2147483648
+  SELECT cast(cast(5500.0 as DECIMAL(5, 1)) as tinyint); -- 124 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast(cast(2147483648.90 as DECIMAL(12, 2)) as tinyint); -- 0 (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast(cast(2147483648.90 as DECIMAL(12, 2)) as integer); -- -2147483648 (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast(cast(2147483648.90 as DECIMAL(12, 2)) as bigint); -- 2147483648
 
 From timestamp

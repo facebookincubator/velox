@@ -19,7 +19,8 @@
 /// dictionaryAwareReads off and "fused" with it on.
 ///
 /// Data: 1,000,000 rows with 1,000 distinct values, in BIGINT, INTEGER,
-/// SMALLINT, REAL and DOUBLE columns, with Trivial or FixedBitWidth indices.
+/// SMALLINT, REAL and DOUBLE columns, with Trivial, FixedBitWidth or Varint
+/// indices. The Varint cases measure reads whose indices arrive one at a time.
 /// Cases cover projection only, filter only, and filter plus projection, plus
 /// nullable layouts with filters that accept nulls. Reads use batches of 4,096
 /// rows, and filters pass 50% of the non-null values.
@@ -240,14 +241,12 @@ class IntegerDictionaryFusionBenchmark : public velox::test::VectorTestBase {
       NullPattern nullPattern) {
     VELOX_CHECK(
         indicesEncoding == EncodingType::Trivial ||
-            indicesEncoding == EncodingType::FixedBitWidth,
+            indicesEncoding == EncodingType::FixedBitWidth ||
+            indicesEncoding == EncodingType::Varint,
         "Unsupported dictionary indices encoding: {}",
         static_cast<int32_t>(indicesEncoding));
-    auto& files = indicesEncoding == EncodingType::Trivial
-        ? trivialIndicesFiles_
-        : fixedBitWidthIndicesFiles_;
-    auto& file =
-        files[CppToType<T>::typeKind][static_cast<size_t>(nullPattern)];
+    auto& file = files_[indicesEncoding][CppToType<T>::typeKind]
+                       [static_cast<size_t>(nullPattern)];
     if (!file.empty()) {
       return file;
     }
@@ -287,8 +286,9 @@ class IntegerDictionaryFusionBenchmark : public velox::test::VectorTestBase {
   using Files = std::unordered_map<
       TypeKind,
       std::array<std::string, static_cast<size_t>(NullPattern::kNumPatterns)>>;
-  Files trivialIndicesFiles_;
-  Files fixedBitWidthIndicesFiles_;
+  // Caches the encoded file for each indices encoding, value type and null
+  // pattern.
+  std::unordered_map<EncodingType, Files> files_;
 };
 
 IntegerDictionaryFusionBenchmark& benchmarkState() {
@@ -369,6 +369,25 @@ void fused(unsigned iterations, const BenchmarkConfig& config) {
       prefix##_FixedBitWidth_FilterAndProject,                              \
       .valueType = type,                                                    \
       .selectivity = 50);                                                   \
+  REGISTER_BENCHMARK(                                                       \
+      prefix##_Varint_FilterOnly,                                           \
+      .valueType = type,                                                    \
+      .indicesEncoding = EncodingType::Varint,                              \
+      .selectivity = 50,                                                    \
+      .projectFilterColumn = false);                                        \
+  REGISTER_BENCHMARK(                                                       \
+      prefix##_Varint_FilterAndProject,                                     \
+      .valueType = type,                                                    \
+      .indicesEncoding = EncodingType::Varint,                              \
+      .selectivity = 50);                                                   \
+  REGISTER_BENCHMARK(                                                       \
+      prefix##_Varint_NullEvery17_FilterOnly,                               \
+      .valueType = type,                                                    \
+      .indicesEncoding = EncodingType::Varint,                              \
+      .nullPattern = NullPattern::kEvery17,                                 \
+      .selectivity = 50,                                                    \
+      .projectFilterColumn = false,                                         \
+      .nullAllowed = true);                                                 \
   REGISTER_BENCHMARK(                                                       \
       prefix##_NullEvery17_FilterOnly,                                      \
       .valueType = type,                                                    \

@@ -15,6 +15,7 @@
  */
 #include "velox/functions/iceberg/BucketFunction.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/expression/SimpleFunctionRegistry.h"
 #include "velox/functions/iceberg/tests/IcebergFunctionBaseTest.h"
 
 #include <gtest/gtest.h>
@@ -44,6 +45,22 @@ class BucketFunctionTest
         "bucket(c0, c1)", {INTEGER(), type}, numBuckets, value);
   }
 };
+
+TEST_F(BucketFunctionTest, defaultOwner) {
+  constexpr std::string_view kPrefix = "owner_test.";
+  constexpr std::string_view kOwner = "iceberg-owner";
+  registerFunctions(std::string{kPrefix}, kOwner);
+
+  for (const auto* name :
+       {"bucket", "truncate", "years", "months", "days", "hours"}) {
+    const auto functions = simpleFunctions().getFunctionSignaturesAndMetadata(
+        std::string{kPrefix} + name);
+    ASSERT_FALSE(functions.empty()) << name;
+    for (const auto& [metadata, _] : functions) {
+      EXPECT_EQ(metadata.owner, kOwner) << name;
+    }
+  }
+}
 
 TEST_F(BucketFunctionTest, integerTypes) {
   EXPECT_EQ(bucket<int32_t>(10, 8), 3);

@@ -91,6 +91,16 @@ class FileConfig {
       "Speculative tail-read size in bytes for Nimble files.")
 
   VELOX_FILE_CONFIG_LEGACY(
+      kNimbleFsstDecodeRepeatedPayloadsSession,
+      kNimbleFsstDecodeRepeatedPayloads,
+      nimbleFsstDecodeRepeatedPayloads,
+      "nimble_fsst_decode_repeated_payloads",
+      "nimble.fsst-decode-repeated-payloads",
+      bool,
+      false,
+      "Reuse decoded bytes for repeated FSST payloads within a read.")
+
+  VELOX_FILE_CONFIG_LEGACY(
       kNimblePreserveDictionaryEncodingSession,
       kNimblePreserveDictionaryEncoding,
       nimblePreserveDictionaryEncoding,
@@ -252,6 +262,16 @@ class FileConfig {
       "quantum per stream is always issued; subsequent quanta are loaded on "
       "demand. Small streams that fit in one quantum see no reduction. "
       "Streams coalesced with eager columns may also be loaded early.")
+
+  VELOX_FILE_CONFIG(
+      kNimbleLazyFileStatsSession,
+      nimbleLazyFileStats,
+      "nimble_lazy_file_stats",
+      bool,
+      false,
+      "Decode Nimble file column statistics on first use, and only those a "
+      "read needs, instead of all of them when the file is opened.")
+  static constexpr const char* kNimbleLazyFileStats = "nimble-lazy-file-stats";
 
   // --- VELOX_FILE_CONFIG_PROPERTY properties ---
 

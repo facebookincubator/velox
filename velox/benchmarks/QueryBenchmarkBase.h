@@ -25,7 +25,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
-#include "velox/exec/Cursor.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/TpchQueryBuilder.h"
 
 DECLARE_string(test_flags_file);
@@ -56,7 +56,9 @@ class QueryBenchmarkBase {
   virtual ~QueryBenchmarkBase() = default;
   virtual void initialize();
   virtual void shutdown();
-  std::pair<std::unique_ptr<exec::TaskCursor>, std::vector<RowVectorPtr>> run(
+  /// Runs the query --num_repeats times and returns the task of the last run,
+  /// or nullptr if a run failed.
+  exec::TaskPtr run(
       const exec::test::TpchPlan& tpchPlan,
       const std::unordered_map<std::string, std::string>& queryConfigs = {});
 
@@ -65,10 +67,10 @@ class QueryBenchmarkBase {
       int32_t numSplitsPerFile,
       const exec::test::TpchPlan& plan);
 
-  static void ensureTaskCompletion(exec::Task* task);
-
-  static void printResults(
-      const std::vector<RowVectorPtr>& results,
+  /// Runs the query once more and prints its results to 'out'.
+  void printResults(
+      const exec::test::TpchPlan& tpchPlan,
+      const std::unordered_map<std::string, std::string>& queryConfigs,
       std::ostream& out);
 
   void readCombinations();
@@ -85,6 +87,12 @@ class QueryBenchmarkBase {
   virtual std::shared_ptr<config::ConfigBase> makeConnectorProperties();
 
  protected:
+  // Returns a builder that runs the query with its splits and configs. A
+  // builder runs once, so each run needs a new one.
+  exec::test::AssertQueryBuilder makeQuery(
+      const exec::test::TpchPlan& tpchPlan,
+      const std::unordered_map<std::string, std::string>& queryConfigs);
+
   std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
   std::unique_ptr<folly::IOThreadPoolExecutor> cacheExecutor_;
   std::shared_ptr<memory::MemoryAllocator> allocator_;

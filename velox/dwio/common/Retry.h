@@ -17,6 +17,7 @@
 #pragma once
 
 #include <folly/Optional.h>
+#include <folly/Random.h>
 #include <glog/logging.h>
 #include <chrono>
 #include <exception>
@@ -25,7 +26,6 @@
 #include <thread>
 #include <vector>
 
-#include "velox/dwio/common/RandGen.h"
 #include "velox/dwio/common/exception/Exception.h"
 
 namespace facebook::velox::dwio::common {
@@ -115,7 +115,8 @@ class ExponentialBackoff : public IRetryPolicy {
 
  private:
   RetryDuration jitter() {
-    return RetryDuration(rand_.gen(folly::to<int64_t>(nextWait_.count()) / 2));
+    return RetryDuration(
+        folly::Random::rand64(folly::to<int64_t>(nextWait_.count()) / 2 + 1));
   }
 
   RetryDuration total() const {
@@ -130,7 +131,6 @@ class ExponentialBackoff : public IRetryPolicy {
   RetryDuration nextWait_;
   RetryDuration totalWait_;
   uint64_t retriesLeft_;
-  RandGen rand_;
 };
 
 class IRetryPolicyFactory {

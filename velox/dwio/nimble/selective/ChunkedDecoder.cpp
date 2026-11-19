@@ -86,7 +86,7 @@ bool ChunkedDecoder::loadNextChunk(const ChunkBoundaryCallback& onChunkLoaded) {
   inputSize_ -= length;
   // Keep the decompressed buffer alive for the lifetime of the encoding, which
   // may reference it without copying.
-  if (FOLLY_UNLIKELY(uncompressedBuffer != nullptr)) {
+  if (uncompressedBuffer != nullptr) [[unlikely]] {
     currentStringBuffers_.push_back(std::move(uncompressedBuffer));
   }
   auto stringBufferFactory = [&](uint32_t totalLength) {
@@ -188,7 +188,7 @@ void ChunkedDecoder::nextBools(
         ? count
         : velox::bits::countNonNulls(incomingNulls, 0, count);
     for (int64_t i = 0; i < totalNumValues;) {
-      if (FOLLY_UNLIKELY(remainingValues_ == 0)) {
+      if (remainingValues_ == 0) [[unlikely]] {
         loadNextChunk();
         NIMBLE_CHECK_EQ(encoding_->dataType(), DataType::Bool);
       }
@@ -227,7 +227,7 @@ void ChunkedDecoder::nextNulls(
       : static_cast<vector_size_t>(
             velox::bits::countNonNulls(incomingNulls, 0, count));
   for (int64_t offset = 0; offset < numValues;) {
-    if (FOLLY_UNLIKELY(remainingValues_ == 0)) {
+    if (remainingValues_ == 0) [[unlikely]] {
       loadNextChunk();
     }
     const auto chunkValues = std::min(numValues - offset, remainingValues_);
@@ -340,7 +340,7 @@ void ChunkedDecoder::skipWithoutIndex(
     int64_t numValues,
     const ChunkBoundaryCallback& onChunkBoundary) {
   while (numValues > 0) {
-    if (FOLLY_UNLIKELY(remainingValues_ == 0)) {
+    if (remainingValues_ == 0) [[unlikely]] {
       loadNextChunk(onChunkBoundary);
     }
     if (numValues < remainingValues_) {

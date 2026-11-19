@@ -318,7 +318,8 @@ void SelectiveStructColumnReaderBase::advanceFieldReaderFixedRowsPerRowGroup(
     dwio::common::SelectiveColumnReader* reader,
     const int64_t offset,
     const int32_t rowsPerRowGroup) {
-  if (!reader->isTopLevel()) {
+  // A file without a row index has no row groups to seek to.
+  if (!reader->isTopLevel() || rowsPerRowGroup == 0) {
     return;
   }
   const auto rowGroup = reader->readOffset() / rowsPerRowGroup;
@@ -365,6 +366,17 @@ void SelectiveStructColumnReaderBase::next(
   const RowSet rows(iota(numValues, rows_), numValues);
 
   if (!children_.empty()) {
+    if (result.use_count() == 1 &&
+        result->encoding() == VectorEncoding::Simple::ROW) {
+      auto* resultRow = result->asUnchecked<RowVector>();
+      for (const auto& childSpec : scanSpec_->children()) {
+        if (childSpec->keepValues() && childSpec->readFromFile() &&
+            !childSpec->deltaUpdate() && !isChildConstant(*childSpec)) {
+          children_[childSpec->subscript()]->releaseReusableResult(
+              resultRow->childAt(childSpec->channel()));
+        }
+      }
+    }
     read(readOffset_, rows, nullptr);
     getValues(outputRows(), &result);
     return;

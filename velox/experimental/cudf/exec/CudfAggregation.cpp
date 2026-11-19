@@ -367,7 +367,7 @@ void setupGroupingKeyChannelProjections(
   //
   // NOTE: grouping key output order is specified as 'groupingKeys' in
   // 'aggregationNode_'.
-  std::vector<exec::IdentityProjection> groupingKeyProjections;
+  std::vector<IdentityProjection> groupingKeyProjections;
   groupingKeyProjections.reserve(groupingKeys.size());
   for (auto i = 0; i < groupingKeys.size(); ++i) {
     groupingKeyProjections.emplace_back(

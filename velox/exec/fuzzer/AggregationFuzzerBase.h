@@ -208,10 +208,16 @@ class AggregationFuzzerBase {
 
   std::pair<CallableSignature, SignatureStats&> pickSignature();
 
+  // Generates 'FLAGS_num_batches' batches of input. Columns named in
+  // 'groupingKeys' are, for a fraction of calls, drawn from one pool of values
+  // shared by every batch, with a cardinality bounded by the total row count
+  // and maximum vector size, so that a key repeats both within and across
+  // batches. Every other column is fuzzed independently per batch.
   std::vector<RowVectorPtr> generateInputData(
       std::vector<std::string> names,
       std::vector<TypePtr> types,
-      const std::optional<CallableSignature>& signature);
+      const std::optional<CallableSignature>& signature,
+      const std::vector<std::string>& groupingKeys);
 
   /// Generate a RowVector of the given types of children with an additional
   /// child named "row_number" of INTEGER row numbers that differentiates every

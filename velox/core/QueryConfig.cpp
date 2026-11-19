@@ -52,6 +52,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kExprDedupNonDeterministic);
     VELOX_REGISTER_QUERY_CONFIG(kExprMaxArraySizeInReduce);
     VELOX_REGISTER_QUERY_CONFIG(kExprMaxCompiledRegexes);
+    VELOX_REGISTER_QUERY_CONFIG(kMinRowsForPeeling);
 
     // Operator.
     VELOX_REGISTER_QUERY_CONFIG(kOperatorTrackCpuUsage);
@@ -74,6 +75,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kMaxExchangeBufferSize);
     VELOX_REGISTER_QUERY_CONFIG(kMaxMergeExchangeBufferSize);
     VELOX_REGISTER_QUERY_CONFIG(kMinExchangeOutputBatchBytes);
+    VELOX_REGISTER_QUERY_CONFIG(kExchangeOutputBatchRows);
 
     // Aggregation.
     VELOX_REGISTER_QUERY_CONFIG(kMaxPartialAggregationMemory);
@@ -222,6 +224,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
 
     // Map.
     VELOX_REGISTER_QUERY_CONFIG(kThrowExceptionOnDuplicateMapKeys);
+    VELOX_REGISTER_QUERY_CONFIG(kGenerateConstantMapsAsFlatMaps);
 
     // Index lookup join.
     VELOX_REGISTER_QUERY_CONFIG(kIndexLookupJoinMaxPrefetchBatches);
@@ -233,6 +236,9 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     // Streaming aggregation.
     VELOX_REGISTER_QUERY_CONFIG(kStreamingAggregationMinOutputBatchRows);
     VELOX_REGISTER_QUERY_CONFIG(kStreamingAggregationEagerFlush);
+
+    // Vector index training.
+    VELOX_REGISTER_QUERY_CONFIG(kVectorIndexTrainThreads);
 
     // Exchange optimization.
     VELOX_REGISTER_QUERY_CONFIG(kSkipRequestDataSizeWithSingleSourceEnabled);
@@ -275,6 +281,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionAsyncGrowthMaxWindow);
 
     // RPC adaptive rate limiter.
+    VELOX_REGISTER_QUERY_CONFIG(kRpcFlowControlPolicy);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterAdaptiveEnabled);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterMinLimit);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterDecreaseFactor);

@@ -48,6 +48,7 @@
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/ReversedEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
@@ -224,6 +225,30 @@ class DeltaBlockFuzzerTest : public ::testing::Test {};
 TYPED_TEST_SUITE(DeltaBlockFuzzerTest, DeltaBlockTypes);
 
 TYPED_TEST(DeltaBlockFuzzerTest, correctness) {
+  EncodingFuzzer<TypeParam> fuzzer(
+      FLAGS_fuzzer_iterations,
+      FLAGS_fuzzer_max_rows,
+      FLAGS_fuzzer_seed,
+      FLAGS_fuzzer_compression);
+  fuzzer.run();
+}
+
+// Reversed: integer types
+using ReversedTypes = ::testing::Types<
+    ReversedEncoding<int8_t>,
+    ReversedEncoding<uint8_t>,
+    ReversedEncoding<int16_t>,
+    ReversedEncoding<uint16_t>,
+    ReversedEncoding<int32_t>,
+    ReversedEncoding<uint32_t>,
+    ReversedEncoding<int64_t>,
+    ReversedEncoding<uint64_t>>;
+
+template <typename E>
+class ReversedFuzzerTest : public ::testing::Test {};
+TYPED_TEST_SUITE(ReversedFuzzerTest, ReversedTypes);
+
+TYPED_TEST(ReversedFuzzerTest, correctness) {
   EncodingFuzzer<TypeParam> fuzzer(
       FLAGS_fuzzer_iterations,
       FLAGS_fuzzer_max_rows,

@@ -782,7 +782,7 @@ class VectorIndexBenchmark {
     velox::io::ReaderOptions ioOptions{readerPool_.get()};
     ioOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
     return VectorIndexDirectory::create(
-        Section{MetadataBuffer{std::move(directoryBuffer)}},
+        Section{MetadataBuffer{toPinnedBuffer(std::move(directoryBuffer))}},
         IndexLookup::Options{
             .file = std::make_shared<velox::InMemoryReadFile>(index_.indexData),
             .ioOptions = &ioOptions,

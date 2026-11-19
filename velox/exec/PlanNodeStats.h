@@ -120,6 +120,12 @@ struct PlanNodeStats {
   /// Operator-specific counters.
   std::unordered_map<std::string, RuntimeMetric> customStats;
 
+  /// Returns the operator-specific counter 'name'. Throws if there is none.
+  const RuntimeMetric& customStat(std::string_view name) const;
+
+  /// Returns true if there is an operator-specific counter 'name'.
+  bool hasCustomStat(std::string_view name) const;
+
   /// Breakdown of stats by operator type.
   std::unordered_map<std::string, std::unique_ptr<PlanNodeStats>> operatorStats;
 
@@ -162,6 +168,12 @@ struct PlanNodeStats {
   /// breakdown. The type must be present (a plan node can map to multiple
   /// operator types, e.g. LocalPartition + LocalExchange).
   const PlanNodeStats& operatorStatsFor(std::string_view operatorType) const;
+
+  /// Extracts the stats of plan node 'planNodeId' from 'taskStats'. The node
+  /// must have stats.
+  static PlanNodeStats extract(
+      const TaskStats& taskStats,
+      const core::PlanNodeId& planNodeId);
 
  private:
   void addTotals(const OperatorStats& stats, bool gateByBoundary);

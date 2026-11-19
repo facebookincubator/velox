@@ -62,7 +62,7 @@ TEST_F(CudfSplitReaderTest, setsPushdownFilterAfterReadingMetadata) {
   auto dataFile = common::testutil::TempFilePath::create();
   writeToFile(
       dataFile->getPath(),
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})}));
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3})));
 
   auto properties = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>{});
@@ -126,9 +126,8 @@ TEST_F(CudfSplitReaderTest, timestampTypeFollowsSession) {
   auto dataFile = common::testutil::TempFilePath::create();
   writeToFile(
       dataFile->getPath(),
-      makeRowVector(
-          {"c0"},
-          {makeFlatVector<Timestamp>({Timestamp(1, 0), Timestamp(2, 0)})}));
+      makeNamedRowVector(
+          "c0", makeFlatVector<Timestamp>({Timestamp(1, 0), Timestamp(2, 0)})));
   // Both settings take the enumerator's integer value.
   const auto seconds =
       std::to_string(static_cast<int32_t>(cudf::type_id::TIMESTAMP_SECONDS));

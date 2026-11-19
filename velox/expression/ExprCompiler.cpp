@@ -376,7 +376,7 @@ ExprPtr compileCast(
 
   const auto& resultType = expr->type();
 
-  if (FOLLY_UNLIKELY(*resultType == *inputs[0]->type())) {
+  if (*resultType == *inputs[0]->type()) [[unlikely]] {
     return inputs[0];
   }
 

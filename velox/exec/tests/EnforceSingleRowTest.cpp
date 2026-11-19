@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -25,17 +27,7 @@ class EnforceSingleRowTest : public OperatorTestBase {
   void assertQueryFails(
       const std::shared_ptr<const core::PlanNode>& plan,
       const std::string& errorMessage) {
-    CursorParameters params;
-    params.planNode = plan;
-    try {
-      readCursor(params);
-      VELOX_FAIL("Expected query to fail, but it succeeded");
-    } catch (const VeloxException& e) {
-      ASSERT_TRUE(e.message().find(errorMessage) != std::string::npos)
-          << "Expected query to fail with error message: " << errorMessage
-          << ". The query failed with a different error message: "
-          << e.message();
-    }
+    VELOX_ASSERT_THROW(AssertQueryBuilder(plan).countResults(), errorMessage);
   }
 };
 

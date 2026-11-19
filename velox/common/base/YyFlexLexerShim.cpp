@@ -32,6 +32,12 @@ int yyFlexLexer::yylex() {
   VELOX_FAIL("Bad call to yyFlexLexer::yylex()");
 }
 
+#ifdef VELOX_FLEX_LEXER_HAS_YYREAD
+int yyFlexLexer::yyread(char* buf, size_t size) {
+  VELOX_FAIL("Bad call to yyFlexLexer::yyread()");
+}
+#endif
+
 void yyFlexLexer::yy_switch_to_buffer(yy_buffer_state*) {
   VELOX_FAIL("Bad call to yyFlexLexer::yy_switch_to_buffer()");
 }

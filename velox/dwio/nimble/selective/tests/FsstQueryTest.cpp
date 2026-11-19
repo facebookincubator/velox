@@ -35,6 +35,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 namespace facebook::nimble::test {
 namespace {
@@ -84,7 +85,7 @@ class FsstQueryTest : public HiveConnectorTestBase,
   }
 
   void TearDown() override {
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
     unregisterSelectiveNimbleReaderFactory();
     HiveConnectorTestBase::TearDown();
   }
@@ -314,39 +315,51 @@ class FsstQueryTest : public HiveConnectorTestBase,
               .copyResults(pool_.get());
       for (const bool fastPath : {false, true}) {
         for (const bool preserve : {false, true}) {
-          SCOPED_TRACE(
-              fmt::format("fastPath={}, preserve={}", fastPath, preserve));
-          auto ids = std::make_shared<core::PlanNodeIdGenerator>();
-          PlanBuilder builder(ids, pool_.get());
-          builder.tableScan(type, query.pushdownFilters, query.remainingFilter);
-          core::PlanNodeId scanId;
-          builder.capturePlanNodeId(scanId);
-          auto plan = finishPlan(builder, query.action, ids);
-          auto split = HiveConnectorSplitBuilder(file->getPath())
-                           .fileFormat(dwio::common::FileFormat::NIMBLE)
-                           .build();
-          const auto actual =
-              AssertQueryBuilder(plan)
-                  .split(scanId, split)
-                  .config(
-                      core::QueryConfig::kPreferredOutputBatchRows,
-                      fastPath ? 113 : 7)
-                  .connectorSessionProperty(
-                      kHiveConnectorId,
-                      connector::FileConfig::kNimbleScanFastPathSession,
-                      fastPath ? "true" : "false")
-                  .connectorSessionProperty(
-                      kHiveConnectorId,
-                      connector::FileConfig::
-                          kNimblePreserveDictionaryEncodingSession,
-                      preserve ? "true" : "false")
-                  .copyResults(pool_.get());
-          ASSERT_TRUE(assertEqualResults({reference}, {actual}));
-          if (query.action == QueryAction::kOrderAscending ||
-              query.action == QueryAction::kOrderDescending) {
-            ASSERT_EQ(reference->size(), actual->size());
-            for (vector_size_t row = 0; row < reference->size(); ++row) {
-              ASSERT_TRUE(reference->equalValueAt(actual.get(), row, row));
+          for (const bool cache : {false, true}) {
+            SCOPED_TRACE(
+                fmt::format(
+                    "fastPath={}, preserve={}, cache={}",
+                    fastPath,
+                    preserve,
+                    cache));
+            auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+            PlanBuilder builder(ids, pool_.get());
+            builder.tableScan(
+                type, query.pushdownFilters, query.remainingFilter);
+            core::PlanNodeId scanId;
+            builder.capturePlanNodeId(scanId);
+            auto plan = finishPlan(builder, query.action, ids);
+            auto split = HiveConnectorSplitBuilder(file->getPath())
+                             .fileFormat(dwio::common::FileFormat::NIMBLE)
+                             .build();
+            const auto actual =
+                AssertQueryBuilder(plan)
+                    .split(scanId, split)
+                    .config(
+                        core::QueryConfig::kPreferredOutputBatchRows,
+                        fastPath ? 113 : 7)
+                    .connectorSessionProperty(
+                        kHiveConnectorId,
+                        connector::FileConfig::kNimbleScanFastPathSession,
+                        fastPath ? "true" : "false")
+                    .connectorSessionProperty(
+                        kHiveConnectorId,
+                        connector::FileConfig::
+                            kNimblePreserveDictionaryEncodingSession,
+                        preserve ? "true" : "false")
+                    .connectorSessionProperty(
+                        kHiveConnectorId,
+                        connector::FileConfig::
+                            kNimbleFsstDecodeRepeatedPayloadsSession,
+                        cache ? "true" : "false")
+                    .copyResults(pool_.get());
+            ASSERT_TRUE(assertEqualResults({reference}, {actual}));
+            if (query.action == QueryAction::kOrderAscending ||
+                query.action == QueryAction::kOrderDescending) {
+              ASSERT_EQ(reference->size(), actual->size());
+              for (vector_size_t row = 0; row < reference->size(); ++row) {
+                ASSERT_TRUE(reference->equalValueAt(actual.get(), row, row));
+              }
             }
           }
         }

@@ -148,6 +148,8 @@ void configureReaderOptions(
   }
   readerOptions.setNimbleDirectBufferedInputEnabled(
       fileConfig->nimbleDirectBufferedInputEnabled(sessionProperties));
+  readerOptions.setNimbleLazyFileStats(
+      fileConfig->nimbleLazyFileStats(sessionProperties));
   readerOptions.setCacheMetadata(
       fileConfig->cacheMetadata(sessionProperties) && fileSplit->cacheable);
   readerOptions.setPinMetadata(fileConfig->pinMetadata(sessionProperties));
@@ -219,6 +221,16 @@ void configureRowReaderOptions(
   rowReaderOptions.setMetadataFilter(std::move(metadataFilter));
   rowReaderOptions.setRequestedType(rowType);
   rowReaderOptions.range(fileSplit->start, fileSplit->length);
+  if (fileSplit->splitRowRange.has_value()) {
+    VELOX_CHECK(
+        fileSplit->fileFormat == dwio::common::FileFormat::NIMBLE ||
+            fileSplit->fileFormat == dwio::common::FileFormat::DWRF ||
+            fileSplit->fileFormat == dwio::common::FileFormat::ORC ||
+            fileSplit->fileFormat == dwio::common::FileFormat::PARQUET,
+        "Split row ranges are only supported for Nimble, DWRF, ORC and Parquet files: {}",
+        fileSplit->toString());
+    rowReaderOptions.setSplitRowRange(fileSplit->splitRowRange);
+  }
   if (fileConfig && sessionProperties) {
     rowReaderOptions.setTimestampPrecision(
         static_cast<TimestampPrecision>(
@@ -233,6 +245,8 @@ void configureRowReaderOptions(
         fileConfig->nimbleLazyColumnIo(sessionProperties));
     rowReaderOptions.setCollectColumnCpuMetrics(
         fileConfig->readerCollectColumnCpuMetrics(sessionProperties));
+    rowReaderOptions.setNimbleFsstDecodeRepeatedPayloads(
+        fileConfig->nimbleFsstDecodeRepeatedPayloads(sessionProperties));
     rowReaderOptions.setNimblePreserveDictionaryEncoding(
         fileConfig->nimblePreserveDictionaryEncoding(sessionProperties));
     rowReaderOptions.setNimbleDictionaryAwareReads(

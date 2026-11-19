@@ -16,10 +16,12 @@
 # metric.
 velox_add_library(
   velox_vector_index_settings
+  CodecOptions.cpp
   LocalVectorIndexOptions.cpp
   VectorIndexMetric.cpp
   VectorIndexKind.cpp
   HEADERS
+  CodecOptions.h
   LocalVectorIndexOptions.h
   VectorIndexMetric.h
   VectorIndexKind.h
@@ -38,17 +40,20 @@ if(VELOX_ENABLE_FAISS)
     velox_vector_index
     Embeddings.cpp
     FaissLocalVectorIndex.cpp
+    FaissThreads.cpp
+    LocalVectorIndex.cpp
     HEADERS
     CallbackWriter.h
     Embeddings.h
     FaissLocalVectorIndex.h
     LocalVectorIndex.h
-    SingleThreadedFaiss.h
+    FaissThreads.h
   )
 
   velox_link_libraries(
     velox_vector_index
     velox_vector_index_settings
+    velox_common_base
     velox_enum_declare
     velox_enum_define
     velox_exception

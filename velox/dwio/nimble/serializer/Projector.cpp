@@ -254,11 +254,12 @@ std::shared_ptr<const Type> updateHybridFlatMapColumnNames(
   if (!changed) {
     return inputType;
   }
+  // Renaming keeps every group, so the new type shares the groups, whose keys
+  // `groups` borrows, and the key index.
   return std::make_shared<HybridFlatMapType>(
       hybridMap.nullsDescriptor(),
-      hybridMap.keyScalarKind(),
+      hybridMap.hybridFlatMap(),
       std::move(groups),
-      hybridMap.defaultGroupKeyPresenceMode(),
       hybridMap.attributes());
 }
 

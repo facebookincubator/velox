@@ -81,6 +81,29 @@ struct ElementwiseOp {
   bool hasOwnOutputArg{false};
 };
 
+/// Describes a reduction over the trailing dims of its single input, from the
+/// dim named by 'keepAttr' on, so codegen can evaluate a fused elementwise
+/// input in registers instead of reading it from memory. A row of up to 1024
+/// elements is reduced by one warp, a longer one by a block. Each text is a C++
+/// expression in which {0} stands for the accumulator.
+struct RowReduction {
+  /// Name of the int attribute holding the number of leading dims kept.
+  std::string keepAttr;
+  /// Type of the accumulator.
+  std::string accumulatorType;
+  /// Initial value of the accumulator.
+  std::string init;
+  /// Combines the element {1} into the accumulator {0}; a statement.
+  std::string combine;
+  /// The accumulator {0} combined across each group of {1} consecutive lanes
+  /// of a warp, {1} a power of two up to 32, the result in every lane of the
+  /// group. Every lane of the warp reaches it; 'lane' is the lane index.
+  std::string groupCombine;
+  /// The accumulator {0} combined across the block's threads, the result in
+  /// every thread. Every thread of the block reaches it.
+  std::string blockCombine;
+};
+
 /// Common cases of determining output size: kNone is a custom function, kMax is
 /// largest input, as in all elementwise, kSum is concatenation.
 enum class SizeShortcut { kNone, kMax, kSum };
@@ -461,6 +484,11 @@ struct Metadata {
   /// device side header to include in the NVRTC translation unit.
   std::string headerFile;
 
+  /// Set for a row reduction that can take a fused elementwise input (see
+  /// CompileCtx::fusesRowReduction). 'deviceFunc' remains the form for an input
+  /// in memory.
+  std::optional<RowReduction> rowReduction;
+
   /// Name of device side function. Arguments are passed as given by
   /// FunctionSchema, inputs are T*, scalars are T, results are T*. T is Tensor
   /// or a scalar type.
@@ -679,6 +707,7 @@ class MetadataBuilder {
   MetadataBuilder& singleBlockIfFused(bool val = true);
   MetadataBuilder& inputFromPreviousKernel(int32_t ordinal);
   MetadataBuilder& multiBlockReturnBarrier(bool val = true);
+  MetadataBuilder& rowReduction(RowReduction reduction);
   MetadataBuilder& scanOutputReturnBarrier(bool val = true);
   MetadataBuilder& alwaysSingleBlock(bool val = true);
   MetadataBuilder& gridSizeSumsInputs(bool val = true);

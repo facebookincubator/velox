@@ -37,6 +37,8 @@
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/ReversedEncoding.h"
+#include "velox/dwio/nimble/encodings/SequenceEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SliceEncoding.h"
@@ -165,6 +167,13 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     }
     case EncodingType::PartitionedEliasFano: {
       RETURN_ENCODING_BY_INTEGER_TYPE(PartitionedEliasFanoEncoding, dataType);
+    }
+    case EncodingType::Sequence: {
+      RETURN_ENCODING_BY_INTEGER_TYPE(SequenceEncoding, dataType);
+    }
+    case EncodingType::Reversed: {
+      // NOLINTNEXTLINE(clang-diagnostic-switch-enum)
+      RETURN_ENCODING_BY_INTEGER_TYPE(ReversedEncoding, dataType);
     }
     case EncodingType::ALP: {
       switch (dataType) {
@@ -485,6 +494,15 @@ std::string_view EncodingFactory::encode(
           "PartitionedEliasFano encoding only supports integral data types, got {}.",
           TypeTraits<T>::dataType);
     }
+    case EncodingType::Sequence: {
+      if constexpr (isIntegralType<T>()) {
+        return SequenceEncoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "Sequence encoding only supports integral data types, got {}.",
+          TypeTraits<T>::dataType);
+    }
     case EncodingType::ALP: {
       if constexpr (isFloatingPointType<T>()) {
         return ALPEncoding<T>::encode(selection, castedValues, buffer, options);
@@ -551,6 +569,15 @@ std::string_view EncodingFactory::encode(
       NIMBLE_INCOMPATIBLE_ENCODING(
           "SubIntSplit encoding only supports 32- and 64-bit numeric data "
           "types, got {}.",
+          TypeTraits<T>::dataType);
+    }
+    case EncodingType::Reversed: {
+      if constexpr (isIntegralType<T>()) {
+        return ReversedEncoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "Reversed encoding only supports integral data types, got {}.",
           TypeTraits<T>::dataType);
     }
     case EncodingType::Huffman: {

@@ -56,6 +56,7 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
     VELOX_FILE_CONFIG_REGISTER(kReaderCollectColumnCpuMetricsSession);
     VELOX_FILE_CONFIG_REGISTER(kUseColumnNamesSession);
     VELOX_FILE_CONFIG_REGISTER(kNimbleFooterSpeculativeIoSizeSession);
+    VELOX_FILE_CONFIG_REGISTER(kNimbleFsstDecodeRepeatedPayloadsSession);
     VELOX_FILE_CONFIG_REGISTER(kNimblePreserveDictionaryEncodingSession);
     VELOX_FILE_CONFIG_REGISTER(kNimbleDictionaryAwareReadsSession);
     VELOX_FILE_CONFIG_REGISTER(kNimbleLazyColumnIoSession);
@@ -71,6 +72,7 @@ const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
     VELOX_FILE_CONFIG_REGISTER(kPinIndexSession);
     VELOX_FILE_CONFIG_REGISTER(kSelectiveNimbleReaderEnabledSession);
     VELOX_FILE_CONFIG_REGISTER(kNimbleDirectBufferedInputEnabledSession);
+    VELOX_FILE_CONFIG_REGISTER(kNimbleLazyFileStatsSession);
     VELOX_FILE_CONFIG_REGISTER(kMaxCoalescedDistanceSession);
     VELOX_FILE_CONFIG_REGISTER(kParallelUnitLoadCountSession);
     VELOX_FILE_CONFIG_REGISTER(kReadTimestampUnitSession);

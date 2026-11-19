@@ -53,10 +53,12 @@ TEST(FileConfigTest, defaultConfig) {
   EXPECT_FALSE(config.useColumnNames(emptySession.get()));
   EXPECT_EQ(
       config.nimbleFooterSpeculativeIoSize(emptySession.get()), 8UL << 20);
+  EXPECT_FALSE(config.nimbleFsstDecodeRepeatedPayloads(emptySession.get()));
   EXPECT_FALSE(config.nimblePreserveDictionaryEncoding(emptySession.get()));
   EXPECT_FALSE(config.nimbleDictionaryAwareReads(emptySession.get()));
   EXPECT_FALSE(config.nimbleScanFastPath(emptySession.get()));
   EXPECT_FALSE(config.nimbleLazyColumnIo(emptySession.get()));
+  EXPECT_FALSE(config.nimbleLazyFileStats(emptySession.get()));
 }
 
 TEST(FileConfigTest, overrideConfig) {
@@ -77,10 +79,12 @@ TEST(FileConfigTest, overrideConfig) {
       {FileConfig::kPinIndex, "true"},
       {"hive.use-column-names", "true"},
       {FileConfig::kNimbleFooterSpeculativeIoSize, std::to_string(4UL << 20)},
+      {FileConfig::kNimbleFsstDecodeRepeatedPayloads, "true"},
       {FileConfig::kNimblePreserveDictionaryEncoding, "true"},
       {FileConfig::kNimbleDictionaryAwareReads, "true"},
       {FileConfig::kNimbleScanFastPath, "true"},
       {FileConfig::kNimbleLazyColumnIo, "true"},
+      {FileConfig::kNimbleLazyFileStats, "true"},
   };
   FileConfig config(
       std::make_shared<config::ConfigBase>(std::move(configFromFile)), "hive.");
@@ -104,10 +108,12 @@ TEST(FileConfigTest, overrideConfig) {
   EXPECT_TRUE(config.useColumnNames(emptySession.get()));
   EXPECT_EQ(
       config.nimbleFooterSpeculativeIoSize(emptySession.get()), 4UL << 20);
+  EXPECT_TRUE(config.nimbleFsstDecodeRepeatedPayloads(emptySession.get()));
   EXPECT_TRUE(config.nimblePreserveDictionaryEncoding(emptySession.get()));
   EXPECT_TRUE(config.nimbleDictionaryAwareReads(emptySession.get()));
   EXPECT_TRUE(config.nimbleScanFastPath(emptySession.get()));
   EXPECT_TRUE(config.nimbleLazyColumnIo(emptySession.get()));
+  EXPECT_TRUE(config.nimbleLazyFileStats(emptySession.get()));
 }
 
 TEST(FileConfigTest, connectorScopedReaderOptions) {
@@ -144,10 +150,12 @@ TEST(FileConfigTest, overrideSession) {
       {FileConfig::kUseColumnNamesSession, "true"},
       {FileConfig::kNimbleFooterSpeculativeIoSizeSession,
        std::to_string(2UL << 20)},
+      {FileConfig::kNimbleFsstDecodeRepeatedPayloadsSession, "true"},
       {FileConfig::kNimblePreserveDictionaryEncodingSession, "true"},
       {FileConfig::kNimbleDictionaryAwareReadsSession, "true"},
       {FileConfig::kNimbleScanFastPathSession, "true"},
       {FileConfig::kNimbleLazyColumnIoSession, "true"},
+      {FileConfig::kNimbleLazyFileStatsSession, "true"},
   };
   const auto session =
       std::make_unique<config::ConfigBase>(std::move(sessionOverride));
@@ -166,10 +174,33 @@ TEST(FileConfigTest, overrideSession) {
   EXPECT_TRUE(config.pinIndex(session.get()));
   EXPECT_TRUE(config.useColumnNames(session.get()));
   EXPECT_EQ(config.nimbleFooterSpeculativeIoSize(session.get()), 2UL << 20);
+  EXPECT_TRUE(config.nimbleFsstDecodeRepeatedPayloads(session.get()));
   EXPECT_TRUE(config.nimblePreserveDictionaryEncoding(session.get()));
   EXPECT_TRUE(config.nimbleDictionaryAwareReads(session.get()));
   EXPECT_TRUE(config.nimbleScanFastPath(session.get()));
   EXPECT_TRUE(config.nimbleLazyColumnIo(session.get()));
+  EXPECT_TRUE(config.nimbleLazyFileStats(session.get()));
+}
+
+TEST(FileConfigTest, nimbleFsstDecodeRepeatedPayloadsSessionOverridesCatalog) {
+  const auto verifyOverride = [](bool catalogValue, bool sessionValue) {
+    FileConfig config(
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>{
+                {FileConfig::kNimbleFsstDecodeRepeatedPayloads,
+                 catalogValue ? "true" : "false"}}),
+        "hive.");
+    const auto session = std::make_unique<config::ConfigBase>(
+        std::unordered_map<std::string, std::string>{
+            {FileConfig::kNimbleFsstDecodeRepeatedPayloadsSession,
+             sessionValue ? "true" : "false"}});
+
+    EXPECT_EQ(
+        config.nimbleFsstDecodeRepeatedPayloads(session.get()), sessionValue);
+  };
+
+  verifyOverride(/*catalogValue=*/true, /*sessionValue=*/false);
+  verifyOverride(/*catalogValue=*/false, /*sessionValue=*/true);
 }
 
 TEST(FileConfigTest, nimbleScanFastPathSessionOverridesCatalog) {
@@ -206,6 +237,26 @@ TEST(FileConfigTest, nimbleDictionaryAwareReadsSessionOverridesCatalog) {
              sessionValue ? "true" : "false"}});
 
     EXPECT_EQ(config.nimbleDictionaryAwareReads(session.get()), sessionValue);
+  };
+
+  verifyOverride(/*catalogValue=*/true, /*sessionValue=*/false);
+  verifyOverride(/*catalogValue=*/false, /*sessionValue=*/true);
+}
+
+TEST(FileConfigTest, nimbleLazyFileStatsSessionOverridesCatalog) {
+  const auto verifyOverride = [](bool catalogValue, bool sessionValue) {
+    FileConfig config(
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>{
+                {FileConfig::kNimbleLazyFileStats,
+                 catalogValue ? "true" : "false"}}),
+        "hive.");
+    const auto session = std::make_unique<config::ConfigBase>(
+        std::unordered_map<std::string, std::string>{
+            {FileConfig::kNimbleLazyFileStatsSession,
+             sessionValue ? "true" : "false"}});
+
+    EXPECT_EQ(config.nimbleLazyFileStats(session.get()), sessionValue);
   };
 
   verifyOverride(/*catalogValue=*/true, /*sessionValue=*/false);

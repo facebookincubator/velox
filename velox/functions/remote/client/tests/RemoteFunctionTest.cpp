@@ -16,9 +16,11 @@
 
 #include <folly/SocketAddress.h>
 #include <folly/init/Init.h>
+#include <folly/io/IOBuf.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <stdlib.h>
+#include <atomic>
+#include <cstring>
 #include <numeric>
 
 #include "velox/common/base/Exceptions.h"
@@ -43,6 +45,20 @@ using ::facebook::velox::test::assertEqualVectors;
 
 namespace facebook::velox::functions {
 namespace {
+
+std::atomic<bool> requestPayloadReleased{false};
+
+template <typename T>
+struct RequestPayloadReleasedFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<Varchar>& input) {
+    VELOX_CHECK(requestPayloadReleased.load(std::memory_order_relaxed));
+    result = input.size();
+  }
+};
 
 struct Foo {
   explicit Foo(int64_t id) : id_(id) {}
@@ -384,6 +400,54 @@ TEST_F(MockRemoteFunctionTest, mockClientIsCalled) {
   // Verify the mock returned our expected values.
   auto expected = makeFlatVector<int64_t>({2, 4, 6});
   assertEqualVectors(expected, results);
+}
+
+TEST_F(MockRemoteFunctionTest, serverReleasesRequestPayloadBeforeEvaluation) {
+  constexpr std::string_view kFunctionName =
+      "request_payload_released_before_evaluation";
+  registerFunction<RequestPayloadReleasedFunction, int64_t, Varchar>(
+      {std::string{kFunctionName}});
+
+  auto input = makeRowVector(
+      {makeFlatVector<std::string>({std::string(64 * 1024, 'a')})});
+  auto serde = getSerde(remote::PageFormat::PRESTO_PAGE);
+  auto serialized = rowVectorToIOBuf(input, *pool(), serde.get());
+  const auto serializedRange = serialized.coalesce();
+  auto* serializedData = new uint8_t[serializedRange.size()];
+  std::memcpy(serializedData, serializedRange.data(), serializedRange.size());
+
+  requestPayloadReleased.store(false, std::memory_order_relaxed);
+  remote::RemoteFunctionRequest request;
+  request.remoteFunctionHandle()->name() = kFunctionName;
+  request.remoteFunctionHandle()->returnType() = "bigint";
+  request.remoteFunctionHandle()->argumentTypes() = {"varchar"};
+  request.inputs()->rowCount() = input->size();
+  request.inputs()->pageFormat() = remote::PageFormat::PRESTO_PAGE;
+  request.inputs()->payload() = std::move(*folly::IOBuf::takeOwnership(
+      serializedData,
+      serializedRange.size(),
+      [](void* buffer, void* userData) {
+        delete[] static_cast<uint8_t*>(buffer);
+        static_cast<std::atomic<bool>*>(userData)->store(
+            true, std::memory_order_relaxed);
+      },
+      &requestPayloadReleased));
+  request.throwOnError() = true;
+
+  RemoteFunctionServiceHandler handler;
+  remote::RemoteFunctionResponse response;
+  handler.invokeFunction(
+      response,
+      std::make_unique<remote::RemoteFunctionRequest>(std::move(request)));
+
+  EXPECT_TRUE(requestPayloadReleased.load(std::memory_order_relaxed));
+  auto output = IOBufToRowVector(
+      response.result()->payload().value(),
+      ROW({BIGINT()}),
+      *pool(),
+      serde.get());
+  auto expected = makeRowVector({makeFlatVector<int64_t>({64 * 1024})});
+  assertEqualVectors(expected, output);
 }
 
 TEST_F(MockRemoteFunctionTest, serializesOnlyActiveRows) {

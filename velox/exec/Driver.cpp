@@ -521,14 +521,14 @@ bool Driver::checkUnderArbitration(ContinueFuture* future) {
 
 namespace {
 inline void addInput(Operator* op, const RowVectorPtr& input) {
-  if (FOLLY_LIKELY(!op->dryRun())) {
+  if (!op->dryRun()) [[likely]] {
     op->addInput(input);
   }
 }
 
 inline void getOutput(Operator* op, RowVectorPtr& result) {
   result = op->getOutput();
-  if (FOLLY_UNLIKELY(op->shouldDropOutput())) {
+  if (op->shouldDropOutput()) [[unlikely]] {
     result = nullptr;
   }
 }
@@ -617,7 +617,7 @@ StopReason Driver::runInternal(
           return stop;
         }
 
-        if (FOLLY_UNLIKELY(shouldYield())) {
+        if (shouldYield()) [[unlikely]] {
           recordYieldCount();
           guard.notThrown();
           return StopReason::kYield;
@@ -629,7 +629,7 @@ StopReason Driver::runInternal(
         // queuedTime we should update.
         curOperatorId_ = i;
 
-        if (FOLLY_UNLIKELY(checkUnderArbitration(&future))) {
+        if (checkUnderArbitration(&future)) [[unlikely]] {
           // Blocks the driver if the associated query is under memory
           // arbitration as it is very likely the driver run will trigger memory
           // arbitration when it needs to allocate memory, and the memory

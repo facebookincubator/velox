@@ -66,8 +66,7 @@ void testIgnoreNullInputs(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& postAggregationProjections,
-    const std::function<std::shared_ptr<exec::Task>(AssertQueryBuilder&)>&
-        assertResults,
+    const std::function<exec::TaskPtr(AssertQueryBuilder&)>& assertResults,
     const std::unordered_map<std::string, std::string>& config,
     exec::test::DuckDbQueryRunner& duckDbQueryRunner,
     memory::MemoryPool* pool);
@@ -181,7 +180,7 @@ std::vector<RowVectorPtr> addExtraGroupingKey(
     const std::vector<RowVectorPtr>& data,
     const std::string& extraKeyName) {
   VELOX_CHECK(!data.empty());
-  auto names = asRowType(data[0]->type())->names();
+  auto names = data[0]->rowType()->names();
   names.push_back(extraKeyName);
 
   std::vector<RowVectorPtr> newData{data.size()};
@@ -403,23 +402,23 @@ void testAbandonedPartialMerge(
       AssertQueryBuilder(plan)
           .configs(config)
           .maxDrivers(1)
-          .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+          .config(core::QueryConfig::kMaxOutputBatchRows, 2)
           .config(core::QueryConfig::kMaxPartialAggregationMemory, 1ULL << 60)
           .config(
               core::QueryConfig::kMaxExtendedPartialAggregationMemory,
               1ULL << 60)
-          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "101")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 101)
           .copyResults(pool);
 
   // Use a new builder because a run consumes the builder's configs, and a
   // later run would then drop kMaxOutputBatchRows and 'config'.
   AssertQueryBuilder queryBuilder(plan);
   queryBuilder.configs(config).config(
-      core::QueryConfig::kMaxOutputBatchRows, "2");
+      core::QueryConfig::kMaxOutputBatchRows, 2);
   enableAbandonPartialAggregation(queryBuilder);
   auto task = queryBuilder.assertResults({expected});
-  const auto stats = toPlanStats(task->taskStats());
-  const auto& mergeStats = stats.at(plan->id());
+  const auto mergeStats =
+      exec::PlanNodeStats::extract(task->taskStats(), plan->id());
   // No group reaches the merge, so there is nothing to abandon.
   if (mergeStats.inputRows == 0) {
     return;
@@ -430,10 +429,9 @@ void testAbandonedPartialMerge(
   ASSERT_GT(mergeStats.inputVectors, 1)
       << "Merge node received one input vector; the abandoned fast path was "
          "not exercised.";
-  EXPECT_GT(
-      mergeStats.customStats.at("abandonedPartialAggregationRows").sum, 0);
+  EXPECT_GT(mergeStats.customStat("abandonedPartialAggregationRows").sum, 0);
   EXPECT_GE(
-      mergeStats.customStats.at("toIntermediateFastPathCalls").sum,
+      mergeStats.customStat("toIntermediateFastPathCalls").sum,
       mergeNode.aggregates().size() * (mergeStats.inputVectors - 1));
 }
 
@@ -541,8 +539,7 @@ struct AggregationTestBase::CompanionPlanInputs {
 void AggregationTestBase::testCompanionExtract(
     const CompanionPlanInputs& inputs,
     const std::vector<std::string>& postAggregationProjections,
-    const std::function<std::shared_ptr<exec::Task>(AssertQueryBuilder&)>&
-        assertResults,
+    const std::function<exec::TaskPtr(AssertQueryBuilder&)>& assertResults,
     const std::unordered_map<std::string, std::string>& config,
     bool streaming) {
   {
@@ -606,10 +603,9 @@ void AggregationTestBase::testCompanionExtract(
     auto task = assertResults(queryBuilder);
 
     // Expect > 0 spilled bytes unless there was no input.
-    const auto partialInputRows =
-        toPlanStats(task->taskStats()).at(partialNodeId).inputRows;
-    const auto finalInputRows =
-        toPlanStats(task->taskStats()).at(finalNodeId).inputRows;
+    const auto planStats = exec::toPlanStats(task->taskStats());
+    const auto partialInputRows = planStats.at(partialNodeId).inputRows;
+    const auto finalInputRows = planStats.at(finalNodeId).inputRows;
     if (exec::injectedSpillCount() > 0) {
       EXPECT_LT(0, spilledBytes(*task))
           << "partial inputRows: " << partialInputRows
@@ -754,8 +750,7 @@ void AggregationTestBase::testCompanionExtract(
 void AggregationTestBase::testCompanionMergeExtract(
     const CompanionPlanInputs& inputs,
     const std::vector<std::string>& postAggregationProjections,
-    const std::function<std::shared_ptr<exec::Task>(AssertQueryBuilder&)>&
-        assertResults,
+    const std::function<exec::TaskPtr(AssertQueryBuilder&)>& assertResults,
     const std::unordered_map<std::string, std::string>& config) {
   {
     SCOPED_TRACE("Run partial + intermediate + final merge extract");
@@ -846,8 +841,7 @@ void AggregationTestBase::testCompanionMerge(
 
   // Returns a builder with the intermediate states of the input copies.
   auto makeIntermediate = [&]() {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    PlanBuilder builder(planNodeIdGenerator, pool());
+    PlanBuilder builder(pool());
     inputs.makeSource(builder);
 
     // Copy every row with a key that numbers the copies, so that the copies
@@ -860,10 +854,7 @@ void AggregationTestBase::testCompanionMerge(
     outputLayout.push_back(kCopyKey);
     builder
         .nestedLoopJoin(
-            PlanBuilder(planNodeIdGenerator, pool())
-                .values({copies})
-                .planNode(),
-            outputLayout)
+            builder.newPlan().values({copies}).planNode(), outputLayout)
         .partialAggregation(groupingKeys, partialAggregates)
         .finalAggregation();
     return builder;
@@ -903,28 +894,29 @@ void AggregationTestBase::testCompanionMerge(
 
   {
     SCOPED_TRACE("Run abandoned partial merge with selected nulls");
-    auto builder = makeIntermediate();
+    auto plan = makeIntermediate().planNode();
 
     // Read without copying to keep the encodings that some merges require,
-    // such as constant intermediate fields. 'cursor' owns the memory of
+    // such as constant intermediate fields. 'task' owns the memory of
     // 'intermediateInputs', so it must outlive the merge run.
-    CursorParameters params;
-    params.planNode = builder.planNode();
-    params.queryConfigs = config;
-    params.queryConfigs[core::QueryConfig::kMaxOutputBatchRows] = "2";
-    params.copyResult = false;
-    auto [cursor, intermediateInputs] = exec::test::readCursor(params);
-    PlanBuilder mergeBuilder(pool());
-    mergeBuilder.values(nullFirstIntermediateRows(
-        intermediateInputs,
-        groupingKeys.size(),
-        builder.planNode()->outputType(),
-        pool()));
+    exec::TaskPtr task;
+    auto intermediateInputs =
+        AssertQueryBuilder(plan)
+            .configs(config)
+            .config(core::QueryConfig::kMaxOutputBatchRows, 2)
+            .results(task);
 
-    // Group by k0 and the copy key because global partial aggregations
-    // cannot be abandoned.
-    mergeBuilder.partialAggregation(groupingKeys, mergeAggregates);
-    testAbandonedPartialMerge(mergeBuilder.planNode(), config, pool());
+    auto mergePlan = PlanBuilder(pool())
+                         .values(nullFirstIntermediateRows(
+                             intermediateInputs,
+                             groupingKeys.size(),
+                             plan->outputType(),
+                             pool()))
+                         // Group by k0 and the copy key because global partial
+                         // aggregations cannot be abandoned.
+                         .partialAggregation(groupingKeys, mergeAggregates)
+                         .planNode();
+    testAbandonedPartialMerge(mergePlan, config, pool());
   }
 }
 
@@ -977,8 +969,7 @@ void AggregationTestBase::testReadFromFiles(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& postAggregationProjections,
-    std::function<std::shared_ptr<exec::Task>(exec::test::AssertQueryBuilder&)>
-        assertResults,
+    std::function<exec::TaskPtr(exec::test::AssertQueryBuilder&)> assertResults,
     const std::unordered_map<std::string, std::string>& config) {
   PlanBuilder builder(pool());
   makeSource(builder);
@@ -1022,7 +1013,7 @@ void AggregationTestBase::testReadFromFiles(
   // No need to test streaming as the streaming test generates its own inputs,
   // so it would be the same as the original test.
   testAggregationsImpl(
-      [&](auto& builder) { builder.tableScan(asRowType(input->type())); },
+      [&](auto& builder) { builder.tableScan(input->rowType()); },
       groupingKeys,
       aggregates,
       postAggregationProjections,
@@ -1135,7 +1126,7 @@ RowVectorPtr AggregationTestBase::validateStreamingInTestAggregations(
                             .configs(config)
                             .copyResults(pool());
   }
-  const auto& names = asRowType(expected->type())->names();
+  const auto& names = expected->rowType()->names();
   for (const auto& actualResults : {actualResults1, actualResults2}) {
     auto actual = makeRowVector(names, actualResults);
     if (!projections.empty()) {
@@ -1161,8 +1152,7 @@ void AggregationTestBase::testAggregationsImpl(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& postAggregationProjections,
-    std::function<std::shared_ptr<exec::Task>(AssertQueryBuilder&)>
-        assertResults,
+    std::function<exec::TaskPtr(AssertQueryBuilder&)> assertResults,
     const std::unordered_map<std::string, std::string>& config,
     bool streaming) {
   {
@@ -1216,10 +1206,9 @@ void AggregationTestBase::testAggregationsImpl(
     auto task = assertResults(queryBuilder);
 
     // Expect > 0 spilled bytes unless there was no input.
-    const auto partialInputRows =
-        toPlanStats(task->taskStats()).at(partialNodeId).inputRows;
-    const auto finalInputRows =
-        toPlanStats(task->taskStats()).at(finalNodeId).inputRows;
+    const auto planStats = exec::toPlanStats(task->taskStats());
+    const auto partialInputRows = planStats.at(partialNodeId).inputRows;
+    const auto finalInputRows = planStats.at(finalNodeId).inputRows;
     if (exec::injectedSpillCount() > 0) {
       EXPECT_LT(0, spilledBytes(*task))
           << "partial inputRows: " << partialInputRows
@@ -1308,8 +1297,8 @@ void AggregationTestBase::testAggregationsImpl(
 
     AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
     queryBuilder.configs(config)
-        .config(core::QueryConfig::kSpillEnabled, "true")
-        .config(core::QueryConfig::kAggregationSpillEnabled, "true")
+        .config(core::QueryConfig::kSpillEnabled, true)
+        .config(core::QueryConfig::kAggregationSpillEnabled, true)
         .spillDirectory(spillDirectory->getPath());
 
     exec::TestScopedSpillInjection scopedSpillInjection(100);
@@ -1403,8 +1392,7 @@ void AggregationTestBase::testStreamingAggregationsImpl(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& postAggregationProjections,
-    std::function<std::shared_ptr<exec::Task>(AssertQueryBuilder&)>
-        assertResults,
+    std::function<exec::TaskPtr(AssertQueryBuilder&)> assertResults,
     const std::unordered_map<std::string, std::string>& config) {
   {
     SCOPED_TRACE("Test StreamingAggregation: run single");
@@ -1467,8 +1455,7 @@ void AggregationTestBase::testAggregations(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& postAggregationProjections,
-    std::function<std::shared_ptr<exec::Task>(AssertQueryBuilder&)>
-        assertResults,
+    std::function<exec::TaskPtr(AssertQueryBuilder&)> assertResults,
     const std::unordered_map<std::string, std::string>& config,
     bool streaming,
     bool incremental) {
@@ -1659,8 +1646,7 @@ void testIgnoreNullInputs(
     const std::vector<std::string>& groupingKeys,
     const std::vector<std::string>& aggregates,
     const std::vector<std::string>& postAggregationProjections,
-    const std::function<std::shared_ptr<exec::Task>(AssertQueryBuilder&)>&
-        assertResults,
+    const std::function<exec::TaskPtr(AssertQueryBuilder&)>& assertResults,
     const std::unordered_map<std::string, std::string>& config,
     exec::test::DuckDbQueryRunner& duckDbQueryRunner,
     memory::MemoryPool* pool) {
@@ -1865,18 +1851,22 @@ void AggregationTestBase::testFailingAggregations(
     SCOPED_TRACE("Run single");
     auto builder = PlanBuilder(pool()).values(data);
     builder.singleAggregation(groupingKeys, aggregates);
-    AssertQueryBuilder queryBuilder(builder.planNode());
-    queryBuilder.configs(config);
-    VELOX_ASSERT_THROW(queryBuilder.copyResults(pool()), expectedMessage);
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(builder.planNode())
+            .configs(config)
+            .copyResults(pool()),
+        expectedMessage);
   }
 
   {
     SCOPED_TRACE("Run partial + final");
     auto builder = PlanBuilder(pool()).values(data);
     builder.partialAggregation(groupingKeys, aggregates).finalAggregation();
-    AssertQueryBuilder queryBuilder(builder.planNode());
-    queryBuilder.configs(config);
-    VELOX_ASSERT_THROW(queryBuilder.copyResults(pool()), expectedMessage);
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(builder.planNode())
+            .configs(config)
+            .copyResults(pool()),
+        expectedMessage);
   }
 
   {
@@ -1897,9 +1887,11 @@ void AggregationTestBase::testFailingAggregations(
     builder.partialAggregation(groupingKeys, aggregates)
         .intermediateAggregation()
         .finalAggregation();
-    AssertQueryBuilder queryBuilder(builder.planNode());
-    queryBuilder.configs(config);
-    VELOX_ASSERT_THROW(queryBuilder.copyResults(pool()), expectedMessage);
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(builder.planNode())
+            .configs(config)
+            .copyResults(pool()),
+        expectedMessage);
   }
 
   if (!groupingKeys.empty()) {
@@ -1908,9 +1900,11 @@ void AggregationTestBase::testFailingAggregations(
     builder.partialAggregation(groupingKeys, aggregates)
         .localPartition(groupingKeys)
         .finalAggregation();
-    AssertQueryBuilder queryBuilder(builder.planNode());
-    queryBuilder.configs(config);
-    VELOX_ASSERT_THROW(queryBuilder.copyResults(pool()), expectedMessage);
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(builder.planNode())
+            .configs(config)
+            .copyResults(pool()),
+        expectedMessage);
   }
 
   {
@@ -1929,9 +1923,11 @@ void AggregationTestBase::testFailingAggregations(
         .localPartition(groupingKeys)
         .finalAggregation();
 
-    AssertQueryBuilder queryBuilder(builder.planNode());
-    queryBuilder.configs(config);
-    VELOX_ASSERT_THROW(queryBuilder.copyResults(pool()), expectedMessage);
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(builder.planNode())
+            .configs(config)
+            .copyResults(pool()),
+        expectedMessage);
   }
 
   // The streaming check splits the input in two, so it doesn't run with fewer

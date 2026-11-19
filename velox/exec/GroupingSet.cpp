@@ -1380,7 +1380,7 @@ bool GroupingSet::mergeNextWithoutAggregates(
     lastVector = stream->current();
     lastIndex = index;
     endOfBatch = index == currentVector.size() - 1;
-    if (FOLLY_UNLIKELY(endOfBatch)) {
+    if (endOfBatch) [[unlikely]] {
       // The stream is at end of input batch. Need to copy out the rows before
       // fetching next batch in 'pop'.
       flushOutput();

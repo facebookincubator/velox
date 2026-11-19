@@ -221,7 +221,21 @@ void makeNTS(std::string& string) {
 void initializeWaveHeaders(
     const std::map<std::string, std::string>& headers,
     const std::string& except) {
-  for (auto& pair : headers) {
+  auto resolvedHeaders = headers;
+  const auto& jitSafeHeaders = jitify::detail::get_jitsafe_headers_map();
+  for (const auto& [name, text] : headers) {
+    const auto header = jitSafeHeaders.find(name);
+    if (header == jitSafeHeaders.end()) {
+      continue;
+    }
+    // Compare the built-ins: Jitify rewrites captured header contents.
+    for (const auto& [alias, source] : jitSafeHeaders) {
+      if (source == header->second) {
+        resolvedHeaders.emplace(alias, text);
+      }
+    }
+  }
+  for (auto& pair : resolvedHeaders) {
     if (pair.first == except) {
       continue;
     }

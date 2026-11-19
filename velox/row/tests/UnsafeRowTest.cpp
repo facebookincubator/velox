@@ -19,6 +19,7 @@
 #include <folly/Random.h>
 #include <folly/init/Init.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/row/UnsafeRowFast.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -235,6 +236,16 @@ TEST_F(UnsafeRowTest, nestedMaps) {
   auto values = makeMapVector({0, 2, 2, 3, 4, 5}, keys, innerMaps, {1});
   auto data = makeRowVector({values});
   testRoundTrip(data);
+}
+
+TEST_F(UnsafeRowTest, flatMapUnsupported) {
+  auto data = makeRowVector({makeFlatMapVector<int32_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{1, 11}},
+  })});
+  VELOX_ASSERT_THROW(
+      UnsafeRowFast{data},
+      "Unsupported map vector encoding for UnsafeRow: FLAT_MAP");
 }
 
 TEST_F(UnsafeRowTest, constantVector) {
