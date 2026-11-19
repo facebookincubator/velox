@@ -86,6 +86,8 @@ class InMemoryExchangeClient
 
   void noMoreRemoteTasks() override;
 
+  /// While any call into a source is in flight, leaves closing all the
+  /// sources to the thread whose call is the last to return.
   void close() override;
 
   folly::F14FastMap<std::string, RuntimeMetric> stats() const override;
@@ -167,6 +169,10 @@ class InMemoryExchangeClient
   // Implements close() so the destructor does not call a virtual method.
   void closeImpl();
 
+  // Ends a call into sources counted in 'numSourceCalls_'. The last one to end
+  // closes the sources that closeImpl() left in 'sourcesToClose_'.
+  void endSourceCalls();
+
   folly::F14FastMap<std::string, RuntimeMetric> collectStatsLocked() const;
 
   // Handy for ad-hoc logging.
@@ -182,6 +188,15 @@ class InMemoryExchangeClient
   std::unordered_set<std::string> remoteTaskIds_;
   std::vector<std::shared_ptr<ExchangeSource>> sources_;
   bool closed_{false};
+
+  // Number of threads calling into sources outside the lock, to issue requests
+  // or to pause a source. A source's close() can free state such a call is
+  // using, so closeImpl() does not close sources while this is non-zero.
+  int32_t numSourceCalls_{0};
+
+  // Sources closeImpl() handed to the last thread in 'numSourceCalls_' to
+  // close.
+  std::vector<std::shared_ptr<ExchangeSource>> sourcesToClose_;
 
   // Mutable because stats() lazily populates this cache.
   mutable folly::F14FastMap<std::string, RuntimeMetric> stats_;
