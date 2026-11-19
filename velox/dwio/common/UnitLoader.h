@@ -46,9 +46,17 @@ class LoadUnit {
 
 class UnitLoaderStats {
  public:
+  /// Number of load units processed.
+  static constexpr std::string_view kProcessedUnits{"processedUnits"};
+  /// Time spent loading units on the reader thread.
+  static constexpr std::string_view kUnitLoadNanos{"unitLoadNanos"};
+  /// Time the reader thread waited for units loaded in the background.
+  static constexpr std::string_view kWaitForUnitReadyNanos{
+      "waitForUnitReadyNanos"};
+
   UnitLoaderStats() = default;
 
-  void addCounter(const std::string& name, RuntimeCounter counter) {
+  void addCounter(std::string_view name, RuntimeCounter counter) {
     auto locked = stats_.wlock();
     auto it = locked->find(name);
     if (it == locked->end()) {

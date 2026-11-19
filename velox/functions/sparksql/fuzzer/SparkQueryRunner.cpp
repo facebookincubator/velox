@@ -37,6 +37,7 @@
 #include "velox/functions/sparksql/fuzzer/spark/connect/base.pb.h"
 #include "velox/functions/sparksql/fuzzer/spark/connect/relations.pb.h"
 #include "velox/vector/arrow/Bridge.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 
 using namespace spark::connect;
 
@@ -126,7 +127,8 @@ SparkQueryRunner::execute(const core::PlanNodePtr& plan) {
       result = executeAndReturnVector(plan);
   if (result.first) {
     return std::make_pair(
-        exec::test::materialize(*result.first), result.second);
+        velox::test::VectorAssertions::toMultiset(*result.first),
+        result.second);
   }
   return std::make_pair(std::nullopt, result.second);
 }

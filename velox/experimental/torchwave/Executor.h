@@ -36,6 +36,7 @@ class GpuArena;
 
 namespace torch::wave {
 
+struct DeviceGrid;
 struct ModelContext;
 
 /// Initializes process-wide GPU resources (arenas, stream/event pools).
@@ -73,7 +74,8 @@ struct LaunchDebugInfo {
   /// follow, 'numBlocks' words later. -1 for a launch that was not timed.
   int64_t clockOffset{-1};
   /// The step's pinned BlockInfo array, which gives each block's op when the
-  /// DebugInfos were not copied back.
+  /// DebugInfos were not copied back. Null for a step whose block table the
+  /// device writes.
   const BlockInfo* pinnedBlocks{nullptr};
 };
 
@@ -349,6 +351,11 @@ struct StepVectors {
   /// Word offset of the current launch's clocks in the execution's clock
   /// buffer, as reserveLaunchClocks gave it; -1 before the first launch.
   int64_t clockOffset{-1};
+  /// The blocks of that launch.
+  int32_t clockBlocks{0};
+  /// Whether the step's launch in the previous execution had the same offset
+  /// and blocks, so that its clocks are still in place for the device grid.
+  bool previousClocksInPlace{false};
 
   /// Every frame value this step can read, over ALL of its grid variants:
   /// each kernel launch's KernelOperation::orderingInputs(), each standalone
@@ -501,6 +508,17 @@ struct StepVectors {
   /// True if sizes matched so that makeGrid results can be reused.
   bool hasGridCache{false};
 
+  /// The step's grid computed on the device, packed after its first host
+  /// grid; null when the step keeps the host grid. 'deviceGridChoices' is the
+  /// gridChoiceBitmap it was packed for.
+  std::shared_ptr<DeviceGrid> deviceGrid;
+  uint64_t deviceGridChoices{0};
+  bool deviceGridTried{false};
+  /// True when this execution's grid is the device's, launched with
+  /// 'deviceGridBlocks' blocks.
+  bool onDeviceGrid{false};
+  int32_t deviceGridBlocks{0};
+
   /// Set at bind when any kernel op in this step has op barriers
   /// (multi-block synchronization). Causes cooperative launch.
   bool isCgGrid{false};
@@ -649,6 +667,13 @@ struct ExecutionState {
   /// and returned on scope exit.
   std::unique_ptr<facebook::velox::wave::Stream> stream;
 
+  /// Under WaveConfig::setupStream: the stream the device-grid steps copy
+  /// their parameters and run their setup kernel on, ahead of the wave
+  /// stream, and the event the wave stream waits on for each step's setup.
+  /// Taken from streamPool on first use, returned with 'stream'.
+  std::unique_ptr<facebook::velox::wave::Stream> setupStream;
+  std::unique_ptr<facebook::velox::wave::Event> setupDone;
+
   const folly::F14FastMap<NodeCP, nativert::OpKernel*>* kernelMap{nullptr};
   const folly::F14FastMap<NodeCP, int32_t>* standaloneIndices{nullptr};
   std::vector<StandaloneStats>* standaloneStats{nullptr};
@@ -781,6 +806,8 @@ struct ExecutionState {
   std::vector<std::tuple<int32_t, int32_t, int64_t>> symbolSources;
   /// By symbol index: the capacity this execution sizes for.
   std::vector<int64_t> symbolCapacities;
+  /// Symbol values bound by DeviceSymbols::checkSizeExprs this execution.
+  folly::F14FastMap<std::string, int64_t> sizeExprSymbols;
   /// The fixup kernel's symbol addresses and capacities, as last copied to
   /// the device, and the device copy.
   std::vector<int64_t> symbolArgsHost;

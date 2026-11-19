@@ -37,6 +37,7 @@
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/SerializedPageUtil.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 using namespace facebook::velox::exec::test;
 
@@ -397,7 +398,7 @@ TEST_P(MultiFragmentTest, aggregationSingleKey) {
       .assertResults("SELECT c0 % 10, sum(c1) FROM tmp GROUP BY 1");
 
   for (auto& task : tasks) {
-    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
   }
 
   // Verify the created memory pools.
@@ -501,7 +502,7 @@ TEST_P(MultiFragmentTest, aggregationMultiKey) {
       .assertResults("SELECT c0 % 10, c1 % 2, sum(c2) FROM tmp GROUP BY 1, 2");
 
   for (auto& task : tasks) {
-    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
   }
 }
 
@@ -529,7 +530,8 @@ TEST_P(MultiFragmentTest, distributedTableScan) {
 
     verifyExchangeStats(task, 1, 1);
 
-    ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*leafTask))
+        << leafTask->taskId();
   }
 }
 
@@ -565,12 +567,12 @@ TEST_P(MultiFragmentTest, abortMergeExchange) {
   for (int i = 0; i < 2; ++i) {
     auto sortTaskId = makeTaskId("orderby", static_cast<int>(tasks.size()));
     partialSortTaskIds.push_back(sortTaskId);
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     auto partialSortPlan =
-        PlanBuilder(planNodeIdGenerator)
+        builder.newPlan()
             .localMerge(
                 {"c0"},
-                {PlanBuilder(planNodeIdGenerator)
+                {builder.newPlan()
                      .tableScan(rowType_)
                      .orderBy({"c0"}, true)
                      .planNode()})
@@ -645,7 +647,7 @@ TEST_P(MultiFragmentTest, mergeExchange) {
        ++numPartialSortTasks) {
     auto sortTaskId = makeTaskId("orderby", tasks.size());
     partialSortTaskIds.push_back(sortTaskId);
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     std::vector<std::shared_ptr<const core::PlanNode>> sources;
     sources.reserve(5);
     std::vector<std::string> scanNodeIds;
@@ -653,7 +655,7 @@ TEST_P(MultiFragmentTest, mergeExchange) {
     for (int numSourcesPerPartialSortTask = 0; numSourcesPerPartialSortTask < 5;
          ++numSourcesPerPartialSortTask) {
       core::PlanNodeId scanNodeId;
-      sources.push_back(PlanBuilder(planNodeIdGenerator)
+      sources.push_back(builder.newPlan()
                             .tableScan(rowType_)
                             .capturePlanNodeId(scanNodeId)
                             .orderBy({"c0"}, true)
@@ -662,7 +664,7 @@ TEST_P(MultiFragmentTest, mergeExchange) {
     }
 
     auto partialSortPlan =
-        PlanBuilder(planNodeIdGenerator)
+        builder.newPlan()
             .localMerge({"c0"}, std::move(sources))
             .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
             .capturePlanNodeId(partitionNodeId)
@@ -710,7 +712,7 @@ TEST_P(MultiFragmentTest, mergeExchange) {
           "SELECT * FROM tmp ORDER BY 1 NULLS LAST", std::vector<uint32_t>{0});
 
   for (auto& task : tasks) {
-    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
   }
 
   const auto finalSortStats = toPlanStats(mergeTask->taskStats());
@@ -745,7 +747,8 @@ TEST_P(MultiFragmentTest, partitionedOutput) {
         .split(remoteSplit(leafTaskId))
         .assertResults("SELECT c0, c1 FROM tmp");
 
-    ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*leafTask))
+        << leafTask->taskId();
   }
 
   // Test reordering and dropping at the same time
@@ -764,7 +767,8 @@ TEST_P(MultiFragmentTest, partitionedOutput) {
         .split(remoteSplit(leafTaskId))
         .assertResults("SELECT c3, c0, c2 FROM tmp");
 
-    ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*leafTask))
+        << leafTask->taskId();
   }
 
   // Test producing duplicate columns
@@ -787,7 +791,8 @@ TEST_P(MultiFragmentTest, partitionedOutput) {
         .split(remoteSplit(leafTaskId))
         .assertResults("SELECT c0, c1, c2, c3, c4, c3, c2, c1, c0 FROM tmp");
 
-    ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*leafTask))
+        << leafTask->taskId();
   }
 
   // Test dropping the partitioning key
@@ -828,7 +833,8 @@ TEST_P(MultiFragmentTest, partitionedOutput) {
 
     verifyExchangeStats(task, kFanout, kFanout);
 
-    ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*leafTask))
+        << leafTask->taskId();
   }
 
   // Test dropping all columns.
@@ -864,7 +870,8 @@ TEST_P(MultiFragmentTest, partitionedOutput) {
     ASSERT_EQ(*result->type(), *ROW({}));
     ASSERT_EQ(result->size(), numRows);
 
-    ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*leafTask))
+        << leafTask->taskId();
   }
 
   // Test asynchronously deleting task buffer (due to abort from downstream).
@@ -880,7 +887,8 @@ TEST_P(MultiFragmentTest, partitionedOutput) {
     // Delete the results asynchronously to simulate abort from downstream.
     bufferManager_->deleteResults(leafTaskId, 0);
 
-    ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*leafTask))
+        << leafTask->taskId();
   }
 }
 
@@ -907,7 +915,7 @@ TEST_P(MultiFragmentTest, mergeExchangeWithSpill) {
        ++numPartialSortTasks) {
     auto sortTaskId = makeTaskId("orderby", tasks.size());
     partialSortTaskIds.push_back(sortTaskId);
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     std::vector<std::shared_ptr<const core::PlanNode>> sources;
     sources.reserve(5);
     std::vector<std::string> scanNodeIds;
@@ -915,7 +923,7 @@ TEST_P(MultiFragmentTest, mergeExchangeWithSpill) {
     for (int numSourcesPerPartialSortTask = 0; numSourcesPerPartialSortTask < 5;
          ++numSourcesPerPartialSortTask) {
       core::PlanNodeId scanNodeId;
-      sources.push_back(PlanBuilder(planNodeIdGenerator)
+      sources.push_back(builder.newPlan()
                             .tableScan(rowType_)
                             .capturePlanNodeId(scanNodeId)
                             .orderBy({"c0"}, true)
@@ -925,7 +933,7 @@ TEST_P(MultiFragmentTest, mergeExchangeWithSpill) {
 
     core::PlanNodeId localMergeNodeId;
     auto partialSortPlan =
-        PlanBuilder(planNodeIdGenerator)
+        builder.newPlan()
             .localMerge({"c0"}, std::move(sources))
             .capturePlanNodeId(localMergeNodeId)
             .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
@@ -985,7 +993,7 @@ TEST_P(MultiFragmentTest, mergeExchangeWithSpill) {
           "SELECT * FROM tmp ORDER BY 1 NULLS LAST", std::vector<uint32_t>{0});
 
   for (auto& task : tasks) {
-    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
   }
   for (auto i = 0; i < 2; ++i) {
     auto taskStats = toPlanStats(tasks[i]->taskStats());
@@ -1178,7 +1186,7 @@ TEST_P(MultiFragmentTest, partitionedOutputWithLargeInput) {
     auto task = queryBuilder(op)
                     .split(remoteSplit(leafTaskId))
                     .assertResults("SELECT c0, c1, c2, c3, c4 FROM tmp");
-    ASSERT_TRUE(waitForTaskCompletion(leafTask.get()))
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*leafTask))
         << leafTask->taskId() << "state: " << leafTask->state();
     auto taskStats = toPlanStats(leafTask->taskStats());
     ASSERT_GT(taskStats.at("1").outputVectors, 2);
@@ -1225,7 +1233,7 @@ TEST_P(MultiFragmentTest, partitionedOutputWithLargeInput) {
     auto task = queryBuilder(op)
                     .splits(std::move(intermediateSplits))
                     .assertResults("SELECT c0, c1, c2, c3, c4 FROM tmp");
-    ASSERT_TRUE(waitForTaskCompletion(leafTask.get()))
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*leafTask))
         << "state: " << leafTask->state();
     auto taskStats = toPlanStats(leafTask->taskStats());
     ASSERT_GT(taskStats.at("1").outputVectors, 2);
@@ -1240,7 +1248,7 @@ TEST_P(MultiFragmentTest, broadcast) {
   std::vector<std::shared_ptr<Task>> tasks;
   auto leafTaskId = makeTaskId("leaf", 0);
   auto leafPlan = PlanBuilder()
-                      .values({data})
+                      .values(data)
                       .partitionedOutputBroadcast(
                           /*outputLayout=*/{}, GetParam().serdeKind)
                       .planNode();
@@ -1279,7 +1287,7 @@ TEST_P(MultiFragmentTest, broadcast) {
       .assertResults("SELECT UNNEST(array[1000, 1000, 1000])");
 
   for (auto& task : tasks) {
-    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
   }
 
   // Make sure duplicate 'updateOutputBuffers' message after task
@@ -1355,7 +1363,7 @@ TEST_P(MultiFragmentTest, roundRobinPartition) {
       .assertResults("SELECT * FROM tmp");
 
   for (auto& task : tasks) {
-    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
   }
 }
 
@@ -1379,7 +1387,7 @@ TEST_P(MultiFragmentTest, constantKeys) {
   // Make leaf task: Values -> Repartitioning (3-way)
   auto leafTaskId = makeTaskId("leaf", 0);
   auto leafPlan = PlanBuilder()
-                      .values({data})
+                      .values(data)
                       .partitionedOutput(
                           {"c0", "123"}, 3, true, {"c0"}, GetParam().serdeKind)
                       .planNode();
@@ -1419,7 +1427,7 @@ TEST_P(MultiFragmentTest, constantKeys) {
           "SELECT 3 * ceil(1000.0 / 7) /* number of null rows */, 1000 + 2 * ceil(1000.0 / 7) /* total number of rows */");
 
   for (auto& task : tasks) {
-    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
   }
 }
 
@@ -1441,7 +1449,7 @@ TEST_P(MultiFragmentTest, replicateNullsAndAny) {
   auto leafTaskId = makeTaskId("leaf", 0);
   auto leafPlan =
       PlanBuilder()
-          .values({data})
+          .values(data)
           .partitionedOutput(
               {"c0"}, 3, true, /*outputLayout=*/{}, GetParam().serdeKind)
           .planNode();
@@ -1481,7 +1489,7 @@ TEST_P(MultiFragmentTest, replicateNullsAndAny) {
           "SELECT 3 * ceil(1000.0 / 7) /* number of null rows */, 1000 + 2 * ceil(1000.0 / 7) /* total number of rows */");
 
   for (auto& task : tasks) {
-    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
   }
 }
 
@@ -1518,8 +1526,8 @@ TEST_P(MultiFragmentTest, limit) {
           .split(remoteSplit(leafTaskId))
           .assertResults(
               "VALUES (null), (1), (2), (3), (4), (5), (6), (null), (8), (9)");
-  ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
-  ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*leafTask)) << leafTask->taskId();
 }
 
 TEST_P(MultiFragmentTest, mergeExchangeOverEmptySources) {
@@ -1533,7 +1541,7 @@ TEST_P(MultiFragmentTest, mergeExchangeOverEmptySources) {
     leafTaskIds.push_back(taskId);
     auto plan =
         PlanBuilder()
-            .values({data})
+            .values(data)
             .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
             .planNode();
 
@@ -1555,7 +1563,7 @@ TEST_P(MultiFragmentTest, mergeExchangeOverEmptySources) {
   queryBuilder(plan).splits(std::move(leafTaskSplits)).assertResults("");
 
   for (auto& task : tasks) {
-    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
   }
 }
 
@@ -1576,7 +1584,7 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, mergeExchangeFailureOnStart) {
     leafTaskIds.push_back(taskId);
     auto plan =
         PlanBuilder()
-            .values({data})
+            .values(data)
             .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
             .planNode();
 
@@ -1600,7 +1608,7 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, mergeExchangeFailureOnStart) {
       injectErrorMsg);
 
   for (auto& task : tasks) {
-    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
   }
 }
 
@@ -1609,13 +1617,13 @@ core::PlanNodePtr makeJoinOverExchangePlan(
     const RowTypePtr& exchangeType,
     const RowVectorPtr& buildData,
     std::string serdeKind) {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  return PlanBuilder(planNodeIdGenerator)
+  PlanBuilder builder;
+  return builder.newPlan()
       .exchange(exchangeType, serdeKind)
       .hashJoin(
           {"c0"},
           {"u_c0"},
-          PlanBuilder(planNodeIdGenerator).values({buildData}).planNode(),
+          builder.newPlan().values(buildData).planNode(),
           "",
           {"c0"})
       .partitionedOutput({}, 1, /*outputLayout=*/{}, serdeKind)
@@ -1698,7 +1706,7 @@ TEST_P(MultiFragmentTest, earlyCompletion) {
       .assertResults("SELECT UNNEST([3, 3, 3, 3, 4, 4, 4, 4])");
 
   for (auto& task : tasks) {
-    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
   }
 }
 
@@ -1770,7 +1778,7 @@ TEST_P(MultiFragmentTest, earlyCompletionBroadcast) {
       .assertResults("SELECT UNNEST([10, 10, 10, 10])");
 
   for (auto& task : tasks) {
-    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
   }
 }
 
@@ -1811,14 +1819,14 @@ TEST_P(MultiFragmentTest, earlyCompletionMerge) {
           "u_c0", makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6}));
     }
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     auto joinPlan =
-        PlanBuilder(planNodeIdGenerator)
+        builder.newPlan()
             .mergeExchange(data->rowType(), {"c0"}, GetParam().serdeKind)
             .hashJoin(
                 {"c0"},
                 {"u_c0"},
-                PlanBuilder(planNodeIdGenerator).values({buildData}).planNode(),
+                builder.newPlan().values(buildData).planNode(),
                 "",
                 {"c0"})
             .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
@@ -1848,7 +1856,7 @@ TEST_P(MultiFragmentTest, earlyCompletionMerge) {
       .assertResults("SELECT UNNEST([3, 3, 3, 3, 4, 4, 4, 4])");
 
   for (auto& task : tasks) {
-    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
   }
 }
 
@@ -1968,7 +1976,7 @@ TEST_P(MultiFragmentTest, exchangeDestruction) {
   rootTask->start(1);
   addRemoteSplits(rootTask, {leafTaskId});
 
-  ASSERT_FALSE(waitForTaskCompletion(rootTask.get(), 1'000'000));
+  ASSERT_FALSE(TaskMonitor::waitForCompletion(*rootTask, 1'000'000));
   leafTask->requestAbort().get();
   rootTask->requestAbort().get();
 
@@ -2096,15 +2104,15 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, lateNoMoreSplits) {
   auto leafTaskId = makeTaskId("leaf", 0);
   auto leafTask = startLeafTask(leafTaskId, {data});
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId exchangeId;
   auto joinPlan =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .values({makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})})
           .hashJoin(
               {"c0"},
               {"u_c0"},
-              PlanBuilder(planNodeIdGenerator)
+              builder.newPlan()
                   .exchange(data->rowType(), GetParam().serdeKind)
                   .capturePlanNodeId(exchangeId)
                   .planNode(),
@@ -2154,7 +2162,7 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, lateNoMoreSplits) {
       &executor);
   auto cancelOnExit = folly::makeGuard([&] {
     joinTask->requestCancel();
-    waitForTaskCompletion(joinTask.get());
+    TaskMonitor::waitForCompletion(*joinTask);
   });
   joinTask->start(4);
   joinTask->addSplit(exchangeId, remoteSplit(leafTaskId));
@@ -2179,9 +2187,9 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, lateNoMoreSplits) {
   }
 
   joinTask->noMoreSplits(exchangeId);
-  ASSERT_TRUE(waitForTaskCompletion(joinTask.get(), 10'000'000));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*joinTask, 10'000'000));
   EXPECT_EQ(numOutputRows, 0);
-  ASSERT_TRUE(waitForTaskCompletion(leafTask.get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*leafTask));
 }
 
 TEST_P(MultiFragmentTest, finishedSplits) {
@@ -2210,11 +2218,11 @@ TEST_P(MultiFragmentTest, finishedSplits) {
   rootTask->start(1);
   rootTask->addSplit(exchangeId, remoteSplit(leafTaskId));
 
-  ASSERT_TRUE(waitForTaskCompletion(rootTask.get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*rootTask));
   const auto stats = rootTask->taskStats();
   EXPECT_EQ(stats.numFinishedSplits, 1);
   EXPECT_EQ(stats.numRunningSplits, 0);
-  ASSERT_TRUE(waitForTaskCompletion(leafTask.get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*leafTask));
 }
 
 TEST_P(MultiFragmentTest, splitBeforeStart) {
@@ -2234,7 +2242,7 @@ TEST_P(MultiFragmentTest, splitBeforeStart) {
       .splits(exchangeId, std::vector<Split>{})
       .maxDrivers(4)
       .assertResults(data);
-  ASSERT_TRUE(waitForTaskCompletion(leafTask.get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*leafTask));
 }
 
 TEST_P(MultiFragmentTest, customPlanNodeWithExchangeClient) {
@@ -2274,7 +2282,7 @@ TEST_P(MultiFragmentTest, customPlanNodeWithExchangeClient) {
     auto task = builder.maxDrivers(1)
                     .split(remoteSplit(leafTaskId))
                     .assertResults(vectors_);
-    ASSERT_TRUE(waitForTaskCompletion(leafTask.get(), 3'000'000))
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*leafTask, 3'000'000))
         << leafTask->taskId();
 
     EXPECT_TRUE(hasStat(
@@ -2360,7 +2368,7 @@ DEBUG_ONLY_TEST_P(
   // Unblock task terminate execution after no more split call finishes.
   readyToTerminate.store(true);
   blockTerminate.notifyAll();
-  ASSERT_TRUE(waitForTaskFailure(rootTask.get(), 1'000'000'000));
+  ASSERT_TRUE(TaskMonitor::waitForFailure(*rootTask, 1'000'000'000));
 }
 
 TEST_P(MultiFragmentTest, taskTerminateWithPendingOutputBuffers) {
@@ -2412,7 +2420,7 @@ TEST_P(MultiFragmentTest, taskTerminateWithPendingOutputBuffers) {
   // Abort the task to terminate after get buffers from the partitioned output
   // buffer manager.
   task->requestAbort();
-  ASSERT_TRUE(waitForTaskAborted(task.get(), 5'000'000));
+  ASSERT_TRUE(TaskMonitor::waitForAbort(*task, 5'000'000));
 
   // Wait for 1 second to let async driver activities to finish and
   // 'receivedIobufs' should be the last ones to hold the reference on the task.
@@ -2464,15 +2472,15 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, terminateWithBadSplit) {
   // Start the task with 2 drivers.
   auto probeData =
       makeNamedRowVector("p_c0", makeFlatVector<int64_t>({1, 2, 3}));
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId exchangeNodeId;
   auto plan =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .values({probeData}, true)
           .hashJoin(
               {"p_c0"},
               {"c0"},
-              PlanBuilder(planNodeIdGenerator)
+              builder.newPlan()
                   .mergeExchange(rowType_, {"c0"}, GetParam().serdeKind)
                   .capturePlanNodeId(exchangeNodeId)
                   .planNode(),
@@ -2526,7 +2534,7 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, terminateWithBadSplit) {
 
   // Wait for the task to fail, and make sure the task has been deleted instead
   // of hanging as a zombie task.
-  ASSERT_TRUE(waitForTaskFailure(task.get(), 3'000'000)) << task->taskId();
+  ASSERT_TRUE(TaskMonitor::waitForFailure(*task, 3'000'000)) << task->taskId();
   failThread.join();
 }
 
@@ -2539,12 +2547,12 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, mergeWithEarlyTermination) {
   std::vector<std::string> partialSortTaskIds;
   auto sortTaskId = makeTaskId("orderby", 0);
   partialSortTaskIds.push_back(sortTaskId);
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto partialSortPlan =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .localMerge(
               {"c0"},
-              {PlanBuilder(planNodeIdGenerator)
+              {builder.newPlan()
                    .tableScan(rowType_)
                    .orderBy({"c0"}, true)
                    .planNode()})
@@ -2586,8 +2594,8 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, mergeWithEarlyTermination) {
   mergeIsBlockedReady.store(true);
   mergeIsBlockedWait.notifyAll();
 
-  ASSERT_TRUE(waitForTaskCompletion(partialSortTask.get(), 30'000'000));
-  ASSERT_TRUE(waitForTaskAborted(finalSortTask.get(), 30'000'000));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*partialSortTask, 30'000'000));
+  ASSERT_TRUE(TaskMonitor::waitForAbort(*finalSortTask, 30'000'000));
 }
 
 class DataFetcher {
@@ -2798,7 +2806,7 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, maxBytes) {
 
     fetcher.fetch().wait();
 
-    ASSERT_TRUE(waitForTaskCompletion(task.get()));
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*task));
 
     const auto stats = fetcher.stats();
     if (testIteration > 1) {
@@ -2871,25 +2879,25 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, exchangeStatsOnFailure) {
           .split(remoteSplit(producerTaskId))
           .copyResults(pool()),
       "Forced failure");
-  ASSERT_TRUE(test::waitForTaskFailure(task.get(), 3'000'000));
+  ASSERT_TRUE(test::TaskMonitor::waitForFailure(*task, 3'000'000));
 
   auto stats = toPlanStats(task->taskStats());
 
   EXPECT_EQ(expectedReceivedPages, sumStat(stats.at("0"), "numReceivedPages"));
 
-  ASSERT_TRUE(waitForTaskCompletion(producerTask.get(), 3'000'000));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*producerTask, 3'000'000));
 }
 
 TEST_P(MultiFragmentTest, earlyTaskFailure) {
   setupSources(1, 10);
 
   const auto partialSortTaskId = makeTaskId("partialSortBy", 0);
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto partialSortPlan =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .localMerge(
               {"c0"},
-              {PlanBuilder(planNodeIdGenerator)
+              {builder.newPlan()
                    .tableScan(rowType_)
                    .orderBy({"c0"}, true)
                    .planNode()})
@@ -2926,13 +2934,13 @@ TEST_P(MultiFragmentTest, earlyTaskFailure) {
     partialSortTask->requestAbort().wait();
 
     if (internalFailure) {
-      ASSERT_TRUE(waitForTaskFailure(finalSortTask.get()))
+      ASSERT_TRUE(TaskMonitor::waitForFailure(*finalSortTask))
           << finalSortTask->taskId();
     } else {
-      ASSERT_TRUE(waitForTaskAborted(finalSortTask.get()))
+      ASSERT_TRUE(TaskMonitor::waitForAbort(*finalSortTask))
           << finalSortTask->taskId();
     }
-    ASSERT_TRUE(waitForTaskAborted(partialSortTask.get()))
+    ASSERT_TRUE(TaskMonitor::waitForAbort(*partialSortTask))
         << partialSortTask->taskId();
   }
 }
@@ -2942,7 +2950,7 @@ TEST_P(MultiFragmentTest, mergeSmallBatchesInExchange) {
 
   const int32_t numPartitions = 100;
   auto producerPlan = test::PlanBuilder()
-                          .values({data})
+                          .values(data)
                           .partitionedOutput(
                               {"c0"},
                               numPartitions,
@@ -3032,7 +3040,7 @@ TEST_P(MultiFragmentTest, exchangeOutputBatchRows) {
     auto producerTask = makeTask(
         producerTaskId,
         test::PlanBuilder()
-            .values({page})
+            .values(page)
             .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
             .planNode());
     bufferManager_->initializeTask(
@@ -3049,7 +3057,7 @@ TEST_P(MultiFragmentTest, exchangeOutputBatchRows) {
 
     std::vector<vector_size_t> sizes;
     for (const auto& batch :
-         queryBuilder(exchange(asRowType(page->type())).planNode())
+         queryBuilder(exchange(page->rowType()).planNode())
              .split(remoteSplit(producerTaskId))
              .config(
                  core::QueryConfig::kExchangeOutputBatchRows,
@@ -3105,7 +3113,7 @@ TEST_P(MultiFragmentTest, splitLargeCompactRowsInExchange) {
   auto data = makeRowVector(columns);
 
   auto producerPlan = test::PlanBuilder()
-                          .values({data})
+                          .values(data)
                           .partitionedOutput(
                               {"c0"},
                               kNumPartitions,
@@ -3261,7 +3269,7 @@ TEST_P(MultiFragmentTest, compressionPageSizeSkip) {
 
   const auto producerPlan =
       test::PlanBuilder()
-          .values({data})
+          .values(data)
           .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
           .planNode();
 
@@ -3332,7 +3340,6 @@ TEST_P(MultiFragmentTest, scaledTableScan) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId scanNodeId;
     configSettings_[core::QueryConfig::kTableScanScaledProcessingEnabled] =
         testData.scaleEnabled ? "true" : "false";
@@ -3376,8 +3383,9 @@ TEST_P(MultiFragmentTest, scaledTableScan) {
         .assertResults(
             "SELECT c5, max(c0), sum(c1), sum(c2), sum(c3), sum(c4) FROM tmp group by c5");
 
-    ASSERT_TRUE(waitForTaskCompletion(leafTask.get())) << leafTask->taskId();
-    ASSERT_TRUE(waitForTaskCompletion(finalAggTask.get()))
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*leafTask))
+        << leafTask->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*finalAggTask))
         << finalAggTask->taskId();
 
     auto planStats = toPlanStats(leafTask->taskStats());
@@ -3416,7 +3424,7 @@ TEST_P(MultiFragmentTest, emptySchema) {
   // Leaf task: Values -> PartitionedOutput
   auto leafPlan =
       PlanBuilder()
-          .values({data})
+          .values(data)
           .partitionedOutput({}, 1, /*outputLayout=*/{}, GetParam().serdeKind)
           .planNode();
 
@@ -3434,7 +3442,7 @@ TEST_P(MultiFragmentTest, emptySchema) {
       .assertSingleResult<int64_t>(1'000);
 
   for (auto& task : tasks) {
-    ASSERT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
   }
 }
 
@@ -3508,7 +3516,7 @@ TEST_P(MultiFragmentTest, batchBytes) {
                              (numBatches * rowsPerBatch - 1)) /
                                 2 * 1.5 / (numBatches * rowsPerBatch)));
 
-    waitForTaskCompletion(leafTask.get());
+    TaskMonitor::waitForCompletion(*leafTask);
 
     // Verify Exchange stats to ensure data was processed correctly
     auto rootTaskStats = toPlanStats(task->taskStats());

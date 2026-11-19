@@ -20,6 +20,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/lib/window/tests/WindowTestBase.h"
 
@@ -343,13 +344,6 @@ TEST_F(ApproxPercentileTest, largeWeightsGroupBy) {
 /// EvalCtx::moveOrCopyResult needlessly flattening constant vector result of a
 /// constant expression.
 TEST_F(ApproxPercentileTest, partialFull) {
-  // Make sure partial aggregation runs out of memory after first batch.
-  CursorParameters params;
-  params.queryCtx = velox::core::QueryCtx::create(executor_.get());
-  params.queryCtx->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kMaxPartialAggregationMemory, "300000"},
-  });
-
   auto data = {
       makeRowVector({
           makeFlatVector<int32_t>(1'024, [](auto row) { return row % 117; }),
@@ -365,7 +359,7 @@ TEST_F(ApproxPercentileTest, partialFull) {
       }),
   };
 
-  params.planNode =
+  auto plan =
       PlanBuilder()
           .values(data)
           .project({"c0", "c1", "1", "0.9995", "0.001"})
@@ -377,23 +371,26 @@ TEST_F(ApproxPercentileTest, partialFull) {
       makeFlatVector<int32_t>(117, [](auto row) { return row; }),
       makeFlatVector<int32_t>(117, [](auto row) { return row < 7 ? 20 : 10; }),
   });
-  assertQuery(params, expected);
-  waitForAllTasksToBeDeleted();
+  // Make sure partial aggregation runs out of memory after first batch.
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kMaxPartialAggregationMemory, "300000")
+      .assertResults(expected);
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(ApproxPercentileTest, finalAggregateAccuracy) {
   auto batch = makeRowVector(
       {makeFlatVector<int32_t>(1000, [](auto row) { return row; })});
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   std::vector<std::shared_ptr<const core::PlanNode>> sources;
   for (int i = 0; i < 10; ++i) {
     sources.push_back(
-        PlanBuilder(planNodeIdGenerator)
-            .values({batch})
+        builder.newPlan()
+            .values(batch)
             .partialAggregation({}, {"approx_percentile(c0, 0.005, 0.0001)"})
             .planNode());
   }
-  auto op = PlanBuilder(planNodeIdGenerator)
+  auto op = builder.newPlan()
                 .localPartitionRoundRobin(sources)
                 .finalAggregation()
                 .planNode();
@@ -404,7 +401,7 @@ TEST_F(ApproxPercentileTest, tinyAccuracy) {
   auto rows = makeRowVector(
       {makeFlatVector<int32_t>({1, 2, 3}), makeConstant<double>(1e-9, 3)});
   auto plan = PlanBuilder()
-                  .values({rows})
+                  .values(rows)
                   .singleAggregation({}, {"approx_percentile(c0, 0.5, c1)"})
                   .planNode();
 
@@ -432,7 +429,7 @@ TEST_F(ApproxPercentileTest, nonFlatPercentileArray) {
       BaseVector::wrapInConstant(1, 0, percentiles),
   });
   auto plan = PlanBuilder()
-                  .values({rows})
+                  .values(rows)
                   .singleAggregation({}, {"approx_percentile(c0, c1)"})
                   .planNode();
   auto expected = makeRowVector({makeArrayVector<int32_t>({{0, 5, 9}})});
@@ -452,7 +449,7 @@ TEST_F(ApproxPercentileTest, invalidWeight) {
       groupingKeys.push_back("c2");
     }
     return PlanBuilder()
-        .values({rows})
+        .values(rows)
         .singleAggregation(groupingKeys, {"approx_percentile(c0, c1, 0.5)"})
         .planNode();
   };

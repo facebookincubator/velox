@@ -222,10 +222,13 @@ void configureRowReaderOptions(
   rowReaderOptions.setRequestedType(rowType);
   rowReaderOptions.range(fileSplit->start, fileSplit->length);
   if (fileSplit->splitRowRange.has_value()) {
-    VELOX_CHECK_EQ(
-        fileSplit->fileFormat,
-        dwio::common::FileFormat::NIMBLE,
-        "Split row ranges are only supported for Nimble files: {}",
+    VELOX_CHECK(
+        fileSplit->fileFormat == dwio::common::FileFormat::NIMBLE ||
+            fileSplit->fileFormat == dwio::common::FileFormat::DWRF ||
+            fileSplit->fileFormat == dwio::common::FileFormat::ORC ||
+            fileSplit->fileFormat == dwio::common::FileFormat::PARQUET ||
+            fileSplit->fileFormat == dwio::common::FileFormat::TEXT,
+        "Split row ranges are only supported for Nimble, DWRF, ORC, Parquet and text files: {}",
         fileSplit->toString());
     rowReaderOptions.setSplitRowRange(fileSplit->splitRowRange);
   }

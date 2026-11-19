@@ -92,25 +92,25 @@ class PlanNodeSerdeTest : public testing::Test,
 
   void topNRankSerdeTest(std::string_view function) {
     auto plan = PlanBuilder()
-                    .values({data_})
+                    .values(data_)
                     .topNRankPartial(function, {}, {"c0", "c2"}, 10)
                     .planNode();
     testSerde(plan);
 
     plan = PlanBuilder()
-               .values({data_})
+               .values(data_)
                .topNRank(function, {}, {"c0", "c2"}, 10, true)
                .planNode();
     testSerde(plan);
 
     plan = PlanBuilder()
-               .values({data_})
+               .values(data_)
                .topNRankPartial(function, {"c0"}, {"c1", "c2"}, 10)
                .planNode();
     testSerde(plan);
 
     plan = PlanBuilder()
-               .values({data_})
+               .values(data_)
                .topNRank(function, {"c0"}, {"c1", "c2"}, 10, false)
                .planNode();
     testSerde(plan);
@@ -120,7 +120,7 @@ class PlanNodeSerdeTest : public testing::Test,
     for (const bool generateRowNumber : {true, false}) {
       SCOPED_TRACE(fmt::format("generateRowNumber: {}", generateRowNumber));
       plan = PlanBuilder()
-                 .values({data_})
+                 .values(data_)
                  .topNRank(function, {"c0"}, {"c1"}, 10, generateRowNumber)
                  .planNode();
       auto serialized = plan->serialize();
@@ -139,7 +139,7 @@ class PlanNodeSerdeTest : public testing::Test,
 
 TEST_F(PlanNodeSerdeTest, nestedAggregations) {
   // Deep enough that deserializing each source more than once would not finish.
-  auto builder = PlanBuilder().values({data_});
+  auto builder = PlanBuilder().values(data_);
   for (int i = 0; i < 40; ++i) {
     builder.singleAggregation({"c0"}, {});
   }
@@ -148,7 +148,7 @@ TEST_F(PlanNodeSerdeTest, nestedAggregations) {
 
 TEST_F(PlanNodeSerdeTest, aggregation) {
   auto plan = PlanBuilder()
-                  .values({data_})
+                  .values(data_)
                   .partialAggregation({"c0"}, {"count(1)", "sum(c1)"})
                   .finalAggregation()
                   .planNode();
@@ -156,7 +156,7 @@ TEST_F(PlanNodeSerdeTest, aggregation) {
   testSerde(plan);
 
   plan = PlanBuilder(pool_.get())
-             .values({data_})
+             .values(data_)
              .partialAggregation({"c0"}, {"count(ARRAY[1, 2])"})
              .finalAggregation()
              .planNode();
@@ -165,7 +165,7 @@ TEST_F(PlanNodeSerdeTest, aggregation) {
 
   // Aggregation over sorted inputs.
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .singleAggregation(
                  {"c0"}, {"array_agg(c1 ORDER BY c2 DESC)", "sum(c1)"})
              .planNode();
@@ -174,7 +174,7 @@ TEST_F(PlanNodeSerdeTest, aggregation) {
 
   // Aggregation over distinct inputs.
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .singleAggregation({"c0"}, {"sum(distinct c1)", "avg(c1)"})
              .planNode();
 
@@ -182,7 +182,7 @@ TEST_F(PlanNodeSerdeTest, aggregation) {
 
   // Aggregation over GroupId with global grouping sets.
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .groupId({"c0"}, {{"c0"}, {}}, {"c1"})
              .singleAggregation({"c0", "group_id"}, {"sum(c1) as sum_c1"}, {})
              .project({"sum_c1"})
@@ -192,7 +192,7 @@ TEST_F(PlanNodeSerdeTest, aggregation) {
 
   // Aggregation over GroupId with multiple global grouping sets.
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .groupId({"c0"}, {{"c0"}, {}, {}}, {"c1"})
              .singleAggregation({"c0", "group_id"}, {"sum(c1) as sum_c1"}, {})
              .project({"sum_c1"})
@@ -202,7 +202,7 @@ TEST_F(PlanNodeSerdeTest, aggregation) {
 }
 
 TEST_F(PlanNodeSerdeTest, assignUniqueId) {
-  auto plan = PlanBuilder().values({data_}).assignUniqueId().planNode();
+  auto plan = PlanBuilder().values(data_).assignUniqueId().planNode();
   testSerde(plan);
 }
 
@@ -210,7 +210,7 @@ TEST_F(PlanNodeSerdeTest, markDistinct) {
   {
     SCOPED_TRACE("single-marker");
     auto plan = PlanBuilder()
-                    .values({data_})
+                    .values(data_)
                     .markDistinct("marker", {"c0", "c1", "c2"})
                     .planNode();
     testSerde(plan);
@@ -218,7 +218,7 @@ TEST_F(PlanNodeSerdeTest, markDistinct) {
   {
     SCOPED_TRACE("multi-mask");
     auto plan = PlanBuilder()
-                    .values({data_})
+                    .values(data_)
                     .markDistinct({"m0", "m1", "m2"}, {"c0"}, {"c2", "c4"})
                     .planNode();
     testSerde(plan);
@@ -227,7 +227,7 @@ TEST_F(PlanNodeSerdeTest, markDistinct) {
 
 TEST_F(PlanNodeSerdeTest, enforceDistinct) {
   auto plan = PlanBuilder()
-                  .values({data_})
+                  .values(data_)
                   .enforceDistinct({"c0", "c1", "c2"}, "Test error message")
                   .planNode();
   testSerde(plan);
@@ -250,32 +250,30 @@ TEST_F(PlanNodeSerdeTest, nestedLoopJoin) {
           makeFlatVector<bool>({true, true, false}),
       });
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   {
-    auto plan =
-        PlanBuilder(planNodeIdGenerator)
-            .values({left})
-            .nestedLoopJoin(
-                PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
-                {"t0", "u1", "t2", "t1"})
-            .planNode();
+    auto plan = builder.newPlan()
+                    .values(left)
+                    .nestedLoopJoin(
+                        builder.newPlan().values(right).planNode(),
+                        {"t0", "u1", "t2", "t1"})
+                    .planNode();
     testSerde(plan);
   }
   {
-    auto plan =
-        PlanBuilder(planNodeIdGenerator)
-            .values({left})
-            .nestedLoopJoin(
-                PlanBuilder(planNodeIdGenerator).values({right}).planNode(),
-                "t0 < u0",
-                {"t0", "u1", "t2", "t1"})
-            .planNode();
+    auto plan = builder.newPlan()
+                    .values(left)
+                    .nestedLoopJoin(
+                        builder.newPlan().values(right).planNode(),
+                        "t0 < u0",
+                        {"t0", "u1", "t2", "t1"})
+                    .planNode();
     testSerde(plan);
   }
 }
 
 TEST_F(PlanNodeSerdeTest, enforceSingleRow) {
-  auto plan = PlanBuilder().values({data_}).enforceSingleRow().planNode();
+  auto plan = PlanBuilder().values(data_).enforceSingleRow().planNode();
   testSerde(plan);
 }
 
@@ -377,11 +375,11 @@ TEST_F(
 }
 
 TEST_F(PlanNodeSerdeTest, filter) {
-  auto plan = PlanBuilder().values({data_}).filter("c0 > 100").planNode();
+  auto plan = PlanBuilder().values(data_).filter("c0 > 100").planNode();
   testSerde(plan);
 
   plan = PlanBuilder(pool_.get())
-             .values({data_})
+             .values(data_)
              .filter("c3 = ARRAY[1,2,3]")
              .planNode();
   testSerde(plan);
@@ -389,13 +387,13 @@ TEST_F(PlanNodeSerdeTest, filter) {
 
 TEST_F(PlanNodeSerdeTest, groupId) {
   auto plan = PlanBuilder()
-                  .values({data_})
+                  .values(data_)
                   .groupId({"c0", "c1"}, {{"c0"}, {"c0", "c1"}}, {"c2"})
                   .planNode();
   testSerde(plan);
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .groupId({"c0", "c0 as c1"}, {{"c0"}, {"c0", "c1"}}, {"c2"})
              .planNode();
   testSerde(plan);
@@ -403,7 +401,7 @@ TEST_F(PlanNodeSerdeTest, groupId) {
 
 TEST_F(PlanNodeSerdeTest, expand) {
   auto plan = PlanBuilder()
-                  .values({data_})
+                  .values(data_)
                   .expand(
                       {{"c0", "c1", "c2", "0 as gid"},
                        {"c0", "c1", "null as c2", "1  as gid"},
@@ -414,37 +412,37 @@ TEST_F(PlanNodeSerdeTest, expand) {
 
 TEST_F(PlanNodeSerdeTest, localPartition) {
   auto plan = PlanBuilder()
-                  .values({data_})
+                  .values(data_)
                   .localPartition(std::vector<std::string>{})
                   .planNode();
   testSerde(plan);
 
-  plan = PlanBuilder().values({data_}).localPartition({"c0", "c1"}).planNode();
+  plan = PlanBuilder().values(data_).localPartition({"c0", "c1"}).planNode();
   testSerde(plan);
 }
 
 TEST_F(PlanNodeSerdeTest, scaleWriterlocalPartition) {
   auto plan = PlanBuilder()
-                  .values({data_})
+                  .values(data_)
                   .scaleWriterlocalPartition(std::vector<std::string>{"c0"})
                   .planNode();
   testSerde(plan);
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .scaleWriterlocalPartitionRoundRobin()
              .planNode();
   testSerde(plan);
 }
 
 TEST_F(PlanNodeSerdeTest, limit) {
-  auto plan = PlanBuilder().values({data_}).limit(0, 10, true).planNode();
+  auto plan = PlanBuilder().values(data_).limit(0, 10, true).planNode();
   testSerde(plan);
 
-  plan = PlanBuilder().values({data_}).limit(0, 10, false).planNode();
+  plan = PlanBuilder().values(data_).limit(0, 10, false).planNode();
   testSerde(plan);
 
-  plan = PlanBuilder().values({data_}).limit(12, 10, false).planNode();
+  plan = PlanBuilder().values(data_).limit(12, 10, false).planNode();
   testSerde(plan);
 }
 
@@ -472,16 +470,15 @@ TEST_F(PlanNodeSerdeTest, mergeExchange) {
 }
 
 TEST_F(PlanNodeSerdeTest, localMerge) {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .localMerge(
-              {"c0"},
-              {
-                  PlanBuilder(planNodeIdGenerator).values({data_}).planNode(),
-                  PlanBuilder(planNodeIdGenerator).values({data_}).planNode(),
-              })
-          .planNode();
+  PlanBuilder builder;
+  auto plan = builder.newPlan()
+                  .localMerge(
+                      {"c0"},
+                      {
+                          builder.newPlan().values(data_).planNode(),
+                          builder.newPlan().values(data_).planNode(),
+                      })
+                  .planNode();
 
   testSerde(plan);
 }
@@ -508,27 +505,26 @@ TEST_F(PlanNodeSerdeTest, mergeJoin) {
           makeFlatVector<bool>({true, true, false}),
       });
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({probe})
-          .mergeJoin(
-              {"t0"},
-              {"u0"},
-              PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
-              "t1 > u1",
-              {"t0", "t1", "u2", "t2"},
-              core::JoinType::kInner)
-          .planNode();
+  PlanBuilder builder(pool_.get());
+  auto plan = builder.newPlan()
+                  .values(probe)
+                  .mergeJoin(
+                      {"t0"},
+                      {"u0"},
+                      builder.newPlan().values(build).planNode(),
+                      "t1 > u1",
+                      {"t0", "t1", "u2", "t2"},
+                      core::JoinType::kInner)
+                  .planNode();
 
   testSerde(plan);
 
-  plan = PlanBuilder(planNodeIdGenerator, pool_.get())
-             .values({probe})
+  plan = builder.newPlan()
+             .values(probe)
              .mergeJoin(
                  {"t0"},
                  {"u0"},
-                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 builder.newPlan().values(build).planNode(),
                  "t3 = ARRAY[1,2,3]",
                  {"t0", "t1", "u2", "t2"},
                  core::JoinType::kInner)
@@ -536,12 +532,12 @@ TEST_F(PlanNodeSerdeTest, mergeJoin) {
 
   testSerde(plan);
 
-  plan = PlanBuilder(planNodeIdGenerator)
-             .values({probe})
+  plan = builder.newPlan()
+             .values(probe)
              .mergeJoin(
                  {"t0"},
                  {"u0"},
-                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 builder.newPlan().values(build).planNode(),
                  "", // no filter
                  {"t0", "t1", "u2", "t2"},
                  core::JoinType::kLeft)
@@ -552,14 +548,14 @@ TEST_F(PlanNodeSerdeTest, mergeJoin) {
 
 TEST_F(PlanNodeSerdeTest, orderBy) {
   auto plan = PlanBuilder()
-                  .values({data_})
+                  .values(data_)
                   .orderBy({"c0", "c1 DESC NULLS FIRST"}, true)
                   .planNode();
 
   testSerde(plan);
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .orderBy({"c0", "c1 DESC NULLS FIRST"}, false)
              .planNode();
 
@@ -572,26 +568,26 @@ TEST_F(PlanNodeSerdeTest, partitionedOutput) {
     SCOPED_TRACE(fmt::format("serdeKind: {}", serdeKind));
 
     auto plan = PlanBuilder()
-                    .values({data_})
+                    .values(data_)
                     .partitionedOutputBroadcast(/*outputLayout=*/{}, serdeKind)
                     .planNode();
     testSerde(plan);
 
     plan = PlanBuilder()
-               .values({data_})
+               .values(data_)
                .partitionedOutput({"c0"}, 50, /*outputLayout=*/{}, serdeKind)
                .planNode();
     testSerde(plan);
 
     plan = PlanBuilder()
-               .values({data_})
+               .values(data_)
                .partitionedOutput({"c0"}, 50, {"c1", {"c2"}, "c0"}, serdeKind)
                .planNode();
     testSerde(plan);
 
     // Round-trips a non-default transport annotation on the node.
     plan = PlanBuilder()
-               .values({data_})
+               .values(data_)
                .partitionedOutputBroadcast(
                    /*outputLayout=*/{},
                    serdeKind,
@@ -603,7 +599,7 @@ TEST_F(PlanNodeSerdeTest, partitionedOutput) {
 
 TEST_F(PlanNodeSerdeTest, project) {
   auto plan = PlanBuilder()
-                  .values({data_})
+                  .values(data_)
                   .project({"c0 * 10", "c0 + c1", "c1 > 0"})
                   .planNode();
 
@@ -612,14 +608,14 @@ TEST_F(PlanNodeSerdeTest, project) {
 
 TEST_F(PlanNodeSerdeTest, parallelProjet) {
   auto plan = PlanBuilder()
-                  .values({data_})
+                  .values(data_)
                   .parallelProject({{"c0 + 1", "c0 * 2"}, {"c1 + 1", "c1 * 2"}})
                   .planNode();
 
   testSerde(plan);
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .parallelProject(
                  {{"c0 + 1", "c0 * 2"}, {"c1 + 1", "c1 * 2"}}, {"c2", "c3"})
              .planNode();
@@ -642,28 +638,27 @@ TEST_F(PlanNodeSerdeTest, vectorSearchJoin) {
           makeFlatVector<int64_t>({10, 20}),
       });
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({probe})
-          .vectorSearchJoin(
-              {"t0"},
-              {"u0"},
-              PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
-              "t1",
-              "u1",
-              /*k=*/2,
-              {"cluster_id", "t0", "u2"},
-              "cluster_id")
-          .planNode();
+  PlanBuilder builder;
+  auto plan = builder.newPlan()
+                  .values(probe)
+                  .vectorSearchJoin(
+                      {"t0"},
+                      {"u0"},
+                      builder.newPlan().values(build).planNode(),
+                      "t1",
+                      "u1",
+                      /*k=*/2,
+                      {"cluster_id", "t0", "u2"},
+                      "cluster_id")
+                  .planNode();
   testSerde(plan);
 
-  plan = PlanBuilder(planNodeIdGenerator)
-             .values({probe})
+  plan = builder.newPlan()
+             .values(probe)
              .vectorSearchJoin(
                  /*leftKeys=*/{},
                  /*rightKeys=*/{},
-                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 builder.newPlan().values(build).planNode(),
                  "t1",
                  "u1",
                  /*k=*/10,
@@ -676,12 +671,12 @@ TEST_F(PlanNodeSerdeTest, vectorSearchJoin) {
   testSerde(plan);
 
   // The index on the left.
-  plan = PlanBuilder(planNodeIdGenerator)
-             .values({build})
+  plan = builder.newPlan()
+             .values(build)
              .vectorSearchJoin(
                  {"u0"},
                  {"t0"},
-                 PlanBuilder(planNodeIdGenerator).values({probe}).planNode(),
+                 builder.newPlan().values(probe).planNode(),
                  "t1",
                  "u1",
                  /*k=*/2,
@@ -713,27 +708,26 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
           makeFlatVector<bool>({true, true, false}),
       });
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({probe})
-          .hashJoin(
-              {"t0"},
-              {"u0"},
-              PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
-              "t1 > u1",
-              {"t0", "t1", "u2", "t2"},
-              core::JoinType::kInner)
-          .planNode();
+  PlanBuilder builder(pool_.get());
+  auto plan = builder.newPlan()
+                  .values(probe)
+                  .hashJoin(
+                      {"t0"},
+                      {"u0"},
+                      builder.newPlan().values(build).planNode(),
+                      "t1 > u1",
+                      {"t0", "t1", "u2", "t2"},
+                      core::JoinType::kInner)
+                  .planNode();
 
   testSerde(plan);
 
-  plan = PlanBuilder(planNodeIdGenerator, pool_.get())
-             .values({probe})
+  plan = builder.newPlan()
+             .values(probe)
              .hashJoin(
                  {"t0"},
                  {"u0"},
-                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 builder.newPlan().values(build).planNode(),
                  "t3 = ARRAY[1,2,3]",
                  {"t0", "t1", "u2", "t2"},
                  core::JoinType::kInner)
@@ -741,12 +735,12 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
 
   testSerde(plan);
 
-  plan = PlanBuilder(planNodeIdGenerator)
-             .values({probe})
+  plan = builder.newPlan()
+             .values(probe)
              .hashJoin(
                  {"t0"},
                  {"u0"},
-                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 builder.newPlan().values(build).planNode(),
                  "", // no filter
                  {"t0", "t1", "u2", "t2"},
                  core::JoinType::kLeft)
@@ -755,12 +749,12 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
   testSerde(plan);
 
   // nullAsValue join (used for EXCEPT/INTERSECT).
-  plan = PlanBuilder(planNodeIdGenerator)
-             .values({probe})
+  plan = builder.newPlan()
+             .values(probe)
              .hashJoin(
                  {"t0"},
                  {"u0"},
-                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 builder.newPlan().values(build).planNode(),
                  "",
                  {"t0", "t1"},
                  core::JoinType::kAnti,
@@ -771,12 +765,12 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
   testSerde(plan);
 
   // Right anti join projects build-side columns only.
-  plan = PlanBuilder(planNodeIdGenerator)
-             .values({probe})
+  plan = builder.newPlan()
+             .values(probe)
              .hashJoin(
                  {"t0"},
                  {"u0"},
-                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 builder.newPlan().values(build).planNode(),
                  "",
                  {"u1", "u2"},
                  core::JoinType::kRightAnti)
@@ -786,14 +780,14 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
 }
 
 TEST_F(PlanNodeSerdeTest, topN) {
-  auto plan = PlanBuilder().values({data_}).topN({"c0"}, 10, true).planNode();
+  auto plan = PlanBuilder().values(data_).topN({"c0"}, 10, true).planNode();
   testSerde(plan);
 
-  plan = PlanBuilder().values({data_}).topN({"c0 DESC"}, 10, false).planNode();
+  plan = PlanBuilder().values(data_).topN({"c0 DESC"}, 10, false).planNode();
   testSerde(plan);
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .topN({"c0", "c1 DESC NULLS FIRST"}, 10, true)
              .planNode();
   testSerde(plan);
@@ -812,17 +806,17 @@ TEST_F(PlanNodeSerdeTest, unnest) {
   });
 
   auto plan = PlanBuilder()
-                  .values({data})
+                  .values(data)
                   .unnest({"c0"}, {"c1", "c2"}, std::nullopt)
                   .planNode();
   testSerde(plan);
 
   plan =
-      PlanBuilder().values({data}).unnest({"c0"}, {"c1"}, "ordinal").planNode();
+      PlanBuilder().values(data).unnest({"c0"}, {"c1"}, "ordinal").planNode();
   testSerde(plan);
 
   plan = PlanBuilder()
-             .values({data})
+             .values(data)
              .unnest({"c0"}, {"c1"}, "ordinal", "emptyUnnestValue")
              .planNode();
   testSerde(plan);
@@ -830,7 +824,7 @@ TEST_F(PlanNodeSerdeTest, unnest) {
   // A std::nullopt unnest name (pruned column) must round-trip through serde:
   // prune the array element and the map value, keep the map key.
   plan = PlanBuilder()
-             .values({data})
+             .values(data)
              .unnest(
                  {"c0"},
                  {"c1", "c2"},
@@ -842,7 +836,7 @@ TEST_F(PlanNodeSerdeTest, unnest) {
 }
 
 TEST_F(PlanNodeSerdeTest, values) {
-  auto plan = PlanBuilder().values({data_}).planNode();
+  auto plan = PlanBuilder().values(data_).planNode();
   testSerde(plan);
 
   plan = PlanBuilder()
@@ -854,7 +848,7 @@ TEST_F(PlanNodeSerdeTest, values) {
 TEST_F(PlanNodeSerdeTest, window) {
   auto plan =
       PlanBuilder()
-          .values({data_})
+          .values(data_)
           .window(
               {"sum(c0) over (partition by c1 order by c2 rows between 10 preceding and 5 following)"})
           .planNode();
@@ -862,7 +856,7 @@ TEST_F(PlanNodeSerdeTest, window) {
   testSerde(plan);
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .window({"sum(c0) over (partition by c1 order by c2)"})
              .planNode();
 
@@ -871,7 +865,7 @@ TEST_F(PlanNodeSerdeTest, window) {
   // Test StreamingWindow serde.
   plan =
       PlanBuilder()
-          .values({data_})
+          .values(data_)
           .streamingWindow(
               {"sum(c0) over (partition by c1 order by c2 rows between 10 preceding and 5 following)"})
           .planNode();
@@ -879,7 +873,7 @@ TEST_F(PlanNodeSerdeTest, window) {
   testSerde(plan);
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .streamingWindow({"sum(c0) over (partition by c1 order by c2)"})
              .planNode();
 
@@ -888,32 +882,28 @@ TEST_F(PlanNodeSerdeTest, window) {
 
 TEST_F(PlanNodeSerdeTest, rowNumber) {
   // Test with emitting the row number.
-  auto plan = PlanBuilder().values({data_}).rowNumber({}).planNode();
+  auto plan = PlanBuilder().values(data_).rowNumber({}).planNode();
   testSerde(plan);
 
-  plan = PlanBuilder().values({data_}).rowNumber({"c2", "c0"}).planNode();
+  plan = PlanBuilder().values(data_).rowNumber({"c2", "c0"}).planNode();
   testSerde(plan);
 
-  plan = PlanBuilder().values({data_}).rowNumber({"c1", "c2"}, 10).planNode();
+  plan = PlanBuilder().values(data_).rowNumber({"c1", "c2"}, 10).planNode();
   testSerde(plan);
 
   // Test without emitting the row number.
-  plan = PlanBuilder()
-             .values({data_})
-             .rowNumber({}, std::nullopt, false)
-             .planNode();
+  plan =
+      PlanBuilder().values(data_).rowNumber({}, std::nullopt, false).planNode();
   testSerde(plan);
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .rowNumber({"c2", "c0"}, std::nullopt, false)
              .planNode();
   testSerde(plan);
 
-  plan = PlanBuilder()
-             .values({data_})
-             .rowNumber({"c1", "c2"}, 10, false)
-             .planNode();
+  plan =
+      PlanBuilder().values(data_).rowNumber({"c1", "c2"}, 10, false).planNode();
   testSerde(plan);
 }
 
@@ -1272,14 +1262,14 @@ TEST_F(PlanNodeSerdeTest, countingJoin) {
        {core::JoinType::kCountingAnti,
         core::JoinType::kCountingLeftSemiFilter}) {
     SCOPED_TRACE(core::JoinTypeName::toName(joinType));
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan = PlanBuilder(planNodeIdGenerator)
-                    .values({data_})
+    PlanBuilder builder;
+    auto plan = builder.newPlan()
+                    .values(data_)
                     .hashJoin(
                         {"c0"},
                         {"u_c0"},
-                        PlanBuilder(planNodeIdGenerator)
-                            .values({data_})
+                        builder.newPlan()
+                            .values(data_)
                             .project({"c0 as u_c0"})
                             .planNode(),
                         "",
@@ -1298,17 +1288,17 @@ TEST_F(PlanNodeSerdeTest, fixedPointSequence) {
   // Shape (1): a fixed-count loop producing x = 1..10.  One append-mode vector
   // state, a single body plan, and no convergence plan (bounded by
   // maxIterations).
-  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto schema = ROW("x", BIGINT());
   auto seed =
-      PlanBuilder(idGenerator)
+      builder.newPlan()
           .values({makeNamedRowVector("x", makeFlatVector<int64_t>({1}))})
           .planNode();
   auto plan =
-      PlanBuilder(idGenerator)
+      builder.newPlan()
           .fixedPoint(
               core::VectorState("n", schema, /*append=*/true).initial(seed),
-              PlanBuilder(idGenerator)
+              builder.newPlan()
                   .stateSource("n", schema)
                   .project({"x + 1 AS x"}),
               core::ConvergenceConfig::withMaxIterations(9))
@@ -1320,22 +1310,22 @@ TEST_F(PlanNodeSerdeTest, fixedPointFibonacci) {
   // Shape (2): iterate Fibonacci until the latest value exceeds a bound.  A
   // replace-mode vector state read in full each iteration, with a convergence
   // plan -- the convergence-driven counterpart to the fixed-count sequence.
-  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto schema = ROW({"a", "b"}, BIGINT());
   auto seed =
-      PlanBuilder(idGenerator)
+      builder.newPlan()
           .values({makeRowVector(
               {"a", "b"},
               {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({1})})})
           .planNode();
-  auto convergence = PlanBuilder(idGenerator)
+  auto convergence = builder.newPlan()
                          .stateSource("fib", schema, /*delta=*/false)
                          .project({"b > 100 AS converged"})
                          .planNode();
-  auto plan = PlanBuilder(idGenerator)
+  auto plan = builder.newPlan()
                   .fixedPoint(
                       core::VectorState("fib", schema).initial(seed),
-                      PlanBuilder(idGenerator)
+                      builder.newPlan()
                           .stateSource("fib", schema, /*delta=*/false)
                           .project({"b AS a", "a + b AS b"}),
                       core::ConvergenceConfig::converging(convergence, 100))
@@ -1347,19 +1337,19 @@ TEST_F(PlanNodeSerdeTest, fixedPointFibonacci) {
 // else round-trips it; dropping it would silently turn a converging loop into
 // one bounded only by maxIterations.
 TEST_F(PlanNodeSerdeTest, fixedPointWhenDeltaEmpty) {
-  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto schema = ROW({"key", "val"}, BIGINT());
   auto seed =
-      PlanBuilder(idGenerator)
+      builder.newPlan()
           .values({makeRowVector(
               {"key", "val"},
               {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({0})})})
           .planNode();
-  auto body = PlanBuilder(idGenerator)
+  auto body = builder.newPlan()
                   .stateSource("vals", schema)
                   .project({"key", "val + 1 AS val"})
                   .planNode();
-  auto plan = PlanBuilder(idGenerator)
+  auto plan = builder.newPlan()
                   .fixedPoint(
                       {core::VectorState("vals", schema).initial(seed)},
                       {body},
@@ -1373,30 +1363,30 @@ TEST_F(PlanNodeSerdeTest, fixedPointWhenDeltaEmpty) {
 // whose convergenceConfig carries a verdict plan.
 // Every other fixed point test round-trips a single convergence plan.
 TEST_F(PlanNodeSerdeTest, fixedPointConvergenceSequence) {
-  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto schema = ROW({"key", "val"}, BIGINT());
   auto seed =
-      PlanBuilder(idGenerator)
+      builder.newPlan()
           .values({makeRowVector(
               {"key", "val"},
               {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({0})})})
           .planNode();
-  auto body = PlanBuilder(idGenerator)
+  auto body = builder.newPlan()
                   .stateSource("values", schema)
                   .project({"key", "val + 1 AS val"})
                   .planNode();
   // Each worker reduces its shard, and worker 0 sums every worker's partial.
-  auto gather = PlanBuilder(idGenerator)
+  auto gather = builder.newPlan()
                     .stateSource("values", schema)
                     .singleAggregation({}, {"sum(val)"})
                     .partitionedOutput({}, 1)
                     .planNode();
-  auto sumPartials = PlanBuilder(idGenerator)
+  auto sumPartials = builder.newPlan()
                          .exchange(ROW("a0", BIGINT()), "Presto")
                          .singleAggregation({}, {"sum(a0) AS total"})
                          .project({"total >= 16"})
                          .planNode();
-  testSerde(PlanBuilder(idGenerator)
+  testSerde(builder.newPlan()
                 .fixedPoint(
                     {core::VectorState("values", schema).initial(seed)},
                     {body},
@@ -1407,20 +1397,20 @@ TEST_F(PlanNodeSerdeTest, fixedPointConvergenceSequence) {
 
   // Every worker sums every worker's values into the same replicated state;
   // worker 0 decides over its own copy and alone emits the output.
-  auto broadcast = PlanBuilder(idGenerator)
+  auto broadcast = builder.newPlan()
                        .stateSource("values", schema)
                        .partitionedOutputBroadcast()
                        .planNode();
-  auto sumAll = PlanBuilder(idGenerator)
+  auto sumAll = builder.newPlan()
                     .exchange(schema, "Presto")
                     .singleAggregation({}, {"sum(val)"})
                     .project({"CAST(0 AS BIGINT) AS key", "a0 AS val"})
                     .planNode();
-  auto ownVerdict = PlanBuilder(idGenerator)
+  auto ownVerdict = builder.newPlan()
                         .stateSource("values", schema)
                         .project({"val >= 16"})
                         .planNode();
-  testSerde(PlanBuilder(idGenerator)
+  testSerde(builder.newPlan()
                 .fixedPoint(
                     {core::VectorState("values", schema).initial(seed)},
                     {broadcast, sumAll},
@@ -1430,13 +1420,12 @@ TEST_F(PlanNodeSerdeTest, fixedPointConvergenceSequence) {
                 .planNode());
 
   // A hash shuffle to a reader on two workers keeps its width.
-  auto shuffle = PlanBuilder(idGenerator)
+  auto shuffle = builder.newPlan()
                      .stateSource("values", schema)
                      .partitionedOutput({"key"}, 2)
                      .planNode();
-  auto readShuffle =
-      PlanBuilder(idGenerator).exchange(schema, "Presto").planNode();
-  testSerde(PlanBuilder(idGenerator)
+  auto readShuffle = builder.newPlan().exchange(schema, "Presto").planNode();
+  testSerde(builder.newPlan()
                 .fixedPoint(
                     {core::VectorState("values", schema).initial(seed)},
                     {shuffle, readShuffle},
@@ -1448,18 +1437,18 @@ TEST_F(PlanNodeSerdeTest, fixedPointConvergenceSequence) {
 // deserializeStages() rebuilds the stages without the checks deserialize()
 // makes, for a caller that changes them before building a plan.
 TEST_F(PlanNodeSerdeTest, multiStagePlanStages) {
-  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId exchangeId;
   const core::MultiStagePlan plan({
       {.id = 1,
-       .plan = PlanBuilder(idGenerator)
+       .plan = builder.newPlan()
                    .values({makeRowVector({makeFlatVector<int64_t>({1})})})
                    .partitionedOutput({"c0"}, 2)
                    .planNode()},
       {.id = 2,
        .type = core::StageType::kFixed,
        .numRemotePartitions = 2,
-       .plan = PlanBuilder(idGenerator)
+       .plan = builder.newPlan()
                    .exchange(ROW("c0", BIGINT()), "Presto")
                    .capturePlanNodeId(exchangeId)
                    .planNode(),
@@ -1495,15 +1484,15 @@ TEST_F(PlanNodeSerdeTest, fixedPointThreeDegrees) {
   auto people = ROW({"id", "depth"}, BIGINT());
   auto edges = ROW({"src", "dst"}, BIGINT());
   auto joinOutput = ROW({"id", "depth", "dst"}, BIGINT());
-  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
   auto me =
-      PlanBuilder(idGenerator)
+      builder.newPlan()
           .values({makeRowVector(
               {"id", "depth"},
               {makeFlatVector<int64_t>({1}), makeFlatVector<int64_t>({0})})})
           .planNode();
-  auto graph = PlanBuilder(idGenerator)
+  auto graph = builder.newPlan()
                    .values({makeRowVector(
                        {"src", "dst"},
                        {makeFlatVector<int64_t>({1, 2}),
@@ -1511,20 +1500,20 @@ TEST_F(PlanNodeSerdeTest, fixedPointThreeDegrees) {
                    .planNode();
 
   // Body: read the frontier delta, probe the graph, append the next hop.
-  auto body = PlanBuilder(idGenerator)
+  auto body = builder.newPlan()
                   .stateSource("reach", people, /*delta=*/true)
                   .stateHashJoin("graph", {"id"}, joinOutput)
                   .project({"dst AS id", "depth + 1 AS depth"})
                   .planNode();
   // Converged once the last iteration appended no rows.
-  auto convergence = PlanBuilder(idGenerator)
+  auto convergence = builder.newPlan()
                          .stateSource("reach", people, /*delta=*/true)
                          .singleAggregation({}, {"count(1)"})
                          .project({"a0 = 0 AS converged"})
                          .planNode();
 
   auto plan =
-      PlanBuilder(idGenerator)
+      builder.newPlan()
           .fixedPoint(
               {core::HashTableState("graph", edges, {"src"}).initial(graph),
                core::VectorState("reach", people, /*append=*/true).initial(me)},
@@ -1577,24 +1566,24 @@ TEST_F(PlanNodeSerdeTest, fixedPointDistributed) {
   // body that shuffles (PartitionedOutput -> Exchange).  The cross-worker
   // (N-way) topology is the coordinator's split-wiring, exercised by
   // FixedPointTest, not a serialized field of this node.
-  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto schema = ROW({"key", "val"}, BIGINT());
-  auto seed = PlanBuilder(idGenerator)
+  auto seed = builder.newPlan()
                   .values({makeRowVector(
                       {"key", "val"},
                       {makeFlatVector<int64_t>({0, 1}),
                        makeFlatVector<int64_t>({1, 1})})})
                   .planNode();
-  auto producer = PlanBuilder(idGenerator)
+  auto producer = builder.newPlan()
                       .stateSource("frontier", schema)
                       .partitionedOutput({"key"}, 2)
                       .planNode();
-  auto consumer = PlanBuilder(idGenerator)
+  auto consumer = builder.newPlan()
                       .exchange(schema, "Presto")
                       .singleAggregation({"key"}, {"sum(val)"})
                       .project({"key", "a0 AS val"})
                       .planNode();
-  auto plan = PlanBuilder(idGenerator)
+  auto plan = builder.newPlan()
                   .fixedPoint(
                       {core::VectorState("frontier", schema).initial(seed)},
                       {producer, consumer},

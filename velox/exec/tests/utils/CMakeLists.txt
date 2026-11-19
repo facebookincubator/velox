@@ -21,6 +21,7 @@ add_library(
   AggregationResolver.cpp
   AssertQueryBuilder.cpp
   ArbitratorTestUtil.cpp
+  DuckDbQueryRunner.cpp
   FilterToExpression.cpp
   HiveConnectorTestBase.cpp
   IndexLookupJoinTestBase.cpp
@@ -30,13 +31,13 @@ add_library(
   QueryAssertions.cpp
   SumNonPODAggregate.cpp
   TableWriterTestBase.cpp
-  TableScanTestBase.cpp
+  TaskMonitor.cpp
   TestIndexStorageConnector.cpp
   TpchQueryBuilder.cpp
   TpcdsQueryBuilder.cpp
   VeloxPlanLoader.cpp
   VectorTestUtil.cpp
-  PortUtil.cpp
+  Ports.cpp
   SerializedPageUtil.cpp
 )
 velox_add_test_headers(
@@ -45,6 +46,7 @@ velox_add_test_headers(
   ArbitratorTestUtil.h
   AssertQueryBuilder.h
   BackpressureTestNode.h
+  DuckDbQueryRunner.h
   ExpressionBuilder.h
   FilterToExpression.h
   HashJoinTestBase.h
@@ -55,12 +57,13 @@ velox_add_test_headers(
   OperatorTestBase.h
   PlanBuilder.h
   PortUtil.h
+  Ports.h
   QueryAssertions.h
   RowContainerTestBase.h
   SerializedPageUtil.h
   SumNonPODAggregate.h
-  TableScanTestBase.h
   TableWriterTestBase.h
+  TaskMonitor.h
   TestIndexStorageConnector.h
   TpchQueryBuilder.h
   TpcdsQueryBuilder.h

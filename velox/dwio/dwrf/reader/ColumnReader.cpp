@@ -1918,7 +1918,7 @@ StructColumnReader::StructColumnReader(
     // if the requested field is not in file, we either return null reader
     // or constant reader based on its expression
     if (cs.shouldReadNode(child->id())) {
-      if (i < fileType_->size()) {
+      if (i < fileType_->size() && cs.getNode(child->id())->isInContent()) {
         auto childColumnReader = factory.build(
             child,
             fileType_->childAt(i),

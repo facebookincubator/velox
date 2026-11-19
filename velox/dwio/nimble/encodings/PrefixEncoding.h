@@ -19,6 +19,7 @@
 #include <vector>
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/StringPageArena.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
@@ -113,13 +114,6 @@ class PrefixEncoding final
   std::string debugString(int offset) const final;
 
  private:
-  struct StringPageSlot {
-    // Non-owning page address returned by stringBufferFactory_.
-    char* data;
-    // Number of writable bytes in the page.
-    size_t capacity;
-  };
-
   // Static helper methods for initializing const members.
   // startOffset is where encoding-specific data begins (after the base prefix).
   static uint32_t readRestartInterval(
@@ -145,15 +139,16 @@ class PrefixEncoding final
       const EncodingSelection<physicalType>& selection);
 
   // Decodes entry at current position and returns the full string.
-  // Stores result in decodedValue_ buffer.
+  // Stores result in decodedValue_ buffer. Used by skip().
   //
   // NOTE: The returned string_view is invalidated on the next decodeEntry call
   // as decodedValue_ buffer is overwritten.
   std::string_view decodeEntry();
 
-  // Calls decodeEntry() then copies the decoded value into a string page
-  // allocated via stringBufferFactory_. Returns a stable string_view.
-  // Used by materialize() and readWithVisitor().
+  // Decodes the entry at the current position straight into 'stringPages_',
+  // with the shared prefix from 'previousValue_' and the suffix from the
+  // encoded data. Returns a stable string_view. Used by materialize() and
+  // readWithVisitor().
   std::string_view decodeToStringBuffer();
 
   // Seeks to the restart point at the given index.
@@ -166,13 +161,6 @@ class PrefixEncoding final
   const char* restartPosition(uint32_t restartIndex) const {
     return dataStart_ + restartOffset(restartIndex);
   }
-
-  // Reuses or allocates a string page of at least minSize bytes.
-  void acquireStringPage(size_t minSize);
-
-  // Factory for allocating string buffers tracked by ChunkedDecoder.
-  // Used by decodeEntry() to allocate pages for stable string storage.
-  const std::function<void*(uint32_t)> stringBufferFactory_;
 
   // Restart interval - number of entries between restart points
   const uint32_t restartInterval_;
@@ -187,19 +175,18 @@ class PrefixEncoding final
   const char* currentPos_{nullptr};
   // Current row index being read
   uint32_t currentRow_{0};
-  // Working buffer for prefix reconstruction. The shared prefix from the
-  // previous entry is already at the beginning of this buffer, so we only
-  // need to append the suffix for each new entry.
+  // Working buffer for prefix reconstruction in decodeEntry(). After
+  // decodeEntry(), the shared prefix for the next entry is already at the
+  // beginning of this buffer, so we only need to append the suffix.
   Vector<char> decodedValue_;
+  // The value decoded last, which holds the shared prefix of the next entry:
+  // in 'decodedValue_' after decodeEntry(), or in a string page after
+  // decodeToStringBuffer(). Empty at the first row and at restart points.
+  std::string_view previousValue_;
 
-  // Current string page for stable storage of decoded values.
-  char* currentPage_{nullptr};
-  size_t pageCapacity_{0};
-  size_t pageUsed_{0};
-  // Factory-allocated pages retained as non-owning slots for reuse after reset.
-  std::vector<StringPageSlot> stringPages_;
-  // Slot containing currentPage_.
-  size_t currentPageIndex_{0};
+  // Keeps decoded values at fixed addresses, in pages from the string buffer
+  // factory, which ChunkedDecoder tracks. reset() reuses the pages.
+  StringPageArena stringPages_;
 
   static constexpr size_t kStringPageSize = 256 * 1024;
 };

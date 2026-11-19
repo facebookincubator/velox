@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -104,15 +106,13 @@ TEST_F(TaskListenerTest, error) {
 
   auto plan = PlanBuilder().values({data}).project({"10 / c0"}).planNode();
 
-  CursorParameters params;
-  params.planNode = plan;
-
   // Register event listener to collect task completion events.
   auto listener = std::make_shared<TestTaskListener>();
   auto& events = listener->events();
   ASSERT_TRUE(exec::registerTaskListener(listener));
 
-  EXPECT_THROW(readCursor(params), VeloxException);
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).countResults(), "division by zero");
 
   ASSERT_EQ(1, events.size());
   ASSERT_EQ("division by zero", events.back().errorMessage());

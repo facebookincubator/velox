@@ -16,6 +16,7 @@
 
 #include "velox/exec/SpillFile.h"
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/time/Timer.h"
 #include "velox/serializers/SerializedPageFile.h"
 
 namespace facebook::velox::exec {
@@ -84,6 +85,19 @@ void SpillWriter::updateWriteStats(
       fileWriteTimeNs, std::memory_order_relaxed);
   updateGlobalSpillWriteStats(spilledBytes, flushTimeNs, fileWriteTimeNs);
   updateAndCheckLimitCb_(spilledBytes);
+}
+
+void SpillWriter::closeFile() {
+  if (currentFile_ == nullptr) {
+    return;
+  }
+  uint64_t closeTimeNs{0};
+  {
+    NanosecondWallTimer timer(&closeTimeNs);
+    serializer::SerializedPageFileWriter::closeFile();
+  }
+  stats_->spillWriteTimeNanos.fetch_add(closeTimeNs, std::memory_order_relaxed);
+  updateGlobalSpillFileCloseTime(closeTimeNs);
 }
 
 void SpillWriter::updateFileStats(

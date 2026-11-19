@@ -17,12 +17,14 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/common/base/PeriodicStatsReporter.h"
 #include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/SharedArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/ExpressionsParser.h"
@@ -57,7 +59,7 @@ void OperatorTestBase::registerVectorSerde() {
 
 OperatorTestBase::~OperatorTestBase() {
   // Wait for all the tasks to be deleted.
-  exec::test::waitForAllTasksToBeDeleted();
+  exec::test::TaskMonitor::waitForAllTasksDeleted();
 }
 
 void OperatorTestBase::SetUpTestCase() {
@@ -72,7 +74,7 @@ void OperatorTestBase::SetUpTestCase() {
 
 void OperatorTestBase::TearDownTestCase() {
   asyncDataCache_->shutdown();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   memory::SharedArbitrator::unregisterFactory();
 }
 
@@ -152,7 +154,7 @@ void OperatorTestBase::SetUp() {
 }
 
 void OperatorTestBase::TearDown() {
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   stopPeriodicStatsReporter();
   executor_.reset();
   // There might be lingering exchange source on executor even after all tasks
@@ -164,7 +166,7 @@ void OperatorTestBase::TearDown() {
   resetMemory();
 }
 
-std::shared_ptr<Task> OperatorTestBase::assertQuery(
+TaskPtr OperatorTestBase::assertQuery(
     const core::PlanNodePtr& plan,
     const std::vector<std::shared_ptr<connector::ConnectorSplit>>&
         connectorSplits,
@@ -192,41 +194,19 @@ core::PlanNodeId getOnlyLeafPlanNodeId(const core::PlanNodePtr& root) {
 }
 } // namespace
 
-std::shared_ptr<Task> OperatorTestBase::assertQuery(
-    const CursorParameters& params,
-    const std::string& duckDbSql) {
-  auto [cursor, actualResults] = readCursor(params);
-  assertResults(
-      actualResults,
-      params.planNode->outputType(),
-      duckDbSql,
-      duckDbQueryRunner_);
-  auto task = cursor->task();
-  EXPECT_TRUE(waitForTaskCompletion(task.get())) << task->taskId();
-  return task;
-}
-
-std::shared_ptr<Task> OperatorTestBase::assertQuery(
-    const CursorParameters& params,
-    const RowVectorPtr& expectedResults) {
-  auto [cursor, results] = readCursor(params);
-  assertEqualResults({expectedResults}, results);
-  return cursor->task();
-}
-
-std::shared_ptr<Task> OperatorTestBase::assertQuery(
+TaskPtr OperatorTestBase::assertQuery(
     const core::PlanNodePtr& plan,
     const std::string& duckDbSql) {
   return AssertQueryBuilder(plan, duckDbQueryRunner_).assertResults(duckDbSql);
 }
 
-std::shared_ptr<Task> OperatorTestBase::assertQuery(
+TaskPtr OperatorTestBase::assertQuery(
     const core::PlanNodePtr& plan,
     const RowVectorPtr& expectedResults) {
   return AssertQueryBuilder(plan).assertResults(expectedResults);
 }
 
-std::shared_ptr<Task> OperatorTestBase::assertQuery(
+TaskPtr OperatorTestBase::assertQuery(
     const core::PlanNodePtr& plan,
     std::vector<exec::Split>&& splits,
     const std::string& duckDbSql) {
@@ -235,24 +215,16 @@ std::shared_ptr<Task> OperatorTestBase::assertQuery(
       .assertResults(duckDbSql);
 }
 
-// static
-std::shared_ptr<core::FieldAccessTypedExpr> OperatorTestBase::toFieldExpr(
-    const std::string& name,
-    const RowTypePtr& rowType) {
-  return std::make_shared<core::FieldAccessTypedExpr>(
-      rowType->findChild(name), name);
-}
-
 core::TypedExprPtr OperatorTestBase::parseExpr(
-    const std::string& text,
-    RowTypePtr rowType,
+    const std::string& sql,
+    const RowTypePtr& rowType,
     const parse::ParseOptions& options) {
-  auto untyped = parse::DuckSqlExpressionsParser(options).parseExpr(text);
+  auto untyped = parse::DuckSqlExpressionsParser(options).parseExpr(sql);
   return core::Expressions::inferTypes(untyped, rowType, pool_.get());
 }
 
 /*static*/ void OperatorTestBase::deleteTaskAndCheckSpillDirectory(
-    std::shared_ptr<Task>& task) {
+    TaskPtr& task) {
   const auto spillDirectoryStr = task->spillDirectory();
   // Nothing to do if there is no spilling directory was set.
   if (spillDirectoryStr.empty()) {
@@ -261,7 +233,7 @@ core::TypedExprPtr OperatorTestBase::parseExpr(
 
   // Wait for the task to go.
   task.reset();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 
   // If a spilling directory was set, ensure it was removed after the task is
   // gone.

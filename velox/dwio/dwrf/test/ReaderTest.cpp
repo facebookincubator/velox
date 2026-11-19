@@ -22,6 +22,7 @@
 #include "folly/executors/ManualExecutor.h"
 #include "folly/lang/Assume.h"
 #include "folly/synchronization/Baton.h"
+#include "velox/common/base/RandomUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/tests/TestUtils.h"
 #include "velox/common/testutil/TestValue.h"
@@ -29,6 +30,7 @@
 #include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/common/FileSink.h"
+#include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/ParallelUnitLoader.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/common/Common.h"
@@ -2458,6 +2460,42 @@ createWriterReader(
   return std::make_pair(std::move(writer), std::move(reader));
 }
 
+TEST_F(TestReader, partitionColumnsWithExtraFileFields) {
+  const auto fileData = makeRowVector(
+      {"data", "$row_group_id", "$row_number"},
+      {makeFlatVector<int64_t>({10, 20}),
+       makeFlatVector<StringView>({"group-a", "group-b"}),
+       makeFlatVector<int64_t>({0, 1})});
+  const auto contentSchema = ROW("data", BIGINT());
+  const auto requestedSchema = ROW({
+      {"data", BIGINT()},
+      {"ds", VARCHAR()},
+      {"pipeline", VARCHAR()},
+      {"ts", VARCHAR()},
+  });
+  const auto expected = makeRowVector(
+      requestedSchema->names(),
+      {fileData->childAt(0),
+       makeNullConstant(TypeKind::VARCHAR, 2),
+       makeNullConstant(TypeKind::VARCHAR, 2),
+       makeNullConstant(TypeKind::VARCHAR, 2)});
+  auto [writer, reader] =
+      createWriterReader({fileData}, pool(), dataIoStats_, metadataIoStats_);
+
+  for (bool projectSelectedType : {false, true}) {
+    SCOPED_TRACE(projectSelectedType);
+    RowReaderOptions options;
+    options.select(
+        std::make_shared<ColumnSelector>(requestedSchema, contentSchema));
+    options.setProjectSelectedType(projectSelectedType);
+    auto rowReader = reader->createRowReader(options);
+    VectorPtr result;
+    ASSERT_EQ(2, rowReader->next(2, result));
+    assertEqualVectors(expected, result);
+    EXPECT_EQ(0, rowReader->next(2, result));
+  }
+}
+
 struct FlatMapReaderWithKeyFilter {
   std::unique_ptr<dwrf::Writer> writer;
   std::unique_ptr<DwrfReader> reader;
@@ -2749,6 +2787,227 @@ TEST_F(TestReader, reuseRowNumberColumn) {
     ASSERT_EQ(rowReader->next(3, result), 3);
     ASSERT_NE(rowNum.get(), result->asUnchecked<RowVector>()->childAt(1).get());
   }
+}
+
+// Three stripes of 2,500 rows each, holding values 0-7,499, with a row index
+// stride of 1,000.
+class SplitRowRangeTest : public TestReader {
+ protected:
+  void SetUp() override {
+    std::vector<std::vector<int32_t>> values(3);
+    for (int32_t i = 0; i < 7'500; ++i) {
+      values[i / 2'500].push_back(i);
+    }
+    batches_ = createBatches(values);
+    schema_ = asRowType(batches_[0]->type());
+    auto config = std::make_shared<dwrf::Config>();
+    config->set(dwrf::Config::ROW_INDEX_STRIDE, static_cast<uint32_t>(1'000));
+    auto sink = std::make_unique<MemorySink>(
+        1 << 20, FileSink::Options{.pool = pool()});
+    auto* sinkPtr = sink.get();
+    writer_ = E2EWriterTestUtil::writeData(
+        std::move(sink), schema_, batches_, config, [] {
+          return std::make_unique<RowThresholdFlushPolicy>(2'500);
+        });
+    data_ = std::string(sinkPtr->data(), sinkPtr->size());
+    reader_ = createReader(nullptr);
+    ASSERT_EQ(reader_->getFooter().stripesSize(), 3);
+    for (int i = 0; i < 3; ++i) {
+      ASSERT_EQ(reader_->getFooter().stripes(i).numberOfRows(), 2'500);
+    }
+  }
+
+  // Opens the written file, sampling its rows with 'randomSkip' if set.
+  std::unique_ptr<DwrfReader> createReader(
+      std::shared_ptr<random::RandomSkipTracker> randomSkip) {
+    dwio::common::ReaderOptions readerOpts(pool());
+    readerOpts.setDataIoStats(dataIoStats_);
+    readerOpts.setMetadataIoStats(metadataIoStats_);
+    readerOpts.setFileFormat(FileFormat::DWRF);
+    readerOpts.setRandomSkip(std::move(randomSkip));
+    return DwrfReader::create(
+        std::make_unique<BufferedInput>(
+            std::make_shared<InMemoryReadFile>(data_), *pool()),
+        readerOpts);
+  }
+
+  RowReaderOptions options(
+      SplitRowRange range,
+      std::unique_ptr<common::Filter> filter = nullptr,
+      bool selective = true) {
+    RowReaderOptions result;
+    if (selective) {
+      auto spec = std::make_shared<common::ScanSpec>("<root>");
+      spec->addAllChildFields(*schema_);
+      if (filter) {
+        spec->childByName("c0")->setFilter(std::move(filter));
+      }
+      result.setScanSpec(spec);
+    }
+    result.setSplitRowRange(range);
+    return result;
+  }
+
+  // Reads all rows in batches of 700 and returns the values.
+  std::vector<int32_t> read(RowReader& rowReader) {
+    std::vector<int32_t> values;
+    auto output = BaseVector::create(schema_, 0, pool());
+    while (rowReader.next(700, output) > 0) {
+      DecodedVector column(*output->as<RowVector>()->childAt(0));
+      for (vector_size_t i = 0; i < output->size(); ++i) {
+        values.push_back(column.valueAt<int32_t>(i));
+      }
+    }
+    return values;
+  }
+
+  std::vector<int32_t> read(const RowReaderOptions& options) {
+    return read(*reader_->createRowReader(options));
+  }
+
+  static std::vector<int32_t> rows(int32_t begin, int32_t end) {
+    std::vector<int32_t> result(end - begin);
+    std::iota(result.begin(), result.end(), begin);
+    return result;
+  }
+
+  static constexpr uint64_t kAll{std::numeric_limits<uint64_t>::max()};
+
+  std::vector<VectorPtr> batches_;
+  RowTypePtr schema_;
+  std::unique_ptr<dwrf::Writer> writer_;
+  std::string data_;
+  std::unique_ptr<DwrfReader> reader_;
+};
+
+TEST_F(SplitRowRangeTest, selective) {
+  EXPECT_EQ(read(options({0, kAll})), rows(0, 7'500));
+  EXPECT_EQ(read(options({1, 2})), rows(1, 3));
+  // Starts past the first stride and crosses a stride boundary.
+  EXPECT_EQ(read(options({1'500, 800})), rows(1'500, 2'300));
+  // Crosses a stripe.
+  EXPECT_EQ(read(options({2'400, 300})), rows(2'400, 2'700));
+  EXPECT_EQ(read(options({7'000, kAll})), rows(7'000, 7'500));
+  EXPECT_EQ(read(options({7'499, 1})), rows(7'499, 7'500));
+  EXPECT_TRUE(read(options({7'500, 1})).empty());
+  EXPECT_TRUE(read(options({3, 0})).empty());
+}
+
+TEST_F(SplitRowRangeTest, nonSelective) {
+  EXPECT_EQ(read(options({1'500, 800}, nullptr, false)), rows(1'500, 2'300));
+  EXPECT_EQ(read(options({2'400, 300}, nullptr, false)), rows(2'400, 2'700));
+}
+
+TEST_F(SplitRowRangeTest, countsRowsFromSplitStart) {
+  // The byte range holds the second and third stripes.
+  const auto offset = reader_->getFooter().stripes(1).offset();
+  auto opts = options({0, 2});
+  opts.range(offset, kAll / 2);
+  EXPECT_EQ(read(opts), rows(2'500, 2'502));
+
+  opts = options({4'000, kAll});
+  opts.range(offset, kAll / 2);
+  EXPECT_EQ(read(opts), rows(6'500, 7'500));
+
+  opts = options({5'000, 1});
+  opts.range(offset, kAll / 2);
+  EXPECT_TRUE(read(opts).empty());
+}
+
+TEST_F(SplitRowRangeTest, filter) {
+  EXPECT_EQ(
+      read(options(
+          {1'400, 3'000},
+          std::make_unique<common::BigintRange>(1'500, 1'700, false))),
+      rows(1'500, 1'701));
+
+  // Starting mid-stride in the first stripe still skips the strides there
+  // that the filter rejects: here, rows 1,000-1,999.
+  auto rowReader = reader_->createRowReader(options(
+      {500, 2'000},
+      std::make_unique<common::BigintRange>(2'000, 7'499, false)));
+  EXPECT_EQ(read(*rowReader), rows(2'000, 2'500));
+  dwio::common::RuntimeStats stats;
+  rowReader->updateRuntimeStats(stats);
+  EXPECT_EQ(stats.skippedStrides, 1);
+}
+
+TEST_F(SplitRowRangeTest, rowNumbers) {
+  auto opts = options({2'400, 300});
+  RowNumberColumnInfo rowNumberColumnInfo;
+  rowNumberColumnInfo.insertPosition = 1;
+  rowNumberColumnInfo.name = "";
+  opts.setRowNumberColumnInfo(rowNumberColumnInfo);
+  auto rowReader = reader_->createRowReader(opts);
+  verifyRowNumbers(*rowReader, pool(), 300);
+}
+
+// Sampling a range keeps the rows that trying each row of the range in turn
+// would keep. The range is read twice with the same sampler, like two splits
+// of a scan, so the sampler must also end each read in the right state.
+TEST_F(SplitRowRangeTest, randomSampling) {
+  const std::vector<SplitRowRange> ranges = {
+      {0, kAll},
+      {1, 2},
+      {1'500, 800},
+      {2'400, 300},
+      {2'600, 4'000},
+      {7'000, kAll},
+  };
+  for (const auto& range : ranges) {
+    // The low rates skip whole stripes, including the range's partial first
+    // and last stripes.
+    for (const double sampleRate : {0.5, 0.1, 0.001, 0.0005, 0.0002}) {
+      for (uint32_t seed = 1; seed <= 50; ++seed) {
+        SCOPED_TRACE(
+            fmt::format(
+                "range={}/{} sampleRate={} seed={}",
+                range.firstRow,
+                range.numRows,
+                sampleRate,
+                seed));
+        random::setSeed(seed);
+        auto randomSkip =
+            std::make_shared<random::RandomSkipTracker>(sampleRate);
+        auto reader = createReader(randomSkip);
+        dwio::common::Mutation mutation;
+        mutation.randomSkip = randomSkip.get();
+        std::vector<int32_t> actual;
+        auto output = BaseVector::create(schema_, 0, pool());
+        for (int i = 0; i < 2; ++i) {
+          auto rowReader = reader->createRowReader(options(range));
+          while (rowReader->next(700, output, &mutation) > 0) {
+            DecodedVector column(*output->as<RowVector>()->childAt(0));
+            for (vector_size_t row = 0; row < output->size(); ++row) {
+              actual.push_back(column.valueAt<int32_t>(row));
+            }
+          }
+        }
+
+        random::setSeed(seed);
+        random::RandomSkipTracker expectedSkip(sampleRate);
+        const auto begin = static_cast<int32_t>(range.firstRow);
+        const auto end = static_cast<int32_t>(
+            begin + std::min<uint64_t>(range.numRows, 7'500 - begin));
+        std::vector<int32_t> expected;
+        for (int i = 0; i < 2; ++i) {
+          for (const auto row : rows(begin, end)) {
+            if (expectedSkip.testOne()) {
+              expected.push_back(row);
+            }
+          }
+        }
+        EXPECT_EQ(actual, expected);
+      }
+    }
+  }
+}
+
+TEST_F(SplitRowRangeTest, seekNotSupported) {
+  auto rowReader = reader_->createDwrfRowReader(options({1, 2}));
+  VELOX_ASSERT_THROW(
+      rowReader->seekToRow(5),
+      "Seeking is not supported with a split row range");
 }
 
 TEST_F(TestReader, explicitRowNumberColumn) {

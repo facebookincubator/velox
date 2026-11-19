@@ -36,6 +36,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/expression/Expr.h"
 #include "velox/vector/DecodedVector.h"
 
@@ -149,7 +150,7 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
 #ifdef VELOX_ENABLE_NIMBLE
     if (format == dwio::common::FileFormat::NIMBLE) {
       nimble::Writer writer(
-          asRowType(input->type()),
+          input->rowType(),
           std::make_unique<LocalWriteFile>(path, false, false),
           *pool(),
           nimble::WriterOptions{});
@@ -166,7 +167,7 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
           std::make_unique<dwio::common::WriteFileSink>(
               std::make_unique<LocalWriteFile>(path, false, false), path),
           options,
-          asRowType(input->type()));
+          input->rowType());
       writer.write(input);
       writer.close();
       return;
@@ -323,6 +324,21 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
       const RowTypePtr& dataColumns = nullptr,
       common::SubfieldFilters subfieldFilters = {},
       const core::TypedExprPtr& remainingFilter = nullptr) {
+    return makePaimonScan(
+               outputType,
+               dataColumns,
+               std::move(subfieldFilters),
+               remainingFilter)
+        .planNode();
+  }
+
+  /// Returns a PlanBuilder whose plan is a Paimon table scan, for adding nodes
+  /// on top of the scan.
+  exec::test::PlanBuilder makePaimonScan(
+      const RowTypePtr& outputType,
+      const RowTypePtr& dataColumns = nullptr,
+      common::SubfieldFilters subfieldFilters = {},
+      const core::TypedExprPtr& remainingFilter = nullptr) {
     const auto rowType = dataColumns ? dataColumns : outputType;
     const auto tableHandle = makePaimonTableHandle(
         rowType, std::move(subfieldFilters), remainingFilter);
@@ -334,8 +350,7 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
         .outputType(outputType)
         .tableHandle(tableHandle)
         .assignments(assignments)
-        .endTableScan()
-        .planNode();
+        .endTableScan();
   }
 
   /// Creates a PaimonConnectorSplit from file paths.
@@ -458,11 +473,7 @@ TEST_F(PaimonConnectorTest, appendOnlySingleFile) {
 
 TEST_F(PaimonConnectorTest, ordinaryOrcTableScan) {
   const auto rowType = ROW({{"int1", INTEGER()}, {"string1", VARCHAR()}});
-  const auto plan = exec::test::PlanBuilder(
-                        makePaimonScanPlan(rowType),
-                        std::make_shared<core::PlanNodeIdGenerator>(1))
-                        .limit(0, 3, false)
-                        .planNode();
+  const auto plan = makePaimonScan(rowType).limit(0, 3, false).planNode();
   const auto path = velox::test::getDataFilePath(
       "velox/dwio/orc/test", "examples/TestOrcFile.columnProjection.orc");
   const auto expected = makeRowVector(
@@ -507,7 +518,7 @@ TEST_F(PaimonConnectorTest, tableSchemaTypesAndBatchOwnership) {
        makeNullableFlatVector<double>({1.5, 2.5, std::nullopt, 4.5}),
        makeNullableFlatVector<std::string>(
            {"alpha", "", std::nullopt, "omega"})});
-  const auto rowType = asRowType(input->type());
+  const auto rowType = input->rowType();
   auto queryCtx = core::QueryCtx::create();
   const auto config = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>{});
@@ -1454,7 +1465,7 @@ TEST_F(PaimonConnectorTest, ordinaryColumnsIgnoreFeatureOptions) {
 TEST_F(PaimonConnectorTest, taskCancellationAndLimit) {
   const auto input = makeRowVector(
       {"id"}, {makeFlatVector<int64_t>(10000, [](auto row) { return row; })});
-  const auto plan = makePaimonScanPlan(asRowType(input->type()));
+  const auto plan = makePaimonScanPlan(input->rowType());
   for (auto format : fileFormats()) {
     SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
     const auto files = makeFilePaths(1);
@@ -1476,15 +1487,12 @@ TEST_F(PaimonConnectorTest, taskCancellationAndLimit) {
     ASSERT_EQ(cursor->task()->state(), exec::TaskState::kCanceled);
     EXPECT_THROW(cursor->moveNext(), folly::OperationCancelled);
     cursor.reset();
-    exec::test::waitForAllTasksToBeDeleted();
+    exec::test::TaskMonitor::waitForAllTasksDeleted();
     const auto limitPlan =
-        exec::test::PlanBuilder(
-            plan, std::make_shared<core::PlanNodeIdGenerator>(1))
-            .limit(0, 1, false)
-            .planNode();
+        makePaimonScan(input->rowType()).limit(0, 1, false).planNode();
     exec::test::AssertQueryBuilder(limitPlan).split(split).assertTypeAndNumRows(
         input->type(), 1);
-    exec::test::waitForAllTasksToBeDeleted();
+    exec::test::TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -1826,7 +1834,7 @@ TEST_F(PaimonConnectorTest, requiresPaimonTableHandle) {
     VELOX_ASSERT_THROW(
         exec::test::AssertQueryBuilder(plan).split(split).copyResults(pool()),
         "Failed to cast from");
-    exec::test::waitForAllTasksToBeDeleted();
+    exec::test::TaskMonitor::waitForAllTasksDeleted();
   }
   EXPECT_EQ(fileSystem->openedFiles, 0);
 }
@@ -1870,7 +1878,7 @@ TEST_F(PaimonConnectorTest, rejectsPrimaryKeySplits) {
     VELOX_ASSERT_USER_THROW(
         exec::test::AssertQueryBuilder(plan).split(split).copyResults(pool()),
         "Paimon split table type does not match table handle");
-    exec::test::waitForAllTasksToBeDeleted();
+    exec::test::TaskMonitor::waitForAllTasksDeleted();
   }
   EXPECT_EQ(fileSystem->openedFiles, 0);
 }

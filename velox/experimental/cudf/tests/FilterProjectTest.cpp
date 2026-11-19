@@ -2066,36 +2066,36 @@ TEST_F(CudfFilterProjectTest, roundDecimal) {
       {makeFlatVector<int64_t>({412389, -456789}, DECIMAL(10, 4))});
 
   // Round to 2 decimal places.
-  // Expected values are 41.24 and -45.68 as DECIMAL(10, 4).
+  // Expected values are 41.24 and -45.68 as DECIMAL(11, 4).
   auto plan = PlanBuilder()
                   .setParseOptions(options)
                   .values({decimalData})
                   .project({"round(c0, 2) as c1"})
                   .planNode();
   auto decimalExpected = makeRowVector(
-      {makeFlatVector<int64_t>({412400, -456800}, DECIMAL(10, 4))});
+      {makeFlatVector<int64_t>({412400, -456800}, DECIMAL(11, 4))});
   AssertQueryBuilder(plan).assertResults(decimalExpected);
 
   // Round to 0 decimal places.
-  // Expected values are 41.0 and -46.0 as DECIMAL(10, 0).
+  // Expected values are 41.0 and -46.0 as DECIMAL(7, 0).
   plan = PlanBuilder()
              .setParseOptions(options)
              .values({decimalData})
              .project({"round(c0) as c1"})
              .planNode();
   decimalExpected =
-      makeRowVector({makeFlatVector<int64_t>({41, -46}, DECIMAL(10, 0))});
+      makeRowVector({makeFlatVector<int64_t>({41, -46}, DECIMAL(7, 0))});
   AssertQueryBuilder(plan).assertResults(decimalExpected);
 
   // Round to -1 decimal places.
-  // Expected values are 40.0 and -50.0 as DECIMAL(10, 4).
+  // Expected values are 40.0 and -50.0 as DECIMAL(11, 4).
   plan = PlanBuilder()
              .setParseOptions(options)
              .values({decimalData})
              .project({"round(c0, -1) as c1"})
              .planNode();
   decimalExpected = makeRowVector(
-      {makeFlatVector<int64_t>({400000, -500000}, DECIMAL(10, 4))});
+      {makeFlatVector<int64_t>({400000, -500000}, DECIMAL(11, 4))});
   AssertQueryBuilder(plan).assertResults(decimalExpected);
 }
 
@@ -4145,6 +4145,13 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
   expected =
       makeRowVector({makeFlatVector<double>({3.14, 2.72, -1.5, 0.5, 101.0})});
   AssertQueryBuilder(plan).assertResults(expected);
+
+  // Compare equality results so approximate vector comparison cannot hide a
+  // one-ULP difference at a fine positive scale.
+  data = makeRowVector(
+      {makeFlatVector<double>({0.21472736303011786, -0.21472736303011786})});
+  assertExpressionMatchesCpu(
+      "round(c0, cast(17 as integer)) = c0", data, data->rowType());
 
   // round(double, -1) — round to nearest 10
   data =

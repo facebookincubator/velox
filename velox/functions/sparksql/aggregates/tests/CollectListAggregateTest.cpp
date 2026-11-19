@@ -94,7 +94,7 @@ TEST_F(CollectListAggregateTest, ignoreNulls) {
 TEST_F(CollectListAggregateTest, allNullsInput) {
   auto input = makeRowVector({makeAllNullFlatVector<int64_t>(100)});
   // If all input data is null, Spark will output an empty array.
-  auto expected = makeRowVector({makeArrayVectorFromJson<int32_t>({"[]"})});
+  auto expected = makeRowVector({makeArrayVectorFromJson<int64_t>({"[]"})});
   AggregationTester(*this)
       .inputs(input)
       .aggregates({"spark_collect_list(c0)"})

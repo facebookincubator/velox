@@ -1235,6 +1235,10 @@ class PlanBuilder {
   /// current plan node).
   PlanBuilder& localMerge(const std::vector<std::string>& keys);
 
+  /// Adds a MixedUnionNode that combines the rows of 'sources', which must have
+  /// the same output type. Must be the first call.
+  PlanBuilder& mixedUnion(std::vector<core::PlanNodePtr> sources);
+
   /// Adds an OrderByNode using specified ORDER BY clauses.
   ///
   /// For example,

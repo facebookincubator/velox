@@ -40,9 +40,12 @@ static const std::string kTurnOffPermissions{"dfs.permissions=false"};
 static const std::string kFilesystemCommand{"fs"};
 static const std::string kFilesystemUrlOption{"-fs"};
 static const std::string kFilePutOption{"-put"};
+static const std::string kWriteDetailsOption{"-writeDetails"};
 
 class HdfsMiniCluster {
  public:
+  static constexpr std::chrono::seconds kStartTimeout{60};
+
   HdfsMiniCluster();
 
   void start();
@@ -73,6 +76,9 @@ class HdfsMiniCluster {
   std::unique_ptr<::boost::process::child> serverProcess_;
   boost::filesystem::path exePath_;
   boost::process::environment env_;
+  const std::shared_ptr<TempDirectoryPath> tempDirectory_{
+      TempDirectoryPath::create()};
+  const std::string detailsPath_{tempDirectory_->getPath() + "/details.json"};
   std::string nameNodePort_;
   std::string httpPort_;
   std::string filesystemUrl_;

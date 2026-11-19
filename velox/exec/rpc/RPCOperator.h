@@ -136,6 +136,13 @@ class RPCOperator : public exec::Operator {
       "rpcCongestionOverloadShrinks"};
   /// Attempts rejected for capacity and admitted again for another attempt.
   static inline const std::string kRpcCapacityRetries{"rpcCapacityRetries"};
+  /// Hinted rejections of a rate quota, such as requests or tokens per minute,
+  /// whether or not they retried.
+  static inline const std::string kRpcQuotaRejections{"rpcQuotaRejections"};
+  /// Hinted rejections for lack of serving capacity, whether or not they
+  /// retried.
+  static inline const std::string kRpcCapacityRejections{
+      "rpcCapacityRejections"};
   /// Capacity retries a hint's minRetries granted after its budget ran out.
   static inline const std::string kRpcCapacityRetryFloorRetries{
       "rpcCapacityRetryFloorRetries"};
@@ -145,6 +152,14 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcRttMaxWallNanos{"rpcRttMaxWallNanos"};
   static inline const std::string kRpcRttCount{"rpcRttCount"};
   static inline const std::string kRpcStreamingMode{"rpcStreamingMode"};
+  /// The requested flow-control policy, by RPCFlowControlPolicy value:
+  /// WINDOW_AIMD=0, CAPACITY_PROBING=1. Reported per driver.
+  static inline const std::string kRpcFlowControlRequestedPolicy{
+      "rpcFlowControlRequestedPolicy"};
+  /// The policy the limiter runs, by the same values. A CAPACITY_PROBING
+  /// request that is not eligible reports WINDOW_AIMD here.
+  static inline const std::string kRpcFlowControlEffectivePolicy{
+      "rpcFlowControlEffectivePolicy"};
   static inline const std::string kRpcErrorKindRateLimited{
       "rpcErrorKindRateLimited"};
   static inline const std::string kRpcErrorKindTimeout{"rpcErrorKindTimeout"};
@@ -430,6 +445,13 @@ class RPCOperator : public exec::Operator {
   RPCRateLimiter* limiter_{nullptr};
   // PER_ROW and AsyncRPCFunction::mayReturnCapacityRetries().
   bool capacityRetryEnabled_{false};
+  // Policy rpc.flow_control_policy names, reported even when not eligible.
+  RPCFlowControlPolicy requestedFlowControlPolicy_{
+      RPCFlowControlPolicy::kWindowAimd};
+  // True when CAPACITY_PROBING is requested for adaptive PER_ROW execution of a
+  // function that may return capacity retries. Any other request runs exactly
+  // as WINDOW_AIMD.
+  bool capacityProbingEnabled_{false};
 
   // Set by the first tryAcquireAdmission() call.
   bool admissionRequested_{false};

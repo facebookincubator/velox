@@ -27,6 +27,7 @@
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
@@ -247,7 +248,7 @@ class ExchangeFuzzer : public VectorTestBase {
         }
 
         for (const auto& task : tasks) {
-          if (!waitForTaskCompletion(task.get(), 1'000'000)) {
+          if (!TaskMonitor::waitForCompletion(*task, 1'000'000)) {
             if (task->state() == TaskState::kFailed) {
               try {
                 std::rethrow_exception(task->error());
@@ -290,7 +291,7 @@ class ExchangeFuzzer : public VectorTestBase {
     }
 
     for (const auto& task : tasks) {
-      if (!waitForTaskCompletion(task.get(), 1'000'000)) {
+      if (!TaskMonitor::waitForCompletion(*task, 1'000'000)) {
         if (task->state() == TaskState::kFailed) {
           try {
             std::rethrow_exception(task->error());
