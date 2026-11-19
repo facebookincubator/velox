@@ -11,7 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_executable(velox_arrow_bridge_test ArrowBridgeArrayTest.cpp ArrowBridgeSchemaTest.cpp)
+add_executable(
+  velox_arrow_bridge_test
+  ArrowBridgeExportTest.cpp
+  ArrowBridgeImportTest.cpp
+  ArrowBridgeSchemaTest.cpp
+)
 
 add_test(velox_arrow_bridge_test velox_arrow_bridge_test)
 
