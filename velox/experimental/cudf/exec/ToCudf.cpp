@@ -322,10 +322,8 @@ struct CudfDriverAdapter {
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
     const auto& queryConfig = driver.driverCtx()->queryConfig();
-    // A query that turns cuDF off stays on the CPU whatever
-    // kCudfAllowCpuFallback says. That switch decides what happens when a GPU
-    // conversion fails, not whether one is attempted, so letting it override
-    // the request would compile a plan the query asked to keep off the GPU.
+    // Checked on its own: kCudfAllowCpuFallback governs failed conversions
+    // only, not whether one is attempted.
     if (!queryConfig.get<bool>(
             CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled)) {
       return false;
@@ -345,14 +343,11 @@ bool cudfIsRegistered() {
 }
 
 bool cudfIsEnabled(
-    const ::facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx) {
+    const ::facebook::velox::connector::ConnectorQueryCtx& connectorQueryCtx) {
   if (!cudfIsRegistered()) {
     return false;
   }
-  if (connectorQueryCtx == nullptr) {
-    return CudfConfig::getInstance().enabled;
-  }
-  return connectorQueryCtx->sessionProperties()->get<bool>(
+  return connectorQueryCtx.sessionProperties()->get<bool>(
       CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled);
 }
 
