@@ -108,15 +108,13 @@ class HashJoinLeftBenchmark : public VectorTestBase {
       const BenchmarkParams& params,
       const std::vector<RowVectorPtr>& buildVectors,
       const std::vector<RowVectorPtr>& probeVectors) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+    PlanBuilder builder(pool_.get());
+    auto plan = builder.newPlan()
                     .values(probeVectors)
                     .hashJoin(
                         {"t0"},
                         {"u0"},
-                        PlanBuilder(planNodeIdGenerator, pool_.get())
-                            .values(buildVectors)
-                            .planNode(),
+                        builder.newPlan().values(buildVectors).planNode(),
                         "",
                         {"t0", "u1"},
                         core::JoinType::kLeft)

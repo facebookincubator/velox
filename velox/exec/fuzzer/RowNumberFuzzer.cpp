@@ -113,7 +113,6 @@ std::vector<RowVectorPtr> RowNumberFuzzer::generateInput(
 PlanWithSplits RowNumberFuzzer::makeDefaultPlan(
     const std::vector<std::string>& partitionKeys,
     const std::vector<RowVectorPtr>& input) {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   std::vector<std::string> projectFields = partitionKeys;
   projectFields.emplace_back("row_number");
   auto plan = test::PlanBuilder()
@@ -131,9 +130,9 @@ PlanWithSplits RowNumberFuzzer::makePlanWithTableScan(
   std::vector<std::string> projectFields = partitionKeys;
   projectFields.emplace_back("row_number");
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  test::PlanBuilder builder;
   core::PlanNodeId scanId;
-  auto plan = test::PlanBuilder(planNodeIdGenerator)
+  auto plan = builder.newPlan()
                   .tableScan(type)
                   .rowNumber(partitionKeys)
                   .project(projectFields)
@@ -154,8 +153,8 @@ void RowNumberFuzzer::addPlansWithTableScan(
 
   const std::vector<Split> inputSplits = test::makeSplits(
       input, fmt::format("{}/row_number", tableDir), writerPool_);
-  altPlans.push_back(makePlanWithTableScan(
-      asRowType(input[0]->type()), partitionKeys, inputSplits));
+  altPlans.push_back(
+      makePlanWithTableScan(input[0]->rowType(), partitionKeys, inputSplits));
 }
 
 void RowNumberFuzzer::runSingleIteration() {

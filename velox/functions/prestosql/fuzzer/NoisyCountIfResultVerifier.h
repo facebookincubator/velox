@@ -88,19 +88,19 @@ class NoisyCountIfResultVerifier : public ResultVerifier {
     // The expected result and actual result are grouped by the same keys,
     // but the rows may be in different order. So we need to union the results.
     // Create sources for expected and actual results
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto expectedSource = PlanBuilder(planNodeIdGenerator)
-                              .values({expectedNoNoise_})
+    PlanBuilder builder;
+    auto expectedSource = builder.newPlan()
+                              .values(expectedNoNoise_)
                               .appendColumns({"'expected' as label"})
                               .planNode();
-    auto actualSource = PlanBuilder(planNodeIdGenerator)
-                            .values({result})
+    auto actualSource = builder.newPlan()
+                            .values(result)
                             .appendColumns({"'actual' as label"})
                             .planNode();
 
     // Combine expected and actual results by grouping keys using map_agg
     auto mapAgg = fmt::format("map_agg(label, {}) as m", name_);
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = builder.newPlan()
                     .localPartition({}, {expectedSource, actualSource})
                     .singleAggregation(groupingKeys_, {mapAgg})
                     .project({"m['actual'] as a", "m['expected'] as e"})

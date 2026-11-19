@@ -483,9 +483,8 @@ TEST_F(OrderByTest, spill) {
   const auto rowType =
       ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
   const auto vectors = createVectors(rowType, 1024, 48 << 20);
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId orderNodeId;
-  const auto plan = PlanBuilder(planNodeIdGenerator)
+  const auto plan = PlanBuilder()
                         .values(vectors)
                         .orderBy({"c0 ASC NULLS LAST"}, false)
                         .capturePlanNodeId(orderNodeId)
@@ -1192,9 +1191,8 @@ DEBUG_ONLY_TEST_F(OrderByTest, spillWithNoMoreOutput) {
   const auto rowType =
       ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
   const auto vectors = createVectors(rowType, 1024, 4 << 20);
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId orderNodeId;
-  const auto plan = PlanBuilder(planNodeIdGenerator)
+  const auto plan = PlanBuilder()
                         .values(vectors)
                         .orderBy({"c0 ASC NULLS LAST"}, false)
                         .capturePlanNodeId(orderNodeId)
@@ -1245,9 +1243,8 @@ TEST_F(OrderByTest, maxSpillBytes) {
   const auto rowType =
       ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
   const auto vectors = createVectors(rowType, 1024, 15 << 20);
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId orderNodeId;
-  const auto plan = PlanBuilder(planNodeIdGenerator)
+  const auto plan = PlanBuilder()
                         .values(vectors)
                         .orderBy({"c0 ASC NULLS LAST"}, false)
                         .capturePlanNodeId(orderNodeId)
