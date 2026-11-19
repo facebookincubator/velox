@@ -1396,6 +1396,71 @@ TEST_F(UcxOutputQueueManagerTest, terminateUnpublishedReader) {
   queueManager_->removeTask(taskId);
 }
 
+// A reader that waits for a destination the producer has not published yet
+// must learn why the producer ended early, as a reader of a published
+// destination does.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    terminateReportsProducerErrorToUnpublishedReader) {
+  const std::string taskId = "terminatedPendingReaderWithError";
+  auto task = initializeTask(
+      taskId, 1, 1, true, core::PartitionedOutputNode::Kind::kBroadcast);
+  auto queue = std::make_shared<UcxOutputQueue>(
+      task, 1, 1, core::PartitionedOutputNode::Kind::kBroadcast);
+  const std::string reason{"Injected producer failure"};
+
+  int endCount{0};
+  std::optional<std::string> producerError;
+  queue->getData(
+      5,
+      [&](std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t,
+          std::vector<int64_t>,
+          std::optional<std::string> error) {
+        EXPECT_EQ(data, nullptr);
+        producerError = std::move(error);
+        ++endCount;
+      });
+  EXPECT_EQ(endCount, 0);
+
+  queue->terminate(reason);
+  EXPECT_EQ(endCount, 1);
+  EXPECT_EQ(producerError, reason);
+  queueManager_->removeTask(taskId);
+}
+
+// A reader that arrives after the producer was removed gets the end marker the
+// producer was removed with: its error if it ended early, a clean end
+// otherwise.
+TEST_F(UcxOutputQueueManagerTest, getDataAfterTerminateReportsProducerError) {
+  for (const auto& reason :
+       {std::optional<std::string>{"Injected producer failure"},
+        std::optional<std::string>{}}) {
+    SCOPED_TRACE(reason.value_or("clean end"));
+    const std::string taskId = "getDataAfterTerminate";
+    auto task = initializeTask(taskId, 1, 1);
+    auto queue = std::make_shared<UcxOutputQueue>(
+        task, 1, 1, core::PartitionedOutputNode::Kind::kPartitioned);
+    queue->terminate(reason);
+
+    bool fired{false};
+    std::optional<std::string> producerError{"not set"};
+    queue->getData(
+        0,
+        [&](std::shared_ptr<cudf::packed_columns> data,
+            vector_size_t,
+            std::vector<int64_t>,
+            std::optional<std::string> error) {
+          EXPECT_EQ(data, nullptr);
+          producerError = std::move(error);
+          fired = true;
+        });
+    EXPECT_TRUE(fired);
+    EXPECT_EQ(producerError, reason);
+    queueManager_->removeTask(taskId);
+  }
+}
+
 // --- Broadcast tests ---
 
 // Basic broadcast: enqueue data, all destinations receive the same data.
@@ -1585,6 +1650,48 @@ TEST_F(UcxOutputQueueManagerTest, deleteUnpublishedReader) {
   bool retryEnd{false};
   queueManager_->getData(taskId, 1, receiveEndMarker(1, retryEnd));
   EXPECT_TRUE(retryEnd);
+  noMoreData(taskId);
+  queueManager_->deleteResults(taskId, 0);
+  EXPECT_TRUE(queueManager_->isFinished(taskId));
+  queueManager_->removeTask(taskId);
+}
+
+// Results of a destination that is not published yet are deleted before every
+// producing driver finished only when the producer discards its own output, as
+// for a published destination. The reader waiting for that destination must
+// fail rather than end cleanly.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    deleteUnpublishedReaderBeforeEndReportsProducerError) {
+  const std::string taskId = "deletedPendingReaderBeforeEnd";
+  initializeTask(
+      taskId, 1, 1, true, core::PartitionedOutputNode::Kind::kBroadcast);
+  enqueue(taskId, 0, 10);
+
+  bool fired{false};
+  std::optional<std::string> producerError;
+  queueManager_->getData(
+      taskId,
+      1,
+      [&](std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t,
+          std::vector<int64_t>,
+          std::optional<std::string> error) {
+        EXPECT_EQ(data, nullptr);
+        producerError = std::move(error);
+        fired = true;
+      });
+  EXPECT_FALSE(fired);
+
+  queueManager_->deleteResults(taskId, 1);
+  EXPECT_TRUE(fired);
+  EXPECT_THAT(
+      producerError,
+      testing::Optional(
+          testing::HasSubstr(
+              "Producer task discarded its output before sending all of it")));
+
+  queueManager_->updateOutputBuffers(taskId, 2, true);
   noMoreData(taskId);
   queueManager_->deleteResults(taskId, 0);
   EXPECT_TRUE(queueManager_->isFinished(taskId));

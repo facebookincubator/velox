@@ -263,7 +263,9 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// publish their destination and backfill any broadcast data and end marker.
   /// Invokes 'notify' with nullptr when the final count excludes the reader,
   /// results have been deleted, or the queue has terminated. Negative
-  /// destinations also receive nullptr.
+  /// destinations also receive nullptr. After terminate(), that nullptr comes
+  /// with the producerError the queue was terminated with; after a deletion
+  /// before the end marker, with discardedOutputErrorLocked().
   void getData(int destination, UcxDataAvailableCallback notify);
 
   /// @brief Indicates that a driver is done and won't enqueue any more data.
@@ -391,9 +393,12 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
       int32_t numDestinations,
       std::vector<UcxDataAvailable>& notifications);
 
-  // Completes unpublished readers with EOS; the caller invokes notifications
-  // outside the locks. Pending queues never contain data.
-  void clearPendingReadersLocked(std::vector<UcxDataAvailable>& notifications);
+  // Completes unpublished readers with EOS, carrying 'producerError' if the
+  // producer ended early; the caller invokes notifications outside the locks.
+  // Pending queues never contain data.
+  void clearPendingReadersLocked(
+      std::vector<UcxDataAvailable>& notifications,
+      const std::optional<std::string>& producerError);
 
   // Reference to the task that owns this UcxQueue.
   std::shared_ptr<exec::Task> task_{nullptr};
@@ -444,6 +449,10 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   // completion, failure, or cancellation. Later getData() reports EOS, and
   // updateOutputBuffers() ignores further updates.
   bool terminated_{false};
+
+  // The producerError of the first terminate(), which the EOS of every later
+  // getData() carries.
+  std::optional<std::string> terminationError_;
 
   // keep track of the number of drivers that have finished.
   uint32_t numFinished_{0};

@@ -216,7 +216,7 @@ bool UcxOutputQueue::initialize(
   initialized_.store(true, std::memory_order_release);
   addDestinationQueuesLocked(numDestinations, notifications);
   if (kind_ == core::PartitionedOutputNode::Kind::kPartitioned) {
-    clearPendingReadersLocked(notifications);
+    clearPendingReadersLocked(notifications, std::nullopt);
   }
   return true;
 }
@@ -324,8 +324,9 @@ void UcxOutputQueue::getDataImpl(
   {
     std::unique_lock<std::mutex> l(mutex_);
     if (terminated_) {
+      auto producerError = terminationError_;
       l.unlock();
-      notify(nullptr, /*numRows=*/0, {}, std::nullopt);
+      notify(nullptr, /*numRows=*/0, {}, std::move(producerError));
       return;
     }
     if (destination < 0 ||
@@ -571,10 +572,15 @@ void UcxOutputQueue::addDestinationQueuesLocked(
 }
 
 void UcxOutputQueue::clearPendingReadersLocked(
-    std::vector<UcxDataAvailable>& notifications) {
+    std::vector<UcxDataAvailable>& notifications,
+    const std::optional<std::string>& producerError) {
   for (auto& [destination, queue] : pendingQueues_) {
     if (queue) {
-      notifications.push_back(queue->getAndClearNotify());
+      auto notification = queue->getAndClearNotify();
+      if (notification.callback != nullptr) {
+        notification.producerError = producerError;
+      }
+      notifications.push_back(std::move(notification));
     }
   }
   pendingQueues_.clear();
@@ -605,7 +611,7 @@ void UcxOutputQueue::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
       noMoreQueues_ = true;
       dataToBroadcast_.clear();
       const auto priorNotifications = notifications.size();
-      clearPendingReadersLocked(notifications);
+      clearPendingReadersLocked(notifications, std::nullopt);
       numRejected = notifications.size() - priorNotifications;
       if (numRejected > 0) {
         taskId = task_ ? task_->taskId() : "n/a";
@@ -645,6 +651,9 @@ void UcxOutputQueue::deleteResults(int destination) {
       if (it != pendingQueues_.end()) {
         if (it->second) {
           dataAvailable = it->second->getAndClearNotify();
+          if (dataAvailable.callback != nullptr) {
+            dataAvailable.producerError = discardedOutputErrorLocked();
+          }
         }
         if (publishable) {
           // Keep a tombstone so publication cannot resurrect deleted results.
@@ -802,8 +811,13 @@ void UcxOutputQueue::terminate(
   {
     std::lock_guard<std::mutex> l(mutex_);
     task = task_;
-    terminated_ = true;
-    clearPendingReadersLocked(pendingCallbacks);
+    // The first removal decides how the stream ended, as the end markers below
+    // do.
+    if (!terminated_) {
+      terminated_ = true;
+      terminationError_ = producerError;
+    }
+    clearPendingReadersLocked(pendingCallbacks, terminationError_);
     // Fire all pending getData callbacks with an end marker. This also covers a
     // producer task that fails or is cancelled before noMoreData(), so that
     // its consumers are not orphaned; 'producerError' tells them it ended
