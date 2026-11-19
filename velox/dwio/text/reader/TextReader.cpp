@@ -130,8 +130,10 @@ void setCompressionSettings(
 
 FileContents::FileContents(
     MemoryPool& pool,
-    const std::shared_ptr<const RowType>& t)
+    const std::shared_ptr<const RowType>& t,
+    const tz::TimeZone* timestampTimezone)
     : schema{t},
+      timestampTimezone{timestampTimezone},
       input{nullptr},
       pool{pool},
       fileLength{0},
@@ -1394,7 +1396,9 @@ void TextRowReader::readElement(
         auto ts = util::Converter<TypeKind::TIMESTAMP>::tryCast(s).thenOrThrow(
             std::identity{},
             [&](const Status& status) { VELOX_USER_FAIL(status.message()); });
-        ts.toGMT(Timestamp::defaultTimezone());
+        if (contents_->timestampTimezone != nullptr) {
+          ts.toGMT(*contents_->timestampTimezone);
+        }
         flatVector->set(
             insertionRow, Timestamp{ts.getSeconds(), ts.getNanos()});
       }
@@ -1486,7 +1490,11 @@ TextReader::TextReader(
     schema = internalSchema_;
   }
   schemaWithId_ = TypeWithId::create(schema);
-  contents_ = std::make_shared<FileContents>(options_.memoryPool(), schema);
+  contents_ = std::make_shared<FileContents>(
+      options_.memoryPool(),
+      schema,
+      options_.adjustTimestampToTimezone() ? options_.sessionTimezone()
+                                           : &Timestamp::defaultTimezone());
 
   if (!contents_->schema->isRow()) {
     throw std::invalid_argument("file schema must be a ROW type");

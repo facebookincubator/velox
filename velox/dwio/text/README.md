@@ -1,5 +1,22 @@
 # Delimited Text Format
 
+## TIMESTAMP timezones
+
+When `adjustTimestampToTimezone` is enabled, the reader interprets timestamp
+fields in `ReaderOptions::sessionTimezone()` and the writer renders timestamps
+in `WriterOptions::sessionTimezoneName`. An unset session timezone uses UTC.
+This applies to both top-level and nested timestamp values.
+
+When adjustment is disabled (the default), both paths retain the legacy
+`Timestamp::defaultTimezone()` behavior (`America/Los_Angeles`), regardless of
+the configured session timezone.
+
+Reading an ambiguous local time during a daylight-saving overlap selects the
+earlier instant. A nonexistent local time during a daylight-saving gap raises
+a user error. Writing uses the offset applicable to each UTC instant.
+Timezone selection does not change timestamp parsing or fractional precision;
+the writer continues to emit milliseconds.
+
 ## REAL and DOUBLE
 
 The reader trims leading and trailing bytes whose unsigned value is at most
