@@ -136,7 +136,7 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
     return;
   }
 
-  dwio::common::RowReaderOptions deleteRowReaderOpts(deleteReaderOpts);
+  dwio::common::RowReaderOptions deleteRowReaderOpts(scanSpec);
   velox_hive::configureRowReaderOptions(
       {},
       nullptr,

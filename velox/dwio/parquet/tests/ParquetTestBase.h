@@ -85,7 +85,8 @@ class ParquetReaderBuilder {
   /// ParquetReader::rowType() without a predetermined projection.
   ParquetReaderBuilder& withScanSpecOnly();
 
-  /// Supplies ReaderOptions instead of the default (leaf pool + IoStatistics).
+  /// Overrides the default ReaderOptions. The supplied options must include a
+  /// non-null ScanSpec, which is reused by the row reader.
   ParquetReaderBuilder& options(
       const dwio::common::ReaderOptions& readerOptions);
 
@@ -154,7 +155,7 @@ class ParquetTestBase : public testing::Test,
       const RowTypePtr& rowType,
       const dwio::common::ReaderOptions& readerOptions,
       bool fileColumnNamesReadAsLowerCase = false) {
-    dwio::common::RowReaderOptions rowReaderOpts(readerOptions);
+    dwio::common::RowReaderOptions rowReaderOpts(readerOptions.scanSpec());
     rowReaderOpts.select(
         std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
             rowType,

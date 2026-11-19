@@ -278,7 +278,7 @@ void FloatToDoubleEvolutionTest::runFloatToDoubleScenario(
     }
   }
 
-  RowReaderOptions rowReaderOpts(readerOptions);
+  RowReaderOptions rowReaderOpts(scanSpec);
   rowReaderOpts.select(
       std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
           readSchema, readSchema->names()));

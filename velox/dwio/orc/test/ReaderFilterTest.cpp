@@ -239,7 +239,7 @@ TEST_P(OrcReaderFilterTestP, tests) {
   scanSpec->childByName(GetParam().columnName)
       ->setFilter(GetParam().filter->clone());
 
-  RowReaderOptions rowReaderOpts(readerOpts);
+  RowReaderOptions rowReaderOpts(scanSpec);
   auto rowReader = reader->createRowReader(rowReaderOpts);
   auto batch = BaseVector::create(schema, 0, &readerOpts.memoryPool());
 

@@ -91,7 +91,7 @@ class ReaderBaseTest : public ::testing::TestWithParam<CreationMode> {
   }
 
   velox::dwio::common::ReaderOptions makeReaderOptions() {
-    velox::dwio::common::ReaderOptions opts(pool_.get());
+    velox::dwio::common::ReaderOptions opts(pool_.get(), nullptr);
     opts.setDataIoStats(std::make_shared<velox::io::IoStatistics>());
     opts.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
     opts.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
@@ -478,7 +478,7 @@ class StripeStreamsMultiStripeTest
       velox::ROW({"a", "b"}, {velox::BIGINT(), velox::VARCHAR()});
 
   velox::dwio::common::ReaderOptions makeReaderOptions() {
-    velox::dwio::common::ReaderOptions opts(pool_.get());
+    velox::dwio::common::ReaderOptions opts(pool_.get(), nullptr);
     opts.setDataIoStats(dataIoStats_);
     opts.setMetadataIoStats(metadataIoStats_);
     opts.setIndexIoStats(indexIoStats_);

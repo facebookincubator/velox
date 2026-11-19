@@ -291,7 +291,7 @@ void NimbleIndexProjectorTestBase::resetReaders() {
 std::shared_ptr<TabletReader> NimbleIndexProjectorTestBase::openSinkTablet() {
   auto readFile =
       std::make_shared<InMemoryReadFile>(std::string_view(sinkData_));
-  dwio::common::ReaderOptions tabletReaderOptions(leafPool_.get());
+  dwio::common::ReaderOptions tabletReaderOptions(leafPool_.get(), nullptr);
   tabletReaderOptions.setFileFormat(FileFormat::NIMBLE);
   return TabletReader::create(
       readFile,
@@ -437,7 +437,7 @@ NimbleIndexProjectorTestBase::createProjectorWithFileHandle(
     bool setIndexIoStats,
     bool cacheData,
     bool verifyStreamChecksums) {
-  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  dwio::common::ReaderOptions readerOptions(leafPool_.get(), nullptr);
   configureReaderOptions(
       readerOptions,
       setDataIoStats,

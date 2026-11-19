@@ -130,7 +130,7 @@ class FlatMapColumnReaderTest : public ::testing::TestWithParam<bool>,
         std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
         options);
     auto type = asRowType(expected->type());
-    dwio::common::RowReaderOptions rowOptions(options);
+    dwio::common::RowReaderOptions rowOptions(scanSpec);
     rowOptions.setRequestedType(type);
     rowOptions.setPreserveFlatMapsInMemory(preserveFlatMapsInMemory);
     rowOptions.setLazyColumnIo(lazyColumnIo);

@@ -126,7 +126,7 @@ class ColumnReaderTestBase {
       executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(2);
     }
     ColumnSelector cs(rowType, nodes, true);
-    auto options = RowReaderOptions();
+    auto options = RowReaderOptions(nullptr);
     options.setReturnFlatVector(returnFlatVector());
     options.setTimestampPrecision(TimestampPrecision::kNanoseconds);
 

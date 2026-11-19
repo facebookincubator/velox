@@ -116,7 +116,7 @@ TEST(RuntimeStatsTest, exportWithoutColumnCpuMetrics) {
       facebook::velox::ROW(
           {"bigint", "varchar"},
           {facebook::velox::BIGINT(), facebook::velox::VARCHAR()}));
-  const RowReaderOptions options;
+  const RowReaderOptions options(nullptr);
   ASSERT_FALSE(options.collectColumnCpuMetrics());
 
   SplitStats splitStats{kExampleFormat};

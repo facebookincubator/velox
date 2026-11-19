@@ -221,7 +221,7 @@ std::unique_ptr<ReaderBase> createCorruptedFileReader(
   sink.write(std::move(buf));
   auto readFile = std::make_shared<facebook::velox::InMemoryReadFile>(
       std::string(sink.data(), sink.size()));
-  facebook::velox::dwio::common::ReaderOptions readerOpts{pool.get()};
+  facebook::velox::dwio::common::ReaderOptions readerOpts{pool.get(), nullptr};
   readerOpts.setDataIoStats(
       std::make_shared<facebook::velox::io::IoStatistics>());
   readerOpts.setMetadataIoStats(

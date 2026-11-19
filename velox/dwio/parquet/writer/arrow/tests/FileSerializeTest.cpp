@@ -257,8 +257,7 @@ class TestSerialize : public test::PrimitiveTypedTest<TestType> {
     auto file =
         test::ParquetTestFile::open(buffer, "FileSerializeTest", scanSpec);
     auto& reader = file.reader();
-    dwio::common::ReaderOptions readerOptions(file.leafPool(), scanSpec);
-    dwio::common::RowReaderOptions rowReaderOpts(readerOptions);
+    dwio::common::RowReaderOptions rowReaderOpts(scanSpec);
     rowReaderOpts.setRequestedType(rowType);
 
     ASSERT_EQ(numColumns_, reader.fileMetaData().rowGroup(0).numColumns());
@@ -582,8 +581,7 @@ TEST(TestBufferedRowGroupWriter, multiPageDisabledDictionary) {
   auto file = test::ParquetTestFile::open(
       buffer, "MultiPageDisabledDictionary", scanSpec);
   auto& reader = file.reader();
-  dwio::common::ReaderOptions readerOptions(file.leafPool(), scanSpec);
-  dwio::common::RowReaderOptions rowReaderOpts(readerOptions);
+  dwio::common::RowReaderOptions rowReaderOpts(scanSpec);
   rowReaderOpts.setRequestedType(rowType);
 
   ASSERT_EQ(1, reader.fileMetaData().numRowGroups());
@@ -637,8 +635,7 @@ TEST(ParquetRoundtrip, AllNulls) {
 
   auto file = test::ParquetTestFile::open(buffer, "AllNulls", scanSpec);
   auto& reader = file.reader();
-  dwio::common::ReaderOptions readerOptions(file.leafPool(), scanSpec);
-  dwio::common::RowReaderOptions rowReaderOpts(readerOptions);
+  dwio::common::RowReaderOptions rowReaderOpts(scanSpec);
   rowReaderOpts.setRequestedType(rowType);
 
   auto rowGroup = reader.fileMetaData().rowGroup(0);

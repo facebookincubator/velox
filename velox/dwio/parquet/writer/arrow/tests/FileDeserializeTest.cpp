@@ -975,7 +975,7 @@ class TestParquetFileReader : public ::testing::Test {
         rootPool->addLeafChild("MetadataTest");
     auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
     auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
-    dwio::common::ReaderOptions readerOptions(leafPool.get());
+    dwio::common::ReaderOptions readerOptions(leafPool.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats);
     readerOptions.setMetadataIoStats(metadataIoStats);
     auto input = std::make_unique<dwio::common::BufferedInput>(
@@ -1034,7 +1034,7 @@ TEST_F(TestParquetFileReader, incompleteMetadata) {
       rootPool->addLeafChild("MetadataTest");
   auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
   auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
-  dwio::common::ReaderOptions readerOptions(leafPool.get());
+  dwio::common::ReaderOptions readerOptions(leafPool.get(), nullptr);
   readerOptions.setDataIoStats(dataIoStats);
   readerOptions.setMetadataIoStats(metadataIoStats);
   auto input = std::make_unique<dwio::common::BufferedInput>(

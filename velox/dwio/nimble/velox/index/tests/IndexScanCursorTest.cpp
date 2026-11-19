@@ -270,7 +270,7 @@ TEST_P(IndexScanCursorTest, returnsSchemaAndCallerScratchOptions) {
 
 TEST_P(IndexScanCursorTest, releasesSelectiveReaderStripeOwnership) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/1);
-  velox::dwio::common::ReaderOptions options(leafPool_.get());
+  velox::dwio::common::ReaderOptions options(leafPool_.get(), nullptr);
   configureReaderOptions(
       options,
       /*setDataIoStats=*/true,

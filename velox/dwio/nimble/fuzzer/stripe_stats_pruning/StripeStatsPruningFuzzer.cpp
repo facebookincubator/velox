@@ -322,7 +322,7 @@ StripeStatsPruningFuzzerStats StripeStatsPruningFuzzer::run() {
         std::make_unique<dwio::common::BufferedInput>(readFile, *leafPool),
         readerOptions);
 
-    dwio::common::RowReaderOptions rowOptions(readerOptions);
+    dwio::common::RowReaderOptions rowOptions(scanSpec);
     rowOptions.setRequestedType(rowType);
     auto rowReader = reader->createRowReader(rowOptions);
 

@@ -23,7 +23,7 @@ using namespace facebook::velox::dwio::common;
 
 TEST(OptionsTests, defaultRowNumberColumnInfoTest) {
   // appendRowNumberColumn flag should be false by default
-  RowReaderOptions rowReaderOptions;
+  RowReaderOptions rowReaderOptions(nullptr);
   ASSERT_EQ(std::nullopt, rowReaderOptions.rowNumberColumnInfo());
 }
 
@@ -44,7 +44,7 @@ TEST(OptionsTests, commonReaderOptions) {
   facebook::velox::memory::MemoryManager::testingSetInstance({});
   auto pool = facebook::velox::memory::memoryManager()->addRootPool(
       "commonReaderOptionsTest");
-  facebook::velox::dwio::common::ReaderOptions options(pool.get());
+  facebook::velox::dwio::common::ReaderOptions options(pool.get(), nullptr);
 
   options.setColumnMappingMode(ColumnMappingMode::kName);
   options.setFooterSpeculativeIoSize(1234);
@@ -57,7 +57,7 @@ TEST(OptionsTests, commonReaderOptions) {
 }
 
 TEST(OptionsTests, setRowNumberColumnInfoTest) {
-  RowReaderOptions rowReaderOptions;
+  RowReaderOptions rowReaderOptions(nullptr);
   RowNumberColumnInfo rowNumberColumnInfo;
   rowNumberColumnInfo.insertPosition = 0;
   rowNumberColumnInfo.name = "test";
@@ -68,7 +68,7 @@ TEST(OptionsTests, setRowNumberColumnInfoTest) {
 }
 
 TEST(OptionsTests, testRowNumberColumnInfoInCopy) {
-  RowReaderOptions rowReaderOptions;
+  RowReaderOptions rowReaderOptions(nullptr);
   RowReaderOptions rowReaderOptionsCopy{rowReaderOptions};
   ASSERT_EQ(std::nullopt, rowReaderOptionsCopy.rowNumberColumnInfo());
 
@@ -87,7 +87,7 @@ TEST(OptionsTests, cacheData) {
   facebook::velox::memory::MemoryManager::testingSetInstance({});
   auto pool =
       facebook::velox::memory::memoryManager()->addRootPool("cacheDataTest");
-  facebook::velox::dwio::common::ReaderOptions options(pool.get());
+  facebook::velox::dwio::common::ReaderOptions options(pool.get(), nullptr);
   EXPECT_TRUE(options.cacheData());
 
   options.setCacheData(false);

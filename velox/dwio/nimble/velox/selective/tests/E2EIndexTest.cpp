@@ -389,7 +389,7 @@ class E2EIndexTestBase : public ::testing::Test {
     dwio::common::ReaderOptions readerOptions(
         leafPool_.get(), createScanSpec(requestedType, filters));
     auto reader = createReader(readerOptions, sampleRate, randomSeed);
-    RowReaderOptions rowReaderOptions(readerOptions);
+    RowReaderOptions rowReaderOptions(readerOptions.scanSpec());
     rowReaderOptions.setRequestedType(requestedType);
 
     // Set index enabled option.
@@ -476,7 +476,7 @@ class E2EIndexTestBase : public ::testing::Test {
     dwio::common::ReaderOptions readerOptions(
         leafPool_.get(), createScanSpec(rowType, filters));
     auto reader = createReader(readerOptions, sampleRate, randomSeed);
-    RowReaderOptions rowReaderOptions(readerOptions);
+    RowReaderOptions rowReaderOptions(readerOptions.scanSpec());
     rowReaderOptions.setRequestedType(rowType);
 
     auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -976,7 +976,7 @@ TEST_F(E2EIndexTestBase, v2ChunkStatsRefreshAfterDynamicFilter) {
   auto* valueSpec = scanSpec->addField("value", 0);
   dwio::common::ReaderOptions readerOptions(leafPool_.get(), scanSpec);
   auto reader = createReader(readerOptions);
-  RowReaderOptions rowReaderOptions(readerOptions);
+  RowReaderOptions rowReaderOptions(scanSpec);
   rowReaderOptions.setRequestedType(rowType);
 
   auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -1021,7 +1021,7 @@ TEST_F(E2EIndexTestBase, v2ChunkStatsUpdateNextRowNumber) {
         ->setFilter(std::make_unique<BigintRange>(100, 203, false));
     dwio::common::ReaderOptions readerOptions(leafPool_.get(), scanSpec);
     auto reader = createReader(readerOptions);
-    RowReaderOptions rowReaderOptions(readerOptions);
+    RowReaderOptions rowReaderOptions(scanSpec);
     rowReaderOptions.setRequestedType(rowType);
 
     auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -1043,7 +1043,7 @@ TEST_F(E2EIndexTestBase, v2ChunkStatsUpdateNextRowNumber) {
             std::make_unique<BigintMultiRange>(std::move(ranges), false));
     dwio::common::ReaderOptions readerOptions(leafPool_.get(), scanSpec);
     auto reader = createReader(readerOptions);
-    RowReaderOptions rowReaderOptions(readerOptions);
+    RowReaderOptions rowReaderOptions(scanSpec);
     rowReaderOptions.setRequestedType(rowType);
 
     auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -1058,7 +1058,7 @@ TEST_F(E2EIndexTestBase, v2ChunkStatsUpdateNextRowNumber) {
     auto* valueSpec = scanSpec->addField("value", 0);
     dwio::common::ReaderOptions readerOptions(leafPool_.get(), scanSpec);
     auto reader = createReader(readerOptions);
-    RowReaderOptions rowReaderOptions(readerOptions);
+    RowReaderOptions rowReaderOptions(scanSpec);
     rowReaderOptions.setRequestedType(rowType);
 
     auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -3999,7 +3999,7 @@ TEST_P(E2EIndexTest, filterRestorationAcrossMultipleSplits) {
 
   dwio::common::ReaderOptions readerOptions(leafPool_.get(), scanSpec);
   auto reader = createReader(readerOptions);
-  RowReaderOptions rowReaderOptions(readerOptions);
+  RowReaderOptions rowReaderOptions(scanSpec);
   rowReaderOptions.setRequestedType(rowType);
 
   rowReaderOptions.setIndexEnabled(true);
@@ -4044,7 +4044,7 @@ TEST_F(E2EIndexTestBase, createIndexReaderWithoutClusterIndex) {
     dwio::common::ReaderOptions readerOptions(
         leafPool_.get(), createScanSpec(rowType, {}));
     auto reader = createReader(readerOptions);
-    RowReaderOptions rowReaderOpts(readerOptions);
+    RowReaderOptions rowReaderOpts(readerOptions.scanSpec());
     rowReaderOpts.setRequestedType(rowType);
 
     // Files without cluster index return nullptr instead of throwing.
@@ -4080,7 +4080,7 @@ TEST_F(E2EIndexTestBase, createIndexReaderRejectsHiddenKeyReadAccess) {
     dwio::common::ReaderOptions readerOptions(
         leafPool_.get(), createScanSpec(storedType, {}));
     auto reader = createReader(readerOptions);
-    RowReaderOptions rowReaderOpts(readerOptions);
+    RowReaderOptions rowReaderOpts(readerOptions.scanSpec());
     rowReaderOpts.setRequestedType(storedType);
 
     auto indexReader = reader->createIndexReader(rowReaderOpts);
@@ -4139,7 +4139,7 @@ TEST_F(E2EIndexTestBase, createIndexReaderRejectsHiddenKeyReadAccess) {
     dwio::common::ReaderOptions readerOptions(
         leafPool_.get(), createScanSpec(rowType, filters));
     auto reader = createReader(readerOptions);
-    RowReaderOptions rowReaderOpts(readerOptions);
+    RowReaderOptions rowReaderOpts(readerOptions.scanSpec());
     rowReaderOpts.setRequestedType(scenario.requestedType);
 
     NIMBLE_ASSERT_THROW(

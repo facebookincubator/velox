@@ -180,14 +180,14 @@ TEST_P(E2EReaderTest, sharedDictionaryFlatmapReadAsStruct) {
   writer->close();
   writer.reset();
 
-  dwio::common::ReaderOptions readerOpts(pool.get());
+  dwio::common::ReaderOptions readerOpts(pool.get(), nullptr);
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   auto bufferedInput = std::make_unique<BufferedInput>(
       std::make_shared<LocalReadFile>(path), *pool);
   auto reader = DwrfReader::create(std::move(bufferedInput), readerOpts);
 
-  RowReaderOptions rowReaderOptions;
+  RowReaderOptions rowReaderOptions(nullptr);
   rowReaderOptions.setDecodingExecutor(GetParam().decodingExecutor());
   rowReaderOptions.setDecodingParallelismFactor(
       GetParam().decodingParallelismFactor());

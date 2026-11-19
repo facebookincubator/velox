@@ -84,7 +84,7 @@ class ScalarColumnReaderTest : public ::testing::Test,
         std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
         options);
     auto type = asRowType(expected->type());
-    dwio::common::RowReaderOptions rowOptions(options);
+    dwio::common::RowReaderOptions rowOptions(scanSpec);
     rowOptions.setRequestedType(type);
     rowOptions.setStringDecoderZeroCopy(stringDecoderZeroCopy);
     readers.rowReader = readers.reader->createRowReader(rowOptions);
@@ -120,7 +120,7 @@ class ScalarColumnReaderTest : public ::testing::Test,
     readers.reader = factory->createReader(
         std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
         options);
-    dwio::common::RowReaderOptions rowOptions(options);
+    dwio::common::RowReaderOptions rowOptions(scanSpec);
     rowOptions.setRequestedType(readType);
     rowOptions.setStringDecoderZeroCopy(stringDecoderZeroCopy);
     readers.rowReader = readers.reader->createRowReader(rowOptions);

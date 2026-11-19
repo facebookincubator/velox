@@ -1177,6 +1177,9 @@ SelectiveNimbleReader::typeWithId() const {
 
 std::unique_ptr<dwio::common::RowReader> SelectiveNimbleReader::createRowReader(
     const dwio::common::RowReaderOptions& options) const {
+  NIMBLE_CHECK(
+      options.scanSpec() == options_.scanSpec(),
+      "RowReaderOptions must share the reader's ScanSpec");
   validateOmittedKeyColumnStorageAccess(options);
   return std::make_unique<SelectiveNimbleRowReader>(readerBase_, options);
 }
@@ -1184,6 +1187,9 @@ std::unique_ptr<dwio::common::RowReader> SelectiveNimbleReader::createRowReader(
 std::unique_ptr<dwio::common::IndexReader>
 SelectiveNimbleReader::createIndexReader(
     const dwio::common::RowReaderOptions& options) const {
+  NIMBLE_CHECK(
+      options.scanSpec() == options_.scanSpec(),
+      "RowReaderOptions must share the reader's ScanSpec");
   validateOmittedKeyColumnStorageAccess(options);
   // Empty files (no stripes) have no cluster index even when index config
   // is set. Return nullptr so the caller handles it as no-index.

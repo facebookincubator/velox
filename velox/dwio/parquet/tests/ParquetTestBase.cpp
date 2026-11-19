@@ -36,7 +36,7 @@ dwio::common::ReaderOptions makeReaderOptions(
 dwio::common::RowReaderOptions makeRowReaderOptsWithSelector(
     const RowTypePtr& rowType,
     const dwio::common::ReaderOptions& readerOptions) {
-  dwio::common::RowReaderOptions rowReaderOpts(readerOptions);
+  dwio::common::RowReaderOptions rowReaderOpts(readerOptions.scanSpec());
   rowReaderOpts.select(
       std::make_shared<dwio::common::ColumnSelector>(
           rowType, rowType->names(), nullptr, false));
@@ -115,7 +115,7 @@ ParquetReaderBundle ParquetReaderBuilder::build() {
     reader = std::make_unique<ParquetReader>(std::move(input), readerOpts);
   }
 
-  dwio::common::RowReaderOptions rowReaderOpts(readerOpts);
+  dwio::common::RowReaderOptions rowReaderOpts(readerOpts.scanSpec());
   if (!withScanSpecOnly_) {
     rowReaderOpts = makeRowReaderOptsWithSelector(outputType_, readerOpts);
   }
@@ -319,7 +319,7 @@ ParquetTestBase::createRowReaderFromReader(
     const RowTypePtr& rowType,
     const dwio::common::ReaderOptions& readerOptions,
     bool useColumnSelector) {
-  dwio::common::RowReaderOptions rowReaderOpts(readerOptions);
+  dwio::common::RowReaderOptions rowReaderOpts(readerOptions.scanSpec());
   if (useColumnSelector) {
     rowReaderOpts = makeRowReaderOpts(rowType, readerOptions);
   }

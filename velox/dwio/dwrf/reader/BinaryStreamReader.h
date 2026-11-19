@@ -62,7 +62,7 @@ class BinaryStripeStreams {
  private:
   bool preload_;
   std::shared_ptr<StripeReadState> stripeReadState_;
-  dwio::common::RowReaderOptions options_;
+  dwio::common::RowReaderOptions options_{nullptr};
   StripeStreamsImpl stripeStreams_;
   folly::F14FastMap<uint32_t, std::vector<uint32_t>> encodingKeys_;
   folly::F14FastMap<uint32_t, std::vector<DwrfStreamIdentifier>>

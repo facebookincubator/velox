@@ -636,7 +636,7 @@ class E2EFilterTest
     velox::dwio::common::ReaderOptions readerOpts(leafPool_.get(), scanSpec);
     readerOpts.setDataIoStats(dataIoStats);
     readerOpts.setMetadataIoStats(metadataIoStats);
-    velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+    velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
     auto reader = makeReader(readerOpts, std::move(input));
     rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
     rowReaderOptions.setNimblePreserveDictionaryEncoding(
@@ -2526,7 +2526,7 @@ TEST_P(E2EFilterTest, nestedMainlyConstantWithDictionary) {
   velox::dwio::common::ReaderOptions readerOpts(leafPool_.get(), scanSpec);
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -2731,7 +2731,7 @@ TEST_P(E2EFilterTest, fuzzMainlyConstantDictionaryVector) {
   velox::dwio::common::ReaderOptions readerOpts(leafPool_.get(), scanSpec);
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(
@@ -2846,7 +2846,7 @@ TEST_P(E2EFilterTest, fuzzRleDictionaryVector) {
   velox::dwio::common::ReaderOptions readerOpts(leafPool_.get(), scanSpec);
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(
@@ -2924,7 +2924,7 @@ TEST_P(E2EFilterTest, constantStringDictionaryVector) {
   velox::dwio::common::ReaderOptions readerOpts(leafPool_.get(), scanSpec);
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(
@@ -2992,7 +2992,7 @@ TEST_P(E2EFilterTest, constantStringWithNullsDictionaryVector) {
   velox::dwio::common::ReaderOptions readerOpts(leafPool_.get(), scanSpec);
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(
@@ -3121,7 +3121,7 @@ TEST_P(E2EFilterTest, crossChunkEncodingChange) {
       leafPool_.get(), scanSpec);
   crossChunkReaderOpts.setDataIoStats(dataIoStats_);
   crossChunkReaderOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(crossChunkReaderOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(crossChunkReaderOpts, std::move(input));
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -3214,7 +3214,7 @@ class NimbleExtractionTest : public E2EFilterTest {
     ReadResult rr;
     rr.reader = makeReader(readerOpts, std::move(input));
 
-    dwio::common::RowReaderOptions rowReaderOpts(readerOpts);
+    dwio::common::RowReaderOptions rowReaderOpts(spec);
     setUpRowReaderOptions(rowReaderOpts);
     rr.rowReader = rr.reader->createRowReader(rowReaderOpts);
 
@@ -3479,7 +3479,7 @@ TEST_P(E2EFilterTest, multiChunkDictionaryWithDifferentAlphabets) {
   scanSpec->addAllChildFields(*type);
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get(), scanSpec};
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(
@@ -3622,7 +3622,7 @@ TEST_P(E2EFilterTest, reactiveEncodingFallbackOutputRowsBias) {
           std::make_unique<velox::common::BytesValues>(accepted, false));
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get(), scanSpec};
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
   auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -3749,7 +3749,7 @@ TEST_P(E2EFilterTest, multiChunkDictionaryWithFilter) {
           std::make_unique<velox::common::BytesValues>(accepted, false));
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get(), scanSpec};
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
   auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -3857,7 +3857,7 @@ TEST_P(E2EFilterTest, filterOnlyDictionaryStringColumn) {
 
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get(), scanSpec};
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
@@ -3982,7 +3982,7 @@ TEST_P(E2EFilterTest, dictionaryStringInSparseNullableStruct) {
 
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get(), scanSpec};
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
@@ -4163,7 +4163,7 @@ TEST_P(E2EFilterTest, dictionaryStringInSparseNullableStructMultiChild) {
 
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get(), scanSpec};
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
@@ -4293,7 +4293,7 @@ TEST_P(E2EFilterTest, filterOnlyDictAbandonDropsFilter) {
 
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get(), scanSpec};
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
@@ -4396,7 +4396,7 @@ TEST_P(E2EFilterTest, dictionaryChunkExhaustedAllNullTail) {
 
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get(), scanSpec};
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
@@ -4546,7 +4546,7 @@ TEST_P(E2EFilterTest, dictionaryStringAllNullRangeAfterStreamEnd) {
               kTotalRows - 1, kTotalRows - 1, /*nullAllowed=*/false));
   velox::dwio::common::ReaderOptions readerOptions{leafPool_.get(), scanSpec};
   readerOptions.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOptions);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOptions, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
@@ -4690,7 +4690,7 @@ TEST_P(E2EFilterTest, dictionaryChunkGapBetweenChunks) {
   scanSpec->addAllChildFields(*type);
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get(), scanSpec};
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
@@ -4818,7 +4818,7 @@ TEST_P(E2EFilterTest, dictionaryChunkGapWithAbandon) {
   scanSpec->addAllChildFields(*type);
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get(), scanSpec};
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
@@ -4983,7 +4983,7 @@ TEST_P(E2EFilterTest, crossChunkEncodingChangeWithFilter) {
           std::make_unique<velox::common::BytesValues>(accepted, false));
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get(), scanSpec};
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
   auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -5111,7 +5111,7 @@ TEST_P(E2EFilterTest, crossChunkAbandonWithNullsAndFilter) {
 
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get(), scanSpec};
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
@@ -5217,7 +5217,7 @@ TEST_P(E2EFilterTest, crossChunkAbandonProjectedDictFilter) {
 
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get(), scanSpec};
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
@@ -5336,7 +5336,7 @@ TEST_P(E2EFilterTest, crossChunkAbandonProjectedNullableDictFilter) {
 
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get(), scanSpec};
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
@@ -5460,7 +5460,7 @@ TEST_P(E2EFilterTest, crossChunkAbandonSparseDictFilter) {
 
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get(), scanSpec};
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
@@ -5554,7 +5554,7 @@ TEST_P(E2EFilterTest, isNullFilterWithNullableDictionary) {
       ->setFilter(std::make_unique<velox::common::IsNull>());
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get(), scanSpec};
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  velox::dwio::common::RowReaderOptions rowReaderOptions(readerOpts);
+  velox::dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
   auto reader = makeReader(readerOpts, std::move(input));
   rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
   auto rowReader = reader->createRowReader(rowReaderOptions);

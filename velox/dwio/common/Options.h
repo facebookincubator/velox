@@ -258,19 +258,16 @@ class FormatSpecificOptions {
   }
 };
 
-class ReaderOptions;
-
 /// Options for creating a RowReader.
 class RowReaderOptions {
  public:
-  RowReaderOptions() noexcept
+  explicit RowReaderOptions(
+      std::shared_ptr<velox::common::ScanSpec> scanSpec) noexcept
       : dataStart_(0),
         dataLength_(std::numeric_limits<uint64_t>::max()),
         preloadStripe_(false),
-        projectSelectedType_(false) {}
-
-  /// Shares the ScanSpec used by the owning Reader.
-  explicit RowReaderOptions(const ReaderOptions& readerOptions);
+        projectSelectedType_(false),
+        scanSpec_(std::move(scanSpec)) {}
 
   /// For files that have structs as the top-level object, select the fields
   /// to read. The first field is 0, the second 1, and so on. By default,
@@ -385,7 +382,7 @@ class RowReaderOptions {
     requestedType_ = std::move(requestedType);
   }
 
-  /// The ScanSpec inherited from ReaderOptions.
+  /// The ScanSpec shared with the owning Reader.
   const std::shared_ptr<velox::common::ScanSpec>& scanSpec() const {
     return scanSpec_;
   }
@@ -725,7 +722,7 @@ class ReaderOptions : public io::ReaderOptions {
   /// A null ScanSpec selects the non-selective reader path where supported.
   explicit ReaderOptions(
       velox::memory::MemoryPool* pool,
-      std::shared_ptr<velox::common::ScanSpec> scanSpec = nullptr)
+      std::shared_ptr<velox::common::ScanSpec> scanSpec)
       : io::ReaderOptions(pool), scanSpec_(std::move(scanSpec)) {}
 
   /// Sets the format of the file, such as "rc" or "dwrf". The default is

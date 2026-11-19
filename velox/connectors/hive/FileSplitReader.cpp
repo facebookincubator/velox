@@ -107,7 +107,7 @@ FileSplitReader::FileSplitReader(
       connectorQueryCtx_(connectorQueryCtx),
       readerOutputType_(readerOutputType),
       baseReaderOpts_(pool_, scanSpec_),
-      baseRowReaderOpts_(baseReaderOpts_),
+      baseRowReaderOpts_(scanSpec_),
       emptySplit_(false) {
   baseReaderOpts_.setDataIoStats(dataIoStats_);
   baseReaderOpts_.setMetadataIoStats(metadataIoStats_);

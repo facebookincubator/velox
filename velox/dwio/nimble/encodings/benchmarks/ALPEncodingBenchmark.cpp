@@ -456,7 +456,7 @@ class AlpFileBenchmarkFixture {
         std::make_unique<common::BufferedInput>(
             std::make_shared<velox::InMemoryReadFile>(file_), *pool_),
         options);
-    common::RowReaderOptions rowOptions(options);
+    common::RowReaderOptions rowOptions(scanSpec);
     rowOptions.setRequestedType(velox::asRowType(input_->type()));
     auto rowReader = reader->createRowReader(rowOptions);
     velox::VectorPtr output =

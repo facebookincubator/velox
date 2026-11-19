@@ -174,7 +174,7 @@ class IntegerDictionaryFusionBenchmark : public velox::test::VectorTestBase {
                 config.valueType, config.indicesEncoding, config.nullPattern)),
             *pool()),
         readerOptions);
-    dwio::common::RowReaderOptions rowReaderOptions(readerOptions);
+    dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
     rowReaderOptions.setRequestedType(inputType);
     rowReaderOptions.setEagerFirstStripeLoad(true);
     rowReaderOptions.setStringDecoderZeroCopy(true);

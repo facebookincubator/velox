@@ -52,7 +52,7 @@ int main(int argc, char** argv) {
   std::string filePath{argv[1]};
   auto dataIoStats = std::make_shared<io::IoStatistics>();
   auto metadataIoStats = std::make_shared<io::IoStatistics>();
-  dwio::common::ReaderOptions readerOpts(pool.get());
+  dwio::common::ReaderOptions readerOpts(pool.get(), nullptr);
   readerOpts.setDataIoStats(dataIoStats);
   readerOpts.setMetadataIoStats(metadataIoStats);
   // To make DwrfReader reads ORC file, setFileFormat to FileFormat::ORC
@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
                         readerOpts);
 
   VectorPtr batch;
-  RowReaderOptions rowReaderOptions;
+  RowReaderOptions rowReaderOptions(nullptr);
   auto rowReader = reader->createRowReader(rowReaderOptions);
   while (rowReader->next(500, batch)) {
     auto rowVector = batch->as<RowVector>();

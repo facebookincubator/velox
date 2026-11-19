@@ -146,7 +146,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   const std::unordered_map<std::string, std::string> customSplitInfo;
 
   // Dynamic parameters.
-  dwio::common::ReaderOptions readerOptions(pool_.get());
+  dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
   readerOptions.setDataIoStats(dataIoStats_);
   readerOptions.setMetadataIoStats(metadataIoStats_);
   FileFormat fileFormat{FileFormat::DWRF};
@@ -192,7 +192,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   };
 
   auto clearDynamicParameters = [&](FileFormat newFileFormat) {
-    readerOptions = dwio::common::ReaderOptions(pool_.get());
+    readerOptions = dwio::common::ReaderOptions(pool_.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     fileFormat = newFileFormat;
@@ -420,7 +420,7 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
 
   // Test ORC format.
   {
-    dwio::common::ReaderOptions readerOptions(pool_.get());
+    dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     auto tableHandle = createTableHandle();
@@ -440,7 +440,7 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
 
   // Test DWRF format (uses ORC config).
   {
-    dwio::common::ReaderOptions readerOptions(pool_.get());
+    dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     auto tableHandle = createTableHandle();
@@ -461,7 +461,7 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
 #ifdef VELOX_ENABLE_PARQUET
   // Test Parquet format.
   {
-    dwio::common::ReaderOptions readerOptions(pool_.get());
+    dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     auto tableHandle = createTableHandle();
@@ -482,7 +482,7 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
 
   // Test Nimble format.
   {
-    dwio::common::ReaderOptions readerOptions(pool_.get());
+    dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     auto tableHandle = createTableHandle();
@@ -503,7 +503,7 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
 
 TEST_F(HiveConnectorUtilTest, cacheMetadataSessionOverride) {
   // Verify default is off.
-  dwio::common::ReaderOptions defaultOptions(pool_.get());
+  dwio::common::ReaderOptions defaultOptions(pool_.get(), nullptr);
   defaultOptions.setDataIoStats(dataIoStats_);
   defaultOptions.setMetadataIoStats(metadataIoStats_);
   ASSERT_FALSE(defaultOptions.cacheMetadata());
@@ -526,7 +526,7 @@ TEST_F(HiveConnectorUtilTest, cacheMetadataSessionOverride) {
     auto hiveConfig =
         std::make_shared<hive::HiveConfig>(std::make_shared<config::ConfigBase>(
             std::unordered_map<std::string, std::string>()));
-    dwio::common::ReaderOptions readerOptions(pool_.get());
+    dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
 
@@ -552,7 +552,7 @@ TEST_F(HiveConnectorUtilTest, cacheMetadataSessionOverride) {
 }
 
 TEST_F(HiveConnectorUtilTest, cacheIndexSessionOverride) {
-  dwio::common::ReaderOptions defaultOptions(pool_.get());
+  dwio::common::ReaderOptions defaultOptions(pool_.get(), nullptr);
   defaultOptions.setDataIoStats(dataIoStats_);
   defaultOptions.setMetadataIoStats(metadataIoStats_);
   ASSERT_FALSE(defaultOptions.cacheIndex());
@@ -575,7 +575,7 @@ TEST_F(HiveConnectorUtilTest, cacheIndexSessionOverride) {
     auto hiveConfig =
         std::make_shared<hive::HiveConfig>(std::make_shared<config::ConfigBase>(
             std::unordered_map<std::string, std::string>()));
-    dwio::common::ReaderOptions readerOptions(pool_.get());
+    dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
 
@@ -631,7 +631,7 @@ TEST_F(HiveConnectorUtilTest, cacheRetention) {
                                  .planNodeId("planNodeId.HiveConnectorUtilTest")
                                  .build();
 
-    dwio::common::ReaderOptions readerOptions(pool_.get());
+    dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
 
@@ -671,7 +671,7 @@ TEST_F(HiveConnectorUtilTest, cacheRetention) {
 }
 
 TEST_F(HiveConnectorUtilTest, configureSstRowReaderOptions) {
-  dwio::common::RowReaderOptions rowReaderOpts;
+  dwio::common::RowReaderOptions rowReaderOpts(nullptr);
   auto hiveSplit =
       std::make_shared<hive::HiveConnectorSplit>("", "", FileFormat::SST);
   hiveSplit->serdeParameters = {
@@ -700,7 +700,7 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
             std::unordered_map<std::string, std::string>()));
     config::ConfigBase sessionProperties({});
 
-    dwio::common::RowReaderOptions rowReaderOpts;
+    dwio::common::RowReaderOptions rowReaderOpts(nullptr);
     auto hiveSplit =
         std::make_shared<hive::HiveConnectorSplit>("", "", FileFormat::DWRF);
 
@@ -726,7 +726,7 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
         std::make_shared<config::ConfigBase>(std::move(configProps)));
     config::ConfigBase sessionProperties({});
 
-    dwio::common::RowReaderOptions rowReaderOpts;
+    dwio::common::RowReaderOptions rowReaderOpts(nullptr);
     auto hiveSplit =
         std::make_shared<hive::HiveConnectorSplit>("", "", FileFormat::DWRF);
 
@@ -753,7 +753,7 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
         {hive::HiveConfig::kPreserveFlatMapsInMemorySession, "true"}};
     config::ConfigBase sessionProperties(std::move(sessionProps));
 
-    dwio::common::RowReaderOptions rowReaderOpts;
+    dwio::common::RowReaderOptions rowReaderOpts(nullptr);
     auto hiveSplit =
         std::make_shared<hive::HiveConnectorSplit>("", "", FileFormat::DWRF);
 
@@ -781,7 +781,7 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
         {hive::HiveConfig::kPreserveFlatMapsInMemorySession, "true"}};
     config::ConfigBase sessionProperties(std::move(sessionProps));
 
-    dwio::common::RowReaderOptions rowReaderOpts;
+    dwio::common::RowReaderOptions rowReaderOpts(nullptr);
     auto hiveSplit =
         std::make_shared<hive::HiveConnectorSplit>("", "", FileFormat::DWRF);
 

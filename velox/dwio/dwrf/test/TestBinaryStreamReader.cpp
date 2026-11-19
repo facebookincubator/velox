@@ -231,7 +231,7 @@ TEST_F(BinaryStreamReaderTest, basicFlow) {
           std::string(sinkPtr->data(), sinkPtr->size())),
       *pool);
 
-  facebook::velox::dwio::common::ReaderOptions readerOpts(pool.get());
+  facebook::velox::dwio::common::ReaderOptions readerOpts(pool.get(), nullptr);
   readerOpts.setFileFormat(FileFormat::DWRF);
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);

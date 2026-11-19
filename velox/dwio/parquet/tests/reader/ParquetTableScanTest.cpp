@@ -186,7 +186,7 @@ class ParquetTableScanTest : public ParquetTableScanTestBase {
 
   void loadDataWithRowType(const std::string& filePath, RowVectorPtr data) {
     auto pool = facebook::velox::memory::memoryManager()->addLeafPool();
-    dwio::common::ReaderOptions readerOpts{pool.get()};
+    dwio::common::ReaderOptions readerOpts{pool.get(), nullptr};
     readerOpts.setDataIoStats(dataIoStats_);
     readerOpts.setMetadataIoStats(metadataIoStats_);
     auto reader = std::make_unique<ParquetReader>(

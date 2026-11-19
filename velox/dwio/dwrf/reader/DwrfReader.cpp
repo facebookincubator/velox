@@ -1277,6 +1277,9 @@ std::unique_ptr<dwio::common::RowReader> DwrfReader::createRowReader(
 
 std::unique_ptr<DwrfRowReader> DwrfReader::createDwrfRowReader(
     const RowReaderOptions& opts) const {
+  VELOX_CHECK(
+      opts.scanSpec() == readerBase_->readerOptions().scanSpec(),
+      "RowReaderOptions must share the reader's ScanSpec");
   auto rowReader = std::make_unique<DwrfRowReader>(readerBase_, opts);
   if (opts.eagerFirstStripeLoad()) {
     // Load the first stripe on construction so that readers created in

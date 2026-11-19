@@ -39,7 +39,7 @@ dwio::common::RowReaderOptions getReaderOpts(
     const RowTypePtr& rowType,
     const dwio::common::ReaderOptions& readerOptions,
     bool fileColumnNamesReadAsLowerCase = false) {
-  dwio::common::RowReaderOptions rowReaderOpts(readerOptions);
+  dwio::common::RowReaderOptions rowReaderOpts(readerOptions.scanSpec());
   rowReaderOpts.select(
       std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
           rowType, rowType->names(), nullptr, fileColumnNamesReadAsLowerCase));

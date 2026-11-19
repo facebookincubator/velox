@@ -163,7 +163,7 @@ class MockStripeStreams : public StripeStreams {
 
  private:
   std::shared_ptr<memory::MemoryPool> pool_;
-  dwio::common::RowReaderOptions options_;
+  dwio::common::RowReaderOptions options_{nullptr};
   DwrfFormat format_ = DwrfFormat::kDwrf;
 };
 

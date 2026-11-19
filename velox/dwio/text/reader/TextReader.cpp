@@ -357,7 +357,7 @@ uint64_t TextRowReader::seekToRow(uint64_t rowNumber) {
 }
 
 const RowReaderOptions& TextRowReader::getDefaultOpts() {
-  static RowReaderOptions defaultOpts;
+  static RowReaderOptions defaultOpts(nullptr);
   return defaultOpts;
 }
 
@@ -1629,6 +1629,9 @@ const std::shared_ptr<const TypeWithId>& TextReader::typeWithId() const {
 
 std::unique_ptr<RowReader> TextReader::createRowReader(
     const RowReaderOptions& opts) const {
+  VELOX_CHECK(
+      opts.scanSpec() == options_.scanSpec(),
+      "RowReaderOptions must share the reader's ScanSpec");
   return std::make_unique<TextRowReader>(contents_, opts);
 }
 

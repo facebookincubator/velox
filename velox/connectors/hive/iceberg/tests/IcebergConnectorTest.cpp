@@ -97,7 +97,7 @@ TEST_F(IcebergConnectorTest, splitMappingOverridesSession) {
                    .columnMappingMode(dwio::common::ColumnMappingMode::kName)
                    .build();
 
-  dwio::common::ReaderOptions readerOptions(pool_.get());
+  dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
   readerOptions.setDataIoStats(std::make_shared<io::IoStatistics>());
   readerOptions.setMetadataIoStats(std::make_shared<io::IoStatistics>());
   configureReaderOptions(

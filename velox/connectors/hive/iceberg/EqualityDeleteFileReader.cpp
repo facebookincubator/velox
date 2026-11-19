@@ -239,7 +239,7 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
     return;
   }
 
-  dwio::common::RowReaderOptions deleteRowReaderOpts(deleteReaderOpts);
+  dwio::common::RowReaderOptions deleteRowReaderOpts(scanSpec);
   configureRowReaderOptions(
       {},
       nullptr,

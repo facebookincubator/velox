@@ -67,7 +67,7 @@ class TimestampColumnReaderTest : public ::testing::Test,
         std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
         options);
     auto type = asRowType(expected->type());
-    dwio::common::RowReaderOptions rowOptions(options);
+    dwio::common::RowReaderOptions rowOptions(scanSpec);
     rowOptions.setRequestedType(type);
     readers.rowReader = readers.reader->createRowReader(rowOptions);
     return readers;

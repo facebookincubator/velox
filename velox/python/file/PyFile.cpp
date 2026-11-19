@@ -58,7 +58,7 @@ PyType PyFile::getSchema() {
         std::shared_ptr<ReadFile>(std::move(readFile)), *leafPool);
     auto dataIoStats = std::make_shared<io::IoStatistics>();
     auto metadataIoStats = std::make_shared<io::IoStatistics>();
-    dwio::common::ReaderOptions readerOptions(leafPool.get());
+    dwio::common::ReaderOptions readerOptions(leafPool.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats);
     readerOptions.setMetadataIoStats(metadataIoStats);
     auto reader = dwio::common::getReaderFactory(fileFormat_)

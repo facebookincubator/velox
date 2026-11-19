@@ -70,7 +70,7 @@ void TpchQueryBuilder::readFileSchema(
     const std::string& tableName,
     const std::string& filePath,
     const std::vector<std::string>& columns) {
-  dwio::common::ReaderOptions readerOptions(pool_.get());
+  dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
   readerOptions.setDataIoStats(dataIoStats_);
   readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setFileFormat(format_);

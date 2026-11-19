@@ -1944,6 +1944,9 @@ ParquetReader::typeWithId() const {
 
 std::unique_ptr<dwio::common::RowReader> ParquetReader::createRowReader(
     const dwio::common::RowReaderOptions& options) const {
+  VELOX_CHECK(
+      options.scanSpec() == readerBase_->options().scanSpec(),
+      "RowReaderOptions must share the reader's ScanSpec");
   return std::make_unique<ParquetRowReader>(readerBase_, options);
 }
 

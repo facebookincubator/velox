@@ -1941,7 +1941,7 @@ TEST_F(ParquetReaderTest, legacyRepDefSource) {
   EXPECT_EQ(source.column, 1);
   EXPECT_EQ(source.kind, TypeKind::INTEGER);
 
-  RowReaderOptions options(readerOptions);
+  RowReaderOptions options(scanSpec);
   auto rowReader = reader->createRowReader(options);
   auto result = BaseVector::create(ROW({}, {}), 0, leafPool_.get());
   EXPECT_EQ(rowReader->next(20'000, result), 13'520);
@@ -2793,7 +2793,7 @@ TEST_F(ParquetReaderTest, thriftMemoryReleasedForSkippedRowGroups) {
         reader->fileMetaData().rowGroup(1).fileOffset();
     ASSERT_GT(secondRowGroupOffset, 0);
 
-    RowReaderOptions rowReaderOpts(readerOptions);
+    RowReaderOptions rowReaderOpts(readerOptions.scanSpec());
     rowReaderOpts.range(0, secondRowGroupOffset);
     auto rowReader = reader->createRowReader(rowReaderOpts);
 

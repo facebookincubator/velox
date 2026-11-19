@@ -97,7 +97,7 @@ class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
   }
 
   std::unique_ptr<dwio::common::Reader> makeReader(const std::string& path) {
-    dwio::common::ReaderOptions readerOpts(pool_.get());
+    dwio::common::ReaderOptions readerOpts(pool_.get(), nullptr);
     readerOpts.setDataIoStats(dataIoStats_);
     readerOpts.setMetadataIoStats(metadataIoStats_);
     readerOpts.setFileFormat(dwio::common::FileFormat::DWRF);
@@ -123,7 +123,7 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
   {
     auto holder = makeConnectorQueryCtx();
     auto split = makeSplit(dwio::common::FileFormat::DWRF);
-    dwio::common::ReaderOptions readerOptions(pool_.get());
+    dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     hive::configureReaderOptions(
@@ -145,7 +145,7 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
          {"orc_footer_speculative_io_size", std::to_string(128UL << 10)},
          {hive::FileConfig::kMaxCoalescedDistanceSession, "3MB"}});
     auto split = makeSplit(dwio::common::FileFormat::ORC);
-    dwio::common::ReaderOptions readerOptions(pool_.get());
+    dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     hive::configureReaderOptions(
@@ -173,7 +173,7 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
         "/tmp/testfile",
         true,
         dwio::common::ColumnMappingMode::kPosition);
-    dwio::common::ReaderOptions readerOptions(pool_.get());
+    dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     hive::configureReaderOptions(
@@ -197,7 +197,7 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
         "/tmp/testfile",
         true,
         dwio::common::ColumnMappingMode::kParquetFieldId);
-    dwio::common::ReaderOptions readerOptions(pool_.get());
+    dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     VELOX_ASSERT_THROW(
@@ -215,7 +215,7 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
   {
     auto holder = makeConnectorQueryCtx();
     auto split = makeSplit(dwio::common::FileFormat::DWRF);
-    dwio::common::ReaderOptions readerOptions(pool_.get());
+    dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setFileFormat(dwio::common::FileFormat::PARQUET);
@@ -245,7 +245,7 @@ TEST_F(FileConnectorUtilTest, cacheMetadataRequiresCacheableSplit) {
          {hive::FileConfig::kCacheIndexSession, "true"}});
     auto split = makeSplit(
         dwio::common::FileFormat::NIMBLE, "/tmp/test", /*cacheable=*/true);
-    dwio::common::ReaderOptions readerOptions(pool_.get());
+    dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     hive::configureReaderOptions(
@@ -266,7 +266,7 @@ TEST_F(FileConnectorUtilTest, cacheMetadataRequiresCacheableSplit) {
          {hive::FileConfig::kCacheIndexSession, "true"}});
     auto split = makeSplit(
         dwio::common::FileFormat::NIMBLE, "/tmp/test", /*cacheable=*/false);
-    dwio::common::ReaderOptions readerOptions(pool_.get());
+    dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     hive::configureReaderOptions(
@@ -285,7 +285,7 @@ TEST_F(FileConnectorUtilTest, cacheMetadataRequiresCacheableSplit) {
     auto holder = makeConnectorQueryCtx();
     auto split = makeSplit(
         dwio::common::FileFormat::NIMBLE, "/tmp/test", /*cacheable=*/true);
-    dwio::common::ReaderOptions readerOptions(pool_.get());
+    dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     hive::configureReaderOptions(
@@ -307,7 +307,7 @@ TEST_F(FileConnectorUtilTest, cacheMetadataRequiresCacheableSplit) {
          {hive::FileConfig::kPinIndexSession, "true"}});
     auto split = makeSplit(
         dwio::common::FileFormat::NIMBLE, "/tmp/test", /*cacheable=*/false);
-    dwio::common::ReaderOptions readerOptions(pool_.get());
+    dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     hive::configureReaderOptions(
@@ -326,7 +326,7 @@ TEST_F(FileConnectorUtilTest, configureReaderOptionsWithoutReaderFactory) {
   auto fileConfig = makeFileConfig();
   auto holder = makeConnectorQueryCtx();
   auto split = makeSplit(dwio::common::FileFormat::JSON);
-  dwio::common::ReaderOptions readerOptions(pool_.get());
+  dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
   readerOptions.setDataIoStats(dataIoStats_);
   readerOptions.setMetadataIoStats(metadataIoStats_);
 
@@ -348,7 +348,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptions) {
   auto split = makeSplit(dwio::common::FileFormat::DWRF);
   auto rowType = ROW({"c0"}, {BIGINT()});
 
-  dwio::common::RowReaderOptions rowReaderOptions;
+  dwio::common::RowReaderOptions rowReaderOptions(nullptr);
   hive::configureRowReaderOptions(
       /*tableParameters=*/{},
       /*metadataFilter=*/nullptr,
@@ -374,7 +374,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
         {{hive::FileConfig::kNimbleStringDecoderZeroCopySession, "true"},
          {hive::FileConfig::kNimblePreserveDictionaryEncodingSession, "true"},
          {hive::FileConfig::kNimbleDictionaryAwareReadsSession, "true"}});
-    dwio::common::RowReaderOptions rowReaderOptions;
+    dwio::common::RowReaderOptions rowReaderOptions(nullptr);
     hive::configureRowReaderOptions(
         /*tableParameters=*/{},
         /*metadataFilter=*/nullptr,
@@ -393,7 +393,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
   // Keys absent => flags fall back to their default (false).
   {
     auto holder = makeConnectorQueryCtx();
-    dwio::common::RowReaderOptions rowReaderOptions;
+    dwio::common::RowReaderOptions rowReaderOptions(nullptr);
     hive::configureRowReaderOptions(
         /*tableParameters=*/{},
         /*metadataFilter=*/nullptr,
@@ -420,7 +420,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSkipRows) {
       {dwio::common::TableParameter::kSkipHeaderLineCount, "5"},
   };
 
-  dwio::common::RowReaderOptions rowReaderOptions;
+  dwio::common::RowReaderOptions rowReaderOptions(nullptr);
   hive::configureRowReaderOptions(
       tableParameters,
       /*metadataFilter=*/nullptr,
@@ -445,7 +445,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSplitRange) {
       /*length=*/5000);
   auto rowType = ROW({"c0"}, {BIGINT()});
 
-  dwio::common::RowReaderOptions rowReaderOptions;
+  dwio::common::RowReaderOptions rowReaderOptions(nullptr);
   hive::configureRowReaderOptions(
       /*tableParameters=*/{},
       /*metadataFilter=*/nullptr,

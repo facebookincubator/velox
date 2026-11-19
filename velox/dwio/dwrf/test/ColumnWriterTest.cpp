@@ -199,7 +199,7 @@ class TestStripeStreams : public StripeStreamsBase {
   WriterContext& context_;
   const proto::StripeFooter& footer_;
   ColumnSelector selector_;
-  RowReaderOptions options_;
+  RowReaderOptions options_{nullptr};
   mutable std::vector<std::unique_ptr<DataBuffer<char>>> buffers_;
   StrictMock<MockStrideIndexProvider> mockStrideIndexProvider_;
 };
@@ -2021,7 +2021,7 @@ std::unique_ptr<DwrfReader> getDwrfReader(
   writer.close();
 
   std::string data(sinkPtr->data(), sinkPtr->size());
-  dwio::common::ReaderOptions readerOpts{&leafPool};
+  dwio::common::ReaderOptions readerOpts{&leafPool, nullptr};
   readerOpts.setDataIoStats(std::move(dataIoStats));
   readerOpts.setMetadataIoStats(std::move(metadataIoStats));
   return std::make_unique<DwrfReader>(
