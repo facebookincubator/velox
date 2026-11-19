@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/expression/CommonFunctions.h"
+#include "velox/experimental/cudf/expression/ConstantLookupFunctions.h"
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"

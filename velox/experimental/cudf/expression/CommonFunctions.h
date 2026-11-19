@@ -49,12 +49,4 @@ void registerArrayAccessFunction(
     ArrayAccessPolicy policy,
     std::vector<exec::FunctionSignaturePtr> signatures);
 
-/// Registers 'name' as element_at over a non-empty constant map with a
-/// non-constant key. A missing or NULL key gives NULL.
-void registerConstantMapElementAtFunction(const std::string& name);
-
-/// Registers 'name' as contains over a non-empty constant array without NULL
-/// elements and a non-constant probe.
-void registerConstantArrayContainsFunction(const std::string& name);
-
 } // namespace facebook::velox::cudf_velox
