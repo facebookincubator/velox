@@ -182,8 +182,8 @@ class SpatialJoinBenchmark : public facebook::velox::test::VectorTestBase {
   RowVectorPtr createProjectionVector(
       const std::string& prefix,
       RowVectorPtr input) {
-    const auto plan = PlanBuilder(std::make_shared<core::PlanNodeIdGenerator>())
-                          .values({input})
+    const auto plan = PlanBuilder()
+                          .values(input)
                           .project(
                               {fmt::format("{}_id", prefix),
                                fmt::format(
@@ -244,12 +244,11 @@ class SpatialJoinBenchmark : public facebook::velox::test::VectorTestBase {
       std::vector<RowVectorPtr>&& probeVectors,
       std::vector<RowVectorPtr>&& buildVectors,
       const SpatialJoinBenchmarkParams& params) {
-    const auto planNodeIdGenerator =
-        std::make_shared<core::PlanNodeIdGenerator>();
-    return PlanBuilder(planNodeIdGenerator)
+    PlanBuilder builder;
+    return builder.newPlan()
         .values(probeVectors)
         .spatialJoin(
-            PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
+            builder.newPlan().values(buildVectors).planNode(),
             fmt::format("{}(probe_geom, build_geom)", params.predicate),
             "probe_geom",
             "build_geom",

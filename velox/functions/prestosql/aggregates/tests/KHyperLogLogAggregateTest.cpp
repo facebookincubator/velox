@@ -169,7 +169,8 @@ TEST_F(KHyperLogLogAggregateTest, globalAggIntegersWithNulls) {
       {{0, 3}});
 
   // All nulls
-  auto expected = makeRowVector({makeNullConstant(TypeKind::VARBINARY, 1)});
+  auto expected = makeRowVector(
+      {BaseVector::createNullConstant(KHYPERLOGLOG(), 1, pool())});
   AggregationTester(*this)
       .inputs(makeRowVector({
           makeNullableFlatVector<int64_t>(
@@ -346,7 +347,7 @@ TEST_F(KHyperLogLogAggregateTest, unknownType) {
        makeAllNullFlatVector<UnknownValue>(10)});
 
   auto expected = makeRowVector(
-      {makeNullableFlatVector<StringView>({std::nullopt}, VARBINARY())});
+      {makeNullableFlatVector<StringView>({std::nullopt}, KHYPERLOGLOG())});
 
   AggregationTester(*this)
       .inputs(data)

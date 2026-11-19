@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/hive/HiveBucketPruning.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveSplitReader.h"
@@ -41,7 +42,58 @@ HiveDataSource::HiveDataSource(
           ioExecutor,
           connectorQueryCtx,
           hiveConfig),
-      hiveConfig_(hiveConfig) {}
+      hiveConfig_(hiveConfig) {
+  updateAllowedBuckets();
+}
+
+void HiveDataSource::updateAllowedBuckets() {
+  allowedBuckets_.reset();
+  const auto& bucketProperty =
+      checkedPointerCast<const HiveTableHandle>(tableHandle_)->bucketProperty();
+  if (bucketProperty == nullptr) {
+    return;
+  }
+
+  std::vector<const common::Filter*> filters;
+  filters.reserve(bucketProperty->bucketedBy().size());
+  for (const auto& name : bucketProperty->bucketedBy()) {
+    const auto* spec = fileScanState_->scanSpec->childByName(name);
+    filters.push_back(spec == nullptr ? nullptr : spec->filter());
+  }
+  allowedBuckets_ = HiveBucketPruning::allowedBuckets(*bucketProperty, filters);
+}
+
+void HiveDataSource::addDynamicFilter(
+    column_index_t outputChannel,
+    const std::shared_ptr<common::Filter>& filter) {
+  connector::FileDataSource::addDynamicFilter(outputChannel, filter);
+
+  const auto& bucketProperty =
+      checkedPointerCast<const HiveTableHandle>(tableHandle_)->bucketProperty();
+  if (bucketProperty == nullptr) {
+    return;
+  }
+  const auto& name =
+      fileScanState_->scanSpec->getChildByChannel(outputChannel).fieldName();
+  const auto& bucketedBy = bucketProperty->bucketedBy();
+  if (std::find(bucketedBy.begin(), bucketedBy.end(), name) !=
+      bucketedBy.end()) {
+    updateAllowedBuckets();
+  }
+}
+
+bool HiveDataSource::skipSplit() {
+  if (!allowedBuckets_.has_value()) {
+    return false;
+  }
+  const auto& bucket =
+      checkedPointerCast<const HiveConnectorSplit>(split_)->tableBucketNumber;
+  if (!bucket.has_value()) {
+    return false;
+  }
+  VELOX_CHECK_LT(*bucket, allowedBuckets_->size());
+  return !(*allowedBuckets_)[*bucket];
+}
 
 std::vector<column_index_t> HiveDataSource::setupBucketConversion() {
   auto hiveSplit = checkedPointerCast<const HiveConnectorSplit>(split_);
@@ -178,6 +230,7 @@ HiveDataSource::getRuntimeStats() {
 void HiveDataSource::setFromDataSource(
     std::unique_ptr<DataSource> sourceUnique) {
   auto* source = checkedPointerCast<HiveDataSource>(sourceUnique.get());
+  allowedBuckets_ = std::move(source->allowedBuckets_);
   numBucketConversion_ += source->numBucketConversion_;
   for (const auto& [format, count] : source->numSplitsByFileFormat_) {
     numSplitsByFileFormat_[format] += count;

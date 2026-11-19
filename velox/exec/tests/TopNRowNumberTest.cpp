@@ -33,7 +33,7 @@ namespace {
 class TopNRowNumberTest : public OperatorTestBase {
  protected:
   explicit TopNRowNumberTest(core::TopNRowNumberNode::RankFunction function)
-      : functionName_(core::TopNRowNumberNode::rankFunctionName(function)) {}
+      : functionName_(core::TopNRowNumberNode::toName(function)) {}
 
   void SetUp() override {
     exec::test::OperatorTestBase::SetUp();
@@ -338,8 +338,8 @@ TEST_P(MultiTopNRowNumberTest, largeOutput) {
       auto task =
           AssertQueryBuilder(plan, duckDbQueryRunner_)
               .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
-              .config(core::QueryConfig::kSpillEnabled, "true")
-              .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+              .config(core::QueryConfig::kSpillEnabled, true)
+              .config(core::QueryConfig::kTopNRowNumberSpillEnabled, true)
               .spillDirectory(spillDirectory->getPath())
               .assertResults(sql);
 
@@ -425,8 +425,8 @@ TEST_P(MultiTopNRowNumberTest, manyPartitions) {
               .config(
                   core::QueryConfig::kPreferredOutputBatchBytes,
                   outputBatchBytes)
-              .config(core::QueryConfig::kSpillEnabled, "true")
-              .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+              .config(core::QueryConfig::kSpillEnabled, true)
+              .config(core::QueryConfig::kTopNRowNumberSpillEnabled, true)
               .spillDirectory(spillDirectory->getPath())
               .assertResults(sql);
 
@@ -497,8 +497,8 @@ TEST_P(MultiTopNRowNumberTest, fewPartitions) {
               .config(
                   core::QueryConfig::kPreferredOutputBatchBytes,
                   outputBatchBytes)
-              .config(core::QueryConfig::kSpillEnabled, "true")
-              .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+              .config(core::QueryConfig::kSpillEnabled, true)
+              .config(core::QueryConfig::kTopNRowNumberSpillEnabled, true)
               .spillDirectory(spillDirectory->getPath())
               .assertResults(sql);
 
@@ -651,14 +651,13 @@ TEST_P(MultiTopNRowNumberTest, planNodeValidation) {
       plan({"a", "b"}, {"c"}, 0), "Limit must be greater than zero");
 
   const auto source = PlanBuilder().values({data}).planNode();
-  const auto& rowType = source->outputType();
   VELOX_ASSERT_THROW(
-      std::make_shared<core::TopNRowNumberNode>(
+      core::TopNRowNumberNode(
           "1",
-          core::TopNRowNumberNode::rankFunctionFromName(functionName_),
-          std::vector<core::FieldAccessTypedExprPtr>{toFieldExpr("a", rowType)},
-          std::vector<core::FieldAccessTypedExprPtr>{toFieldExpr("b", rowType)},
-          std::vector<core::SortOrder>{core::kAscNullsLast},
+          core::TopNRowNumberNode::toRankFunction(functionName_),
+          {std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a")},
+          {std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "b")},
+          {core::kAscNullsLast},
           "row_number",
           10,
           /*partial=*/true,
@@ -693,8 +692,8 @@ TEST_P(MultiTopNRowNumberTest, maxSpillBytes) {
       AssertQueryBuilder(plan)
           .spillDirectory(spillDirectory->getPath())
           .queryCtx(queryCtx)
-          .config(core::QueryConfig::kSpillEnabled, "true")
-          .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+          .config(core::QueryConfig::kSpillEnabled, true)
+          .config(core::QueryConfig::kTopNRowNumberSpillEnabled, true)
           .config(core::QueryConfig::kMaxSpillBytes, testData.maxSpilledBytes)
           .copyResults(pool_.get());
       ASSERT_FALSE(testData.expectedExceedLimit);
@@ -766,8 +765,8 @@ DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, memoryUsageCheckAfterReclaim) {
       " WHERE rn <= 1000",
       functionName_);
   auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
-                  .config(core::QueryConfig::kSpillEnabled, "true")
-                  .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+                  .config(core::QueryConfig::kSpillEnabled, true)
+                  .config(core::QueryConfig::kTopNRowNumberSpillEnabled, true)
                   .spillDirectory(spillDirectory->getPath())
                   .assertResults(sql);
 
@@ -874,8 +873,8 @@ DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, reclaimAfterClose) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan)
-          .config(core::QueryConfig::kSpillEnabled, "true")
-          .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+          .config(core::QueryConfig::kSpillEnabled, true)
+          .config(core::QueryConfig::kTopNRowNumberSpillEnabled, true)
           .spillDirectory(spillDirectory->getPath())
           .copyResults(pool_.get()),
       errorMessage);
@@ -992,8 +991,8 @@ DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, inMemoryVsSpilled) {
       AssertQueryBuilder(plan)
           .maxDrivers(1)
           .spillDirectory(spillDirectory->getPath())
-          .config(core::QueryConfig::kSpillEnabled, "true")
-          .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+          .config(core::QueryConfig::kSpillEnabled, true)
+          .config(core::QueryConfig::kTopNRowNumberSpillEnabled, true)
           .copyResults(pool_.get(), task);
 
   auto planStats = exec::toPlanStats(task->taskStats());

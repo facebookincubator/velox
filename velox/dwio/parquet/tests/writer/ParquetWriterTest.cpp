@@ -1418,21 +1418,20 @@ DEBUG_ONLY_TEST_F(ParquetWriterTest, timestampUnitAndTimeZone) {
       10'000, [](auto row) { return Timestamp(row, row); })});
   const auto outputDirectory = TempDirectoryPath::create();
 
-  auto parquetOptions = std::make_shared<ParquetWriterOptions>();
-  parquetOptions->parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds;
-  auto writerOptions = std::make_shared<dwio::common::WriterOptions>();
-  writerOptions->formatSpecificOptions = parquetOptions;
-
-  const auto plan = PlanBuilder()
-                        .values({data})
-                        .tableWrite(
-                            outputDirectory->getPath(),
-                            dwio::common::FileFormat::PARQUET,
-                            {},
-                            writerOptions)
-                        .planNode();
+  const auto plan =
+      PlanBuilder()
+          .values({data})
+          .tableWrite(
+              outputDirectory->getPath(), dwio::common::FileFormat::PARQUET)
+          .planNode();
   AssertQueryBuilder(plan)
       .config(core::QueryConfig::kSessionTimezone, "America/New_York")
+      .connectorSessionProperty(
+          kHiveConnectorId,
+          dwio::common::formatConfigPrefix(
+              dwio::common::FileFormat::PARQUET, "_") +
+              ParquetConfig::kWriterTimestampUnitSession,
+          "6")
       .copyResults(pool_.get());
 }
 #endif

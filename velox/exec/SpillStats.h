@@ -53,7 +53,8 @@ struct SpillStats {
   /// The time spent on copy out serialized rows for disk write. If compression
   /// is enabled, this includes the compression time.
   std::atomic_uint64_t spillFlushTimeNanos{0};
-  /// The time spent on writing spilled rows to disk.
+  /// The time spent on writing spilled rows to disk, including closing the
+  /// files.
   std::atomic_uint64_t spillWriteTimeNanos{0};
   /// The number of times that an hash build operator exceeds the max spill
   /// limit.
@@ -147,6 +148,10 @@ void updateGlobalSpillWriteStats(
     uint64_t spilledBytes,
     uint64_t flushTimeNs,
     uint64_t writeTimeNs);
+
+/// Adds the time spent on closing spill files to the disk write time. Counts no
+/// disk write and leaves the per-write latency histogram unchanged.
+void updateGlobalSpillFileCloseTime(uint64_t timeNs);
 
 /// Updates the stats for disk read including the number of disk reads, the
 /// amount of data read in bytes, and the time it takes to read from the disk.

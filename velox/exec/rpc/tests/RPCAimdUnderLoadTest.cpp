@@ -763,7 +763,8 @@ TEST_F(RPCAimdUnderLoadTest, windowAndRateLimiterBackOffThenRecover) {
   for (const auto& prompt : storage) {
     prompts.emplace_back(prompt);
   }
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
   auto plan =
       makeRPCNode(PlanBuilder().values({input}).planNode(), "burst_rpc");
@@ -842,7 +843,8 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesBoundAttemptsToCapacity) {
     storage.push_back("row_" + std::to_string(i));
   }
   std::vector<StringView> prompts(storage.begin(), storage.end());
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
   struct Run {
     int64_t numAttempts{0};
@@ -908,7 +910,8 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesStopAtBudget) {
     storage.push_back("row_" + std::to_string(i));
   }
   std::vector<StringView> prompts(storage.begin(), storage.end());
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), "capacity_exhausted_rpc");
 
@@ -934,8 +937,8 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesStopAtBudget) {
 // mayReturnCapacityRetries() gets today's behavior: each hinted row fails on
 // its first rejection.
 TEST_F(RPCAimdUnderLoadTest, undeclaredCapacityRetriesAreIgnored) {
-  auto input = makeRowVector(
-      {"prompt"}, {makeFlatVector<StringView>({"a", "b", "c", "d"})});
+  auto input = makeNamedRowVector(
+      "prompt", makeFlatVector<StringView>({"a", "b", "c", "d"}));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), "capacity_undeclared_hint_rpc");
   std::shared_ptr<Task> task;
@@ -962,7 +965,8 @@ TEST_F(RPCAimdUnderLoadTest, batchIgnoresCapacityRetries) {
     storage.push_back("row_" + std::to_string(i));
   }
   std::vector<StringView> prompts(storage.begin(), storage.end());
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(), 16, "burst_batch_hint_rpc");
   std::shared_ptr<Task> task;
@@ -991,7 +995,8 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesWithSeveralDrivers) {
     storage.push_back("row_" + std::to_string(i));
   }
   std::vector<StringView> prompts(storage.begin(), storage.end());
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}, /*parallelizable=*/true).planNode(),
       "capacity_step_hint_rpc");
@@ -1033,7 +1038,7 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesKeepRowIdentityAcrossBatches) {
       prompts.emplace_back(storage.back());
     }
     batches.push_back(
-        makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)}));
+        makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts)));
   }
   auto plan = makeRPCNode(
       PlanBuilder().values(batches).planNode(), "capacity_step_hint_rpc");
@@ -1077,7 +1082,7 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesBoundRetainedInput) {
       prompts.emplace_back(storage.back());
     }
     batches.push_back(
-        makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)}));
+        makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts)));
   }
   auto plan = makeRPCNode(
       PlanBuilder().values(batches).planNode(), "capacity_tight_hint_rpc");
@@ -1105,7 +1110,8 @@ TEST_F(RPCAimdUnderLoadTest, perRowBackendErrorsDoNotBackOff) {
   for (const auto& prompt : storage) {
     prompts.emplace_back(prompt);
   }
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
   auto plan = makeRPCNode(
       PlanBuilder().values({input}).planNode(), "backend_error_rpc");
 
@@ -1163,7 +1169,8 @@ TEST_F(RPCAimdUnderLoadTest, batchRateLimiterBacksOffThenRecovers) {
   for (const auto& prompt : storage) {
     prompts.emplace_back(prompt);
   }
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
 
   // Chunks small enough that the burst window spans several flushes, so the
   // cap shrinks more than once, and small enough that many clean batches
@@ -1227,7 +1234,8 @@ TEST_F(RPCAimdUnderLoadTest, batchBackendErrorsDoNotBackOff) {
   for (const auto& prompt : storage) {
     prompts.emplace_back(prompt);
   }
-  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       /*dispatchBatchSize=*/16,

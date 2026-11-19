@@ -339,19 +339,12 @@ TEST_F(WindowTest, spillUnsupported) {
           .spillDirectory(spillDirectory->getPath())
           .assertResults("SELECT *, row_number() over (order by s) FROM tmp");
 
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  const auto& stats = taskStats.at(windowId);
-
+  const auto stats = PlanNodeStats::extract(task->taskStats(), windowId);
   ASSERT_EQ(stats.spilledBytes, 0);
   ASSERT_EQ(stats.spilledRows, 0);
   ASSERT_EQ(stats.spilledFiles, 0);
   ASSERT_EQ(stats.spilledPartitions, 0);
-  auto opStats = toOperatorStats(task->taskStats());
-  ASSERT_GT(
-      opStats.at("Window")
-          .runtimeStats[std::string(Operator::kSpillNotSupported)]
-          .sum,
-      1);
+  ASSERT_GT(stats.customStat(Operator::kSpillNotSupported).sum, 1);
 }
 
 TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
@@ -372,8 +365,6 @@ TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
   // Abstract the common values vector split.
   auto valuesSplit = split(data, 10);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  CursorParameters params;
   auto queryCtx = core::QueryCtx::create(executor_.get());
   queryCtx->testingOverrideMemoryPool(
       memory::memoryManager()->addRootPool(
@@ -381,30 +372,28 @@ TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
           8'388'608 /* 8MB */,
           exec::MemoryReclaimer::create()));
 
-  params.queryCtx = queryCtx;
-
   auto testWindowBuild = [&](bool useStreamingWindow) {
     if (useStreamingWindow) {
-      params.planNode =
-          PlanBuilder(planNodeIdGenerator)
-              .values(valuesSplit)
-              .streamingWindow(
-                  {"row_number() over (partition by p order by s)"})
-              .project({"d"})
-              .singleAggregation({}, {"sum(d)"})
-              .planNode();
+      auto plan = PlanBuilder()
+                      .values(valuesSplit)
+                      .streamingWindow(
+                          {"row_number() over (partition by p order by s)"})
+                      .project({"d"})
+                      .singleAggregation({}, {"sum(d)"})
+                      .planNode();
 
-      readCursor(params);
+      AssertQueryBuilder(plan).queryCtx(queryCtx).countResults();
     } else {
-      params.planNode =
-          PlanBuilder(planNodeIdGenerator)
-              .values(valuesSplit)
-              .window({"row_number() over (partition by p order by s)"})
-              .project({"d"})
-              .singleAggregation({}, {"sum(d)"})
-              .planNode();
+      auto plan = PlanBuilder()
+                      .values(valuesSplit)
+                      .window({"row_number() over (partition by p order by s)"})
+                      .project({"d"})
+                      .singleAggregation({}, {"sum(d)"})
+                      .planNode();
 
-      VELOX_ASSERT_THROW(readCursor(params), "Exceeded memory pool capacity");
+      VELOX_ASSERT_THROW(
+          AssertQueryBuilder(plan).queryCtx(queryCtx).countResults(),
+          "Exceeded memory pool capacity");
     }
   };
   // RowStreamingWindow will not OOM.
@@ -452,7 +441,8 @@ DEBUG_ONLY_TEST_F(WindowTest, singlePartitionRowCountLimit) {
   // a count at the limit so the next row append would overflow, and verify the
   // operator fails with a catchable user error rather than overflowing and
   // aborting the process.
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  auto data =
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3, 4, 5}));
 
   auto plan = PlanBuilder()
                   .values({data})
@@ -474,7 +464,8 @@ DEBUG_ONLY_TEST_F(WindowTest, subPartitionedRowCountLimit) {
   // The same limit applies to SubPartitionedSortWindowBuild, whose own counter
   // aggregates all sub-partitions. Force sub-partitioning and inject a count at
   // the limit; the next batch must fail cleanly rather than overflow.
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  auto data =
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3, 4, 5}));
 
   auto plan = PlanBuilder()
                   .values({data})
@@ -500,7 +491,8 @@ DEBUG_ONLY_TEST_F(WindowTest, operatorRowCountLimit) {
   // counter (e.g. RowsStreamingWindowBuild::pendingRowCount_). The guard runs
   // before delegating to the build, so inject a count at the limit and verify
   // the batch is rejected before it reaches the streaming build.
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  auto data =
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3, 4, 5}));
 
   // orderBy() + streamingWindow() selects RowsStreamingWindowBuild, the path
   // where the operator counter is the only guard.
@@ -534,9 +526,8 @@ DEBUG_ONLY_TEST_F(WindowTest, operatorRowCountLimit) {
 }
 
 DEBUG_ONLY_TEST_F(WindowTest, rankRowStreamingWindowBuild) {
-  auto data = makeRowVector(
-      {"c1"},
-      {makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1, 1, 2, 2})});
+  auto data = makeNamedRowVector(
+      "c1", makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1, 1, 2, 2}));
 
   createDuckDbTable({data});
 
@@ -962,12 +953,12 @@ TEST_F(WindowTest, rowsStreamingWindowBuildWideRowsSinglePartition) {
   auto windowNode =
       makeStreamingWindowNode({data}, {rowsFrameFunction("row_number()")});
 
-  auto result =
+  ASSERT_EQ(
       AssertQueryBuilder(windowNode)
           .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
           .config(core::QueryConfig::kPreferredOutputBatchRows, 10'000)
-          .copyResults(pool());
-  ASSERT_EQ(result->size(), size);
+          .countResults(),
+      size);
 }
 
 TEST_F(WindowTest, rowsStreamingWindowBuildLoadsOnlyBoundaryColumns) {
@@ -1598,9 +1589,8 @@ DEBUG_ONLY_TEST_F(WindowTest, aggregationWithNonDefaultFrame) {
 }
 
 DEBUG_ONLY_TEST_F(WindowTest, nonRowsStreamingWindow) {
-  auto data = makeRowVector(
-      {"c1"},
-      {makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1, 1, 2, 2})});
+  auto data = makeNamedRowVector(
+      "c1", makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1, 1, 2, 2}));
 
   createDuckDbTable({data});
 
@@ -1671,8 +1661,7 @@ TEST_F(WindowTest, missingFunctionSignature) {
 
     core::WindowNode::Function windowFunction{callExpr, frame, false};
 
-    CursorParameters params;
-    params.planNode =
+    auto plan =
         PlanBuilder()
             .values(input)
             .addNode([&](auto nodeId, auto source) -> core::PlanNodePtr {
@@ -1690,7 +1679,7 @@ TEST_F(WindowTest, missingFunctionSignature) {
             })
             .planNode();
 
-    readCursor(params);
+    AssertQueryBuilder(plan).countResults();
   };
 
   auto callExpr = std::make_shared<core::CallTypedExpr>(

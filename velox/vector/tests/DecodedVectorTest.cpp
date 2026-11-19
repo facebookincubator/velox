@@ -1735,6 +1735,49 @@ TEST_F(DecodedVectorTest, flatNulls) {
   }
 }
 
+// Decoding skips the lazy checks for encodings that cannot hold a lazy vector.
+// One decoder reused across encodings must still give each vector its own
+// values, nulls and mapping, whatever it decoded before.
+TEST_F(DecodedVectorTest, reuseAcrossEncodings) {
+  constexpr vector_size_t kSize = 100;
+  auto flatWithNulls = makeFlatVector<int64_t>(
+      kSize, [](auto row) { return row; }, nullEvery(7));
+  auto flatNoNulls =
+      makeFlatVector<int64_t>(kSize, [](auto row) { return row * 2; });
+  auto dictionary =
+      wrapInDictionary(makeIndicesInReverse(kSize), flatWithNulls);
+  auto constant = makeConstant<int64_t>(5, kSize);
+
+  DecodedVector decoded;
+  const std::vector<VectorPtr> vectors = {
+      dictionary,
+      flatNoNulls,
+      constant,
+      flatWithNulls,
+      dictionary,
+      flatNoNulls};
+  for (const auto& vector : vectors) {
+    SCOPED_TRACE(vector->toString());
+    decoded.decode(*vector);
+    const bool isFlat = vector->encoding() == VectorEncoding::Simple::FLAT;
+    EXPECT_EQ(decoded.isIdentityMapping(), isFlat);
+    if (isFlat) {
+      EXPECT_EQ(decoded.base(), vector.get());
+      EXPECT_EQ(decoded.mayHaveNulls(), vector->rawNulls() != nullptr);
+    }
+    const auto* simple = vector->as<SimpleVector<int64_t>>();
+    for (vector_size_t i = 0; i < kSize; ++i) {
+      ASSERT_EQ(decoded.isNullAt(i), vector->isNullAt(i)) << i;
+      if (!vector->isNullAt(i)) {
+        ASSERT_EQ(decoded.valueAt<int64_t>(i), simple->valueAt(i)) << i;
+      }
+    }
+  }
+
+  // The shared base of a flat vector is the vector itself.
+  EXPECT_EQ(decoded.decodeAndGetBase(flatNoNulls).get(), flatNoNulls.get());
+}
+
 // An entirely null flat vector may carry no values buffer at all.
 TEST_F(DecodedVectorTest, flatAllNullWithoutValues) {
   constexpr vector_size_t kSize = 100;
@@ -1752,6 +1795,34 @@ TEST_F(DecodedVectorTest, flatAllNullWithoutValues) {
   for (vector_size_t i = 0; i < kSize; ++i) {
     ASSERT_TRUE(decoded.isNullAt(i)) << i;
   }
+}
+
+// Decoding loads a lazy vector under every encoding that can hold one:
+// isLazyNotLoaded() answers without a call only for the other encodings.
+TEST_F(DecodedVectorTest, loadsLazyUnderEachEncoding) {
+  constexpr vector_size_t kSize = 100;
+  const auto makeLazy = [&] {
+    return vectorMaker_.lazyFlatVector<int64_t>(
+        kSize, [](auto row) { return row; });
+  };
+  const auto expectLoaded = [&](const VectorPtr& vector,
+                                const VectorPtr& lazy) {
+    SCOPED_TRACE(vector->toString());
+    DecodedVector decoded(*vector);
+    EXPECT_TRUE(lazy->asUnchecked<LazyVector>()->isLoaded());
+  };
+
+  auto lazy = makeLazy();
+  expectLoaded(lazy, lazy);
+
+  lazy = makeLazy();
+  expectLoaded(wrapInDictionary(makeIndicesInReverse(kSize), lazy), lazy);
+
+  lazy = makeLazy();
+  expectLoaded(BaseVector::wrapInConstant(kSize, 3, lazy), lazy);
+
+  lazy = makeLazy();
+  expectLoaded(makeRowVector({lazy}), lazy);
 }
 
 TEST_F(DecodedVectorTest, dictionaryOverFlatNulls) {

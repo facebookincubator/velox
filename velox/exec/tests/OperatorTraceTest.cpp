@@ -133,7 +133,7 @@ TEST_F(OperatorTraceTest, emptyTrace) {
   std::string planNodeId;
   auto traceDirPath = TempDirectoryPath::create();
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .filter("a > 0")
                   .singleAggregation({"a"}, {"count(1)"})
                   .capturePlanNodeId(planNodeId)
@@ -278,16 +278,16 @@ TEST_F(OperatorTraceTest, traceMetadata) {
   }
 
   const auto outputDir = TempDirectoryPath::create();
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId traceNodeId;
   const auto planNode =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .values(rows, false)
           .project({"c0", "c1", "c2"})
           .hashJoin(
               {"c0"},
               {"u0"},
-              PlanBuilder(planNodeIdGenerator)
+              builder.newPlan()
                   .values(rows, true)
                   .singleAggregation({"c0", "c1"}, {"min(c2)"})
                   .project({"c0 AS u0", "c1 AS u1", "a0 AS u2"})
@@ -346,14 +346,14 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
   const std::vector<RowVectorPtr> rows{vectorFuzzer_.fuzzRow(rowType, 2)};
 
   const auto outputDir = TempDirectoryPath::create();
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId traceNodeId;
-  const auto planNode = PlanBuilder(planNodeIdGenerator)
+  const auto planNode = builder.newPlan()
                             .values(rows, false)
                             .hashJoin(
                                 {"c0"},
                                 {"u0"},
-                                PlanBuilder(planNodeIdGenerator)
+                                builder.newPlan()
                                     .values(rows, true)
                                     .project({"c0 AS u0", "c1 AS u1"})
                                     .planNode(),
@@ -682,16 +682,16 @@ TEST_F(OperatorTraceTest, task) {
     rows.push_back(vectorFuzzer_.fuzzRow(rowType, 2));
   }
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId hashJoinNodeId;
   const auto planNode =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .values(rows, false)
           .project({"c0", "c1", "c2"})
           .hashJoin(
               {"c0"},
               {"u0"},
-              PlanBuilder(planNodeIdGenerator)
+              builder.newPlan()
                   .values(rows, true)
                   .singleAggregation({"c0", "c1"}, {"min(c2)"})
                   .project({"c0 AS u0", "c1 AS u1", "a0 AS u2"})
@@ -1075,8 +1075,7 @@ TEST_F(OperatorTraceTest, traceSplitRoundTrip) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
   auto splits = makeHiveConnectorSplits(splitFiles);
@@ -1142,8 +1141,7 @@ TEST_F(OperatorTraceTest, traceSplitPartial) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
   auto splits = makeHiveConnectorSplits(splitFiles);
@@ -1231,8 +1229,7 @@ TEST_F(OperatorTraceTest, traceSplitCorrupted) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
   auto splits = makeHiveConnectorSplits(splitFiles);
@@ -1355,22 +1352,20 @@ TEST_F(OperatorTraceTest, hashJoin) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     const auto outputDir = TempDirectoryPath::create();
-    const auto planNodeIdGenerator{
-        std::make_shared<core::PlanNodeIdGenerator>()};
+    PlanBuilder builder;
     core::PlanNodeId hashJoinNodeId;
-    const auto planNode = PlanBuilder(planNodeIdGenerator)
-                              .values(probeInput, false)
-                              .hashJoin(
-                                  {"c0"},
-                                  {"u0"},
-                                  PlanBuilder(planNodeIdGenerator)
-                                      .values(buildInput, true)
-                                      .planNode(),
-                                  "c0 < 135",
-                                  {"c0", "c1", "c2"},
-                                  core::JoinType::kInner)
-                              .capturePlanNodeId(hashJoinNodeId)
-                              .planNode();
+    const auto planNode =
+        builder.newPlan()
+            .values(probeInput, false)
+            .hashJoin(
+                {"c0"},
+                {"u0"},
+                builder.newPlan().values(buildInput, true).planNode(),
+                "c0 < 135",
+                {"c0", "c1", "c2"},
+                core::JoinType::kInner)
+            .capturePlanNodeId(hashJoinNodeId)
+            .planNode();
     const auto testDir = TempDirectoryPath::create();
     const auto traceRoot =
         fmt::format("{}/{}", testDir->getPath(), "traceRoot");
@@ -1492,8 +1487,7 @@ TEST_F(OperatorTraceTest, hiveConnectorId) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
   auto splits = makeHiveConnectorSplits(splitFiles);

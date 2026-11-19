@@ -338,6 +338,16 @@ class FlatMapVector : public BaseVector {
 
   std::unique_ptr<SimpleVector<uint64_t>> hashAll() const override;
 
+  /// Runtime stat counting the conversions of a flat map into a map.
+  static constexpr std::string_view kNumMapConversions{
+      "flatMap.numMapConversions"};
+  /// Runtime stat counting the map entries produced by those conversions.
+  static constexpr std::string_view kNumMapConversionEntries{
+      "flatMap.numMapConversionEntries"};
+  /// Runtime stat with the wall time of those conversions, in nanoseconds.
+  static constexpr std::string_view kMapConversionWallNanos{
+      "flatMap.mapConversionWallNanos"};
+
   /// Converts and copies `this` into a MapVector.
   ///
   /// It does so by wrapping the distinctKeys_ vector into a dictionary to
@@ -373,6 +383,31 @@ class FlatMapVector : public BaseVector {
   /// an in-map buffer is in every row, so a buffer allocated here starts with
   /// every bit set. A buffer that is a view or shared is copied first.
   uint64_t* ensureInMapAt(column_index_t channel);
+
+  /// Merges the values that two channels hold for the same key into one
+  /// channel. The earlier channel is given by the result values and in-map,
+  /// the later one by the values and in-map, both with values indexed by row.
+  /// A null in-map means the key is in every selected row. The merged channel
+  /// holds the key in the selected rows where either channel does, with the
+  /// later values in the rows where both do. Unselected rows are undefined.
+  ///
+  /// When the earlier channel is shared, its values and in-map are not written
+  /// into but copied first into new ones of the given size. Returns whether
+  /// the merged values and in-map are still shared. When duplicate keys throw
+  /// and any selected row holds the key in both channels, throws a user error
+  /// naming the key at the given index of the keys before merging anything.
+  static bool mergeChannels(
+      const SelectivityVector& rows,
+      const VectorPtr& values,
+      BufferPtr inMap,
+      bool isShared,
+      vector_size_t size,
+      memory::MemoryPool* pool,
+      bool throwOnDuplicateKeys,
+      const BaseVector& keys,
+      vector_size_t keyIndex,
+      VectorPtr& resultValues,
+      BufferPtr& resultInMap);
 
   /// Updates the in map buffer from the key defined by `targetChannel` based on
   /// values from `sourceInMaps`. Updates based on the ranges defined in

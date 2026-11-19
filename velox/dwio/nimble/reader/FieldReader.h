@@ -49,10 +49,10 @@ struct FeatureSelection {
 struct FieldReaderParams {
   /// Allow selecting subset of features to be included/excluded in flat maps.
   /// The key in the map is the flat map (top-level) column name.
-  folly::F14FastMap<std::string, FeatureSelection> flatMapFeatureSelector;
+  folly::F14FastMap<std::string, FeatureSelection> flatMapFeatureSelector{};
 
   /// Contains flatmap field name which we want to return as Struct
-  folly::F14FastSet<std::string> readFlatMapFieldAsStruct;
+  folly::F14FastSet<std::string> readFlatMapFieldAsStruct{};
 
   /// Callback to populate feature projection stats when needed
   std::function<void(velox::dwio::common::flatmap::FlatMapKeySelectionStats)>
@@ -81,7 +81,7 @@ struct FieldReaderParams {
   /// row children and FlatMap-as-struct values. When provided, the pool count
   /// must match maxDecodeParallelism. The caller must keep the pools alive
   /// while returned vectors exist.
-  std::vector<velox::memory::MemoryPool*> decodePools;
+  std::vector<velox::memory::MemoryPool*> decodePools{};
 };
 
 class FieldReader {

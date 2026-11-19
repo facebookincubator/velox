@@ -200,6 +200,7 @@ EncodingLayout EncodingLayoutCapture::capture(
     case EncodingType::Prefix:
     case EncodingType::DeltaBlock:
     case EncodingType::EliasFano:
+    case EncodingType::Sequence:
     case EncodingType::SimdForBitpack:
     case EncodingType::FrequencyPartition:
     case EncodingType::Huffman:
@@ -456,6 +457,14 @@ EncodingLayout EncodingLayoutCapture::capture(
       // For nullable encodings we only capture the data encoding part, so we
       // are "overwriting" the current captured node with the nested data node.
       return EncodingLayoutCapture::capture({pos, dataBytes}, options);
+    }
+    case EncodingType::Reversed: {
+      // Unlike Nullable and Sentinel, Reversed changes the values its nested
+      // stream holds, so the layout keeps the Reversed node and captures the
+      // nested stream as its only child.
+      children.emplace_back(
+          EncodingLayoutCapture::capture(encoding.substr(prefixSize), options));
+      break;
     }
     case EncodingType::Sentinel: {
       // For sentinel encodings we only capture the data encoding part, so we

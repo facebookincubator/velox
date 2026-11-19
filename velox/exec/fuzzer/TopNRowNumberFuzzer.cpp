@@ -234,9 +234,9 @@ PlanWithSplits TopNRowNumberFuzzer::makePlanWithTableScan(
   std::vector<std::string> projectFields = allKeys;
   projectFields.emplace_back("row_number");
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = test::PlanBuilder(planNodeIdGenerator)
-                  .tableScan(asRowType(input[0]->type()))
+  test::PlanBuilder builder;
+  auto plan = builder.newPlan()
+                  .tableScan(input[0]->rowType())
                   .topNRank(rankFunction, partitionKeys, sortKeys, limit, true)
                   .project(projectFields)
                   .planNode();

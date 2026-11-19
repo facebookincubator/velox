@@ -32,6 +32,7 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
@@ -187,7 +188,8 @@ class OrderByTest : public OperatorTestBase {
       const std::vector<uint32_t>& sortingKeys) {
     {
       SCOPED_TRACE("run without spilling");
-      assertQueryOrdered(planNode, duckDbSql, sortingKeys);
+      AssertQueryBuilder(planNode, duckDbQueryRunner_)
+          .assertResults(duckDbSql, sortingKeys);
     }
     {
       SCOPED_TRACE("run with spilling");
@@ -198,11 +200,10 @@ class OrderByTest : public OperatorTestBase {
           {core::QueryConfig::kSpillEnabled, "true"},
           {core::QueryConfig::kOrderBySpillEnabled, "true"},
       });
-      CursorParameters params;
-      params.planNode = planNode;
-      params.queryCtx = queryCtx;
-      params.spillDirectory = spillDirectory->getPath();
-      auto task = assertQueryOrdered(params, duckDbSql, sortingKeys);
+      auto task = AssertQueryBuilder(planNode, duckDbQueryRunner_)
+                      .queryCtx(queryCtx)
+                      .spillDirectory(spillDirectory->getPath())
+                      .assertResults(duckDbSql, sortingKeys);
       auto inputRows =
           PlanNodeStats::extract(task->taskStats(), orderById).inputRows;
       const uint64_t peakSpillMemoryUsage =
@@ -467,11 +468,11 @@ TEST_F(OrderByTest, outputBatchRows) {
           std::to_string(testData.preferredOutBatchBytes)},
          {core::QueryConfig::kMaxOutputBatchRows,
           std::to_string(testData.maxOutBatchRows)}});
-    CursorParameters params;
-    params.planNode = plan;
-    params.queryCtx = queryCtx;
-    auto task = assertQueryOrdered(
-        params, "SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST", {0});
+    auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                    .queryCtx(queryCtx)
+                    .assertResults(
+                        "SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST",
+                        std::vector<uint32_t>{0});
     EXPECT_EQ(
         testData.expectedOutputVectors,
         PlanNodeStats::extract(task->taskStats(), orderById).outputVectors);
@@ -482,9 +483,8 @@ TEST_F(OrderByTest, spill) {
   const auto rowType =
       ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
   const auto vectors = createVectors(rowType, 1024, 48 << 20);
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId orderNodeId;
-  const auto plan = PlanBuilder(planNodeIdGenerator)
+  const auto plan = PlanBuilder()
                         .values(vectors)
                         .orderBy({"c0 ASC NULLS LAST"}, false)
                         .capturePlanNodeId(orderNodeId)
@@ -1117,7 +1117,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringOutputProcessing) {
             .maxDrivers(1)
             .assertResults(expectedResult),
         "Manual MemoryPool Abortion");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -1183,7 +1183,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, abortDuringInputgProcessing) {
             .maxDrivers(1)
             .assertResults(expectedResult),
         "Manual MemoryPool Abortion");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -1191,9 +1191,8 @@ DEBUG_ONLY_TEST_F(OrderByTest, spillWithNoMoreOutput) {
   const auto rowType =
       ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
   const auto vectors = createVectors(rowType, 1024, 4 << 20);
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId orderNodeId;
-  const auto plan = PlanBuilder(planNodeIdGenerator)
+  const auto plan = PlanBuilder()
                         .values(vectors)
                         .orderBy({"c0 ASC NULLS LAST"}, false)
                         .capturePlanNodeId(orderNodeId)
@@ -1244,9 +1243,8 @@ TEST_F(OrderByTest, maxSpillBytes) {
   const auto rowType =
       ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
   const auto vectors = createVectors(rowType, 1024, 15 << 20);
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId orderNodeId;
-  const auto plan = PlanBuilder(planNodeIdGenerator)
+  const auto plan = PlanBuilder()
                         .values(vectors)
                         .orderBy({"c0 ASC NULLS LAST"}, false)
                         .capturePlanNodeId(orderNodeId)
@@ -1322,7 +1320,7 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimFromOrderBy) {
   auto& planStats = taskStats.at(orderById);
   ASSERT_GT(planStats.spilledBytes, 0);
   task.reset();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(OrderByTest, reclaimFromEmptyOrderBy) {

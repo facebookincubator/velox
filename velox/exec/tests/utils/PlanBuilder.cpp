@@ -54,7 +54,7 @@ std::shared_ptr<HiveBucketProperty> buildHiveBucketProperty(
     const RowTypePtr rowType,
     int32_t bucketCount,
     const std::vector<std::string>& bucketColumns,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy) {
+    const std::vector<HiveSortingColumnPtr>& sortBy) {
   std::vector<TypePtr> bucketTypes;
   bucketTypes.reserve(bucketColumns.size());
   for (const auto& bucketColumn : bucketColumns) {
@@ -471,12 +471,12 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
     insertHandle_ = std::make_shared<connector::hive::HiveInsertTableHandle>(
         columnHandles,
         locationHandle,
+        connector::hive::HiveConfig::InsertExistingPartitionsBehavior::kError,
         fileFormat_,
         bucketProperty,
         compressionKind_,
         serdeParameters_,
-        options_,
-        ensureFiles_,
+        writeEmptyFile_,
         // Repeats the constructor's default so that storageParameters, which
         // follows it positionally, can be passed.
         std::make_shared<const connector::hive::HiveInsertFileNameGenerator>(),
@@ -777,14 +777,12 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::string& outputDirectoryPath,
     const dwio::common::FileFormat fileFormat,
     const std::vector<std::string>& aggregates,
-    const std::shared_ptr<dwio::common::WriterOptions>& options,
     const std::string& outputFileName) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .outputFileName(outputFileName)
       .fileFormat(fileFormat)
       .aggregates(aggregates)
-      .options(options)
       .endTableWriter();
 }
 
@@ -792,14 +790,12 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::string& outputDirectoryPath,
     const std::vector<std::string>& partitionBy,
     const dwio::common::FileFormat fileFormat,
-    const std::vector<std::string>& aggregates,
-    const std::shared_ptr<dwio::common::WriterOptions>& options) {
+    const std::vector<std::string>& aggregates) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .partitionBy(partitionBy)
       .fileFormat(fileFormat)
       .aggregates(aggregates)
-      .options(options)
       .endTableWriter();
 }
 
@@ -809,8 +805,7 @@ PlanBuilder& PlanBuilder::tableWrite(
     int32_t bucketCount,
     const std::vector<std::string>& bucketedBy,
     const dwio::common::FileFormat fileFormat,
-    const std::vector<std::string>& aggregates,
-    const std::shared_ptr<dwio::common::WriterOptions>& options) {
+    const std::vector<std::string>& aggregates) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .partitionBy(partitionBy)
@@ -818,7 +813,6 @@ PlanBuilder& PlanBuilder::tableWrite(
       .bucketedBy(bucketedBy)
       .fileFormat(fileFormat)
       .aggregates(aggregates)
-      .options(options)
       .endTableWriter();
 }
 
@@ -827,16 +821,15 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::vector<std::string>& partitionBy,
     int32_t bucketCount,
     const std::vector<std::string>& bucketedBy,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy,
+    const std::vector<HiveSortingColumnPtr>& sortBy,
     const dwio::common::FileFormat fileFormat,
     const std::vector<std::string>& aggregates,
     const std::string_view& connectorId,
     const std::unordered_map<std::string, std::string>& serdeParameters,
-    const std::shared_ptr<dwio::common::WriterOptions>& options,
     const std::string& outputFileName,
     const common::CompressionKind compressionKind,
     const RowTypePtr& schema,
-    const bool ensureFiles,
+    const bool writeEmptyFile,
     const connector::CommitStrategy commitStrategy,
     connector::ConnectorInsertTableHandlePtr insertTableHandle,
     const std::unordered_map<std::string, std::string>& storageParameters) {
@@ -853,9 +846,8 @@ PlanBuilder& PlanBuilder::tableWrite(
       .connectorId(connectorId)
       .serdeParameters(serdeParameters)
       .storageParameters(storageParameters)
-      .options(options)
       .compressionKind(compressionKind)
-      .ensureFiles(ensureFiles)
+      .writeEmptyFile(writeEmptyFile)
       .commitStrategy(commitStrategy)
       .insertHandle(insertTableHandle)
       .endTableWriter();
@@ -1366,6 +1358,13 @@ PlanBuilder& PlanBuilder::localMerge(
 
   planNode_ =
       createLocalMergeNode(nextPlanNodeId(), keys, std::move(sources), pool_);
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::mixedUnion(std::vector<core::PlanNodePtr> sources) {
+  VELOX_CHECK_NULL(planNode_, "mixedUnion() must be the first call");
+  planNode_ = std::make_shared<core::MixedUnionNode>(
+      nextPlanNodeId(), std::move(sources));
   return *this;
 }
 
@@ -2790,7 +2789,7 @@ PlanBuilder& PlanBuilder::addTopNRowNumber(
       parseOrderByClauses(sortingKeys, planNode_->outputType(), pool_);
   planNode_ = std::make_shared<core::TopNRowNumberNode>(
       nextPlanNodeId(),
-      core::TopNRowNumberNode::rankFunctionFromName(function),
+      core::TopNRowNumberNode::toRankFunction(function),
       fields(partitionKeys),
       sortingFields,
       sortingOrders,

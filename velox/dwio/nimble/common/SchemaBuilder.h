@@ -496,6 +496,17 @@ class SchemaBuilder {
   std::optional<offset_size> sharedDictionaryStreamOffset(
       offset_size valueStreamOffset) const;
 
+  /// Allocates the stream that holds the cluster index key chunk of each
+  /// stripe. No schema node references it. Must be the first allocation, so
+  /// the stream is id 0 whatever streams the schema adds later.
+  offset_size createClusterIndexKeyStream();
+
+  /// Returns the stream allocated by createClusterIndexKeyStream(), or nullopt
+  /// when there is none.
+  std::optional<offset_size> clusterIndexKeyStreamOffset() const {
+    return clusterIndexKeyStreamOffset_;
+  }
+
   const std::shared_ptr<const TypeBuilder>& root() const;
 
  private:
@@ -517,6 +528,9 @@ class SchemaBuilder {
   // Used by the physical layout planner to colocate stripe dictionaries with
   // their value streams. File and external dictionaries have no stream here.
   folly::F14FastMap<offset_size, offset_size> sharedDictionaryStreamOffsets_;
+  // Used by the physical layout planner to put the cluster index key stream
+  // first in each stripe.
+  std::optional<offset_size> clusterIndexKeyStreamOffset_;
   offset_size currentOffset_{0};
 
   friend class ScalarTypeBuilder;

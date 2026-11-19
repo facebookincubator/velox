@@ -879,7 +879,22 @@ class MapFieldWriter : public MultiValueFieldWriter {
   void write(const velox::VectorPtr& vector, const OrderedRanges& ranges)
       override {
     OrderedRanges childRanges;
-    auto map = ingestLengths<velox::MapVector>(vector, ranges, childRanges);
+    velox::MapVectorPtr flatMapAsMap;
+    velox::VectorPtr input = vector;
+    if (vector->wrappedVector()->encoding() ==
+        velox::VectorEncoding::Simple::FLAT_MAP) {
+      flatMapAsMap = vector->wrappedVector()
+                         ->asUnchecked<velox::FlatMapVector>()
+                         ->toMapVector();
+      if (vector->encoding() == velox::VectorEncoding::Simple::FLAT_MAP) {
+        input = flatMapAsMap;
+      } else {
+        auto decodingContext = context_.decodingContext();
+        input = decodingContext.decode(vector, ranges)
+                    .wrap(flatMapAsMap, *vector, vector->size());
+      }
+    }
+    auto map = ingestLengths<velox::MapVector>(input, ranges, childRanges);
     if (childRanges.size() > 0) {
       keys_->write(map->mapKeys(), childRanges);
       values_->write(map->mapValues(), childRanges);
