@@ -51,6 +51,11 @@ class LocalVectorIndexAccelerator {
         std::span<int64_t> ids,
         std::span<float> scores) const = 0;
 
+    /// Whether searchDevice accepts this effective neighbor count.
+    virtual bool supportsDeviceSearch(int64_t /*k*/) const {
+      return false;
+    }
+
     /// Searches as search() does with 'queries', 'ids' and 'scores' in device
     /// memory, ordering the work on 'stream', a cudaStream_t. 'k' is between 1
     /// and the size of the index. Writes the ids the device search returns,

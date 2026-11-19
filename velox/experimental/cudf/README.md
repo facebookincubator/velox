@@ -36,6 +36,46 @@ Velox-cuDF builds are included in Velox CI as part of the [adapters build](https
 
 Velox-cuDF provides several configuration properties to control GPU execution behavior, memory management, and debugging. These configurations are available when compiled with cuDF support and can be set via Velox's configuration system. For a complete list of cuDF-specific configuration properties and their descriptions, see the [Cudf-specific Configuration section](https://facebookincubator.github.io/velox/configs.html#cudf-specific-configuration-experimental) in the Velox configuration documentation.
 
+### Vector search on the GPU
+
+A FAISS **index search** finds the nearest vectors in one local index.
+`VectorSearchJoin` is the Velox operator that matches query rows to indexes,
+calls FAISS, and emits a row for each candidate match. A full search plan
+can use one join to find clusters, a second join to search those clusters,
+and `TopNRowNumber` to keep the best matches across indexes.
+
+Build with `VELOX_ENABLE_FAISS=ON`, `VELOX_ENABLE_FAISS_GPU=ON`, and
+`VELOX_ENABLE_CUDF=ON` for the GPU paths. Set
+`cudf.vector_search_enabled` before calling `registerCudf()`. The GPU join
+path requires cuDF operator replacement for the query (`cudf.enabled=true`
+by default).
+
+| `cudf.vector_search_enabled` | FAISS index search | `VectorSearchJoin` | Per-query rerank directly after the join |
+|---|---|---|---|
+| `false` (default) | CPU | CPU | CPU |
+| `true` | GPU for eligible indexes | GPU for eligible joins | GPU when supported by cuDF |
+
+When the joins and rerank run on the GPU, candidate rows pass between
+them in GPU memory.
+
+The GPU join path supports Flat and IVF-Flat inner and left joins with
+cuDF-supported input and output columns. It can search every index (no
+equality keys) or select indexes by matching any number of integer and
+`VARCHAR` key columns together. Other joins use the CPU probe and can
+still use GPU FAISS for eligible indexes.
+`cudf.vector_search_min_index_size` defaults to 1,024 embeddings per index.
+An index below that threshold is searched on the CPU, including a centroid
+index used by a routing join. `VectorSearchJoinBuild` still opens the
+indexes and prepares the build side on the CPU.
+
+The [SQL-shaped `vector_search(...)` example](../../exec/tests/VectorSearchTest.cpp)
+uses two equality keys for routing and three for the local-index search.
+Both sets of keys are supported by the GPU join path.
+
+To train and fill eligible IVF-Flat and IVF-SQ indexes on the GPU with
+`vector_index_build`, set `cudf.vector_index_build_enabled=true` together
+with `cudf.vector_search_enabled=true`.
+
 ### Testing Velox with cuDF
 
 Tests with Velox-cuDF can only be run on GPU-enabled hardware. The Velox-cuDF tests in [experimental/cudf/tests](https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/tests) include several types of tests:

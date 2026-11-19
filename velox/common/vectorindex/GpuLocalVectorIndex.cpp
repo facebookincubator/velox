@@ -127,8 +127,9 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
     // translates its ids on the CPU. A device search uses the device index
     // directly, so the translation moves to the device.
     const auto* idMap = dynamic_cast<const faiss::IndexIDMap*>(index_.get());
-    if (idMap == nullptr ||
-        dynamic_cast<faiss::gpu::GpuIndex*>(idMap->index) == nullptr) {
+    gpuIndex_ = dynamic_cast<faiss::gpu::GpuIndex*>(
+        idMap == nullptr ? index_.get() : idMap->index);
+    if (idMap == nullptr || gpuIndex_ == nullptr) {
       return;
     }
     static_assert(sizeof(faiss::idx_t) == sizeof(int64_t));
@@ -199,6 +200,10 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
     return true;
   }
 
+  bool supportsDeviceSearch(int64_t k) const override {
+    return gpuIndex_ != nullptr && k >= 1 && k <= maxK_ && k <= index_->ntotal;
+  }
+
   bool searchDevice(
       const float* queries,
       int64_t numQueries,
@@ -206,22 +211,12 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
       int64_t* ids,
       float* scores,
       void* stream) const override {
-    if (k < 1 || k > maxK_ || k > index_->ntotal) {
-      return false;
-    }
-    auto* gpu = dynamic_cast<faiss::gpu::GpuIndex*>(index_.get());
-    if (gpu == nullptr) {
-      if (const auto* idMap =
-              dynamic_cast<const faiss::IndexIDMap*>(index_.get())) {
-        gpu = dynamic_cast<faiss::gpu::GpuIndex*>(idMap->index);
-      }
-    }
-    if (gpu == nullptr) {
+    if (!supportsDeviceSearch(k)) {
       return false;
     }
     searchOnStream(
         *device_, stream, "FAISS GPU local vector index search", [&] {
-          gpu->search(numQueries, queries, k, scores, ids);
+          gpuIndex_->search(numQueries, queries, k, scores, ids);
         });
     return true;
   }
@@ -234,6 +229,7 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
   const std::shared_ptr<Device> device_;
   std::unique_ptr<faiss::Index> index_;
   const int64_t maxK_;
+  faiss::gpu::GpuIndex* gpuIndex_{nullptr};
   DeviceIds deviceIds_;
 };
 
@@ -322,6 +318,10 @@ class MappedIndex : public LocalVectorIndexAccelerator::Index {
     return true;
   }
 
+  bool supportsDeviceSearch(int64_t k) const override {
+    return k >= 1 && k <= maxK_ && k <= static_cast<int64_t>(ids_.size());
+  }
+
   bool searchDevice(
       const float* queries,
       int64_t numQueries,
@@ -329,7 +329,7 @@ class MappedIndex : public LocalVectorIndexAccelerator::Index {
       int64_t* ids,
       float* scores,
       void* stream) const override {
-    if (k < 1 || k > maxK_ || k > static_cast<int64_t>(ids_.size())) {
+    if (!supportsDeviceSearch(k)) {
       return false;
     }
     searchOnStream(*device_, stream, "Local vector index device search", [&] {

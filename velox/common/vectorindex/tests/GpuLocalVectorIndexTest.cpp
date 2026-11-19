@@ -25,10 +25,12 @@
 #include <unordered_set>
 #include <vector>
 
+#include <cuda_runtime_api.h>
 #include <faiss/IndexIDMap.h>
 #include <faiss/IndexIVF.h>
 #include <faiss/impl/zerocopy_io.h>
 #include <faiss/index_io.h>
+#include <folly/ScopeGuard.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -150,6 +152,57 @@ class GpuLocalVectorIndexTest : public testing::Test {
   std::vector<float> queries_;
   std::vector<int64_t> ids_;
 };
+
+TEST_F(GpuLocalVectorIndexTest, deviceCapabilityAndDenseLabels) {
+  const auto bytes = build(VectorIndexKind::kFlat);
+  const FaissLocalVectorIndex cpu(bytes, VectorIndexMetric::kCosine, {});
+  const auto expected = search(cpu);
+  useGpu();
+  const FaissLocalVectorIndex gpu(bytes, VectorIndexMetric::kCosine, {});
+  const auto* device = gpu.deviceIndex();
+  ASSERT_NE(device, nullptr);
+  EXPECT_TRUE(device->supportsDeviceSearch(kK));
+  for (const auto invalid : {int64_t{0}, kNumEmbeddings + 1}) {
+    EXPECT_FALSE(device->supportsDeviceSearch(invalid));
+    EXPECT_FALSE(
+        device->searchDevice(nullptr, 1, invalid, nullptr, nullptr, nullptr));
+  }
+
+  void* storage = nullptr;
+  ASSERT_EQ(
+      cudaMalloc(
+          &storage, kK * sizeof(int64_t) + (kK + kDimension) * sizeof(float)),
+      cudaSuccess);
+  const auto release = folly::makeGuard([&] { cudaFree(storage); });
+  auto* ids = static_cast<int64_t*>(storage);
+  auto* scores = reinterpret_cast<float*>(ids + kK);
+  auto* query = scores + kK;
+  ASSERT_EQ(
+      cudaMemcpy(
+          query,
+          queries_.data(),
+          kDimension * sizeof(float),
+          cudaMemcpyHostToDevice),
+      cudaSuccess);
+  ASSERT_TRUE(device->searchDevice(query, 1, kK, ids, scores, nullptr));
+  ASSERT_NE(device->deviceIdMap(), nullptr);
+  std::vector<int64_t> dense(kK);
+  std::vector<float> distances(kK);
+  ASSERT_EQ(
+      cudaMemcpy(
+          dense.data(), ids, kK * sizeof(int64_t), cudaMemcpyDeviceToHost),
+      cudaSuccess);
+  ASSERT_EQ(
+      cudaMemcpy(
+          distances.data(), scores, kK * sizeof(float), cudaMemcpyDeviceToHost),
+      cudaSuccess);
+  for (int64_t i = 0; i < kK; ++i) {
+    ASSERT_GE(dense[i], 0);
+    ASSERT_LT(dense[i], kNumEmbeddings);
+    EXPECT_EQ(ids_[dense[i]], expected.ids[i]);
+    EXPECT_NEAR(distances[i], expected.scores[i], 1e-5);
+  }
+}
 
 TEST_F(GpuLocalVectorIndexTest, searchMatchesCpu) {
   const auto exact = exactIds();

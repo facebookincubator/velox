@@ -169,17 +169,33 @@ std::unique_ptr<cudf::table> toCudfTable(
       .timestampTimeZone = timestampTimeZone,
       .exportVarbinaryAsString = true,
       .useDecimalTypeWidth = true};
+  RowVectorPtr arrowInput = veloxTable;
+  // Arrow's flatten flags handle scalar wrappers. Materialize wrapped arrays
+  // and rows before export, including standalone constant-null batches.
+  std::vector<VectorPtr> children;
+  for (column_index_t i = 0; i < veloxTable->childrenSize(); ++i) {
+    const auto& child = veloxTable->childAt(i);
+    if (child && !child->isScalar() &&
+        (child->isConstantEncoding() ||
+         child->encoding() == VectorEncoding::Simple::DICTIONARY)) {
+      if (children.empty()) {
+        children = veloxTable->children();
+      }
+      children[i] = BaseVector::copy(*child, pool);
+    }
+  }
+  if (!children.empty()) {
+    arrowInput = std::make_shared<RowVector>(
+        pool,
+        veloxTable->type(),
+        veloxTable->nulls(),
+        veloxTable->size(),
+        std::move(children));
+  }
   ArrowArray arrowArray;
-  exportToArrow(
-      std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),
-      arrowArray,
-      pool,
-      arrowOptions);
+  exportToArrow(arrowInput, arrowArray, pool, arrowOptions);
   ArrowSchema arrowSchema;
-  exportToArrow(
-      std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),
-      arrowSchema,
-      arrowOptions);
+  exportToArrow(arrowInput, arrowSchema, arrowOptions);
   auto tbl = cudf::from_arrow(&arrowSchema, &arrowArray, stream, mr);
 
   // Synchronize before releasing Arrow resources.  cudf::from_arrow uses

@@ -20,6 +20,7 @@
 
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/VectorSearchJoinBuild.h"
 
 namespace facebook::velox::exec {
@@ -30,10 +31,12 @@ namespace facebook::velox::exec {
 /// search looks up the queries of some probe rows in one local index.
 class VectorSearchJoinProbe : public Operator {
  public:
+  // A delegating probe uses a distinct type so its pool has its own name.
   VectorSearchJoinProbe(
       int32_t operatorId,
       DriverCtx* driverCtx,
-      const core::VectorSearchJoinNodePtr& joinNode);
+      const core::VectorSearchJoinNodePtr& joinNode,
+      std::string_view operatorType = OperatorType::kVectorSearchJoinProbe);
 
   bool needsInput() const override {
     return input_ == nullptr;

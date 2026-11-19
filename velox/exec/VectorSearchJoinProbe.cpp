@@ -27,13 +27,14 @@ namespace facebook::velox::exec {
 VectorSearchJoinProbe::VectorSearchJoinProbe(
     int32_t operatorId,
     DriverCtx* driverCtx,
-    const core::VectorSearchJoinNodePtr& joinNode)
+    const core::VectorSearchJoinNodePtr& joinNode,
+    std::string_view operatorType)
     : Operator(
           driverCtx,
           joinNode->outputType(),
           operatorId,
           joinNode->id(),
-          OperatorType::kVectorSearchJoinProbe),
+          operatorType),
       isLeftJoin_{joinNode->joinType() == core::JoinType::kLeft},
       metric_{joinNode->metric()},
       k_{joinNode->k()},

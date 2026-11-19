@@ -205,10 +205,9 @@ struct CudfConfig {
   // Query config key for the TopN batch size in the cuDF TopN operator.
   int32_t topNBatchSize{5};
 
-  /// Search Faiss local indexes on the GPU. Read once at registerCudf(), on
-  /// builds with VELOX_ENABLE_FAISS_GPU. The indexes keep their FAISS
-  /// serialization, so plans and intermediate results are the same on the CPU
-  /// and the GPU.
+  /// Enable GPU FAISS lookups, device-resident vector search probes, and
+  /// ranking directly after a vector search join, where supported. Set before
+  /// calling registerCudf().
   bool vectorSearchEnabled{false};
 
   /// Local indexes with fewer embeddings are searched on the CPU, where the

@@ -50,6 +50,10 @@ class VectorSearchJoinTable {
     return rows_;
   }
 
+  const common::vectorindex::LocalVectorIndex& indexAt(vector_size_t row) const {
+    return *indexes_[row];
+  }
+
   /// Calls 'onMatch' with each build row whose keys equal the keys of
   /// probe 'row' in 'probeKeys'. A null probe key matches nothing.
   void forEachMatch(

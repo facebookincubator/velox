@@ -72,6 +72,12 @@
 #include "velox/exec/Values.h"
 #include "velox/exec/Window.h"
 
+#ifdef VELOX_ENABLE_FAISS_GPU
+#include "velox/experimental/cudf/exec/CudfVectorSearchJoinProbe.h"
+
+#include "velox/exec/VectorSearchJoinProbe.h"
+#endif
+
 namespace facebook::velox::cudf_velox {
 
 namespace {
@@ -762,11 +768,14 @@ class TopNRowNumberAdapter : public OperatorAdapter {
       exec::DriverCtx* /*ctx*/) const override {
     auto node =
         std::dynamic_pointer_cast<const core::TopNRowNumberNode>(planNode);
-    if (!node) {
+    if (!node ||
+        node->rankFunction() !=
+            core::TopNRowNumberNode::RankFunction::kRowNumber) {
       return false;
     }
-    return node->rankFunction() ==
-        core::TopNRowNumberNode::RankFunction::kRowNumber;
+    return CudfConfig::getInstance().vectorSearchEnabled ||
+        !dynamic_cast<const core::VectorSearchJoinNode*>(
+            node->sources().front().get());
   }
 
   bool acceptsGpuInput() const override {
@@ -1448,6 +1457,73 @@ class UcxPartitionedOutputAdapter : public OperatorAdapter {
 
 #endif // VELOX_ENABLE_UCX_EXCHANGE
 
+#ifdef VELOX_ENABLE_FAISS_GPU
+class VectorSearchJoinProbeAdapter : public OperatorAdapter {
+ public:
+  VectorSearchJoinProbeAdapter() : OperatorAdapter("VectorSearchJoinProbe") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return op->is<exec::VectorSearchJoinProbe>();
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* /*ctx*/) const override {
+    const auto node =
+        std::dynamic_pointer_cast<const core::VectorSearchJoinNode>(planNode);
+    const auto isSupportedKey = [](const core::FieldAccessTypedExprPtr& key) {
+      const auto& type = key->type();
+      if (containsCustomComparison(type) || type->isDecimal() ||
+          type->isDate()) {
+        return false;
+      }
+      switch (type->kind()) {
+        case TypeKind::TINYINT:
+        case TypeKind::SMALLINT:
+        case TypeKind::INTEGER:
+        case TypeKind::BIGINT:
+        case TypeKind::VARCHAR:
+          return true;
+        default:
+          return false;
+      }
+    };
+    return node &&
+        std::all_of(
+            node->leftKeys().begin(), node->leftKeys().end(), isSupportedKey) &&
+        std::all_of(
+            node->rightKeys().begin(), node->rightKeys().end(), isSupportedKey) &&
+        node->outputType()->size() != 0 &&
+        isTypeSupportedByCudf(node->sources()[0]->outputType()) &&
+        isTypeSupportedByCudf(node->outputType());
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(
+        std::make_unique<CudfVectorSearchJoinProbe>(
+            operatorId,
+            ctx,
+            std::static_pointer_cast<const core::VectorSearchJoinNode>(
+                planNode)));
+    return result;
+  }
+};
+#endif
+
 /// Registration Function
 void registerAllOperatorAdapters() {
   auto& registry = OperatorAdapterRegistry::getInstance();
@@ -1463,6 +1539,11 @@ void registerAllOperatorAdapters() {
   registry.registerAdapter(std::make_unique<HashJoinProbeAdapter>());
   registry.registerAdapter(std::make_unique<NestedLoopJoinBuildAdapter>());
   registry.registerAdapter(std::make_unique<NestedLoopJoinProbeAdapter>());
+#ifdef VELOX_ENABLE_FAISS_GPU
+  if (CudfConfig::getInstance().vectorSearchEnabled) {
+    registry.registerAdapter(std::make_unique<VectorSearchJoinProbeAdapter>());
+  }
+#endif
   registry.registerAdapter(std::make_unique<OrderByAdapter>());
   registry.registerAdapter(std::make_unique<TopNAdapter>());
   registry.registerAdapter(std::make_unique<TopNRowNumberAdapter>());
