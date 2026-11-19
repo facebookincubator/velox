@@ -388,7 +388,6 @@ TEST_F(ComparisonsTest, between) {
   EXPECT_EQ(
       between<float>(std::nullopt, std::nullopt, std::nullopt), std::nullopt);
   EXPECT_EQ(between<double>(1, std::nullopt, 3), std::nullopt);
-  EXPECT_EQ(between<double>(kNaN, std::nullopt, 4), std::nullopt);
   EXPECT_EQ(between<double>(kNaN, 1, 5), false);
   EXPECT_EQ(between<double>(kInf, 0, kInf), true);
   EXPECT_EQ(between<float>(kInfF, 0, kInfF), true);
@@ -406,6 +405,16 @@ TEST_F(ComparisonsTest, between) {
   EXPECT_EQ(between<float>(kNaNF, kNaNF, kNaNF), true);
   EXPECT_EQ(between<float>(0.0f, -1.0f, kNaNF), true);
   EXPECT_EQ(between<float>(kNaNF, 0.0f, kNaNF), true);
+
+  // 'c0 between c1 and c2' is 'c0 >= c1 and c0 <= c2', which is false if one
+  // comparison is false even if the other bound is null.
+  EXPECT_EQ(between<int32_t>(0, 1, std::nullopt), false);
+  EXPECT_EQ(between<int32_t>(1, 1, std::nullopt), std::nullopt);
+  EXPECT_EQ(between<int64_t>(2, std::nullopt, 1), false);
+  EXPECT_EQ(between<int64_t>(1, std::nullopt, 1), std::nullopt);
+  EXPECT_EQ(between<int64_t>(std::nullopt, 2, 1), std::nullopt);
+  EXPECT_EQ(between<double>(kNaN, std::nullopt, 4), false);
+  EXPECT_EQ(between<double>(kNaN, std::nullopt, kNaN), std::nullopt);
 }
 
 TEST_F(ComparisonsTest, decimal) {
