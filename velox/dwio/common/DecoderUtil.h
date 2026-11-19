@@ -271,33 +271,6 @@ inline void processFixedFilter(
   }
 }
 
-namespace detail {
-// Gathers 'width' 16-bit values at 'rows' from a stream buffer that starts at
-// row 'rowOffset' and ends at 'bufferEnd'. The SIMD gather reads 2 bytes past
-// each value, so a batch that holds the buffer's last value is read one value
-// at a time: the stream buffer has no padding.
-template <typename T>
-xsimd::batch<T> gatherShorts(
-    const T* buffer,
-    const char* bufferEnd,
-    int32_t rowOffset,
-    const int32_t* rows,
-    int32_t width) {
-  constexpr int32_t kWidth = xsimd::batch<T>::size;
-  const int64_t numBufferValues =
-      (bufferEnd - reinterpret_cast<const char*>(buffer)) / sizeof(T);
-  if (rows[width - 1] - rowOffset + 1 < numBufferValues) {
-    return simd::gather(buffer - rowOffset, rows, width);
-  }
-  T lastValues[kWidth]{};
-  for (auto i = 0; i < width; ++i) {
-    // Copies from the byte address: the stream buffer may be unaligned.
-    std::memcpy(&lastValues[i], buffer + (rows[i] - rowOffset), sizeof(T));
-  }
-  return xsimd::load_unaligned(lastValues);
-}
-} // namespace detail
-
 struct NoHook;
 
 template <
@@ -417,8 +390,8 @@ void fixedWidthScan(
                 auto indices = simd::loadGatherIndices<T>(rows + rowIndex);
                 xsimd::batch<T> values;
                 if constexpr (kHasSecondIndexBatch) {
-                  values = detail::gatherShorts(
-                      buffer, bufferEnd, rowOffset, rows + rowIndex, kWidth);
+                  values =
+                      simd::gather(buffer - rowOffset, rows + rowIndex, kWidth);
                 } else {
                   values = simd::gather(buffer - rowOffset, indices);
                 }
@@ -472,8 +445,8 @@ void fixedWidthScan(
                 xsimd::batch<T> values;
                 int width = std::min<int32_t>(kWidth, numRows - step);
                 if constexpr (kHasSecondIndexBatch) {
-                  values = detail::gatherShorts(
-                      buffer, bufferEnd, rowOffset, rows + rowIndex, width);
+                  values =
+                      simd::gather(buffer - rowOffset, rows + rowIndex, width);
                 } else {
                   auto indices = simd::loadGatherIndices<T>(rows + rowIndex);
                   if (width < kWidth) {

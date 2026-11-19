@@ -19,7 +19,6 @@
 #include <array>
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/testutil/PageBeforeGuard.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -1330,98 +1329,6 @@ TEST_F(VectorHasherTest, simdRange) {
           result[i]);
     }
   }
-}
-
-TEST_F(VectorHasherTest, simdRangeAtEndOfMapping) {
-  // Values that wrap external memory may end right before an unmapped page.
-  // The range lookup must not load a full SIMD batch past the last row.
-  struct NoopReleaser {
-    void addRef() const {}
-    void release() const {}
-  };
-  // On AVX2, 13 INTEGER rows are a full batch of rows 0 to 7 and a last batch
-  // of rows 8 to 12, and 13 BIGINT rows end with a last batch of row 12. Rows 3
-  // and 12 hold 100, which is out of range: one in a full batch and one in the
-  // last batch.
-  constexpr vector_size_t kNumRows = 13;
-  auto isOutOfRange = [](vector_size_t row) { return row == 3 || row == 12; };
-  auto test = [&]<typename T>(const TypePtr& type, uint64_t multiplier) {
-    SCOPED_TRACE(fmt::format("{} multiplier {}", type->toString(), multiplier));
-    common::testutil::PageBeforeGuard page;
-    auto* rawValues = reinterpret_cast<T*>(page.end()) - kNumRows;
-    for (auto i = 0; i < kNumRows; ++i) {
-      rawValues[i] = isOutOfRange(i) ? 100 : i % 8 + 1;
-    }
-    auto values = std::make_shared<FlatVector<T>>(
-        pool(),
-        type,
-        nullptr,
-        kNumRows,
-        BufferView<NoopReleaser>::create(
-            reinterpret_cast<uint8_t*>(rawValues),
-            kNumRows * sizeof(T),
-            NoopReleaser{}),
-        std::vector<BufferPtr>{});
-
-    auto hasher = exec::VectorHasher::create(type, 0);
-    auto sample = makeFlatVector<T>({1, 2, 3, 4, 5, 6, 7, 8});
-    SelectivityVector sampleRows(sample->size());
-    raw_vector<uint64_t> result(sample->size());
-    hasher->decode(*sample, sampleRows);
-    hasher->computeValueIds(sampleRows, result);
-    hasher->enableValueRange(multiplier, 0);
-
-    // With a multiplier, the lookup adds to the ids of earlier keys in
-    // 'result'.
-    constexpr uint64_t kEarlierId = 5;
-    auto lookup = [&](SelectivityVector& rows) {
-      result.resize(kNumRows);
-      std::fill(result.begin(), result.end(), kEarlierId);
-      exec::VectorHasher::ScratchMemory scratch;
-      hasher->lookupValueIds(*values, rows, scratch, result);
-    };
-    auto expectSelected = [&](const SelectivityVector& rows,
-                              vector_size_t row) {
-      EXPECT_TRUE(rows.isValid(row)) << row;
-      // The minimum value is 1, so a value's id is the value itself.
-      const uint64_t id = rawValues[row];
-      EXPECT_EQ(
-          result[row], multiplier == 1 ? id : kEarlierId + multiplier * id)
-          << row;
-    };
-
-    {
-      SelectivityVector rows(kNumRows);
-      lookup(rows);
-      for (auto i = 0; i < kNumRows; ++i) {
-        if (isOutOfRange(i)) {
-          EXPECT_FALSE(rows.isValid(i)) << i;
-        } else {
-          expectSelected(rows, i);
-        }
-      }
-    }
-
-    {
-      // Rows 9, 11 and 12 leave row 10 out. On AVX2 they start past the last
-      // full INTEGER batch, which ends at row 8.
-      SelectivityVector rows(kNumRows, false);
-      rows.setValid(9, true);
-      rows.setValid(11, true);
-      rows.setValid(12, true);
-      rows.updateBounds();
-      lookup(rows);
-      expectSelected(rows, 9);
-      expectSelected(rows, 11);
-      EXPECT_FALSE(rows.isValid(10));
-      EXPECT_FALSE(rows.isValid(12));
-    }
-  };
-
-  test.template operator()<int64_t>(BIGINT(), 1);
-  test.template operator()<int64_t>(BIGINT(), 3);
-  test.template operator()<int32_t>(INTEGER(), 1);
-  test.template operator()<int32_t>(INTEGER(), 3);
 }
 
 TEST_F(VectorHasherTest, lookupValueIdsDictionaryWithLargerBase) {

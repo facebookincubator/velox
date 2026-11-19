@@ -315,9 +315,9 @@ struct StringView {
   /// the first i for which the strings match or -1 if no match is found. Uses
   /// SIMD to accelerate the search.
   ///
-  /// Alignment: 'strings' must be aligned to alignof(StringView) and 'indices'
-  /// 4-byte aligned. The string bodies need not be aligned.
-  /// Padding: not required.
+  /// Accesses StringView bodies in 32 byte vectors, thus expects up to 31 bytes
+  /// of addressable padding after out of line strings. This is the case for
+  /// velox Buffers.
   static int32_t linearSearch(
       StringView key,
       const StringView* strings,

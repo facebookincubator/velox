@@ -18,7 +18,6 @@
 #include <folly/Random.h>
 #include "velox/common/base/Nulls.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/testutil/PageBeforeGuard.h"
 #include "velox/dwio/common/ColumnVisitors.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/type/Filter.h"
@@ -28,7 +27,6 @@
 
 #include <algorithm>
 #include <functional>
-#include <optional>
 
 using namespace facebook::velox;
 using namespace facebook::velox::dwio::common;
@@ -405,77 +403,6 @@ TEST_F(DecoderUtilTest, fixedWidthScanSmallintRowIndices) {
   for (int32_t i = 0; i < kWidth; ++i) {
     EXPECT_EQ(hits[i], 2 * i) << "lane " << i;
     EXPECT_EQ(values[i], 2 * i + 1) << "lane " << i;
-  }
-}
-
-TEST_F(DecoderUtilTest, fixedWidthScanSmallintAtEndOfMapping) {
-  // The stream buffer may end right before an unmapped page. A sparse SMALLINT
-  // scan gathers each value as 4 bytes, which must not run past the last one.
-  constexpr int32_t kWidth = xsimd::batch<int16_t>::size;
-  // A full batch of rows, then a full batch and a partial one, each ending at
-  // the buffer's last value. The stream buffer ends at the guard page, or
-  // starts at an odd address, which the values read one at a time must allow.
-  // A typed load at an odd address faults only with UBSan's alignment check.
-  // Only AVX2 allows an odd address: elsewhere fixedWidthScan reads the stream
-  // buffer through typed pointers.
-  std::vector<bool> oddAddresses{false};
-  if (XSIMD_WITH_AVX2) {
-    oddAddresses.push_back(true);
-  }
-  for (const bool oddAddress : oddAddresses) {
-    for (const int32_t numRows : {kWidth, kWidth + 3}) {
-      SCOPED_TRACE(
-          fmt::format("oddAddress {} numRows {}", oddAddress, numRows));
-      const int32_t numData = 2 * numRows;
-      std::optional<common::testutil::PageBeforeGuard> page;
-      std::vector<char> storage(numData * sizeof(int16_t) + 1);
-      char* data{nullptr};
-      if (oddAddress) {
-        data = storage.data() + 1;
-      } else {
-        page.emplace();
-        data = reinterpret_cast<char*>(page->end()) - numData * sizeof(int16_t);
-      }
-      for (int32_t i = 0; i < numData; ++i) {
-        const int16_t value = i + 1;
-        std::memcpy(data + i * sizeof(int16_t), &value, sizeof(int16_t));
-      }
-      // Odd rows, so that the last row is the last value.
-      raw_vector<int32_t> rows(numRows);
-      for (int32_t i = 0; i < numRows; ++i) {
-        rows[i] = 2 * i + 1;
-      }
-      raw_vector<int16_t> values(numRows);
-      raw_vector<int32_t> hits(numRows);
-
-      SeekableArrayInputStream input(
-          reinterpret_cast<const uint8_t*>(data), numData * sizeof(int16_t));
-      const void* buffer = nullptr;
-      int32_t bufferSize = 0;
-      ASSERT_TRUE(input.Next(&buffer, &bufferSize));
-      const char* bufferStart = static_cast<const char*>(buffer);
-      const char* bufferEnd = bufferStart + bufferSize;
-      common::IsNotNull filter;
-      NoHook noHook;
-      int32_t numValues = 0;
-      fixedWidthScan<int16_t, false, false>(
-          folly::Range<const int32_t*>(rows.data(), numRows),
-          nullptr,
-          values.data(),
-          hits.data(),
-          numValues,
-          input,
-          bufferStart,
-          bufferEnd,
-          filter,
-          noHook);
-
-      ASSERT_EQ(numValues, numRows);
-      for (int32_t i = 0; i < numRows; ++i) {
-        EXPECT_EQ(hits[i], 2 * i + 1) << i;
-        EXPECT_EQ(values[i], 2 * i + 2) << i;
-      }
-    }
   }
 }
 

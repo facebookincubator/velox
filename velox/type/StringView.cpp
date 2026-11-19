@@ -17,7 +17,6 @@
 #include "velox/type/StringView.h"
 
 #include <folly/dynamic.h>
-#include <cstring>
 
 #include "velox/common/base/SimdUtil.h"
 
@@ -82,10 +81,10 @@ int32_t StringView::linearSearch(
         if (isInline ? inlined ==
                     reinterpret_cast<const uint64_t*>(
                            &strings[indices[i + offset]])[1]
-                     : std::memcmp(
+                     : simd::memEqualUnsafe(
                            body,
                            strings[indices[i + offset]].data() + 4,
-                           bodySize) == 0) {
+                           bodySize)) {
           return i + offset;
         }
       }
@@ -122,7 +121,8 @@ int32_t StringView::linearSearch(
             return offset;
           }
           if (!isInline) {
-            if (std::memcmp(body, strings[offset].data() + 4, bodySize) == 0) {
+            if (simd::memEqualUnsafe(
+                    body, strings[offset].data() + 4, bodySize)) {
               return offset;
             }
           }
