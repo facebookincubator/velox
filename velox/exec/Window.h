@@ -107,9 +107,8 @@ class Window : public Operator {
       const core::WindowNode::Frame& frame,
       const RowTypePtr& inputType);
 
-  // Creates the buffers for peer and frame row
-  // indices to send in window function apply invocations.
-  void createPeerAndFrameBuffers();
+  // Sets the initial batch size and prepares storage for per-function buffers.
+  void initializeOutputBatching();
 
   // Updates the next batch size using the latest non-empty output batch.
   void updateNextBatchRows(const RowVectorPtr& output);
@@ -198,8 +197,8 @@ class Window : public Operator {
   std::vector<WindowFrame> windowFrames_;
 
   // The following 4 Buffers are used to pass peer and frame start and end
-  // values to the WindowFunction::apply method. These buffers can be allocated
-  // once and reused across all the getOutput calls.
+  // values to the WindowFunction::apply method. They grow as needed and are
+  // reused across getOutput calls.
   // Only a single peer start and peer end buffer is needed across all
   // functions (as the peer values are based on the ORDER BY clause).
   BufferPtr peerStartBuffer_;
@@ -222,8 +221,11 @@ class Window : public Operator {
   // Number of input rows.
   vector_size_t numRows_ = 0;
 
-  // Fixed capacity of peer/frame buffers and the WindowBuild batch threshold.
-  vector_size_t preferredOutputBatchRows_;
+  // Caps byte-derived output batches at the configured maximum row count.
+  vector_size_t outputBatchRowCap_;
+
+  // Supplies the batch size when sampling yields no usable row-width estimate.
+  vector_size_t fallbackOutputBatchRows_;
 
   // Rows to request in the next batch, based on the previous batch's average
   // row width. Unknown output widths start at one row.

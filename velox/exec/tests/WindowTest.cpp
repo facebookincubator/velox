@@ -361,31 +361,68 @@ void assertOrderedBatches(
   EXPECT_EQ(offset, expected->size());
 }
 
-TEST_F(WindowTest, fixedWidthOutputBatchCount) {
+namespace {
+
+// Builds a row-number plan over sorted c0 input in either window mode.
+core::PlanNodePtr rowNumberPlan(const RowVectorPtr& input, bool streaming) {
+  PlanBuilder builder;
+  builder.values({input});
+  const std::vector<std::string> functions{
+      "row_number() over (order by c0 rows unbounded preceding)"};
+  if (streaming) {
+    return builder.streamingWindow(functions).planNode();
+  }
+  return builder.window(functions).planNode();
+}
+
+} // namespace
+
+TEST_F(WindowTest, fixedWidthOutputBatchSizes) {
   const vector_size_t size{64};
+  const vector_size_t preferredRows{8};
   auto input = makeRowVector(
       {"c0"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
   auto expected = makeRowVector(
       {input->childAt(0),
        makeFlatVector<int64_t>(size, [](auto row) { return row + 1; })});
+  const struct {
+    vector_size_t maxRows;
+    std::vector<vector_size_t> expectedBatchSizes;
+  } testCases[] = {
+      {10'000, {64}},
+      {17, {17, 17, 17, 13}},
+  };
   for (bool streaming : {false, true}) {
     SCOPED_TRACE(streaming);
-    PlanBuilder builder;
-    builder.values({input});
-    const std::vector<std::string> functions{
-        "row_number() over (order by c0 rows unbounded preceding)"};
-    if (streaming) {
-      builder.streamingWindow(functions);
-    } else {
-      builder.window(functions);
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.maxRows);
+      const auto batches =
+          AssertQueryBuilder(rowNumberPlan(input, streaming))
+              .config(
+                  core::QueryConfig::kPreferredOutputBatchRows, preferredRows)
+              .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'048'576)
+              .config(core::QueryConfig::kMaxOutputBatchRows, testCase.maxRows)
+              .copyResultBatches(pool());
+      std::vector<vector_size_t> batchSizes;
+      for (const auto& batch : batches) {
+        batchSizes.push_back(batch->size());
+      }
+      EXPECT_THAT(
+          batchSizes, testing::ElementsAreArray(testCase.expectedBatchSizes));
+      assertOrderedBatches(expected, batches);
     }
-    auto batches =
-        AssertQueryBuilder(builder.planNode())
-            .config(core::QueryConfig::kPreferredOutputBatchRows, size)
-            .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'048'576)
-            .copyResultBatches(pool());
-    ASSERT_EQ(batches.size(), 1);
-    assertOrderedBatches(expected, batches);
+  }
+}
+
+TEST_F(WindowTest, zeroMaxOutputBatchRows) {
+  auto input = makeRowVector({"c0"}, {makeFlatVector<int64_t>({})});
+  for (bool streaming : {false, true}) {
+    SCOPED_TRACE(streaming);
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(rowNumberPlan(input, streaming))
+            .config(core::QueryConfig::kMaxOutputBatchRows, 0)
+            .copyResultBatches(pool()),
+        "max_output_batch_rows must be positive for Window batching");
   }
 }
 
@@ -415,6 +452,8 @@ TEST_F(WindowTest, outputBatchRowSizeChangesPreserveFrames) {
                return isRows ? preceding : row / peerGroupSize - preceding;
              }),
          makeFlatVector<int64_t>(size, [](auto row) { return row; })});
+    createDuckDbTable({input});
+
     auto plan = PlanBuilder()
                     .values({input})
                     .streamingWindow({fmt::format(
@@ -448,65 +487,20 @@ TEST_F(WindowTest, outputBatchRowSizeChangesPreserveFrames) {
     EXPECT_LT(smallestWideBatch, preferredRows);
     EXPECT_GT(largestRecoveredBatch, smallestWideBatch);
 
-    std::vector<std::vector<int64_t>> expectedArrays;
-    for (vector_size_t row = 0; row < size; ++row) {
-      const auto preceding = precedingForRow(row);
-      const auto start = isRows
-          ? std::max<int64_t>(0, row - preceding)
-          : std::max<int64_t>(0, row / peerGroupSize - preceding) *
-              peerGroupSize;
-      const auto end =
-          isRows ? row + 1 : (row / peerGroupSize + 1) * peerGroupSize;
-      std::vector<int64_t> values;
-      for (auto i = start; i < end; ++i) {
-        values.push_back(i / peerGroupSize);
-      }
-      expectedArrays.push_back(std::move(values));
-    }
-    auto expected = makeRowVector(
-        {input->childAt(0),
-         input->childAt(1),
-         input->childAt(2),
-         makeArrayVector<int64_t>(expectedArrays)});
-    assertOrderedBatches(expected, batches);
-  }
-}
-
-TEST_F(WindowTest, outputBatchesRespectMaxRows) {
-  const vector_size_t size{100};
-  const vector_size_t maxRows{17};
-  const uint64_t preferredBytes{1'048'576};
-  auto input = makeRowVector(
-      {"c0"}, {makeFlatVector<int64_t>(size, [](auto row) { return row; })});
-  auto expected = makeRowVector(
-      {input->childAt(0),
-       makeFlatVector<int64_t>(size, [](auto row) { return row + 1; })});
-
-  for (bool streaming : {false, true}) {
-    SCOPED_TRACE(streaming);
-    PlanBuilder builder;
-    builder.values({input});
-    const std::vector<std::string> functions{
-        "row_number() over (order by c0 rows unbounded preceding)"};
-    if (streaming) {
-      builder.streamingWindow(functions);
-    } else {
-      builder.window(functions);
-    }
-    auto batches =
-        AssertQueryBuilder(builder.planNode())
-            .config(core::QueryConfig::kPreferredOutputBatchRows, 128)
-            .config(core::QueryConfig::kMaxOutputBatchRows, maxRows)
-            .config(
-                core::QueryConfig::kPreferredOutputBatchBytes, preferredBytes)
-            .copyResultBatches(pool());
-
-    ASSERT_FALSE(batches.empty());
-    for (const auto& batch : batches) {
-      EXPECT_GT(batch->size(), 0);
-      EXPECT_LE(batch->size(), maxRows);
-    }
-    assertOrderedBatches(expected, batches);
+    // DuckDB takes a RANGE offset and can aggregate RANGE peers first. Sort
+    // the reference arrays into the window order and break ROWS ties by id.
+    const auto sql = fmt::format(
+        "SELECT c0, c1, id, array_sort(array_agg(c0) OVER (ORDER BY {} {} "
+        "BETWEEN {} PRECEDING AND CURRENT ROW)) FROM tmp ORDER BY id",
+        isRows ? "c0, id" : "c0",
+        frameType,
+        isRows ? "c1" : "c0 - c1");
+    assertResultsOrdered(
+        batches,
+        plan->outputType(),
+        sql,
+        duckDbQueryRunner_,
+        {plan->outputType()->getChildIdx("id")});
   }
 }
 

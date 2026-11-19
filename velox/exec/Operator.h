@@ -672,6 +672,14 @@ class Operator : public BaseRuntimeStatWriter {
   vector_size_t outputBatchRows(
       std::optional<uint64_t> averageRowSize = std::nullopt) const;
 
+  // Estimates the next batch's row count from a non-empty output batch,
+  // a byte target and a row cap. Returns nullopt when the average row width
+  // rounds down to zero.
+  static std::optional<vector_size_t> outputBatchRowsFromOutput(
+      const RowVector& output,
+      uint64_t preferredBytes,
+      vector_size_t maxRows);
+
   /// Load 'vector' if lazy. Potential large memory usage site that might
   /// trigger arbitration. Hence this call is made reclaimable. This is often
   /// used at the start of 'addInput()' call to load the input if needed.

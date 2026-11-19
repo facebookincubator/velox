@@ -364,6 +364,21 @@ void Operator::close() {
   operatorCtx_->pool()->release();
 }
 
+namespace {
+
+vector_size_t rowsForByteTarget(
+    uint64_t preferredBytes,
+    uint64_t averageRowSize,
+    vector_size_t maxRows) {
+  const uint64_t batchSize = preferredBytes / averageRowSize;
+  if (batchSize > static_cast<uint64_t>(maxRows)) {
+    return maxRows;
+  }
+  return std::max<vector_size_t>(batchSize, 1);
+}
+
+} // namespace
+
 vector_size_t Operator::outputBatchRows(
     std::optional<uint64_t> averageRowSize) const {
   const auto& queryConfig = operatorCtx_->task()->queryCtx()->queryConfig();
@@ -375,12 +390,22 @@ vector_size_t Operator::outputBatchRows(
     return queryConfig.maxOutputBatchRows();
   }
 
-  const uint64_t batchSize =
-      queryConfig.preferredOutputBatchBytes() / averageRowSize.value();
-  if (batchSize > queryConfig.maxOutputBatchRows()) {
-    return queryConfig.maxOutputBatchRows();
+  return rowsForByteTarget(
+      queryConfig.preferredOutputBatchBytes(),
+      averageRowSize.value(),
+      queryConfig.maxOutputBatchRows());
+}
+
+std::optional<vector_size_t> Operator::outputBatchRowsFromOutput(
+    const RowVector& output,
+    uint64_t preferredBytes,
+    vector_size_t maxRows) {
+  VELOX_CHECK_GT(output.size(), 0);
+  const auto averageRowSize = output.estimateFlatSize() / output.size();
+  if (averageRowSize == 0) {
+    return std::nullopt;
   }
-  return std::max<vector_size_t>(batchSize, 1);
+  return rowsForByteTarget(preferredBytes, averageRowSize, maxRows);
 }
 
 void Operator::loadLazyReclaimable(RowVectorPtr& vector) {

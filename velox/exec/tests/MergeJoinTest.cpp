@@ -2711,10 +2711,7 @@ TEST_F(MergeJoinTest, testJoinWithTwoKeysAndSecondColumnHasNulls) {
 // (mergeJoinOutputBatchStartSize > 0), MergeJoin adjusts output batch size
 // based on average row size and preferred bytes.
 TEST_F(MergeJoinTest, dynamicOutputBatchSizing) {
-  // Create simple two-column BIGINT data for both left and right sides.
-  // Each row is approximately 16 bytes (2 x 8 bytes for BIGINT).
-  // We create enough rows to see multiple output batches.
-  const vector_size_t numRows = 1000;
+  const vector_size_t numRows{64};
 
   auto left = makeRowVector(
       {"t_c0", "t_c1"},
@@ -2731,7 +2728,6 @@ TEST_F(MergeJoinTest, dynamicOutputBatchSizing) {
       });
 
   auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  core::PlanNodeId mergeJoinNodeId;
 
   auto plan =
       PlanBuilder(planNodeIdGenerator)
@@ -2743,63 +2739,57 @@ TEST_F(MergeJoinTest, dynamicOutputBatchSizing) {
               "",
               {"t_c0", "t_c1", "u_c1"},
               core::JoinType::kInner)
-          .capturePlanNodeId(mergeJoinNodeId)
           .planNode();
 
-  // Set a very high preferred row count (10000) but a relatively small byte
-  // limit. The dynamic sizing should compute batch size based on
-  // preferredBytes / avgRowSize, rather than immediately producing 10000 rows.
-  const uint32_t highPreferredRows = 10000;
-  // Set preferred bytes to allow roughly 64 rows per batch (each output row is
-  // ~24 bytes: 3 x 8 bytes for 3 BIGINT columns).
-  const uint64_t preferredBytes = 24 * 64;
+  // The byte target limits batch sizes when the row cap is high enough.
+  const uint64_t preferredBytes{24 * 12};
+  const struct {
+    vector_size_t startRows;
+    vector_size_t maxRows;
+    bool byteLimited;
+  } testCases[] = {
+      {1, 8, false},
+      {16, 8, false},
+      {1, 32, true},
+  };
 
-  auto queryCtx = core::QueryCtx::create(executor_.get());
-  queryCtx->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kPreferredOutputBatchRows,
-       std::to_string(highPreferredRows)},
-      {core::QueryConfig::kPreferredOutputBatchBytes,
-       std::to_string(preferredBytes)},
-      // Enable dynamic batch sizing by setting a non-zero start size.
-      {core::QueryConfig::kMergeJoinOutputBatchStartSize, "1"},
-  });
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(
+        fmt::format(
+            "startRows={}, maxRows={}", testCase.startRows, testCase.maxRows));
+    const auto batches =
+        AssertQueryBuilder(plan)
+            .config(core::QueryConfig::kPreferredOutputBatchRows, numRows)
+            .config(core::QueryConfig::kMaxOutputBatchRows, testCase.maxRows)
+            .config(
+                core::QueryConfig::kPreferredOutputBatchBytes, preferredBytes)
+            .config(
+                core::QueryConfig::kMergeJoinOutputBatchStartSize,
+                testCase.startRows)
+            .copyResultBatches(pool());
 
-  CursorParameters params;
-  params.planNode = plan;
-  params.queryCtx = queryCtx;
-
-  auto cursor = TaskCursor::create(params);
-  cursor->start();
-
-  std::vector<vector_size_t> outputBatchSizes;
-  while (cursor->moveNext()) {
-    auto result = cursor->current();
-    if (result && result->size() > 0) {
-      outputBatchSizes.push_back(result->size());
+    ASSERT_GT(batches.size(), 2);
+    EXPECT_EQ(
+        batches.front()->size(),
+        std::min(testCase.startRows, testCase.maxRows));
+    for (size_t i = 1; i < batches.size() - 1; ++i) {
+      if (testCase.byteLimited) {
+        EXPECT_GT(batches[i]->size(), testCase.startRows);
+        EXPECT_LT(batches[i]->size(), testCase.maxRows);
+      } else {
+        EXPECT_EQ(batches[i]->size(), testCase.maxRows);
+      }
     }
+    EXPECT_GT(batches.back()->size(), 0);
+    EXPECT_LE(batches.back()->size(), testCase.maxRows);
   }
 
-  // Verify that we got multiple output batches.
-  ASSERT_GT(outputBatchSizes.size(), 1);
-
-  // Verify the first batch starts small (should be 1 row due to initial
-  // outputBatchSize_ = 1).
-  EXPECT_EQ(outputBatchSizes[0], 1);
-
-  // After the first batch, the batch size should immediately jump to the
-  // computed size based on preferredBytes / avgRowSize (roughly 64 rows).
-  // All subsequent batches (except the last which may have fewer remaining
-  // rows) should be approximately this computed size.
-  for (size_t i = 1; i < outputBatchSizes.size() - 1; ++i) {
-    EXPECT_GT(outputBatchSizes[i], 8)
-        << "Batch " << i
-        << " should be computed based on preferredBytes / avgRowSize";
-  }
-
-  // Verify we never exceed the preferred row count.
-  for (size_t i = 0; i < outputBatchSizes.size(); ++i) {
-    EXPECT_LE(outputBatchSizes[i], highPreferredRows);
-  }
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kMergeJoinOutputBatchStartSize, 1)
+          .config(core::QueryConfig::kMaxOutputBatchRows, 0)
+          .copyResults(pool()),
+      "max_output_batch_rows must be positive for dynamic MergeJoin batching");
 }
 
 // Test that filterInput_ properly handles the case where outputBatchSize_

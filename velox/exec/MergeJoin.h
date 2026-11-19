@@ -664,6 +664,9 @@ class MergeJoin : public Operator {
   // outputBatchSize_ is fixed at preferredOutputBatchRows_.
   const bool dynamicOutputBatchSizeEnabled_;
 
+  // Configured hard row limit for initial and resized batches in dynamic mode.
+  const vector_size_t maxDynamicOutputBatchRows_;
+
   // core::QueryConfig::mergeJoinStreamLeftSide(). Whether streaming actually
   // applies also depends on the join type and filter; see canStreamLeftSide().
   const bool streamLeftSideEnabled_;

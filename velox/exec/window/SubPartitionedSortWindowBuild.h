@@ -61,8 +61,6 @@ class SubPartitionedSortWindowBuild : public WindowBuild {
 
   std::shared_ptr<WindowPartition> nextPartition() override;
 
-  std::optional<int64_t> estimateRowSize() override;
-
  private:
   // The current sub partition's WindowBuild has finished producing all the
   // data. Release all the memory of current sub partition's WindowBuild, and

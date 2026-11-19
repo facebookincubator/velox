@@ -105,9 +105,19 @@ Window::Window(
 void Window::initialize() {
   Operator::initialize();
   VELOX_CHECK_NOT_NULL(windowNode_);
+  const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
+  outputBatchRowCap_ = queryConfig.maxOutputBatchRows();
+  VELOX_USER_CHECK_GT(
+      outputBatchRowCap_,
+      0,
+      "max_output_batch_rows must be positive for Window batching");
+  fallbackOutputBatchRows_ =
+      std::min(queryConfig.preferredOutputBatchRows(), outputBatchRowCap_);
   createWindowFunctions();
-  createPeerAndFrameBuffers();
-  windowBuild_->setNumRowsPerOutput(preferredOutputBatchRows_);
+  initializeOutputBatching();
+  // Let the build accumulate enough rows for the initial fixed-width batch.
+  windowBuild_->setNumRowsPerOutput(
+      std::max(fallbackOutputBatchRows_, nextBatchRows_));
   windowNode_.reset();
 }
 
@@ -314,47 +324,22 @@ void Window::reclaim(
   windowBuild_->spill();
 }
 
-void Window::createPeerAndFrameBuffers() {
-  // Keep the buffer capacity and build threshold fixed. Output batches can
-  // shrink based on the observed output row size.
-  const auto inputRowSize = windowBuild_->estimateRowSize();
-  preferredOutputBatchRows_ = outputBatchRows(inputRowSize);
-
-  // Seed fixed-width results from the input estimate when available. Before
-  // input arrives, fixed-width input columns also have a known row width.
-  auto rowSize = inputRowSize;
-  const auto firstColumn = rowSize.has_value() ? numInputColumns_ : 0;
-  for (auto column = firstColumn; column < outputType_->size(); ++column) {
-    const auto& type = outputType_->childAt(column);
+void Window::initializeOutputBatching() {
+  // Fixed-width output can skip the initial one-row sample.
+  std::optional<uint64_t> rowSize{0};
+  for (const auto& type : outputType_->children()) {
     if (!type->isFixedWidth()) {
       rowSize.reset();
       break;
     }
-    rowSize = rowSize.value_or(0) + type->cppSizeInBytes();
+    *rowSize += type->cppSizeInBytes();
   }
-  nextBatchRows_ = rowSize.has_value()
-      ? std::min(preferredOutputBatchRows_, outputBatchRows(rowSize))
-      : 1;
-
-  peerStartBuffer_ = AlignedBuffer::allocate<vector_size_t>(
-      preferredOutputBatchRows_, operatorCtx_->pool());
-  peerEndBuffer_ = AlignedBuffer::allocate<vector_size_t>(
-      preferredOutputBatchRows_, operatorCtx_->pool());
+  nextBatchRows_ = rowSize.has_value() ? outputBatchRows(rowSize) : 1;
 
   const auto numFuncs = windowFunctions_.size();
-  frameStartBuffers_.reserve(numFuncs);
-  frameEndBuffers_.reserve(numFuncs);
-  validFrames_.reserve(numFuncs);
-
-  for (auto i = 0; i < numFuncs; i++) {
-    BufferPtr frameStartBuffer = AlignedBuffer::allocate<vector_size_t>(
-        preferredOutputBatchRows_, operatorCtx_->pool());
-    BufferPtr frameEndBuffer = AlignedBuffer::allocate<vector_size_t>(
-        preferredOutputBatchRows_, operatorCtx_->pool());
-    frameStartBuffers_.push_back(frameStartBuffer);
-    frameEndBuffers_.push_back(frameEndBuffer);
-    validFrames_.push_back(SelectivityVector(preferredOutputBatchRows_));
-  }
+  frameStartBuffers_.resize(numFuncs);
+  frameEndBuffers_.resize(numFuncs);
+  validFrames_.resize(numFuncs);
 }
 
 void Window::noMoreInput() {
@@ -588,25 +573,22 @@ void Window::computePeerAndFrameBuffers(
   const vector_size_t numRows = endRow - startRow;
   const vector_size_t numFuncs = windowFunctions_.size();
 
-  // Size buffers for the call to WindowFunction::apply.
-  const auto bufferSize = numRows * sizeof(vector_size_t);
-  peerStartBuffer_->setSize(bufferSize);
-  peerEndBuffer_->setSize(bufferSize);
-  auto* rawPeerStarts = peerStartBuffer_->asMutable<vector_size_t>();
-  auto* rawPeerEnds = peerEndBuffer_->asMutable<vector_size_t>();
+  auto* pool = operatorCtx_->pool();
+  auto prepareBuffer = [&](BufferPtr& buffer) {
+    vector_size_t* raw;
+    BaseVector::ensureBuffer<vector_size_t>(numRows, pool, &buffer, &raw);
+    return raw;
+  };
+  auto* rawPeerStarts = prepareBuffer(peerStartBuffer_);
+  auto* rawPeerEnds = prepareBuffer(peerEndBuffer_);
 
   std::vector<vector_size_t*> rawFrameStarts;
   std::vector<vector_size_t*> rawFrameEnds;
   rawFrameStarts.reserve(numFuncs);
   rawFrameEnds.reserve(numFuncs);
   for (auto i = 0; i < numFuncs; ++i) {
-    frameStartBuffers_[i]->setSize(bufferSize);
-    frameEndBuffers_[i]->setSize(bufferSize);
-
-    auto* rawFrameStart = frameStartBuffers_[i]->asMutable<vector_size_t>();
-    auto* rawFrameEnd = frameEndBuffers_[i]->asMutable<vector_size_t>();
-    rawFrameStarts.push_back(rawFrameStart);
-    rawFrameEnds.push_back(rawFrameEnd);
+    rawFrameStarts.push_back(prepareBuffer(frameStartBuffers_[i]));
+    rawFrameEnds.push_back(prepareBuffer(frameEndBuffers_[i]));
   }
 
   std::tie(peerStartRow_, peerEndRow_) = currentPartition_->computePeerBuffers(
@@ -795,9 +777,11 @@ void Window::updateNextBatchRows(const RowVectorPtr& output) {
     return;
   }
 
-  nextBatchRows_ = std::min(
-      preferredOutputBatchRows_,
-      outputBatchRows(output->estimateFlatSize() / output->size()));
+  const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
+  nextBatchRows_ =
+      outputBatchRowsFromOutput(
+          *output, queryConfig.preferredOutputBatchBytes(), outputBatchRowCap_)
+          .value_or(fallbackOutputBatchRows_);
 }
 
 } // namespace facebook::velox::exec
