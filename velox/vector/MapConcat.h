@@ -41,7 +41,8 @@ struct MapConcatConfig {
 /// constant, the result is a FlatMapVector. A key that only one input has
 /// shares the map values of that input instead of copying them, and entry
 /// order within a map is not defined. When every input is a MapVector, the
-/// result is a MapVector. Mixing the two encodings fails.
+/// result is a MapVector. When the inputs mix the two, the result is a
+/// FlatMapVector, and the entries of each MapVector are copied into it.
 VectorPtr mapConcat(
     memory::MemoryPool* pool,
     const TypePtr& outputType,

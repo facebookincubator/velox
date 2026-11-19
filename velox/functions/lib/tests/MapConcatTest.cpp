@@ -331,16 +331,30 @@ TEST_F(MapConcatTest, flatMapWithMap) {
       "{3:31}",
   });
 
-  VELOX_ASSERT_THROW(
-      evaluate("map_concat(c0, c1)", makeRowVector({flatMap, map})),
-      "map_concat does not support mixing flat maps and regular maps");
-  VELOX_ASSERT_THROW(
-      evaluate("map_concat(c1, c0)", makeRowVector({flatMap, map})),
-      "map_concat does not support mixing flat maps and regular maps");
-  VELOX_ASSERT_THROW(
-      evaluate(
-          "map_concat(c0, map(array[7], array[70]))", makeRowVector({flatMap})),
-      "map_concat does not support mixing flat maps and regular maps");
+  testFlatMap(
+      "map_concat(c0, c1)",
+      {flatMap, map},
+      {flatMap->toMapVector(), map},
+      makeMapVectorFromJson<int64_t, int64_t>({
+          "{1:10, 2:20, 4:40}",
+          "{3:31}",
+      }));
+  testFlatMap(
+      "map_concat(c1, c0)",
+      {flatMap, map},
+      {flatMap->toMapVector(), map},
+      makeMapVectorFromJson<int64_t, int64_t>({
+          "{1:10, 2:20, 4:40}",
+          "{3:30}",
+      }));
+  testFlatMap(
+      "map_concat(c0, map(array[2, 7], array[22, 70]))",
+      {flatMap},
+      {flatMap->toMapVector()},
+      makeMapVectorFromJson<int64_t, int64_t>({
+          "{1:10, 2:22, 7:70}",
+          "{2:22, 3:30, 7:70}",
+      }));
 }
 
 TEST_F(MapConcatTest, flatMapDuplicateKeys) {

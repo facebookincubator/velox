@@ -72,6 +72,25 @@ class MapConcatTest : public testing::Test, public velox::test::VectorTestBase {
     test::assertEqualVectors(expected, result);
     test::assertEqualVectors(concat(mapInputs, rows, config), result);
   }
+
+  std::shared_ptr<FlatMapVector> testMixedConcat(
+      const std::vector<VectorPtr>& inputs,
+      const SelectivityVector& rows,
+      const MapConcatConfig& config) {
+    std::vector<VectorPtr> mapInputs;
+    std::vector<VectorPtr> inputCopies;
+    for (const auto& input : inputs) {
+      mapInputs.push_back(test::withMapBase(input));
+      inputCopies.push_back(BaseVector::copy(*mapInputs.back()));
+    }
+    auto result = concat<FlatMapVector>(inputs, rows, config);
+    result->validate();
+    test::assertEqualVectors(concat(mapInputs, rows, config), result, rows);
+    for (size_t i = 0; i < inputs.size(); ++i) {
+      test::assertEqualVectors(inputCopies[i], inputs[i]);
+    }
+    return result;
+  }
 };
 
 TEST_F(MapConcatTest, basic) {
@@ -451,28 +470,273 @@ TEST_F(MapConcatTest, flatMapWithMap) {
   auto flatMap = makeFlatMapVectorFromJson<int64_t, int64_t>({
       "{1:10, 2:20}",
       "{3:30}",
+      "{}",
   });
   auto map = makeMapVectorFromJson<int64_t, int64_t>({
       "{2:99}",
       "{7:70}",
+      "{2:92, 3:93}",
   });
+  SelectivityVector rows(3);
+
+  {
+    auto result = testMixedConcat({flatMap, map}, rows, {});
+    test::assertEqualVectors(
+        makeMapVectorFromJson<int64_t, int64_t>({
+            "{1:10, 2:99}",
+            "{3:30, 7:70}",
+            "{2:92, 3:93}",
+        }),
+        result);
+    EXPECT_EQ(
+        result->mapValuesAt(result->getKeyChannel(int64_t{1}).value()),
+        flatMap->mapValuesAt(flatMap->getKeyChannel(int64_t{1}).value()));
+  }
+
+  {
+    auto result = testMixedConcat({map, flatMap}, rows, {});
+    test::assertEqualVectors(
+        makeMapVectorFromJson<int64_t, int64_t>({
+            "{1:10, 2:20}",
+            "{3:30, 7:70}",
+            "{2:92, 3:93}",
+        }),
+        result);
+  }
+
+  testMixedConcat({map, flatMap, map}, rows, {});
+  testMixedConcat({flatMap, map, flatMap}, rows, {});
+  testMixedConcat({map, map, flatMap}, rows, {});
+  testMixedConcat({flatMap, map, map}, rows, {});
+}
+
+TEST_F(MapConcatTest, flatMapWithMapNulls) {
+  auto flatMap = makeFlatMapVectorFromJson<int64_t, int64_t>({
+      "{1:10, 2:20}",
+      "null",
+      "{3:30}",
+      "{4:null}",
+  });
+  auto map = makeMapVectorFromJson<int64_t, int64_t>({
+      "null",
+      "{7:70}",
+      "{3:null, 8:80}",
+      "{4:44}",
+  });
+  SelectivityVector rows(4);
+
+  {
+    auto result = testMixedConcat({flatMap, map}, rows, {});
+    test::assertEqualVectors(
+        makeMapVectorFromJson<int64_t, int64_t>({
+            "null",
+            "null",
+            "{3:null, 8:80}",
+            "{4:44}",
+        }),
+        result);
+    EXPECT_EQ(result->numDistinctKeys(), 3);
+  }
+
+  {
+    auto result = testMixedConcat({map, flatMap}, rows, {.emptyForNull = true});
+    test::assertEqualVectors(
+        makeMapVectorFromJson<int64_t, int64_t>({
+            "{1:10, 2:20}",
+            "{7:70}",
+            "{3:30, 8:80}",
+            "{4:null}",
+        }),
+        result);
+  }
+
+  for (const auto& config :
+       {MapConcatConfig{}, MapConcatConfig{.emptyForNull = true}}) {
+    auto nullMap = BaseVector::wrapInConstant(4, 0, map);
+    testMixedConcat({flatMap, nullMap}, rows, config);
+    testMixedConcat({nullMap, flatMap, map}, rows, config);
+  }
+
+  auto nullMap = BaseVector::createNullConstant(map->type(), 4, pool());
+  {
+    auto result = concat<FlatMapVector>({flatMap, nullMap, map}, rows, {});
+    result->validate();
+    test::assertEqualVectors(
+        BaseVector::createNullConstant(map->type(), 4, pool()), result);
+  }
+
+  {
+    auto result = concat<FlatMapVector>(
+        {nullMap, flatMap, map}, rows, {.emptyForNull = true});
+    result->validate();
+    test::assertEqualVectors(
+        concat({flatMap->toMapVector(), map}, rows, {.emptyForNull = true}),
+        result);
+  }
+}
+
+TEST_F(MapConcatTest, flatMapWithMapDuplicateKeys) {
+  auto flatMap = makeFlatMapVectorFromJson<int64_t, int64_t>({
+      "{1:10, 2:20}",
+      "{3:30}",
+  });
+  auto map = makeMapVectorFromJson<int64_t, int64_t>({
+      "{4:40}",
+      "{3:31}",
+  });
+  auto noDuplicates = makeMapVectorFromJson<int64_t, int64_t>({
+      "{5:50}",
+      "{6:60}",
+  });
+  auto duplicatesInRow = makeMapVector(
+      {0, 3},
+      makeFlatVector<int64_t>({5, 6, 5, 7}),
+      makeFlatVector<int64_t>({50, 60, 51, 70}));
+  const MapConcatConfig config{.throwOnDuplicateKeys = true};
   SelectivityVector rows(2);
 
   VELOX_ASSERT_THROW(
-      concat({flatMap, map}, rows, {}),
-      "map_concat does not support mixing flat maps and regular maps");
+      concat<FlatMapVector>({flatMap, map}, rows, config),
+      "Duplicate map key was found: 3");
   VELOX_ASSERT_THROW(
-      concat({flatMap, BaseVector::wrapInConstant(2, 0, map)}, rows, {}),
-      "map_concat does not support mixing flat maps and regular maps");
+      concat<FlatMapVector>({map, flatMap}, rows, config),
+      "Duplicate map key was found: 3");
   VELOX_ASSERT_THROW(
-      concat({map, flatMap}, rows, {}),
-      "map_concat does not support mixing flat maps and regular maps");
+      concat<FlatMapVector>({flatMap, duplicatesInRow}, rows, config),
+      "Duplicate map key was found: 5");
   VELOX_ASSERT_THROW(
-      concat({map, BaseVector::wrapInConstant(2, 0, flatMap)}, rows, {}),
-      "map_concat does not support mixing flat maps and regular maps");
+      concat({flatMap->toMapVector(), duplicatesInRow}, rows, config),
+      "Duplicate map key was found: 5");
   VELOX_ASSERT_THROW(
-      concat({map, map, flatMap}, rows, {}),
-      "map_concat does not support mixing flat maps and regular maps");
+      concat<FlatMapVector>(
+          {flatMap, noDuplicates, noDuplicates}, rows, config),
+      "Duplicate map key was found: 5");
+
+  testMixedConcat({flatMap, noDuplicates}, rows, config);
+  testMixedConcat({noDuplicates, flatMap}, rows, config);
+
+  {
+    auto result = testMixedConcat({flatMap, duplicatesInRow}, rows, {});
+    test::assertEqualVectors(
+        makeMapVectorFromJson<int64_t, int64_t>({
+            "{1:10, 2:20, 5:51, 6:60}",
+            "{3:30, 7:70}",
+        }),
+        result);
+  }
+}
+
+TEST_F(MapConcatTest, flatMapWithEncodedMap) {
+  constexpr vector_size_t kSize{4};
+  auto flatMap = makeFlatMapVectorFromJson<int64_t, int64_t>({
+      "{1:10, 2:20}",
+      "null",
+      "{3:30}",
+      "{}",
+  });
+  auto map = makeMapVectorFromJson<int64_t, int64_t>({
+      "{2:99, 5:50}",
+      "{7:70}",
+      "null",
+  });
+  SelectivityVector rows(kSize);
+
+  for (const auto& config :
+       {MapConcatConfig{}, MapConcatConfig{.emptyForNull = true}}) {
+    for (vector_size_t index = 0; index < map->size(); ++index) {
+      auto constant = BaseVector::wrapInConstant(kSize, index, map);
+      testMixedConcat({flatMap, constant}, rows, config);
+      testMixedConcat({constant, flatMap}, rows, config);
+    }
+    auto dictionary = BaseVector::wrapInDictionary(
+        makeNulls({false, false, true, false}),
+        makeIndices({1, 0, 1, 0}),
+        kSize,
+        makeMapVectorFromJson<int64_t, int64_t>({
+            "{2:99, 5:50}",
+            "{7:70}",
+        }));
+    testMixedConcat({flatMap, dictionary}, rows, config);
+    testMixedConcat({dictionary, flatMap}, rows, config);
+    testMixedConcat(
+        {BaseVector::wrapInDictionary(
+             makeNulls({false, false, false, true}),
+             makeIndices({1, 0, 3, 2}),
+             kSize,
+             flatMap),
+         dictionary},
+        rows,
+        config);
+  }
+}
+
+TEST_F(MapConcatTest, flatMapWithMapPartialRows) {
+  auto flatMap = makeFlatMapVectorFromJson<int64_t, int64_t>({
+      "{1:10, 2:20}",
+      "{4:41}",
+      "null",
+      "{2:23}",
+  });
+  auto map = makeMapVectorFromJson<int64_t, int64_t>({
+      "{5:50}",
+      "{6:61, 2:21}",
+      "{1:12}",
+      "{2:24, 7:73}",
+  });
+  SelectivityVector rows(4);
+  rows.setValid(1, false);
+  rows.setValid(3, false);
+  rows.updateBounds();
+
+  auto keysOf = [](const FlatMapVector& vector) {
+    DecodedVector decoded(*vector.distinctKeys());
+    std::vector<int64_t> keys;
+    for (vector_size_t channel = 0; channel < vector.numDistinctKeys();
+         ++channel) {
+      keys.push_back(decoded.valueAt<int64_t>(channel));
+    }
+    return keys;
+  };
+
+  {
+    auto result = testMixedConcat({flatMap, map}, rows, {});
+    EXPECT_THAT(keysOf(*result), testing::UnorderedElementsAre(1, 2, 5));
+  }
+
+  {
+    auto result = testMixedConcat({map, flatMap}, rows, {.emptyForNull = true});
+    EXPECT_THAT(keysOf(*result), testing::UnorderedElementsAre(1, 2, 5));
+  }
+}
+
+TEST_F(MapConcatTest, flatMapWithMapCustomComparisonKeys) {
+  static const Mod100Type kMod100Type;
+  auto mod100Type =
+      std::shared_ptr<const Type>(std::shared_ptr<const Type>{}, &kMod100Type);
+  auto mapType = MAP(mod100Type, BIGINT());
+  auto flatMap = std::make_shared<FlatMapVector>(
+      pool(),
+      mapType,
+      nullptr,
+      1,
+      makeFlatVector<int64_t>({1}, mod100Type),
+      std::vector<VectorPtr>{makeFlatVector<int64_t>({10})},
+      std::vector<BufferPtr>{nullptr});
+  auto map = std::make_shared<MapVector>(
+      pool(),
+      mapType,
+      nullptr,
+      1,
+      makeIndices({0}),
+      makeIndices({1}),
+      makeFlatVector<int64_t>({101}, mod100Type),
+      makeFlatVector<int64_t>({20}));
+  SelectivityVector rows(1);
+
+  auto result = testMixedConcat({flatMap, map}, rows, {});
+  ASSERT_EQ(result->numDistinctKeys(), 1);
+  test::assertEqualVectors(
+      makeFlatVector<int64_t>({20}), result->mapValuesAt(0));
 }
 
 TEST_F(MapConcatTest, twoFlatMaps) {

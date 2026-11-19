@@ -376,8 +376,9 @@ bool isNullConstant(const DecodedVector& decoded) {
   return decoded.isConstantMapping() && decoded.isNullAt(0);
 }
 
-// Checks that every map is a flat map with the result's key type and returns
-// the total number of their distinct keys, which bounds the result's. Unless
+// Checks that every map is a flat map or a regular map with the result's key
+// type and returns the number of distinct keys of the flat maps plus the number
+// of entries of the regular maps, a rough guess at the result's keys. Unless
 // null maps count as empty, also sets 'resultNulls' to the rows where every map
 // is not null, or leaves it null when no map has nulls.
 vector_size_t estimateKeySizeAndCheckTypes(
@@ -389,16 +390,24 @@ vector_size_t estimateKeySizeAndCheckTypes(
     BufferPtr& resultNulls) {
   const auto numRows = rows.end();
   vector_size_t maxNumKeys{0};
+  auto checkKeyType = [&](const TypePtr& mapKeyType) {
+    VELOX_CHECK(
+        *keyType == *mapKeyType,
+        "Map key type mismatch: {} vs {}",
+        keyType->toString(),
+        mapKeyType->toString());
+  };
   for (auto* map : maps) {
-    if (!isNullConstant(*map)) {
-      const auto* flatMap = map->base()->asChecked<FlatMapVector>();
-      const auto& mapKeyType = flatMap->distinctKeys()->type();
-      VELOX_CHECK(
-          *keyType == *mapKeyType,
-          "Map key type mismatch: {} vs {}",
-          keyType->toString(),
-          mapKeyType->toString());
+    if (const auto* regularMap = map->base()->as<MapVector>();
+        regularMap != nullptr && !isNullConstant(*map)) {
+      checkKeyType(regularMap->mapKeys()->type());
+      maxNumKeys += regularMap->mapKeys()->size();
+    } else if (const auto* flatMap = map->base()->as<FlatMapVector>();
+               flatMap != nullptr && !isNullConstant(*map)) {
+      checkKeyType(flatMap->distinctKeys()->type());
       maxNumKeys += flatMap->numDistinctKeys();
+    } else if (!isNullConstant(*map)) {
+      VELOX_FAIL("Unsupported map encoding: {}", map->base()->encoding());
     }
     if (config.emptyForNull) {
       continue;
@@ -446,11 +455,97 @@ BufferPtr generateResultRowsBuffer(
   return nullptr;
 }
 
+void pullFromMap(
+    const DecodedVector& decoded,
+    const uint64_t* rowBits,
+    const SelectivityVector& rows,
+    const TypePtr& valueType,
+    const MapConcatConfig& config,
+    memory::MemoryPool* pool,
+    VectorPtr& keys,
+    vector_size_t& numKeys,
+    folly::F14FastMap<KeyAt, vector_size_t, KeyAtHasher>& keyChannels,
+    std::vector<VectorPtr>& mapValues,
+    std::vector<BufferPtr>& inMaps,
+    std::vector<bool>& isOriginal) {
+  if (detail::isAllNullVector(*decoded.base())) {
+    return;
+  }
+  const auto numRows = rows.end();
+  const auto& map = *decoded.base()->asUnchecked<MapVector>();
+  const auto& entryKeys = map.mapKeys();
+  const auto numKeysBefore = numKeys;
+  std::vector<std::vector<BaseVector::CopyRange>> valueRanges(numKeys);
+  std::vector<BufferPtr> keyRows(numKeys);
+  bits::forEachSetBit(
+      rowBits, rows.begin(), rows.end(), [&](vector_size_t row) {
+        const auto mapRow = decoded.index(row);
+        const auto offset = map.offsetAt(mapRow);
+        for (auto entry = offset; entry < offset + map.sizeAt(mapRow);
+             ++entry) {
+          VELOX_CHECK(!entryKeys->isNullAt(entry), "Map key cannot be null");
+          auto [it, inserted] = keyChannels.try_emplace(
+              KeyAt{entryKeys.get(), static_cast<column_index_t>(entry)},
+              numKeys);
+          if (inserted) {
+            keys->copy(entryKeys.get(), numKeys++, entry, 1);
+            valueRanges.emplace_back();
+            keyRows.emplace_back();
+          }
+          const auto channel = it->second;
+          if (keyRows[channel] == nullptr) {
+            keyRows[channel] =
+                AlignedBuffer::allocate<bool>(numRows, pool, false);
+          }
+          auto* rawKeyRows = keyRows[channel]->asMutable<uint64_t>();
+          if (bits::isBitSet(rawKeyRows, row)) {
+            if (config.throwOnDuplicateKeys) {
+              VELOX_USER_FAIL(
+                  "Duplicate map key was found: {}",
+                  entryKeys->wrappedVector()->toString(
+                      entryKeys->wrappedIndex(entry)));
+            }
+            valueRanges[channel].back().sourceIndex = entry;
+          } else {
+            bits::setBit(rawKeyRows, row);
+            valueRanges[channel].push_back({entry, row, 1});
+          }
+        }
+      });
+  for (vector_size_t channel = 0; channel < numKeys; ++channel) {
+    if (keyRows[channel] == nullptr) {
+      continue;
+    }
+    auto values = BaseVector::create(valueType, numRows, pool);
+    values->copyRanges(map.mapValues().get(), valueRanges[channel]);
+    if (channel >= numKeysBefore) {
+      mapValues.push_back(std::move(values));
+      inMaps.push_back(std::move(keyRows[channel]));
+      isOriginal.push_back(false);
+    } else {
+      isOriginal[channel] = FlatMapVector::mergeChannels(
+          rows,
+          values,
+          std::move(keyRows[channel]),
+          isOriginal[channel],
+          numRows,
+          pool,
+          config.throwOnDuplicateKeys,
+          *keys,
+          channel,
+          mapValues[channel],
+          inMaps[channel]);
+    }
+  }
+}
+
 // Concatenates the maps one at a time. A key the result does not have yet
 // shares the map's values. A key it already has is copied into values of its
 // own the first time, and later maps copy over it, so the last map wins.
 // Output keys are in the order they are first seen. When they are exactly the
 // keys of the first flat map, the result keeps its distinct keys and key index.
+// The entries of a regular map are copied into the result keys row by row,
+// with the last of duplicate keys in a row winning.
 FlatMapVectorPtr flatMapConcat(
     memory::MemoryPool* pool,
     const TypePtr& outputType,
@@ -490,7 +585,6 @@ FlatMapVectorPtr flatMapConcat(
       continue;
     }
     auto& decoded = *maps[i];
-    const auto& flatMap = *decoded.base()->asUnchecked<FlatMapVector>();
     auto mapRows = resultRowsBuffer;
     const auto* rawNulls = decoded.nulls(&rows);
     if (config.emptyForNull && rawNulls != nullptr) {
@@ -502,6 +596,23 @@ FlatMapVectorPtr flatMapConcat(
           0,
           numRows);
     }
+    if (decoded.base()->encoding() != VectorEncoding::Simple::FLAT_MAP) {
+      pullFromMap(
+          decoded,
+          mapRows != nullptr ? mapRows->as<uint64_t>() : selectedRowBits,
+          rows,
+          outputType->asMap().valueType(),
+          config,
+          pool,
+          keys,
+          numKeys,
+          keyChannels,
+          mapValues,
+          inMaps,
+          isOriginal);
+      continue;
+    }
+    const auto& flatMap = *decoded.base()->asUnchecked<FlatMapVector>();
     DecodedVector::DictionaryWrapping wrapping;
     if (!decoded.isIdentityMapping() && !decoded.isConstantMapping()) {
       wrapping = decoded.dictionaryWrapping(*pool, rows);
@@ -624,6 +735,7 @@ VectorPtr mapConcat(
   VELOX_CHECK_LT(inputs.size(), std::numeric_limits<int8_t>::max());
   switch (mapsToConcatEncodings(inputs)) {
     case ConcatEncoding::kFlatMap:
+    case ConcatEncoding::kMixed:
       return flatMapConcat(pool, outputType, inputs, rows, config);
     case ConcatEncoding::kMap: {
       const auto& keyType = outputType->asMap().keyType();
@@ -643,9 +755,6 @@ VectorPtr mapConcat(
           rows,
           config);
     }
-    case ConcatEncoding::kMixed:
-      VELOX_NYI(
-          "map_concat does not support mixing flat maps and regular maps");
   }
   VELOX_UNREACHABLE();
 }
