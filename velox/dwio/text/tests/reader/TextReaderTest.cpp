@@ -28,6 +28,7 @@
 #include "velox/connectors/common/ExtractionUtils.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/text/RegisterTextReader.h"
+#include "velox/type/tz/TimeZoneMap.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 extern int daylight;
@@ -80,23 +81,29 @@ class TextReaderTest : public testing::Test,
   }
 
   std::unique_ptr<dwio::common::Reader> createReader(
-      const RowTypePtr& type,
       const std::string& fileName,
-      const dwio::common::SerDeOptions& serDeOptions =
-          dwio::common::SerDeOptions()) {
+      const dwio::common::ReaderOptions& readerOptions) {
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
     auto path =
         velox::test::getDataFilePath("velox/dwio/text/tests/reader/", fileName);
     auto readFile = std::make_shared<LocalReadFile>(path);
+    auto input =
+        std::make_unique<dwio::common::BufferedInput>(readFile, *pool());
+    return factory->createReader(std::move(input), readerOptions);
+  }
+
+  std::unique_ptr<dwio::common::Reader> createReader(
+      const RowTypePtr& type,
+      const std::string& fileName,
+      const dwio::common::SerDeOptions& serDeOptions =
+          dwio::common::SerDeOptions()) {
     dwio::common::ReaderOptions readerOptions(pool());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setFileSchema(type);
     readerOptions.setSerDeOptions(serDeOptions);
-    auto input =
-        std::make_unique<dwio::common::BufferedInput>(readFile, *pool());
-    return factory->createReader(std::move(input), readerOptions);
+    return createReader(fileName, readerOptions);
   }
 
   void assertReadsAs(
@@ -302,6 +309,101 @@ TEST_F(TextReaderTest, rowReaderOwnsScanSpec) {
       makeFlatVector<bool>({true}),
   });
   EXPECT_TRUE(result->equalValueAt(expected.get(), 0, 0));
+}
+
+TEST_F(TextReaderTest, sessionTimezone) {
+  const auto type =
+      ROW({{"value", TIMESTAMP()}, {"nested", ARRAY(TIMESTAMP())}});
+  struct TestCase {
+    std::string timezone;
+    std::string localTime;
+    int64_t sessionSeconds;
+    int64_t legacySeconds;
+  };
+  const std::vector<TestCase> testCases{
+      {"", "1970-01-01 00:00:00", 0, 28'800},
+      {"UTC", "1970-01-01 00:00:00", 0, 28'800},
+      {"Asia/Kolkata", "1970-01-01 00:00:00", -19'800, 28'800},
+      {"America/New_York", "2024-01-15 12:34:56", 1'705'340'096, 1'705'350'896},
+      {"America/New_York", "2024-03-10 01:59:59", 1'710'053'999, 1'710'064'799},
+      {"America/New_York", "2024-03-10 03:00:00", 1'710'054'000, 1'710'064'800},
+      {"America/New_York", "2024-11-03 01:30:00", 1'730'611'800, 1'730'622'600},
+      {"America/New_York", "2024-11-03 02:00:00", 1'730'617'200, 1'730'628'000},
+  };
+  for (const auto& testCase : testCases) {
+    const auto textFile = createTextFile(2, [&](size_t row) {
+      return row == 0 ? fmt::format(
+                            "{}.123456,{}.123456|\\N",
+                            testCase.localTime,
+                            testCase.localTime)
+                      : std::string("\\N,\\N");
+    });
+    for (bool adjust : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "timezone={}, adjust={}, input={}",
+              testCase.timezone,
+              adjust,
+              testCase.localTime));
+      dwio::common::ReaderOptions readerOptions(pool());
+      readerOptions.setFileSchema(type);
+      readerOptions.setSerDeOptions(dwio::common::SerDeOptions(',', '|', ':'));
+      readerOptions.setAdjustTimestampToTimezone(adjust);
+      if (!testCase.timezone.empty()) {
+        readerOptions.setSessionTimezone(tz::locateZone(testCase.timezone));
+      }
+      auto reader = createReader(textFile->getPath(), readerOptions);
+      dwio::common::RowReaderOptions rowReaderOptions;
+      setScanSpec(*type, rowReaderOptions);
+      auto rowReader = reader->createRowReader(rowReaderOptions);
+      const Timestamp timestamp{
+          adjust ? testCase.sessionSeconds : testCase.legacySeconds,
+          123'456'000};
+      const auto expected = makeRowVector(
+          {"value", "nested"},
+          {
+              makeNullableFlatVector<Timestamp>({timestamp, std::nullopt}),
+              makeNullableArrayVector<Timestamp>(
+                  {{{timestamp, std::nullopt}}, std::nullopt}),
+          });
+      VectorPtr result;
+      ASSERT_EQ(rowReader->next(2, result), 2);
+      assertEqualVectors(expected, result);
+      EXPECT_EQ(rowReader->next(1, result), 0);
+    }
+  }
+}
+
+TEST_F(TextReaderTest, sessionTimezoneDstGap) {
+  const auto type = ROW("value", TIMESTAMP());
+  const auto textFile = createTextFile(
+      1, [](size_t) { return std::string("2024-03-31 02:30:00"); });
+  for (bool adjust : {false, true}) {
+    SCOPED_TRACE(adjust);
+    dwio::common::ReaderOptions readerOptions(pool());
+    readerOptions.setFileSchema(type);
+    readerOptions.setSessionTimezone(tz::locateZone("Europe/Berlin"));
+    readerOptions.setAdjustTimestampToTimezone(adjust);
+    auto reader = createReader(textFile->getPath(), readerOptions);
+    dwio::common::RowReaderOptions rowReaderOptions;
+    setScanSpec(*type, rowReaderOptions);
+    auto rowReader = reader->createRowReader(rowReaderOptions);
+    VectorPtr result;
+    if (adjust) {
+      VELOX_ASSERT_USER_THROW(
+          rowReader->next(1, result),
+          "2024-03-31 02:30:00 is in a gap between\n"
+          "2024-03-31 02:00:00 CET and\n"
+          "2024-03-31 03:00:00 CEST which are both equivalent to\n"
+          "2024-03-31 01:00:00 UTC");
+    } else {
+      ASSERT_EQ(rowReader->next(1, result), 1);
+      assertEqualVectors(
+          makeRowVector(
+              {"value"}, {makeFlatVector<Timestamp>({{1'711'877'400, 0}})}),
+          result);
+    }
+  }
 }
 
 TEST_F(TextReaderTest, headerAndCustomNullString) {

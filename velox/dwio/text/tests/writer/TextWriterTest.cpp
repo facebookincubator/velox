@@ -16,6 +16,7 @@
 
 #include "velox/dwio/text/writer/TextWriter.h"
 #include "velox/buffer/Buffer.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
@@ -194,6 +195,134 @@ TEST_F(TextWriterTest, write) {
   EXPECT_EQ(result[0][9], "aGVsbG8=");
   EXPECT_EQ(result[1][9], "d29ybGQ=");
   EXPECT_EQ(result[2][9], "Y3Bw");
+}
+
+TEST_F(TextWriterTest, sessionTimezone) {
+  const auto values = makeNullableFlatVector<Timestamp>({
+      Timestamp{0, 123'456'789},
+      Timestamp{1'710'053'999, 123'456'789},
+      Timestamp{1'710'054'000, 123'456'789},
+      Timestamp{1'730'611'800, 123'456'789},
+      Timestamp{1'730'615'400, 123'456'789},
+      std::nullopt,
+  });
+  const auto numRows = values->size();
+  const auto data = makeRowVector(
+      {"flat", "dictionary", "constant", "nested"},
+      {
+          values,
+          BaseVector::wrapInDictionary(
+              nullptr, makeIndicesInReverse(numRows), numRows, values),
+          BaseVector::wrapInConstant(numRows, 0, values),
+          BaseVector::wrapInConstant(
+              numRows,
+              0,
+              makeNullableArrayVector<Timestamp>(
+                  {{Timestamp{0, 123'456'789}, std::nullopt}})),
+      });
+  const std::vector<std::string> utcValues{
+      "1970-01-01 00:00:00.123",
+      "2024-03-10 06:59:59.123",
+      "2024-03-10 07:00:00.123",
+      "2024-11-03 05:30:00.123",
+      "2024-11-03 06:30:00.123",
+      "\\N",
+  };
+  const std::vector<std::string> legacyValues{
+      "1969-12-31 16:00:00.123",
+      "2024-03-09 22:59:59.123",
+      "2024-03-09 23:00:00.123",
+      "2024-11-02 22:30:00.123",
+      "2024-11-02 23:30:00.123",
+      "\\N",
+  };
+  struct TestCase {
+    std::string timezone;
+    std::vector<std::string> expected;
+  };
+  const std::vector<TestCase> testCases{
+      {"", utcValues},
+      {"UTC", utcValues},
+      {"Asia/Kolkata",
+       {
+           "1970-01-01 05:30:00.123",
+           "2024-03-10 12:29:59.123",
+           "2024-03-10 12:30:00.123",
+           "2024-11-03 11:00:00.123",
+           "2024-11-03 12:00:00.123",
+           "\\N",
+       }},
+      {"America/New_York",
+       {
+           "1969-12-31 19:00:00.123",
+           "2024-03-10 01:59:59.123",
+           "2024-03-10 03:00:00.123",
+           "2024-11-03 01:30:00.123",
+           "2024-11-03 01:30:00.123",
+           "\\N",
+       }},
+  };
+  const auto factory =
+      dwio::common::getWriterFactory(dwio::common::FileFormat::TEXT);
+  for (const auto& testCase : testCases) {
+    for (bool adjust : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format("timezone={}, adjust={}", testCase.timezone, adjust));
+      auto options = std::make_shared<WriterOptions>();
+      options->memoryPool = rootPool_.get();
+      options->schema = data->type();
+      options->sessionTimezoneName = testCase.timezone;
+      options->adjustTimestampToTimezone = adjust;
+      auto sink = std::make_unique<dwio::common::MemorySink>(
+          0, dwio::common::FileSink::Options{.pool = leafPool_.get()});
+      const auto* memorySink = sink.get();
+      auto writer = factory->createWriter(std::move(sink), options);
+      writer->write(data);
+      writer->close();
+
+      const auto& expectedValues = adjust ? testCase.expected : legacyValues;
+      std::string expected;
+      for (vector_size_t row = 0; row < numRows; ++row) {
+        expected += fmt::format(
+            "{}\1{}\1{}\1{}\2\\N\n",
+            expectedValues[row],
+            expectedValues[numRows - row - 1],
+            expectedValues.front(),
+            expectedValues.front());
+      }
+      EXPECT_EQ(std::string(memorySink->data(), memorySink->size()), expected);
+    }
+  }
+}
+
+TEST_F(TextWriterTest, invalidSessionTimezone) {
+  const auto data =
+      makeRowVector({"value"}, {makeFlatVector<Timestamp>({Timestamp{0, 0}})});
+  const auto factory =
+      dwio::common::getWriterFactory(dwio::common::FileFormat::TEXT);
+  for (bool adjust : {false, true}) {
+    SCOPED_TRACE(adjust);
+    auto options = std::make_shared<WriterOptions>();
+    options->memoryPool = rootPool_.get();
+    options->schema = data->type();
+    options->sessionTimezoneName = "Invalid/Timezone";
+    options->adjustTimestampToTimezone = adjust;
+    auto sink = std::make_unique<dwio::common::MemorySink>(
+        0, dwio::common::FileSink::Options{.pool = leafPool_.get()});
+    if (adjust) {
+      VELOX_ASSERT_USER_THROW(
+          factory->createWriter(std::move(sink), options),
+          "Unknown time zone: 'Invalid/Timezone'");
+    } else {
+      const auto* memorySink = sink.get();
+      auto writer = factory->createWriter(std::move(sink), options);
+      writer->write(data);
+      writer->close();
+      EXPECT_EQ(
+          std::string(memorySink->data(), memorySink->size()),
+          "1969-12-31 16:00:00.000\n");
+    }
+  }
 }
 
 // The writer factory must translate the Hive serde 'field.delim' parameter on

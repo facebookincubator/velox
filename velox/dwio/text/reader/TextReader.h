@@ -42,10 +42,15 @@ using memory::MemoryPool;
 
 // Shared state for a file between TextReader and TextRowReader
 struct FileContents {
-  FileContents(MemoryPool& pool, const std::shared_ptr<const RowType>& t);
+  FileContents(
+      MemoryPool& pool,
+      const std::shared_ptr<const RowType>& t,
+      const tz::TimeZone* timestampTimezone);
 
   const size_t COLUMN_POSITION_INVALID = std::numeric_limits<size_t>::max();
   const std::shared_ptr<const RowType> schema;
+  /// Interprets timestamp fields in this timezone; nullptr denotes UTC.
+  const tz::TimeZone* const timestampTimezone;
 
   std::unique_ptr<BufferedInput> input;
   std::unique_ptr<dwio::common::SeekableInputStream> inputStream;

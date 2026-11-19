@@ -83,6 +83,8 @@ class TextWriter : public dwio::common::Writer {
 
   uint8_t headerLineCount_;
   SerDeOptions serDeOptions_;
+  // Renders timestamp values in this timezone; nullptr denotes UTC.
+  const tz::TimeZone* timestampTimezone_;
 };
 
 class TextWriterFactory : public dwio::common::WriterFactory {

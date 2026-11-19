@@ -16,6 +16,7 @@
 
 #include "velox/dwio/text/writer/TextWriter.h"
 #include "velox/common/encode/Base64.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 #include <folly/Conv.h>
 #include <cctype>
@@ -113,7 +114,6 @@ std::optional<std::string> toTextStr<double>(double val) {
 template <>
 std::optional<std::string> toTextStr<Timestamp>(Timestamp val) {
   TimestampToStringOptions options;
-  val.toTimezone(Timestamp::defaultTimezone());
   options.dateTimeSeparator = ' ';
   options.precision = TimestampPrecision::kMilliseconds;
   return {val.toString(options)};
@@ -135,8 +135,14 @@ TextWriter::TextWriter(
                       folly::to<std::string>(folly::Random::rand64()))),
               options->defaultFlushCount)),
       headerLineCount_(options->headerLineCount),
-      serDeOptions_(serDeOptions) {
+      serDeOptions_(serDeOptions),
+      timestampTimezone_(nullptr) {
   VELOX_CHECK_LE(headerLineCount_, 1, "Header line count must be <= 1");
+  if (!options->adjustTimestampToTimezone) {
+    timestampTimezone_ = &Timestamp::defaultTimezone();
+  } else if (!options->sessionTimezoneName.empty()) {
+    timestampTimezone_ = tz::locateZone(options->sessionTimezoneName);
+  }
 }
 
 uint8_t TextWriter::getDelimiterForDepth(uint8_t depth) const {
@@ -296,7 +302,11 @@ void TextWriter::writeCellValue(
       break;
     }
     case TypeKind::TIMESTAMP: {
-      dataStr = toTextStr(decodedColumnVector->valueAt<Timestamp>(row));
+      auto timestamp = decodedColumnVector->valueAt<Timestamp>(row);
+      if (timestampTimezone_ != nullptr) {
+        timestamp.toTimezone(*timestampTimezone_);
+      }
+      dataStr = toTextStr(timestamp);
       break;
     }
     case TypeKind::VARCHAR: {
