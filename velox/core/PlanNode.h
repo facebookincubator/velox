@@ -6415,29 +6415,6 @@ class TopNRowNumberNode : public PlanNode {
       bool partial,
       PlanNodePtr source);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  /// Legacy constructor: a node without 'rowNumberColumnName' is partial.
-  TopNRowNumberNode(
-      PlanNodeId id,
-      RankFunction function,
-      std::vector<FieldAccessTypedExprPtr> partitionKeys,
-      std::vector<FieldAccessTypedExprPtr> sortingKeys,
-      std::vector<SortOrder> sortingOrders,
-      const std::optional<std::string>& rowNumberColumnName,
-      int32_t limit,
-      PlanNodePtr source)
-      : TopNRowNumberNode(
-            std::move(id),
-            function,
-            std::move(partitionKeys),
-            std::move(sortingKeys),
-            std::move(sortingOrders),
-            rowNumberColumnName,
-            limit,
-            /*partial=*/!rowNumberColumnName.has_value(),
-            std::move(source)) {}
-#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
-
   class Builder {
    public:
     Builder() = default;
