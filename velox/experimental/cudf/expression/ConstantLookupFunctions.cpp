@@ -53,10 +53,28 @@ std::pair<const T*, vector_size_t> constantCollection(
 }
 
 // Returns true if `type` can be a constant lookup key: a cuDF-supported
-// primitive type other than REAL or DOUBLE.
+// primitive type other than REAL or DOUBLE. A TIMESTAMP needs the nanosecond
+// unit, since a coarser one can convert distinct timestamps to equal values.
 bool isSupportedConstantLookupKeyType(const TypePtr& type) {
   return type->isPrimitiveType() && !type->isReal() && !type->isDouble() &&
+      (!type->isTimestamp() ||
+       CudfConfig::getInstance().timestampUnit ==
+           cudf::type_id::TIMESTAMP_NANOSECONDS) &&
       isTypeSupportedByCudf(type);
+}
+
+// Returns true if the keys of the map at 'row' are distinct, which the hash
+// table needs. Velox does not ensure it: a cast from JSON turns "1" and "01"
+// into the same BIGINT key.
+bool hasDistinctKeys(const MapVector& map, vector_size_t row) {
+  const auto indices = map.sortedKeyIndices(row);
+  const auto& keys = *map.mapKeys();
+  for (size_t i = 1; i < indices.size(); ++i) {
+    if (keys.equalValueAt(&keys, indices[i - 1], indices[i])) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // Copies 'columns' of a constant collection to the GPU.
@@ -100,15 +118,11 @@ class ConstantMapElementAtFunction : public CudfFunction {
   static bool canEvaluate(const core::TypedExprPtr& expr) {
     const auto [map, row] = constantCollection<MapVector>(expr->inputs()[0]);
     const auto& mapType = expr->inputs()[0]->type()->asMap();
-    // Under a unit coarser than nanoseconds, distinct TIMESTAMP keys can
-    // convert to equal cuDF keys, and the hash table needs distinct keys.
-    const bool keysStayDistinct = !mapType.keyType()->isTimestamp() ||
-        CudfConfig::getInstance().timestampUnit ==
-            cudf::type_id::TIMESTAMP_NANOSECONDS;
     return map != nullptr && map->sizeAt(row) > 0 &&
         !expr->inputs()[1]->isConstantKind() &&
         isSupportedConstantLookupKeyType(mapType.keyType()) &&
-        keysStayDistinct && isTypeSupportedByCudf(mapType.valueType());
+        isTypeSupportedByCudf(mapType.valueType()) &&
+        hasDistinctKeys(*map, row);
   }
 
   ConstantMapElementAtFunction(
@@ -126,7 +140,8 @@ class ConstantMapElementAtFunction : public CudfFunction {
         pool,
         stream);
     // Built once and only read afterwards, on whatever stream eval() gets;
-    // the sync below completes the build first. A map's keys are distinct.
+    // the sync below completes the build first. canEvaluate() checked that
+    // the keys are distinct.
     keyIndex_ = std::make_unique<cudf::distinct_hash_join>(
         entries_->view().select({0}),
         cudf::null_equality::UNEQUAL,
