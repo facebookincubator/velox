@@ -38,6 +38,9 @@ struct DeriveOp {
   std::vector<int64_t> constants;
   /// An all-constant integer list operand (view and expand sizes).
   std::vector<int64_t> intList;
+  /// The elements of a list operand that a prim.ListPack of SymInts makes: a
+  /// value id each. Read when 'intList' is empty.
+  std::vector<int32_t> listElements;
   int32_t output{-1};
   /// The outputs of a multi-output op: the elements an unbind or split makes,
   /// or what a list unpack yields. Empty for a single-output op.
@@ -71,6 +74,8 @@ struct DeriveRec {
   /// Into StepCode::consts.
   Span constants;
   Span intList;
+  /// Into StepCode::ids.
+  Span listElements;
   int32_t shortcut{-1};
   int32_t secondShortcut{-1};
   bool wholeExtent{false};
@@ -83,6 +88,7 @@ struct DeriveView {
   ArrayView<int32_t> operands;
   ArrayView<int64_t> constants;
   ArrayView<int64_t> intList;
+  ArrayView<int32_t> listElements;
   ArrayView<int32_t> outputs;
   ArrayView<int32_t> elements;
   bool wholeExtent{false};

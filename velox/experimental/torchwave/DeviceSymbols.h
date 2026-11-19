@@ -20,6 +20,7 @@
 #include <folly/CppAttributes.h>
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -32,10 +33,15 @@ namespace facebook::velox::wave {
 class Stream;
 } // namespace facebook::velox::wave
 
+namespace torch::nativert {
+class ExecutionFrame;
+} // namespace torch::nativert
+
 namespace torch::wave {
 
 namespace nativert = torch::nativert;
 
+struct AllocGroup;
 struct ExecutionState;
 struct StepProgram;
 class WaveGraph;
@@ -54,6 +60,51 @@ struct SymbolFixups {
   int32_t numRecords{0};
   at::Tensor deviceRecords;
   at::Tensor deviceCode;
+  /// Under WaveConfig::convergedSetup, the results the converged evaluation
+  /// writes and the records read.
+  at::Tensor deviceResults;
+  /// Words of 'deviceCode'.
+  int32_t numDeviceCode{0};
+  /// Records in 'deviceRecords'.
+  int32_t numDeviceRecords{0};
+  /// Under WaveConfig::wideSetup, the plan of the step's setup over several
+  /// blocks, when the step has one, and the blocks' flags.
+  at::Tensor deviceWide;
+  std::vector<int32_t> wideHostWords;
+  at::Tensor wideFlags;
+  int32_t numWideBlocks{0};
+  /// Words of the plan's shape table and code.
+  int32_t wideShapeWords{0};
+  /// The bytes from the start of the step's parameters that the wide setup
+  /// may write, and the addresses its programs load. A symbol or load there
+  /// would see another block's writes, so the step then runs the one-block
+  /// setup.
+  int32_t wideWriteEnd{0};
+  std::vector<int64_t> wideLoadAddresses;
+  /// The words the wide setup's placement block stores, sorted. A symbol
+  /// there would see them before the stores or after, depending on the
+  /// block.
+  std::vector<int64_t> wideStoreAddresses;
+};
+
+/// What the fixup kernel of one step reads besides the step's parameters.
+struct FixupArgs {
+  int32_t* records{nullptr};
+  int64_t* code{nullptr};
+  int32_t numRecords{0};
+  /// The symbols' source addresses, then their capacities.
+  int64_t* symbols{nullptr};
+  int32_t numSymbols{0};
+  /// Words of 'code'.
+  int32_t numCode{0};
+  /// The wide setup's plan, or nullptr for the one-block setup; see
+  /// SymbolFixups::deviceWide.
+  int32_t* wide{nullptr};
+  /// The plan's words on the host.
+  const std::vector<int32_t>* wideHost{nullptr};
+  int32_t* wideFlags{nullptr};
+  int32_t numWideBlocks{0};
+  int32_t wideShapeWords{0};
 };
 
 /// Lets a step that would wait for an integer the device returns -- an
@@ -116,13 +167,130 @@ class DeviceSymbols {
   /// value exceeded the capacity the execution ran on.
   bool endExecution(ExecutionState& state);
 
+  /// Makes the fixups of a step ready to run on the device. With
+  /// 'deviceBase', the step's parameters on the device, the fixups may run as
+  /// a wide setup.
+  FixupArgs prepareFixups(
+      ExecutionState& state,
+      SymbolFixups& fixups,
+      const uint8_t* deviceBase);
+
   /// Launches the fixups of a step on 'stream', after its parameters have
   /// been copied to 'deviceBase'.
+  /// With 'checkFailure' false the setup neither checks nor marks the
+  /// failure words: a probe for its demands.
   void runFixups(
       ExecutionState& state,
       SymbolFixups& fixups,
       uint8_t* deviceBase,
-      facebook::velox::wave::Stream* stream);
+      facebook::velox::wave::Stream* stream,
+      bool checkFailure = true);
+
+  /// Gives the outputs of the bound steps of 'state' the shapes the symbolic
+  /// forms of their ReserveFns compute, where the export has none. An integer
+  /// operand without an expression, such as a total the device returns, gets
+  /// a new symbol named u_<value>. Returns how many shapes it added.
+  int32_t inferReserveShapes(const ExecutionState& state);
+
+  /// Logs and clears what checkSizeExprs has tallied over an execution, after
+  /// comparing the outputs it deferred with the execution's 'symbols'.
+  void reportSizeExprs(
+      const folly::F14FastMap<std::string, int64_t>& symbols) const;
+
+  /// Under WaveConfig::deviceSizeCheck: adds to each step's fixups a check
+  /// record for every tensor parameter whose size derived from graph-input
+  /// dims has all its symbols written to the device by then. Input dims are
+  /// read from the tensor parameters of the graph inputs, data-decided
+  /// symbols from integer parameters. The setup kernel evaluates the records
+  /// and counts the parameters whose dims differ from the host's.
+  void bindSizeChecks(ExecutionState& state);
+
+  /// Logs and zeroes the counts the check records added over the previous
+  /// execution of 'state'. The streams must be idle.
+  void reportSizeChecks(ExecutionState& state) const;
+
+  /// Finds the runs of consecutive steps on the device path whose setups can
+  /// run as the blocks of one kernel before the first of them: no setup reads
+  /// a value a kernel of an earlier step in the run leaves, and only the last
+  /// step runs standalones. A setup that loads a table word the setup of an
+  /// earlier step in the run stores waits for it. Puts the runs in
+  /// state.setupBatches and logs them. Once per state, after an execution.
+  void planSetupBatches(ExecutionState& state) const;
+
+  /// Under WaveConfig::deviceSizingPoison: zeroes the dims the host wrote at
+  /// 'params' for the tensor parameters whose every dim 'fixups' writes.
+  static void poisonSizedParams(const SymbolFixups& fixups, uint8_t* params);
+
+  /// Copies the values of the input symbols bindSizeChecks placed from
+  /// 'frame' to the device. Called at each execution start.
+  void writeInputSymbols(
+      const nativert::ExecutionFrame& frame,
+      ExecutionState& state) const;
+
+  /// True if the export gave the shape of 'valueId'; see hostShaped_.
+  bool isHostShaped(int32_t valueId) const;
+
+  /// True if the device sets the shape of 'valueId'; see setOnDevice_.
+  bool isSetOnDevice(int32_t valueId) const;
+
+  /// Under WaveConfig::sizeExprsFromInputs: shapes for every value derived
+  /// from graph-input dims taken as symbols, kept apart from the export's.
+  int32_t deriveShapesFromInputs(const ExecutionState& state);
+
+  /// One pass of deriveShapesFromInputs, starting from the shapes in
+  /// 'preset'. Sets 'numAdded' to how many shapes the rules added.
+  std::shared_ptr<SymShapes> deriveOnce(
+      const ExecutionState& state,
+      const folly::F14FastMap<std::string, SymShape>& preset,
+      int32_t& numAdded);
+
+  /// Runs the rules of the nodes of the variant graphs, which produce the
+  /// values grid generation makes. Returns how many main-graph values it
+  /// shaped under another name.
+  int32_t shapeVariantNodes(SymShapes& shapes);
+
+  /// Shapes the duplicates of values made during grid generation, which a
+  /// reused op gives each of its invocations: the original's rule over the
+  /// invocation's operands. Returns how many shapes it added.
+  int32_t shapeDuplicates(SymShapes& shapes);
+
+  /// Applies the reserves' symbolic forms to the bound steps of 'state',
+  /// adding to 'shapes'. Returns how many shapes it added.
+  int32_t applySymReserves(const ExecutionState& state, SymShapes& shapes);
+
+  /// Checks that the export's symbolic shapes give the dims the host sized
+  /// the tensor parameters of 'program' with, at 'params'. A symbol is bound
+  /// from the first dim that is that symbol alone; every other dim is
+  /// evaluated and compared. Logs a summary now and then. For
+  /// WaveConfig::checkSizeExprs.
+  void checkSizeExprs(
+      ExecutionState& state,
+      const StepProgram& program,
+      const uint8_t* params,
+      int32_t sequenceNumber,
+      int32_t stepIdx) const;
+
+  /// The CUDA source of the fixups: __device__ fixupBody(params, records,
+  /// code, numRecords, symbols, numSymbols), called by every thread of one
+  /// block, and the fixupSymbols kernel that runs it.
+  static const char* fixupSource();
+
+  /// The dynamic shared memory fixupBody uses for 'numCode' words of
+  /// programs: all of them, or none when they do not fit.
+  static int32_t fixupSharedBytes(int32_t numCode);
+
+  /// The dynamic shared memory a wide setup's placement block uses for the
+  /// temps, before the symbols.
+  static constexpr int32_t kWideAreaBytes = 8 * 1024;
+
+  /// The term table a wide setup's grid block evaluates the count terms of
+  /// the packed grid descriptor 'gridWords' with, over the wide plan 'plan':
+  /// per term its flags, offset, and the slot entry or value code that sets
+  /// what it reads. Empty when a term reads what the plan writes in a way the
+  /// table cannot give; the grid block then waits for the other blocks.
+  static std::vector<int32_t> wideCountTerms(
+      const std::vector<int32_t>& plan,
+      const std::vector<int32_t>& gridWords);
 
   /// Logs, for each step that still waits, the returned values it waits for
   /// and why each was not picked. For TW_DEVICE_SYMBOLS_TRACE.
@@ -142,6 +310,15 @@ class DeviceSymbols {
   static constexpr int32_t kMaxSymbols = 1024;
 
  private:
+  /// One pass of bindSizeChecks. 'capacityRegion' says in which groups the
+  /// setup places the members of device symbols' regions at their
+  /// capacities: none (nullptr) or the groups in the set; 'allRegions'
+  /// places them so in every group.
+  void bindSizeChecksPass(
+      ExecutionState& state,
+      const folly::F14FastSet<const AllocGroup*>* capacityRegion,
+      bool allRegions);
+
   int32_t symbolIndex(const std::string& symbol);
 
   // Renames the symbols a broadcast proves equal to one of them, then defines
@@ -187,7 +364,41 @@ class DeviceSymbols {
   void traceRejection(const std::string& why) const;
 
   std::shared_ptr<SymShapes> shapes_;
+  // See deriveShapesFromInputs; null unless WaveConfig::sizeExprsFromInputs.
+  std::shared_ptr<SymShapes> derivedShapes_;
+  // Outputs the device gives their actual shape. The producing step's frame
+  // holds the reserve's capacity and later frames the actual shape, so the
+  // host's dims for them depend on the step.
+  folly::F14FastSet<std::string> setOnDevice_;
+  // Outputs of ops no rule describes, shaped from the export: the host
+  // decides them when the op returns.
+  folly::F14FastSet<std::string> hostShaped_;
+  // By value name: the shape the reserve's symbolic form gives an output, a
+  // capacity where the data decides the extent. Set by applySymReserves.
+  folly::F14FastMap<std::string, SymShape> capacityByName_;
   WaveGraph& waveGraph_;
+  // For checkSizeExprs: parameters without an expression by producer.
+  mutable std::mutex noShapeMutex_;
+  mutable folly::F14FastMap<std::string, int64_t> noShapeByTarget_;
+  // For checkSizeExprs: outputs compared at the end of the execution.
+  struct PendingSizeCheck {
+    int32_t valueId;
+    std::vector<SymExpr> dims;
+    std::vector<int64_t> hostDims;
+  };
+  mutable std::vector<PendingSizeCheck> pendingSizeChecks_;
+  // For checkSizeExprs: parameters whose expression differs, by producer.
+  mutable folly::F14FastMap<std::string, int64_t> differByTarget_;
+  // checkSizeExprs tallies since the last reportSizeExprs.
+  mutable std::atomic<int64_t> numSizeValues_{0};
+  mutable std::atomic<int64_t> numSizeNoShape_{0};
+  mutable std::atomic<int64_t> numSizeMatched_{0};
+  mutable std::atomic<int64_t> numSizeDiffer_{0};
+  mutable std::atomic<int64_t> numSizeUnbound_{0};
+  mutable std::atomic<int64_t> numSizeSetOnDevice_{0};
+  mutable std::atomic<int64_t> numSizeHostShaped_{0};
+  mutable std::atomic<int32_t> numSizeReports_{0};
+  mutable std::atomic<int32_t> numSizeUnboundReports_{0};
   // Integer values whose expression is a single data-dependent symbol.
   folly::F14FastMap<nativert::ValueId, std::string> candidateSymbol_;
   // Tensors whose one dim is a data-dependent symbol, the count the device

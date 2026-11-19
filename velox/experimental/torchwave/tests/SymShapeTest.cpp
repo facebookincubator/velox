@@ -64,5 +64,17 @@ TEST(SymShapeTest, recordsShapesAndScalars) {
   EXPECT_THAT(shapes.unparsed, testing::ElementsAre("bad"));
 }
 
+TEST(SymShapeTest, hostDimMatchesTheDimItWasTracedWith) {
+  const auto host = hostDimSymbol("getitem_7", 0, 1024);
+  EXPECT_TRUE(isHostDimSymbol(host.symbol));
+  EXPECT_FALSE(isHostDimSymbol("d1024"));
+  EXPECT_EQ(tracedValue(host), 1024);
+  const SymExpr input{.kind = SymExpr::Kind::kSymbol, .symbol = "d1024"};
+  EXPECT_TRUE(sameDim(host, input));
+  EXPECT_TRUE(sameDim(input, host));
+  EXPECT_TRUE(sameDim(host, SymExpr::constant(1024)));
+  EXPECT_FALSE(sameDim(host, hostDimSymbol("getitem_8", 0, 512)));
+}
+
 } // namespace
 } // namespace torch::wave

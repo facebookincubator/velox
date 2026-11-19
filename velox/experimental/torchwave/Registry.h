@@ -106,7 +106,7 @@ struct RowReduction {
 
 /// Common cases of determining output size: kNone is a custom function, kMax is
 /// largest input, as in all elementwise, kSum is concatenation.
-enum class SizeShortcut { kNone, kMax, kSum };
+enum class SizeShortcut { kNone, kMax, kSum, kProduct };
 
 /// Identifies a metadata-only standalone op (no real compute, only tensor
 /// metadata manipulation) so the executor can apply a host-side shortcut
@@ -127,6 +127,11 @@ enum class StandaloneShortcut {
   kExpand,
   kSymSize,
   kSymNumel,
+  // squeeze.default: drops every dim of extent 1.
+  kSqueeze,
+  // t.default: swaps dims 0 and 1 of a 2-d tensor.
+  kT,
+  kDiagonal,
   // A new_* factory with a constant size of zero elements: an empty tensor
   // with no kernel and no storage.
   kEmptyFactory,
@@ -289,6 +294,17 @@ struct Metadata {
   /// that ignores the list length, so the op runs far fewer blocks than it has
   /// independent work.
   bool gridSizeSumsInputs{false};
+
+  /// The launch count of an op whose work is neither its largest input nor
+  /// its outputs: 'kind' over the named inputs, a tensor counting its numel
+  /// and an integer its value. E.g. all pairs of two lists:
+  /// {SizeShortcut::kProduct, {"a", "b"}}. Each must be an input of the
+  /// kernel the op ends up in; otherwise the default count applies.
+  struct GridCount {
+    SizeShortcut kind{SizeShortcut::kNone};
+    std::vector<OperandName> operands;
+  };
+  std::optional<GridCount> gridCount;
 
   /// If true, the op reads tensor metadata (shape, size) rather than
   /// computing on tensor data. When used as a size arg producer, it runs as
@@ -711,6 +727,9 @@ class MetadataBuilder {
   MetadataBuilder& scanOutputReturnBarrier(bool val = true);
   MetadataBuilder& alwaysSingleBlock(bool val = true);
   MetadataBuilder& gridSizeSumsInputs(bool val = true);
+  MetadataBuilder& gridCount(
+      SizeShortcut kind,
+      std::vector<OperandName> operands);
   MetadataBuilder& metadataGetter(bool val = true);
   MetadataBuilder& makeMultiKernelVariant(
       std::function<nativert::Node*(NodeCP, WaveGraph*)> func);

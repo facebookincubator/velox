@@ -301,12 +301,49 @@ bool transpose(
   return true;
 }
 
+// The sizes of a view or expand: the constant list, or the integers the
+// table holds for the elements of a SymInt list.
+class TargetSizes {
+ public:
+  TargetSizes(const DeriveView& op, const ValueTable& table) {
+    if (!op.intList.empty()) {
+      valid_ = op.intList.size() <= kMaxDims;
+      size_ = valid_ ? op.intList.size() : 0;
+      std::copy(op.intList.begin(), op.intList.begin() + size_, sizes_);
+      return;
+    }
+    valid_ = op.listElements.size() <= kMaxDims;
+    for (size_t i = 0; valid_ && i < op.listElements.size(); ++i) {
+      const auto id = op.listElements[i];
+      valid_ = table.valid(id) && table.isInt(id);
+      sizes_[size_++] = valid_ ? table.scalar(id) : 0;
+    }
+  }
+
+  bool empty() const {
+    return !valid_ || size_ == 0;
+  }
+
+  size_t size() const {
+    return size_;
+  }
+
+  int64_t operator[](size_t i) const {
+    return sizes_[i];
+  }
+
+ private:
+  int64_t sizes_[kMaxDims]{};
+  size_t size_{0};
+  bool valid_{false};
+};
+
 bool expand(
     const DeriveView& op,
     const ValueTable& table,
     const Operands& args) {
   const auto* self = args.tensor(0);
-  const auto& target = op.intList;
+  const TargetSizes target(op, table);
   if (self == nullptr || target.empty() ||
       static_cast<int32_t>(target.size()) < self->rank ||
       target.size() > kMaxDims) {
@@ -344,8 +381,8 @@ bool expand(
 
 bool view(const DeriveView& op, const ValueTable& table, const Operands& args) {
   const auto* self = args.tensor(0);
-  const auto& target = op.intList;
-  if (self == nullptr || target.empty() || target.size() > kMaxDims) {
+  const TargetSizes target(op, table);
+  if (self == nullptr || target.empty()) {
     return false;
   }
   const auto source = geometryOf(*self);
@@ -378,6 +415,80 @@ bool view(const DeriveView& op, const ValueTable& table, const Operands& args) {
       self->numEl,
       " elements");
   writeTensorEntry(table, op.output, *self, g, 0);
+  return true;
+}
+
+// squeeze (self): drops every dim of extent 1.
+bool squeeze(
+    const DeriveView& op,
+    const ValueTable& table,
+    const Operands& args) {
+  const auto* self = args.tensor(0);
+  if (self == nullptr) {
+    return false;
+  }
+  auto g = geometryOf(*self);
+  for (int32_t d = g.rank - 1; d >= 0; --d) {
+    if (g.sizes[d] == 1) {
+      erase(g, d);
+    }
+  }
+  writeTensorEntry(table, op.output, *self, g, 0);
+  return true;
+}
+
+// t (self): a transpose of dims 0 and 1; a tensor of rank below 2 is itself.
+bool t(const DeriveView& op, const ValueTable& table, const Operands& args) {
+  const auto* self = args.tensor(0);
+  if (self == nullptr || self->rank > 2) {
+    return false;
+  }
+  auto g = geometryOf(*self);
+  if (g.rank == 2) {
+    std::swap(g.sizes[0], g.sizes[1]);
+    std::swap(g.strides[0], g.strides[1]);
+  }
+  writeTensorEntry(table, op.output, *self, g, 0);
+  return true;
+}
+
+// diagonal (self, offset, dim1, dim2): drops both dims and appends the
+// diagonal, whose step is the sum of their strides.
+bool diagonal(
+    const DeriveView& op,
+    const ValueTable& table,
+    const Operands& args) {
+  const auto* self = args.tensor(0);
+  int64_t offset;
+  int64_t firstArg;
+  int64_t secondArg;
+  if (self == nullptr || self->rank < 2 || !args.integer(1, offset) ||
+      !args.integer(2, firstArg) || !args.integer(3, secondArg)) {
+    return false;
+  }
+  auto g = geometryOf(*self);
+  const auto first = wrapDim(firstArg, g.rank);
+  const auto second = wrapDim(secondArg, g.rank);
+  if (first == second) {
+    return false;
+  }
+  const auto firstSize = g.sizes[first];
+  const auto secondSize = g.sizes[second];
+  const auto firstStride = g.strides[first];
+  const auto secondStride = g.strides[second];
+  int64_t length = offset >= 0 ? std::min(firstSize, secondSize - offset)
+                               : std::min(firstSize + offset, secondSize);
+  length = std::max<int64_t>(length, 0);
+  int64_t elementOffset = 0;
+  if (length > 0) {
+    elementOffset = offset >= 0 ? offset * secondStride : -offset * firstStride;
+  }
+  erase(g, std::max(first, second));
+  erase(g, std::min(first, second));
+  g.sizes[g.rank] = length;
+  g.strides[g.rank] = firstStride + secondStride;
+  ++g.rank;
+  writeTensorEntry(table, op.output, *self, g, elementOffset);
   return true;
 }
 
@@ -474,6 +585,9 @@ bool derivable(StandaloneShortcut kind) {
     case StandaloneShortcut::kTranspose:
     case StandaloneShortcut::kExpand:
     case StandaloneShortcut::kView:
+    case StandaloneShortcut::kSqueeze:
+    case StandaloneShortcut::kT:
+    case StandaloneShortcut::kDiagonal:
       return true;
     case StandaloneShortcut::kNone:
     case StandaloneShortcut::kListPack:
@@ -522,6 +636,12 @@ bool runDerive(const DeriveView& op, const ValueTable& table) {
       return expand(op, table, args);
     case StandaloneShortcut::kView:
       return view(op, table, args);
+    case StandaloneShortcut::kSqueeze:
+      return squeeze(op, table, args);
+    case StandaloneShortcut::kT:
+      return t(op, table, args);
+    case StandaloneShortcut::kDiagonal:
+      return diagonal(op, table, args);
     case StandaloneShortcut::kUnbind:
       return unbind(op, table, args);
     case StandaloneShortcut::kSplitWithSizes:

@@ -189,6 +189,143 @@ struct WaveConfig {
   // DeviceSymbols. Needs the export's symbolic shapes.
   bool deviceSymbols{true};
 
+  // Checks, at every grid, that the GridDescriptor gives each launch the
+  // element count the host sized it for.
+  bool checkGridDescriptor{false};
+
+  // Compares, after the setup of each step off the device path, every export
+  // slot it wrote with the host's Tensor of the value: dims, strides, element
+  // count and storage.
+  bool checkExports{false};
+
+  // Gives each launch of a step blocks in proportion to its estimated work,
+  // input elements times cost per element times the measured cost
+  // adjustment, so that all launches complete at the same time. See
+  // assignBlocksEqualFinish.
+  bool gridEqualFinish{false};
+
+  // Computes each step's grid on the device from the element counts the
+  // device holds, with the gridEqualFinish rule, and updates the cost
+  // multipliers there from the previous execution's clocks. See DeviceGrid.
+  bool deviceGrid{false};
+
+  // With deviceGrid, false keeps the device from reading the previous
+  // execution's clocks, so the cost multipliers do not learn and a step's grid
+  // depends on its counts alone.
+  bool deviceGridLearn{true};
+
+  // Debug: when non-zero, the seed of random scalings of the previous
+  // execution's block clocks at the start of each execution, so that the
+  // device grids give ops a different number of blocks every time.
+  int32_t deviceGridJitter{0};
+
+  // With deviceGrid, the device keeps a step's previous block table instead of
+  // computing the grid when every launch's count is within gridSkipTolerance
+  // (a fraction) of its count at the last full grid, and computes the grid at
+  // least every gridSkipRefresh executions, which applies the cost feedback.
+  // A gridSkipRefresh of 0 or 1 always computes the grid.
+  int32_t gridSkipRefresh{0};
+  float gridSkipTolerance{0.1f};
+
+  // Test hook: blocks the device grid adds to its last launch before it fits
+  // the grid to the target.
+  int32_t deviceGridTestExtraBlocks{0};
+
+  // With deviceSizing and devicePlacement, a step whose every parameter word
+  // comes from its setup kernel keeps its parameters on the device: after its
+  // first execution the host copies only the block table part of the block.
+  // Always on for the steps on the device path.
+  bool residentBlocks{false};
+
+  // For testing the failure words: when >= 0, each execution starts with
+  // this step marked failed, so it and every later step return at entry.
+  int32_t testFailedStep{-1};
+
+  // At the end of each execution, compares each group's demand, as its setup
+  // computed it, with the bytes of the buffer the host carved for it.
+  bool checkDemands{false};
+
+  // The device path for memory. A step whose outputs only steps on the device
+  // path read skips host sizing: its groups get the demand its setup recorded
+  // in an earlier execution, plus deviceAllocMarginPct percent. Implies
+  // deviceSizeCheck, deviceSizing, devicePlacement and deviceGrid.
+  bool deviceAlloc{false};
+  int32_t deviceAllocMarginPct{25};
+
+  // Under deviceAlloc: how a step off the path gets the table entry of a
+  // value a step on the path makes. 0 waits for the descriptor the setup
+  // wrote. 1 computes it on the host from the capacity layout, as the host
+  // path lays memory out, and does not wait. 2 computes it, waits, and
+  // compares the two.
+  int32_t hostFetch{0};
+
+  // Under deviceAlloc: a group whose demand the host computes from the
+  // capacities and input sizes gets that size, and its setup cannot fail, so
+  // nothing waits to learn whether it did.
+  bool hostSizedGroups{true};
+
+  // Copies a device-grid step's parameters and runs its setup kernel on a
+  // second stream, so that the setup overlaps the steps before it. A step
+  // whose setup reads symbols the device holds waits for the step before it.
+  bool setupStream{false};
+
+  // Under deviceAlloc: runs the setups of consecutive steps on the device
+  // path as the blocks of one kernel before the first of them, when no setup
+  // reads what a kernel in the run leaves. The host fills and allocates for
+  // the later steps when the first one runs. See
+  // DeviceSymbols::planSetupBatches.
+  bool setupBatches{false};
+
+  // Evaluates the programs of a device setup grouped by shape, so that the
+  // threads of a warp run the same instructions over different operands. See
+  // DeviceSymbols::prepareFixups.
+  bool convergedSetup{false};
+
+  // With convergedSetup, runs a step's setup on several blocks: one places
+  // the allocation group members, others update the tensor parameters, and
+  // one computes the grid. See buildWidePlan in DeviceSymbols.cpp.
+  bool wideSetup{false};
+
+  // Checks that the export's symbolic shapes give the dims the host sizes
+  // every tensor parameter with. See DeviceSymbols::checkSizeExprs.
+  bool checkSizeExprs{false};
+
+  // With checkSizeExprs: derive every shape from graph-input dims taken as
+  // symbols, in place of the export's expressions.
+  bool sizeExprsFromInputs{false};
+
+  // Evaluates the sizes derived from graph-input dims in each step's setup
+  // kernel and counts where they differ from the host's. See
+  // DeviceSymbols::bindSizeChecks.
+  bool deviceSizeCheck{false};
+
+  // With deviceSizeCheck: the setup kernel writes the dims and strides it
+  // computes in place of checking them.
+  bool deviceSizing{false};
+
+  // With deviceSizing: zeroes the host's dims of the tensor parameters the
+  // setup kernel writes, so wrong results show where it does not.
+  bool deviceSizingPoison{false};
+
+  // Debug: fills every group buffer with 0xff bytes when it is allocated and
+  // the group arena at the start of each execution, so a read of a group
+  // member before its producer writes it shows in every execution, not only
+  // when the previous execution left different data there.
+  bool poisonGroups{false};
+
+  // Debug: when an execution takes longer than this many seconds, logs the
+  // steps whose wave work has not completed. 0 is off.
+  int32_t stallReportSeconds{0};
+
+  // Test hook: records half of each group's demand, so that every execution
+  // finds the groups of the device path under capacity and restarts.
+  bool testShrinkDemands{false};
+
+  // With deviceSizing: the setup kernel writes the data pointers of the
+  // members of allocation groups, from the group's base and the members'
+  // sizes. With deviceSizingPoison the host's pointers are zeroed.
+  bool devicePlacement{false};
+
   // Ablation knobs.  Each switches one optimization off so its contribution
   // can be measured by comparing runtimes; none is meant for production use.
 
@@ -593,6 +730,11 @@ struct WaveConfig {
   /// default. Used in the performance report so a run's active configuration is
   /// self-documenting.
   std::string toString() const;
+
+  /// Turns on device-side setup in its tested configuration: deviceAlloc
+  /// with the device sizing, placement and grid it needs, converged and wide
+  /// setups, and host-computed fetches. Setup batches stay a separate option.
+  void enableDeviceSetup();
 };
 
 } // namespace torch::wave

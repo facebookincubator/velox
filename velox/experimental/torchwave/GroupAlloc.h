@@ -25,6 +25,10 @@
 #include "velox/experimental/torchwave/Cat.h"
 #include "velox/experimental/torchwave/Executor.h"
 
+namespace facebook::velox::wave {
+class Stream;
+} // namespace facebook::velox::wave
+
 namespace torch::wave {
 
 /// Adds 'buffer' to the state's allocation records and returns its index,
@@ -48,6 +52,29 @@ void writeMemberEntry(
     const std::vector<int64_t>& dims,
     c10::ScalarType dtype,
     int32_t owner);
+
+/// Writes the base and the capacity (its bytes) of 'buffer', the carve of
+/// 'group', to the group's address table slots, when the setup places it.
+void noteGroupBase(
+    ExecutionState& state,
+    const AllocGroup* group,
+    const at::Tensor& buffer);
+
+/// Allocates 'group' on the device path for step 'stepIdx' of node
+/// 'sequenceNumber': its recorded demand plus the margin, with its base and
+/// capacity in the address table. Its values get no table entries; they own
+/// the buffer, which goes when the last of them is freed.
+void allocateDeviceGroup(
+    ExecutionState& state,
+    const AllocGroup& group,
+    int32_t sequenceNumber,
+    int32_t stepIdx);
+
+/// Gives the device-path group of 'slot', whose setup demanded 'demand' bytes
+/// over its capacity, a buffer of its own of the demand plus the margin, in
+/// place of its undersized one, and writes its base and capacity. The group's
+/// values keep their allocation, which now holds the new buffer.
+void regrowDeviceGroup(ExecutionState& state, int32_t slot, int64_t demand);
 
 /// Allocates a tensor of 'dims' and 'dtype' for 'id' as an allocation of its
 /// own and writes only its table entry.
@@ -127,6 +154,9 @@ void beginGroupArena(ExecutionState& state);
 /// Marks the end of the execution that beginGroupArena started.
 void endGroupArena(ExecutionState& state);
 
+/// Under WaveConfig::poisonGroups, fills 'buffer' with 0xff bytes and waits.
+void poisonGroupBytes(const at::Tensor& buffer);
+
 /// Carves a lifetime group like materializeAllocGroup, except that a member
 /// in ExecutionState::tableOnly gets only its table entry. Its frame slot
 /// keeps the shape placeholder the sizing left there. 'group' names the plan's
@@ -146,6 +176,30 @@ bool holdsTensorOfDims(
 
 /// Whether 'id' lives in the table alone this execution.
 bool isTableOnly(const ExecutionState& state, nativert::ValueId id);
+
+/// Writes 'address' to slot 'slot' of the group base table's pinned copy.
+void setAddress(ExecutionState& state, int32_t slot, int64_t address);
+
+/// Copies the group base slots written since the last copy to the device,
+/// on 'stream', before a setup kernel that loads them.
+void copyAddresses(
+    ExecutionState& state,
+    facebook::velox::wave::Stream& stream);
+
+/// Writes the dims and strides of the tensor parameter at 'param' to the
+/// shape slot of 'valueId', if it has one.
+void setValueShape(
+    ExecutionState& state,
+    int32_t valueId,
+    const uint8_t* param);
+
+/// Gives the derived entry of 'id' the owner of 'source', whose storage it
+/// views: the source's allocation, or a new one holding the source's frame
+/// tensor so the derived value can be materialized and outlives the source.
+void takeOwner(
+    ExecutionState& state,
+    nativert::ValueId id,
+    nativert::ValueId source);
 
 /// Gives the frame a tensor (or integer) for the table entry of 'id'. A
 /// tensor's storage is in its owner's buffer, or else in the frame tensor of

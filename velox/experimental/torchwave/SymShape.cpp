@@ -432,7 +432,8 @@ bool sameExpr(const SymExpr& lhs, const SymExpr& rhs) {
 }
 
 // Right-aligned broadcast of symbolic dims; nullopt where two operands have
-// different non-1 extents that the expressions do not show to be equal.
+// different non-1 extents that sameDim does not take to be equal. Of two
+// extents that are the same dim, the one that is not a constant is kept.
 std::optional<std::vector<SymExpr>> broadcastDims(
     const std::vector<const SymShape*>& operands) {
   size_t rank = 0;
@@ -452,8 +453,10 @@ std::optional<std::vector<SymExpr>> broadcastDims(
       }
       if (out.isConstant() && out.value == 1) {
         out = dim;
-      } else if (!sameExpr(out, dim)) {
+      } else if (!sameDim(out, dim)) {
         return std::nullopt;
+      } else if (out.isConstant()) {
+        out = dim;
       }
     }
   }
@@ -586,6 +589,16 @@ std::optional<SymShape> inferNode(const SymShapes& shapes, NodeCP node) {
     }
     return SymShape{.dims = *dims, .strides = contiguousStrides(*dims)};
   }
+  // An in-place copy returns 'self', strides and storage included.
+  if (target == "torch.ops.aten.copy_.default") {
+    const auto* self = node->tryGetInput("self");
+    const auto* shape =
+        self != nullptr ? shapeOf(shapes, self->value) : nullptr;
+    if (shape == nullptr) {
+      return std::nullopt;
+    }
+    return *shape;
+  }
   if (keepsSelfShape(target)) {
     const auto* self = node->tryGetInput("self");
     if (self == nullptr) {
@@ -623,6 +636,429 @@ std::optional<SymShape> inferNode(const SymShapes& shapes, NodeCP node) {
 
 } // namespace
 
+namespace {
+
+folly::F14FastMap<std::string, SymShapeRule>& symShapeRules() {
+  static folly::F14FastMap<std::string, SymShapeRule> rules;
+  return rules;
+}
+
+// A ListUnpack's outputs are its list's elements. The elements are copied
+// first: adding to 'shapes' can move the ones it holds.
+int32_t unpackRule(SymShapes& shapes, const nativert::Node& node) {
+  if (node.inputs().empty()) {
+    return 0;
+  }
+  std::vector<std::optional<SymShape>> elements;
+  for (const auto* element :
+       listElementShapes(shapes, node.inputs()[0].value)) {
+    elements.push_back(
+        element != nullptr ? std::optional<SymShape>(*element) : std::nullopt);
+  }
+  int32_t numAdded = 0;
+  for (size_t i = 0; i < node.outputs().size() && i < elements.size(); ++i) {
+    const auto& element = elements.at(i);
+    if (element.has_value() &&
+        shapes.byName.emplace(std::string(node.outputs()[i]->name()), *element)
+            .second) {
+      ++numAdded;
+    }
+  }
+  return numAdded;
+}
+
+} // namespace
+
+std::string listElementName(std::string_view list, size_t index) {
+  return fmt::format("{}[{}]", list, index);
+}
+
+std::vector<const SymShape*> listElementShapes(
+    const SymShapes& shapes,
+    const nativert::Value* list) {
+  std::vector<const SymShape*> result;
+  if (list == nullptr) {
+    return result;
+  }
+  const auto* producer = list->producer();
+  if (producer != nullptr && producer->target() == "prim.ListPack") {
+    for (const auto& input : producer->inputs()) {
+      result.push_back(shapeOf(shapes, input.value));
+    }
+    return result;
+  }
+  for (size_t i = 0;; ++i) {
+    auto it = shapes.byName.find(listElementName(list->name(), i));
+    if (it == shapes.byName.end()) {
+      break;
+    }
+    result.push_back(&it->second);
+  }
+  return result;
+}
+
+SymExpr numelOf(const SymShape& shape) {
+  SymExpr result = SymExpr::constant(1);
+  for (const auto& dim : shape.dims) {
+    result = product(result, dim);
+  }
+  return result;
+}
+
+SymShape vectorShape(const SymExpr& length) {
+  return SymShape{.dims = {length}, .strides = {SymExpr::constant(1)}};
+}
+
+namespace {
+
+// Adds 'coefficient' times 'expr' to the terms of a sum, flattening nested
+// sums and splitting a constant factor off a product.
+void addTerms(
+    const SymExpr& expr,
+    int64_t coefficient,
+    int64_t& constant,
+    std::vector<std::pair<SymExpr, int64_t>>& terms) {
+  if (expr.isConstant()) {
+    constant += coefficient * expr.value;
+    return;
+  }
+  if (expr.kind == SymExpr::Kind::kAdd) {
+    for (const auto& arg : expr.args) {
+      addTerms(arg, coefficient, constant, terms);
+    }
+    return;
+  }
+  if (expr.kind == SymExpr::Kind::kMul && expr.args.size() == 2) {
+    for (size_t i = 0; i < 2; ++i) {
+      if (expr.args[i].isConstant()) {
+        addTerms(
+            expr.args[1 - i],
+            coefficient * expr.args[i].value,
+            constant,
+            terms);
+        return;
+      }
+    }
+  }
+  const auto text = expr.toString();
+  for (auto& [term, existing] : terms) {
+    if (term.toString() == text) {
+      existing += coefficient;
+      return;
+    }
+  }
+  terms.emplace_back(expr, coefficient);
+}
+
+} // namespace
+
+SymExpr symAdd(const SymExpr& lhs, const SymExpr& rhs) {
+  int64_t constant = 0;
+  std::vector<std::pair<SymExpr, int64_t>> terms;
+  addTerms(lhs, 1, constant, terms);
+  addTerms(rhs, 1, constant, terms);
+  std::optional<SymExpr> sum;
+  auto append = [&](SymExpr term) {
+    sum = sum.has_value()
+        ? SymExpr{.kind = SymExpr::Kind::kAdd, .args = {*sum, std::move(term)}}
+        : std::move(term);
+  };
+  for (auto& [term, coefficient] : terms) {
+    if (coefficient == 1) {
+      append(term);
+    } else if (coefficient != 0) {
+      append(product(SymExpr::constant(coefficient), term));
+    }
+  }
+  if (constant != 0 || !sum.has_value()) {
+    append(SymExpr::constant(constant));
+  }
+  return *sum;
+}
+
+SymExpr symMul(const SymExpr& lhs, const SymExpr& rhs) {
+  return product(lhs, rhs);
+}
+
+SymExpr symMax(const SymExpr& lhs, const SymExpr& rhs) {
+  if (lhs.isConstant() && rhs.isConstant()) {
+    return SymExpr::constant(std::max(lhs.value, rhs.value));
+  }
+  return SymExpr{.kind = SymExpr::Kind::kMax, .args = {lhs, rhs}};
+}
+
+namespace {
+
+// The factors of a product, constants folded into 'constant'.
+void collectFactors(
+    const SymExpr& expr,
+    int64_t& constant,
+    std::vector<SymExpr>& factors) {
+  if (expr.isConstant()) {
+    constant *= expr.value;
+  } else if (expr.kind == SymExpr::Kind::kMul) {
+    for (const auto& arg : expr.args) {
+      collectFactors(arg, constant, factors);
+    }
+  } else {
+    factors.push_back(expr);
+  }
+}
+
+} // namespace
+
+// Factors common to both sides cancel, which is exact for the positive
+// extents these expressions describe.
+SymExpr symFloorDiv(const SymExpr& lhs, const SymExpr& rhs) {
+  int64_t numeratorConstant = 1;
+  int64_t divisorConstant = 1;
+  std::vector<SymExpr> numerator;
+  std::vector<SymExpr> divisor;
+  collectFactors(lhs, numeratorConstant, numerator);
+  collectFactors(rhs, divisorConstant, divisor);
+  if (divisorConstant <= 0 || numeratorConstant < 0) {
+    return SymExpr{.kind = SymExpr::Kind::kFloorDiv, .args = {lhs, rhs}};
+  }
+  for (auto it = divisor.begin(); it != divisor.end();) {
+    auto match = std::find_if(numerator.begin(), numerator.end(), [&](auto& f) {
+      return sameExpr(f, *it);
+    });
+    if (match != numerator.end()) {
+      numerator.erase(match);
+      it = divisor.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  if (numeratorConstant % divisorConstant == 0) {
+    numeratorConstant /= divisorConstant;
+    divisorConstant = 1;
+  }
+  SymExpr top = SymExpr::constant(numeratorConstant);
+  for (const auto& factor : numerator) {
+    top = product(top, factor);
+  }
+  SymExpr bottom = SymExpr::constant(divisorConstant);
+  for (const auto& factor : divisor) {
+    bottom = product(bottom, factor);
+  }
+  if (bottom.isConstant() && bottom.value == 1) {
+    return top;
+  }
+  if (top.isConstant() && bottom.isConstant()) {
+    return SymExpr::constant(top.value / bottom.value);
+  }
+  return SymExpr{.kind = SymExpr::Kind::kFloorDiv, .args = {top, bottom}};
+}
+
+namespace {
+
+constexpr std::string_view kHostDimPrefix{"h:"};
+
+// The traced extent at the end of a hostDimSymbol, or nullopt.
+std::optional<int64_t> hostDimTraced(std::string_view symbol) {
+  const auto last = symbol.rfind(':');
+  if (!isHostDimSymbol(symbol) || last == std::string_view::npos ||
+      last + 1 >= symbol.size()) {
+    return std::nullopt;
+  }
+  const auto digits = symbol.substr(last + 1);
+  if (!std::all_of(digits.begin(), digits.end(), [](char c) {
+        return std::isdigit(static_cast<unsigned char>(c));
+      })) {
+    return std::nullopt;
+  }
+  return std::stoll(std::string(digits));
+}
+
+} // namespace
+
+SymExpr hostDimSymbol(std::string_view value, size_t dim, int64_t traced) {
+  return SymExpr{
+      .kind = SymExpr::Kind::kSymbol,
+      .symbol = fmt::format("{}{}:{}:{}", kHostDimPrefix, value, dim, traced)};
+}
+
+bool isHostDimSymbol(std::string_view symbol) {
+  return symbol.starts_with(kHostDimPrefix);
+}
+
+std::optional<int64_t> tracedValue(const SymExpr& expr) {
+  if (expr.isConstant()) {
+    return expr.value;
+  }
+  std::vector<std::string> names;
+  expr.collectSymbols(names);
+  folly::F14FastMap<std::string, int64_t> traced;
+  for (const auto& name : names) {
+    if (auto host = hostDimTraced(name)) {
+      traced[name] = *host;
+      continue;
+    }
+    if (name.size() < 2 || name[0] != 'd' ||
+        !std::all_of(name.begin() + 1, name.end(), [](char c) {
+          return std::isdigit(static_cast<unsigned char>(c));
+        })) {
+      return std::nullopt;
+    }
+    traced[name] = std::stoll(name.substr(1));
+  }
+  return expr.evaluate(traced);
+}
+
+SymExpr elementSymbol(std::string_view tensor, int64_t index) {
+  return SymExpr{
+      .kind = SymExpr::Kind::kSymbol,
+      .symbol = fmt::format("e:{}:{}", tensor, index)};
+}
+
+std::optional<std::pair<std::string, int64_t>> parseElementSymbol(
+    std::string_view symbol) {
+  const auto last = symbol.rfind(':');
+  if (symbol.size() < 5 || symbol.substr(0, 2) != "e:" ||
+      last == std::string_view::npos || last < 2) {
+    return std::nullopt;
+  }
+  const auto index = symbol.substr(last + 1);
+  if (index.empty() || !std::all_of(index.begin(), index.end(), [](char c) {
+        return std::isdigit(static_cast<unsigned char>(c));
+      })) {
+    return std::nullopt;
+  }
+  return std::make_pair(
+      std::string(symbol.substr(2, last - 2)), std::stoll(std::string(index)));
+}
+
+bool sameDim(const SymExpr& lhs, const SymExpr& rhs) {
+  if (sameExpr(lhs, rhs)) {
+    return true;
+  }
+  const auto lhsTraced = tracedValue(lhs);
+  return lhsTraced.has_value() && lhsTraced == tracedValue(rhs);
+}
+
+SymShape denseShape(std::vector<SymExpr> dims) {
+  auto strides = contiguousStrides(dims);
+  return SymShape{.dims = std::move(dims), .strides = std::move(strides)};
+}
+
+namespace {
+
+folly::F14FastMap<ReserveFnKey, SymReserveFn>& symReserves() {
+  static folly::F14FastMap<ReserveFnKey, SymReserveFn> reserves;
+  return reserves;
+}
+
+} // namespace
+
+void registerSymReserve(ReserveFnKey fn, SymReserveFn sym) {
+  symReserves()[fn] = sym;
+}
+
+SymReserveFn symReserveOf(ReserveFnKey fn) {
+  auto it = symReserves().find(fn);
+  return it != symReserves().end() ? it->second : nullptr;
+}
+
+bool symNumel(const SymReserveArgs& args, std::vector<SymShape>& out, int32_t) {
+  const auto* input = args.tensor(0);
+  if (input == nullptr) {
+    return false;
+  }
+  out.at(0) = vectorShape(numelOf(*input));
+  return true;
+}
+
+bool symNumelPlusOne(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* input = args.tensor(0);
+  if (input == nullptr) {
+    return false;
+  }
+  out.at(0) = vectorShape(symAdd(numelOf(*input), SymExpr::constant(1)));
+  return true;
+}
+
+bool symScalarLength(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  if (args.scalars.empty() || !args.scalars[0].has_value()) {
+    return false;
+  }
+  out.at(0) = vectorShape(*args.scalars[0]);
+  return true;
+}
+
+bool symFirstDim(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* input = args.tensor(0);
+  if (input == nullptr || input->dims.empty()) {
+    return false;
+  }
+  out.at(0) = vectorShape(input->dims[0]);
+  return true;
+}
+
+bool symRepeatedScalar(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t numOut) {
+  if (args.scalars.empty() || !args.scalars[0].has_value()) {
+    return false;
+  }
+  for (int32_t i = 0; i < numOut; ++i) {
+    out.at(i) = vectorShape(*args.scalars[0]);
+  }
+  return true;
+}
+
+bool symListNumel(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t numOut) {
+  for (int32_t i = 0; i < numOut; ++i) {
+    const auto* input = args.tensor(0, i);
+    if (input == nullptr) {
+      return false;
+    }
+    out.at(i) = vectorShape(numelOf(*input));
+  }
+  return true;
+}
+
+void registerSymShapeRule(std::string_view target, SymShapeRule rule) {
+  symShapeRules()[std::string(target)] = std::move(rule);
+}
+
+int32_t inferNodeShapes(SymShapes& shapes, const nativert::Node& node) {
+  if (node.target() == "prim.ListUnpack") {
+    return unpackRule(shapes, node);
+  }
+  auto rule = symShapeRules().find(std::string(node.target()));
+  if (rule != symShapeRules().end()) {
+    return rule->second(shapes, node);
+  }
+  const auto& outputs = node.outputs();
+  // A cooperative-grid scan adds its per-block partials as a second output.
+  const size_t numOutputs = node.target() == "tw.cumsum_cg" ? 2 : 1;
+  if (outputs.size() != numOutputs ||
+      outputs[0]->type().kind() != nativert::Type::Kind::Tensor ||
+      shapes.byName.count(std::string(outputs[0]->name())) != 0) {
+    return 0;
+  }
+  auto shape = inferNode(shapes, &node);
+  if (!shape) {
+    return 0;
+  }
+  shapes.byName.emplace(std::string(outputs[0]->name()), std::move(*shape));
+  return 1;
+}
+
 int32_t inferSymShapes(SymShapes& shapes, WaveGraph& waveGraph) {
   int32_t numAdded = 0;
   // A rewrite's replacement equals the value it replaced. Chains of
@@ -648,21 +1084,9 @@ int32_t inferSymShapes(SymShapes& shapes, WaveGraph& waveGraph) {
     }
   }
   auto infer = [&](const nativert::Node& node) {
-    const auto& outputs = node.outputs();
-    // A cooperative-grid scan adds its per-block partials as a second output.
-    const size_t numOutputs = node.target() == "tw.cumsum_cg" ? 2 : 1;
-    if (outputs.size() != numOutputs ||
-        outputs[0]->type().kind() != nativert::Type::Kind::Tensor ||
-        shapes.byName.count(std::string(outputs[0]->name())) != 0) {
-      return false;
-    }
-    auto shape = inferNode(shapes, &node);
-    if (!shape) {
-      return false;
-    }
-    shapes.byName.emplace(std::string(outputs[0]->name()), std::move(*shape));
-    ++numAdded;
-    return true;
+    const auto added = inferNodeShapes(shapes, node);
+    numAdded += added;
+    return added > 0;
   };
   for (const auto& node : waveGraph.graph()->nodes()) {
     infer(node);

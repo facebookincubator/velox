@@ -315,6 +315,16 @@ void runStandaloneShortcut(
           self, geometry.sizes, geometry.strides, self.storage_offset()));
       break;
     }
+    case StandaloneShortcut::kSqueeze:
+      setOutput(at::squeeze(tensorAt(0)));
+      break;
+    case StandaloneShortcut::kT:
+      setOutput(at::t(tensorAt(0)));
+      break;
+    case StandaloneShortcut::kDiagonal:
+      // (Tensor self, int offset, int dim1, int dim2).
+      setOutput(at::diagonal(tensorAt(0), intAt(1), intAt(2), intAt(3)));
+      break;
     case StandaloneShortcut::kExpand: {
       // (Tensor self, SymInt[] size, *, bool implicit=False). A broadcast is a
       // pure view: an expanded dim gets stride 0, so nothing is copied. 'size'
@@ -400,6 +410,17 @@ void runStandaloneShortcut(
       break;
     }
     case StandaloneShortcut::kListPack: {
+      if (!data.standalone->outputs().empty() &&
+          data.standalone->outputs()[0]->type().kind() ==
+              nativert::Type::Kind::SymIntList) {
+        std::vector<int64_t> ints;
+        ints.reserve(args.size());
+        for (size_t i = 0; i < args.size(); ++i) {
+          ints.push_back(intAt(i));
+        }
+        setOutput(c10::IValue(std::move(ints)));
+        break;
+      }
       c10::List<at::Tensor> list;
       list.reserve(args.size());
       for (auto* value : args) {
@@ -432,6 +453,21 @@ void runStandaloneShortcut(
     case StandaloneShortcut::kEmptyFactory: {
       // (Tensor self, int[] size, ScalarType? dtype, ...): self gives the
       // device, and the dtype unless one is given. No elements, so no storage.
+      // Under device setup self may live only on the device: the static dtype
+      // and the current device stand in for it.
+      const std::vector<int64_t> sizes(
+          data.intList.begin(), data.intList.end());
+      const auto& selfValue = frame.getIValue(args[0]->id());
+      if (!selfValue.isTensor() && data.launch->emptyFactoryDtype) {
+        setOutput(
+            c10::IValue(
+                at::empty(
+                    sizes,
+                    at::TensorOptions()
+                        .dtype(*data.launch->emptyFactoryDtype)
+                        .device(at::kCUDA))));
+        break;
+      }
       auto self = tensorAt(0);
       auto dtype = self.scalar_type();
       if (const auto* attr = data.standalone->tryGetAttribute("dtype");
@@ -439,12 +475,7 @@ void runStandaloneShortcut(
           std::holds_alternative<c10::ScalarType>(attr->value)) {
         dtype = std::get<c10::ScalarType>(attr->value);
       }
-      setOutput(
-          c10::IValue(
-              at::empty(
-                  std::vector<int64_t>(
-                      data.intList.begin(), data.intList.end()),
-                  self.options().dtype(dtype))));
+      setOutput(c10::IValue(at::empty(sizes, self.options().dtype(dtype))));
       break;
     }
     case StandaloneShortcut::kNone:

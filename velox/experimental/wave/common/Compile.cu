@@ -545,8 +545,12 @@ std::shared_ptr<CompiledModule> CompiledModule::fromCubin(
 void CompiledModuleImpl::allowLargeDynamicShared(
     int32_t kernelIdx,
     int32_t shared) {
-  constexpr int32_t kDefaultMaxDynamicShared = 48 * 1024;
-  if (shared <= kDefaultMaxDynamicShared) {
+  // The default limit is on static and dynamic shared memory together.
+  constexpr int32_t kDefaultMaxShared = 48 * 1024;
+  int staticShared = 0;
+  CU_CHECK(cuFuncGetAttribute(
+      &staticShared, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, kernels_[kernelIdx]));
+  if (staticShared + shared <= kDefaultMaxShared) {
     return;
   }
   CU_CHECK(cuFuncSetAttribute(

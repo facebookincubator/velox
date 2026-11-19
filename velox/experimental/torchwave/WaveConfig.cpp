@@ -25,6 +25,17 @@
 
 namespace torch::wave {
 
+void WaveConfig::enableDeviceSetup() {
+  deviceAlloc = true;
+  deviceSizeCheck = true;
+  deviceSizing = true;
+  devicePlacement = true;
+  deviceGrid = true;
+  convergedSetup = true;
+  wideSetup = true;
+  hostFetch = 1;
+}
+
 std::string WaveConfig::toString() const {
   // Take the defaults from a default-constructed config rather than repeating
   // them here. A repeated default that drifts from the header still compiles
@@ -95,6 +106,29 @@ std::string WaveConfig::toString() const {
   addBool("groupArena", &WaveConfig::groupArena);
   addInt("groupArenaMaxBytes", &WaveConfig::groupArenaMaxBytes);
   addBool("deviceSymbols", &WaveConfig::deviceSymbols);
+  addBool("checkGridDescriptor", &WaveConfig::checkGridDescriptor);
+  addBool("checkExports", &WaveConfig::checkExports);
+  addBool("gridEqualFinish", &WaveConfig::gridEqualFinish);
+  addBool("deviceGrid", &WaveConfig::deviceGrid);
+  addInt("gridSkipRefresh", &WaveConfig::gridSkipRefresh);
+  addFloat("gridSkipTolerance", &WaveConfig::gridSkipTolerance);
+  addBool("residentBlocks", &WaveConfig::residentBlocks);
+  addInt("testFailedStep", &WaveConfig::testFailedStep);
+  addBool("checkDemands", &WaveConfig::checkDemands);
+  addBool("deviceAlloc", &WaveConfig::deviceAlloc);
+  addInt("deviceAllocMarginPct", &WaveConfig::deviceAllocMarginPct);
+  addInt("hostFetch", &WaveConfig::hostFetch);
+  addBool("hostSizedGroups", &WaveConfig::hostSizedGroups);
+  addBool("setupStream", &WaveConfig::setupStream);
+  addBool("convergedSetup", &WaveConfig::convergedSetup);
+  addBool("deviceGridLearn", &WaveConfig::deviceGridLearn);
+  addBool("wideSetup", &WaveConfig::wideSetup);
+  addBool("checkSizeExprs", &WaveConfig::checkSizeExprs);
+  addBool("sizeExprsFromInputs", &WaveConfig::sizeExprsFromInputs);
+  addBool("deviceSizeCheck", &WaveConfig::deviceSizeCheck);
+  addBool("deviceSizing", &WaveConfig::deviceSizing);
+  addBool("deviceSizingPoison", &WaveConfig::deviceSizingPoison);
+  addBool("devicePlacement", &WaveConfig::devicePlacement);
   addBool("uniformCost", &WaveConfig::uniformCost);
   addBool("launchPerOp", &WaveConfig::launchPerOp);
   addBool("dedupProjectOps", &WaveConfig::dedupProjectOps);
