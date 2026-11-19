@@ -3834,6 +3834,69 @@ TEST_P(NimbleIndexProjectorTest, projectRowsKeepsNullFlatMapValues) {
   }
 }
 
+// Repeated reads through one projector must not accumulate retained output:
+// node values reset between reads, so pool usage stays flat instead of
+// growing with every call.
+TEST_P(NimbleIndexProjectorTest, projectRowsReleasesRetainedNodeValues) {
+  constexpr vector_size_t kNumRows{12};
+  const auto rowType =
+      ROW({{"key", BIGINT()}, {"features", MAP(BIGINT(), ARRAY(BIGINT()))}});
+  // Two trait keys with a few events per row, the array-valued flat-map
+  // shape whose nested elements accumulate without the reset.
+  std::vector<int64_t> keys;
+  std::vector<std::vector<int64_t>> elements;
+  for (vector_size_t row = 0; row < kNumRows; ++row) {
+    keys.push_back(7);
+    elements.push_back({row, row + 100});
+    if (row % 3 == 0) {
+      keys.push_back(9);
+      elements.push_back({row * 10});
+    }
+  }
+  std::vector<velox::vector_size_t> offsets{0};
+  for (vector_size_t row = 0; row < kNumRows; ++row) {
+    offsets.push_back(offsets.back() + (row % 3 == 0 ? 2 : 1));
+  }
+  const auto features = vectorMaker_->mapVector(
+      offsets,
+      vectorMaker_->flatVector<int64_t>(keys),
+      vectorMaker_->arrayVector<int64_t>(elements));
+  const auto batch = vectorMaker_->rowVector(
+      {"key", "features"},
+      {vectorMaker_->flatVector<int64_t>(
+           kNumRows, [](auto row) { return static_cast<int64_t>(row); }),
+       features});
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("features[7]");
+  subfields.emplace_back("features[9]");
+  const auto expected =
+      vectorMaker_->rowVector({"features"}, {features->slice(2, 8)});
+  writeData(
+      {batch},
+      {"key"},
+      {{"features", {}}},
+      /*stripeSize=*/1 << 20);
+  auto projector = createProjector(subfields);
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {makeRangeLookup(rowType, {"key"}, 2, 10)};
+  const auto first = projectRows(*projector, request, {});
+  ASSERT_EQ(first.responses.size(), 1);
+  velox::test::assertEqualVectors(
+      expected,
+      first.values->slice(first.responses[0].offset, first.responses[0].size));
+  const auto bytesAfterFirst = leafPool_->usedBytes();
+  constexpr int kRepeatReads{8};
+  for (int read = 0; read < kRepeatReads; ++read) {
+    const auto repeated = projectRows(*projector, request, {});
+    ASSERT_EQ(repeated.responses.size(), 1);
+    velox::test::assertEqualVectors(
+        expected,
+        repeated.values->slice(
+            repeated.responses[0].offset, repeated.responses[0].size));
+  }
+  EXPECT_EQ(leafPool_->usedBytes(), bytesAfterFirst);
+}
+
 TEST_P(NimbleIndexProjectorTest, preservesStreamRowCountEncoding) {
   constexpr vector_size_t kNumRows{64};
   constexpr uint32_t kRequestStart{10};
