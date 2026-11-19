@@ -19,6 +19,7 @@
 // for a member host code reads.
 
 #include "velox/experimental/torchwave/GroupAlloc.h"
+#include "velox/experimental/wave/common/Cuda.h"
 
 #include <glog/logging.h>
 
@@ -147,6 +148,22 @@ void writeShapeEntry(
   state.valueCold[id].owner = -1;
 }
 
+void noteGroupBase(
+    ExecutionState& state,
+    const AllocGroup* group,
+    const at::Tensor& buffer) {
+  auto it = state.groupBaseSlot.find(group);
+  if (it == state.groupBaseSlot.end()) {
+    return;
+  }
+  setAddress(state, it->second, reinterpret_cast<int64_t>(buffer.data_ptr()));
+  const int64_t bytes = buffer.numel() * buffer.element_size();
+  setAddress(state, state.groupCapacityBase + it->second, bytes);
+  if (static_cast<size_t>(it->second) < state.groupHostBytes.size()) {
+    state.groupHostBytes[it->second] = bytes;
+  }
+}
+
 namespace {
 
 at::Tensor allocateGroupBytes(int64_t bytes) {
@@ -199,7 +216,9 @@ at::Tensor
 groupBuffer(ExecutionState& state, const AllocGroup* group, int64_t bytes) {
   if (group == nullptr || !WaveConfig::get().groupArena || bytes == 0 ||
       bytes >= WaveConfig::get().groupArenaMaxBytes) {
-    return allocateGroupBytes(bytes);
+    auto buffer = allocateGroupBytes(bytes);
+    noteGroupBase(state, group, buffer);
+    return buffer;
   }
   if (state.groupArena == nullptr) {
     state.groupArena = std::make_shared<GroupArena>();
@@ -244,7 +263,7 @@ groupBuffer(ExecutionState& state, const AllocGroup* group, int64_t bytes) {
   // The deleter keeps the arena's buffer, or the group's own one, alive until
   // the last reference to the group goes.
   auto keep = fromArena ? arena->buffer : own;
-  return at::from_blob(
+  auto buffer = at::from_blob(
       data,
       {bytes},
       [arena, idx, keep, fromArena, carve](void*) {
@@ -262,9 +281,100 @@ groupBuffer(ExecutionState& state, const AllocGroup* group, int64_t bytes) {
         }
       },
       at::TensorOptions().dtype(at::kByte).device(keep.device()));
+  noteGroupBase(state, group, buffer);
+  return buffer;
 }
 
 } // namespace
+
+void allocateDeviceGroup(ExecutionState& state, const AllocGroup& group) {
+  const auto slot = state.groupBaseSlot.at(&group);
+  const auto demand = state.recordedDemand.at(slot);
+  TORCH_CHECK(demand >= 0, "No recorded demand to size group slot: ", slot);
+  // An empty group still gets memory: a kernel sized by a broadcast-free
+  // count can read an empty operand's base, which must not be null.
+  const auto bytes = std::max<int64_t>(
+      alignAllocSize(1),
+      alignAllocSize(
+          demand + demand * WaveConfig::get().deviceAllocMarginPct / 100));
+  auto buffer = groupBuffer(state, &group, bytes);
+  // Not a host size, so not checked against the demand.
+  state.groupHostBytes.at(slot) = -1;
+  if (group.concat != nullptr) {
+    setAddress(
+        state,
+        state.valueAddressBase + group.concat->resultId,
+        reinterpret_cast<int64_t>(buffer.data_ptr()));
+  }
+  const auto owner = addAllocation(state, std::move(buffer));
+  auto own = [&](nativert::ValueId id) {
+    if (id < 0) {
+      return;
+    }
+    releaseOwner(state, id);
+    state.valueCold[id].owner = owner;
+    ++state.allocations[owner].liveValues;
+  };
+  for (auto id : group.actualIds) {
+    own(id);
+  }
+  if (group.concat != nullptr) {
+    own(group.concat->resultId);
+  }
+}
+
+void setAddress(ExecutionState& state, int32_t slot, int64_t address) {
+  TORCH_CHECK(
+      slot >= 0 && slot < state.addressPinned.numel(),
+      "Address table slot out of range: ",
+      slot);
+  state.addressPinned.data_ptr<int64_t>()[slot] = address;
+  state.addressDirtyBegin = std::min(state.addressDirtyBegin, slot);
+  state.addressDirtyEnd = std::max(state.addressDirtyEnd, slot + 1);
+}
+
+void copyAddresses(
+    ExecutionState& state,
+    facebook::velox::wave::Stream& stream) {
+  if (state.addressDirtyBegin < state.addressDirtyEnd) {
+    const auto begin = state.addressDirtyBegin;
+    stream.hostToDeviceAsync(
+        state.addressTable.data_ptr<int64_t>() + begin,
+        state.addressPinned.data_ptr<int64_t>() + begin,
+        (state.addressDirtyEnd - begin) * sizeof(int64_t));
+    state.addressDirtyBegin = std::numeric_limits<int32_t>::max();
+    state.addressDirtyEnd = 0;
+  }
+  if (state.shapeDirtyBegin < state.shapeDirtyEnd) {
+    const auto first = state.shapeDirtyBegin;
+    stream.hostToDeviceAsync(
+        state.shapeTable.data_ptr<int64_t>() + first,
+        state.shapePinned.data_ptr<int64_t>() + first,
+        (state.shapeDirtyEnd - first) * sizeof(int64_t));
+    state.shapeDirtyBegin = std::numeric_limits<int32_t>::max();
+    state.shapeDirtyEnd = 0;
+  }
+}
+
+void setValueShape(
+    ExecutionState& state,
+    int32_t valueId,
+    const uint8_t* param) {
+  if (valueId < 0 ||
+      valueId >= static_cast<int32_t>(state.valueShapeSlot.size()) ||
+      state.valueShapeSlot[valueId] < 0) {
+    return;
+  }
+  const auto first = state.valueShapeSlot[valueId] * 2 * kMaxDims;
+  const auto* tensor = reinterpret_cast<const Tensor*>(param);
+  auto* words = state.shapePinned.data_ptr<int64_t>() + first;
+  for (int32_t d = 0; d < kMaxDims; ++d) {
+    words[d] = tensor->dims[d];
+    words[kMaxDims + d] = tensor->strides[d];
+  }
+  state.shapeDirtyBegin = std::min(state.shapeDirtyBegin, first);
+  state.shapeDirtyEnd = std::max(state.shapeDirtyEnd, first + 2 * kMaxDims);
+}
 
 void beginGroupArena(ExecutionState& state) {
   auto* arena = state.groupArena.get();
@@ -470,6 +580,24 @@ bool isTableOnly(const ExecutionState& state, nativert::ValueId id) {
       state.tableOnly[id] != 0;
 }
 
+void takeOwner(
+    ExecutionState& state,
+    nativert::ValueId id,
+    nativert::ValueId source) {
+  // NOLINTNEXTLINE(facebook-hte-ParameterUncheckedArrayBounds)
+  auto& out = state.valueCold[id];
+  out.owner = source >= 0 ? state.valueCold[source].owner : -1;
+  if (out.owner < 0 && source >= 0) {
+    const auto& base = state.frame->getIValue(source);
+    if (base.isTensor()) {
+      out.owner = addAllocation(state, base.toTensor());
+    }
+  }
+  if (out.owner >= 0) {
+    ++state.allocations[out.owner].liveValues;
+  }
+}
+
 void materializeEntry(
     ExecutionState& state,
     nativert::ValueId id,
@@ -481,6 +609,13 @@ void materializeEntry(
     return;
   }
   const auto owner = state.valueCold[id].owner;
+  TORCH_CHECK(
+      owner >= 0 || frame.getIValue(baseId).isTensor(),
+      "Materializing %",
+      id,
+      " over %",
+      baseId,
+      ", which has no owner and no frame tensor");
   const at::Tensor base = owner >= 0 ? state.allocations[owner].buffer
                                      : frame.getIValue(baseId).toTensor();
   const auto& t = entry.t;
@@ -673,6 +808,14 @@ AllocGroupBuffer materializeConcatGroupTable(
   AllocGroupBuffer buffer;
   buffer.base = state.allocations[owner].buffer;
   buffer.totalBytes = buffer.base.numel() * buffer.base.element_size();
+  // The setup places the result, and the bands in it, from its address.
+  if (layout.resultId < static_cast<int32_t>(state.hasValueAddress.size()) &&
+      state.hasValueAddress[layout.resultId] != 0) {
+    setAddress(
+        state,
+        state.valueAddressBase + layout.resultId,
+        reinterpret_cast<int64_t>(buffer.base.data_ptr()));
+  }
   buffer.slots.assign(requests.size(), at::Tensor());
   buffer.offsets.assign(requests.size(), 0);
   int64_t joinStride = 1;

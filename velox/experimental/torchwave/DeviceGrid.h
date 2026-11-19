@@ -57,6 +57,12 @@ struct DeviceGrid {
   int64_t longsOffset{0};
 };
 
+/// Whether the grid kernel can hold a step of 'numLaunches' launches whose
+/// descriptor is 'grid': no launch counted on the host, and the per-launch
+/// arrays fit in shared memory. A descriptor too large for shared memory stays
+/// in global memory.
+bool deviceGridFits(const GridDescriptor& grid, int32_t numLaunches);
+
 /// Packs 'grid' for the kernel. 'paramOffsets' are the launches' offsets in
 /// the step's parameter region, 'costAdjust' their host cost adjustments.
 /// Returns false when some launch's element count needs the host, or the step
@@ -78,7 +84,9 @@ bool packDeviceGrid(
 /// 'previousClocks' they still hold the clocks of the step's previous
 /// execution, which correct the launches' cost multipliers.
 /// With 'fixups' the same kernel first runs the step's symbol
-/// fixups, which the counts then see.
+/// fixups, which the counts then see. The kernel returns at once when
+/// 'failure' (the execution's failure words, or nullptr) names a step before
+/// 'firstStep'.
 void runDeviceGrid(
     DeviceGrid& grid,
     uint8_t* deviceBase,
@@ -88,7 +96,9 @@ void runDeviceGrid(
     int64_t* deviceClocks,
     bool previousClocks,
     const FixupArgs* fixups,
-    facebook::velox::wave::Stream* stream);
+    facebook::velox::wave::Stream* stream,
+    const int32_t* failure,
+    int32_t firstStep);
 
 /// What the last grid kernel of 'grid' computed, copied back after a stream
 /// sync: per launch the element count, the multiplier and the blocks.

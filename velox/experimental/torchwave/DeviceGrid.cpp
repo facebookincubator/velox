@@ -70,7 +70,7 @@ constexpr int32_t kSharedPerLaunch = 48;
 constexpr int32_t kPrevPerThread = 4;
 // Below the 48 KB a kernel gets without opting in, less the static shared of
 // the grid and the fixups.
-constexpr int32_t kMaxSharedBytes = 30 * 1024;
+constexpr int32_t kMaxSharedBytes = 22 * 1024;
 // Ints before the per-launch ints: the previous block count, the grid total,
 // and spare words.
 constexpr int32_t kStateWords = 16;
@@ -86,7 +86,7 @@ constexpr int kStateWords = 16;
 constexpr int kPrevPerThread = 4;
 // Dynamic shared memory of a setup kernel: 48 KB less the static shared of
 // the fixups and the grid.
-constexpr int kMaxSetupShared = 30 * 1024;
+constexpr int kMaxSetupShared = 22 * 1024;
 
 // With TW_SETUP_CLOCKS, state words 2-8 get the cycles from the start of the
 // kernel to each phase of the setup.
@@ -105,6 +105,16 @@ constexpr int kMaxSetupShared = 30 * 1024;
 #endif
 constexpr unsigned kFull = 0xffffffffu;
 
+// One dim of a broadcast: a 1 takes the other's extent, and an empty dim
+// empties the result.
+__device__ int broadcastDim(int dim, int term) {
+  return term == 1 ? dim
+      : dim == 1   ? term
+      : dim == 0 || term == 0 ? 0
+      : term > dim ? term
+                   : dim;
+}
+
 // The element count of the launch described at 'l', from its parameters.
 __device__ long long launchCount(
     const int* desc, const int* l, const unsigned char* base) {
@@ -118,21 +128,24 @@ __device__ long long launchCount(
   }
   const int* terms = desc + desc[4];
   const int* consts = desc + desc[5];
-  long long count = 0;
+  // Kinds as GridLaunchDesc::Count: 1 max, 2 sum, 3 broadcast, 4 product.
+  long long count = kind == 4 ? 1 : 0;
   int dims[4] = {1, 1, 1, 1};
   int rank = 0;
   for (int t = 0; t < numTerms; ++t) {
     const unsigned char* term = base + terms[2 * (termBegin + t)];
     if (terms[2 * (termBegin + t) + 1]) {
       const long long value = *reinterpret_cast<const long long*>(term);
-      count = value > count ? value : count;
+      count = kind == 4 ? count * value : value > count ? value : count;
       continue;
     }
     const int termRank = *reinterpret_cast<const signed char*>(term + 8);
     const int* termDims = reinterpret_cast<const int*>(term + 12);
     // Tensor::numEl is a uint32_t, as on the host.
     const long long numEl = *reinterpret_cast<const unsigned*>(term + 44);
-    if (kind == 2) {
+    if (kind == 4) {
+      count *= numEl;
+    } else if (kind == 2) {
       count += numEl;
     } else if (kind == 1) {
       count = numEl > count ? numEl : count;
@@ -140,7 +153,7 @@ __device__ long long launchCount(
       rank = termRank > rank ? termRank : rank;
       for (int d = 0; d < termRank; ++d) {
         int& dim = dims[4 - termRank + d];
-        dim = termDims[d] > dim ? termDims[d] : dim;
+        dim = broadcastDim(dim, termDims[d]);
       }
     }
   }
@@ -151,7 +164,7 @@ __device__ long long launchCount(
       rank = constRank > rank ? constRank : rank;
       for (int d = 0; d < constRank; ++d) {
         int& dim = dims[4 - constRank + d];
-        dim = shape[1 + d] > dim ? shape[1 + d] : dim;
+        dim = broadcastDim(dim, shape[1 + d]);
       }
     }
     count = 1;
@@ -235,8 +248,10 @@ __device__ int blockScan(int value, int* scratch, int& total) {
 // cost, blocks and cap; then a copy of the descriptor's 'numWords'.
 // 'stepClocks' and 'stepWaits' are the step's per-block clocks and barrier
 // clocks in the execution's clock buffer, for its 'launchBlocks' blocks. With
-// 'previousClocks' they hold the previous execution's clocks of the step.
-// 'maxPrevBlocks' bounds the previous execution's block count.
+// 'previousClocks' they hold the previous execution's clocks of the step. A
+// negative 'numWords' leaves the descriptor in global memory, for a step whose
+// descriptor does not fit. 'maxPrevBlocks' bounds the previous execution's
+// block count.
 // Called by every thread of the block.
 __device__ void gridBody(
     const int* deviceDesc,
@@ -271,7 +286,8 @@ __device__ void gridBody(
   float* lastCost = lastMultiplier + n;
   int* lastBlocks = reinterpret_cast<int*>(lastCost + n);
   int* lastCap = lastBlocks + n;
-  int* desc = lastCap + n;
+  int* sharedDesc = lastCap + n;
+  const int* desc = numWords >= 0 ? sharedDesc : deviceDesc;
   __shared__ double scratch[kWarps];
   __shared__ int intScratch[kWarps];
   __shared__ int feasible[kWarps];
@@ -287,7 +303,7 @@ __device__ void gridBody(
   // block table overwrites them. The previous execution's blocks are loaded
   // ahead of the test against its block count.
   for (int w = tid; w < numWords; w += numThreads) {
-    desc[w] = deviceDesc[w];
+    sharedDesc[w] = deviceDesc[w];
   }
   for (int i = tid; i < n; i += numThreads) {
     first[i] = blockInfos[i];
@@ -524,7 +540,12 @@ extern "C" __global__ void deviceGrid(
     int previousClocks,
     float* floats,
     int* ints,
-    long long* countsOut) {
+    long long* countsOut,
+    const int* failure,
+    int firstStep) {
+  if (stepAlreadyFailed(failure, firstStep)) {
+    return;
+  }
   SETUP_START();
   gridBody(
       deviceDesc,
@@ -566,7 +587,12 @@ extern "C" __global__ void stepSetup(
     int previousClocks,
     float* floats,
     int* ints,
-    long long* countsOut) {
+    long long* countsOut,
+    const int* failure,
+    int firstStep) {
+  if (stepAlreadyFailed(failure, firstStep)) {
+    return;
+  }
   SETUP_START();
   extern __shared__ long long setupShared[];
   fixupBody(
@@ -580,7 +606,9 @@ extern "C" __global__ void stepSetup(
       numCode,
       0,
       blockDim.x,
-      1);
+      1,
+      failure,
+      firstStep);
   __syncthreads();
   gridBody(
       deviceDesc,
@@ -943,7 +971,12 @@ extern "C" __global__ void deviceGridWarp(
     int previousClocks,
     float* floats,
     int* ints,
-    long long* countsOut) {
+    long long* countsOut,
+    const int* failure,
+    int firstStep) {
+  if (stepAlreadyFailed(failure, firstStep)) {
+    return;
+  }
   SETUP_START();
   gridWarpBody(
       deviceDesc,
@@ -987,7 +1020,12 @@ extern "C" __global__ void stepSetupWarp(
     int previousClocks,
     float* floats,
     int* ints,
-    long long* countsOut) {
+    long long* countsOut,
+    const int* failure,
+    int firstStep) {
+  if (stepAlreadyFailed(failure, firstStep)) {
+    return;
+  }
   SETUP_START();
   // The first half of the block runs the fixups while the second half loads
   // what the grid reads before the counts; the programs go after the grid's
@@ -1007,7 +1045,9 @@ extern "C" __global__ void stepSetupWarp(
         numCode,
         0,
         half,
-        1);
+        1,
+        failure,
+        firstStep);
     SETUP_MARK(ints, 0);
 #ifdef TW_SETUP_CLOCKS
     if (threadIdx.x == 0) {
@@ -1060,6 +1100,16 @@ int32_t sharedBytes(int32_t numLaunches, int32_t numWords) {
   return kSharedPerLaunch * numLaunches + 4 * numWords;
 }
 
+// Whether the grid kernel keeps the descriptor in shared memory; else it reads
+// it from global memory and needs only the per-launch arrays there.
+bool descriptorInShared(int32_t numLaunches, int32_t numWords) {
+  return sharedBytes(numLaunches, numWords) <= kMaxSharedBytes;
+}
+
+bool gridFitsShared(int32_t numLaunches) {
+  return sharedBytes(numLaunches, 0) <= kMaxSharedBytes;
+}
+
 at::Tensor toDevice(const void* data, int64_t numel, at::ScalarType type) {
   return at::from_blob(
              const_cast<void*>(data),
@@ -1069,6 +1119,17 @@ at::Tensor toDevice(const void* data, int64_t numel, at::ScalarType type) {
 }
 
 } // namespace
+
+bool deviceGridFits(const GridDescriptor& grid, int32_t numLaunches) {
+  if (grid.launches.size() == static_cast<size_t>(numLaunches)) {
+    for (const auto& launch : grid.launches) {
+      if (launch.count == GridLaunchDesc::Count::kHost) {
+        return false;
+      }
+    }
+  }
+  return gridFitsShared(numLaunches);
+}
 
 bool packDeviceGrid(
     const GridDescriptor& grid,
@@ -1096,8 +1157,7 @@ bool packDeviceGrid(
   const int32_t termBase = kHeaderWords + kLaunchWords * numLaunches;
   const int32_t constBase = termBase + 2 * numTerms;
   words.assign(constBase + kConstWords * numConsts, 0);
-  if (sharedBytes(numLaunches, static_cast<int32_t>(words.size())) >
-      kMaxSharedBytes) {
+  if (!gridFitsShared(numLaunches)) {
     return false;
   }
   // NOLINTNEXTLINE(facebook-hte-ParameterUncheckedArrayBounds)
@@ -1157,7 +1217,9 @@ void runDeviceGrid(
     int64_t* deviceClocks,
     bool previousClocks,
     const FixupArgs* fixups,
-    facebook::velox::wave::Stream* stream) {
+    facebook::velox::wave::Stream* stream,
+    const int32_t* failure,
+    int32_t firstStep) {
   TORCH_CHECK(deviceClocks != nullptr, "A device grid needs the step's clocks");
   const int32_t n = grid.numLaunches;
   if (!grid.device.defined()) {
@@ -1212,7 +1274,9 @@ void runDeviceGrid(
       &previousClocksArg,
       &floats,
       &ints,
-      &longs};
+      &longs,
+      &failure,
+      &firstStep};
   // deviceGrid takes the arguments after the fixups'. A step of at most 32
   // launches runs on one warp.
   constexpr int32_t kNumFixupArgs = 6;
@@ -1231,8 +1295,13 @@ void runDeviceGrid(
         ? codeOffset + codeBytes
         : warpBytes;
   } else {
-    dynamicShared = std::max(
-        sharedBytes(n, static_cast<int32_t>(grid.words.size())), codeBytes);
+    const auto descWords = static_cast<int32_t>(grid.words.size());
+    const bool inShared = descriptorInShared(n, descWords);
+    if (!inShared) {
+      numWords = -numWords;
+    }
+    dynamicShared =
+        std::max(sharedBytes(n, inShared ? descWords : 0), codeBytes);
   }
   gridKernel().launch(
       entry,
