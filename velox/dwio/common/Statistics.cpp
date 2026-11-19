@@ -122,7 +122,8 @@ std::string DoubleColumnStatistics::toString() const {
       toStringOr(sum_, kUnknown));
 }
 
-std::string IntegerColumnStatistics::toString() const {
+template <typename T>
+std::string IntegerColumnStatistics<T>::toString() const {
   return folly::to<std::string>(
       ColumnStatistics::toString(),
       ", min: ",
@@ -132,6 +133,9 @@ std::string IntegerColumnStatistics::toString() const {
       ", sum: ",
       toStringOr(sum_, kUnknown));
 }
+
+template std::string IntegerColumnStatistics<int64_t>::toString() const;
+template std::string IntegerColumnStatistics<int128_t>::toString() const;
 
 std::string TimestampColumnStatistics::toString() const {
   return folly::to<std::string>(
