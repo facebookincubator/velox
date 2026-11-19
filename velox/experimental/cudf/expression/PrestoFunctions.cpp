@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/expression/CommonFunctions.h"
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
@@ -21,6 +23,7 @@
 #include "velox/experimental/cudf/expression/prestosql/ArrayJoinFunction.h"
 #include "velox/experimental/cudf/expression/prestosql/DateAddFunction.h"
 #include "velox/experimental/cudf/expression/prestosql/DatePlusIntervalFunction.h"
+#include "velox/experimental/cudf/expression/prestosql/SplitFunction.h"
 #include "velox/experimental/cudf/expression/prestosql/UnixtimeFunctions.h"
 
 #include "velox/common/base/Exceptions.h"
@@ -30,9 +33,12 @@
 
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/strings/slice.hpp>
+#include <cudf/strings/strip.hpp>
 
 #include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -125,6 +131,45 @@ class SubstrFunction : public CudfFunction {
   bool hasEnd_{false};
 };
 
+// Lists the code points Presto trims as whitespace
+// (stringImpl::isUnicodeWhiteSpace()).
+constexpr std::string_view kPrestoWhitespace{
+    "\t\n\v\f\r\x1c\x1d\x1e\x1f \u1680\u2000\u2001\u2002\u2003\u2004\u2005"
+    "\u2006\u2008\u2009\u200a\u2028\u2029\u205f\u3000"};
+
+// Assumes valid UTF-8. cuDF reads a stray continuation byte as part of the
+// preceding character, so rtrim('x \x80') returns 'x' where Presto returns
+// 'x \x80'.
+// TODO: Match Presto on invalid UTF-8 by porting stringImpl's byte-level
+// whitespace checks (https://github.com/facebookincubator/velox/issues/20475).
+class TrimFunction : public CudfFunction {
+ public:
+  explicit TrimFunction(cudf::strings::side_type side) : side_(side) {
+    // Built once rather than per batch; the sync lets eval() use it on any
+    // stream.
+    auto stream = getDefaultStreamForCurrentThread();
+    whitespace_ = std::make_unique<cudf::string_scalar>(
+        kPrestoWhitespace, true, stream, get_temp_mr());
+    stream.sync();
+  }
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) const override {
+    return cudf::strings::strip(
+        cudf::strings_column_view(asView(inputColumns[0])),
+        side_,
+        *whitespace_,
+        stream,
+        mr);
+  }
+
+ private:
+  cudf::strings::side_type side_;
+  std::unique_ptr<cudf::string_scalar> whitespace_;
+};
+
 } // namespace
 
 void registerPrestoFunctions(const std::string& prefix) {
@@ -187,6 +232,61 @@ void registerPrestoFunctions(const std::string& prefix) {
            .constantArgumentType("bigint")
            .constantArgumentType("bigint")
            .build()});
+
+  for (const auto& [name, side] :
+       {std::pair{"trim", cudf::strings::side_type::BOTH},
+        std::pair{"ltrim", cudf::strings::side_type::LEFT},
+        std::pair{"rtrim", cudf::strings::side_type::RIGHT}}) {
+    registerCudfFunction(
+        prefix + name,
+        [side](
+            const std::string&,
+            const core::TypedExprPtr&,
+            memory::MemoryPool*,
+            const core::QueryConfig&) {
+          return std::make_shared<TrimFunction>(side);
+        },
+        {FunctionSignatureBuilder()
+             .returnType("varchar")
+             .argumentType("varchar")
+             .build()},
+        true,
+        // FunctionExpression does not pass a constant input to eval().
+        [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
+          return !expr->inputs()[0]->isConstantKind();
+        });
+  }
+
+  // Presto only: Spark's split takes a regular expression.
+  registerCudfFunction(
+      prefix + "split",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool,
+         const core::QueryConfig&) {
+        return std::make_shared<prestosql::SplitFunction>(expr, pool);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("array(varchar)")
+           .argumentType("varchar")
+           .constantArgumentType("varchar")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("array(varchar)")
+           .argumentType("varchar")
+           .constantArgumentType("varchar")
+           .constantArgumentType("integer")
+           .build(),
+       FunctionSignatureBuilder()
+           .returnType("array(varchar)")
+           .argumentType("varchar")
+           .constantArgumentType("varchar")
+           .constantArgumentType("bigint")
+           .build()},
+      true,
+      [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
+        return prestosql::SplitFunction::canEvaluate(expr);
+      });
 
   registerCudfFunction(
       prefix + "plus",

@@ -179,6 +179,38 @@ TEST_F(CudfSparkExpressionSelectionTest, isNullDialectRegistration) {
   }
 }
 
+// Spark trims spaces only, and its split takes a regular expression, so the
+// builtin and Spark registrations must not include the cuDF Presto versions.
+TEST_F(CudfSparkExpressionSelectionTest, prestoTrimAndSplitStayOnCpu) {
+  auto canRunOnGpu = [&](const char* sql) {
+    auto expr = parseAndInferTypedExpr(
+        sql,
+        rowType_,
+        execCtx_.get(),
+        {.parseIntegerAsBigint = false, .functionPrefix = ""});
+    return canExprRunOnGpu(expr, queryCtx_.get(), pool_.get());
+  };
+  // SetUp() registers the Presto functions, which run these on the GPU.
+  EXPECT_TRUE(canRunOnGpu("trim(name)"));
+  EXPECT_TRUE(canRunOnGpu("split(name, ',')"));
+
+  unregisterFunctions();
+  registerBuiltinFunctions("");
+  registerSparkFunctions("");
+  for (const auto* sql :
+       {"trim(name)",
+        "ltrim(name)",
+        "rtrim(name)",
+        "split(name, ',')",
+        "split(name, ',', 2)",
+        "split(name, ',+', 2)",
+        "split(name, ',+', -1)",
+        "split(name, ',+', 0)"}) {
+    SCOPED_TRACE(sql);
+    EXPECT_FALSE(canRunOnGpu(sql));
+  }
+}
+
 TEST_F(CudfSparkExpressionSelectionTest, signatureAllowsColumnArgsStartswith) {
   // OK: pattern is a constant
   auto ok = optimizeTypedExpr(
