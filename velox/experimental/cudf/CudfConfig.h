@@ -128,7 +128,9 @@ struct CudfConfig {
   /// Serialize a single-destination task output into Presto pages on the GPU
   /// with CudfPrestoOutput instead of CudfToVelox + PartitionedOutput. Also a
   /// query config key.
-  bool prestoOutputEnabled{true};
+  // TODO: Enable by default once the Presto integration tests pass with it on
+  // GPU workers.
+  bool prestoOutputEnabled{false};
 
   /// Serialized bytes per Presto page built on the GPU, the page cap of
   /// PartitionedOutput by default; a page exceeds it by less than one row

@@ -45,7 +45,8 @@ namespace facebook::velox::cudf_velox {
 /// which consumers drain as they drain the pages of exec::PartitionedOutput.
 ///
 /// Replaces the CudfToVelox + exec::PartitionedOutput pair at the end of a GPU
-/// pipeline when the output goes to one destination buffer (a single,
+/// pipeline when cudf.presto_output_enabled is set, which it is not by
+/// default, and the output goes to one destination buffer (a single,
 /// broadcast or arbitrary output without partition keys) through the Presto
 /// serde without compression, and every output column has a flat Presto
 /// encoding. An output whose input is already on the CPU keeps

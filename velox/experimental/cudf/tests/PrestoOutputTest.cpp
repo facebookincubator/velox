@@ -272,16 +272,22 @@ class PrestoOutputTest
     : public cudf_velox::exec::test::CudfHiveConnectorTestBase {
  protected:
   void SetUp() override {
-    savedCpuFallback_ = cudf_velox::CudfConfig::getInstance().allowCpuFallback;
-    savedTimestampUnit_ = cudf_velox::CudfConfig::getInstance().timestampUnit;
+    auto& config = cudf_velox::CudfConfig::getInstance();
+    savedCpuFallback_ = config.allowCpuFallback;
+    savedTimestampUnit_ = config.timestampUnit;
+    savedPrestoOutputEnabled_ = config.prestoOutputEnabled;
     CudfHiveConnectorTestBase::SetUp();
+    // Off by default.
+    config.prestoOutputEnabled = true;
   }
 
   void TearDown() override {
     bufferManager_->setListenerFactory(nullptr);
     CudfHiveConnectorTestBase::TearDown();
-    cudf_velox::CudfConfig::getInstance().allowCpuFallback = savedCpuFallback_;
-    cudf_velox::CudfConfig::getInstance().timestampUnit = savedTimestampUnit_;
+    auto& config = cudf_velox::CudfConfig::getInstance();
+    config.allowCpuFallback = savedCpuFallback_;
+    config.timestampUnit = savedTimestampUnit_;
+    config.prestoOutputEnabled = savedPrestoOutputEnabled_;
   }
 
   struct Destination {
@@ -692,6 +698,7 @@ class PrestoOutputTest
   uint64_t maxBytesPerFetch_{1 << 20};
   bool savedCpuFallback_{true};
   cudf::type_id savedTimestampUnit_{cudf::type_id::TIMESTAMP_NANOSECONDS};
+  bool savedPrestoOutputEnabled_{false};
 };
 
 TEST_F(PrestoOutputTest, flatTypes) {
