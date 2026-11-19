@@ -20,6 +20,7 @@
 #include <folly/CppAttributes.h>
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -54,6 +55,18 @@ struct SymbolFixups {
   int32_t numRecords{0};
   at::Tensor deviceRecords;
   at::Tensor deviceCode;
+};
+
+/// What the fixup kernel of one step reads besides the step's parameters.
+struct FixupArgs {
+  int32_t* records{nullptr};
+  int64_t* code{nullptr};
+  int32_t numRecords{0};
+  /// The symbols' source addresses, then their capacities.
+  int64_t* symbols{nullptr};
+  int32_t numSymbols{0};
+  /// Words of 'code'.
+  int32_t numCode{0};
 };
 
 /// Lets a step that would wait for an integer the device returns -- an
@@ -116,6 +129,9 @@ class DeviceSymbols {
   /// value exceeded the capacity the execution ran on.
   bool endExecution(ExecutionState& state);
 
+  /// Makes the fixups of a step ready to run on the device.
+  FixupArgs prepareFixups(ExecutionState& state, SymbolFixups& fixups);
+
   /// Launches the fixups of a step on 'stream', after its parameters have
   /// been copied to 'deviceBase'.
   void runFixups(
@@ -123,6 +139,62 @@ class DeviceSymbols {
       SymbolFixups& fixups,
       uint8_t* deviceBase,
       facebook::velox::wave::Stream* stream);
+
+  /// Gives the outputs of the bound steps of 'state' the shapes the symbolic
+  /// forms of their ReserveFns compute, where the export has none. An integer
+  /// operand without an expression, such as a total the device returns, gets
+  /// a new symbol named u_<value>. Returns how many shapes it added.
+  int32_t inferReserveShapes(const ExecutionState& state);
+
+  /// Logs and clears what checkSizeExprs has tallied over an execution, after
+  /// comparing the outputs it deferred with the execution's 'symbols'.
+  void reportSizeExprs(
+      const folly::F14FastMap<std::string, int64_t>& symbols) const;
+
+  /// True if the export gave the shape of 'valueId'; see hostShaped_.
+  bool isHostShaped(int32_t valueId) const;
+
+  /// True if the device sets the shape of 'valueId'; see setOnDevice_.
+  bool isSetOnDevice(int32_t valueId) const;
+
+  /// Under WaveConfig::sizeExprsFromInputs: shapes for every value derived
+  /// from graph-input dims taken as symbols, kept apart from the export's.
+  int32_t deriveShapesFromInputs(const ExecutionState& state);
+
+  /// Runs the rules of the nodes of the variant graphs, which produce the
+  /// values grid generation makes. Returns how many main-graph values it
+  /// shaped under another name.
+  int32_t shapeVariantNodes(SymShapes& shapes);
+
+  /// Shapes the duplicates of values made during grid generation, which a
+  /// reused op gives each of its invocations: the original's rule over the
+  /// invocation's operands. Returns how many shapes it added.
+  int32_t shapeDuplicates(SymShapes& shapes);
+
+  /// Applies the reserves' symbolic forms to the bound steps of 'state',
+  /// adding to 'shapes'. Returns how many shapes it added.
+  int32_t applySymReserves(const ExecutionState& state, SymShapes& shapes);
+
+  /// Checks that the export's symbolic shapes give the dims the host sized
+  /// the tensor parameters of 'program' with, at 'params'. A symbol is bound
+  /// from the first dim that is that symbol alone; every other dim is
+  /// evaluated and compared. Logs a summary now and then. For
+  /// WaveConfig::checkSizeExprs.
+  void checkSizeExprs(
+      ExecutionState& state,
+      const StepProgram& program,
+      const uint8_t* params,
+      int32_t sequenceNumber,
+      int32_t stepIdx) const;
+
+  /// The CUDA source of the fixups: __device__ fixupBody(params, records,
+  /// code, numRecords, symbols, numSymbols), called by every thread of one
+  /// block, and the fixupSymbols kernel that runs it.
+  static const char* fixupSource();
+
+  /// The dynamic shared memory fixupBody uses for 'numCode' words of
+  /// programs: all of them, or none when they do not fit.
+  static int32_t fixupSharedBytes(int32_t numCode);
 
   /// Logs, for each step that still waits, the returned values it waits for
   /// and why each was not picked. For TW_DEVICE_SYMBOLS_TRACE.
@@ -187,7 +259,38 @@ class DeviceSymbols {
   void traceRejection(const std::string& why) const;
 
   std::shared_ptr<SymShapes> shapes_;
+  // See deriveShapesFromInputs; null unless WaveConfig::sizeExprsFromInputs.
+  std::shared_ptr<SymShapes> derivedShapes_;
+  // Outputs the device gives their actual shape. The producing step's frame
+  // holds the reserve's capacity and later frames the actual shape, so the
+  // host's dims for them depend on the step.
+  folly::F14FastSet<std::string> setOnDevice_;
+  // Outputs of ops no rule describes, shaped from the export: the host
+  // decides them when the op returns.
+  folly::F14FastSet<std::string> hostShaped_;
   WaveGraph& waveGraph_;
+  // For checkSizeExprs: parameters without an expression by producer.
+  mutable std::mutex noShapeMutex_;
+  mutable folly::F14FastMap<std::string, int64_t> noShapeByTarget_;
+  // For checkSizeExprs: outputs compared at the end of the execution.
+  struct PendingSizeCheck {
+    int32_t valueId;
+    std::vector<SymExpr> dims;
+    std::vector<int64_t> hostDims;
+  };
+  mutable std::vector<PendingSizeCheck> pendingSizeChecks_;
+  // For checkSizeExprs: parameters whose expression differs, by producer.
+  mutable folly::F14FastMap<std::string, int64_t> differByTarget_;
+  // checkSizeExprs tallies since the last reportSizeExprs.
+  mutable std::atomic<int64_t> numSizeValues_{0};
+  mutable std::atomic<int64_t> numSizeNoShape_{0};
+  mutable std::atomic<int64_t> numSizeMatched_{0};
+  mutable std::atomic<int64_t> numSizeDiffer_{0};
+  mutable std::atomic<int64_t> numSizeUnbound_{0};
+  mutable std::atomic<int64_t> numSizeSetOnDevice_{0};
+  mutable std::atomic<int64_t> numSizeHostShaped_{0};
+  mutable std::atomic<int32_t> numSizeReports_{0};
+  mutable std::atomic<int32_t> numSizeUnboundReports_{0};
   // Integer values whose expression is a single data-dependent symbol.
   folly::F14FastMap<nativert::ValueId, std::string> candidateSymbol_;
   // Tensors whose one dim is a data-dependent symbol, the count the device
