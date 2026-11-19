@@ -205,6 +205,25 @@ void InMemoryExchangeClient::close() {
   closeImpl();
 }
 
+namespace {
+
+// Closes all of 'sources', logging the errors of those that throw.
+void closeSources(const std::vector<std::shared_ptr<ExchangeSource>>& sources) {
+  for (const auto& source : sources) {
+    try {
+      source->close();
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Failed to close exchange source " << source->toString()
+                 << ": " << e.what();
+    } catch (...) {
+      LOG(ERROR) << "Failed to close exchange source " << source->toString()
+                 << ": <Unknown exception type>";
+    }
+  }
+}
+
+} // namespace
+
 void InMemoryExchangeClient::closeImpl() {
   std::vector<std::shared_ptr<ExchangeSource>> sources;
   std::queue<ProducingSource> producingSources;
@@ -229,10 +248,8 @@ void InMemoryExchangeClient::closeImpl() {
     emptySources = std::move(emptySources_);
   }
 
-  // Outside of mutex.
-  for (auto& source : sources) {
-    source->close();
-  }
+  // Outside of mutex. close() must not throw: destructors call it.
+  closeSources(sources);
   queue_->close();
 }
 
@@ -249,14 +266,7 @@ void InMemoryExchangeClient::endSourceCalls() {
 
   // close() has already returned, so a failure here has no caller to report
   // to, and this may run while an exception from a source call unwinds.
-  for (auto& source : sources) {
-    try {
-      source->close();
-    } catch (const std::exception& e) {
-      LOG(ERROR) << "Failed to close exchange source " << source->toString()
-                 << ": " << e.what();
-    }
-  }
+  closeSources(sources);
 }
 
 folly::F14FastMap<std::string, RuntimeMetric> InMemoryExchangeClient::stats()
