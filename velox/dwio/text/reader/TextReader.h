@@ -137,6 +137,10 @@ class TextRowReader : public dwio::common::RowReader {
 
   void setEOF();
 
+  // Skips to the first row of the split row range, if one is set, and sets
+  // 'endRow_'.
+  void initSplitRowRange();
+
   void incrementDepth();
 
   void decrementDepth(DelimType& delim);
@@ -228,6 +232,8 @@ class TextRowReader : public dwio::common::RowReader {
   std::string_view preLoadedUnreadData_;
   int unreadIdx_;
   uint64_t limit_; // lowest offset not in the range
+  // 'currentRow_' at which to stop reading. Set by the split row range.
+  std::optional<uint64_t> endRow_;
   uint64_t fileLength_;
   std::string ownedString_;
   std::shared_ptr<dwio::common::DataBuffer<char>> varBinBuf_;
