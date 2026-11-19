@@ -31,12 +31,18 @@ struct MapConcatConfig {
   bool throwOnDuplicateKeys{false};
 };
 
-/// Merge multiple map vectors into a single MapVector.  All inputs are provided
-/// as DecodedVectors.  For each selected row, entries from all inputs are
-/// merged.  When duplicate keys exist across inputs, the entry from the last
-/// input wins.  Only rows selected in 'rows' are processed; unselected rows
-/// get size 0 in the output.
-MapVectorPtr mapConcat(
+/// Merge multiple map vectors into a single map vector.  All inputs are
+/// provided as DecodedVectors.  For each selected row, entries from all inputs
+/// are merged.  When duplicate keys exist across inputs, the entry from the
+/// last input wins.  Only rows selected in 'rows' are processed; unselected
+/// rows get size 0 in the output.
+///
+/// When every input is a FlatMapVector, possibly wrapped in a dictionary or
+/// constant, the result is a FlatMapVector. A key that only one input has
+/// shares the map values of that input instead of copying them, and entry
+/// order within a map is not defined. When every input is a MapVector, the
+/// result is a MapVector. Mixing the two encodings fails.
+VectorPtr mapConcat(
     memory::MemoryPool* pool,
     const TypePtr& outputType,
     std::span<DecodedVector* const> inputs,
