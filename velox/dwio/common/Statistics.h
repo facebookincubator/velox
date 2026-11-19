@@ -40,6 +40,24 @@ inline constexpr std::string_view kChunkSkippedRows = "chunkSkippedRows";
 /// Runtime metric name for rows traversed by reads or chunk-statistics skips.
 inline constexpr std::string_view kProcessedRows = "processedRows";
 
+/// Runtime metric names for splits and strides skipped or read based on
+/// statistics.
+inline constexpr std::string_view kSkippedSplits = "skippedSplits";
+inline constexpr std::string_view kProcessedSplits = "processedSplits";
+inline constexpr std::string_view kSkippedSplitBytes = "skippedSplitBytes";
+inline constexpr std::string_view kSkippedStrides = "skippedStrides";
+inline constexpr std::string_view kProcessedStrides = "processedStrides";
+
+/// Runtime metric names for file footer reads.
+inline constexpr std::string_view kFooterBufferOverread =
+    "footerBufferOverread";
+inline constexpr std::string_view kFooterBufferUnderread =
+    "footerBufferUnderread";
+inline constexpr std::string_view kFooterCacheHit = "footerCacheHit";
+
+/// Runtime metric name for the number of stripes in the files read.
+inline constexpr std::string_view kNumStripes = "numStripes";
+
 /// Provides a common base for writer version information used when
 /// interpreting metadata.
 ///

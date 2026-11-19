@@ -45,11 +45,11 @@ class MergeTest : public OperatorTestBase {
         "NULLS LAST", "NULLS FIRST", "DESC NULLS FIRST", "DESC NULLS LAST"};
     for (const auto& sortOrderSql : sortOrderSqls) {
       const auto orderByClause = fmt::format("{} {}", key, sortOrderSql);
-      auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-      auto plan = PlanBuilder(planNodeIdGenerator)
+      PlanBuilder builder;
+      auto plan = builder
                       .localMerge(
                           {orderByClause},
-                          {PlanBuilder(planNodeIdGenerator)
+                          {builder.newPlan()
                                .values(inputVectors)
                                .orderBy({orderByClause}, true)
                                .planNode()})
@@ -64,12 +64,12 @@ class MergeTest : public OperatorTestBase {
       // Use multiple sources for local merge.
       std::vector<std::shared_ptr<const core::PlanNode>> sources;
       for (const auto& input : inputVectors) {
-        sources.push_back(PlanBuilder(planNodeIdGenerator)
+        sources.push_back(builder.newPlan()
                               .values({input})
                               .orderBy({orderByClause}, true)
                               .planNode());
       }
-      plan = PlanBuilder(planNodeIdGenerator)
+      plan = builder.newPlan()
                  .localMerge({orderByClause}, std::move(sources))
                  .planNode();
 
@@ -102,12 +102,11 @@ class MergeTest : public OperatorTestBase {
             fmt::format("{} {}", key2, sortOrderSqls[j])};
         const auto orderBySql = fmt::format(
             "ORDER BY {}, {}", orderByClauses[0], orderByClauses[1]);
-        auto planNodeIdGenerator =
-            std::make_shared<core::PlanNodeIdGenerator>();
-        auto plan = PlanBuilder(planNodeIdGenerator)
+        PlanBuilder builder;
+        auto plan = builder
                         .localMerge(
                             orderByClauses,
-                            {PlanBuilder(planNodeIdGenerator)
+                            {builder.newPlan()
                                  .values(inputVectors)
                                  .orderBy(orderByClauses, true)
                                  .planNode()})
@@ -121,12 +120,12 @@ class MergeTest : public OperatorTestBase {
         // Use multiple sources for local merge.
         std::vector<std::shared_ptr<const core::PlanNode>> sources;
         for (const auto& input : inputVectors) {
-          sources.push_back(PlanBuilder(planNodeIdGenerator)
+          sources.push_back(builder.newPlan()
                                 .values({input})
                                 .orderBy(orderByClauses, true)
                                 .planNode());
         }
-        plan = PlanBuilder(planNodeIdGenerator)
+        plan = builder.newPlan()
                    .localMerge(orderByClauses, std::move(sources))
                    .planNode();
 
@@ -146,20 +145,18 @@ class MergeTest : public OperatorTestBase {
 
     for (const auto& sortOrderSql : sortOrderSqls) {
       const auto orderByClause = fmt::format("{} {}", key, sortOrderSql);
-      const auto planNodeIdGenerator =
-          std::make_shared<core::PlanNodeIdGenerator>();
+      PlanBuilder builder;
       const std::shared_ptr<TempDirectoryPath> spillDirectory =
           TempDirectoryPath::create();
       std::vector<std::shared_ptr<const core::PlanNode>> sources;
       for (const auto& input : inputVectors) {
-        sources.push_back(PlanBuilder(planNodeIdGenerator)
+        sources.push_back(builder.newPlan()
                               .values({input})
                               .orderBy({orderByClause}, true)
                               .planNode());
       }
       core::PlanNodeId nodeId;
-      const auto plan = PlanBuilder(planNodeIdGenerator)
-                            .localMerge({orderByClause}, std::move(sources))
+      const auto plan = builder.localMerge({orderByClause}, std::move(sources))
                             .capturePlanNodeId(nodeId)
                             .planNode();
       auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
@@ -172,8 +169,7 @@ class MergeTest : public OperatorTestBase {
                       .assertResults(
                           "SELECT * FROM tmp ORDER BY " + orderByClause,
                           std::vector<uint32_t>{keyIndex});
-      auto taskStats = toPlanStats(task->taskStats());
-      auto& planStats = taskStats.at(nodeId);
+      const auto planStats = PlanNodeStats::extract(task->taskStats(), nodeId);
       auto expectedNumSpillFiles = (inputVectors.size() + 2 - 1) / 2;
       ASSERT_GT(planStats.spilledBytes, 0);
       ASSERT_EQ(planStats.spilledPartitions, expectedNumSpillFiles);
@@ -205,22 +201,21 @@ class MergeTest : public OperatorTestBase {
             fmt::format("{} {}", key2, sortOrderSqls[j])};
         const auto orderBySql = fmt::format(
             "ORDER BY {}, {}", orderByClauses[0], orderByClauses[1]);
-        const auto planNodeIdGenerator =
-            std::make_shared<core::PlanNodeIdGenerator>();
+        PlanBuilder builder;
         const std::shared_ptr<TempDirectoryPath> spillDirectory =
             TempDirectoryPath::create();
         std::vector<std::shared_ptr<const core::PlanNode>> sources;
         for (const auto& input : inputVectors) {
-          sources.push_back(PlanBuilder(planNodeIdGenerator)
+          sources.push_back(builder.newPlan()
                                 .values({input})
                                 .orderBy(orderByClauses, true)
                                 .planNode());
         }
         core::PlanNodeId nodeId;
-        const auto plan = PlanBuilder(planNodeIdGenerator)
-                              .localMerge({orderByClauses}, std::move(sources))
-                              .capturePlanNodeId(nodeId)
-                              .planNode();
+        const auto plan =
+            builder.localMerge({orderByClauses}, std::move(sources))
+                .capturePlanNodeId(nodeId)
+                .planNode();
         auto task =
             AssertQueryBuilder(plan, duckDbQueryRunner_)
                 .maxDrivers(2)
@@ -230,8 +225,8 @@ class MergeTest : public OperatorTestBase {
                      {"local_merge_max_num_merge_sources", "2"}}))
                 .spillDirectory(spillDirectory->getPath())
                 .assertResults("SELECT * FROM tmp " + orderBySql, sortingKeys);
-        auto taskStats = toPlanStats(task->taskStats());
-        auto& planStats = taskStats.at(nodeId);
+        const auto planStats =
+            PlanNodeStats::extract(task->taskStats(), nodeId);
         auto expectedNumSpillFiles = (inputVectors.size() + 2 - 1) / 2;
         ASSERT_GT(planStats.spilledBytes, 0);
         ASSERT_EQ(planStats.spilledPartitions, expectedNumSpillFiles);
@@ -279,21 +274,19 @@ class MergeTest : public OperatorTestBase {
     auto keyIndex = inputVectors[0][0]->type()->asRow().getChildIdx("c0");
 
     const auto orderByClause = fmt::format("{}", "c0");
-    const auto planNodeIdGenerator =
-        std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     const std::shared_ptr<TempDirectoryPath> spillDirectory =
         TempDirectoryPath::create();
     std::vector<std::shared_ptr<const core::PlanNode>> sources;
     sources.reserve(inputVectors.size());
     for (const auto& vectors : inputVectors) {
-      sources.push_back(PlanBuilder(planNodeIdGenerator)
+      sources.push_back(builder.newPlan()
                             .values(vectors)
                             .orderBy({orderByClause}, true)
                             .planNode());
     }
     core::PlanNodeId localMergeNodeId;
-    const auto plan = PlanBuilder(planNodeIdGenerator)
-                          .localMerge({orderByClause}, std::move(sources))
+    const auto plan = builder.localMerge({orderByClause}, std::move(sources))
                           .capturePlanNodeId(localMergeNodeId)
                           .planNode();
     auto task =
@@ -310,8 +303,8 @@ class MergeTest : public OperatorTestBase {
                 "SELECT * FROM tmp ORDER BY " + orderByClause,
                 std::vector<uint32_t>{keyIndex});
 
-    auto taskStats = toPlanStats(task->taskStats());
-    const auto& mergeStats = taskStats.at(localMergeNodeId);
+    const auto mergeStats =
+        PlanNodeStats::extract(task->taskStats(), localMergeNodeId);
     ASSERT_EQ(mergeStats.spilledBytes, 0);
     ASSERT_EQ(mergeStats.spilledPartitions, 0);
     ASSERT_EQ(mergeStats.spilledFiles, 0);
@@ -360,21 +353,19 @@ class MergeTest : public OperatorTestBase {
     auto keyIndex = inputVectors[0][0]->type()->asRow().getChildIdx("c0");
 
     const auto orderByClause = fmt::format("{}", "c0");
-    const auto planNodeIdGenerator =
-        std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     const std::shared_ptr<TempDirectoryPath> spillDirectory =
         TempDirectoryPath::create();
     std::vector<std::shared_ptr<const core::PlanNode>> sources;
     sources.reserve(inputVectors.size());
     for (const auto& vectors : inputVectors) {
-      sources.push_back(PlanBuilder(planNodeIdGenerator)
+      sources.push_back(builder.newPlan()
                             .values(vectors)
                             .orderBy({orderByClause}, true)
                             .planNode());
     }
     core::PlanNodeId nodeId;
-    const auto plan = PlanBuilder(planNodeIdGenerator)
-                          .localMerge({orderByClause}, std::move(sources))
+    const auto plan = builder.localMerge({orderByClause}, std::move(sources))
                           .capturePlanNodeId(nodeId)
                           .planNode();
     auto task =
@@ -394,8 +385,7 @@ class MergeTest : public OperatorTestBase {
                 "SELECT * FROM tmp ORDER BY " + orderByClause,
                 std::vector<uint32_t>{keyIndex});
 
-    auto taskStats = toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(nodeId);
+    const auto planStats = PlanNodeStats::extract(task->taskStats(), nodeId);
     if (inputBatchSize == 0 || numMaxMergeSources >= numInputSources ||
         !hasSpillExecutor) {
       ASSERT_EQ(planStats.spilledBytes, 0);
@@ -573,21 +563,19 @@ TEST_F(MergeTest, localMergeSpillPartialEmpty) {
   auto keyIndex = vectors[0]->type()->asRow().getChildIdx("c0");
 
   const auto orderByClause = fmt::format("{}", "c0");
-  const auto planNodeIdGenerator =
-      std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   const std::shared_ptr<TempDirectoryPath> spillDirectory =
       TempDirectoryPath::create();
   std::vector<std::shared_ptr<const core::PlanNode>> sources;
   sources.reserve(vectors.size());
   for (const auto& vector : vectors) {
-    sources.push_back(PlanBuilder(planNodeIdGenerator)
+    sources.push_back(builder.newPlan()
                           .values({vector})
                           .orderBy({orderByClause}, true)
                           .planNode());
   }
   core::PlanNodeId nodeId;
-  const auto plan = PlanBuilder(planNodeIdGenerator)
-                        .localMerge({orderByClause}, std::move(sources))
+  const auto plan = builder.localMerge({orderByClause}, std::move(sources))
                         .capturePlanNodeId(nodeId)
                         .planNode();
   auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
@@ -601,8 +589,7 @@ TEST_F(MergeTest, localMergeSpillPartialEmpty) {
                       "SELECT * FROM tmp ORDER BY " + orderByClause,
                       std::vector<uint32_t>{keyIndex});
 
-  auto taskStats = toPlanStats(task->taskStats());
-  auto& planStats = taskStats.at(nodeId);
+  const auto planStats = PlanNodeStats::extract(task->taskStats(), nodeId);
   ASSERT_GT(planStats.spilledBytes, 0);
   ASSERT_EQ(planStats.spilledPartitions, 4);
   ASSERT_EQ(planStats.spilledFiles, 4);
@@ -664,21 +651,19 @@ DEBUG_ONLY_TEST_F(MergeTest, localMergeSmallBatch) {
   auto keyIndex = vectors[0]->type()->asRow().getChildIdx("c0");
 
   const auto orderByClause = fmt::format("{}", "c0");
-  const auto planNodeIdGenerator =
-      std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   const std::shared_ptr<TempDirectoryPath> spillDirectory =
       TempDirectoryPath::create();
   std::vector<std::shared_ptr<const core::PlanNode>> sources;
   sources.reserve(vectors.size());
   for (const auto& vector : vectors) {
-    sources.push_back(PlanBuilder(planNodeIdGenerator)
+    sources.push_back(builder.newPlan()
                           .values({vector})
                           .orderBy({orderByClause}, true)
                           .planNode());
   }
   core::PlanNodeId nodeId;
-  const auto plan = PlanBuilder(planNodeIdGenerator)
-                        .localMerge({orderByClause}, std::move(sources))
+  const auto plan = builder.localMerge({orderByClause}, std::move(sources))
                         .capturePlanNodeId(nodeId)
                         .planNode();
 
@@ -739,21 +724,19 @@ DEBUG_ONLY_TEST_F(MergeTest, localMergeAbort) {
   }
 
   const auto orderByClause = fmt::format("{}", "c0");
-  const auto planNodeIdGenerator =
-      std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   const std::shared_ptr<TempDirectoryPath> spillDirectory =
       TempDirectoryPath::create();
   std::vector<std::shared_ptr<const core::PlanNode>> sources;
   sources.reserve(inputVectors.size());
   for (const auto& vectors : inputVectors) {
-    sources.push_back(PlanBuilder(planNodeIdGenerator)
+    sources.push_back(builder.newPlan()
                           .values(vectors)
                           .orderBy({orderByClause}, true)
                           .planNode());
   }
   core::PlanNodeId nodeId;
-  const auto plan = PlanBuilder(planNodeIdGenerator)
-                        .localMerge({orderByClause}, std::move(sources))
+  const auto plan = builder.localMerge({orderByClause}, std::move(sources))
                         .capturePlanNodeId(nodeId)
                         .planNode();
   std::atomic_int cnt{0};
@@ -851,16 +834,15 @@ DEBUG_ONLY_TEST_F(MergeTest, localMergeStart) {
       "facebook::velox::exec::Values::getOutput",
       std::function<void(MergeSource*)>(
           ([&](MergeSource* /*unused*/) { getOutput = true; })));
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .localMerge(
-              {"c0"},
-              {
-                  PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
-                  PlanBuilder(planNodeIdGenerator).values({data2}).planNode(),
-              })
-          .planNode();
+  PlanBuilder builder;
+  auto plan = builder
+                  .localMerge(
+                      {"c0"},
+                      {
+                          builder.newPlan().values({data1}).planNode(),
+                          builder.newPlan().values({data2}).planNode(),
+                      })
+                  .planNode();
 
   std::thread queryThread([&]() {
     AssertQueryBuilder(plan, duckDbQueryRunner_)
@@ -889,17 +871,16 @@ TEST_F(MergeTest, offByOne) {
       makeFlatVector<int64_t>({2, 3, 4, 5}),
   });
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .localMerge(
-              {"c0"},
-              {
-                  PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
-                  PlanBuilder(planNodeIdGenerator).values({data2}).planNode(),
-              })
-          .planNode();
+  auto plan = builder
+                  .localMerge(
+                      {"c0"},
+                      {
+                          builder.newPlan().values({data1}).planNode(),
+                          builder.newPlan().values({data2}).planNode(),
+                      })
+                  .planNode();
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .config(core::QueryConfig::kPreferredOutputBatchRows, "6")
@@ -967,18 +948,13 @@ TEST_F(MergeTest, preserveVectorEncoding) {
       }),
   });
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator).values({data}).planNode();
+  auto plan = PlanBuilder().values({data}).planNode();
 
-  CursorParameters params;
-  params.planNode = plan;
-  params.queryCtx = core::QueryCtx::create(executor_.get());
-  params.maxDrivers = 2;
+  TaskPtr task;
+  auto results = AssertQueryBuilder(plan).maxDrivers(2).results(task);
+  ASSERT_EQ(results.size(), 1);
 
-  auto result = readCursor(params);
-  ASSERT_EQ(result.second.size(), 1);
-
-  auto output = result.second[0];
+  auto output = results[0];
   ASSERT_EQ(output->size(), 3);
 
   auto mapColumn = output->childAt(1);
@@ -1048,47 +1024,37 @@ TEST_F(MergeTest, flatMapVectorEncoding) {
   // Test multi-threaded execution.
   {
     SCOPED_TRACE("Multi-threaded execution");
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan =
-        PlanBuilder(planNodeIdGenerator)
-            .localMerge(
-                {"c0"},
-                {
-                    PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
-                    PlanBuilder(planNodeIdGenerator).values({data2}).planNode(),
-                })
-            .planNode();
+    PlanBuilder builder;
+    auto plan = builder
+                    .localMerge(
+                        {"c0"},
+                        {
+                            builder.newPlan().values({data1}).planNode(),
+                            builder.newPlan().values({data2}).planNode(),
+                        })
+                    .planNode();
 
-    CursorParameters params;
-    params.planNode = plan;
-    params.queryCtx = core::QueryCtx::create(executor_.get());
-    params.maxDrivers = 2;
-
-    auto result = readCursor(params);
-    verifyResult(result.second);
+    TaskPtr task;
+    auto results = AssertQueryBuilder(plan).maxDrivers(2).results(task);
+    verifyResult(results);
   }
 
   // Test serial execution.
   {
     SCOPED_TRACE("Serial execution");
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan =
-        PlanBuilder(planNodeIdGenerator)
-            .localMerge(
-                {"c0"},
-                {
-                    PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
-                    PlanBuilder(planNodeIdGenerator).values({data2}).planNode(),
-                })
-            .planNode();
+    PlanBuilder builder;
+    auto plan = builder
+                    .localMerge(
+                        {"c0"},
+                        {
+                            builder.newPlan().values({data1}).planNode(),
+                            builder.newPlan().values({data2}).planNode(),
+                        })
+                    .planNode();
 
-    CursorParameters params;
-    params.planNode = plan;
-    params.queryCtx = core::QueryCtx::create();
-    params.serialExecution = true;
-
-    auto result = readCursor(params);
-    verifyResult(result.second);
+    TaskPtr task;
+    auto results = AssertQueryBuilder(plan).serialExecution(true).results(task);
+    verifyResult(results);
   }
 }
 
@@ -1113,29 +1079,22 @@ TEST_F(MergeTest, flatMapVectorEncodingWithEmptyFirstSource) {
       }),
   });
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .localMerge(
-              {"c0"},
-              {
-                  PlanBuilder(planNodeIdGenerator)
-                      .values({emptyData})
-                      .planNode(),
-                  PlanBuilder(planNodeIdGenerator).values({data}).planNode(),
-              })
-          .planNode();
+  auto plan = builder
+                  .localMerge(
+                      {"c0"},
+                      {
+                          builder.newPlan().values({emptyData}).planNode(),
+                          builder.newPlan().values({data}).planNode(),
+                      })
+                  .planNode();
 
-  CursorParameters params;
-  params.planNode = plan;
-  params.queryCtx = core::QueryCtx::create(executor_.get());
-  params.maxDrivers = 2;
+  TaskPtr task;
+  auto results = AssertQueryBuilder(plan).maxDrivers(2).results(task);
+  ASSERT_EQ(results.size(), 1);
 
-  auto result = readCursor(params);
-  ASSERT_EQ(result.second.size(), 1);
-
-  auto output = result.second[0];
+  auto output = results[0];
   ASSERT_EQ(output->size(), 3);
 
   // Verify the FlatMapVector encoding is preserved even when first source is
@@ -1180,28 +1139,23 @@ TEST_F(MergeTest, flatMapVectorEncodingMultipleSources) {
       }),
   });
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .localMerge(
-              {"c0"},
-              {
-                  PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
-                  PlanBuilder(planNodeIdGenerator).values({data2}).planNode(),
-                  PlanBuilder(planNodeIdGenerator).values({data3}).planNode(),
-              })
-          .planNode();
+  auto plan = builder
+                  .localMerge(
+                      {"c0"},
+                      {
+                          builder.newPlan().values({data1}).planNode(),
+                          builder.newPlan().values({data2}).planNode(),
+                          builder.newPlan().values({data3}).planNode(),
+                      })
+                  .planNode();
 
-  CursorParameters params;
-  params.planNode = plan;
-  params.queryCtx = core::QueryCtx::create(executor_.get());
-  params.maxDrivers = 3;
+  TaskPtr task;
+  auto results = AssertQueryBuilder(plan).maxDrivers(3).results(task);
+  ASSERT_EQ(results.size(), 1);
 
-  auto result = readCursor(params);
-  ASSERT_EQ(result.second.size(), 1);
-
-  auto output = result.second[0];
+  auto output = results[0];
   ASSERT_EQ(output->size(), 6);
 
   // Verify the output is sorted correctly.

@@ -28,6 +28,7 @@
 #include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/StaticDims.h"
 #include "velox/experimental/torchwave/StepProgram.h"
+#include "velox/experimental/torchwave/WaveConfig.h"
 #include "velox/experimental/torchwave/WaveGraph.h"
 #include "velox/experimental/wave/common/Cuda.h"
 
@@ -83,18 +84,41 @@ int64_t word(Opcode opcode, int64_t operand = 0) {
       (operand & kOperandMask);
 }
 
-facebook::velox::wave::CompiledKernel& fixupKernel() {
-  static std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel;
-  static folly::once_flag flag;
-  folly::call_once(flag, [] {
-    kernel =
-        facebook::velox::wave::CompiledKernel::getKernel("fixupSymbols", [] {
-          facebook::velox::wave::KernelSpec spec;
-          spec.code = R"(
+const char* const kFixupSource = R"(
 constexpr int kMaxSymbols = 1024;
+
+// TW_SETUP_CLOCKS marks; see DeviceGrid.cpp.
+__shared__ long long setupStart;
+__shared__ int fixupMark[3];
+#ifdef TW_SETUP_CLOCKS
+#define FIXUP_MARK(k)                                                 \
+  if (tid == 0) {                                                     \
+    fixupMark[k] = static_cast<int>(clock64() - setupStart);          \
+  }
+#else
+#define FIXUP_MARK(k)
+#endif
+constexpr int kSharedCode = 2048;
 constexpr int kDenseStride = -2;
 
+__device__ inline long long operandOf(long long word) {
+  long long operand = word & ((1LL << 56) - 1);
+  return (operand & (1LL << 55)) ? operand - (1LL << 56) : operand;
+}
+
 __device__ long long evalProgram(const long long* code, const long long* values) {
+  // Most programs are one constant or symbol; those skip the stack, which
+  // lives in local memory.
+  const long long first = code[0];
+  if ((code[1] >> 56) == 10) {
+    const long long op = first >> 56;
+    if (op == 1) {
+      return operandOf(first);
+    }
+    if (op == 2) {
+      return values[operandOf(first)];
+    }
+  }
   long long stack[16];
   int top = 0;
   for (;; ++code) {
@@ -130,34 +154,70 @@ __device__ long long evalProgram(const long long* code, const long long* values)
   }
 }
 
-extern "C" __global__ void fixupSymbols(
+// Waits for 'count' threads at named barrier 'id'; 0 is __syncthreads.
+__device__ inline void barrier(int id, int count) {
+  asm volatile("bar.sync %0, %1;" ::"r"(id), "r"(count) : "memory");
+}
+
+// barrier() that also returns whether 'predicate' is nonzero in any thread.
+__device__ inline int barrierOr(int id, int count, int predicate) {
+  int result;
+  asm volatile(
+      "{ .reg .pred p, q; setp.ne.s32 p, %1, 0; "
+      "bar.red.or.pred q, %2, %3, p; selp.s32 %0, 1, 0, q; }"
+      : "=r"(result)
+      : "r"(predicate), "r"(id), "r"(count)
+      : "memory");
+  return result;
+}
+
+// Run by 'numThreads' threads from 'firstThread' on, which meet at named
+// barrier 'barrierId'; the rest of the block may do other work. The programs
+// go to 'codeBuffer' in shared memory when it is given.
+__device__ void fixupBody(
     unsigned char* params,
     const int* records,
     const long long* code,
     int numRecords,
     const long long* symbols,
-    int numSymbols) {
+    int numSymbols,
+    long long* codeBuffer,
+    int numCode,
+    int firstThread,
+    int numThreads,
+    int barrierId) {
+  const int tid = threadIdx.x - firstThread;
   // 'symbols' holds numSymbols source addresses, then their capacities.
   __shared__ long long values[kMaxSymbols];
   __shared__ long long capacities[kMaxSymbols];
-  __shared__ int over;
-  if (threadIdx.x == 0) {
-    over = 0;
+  // All loads go before the one barrier: the programs, the symbols, and a
+  // prefetch of each thread's first record's slot. Each word of a program in
+  // global memory is otherwise a dependent load.
+  const int firstRecord = tid < numRecords ? records[tid * 12] : -1;
+  if (codeBuffer != nullptr) {
+    for (int i = tid; i < numCode; i += numThreads) {
+      codeBuffer[i] = code[i];
+    }
+    code = codeBuffer;
   }
-  __syncthreads();
-  for (int i = threadIdx.x; i < numSymbols; i += blockDim.x) {
+  int anyOver = 0;
+  for (int i = tid; i < numSymbols; i += numThreads) {
     const long long address = symbols[i];
+    const long long capacity = symbols[numSymbols + i];
     const long long v = address == 0 ? 0
         : (address & 1) ? *reinterpret_cast<const int*>(address - 1)
                         : *reinterpret_cast<const long long*>(address);
     values[i] = v;
-    capacities[i] = symbols[numSymbols + i];
-    if (v < 0 || v > symbols[numSymbols + i]) {
-      atomicExch(&over, 1);
-    }
+    capacities[i] = capacity;
+    anyOver |= v < 0 || v > capacity ? 1 : 0;
   }
-  __syncthreads();
-  for (int r = threadIdx.x; r < numRecords; r += blockDim.x) {
+  if (firstRecord >= 0) {
+    asm volatile("prefetch.global.L1 [%0];" ::"l"(params + firstRecord));
+  }
+  FIXUP_MARK(0);
+  const int over = barrierOr(barrierId, numThreads, anyOver);
+  FIXUP_MARK(1);
+  for (int r = tid; r < numRecords; r += numThreads) {
     const int* rec = records + r * 12;
     unsigned char* slot = params + rec[0];
     if (rec[1] == 1) {
@@ -227,7 +287,39 @@ extern "C" __global__ void fixupSymbols(
     }
   }
 }
+
+extern "C" __global__ void fixupSymbols(
+    unsigned char* params,
+    const int* records,
+    const long long* code,
+    int numRecords,
+    const long long* symbols,
+    int numSymbols,
+    int numCode) {
+  extern __shared__ long long fixupCode[];
+  fixupBody(
+      params,
+      records,
+      code,
+      numRecords,
+      symbols,
+      numSymbols,
+      numCode <= kSharedCode ? fixupCode : nullptr,
+      numCode,
+      0,
+      blockDim.x,
+      1);
+}
 )";
+
+facebook::velox::wave::CompiledKernel& fixupKernel() {
+  static std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel;
+  static folly::once_flag flag;
+  folly::call_once(flag, [] {
+    kernel =
+        facebook::velox::wave::CompiledKernel::getKernel("fixupSymbols", [] {
+          facebook::velox::wave::KernelSpec spec;
+          spec.code = kFixupSource;
           spec.entryPoints = {"fixupSymbols"};
           return spec;
         });
@@ -2041,11 +2133,9 @@ bool DeviceSymbols::endExecution(ExecutionState& state) {
   return fits;
 }
 
-void DeviceSymbols::runFixups(
+FixupArgs DeviceSymbols::prepareFixups(
     ExecutionState& state,
-    SymbolFixups& fixups,
-    uint8_t* deviceBase,
-    facebook::velox::wave::Stream* stream) {
+    SymbolFixups& fixups) {
   if (!fixups.deviceRecords.defined()) {
     auto options = at::TensorOptions().device(at::kCUDA);
     fixups.deviceRecords = at::from_blob(
@@ -2084,13 +2174,891 @@ void DeviceSymbols::runFixups(
             at::TensorOptions().dtype(at::kLong))
             .to(at::TensorOptions().device(at::kCUDA).dtype(at::kLong));
   }
-  auto* records = fixups.deviceRecords.data_ptr<int32_t>();
-  auto* code = fixups.deviceCode.data_ptr<int64_t>();
-  auto* symbolArgs = state.symbolArgsDevice.data_ptr<int64_t>();
-  int32_t numRecords = fixups.numRecords;
+  return {
+      .records = fixups.deviceRecords.data_ptr<int32_t>(),
+      .code = fixups.deviceCode.data_ptr<int64_t>(),
+      .numRecords = fixups.numRecords,
+      .symbols = state.symbolArgsDevice.data_ptr<int64_t>(),
+      .numSymbols = numSymbols,
+      .numCode = static_cast<int32_t>(fixups.code.size())};
+}
+
+void DeviceSymbols::runFixups(
+    ExecutionState& state,
+    SymbolFixups& fixups,
+    uint8_t* deviceBase,
+    facebook::velox::wave::Stream* stream) {
+  auto args = prepareFixups(state, fixups);
   void* kernelArgs[] = {
-      &deviceBase, &records, &code, &numRecords, &symbolArgs, &numSymbols};
-  fixupKernel().launch(0, 1, 256, 0, stream, kernelArgs);
+      &deviceBase,
+      &args.records,
+      &args.code,
+      &args.numRecords,
+      &args.symbols,
+      &args.numSymbols,
+      &args.numCode};
+  fixupKernel().launch(
+      0, 1, 256, fixupSharedBytes(args.numCode), stream, kernelArgs);
+}
+
+int32_t DeviceSymbols::inferReserveShapes(const ExecutionState& state) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (WaveConfig::get().sizeExprsFromInputs) {
+    return deriveShapesFromInputs(state);
+  }
+  return applySymReserves(state, *shapes_);
+}
+
+namespace {
+
+// Makes each dim of 'shape', the shape of 'name', that has a fixed value a
+// symbol of its own. Keeps the strides dense if they were.
+void unfixDims(const std::string& name, SymShape& shape) {
+  const auto dense = denseShape(shape.dims);
+  bool contiguous = shape.strides.size() == dense.strides.size();
+  for (size_t d = 0; contiguous && d < shape.strides.size(); ++d) {
+    contiguous = sameDim(shape.strides.at(d), dense.strides.at(d));
+  }
+  for (size_t d = 0; d < shape.dims.size(); ++d) {
+    auto& dim = shape.dims.at(d);
+    if (const auto traced = tracedValue(dim)) {
+      dim = hostDimSymbol(name, d, *traced);
+    }
+  }
+  if (contiguous) {
+    shape.strides = denseShape(shape.dims).strides;
+  }
+}
+
+} // namespace
+
+int32_t DeviceSymbols::deriveShapesFromInputs(const ExecutionState& state) {
+  // Graph-input dims are symbols bound each execution; weights keep the
+  // export's shapes. Everything else is derived from those through the shape
+  // rules and the reserves' symbolic forms, ignoring the export's constants,
+  // which hold the shapes the export was traced with.
+  auto derived = std::make_shared<SymShapes>();
+  derived->scalarByName = shapes_->scalarByName;
+  derived->exported = shapes_.get();
+  const auto& graph = *waveGraph_.graph();
+  // The constant elements of int lists are values without a producer.
+  for (const auto& [id, constant] : graph.getConstantSymIntValues()) {
+    auto it = waveGraph_.idToValue().find(id);
+    if (it != waveGraph_.idToValue().end()) {
+      derived->scalarByName.insert_or_assign(
+          std::string(it->second->name()), SymExpr::constant(constant));
+    }
+  }
+  auto seed = [&](const nativert::Value* value) {
+    const std::string name(value->name());
+    auto it = shapes_->byName.find(name);
+    if (it == shapes_->byName.end()) {
+      return;
+    }
+    // A dim the export left symbolic keeps its expression. A dim it fixed
+    // at c > 1 becomes symbol d<c>, shared by all input dims traced at c, so
+    // that dims traced equal stay equal.
+    std::vector<SymExpr> dims;
+    for (const auto& dim : it->second.dims) {
+      if (!dim.isConstant() || dim.value == 1) {
+        dims.push_back(dim);
+      } else {
+        dims.push_back(
+            SymExpr{
+                .kind = SymExpr::Kind::kSymbol,
+                .symbol = fmt::format("d{}", dim.value)});
+      }
+    }
+    derived->byName.emplace(name, denseShape(std::move(dims)));
+  };
+  for (const auto* input : graph.userInputs()) {
+    if (input == nullptr) {
+      continue;
+    }
+    if (input->type().kind() == nativert::Type::Kind::Tensor) {
+      seed(input);
+      continue;
+    }
+    // A list input's elements are its unpacks' outputs.
+    for (const auto* user : input->users()) {
+      if (user->target() == "prim.ListUnpack") {
+        for (const auto* output : user->outputs()) {
+          seed(output);
+        }
+      }
+    }
+  }
+  for (const auto* weight : graph.weightValues()) {
+    auto it = shapes_->byName.find(std::string(weight->name()));
+    if (it != shapes_->byName.end()) {
+      derived->byName.emplace(it->first, it->second);
+    }
+  }
+  int32_t numAdded = 0;
+  auto converge = [&]() {
+    for (int32_t round = 0; round < 8; ++round) {
+      const auto added = inferSymShapes(*derived, waveGraph_) +
+          applySymReserves(state, *derived) + shapeDuplicates(*derived) +
+          shapeVariantNodes(*derived);
+      numAdded += added;
+      if (added == 0) {
+        break;
+      }
+    }
+  };
+  converge();
+  // An integer that is still unknown is one only the data decides, such as a
+  // count a kernel returns: it becomes a symbol of its own, u_<value>, and
+  // the shapes that depend on it follow.
+  int32_t numMinted = 0;
+  for (const auto& [id, value] : waveGraph_.idToValue()) {
+    if (value->type().kind() == nativert::Type::Kind::SymInt &&
+        value->producer() != nullptr &&
+        derived->scalarByName
+            .try_emplace(
+                std::string(value->name()),
+                SymExpr{
+                    .kind = SymExpr::Kind::kSymbol,
+                    .symbol = "u_" + std::string(value->name())})
+            .second) {
+      ++numMinted;
+    }
+  }
+  if (numMinted > 0) {
+    converge();
+  }
+  // An op no rule describes, such as an eager op that runs on the host, gets
+  // the export's shapes for its outputs once its inputs have shapes: the
+  // host decides those shapes when the op returns.
+  auto hasShape = [&](const nativert::Value* value) {
+    if (value == nullptr) {
+      return true;
+    }
+    switch (value->type().kind()) {
+      case nativert::Type::Kind::Tensor:
+        return derived->byName.count(std::string(value->name())) != 0;
+      case nativert::Type::Kind::TensorList: {
+        const auto elements = listElementShapes(*derived, value);
+        return !elements.empty() &&
+            std::all_of(elements.begin(), elements.end(), [](auto* element) {
+              return element != nullptr;
+            });
+      }
+      case nativert::Type::Kind::None:
+      case nativert::Type::Kind::NestedTensorList:
+      case nativert::Type::Kind::OptionalTensorList:
+      case nativert::Type::Kind::SymInt:
+      case nativert::Type::Kind::SymIntList:
+      case nativert::Type::Kind::SymBool:
+      case nativert::Type::Kind::SymFloat:
+      case nativert::Type::Kind::CustomObj:
+        break;
+    }
+    return true;
+  };
+  // A dim the export fixed for a custom op is what the op's fake kernel made
+  // at trace time, which the real op need not return: it becomes a symbol of
+  // its own, which the setup reads from the value's shape slot. An aten op's
+  // meta function gives the real dims, as it does for the tw op replacing it.
+  auto fromExport = [&](const nativert::Node& producer,
+                        const nativert::Value* value) {
+    auto it = shapes_->byName.find(std::string(value->name()));
+    if (it == shapes_->byName.end()) {
+      return 0;
+    }
+    auto shape = it->second;
+    if (!producer.target().starts_with("torch.ops.aten.") &&
+        !producer.target().starts_with("tw.")) {
+      VLOG(1) << "Device symbols: dims of " << it->first << " from "
+              << producer.target() << " are the host's";
+      unfixDims(it->first, shape);
+    }
+    if (!derived->byName.emplace(it->first, std::move(shape)).second) {
+      return 0;
+    }
+    hostShaped_.insert(it->first);
+    return 1;
+  };
+  for (int32_t round = 0; round < 4; ++round) {
+    int32_t numFromExport = 0;
+    folly::F14FastSet<const nativert::Node*> seen;
+    for (const auto& [id, value] : waveGraph_.idToValue()) {
+      const auto* node = value->producer();
+      if (node == nullptr || node->target() == "tw.placeholder" ||
+          node->target() == "prim.Input" || !seen.insert(node).second ||
+          !std::all_of(
+              node->inputs().begin(), node->inputs().end(), [&](auto& in) {
+                return hasShape(in.value);
+              })) {
+        continue;
+      }
+      for (const auto* output : node->outputs()) {
+        if (output == nullptr || hasShape(output)) {
+          continue;
+        }
+        if (output->type().kind() == nativert::Type::Kind::Tensor) {
+          numFromExport += fromExport(*node, output);
+          continue;
+        }
+        for (const auto* user : output->users()) {
+          if (user->target() == "prim.ListUnpack") {
+            for (const auto* element : user->outputs()) {
+              numFromExport += fromExport(*node, element);
+            }
+          }
+        }
+      }
+    }
+    if (numFromExport == 0) {
+      break;
+    }
+    converge();
+  }
+  derivedShapes_ = std::move(derived);
+  return numAdded;
+}
+
+int32_t DeviceSymbols::shapeVariantNodes(SymShapes& shapes) {
+  const auto& idToValue = waveGraph_.idToValue();
+  // The value of the main graph a variant's value stands for: the one with
+  // its id. Where the names differ, what is known carries across.
+  auto mainOf = [&](const nativert::Value* value) -> const nativert::Value* {
+    auto it = idToValue.find(value->id());
+    return it != idToValue.end() && it->second->name() != value->name()
+        ? it->second
+        : nullptr;
+  };
+  auto carry = [&](const nativert::Value* from, const nativert::Value* to) {
+    auto shape = shapes.byName.find(std::string(from->name()));
+    if (shape != shapes.byName.end()) {
+      auto copy = shape->second;
+      return shapes.byName.emplace(std::string(to->name()), std::move(copy))
+                 .second
+          ? 1
+          : 0;
+    }
+    auto scalar = shapes.scalarByName.find(std::string(from->name()));
+    if (scalar != shapes.scalarByName.end()) {
+      auto copy = scalar->second;
+      return shapes.scalarByName
+                 .emplace(std::string(to->name()), std::move(copy))
+                 .second
+          ? 1
+          : 0;
+    }
+    return 0;
+  };
+  int32_t numAdded = 0;
+  for (const auto& graph : waveGraph_.variantGraphs()) {
+    for (const auto& node : graph->nodes()) {
+      for (const auto& input : node.inputs()) {
+        if (input.value == nullptr) {
+          continue;
+        }
+        if (const auto* main = mainOf(input.value)) {
+          carry(main, input.value);
+        }
+      }
+      inferNodeShapes(shapes, node);
+      for (const auto* output : node.outputs()) {
+        if (output == nullptr) {
+          continue;
+        }
+        if (const auto* main = mainOf(output)) {
+          numAdded += carry(output, main);
+        } else if (idToValue.count(output->id()) != 0) {
+          // Same name: the rule wrote the main value's shape directly.
+        }
+      }
+    }
+  }
+  return numAdded;
+}
+
+int32_t DeviceSymbols::shapeDuplicates(SymShapes& shapes) {
+  const auto& idToValue = waveGraph_.idToValue();
+  auto valueOf = [&](int32_t id) -> const nativert::Value* {
+    auto it = idToValue.find(id);
+    return it != idToValue.end() ? it->second : nullptr;
+  };
+  int32_t numAdded = 0;
+  for (const auto& [duplicateId, duplicate] : waveGraph_.duplicates()) {
+    const auto* value = valueOf(duplicateId);
+    const auto* original = valueOf(duplicate.original);
+    const auto* node = original != nullptr ? original->producer() : nullptr;
+    if (value == nullptr || node == nullptr ||
+        shapes.byName.count(std::string(value->name())) != 0) {
+      continue;
+    }
+    const auto& bindings = *duplicate.bindings;
+    auto actualOf = [&](const nativert::Value* formal) {
+      auto it = bindings.find(formal->id());
+      return it != bindings.end() ? valueOf(it->second) : formal;
+    };
+    // The original's node, run over the invocation's actual operands: their
+    // shapes stand in for the formal ones, and the outputs are cleared, for
+    // as long as the rule runs.
+    std::vector<std::pair<std::string, std::optional<SymShape>>> savedShapes;
+    std::vector<std::pair<std::string, std::optional<SymExpr>>> savedScalars;
+    auto saveShape = [&](const std::string& name) {
+      auto it = shapes.byName.find(name);
+      savedShapes.emplace_back(
+          name,
+          it != shapes.byName.end() ? std::optional<SymShape>(it->second)
+                                    : std::nullopt);
+    };
+    bool known = true;
+    for (const auto& input : node->inputs()) {
+      const auto* formal = input.value;
+      const auto* actual = formal != nullptr ? actualOf(formal) : nullptr;
+      if (formal == nullptr || actual == nullptr || actual == formal) {
+        continue;
+      }
+      const std::string formalName(formal->name());
+      if (formal->type().kind() == nativert::Type::Kind::Tensor) {
+        auto it = shapes.byName.find(std::string(actual->name()));
+        if (it == shapes.byName.end()) {
+          known = false;
+          break;
+        }
+        auto shape = it->second;
+        saveShape(formalName);
+        shapes.byName.insert_or_assign(formalName, std::move(shape));
+      } else if (formal->type().kind() == nativert::Type::Kind::SymInt) {
+        auto it = shapes.scalarByName.find(std::string(actual->name()));
+        if (it == shapes.scalarByName.end()) {
+          known = false;
+          break;
+        }
+        auto scalar = it->second;
+        auto old = shapes.scalarByName.find(formalName);
+        savedScalars.emplace_back(
+            formalName,
+            old != shapes.scalarByName.end()
+                ? std::optional<SymExpr>(old->second)
+                : std::nullopt);
+        shapes.scalarByName.insert_or_assign(formalName, std::move(scalar));
+      }
+    }
+    // A list output's rule writes its elements under listElementName.
+    auto isList = [](const nativert::Value* output) {
+      return output->type().kind() == nativert::Type::Kind::TensorList;
+    };
+    auto elementNames = [&](const nativert::Value* output) {
+      std::vector<std::string> names;
+      for (size_t i = 0;; ++i) {
+        auto name = listElementName(output->name(), i);
+        if (shapes.byName.count(name) == 0) {
+          return names;
+        }
+        names.push_back(std::move(name));
+      }
+    };
+    if (known) {
+      for (const auto* output : node->outputs()) {
+        if (output == nullptr) {
+          continue;
+        }
+        saveShape(std::string(output->name()));
+        shapes.byName.erase(std::string(output->name()));
+        if (isList(output)) {
+          for (const auto& name : elementNames(output)) {
+            saveShape(name);
+            shapes.byName.erase(name);
+          }
+        }
+      }
+      inferNodeShapes(shapes, *node);
+      // The restore runs in reverse, so these are erased before the saved
+      // elements come back.
+      for (const auto* output : node->outputs()) {
+        if (output != nullptr && isList(output)) {
+          for (auto& name : elementNames(output)) {
+            savedShapes.emplace_back(std::move(name), std::nullopt);
+          }
+        }
+      }
+    }
+    std::vector<std::pair<std::string, SymShape>> results;
+    if (known) {
+      for (const auto* output : node->outputs()) {
+        const auto* actual = output != nullptr ? actualOf(output) : nullptr;
+        auto it = output != nullptr
+            ? shapes.byName.find(std::string(output->name()))
+            : shapes.byName.end();
+        if (actual != nullptr && actual != output &&
+            it != shapes.byName.end()) {
+          results.emplace_back(std::string(actual->name()), it->second);
+        }
+      }
+    }
+    for (auto it = savedShapes.rbegin(); it != savedShapes.rend(); ++it) {
+      if (it->second.has_value()) {
+        shapes.byName.insert_or_assign(it->first, *it->second);
+      } else {
+        shapes.byName.erase(it->first);
+      }
+    }
+    for (auto it = savedScalars.rbegin(); it != savedScalars.rend(); ++it) {
+      if (it->second.has_value()) {
+        shapes.scalarByName.insert_or_assign(it->first, *it->second);
+      } else {
+        shapes.scalarByName.erase(it->first);
+      }
+    }
+    for (auto& [name, shape] : results) {
+      if (shapes.byName.emplace(name, std::move(shape)).second) {
+        ++numAdded;
+      }
+    }
+  }
+  return numAdded;
+}
+
+int32_t DeviceSymbols::applySymReserves(
+    const ExecutionState& state,
+    SymShapes& shapes) {
+  const auto& idToValue = waveGraph_.idToValue();
+  auto shapeIn = [&](int32_t id) -> const SymShape* {
+    auto it = idToValue.find(id);
+    if (it == idToValue.end()) {
+      return nullptr;
+    }
+    auto found = shapes.byName.find(std::string(it->second->name()));
+    return found != shapes.byName.end() ? &found->second : nullptr;
+  };
+  auto valueOf = [&](int32_t id) -> const nativert::Value* {
+    auto it = idToValue.find(id);
+    return it != idToValue.end() ? it->second : nullptr;
+  };
+  auto scalarExpr = [&](const ScalarRef& ref) -> std::optional<SymExpr> {
+    if (ref.kind == ScalarRef::kConstant) {
+      return SymExpr::constant(ref.constant);
+    }
+    const auto* value =
+        ref.kind == ScalarRef::kValue ? valueOf(ref.valueId) : nullptr;
+    if (value == nullptr) {
+      return std::nullopt;
+    }
+    const std::string name(value->name());
+    auto it = shapes.scalarByName.find(name);
+    if (it != shapes.scalarByName.end()) {
+      return it->second;
+    }
+    SymExpr symbol{.kind = SymExpr::Kind::kSymbol, .symbol = "u_" + name};
+    shapes.scalarByName.emplace(name, symbol);
+    return symbol;
+  };
+  int32_t numAdded = 0;
+  // A step's operands come from earlier steps; a second pass catches the
+  // rest of any order the steps are listed in.
+  for (int32_t pass = 0; pass < 2; ++pass) {
+    for (const auto& steps : state.stepVectors) {
+      for (const auto& sv : steps) {
+        if (sv.program == nullptr) {
+          continue;
+        }
+        // Each size's symbolic result, then each output it shapes: one
+        // per element of a list, or several outputs sharing one size.
+        const auto& sizes = sv.program->sizes;
+        std::vector<std::optional<std::vector<SymShape>>> results(sizes.size());
+        for (size_t s = 0; s < sizes.size(); ++s) {
+          const auto& size = sizes[s];
+          if (size.fn == nullptr || size.concat >= 0) {
+            continue;
+          }
+          const auto sym = symReserveOf(size.fn);
+          if (sym == nullptr) {
+            continue;
+          }
+          SymReserveArgs args;
+          args.blockSize = size.blockSize;
+          for (const auto& group : size.args.tensors) {
+            auto& shapesOfGroup = args.tensors.emplace_back();
+            for (auto id : group) {
+              shapesOfGroup.push_back(shapeIn(id));
+            }
+          }
+          for (const auto& ref : size.args.scalars) {
+            args.scalars.push_back(scalarExpr(ref));
+          }
+          bool listsKnown = true;
+          for (const auto& list : size.args.intLists) {
+            auto& exprs = args.intLists.emplace_back();
+            for (const auto& ref : list) {
+              auto expr = scalarExpr(ref);
+              if (!expr.has_value()) {
+                listsKnown = false;
+                break;
+              }
+              exprs.push_back(std::move(*expr));
+            }
+          }
+          std::vector<SymShape> out(std::max(1, size.numShapes));
+          if (listsKnown && sym(args, out, static_cast<int32_t>(out.size()))) {
+            results[s] = std::move(out);
+          }
+        }
+        // The operands of a fused concat get their shapes from their own
+        // sizes.
+        for (const auto& concat : sv.program->concats) {
+          for (size_t i = 0;
+               i < concat.operandIds.size() && i < concat.operandSizes.size();
+               ++i) {
+            const auto s = concat.operandSizes[i];
+            const auto* value = valueOf(concat.operandIds[i]);
+            if (value == nullptr || s < 0 ||
+                static_cast<size_t>(s) >= results.size() ||
+                !results[s].has_value() || results[s]->empty()) {
+              continue;
+            }
+            auto shape = (*results[s])[0];
+            if (shapes.byName
+                    .emplace(std::string(value->name()), std::move(shape))
+                    .second) {
+              ++numAdded;
+            }
+          }
+        }
+        for (const auto& launch : sv.program->launches) {
+          for (const auto& bound : launch.largestOutputs) {
+            const auto* value = valueOf(bound.valueId);
+            if (value == nullptr || bound.size < 0 ||
+                static_cast<size_t>(bound.size) >= results.size() ||
+                !results[bound.size].has_value() ||
+                static_cast<size_t>(bound.element) >=
+                    results[bound.size]->size()) {
+              continue;
+            }
+            auto shape = (*results[bound.size])[bound.element];
+            if (shapes.byName
+                    .emplace(std::string(value->name()), std::move(shape))
+                    .second) {
+              ++numAdded;
+            }
+          }
+          for (const auto& bound : launch.outputs) {
+            const auto* value = valueOf(bound.valueId);
+            if (value == nullptr) {
+              continue;
+            }
+            const std::string name(value->name());
+            if (bound.size >= 0 &&
+                static_cast<size_t>(bound.size) < sizes.size()) {
+              const auto& size = sizes[bound.size];
+              if (size.data != nullptr && size.outputIdx >= 0 &&
+                  static_cast<size_t>(size.outputIdx) <
+                      size.data->actualOutputDescs.size() &&
+                  size.data->actualOutputDescs[size.outputIdx]
+                      .shapeSetOnDevice) {
+                setOnDevice_.insert(name);
+              }
+            }
+            const SymShape* shape = nullptr;
+            if (bound.kind == BoundOutput::kAlias && bound.aliasOf >= 0) {
+              shape = shapeIn(bound.aliasOf);
+            } else if (
+                (bound.kind == BoundOutput::kTensor ||
+                 bound.kind == BoundOutput::kListElement ||
+                 bound.kind == BoundOutput::kShapeOnly) &&
+                bound.size >= 0 &&
+                static_cast<size_t>(bound.size) < results.size() &&
+                results[bound.size].has_value() &&
+                static_cast<size_t>(bound.element) <
+                    results[bound.size]->size()) {
+              shape = &(*results[bound.size])[bound.element];
+            }
+            if (shape != nullptr) {
+              auto copy = *shape;
+              if (shapes.byName.emplace(name, std::move(copy)).second) {
+                ++numAdded;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return numAdded;
+}
+
+namespace {
+
+// The value's name and its producer's target, for messages.
+std::string describeValue(const nativert::Value* value) {
+  if (value == nullptr) {
+    return "unknown value";
+  }
+  const auto* producer = value->producer();
+  return fmt::format(
+      "{} from {}",
+      value->name(),
+      producer != nullptr ? producer->target() : "input");
+}
+
+} // namespace
+
+namespace {
+
+// True if every symbol of 'expr' is one only the data decides.
+bool onlyDataDependent(const SymExpr& expr) {
+  std::vector<std::string> names;
+  expr.collectSymbols(names);
+  return !names.empty() &&
+      std::all_of(names.begin(), names.end(), [](const auto& name) {
+        return name[0] == 'u';
+      });
+}
+
+} // namespace
+
+void DeviceSymbols::checkSizeExprs(
+    ExecutionState& state,
+    const StepProgram& program,
+    const uint8_t* params,
+    int32_t sequenceNumber,
+    int32_t stepIdx) const {
+  auto& symbols = state.sizeExprSymbols;
+  auto producerOf = [&](int32_t id) {
+    auto it = waveGraph_.idToValue().find(id);
+    return describeValue(
+        it != waveGraph_.idToValue().end() ? it->second : nullptr);
+  };
+  // The producer's target, and for a list element the list's producer's.
+  auto producerKey = [&](int32_t id) {
+    auto it = waveGraph_.idToValue().find(id);
+    const auto* producer =
+        it != waveGraph_.idToValue().end() ? it->second->producer() : nullptr;
+    if (producer == nullptr) {
+      return std::string("input");
+    }
+    std::string key(producer->target());
+    if (producer->target() == "prim.ListUnpack" &&
+        !producer->inputs().empty() && producer->inputs()[0].value != nullptr) {
+      const auto* list = producer->inputs()[0].value->producer();
+      key += "<-";
+      key += list != nullptr ? std::string(list->target()) : "input";
+    }
+    return key;
+  };
+  // Integer parameters carry the actual value of a data-dependent symbol;
+  // the step's own outputs may hold a capacity for it.
+  if (derivedShapes_ != nullptr) {
+    for (const auto& fill : program.fills) {
+      if (fill.kind != FillOp::kScalar) {
+        continue;
+      }
+      auto it = waveGraph_.idToValue().find(fill.valueId);
+      if (it == waveGraph_.idToValue().end()) {
+        continue;
+      }
+      auto scalar =
+          derivedShapes_->scalarByName.find(std::string(it->second->name()));
+      if (scalar != derivedShapes_->scalarByName.end() &&
+          scalar->second.kind == SymExpr::Kind::kSymbol) {
+        symbols.try_emplace(
+            scalar->second.symbol,
+            *reinterpret_cast<const int64_t*>(params + fill.offset));
+      }
+    }
+  }
+  folly::F14FastSet<int32_t> outputs;
+  for (const auto& launch : program.launches) {
+    for (const auto& bound : launch.outputs) {
+      outputs.insert(bound.valueId);
+    }
+  }
+  for (const auto& fill : program.fills) {
+    if (fill.kind != FillOp::kTensor && fill.kind != FillOp::kShapeOnly) {
+      continue;
+    }
+    const auto* tensor = reinterpret_cast<const Tensor*>(params + fill.offset);
+    if (fill.kind == FillOp::kTensor && tensor->storage == nullptr) {
+      continue;
+    }
+    ++numSizeValues_;
+    const SymShape* shape = nullptr;
+    if (derivedShapes_ != nullptr) {
+      auto it = waveGraph_.idToValue().find(fill.valueId);
+      if (it != waveGraph_.idToValue().end()) {
+        auto found =
+            derivedShapes_->byName.find(std::string(it->second->name()));
+        shape =
+            found != derivedShapes_->byName.end() ? &found->second : nullptr;
+      }
+    } else {
+      shape = shapeOf(fill.valueId);
+    }
+    if (shape != nullptr && isHostShaped(fill.valueId)) {
+      ++numSizeHostShaped_;
+      continue;
+    }
+    // The host keeps a 0-dim tensor as one element of rank 1.
+    if (shape != nullptr && shape->dims.empty() && tensor->rank == 1 &&
+        tensor->dims[0] == 1) {
+      ++numSizeMatched_;
+      continue;
+    }
+    if (shape == nullptr ||
+        shape->dims.size() != static_cast<size_t>(tensor->rank)) {
+      ++numSizeNoShape_;
+      auto key = producerKey(fill.valueId);
+      std::lock_guard<std::mutex> lock(noShapeMutex_);
+      ++noShapeByTarget_[shape != nullptr && key == "input" ? "rank" : key];
+      continue;
+    }
+    // An output whose extent is a symbol only the data decides holds a
+    // capacity here; it is compared once the step's consumers bind the
+    // symbol, at the end of the execution.
+    if (outputs.count(fill.valueId) != 0) {
+      std::vector<std::string> names;
+      for (const auto& dim : shape->dims) {
+        dim.collectSymbols(names);
+      }
+      if (std::any_of(names.begin(), names.end(), [&](const auto& name) {
+            return !name.empty() && name[0] == 'u' && symbols.count(name) == 0;
+          })) {
+        std::lock_guard<std::mutex> lock(noShapeMutex_);
+        pendingSizeChecks_.push_back(
+            {.valueId = fill.valueId,
+             .dims = shape->dims,
+             .hostDims = std::vector<int64_t>(
+                 tensor->dims, tensor->dims + tensor->rank)});
+        continue;
+      }
+    }
+    bool differ = false;
+    bool unbound = false;
+    bool setOnDevice = false;
+    for (int32_t d = 0; d < tensor->rank; ++d) {
+      const auto& expr = shape->dims[d];
+      const auto value = expr.evaluate(symbols);
+      if (!value.has_value()) {
+        // A device-set shape is a capacity in its producer's frame.
+        if (expr.kind == SymExpr::Kind::kSymbol &&
+            isSetOnDevice(fill.valueId)) {
+          setOnDevice = true;
+        } else if (expr.kind == SymExpr::Kind::kSymbol) {
+          symbols[expr.symbol] = tensor->dims[d];
+        } else {
+          unbound = true;
+          if (numSizeUnboundReports_++ < 10) {
+            LOG(WARNING) << "Size expression of %" << fill.valueId << " dim "
+                         << d << " at step " << sequenceNumber << "." << stepIdx
+                         << " has an unbound symbol: " << expr.toString();
+          }
+        }
+        continue;
+      }
+      if (*value != tensor->dims[d]) {
+        // A device-set shape, or a capacity for an extent only the data
+        // decides: the host holds such a symbol's capacity in some steps and
+        // its actual value in others.
+        if (isSetOnDevice(fill.valueId) ||
+            (*value < tensor->dims[d] && outputs.count(fill.valueId) != 0) ||
+            (*value > tensor->dims[d] && onlyDataDependent(expr))) {
+          setOnDevice = true;
+          continue;
+        }
+        differ = true;
+        if (numSizeReports_++ < 20) {
+          LOG(WARNING) << "Size expression of %" << fill.valueId << " dim " << d
+                       << " at step " << sequenceNumber << "." << stepIdx
+                       << " gives " << *value << " = " << expr.toString()
+                       << ", the host sized " << tensor->dims[d] << "; "
+                       << producerOf(fill.valueId);
+        }
+      }
+    }
+    if (differ) {
+      std::lock_guard<std::mutex> lock(noShapeMutex_);
+      ++differByTarget_[producerKey(fill.valueId)];
+    }
+    ++(differ            ? numSizeDiffer_
+           : unbound     ? numSizeUnbound_
+           : setOnDevice ? numSizeSetOnDevice_
+                         : numSizeMatched_);
+  }
+}
+
+bool DeviceSymbols::isHostShaped(int32_t valueId) const {
+  auto it = waveGraph_.idToValue().find(valueId);
+  return it != waveGraph_.idToValue().end() &&
+      hostShaped_.count(std::string(it->second->name())) != 0;
+}
+
+bool DeviceSymbols::isSetOnDevice(int32_t valueId) const {
+  auto it = waveGraph_.idToValue().find(valueId);
+  return it != waveGraph_.idToValue().end() &&
+      setOnDevice_.count(std::string(it->second->name())) != 0;
+}
+
+void DeviceSymbols::reportSizeExprs(
+    const folly::F14FastMap<std::string, int64_t>& symbols) const {
+  {
+    std::lock_guard<std::mutex> lock(noShapeMutex_);
+    for (const auto& pending : pendingSizeChecks_) {
+      bool unbound = false;
+      bool differ = false;
+      bool capacity = false;
+      for (size_t d = 0; d < pending.dims.size(); ++d) {
+        const auto value = pending.dims[d].evaluate(symbols);
+        if (!value.has_value()) {
+          unbound = true;
+        } else if (*value < pending.hostDims[d]) {
+          capacity = true;
+        } else if (*value > pending.hostDims[d]) {
+          differ = true;
+        }
+      }
+      ++(differ         ? numSizeDiffer_
+             : unbound  ? numSizeUnbound_
+             : capacity ? numSizeSetOnDevice_
+                        : numSizeMatched_);
+    }
+    pendingSizeChecks_.clear();
+  }
+  if (numSizeValues_ == 0) {
+    return;
+  }
+  LOG(INFO) << "Size expressions: " << numSizeValues_.exchange(0)
+            << " tensor parameters, " << numSizeMatched_.exchange(0)
+            << " match, " << numSizeDiffer_.exchange(0) << " differ, "
+            << numSizeUnbound_.exchange(0) << " unbound, "
+            << numSizeNoShape_.exchange(0) << " without an expression, "
+            << numSizeSetOnDevice_.exchange(0)
+            << " differ in a shape the device sets or a capacity, "
+            << numSizeHostShaped_.exchange(0) << " shaped by host ops";
+  numSizeReports_ = 0;
+  numSizeUnboundReports_ = 0;
+  std::lock_guard<std::mutex> lock(noShapeMutex_);
+  auto byProducer = [](folly::F14FastMap<std::string, int64_t>& counts) {
+    std::vector<std::pair<int64_t, std::string>> byCount;
+    for (const auto& [target, count] : counts) {
+      byCount.emplace_back(count, target);
+    }
+    counts.clear();
+    std::sort(byCount.rbegin(), byCount.rend());
+    std::string text;
+    for (size_t i = 0; i < byCount.size() && i < 20; ++i) {
+      text += fmt::format(" {} x{}", byCount[i].second, byCount[i].first);
+    }
+    return text;
+  };
+  LOG(INFO) << "  without an expression, by producer:"
+            << byProducer(noShapeByTarget_);
+  LOG(INFO) << "  differ, by producer:" << byProducer(differByTarget_);
+}
+
+int32_t DeviceSymbols::fixupSharedBytes(int32_t numCode) {
+  constexpr int32_t kSharedCodeWords = 2048;
+  return numCode <= kSharedCodeWords
+      ? numCode * static_cast<int32_t>(sizeof(int64_t))
+      : 0;
+}
+
+const char* DeviceSymbols::fixupSource() {
+  return kFixupSource;
 }
 
 void DeviceSymbols::traceWaits(

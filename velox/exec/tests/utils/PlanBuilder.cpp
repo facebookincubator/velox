@@ -1361,6 +1361,13 @@ PlanBuilder& PlanBuilder::localMerge(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::mixedUnion(std::vector<core::PlanNodePtr> sources) {
+  VELOX_CHECK_NULL(planNode_, "mixedUnion() must be the first call");
+  planNode_ = std::make_shared<core::MixedUnionNode>(
+      nextPlanNodeId(), std::move(sources));
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::orderBy(
     const std::vector<std::string>& keys,
     bool isPartial) {
