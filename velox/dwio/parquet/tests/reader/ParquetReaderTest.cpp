@@ -19,6 +19,7 @@
 #include <numeric>
 
 #include "velox/common/Casts.h"
+#include "velox/common/base/RandomUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/parquet/common/ParquetRuntimeStats.h"
@@ -3237,4 +3238,253 @@ TEST_F(ParquetReaderTest, byteStreamSplitFloat) {
     EXPECT_FALSE(floatColumn->isNullAt(index));
     EXPECT_FLOAT_EQ(floatColumn->valueAt(index), value);
   }
+}
+
+namespace {
+
+// Five row groups of 1,000 rows. c0 is the row number; the other columns are
+// nullable strings, structs and arrays, so skipping into a row group has to
+// skip nulls and repeated values.
+class ParquetSplitRowRangeTest : public ParquetTestBase {
+ protected:
+  static constexpr int32_t kRowsPerRowGroup = 1'000;
+  static constexpr int32_t kNumRows = 5 * kRowsPerRowGroup;
+  static constexpr uint64_t kAll{std::numeric_limits<uint64_t>::max()};
+
+  void SetUp() override {
+    ParquetTestBase::SetUp();
+    data_ = makeRowVector(
+        {"c0", "c1", "c2", "c3"},
+        {
+            makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
+            makeFlatVector<std::string>(
+                kNumRows,
+                [](auto row) { return fmt::format("s{}", row); },
+                [](auto row) { return row % 7 == 0; }),
+            makeRowVector(
+                {"x"},
+                {makeFlatVector<int32_t>(
+                    kNumRows,
+                    [](auto row) { return row * 2; },
+                    [](auto row) { return row % 5 == 0; })},
+                [](auto row) { return row % 3 == 0; }),
+            makeArrayVector<int32_t>(
+                kNumRows,
+                [](auto row) { return row % 4; },
+                [](auto row, auto i) { return row + i; },
+                [](auto row) { return row % 11 == 0; }),
+        });
+    schema_ = asRowType(data_->type());
+    dwio::common::WriterOptions options;
+    options.memoryPool = rootPool_.get();
+    options.flushPolicyFactory = []() {
+      return std::make_unique<parquet::LambdaFlushPolicy>(
+          kRowsPerRowGroup, 1L << 30, []() { return false; });
+    };
+    sink_ = write(data_, options, parquet::ParquetWriterOptions{});
+    auto reader = createReaderInMemory(*sink_);
+    ASSERT_EQ(reader->fileMetaData().numRowGroups(), 5);
+    // Byte offset of each row group, as the reader assigns row groups to byte
+    // ranges.
+    for (int i = 0; i < 5; ++i) {
+      auto rowGroup = reader->fileMetaData().rowGroup(i);
+      if (rowGroup.hasFileOffset() && rowGroup.fileOffset() != 0) {
+        rowGroupOffsets_.push_back(rowGroup.fileOffset());
+        continue;
+      }
+      auto column = rowGroup.columnChunk(0);
+      rowGroupOffsets_.push_back(
+          column.hasDictionaryPageOffset() ? column.dictionaryPageOffset()
+                                           : column.dataPageOffset());
+    }
+  }
+
+  // A row reader drops the metadata of row groups it skips from its reader, so
+  // each row reader gets a reader of its own.
+  std::unique_ptr<RowReader> createRowReader(const RowReaderOptions& options) {
+    readers_.push_back(createReaderInMemory(*sink_));
+    return readers_.back()->createRowReader(options);
+  }
+
+  RowReaderOptions options(
+      SplitRowRange range,
+      int firstRowGroup = 0,
+      std::unique_ptr<common::Filter> filter = nullptr) {
+    auto spec = makeScanSpec(schema_);
+    if (filter) {
+      spec->childByName("c0")->setFilter(std::move(filter));
+    }
+    auto result = makeRowReaderOpts(schema_);
+    result.setScanSpec(spec);
+    result.setSplitRowRange(range);
+    result.range(rowGroupOffsets_[firstRowGroup], kAll / 2);
+    return result;
+  }
+
+  // Reads all rows in batches of 700, applying 'mutation', into one vector.
+  RowVectorPtr read(
+      RowReader& rowReader,
+      const dwio::common::Mutation* mutation = nullptr) {
+    auto result = BaseVector::create<RowVector>(schema_, 0, pool());
+    VectorPtr batch = BaseVector::create(schema_, 0, pool());
+    while (rowReader.next(700, batch, mutation) > 0) {
+      const auto offset = result->size();
+      result->resize(offset + batch->size());
+      result->copy(batch.get(), offset, 0, batch->size());
+    }
+    return result;
+  }
+
+  RowVectorPtr read(const RowReaderOptions& options) {
+    return read(*createRowReader(options));
+  }
+
+  // Checks that 'range' of the split starting at 'firstRowGroup' reads rows
+  // [begin, end) of the file.
+  void verify(
+      SplitRowRange range,
+      int firstRowGroup,
+      vector_size_t begin,
+      vector_size_t end) {
+    SCOPED_TRACE(
+        fmt::format(
+            "firstRowGroup {} firstRow {} numRows {}",
+            firstRowGroup,
+            range.firstRow,
+            range.numRows));
+    test::assertEqualVectors(
+        data_->slice(begin, end - begin), read(options(range, firstRowGroup)));
+  }
+
+  // Reads 'range' of the split starting at 'firstRowGroup' twice with one
+  // sampler, like two splits of a scan, and checks that the kept rows are
+  // those that trying each of rows [begin, end) in turn would keep.
+  void verifySampling(
+      SplitRowRange range,
+      int firstRowGroup,
+      vector_size_t begin,
+      vector_size_t end,
+      double sampleRate,
+      uint32_t seed) {
+    SCOPED_TRACE(
+        fmt::format(
+            "firstRowGroup {} firstRow {} numRows {} sampleRate {} seed {}",
+            firstRowGroup,
+            range.firstRow,
+            range.numRows,
+            sampleRate,
+            seed));
+    random::setSeed(seed);
+    random::RandomSkipTracker randomSkip(sampleRate);
+    dwio::common::Mutation mutation;
+    mutation.randomSkip = &randomSkip;
+    auto actual = BaseVector::create<RowVector>(schema_, 0, pool());
+    for (int i = 0; i < 2; ++i) {
+      auto rows =
+          read(*createRowReader(options(range, firstRowGroup)), &mutation);
+      actual->append(rows.get());
+    }
+
+    random::setSeed(seed);
+    random::RandomSkipTracker expectedSkip(sampleRate);
+    std::vector<vector_size_t> expectedRows;
+    for (int i = 0; i < 2; ++i) {
+      for (auto row = begin; row < end; ++row) {
+        if (expectedSkip.testOne()) {
+          expectedRows.push_back(row);
+        }
+      }
+    }
+    ASSERT_EQ(actual->size(), expectedRows.size());
+    for (vector_size_t i = 0; i < actual->size(); ++i) {
+      ASSERT_TRUE(actual->equalValueAt(data_.get(), i, expectedRows[i]))
+          << "row " << expectedRows[i];
+    }
+  }
+
+  RowVectorPtr data_;
+  RowTypePtr schema_;
+  dwio::common::MemorySink* sink_{nullptr};
+  std::vector<uint64_t> rowGroupOffsets_;
+  std::vector<std::unique_ptr<ParquetReader>> readers_;
+};
+
+} // namespace
+
+TEST_F(ParquetSplitRowRangeTest, ranges) {
+  verify({0, kAll}, 0, 0, kNumRows);
+  verify({1, 2}, 0, 1, 3);
+  // Starts mid row group.
+  verify({1'500, 300}, 0, 1'500, 1'800);
+  // Crosses row groups.
+  verify({900, 2'250}, 0, 900, 3'150);
+  verify({4'500, kAll}, 0, 4'500, kNumRows);
+  verify({4'999, 1}, 0, 4'999, kNumRows);
+  verify({kNumRows, 1}, 0, 0, 0);
+  verify({3, 0}, 0, 0, 0);
+}
+
+TEST_F(ParquetSplitRowRangeTest, countsRowsFromSplitStart) {
+  verify({0, 2}, 1, 1'000, 1'002);
+  verify({1'500, 1'000}, 2, 3'500, 4'500);
+  verify({1'999, kAll}, 3, 4'999, kNumRows);
+  verify({2'000, 1}, 3, 0, 0);
+}
+
+TEST_F(ParquetSplitRowRangeTest, filter) {
+  // The filter keeps rows 1,700-2,600: row groups 1 and 2 by stats.
+  auto rowReader = createRowReader(options(
+      {1'500, 3'000},
+      0,
+      std::make_unique<common::BigintRange>(1'700, 2'600, false)));
+  test::assertEqualVectors(data_->slice(1'700, 901), read(*rowReader));
+  dwio::common::RuntimeStats stats;
+  rowReader->updateRuntimeStats(stats);
+  // Row groups 3 and 4 fail the stats filter. Row group 0 is outside the row
+  // range, so it is not counted.
+  EXPECT_EQ(stats.skippedStrides, 2);
+
+  // The row range starts inside the rows the filter keeps.
+  test::assertEqualVectors(
+      data_->slice(1'800, 801),
+      read(options(
+          {1'800, 3'000},
+          0,
+          std::make_unique<common::BigintRange>(1'700, 2'600, false))));
+}
+
+TEST_F(ParquetSplitRowRangeTest, randomSampling) {
+  for (const double sampleRate : {0.5, 0.1, 0.001}) {
+    for (uint32_t seed = 1; seed <= 10; ++seed) {
+      verifySampling({0, kAll}, 0, 0, kNumRows, sampleRate, seed);
+      verifySampling({1'500, 300}, 0, 1'500, 1'800, sampleRate, seed);
+      verifySampling({900, 2'250}, 0, 900, 3'150, sampleRate, seed);
+      verifySampling({4'500, kAll}, 0, 4'500, kNumRows, sampleRate, seed);
+      verifySampling({1'500, 1'000}, 2, 3'500, 4'500, sampleRate, seed);
+    }
+  }
+}
+
+TEST_F(ParquetSplitRowRangeTest, rowNumbers) {
+  auto opts = options({1'500, 2'000});
+  RowNumberColumnInfo rowNumberColumnInfo;
+  rowNumberColumnInfo.insertPosition = 4;
+  rowNumberColumnInfo.name = "row_number";
+  opts.setRowNumberColumnInfo(rowNumberColumnInfo);
+  auto rowReader = createRowReader(opts);
+  EXPECT_EQ(rowReader->nextRowNumber(), 1'500);
+  VectorPtr batch = BaseVector::create(schema_, 0, pool());
+  int64_t expected = 1'500;
+  while (rowReader->next(700, batch) > 0) {
+    auto* row = batch->as<RowVector>();
+    ASSERT_EQ(row->childrenSize(), 5);
+    DecodedVector values(*row->childAt(0));
+    DecodedVector rowNumbers(*row->childAt(4));
+    for (vector_size_t i = 0; i < batch->size(); ++i) {
+      ASSERT_EQ(values.valueAt<int64_t>(i), expected);
+      ASSERT_EQ(rowNumbers.valueAt<int64_t>(i), expected);
+      ++expected;
+    }
+  }
+  EXPECT_EQ(expected, 3'500);
 }
