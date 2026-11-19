@@ -49,15 +49,15 @@ core::PlanNodePtr makeScanUnion(
     const RowTypePtr& rowType,
     core::PlanNodeId& sourceId,
     core::PlanNodeId& siblingId) {
-  const auto ids = std::make_shared<core::PlanNodeIdGenerator>();
-  return test::PlanBuilder(ids)
+  test::PlanBuilder builder;
+  return builder.newPlan()
       .localPartitionRoundRobin({
-          test::PlanBuilder(ids)
+          builder.newPlan()
               .tableScan(rowType)
               .capturePlanNodeId(sourceId)
               .limit(0, 2, true)
               .planNode(),
-          test::PlanBuilder(ids)
+          builder.newPlan()
               .tableScan(rowType)
               .capturePlanNodeId(siblingId)
               .planNode(),
@@ -211,20 +211,20 @@ void admitSplit(
 TEST_F(SplitLifecycleTest, admissionResumesAfterLimit) {
   const auto data = makeRowVector({makeFlatIdentityVector<int32_t>(10'000)});
   const auto file = writeToFile(data);
-  const auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+  test::PlanBuilder builder;
   core::PlanNodeId sourceId;
   core::PlanNodeId siblingId;
   CursorParameters params;
-  params.planNode = test::PlanBuilder(ids)
+  params.planNode = builder.newPlan()
                         .localPartitionRoundRobin({
-                            test::PlanBuilder(ids)
+                            builder.newPlan()
                                 .tableScan(data->rowType())
                                 .capturePlanNodeId(sourceId)
                                 .limit(0, 2, true)
                                 .localGather()
                                 .limit(0, 2, false)
                                 .planNode(),
-                            test::PlanBuilder(ids)
+                            builder.newPlan()
                                 .tableScan(data->rowType())
                                 .capturePlanNodeId(siblingId)
                                 .planNode(),
@@ -471,28 +471,25 @@ TEST_F(SplitLifecycleTest, exchangeSource) {
   ExchangeSource::registerFactory(test::createLocalExchangeSource);
   const auto upstream = Task::create(
       "local://split-lifecycle",
-      test::PlanBuilder()
-          .values({data})
-          .partitionedOutput({}, 1)
-          .planFragment(),
+      test::PlanBuilder().values(data).partitionedOutput({}, 1).planFragment(),
       0,
       core::QueryCtx::create(driverExecutor_.get()),
       Task::ExecutionMode::kParallel);
   upstream->start(1);
 
-  const auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+  test::PlanBuilder builder;
   core::PlanNodeId sourceId;
   core::PlanNodeId siblingId;
   CursorParameters params;
   params.maxDrivers = 1;
-  params.planNode = test::PlanBuilder(ids)
+  params.planNode = builder.newPlan()
                         .localPartitionRoundRobin({
-                            test::PlanBuilder(ids)
+                            builder.newPlan()
                                 .exchange(data->rowType(), "Presto")
                                 .capturePlanNodeId(sourceId)
                                 .limit(0, 2, true)
                                 .planNode(),
-                            test::PlanBuilder(ids)
+                            builder.newPlan()
                                 .tableScan(data->rowType())
                                 .capturePlanNodeId(siblingId)
                                 .planNode(),

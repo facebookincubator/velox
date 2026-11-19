@@ -211,14 +211,14 @@ class HashJoinBuildBenchmark : public VectorTestBase {
   std::shared_ptr<const core::PlanNode> makeHashJoinPlan(
       const std::vector<RowVectorPtr>& buildVectors,
       const std::vector<RowVectorPtr>& probeVectors) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    return exec::test::PlanBuilder(planNodeIdGenerator, pool_.get())
+    exec::test::PlanBuilder builder(pool_.get());
+    return builder.newPlan()
         .values(probeVectors)
         .project({"c0 AS t0", "c1 as t1", "c2 as t2"})
         .hashJoin(
             {"t0"},
             {"u0"},
-            exec::test::PlanBuilder(planNodeIdGenerator)
+            builder.newPlan()
                 .values(buildVectors)
                 .project({"c0 AS u0"})
                 .planNode(),

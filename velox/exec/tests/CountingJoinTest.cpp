@@ -32,13 +32,13 @@ class CountingJoinTest : public OperatorTestBase {
       const std::vector<int32_t>& build,
       core::JoinType joinType,
       const std::vector<int32_t>& expected) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    PlanBuilder builder;
+    auto plan = builder.newPlan()
                     .values(makeRowVector({makeFlatVector<int32_t>(probe)}))
                     .hashJoin(
                         {"c0"},
                         {"u0"},
-                        PlanBuilder(planNodeIdGenerator)
+                        builder.newPlan()
                             .values(makeRowVector(
                                 {"u0"}, {makeFlatVector<int32_t>(build)}))
                             .planNode(),
@@ -119,20 +119,19 @@ TEST_F(CountingJoinTest, multipleProbeBatches) {
 
   auto test = [&](core::JoinType joinType,
                   const std::vector<int32_t>& expected) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan =
-        PlanBuilder(planNodeIdGenerator)
-            .values(probeVectors)
-            .hashJoin(
-                {"c0"},
-                {"u0"},
-                PlanBuilder(planNodeIdGenerator).values(buildVector).planNode(),
-                "",
-                {"c0"},
-                joinType,
-                /*nullAware=*/false,
-                /*nullAsValue=*/true)
-            .planNode();
+    PlanBuilder builder;
+    auto plan = builder.newPlan()
+                    .values(probeVectors)
+                    .hashJoin(
+                        {"c0"},
+                        {"u0"},
+                        builder.newPlan().values(buildVector).planNode(),
+                        "",
+                        {"c0"},
+                        joinType,
+                        /*nullAware=*/false,
+                        /*nullAsValue=*/true)
+                    .planNode();
     AssertQueryBuilder(plan).assertResults(
         makeRowVector({makeFlatVector<int32_t>(expected)}));
   };
@@ -156,20 +155,19 @@ TEST_F(CountingJoinTest, multipleKeys) {
 
   // Probe: {(1,10):2, (1,20):1, (2,10):2}, Build: {(1,10):2, (2,10):1}
   // EXCEPT ALL: {(1,20):1, (2,10):1}
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values(probeVector)
-          .hashJoin(
-              {"c0", "c1"},
-              {"u0", "u1"},
-              PlanBuilder(planNodeIdGenerator).values(buildVector).planNode(),
-              "",
-              {"c0", "c1"},
-              core::JoinType::kCountingAnti,
-              /*nullAware=*/false,
-              /*nullAsValue=*/true)
-          .planNode();
+  PlanBuilder builder;
+  auto plan = builder.newPlan()
+                  .values(probeVector)
+                  .hashJoin(
+                      {"c0", "c1"},
+                      {"u0", "u1"},
+                      builder.newPlan().values(buildVector).planNode(),
+                      "",
+                      {"c0", "c1"},
+                      core::JoinType::kCountingAnti,
+                      /*nullAware=*/false,
+                      /*nullAsValue=*/true)
+                  .planNode();
 
   auto expected = makeRowVector({
       makeFlatVector<int32_t>({1, 2}),
@@ -190,15 +188,13 @@ TEST_F(CountingJoinTest, nullKeys) {
   auto test = [&](core::JoinType joinType,
                   const std::vector<std::optional<int32_t>>& expected) {
     SCOPED_TRACE(core::JoinTypeName::toName(joinType));
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan = PlanBuilder(planNodeIdGenerator)
-                    .values({probeVector})
+    PlanBuilder builder;
+    auto plan = builder.newPlan()
+                    .values(probeVector)
                     .hashJoin(
                         {"c0"},
                         {"u0"},
-                        PlanBuilder(planNodeIdGenerator)
-                            .values({buildVector})
-                            .planNode(),
+                        builder.newPlan().values(buildVector).planNode(),
                         "",
                         {"c0"},
                         joinType,
@@ -228,22 +224,21 @@ TEST_F(CountingJoinTest, buildSideDedup) {
   // Probe has values 0..14. Build has values 0..9, each repeated 1'000 times.
   // EXCEPT ALL: values 0..9 each appear once on probe but 1'000 times on build,
   // so all are consumed. Values 10..14 have no match and are emitted.
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .values(makeRowVector({makeFlatVector<int32_t>(
-                      15, [](auto row) { return row; })}))
-                  .hashJoin(
-                      {"c0"},
-                      {"u0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .values({buildVector}, false, 1'000)
-                          .planNode(),
-                      "",
-                      {"c0"},
-                      core::JoinType::kCountingAnti,
-                      /*nullAware=*/false,
-                      /*nullAsValue=*/true)
-                  .planNode();
+  PlanBuilder builder;
+  auto plan =
+      builder.newPlan()
+          .values(makeRowVector(
+              {makeFlatVector<int32_t>(15, [](auto row) { return row; })}))
+          .hashJoin(
+              {"c0"},
+              {"u0"},
+              builder.newPlan().values({buildVector}, false, 1'000).planNode(),
+              "",
+              {"c0"},
+              core::JoinType::kCountingAnti,
+              /*nullAware=*/false,
+              /*nullAsValue=*/true)
+          .planNode();
 
   auto expected =
       makeRowVector({makeFlatVector<int32_t>({10, 11, 12, 13, 14})});
@@ -282,13 +277,13 @@ TEST_F(CountingJoinTest, multipleBuildDrivers) {
         makeRowVector(probeVector->rowType()->names(), expectedChildren);
     auto probeKeys = probeVector->rowType()->names();
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan = PlanBuilder(planNodeIdGenerator)
-                    .values({probeVector})
+    PlanBuilder builder;
+    auto plan = builder.newPlan()
+                    .values(probeVector)
                     .hashJoin(
                         probeKeys,
                         buildVector->rowType()->names(),
-                        PlanBuilder(planNodeIdGenerator)
+                        builder.newPlan()
                             .values({buildVector}, /*parallelizable=*/true)
                             .planNode(),
                         "",
