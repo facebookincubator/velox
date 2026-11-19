@@ -256,9 +256,10 @@ class ParallelUnitLoader : public UnitLoader {
   UnitLoaderStats stats() override {
     UnitLoaderStats stats;
     stats.addCounter(
-        "processedUnits", RuntimeCounter(saturateCast(processedUnits_.size())));
+        UnitLoaderStats::kProcessedUnits,
+        RuntimeCounter(saturateCast(processedUnits_.size())));
     stats.addCounter(
-        "waitForUnitReadyNanos",
+        UnitLoaderStats::kWaitForUnitReadyNanos,
         RuntimeCounter(
             saturateCast(waitForUnitReadyNanos_),
             RuntimeCounter::Unit::kNanos));

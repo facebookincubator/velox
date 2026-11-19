@@ -365,8 +365,6 @@ TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
   // Abstract the common values vector split.
   auto valuesSplit = split(data, 10);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  CursorParameters params;
   auto queryCtx = core::QueryCtx::create(executor_.get());
   queryCtx->testingOverrideMemoryPool(
       memory::memoryManager()->addRootPool(
@@ -374,30 +372,28 @@ TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
           8'388'608 /* 8MB */,
           exec::MemoryReclaimer::create()));
 
-  params.queryCtx = queryCtx;
-
   auto testWindowBuild = [&](bool useStreamingWindow) {
     if (useStreamingWindow) {
-      params.planNode =
-          PlanBuilder(planNodeIdGenerator)
-              .values(valuesSplit)
-              .streamingWindow(
-                  {"row_number() over (partition by p order by s)"})
-              .project({"d"})
-              .singleAggregation({}, {"sum(d)"})
-              .planNode();
+      auto plan = PlanBuilder()
+                      .values(valuesSplit)
+                      .streamingWindow(
+                          {"row_number() over (partition by p order by s)"})
+                      .project({"d"})
+                      .singleAggregation({}, {"sum(d)"})
+                      .planNode();
 
-      readCursor(params);
+      AssertQueryBuilder(plan).queryCtx(queryCtx).countResults();
     } else {
-      params.planNode =
-          PlanBuilder(planNodeIdGenerator)
-              .values(valuesSplit)
-              .window({"row_number() over (partition by p order by s)"})
-              .project({"d"})
-              .singleAggregation({}, {"sum(d)"})
-              .planNode();
+      auto plan = PlanBuilder()
+                      .values(valuesSplit)
+                      .window({"row_number() over (partition by p order by s)"})
+                      .project({"d"})
+                      .singleAggregation({}, {"sum(d)"})
+                      .planNode();
 
-      VELOX_ASSERT_THROW(readCursor(params), "Exceeded memory pool capacity");
+      VELOX_ASSERT_THROW(
+          AssertQueryBuilder(plan).queryCtx(queryCtx).countResults(),
+          "Exceeded memory pool capacity");
     }
   };
   // RowStreamingWindow will not OOM.
@@ -957,12 +953,12 @@ TEST_F(WindowTest, rowsStreamingWindowBuildWideRowsSinglePartition) {
   auto windowNode =
       makeStreamingWindowNode({data}, {rowsFrameFunction("row_number()")});
 
-  auto result =
+  ASSERT_EQ(
       AssertQueryBuilder(windowNode)
           .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
           .config(core::QueryConfig::kPreferredOutputBatchRows, 10'000)
-          .copyResults(pool());
-  ASSERT_EQ(result->size(), size);
+          .countResults(),
+      size);
 }
 
 TEST_F(WindowTest, rowsStreamingWindowBuildLoadsOnlyBoundaryColumns) {
@@ -1665,8 +1661,7 @@ TEST_F(WindowTest, missingFunctionSignature) {
 
     core::WindowNode::Function windowFunction{callExpr, frame, false};
 
-    CursorParameters params;
-    params.planNode =
+    auto plan =
         PlanBuilder()
             .values(input)
             .addNode([&](auto nodeId, auto source) -> core::PlanNodePtr {
@@ -1684,7 +1679,7 @@ TEST_F(WindowTest, missingFunctionSignature) {
             })
             .planNode();
 
-    readCursor(params);
+    AssertQueryBuilder(plan).countResults();
   };
 
   auto callExpr = std::make_shared<core::CallTypedExpr>(
