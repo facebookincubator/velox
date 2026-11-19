@@ -21,15 +21,10 @@
 
 #ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 #include "velox/exec/tests/utils/TaskMonitor.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 #endif
 
 namespace facebook::velox::exec::test {
-
-/// Converts input 'RowVector' into a list of 'MaterializedRow's.
-std::vector<MaterializedRow> materialize(const RowVectorPtr& vector);
-
-/// Converts a list of 'RowVector's into 'MaterializedRowMultiset'.
-MaterializedRowMultiset materialize(const std::vector<RowVectorPtr>& vectors);
 
 /// Scoped abort percentage utility that allows user to trigger abort during the
 ///  query execution.
@@ -96,54 +91,27 @@ inline bool waitForTaskStateChange(
 inline void waitForAllTasksToBeDeleted(uint64_t maxWaitUs = 3'000'000) {
   TaskMonitor::waitForAllTasksDeleted(maxWaitUs);
 }
+
+/// Legacy form of VectorAssertions::equalMultisets against DuckDB results.
+inline void assertResults(
+    const std::vector<RowVectorPtr>& results,
+    const RowTypePtr& resultType,
+    const std::string& duckDbSql,
+    DuckDbQueryRunner& duckDbQueryRunner) {
+  velox::test::VectorAssertions::equalMultisets(
+      duckDbQueryRunner.execute(duckDbSql, resultType), resultType, results);
+}
 #endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
 
-void assertResults(
-    const std::vector<RowVectorPtr>& results,
-    const RowTypePtr& resultType,
-    const std::string& duckDbSql,
-    DuckDbQueryRunner& duckDbQueryRunner);
-
-void assertResultsOrdered(
-    const std::vector<RowVectorPtr>& results,
-    const RowTypePtr& resultType,
-    const std::string& duckDbSql,
-    DuckDbQueryRunner& duckDbQueryRunner,
-    const std::vector<uint32_t>& sortingKeys);
-
-/// assertEqualResults() has limited support for results with floating-point
-/// columns.
-///   1. When there is one or more floating-point columns, we try to group the
-///   rows in each set by the non-floating-point columns. If every group
-///   contains only one row in both sets, we compare their rows
-///   via the sort-merge algorithm with epsilon comparator.
-///   2. If there is no floating-point column, we loop over every row in one set
-///   and try to find it in the other via std::multiset::find(). Values are
-///   compared directly without epsilon.
-/// We made this difference because some operations, such as aggregation,
-/// require tolerance to imprecision of floating-point computation in their
-/// results, while epsilon comparator doesn't satisfy the strict weak ordering
-/// requirement of std::multiset. Since aggregation results typically have one
-/// row per group, we use sort-merge algorithm with epsilon comparator to verify
-/// their results. This condition may be relaxed if there is only one
-/// floating-point column in each set. Verifying arbitrary result sets with
-/// epsilon comparison would require more advanced algorithms such as maximum
-/// bipartite matching. Hence we leave them as future work. Check out
-/// https://github.com/facebookincubator/velox/issues/3493 for more discussion.
+/// Same as VectorAssertions::equalMultisets.
 bool assertEqualResults(
     const std::vector<RowVectorPtr>& expected,
     const std::vector<RowVectorPtr>& actual);
 
+/// Same as VectorAssertions::equalMultisets.
 bool assertEqualResults(
     const MaterializedRowMultiset& expectedRows,
     const TypePtr& expectedRowType,
     const std::vector<RowVectorPtr>& actual);
-
-bool assertEqualResults(
-    const MaterializedRowMultiset& expectedRows,
-    const TypePtr& expectedType,
-    const MaterializedRowMultiset& actualRows,
-    const TypePtr& actualType,
-    const std::string& message);
 
 } // namespace facebook::velox::exec::test

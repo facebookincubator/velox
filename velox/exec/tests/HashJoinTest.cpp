@@ -39,6 +39,7 @@
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
@@ -349,7 +350,8 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBeforeBarrier) {
     ASSERT_LE(result->size(), 5 * numDrivers_);
 
     auto remainingExpected = fullResults;
-    const auto actualRows = materialize(result);
+    const auto actualRows =
+        velox::test::VectorAssertions::toVariantRows(result);
     for (vector_size_t row = 0; row < actualRows.size(); ++row) {
       const auto expectedIt = remainingExpected.find(actualRows[row]);
       ASSERT_NE(expectedIt, remainingExpected.end())
@@ -432,7 +434,8 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBetweenSpillRounds) {
     ASSERT_LE(result->size(), 5 * numDrivers_);
 
     auto remainingExpected = fullResults;
-    const auto actualRows = materialize(result);
+    const auto actualRows =
+        velox::test::VectorAssertions::toVariantRows(result);
     for (vector_size_t row = 0; row < actualRows.size(); ++row) {
       const auto expectedIt = remainingExpected.find(actualRows[row]);
       ASSERT_NE(expectedIt, remainingExpected.end())
