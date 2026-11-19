@@ -500,3 +500,47 @@ INSTANTIATE_TEST_SUITE_P(
           filename.end());
       return filename;
     });
+
+// A file without a row index (10 stripes of 5,000 rows, row index stride 0)
+// reads the same through the selective reader, including from the middle of a
+// stripe.
+TEST_F(OrcReaderTest, selectiveReadWithoutRowIndex) {
+  dwio::common::ReaderOptions readerOpts{pool()};
+  readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
+  auto reader = DwrfReader::create(
+      createFileBufferedInput(
+          getExamplesFilePath("TestOrcFile.testWithoutIndex.orc"),
+          readerOpts.memoryPool()),
+      readerOpts);
+  ASSERT_EQ(reader->getFooter().rowIndexStride(), 0);
+  const auto schema = reader->rowType();
+
+  auto read = [&](RowReaderOptions options) {
+    auto rowReader = reader->createRowReader(options);
+    auto result = BaseVector::create<RowVector>(schema, 0, pool());
+    VectorPtr batch = BaseVector::create(schema, 0, pool());
+    while (rowReader->next(700, batch) > 0) {
+      const auto offset = result->size();
+      result->resize(offset + batch->size());
+      result->copy(batch.get(), offset, 0, batch->size());
+    }
+    return result;
+  };
+  auto selectiveOptions = [&]() {
+    auto spec = std::make_shared<common::ScanSpec>("<root>");
+    spec->addAllChildFields(*schema);
+    RowReaderOptions options;
+    options.setScanSpec(spec);
+    return options;
+  };
+
+  const auto expected = read(RowReaderOptions{});
+  ASSERT_EQ(expected->size(), 50'000);
+  test::assertEqualVectors(expected, read(selectiveOptions()));
+
+  // Starting mid-stripe seeks within the stripe.
+  auto options = selectiveOptions();
+  options.setSplitRowRange(
+      SplitRowRange{.firstRow = 12'345, .numRows = 20'000});
+  test::assertEqualVectors(expected->slice(12'345, 20'000), read(options));
+}
