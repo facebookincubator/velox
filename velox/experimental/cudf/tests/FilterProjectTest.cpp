@@ -2066,36 +2066,36 @@ TEST_F(CudfFilterProjectTest, roundDecimal) {
       {makeFlatVector<int64_t>({412389, -456789}, DECIMAL(10, 4))});
 
   // Round to 2 decimal places.
-  // Expected values are 41.24 and -45.68 as DECIMAL(10, 4).
+  // Expected values are 41.24 and -45.68 as DECIMAL(11, 4).
   auto plan = PlanBuilder()
                   .setParseOptions(options)
                   .values({decimalData})
                   .project({"round(c0, 2) as c1"})
                   .planNode();
   auto decimalExpected = makeRowVector(
-      {makeFlatVector<int64_t>({412400, -456800}, DECIMAL(10, 4))});
+      {makeFlatVector<int64_t>({412400, -456800}, DECIMAL(11, 4))});
   AssertQueryBuilder(plan).assertResults(decimalExpected);
 
   // Round to 0 decimal places.
-  // Expected values are 41.0 and -46.0 as DECIMAL(10, 0).
+  // Expected values are 41.0 and -46.0 as DECIMAL(7, 0).
   plan = PlanBuilder()
              .setParseOptions(options)
              .values({decimalData})
              .project({"round(c0) as c1"})
              .planNode();
   decimalExpected =
-      makeRowVector({makeFlatVector<int64_t>({41, -46}, DECIMAL(10, 0))});
+      makeRowVector({makeFlatVector<int64_t>({41, -46}, DECIMAL(7, 0))});
   AssertQueryBuilder(plan).assertResults(decimalExpected);
 
   // Round to -1 decimal places.
-  // Expected values are 40.0 and -50.0 as DECIMAL(10, 4).
+  // Expected values are 40.0 and -50.0 as DECIMAL(11, 4).
   plan = PlanBuilder()
              .setParseOptions(options)
              .values({decimalData})
              .project({"round(c0, -1) as c1"})
              .planNode();
   decimalExpected = makeRowVector(
-      {makeFlatVector<int64_t>({400000, -500000}, DECIMAL(10, 4))});
+      {makeFlatVector<int64_t>({400000, -500000}, DECIMAL(11, 4))});
   AssertQueryBuilder(plan).assertResults(decimalExpected);
 }
 
