@@ -24,6 +24,8 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
+#include <gmock/gmock.h>
+
 #include <future>
 
 namespace facebook::velox::cudf_velox::test {
@@ -265,6 +267,91 @@ TEST_F(PhysicalPlanTest, validationChecksRepresentations) {
       "requires an explicit Exchange and CudfOrderBy");
 }
 
+TEST_F(PhysicalPlanTest, conversionsRejectUnsupportedTypes) {
+  auto data = makeRowVector(
+      {"k", "m"},
+      {makeFlatVector<int64_t>({1}),
+       makeMapVector<int64_t, int64_t>({{{1, 10}}})});
+  auto values = PlanBuilder().values({data}).planNode();
+
+  VELOX_ASSERT_USER_THROW(
+      validateCudfPlan(
+          std::make_shared<CudfToVeloxNode>(
+              "download",
+              std::make_shared<CudfFromVeloxNode>("upload", values)),
+          *queryCtx_),
+      "Unsupported cuDF conversion type at upload");
+
+  // The node of the application produces cuDF vectors, and the task needs
+  // Velox vectors.
+  VELOX_ASSERT_USER_THROW(
+      rewrite(app(values, Need::kVelox, Kind::kCudf)),
+      "(app) across a cuDF boundary");
+}
+
+TEST_F(PhysicalPlanTest, driverAdapterRejectsCudfPlanNodes) {
+  unregisterCudf();
+  CudfConfig::getInstance().enableDriverAdapter = true;
+  registerCudf();
+  auto plan = std::make_shared<CudfToVeloxNode>(
+      "download", std::make_shared<CudfFromVeloxNode>("upload", values()));
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan).queryCtx(queryCtx_).copyResults(pool()),
+      "Disable cudf.driver_adapter_enabled before executing physical cuDF plans");
+}
+
+TEST_F(PhysicalPlanTest, detailsShowKeysAndExpressions) {
+  auto data = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({1, 2}), makeFlatVector<int64_t>({10, 20})});
+  auto details = [&](const core::PlanNodePtr& plan, std::string_view name) {
+    auto physical = rewrite(plan);
+    const auto* node = core::PlanNode::findFirstNode(
+        physical.get(),
+        [&](const core::PlanNode* node) { return node->name() == name; });
+    VELOX_CHECK_NOT_NULL(node, "{}", physical->toString(true, true));
+    return node->toString(true, false);
+  };
+  auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+  auto values = [&] { return PlanBuilder(ids).values({data}); };
+
+  EXPECT_THAT(
+      details(
+          values().filter("c0 > 1").project({"c1 + 1 AS x"}).planNode(),
+          "CudfFilterProject"),
+      testing::AllOf(
+          testing::HasSubstr("filter: gt("),
+          testing::HasSubstr("expressions: (x:BIGINT, plus(")));
+  EXPECT_THAT(
+      details(
+          values().singleAggregation({"c0"}, {"sum(c1) AS s"}).planNode(),
+          "CudfAggregation"),
+      testing::HasSubstr("SINGLE [c0] s := sum("));
+  EXPECT_THAT(
+      details(values().orderBy({"c1 DESC"}, false).planNode(), "CudfOrderBy"),
+      testing::HasSubstr("FINAL c1 DESC NULLS LAST"));
+  EXPECT_THAT(
+      details(values().topN({"c1"}, 5, false).planNode(), "CudfTopN"),
+      testing::HasSubstr("FINAL 5 c1 ASC NULLS LAST"));
+  EXPECT_THAT(
+      details(
+          values()
+              .hashJoin(
+                  {"c0"},
+                  {"u0"},
+                  PlanBuilder(ids)
+                      .values({data})
+                      .project({"c0 AS u0", "c1 AS u1"})
+                      .planNode(),
+                  "c1 < u1",
+                  {"c0", "u1"})
+              .planNode(),
+          "CudfHashJoin"),
+      testing::AllOf(
+          testing::HasSubstr("INNER c0=u0"),
+          testing::HasSubstr("filter: lt(")));
+}
+
 TEST_F(PhysicalPlanTest, aggregationConstructsWithoutCpuPlan) {
   core::AggregationNode::Aggregate sum;
   sum.call = std::make_shared<core::CallTypedExpr>(
@@ -282,7 +369,7 @@ TEST_F(PhysicalPlanTest, aggregationConstructsWithoutCpuPlan) {
       std::vector<core::FieldAccessTypedExprPtr>{},
       std::vector<core::AggregationNode::Aggregate>{sum},
       std::vector<TypePtr>{BIGINT()},
-      false);
+      /*ignoreNullKeys=*/false);
   auto plan = std::make_shared<CudfToVeloxNode>("download", aggregation);
   validateCudfPlan(plan, *queryCtx_);
   check(plan, makeRowVector({"s"}, {makeFlatVector<int64_t>({6})}));
@@ -409,8 +496,8 @@ TEST_F(PhysicalPlanTest, constructTopNRowNumberWithoutCpuCounterpart) {
       std::vector<core::FieldAccessTypedExprPtr>{
           std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c1")},
       std::vector<core::SortOrder>{core::SortOrder(true, false)},
-      1,
-      false);
+      /*limit=*/1,
+      /*generateRowNumber=*/false);
   AssertQueryBuilder(std::make_shared<CudfToVeloxNode>("download", topN))
       .assertResults(makeRowVector(
           {"c0", "c1"},
@@ -450,7 +537,7 @@ TEST_F(PhysicalPlanTest, cudfMaxDriversLimitsGpuPipelines) {
           std::vector<core::FieldAccessTypedExprPtr>{
               std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "k")},
           std::vector<core::SortOrder>{core::kAscNullsLast},
-          false));
+          /*isPartial=*/false));
 
   for (const auto maxDrivers :
        std::vector<std::optional<int32_t>>{std::nullopt, 2}) {

@@ -18,6 +18,8 @@
 #include "velox/experimental/cudf/exec/GpuPlacement.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
+#include <folly/String.h>
+
 #include <algorithm>
 #include <functional>
 #include <mutex>
@@ -69,6 +71,26 @@ void checkSortingKeys(
   }
 }
 
+// Writes the names of 'keys' separated by commas.
+void addKeys(
+    std::stringstream& stream,
+    const std::vector<core::FieldAccessTypedExprPtr>& keys) {
+  for (size_t i = 0; i < keys.size(); ++i) {
+    stream << (i > 0 ? ", " : "") << keys[i]->name();
+  }
+}
+
+// Writes each sorting key with its order, for example "a ASC NULLS LAST".
+void addSortingKeys(
+    std::stringstream& stream,
+    const std::vector<core::FieldAccessTypedExprPtr>& sortingKeys,
+    const std::vector<core::SortOrder>& sortingOrders) {
+  for (size_t i = 0; i < sortingKeys.size(); ++i) {
+    stream << (i > 0 ? ", " : "") << sortingKeys[i]->name() << " "
+           << sortingOrders[i].toString();
+  }
+}
+
 CudfPlanNodeTraits deviceTraits(size_t sources) {
   return {
       std::vector<InputRepresentation>(sources, InputRepresentation::kCudf),
@@ -94,6 +116,126 @@ void unregisterCudfPlanNodeDescriptor(const std::string& name) {
   std::lock_guard lock(descriptorMutex);
   std::erase_if(
       descriptors, [&](const auto& entry) { return entry.first == name; });
+}
+
+void CudfFilterProjectNode::addDetails(std::stringstream& stream) const {
+  if (filter_ != nullptr) {
+    stream << "filter: " << filter_->toString();
+  }
+  if (!hasProject()) {
+    return;
+  }
+  stream << (filter_ != nullptr ? ", " : "") << "expressions: ";
+  for (size_t i = 0; i < projections_.size(); ++i) {
+    stream << (i > 0 ? ", " : "") << "(" << outputType_->nameOf(i) << ":"
+           << outputType_->childAt(i)->toString() << ", "
+           << projections_[i]->toString() << ")";
+  }
+}
+
+void CudfAggregationNode::addDetails(std::stringstream& stream) const {
+  stream << core::AggregationNode::toName(step_) << " ";
+  if (!groupingKeys_.empty()) {
+    stream << "[";
+    addKeys(stream, groupingKeys_);
+    stream << "] ";
+  }
+  for (size_t i = 0; i < aggregates_.size(); ++i) {
+    const auto& aggregate = aggregates_[i];
+    stream << (i > 0 ? ", " : "")
+           << outputType_->nameOf(groupingKeys_.size() + i)
+           << " := " << aggregate.call->toString();
+    if (aggregate.distinct) {
+      stream << " distinct";
+    }
+    if (aggregate.mask != nullptr) {
+      stream << " mask: " << aggregate.mask->name();
+    }
+    if (!aggregate.sortingKeys.empty()) {
+      stream << " ORDER BY ";
+      addSortingKeys(stream, aggregate.sortingKeys, aggregate.sortingOrders);
+    }
+  }
+}
+
+void CudfHashJoinNode::addDetails(std::stringstream& stream) const {
+  stream << core::JoinTypeName::toName(joinType_) << " ";
+  for (size_t i = 0; i < leftKeys_.size(); ++i) {
+    stream << (i > 0 ? " AND " : "") << leftKeys_[i]->name() << "="
+           << rightKeys_[i]->name();
+  }
+  if (filter_ != nullptr) {
+    stream << ", filter: " << filter_->toString();
+  }
+  if (nullAware_) {
+    stream << ", null aware";
+  }
+}
+
+void CudfNestedLoopJoinNode::addDetails(std::stringstream& stream) const {
+  stream << core::JoinTypeName::toName(joinType_);
+  if (joinCondition_ != nullptr) {
+    stream << ", joinCondition: " << joinCondition_->toString();
+  }
+}
+
+void CudfOrderByNode::addDetails(std::stringstream& stream) const {
+  stream << (isPartial_ ? "PARTIAL " : "FINAL ");
+  addSortingKeys(stream, sortingKeys_, sortingOrders_);
+}
+
+void CudfTopNNode::addDetails(std::stringstream& stream) const {
+  stream << (isPartial_ ? "PARTIAL " : "FINAL ") << count_ << " ";
+  addSortingKeys(stream, sortingKeys_, sortingOrders_);
+}
+
+void CudfTopNRowNumberNode::addDetails(std::stringstream& stream) const {
+  stream << core::TopNRowNumberNode::toName(rankFunction_) << " ";
+  if (!partitionKeys_.empty()) {
+    stream << "partition by (";
+    addKeys(stream, partitionKeys_);
+    stream << ") ";
+  }
+  stream << "order by (";
+  addSortingKeys(stream, sortingKeys_, sortingOrders_);
+  stream << ") limit " << limit_;
+  if (generateRowNumber_) {
+    stream << " with row number";
+  }
+}
+
+void CudfMarkDistinctNode::addDetails(std::stringstream& stream) const {
+  stream << "distinct keys: [";
+  addKeys(stream, distinctKeys_);
+  stream << "]";
+}
+
+void CudfGroupIdNode::addDetails(std::stringstream& stream) const {
+  for (size_t i = 0; i < groupingSets_.size(); ++i) {
+    stream << (i > 0 ? ", " : "") << "[" << folly::join(", ", groupingSets_[i])
+           << "]";
+  }
+}
+
+void CudfWindowNode::addDetails(std::stringstream& stream) const {
+  if (inputsSorted_) {
+    stream << "STREAMING ";
+  }
+  if (!partitionKeys_.empty()) {
+    stream << "partition by [";
+    addKeys(stream, partitionKeys_);
+    stream << "] ";
+  }
+  if (!sortingKeys_.empty()) {
+    stream << "order by [";
+    addSortingKeys(stream, sortingKeys_, sortingOrders_);
+    stream << "] ";
+  }
+  const auto numInputColumns = inputType()->size();
+  for (size_t i = 0; i < windowFunctions_.size(); ++i) {
+    stream << (i > 0 ? ", " : "") << outputType_->nameOf(numInputColumns + i)
+           << " := " << windowFunctions_[i].functionCall->toString();
+  }
 }
 
 CudfHashJoinNode::CudfHashJoinNode(

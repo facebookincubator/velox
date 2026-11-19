@@ -146,8 +146,7 @@ bool canRunAggregationOnGpu(
     memory::MemoryPool* pool,
     std::string* reason) {
   if (!canBeEvaluatedByCudf(node, queryCtx, pool)) {
-    return reject(
-        reason, "Aggregation aggregation cannot be evaluated by cuDF");
+    return reject(reason, "Aggregation cannot be evaluated by cuDF");
   }
   return true;
 }

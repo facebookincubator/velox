@@ -494,7 +494,7 @@ class Rewriter {
 
  private:
   RewriteResult rewriteNode(const core::PlanNodePtr& node, Mode requestedMode) {
-    auto result = rewriteImpl(node, requestedMode);
+    auto result = rewriteImpl(node);
     if (result.hasOutput && result.mode != requestedMode) {
       result.node =
           addBoundary(std::move(result.node), result.mode, requestedMode);
@@ -503,14 +503,10 @@ class Rewriter {
     return result;
   }
 
-  RewriteResult rewriteImpl(const core::PlanNodePtr& node, Mode requestedMode) {
-    if (!node) {
-      return {nullptr, requestedMode};
-    }
-
-    if (auto traits =
-            facebook::velox::cudf_velox::detail::customCudfPlanNodeTraits(
-                node, *queryCtx_)) {
+  // Places 'node' bottom-up. Only rewriteNode() looks at what the consumer
+  // of 'node' needs.
+  RewriteResult rewriteImpl(const core::PlanNodePtr& node) {
+    if (auto traits = detail::customCudfPlanNodeTraits(node, *queryCtx_)) {
       VELOX_USER_CHECK_EQ(traits->inputs.size(), node->sources().size());
       VELOX_USER_CHECK(!(traits->output && traits->outputSource));
       std::vector<core::PlanNodePtr> sources;
@@ -518,7 +514,7 @@ class Rewriter {
       for (size_t i = 0; i < traits->inputs.size(); ++i) {
         const auto need = traits->inputs[i];
         auto child = need == InputRepresentation::kEither
-            ? rewriteImpl(node->sources()[i], requestedMode)
+            ? rewriteImpl(node->sources()[i])
             : rewriteNode(
                   node->sources()[i],
                   need == InputRepresentation::kCudf ? Mode::kGpu : Mode::kCpu);
@@ -534,8 +530,7 @@ class Rewriter {
         mode = modes[*traits->outputSource];
       }
       return {
-          facebook::velox::cudf_velox::detail::rebuildCustomCudfPlanNode(
-              node, std::move(sources)),
+          detail::rebuildCustomCudfPlanNode(node, std::move(sources)),
           mode,
           traits->output.has_value() || traits->outputSource.has_value()};
     }
@@ -648,8 +643,7 @@ class Rewriter {
     // FilterProject. Keep the Project on CPU and visit the Filter normally so
     // its contract and rebuilding callback determine the input boundaries.
     // For a host Filter, LocalPlanner can still fuse the pair on CPU.
-    if (facebook::velox::cudf_velox::detail::customCudfPlanNodeTraits(
-            filter, *queryCtx_)) {
+    if (detail::customCudfPlanNodeTraits(filter, *queryCtx_)) {
       // Keeping the Project on the CPU is our choice, not something cuDF
       // cannot do, so it must not fail a query that disables CPU fallback.
       if (!cpuFallbackAllowed()) {

@@ -262,6 +262,26 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_physical_plan_test
+  SOURCES Main.cpp PhysicalPlanTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_window fmt::fmt
+)
+
+velox_add_cudf_test(
+  NAME velox_cudf_plan_rewriter_test
+  SOURCES Main.cpp PlanRewriterTest.cpp
+  LIBS
+    ${CUDF_TEST_DEFAULT_LIBS}
+    velox_cudf_exec_test_lib
+    velox_cudf_hive_connector
+    velox_custom_types_for_testing
+    velox_dwio_parquet_reader
+    velox_dwio_parquet_writer
+    velox_window
+    fmt::fmt
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_presto_page_device_test
   SOURCES Main.cpp PrestoPageDeviceTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_presto_serializer
@@ -332,26 +352,6 @@ velox_add_cudf_test(
   NAME velox_cudf_tocudf_selection_test
   SOURCES Main.cpp ToCudfSelectionTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_vector_fuzzer
-)
-
-velox_add_cudf_test(
-  NAME velox_cudf_plan_rewriter_test
-  SOURCES Main.cpp PlanRewriterTest.cpp
-  LIBS
-    ${CUDF_TEST_DEFAULT_LIBS}
-    velox_cudf_exec_test_lib
-    velox_cudf_hive_connector
-    velox_custom_types_for_testing
-    velox_dwio_parquet_reader
-    velox_dwio_parquet_writer
-    velox_window
-    fmt::fmt
-)
-
-velox_add_cudf_test(
-  NAME velox_cudf_physical_plan_test
-  SOURCES Main.cpp PhysicalPlanTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_window fmt::fmt
 )
 
 velox_add_cudf_test(

@@ -739,19 +739,21 @@ class LocalPartitionAdapter : public OperatorAdapter {
       exec::DriverCtx* /*ctx*/) const override {
     auto localPartitionPlanNode =
         std::dynamic_pointer_cast<const core::LocalPartitionNode>(planNode);
-    bool canRun = canHandle(op) && localPartitionPlanNode &&
-        canRunLocalPartitionOnGpu(localPartitionPlanNode, nullptr) &&
-        !subtreeHasUnsupportedType(localPartitionPlanNode);
-    if (!canRun) {
-      LOG_FALLBACK(
-          "LocalPartitionAdapter {}, PlanNode id: {}",
-          !canHandle(op) ? "operator is not LocalPartition"
-              : !localPartitionPlanNode
-              ? "planNode is not LocalPartitionNode"
-              : "partition spec or source types are unsupported by cuDF",
-          planNode->id());
+    std::string reason;
+    if (!canHandle(op)) {
+      reason = "operator is not LocalPartition";
+    } else if (!localPartitionPlanNode) {
+      reason = "planNode is not LocalPartitionNode";
+    } else if (
+        canRunLocalPartitionOnGpu(localPartitionPlanNode, &reason) &&
+        subtreeHasUnsupportedType(localPartitionPlanNode)) {
+      reason = "source types are unsupported by cuDF";
     }
-    return canRun;
+    if (!reason.empty()) {
+      LOG_FALLBACK(
+          "LocalPartitionAdapter {}, PlanNode id: {}", reason, planNode->id());
+    }
+    return reason.empty();
   }
 
   bool acceptsGpuInput() const override {
@@ -804,18 +806,19 @@ class LocalExchangeAdapter : public OperatorAdapter {
       exec::DriverCtx* /*ctx*/) const override {
     auto localPartitionPlanNode =
         std::dynamic_pointer_cast<const core::LocalPartitionNode>(planNode);
-    bool canRun = localPartitionPlanNode &&
-        canRunLocalPartitionOnGpu(localPartitionPlanNode, nullptr) &&
-        !subtreeHasUnsupportedType(localPartitionPlanNode);
-    if (!canRun) {
-      LOG_FALLBACK(
-          "LocalExchangeAdapter {}, PlanNode id: {}",
-          !localPartitionPlanNode
-              ? "planNode is not LocalPartitionNode"
-              : "partition spec or source types are unsupported by cuDF",
-          planNode->id());
+    std::string reason;
+    if (!localPartitionPlanNode) {
+      reason = "planNode is not LocalPartitionNode";
+    } else if (
+        canRunLocalPartitionOnGpu(localPartitionPlanNode, &reason) &&
+        subtreeHasUnsupportedType(localPartitionPlanNode)) {
+      reason = "source types are unsupported by cuDF";
     }
-    return canRun;
+    if (!reason.empty()) {
+      LOG_FALLBACK(
+          "LocalExchangeAdapter {}, PlanNode id: {}", reason, planNode->id());
+    }
+    return reason.empty();
   }
 
   bool acceptsGpuInput() const override {

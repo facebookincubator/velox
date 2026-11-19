@@ -19,6 +19,8 @@
 
 namespace facebook::velox::cudf_velox {
 
+/// Base class of cuDF plan nodes with one source that take and produce cuDF
+/// vectors.
 class CudfUnaryPlanNode : public CudfPlanNode {
  public:
   CudfPlanNodeTraits cudfTraits() const override {
@@ -115,11 +117,7 @@ class CudfFilterProjectNode : public CudfUnaryPlanNode {
   }
 
  private:
-  void addDetails(std::stringstream& stream) const override {
-    stream << "filter=" << (filterNodeId_ ? filterNodeId_.value() : "none")
-           << ", project="
-           << (projectNodeId_ ? projectNodeId_.value() : "none");
-  }
+  void addDetails(std::stringstream& stream) const override;
 
   const std::optional<core::PlanNodeId> filterNodeId_;
   const std::optional<core::PlanNodeId> projectNodeId_;
@@ -128,6 +126,9 @@ class CudfFilterProjectNode : public CudfUnaryPlanNode {
   const bool lazyDereference_;
 };
 
+/// Aggregates with cuDF. 'intermediateTypes' has the type of the state of
+/// each aggregate, which a partial step produces and a final or intermediate
+/// step reads.
 class CudfAggregationNode : public CudfUnaryPlanNode {
  public:
   CudfAggregationNode(
@@ -181,9 +182,7 @@ class CudfAggregationNode : public CudfUnaryPlanNode {
   }
 
  private:
-  void addDetails(std::stringstream& stream) const override {
-    stream << core::AggregationNode::toName(step_);
-  }
+  void addDetails(std::stringstream& stream) const override;
 
   const core::AggregationNode::Step step_;
   const std::vector<core::FieldAccessTypedExprPtr> groupingKeys_;
@@ -192,6 +191,8 @@ class CudfAggregationNode : public CudfUnaryPlanNode {
   const bool ignoreNullKeys_;
 };
 
+/// Hash join that runs on cuDF. The first source is the probe side and the
+/// second is the build side.
 class CudfHashJoinNode : public CudfPlanNode {
  public:
   /// Throws if cuDF does not implement the join, see
@@ -247,35 +248,35 @@ class CudfHashJoinNode : public CudfPlanNode {
   }
 
   bool isInnerJoin() const {
-    return joinType_ == core::JoinType::kInner;
+    return core::isInnerJoin(joinType_);
   }
 
   bool isLeftJoin() const {
-    return joinType_ == core::JoinType::kLeft;
+    return core::isLeftJoin(joinType_);
   }
 
   bool isRightJoin() const {
-    return joinType_ == core::JoinType::kRight;
+    return core::isRightJoin(joinType_);
   }
 
   bool isFullJoin() const {
-    return joinType_ == core::JoinType::kFull;
+    return core::isFullJoin(joinType_);
   }
 
   bool isLeftSemiFilterJoin() const {
-    return joinType_ == core::JoinType::kLeftSemiFilter;
+    return core::isLeftSemiFilterJoin(joinType_);
   }
 
   bool isLeftSemiProjectJoin() const {
-    return joinType_ == core::JoinType::kLeftSemiProject;
+    return core::isLeftSemiProjectJoin(joinType_);
   }
 
   bool isRightSemiFilterJoin() const {
-    return joinType_ == core::JoinType::kRightSemiFilter;
+    return core::isRightSemiFilterJoin(joinType_);
   }
 
   bool isAntiJoin() const {
-    return joinType_ == core::JoinType::kAnti;
+    return core::isAntiJoin(joinType_);
   }
 
   const std::vector<core::FieldAccessTypedExprPtr>& leftKeys() const {
@@ -291,9 +292,7 @@ class CudfHashJoinNode : public CudfPlanNode {
   }
 
  private:
-  void addDetails(std::stringstream& stream) const override {
-    stream << "joinType=" << core::JoinTypeName::toName(joinType_);
-  }
+  void addDetails(std::stringstream& stream) const override;
 
   const core::JoinType joinType_;
   const bool nullAware_;
@@ -304,6 +303,8 @@ class CudfHashJoinNode : public CudfPlanNode {
   const RowTypePtr outputType_;
 };
 
+/// Nested loop join that runs on cuDF. The first source is the probe side
+/// and the second is the build side.
 class CudfNestedLoopJoinNode : public CudfPlanNode {
  public:
   CudfNestedLoopJoinNode(
@@ -355,9 +356,7 @@ class CudfNestedLoopJoinNode : public CudfPlanNode {
   }
 
  private:
-  void addDetails(std::stringstream& stream) const override {
-    stream << "joinType=" << core::JoinTypeName::toName(joinType_);
-  }
+  void addDetails(std::stringstream& stream) const override;
 
   const core::JoinType joinType_;
   const core::TypedExprPtr joinCondition_;
@@ -365,6 +364,10 @@ class CudfNestedLoopJoinNode : public CudfPlanNode {
   const RowTypePtr outputType_;
 };
 
+/// Sorts with cuDF. A final sort runs in one driver and produces the whole
+/// input in order. A partial sort runs in every driver of its pipeline, and
+/// each driver produces only its own input in order, so the plan needs a
+/// CudfLocalMergeNode downstream to produce one ordered stream.
 class CudfOrderByNode : public CudfUnaryPlanNode {
  public:
   /// Throws if there is no sorting key, a sorting key is null or repeated, or
@@ -403,15 +406,16 @@ class CudfOrderByNode : public CudfUnaryPlanNode {
   }
 
  private:
-  void addDetails(std::stringstream& stream) const override {
-    stream << (isPartial_ ? "PARTIAL" : "FINAL");
-  }
+  void addDetails(std::stringstream& stream) const override;
 
   const std::vector<core::FieldAccessTypedExprPtr> sortingKeys_;
   const std::vector<core::SortOrder> sortingOrders_;
   const bool isPartial_;
 };
 
+/// Keeps the first 'count' rows in sorting order. A final node runs in one
+/// driver. A partial node keeps 'count' rows per driver, so the plan needs a
+/// final CudfTopNNode downstream.
 class CudfTopNNode : public CudfUnaryPlanNode {
  public:
   /// Throws for the sorting keys and orders CudfOrderByNode rejects, and if
@@ -455,9 +459,7 @@ class CudfTopNNode : public CudfUnaryPlanNode {
   }
 
  private:
-  void addDetails(std::stringstream& stream) const override {
-    stream << "count=" << count_;
-  }
+  void addDetails(std::stringstream& stream) const override;
 
   const std::vector<core::FieldAccessTypedExprPtr> sortingKeys_;
   const std::vector<core::SortOrder> sortingOrders_;
@@ -525,10 +527,7 @@ class CudfTopNRowNumberNode : public CudfUnaryPlanNode {
   }
 
  private:
-  void addDetails(std::stringstream& stream) const override {
-    stream << core::TopNRowNumberNode::toName(rankFunction_)
-           << ", limit=" << limit_ << ", rowNumber=" << generateRowNumber_;
-  }
+  void addDetails(std::stringstream& stream) const override;
 
   const core::TopNRowNumberNode::RankFunction rankFunction_;
   const std::vector<core::FieldAccessTypedExprPtr> partitionKeys_;
@@ -576,11 +575,6 @@ class CudfLocalMergeNode : public core::LocalMergeNode {
     return std::make_shared<CudfLocalMergeNode>(
         id(), std::move(sources), type, sortingKeys(), sortingOrders());
   }
-
- private:
-  void addDetails(std::stringstream& stream) const override {
-    stream << "sources=" << sources().size();
-  }
 };
 
 /// Explicit device-vector local exchange. Retaining the core base lets Task
@@ -625,6 +619,8 @@ class CudfLocalPartitionNode : public core::LocalPartitionNode {
       : LocalPartitionNode(node) {}
 };
 
+/// Skips 'offset' rows and keeps the next 'count'. A final limit runs in one
+/// driver. A partial limit applies to each driver by itself.
 class CudfLimitNode : public CudfUnaryPlanNode {
  public:
   CudfLimitNode(
@@ -674,6 +670,8 @@ class CudfLimitNode : public CudfUnaryPlanNode {
   const bool isPartial_;
 };
 
+/// Concatenates small input batches, so that the operator above it gets
+/// fewer, larger batches.
 class CudfBatchConcatNode : public CudfUnaryPlanNode {
  public:
   CudfBatchConcatNode(const core::PlanNodeId& id, core::PlanNodePtr source)
@@ -692,6 +690,8 @@ class CudfBatchConcatNode : public CudfUnaryPlanNode {
   void addDetails(std::stringstream& /* stream */) const override {}
 };
 
+/// Appends a column of IDs that are unique within the query.
+/// 'taskUniqueId' keeps the IDs of different tasks apart.
 class CudfAssignUniqueIdNode : public CudfUnaryPlanNode {
  public:
   CudfAssignUniqueIdNode(
@@ -723,6 +723,8 @@ class CudfAssignUniqueIdNode : public CudfUnaryPlanNode {
   const int32_t taskUniqueId_;
 };
 
+/// Appends one boolean column that is true for the first row of each
+/// distinct value of 'distinctKeys'. Has no masks.
 class CudfMarkDistinctNode : public CudfUnaryPlanNode {
  public:
   CudfMarkDistinctNode(
@@ -747,13 +749,13 @@ class CudfMarkDistinctNode : public CudfUnaryPlanNode {
   }
 
  private:
-  void addDetails(std::stringstream& stream) const override {
-    stream << "distinctKeys=" << distinctKeys_.size();
-  }
+  void addDetails(std::stringstream& stream) const override;
 
   const std::vector<core::FieldAccessTypedExprPtr> distinctKeys_;
 };
 
+/// Fails if its input has more than one row, and produces one row of nulls
+/// if its input is empty.
 class CudfEnforceSingleRowNode : public CudfUnaryPlanNode {
  public:
   CudfEnforceSingleRowNode(
@@ -779,6 +781,8 @@ class CudfEnforceSingleRowNode : public CudfUnaryPlanNode {
   void addDetails(std::stringstream& /* stream */) const override {}
 };
 
+/// Produces one copy of the input for each grouping set, with a group ID
+/// column that tells the copies apart.
 class CudfGroupIdNode : public CudfUnaryPlanNode {
  public:
   CudfGroupIdNode(
@@ -822,9 +826,7 @@ class CudfGroupIdNode : public CudfUnaryPlanNode {
   }
 
  private:
-  void addDetails(std::stringstream& stream) const override {
-    stream << "groupingSets=" << groupingSets_.size();
-  }
+  void addDetails(std::stringstream& stream) const override;
 
   const std::vector<std::vector<std::string>> groupingSets_;
   const std::vector<core::GroupIdNode::GroupingKeyInfo> groupingKeyInfos_;
@@ -832,6 +834,8 @@ class CudfGroupIdNode : public CudfUnaryPlanNode {
   const int32_t numGroupingKeys_;
 };
 
+/// Evaluates window functions with cuDF. 'inputsSorted' says that the input
+/// is already sorted on the partition keys and then the sorting keys.
 class CudfWindowNode : public CudfUnaryPlanNode {
  public:
   CudfWindowNode(
@@ -884,9 +888,7 @@ class CudfWindowNode : public CudfUnaryPlanNode {
   }
 
  private:
-  void addDetails(std::stringstream& stream) const override {
-    stream << "functions=" << windowFunctions_.size();
-  }
+  void addDetails(std::stringstream& stream) const override;
 
   const std::vector<core::FieldAccessTypedExprPtr> partitionKeys_;
   const std::vector<core::FieldAccessTypedExprPtr> sortingKeys_;
@@ -895,6 +897,8 @@ class CudfWindowNode : public CudfUnaryPlanNode {
   const bool inputsSorted_;
 };
 
+/// Converts Velox vectors to cuDF vectors. Marks where a plan moves from the
+/// CPU to the GPU.
 class CudfFromVeloxNode : public CudfPlanNode {
  public:
   CudfFromVeloxNode(const core::PlanNodeId& id, core::PlanNodePtr source)
@@ -928,6 +932,8 @@ class CudfFromVeloxNode : public CudfPlanNode {
   std::vector<core::PlanNodePtr> sources_;
 };
 
+/// Converts cuDF vectors to Velox vectors. Marks where a plan moves from the
+/// GPU to the CPU.
 class CudfToVeloxNode : public CudfPlanNode {
  public:
   CudfToVeloxNode(const core::PlanNodeId& id, core::PlanNodePtr source)

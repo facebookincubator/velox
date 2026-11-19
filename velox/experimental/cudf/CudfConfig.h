@@ -168,8 +168,11 @@ struct CudfConfig {
 
   /// Maximum number of drivers for a pipeline that contains cuDF plan nodes.
   /// Pipelines without them keep the task's driver count. Unset means no
-  /// separate limit. Only applies to plans of cuDF plan nodes, because the
-  /// driver adapter runs after driver counts are fixed.
+  /// separate limit. The drivers of a GPU pipeline share one GPU and its
+  /// memory, so they usually need fewer drivers than the CPU pipelines of the
+  /// same task, which scale with the number of cores. Only applies to plans of
+  /// cuDF plan nodes, because the driver adapter runs after driver counts are
+  /// fixed.
   std::optional<int32_t> maxDrivers;
 
   /// Whether to insert CudfBatchConcat operators before supported Cudf

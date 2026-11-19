@@ -84,7 +84,7 @@ class CudfFilterProject : public CudfOperatorBase {
   // If true exprs_[0] is a filter and the other expressions are projections
   const bool hasFilter_{false};
 
-  // Cached physical plan metadata for lazy initialization.
+  // Plan metadata for lazy initialization. Reset at the end of initialize().
   std::shared_ptr<const CudfFilterProjectNode> planNode_;
 
   std::vector<CudfExpressionPtr> projectEvaluators_;
