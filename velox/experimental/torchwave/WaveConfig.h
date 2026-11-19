@@ -189,6 +189,34 @@ struct WaveConfig {
   // DeviceSymbols. Needs the export's symbolic shapes.
   bool deviceSymbols{true};
 
+  // Checks, at every grid, that the GridDescriptor gives each launch the
+  // element count the host sized it for.
+  bool checkGridDescriptor{false};
+
+  // Gives each launch of a step blocks in proportion to its estimated work,
+  // input elements times cost per element times the measured cost
+  // adjustment, so that all launches complete at the same time. See
+  // assignBlocksEqualFinish.
+  bool gridEqualFinish{false};
+
+  // Computes each step's grid on the device from the element counts the
+  // device holds, with the gridEqualFinish rule, and updates the cost
+  // multipliers there from the previous execution's clocks. See DeviceGrid.
+  bool deviceGrid{false};
+
+  // Copies a device-grid step's parameters and runs its setup kernel on a
+  // second stream, so that the setup overlaps the steps before it. A step
+  // whose setup reads symbols the device holds waits for the step before it.
+  bool setupStream{false};
+
+  // Checks that the export's symbolic shapes give the dims the host sizes
+  // every tensor parameter with. See DeviceSymbols::checkSizeExprs.
+  bool checkSizeExprs{false};
+
+  // With checkSizeExprs: derive every shape from graph-input dims taken as
+  // symbols, in place of the export's expressions.
+  bool sizeExprsFromInputs{false};
+
   // Ablation knobs.  Each switches one optimization off so its contribution
   // can be measured by comparing runtimes; none is meant for production use.
 

@@ -39,21 +39,6 @@ class MixedUnionWithTableScanTest : public HiveConnectorTestBase {
     HiveConnectorTestBase::TearDown();
   }
 
-  /// Helper to create a MixedUnionNode from multiple plan node sources.
-  std::shared_ptr<core::MixedUnionNode> makeMixedUnionNode(
-      std::vector<core::PlanNodePtr> sources,
-      std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator) {
-    return std::make_shared<core::MixedUnionNode>(
-        planNodeIdGenerator->next(), std::move(sources));
-  }
-
-  /// Helper to create a table scan plan node.
-  core::PlanNodePtr makeTableScanNode(
-      const RowTypePtr& rowType,
-      std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator) {
-    return PlanBuilder(planNodeIdGenerator).tableScan(rowType).planNode();
-  }
-
   RowTypePtr testSchema_{ROW({"c0", "c1"}, {BIGINT(), VARCHAR()})};
 };
 
@@ -74,22 +59,23 @@ TEST_F(MixedUnionWithTableScanTest, basicUnionOfTableScans) {
   auto filePath2 = writeToFile(data2);
 
   // Build plan with MixedUnion of two table scans.
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto rowType = asRowType(data1->type());
+  PlanBuilder builder;
+  auto rowType = data1->rowType();
 
   core::PlanNodeId tableScan1Id;
-  auto source1 = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(tableScan1Id)
-                     .planNode();
-
   core::PlanNodeId tableScan2Id;
-  auto source2 = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(tableScan2Id)
-                     .planNode();
 
-  auto unionNode = makeMixedUnionNode({source1, source2}, planNodeIdGenerator);
+  auto unionNode = builder
+                       .mixedUnion(
+                           {builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(tableScan1Id)
+                                .planNode(),
+                            builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(tableScan2Id)
+                                .planNode()})
+                       .planNode();
 
   // Execute query with splits.
   auto result =
@@ -118,16 +104,17 @@ TEST_F(MixedUnionWithTableScanTest, singleTableScanUnion) {
 
   auto filePath = writeToFile(data);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto rowType = asRowType(data->type());
+  PlanBuilder builder;
+  auto rowType = data->rowType();
 
   core::PlanNodeId tableScanId;
-  auto source = PlanBuilder(planNodeIdGenerator)
-                    .tableScan(rowType)
-                    .capturePlanNodeId(tableScanId)
-                    .planNode();
 
-  auto unionNode = makeMixedUnionNode({source}, planNodeIdGenerator);
+  auto unionNode = builder
+                       .mixedUnion({builder.newPlan()
+                                        .tableScan(rowType)
+                                        .capturePlanNodeId(tableScanId)
+                                        .planNode()})
+                       .planNode();
 
   auto result =
       AssertQueryBuilder(unionNode)
@@ -144,7 +131,7 @@ TEST_F(MixedUnionWithTableScanTest, singleTableScanUnion) {
 TEST_F(MixedUnionWithTableScanTest, multipleTableScanUnion) {
   constexpr int kNumSources = 5;
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   std::vector<std::shared_ptr<TempFilePath>> filePaths;
   std::vector<core::PlanNodePtr> sources;
   std::vector<core::PlanNodeId> tableScanIds;
@@ -156,11 +143,10 @@ TEST_F(MixedUnionWithTableScanTest, multipleTableScanUnion) {
         makeFlatVector<int64_t>({i * 10, i * 10 + 1}),
     });
 
-    auto filePath = writeToFile(data);
-    filePaths.push_back(filePath);
+    filePaths.push_back(writeToFile(data));
 
     core::PlanNodeId tableScanId;
-    auto source = PlanBuilder(planNodeIdGenerator)
+    auto source = builder.newPlan()
                       .tableScan(rowType)
                       .capturePlanNodeId(tableScanId)
                       .planNode();
@@ -168,7 +154,7 @@ TEST_F(MixedUnionWithTableScanTest, multipleTableScanUnion) {
     tableScanIds.push_back(tableScanId);
   }
 
-  auto unionNode = makeMixedUnionNode(std::move(sources), planNodeIdGenerator);
+  auto unionNode = builder.mixedUnion(std::move(sources)).planNode();
 
   auto queryBuilder = AssertQueryBuilder(unionNode);
   for (int i = 0; i < kNumSources; ++i) {
@@ -201,22 +187,23 @@ TEST_F(MixedUnionWithTableScanTest, emptyTableScanSource) {
   auto filePath1 = writeToFile(data);
   auto filePath2 = writeToFile(emptyData);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto rowType = asRowType(data->type());
+  PlanBuilder builder;
+  auto rowType = data->rowType();
 
   core::PlanNodeId tableScan1Id;
-  auto source1 = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(tableScan1Id)
-                     .planNode();
-
   core::PlanNodeId tableScan2Id;
-  auto source2 = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(tableScan2Id)
-                     .planNode();
 
-  auto unionNode = makeMixedUnionNode({source1, source2}, planNodeIdGenerator);
+  auto unionNode = builder
+                       .mixedUnion(
+                           {builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(tableScan1Id)
+                                .planNode(),
+                            builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(tableScan2Id)
+                                .planNode()})
+                       .planNode();
 
   auto result =
       AssertQueryBuilder(unionNode)
@@ -245,25 +232,25 @@ TEST_F(MixedUnionWithTableScanTest, unionWithFilteredTableScans) {
   auto filePath1 = writeToFile(data1);
   auto filePath2 = writeToFile(data2);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto rowType = asRowType(data1->type());
+  PlanBuilder builder;
+  auto rowType = data1->rowType();
 
-  // Build table scans with filters.
+  // Union of table scans with filters.
   core::PlanNodeId tableScan1Id;
-  auto source1 = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(tableScan1Id)
-                     .filter("c0 > 2")
-                     .planNode();
-
   core::PlanNodeId tableScan2Id;
-  auto source2 = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(tableScan2Id)
-                     .filter("c0 < 9")
-                     .planNode();
-
-  auto unionNode = makeMixedUnionNode({source1, source2}, planNodeIdGenerator);
+  auto unionNode = builder
+                       .mixedUnion(
+                           {builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(tableScan1Id)
+                                .filter("c0 > 2")
+                                .planNode(),
+                            builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(tableScan2Id)
+                                .filter("c0 < 9")
+                                .planNode()})
+                       .planNode();
 
   auto result =
       AssertQueryBuilder(unionNode)
@@ -296,25 +283,26 @@ TEST_F(MixedUnionWithTableScanTest, unionWithProjectedTableScans) {
   auto filePath1 = writeToFile(data1);
   auto filePath2 = writeToFile(data2);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto rowType = asRowType(data1->type());
+  PlanBuilder builder;
+  auto rowType = data1->rowType();
 
   // Build table scans with projections (sum of columns).
   core::PlanNodeId tableScan1Id;
-  auto source1 = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(tableScan1Id)
-                     .project({"c0 + c1 as sum"})
-                     .planNode();
-
   core::PlanNodeId tableScan2Id;
-  auto source2 = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(tableScan2Id)
-                     .project({"c0 + c1 as sum"})
-                     .planNode();
 
-  auto unionNode = makeMixedUnionNode({source1, source2}, planNodeIdGenerator);
+  auto unionNode = builder
+                       .mixedUnion(
+                           {builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(tableScan1Id)
+                                .project({"c0 + c1 as sum"})
+                                .planNode(),
+                            builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(tableScan2Id)
+                                .project({"c0 + c1 as sum"})
+                                .planNode()})
+                       .planNode();
 
   auto result =
       AssertQueryBuilder(unionNode)
@@ -345,38 +333,32 @@ TEST_F(MixedUnionWithTableScanTest, unionWithAggregation) {
   auto filePath1 = writeToFile(data1);
   auto filePath2 = writeToFile(data2);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto rowType = asRowType(data1->type());
+  PlanBuilder builder;
+  auto rowType = data1->rowType();
 
   core::PlanNodeId tableScan1Id;
-  auto source1 = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(tableScan1Id)
-                     .planNode();
+  auto source1 =
+      builder.tableScan(rowType).capturePlanNodeId(tableScan1Id).planNode();
 
   core::PlanNodeId tableScan2Id;
-  auto source2 = PlanBuilder(planNodeIdGenerator)
+  auto source2 = builder.newPlan()
                      .tableScan(rowType)
                      .capturePlanNodeId(tableScan2Id)
                      .planNode();
 
-  auto unionNode = makeMixedUnionNode({source1, source2}, planNodeIdGenerator);
-
-  // Add aggregation after union.
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .addNode([&](auto, auto) { return unionNode; })
+  auto plan = builder.newPlan()
+                  .mixedUnion({source1, source2})
                   .singleAggregation({"c0"}, {"sum(c1)"})
                   .planNode();
 
-  auto result =
+  // Group 1: 10 + 20 + 40 = 70.
+  // Group 2: 30 + 50 + 60 = 140.
+  ASSERT_EQ(
       AssertQueryBuilder(plan)
           .split(tableScan1Id, makeHiveConnectorSplit(filePath1->getPath()))
           .split(tableScan2Id, makeHiveConnectorSplit(filePath2->getPath()))
-          .copyResults(pool());
-
-  // Group 1: 10 + 20 + 40 = 70.
-  // Group 2: 30 + 50 + 60 = 140.
-  ASSERT_EQ(result->size(), 2);
+          .countResults(),
+      2);
 }
 
 /// Test union with multiple splits per table scan.
@@ -399,22 +381,23 @@ TEST_F(MixedUnionWithTableScanTest, unionWithMultipleSplitsPerSource) {
   auto filePath2a = writeToFile(data2a);
   auto filePath2b = writeToFile(data2b);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto rowType = asRowType(data1a->type());
+  PlanBuilder builder;
+  auto rowType = data1a->rowType();
 
   core::PlanNodeId tableScan1Id;
-  auto source1 = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(tableScan1Id)
-                     .planNode();
-
   core::PlanNodeId tableScan2Id;
-  auto source2 = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(tableScan2Id)
-                     .planNode();
 
-  auto unionNode = makeMixedUnionNode({source1, source2}, planNodeIdGenerator);
+  auto unionNode = builder
+                       .mixedUnion(
+                           {builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(tableScan1Id)
+                                .planNode(),
+                            builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(tableScan2Id)
+                                .planNode()})
+                       .planNode();
 
   // Add multiple splits per table scan.
   auto result =
@@ -449,22 +432,23 @@ TEST_F(MixedUnionWithTableScanTest, unionWithNullValues) {
   auto filePath1 = writeToFile(data1);
   auto filePath2 = writeToFile(data2);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto rowType = asRowType(data1->type());
+  PlanBuilder builder;
+  auto rowType = data1->rowType();
 
   core::PlanNodeId tableScan1Id;
-  auto source1 = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(tableScan1Id)
-                     .planNode();
-
   core::PlanNodeId tableScan2Id;
-  auto source2 = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(tableScan2Id)
-                     .planNode();
 
-  auto unionNode = makeMixedUnionNode({source1, source2}, planNodeIdGenerator);
+  auto unionNode = builder
+                       .mixedUnion(
+                           {builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(tableScan1Id)
+                                .planNode(),
+                            builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(tableScan2Id)
+                                .planNode()})
+                       .planNode();
 
   auto result =
       AssertQueryBuilder(unionNode)
@@ -501,22 +485,23 @@ TEST_F(MixedUnionWithTableScanTest, unionWithVariousTypes) {
   auto filePath1 = writeToFile(data1);
   auto filePath2 = writeToFile(data2);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto rowType = asRowType(data1->type());
+  PlanBuilder builder;
+  auto rowType = data1->rowType();
 
   core::PlanNodeId tableScan1Id;
-  auto source1 = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(tableScan1Id)
-                     .planNode();
-
   core::PlanNodeId tableScan2Id;
-  auto source2 = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(tableScan2Id)
-                     .planNode();
 
-  auto unionNode = makeMixedUnionNode({source1, source2}, planNodeIdGenerator);
+  auto unionNode = builder
+                       .mixedUnion(
+                           {builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(tableScan1Id)
+                                .planNode(),
+                            builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(tableScan2Id)
+                                .planNode()})
+                       .planNode();
 
   auto result =
       AssertQueryBuilder(unionNode)
@@ -552,29 +537,28 @@ TEST_F(MixedUnionWithTableScanTest, unionWithUnequalSourceSizes) {
   auto filePath2 = writeToFile(data2);
   auto filePath3 = writeToFile(data3);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto rowType = asRowType(data1->type());
+  PlanBuilder builder;
+  auto rowType = data1->rowType();
 
   core::PlanNodeId tableScan1Id;
-  auto source1 = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(tableScan1Id)
-                     .planNode();
-
   core::PlanNodeId tableScan2Id;
-  auto source2 = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(tableScan2Id)
-                     .planNode();
-
   core::PlanNodeId tableScan3Id;
-  auto source3 = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(tableScan3Id)
-                     .planNode();
 
-  auto unionNode =
-      makeMixedUnionNode({source1, source2, source3}, planNodeIdGenerator);
+  auto unionNode = builder
+                       .mixedUnion(
+                           {builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(tableScan1Id)
+                                .planNode(),
+                            builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(tableScan2Id)
+                                .planNode(),
+                            builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(tableScan3Id)
+                                .planNode()})
+                       .planNode();
 
   auto result =
       AssertQueryBuilder(unionNode)
@@ -597,7 +581,7 @@ TEST_F(MixedUnionWithTableScanTest, unionWithLargeDataVolume) {
   constexpr int kRowsPerSource = 1000;
   constexpr int kNumSources = 3;
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   std::vector<std::shared_ptr<TempFilePath>> filePaths;
   std::vector<core::PlanNodePtr> sources;
   std::vector<core::PlanNodeId> tableScanIds;
@@ -612,11 +596,10 @@ TEST_F(MixedUnionWithTableScanTest, unionWithLargeDataVolume) {
             kRowsPerSource, [](auto row) { return row * 0.1; }),
     });
 
-    auto filePath = writeToFile(data);
-    filePaths.push_back(filePath);
+    filePaths.push_back(writeToFile(data));
 
     core::PlanNodeId tableScanId;
-    auto source = PlanBuilder(planNodeIdGenerator)
+    auto source = builder.newPlan()
                       .tableScan(rowType)
                       .capturePlanNodeId(tableScanId)
                       .planNode();
@@ -624,7 +607,7 @@ TEST_F(MixedUnionWithTableScanTest, unionWithLargeDataVolume) {
     tableScanIds.push_back(tableScanId);
   }
 
-  auto unionNode = makeMixedUnionNode(std::move(sources), planNodeIdGenerator);
+  auto unionNode = builder.mixedUnion(std::move(sources)).planNode();
 
   auto queryBuilder = AssertQueryBuilder(unionNode);
   for (int i = 0; i < kNumSources; ++i) {
@@ -680,22 +663,23 @@ TEST_F(MixedUnionWithTableScanTest, batchSizeHintControlsReadRate) {
   auto filePathA = writeToFile(dataA);
   auto filePathB = writeToFile(dataB);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto rowType = ROW({"c0"}, {BIGINT()});
 
   core::PlanNodeId scanAId;
-  auto sourceA = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(scanAId)
-                     .planNode();
-
   core::PlanNodeId scanBId;
-  auto sourceB = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(scanBId)
-                     .planNode();
 
-  auto unionNode = makeMixedUnionNode({sourceA, sourceB}, planNodeIdGenerator);
+  auto unionNode = builder
+                       .mixedUnion(
+                           {builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(scanAId)
+                                .planNode(),
+                            builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(scanBId)
+                                .planNode()})
+                       .planNode();
 
   // Build splits with batchSizeHint set.
   auto splitA = HiveConnectorSplitBuilder(filePathA->getPath())
@@ -705,24 +689,12 @@ TEST_F(MixedUnionWithTableScanTest, batchSizeHintControlsReadRate) {
                     .batchSizeHint(kBatchHintB)
                     .build();
 
-  // Use readCursor to collect individual output batches so we can inspect
-  // per-batch composition.
-  CursorParameters params;
-  params.planNode = unionNode;
-  params.maxDrivers = 1;
-  params.serialExecution = true;
-
-  auto [cursor, results] = readCursor(params, [&](TaskCursor* taskCursor) {
-    if (taskCursor->noMoreSplits()) {
-      return;
-    }
-    auto task = taskCursor->task();
-    task->addSplit(scanAId, Split(splitA));
-    task->addSplit(scanBId, Split(splitB));
-    task->noMoreSplits(scanAId);
-    task->noMoreSplits(scanBId);
-    taskCursor->setNoMoreSplits();
-  });
+  // Keep the output batches to inspect each batch's composition.
+  auto results = AssertQueryBuilder(unionNode)
+                     .serialExecution(true)
+                     .split(scanAId, splitA)
+                     .split(scanBId, splitB)
+                     .copyResultBatches(pool());
 
   // Verify all rows are present.
   std::set<int64_t> allValues;
@@ -803,16 +775,17 @@ TEST_F(MixedUnionWithTableScanTest, zeroBatchSizeHintUsesDefault) {
 
   auto filePath = writeToFile(data);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto rowType = ROW({"c0"}, {BIGINT()});
 
   core::PlanNodeId scanId;
-  auto source = PlanBuilder(planNodeIdGenerator)
-                    .tableScan(rowType)
-                    .capturePlanNodeId(scanId)
-                    .planNode();
 
-  auto unionNode = makeMixedUnionNode({source}, planNodeIdGenerator);
+  auto unionNode = builder
+                       .mixedUnion({builder.newPlan()
+                                        .tableScan(rowType)
+                                        .capturePlanNodeId(scanId)
+                                        .planNode()})
+                       .planNode();
 
   // Split with batchSizeHint=0 (default).
   auto split = HiveConnectorSplitBuilder(filePath->getPath()).build();
@@ -842,35 +815,26 @@ TEST_F(MixedUnionWithTableScanTest, batchSizeHintDirectlyControlsBatchSize) {
 
   auto filePath = writeToFile(data);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto rowType = ROW({"c0"}, {BIGINT()});
 
   core::PlanNodeId scanId;
-  auto source = PlanBuilder(planNodeIdGenerator)
-                    .tableScan(rowType)
-                    .capturePlanNodeId(scanId)
-                    .planNode();
 
-  auto unionNode = makeMixedUnionNode({source}, planNodeIdGenerator);
+  auto unionNode = builder
+                       .mixedUnion({builder.newPlan()
+                                        .tableScan(rowType)
+                                        .capturePlanNodeId(scanId)
+                                        .planNode()})
+                       .planNode();
 
   auto split = HiveConnectorSplitBuilder(filePath->getPath())
                    .batchSizeHint(kBatchHint)
                    .build();
 
-  CursorParameters params;
-  params.planNode = unionNode;
-  params.maxDrivers = 1;
-  params.serialExecution = true;
-
-  auto [cursor, results] = readCursor(params, [&](TaskCursor* taskCursor) {
-    if (taskCursor->noMoreSplits()) {
-      return;
-    }
-    auto task = taskCursor->task();
-    task->addSplit(scanId, Split(split));
-    task->noMoreSplits(scanId);
-    taskCursor->setNoMoreSplits();
-  });
+  auto results = AssertQueryBuilder(unionNode)
+                     .serialExecution(true)
+                     .split(scanId, split)
+                     .copyResultBatches(pool());
 
   int totalRows = 0;
   for (const auto& batch : results) {
@@ -904,37 +868,29 @@ TEST_F(
 
   auto filePath = writeToFile(data);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto rowType = ROW({"c0"}, {BIGINT()});
 
   core::PlanNodeId scanId;
-  auto source = PlanBuilder(planNodeIdGenerator)
-                    .tableScan(rowType)
-                    .capturePlanNodeId(scanId)
-                    .planNode();
 
-  auto unionNode = makeMixedUnionNode({source}, planNodeIdGenerator);
+  auto unionNode = builder
+                       .mixedUnion({builder.newPlan()
+                                        .tableScan(rowType)
+                                        .capturePlanNodeId(scanId)
+                                        .planNode()})
+                       .planNode();
 
   auto split = HiveConnectorSplitBuilder(filePath->getPath())
                    .batchSizeHint(kBatchHint)
                    .build();
 
-  CursorParameters params;
-  params.planNode = unionNode;
-  params.maxDrivers = 1;
-  params.serialExecution = true;
-  params.queryConfigs[core::QueryConfig::kTableScanOutputBatchRowsOverride] =
-      folly::to<std::string>(kOverride);
-
-  auto [cursor, results] = readCursor(params, [&](TaskCursor* taskCursor) {
-    if (taskCursor->noMoreSplits()) {
-      return;
-    }
-    auto task = taskCursor->task();
-    task->addSplit(scanId, Split(split));
-    task->noMoreSplits(scanId);
-    taskCursor->setNoMoreSplits();
-  });
+  auto results = AssertQueryBuilder(unionNode)
+                     .serialExecution(true)
+                     .config(
+                         core::QueryConfig::kTableScanOutputBatchRowsOverride,
+                         folly::to<std::string>(kOverride))
+                     .split(scanId, split)
+                     .copyResultBatches(pool());
 
   int totalRows = 0;
   for (const auto& batch : results) {
@@ -977,27 +933,28 @@ TEST_F(MixedUnionWithTableScanTest, threeSourceProportionalBatchSizeHints) {
   auto filePathB = writeToFile(dataB);
   auto filePathC = writeToFile(dataC);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto rowType = ROW({"c0"}, {BIGINT()});
 
   core::PlanNodeId scanAId;
-  auto sourceA = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(scanAId)
-                     .planNode();
   core::PlanNodeId scanBId;
-  auto sourceB = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(scanBId)
-                     .planNode();
   core::PlanNodeId scanCId;
-  auto sourceC = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(scanCId)
-                     .planNode();
 
-  auto unionNode =
-      makeMixedUnionNode({sourceA, sourceB, sourceC}, planNodeIdGenerator);
+  auto unionNode = builder
+                       .mixedUnion(
+                           {builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(scanAId)
+                                .planNode(),
+                            builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(scanBId)
+                                .planNode(),
+                            builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(scanCId)
+                                .planNode()})
+                       .planNode();
 
   auto splitA = HiveConnectorSplitBuilder(filePathA->getPath())
                     .batchSizeHint(kHintA)
@@ -1009,24 +966,12 @@ TEST_F(MixedUnionWithTableScanTest, threeSourceProportionalBatchSizeHints) {
                     .batchSizeHint(kHintC)
                     .build();
 
-  CursorParameters params;
-  params.planNode = unionNode;
-  params.maxDrivers = 1;
-  params.serialExecution = true;
-
-  auto [cursor, results] = readCursor(params, [&](TaskCursor* taskCursor) {
-    if (taskCursor->noMoreSplits()) {
-      return;
-    }
-    auto task = taskCursor->task();
-    task->addSplit(scanAId, Split(splitA));
-    task->addSplit(scanBId, Split(splitB));
-    task->addSplit(scanCId, Split(splitC));
-    task->noMoreSplits(scanAId);
-    task->noMoreSplits(scanBId);
-    task->noMoreSplits(scanCId);
-    taskCursor->setNoMoreSplits();
-  });
+  auto results = AssertQueryBuilder(unionNode)
+                     .serialExecution(true)
+                     .split(scanAId, splitA)
+                     .split(scanBId, splitB)
+                     .split(scanCId, splitC)
+                     .copyResultBatches(pool());
 
   // Verify all rows present.
   int totalA = 0, totalB = 0, totalC = 0;
@@ -1114,35 +1059,26 @@ TEST_F(MixedUnionWithTableScanTest, batchSizeHintWithSmallValue) {
 
   auto filePath = writeToFile(data);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto rowType = ROW({"c0"}, {BIGINT()});
 
   core::PlanNodeId scanId;
-  auto source = PlanBuilder(planNodeIdGenerator)
-                    .tableScan(rowType)
-                    .capturePlanNodeId(scanId)
-                    .planNode();
 
-  auto unionNode = makeMixedUnionNode({source}, planNodeIdGenerator);
+  auto unionNode = builder
+                       .mixedUnion({builder.newPlan()
+                                        .tableScan(rowType)
+                                        .capturePlanNodeId(scanId)
+                                        .planNode()})
+                       .planNode();
 
   auto split = HiveConnectorSplitBuilder(filePath->getPath())
                    .batchSizeHint(kBatchHint)
                    .build();
 
-  CursorParameters params;
-  params.planNode = unionNode;
-  params.maxDrivers = 1;
-  params.serialExecution = true;
-
-  auto [cursor, results] = readCursor(params, [&](TaskCursor* taskCursor) {
-    if (taskCursor->noMoreSplits()) {
-      return;
-    }
-    auto task = taskCursor->task();
-    task->addSplit(scanId, Split(split));
-    task->noMoreSplits(scanId);
-    taskCursor->setNoMoreSplits();
-  });
+  auto results = AssertQueryBuilder(unionNode)
+                     .serialExecution(true)
+                     .split(scanId, split)
+                     .copyResultBatches(pool());
 
   int totalRows = 0;
   for (const auto& batch : results) {
@@ -1192,21 +1128,23 @@ TEST_F(MixedUnionWithTableScanTest, perBatchMixRatioMatchesHints) {
   auto filePathA = writeToFile(dataA);
   auto filePathB = writeToFile(dataB);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto rowType = ROW({"c0"}, {BIGINT()});
 
   core::PlanNodeId scanAId;
-  auto sourceA = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(scanAId)
-                     .planNode();
   core::PlanNodeId scanBId;
-  auto sourceB = PlanBuilder(planNodeIdGenerator)
-                     .tableScan(rowType)
-                     .capturePlanNodeId(scanBId)
-                     .planNode();
 
-  auto unionNode = makeMixedUnionNode({sourceA, sourceB}, planNodeIdGenerator);
+  auto unionNode = builder
+                       .mixedUnion(
+                           {builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(scanAId)
+                                .planNode(),
+                            builder.newPlan()
+                                .tableScan(rowType)
+                                .capturePlanNodeId(scanBId)
+                                .planNode()})
+                       .planNode();
 
   auto splitA = HiveConnectorSplitBuilder(filePathA->getPath())
                     .batchSizeHint(kHintA)
@@ -1215,22 +1153,11 @@ TEST_F(MixedUnionWithTableScanTest, perBatchMixRatioMatchesHints) {
                     .batchSizeHint(kHintB)
                     .build();
 
-  CursorParameters params;
-  params.planNode = unionNode;
-  params.maxDrivers = 1;
-  params.serialExecution = true;
-
-  auto [cursor, results] = readCursor(params, [&](TaskCursor* taskCursor) {
-    if (taskCursor->noMoreSplits()) {
-      return;
-    }
-    auto task = taskCursor->task();
-    task->addSplit(scanAId, Split(splitA));
-    task->addSplit(scanBId, Split(splitB));
-    task->noMoreSplits(scanAId);
-    task->noMoreSplits(scanBId);
-    taskCursor->setNoMoreSplits();
-  });
+  auto results = AssertQueryBuilder(unionNode)
+                     .serialExecution(true)
+                     .split(scanAId, splitA)
+                     .split(scanBId, splitB)
+                     .copyResultBatches(pool());
 
   // Both sources exhaust in 5 cycles, so we expect exactly 5 mixed batches.
   constexpr int kExpectedCycles = kRowsA / kHintA;
