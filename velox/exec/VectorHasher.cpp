@@ -505,8 +505,33 @@ void VectorHasher::lookupIdsRangeSimd(
   auto data = decoded.data<T>();
   uint64_t offset = min_ - 1;
   auto bits = rows.asMutableRange().bits();
-  bits::forBatches<xsimd::batch<T>::size>(
-      bits, rows.begin(), rows.end(), [&](auto index, auto /*mask*/) {
+  constexpr int32_t kWidth = xsimd::batch<T>::size;
+  // Full batches stay within 'data', which may have no padding.
+  const vector_size_t simdEnd = std::min<vector_size_t>(
+      rows.end(), decoded.base()->size() / kWidth * kWidth);
+  // Looks up the rows past the last full batch one at a time. Runs before the
+  // SIMD loop: values kept live across the loop for this lookup made the loop
+  // spill registers. Like the SIMD batch that would hold them, it writes
+  // 'result' for every row of that batch up to the last selected one, and
+  // deselects the out-of-range rows: a hash table probe of normalized keys
+  // reads every slot up to the last row. Only rows selected on entry add to
+  // their slot: an earlier key may not have written the slots of the others.
+  for (vector_size_t row = std::max(rows.begin() / kWidth * kWidth, simdEnd);
+       row < rows.end();
+       ++row) {
+    const T value = data[row];
+    const uint64_t id = static_cast<uint64_t>(value) - offset;
+    if (!bits::isBitSet(bits, row)) {
+      result[row] = id;
+      continue;
+    }
+    result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
+    if (value < min_ || value > max_) {
+      bits::clearBit(bits, row);
+    }
+  }
+  bits::forBatches<kWidth>(
+      bits, rows.begin(), simdEnd, [&](auto index, auto /*mask*/) {
         auto values = xsimd::batch<T>::load_unaligned(data + index);
         uint64_t outOfRange =
             simd::toBitMask(lower > values) | simd::toBitMask(values > upper);

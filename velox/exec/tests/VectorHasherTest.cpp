@@ -19,6 +19,7 @@
 #include <array>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/PageBeforeGuard.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -1327,6 +1328,122 @@ TEST_F(VectorHasherTest, simdRange) {
               ((intValues->valueAt(i) + 1) * multiplier1) +
               ((int64Values->valueAt(i) + 1) * multiplier2),
           result[i]);
+    }
+  }
+}
+
+TEST_F(VectorHasherTest, simdRangeAtEndOfMapping) {
+  // Values that wrap external memory may end right before an unmapped page.
+  // The range lookup must not load a full SIMD batch past the last row.
+  struct NoopReleaser {
+    void addRef() const {}
+    void release() const {}
+  };
+  // On AVX2, 13 INTEGER rows are a full batch of rows 0 to 7 and a last batch
+  // of rows 8 to 12, and 13 BIGINT rows end with a last batch of row 12. Row 3
+  // holds 100, which is out of range, in a full batch, and row 11 holds 4, just
+  // above the maximum, before the last row. Row 12, in the last batch for both
+  // types, holds 'lastValue'.
+  constexpr vector_size_t kNumRows = 13;
+  // The sample makes the range [kMin, kMax].
+  constexpr int32_t kMin = -4;
+  constexpr int32_t kMax = 3;
+  auto test = [&]<typename T>(
+                  const TypePtr& type, uint64_t multiplier, T lastValue) {
+    SCOPED_TRACE(
+        fmt::format(
+            "{} multiplier {} last value {}",
+            type->toString(),
+            multiplier,
+            lastValue));
+    common::testutil::PageBeforeGuard page;
+    auto* rawValues = reinterpret_cast<T*>(page.end()) - kNumRows;
+    for (auto i = 0; i < kNumRows; ++i) {
+      rawValues[i] = i == 3 ? 100 : i % 8 + kMin;
+    }
+    rawValues[11] = kMax + 1;
+    rawValues[kNumRows - 1] = lastValue;
+    auto isInRange = [&](vector_size_t row) {
+      return rawValues[row] >= kMin && rawValues[row] <= kMax;
+    };
+    auto values = std::make_shared<FlatVector<T>>(
+        pool(),
+        type,
+        nullptr,
+        kNumRows,
+        BufferView<NoopReleaser>::create(
+            reinterpret_cast<uint8_t*>(rawValues),
+            kNumRows * sizeof(T),
+            NoopReleaser{}),
+        std::vector<BufferPtr>{});
+
+    auto hasher = exec::VectorHasher::create(type, 0);
+    auto sample = makeFlatVector<T>({-4, -3, -2, -1, 0, 1, 2, 3});
+    SelectivityVector sampleRows(sample->size());
+    raw_vector<uint64_t> result(sample->size());
+    hasher->decode(*sample, sampleRows);
+    hasher->computeValueIds(sampleRows, result);
+    hasher->enableValueRange(multiplier, 0);
+
+    // With a multiplier, the lookup adds to the ids of earlier keys in
+    // 'result'.
+    constexpr uint64_t kEarlierId = 5;
+    auto lookup = [&](SelectivityVector& rows) {
+      result.resize(kNumRows);
+      std::fill(result.begin(), result.end(), kEarlierId);
+      exec::VectorHasher::ScratchMemory scratch;
+      hasher->lookupValueIds(*values, rows, scratch, result);
+    };
+    // Expects 'row' to keep its selection if its value is in range and to be
+    // deselected otherwise. Either way 'result' holds the id of its value, as
+    // a SIMD batch writes it: a probe of normalized keys reads it.
+    auto expectLookedUp = [&](const SelectivityVector& rows,
+                              vector_size_t row) {
+      EXPECT_EQ(rows.isValid(row), isInRange(row)) << row;
+      const uint64_t id = static_cast<uint64_t>(rawValues[row]) - (kMin - 1);
+      EXPECT_EQ(
+          result[row], multiplier == 1 ? id : kEarlierId + multiplier * id)
+          << row;
+    };
+
+    {
+      SelectivityVector rows(kNumRows);
+      lookup(rows);
+      for (auto i = 0; i < kNumRows; ++i) {
+        expectLookedUp(rows, i);
+      }
+    }
+
+    {
+      // Rows 9, 11 and 12 leave row 10 out. On AVX2 they start past the last
+      // full INTEGER batch, which ends at row 8.
+      SelectivityVector rows(kNumRows, false);
+      rows.setValid(9, true);
+      rows.setValid(11, true);
+      rows.setValid(12, true);
+      rows.updateBounds();
+      lookup(rows);
+      expectLookedUp(rows, 9);
+      expectLookedUp(rows, 11);
+      expectLookedUp(rows, 12);
+      EXPECT_FALSE(rows.isValid(10));
+      // In the last batch, which row 10 is in for INTEGER on AVX2, unselected
+      // row 10 gets the id of its value without adding to its slot, which an
+      // earlier key may not have written.
+      constexpr vector_size_t kWidth = xsimd::batch<T>::size;
+      if (10 >= kNumRows / kWidth * kWidth) {
+        EXPECT_EQ(
+            result[10], static_cast<uint64_t>(rawValues[10]) - (kMin - 1));
+      }
+    }
+  };
+
+  // The last row is in range and negative, below the minimum, or above the
+  // maximum.
+  for (const int32_t lastValue : {kMin, kMin - 1, 100}) {
+    for (const uint64_t multiplier : {1, 3}) {
+      test.template operator()<int64_t>(BIGINT(), multiplier, lastValue);
+      test.template operator()<int32_t>(INTEGER(), multiplier, lastValue);
     }
   }
 }
