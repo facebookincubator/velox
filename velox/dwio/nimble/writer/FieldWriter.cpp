@@ -2129,7 +2129,9 @@ class HybridFlatMapFieldWriter : public FieldWriter {
             context.schemaBuilder().createHybridFlatMapTypeBuilder(
                 NimbleTypeTraits<K>::scalarKind,
                 configuredHybridFlatMap(context, type->id())
-                    .defaultGroupKeyPresenceMode())),
+                    .defaultGroupKeyPresenceMode(),
+                /*projection=*/false,
+                context.hybridFlatMapGroupKeysLayout())),
         valueType_{type->childAt(1)},
         nodeId_{type->id()},
         hybridMap_{[&] {
