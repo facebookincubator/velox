@@ -188,6 +188,30 @@ DEFINE_bool(
     true,
     "Run steps that would wait for a returned integer on a capacity, with device-side dim fixups");
 DEFINE_bool(
+    check_grid_descriptor,
+    false,
+    "Check at every grid that the step's grid descriptor gives each launch the element count the host sized it for");
+DEFINE_bool(
+    grid_equal_finish,
+    false,
+    "Give each launch blocks so that all launches of a step complete at the same time");
+DEFINE_bool(
+    device_grid,
+    false,
+    "Compute each step's grid on the device from the counts the device holds");
+DEFINE_bool(
+    setup_stream,
+    false,
+    "Run device-grid steps' parameter copies and setup kernels on a second stream");
+DEFINE_bool(
+    check_size_exprs,
+    false,
+    "Check that symbolic shapes give the dims the host sizes tensor parameters with");
+DEFINE_bool(
+    size_exprs_from_inputs,
+    false,
+    "With --check_size_exprs, derive shapes from graph-input dims as symbols");
+DEFINE_bool(
     sym_shape_report,
     false,
     "Print how many tensor values have static, export-symbolic or no known shapes");
@@ -931,6 +955,12 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().groupArena = FLAGS_group_arena;
   WaveConfig::get().groupArenaMaxBytes = FLAGS_group_arena_max_bytes;
   WaveConfig::get().deviceSymbols = FLAGS_device_symbols;
+  WaveConfig::get().checkGridDescriptor = FLAGS_check_grid_descriptor;
+  WaveConfig::get().gridEqualFinish = FLAGS_grid_equal_finish;
+  WaveConfig::get().deviceGrid = FLAGS_device_grid;
+  WaveConfig::get().setupStream = FLAGS_setup_stream;
+  WaveConfig::get().checkSizeExprs = FLAGS_check_size_exprs;
+  WaveConfig::get().sizeExprsFromInputs = FLAGS_size_exprs_from_inputs;
   WaveConfig::get().uniformCost = FLAGS_uniform_cost;
   WaveConfig::get().launchPerOp = FLAGS_launch_per_op;
   WaveConfig::get().dedupProjectOps = FLAGS_dedup_project_ops;

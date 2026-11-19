@@ -36,49 +36,42 @@ class AssignUniqueIdTest : public HiveConnectorTestBase {
   void verifyUniqueId(
       const std::shared_ptr<const core::PlanNode>& plan,
       const std::vector<RowVectorPtr>& input) {
-    CursorParameters params;
-    params.planNode = plan;
-    auto result = readCursor(params);
-    ASSERT_EQ(result.second[0]->childrenSize(), input[0]->childrenSize() + 1);
-    verifyUniqueId(input, result.second);
+    TaskPtr task;
+    auto result = AssertQueryBuilder(plan).copyResults(pool(), task);
+    verifyUniqueId(input, result);
 
-    auto task = result.first->task();
     // Verify number of memory allocations. There should be exactly one
     // allocation (per thread of execution) for the values buffer of the
     // unique ID vector. Memory should be allocated when producing first
     // batch of output and re-used for subsequent batches.
-    auto stats = toPlanStats(task->taskStats());
-    ASSERT_EQ(1, stats.at(uniqueNodeId_).numMemoryAllocations);
+    const auto uniqueIdStats =
+        PlanNodeStats::extract(task->taskStats(), uniqueNodeId_);
+    ASSERT_EQ(1, uniqueIdStats.numMemoryAllocations);
   }
 
+  // Verifies that 'result' has the rows of 'input' in order, with a column of
+  // unique ids added last.
   void verifyUniqueId(
       const std::vector<RowVectorPtr>& input,
-      const std::vector<facebook::velox::RowVectorPtr>& vectors) {
-    auto numColumns = vectors[0]->childrenSize();
-    ASSERT_EQ(numColumns, input[0]->childrenSize() + 1);
+      const RowVectorPtr& result) {
+    const auto numColumns = input[0]->childrenSize();
+    ASSERT_EQ(result->childrenSize(), numColumns + 1);
 
-    std::set<int64_t> ids;
-    for (int i = 0; i < numColumns; i++) {
-      for (auto batch = 0; batch < vectors.size(); ++batch) {
-        auto column = vectors[batch]->childAt(i);
-        if (i < numColumns - 1) {
-          assertEqualVectors(input[batch]->childAt(i), column);
-        } else {
-          auto idValues = column->asFlatVector<int64_t>()->rawValues();
-          std::copy(
-              idValues,
-              idValues + column->size(),
-              std::inserter(ids, ids.end()));
-        }
+    vector_size_t offset = 0;
+    for (const auto& batch : input) {
+      for (auto i = 0; i < numColumns; ++i) {
+        assertEqualVectors(
+            batch->childAt(i),
+            result->childAt(i)->slice(offset, batch->size()));
       }
+      offset += batch->size();
     }
+    ASSERT_EQ(result->size(), offset);
 
-    vector_size_t totalInputSize = 0;
-    for (const auto& vector : input) {
-      totalInputSize += vector->size();
-    }
-
-    ASSERT_EQ(totalInputSize, ids.size());
+    const auto* ids =
+        result->childAt(numColumns)->asFlatVector<int64_t>()->rawValues();
+    ASSERT_EQ(
+        std::set<int64_t>(ids, ids + result->size()).size(), result->size());
   }
 
   core::PlanNodeId uniqueNodeId_;
@@ -129,7 +122,7 @@ TEST_F(AssignUniqueIdTest, multiThread) {
                     .capturePlanNodeId(uniqueNodeId_)
                     .planNode();
 
-    std::shared_ptr<exec::Task> task;
+    exec::TaskPtr task;
     auto result =
         AssertQueryBuilder(plan).maxDrivers(8).copyResults(pool(), task);
     ASSERT_EQ(batchSize * 8, result->size());
@@ -146,8 +139,9 @@ TEST_F(AssignUniqueIdTest, multiThread) {
     // allocation (per thread of execution) for the values buffer of the
     // unique ID vector. Memory should be allocated when producing first batch
     // of output and re-used for subsequent batches.
-    auto stats = toPlanStats(task->taskStats());
-    ASSERT_EQ(8, stats.at(uniqueNodeId_).numMemoryAllocations);
+    const auto uniqueIdStats =
+        PlanNodeStats::extract(task->taskStats(), uniqueNodeId_);
+    ASSERT_EQ(8, uniqueIdStats.numMemoryAllocations);
   }
 }
 
@@ -234,16 +228,14 @@ TEST_F(AssignUniqueIdTest, barrier) {
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.toString());
-    std::shared_ptr<Task> task;
+    TaskPtr task;
     auto result = AssertQueryBuilder(plan)
                       .splits(makeHiveConnectorSplits(tempFiles))
                       .serialExecution(testData.serialExecution)
                       .maxDrivers(testData.serialExecution ? 1 : 3)
                       .barrierExecution(testData.hasBarrier)
                       .copyResults(pool(), task);
-    auto results = split(result, numSplits);
-
-    verifyUniqueId(vectors, results);
+    verifyUniqueId(vectors, result);
 
     const auto taskStats = task->taskStats();
     ASSERT_EQ(taskStats.numBarriers, testData.hasBarrier ? numSplits : 0);

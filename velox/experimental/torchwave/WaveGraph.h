@@ -346,6 +346,27 @@ class WaveGraph {
   /// to an internal placeholder node. Registers it in idToValue_.
   nativert::Value* duplicateValue(ValueCP original);
 
+  /// What a duplicate stands for: the value it duplicates, and the formal to
+  /// actual value ids of the invocation it belongs to.
+  struct Duplicate {
+    nativert::ValueId original{};
+    std::shared_ptr<const folly::F14FastMap<int32_t, int32_t>> bindings;
+  };
+
+  /// Records that 'duplicate' stands for 'original' in an invocation whose
+  /// formal to actual ids are 'bindings'.
+  void recordDuplicate(
+      nativert::ValueId duplicate,
+      nativert::ValueId original,
+      std::shared_ptr<const folly::F14FastMap<int32_t, int32_t>> bindings) {
+    duplicates_[duplicate] = {original, std::move(bindings)};
+  }
+
+  /// Duplicate id -> what it stands for.
+  const folly::F14FastMap<nativert::ValueId, Duplicate>& duplicates() const {
+    return duplicates_;
+  }
+
   /// Returns the underlying nativert graph.
   GraphP graph() {
     return graph_;
@@ -562,6 +583,12 @@ class WaveGraph {
     return variantGraphs_.back().get();
   }
 
+  /// The variant graphs, which hold the nodes that produce the values grid
+  /// generation makes.
+  const std::vector<std::unique_ptr<nativert::Graph>>& variantGraphs() const {
+    return variantGraphs_;
+  }
+
   /// The variant graph currently being built by variantSubgraph, or nullptr.
   nativert::Graph* currentVariantGraph() const {
     return currentVariantGraph_;
@@ -595,6 +622,8 @@ class WaveGraph {
   std::unordered_map<nativert::ValueId, c10::ScalarType> createdValueDtypes_;
 
   folly::F14FastMap<std::string, std::string> replacedBy_;
+
+  folly::F14FastMap<nativert::ValueId, Duplicate> duplicates_;
 
   // Placeholder node used by duplicateValue to attach new Values.
   nativert::Node* placeholderNode_{nullptr};

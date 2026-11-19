@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -25,6 +26,11 @@
 
 #include <folly/container/F14Map.h>
 #include <torch/csrc/utils/generated_serialization_types.h> // @manual=//caffe2:torch-cpp
+
+namespace torch::nativert {
+class Node;
+class Value;
+} // namespace torch::nativert
 
 namespace torch::wave {
 
@@ -96,6 +102,9 @@ struct SymShapes {
   /// Integer values (an item(), a sym_size) by name.
   folly::F14FastMap<std::string, SymExpr> scalarByName;
   std::vector<std::string> unparsed;
+  /// The export's shapes, for rules that line operands up with the dims the
+  /// export traced, when these shapes are derived apart from the export's.
+  const SymShapes* exported{nullptr};
 };
 
 /// One dim or stride as the serialized program has it: a fixed value or a
@@ -127,6 +136,131 @@ bool broadcastsOperands(std::string_view target);
 
 /// True for the ops whose output has the shape of input 'self'.
 bool keepsSelfShape(std::string_view target);
+
+/// The name under which SymShapes keeps the shape of element 'index' of the
+/// list value 'list'.
+std::string listElementName(std::string_view list, size_t index);
+
+/// The shapes of the elements of list value 'list': the operands of its
+/// ListPack, else the shapes recorded under listElementName. Empty when the
+/// list's length is not known; null for an element without a shape.
+std::vector<const SymShape*> listElementShapes(
+    const SymShapes& shapes,
+    const torch::nativert::Value* list);
+
+/// The element count of 'shape': the product of its dims.
+SymExpr numelOf(const SymShape& shape);
+
+/// A one-dim contiguous shape of 'length' elements.
+SymShape vectorShape(const SymExpr& length);
+
+/// Adds to 'shapes' what the node's outputs' shapes are, from its inputs'
+/// shapes: an output's shape under the output's name, a list output's
+/// elements under listElementName. Returns how many shapes it added.
+using SymShapeRule = std::function<
+    int32_t(SymShapes& shapes, const torch::nativert::Node& node)>;
+
+/// Registers the rule inferSymShapes applies to nodes of 'target', for ops
+/// defined outside the core.
+void registerSymShapeRule(std::string_view target, SymShapeRule rule);
+
+/// Registers the rules of the aten view, shape and reduction ops.
+void registerAtenShapeRules();
+
+/// Expression builders that fold constants.
+SymExpr symAdd(const SymExpr& lhs, const SymExpr& rhs);
+SymExpr symMul(const SymExpr& lhs, const SymExpr& rhs);
+SymExpr symMax(const SymExpr& lhs, const SymExpr& rhs);
+SymExpr symFloorDiv(const SymExpr& lhs, const SymExpr& rhs);
+
+/// The value 'expr' had when the export was traced, where its symbols are
+/// graph-input dims named d<c> for a dim traced at c, or hostDimSymbols;
+/// nullopt when it refers to another symbol.
+std::optional<int64_t> tracedValue(const SymExpr& expr);
+
+/// A symbol for dim 'dim' of the value named 'value', whose extent the host
+/// learns when the op that makes it returns, traced at 'traced' in the
+/// export.
+SymExpr hostDimSymbol(std::string_view value, size_t dim, int64_t traced);
+
+/// True when 'symbol' is a hostDimSymbol.
+bool isHostDimSymbol(std::string_view symbol);
+
+/// True when 'lhs' and 'rhs' are the same expression, or have the same traced
+/// value. Exports specialize dims to their traced values, so a dim that is a
+/// constant in one place is an input dim symbol in another.
+bool sameDim(const SymExpr& lhs, const SymExpr& rhs);
+
+/// A shape with 'dims', laid out densely.
+SymShape denseShape(std::vector<SymExpr> dims);
+
+struct ReserveArgs;
+struct Shape;
+
+/// The operands of a SymReserveFn: what a ReserveFn reads, as expressions.
+struct SymReserveArgs {
+  /// Tensor group i, one shape per tensor; null for a tensor without one.
+  std::vector<std::vector<const SymShape*>> tensors;
+  /// Integer operands; nullopt for an absent optional one.
+  std::vector<std::optional<SymExpr>> scalars;
+  std::vector<std::vector<SymExpr>> intLists;
+  /// Threads per block of the launch the reserve sizes for.
+  int32_t blockSize{0};
+
+  /// Tensor 'element' of group 'group', or null.
+  const SymShape* tensor(size_t group, size_t element = 0) const {
+    return group < tensors.size() && element < tensors[group].size()
+        ? tensors[group][element]
+        : nullptr;
+  }
+};
+
+/// The symbolic form of a ReserveFn: the shapes of the outputs, one per
+/// output tensor, 'numOut' of them. Returns false when an operand it needs
+/// has no expression.
+using SymReserveFn = bool (*)(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t numOut);
+
+/// The type of a ReserveFn, declared here without Reserve.h.
+using ReserveFnKey = bool (*)(const ReserveArgs&, Shape*, int32_t);
+
+/// Gives the symbolic form of a ReserveFn, which sizing on the device
+/// evaluates instead of calling the function on the host.
+void registerSymReserve(ReserveFnKey fn, SymReserveFn sym);
+
+/// The symbolic form of 'fn', or null.
+SymReserveFn symReserveOf(ReserveFnKey fn);
+
+/// SymReserveFns many ReserveFns share. Each output is one-dim:
+/// tensor 0's element count, that plus one, scalar 0, tensor 0's first dim,
+/// scalar 0 for every output, and tensor (0, i)'s element count for output i.
+bool symNumel(const SymReserveArgs& args, std::vector<SymShape>& out, int32_t);
+bool symNumelPlusOne(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t);
+bool symScalarLength(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t);
+bool symFirstDim(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t);
+bool symRepeatedScalar(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t numOut);
+bool symListNumel(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t numOut);
+
+/// Adds what one node's rule gives for its outputs. Returns how many shapes
+/// it added.
+int32_t inferNodeShapes(SymShapes& shapes, const torch::nativert::Node& node);
 
 /// Adds shapes for the tensor values of 'waveGraph' that the export does not
 /// describe -- the outputs of nodes the graph rewrites created -- where the
