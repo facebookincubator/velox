@@ -4803,9 +4803,9 @@ TEST_P(
     tabletWriter->writeStripe(kRowsPerBatch, std::move(streams));
   }
 
-  const auto schema =
-      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
-  SchemaSerializer schemaSerializer;
+  const auto schema = SchemaReader::getSchema(
+      serializer.schemaBuilder().schemaNodes(), leafPool_.get());
+  SchemaSerializer schemaSerializer{leafPool_.get()};
   tabletWriter->writeOptionalSection(
       std::string{kSchemaSection}, schemaSerializer.serialize(*schema));
   tabletWriter->writeOptionalSection(
