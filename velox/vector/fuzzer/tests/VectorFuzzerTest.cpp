@@ -223,10 +223,10 @@ TEST_F(VectorFuzzerTest, flatOpaque) {
     int64_t id = boost::random::uniform_int_distribution<int64_t>(1, 10)(rng);
     return std::make_shared<Foo>(id);
   });
-  fuzzer.registerOpaqueTypeGenerator<Bar>([](FuzzerGenerator& rng) {
-    throw std::runtime_error("Should not be called");
-    return std::make_shared<Bar>();
-  });
+  fuzzer.registerOpaqueTypeGenerator<Bar>(
+      [](FuzzerGenerator& /*rng*/) -> std::shared_ptr<Bar> {
+        throw std::runtime_error("Should not be called");
+      });
 
   auto opaqueType = OPAQUE<Foo>();
   VectorPtr vector = fuzzer.fuzzFlat(opaqueType);
@@ -255,10 +255,10 @@ TEST_F(VectorFuzzerTest, opaque) {
     int64_t id = boost::random::uniform_int_distribution<int64_t>(1, 10)(rng);
     return std::make_shared<Foo>(id);
   });
-  fuzzer.registerOpaqueTypeGenerator<Bar>([](FuzzerGenerator& rng) {
-    throw std::runtime_error("Should not be called");
-    return std::make_shared<Bar>();
-  });
+  fuzzer.registerOpaqueTypeGenerator<Bar>(
+      [](FuzzerGenerator& /*rng*/) -> std::shared_ptr<Bar> {
+        throw std::runtime_error("Should not be called");
+      });
 
   auto opaqueType = OPAQUE<Foo>();
   VectorPtr vector = fuzzer.fuzz(opaqueType, opts.vectorSize);

@@ -3561,6 +3561,95 @@ TEST_F(SparkCastExprTestAnsiOn, tryCastNumericToIntegralOverflow) {
   testTryCast<float, int32_t>("integer", {3.0e10f}, {std::nullopt});
 }
 
+TEST_F(SparkCastExprTestAnsiOn, castDecimalToIntegralOverflow) {
+  // Casts that overflow the target integral type throw under ANSI mode.
+  testThrow<int64_t>(
+      DECIMAL(9, 0),
+      SMALLINT(),
+      {999'999'999},
+      "Cannot cast DECIMAL(9, 0) '999999999' to SMALLINT. Out of bounds.");
+  testThrow<int64_t>(
+      DECIMAL(3, 0),
+      TINYINT(),
+      {-129},
+      "Cannot cast DECIMAL(3, 0) '-129' to TINYINT. Out of bounds.");
+  testThrow<int64_t>(
+      DECIMAL(10, 0),
+      INTEGER(),
+      {2'147'483'648},
+      "Cannot cast DECIMAL(10, 0) '2147483648' to INTEGER. Out of bounds.");
+  testThrow<int128_t>(
+      DECIMAL(19, 0),
+      BIGINT(),
+      {static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1},
+      "Cannot cast DECIMAL(19, 0) '9223372036854775808' to BIGINT. Out of bounds.");
+  testThrow<int128_t>(
+      DECIMAL(20, 0),
+      BIGINT(),
+      {static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1},
+      "Cannot cast DECIMAL(20, 0) '-9223372036854775809' to BIGINT. Out of bounds.");
+
+  // Scaled values are truncated toward zero before the range check.
+  testThrow<int64_t>(
+      DECIMAL(7, 2),
+      SMALLINT(),
+      {3'276'800},
+      "Cannot cast DECIMAL(7, 2) '32768.00' to SMALLINT. Out of bounds.");
+  testThrow<int128_t>(
+      DECIMAL(20, 2),
+      TINYINT(),
+      {12'800},
+      "Cannot cast DECIMAL(20, 2) '128.00' to TINYINT. Out of bounds.");
+  testCast(
+      makeFlatVector<int64_t>({3'276'799, -3'276'899}, DECIMAL(7, 2)),
+      makeFlatVector<int16_t>({32'767, -32'768}));
+  testCast(
+      makeFlatVector<int128_t>({12'799, -12'899}, DECIMAL(20, 2)),
+      makeFlatVector<int8_t>({127, -128}));
+
+  // Precision > 18: Velox truncates the exact value, so 127.999999999999999999
+  // casts to 127. Spark converts it to DOUBLE first, which rounds to 128.0 and
+  // throws. See the note in conversion.rst.
+  const int128_t kScale18 = 1'000'000'000'000'000'000;
+  testCast(
+      makeFlatVector<int128_t>(
+          {128 * kScale18 - 1, -129 * kScale18 + 1}, DECIMAL(21, 18)),
+      makeFlatVector<int8_t>({127, -128}));
+}
+
+TEST_F(SparkCastExprTestAnsiOn, tryCastDecimalToIntegralOverflow) {
+  // try_cast returns null on overflow and truncates in-range values.
+  testTryCast<int64_t, int16_t>(
+      "smallint",
+      {999'999'999, 3'276'800, 3'276'799},
+      {std::nullopt, std::nullopt, 32'767},
+      DECIMAL(9, 2));
+  testTryCast<int128_t, int64_t>(
+      "bigint",
+      {static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1},
+      {std::nullopt},
+      DECIMAL(19, 0));
+}
+
+TEST_F(SparkCastExprTest, ansiCastModeDecimalToIntegralOverflow) {
+  setAnsiSupport(false);
+
+  VELOX_ASSERT_THROW(
+      evaluateCastModeSpecialForm(
+          kSparkAnsiCast,
+          SMALLINT(),
+          makeFlatVector<int64_t>({999'999'999}, DECIMAL(9, 0))),
+      "Cannot cast DECIMAL(9, 0) '999999999' to SMALLINT. Out of bounds.");
+}
+
+TEST_F(SparkCastExprTestAnsiOff, castDecimalToIntegralOverflow) {
+  // Casts that overflow the target integral type wrap when ANSI mode is
+  // disabled.
+  testCast<int64_t, int16_t>(
+      "smallint", {999'999'999}, {-13'825}, DECIMAL(9, 0));
+  testCast<int64_t, int16_t>("smallint", {3'276'800}, {-32'768}, DECIMAL(7, 2));
+}
+
 TEST_F(SparkCastExprTestAnsiOff, castNumericToIntegralOverflow) {
   // Casts that overflow the target integral type wrap or saturate when ANSI
   // mode is disabled.

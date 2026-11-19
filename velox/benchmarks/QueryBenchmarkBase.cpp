@@ -18,6 +18,7 @@
 #include <folly/String.h>
 #include <iostream>
 #include "velox/common/base/SuccinctPrinter.h"
+#include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"

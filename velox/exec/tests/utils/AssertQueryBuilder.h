@@ -231,6 +231,10 @@ class AssertQueryBuilder {
       memory::MemoryPool* pool,
       std::shared_ptr<Task>& task);
 
+  /// Runs a query that returns a single row with a single column and returns
+  /// that value.
+  Variant copySingleValue();
+
   /// Run the query and copy the result Vectors as their original batches.
   std::vector<RowVectorPtr> copyResultBatches(memory::MemoryPool* pool);
 

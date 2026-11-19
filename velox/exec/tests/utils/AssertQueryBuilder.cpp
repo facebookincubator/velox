@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/exec/Cursor.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 
 namespace facebook::velox::exec::test {
 
@@ -197,18 +198,22 @@ std::shared_ptr<Task> AssertQueryBuilder::assertResults(
   VELOX_CHECK_NOT_NULL(duckDbQueryRunner_);
 
   auto [cursor, results] = readCursor();
-  if (results.empty()) {
-    test::assertResults(results, ROW({}, {}), duckDbSql, *duckDbQueryRunner_);
-  } else if (sortingKeys.has_value()) {
-    test::assertResultsOrdered(
+  SCOPED_TRACE(
+      fmt::format(
+          "DuckDB query: {}\nNote: DuckDB only supports timestamps of millisecond "
+          "precision. If this test involves timestamp inputs, please make sure you "
+          "use the right precision.",
+          duckDbSql));
+  const auto type = results.empty() ? ROW({}) : results[0]->rowType();
+  if (sortingKeys.has_value() && !results.empty()) {
+    velox::test::VectorAssertions::equalOrderedBy(
+        duckDbQueryRunner_->executeOrdered(duckDbSql, type),
+        type,
         results,
-        asRowType(results[0]->type()),
-        duckDbSql,
-        *duckDbQueryRunner_,
         sortingKeys.value());
   } else {
-    test::assertResults(
-        results, asRowType(results[0]->type()), duckDbSql, *duckDbQueryRunner_);
+    velox::test::VectorAssertions::equalMultisets(
+        duckDbQueryRunner_->execute(duckDbSql, type), type, results);
   }
   return cursor->task();
 }
@@ -290,6 +295,25 @@ RowVectorPtr AssertQueryBuilder::copyResults(
 
   task = cursor->task();
   return copy;
+}
+
+Variant AssertQueryBuilder::copySingleValue() {
+  VELOX_CHECK_EQ(
+      params_.planNode->outputType()->size(),
+      1,
+      "Query must return a single column");
+
+  auto [cursor, results] = readCursor();
+  RowVectorPtr batch;
+  vector_size_t numRows{0};
+  for (const auto& result : results) {
+    if (result->size() > 0) {
+      batch = result;
+      numRows += result->size();
+    }
+  }
+  VELOX_CHECK_EQ(numRows, 1, "Query must return a single row");
+  return velox::test::VectorAssertions::toVariantRows(batch)[0][0];
 }
 
 std::vector<RowVectorPtr> AssertQueryBuilder::copyResultBatches(

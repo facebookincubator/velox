@@ -19,6 +19,7 @@
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/BackpressureTestNode.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"

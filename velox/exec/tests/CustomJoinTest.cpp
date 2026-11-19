@@ -295,9 +295,7 @@ class CustomJoinTest : public HiveConnectorTestBase {
     auto rightNode =
         PlanBuilder(planNodeIdGenerator).values({rightBatch}, true).planNode();
 
-    CursorParameters params;
-    params.maxDrivers = numThreads;
-    params.planNode =
+    auto plan =
         PlanBuilder(planNodeIdGenerator)
             .values({leftBatch}, true)
             .addNode([&leftNode, &rightNode](
@@ -308,7 +306,9 @@ class CustomJoinTest : public HiveConnectorTestBase {
             .project({"c0"})
             .planNode();
 
-    OperatorTestBase::assertQuery(params, referenceQuery);
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .maxDrivers(numThreads)
+        .assertResults(referenceQuery);
   }
 };
 

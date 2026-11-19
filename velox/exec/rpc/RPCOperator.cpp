@@ -160,12 +160,17 @@ void RPCOperator::initialize() {
   auto* driverCtx = operatorCtx_->driverCtx();
   VELOX_CHECK_NOT_NULL(driverCtx);
   const auto& queryConfig = driverCtx->queryConfig();
+  requestedFlowControlPolicy_ =
+      parseRPCFlowControlPolicy(queryConfig.rpcFlowControlPolicy());
   function_->setMemoryPool(operatorCtx_->pool()->shared_from_this());
   function_->initialize(
       queryConfig, inputTypes, constantInputs, rpcNode_->streamingMode());
   capacityRetryEnabled_ =
       rpcNode_->streamingMode() == RPCStreamingMode::kPerRow &&
       function_->mayReturnCapacityRetries();
+  capacityProbingEnabled_ =
+      requestedFlowControlPolicy_ == RPCFlowControlPolicy::kCapacityProbing &&
+      queryConfig.rpcRateLimiterAdaptiveEnabled() && capacityRetryEnabled_;
   state_->setCapacityRetryEnabled(capacityRetryEnabled_);
   *liveStatsSources_.wlock() =
       LiveStatsSources{.state = state_, .function = function_};
@@ -230,6 +235,9 @@ void RPCOperator::initializeRateLimiter() {
   const bool functionBoundsFirst = sessionHardLimit >= 0;
   RPCRateLimiter::Config policy;
   policy.adaptive = queryConfig.rpcRateLimiterAdaptiveEnabled();
+  policy.flowControlPolicy = capacityProbingEnabled_
+      ? RPCFlowControlPolicy::kCapacityProbing
+      : RPCFlowControlPolicy::kWindowAimd;
   const auto functionFloor = function_->configuredAdaptiveFloor();
   if (functionBoundsFirst && functionFloor > 0) {
     policy.floor = functionFloor;
@@ -243,6 +251,8 @@ void RPCOperator::initializeRateLimiter() {
   policy.decreaseFactor = queryConfig.rpcRateLimiterDecreaseFactor();
   policy.maxProbeInterval = std::chrono::milliseconds{maxProbeIntervalMs};
   const auto functionLimit = function_->configuredCeiling();
+  // True when neither the session nor the function bounds the limiter.
+  bool safetyCeilingOnly{false};
   if (sessionHardLimit < 0) {
     if (functionLimit > 0) {
       policy.ceiling = functionLimit;
@@ -259,6 +269,23 @@ void RPCOperator::initializeRateLimiter() {
   } else {
     policy.ceiling =
         policy.adaptive ? kDefaultAdaptiveHardLimit : kLegacyFixedLimit;
+    safetyCeilingOnly = true;
+  }
+
+  // A driver window ceiling the session sets holds under either policy.
+  if (capacityProbingEnabled_ && queryConfig.rpcCongestionMaxWindow() <= 0) {
+    // The shared limiter learns the backend's capacity, so a driver window
+    // must not hold the worker below the limiter's ceiling. A ceiling the
+    // function declares is its backend's sizing, so the window does not rise
+    // past it even when a session limit takes precedence for the limiter. The
+    // safety ceiling sizes nothing, so under it the window stays finite.
+    int64_t driverCeiling{policy.ceiling};
+    if (functionLimit > 0) {
+      driverCeiling = std::min(policy.ceiling, functionLimit);
+    } else if (safetyCeilingOnly) {
+      driverCeiling = RPCRateLimiter::kInitialAdaptiveLimit;
+    }
+    state_->raisePerRowMaxWindow(driverCeiling);
   }
 
   const auto lookup =
@@ -416,7 +443,13 @@ void RPCOperator::addInput(RowVectorPtr input) {
 
 void RPCOperator::dispatchDueRetries() {
   const auto feedback = state_->takeRetryFeedback();
-  if (feedback.overloaded) {
+  // WINDOW_AIMD halves the driver window on every overloaded retry. Under
+  // CAPACITY_PROBING the shared limiter already backed off from a capacity
+  // rejection, and it can always cut further or pace; any other rejection
+  // backs off as under WINDOW_AIMD.
+  const bool limiterBackedOff = capacityProbingEnabled_ &&
+      feedback.sharedOverloadHandled && !feedback.nonCapacityOverload;
+  if (feedback.overloaded && !limiterBackedOff) {
     recordCongestion(
         AsyncRPCFunction::CongestionSignal::kOverloaded,
         /*roundTripTimesNs=*/{},
@@ -1002,7 +1035,11 @@ RowVectorPtr RPCOperator::outputPerRow() {
     // the gradient/baseline.
     if (!hasError && row.response.isBackendOutcome()) {
       roundTripTimesNs.push_back(row.rttNs);
-      if (row.admissionEpoch.has_value()) {
+      // Under CAPACITY_PROBING a row the transport retried through overloads
+      // shows the backend refusing calls, so it earns the limiter no growth.
+      const bool earnsGrowth =
+          !capacityProbingEnabled_ || row.response.numOverloadedAttempts == 0;
+      if (row.admissionEpoch.has_value() && earnsGrowth) {
         const auto overloadEpoch = row.admissionEpoch.value();
         const auto it = std::find_if(
             successUnitsByEpoch.begin(),
@@ -1464,6 +1501,8 @@ void RPCOperator::addLiveProgressStats(
   }
   stats.runtimeStats[kRpcRequestsDispatched] =
       RuntimeMetric(numRequestsDispatched_.load(std::memory_order_relaxed));
+  stats.runtimeStats[kRpcFlowControlRequestedPolicy] =
+      RuntimeMetric(static_cast<int64_t>(requestedFlowControlPolicy_));
   const auto snapshot = sources->state->operatorSnapshot();
   stats.runtimeStats[kRpcCompletionsSignaled] =
       RuntimeMetric(snapshot.numCompletionsSignaled);
@@ -1489,6 +1528,8 @@ void RPCOperator::addLiveProgressStats(
   // report in that case, and no stats worth reporting either.
   if (sources->limiter != nullptr) {
     const auto limiterStats = sources->limiter->stats();
+    stats.runtimeStats[kRpcFlowControlEffectivePolicy] =
+        RuntimeMetric(static_cast<int64_t>(limiterStats.flowControlPolicy));
     stats.runtimeStats[kRpcRateLimiterCap] =
         RuntimeMetric(limiterStats.capacity);
     stats.runtimeStats[kRpcRateLimiterHardLimit] =
@@ -1588,6 +1629,15 @@ void RPCOperator::recordRuntimeStats() {
     if (snapshot.numCapacityRetries > 0) {
       lockedStats->addRuntimeStat(
           kRpcCapacityRetries, RuntimeCounter(snapshot.numCapacityRetries));
+    }
+    if (snapshot.numQuotaRejections > 0) {
+      lockedStats->addRuntimeStat(
+          kRpcQuotaRejections, RuntimeCounter(snapshot.numQuotaRejections));
+    }
+    if (snapshot.numCapacityRejections > 0) {
+      lockedStats->addRuntimeStat(
+          kRpcCapacityRejections,
+          RuntimeCounter(snapshot.numCapacityRejections));
     }
     if (snapshot.numCapacityRetryFloorRetries > 0) {
       lockedStats->addRuntimeStat(

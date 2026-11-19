@@ -29,6 +29,7 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 
 namespace facebook::velox::test {
 using namespace facebook::velox::common::testutil;
@@ -59,7 +60,7 @@ RowVectorPtr createRowVector(
 // separated by " | ".
 void printResults(const RowVectorPtr& result, std::ostream& out) {
   const auto& type = result->type();
-  for (const auto& row : exec::test::materialize(result)) {
+  for (const auto& row : velox::test::VectorAssertions::toVariantRows(result)) {
     for (size_t i = 0; i < row.size(); ++i) {
       if (i > 0) {
         out << " | ";
