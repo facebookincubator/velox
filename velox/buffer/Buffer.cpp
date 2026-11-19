@@ -79,12 +79,9 @@ BufferPtr Buffer::slice<bool>(
   VELOX_CHECK_NOT_NULL(buffer, "Buffer must not be null.");
   const uint64_t numBits = static_cast<uint64_t>(buffer->size()) * 8;
   VELOX_CHECK_LE(
-      offset, numBits, "Offset must be less than or equal to {}.", numBits);
+      offset, numBits, "Slice offset is past the end of the buffer.");
   VELOX_CHECK_LE(
-      length,
-      numBits - offset,
-      "Length must be less than or equal to {}.",
-      numBits - offset);
+      length, numBits - offset, "Slice length is past the end of the buffer.");
 
   // A zero-copy slice must start 8-byte aligned, as vector bitmaps must.
   if (offset % 64 == 0) {

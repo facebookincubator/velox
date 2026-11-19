@@ -516,7 +516,7 @@ TEST_F(BufferTest, testAllocateSizeOverflow) {
 
 TEST_F(BufferTest, alignment) {
   auto buffer = AlignedBuffer::allocate<int64_t>(4, pool_.get());
-  ASSERT_GE(buffer->alignment(), alignof(int64_t));
+  ASSERT_GE(buffer->alignment(), 16);
   MockCachePin pin;
   for (const size_t offset : {1, 2, 4, 8}) {
     SCOPED_TRACE(offset);
@@ -615,13 +615,13 @@ TEST_F(BufferTest, sliceBooleanBuffer) {
   // Ranges past the 256 bits fail, whether the slice would copy or not.
   VELOX_ASSERT_THROW(
       Buffer::slice<bool>(bufferPtr, 8, 256, pool_.get()),
-      "Length must be less than or equal to 248.");
+      "(256 vs. 248) Slice length is past the end of the buffer.");
   VELOX_ASSERT_THROW(
       Buffer::slice<bool>(bufferPtr, 64, 256, pool_.get()),
-      "Length must be less than or equal to 192.");
+      "(256 vs. 192) Slice length is past the end of the buffer.");
   VELOX_ASSERT_THROW(
       Buffer::slice<bool>(bufferPtr, 264, 1, pool_.get()),
-      "Offset must be less than or equal to 256.");
+      "(264 vs. 256) Slice offset is past the end of the buffer.");
 }
 
 TEST_F(BufferTest, testType) {
