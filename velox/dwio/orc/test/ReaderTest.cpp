@@ -16,7 +16,9 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/base/RandomUtil.h"
 #include "velox/common/io/IoStatistics.h"
+#include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
@@ -543,4 +545,223 @@ TEST_F(OrcReaderTest, selectiveReadWithoutRowIndex) {
   options.setSplitRowRange(
       SplitRowRange{.firstRow = 12'345, .numRows = 20'000});
   test::assertEqualVectors(expected->slice(12'345, 20'000), read(options));
+}
+
+namespace {
+
+// Reads ORC files with a split row range and compares the rows with the
+// same rows of a full read.
+class OrcSplitRowRangeTest : public OrcReaderTest,
+                             public testing::WithParamInterface<bool> {
+ protected:
+  static constexpr uint64_t kAll{std::numeric_limits<uint64_t>::max()};
+
+  void open(const std::string& fileName) {
+    fileName_ = fileName;
+    reader_ = createReader(nullptr);
+    schema_ = reader_->rowType();
+    expected_ = read(rowReaderOptions());
+    ASSERT_EQ(expected_->size(), reader_->numberOfRows().value());
+  }
+
+  // Opens the file, sampling its rows with 'randomSkip' if set.
+  std::unique_ptr<DwrfReader> createReader(
+      std::shared_ptr<random::RandomSkipTracker> randomSkip) {
+    dwio::common::ReaderOptions readerOpts{pool()};
+    readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
+    readerOpts.setRandomSkip(std::move(randomSkip));
+    return DwrfReader::create(
+        createFileBufferedInput(
+            getExamplesFilePath(fileName_), readerOpts.memoryPool()),
+        readerOpts);
+  }
+
+  // Selective (scan spec) or not, per the test parameter.
+  RowReaderOptions rowReaderOptions() const {
+    RowReaderOptions options;
+    if (GetParam()) {
+      auto spec = std::make_shared<common::ScanSpec>("<root>");
+      spec->addAllChildFields(*schema_);
+      options.setScanSpec(spec);
+    }
+    return options;
+  }
+
+  // Reads all rows in batches of 700 into one vector.
+  RowVectorPtr read(const RowReaderOptions& options) {
+    auto result = BaseVector::create<RowVector>(schema_, 0, pool());
+    append(*reader_->createRowReader(options), nullptr, *result);
+    return result;
+  }
+
+  // Reads all rows of 'rowReader' in batches of 700, applying 'mutation', and
+  // appends them to 'result'.
+  void append(
+      RowReader& rowReader,
+      const dwio::common::Mutation* mutation,
+      RowVector& result) {
+    VectorPtr batch = BaseVector::create(schema_, 0, pool());
+    while (rowReader.next(700, batch, mutation) > 0) {
+      const auto offset = result.size();
+      result.resize(offset + batch->size());
+      result.copy(batch.get(), offset, 0, batch->size());
+    }
+  }
+
+  // Reads 'range' of the split that starts at stripe 'firstStripe' and checks
+  // the rows against the full read.
+  void verify(SplitRowRange range, uint32_t firstStripe = 0) {
+    SCOPED_TRACE(
+        fmt::format(
+            "firstStripe {} firstRow {} numRows {}",
+            firstStripe,
+            range.firstRow,
+            range.numRows));
+    const auto& footer = reader_->getFooter();
+    uint64_t splitStartRow = 0;
+    for (uint32_t i = 0; i < firstStripe; ++i) {
+      splitStartRow += footer.stripes(i).numberOfRows();
+    }
+    const uint64_t numRows = expected_->size();
+    const uint64_t begin = std::min(splitStartRow + range.firstRow, numRows);
+    const uint64_t end =
+        range.numRows >= numRows - begin ? numRows : begin + range.numRows;
+
+    auto options = rowReaderOptions();
+    options.setSplitRowRange(range);
+    options.range(footer.stripes(firstStripe).offset(), kAll / 2);
+    auto actual = read(options);
+    ASSERT_EQ(actual->size(), end - begin);
+    for (vector_size_t i = 0; i < actual->size(); ++i) {
+      ASSERT_TRUE(actual->equalValueAt(expected_.get(), i, begin + i))
+          << "row " << begin + i << ": " << actual->toString(vector_size_t(i))
+          << " vs " << expected_->toString(vector_size_t(begin + i));
+    }
+  }
+
+  // Reads 'range' twice with one sampler, like two splits of a scan, and
+  // checks that the kept rows are those that trying each row of the range in
+  // turn would keep.
+  void verifySampling(SplitRowRange range, double sampleRate, uint32_t seed) {
+    SCOPED_TRACE(
+        fmt::format(
+            "firstRow {} numRows {} sampleRate {} seed {}",
+            range.firstRow,
+            range.numRows,
+            sampleRate,
+            seed));
+    random::setSeed(seed);
+    auto randomSkip = std::make_shared<random::RandomSkipTracker>(sampleRate);
+    auto reader = createReader(randomSkip);
+    auto options = rowReaderOptions();
+    options.setSplitRowRange(range);
+    dwio::common::Mutation mutation;
+    mutation.randomSkip = randomSkip.get();
+    auto actual = BaseVector::create<RowVector>(schema_, 0, pool());
+    for (int i = 0; i < 2; ++i) {
+      append(*reader->createRowReader(options), &mutation, *actual);
+    }
+
+    random::setSeed(seed);
+    random::RandomSkipTracker expectedSkip(sampleRate);
+    const uint64_t numRows = expected_->size();
+    const uint64_t begin = std::min(range.firstRow, numRows);
+    const uint64_t end = begin + std::min(range.numRows, numRows - begin);
+    std::vector<vector_size_t> expectedRows;
+    for (int i = 0; i < 2; ++i) {
+      for (auto row = begin; row < end; ++row) {
+        if (expectedSkip.testOne()) {
+          expectedRows.push_back(row);
+        }
+      }
+    }
+    ASSERT_EQ(actual->size(), expectedRows.size());
+    for (vector_size_t i = 0; i < actual->size(); ++i) {
+      ASSERT_TRUE(actual->equalValueAt(expected_.get(), i, expectedRows[i]))
+          << "row " << expectedRows[i];
+    }
+  }
+
+  std::string fileName_;
+  std::unique_ptr<DwrfReader> reader_;
+  RowTypePtr schema_;
+  RowVectorPtr expected_;
+};
+
+} // namespace
+
+INSTANTIATE_TEST_SUITE_P(
+    OrcSplitRowRangeTests,
+    OrcSplitRowRangeTest,
+    testing::Bool(),
+    [](const testing::TestParamInfo<bool>& info) {
+      return info.param ? "selective" : "nonSelective";
+    });
+
+// 5 stripes of 5,000, 5,000, 5,000, 5,000 and 1,000 rows, with a row index
+// stride of 1,000.
+TEST_P(OrcSplitRowRangeTest, withRowIndex) {
+  open("TestOrcFile.columnProjection.orc");
+  ASSERT_EQ(reader_->getFooter().stripesSize(), 5);
+  ASSERT_EQ(reader_->getFooter().rowIndexStride(), 1'000);
+  verify({0, kAll});
+  verify({1, 2});
+  // Starts past the first strides and crosses a stride boundary.
+  verify({2'500, 800});
+  // Crosses stripes.
+  verify({4'900, 5'200});
+  verify({20'500, kAll});
+  verify({20'999, 1});
+  verify({21'000, 1});
+  verify({3, 0});
+  // Counts rows from the split's first stripe.
+  verify({0, 2}, 1);
+  verify({3'500, 3'000}, 2);
+  verify({6'000, kAll}, 3);
+  verify({6'000, 1}, 3);
+}
+
+// 10 stripes of 5,000 rows and no row index.
+TEST_P(OrcSplitRowRangeTest, withoutRowIndex) {
+  open("TestOrcFile.testWithoutIndex.orc");
+  ASSERT_EQ(reader_->getFooter().stripesSize(), 10);
+  ASSERT_EQ(reader_->getFooter().rowIndexStride(), 0);
+  verify({2'500, 800});
+  verify({4'900, 5'200});
+  verify({12'345, 20'000});
+  verify({49'999, kAll});
+  verify({3'500, 3'000}, 4);
+}
+
+// The low sample rates skip whole stripes, including the range's partial first
+// and last stripes.
+TEST_P(OrcSplitRowRangeTest, randomSampling) {
+  if (!GetParam()) {
+    GTEST_SKIP() << "Only the selective reader samples rows";
+  }
+  for (const auto& fileName :
+       {"TestOrcFile.columnProjection.orc",
+        "TestOrcFile.testWithoutIndex.orc"}) {
+    open(fileName);
+    for (const SplitRowRange range :
+         {SplitRowRange{0, kAll},
+          SplitRowRange{2'500, 800},
+          SplitRowRange{4'900, 5'200},
+          SplitRowRange{20'500, kAll}}) {
+      for (const double sampleRate : {0.1, 0.001, 0.0002}) {
+        for (uint32_t seed = 1; seed <= 20; ++seed) {
+          verifySampling(range, sampleRate, seed);
+        }
+      }
+    }
+  }
+}
+
+// One stripe of 32,768 strings with a row index stride of 4,096.
+TEST_P(OrcSplitRowRangeTest, oneStripe) {
+  open("TestStringDictionary.testRowIndex.orc");
+  ASSERT_EQ(reader_->getFooter().stripesSize(), 1);
+  verify({4'095, 2});
+  verify({10'000, 10'000});
+  verify({30'000, kAll});
 }
