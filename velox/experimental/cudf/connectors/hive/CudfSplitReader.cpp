@@ -560,19 +560,16 @@ cudf::io::source_info makeSourceInfo(const CudfHiveConnectorSplit& split) {
       std::vector<cudf::io::filepath_source>{std::move(source)}};
 }
 
-// Opens the split's file with KvikIO. Its reads go through the async data
-// cache when the split is cacheable.
+// Opens the split's file with KvikIO. Its reads go through 'cache' when the
+// split is cacheable and 'cache' is not null.
 std::unique_ptr<cudf::io::datasource> createKvikioDataSource(
     const CudfHiveConnectorSplit& split,
+    cache::AsyncDataCache* cache,
     const std::shared_ptr<IoStats>& ioStats) {
   auto source =
       std::move(cudf::io::make_datasources(makeSourceInfo(split)).front());
   return maybeCacheKvikioDataSource(
-      std::move(source),
-      split.filePath,
-      velox::cache::AsyncDataCache::getInstance(),
-      split.cacheable,
-      ioStats);
+      std::move(source), split.filePath, cache, split.cacheable, ioStats);
 }
 
 } // namespace
@@ -610,7 +607,8 @@ void CudfSplitReader::setupCudfDataSource() {
   // Helper to create a KvikIO data source.
   auto makeKvikioDataSource = [&]() {
     try {
-      dataSource_ = createKvikioDataSource(*split_, ioStats_);
+      dataSource_ = createKvikioDataSource(
+          *split_, connectorQueryCtx_->cache(), ioStats_);
     } catch (const std::system_error& e) {
       // KvikIO preserves errno for local opens only.
       // TODO: Ignore missing remote files once KvikIO reports them
