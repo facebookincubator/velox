@@ -36,6 +36,7 @@
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 #include <fmt/core.h>
+#include <fmt/ranges.h> // IWYU pragma: keep
 
 using namespace facebook::nimble;
 using namespace facebook;
