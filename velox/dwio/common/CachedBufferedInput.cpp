@@ -145,6 +145,9 @@ std::vector<CacheRequest*> makeRequestParts(
             request.trackingId));
     parts.push_back(extraRequests.back().get());
     parts.back()->coalesces = prefetch;
+    // Carry the parent's stream so readRegion() registers the resulting load
+    // under a key the stream will actually look up.
+    parts.back()->stream = request.stream;
     if (prefetchOne) {
       break;
     }
