@@ -16,6 +16,8 @@
 
 #include "velox/vector/arrow/Bridge.h"
 
+#include <folly/String.h>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -37,14 +39,19 @@ class ArrowStreamTest : public OperatorTestBase {
         const std::vector<RowVectorPtr>& vectors,
         const TypePtr& type,
         bool failGetNext = false,
-        bool failGetSchema = false)
+        bool failGetSchema = false,
+        bool writeOutputOnFailure = true)
         : pool_(pool),
           vectors_(vectors),
           type_(type),
           failGetNext_(failGetNext),
-          failGetSchema_(failGetSchema) {}
+          failGetSchema_(failGetSchema),
+          writeOutputOnFailure_(writeOutputOnFailure) {}
 
     int getNext(struct ArrowArray* outArray) {
+      if (failGetNext_ && !writeOutputOnFailure_) {
+        return (int)ErrorCode::kGetNextFailed;
+      }
       if (vectorIndex_ < vectors_.size()) {
         exportToArrow(vectors_[vectorIndex_], *outArray, pool_.get(), options_);
         vectorIndex_ += 1;
@@ -57,6 +64,9 @@ class ArrowStreamTest : public OperatorTestBase {
     }
 
     int getArrowSchema(ArrowSchema& out) {
+      if (failGetSchema_ && !writeOutputOnFailure_) {
+        return (int)ErrorCode::kGetSchemaFailed;
+      }
       exportToArrow(BaseVector::create(type_, 0, pool_.get()), out, options_);
       return failGetSchema_ ? (int)ErrorCode::kGetSchemaFailed
                             : (int)ErrorCode::kNoError;
@@ -69,6 +79,9 @@ class ArrowStreamTest : public OperatorTestBase {
     const TypePtr type_;
     const bool failGetNext_;
     const bool failGetSchema_;
+    // Whether a failing call exports to its output before returning the
+    // error. The C stream interface leaves the output unspecified on error.
+    const bool writeOutputOnFailure_;
     int vectorIndex_ = 0;
   };
 
@@ -211,24 +224,62 @@ TEST_F(ArrowStreamTest, error) {
   }
   auto type = asRowType(vectors[0]->type());
 
-  // Assert getNext error message.
-  struct ArrowArrayStream arrowStream;
-  exportArrowStream(
-      std::make_shared<ArrowReader>(pool_, vectors, type, true, false),
-      &arrowStream);
-  auto plan = std::make_shared<core::ArrowStreamNode>(
-      "0", type, std::make_shared<ArrowArrayStream>(arrowStream));
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan).copyResults(pool_.get()),
-      "Failed to call get_next on ArrowStream: get_next failed.");
+  auto makeStream =
+      [&](bool failGetNext, bool failGetSchema, bool writeOutputOnFailure) {
+        struct ArrowArrayStream arrowStream;
+        exportArrowStream(
+            std::make_shared<ArrowReader>(
+                pool_,
+                vectors,
+                type,
+                failGetNext,
+                failGetSchema,
+                writeOutputOnFailure),
+            &arrowStream);
+        return arrowStream;
+      };
 
-  // Assert getSchema error message.
-  exportArrowStream(
-      std::make_shared<ArrowReader>(pool_, vectors, type, false, true),
-      &arrowStream);
-  plan = std::make_shared<core::ArrowStreamNode>(
-      "0", type, std::make_shared<ArrowArrayStream>(arrowStream));
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(plan).copyResults(pool_.get()),
-      "Failed to call get_schema on ArrowStream: get_schema failed.");
+  auto assertError = [&](const struct ArrowArrayStream& arrowStream,
+                         const std::string& expectedMessage) {
+    auto plan = std::make_shared<core::ArrowStreamNode>(
+        "0", type, std::make_shared<ArrowArrayStream>(arrowStream));
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).copyResults(pool_.get()), expectedMessage);
+  };
+
+  for (bool writeOutputOnFailure : {true, false}) {
+    SCOPED_TRACE(fmt::format("writeOutputOnFailure: {}", writeOutputOnFailure));
+
+    assertError(
+        makeStream(
+            /*failGetNext=*/true,
+            /*failGetSchema=*/false,
+            writeOutputOnFailure),
+        "Failed to call get_next on ArrowStream: get_next failed.");
+
+    assertError(
+        makeStream(
+            /*failGetNext=*/false,
+            /*failGetSchema=*/true,
+            writeOutputOnFailure),
+        "Failed to call get_schema on ArrowStream: get_schema failed.");
+  }
+
+  // A stream may provide no error message. The error code describes the
+  // failure instead.
+  {
+    SCOPED_TRACE("No error message");
+    auto arrowStream = makeStream(
+        /*failGetNext=*/true,
+        /*failGetSchema=*/false,
+        /*writeOutputOnFailure=*/false);
+    arrowStream.get_last_error = [](struct ArrowArrayStream*) -> const char* {
+      return nullptr;
+    };
+    assertError(
+        arrowStream,
+        fmt::format(
+            "Failed to call get_next on ArrowStream: {}",
+            folly::errnoStr(static_cast<int>(ErrorCode::kGetNextFailed))));
+  }
 }
