@@ -37,6 +37,26 @@ struct SharedDictionaryConfig {
   bool useExternalAlphabet{false};
   /// Candidate encodings for alphabets stored in this file.
   std::vector<EncodingType> alphabetEncodings{};
+  /// Commits the scope to shared dictionary encoding without first checking
+  /// whether the opening chunk would have chosen Dictionary on its own.
+  ///
+  /// That check prices a per-chunk dictionary, which carries its own alphabet,
+  /// against the alternatives for one chunk. A shared dictionary writes its
+  /// alphabet once for the whole scope, so the two have different economics
+  /// and diverge most as chunks get smaller: a chunk too small to repay an
+  /// alphabet of its own can still be well served by indices into a shared
+  /// one. Taking the per-chunk answer there declines the dictionary exactly
+  /// where sharing has the most to offer.
+  bool skipOpeningChunkCostCheck{false};
+  /// Compresses the stored alphabet with the writer's compression options.
+  ///
+  /// A shared alphabet replaces one copy per chunk, and those copies are
+  /// compressed. Storing the survivor uncompressed gives back more than the
+  /// copies cost, so sharing can enlarge a file whose duplicate alphabets it
+  /// removed. Alphabet encoding narrows to the encodings whose views
+  /// decompress, since a view that cannot is handed compressed bytes to read
+  /// entries from.
+  bool compressAlphabet{false};
 };
 
 /// Shared dictionary settings for one regular column value stream.

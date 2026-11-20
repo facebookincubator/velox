@@ -252,9 +252,13 @@ class SharedDictionaryAlphabet {
       std::span<const T> values,
       std::span<const EncodingType> candidateEncodings,
       Buffer& buffer,
-      const Encoding::Options& options = {}) {
+      const Encoding::Options& options = {},
+      std::optional<CompressionOptions> compressionOptions = std::nullopt) {
     return EncodingFactory::encode<T>(
-        createEncodingPolicy<T>(candidateEncodings), values, buffer, options);
+        createEncodingPolicy<T>(candidateEncodings, compressionOptions),
+        values,
+        buffer,
+        options);
   }
 
   /// Returns the encoded size encode() would produce for values. Writers use
@@ -399,16 +403,51 @@ class SharedDictionaryAlphabet {
 
   template <typename T>
   static std::unique_ptr<EncodingSelectionPolicy<T>> createEncodingPolicy(
-      std::span<const EncodingType> candidateEncodings) {
-    // Compression is disabled because supportsEncodingView() only sees the
-    // encoding type, so a compressed stream would be mistaken for one the
-    // reader can index into.
+      std::span<const EncodingType> candidateEncodings,
+      std::optional<CompressionOptions> compressionOptions = std::nullopt) {
+    // Compression travels with the encoding, past the prefix that
+    // supportsEncodingView() reads, so an encoding whose view does not undo it
+    // would hand the reader compressed bytes to index into. Offering only the
+    // encodings whose views decompress keeps that choice sound; without
+    // compression every encoding stays eligible, as before.
     const ManualEncodingSelectionPolicyFactory factory{
-        encodingReadFactors(candidateEncodings),
-        /*compressionOptions=*/std::nullopt};
+        compressionOptions.has_value()
+            ? compressibleEncodingReadFactors(candidateEncodings)
+            : encodingReadFactors(candidateEncodings),
+        compressionOptions};
     auto policy = factory.createPolicy(TypeTraits<T>::dataType);
     return std::unique_ptr<EncodingSelectionPolicy<T>>(
         static_cast<EncodingSelectionPolicy<T>*>(policy.release()));
+  }
+
+  // Encodings whose EncodingView calls decompressPayload(), so a compressed
+  // alphabet stays readable by index. Keep in sync with the views under
+  // encodings/views that decompress.
+  static bool viewDecompresses(EncodingType encodingType) {
+    switch (encodingType) {
+      case EncodingType::Trivial:
+      case EncodingType::FixedBitWidth:
+      case EncodingType::FOR:
+      case EncodingType::BlockBitPackingV2:
+      case EncodingType::Fsst:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  static std::vector<std::pair<EncodingType, float>>
+  compressibleEncodingReadFactors(
+      std::span<const EncodingType> candidateEncodings) {
+    auto readFactors = encodingReadFactors(candidateEncodings);
+    std::erase_if(readFactors, [](const auto& entry) {
+      return !viewDecompresses(entry.first);
+    });
+    NIMBLE_CHECK(
+        !readFactors.empty(),
+        "Compressed shared dictionary alphabets need a candidate encoding "
+        "whose view decompresses.");
+    return readFactors;
   }
 
   static std::vector<std::pair<EncodingType, float>> encodingReadFactors(

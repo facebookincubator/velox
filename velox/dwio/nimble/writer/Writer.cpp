@@ -936,6 +936,10 @@ TypedSharedDictionaryWriter<T>* sharedDictionaryWriter(
       .encodingOptions = std::move(encodingOptions),
       .resolver =
           writerOptions.experimentalSharedDictionaryEncoding.externalResolver,
+      .skipOpeningChunkCostCheck = config->skipOpeningChunkCostCheck,
+      .alphabetCompressionOptions = config->compressAlphabet
+          ? std::optional{writerOptions.compressionOptions}
+          : std::nullopt,
   };
   auto writer = std::make_unique<TypedSharedDictionaryWriter<T>>(
       &buffer.getMemoryPool(), dictionaryOptions);

@@ -81,6 +81,18 @@ class SharedDictionaryWriter {
     /// type. Required for external dictionaries, and for file dictionaries when
     /// useExternalAlphabet is set.
     std::shared_ptr<const ExternalDictionaryResolver> resolver;
+
+    /// Commits a stripe scope to shared dictionary encoding without first
+    /// checking whether its opening chunk would have chosen Dictionary alone.
+    /// See SharedDictionaryConfig::skipOpeningChunkCostCheck.
+    bool skipOpeningChunkCostCheck{false};
+
+    /// Compresses the stored alphabet. Unset leaves it uncompressed, which
+    /// costs the whole alphabet at full size: the per-chunk alphabets a shared
+    /// one replaces are compressed, so an uncompressed alphabet can outweigh
+    /// every copy it removed. Setting it narrows alphabet encoding to the
+    /// encodings whose views decompress.
+    std::optional<CompressionOptions> alphabetCompressionOptions;
   };
 
   virtual ~SharedDictionaryWriter() = default;
@@ -236,7 +248,8 @@ class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
         alphabet,
         options_.alphabetEncodings,
         buffer,
-        alphabetEncodingOptions());
+        alphabetEncodingOptions(),
+        options_.alphabetCompressionOptions);
     // TODO: Populate bounds from the encoded shared dictionary alphabet.
     return Chunk{
         .rowCount = rowCount,
@@ -305,6 +318,10 @@ class TypedSharedDictionaryWriter final : public SharedDictionaryWriter {
         if (!writer_->useDictionary_.value()) {
           return selectNonSharedEncoding(values, statistics, options, notNulls);
         }
+        return selectDictionary(logicalValues);
+      }
+
+      if (writer_->options_.skipOpeningChunkCostCheck) {
         return selectDictionary(logicalValues);
       }
 
