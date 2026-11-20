@@ -341,6 +341,10 @@ class Reader {
     return kvikioSource_->size();
   }
 
+  bool supportsDeviceRead() const {
+    return kvikioSource_->supports_device_read();
+  }
+
   bool isDeviceReadPreferred(size_t bytes) const {
     return kvikioSource_->is_device_read_preferred(bytes);
   }
@@ -694,7 +698,7 @@ class CachingDataSource final : public cudf::io::datasource {
   }
 
   bool supports_device_read() const override {
-    return true;
+    return reader_->supportsDeviceRead();
   }
 
   bool is_device_read_preferred(size_t bytes) const override {
