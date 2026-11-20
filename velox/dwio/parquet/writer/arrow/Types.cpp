@@ -411,11 +411,11 @@ std::shared_ptr<const LogicalType> LogicalType::fromThrift(
       return EnumLogicalType::make();
     case Type::DECIMAL:
       return DecimalLogicalType::make(
-          *type.get_DECIMAL().precision(), *type.get_DECIMAL().scale());
+          *type.DECIMAL()->precision(), *type.DECIMAL()->scale());
     case Type::DATE:
       return DateLogicalType::make();
     case Type::TIME: {
-      auto thrift_unit = type.get_TIME().unit();
+      auto thrift_unit = type.TIME()->unit();
       const auto thriftUnitType = thrift_unit->getType();
       LogicalType::TimeUnit::Unit unit;
       if (thriftUnitType == TimeUnitType::MILLIS) {
@@ -427,10 +427,10 @@ std::shared_ptr<const LogicalType> LogicalType::fromThrift(
       } else {
         unit = LogicalType::TimeUnit::kUnknown;
       }
-      return TimeLogicalType::make(*type.get_TIME().isAdjustedToUTC(), unit);
+      return TimeLogicalType::make(*type.TIME()->isAdjustedToUTC(), unit);
     }
     case Type::TIMESTAMP: {
-      auto thrift_unit = type.get_TIMESTAMP().unit();
+      auto thrift_unit = type.TIMESTAMP()->unit();
       const auto thriftUnitType = thrift_unit->getType();
       LogicalType::TimeUnit::Unit unit;
       if (thriftUnitType == TimeUnitType::MILLIS) {
@@ -443,7 +443,7 @@ std::shared_ptr<const LogicalType> LogicalType::fromThrift(
         unit = LogicalType::TimeUnit::kUnknown;
       }
       return TimestampLogicalType::make(
-          *type.get_TIMESTAMP().isAdjustedToUTC(), unit);
+          *type.TIMESTAMP()->isAdjustedToUTC(), unit);
     }
     // TODO(tpboudreau): activate the commented code after parquet.thrift
     // recognizes IntervalType as a LogicalType
@@ -451,8 +451,8 @@ std::shared_ptr<const LogicalType> LogicalType::fromThrift(
     //   return IntervalLogicalType::make();
     case Type::INTEGER:
       return IntLogicalType::make(
-          static_cast<int>(*type.get_INTEGER().bitWidth()),
-          *type.get_INTEGER().isSigned());
+          static_cast<int>(*type.INTEGER()->bitWidth()),
+          *type.INTEGER()->isSigned());
     case Type::UNKNOWN:
       return NullLogicalType::make();
     case Type::JSON:
