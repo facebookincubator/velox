@@ -488,6 +488,11 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
         defineLength,
         levelBitWidth(maxDefine_));
   }
+  // readBytes() above consumed the whole page. The levels are not compressed,
+  // so the rep/def-only pass does not need the values.
+  if (row == kRepDefOnly) {
+    return;
+  }
   pageData_ += levelsSize;
   // parquet.thrift uses "7: optional bool is_compressed = true;" but
   // FBThrift doesn't support "optional" and default value. The problem is
@@ -503,19 +508,12 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
         compressedPageSize - levelsSize,
         uncompressedPageSize - levelsSize);
   }
-  if (row == kRepDefOnly) {
-    skipBytes(bytes, inputStream_.get(), bufferStart_, bufferEnd_);
-    return;
-  }
-
   encodedDataSize_ = static_cast<int32_t>(uncompressedPageSize - levelsSize);
   encoding_ = *pageHeader.data_page_header_v2()->encoding();
-  if (numRowsInPage_ == kRowsUnknown) {
+  if (!hasChunkRepDefs_ && (numRowsInPage_ == kRowsUnknown || maxDefine_ > 1)) {
     readPageDefLevels();
   }
-  if (row != kRepDefOnly) {
-    makeDecoder();
-  }
+  makeDecoder();
 }
 
 void PageReader::readDictionaryBytes(char* dest, int32_t numBytes) {
