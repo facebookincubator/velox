@@ -73,6 +73,7 @@
 #include "velox/exec/TopNRowNumber.h"
 #include "velox/exec/Values.h"
 #include "velox/exec/Window.h"
+#include "velox/expression/ExprOptimizer.h"
 
 namespace facebook::velox::cudf_velox {
 
@@ -91,6 +92,10 @@ bool containsCustomComparison(const TypePtr& type) {
 }
 
 bool containsCustomComparison(const core::TypedExprPtr& expression) {
+  // The input row holds every column, not just the ones the expression reads.
+  if (expression->isInputKind()) {
+    return false;
+  }
   if (containsCustomComparison(expression->type())) {
     return true;
   }
@@ -108,19 +113,32 @@ bool subtreeHasUnsupportedType(const core::PlanNodePtr& root) {
 
 std::vector<core::TypedExprPtr> toComparisonKeys(
     const std::vector<core::FieldAccessTypedExprPtr>& first,
-    const std::vector<core::FieldAccessTypedExprPtr>& second = {}) {
+    const std::vector<core::FieldAccessTypedExprPtr>& second) {
   std::vector<core::TypedExprPtr> keys(first.begin(), first.end());
   keys.insert(keys.end(), second.begin(), second.end());
   return keys;
 }
 
+// CallbackSink and LocalMerge must declare the same keys, or only one side of
+// the merge moves to the GPU.
+std::vector<core::TypedExprPtr> localMergeComparisonKeys(
+    const core::PlanNodePtr& planNode) {
+  auto node = std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode);
+  if (!node) {
+    return {};
+  }
+  return toComparisonKeys(node->sortingKeys(), {});
+}
+
 } // namespace
 
 bool OperatorAdapter::needsCustomComparison(
-    const core::PlanNodePtr& planNode) const {
+    const core::PlanNodePtr& planNode,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool) const {
   const auto keys = comparisonKeys(planNode);
-  return std::any_of(keys.begin(), keys.end(), [](const auto& key) {
-    return containsCustomComparison(key);
+  return std::any_of(keys.begin(), keys.end(), [&](const auto& key) {
+    return containsCustomComparison(expression::optimize(key, queryCtx, pool));
   });
 }
 
@@ -446,7 +464,7 @@ class AggregationAdapter : public OperatorAdapter {
     if (!node) {
       return {};
     }
-    return toComparisonKeys(node->groupingKeys());
+    return toComparisonKeys(node->groupingKeys(), {});
   }
 
   bool acceptsGpuInput() const override {
@@ -806,7 +824,7 @@ class OrderByAdapter : public OperatorAdapter {
     if (!node) {
       return {};
     }
-    return toComparisonKeys(node->sortingKeys());
+    return toComparisonKeys(node->sortingKeys(), {});
   }
 
   bool acceptsGpuInput() const override {
@@ -854,7 +872,7 @@ class TopNAdapter : public OperatorAdapter {
     if (!node) {
       return {};
     }
-    return toComparisonKeys(node->sortingKeys());
+    return toComparisonKeys(node->sortingKeys(), {});
   }
 
   bool acceptsGpuInput() const override {
@@ -1197,7 +1215,7 @@ class MarkDistinctAdapter : public OperatorAdapter {
     if (!node) {
       return {};
     }
-    return toComparisonKeys(node->distinctKeys());
+    return toComparisonKeys(node->distinctKeys(), {});
   }
 
   bool acceptsGpuInput() const override {
@@ -1293,11 +1311,7 @@ class CallbackSinkAdapter : public OperatorAdapter {
 
   std::vector<core::TypedExprPtr> comparisonKeys(
       const core::PlanNodePtr& planNode) const override {
-    auto node = std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode);
-    if (!node) {
-      return {};
-    }
-    return toComparisonKeys(node->sortingKeys());
+    return localMergeComparisonKeys(planNode);
   }
 
   bool acceptsGpuInput() const override {
@@ -1342,11 +1356,7 @@ class LocalMergeAdapter : public OperatorAdapter {
 
   std::vector<core::TypedExprPtr> comparisonKeys(
       const core::PlanNodePtr& planNode) const override {
-    auto node = std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode);
-    if (!node) {
-      return {};
-    }
-    return toComparisonKeys(node->sortingKeys());
+    return localMergeComparisonKeys(planNode);
   }
 
   bool acceptsGpuInput() const override {

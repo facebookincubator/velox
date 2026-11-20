@@ -249,6 +249,24 @@ TEST_F(HashJoinTest, countStarOverJoinFilterCastingVarchar) {
   EXPECT_NE(operatorTypes.find("Cudf"), std::string::npos) << operatorTypes;
 }
 
+TEST_F(HashJoinTest, countStarOverJoinFilterFoldingCustomComparisonType) {
+  auto probe = makeNamedRowVector(
+      "k", makeFlatVector<int64_t>({1969, 1970, 1971, 1972}));
+  auto build = makeNamedRowVector(
+      "u_k", makeFlatVector<int64_t>({1970, 1971, 1971, 1972}));
+
+  // from_unixtime() returns a TIMESTAMP WITH TIME ZONE, which provides custom
+  // comparison, but the filter folds to 'k > 1970' and stays on the GPU.
+  auto plan = countStarOverZeroColumnHashJoinPlan(
+      probe,
+      build,
+      core::JoinType::kInner,
+      "k > year(from_unixtime(0.0, 'UTC'))");
+
+  auto expected = makeRowVector({makeFlatVector<int64_t>({3})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 TEST_F(HashJoinTest, countStarOverLikeFilterSpanningBothSidesJoin) {
   // The LIKE value comes from the probe side and the pattern comes from the
   // build side, so this cross-side, non-AST-supported filter should exercise

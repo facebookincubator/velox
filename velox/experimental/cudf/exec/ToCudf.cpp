@@ -34,6 +34,7 @@
 
 #include "folly/Conv.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/exec/Task.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/utilities/memory_resource.hpp>
@@ -98,6 +99,9 @@ bool CompileState::compile(bool allowCpuFallback) {
   struct OperatorProperties : OperatorAdapter::Properties {
     const OperatorAdapter* adapter = nullptr;
     core::PlanNodePtr planNode;
+    // Whether the previous operator's output, which is this operator's input,
+    // converts to cuDF. False when that operator has no plan node. Unused for
+    // the first operator.
     bool inputTypesConvertible = true;
     bool outputTypesConvertible = true;
     bool keysNeedCustomComparison = false;
@@ -125,8 +129,8 @@ bool CompileState::compile(bool allowCpuFallback) {
         if (adapter && props.planNode) {
           static_cast<OperatorAdapter::Properties&>(props) =
               adapter->properties(op, props.planNode, ctx);
-          props.keysNeedCustomComparison =
-              adapter->needsCustomComparison(props.planNode);
+          props.keysNeedCustomComparison = adapter->needsCustomComparison(
+              props.planNode, ctx->task->queryCtx().get(), op->pool());
         }
         if (isAnyOf<CudfOperator>(op)) {
           // CudfOperator is always fully GPU compatible
@@ -160,6 +164,8 @@ bool CompileState::compile(bool allowCpuFallback) {
   // Resuming GPU once types are supported again requires coordinated backend
   // selection across joins and local exchanges.
   bool skipGpuReplacement = false;
+  // Why skipGpuReplacement was set, reported for each operator it keeps on CPU.
+  std::string skipGpuReason;
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
        ++operatorIndex) {
     std::vector<std::unique_ptr<exec::Operator>> replaceOp;
@@ -208,6 +214,9 @@ bool CompileState::compile(bool allowCpuFallback) {
       } else {
         skipGpuReplacement = true;
         inputTypesSkippedGpu = true;
+        skipGpuReason = prevPlanNode
+            ? "input types are not convertible to cuDF"
+            : "the operator before it has no plan node";
       }
     }
     if (not replaceOp.empty()) {
@@ -298,15 +307,16 @@ bool CompileState::compile(bool allowCpuFallback) {
     if (isPureCpuOperator) {
       if (!adapter) {
         reason = "no cuDF adapter";
+      } else if (!planNode) {
+        reason = "the operator has no plan node";
       } else if (inputTypesSkippedGpu) {
-        reason = "input types are not convertible to cuDF";
+        reason = skipGpuReason;
       } else if (!thisOpProps.outputTypesConvertible) {
         reason = "output types are not convertible to cuDF";
       } else if (thisOpProps.keysNeedCustomComparison) {
         reason = "keys need custom comparison";
       } else if (skipGpuReplacement) {
-        reason =
-            "an earlier operator's input types are not convertible to cuDF";
+        reason = "an earlier operator stayed on CPU: " + skipGpuReason;
       } else {
         reason = fmt::format(
             "the {} adapter declined the operator", adapter->name());

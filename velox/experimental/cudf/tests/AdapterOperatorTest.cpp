@@ -433,7 +433,8 @@ TEST_F(AdapterOperatorTest, fromVeloxRejectsDeviceInput) {
 TEST_F(AdapterOperatorTest, customComparisonKeyIsRejectedWithoutFallback) {
   registerAdapterFirst(std::make_unique<CustomComparisonKeyAdapter>());
 
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  auto data =
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3, 4, 5}));
   auto plan = PlanBuilder().values({data}).project({"c0 * 2 as x"}).planNode();
 
   VELOX_ASSERT_THROW(
@@ -445,7 +446,8 @@ TEST_F(AdapterOperatorTest, customComparisonKeyRunsOnCpuWithFallback) {
   enableCpuFallback();
   registerAdapterFirst(std::make_unique<CustomComparisonKeyAdapter>());
 
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  auto data =
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3, 4, 5}));
   core::PlanNodeId projNodeId;
   auto plan = PlanBuilder()
                   .values({data})
@@ -456,11 +458,80 @@ TEST_F(AdapterOperatorTest, customComparisonKeyRunsOnCpuWithFallback) {
   std::shared_ptr<exec::Task> task;
   auto results = AssertQueryBuilder(plan).copyResults(pool(), task);
   facebook::velox::test::assertEqualVectors(
-      makeRowVector({"x"}, {makeFlatVector<int64_t>({2, 4, 6, 8, 10})}),
+      makeNamedRowVector("x", makeFlatVector<int64_t>({2, 4, 6, 8, 10})),
       results);
 
   auto stats = toPlanStats(task->taskStats());
   auto& projStats = stats.at(projNodeId);
   EXPECT_EQ(projStats.operatorStats.count("FilterProject"), 1);
   EXPECT_EQ(projStats.operatorStats.count("CudfFilterProject"), 0);
+  EXPECT_EQ(projStats.operatorStats.count("CudfFromVelox"), 0);
+  EXPECT_EQ(projStats.operatorStats.count("CudfToVelox"), 0);
+}
+
+TEST_F(AdapterOperatorTest, keyedAdaptersDeclareComparisonKeys) {
+  const auto customType =
+      facebook::velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON();
+  // Returns plans that each have 'keyType' in exactly one key list and BIGINT
+  // elsewhere, with the names of the adapters that declare that list. Each row
+  // also has a custom comparison column that no key reads.
+  const auto makePlans = [&](const TypePtr& keyType) {
+    auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    const auto source = [&](const std::string& prefix) {
+      return PlanBuilder(idGenerator)
+          .values({BaseVector::create<RowVector>(
+              ROW({prefix + "k", prefix + "v", prefix + "p"},
+                  {keyType, BIGINT(), customType}),
+              0,
+              pool())});
+    };
+    const auto build = source("u_").planNode();
+    return std::vector<std::pair<std::vector<std::string>, core::PlanNodePtr>>{
+        {{"Aggregation"}, source("").singleAggregation({"k"}, {}).planNode()},
+        {{"HashJoinBuild", "HashJoinProbe"},
+         source("").hashJoin({"k"}, {"u_k"}, build, "", {"v"}).planNode()},
+        {{"HashJoinBuild", "HashJoinProbe"},
+         source("")
+             .hashJoin({"v"}, {"u_v"}, build, "k = u_k", {"v"})
+             .planNode()},
+        {{"NestedLoopJoinBuild", "NestedLoopJoinProbe"},
+         source("").nestedLoopJoin(build, "k = u_k", {"v"}).planNode()},
+        {{"OrderBy"}, source("").orderBy({"k"}, false).planNode()},
+        {{"TopN"}, source("").topN({"k"}, 1, false).planNode()},
+        {{"TopNRowNumber"},
+         source("").topNRowNumber({"k"}, {"v"}, 1, true).planNode()},
+        {{"TopNRowNumber"},
+         source("").topNRowNumber({"v"}, {"k"}, 1, true).planNode()},
+        {{"MarkDistinct"}, source("").markDistinct("m", {"k"}).planNode()},
+        {{"CallbackSink", "LocalMerge"},
+         source("").localMerge({"k"}).planNode()},
+        {{"Window"},
+         source("")
+             .window({"count(v) over (partition by k order by v)"})
+             .planNode()},
+        {{"Window"},
+         source("")
+             .window({"count(v) over (partition by v order by k)"})
+             .planNode()},
+    };
+  };
+
+  std::unordered_map<std::string, const cudf_velox::OperatorAdapter*> adapters;
+  for (const auto& adapter :
+       cudf_velox::OperatorAdapterRegistry::getInstance().getAdapters()) {
+    adapters.emplace(adapter->name(), adapter.get());
+  }
+  const auto queryCtx = core::QueryCtx::create();
+  for (const auto& [keyType, expected] : std::vector<std::pair<TypePtr, bool>>{
+           {customType, true}, {ROW({customType}), true}, {BIGINT(), false}}) {
+    for (const auto& [adapterNames, plan] : makePlans(keyType)) {
+      for (const auto& name : adapterNames) {
+        SCOPED_TRACE(fmt::format("{}: {}", name, plan->toString(true, false)));
+        EXPECT_EQ(
+            adapters.at(name)->needsCustomComparison(
+                plan, queryCtx.get(), pool()),
+            expected);
+      }
+    }
+  }
 }

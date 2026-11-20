@@ -59,16 +59,20 @@ class OperatorAdapter {
   /// produces GPU vectors as output.
   virtual bool producesGpuOutput() const = 0;
 
-  /// Expressions whose values the operator hashes, compares, sorts or
-  /// partitions by. The caller decides whether they can run on the GPU.
+  /// Returns the expressions whose values the operator hashes, compares, sorts
+  /// or partitions by. The caller decides whether they can run on the GPU.
   virtual std::vector<core::TypedExprPtr> comparisonKeys(
       const core::PlanNodePtr& /*planNode*/) const {
     return {};
   }
 
-  /// Returns whether any of comparisonKeys() has a type, or a nested type,
-  /// that provides custom comparison.
-  bool needsCustomComparison(const core::PlanNodePtr& planNode) const;
+  /// Returns whether any of comparisonKeys(), or any expression within them,
+  /// has a type or nested type that provides custom comparison. Keys are
+  /// constant folded first, as the operators do before evaluating them.
+  bool needsCustomComparison(
+      const core::PlanNodePtr& planNode,
+      core::QueryCtx* queryCtx,
+      memory::MemoryPool* pool) const;
 
   /// Bundled GPU capability properties for an operator.
   struct Properties {
