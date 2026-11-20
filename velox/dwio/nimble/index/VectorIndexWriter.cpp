@@ -58,6 +58,10 @@ constexpr uint8_t kMaxPqBits{24};
 
 constexpr uint8_t kRaBitQQueryBits{4};
 
+bool isGraphIndexType(VectorIndexType indexType) {
+  return indexType == VectorIndexType::kHnswSq8;
+}
+
 // Clamps the requested partition count to the available training data.
 uint32_t calculateNumPartitions(
     uint64_t numVectors,
@@ -264,7 +268,7 @@ velox::column_index_t validateConfig(
         config.pqBits, kMaxPqBits, "PQ bits per code exceed the FAISS limit");
   }
 
-  if (config.indexType == VectorIndexType::kHnswSq8) {
+  if (isGraphIndexType(config.indexType)) {
     NIMBLE_USER_CHECK_GT(
         config.hnswNumConnections,
         0,
@@ -539,7 +543,7 @@ VectorIndexWriter::SerializedIndex VectorIndexWriter::buildIndex(
   normalizeVectors(
       config.metric, accumulator.numVectors, config.dimensions, vectorData);
 
-  const auto numPartitions = config.indexType == VectorIndexType::kHnswSq8
+  const auto numPartitions = isGraphIndexType(config.indexType)
       ? 0
       : calculateNumPartitions(accumulator.numVectors, config.numPartitions);
   auto ownedIndex = createFaissIndex(config, numPartitions);
@@ -551,10 +555,12 @@ VectorIndexWriter::SerializedIndex VectorIndexWriter::buildIndex(
       static_cast<faiss::idx_t>(accumulator.numVectors);
   // Some FAISS implementations are initialized as trained, while others must
   // learn their quantization state from the input vectors.
-  if (!faissIndex.is_trained) {
-    faissIndex.train(faissNumVectors, vectorData);
+  if (faissIndex.ntotal == 0) {
+    if (!faissIndex.is_trained) {
+      faissIndex.train(faissNumVectors, vectorData);
+    }
+    faissIndex.add(faissNumVectors, vectorData);
   }
-  faissIndex.add(faissNumVectors, vectorData);
 
   SerializedIndexWriter writer{
       pool_, static_cast<size_t>(config.maxIndexSizeBytes)};
