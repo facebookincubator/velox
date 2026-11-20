@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/Conv.h>
 #include <re2/re2.h>
 
 #include "velox/common/config/Config.h"
@@ -21,6 +22,38 @@
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::core {
+
+namespace {
+
+struct PropertyRange {
+  const char* key;
+  uint32_t min;
+  uint32_t max;
+};
+
+// A batch's row count is a vector_size_t.
+constexpr uint32_t kMaxBatchRows = std::numeric_limits<vector_size_t>::max();
+constexpr uint32_t kUnlimited = std::numeric_limits<uint32_t>::max();
+
+constexpr std::array kPropertyRanges = {
+    PropertyRange{QueryConfig::kMaxOutputBatchRows, 1, kMaxBatchRows},
+    PropertyRange{QueryConfig::kPreferredOutputBatchRows, 1, kMaxBatchRows},
+    PropertyRange{
+        QueryConfig::kMergeJoinOutputBatchStartSize,
+        0,
+        kMaxBatchRows},
+    PropertyRange{
+        QueryConfig::kTableScanOutputBatchRowsOverride,
+        0,
+        kMaxBatchRows},
+    PropertyRange{QueryConfig::kMaxLocalExchangePartitionCount, 1, kUnlimited},
+    PropertyRange{QueryConfig::kLocalMergeMaxNumMergeSources, 1, kUnlimited},
+    PropertyRange{QueryConfig::kLocalMergeSourceQueueSize, 1, kUnlimited},
+    PropertyRange{QueryConfig::kTaskWriterCount, 1, kUnlimited},
+    PropertyRange{QueryConfig::kTaskPartitionedWriterCount, 1, kUnlimited},
+};
+
+} // namespace
 
 namespace {
 constexpr const char* kUseSessionTimezoneForTimestampWithTimezone =
@@ -52,6 +85,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kExprDedupNonDeterministic);
     VELOX_REGISTER_QUERY_CONFIG(kExprMaxArraySizeInReduce);
     VELOX_REGISTER_QUERY_CONFIG(kExprMaxCompiledRegexes);
+    VELOX_REGISTER_QUERY_CONFIG(kMinRowsForPeeling);
 
     // Operator.
     VELOX_REGISTER_QUERY_CONFIG(kOperatorTrackCpuUsage);
@@ -74,6 +108,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kMaxExchangeBufferSize);
     VELOX_REGISTER_QUERY_CONFIG(kMaxMergeExchangeBufferSize);
     VELOX_REGISTER_QUERY_CONFIG(kMinExchangeOutputBatchBytes);
+    VELOX_REGISTER_QUERY_CONFIG(kExchangeOutputBatchRows);
 
     // Aggregation.
     VELOX_REGISTER_QUERY_CONFIG(kMaxPartialAggregationMemory);
@@ -129,6 +164,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kMarkDistinctSpillEnabled);
     VELOX_REGISTER_QUERY_CONFIG(kTopNRowNumberSpillEnabled);
     VELOX_REGISTER_QUERY_CONFIG(kLocalMergeSpillEnabled);
+    VELOX_REGISTER_QUERY_CONFIG(kLocalMergeMaxNumMergeSources);
     VELOX_REGISTER_QUERY_CONFIG(kMaxSpillRunRows);
     VELOX_REGISTER_QUERY_CONFIG(kMaxSpillBytes);
     VELOX_REGISTER_QUERY_CONFIG(kMaxSpillLevel);
@@ -222,6 +258,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
 
     // Map.
     VELOX_REGISTER_QUERY_CONFIG(kThrowExceptionOnDuplicateMapKeys);
+    VELOX_REGISTER_QUERY_CONFIG(kGenerateConstantMapsAsFlatMaps);
 
     // Index lookup join.
     VELOX_REGISTER_QUERY_CONFIG(kIndexLookupJoinMaxPrefetchBatches);
@@ -278,6 +315,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionAsyncGrowthMaxWindow);
 
     // RPC adaptive rate limiter.
+    VELOX_REGISTER_QUERY_CONFIG(kRpcFlowControlPolicy);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterAdaptiveEnabled);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterMinLimit);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterDecreaseFactor);
@@ -321,11 +359,29 @@ void QueryConfig::validateConfig() {
         QueryConfig::kSessionTimezone,
         *tz);
   }
+
+  for (const auto& [key, min, max] : kPropertyRanges) {
+    const auto text = config_->get<std::string>(key);
+    if (!text.has_value()) {
+      continue;
+    }
+    const auto value = folly::tryTo<uint32_t>(*text);
+    VELOX_USER_CHECK(
+        value.hasValue(),
+        "Session property must be an integer between 0 and {}: {} = {}",
+        kUnlimited,
+        key,
+        *text);
+    VELOX_USER_CHECK_GE(
+        *value, min, "Session property must be at least {}: {}", min, key);
+    VELOX_USER_CHECK_LE(
+        *value, max, "Session property cannot exceed {}: {}", max, key);
+  }
 }
 
 void QueryConfig::testingOverrideConfigUnsafe(
     std::unordered_map<std::string, std::string>&& values) {
-  config_ = std::make_unique<config::ConfigBase>(std::move(values));
+  config_ = QueryConfig{std::move(values)}.config_;
 }
 
 std::unordered_map<std::string, std::string> QueryConfig::rawConfigsCopy()

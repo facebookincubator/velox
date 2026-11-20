@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/torchwave/Model.h"
+#include "velox/experimental/torchwave/PackRewrite.h"
 
 #include <algorithm>
 
@@ -95,6 +96,16 @@ std::unique_ptr<TorchWaveModel> TorchWaveModel::loadFromReader(
   setGraphDevice(loaded.graph.get(), /*isCuda=*/true);
   rewriteGpuIncompatibleOps(*loaded.graph);
   insertCpuOnlyCopies(*loaded.graph);
+  // Retarget merge-and-dedup to the fused TorchWave _tw CUDA ops when
+  // WaveConfig::twMad asks for it and a build has registered them (e.g. the
+  // _torchwave_meta extension). Otherwise the sparsenn op runs as a standalone.
+  if (WaveConfig::get().twMad) {
+    rewriteMergeAndDedupToTw(*loaded.graph);
+  }
+  std::vector<PackRecipe> packRecipes;
+  if (WaveConfig::get().packInputs) {
+    packRecipes = rewritePackedInputs(*loaded.graph);
+  }
 
   auto context = std::make_unique<ModelContext>();
   context->graph = std::move(loaded.graph);
@@ -102,19 +113,27 @@ std::unique_ptr<TorchWaveModel> TorchWaveModel::loadFromReader(
   context->config = config;
 
   auto executor = std::make_unique<WaveGraphExecutor>(std::move(context));
-  return std::unique_ptr<TorchWaveModel>(
-      new TorchWaveModel(std::move(reader), std::move(executor)));
+  return std::unique_ptr<TorchWaveModel>(new TorchWaveModel(
+      std::move(reader), std::move(executor), std::move(packRecipes)));
 }
 
 TorchWaveModel::TorchWaveModel(
     std::shared_ptr<caffe2::serialize::PyTorchStreamReader> reader,
-    std::unique_ptr<WaveGraphExecutor> executor)
-    : reader_(std::move(reader)), executor_(std::move(executor)) {}
+    std::unique_ptr<WaveGraphExecutor> executor,
+    std::vector<PackRecipe> packRecipes)
+    : reader_(std::move(reader)),
+      executor_(std::move(executor)),
+      packRecipes_(std::move(packRecipes)) {}
 
 TorchWaveModel::~TorchWaveModel() = default;
 
 std::vector<c10::IValue> TorchWaveModel::run(std::vector<c10::IValue> inputs) {
   return executor_->runInputs(std::move(inputs));
+}
+
+std::vector<c10::IValue> TorchWaveModel::runReuse(
+    std::vector<c10::IValue> inputs) {
+  return executor_->runInputsReuse(std::move(inputs));
 }
 
 std::vector<at::Tensor> TorchWaveModel::runTensors(

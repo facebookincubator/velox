@@ -36,7 +36,8 @@ class KeyCursor {
   virtual bool hasNext() const = 0;
 
   /// Returns the current encoded key and advances by one row. The returned
-  /// view remains valid until the next next() call or cursor destruction.
+  /// view remains valid until the next next() or skip() call or cursor
+  /// destruction.
   virtual std::string_view next() = 0;
 
   /// Appends up to 'maxKeys' keys from the current row to 'keys' and advances
@@ -49,6 +50,17 @@ class KeyCursor {
       size_t maxKeys,
       std::vector<std::string_view>& keys,
       const BufferAllocator& bufferAllocator) = 0;
+
+  /// Advances past up to 'numKeys' keys without returning them, and stops at
+  /// the end of the cursor. The default reads the keys and drops them. A
+  /// cursor that can move to a row without reading the keys before it
+  /// overrides it.
+  virtual void skip(size_t numKeys) {
+    while (numKeys > 0 && hasNext()) {
+      next();
+      --numKeys;
+    }
+  }
 };
 
 } // namespace facebook::nimble::index

@@ -48,7 +48,7 @@ namespace {
 // Check if memory operation is allowed and increment the named stats.
 #define CHECK_AND_INC_MEM_OP_STATS(pool, stats)                       \
   do {                                                                \
-    if (FOLLY_UNLIKELY(pool->kind_ != Kind::kLeaf)) {                 \
+    if (pool->kind_ != Kind::kLeaf) [[unlikely]] {                    \
       VELOX_FAIL(                                                     \
           "Memory operation is only allowed on leaf memory pool: {}", \
           pool->toString());                                          \
@@ -62,7 +62,7 @@ namespace {
 // Check if a memory pool management operation is allowed.
 #define CHECK_POOL_MANAGEMENT_OP(opName)                                             \
   do {                                                                               \
-    if (FOLLY_UNLIKELY(kind_ != Kind::kAggregate)) {                                 \
+    if (kind_ != Kind::kAggregate) [[unlikely]] {                                    \
       VELOX_FAIL(                                                                    \
           "Memory pool {} operation is only allowed on aggregation memory pool: {}", \
           #opName,                                                                   \
@@ -157,17 +157,17 @@ void treeMemoryUsageVisitor(
   });
 }
 
-#define DEBUG_RECORD_ALLOC(pool, ...)         \
-  if (FOLLY_UNLIKELY(pool->debugEnabled())) { \
-    pool->recordAllocDbg(__VA_ARGS__);        \
+#define DEBUG_RECORD_ALLOC(pool, ...)      \
+  if (pool->debugEnabled()) [[unlikely]] { \
+    pool->recordAllocDbg(__VA_ARGS__);     \
   }
-#define DEBUG_RECORD_FREE(...)          \
-  if (FOLLY_UNLIKELY(debugEnabled())) { \
-    recordFreeDbg(__VA_ARGS__);         \
+#define DEBUG_RECORD_FREE(...)       \
+  if (debugEnabled()) [[unlikely]] { \
+    recordFreeDbg(__VA_ARGS__);      \
   }
-#define DEBUG_LEAK_CHECK()              \
-  if (FOLLY_UNLIKELY(debugEnabled())) { \
-    leakCheckDbg();                     \
+#define DEBUG_LEAK_CHECK()           \
+  if (debugEnabled()) [[unlikely]] { \
+    leakCheckDbg();                  \
   }
 } // namespace
 

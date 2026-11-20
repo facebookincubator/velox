@@ -40,6 +40,7 @@
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableScan.h"
+#include "velox/exec/TableScanStatNames.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/type/Timestamp.h"
@@ -215,24 +216,13 @@ class CudfIcebergReadTest : public CudfIcebergTestBase {
                     .planNode();
     auto task = assertQuery(plan, splits, duckdbSql, numPrefetchSplits);
 
-    auto planStats = toPlanStats(task->taskStats());
-    auto it = planStats.find(plan->id());
-    ASSERT_TRUE(it != planStats.end());
+    const auto scanStats =
+        PlanNodeStats::extract(task->taskStats(), plan->id());
     if (numPrefetchSplits > 0) {
-      const auto& customStats = it->second.customStats;
-      ASSERT_EQ(
-          customStats.count(
-              std::string(facebook::velox::exec::TableScan::kPreloadedSplits)),
-          1);
-      EXPECT_GT(
-          customStats
-              .at(std::string(
-                  facebook::velox::exec::TableScan::kPreloadedSplits))
-              .sum,
-          0);
+      EXPECT_GT(scanStats.customSum(TableScanStatNames::kPreloadedSplits), 0);
     }
     // TODO (mh): enable once we start to track gpu memory
-    // ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+    // ASSERT_TRUE(scanStats.peakMemoryBytes > 0);
   }
 
   void assertSingleBaseFileSingleDeleteFile(
@@ -530,11 +520,10 @@ TEST_F(CudfIcebergReadTest, ignoreMissingFiles) {
                         "true")
                     .splits(splits)
                     .assertResults({data});
-    const auto stats =
-        PlanNodeStats::extract(task->taskStats(), plan->id()).customStats;
-    EXPECT_EQ(stats.count("skippedSplits"), 0);
-    EXPECT_EQ(stats.count("skippedSplitBytes"), 0);
-    EXPECT_EQ(stats.at("processedSplits").sum, 1);
+    const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
+    EXPECT_FALSE(stats.hasCustomStat("skippedSplits"));
+    EXPECT_FALSE(stats.hasCustomStat("skippedSplitBytes"));
+    EXPECT_EQ(stats.customSum("processedSplits"), 1);
   }
 }
 
@@ -1679,16 +1668,13 @@ TEST_F(CudfIcebergReadTest, injectedColumnPredicateFolds) {
   auto task = AssertQueryBuilder(rejectedPlan)
                   .splits(makeSplits())
                   .assertEmptyResults();
-  auto planStats = toPlanStats(task->taskStats());
-  auto it = planStats.find(rejectedPlan->id());
-  ASSERT_TRUE(it != planStats.end());
-  EXPECT_EQ(it->second.rawInputRows, 0);
+  const auto scanStats =
+      PlanNodeStats::extract(task->taskStats(), rejectedPlan->id());
+  EXPECT_EQ(scanStats.rawInputRows, 0);
 
   // A rejected split counts as skipped rather than processed.
-  const auto& rejectedStats = it->second.customStats;
-  ASSERT_EQ(rejectedStats.count("skippedSplits"), 1);
-  EXPECT_EQ(rejectedStats.at("skippedSplits").sum, 1);
-  EXPECT_EQ(rejectedStats.count("processedSplits"), 0);
+  EXPECT_EQ(scanStats.customSum("skippedSplits"), 1);
+  EXPECT_FALSE(scanStats.hasCustomStat("processedSplits"));
 
   // A column missing from the file is NULL for every row of the split.
   AssertQueryBuilder(scan({"added IS NULL", "c1 > 20"}))
@@ -1722,13 +1708,10 @@ TEST_F(CudfIcebergReadTest, injectedColumnPredicateFolds) {
   auto nullAllowedTask = AssertQueryBuilder(nullAllowedPlan)
                              .splits(makeSplits())
                              .assertResults({allRows});
-  auto nullAllowedStats = toPlanStats(nullAllowedTask->taskStats());
-  auto nullAllowedIt = nullAllowedStats.find(nullAllowedPlan->id());
-  ASSERT_TRUE(nullAllowedIt != nullAllowedStats.end());
-  const auto& retainedStats = nullAllowedIt->second.customStats;
-  ASSERT_EQ(retainedStats.count("processedSplits"), 1);
-  EXPECT_EQ(retainedStats.at("processedSplits").sum, 1);
-  EXPECT_EQ(retainedStats.count("skippedSplits"), 0);
+  const auto nullAllowedStats = PlanNodeStats::extract(
+      nullAllowedTask->taskStats(), nullAllowedPlan->id());
+  EXPECT_EQ(nullAllowedStats.customSum("processedSplits"), 1);
+  EXPECT_FALSE(nullAllowedStats.hasCustomStat("skippedSplits"));
 
   // An IN-list folds as well, though it reaches the filter as a disjunction
   // over several references to the same column.
@@ -1878,12 +1861,9 @@ TEST_F(CudfIcebergReadTest, injectedColumnFoldsAgainstExtractedFilter) {
   auto task = AssertQueryBuilder(plan)
                   .splits(makeIcebergSplits(dataFile->getPath(), {}, rejected))
                   .assertEmptyResults();
-  auto planStats = toPlanStats(task->taskStats());
-  auto it = planStats.find(plan->id());
-  ASSERT_TRUE(it != planStats.end());
-  EXPECT_EQ(it->second.rawInputRows, 0);
-  ASSERT_EQ(it->second.customStats.count("skippedSplits"), 1);
-  EXPECT_EQ(it->second.customStats.at("skippedSplits").sum, 1);
+  const auto scanStats = PlanNodeStats::extract(task->taskStats(), plan->id());
+  EXPECT_EQ(scanStats.rawInputRows, 0);
+  EXPECT_EQ(scanStats.customSum("skippedSplits"), 1);
 
   // The merged filter accepts this partition, so every row survives.
   std::unordered_map<std::string, std::optional<std::string>> accepted = {
@@ -2317,15 +2297,14 @@ TEST_F(CudfIcebergReadTest, remainingFilterCastFromVarchar) {
         // The adapter adds a CudfToVelox operator after a GPU scan, and only
         // the cuDF data source reports kDwioStorageReadBytes, so the two show
         // that the adapter and the connector agree.
-        const auto planStats = toPlanStats(task->taskStats());
-        const auto& scanStats = planStats.at(plan->id());
+        const auto scanStats =
+            PlanNodeStats::extract(task->taskStats(), plan->id());
         EXPECT_EQ(
             scanStats.operatorStats.count("CudfToVelox") > 0, expectCudfScan);
         EXPECT_EQ(
-            scanStats.customStats.count(
-                std::string(
-                    cudf_velox::connector::hive::CudfHiveDataSource::
-                        kDwioStorageReadBytes)) > 0,
+            scanStats.hasCustomStat(
+                cudf_velox::connector::hive::CudfHiveDataSource::
+                    kDwioStorageReadBytes),
             expectCudfScan);
       };
 

@@ -65,6 +65,7 @@ void extractCompressionType(
     case EncodingType::Delta:
     case EncodingType::DeltaBlock:
     case EncodingType::EliasFano:
+    case EncodingType::Sequence:
     case EncodingType::Constant:
     case EncodingType::MainlyConstant:
     case EncodingType::Prefix:
@@ -73,6 +74,7 @@ void extractCompressionType(
     case EncodingType::Fsst:
     case EncodingType::PFOR:
     case EncodingType::PartitionedEliasFano:
+    case EncodingType::Reversed:
     case EncodingType::SimdForBitpack:
     // SubIntSplit integration is disabled; it carries no separate compression
     // byte, so treat it like the other encodings handled here.
@@ -142,6 +144,7 @@ void traverseEncodings(
     case EncodingType::Prefix:
     case EncodingType::DeltaBlock:
     case EncodingType::EliasFano:
+    case EncodingType::Sequence:
     case EncodingType::SimdForBitpack:
     // The wrapped encoding is carried verbatim rather than as a nested
     // stream, so there is nothing to traverse into here.
@@ -479,6 +482,16 @@ void traverseEncodings(
           level + 1,
           1,
           "Nulls",
+          useVarintRowCount,
+          visitor);
+      break;
+    }
+    case EncodingType::Reversed: {
+      traverseEncodings(
+          stream.substr(dataOffset),
+          level + 1,
+          0,
+          "Values",
           useVarintRowCount,
           visitor);
       break;

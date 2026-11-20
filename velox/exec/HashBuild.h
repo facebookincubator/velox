@@ -57,13 +57,6 @@ class HashBuild final : public Operator {
   };
   static std::string stateName(State state);
 
-  /// Runtime stat keys for hash build.
-  /// Maximum spill level reached during hash join build.
-  static constexpr std::string_view kMaxSpillLevel = "maxSpillLevel";
-  /// Whether dedup hash build was abandoned.
-  static constexpr std::string_view kAbandonBuildNoDupHash =
-      "abandonBuildNoDupHash";
-
   HashBuild(
       int32_t operatorId,
       DriverCtx* driverCtx,

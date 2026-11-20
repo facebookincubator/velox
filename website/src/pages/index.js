@@ -6,6 +6,7 @@ import Layout from '@theme/Layout';
 import HomepageFeatures from '@site/src/components/HomepageFeatures';
 import VeloxConBanner from '@site/src/components/VeloxConBanner';
 import useBaseUrl from '@docusaurus/useBaseUrl';
+import VeloxLogo from '@site/static/img/velox-logo.svg';
 import styles from './index.module.css';
 import Head from '@docusaurus/Head';
 
@@ -15,11 +16,7 @@ function HomepageHeader() {
   return (
     <header className={clsx(styles.heroSection)}>
       <div className={clsx('container', styles.heroContainer)}>
-        <img
-          className={styles.heroLogo}
-          src={useBaseUrl('img/velox-logo.svg')}
-          alt="Velox Logo"
-        />
+        <VeloxLogo className={styles.heroLogo} role="img" aria-label="Velox Logo" />
 
         <h1 className={styles.heroTitle}>
             An open-source composable

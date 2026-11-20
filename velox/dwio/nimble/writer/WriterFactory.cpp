@@ -20,11 +20,11 @@
 #include <folly/Random.h>
 
 #include "dwio/utils/BufferedWriteFile.h"
+#include "fb_velox/dwio/nimble/writer/NimbleWriterOptionBuilder.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/File.h"
 #include "velox/dwio/nimble/common/NimbleConfig.h"
 #include "velox/dwio/nimble/writer/Writer.h"
-#include "velox/dwio/nimble/writer/fb/NimbleWriterOptionBuilder.h"
 
 namespace facebook::velox::nimble {
 
@@ -74,10 +74,11 @@ std::unique_ptr<dwio::common::Writer> WriterFactory::createWriter(
           .withReclaimerFactory(options->memoryReclaimerFactory)
           .withSpillConfig(options->spillConfig);
 
-  auto* nimbleOptions = dynamic_cast<NimbleWriterOptions*>(options.get());
-  if (nimbleOptions && nimbleOptions->encodingExecutor) {
-    builder.withEncodingExecutor(nimbleOptions->encodingExecutor);
+  if (encodingExecutor_.get() != nullptr) {
+    builder.withEncodingExecutor(encodingExecutor_);
   }
+
+  auto* nimbleOptions = dynamic_cast<NimbleWriterOptions*>(options.get());
   if (nimbleOptions && !nimbleOptions->schemaAttributes.empty()) {
     builder.withSchemaAttributes(nimbleOptions->schemaAttributes);
   }

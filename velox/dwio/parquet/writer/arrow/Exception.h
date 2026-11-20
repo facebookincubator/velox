@@ -24,7 +24,13 @@
 #include <utility>
 
 #include "arrow/type_fwd.h"
+#include "arrow/util/config.h"
+#if ARROW_VERSION_MAJOR >= 21
+#include "arrow/status.h"
+#include "arrow/util/string_util.h"
+#else
 #include "arrow/util/string_builder.h"
+#endif
 #include "velox/dwio/parquet/writer/arrow/Platform.h"
 
 // PARQUET-1085.
@@ -59,15 +65,21 @@
 
 // Arrow Status to Parquet exception.
 
-#define PARQUET_IGNORE_NOT_OK(s)                               \
-  do {                                                         \
-    ::arrow::Status S = ::arrow::internal::GenericToStatus(s); \
-    ARROW_UNUSED(S);                                           \
+#if ARROW_VERSION_MAJOR >= 21
+#define PARQUET_TO_STATUS(s) ::arrow::ToStatus(s)
+#else
+#define PARQUET_TO_STATUS(s) ::arrow::internal::GenericToStatus(s)
+#endif
+
+#define PARQUET_IGNORE_NOT_OK(s)              \
+  do {                                        \
+    ::arrow::Status S = PARQUET_TO_STATUS(s); \
+    ARROW_UNUSED(S);                          \
   } while (0)
 
 #define PARQUET_THROW_NOT_OK(s)                                        \
   do {                                                                 \
-    ::arrow::Status S = ::arrow::internal::GenericToStatus(s);         \
+    ::arrow::Status S = PARQUET_TO_STATUS(s);                          \
     if (!S.ok()) {                                                     \
       throw ::facebook::velox::parquet::arrow::ParquetStatusException( \
           std::move(S));                                               \
@@ -85,6 +97,20 @@
 
 namespace facebook::velox::parquet::arrow {
 
+namespace detail {
+
+// Concatenates the string representations of 'args'.
+template <typename... Args>
+std::string joinToString(Args&&... args) {
+#if ARROW_VERSION_MAJOR >= 21
+  return ::arrow::internal::JoinToString(std::forward<Args>(args)...);
+#else
+  return ::arrow::util::StringBuilder(std::forward<Args>(args)...);
+#endif
+}
+
+} // namespace detail
+
 class ParquetException : public std::exception {
  public:
   PARQUET_NORETURN static void eofException(const std::string& msg = "") {
@@ -101,7 +127,7 @@ class ParquetException : public std::exception {
 
   template <typename... Args>
   explicit ParquetException(Args&&... args)
-      : msg_(::arrow::util::StringBuilder(std::forward<Args>(args)...)) {}
+      : msg_(detail::joinToString(std::forward<Args>(args)...)) {}
 
   explicit ParquetException(std::string msg) : msg_(std::move(msg)) {}
 

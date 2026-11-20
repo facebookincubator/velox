@@ -135,7 +135,7 @@ HybridFlatMap makeHybridFlatMapConfig(
 
 NimbleIndexProjector::RowProjectionResult projectRows(
     NimbleIndexProjector& projector,
-    const NimbleIndexProjector::Request& request,
+    const index::IndexLookup::LookupRequest& request,
     const NimbleIndexProjector::Options& options) {
   return folly::coro::blockingWait(projector.co_projectRows(request, options));
 }
@@ -238,6 +238,7 @@ void NimbleIndexProjectorTestBase::writeData(
   };
   options.skipConstantFlatMapInMapStreams = skipConstantFlatMapInMapStreams;
   options.clusterIndexConfig = makeClusterIndexConfig(indexColumns);
+  options.clusterIndexKeyStreamLayout = currentTestParam().keyStreamLayout;
 
   options.flushPolicyFactory = [stripeSize]() {
     return std::make_unique<LambdaFlushPolicy>(
@@ -260,6 +261,21 @@ NimbleIndexProjectorTestBase::makeClusterIndexConfig(
       .withEnforceKeyOrder(true)
       .withNoDuplicateKey(true)
       .build();
+}
+
+void NimbleIndexProjectorTestBase::writeStripeKeyStreamData(
+    const std::vector<RowVectorPtr>& batches,
+    bool enableStreamChecksums) {
+  WriterOptions options;
+  options.encodingSelectionPolicyCreator = encodingViewSelectionPolicy();
+  options.clusterIndexConfig = makeClusterIndexConfig({"key"});
+  options.clusterIndexKeyStreamLayout = index::KeyStreamLayout::kStripe;
+  options.enableStreamChecksums = enableStreamChecksums;
+  options.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        [](const StripeProgress& /*progress*/) { return true; });
+  };
+  writeBatches(batches, std::move(options));
 }
 
 void NimbleIndexProjectorTestBase::writeBatches(
@@ -316,6 +332,22 @@ std::vector<TestParam> NimbleIndexProjectorTestBase::getIteratorTestParams() {
           {readerParam.cacheMetadata,
            readerParam.pinMetadata,
            cacheEncodingView});
+    }
+  }
+  return params;
+}
+
+std::vector<TestParam>
+NimbleIndexProjectorTestBase::getKeyStreamLayoutTestParams() {
+  std::vector<TestParam> params;
+  for (const auto& readerParam : getTestParams()) {
+    for (const auto keyStreamLayout :
+         {index::KeyStreamLayout::kPartition,
+          index::KeyStreamLayout::kStripe}) {
+      params.push_back(
+          {.cacheMetadata = readerParam.cacheMetadata,
+           .pinMetadata = readerParam.pinMetadata,
+           .keyStreamLayout = keyStreamLayout});
     }
   }
   return params;
@@ -577,9 +609,8 @@ NimbleIndexProjectorTestBase::makeWindowedSlice() {
   subfields.emplace_back("value");
   auto projector = createProjector(subfields);
   auto bounds = makeRangeLookup(rowType, {"key"}, kWindowStart, kWindowEnd);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
-  auto result = projector->projectStreams(request, {});
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+  auto result = projector->projectStreams(*request, {});
   return {std::move(projector), std::move(result), std::move(values)};
 }
 

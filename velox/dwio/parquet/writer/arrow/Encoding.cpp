@@ -20,6 +20,7 @@
 
 #include <glog/logging.h>
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
@@ -43,6 +44,7 @@
 #include "arrow/util/ubsan.h"
 #include "arrow/visit_data_inline.h"
 
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/dwio/parquet/common/RleEncodingInternal.h"
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
@@ -51,17 +53,13 @@
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/ByteStreamSplitInternal.h"
 #include "velox/dwio/parquet/writer/arrow/util/Hashing.h"
-#include "velox/dwio/parquet/writer/arrow/util/OverflowUtilInternal.h"
 
 using ::arrow::Buffer;
 using ::arrow::MemoryPool;
 using ::arrow::ResizableBuffer;
 using arrow::Status;
 using arrow::VisitNullBitmapInline;
-using arrow::internal::addWithOverflow;
 using arrow::internal::checked_cast;
-using arrow::internal::multiplyWithOverflow;
-using arrow::internal::SubtractWithOverflow;
 using std::string_view;
 
 template <typename T>
@@ -175,7 +173,7 @@ class PlainEncoder : public EncoderImpl, virtual public TypedEncoder<DType> {
     if (validBits != NULLPTR) {
       auto buffer = allocateBuffer(this->memoryPool(), numValues * sizeof(T));
       T* data = reinterpret_cast<T*>(buffer->mutable_data());
-      int numValidValues = ::arrow::util::internal::SpacedCompress<T>(
+      int numValidValues = util::internal::spacedCompress<T>(
           src, numValues, validBits, validBitsOffset, data);
       put(data, numValidValues);
     } else {
@@ -389,7 +387,7 @@ class PlainEncoder<BooleanType> : public EncoderImpl,
     if (validBits != NULLPTR) {
       auto buffer = allocateBuffer(this->memoryPool(), numValues * sizeof(T));
       T* data = reinterpret_cast<T*>(buffer->mutable_data());
-      int numValidValues = ::arrow::util::internal::SpacedCompress<T>(
+      int numValidValues = util::internal::spacedCompress<T>(
           src, numValues, validBits, validBitsOffset, data);
       put(data, numValidValues);
     } else {
@@ -1029,7 +1027,7 @@ void ByteStreamSplitEncoder<DType>::putSpaced(
   if (validBits != NULLPTR) {
     auto buffer = allocateBuffer(this->memoryPool(), numValues * sizeof(T));
     T* data = reinterpret_cast<T*>(buffer->mutable_data());
-    int numValidValues = ::arrow::util::internal::SpacedCompress<T>(
+    int numValidValues = util::internal::spacedCompress<T>(
         src, numValues, validBits, validBitsOffset, data);
     put(data, numValidValues);
   } else {
@@ -2623,8 +2621,7 @@ void DeltaBitPackEncoder<DType>::flushBlock() {
 
     // The minimum number of bits required to write any of values in deltas_.
     // Vector. See overflow comment above.
-    const auto bitWidth = bitWidthData[i] =
-        ::arrow::bit_util::NumRequiredBits(maxDelta - minDelta);
+    const auto bitWidth = bitWidthData[i] = std::bit_width(maxDelta - minDelta);
 
     for (uint32_t j = start; j < start + valuesCurrentMiniBlock; j++) {
       // See overflow comment above.
@@ -2746,7 +2743,7 @@ void DeltaBitPackEncoder<DType>::putSpaced(
   if (validBits != NULLPTR) {
     auto buffer = allocateBuffer(this->memoryPool(), numValues * sizeof(T));
     T* data = reinterpret_cast<T*>(buffer->mutable_data());
-    int numValidValues = ::arrow::util::internal::SpacedCompress<T>(
+    int numValidValues = util::internal::spacedCompress<T>(
         src, numValues, validBits, validBitsOffset, data);
     put(data, numValidValues);
   } else {
@@ -3089,11 +3086,11 @@ void DeltaLengthByteArrayEncoder<DType>::put(const T* src, int numValues) {
   for (int idx = 0; idx < numValues; idx += kBatchSize) {
     const int batchSize = std::min(kBatchSize, numValues - idx);
     for (int j = 0; j < batchSize; ++j) {
-      const int32_t len = src[idx + j].len;
+      const uint32_t len = src[idx + j].len;
       if (addWithOverflow(totalIncrementSize, len, &totalIncrementSize)) {
         throw ParquetException("excess expansion in DELTA_LENGTH_BYTE_ARRAY");
       }
-      lengths[j] = len;
+      lengths[j] = static_cast<int32_t>(len);
     }
     lengthEncoder_.put(lengths.data(), batchSize);
   }
@@ -3117,7 +3114,7 @@ void DeltaLengthByteArrayEncoder<DType>::putSpaced(
   if (validBits != NULLPTR) {
     auto buffer = allocateBuffer(this->memoryPool(), numValues * sizeof(T));
     T* data = reinterpret_cast<T*>(buffer->mutable_data());
-    int numValidValues = ::arrow::util::internal::SpacedCompress<T>(
+    int numValidValues = util::internal::spacedCompress<T>(
         src, numValues, validBits, validBitsOffset, data);
     put(data, numValidValues);
   } else {
@@ -3349,7 +3346,7 @@ class RleBooleanEncoder final : public EncoderImpl,
     if (validBits != NULLPTR) {
       auto buffer = allocateBuffer(this->memoryPool(), numValues * sizeof(T));
       T* data = reinterpret_cast<T*>(buffer->mutable_data());
-      int numValidValues = ::arrow::util::internal::SpacedCompress<T>(
+      int numValidValues = util::internal::spacedCompress<T>(
           src, numValues, validBits, validBitsOffset, data);
       put(data, numValidValues);
     } else {
@@ -3561,7 +3558,7 @@ class DeltaByteArrayEncoder : public EncoderImpl,
         PARQUET_THROW_NOT_OK(buffer_->Resize(numValues * sizeof(T), false));
       }
       T* data = reinterpret_cast<T*>(buffer_->mutable_data());
-      int numValidValues = ::arrow::util::internal::SpacedCompress<T>(
+      int numValidValues = util::internal::spacedCompress<T>(
           src, numValues, validBits, validBitsOffset, data);
       put(data, numValidValues);
     } else {

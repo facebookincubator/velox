@@ -16,6 +16,7 @@
 #include "velox/exec/TopNRowNumber.h"
 
 #include "velox/exec/OperatorType.h"
+#include "velox/exec/TopNRowNumberStatNames.h"
 
 namespace facebook::velox::exec {
 
@@ -38,8 +39,7 @@ namespace {
       }                                                                      \
       default:                                                               \
         VELOX_FAIL(                                                          \
-            "not a rank function kind: {}",                                  \
-            core::TopNRowNumberNode::rankFunctionName(functionKind));        \
+            "not a rank function kind: {}", static_cast<int>(functionKind)); \
     }                                                                        \
   }()
 
@@ -253,7 +253,8 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
   if (abandonPartialEarly()) {
     abandonedPartial_ = true;
     addRuntimeStat(
-        std::string(TopNRowNumber::kAbandonedPartial), RuntimeCounter(1));
+        std::string(TopNRowNumberStatNames::kAbandonedPartial),
+        RuntimeCounter(1));
 
     updateEstimatedOutputRowSize();
     outputBatchSize_ = outputBatchRows(estimatedOutputRowSize_);

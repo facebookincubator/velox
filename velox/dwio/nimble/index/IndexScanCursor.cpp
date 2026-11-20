@@ -24,12 +24,14 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include <glog/logging.h>
 
 #include <folly/ExceptionWrapper.h>
+#include <folly/ScopeGuard.h>
 #include <folly/Try.h>
 #include <folly/coro/AsyncScope.h>
 #include <folly/coro/Baton.h>
@@ -46,23 +48,77 @@
 
 namespace facebook::nimble::detail {
 
+namespace {
+
+// Reads the keys of the selected rows of one stripe from the key cursor of the
+// scan, which then reads on from the first row of the next stripe.
+class StripeKeyCursor final : public index::KeyCursor {
+ public:
+  StripeKeyCursor(index::KeyCursor* scanKeyCursor, uint32_t numRows)
+      : scanKeyCursor_{velox::checkedNotNull(scanKeyCursor)},
+        numRemaining_{numRows} {}
+
+  bool hasNext() const override {
+    return numRemaining_ > 0 && scanKeyCursor_->hasNext();
+  }
+
+  std::string_view next() override {
+    NIMBLE_CHECK_GT(numRemaining_, 0, "The stripe has no more keys");
+    const auto key = scanKeyCursor_->next();
+    --numRemaining_;
+    return key;
+  }
+
+  void next(
+      size_t maxKeys,
+      std::vector<std::string_view>& keys,
+      const BufferAllocator& bufferAllocator) override {
+    const auto numKeys = keys.size();
+    scanKeyCursor_->next(
+        std::min<size_t>(maxKeys, numRemaining_), keys, bufferAllocator);
+    numRemaining_ -= static_cast<uint32_t>(keys.size() - numKeys);
+  }
+
+  void skip(size_t numKeys) override {
+    const auto numSkipped =
+        static_cast<uint32_t>(std::min<size_t>(numKeys, numRemaining_));
+    scanKeyCursor_->skip(numSkipped);
+    numRemaining_ -= numSkipped;
+  }
+
+  // Returns the number of keys of the stripe that were not read.
+  uint32_t numRemaining() const {
+    return numRemaining_;
+  }
+
+ private:
+  index::KeyCursor* const scanKeyCursor_;
+  uint32_t numRemaining_;
+};
+
+} // namespace
+
 // Loads encoded streams in contiguous stripe batches within the configured
 // stripe limit. The consumer materializes them.
 class ScanPrefetcher {
  public:
   using ProjectorPtr = IndexScanCursor::ProjectorPtr;
 
-  // Starts prefetching the stripes selected for the active scan.
+  // Starts prefetching the stripes selected for the active scan, in batches of
+  // 'maxPrefetchStripes' / 'numPrefetchBatches' stripes. The cursor checks
+  // that 'numPrefetchBatches' is positive.
   ScanPrefetcher(
       ProjectorPtr projector,
       std::vector<StripeSelection> selections,
       folly::Executor::KeepAlive<> prefetchExecutor,
-      uint32_t maxPrefetchStripes)
+      uint32_t maxPrefetchStripes,
+      uint32_t numPrefetchBatches)
       : projector_{std::move(projector)},
         selections_{std::move(selections)},
         prefetchExecutor_{std::move(prefetchExecutor)},
         maxPrefetchStripes_{maxPrefetchStripes},
-        maxBatchStripes_{std::max<uint32_t>(1, maxPrefetchStripes / 2)} {
+        maxBatchStripes_{
+            std::max<uint32_t>(1, maxPrefetchStripes / numPrefetchBatches)} {
     NIMBLE_CHECK_GT(maxPrefetchStripes_, 0);
     NIMBLE_CHECK(!selections_.empty(), "No stripes are selected to prefetch");
   }
@@ -95,13 +151,25 @@ class ScanPrefetcher {
   }
 
   // Waits for the next queued stripe, which is 'stripeIndex', and returns its
-  // encoded streams for the consumer to materialize.
+  // encoded streams for the consumer to materialize. A stripe leaves the queue
+  // when the consumer takes it, so a request for a stripe that the consumer
+  // took before, as in a retry of a stripe that failed, fails at once rather
+  // than waiting for a stripe that never loads.
   folly::coro::Task<ProjectedStripe> co_nextStripe(uint32_t stripeIndex) {
+    NIMBLE_USER_CHECK_LT(
+        numReturnedStripes_,
+        selections_.size(),
+        "Reset or seek before reading again after a prefetched stripe fails");
+    NIMBLE_USER_CHECK_EQ(
+        selections_[numReturnedStripes_].stripeIndex,
+        stripeIndex,
+        "Reset or seek before reading again after a prefetched stripe fails");
     auto stripe = co_await co_dequeueStripe();
     NIMBLE_CHECK_EQ(
         stripe.selection.stripeIndex,
         stripeIndex,
         "Loaded stripe index does not match the selected stripe");
+    ++numReturnedStripes_;
     co_return std::move(stripe);
   }
 
@@ -222,7 +290,8 @@ class ScanPrefetcher {
   // Maximum stripe streams queued ahead of the consumer.
   // TODO: Add a limit on projected stripe bytes.
   const uint32_t maxPrefetchStripes_;
-  // Targets two batches so loading can overlap consumption.
+  // Stripes that one batch loads in one read. With two or more batches,
+  // loading can overlap consumption.
   const uint32_t maxBatchStripes_;
   // First selected stripe that the producer has not loaded yet.
   uint32_t nextStripeOffset_{0};
@@ -237,6 +306,9 @@ class ScanPrefetcher {
   std::vector<ProjectedStripe> currentBatch_;
   // Next stripe to return from the consumer's current batch.
   size_t currentBatchStripe_{0};
+  // Selected stripes returned to the consumer, which is the offset of the next
+  // one in 'selections_'.
+  size_t numReturnedStripes_{0};
   // Retains producer failures, including cancellation, across consumer retries.
   folly::exception_wrapper loadError_;
   // Ensures the producer is scheduled only once.
@@ -285,7 +357,10 @@ IndexScanCursor::IndexScanCursor(
       // A get reads the rows of one key, which a prefetch would not speed up,
       // and reads the stripe that the materializer holds without loading it.
       maxPrefetchStripes_{options.forGet ? 0 : options.maxPrefetchStripes},
+      numPrefetchBatches_{options.numPrefetchBatches},
       stripeMaterializer_{velox::checkedNotNull(std::move(materializer))} {
+  NIMBLE_USER_CHECK_GT(
+      numPrefetchBatches_, 0, "Prefetch batch count must be positive");
   NIMBLE_CHECK_LE(projector_->numRows(), std::numeric_limits<uint32_t>::max());
   projector_->setTimingEnabled(options.collectTimings);
 }
@@ -325,14 +400,14 @@ IndexScanCursor::~IndexScanCursor() {
 std::optional<RowRange> IndexScanCursor::seek(
     const velox::serializer::EncodedKeyBounds& bounds) {
   reset();
-  setStripeSelections(projector_->lookup(bounds));
+  setStripeSelections(projector_->lookup(bounds, keyCursor_));
   startPrefetch();
   return range_;
 }
 
 std::optional<RowRange> IndexScanCursor::seek(std::string encodedKey) {
   reset();
-  setStripeSelections(projector_->lookup(std::move(encodedKey)));
+  setStripeSelections(projector_->lookup(std::move(encodedKey), keyCursor_));
   startPrefetch();
   return range_;
 }
@@ -353,6 +428,7 @@ void IndexScanCursor::reset() {
   }
   range_.reset();
   stripeSelections_.clear();
+  keyCursor_.reset();
   stripeOffset_ = 0;
 }
 
@@ -428,11 +504,38 @@ IndexScanCursor::co_nextStripe(uint32_t row) {
     stripe = std::move(stripes.at(0));
   }
   stripe.selection.rowRange = selection.rowRange;
+  const auto selectedRows = selection.selectedRowRange();
+  StripeKeyCursor stripeKeyCursor{
+      ensureKeyCursor(selection), selectedRows.numRows()};
+  // A failed stripe can stop the key cursor at any row, so a retry of the
+  // stripe starts a new one. Dismissed on success.
+  auto resetKeyCursor = folly::makeGuard([this] { keyCursor_.reset(); });
   auto entries = co_await stripeMaterializer_->materialize(
-      std::move(stripe), projector_->clusterIndex());
-  numOutputRows_ += selection.selectedRowRange().numRows();
+      std::move(stripe), stripeKeyCursor);
+  if (stripeOffset_ + 1 == stripeSelections_.size()) {
+    // The last stripe releases the key chunk that the key cursor holds.
+    keyCursor_.reset();
+  } else {
+    velox::common::testutil::TestValue::adjust(
+        "facebook::nimble::IndexScanCursor::co_nextStripe::beforeKeySkip",
+        this);
+    // Moves the key cursor of the scan past the keys that the materializer
+    // left unread, to the first row of the next stripe.
+    stripeKeyCursor.skip(stripeKeyCursor.numRemaining());
+  }
+  resetKeyCursor.dismiss();
+  numOutputRows_ += selectedRows.numRows();
   ++stripeOffset_;
   co_return entries;
+}
+
+index::KeyCursor* IndexScanCursor::ensureKeyCursor(
+    const StripeSelection& selection) {
+  if (keyCursor_ == nullptr) {
+    keyCursor_ = projector_->clusterIndex().keyCursor(
+        RowRange{selection.selectedRowRange().startRow, range_->endRow});
+  }
+  return keyCursor_.get();
 }
 
 void IndexScanCursor::startPrefetch() {
@@ -441,7 +544,11 @@ void IndexScanCursor::startPrefetch() {
     return;
   }
   scanPrefetcher_ = std::make_shared<ScanPrefetcher>(
-      projector_, stripeSelections_, prefetchExecutor_, maxPrefetchStripes_);
+      projector_,
+      stripeSelections_,
+      prefetchExecutor_,
+      maxPrefetchStripes_,
+      numPrefetchBatches_);
   scanPrefetcher_->start();
 }
 

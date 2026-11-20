@@ -20,5 +20,4 @@
 
 namespace facebook::velox::exec::test {
 using facebook::velox::common::testutil::TempFilePath;
-using facebook::velox::common::testutil::toFilePaths;
 } // namespace facebook::velox::exec::test

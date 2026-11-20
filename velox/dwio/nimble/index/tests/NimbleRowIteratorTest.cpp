@@ -84,7 +84,48 @@
 
 namespace facebook::nimble::test {
 
-class NimbleRowIteratorTest : public NimbleIndexProjectorTest {};
+class NimbleRowIteratorTest : public NimbleIndexProjectorTest {
+ protected:
+  // Writes the rows of writeResumeKeyTestData(): the key of each row is its row
+  // number, and its value is ten times the key. Ends a stripe every
+  // 'rowsPerStripe' rows and a key chunk of the cluster index every
+  // 'rowsPerKeyChunk' rows, in the one partition of the index.
+  void writeKeyChunkTestData(
+      int32_t rowsPerStripe,
+      int32_t numStripes,
+      int32_t rowsPerKeyChunk) {
+    std::vector<RowVectorPtr> batches;
+    for (int32_t stripe{0}; stripe < numStripes; ++stripe) {
+      std::vector<int64_t> keys(rowsPerStripe);
+      std::vector<int32_t> values(rowsPerStripe);
+      for (int32_t row{0}; row < rowsPerStripe; ++row) {
+        keys[row] = stripe * rowsPerStripe + row;
+        values[row] = static_cast<int32_t>(keys[row] * 10);
+      }
+      batches.emplace_back(vectorMaker_->rowVector(
+          {"key", "value"},
+          {vectorMaker_->flatVector<int64_t>(keys),
+           vectorMaker_->flatVector<int32_t>(values)}));
+    }
+    WriterOptions options;
+    options.encodingSelectionPolicyCreator = encodingViewSelectionPolicy();
+    options.clusterIndexConfig =
+        ClusterIndexConfigBuilder{}
+            .withKeyColumns({"key"})
+            .withSortOrders({SortOrder{.ascending = true}})
+            .withEnforceKeyOrder(true)
+            .withNoDuplicateKey(true)
+            .withMaxRowsPerKeyChunk(rowsPerKeyChunk)
+            .build();
+    options.flushPolicyFactory = [] {
+      return std::make_unique<LambdaFlushPolicy>(
+          /*shouldFlush=*/[](const StripeProgress& /*progress*/) {
+            return true;
+          });
+    };
+    writeBatches(batches, std::move(options));
+  }
+};
 
 namespace {
 
@@ -232,40 +273,52 @@ TEST_P(NimbleRowIteratorTest, rowIteratorKeepsKeysAlignedAfterSkippingRows) {
   expectKey(8);
 }
 
-TEST_P(NimbleRowIteratorTest, rowIteratorKeepsItsStreamReader) {
+TEST_P(NimbleRowIteratorTest, rowIteratorReusesStreamReaders) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
   std::vector<Subfield> projectedSubfields;
   projectedSubfields.emplace_back("value");
 
   // Each StreamReader constructs its output type once. Retain the types so
   // that rebuilding a reader cannot reuse an earlier type's address.
-  std::set<velox::TypePtr> decodedTypes;
   const auto decodeRows = compactRowDecoder();
-  TestNimbleIterator iterator{createEntryIterator(
-      projectedSubfields,
-      [&](const velox::RowVectorPtr& rows,
-          nimble::index::KeyCursor& keyCursor,
-          folly::IOBufQueue& keyStorage,
-          folly::IOBufQueue& valueStorage,
-          std::vector<std::string_view>& keys,
-          std::vector<std::string_view>& values) {
-        decodedTypes.insert(rows->type());
-        decodeRows(rows, keyCursor, keyStorage, valueStorage, keys, values);
-      },
-      /*options=*/{})};
+  for (const uint32_t maxPrefetchStripes : {0, 2}) {
+    SCOPED_TRACE(maxPrefetchStripes);
+    auto executor = std::make_unique<folly::CPUThreadPoolExecutor>(2);
+    std::mutex mutex;
+    std::set<velox::TypePtr> decodedTypes;
+    auto iterator = createEntryIterator(
+        projectedSubfields,
+        [&](const velox::RowVectorPtr& rows,
+            nimble::index::KeyCursor& keyCursor,
+            folly::IOBufQueue& keyStorage,
+            folly::IOBufQueue& valueStorage,
+            std::vector<std::string_view>& keys,
+            std::vector<std::string_view>& values) {
+          {
+            const std::lock_guard<std::mutex> lock{mutex};
+            decodedTypes.insert(rows->type());
+          }
+          decodeRows(rows, keyCursor, keyStorage, valueStorage, keys, values);
+        },
+        NimbleIterator::Options{
+            .prefetchExecutor = maxPrefetchStripes > 0
+                ? folly::getKeepAliveToken(*executor)
+                : folly::Executor::KeepAlive<>{},
+            .maxPrefetchStripes = maxPrefetchStripes});
 
-  // The iterator builds a reader for its first stripe and keeps it for the
-  // other stripes and for later seeks.
-  for (int seek = 0; seek < 2; ++seek) {
-    SCOPED_TRACE(seek);
-    iterator.seekToFirst();
-    int32_t numRows{0};
-    for (; iterator.valid(); iterator.next()) {
-      ++numRows;
+    for (int seek = 0; seek < 2; ++seek) {
+      SCOPED_TRACE(seek);
+      iterator->seekToFirst();
+      int32_t numRows{0};
+      for (; iterator->valid(); iterator->nextRow()) {
+        ++numRows;
+      }
+      EXPECT_EQ(numRows, 12);
     }
-    EXPECT_EQ(numRows, 12);
+    iterator->reset();
+    const std::lock_guard<std::mutex> lock{mutex};
+    EXPECT_EQ(decodedTypes.size(), 1);
   }
-  EXPECT_THAT(decodedTypes, ::testing::SizeIs(1));
 }
 
 TEST_P(NimbleRowIteratorTest, rowIteratorSkipsRowsAcrossPrefetchedStripes) {
@@ -525,7 +578,7 @@ TEST_P(NimbleRowIteratorTest, rowIteratorFreesTheDecodedRowsOnReset) {
         decodedRows.emplace_back(rows);
         decodeRows(rows, keyCursor, keyStorage, valueStorage, keys, values);
       },
-      NimbleIterator::Options{});
+      NimbleIterator::Options{.forGet = true});
   iterator->seekToFirst();
 
   const auto actual = velox::row::CompactRow::deserialize(
@@ -623,7 +676,8 @@ TEST_P(NimbleRowIteratorTest, entryIteratorKeepsRowsThatTheStorageOwns) {
         NimbleIterator::Options{
             .prefetchExecutor = prefetch ? folly::getKeepAliveToken(*executor)
                                          : folly::Executor::KeepAlive<>{},
-            .maxPrefetchStripes = 4,
+            .maxPrefetchStripes = 2,
+            .maxDecodeParallelism = prefetch ? 4U : 0U,
         });
     iterator->seekToFirst();
 
@@ -1118,7 +1172,7 @@ TEST_P(NimbleRowIteratorTest, rowIteratorReusesTheOutputOfTheLastDecode) {
   iterator->reset();
   EXPECT_TRUE(outputs[6].expired());
 
-  // A scan decodes its stripes into the same output.
+  // A scan releases decoded rows after KV conversion.
   outputs.clear();
   const auto scanIterator = createEntryIterator(
       projectedSubfields,
@@ -1145,9 +1199,9 @@ TEST_P(NimbleRowIteratorTest, rowIteratorReusesTheOutputOfTheLastDecode) {
   }
   EXPECT_FALSE(scanIterator->valid());
   ASSERT_EQ(outputs.size(), 3);
-  ASSERT_NE(outputs[0].lock(), nullptr);
-  EXPECT_EQ(outputs[1].lock(), outputs[0].lock());
-  EXPECT_EQ(outputs[2].lock(), outputs[0].lock());
+  EXPECT_TRUE(outputs[0].expired());
+  EXPECT_TRUE(outputs[1].expired());
+  EXPECT_TRUE(outputs[2].expired());
   scanIterator->reset();
   EXPECT_TRUE(outputs[2].expired());
 }
@@ -1205,6 +1259,26 @@ TEST_P(
       EXPECT_EQ(stats.conversionTiming, velox::CpuWallTiming{});
     }
   }
+
+  // With prefetch and parallel decoding configured, the consumer still times
+  // the decoding and conversion of each stripe once.
+  auto executor = std::make_unique<folly::CPUThreadPoolExecutor>(4);
+  auto iterator = createRowIterator(
+      projectedSubfields,
+      NimbleIterator::Options{
+          .prefetchExecutor = folly::getKeepAliveToken(*executor),
+          .maxPrefetchStripes = 2,
+          .maxDecodeParallelism = 4});
+  iterator->seekToFirst();
+  while (iterator->valid()) {
+    iterator->value();
+    iterator->nextRow();
+  }
+  iterator->reset();
+  const auto stats = iterator->stats();
+  EXPECT_EQ(stats.decodingTiming.count, 3);
+  EXPECT_GT(stats.decodingTiming.wallNanos, 0);
+  EXPECT_EQ(stats.conversionTiming.count, 3);
 }
 
 TEST_P(NimbleRowIteratorTest, rowIteratorSeeksPoint) {
@@ -1239,6 +1313,256 @@ TEST_P(NimbleRowIteratorTest, rowIteratorSeeksPoint) {
   // A key without rows leaves the iterator invalid.
   iterator.seek(*makePointLookup(rowType, {"key"}, 1'000).lowerKey);
   EXPECT_FALSE(iterator.valid());
+}
+
+// Debug-only: counting decodes relies on a TestValue hook, which is compiled
+// out under NDEBUG.
+DEBUG_ONLY_TEST_P(
+    NimbleRowIteratorTest,
+    rowIteratorReadsTheKeyChunksOfItsSeek) {
+  // The index keeps one decoded chunk of its partition for all the iterators
+  // of the file.
+  writeKeyChunkTestData(
+      /*rowsPerStripe=*/4, /*numStripes=*/3, /*rowsPerKeyChunk=*/4);
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  const auto encodeKey = [&](int64_t key) {
+    return *makePointLookup(rowType, {"key"}, key).lowerKey;
+  };
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  TestNimbleIterator first{
+      createRowIterator(projectedSubfields, NimbleIterator::Options{})};
+  TestNimbleIterator second{
+      createRowIterator(projectedSubfields, NimbleIterator::Options{})};
+  TestNimbleIterator scan{
+      createRowIterator(projectedSubfields, NimbleIterator::Options{})};
+
+  const bool wasEnabled = velox::common::testutil::TestValue::enabled();
+  velox::common::testutil::TestValue::enable();
+  auto restoreTestValue = folly::makeGuard([&] {
+    if (!wasEnabled) {
+      velox::common::testutil::TestValue::disable();
+    }
+  });
+  // Fires only after a cache miss, so it counts decodes rather than reads.
+  std::atomic_uint32_t numDecodes{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::nimble::index::ClusterIndexBase::getDecodedChunk",
+      std::function<void(index::DecodedKeyChunk*)>(
+          [&](index::DecodedKeyChunk* /*decodedChunk*/) { ++numDecodes; }));
+
+  first.seek(encodeKey(1));
+  EXPECT_EQ(numDecodes.load(), 1);
+  // The iterators share the index, so a seek in the same chunk decodes nothing.
+  second.seek(encodeKey(2));
+  EXPECT_EQ(numDecodes.load(), 1);
+  // A seek in the last stripe replaces the chunk of the first stripe in the
+  // index.
+  second.seek(encodeKey(9));
+  EXPECT_EQ(numDecodes.load(), 2);
+
+  // The first iterator reads its key from the chunk that its seek decoded.
+  EXPECT_EQ(first.key(), encodeKey(1));
+  EXPECT_EQ(numDecodes.load(), 2);
+
+  // A scan from the first row has no key chunks of a seek, so it decodes the
+  // chunk of the first stripe, which replaces the chunk of the last stripe in
+  // the index.
+  scan.seekToFirst();
+  EXPECT_EQ(scan.key(), encodeKey(0));
+  EXPECT_EQ(numDecodes.load(), 3);
+
+  // The second iterator reads its key from the chunk that its seek decoded.
+  EXPECT_EQ(second.key(), encodeKey(9));
+  EXPECT_EQ(numDecodes.load(), 3);
+}
+
+// Debug-only: counting decodes relies on a TestValue hook, which is compiled
+// out under NDEBUG.
+DEBUG_ONLY_TEST_P(
+    NimbleRowIteratorTest,
+    rowIteratorHoldsOnlyTheKeyChunkThatItReads) {
+  writeKeyChunkTestData(
+      /*rowsPerStripe=*/4, /*numStripes=*/3, /*rowsPerKeyChunk=*/4);
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  TestNimbleIterator iterator{
+      createRowIterator(projectedSubfields, NimbleIterator::Options{})};
+
+  const bool wasEnabled = velox::common::testutil::TestValue::enabled();
+  velox::common::testutil::TestValue::enable();
+  auto restoreTestValue = folly::makeGuard([&] {
+    if (!wasEnabled) {
+      velox::common::testutil::TestValue::disable();
+    }
+  });
+  // Fires only after a cache miss, so it counts decodes rather than reads.
+  std::atomic_uint32_t numDecodes{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::nimble::index::ClusterIndexBase::getDecodedChunk",
+      std::function<void(index::DecodedKeyChunk*)>(
+          [&](index::DecodedKeyChunk* /*decodedChunk*/) { ++numDecodes; }));
+
+  // The bounds of the rows 1 to 8 are in the chunks of the first and of the
+  // last stripe, which the seek decodes.
+  iterator.seek(makeRangeLookup(rowType, {"key"}, 1, 9));
+  EXPECT_EQ(numDecodes.load(), 2);
+
+  // The first stripe reads its keys from the chunk of the first row, which the
+  // key cursor of the seek keeps.
+  for (int64_t row{1}; row < 4; ++row) {
+    SCOPED_TRACE(row);
+    EXPECT_EQ(iterator.key(), *makePointLookup(rowType, {"key"}, row).lowerKey);
+    iterator.next();
+  }
+  EXPECT_EQ(numDecodes.load(), 2);
+
+  // The second stripe decodes its chunk, which replaces the chunk of the last
+  // stripe in the index. The key cursor releases the chunk of the first stripe.
+  for (int64_t row{4}; row < 8; ++row) {
+    SCOPED_TRACE(row);
+    EXPECT_EQ(iterator.key(), *makePointLookup(rowType, {"key"}, row).lowerKey);
+    iterator.next();
+  }
+  EXPECT_EQ(numDecodes.load(), 3);
+
+  // The key cursor kept only the chunk of the first row of the seek, so the
+  // last stripe decodes its chunk again.
+  EXPECT_EQ(iterator.key(), *makePointLookup(rowType, {"key"}, 8).lowerKey);
+  EXPECT_EQ(numDecodes.load(), 4);
+  iterator.next();
+  EXPECT_FALSE(iterator.valid());
+}
+
+// Debug-only: counting decodes relies on a TestValue hook, which is compiled
+// out under NDEBUG.
+DEBUG_ONLY_TEST_P(
+    NimbleRowIteratorTest,
+    rowIteratorReadsAKeyChunkOnceAcrossStripes) {
+  // The first key chunk holds the rows of the first two stripes.
+  writeKeyChunkTestData(
+      /*rowsPerStripe=*/4, /*numStripes=*/3, /*rowsPerKeyChunk=*/8);
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  const auto encodeKey = [&](int64_t key) {
+    return *makePointLookup(rowType, {"key"}, key).lowerKey;
+  };
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  TestNimbleIterator scan{
+      createRowIterator(projectedSubfields, NimbleIterator::Options{})};
+  TestNimbleIterator get{
+      createRowIterator(projectedSubfields, NimbleIterator::Options{})};
+
+  const bool wasEnabled = velox::common::testutil::TestValue::enabled();
+  velox::common::testutil::TestValue::enable();
+  auto restoreTestValue = folly::makeGuard([&] {
+    if (!wasEnabled) {
+      velox::common::testutil::TestValue::disable();
+    }
+  });
+  // Fires only after a cache miss, so it counts decodes rather than reads.
+  std::atomic_uint32_t numDecodes{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::nimble::index::ClusterIndexBase::getDecodedChunk",
+      std::function<void(index::DecodedKeyChunk*)>(
+          [&](index::DecodedKeyChunk* /*decodedChunk*/) { ++numDecodes; }));
+
+  scan.seekToFirst();
+  EXPECT_EQ(scan.key(), encodeKey(0));
+  EXPECT_EQ(numDecodes.load(), 1);
+  // A get of the last chunk replaces the first chunk in the index.
+  get.seek(encodeKey(9));
+  EXPECT_EQ(get.key(), encodeKey(9));
+  EXPECT_EQ(numDecodes.load(), 2);
+
+  // The second stripe reads on from the key cursor of the scan, which holds
+  // the first chunk.
+  for (int64_t row{0}; row < 8; ++row) {
+    SCOPED_TRACE(row);
+    EXPECT_EQ(scan.key(), encodeKey(row));
+    scan.next();
+  }
+  EXPECT_EQ(numDecodes.load(), 2);
+
+  // The index holds the last chunk.
+  EXPECT_EQ(scan.key(), encodeKey(8));
+  EXPECT_EQ(numDecodes.load(), 2);
+}
+
+// Debug-only: counting decodes relies on a TestValue hook, which is compiled
+// out under NDEBUG.
+DEBUG_ONLY_TEST_P(
+    NimbleRowIteratorTest,
+    rowIteratorSkipsTheKeysThatItsDecoderLeavesUnread) {
+  // The first key chunk holds the rows of the first two stripes.
+  writeKeyChunkTestData(
+      /*rowsPerStripe=*/4, /*numStripes=*/3, /*rowsPerKeyChunk=*/8);
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  const auto encodeKey = [&](int64_t key) {
+    return *makePointLookup(rowType, {"key"}, key).lowerKey;
+  };
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  // Reads the key of the first row of each stripe from the key cursor, and
+  // takes the keys of the entries from the values, which are ten times the
+  // keys.
+  std::vector<std::string> firstKeys;
+  TestNimbleIterator scan{createEntryIterator(
+      projectedSubfields,
+      [&](const velox::RowVectorPtr& rows,
+          nimble::index::KeyCursor& keyCursor,
+          folly::IOBufQueue& keyStorage,
+          folly::IOBufQueue& valueStorage,
+          std::vector<std::string_view>& keys,
+          std::vector<std::string_view>& values) {
+        firstKeys.emplace_back(keyCursor.next());
+        const auto* numbers = rows->childAt(0)->asFlatVector<int32_t>();
+        for (velox::vector_size_t row{0}; row < rows->size(); ++row) {
+          appendBytes(encodeKey(numbers->valueAt(row) / 10), keyStorage, keys);
+          appendBytes(
+              std::to_string(numbers->valueAt(row)), valueStorage, values);
+        }
+      },
+      NimbleIterator::Options{})};
+  TestNimbleIterator get{
+      createRowIterator(projectedSubfields, NimbleIterator::Options{})};
+
+  const bool wasEnabled = velox::common::testutil::TestValue::enabled();
+  velox::common::testutil::TestValue::enable();
+  auto restoreTestValue = folly::makeGuard([&] {
+    if (!wasEnabled) {
+      velox::common::testutil::TestValue::disable();
+    }
+  });
+  // Fires only after a cache miss, so it counts decodes rather than reads.
+  std::atomic_uint32_t numDecodes{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::nimble::index::ClusterIndexBase::getDecodedChunk",
+      std::function<void(index::DecodedKeyChunk*)>(
+          [&](index::DecodedKeyChunk* /*decodedChunk*/) { ++numDecodes; }));
+
+  scan.seekToFirst();
+  EXPECT_EQ(scan.key(), encodeKey(0));
+  EXPECT_EQ(numDecodes.load(), 1);
+  // A get of the last chunk replaces the first chunk in the index.
+  get.seek(encodeKey(9));
+  EXPECT_EQ(get.key(), encodeKey(9));
+  EXPECT_EQ(numDecodes.load(), 2);
+
+  // The key cursor of the scan skipped the keys of the first stripe that the
+  // decoder left unread, and holds the first chunk for the second stripe.
+  for (int64_t row{0}; row < 8; ++row) {
+    SCOPED_TRACE(row);
+    EXPECT_EQ(scan.key(), encodeKey(row));
+    scan.next();
+  }
+  EXPECT_EQ(numDecodes.load(), 2);
+  EXPECT_EQ(scan.key(), encodeKey(8));
+  EXPECT_EQ(numDecodes.load(), 2);
+  EXPECT_EQ(
+      firstKeys,
+      (std::vector<std::string>{encodeKey(0), encodeKey(4), encodeKey(8)}));
 }
 
 INSTANTIATE_TEST_SUITE_P(

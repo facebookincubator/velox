@@ -175,6 +175,13 @@ void FileSplitReader::resetSplit() {
   fileSplit_.reset();
 }
 
+int64_t FileSplitReader::nextRowNumber() const {
+  if (!baseRowReader_) {
+    return dwio::common::RowReader::kAtEnd;
+  }
+  return baseRowReader_->nextRowNumber();
+}
+
 int64_t FileSplitReader::estimatedRowSize() const {
   if (!baseRowReader_) {
     return DataSource::kUnknownRowSize;
@@ -341,7 +348,7 @@ void FileSplitReader::createRowReader(
       rowSizeTrackingEnabled.has_value()
           ? *rowSizeTrackingEnabled
           : connectorQueryCtx_->rowSizeTrackingMode() !=
-              core::QueryConfig::RowSizeTrackingMode::DISABLED);
+              core::QueryConfig::RowSizeTrackingMode::kDisabled);
   baseRowReader_ = baseReader_->createRowReader(baseRowReaderOpts_);
 }
 

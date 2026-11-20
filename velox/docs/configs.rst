@@ -22,11 +22,13 @@ Generic Configuration
      - 1024
      - Preferred number of rows to be returned by operators from Operator::getOutput. It is used when an estimate of
        average row size is not known. When the estimate of average row size is known, preferred_output_batch_bytes is used.
+       Must be at least 1.
    * - max_output_batch_rows
      - integer
      - 10000
      - Max number of rows that could be return by operators from Operator::getOutput. It is used when an estimate of
        average row size is known and preferred_output_batch_bytes is used to compute the number of output rows.
+       Must be at least 1.
    * - merge_join_output_batch_start_size
      - integer
      - 0
@@ -122,11 +124,11 @@ Generic Configuration
      - Used for backpressure to block local exchange producers when the local exchange buffer reaches or exceeds this size.
    * - max_local_exchange_partition_count
      - integer
-     - 2^32
+     - 2^32 - 1
      - Limits the number of partitions created by a local exchange. Partitioning data too granularly can lead to poor performance.
        This setting allows increasing the task concurrency for all pipelines except the ones that require a local partitioning.
        Affects the number of drivers for pipelines containing LocalPartitionNode and cannot exceed the maximum number of
-       pipeline drivers configured for the task.
+       pipeline drivers configured for the task. Must be at least 1.
    * - exchange.max_buffer_size
      - integer
      - 32MB
@@ -140,6 +142,13 @@ Generic Configuration
        creating tiny batches which may have a negative impact on performance when the cost of creating vectors is high
        (for example, when there are many columns). To avoid latency degradation, the exchange client unblocks a consumer
        when 1% of the data size observed so far is accumulated.
+   * - exchange_output_batch_rows
+     - integer
+     - 0
+     - The number of rows the Exchange operator fills each output batch to. When positive, it replaces the target the
+       operator derives from preferred_output_batch_bytes and an estimate of the row size. A batch holds only pages
+       taken from the exchange queue together, at most preferred_output_batch_bytes, so it can have fewer rows. A Presto
+       page is never split, so a batch can exceed this by part of a page. 0 keeps the derived target.
    * - merge_exchange.max_buffer_size
      - integer
      - 128MB
@@ -159,6 +168,7 @@ Generic Configuration
      - integer
      - 2
      - Maximum number of vectors buffered in each local merge source before blocking to wait for consumers.
+       Must be at least 1.
    * - max_page_partitioning_buffer_size
      - integer
      - 32MB
@@ -257,6 +267,10 @@ Generic Configuration
      - false
      - By default, if a key is found in multiple given maps, that key's value in the resulting map comes from the last one of those maps.
        If true, throws exception when duplicate keys are found. This configuration is needed by Spark functions `CreateMap`, `MapFromArrays`, `MapFromEntries`, `StringToMap`, `MapConcat`, `TransformKeys`.
+   * - generate_constant_maps_as_flat_maps
+     - bool
+     - false
+     - If true, map functions that support it build a flat map when every key is constant. Today only Spark `CreateMap` supports it.
    * - index_lookup_join_max_prefetch_batches
      - integer
      - 0
@@ -388,6 +402,12 @@ Expression Evaluation Configuration
      - integer
      - 100
      - Controls maximum number of compiled regular expression patterns per batch.
+   * - expression.min_rows_for_peeling
+     - integer
+     - 0
+     - Minimum number of selected rows for expression evaluation to peel dictionary encodings off its inputs. Below it,
+       a function whose only non-constant input is a dictionary gets that input flattened instead, unless its rows are
+       large enough that copying them costs more than peeling.
    * - debug_disable_expression_with_peeling
      - bool
      - false
@@ -473,6 +493,11 @@ Spilling
      - boolean
      - false
      - When `spill_enabled` is true, determines whether LocalMerge operators can spill to disk to cap memory usage.
+   * - local_merge_max_num_merge_sources
+     - integer
+     - 2^32 - 1
+     - When `local_merge_spill_enabled` is true, the maximum number of sources a LocalMerge operator merges at a time.
+       Must be at least 1.
    * - mixed_grouped_mode_hash_join_spill_enabled
      - boolean
      - false
@@ -717,13 +742,13 @@ Table Writer
      - Description
    * - task_writer_count
      - integer
-     - 1
-     - The number of parallel table writer threads per task.
+     - 4
+     - The number of parallel table writer threads per task. Must be at least 1.
    * - task_partitioned_writer_count
      - integer
      - task_writer_count
      - The number of parallel table writer threads per task for partitioned
-       table writes. If not set, use 'task_writer_count' as default.
+       table writes. If not set, use 'task_writer_count' as default. Must be at least 1.
    * - scaled_writer_rebalance_max_memory_usage_ratio
      - double
      - 0.7
@@ -950,6 +975,11 @@ Common Options
      - bool
      - true
      - Enable selective Nimble reader. Session: ``selective_nimble_reader_enabled``.
+   * - ``nimble-lazy-file-stats``
+     - bool
+     - false
+     - Decode Nimble file column statistics on first use, and only those a read needs, instead of all
+       of them when the file is opened. Do not prepend ``hive.``. Session: ``nimble_lazy_file_stats``.
    * - ``index-enabled``
      - bool
      - false
@@ -1144,7 +1174,7 @@ Parquet Options (prefix ``hive.parquet.``)
        Session: ``parquet_writer_max_target_file_size``.
 
        Row-group sizing is independent of this setting. The soft byte target is configured by
-       ``writer.row-group-size``, while the row count is capped at 1,048,576. When
+       ``writer.row-group-size``, and the row count by ``writer.row-group-rows``. When
        ``writer.max-target-file-size`` is set, the writer may flush the current row group early so
        the accumulated file size is visible and rotation can occur.
    * - ``writer.enable-dictionary``
@@ -1182,6 +1212,10 @@ Parquet Options (prefix ``hive.parquet.``)
      - Soft target for the serialized row group size. The estimate includes compressed bytes for
        encoded pages and estimated bytes for data that has not yet been serialized into pages, so a
        row group may slightly exceed the target. Session: ``parquet_writer_row_group_size``.
+   * - ``writer.row-group-rows``
+     - integer
+     - 1048576
+     - Maximum number of rows in a row group. Session: ``parquet_writer_row_group_rows``.
    * - ``writer.created-by``
      - string
      - parquet-cpp-velox version 0.0.0

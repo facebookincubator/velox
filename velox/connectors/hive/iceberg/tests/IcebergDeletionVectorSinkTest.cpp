@@ -44,7 +44,8 @@ namespace {
 // the Puffin output directory) and writeKind(); inputColumns and partition
 // spec are not exercised by the deletion-vector path.
 IcebergInsertTableHandlePtr makeDeletionVectorHandle(
-    const std::string& outputDirectory) {
+    const std::string& outputDirectory,
+    bool includePartitionPaths = true) {
   auto locationHandle = std::make_shared<connector::hive::LocationHandle>(
       outputDirectory,
       outputDirectory,
@@ -56,7 +57,14 @@ IcebergInsertTableHandlePtr makeDeletionVectorHandle(
       /*partitionSpec=*/nullptr,
       /*compressionKind=*/std::nullopt,
       /*serdeParameters=*/std::unordered_map<std::string, std::string>{},
-      IcebergInsertTableHandle::WriteKind::kDeletionVector);
+      IcebergInsertTableHandle::WriteKind::kDeletionVector,
+      /*existingDeletionVectors=*/
+      std::unordered_map<
+          std::string,
+          IcebergInsertTableHandle::ExistingDeletionVector>{},
+      std::make_shared<const IcebergFileNameGenerator>(),
+      /*insertedColumns=*/std::vector<std::string>{},
+      includePartitionPaths);
 }
 
 // Like makeDeletionVectorHandle but carries a map of existing deletion vectors
@@ -297,6 +305,34 @@ TEST_F(IcebergDeletionVectorSinkTest, singleFileSinglePosition) {
   auto deleted = readBackDeletedPositions(
       puffinPath, offset, length, recordCount, /*maxPos=*/42, pool_.get());
   EXPECT_EQ(deleted, std::vector<uint64_t>{42});
+}
+
+TEST_F(IcebergDeletionVectorSinkTest, flatLayoutWritesToTargetDirectory) {
+  auto dataDirectory = TempDirectoryPath::create();
+  auto targetDirectory = TempDirectoryPath::create();
+  auto handle = makeDeletionVectorHandle(
+      targetDirectory->getPath(), /*includePartitionPaths=*/false);
+
+  IcebergDeletionVectorSink sink(
+      ROW({"file_path", "pos"}, {VARCHAR(), BIGINT()}),
+      handle,
+      connectorQueryCtx_.get(),
+      connector::CommitStrategy::kNoCommit,
+      hiveConfig_);
+
+  const std::string dataFile =
+      dataDirectory->getPath() + "/id=1/data-file.parquet";
+  sink.appendData(makePositionDeleteRows({dataFile}, {42}));
+  EXPECT_TRUE(sink.finish());
+  const auto commitMessages = sink.close();
+
+  ASSERT_EQ(commitMessages.size(), 1);
+  const auto parsed = folly::parseJson(commitMessages[0]);
+  EXPECT_EQ(parsed["referencedDataFile"].asString(), dataFile);
+  EXPECT_EQ(
+      std::filesystem::path(parsed["path"].asString()).parent_path(),
+      std::filesystem::path(targetDirectory->getPath()));
+  EXPECT_TRUE(std::filesystem::is_empty(dataDirectory->getPath()));
 }
 
 // Writes a first DV for a data file, then runs a second sink that DELETEs a

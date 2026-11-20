@@ -25,6 +25,7 @@ The following table shows the list of already supported encodings.
 | **SparseBool** | Skewed on false/true | Stores positions of the minority boolean value. |
 | **Prefix** | Shared prefixes | Prefix-based string encoding. |
 | **SubIntSplit** | Structured 32/64-bit numeric values | Splits physical values into independently encoded bit ranges. See [SubIntSplit encoding](SubIntSplit.md). |
+| **Reversed** | Descending integers | Complements each value's order-preserving form so descending values ascend, and stores them in a nested encoding, such as EliasFano, PartitionedEliasFano or DeltaBlock. Not a default candidate. |
 
 ## Cascading (Recursive) Encoding
 
@@ -77,6 +78,13 @@ size using `EncodingSizeEstimation`, and applies a read performance factor:
 ```
 cost = estimatedSize × readFactor
 ```
+
+`Reversed` is a candidate only for values that mostly descend. Its estimated
+size is the prefix plus the estimate of EliasFano, PartitionedEliasFano or
+DeltaBlock over the reversed values. Encoding then selects its nested encoding
+among every candidate, as for other encodings with nested streams. It decodes
+its nested stream plus one XOR per value, so give it the read factor of those
+encodings.
 
 Read factors weight encodings by decode performance:
 

@@ -34,6 +34,7 @@
 #include <folly/compression/elias_fano/EliasFanoCoding.h>
 #include <folly/lang/Bits.h>
 
+#include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/OrderedInteger.h"
@@ -528,12 +529,74 @@ uint32_t EliasFanoEncoding<T>::List::lowerBound(
     found = fromOrdered<T>(base_);
     return 0;
   }
-  Reader reader{open()};
-  if (!reader.jumpTo(ordered - base_)) {
+
+  // A bucket holds the values that share their upper bits. Folly's jumpTo()
+  // reads every row of the target's bucket before the target, and clustered
+  // values crowd a few buckets with most of the rows. Every value of a bucket
+  // is at least its start, so jumping there reads no rows, and the lower bits
+  // of a bucket ascend, so a binary search over them finds the target.
+  // TODO: Benchmark Folly's jumpTo() for small buckets and choose a fallback
+  // threshold, including the cost of finding bucket boundaries.
+  const uint64_t target = ordered - base_;
+  const uint64_t lowerMask = velox::bits::lowMask(lowerBits_);
+  const uint64_t bucketStart = target & ~lowerMask;
+  const auto list = open();
+  Reader reader{list};
+  if (!reader.jumpTo(bucketStart)) {
     return rowCount_;
   }
-  found = fromOrdered<T>(base_ + reader.value());
-  return static_cast<uint32_t>(reader.position());
+  if (reader.value() >= target) {
+    found = fromOrdered<T>(base_ + reader.value());
+    return static_cast<uint32_t>(reader.position());
+  }
+  uint32_t begin = static_cast<uint32_t>(reader.position()) + 1;
+  if (begin == rowCount_) {
+    return rowCount_;
+  }
+
+  // The target's bucket ends where the next one starts.
+  Reader nextBucket{reader};
+  const bool hasNextBucket =
+      bucketStart <= std::numeric_limits<uint64_t>::max() - lowerMask - 1 &&
+      nextBucket.skipTo(bucketStart + lowerMask + 1);
+  const auto bucketEnd =
+      hasNextBucket ? static_cast<uint32_t>(nextBucket.position()) : rowCount_;
+  if (begin == bucketEnd) {
+    found = fromOrdered<T>(base_ + nextBucket.value());
+    return bucketEnd;
+  }
+
+  // Reads as Folly's private readLowerPart() does. The upper bits and the
+  // trailing padding after the lower bits keep the 8-byte load in the payload,
+  // and kMaxLowerBits keeps the shifted value within it.
+  const auto lowerBitsAt = [&](uint32_t row) {
+    const uint64_t bit = uint64_t{row} * lowerBits_;
+    return (velox::bits::loadPartialWord(
+                list.lower + bit / 8, /*size=*/sizeof(uint64_t)) >>
+            (bit % 8)) &
+        lowerMask;
+  };
+
+  // The bucket's first row is below the target, so the search starts after it.
+  const uint64_t targetLowerBits = target & lowerMask;
+  uint32_t end = bucketEnd;
+  while (begin < end) {
+    const auto middle = begin + (end - begin) / 2;
+    if (lowerBitsAt(middle) < targetLowerBits) {
+      begin = middle + 1;
+    } else {
+      end = middle;
+    }
+  }
+  if (begin < bucketEnd) {
+    found = fromOrdered<T>(base_ + (bucketStart | lowerBitsAt(begin)));
+    return begin;
+  }
+  if (!hasNextBucket) {
+    return rowCount_;
+  }
+  found = fromOrdered<T>(base_ + nextBucket.value());
+  return bucketEnd;
 }
 
 template <typename T>

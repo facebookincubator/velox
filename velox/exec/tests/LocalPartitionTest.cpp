@@ -20,6 +20,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
 using facebook::velox::test::BatchMaker;
@@ -44,15 +45,6 @@ class LocalPartitionTest : public HiveConnectorTestBase {
   FlatVectorPtr<T> makeFlatSequence(T start, T max, vector_size_t size) {
     return makeFlatVector<T>(
         size, [start, max](auto row) { return (start + row) % max; });
-  }
-
-  std::vector<std::shared_ptr<TempFilePath>> writeToFiles(
-      const std::vector<RowVectorPtr>& vectors) {
-    auto filePaths = makeFilePaths(vectors.size());
-    for (auto i = 0; i < vectors.size(); i++) {
-      writeToFile(filePaths[i]->getPath(), vectors[i]);
-    }
-    return filePaths;
   }
 
   void verifyExchangeSourceOperatorStats(
@@ -80,19 +72,6 @@ class LocalPartitionTest : public HiveConnectorTestBase {
       std::this_thread::sleep_for(std::chrono::seconds(1));
     }
     ASSERT_EQ(expected, task.use_count());
-  }
-
-  void waitForTaskCompletion(
-      const std::shared_ptr<exec::Task>& task,
-      exec::TaskState expected) {
-    if (task->state() != expected) {
-      auto& executor = folly::QueuedImmediateExecutor::instance();
-      auto future = task->taskCompletionFuture()
-                        .within(std::chrono::microseconds(1'000'000))
-                        .via(&executor);
-      future.wait();
-      EXPECT_EQ(expected, task->state());
-    }
   }
 };
 
@@ -124,13 +103,13 @@ TEST_P(LocalPartitionTestParametrized, gather) {
       makeRowVector({makeFlatSequence<int32_t>(-71, 100)}),
   };
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
   auto valuesNode = [&](int index) {
-    return PlanBuilder(planNodeIdGenerator).values({vectors[index]}).planNode();
+    return builder.newPlan().values({vectors[index]}).planNode();
   };
 
-  auto op = PlanBuilder(planNodeIdGenerator)
+  auto op = builder.newPlan()
                 .localPartition(
                     {},
                     {
@@ -146,17 +125,17 @@ TEST_P(LocalPartitionTestParametrized, gather) {
 
   auto filePaths = writeToFiles(vectors);
 
-  auto rowType = asRowType(vectors[0]->type());
+  auto rowType = vectors[0]->rowType();
 
   std::vector<core::PlanNodeId> scanNodeIds;
 
   auto tableScanNode = [&]() {
-    auto node = PlanBuilder(planNodeIdGenerator).tableScan(rowType).planNode();
+    auto node = builder.newPlan().tableScan(rowType).planNode();
     scanNodeIds.push_back(node->id());
     return node;
   };
 
-  op = PlanBuilder(planNodeIdGenerator)
+  op = builder.newPlan()
            .localPartition(
                {},
                {
@@ -194,18 +173,18 @@ TEST_F(LocalPartitionTest, gatherPreserveInputOrderWithSerialExecutionMode) {
       makeRowVector({makeFlatVector<int64_t>({90, 100})}),
       makeRowVector({makeFlatVector<int64_t>({110, 120})})};
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
   auto valuesNode = [&](const std::vector<int>& indices) {
     std::vector<RowVectorPtr> values;
     for (const auto& index : indices) {
       values.push_back(vectors[index]);
     }
-    return PlanBuilder(planNodeIdGenerator).values(values).planNode();
+    return builder.newPlan().values(values).planNode();
   };
 
   auto op =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .localPartition(
               {}, {valuesNode({0, 1, 2}), valuesNode({3}), valuesNode({4, 5})})
           .window({"row_number() over () as r"})
@@ -225,20 +204,20 @@ TEST_P(LocalPartitionTestParametrized, partition) {
 
   auto filePaths = writeToFiles(vectors);
 
-  auto rowType = asRowType(vectors[0]->type());
+  auto rowType = vectors[0]->rowType();
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
   std::vector<core::PlanNodeId> scanNodeIds;
 
   auto scanAggNode = [&]() {
-    auto builder = PlanBuilder(planNodeIdGenerator);
-    auto scanNode = builder.tableScan(rowType).planNode();
+    auto scanBuilder = builder.newPlan();
+    auto scanNode = scanBuilder.tableScan(rowType).planNode();
     scanNodeIds.push_back(scanNode->id());
-    return builder.partialAggregation({"c0"}, {"count(1)"}).planNode();
+    return scanBuilder.partialAggregation({"c0"}, {"count(1)"}).planNode();
   };
 
-  auto op = PlanBuilder(planNodeIdGenerator)
+  auto op = builder.newPlan()
                 .localPartition(
                     {"c0"},
                     {
@@ -271,13 +250,12 @@ TEST_F(LocalPartitionTest, planNodeStats) {
   // id: the LocalPartition producer and the LocalExchange consumer.
   auto data = makeRowVector({makeFlatIdentityVector<int32_t>(100)});
 
-  auto plan = PlanBuilder().values({data}).localPartition({"c0"}).planNode();
+  auto plan = PlanBuilder().values(data).localPartition({"c0"}).planNode();
 
   std::shared_ptr<Task> task;
   AssertQueryBuilder(plan).maxDrivers(4).countResults(task);
 
-  auto planStats = toPlanStats(task->taskStats());
-  const auto& stats = planStats.at(plan->id());
+  const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
 
   // Two operators implement this one plan node.
   ASSERT_EQ(stats.operatorStats.size(), 2);
@@ -295,21 +273,19 @@ TEST_F(LocalPartitionTest, planNodeStats) {
 
 TEST_F(LocalPartitionTest, partitionBuffering) {
   std::vector<RowVectorPtr> vectors = {
-      makeRowVector({"c0"}, {makeFlatSequence<int32_t>(0, 100)}),
-      makeRowVector({"c0"}, {makeFlatSequence<int32_t>(53, 100)}),
-      makeRowVector({"c0"}, {makeFlatSequence<int32_t>(-71, 1000)}),
-      makeRowVector({"c0"}, {makeFlatSequence<int32_t>(-69, 1000)}),
+      makeNamedRowVector("c0", makeFlatSequence<int32_t>(0, 100)),
+      makeNamedRowVector("c0", makeFlatSequence<int32_t>(53, 100)),
+      makeNamedRowVector("c0", makeFlatSequence<int32_t>(-71, 1000)),
+      makeNamedRowVector("c0", makeFlatSequence<int32_t>(-69, 1000)),
   };
 
   std::string query{"SELECT c0, count(1) FROM tmp GROUP BY 1"};
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .localPartition(
-              {"c0"},
-              {PlanBuilder(planNodeIdGenerator).values(vectors).planNode()})
-          .partialAggregation({"c0"}, {"count(1)"})
-          .planNode();
+  PlanBuilder builder;
+  auto plan = builder.newPlan()
+                  .localPartition(
+                      {"c0"}, {builder.newPlan().values(vectors).planNode()})
+                  .partialAggregation({"c0"}, {"count(1)"})
+                  .planNode();
   createDuckDbTable(vectors);
 
   AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
@@ -376,14 +352,12 @@ TEST_F(LocalPartitionTest, partitionBufferingWithStringBuffers) {
                       int maxDrivers,
                       int maxPartitionBufferSize) {
     std::string query{"SELECT c0, arbitrary(c1) FROM tmp GROUP BY c0"};
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan =
-        PlanBuilder(planNodeIdGenerator)
-            .localPartition(
-                {"c0"},
-                {PlanBuilder(planNodeIdGenerator).values(input).planNode()})
-            .partialAggregation({"c0"}, {"arbitrary(c1)"})
-            .planNode();
+    PlanBuilder builder;
+    auto plan = builder.newPlan()
+                    .localPartition(
+                        {"c0"}, {builder.newPlan().values(input).planNode()})
+                    .partialAggregation({"c0"}, {"arbitrary(c1)"})
+                    .planNode();
     createDuckDbTable(vectors);
 
     AssertQueryBuilder queryBuilder(plan, duckDbQueryRunner_);
@@ -434,19 +408,17 @@ TEST_F(LocalPartitionTest, partitionBufferingWithStringBuffers) {
 
 TEST_F(LocalPartitionTest, partitionBufferingPreserveEncoding) {
   std::vector<RowVectorPtr> vectors = {
-      makeRowVector({"c0"}, {makeConstant<int32_t>(0, 100)}),
-      makeRowVector({"c0"}, {makeConstant<int32_t>(0, 100)}),
-      makeRowVector({"c0"}, {makeConstant<int32_t>(1, 100)}),
-      makeRowVector({"c0"}, {makeConstant<int32_t>(1, 100)}),
+      makeNamedRowVector("c0", makeConstant<int32_t>(0, 100)),
+      makeNamedRowVector("c0", makeConstant<int32_t>(0, 100)),
+      makeNamedRowVector("c0", makeConstant<int32_t>(1, 100)),
+      makeNamedRowVector("c0", makeConstant<int32_t>(1, 100)),
   };
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .localPartition(
-              {"c0"},
-              {PlanBuilder(planNodeIdGenerator).values(vectors).planNode()})
-          .planNode();
+  PlanBuilder builder;
+  auto plan = builder.newPlan()
+                  .localPartition(
+                      {"c0"}, {builder.newPlan().values(vectors).planNode()})
+                  .planNode();
 
   std::unordered_map<std::string, std::string> configs;
   // enable buffering
@@ -487,17 +459,17 @@ TEST_F(LocalPartitionTest, maxBufferSizeGather) {
         100, [i](auto row) { return -71 + i * 10 + row; })}));
   }
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
   auto valuesNode = [&](int start, int end) {
-    return PlanBuilder(planNodeIdGenerator)
+    return builder.newPlan()
         .values(
             std::vector<RowVectorPtr>(
                 vectors.begin() + start, vectors.begin() + end))
         .planNode();
   };
 
-  auto op = PlanBuilder(planNodeIdGenerator)
+  auto op = builder.newPlan()
                 .localPartition(
                     {},
                     {
@@ -527,19 +499,19 @@ TEST_F(LocalPartitionTest, maxBufferSizePartition) {
 
   auto filePaths = writeToFiles(vectors);
 
-  auto rowType = asRowType(vectors[0]->type());
+  auto rowType = vectors[0]->rowType();
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
   std::vector<core::PlanNodeId> scanNodeIds;
 
   auto scanNode = [&]() {
-    auto node = PlanBuilder(planNodeIdGenerator).tableScan(rowType).planNode();
+    auto node = builder.newPlan().tableScan(rowType).planNode();
     scanNodeIds.push_back(node->id());
     return node;
   };
 
-  auto op = PlanBuilder(planNodeIdGenerator)
+  auto op = builder.newPlan()
                 .localPartition(
                     {"c0"},
                     {
@@ -581,16 +553,16 @@ TEST_F(LocalPartitionTest, indicesBufferCapacity) {
         100, [i](auto row) { return -71 + i * 10 + row; })}));
   }
   auto filePaths = writeToFiles(vectors);
-  auto rowType = asRowType(vectors[0]->type());
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto rowType = vectors[0]->rowType();
+  PlanBuilder builder;
   std::vector<core::PlanNodeId> scanNodeIds;
   auto scanNode = [&]() {
-    auto node = PlanBuilder(planNodeIdGenerator).tableScan(rowType).planNode();
+    auto node = builder.newPlan().tableScan(rowType).planNode();
     scanNodeIds.push_back(node->id());
     return node;
   };
   CursorParameters params;
-  params.planNode = PlanBuilder(planNodeIdGenerator)
+  params.planNode = builder.newPlan()
                         .localPartition(
                             {"c0"},
                             {
@@ -666,17 +638,15 @@ TEST_F(LocalPartitionTest, blockingOnLocalExchangeQueue) {
 
     createDuckDbTable({test.input});
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     core::PlanNodeId nodeId;
-    auto plan = PlanBuilder(planNodeIdGenerator)
-                    .localPartition(
-                        {"c0"},
-                        {PlanBuilder(planNodeIdGenerator)
-                             .values({test.input})
-                             .planNode()})
-                    .capturePlanNodeId(nodeId)
-                    .singleAggregation({"c0"}, {"count(1)"})
-                    .planNode();
+    auto plan =
+        builder.newPlan()
+            .localPartition(
+                {"c0"}, {builder.newPlan().values({test.input}).planNode()})
+            .capturePlanNodeId(nodeId)
+            .singleAggregation({"c0"}, {"count(1)"})
+            .planNode();
     auto task = AssertQueryBuilder(duckDbQueryRunner_)
                     .plan(plan)
                     .maxDrivers(4)
@@ -710,13 +680,13 @@ TEST_P(LocalPartitionTestParametrized, multipleExchanges) {
 
   auto filePaths = writeToFiles(vectors);
 
-  auto rowType = asRowType(vectors[0]->type());
+  auto rowType = vectors[0]->rowType();
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   std::vector<core::PlanNodeId> scanNodeIds;
 
   auto tableScanNode = [&]() {
-    auto node = PlanBuilder(planNodeIdGenerator).tableScan(rowType).planNode();
+    auto node = builder.newPlan().tableScan(rowType).planNode();
     scanNodeIds.push_back(node->id());
     return node;
   };
@@ -725,10 +695,10 @@ TEST_P(LocalPartitionTestParametrized, multipleExchanges) {
   // Group by 0, 1 and compute counts. Group by 0 and compute counts and sums.
   // First exchange re-partitions the results of table scan on two keys. Second
   // exchange re-partitions the results on just the first key.
-  auto op = PlanBuilder(planNodeIdGenerator)
+  auto op = builder.newPlan()
                 .localPartition(
                     {"c0"},
-                    {PlanBuilder(planNodeIdGenerator)
+                    {builder.newPlan()
                          .localPartition(
                              {"c0", "c1"},
                              {
@@ -764,11 +734,10 @@ TEST_P(LocalPartitionTestParametrized, earlyCompletion) {
       makeRowVector({makeFlatSequence(13, 100)}),
   };
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .localPartition(
-              {}, {PlanBuilder(planNodeIdGenerator).values(data).planNode()})
+      builder.newPlan()
+          .localPartition({}, {builder.newPlan().values(data).planNode()})
           .limit(0, 2, true)
           .planNode();
 
@@ -790,11 +759,10 @@ TEST_F(LocalPartitionTest, earlyCancelation) {
       makeRowVector({makeFlatSequence(13, 100)}),
   };
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .localPartition(
-              {}, {PlanBuilder(planNodeIdGenerator).values(data).planNode()})
+      builder.newPlan()
+          .localPartition({}, {builder.newPlan().values(data).planNode()})
           .limit(0, 2'000, true)
           .planNode();
 
@@ -824,7 +792,7 @@ TEST_F(LocalPartitionTest, earlyCancelation) {
   }
 
   // Wait for task to transition to final state.
-  waitForTaskCompletion(task, exec::TaskState::kCanceled);
+  EXPECT_TRUE(TaskMonitor::waitForStateChange(*task, TaskState::kCanceled));
 
   // Make sure there is only one reference to Task left, i.e. no Driver is
   // blocked forever.
@@ -839,16 +807,14 @@ TEST_F(LocalPartitionTest, producerError) {
       makeRowVector({makeFlatSequence(-13, 100)}),
   };
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .localPartition(
-                      {},
-                      {PlanBuilder(planNodeIdGenerator)
-                           .values(data)
-                           .project({"7 / c0"})
-                           .planNode()})
-                  .limit(0, 2'000, true)
-                  .planNode();
+  PlanBuilder builder;
+  auto plan =
+      builder.newPlan()
+          .localPartition(
+              {},
+              {builder.newPlan().values(data).project({"7 / c0"}).planNode()})
+          .limit(0, 2'000, true)
+          .planNode();
 
   CursorParameters params;
   params.planNode = plan;
@@ -860,7 +826,7 @@ TEST_F(LocalPartitionTest, producerError) {
   ASSERT_THROW(while (cursor->moveNext()) { ; }, VeloxException);
 
   // Wait for task to transition to failed state.
-  waitForTaskCompletion(task, exec::TaskState::kFailed);
+  EXPECT_TRUE(TaskMonitor::waitForStateChange(*task, TaskState::kFailed));
 
   // Make sure there is only one reference to Task left, i.e. no Driver is
   // blocked forever.
@@ -877,16 +843,16 @@ TEST_F(LocalPartitionTest, unionAll) {
       {makeFlatVector<int32_t>({20, 21}),
        makeFlatVector<StringView>({"z", "w"})});
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator)
+  PlanBuilder builder;
+  auto plan = builder.newPlan()
                   .localPartition(
                       {},
-                      {PlanBuilder(planNodeIdGenerator)
-                           .values({data1})
+                      {builder.newPlan()
+                           .values(data1)
                            .project({"d0 as c0", "d1 as c1"})
                            .planNode(),
-                       PlanBuilder(planNodeIdGenerator)
-                           .values({data2})
+                       builder.newPlan()
+                           .values(data2)
                            .project({"e0 as c0", "e1 as c1"})
                            .planNode()})
                   .planNode();
@@ -899,22 +865,22 @@ TEST_F(LocalPartitionTest, unionAll) {
 }
 
 TEST_P(LocalPartitionTestParametrized, unionAllLocalExchange) {
-  auto data1 = makeRowVector({"d0"}, {makeFlatVector<StringView>({"x"})});
-  auto data2 = makeRowVector({"e0"}, {makeFlatVector<StringView>({"y"})});
+  auto data1 = makeNamedRowVector("d0", makeFlatVector<StringView>({"x"}));
+  auto data2 = makeNamedRowVector("e0", makeFlatVector<StringView>({"y"}));
   for (bool serialExecutionMode : {false, true}) {
     SCOPED_TRACE(fmt::format("serialExecutionMode {}", serialExecutionMode));
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     AssertQueryBuilder queryBuilder(duckDbQueryRunner_);
     applyTestParameters(queryBuilder);
     queryBuilder.serialExecution(serialExecutionMode)
-        .plan(PlanBuilder(planNodeIdGenerator)
+        .plan(builder.newPlan()
                   .localPartitionRoundRobin(
-                      {PlanBuilder(planNodeIdGenerator)
-                           .values({data1})
+                      {builder.newPlan()
+                           .values(data1)
                            .project({"d0 as c0"})
                            .planNode(),
-                       PlanBuilder(planNodeIdGenerator)
-                           .values({data2})
+                       builder.newPlan()
+                           .values(data2)
                            .project({"e0 as c0"})
                            .planNode()})
                   .project({"length(c0)"})
@@ -1023,8 +989,10 @@ class BlockingNodeFactory : public Operator::PlanNodeTranslator {
 } // namespace
 
 TEST_F(LocalPartitionTest, unionAllLocalExchangeWithInterDependency) {
-  const auto data1 = makeRowVector({"d0"}, {makeFlatVector<StringView>({"x"})});
-  const auto data2 = makeRowVector({"e0"}, {makeFlatVector<StringView>({"y"})});
+  const auto data1 =
+      makeNamedRowVector("d0", makeFlatVector<StringView>({"x"}));
+  const auto data2 =
+      makeNamedRowVector("e0", makeFlatVector<StringView>({"y"}));
 
   for (bool serialExecutionMode : {false, true}) {
     SCOPED_TRACE(fmt::format("serialExecutionMode {}", serialExecutionMode));
@@ -1069,19 +1037,19 @@ TEST_F(LocalPartitionTest, unionAllLocalExchangeWithInterDependency) {
         std::make_unique<BlockingNodeFactory>(
             std::move(blockingCallback), std::move(finishCallback)));
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    PlanBuilder builder;
+    auto plan = builder.newPlan()
                     .localPartitionRoundRobin(
-                        {PlanBuilder(planNodeIdGenerator)
-                             .values({data1})
+                        {builder.newPlan()
+                             .values(data1)
                              .project({"d0 as c0"})
                              .addNode([](const core::PlanNodeId& id,
                                          const core::PlanNodePtr& input) {
                                return std::make_shared<BlockingNode>(id, input);
                              })
                              .planNode(),
-                         PlanBuilder(planNodeIdGenerator)
-                             .values({data2})
+                         builder.newPlan()
+                             .values(data2)
                              .project({"e0 as c0"})
                              .addNode([](const core::PlanNodeId& id,
                                          const core::PlanNodePtr& input) {
@@ -1114,8 +1082,10 @@ TEST_F(LocalPartitionTest, unionAllLocalExchangeWithInterDependency) {
 TEST_F(
     LocalPartitionTest,
     taskErrorWithBlockedDriverFutureUnderSerializedExecutionMode) {
-  const auto data1 = makeRowVector({"d0"}, {makeFlatVector<StringView>({"x"})});
-  const auto data2 = makeRowVector({"e0"}, {makeFlatVector<StringView>({"y"})});
+  const auto data1 =
+      makeNamedRowVector("d0", makeFlatVector<StringView>({"x"}));
+  const auto data2 =
+      makeNamedRowVector("e0", makeFlatVector<StringView>({"y"}));
 
   Operator::unregisterAllOperators();
 
@@ -1139,19 +1109,19 @@ TEST_F(
       std::make_unique<BlockingNodeFactory>(
           std::move(blockingCallback), std::move(finishCallback)));
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator)
+  PlanBuilder builder;
+  auto plan = builder.newPlan()
                   .localPartitionRoundRobin(
-                      {PlanBuilder(planNodeIdGenerator)
-                           .values({data1})
+                      {builder.newPlan()
+                           .values(data1)
                            .project({"d0 as c0"})
                            .addNode([](const core::PlanNodeId& id,
                                        const core::PlanNodePtr& input) {
                              return std::make_shared<BlockingNode>(id, input);
                            })
                            .planNode(),
-                       PlanBuilder(planNodeIdGenerator)
-                           .values({data2})
+                       builder.newPlan()
+                           .values(data2)
                            .project({"e0 as c0"})
                            .addNode([](const core::PlanNodeId& id,
                                        const core::PlanNodePtr& input) {
@@ -1220,10 +1190,8 @@ TEST_F(LocalPartitionTest, barrier) {
       auto vector = std::dynamic_pointer_cast<RowVector>(
           BatchMaker::createBatch(rowType, 100, *pool_));
       sourceVectors.push_back(vector);
-      tempFiles[i].push_back(TempFilePath::create());
     }
-    HiveConnectorTestBase::writeToFiles(
-        toFilePaths(tempFiles[i]), sourceVectors);
+    tempFiles[i] = writeToFiles(sourceVectors);
     std::copy(
         sourceVectors.begin(),
         sourceVectors.end(),
@@ -1231,16 +1199,16 @@ TEST_F(LocalPartitionTest, barrier) {
   }
   createDuckDbTable(vectors);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
   std::vector<core::PlanNodeId> scanNodeIds;
   auto tableScanNode = [&]() {
-    auto node = PlanBuilder(planNodeIdGenerator).tableScan(rowType).planNode();
+    auto node = builder.newPlan().tableScan(rowType).planNode();
     scanNodeIds.push_back(node->id());
     return node;
   };
 
-  auto plan = PlanBuilder(planNodeIdGenerator)
+  auto plan = builder.newPlan()
                   .localPartition(
                       {},
                       {

@@ -65,8 +65,7 @@ class TDigestAggregateResultVerifier : public ResultVerifier {
     auto projection = keys_;
     projection.push_back(resultName_);
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto builder = PlanBuilder(planNodeIdGenerator).values({result});
+    auto builder = PlanBuilder().values(result);
     if (!keys_.empty()) {
       builder = builder.orderBy(keys_, false);
     }
@@ -74,7 +73,7 @@ class TDigestAggregateResultVerifier : public ResultVerifier {
     auto sortedResult =
         AssertQueryBuilder(sortByKeys).copyResults(result->pool());
 
-    builder = PlanBuilder(planNodeIdGenerator).values({altResult});
+    builder = PlanBuilder().values(altResult);
     if (!keys_.empty()) {
       builder = builder.orderBy(keys_, false);
     }

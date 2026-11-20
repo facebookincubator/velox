@@ -67,14 +67,14 @@ std::unique_ptr<memory::MemoryManager> createMemoryManager(
 core::PlanNodePtr hashJoinPlan(
     const std::vector<RowVectorPtr>& vectors,
     core::PlanNodeId& joinNodeId) {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  return PlanBuilder(planNodeIdGenerator)
+  PlanBuilder builder;
+  return builder.newPlan()
       .values(vectors, true)
       .project({"c0", "c1", "c2"})
       .hashJoin(
           {"c0"},
           {"u1"},
-          PlanBuilder(planNodeIdGenerator)
+          builder.newPlan()
               .values(vectors, true)
               .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
               .planNode(),
@@ -122,8 +122,7 @@ QueryTestResult runHashJoinTask(
 core::PlanNodePtr aggregationPlan(
     const std::vector<RowVectorPtr>& vectors,
     core::PlanNodeId& aggregateNodeId) {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  return PlanBuilder(planNodeIdGenerator)
+  return PlanBuilder()
       .values(vectors)
       .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
       .capturePlanNodeId(aggregateNodeId)
@@ -142,15 +141,14 @@ QueryTestResult runAggregateTask(
   const auto plan = aggregationPlan(vectors, result.planNodeId);
   if (enableSpilling) {
     const auto spillDirectory = TempDirectoryPath::create();
-    result.data =
-        AssertQueryBuilder(plan)
-            .serialExecution(serialExecution)
-            .spillDirectory(spillDirectory->getPath())
-            .config(core::QueryConfig::kSpillEnabled, "true")
-            .config(core::QueryConfig::kAggregationSpillEnabled, "true")
-            .queryCtx(queryCtx)
-            .maxDrivers(numDrivers)
-            .copyResults(pool, result.task);
+    result.data = AssertQueryBuilder(plan)
+                      .serialExecution(serialExecution)
+                      .spillDirectory(spillDirectory->getPath())
+                      .config(core::QueryConfig::kSpillEnabled, true)
+                      .config(core::QueryConfig::kAggregationSpillEnabled, true)
+                      .queryCtx(queryCtx)
+                      .maxDrivers(numDrivers)
+                      .copyResults(pool, result.task);
   } else {
     result.data = AssertQueryBuilder(plan)
                       .serialExecution(serialExecution)
@@ -167,8 +165,7 @@ QueryTestResult runAggregateTask(
 core::PlanNodePtr orderByPlan(
     const std::vector<RowVectorPtr>& vectors,
     core::PlanNodeId& orderNodeId) {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  return PlanBuilder(planNodeIdGenerator)
+  return PlanBuilder()
       .values(vectors)
       .project({"c0", "c1", "c2"})
       .orderBy({"c2 ASC NULLS LAST"}, false)
@@ -191,8 +188,8 @@ QueryTestResult runOrderByTask(
     result.data = AssertQueryBuilder(plan)
                       .serialExecution(serialExecution)
                       .spillDirectory(spillDirectory->getPath())
-                      .config(core::QueryConfig::kSpillEnabled, "true")
-                      .config(core::QueryConfig::kOrderBySpillEnabled, "true")
+                      .config(core::QueryConfig::kSpillEnabled, true)
+                      .config(core::QueryConfig::kOrderBySpillEnabled, true)
                       .queryCtx(queryCtx)
                       .maxDrivers(numDrivers)
                       .copyResults(pool, result.task);
@@ -212,8 +209,7 @@ QueryTestResult runOrderByTask(
 core::PlanNodePtr rowNumberPlan(
     const std::vector<RowVectorPtr>& vectors,
     core::PlanNodeId& rowNumberNodeId) {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  return PlanBuilder(planNodeIdGenerator)
+  return PlanBuilder()
       .values(vectors)
       .rowNumber({"c0"}, 2, false)
       .project({"c0", "c1"})
@@ -236,8 +232,8 @@ QueryTestResult runRowNumberTask(
     result.data = AssertQueryBuilder(plan)
                       .serialExecution(serialExecution)
                       .spillDirectory(spillDirectory->getPath())
-                      .config(core::QueryConfig::kSpillEnabled, "true")
-                      .config(core::QueryConfig::kRowNumberSpillEnabled, "true")
+                      .config(core::QueryConfig::kSpillEnabled, true)
+                      .config(core::QueryConfig::kRowNumberSpillEnabled, true)
                       .queryCtx(queryCtx)
                       .maxDrivers(numDrivers)
                       .copyResults(pool, result.task);
@@ -257,8 +253,7 @@ QueryTestResult runRowNumberTask(
 core::PlanNodePtr topNPlan(
     const std::vector<RowVectorPtr>& vectors,
     core::PlanNodeId& topNodeId) {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  return PlanBuilder(planNodeIdGenerator)
+  return PlanBuilder()
       .values(vectors)
       .project({"c1"})
       .topN({"c1 NULLS FIRST"}, 10, false)
@@ -282,8 +277,8 @@ QueryTestResult runTopNTask(
         AssertQueryBuilder(plan)
             .serialExecution(serialExecution)
             .spillDirectory(spillDirectory->getPath())
-            .config(core::QueryConfig::kSpillEnabled, "true")
-            .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+            .config(core::QueryConfig::kSpillEnabled, true)
+            .config(core::QueryConfig::kTopNRowNumberSpillEnabled, true)
             .queryCtx(queryCtx)
             .maxDrivers(numDrivers)
             .copyResults(pool, result.task);
@@ -304,8 +299,7 @@ core::PlanNodePtr writePlan(
     const std::vector<RowVectorPtr>& vectors,
     const std::string& outputDirPath,
     core::PlanNodeId& writeNodeId) {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  return PlanBuilder(planNodeIdGenerator)
+  return PlanBuilder()
       .values(vectors)
       .tableWrite(outputDirPath)
       .singleAggregation(
@@ -332,9 +326,9 @@ QueryTestResult runWriteTask(
         AssertQueryBuilder(plan)
             .serialExecution(serialExecution)
             .spillDirectory(spillDirectory->getPath())
-            .config(core::QueryConfig::kSpillEnabled, "true")
-            .config(core::QueryConfig::kAggregationSpillEnabled, "false")
-            .config(core::QueryConfig::kWriterSpillEnabled, "true")
+            .config(core::QueryConfig::kSpillEnabled, true)
+            .config(core::QueryConfig::kAggregationSpillEnabled, false)
+            .config(core::QueryConfig::kWriterSpillEnabled, true)
             // Set 0 file writer flush threshold to always trigger flush in
             // test.
             .config(core::QueryConfig::kWriterFlushThresholdBytes, 0)

@@ -104,8 +104,7 @@ TEST_F(TableScanReplayerTest, runner) {
   const int numSplits{5};
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
 
@@ -172,8 +171,7 @@ TEST_F(TableScanReplayerTest, basic) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < 5; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
 
@@ -239,8 +237,7 @@ TEST_F(TableScanReplayerTest, columnPrunning) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < 5; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
 
@@ -290,8 +287,7 @@ TEST_F(TableScanReplayerTest, subfieldPrunning) {
   auto columnType = ROW({"c", "d"}, {innerType, BIGINT()});
   auto rowType = ROW({"e"}, {columnType});
   auto vectors = makeVectors(10, 1'000, rowType);
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), vectors);
+  auto filePath = writeToFile(vectors);
   std::vector<common::Subfield> requiredSubfields;
   requiredSubfields.emplace_back("e.c");
   connector::ColumnHandleMap assignments;
@@ -348,8 +344,7 @@ TEST_F(TableScanReplayerTest, concurrent) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < 2; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
 

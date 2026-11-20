@@ -392,18 +392,18 @@ TEST_F(TpchConnectorTest, namespaceInfer) {
 
 // Join nation and region.
 TEST_F(TpchConnectorTest, join) {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId nationScanId;
   core::PlanNodeId regionScanId;
   auto plan =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .tpchTableScan(
               tpch::Table::TBL_NATION, {"n_regionkey"}, 1.0 /*scaleFactor*/)
           .capturePlanNodeId(nationScanId)
           .hashJoin(
               {"n_regionkey"},
               {"r_regionkey"},
-              PlanBuilder(planNodeIdGenerator)
+              builder.newPlan()
                   .tpchTableScan(
                       tpch::Table::TBL_REGION,
                       {"r_regionkey", "r_name"},

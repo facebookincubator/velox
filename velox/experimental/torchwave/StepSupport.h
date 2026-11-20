@@ -29,6 +29,10 @@
 
 namespace torch::wave {
 
+struct SizeOp;
+struct StepProgram;
+struct ValueTable;
+
 /// The StepVectors of (sequenceNumber, stepIdx), growing 'allSteps' as needed.
 StepVectors& getStepVectors(
     std::vector<std::vector<StepVectors>>& allSteps,
@@ -92,6 +96,19 @@ void fillScalarParam(
 
 /// Writes the descriptor of an absent tensor into 'dest'.
 void fillEmptyTensorParam(void* dest);
+
+/// Fails when a tensor in 'table' differs from the shape a kernel of
+/// 'program' was compiled for. The shapes follow from the graph, so a
+/// mismatch is a bug in shape inference, and running the kernel would read
+/// the wrong elements.
+void runShapeChecks(const StepProgram& program, const ValueTable& table);
+
+/// Runs the ReserveFn of the constant 'size' and fails when its result
+/// differs from the one bind computed from static shapes.
+void verifyConstantSize(
+    const SizeOp& size,
+    const StepProgram& program,
+    const ValueTable& table);
 
 /// Bound path: decides which values live in the table alone
 /// (ExecutionState::tableOnly) from what host code reads, and turns the

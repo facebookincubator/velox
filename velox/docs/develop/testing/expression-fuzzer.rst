@@ -299,11 +299,9 @@ ExpressionRunner supports the following flags:
 
     - ``simplified`` evaluates the expression using simplified path and prints the results to stdout.
 
-    - ``query`` evaluate SQL query specified in --sql or --sql_path and print out results. If --input_path is specified, the query may reference it as table 't'.
-
 * ``--num_rows`` optional number of rows to process in common and simplified modes. Default: 10. 0 means all rows. This flag is ignored in 'verify' mode.
 
-* ``--store_result_path`` optional directory path for storing the results of evaluating SQL expression or query in 'common', 'simplified' or 'query' modes.
+* ``--store_result_path`` optional directory path for storing the results of evaluating SQL expression in 'common' or 'simplified' modes.
 
 * ``--findMinimalSubExpression`` optional Whether to find minimum failing subexpression on result mismatch. Set to false by default.
 

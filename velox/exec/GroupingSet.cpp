@@ -1380,7 +1380,7 @@ bool GroupingSet::mergeNextWithoutAggregates(
     lastVector = stream->current();
     lastIndex = index;
     endOfBatch = index == currentVector.size() - 1;
-    if (FOLLY_UNLIKELY(endOfBatch)) {
+    if (endOfBatch) [[unlikely]] {
       // The stream is at end of input batch. Need to copy out the rows before
       // fetching next batch in 'pop'.
       flushOutput();
@@ -1454,7 +1454,8 @@ void GroupingSet::updateRow(SpillMergeStream& input, char* row) {
     mergeSelection_.clearAll();
   }
   mergeSelection_.setValid(input.currentIndex(), true);
-  mergeSelection_.updateBounds();
+  mergeSelection_.setActiveBounds(
+      input.currentIndex(), input.currentIndex() + 1);
   for (auto i = 0; i < aggregates_.size(); ++i) {
     if (!aggregates_[i].sortingKeys.empty()) {
       continue;

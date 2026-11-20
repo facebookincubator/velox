@@ -53,6 +53,17 @@ class SparkFunctionBaseTest : public FunctionBaseTest {
     });
   }
 
+  // Builds flat maps in map() for constant keys, under the given duplicate map
+  // key policy.
+  void setGenerateConstantMapsAsFlatMaps(
+      bool throwExceptionOnDuplicateMapKeys) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys,
+         throwExceptionOnDuplicateMapKeys ? "true" : "false"},
+        {core::QueryConfig::kGenerateConstantMapsAsFlatMaps, "true"},
+    });
+  }
+
   // Returns the bit pattern of each element of 'arrays', an ARRAY(DOUBLE)
   // vector, row by row. assertEqualVectors treats 0.0 and -0.0 as equal, and
   // their bit patterns differ.

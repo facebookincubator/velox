@@ -128,8 +128,17 @@ bool SelectiveColumnReader::hasRowFilter() const {
       !scanSpec_->children().empty();
 }
 
+bool SelectiveColumnReader::useBulkPath(bool hasNulls) const {
+  auto* filter = scanSpec_->filter();
+  return hasBulkPath() && process::hasSimd() &&
+      (!filter ||
+       (filter->isDeterministic() && (!hasNulls || !filter->testNull()))) &&
+      (!scanSpec_->valueHook() || !hasNulls ||
+       !scanSpec_->valueHook()->acceptsNulls());
+}
+
 void SelectiveColumnReader::setReturnNullsMode(const RowSet& rows) {
-  if (useBulkPath() && !hasRowFilter()) {
+  if (useBulkPath() && !scanSpec_->hasFilter()) {
     anyNulls_ = nullsInReadRange_ != nullptr;
     const bool isDense = rows.back() == rows.size() - 1;
     returnReaderNulls_ = anyNulls_ && isDense;
@@ -530,7 +539,8 @@ void SelectiveColumnReader::addSkippedParentNulls(
     int64_t to,
     int32_t numNulls) {
   const auto rowsPerRowGroup = formatData_->rowsPerRowGroup();
-  if (rowsPerRowGroup.has_value() &&
+  // A file without a row index reports 0 rows per row group.
+  if (rowsPerRowGroup.value_or(0) > 0 &&
       from / rowsPerRowGroup.value() >
           parentNullsRecordedTo_ / rowsPerRowGroup.value()) {
     // the new nulls are in a different row group than the last.

@@ -48,17 +48,6 @@ namespace facebook::velox::exec {
 /// than one right vector, it gets copied and flattened.
 class MergeJoin : public Operator {
  public:
-  /// Runtime stat keys for merge join.
-  /// Number of left rows matched in merge join.
-  static constexpr std::string_view kMatchedLeftRows = "matchedLeftRows";
-  /// Number of right rows matched in merge join.
-  static constexpr std::string_view kMatchedRightRows = "matchedRightRows";
-  /// Number of left input batches dropped mid-group by
-  /// 'merge_join_stream_left_side'. Zero means no group ever streamed, so the
-  /// left side was retained exactly as it is without the config.
-  static constexpr std::string_view kStreamedLeftBatches =
-      "streamedLeftBatches";
-
   MergeJoin(
       int32_t operatorId,
       DriverCtx* driverCtx,
@@ -766,9 +755,9 @@ class MergeJoin : public Operator {
   uint64_t matchedRightRows_{0};
 
   // Counts left input batches dropped by releaseConsumedLeftMatchInputs(),
-  // reported as kStreamedLeftBatches so a caller can tell whether streaming
-  // actually engaged. Output is identical either way, so this is the only
-  // externally visible sign of it.
+  // reported as MergeJoinStatNames::kStreamedLeftBatches so a caller can tell
+  // whether streaming actually engaged. Output is identical either way, so this
+  // is the only externally visible sign of it.
   int64_t streamedLeftBatches_{0};
 };
 } // namespace facebook::velox::exec

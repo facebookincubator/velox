@@ -71,13 +71,11 @@ class SetDigestResultVerifier : public ResultVerifier {
       override {
     VELOX_CHECK_EQ(result->size(), altResult->size());
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-
     auto sortByGroupingKeys = [&](const RowVectorPtr& data) {
       auto projection = keys_;
       projection.push_back(resultName_);
 
-      auto builder = PlanBuilder(planNodeIdGenerator).values({data});
+      auto builder = PlanBuilder().values(data);
       if (!keys_.empty()) {
         builder = builder.orderBy(keys_, false);
       }

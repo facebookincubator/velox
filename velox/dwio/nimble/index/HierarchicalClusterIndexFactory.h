@@ -122,7 +122,8 @@ class HierarchicalClusterIndexFactory : public ClusterIndexFactory {
   std::unique_ptr<IndexWriter> createWriter(
       const IndexConfig& config,
       const velox::TypePtr& inputType,
-      velox::memory::MemoryPool* pool) const override;
+      velox::memory::MemoryPool* pool,
+      const Options& options) const override;
 
   /// Returns a key encoder that turns the values of the key columns of a row
   /// into the values of the levels, as the writer of the index does, and writes

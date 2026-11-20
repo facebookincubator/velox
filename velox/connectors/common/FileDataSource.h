@@ -53,6 +53,13 @@ struct FileScanBatchEvent : public core::ScanBatchEvent {
   /// Bytes fetched from storage producing this batch, including any read
   /// amplification from coalescing adjacent regions.
   uint64_t storageReadBytes{0};
+  /// The split this batch was read from.
+  const FileConnectorSplit* split{nullptr};
+  /// File row number where this batch's read started. The read covered rows
+  /// [rowStart, rowStart + numRows), including rows filters removed inside the
+  /// scan. dwio::common::RowReader::kAtEnd when the split reader opens its file
+  /// inside the read, as Paimon does.
+  int64_t rowStart{0};
 };
 
 class FileConfig;
@@ -138,6 +145,12 @@ class FileDataSource : public DataSource {
  protected:
   virtual std::unique_ptr<FileSplitReader> createSplitReader();
 
+  // Returns true to skip 'split_' without opening its file. The split then
+  // returns no rows and counts toward skippedSplits.
+  virtual bool skipSplit() {
+    return false;
+  }
+
   FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const ioExecutor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
@@ -169,6 +182,10 @@ class FileDataSource : public DataSource {
   // Cumulative dataIoStats_->read().sum() as of the last scan batch event, so
   // each event reports only the bytes read since the previous one.
   uint64_t lastEventStorageReadBytes_{0};
+
+  // File row number where the last read started. The scan batch event of that
+  // read reports it as rowStart.
+  int64_t lastReadStart_{0};
 
   /// Column handles for the split info columns keyed on their column names.
   std::unordered_map<std::string, FileColumnHandlePtr> infoColumns_;

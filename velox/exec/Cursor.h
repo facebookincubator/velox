@@ -189,6 +189,9 @@ class TaskCursor {
     return moveNext(nullptr);
   }
 
+  /// Reads the rest of the task's output and returns the number of rows read.
+  uint64_t countRows();
+
   /// Steps through execution, returning either the input to the next operator
   /// with a breakpoint installed, or the next task output. If no breakpoints
   /// are set, then moveStep() == moveNext().
