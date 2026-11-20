@@ -19,6 +19,7 @@
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/HashBuildStatNames.h"
 #include "velox/exec/HashTableCache.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
@@ -1156,7 +1157,7 @@ void HashBuild::addRuntimeStats() {
   // Add max spilling level stats if spilling has been triggered.
   if (spiller_ != nullptr && spiller_->spillTriggered()) {
     lockedStats->addRuntimeStat(
-        std::string(HashBuild::kMaxSpillLevel),
+        std::string(HashBuildStatNames::kMaxSpillLevel),
         RuntimeCounter(
             spillConfig()->spillLevel(spiller_->hashBits().begin())));
   }
@@ -1517,7 +1518,8 @@ void HashBuild::abandonHashBuildDedup() {
   // that was previously inserted into the hash table is already in the
   // RowContainer.
   addRuntimeStat(
-      std::string(HashBuild::kAbandonBuildNoDupHash), RuntimeCounter(1));
+      std::string(HashBuildStatNames::kAbandonBuildNoDupHash),
+      RuntimeCounter(1));
   abandonHashBuildDedup_ = true;
   table_->setAllowDuplicates(true);
   lookup_.reset();

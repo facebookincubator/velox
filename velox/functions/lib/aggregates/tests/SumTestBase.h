@@ -151,13 +151,13 @@ void SumTestBase::testAggregateOverflow(
   // Partial Aggregation (raw input in - partial result out).
   partialAggsToTest.push_back(
       {facebook::velox::exec::test::PlanBuilder()
-           .values({overflowFlatVector})
+           .values(overflowFlatVector)
            .partialAggregation({}, {fmt::format("{}(c0)", function)})
            .planNode(),
        expectedFlatSum});
   partialAggsToTest.push_back(
       {facebook::velox::exec::test::PlanBuilder()
-           .values({overflowConstantVector})
+           .values(overflowConstantVector)
            .partialAggregation({}, {fmt::format("{}(c0)", function)})
            .planNode(),
        expectedConstantSum});
@@ -173,13 +173,13 @@ void SumTestBase::testAggregateOverflow(
   // Single Aggregation (raw input in - final result out).
   aggsToTest.push_back(
       {facebook::velox::exec::test::PlanBuilder()
-           .values({overflowFlatVector})
+           .values(overflowFlatVector)
            .singleAggregation({}, {fmt::format("{}(c0)", function)})
            .planNode(),
        expectedFlatSum});
   aggsToTest.push_back(
       {facebook::velox::exec::test::PlanBuilder()
-           .values({overflowConstantVector})
+           .values(overflowConstantVector)
            .singleAggregation({}, {fmt::format("{}(c0)", function)})
            .planNode(),
        expectedConstantSum});
@@ -195,17 +195,17 @@ void SumTestBase::testAggregateOverflow(
   // output into a final aggregate plan node. Each of those input fragments
   // only have a single input value under the max limit which when added in
   // the final step causes a potential overflow.
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  facebook::velox::exec::test::PlanBuilder builder;
   aggsToTest.push_back(
-      {facebook::velox::exec::test::PlanBuilder(planNodeIdGenerator)
+      {builder.newPlan()
            .localPartition(
                {},
-               {facebook::velox::exec::test::PlanBuilder(planNodeIdGenerator)
-                    .values({limitVector})
+               {builder.newPlan()
+                    .values(limitVector)
                     .partialAggregation({}, {fmt::format("{}(c0)", function)})
                     .planNode(),
-                facebook::velox::exec::test::PlanBuilder(planNodeIdGenerator)
-                    .values({limitVector})
+                builder.newPlan()
+                    .values(limitVector)
                     .partialAggregation({}, {fmt::format("{}(c0)", function)})
                     .planNode()})
            .finalAggregation()

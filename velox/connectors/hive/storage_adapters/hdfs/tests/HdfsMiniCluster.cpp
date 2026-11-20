@@ -16,10 +16,14 @@
 
 #include "velox/connectors/hive/storage_adapters/hdfs/tests/HdfsMiniCluster.h"
 
-#include "velox/exec/tests/utils/PortUtil.h"
+#include "velox/connectors/hive/storage_adapters/test_common/ServerStartup.h"
+#include "velox/exec/tests/utils/Ports.h"
+
+#include <filesystem>
 
 namespace facebook::velox::filesystems::test {
 void HdfsMiniCluster::start() {
+  std::filesystem::remove(detailsPath_);
   try {
     serverProcess_ = std::make_unique<boost::process::child>(
         env_,
@@ -34,16 +38,23 @@ void HdfsMiniCluster::start() {
         kNameNodePortOption,
         nameNodePort_,
         kConfigurationOption,
-        kTurnOffPermissions);
-    serverProcess_->wait_for(std::chrono::duration<int, std::milli>(60000));
-    VELOX_CHECK_EQ(
-        serverProcess_->exit_code(),
-        383,
-        "Minicluster process exited, code: {}",
-        serverProcess_->exit_code());
+        kTurnOffPermissions,
+        kWriteDetailsOption,
+        detailsPath_);
   } catch (const std::exception& e) {
     VELOX_FAIL("Failed to launch Minicluster server: {}", e.what());
   }
+  // The NameNode port opens before the DataNode registers, so a write right
+  // after the port opens can fail. The minicluster writes the details file
+  // once the cluster is active.
+  velox::test::ServerStartup::wait(
+      "Minicluster",
+      [this] {
+        std::error_code ec;
+        return std::filesystem::file_size(detailsPath_, ec) > 0 && !ec;
+      },
+      [this] { return serverProcess_->running(); },
+      kStartTimeout);
 }
 
 void HdfsMiniCluster::stop() {
@@ -75,7 +86,7 @@ HdfsMiniCluster::HdfsMiniCluster() {
         kMiniClusterExecutableName);
   }
   constexpr auto kHostAddressTemplate = "hdfs://{}:{}";
-  auto ports = facebook::velox::exec::test::getFreePorts(2);
+  auto ports = facebook::velox::exec::test::Ports::findFreePorts(2);
   nameNodePort_ = fmt::format("{}", ports[0]);
   httpPort_ = fmt::format("{}", ports[1]);
   filesystemUrl_ = fmt::format(kHostAddressTemplate, host(), nameNodePort_);

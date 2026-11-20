@@ -226,8 +226,9 @@ void configureRowReaderOptions(
         fileSplit->fileFormat == dwio::common::FileFormat::NIMBLE ||
             fileSplit->fileFormat == dwio::common::FileFormat::DWRF ||
             fileSplit->fileFormat == dwio::common::FileFormat::ORC ||
-            fileSplit->fileFormat == dwio::common::FileFormat::PARQUET,
-        "Split row ranges are only supported for Nimble, DWRF, ORC and Parquet files: {}",
+            fileSplit->fileFormat == dwio::common::FileFormat::PARQUET ||
+            fileSplit->fileFormat == dwio::common::FileFormat::TEXT,
+        "Split row ranges are only supported for Nimble, DWRF, ORC, Parquet and text files: {}",
         fileSplit->toString());
     rowReaderOptions.setSplitRowRange(fileSplit->splitRowRange);
   }

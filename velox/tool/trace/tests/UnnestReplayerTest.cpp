@@ -92,11 +92,11 @@ class UnnestReplayerTest : public HiveConnectorTestBase {
   };
 
   PlanWithSplits createPlan() {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     core::PlanNodeId scanId;
     core::PlanNodeId unnestId;
 
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = builder.newPlan()
                     .tableScan(inputType_)
                     .capturePlanNodeId(scanId)
                     .unnest({"c0"}, {"c1"})

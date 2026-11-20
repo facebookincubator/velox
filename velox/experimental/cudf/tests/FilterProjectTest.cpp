@@ -2392,6 +2392,164 @@ TEST_F(CudfFilterProjectTest, replaceReplacementContainsSearch) {
   assertProjectMatchesVelox(vectors, projections);
 }
 
+TEST_F(CudfFilterProjectTest, strposConstantSubstring) {
+  // Column string, constant substring: found -> 1-based position, absent ->
+  // 0, null string -> null.
+  auto data = makeRowVector(
+      {"s"},
+      {makeNullableFlatVector<std::string>(
+          {"database services",
+           "no match here",
+           "the database",
+           "DATABASE",
+           std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "strpos(s, 'database') AS pos_found",
+      "strpos(s, 'zzz') AS pos_absent",
+      "strpos(s, '') AS pos_empty"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, strposColumnSubstring) {
+  // Both operands are columns; nulls on either side propagate to null.
+  auto data = makeRowVector(
+      {"s", "sub"},
+      {makeNullableFlatVector<std::string>(
+           {"alpha beta gamma",
+            "gamma",
+            "delta",
+            std::nullopt,
+            "epsilon zeta"}),
+       makeNullableFlatVector<std::string>(
+           {"beta", "gamma", "xyz", "delta", std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{"strpos(s, sub) AS result"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, strposConstantString) {
+  // Constant string, column substring: exercises the make_column_from_scalar
+  // path that sizes the constant string column to the substring column's
+  // rows.
+  auto data = makeRowVector(
+      {"sub"},
+      {makeNullableFlatVector<std::string>(
+          {"world", "hello", "zzz", std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "strpos('hello world', sub) AS result"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, strposNullConstantSubstring) {
+  // Constant NULL substring with a column string: strpos(x, NULL) is NULL for
+  // every row. The row count comes from the string column.
+  auto data = makeRowVector(
+      {"s"}, {makeFlatVector<std::string>({"anything", "here", "goes"})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "strpos(s, CAST(NULL AS VARCHAR)) AS result"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, strposMultibyte) {
+  // Positions are character (code-point) based, not byte based, on both the
+  // GPU and CPU paths; multi-byte UTF-8 input must agree.
+  auto data = makeRowVector(
+      {"s"},
+      {makeFlatVector<std::string>(
+          {"caf\xC3\xA9 latte", // "café latte"
+           "na\xC3\xAFve city", // "naïve city"
+           "\xE2\x82\xAC"
+           "100 note"})}); // "€100 note"
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "strpos(s, 'latte') AS pos_latte",
+      "strpos(s, 'city') AS pos_city",
+      "strpos(s, '100') AS pos_100"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, strposLongStrings) {
+  // cudf::strings::find searches with one warp per string when the strings
+  // average more than 64 bytes, and with one thread per string otherwise.
+  const std::string padding(100, 'x');
+  auto data = makeRowVector(
+      {"s", "sub"},
+      {makeNullableFlatVector<std::string>(
+           {padding + "needle" + padding,
+            padding + "caf\xC3\xA9" + padding, // "café"
+            padding,
+            std::nullopt}),
+       makeFlatVector<std::string>({"needle", "\xC3\xA9", "zzz", "x"})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "strpos(s, sub) AS column_substring",
+      "strpos(s, 'needle') AS constant_substring",
+      "strpos(s, '') AS empty_substring"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, strposNullConstantString) {
+  // Constant NULL string with a column substring: strpos(NULL, x) is NULL for
+  // every row. The row count comes from the substring column.
+  auto data = makeRowVector(
+      {"sub"},
+      {makeNullableFlatVector<std::string>({"world", "hello", std::nullopt})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "strpos(CAST(NULL AS VARCHAR), sub) AS result"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, strposAllNullStringColumnSubstring) {
+  // Every string is null and the substring is a column, so every result is
+  // null (https://github.com/NVIDIA/cudf/issues/25231).
+  auto data = makeRowVector(
+      {"s", "sub"},
+      {makeNullableFlatVector<std::string>({std::nullopt, std::nullopt}),
+       makeFlatVector<std::string>({"a", "b"})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{"strpos(s, sub) AS result"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
+TEST_F(CudfFilterProjectTest, strposEmptyColumnSubstring) {
+  // Every non-null substring is empty, so the substring column holds no
+  // characters; an empty substring is found at position 1
+  // (https://github.com/NVIDIA/cudf/issues/25231).
+  auto data = makeRowVector(
+      {"s", "empty", "empty_or_null"},
+      {makeNullableFlatVector<std::string>({"abc", "x", "", std::nullopt}),
+       makeFlatVector<std::string>({"", "", "", ""}),
+       makeNullableFlatVector<std::string>({"", std::nullopt, "", ""})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  const std::vector<std::string> projections{
+      "strpos(s, empty) AS column_string",
+      "strpos(s, empty_or_null) AS with_null_substring",
+      "strpos('caf\xC3\xA9', empty) AS constant_string"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
 TEST_F(CudfFilterProjectTest, mixedLiteralProjection) {
   vector_size_t batchSize = 1000;
   auto vectors = makeVectors(rowType_, 2, batchSize);

@@ -24,7 +24,12 @@ velox_add_test_headers(velox_abfs_test AzuriteServer.h MockDataLakeFileClient.h)
 add_test(velox_abfs_test velox_abfs_test)
 target_link_libraries(
   velox_abfs_test
-  PRIVATE velox_abfs velox_exec_test_lib GTest::gtest GTest::gtest_main
+  PRIVATE
+    velox_abfs
+    velox_exec_test_lib
+    velox_hive_storage_adapters_server_startup
+    GTest::gtest
+    GTest::gtest_main
 )
 
 target_compile_options(velox_abfs_test PRIVATE -Wno-deprecated-declarations)

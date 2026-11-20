@@ -24,6 +24,9 @@
 #include <cudf/merge.hpp>
 #include <cudf/sorting.hpp>
 
+#include <algorithm>
+#include <limits>
+
 namespace facebook::velox::cudf_velox {
 CudfTopN::CudfTopN(
     int32_t operatorId,
@@ -39,7 +42,13 @@ CudfTopN::CudfTopN(
           NvtxMethodFlag::kAll,
           std::nullopt,
           topNNode),
-      count_(topNNode->count()),
+      // cuDF tables hold at most int32 rows, and the top k of a table with k or
+      // fewer rows is the whole table, so clamping the count keeps the same
+      // rows.
+      count_(
+          static_cast<int32_t>(std::min<int64_t>(
+              topNNode->count(),
+              std::numeric_limits<int32_t>::max()))),
       topNNode_(topNNode),
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
   kBatchSize_ = driverCtx->queryConfig().get<int32_t>(
