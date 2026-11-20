@@ -83,16 +83,10 @@ struct ColumnCase {
   // Whether the non-null values never decrease. DeltaBlockEncoding and
   // EliasFanoEncoding refuse anything else.
   bool isNonDecreasing{false};
+  // Whether the non-null values descend, with occasional repeats. Reversed
+  // can use its ordered nested encodings on this shape.
+  bool isNonIncreasing{false};
 };
-
-// Returns whether 'encodingType' applies only when the policy offers encodings
-// for its nested stream. Reversed applies only when the policy also offers
-// EliasFano, PartitionedEliasFano or DeltaBlock for its nested stream. The
-// forced policy here offers none, so these never apply; their own tests cover
-// them.
-bool needsNestedCandidates(EncodingType encodingType) {
-  return encodingType == EncodingType::Reversed;
-}
 
 // The outcome a (column, encoding) pair must produce. Derived from the
 // encoders' stated contracts rather than from a previous run, so a pair that
@@ -145,10 +139,10 @@ WriteOutcome expectedOutcome(
   // which plain EliasFano covers. The cycling columns have two runs of at
   // least 64 rows, the minimum average it accepts.
   if (encodingType == EncodingType::PartitionedEliasFano &&
-      columnCase.isNonDecreasing) {
+      (columnCase.isNonDecreasing || columnCase.isNonIncreasing)) {
     return WriteOutcome::kNotApplied;
   }
-  if (needsNestedCandidates(encodingType)) {
+  if (encodingType == EncodingType::Reversed && !columnCase.isNonIncreasing) {
     return WriteOutcome::kNotApplied;
   }
   // "Huffman encoding requires at least two symbols" -- a single-symbol
@@ -183,6 +177,16 @@ class EncodingDispatchConsistencyTest : public ::testing::Test {
         {"c0"}, {vectorMaker_->flatVector<T>(kNumRows, [](auto row) {
           return static_cast<T>(row % 97) / static_cast<T>(100);
         })});
+  }
+
+  template <typename T>
+  VectorPtr makeDescendingColumn(bool nullable) {
+    return vectorMaker_->rowVector(
+        {"c0"},
+        {vectorMaker_->flatVector<T>(
+            kNumRows,
+            [](auto row) { return static_cast<T>(63 - (row + row / 3) / 4); },
+            [nullable](auto row) { return nullable && row % 7 == 0; })});
   }
 
   std::vector<ColumnCase> makeColumnCases() {
@@ -221,6 +225,31 @@ class EncodingDispatchConsistencyTest : public ::testing::Test {
                  [](auto row) { return static_cast<int64_t>(row / 2); })}),
          .dataType = DataType::Int64,
          .isNonDecreasing = true});
+    cases.push_back(
+        {.name = "descending_tinyint",
+         .batch = makeDescendingColumn<int8_t>(false),
+         .dataType = DataType::Int8,
+         .isNonIncreasing = true});
+    cases.push_back(
+        {.name = "descending_smallint",
+         .batch = makeDescendingColumn<int16_t>(false),
+         .dataType = DataType::Int16,
+         .isNonIncreasing = true});
+    cases.push_back(
+        {.name = "descending_integer",
+         .batch = makeDescendingColumn<int32_t>(false),
+         .dataType = DataType::Int32,
+         .isNonIncreasing = true});
+    cases.push_back(
+        {.name = "descending_bigint",
+         .batch = makeDescendingColumn<int64_t>(false),
+         .dataType = DataType::Int64,
+         .isNonIncreasing = true});
+    cases.push_back(
+        {.name = "nullable_descending_bigint",
+         .batch = makeDescendingColumn<int64_t>(true),
+         .dataType = DataType::Int64,
+         .isNonIncreasing = true});
     cases.push_back(
         {.name = "real",
          .batch = makeDecimalLikeColumn<float>(),
@@ -395,6 +424,28 @@ TEST_F(
   }
 }
 
+TEST_F(EncodingDispatchConsistencyTest, generatedColumnsSelectReversed) {
+  NimbleWriterFuzzerOptions options;
+  options.seed = 1;
+  options.maxSchemaDepth = 1;
+  options.batchSize = 64;
+  options.numBatches = 3;
+  options.randomizeWriterConfig = false;
+  NimbleWriterFuzzer fuzzer(options, *rootPool_);
+  for (int iteration = 0; iteration < 32; ++iteration) {
+    fuzzer.run();
+    const auto entry = fuzzer.coverage().find(EncodingType::Reversed);
+    if (entry != fuzzer.coverage().end() &&
+        entry->second.numChunksApplied > 0) {
+      break;
+    }
+    fuzzer.reSeed();
+  }
+  const auto entry = fuzzer.coverage().find(EncodingType::Reversed);
+  ASSERT_NE(entry, fuzzer.coverage().end());
+  EXPECT_GT(entry->second.numChunksApplied, 0U);
+}
+
 TEST_F(
     EncodingDispatchConsistencyTest,
     everyWritableEncodingIsReadableEverywhere) {
@@ -494,9 +545,6 @@ TEST_F(
   // shape. A zero here means the column cases no longer exercise that encoding
   // and the coverage this test claims is stale.
   for (const auto encodingType : encodings) {
-    if (needsNestedCandidates(encodingType)) {
-      continue;
-    }
     const auto entry = fuzzer.coverage().find(encodingType);
     ASSERT_NE(entry, fuzzer.coverage().end())
         << toString(encodingType) << " was never written";
