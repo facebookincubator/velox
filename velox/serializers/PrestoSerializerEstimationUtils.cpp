@@ -19,11 +19,63 @@
 #include <array>
 #include <limits>
 
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
 namespace facebook::velox::serializer::presto::detail {
 namespace {
+// Adds, for each row, the sizes of the values of its keys and its share of the
+// key, channel, count and bitmap of each of its keys.
+void estimateFlatMapSerializedSize(
+    const FlatMapVector& flatMap,
+    const folly::Range<const vector_size_t*>& rows,
+    vector_size_t** sizes,
+    Scratch& scratch) {
+  const auto numKeys = flatMap.numDistinctKeys();
+  std::vector<vector_size_t> keyBytes(numKeys);
+  std::vector<vector_size_t*> keyBytesPointers(numKeys);
+  raw_vector<vector_size_t> channels(numKeys);
+  for (column_index_t channel = 0; channel < numKeys; ++channel) {
+    keyBytesPointers[channel] = &keyBytes[channel];
+    channels[channel] = channel;
+  }
+  estimateSerializedSizeInt(
+      flatMap.distinctKeys().get(),
+      folly::Range<const vector_size_t*>(channels.data(), numKeys),
+      keyBytesPointers.data(),
+      scratch);
+  raw_vector<vector_size_t> keyRows;
+  std::vector<vector_size_t*> keySizes;
+  for (column_index_t channel = 0; channel < numKeys; ++channel) {
+    keyRows.clear();
+    keySizes.clear();
+    const auto* inMap = flatMap.rawInMapsAt(channel);
+    for (auto i = 0; i < rows.size(); ++i) {
+      const auto row = rows[i];
+      if (flatMap.isNullAt(row) ||
+          (inMap != nullptr && !bits::isBitSet(inMap, row))) {
+        continue;
+      }
+      keyRows.push_back(row);
+      keySizes.push_back(sizes[i]);
+    }
+    if (!keyRows.empty()) {
+      const vector_size_t presenceSize = bits::divRoundUp(
+          keyBytes[channel] + 2 * sizeof(int32_t) + bits::nbytes(rows.size()),
+          keyRows.size());
+      for (auto* size : keySizes) {
+        addToSize(size, presenceSize);
+      }
+      estimateSerializedSizeInt(
+          flatMap.mapValuesAt(channel).get(),
+          folly::Range<const vector_size_t*>(keyRows.data(), keyRows.size()),
+          keySizes.data(),
+          scratch);
+    }
+  }
+}
+
 template <TypeKind Kind>
 void estimateFlattenedConstantSerializedSize(
     const BaseVector* vector,
@@ -571,6 +623,23 @@ void estimateSerializedSizeInt(
           scratch);
       break;
     }
+    case VectorEncoding::Simple::FLAT_MAP: {
+      std::vector<vector_size_t> rows;
+      std::vector<vector_size_t*> rowSizes;
+      for (int32_t i = 0; i < ranges.size(); ++i) {
+        for (auto row = ranges[i].begin; row < ranges[i].begin + ranges[i].size;
+             ++row) {
+          rows.push_back(row);
+          rowSizes.push_back(sizes[i]);
+        }
+      }
+      estimateFlatMapSerializedSize(
+          *vector->asUnchecked<FlatMapVector>(),
+          folly::Range<const vector_size_t*>(rows.data(), rows.size()),
+          rowSizes.data(),
+          scratch);
+      break;
+    }
     case VectorEncoding::Simple::ARRAY: {
       auto arrayVector = vector->as<ArrayVector>();
       std::vector<IndexRange> childRanges;
@@ -763,6 +832,10 @@ void estimateSerializedSizeInt(
           scratch);
       break;
     }
+    case VectorEncoding::Simple::FLAT_MAP:
+      estimateFlatMapSerializedSize(
+          *vector->asUnchecked<FlatMapVector>(), rows, sizes, scratch);
+      break;
     case VectorEncoding::Simple::ARRAY: {
       auto* arrayVector = vector->as<ArrayVector>();
       estimateCollectionSerializedSize(

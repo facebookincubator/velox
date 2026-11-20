@@ -38,6 +38,7 @@ enum class TokenType {
   HASH_TABLE,
   NUM_FIELDS,
   OFFSETS,
+  FLAT_MAP_SEGMENTS,
 };
 
 struct Token {
@@ -72,6 +73,7 @@ class PrestoVectorLexer {
   Status lexVariableWidth();
   Status lexArray();
   Status lexMap();
+  Status lexFlatMap();
   Status lexRow();
   Status lexDictionary();
   Status lexRLE();

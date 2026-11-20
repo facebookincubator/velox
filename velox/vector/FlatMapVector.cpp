@@ -522,6 +522,43 @@ bool FlatMapVector::containsNullAt(vector_size_t index) const {
   return false;
 }
 
+uint64_t FlatMapVector::retainedSizeImpl(
+    uint64_t& totalStringBufferSize) const {
+  auto size = BaseVector::retainedSizeImpl();
+  if (distinctKeys_) {
+    size += distinctKeys_->retainedSize(totalStringBufferSize);
+  }
+  for (const auto& values : mapValues_) {
+    if (values) {
+      size += values->retainedSize(totalStringBufferSize);
+    }
+  }
+  for (const auto& inMap : inMaps_) {
+    if (inMap) {
+      size += inMap->capacity();
+    }
+  }
+  return size;
+}
+
+uint64_t FlatMapVector::estimateFlatSize() const {
+  auto size = BaseVector::retainedSizeImpl();
+  if (distinctKeys_) {
+    size += distinctKeys_->estimateFlatSize();
+  }
+  for (const auto& values : mapValues_) {
+    if (values) {
+      size += values->estimateFlatSize();
+    }
+  }
+  for (const auto& inMap : inMaps_) {
+    if (inMap) {
+      size += inMap->capacity();
+    }
+  }
+  return size;
+}
+
 uint64_t FlatMapVector::hashValueAt(vector_size_t index) const {
   if (isNullAt(index)) {
     return BaseVector::kNullHash;
@@ -955,6 +992,29 @@ void FlatMapVector::copyMapRanges(
   }
 }
 
+namespace {
+bool isInAnyCopiedRow(
+    const FlatMapVector& source,
+    column_index_t channel,
+    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+  if (source.mapValuesAt(channel) == nullptr) {
+    return false;
+  }
+  const auto* inMap = source.rawInMapsAt(channel);
+  const auto* presentRows = inMap != nullptr ? inMap : source.rawNulls();
+  for (const auto& range : ranges) {
+    if (range.count > 0 &&
+        (presentRows == nullptr ||
+         bits::findFirstBit(
+             presentRows, range.sourceIndex, range.sourceIndex + range.count) >=
+             0)) {
+      return true;
+    }
+  }
+  return false;
+}
+} // namespace
+
 void FlatMapVector::copyFlatMapRanges(
     const FlatMapVector* sourceFlatMap,
     const folly::Range<const CopyRange*>& ranges) {
@@ -973,6 +1033,20 @@ void FlatMapVector::copyFlatMapRanges(
   for (column_index_t i = 0; i < sourceFlatMap->distinctKeys_->size(); ++i) {
     const auto channel = getKeyChannel(sourceFlatMap->distinctKeys_, i)
                              .value_or(distinctKeys_->size());
+
+    if (!isInAnyCopiedRow(*sourceFlatMap, i, ranges)) {
+      if (channel < distinctKeys_->size()) {
+        auto* targetInMaps = ensureInMapAt(channel);
+        applyToEachRange(
+            ranges,
+            [targetInMaps](
+                auto targetIndex, auto /* sourceIndex */, auto count) {
+              bits::fillBits(
+                  targetInMaps, targetIndex, targetIndex + count, false);
+            });
+      }
+      continue;
+    }
 
     if (channel == distinctKeys_->size()) {
       // First append the new key to the distinct keys internal vector.
