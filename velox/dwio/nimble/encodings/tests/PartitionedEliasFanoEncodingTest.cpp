@@ -811,6 +811,56 @@ TEST_F(PartitionedEliasFanoEncodingTest, slicesRandomRangesAllTypes) {
   checkRandomSlices<uint64_t>(/*seed=*/28);
 }
 
+TEST_F(PartitionedEliasFanoEncodingTest, materializesRangesAcrossGroups) {
+  // Dense partitions merge into a group of more rows than one decode batch,
+  // and sparse ones into another group, so ranges cover several
+  // partitions of one group, cross group boundaries, and end batches in the
+  // middle of a partition.
+  constexpr int kNumRuns{12};
+  constexpr int kNumDenseRuns{8};
+  constexpr int kRowsPerRun{200};
+  std::mt19937 random{29};
+  std::vector<int64_t> input;
+  for (int run = 0; run < kNumRuns; ++run) {
+    // Each run starts below the previous one's end, so each is a partition.
+    int64_t value = (kNumRuns - run) * (int64_t{1} << 41) - (int64_t{1} << 44);
+    const int64_t maxGap = run < kNumDenseRuns ? 3 : int64_t{1} << 30;
+    for (int row = 0; row < kRowsPerRun; ++row) {
+      value += static_cast<int64_t>(random() % (maxGap + 1));
+      input.push_back(value);
+    }
+  }
+  const auto encoding = createEncoding(input);
+  const auto& partitioned =
+      dynamic_cast<const nimble::PartitionedEliasFanoEncoding<int64_t>&>(
+          *encoding);
+  ASSERT_EQ(partitioned.numPartitions(), kNumRuns);
+  // The dense partitions share one group and the sparse ones another.
+  ASSERT_EQ(partitioned.numGroups(), 2);
+  const auto expectRange = [&](uint32_t offset, uint32_t length) {
+    std::vector<int64_t> output(length);
+    partitioned.materializeAt(
+        offset, length, reinterpret_cast<uint64_t*>(output.data()));
+    ASSERT_TRUE(
+        std::equal(output.begin(), output.end(), input.begin() + offset))
+        << "offset=" << offset << ", length=" << length;
+  };
+  const auto numRows = static_cast<uint32_t>(input.size());
+  for (uint32_t offset = 0; offset < numRows; offset += 37) {
+    for (uint32_t length = 0; offset + length <= numRows; length += 101) {
+      expectRange(offset, length);
+    }
+  }
+  // Single rows include the first and last row of every partition.
+  for (uint32_t row = 0; row < numRows; ++row) {
+    expectRange(row, 1);
+  }
+  // A full batch ends exactly at the end of partition 5, and a range crosses
+  // from the last row of the dense group into the sparse group.
+  expectRange(/*offset=*/176, /*length=*/1'024);
+  expectRange(/*offset=*/kNumDenseRuns * kRowsPerRun - 1, /*length=*/2);
+}
+
 TEST_F(PartitionedEliasFanoEncodingTest, slicesEveryRange) {
   constexpr auto kMin = std::numeric_limits<int64_t>::min();
   constexpr auto kMax = std::numeric_limits<int64_t>::max();
