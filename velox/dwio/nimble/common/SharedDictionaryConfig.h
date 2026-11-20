@@ -30,11 +30,26 @@ class SharedDictionaryConfigBuilder;
 struct SharedDictionaryConfig {
   /// Where the dictionary alphabet is stored or resolved.
   SharedDictionaryScope scope{SharedDictionaryScope::Stripe};
-  /// Dictionary id within File or External scope. Stripe scope assigns this
-  /// from the generated auxiliary alphabet stream.
+
+  /// Identifies the dictionary inside the written file. The writer assigns
+  /// this for Stripe and File scope -- from the generated auxiliary alphabet
+  /// stream and from a per-file counter respectively -- so callers must leave
+  /// it unset for those scopes. External scope stores no alphabet in the file,
+  /// so the caller sets this and it serves as the resolver key on both the
+  /// write and the read side.
   uint32_t dictionaryId{};
+
   /// Resolves a provided alphabet instead of building one from written values.
   bool useExternalAlphabet{false};
+
+  /// Names this dictionary in the caller's own store, for File scope with
+  /// useExternalAlphabet. Needed only there: External scope is caller-named
+  /// end to end, so its |dictionaryId| already is the resolver key, while a
+  /// File dictionary gets a writer-assigned id and so must carry the caller's
+  /// key separately. Caller-owned, so unlike |dictionaryId| it may repeat
+  /// across value streams that share one provided dictionary.
+  uint32_t resolverKey{};
+
   /// Candidate encodings for alphabets stored in this file.
   std::vector<EncodingType> alphabetEncodings{};
 };
@@ -79,17 +94,13 @@ struct FlatmapColumnDictionary {
 struct SharedDictionaryEncodingConfig {
   /// Regular columns eligible for shared dictionary encoding. The resolved
   /// value must be an integer scalar, an array with an integer element stream,
-  /// or a map with an integer value stream. For File scope, callers are
-  /// responsible for assigning a unique dictionaryId per configured value
-  /// stream.
+  /// or a map with an integer value stream.
   std::vector<ColumnDictionary> columns;
 
   /// Top-level flat-map columns eligible for shared dictionary encoding.
   /// valueSubfield paths resolve below the keyed value. The configured value
   /// stream must be an integer scalar, an array with an integer element stream,
-  /// or a map with an integer value stream. For File scope, callers are
-  /// responsible for assigning a unique dictionaryId per configured key value
-  /// stream.
+  /// or a map with an integer value stream.
   std::vector<FlatmapColumnDictionary> flatMaps;
 
   /// Supplies external alphabets for External shared dictionary configurations
