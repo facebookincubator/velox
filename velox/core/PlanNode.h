@@ -4968,7 +4968,7 @@ class TopNNode : public PlanNode {
       const PlanNodeId& id,
       const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
       const std::vector<SortOrder>& sortingOrders,
-      int32_t count,
+      int64_t count,
       bool isPartial,
       const PlanNodePtr& source);
 
@@ -5001,7 +5001,7 @@ class TopNNode : public PlanNode {
       return *this;
     }
 
-    Builder& count(int32_t count) {
+    Builder& count(int64_t count) {
       count_ = count;
       return *this;
     }
@@ -5039,7 +5039,7 @@ class TopNNode : public PlanNode {
     std::optional<PlanNodeId> id_;
     std::optional<std::vector<FieldAccessTypedExprPtr>> sortingKeys_;
     std::optional<std::vector<SortOrder>> sortingOrders_;
-    std::optional<int32_t> count_;
+    std::optional<int64_t> count_;
     std::optional<bool> isPartial_;
     std::optional<PlanNodePtr> source_;
   };
@@ -5067,7 +5067,7 @@ class TopNNode : public PlanNode {
     return !isPartial_;
   }
 
-  int32_t count() const {
+  int64_t count() const {
     return count_;
   }
 
@@ -5088,7 +5088,7 @@ class TopNNode : public PlanNode {
 
   const std::vector<FieldAccessTypedExprPtr> sortingKeys_;
   const std::vector<SortOrder> sortingOrders_;
-  const int32_t count_;
+  const int64_t count_;
   const bool isPartial_;
   const std::vector<PlanNodePtr> sources_;
 };
@@ -6415,29 +6415,6 @@ class TopNRowNumberNode : public PlanNode {
       bool partial,
       PlanNodePtr source);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  /// Legacy constructor: a node without 'rowNumberColumnName' is partial.
-  TopNRowNumberNode(
-      PlanNodeId id,
-      RankFunction function,
-      std::vector<FieldAccessTypedExprPtr> partitionKeys,
-      std::vector<FieldAccessTypedExprPtr> sortingKeys,
-      std::vector<SortOrder> sortingOrders,
-      const std::optional<std::string>& rowNumberColumnName,
-      int32_t limit,
-      PlanNodePtr source)
-      : TopNRowNumberNode(
-            std::move(id),
-            function,
-            std::move(partitionKeys),
-            std::move(sortingKeys),
-            std::move(sortingOrders),
-            rowNumberColumnName,
-            limit,
-            /*partial=*/!rowNumberColumnName.has_value(),
-            std::move(source)) {}
-#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
-
   class Builder {
    public:
     Builder() = default;
@@ -6954,6 +6931,8 @@ class RPCNode : public PlanNode {
   /// @param streamingMode The streaming mode for RPC execution.
   /// @param dispatchBatchSize For BATCH mode pipelining: fire callBatch()
   ///        every N rows during addInput() instead of collecting all rows.
+  /// @param executionPhase Backend lifecycle phase. SUBMIT, POLL and COLLECT
+  ///        require BATCH dispatch; INLINE executes the original RPC call.
   RPCNode(
       const PlanNodeId& id,
       PlanNodePtr source,
@@ -6961,7 +6940,8 @@ class RPCNode : public PlanNode {
       std::string outputColumn,
       RowTypePtr outputType,
       rpc::RPCStreamingMode streamingMode = rpc::RPCStreamingMode::kPerRow,
-      int32_t dispatchBatchSize = 0);
+      int32_t dispatchBatchSize = 0,
+      std::string executionPhase = "INLINE");
 
   const PlanNodePtr& source() const {
     return sources_[0];
@@ -6992,9 +6972,12 @@ class RPCNode : public PlanNode {
     return dispatchBatchSize_;
   }
 
-  std::string_view name() const override {
-    return "RPC";
+  const std::string& executionPhase() const {
+    return executionPhase_;
   }
+
+  /// Returns the operator name used in phase reporting and plan serialization.
+  std::string_view name() const override;
 
   const RowTypePtr& outputType() const override {
     return outputType_;
@@ -7017,6 +7000,8 @@ class RPCNode : public PlanNode {
   RowTypePtr outputType_;
   rpc::RPCStreamingMode streamingMode_;
   int32_t dispatchBatchSize_{0};
+  // Preserves the lifecycle phase across plan serialization.
+  std::string executionPhase_;
 };
 
 using RPCNodePtr = std::shared_ptr<RPCNode>;

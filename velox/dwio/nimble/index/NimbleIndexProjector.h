@@ -34,6 +34,7 @@
 #include "velox/dwio/nimble/common/Checksum.h"
 #include "velox/dwio/nimble/common/RowRange.h"
 #include "velox/dwio/nimble/common/SchemaUtils.h"
+#include "velox/dwio/nimble/common/StripeRange.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
 #include "velox/dwio/nimble/index/StripeStreams.h"
 #include "velox/dwio/nimble/tablet/DataInput.h"
@@ -55,9 +56,9 @@ class StreamSlicer;
 
 using Subfield = velox::common::Subfield;
 
-/// NimbleIndexProjector takes a batch of index lookup requests (point lookups
-/// or range scans with already-encoded keys) and column projections, then uses
-/// the Nimble cluster index to read the matching stripe rows. Results can be
+/// Projects columns for a batch of range lookups with already-encoded keys,
+/// using the Nimble cluster index to read the matching stripe rows. Single-key
+/// point lookups are available through lookup(encodedKey). Results can be
 /// serialized for transport, decoded into a Velox vector, or supplied as
 /// stripe streams to iterators.
 ///
@@ -180,6 +181,11 @@ class NimbleIndexProjector {
     /// include ones that a row or byte limit keeps planning from reaching. A
     /// read error in any of them fails the projection. Pinned metadata keeps
     /// them in memory for the reader's lifetime.
+    ///
+    /// A co-load (see coLoadKeyStreams) loads stripe groups the same way while
+    /// it picks its stripes before the key lookups, and keeps the stream
+    /// locations of the stripes it reads. Planning then takes the stream
+    /// locations from the co-load and loads no group.
     uint64_t maxStripeGroupMetadataBytesPerLoad{0};
     /// Makes co_projectRows() build the lookup structures of each encoding
     /// view when it binds a stripe's streams, which pays off when a projection
@@ -188,12 +194,28 @@ class NimbleIndexProjector {
     /// Changing it between calls rebuilds the projector's StreamReader. See
     /// Encoding::Options::cacheEncodingView.
     bool cacheEncodingView{false};
-  };
-
-  /// Request for a batch of index lookups.
-  struct Request {
-    /// Pre-encoded key bounds for each lookup.
-    std::vector<velox::serializer::EncodedKeyBounds> keyBounds;
+    /// When the file's cluster index stores key chunks in stripes
+    /// (KeyStreamLayout::kStripe), reads the stripes that the requests can
+    /// select rows of in one load, each with its key stream, which holds the
+    /// stripe's keys, and resolves the bounds from those key streams. Stream
+    /// checksums verify the key streams like the projected streams. A co-load
+    /// saves the read that waits for the key chunks, but reads the stripe
+    /// streams even when a key is missing. Under maxRows, maxBytes or
+    /// maxRowsPerRequest, it picks the stripes to read from stripe metadata
+    /// before the lookup, which does not tell how many rows of its stripe a
+    /// bound selects, so it can read stripes past where the limits stop the
+    /// projection. It also reads the stripe right after where the limits or a
+    /// request's maxRowsPerRequest stop the projection, for its key stream,
+    /// which holds the first key that a request continuing there resumes at,
+    /// and it reads nothing past that stripe. It takes resume keys from the key
+    /// streams it read, and resolves only the bounds in those streams: a
+    /// request that the limits keep the projection from reaching gets its
+    /// lowerKey back as its resume key, even when it matches no row. Without a
+    /// co-load, the projection reads the key chunks before the stripe streams.
+    /// Row windows and derived lookup requests use the index lookup before
+    /// loading stripes, so their constraints are applied before stripe
+    /// planning.
+    bool coLoadKeyStreams{true};
   };
 
   /// Serialized output for a single request.
@@ -215,7 +237,10 @@ class NimbleIndexProjector {
     /// short by a limit (maxRows, maxBytes, or maxRowsPerRequest), the encoded
     /// resume key for continuation. The caller constructs new key bounds using
     /// this as lowerKey with their original upperKey. nullopt if complete, a
-    /// miss, or needResumeKey was not set.
+    /// miss, or needResumeKey was not set. A co-load (see
+    /// Options::coLoadKeyStreams) does not look up a request that the limits
+    /// keep the projection from reaching, so it returns the lowerKey of such a
+    /// request even when the request is a miss.
     ///
     /// Also embedded in the last slice's per-slice header so consumers that
     /// hold an IOBuf can recover the key without keeping the
@@ -248,19 +273,19 @@ class NimbleIndexProjector {
   };
 
   /// Projects the requested columns for the given batch of index lookups.
-  /// Returns one SerializedResponse per request, in order. Processes all
-  /// relevant stripes internally.
+  /// Returns one SerializedResponse per lookup position, in order. Processes
+  /// all relevant stripes internally. 'request' must be a range scan.
   SerializedResult projectStreams(
-      const Request& request,
+      const index::IndexLookup::LookupRequest& request,
       const Options& options);
 
   /// Projects rows directly into a Velox vector. Flat scalar projections use
   /// random-access EncodingView reads when supported. Nested projections use
   /// the general FieldReader path without serializing an intermediate kTablet
-  /// payload. The request and options must remain alive until the returned
-  /// task completes.
+  /// payload. 'request' must be a range scan. The request and options must
+  /// remain alive until the returned task completes.
   folly::coro::Task<RowProjectionResult> co_projectRows(
-      const Request& request,
+      const index::IndexLookup::LookupRequest& request,
       const Options& options);
 
   /// Resolves key bounds into stripe selections, in stripe order.
@@ -323,8 +348,17 @@ class NimbleIndexProjector {
 
   /// Statistics captured during projection.
   struct Stats {
-    /// Number of stripes read from the tablet.
+    /// Number of stripes that the projection reads rows from.
     uint32_t numReadStripes{0};
+
+    // TODO: Skip the co-loaded stripes of keys that a bloom filter rules out
+    // of the file.
+    /// Number of stripes that the projection loads: the stripes of a co-load,
+    /// otherwise the stripes that it reads rows from. numLoadedStripes minus
+    /// numReadStripes counts the stripes that a co-load reads and no row comes
+    /// from, such as the stripe of a missing key, or a stripe past where the
+    /// limits or a request's Options::maxRowsPerRequest stop the projection.
+    uint32_t numLoadedStripes{0};
     /// Number of read stripes serialized through stream slicing.
     uint32_t numSlicedStripes{0};
     /// Total rows read from storage (entire stripe row counts). Includes
@@ -343,6 +377,9 @@ class NimbleIndexProjector {
     /// Number of projections that stopped with stripes left to read because
     /// numPlannedBytes reached Options::maxBytes.
     uint32_t numMaxBytesTruncations{0};
+    /// Number of projections that read key streams in the same load as their
+    /// stripe streams.
+    uint32_t numKeyStreamCoLoads{0};
 
     /// Time spent looking up stripes and row ranges via the tablet index.
     velox::CpuWallTiming lookupTiming;
@@ -438,15 +475,94 @@ class NimbleIndexProjector {
 
   // Initializes per-request state: stores request/options pointers and
   // resets running totals.
-  void initRequest(const Request& request, const Options& options);
+  void initRequest(
+      const index::IndexLookup::LookupRequest& request,
+      const Options& options);
 
   // Clears all per-request state set by initRequest(). Invoked on scope
   // exit so a subsequent projection starts from a clean slate.
   void clearRequest();
 
-  // Looks up all requests via the cluster index and maps them to stripes.
-  // Populates ctx_.stripeRanges.
-  void lookupStripes();
+  // Looks up all requests and maps them to stripes. Populates
+  // ctx_.stripeRanges. Looks them up via the cluster index without a co-load,
+  // which reads the key chunks that it needs from the file, and at their
+  // boundary stripes with lookupCoLoadedRows() after one.
+  void lookupRows();
+
+  // Looks up the rows of each request after a co-load with
+  // coLoadedRequestRows(), and returns them as the cluster index returns a
+  // lookup.
+  index::IndexLookup::LookupResult lookupCoLoadedRows() const;
+
+  // Returns the rows of request 'requestIndex' after a co-load, which can be
+  // none. The first stripe of a request in ctx_.coLoadRequestStripes holds
+  // its lower key, its last stripe its upper key, and each stripe between them
+  // only rows of the request. So it seeks the lower key in the key chunk of the
+  // first stripe and the upper key in that of the last, and takes the stripes
+  // between in full. Seeks a key only in a stripe that the co-load loaded: a
+  // request whose first stripe the co-load did not load selects no row, and
+  // the rows of one whose last stripe it did not load end at the first row of
+  // that stripe.
+  RowRange coLoadedRequestRows(uint32_t requestIndex) const;
+
+  // Returns the key chunk of 'stripe' that the co-load loaded, or null when it
+  // did not load the stripe.
+  const ClusterIndexBase::KeyChunk* coLoadedKeyChunk(uint32_t stripe) const;
+
+  // Loads, before lookupRows(), the stripes that the lookup of the requests can
+  // select rows of, each with its key stream, in one load, and keeps their
+  // key chunks in ctx_.coLoadedKeyChunks for lookupRows() and the resume keys.
+  // Finds the stripes of each request from index metadata, which it keeps in
+  // ctx_.coLoadRequestStripes for lookupRows(), and trims them at stripe level
+  // with selectStripesToCoLoad(). prepareStripes() trims the stripes again at
+  // row level after the lookup. Records in ctx_.unloadedRequests the requests
+  // whose first stripes it did not load, of which the lookup selects no row,
+  // as planning cannot reach them. Of a request whose last stripe it did not
+  // load, the lookup can select rows past the loaded stripes, which planning
+  // stops before.
+  void coLoadStripes();
+
+  // Picks the stripes that coLoadStripes() loads, in file order, from
+  // metadata alone, and records them in ctx_.coLoadedStripes with the
+  // locations of their streams in ctx_.coLoadedStreams. Gets the stripe groups
+  // that locate the streams from a StripeGroupLoader of its own, which holds
+  // the groups of one load at a time. 'requestStripes' holds the stripes of
+  // each request, as ClusterIndexBase::lookupStripes() returns them. Without
+  // limits, picks all of them. With limits, picks the stripes up to where the
+  // limits of the options can stop prepareStripes(), then the stripe right
+  // after there, for its key stream, and stops. Under maxRowsPerRequest, a
+  // request stops asking for stripes once it may have reached the cap, and
+  // asks for the stripe right after, for its key stream. A request selects
+  // every row of each of its stripes but the first and the last, and maybe
+  // none of those two, so the stripes reach at least as far as
+  // prepareStripes() plans after the lookup, and their key streams hold every
+  // resume key. Also picks the stripes up to there that hold no projected
+  // stream, so that prepareStripes() drops them without stripe-group metadata.
+  void selectStripesToCoLoad(
+      std::span<const nimble::StripeRange> requestStripes);
+
+  // Records 'stripe' for the co-load to read, with 'streams', the locations of
+  // its projected streams and then of its key stream.
+  void addCoLoadedStripe(
+      uint32_t stripe,
+      std::span<const StripeGroup::StreamMetadata> streams);
+
+  // Loads the streams that ctx_.coLoadedStreams locates for each of
+  // ctx_.coLoadedStripes in one load, verifying their checksums, and returns
+  // the key chunk of each. Records the enqueue indices of their streams in
+  // ctx_.dataInputIndices.
+  std::vector<ClusterIndexBase::KeyChunk> loadCoLoadedStreams();
+
+  // Returns the key chunk of each of ctx_.coLoadedStripes from the key streams
+  // that loadCoLoadedStreams() loaded, without their stream trailers.
+  std::vector<ClusterIndexBase::KeyChunk> coLoadedKeyChunks() const;
+
+  // Points ctx_.dataInputIndices of each planned stripe at the streams that
+  // loadCoLoadedStreams() loaded for it, which must have loaded every planned
+  // stripe, in place of loadStripeStreams(). Drops the key streams and the
+  // streams of the loaded stripes that prepareStripes() trimmed, then clears
+  // what the co-load recorded.
+  void assignCoLoadedStreams();
 
   // Output of prepareStripes(). Per-stripe vectors are indexed by stripe
   // offset in the compact plan and only contain stripes retained for
@@ -500,6 +616,19 @@ class NimbleIndexProjector {
   // prepareStripes() trims any left over.
   StripeStreams locateStripeStreams(const StripeIdentifier& stripe);
 
+  // Stages the projected streams of 'stripe' like locateStripeStreams(), from
+  // the locations that the co-load recorded instead of stripe-group metadata.
+  // Returns no stream for a stripe that the co-load found holds none. Throws
+  // for a stripe that the co-load did not locate, or of which it read only the
+  // key stream.
+  StripeStreams locateCoLoadedStreams(uint32_t stripe);
+
+  // Converts 'projectedStreams', the locations of the projected streams of a
+  // stripe, into their StripeStreams: how many hold bytes, how many bytes, and
+  // whether decoding needs a barrier.
+  StripeStreams toStripeStreams(
+      std::span<const StripeGroup::StreamMetadata> projectedStreams) const;
+
   // Appends one stripe to the plan using streams already staged for it by
   // locateStripeStreams().
   void appendStripePlan(
@@ -528,13 +657,35 @@ class NimbleIndexProjector {
       uint32_t readEndRow,
       bool partialRead);
 
+  // Returns the encoded key at row 'rowInStripe' of tablet stripe 'stripe'.
+  // Reads it from the key chunk of the stripe that the co-load loaded, which
+  // must hold the stripe, after a co-load, and via the cluster index, which
+  // reads it from the file, without one.
+  std::string keyAtStripeRow(uint32_t stripe, uint32_t rowInStripe) const;
+
   // Applies row and byte limits to the looked-up stripe ranges, computes stream
-  // metadata for selected stripes, and populates ctx_.plan.
+  // metadata for selected stripes, and populates ctx_.plan. After a co-load,
+  // copies the stream locations that the co-load recorded instead of loading
+  // stripe-group metadata.
   void prepareStripes();
 
   // Enqueues all projected streams from ctx_.plan into DataInput and issues a
   // single coalesced load() call.
   void loadStripeStreams();
+
+  // Starts a load group for the stripe at 'stripeOffset' in the file, which
+  // spans 'stripeSize' bytes when DataInput is cached, and enqueues each of
+  // 'streams' that holds bytes, recording its enqueue index at the same
+  // position in 'dataInputIndices'.
+  void enqueueStripeStreams(
+      uint64_t stripeOffset,
+      uint64_t stripeSize,
+      std::span<const StripeGroup::StreamMetadata> streams,
+      std::span<std::optional<uint32_t>> dataInputIndices);
+
+  // Loads the enqueued streams in one load into ctx_.dataHandle, verifying
+  // their checksums when stream checksums are on.
+  void loadEnqueuedStreams();
 
   // Builds serialized responses from the loaded stripe streams.
   SerializedResult processStripeStreams();
@@ -543,6 +694,10 @@ class NimbleIndexProjector {
   // `data` ends with, throwing when they differ. `enqueueIndex`, the index
   // DataInput returned from enqueue(), only locates the stream for the error.
   void verifyStreamChecksum(uint32_t enqueueIndex, std::string_view data) const;
+
+  // Describes the stream that the current load enqueued at `enqueueIndex`, for
+  // a checksum error.
+  std::string loadedStreamDescription(uint32_t enqueueIndex) const;
 
   // Validates the projected row schema.
   void validateProjection() const;
@@ -555,8 +710,13 @@ class NimbleIndexProjector {
   // checksum.
   void initStreamChecksum(bool verifyStreamChecksums);
 
-  // Resolves the request's stripes and loads their projected streams.
-  void loadStripes(const Request& request, const Options& options);
+  // Resolves the request's stripes and loads their projected streams. Both key
+  // stream layouts look up the rows of the requests and plan their stripes the
+  // same way. A co-load of key streams loads the stripes before the lookup
+  // instead of after the plan.
+  void loadStripes(
+      const index::IndexLookup::LookupRequest& request,
+      const Options& options);
 
   // Returns decoding options backed by this projector's scratch pool.
   Encoding::Options encodingOptions(bool cacheEncodingView);
@@ -627,8 +787,10 @@ class NimbleIndexProjector {
   // After global truncation (maxRows or maxBytes), resolves resume keys for the
   // requests it cut short and stores them in ctx_.resumeKeys: a request
   // continuing past the last planned stripe resumes at the next stripe, and a
-  // request planning never reached resumes from its lower key. No-op when
-  // Options::needResumeKey is unset or the plan was not truncated.
+  // request planning never reached resumes from its lower key, as does each of
+  // ctx_.unloadedRequests. No-op when Options::needResumeKey is unset or the
+  // plan was not truncated. First checks that planning stopped before
+  // ctx_.unloadedRequests, as planning can read no rows of those.
   void prepareResumeKeys();
 
   // Iterates planned stripes and ctx_.packedStripes to build per-request
@@ -654,11 +816,18 @@ class NimbleIndexProjector {
   velox::memory::MemoryPool* const pool_;
   const ClusterIndexBase* const clusterIndex_;
   const uint32_t numStripes_{0};
+  // Whether the cluster index stores its key chunks in stripes, as key streams
+  // that a projection can read in the same load as its stripe streams.
+  const bool stripeKeyLayout_{false};
 
   const std::shared_ptr<const NimbleTypeProjection> projection_;
   // True when every emitted slice must preserve a native HFM batch boundary,
   // even if the selected group has no physical stream in a stripe.
   const bool hasProjectedHybridFlatMaps_{false};
+  // The streams that a co-load locates in each stripe: the projected streams,
+  // then the key stream of the cluster index, which holds the key chunk of the
+  // stripe. Empty unless the cluster index keeps its key chunks in stripes.
+  const std::vector<uint32_t> coLoadStreamIds_;
 
   std::unique_ptr<DataInput> dataInput_;
   // Verifies a stream read from storage against the checksum in its stream
@@ -699,14 +868,14 @@ class NimbleIndexProjector {
   };
 
   // Per-request state. Set by initRequest(), populated through the shared
-  // pipeline (lookupStripes → prepareStripes → loadStripeStreams), consumed by
+  // pipeline (lookupRows → prepareStripes → loadStripeStreams), consumed by
   // whichever terminal step the caller asked for, and reset on return.
   struct ProjectionContext {
-    const Request* request{nullptr};
+    const index::IndexLookup::LookupRequest* request{nullptr};
     const Options* options{nullptr};
     uint32_t numRequests{0};
     // CSR mapping from stripes to request row ranges. Populated by
-    // lookupStripes(), read-only during stripe processing.
+    // lookupRows(), read-only during stripe processing.
     StripeRanges stripeRanges;
     // Populated by prepareStripes().
     ScanPlan plan;
@@ -716,8 +885,35 @@ class NimbleIndexProjector {
     std::vector<std::optional<std::string>> resumeKeys;
     // Flat array of enqueue indices, logically
     // [stripeOffset * numProjectedStreams + streamIndex]. nullopt for absent
-    // streams. Populated by loadStripeStreams().
+    // streams. Populated by loadStripeStreams(). loadCoLoadedStreams()
+    // populates it by stripe positions in coLoadedStripes instead, in the
+    // layout of coLoadedStreams, with the key stream of each stripe after its
+    // projected streams. assignCoLoadedStreams() then turns it into the offsets
+    // of the planned stripes and drops the key streams.
     std::vector<std::optional<uint32_t>> dataInputIndices;
+    // Stripes whose projected streams coLoadStripes() loaded before planning
+    // them, ascending. assignCoLoadedStreams() clears it once it has pointed
+    // dataInputIndices at the streams of the planned stripes.
+    std::vector<uint32_t> coLoadedStripes;
+    // Locations of the projected streams and then of the key stream of each
+    // of coLoadedStripes, numProjectedStreams + 1 per stripe, which
+    // selectStripesToCoLoad() records from stripe-group metadata.
+    // loadCoLoadedStreams() loads the streams from them, and prepareStripes()
+    // plans the stripes from them, so neither needs stripe-group metadata.
+    // assignCoLoadedStreams() clears it.
+    std::vector<StripeGroup::StreamMetadata> coLoadedStreams;
+    // Key chunks of coLoadedStripes, which point into the loaded data. Kept
+    // past the lookup for the resume keys. Empty without a co-load, so that
+    // the lookup then reads the key chunks that it needs from the file, and
+    // keyAtStripeRow() reads keys from it.
+    std::vector<ClusterIndexBase::KeyChunk> coLoadedKeyChunks;
+    // Stripes of each request that ClusterIndexBase::lookupStripes() returns,
+    // which coLoadStripes() records for lookupCoLoadedRows().
+    std::vector<nimble::StripeRange> coLoadRequestStripes;
+    // Requests whose first stripes a co-load did not load, ascending, as they
+    // are past where the limits stop planning, so the lookup selects no row of
+    // them. prepareResumeKeys() gives each its lower key back.
+    std::vector<uint32_t> unloadedRequests;
     // Handle keeping loaded data alive for zero-copy BufferRefs.
     DataInput::Handle dataHandle;
     // Serialized stripe bodies and metadata, one per planned stripe. Populated

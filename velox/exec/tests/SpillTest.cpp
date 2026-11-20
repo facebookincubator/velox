@@ -17,12 +17,18 @@
 #include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <memory>
+#include <thread>
+
+#include <folly/executors/CPUThreadPoolExecutor.h>
 
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Spill.h"
@@ -39,6 +45,25 @@ using namespace facebook::velox::common::testutil;
 
 namespace {
 static const int64_t kGB = 1'000'000'000;
+
+// Tracks spill read-ahead separately from the filesystem's native I/O.
+class CountingExecutor : public folly::Executor {
+ public:
+  explicit CountingExecutor(size_t numThreads) : executor_(numThreads) {}
+
+  void add(folly::Func function) override {
+    numAdds_.fetch_add(1, std::memory_order_relaxed);
+    executor_.add(std::move(function));
+  }
+
+  uint64_t numAdds() const {
+    return numAdds_.load(std::memory_order_relaxed);
+  }
+
+ private:
+  std::atomic_uint64_t numAdds_{0};
+  folly::CPUThreadPoolExecutor executor_;
+};
 
 } // namespace
 
@@ -114,6 +139,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
 
  protected:
   static void SetUpTestCase() {
+    tests::utils::registerFaultyFileSystem();
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
     TestValue::enable();
     if (!isRegisteredVectorSerde()) {
@@ -729,6 +755,59 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
   common::UpdateAndCheckSpillLimitCB updateSpilledBytesCb_;
 };
 
+TEST_P(SpillTest, orderedReaderUsesReadAheadExecutor) {
+  auto asyncFileSystem = tests::utils::faultyFileSystem();
+  CountingExecutor nativeExecutor(2);
+  CountingExecutor readAheadExecutor(2);
+  asyncFileSystem->setExecutor(&nativeExecutor);
+  const auto resetExecutor =
+      folly::makeGuard([&]() { asyncFileSystem->setExecutor(nullptr); });
+
+  constexpr int kNumBatches = 8;
+  constexpr int kNumRowsPerBatch = 100;
+  const SpillPartitionId partitionId{0};
+  setupSpillState({partitionId}, kGB, 0, kNumBatches, kNumRowsPerBatch);
+
+  auto spillFiles = state_->finish(partitionId);
+  ASSERT_EQ(spillFiles.size(), kNumBatches / 2);
+  for (auto& spillFile : spillFiles) {
+    spillFile.path = tests::utils::FaultyFileSystem::scheme() + spillFile.path;
+  }
+  SpillPartition spillPartition(partitionId, std::move(spillFiles));
+
+  auto spillConfig = common::SpillConfig();
+  spillConfig.executor = &readAheadExecutor;
+  spillConfig.numMaxMergeFiles = 2;
+  // Force multiple FileInputStream refills in both intermediate and final
+  // merge readers.
+  spillConfig.readBufferSize = 64;
+  spillConfig.writeBufferSize = 64;
+  spillConfig.updateAndCheckSpillLimitCb = [](int64_t) {};
+  spillConfig.fileCreateConfig = "";
+
+  auto merge =
+      spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_);
+  ASSERT_NE(merge, nullptr);
+  ASSERT_LE(merge->numStreams(), spillConfig.numMaxMergeFiles);
+
+  for (auto i = 0; i < values_.size(); ++i) {
+    auto* stream = merge->next();
+    ASSERT_NE(stream, nullptr) << i;
+    if (values_[i].has_value()) {
+      ASSERT_EQ(
+          values_[i].value(),
+          stream->decoded(0).valueAt<int64_t>(stream->currentIndex()))
+          << i;
+    } else {
+      ASSERT_TRUE(stream->decoded(0).isNullAt(stream->currentIndex())) << i;
+    }
+    stream->pop();
+  }
+  ASSERT_EQ(merge->next(), nullptr);
+  EXPECT_GT(readAheadExecutor.numAdds(), 0);
+  EXPECT_GT(nativeExecutor.numAdds(), 0);
+}
+
 TEST_P(SpillTest, spillState) {
   // Set the target file size to a large value to avoid new file creation
   // triggered by batch write.
@@ -829,6 +908,44 @@ TEST_P(SpillTest, spillStateWithSmallTargetFileSize) {
   hybridSpillStateTest(1, 2, 8, 8, {CompareFlags{false, false}}, 8 * 2);
   hybridSpillStateTest(1, 2, 8, 8, {CompareFlags{false, true}}, 8 * 2);
   hybridSpillStateTest(1, 2, 8, 8, {}, 8 * 2);
+}
+
+// Buffered writes may finish uploading during close.
+DEBUG_ONLY_TEST_P(SpillTest, writeTimeIncludesFileClose) {
+  const auto closeDelay = std::chrono::milliseconds(100);
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::serializer::SerializedPageFile::finish",
+      std::function<void(void*)>(
+          [&](void*) { std::this_thread::sleep_for(closeDelay); }));
+
+  auto tempDirectory = TempDirectoryPath::create();
+  SpillState state(
+      [&]() -> const std::string& { return tempDirectory->getPath(); },
+      updateSpilledBytesCb_,
+      "test",
+      {},
+      kGB,
+      0,
+      compressionKind_,
+      std::nullopt,
+      pool(),
+      &spillStats_,
+      "");
+  const SpillPartitionId partitionId{0};
+  state.setPartitionSpilled(partitionId);
+  const auto prevGlobalStats = globalSpillStats();
+  state.appendToPartition(
+      partitionId, makeRowVector({makeFlatVector<int64_t>({1, 2, 3})}));
+  ASSERT_EQ(state.finish(partitionId).size(), 1);
+
+  ASSERT_EQ(spillStats_.spillWrites, 1);
+  ASSERT_GE(
+      spillStats_.spillWriteTimeNanos,
+      std::chrono::nanoseconds(closeDelay).count());
+  ASSERT_GE(
+      globalSpillStats().spillWriteTimeNanos -
+          prevGlobalStats.spillWriteTimeNanos,
+      spillStats_.spillWriteTimeNanos);
 }
 
 TEST_P(SpillTest, spillPartitionId) {

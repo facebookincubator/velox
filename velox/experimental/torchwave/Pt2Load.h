@@ -24,6 +24,7 @@
 
 #include <caffe2/serialize/inline_container.h> // @manual=//caffe2/caffe2/serialize:inline_container
 #include <torch/nativert/graph/Graph.h>
+#include "velox/experimental/torchwave/SymShape.h"
 
 namespace torch::wave {
 
@@ -35,6 +36,9 @@ struct LoadedModel {
   std::string modelName;
   std::unordered_map<std::string, std::string> tensorPaths;
   std::unordered_map<std::string, std::string> constantPaths;
+  /// The export's symbolic sizes and strides, which the graph's TensorMeta
+  /// drops.
+  SymShapes symShapes;
 };
 
 std::vector<std::string> getModelNames(

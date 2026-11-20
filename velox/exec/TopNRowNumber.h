@@ -73,9 +73,6 @@ class TopNRowNumberSpiller;
 
 class TopNRowNumber : public Operator {
  public:
-  /// Runtime stat key indicating partial TopN was abandoned.
-  static constexpr std::string_view kAbandonedPartial = "abandonedPartial";
-
   TopNRowNumber(
       int32_t operatorId,
       DriverCtx* driverCtx,

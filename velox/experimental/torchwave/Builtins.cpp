@@ -18,8 +18,11 @@
 #include "velox/experimental/torchwave/CompiledOp.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/Registry.h"
+#include "velox/experimental/torchwave/SymShape.h"
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
+
+#include <folly/CppAttributes.h>
 
 #include <cmath>
 #include <limits>
@@ -1166,6 +1169,11 @@ bool allButLastDimReserve(
   return true;
 }
 
+bool firstDimReserve(const ReserveArgs& args, Shape* out, int32_t /*numOut*/) {
+  out[0].setVector(static_cast<Dim>(args.tensor(0).dims[0]));
+  return true;
+}
+
 // An open-addressing table of the smallest power of two at least twice the
 // input's element count, plus one.
 bool hashTableReserve(const ReserveArgs& args, Shape* out, int32_t /*numOut*/) {
@@ -1396,6 +1404,350 @@ std::string transposeTileTemplateArg(NodeCP node, CompileCtx* /*ctx*/) {
 
 int64_t transposeTileSharedBytes(NodeCP node, int32_t /*blockSize*/) {
   return hasTransposeTile(node) ? kTransposeTileBytes : 0;
+}
+
+// The symbolic forms of the reserves above, for sizing on the device.
+
+bool symSizeAttr(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  if (args.intLists.empty()) {
+    return false;
+  }
+  out.at(0) = denseShape(args.intLists[0]);
+  return true;
+}
+
+bool symInputShape(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* input = args.tensor(0);
+  if (input == nullptr) {
+    return false;
+  }
+  out.at(0) = denseShape(input->dims);
+  return true;
+}
+
+bool symArangeSpan(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  if (args.scalars.size() < 2 || !args.scalars[0] || !args.scalars[1]) {
+    return false;
+  }
+  out.at(0) = vectorShape(symAdd(
+      *args.scalars[1], symMul(SymExpr::constant(-1), *args.scalars[0])));
+  return true;
+}
+
+bool symLeadingDims(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* input = args.tensor(0);
+  if (input == nullptr || args.scalars.empty() || !args.scalars[0] ||
+      !args.scalars[0]->isConstant()) {
+    return false;
+  }
+  const auto keep = static_cast<size_t>(args.scalars[0]->value);
+  if (keep > input->dims.size()) {
+    return false;
+  }
+  out.at(0) = denseShape(
+      std::vector<SymExpr>(
+          input->dims.begin(),
+          input->dims.begin() + static_cast<std::ptrdiff_t>(keep)));
+  return true;
+}
+
+bool symIndexSelect(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* self = args.tensor(0);
+  const auto* index = args.tensor(1);
+  if (self == nullptr || index == nullptr || args.scalars.empty() ||
+      !args.scalars[0] || !args.scalars[0]->isConstant()) {
+    return false;
+  }
+  auto dims = self->dims;
+  auto dim = args.scalars[0]->value;
+  dim = dim < 0 ? dim + static_cast<int64_t>(dims.size()) : dim;
+  if (dim < 0 || dim >= static_cast<int64_t>(dims.size())) {
+    return false;
+  }
+  dims[dim] = numelOf(*index);
+  out.at(0) = denseShape(std::move(dims));
+  return true;
+}
+
+bool symScalar(const SymReserveArgs&, std::vector<SymShape>& out, int32_t) {
+  out.at(0) = SymShape{};
+  return true;
+}
+
+SymExpr ceilDiv(const SymExpr& numerator, int64_t denominator) {
+  return symFloorDiv(
+      symAdd(numerator, SymExpr::constant(denominator - 1)),
+      SymExpr::constant(denominator));
+}
+
+bool symNumBlocks(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* input = args.tensor(0);
+  if (input == nullptr || args.blockSize <= 0) {
+    return false;
+  }
+  out.at(0) = vectorShape(
+      symMax(SymExpr::constant(1), ceilDiv(numelOf(*input), args.blockSize)));
+  return true;
+}
+
+// The flag words, rounded to even, then two accumulators of two words per
+// tile.
+bool symLookbackState(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* input = args.tensor(0);
+  if (input == nullptr || args.blockSize <= 0) {
+    return false;
+  }
+  const auto tiles = symMax(
+      SymExpr::constant(1),
+      ceilDiv(
+          numelOf(*input),
+          static_cast<int64_t>(args.blockSize) * kSinglePassItemsPerThread));
+  const auto flagWords = symMul(
+      SymExpr::constant(2),
+      symFloorDiv(symAdd(tiles, SymExpr::constant(1)), SymExpr::constant(2)));
+  out.at(0) =
+      vectorShape(symAdd(flagWords, symMul(SymExpr::constant(4), tiles)));
+  return true;
+}
+
+// The operand with the most elements, by the values the export traced; one
+// element without operands.
+const SymShape* FOLLY_NULLABLE largestOperand(const SymReserveArgs& args) {
+  const SymShape* best = nullptr;
+  int64_t bestNumel = -1;
+  for (const auto& group : args.tensors) {
+    for (const auto* shape : group) {
+      if (shape == nullptr) {
+        continue;
+      }
+      const auto numel = tracedValue(numelOf(*shape)).value_or(0);
+      if (best == nullptr || numel > bestNumel) {
+        best = shape;
+        bestNumel = numel;
+      }
+    }
+  }
+  return best;
+}
+
+bool symMaxShape(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  bool anyOperand = false;
+  for (const auto& group : args.tensors) {
+    anyOperand |= !group.empty();
+  }
+  if (!anyOperand) {
+    out.at(0) = vectorShape(SymExpr::constant(1));
+    return true;
+  }
+  const auto* best = largestOperand(args);
+  if (best == nullptr) {
+    return false;
+  }
+  out.at(0) = denseShape(best->dims);
+  return true;
+}
+
+bool symNonzero(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t numOut) {
+  if (!symMaxShape(args, out, numOut)) {
+    return false;
+  }
+  auto dims = out.at(0).dims;
+  if (!dims.empty()) {
+    dims.push_back(SymExpr::constant(1));
+  }
+  out.at(0) = denseShape(std::move(dims));
+  return true;
+}
+
+bool symArangeStep(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  if (args.scalars.size() < 3 || !args.scalars[0] || !args.scalars[1] ||
+      !args.scalars[2] || !args.scalars[2]->isConstant() ||
+      args.scalars[2]->value <= 0) {
+    return false;
+  }
+  out.at(0) = vectorShape(symMax(
+      SymExpr::constant(0),
+      ceilDiv(
+          symAdd(
+              *args.scalars[1],
+              symMul(SymExpr::constant(-1), *args.scalars[0])),
+          args.scalars[2]->value)));
+  return true;
+}
+
+// 'total' along 'dim', or in all when 'dim' is absent or negative.
+bool symRepeatInterleaveFinal(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  if (args.scalars.empty() || !args.scalars[0]) {
+    return false;
+  }
+  const auto& total = *args.scalars[0];
+  const auto* input = args.tensor(0);
+  const bool hasDim = args.scalars.size() > 1 && args.scalars[1].has_value();
+  if (!hasDim ||
+      (args.scalars[1]->isConstant() && args.scalars[1]->value < 0)) {
+    out.at(0) = vectorShape(total);
+    return true;
+  }
+  if (input == nullptr || !args.scalars[1]->isConstant() ||
+      args.scalars[1]->value >= static_cast<int64_t>(input->dims.size())) {
+    return false;
+  }
+  auto dims = input->dims;
+  dims[args.scalars[1]->value] = total;
+  out.at(0) = denseShape(std::move(dims));
+  return true;
+}
+
+bool symRepeatInterleaveBcast(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* input = args.tensor(0);
+  if (input == nullptr) {
+    return false;
+  }
+  if (args.scalars.empty() || !args.scalars[0]) {
+    out.at(0) = vectorShape(numelOf(*input));
+    return true;
+  }
+  if (!args.scalars[0]->isConstant() || args.scalars[0]->value < 0 ||
+      args.scalars[0]->value >= static_cast<int64_t>(input->dims.size())) {
+    return false;
+  }
+  out.at(0) = vectorShape(input->dims[args.scalars[0]->value]);
+  return true;
+}
+
+bool symPadLastDim(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* input = args.tensor(0);
+  if (input == nullptr || input->dims.empty() || args.intLists.empty() ||
+      args.intLists[0].size() < 2) {
+    return false;
+  }
+  const auto& pad = args.intLists.at(0);
+  auto dims = input->dims;
+  dims.back() = symAdd(dims.back(), symAdd(pad.at(0), pad.at(1)));
+  out.at(0) = denseShape(std::move(dims));
+  return true;
+}
+
+bool symHashTable(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* input = args.tensor(0);
+  if (input == nullptr) {
+    return false;
+  }
+  const auto numel = numelOf(*input);
+  if (!numel.isConstant()) {
+    return false;
+  }
+  int64_t tableSize = 1;
+  while (tableSize < numel.value * 2) {
+    tableSize *= 2;
+  }
+  out.at(0) = vectorShape(SymExpr::constant(tableSize + 1));
+  return true;
+}
+
+bool symRepeat(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* self = args.tensor(0);
+  if (self == nullptr || args.intLists.empty() ||
+      args.intLists[0].size() < self->dims.size()) {
+    return false;
+  }
+  const auto& repeats = args.intLists[0];
+  const auto offset = repeats.size() - self->dims.size();
+  std::vector<SymExpr> dims;
+  dims.reserve(repeats.size());
+  for (size_t d = 0; d < repeats.size(); ++d) {
+    if (d < offset) {
+      dims.push_back(repeats[d]);
+    } else {
+      dims.push_back(symMul(repeats[d], self->dims[d - offset]));
+    }
+  }
+  out.at(0) = denseShape(std::move(dims));
+  return true;
+}
+
+bool symBincountFinal(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  if (args.scalars.size() < 2 || !args.scalars[0] || !args.scalars[1]) {
+    return false;
+  }
+  out.at(0) = vectorShape(symMax(
+      symMax(symAdd(*args.scalars[0], SymExpr::constant(1)), *args.scalars[1]),
+      SymExpr::constant(0)));
+  return true;
+}
+
+void registerSymReserves() {
+  registerSymReserve(sizeAttrReserve, symSizeAttr);
+  registerSymReserve(inputShapeReserve, symInputShape);
+  registerSymReserve(firstListElementReserve, symInputShape);
+  registerSymReserve(inputNumelReserve, symNumel);
+  registerSymReserve(inputShapePlusOneReserve, symNumelPlusOne);
+  registerSymReserve(arangeEndReserve, symScalarLength);
+  registerSymReserve(scalarLengthReserve, symScalarLength);
+  registerSymReserve(arangeSpanReserve, symArangeSpan);
+  registerSymReserve(leadingDimsReserve, symLeadingDims);
+  registerSymReserve(firstDimReserve, symFirstDim);
+  registerSymReserve(indexSelectShape, symIndexSelect);
+  registerSymReserve(scalarReserve, symScalar);
+  registerSymReserve(numBlocksReserve, symNumBlocks);
+  registerSymReserve(lookbackStateReserve, symLookbackState);
+  registerSymReserve(maxShapeReserve, symMaxShape);
+  registerSymReserve(nonzeroShape, symNonzero);
+  registerSymReserve(arangeStepReserve, symArangeStep);
+  registerSymReserve(repeatInterleaveFinalShape, symRepeatInterleaveFinal);
+  registerSymReserve(repeatInterleaveBcastShape, symRepeatInterleaveBcast);
+  registerSymReserve(padLastDimReserve, symPadLastDim);
+  registerSymReserve(hashTableReserve, symHashTable);
+  registerSymReserve(repeatShape, symRepeat);
+  registerSymReserve(bincountFinalShape, symBincountFinal);
 }
 
 void registerRankPreservingStandalone(
@@ -2211,6 +2563,8 @@ ValueCP FOLLY_NULLABLE unflattenIndexOfVector(
 } // namespace
 
 void registerBuiltins() {
+  registerSymReserves();
+  registerAtenShapeRules();
   // With WaveConfig::singlePass the two scans and the stream compaction get one
   // implementation, the decoupled look-back form, in place of the multi-kernel
   // and the cooperative-grid expansions. It replaces both so the choice does
@@ -2609,6 +2963,10 @@ void registerBuiltins() {
       .normalize(castScalarAttrsToInputDtype)
       .registerOp();
   MetadataBuilder("torch.ops.aten.nan_to_num.default")
+      .elementwise()
+      .normalize(resolveNanToNumDefaults)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.nan_to_num_.default")
       .elementwise()
       .normalize(resolveNanToNumDefaults)
       .registerOp();
@@ -3022,6 +3380,34 @@ void registerBuiltins() {
       .deviceFunc("arange_mem")
       .outputConstraints(rank1Constraint)
       .hasDtypeTemplateParam()
+      .registerOp();
+
+  // tw.unpack_slot: the 'size' int64 values of slot 'slot' of a packed input
+  // (PackedInput.h), decoded to memory by a device function. It replaces one
+  // output of the split of a packed input, so 'size' is that output's split
+  // size. Like tw.arange_mem, it is sized by its reserve from 'size', a size
+  // argument whose value is on the host when the reserve runs. 'slot' is a
+  // constant, so the decodes of all slots of a packed input are one op.
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.unpack_slot",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("size", c10::IntType::get()),
+              c10::Argument("packed", c10::TensorType::get()),
+              c10::Argument("slot", c10::IntType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .argumentMeta(
+          {{.isRegister = false}, {.isRegister = false}, {.isRegister = false}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserve = scalarLengthReserve,
+            .reserveInputs = {.scalars = {"size"}}}})
+      .headerFile("velox/experimental/torchwave/Unpack.cuh")
+      .deviceFunc("unpack_slot")
+      .outputConstraints(rank1Constraint)
       .registerOp();
 
   MetadataBuilder("torch.ops.aten.arange.start")
@@ -4433,6 +4819,44 @@ void registerBuiltins() {
             constraint.rank =
                 static_cast<int8_t>(inputRank - (endDim - startDim));
             return {constraint};
+          })
+      // A flatten that merges nothing is its input. One that merges every dim
+      // is reshape(self, [-1]), which is a view of a contiguous input and a
+      // copy of any other.
+      .maybeReplace(
+          [](NodeCP node,
+             ValueTypes& types,
+             WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
+            auto* self = inputAt(node, 0);
+            const auto selfId = self->id();
+            if (selfId >= static_cast<int>(types.types.size()) ||
+                !types.types[selfId] || types.rank(self) < 1) {
+              return {};
+            }
+            const int64_t inputRank = types.rank(self);
+            auto dim = [&](const char* name, int64_t defaultDim) {
+              const auto* attr = node->tryGetAttribute(name);
+              const auto value =
+                  attr ? std::get<int64_t>(attr->value) : defaultDim;
+              return value < 0 ? value + inputRank : value;
+            };
+            const auto startDim = dim("start_dim", 0);
+            const auto endDim = dim("end_dim", -1);
+            if (startDim >= endDim) {
+              return {{node->outputs()[0], self}};
+            }
+            if (startDim != 0 || endDim != inputRank - 1) {
+              return {};
+            }
+            auto* graph = waveGraph.graph();
+            auto* reshape = graph->createNode(
+                "torch.ops.aten.reshape.default", {{"self", self}});
+            reshape->addAttribute({"shape", std::vector<int64_t>{-1}});
+            graph->insertBefore(reshape, const_cast<nativert::Node*>(node));
+            auto* output = waveGraph.newTensorValue(
+                reshape, "flatten", types.types[selfId]->dtype());
+            types.constraints.at(output->id()).rank = 1;
+            return {{node->outputs()[0], output}};
           })
       .registerOp();
 

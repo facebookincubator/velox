@@ -27,12 +27,10 @@ class AssertQueryBuilderTest : public HiveConnectorTestBase {};
 TEST_F(AssertQueryBuilderTest, basic) {
   auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
 
-  AssertQueryBuilder(
-      PlanBuilder().values({data}).planNode(), duckDbQueryRunner_)
+  AssertQueryBuilder(PlanBuilder().values(data).planNode(), duckDbQueryRunner_)
       .assertResults("VALUES (1), (2), (3)");
 
-  AssertQueryBuilder(PlanBuilder().values({data}).planNode())
-      .assertResults(data);
+  AssertQueryBuilder(PlanBuilder().values(data).planNode()).assertResults(data);
 
   AssertQueryBuilder(
       PlanBuilder()
@@ -53,7 +51,7 @@ TEST_F(AssertQueryBuilderTest, serialExecution) {
   auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
 
   PlanBuilder builder;
-  const auto& plan = builder.values({data}).planNode();
+  const auto& plan = builder.values(data).planNode();
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .serialExecution(true)
@@ -66,7 +64,7 @@ TEST_F(AssertQueryBuilderTest, orderedResults) {
   auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
 
   AssertQueryBuilder(
-      PlanBuilder().values({data}).orderBy({"c0 DESC"}, true).planNode(),
+      PlanBuilder().values(data).orderBy({"c0 DESC"}, true).planNode(),
       duckDbQueryRunner_)
       .assertResults("VALUES (3), (2), (1)", {{0}});
 }
@@ -88,7 +86,7 @@ TEST_F(AssertQueryBuilderTest, config) {
   auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
 
   AssertQueryBuilder(
-      PlanBuilder().values({data}).project({"c0 * 2"}).planNode(),
+      PlanBuilder().values(data).project({"c0 * 2"}).planNode(),
       duckDbQueryRunner_)
       .config(core::QueryConfig::kExprEvalSimplified, "true")
       .assertResults("VALUES (2), (4), (6)");
@@ -97,13 +95,11 @@ TEST_F(AssertQueryBuilderTest, config) {
 TEST_F(AssertQueryBuilderTest, hiveSplits) {
   auto data = makeNamedRowVector("c0", makeFlatVector<int32_t>({1, 2, 3}));
 
-  auto file = TempFilePath::create();
-  writeToFile(file->getPath(), {data});
+  auto file = writeToFile(data);
 
   // Single leaf node.
   AssertQueryBuilder(
-      PlanBuilder().tableScan(asRowType(data->type())).planNode(),
-      duckDbQueryRunner_)
+      PlanBuilder().tableScan(data->rowType()).planNode(), duckDbQueryRunner_)
       .split(makeHiveConnectorSplit(file->getPath()))
       .assertResults("VALUES (1), (2), (3)");
 
@@ -119,8 +115,7 @@ TEST_F(AssertQueryBuilderTest, hiveSplits) {
 
   for (const auto withSequence : {false, true}) {
     AssertQueryBuilder(
-        PlanBuilder().tableScan(asRowType(data->type())).planNode(),
-        duckDbQueryRunner_)
+        PlanBuilder().tableScan(data->rowType()).planNode(), duckDbQueryRunner_)
         .splits(makeSplits(file->getPath(), 2))
         .addSplitWithSequence(withSequence)
         .assertResults("VALUES (1), (2), (3), (1), (2), (3)");
@@ -130,10 +125,7 @@ TEST_F(AssertQueryBuilderTest, hiveSplits) {
   for (const auto withSequence : {false, true}) {
     auto splits = makeSplits(file->getPath(), 2);
     AssertQueryBuilder(
-        PlanBuilder()
-            .tableScan(asRowType(data->type()))
-            .project({"c0 + 1"})
-            .planNode(),
+        PlanBuilder().tableScan(data->rowType()).project({"c0 + 1"}).planNode(),
         duckDbQueryRunner_)
         .splits(splits)
         .addSplitWithSequence(withSequence)
@@ -164,20 +156,19 @@ TEST_F(AssertQueryBuilderTest, hiveSplits) {
 
   // Two leaf nodes.
   auto buildData = makeRowVector({makeFlatVector<int32_t>({2, 3})});
-  auto buildFile = TempFilePath::create();
-  writeToFile(buildFile->getPath(), {buildData});
+  auto buildFile = writeToFile(buildData);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId probeScanId;
   core::PlanNodeId buildScanId;
-  auto joinPlan = PlanBuilder(planNodeIdGenerator)
-                      .tableScan(asRowType(data->type()))
+  auto joinPlan = builder.newPlan()
+                      .tableScan(data->rowType())
                       .capturePlanNodeId(probeScanId)
                       .hashJoin(
                           {"c0"},
                           {"b_c0"},
-                          PlanBuilder(planNodeIdGenerator)
-                              .tableScan(asRowType(data->type()))
+                          builder.newPlan()
+                              .tableScan(data->rowType())
                               .capturePlanNodeId(buildScanId)
                               .project({"c0 as b_c0"})
                               .planNode(),

@@ -23,3 +23,21 @@ velox_add_library(
   HEADERS
   test_common/InsertTest.h
 )
+
+if(${VELOX_BUILD_TESTING})
+  add_library(velox_hive_storage_adapters_server_startup test_common/ServerStartup.cpp)
+  velox_add_test_headers(velox_hive_storage_adapters_server_startup test_common/ServerStartup.h)
+  target_link_libraries(velox_hive_storage_adapters_server_startup velox_exception)
+
+  add_executable(velox_hive_storage_adapters_server_startup_test test_common/ServerStartupTest.cpp)
+  add_test(
+    velox_hive_storage_adapters_server_startup_test
+    velox_hive_storage_adapters_server_startup_test
+  )
+  target_link_libraries(
+    velox_hive_storage_adapters_server_startup_test
+    velox_hive_storage_adapters_server_startup
+    GTest::gtest
+    GTest::gtest_main
+  )
+endif()

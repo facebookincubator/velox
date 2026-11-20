@@ -128,12 +128,15 @@ std::unique_ptr<core::PartitionFunction> HivePartitionFunctionSpec::create(
       bucketToPartitions[bucket] = bucket % numPartitions;
     }
     if (localExchange) {
-      // Shuffle the map from bucket to partition for local exchange so we don't
-      // use the same map for remote shuffle.
-      std::shuffle(
-          bucketToPartitions.begin(),
-          bucketToPartitions.end(),
-          std::mt19937{0});
+      // Shuffle within aligned runs of numPartitions buckets, not globally.
+      std::mt19937 rng{0};
+      for (int start = 0; start < numBuckets_; start += numPartitions) {
+        std::shuffle(
+            bucketToPartitions.begin() + start,
+            bucketToPartitions.begin() +
+                std::min(start + numPartitions, numBuckets_),
+            rng);
+      }
     }
   }
   return std::make_unique<HivePartitionFunction>(

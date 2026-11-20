@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <memory>
 
 #include "folly/ScopeGuard.h"
@@ -798,11 +799,46 @@ StreamSlicer::Range StreamSlicer::offsetsRange(
     Range range,
     const Encoding::Options& encodingOptions) const {
   NIMBLE_CHECK_GT(range.length, 0, "Offsets range length must be positive");
-  auto encoding = createEncoding(encoded, pool_, encodingOptions);
-  NIMBLE_CHECK_EQ(
-      encoding->dataType(), DataType::Uint32, "Expected a uint32 stream");
   const auto count = range.offset + range.length;
-  NIMBLE_CHECK_LE(count, encoding->rowCount());
+  NIMBLE_CHECK_EQ(
+      EncodingPrefix::dataType(encoded),
+      DataType::Uint32,
+      "Expected a uint32 stream");
+  NIMBLE_CHECK_LE(
+      count,
+      EncodingPrefix::readRowCount(encoded, encodingOptions.useVarintRowCount));
+  // NOLINTNEXTLINE(clang-diagnostic-switch-enum)
+  switch (EncodingPrefix::encodingType(encoded)) {
+    case EncodingType::Constant: {
+      const char* pos = encoded.data() +
+          EncodingPrefix::prefixSize(
+                            encoded, encodingOptions.useVarintRowCount);
+      const uint64_t value = encoding::read<uint32_t>(pos);
+      NIMBLE_CHECK_FILE_LE(
+          value * count,
+          std::numeric_limits<uint32_t>::max(),
+          "Array or map lengths overflow uint32_t.");
+      return {
+          .offset = static_cast<uint32_t>(value * range.offset),
+          .length = static_cast<uint32_t>(value * range.length),
+      };
+    }
+    case EncodingType::RLE: {
+      const auto sums = RLEEncoding<uint32_t>::sumRange(
+          encoded, range.offset, range.length, encodingOptions, pool_);
+      NIMBLE_CHECK_FILE_LE(
+          sums.sumBeforeRange + sums.sumInRange,
+          std::numeric_limits<uint32_t>::max(),
+          "Array or map lengths overflow uint32_t.");
+      return {
+          .offset = static_cast<uint32_t>(sums.sumBeforeRange),
+          .length = static_cast<uint32_t>(sums.sumInRange),
+      };
+    }
+    default:
+      break;
+  }
+  auto encoding = createEncoding(encoded, pool_, encodingOptions);
   ScopedVector<uint32_t> values{count, pool_, encodingOptions.bufferPool};
   encoding->materialize(count, values.data());
 

@@ -457,6 +457,9 @@ offset of an empty array.
 
 Null array and empty array are not the same.
 
+The offset and size of a null array are undefined and can be any value.
+Elements that no non-null array covers are undefined as well.
+
 Elements vector may have a nulls buffer independent of the nulls buffer of the
 array vector itself. This allows us to specify non-null arrays with some or all
 null elements. Null array and array of all null elements are not the same.
@@ -491,6 +494,9 @@ considered undefined and can be any value. Consider using zero for the offset
 of an empty map.
 
 Null map and empty map are not the same.
+
+The offset and size of a null map are undefined and can be any value. Keys and
+values that no non-null map covers are undefined as well.
 
 Keys and values vectors may have nulls buffer independent of each other and of
 the nulls buffer of the map vector itself. This allows us to specify non-null

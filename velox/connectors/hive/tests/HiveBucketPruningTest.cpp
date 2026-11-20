@@ -239,5 +239,32 @@ TEST_F(HiveBucketPruningTest, notNarrowed) {
   EXPECT_EQ(buckets(*exec::betweenDouble(1.0, 1.0), DOUBLE(), 4), std::nullopt);
 }
 
+TEST_F(HiveBucketPruningTest, allowedBuckets) {
+  const auto makeProperty = [](HiveBucketProperty::Kind kind) {
+    return HiveBucketProperty(kind, 4, {"c0"}, {BIGINT()}, /*sortedBy=*/{});
+  };
+  const auto filter = exec::in({1, 6, 9});
+
+  // A flag per bucket, set for the buckets that buckets() returns: 1 and 2.
+  EXPECT_THAT(
+      HiveBucketPruning::allowedBuckets(
+          makeProperty(HiveBucketProperty::Kind::kHiveCompatible),
+          {filter.get()}),
+      testing::Optional(testing::ElementsAre(false, true, true, false)));
+
+  // A bucket column without a filter.
+  EXPECT_EQ(
+      HiveBucketPruning::allowedBuckets(
+          makeProperty(HiveBucketProperty::Kind::kHiveCompatible), {nullptr}),
+      std::nullopt);
+
+  // Bucketing with a hash other than Hive's.
+  EXPECT_EQ(
+      HiveBucketPruning::allowedBuckets(
+          makeProperty(HiveBucketProperty::Kind::kPrestoNative),
+          {filter.get()}),
+      std::nullopt);
+}
+
 } // namespace
 } // namespace facebook::velox::connector::hive

@@ -13,8 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Values.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -56,11 +59,9 @@ class FilterProjectTest : public test::HiveConnectorTestBase {
 
     // A quick sanity check for memory usage reporting. Check that peak total
     // memory usage for the project node is > 0.
-    auto planStats = toPlanStats(task->taskStats());
-    auto projectNodeId = plan->id();
-    auto it = planStats.find(projectNodeId);
-    ASSERT_TRUE(it != planStats.end());
-    ASSERT_GT(it->second.peakMemoryBytes, 0);
+    ASSERT_GT(
+        PlanNodeStats::extract(task->taskStats(), plan->id()).peakMemoryBytes,
+        0);
   }
 
   RowVectorPtr makeTestVector(vector_size_t size = 100) const {
@@ -317,6 +318,39 @@ TEST_F(FilterProjectTest, nestedFieldReferenceSharedChild) {
   test::AssertQueryBuilder(plan).assertResults(makeRowVector({expected}));
 }
 
+DEBUG_ONLY_TEST_F(FilterProjectTest, sharedSubexprResultsReleasedAfterBatch) {
+  auto input = makeRowVector({
+      makeMapVector<int64_t, int64_t>({
+          {{1, 10}},
+          {{1, 20}, {2, 30}},
+          {{2, 40}, {1, 50}},
+      }),
+  });
+  const auto& mapValues =
+      input->childAt(0)->asUnchecked<MapVector>()->mapValues();
+
+  auto plan = test::PlanBuilder()
+                  .values({input})
+                  .project({"c0[1] + 1", "c0[1] * 2"})
+                  .planNode();
+
+  int numValuesCalls{0};
+  std::optional<int64_t> mapValuesUseCount;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Values::getOutput",
+      std::function<void(const exec::Values*)>([&](const exec::Values*) {
+        if (numValuesCalls++ == 1) {
+          mapValuesUseCount = mapValues.use_count();
+        }
+      }));
+
+  test::AssertQueryBuilder(plan).assertResults(makeRowVector({
+      makeFlatVector<int64_t>({11, 21, 51}),
+      makeFlatVector<int64_t>({20, 40, 100}),
+  }));
+  ASSERT_EQ(mapValuesUseCount, 1);
+}
+
 TEST_F(FilterProjectTest, numSilentThrow) {
   auto row = makeRowVector({makeFlatIdentityVector<int32_t>(100)});
 
@@ -329,8 +363,10 @@ TEST_F(FilterProjectTest, numSilentThrow) {
                   .planNode();
 
   auto task = test::AssertQueryBuilder(plan).assertEmptyResults();
-  auto planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(100, planStats.at(filterId).customStats.at("numSilentThrow").sum);
+  ASSERT_EQ(
+      100,
+      PlanNodeStats::extract(task->taskStats(), filterId)
+          .customSum(DriverStats::kNumSilentThrow));
 }
 
 TEST_F(FilterProjectTest, statsSplitter) {
@@ -378,13 +414,11 @@ TEST_F(FilterProjectTest, statsSplitter) {
 
 TEST_F(FilterProjectTest, barrier) {
   std::vector<RowVectorPtr> vectors;
-  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
   const int numSplits{5};
   for (int32_t i = 0; i < numSplits; ++i) {
     vectors.push_back(makeTestVector());
-    tempFiles.push_back(TempFilePath::create());
   }
-  writeToFiles(toFilePaths(tempFiles), vectors);
+  auto tempFiles = writeToFiles(vectors);
   createDuckDbTable(vectors);
 
   core::PlanNodeId projectPlanNodeId;
@@ -437,7 +471,8 @@ TEST_F(FilterProjectTest, barrier) {
     // one-to-one mapping and expects the upstream operator respects the output
     // batch size.
     ASSERT_EQ(
-        exec::toPlanStats(taskStats).at(projectPlanNodeId).outputVectors,
+        exec::PlanNodeStats::extract(taskStats, projectPlanNodeId)
+            .outputVectors,
         numSplits);
   }
 }

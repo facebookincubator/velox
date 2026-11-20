@@ -304,8 +304,7 @@ TEST_F(IcebergSessionCredentialsE2ETest, forwardsSessionCredentialToReadPath) {
   const auto vectors =
       createTestData(rowType, /*numBatches=*/1, /*rowsPerBatch=*/20);
 
-  const auto dataFile = common::testutil::TempFilePath::create();
-  writeToFile(dataFile->getPath(), vectors);
+  const auto dataFile = writeToFile(vectors);
 
   // Route the read through the recording file system by prefixing its scheme.
   const auto splits =
@@ -487,8 +486,7 @@ TEST_F(IcebergSessionCredentialsE2ETest, noSessionCredentialForwardsNothing) {
   const auto vectors =
       createTestData(rowType, /*numBatches=*/1, /*rowsPerBatch=*/20);
 
-  const auto dataFile = common::testutil::TempFilePath::create();
-  writeToFile(dataFile->getPath(), vectors);
+  const auto dataFile = writeToFile(vectors);
 
   const auto splits =
       makeIcebergSplits(RecordingFileSystem::scheme() + dataFile->getPath());

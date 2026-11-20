@@ -240,6 +240,7 @@ add_library(
   TabletReader.cpp
   TabletReader.h
   StripeGroup.h
+  StripeMetadata.h
   FileLayout.h
 )
 target_link_libraries(

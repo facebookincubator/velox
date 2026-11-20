@@ -404,6 +404,15 @@ DataSink::Stats IcebergDeletionVectorSink::stats() const {
 
 std::string IcebergDeletionVectorSink::puffinPathFor(
     const std::string& dataFile) const {
+  const std::string uuid =
+      boost::uuids::to_string(boost::uuids::random_generator()());
+  // The referenced data file may live in another commit's directory, which a
+  // flat-layout table must not write into.
+  if (!insertTableHandle_->includePartitionPaths()) {
+    return insertTableHandle_->locationHandle()->targetPath() + "/dv-" + uuid +
+        ".puffin";
+  }
+
   // Co-locate the puffin file with the referenced data file so that a
   // partitioned V3 table's puffin blobs land in the same partition
   // sub-directory as their data files. Falling back to the location handle's
@@ -421,8 +430,6 @@ std::string IcebergDeletionVectorSink::puffinPathFor(
   } else {
     parentDir = dataFile.substr(0, lastSlash);
   }
-  const std::string uuid =
-      boost::uuids::to_string(boost::uuids::random_generator()());
   return parentDir + "/dv-" + uuid + ".puffin";
 }
 

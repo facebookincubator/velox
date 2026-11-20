@@ -536,6 +536,40 @@ TEST(DefaultLayoutPlannerTests, sharedDictionaryFollowsValueStream) {
           "r.c3(2).s"}));
 }
 
+TEST(DefaultLayoutPlannerTests, clusterIndexKeyStreamLeads) {
+  nimble::SchemaBuilder builder;
+  const auto keyStreamOffset = builder.createClusterIndexKeyStream();
+  NIMBLE_SCHEMA(
+      builder,
+      NIMBLE_ROW({
+          {"c1", NIMBLE_TINYINT()},
+          {"c2", NIMBLE_TINYINT()},
+      }));
+
+  // The key stream comes last, so the planner has to move it.
+  const auto namedTypes = getNamedTypes(*builder.root());
+  std::vector<nimble::Stream> streams;
+  streams.reserve(namedTypes.size() + 1);
+  for (const auto& [offset, name] : namedTypes) {
+    streams.push_back(nimble::Stream{offset, {{.content = {name}}}});
+  }
+  streams.push_back(
+      nimble::Stream{keyStreamOffset, {{.content = {"cluster index keys"}}}});
+
+  nimble::DefaultLayoutPlanner planner{&builder, std::nullopt};
+  streams = planner.getLayout(std::move(streams));
+
+  std::vector<std::string> streamNames;
+  streamNames.reserve(streams.size());
+  for (const auto& stream : streams) {
+    streamNames.emplace_back(stream.chunks.front().content.front());
+  }
+  EXPECT_EQ(
+      streamNames,
+      (std::vector<std::string>{
+          "cluster index keys", "r", "r.c1(0).s", "r.c2(1).s"}));
+}
+
 TEST(DefaultLayoutPlannerTests, nonFlatMapOrdinalsAreIgnored) {
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;

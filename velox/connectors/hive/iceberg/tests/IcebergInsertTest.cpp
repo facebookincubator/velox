@@ -213,6 +213,35 @@ TEST_F(IcebergInsertTest, singleColumnPartition) {
   }
 }
 
+TEST_F(IcebergInsertTest, flatLayoutKeepsPartitionValues) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto rowType = ROW({{"id", BIGINT()}, {"value", VARCHAR()}});
+  const auto vectors = createTestData(
+      rowType, /*numBatches=*/2, /*rowsPerBatch=*/50, /*nullRatio=*/0.0);
+  const std::vector<test::PartitionField> partitionFields = {
+      {0, TransformType::kIdentity, std::nullopt},
+  };
+
+  const auto commitTasks = createDataSinkAndAppendData(
+                               vectors,
+                               outputDirectory->getPath(),
+                               partitionFields,
+                               /*includePartitionPaths=*/false)
+                               ->close();
+
+  ASSERT_GT(commitTasks.size(), 1);
+  const auto files = listFiles(outputDirectory->getPath());
+  ASSERT_EQ(files.size(), commitTasks.size());
+  for (const auto& file : files) {
+    EXPECT_EQ(
+        std::filesystem::path(file).parent_path(),
+        std::filesystem::path(outputDirectory->getPath()));
+  }
+  for (const auto& task : commitTasks) {
+    EXPECT_TRUE(folly::parseJson(task).count("partitionDataJson"));
+  }
+}
+
 TEST_F(IcebergInsertTest, partitionNullColumn) {
   struct TestCase {
     std::string name;

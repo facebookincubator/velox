@@ -153,8 +153,11 @@ class IndexScanCursor final {
   /// keeps. The stripes of a scan read their keys from one key cursor, which
   /// starts with the key chunk that the seek of the scan found its first row
   /// in, and which the cursor releases after the last stripe. With prefetch
-  /// enabled, later calls rethrow a load failure until the next seek. Reset or
-  /// seek before reading again after a prefetched materialization failure.
+  /// enabled, later calls rethrow a load failure until the next seek. A stripe
+  /// that fails after its streams load stays the next stripe, so without
+  /// prefetch a call with the same 'row' retries it. A prefetched stripe has
+  /// left the prefetch queue, so reset or seek before reading again after it
+  /// fails. Calls fail until then.
   folly::coro::Task<std::unique_ptr<StripeMaterializer::Entries>> co_nextStripe(
       uint32_t row);
 
@@ -197,6 +200,9 @@ class IndexScanCursor final {
   const folly::Executor::KeepAlive<> prefetchExecutor_;
   // Maximum number of prefetched stripes queued ahead of the consumer.
   const uint32_t maxPrefetchStripes_;
+  // Number of batches that 'maxPrefetchStripes_' is split into, each loaded in
+  // one read.
+  const uint32_t numPrefetchBatches_;
   // Materializes stripes on the iterator caller.
   const std::shared_ptr<StripeMaterializer> stripeMaterializer_;
   // Contiguous file-row range selected by the active key bounds.

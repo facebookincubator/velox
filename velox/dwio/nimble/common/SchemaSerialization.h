@@ -23,19 +23,29 @@ namespace facebook::nimble {
 
 class SchemaSerializer {
  public:
-  SchemaSerializer();
+  /// Serializes schemas whose Hybrid FlatMap nodes serialize their groups with
+  /// `pool` (HybridFlatMap::serialize()), which must not be null to serialize
+  /// a Type that holds one.
+  explicit SchemaSerializer(velox::memory::MemoryPool* pool = nullptr);
 
   std::string_view serialize(const SchemaBuilder& builder);
 
   std::string_view serialize(const Type& type);
 
  private:
+  // See SchemaSerializer().
+  velox::memory::MemoryPool* const pool_;
   flatbuffers::FlatBufferBuilder builder_;
 };
 
 class SchemaDeserializer {
  public:
-  static std::shared_ptr<const Type> deserialize(std::string_view schema);
+  /// Reads the schema `schema` serializes, decoding the encoded group keys of
+  /// Hybrid FlatMap nodes from `pool`, which a schema with a Hybrid FlatMap
+  /// requires (SchemaReader::getSchema()).
+  static std::shared_ptr<const Type> deserialize(
+      std::string_view schema,
+      velox::memory::MemoryPool* pool = nullptr);
 };
 
 } // namespace facebook::nimble

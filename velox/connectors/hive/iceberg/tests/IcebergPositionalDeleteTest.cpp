@@ -316,8 +316,6 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
     deleteFilePaths.reserve(deleteFiles.size());
 
     for (const auto& deleteFile : deleteFiles) {
-      auto deleteFilePath = TempFilePath::create();
-
       std::vector<RowVectorPtr> deleteFileVectors;
       int64_t totalPositionsInDeleteFile = 0;
 
@@ -338,7 +336,7 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
             static_cast<int64_t>(deleteFileRowGroup.positions.size());
       }
 
-      writeToFile(deleteFilePath->getPath(), deleteFileVectors);
+      auto deleteFilePath = writeToFile(deleteFileVectors);
       deleteFilePaths[deleteFile.name] =
           std::make_pair(totalPositionsInDeleteFile, deleteFilePath);
     }

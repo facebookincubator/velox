@@ -194,14 +194,19 @@ struct PointLookupCoverage {
     /// Counts rows the lookups returned, and rows chunk stats skipped.
     uint64_t numMatchedRows{0};
     uint64_t numChunkSkippedRows{0};
+
+    /// Counts lookups whose file the connector would skip without reading it,
+    /// because the file statistics of a filtered column show that no row
+    /// passes that column's filter.
+    uint64_t numLookupsPrunedByFileStats{0};
   };
 
   /// Keyed by the number of filtered columns.
   std::map<uint32_t, LookupCounts> byNumColumns;
 
   /// Keyed by column type, such as BIGINT, then by filter kind: equal, in,
-  /// atMost, atLeast, between, isNull or isNotNull. A lookup counts once under
-  /// each of its filters.
+  /// atMost, atLeast, between, aboveMax, isNull or isNotNull. A lookup counts
+  /// once under each of its filters.
   std::map<std::string, std::map<std::string, LookupCounts>> byType;
 
   /// Keyed by "anchored" or "unanchored", then by the power-of-two floor of the
@@ -449,7 +454,11 @@ class NimbleWriterFuzzer {
       uint64_t iterationSeed);
 
   // Validates the chunk-stats section against independently parsed and decoded
-  // physical chunks, and records which metadata shapes were exercised.
+  // physical chunks, and records which metadata shapes were exercised. Checks
+  // two things about the bounds of every chunk:
+  // - They equal the bounds predicted with the writer's rules.
+  // - They hold every value of the chunk, NaN counting as larger than every
+  //   other value, whatever those rules are.
   // 'flushRegime' and 'metadataFlushThreshold' name the writer settings drawn
   // for the file, which key its stripe and stripe-group counts.
   void verifyChunkStatsMetadata(
@@ -459,8 +468,12 @@ class NimbleWriterFuzzer {
       std::string_view flushRegime,
       std::string_view metadataFlushThreshold);
 
-  // Verifies file-level column statistics (value count, null count, min, max)
-  // against the data that was actually written.
+  // Verifies file-level column statistics against the data that was actually
+  // written:
+  // - Value count, null count, min and max equal the values predicted with the
+  //   writer's rules.
+  // - Every stored min/max holds the node's values, NaN counting as larger than
+  //   every other value, whatever those rules are.
   void verifyColumnStatistics(
       const std::string& file,
       const velox::RowTypePtr& schema,
@@ -489,7 +502,11 @@ class NimbleWriterFuzzer {
   // return many rows. Checks the returned rows against the input rows all
   // filters accept. Chunk stats let the reader skip chunks that cannot match,
   // and each skip seeks with the chunk index, so a wrong stat, merged skip
-  // range or lookup returns the wrong rows.
+  // range or lookup returns the wrong rows. Also runs the connector's check
+  // for skipping the whole file by its column statistics, and fails when it
+  // would skip a file holding a row that passes every filter. Unanchored
+  // lookups can filter above a column's largest value, which only NaN rows
+  // pass.
   void verifyPointLookup(
       const std::string& file,
       const velox::RowTypePtr& schema,

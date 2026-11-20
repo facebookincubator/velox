@@ -514,19 +514,16 @@ TEST_F(IcebergGeospatialReadTest, geometryHashJoinWithDynamicFilterPushdown) {
   auto buildData = makeNamedRowVector(
       "bgeom", makeGeometryVector({toVeloxGeospatial(matchWkt)}));
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId scanId;
-  test::IcebergPlanBuilder planBuilder(planNodeIdGenerator);
-  auto plan = planBuilder.startTableScan()
+  test::IcebergPlanBuilder builder;
+  auto plan = builder.startTableScan()
                   .outputType(ROW({"id", "geom"}, {BIGINT(), GEOMETRY()}))
                   .endTableScan()
                   .capturePlanNodeId(scanId)
                   .hashJoin(
                       {"geom"},
                       {"bgeom"},
-                      exec::test::PlanBuilder(planNodeIdGenerator)
-                          .values({buildData})
-                          .planNode(),
+                      builder.newPlan().values(buildData).planNode(),
                       /*filter=*/"",
                       {"id"})
                   .planNode();
@@ -1376,8 +1373,7 @@ TEST_F(IcebergGeospatialReadTest, hiveConnectorDoesNotConvert) {
   }
   auto data = makeNamedRowVector("geom", makeVarbinaryVector(wkb));
 
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  auto filePath = writeToFile(data);
 
   auto plan = exec::test::PlanBuilder()
                   .tableScan(ROW({"geom"}, {GEOMETRY()}))
@@ -1481,8 +1477,7 @@ TEST_F(IcebergGeospatialReadTest, nonParquetGeometryIsRejected) {
   fileFormat_ = dwio::common::FileFormat::DWRF;
   const auto wkb = toWkb("POINT (1 2)");
   auto data = makeNamedRowVector("geom", makeVarbinaryVector({wkb}));
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  auto filePath = writeToFile(data);
 
   auto plan = makeIcebergTableScanPlan(ROW({"geom"}, {GEOMETRY()}));
   VELOX_ASSERT_THROW(

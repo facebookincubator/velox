@@ -409,11 +409,15 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
  public:
   /// Constructs a hook bound to the given dictionary visitor.
   /// 'filterCache' is the visitor's per-index verdict cache. It may be null
-  /// for reads without a filter.
+  /// for reads without a filter. 'dictionarySize' is the number of dictionary
+  /// entries.
   FusedDictionaryIndicesHook(
       DictionaryVisitor& visitor,
-      const uint8_t* filterCache)
-      : visitor_{visitor}, filterCache_{filterCache} {}
+      const uint8_t* filterCache,
+      uint64_t dictionarySize)
+      : visitor_{visitor},
+        filterCache_{filterCache},
+        dictionarySize_{dictionarySize} {}
 
   bool acceptsNulls() const final {
     return false;
@@ -426,6 +430,16 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
     processNulls(row);
     NIMBLE_DCHECK(
         !visitor_.atEnd(), "Dictionary visitor received an extra index");
+
+    // process() narrows the index to the visitor's index type. For SMALLINT
+    // that drops the high bits, so check the full index first.
+    if constexpr (
+        sizeof(typename DictionaryVisitor::DataType) < sizeof(int32_t)) {
+      NIMBLE_CHECK_FILE_LT(
+          static_cast<uint64_t>(index),
+          dictionarySize_,
+          "Dictionary index must be less than the dictionary size");
+    }
     bool atEnd{false};
     visitor_.process(index, atEnd);
   }
@@ -602,7 +616,10 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
         }
       }
     }
-    NIMBLE_DCHECK_EQ(outputPosition, passingPosition);
+    NIMBLE_CHECK_EQ(
+        outputPosition,
+        passingPosition,
+        "Merged nulls must fill the gaps in the filtered output exactly");
     visitor_.addNumValues(numNulls);
   }
 
@@ -646,6 +663,9 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
 
   // Verdict per dictionary index, filled by the visitor's processBulk().
   const uint8_t* filterCache_;
+
+  // Number of dictionary entries. Each index from addValue() must be below it.
+  const uint64_t dictionarySize_;
 
   // Hook paths this read took. Outside fuzzer builds it is an empty type whose
   // record methods do nothing, so the hook pays nothing.
@@ -723,7 +743,7 @@ void DictionaryEncoding<T>::readWithVisitor(
       // The filter applies to dictionary values, not indices, so decode indices
       // unfiltered and let the dictionary visitor translate and filter them.
       detail::FusedDictionaryIndicesHook<DictionaryVisitor> dictionaryHook{
-          dictionaryVisitor, dictionaryState.filterCache};
+          dictionaryVisitor, dictionaryState.filterCache, alphabet_.size()};
       detail::ForwardingIndicesHook indicesHook{dictionaryHook};
       using IndicesExtract =
           velox::dwio::common::ExtractToHook<detail::ForwardingIndicesHook>;

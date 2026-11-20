@@ -36,7 +36,7 @@ static std::string_view kAzuriteSearchPath{":/usr/bin/azurite"};
 
 class AzuriteServer {
  public:
-  AzuriteServer(int64_t port);
+  AzuriteServer(uint16_t port);
 
   const std::string connectionStr() const;
 
@@ -67,7 +67,7 @@ class AzuriteServer {
   virtual ~AzuriteServer();
 
  private:
-  int64_t port_;
+  uint16_t port_;
   const std::string account_{"test"};
   const std::string container_{"test"};
   const std::string file_{"test_file.txt"};

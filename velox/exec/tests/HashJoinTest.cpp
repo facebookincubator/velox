@@ -28,6 +28,7 @@
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/HashProbe.h"
+#include "velox/exec/HashProbeStatNames.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -39,6 +40,7 @@
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
@@ -146,23 +148,22 @@ TEST_P(MultiThreadedHashJoinTest, spillEnabledJoinWithPartialLimit) {
   auto buildVector = makeNamedRowVector(
       "u_key", makeFlatVector<int64_t>(999, [](auto row) { return row; }));
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({probeVector})
-          .localPartition({"t_key"})
-          .hashJoin(
-              {"t_key"},
-              {"u_key"},
-              PlanBuilder(planNodeIdGenerator).values({buildVector}).planNode(),
-              "",
-              {"t_key", "match"},
-              core::JoinType::kLeftSemiProject,
-              true)
-          .filter("not(match)")
-          .project({"t_key"})
-          .limit(0, 1, true)
-          .planNode();
+  PlanBuilder builder;
+  auto plan = builder.newPlan()
+                  .values(probeVector)
+                  .localPartition({"t_key"})
+                  .hashJoin(
+                      {"t_key"},
+                      {"u_key"},
+                      builder.newPlan().values(buildVector).planNode(),
+                      "",
+                      {"t_key", "match"},
+                      core::JoinType::kLeftSemiProject,
+                      true)
+                  .filter("not(match)")
+                  .project({"t_key"})
+                  .limit(0, 1, true)
+                  .planNode();
 
   for (const auto injectSpill : {false, true}) {
     SCOPED_TRACE(fmt::format("injectSpill: {}", injectSpill));
@@ -192,20 +193,19 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesLastProber) {
   auto buildVector = makeNamedRowVector(
       "u_key", makeFlatVector<int64_t>(1'000, [](auto row) { return row; }));
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({probeVector})
-          .localPartition({"t_key"})
-          .hashJoin(
-              {"t_key"},
-              {"u_key"},
-              PlanBuilder(planNodeIdGenerator).values({buildVector}).planNode(),
-              "",
-              {"u_key"},
-              core::JoinType::kRight)
-          .limit(0, 1, true)
-          .planNode();
+  PlanBuilder builder;
+  auto plan = builder.newPlan()
+                  .values(probeVector)
+                  .localPartition({"t_key"})
+                  .hashJoin(
+                      {"t_key"},
+                      {"u_key"},
+                      builder.newPlan().values(buildVector).planNode(),
+                      "",
+                      {"u_key"},
+                      core::JoinType::kRight)
+                  .limit(0, 1, true)
+                  .planNode();
 
   const std::vector<bool> injectSpills = parallelBuildSideRowsEnabled_
       ? std::vector<bool>{false}
@@ -299,8 +299,8 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBeforeBarrier) {
            })}));
     }
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    PlanBuilder builder;
+    auto plan = builder.newPlan()
                     .values(probeVectors)
                     // Send all probe input to one driver so that this driver
                     // closes early while its peers wait at the barrier.
@@ -308,9 +308,7 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBeforeBarrier) {
                     .hashJoin(
                         {"t_key"},
                         {"u_key"},
-                        PlanBuilder(planNodeIdGenerator)
-                            .values({buildVector})
-                            .planNode(),
+                        builder.newPlan().values(buildVector).planNode(),
                         "",
                         {"t_key", "u_key"},
                         testParam.joinType)
@@ -349,7 +347,8 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBeforeBarrier) {
     ASSERT_LE(result->size(), 5 * numDrivers_);
 
     auto remainingExpected = fullResults;
-    const auto actualRows = materialize(result);
+    const auto actualRows =
+        velox::test::VectorAssertions::toVariantRows(result);
     for (vector_size_t row = 0; row < actualRows.size(); ++row) {
       const auto expectedIt = remainingExpected.find(actualRows[row]);
       ASSERT_NE(expectedIt, remainingExpected.end())
@@ -399,16 +398,14 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBetweenSpillRounds) {
           "(SELECT 1 FROM t WHERE t.t_key = u.u_key) FROM u";
     }
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan = PlanBuilder(planNodeIdGenerator)
-                    .values({probeVector})
+    PlanBuilder builder;
+    auto plan = builder.newPlan()
+                    .values(probeVector)
                     .localPartition({"t_key"})
                     .hashJoin(
                         {"t_key"},
                         {"u_key"},
-                        PlanBuilder(planNodeIdGenerator)
-                            .values({buildVector})
-                            .planNode(),
+                        builder.newPlan().values(buildVector).planNode(),
                         "",
                         outputLayout,
                         joinType)
@@ -432,7 +429,8 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBetweenSpillRounds) {
     ASSERT_LE(result->size(), 5 * numDrivers_);
 
     auto remainingExpected = fullResults;
-    const auto actualRows = materialize(result);
+    const auto actualRows =
+        velox::test::VectorAssertions::toVariantRows(result);
     for (vector_size_t row = 0; row < actualRows.size(); ++row) {
       const auto expectedIt = remainingExpected.find(actualRows[row]);
       ASSERT_NE(expectedIt, remainingExpected.end())
@@ -826,20 +824,19 @@ TEST_P(MultiThreadedHashJoinTest, nullAsValueAntiJoin) {
       {makeNullableFlatVector<int32_t>({1, 2}),
        makeNullableFlatVector<int32_t>({std::nullopt, 4})});
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({probeVector})
-          .hashJoin(
-              {"c0", "c1"},
-              {"u0", "u1"},
-              PlanBuilder(planNodeIdGenerator).values({buildVector}).planNode(),
-              "",
-              {"c0", "c1"},
-              core::JoinType::kAnti,
-              /*nullAware=*/false,
-              /*nullAsValue=*/true)
-          .planNode();
+  PlanBuilder builder;
+  auto plan = builder.newPlan()
+                  .values(probeVector)
+                  .hashJoin(
+                      {"c0", "c1"},
+                      {"u0", "u1"},
+                      builder.newPlan().values(buildVector).planNode(),
+                      "",
+                      {"c0", "c1"},
+                      core::JoinType::kAnti,
+                      /*nullAware=*/false,
+                      /*nullAsValue=*/true)
+                  .planNode();
   AssertQueryBuilder(plan).assertResults(makeRowVector(
       {"c0", "c1"},
       {makeNullableFlatVector<int32_t>({2}),
@@ -859,20 +856,19 @@ TEST_P(MultiThreadedHashJoinTest, nullAsValueSemiJoin) {
       {makeNullableFlatVector<int32_t>({1, 2}),
        makeNullableFlatVector<int32_t>({std::nullopt, 4})});
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({probeVector})
-          .hashJoin(
-              {"c0", "c1"},
-              {"u0", "u1"},
-              PlanBuilder(planNodeIdGenerator).values({buildVector}).planNode(),
-              "",
-              {"c0", "c1"},
-              core::JoinType::kLeftSemiFilter,
-              /*nullAware=*/false,
-              /*nullAsValue=*/true)
-          .planNode();
+  PlanBuilder builder;
+  auto plan = builder.newPlan()
+                  .values(probeVector)
+                  .hashJoin(
+                      {"c0", "c1"},
+                      {"u0", "u1"},
+                      builder.newPlan().values(buildVector).planNode(),
+                      "",
+                      {"c0", "c1"},
+                      core::JoinType::kLeftSemiFilter,
+                      /*nullAware=*/false,
+                      /*nullAsValue=*/true)
+                  .planNode();
   AssertQueryBuilder(plan).assertResults(makeRowVector(
       {"c0", "c1"},
       {makeNullableFlatVector<int32_t>({1}),
@@ -1525,26 +1521,24 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
         });
   });
 
-  std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
-  writeToFile(probeFile->getPath(), probeVectors);
+  auto probeFile = writeToFile(probeVectors);
 
-  std::shared_ptr<TempFilePath> buildFile = TempFilePath::create();
-  writeToFile(buildFile->getPath(), buildVectors);
+  auto buildFile = writeToFile(buildVectors);
 
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
 
   core::PlanNodeId probeScanId;
   core::PlanNodeId buildScanId;
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(asRowType(probeVectors[0]->type()))
+  PlanBuilder builder;
+  auto plan = builder.newPlan()
+                  .tableScan(probeVectors[0]->rowType())
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
                       {"t0"},
                       {"u0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .tableScan(asRowType(buildVectors[0]->type()))
+                      builder.newPlan()
+                          .tableScan(buildVectors[0]->rowType())
                           .capturePlanNodeId(buildScanId)
                           .planNode(),
                       "",
@@ -1572,21 +1566,24 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
       .run();
 
   // With extra filter.
-  planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  plan = PlanBuilder(planNodeIdGenerator)
-             .tableScan(asRowType(probeVectors[0]->type()))
+  plan = builder.newPlan()
+             .tableScan(probeVectors[0]->rowType())
              .capturePlanNodeId(probeScanId)
              .hashJoin(
                  {"t0"},
                  {"u0"},
-                 PlanBuilder(planNodeIdGenerator)
-                     .tableScan(asRowType(buildVectors[0]->type()))
+                 builder.newPlan()
+                     .tableScan(buildVectors[0]->rowType())
                      .capturePlanNodeId(buildScanId)
                      .planNode(),
                  "(t1 + u1) % 3 = 0",
                  {"t0", "t1"},
                  core::JoinType::kLeftSemiFilter)
              .planNode();
+  splitPaths = {
+      {probeScanId, {probeFile->getPath()}},
+      {buildScanId, {buildFile->getPath()}},
+  };
 
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(plan)
@@ -1693,14 +1690,14 @@ TEST_P(HashJoinTest, nullAwareRightAntiJoinIsRejected) {
   auto buildVector = makeNamedRowVector(
       "u0", makeFlatVector<int32_t>(10, [](auto row) { return row; }));
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   VELOX_ASSERT_THROW(
-      PlanBuilder(planNodeIdGenerator)
-          .values({probeVector})
+      builder.newPlan()
+          .values(probeVector)
           .hashJoin(
               {"t0"},
               {"u0"},
-              PlanBuilder(planNodeIdGenerator).values({buildVector}).planNode(),
+              builder.newPlan().values(buildVector).planNode(),
               /*filter=*/"",
               {"u0"},
               core::JoinType::kRightAnti,
@@ -2276,10 +2273,10 @@ TEST_P(HashJoinTest, bloomFilterLocalProbe) {
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(1)
         .injectSpill(true)
-        .probeType(asRowType(probe->type()))
+        .probeType(probe->rowType())
         .probeKeys({"t_k0"})
         .probeVectors({probe})
-        .buildType(asRowType(build->type()))
+        .buildType(build->rowType())
         .buildKeys({"u_k0"})
         .buildVectors({build})
         .joinType(testCase.joinType)
@@ -2292,11 +2289,15 @@ TEST_P(HashJoinTest, bloomFilterLocalProbe) {
         .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
           const auto testedRows =
               getOperatorRuntimeStats(
-                  task, 1, std::string(HashProbe::kBloomFilterTestedRows))
+                  task,
+                  1,
+                  std::string(HashProbeStatNames::kBloomFilterTestedRows))
                   .sum;
           const auto acceptedRows =
               getOperatorRuntimeStats(
-                  task, 1, std::string(HashProbe::kBloomFilterAcceptedRows))
+                  task,
+                  1,
+                  std::string(HashProbeStatNames::kBloomFilterAcceptedRows))
                   .sum;
           if (hasSpill) {
             verifiedSpillRun = true;
@@ -2352,10 +2353,10 @@ TEST_P(HashJoinTest, bloomFilterLocalProbeInt32Keys) {
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(1)
       .injectSpill(false)
-      .probeType(asRowType(probe->type()))
+      .probeType(probe->rowType())
       .probeKeys({"t_k0", "t_k1"})
       .probeVectors({probe})
-      .buildType(asRowType(build->type()))
+      .buildType(build->rowType())
       .buildKeys({"u_k0", "u_k1"})
       .buildVectors({build})
       .joinType(core::JoinType::kLeft)
@@ -2371,11 +2372,15 @@ TEST_P(HashJoinTest, bloomFilterLocalProbeInt32Keys) {
         ASSERT_FALSE(hasSpill);
         const auto testedRows =
             getOperatorRuntimeStats(
-                task, 1, std::string(HashProbe::kBloomFilterTestedRows))
+                task,
+                1,
+                std::string(HashProbeStatNames::kBloomFilterTestedRows))
                 .sum;
         const auto acceptedRows =
             getOperatorRuntimeStats(
-                task, 1, std::string(HashProbe::kBloomFilterAcceptedRows))
+                task,
+                1,
+                std::string(HashProbeStatNames::kBloomFilterAcceptedRows))
                 .sum;
         EXPECT_EQ(testedRows, numRows);
         EXPECT_GE(acceptedRows, numRows * 50 / 100);
@@ -2433,10 +2438,10 @@ TEST_P(HashJoinTest, bypassBloomFilterLocalProbe) {
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .numDrivers(1)
         .injectSpill(false)
-        .probeType(asRowType(sampleProbe->type()))
+        .probeType(sampleProbe->rowType())
         .probeKeys({"t_k0"})
         .probeVectors({sampleProbe, remainingProbe})
-        .buildType(asRowType(build->type()))
+        .buildType(build->rowType())
         .buildKeys({"u_k0"})
         .buildVectors({build})
         .joinType(testCase.joinType)
@@ -2452,15 +2457,21 @@ TEST_P(HashJoinTest, bypassBloomFilterLocalProbe) {
           ASSERT_FALSE(hasSpill);
           const auto testedRows =
               getOperatorRuntimeStats(
-                  task, 1, std::string(HashProbe::kBloomFilterTestedRows))
+                  task,
+                  1,
+                  std::string(HashProbeStatNames::kBloomFilterTestedRows))
                   .sum;
           const auto acceptedRows =
               getOperatorRuntimeStats(
-                  task, 1, std::string(HashProbe::kBloomFilterAcceptedRows))
+                  task,
+                  1,
+                  std::string(HashProbeStatNames::kBloomFilterAcceptedRows))
                   .sum;
           const auto bypassed =
               getOperatorRuntimeStats(
-                  task, 1, std::string(HashProbe::kBloomFilterBypassed))
+                  task,
+                  1,
+                  std::string(HashProbeStatNames::kBloomFilterBypassed))
                   .sum;
           EXPECT_EQ(100, testedRows);
           EXPECT_EQ(100, acceptedRows);
@@ -2482,10 +2493,10 @@ TEST_P(HashJoinTest, bypassBloomFilterLocalProbeWithoutSampling) {
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(1)
       .injectSpill(false)
-      .probeType(asRowType(probe->type()))
+      .probeType(probe->rowType())
       .probeKeys({"t_k0"})
       .probeVectors({probe})
-      .buildType(asRowType(build->type()))
+      .buildType(build->rowType())
       .buildKeys({"u_k0"})
       .buildVectors({build})
       .joinType(core::JoinType::kLeft)
@@ -2500,11 +2511,15 @@ TEST_P(HashJoinTest, bypassBloomFilterLocalProbeWithoutSampling) {
         ASSERT_FALSE(hasSpill);
         const auto testedRows =
             getOperatorRuntimeStats(
-                task, 1, std::string(HashProbe::kBloomFilterTestedRows))
+                task,
+                1,
+                std::string(HashProbeStatNames::kBloomFilterTestedRows))
                 .sum;
         const auto acceptedRows =
             getOperatorRuntimeStats(
-                task, 1, std::string(HashProbe::kBloomFilterAcceptedRows))
+                task,
+                1,
+                std::string(HashProbeStatNames::kBloomFilterAcceptedRows))
                 .sum;
         EXPECT_EQ(0, testedRows);
         EXPECT_EQ(0, acceptedRows);

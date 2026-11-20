@@ -212,4 +212,22 @@ std::optional<std::vector<int32_t>> HiveBucketPruning::buckets(
   return std::vector<int32_t>(buckets.begin(), buckets.end());
 }
 
+std::optional<std::vector<bool>> HiveBucketPruning::allowedBuckets(
+    const HiveBucketProperty& bucketProperty,
+    const std::vector<const common::Filter*>& filters) {
+  if (bucketProperty.kind() != HiveBucketProperty::Kind::kHiveCompatible) {
+    return std::nullopt;
+  }
+  const auto bucketList = buckets(
+      filters, bucketProperty.bucketedTypes(), bucketProperty.bucketCount());
+  if (!bucketList.has_value()) {
+    return std::nullopt;
+  }
+  std::vector<bool> allowed(bucketProperty.bucketCount(), false);
+  for (auto bucket : *bucketList) {
+    allowed[bucket] = true;
+  }
+  return allowed;
+}
+
 } // namespace facebook::velox::connector::hive

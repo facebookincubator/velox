@@ -30,6 +30,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h" // @manual
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
@@ -216,7 +217,7 @@ class ParquetTableScanTest : public ParquetTableScanTestBase {
     auto file = TempFilePath::create();
     writeToParquetFile(file->getPath(), {vector}, options);
     loadData(
-        asRowType(vector->type()),
+        vector->rowType(),
         makeRowVector(
             {"t"},
             {
@@ -510,7 +511,7 @@ TEST_F(ParquetTableScanTest, lazy) {
     rows += result->size();
   }
   ASSERT_EQ(rows, 20);
-  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*cursor->task()));
 }
 
 TEST_F(ParquetTableScanTest, aggregatePushdown) {
@@ -1021,7 +1022,7 @@ TEST_F(ParquetTableScanTest, readAsLowerCase) {
 
   // Wait for all tasks to be deleted to avoid race condition between async IO
   // preloading and TempFilePath destruction.
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 
   // Test reading table with non-ascii names.
   auto vectorsNonAsciiNames = {makeRowVector(
@@ -1051,7 +1052,7 @@ TEST_F(ParquetTableScanTest, readAsLowerCase) {
       .split(makeSplit(filePath2->getPath()))
       .assertResults("SELECT * FROM tmp");
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(ParquetTableScanTest, rowIndex) {
@@ -1330,7 +1331,7 @@ TEST_F(ParquetTableScanTest, timestampConvertedType) {
       {
           makeFlatVector<Timestamp>(values),
       });
-  const auto schema = asRowType(vector->type());
+  const auto schema = vector->rowType();
   loadData(schema, vector);
 
   assertSelectWithFilter(
@@ -1348,7 +1349,7 @@ TEST_F(ParquetTableScanTest, timestampPrecisionMicrosecond) {
       makeFlatVector<Timestamp>(
           kSize, [](auto i) { return Timestamp(i, i * 1'001'001); }),
   });
-  auto schema = asRowType(vector->type());
+  auto schema = vector->rowType();
   for (const auto writeInt96 : {true, false}) {
     auto file = TempFilePath::create();
     ParquetWriterOptions options;
@@ -1858,7 +1859,7 @@ TEST_F(ParquetTableScanTest, booleanRle) {
           makeFlatVector<bool>(100, allFalse),
           makeFlatVector<bool>(100, randomTrueFalse, randomNull),
       });
-  auto schema = asRowType(vector->type());
+  auto schema = vector->rowType();
   auto file = TempFilePath::create();
   writeToParquetFile(file->getPath(), {vector}, options);
   loadData(schema, vector);
@@ -1914,7 +1915,7 @@ TEST_F(ParquetTableScanTest, singleBooleanRle) {
           makeFlatVector<bool>(std::vector<bool>{false}),
           makeNullableFlatVector<bool>({std::nullopt}),
       });
-  auto schema = asRowType(vector->type());
+  auto schema = vector->rowType();
   auto file = TempFilePath::create();
   writeToParquetFile(file->getPath(), {vector}, options);
   loadData(schema, vector);
@@ -2234,18 +2235,16 @@ TEST_F(ParquetTableScanTest, longDecimalDynamicFilterPushdown) {
   ParquetWriterOptions options;
   writeToParquetFile(filePath->getPath(), {fact}, options);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId probeScanId;
   core::PlanNodeId joinId;
-  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(asRowType(fact->type()))
+  auto plan = builder.newPlan()
+                  .tableScan(fact->rowType())
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
                       {"k"},
                       {"dk"},
-                      PlanBuilder(planNodeIdGenerator, pool_.get())
-                          .values({build})
-                          .planNode(),
+                      builder.newPlan().values(build).planNode(),
                       "",
                       {"k", "payload", "dim_payload"})
                   .capturePlanNodeId(joinId)
@@ -2311,18 +2310,16 @@ TEST_F(ParquetTableScanTest, longDecimalDynamicFilterReplacement) {
   ParquetWriterOptions options;
   writeToParquetFile(filePath->getPath(), {fact}, options);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId probeScanId;
   core::PlanNodeId joinId;
-  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
-                  .tableScan(asRowType(fact->type()))
+  auto plan = builder.newPlan()
+                  .tableScan(fact->rowType())
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
                       {"k"},
                       {"dk"},
-                      PlanBuilder(planNodeIdGenerator, pool_.get())
-                          .values({build})
-                          .planNode(),
+                      builder.newPlan().values(build).planNode(),
                       "",
                       {"k"})
                   .capturePlanNodeId(joinId)
@@ -2467,8 +2464,7 @@ TEST_F(ParquetTableScanTest, fileFormatRuntimeStats) {
   ParquetWriterOptions parquetOptions;
   writeToParquetFile(parquetFile->getPath(), vectors, parquetOptions);
 
-  auto dwrfFile = TempFilePath::create();
-  writeToFile(dwrfFile->getPath(), vectors);
+  auto dwrfFile = writeToFile(vectors);
 
   // DuckDB reference table with data from both files.
   std::vector<RowVectorPtr> allVectors = {vector, vector};
@@ -2479,7 +2475,7 @@ TEST_F(ParquetTableScanTest, fileFormatRuntimeStats) {
   auto dwrfSplit = makeHiveConnectorSplits(
       dwrfFile->getPath(), 1, dwio::common::FileFormat::DWRF);
 
-  auto plan = PlanBuilder().tableScan(asRowType(vectors[0]->type())).planNode();
+  auto plan = PlanBuilder().tableScan(vectors[0]->rowType()).planNode();
 
   auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
                   .splits({parquetSplit[0], dwrfSplit[0]})
@@ -2492,7 +2488,7 @@ TEST_F(ParquetTableScanTest, fileFormatRuntimeStats) {
   ASSERT_EQ(stats.at("fileFormat.dwrf").sum, 1);
 
   task.reset();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(ParquetTableScanTest, structSkipNulls) {
@@ -2510,7 +2506,7 @@ TEST_F(ParquetTableScanTest, structSkipNulls) {
       [](vector_size_t /*row*/) { return true; });
 
   auto data = makeRowVector({"id", "s"}, {id, structColumn});
-  auto dataType = asRowType(data->type());
+  auto dataType = data->rowType();
 
   auto filePath = TempFilePath::create();
   ParquetWriterOptions options;

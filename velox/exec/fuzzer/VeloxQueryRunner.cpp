@@ -32,6 +32,7 @@
 #include "velox/functions/prestosql/types/UuidType.h"
 #include "velox/functions/prestosql/types/parser/TypeParser.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 
 using namespace facebook::velox::runner;
 
@@ -225,7 +226,7 @@ VeloxQueryRunner::execute(const core::PlanNodePtr& plan) {
   if (*response.success()) {
     LOG(INFO) << "Reference eval succeeded.";
     return std::make_pair(
-        exec::test::materialize(
+        velox::test::VectorAssertions::toMultiset(
             deserializeBatches(*response.results(), pool_.get())),
         ReferenceQueryErrorCode::kSuccess);
   } else {

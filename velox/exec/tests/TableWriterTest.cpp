@@ -29,6 +29,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 #include <folly/ScopeGuard.h>
@@ -38,7 +39,9 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/exec/TableWriterStatNames.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 namespace velox::exec::test {
 using namespace facebook::velox::common::testutil;
@@ -56,12 +59,11 @@ TEST_F(BasicTableWriterTest, roundTrip) {
           size, [](auto row) { return row * 2; }, nullEvery(7)),
   });
 
-  auto sourceFilePath = TempFilePath::create();
-  writeToFile(sourceFilePath->getPath(), data);
+  auto sourceFilePath = writeToFile(data);
 
   auto targetDirectoryPath = TempDirectoryPath::create();
 
-  auto rowType = asRowType(data->type());
+  auto rowType = data->rowType();
   auto plan = PlanBuilder()
                   .tableScan(rowType)
                   .tableWrite(targetDirectoryPath->getPath())
@@ -143,7 +145,6 @@ TEST_F(BasicTableWriterTest, structAsMap) {
                           {"orc.map.flat.cols", "0"},
                           {"orc.map.flat.cols.struct.keys", "[[\"1\", \"2\"]]"},
                       },
-                      nullptr,
                       fileName,
                       common::CompressionKind_NONE,
                       outputType)
@@ -177,7 +178,6 @@ TEST_F(BasicTableWriterTest, targetFileName) {
                       directory->getPath(),
                       dwio::common::FileFormat::DWRF,
                       {},
-                      nullptr,
                       kFileName)
                   .planNode();
   auto results = AssertQueryBuilder(plan).copyResults(pool());
@@ -187,7 +187,7 @@ TEST_F(BasicTableWriterTest, targetFileName) {
   auto fileWriteInfos = detail["fileWriteInfos"];
   ASSERT_EQ(1, fileWriteInfos.size());
   ASSERT_EQ(fileWriteInfos[0]["writeFileName"].asString(), kFileName);
-  plan = PlanBuilder().tableScan(asRowType(data->type())).planNode();
+  plan = PlanBuilder().tableScan(data->rowType()).planNode();
   AssertQueryBuilder(plan)
       .split(makeHiveConnectorSplit(
           fmt::format("{}/{}", directory->getPath(), kFileName)))
@@ -219,7 +219,7 @@ TEST_F(BasicTableWriterTest, writerRuntimeStatsReachOperatorStats) {
   auto plan =
       PlanBuilder().values({data}).tableWrite(directory->getPath()).planNode();
 
-  std::shared_ptr<Task> task;
+  TaskPtr task;
   AssertQueryBuilder(plan).copyResults(pool(), task);
 
   auto taskStats = task->taskStats();
@@ -245,6 +245,42 @@ TEST_F(BasicTableWriterTest, writerRuntimeStatsReachOperatorStats) {
           .at(std::string{Operator::kBackgroundCpuTimeNanos})
           .sum,
       kInjectedNanos);
+}
+
+TEST_F(BasicTableWriterTest, flatMapConversionRuntimeStats) {
+  std::vector<RowVectorPtr> batches;
+  int64_t numEntries{0};
+  for (auto i = 0; i < 3; ++i) {
+    auto map = makeMapVector<int64_t, int64_t>(
+        100,
+        [i](auto row) { return (row + i) % 4; },
+        [](auto row) { return row; },
+        [](auto row) { return row * 2; });
+    numEntries += map->mapKeys()->size();
+    batches.push_back(makeRowVector({FlatMapVector::fromMapVector(*map)}));
+  }
+
+  auto directory = TempDirectoryPath::create();
+  core::PlanNodeId tableWriteNodeId;
+  auto plan = PlanBuilder()
+                  .values(batches)
+                  .tableWrite(directory->getPath())
+                  .capturePlanNodeId(tableWriteNodeId)
+                  .planNode();
+
+  TaskPtr task;
+  AssertQueryBuilder(plan).copyResults(pool(), task);
+
+  const auto stats =
+      PlanNodeStats::extract(task->taskStats(), tableWriteNodeId);
+  const auto& conversions = stats.customStat(FlatMapVector::kNumMapConversions);
+  ASSERT_EQ(conversions.count, batches.size());
+  ASSERT_EQ(conversions.sum, batches.size());
+  ASSERT_EQ(
+      stats.customSum(FlatMapVector::kNumMapConversionEntries), numEntries);
+  ASSERT_EQ(
+      stats.customStat(FlatMapVector::kMapConversionWallNanos).count,
+      batches.size());
 }
 
 class PartitionedTableWriterTest
@@ -676,11 +712,8 @@ class AllTableWriterTest : public TableWriterTestBase,
 
 // Runs a pipeline with read + filter + project (with substr) + write.
 TEST_P(AllTableWriterTest, scanFilterProjectWrite) {
-  auto filePaths = makeFilePaths(5);
-  auto vectors = makeVectors(filePaths.size(), 500);
-  for (int i = 0; i < filePaths.size(); i++) {
-    writeToFile(filePaths[i]->getPath(), vectors[i]);
-  }
+  auto vectors = makeVectors(5, 500);
+  auto filePaths = writeToFiles(vectors);
 
   createDuckDbTable(vectors);
 
@@ -730,11 +763,8 @@ TEST_P(AllTableWriterTest, scanFilterProjectWrite) {
 }
 
 TEST_P(AllTableWriterTest, renameAndReorderColumns) {
-  auto filePaths = makeFilePaths(5);
-  auto vectors = makeVectors(filePaths.size(), 500);
-  for (int i = 0; i < filePaths.size(); ++i) {
-    writeToFile(filePaths[i]->getPath(), vectors[i]);
-  }
+  auto vectors = makeVectors(5, 500);
+  auto filePaths = writeToFiles(vectors);
 
   createDuckDbTable(vectors);
 
@@ -796,11 +826,8 @@ TEST_P(AllTableWriterTest, renameAndReorderColumns) {
 
 // Runs a pipeline with read + write.
 TEST_P(AllTableWriterTest, directReadWrite) {
-  auto filePaths = makeFilePaths(5);
-  auto vectors = makeVectors(filePaths.size(), 200);
-  for (int i = 0; i < filePaths.size(); i++) {
-    writeToFile(filePaths[i]->getPath(), vectors[i]);
-  }
+  auto vectors = makeVectors(5, 200);
+  auto filePaths = writeToFiles(vectors);
 
   createDuckDbTable(vectors);
 
@@ -1034,10 +1061,7 @@ TEST_P(PartitionedTableWriterTest, specialPartitionName) {
   });
   createDuckDbTable(vectors);
 
-  auto inputFilePaths = makeFilePaths(numBatches);
-  for (int i = 0; i < numBatches; i++) {
-    writeToFile(inputFilePaths[i]->getPath(), vectors[i]);
-  }
+  auto inputFilePaths = writeToFiles(vectors);
 
   auto outputDirectory = TempDirectoryPath::create();
   auto plan = createInsertPlan(
@@ -1120,10 +1144,7 @@ TEST_P(PartitionedTableWriterTest, multiplePartitions) {
   });
   createDuckDbTable(vectors);
 
-  auto inputFilePaths = makeFilePaths(numBatches);
-  for (int i = 0; i < numBatches; i++) {
-    writeToFile(inputFilePaths[i]->getPath(), vectors[i]);
-  }
+  auto inputFilePaths = writeToFiles(vectors);
 
   auto outputDirectory = TempDirectoryPath::create();
   auto plan = createInsertPlan(
@@ -1200,10 +1221,7 @@ TEST_P(PartitionedTableWriterTest, singlePartition) {
   });
   createDuckDbTable(vectors);
 
-  auto inputFilePaths = makeFilePaths(numBatches);
-  for (int i = 0; i < numBatches; i++) {
-    writeToFile(inputFilePaths[i]->getPath(), vectors[i]);
-  }
+  auto inputFilePaths = writeToFiles(vectors);
 
   auto outputDirectory = TempDirectoryPath::create();
   const int numWriters = getNumWriters();
@@ -1363,21 +1381,7 @@ TEST_P(AllTableWriterTest, writeNoFile) {
       rowType_,
       outputDirectory->getPath());
 
-  auto execute = [&](const std::shared_ptr<const core::PlanNode>& plan,
-                     std::shared_ptr<core::QueryCtx> queryCtx) {
-    CursorParameters params;
-    params.planNode = plan;
-    params.queryCtx = queryCtx;
-    readCursor(params, [&](TaskCursor* taskCursor) {
-      if (taskCursor->noMoreSplits()) {
-        return;
-      }
-      taskCursor->task()->noMoreSplits("0");
-      taskCursor->setNoMoreSplits();
-    });
-  };
-
-  execute(plan, core::QueryCtx::create(executor_.get()));
+  AssertQueryBuilder(plan).splits("0", std::vector<Split>{}).countResults();
   ASSERT_TRUE(fs::is_empty(outputDirectory->getPath()));
 }
 
@@ -1496,7 +1500,7 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
         compressionKind_,
         1,
         connector::hive::LocationHandle::TableType::kNew);
-    const std::shared_ptr<Task> task =
+    const TaskPtr task =
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .config(QueryConfig::kTaskWriterCount, 1)
             .connectorSessionProperty(
@@ -1515,15 +1519,25 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
     ASSERT_EQ(
         stats[1].runtimeStats["stripeSize"].count, testData.expectedNumStripes);
     ASSERT_EQ(
-        stats[1].runtimeStats[std::string(TableWriter::kNumWrittenFiles)].sum,
+        stats[1]
+            .runtimeStats[std::string(TableWriterStatNames::kNumWrittenFiles)]
+            .sum,
         1);
     ASSERT_EQ(
-        stats[1].runtimeStats[std::string(TableWriter::kNumWrittenFiles)].count,
+        stats[1]
+            .runtimeStats[std::string(TableWriterStatNames::kNumWrittenFiles)]
+            .count,
         1);
     ASSERT_GE(
-        stats[1].runtimeStats[std::string(TableWriter::kWriteIOTime)].sum, 0);
+        stats[1]
+            .runtimeStats[std::string(TableWriterStatNames::kWriteIOTime)]
+            .sum,
+        0);
     ASSERT_EQ(
-        stats[1].runtimeStats[std::string(TableWriter::kWriteIOTime)].count, 1);
+        stats[1]
+            .runtimeStats[std::string(TableWriterStatNames::kWriteIOTime)]
+            .count,
+        1);
   }
 }
 
@@ -2419,8 +2433,7 @@ std::vector<std::string> extractFragmentFiles(const folly::dynamic& fragment) {
 core::ColumnStatsSpec makeFinalStatsSpec(
     const core::PlanNodePtr& workerPlan,
     const RowType& inputType) {
-  auto mergeNode =
-      std::dynamic_pointer_cast<const core::TableWriteMergeNode>(workerPlan);
+  const auto* mergeNode = workerPlan->as<core::TableWriteMergeNode>();
   VELOX_CHECK_NOT_NULL(mergeNode);
   VELOX_CHECK(mergeNode->hasColumnStatsSpec());
 
@@ -2594,10 +2607,7 @@ TEST_P(AllTableWriterTest, tableWriterStats) {
   });
   createDuckDbTable(vectors);
 
-  auto inputFilePaths = makeFilePaths(numBatches);
-  for (int i = 0; i < numBatches; i++) {
-    writeToFile(inputFilePaths[i]->getPath(), vectors[i]);
-  }
+  auto inputFilePaths = writeToFiles(vectors);
 
   auto outputDirectory = TempDirectoryPath::create();
   const int numWriters = getNumWriters();
@@ -2626,25 +2636,25 @@ TEST_P(AllTableWriterTest, tableWriterStats) {
   const auto fixedWrittenBytes =
       numWrittenFiles * (fileFormat_ == FileFormat::DWRF ? ORC_HEADER_LEN : 0);
 
-  auto planStats = toPlanStats(task->taskStats());
-  auto& stats = planStats.at(tableWriteNodeId_);
+  const auto stats =
+      PlanNodeStats::extract(task->taskStats(), tableWriteNodeId_);
   ASSERT_GT(stats.physicalWrittenBytes, fixedWrittenBytes);
   ASSERT_GT(
       stats.operatorStats.at("TableWrite")->physicalWrittenBytes,
       fixedWrittenBytes);
   ASSERT_EQ(
       stats.operatorStats.at("TableWrite")
-          ->customStats.at(std::string(TableWriter::kNumWrittenFiles))
+          ->customStat(TableWriterStatNames::kNumWrittenFiles)
           .sum,
       numWrittenFiles);
   ASSERT_GE(
       stats.operatorStats.at("TableWrite")
-          ->customStats.at(std::string(TableWriter::kWriteIOTime))
+          ->customStat(TableWriterStatNames::kWriteIOTime)
           .sum,
       0);
   ASSERT_GE(
       stats.operatorStats.at("TableWrite")
-          ->customStats.at(std::string(TableWriter::kRunningWallNanos))
+          ->customStat(TableWriterStatNames::kRunningWallNanos)
           .sum,
       0);
 }
@@ -2786,23 +2796,21 @@ TEST_P(BucketSortOnlyTableWriterTest, sortWriterSpill) {
   const auto updatedSpillStats = globalSpillStats();
   ASSERT_GT(updatedSpillStats.spilledBytes, spillStats.spilledBytes);
   ASSERT_GT(updatedSpillStats.spilledPartitions, spillStats.spilledPartitions);
-  auto taskStats = toPlanStats(task->taskStats());
-  auto& stats = taskStats.at(tableWriteNodeId_);
+  const auto stats =
+      PlanNodeStats::extract(task->taskStats(), tableWriteNodeId_);
   ASSERT_GT(stats.spilledRows, 0);
   ASSERT_GT(stats.spilledBytes, 0);
   // One spilled partition per each written files.
-  const int numWrittenFiles = stats.customStats["numWrittenFiles"].sum;
+  const int numWrittenFiles = stats.customSum("numWrittenFiles");
   ASSERT_GE(stats.spilledPartitions, numWrittenFiles);
-  ASSERT_GT(stats.customStats[std::string(Operator::kSpillRuns)].sum, 0);
-  ASSERT_GT(stats.customStats[std::string(Operator::kSpillFillTime)].sum, 0);
-  ASSERT_GT(stats.customStats[std::string(Operator::kSpillSortTime)].sum, 0);
-  ASSERT_GT(
-      stats.customStats[std::string(Operator::kSpillExtractVectorTime)].sum, 0);
-  ASSERT_GT(
-      stats.customStats[std::string(Operator::kSpillSerializationTime)].sum, 0);
-  ASSERT_GT(stats.customStats[std::string(Operator::kSpillFlushTime)].sum, 0);
-  ASSERT_GT(stats.customStats[std::string(Operator::kSpillWrites)].sum, 0);
-  ASSERT_GT(stats.customStats[std::string(Operator::kSpillWriteTime)].sum, 0);
+  ASSERT_GT(stats.customSum(Operator::kSpillRuns), 0);
+  ASSERT_GT(stats.customSum(Operator::kSpillFillTime), 0);
+  ASSERT_GT(stats.customSum(Operator::kSpillSortTime), 0);
+  ASSERT_GT(stats.customSum(Operator::kSpillExtractVectorTime), 0);
+  ASSERT_GT(stats.customSum(Operator::kSpillSerializationTime), 0);
+  ASSERT_GT(stats.customSum(Operator::kSpillFlushTime), 0);
+  ASSERT_GT(stats.customSum(Operator::kSpillWrites), 0);
+  ASSERT_GT(stats.customSum(Operator::kSpillWriteTime), 0);
 }
 
 DEBUG_ONLY_TEST_P(BucketSortOnlyTableWriterTest, outputBatchRows) {
@@ -2871,7 +2879,7 @@ DEBUG_ONLY_TEST_P(BucketSortOnlyTableWriterTest, outputBatchRows) {
         1,
         connector::hive::LocationHandle::TableType::kNew,
         commitStrategy_);
-    const std::shared_ptr<Task> task =
+    const TaskPtr task =
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .config(QueryConfig::kTaskWriterCount, 1)
             .connectorSessionProperty(
@@ -2950,7 +2958,7 @@ DEBUG_ONLY_TEST_P(BucketSortOnlyTableWriterTest, yield) {
         connector::hive::LocationHandle::TableType::kNew,
         commitStrategy_);
     const int prevYieldCount = Driver::yieldCount();
-    const std::shared_ptr<Task> task =
+    const TaskPtr task =
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .config(QueryConfig::kTaskWriterCount, 1)
             .connectorSessionProperty(
@@ -3162,27 +3170,22 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromTableWriter) {
                 .config(core::QueryConfig::kWriterFlushThresholdBytes, 0)
                 .plan(std::move(writerPlan))
                 .assertResults(fmt::format("SELECT {}", numRows));
-        auto planStats = toPlanStats(task->taskStats());
-        auto& tableWriteStats =
-            planStats.at(tableWriteNodeId).operatorStats.at("TableWrite");
+        const auto planStats =
+            PlanNodeStats::extract(task->taskStats(), tableWriteNodeId);
+        const auto& tableWriteStats = planStats.operatorStatsFor("TableWrite");
         if (writerSpillEnabled) {
           ASSERT_GT(
-              tableWriteStats->customStats
-                  .at(HiveDataSink::kEarlyFlushedRawBytes)
+              tableWriteStats.customStat(HiveDataSink::kEarlyFlushedRawBytes)
                   .count,
               0);
           ASSERT_GT(
-              tableWriteStats->customStats
-                  .at(HiveDataSink::kEarlyFlushedRawBytes)
-                  .sum,
+              tableWriteStats.customSum(HiveDataSink::kEarlyFlushedRawBytes),
               0);
           ASSERT_EQ(
               arbitrator->stats().numFailures, numPrevArbitrationFailures);
         } else {
-          ASSERT_EQ(
-              tableWriteStats->customStats.count(
-                  HiveDataSink::kEarlyFlushedRawBytes),
-              0);
+          ASSERT_FALSE(tableWriteStats.hasCustomStat(
+              HiveDataSink::kEarlyFlushedRawBytes));
           ASSERT_EQ(
               arbitrator->stats().numFailures, numPrevArbitrationFailures + 1);
         }
@@ -3190,7 +3193,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromTableWriter) {
             arbitrator->stats().numNonReclaimableAttempts,
             numPrevNonReclaimableAttempts);
       }
-      waitForAllTasksToBeDeleted(3'000'000);
+      TaskMonitor::waitForAllTasksDeleted(3'000'000);
     }
   }
 }
@@ -3301,7 +3304,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromSortTableWriter) {
           arbitrator->stats().numNonReclaimableAttempts,
           numPrevNonReclaimableAttempts);
 
-      waitForAllTasksToBeDeleted(3'000'000);
+      TaskMonitor::waitForAllTasksDeleted(3'000'000);
       const auto updatedSpillStats = globalSpillStats();
       if (writerSpillEnabled) {
         ASSERT_GT(updatedSpillStats.spilledBytes, spillStats.spilledBytes);
@@ -3426,7 +3429,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, writerFlushThreshold) {
         arbitrator->stats().numNonReclaimableAttempts,
         numPrevNonReclaimableAttempts);
     ASSERT_GE(arbitrator->stats().reclaimedUsedBytes, testParam.bytesToReserve);
-    waitForAllTasksToBeDeleted(3'000'000);
+    TaskMonitor::waitForAllTasksDeleted(3'000'000);
     queryCtx.reset();
   }
 }
@@ -3520,7 +3523,7 @@ DEBUG_ONLY_TEST_F(
   ASSERT_EQ(
       arbitrator->stats().numNonReclaimableAttempts,
       numPrevNonReclaimableAttempts + 1);
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(
@@ -3625,7 +3628,7 @@ DEBUG_ONLY_TEST_F(
       numPrevArbitrationFailures);
   ASSERT_EQ(arbitrator->stats().numFailures, numPrevNonReclaimableAttempts);
   ASSERT_GT(arbitrator->stats().reclaimedUsedBytes, numPrevReclaimedBytes);
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(
@@ -3736,7 +3739,7 @@ DEBUG_ONLY_TEST_F(
       numPrevNonReclaimableAttempts + 1);
   const auto updatedSpillStats = globalSpillStats();
   ASSERT_EQ(updatedSpillStats, spillStats);
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableFileWriteError) {
@@ -3814,7 +3817,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableFileWriteError) {
           .copyResults(pool()),
       "inject writer error");
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteSpillUseMoreMemory) {
@@ -3906,7 +3909,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteSpillUseMoreMemory) {
           .copyResults(pool()),
       "");
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteReclaimOnClose) {
@@ -4013,7 +4016,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, tableWriteReclaimOnClose) {
       .plan(std::move(writerPlan))
       .assertResults(fmt::format("SELECT {}", numRows));
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(
@@ -4069,6 +4072,6 @@ DEBUG_ONLY_TEST_F(
   memory::testingRunArbitration();
 
   queryThread.join();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 } // namespace velox::exec::test

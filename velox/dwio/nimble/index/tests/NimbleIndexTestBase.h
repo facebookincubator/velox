@@ -61,7 +61,7 @@ HybridFlatMap makeHybridFlatMapConfig(
     const std::vector<std::vector<std::string>>& explicitGroups);
 NimbleIndexProjector::RowProjectionResult projectRows(
     NimbleIndexProjector& projector,
-    const NimbleIndexProjector::Request& request,
+    const index::IndexLookup::LookupRequest& request,
     const NimbleIndexProjector::Options& options);
 
 // Adapts the coroutine iterator API to synchronous assertions in this test.
@@ -115,13 +115,16 @@ struct TestParam {
   bool pinMetadata;
   // Applies to the iterators and cursors that the iterator suites create.
   bool cacheEncodingView{true};
+  // Where the cluster index of a file from writeData() stores its key chunks.
+  index::KeyStreamLayout keyStreamLayout{index::KeyStreamLayout::kPartition};
 
   std::string debugString() const {
     return fmt::format(
-        "cacheMetadata={}, pinMetadata={}, cacheEncodingView={}",
+        "cacheMetadata={}, pinMetadata={}, cacheEncodingView={}, keyStreamLayout={}",
         cacheMetadata,
         pinMetadata,
-        cacheEncodingView);
+        cacheEncodingView,
+        index::toString(keyStreamLayout));
   }
 };
 
@@ -168,6 +171,12 @@ class NimbleIndexProjectorTestBase : public ::testing::Test {
   static std::shared_ptr<const index::IndexConfig> makeClusterIndexConfig(
       const std::vector<std::string>& indexColumns);
 
+  // Writes each of `batches` as a stripe of its own, with a cluster index on
+  // "key" that stores its key chunks in stripes.
+  void writeStripeKeyStreamData(
+      const std::vector<RowVectorPtr>& batches,
+      bool enableStreamChecksums);
+
   // Writes `batches` into sinkData_ under `options` and drops the readers
   // holding the previous file.
   void writeBatches(
@@ -191,6 +200,10 @@ class NimbleIndexProjectorTestBase : public ::testing::Test {
   // Returns getTestParams() with cacheEncodingView set to both values, for the
   // suites that create iterators and cursors.
   static std::vector<TestParam> getIteratorTestParams();
+
+  // Returns getTestParams() with keyStreamLayout set to each layout, for the
+  // suites whose tests project files of either layout.
+  static std::vector<TestParam> getKeyStreamLayoutTestParams();
 
   // Names an instance of the iterator suites after its parameters.
   static std::string iteratorTestParamName(

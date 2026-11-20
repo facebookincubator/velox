@@ -194,6 +194,12 @@ class SelectiveColumnReader {
   /// last 'read().
   virtual void getValues(const RowSet& rows, VectorPtr* result) = 0;
 
+  /// Called before read() with the vector getValues() will receive, which
+  /// still holds the previous batch. A reader whose result shares its buffers
+  /// drops the result's references to them when nothing else holds the
+  /// result, so that read() can write them in place. Does nothing by default.
+  virtual void releaseReusableResult(VectorPtr& /*result*/) {}
+
   // Returns the rows that were selected/visited by the last
   // read(). If 'this' has no filter, returns 'rows' passed to last
   // read().
@@ -285,11 +291,11 @@ class SelectiveColumnReader {
 
   /// Resolves which buffer resultNulls() returns for this read, by setting the
   /// returnReaderNulls_ flag (and anyNulls_). Sets it true on the fast path --
-  /// bulk read, no filter that can drop rows, dense rows, and nulls present --
-  /// so the nulls decoded into nullsInReadRange_ can be returned directly;
-  /// otherwise false, so resultNulls() returns the separately-built,
-  /// output-aligned resultNulls_. Resolves the flag only; allocates no buffer.
-  /// Call after the read-range nulls are decoded.
+  /// bulk read, no filter, dense rows, and nulls present -- so the nulls
+  /// decoded into nullsInReadRange_ can be returned directly; otherwise false,
+  /// so resultNulls() returns the separately-built, output-aligned
+  /// resultNulls_. Resolves the flag only; allocates no buffer. Call after the
+  /// read-range nulls are decoded.
   void setReturnNullsMode(const RowSet& rows);
 
   void setNumValues(vector_size_t size) {
@@ -334,6 +340,10 @@ class SelectiveColumnReader {
 
   void setAllNull() {
     allNull_ = true;
+  }
+
+  bool allNull() const {
+    return allNull_;
   }
 
   void incrementNumValues(vector_size_t size) {
@@ -428,18 +438,14 @@ class SelectiveColumnReader {
   }
 
   /// Returns true if no filters or deterministic filters/hooks that discard
-  /// nulls, or an AlwaysTrue filter. This is used at read prepare time.
-  /// useFastPath() in DecoderUtil.h is used at read time and is expected to
-  /// produce the same result.
+  /// nulls, for a read whose rows have nulls when 'hasNulls' is true. This is
+  /// used at read prepare time, and at read time through useFastPath() in
+  /// DecoderUtil.h, so the reader and the decoders take the bulk path together.
+  bool useBulkPath(bool hasNulls) const;
+
+  /// Same as useBulkPath(bool) for the nulls this reader decoded.
   bool useBulkPath() const {
-    auto* filter = scanSpec_->filter();
-    return hasBulkPath() && process::hasSimd() &&
-        (!filter ||
-         (filter->isDeterministic() &&
-          (!nullsInReadRange_ || !filter->testNull() ||
-           filter->kind() == velox::common::FilterKind::kAlwaysTrue))) &&
-        (!scanSpec_->valueHook() || !nullsInReadRange_ ||
-         !scanSpec_->valueHook()->acceptsNulls());
+    return useBulkPath(nullsInReadRange_ != nullptr);
   }
 
   // true if 'this' has a fast path.
@@ -552,8 +558,13 @@ class SelectiveColumnReader {
       if (!nullsInReadRange_) {
         nullsInReadRange_ = std::move(flatMapValueNullsInReadRange_);
       }
-    } else if (nullsInReadRange_ && !nullsInReadRange_->unique()) {
-      nullsInReadRange_.reset();
+    } else {
+      if (!nullsInReadRange_) {
+        nullsInReadRange_ = std::move(reusableNullsInReadRange_);
+      }
+      if (nullsInReadRange_ && !nullsInReadRange_->unique()) {
+        nullsInReadRange_.reset();
+      }
     }
     formatData_->readNulls(
         numRows, incomingNulls, nullsInReadRange_, readsNullsOnly);
@@ -656,8 +667,7 @@ class SelectiveColumnReader {
   }
 
   // True if the scan spec has a filter that can drop rows. An AlwaysTrue filter
-  // keeps every row, so the column visitors record no output rows for it and
-  // the read-range nulls stay aligned with the output.
+  // keeps every row, so the column visitors record no output rows for it.
   bool hasRowFilter() const;
 
   memory::MemoryPool* const pool_;
@@ -772,6 +782,10 @@ class SelectiveColumnReader {
   BufferPtr flatMapValueNullsInReadRange_;
   VectorPtr flatMapValueFlatValues_;
   VectorPtr flatMapValueConstantNullValues_;
+
+  // The nulls buffer of a read without nulls, kept for the next read that has
+  // nulls.
+  BufferPtr reusableNullsInReadRange_;
 };
 
 template <>

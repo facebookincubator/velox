@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/dwio/nimble/index/ClusterIndexFactory.h"
 #include "velox/dwio/nimble/index/ClusterIndexWriterBase.h"
 
 namespace facebook::nimble::index {
@@ -24,10 +25,13 @@ struct ClusterIndexConfig;
 /// Writes a cluster index backed by flat Prefix or Trivial key chunks.
 class ClusterIndexWriter final : public ClusterIndexWriterBase {
  public:
+  /// Creates the writer. 'options' are as in
+  /// ClusterIndexFactory::createWriter().
   static std::unique_ptr<ClusterIndexWriter> create(
       const IndexConfig& config,
       const velox::TypePtr& inputType,
-      velox::memory::MemoryPool* pool);
+      velox::memory::MemoryPool* pool,
+      const ClusterIndexFactory::Options& options = {});
 
   ~ClusterIndexWriter() override;
 
@@ -36,7 +40,8 @@ class ClusterIndexWriter final : public ClusterIndexWriterBase {
       const ClusterIndexConfig& config,
       const velox::RowTypePtr& inputType,
       const std::vector<SortOrder>& sortOrders,
-      velox::memory::MemoryPool* pool);
+      velox::memory::MemoryPool* pool,
+      const ClusterIndexFactory::Options& options);
 };
 
 } // namespace facebook::nimble::index

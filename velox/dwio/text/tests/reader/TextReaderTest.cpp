@@ -14,11 +14,20 @@
  * limitations under the License.
  */
 
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <limits>
+#include <optional>
+#include <string>
+#include "velox/common/base/RandomUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/connectors/common/ExtractionUtils.h"
+#include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/text/RegisterTextReader.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -36,6 +45,19 @@ namespace {
 
 int32_t parseDate(const std::string& text) {
   return DATE()->toDays(text);
+}
+
+std::shared_ptr<TempFilePath> createTextFile(
+    size_t numLines,
+    const std::function<std::string(size_t)>& lineAt) {
+  auto textFile = TempFilePath::create();
+  LocalWriteFile writeFile(textFile->getPath(), true, false);
+  for (size_t i = 0; i < numLines; ++i) {
+    writeFile.append(lineAt(i));
+    writeFile.append("\n");
+  }
+  writeFile.close();
+  return textFile;
 }
 
 class TextReaderTest : public testing::Test,
@@ -77,6 +99,78 @@ class TextReaderTest : public testing::Test,
     auto input =
         std::make_unique<dwio::common::BufferedInput>(readFile, *pool());
     return factory->createReader(std::move(input), readerOptions);
+  }
+
+  void assertReadsAs(
+      const std::vector<std::string>& inputs,
+      std::optional<float> expectedReal,
+      std::optional<double> expectedDouble) {
+    ASSERT_FALSE(inputs.empty());
+    SCOPED_TRACE(inputs.front());
+    auto textFile = createTextFile(inputs.size() + 1, [&](size_t row) {
+      if (row == inputs.size()) {
+        // Verify a malformed field does not prevent reading a later valid row.
+        return std::string("7,2.5f,2.5f,2.5f,9");
+      }
+      const auto& input = inputs[row];
+      return "7," + input + "," + input + "," + input + ",9";
+    });
+
+    const auto type = ROW(
+        {{"before", INTEGER()},
+         {"real", REAL()},
+         {"double", DOUBLE()},
+         {"widened_real", REAL()},
+         {"after", INTEGER()}});
+    const auto requestedType = ROW(
+        {{"before", INTEGER()},
+         {"real", REAL()},
+         {"double", DOUBLE()},
+         {"widened_real", DOUBLE()},
+         {"after", INTEGER()}});
+    auto reader = createReader(
+        type, textFile->getPath(), dwio::common::SerDeOptions(',', '\2', '\3'));
+    dwio::common::RowReaderOptions rowReaderOptions;
+    setScanSpec(*requestedType, rowReaderOptions);
+    rowReaderOptions.select(
+        std::make_shared<dwio::common::ColumnSelector>(requestedType, type));
+    rowReaderOptions.setProjectSelectedType(true);
+    auto rowReader = reader->createRowReader(rowReaderOptions);
+
+    const std::optional<double> expectedWidenedReal = expectedReal
+        ? std::optional<double>{static_cast<double>(*expectedReal)}
+        : std::nullopt;
+    std::vector<std::optional<float>> realValues(inputs.size(), expectedReal);
+    std::vector<std::optional<double>> doubleValues(
+        inputs.size(), expectedDouble);
+    std::vector<std::optional<double>> widenedRealValues(
+        inputs.size(), expectedWidenedReal);
+    realValues.push_back(2.5f);
+    doubleValues.push_back(2.5);
+    widenedRealValues.push_back(2.5);
+    const auto size = realValues.size();
+    auto expected = makeRowVector(
+        {"before", "real", "double", "widened_real", "after"},
+        {
+            makeFlatVector<int32_t>(std::vector<int32_t>(size, 7)),
+            makeNullableFlatVector<float>(realValues),
+            makeNullableFlatVector<double>(doubleValues),
+            makeNullableFlatVector<double>(widenedRealValues),
+            makeFlatVector<int32_t>(std::vector<int32_t>(size, 9)),
+        });
+    VectorPtr result;
+    ASSERT_EQ(rowReader->next(size, result), size);
+    ASSERT_NO_FATAL_FAILURE(assertEqualVectors(expected, result));
+    EXPECT_EQ(rowReader->next(1, result), 0);
+  }
+
+  void assertReadsAs(
+      const std::vector<std::string>& inputs,
+      std::optional<double> expected) {
+    const std::optional<float> expectedReal = expected
+        ? std::optional<float>{static_cast<float>(*expected)}
+        : std::nullopt;
+    ASSERT_NO_FATAL_FAILURE(assertReadsAs(inputs, expectedReal, expected));
   }
 
   std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
@@ -995,6 +1089,132 @@ TEST_F(TextReaderTest, readFloatAsInt) {
   }
 }
 
+TEST_F(TextReaderTest, readFloatingPointValues) {
+  const auto doubleNaN = std::numeric_limits<double>::quiet_NaN();
+  const auto realInfinity = std::numeric_limits<float>::infinity();
+  const auto doubleInfinity = std::numeric_limits<double>::infinity();
+  const auto realAboveOne = std::nextafter(1.0f, 2.0f);
+  assertReadsAs({"NaN", "+NaN", "-NaN", " \t-NaN\t "}, doubleNaN);
+  assertReadsAs(
+      {"nan",
+       "NAN",
+       "Nan",
+       "+nan",
+       "-nan",
+       "NaN()",
+       "NaN(payload)",
+       "+NaN(payload)",
+       "NaNf",
+       "NaNd",
+       "+NaNF",
+       "-NaND"},
+      std::nullopt);
+
+  assertReadsAs(
+      {"Infinity", "+Infinity", "Inf", "inf", "INF", "+inf", "inFINITY"},
+      doubleInfinity);
+  assertReadsAs(
+      {"-Infinity", "-Inf", "-inf", " \t-iNfInItY\t "}, -doubleInfinity);
+  assertReadsAs({"Infinityf", "+InfinityD", "-Infd"}, std::nullopt);
+
+  assertReadsAs(
+      {"1.25", "+1.25", "1.25f", "1.25F", "1.25d", "1.25D", " \t1.25f\t "},
+      1.25);
+  assertReadsAs({"-1.25", "-1.25f", "-1.25D"}, -1.25);
+  assertReadsAs({".5", "+.5", ".5f", "+.5f"}, 0.5);
+  assertReadsAs({"-.5", "-.5D"}, -0.5);
+  assertReadsAs({"1.", "1.f", "1.F", "1.d", "1.D"}, 1.0);
+  assertReadsAs({"1e2", "1E+2", "1e2F", "1e+2d"}, 100.0);
+  assertReadsAs({"0", "+0.0", "0e+2D", "-0.0", "-0f", "-0e-2D"}, 0.0);
+
+  assertReadsAs({"", " \t ", "+", "-", "f", "+f"}, std::nullopt);
+  assertReadsAs({".", ".f", ".F", ".d", ".D", ".e2", ".e2f"}, std::nullopt);
+  assertReadsAs({"1e", "1e+", "1e-", "1e+f", "1ef"}, std::nullopt);
+  assertReadsAs({"1ff", "1.0fX", "1.0X", "12a", "1L", "1.5%"}, std::nullopt);
+  assertReadsAs({"1.0 f", "1.5 d", "1\t2"}, std::nullopt);
+  assertReadsAs(
+      {"1e5x", "1e400x", "1e-400fX", "1.2.3", "--1d", "1f2"}, std::nullopt);
+  assertReadsAs({std::string("1.0\0f", 5)}, std::nullopt);
+  assertReadsAs(
+      {"0x10", "0x1.8p+1D", "-0X1p2", "0x1f", "0x1d", "0x1p+f"}, std::nullopt);
+
+  // Keep distinct REAL and DOUBLE expectations for precision and range.
+  // A suffix does not narrow a DOUBLE value to float precision.
+  assertReadsAs({"0.1f"}, 0.1f, 0.1);
+  assertReadsAs({"16777217f"}, 16'777'216.0f, 16'777'217.0);
+  // Direct float parsing rounds up, but parsing through DOUBLE rounds
+  // to the midpoint between 1.0f and its successor, then down to 1.0f.
+  assertReadsAs({"1.0000000596046448f"}, realAboveOne, 1.0000000596046448);
+  assertReadsAs({"1e100f"}, realInfinity, 1e100);
+  assertReadsAs({"-1e100"}, -realInfinity, -1e100);
+  assertReadsAs({"1e400D"}, realInfinity, doubleInfinity);
+  assertReadsAs({"-1e400d"}, -realInfinity, -doubleInfinity);
+  assertReadsAs({"1e-100f"}, 0.0f, 1e-100);
+  assertReadsAs({"-1e-100"}, 0.0f, -1e-100);
+  assertReadsAs(
+      {"1.4e-45f"}, std::numeric_limits<float>::denorm_min(), 1.4e-45);
+  assertReadsAs({"4.9e-324D"}, 0.0f, std::numeric_limits<double>::denorm_min());
+  assertReadsAs({"1e-400D"}, 0.0f, 0.0);
+  assertReadsAs({"-1e-400f"}, 0.0f, 0.0);
+}
+
+TEST_F(TextReaderTest, readIntegerWithLeadingPlus) {
+  struct TestCase {
+    std::string line;
+    std::optional<int8_t> tinyint;
+    std::optional<int16_t> smallint;
+    std::optional<int32_t> integer;
+    std::optional<int64_t> bigint;
+  };
+  const std::vector<TestCase> testCases = {
+      {"+1,+2,+3,+4", 1, 2, 3, 4},
+      {"+127,+32767,+2147483647,+9223372036854775807",
+       127,
+       32'767,
+       2'147'483'647,
+       9'223'372'036'854'775'807LL},
+      {"+1.5,+2.5,+3.5,+4.5", 1, 2, 3, 4},
+      {"+128,+2,+3,+4", std::nullopt, 2, 3, 4},
+      {"+1,+32768,+3,+4", 1, std::nullopt, 3, 4},
+      {"+1,+2,+2147483648,+4", 1, 2, std::nullopt, 4},
+      {"+1,+2,+3,+9223372036854775808", 1, 2, 3, std::nullopt},
+      {"+,+2,+3,+4", std::nullopt, 2, 3, 4},
+      {"+1,++2,+3,+4", 1, std::nullopt, 3, 4},
+      {"+1,+2,+3x,+4", 1, 2, std::nullopt, 4},
+      {"+1,+2,+3,+-4", 1, 2, 3, std::nullopt},
+  };
+  std::vector<std::optional<int8_t>> tinyintValues;
+  std::vector<std::optional<int16_t>> smallintValues;
+  std::vector<std::optional<int32_t>> integerValues;
+  std::vector<std::optional<int64_t>> bigintValues;
+  for (const auto& testCase : testCases) {
+    tinyintValues.push_back(testCase.tinyint);
+    smallintValues.push_back(testCase.smallint);
+    integerValues.push_back(testCase.integer);
+    bigintValues.push_back(testCase.bigint);
+  }
+
+  auto expected = makeNamedRowVector({
+      {"tinyint", makeNullableFlatVector<int8_t>(tinyintValues)},
+      {"smallint", makeNullableFlatVector<int16_t>(smallintValues)},
+      {"integer", makeNullableFlatVector<int32_t>(integerValues)},
+      {"bigint", makeNullableFlatVector<int64_t>(bigintValues)},
+  });
+  auto textFile = createTextFile(
+      testCases.size(), [&](size_t row) { return testCases[row].line; });
+  auto type = expected->rowType();
+  auto reader = createReader(
+      type, textFile->getPath(), dwio::common::SerDeOptions(',', '\2', '\3'));
+  dwio::common::RowReaderOptions rowReaderOptions;
+  setScanSpec(*type, rowReaderOptions);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(testCases.size(), result), testCases.size());
+  assertEqualVectors(expected, result);
+  ASSERT_EQ(rowReader->next(1, result), 0);
+}
+
 TEST_F(TextReaderTest, simpleTypes) {
   const auto tzOffsetPST = 28'800;
   const auto tzOffsetPDT = 25'200;
@@ -1819,26 +2039,23 @@ TEST_F(TextReaderTest, extractionMapValues) {
 TEST_F(TextReaderTest, extractionMapKeyFilter) {
   // Write a text file with a MAP(VARCHAR, BIGINT) column and apply a
   // MapKeyFilter extraction transform via ScanSpec.
-  auto textFile = TempFilePath::create();
-  {
-    auto writeFile =
-        std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
-    // Row format: map entries separated by \x02, key-value by \x03.
-    // Row 0: {"a":1, "b":2, "c":3}
-    // Row 1: {"a":10, "d":40}
-    writeFile->append(
-        "a\x03"
-        "1\x02"
-        "b\x03"
-        "2\x02"
-        "c\x03"
-        "3\n"
-        "a\x03"
-        "10\x02"
-        "d\x03"
-        "40\n");
-    writeFile->close();
-  }
+  // Row format: map entries separated by \x02, key-value by \x03.
+  // Row 0: {"a":1, "b":2, "c":3}
+  // Row 1: {"a":10, "d":40}
+  auto textFile = createTextFile(2, [](size_t row) {
+    if (row == 0) {
+      return "a\x03"
+             "1\x02"
+             "b\x03"
+             "2\x02"
+             "c\x03"
+             "3";
+    }
+    return "a\x03"
+           "10\x02"
+           "d\x03"
+           "40";
+  });
 
   const auto type = ROW({{"col_map", MAP(VARCHAR(), BIGINT())}});
   auto reader = createReader(type, textFile->getPath());
@@ -1938,6 +2155,224 @@ TEST_F(TextReaderTest, extractionTransformOnMapColumn) {
   }
 }
 
+// Reads text files with a split row range and compares the rows with the same
+// split read without one.
+class TextSplitRowRangeTest : public TextReaderTest {
+ protected:
+  static constexpr uint64_t kAll{std::numeric_limits<uint64_t>::max()};
+  static constexpr int32_t kNumLines{1'000};
+
+  void SetUp() override {
+    TextReaderTest::SetUp();
+    // Lines "<i>\x01s<i>", optionally after a header line.
+    file_ = TempFilePath::create();
+    std::string content;
+    content += "header\x01line\n";
+    for (int32_t i = 0; i < kNumLines; ++i) {
+      lineOffsets_.push_back(content.size());
+      content += fmt::format("{}\x01s{}\n", i, i);
+    }
+    LocalWriteFile writeFile(
+        file_->getPath(),
+        /*shouldCreateParentDirectories=*/false,
+        /*shouldThrowOnFileAlreadyExists=*/false);
+    writeFile.append(content);
+    writeFile.close();
+    fileSize_ = content.size();
+  }
+
+  std::unique_ptr<dwio::common::Reader> createFileReader(
+      const std::string& path) {
+    auto factory =
+        dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+    dwio::common::ReaderOptions readerOptions(pool());
+    readerOptions.setFileSchema(type_);
+    auto input = std::make_unique<dwio::common::BufferedInput>(
+        std::make_shared<LocalReadFile>(path), *pool());
+    return factory->createReader(std::move(input), readerOptions);
+  }
+
+  // Reads all rows of the split [start, start + length) in batches of 7,
+  // applying 'mutation'.
+  RowVectorPtr read(
+      const std::string& path,
+      uint64_t start,
+      uint64_t length,
+      std::optional<dwio::common::SplitRowRange> range,
+      uint64_t skipRows = 0,
+      const dwio::common::Mutation* mutation = nullptr) {
+    dwio::common::RowReaderOptions options;
+    setScanSpec(*type_, options);
+    options.range(start, length);
+    options.setSkipRows(skipRows);
+    options.setSplitRowRange(range);
+    auto reader = createFileReader(path);
+    auto rowReader = reader->createRowReader(options);
+    auto result = BaseVector::create<RowVector>(type_, 0, pool());
+    VectorPtr batch;
+    while (rowReader->next(7, batch, mutation) > 0) {
+      const auto offset = result->size();
+      result->resize(offset + batch->size());
+      result->copy(batch.get(), offset, 0, batch->size());
+    }
+    return result;
+  }
+
+  // Checks that 'range' of the split reads the same rows as the split read
+  // in full and then sliced.
+  void verify(
+      dwio::common::SplitRowRange range,
+      uint64_t start,
+      uint64_t length,
+      uint64_t skipRows = 0,
+      const std::string& path = "") {
+    SCOPED_TRACE(
+        fmt::format(
+            "start {} length {} firstRow {} numRows {} skipRows {}",
+            start,
+            length,
+            range.firstRow,
+            range.numRows,
+            skipRows));
+    const auto& filePath = path.empty() ? file_->getPath() : path;
+    auto all = read(filePath, start, length, std::nullopt, skipRows);
+    const auto numRows = static_cast<uint64_t>(all->size());
+    const auto begin = std::min(range.firstRow, numRows);
+    const auto end =
+        range.numRows >= numRows - begin ? numRows : begin + range.numRows;
+    auto actual = read(filePath, start, length, range, skipRows);
+    ASSERT_EQ(actual->size(), end - begin);
+    if (end > begin) {
+      test::assertEqualVectors(all->slice(begin, end - begin), actual);
+    }
+  }
+
+  // Reads 'range' of the split twice with one sampler, like two splits of a
+  // scan, and checks that the kept rows are those that trying each row of the
+  // range in turn would keep.
+  void verifySampling(
+      dwio::common::SplitRowRange range,
+      uint64_t start,
+      uint64_t length,
+      uint64_t skipRows,
+      double sampleRate,
+      uint32_t seed) {
+    SCOPED_TRACE(
+        fmt::format(
+            "start {} length {} firstRow {} numRows {} skipRows {} "
+            "sampleRate {} seed {}",
+            start,
+            length,
+            range.firstRow,
+            range.numRows,
+            skipRows,
+            sampleRate,
+            seed));
+    const auto& path = file_->getPath();
+    auto all = read(path, start, length, std::nullopt, skipRows);
+    random::setSeed(seed);
+    random::RandomSkipTracker randomSkip(sampleRate);
+    dwio::common::Mutation mutation;
+    mutation.randomSkip = &randomSkip;
+    auto actual = BaseVector::create<RowVector>(type_, 0, pool());
+    for (int i = 0; i < 2; ++i) {
+      auto rows = read(path, start, length, range, skipRows, &mutation);
+      actual->append(rows.get());
+    }
+
+    random::setSeed(seed);
+    random::RandomSkipTracker expectedSkip(sampleRate);
+    const auto numRows = static_cast<uint64_t>(all->size());
+    const auto begin = std::min(range.firstRow, numRows);
+    const auto end = begin + std::min(range.numRows, numRows - begin);
+    std::vector<vector_size_t> expectedRows;
+    for (int i = 0; i < 2; ++i) {
+      for (auto row = begin; row < end; ++row) {
+        if (expectedSkip.testOne()) {
+          expectedRows.push_back(row);
+        }
+      }
+    }
+    ASSERT_EQ(actual->size(), expectedRows.size());
+    for (vector_size_t i = 0; i < actual->size(); ++i) {
+      ASSERT_TRUE(actual->equalValueAt(all.get(), i, expectedRows[i]))
+          << "row " << expectedRows[i];
+    }
+  }
+
+  RowTypePtr type_{ROW({"c0", "c1"}, {BIGINT(), VARCHAR()})};
+  std::shared_ptr<TempFilePath> file_;
+  std::vector<uint64_t> lineOffsets_;
+  uint64_t fileSize_{0};
+};
+
+TEST_F(TextSplitRowRangeTest, wholeFile) {
+  // The header counts as a row unless skipped.
+  verify({0, kAll}, 0, kAll);
+  verify({1, 2}, 0, kAll);
+  verify({500, 300}, 0, kAll);
+  verify({1'000, kAll}, 0, kAll);
+  verify({1'000, 1}, 0, kAll);
+  verify({1'001, 1}, 0, kAll);
+  verify({3, 0}, 0, kAll);
+}
+
+TEST_F(TextSplitRowRangeTest, skipHeader) {
+  verify({0, 2}, 0, kAll, 1);
+  verify({500, 300}, 0, kAll, 1);
+  verify({999, kAll}, 0, kAll, 1);
+  // Rows of the range start at line 500.
+  auto rows =
+      read(file_->getPath(), 0, kAll, dwio::common::SplitRowRange{500, 1}, 1);
+  ASSERT_EQ(rows->size(), 1);
+  EXPECT_EQ(rows->childAt(0)->asFlatVector<int64_t>()->valueAt(0), 500);
+}
+
+TEST_F(TextSplitRowRangeTest, byteRange) {
+  // A split from the middle of line 100 to the middle of line 600.
+  const auto start = lineOffsets_[100] + 1;
+  const auto length = lineOffsets_[600] + 1 - start;
+  verify({0, kAll}, start, length);
+  verify({0, 3}, start, length);
+  verify({250, 100}, start, length);
+  // The range ends past the split's last row.
+  verify({450, 1'000}, start, length);
+  verify({500, 1}, start, length);
+  // The split row range counts from the split's first row.
+  auto rows =
+      read(file_->getPath(), start, length, dwio::common::SplitRowRange{0, 1});
+  ASSERT_EQ(rows->size(), 1);
+  EXPECT_EQ(rows->childAt(0)->asFlatVector<int64_t>()->valueAt(0), 101);
+}
+
+TEST_F(TextSplitRowRangeTest, randomSampling) {
+  // A split from the middle of line 100 to the middle of line 600.
+  const auto start = lineOffsets_[100] + 1;
+  const auto length = lineOffsets_[600] + 1 - start;
+  for (const double sampleRate : {0.5, 0.1, 0.01}) {
+    for (uint32_t seed = 1; seed <= 10; ++seed) {
+      verifySampling({0, kAll}, 0, kAll, 0, sampleRate, seed);
+      verifySampling({500, 300}, 0, kAll, 0, sampleRate, seed);
+      verifySampling({500, 300}, 0, kAll, 1, sampleRate, seed);
+      verifySampling({250, 100}, start, length, 0, sampleRate, seed);
+      verifySampling({450, 1'000}, start, length, 0, sampleRate, seed);
+    }
+  }
+}
+
+TEST_F(TextSplitRowRangeTest, compressed) {
+  // A compressed file is read by the split that starts at byte 0.
+  const auto path = velox::test::getDataFilePath(
+      "velox/dwio/text/tests/reader/",
+      "examples/simple_types_compressed_file.gz");
+  type_ =
+      ROW({"col_string", "col_int", "col_float", "col_bool"},
+          {VARCHAR(), INTEGER(), DOUBLE(), BOOLEAN()});
+  auto all = read(path, 0, kAll, std::nullopt);
+  ASSERT_GT(all->size(), 3);
+  verify({1, 2}, 0, kAll, 0, path);
+  verify({2, kAll}, 0, kAll, 0, path);
+}
 } // namespace
 
 } // namespace facebook::velox::text

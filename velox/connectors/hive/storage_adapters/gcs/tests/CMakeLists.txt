@@ -21,6 +21,7 @@ target_link_libraries(
   velox_dwio_common_exception
   velox_exec
   velox_exec_test_lib
+  velox_hive_storage_adapters_server_startup
   velox_file
   velox_gcs
   velox_hive_connector
@@ -41,6 +42,7 @@ target_link_libraries(
   velox_dwio_parquet_reader
   velox_dwio_parquet_writer
   velox_exec_test_lib
+  velox_hive_storage_adapters_server_startup
   velox_dwio_common_exception
   velox_exec
   GTest::gmock
@@ -57,6 +59,7 @@ target_link_libraries(
   velox_hive_config
   velox_core
   velox_exec_test_lib
+  velox_hive_storage_adapters_server_startup
   velox_dwio_parquet_reader
   velox_dwio_parquet_writer
   velox_dwio_common_exception

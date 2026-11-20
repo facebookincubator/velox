@@ -120,6 +120,108 @@ TEST(StatisticsTest, naturalAndSignedOrderCachesAreIndependent) {
   testNaturalAndSignedOrderCachesAreIndependent<int64_t>();
 }
 
+TYPED_TEST(StatisticsIntegerTests, adjacentOrder) {
+  using ValueType = typename TypeParam::valueType;
+  using PhysicalType = std::make_unsigned_t<ValueType>;
+  const auto adjacentOrder = [](const std::vector<ValueType>& values) {
+    std::vector<PhysicalType> physicalValues;
+    physicalValues.reserve(values.size());
+    for (const auto value : values) {
+      physicalValues.push_back(static_cast<PhysicalType>(value));
+    }
+    const auto order = nimble::Statistics<PhysicalType>::create(physicalValues)
+                           .template adjacentOrder<ValueType>();
+    return std::pair{order.numDescending, order.numAscending};
+  };
+
+  // Equal pairs count as neither.
+  EXPECT_EQ(
+      adjacentOrder({
+          static_cast<ValueType>(5),
+          static_cast<ValueType>(3),
+          static_cast<ValueType>(3),
+          static_cast<ValueType>(4),
+          static_cast<ValueType>(1),
+      }),
+      std::pair(uint64_t{2}, uint64_t{1}));
+  EXPECT_EQ(adjacentOrder({}), std::pair(uint64_t{0}, uint64_t{0}));
+  EXPECT_EQ(
+      adjacentOrder({static_cast<ValueType>(7)}),
+      std::pair(uint64_t{0}, uint64_t{0}));
+}
+
+template <typename SignedType>
+void testSignedAdjacentOrder() {
+  using UnsignedType = std::make_unsigned_t<SignedType>;
+  // Descends as signed values and ascends as unsigned ones.
+  const std::vector<UnsignedType> values{
+      static_cast<UnsignedType>(0),
+      static_cast<UnsignedType>(-1),
+      static_cast<UnsignedType>(std::numeric_limits<SignedType>::min()),
+  };
+  const auto statistics = nimble::Statistics<UnsignedType>::create(values);
+  const auto signedOrder = statistics.template adjacentOrder<SignedType>();
+  EXPECT_EQ(signedOrder.numDescending, 2);
+  EXPECT_EQ(signedOrder.numAscending, 0);
+  const auto unsignedOrder = statistics.template adjacentOrder<UnsignedType>();
+  EXPECT_EQ(unsignedOrder.numDescending, 1);
+  EXPECT_EQ(unsignedOrder.numAscending, 1);
+}
+
+TEST(StatisticsTest, signedAdjacentOrder) {
+  testSignedAdjacentOrder<int8_t>();
+  testSignedAdjacentOrder<int16_t>();
+  testSignedAdjacentOrder<int32_t>();
+  testSignedAdjacentOrder<int64_t>();
+}
+
+// SequenceEncoding stores exactly the streams sequenceStep() finds a step for,
+// so it must find one for every progression, including decreasing ones and
+// ones that wrap around, and for nothing else.
+TEST(StatisticsTest, sequenceStep) {
+  const auto sequenceStep = [](const auto& values) {
+    using T = typename std::decay_t<decltype(values)>::value_type;
+    return nimble::Statistics<T>::create(values).sequenceStep();
+  };
+  EXPECT_EQ(sequenceStep(std::vector<uint64_t>{5, 8, 11, 14}), 3);
+  EXPECT_EQ(sequenceStep(std::vector<uint32_t>{7, 7, 7}), 0);
+  EXPECT_EQ(sequenceStep(std::vector<uint32_t>{9}), 0);
+  EXPECT_EQ(sequenceStep(std::vector<uint32_t>{}), std::nullopt);
+  // Steps down by 2, which is a step of 2^16 - 2 in uint16 arithmetic.
+  EXPECT_EQ(sequenceStep(std::vector<uint16_t>{10, 8, 6, 4}), 65'534);
+  EXPECT_EQ(sequenceStep(std::vector<uint8_t>{254, 255, 0, 1}), 1);
+  EXPECT_EQ(sequenceStep(std::vector<int32_t>{2, 0, -2, -4}), -2);
+  EXPECT_EQ(
+      sequenceStep(
+          std::vector<int64_t>{
+              std::numeric_limits<int64_t>::max(),
+              std::numeric_limits<int64_t>::min()}),
+      1);
+  // Off the progression at the last value, and at the third value.
+  EXPECT_EQ(sequenceStep(std::vector<uint64_t>{0, 1, 2, 4}), std::nullopt);
+  EXPECT_EQ(sequenceStep(std::vector<uint64_t>{0, 1, 3, 4}), std::nullopt);
+}
+
+// sequenceStep() caches std::nullopt as well as a step, so a second call does
+// not scan the stream again. The statistics view the values, so changing them
+// after the first call shows whether the second call scanned them.
+TEST(StatisticsTest, sequenceStepIsCached) {
+  {
+    std::vector<uint32_t> values{0, 1, 3};
+    const auto statistics = nimble::Statistics<uint32_t>::create(values);
+    EXPECT_EQ(statistics.sequenceStep(), std::nullopt);
+    values[2] = 2;
+    EXPECT_EQ(statistics.sequenceStep(), std::nullopt);
+  }
+  {
+    std::vector<uint32_t> values{0, 1, 2};
+    const auto statistics = nimble::Statistics<uint32_t>::create(values);
+    EXPECT_EQ(statistics.sequenceStep(), 1);
+    values[2] = 3;
+    EXPECT_EQ(statistics.sequenceStep(), 1);
+  }
+}
+
 TEST(StatisticsTest, runValues) {
   const std::vector<int32_t> data = {1, 1, 2, 2, 1, 3, 3};
   const std::vector<int32_t> expected = {1, 2, 1, 3};

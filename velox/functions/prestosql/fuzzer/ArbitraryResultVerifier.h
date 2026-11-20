@@ -56,9 +56,8 @@ class ArbitraryResultVerifier : public ResultVerifier {
             "cast(NULL as {}) as {}", aggregateTypeSql_, aggregateName));
     projectColumns.push_back("expected");
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     auto plan =
-        PlanBuilder(planNodeIdGenerator, input[0]->pool())
+        PlanBuilder(input[0]->pool())
             .values(input)
             .projectExpressions(projections)
             .singleAggregation(groupingKeys, {makeArrayAggCall(aggregate)})
@@ -82,15 +81,14 @@ class ArbitraryResultVerifier : public ResultVerifier {
     // grouping keys may have nulls because rows with some grouping keys being
     // nulls are ignored during inner joins and considered unmatchable during
     // left, right, and outer joins.
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto expectedSource =
-        PlanBuilder(planNodeIdGenerator).values({expected_}).planNode();
+    PlanBuilder builder(result->pool());
+    auto expectedSource = builder.newPlan().values(expected_).planNode();
 
     // Append a column of array of arbitrary result type so that we can union
     // 'result' with 'expected_'.
     auto actualSource =
-        PlanBuilder(planNodeIdGenerator, result->pool())
-            .values({result})
+        builder.newPlan()
+            .values(result)
             .appendColumns({fmt::format(
                 "cast(NULL as {}[]) as expected", aggregateTypeSql_)})
             .planNode();
@@ -105,7 +103,7 @@ class ArbitraryResultVerifier : public ResultVerifier {
     // situation, either 'e' is empty too, or e[1] is an array that only
     // contains null.
     auto plan =
-        PlanBuilder(planNodeIdGenerator)
+        builder.newPlan()
             .localPartition({}, {expectedSource, actualSource})
             .singleAggregation(
                 groupingKeys_,

@@ -265,6 +265,9 @@ class HybridFlatMapType : public Type {
     StreamDescriptor inMapDescriptor;
     /// Complete value subtree owned by this group.
     std::shared_ptr<const Type> valueType;
+    /// The `encoded_group_keys` stream the schema recorded for the keys
+    /// (HybridFlatMap::Group::encodedKeys), or empty.
+    std::string_view encodedKeys{};
   };
 
   /// Reserved schema attribute holding the groups, as
@@ -372,8 +375,12 @@ class SchemaReader {
  public:
   // Construct type tree from an ordered list of schema nodes.
   // If the schema nodes are ordered incorrectly the behavior is undefined.
+  // Reads Hybrid FlatMap nodes with `pool`, which decodes their encoded group
+  // keys, e.g. the pool of the reader the schema is for. Throws a user error
+  // for a Hybrid FlatMap node when `pool` is null.
   static std::shared_ptr<const Type> getSchema(
-      const std::vector<SchemaNode>& nodes);
+      const std::vector<SchemaNode>& nodes,
+      velox::memory::MemoryPool* pool = nullptr);
 
   struct NodeInfo {
     std::string_view name;

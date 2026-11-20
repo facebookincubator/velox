@@ -18,6 +18,7 @@
 
 #include <folly/container/F14Set.h>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -231,6 +232,15 @@ struct TableParameter {
 struct RowNumberColumnInfo {
   column_index_t insertPosition;
   std::string name;
+};
+
+/// Rows of a split to read: 'numRows' rows starting at row 'firstRow', counted
+/// from the first row in the split's byte range.
+struct SplitRowRange {
+  uint64_t firstRow{0};
+  uint64_t numRows{std::numeric_limits<uint64_t>::max()};
+
+  bool operator==(const SplitRowRange& other) const = default;
 };
 
 /// Carries format-owned reader and writer options through the common reader
@@ -503,6 +513,16 @@ class RowReaderOptions {
     return skipRows_;
   }
 
+  /// Restricts reading to a range of the split's rows. Only the selective
+  /// Nimble reader supports it.
+  void setSplitRowRange(std::optional<SplitRowRange> splitRowRange) {
+    splitRowRange_ = splitRowRange;
+  }
+
+  const std::optional<SplitRowRange>& splitRowRange() const {
+    return splitRowRange_;
+  }
+
   bool preserveFlatMapsInMemory() const {
     return preserveFlatMapsInMemory_;
   }
@@ -689,6 +709,7 @@ class RowReaderOptions {
   std::function<void(uint16_t)> stripeCountCallback_;
   bool eagerFirstStripeLoad_{true};
   uint64_t skipRows_{0};
+  std::optional<SplitRowRange> splitRowRange_;
 
   std::shared_ptr<UnitLoaderFactory> unitLoaderFactory_;
 
@@ -933,6 +954,15 @@ class ReaderOptions : public io::ReaderOptions {
     nimbleDirectBufferedInputEnabled_ = value;
   }
 
+  /// Whether Nimble decodes file column statistics on first use.
+  bool nimbleLazyFileStats() const {
+    return nimbleLazyFileStats_;
+  }
+
+  void setNimbleLazyFileStats(bool value) {
+    nimbleLazyFileStats_ = value;
+  }
+
   /// Whether to cache file metadata (footer, stripes, index) in the
   /// process-wide AsyncDataCache. When enabled, the first reader performs a
   /// speculative tail read and populates the cache; subsequent readers on the
@@ -998,6 +1028,18 @@ class ReaderOptions : public io::ReaderOptions {
 
   void setLoadClusterIndex(bool value) {
     loadClusterIndex_ = value;
+  }
+
+  /// Cluster index implementation to load. Empty selects the format's default.
+  /// A file written with a different implementation has no index under this
+  /// name, so it opens without one rather than silently reading the wrong
+  /// index. Only effective when loadClusterIndex() is also true.
+  const std::string& clusterIndexName() const {
+    return clusterIndexName_;
+  }
+
+  void setClusterIndexName(std::string value) {
+    clusterIndexName_ = std::move(value);
   }
 
   /// Whether to eagerly preload all per-partition metadata and decode all
@@ -1088,12 +1130,14 @@ class ReaderOptions : public io::ReaderOptions {
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
   bool nimbleDirectBufferedInputEnabled_{false};
+  bool nimbleLazyFileStats_{false};
   bool cacheMetadata_{false};
   bool pinMetadata_{false};
   bool cacheIndex_{false};
   bool pinIndex_{false};
   bool cacheData_{true};
   bool loadClusterIndex_{false};
+  std::string clusterIndexName_;
   bool preloadIndex_{false};
   bool verifyStreamChecksums_{false};
   bool loadChunkStats_{true};

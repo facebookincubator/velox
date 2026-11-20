@@ -289,16 +289,12 @@ class CustomJoinTest : public HiveConnectorTestBase {
       const std::string& referenceQuery) {
     createDuckDbTable("t", {leftBatch});
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto leftNode =
-        PlanBuilder(planNodeIdGenerator).values({leftBatch}, true).planNode();
-    auto rightNode =
-        PlanBuilder(planNodeIdGenerator).values({rightBatch}, true).planNode();
+    PlanBuilder builder;
+    auto leftNode = builder.newPlan().values({leftBatch}, true).planNode();
+    auto rightNode = builder.newPlan().values({rightBatch}, true).planNode();
 
-    CursorParameters params;
-    params.maxDrivers = numThreads;
-    params.planNode =
-        PlanBuilder(planNodeIdGenerator)
+    auto plan =
+        builder.newPlan()
             .values({leftBatch}, true)
             .addNode([&leftNode, &rightNode](
                          std::string id, core::PlanNodePtr /* input */) {
@@ -308,7 +304,9 @@ class CustomJoinTest : public HiveConnectorTestBase {
             .project({"c0"})
             .planNode();
 
-    OperatorTestBase::assertQuery(params, referenceQuery);
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .maxDrivers(numThreads)
+        .assertResults(referenceQuery);
   }
 };
 
@@ -349,16 +347,16 @@ TEST_F(CustomJoinTest, mixedGroupedExecution) {
   auto vectors = makeVectors(rowType, 4, 20);
   auto filePath = writeToFile(vectors);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId probeScanNodeId;
   core::PlanNodeId buildScanNodeId;
 
-  auto buildNode = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto buildNode = builder.newPlan()
                        .tableScan(rowType)
                        .capturePlanNodeId(buildScanNodeId)
                        .planNode();
   auto plan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .tableScan(rowType)
           .capturePlanNodeId(probeScanNodeId)
           .addNode([&](const std::string& id, core::PlanNodePtr probeNode) {

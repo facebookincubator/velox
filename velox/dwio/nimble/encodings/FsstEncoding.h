@@ -59,6 +59,7 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/StringPageArena.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
@@ -195,13 +196,6 @@ class FsstEncoding final
   static constexpr size_t kMaxSymbolLength = 8;
 
   static constexpr size_t kStringPageSize = 256 * 1024;
-
-  struct StringPageSlot {
-    // Non-owning page address returned by stringBufferFactory_.
-    char* data;
-    // Number of writable bytes in the page.
-    size_t capacity;
-  };
 
   // Maps a compressed payload to its cached decompressed string for this call.
   struct DecodeCacheEntry {
@@ -414,11 +408,10 @@ class FsstEncoding final
       Buffer& buffer,
       const Encoding::Options& options);
 
-  // Decompresses a validated row payload into stable page storage, using
-  // scratch space when the page cannot hold the maximum possible expansion.
-  // Returned views never reference decompressBuffer_. Output pages are owned by
-  // stringBufferFactory_ and stay at fixed addresses until the caller releases
-  // them; reset() may reuse their contents after a read has completed.
+  // Decompresses a validated row payload into 'stringPages_', bounded by the
+  // maximum possible expansion. Output pages are owned by the string buffer
+  // factory and stay at fixed addresses until the caller releases them;
+  // reset() may reuse their contents after a read has completed.
   // The caller must first validate the containing range with
   // validateCompressedLengths().
   std::string_view decompressToStringBuffer(std::string_view compressed);
@@ -427,15 +420,6 @@ class FsstEncoding final
   bool testCompressedRange(
       std::string_view compressed,
       const velox::common::BytesRange& filter) const;
-
-  // Returns writable storage when the current page has enough room.
-  std::optional<std::span<char>> availablePageRange(size_t requiredBytes) const;
-
-  // Ensures at least requiredBytes remain in the current page and returns the
-  // first writable byte.
-  char* ensurePage(size_t requiredBytes);
-
-  const std::function<void*(uint32_t)> stringBufferFactory_;
 
   // FSST decoder (symbol table for decompression).
   fsst_decoder_t decoder_{};
@@ -454,18 +438,11 @@ class FsstEncoding final
   // Scratch buffer for materializing lengths.
   Vector<uint32_t> lengthBuffer_;
 
-  // Current string page for stable storage of decompressed values.
-  char* currentPage_{nullptr};
-  size_t pageCapacityBytes_{0};
-  size_t pageUsedBytes_{0};
-  // Factory-allocated pages retained as non-owning slots for reuse after reset.
-  std::vector<StringPageSlot> stringPages_;
-  // Slot containing currentPage_.
-  size_t currentPageIndex_{0};
-
-  // Scratch buffer used when the remaining page capacity cannot hold the
-  // maximum possible expansion of a compressed string.
-  Vector<char> decompressBuffer_;
+  // Keeps decompressed values at fixed addresses, in pages from the string
+  // buffer factory. Uses scratch space when the current page cannot hold the
+  // maximum possible expansion of a compressed string. reset() reuses the
+  // pages.
+  StringPageArena stringPages_;
 
   // Retains entry capacity; cache contents are cleared after each call.
   Vector<DecodeCacheEntry> decodeCacheEntries_;
