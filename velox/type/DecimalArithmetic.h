@@ -148,11 +148,11 @@ struct DecimalArithmetic {
   static constexpr int128_t kShortDecimalMax =
       detail::decimalPowerOfTen(kMaxShortPrecision) - 1;
 
-  /// Magnitude of a decimal's unscaled value, as an unsigned type. Widens to
-  /// unsigned before negating, since negating the signed minimum is undefined.
-  /// Lives here rather than on DecimalUtil so that callers need not reach the
-  /// runtime type system; DecimalUtil::absValue still resolves through
-  /// inheritance.
+  /// Returns the magnitude of a decimal's unscaled value as an unsigned type.
+  /// Widens to unsigned before negating, since negating the signed minimum is
+  /// undefined. Lives here rather than on DecimalUtil so that callers need not
+  /// reach the runtime type system; DecimalUtil::absValue still resolves
+  /// through inheritance.
   template <class T, typename = std::enable_if_t<std::is_same_v<T, int64_t>>>
   VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE static constexpr uint64_t absValue(
       int64_t a) {
