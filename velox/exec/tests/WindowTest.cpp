@@ -192,8 +192,7 @@ TEST_F(WindowTest, spill) {
           .assertResults(
               "SELECT *, row_number() over (partition by p order by s) FROM tmp");
 
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  const auto& stats = taskStats.at(windowId);
+  const auto stats = exec::PlanNodeStats::extract(task->taskStats(), windowId);
 
   ASSERT_GT(stats.spilledBytes, 0);
   ASSERT_GT(stats.spilledRows, 0);
@@ -240,8 +239,7 @@ TEST_F(WindowTest, spillBatchReadTinyPartitions) {
           .assertResults(
               "SELECT *, row_number() over (partition by p order by s) FROM tmp");
 
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  const auto& stats = taskStats.at(windowId);
+  const auto stats = exec::PlanNodeStats::extract(task->taskStats(), windowId);
 
   ASSERT_GT(stats.spilledBytes, 0);
   ASSERT_GT(stats.spilledRows, 0);
@@ -293,8 +291,7 @@ TEST_F(WindowTest, spillBatchReadHugePartitions) {
           .assertResults(
               "SELECT *, row_number() over (partition by p order by s) FROM tmp");
 
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  const auto& stats = taskStats.at(windowId);
+  const auto stats = exec::PlanNodeStats::extract(task->taskStats(), windowId);
 
   ASSERT_GT(stats.spilledBytes, 0);
   ASSERT_GT(stats.spilledRows, 0);
@@ -344,7 +341,7 @@ TEST_F(WindowTest, spillUnsupported) {
   ASSERT_EQ(stats.spilledRows, 0);
   ASSERT_EQ(stats.spilledFiles, 0);
   ASSERT_EQ(stats.spilledPartitions, 0);
-  ASSERT_GT(stats.customStat(Operator::kSpillNotSupported).sum, 1);
+  ASSERT_GT(stats.customSum(Operator::kSpillNotSupported), 1);
 }
 
 TEST_F(WindowTest, rowBasedStreamingWindowOOM) {
@@ -1541,8 +1538,7 @@ TEST_F(WindowTest, prePartitionedBuildWithSpill) {
           .assertResults(
               "SELECT *, row_number() over (partition by p order by s desc) FROM tmp ORDER BY s");
 
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  const auto& stats = taskStats.at(windowId);
+  const auto stats = exec::PlanNodeStats::extract(task->taskStats(), windowId);
 
   ASSERT_GT(stats.spilledBytes, 0);
   ASSERT_GT(stats.spilledRows, 0);

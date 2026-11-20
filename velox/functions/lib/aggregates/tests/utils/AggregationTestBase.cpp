@@ -429,9 +429,9 @@ void testAbandonedPartialMerge(
   ASSERT_GT(mergeStats.inputVectors, 1)
       << "Merge node received one input vector; the abandoned fast path was "
          "not exercised.";
-  EXPECT_GT(mergeStats.customStat("abandonedPartialAggregationRows").sum, 0);
+  EXPECT_GT(mergeStats.customSum("abandonedPartialAggregationRows"), 0);
   EXPECT_GE(
-      mergeStats.customStat("toIntermediateFastPathCalls").sum,
+      mergeStats.customSum("toIntermediateFastPathCalls"),
       mergeNode.aggregates().size() * (mergeStats.inputVectors - 1));
 }
 
@@ -603,9 +603,11 @@ void AggregationTestBase::testCompanionExtract(
     auto task = assertResults(queryBuilder);
 
     // Expect > 0 spilled bytes unless there was no input.
-    const auto planStats = exec::toPlanStats(task->taskStats());
-    const auto partialInputRows = planStats.at(partialNodeId).inputRows;
-    const auto finalInputRows = planStats.at(finalNodeId).inputRows;
+    const auto partialInputRows =
+        exec::PlanNodeStats::extract(task->taskStats(), partialNodeId)
+            .inputRows;
+    const auto finalInputRows =
+        exec::PlanNodeStats::extract(task->taskStats(), finalNodeId).inputRows;
     if (exec::injectedSpillCount() > 0) {
       EXPECT_LT(0, spilledBytes(*task))
           << "partial inputRows: " << partialInputRows
@@ -1206,9 +1208,11 @@ void AggregationTestBase::testAggregationsImpl(
     auto task = assertResults(queryBuilder);
 
     // Expect > 0 spilled bytes unless there was no input.
-    const auto planStats = exec::toPlanStats(task->taskStats());
-    const auto partialInputRows = planStats.at(partialNodeId).inputRows;
-    const auto finalInputRows = planStats.at(finalNodeId).inputRows;
+    const auto partialInputRows =
+        exec::PlanNodeStats::extract(task->taskStats(), partialNodeId)
+            .inputRows;
+    const auto finalInputRows =
+        exec::PlanNodeStats::extract(task->taskStats(), finalNodeId).inputRows;
     if (exec::injectedSpillCount() > 0) {
       EXPECT_LT(0, spilledBytes(*task))
           << "partial inputRows: " << partialInputRows
@@ -1257,13 +1261,14 @@ void AggregationTestBase::testAggregationsImpl(
 
     // Expect partial aggregation was turned off if there were more than 1 input
     // batches.
-    auto taskStats = toPlanStats(task->taskStats());
-    auto inputVectors = taskStats.at(partialNodeId).inputVectors;
-    auto partialStats = taskStats.at(partialNodeId).customStats;
-    auto intermediateStats = taskStats.at(intermediateNodeId).customStats;
-    if (inputVectors > 1) {
-      EXPECT_LT(0, partialStats.at("abandonedPartialAggregationRows").sum);
-      EXPECT_LT(0, intermediateStats.at("abandonedPartialAggregationRows").sum);
+    const auto partialStats =
+        exec::PlanNodeStats::extract(task->taskStats(), partialNodeId);
+    if (partialStats.inputVectors > 1) {
+      const auto intermediateStats =
+          exec::PlanNodeStats::extract(task->taskStats(), intermediateNodeId);
+      EXPECT_LT(0, partialStats.customSum("abandonedPartialAggregationRows"));
+      EXPECT_LT(
+          0, intermediateStats.customSum("abandonedPartialAggregationRows"));
     }
   }
 

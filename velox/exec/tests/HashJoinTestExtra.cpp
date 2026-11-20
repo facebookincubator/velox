@@ -686,21 +686,22 @@ TEST_P(HashJoinTest, dynamicFilters) {
               "SELECT u.c0, u.c1 + 1 FROM u WHERE u.c0 IN (SELECT c0 FROM t)")
           .verifier([&](const TaskPtr& task, bool hasSpill) {
             SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
-            auto planStats = toPlanStats(task->taskStats());
+            const auto planStats =
+                PlanNodeStats::extract(task->taskStats(), probeScanId);
             if (hasSpill) {
               // Dynamic filtering should be disabled with spilling triggered.
               ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
               ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
               ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
               ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
-              ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+              ASSERT_TRUE(planStats.dynamicFilterStats.empty());
             } else {
               ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
               ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
               ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
               ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
               ASSERT_EQ(
-                  planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                  planStats.dynamicFilterStats.producerNodeIds,
                   std::unordered_set<core::PlanNodeId>({joinId}));
             }
           })
@@ -772,21 +773,22 @@ TEST_P(HashJoinTest, dynamicFilters) {
               "SELECT u.c0, u.c1 + 1 FROM u WHERE NOT EXISTS (SELECT 1 FROM t WHERE t.c0 = u.c0)")
           .verifier([&](const TaskPtr& task, bool hasSpill) {
             SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
-            auto planStats = toPlanStats(task->taskStats());
+            const auto planStats =
+                PlanNodeStats::extract(task->taskStats(), probeScanId);
             if (hasSpill) {
               // Dynamic filtering should be disabled with spilling triggered.
               ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
               ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
               ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
               ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
-              ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+              ASSERT_TRUE(planStats.dynamicFilterStats.empty());
             } else {
               ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
               ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
               ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
               ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
               ASSERT_EQ(
-                  planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                  planStats.dynamicFilterStats.producerNodeIds,
                   std::unordered_set<core::PlanNodeId>({joinId}));
             }
           })
@@ -865,21 +867,22 @@ TEST_P(HashJoinTest, dynamicFilters) {
             "SELECT t.c1 + u.c1 FROM t, u WHERE t.c0 = u.c0 AND t.c0 < 500")
         .verifier([&](const TaskPtr& task, bool hasSpill) {
           SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
-          auto planStats = toPlanStats(task->taskStats());
+          const auto planStats =
+              PlanNodeStats::extract(task->taskStats(), probeScanId);
           if (hasSpill) {
             // Dynamic filtering should be disabled with spilling triggered.
             ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
             ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
             ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
             ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
-            ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+            ASSERT_TRUE(planStats.dynamicFilterStats.empty());
           } else {
             ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
             ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
             ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
             ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
             ASSERT_EQ(
-                planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                planStats.dynamicFilterStats.producerNodeIds,
                 std::unordered_set<core::PlanNodeId>({joinId}));
           }
         })
@@ -949,14 +952,15 @@ TEST_P(HashJoinTest, dynamicFilters) {
         .referenceQuery("SELECT t.c0 FROM t JOIN u ON (t.c0 = u.c0)")
         .verifier([&](const TaskPtr& task, bool hasSpill) {
           SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
-          auto planStats = toPlanStats(task->taskStats());
+          const auto planStats =
+              PlanNodeStats::extract(task->taskStats(), probeScanId);
           if (hasSpill) {
             // Dynamic filtering should be disabled with spilling triggered.
             ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
             ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
             ASSERT_EQ(0, getReplacedWithFilterRows(task, 1).sum);
             ASSERT_EQ(getInputPositions(task, 1), numRowsProbe * numSplits);
-            ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+            ASSERT_TRUE(planStats.dynamicFilterStats.empty());
           } else {
             ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
             ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
@@ -965,7 +969,7 @@ TEST_P(HashJoinTest, dynamicFilters) {
                 numRowsBuild * numSplits);
             ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
             ASSERT_EQ(
-                planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                planStats.dynamicFilterStats.producerNodeIds,
                 std::unordered_set<core::PlanNodeId>({joinId}));
           }
         })
@@ -1039,21 +1043,22 @@ TEST_P(HashJoinTest, dynamicFilters) {
               "SELECT t.c1 + 1 FROM t, u WHERE t.c0 = u.c0 AND t.c0 < 200")
           .verifier([&](const TaskPtr& task, bool hasSpill) {
             SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
-            auto planStats = toPlanStats(task->taskStats());
+            const auto planStats =
+                PlanNodeStats::extract(task->taskStats(), probeScanId);
             if (hasSpill) {
               // Dynamic filtering should be disabled with spilling triggered.
               ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
               ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
               ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
               ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
-              ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+              ASSERT_TRUE(planStats.dynamicFilterStats.empty());
             } else {
               ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
               ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
               ASSERT_GT(getReplacedWithFilterRows(task, 1).sum, 0);
               ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
               ASSERT_EQ(
-                  planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                  planStats.dynamicFilterStats.producerNodeIds,
                   std::unordered_set<core::PlanNodeId>({joinId}));
             }
           })
@@ -1130,21 +1135,22 @@ TEST_P(HashJoinTest, dynamicFilters) {
               "SELECT u.c1 + 1 FROM u WHERE u.c0 IN (SELECT c0 FROM t) AND u.c0 < 200")
           .verifier([&](const TaskPtr& task, bool hasSpill) {
             SCOPED_TRACE(fmt::format("hasSpill:{}", hasSpill));
-            auto planStats = toPlanStats(task->taskStats());
+            const auto planStats =
+                PlanNodeStats::extract(task->taskStats(), probeScanId);
             if (hasSpill) {
               // Dynamic filtering should be disabled with spilling triggered.
               ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
               ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
               ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
               ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
-              ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+              ASSERT_TRUE(planStats.dynamicFilterStats.empty());
             } else {
               ASSERT_EQ(1, getFiltersProduced(task, 1).sum);
               ASSERT_EQ(1, getFiltersAccepted(task, 0).sum);
               ASSERT_EQ(getReplacedWithFilterRows(task, 1).sum, 0);
               ASSERT_LT(getInputPositions(task, 1), numRowsProbe * numSplits);
               ASSERT_EQ(
-                  planStats.at(probeScanId).dynamicFilterStats.producerNodeIds,
+                  planStats.dynamicFilterStats.producerNodeIds,
                   std::unordered_set<core::PlanNodeId>({joinId}));
             }
           })
@@ -1209,7 +1215,6 @@ TEST_P(HashJoinTest, dynamicFilters) {
         .planNode(std::move(op))
         .referenceQuery("SELECT t.c1 + 1 FROM t, u WHERE t.c0 = u.c0")
         .verifier([&](const TaskPtr& task, bool hasSpill) {
-          auto planStats = toPlanStats(task->taskStats());
           ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
           ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
           ASSERT_EQ(numRowsProbe * numSplits, getInputPositions(task, 1));
@@ -1237,11 +1242,12 @@ TEST_P(HashJoinTest, dynamicFilters) {
         .makeInputSplits(makeInputSplits(probeScanId))
         .referenceQuery("SELECT t.c1 + 1 FROM t, u WHERE (t.c0 + 1) = u.c0")
         .verifier([&](const TaskPtr& task, bool hasSpill) {
-          auto planStats = toPlanStats(task->taskStats());
+          const auto planStats =
+              PlanNodeStats::extract(task->taskStats(), probeScanId);
           ASSERT_EQ(0, getFiltersProduced(task, 1).sum);
           ASSERT_EQ(0, getFiltersAccepted(task, 0).sum);
           ASSERT_EQ(numRowsProbe * numSplits, getInputPositions(task, 1));
-          ASSERT_TRUE(planStats.at(probeScanId).dynamicFilterStats.empty());
+          ASSERT_TRUE(planStats.dynamicFilterStats.empty());
         })
         .run();
   }
@@ -2031,10 +2037,9 @@ TEST_P(HashJoinTest, dynamicFiltersAppliedToPreloadedSplits) {
       .referenceQuery("select p.p0 from p, b where b.b0 = p.p1")
       .checkSpillStats(false)
       .verifier([&](const TaskPtr& task, bool /*hasSpill*/) {
-        const auto planStats = toPlanStats(task->taskStats());
         auto getStatSum = [&](const core::PlanNodeId& id,
                               const std::string& name) {
-          return planStats.at(id).customStat(name).sum;
+          return PlanNodeStats::extract(task->taskStats(), id).customSum(name);
         };
         ASSERT_EQ(1, getStatSum(joinNodeId, "dynamicFiltersProduced"));
         ASSERT_EQ(1, getStatSum(probeScanId, "dynamicFiltersAccepted"));
@@ -3849,8 +3854,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, exceededMaxSpillLevel) {
             PlanNodeStats::extract(task->taskStats(), joinNodeId);
         ASSERT_EQ(
             joinStats.operatorStatsFor("HashProbe")
-                .customStat(Operator::kExceededMaxSpillLevel)
-                .sum,
+                .customSum(Operator::kExceededMaxSpillLevel),
             8);
         ASSERT_EQ(
             joinStats.operatorStatsFor("HashProbe")
@@ -3859,8 +3863,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, exceededMaxSpillLevel) {
             1);
         ASSERT_EQ(
             joinStats.operatorStatsFor("HashBuild")
-                .customStat(Operator::kExceededMaxSpillLevel)
-                .sum,
+                .customSum(Operator::kExceededMaxSpillLevel),
             8);
         ASSERT_EQ(
             joinStats.operatorStatsFor("HashBuild")
@@ -4021,8 +4024,8 @@ TEST_P(HashJoinTest, reclaimFromJoinBuilderWithMultiDrivers) {
       pool(),
       true,
       expectedResult);
-  auto taskStats = exec::toPlanStats(result.task->taskStats());
-  auto& planStats = taskStats.at(result.planNodeId);
+  const auto planStats =
+      exec::PlanNodeStats::extract(result.task->taskStats(), result.planNodeId);
   ASSERT_GT(planStats.spilledBytes, 0);
   result.task.reset();
 
@@ -4216,8 +4219,8 @@ DEBUG_ONLY_TEST_P(
   std::thread joinThread([&]() {
     const auto result = runHashJoinTask(
         vectors, queryCtx, false, numDrivers, pool(), true, expectedResult);
-    auto taskStats = exec::toPlanStats(result.task->taskStats());
-    auto& planStats = taskStats.at(result.planNodeId);
+    const auto planStats = exec::PlanNodeStats::extract(
+        result.task->taskStats(), result.planNodeId);
     ASSERT_EQ(planStats.spilledBytes, 0);
   });
 
@@ -4301,8 +4304,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, reclaimDuringTableBuild) {
             PlanNodeStats::extract(task->taskStats(), joinNodeId);
         ASSERT_GT(
             joinStats.operatorStatsFor("HashBuild")
-                .customStat(Operator::kSpillWrites)
-                .sum,
+                .customSum(Operator::kSpillWrites),
             0);
       })
       .run();
@@ -4776,8 +4778,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, taskWaitTimeout) {
               pool(),
               true,
               expectedResult);
-          auto taskStats = exec::toPlanStats(result.task->taskStats());
-          auto& planStats = taskStats.at(result.planNodeId);
+          const auto planStats = exec::PlanNodeStats::extract(
+              result.task->taskStats(), result.planNodeId);
           ASSERT_GT(planStats.spilledBytes, 0);
         } catch (const VeloxRuntimeError& e) {
           ASSERT_EQ(e.errorCode(), error_code::kMemCapExceeded)
@@ -5366,8 +5368,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, spillCheckOnLeftSemiFilterWithDynamicFilters) {
           "SELECT t.c0, t.c1 + 1 FROM t WHERE t.c0 IN (SELECT c0 FROM u)")
       .verifier([&](const TaskPtr& task, bool /*unused*/) {
         // Verify spill hasn't triggered.
-        auto taskStats = exec::toPlanStats(task->taskStats());
-        auto& planStats = taskStats.at(joinNodeId);
+        const auto planStats =
+            exec::PlanNodeStats::extract(task->taskStats(), joinNodeId);
         ASSERT_GT(planStats.spilledBytes, 0);
       })
       .run();

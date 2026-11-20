@@ -173,7 +173,7 @@ TEST_F(TableScanTest, allColumns) {
   // A quick sanity check of the scan's stats.
   const auto scanStats = PlanNodeStats::extract(task->taskStats(), plan->id());
   ASSERT_GT(scanStats.peakMemoryBytes, 0);
-  ASSERT_GT(scanStats.customStat(io::kIoWaitWallNanos).sum, 0);
+  ASSERT_GT(scanStats.customSum(io::kIoWaitWallNanos), 0);
   ASSERT_TRUE(scanStats.dynamicFilterStats.empty());
 }
 
@@ -267,15 +267,14 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   // memory usage for the project node is > 0.
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   const auto rawInputBytes = stats.rawInputBytes;
-  const auto overreadBytes = stats.customStat(io::kOverreadBytes).sum;
+  const auto overreadBytes = stats.customSum(io::kOverreadBytes);
   ASSERT_GE(rawInputBytes, 500);
   ASSERT_EQ(overreadBytes, 13);
   // Without preloading, storageReadBytes is the sum of individual stream reads.
   ASSERT_LE(
-      stats.customStat(io::kStorageReadBytes).sum,
-      rawInputBytes + overreadBytes);
-  ASSERT_GT(stats.customStat(io::kTotalScanTime).sum, 0);
-  ASSERT_GT(stats.customStat(io::kIoWaitWallNanos).sum, 0);
+      stats.customSum(io::kStorageReadBytes), rawInputBytes + overreadBytes);
+  ASSERT_GT(stats.customSum(io::kTotalScanTime), 0);
+  ASSERT_GT(stats.customSum(io::kIoWaitWallNanos), 0);
 }
 
 TEST_F(TableScanTest, directBufferInputInlineCoalescedLoadIoWait) {
@@ -347,14 +346,14 @@ TEST_F(TableScanTest, directBufferInputInlineCoalescedLoadIoWait) {
   // Nothing prefetched, so the query thread read every coalesced load itself.
   ASSERT_FALSE(scanStats.hasCustomStat(io::kNumPrefetch));
   // Both timers ran, so the comparisons below are not vacuous.
-  ASSERT_GT(scanStats.customStat(io::kCoalescedStorageLoadWallNanos).sum, 0);
-  ASSERT_GT(scanStats.customStat(io::kStorageReadWallNanos).sum, 0);
+  ASSERT_GT(scanStats.customSum(io::kCoalescedStorageLoadWallNanos), 0);
+  ASSERT_GT(scanStats.customSum(io::kStorageReadWallNanos), 0);
 
   // Every read happened on the driver thread inside getOutput(), so the thread
   // cannot have been blocked for longer than the operator ran. Timing an
   // inline coalesced load twice pushes the reported wait past that.
   EXPECT_LE(
-      scanStats.customStat(io::kIoWaitWallNanos).sum,
+      scanStats.customSum(io::kIoWaitWallNanos),
       scanStats.getOutputTiming.wallNanos);
 
   // An inline coalesced load is timed into coalescedStorageLoadWallNanos by
@@ -362,9 +361,9 @@ TEST_F(TableScanTest, directBufferInputInlineCoalescedLoadIoWait) {
   // thread waited out one of those intervals, not both, so its wait has to
   // come in strictly under their sum.
   EXPECT_LT(
-      scanStats.customStat(io::kIoWaitWallNanos).sum,
-      scanStats.customStat(io::kCoalescedStorageLoadWallNanos).sum +
-          scanStats.customStat(io::kStorageReadWallNanos).sum);
+      scanStats.customSum(io::kIoWaitWallNanos),
+      scanStats.customSum(io::kCoalescedStorageLoadWallNanos) +
+          scanStats.customSum(io::kStorageReadWallNanos));
 }
 
 DEBUG_ONLY_TEST_F(TableScanTest, pendingCoalescedIoWhenTaskFailed) {
@@ -1945,7 +1944,7 @@ TEST_F(TableScanTest, multipleSplits) {
         assertQuery(plan, filePaths, "SELECT * FROM tmp", numPrefetchSplit);
     const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
     if (numPrefetchSplit != 0) {
-      ASSERT_GT(stats.customStat(TableScan::kPreloadedSplits).sum, 10);
+      ASSERT_GT(stats.customSum(TableScan::kPreloadedSplits), 10);
     } else {
       ASSERT_FALSE(stats.hasCustomStat(TableScan::kPreloadedSplits));
     }
@@ -1961,7 +1960,7 @@ TEST_F(TableScanTest, preloadSplits) {
   auto task = assertQuery(
       plan, filePaths, "SELECT * FROM tmp", /*numPrefetchSplit=*/10);
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  ASSERT_EQ(stats.customStat(TableScan::kPreloadedSplits).sum, 10);
+  ASSERT_EQ(stats.customSum(TableScan::kPreloadedSplits), 10);
 }
 
 TEST_F(TableScanTest, preloadingSplitClose) {
@@ -1985,7 +1984,7 @@ TEST_F(TableScanTest, preloadingSplitClose) {
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
 
   // Verify that split preloading is enabled.
-  ASSERT_GT(stats.customStat(TableScan::kPreloadedSplits).sum, 1);
+  ASSERT_GT(stats.customSum(TableScan::kPreloadedSplits), 1);
 
   task.reset();
   // Once all task references are cleared, all the tasks should be destroyed.
@@ -2462,13 +2461,13 @@ TEST_F(TableScanTest, statsBasedSkippingBool) {
   };
   auto stats = runScan("c1 = true");
   EXPECT_EQ(20'000, stats.rawInputRows);
-  EXPECT_EQ(2, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(2, stats.customSum(dwio::common::kSkippedStrides));
   EXPECT_EQ(1, stats.numSplits);
   EXPECT_EQ(1, stats.numDrivers);
 
   stats = runScan("c1 = false");
   EXPECT_EQ(size - 20'000, stats.rawInputRows);
-  EXPECT_EQ(2, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(2, stats.customSum(dwio::common::kSkippedStrides));
 }
 
 TEST_F(TableScanTest, statsBasedSkippingDouble) {
@@ -2491,23 +2490,23 @@ TEST_F(TableScanTest, statsBasedSkippingDouble) {
 
   auto stats = runScan("c0 <= -1.05");
   EXPECT_EQ(0, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedSplits).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedSplits));
 
   // c0 >= 11,111.06 - first stride should be skipped based on stats
   stats = runScan("c0 >= 11111.06");
   EXPECT_EQ(size - 10'000, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedStrides));
 
   // c0 between 10'100.06 and 10'500.08 - all strides but second should be
   // skipped based on stats
   stats = runScan("c0 between 10100.06 AND 10500.08");
   EXPECT_EQ(10'000, stats.rawInputRows);
-  EXPECT_EQ(3, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(3, stats.customSum(dwio::common::kSkippedStrides));
 
   // c0 <= 1,234.005 - all strides but first should be skipped
   stats = runScan("c0 <= 1234.005");
   EXPECT_EQ(10'000, stats.rawInputRows);
-  EXPECT_EQ(3, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(3, stats.customSum(dwio::common::kSkippedStrides));
 }
 
 TEST_F(TableScanTest, statsBasedSkippingFloat) {
@@ -2531,23 +2530,23 @@ TEST_F(TableScanTest, statsBasedSkippingFloat) {
 
   auto stats = runScan("c0 <= '-1.05'::REAL");
   EXPECT_EQ(0, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedSplits).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedSplits));
 
   // c0 >= 11,111.06 - first stride should be skipped based on stats
   stats = runScan("c0 >= 11111.06::REAL");
   EXPECT_EQ(size - 10'000, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedStrides));
 
   // c0 between 10'100.06 and 10'500.08 - all strides but second should be
   // skipped based on stats
   stats = runScan("c0 between 10100.06::REAL AND 10500.08::REAL");
   EXPECT_EQ(10'000, stats.rawInputRows);
-  EXPECT_EQ(3, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(3, stats.customSum(dwio::common::kSkippedStrides));
 
   // c0 <= 1,234.005 - all strides but first should be skipped
   stats = runScan("c0 <= 1234.005::REAL");
   EXPECT_EQ(10'000, stats.rawInputRows);
-  EXPECT_EQ(3, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(3, stats.customSum(dwio::common::kSkippedStrides));
 }
 
 // Test skipping whole file based on statistics
@@ -2613,39 +2612,39 @@ TEST_F(TableScanTest, statsBasedSkipping) {
   subfieldFilters = singleSubfieldFilter("c2", equal("tomato"));
   stats = runScan("SELECT c1 FROM tmp WHERE c2 = 'tomato'");
   EXPECT_EQ(0, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedSplits).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedSplits));
 
   // c2 in ("x", "y") -> whole file should be skipped based on stats
   subfieldFilters =
       singleSubfieldFilter("c2", orFilter(equal("x"), equal("y")));
   stats = runScan("SELECT c1 FROM tmp WHERE c2 IN ('x', 'y')");
   EXPECT_EQ(0, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedSplits).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedSplits));
 
   // c0 >= 11,111 - first stride should be skipped based on stats
   subfieldFilters = singleSubfieldFilter("c0", greaterThanOrEqual(11'111));
   stats = runScan("SELECT c1 FROM tmp WHERE c0 >= 11111");
   EXPECT_EQ(size - 10'000, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedStrides));
 
   // c2 = "banana" - odd stripes should be skipped based on stats
   subfieldFilters = singleSubfieldFilter("c2", equal("banana"));
   stats = runScan("SELECT c1 FROM tmp WHERE c2 = 'banana'");
   EXPECT_EQ(20'000, stats.rawInputRows);
-  EXPECT_EQ(2, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(2, stats.customSum(dwio::common::kSkippedStrides));
 
   // c2 in ("banana", "y") -> same as previous
   subfieldFilters =
       singleSubfieldFilter("c2", orFilter(equal("banana"), equal("y")));
   stats = runScan("SELECT c1 FROM tmp WHERE c2 IN ('banana', 'y')");
   EXPECT_EQ(20'000, stats.rawInputRows);
-  EXPECT_EQ(2, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(2, stats.customSum(dwio::common::kSkippedStrides));
 
   // c2 = "squash" - even stripes should be skipped based on stats
   subfieldFilters = singleSubfieldFilter("c2", equal("squash"));
   stats = runScan("SELECT c1 FROM tmp WHERE c2 = 'squash'");
   EXPECT_EQ(size - 20'000, stats.rawInputRows);
-  EXPECT_EQ(2, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(2, stats.customSum(dwio::common::kSkippedStrides));
 
   // c2 in ("banana", "squash") -> no skipping
   subfieldFilters =
@@ -2659,20 +2658,20 @@ TEST_F(TableScanTest, statsBasedSkipping) {
       "c0", bigintOr(lessThanOrEqual(100), greaterThanOrEqual(20'100)));
   stats = runScan("SELECT c1 FROM tmp WHERE c0 <= 100 OR c0 >= 20100");
   EXPECT_EQ(size - 10'000, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedStrides));
 
   // c0 between 10'100 and 10'500 - all strides but second should be skipped
   // based on stats
   subfieldFilters = singleSubfieldFilter("c0", between(10'100, 10'500));
   stats = runScan("SELECT c1 FROM tmp WHERE c0 between 10100 AND 10500");
   EXPECT_EQ(10'000, stats.rawInputRows);
-  EXPECT_EQ(3, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(3, stats.customSum(dwio::common::kSkippedStrides));
 
   // c0 <= 1,234 - all strides but first should be skipped
   subfieldFilters = singleSubfieldFilter("c0", lessThanOrEqual(1'234));
   stats = runScan("SELECT c1 FROM tmp WHERE c0 <= 1234");
   EXPECT_EQ(10'000, stats.rawInputRows);
-  EXPECT_EQ(3, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(3, stats.customSum(dwio::common::kSkippedStrides));
 
   // c0 >= 10234 AND c1 <= 20345 - first and last strides should be skipped
   subfieldFilters = SubfieldFiltersBuilder()
@@ -2681,7 +2680,7 @@ TEST_F(TableScanTest, statsBasedSkipping) {
                         .build();
   stats = runScan("SELECT c1 FROM tmp WHERE c0 >= 10234 AND c1 <= 20345");
   EXPECT_EQ(20'000, stats.rawInputRows);
-  EXPECT_EQ(2, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(2, stats.customSum(dwio::common::kSkippedStrides));
 }
 
 // Test skipping files and row groups containing constant values based on
@@ -2722,25 +2721,25 @@ TEST_F(TableScanTest, statsBasedSkippingConstants) {
   // skip whole file
   auto stats = runScan("c0 in (0, 10, 100, 1000)");
   EXPECT_EQ(0, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedSplits).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedSplits));
 
   // skip all but first rowgroup
   stats = runScan("c1 in (0, 10, 100, 1000)");
 
   EXPECT_EQ(10'000, stats.rawInputRows);
-  EXPECT_EQ(3, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(3, stats.customSum(dwio::common::kSkippedStrides));
 
   // skip whole file
   stats = runScan("c2 in ('apple', 'cherry')");
 
   EXPECT_EQ(0, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedSplits).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedSplits));
 
   // skip all but second rowgroup
   stats = runScan("c3 in ('banana', 'grapefruit')");
 
   EXPECT_EQ(10'000, stats.rawInputRows);
-  EXPECT_EQ(3, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(3, stats.customSum(dwio::common::kSkippedStrides));
 }
 
 // Test stats-based skipping for the IS NULL filter.
@@ -2783,7 +2782,7 @@ TEST_F(TableScanTest, statsBasedSkippingNulls) {
   EXPECT_EQ(0, stats.rawInputRows);
   EXPECT_EQ(0, stats.inputRows);
   EXPECT_EQ(0, stats.outputRows);
-  ASSERT_EQ(stats.customStat(dwio::common::kSkippedSplits).sum, 1);
+  ASSERT_EQ(stats.customSum(dwio::common::kSkippedSplits), 1);
   ASSERT_FALSE(stats.hasCustomStat(dwio::common::kSkippedStrides));
 
   // c1 IS NULL - first stride should be skipped based on stats
@@ -2792,7 +2791,7 @@ TEST_F(TableScanTest, statsBasedSkippingNulls) {
   EXPECT_EQ(size - 11'111, stats.inputRows);
   EXPECT_EQ(size - 11'111, stats.outputRows);
   ASSERT_FALSE(stats.hasCustomStat(dwio::common::kSkippedSplits));
-  ASSERT_EQ(stats.customStat(dwio::common::kSkippedStrides).sum, 1);
+  ASSERT_EQ(stats.customSum(dwio::common::kSkippedStrides), 1);
 
   // c1 IS NOT NULL - 3rd and 4th strides should be skipped based on stats
   stats = runScan("c1 IS NOT NULL");
@@ -2800,7 +2799,7 @@ TEST_F(TableScanTest, statsBasedSkippingNulls) {
   EXPECT_EQ(11'111, stats.inputRows);
   EXPECT_EQ(11'111, stats.outputRows);
   ASSERT_FALSE(stats.hasCustomStat(dwio::common::kSkippedSplits));
-  ASSERT_EQ(stats.customStat(dwio::common::kSkippedStrides).sum, 2);
+  ASSERT_EQ(stats.customSum(dwio::common::kSkippedStrides), 2);
 }
 
 // Test skipping whole compression blocks without decompressing these.
@@ -3499,7 +3498,7 @@ TEST_F(TableScanTest, bucketPruning) {
                            const core::PlanNodeId& scanId) {
     const auto stats = PlanNodeStats::extract(task->taskStats(), scanId);
     return stats.hasCustomStat(dwio::common::kSkippedSplits)
-        ? stats.customStat(dwio::common::kSkippedSplits).sum
+        ? stats.customSum(dwio::common::kSkippedSplits)
         : 0;
   };
 
@@ -3522,8 +3521,7 @@ TEST_F(TableScanTest, bucketPruning) {
     if (numPreloadSplits > 0) {
       EXPECT_GT(
           PlanNodeStats::extract(task->taskStats(), plan->id())
-              .customStat(TableScan::kPreloadedSplits)
-              .sum,
+              .customSum(TableScan::kPreloadedSplits),
           0);
     }
   }
@@ -4312,8 +4310,7 @@ TEST_F(TableScanTest, randomSample) {
   ASSERT_TRUE(TaskMonitor::waitForCompletion(*cursor->task()));
   ASSERT_GT(
       PlanNodeStats::extract(cursor->task()->taskStats(), scanId)
-          .customStat(dwio::common::kSkippedStrides)
-          .sum,
+          .customSum(dwio::common::kSkippedStrides),
       0);
   double expectedNumRows = 0.01 * numTotalRows;
   ASSERT_LT(abs(numRows - expectedNumRows) / expectedNumRows, 0.1);
@@ -4380,7 +4377,7 @@ TEST_F(TableScanTest, aggregationPushdown) {
                               const core::PlanNodePtr& plan) {
     const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
     return stats.hasCustomStat("loadedToValueHook")
-        ? stats.customStat("loadedToValueHook").sum
+        ? stats.customSum("loadedToValueHook")
         : 0;
   };
 
@@ -4577,8 +4574,7 @@ TEST_F(TableScanTest, aggregationPushdownSchemaEvolution) {
               it == duckDbAgg.end() ? agg : it->second));
       ASSERT_EQ(
           PlanNodeStats::extract(task->taskStats(), plan->id())
-              .customStat("loadedToValueHook")
-              .sum,
+              .customSum("loadedToValueHook"),
           kSize);
     }
   };
@@ -5855,8 +5851,7 @@ TEST_F(TableScanTest, flatMapReuseWithRemainingFilter) {
                         connector::FileConfig::kPreserveFlatMapsInMemorySession,
                         "true")
                     .assertResults(expected);
-    const auto planStats = toPlanStats(task->taskStats());
-    const auto& scanStats = planStats.at(scanId);
+    const auto scanStats = PlanNodeStats::extract(task->taskStats(), scanId);
     EXPECT_GE(scanStats.outputVectors, kNumRows / kBatchRows);
     return scanStats.numMemoryAllocations;
   };
@@ -6044,9 +6039,9 @@ TEST_F(TableScanTest, bloomFilterPushdown) {
 
     const auto joinStats = PlanNodeStats::extract(task->taskStats(), joinId);
     ASSERT_EQ(
-        joinStats.customStat(DriverStats::kDynamicFiltersProduced).sum,
+        joinStats.customSum(DriverStats::kDynamicFiltersProduced),
         parallelBuild ? 2 : 1);
-    ASSERT_GT(joinStats.customStat(HashProbe::kBloomFilterSize).sum, 0);
+    ASSERT_GT(joinStats.customSum(HashProbe::kBloomFilterSize), 0);
   }
 }
 
@@ -6400,7 +6395,7 @@ TEST_F(TableScanTest, rowId) {
     }
     auto task = query.assertResults(expected);
     const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-    ASSERT_GT(stats.customStat(TableScan::kPreloadedSplits).sum, 0);
+    ASSERT_GT(stats.customSum(TableScan::kPreloadedSplits), 0);
   }
   {
     SCOPED_TRACE("Remaining filter only");
@@ -6697,8 +6692,7 @@ TEST_F(TableScanTest, dynamicFilterWithReadRangeColumn) {
 
   EXPECT_EQ(
       PlanNodeStats::extract(task->taskStats(), joinId)
-          .customStat(DriverStats::kDynamicFiltersProduced)
-          .sum,
+          .customSum(DriverStats::kDynamicFiltersProduced),
       1);
 }
 
@@ -6746,7 +6740,7 @@ TEST_F(TableScanTest, footerIOCount) {
               BaseVector::create<RowVector>(vector->type(), 0, pool()));
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   ASSERT_EQ(stats.customStat(io::kStorageReadBytes).count, 1);
-  ASSERT_GT(stats.customStat(dwio::common::kFooterBufferOverread).sum, 0);
+  ASSERT_GT(stats.customSum(dwio::common::kFooterBufferOverread), 0);
 }
 
 TEST_F(TableScanTest, statsBasedFilterReorderBothEnabledAndDisabled) {
@@ -6833,7 +6827,7 @@ TEST_F(TableScanTest, statsBasedFilterReorderBothEnabledAndDisabled) {
       auto tableScanStats =
           PlanNodeStats::extract(task->taskStats(), plan->id());
       ASSERT_TRUE(tableScanStats.hasCustomStat(io::kStorageReadBytes));
-      ASSERT_GT(tableScanStats.customStat(io::kStorageReadBytes).sum, 0);
+      ASSERT_GT(tableScanStats.customSum(io::kStorageReadBytes), 0);
       ASSERT_GT(tableScanStats.customStat(io::kStorageReadBytes).count, 0);
       ASSERT_EQ(tableScanStats.numSplits, numSplits);
     }
@@ -6876,7 +6870,7 @@ TEST_F(TableScanTest, statsBasedFilterReorderBothEnabledAndDisabled) {
         }
         // Cache miss, should behave like first time run
         ASSERT_TRUE(tableScanStats.hasCustomStat(io::kStorageReadBytes));
-        ASSERT_GT(tableScanStats.customStat(io::kStorageReadBytes).sum, 0);
+        ASSERT_GT(tableScanStats.customSum(io::kStorageReadBytes), 0);
         ASSERT_GT(tableScanStats.customStat(io::kStorageReadBytes).count, 0);
       }
       ASSERT_EQ(tableScanStats.numSplits, numSplits);
@@ -6971,7 +6965,7 @@ TEST_F(TableScanTest, textfileEscape) {
                   .assertResults(expected);
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   const int64_t overreadBytes = stats.hasCustomStat(io::kOverreadBytes)
-      ? stats.customStat(io::kOverreadBytes).sum
+      ? stats.customSum(io::kOverreadBytes)
       : 0;
 
   ASSERT_EQ(stats.rawInputBytes, 11);
@@ -7027,11 +7021,8 @@ TEST_F(TableScanTest, textfileChunkReadEntireFile) {
                   .split(split)
                   .assertResults(expected);
 
-  auto planStats = facebook::velox::exec::toPlanStats(task->taskStats());
-  auto scanNodeId = plan->id();
-  auto it = planStats.find(scanNodeId);
-  ASSERT_TRUE(it != planStats.end());
-  auto rawInputBytes = it->second.rawInputBytes;
+  const auto rawInputBytes =
+      PlanNodeStats::extract(task->taskStats(), plan->id()).rawInputBytes;
 
   // Entire file was read in a single chunk even though range is [0,59]
   ASSERT_EQ(rawInputBytes, 106);
@@ -7119,8 +7110,8 @@ TEST_F(TableScanTest, textfileLarge) {
 
   // Verify we did not read the entire file but only a chunk
   ASSERT_EQ(stats.rawInputBytes, loadQuantum);
-  ASSERT_GT(stats.customStat(io::kTotalScanTime).sum, 0);
-  ASSERT_GT(stats.customStat(io::kIoWaitWallNanos).sum, 0);
+  ASSERT_GT(stats.customSum(io::kTotalScanTime), 0);
+  ASSERT_GT(stats.customSum(io::kIoWaitWallNanos), 0);
 }
 
 TEST_F(TableScanTest, duplicateFieldProject) {
@@ -7439,11 +7430,8 @@ TEST_F(TableScanTest, fileFormatRuntimeStats) {
   auto task = assertQuery(plan, filePaths, "SELECT * FROM tmp");
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   ASSERT_EQ(
-      stats
-          .customStat(
-              fmt::format(
-                  "{}dwrf", connector::hive::HiveDataSource::kFileFormat))
-          .sum,
+      stats.customSum(
+          fmt::format("{}dwrf", connector::hive::HiveDataSource::kFileFormat)),
       3);
 }
 
@@ -7623,8 +7611,7 @@ TEST_F(TableScanTest, scanBatchCallbackStorageReadBytes) {
   // small -- a delta measured only around next() would report zero here.
   const auto operatorBytes =
       PlanNodeStats::extract(task->taskStats(), plan->id())
-          .customStat(io::kStorageReadBytes)
-          .sum;
+          .customSum(io::kStorageReadBytes);
   EXPECT_GT(operatorBytes, 0);
   EXPECT_EQ(summedEventBytes, operatorBytes);
 }
@@ -7664,13 +7651,13 @@ TEST_F(TableScanTest, scanBatchCallbackStorageReadBytesMultiStripe) {
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   // Guards against the file collapsing to a single stripe, which would make
   // this a duplicate of the test above.
-  ASSERT_GT(stats.customStat(dwio::common::kNumStripes).sum, 1);
-  const auto operatorBytes = stats.customStat(io::kStorageReadBytes).sum;
+  ASSERT_GT(stats.customSum(dwio::common::kNumStripes), 1);
+  const auto operatorBytes = stats.customSum(io::kStorageReadBytes);
   EXPECT_GT(operatorBytes, 0);
   EXPECT_EQ(summedEventBytes, operatorBytes);
   EXPECT_GT(eventsCarryingBytes, 0);
   LOG(INFO) << "multiStripe: numStripes="
-            << stats.customStat(dwio::common::kNumStripes).sum
+            << stats.customSum(dwio::common::kNumStripes)
             << " eventsCarryingBytes=" << eventsCarryingBytes
             << " bytes=" << operatorBytes;
 }
@@ -7704,8 +7691,8 @@ TEST_F(TableScanTest, scanBatchCallbackStorageReadBytesPreload) {
 
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   // Without this the test would silently stop covering the handover path.
-  ASSERT_GT(stats.customStat(TableScan::kPreloadedSplits).sum, 0);
-  const auto operatorBytes = stats.customStat(io::kStorageReadBytes).sum;
+  ASSERT_GT(stats.customSum(TableScan::kPreloadedSplits), 0);
+  const auto operatorBytes = stats.customSum(io::kStorageReadBytes);
   EXPECT_GT(operatorBytes, 0);
   EXPECT_EQ(summedEventBytes, operatorBytes);
 }
@@ -7811,8 +7798,7 @@ TEST_F(TableScanTest, scanBatchCallbackPreloadedSplits) {
 
   ASSERT_GT(
       PlanNodeStats::extract(task->taskStats(), plan->id())
-          .customStat(TableScan::kPreloadedSplits)
-          .sum,
+          .customSum(TableScan::kPreloadedSplits),
       0);
   EXPECT_THAT(reads, ::testing::ElementsAreArray(expected));
 }

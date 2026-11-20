@@ -343,8 +343,8 @@ TEST_P(MultiTopNRowNumberTest, largeOutput) {
               .spillDirectory(spillDirectory->getPath())
               .assertResults(sql);
 
-      auto taskStats = exec::toPlanStats(task->taskStats());
-      const auto& stats = taskStats.at(topNRowNumberId);
+      const auto stats =
+          exec::PlanNodeStats::extract(task->taskStats(), topNRowNumberId);
 
       ASSERT_GT(stats.spilledBytes, 0);
       ASSERT_GT(stats.spilledRows, 0);
@@ -430,8 +430,8 @@ TEST_P(MultiTopNRowNumberTest, manyPartitions) {
               .spillDirectory(spillDirectory->getPath())
               .assertResults(sql);
 
-      auto taskStats = exec::toPlanStats(task->taskStats());
-      const auto& stats = taskStats.at(topNRowNumberId);
+      const auto stats =
+          exec::PlanNodeStats::extract(task->taskStats(), topNRowNumberId);
 
       ASSERT_GT(stats.spilledBytes, 0);
       ASSERT_GT(stats.spilledRows, 0);
@@ -502,8 +502,8 @@ TEST_P(MultiTopNRowNumberTest, fewPartitions) {
               .spillDirectory(spillDirectory->getPath())
               .assertResults(sql);
 
-      auto taskStats = exec::toPlanStats(task->taskStats());
-      const auto& stats = taskStats.at(topNRowNumberId);
+      const auto stats =
+          exec::PlanNodeStats::extract(task->taskStats(), topNRowNumberId);
 
       ASSERT_GT(stats.spilledBytes, 0);
       ASSERT_GT(stats.spilledRows, 0);
@@ -563,11 +563,11 @@ TEST_P(MultiTopNRowNumberTest, abandonPartial) {
                     functionName_,
                     partitionBy));
 
-    const auto planStats = exec::toPlanStats(task->taskStats());
-    const auto& stats = planStats.at(topNRowNumberId);
+    const auto stats =
+        exec::PlanNodeStats::extract(task->taskStats(), topNRowNumberId);
     ASSERT_EQ(stats.outputRows, expectedOutputRows);
     if (expectAbandoned) {
-      ASSERT_EQ(stats.customStat(TopNRowNumber::kAbandonedPartial).sum, 1);
+      ASSERT_EQ(stats.customSum(TopNRowNumber::kAbandonedPartial), 1);
     } else {
       ASSERT_FALSE(stats.hasCustomStat(TopNRowNumber::kAbandonedPartial));
     }
@@ -770,8 +770,8 @@ DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, memoryUsageCheckAfterReclaim) {
                   .spillDirectory(spillDirectory->getPath())
                   .assertResults(sql);
 
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  const auto& stats = taskStats.at(topNRowNumberId);
+  const auto stats =
+      exec::PlanNodeStats::extract(task->taskStats(), topNRowNumberId);
 
   ASSERT_GT(stats.spilledBytes, 0);
   ASSERT_GT(stats.spilledRows, 0);
@@ -995,8 +995,9 @@ DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, inMemoryVsSpilled) {
           .config(core::QueryConfig::kTopNRowNumberSpillEnabled, true)
           .copyResults(pool_.get(), task);
 
-  auto planStats = exec::toPlanStats(task->taskStats());
-  ASSERT_GT(planStats.at(topNId).spilledRows, 0);
+  const auto planStats =
+      exec::PlanNodeStats::extract(task->taskStats(), topNId);
+  ASSERT_GT(planStats.spilledRows, 0);
 
   assertEqualResults({inMemoryResult}, {spilledResult});
 }
