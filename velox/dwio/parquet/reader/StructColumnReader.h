@@ -85,6 +85,14 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
       const dwio::common::StatsContext&,
       dwio::common::FormatData::FilterRowGroupsResult&) const override;
 
+ protected:
+  // Struct nulls come from the rep/def levels of a leaf and are set before
+  // each read. A required struct has none because it cannot be null. The
+  // struct has no page reader, so it never reads nulls from pages.
+  bool readsNullsOnly() const override {
+    return false;
+  }
+
  private:
   struct SyntheticRepDefSource;
 
