@@ -251,7 +251,7 @@ std::optional<Timestamp> integerToTimestamp(
   }
   if (logicalType.has_value() &&
       logicalType->getType() == thrift::LogicalType::Type::TIMESTAMP) {
-    auto unit = logicalType->get_TIMESTAMP().unit();
+    auto unit = logicalType->TIMESTAMP()->unit();
     const auto unitType = unit->getType();
     if (unitType == thrift::TimeUnit::Type::MILLIS) {
       return Timestamp::fromMillis(value.value());
