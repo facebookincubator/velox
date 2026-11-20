@@ -31,6 +31,10 @@
 
 #include <aws/core/utils/stream/PreallocatedStreamBuf.h>
 
+#include <algorithm>
+#include <cstring>
+#include <iostream>
+
 namespace facebook::velox::filesystems {
 
 namespace {
@@ -238,6 +242,109 @@ class StringViewStream : Aws::Utils::Stream::PreallocatedStreamBuf,
             reinterpret_cast<unsigned char*>(const_cast<void*>(data)),
             static_cast<size_t>(nbytes)),
         std::iostream(this) {}
+};
+
+/// A stream over a caller-provided buffer for the AWS SDK to write a response
+/// body into. Bytes written past the buffer are counted and dropped instead of
+/// failing the stream. The SDK writes an error response, such as the XML body
+/// of a 503 SlowDown, into the same stream as object data; a stream that fails
+/// on it turns the response into a non-retryable INTERNAL_FAILURE ("Failed to
+/// flush response stream"), while one that stays good lets the SDK classify
+/// the response by its HTTP status and retry it. Reads return the body when it
+/// fit in the buffer, which is how the SDK parses an error body, and nothing
+/// when it did not: the SDK's XML parser can crash on a cut-off body, and the
+/// HTTP status alone classifies the response.
+class ResponseBufferStream : private std::streambuf, public std::iostream {
+ public:
+  // Both bases define these.
+  using int_type = std::streambuf::int_type;
+  using off_type = std::streambuf::off_type;
+  using pos_type = std::streambuf::pos_type;
+  using traits_type = std::streambuf::traits_type;
+
+  ResponseBufferStream(char* data, size_t capacity)
+      : std::iostream(this), data_(data), capacity_(capacity) {
+    setp(data_, data_ + capacity_);
+    setg(data_, data_, data_);
+  }
+
+  /// Bytes written by the SDK, including those dropped past the buffer.
+  size_t bytesReceived() const {
+    return received_;
+  }
+
+ protected:
+  std::streamsize xsputn(const char* s, std::streamsize n) override {
+    const auto kept = std::min<std::streamsize>(n, epptr() - pptr());
+    std::memcpy(pptr(), s, kept);
+    // setp() rather than pbump(), whose offset is an int.
+    setp(pptr() + kept, epptr());
+    received_ += n;
+    return n;
+  }
+
+  int_type overflow(int_type ch) override {
+    if (traits_type::eq_int_type(ch, traits_type::eof())) {
+      return traits_type::not_eof(ch);
+    }
+    if (pptr() < epptr()) {
+      *pptr() = traits_type::to_char_type(ch);
+      pbump(1);
+    }
+    ++received_;
+    return ch;
+  }
+
+  int_type underflow() override {
+    char* const end = readableEnd();
+    setg(data_, std::min(gptr(), end), end);
+    return gptr() < egptr() ? traits_type::to_int_type(*gptr())
+                            : traits_type::eof();
+  }
+
+  pos_type seekoff(
+      off_type off,
+      std::ios_base::seekdir dir,
+      std::ios_base::openmode which) override {
+    const bool in = which & std::ios_base::in;
+    const bool out = which & std::ios_base::out;
+    if (in == out) {
+      return pos_type(off_type(-1));
+    }
+    const off_type end =
+        in ? readableEnd() - data_ : static_cast<off_type>(capacity_);
+    off_type base = 0;
+    if (dir == std::ios_base::cur) {
+      base = (in ? gptr() : pptr()) - data_;
+    } else if (dir == std::ios_base::end) {
+      base = end;
+    }
+    const off_type pos = base + off;
+    if (pos < 0 || pos > end) {
+      return pos_type(off_type(-1));
+    }
+    if (in) {
+      setg(data_, data_ + pos, data_ + end);
+    } else {
+      setp(data_ + pos, data_ + capacity_);
+    }
+    return pos_type(pos);
+  }
+
+  pos_type seekpos(pos_type pos, std::ios_base::openmode which) override {
+    return seekoff(off_type(pos), std::ios_base::beg, which);
+  }
+
+ private:
+  // The end of the readable bytes: those written, or none once the body
+  // overran the buffer.
+  char* readableEnd() const {
+    return received_ > capacity_ ? data_ : pptr();
+  }
+
+  char* const data_;
+  const size_t capacity_;
+  size_t received_{0};
 };
 
 } // namespace facebook::velox::filesystems
