@@ -360,6 +360,9 @@ class HashBuild final : public Operator {
 
   // Set of active rows during addInput().
   SelectivityVector activeRows_;
+
+  // Rows allocated by RowContainer::newRows() for the selected rows of one
+  // input batch. Kept as a member to reuse its capacity across batches.
   std::vector<char*> newRowsBuffer_;
 
   // True if this is a build side of an anti or left semi project join and has

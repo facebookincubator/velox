@@ -565,9 +565,9 @@ void HashBuild::addInput(RowVectorPtr input) {
   const auto numSelected = activeRows_.countSelected();
   newRowsBuffer_.resize(numSelected);
   rows->newRows(numSelected, newRowsBuffer_.data());
-  int32_t k = 0;
+  int32_t newRowIndex{0};
   activeRows_.applyToSelected([&](auto rowIndex) {
-    char* newRow = newRowsBuffer_[k++];
+    char* newRow = newRowsBuffer_[newRowIndex++];
     // Store the columns for each row in sequence. At probe time
     // strings of the row will probably be in consecutive places, so
     // reading one will prime the cache for the next.

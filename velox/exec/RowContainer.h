@@ -1305,6 +1305,12 @@ class RowContainer {
   // Frees the out-of-line data of the variable-width values of 'rows'.
   void freeVariableWidthValues(RowSpan rows);
 
+  // Allocates 'numRows' contiguous rows from the current allocation run, counts
+  // them and registers them in 'rowPointers_' if used. Returns the first row.
+  // The rows are not initialized. 'numRows' must fit in the current run unless
+  // it is 1.
+  char* allocateRows(int32_t numRows);
+
   // Frees the memory the accumulators of 'rows' hold outside the rows.
   void freeAggregates(std::span<char*> rows);
 
