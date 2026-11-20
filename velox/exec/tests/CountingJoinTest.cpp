@@ -246,12 +246,9 @@ TEST_F(CountingJoinTest, buildSideDedup) {
 
   // Verify the build received 10'000 rows but the hash table has only 10
   // distinct keys.
-  auto planStats = toPlanStats(task->taskStats());
-  const auto& joinStats = planStats.at(plan->id());
+  const auto joinStats = PlanNodeStats::extract(task->taskStats(), plan->id());
   EXPECT_EQ(10'000, joinStats.operatorStats.at("HashBuild")->inputRows);
-  EXPECT_EQ(
-      10,
-      joinStats.customStats.at(std::string(BaseHashTable::kNumDistinct)).sum);
+  EXPECT_EQ(10, joinStats.customSum(BaseHashTable::kNumDistinct));
 }
 
 // Verifies that counts are correctly merged when multiple build drivers process
@@ -297,8 +294,8 @@ TEST_F(CountingJoinTest, multipleBuildDrivers) {
                     .assertResults(expected);
 
     // Verify that all build drivers ran. Each driver processes 1 batch.
-    auto planStats = toPlanStats(task->taskStats());
-    const auto& joinStats = planStats.at(plan->id());
+    const auto joinStats =
+        PlanNodeStats::extract(task->taskStats(), plan->id());
 
     const auto& buildStats = *joinStats.operatorStats.at("HashBuild");
     EXPECT_EQ(kNumDrivers, buildStats.numDrivers);
@@ -314,7 +311,7 @@ TEST_F(CountingJoinTest, multipleBuildDrivers) {
 
     EXPECT_EQ(
         static_cast<int64_t>(expectedHashMode),
-        buildStats.customStats.at(std::string(BaseHashTable::kHashMode)).sum);
+        buildStats.customSum(BaseHashTable::kHashMode));
   };
 
   // Small keys {1, 2}: triggers array-based hash mode.

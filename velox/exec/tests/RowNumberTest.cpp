@@ -230,8 +230,8 @@ TEST_F(RowNumberTest, spill) {
                     .planNode())
             .assertResults(
                 "SELECT *, row_number() over (partition by c0) FROM tmp");
-    auto taskStats = toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(rowNumberPlanNodeId);
+    const auto planStats =
+        PlanNodeStats::extract(task->taskStats(), rowNumberPlanNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
     ASSERT_EQ(
         planStats.spilledPartitions,
@@ -342,8 +342,8 @@ TEST_F(RowNumberTest, memoryUsage) {
 
       if (spillEnable) {
         peakBytesWithSpilling = queryCtx->pool()->peakBytes();
-        auto taskStats = exec::toPlanStats(task->taskStats());
-        const auto& stats = taskStats.at(rowNumberId);
+        const auto stats =
+            exec::PlanNodeStats::extract(task->taskStats(), rowNumberId);
 
         ASSERT_GT(stats.spilledBytes, 0);
         ASSERT_GT(stats.spilledRows, 0);
@@ -418,8 +418,8 @@ DEBUG_ONLY_TEST_F(RowNumberTest, spillOnlyDuringInputOrOutput) {
                     .planNode())
             .assertResults(
                 "SELECT *, row_number() over (partition by c0) FROM tmp");
-    auto taskStats = toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(rowNumberPlanNodeId);
+    const auto planStats =
+        PlanNodeStats::extract(task->taskStats(), rowNumberPlanNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
     ASSERT_EQ(
         planStats.spilledPartitions,
@@ -503,8 +503,8 @@ DEBUG_ONLY_TEST_F(RowNumberTest, recursiveSpill) {
                     .planNode())
             .assertResults(
                 "SELECT *, row_number() over (partition by c0) FROM tmp");
-    auto taskStats = toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(rowNumberPlanNodeId);
+    const auto planStats =
+        PlanNodeStats::extract(task->taskStats(), rowNumberPlanNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
     ASSERT_EQ(
         planStats.spilledPartitions,
@@ -515,9 +515,11 @@ DEBUG_ONLY_TEST_F(RowNumberTest, recursiveSpill) {
     auto runTimeStats =
         task->taskStats().pipelineStats.back().operatorStats.at(1).runtimeStats;
     if (testData.numSpills > testData.maxSpillLevel) {
-      ASSERT_GT(runTimeStats["exceededMaxSpillLevel"].sum, 0);
+      ASSERT_GT(
+          runTimeStats[std::string(Operator::kExceededMaxSpillLevel)].sum, 0);
     } else {
-      ASSERT_EQ(runTimeStats.count("exceededMaxSpillLevel"), 0);
+      ASSERT_EQ(
+          runTimeStats.count(std::string(Operator::kExceededMaxSpillLevel)), 0);
     }
 
     task.reset();
@@ -566,8 +568,8 @@ TEST_F(RowNumberTest, spillWithYield) {
                     .planNode())
             .assertResults(
                 "SELECT *, row_number() over (partition by c0) FROM tmp");
-    auto taskStats = toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(rowNumberPlanNodeId);
+    const auto planStats =
+        PlanNodeStats::extract(task->taskStats(), rowNumberPlanNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
     ASSERT_GT(planStats.spilledFiles, 0);
     ASSERT_GT(planStats.spilledRows, 0);

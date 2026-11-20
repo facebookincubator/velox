@@ -255,8 +255,7 @@ TEST_F(LocalPartitionTest, planNodeStats) {
   std::shared_ptr<Task> task;
   AssertQueryBuilder(plan).maxDrivers(4).countResults(task);
 
-  auto planStats = toPlanStats(task->taskStats());
-  const auto& stats = planStats.at(plan->id());
+  const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
 
   // Two operators implement this one plan node.
   ASSERT_EQ(stats.operatorStats.size(), 2);

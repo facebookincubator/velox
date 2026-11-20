@@ -499,37 +499,28 @@ TEST_F(OrderByTest, spill) {
                   .config(core::QueryConfig::kSpillEnabled, true)
                   .config(core::QueryConfig::kOrderBySpillEnabled, true)
                   .assertResults(expectedResult);
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  auto& planStats = taskStats.at(orderNodeId);
+  const auto planStats =
+      exec::PlanNodeStats::extract(task->taskStats(), orderNodeId);
   ASSERT_GT(planStats.spilledBytes, 0);
   ASSERT_GT(planStats.spilledRows, 0);
   ASSERT_GT(planStats.spilledBytes, 0);
   ASSERT_GT(planStats.spilledInputBytes, 0);
   ASSERT_EQ(planStats.spilledPartitions, 1);
   ASSERT_GT(planStats.spilledFiles, 0);
-  ASSERT_GT(planStats.customStats[std::string(Operator::kSpillRuns)].count, 0);
-  ASSERT_GT(
-      planStats.customStats[std::string(Operator::kSpillFillTime)].sum, 0);
-  ASSERT_GT(
-      planStats.customStats[std::string(Operator::kSpillSortTime)].sum, 0);
-  ASSERT_GT(
-      planStats.customStats[std::string(Operator::kSpillExtractVectorTime)].sum,
-      0);
-  ASSERT_GT(
-      planStats.customStats[std::string(Operator::kSpillSerializationTime)].sum,
-      0);
-  ASSERT_GT(
-      planStats.customStats[std::string(Operator::kSpillFlushTime)].sum, 0);
+  ASSERT_GT(planStats.customStat(Operator::kSpillRuns).count, 0);
+  ASSERT_GT(planStats.customSum(Operator::kSpillFillTime), 0);
+  ASSERT_GT(planStats.customSum(Operator::kSpillSortTime), 0);
+  ASSERT_GT(planStats.customSum(Operator::kSpillExtractVectorTime), 0);
+  ASSERT_GT(planStats.customSum(Operator::kSpillSerializationTime), 0);
+  ASSERT_GT(planStats.customSum(Operator::kSpillFlushTime), 0);
   ASSERT_EQ(
-      planStats.customStats[std::string(Operator::kSpillSerializationTime)]
-          .count,
-      planStats.customStats[std::string(Operator::kSpillFlushTime)].count);
-  ASSERT_GT(planStats.customStats[std::string(Operator::kSpillWrites)].sum, 0);
-  ASSERT_GT(
-      planStats.customStats[std::string(Operator::kSpillWriteTime)].sum, 0);
+      planStats.customStat(Operator::kSpillSerializationTime).count,
+      planStats.customStat(Operator::kSpillFlushTime).count);
+  ASSERT_GT(planStats.customSum(Operator::kSpillWrites), 0);
+  ASSERT_GT(planStats.customSum(Operator::kSpillWriteTime), 0);
   ASSERT_EQ(
-      planStats.customStats[std::string(Operator::kSpillWrites)].count,
-      planStats.customStats[std::string(Operator::kSpillWriteTime)].count);
+      planStats.customStat(Operator::kSpillWrites).count,
+      planStats.customStat(Operator::kSpillWriteTime).count);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
@@ -1232,8 +1223,8 @@ DEBUG_ONLY_TEST_F(OrderByTest, spillWithNoMoreOutput) {
           .config(QueryConfig::kMaxSpillBytes, 1)
           .maxDrivers(1)
           .assertResults(expectedResult);
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  auto& planStats = taskStats.at(orderNodeId);
+  const auto planStats =
+      exec::PlanNodeStats::extract(task->taskStats(), orderNodeId);
   ASSERT_EQ(planStats.spilledBytes, 0);
   ASSERT_EQ(planStats.spilledRows, 0);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
@@ -1316,8 +1307,8 @@ DEBUG_ONLY_TEST_F(OrderByTest, reclaimFromOrderBy) {
                   .capturePlanNodeId(orderById)
                   .planNode())
           .assertResults("SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST");
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  auto& planStats = taskStats.at(orderById);
+  const auto planStats =
+      exec::PlanNodeStats::extract(task->taskStats(), orderById);
   ASSERT_GT(planStats.spilledBytes, 0);
   task.reset();
   TaskMonitor::waitForAllTasksDeleted();
@@ -1455,8 +1446,7 @@ TEST_F(OrderByTest, planNodeStats) {
   std::shared_ptr<Task> task;
   AssertQueryBuilder(plan).maxDrivers(4).countResults(task);
 
-  auto planStats = toPlanStats(task->taskStats());
-  const auto& stats = planStats.at(plan->id());
+  const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
 
   // Two operators implement this one plan node.
   ASSERT_EQ(stats.operatorStats.size(), 2);

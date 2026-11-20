@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/HashAggregationStatNames.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -190,9 +191,12 @@ TEST_F(CountAggregationTest, mask) {
           .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
           .assertResults(
               "SELECT k, count(c) FILTER (where m) FROM tmp GROUP BY k");
-  auto taskStats = toPlanStats(task->taskStats());
-  auto partialStats = taskStats.at(partialNodeId).customStats;
-  EXPECT_LT(0, partialStats.at("abandonedPartialAggregationRows").sum);
+  EXPECT_LT(
+      0,
+      exec::PlanNodeStats::extract(task->taskStats(), partialNodeId)
+          .customSum(
+              exec::HashAggregationStatNames::
+                  kAbandonedPartialAggregationRows));
 }
 
 TEST_F(CountAggregationTest, distinct) {
@@ -469,14 +473,15 @@ TEST_F(CountAggregationTest, toIntermediate) {
               "SELECT k, count(v), count(1) FILTER (WHERE m), count(c) "
               "FROM tmp GROUP BY k");
 
-  const auto stats = toPlanStats(task->taskStats());
+  const auto stats =
+      exec::PlanNodeStats::extract(task->taskStats(), partialNodeId);
   EXPECT_LT(
       0,
-      stats.at(partialNodeId)
-          .customStats.at("abandonedPartialAggregationRows")
-          .sum);
+      stats.customSum(
+          exec::HashAggregationStatNames::kAbandonedPartialAggregationRows));
   EXPECT_GT(
-      stats.at(partialNodeId).customStats.at("toIntermediateFastPathCalls").sum,
+      stats.customSum(
+          exec::HashAggregationStatNames::kToIntermediateFastPathCalls),
       0);
 }
 
