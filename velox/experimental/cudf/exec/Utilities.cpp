@@ -99,6 +99,15 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
     const TypePtr& tableType,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
+  return getConcatenatedTable(std::move(tables), tableType, {}, stream, mr);
+}
+
+std::unique_ptr<cudf::table> getConcatenatedTable(
+    std::vector<CudfVectorPtr> tables,
+    const TypePtr& tableType,
+    std::span<const column_index_t> channels,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
   // Check for empty vector
   if (tables.size() == 0) {
     return makeEmptyTable(tableType, stream, mr);
@@ -112,7 +121,10 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
 
   for (const auto& table : tables) {
     VELOX_CHECK_NOT_NULL(table);
-    tableViews.push_back(table->getTableView());
+    auto view = table->getTableView();
+    tableViews.push_back(
+        channels.empty() ? view
+                         : view.select(channels.begin(), channels.end()));
     inputStreams.push_back(table->stream());
   }
 

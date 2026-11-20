@@ -59,6 +59,16 @@ namespace facebook::velox::cudf_velox {
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
+/// Same as above for the columns 'channels' of the inputs only, in that
+/// order, so that the other columns are not copied. Without 'channels', every
+/// column is concatenated. 'tableType' is the type of the result.
+[[nodiscard]] std::unique_ptr<cudf::table> getConcatenatedTable(
+    std::vector<CudfVectorPtr> tables,
+    const TypePtr& tableType,
+    std::span<const column_index_t> channels,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
+
 /**
  * @brief Concatenates multiple CUDF tables with automatic batching based on
  * size limits.

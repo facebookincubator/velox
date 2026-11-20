@@ -243,6 +243,49 @@ TEST_F(CudfVectorTest, retainedSizeReportsDeviceStorage) {
   EXPECT_EQ(vector.retainedSize(), vector.estimateFlatSize());
 }
 
+TEST_F(CudfVectorTest, estimateFlatSizeOfColumns) {
+  using Channels = std::vector<column_index_t>;
+  TestCudaStream stream;
+  {
+    // An owned table knows the buffers of each column: 'c0' has its values
+    // and a null mask, the struct 'c1' a null mask and those of its child.
+    auto table =
+        makeNestedTable(stream.view(), cudf::get_current_device_resource_ref());
+    stream.view().sync();
+    const auto c0Bytes = table->get_column(0).alloc_size();
+    const auto c1Bytes = table->get_column(1).alloc_size();
+    ASSERT_GT(c1Bytes, c0Bytes);
+    CudfVector vector(
+        pool_.get(),
+        nestedTableType(),
+        table->num_rows(),
+        std::move(table),
+        stream.view());
+    EXPECT_EQ(vector.estimateFlatSize(), c0Bytes + c1Bytes);
+    EXPECT_EQ(vector.estimateFlatSize(Channels{0}), c0Bytes);
+    EXPECT_EQ(vector.estimateFlatSize(Channels{1}), c1Bytes);
+    EXPECT_EQ(vector.estimateFlatSize(Channels{1, 0}), c0Bytes + c1Bytes);
+    EXPECT_EQ(vector.estimateFlatSize(Channels{}), 0);
+
+    auto released = vector.release();
+    EXPECT_EQ(vector.estimateFlatSize(Channels{0}), 0);
+  }
+  {
+    // The columns of a packed table share one buffer.
+    RecordingAsyncDeviceResource resource;
+    auto packedTable = makePackedTable(stream.view(), resource);
+    CudfVector vector(
+        pool_.get(),
+        ROW({"c0"}, {INTEGER()}),
+        packedTable->table.num_rows(),
+        std::move(packedTable),
+        stream.view());
+    EXPECT_GT(vector.estimateFlatSize(), 0);
+    EXPECT_EQ(vector.estimateFlatSize(Channels{0}), vector.estimateFlatSize());
+    EXPECT_EQ(vector.estimateFlatSize(Channels{}), 0);
+  }
+}
+
 TEST_F(CudfVectorTest, rebindOwnedTableDeallocationStream) {
   TestCudaStream allocationStream;
   TestCudaStream targetStream;

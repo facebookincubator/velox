@@ -86,6 +86,11 @@ class CudfVector : public RowVector {
 
   uint64_t estimateFlatSize() const override;
 
+  /// Returns the part of estimateFlatSize() that the columns 'channels' take.
+  /// Exact for an owned table. The columns of a packed table share one buffer,
+  /// so each counts as an equal part of it.
+  uint64_t estimateFlatSize(std::span<const column_index_t> channels) const;
+
  private:
   uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override;
 
