@@ -69,21 +69,13 @@ inline std::string dictionaryAwareReadsWithFilterAcceptingNull(
 /// whose filter accepts nulls:
 /// - addValue: the hook got indices one at a time.
 /// - addValues: the hook got batches of indices.
-/// - mergeBulkNulls.dense and mergeBulkNulls.sparse: a batch merged null rows
-///   into filtered output through that branch.
 inline constexpr std::string_view kAddValuePath = "addValue";
 inline constexpr std::string_view kAddValuesPath = "addValues";
-inline constexpr std::string_view kMergeBulkNullsDensePath =
-    "mergeBulkNulls.dense";
-inline constexpr std::string_view kMergeBulkNullsSparsePath =
-    "mergeBulkNulls.sparse";
 
 /// The hook paths above, in report order.
 inline constexpr std::array kDictionaryAwareReadPaths{
     kAddValuePath,
     kAddValuesPath,
-    kMergeBulkNullsDensePath,
-    kMergeBulkNullsSparsePath,
 };
 
 /// Returns the stat that counts the reads in 'typeStat' whose filter accepts
@@ -109,14 +101,6 @@ class DictionaryAwareReadPaths {
     addValues_ = true;
   }
 
-  void recordMergeBulkNullsDense() {
-    mergeBulkNullsDense_ = true;
-  }
-
-  void recordMergeBulkNullsSparse() {
-    mergeBulkNullsSparse_ = true;
-  }
-
   bool addValue() const {
     return addValue_;
   }
@@ -125,20 +109,10 @@ class DictionaryAwareReadPaths {
     return addValues_;
   }
 
-  bool mergeBulkNullsDense() const {
-    return mergeBulkNullsDense_;
-  }
-
-  bool mergeBulkNullsSparse() const {
-    return mergeBulkNullsSparse_;
-  }
-
  private:
   // Paths the read took, set by the record methods.
   bool addValue_{false};
   bool addValues_{false};
-  bool mergeBulkNullsDense_{false};
-  bool mergeBulkNullsSparse_{false};
 };
 
 void updateStringDictionaryEncodingPreserved();
@@ -167,10 +141,6 @@ class DictionaryAwareReadPaths {
   void recordAddValue() {}
 
   void recordAddValues() {}
-
-  void recordMergeBulkNullsDense() {}
-
-  void recordMergeBulkNullsSparse() {}
 };
 
 static inline void updateStringDictionaryEncodingPreserved() {}
