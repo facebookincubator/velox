@@ -2036,7 +2036,7 @@ TEST_P(ParameterizedExprTest, caseExprExceptionHandling) {
   // before the subject, eq, and THEN/ELSE are ever evaluated, so the throwing
   // expression is never reached for null rows.
   //
-  // c0 = {0, null, 4}. THEN and ELSE are both c0 / 0.
+  // c0 = {0, null, 4}. THEN is c0 / 0 and ELSE is c0 % 0.
   // Non-null rows hit division by zero; null row is masked by propagation.
   {
     auto input = makeRowVector({makeFlatVector<int64_t>(
@@ -2044,13 +2044,13 @@ TEST_P(ParameterizedExprTest, caseExprExceptionHandling) {
         [](auto row) { return row * 2; },
         [](auto row) { return row == 1; })});
 
-    // Without try: non-null rows hit c0/0 → throws.
+    // Without try: non-null rows hit c0 % 0 → throws.
     VELOX_ASSERT_THROW(
-        evaluate("case c0 when 1 then c0 / 0 else c0 / 0 end", input), "");
+        evaluate("case c0 when 1 then c0 / 0 else c0 % 0 end", input), "");
 
     // With try: non-null rows → error → null; null row → propagation → null.
     auto result =
-        evaluate("try(case c0 when 1 then c0 / 0 else c0 / 0 end)", input);
+        evaluate("try(case c0 when 1 then c0 / 0 else c0 % 0 end)", input);
     EXPECT_TRUE(result->isNullAt(0));
     EXPECT_TRUE(result->isNullAt(1));
     EXPECT_TRUE(result->isNullAt(2));
@@ -2070,12 +2070,13 @@ TEST_P(ParameterizedExprTest, caseExprExceptionHandling) {
     // Without try: non-null rows call always_throws_bigint → throws.
     VELOX_ASSERT_THROW(
         evaluate(
-            "case c0 when always_throws_bigint(c0) then c0 else c0 end", input),
+            "case c0 when always_throws_bigint(c0) then c0 else c0 + 1 end",
+            input),
         "");
 
     // With try: non-null rows → error → null; null row → propagation → null.
     auto result = evaluate(
-        "try(case c0 when always_throws_bigint(c0) then c0 else c0 end)",
+        "try(case c0 when always_throws_bigint(c0) then c0 else c0 + 1 end)",
         input);
     EXPECT_TRUE(result->isNullAt(0));
     EXPECT_TRUE(result->isNullAt(1));
@@ -2095,14 +2096,14 @@ TEST_P(ParameterizedExprTest, caseExprExceptionHandling) {
     // Without try: row 0 matches → THEN always_throws_bigint(c1) → throws.
     VELOX_ASSERT_THROW(
         evaluate(
-            "case c0 when 1 then always_throws_bigint(c1) else always_throws_bigint(c1) end",
+            "case c0 when 1 then always_throws_bigint(c1) else always_throws_bigint(c1 + 1) end",
             input),
         "");
 
     // With try: row 0 → THEN errors → null; row 1 → c0 null, no match →
-    // ELSE always_throws_bigint(c1) → error → null.
+    // ELSE always_throws_bigint(c1 + 1) → error → null.
     auto result = evaluate(
-        "try(case c0 when 1 then always_throws_bigint(c1) else always_throws_bigint(c1) end)",
+        "try(case c0 when 1 then always_throws_bigint(c1) else always_throws_bigint(c1 + 1) end)",
         input);
     EXPECT_TRUE(result->isNullAt(0));
     EXPECT_TRUE(result->isNullAt(1));
@@ -2236,7 +2237,7 @@ TEST_P(ParameterizedExprTest, switchSetNullsForThrowIndices) {
   {
     auto input = vectorMaker_.flatVector<int64_t>({1, 1, 1, 4, 4});
     auto result = eval(
-        "if(always_throws(c0), row_constructor(1,2), row_constructor(1,2))",
+        "if(always_throws(c0), row_constructor(1,2), row_constructor(1,3))",
         vectorMaker_.rowVector({input}));
     EXPECT_EQ(result->size(), input->size());
     for (int i = 0; i < input->size(); i++) {
@@ -2258,7 +2259,7 @@ TEST_P(ParameterizedExprTest, switchSetNullsForThrowIndices) {
   {
     auto input = vectorMaker_.flatVector<int64_t>({1, 1, 1, 4, 4});
     auto result = eval(
-        "if(throw_at_odd(c0), array_constructor(1,2), array_constructor(1,2))",
+        "if(throw_at_odd(c0), array_constructor(1,2), array_constructor(1,3))",
         vectorMaker_.rowVector({input}));
     EXPECT_EQ(result->size(), input->size());
     for (int i = 0; i < input->size(); i++) {
@@ -4867,7 +4868,7 @@ TEST_P(ParameterizedExprTest, nullPropagation) {
   // Try will call propagateNulls on its child, that should not
   // redo the computation.
   auto switchInTry = parseExpression(
-      "try(switch(subscript(c0, array_min(c1)), FALSE, FALSE,"
+      "try(switch(subscript(c0, array_min(c1)), TRUE, FALSE,"
       "FALSE, is_null('6338838335202944843'::BIGINT)))",
       ROW({"c0", "c1"}, {ARRAY({BOOLEAN()}), ARRAY({BIGINT()})}));
   EXPECT_FALSE(propagatesNulls(switchInTry));
