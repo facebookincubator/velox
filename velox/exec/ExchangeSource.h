@@ -27,11 +27,11 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
       int destination,
       std::shared_ptr<ExchangeQueue> queue,
       memory::MemoryPool* pool)
-      : remoteTaskId_(remoteTaskId),
-        taskId_(remoteTaskId),
-        destination_(destination),
-        queue_(std::move(queue)),
-        pool_(pool->shared_from_this()) {}
+      : ExchangeSource(
+            remoteTaskId,
+            destination,
+            std::move(queue),
+            pool->shared_from_this()) {}
 
   virtual ~ExchangeSource() = default;
 
@@ -102,6 +102,11 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   /// has been received and processed. This can happen in case
   /// of an error or an operator like Limit aborting the query
   /// once it received enough data.
+  ///
+  /// Do not wait for pending responses. Cancel or detach callbacks, timers,
+  /// and registrations so that they do not retain the source, its pool, or
+  /// buffers allocated from that pool. A request future may complete after
+  /// close(), but discard late data without allocating from the pool.
   virtual void close() = 0;
 
   // Returns runtime statistics. ExchangeSource is expected to report
@@ -154,6 +159,18 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   }
 
  protected:
+  // Sources that never allocate from the consumer pool may pass an empty pool.
+  ExchangeSource(
+      const std::string& remoteTaskId,
+      int destination,
+      std::shared_ptr<ExchangeQueue> queue,
+      std::shared_ptr<memory::MemoryPool> pool)
+      : remoteTaskId_(remoteTaskId),
+        taskId_(remoteTaskId),
+        destination_(destination),
+        queue_(std::move(queue)),
+        pool_(std::move(pool)) {}
+
   // ID of the remote task producing data.
   const std::string remoteTaskId_;
   // Same with 'remoteTaskId_', will be removed after removing usage in Presto.
@@ -161,13 +178,7 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   // Destination number of 'this' on producer.
   const int destination_;
   const std::shared_ptr<ExchangeQueue> queue_{nullptr};
-  // Holds a shared reference on the memory pool as it might be still possible
-  // to be accessed by external components after the query task is destroyed.
-  // For instance, in Prestissimo, there might be a pending http request issued
-  // by PrestoExchangeSource to fetch data from the remote task. When the http
-  // response returns back, the task might have already terminated and deleted
-  // so we need to hold an additional shared reference on the memory pool to
-  // keeps it alive.
+  // Keeps the consumer pool alive while the source uses it to receive pages.
   const std::shared_ptr<memory::MemoryPool> pool_;
 
   int64_t sequence_{0};
