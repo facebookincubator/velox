@@ -174,7 +174,8 @@ class DirectBufferedInput : public BufferedInput {
       std::shared_ptr<velox::IoStats> ioStats,
       folly::Executor* executor,
       const io::ReaderOptions& readerOptions,
-      folly::F14FastMap<std::string, std::string> fileReadOps = {})
+      folly::F14FastMap<std::string, std::string> fileReadOps = {},
+      folly::CancellationToken cancellationToken = {})
       : BufferedInput(
             std::move(readFile),
             readerOptions.memoryPool(),
@@ -183,7 +184,9 @@ class DirectBufferedInput : public BufferedInput {
             ioStats.get(),
             kMaxMergeDistance,
             std::nullopt,
-            std::move(fileReadOps)),
+            std::move(fileReadOps),
+            /*cacheable=*/false,
+            std::move(cancellationToken)),
         fileNum_(std::move(fileNum)),
         tracker_(std::move(tracker)),
         groupId_(std::move(groupId)),

@@ -112,12 +112,16 @@ std::unique_ptr<velox::dwio::common::BufferedInput> maybePreloadInput(
   }
   auto buffer = velox::AlignedBuffer::allocateExact<char>(
       fileSize, &options.memoryPool());
+  const auto& fileIoContext = input->getInputStream()->fileIoContext();
   velox::dwio::common::ReadFileInputStream(
       readFile,
       velox::dwio::common::MetricsLog::voidLog(),
       options.dataIoStats().get(),
       /*ioStats=*/nullptr,
-      input->getInputStream()->fileIoContext().fileOpts)
+      fileIoContext.fileOpts,
+      /*cacheable=*/false,
+      /*pool=*/nullptr,
+      fileIoContext.cancellationToken)
       .read(
           buffer->asMutable<char>(),
           fileSize,

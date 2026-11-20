@@ -23,6 +23,7 @@
 #include <set>
 #include <vector>
 
+#include "folly/CancellationToken.h"
 #include "folly/executors/CPUThreadPoolExecutor.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/tests/TestUtils.h"
@@ -47,6 +48,35 @@ enum class CreationMode { kDirect, kCached };
 int32_t sharedDictionaryValue(velox::vector_size_t row) {
   return row % 2 == 0 ? 0 : std::numeric_limits<int32_t>::max();
 }
+
+// Keeps the cancellation token of the last read, so a test can check which
+// query a read belongs to.
+class TokenRecordingReadFile : public velox::InMemoryReadFile {
+ public:
+  using velox::InMemoryReadFile::InMemoryReadFile;
+
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buf,
+      const velox::FileIoContext& context = {}) const override {
+    ++numReads_;
+    lastReadToken_ = context.cancellationToken;
+    return InMemoryReadFile::pread(offset, length, buf, context);
+  }
+
+  uint64_t numReads() const {
+    return numReads_;
+  }
+
+  const folly::CancellationToken& lastReadToken() const {
+    return lastReadToken_;
+  }
+
+ private:
+  mutable uint64_t numReads_{0};
+  mutable folly::CancellationToken lastReadToken_;
+};
 
 } // namespace
 
@@ -678,6 +708,30 @@ TEST_P(StripeStreamsMultiStripeTest, preloadCollapsesStripeReads) {
 
   EXPECT_EQ(preadsReadingAllStripes(fileData_.size() + 1), 1);
   EXPECT_GE(preadsReadingAllStripes(0), kStripeCount);
+}
+
+TEST_P(StripeStreamsMultiStripeTest, preloadKeepsQueryCancellation) {
+  auto readFile = std::make_shared<TokenRecordingReadFile>(fileData_);
+  auto opts = makeReaderOptions();
+  opts.setFilePreloadThreshold(fileData_.size() + 1);
+  folly::CancellationSource cancellation;
+  auto input = std::make_unique<velox::dwio::common::BufferedInput>(
+      readFile,
+      *pool_,
+      velox::dwio::common::MetricsLog::voidLog(),
+      /*stats=*/nullptr,
+      /*ioStats=*/nullptr,
+      velox::dwio::common::BufferedInput::kMaxMergeDistance,
+      /*wsVRLoad=*/std::nullopt,
+      folly::F14FastMap<std::string, std::string>{},
+      /*cacheable=*/false,
+      cancellation.getToken());
+
+  ReaderBase::create(std::move(input), opts);
+  ASSERT_EQ(readFile->numReads(), 1);
+
+  cancellation.requestCancellation();
+  EXPECT_TRUE(readFile->lastReadToken().isCancellationRequested());
 }
 
 INSTANTIATE_TEST_CASE_P(

@@ -34,6 +34,7 @@
 #include <string>
 #include <string_view>
 
+#include <folly/CancellationToken.h>
 #include <folly/Executor.h>
 #include <folly/Range.h>
 #include <folly/Synchronized.h>
@@ -89,6 +90,9 @@ struct FileIoContext {
   /// the file allocates outside any pool.
   memory::MemoryPool* pool{nullptr};
 
+  /// Cancels work for this read without changing a shared ReadFile handle.
+  folly::CancellationToken cancellationToken;
+
   FileIoContext() = default;
 
   explicit FileIoContext(
@@ -96,12 +100,14 @@ struct FileIoContext {
       folly::F14FastMap<std::string, std::string> fileOpts = {},
       std::shared_ptr<FileIoTracer> tracer = nullptr,
       bool cacheable = false,
-      memory::MemoryPool* pool = nullptr)
+      memory::MemoryPool* pool = nullptr,
+      folly::CancellationToken cancellationToken = {})
       : ioStats(stats),
         fileOpts(std::move(fileOpts)),
         ioTracer(std::move(tracer)),
         cacheable(cacheable),
-        pool(pool) {}
+        pool(pool),
+        cancellationToken(std::move(cancellationToken)) {}
 };
 
 // A read-only file.  All methods in this object should be thread safe.

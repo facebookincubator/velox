@@ -16,13 +16,18 @@
 
 #include "velox/connectors/common/FileConnectorUtil.h"
 
+#include <folly/CancellationToken.h>
 #include <gtest/gtest.h>
+
+#include <typeinfo>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/common/FileConfig.h"
 #include "velox/connectors/common/FileConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/dwio/common/CachedBufferedInput.h"
+#include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/orc/reader/OrcReader.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -48,7 +53,9 @@ class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
   };
 
   QueryCtxHolder makeConnectorQueryCtx(
-      std::unordered_map<std::string, std::string> sessionProps = {}) {
+      std::unordered_map<std::string, std::string> sessionProps = {},
+      folly::CancellationToken cancellationToken = {},
+      cache::AsyncDataCache* cache = nullptr) {
     QueryCtxHolder holder;
     holder.sessionProperties =
         std::make_shared<config::ConfigBase>(std::move(sessionProps));
@@ -59,6 +66,8 @@ class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
                      .queryId("query.FileConnectorUtilTest")
                      .taskId("task.FileConnectorUtilTest")
                      .planNodeId("planNodeId.FileConnectorUtilTest")
+                     .cancellationToken(std::move(cancellationToken))
+                     .asyncDataCache(cache)
                      .build();
     return holder;
   }
@@ -107,6 +116,37 @@ class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
     return dwrf::DwrfReader::create(std::move(input), readerOpts);
   }
 
+  // Checks that 'createBufferedInput' builds 'ExpectedInput' for 'format' and
+  // 'cache', and that canceling the query reaches the input's file reads.
+  template <typename ExpectedInput>
+  void testFileReadCancellation(
+      dwio::common::FileFormat format,
+      cache::AsyncDataCache* cache) {
+    folly::CancellationSource cancellation;
+    auto holder = makeConnectorQueryCtx({}, cancellation.getToken(), cache);
+    const auto path =
+        writeDataFile(makeRowVector({makeFlatVector<int64_t>({1})}));
+    const FileHandle fileHandle{.file = std::make_shared<LocalReadFile>(path)};
+    dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setFileFormat(format);
+
+    auto input = createBufferedInput(
+        fileHandle,
+        readerOptions,
+        holder.ctx.get(),
+        dataIoStats_,
+        std::make_shared<IoStats>(),
+        /*executor=*/nullptr);
+    const auto& inputRef = *input;
+    ASSERT_EQ(typeid(inputRef), typeid(ExpectedInput));
+    const auto& readCancellation =
+        input->getInputStream()->fileIoContext().cancellationToken;
+
+    EXPECT_FALSE(readCancellation.isCancellationRequested());
+    cancellation.requestCancellation();
+    EXPECT_TRUE(readCancellation.isCancellationRequested());
+  }
+
   std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
       std::make_shared<velox::io::IoStatistics>();
   std::shared_ptr<velox::io::IoStatistics> metadataIoStats_ =
@@ -115,6 +155,15 @@ class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
  private:
   std::vector<std::shared_ptr<exec::test::TempFilePath>> tempPaths_;
 };
+
+TEST_F(FileConnectorUtilTest, fileReadCancellation) {
+  testFileReadCancellation<dwio::common::CachedBufferedInput>(
+      dwio::common::FileFormat::DWRF, asyncDataCache_.get());
+  testFileReadCancellation<dwio::common::BufferedInput>(
+      dwio::common::FileFormat::NIMBLE, /*cache=*/nullptr);
+  testFileReadCancellation<dwio::common::DirectBufferedInput>(
+      dwio::common::FileFormat::DWRF, /*cache=*/nullptr);
+}
 
 TEST_F(FileConnectorUtilTest, configureReaderOptions) {
   auto fileConfig = makeFileConfig();
