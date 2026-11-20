@@ -547,27 +547,30 @@ class QueryConfig {
 
   /// Preferred number of rows to be returned by operators from
   /// Operator::getOutput. Used when average row size is not known.
-  VELOX_QUERY_CONFIG_PROPERTY(
+  VELOX_QUERY_CONFIG(
       kPreferredOutputBatchRows,
+      preferredOutputBatchRows,
       "preferred_output_batch_rows",
-      uint32_t,
+      vector_size_t,
       1024,
       "Preferred number of rows in output batches.")
 
   /// Max number of rows that could be return by operators from
   /// Operator::getOutput.
-  VELOX_QUERY_CONFIG_PROPERTY(
+  VELOX_QUERY_CONFIG(
       kMaxOutputBatchRows,
+      maxOutputBatchRows,
       "max_output_batch_rows",
-      uint32_t,
-      10000,
+      vector_size_t,
+      10'000,
       "Maximum number of rows in output batches.")
 
   /// Initial output batch size in rows for MergeJoin operator.
-  VELOX_QUERY_CONFIG_PROPERTY(
+  VELOX_QUERY_CONFIG(
       kMergeJoinOutputBatchStartSize,
+      mergeJoinOutputBatchStartSize,
       "merge_join_output_batch_start_size",
-      uint32_t,
+      vector_size_t,
       0,
       "Initial output batch size in rows for MergeJoin. 0 disables dynamic adjustment.")
 
@@ -604,7 +607,7 @@ class QueryConfig {
       kTableScanOutputBatchRowsOverride,
       tableScanOutputBatchRowsOverride,
       "table_scan_output_batch_rows_override",
-      uint32_t,
+      vector_size_t,
       0,
       "Override number of rows in TableScan output batches. 0 means no override.")
 
@@ -748,9 +751,13 @@ class QueryConfig {
       "Enable LocalMerge spilling. Requires spill_enabled.")
 
   /// Specify the max number of local sources to merge at a time.
-  /// Uses std::numeric_limits<uint32_t>::max() as default.
-  static constexpr const char* kLocalMergeMaxNumMergeSources =
-      "local_merge_max_num_merge_sources";
+  VELOX_QUERY_CONFIG(
+      kLocalMergeMaxNumMergeSources,
+      localMergeMaxNumMergeSources,
+      "local_merge_max_num_merge_sources",
+      uint32_t,
+      std::numeric_limits<uint32_t>::max(),
+      "Maximum number of local sources to merge at a time.")
 
   /// The max row numbers to fill and spill for each spill run. Default is
   /// 12 million rows which uses ~128MB memory.
@@ -1747,32 +1754,6 @@ class QueryConfig {
         config::CapacityUnit::BYTE);
   }
 
-  vector_size_t preferredOutputBatchRows() const {
-    const uint32_t batchRows = get<uint32_t>(kPreferredOutputBatchRows, 1024);
-    VELOX_USER_CHECK_LE(batchRows, std::numeric_limits<vector_size_t>::max());
-    return batchRows;
-  }
-
-  vector_size_t maxOutputBatchRows() const {
-    const uint32_t maxBatchRows = get<uint32_t>(kMaxOutputBatchRows, 10'000);
-    VELOX_USER_CHECK_LE(
-        maxBatchRows, std::numeric_limits<vector_size_t>::max());
-    return maxBatchRows;
-  }
-
-  vector_size_t mergeJoinOutputBatchStartSize() const {
-    const uint32_t batchRows = get<uint32_t>(kMergeJoinOutputBatchStartSize, 0);
-    VELOX_USER_CHECK_LE(batchRows, std::numeric_limits<vector_size_t>::max());
-    return batchRows;
-  }
-
-  uint32_t localMergeMaxNumMergeSources() const {
-    const auto maxNumMergeSources = get<uint32_t>(
-        kLocalMergeMaxNumMergeSources, std::numeric_limits<uint32_t>::max());
-    VELOX_CHECK_GT(maxNumMergeSources, 0);
-    return maxNumMergeSources;
-  }
-
   uint8_t spillNumPartitionBits() const {
     constexpr uint8_t kDefaultBits = 3;
     constexpr uint8_t kMaxBits = 3;
@@ -1796,15 +1777,25 @@ class QueryConfig {
         config::CapacityUnit::BYTE);
   }
 
+  /// Which table scans track the size of the rows they read.
   enum class RowSizeTrackingMode {
-    DISABLED = 0,
-    EXCLUDE_DELTA_SPLITS = 1,
-    ENABLED_FOR_ALL = 2,
+    /// No table scan tracks row size.
+    kDisabled = 0,
+    /// Table scans track row size except for delta splits.
+    kExcludeDeltaSplits = 1,
+    /// Every table scan tracks row size.
+    kEnabledForAll = 2,
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+    // TODO: Remove once Prestissimo migrates.
+    DISABLED = kDisabled,
+    EXCLUDE_DELTA_SPLITS = kExcludeDeltaSplits,
+    ENABLED_FOR_ALL = kEnabledForAll,
+#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
   };
 
   RowSizeTrackingMode rowSizeTrackingMode() const {
     return get<RowSizeTrackingMode>(
-        kRowSizeTrackingMode, RowSizeTrackingMode::ENABLED_FOR_ALL);
+        kRowSizeTrackingMode, RowSizeTrackingMode::kEnabledForAll);
   }
 
   template <typename T>
@@ -1822,7 +1813,8 @@ class QueryConfig {
   }
 
   /// Test-only method to override the current query config properties.
-  /// It is not thread safe.
+  /// Validates the values like the constructor and throws on an invalid one,
+  /// leaving the current properties in place. It is not thread safe.
   void testingOverrideConfigUnsafe(
       std::unordered_map<std::string, std::string>&& values);
 
