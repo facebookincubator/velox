@@ -54,6 +54,17 @@ static_assert(
     1'000'000'000'000'000'000 * (int128_t)1'000'000'000'000'000'000 *
         (int128_t)100);
 
+// The signed minimum has no positive counterpart. A constant expression rejects
+// signed overflow, so these fail in nvcc's device pass as well as its host pass
+// if absValue() negates before widening to unsigned.
+static_assert(
+    DecimalArithmetic::absValue<int64_t>(std::numeric_limits<int64_t>::min()) ==
+    uint64_t{1} << 63);
+static_assert(
+    DecimalArithmetic::absValue<int128_t>(
+        std::numeric_limits<int128_t>::min()) ==
+    static_cast<__uint128_t>(1) << 127);
+
 template <typename T>
 struct Operands {
   T a;
@@ -152,6 +163,30 @@ struct PowerOfTen {
   }
 };
 
+// absValue(), run from the same source on either side. Outcome holds the
+// magnitude as int128_t, which wraps the int128_t minimum's 2^127 to the same
+// bits on both sides.
+struct AbsValue {
+  template <typename T>
+  static Outcome host(T value) {
+    return AbsValue{}(value);
+  }
+  template <typename T>
+  VELOX_GPU_COMPATIBLE Outcome operator()(T value) const {
+    return {
+        false, static_cast<int128_t>(DecimalArithmetic::absValue<T>(value))};
+  }
+};
+
+// Values on either side of zero and at both ends of T, including the signed
+// minimum, whose magnitude T cannot hold.
+template <typename T>
+std::vector<T> absValueInputs() {
+  constexpr T kMin = std::numeric_limits<T>::min();
+  constexpr T kMax = std::numeric_limits<T>::max();
+  return {0, 7, -7, kMax, kMin + 1, kMin};
+}
+
 // Stands in for exec::VectorExec, whose header nvcc cannot parse. The function
 // types only name its resolver, and nothing here uses them.
 struct IdentityExec {
@@ -188,6 +223,11 @@ TEST(DecimalArithmeticDeviceTest, deviceMatchesHost) {
   std::vector<uint8_t> exponents(DecimalArithmetic::kMaxLongPrecision + 1);
   std::iota(exponents.begin(), exponents.end(), uint8_t{0});
   expectDeviceMatchesHost("powerOfTen", PowerOfTen{}, exponents);
+
+  expectDeviceMatchesHost(
+      "absValue<int64_t>", AbsValue{}, absValueInputs<int64_t>());
+  expectDeviceMatchesHost(
+      "absValue<int128_t>", AbsValue{}, absValueInputs<int128_t>());
 
   expectDeviceMatchesHost(
       "DecimalPlusFunction::call",
