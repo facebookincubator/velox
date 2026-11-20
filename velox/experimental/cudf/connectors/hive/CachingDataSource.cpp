@@ -653,6 +653,8 @@ class Reader {
   }
 
   std::unique_ptr<cudf::io::datasource> kvikioSource_;
+  // The cache must outlive every read still queued on the fill and copy
+  // threads.
   cache::AsyncDataCache* cache_;
   StringIdLease fileId_;
   std::shared_ptr<IoStats> ioStats_;
