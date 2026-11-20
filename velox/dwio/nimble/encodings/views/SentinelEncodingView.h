@@ -54,12 +54,13 @@ class SentinelEncodingView final : public TypedEncodingView<T> {
         2 * sizeof(uint32_t),
         payloadSize,
         "Sentinel encoding is missing its null count or value-stream length");
+    const char* const dataEnd = data.data() + data.size();
     const char* position = data.data() + this->dataOffset_;
     const auto numNulls = encoding::readUint32(position);
     NIMBLE_CHECK_LE(
         numNulls, this->rowCount_, "Sentinel null count exceeds row count");
     const auto valuesSize = encoding::readUint32(position);
-    const auto remainingSize = static_cast<size_t>(data.end() - position);
+    const auto remainingSize = static_cast<size_t>(dataEnd - position);
     constexpr auto kSentinelSize =
         std::is_same_v<physicalType, std::string_view> ? sizeof(uint32_t)
                                                        : sizeof(physicalType);
@@ -77,15 +78,14 @@ class SentinelEncodingView final : public TypedEncodingView<T> {
       const auto sentinelSize = encoding::readUint32(position);
       NIMBLE_CHECK_LE(
           sentinelSize,
-          static_cast<size_t>(data.end() - position),
+          static_cast<size_t>(dataEnd - position),
           "Sentinel string exceeds payload bounds");
       sentinel_ = {position, sentinelSize};
       position += sentinelSize;
     } else {
       sentinel_ = encoding::read<physicalType>(position);
     }
-    NIMBLE_CHECK_EQ(
-        position, data.end(), "Sentinel encoding has trailing data");
+    NIMBLE_CHECK_EQ(position, dataEnd, "Sentinel encoding has trailing data");
     NIMBLE_CHECK_EQ(
         values_->rowCount(),
         this->rowCount_,
