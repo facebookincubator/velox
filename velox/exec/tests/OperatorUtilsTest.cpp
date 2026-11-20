@@ -616,6 +616,34 @@ TEST_F(OperatorUtilsTest, setOperatorRuntimeStats) {
   ASSERT_EQ(stats[std::string(statsName)].min, 100);
 }
 
+TEST_F(OperatorUtilsTest, operatorAggregatedMetrics) {
+  EXPECT_TRUE(OperatorAggregatedMetrics::contains("storageReadBytes"));
+  EXPECT_THROW(
+      OperatorAggregatedMetrics::add("storageReadBytes"), VeloxException);
+  EXPECT_THROW(
+      OperatorAggregatedMetrics::remove("storageReadBytes"), VeloxException);
+  EXPECT_THROW(
+      OperatorAggregatedMetrics::remove("unregisteredMetric"), VeloxException);
+
+  const std::string kMetricName = "registeredMetric";
+  OperatorAggregatedMetrics::add(kMetricName);
+  EXPECT_THROW(OperatorAggregatedMetrics::add(kMetricName), VeloxException);
+
+  std::unordered_map<std::string, RuntimeMetric> stats;
+  auto& metric = stats.emplace(kMetricName, RuntimeMetric{}).first->second;
+  metric.addValue(10);
+  metric.addValue(20);
+  aggregateOperatorRuntimeStats(stats);
+
+  EXPECT_EQ(metric.sum, 30);
+  EXPECT_EQ(metric.count, 1);
+  EXPECT_EQ(metric.min, 30);
+  EXPECT_EQ(metric.max, 30);
+
+  OperatorAggregatedMetrics::remove(kMetricName);
+  EXPECT_THROW(OperatorAggregatedMetrics::remove(kMetricName), VeloxException);
+}
+
 TEST_F(OperatorUtilsTest, initializeRowNumberMapping) {
   BufferPtr mapping;
   auto rawMapping = initializeRowNumberMapping(mapping, 10, pool());

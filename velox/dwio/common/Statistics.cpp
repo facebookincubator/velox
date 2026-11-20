@@ -351,8 +351,7 @@ RuntimeStats::toRuntimeMetricMap() const {
   }
   for (const auto& [format, metrics] : formatSpecificStats) {
     for (const auto& [name, metric] : metrics) {
-      result.emplace(
-          fmt::format("{}.{}", FileFormatName::toName(format), name), metric);
+      result.emplace(formatMetricName(format, name), metric);
     }
   }
   for (const auto& [nodeId, statsByFormat] : columnStats) {
@@ -366,5 +365,11 @@ RuntimeStats::toRuntimeMetricMap() const {
     }
   }
   return result;
+}
+
+std::string RuntimeStats::formatMetricName(
+    FileFormat format,
+    std::string_view name) {
+  return fmt::format("{}.{}", FileFormatName::toName(format), name);
 }
 } // namespace facebook::velox::dwio::common
