@@ -545,6 +545,9 @@ TEST_P(UcxExchangeTest, bandwidthTest) {
 TEST_P(UcxExchangeTest, realPartitionedOutputTest) {
   VLOG(3) << "+ UcxExchangeTest::realPartitionedOutputTest";
   ExchangeTestParams p = GetParam();
+  // The real UcxPartitionedOutput is a cuDF operator, which binds the cuDF
+  // device and installs the cuDF memory resources in each of its methods.
+  CudfRegistration cudfRegistration;
 
   // Wide table multi-partition tests work by using
   // structs_column_view::get_sliced_child() in
@@ -659,6 +662,9 @@ TEST_P(UcxExchangeTest, realPartitionedOutputTest) {
 TEST_P(UcxExchangeTest, realPartitionedOutputDataIntegrityTest) {
   VLOG(3) << "+ UcxExchangeTest::realPartitionedOutputDataIntegrityTest";
   ExchangeTestParams p = GetParam();
+  // The real UcxPartitionedOutput is a cuDF operator, which binds the cuDF
+  // device and installs the cuDF memory resources in each of its methods.
+  CudfRegistration cudfRegistration;
 
   // Wide table multi-partition tests work by using
   // structs_column_view::get_sliced_child() in
@@ -1138,6 +1144,9 @@ TEST_F(UcxExchangeFocusedTest, broadcastIntraNodePlaceholderRace) {
 // small input chunks into fewer, larger output chunks while preserving all rows
 // and data integrity.
 TEST_F(UcxExchangeFocusedTest, batchAccumulationTest) {
+  // The real UcxPartitionedOutput is a cuDF operator, which binds the cuDF
+  // device and installs the cuDF memory resources in each of its methods.
+  CudfRegistration cudfRegistration;
   const int kTargetRows = UcxPartitionedOutput::kDefaultTargetRowsPerChunk;
 
   // --- Scenario 1: Small chunks that SHOULD be accumulated ---

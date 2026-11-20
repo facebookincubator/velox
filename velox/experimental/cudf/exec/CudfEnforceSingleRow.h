@@ -53,10 +53,6 @@ class CudfEnforceSingleRow : public CudfOperatorBase {
 
   bool isFinished() override;
 
-  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
-    return exec::BlockingReason::kNotBlocked;
-  }
-
  protected:
   void doAddInput(RowVectorPtr input) override;
   RowVectorPtr doGetOutput() override;

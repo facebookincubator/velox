@@ -48,7 +48,7 @@ bool CudfJoinBuild::needsInput() const {
   return !noMoreInput_;
 }
 
-exec::BlockingReason CudfJoinBuild::isBlocked(ContinueFuture* future) {
+exec::BlockingReason CudfJoinBuild::doIsBlocked(ContinueFuture* future) {
   if (!future_.valid()) {
     return exec::BlockingReason::kNotBlocked;
   }

@@ -30,8 +30,6 @@ class CudfJoinBuild : public CudfOperatorBase {
  public:
   bool needsInput() const final;
 
-  exec::BlockingReason isBlocked(ContinueFuture* future) final;
-
   bool isFinished() final;
 
  protected:
@@ -41,6 +39,8 @@ class CudfJoinBuild : public CudfOperatorBase {
       const std::shared_ptr<const core::PlanNode>& joinNode,
       const std::string& operatorName,
       NvtxMethodFlag nvtxMethods);
+
+  exec::BlockingReason doIsBlocked(ContinueFuture* future) final;
 
   void doAddInput(RowVectorPtr input) final;
   RowVectorPtr doGetOutput() final;

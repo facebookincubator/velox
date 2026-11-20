@@ -169,11 +169,7 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::NestedLoopJoinNode> joinNode);
 
-  void initialize() override;
-
   bool needsInput() const override;
-
-  exec::BlockingReason isBlocked(ContinueFuture* future) override;
 
   bool isFinished() override;
 
@@ -192,6 +188,8 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
   }
 
  protected:
+  void doInitialize() override;
+  exec::BlockingReason doIsBlocked(ContinueFuture* future) override;
   void doAddInput(RowVectorPtr input) override;
   RowVectorPtr doGetOutput() override;
   void doNoMoreInput() override;

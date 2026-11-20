@@ -39,10 +39,6 @@ class CudfBatchConcat : public CudfOperatorBase {
     return !noMoreInput_ && outputQueue_.empty() && !targetReached();
   }
 
-  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
-    return exec::BlockingReason::kNotBlocked;
-  }
-
   bool isFinished() override;
 
  protected:

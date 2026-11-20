@@ -51,6 +51,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/experimental/ucx-exchange/tests/UcxExchangeTestBase.h"
+#include "velox/experimental/ucx-exchange/tests/UcxTestHelpers.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorStream.h"
@@ -243,30 +244,6 @@ class StartedTasks {
  private:
   TaskShuffleResults* const results_;
   std::vector<std::shared_ptr<exec::Task>> tasks_;
-};
-
-// Pairs registerCudf() with unregisterCudf() so the cuDF driver adapter and the
-// transport registrations it installs do not outlive the case even if the body
-// throws. unregisterCudf() empties output_mr_, which main() seeded for the
-// whole binary, so the previous value is put back for the cases that run later
-// and still allocate through get_output_mr().
-class CudfRegistration {
- public:
-  CudfRegistration() : previousOutputMr_(cudf_velox::output_mr_) {
-    cudf_velox::registerCudf();
-  }
-
-  ~CudfRegistration() {
-    cudf_velox::unregisterCudf();
-    cudf_velox::output_mr_ = std::move(previousOutputMr_);
-  }
-
-  CudfRegistration(const CudfRegistration&) = delete;
-  CudfRegistration& operator=(const CudfRegistration&) = delete;
-
- private:
-  std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>>
-      previousOutputMr_;
 };
 
 // A producer Task and the batches its Values node emits.

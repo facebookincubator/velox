@@ -27,19 +27,15 @@ class CudfDistinct : public CudfOperatorBase {
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::AggregationNode> const& aggregationNode);
 
-  void initialize() override;
-
   bool needsInput() const override {
     return !noMoreInput_;
-  }
-
-  exec::BlockingReason isBlocked(ContinueFuture* /* unused */) override {
-    return exec::BlockingReason::kNotBlocked;
   }
 
   bool isFinished() override;
 
  protected:
+  void doInitialize() override;
+
   void doAddInput(RowVectorPtr input) override;
 
   RowVectorPtr doGetOutput() override;
