@@ -46,7 +46,7 @@ jobs:
   ubuntu-debug:
     runs-on: ubuntu-22.04
     # prevent errors when forks ff their main branch
-    if: ${{ github.repository == 'facebookincubator/velox' }}
+    if: ${{ !github.event.repository.fork }}
     name: Ubuntu debug
     defaults:
       run:
@@ -124,7 +124,7 @@ jobs:
   ubuntu-gpu-relwithdebinfo:
     runs-on: 4-core-ubuntu-gpu-t4
     # prevent errors when forks ff their main branch
-    if: ${{ github.repository == 'facebookincubator/velox' }}
+    if: ${{ !github.event.repository.fork }}
     name: Ubuntu GPU debug
     env:
       CUDA_VERSION: '12.9'
