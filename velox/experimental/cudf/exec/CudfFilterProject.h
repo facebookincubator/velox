@@ -37,7 +37,7 @@ class CudfFilterProject : public CudfOperatorBase {
       const std::shared_ptr<const core::FilterNode>& filter,
       const std::shared_ptr<const core::ProjectNode>& project);
 
-  void initialize() override;
+  void doInitialize() override;
 
   bool needsInput() const override {
     return !input_;
@@ -54,10 +54,6 @@ class CudfFilterProject : public CudfOperatorBase {
       std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
       cudf::size_type numRows,
       cuda::stream_ref stream);
-
-  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
-    return exec::BlockingReason::kNotBlocked;
-  }
 
   bool isFinished() override;
 

@@ -30,7 +30,7 @@ class CudfJoinBuild : public CudfOperatorBase {
  public:
   bool needsInput() const final;
 
-  exec::BlockingReason isBlocked(ContinueFuture* future) final;
+  exec::BlockingReason doIsBlocked(ContinueFuture* future) final;
 
   bool isFinished() final;
 

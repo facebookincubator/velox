@@ -35,6 +35,7 @@
 // function directly, bypassing the error-attributed cudf wrapper.
 
 #include "velox/experimental/cudf/CudfDefaultStreamOverload.h"
+#include "velox/experimental/cudf/CudfTemporaryMemoryResource.h"
 
 #include <rmm/mr/per_device_resource.hpp>
 #include <rmm/resource_ref.hpp>
@@ -55,16 +56,3 @@ get_current_device_resource_ref();
 #endif
 
 } // namespace cudf
-
-namespace facebook::velox::cudf_velox {
-
-/// Returns the current device memory resource as an async resource reference.
-/// Equivalent to cudf::get_current_device_resource_ref(), but bypasses the
-/// __attribute__((error)) redeclaration above by calling the underlying RMM
-/// function directly. Use this at call sites where you intentionally want
-/// the current default device memory resource.
-inline rmm::device_async_resource_ref get_temp_mr() {
-  return rmm::mr::get_current_device_resource_ref();
-}
-
-} // namespace facebook::velox::cudf_velox
