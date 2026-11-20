@@ -319,11 +319,13 @@ class Reader {
       std::unique_ptr<cudf::io::datasource> source,
       std::string_view path,
       cache::AsyncDataCache* dataCache,
-      std::shared_ptr<IoStats> stats)
+      std::shared_ptr<IoStats> stats,
+      std::shared_ptr<io::IoStatistics> ioStatistics)
       : kvikioSource_(std::move(source)),
         cache_(dataCache),
         fileId_(fileIds(), std::string(path)),
-        ioStats_(std::move(stats)) {
+        ioStats_(std::move(stats)),
+        ioStatistics_(std::move(ioStatistics)) {
     VELOX_CHECK_NOT_NULL(kvikioSource_);
     VELOX_CHECK_NOT_NULL(cache_);
     // Register the file with the cache TTL controller, if there is one, so
@@ -517,11 +519,7 @@ class Reader {
         return {};
       }
     }
-    if (pin.empty()) {
-      // Another reader is filling the entry.
-      return pin;
-    }
-    pin.checkedEntry()->getAndClearFirstUseFlag();
+    // The pin is empty when another reader is filling the entry.
     return pin;
   }
 
@@ -552,6 +550,9 @@ class Reader {
     if (!entry->isExclusive()) {
       const auto bytes = pieceSize(pin, size);
       countBytes("cudfKvikioCacheHitBytes", bytes);
+      if (ioStatistics_) {
+        ioStatistics_->ramHit().increment(bytes);
+      }
       if (bytes < size) {
         count("cudfKvikioCacheReusedPrefixes");
         countBytes("cudfKvikioCacheReusedPrefixBytes", bytes);
@@ -563,6 +564,9 @@ class Reader {
     // file through KvikIO.
     if (fillEntryFromSsd(pin, offset)) {
       countBytes("cudfKvikioCacheSsdBytes", size);
+      if (ioStatistics_) {
+        ioStatistics_->ssdRead().increment(size);
+      }
     } else {
       const auto bytesRead = kvikioSource_->host_read(
           offset, size, reinterpret_cast<uint8_t*>(entry->contiguousData()));
@@ -571,8 +575,8 @@ class Reader {
       countBytes("cudfKvikioCacheMissBytes", size);
     }
     // An SSD cache entry holds at most 8 MiB. A larger entry is not saved to
-    // SSD. Velox's buffered input stays within the same limit (its load
-    // quantum).
+    // the SSD cache. Velox's buffered input stays within the same limit (its
+    // load quantum).
     const bool ssdSavable = size <= (1 << cache::SsdRun::kSizeBits);
     // Filled: make the entry readable by other reads (shared).
     entry->setExclusiveToShared(ssdSavable);
@@ -592,8 +596,8 @@ class Reader {
     if (ssdPin.empty()) {
       return false;
     }
-    // The SSD copy may differ in size from the piece. Read the piece from
-    // KvikIO in this case.
+    // The SSD cache's copy may differ in size from the piece. Read the piece
+    // from KvikIO in this case.
     if (ssdPin.run().size() != pin.checkedEntry()->size()) {
       return false;
     }
@@ -664,6 +668,7 @@ class Reader {
   cache::AsyncDataCache* cache_;
   StringIdLease fileId_;
   std::shared_ptr<IoStats> ioStats_;
+  std::shared_ptr<io::IoStatistics> ioStatistics_;
 };
 
 // The datasource cuDF reads from. The reads themselves are done by Reader.
@@ -673,13 +678,15 @@ class CachingDataSource final : public cudf::io::datasource {
       std::unique_ptr<cudf::io::datasource> kvikioSource,
       std::string_view path,
       cache::AsyncDataCache* cache,
-      std::shared_ptr<IoStats> ioStats)
+      std::shared_ptr<IoStats> ioStats,
+      std::shared_ptr<io::IoStatistics> ioStatistics)
       : reader_(
             std::make_shared<Reader>(
                 std::move(kvikioSource),
                 path,
                 cache,
-                std::move(ioStats))) {}
+                std::move(ioStats),
+                std::move(ioStatistics))) {}
 
   size_t size() const override {
     return reader_->fileSize();
@@ -806,12 +813,17 @@ std::unique_ptr<cudf::io::datasource> maybeCacheKvikioDataSource(
     std::string_view path,
     cache::AsyncDataCache* cache,
     bool cacheable,
-    std::shared_ptr<IoStats> ioStats) {
+    std::shared_ptr<IoStats> ioStats,
+    std::shared_ptr<io::IoStatistics> ioStatistics) {
   if (cache == nullptr || !cacheable) {
     return kvikioSource;
   }
   return std::make_unique<CachingDataSource>(
-      std::move(kvikioSource), path, cache, std::move(ioStats));
+      std::move(kvikioSource),
+      path,
+      cache,
+      std::move(ioStats),
+      std::move(ioStatistics));
 }
 
 void freeCachingDataSourceBuffers() {

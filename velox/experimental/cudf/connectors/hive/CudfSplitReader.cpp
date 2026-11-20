@@ -565,11 +565,17 @@ cudf::io::source_info makeSourceInfo(const CudfHiveConnectorSplit& split) {
 std::unique_ptr<cudf::io::datasource> createKvikioDataSource(
     const CudfHiveConnectorSplit& split,
     cache::AsyncDataCache* cache,
-    const std::shared_ptr<IoStats>& ioStats) {
+    const std::shared_ptr<IoStats>& ioStats,
+    const std::shared_ptr<io::IoStatistics>& ioStatistics) {
   auto source =
       std::move(cudf::io::make_datasources(makeSourceInfo(split)).front());
   return maybeCacheKvikioDataSource(
-      std::move(source), split.filePath, cache, split.cacheable, ioStats);
+      std::move(source),
+      split.filePath,
+      cache,
+      split.cacheable,
+      ioStats,
+      ioStatistics);
 }
 
 } // namespace
@@ -608,7 +614,7 @@ void CudfSplitReader::setupCudfDataSource() {
   auto makeKvikioDataSource = [&]() {
     try {
       dataSource_ = createKvikioDataSource(
-          *split_, connectorQueryCtx_->cache(), ioStats_);
+          *split_, connectorQueryCtx_->cache(), ioStats_, ioStatistics_);
     } catch (const std::system_error& e) {
       // KvikIO preserves errno for local opens only.
       // TODO: Ignore missing remote files once KvikIO reports them
