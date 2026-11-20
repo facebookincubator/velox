@@ -22,6 +22,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace facebook::velox::cudf_velox {
 
@@ -43,6 +44,8 @@ struct CudfConfig {
       "cudf.jit_expression_priority"};
   static constexpr const char* kCudfOutputMr{"cudf.output_mr"};
   static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
+  static constexpr const char* kCudfAllowedCpuOperators{
+      "cudf.allowed_cpu_operators"};
   static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
   static constexpr const char* kCudfBatchSizeMinThreshold{
       "cudf.batch_size_min_threshold"};
@@ -84,6 +87,21 @@ struct CudfConfig {
 
   /// Allow fallback to CPU operators if GPU operator replacement fails.
   bool allowCpuFallback{true};
+
+  /// Operator types -- exec::Operator::operatorType(), e.g. "Exchange" -- that
+  /// a deployment intentionally runs on the CPU. Comma-separated in the config
+  /// string. Two effects:
+  ///  * with allowCpuFallback == false, a listed operator staying on the CPU is
+  ///    not an error, so strict mode flags only the operators that actually
+  ///    lack a GPU path;
+  ///  * a CPU operator is reported in its runtime stats as
+  ///    kCudfCpuAllowlistedStat when listed and kCudfCpuFallbackStat when
+  ///    not, so per-query telemetry can separate intended CPU work from gaps.
+  /// Empty by default: every CPU operator counts as a fallback.
+  std::unordered_set<std::string> allowedCpuOperators;
+
+  /// Whether 'operatorType' is in allowedCpuOperators.
+  bool isAllowedCpuOperator(std::string_view operatorType) const;
 
   /// Enable GPU exchange operators (UcxExchange / UcxPartitionedOutput). This
   /// is a capability, not a request: it is read once at registerCudf() to
