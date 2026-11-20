@@ -206,13 +206,11 @@ class ColumnCryptoMetaData::ColumnCryptoMetaDataImpl {
   }
   std::shared_ptr<schema::ColumnPath> pathInSchema() const {
     return std::make_shared<schema::ColumnPath>(
-        *cryptoMetadata_->get_ENCRYPTION_WITH_COLUMN_KEY().path_in_schema());
+        *cryptoMetadata_->ENCRYPTION_WITH_COLUMN_KEY()->path_in_schema());
   }
   const std::string& keyMetadata() const {
     return apache::thrift::can_throw(
-        cryptoMetadata_->get_ENCRYPTION_WITH_COLUMN_KEY()
-            .key_metadata()
-            .value());
+        cryptoMetadata_->ENCRYPTION_WITH_COLUMN_KEY()->key_metadata().value());
   }
 
  private:
@@ -271,9 +269,14 @@ class ColumnChunkMetaData::ColumnChunkMetaDataImpl {
           // Should decrypt metadata.
           std::shared_ptr<schema::ColumnPath> path =
               std::make_shared<schema::ColumnPath>(
-                  *ccmd.get_ENCRYPTION_WITH_COLUMN_KEY().path_in_schema());
-          std::string key_metadata = apache::thrift::can_throw(
-              ccmd.get_ENCRYPTION_WITH_COLUMN_KEY().key_metadata().value());
+                  *ccmd.ENCRYPTION_WITH_COLUMN_KEY()
+                       .as_const()
+                       ->path_in_schema());
+          std::string key_metadata =
+              apache::thrift::can_throw(ccmd.ENCRYPTION_WITH_COLUMN_KEY()
+                                            .as_const()
+                                            ->key_metadata()
+                                            .value());
 
           std::string aadColumnMetadata = encryption::createModuleAad(
               fileDecryptor->fileAad(),

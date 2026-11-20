@@ -2464,8 +2464,11 @@ class TestDecimalSchemaElementConstruction
     TestSchemaElementConstruction::inspect();
     ASSERT_EQ(*element_->precision(), precision_);
     ASSERT_EQ(*element_->scale(), scale_);
-    ASSERT_EQ(*element_->logicalType()->get_DECIMAL().precision(), precision_);
-    ASSERT_EQ(*element_->logicalType()->get_DECIMAL().scale(), scale_);
+    ASSERT_EQ(
+        *element_->logicalType()->DECIMAL().as_const().value().precision(),
+        precision_);
+    ASSERT_EQ(
+        *element_->logicalType()->DECIMAL().as_const().value().scale(), scale_);
     return;
   }
 
@@ -2588,23 +2591,37 @@ template <>
 void TestTemporalSchemaElementConstruction::inspect<
     facebook::velox::parquet::thrift::TimeType>() {
   TestSchemaElementConstruction::inspect();
-  ASSERT_EQ(*element_->logicalType()->get_TIME().isAdjustedToUTC(), adjusted_);
+  ASSERT_EQ(
+      *element_->logicalType()->TIME().as_const().value().isAdjustedToUTC(),
+      adjusted_);
   using TimeUnitType = facebook::velox::parquet::thrift::TimeUnit::Type;
   switch (unit_) {
     case LogicalType::TimeUnit::kMillis:
       ASSERT_TRUE(
-          element_->logicalType()->get_TIME().unit()->getType() ==
-          TimeUnitType::MILLIS);
+          element_->logicalType()
+              ->TIME()
+              .as_const()
+              .value()
+              .unit()
+              ->getType() == TimeUnitType::MILLIS);
       break;
     case LogicalType::TimeUnit::kMicros:
       ASSERT_TRUE(
-          element_->logicalType()->get_TIME().unit()->getType() ==
-          TimeUnitType::MICROS);
+          element_->logicalType()
+              ->TIME()
+              .as_const()
+              .value()
+              .unit()
+              ->getType() == TimeUnitType::MICROS);
       break;
     case LogicalType::TimeUnit::kNanos:
       ASSERT_TRUE(
-          element_->logicalType()->get_TIME().unit()->getType() ==
-          TimeUnitType::NANOS);
+          element_->logicalType()
+              ->TIME()
+              .as_const()
+              .value()
+              .unit()
+              ->getType() == TimeUnitType::NANOS);
       break;
     case LogicalType::TimeUnit::kUnknown:
     default:
@@ -2618,23 +2635,40 @@ void TestTemporalSchemaElementConstruction::inspect<
     facebook::velox::parquet::thrift::TimestampType>() {
   TestSchemaElementConstruction::inspect();
   ASSERT_EQ(
-      *element_->logicalType()->get_TIMESTAMP().isAdjustedToUTC(), adjusted_);
+      *element_->logicalType()
+           ->TIMESTAMP()
+           .as_const()
+           .value()
+           .isAdjustedToUTC(),
+      adjusted_);
   using TimeUnitType = facebook::velox::parquet::thrift::TimeUnit::Type;
   switch (unit_) {
     case LogicalType::TimeUnit::kMillis:
       ASSERT_TRUE(
-          element_->logicalType()->get_TIMESTAMP().unit()->getType() ==
-          TimeUnitType::MILLIS);
+          element_->logicalType()
+              ->TIMESTAMP()
+              .as_const()
+              .value()
+              .unit()
+              ->getType() == TimeUnitType::MILLIS);
       break;
     case LogicalType::TimeUnit::kMicros:
       ASSERT_TRUE(
-          element_->logicalType()->get_TIMESTAMP().unit()->getType() ==
-          TimeUnitType::MICROS);
+          element_->logicalType()
+              ->TIMESTAMP()
+              .as_const()
+              .value()
+              .unit()
+              ->getType() == TimeUnitType::MICROS);
       break;
     case LogicalType::TimeUnit::kNanos:
       ASSERT_TRUE(
-          element_->logicalType()->get_TIMESTAMP().unit()->getType() ==
-          TimeUnitType::NANOS);
+          element_->logicalType()
+              ->TIMESTAMP()
+              .as_const()
+              .value()
+              .unit()
+              ->getType() == TimeUnitType::NANOS);
       break;
     case LogicalType::TimeUnit::kUnknown:
     default:
@@ -2800,8 +2834,12 @@ class TestIntegerSchemaElementConstruction
 
   void inspect() {
     TestSchemaElementConstruction::inspect();
-    ASSERT_EQ(*element_->logicalType()->get_INTEGER().bitWidth(), width_);
-    ASSERT_EQ(*element_->logicalType()->get_INTEGER().isSigned(), signed_);
+    ASSERT_EQ(
+        *element_->logicalType()->INTEGER().as_const().value().bitWidth(),
+        width_);
+    ASSERT_EQ(
+        *element_->logicalType()->INTEGER().as_const().value().isSigned(),
+        signed_);
     return;
   }
 
