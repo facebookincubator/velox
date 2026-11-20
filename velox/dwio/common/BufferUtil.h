@@ -32,16 +32,16 @@ inline void ensureCapacity(
   if (!data) {
     data = AlignedBuffer::allocate<T>(numElements, pool);
   } else {
-    oldSize = data->size();
+    if (preserveOldData) {
+      oldSize = data->size();
+    }
     if (!data->isMutable() || data->capacity() < newCapacity) {
       auto newData = AlignedBuffer::allocate<T>(numElements, pool);
       if (preserveOldData) {
         std::memcpy(
             newData->template asMutable<uint8_t>(),
             data->as<uint8_t>(),
-            oldSize);
-      } else {
-        oldSize = 0;
+            std::min(oldSize, newCapacity));
       }
       data = newData;
     }
