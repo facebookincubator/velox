@@ -11,9 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(velox_vector_test_lib VectorMaker.cpp VectorTestBase.cpp)
+add_library(velox_vector_test_lib VectorAssertions.cpp VectorMaker.cpp VectorTestBase.cpp)
 velox_add_test_headers(
   velox_vector_test_lib
+  VectorAssertions.h
   VectorMaker-inl.h
   VectorMaker.h
   VectorMakerStats.h
@@ -24,6 +25,7 @@ target_link_libraries(
   velox_vector_test_lib
   velox_row_fast
   velox_vector
+  gflags::gflags
   GTest::gtest
   GTest::gtest_main
 )

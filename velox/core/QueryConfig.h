@@ -387,6 +387,21 @@ class QueryConfig {
       2UL << 20,
       "Minimum bytes to accumulate before unblocking an exchange consumer.")
 
+  /// The number of rows the Exchange operator fills each output batch to.
+  /// When positive, it replaces the target the operator derives from
+  /// preferred_output_batch_bytes and an estimate of the row size. A batch
+  /// holds only pages taken from the exchange queue together, at most
+  /// preferred_output_batch_bytes, so it can have fewer rows. A Presto page is
+  /// never split, so a batch can exceed this by part of a page. 0 keeps the
+  /// derived target.
+  VELOX_QUERY_CONFIG(
+      kExchangeOutputBatchRows,
+      exchangeOutputBatchRows,
+      "exchange_output_batch_rows",
+      uint32_t,
+      0,
+      "Rows per Exchange output batch, replacing the target derived from preferred_output_batch_bytes and the estimated row size. 0 keeps the derived target.")
+
   VELOX_QUERY_CONFIG(
       kMaxPartialAggregationMemory,
       maxPartialAggregationMemoryUsage,
@@ -532,27 +547,30 @@ class QueryConfig {
 
   /// Preferred number of rows to be returned by operators from
   /// Operator::getOutput. Used when average row size is not known.
-  VELOX_QUERY_CONFIG_PROPERTY(
+  VELOX_QUERY_CONFIG(
       kPreferredOutputBatchRows,
+      preferredOutputBatchRows,
       "preferred_output_batch_rows",
-      uint32_t,
+      vector_size_t,
       1024,
       "Preferred number of rows in output batches.")
 
   /// Max number of rows that could be return by operators from
   /// Operator::getOutput.
-  VELOX_QUERY_CONFIG_PROPERTY(
+  VELOX_QUERY_CONFIG(
       kMaxOutputBatchRows,
+      maxOutputBatchRows,
       "max_output_batch_rows",
-      uint32_t,
-      10000,
+      vector_size_t,
+      10'000,
       "Maximum number of rows in output batches.")
 
   /// Initial output batch size in rows for MergeJoin operator.
-  VELOX_QUERY_CONFIG_PROPERTY(
+  VELOX_QUERY_CONFIG(
       kMergeJoinOutputBatchStartSize,
+      mergeJoinOutputBatchStartSize,
       "merge_join_output_batch_start_size",
-      uint32_t,
+      vector_size_t,
       0,
       "Initial output batch size in rows for MergeJoin. 0 disables dynamic adjustment.")
 
@@ -589,7 +607,7 @@ class QueryConfig {
       kTableScanOutputBatchRowsOverride,
       tableScanOutputBatchRowsOverride,
       "table_scan_output_batch_rows_override",
-      uint32_t,
+      vector_size_t,
       0,
       "Override number of rows in TableScan output batches. 0 means no override.")
 
@@ -733,9 +751,13 @@ class QueryConfig {
       "Enable LocalMerge spilling. Requires spill_enabled.")
 
   /// Specify the max number of local sources to merge at a time.
-  /// Uses std::numeric_limits<uint32_t>::max() as default.
-  static constexpr const char* kLocalMergeMaxNumMergeSources =
-      "local_merge_max_num_merge_sources";
+  VELOX_QUERY_CONFIG(
+      kLocalMergeMaxNumMergeSources,
+      localMergeMaxNumMergeSources,
+      "local_merge_max_num_merge_sources",
+      uint32_t,
+      std::numeric_limits<uint32_t>::max(),
+      "Maximum number of local sources to merge at a time.")
 
   /// The max row numbers to fill and spill for each spill run. Default is
   /// 12 million rows which uses ~128MB memory.
@@ -1323,6 +1345,16 @@ class QueryConfig {
       false,
       "Throw exception on duplicate map keys.")
 
+  /// If true, map functions that support it build a flat map when every key is
+  /// constant.
+  VELOX_QUERY_CONFIG(
+      kGenerateConstantMapsAsFlatMaps,
+      generateConstantMapsAsFlatMaps,
+      "generate_constant_maps_as_flat_maps",
+      bool,
+      false,
+      "Build a flat map when every map key is constant.")
+
   /// Max number of input batches to prefetch for index lookup. 0 = disabled.
   VELOX_QUERY_CONFIG(
       kIndexLookupJoinMaxPrefetchBatches,
@@ -1566,6 +1598,35 @@ class QueryConfig {
       "cap. A positive value below the effective BATCH start window is raised "
       "to that start. The congestion max window remains the overall ceiling.")
 
+  /// Admission-window policy of the query's RPC rate limiters.
+  VELOX_QUERY_CONFIG(
+      kRpcFlowControlPolicy,
+      rpcFlowControlPolicy,
+      "rpc.flow_control_policy",
+      std::string,
+      "WINDOW_AIMD",
+      "RPC flow-control policy, case-insensitive: WINDOW_AIMD (default) or "
+      "CAPACITY_PROBING (experimental). CAPACITY_PROBING applies only to "
+      "adaptive PER_ROW functions that return capacity retries; other queries "
+      "run WINDOW_AIMD. It differs from WINDOW_AIMD as follows. Until the "
+      "first overload, or until responses slow down, the window doubles every "
+      "round. A rejection the function names as a lack of serving capacity "
+      "keeps 80% of the calls the backend held, as the round's rejections "
+      "show, even below rpc.ratelimiter.min_limit and below one call. The "
+      "window then grows "
+      "back to that level by half the distance each round and past it by a "
+      "step that doubles each round, at most 16 calls per round. The window "
+      "never grows past twice the most calls in flight in the round or the "
+      "one before, and rows "
+      "the transport answered only after retrying an overload in place earn "
+      "it no growth. Driver windows start "
+      "at the rate limiter's ceiling instead of 100 when that is higher, but "
+      "not above a ceiling the function declares, nor above 200 when only the "
+      "safety ceiling of rpc.ratelimiter.hard_limit=0 applies; a session's "
+      "rpc.congestion.max_window still sets them. A CAPACITY_PROBING query "
+      "gets its own rate limiter per backend, with its own ceiling. Any other "
+      "value fails the query.")
+
   /// Enables AIMD adaptation of each backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterAdaptiveEnabled,
@@ -1674,8 +1735,12 @@ class QueryConfig {
       "that is down. It is also a minimum load: each worker sends at least one "
       "call per gap to the backend, and probes come up to 20% early at random, "
       "about 11% more on average. Calls that take longer than half this gap "
-      "are probed every two call durations instead. Zero removes the bound, "
-      "so the window can fall to the function's floor. Only used when "
+      "are probed every two call durations instead. Under CAPACITY_PROBING a "
+      "capacity rejection can cut below the function's floor, so this bound is "
+      "what still admits one call per gap while the backend rejects "
+      "everything. Zero removes the bound, so the window can fall to the "
+      "function's floor, or under CAPACITY_PROBING to a thousandth of a call: "
+      "a call every thousand service times. Only used when "
       "rpc.ratelimiter.adaptive_enabled is true. The first query to reach a "
       "backend fixes its policy for the life of the worker process.")
 
@@ -1687,32 +1752,6 @@ class QueryConfig {
     return config::toCapacity(
         get<std::string>(kQueryMaxMemoryPerNode, "0B"),
         config::CapacityUnit::BYTE);
-  }
-
-  vector_size_t preferredOutputBatchRows() const {
-    const uint32_t batchRows = get<uint32_t>(kPreferredOutputBatchRows, 1024);
-    VELOX_USER_CHECK_LE(batchRows, std::numeric_limits<vector_size_t>::max());
-    return batchRows;
-  }
-
-  vector_size_t maxOutputBatchRows() const {
-    const uint32_t maxBatchRows = get<uint32_t>(kMaxOutputBatchRows, 10'000);
-    VELOX_USER_CHECK_LE(
-        maxBatchRows, std::numeric_limits<vector_size_t>::max());
-    return maxBatchRows;
-  }
-
-  vector_size_t mergeJoinOutputBatchStartSize() const {
-    const uint32_t batchRows = get<uint32_t>(kMergeJoinOutputBatchStartSize, 0);
-    VELOX_USER_CHECK_LE(batchRows, std::numeric_limits<vector_size_t>::max());
-    return batchRows;
-  }
-
-  uint32_t localMergeMaxNumMergeSources() const {
-    const auto maxNumMergeSources = get<uint32_t>(
-        kLocalMergeMaxNumMergeSources, std::numeric_limits<uint32_t>::max());
-    VELOX_CHECK_GT(maxNumMergeSources, 0);
-    return maxNumMergeSources;
   }
 
   uint8_t spillNumPartitionBits() const {
@@ -1738,15 +1777,25 @@ class QueryConfig {
         config::CapacityUnit::BYTE);
   }
 
+  /// Which table scans track the size of the rows they read.
   enum class RowSizeTrackingMode {
-    DISABLED = 0,
-    EXCLUDE_DELTA_SPLITS = 1,
-    ENABLED_FOR_ALL = 2,
+    /// No table scan tracks row size.
+    kDisabled = 0,
+    /// Table scans track row size except for delta splits.
+    kExcludeDeltaSplits = 1,
+    /// Every table scan tracks row size.
+    kEnabledForAll = 2,
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+    // TODO: Remove once Prestissimo migrates.
+    DISABLED = kDisabled,
+    EXCLUDE_DELTA_SPLITS = kExcludeDeltaSplits,
+    ENABLED_FOR_ALL = kEnabledForAll,
+#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
   };
 
   RowSizeTrackingMode rowSizeTrackingMode() const {
     return get<RowSizeTrackingMode>(
-        kRowSizeTrackingMode, RowSizeTrackingMode::ENABLED_FOR_ALL);
+        kRowSizeTrackingMode, RowSizeTrackingMode::kEnabledForAll);
   }
 
   template <typename T>
@@ -1764,7 +1813,8 @@ class QueryConfig {
   }
 
   /// Test-only method to override the current query config properties.
-  /// It is not thread safe.
+  /// Validates the values like the constructor and throws on an invalid one,
+  /// leaving the current properties in place. It is not thread safe.
   void testingOverrideConfigUnsafe(
       std::unordered_map<std::string, std::string>&& values);
 

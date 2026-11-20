@@ -31,6 +31,7 @@
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/VectorReaders.h"
+#include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/TypeResolver.h"
 
@@ -54,7 +55,7 @@ std::shared_ptr<HiveBucketProperty> buildHiveBucketProperty(
     const RowTypePtr rowType,
     int32_t bucketCount,
     const std::vector<std::string>& bucketColumns,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy) {
+    const std::vector<HiveSortingColumnPtr>& sortBy) {
   std::vector<TypePtr> bucketTypes;
   bucketTypes.reserve(bucketColumns.size());
   for (const auto& bucketColumn : bucketColumns) {
@@ -471,12 +472,12 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
     insertHandle_ = std::make_shared<connector::hive::HiveInsertTableHandle>(
         columnHandles,
         locationHandle,
+        connector::hive::HiveConfig::InsertExistingPartitionsBehavior::kError,
         fileFormat_,
         bucketProperty,
         compressionKind_,
         serdeParameters_,
-        options_,
-        ensureFiles_,
+        writeEmptyFile_,
         // Repeats the constructor's default so that storageParameters, which
         // follows it positionally, can be passed.
         std::make_shared<const connector::hive::HiveInsertFileNameGenerator>(),
@@ -777,14 +778,12 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::string& outputDirectoryPath,
     const dwio::common::FileFormat fileFormat,
     const std::vector<std::string>& aggregates,
-    const std::shared_ptr<dwio::common::WriterOptions>& options,
     const std::string& outputFileName) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .outputFileName(outputFileName)
       .fileFormat(fileFormat)
       .aggregates(aggregates)
-      .options(options)
       .endTableWriter();
 }
 
@@ -792,14 +791,12 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::string& outputDirectoryPath,
     const std::vector<std::string>& partitionBy,
     const dwio::common::FileFormat fileFormat,
-    const std::vector<std::string>& aggregates,
-    const std::shared_ptr<dwio::common::WriterOptions>& options) {
+    const std::vector<std::string>& aggregates) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .partitionBy(partitionBy)
       .fileFormat(fileFormat)
       .aggregates(aggregates)
-      .options(options)
       .endTableWriter();
 }
 
@@ -809,8 +806,7 @@ PlanBuilder& PlanBuilder::tableWrite(
     int32_t bucketCount,
     const std::vector<std::string>& bucketedBy,
     const dwio::common::FileFormat fileFormat,
-    const std::vector<std::string>& aggregates,
-    const std::shared_ptr<dwio::common::WriterOptions>& options) {
+    const std::vector<std::string>& aggregates) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .partitionBy(partitionBy)
@@ -818,7 +814,6 @@ PlanBuilder& PlanBuilder::tableWrite(
       .bucketedBy(bucketedBy)
       .fileFormat(fileFormat)
       .aggregates(aggregates)
-      .options(options)
       .endTableWriter();
 }
 
@@ -827,16 +822,15 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::vector<std::string>& partitionBy,
     int32_t bucketCount,
     const std::vector<std::string>& bucketedBy,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy,
+    const std::vector<HiveSortingColumnPtr>& sortBy,
     const dwio::common::FileFormat fileFormat,
     const std::vector<std::string>& aggregates,
     const std::string_view& connectorId,
     const std::unordered_map<std::string, std::string>& serdeParameters,
-    const std::shared_ptr<dwio::common::WriterOptions>& options,
     const std::string& outputFileName,
     const common::CompressionKind compressionKind,
     const RowTypePtr& schema,
-    const bool ensureFiles,
+    const bool writeEmptyFile,
     const connector::CommitStrategy commitStrategy,
     connector::ConnectorInsertTableHandlePtr insertTableHandle,
     const std::unordered_map<std::string, std::string>& storageParameters) {
@@ -853,9 +847,8 @@ PlanBuilder& PlanBuilder::tableWrite(
       .connectorId(connectorId)
       .serdeParameters(serdeParameters)
       .storageParameters(storageParameters)
-      .options(options)
       .compressionKind(compressionKind)
-      .ensureFiles(ensureFiles)
+      .writeEmptyFile(writeEmptyFile)
       .commitStrategy(commitStrategy)
       .insertHandle(insertTableHandle)
       .endTableWriter();
@@ -1369,6 +1362,13 @@ PlanBuilder& PlanBuilder::localMerge(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::mixedUnion(std::vector<core::PlanNodePtr> sources) {
+  VELOX_CHECK_NULL(planNode_, "mixedUnion() must be the first call");
+  planNode_ = std::make_shared<core::MixedUnionNode>(
+      nextPlanNodeId(), std::move(sources));
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::orderBy(
     const std::vector<std::string>& keys,
     bool isPartial) {
@@ -1384,7 +1384,7 @@ PlanBuilder& PlanBuilder::orderBy(
 
 PlanBuilder& PlanBuilder::topN(
     const std::vector<std::string>& keys,
-    int32_t count,
+    int64_t count,
     bool isPartial) {
   VELOX_CHECK_NOT_NULL(planNode_, "TopN cannot be the source node");
   auto [sortingKeys, sortingOrders] =
@@ -1519,6 +1519,65 @@ PlanBuilder& PlanBuilder::assignUniqueId(const std::string& idName) {
   planNode_ = std::make_shared<core::AssignUniqueIdNode>(
       nextPlanNodeId(), idName, planNode_);
   VELOX_CHECK(planNode_->supportsBarrier());
+  return *this;
+}
+
+namespace {
+TypePtr resolveRPCType(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes) {
+  const auto entry = exec::rpc::AsyncRPCFunctionRegistry::find(name);
+  VELOX_USER_CHECK(entry.has_value(), "RPC function doesn't exist: {}", name);
+  for (const auto& signature : entry->signatures) {
+    SignatureBinder binder(*signature, argTypes, TypeCoercer::defaults());
+    if (binder.tryBind()) {
+      return binder.tryResolveType(signature->returnType());
+    }
+  }
+  VELOX_USER_FAIL(
+      "RPC function signature is not supported: {}. Supported signatures: {}.",
+      toString(name, argTypes),
+      toString(entry->signatures));
+}
+} // namespace
+
+PlanBuilder& PlanBuilder::rpc(
+    std::string_view call,
+    velox::rpc::RPCStreamingMode streamingMode,
+    int32_t dispatchBatchSize,
+    std::string executionPhase) {
+  VELOX_CHECK_NOT_NULL(planNode_, "RPC cannot be the source node");
+  const auto untyped =
+      parse::DuckSqlExpressionsParser(options_).parseExpr(std::string(call));
+  const auto* callExpr = untyped->as<core::CallExpr>();
+  VELOX_USER_CHECK_NOT_NULL(callExpr, "RPC must be a function call: {}", call);
+
+  std::vector<core::TypedExprPtr> inputs;
+  std::vector<TypePtr> argTypes;
+  for (const auto& input : callExpr->inputs()) {
+    inputs.push_back(inferTypes(input));
+    argTypes.push_back(inputs.back()->type());
+  }
+  const auto resultColumn = callExpr->alias().value_or("__rpc_result");
+  VELOX_USER_CHECK(
+      !planNode_->outputType()->containsChild(resultColumn),
+      "RPC result column already exists in the input. Use an alias: {}",
+      resultColumn);
+  auto typedCall = std::make_shared<core::CallTypedExpr>(
+      resolveRPCType(callExpr->name(), argTypes),
+      std::move(inputs),
+      callExpr->name());
+  auto outputType =
+      planNode_->outputType()->unionWith({resultColumn}, {typedCall->type()});
+  planNode_ = std::make_shared<core::RPCNode>(
+      nextPlanNodeId(),
+      planNode_,
+      std::move(typedCall),
+      resultColumn,
+      std::move(outputType),
+      streamingMode,
+      dispatchBatchSize,
+      std::move(executionPhase));
   return *this;
 }
 
@@ -2790,7 +2849,7 @@ PlanBuilder& PlanBuilder::addTopNRowNumber(
       parseOrderByClauses(sortingKeys, planNode_->outputType(), pool_);
   planNode_ = std::make_shared<core::TopNRowNumberNode>(
       nextPlanNodeId(),
-      core::TopNRowNumberNode::rankFunctionFromName(function),
+      core::TopNRowNumberNode::toRankFunction(function),
       fields(partitionKeys),
       sortingFields,
       sortingOrders,

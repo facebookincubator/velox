@@ -178,6 +178,7 @@ TEST(NimbleWriterFuzzerTest, pointLookupsMatchInput) {
     EXPECT_GE(numColumns, 1U);
     EXPECT_LE(numColumns, 3U);
     EXPECT_LE(counts.numLookupsWithChunkSkips, counts.numLookups);
+    EXPECT_LE(counts.numLookupsPrunedByFileStats, counts.numLookups);
     numLookups += counts.numLookups;
   }
   EXPECT_GT(numLookups, 0U);
@@ -187,6 +188,8 @@ TEST(NimbleWriterFuzzerTest, pointLookupsMatchInput) {
   for (const auto& [type, byKind] : coverage.byType) {
     for (const auto& [kind, counts] : byKind) {
       EXPECT_LE(counts.numLookupsWithChunkSkips, counts.numLookups)
+          << type << " " << kind;
+      EXPECT_LE(counts.numLookupsPrunedByFileStats, counts.numLookups)
           << type << " " << kind;
     }
   }
@@ -203,6 +206,38 @@ TEST(NimbleWriterFuzzerTest, pointLookupsMatchInput) {
   const auto anchored = coverage.lookupsByMatchedRows.find("anchored");
   ASSERT_NE(anchored, coverage.lookupsByMatchedRows.end());
   EXPECT_GT(anchored->second.rbegin()->first, 1U);
+}
+
+// Checks that point lookups run the connector's check for skipping a file by
+// its statistics: some lookups filter above a column's largest value, so the
+// connector skips their file. A lookup fails if the connector skips a file
+// holding a row that passes every filter.
+TEST(NimbleWriterFuzzerTest, pointLookupsPruneFilesByStats) {
+  auto rootPool = velox::memory::memoryManager()->addRootPool(
+      "pointLookupsPruneFilesByStats", velox::memory::kMaxMemory);
+  NimbleWriterFuzzerOptions options;
+  options.seed = 1;
+  options.batchSize = 64;
+  options.numBatches = 4;
+  NimbleWriterFuzzer fuzzer(options, *rootPool);
+  const auto numAboveMaxPrunes = [&] {
+    uint64_t numPrunes{0};
+    for (const auto& [type, byKind] : fuzzer.pointLookupCoverage().byType) {
+      const auto aboveMax = byKind.find("aboveMax");
+      if (aboveMax != byKind.end()) {
+        numPrunes += aboveMax->second.numLookupsPrunedByFileStats;
+      }
+    }
+    return numPrunes;
+  };
+  // Runs until statistics rule out the file of an above-max lookup. About one
+  // lookup in 40 gets there, and an iteration runs 10 lookups.
+  for (int iteration = 0; iteration < 30 && numAboveMaxPrunes() == 0;
+       ++iteration) {
+    fuzzer.run();
+    fuzzer.reSeed();
+  }
+  EXPECT_GT(numAboveMaxPrunes(), 0U);
 }
 
 TEST(NimbleWriterFuzzerTest, run) {

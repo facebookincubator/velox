@@ -199,7 +199,7 @@ bool isSpecialCode(int32_t codePoint) {
 // Gets codepoint of a char and increments position pos
 // in view to next char.
 int32_t getEscapedChar(std::string_view view, size_t& pos) {
-  if (FOLLY_UNLIKELY(view[pos] == '\\')) {
+  if (view[pos] == '\\') [[unlikely]] {
     switch (view[pos + 1]) {
       case '/':
         pos++;
@@ -253,7 +253,7 @@ int32_t compareChars(
     size_t& i,
     size_t& j) {
   // Both are ASCII.
-  if (FOLLY_LIKELY(!(first[i] & 0x80) && !(second[j] & 0x80))) {
+  if (!(first[i] & 0x80) && !(second[j] & 0x80)) [[likely]] {
     // Check if escaped.
     auto firstChar = getEscapedChar(first, i);
     auto secondChar = getEscapedChar(second, j);
@@ -308,7 +308,7 @@ size_t normalizeForJsonParse(const char* input, size_t length, char* output) {
   auto* end = input + length;
   while (start < end) {
     // Unescape characters that are escaped by \ character.
-    if (FOLLY_UNLIKELY(*start == '\\')) {
+    if (*start == '\\') [[unlikely]] {
       VELOX_USER_CHECK(
           start + 1 != end, "Invalid escape sequence at the end of string");
       // Presto java implementation only unescapes the / character.
@@ -354,7 +354,7 @@ size_t normalizeForJsonParse(const char* input, size_t length, char* output) {
           continue;
       }
     }
-    if (FOLLY_LIKELY(IS_ASCII(*start))) {
+    if (IS_ASCII(*start)) [[likely]] {
       *pos++ = *start++;
       continue;
     }
@@ -403,7 +403,7 @@ size_t normalizedSizeForJsonParse(const char* input, size_t length) {
   auto* end = input + length;
   size_t outSize = 0;
   while (start < end) {
-    if (FOLLY_UNLIKELY(*start == '\\')) {
+    if (*start == '\\') [[unlikely]] {
       VELOX_USER_CHECK(
           start + 1 != end, "Invalid escape sequence at the end of string");
       switch (*(start + 1)) {
@@ -432,7 +432,7 @@ size_t normalizedSizeForJsonParse(const char* input, size_t length) {
           continue;
       }
     }
-    if (FOLLY_LIKELY(IS_ASCII(*start))) {
+    if (IS_ASCII(*start)) [[likely]] {
       ++outSize;
       ++start;
       continue;
@@ -475,7 +475,7 @@ unescapeSizeForJsonFunctions(const char* input, size_t length, bool fully) {
   auto* end = input + length;
   size_t outSize = 0;
   while (start < end) {
-    if (FOLLY_UNLIKELY(*start == '\\')) {
+    if (*start == '\\') [[unlikely]] {
       VELOX_USER_CHECK(
           start + 1 != end, "Invalid escape sequence at the end of string");
       switch (*(start + 1)) {
@@ -532,7 +532,7 @@ unescapeSizeForJsonFunctions(const char* input, size_t length, bool fully) {
           continue;
       }
     }
-    if (FOLLY_LIKELY(IS_ASCII(*start))) {
+    if (IS_ASCII(*start)) [[likely]] {
       ++outSize;
       ++start;
       continue;
@@ -574,7 +574,7 @@ void unescapeForJsonFunctions(
   auto* end = input + length;
 
   while (start < end) {
-    if (FOLLY_UNLIKELY(*start == '\\')) {
+    if (*start == '\\') [[unlikely]] {
       VELOX_USER_CHECK(
           start + 1 != end, "Invalid escape sequence at the end of string");
       switch (*(start + 1)) {
@@ -645,7 +645,7 @@ void unescapeForJsonFunctions(
           continue;
       }
     }
-    if (FOLLY_LIKELY(IS_ASCII(*start))) {
+    if (IS_ASCII(*start)) [[likely]] {
       *pos++ = *start++;
       continue;
     }

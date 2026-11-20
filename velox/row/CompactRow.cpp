@@ -220,6 +220,10 @@ void CompactRow::initialize(const TypePtr& type) {
     }
     case TypeKind::MAP: {
       auto* mapBase = base->as<MapVector>();
+      VELOX_CHECK_NOT_NULL(
+          mapBase,
+          "Unsupported map vector encoding for CompactRow: {}",
+          base->encoding());
       children_.push_back(CompactRow(mapBase->mapKeys()));
       children_.push_back(CompactRow(mapBase->mapValues()));
       childIsFixedWidth_.push_back(mapBase->mapKeys()->type()->isFixedWidth());
@@ -474,6 +478,10 @@ int32_t CompactRow::arrayRowSize(
     vector_size_t offset,
     vector_size_t size,
     bool fixedWidth) const {
+  if (elements.typeKind_ == TypeKind::UNKNOWN) {
+    return kSizeBytes;
+  }
+
   const int32_t nullBytes = bits::nbytes(size);
 
   // array size | null bits | elements
@@ -547,6 +555,9 @@ int32_t CompactRow::serializeAsArray(
 
   // Write array size.
   writeInt32(buffer, size);
+  if (elements.typeKind_ == TypeKind::UNKNOWN) {
+    return kSizeBytes;
+  }
 
   // Write null flags.
   const int32_t nullBytes = bits::nbytes(size);
@@ -894,19 +905,6 @@ VectorPtr deserializeStrings(
   return flatVector;
 }
 
-VectorPtr deserializeUnknownArrays(
-    const TypePtr& type,
-    const std::vector<std::string_view>& data,
-    const BufferPtr& sizes,
-    std::vector<size_t>& offsets,
-    memory::MemoryPool* pool) {
-  const auto numRows = data.size();
-  auto* rawSizes = sizes->as<vector_size_t>();
-  const auto total = totalSize(rawSizes, numRows);
-
-  return BaseVector::createNullConstant(UNKNOWN(), total, pool);
-}
-
 // Deserializes multiple strings from each 'row' in 'data'.
 // Each set of strings starts at data[row].data() + offsets[row] and contains
 // null flags followed by the strings. The number of strings is provided in
@@ -1021,6 +1019,7 @@ VectorPtr deserializeComplexArrays(
 // size | element nulls | serialized size (if complex type elements)
 // | element offsets (if complex type elements) | e1 | e2 | e3 |...
 //
+// UNKNOWN elements have no null flags or value bytes.
 // Advances the offsets past the arrays.
 ArrayVectorPtr deserializeArrays(
     const TypePtr& type,
@@ -1055,8 +1054,7 @@ ArrayVectorPtr deserializeArrays(
   VectorPtr elements;
   const auto& elementType = type->childAt(0);
   if (elementType->isUnknown()) {
-    elements =
-        deserializeUnknownArrays(elementType, data, arraySizes, offsets, pool);
+    elements = BaseVector::createNullConstant(elementType, arrayOffset, pool);
   } else if (elementType->isFixedWidth()) {
     elements = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
         deserializeFixedWidthArrays,

@@ -19,9 +19,13 @@
 namespace facebook::velox::connector::hive {
 
 std::string HiveConnectorSplit::toString() const {
-  const std::string physicalPath = physicalFilePath.empty()
-      ? ""
-      : fmt::format(" read from {}", physicalFilePath);
+  std::string suffix = splitRowRange.has_value()
+      ? fmt::format(
+            " rows {} + {}", splitRowRange->firstRow, splitRowRange->numRows)
+      : "";
+  if (!physicalFilePath.empty()) {
+    suffix += fmt::format(" read from {}", physicalFilePath);
+  }
   if (tableBucketNumber.has_value()) {
     return fmt::format(
         "Hive: {} {} - {} {}{}",
@@ -29,10 +33,9 @@ std::string HiveConnectorSplit::toString() const {
         start,
         length,
         tableBucketNumber.value(),
-        physicalPath);
+        suffix);
   }
-  return fmt::format(
-      "Hive: {} {} - {}{}", filePath, start, length, physicalPath);
+  return fmt::format("Hive: {} {} - {}{}", filePath, start, length, suffix);
 }
 
 folly::dynamic HiveConnectorSplit::serialize() const {
@@ -110,6 +113,12 @@ folly::dynamic HiveConnectorSplit::serialize() const {
   }
   if (!physicalFilePath.empty()) {
     obj["physicalFilePath"] = physicalFilePath;
+  }
+  if (splitRowRange.has_value()) {
+    folly::dynamic splitRowRangeObj = folly::dynamic::object;
+    splitRowRangeObj["firstRow"] = splitRowRange->firstRow;
+    splitRowRangeObj["numRows"] = splitRowRange->numRows;
+    obj["splitRowRange"] = splitRowRangeObj;
   }
 
   return obj;
@@ -223,6 +232,12 @@ std::shared_ptr<HiveConnectorSplit> HiveConnectorSplit::create(
       columnMappingMode);
   if (auto it = obj.find("physicalFilePath"); it != obj.items().end()) {
     split->physicalFilePath = it->second.asString();
+  }
+  if (auto it = obj.find("splitRowRange"); it != obj.items().end()) {
+    split->splitRowRange = dwio::common::SplitRowRange{
+        .firstRow = static_cast<uint64_t>(it->second["firstRow"].asInt()),
+        .numRows = static_cast<uint64_t>(it->second["numRows"].asInt()),
+    };
   }
   return split;
 }

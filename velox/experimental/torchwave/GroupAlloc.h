@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include <memory>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 #include "velox/experimental/torchwave/AllocGroup.h"
@@ -62,13 +65,77 @@ void writeShapeEntry(
     c10::IntArrayRef dims,
     c10::ScalarType dtype);
 
+/// One buffer that the lifetime groups of every execution are carved from.
+///
+/// Each group's slot is placed from what the previous execution observed: the
+/// group's largest size, and the interval between its carve and the release of
+/// its last reference, counted on one sequence of carves and releases. Groups
+/// whose intervals do not overlap share addresses. A release is the buffer's
+/// deleter running, so a delayed free counts where it actually happens.
+///
+/// A slot is handed out only when it is large enough and no group whose
+/// addresses overlap it still holds its own slot, so a release later than last
+/// time costs an allocator call rather than a conflict. A group released in a
+/// later execution than it was carved in -- a graph output the caller keeps --
+/// gets no slot.
+struct GroupArena {
+  struct Entry {
+    /// Largest size seen.
+    int64_t bytes{0};
+    /// Offset in 'buffer', or -1 for no slot.
+    int64_t offset{-1};
+    int64_t capacity{0};
+    bool inUse{false};
+    /// The carve that holds the slot while 'inUse'.
+    int64_t inUseCarve{-1};
+    /// Carve and release on 'sequence', in execution 'generation'.
+    int64_t start{-1};
+    int64_t end{-1};
+    int64_t generation{-1};
+    int64_t endGeneration{-1};
+    /// Entries whose slots overlap this one's.
+    std::vector<int32_t> conflicts;
+    /// Recorded on the releasing thread's torch stream when the slot is
+    /// released outside the execution that runs on the arena. Work that
+    /// thread queued may still read the slot, so its next user waits for it.
+    std::unique_ptr<facebook::velox::wave::Event> releaseEvent;
+    bool releasePending{false};
+  };
+
+  at::Tensor buffer;
+  folly::F14FastMap<const AllocGroup*, int32_t> index;
+  std::vector<Entry> entries;
+  int64_t sequence{0};
+  int64_t generation{0};
+  /// Set when a group is new or larger than its slot.
+  bool changed{false};
+  int64_t hits{0};
+  int64_t misses{0};
+  /// True from beginGroupArena to endGroupArena, on 'executingThread'.
+  bool executing{false};
+  std::thread::id executingThread;
+  /// Guards the fields above. A group's deleter runs on whichever thread drops
+  /// its last reference, e.g. a caller releasing a returned value while the
+  /// pooled state already runs another execution.
+  std::mutex mutex;
+};
+
+/// Lays the arena out again from the execution that just ended when anything
+/// changed, and starts a new generation. Called at the start of an execution.
+void beginGroupArena(ExecutionState& state);
+
+/// Marks the end of the execution that beginGroupArena started.
+void endGroupArena(ExecutionState& state);
+
 /// Carves a lifetime group like materializeAllocGroup, except that a member
 /// in ExecutionState::tableOnly gets only its table entry. Its frame slot
-/// keeps the shape placeholder the sizing left there.
+/// keeps the shape placeholder the sizing left there. 'group' names the plan's
+/// group for the arena, or is null.
 AllocGroupBuffer materializeAllocGroupTable(
     const std::vector<AllocRequest>& requests,
     nativert::ExecutionFrame& frame,
-    ExecutionState& state);
+    ExecutionState& state,
+    const AllocGroup* group);
 
 /// Whether this execution already gave 'id' storage of 'dims', as a launch of
 /// an earlier step that also outputs it does.

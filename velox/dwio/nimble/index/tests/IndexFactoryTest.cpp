@@ -88,7 +88,8 @@ class TestClusterIndexFactory final : public ClusterIndexFactory {
   std::unique_ptr<IndexWriter> createWriter(
       const IndexConfig& config,
       const velox::TypePtr& inputType,
-      velox::memory::MemoryPool* pool) const override {
+      velox::memory::MemoryPool* pool,
+      const Options& writerOptions) const override {
     const auto& options = checkedIndexConfig<TestIndexConfig>(config);
     const ClusterIndexConfig builtInConfig{
         std::string{name()},
@@ -100,7 +101,8 @@ class TestClusterIndexFactory final : public ClusterIndexFactory {
         10'000,
         CompressionType::Uncompressed,
         /*hierarchicalKeyEncodingReadFactors=*/{}};
-    return ClusterIndexWriter::create(builtInConfig, inputType, pool);
+    return ClusterIndexWriter::create(
+        builtInConfig, inputType, pool, writerOptions);
   }
 
   std::unique_ptr<IndexKeyEncoder> createKeyEncoder(
@@ -141,7 +143,8 @@ class ReverseOrderClusterIndexFactory final : public ClusterIndexFactory {
   std::unique_ptr<IndexWriter> createWriter(
       const IndexConfig& config,
       const velox::TypePtr& inputType,
-      velox::memory::MemoryPool* pool) const override {
+      velox::memory::MemoryPool* pool,
+      const Options& writerOptions) const override {
     const auto& options = checkedIndexConfig<TestIndexConfig>(config);
     const ClusterIndexConfig builtInConfig{
         std::string{name()},
@@ -153,7 +156,8 @@ class ReverseOrderClusterIndexFactory final : public ClusterIndexFactory {
         /*maxRowsPerKeyChunk=*/4,
         CompressionType::Uncompressed,
         /*hierarchicalKeyEncodingReadFactors=*/{}};
-    return ClusterIndexWriter::create(builtInConfig, inputType, pool);
+    return ClusterIndexWriter::create(
+        builtInConfig, inputType, pool, writerOptions);
   }
 
   std::unique_ptr<IndexKeyEncoder> createKeyEncoder(
@@ -191,10 +195,14 @@ class NamedIndexWriter final : public IndexWriter {
     writer_->write(input);
   }
 
-  void flush(
+  std::vector<Chunk> finishStripe(Buffer& buffer) override {
+    return writer_->finishStripe(buffer);
+  }
+
+  void finishStripeGroup(
       const WriteDataFn& writeDataFn,
       const CreateMetadataSectionFn& createMetadataFn) override {
-    writer_->flush(writeDataFn, createMetadataFn);
+    writer_->finishStripeGroup(writeDataFn, createMetadataFn);
   }
 
   std::optional<IndexDescriptor> close(
@@ -298,7 +306,8 @@ class FailingIndexWriter final : public IndexWriter {
     NIMBLE_FAIL("Injected index write failure");
   }
 
-  void flush(const WriteDataFn&, const CreateMetadataSectionFn&) override {}
+  void finishStripeGroup(const WriteDataFn&, const CreateMetadataSectionFn&)
+      override {}
 
   std::optional<IndexDescriptor> close(
       const WriteDataFn&,
@@ -311,7 +320,8 @@ class InvalidDescriptorIndexWriter final : public IndexWriter {
  public:
   void write(const velox::VectorPtr&) override {}
 
-  void flush(const WriteDataFn&, const CreateMetadataSectionFn&) override {}
+  void finishStripeGroup(const WriteDataFn&, const CreateMetadataSectionFn&)
+      override {}
 
   std::optional<IndexDescriptor> close(
       const WriteDataFn&,
@@ -332,8 +342,9 @@ class LifecycleIndexWriter final : public IndexWriter {
     lifecycleEvents.wlock()->emplace_back("write");
   }
 
-  void flush(const WriteDataFn&, const CreateMetadataSectionFn&) override {
-    lifecycleEvents.wlock()->emplace_back("flush");
+  void finishStripeGroup(const WriteDataFn&, const CreateMetadataSectionFn&)
+      override {
+    lifecycleEvents.wlock()->emplace_back("finishStripeGroup");
     if (failureStage_ == FailureStage::kFlush) {
       NIMBLE_FAIL("Injected index flush failure");
     }
@@ -529,6 +540,32 @@ class IndexFactoryTest : public testing::Test {
         fileSystem->openFileForRead(path), leafPool_.get(), options);
   }
 
+  // Opens a real index of each lookup implementation for request validation.
+  std::shared_ptr<TabletReader> openLookupIndexFile(IndexType type) {
+    WriterOptions options;
+    switch (type) {
+      case IndexType::Cluster:
+        options.clusterIndexConfig = std::make_shared<const TestIndexConfig>(
+            IndexFamily::Cluster, std::string{kCustomClusterIndexName});
+        break;
+      case IndexType::Hash:
+        options.denseIndexConfigs.emplace_back(
+            HashIndexConfigBuilder{}.withKeyColumns({"id"}).build());
+        break;
+      case IndexType::Sorted:
+        options.denseIndexConfigs.emplace_back(
+            SortedIndexConfigBuilder{}.withKeyColumns({"id"}).build());
+        break;
+    }
+    const auto name = toString(type);
+    auto writer = makeWriter(name, std::move(options));
+    writer->write(makeBatch());
+    writer->close();
+    return openFile(
+        tempDirectory_->getPath() + "/" + name,
+        std::string{kCustomClusterIndexName});
+  }
+
   std::string encodeKey(int32_t value) {
     auto keyVector =
         velox::BaseVector::create(velox::INTEGER(), 1, leafPool_.get());
@@ -563,20 +600,91 @@ TEST_F(IndexFactoryTest, customFactoriesEndToEnd) {
   ASSERT_NE(tablet->clusterIndex(), nullptr);
   const auto key = encodeKey(7);
   auto clusterResult = tablet->clusterIndex()->lookup(
-      IndexLookup::LookupRequest::pointLookup({key}));
+      *IndexLookup::LookupRequest::pointLookup({key}));
   ASSERT_EQ(clusterResult.size(), 1);
   EXPECT_FALSE(clusterResult[0].empty());
 
   const auto* denseIndex = tablet->denseIndex({"id"});
   ASSERT_NE(denseIndex, nullptr);
   auto denseResult =
-      denseIndex->lookup(IndexLookup::LookupRequest::pointLookup({key}));
+      denseIndex->lookup(*IndexLookup::LookupRequest::pointLookup({key}));
   ASSERT_EQ(denseResult.size(), 1);
   ASSERT_EQ(denseResult[0].size(), 1);
   EXPECT_EQ(denseResult[0][0], RowRange(7, 8));
 
   auto wrongClusterName = openFile(path, std::string{kClusterIndexName});
   EXPECT_EQ(wrongClusterName->clusterIndex(), nullptr);
+}
+
+TEST_F(IndexFactoryTest, lookupAcceptsDerivedRequests) {
+  // Keeps the base request's semantics while exercising a derived C++ type.
+  class PlainLookupRequest final : public IndexLookup::LookupRequest {
+   public:
+    // Creates a point request without additional constraints.
+    explicit PlainLookupRequest(std::string key)
+        : LookupRequest{std::vector<std::string>{std::move(key)}, nullptr} {}
+  };
+
+  for (const auto type :
+       {IndexType::Cluster, IndexType::Hash, IndexType::Sorted}) {
+    SCOPED_TRACE(toString(type));
+    auto tablet = openLookupIndexFile(type);
+    const IndexLookup* index = type == IndexType::Cluster
+        ? tablet->clusterIndex()
+        : tablet->denseIndex({"id"});
+    ASSERT_NE(index, nullptr);
+    const PlainLookupRequest request{encodeKey(7)};
+    const auto result = index->lookup(request);
+    ASSERT_EQ(result.size(), 1);
+    ASSERT_EQ(result[0].size(), 1);
+    EXPECT_EQ(result[0][0], (RowRange{7, 8}));
+  }
+}
+
+TEST_F(IndexFactoryTest, lookupUsesRequestValidator) {
+  // Restricts a request to an index implementation through the request hook.
+  class IndexTypeLookupRequest final : public IndexLookup::LookupRequest {
+   public:
+    // Creates a point request that requires the selected index type.
+    IndexTypeLookupRequest(std::string key, IndexType indexType)
+        : LookupRequest{std::vector<std::string>{std::move(key)}, nullptr},
+          indexType_{indexType} {}
+
+    // Rejects indexes that do not meet the request's requirement.
+    void validateFor(const IndexLookup& index) const override {
+      NIMBLE_USER_CHECK_EQ(
+          index.type(),
+          indexType_,
+          "Lookup request requires a different index type");
+    }
+
+   private:
+    // Index type required by this request.
+    const IndexType indexType_;
+  };
+
+  for (const auto type :
+       {IndexType::Cluster, IndexType::Hash, IndexType::Sorted}) {
+    SCOPED_TRACE(toString(type));
+    auto tablet = openLookupIndexFile(type);
+    const IndexLookup* index = type == IndexType::Cluster
+        ? tablet->clusterIndex()
+        : tablet->denseIndex({"id"});
+    ASSERT_NE(index, nullptr);
+
+    const IndexTypeLookupRequest request{encodeKey(7), type};
+    const auto result = index->lookup(request);
+    ASSERT_EQ(result.size(), 1);
+    ASSERT_EQ(result[0].size(), 1);
+    EXPECT_EQ(result[0][0], (RowRange{7, 8}));
+
+    const auto incompatibleType =
+        type == IndexType::Cluster ? IndexType::Hash : IndexType::Cluster;
+    const IndexTypeLookupRequest incompatible{encodeKey(7), incompatibleType};
+    NIMBLE_ASSERT_USER_THROW(
+        index->lookup(incompatible),
+        "Lookup request requires a different index type");
+  }
 }
 
 TEST_F(IndexFactoryTest, customKeyOrderEndToEnd) {
@@ -591,9 +699,8 @@ TEST_F(IndexFactoryTest, customKeyOrderEndToEnd) {
   ASSERT_NE(index, nullptr);
 
   {
-    const auto result = index->lookup(
-        IndexLookup::LookupRequest::pointLookup(
-            {encodeKey(19), encodeKey(7), encodeKey(0)}));
+    const auto result = index->lookup(*IndexLookup::LookupRequest::pointLookup(
+        {encodeKey(19), encodeKey(7), encodeKey(0)}));
     ASSERT_EQ(result.size(), 3);
     const std::vector<RowRange> expected{
         RowRange(0, 1), RowRange(12, 13), RowRange(19, 20)};
@@ -606,11 +713,10 @@ TEST_F(IndexFactoryTest, customKeyOrderEndToEnd) {
   {
     // Ids 15 down to 6, then an empty range whose upper bound sorts before
     // its lower bound in the reverse order.
-    const auto result = index->lookup(
-        IndexLookup::LookupRequest::rangeScan({
-            {.lowerKey = encodeKey(15), .upperKey = encodeKey(5)},
-            {.lowerKey = encodeKey(5), .upperKey = encodeKey(15)},
-        }));
+    const auto result = index->lookup(*IndexLookup::LookupRequest::rangeScan({
+        {.lowerKey = encodeKey(15), .upperKey = encodeKey(5)},
+        {.lowerKey = encodeKey(5), .upperKey = encodeKey(15)},
+    }));
     ASSERT_EQ(result.size(), 2);
     ASSERT_EQ(result[0].size(), 1);
     EXPECT_EQ(result[0][0], RowRange(4, 14));
@@ -837,9 +943,9 @@ TEST_F(IndexFactoryTest, indexWriterLifecycle) {
     std::vector<std::string> expectedEvents;
   };
   const std::vector<TestCase> testCases{
-      {"success", "", {"write", "flush", "close"}},
-      {"flush_failure", "flush", {"write", "flush"}},
-      {"close_failure", "close", {"write", "flush", "close"}},
+      {"success", "", {"write", "finishStripeGroup", "close"}},
+      {"flush_failure", "flush", {"write", "finishStripeGroup"}},
+      {"close_failure", "close", {"write", "finishStripeGroup", "close"}},
   };
 
   for (const auto& testCase : testCases) {

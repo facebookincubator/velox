@@ -171,14 +171,13 @@ class ProbeState {
          ++numProbedBuckets) {
       if constexpr (op == Operation::kInsert) {
         if (partitionInfo != nullptr) {
-          if (FOLLY_UNLIKELY(!partitionInfo->inRange(bucketOffset_))) {
+          if (!partitionInfo->inRange(bucketOffset_)) [[unlikely]] {
             // If we have passed the partition boundary, then call insert to put
             // row in overflows.
             return insert(row_, bucketOffset_);
           }
-          if (FOLLY_UNLIKELY(
-                  (bucketOffset_ <= startBucketOffset) &&
-                  (numProbedBuckets > 0))) {
+          if ((bucketOffset_ <= startBucketOffset) && (numProbedBuckets > 0))
+              [[unlikely]] {
             // If this is the last bucket and wrap around, then call insert to
             // put row in overflows.
             return insert(row_, partitionInfo->end);

@@ -90,8 +90,10 @@ add_library(
 
 target_link_libraries(
   nimble_index
+  nimble_block_cache
   nimble_common
   nimble_compression
+  nimble_data_input
   nimble_encodings
   nimble_tablet_common
   nimble_cluster_index_fb

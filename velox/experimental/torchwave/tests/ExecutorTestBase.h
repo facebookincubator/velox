@@ -33,6 +33,8 @@
 #include "velox/experimental/torchwave/AllocGroup.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/GraphPrep.h"
+#include "velox/experimental/torchwave/PackRewrite.h"
+#include "velox/experimental/torchwave/PackedInput.h"
 #include "velox/experimental/torchwave/Pt2Load.h"
 #include "velox/experimental/torchwave/tests/CompiledPlan.h"
 #include "velox/experimental/torchwave/tests/DataGen.h"
@@ -46,7 +48,7 @@ struct RunTiming {
   /// Execution time excluding data transfer.
   int64_t executeUs{0};
   /// Per-launch debug info (outer = launches, inner = blocks).
-  std::vector<std::vector<DebugInfo>> debugInfo;
+  std::vector<std::vector<BlockDebugInfo>> debugInfo;
 };
 
 /// Holds the loaded model and weights shared across test methods.
@@ -219,6 +221,21 @@ class ExecutorTestBase : public ::testing::Test {
       const std::vector<c10::IValue>& expected,
       const std::string& label = "");
 
+  /// Runs each --batch_inputs file through 'executor': a first run checked
+  /// against the file's <name>_results.pt, if present, then --num_repeats
+  /// timed runs. Logs each batch's times and the sum of their medians.
+  void runBatchInputs(
+      WaveGraphExecutor& executor,
+      const nativert::Graph& graph);
+
+  /// With --pack_inputs, encodes the packed inputs among 'inputs' (user
+  /// inputs on the host, in graph order) for the rewritten wave graph, and
+  /// logs the encode time on --pack_threads threads and the host-to-device
+  /// time of each packed input from pinned memory, plain and encoded.
+  void encodePackedInputsForWave(
+      std::vector<c10::IValue>& inputs,
+      std::string_view label);
+
   /// Executes a pre-filled frame node by node using the given kernels,
   /// tracing values in trace_values. Returns the user outputs. When
   /// 'captureRefOutputs' is true, deep-copies every node output to CPU into
@@ -329,6 +346,9 @@ class ExecutorTestBase : public ::testing::Test {
 
   /// Display name for the current test, included in failure messages.
   std::string displayName_;
+
+  // The packed inputs rewritten in the wave graph under --pack_inputs.
+  std::vector<PackRecipe> packRecipes_;
 
   // Snapshot of the serial frame's initial state (after filling user inputs,
   // before execution). Maps value id to shape string or "none"/"scalar".

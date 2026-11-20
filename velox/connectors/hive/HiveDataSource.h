@@ -36,6 +36,12 @@ class HiveDataSource : public connector::FileDataSource {
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<HiveConfig>& hiveConfig);
 
+  /// Also recomputes the allowed buckets when the filter is on a bucket
+  /// column.
+  void addDynamicFilter(
+      column_index_t outputChannel,
+      const std::shared_ptr<common::Filter>& filter) override;
+
   std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 
   void setFromDataSource(std::unique_ptr<DataSource> sourceUnique) override;
@@ -64,6 +70,10 @@ class HiveDataSource : public connector::FileDataSource {
  protected:
   std::unique_ptr<connector::FileSplitReader> createSplitReader() override;
 
+  // Skips a split whose table bucket the filters on the bucket columns
+  // exclude.
+  bool skipSplit() override;
+
   /// Pre-creation setup: stats tracking, bucket conversion, rowId.
   /// Returns bucket channels (empty if none).
   std::vector<column_index_t> prepareSplit();
@@ -71,11 +81,20 @@ class HiveDataSource : public connector::FileDataSource {
  private:
   std::vector<column_index_t> setupBucketConversion();
 
+  // Recomputes 'allowedBuckets_' from the scan spec's filters on the bucket
+  // columns. The scan spec holds the static filters and the dynamic filters
+  // added so far.
+  void updateAllowedBuckets();
+
   void setupRowIdColumn();
 
   const std::shared_ptr<HiveConfig> hiveConfig_;
 
   int64_t numBucketConversion_ = 0;
+
+  // HiveBucketPruning::allowedBuckets for the filters on the bucket columns.
+  // std::nullopt when the table is not bucketed.
+  std::optional<std::vector<bool>> allowedBuckets_;
 
   // Tracks the number of splits read per file format.
   std::unordered_map<dwio::common::FileFormat, int64_t> numSplitsByFileFormat_;

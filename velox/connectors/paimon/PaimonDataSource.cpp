@@ -110,8 +110,11 @@ void PaimonDataSource::setFromDataSource(
   paimonSplit_ = std::move(source->paimonSplit_);
   connector::FileDataSource::setFromDataSource(std::move(sourceUnique));
   // Rebind the lazy reader's borrowed stats pointer after ownership transfer.
-  checkedPointerCast<PaimonSplitReader>(splitReader_.get())
-      ->setRuntimeStats(runtimeStats_);
+  // A skipped split has no reader.
+  if (splitReader_ != nullptr) {
+    checkedPointerCast<PaimonSplitReader>(splitReader_.get())
+        ->setRuntimeStats(runtimeStats_);
+  }
 }
 
 } // namespace facebook::velox::connector::paimon

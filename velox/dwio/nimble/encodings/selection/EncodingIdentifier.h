@@ -48,6 +48,11 @@ struct EncodingIdentifiers {
     static constexpr NestedEncodingIdentifier Indices = 0;
   };
 
+  struct Reversed {
+    /// The values with the order-reversing mask applied.
+    static constexpr NestedEncodingIdentifier Values = 0;
+  };
+
   struct SharedDictionary {
     static constexpr NestedEncodingIdentifier Indices = 0;
   };

@@ -20,6 +20,7 @@
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 namespace facebook::velox::exec::test {
 
@@ -153,10 +154,9 @@ TEST_P(PartitionedOutputTest, flush) {
   // up to a defined threshold
   ASSERT_EQ(partition1.size(), 2);
 
-  auto planStats = toPlanStats(task->taskStats());
   const auto serdeKindRuntimsStats =
-      planStats.at(partitionNodeId)
-          .customStats.at(std::string(Operator::kShuffleSerdeKind));
+      PlanNodeStats::extract(task->taskStats(), partitionNodeId)
+          .customStat(Operator::kShuffleSerdeKind);
   ASSERT_EQ(serdeKindRuntimsStats.count, 1);
   ASSERT_EQ(
       serdeKindRuntimsStats.min,
@@ -200,11 +200,12 @@ TEST_P(PartitionedOutputTest, keyChannelNotAtBeginningWithNulls) {
   const auto partition0 = getAllData(taskId, 0);
   const auto partition1 = getAllData(taskId, 1);
 
-  ASSERT_TRUE(waitForTaskCompletion(
-      task.get(),
-      std::chrono::duration_cast<std::chrono::microseconds>(
-          std::chrono::seconds(10))
-          .count()));
+  ASSERT_TRUE(
+      TaskMonitor::waitForCompletion(
+          *task,
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::seconds(10))
+              .count()));
 }
 
 // This test verifies that the Destination properly handles multiple
@@ -269,10 +270,9 @@ TEST_P(PartitionedOutputTest, multipleFlushCycles) {
   // Partition 1 should have no data (or just the final flush marker).
   ASSERT_LE(partition1.size(), 1);
 
-  auto planStats = toPlanStats(task->taskStats());
   const auto serdeKindRuntimsStats =
-      planStats.at(partitionNodeId)
-          .customStats.at(std::string(Operator::kShuffleSerdeKind));
+      PlanNodeStats::extract(task->taskStats(), partitionNodeId)
+          .customStat(Operator::kShuffleSerdeKind);
   ASSERT_EQ(serdeKindRuntimsStats.count, 1);
   ASSERT_EQ(
       serdeKindRuntimsStats.min,

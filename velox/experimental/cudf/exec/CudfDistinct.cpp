@@ -20,6 +20,7 @@
 
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/HashAggregation.h"
+#include "velox/exec/HashAggregationStatNames.h"
 
 #include <cudf/concatenate.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
@@ -148,12 +149,13 @@ CudfVectorPtr CudfDistinct::releaseAndResetBufferedResult() {
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
-        std::string(exec::HashAggregation::kFlushRowCount),
+        std::string(exec::HashAggregationStatNames::kFlushRowCount),
         RuntimeCounter(numOutputRows));
     lockedStats->addRuntimeStat(
-        std::string(exec::HashAggregation::kFlushTimes), RuntimeCounter(1));
+        std::string(exec::HashAggregationStatNames::kFlushTimes),
+        RuntimeCounter(1));
     lockedStats->addRuntimeStat(
-        std::string(exec::HashAggregation::kPartialAggregationPct),
+        std::string(exec::HashAggregationStatNames::kPartialAggregationPct),
         RuntimeCounter(aggregationPct));
   }
 

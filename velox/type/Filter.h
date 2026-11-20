@@ -1335,6 +1335,9 @@ class BigintValuesUsingBitmask final : public Filter {
   const int64_t max_;
 };
 
+/// IN-list filter for integral types backed by a bloom filter, which allows
+/// false positives. May also hold an exact filter, such as x <> 0, that values
+/// must pass in addition to the bloom filter.
 class BigintValuesUsingBloomFilter final : public Filter {
  public:
   static int64_t numBlocks(int64_t capacity) {
@@ -1347,7 +1350,8 @@ class BigintValuesUsingBloomFilter final : public Filter {
         filter_(blocks_) {}
 
   bool testInt64(int64_t value) const final {
-    return filter_.mayContain(hash(value));
+    return filter_.mayContain(hash(value)) &&
+        (!exact_ || exact_->testInt64(value));
   }
 
   xsimd::batch_bool<int64_t> testValues(xsimd::batch<int64_t> x) const final {
@@ -1362,17 +1366,11 @@ class BigintValuesUsingBloomFilter final : public Filter {
     return genericTestValues(x, [this](int16_t x) { return testInt64(x); });
   }
 
-  bool testInt64Range(int64_t /*min*/, int64_t /*max*/, bool /*hasNull*/)
-      const final {
-    return true;
+  bool testInt64Range(int64_t min, int64_t max, bool hasNull) const final {
+    return !exact_ || exact_->testInt64Range(min, max, hasNull);
   }
 
-  std::unique_ptr<Filter> clone(
-      std::optional<bool> nullAllowed) const override {
-    return std::unique_ptr<BigintValuesUsingBloomFilter>(
-        new BigintValuesUsingBloomFilter(
-            nullAllowed.value_or(nullAllowed_), blocks_));
-  }
+  std::unique_ptr<Filter> clone(std::optional<bool> nullAllowed) const override;
 
   folly::dynamic serialize() const override;
 
@@ -1402,16 +1400,25 @@ class BigintValuesUsingBloomFilter final : public Filter {
     return folly::hasher<int64_t>()(value);
   }
 
-  // Private constructor used by clone() and create().
+  // Private constructor used by clone(), create() and mergeWith().
   BigintValuesUsingBloomFilter(
       bool nullAllowed,
-      std::vector<SplitBlockBloomFilter::Block> blocks)
+      std::vector<SplitBlockBloomFilter::Block> blocks,
+      std::shared_ptr<const Filter> exact)
       : Filter(true, nullAllowed, FilterKind::kBigintValuesUsingBloomFilter),
         blocks_(std::move(blocks)),
-        filter_(blocks_) {}
+        filter_(blocks_),
+        exact_(std::move(exact)) {}
+
+  // Returns this bloom filter that also applies 'other' exactly.
+  std::unique_ptr<Filter> mergeWithExact(const Filter& other) const;
 
   std::vector<SplitBlockBloomFilter::Block> blocks_;
   SplitBlockBloomFilter filter_;
+
+  // Filter this bloom filter was merged with. Every value must pass it. Allows
+  // nulls exactly when this filter does. Null if there was no such merge.
+  std::shared_ptr<const Filter> exact_;
 };
 
 // NOT IN-list filter for integral data types. Implemented as a hash table. Good
@@ -1434,7 +1441,9 @@ class NegatedBigintValuesUsingHashTable final : public Filter {
       bool nullAllowed)
       : Filter(true, nullAllowed, other.kind()),
         nonNegated_(
-            std::make_unique<BigintValuesUsingHashTable>(*other.nonNegated_)) {}
+            std::make_unique<BigintValuesUsingHashTable>(
+                *other.nonNegated_,
+                !nullAllowed)) {}
 
   folly::dynamic serialize() const override;
 
@@ -1520,7 +1529,9 @@ class NegatedBigintValuesUsingBitmask final : public Filter {
         min_(other.min_),
         max_(other.max_),
         nonNegated_(
-            std::make_unique<BigintValuesUsingBitmask>(*other.nonNegated_)) {}
+            std::make_unique<BigintValuesUsingBitmask>(
+                *other.nonNegated_,
+                !nullAllowed)) {}
 
   folly::dynamic serialize() const override;
 
@@ -2133,7 +2144,8 @@ class NegatedBytesRange final : public Filter {
 
   NegatedBytesRange(const NegatedBytesRange& other, bool nullAllowed)
       : Filter(true, nullAllowed, other.kind()),
-        nonNegated_(std::make_unique<BytesRange>(*other.nonNegated_)) {}
+        nonNegated_(
+            std::make_unique<BytesRange>(*other.nonNegated_, nullAllowed)) {}
 
   folly::dynamic serialize() const override;
 
@@ -2417,7 +2429,8 @@ class NegatedBytesValues final : public Filter {
 
   NegatedBytesValues(const NegatedBytesValues& other, bool nullAllowed)
       : Filter(true, nullAllowed, other.kind()),
-        nonNegated_(std::make_unique<BytesValues>(*other.nonNegated_)) {}
+        nonNegated_(
+            std::make_unique<BytesValues>(*other.nonNegated_, !nullAllowed)) {}
 
   folly::dynamic serialize() const override;
 

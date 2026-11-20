@@ -27,6 +27,7 @@
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -132,24 +133,22 @@ class HashJoinReplayerTest : public HiveConnectorTestBase {
       const std::vector<std::string>& buildKeys,
       const std::vector<RowVectorPtr>& probeInput,
       const std::vector<RowVectorPtr>& buildInput) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     const std::vector<Split> probeSplits =
         makeSplits(probeInput, fmt::format("{}/probe", tableDir), pool());
     const std::vector<Split> buildSplits =
         makeSplits(buildInput, fmt::format("{}/build", tableDir), pool());
     core::PlanNodeId probeScanId;
     core::PlanNodeId buildScanId;
-    const auto outputColumns = concat(
-                                   asRowType(probeInput_[0]->type()),
-                                   asRowType(buildInput_[0]->type()))
-                                   ->names();
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    const auto outputColumns =
+        concat(probeInput_[0]->rowType(), buildInput_[0]->rowType())->names();
+    auto plan = builder.newPlan()
                     .tableScan(probeType_)
                     .capturePlanNodeId(probeScanId)
                     .hashJoin(
                         probeKeys,
                         buildKeys,
-                        PlanBuilder(planNodeIdGenerator)
+                        builder.newPlan()
                             .tableScan(buildType_)
                             .capturePlanNodeId(buildScanId)
                             .planNode(),
@@ -451,12 +450,10 @@ DEBUG_ONLY_TEST_F(HashJoinReplayerTest, hashBuildSpill) {
   }
 
   auto traceResult = traceBuilder.copyResults(pool(), task);
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  const auto& stats = taskStats.at(traceNodeId_);
-  auto opStats = toOperatorStats(task->taskStats());
+  const auto stats = PlanNodeStats::extract(task->taskStats(), traceNodeId_);
   ASSERT_GT(
-      opStats.at("HashBuild")
-          .runtimeStats[std::string(Operator::kSpillWrites)]
+      stats.operatorStatsFor("HashBuild")
+          .customStat(Operator::kSpillWrites)
           .sum,
       0);
   ASSERT_GT(stats.spilledBytes, 0);
@@ -536,12 +533,10 @@ DEBUG_ONLY_TEST_F(HashJoinReplayerTest, hashProbeSpill) {
   }
 
   auto traceResult = traceBuilder.copyResults(pool(), task);
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  const auto& stats = taskStats.at(traceNodeId_);
-  auto opStats = toOperatorStats(task->taskStats());
+  const auto stats = PlanNodeStats::extract(task->taskStats(), traceNodeId_);
   ASSERT_GT(
-      opStats.at("HashProbe")
-          .runtimeStats[std::string(Operator::kSpillWrites)]
+      stats.operatorStatsFor("HashProbe")
+          .customStat(Operator::kSpillWrites)
           .sum,
       0);
 

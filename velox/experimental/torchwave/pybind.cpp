@@ -19,7 +19,11 @@
 #include <pybind11/stl.h>
 #include <torch/csrc/utils/pybind.h>
 
+#include <unordered_map>
+
+#include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/Model.h"
+#include "velox/experimental/torchwave/PackedInput.h"
 #include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
 
@@ -34,9 +38,7 @@ namespace {
 // each item to an IValue accordingly - None or str to an empty tensor (the
 // executor cannot bind such a value; the slot is dead), Python int/float to a
 // scalar, everything else to a tensor. Returns the output tensors.
-std::vector<at::Tensor> runOptionalTensors(
-    torch::wave::TorchWaveModel& self,
-    const py::sequence& inputs) {
+std::vector<c10::IValue> toInputValues(const py::sequence& inputs) {
   std::vector<c10::IValue> ivalues;
   ivalues.reserve(inputs.size());
   for (const auto& item : inputs) {
@@ -54,7 +56,86 @@ std::vector<at::Tensor> runOptionalTensors(
       ivalues.emplace_back(py::cast<at::Tensor>(item));
     }
   }
-  return torch::wave::outputsToTensors(self.run(std::move(ivalues)));
+  return ivalues;
+}
+
+// 'stream' is the cudaStream_t (an int, as torch.cuda.Stream.cuda_stream gives
+// it) the caller's PyTorch work runs on, 0 for the legacy default stream. The
+// run waits for it, dispatches standalones under it and synchronizes it, so the
+// caller must have made it the current stream. The GIL is released for the run,
+// so other Python threads proceed while it blocks.
+std::vector<at::Tensor> runOptionalTensors(
+    torch::wave::TorchWaveModel& self,
+    const py::sequence& inputs,
+    bool reuse,
+    intptr_t stream) {
+  auto ivalues = toInputValues(inputs);
+  std::vector<at::Tensor> tensors;
+  {
+    py::gil_scoped_release noGil;
+    // NOLINTNEXTLINE(performance-no-int-to-ptr)
+    torch::wave::TorchStreamGuard streamGuard(reinterpret_cast<void*>(stream));
+    auto outputs = reuse ? self.runReuse(std::move(ivalues))
+                         : self.run(std::move(ivalues));
+    tensors = torch::wave::outputsToTensors(std::move(outputs));
+  }
+  return tensors;
+}
+
+// Encodes the packed inputs among 'inputs' for the model's recipes. Returns
+// (input index, value, stats) for every input the encoding replaces: each
+// packed input with its encoded host tensor and stats, and each lengths input
+// of a windowed slot with its trimmed lengths (a tensor, or an int for a scalar
+// length) and empty stats. The caller puts each value at its index before
+// run().
+py::list encodePackedInputs(
+    torch::wave::TorchWaveModel& self,
+    const py::sequence& inputs,
+    int32_t numThreads,
+    bool pinned) {
+  auto ivalues = toInputValues(inputs);
+  const auto before = ivalues;
+  std::vector<torch::wave::PackStats> stats;
+  torch::wave::encodePackedInputs(
+      self.packRecipes(),
+      ivalues,
+      {.numThreads = numThreads, .pinned = pinned},
+      &stats);
+  const auto& recipes = self.packRecipes();
+  std::unordered_map<int32_t, size_t> recipeOf;
+  for (size_t i = 0; i < recipes.size(); ++i) {
+    recipeOf[recipes[i].inputIndex] = i;
+  }
+  py::list result;
+  for (size_t index = 0; index < ivalues.size(); ++index) {
+    const auto& value = ivalues[index];
+    const auto& original = before[index];
+    const bool replaced = value.isTensor() ? !original.isTensor() ||
+            value.toTensor().unsafeGetTensorImpl() !=
+                original.toTensor().unsafeGetTensorImpl()
+                                           : value.isInt() &&
+            (!original.isInt() || value.toInt() != original.toInt());
+    if (!replaced) {
+      continue;
+    }
+    py::dict statsDict;
+    auto it = recipeOf.find(static_cast<int32_t>(index));
+    if (it != recipeOf.end()) {
+      const auto& recipeStats = stats.at(it->second);
+      statsDict["input_bytes"] = recipeStats.inputBytes;
+      statsDict["packed_bytes"] = recipeStats.packedBytes;
+      statsDict["range_us"] = recipeStats.rangeUs;
+      statsDict["layout_us"] = recipeStats.layoutUs;
+      statsDict["write_us"] = recipeStats.writeUs;
+      statsDict["total_us"] = recipeStats.totalUs;
+    }
+    if (value.isTensor()) {
+      result.append(py::make_tuple(index, value.toTensor(), statsDict));
+    } else {
+      result.append(py::make_tuple(index, value.toInt(), statsDict));
+    }
+  }
+  return result;
 }
 
 } // namespace
@@ -64,13 +145,62 @@ PYBIND11_MODULE(_torchwave, m) {
 
   py::class_<torch::wave::WaveConfig>(m, "WaveConfig")
       .def_readwrite("block_size", &torch::wave::WaveConfig::blockSize)
-      .def_readwrite("all_standalone", &torch::wave::WaveConfig::allStandalone);
+      .def_readwrite("all_standalone", &torch::wave::WaveConfig::allStandalone)
+      // Read-only: set these through set_is_cg, set_trace, set_enable_reuse
+      // and set_kernel_cache_dir, which write the instance the executor reads.
+      .def_readonly("is_cg", &torch::wave::WaveConfig::isCg)
+      .def_readonly("trace", &torch::wave::WaveConfig::trace)
+      .def_readonly("enable_reuse", &torch::wave::WaveConfig::enableReuse)
+      .def_readonly(
+          "kernel_cache_dir", &torch::wave::WaveConfig::kernelCacheDir);
 
   // Whole-graph alternative to an AOTInductor model container: load() compiles
   // a packaged .pt2 and run() executes it on the GPU.
   py::class_<torch::wave::TorchWaveModel>(m, "TorchWaveModel")
-      .def("run", &runOptionalTensors, py::arg("inputs"))
-      .def("__call__", &runOptionalTensors, py::arg("inputs"));
+      .def(
+          "run",
+          [](torch::wave::TorchWaveModel& self,
+             const py::sequence& inputs,
+             intptr_t stream) {
+            return runOptionalTensors(self, inputs, /*reuse=*/false, stream);
+          },
+          py::arg("inputs"),
+          py::arg("stream") = 0)
+      .def(
+          "run_reuse",
+          [](torch::wave::TorchWaveModel& self,
+             const py::sequence& inputs,
+             intptr_t stream) {
+            return runOptionalTensors(self, inputs, /*reuse=*/true, stream);
+          },
+          py::arg("inputs"),
+          py::arg("stream") = 0)
+      .def(
+          "__call__",
+          [](torch::wave::TorchWaveModel& self,
+             const py::sequence& inputs,
+             intptr_t stream) {
+            return runOptionalTensors(self, inputs, /*reuse=*/false, stream);
+          },
+          py::arg("inputs"),
+          py::arg("stream") = 0)
+      // The packed inputs load() rewrote (set_pack_inputs), one JSON recipe
+      // each.
+      .def(
+          "pack_recipes",
+          [](const torch::wave::TorchWaveModel& self) {
+            std::vector<std::string> recipes;
+            for (const auto& recipe : self.packRecipes()) {
+              recipes.push_back(recipe.toJson());
+            }
+            return recipes;
+          })
+      .def(
+          "encode_packed_inputs",
+          &encodePackedInputs,
+          py::arg("inputs"),
+          py::arg("num_threads") = 1,
+          py::arg("pinned") = true);
 
   m.def(
       "load",
@@ -86,6 +216,25 @@ PYBIND11_MODULE(_torchwave, m) {
         return torch::wave::WaveConfig::get();
       },
       py::return_value_policy::reference);
+
+  // Per-op timing/perf report from the most recent run on this thread,
+  // populated when the executor's trace has the kTiming (16) bit set.
+  m.def("last_perf_report", []() {
+    return torch::wave::waveThreadInfo().perfReport;
+  });
+
+  // Set/get the trace bits on the exact WaveConfig instance the executor reads
+  // (setWaveTrace/getWaveTrace live in the executor's TU, avoiding a duplicated
+  // inline-static WaveConfig::get() instance that a wave_config().trace write
+  // from this TU could hit instead).
+  m.def("set_trace", &torch::wave::setWaveTrace, py::arg("trace"));
+  m.def("set_num_sms", &torch::wave::setNumSms, py::arg("num_sms"));
+  m.def("set_pack_inputs", &torch::wave::setPackInputs, py::arg("on"));
+  m.def("get_trace", &torch::wave::getWaveTrace);
+  m.def("set_is_cg", &torch::wave::setIsCg, py::arg("on"));
+  m.def("set_enable_reuse", &torch::wave::setEnableReuse, py::arg("on"));
+  m.def(
+      "set_kernel_cache_dir", &torch::wave::setKernelCacheDir, py::arg("dir"));
 
   m.def(
       "register_elementwise_op",

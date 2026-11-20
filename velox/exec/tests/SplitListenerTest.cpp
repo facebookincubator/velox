@@ -165,9 +165,8 @@ TEST_F(SplitListenerTest, basic) {
 
   makeTable();
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId nodeId;
-  auto plan = PlanBuilder(planNodeIdGenerator)
+  auto plan = PlanBuilder()
                   .tableScan(rowType_)
                   .capturePlanNodeId(nodeId)
                   .project({"c0 + 1 as c0"})
@@ -203,9 +202,8 @@ TEST_F(SplitListenerTest, multipleListeners) {
 
   makeTable();
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId nodeId;
-  auto plan = PlanBuilder(planNodeIdGenerator)
+  auto plan = PlanBuilder()
                   .tableScan(rowType_)
                   .capturePlanNodeId(nodeId)
                   .project({"c0 + 1 as c0"})

@@ -19,10 +19,12 @@
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/BackpressureTestNode.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 namespace facebook::velox::exec::test {
 using namespace facebook::velox::common::testutil;
@@ -56,12 +58,12 @@ TEST_F(RowNumberTest, basic) {
   createDuckDbTable({data});
 
   // No limit, emit row numbers.
-  auto plan = PlanBuilder().values({data}).rowNumber({"c0"}).planNode();
+  auto plan = PlanBuilder().values(data).rowNumber({"c0"}).planNode();
   assertQuery(plan, "SELECT *, row_number() over (partition by c0) FROM tmp");
 
   // No limit, don't emit row numbers.
   plan = PlanBuilder()
-             .values({data})
+             .values(data)
              .rowNumber({"c0"}, std::nullopt, false)
              .planNode();
   assertQuery(
@@ -70,8 +72,7 @@ TEST_F(RowNumberTest, basic) {
 
   auto testLimit = [&](int32_t limit) {
     // Limit, emit row numbers.
-    auto plan =
-        PlanBuilder().values({data}).rowNumber({"c0"}, limit).planNode();
+    auto plan = PlanBuilder().values(data).rowNumber({"c0"}, limit).planNode();
     assertQuery(
         plan,
         fmt::format(
@@ -81,7 +82,7 @@ TEST_F(RowNumberTest, basic) {
 
     // Limit, don't emit row numbers.
     plan =
-        PlanBuilder().values({data}).rowNumber({"c0"}, limit, false).planNode();
+        PlanBuilder().values(data).rowNumber({"c0"}, limit, false).planNode();
     assertQuery(
         plan,
         fmt::format(
@@ -229,8 +230,8 @@ TEST_F(RowNumberTest, spill) {
                     .planNode())
             .assertResults(
                 "SELECT *, row_number() over (partition by c0) FROM tmp");
-    auto taskStats = toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(rowNumberPlanNodeId);
+    const auto planStats =
+        PlanNodeStats::extract(task->taskStats(), rowNumberPlanNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
     ASSERT_EQ(
         planStats.spilledPartitions,
@@ -250,7 +251,7 @@ TEST_F(RowNumberTest, spill) {
         0);
 
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -258,8 +259,7 @@ TEST_F(RowNumberTest, maxSpillBytes) {
   const auto rowType =
       ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
   const auto vectors = createVectors(rowType, 1024, 15 << 20);
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator)
+  auto plan = PlanBuilder()
                   .values(vectors)
                   .rowNumber({"c0"}, 2, false)
                   .project({"c0", "c1"})
@@ -342,8 +342,8 @@ TEST_F(RowNumberTest, memoryUsage) {
 
       if (spillEnable) {
         peakBytesWithSpilling = queryCtx->pool()->peakBytes();
-        auto taskStats = exec::toPlanStats(task->taskStats());
-        const auto& stats = taskStats.at(rowNumberId);
+        const auto stats =
+            exec::PlanNodeStats::extract(task->taskStats(), rowNumberId);
 
         ASSERT_GT(stats.spilledBytes, 0);
         ASSERT_GT(stats.spilledRows, 0);
@@ -418,8 +418,8 @@ DEBUG_ONLY_TEST_F(RowNumberTest, spillOnlyDuringInputOrOutput) {
                     .planNode())
             .assertResults(
                 "SELECT *, row_number() over (partition by c0) FROM tmp");
-    auto taskStats = toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(rowNumberPlanNodeId);
+    const auto planStats =
+        PlanNodeStats::extract(task->taskStats(), rowNumberPlanNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
     ASSERT_EQ(
         planStats.spilledPartitions,
@@ -428,7 +428,7 @@ DEBUG_ONLY_TEST_F(RowNumberTest, spillOnlyDuringInputOrOutput) {
     ASSERT_GT(planStats.spilledRows, 0);
 
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -503,8 +503,8 @@ DEBUG_ONLY_TEST_F(RowNumberTest, recursiveSpill) {
                     .planNode())
             .assertResults(
                 "SELECT *, row_number() over (partition by c0) FROM tmp");
-    auto taskStats = toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(rowNumberPlanNodeId);
+    const auto planStats =
+        PlanNodeStats::extract(task->taskStats(), rowNumberPlanNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
     ASSERT_EQ(
         planStats.spilledPartitions,
@@ -515,13 +515,15 @@ DEBUG_ONLY_TEST_F(RowNumberTest, recursiveSpill) {
     auto runTimeStats =
         task->taskStats().pipelineStats.back().operatorStats.at(1).runtimeStats;
     if (testData.numSpills > testData.maxSpillLevel) {
-      ASSERT_GT(runTimeStats["exceededMaxSpillLevel"].sum, 0);
+      ASSERT_GT(
+          runTimeStats[std::string(Operator::kExceededMaxSpillLevel)].sum, 0);
     } else {
-      ASSERT_EQ(runTimeStats.count("exceededMaxSpillLevel"), 0);
+      ASSERT_EQ(
+          runTimeStats.count(std::string(Operator::kExceededMaxSpillLevel)), 0);
     }
 
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -566,14 +568,14 @@ TEST_F(RowNumberTest, spillWithYield) {
                     .planNode())
             .assertResults(
                 "SELECT *, row_number() over (partition by c0) FROM tmp");
-    auto taskStats = toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(rowNumberPlanNodeId);
+    const auto planStats =
+        PlanNodeStats::extract(task->taskStats(), rowNumberPlanNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
     ASSERT_GT(planStats.spilledFiles, 0);
     ASSERT_GT(planStats.spilledRows, 0);
 
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 

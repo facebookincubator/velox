@@ -27,6 +27,15 @@
 
 namespace torch::wave {
 
+void KernelOperation::addStaticShape(
+    int32_t offset,
+    std::vector<int64_t> dims,
+    bool contiguous) {
+  auto [it, inserted] =
+      staticShapes_.emplace(offset, StaticShape{std::move(dims), contiguous});
+  it->second.contiguous |= contiguous;
+}
+
 // --- SizeExpr ---
 
 int64_t SizeExpr::numElements(FrameP frame, nativert::ValueId* largestOut)
@@ -1405,6 +1414,13 @@ SizeExpr KernelOperation::makeDeepSizeExpr() {
       // emitted at an elementwise border, so walk through borders here.
       collectElementwiseLeaves(
           expr_, inputs_, seen, leafIds, /*stopAtBorder=*/false);
+      // A root sized from its own output (e.g. index_select) has only whole
+      // tensor operands, so its output is the leaf.
+      if (const auto* rootMeta = Registry::metadata(expr_->target());
+          rootMeta != nullptr && rootMeta->sizeFromOutput &&
+          !expr_->outputs().empty()) {
+        leafIds.push_back(expr_->outputs()[0]->id());
+      }
       std::unordered_set<NodeCP> factoryVisited;
       std::vector<std::vector<Dim>> constShapes;
       collectFactorySizes(expr_, inputs_, factoryVisited, constShapes);
@@ -1625,7 +1641,11 @@ void KernelOperation::setOutputs(
     auto* producer = value->producer();
     if (producer) {
       const auto* am = argMetaForInput(meta, node, i);
-      bool inputInMemory = am && !am->isRegister;
+      // The producer of a view the expression computes through is never
+      // written, but its shape is: leaves below the view index against it.
+      bool inputInMemory = am && !am->isRegister &&
+          !compileCtx_.fusesThroughView(node) &&
+          !compileCtx_.fusesRowReduction(node);
       setOutputs(
           producer,
           subgraphInputs,

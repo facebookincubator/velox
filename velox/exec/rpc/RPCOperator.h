@@ -121,106 +121,6 @@ class RPCOperator : public exec::Operator {
   /// mutex-protected snapshots reached through liveStatsSources_.
   exec::OperatorStats stats(bool clear) override;
 
-  /// Runtime stat names.
-  static inline const std::string kRpcRequestsDispatched{
-      "rpcRequestsDispatched"};
-  static inline const std::string kRpcResponsesReceived{"rpcResponsesReceived"};
-  static inline const std::string kRpcErrorCount{"rpcErrorCount"};
-  static inline const std::string kRpcWaitWallNanos{"rpcWaitWallNanos"};
-  static inline const std::string kRpcBackpressureWaitNanos{
-      "rpcBackpressureWaitNanos"};
-  static inline const std::string kRpcCongestionWindowFinal{
-      "rpcCongestionWindowFinal"};
-  static inline const std::string kRpcCongestionShrinks{"rpcCongestionShrinks"};
-  static inline const std::string kRpcCongestionOverloadShrinks{
-      "rpcCongestionOverloadShrinks"};
-  /// Attempts rejected for capacity and admitted again for another attempt.
-  static inline const std::string kRpcCapacityRetries{"rpcCapacityRetries"};
-  /// Capacity retries a hint's minRetries granted after its budget ran out.
-  static inline const std::string kRpcCapacityRetryFloorRetries{
-      "rpcCapacityRetryFloorRetries"};
-  static inline const std::string kRpcBaselineRttNanos{"rpcBaselineRttNanos"};
-  static inline const std::string kRpcPeakInFlight{"rpcPeakInFlight"};
-  static inline const std::string kRpcRttMinWallNanos{"rpcRttMinWallNanos"};
-  static inline const std::string kRpcRttMaxWallNanos{"rpcRttMaxWallNanos"};
-  static inline const std::string kRpcRttCount{"rpcRttCount"};
-  static inline const std::string kRpcStreamingMode{"rpcStreamingMode"};
-  static inline const std::string kRpcErrorKindRateLimited{
-      "rpcErrorKindRateLimited"};
-  static inline const std::string kRpcErrorKindTimeout{"rpcErrorKindTimeout"};
-  static inline const std::string kRpcErrorKindBackendError{
-      "rpcErrorKindBackendError"};
-  static inline const std::string kRpcErrorKindInvalidRequest{
-      "rpcErrorKindInvalidRequest"};
-  static inline const std::string kRpcErrorKindInternal{"rpcErrorKindInternal"};
-  /// Overloaded attempts the transport reported before each completed PER_ROW
-  /// row's final attempt (RPCResponse::numOverloadedAttempts), failed rows
-  /// included. BATCH completions are not counted.
-  /// This and kRpcSuccessesAfterOverload are per-driver live counters that sum
-  /// across drivers.
-  static inline const std::string kRpcOverloadedAttempts{
-      "rpcOverloadedAttempts"};
-  /// Successes whose response reported at least one overloaded attempt.
-  static inline const std::string kRpcSuccessesAfterOverload{
-      "rpcSuccessesAfterOverload"};
-  // Shared rate-limiter stats, refreshed on every stats() call.
-  static inline const std::string kRpcRateLimiterCap{"rpcRateLimiterCap"};
-  static inline const std::string kRpcRateLimiterHardLimit{
-      "rpcRateLimiterHardLimit"};
-  static inline const std::string kRpcRateLimiterPeakPending{
-      "rpcRateLimiterPeakPending"};
-  static inline const std::string kRpcRateLimiterMinCap{"rpcRateLimiterMinCap"};
-  static inline const std::string kRpcRateLimiterLimitMilli{
-      "rpcRateLimiterLimitMilli"};
-  static inline const std::string kRpcRateLimiterMinLimitMilli{
-      "rpcRateLimiterMinLimitMilli"};
-  static inline const std::string kRpcRateLimiterServiceHorizonNanos{
-      "rpcRateLimiterServiceHorizonNanos"};
-  /// Present, with value one per driver, when the backend's shared limiter
-  /// runs another policy and this operator runs under the limiter for its own.
-  static inline const std::string kRpcRateLimiterPolicyScoped{
-      "rpcRateLimiterPolicyScoped"};
-  /// Time from this driver's first admission request until the stats sample
-  /// or close. The pacing and window stats below cover the same span, and a
-  /// driver that never requests admission reports none of the three. These
-  /// three and rpcStaleSuccessUnits are per-driver counters that sum across
-  /// drivers and tasks on Prestissimo and on Presto-on-Spark; the sums are
-  /// driver time, not wall time. sum(PacingNanos) / sum(AttachedNanos) is the
-  /// share of attached time during which the shared limiter paced. It bounds
-  /// pacing delay from above, because it includes time a driver was idle or
-  /// waiting on upstream. sum(LimitMilliUnitSeconds) / (sum(AttachedNanos) /
-  /// 1e9) is the average window in milli-admission-units.
-  static inline const std::string kRpcRateLimiterAttachedNanos{
-      "rpcRateLimiterAttachedNanos"};
-  /// Part of that span during which the shared limiter paced admission.
-  static inline const std::string kRpcRateLimiterPacingNanos{
-      "rpcRateLimiterPacingNanos"};
-  /// The shared limiter's committed window, the one rpcRateLimiterLimitMilli
-  /// shows, integrated over that span, in milli-admission-units times seconds.
-  /// Recovery growth counts once the limiter commits it to the window.
-  static inline const std::string kRpcRateLimiterLimitMilliUnitSeconds{
-      "rpcRateLimiterLimitMilliUnitSeconds"};
-  /// This driver's successful units whose recovery credit the shared limiter
-  /// discarded because an overload, including one in the same completion,
-  /// arrived after their admission. PER_ROW counts error-free rows; BATCH
-  /// counts the admission units of a flush with at least one successful row
-  /// as a whole, as the limiter credits them.
-  static inline const std::string kRpcStaleSuccessUnits{"rpcStaleSuccessUnits"};
-
-  /// Live liveness stats, refreshed on every stats() call rather than only at
-  /// close(). Units dispatched but not yet completed.
-  static inline const std::string kRpcInFlight{"rpcInFlight"};
-  /// Monotonic count of completions signaled by the transport. Advances from
-  /// the RPC executor threads, so it moves even while the driver is blocked.
-  static inline const std::string kRpcCompletionsSignaled{
-      "rpcCompletionsSignaled"};
-  /// Monotonic count of retry attempts the function's transports have
-  /// scheduled. A retry is neither a dispatch nor a completion, so a request
-  /// climbing a doubling backoff schedule leaves both counters above frozen
-  /// for as long as the ladder runs. Advances from the transport executor
-  /// threads, so it moves even while the driver is blocked.
-  static inline const std::string kRpcRetriesAttempted{"rpcRetriesAttempted"};
-
   /// Null once close() has run.
   const std::shared_ptr<RPCState>& testingState() const {
     return state_;
@@ -430,6 +330,13 @@ class RPCOperator : public exec::Operator {
   RPCRateLimiter* limiter_{nullptr};
   // PER_ROW and AsyncRPCFunction::mayReturnCapacityRetries().
   bool capacityRetryEnabled_{false};
+  // Policy rpc.flow_control_policy names, reported even when not eligible.
+  RPCFlowControlPolicy requestedFlowControlPolicy_{
+      RPCFlowControlPolicy::kWindowAimd};
+  // True when CAPACITY_PROBING is requested for adaptive PER_ROW execution of a
+  // function that may return capacity retries. Any other request runs exactly
+  // as WINDOW_AIMD.
+  bool capacityProbingEnabled_{false};
 
   // Set by the first tryAcquireAdmission() call.
   bool admissionRequested_{false};
@@ -462,7 +369,7 @@ class RPCOperator : public exec::Operator {
   // are independent counters, not a handshake.
   std::atomic<int64_t> numRequestsDispatched_{0};
   // Success units the shared limiter discarded as stale; see
-  // kRpcStaleSuccessUnits.
+  // RPCOperatorStatNames::kRpcStaleSuccessUnits.
   std::atomic<int64_t> numStaleSuccessUnits_{0};
   int64_t numResponsesReceived_{0};
   int64_t numErrors_{0};
@@ -509,11 +416,6 @@ class RPCOperator : public exec::Operator {
 
   // Whether we've detected the finish condition.
   bool finished_{false};
-
-  // Ceiling for batch RPC calls; the operator returns as soon as results are
-  // ready. An offline batch job can take many minutes in backend queueing and
-  // scheduling, so this needs generous headroom.
-  static constexpr auto kBatchRpcTimeout = std::chrono::milliseconds(3'600'000);
 
   // Block wait time tracking for runtime stats. Started when the operator
   // parks and reset when the wait ends.

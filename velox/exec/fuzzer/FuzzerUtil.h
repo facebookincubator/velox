@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/common/fuzzer/Utils.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
@@ -157,6 +158,36 @@ std::unique_ptr<ReferenceQueryRunner> setupReferenceQueryRunner(
 
 // Logs the input vectors if verbose logging is turned on.
 void logVectors(const std::vector<RowVectorPtr>& vectors);
+
+/// Returns a value for QueryConfig::kSpillNumMaxMergeFiles. Half the time "0",
+/// which leaves the merge way unlimited, otherwise a small cap. The cap has to
+/// be small to be useful: SpillPartition::createOrderedReader only pre-merges
+/// when a single spill partition holds more than that many files, and fuzzers
+/// generate far fewer files than production settings assume, so fuzzing
+/// production-sized values would never reach that path. Never returns 1, which
+/// SpillConfig rejects.
+std::string randomSpillNumMaxMergeFiles(fuzzer::FuzzerGenerator& rng);
+
+/// Returns a value for QueryConfig::kMaxSpillRunRows, drawn log-uniformly from
+/// [32, 1 << 30]. Drawing uniformly from that range almost always lands near
+/// the maximum, so a spill run is never split and each spill event leaves a
+/// single large file. Small values are what produce the many-file partitions
+/// that the multi-file merge paths need.
+std::string randomMaxSpillRunRows(fuzzer::FuzzerGenerator& rng);
+
+/// Returns a value in ['min', 'max'], picking the power-of-two band first so
+/// that every band is equally likely. A uniform draw over a wide range spends
+/// almost all of its mass near 'max', which hides whatever the small values
+/// would exercise. 'min' must be at least 1.
+uint64_t
+randomLogUniform(fuzzer::FuzzerGenerator& rng, uint64_t min, uint64_t max);
+
+/// Returns a value for QueryConfig::kSpillNumPartitionBits, from 1 to the
+/// maximum of 3. Fuzzers spill few files in total, so
+/// spreading them over the default 8 partitions leaves each partition with too
+/// few files to reach the multi-file merge paths. Fewer partitions concentrate
+/// the files and make those paths reachable.
+std::string randomSpillNumPartitionBits(fuzzer::FuzzerGenerator& rng);
 
 // Converts 'plan' into an SQL query and runs in the reference DB.
 // Result is returned as a MaterializedRowMultiset with the

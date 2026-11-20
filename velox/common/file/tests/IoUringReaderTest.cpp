@@ -15,10 +15,13 @@
  */
 
 #include <fcntl.h>
+#include <poll.h>
+#include <sys/inotify.h>
 #include <unistd.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <climits>
 #include <condition_variable>
 #include <cstring>
 #include <exception>
@@ -31,6 +34,7 @@
 #include <utility>
 #include <vector>
 
+#include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -174,13 +178,10 @@ std::string makeTestData(size_t size) {
   return data;
 }
 
-IoUringReader::Options makeReaderOptions(
-    int32_t queueDepth = 128,
-    int32_t registeredFileSlots = 128) {
+IoUringReader::Options makeReaderOptions(int32_t queueDepth = 128) {
   IoUringReader::Options options;
   options.submissionQueueDepth = queueDepth;
   options.completionQueueDepth = queueDepth;
-  options.registeredFileSlots = registeredFileSlots;
   return options;
 }
 
@@ -540,7 +541,6 @@ TEST_F(IoUringReaderTest, queueDepth) {
     IoUringReader::Options options;
     options.submissionQueueDepth = testCase.submissionQueueDepth;
     options.completionQueueDepth = testCase.completionQueueDepth;
-    options.registeredFileSlots = 4;
 
     std::unique_ptr<IoUringReader> reader;
     ASSERT_NO_THROW(reader = std::make_unique<IoUringReader>(options));
@@ -554,7 +554,7 @@ TEST_F(IoUringReaderTest, queueDepth) {
   }
 }
 
-TEST_F(IoUringReaderTest, reusesRegisteredFileSlots) {
+TEST_F(IoUringReaderTest, registersFileForEachRead) {
   if (!IoUringReader::available()) {
     GTEST_SKIP() << "io_uring is unavailable";
   }
@@ -587,40 +587,20 @@ TEST_F(IoUringReaderTest, reusesRegisteredFileSlots) {
 
   struct TestCase {
     const char* name;
-    int32_t registeredFileSlots;
     size_t fileCount;
     std::vector<size_t> accessOrder;
-    uint64_t expectedFileUpdates;
   };
 
   const std::vector<TestCase> testCases = {
       {
-          "reuseWhenTableFits",
-          /*registeredFileSlots=*/2,
+          "alternateFiles",
           /*fileCount=*/2,
           /*accessOrder=*/{0, 1, 0, 1},
-          /*expectedFileUpdates=*/2,
       },
       {
-          "singleSlotAlternates",
-          /*registeredFileSlots=*/1,
-          /*fileCount=*/2,
-          /*accessOrder=*/{0, 1, 0, 1},
-          /*expectedFileUpdates=*/4,
-      },
-      {
-          "evictWhenTableIsFull",
-          /*registeredFileSlots=*/2,
+          "repeatFile",
           /*fileCount=*/3,
           /*accessOrder=*/{0, 1, 0, 1, 2, 0, 1, 1},
-          /*expectedFileUpdates=*/5,
-      },
-      {
-          "largerTableFitsAllFiles",
-          /*registeredFileSlots=*/4,
-          /*fileCount=*/3,
-          /*accessOrder=*/{0, 1, 2, 0, 2, 1},
-          /*expectedFileUpdates=*/3,
       },
   };
 
@@ -648,8 +628,7 @@ TEST_F(IoUringReaderTest, reusesRegisteredFileSlots) {
       tempFiles.push_back(std::move(tempFile));
     }
 
-    auto reader = std::make_unique<IoUringReader>(makeReaderOptions(
-        /*queueDepth=*/128, testCase.registeredFileSlots));
+    auto reader = std::make_unique<IoUringReader>(makeReaderOptions());
 
     for (const auto fileIndex : testCase.accessOrder) {
       ASSERT_LT(fileIndex, testCase.fileCount);
@@ -661,8 +640,42 @@ TEST_F(IoUringReaderTest, reusesRegisteredFileSlots) {
     EXPECT_EQ(stats.regions, testCase.accessOrder.size());
     EXPECT_EQ(
         stats.registeredFileUpdates,
-        expectedRegisteredFileUpdates(testCase.expectedFileUpdates));
+        expectedRegisteredFileUpdates(testCase.accessOrder.size()));
   }
+}
+
+TEST_F(IoUringReaderTest, releasesFileAfterRead) {
+  if (!IoUringReader::available()) {
+    GTEST_SKIP() << "io_uring is unavailable";
+  }
+
+  // inotify reports IN_CLOSE_NOWRITE when the last reference to the open file
+  // is dropped. A registered-file slot holds one such reference.
+  const int inotifyFd = ::inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+  ASSERT_GE(inotifyFd, 0);
+  SCOPE_EXIT {
+    ::close(inotifyFd);
+  };
+  ASSERT_GE(
+      ::inotify_add_watch(
+          inotifyFd, tempFile_->getPath().c_str(), IN_CLOSE_NOWRITE),
+      0);
+
+  IoUringReader reader(makeReaderOptions());
+  {
+    auto fd = openFile();
+    ASSERT_GE(fd.fd, 0);
+    readAndVerify(reader, fd.fd, makeReadRegions(1));
+  }
+
+  pollfd pollFd{.fd = inotifyFd, .events = POLLIN};
+  ASSERT_EQ(::poll(&pollFd, 1, /*timeout=*/5'000), 1);
+  alignas(inotify_event) char buffer[sizeof(inotify_event) + NAME_MAX + 1];
+  ASSERT_GE(
+      ::read(inotifyFd, buffer, sizeof(buffer)),
+      static_cast<ssize_t>(sizeof(inotify_event)));
+  EXPECT_EQ(
+      reinterpret_cast<const inotify_event*>(buffer)->mask, IN_CLOSE_NOWRITE);
 }
 
 TEST_F(IoUringReaderTest, singleThreadRead) {
@@ -702,7 +715,6 @@ TEST_F(IoUringReaderTest, concurrentRead) {
   IoUringReader::Options options;
   options.submissionQueueDepth = 64;
   options.completionQueueDepth = 64;
-  options.registeredFileSlots = 64;
   IoUringReaderOptionsGuard optionsGuard(options);
 
   constexpr size_t kThreadCount{8};
@@ -819,22 +831,6 @@ TEST(IoUringReaderOptionsTest, invalidQueueDepth) {
   VELOX_ASSERT_THROW(
       IoUringReader::setOptions(options),
       "io_uring completionQueueDepth must be positive");
-}
-
-TEST(IoUringReaderOptionsTest, invalidRegisteredFileSlots) {
-  IoUringReader::Options options;
-
-  options.registeredFileSlots = 0;
-
-  VELOX_ASSERT_THROW(
-      IoUringReader::setOptions(options),
-      "io_uring registeredFileSlots must be positive");
-
-  options.registeredFileSlots = -1;
-
-  VELOX_ASSERT_THROW(
-      IoUringReader::setOptions(options),
-      "io_uring registeredFileSlots must be positive");
 }
 
 } // namespace

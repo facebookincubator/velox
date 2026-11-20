@@ -20,6 +20,7 @@
 
 #include "velox/vector/FlatMapVector.h"
 
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/SimpleVector.h"
@@ -65,6 +66,9 @@ FlatMapVector::FlatMapVector(
       "Wrong number of map value vectors.");
   VELOX_CHECK_LE(
       inMaps_.size(), numDistinctKeys(), "Wrong number of in map buffers.");
+  for (const auto& inMap : inMaps_) {
+    VELOX_DCHECK_BUFFER_ALIGNED(inMap, bool);
+  }
 }
 
 void FlatMapVector::setDistinctKeys(VectorPtr distinctKeys, bool sortedKeys) {
@@ -774,6 +778,71 @@ uint64_t* FlatMapVector::ensureInMapAt(column_index_t channel) {
   return inMap->asMutable<uint64_t>();
 }
 
+bool FlatMapVector::mergeChannels(
+    const SelectivityVector& rows,
+    const VectorPtr& values,
+    BufferPtr inMap,
+    bool isShared,
+    vector_size_t size,
+    memory::MemoryPool* pool,
+    bool throwOnDuplicateKeys,
+    const BaseVector& keys,
+    vector_size_t keyIndex,
+    VectorPtr& resultValues,
+    BufferPtr& resultInMap) {
+  SelectivityVector keyRows(rows);
+  if (inMap != nullptr) {
+    keyRows.deselectNulls(inMap->as<uint64_t>(), rows.begin(), rows.end());
+  }
+  SelectivityVector resultKeyRows(rows);
+  if (resultInMap != nullptr) {
+    resultKeyRows.deselectNulls(
+        resultInMap->as<uint64_t>(), rows.begin(), rows.end());
+  }
+  if (throwOnDuplicateKeys &&
+      bits::hasIntersection(
+          keyRows.asRange().bits(),
+          resultKeyRows.asRange().bits(),
+          rows.begin(),
+          rows.end())) {
+    VELOX_USER_FAIL("Duplicate map key was found: {}", keys.toString(keyIndex));
+  }
+
+  // When the later channel holds the key in every row the earlier one does,
+  // its values win in all of them, so the merged channel shares them instead.
+  if (bits::isSubset(
+          resultKeyRows.asRange().bits(),
+          keyRows.asRange().bits(),
+          rows.begin(),
+          rows.end())) {
+    resultValues = values;
+    resultInMap = std::move(inMap);
+    return true;
+  }
+
+  if (isShared) {
+    auto mergedInMap = AlignedBuffer::allocate<bool>(size, pool, false);
+    bits::copyBits(
+        resultKeyRows.asRange().bits(),
+        0,
+        mergedInMap->asMutable<uint64_t>(),
+        0,
+        rows.end());
+    resultKeyRows.deselect(keyRows);
+    auto mergedValues = BaseVector::create(resultValues->type(), size, pool);
+    mergedValues->copy(resultValues.get(), resultKeyRows, nullptr);
+    resultValues = std::move(mergedValues);
+    resultInMap = std::move(mergedInMap);
+  }
+  resultValues->copy(values.get(), keyRows, nullptr);
+  bits::orBits(
+      resultInMap->asMutable<uint64_t>(),
+      keyRows.asRange().bits(),
+      rows.begin(),
+      rows.end());
+  return false;
+}
+
 void FlatMapVector::copyRanges(
     const BaseVector* source,
     const folly::Range<const CopyRange*>& ranges) {
@@ -988,6 +1057,7 @@ FlatMapVectorPtr FlatMapVector::fromMapVector(const MapVector& map) {
 // scatter-like operation. This prevents the lack of cache locality for reads in
 // a gather-like operation.
 MapVectorPtr FlatMapVector::toMapVector() const {
+  RuntimeStatWallTimer timer{kMapConversionWallNanos};
   // We first need to count how many key/value pairs per row. We do so by
   // couting how many "full" maps we have (when inMap buffers are not
   // materialized), then counting the ones that have inMap buffers.
@@ -1042,20 +1112,26 @@ MapVectorPtr FlatMapVector::toMapVector() const {
 
   // The main scatter loop. Scan each map values vector, and copy the elements
   // to the right offsets in the flattened output.
+  std::vector<CopyRange> ranges;
   for (vector_size_t i = 0; i < mapValues_.size(); i++) {
     if (mapValues_[i] != nullptr) {
+      ranges.clear();
       for (vector_size_t j = 0; j < length_; j++) {
         // If needed, this check could be unrolled out of the loop (in many
         // cases the inMap buffer doesn't exist).
         if (isInMap(i, j)) {
-          mapValues->copy(
-              mapValues_[i].get(), rawOffsets[j] + rawSizes[j], j, 1);
+          ranges.push_back({j, rawOffsets[j] + rawSizes[j], 1});
           rawKeyDictIndices[rawOffsets[j] + rawSizes[j]] = i;
           ++rawSizes[j];
         }
       }
+      mapValues->copyRanges(mapValues_[i].get(), ranges);
     }
   }
+
+  addThreadLocalRuntimeStat(kNumMapConversions, RuntimeCounter(1));
+  addThreadLocalRuntimeStat(
+      kNumMapConversionEntries, RuntimeCounter(totalElements));
 
   auto mapKeys = distinctKeys_
       ? BaseVector::wrapInDictionary(

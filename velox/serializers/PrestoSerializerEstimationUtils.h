@@ -58,7 +58,7 @@ inline vector_size_t saturatedProduct(
     vector_size_t count,
     vector_size_t width) {
   vector_size_t bytes;
-  if (FOLLY_UNLIKELY(__builtin_mul_overflow(count, width, &bytes))) {
+  if (__builtin_mul_overflow(count, width, &bytes)) [[unlikely]] {
     return std::numeric_limits<vector_size_t>::max();
   }
   return bytes;

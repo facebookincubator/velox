@@ -570,18 +570,22 @@ struct VectorInitializer<velox::FlatVector<T>> {
       resetIfNotWritable(output, nulls, values);
     }
 
-    ensureBuffer<bool, /* ShouldAllocate */ false>(&nulls, rowCount, pool);
-    ensureBuffer<T>(&values, rowCount, pool);
+    ensureBuffer<bool, /*ShouldAllocate=*/false>(&nulls, rowCount, pool);
 
-    if (!output) {
-      output = std::make_shared<velox::FlatVector<T>>(
-          pool,
-          veloxType,
-          nulls,
-          rowCount,
-          values,
-          std::vector<velox::BufferPtr>());
+    if (output != nullptr) {
+      // The caller resizes the reused vector's owned storage before writing.
+      ensureBuffer<T, /*ShouldAllocate=*/false>(&values, rowCount, pool);
+      return static_cast<velox::FlatVector<T>*>(output.get());
     }
+
+    ensureBuffer<T>(&values, rowCount, pool);
+    output = std::make_shared<velox::FlatVector<T>>(
+        pool,
+        veloxType,
+        nulls,
+        rowCount,
+        values,
+        std::vector<velox::BufferPtr>());
 
     return static_cast<velox::FlatVector<T>*>(output.get());
   }
@@ -606,21 +610,28 @@ struct VectorInitializer<velox::ArrayVector> {
       resetIfNotWritable(output, nulls, sizes, offsets);
     }
 
-    ensureBuffer<bool, /* ShouldAllocate */ false>(&nulls, rowCount, pool);
+    ensureBuffer<bool, /*ShouldAllocate=*/false>(&nulls, rowCount, pool);
+
+    if (output != nullptr) {
+      // The caller resizes the reused vector's owned storage before writing.
+      ensureBuffer<velox::vector_size_t, /*ShouldAllocate=*/false>(
+          &offsets, rowCount, pool);
+      ensureBuffer<velox::vector_size_t, /*ShouldAllocate=*/false>(
+          &sizes, rowCount, pool);
+      return static_cast<velox::ArrayVector*>(output.get());
+    }
+
     ensureBuffer<velox::vector_size_t>(&offsets, rowCount, pool);
     ensureBuffer<velox::vector_size_t>(&sizes, rowCount, pool);
-
-    if (!output) {
-      output = std::make_shared<velox::ArrayVector>(
-          pool,
-          veloxType,
-          nulls,
-          rowCount,
-          std::move(offsets),
-          std::move(sizes),
-          /* elements */ elements,
-          0 /*nullCount*/);
-    }
+    output = std::make_shared<velox::ArrayVector>(
+        pool,
+        veloxType,
+        nulls,
+        rowCount,
+        std::move(offsets),
+        std::move(sizes),
+        /* elements */ elements,
+        0 /*nullCount*/);
 
     return static_cast<velox::ArrayVector*>(output.get());
   }
@@ -646,22 +657,29 @@ struct VectorInitializer<velox::MapVector> {
       resetIfNotWritable(output, nulls, sizes, offsets);
     }
 
-    ensureBuffer<bool, /* ShouldAllocate */ false>(&nulls, rowCount, pool);
+    ensureBuffer<bool, /*ShouldAllocate=*/false>(&nulls, rowCount, pool);
+
+    if (output != nullptr) {
+      // The caller resizes the reused vector's owned storage before writing.
+      ensureBuffer<velox::vector_size_t, /*ShouldAllocate=*/false>(
+          &offsets, rowCount, pool);
+      ensureBuffer<velox::vector_size_t, /*ShouldAllocate=*/false>(
+          &sizes, rowCount, pool);
+      return static_cast<velox::MapVector*>(output.get());
+    }
+
     ensureBuffer<velox::vector_size_t>(&offsets, rowCount, pool);
     ensureBuffer<velox::vector_size_t>(&sizes, rowCount, pool);
-
-    if (!output) {
-      output = std::make_shared<velox::MapVector>(
-          pool,
-          veloxType,
-          nulls,
-          rowCount,
-          std::move(offsets),
-          std::move(sizes),
-          /* keys*/ mapKeys,
-          /*values*/ mapValues,
-          0 /*nullCount*/);
-    }
+    output = std::make_shared<velox::MapVector>(
+        pool,
+        veloxType,
+        nulls,
+        rowCount,
+        std::move(offsets),
+        std::move(sizes),
+        /* keys*/ mapKeys,
+        /*values*/ mapValues,
+        0 /*nullCount*/);
 
     return static_cast<velox::MapVector*>(output.get());
   }

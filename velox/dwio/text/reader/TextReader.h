@@ -137,6 +137,10 @@ class TextRowReader : public dwio::common::RowReader {
 
   void setEOF();
 
+  // Skips to the first row of the split row range, if one is set, and sets
+  // 'endRow_'.
+  void initSplitRowRange();
+
   void incrementDepth();
 
   void decrementDepth(DelimType& delim);
@@ -184,9 +188,9 @@ class TextRowReader : public dwio::common::RowReader {
 
   static bool getBoolean(TextRowReader& th, bool& isNull, DelimType& delim);
 
-  static float getFloat(TextRowReader& th, bool& isNull, DelimType& delim);
-
-  static double getDouble(TextRowReader& th, bool& isNull, DelimType& delim);
+  // Parses one field as T and sets isNull for malformed input.
+  template <typename T>
+  static T getFloatingPoint(TextRowReader& th, bool& isNull, DelimType& delim);
 
   void readElement(
       const std::shared_ptr<const Type>& t,
@@ -212,7 +216,6 @@ class TextRowReader : public dwio::common::RowReader {
 
   const std::shared_ptr<FileContents> contents_;
   const std::shared_ptr<const TypeWithId> schemaWithId_;
-  const std::shared_ptr<velox::common::ScanSpec>& scanSpec_;
 
   mutable std::shared_ptr<const TypeWithId> selectedSchema_;
 
@@ -229,6 +232,8 @@ class TextRowReader : public dwio::common::RowReader {
   std::string_view preLoadedUnreadData_;
   int unreadIdx_;
   uint64_t limit_; // lowest offset not in the range
+  // 'currentRow_' at which to stop reading. Set by the split row range.
+  std::optional<uint64_t> endRow_;
   uint64_t fileLength_;
   std::string ownedString_;
   std::shared_ptr<dwio::common::DataBuffer<char>> varBinBuf_;

@@ -116,19 +116,19 @@ class NoisySumResultVerifier : public ResultVerifier {
     // The expected result and actual result are grouped by the same keys,
     // but the rows may be in different order. So we need to union the results.
     // Create sources for expected and actual results
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto expectedSource = PlanBuilder(planNodeIdGenerator)
-                              .values({expectedNoNoise_})
+    PlanBuilder builder;
+    auto expectedSource = builder.newPlan()
+                              .values(expectedNoNoise_)
                               .appendColumns({"'expected' as label"})
                               .planNode();
-    auto actualSource = PlanBuilder(planNodeIdGenerator)
-                            .values({result})
+    auto actualSource = builder.newPlan()
+                            .values(result)
                             .appendColumns({"'actual' as label"})
                             .planNode();
 
     // Combine expected and actual results by grouping keys using map_agg
     auto mapAgg = fmt::format("map_agg(label, {}) as m", name_);
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = builder.newPlan()
                     .localPartition({}, {expectedSource, actualSource})
                     .singleAggregation(groupingKeys_, {mapAgg})
                     .project({"m['actual'] as a", "m['expected'] as e"})
@@ -230,7 +230,6 @@ class NoisySumResultVerifier : public ResultVerifier {
     // combinations of grouping keys and aggregate column, preserving the
     // original row type.
     VELOX_CHECK(!input.empty());
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
     // Create partition keys that include both the original grouping keys
     // and the aggregate column to ensure proper deduplication for DISTINCT
@@ -249,7 +248,7 @@ class NoisySumResultVerifier : public ResultVerifier {
     // unique combination, then filter to keep only those rows(row number = 1)
     auto windowExpr = fmt::format("row_number() over ({}) as rn", partitionBy);
 
-    auto builder = PlanBuilder(planNodeIdGenerator).values(input);
+    auto builder = PlanBuilder().values(input);
 
     // Apply mask filter first if it exists
     if (mask != nullptr) {
@@ -258,7 +257,7 @@ class NoisySumResultVerifier : public ResultVerifier {
 
     auto source = builder.window({windowExpr})
                       .filter("rn = 1")
-                      .project(asRowType(input[0]->type())->names())
+                      .project(input[0]->rowType()->names())
                       .planNode();
     auto deduplicated =
         AssertQueryBuilder(source).copyResults(input[0]->pool());
@@ -326,7 +325,7 @@ class NoisySumResultVerifier : public ResultVerifier {
       }
 
       // Create a new RowType with first column changed to double
-      auto originalRowType = asRowType(rowVector->type());
+      auto originalRowType = rowVector->rowType();
       std::vector<std::string> names = originalRowType->names();
       std::vector<TypePtr> types = originalRowType->children();
 

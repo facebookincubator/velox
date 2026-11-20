@@ -19,6 +19,7 @@
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/HashBuildStatNames.h"
 #include "velox/exec/HashTableCache.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
@@ -342,7 +343,7 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
         numPartitionBits;
     // Disable spilling if exceeding the max spill level and the query might run
     // out of memory if the restored partition still can't fit in memory.
-    if (FOLLY_UNLIKELY(config->exceedSpillLevelLimit(startPartitionBit))) {
+    if (config->exceedSpillLevelLimit(startPartitionBit)) [[unlikely]] {
       RECORD_METRIC_VALUE(kMetricMaxSpillLevelExceededCount);
       LOG(WARNING) << "Exceeded spill level limit: " << config->maxSpillLevel
                    << ", and disable spilling for memory pool: "
@@ -683,7 +684,7 @@ void HashBuild::spillInput(const RowVectorPtr& input) {
   vector_size_t numSpillInputs = 0;
   for (auto row = 0; row < numInput; ++row) {
     const auto partition = spillPartitions_[row];
-    if (FOLLY_UNLIKELY(!activeRows_.isValid(row))) {
+    if (!activeRows_.isValid(row)) [[unlikely]] {
       continue;
     }
     activeRows_.setValid(row, false);
@@ -1156,7 +1157,7 @@ void HashBuild::addRuntimeStats() {
   // Add max spilling level stats if spilling has been triggered.
   if (spiller_ != nullptr && spiller_->spillTriggered()) {
     lockedStats->addRuntimeStat(
-        std::string(HashBuild::kMaxSpillLevel),
+        std::string(HashBuildStatNames::kMaxSpillLevel),
         RuntimeCounter(
             spillConfig()->spillLevel(spiller_->hashBits().begin())));
   }
@@ -1475,7 +1476,7 @@ void HashBuildSpiller::spill(
     const RowVectorPtr& spillVector) {
   VELOX_CHECK(spillTriggered_);
   VELOX_CHECK(!finalized_);
-  if (FOLLY_UNLIKELY(spillVector == nullptr)) {
+  if (spillVector == nullptr) [[unlikely]] {
     return;
   }
   if (!state_.isPartitionSpilled(partitionId)) {
@@ -1517,7 +1518,8 @@ void HashBuild::abandonHashBuildDedup() {
   // that was previously inserted into the hash table is already in the
   // RowContainer.
   addRuntimeStat(
-      std::string(HashBuild::kAbandonBuildNoDupHash), RuntimeCounter(1));
+      std::string(HashBuildStatNames::kAbandonBuildNoDupHash),
+      RuntimeCounter(1));
   abandonHashBuildDedup_ = true;
   table_->setAllowDuplicates(true);
   lookup_.reset();
