@@ -305,7 +305,10 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithOutputBuffer) {
   for (const auto& pipeStats : taskStats.pipelineStats) {
     for (const auto& opStats : pipeStats.operatorStats) {
       EXPECT_EQ(
-          9, opStats.runtimeStats.find("runningFinishWallNanos")->second.count);
+          9,
+          opStats.runtimeStats
+              .find(std::string(OperatorStats::kRunningFinishWallNanos))
+              ->second.count);
     }
   }
 
@@ -741,8 +744,8 @@ DEBUG_ONLY_TEST_F(
     // Task must be finished at this stage.
     ASSERT_EQ(task->state(), exec::TaskState::kFinished);
 
-    auto taskStats = exec::toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(joinNode->id());
+    const auto planStats =
+        exec::PlanNodeStats::extract(task->taskStats(), joinNode->id());
     if (testData.expectedSpill) {
       ASSERT_GT(planStats.spilledBytes, 0);
     } else {
@@ -874,8 +877,8 @@ DEBUG_ONLY_TEST_F(
   // Task is at running state because the build side is lingering.
   ASSERT_EQ(task->state(), exec::TaskState::kRunning);
 
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  auto& planStats = taskStats.at(joinNode->id());
+  const auto planStats =
+      exec::PlanNodeStats::extract(task->taskStats(), joinNode->id());
   ASSERT_GT(planStats.spilledBytes, 0);
 
   // Finalize the last probe split.
