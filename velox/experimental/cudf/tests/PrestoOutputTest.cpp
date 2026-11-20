@@ -37,6 +37,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/serializers/PrestoHeader.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/PrestoSerializerSerializationUtils.h"
@@ -389,7 +390,7 @@ class PrestoOutputTest
       });
       run.destinations.push_back(std::move(result));
     }
-    EXPECT_TRUE(waitForTaskCompletion(run.task.get(), 10'000'000))
+    EXPECT_TRUE(TaskMonitor::waitForCompletion(*run.task, 10'000'000))
         << run.task->taskId();
     return run;
   }
@@ -905,7 +906,7 @@ TEST_F(PrestoOutputTest, timestampOverflow) {
         {{cudf_velox::CudfConfig::kCudfPrestoOutputEnabled,
           gpu ? "true" : "false"}});
     task->start(1);
-    ASSERT_TRUE(waitForTaskFailure(task.get(), 10'000'000));
+    ASSERT_TRUE(TaskMonitor::waitForFailure(*task, 10'000'000));
     EXPECT_NE(task->errorMessage().find("milliseconds"), std::string::npos)
         << task->errorMessage();
   }
@@ -1160,7 +1161,7 @@ TEST_F(PrestoOutputTest, deviceMemoryWhileBlocked) {
   drain(*task, 0, [&](std::unique_ptr<folly::IOBuf> page) {
     pages.push_back(deserialize(std::move(page), rowType, options));
   });
-  ASSERT_TRUE(waitForTaskCompletion(task.get(), 10'000'000));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*task, 10'000'000));
   assertEqualVectors(input, concat(pages));
 }
 
@@ -1193,9 +1194,9 @@ TEST_F(PrestoOutputTest, abortWhileBlocked) {
   }
   EXPECT_GT(pinned.live(), 0);
   task->requestAbort();
-  ASSERT_TRUE(waitForTaskAborted(task.get(), 10'000'000));
+  ASSERT_TRUE(TaskMonitor::waitForAbort(*task, 10'000'000));
   task.reset();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   EXPECT_EQ(pinned.live(), 0);
 }
 
@@ -1241,7 +1242,7 @@ TEST_F(PrestoOutputTest, pagesFreedOnConsumerThread) {
   drain(*task, 0, [&](std::unique_ptr<folly::IOBuf> page) {
     pages.push_back(std::move(page));
   });
-  ASSERT_TRUE(waitForTaskCompletion(task.get(), 10'000'000));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*task, 10'000'000));
   EXPECT_EQ(
       operatorTypes(*task, outputId),
       std::set<std::string>{"CudfPrestoOutput"});
