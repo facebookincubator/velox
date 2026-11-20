@@ -128,6 +128,7 @@ class SpillReadFile : public serializer::SerializedPageFileReader {
       const SpillFileInfo& fileInfo,
       uint64_t bufferSize,
       memory::MemoryPool* pool,
+      folly::Executor* readAheadExecutor,
       exec::SpillStats* stats);
 
   uint32_t id() const {
@@ -157,6 +158,7 @@ class SpillReadFile : public serializer::SerializedPageFileReader {
       const std::vector<SpillSortKey>& sortingKeys,
       common::CompressionKind compressionKind,
       memory::MemoryPool* pool,
+      folly::Executor* readAheadExecutor,
       exec::SpillStats* stats);
 
   // Records spill read stats at the end of read input.
