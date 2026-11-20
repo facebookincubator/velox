@@ -947,6 +947,39 @@ TEST_F(TableScanTest, rawInputBytesFromSplitFileSize) {
   }
 }
 
+// The cuDF data source copies 'cacheable' from the Hive split. KvikIO reads go
+// through the async data cache only for a cacheable split.
+TEST_F(TableScanTest, kvikioReadsUseCacheOnlyForCacheableSplits) {
+  using cudf_velox::connector::hive::CudfHiveConfig;
+  auto vectors = makeVectors(2, 100);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
+
+  for (const bool cacheable : {false, true}) {
+    SCOPED_TRACE(fmt::format("cacheable={}", cacheable));
+    auto split = hive::HiveConnectorSplitBuilder(filePath->getPath())
+                     .connectorId(kCudfHiveConnectorId)
+                     .fileFormat(dwio::common::FileFormat::PARQUET)
+                     .cacheable(cacheable)
+                     .build();
+    auto task = AssertQueryBuilder(tableScanNode(), duckDbQueryRunner_)
+                    .connectorSessionProperty(
+                        kCudfHiveConnectorId,
+                        CudfHiveConfig::kUseBufferedInputSession,
+                        "false")
+                    .split(split)
+                    .assertResults("SELECT * FROM tmp");
+    const auto missBytes =
+        getTableScanRuntimeStat(task, "cudfKvikioCacheMissBytes");
+    if (cacheable) {
+      EXPECT_GT(missBytes, 0);
+    } else {
+      EXPECT_EQ(missBytes, 0);
+    }
+  }
+}
+
 TEST_P(TableScanTestParameterized, scanOnNonDefaultGpu) {
   int deviceCount = 0;
   ASSERT_EQ(cudaSuccess, cudaGetDeviceCount(&deviceCount));
@@ -2000,6 +2033,13 @@ TEST_F(TableScanTest, splitCarriesFileSize) {
                      .has_value())
         << notASize;
   }
+
+  auto notCacheable = CudfHiveConnectorSplitBuilder("/data/file.parquet")
+                          .cacheable(false)
+                          .build();
+  auto notCacheableCopy =
+      CudfHiveConnectorSplit::create(notCacheable->serialize());
+  EXPECT_FALSE(notCacheableCopy->cacheable);
 }
 
 // Verify that a `count(*)` scan with no projected columns returns the correct
