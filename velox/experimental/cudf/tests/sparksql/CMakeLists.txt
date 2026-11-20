@@ -46,3 +46,15 @@ velox_add_cudf_test(
   SOURCES ExpressionSelectionTest.cpp Main.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_spark
 )
+
+velox_add_cudf_test(
+  NAME velox_cudf_spark_legacy_cast_test
+  SOURCES LegacyCastTest.cpp Main.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_spark velox_functions_test_lib
+)
+
+velox_add_cudf_test(
+  NAME velox_cudf_spark_decimal_comparison_test
+  SOURCES DecimalComparisonTest.cpp Main.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_spark velox_functions_test_lib
+)

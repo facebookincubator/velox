@@ -36,6 +36,45 @@ Velox-cuDF builds are included in Velox CI as part of the [adapters build](https
 
 Velox-cuDF provides several configuration properties to control GPU execution behavior, memory management, and debugging. These configurations are available when compiled with cuDF support and can be set via Velox's configuration system. For a complete list of cuDF-specific configuration properties and their descriptions, see the [Cudf-specific Configuration section](https://facebookincubator.github.io/velox/configs.html#cudf-specific-configuration-experimental) in the Velox configuration documentation.
 
+## Limitations and compatibility
+
+### Spark numeric casts and decimal comparisons
+
+`spark_legacy_cast` supports conversions between Boolean, integer, REAL, and
+DOUBLE types, numeric-to-DECIMAL casts, and decimal rescaling. String, date/time,
+complex-type, DECIMAL-to-non-DECIMAL, and `spark_ansi_cast` conversions are not
+supported by this path. Unsupported casts use the CPU only when fallback is
+enabled; otherwise GPU validation rejects them.
+
+Floating-point-to-decimal casts follow Spark 3.5 on Java 17 by default, including
+HALF_UP rounding and NULL on precision overflow. This path uses the decimal
+representation from Java 8/11/17; newer Java rendering rules are not implemented.
+It uses a fast path when the result is unambiguous and an exact fallback for
+other values.
+
+The optional `cudf.numeric_float_to_decimal_enabled` mode converts REAL/DOUBLE
+values directly, without reconstructing their Java decimal representation.
+It can produce different values or NULL results. For example,
+REAL `0.1f` cast to `DECIMAL(18,18)` becomes `0.100000001490116119` instead of
+`0.100000001490116120`, and DOUBLE `1e38` cast to `DECIMAL(38,0)` produces a
+value where Spark returns NULL. Differences can exceed one unit in the last
+decimal place and can change filters, joins, or aggregates. Input NULLs remain
+NULL, and nonfinite inputs return NULL in both modes.
+
+Numeric mode is experimental and disabled by default. To enable it, pass
+`cudf.numeric_float_to_decimal_enabled=true` to `CudfConfig::initialize` before
+creating expressions. Integrations must forward this setting to Velox;
+changing it does not affect expressions that already exist.
+
+Floating-point-to-decimal and floating-point-to-integer casts of foldable
+constant expressions are rejected during GPU validation because the CPU
+optimizer can fold them with different rounding or overflow results. Columns
+that use constant encoding are supported.
+
+The six `decimal_*` comparison functions support NULLs and operands with
+different scales. Validation rejects a comparison if aligning the scales could
+overflow the common decimal storage type.
+
 ### Testing Velox with cuDF
 
 Tests with Velox-cuDF can only be run on GPU-enabled hardware. The Velox-cuDF tests in [experimental/cudf/tests](https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/tests) include several types of tests:
