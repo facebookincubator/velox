@@ -56,11 +56,16 @@ TEST(PageBeforeGuardTest, copyToEnd) {
   PageBeforeGuard page;
   const std::vector<int32_t> source = {1, 2, 3};
   auto copy = page.copyToEnd(source);
-  EXPECT_THAT(copy, testing::ElementsAre(1, 2, 3));
+  // Older gmock needs a const_iterator, which std::span lacks before C++23.
+  EXPECT_THAT(
+      std::vector<int32_t>(copy.begin(), copy.end()),
+      testing::ElementsAre(1, 2, 3));
   EXPECT_EQ(reinterpret_cast<uint8_t*>(copy.data() + 3), page.end());
 
   auto list = page.copyToEnd({int16_t{4}, int16_t{5}});
-  EXPECT_THAT(list, testing::ElementsAre(4, 5));
+  EXPECT_THAT(
+      std::vector<int16_t>(list.begin(), list.end()),
+      testing::ElementsAre(4, 5));
   EXPECT_EQ(reinterpret_cast<uint8_t*>(list.data() + 2), page.end());
 }
 
