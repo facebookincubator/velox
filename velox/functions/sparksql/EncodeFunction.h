@@ -63,14 +63,14 @@ Status encode(
 
 } // namespace detail
 
+/// Registers encode with input-buffer retention only when borrowing is
+/// possible.
+void registerEncode(const std::string& name);
+
 // Encodes a VARCHAR into VARBINARY using Spark-compatible charset semantics.
 template <typename T>
 struct EncodeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  // Keeps borrowed output bytes alive after the input vector is released.
-  // The adapter retains input buffers even for conversion-only batches.
-  static constexpr int32_t reuse_strings_from_arg = 0;
 
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,

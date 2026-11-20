@@ -152,9 +152,12 @@ String Functions
     This setting corresponds to Spark's ``spark.sql.legacy.javaCharsets``.
     Spark accepts any JDK charset when enabled; Velox raises an error for names
     outside the subset above.
-    Names follow Spark's locale-independent lowercasing: ASCII case and the
-    Kelvin sign (U+212A) match, but names must otherwise match exactly. The
-    allowlist and encoder mappings are generated from JDK 17, including
+    Names match ASCII case-insensitively and accept the Kelvin sign (U+212A),
+    following Spark's locale-independent lowercasing. Unlike Spark on JDK 17,
+    Velox rejects variants containing dotless i (U+0131) or long s (U+017F),
+    even for ``IBM037``, ``windows-1255``, ``windows-1256``, and ``windows-1258``,
+    where JDK 17 accepts such spellings. Names must otherwise match exactly.
+    The allowlist and encoder mappings are generated from JDK 17, including
     encoder-only mappings. The initial subset covers the ISO-8859 and
     Windows-125x families above, KOI8-R/U, IBM437 for DOS, and IBM037 for EBCDIC.
     This is an explicit coverage choice, not every encoder that passes the

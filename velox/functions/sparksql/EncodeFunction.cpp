@@ -20,6 +20,7 @@
 #include <array>
 #include <compare>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -27,6 +28,7 @@
 #include <folly/Range.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/functions/Registerer.h"
 #include "velox/functions/lib/Utf8Utils.h"
 #include "velox/functions/lib/string/StringCore.h"
 #include "velox/functions/sparksql/EncodeCharsets.h"
@@ -370,26 +372,10 @@ Status encodeUtf32(
 } // namespace
 
 Charset resolveCharset(const StringView& charset, bool legacyJavaCharsets) {
-  if (equalsIgnoreAsciiCase(charset, "UTF-8")) {
-    return {CharsetType::kUtf8};
-  }
-  if (equalsIgnoreAsciiCase(charset, "US-ASCII")) {
-    return {CharsetType::kUsAscii};
-  }
-  if (equalsIgnoreAsciiCase(charset, "ISO-8859-1")) {
-    return {CharsetType::kIso8859_1};
-  }
-  if (equalsIgnoreAsciiCase(charset, "UTF-16")) {
-    return {CharsetType::kUtf16};
-  }
-  if (equalsIgnoreAsciiCase(charset, "UTF-16BE")) {
-    return {CharsetType::kUtf16BE};
-  }
-  if (equalsIgnoreAsciiCase(charset, "UTF-16LE")) {
-    return {CharsetType::kUtf16LE};
-  }
-  if (equalsIgnoreAsciiCase(charset, "UTF-32")) {
-    return {CharsetType::kUtf32};
+  for (const auto& [name, type] : kStandardCharsets) {
+    if (equalsIgnoreAsciiCase(charset, name)) {
+      return {type};
+    }
   }
   if (legacyJavaCharsets) {
     const auto findAlias = [&](const auto& aliases) {
@@ -452,3 +438,65 @@ Status encode(
 }
 
 } // namespace facebook::velox::functions::sparksql::detail
+
+namespace facebook::velox::functions::sparksql {
+namespace {
+
+// Keeps borrowed legacy ASCII bytes alive after the input vector is released.
+template <typename T>
+struct BorrowingEncodeFunction : EncodeFunction<T> {
+  static constexpr int32_t reuse_strings_from_arg = 0;
+};
+
+template <template <typename> class Function>
+using EncodeFunctionHolder = core::UDFHolder<
+    Function<exec::VectorExec>,
+    exec::VectorExec,
+    Varbinary,
+    ConstantChecker<Varchar, Varchar>,
+    Varchar,
+    Varchar>;
+
+using EncodeFunctionFactoryBase = exec::SimpleFunctionAdapterFactoryImpl<
+    EncodeFunctionHolder<EncodeFunction>>;
+
+// Chooses buffer ownership once per expression, without per-row overhead.
+class EncodeFunctionFactory : public EncodeFunctionFactoryBase {
+ public:
+  std::unique_ptr<exec::VectorFunction> createVectorFunction(
+      const std::vector<TypePtr>& inputTypes,
+      const std::vector<VectorPtr>& constantInputs,
+      const core::QueryConfig& config,
+      memory::MemoryPool* memoryPool) const override {
+    bool mayBorrowInput = SparkQueryConfig{config}.legacyJavaCharsets();
+    if (mayBorrowInput && !constantInputs.empty() && constantInputs[1]) {
+      const auto& charset = constantInputs[1];
+      if (charset->isNullAt(0)) {
+        mayBorrowInput = false;
+      } else {
+        const auto resolved = detail::resolveCharset(
+            charset->as<SimpleVector<StringView>>()->valueAt(0), true);
+        mayBorrowInput =
+            resolved.type == detail::CharsetType::kLegacySingleByte &&
+            detail::single_byte::kCharsets[resolved.legacyIndex]
+                .asciiCompatible;
+      }
+    }
+    if (mayBorrowInput) {
+      return std::make_unique<exec::SimpleFunctionAdapter<
+          EncodeFunctionHolder<BorrowingEncodeFunction>>>(
+          inputTypes, config, constantInputs, memoryPool);
+    }
+    return EncodeFunctionFactoryBase::createVectorFunction(
+        inputTypes, constantInputs, config, memoryPool);
+  }
+};
+
+} // namespace
+
+void registerEncode(const std::string& name) {
+  exec::mutableSimpleFunctions().registerFunction<EncodeFunctionFactory>(
+      {name}, {}, true);
+}
+
+} // namespace facebook::velox::functions::sparksql
