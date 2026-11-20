@@ -351,10 +351,9 @@ class PartitionedEliasFanoEncoding final
       Buffer& buffer,
       const Encoding::Options& options = {});
 
-  /// Estimates the encoded size, or returns nullopt for oversized input, for
-  /// input with fewer than two partitions, which EliasFano stores without a
-  /// directory, and for partitions shorter than kMinRowsPerPartition on
-  /// average.
+  /// Estimates the encoded size, including the directory entries of every
+  /// partition, or returns nullopt for oversized input and for input with
+  /// fewer than two partitions, which EliasFano stores without a directory.
   static std::optional<uint64_t> estimateSize(
       std::span<const physicalType> values,
       const Encoding::Options& options = {});
@@ -369,10 +368,6 @@ class PartitionedEliasFanoEncoding final
 
   using GroupEncoding = EliasFanoEncoding<uint64_t>;
   using GroupList = GroupEncoding::List;
-
-  // Reads keep about 70 bytes per partition, so shorter partitions cost more
-  // memory per row than a per-value encoding saves on disk.
-  static constexpr uint32_t kMinRowsPerPartition{64};
 
   // Calls 'visit(start, numRows, range)' for each partition in row order and
   // stops once it returns false.
@@ -654,18 +649,25 @@ void PartitionedEliasFanoEncoding<T>::materializeAt(
   std::array<uint64_t, kBatchSize> shiftedValues;
   const auto end = offset + rowCount;
   auto partitionIndex = findPartition(offset);
-  // Each batch stays within one partition, so it restores with one base.
+  // Each batch stays within one group, so it decodes with one list seek, and
+  // restores the rows of each partition it covers with that partition's base.
   for (auto row = offset; row < end;) {
-    const auto& partition = partitions_[partitionIndex];
-    const auto length = std::min({end, partition.end, row + kBatchSize}) - row;
-    partition.groupList.materializeAt(
-        row - partition.groupStartRow, length, shiftedValues.data());
-    for (uint32_t i = 0; i < length; ++i) {
-      output[row - offset + i] = partition.restore(shiftedValues[i]);
-    }
-    row += length;
-    if (row == partition.end) {
-      ++partitionIndex;
+    const auto& groupList = partitions_[partitionIndex].groupList;
+    const auto groupStartRow = partitions_[partitionIndex].groupStartRow;
+    const auto batchEnd =
+        std::min({end, groupStartRow + groupList.rowCount(), row + kBatchSize});
+    groupList.materializeAt(
+        row - groupStartRow, batchEnd - row, shiftedValues.data());
+    const auto* shifted = shiftedValues.data();
+    while (row < batchEnd) {
+      const auto& partition = partitions_[partitionIndex];
+      const auto partitionEnd = std::min(partition.end, batchEnd);
+      for (; row < partitionEnd; ++row) {
+        output[row - offset] = partition.restore(*shifted++);
+      }
+      if (row == partition.end) {
+        ++partitionIndex;
+      }
     }
   }
 }
@@ -767,8 +769,7 @@ std::optional<uint64_t> PartitionedEliasFanoEncoding<T>::estimateSize(
   const auto groupBytes = planner.totalBytes();
   // Fewer than two partitions decline in favor of plain EliasFano, which
   // stores the stream without directories.
-  if (!groupBytes.has_value() || numPartitions < 2 ||
-      values.size() < uint64_t{kMinRowsPerPartition} * numPartitions) {
+  if (!groupBytes.has_value() || numPartitions < 2) {
     return std::nullopt;
   }
   // Estimates each directory as FixedBitWidth.

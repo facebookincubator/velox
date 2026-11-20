@@ -825,7 +825,7 @@ TEST_F(HierarchicalKeyReaderTest, seeksPartitionedEliasFanoSequences) {
 
 TEST_F(HierarchicalKeyReaderTest, picksPartitionedEliasFanoForLongRuns) {
   // The same number of ascending level-1 values, first in a few long runs and
-  // then in many runs too short to partition.
+  // then in many 4-row runs, which store smaller as FixedBitWidth.
   constexpr uint64_t kNumRows{600};
   for (const uint64_t rowsPerParent : {200, 4}) {
     SCOPED_TRACE(rowsPerParent);
