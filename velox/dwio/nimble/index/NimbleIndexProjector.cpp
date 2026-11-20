@@ -21,6 +21,7 @@
 #include <limits>
 #include <numeric>
 #include <optional>
+#include <typeinfo>
 #include <utility>
 
 #include "folly/ScopeGuard.h"
@@ -348,10 +349,12 @@ void NimbleIndexProjector::initStreamChecksum(bool verifyStreamChecksums) {
 }
 
 void NimbleIndexProjector::loadStripes(
-    const Request& request,
+    const index::IndexLookup::LookupRequest& request,
     const Options& options) {
   initRequest(request, options);
-  if (!stripeKeyLayout_ || !options.coLoadKeyStreams) {
+  if (!stripeKeyLayout_ || !options.coLoadKeyStreams ||
+      request.options().rowRange.has_value() ||
+      typeid(request) != typeid(index::IndexLookup::LookupRequest)) {
     lookupRows();
     prepareStripes();
     loadStripeStreams();
@@ -367,7 +370,7 @@ void NimbleIndexProjector::loadStripes(
 }
 
 NimbleIndexProjector::SerializedResult NimbleIndexProjector::projectStreams(
-    const Request& request,
+    const index::IndexLookup::LookupRequest& request,
     const Options& options) {
   SCOPE_EXIT {
     clearRequest();
@@ -378,7 +381,7 @@ NimbleIndexProjector::SerializedResult NimbleIndexProjector::projectStreams(
 
 folly::coro::Task<NimbleIndexProjector::RowProjectionResult>
 NimbleIndexProjector::co_projectRows(
-    const Request& request,
+    const index::IndexLookup::LookupRequest& request,
     const Options& options) {
   ensureStreamReader();
   SCOPE_EXIT {
@@ -972,11 +975,14 @@ void NimbleIndexProjector::prepareStripes() {
 }
 
 void NimbleIndexProjector::initRequest(
-    const Request& request,
+    const index::IndexLookup::LookupRequest& request,
     const Options& options) {
   NIMBLE_CHECK_NULL(ctx_.request, "Projection is not reentrant");
   NIMBLE_CHECK_NULL(ctx_.options, "Projection is not reentrant");
-  NIMBLE_CHECK_GT(request.keyBounds.size(), 0, "keyBounds must not be empty");
+  NIMBLE_USER_CHECK_EQ(
+      request.mode(),
+      index::IndexLookup::LookupRequest::Mode::RangeScan,
+      "Projection requires a range-scan request");
   NIMBLE_CHECK(
       std::isfinite(options.maxOverfetchRowsRatio) &&
           options.maxOverfetchRowsRatio >= 0.0 &&
@@ -985,7 +991,7 @@ void NimbleIndexProjector::initRequest(
       options.maxOverfetchRowsRatio);
   ctx_.request = &request;
   ctx_.options = &options;
-  ctx_.numRequests = static_cast<uint32_t>(request.keyBounds.size());
+  ctx_.numRequests = static_cast<uint32_t>(request.size());
 }
 
 void NimbleIndexProjector::clearRequest() {
@@ -1045,13 +1051,8 @@ void NimbleIndexProjector::lookupRows() {
         recordStatsTiming(&Stats::lookupTiming, timing);
       }};
 
-  // Without a co-load, the lookup reads the key chunks that it needs from the
-  // file. A co-load loads no key chunk only when no request selects a stripe,
-  // so the lookup then reads none.
   const auto result = ctx_.coLoadedKeyChunks.empty()
-      ? clusterIndex_->lookup(
-            index::IndexLookup::LookupRequest::rangeScan(
-                ctx_.request->keyBounds))
+      ? clusterIndex_->lookup(*ctx_.request)
       : lookupCoLoadedRows();
 
   struct ResolvedRequest {
@@ -1169,7 +1170,7 @@ RowRange NimbleIndexProjector::coLoadedRequestRows(
   if (firstKeyChunk == nullptr) {
     return {};
   }
-  const auto& keyBounds = ctx_.request->keyBounds[requestIndex];
+  const auto& keyBounds = ctx_.request->rangeBound(requestIndex);
   auto startRow =
       static_cast<uint32_t>(tablet_->stripeStartRow(stripes.startStripe));
   if (keyBounds.lowerKey.has_value()) {
@@ -1363,8 +1364,7 @@ void NimbleIndexProjector::coLoadStripes() {
         timingEnabled_, [this](const velox::CpuWallTiming& timing) {
           recordStatsTiming(&Stats::lookupTiming, timing);
         }};
-    ctx_.coLoadRequestStripes = clusterIndex_->lookupStripes(
-        index::IndexLookup::LookupRequest::rangeScan(ctx_.request->keyBounds));
+    ctx_.coLoadRequestStripes = clusterIndex_->lookupStripes(*ctx_.request);
   }
   const auto& requestStripes = ctx_.coLoadRequestStripes;
   selectStripesToCoLoad(requestStripes);
@@ -1391,7 +1391,7 @@ void NimbleIndexProjector::coLoadStripes() {
     }
     if (!isCoLoaded(stripes.startStripe)) {
       NIMBLE_CHECK(
-          ctx_.request->keyBounds[requestIndex].lowerKey.has_value(),
+          ctx_.request->rangeBound(requestIndex).lowerKey.has_value(),
           "A request without a lower key must start in a loaded stripe");
       ctx_.unloadedRequests.emplace_back(requestIndex);
     }
@@ -2408,7 +2408,7 @@ void NimbleIndexProjector::prepareResumeKeys() {
       if (resumeKey.has_value()) {
         continue;
       }
-      const auto& keyBounds = ctx_.request->keyBounds[range.requestIndex];
+      const auto& keyBounds = ctx_.request->rangeBound(range.requestIndex);
       NIMBLE_CHECK(
           keyBounds.lowerKey.has_value(),
           "Request {} has no lowerKey: unbounded lower requests start from "
@@ -2423,7 +2423,7 @@ void NimbleIndexProjector::prepareResumeKeys() {
   // or not it matches rows.
   for (const auto requestIndex : ctx_.unloadedRequests) {
     ctx_.resumeKeys[requestIndex] =
-        *ctx_.request->keyBounds[requestIndex].lowerKey;
+        *ctx_.request->rangeBound(requestIndex).lowerKey;
   }
 }
 
