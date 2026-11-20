@@ -52,11 +52,17 @@ uint32_t countRuns(const std::vector<T>& values) {
   return runs;
 }
 
-// Returns 'numRuns' ascending runs of random lengths and starting values.
+// Returns 'numRuns' ascending runs of random lengths in [minLength, maxLength]
+// and random starting values.
 template <typename T>
-std::vector<T> makeRuns(uint32_t numRuns, uint64_t seed) {
+std::vector<T> makeRuns(
+    uint32_t numRuns,
+    uint64_t seed,
+    uint32_t minLength,
+    uint32_t maxLength) {
   std::mt19937_64 random{seed};
-  std::uniform_int_distribution<uint32_t> lengthDistribution{64, 200};
+  std::uniform_int_distribution<uint32_t> lengthDistribution{
+      minLength, maxLength};
   std::uniform_int_distribution<int64_t> startDistribution{
       std::is_signed_v<T> ? -1'000 : 0, 1'000};
   std::uniform_int_distribution<int64_t> deltaDistribution{0, 50};
@@ -128,6 +134,33 @@ class PartitionedEliasFanoEncodingTest : public ::testing::Test {
       values.push_back(value);
     }
     return values;
+  }
+
+  // Checks that the estimate of 'input' is within 5% of its encoded size.
+  void expectEstimateTracksEncodedSize(const std::vector<uint64_t>& input) {
+    const auto values = toVector(input);
+    const auto estimate =
+        nimble::PartitionedEliasFanoEncoding<uint64_t>::estimateSize(
+            std::span<const uint64_t>{values.data(), values.size()});
+    ASSERT_TRUE(estimate.has_value());
+
+    auto policy =
+        std::make_unique<nimble::ManualEncodingSelectionPolicy<uint64_t>>(
+            std::vector<std::pair<nimble::EncodingType, float>>{
+                {nimble::EncodingType::PartitionedEliasFano, 1.0},
+                {nimble::EncodingType::FixedBitWidth, 10.0},
+            },
+            /*compressionOptions=*/std::nullopt,
+            /*identifier=*/std::nullopt);
+    const auto encoded = nimble::EncodingFactory::encode<uint64_t>(
+        std::move(policy), values, *buffer_);
+    ASSERT_EQ(
+        nimble::EncodingPrefix::encodingType(encoded),
+        nimble::EncodingType::PartitionedEliasFano);
+    EXPECT_NEAR(
+        static_cast<double>(*estimate),
+        static_cast<double>(encoded.size()),
+        0.05 * encoded.size());
   }
 
   template <typename T>
@@ -418,11 +451,21 @@ class PartitionedEliasFanoEncodingTest : public ::testing::Test {
 };
 
 TEST_F(PartitionedEliasFanoEncodingTest, roundTripRandomPartitions) {
-  roundTrip(makeRuns<uint32_t>(/*numRuns=*/200, /*seed=*/1));
-  roundTrip(makeRuns<uint64_t>(/*numRuns=*/200, /*seed=*/2));
-  roundTrip(makeRuns<int32_t>(/*numRuns=*/200, /*seed=*/3));
-  roundTrip(makeRuns<int64_t>(/*numRuns=*/200, /*seed=*/4));
-  roundTrip(makeRuns<int16_t>(/*numRuns=*/50, /*seed=*/5));
+  roundTrip(
+      makeRuns<uint32_t>(
+          /*numRuns=*/200, /*seed=*/1, /*minLength=*/64, /*maxLength=*/200));
+  roundTrip(
+      makeRuns<uint64_t>(
+          /*numRuns=*/200, /*seed=*/2, /*minLength=*/64, /*maxLength=*/200));
+  roundTrip(
+      makeRuns<int32_t>(
+          /*numRuns=*/200, /*seed=*/3, /*minLength=*/64, /*maxLength=*/200));
+  roundTrip(
+      makeRuns<int64_t>(
+          /*numRuns=*/200, /*seed=*/4, /*minLength=*/64, /*maxLength=*/200));
+  roundTrip(
+      makeRuns<int16_t>(
+          /*numRuns=*/50, /*seed=*/5, /*minLength=*/64, /*maxLength=*/200));
 }
 
 TEST_F(PartitionedEliasFanoEncodingTest, roundTripDocumentedExample) {
@@ -543,22 +586,56 @@ TEST_F(
           .has_value());
 }
 
-TEST_F(PartitionedEliasFanoEncodingTest, estimateRejectsShortPartitions) {
-  // Two 63-row runs average below the 64 rows a partition needs; two 64-row
-  // runs do not.
-  const auto estimate = [&](uint32_t runLength) {
-    std::vector<uint64_t> input;
-    for (uint32_t run = 0; run < 2; ++run) {
-      for (uint64_t value = 0; value < runLength; ++value) {
-        input.push_back(value);
-      }
-    }
-    const auto values = toVector(input);
-    return nimble::PartitionedEliasFanoEncoding<uint64_t>::estimateSize(
-        std::span<const uint64_t>{values.data(), values.size()});
+TEST_F(PartitionedEliasFanoEncodingTest, selectionWeighsPartitionsBySize) {
+  // Random values, whose ascending runs average about two rows, store smaller
+  // as FixedBitWidth. Short runs of small gaps above wide bases store smaller
+  // as PartitionedEliasFano.
+  const auto encodeWith =
+      [&](const std::vector<uint32_t>& input,
+          std::vector<std::pair<nimble::EncodingType, float>> readFactors) {
+        auto policy =
+            std::make_unique<nimble::ManualEncodingSelectionPolicy<uint32_t>>(
+                std::move(readFactors),
+                /*compressionOptions=*/std::nullopt,
+                /*identifier=*/std::nullopt);
+        return nimble::EncodingFactory::encode<uint32_t>(
+            std::move(policy), toVector(input), *buffer_);
+      };
+  // Returns the selected encoding, and checks that it stores 'input' in fewer
+  // bytes than the other candidate.
+  const auto select = [&](const std::vector<uint32_t>& input) {
+    const auto selected = encodeWith(
+        input,
+        {{nimble::EncodingType::FixedBitWidth, 1.0},
+         {nimble::EncodingType::PartitionedEliasFano, 1.0}});
+    const auto selectedType = nimble::EncodingPrefix::encodingType(selected);
+    const auto other = selectedType == nimble::EncodingType::FixedBitWidth
+        ? nimble::EncodingType::PartitionedEliasFano
+        : nimble::EncodingType::FixedBitWidth;
+    const auto otherSize =
+        encodeWith(input, {{other, 1.0}, {selectedType, 10.0}}).size();
+    EXPECT_LE(selected.size(), otherSize);
+    return selectedType;
   };
-  EXPECT_FALSE(estimate(63).has_value());
-  EXPECT_TRUE(estimate(64).has_value());
+  std::mt19937 random{7};
+
+  std::vector<uint32_t> randomValues(1'000);
+  for (auto& value : randomValues) {
+    value = random() % (uint32_t{1} << 30);
+  }
+  EXPECT_EQ(select(randomValues), nimble::EncodingType::FixedBitWidth);
+
+  constexpr uint32_t kNumRuns{20};
+  constexpr uint32_t kRowsPerRun{49};
+  std::vector<uint32_t> runs;
+  for (uint32_t run = kNumRuns; run > 0; --run) {
+    uint32_t value = run << 25;
+    for (uint32_t row = 0; row < kRowsPerRun; ++row) {
+      value += random() % 4;
+      runs.push_back(value);
+    }
+  }
+  EXPECT_EQ(select(runs), nimble::EncodingType::PartitionedEliasFano);
 }
 
 TEST_F(PartitionedEliasFanoEncodingTest, resetSkipAndMaterialize) {
@@ -695,7 +772,8 @@ TEST_F(PartitionedEliasFanoEncodingTest, findsPartitionsOfUnevenLengths) {
 }
 
 TEST_F(PartitionedEliasFanoEncodingTest, factoryRoundTripWithNestedSelection) {
-  const auto input = makeRuns<uint64_t>(/*numRuns=*/64, /*seed=*/7);
+  const auto input = makeRuns<uint64_t>(
+      /*numRuns=*/64, /*seed=*/7, /*minLength=*/64, /*maxLength=*/200);
   const auto values = toVector(input);
   auto policy =
       std::make_unique<nimble::ManualEncodingSelectionPolicy<uint64_t>>(
@@ -974,30 +1052,12 @@ TEST_F(PartitionedEliasFanoEncodingTest, sliceOfRebasedSliceIsNotSupported) {
 }
 
 TEST_F(PartitionedEliasFanoEncodingTest, estimateTracksEncodedSize) {
-  const auto input = makeRuns<uint64_t>(/*numRuns=*/500, /*seed=*/8);
-  const auto values = toVector(input);
-  const auto estimate =
-      nimble::PartitionedEliasFanoEncoding<uint64_t>::estimateSize(
-          std::span<const uint64_t>{values.data(), values.size()});
-  ASSERT_TRUE(estimate.has_value());
-
-  auto policy =
-      std::make_unique<nimble::ManualEncodingSelectionPolicy<uint64_t>>(
-          std::vector<std::pair<nimble::EncodingType, float>>{
-              {nimble::EncodingType::PartitionedEliasFano, 1.0},
-              {nimble::EncodingType::FixedBitWidth, 10.0},
-          },
-          std::nullopt,
-          std::nullopt);
-  const auto encoded = nimble::EncodingFactory::encode<uint64_t>(
-      std::move(policy), values, *buffer_);
-  ASSERT_EQ(
-      nimble::EncodingPrefix::encodingType(encoded),
-      nimble::EncodingType::PartitionedEliasFano);
-  EXPECT_NEAR(
-      static_cast<double>(*estimate),
-      static_cast<double>(encoded.size()),
-      0.05 * encoded.size());
+  for (const auto& [minLength, maxLength] :
+       std::vector<std::pair<uint32_t, uint32_t>>{{64, 200}, {2, 63}}) {
+    SCOPED_TRACE(fmt::format("runs of {} to {} rows", minLength, maxLength));
+    expectEstimateTracksEncodedSize(
+        makeRuns<uint64_t>(/*numRuns=*/500, /*seed=*/8, minLength, maxLength));
+  }
 }
 
 TEST_F(PartitionedEliasFanoEncodingTest, rejectsTruncatedStreams) {
