@@ -117,6 +117,13 @@ target_link_libraries(
   velox_functions_prestosql
 )
 
+add_executable(velox_benchmark_peeled_encoding PeeledEncodingBenchmark.cpp)
+target_link_libraries(
+  velox_benchmark_peeled_encoding
+  ${velox_benchmark_deps}
+  velox_functions_prestosql
+)
+
 add_executable(velox_format_datetime_benchmark FormatDateTimeBenchmark.cpp)
 target_link_libraries(
   velox_format_datetime_benchmark
