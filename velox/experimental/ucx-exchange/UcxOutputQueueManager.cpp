@@ -232,12 +232,13 @@ void UcxOutputQueueManager::removeTask(const std::string& taskId) {
       if (it == queues.end()) {
         // The task never created its queue, as when initializeTask() threw
         // before registering one. A consumer that arrives later must fail
-        // rather than wait on a placeholder that no task will remove. An
-        // earlier removal keeps its own reason; initializeTask() clears the
-        // entry if the task ID is reused.
+        // rather than wait on a placeholder that no task will remove, and the
+        // intra-node registry below records the same reason. An earlier
+        // removal keeps its own reason in both; initializeTask() clears the
+        // entries if the task ID is reused.
+        producerError = std::string{kProducerNotInitializedError};
         removedTasks_.withLock([&](auto& removed) {
-          removed.try_emplace(
-              taskIdStr, std::string{kProducerNotInitializedError});
+          removed.try_emplace(taskIdStr, producerError);
         });
         return true;
       }

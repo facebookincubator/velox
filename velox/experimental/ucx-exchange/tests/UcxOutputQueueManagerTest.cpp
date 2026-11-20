@@ -799,6 +799,31 @@ TEST_F(
               "Producer task ended before initializing its output")));
 }
 
+// An intra-node source reads how the producer ended from
+// IntraNodeTransferRegistry instead of from the queue manager. A removal with
+// no queue registered must leave it the same reason.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    removeTaskWithoutQueueCancelsIntraNodeWithProducerError) {
+  const std::string taskId = "intraNodeAfterRemovalWithoutQueue";
+  // A manager that has not seen the task, as after an initializeTask() that
+  // threw before it registered a queue.
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+
+  queueManager_->removeTask(taskId);
+
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  const auto result = registry->poll({taskId, /*destination=*/0, 0});
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(result->atEnd);
+  EXPECT_THAT(
+      result->producerError,
+      testing::Optional(
+          testing::HasSubstr(
+              "Producer task ended before initializing its output")));
+  registry->clearCancelledTask(taskId);
+}
+
 // A producer that initialized its output but is removed before every driver
 // called noMoreData() must end each destination with its reason, not with a
 // clean end of stream.
