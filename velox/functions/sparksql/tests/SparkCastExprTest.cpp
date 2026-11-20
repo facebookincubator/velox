@@ -928,6 +928,16 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
         "real", {"\n\f\r\t\n\u001F 123.0\u000B\u001C\u001D\u001E"}, {123.0});
     testCast<std::string, double>(
         "double", {"\n\f\r\t\n\u001F 123.0\u000B\u001C\u001D\u001E"}, {123.0});
+    // A trailing 'f', 'F', 'd' or 'D' after a digit or '.' is ignored, as in
+    // Java.
+    for (const auto& input :
+         {"123.0f", "123.0F", "123.0d", "123.0D", "123d", "123.f", " 123d "}) {
+      testCast<std::string, float>("real", {input}, {123.0});
+      testCast<std::string, double>("double", {input}, {123.0});
+    }
+    testCast<std::string, double>("double", {"1e5d"}, {100000.0});
+    testCast<std::string, double>("double", {".5f"}, {0.5});
+    testCast<std::string, double>("double", {"-1.5d"}, {-1.5});
     testCast<std::string, Timestamp>(
         "timestamp",
         {"\n\f\r\t\n\u001F 2000-01-01 12:21:56\u000B\u001C\u001D\u001E"},
@@ -2683,6 +2693,12 @@ TEST_F(SparkCastExprTestAnsiOff, primitiveInvalidCornerCase) {
   // To floating-point - invalid strings return null
   testCast<std::string, float>("real", {"1.2a"}, {std::nullopt});
   testCast<std::string, float>("real", {"1.2.3"}, {std::nullopt});
+  // A suffix is only accepted right after a digit or '.'.
+  for (const auto& input :
+       {"d", "123dd", "1.5 d", "NaNd", "Infinityd", "infd"}) {
+    testCast<std::string, float>("real", {input}, {std::nullopt});
+    testCast<std::string, double>("double", {input}, {std::nullopt});
+  }
 
   // To boolean - invalid strings return null
   testCast<std::string, bool>("boolean", {"1.7E308"}, {std::nullopt});
