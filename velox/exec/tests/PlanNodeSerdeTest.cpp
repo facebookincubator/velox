@@ -791,6 +791,12 @@ TEST_F(PlanNodeSerdeTest, topN) {
              .topN({"c0", "c1 DESC NULLS FIRST"}, 10, true)
              .planNode();
   testSerde(plan);
+
+  plan = PlanBuilder()
+             .values({data_})
+             .topN({"c0"}, 3'000'000'000, false)
+             .planNode();
+  testSerde(plan);
 }
 
 TEST_F(PlanNodeSerdeTest, unnest) {

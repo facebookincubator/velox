@@ -4102,7 +4102,7 @@ TopNNode::TopNNode(
     const PlanNodeId& id,
     const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
     const std::vector<SortOrder>& sortingOrders,
-    int32_t count,
+    int64_t count,
     bool isPartial,
     const PlanNodePtr& source)
     : PlanNode(id),
