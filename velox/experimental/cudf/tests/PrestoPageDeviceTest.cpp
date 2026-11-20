@@ -306,12 +306,158 @@ TEST_F(PrestoPageDeviceTest, stringOffsets) {
     std::vector<int32_t> actual(5);
     std::memcpy(actual.data(), bytes.data(), bytes.size());
     EXPECT_EQ(actual, (std::vector<int32_t>{10, 11, 12, 52, 3}));
-
-    const std::vector<int64_t> rows = {0, 2, 5, kNumStrings};
-    EXPECT_EQ(
-        detail::gatherStringOffsets(strings, rows, stream_),
-        (std::vector<int64_t>{9, 12, 24, 68}));
   }
+}
+
+TEST_F(PrestoPageDeviceTest, pageStats) {
+  using Bounds = std::vector<int64_t>;
+  constexpr int64_t kNumBits = 100'000;
+  auto valid = [](int64_t bit) { return bit % 7 != 0 && bit != 77; };
+  auto mask = toDevice(makeMask(kNumBits, valid));
+  auto offsets32 = toDevice(offsets32_);
+  auto offsets64 = toDevice(offsets64_);
+  const StringOffsets strings32{offsets32.data(), kInt32, kFirstIndex};
+  const StringOffsets strings64{offsets64.data(), kInt64, kFirstIndex};
+
+  // The nulls of the pages of a column whose first row is mask bit
+  // 'firstBit', and none at the last boundary.
+  auto expectedNulls = [&](int64_t firstBit, const Bounds& bounds) {
+    std::vector<int32_t> nulls;
+    for (size_t i = 0; i + 1 < bounds.size(); ++i) {
+      int32_t count = 0;
+      for (auto row = bounds[i]; row < bounds[i + 1]; ++row) {
+        count += !valid(firstBit + row);
+      }
+      nulls.push_back(count);
+    }
+    nulls.push_back(0);
+    return nulls;
+  };
+  auto nullsOf = [](const std::vector<detail::PageStats>& stats,
+                    size_t column,
+                    size_t numBounds) {
+    std::vector<int32_t> nulls;
+    for (size_t i = 0; i < numBounds; ++i) {
+      nulls.push_back(stats[column * numBounds + i].numNulls);
+    }
+    return nulls;
+  };
+  auto charsOf = [](const std::vector<detail::PageStats>& stats,
+                    size_t column,
+                    size_t numBounds) {
+    std::vector<int64_t> chars;
+    for (size_t i = 0; i < numBounds; ++i) {
+      chars.push_back(stats[column * numBounds + i].charsOffset);
+    }
+    return chars;
+  };
+
+  {
+    // The 8 strings in three pages: strings without nulls, strings and fixed
+    // width values with masks that start inside a word, and a column with
+    // neither nulls nor strings.
+    const Bounds bounds = {0, 2, 5, kNumStrings};
+    const std::vector<detail::PageStatsColumn> columns = {
+        {nullptr, 0, strings32},
+        {mask.data(), 5, strings64},
+        {mask.data(), 37, StringOffsets{}},
+        {nullptr, 0, StringOffsets{}},
+    };
+    const auto stats = detail::prestoPageStats(columns, bounds, stream_);
+    ASSERT_EQ(stats.size(), columns.size() * bounds.size());
+    const std::vector<int64_t> stringBounds = {9, 12, 24, 68};
+    const std::vector<int32_t> none(bounds.size(), 0);
+    const std::vector<int64_t> noChars(bounds.size(), 0);
+    EXPECT_EQ(charsOf(stats, 0, bounds.size()), stringBounds);
+    EXPECT_EQ(nullsOf(stats, 0, bounds.size()), none);
+    EXPECT_EQ(charsOf(stats, 1, bounds.size()), stringBounds);
+    EXPECT_EQ(nullsOf(stats, 1, bounds.size()), expectedNulls(5, bounds));
+    EXPECT_EQ(charsOf(stats, 2, bounds.size()), noChars);
+    EXPECT_EQ(nullsOf(stats, 2, bounds.size()), expectedNulls(37, bounds));
+    EXPECT_EQ(charsOf(stats, 3, bounds.size()), noChars);
+    EXPECT_EQ(nullsOf(stats, 3, bounds.size()), none);
+  }
+  {
+    // Pages of one row, of a part of a word and of more words than a block
+    // has threads, for two columns that share the mask from different bits.
+    const Bounds bounds = {0, 1, 9'000, 9'001, 9'020, 60'000, 99'900};
+    const std::vector<detail::PageStatsColumn> columns = {
+        {mask.data(), 9, StringOffsets{}},
+        {mask.data(), 64, StringOffsets{}},
+    };
+    const auto stats = detail::prestoPageStats(columns, bounds, stream_);
+    ASSERT_EQ(stats.size(), columns.size() * bounds.size());
+    EXPECT_EQ(nullsOf(stats, 0, bounds.size()), expectedNulls(9, bounds));
+    EXPECT_EQ(nullsOf(stats, 1, bounds.size()), expectedNulls(64, bounds));
+  }
+  {
+    // Without rows there is one boundary and no page.
+    const std::vector<detail::PageStatsColumn> columns = {
+        {mask.data(), 3, strings32}};
+    const auto stats = detail::prestoPageStats(columns, Bounds{0}, stream_);
+    ASSERT_EQ(stats.size(), 1);
+    EXPECT_EQ(stats[0].charsOffset, 9);
+    EXPECT_EQ(stats[0].numNulls, 0);
+  }
+  EXPECT_TRUE(detail::prestoPageStats({}, Bounds{0, 4}, stream_).empty());
+}
+
+TEST_F(PrestoPageDeviceTest, nonEmptyNullStrings) {
+  auto offsets32 = toDevice(offsets32_);
+  auto offsets64 = toDevice(offsets64_);
+  const StringOffsets strings32{offsets32.data(), kInt32, kFirstIndex};
+  const StringOffsets strings64{offsets64.data(), kInt64, kFirstIndex};
+  // Of the 8 strings, only row 1 is empty. The masks start at bit 37.
+  constexpr int64_t kFirstBit = 37;
+  auto emptyNull =
+      toDevice(makeMask(64, [](int64_t bit) { return bit != kFirstBit + 1; }));
+  auto nonEmptyNull = toDevice(makeMask(64, [](int64_t bit) {
+    return bit != kFirstBit + 1 && bit != kFirstBit + 7;
+  }));
+  // A null bit before the first row and one after the last row belong to
+  // other rows.
+  auto nullsOutside = toDevice(makeMask(64, [](int64_t bit) {
+    return bit != kFirstBit - 1 && bit != kFirstBit + kNumStrings;
+  }));
+  const std::vector<detail::PageStatsColumn> columns = {
+      {emptyNull.data(), kFirstBit, strings32},
+      {nonEmptyNull.data(), kFirstBit, strings32},
+      {nonEmptyNull.data(), kFirstBit, strings64},
+      {nullsOutside.data(), kFirstBit, strings64},
+      // Neither strings without a mask nor nulls without offsets count.
+      {nullptr, 0, strings32},
+      {nonEmptyNull.data(), kFirstBit, StringOffsets{}},
+  };
+  EXPECT_EQ(
+      detail::hasNonEmptyNullStrings(columns, kNumStrings, stream_),
+      (std::vector<bool>{false, true, true, false, false, false}));
+  // The null row with bytes is the last one.
+  EXPECT_EQ(
+      detail::hasNonEmptyNullStrings(columns, kNumStrings - 1, stream_),
+      (std::vector<bool>(columns.size(), false)));
+  EXPECT_EQ(
+      detail::hasNonEmptyNullStrings(columns, 0, stream_),
+      (std::vector<bool>(columns.size(), false)));
+  EXPECT_TRUE(detail::hasNonEmptyNullStrings({}, 8, stream_).empty());
+
+  // More rows than a block has threads: one-byte strings, of which only the
+  // last is null.
+  constexpr int32_t kNumRows = 100'000;
+  std::vector<int32_t> ones(kNumRows + 1);
+  for (int32_t i = 0; i <= kNumRows; ++i) {
+    ones[i] = i;
+  }
+  auto oneByteEach = toDevice(ones);
+  auto lastNull = toDevice(
+      makeMask(kNumRows, [](int64_t bit) { return bit != kNumRows - 1; }));
+  const std::vector<detail::PageStatsColumn> manyRows = {
+      {lastNull.data(), 0, StringOffsets{oneByteEach.data(), kInt32, 0}}};
+  EXPECT_EQ(
+      detail::hasNonEmptyNullStrings(manyRows, kNumRows, stream_),
+      (std::vector<bool>{true}));
+  EXPECT_EQ(
+      detail::hasNonEmptyNullStrings(manyRows, kNumRows - 1, stream_),
+      (std::vector<bool>{false}));
 }
 
 TEST_F(PrestoPageDeviceTest, stringOffsetsBeyondInt32) {
@@ -397,10 +543,31 @@ TEST_F(PrestoPageDeviceTest, alignmentAndArgumentChecks) {
               {unsignedOffsets, 0, 2, aligned}},
           stream_),
       "INT32 or INT64");
+  const std::vector<detail::PageStatsColumn> unsignedColumn = {
+      {nullptr, 0, unsignedOffsets}};
   VELOX_ASSERT_THROW(
-      detail::gatherStringOffsets(
-          unsignedOffsets, std::vector<int64_t>{0}, stream_),
+      detail::prestoPageStats(
+          unsignedColumn, std::vector<int64_t>{0, 2}, stream_),
       "INT32 or INT64");
+  VELOX_ASSERT_THROW(
+      detail::hasNonEmptyNullStrings(unsignedColumn, 2, stream_),
+      "INT32 or INT64");
+
+  // Page boundaries start with row 0 and never decrease.
+  const std::vector<detail::PageStatsColumn> column = {
+      {mask.data(), 0, StringOffsets{}}};
+  VELOX_ASSERT_THROW(
+      detail::prestoPageStats(column, std::vector<int64_t>{}, stream_),
+      "'bounds' must start with row 0");
+  VELOX_ASSERT_THROW(
+      detail::prestoPageStats(column, std::vector<int64_t>{1, 2}, stream_),
+      "'bounds' must start with row 0");
+  VELOX_ASSERT_THROW(
+      detail::prestoPageStats(column, std::vector<int64_t>{0, 5, 3}, stream_),
+      "'bounds' must not decrease");
+  VELOX_ASSERT_THROW(
+      detail::hasNonEmptyNullStrings(column, -1, stream_),
+      "'numRows' must not be negative");
 }
 
 TEST_F(PrestoPageDeviceTest, timestampsToMillis) {

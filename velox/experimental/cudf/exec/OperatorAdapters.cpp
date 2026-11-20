@@ -1282,8 +1282,9 @@ class LocalMergeAdapter : public OperatorAdapter {
 /// PartitionedOutputAdapter - Replaces a single-destination PartitionedOutput
 /// whose input is on the GPU with CudfPrestoOutput, which serializes Presto
 /// pages from the GPU table. Declines, which keeps the CPU operator behind a
-/// CudfToVelox, for partitioned, compressed and non-Presto outputs and for
-/// output columns without a flat Presto encoding.
+/// CudfToVelox, for partitioned, compressed and non-Presto outputs, for
+/// output columns without a flat Presto encoding and for an output stream
+/// listener other than the Presto one.
 class PartitionedOutputAdapter : public OperatorAdapter {
  public:
   PartitionedOutputAdapter() : OperatorAdapter("PartitionedOutput") {}
@@ -1293,7 +1294,7 @@ class PartitionedOutputAdapter : public OperatorAdapter {
   }
 
   bool canRunOnGPU(
-      const exec::Operator* /*op*/,
+      const exec::Operator* op,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx) const override {
     auto node =
@@ -1301,8 +1302,14 @@ class PartitionedOutputAdapter : public OperatorAdapter {
     if (!node) {
       return false;
     }
+    const auto bufferManager =
+        op->as<exec::PartitionedOutput>()->bufferManager();
+    if (bufferManager == nullptr) {
+      return false;
+    }
     const auto& queryCtx = *ctx->task->queryCtx();
-    const auto reason = CudfPrestoOutput::cpuFallbackReason(*node, queryCtx);
+    const auto reason =
+        CudfPrestoOutput::cpuFallbackReason(*node, queryCtx, *bufferManager);
     if (!reason.has_value()) {
       return true;
     }

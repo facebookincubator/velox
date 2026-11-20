@@ -24,8 +24,10 @@
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/compression/Compression.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/memory/Memory.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/parquet/writer/Writer.h"
@@ -76,25 +78,27 @@ namespace {
 const std::unordered_map<std::string, std::string> kPerBatchGpuInput{
     {cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1"}};
 
-/// A pinned memory resource that counts the live allocations of the resource
-/// it forwards to. Copies share the count, as a resource_ref may copy it.
+/// A pinned memory resource that counts the bytes allocated from the resource
+/// it forwards to and not freed yet. Copies share the counts, as a
+/// resource_ref may copy it.
 class CountingPinnedResource {
  public:
   explicit CountingPinnedResource(rmm::host_device_async_resource_ref upstream)
-      : upstream_(upstream), live_(std::make_shared<std::atomic<int64_t>>(0)) {}
+      : upstream_(upstream), counts_(std::make_shared<Counts>()) {}
 
   void* allocate_sync(
       size_t bytes,
       size_t alignment = rmm::CUDA_ALLOCATION_ALIGNMENT) {
-    ++*live_;
-    return upstream_.allocate_sync(bytes, alignment);
+    auto* result = upstream_.allocate_sync(bytes, alignment);
+    counts_->add(bytes);
+    return result;
   }
 
   void deallocate_sync(
       void* ptr,
       size_t bytes,
       size_t alignment = rmm::CUDA_ALLOCATION_ALIGNMENT) noexcept {
-    --*live_;
+    counts_->live -= bytes;
     upstream_.deallocate_sync(ptr, bytes, alignment);
   }
 
@@ -102,8 +106,9 @@ class CountingPinnedResource {
       cuda::stream_ref stream,
       size_t bytes,
       size_t alignment = rmm::CUDA_ALLOCATION_ALIGNMENT) {
-    ++*live_;
-    return upstream_.allocate(stream, bytes, alignment);
+    auto* result = upstream_.allocate(stream, bytes, alignment);
+    counts_->add(bytes);
+    return result;
   }
 
   void deallocate(
@@ -111,20 +116,25 @@ class CountingPinnedResource {
       void* ptr,
       size_t bytes,
       size_t alignment = rmm::CUDA_ALLOCATION_ALIGNMENT) noexcept {
-    --*live_;
+    counts_->live -= bytes;
     upstream_.deallocate(stream, ptr, bytes, alignment);
   }
 
   bool operator==(const CountingPinnedResource& other) const noexcept {
-    return live_ == other.live_;
+    return counts_ == other.counts_;
   }
 
   bool operator!=(const CountingPinnedResource& other) const noexcept {
-    return live_ != other.live_;
+    return counts_ != other.counts_;
   }
 
-  int64_t live() const {
-    return live_->load();
+  int64_t liveBytes() const {
+    return counts_->live.load();
+  }
+
+  /// The most bytes that were live at once.
+  int64_t peakBytes() const {
+    return counts_->peak.load();
   }
 
   friend void get_property(
@@ -136,8 +146,35 @@ class CountingPinnedResource {
       cuda::mr::host_accessible) noexcept {}
 
  private:
+  struct Counts {
+    void add(size_t bytes) {
+      const int64_t now = live += bytes;
+      int64_t seen = peak.load();
+      while (seen < now && !peak.compare_exchange_weak(seen, now)) {
+      }
+    }
+
+    std::atomic<int64_t> live{0};
+    std::atomic<int64_t> peak{0};
+  };
+
   rmm::host_device_async_resource_ref upstream_;
-  std::shared_ptr<std::atomic<int64_t>> live_;
+  std::shared_ptr<Counts> counts_;
+};
+
+/// An output stream listener other than the Presto one, which counts the
+/// bytes written to the stream.
+class CountingListener : public OutputStreamListener {
+ public:
+  explicit CountingListener(std::shared_ptr<std::atomic<int64_t>> numBytes)
+      : numBytes_(std::move(numBytes)) {}
+
+  void onWrite(const char* /*s*/, std::streamsize count) override {
+    *numBytes_ += count;
+  }
+
+ private:
+  const std::shared_ptr<std::atomic<int64_t>> numBytes_;
 };
 
 /// Passes its GPU input on with the rows ['begin', 'end') of every strings
@@ -267,6 +304,45 @@ class NullMaskedStringsAdapter : public cudf_velox::OperatorAdapter {
   const cudf::size_type end_;
 };
 
+/// Handles FilterProject with a combination no adapter may have: it requires
+/// GPU input and does not allow the CPU operator, so an operator fed by the
+/// CPU would have no valid form.
+class GpuInputOnlyAdapter : public cudf_velox::OperatorAdapter {
+ public:
+  GpuInputOnlyAdapter() : cudf_velox::OperatorAdapter("GpuInputOnly") {}
+
+  bool canHandle(const Operator* op) const override {
+    return dynamic_cast<const FilterProject*>(op) != nullptr;
+  }
+
+  bool canRunOnGPU(
+      const Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      DriverCtx* /*ctx*/) const override {
+    return true;
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool requiresGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<Operator>> createReplacements(
+      const Operator* /*op*/,
+      const core::PlanNodePtr& /*planNode*/,
+      DriverCtx* /*ctx*/,
+      int32_t /*operatorId*/) const override {
+    VELOX_UNREACHABLE();
+  }
+};
+
 /// The cuDF Hive fixture registers cuDF with CPU fallback disabled and the
 /// cuDF Hive connector of the scans.
 class PrestoOutputTest
@@ -329,17 +405,23 @@ class PrestoOutputTest
 
   /// Task ids are unique within the process: Task::terminate() removes the
   /// output buffer of its id after the task finished, which would remove the
-  /// buffer of a later task that reused the id.
+  /// buffer of a later task that reused the id. 'queryPool', when given, is
+  /// the memory pool of the query.
   std::shared_ptr<Task> makeTask(
       const core::PlanNodePtr& plan,
-      std::unordered_map<std::string, std::string> config) {
+      std::unordered_map<std::string, std::string> config,
+      std::shared_ptr<memory::MemoryPool> queryPool = nullptr) {
     static std::atomic<int> taskCounter{0};
     return Task::create(
         fmt::format("local://presto-output-test-{}", ++taskCounter),
         core::PlanFragment{plan},
         0,
         core::QueryCtx::create(
-            executor_.get(), core::QueryConfig(std::move(config))),
+            executor_.get(),
+            core::QueryConfig(std::move(config)),
+            {},
+            cache::AsyncDataCache::getInstance(),
+            std::move(queryPool)),
         Task::ExecutionMode::kParallel);
   }
 
@@ -467,6 +549,22 @@ class PrestoOutputTest
       ASSERT_LT(std::chrono::steady_clock::now(), deadline);
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+  }
+
+  /// Bytes in use in the memory pools of the operators of 'nodeId', which
+  /// count towards the memory limit of the query.
+  int64_t operatorPoolBytes(const Task& task, const core::PlanNodeId& nodeId) {
+    int64_t bytes = 0;
+    task.pool()->visitChildren([&](memory::MemoryPool* nodePool) {
+      if (nodePool->name() == fmt::format("node.{}", nodeId)) {
+        nodePool->visitChildren([&](memory::MemoryPool* operatorPool) {
+          bytes += operatorPool->usedBytes();
+          return true;
+        });
+      }
+      return true;
+    });
+    return bytes;
   }
 
   RowVectorPtr concat(const std::vector<RowVectorPtr>& vectors) {
@@ -773,6 +871,46 @@ TEST_F(PrestoOutputTest, multiplePages) {
   EXPECT_EQ(stats.at("CudfPrestoOutput")->outputRows, pages.numRows());
 }
 
+TEST_F(PrestoOutputTest, smallInputsFillPages) {
+  // Inputs of about 0.6 page each are gathered for a wave of 32 pages before
+  // they are serialized, so the layout runs once per wave rather than once per
+  // page, and only the last page of each gathered table comes out short.
+  constexpr int64_t kPageBytes = 64 << 10;
+  constexpr int32_t kNumInputs = 100;
+  std::vector<RowVectorPtr> inputs;
+  for (int32_t i = 0; i < kNumInputs; ++i) {
+    std::vector<VectorPtr> columns;
+    for (int32_t c = 0; c < 4; ++c) {
+      columns.push_back(makeFlatVector<int64_t>(1'200, [i, c](auto row) {
+        return (i * 10'000LL + row) * (c + 1);
+      }));
+    }
+    inputs.push_back(makeRowVector(columns));
+  }
+  core::PlanNodeId outputId;
+  PlanBuilder builder;
+  builder.values(inputs);
+  auto plan = passThrough(builder)
+                  .partitionedOutput({}, 1)
+                  .capturePlanNodeId(outputId)
+                  .planNode();
+  auto config = kPerBatchGpuInput;
+  config[cudf_velox::CudfConfig::kCudfPrestoOutputPageBytes] =
+      std::to_string(kPageBytes);
+  auto run = execute(plan, config);
+  EXPECT_EQ(
+      operatorTypes(*run.task, outputId),
+      std::set<std::string>{"CudfPrestoOutput"});
+  const auto& pages = run.destinations[0];
+  assertEqualVectors(concat(inputs), concat(pages.pages));
+  // The inputs are serialized as two tables, each with a short last page.
+  int32_t numShortPages = 0;
+  for (const auto& bytes : pages.pageBytes) {
+    numShortPages += bytes.size() < kPageBytes / 2;
+  }
+  EXPECT_LE(numShortPages, 2);
+}
+
 TEST_F(PrestoOutputTest, checksummedPages) {
   // With the Presto listener installed, as Prestissimo installs it, every
   // page carries the CRC32 that the deserializer verifies.
@@ -822,21 +960,102 @@ TEST_F(PrestoOutputTest, checksummedPages) {
   assertEqualVectors(input, concat(run.pages()));
 }
 
-TEST_F(PrestoOutputTest, projectedOutputLayout) {
-  // The output layout reorders and drops input columns.
-  auto input = makeFlatRows(1'000, 23, true);
+TEST_F(PrestoOutputTest, otherListenerKeepsCpuOutput) {
+  // exec::PartitionedOutput reports every byte it serializes to the listener
+  // of the buffer manager. The GPU operator serves the Presto listener only,
+  // whose checksum it computes, so an output with another listener keeps the
+  // CPU operator, and the listener its bytes.
+  auto numBytes = std::make_shared<std::atomic<int64_t>>(0);
+  bufferManager_->setListenerFactory(
+      [numBytes]() { return std::make_unique<CountingListener>(numBytes); });
+  auto input = makeFlatRows(1'000, 30, true);
   core::PlanNodeId outputId;
   PlanBuilder builder;
   builder.values({input});
   auto plan = passThrough(builder)
+                  .partitionedOutput({}, 1)
+                  .capturePlanNodeId(outputId)
+                  .planNode();
+  auto run = execute(plan);
+  EXPECT_EQ(
+      operatorTypes(*run.task, outputId),
+      std::set<std::string>{"PartitionedOutput"});
+  ASSERT_EQ(run.pages().size(), 1);
+  assertEqualVectors(input, run.pages()[0]);
+  EXPECT_GE(numBytes->load(), run.destinations[0].pageBytes[0].size());
+}
+
+TEST_F(PrestoOutputTest, projectedOutputLayout) {
+  // The output layout reorders and drops input columns: those of one GPU
+  // batch, and those of two batches, of which only the columns of the output
+  // are gathered into one table.
+  std::vector<RowVectorPtr> inputs = {
+      makeFlatRows(1'000, 23, true), makeFlatRows(600, 34, false)};
+  core::PlanNodeId outputId;
+  PlanBuilder builder;
+  builder.values(inputs);
+  auto plan = passThrough(builder)
                   .partitionedOutput({}, 1, {"v", "l", "b"})
                   .capturePlanNodeId(outputId)
                   .planNode();
-  auto run = assertSameRowsAsCpuPath(plan, outputId);
+  const auto input = concat(inputs);
   auto expected = makeRowVector(
       {"v", "l", "b"},
       {input->childAt(7), input->childAt(4), input->childAt(0)});
-  assertEqualVectors(expected, concat(run.pages()));
+  for (const auto& config :
+       {std::unordered_map<std::string, std::string>{}, kPerBatchGpuInput}) {
+    SCOPED_TRACE(fmt::format("GPU batch per input = {}", !config.empty()));
+    auto run = assertSameRowsAsCpuPath(plan, outputId, config);
+    ASSERT_EQ(run.pages().size(), 1);
+    assertEqualVectors(expected, run.pages()[0]);
+  }
+}
+
+TEST_F(PrestoOutputTest, droppedColumnsDoNotFillPages) {
+  // Input is gathered until the columns of the output fill pages. A column
+  // the output layout drops, here 128 times the bytes of the one it keeps,
+  // counts for nothing: the pages are full of the kept column.
+  constexpr int64_t kPageBytes = 16 << 10;
+  constexpr vector_size_t kRowsPerInput = 250;
+  std::vector<RowVectorPtr> inputs;
+  for (int32_t i = 0; i < 40; ++i) {
+    inputs.push_back(makeRowVector(
+        {"k", "pad"},
+        {makeFlatVector<int64_t>(
+             kRowsPerInput, [i](auto row) { return i * 1'000LL + row; }),
+         makeFlatVector<StringView>(kRowsPerInput, [&](auto row) {
+           stringBuffer_ = std::string(1'024, 'a' + row % 26);
+           return StringView(stringBuffer_);
+         })}));
+  }
+  core::PlanNodeId outputId;
+  PlanBuilder builder;
+  builder.values(inputs);
+  auto plan = passThrough(builder)
+                  .partitionedOutput({}, 1, std::vector<std::string>{"k"})
+                  .capturePlanNodeId(outputId)
+                  .planNode();
+  auto config = kPerBatchGpuInput;
+  config[cudf_velox::CudfConfig::kCudfPrestoOutputPageBytes] =
+      std::to_string(kPageBytes);
+  auto run = execute(plan, config);
+  EXPECT_EQ(
+      operatorTypes(*run.task, outputId),
+      std::set<std::string>{"CudfPrestoOutput"});
+  const auto& pages = run.destinations[0];
+  ASSERT_GE(pages.pages.size(), 4);
+  for (size_t p = 0; p + 1 < pages.pages.size(); ++p) {
+    EXPECT_GT(pages.pageBytes[p].size(), kPageBytes / 2) << "page " << p;
+  }
+  std::vector<VectorPtr> keys;
+  for (const auto& input : inputs) {
+    keys.push_back(input->childAt(0));
+  }
+  std::vector<RowVectorPtr> expected;
+  for (const auto& key : keys) {
+    expected.push_back(makeRowVector({"k"}, {key}));
+  }
+  assertEqualVectors(concat(expected), concat(pages.pages));
 }
 
 TEST_F(PrestoOutputTest, singleRowPages) {
@@ -984,6 +1203,31 @@ TEST_F(PrestoOutputTest, eagerFlushUnderPartialLimit) {
   EXPECT_EQ(run.pages().size(), 4);
 }
 
+TEST_F(PrestoOutputTest, eagerFlushConfig) {
+  // partitioned_output_eager_flush makes every GPU batch its own page, as it
+  // makes exec::PartitionedOutput flush every batch; without it the four
+  // batches fill one page.
+  std::vector<RowVectorPtr> inputs;
+  for (int32_t i = 0; i < 4; ++i) {
+    inputs.push_back(makeFlatRows(96, 32 + i, true));
+  }
+  core::PlanNodeId outputId;
+  PlanBuilder builder;
+  builder.values(inputs);
+  auto plan = passThrough(builder)
+                  .partitionedOutput({}, 1)
+                  .capturePlanNodeId(outputId)
+                  .planNode();
+  auto run = assertSameRowsAsCpuPath(plan, outputId, kPerBatchGpuInput);
+  EXPECT_EQ(run.pages().size(), 1);
+
+  auto config = kPerBatchGpuInput;
+  config[core::QueryConfig::kPartitionedOutputEagerFlush] = "true";
+  run = assertSameRowsAsCpuPath(plan, outputId, config);
+  EXPECT_EQ(run.pages().size(), 4);
+  assertEqualVectors(concat(inputs), concat(run.pages()));
+}
+
 TEST_F(PrestoOutputTest, zeroColumns) {
   // Pages of row counts only. The row cap splits them and bounds how much
   // input is gathered before a page is serialized.
@@ -1080,10 +1324,12 @@ TEST_F(PrestoOutputTest, multipleDrivers) {
 TEST_F(PrestoOutputTest, consumerBackpressure) {
   // The output buffer holds 256 KiB and the consumer starts late, so the
   // operator blocks on the consumer and resumes as pages are fetched. The
-  // pinned pages alive at once stay within the output buffer plus the page
-  // that crossed its limit, one host batch, which the output buffer size caps
-  // below 8 pages here, and the pages of a fetch that are acknowledged but
-  // not freed yet.
+  // pages are memory of the operator's pool, as the pages of
+  // exec::PartitionedOutput are, so the query's memory limit covers them. At
+  // most, the pool holds the output buffer plus the page that crossed its
+  // limit, one host batch, which max_page_partitioning_buffer_size caps below
+  // 8 pages here, and the pages of a fetch that are acknowledged but not
+  // freed yet.
   drainDelay_ = std::chrono::milliseconds(500);
   constexpr int64_t kPageBytes = 64 << 10;
   constexpr int64_t kOutputBufferBytes = 256 << 10;
@@ -1102,20 +1348,90 @@ TEST_F(PrestoOutputTest, consumerBackpressure) {
       {{cudf_velox::CudfConfig::kCudfPrestoOutputPageBytes,
         std::to_string(kPageBytes)},
        {core::QueryConfig::kMaxOutputBufferSize,
+        std::to_string(kOutputBufferBytes)},
+       {core::QueryConfig::kMaxPartitionedOutputBufferSize,
         std::to_string(kOutputBufferBytes)}});
   assertEqualVectors(concat(inputs), concat(run.pages()));
   const auto planStats = toPlanStats(run.task->taskStats());
-  const auto& stats =
-      *planStats.at(outputId).operatorStats.at("CudfPrestoOutput");
-  EXPECT_GT(stats.blockedWallNanos, 0);
+  const auto& nodeStats = planStats.at(outputId);
+  EXPECT_GT(
+      nodeStats.operatorStats.at("CudfPrestoOutput")->blockedWallNanos, 0);
   // A page exceeds kPageBytes by less than one row plus its headers.
   constexpr int64_t kMaxPage = kPageBytes + 2'048;
-  const auto peakPinned = stats.customStats.at("peakPinnedPageBytes").sum;
-  EXPECT_GE(peakPinned, kOutputBufferBytes);
+  EXPECT_GE(nodeStats.peakMemoryBytes, kOutputBufferBytes);
   EXPECT_LE(
-      peakPinned,
+      nodeStats.peakMemoryBytes,
       kOutputBufferBytes + kMaxPage + kOutputBufferBytes +
           static_cast<int64_t>(maxBytesPerFetch_) + kMaxPage);
+}
+
+TEST_F(PrestoOutputTest, queryMemoryLimitCoversPages) {
+  // No consumer fetches the 16 MiB of pages, which the output buffer would
+  // take, and the query may use 4 MiB. The operator fails when its pool cannot
+  // hold another page; pages outside the pools of the query would pile up out
+  // of sight of its limit.
+  std::vector<VectorPtr> columns;
+  for (int32_t i = 0; i < 4; ++i) {
+    columns.push_back(makeFlatVector<int64_t>(500'000, [i](auto row) {
+      return row * (i + 1LL);
+    }));
+  }
+  PlanBuilder builder;
+  builder.values({makeRowVector(columns)});
+  auto plan = passThrough(builder).partitionedOutput({}, 1).planNode();
+  auto task = makeTask(
+      plan,
+      {},
+      memory::memoryManager()->addRootPool(
+          "queryMemoryLimitCoversPages", 4 << 20));
+  task->start(1);
+  ASSERT_TRUE(TaskMonitor::waitForFailure(*task, 10'000'000));
+  EXPECT_NE(
+      task->errorMessage().find("Exceeded memory pool cap"), std::string::npos)
+      << task->errorMessage();
+  EXPECT_NE(task->errorMessage().find("CudfPrestoOutput"), std::string::npos)
+      << task->errorMessage();
+  task.reset();
+  TaskMonitor::waitForAllTasksDeleted();
+}
+
+TEST_F(PrestoOutputTest, pinnedMemoryStagesCopies) {
+  // Pinned memory holds a batch of pages only while it is copied from the
+  // device: at most max_page_partitioning_buffer_size, two pages here. The
+  // pages themselves are pageable, since the consumer decides how long they
+  // live, and a pinned pool that many waiting pages exhaust falls back to
+  // allocations that wait for the device.
+  CountingPinnedResource pinned(cudf::get_pinned_memory_resource());
+  const auto previous = cudf::set_pinned_memory_resource(pinned);
+  auto restore =
+      folly::makeGuard([&] { cudf::set_pinned_memory_resource(previous); });
+
+  constexpr int64_t kPageBytes = 64 << 10;
+  constexpr int64_t kStagingBytes = 2 * (kPageBytes + 2'048);
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(200'000, folly::identity, nullEvery(7))});
+  core::PlanNodeId outputId;
+  PlanBuilder builder;
+  builder.values({input});
+  auto plan = passThrough(builder)
+                  .partitionedOutput({}, 1)
+                  .capturePlanNodeId(outputId)
+                  .planNode();
+  auto run = execute(
+      plan,
+      {{cudf_velox::CudfConfig::kCudfPrestoOutputPageBytes,
+        std::to_string(kPageBytes)},
+       {core::QueryConfig::kMaxPartitionedOutputBufferSize,
+        std::to_string(kStagingBytes)}});
+  EXPECT_EQ(
+      operatorTypes(*run.task, outputId),
+      std::set<std::string>{"CudfPrestoOutput"});
+  ASSERT_GT(run.pages().size(), 16);
+  assertEqualVectors(input, concat(run.pages()));
+  // Besides the batch, the lists of device tasks of a wave are pinned: a few
+  // KiB for one column.
+  EXPECT_GE(pinned.peakBytes(), kPageBytes);
+  EXPECT_LE(pinned.peakBytes(), kStagingBytes + (16 << 10));
 }
 
 TEST_F(PrestoOutputTest, deviceMemoryWhileBlocked) {
@@ -1167,61 +1483,49 @@ TEST_F(PrestoOutputTest, deviceMemoryWhileBlocked) {
 
 TEST_F(PrestoOutputTest, abortWhileBlocked) {
   // The task is aborted while pages wait in the full output buffer and in the
-  // operator; all pinned memory comes back.
+  // operator. The pages are memory of the operator's pool, none of them
+  // pinned, and all of it comes back: the pools of the task fail to go away
+  // with memory in use.
   CountingPinnedResource pinned(cudf::get_pinned_memory_resource());
   const auto previous = cudf::set_pinned_memory_resource(pinned);
   auto restore =
       folly::makeGuard([&] { cudf::set_pinned_memory_resource(previous); });
 
+  constexpr int64_t kOutputBufferBytes = 256 << 10;
   std::vector<RowVectorPtr> inputs = {
       makeFlatRows(20'000, 27, true), makeFlatRows(20'000, 28, false)};
+  core::PlanNodeId outputId;
   PlanBuilder builder;
   builder.values(inputs, false, 3);
-  auto plan = passThrough(builder).partitionedOutput({}, 1).planNode();
+  auto plan = passThrough(builder)
+                  .partitionedOutput({}, 1)
+                  .capturePlanNodeId(outputId)
+                  .planNode();
   auto task = makeTask(
       plan,
       {{cudf_velox::CudfConfig::kCudfPrestoOutputPageBytes,
         std::to_string(64 << 10)},
-       {core::QueryConfig::kMaxOutputBufferSize, std::to_string(256 << 10)}});
-  const auto taskId = task->taskId();
+       {core::QueryConfig::kMaxOutputBufferSize,
+        std::to_string(kOutputBufferBytes)}});
   task->start(1);
-  // Over the buffer limit, the operator blocks on the consumer.
-  const auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::seconds(30);
-  while (bufferManager_->getUtilization(taskId).value_or(0) <= 1.0) {
-    ASSERT_LT(std::chrono::steady_clock::now(), deadline);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  EXPECT_GT(pinned.live(), 0);
+  waitForConsumerBlock(*task);
+  // Over the buffer limit, the operator is blocked on the consumer.
+  EXPECT_GT(operatorPoolBytes(*task, outputId), kOutputBufferBytes);
+  // Only the lists of device tasks of a wave stay pinned.
+  EXPECT_LT(pinned.liveBytes(), kOutputBufferBytes);
   task->requestAbort();
   ASSERT_TRUE(TaskMonitor::waitForAbort(*task, 10'000'000));
   task.reset();
   TaskMonitor::waitForAllTasksDeleted();
-  EXPECT_EQ(pinned.live(), 0);
+  EXPECT_EQ(pinned.liveBytes(), 0);
 }
 
 TEST_F(PrestoOutputTest, pagesFreedOnConsumerThread) {
   // The consumer drops the last reference to a page on a thread of its own,
-  // an HTTP thread in Prestissimo, which has not bound cuDF's device. Handing
-  // the page back to the pinned pool calls CUDA, which uses device 0 on such
-  // a thread unless the release binds cuDF's device first.
-  int numDevices = 0;
-  ASSERT_EQ(cudaSuccess, cudaGetDeviceCount(&numDevices));
-  if (numDevices < 2) {
-    GTEST_SKIP() << "Requires two GPUs";
-  }
-  int originalDevice = -1;
-  ASSERT_EQ(cudaSuccess, cudaGetDevice(&originalDevice));
-  const int cudfDevice = numDevices - 1;
-  cudf_velox::unregisterCudf();
-  SCOPE_EXIT {
-    cudf_velox::unregisterCudf();
-    EXPECT_EQ(cudaSuccess, cudaSetDevice(originalDevice));
-    cudf_velox::registerCudf();
-  };
-  ASSERT_EQ(cudaSuccess, cudaSetDevice(cudfDevice));
-  cudf_velox::registerCudf();
-
+  // an HTTP thread in Prestissimo, after the operator and the output buffer
+  // are gone. A page goes back to the operator's pool, which it keeps alive
+  // through the task, and frees no pinned memory, which would call CUDA on a
+  // thread that has not bound cuDF's device.
   CountingPinnedResource pinned(cudf::get_pinned_memory_resource());
   const auto previous = cudf::set_pinned_memory_resource(pinned);
   auto restore =
@@ -1237,25 +1541,27 @@ TEST_F(PrestoOutputTest, pagesFreedOnConsumerThread) {
                   .planNode();
   auto task = makeTask(plan, {});
   task->start(1);
-  // The pages outlive the output buffer and the task.
   std::vector<std::unique_ptr<folly::IOBuf>> pages;
+  size_t numBytes = 0;
   drain(*task, 0, [&](std::unique_ptr<folly::IOBuf> page) {
+    numBytes += page->computeChainDataLength();
     pages.push_back(std::move(page));
   });
   ASSERT_TRUE(TaskMonitor::waitForCompletion(*task, 10'000'000));
   EXPECT_EQ(
       operatorTypes(*task, outputId),
       std::set<std::string>{"CudfPrestoOutput"});
-  ASSERT_GT(pinned.live(), 0);
+  EXPECT_EQ(pinned.liveBytes(), 0);
+  EXPECT_GE(operatorPoolBytes(*task, outputId), numBytes);
 
-  int consumerDevice = -1;
-  std::thread consumer([&] {
-    pages.clear();
-    EXPECT_EQ(cudaSuccess, cudaGetDevice(&consumerDevice));
-  });
+  std::weak_ptr<Task> weakTask = task;
+  task.reset();
+  // The pages hold the task, whose pools they free into.
+  ASSERT_FALSE(weakTask.expired());
+  std::thread consumer([&] { pages.clear(); });
   consumer.join();
-  EXPECT_EQ(pinned.live(), 0);
-  EXPECT_EQ(consumerDevice, cudfDevice);
+  TaskMonitor::waitForAllTasksDeleted();
+  EXPECT_TRUE(weakTask.expired());
 }
 
 TEST_F(PrestoOutputTest, runtimeStats) {
@@ -1279,9 +1585,10 @@ TEST_F(PrestoOutputTest, runtimeStats) {
       static_cast<int64_t>(common::CompressionKind::CompressionKind_NONE));
   EXPECT_GT(stats.at("pageLayoutNanos").sum, 0);
   EXPECT_GT(stats.at("deviceToHostNanos").sum, 0);
+  // The page is memory of the operator's pool.
   EXPECT_GE(
-      stats.at("peakPinnedPageBytes").sum,
-      static_cast<int64_t>(run.destinations[0].pageBytes[0].size()));
+      planStats.at(outputId).peakMemoryBytes,
+      run.destinations[0].pageBytes[0].size());
 }
 
 // Outputs the GPU serializer does not serve keep the CPU PartitionedOutput
@@ -1387,6 +1694,23 @@ TEST_F(PrestoOutputTest, cpuInputKeepsCpuOutput) {
       allOperatorTypes(*run.task),
       (std::set<std::string>{"Values", "PartitionedOutput"}));
   assertEqualVectors(input, concat(run.pages()));
+}
+
+TEST_F(PrestoOutputTest, gpuInputAdapterMustAllowCpuOperator) {
+  // An adapter that requires GPU input keeps the CPU operator after a CPU
+  // operator, so it must allow the CPU operator. One that does not is
+  // reported as such instead of as a failed GPU replacement.
+  cudf_velox::OperatorAdapterRegistry::getInstance().registerAdapterFront(
+      std::make_unique<GpuInputOnlyAdapter>());
+  auto input = makeFlatRows(100, 31, false);
+  PlanBuilder builder;
+  builder.values({input});
+  auto plan = passThrough(builder).partitionedOutput({}, 1).planNode();
+  auto task = makeTask(plan, {});
+  VELOX_ASSERT_THROW(
+      task->start(1),
+      "An adapter that requires GPU input must allow the CPU operator: GpuInputOnly");
+  EXPECT_EQ(task->state(), TaskState::kFailed);
 }
 
 TEST_F(PrestoOutputTest, decimalsFromParquetScan) {

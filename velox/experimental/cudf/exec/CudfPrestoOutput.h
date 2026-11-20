@@ -26,7 +26,6 @@
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
 
-#include <atomic>
 #include <deque>
 #include <limits>
 #include <memory>
@@ -50,22 +49,25 @@ namespace facebook::velox::cudf_velox {
 /// broadcast or arbitrary output without partition keys) through the Presto
 /// serde without compression, and every output column has a flat Presto
 /// encoding. An output whose input is already on the CPU keeps
-/// exec::PartitionedOutput. Input is gathered until it fills a page of
-/// cudf.presto_output_page_bytes or kMaxPageRows rows, unless the output
-/// flushes eagerly. The pages carry the CRC32 checksum when the buffer
-/// manager has a Presto output stream listener, as the pages of
-/// exec::PartitionedOutput do.
+/// exec::PartitionedOutput, and so does one whose buffer manager has an output
+/// stream listener other than the Presto one. The pages carry the CRC32
+/// checksum when the buffer manager has the Presto output stream listener, as
+/// the pages of exec::PartitionedOutput do.
 ///
-/// The pages are laid out on the device a wave at a time. Besides the batch
-/// being serialized, the device holds the pages of one wave and, while that
-/// wave is laid out, the compacted and converted values of its rows.
+/// Input is gathered until the columns of the output fill a wave of pages of
+/// cudf.presto_output_page_bytes, or kMaxPageRows rows, unless the output
+/// flushes eagerly. The pages are laid out on the device a wave at a time.
+/// Besides the batch being serialized, the device holds the pages of one wave
+/// and, while that wave is laid out, the compacted and converted values of
+/// its rows.
 ///
-/// The pages are copied into pinned memory from cuDF's pinned memory resource
-/// in batches of at most kPagesPerHostBatch pages and max_output_buffer_size
-/// bytes, or one page when a page is larger, so a driver holds at most that
-/// much beyond the pages in the output buffer; the runtime stat
-/// peakPinnedPageBytes reports the most such bytes alive at once, the pages
-/// the consumer has not freed yet included.
+/// The pages are memory of the operator's pool, as the pages of
+/// exec::PartitionedOutput are, so the memory limit of the query covers them
+/// until the consumer frees them. Pinned memory from cuDF's pinned memory
+/// resource only stages their copy from the device, a batch of at most
+/// kPagesPerHostBatch pages and max_page_partitioning_buffer_size bytes at a
+/// time, or one page when a page is larger. A driver holds at most that many
+/// pages beyond those in the output buffer.
 class CudfPrestoOutput : public CudfOperatorBase {
  public:
   /// Rows a page holds at most. Bounds the pages of narrow rows and of rows
@@ -87,10 +89,12 @@ class CudfPrestoOutput : public CudfOperatorBase {
   ~CudfPrestoOutput() override;
 
   /// Returns why 'node' cannot be served by this operator under the query's
-  /// configuration, or nullopt when it can.
+  /// configuration and with the output stream listener of 'bufferManager', or
+  /// nullopt when it can.
   static std::optional<std::string> cpuFallbackReason(
       const core::PartitionedOutputNode& node,
-      const core::QueryCtx& queryCtx);
+      const core::QueryCtx& queryCtx,
+      const exec::DefaultOutputBufferManager& bufferManager);
 
   /// Whether cudf.presto_output_enabled allows the operator under 'config'.
   static bool isEnabled(const core::QueryConfig& config);
@@ -158,7 +162,7 @@ class CudfPrestoOutput : public CudfOperatorBase {
     size_t next{0};
   };
 
-  // A page copied to pinned host memory, ready to be enqueued.
+  // A page in memory of the operator's pool, ready to be enqueued.
   struct HostPage {
     void* data;
     size_t size;
@@ -179,7 +183,8 @@ class CudfPrestoOutput : public CudfOperatorBase {
   // Lays out the next wave of pages of the current Serializer on the device.
   void buildNextWave();
 
-  // Copies a batch of pages of the current wave to pinned host memory.
+  // Copies a batch of pages of the current wave to memory of the operator's
+  // pool, through pinned memory that is held only meanwhile.
   void copyPagesToHost();
 
   // Writes the host fields of 'range' into its host page.
@@ -195,32 +200,42 @@ class CudfPrestoOutput : public CudfOperatorBase {
   // Runs the pipeline until everything is enqueued or the consumer blocks.
   void drain();
 
-  void releaseHostPage(HostPage& page);
-
   const std::weak_ptr<exec::DefaultOutputBufferManager> bufferManager_;
-  const RowTypePtr inputType_;
+  // The columns of the input the output has, in its order. Empty when the
+  // output has every column of the input in the order of the input.
   const std::vector<column_index_t> outputChannels_;
   const int64_t pageBytes_;
   // Device bytes laid out per wave: a bounded number of pages.
   const int64_t waveBytes_;
-  // Bytes copied to the host between two stream synchronizations: at most
-  // kPagesPerHostBatch pages, and no more than the output buffer accepts
-  // before it blocks; a batch always holds one page.
+  // Bytes of output columns to gather before they are serialized: a wave, so
+  // that the layout, which waits for the device a fixed number of times, runs
+  // once per wave rather than once per page.
+  const int64_t gatherBytes_;
+  // Device bytes of gathered inputs, the columns the output drops included,
+  // at which the inputs are serialized although the columns of the output
+  // fill less than 'gatherBytes_': the dropped columns stay on the device as
+  // long as their input is gathered.
+  const int64_t maxPendingInputBytes_;
+  // Bytes copied to the host between two stream synchronizations, which the
+  // operator holds besides the pages in the output buffer: at most
+  // kPagesPerHostBatch pages, and no more than
+  // max_page_partitioning_buffer_size, which bounds what
+  // exec::PartitionedOutput holds; a batch always holds one page.
   const int64_t hostBatchBytes_;
-  // Serialize each input as it arrives instead of filling a page first.
+  // Serialize each input as it arrives instead of gathering a wave first.
   const bool eagerFlush_;
-  // The buffer manager's listener, and the same when it computes the Presto
-  // checksum; null otherwise.
+  // The buffer manager's listener, which computes the Presto checksum; null
+  // without a listener.
   const std::unique_ptr<OutputStreamListener> listener_;
   serializer::presto::PrestoOutputStreamListener* const checksumListener_;
-  // Pinned page bytes not freed yet, shared with the release callbacks of the
-  // enqueued pages, which run on the consumer's threads.
-  const std::shared_ptr<std::atomic<int64_t>> livePinnedBytes_;
   rmm::host_device_async_resource_ref pinnedMr_;
 
   std::vector<CudfVectorPtr> pendingInputs_;
   int64_t pendingRows_{0};
+  // Device bytes of the columns of the output in 'pendingInputs_'.
   int64_t pendingBytes_{0};
+  // Device bytes of every column of 'pendingInputs_'.
+  int64_t pendingInputBytes_{0};
 
   std::unique_ptr<Serializer> serializer_;
   // The task lists of the wave being laid out, reused across waves.
@@ -232,7 +247,6 @@ class CudfPrestoOutput : public CudfOperatorBase {
   ContinueFuture future_;
   bool finished_{false};
 
-  int64_t peakPinnedBytes_{0};
   uint64_t layoutNanos_{0};
   uint64_t copyNanos_{0};
 };

@@ -138,6 +138,10 @@ bool CompileState::compile(bool allowCpuFallback) {
     if (props.canRunOnGPU && props.adapter != nullptr &&
         props.adapter->requiresGpuInput() &&
         (i == 0 || !opProps[i - 1].producesGpuOutput)) {
+      VELOX_CHECK(
+          props.adapter->allowsCpuOperator(),
+          "An adapter that requires GPU input must allow the CPU operator: {}",
+          props.adapter->name());
       props.canRunOnGPU = false;
       props.acceptsGpuInput = false;
       props.producesGpuOutput = false;

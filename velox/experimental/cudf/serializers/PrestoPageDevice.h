@@ -74,6 +74,27 @@ struct CopyTask {
   size_t size;
 };
 
+/// What prestoPageStats() and hasNonEmptyNullStrings() read of one column.
+struct PageStatsColumn {
+  /// cuDF validity mask (1 = valid), or null for a column without nulls.
+  const cudf::bitmask_type* mask;
+  /// Mask bit of the column's first row.
+  int64_t firstBit;
+  /// The offsets of a strings column; 'offsets.offsets' is null for a column
+  /// of another type.
+  StringOffsets offsets;
+};
+
+/// What prestoPageStats() tells of one column at one page boundary.
+struct PageStats {
+  /// Offset at which the strings of the boundary row start, the end offset of
+  /// the column at the last boundary; 0 for a column without offsets.
+  int64_t charsOffset;
+  /// Null rows of the page that starts at the boundary; 0 for a column
+  /// without a mask and at the last boundary, where no page starts.
+  int32_t numNulls;
+};
+
 /// Splits 'numRows' rows into pages and returns the row boundaries, numPages +
 /// 1 values from 0 to numRows, or {0} without rows. A row costs
 /// 'fixedBitsPerRow' bits, which is not negative, plus the bytes of its
@@ -105,11 +126,23 @@ void batchedDeviceCopy(
     cudf::host_span<const CopyTask> tasks,
     cuda::stream_ref stream);
 
-/// Returns the offset at which each of 'rows' starts, rows counted from the
-/// column's first row. A row equal to the row count yields the end offset.
-std::vector<int64_t> gatherStringOffsets(
-    const StringOffsets& offsets,
-    cudf::host_span<const int64_t> rows,
+/// Returns the PageStats of every column at every page boundary:
+/// columns.size() * bounds.size() values, those of a column next to each
+/// other. 'bounds' are the row boundaries of the pages as
+/// prestoPageBoundaries() returns them: from 0 to the row count, never
+/// decreasing. Waits for the device once, however many columns there are.
+std::vector<PageStats> prestoPageStats(
+    cudf::host_span<const PageStatsColumn> columns,
+    cudf::host_span<const int64_t> bounds,
+    cuda::stream_ref stream);
+
+/// Returns for each column whether one of its 'numRows' rows is null and has
+/// string bytes, which cuDF allows and a Presto page cannot hold; false for a
+/// column without a mask or without offsets. Waits for the device once,
+/// however many columns there are.
+std::vector<bool> hasNonEmptyNullStrings(
+    cudf::host_span<const PageStatsColumn> columns,
+    int32_t numRows,
     cuda::stream_ref stream);
 
 /// Copies the values of the non-null rows of a row range to 'dst', next to

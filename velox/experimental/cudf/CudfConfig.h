@@ -65,12 +65,12 @@ struct CudfConfig {
   static constexpr const char* kUcxExchangeLogLevel{"cudf.exchange_log_level"};
   static constexpr const char* kUcxPartitionedOutputBatchRows{
       "cudf.partitioned_output_batch_rows"};
+  /// Query session configs for the cuDF Operators.
+  static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
   static constexpr const char* kCudfPrestoOutputEnabled{
       "cudf.presto_output_enabled"};
   static constexpr const char* kCudfPrestoOutputPageBytes{
       "cudf.presto_output_page_bytes"};
-  /// Query session configs for the cuDF Operators.
-  static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
 
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
@@ -134,8 +134,8 @@ struct CudfConfig {
 
   /// Serialized bytes per Presto page built on the GPU, the page cap of
   /// PartitionedOutput by default; a page exceeds it by less than one row
-  /// plus its headers. CudfPrestoOutput gathers input until it fills a page,
-  /// unless the output flushes eagerly. Also a query config key.
+  /// plus its headers. CudfPrestoOutput gathers input until it fills 32
+  /// pages, unless the output flushes eagerly. Also a query config key.
   int64_t prestoOutputPageBytes{int64_t{1} << 20};
 
   /// Memory resource for cuDF.
