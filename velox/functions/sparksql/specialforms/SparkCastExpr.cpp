@@ -133,6 +133,12 @@ bool SparkCastCallToSpecialForm::isAnsiSupported(
     return true;
   }
 
+  // Decimal-to-string casts never fail. ANSI mode differs from legacy mode by
+  // producing plain strings instead of scientific notation.
+  if (fromType->isDecimal() && toType->isVarchar()) {
+    return true;
+  }
+
   if (toType->isDecimal()) {
     if (fromType->isDecimal()) {
       return true;
