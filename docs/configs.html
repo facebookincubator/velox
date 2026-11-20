@@ -67,13 +67,15 @@ estimate of average row size is known. Otherwise preferred_output_batch_rows is 
 <td><p>integer</p></td>
 <td><p>1024</p></td>
 <td><p>Preferred number of rows to be returned by operators from Operator::getOutput. It is used when an estimate of
-average row size is not known. When the estimate of average row size is known, preferred_output_batch_bytes is used.</p></td>
+average row size is not known. When the estimate of average row size is known, preferred_output_batch_bytes is used.
+Must be at least 1.</p></td>
 </tr>
 <tr class="row-even"><td><p>max_output_batch_rows</p></td>
 <td><p>integer</p></td>
 <td><p>10000</p></td>
 <td><p>Max number of rows that could be return by operators from Operator::getOutput. It is used when an estimate of
-average row size is known and preferred_output_batch_bytes is used to compute the number of output rows.</p></td>
+average row size is known and preferred_output_batch_bytes is used to compute the number of output rows.
+Must be at least 1.</p></td>
 </tr>
 <tr class="row-odd"><td><p>merge_join_output_batch_start_size</p></td>
 <td><p>integer</p></td>
@@ -187,11 +189,11 @@ enabled by hash probe). If false, only the last prober is allowed to output buil
 </tr>
 <tr class="row-even"><td><p>max_local_exchange_partition_count</p></td>
 <td><p>integer</p></td>
-<td><p>2^32</p></td>
+<td><p>2^32 - 1</p></td>
 <td><p>Limits the number of partitions created by a local exchange. Partitioning data too granularly can lead to poor performance.
 This setting allows increasing the task concurrency for all pipelines except the ones that require a local partitioning.
 Affects the number of drivers for pipelines containing LocalPartitionNode and cannot exceed the maximum number of
-pipeline drivers configured for the task.</p></td>
+pipeline drivers configured for the task. Must be at least 1.</p></td>
 </tr>
 <tr class="row-odd"><td><p>exchange.max_buffer_size</p></td>
 <td><p>integer</p></td>
@@ -236,7 +238,8 @@ has only one shuffle partition source.</p></td>
 <tr class="row-even"><td><p>local_merge_source_queue_size</p></td>
 <td><p>integer</p></td>
 <td><p>2</p></td>
-<td><p>Maximum number of vectors buffered in each local merge source before blocking to wait for consumers.</p></td>
+<td><p>Maximum number of vectors buffered in each local merge source before blocking to wait for consumers.
+Must be at least 1.</p></td>
 </tr>
 <tr class="row-odd"><td><p>max_page_partitioning_buffer_size</p></td>
 <td><p>integer</p></td>
@@ -641,70 +644,76 @@ global arbitration victim selection.</p></td>
 <td><p>false</p></td>
 <td><p>When <cite>spill_enabled</cite> is true, determines whether LocalMerge operators can spill to disk to cap memory usage.</p></td>
 </tr>
-<tr class="row-even"><td><p>mixed_grouped_mode_hash_join_spill_enabled</p></td>
+<tr class="row-even"><td><p>local_merge_max_num_merge_sources</p></td>
+<td><p>integer</p></td>
+<td><p>2^32 - 1</p></td>
+<td><p>When <cite>local_merge_spill_enabled</cite> is true, the maximum number of sources a LocalMerge operator merges at a time.
+Must be at least 1.</p></td>
+</tr>
+<tr class="row-odd"><td><p>mixed_grouped_mode_hash_join_spill_enabled</p></td>
 <td><p>boolean</p></td>
 <td><p>false</p></td>
 <td><p>When both <cite>spill_enabled</cite> and <cite>join_spill_enabled</cite> are true, determines if HashProbe and HashBuild are able to spill under mixed grouped execution mode.</p></td>
 </tr>
-<tr class="row-odd"><td><p>order_by_spill_enabled</p></td>
+<tr class="row-even"><td><p>order_by_spill_enabled</p></td>
 <td><p>boolean</p></td>
 <td><p>true</p></td>
 <td><p>When <cite>spill_enabled</cite> is true, determines whether OrderBy operator can spill to disk under memory pressure.</p></td>
 </tr>
-<tr class="row-even"><td><p>window_spill_enabled</p></td>
+<tr class="row-odd"><td><p>window_spill_enabled</p></td>
 <td><p>boolean</p></td>
 <td><p>true</p></td>
 <td><p>When <cite>spill_enabled</cite> is true, determines whether Window operator can spill to disk under memory pressure.</p></td>
 </tr>
-<tr class="row-odd"><td><p>window_spill_min_read_batch_rows</p></td>
+<tr class="row-even"><td><p>window_spill_min_read_batch_rows</p></td>
 <td><p>integer</p></td>
 <td><p>1000</p></td>
 <td><p>When processing spilled window data, read batches of whole partitions having at least that many rows. Set to 1 to
 read one whole partition at a time. Each driver processing the Window operator will process that much data at
 once.</p></td>
 </tr>
-<tr class="row-even"><td><p>row_number_spill_enabled</p></td>
+<tr class="row-odd"><td><p>row_number_spill_enabled</p></td>
 <td><p>boolean</p></td>
 <td><p>true</p></td>
 <td><p>When <cite>spill_enabled</cite> is true, determines whether RowNumber operator can spill to disk under memory pressure.</p></td>
 </tr>
-<tr class="row-odd"><td><p>topn_row_number_spill_enabled</p></td>
+<tr class="row-even"><td><p>topn_row_number_spill_enabled</p></td>
 <td><p>boolean</p></td>
 <td><p>true</p></td>
 <td><p>When <cite>spill_enabled</cite> is true, determines whether TopNRowNumber operator can spill to disk under memory pressure.</p></td>
 </tr>
-<tr class="row-even"><td><p>mark_distinct_spill_enabled</p></td>
+<tr class="row-odd"><td><p>mark_distinct_spill_enabled</p></td>
 <td><p>boolean</p></td>
 <td><p>false</p></td>
 <td><p>When <cite>spill_enabled</cite> is true, determines whether MarkDistinct operator can spill to disk under memory pressure.</p></td>
 </tr>
-<tr class="row-odd"><td><p>writer_spill_enabled</p></td>
+<tr class="row-even"><td><p>writer_spill_enabled</p></td>
 <td><p>boolean</p></td>
 <td><p>true</p></td>
 <td><p>When <cite>writer_spill_enabled</cite> is true, determines whether TableWriter operator can flush the buffered data to disk
 under memory pressure.</p></td>
 </tr>
-<tr class="row-even"><td><p>aggregation_spill_memory_threshold</p></td>
+<tr class="row-odd"><td><p>aggregation_spill_memory_threshold</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Maximum amount of memory in bytes that a final aggregation can use before spilling. 0 means unlimited.</p></td>
 </tr>
-<tr class="row-odd"><td><p>join_spill_memory_threshold</p></td>
+<tr class="row-even"><td><p>join_spill_memory_threshold</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Maximum amount of memory in bytes that a hash join build side can use before spilling. 0 means unlimited.</p></td>
 </tr>
-<tr class="row-even"><td><p>order_by_spill_memory_threshold</p></td>
+<tr class="row-odd"><td><p>order_by_spill_memory_threshold</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Maximum amount of memory in bytes that an order by can use before spilling. 0 means unlimited.</p></td>
 </tr>
-<tr class="row-odd"><td><p>writer_flush_threshold_bytes</p></td>
+<tr class="row-even"><td><p>writer_flush_threshold_bytes</p></td>
 <td><p>integer</p></td>
 <td><p>96MB</p></td>
 <td><p>Minimum memory footprint size required to reclaim memory from a file writer by flushing its buffered data to disk.</p></td>
 </tr>
-<tr class="row-even"><td><p>min_spillable_reservation_pct</p></td>
+<tr class="row-odd"><td><p>min_spillable_reservation_pct</p></td>
 <td><p>integer</p></td>
 <td><p>5</p></td>
 <td><p>The minimal available spillable memory reservation in percentage of the current memory usage. Suppose the current
@@ -713,7 +722,7 @@ if M * P / 100 &gt; N, then spiller operator needs to grow the memory reservatio
 ‘spillable_reservation_growth_pct’ (see below). This ensures we have sufficient amount of memory reservation to
 process the large input outlier.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spillable_reservation_growth_pct</p></td>
+<tr class="row-even"><td><p>spillable_reservation_growth_pct</p></td>
 <td><p>integer</p></td>
 <td><p>10</p></td>
 <td><p>The spillable memory reservation growth percentage of the current memory usage. Suppose a growth percentage of N
@@ -721,7 +730,7 @@ and the current memory usage size of M, the next memory reservation size will be
 the memory reservation K times, the memory reservation size will be M * (1 + N / 100) ^ K. Hence the memory
 reservation grows along a series of powers of (1 + N / 100). If the memory reservation fails, it starts spilling.</p></td>
 </tr>
-<tr class="row-even"><td><p>max_spill_level</p></td>
+<tr class="row-odd"><td><p>max_spill_level</p></td>
 <td><p>integer</p></td>
 <td><p>1</p></td>
 <td><p>The maximum allowed spilling level with zero being the initial spilling level. Applies to hash join build
@@ -729,7 +738,7 @@ spilling which might use recursive spilling when the build table is very large. 
 In this case an extremely large query might run out of spilling partition bits. The max spill level
 can be used to prevent a query from using too much io and cpu resources.</p></td>
 </tr>
-<tr class="row-odd"><td><p>max_spill_run_rows</p></td>
+<tr class="row-even"><td><p>max_spill_run_rows</p></td>
 <td><p>integer</p></td>
 <td><p>12582912</p></td>
 <td><p>The max number of rows to fill and spill for each spill run. This is used to cap the memory used for spilling.
@@ -738,31 +747,31 @@ default value is set to 12 million rows which uses <code class="docutils literal
 Relation between spill rows and memory usage are as follows:
 12 million rows: <code class="docutils literal notranslate"><span class="pre">128</span> <span class="pre">MB</span></code>, 30 million rows: <code class="docutils literal notranslate"><span class="pre">256</span> <span class="pre">MB</span></code>, 60 million rows: <code class="docutils literal notranslate"><span class="pre">512</span> <span class="pre">MB</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p>max_spill_file_size</p></td>
+<tr class="row-odd"><td><p>max_spill_file_size</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>The maximum allowed spill file size. Zero means unlimited.</p></td>
 </tr>
-<tr class="row-odd"><td><p>max_spill_bytes</p></td>
+<tr class="row-even"><td><p>max_spill_bytes</p></td>
 <td><p>integer</p></td>
 <td><p>107374182400</p></td>
 <td><p>The max spill bytes limit set for each query. This is used to cap the storage used for spilling.
 If it is zero, then there is no limit and spilling might exhaust the storage or takes too long to run.
 The default value is set to 100 GB.</p></td>
 </tr>
-<tr class="row-even"><td><p>spill_write_buffer_size</p></td>
+<tr class="row-odd"><td><p>spill_write_buffer_size</p></td>
 <td><p>integer</p></td>
 <td><p>4MB</p></td>
 <td><p>The maximum size in bytes to buffer the serialized spill data before write to disk for IO efficiency.
 If set to zero, buffering is disabled.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spill_read_buffer_size</p></td>
+<tr class="row-even"><td><p>spill_read_buffer_size</p></td>
 <td><p>integer</p></td>
 <td><p>1MB</p></td>
 <td><p>The buffer size in bytes to read from one spilled file. If the underlying filesystem supports async
 read, we do read-ahead with double buffering, which doubles the buffer used to read from each spill file.</p></td>
 </tr>
-<tr class="row-even"><td><p>min_spill_run_size</p></td>
+<tr class="row-odd"><td><p>min_spill_run_size</p></td>
 <td><p>integer</p></td>
 <td><p>256MB</p></td>
 <td><p>The minimum spill run size (bytes) limit used to select partitions for spilling. The spiller tries to spill a
@@ -771,38 +780,38 @@ If the limit is zero, then the spiller always spills a previously spilled partit
 to avoid spill from a partition with a small amount of data which might result in generating too many small
 spilled files.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spill_compression_codec</p></td>
+<tr class="row-even"><td><p>spill_compression_codec</p></td>
 <td><p>string</p></td>
 <td><p>none</p></td>
 <td><p>Specifies the compression algorithm type to compress the spilled data before write to disk to trade CPU for IO
 efficiency. The supported compression codecs are: zlib, snappy, lzo, zstd, lz4 and gzip.
 none means no compression.</p></td>
 </tr>
-<tr class="row-even"><td><p>spill_num_max_merge_files</p></td>
+<tr class="row-odd"><td><p>spill_num_max_merge_files</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>The max number of files to merge at a time when merging sorted files into a single ordered stream. 0 means unlimited.
 This is used to reduce memory pressure by capping the number of open files when merging spilled sorted files to
 avoid using too much memory and causing OOM. Note that this is only applicable for ordered spill.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spill_prefixsort_enabled</p></td>
+<tr class="row-even"><td><p>spill_prefixsort_enabled</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Enable the prefix sort or fallback to timsort in spill. The prefix sort is faster than std::sort but requires the
 memory to build normalized prefix keys, which might have potential risk of running out of server memory.</p></td>
 </tr>
-<tr class="row-even"><td><p>spiller_start_partition_bit</p></td>
+<tr class="row-odd"><td><p>spiller_start_partition_bit</p></td>
 <td><p>integer</p></td>
 <td><p>29</p></td>
 <td><p>The start partition bit which is used with <cite>spiller_num_partition_bits</cite> together to calculate the spilling partition number.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spiller_num_partition_bits</p></td>
+<tr class="row-even"><td><p>spiller_num_partition_bits</p></td>
 <td><p>integer</p></td>
 <td><p>3</p></td>
 <td><p>The number of bits (N) used to calculate the spilling partition number for hash join and RowNumber: 2 ^ N. At the moment the maximum
 value is 3, meaning we only support up to 8-way spill partitioning.</p></td>
 </tr>
-<tr class="row-even"><td><p>testing.spill_pct</p></td>
+<tr class="row-odd"><td><p>testing.spill_pct</p></td>
 <td><p>integer</p></td>
 <td><p>0</p></td>
 <td><p>Percentage of aggregation or join input batches that will be forced to spill for testing. 0 means no extra spilling.</p></td>
@@ -950,14 +959,14 @@ to produce deterministic results. Zero means ‘no override’.</p></td>
 <tbody>
 <tr class="row-even"><td><p>task_writer_count</p></td>
 <td><p>integer</p></td>
-<td><p>1</p></td>
-<td><p>The number of parallel table writer threads per task.</p></td>
+<td><p>4</p></td>
+<td><p>The number of parallel table writer threads per task. Must be at least 1.</p></td>
 </tr>
 <tr class="row-odd"><td><p>task_partitioned_writer_count</p></td>
 <td><p>integer</p></td>
 <td><p>task_writer_count</p></td>
 <td><p>The number of parallel table writer threads per task for partitioned
-table writes. If not set, use ‘task_writer_count’ as default.</p></td>
+table writes. If not set, use ‘task_writer_count’ as default. Must be at least 1.</p></td>
 </tr>
 <tr class="row-even"><td><p>scaled_writer_rebalance_max_memory_usage_ratio</p></td>
 <td><p>double</p></td>
