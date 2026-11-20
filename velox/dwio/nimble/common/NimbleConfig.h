@@ -211,6 +211,23 @@ class Config : public velox::config::ConfigBase {
   // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
   static Entry<bool> INDEX_OMIT_KEY_COLUMN_STORAGE;
 
+  /// Names the registered cluster index to build. Empty (default) selects the
+  /// built-in cluster index. Settings that only some indexes take go in
+  /// nimble.index.properties.
+  /// Requires nimble.index.columns when non-empty.
+  /// EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
+  /// production tables without consulting the Nimble team (oncall: dwios).
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<std::string> INDEX_NAME;
+
+  /// Configures the cluster index that nimble.index.name selects, as
+  /// comma-separated "key:value" pairs (mirrors nimble.buffer_policy_config).
+  /// Each index takes its own keys, so the writer that builds the index
+  /// validates them. Empty (default) sets none.
+  /// Requires nimble.index.columns when non-empty.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<std::string> INDEX_PROPERTIES;
+
   // EXPERIMENTAL: BlockBitPacking encoding is not production-ready. Do not
   // enable for production tables without consulting the Nimble team
   // (oncall: dwios).

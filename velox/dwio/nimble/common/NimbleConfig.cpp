@@ -417,6 +417,14 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
     "nimble.index.omit_key_column_storage",
     false);
 
+/* static */ Config::Entry<std::string> Config::INDEX_NAME(
+    "nimble.index.name",
+    "");
+
+/* static */ Config::Entry<std::string> Config::INDEX_PROPERTIES(
+    "nimble.index.properties",
+    "");
+
 // EXPERIMENTAL: BlockBitPacking encoding is not production-ready. Do not
 // enable for production tables without consulting the Nimble team
 // (oncall: dwios).
