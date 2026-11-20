@@ -17,6 +17,8 @@
 #pragma once
 
 #include "velox/dwio/common/SelectiveByteRleColumnReader.h"
+#include "velox/dwio/dwrf/common/DecoderUtil.h"
+#include "velox/dwio/dwrf/reader/DwrfData.h"
 
 namespace facebook::velox::dwrf {
 
@@ -30,71 +32,20 @@ class SelectiveByteRleColumnReader
       std::shared_ptr<const dwio::common::TypeWithId> fileType,
       DwrfParams& params,
       common::ScanSpec& scanSpec,
-      bool isBool)
-      : dwio::common::SelectiveByteRleColumnReader(
-            requestedType,
-            std::move(fileType),
-            params,
-            scanSpec) {
-    const EncodingKey encodingKey{
-        fileType_->id(), params.flatMapContext().sequence};
-    auto& stripe = params.stripeStreams();
-    if (isBool) {
-      boolRle_ = createBooleanRleDecoder(
-          stripe.getStream(
-              StripeStreamsUtil::getStreamForKind(
-                  stripe,
-                  encodingKey,
-                  proto::Stream_Kind_DATA,
-                  proto::orc::Stream_Kind_DATA),
-              params.streamLabels().label(),
-              true),
-          encodingKey);
-    } else {
-      byteRle_ = createByteRleDecoder(
-          stripe.getStream(
-              StripeStreamsUtil::getStreamForKind(
-                  stripe,
-                  encodingKey,
-                  proto::Stream_Kind_DATA,
-                  proto::orc::Stream_Kind_DATA),
-              params.streamLabels().label(),
-              true),
-          encodingKey);
-    }
-  }
+      bool isBool);
+
+  void getValues(const RowSet& rows, VectorPtr* result) override;
 
   bool hasBulkPath() const override {
     return false;
   }
 
-  void seekToRowGroup(int64_t index) override {
-    dwio::common::SelectiveByteRleColumnReader::seekToRowGroup(index);
-    auto positionsProvider = formatData_->seekToRowGroup(index);
-    if (boolRle_) {
-      boolRle_->seekToRowGroup(positionsProvider);
-    } else {
-      byteRle_->seekToRowGroup(positionsProvider);
-    }
+  void seekToRowGroup(int64_t index) override;
 
-    VELOX_CHECK(!positionsProvider.hasNext());
-  }
-
-  uint64_t skip(uint64_t numValues) override {
-    numValues = formatData_->skipNulls(numValues);
-    if (byteRle_) {
-      byteRle_->skip(numValues);
-    } else {
-      boolRle_->skip(numValues);
-    }
-    return numValues;
-  }
+  uint64_t skip(uint64_t numValues) override;
 
   void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
-      override {
-    readCommon<SelectiveByteRleColumnReader, true>(offset, rows, incomingNulls);
-    readOffset_ += rows.back() + 1;
-  }
+      override;
 
   template <typename ColumnVisitor>
   void readWithVisitor(const RowSet& rows, ColumnVisitor visitor);
