@@ -16,6 +16,8 @@
 
 #include "velox/functions/prestosql/types/JsonCastOperator.h"
 
+#include <cmath>
+
 #include "velox/expression/PeeledEncoding.h"
 #include "velox/expression/VectorWriters.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
@@ -141,14 +143,19 @@ void generateJsonKeyTyped(
     } else {
       result.clear();
 
-      if constexpr (!std::is_same_v<T, StringView>) {
+      bool addQuotes = !std::is_same_v<T, StringView>;
+      if constexpr (!legacyCast && std::is_floating_point_v<T>) {
+        // generateJsonTyped already quotes non-finite floating-point values.
+        addQuotes = std::isfinite(inputVector.valueAt(row));
+      }
+      if (addQuotes) {
         result.append("\"");
       }
 
       generateJsonTyped<T, legacyCast>(
           inputVector, row, result, type, isDate, isDecimal, hooks);
 
-      if constexpr (!std::is_same_v<T, StringView>) {
+      if (addQuotes) {
         result.append("\"");
       }
 

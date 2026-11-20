@@ -600,6 +600,15 @@ TEST_F(JsonCastTest, fromAllNullOrEmptyMapOfRows) {
   testCast(data, expected);
 }
 
+TEST_F(JsonCastTest, fromMapWithNonFiniteFloatingPointKeys) {
+  const std::vector<std::optional<JsonNativeType>> expected{
+      R"({"-Infinity":3,"Infinity":2,"NaN":1})"};
+  testCastFromMap<double, int64_t>(
+      MAP(DOUBLE(), BIGINT()), {{{kNan, 1}, {kInf, 2}, {-kInf, 3}}}, expected);
+  testCastFromMap<float, int64_t>(
+      MAP(REAL(), BIGINT()), {{{kNan, 1}, {kInf, 2}, {-kInf, 3}}}, expected);
+}
+
 TEST_F(JsonCastTest, fromMap) {
   // Tests map with string keys.
   std::vector<std::vector<Pair<StringView, int64_t>>> mapStringKey{
