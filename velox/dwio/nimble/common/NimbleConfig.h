@@ -133,20 +133,35 @@ class Config : public velox::config::ConfigBase {
   /// policy, leaving the writer on the flush-policy path.
   ///
   /// Currently supported:
-  ///   type:user_sequence[,user_id_column:<name>|,user_id_column_index:<n>]
+  ///   type:user_sequence[,grouping_columns:<name>;<name>;...]
+  ///                     [,user_id_column:<name>|,user_id_column_index:<n>]
   ///                     [,max_rows_per_stripe:<n>]
-  ///       Cuts a stripe at every change of an int64 grouping column, with an
-  ///       optional hard row cap 'max_rows_per_stripe' (default 0, meaning
-  ///       uncapped). Each emitted stripe therefore holds rows for exactly one
-  ///       key, which is what the cluster-index read path expects. See
+  ///                     [,target_groups_per_stripe:<n>]
+  ///       Cuts a stripe at every change of the grouping columns.
+  ///       'max_rows_per_stripe' caps the rows of each stripe, so a group with
+  ///       more rows spans several stripes; 0 (default) sets no cap.
+  ///       'target_groups_per_stripe' (default 1, must be positive) packs that
+  ///       many contiguous groups into a stripe before a group change cuts it.
+  ///       With the defaults, each emitted stripe holds rows for exactly one
+  ///       group, which is what the cluster-index read path expects. See
   ///       UserSequenceBufferPolicy.h.
   ///
-  ///       Address the grouping column by 'user_id_column' (a name, matching
-  ///       how nimble.index.columns is spelled) or by 'user_id_column_index'
-  ///       (a zero-based position, default 0). Supplying both is an error.
-  ///       Prefer the name: this column must be the same one the cluster index
-  ///       is keyed on, and a position silently follows a reordered projection
-  ///       onto a different column.
+  ///       'grouping_columns' names, in order, the columns whose value tuple
+  ///       identifies a group, e.g. "grouping_columns:user_id;event_type" cuts
+  ///       at every change of user ID or event type. Columns may be of any
+  ///       type and must not repeat.
+  ///
+  ///       Without 'grouping_columns', the group is one BIGINT user ID column,
+  ///       addressed by 'user_id_column' (a name) or by 'user_id_column_index'
+  ///       (a zero-based position, default 0). Supplying both, or either with
+  ///       'grouping_columns', is an error. These spellings predate
+  ///       'grouping_columns' and stay because Sequence Storage tables persist
+  ///       'user_id_column' in their serde params.
+  ///
+  ///       Name columns as nimble.index.columns spells them: the grouping
+  ///       columns must be the ones the cluster index is keyed on, and a
+  ///       position silently follows a reordered projection onto a different
+  ///       column.
   ///
   /// NOTE: buffer and flush policies are mutually exclusive. When a buffer
   /// policy is installed Writer routes every write() through it and never
