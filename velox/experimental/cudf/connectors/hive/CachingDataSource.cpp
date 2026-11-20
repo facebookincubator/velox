@@ -725,6 +725,14 @@ class CachingDataSource final : public cudf::io::datasource {
     auto copiesQueuedPromise = std::make_shared<std::promise<size_t>>();
     auto copiesQueued = copiesQueuedPromise->get_future();
 
+    auto bytesInGpu = std::async(
+        std::launch::deferred,
+        [copiesQueued = std::move(copiesQueued), read]() mutable {
+          const auto bytes = copiesQueued.get();
+          waitForStream(read.stream, read.device);
+          return bytes;
+        });
+
     // Put the range in the cache on a fill thread, then copy it to the GPU on
     // a copy thread.
     fillExecutor()->add([reader = reader_, read, copiesQueuedPromise] {
@@ -746,14 +754,7 @@ class CachingDataSource final : public cudf::io::datasource {
       }
     });
 
-    // Return a future whose get() waits until the bytes are in GPU memory.
-    return std::async(
-        std::launch::deferred,
-        [copiesQueued = std::move(copiesQueued), read]() mutable {
-          const auto bytes = copiesQueued.get();
-          waitForStream(read.stream, read.device);
-          return bytes;
-        });
+    return bytesInGpu;
   }
 
   size_t device_read(
