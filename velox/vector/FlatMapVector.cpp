@@ -522,6 +522,43 @@ bool FlatMapVector::containsNullAt(vector_size_t index) const {
   return false;
 }
 
+uint64_t FlatMapVector::retainedSizeImpl(
+    uint64_t& totalStringBufferSize) const {
+  auto size = BaseVector::retainedSizeImpl();
+  if (distinctKeys_) {
+    size += distinctKeys_->retainedSize(totalStringBufferSize);
+  }
+  for (const auto& values : mapValues_) {
+    if (values) {
+      size += values->retainedSize(totalStringBufferSize);
+    }
+  }
+  for (const auto& inMap : inMaps_) {
+    if (inMap) {
+      size += inMap->capacity();
+    }
+  }
+  return size;
+}
+
+uint64_t FlatMapVector::estimateFlatSize() const {
+  auto size = BaseVector::retainedSizeImpl();
+  if (distinctKeys_) {
+    size += distinctKeys_->estimateFlatSize();
+  }
+  for (const auto& values : mapValues_) {
+    if (values) {
+      size += values->estimateFlatSize();
+    }
+  }
+  for (const auto& inMap : inMaps_) {
+    if (inMap) {
+      size += inMap->capacity();
+    }
+  }
+  return size;
+}
+
 uint64_t FlatMapVector::hashValueAt(vector_size_t index) const {
   if (isNullAt(index)) {
     return BaseVector::kNullHash;
