@@ -19,6 +19,7 @@
 #include <velox/exec/OutputBufferManager.h>
 #include <velox/exec/Task.h>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -177,12 +178,29 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
       std::mutex>
       queues_;
 
-  // Tracks removed tasks so late readers receive EOS instead of waiting on
-  // a recreated placeholder. Maps each to the producerError it was removed
-  // with, which a late getData() reports.
+  // What a removal leaves behind for consumers that arrive after it.
+  struct RemovedTask {
+    // Expires when the host destroys the producer's Task, after which no
+    // consumer is expected. Empty if no Task with the ID was alive at the
+    // removal.
+    std::weak_ptr<exec::Task> task;
+    // What the end marker of a getData() after the removal carries.
+    std::optional<std::string> producerError;
+  };
+
+  // The Tasks whose initializeTask() threw before their queue was registered,
+  // so that their removal can still tie its record to the Task. removeTask()
+  // erases the entry; Task::terminate() removes such a Task once
+  // initializeTask() returned.
   folly::Synchronized<
-      std::unordered_map<std::string, std::optional<std::string>>,
+      std::unordered_map<std::string, std::weak_ptr<exec::Task>>,
       std::mutex>
+      failedInitializations_;
+
+  // Tracks removed tasks so late readers receive EOS instead of waiting on
+  // a recreated placeholder. removeTask() drops the records whose Task was
+  // destroyed, so the map holds at most the tasks the host still keeps.
+  folly::Synchronized<std::unordered_map<std::string, RemovedTask>, std::mutex>
       removedTasks_;
 };
 

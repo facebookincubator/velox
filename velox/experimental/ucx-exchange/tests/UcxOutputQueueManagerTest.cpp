@@ -1389,6 +1389,109 @@ TEST_F(
               "Producer task ended before sending all its output")));
 }
 
+// The record of a removed task answers consumers that arrive after the removal
+// for as long as the host keeps the producer's Task. Once the Task is
+// destroyed, the next removal drops the record, in the queue manager and in
+// IntraNodeTransferRegistry, so that neither keeps one for every task the
+// worker ever ran.
+TEST_F(UcxOutputQueueManagerTest, removedTaskRecordLivesAsLongAsItsTask) {
+  const std::string taskId = "recordedWhileTaskLives";
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  bool fired{false};
+  auto receive = [&fired](
+                     std::shared_ptr<cudf::packed_columns> data,
+                     vector_size_t /*numRows*/,
+                     std::vector<int64_t> /*remainingBytes*/,
+                     std::optional<std::string> /*error*/) {
+    EXPECT_EQ(data, nullptr);
+    fired = true;
+  };
+
+  // Other removals keep the record while the Task is alive.
+  queueManager_->removeTask("otherRemovedTask");
+  queueManager_->getData(taskId, 0, receive);
+  EXPECT_TRUE(fired);
+  EXPECT_TRUE(registry->poll({taskId, /*destination=*/0, 0}).has_value());
+
+  std::weak_ptr<Task> weakTask = task;
+  task.reset();
+  ASSERT_TRUE(weakTask.expired());
+  queueManager_->removeTask("removalAfterTaskDestroyed");
+
+  // A consumer that arrives now is treated like one of a task not created yet.
+  fired = false;
+  queueManager_->getData(taskId, 0, receive);
+  EXPECT_FALSE(fired);
+  EXPECT_FALSE(registry->poll({taskId, /*destination=*/0, 0}).has_value());
+
+  queueManager_->removeTask(taskId);
+  EXPECT_TRUE(fired);
+  for (const auto& removedTaskId :
+       {taskId,
+        std::string{"otherRemovedTask"},
+        std::string{"removalAfterTaskDestroyed"}}) {
+    registry->clearCancelledTask(removedTaskId);
+  }
+}
+
+// A task whose initializeTask() threw is removed with no queue registered, so
+// only the failed initialization knew its Task. Its record must still live as
+// long as the Task rather than until the next removal.
+DEBUG_ONLY_TEST_F(
+    UcxOutputQueueManagerTest,
+    recordOfFailedInitializationLivesAsLongAsItsTask) {
+  const std::string taskId = "failedInitialization";
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  auto task = createSourceTask(taskId, pool_, UcxTestData::kTestRowType);
+  {
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::ucx_exchange::UcxOutputQueueManager::initializeTask",
+        std::function<void(Task*)>(
+            [](Task*) { VELOX_FAIL("Injected initialization failure"); }));
+    VELOX_ASSERT_THROW(
+        queueManager_->initializeTask(
+            task,
+            core::PartitionedOutputNode::Kind::kPartitioned,
+            /*numDestinations=*/1,
+            /*numDrivers=*/1),
+        "Injected initialization failure");
+  }
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  queueManager_->removeTask("removalAfterFailedInitialization");
+  bool fired{false};
+  std::optional<std::string> producerError;
+  queueManager_->getData(
+      taskId,
+      0,
+      [&fired, &producerError](
+          std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
+          std::vector<int64_t> /*remainingBytes*/,
+          std::optional<std::string> error) {
+        EXPECT_EQ(data, nullptr);
+        fired = true;
+        producerError = std::move(error);
+      });
+  EXPECT_TRUE(fired);
+  EXPECT_THAT(
+      producerError,
+      testing::Optional(
+          testing::HasSubstr(
+              "Producer task ended before initializing its output")));
+  for (const auto& removedTaskId :
+       {taskId, std::string{"removalAfterFailedInitialization"}}) {
+    registry->clearCancelledTask(removedTaskId);
+  }
+}
+
 TEST_F(UcxOutputQueueManagerTest, terminateUnpublishedReader) {
   const std::string taskId = "terminatedPendingReader";
   auto task = initializeTask(

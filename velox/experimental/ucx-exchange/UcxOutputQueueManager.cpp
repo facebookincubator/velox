@@ -42,26 +42,39 @@ void UcxOutputQueueManager::initializeTask(
     int numDrivers,
     const std::string& /*transportOptions*/) {
   const auto& taskId = task->taskId();
+  const std::weak_ptr<exec::Task> weakTask = task;
   std::vector<UcxDataAvailable> notifications;
-  queues_.withLock([&](auto& queues) {
-    auto it = queues.find(taskId);
-    if (it == queues.end()) {
-      queues[taskId] = std::make_shared<UcxOutputQueue>(
-          std::move(task), numDestinations, numDrivers, kind);
-    } else {
-      if (!it->second->initialize(
-              task, numDestinations, numDrivers, kind, notifications)) {
-        VELOX_FAIL(
-            "Registering a cudf output queue for pre-existing taskId {}",
-            taskId);
+  try {
+    queues_.withLock([&](auto& queues) {
+      common::testutil::TestValue::adjust(
+          "facebook::velox::ucx_exchange::UcxOutputQueueManager::initializeTask",
+          task.get());
+      auto it = queues.find(taskId);
+      if (it == queues.end()) {
+        queues[taskId] = std::make_shared<UcxOutputQueue>(
+            std::move(task), numDestinations, numDrivers, kind);
+      } else {
+        if (!it->second->initialize(
+                task, numDestinations, numDrivers, kind, notifications)) {
+          VELOX_FAIL(
+              "Registering a cudf output queue for pre-existing taskId {}",
+              taskId);
+        }
       }
-    }
-  });
+    });
+  } catch (...) {
+    // A Task whose initialization throws before its queue is registered is
+    // removed with no queue that knows it, so its removal finds it here.
+    failedInitializations_.withLock(
+        [&](auto& failed) { failed.insert_or_assign(taskId, weakTask); });
+    throw;
+  }
   // Clear any stale "removed" state so that getData() calls after this
   // initializeTask() create proper placeholder queues if needed.
   removedTasks_.withLock([&](auto& removed) { removed.erase(taskId); });
-  // Clear any stale "cancelled" state in the intra-node registry so
-  // that the cancelledTasks_ set doesn't grow unboundedly across queries.
+  failedInitializations_.withLock([&](auto& failed) { failed.erase(taskId); });
+  // Clear any stale "cancelled" state that a removal of the same task ID left
+  // in the intra-node registry.
   IntraNodeTransferRegistry::getInstance()->clearCancelledTask(taskId);
   if (kind == core::PartitionedOutputNode::Kind::kPartitioned &&
       !notifications.empty()) {
@@ -147,7 +160,7 @@ void UcxOutputQueueManager::getDataImpl(
             if (removedIt == removed.end()) {
               return false;
             }
-            producerError = removedIt->second;
+            producerError = removedIt->second.producerError;
             return true;
           })) {
         VLOG(2) << "[QUEUE-MGR] task=" << taskId << " dest=" << destination
@@ -215,6 +228,35 @@ void UcxOutputQueueManager::removeTask(const std::string& taskId) {
   std::shared_ptr<UcxOutputQueue> queue;
   std::optional<std::string> producerError;
   auto expectedQueue = getQueueIfExists(taskIdStr);
+  // Task::terminate() calls removeTask(), so the producer's Task is alive.
+  // Its queue knows it, or a failed initializeTask() if it registered none.
+  // Tests also remove task IDs that have no Task.
+  auto producerTask = failedInitializations_.withLock([&](auto& failed) {
+    std::weak_ptr<exec::Task> task;
+    if (auto it = failed.find(taskIdStr); it != failed.end()) {
+      task = std::move(it->second);
+      failed.erase(it);
+    }
+    return task;
+  });
+  if (expectedQueue != nullptr) {
+    if (auto task = expectedQueue->task()) {
+      producerTask = task;
+    }
+  }
+  // A record is needed only while a consumer can still arrive, which ends
+  // when the host destroys the producer's Task.
+  std::vector<std::string> droppedTaskIds;
+  auto dropRecordsOfDestroyedTasks = [&droppedTaskIds](auto& removed) {
+    for (auto it = removed.begin(); it != removed.end();) {
+      if (it->second.task.expired()) {
+        droppedTaskIds.push_back(it->first);
+        it = removed.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  };
   for (bool decided = false; !decided;) {
     producerError = expectedQueue != nullptr
         ? expectedQueue->incompleteOutputError()
@@ -238,7 +280,9 @@ void UcxOutputQueueManager::removeTask(const std::string& taskId) {
         // entries if the task ID is reused.
         producerError = std::string{kProducerNotInitializedError};
         removedTasks_.withLock([&](auto& removed) {
-          removed.try_emplace(taskIdStr, producerError);
+          dropRecordsOfDestroyedTasks(removed);
+          removed.try_emplace(
+              taskIdStr, RemovedTask{producerTask, producerError});
         });
         return true;
       }
@@ -247,7 +291,9 @@ void UcxOutputQueueManager::removeTask(const std::string& taskId) {
       // to prevent getData() from seeing a gap between erase and insert,
       // which would cause it to create a zombie placeholder queue.
       removedTasks_.withLock([&](auto& removed) {
-        removed.insert_or_assign(taskIdStr, producerError);
+        dropRecordsOfDestroyedTasks(removed);
+        removed.insert_or_assign(
+            taskIdStr, RemovedTask{producerTask, producerError});
       });
       queue = std::move(currentQueue);
       return true;
@@ -261,6 +307,9 @@ void UcxOutputQueueManager::removeTask(const std::string& taskId) {
   // Notify the intra-node registry so that any sources polling for this
   // task get an atEnd result instead of spinning forever.
   registry->cancelTask(taskId, producerError);
+  for (const auto& droppedTaskId : droppedTaskIds) {
+    registry->clearCancelledTask(droppedTaskId);
+  }
 }
 
 std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueueIfExists(

@@ -223,6 +223,9 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
     return kind_;
   }
 
+  /// Returns the Task that owns this queue, or nullptr for a placeholder.
+  std::shared_ptr<exec::Task> task();
+
   /// Returns true once task metadata has been published via initializeTask()
   /// (not just a placeholder created by early getData() calls).
   /// This is published before destination queue expansion completes so local

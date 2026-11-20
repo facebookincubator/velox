@@ -155,8 +155,9 @@ class IntraNodeTransferRegistry {
   void unfreezeTask(std::string_view taskId);
 
   /// @brief Remove a task from the cancelled tasks.
-  /// Called when a task ID is (re)initialized, so that the cancelled tasks
-  /// do not grow unboundedly across queries.
+  /// The queue manager calls it when it drops the record of a removed task,
+  /// once the host destroyed that Task, and when a task ID is initialized
+  /// again.
   /// @param taskId The task to clear from the cancelled tasks
   void clearCancelledTask(std::string_view taskId);
 

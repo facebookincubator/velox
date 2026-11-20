@@ -300,6 +300,11 @@ bool UcxOutputQueue::checkBlocked(ContinueFuture* future) {
   return false;
 }
 
+std::shared_ptr<exec::Task> UcxOutputQueue::task() {
+  std::lock_guard<std::mutex> l(mutex_);
+  return task_;
+}
+
 bool UcxOutputQueue::isDestinationCountFinalLocked() const {
   return terminated_ || noMoreQueues_ ||
       (task_ && kind_ == core::PartitionedOutputNode::Kind::kPartitioned);
