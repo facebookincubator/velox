@@ -154,6 +154,144 @@ inline void skipSpaces(const char* buf, size_t len, size_t& pos) {
   }
 }
 
+std::string_view trimHiveText(std::string_view input) {
+  while (!input.empty() && static_cast<unsigned char>(input.front()) <= 0x20) {
+    input.remove_prefix(1);
+  }
+  while (!input.empty() && static_cast<unsigned char>(input.back()) <= 0x20) {
+    input.remove_suffix(1);
+  }
+  return input;
+}
+
+bool tryParseHiveDateString(
+    std::string_view input,
+    size_t& pos,
+    int64_t& daysSinceEpoch,
+    bool iso8601) {
+  if (input.empty()) {
+    return false;
+  }
+
+  const bool negative = input[pos] == '-';
+  const bool positive = input[pos] == '+';
+  if (negative || positive) {
+    ++pos;
+  }
+  const auto yearStart = pos;
+  int64_t year = 0;
+  while (pos < input.size() && characterIsDigit(input[pos]) &&
+         pos - yearStart < 10) {
+    year = year * 10 + (input[pos++] - '0');
+  }
+  const auto yearDigits = pos - yearStart;
+  if (yearDigits == 0 || (negative && year == 0)) {
+    return false;
+  }
+  if (iso8601) {
+    if (yearDigits < 4 || (positive && yearDigits <= 4) ||
+        (!negative && !positive && yearDigits > 4)) {
+      return false;
+    }
+  } else if (positive) {
+    return false;
+  }
+  if (negative) {
+    year = -year;
+  }
+  if (year < kMinYear || year > kMaxYear || pos == input.size() ||
+      input[pos++] != '-') {
+    return false;
+  }
+
+  int32_t month = 0;
+  const auto monthStart = pos;
+  if (!parseDoubleDigit(input.data(), input.size(), pos, month) ||
+      (iso8601 && pos - monthStart != 2) || pos == input.size() ||
+      input[pos++] != '-') {
+    return false;
+  }
+  int32_t day = 0;
+  const auto dayStart = pos;
+  if (!parseDoubleDigit(input.data(), input.size(), pos, day) ||
+      (iso8601 && pos - dayStart != 2)) {
+    return false;
+  }
+
+  const auto days =
+      daysSinceEpochFromDate(static_cast<int32_t>(year), month, day);
+  if (days.hasError()) {
+    return false;
+  }
+  daysSinceEpoch = days.value();
+  return true;
+}
+
+bool tryParseHiveTimestampString(
+    std::string_view input,
+    Timestamp& result,
+    bool iso8601) {
+  size_t pos = 0;
+  int64_t daysSinceEpoch;
+  if (!tryParseHiveDateString(input, pos, daysSinceEpoch, iso8601) ||
+      pos == input.size()) {
+    return false;
+  }
+  const auto separator = input[pos++];
+  if (iso8601 ? separator != 'T' && separator != 't' : separator != ' ') {
+    return false;
+  }
+
+  auto parseField = [&](int32_t& field) {
+    const auto start = pos;
+    return parseDoubleDigit(input.data(), input.size(), pos, field) &&
+        (!iso8601 || pos - start == 2);
+  };
+  int32_t hour = 0;
+  int32_t minute = 0;
+  int32_t second = 0;
+  if (!parseField(hour) || hour > 23 || pos == input.size() ||
+      input[pos++] != ':' || !parseField(minute) || minute > 59) {
+    return false;
+  }
+
+  int32_t nanos = 0;
+  if (pos < input.size() && input[pos] == ':') {
+    ++pos;
+    if (!parseField(second) || second > 59) {
+      return false;
+    }
+    if (pos < input.size() && input[pos] == '.') {
+      ++pos;
+      const auto fractionStart = pos;
+      while (pos < input.size() && characterIsDigit(input[pos]) &&
+             pos - fractionStart < 9) {
+        nanos = nanos * 10 + (input[pos++] - '0');
+      }
+      const auto fractionDigits = pos - fractionStart;
+      if (!iso8601 && fractionDigits == 0) {
+        return false;
+      }
+      for (auto i = fractionDigits; i < 9; ++i) {
+        nanos *= 10;
+      }
+    }
+  } else if (!iso8601) {
+    return false;
+  }
+  if (pos != input.size()) {
+    return false;
+  }
+
+  const auto seconds = daysSinceEpoch * kSecsPerDay + hour * kSecsPerHour +
+      minute * kSecsPerMinute + second;
+  if (seconds < Timestamp::kMinSeconds || seconds > Timestamp::kMaxSeconds) {
+    return false;
+  }
+  result = Timestamp(seconds, nanos);
+  return true;
+}
+
 bool tryParseDateString(
     const char* buf,
     size_t len,
@@ -161,6 +299,11 @@ bool tryParseDateString(
     int64_t& daysSinceEpoch,
     ParseMode mode) {
   pos = 0;
+  if (mode == ParseMode::kHiveText) {
+    return tryParseHiveDateString(
+               trimHiveText({buf, len}), pos, daysSinceEpoch, false) &&
+        validDate(daysSinceEpoch);
+  }
   if (len == 0) {
     return false;
   }
@@ -239,7 +382,7 @@ bool tryParseDateString(
   // Fetch the separator.
   sep = buf[pos++];
   if (mode == ParseMode::kPrestoCast || mode == ParseMode::kSparkCast ||
-      mode == ParseMode::kIso8601 || mode == ParseMode::kHiveCast) {
+      mode == ParseMode::kIso8601) {
     // Only '-' is valid for cast.
     if (sep != '-') {
       return false;
@@ -284,18 +427,12 @@ bool tryParseDateString(
     return false;
   }
 
-  if (mode == ParseMode::kPrestoCast || mode == ParseMode::kIso8601 ||
-      mode == ParseMode::kHiveCast) {
+  if (mode == ParseMode::kPrestoCast || mode == ParseMode::kIso8601) {
     Expected<int64_t> expected = daysSinceEpochFromDate(year, month, day);
     if (expected.hasError()) {
       return false;
     }
     daysSinceEpoch = expected.value();
-
-    if (mode == ParseMode::kHiveCast) {
-      return validDate(daysSinceEpoch) &&
-          (pos == len || buf[pos] == 'T' || characterIsSpace(buf[pos]));
-    }
 
     if (mode == ParseMode::kPrestoCast) {
       skipSpaces(buf, len, pos);
@@ -383,7 +520,7 @@ void parseTimeSeparator(
       break;
     case TimestampParseMode::kLegacyCast:
     case TimestampParseMode::kSparkCast:
-    case TimestampParseMode::kHiveCast:
+    case TimestampParseMode::kHiveText:
       if (buf[pos] == ' ' || buf[pos] == 'T') {
         pos++;
       }
@@ -401,7 +538,6 @@ bool tryParseTimeString(
     int64_t& result,
     TimestampParseMode parseMode) {
   static constexpr int sep = ':';
-  const bool isHiveTime = parseMode == TimestampParseMode::kHiveCast;
   int32_t hour = 0, min = 0, sec = 0, micros = 0;
   pos = 0;
 
@@ -457,7 +593,7 @@ bool tryParseTimeString(
     if (!parseDoubleDigit(buf, len, pos, sec)) {
       return false;
     }
-    if (sec < 0 || sec > 60 || (isHiveTime && sec == 60)) {
+    if (sec < 0 || sec > 60) {
       return false;
     }
 
@@ -465,13 +601,8 @@ bool tryParseTimeString(
     if (pos < len) {
       if (buf[pos] == '.') {
         ++pos;
-        if (isHiveTime && (pos >= len || !characterIsDigit(buf[pos]))) {
-          return false;
-        }
       } else if (parseMode == TimestampParseMode::kIso8601 && buf[pos] == ',') {
         ++pos;
-      } else if (isHiveTime && characterIsDigit(buf[pos])) {
-        return false;
       }
 
       if (pos >= len) {
@@ -610,6 +741,15 @@ bool tryParseTimestampString(
     size_t& pos,
     Timestamp& result,
     TimestampParseMode parseMode) {
+  if (parseMode == TimestampParseMode::kHiveText) {
+    const auto input = trimHiveText({buf, len});
+    if (!tryParseHiveTimestampString(input, result, false) &&
+        !tryParseHiveTimestampString(input, result, true)) {
+      return false;
+    }
+    pos = len;
+    return true;
+  }
   int64_t daysSinceEpoch = 0;
   int64_t microsSinceMidnight = 0;
 
@@ -651,25 +791,18 @@ bool tryParseTimestampString(
   const size_t preSeparatorPos = pos;
   parseTimeSeparator(buf, pos, parseMode);
 
-  // Require a time after either Spark separator or Hive's 'T'. Keep accepting
-  // a date followed only by whitespace in Hive mode.
-  const bool isHiveTime =
-      parseMode == TimestampParseMode::kHiveCast && buf[preSeparatorPos] == 'T';
-  const bool requiresTime =
-      parseMode == TimestampParseMode::kSparkCast || isHiveTime;
-  if (requiresTime && pos > preSeparatorPos &&
+  // In Spark cast mode, once a date-time separator ('T' or ' ') is consumed,
+  // the time component must begin immediately with a digit. This mirrors
+  // Spark's grammar: a separator followed by a timezone, garbage, or end of
+  // input is rejected.
+  if (parseMode == TimestampParseMode::kSparkCast && pos > preSeparatorPos &&
       (pos >= len || !characterIsDigit(buf[pos]))) {
     return false;
   }
 
-  // Preserve the existing time grammar for whitespace-separated Hive input.
-  const auto timeParseMode =
-      parseMode == TimestampParseMode::kHiveCast && !isHiveTime
-      ? TimestampParseMode::kPrestoCast
-      : parseMode;
   size_t timePos = 0;
   if (!tryParseTimeString(
-          buf + pos, len - pos, timePos, microsSinceMidnight, timeParseMode)) {
+          buf + pos, len - pos, timePos, microsSinceMidnight, parseMode)) {
     // The rest of the string is not a valid time, but it could be relevant to
     // the caller (e.g. it could be a time zone), return the date we parsed
     // and let them decide what to do with the rest.
@@ -850,13 +983,12 @@ Expected<int32_t> fromDateString(const char* str, size_t len, ParseMode mode) {
                 "Valid date string pattern is (YYYY-MM-DD), "
                 "and can be prefixed with [+-]",
                 std::string(str, len)));
-      case ParseMode::kHiveCast:
+      case ParseMode::kHiveText:
         return folly::makeUnexpected(
             Status::UserError(
-                "Unable to parse date value. "
-                "Valid date string pattern is (YYYY-MM-DD), "
-                "optionally prefixed with [+-] and optionally followed by "
-                "'T' or whitespace and arbitrary text. Got: \"{}\"",
+                "Unable to parse Hive text date. Expected a valid year-month-day "
+                "prefix with an optional negative year and a date within the "
+                "32-bit day range. Got: \"{}\"",
                 std::string(str, len)));
       case ParseMode::kSparkCast:
         return folly::makeUnexpected(

@@ -83,10 +83,11 @@ enum class ParseMode {
   // [+-][Y]Y*-[M]M*-[D]D
   kIso8601,
 
-  /// Accepts a complete year-month-day with an optional leading sign and ASCII
-  /// whitespace. Requires all three fields, with one or two digits for month
-  /// and day. Ignores any suffix beginning with 'T' or ASCII whitespace.
-  kHiveCast,
+  /// Parses a Hive text DATE prefix: [-]year-month-day, with 1-10 year digits
+  /// and 1-2 month and day digits. Trims leading and trailing bytes <= 0x20.
+  /// Ignores any suffix after the day. Rejects a leading '+' and negative zero
+  /// years. Requires a valid date in the signed 32-bit day range.
+  kHiveText,
 };
 
 // Returns true if leap year, false otherwise
@@ -213,12 +214,17 @@ enum class TimestampParseMode {
   /// spaces.
   kSparkCast,
 
-  /// Accepts date [(' ' | 'T') hour:minute[:second[.fraction]]], retaining
-  /// kPrestoCast's date forms and fractional precision. After 'T', requires
-  /// a time immediately, seconds in [0, 59], and '.' followed by at least one
-  /// digit for any fraction. Preserves kPrestoCast time parsing for
-  /// whitespace-separated input. Allows leading and trailing ASCII whitespace.
-  kHiveCast,
+  /// Parses Hive text TIMESTAMP fields using one of two grammars:
+  ///   [-]year-month-day hour:minute:second[.fraction]
+  ///   ISO local date ('T' | 't') HH:mm[:ss[.fraction]]
+  /// The space form requires 1-10 year digits and 1-2 digits per other field,
+  /// rejects a leading '+', and requires 1-9 fractional digits after '.'.
+  /// ISO requires two-digit fields and 4-10 year digits, with '+' for
+  /// positive years wider than four digits; its fraction may have 0-9 digits.
+  /// Both require a date and time, reject negative zero years and timezone
+  /// suffixes, and trim outer bytes <= 0x20. Hours are in [0, 23], minutes and
+  /// seconds in [0, 59]. Preserves nanoseconds within Velox's timestamp range.
+  kHiveText,
 };
 
 /// Parses a timestamp string using specified TimestampParseMode.

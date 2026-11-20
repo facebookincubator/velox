@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include <fmt/format.h>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -380,16 +379,16 @@ TEST_F(TextReaderTest, headerAndCustomNullString) {
       makeNullableFlatVector<Timestamp>({
           Timestamp{1'695'378'095 + tzOffsetPDT, 148'000'000},
           Timestamp{1'695'690'351 + tzOffsetPDT, 0},
-          Timestamp{1'695'686'400 + tzOffsetPDT, 0},
+          std::nullopt,
           Timestamp{1'695'083'400 + tzOffsetPDT, 0},
           std::nullopt,
           Timestamp{1'695'657'091 + tzOffsetPDT, 209'000'000},
           Timestamp{1'695'690'437 + tzOffsetPDT, 469'123'000},
           Timestamp{1'696'540'679 + tzOffsetPDT, 976'000'000},
           Timestamp{1'695'657'171 + tzOffsetPDT, 637'000'000},
-          Timestamp{1'695'693'225 + tzOffsetPDT, 745'123'000},
+          Timestamp{1'695'693'225 + tzOffsetPDT, 745'123'456},
           std::nullopt,
-          Timestamp{1'695'406'246 + tzOffsetPDT, 0},
+          Timestamp{1'695'406'246 + tzOffsetPDT, 1},
           Timestamp{1'699'392'124 + tzOffsetPST, 736'000'000},
       }),
   });
@@ -1258,12 +1257,29 @@ TEST_F(TextReaderTest, dateParsing) {
           {"2024-01-01", 19'723},
           {"2024-01-01T10:00", 19'723},
           {"2024-01-01Tnot-a-time", 19'723},
+          {"2024-01-01X10:00", 19'723},
+          {"2024-01-01t10:00", 19'723},
+          {"2024-01-0110:00", 19'723},
           {"2024-01-01 ignored", 19'723},
           {" \t2024-01-01\tignored", 19'723},
           {"2024-02-29T23:59:59", 19'782},
           {"1969-12-31T23:59:59", -1},
           {"2024-1-2T10:00", 19'724},
+          {"+2024-01-01", std::nullopt},
+          {"-0-01-01", std::nullopt},
+          {"1-1-1", std::nullopt},
+          {"2023-02-29T10:00", std::nullopt},
+          {"2024/01/01T10:00", std::nullopt},
+          {"2024-001-01", std::nullopt},
+          {"2024-13-01", std::nullopt},
+          {"2024-01-00", std::nullopt},
+          {"2024-01", std::nullopt},
+          {"99999999999999999999-01-01", std::nullopt},
+          {"10000000-01-01", std::nullopt},
+          {"", std::nullopt},
+          {" \t ", std::nullopt},
           {"\\N", std::nullopt},
+          {"2024-01-02", 19'724},
       },
       DATE());
 }
@@ -1272,60 +1288,54 @@ TEST_F(TextReaderTest, timestampParsing) {
   assertReadText<Timestamp>(
       {
           {"2024-01-01 00:00:00", Timestamp(1'704'096'000, 0)},
+          {"2024-1-1 0:0:0", Timestamp(1'704'096'000, 0)},
+          {"2024-1-2 3:4:5.123456789", Timestamp(1'704'193'445, 123'456'789)},
           {"2024-01-01T00:00:00", Timestamp(1'704'096'000, 0)},
+          {"2024-01-01t00:00", Timestamp(1'704'096'000, 0)},
+          {"2024-01-01T00:00:00.", Timestamp(1'704'096'000, 0)},
           {"2024-01-01T10:00", Timestamp(1'704'132'000, 0)},
+          {"2024-01-02T03:04", Timestamp(1'704'193'440, 0)},
+          {"2024-01-02t03:04:05.123456789",
+           Timestamp(1'704'193'445, 123'456'789)},
+          {"2024-01-02T03:04:05.", Timestamp(1'704'193'445, 0)},
           {" \t2024-01-01T00:00:00 \t", Timestamp(1'704'096'000, 0)},
           {"2024-01-01T00:00:00.123456789",
-           Timestamp(1'704'096'000, 123'456'000)},
+           Timestamp(1'704'096'000, 123'456'789)},
+          {"2024-01-01 00:00:00.123456789",
+           Timestamp(1'704'096'000, 123'456'789)},
+          {"2024-01-01T00:00:00.000000001", Timestamp(1'704'096'000, 1)},
           {"2024-01-01T00:00:00.1", Timestamp(1'704'096'000, 100'000'000)},
           {"2024-01-01T23:59:59.999999999",
-           Timestamp(1'704'182'399, 999'999'000)},
-          {"2024-01-01 00:00:001", Timestamp(1'704'096'000, 100'000'000)},
-          {"2024-01-01 00:00:60", Timestamp(1'704'096'060, 0)},
+           Timestamp(1'704'182'399, 999'999'999)},
+          {"2024-01-01", std::nullopt},
+          {"2024-01-01 10:00", std::nullopt},
+          {"2024-01-01 00:00:001", std::nullopt},
+          {"2024-01-01 00:00:60", std::nullopt},
+          {"2024-1-2T10:00", std::nullopt},
+          {"2024-01-01T1:00", std::nullopt},
+          {"2024-01-01T00:00:1", std::nullopt},
+          {"2024-01-01T", std::nullopt},
+          {"2024-01-01T 00:00:00", std::nullopt},
+          {"2024-01-01  00:00:00", std::nullopt},
+          {"2024-01-01\t00:00:00", std::nullopt},
+          {"2024-01-01Tnot-a-time", std::nullopt},
+          {"2024-01-01T24:00:00", std::nullopt},
+          {"2024-01-01T00:00:60", std::nullopt},
+          {"2024-01-01T00:00:001", std::nullopt},
+          {"2024-01-01 00:00:00.", std::nullopt},
+          {"2024-01-01T00:00:00.1234567890", std::nullopt},
+          {"2024-01-01T00:00:00Z", std::nullopt},
+          {"2024-01-01T00:00:00+01:00", std::nullopt},
+          {"2023-02-29T00:00:00", std::nullopt},
+          {"99999999999999999999-01-01 00:00:00", std::nullopt},
+          {"", std::nullopt},
+          {" \t ", std::nullopt},
+          {"\\N", std::nullopt},
           {"2024-07-01 00:00:00", Timestamp(1'719'817'200, 0)},
           {"2024-07-01T00:00:00", Timestamp(1'719'817'200, 0)},
           {"\\N", std::nullopt},
       },
       TIMESTAMP());
-}
-
-TEST_F(TextReaderTest, invalidDateAndTimestampParsing) {
-  for (const auto* input : {
-           "2023-02-29T10:00",
-           "2024-01-01X10:00",
-           "2024/01/01T10:00",
-           "2024-01-0110:00",
-       }) {
-    SCOPED_TRACE(input);
-    VELOX_ASSERT_THROW(
-        assertReadText<int32_t>({{input, std::nullopt}}, DATE()),
-        fmt::format(
-            "Unable to parse date value. "
-            "Valid date string pattern is (YYYY-MM-DD), "
-            "optionally prefixed with [+-] and optionally followed by "
-            "'T' or whitespace and arbitrary text. Got: \"{}\"",
-            input));
-  }
-  for (const auto* input : {
-           "2024-01-01T",
-           "2024-01-01T 00:00:00",
-           "2024-01-01Tnot-a-time",
-           "2024-01-01T24:00:00",
-           "2024-01-01T00:00:60",
-           "2024-01-01T00:00:60.1",
-           "2024-01-01T00:00:001",
-           "2024-01-01T00:00:00.",
-           "2024-01-01T00:00:00. \t",
-           "2024-01-01T00:00:00Z",
-       }) {
-    SCOPED_TRACE(input);
-    VELOX_ASSERT_THROW(
-        assertReadText<Timestamp>({{input, std::nullopt}}, TIMESTAMP()),
-        fmt::format(
-            "Unable to parse timestamp value: \"{}\", "
-            "expected format is (YYYY-MM-DD HH:MM:SS[.MS])",
-            input));
-  }
 }
 
 TEST_F(TextReaderTest, simpleTypes) {
@@ -1378,16 +1388,16 @@ TEST_F(TextReaderTest, simpleTypes) {
       makeNullableFlatVector<Timestamp>(
           {Timestamp{1'695'378'095 + tzOffsetPDT, 148'000'000},
            Timestamp{1'695'690'351 + tzOffsetPDT, 0},
-           Timestamp{1'695'686'400 + tzOffsetPDT, 0},
+           std::nullopt,
            Timestamp{1'695'083'400 + tzOffsetPDT, 0},
            std::nullopt,
            Timestamp{1'695'657'091 + tzOffsetPDT, 209'000'000},
            Timestamp{1'695'690'437 + tzOffsetPDT, 469'123'000},
            Timestamp{1'696'540'679 + tzOffsetPDT, 976'000'000},
            Timestamp{1'695'657'171 + tzOffsetPDT, 637'000'000},
-           Timestamp{1'695'693'225 + tzOffsetPDT, 745'123'000},
+           Timestamp{1'695'693'225 + tzOffsetPDT, 745'123'456},
            std::nullopt,
-           Timestamp{1'695'406'246 + tzOffsetPDT, 0},
+           Timestamp{1'695'406'246 + tzOffsetPDT, 1},
            Timestamp{1'699'392'124 + tzOffsetPST, 736'000'000}}),
   });
 

@@ -297,12 +297,15 @@ TEST(DateTimeUtilTest, fromDateStringInvalid) {
   testCastFromDateStringInvalid("1970-01-01T01:00:47.000", ParseMode::kIso8601);
 }
 
-TEST(DateTimeUtilTest, fromDateStringHive) {
+TEST(DateTimeUtilTest, fromDateStringHiveText) {
   for (const auto* suffix : {
            "",
            "T",
            "T10:00",
            "Tnot-a-time",
+           "X10:00",
+           "t10:00",
+           "10:00",
            " ",
            " 10:00",
            "\tignored",
@@ -313,12 +316,23 @@ TEST(DateTimeUtilTest, fromDateStringHive) {
        }) {
     const auto input = std::string(" \t2024-02-29") + suffix;
     SCOPED_TRACE(input);
-    EXPECT_EQ(19'782, parseDate(StringView(input), ParseMode::kHiveCast));
+    EXPECT_EQ(19'782, parseDate(StringView(input), ParseMode::kHiveText));
   }
-  EXPECT_EQ(-1, parseDate("1969-12-31T23:59:59", ParseMode::kHiveCast));
-  EXPECT_EQ(0, parseDate("+1970-1-1T00:00", ParseMode::kHiveCast));
-  EXPECT_EQ(-719'893, parseDate("-1-1-1Tignored", ParseMode::kHiveCast));
-  EXPECT_EQ(3'789'742, parseDate("12345-12-18 ignored", ParseMode::kHiveCast));
+  EXPECT_EQ(-1, parseDate("1969-12-31T23:59:59", ParseMode::kHiveText));
+  EXPECT_EQ(0, parseDate("1970-1-1T00:00", ParseMode::kHiveText));
+  EXPECT_EQ(0, parseDate("0000001970-1-1", ParseMode::kHiveText));
+  EXPECT_EQ(-719'528, parseDate("0-1-1", ParseMode::kHiveText));
+  EXPECT_EQ(-719'893, parseDate("-1-1-1Tignored", ParseMode::kHiveText));
+  EXPECT_EQ(3'789'742, parseDate("12345-12-18 ignored", ParseMode::kHiveText));
+  EXPECT_EQ(
+      19'723,
+      parseDate(
+          StringView(
+              std::string(
+                  "\x1f"
+                  "2024-01-01\0ignored",
+                  19)),
+          ParseMode::kHiveText));
 
   for (const auto* input : {
            "",
@@ -328,25 +342,22 @@ TEST(DateTimeUtilTest, fromDateStringHive) {
            "2024-13-01T10:00",
            "2024-01-00 ignored",
            "2024/01/01T10:00",
-           "2024-01-01X10:00",
-           "2024-01-01t10:00",
-           "2024-01-0110:00",
+           "2024-001-01",
+           "+1970-1-1",
+           "-0-1-1",
+           "00000001970-1-1",
+           "10000000-01-01",
+           "999999999999999999999-01-01",
        }) {
     SCOPED_TRACE(input);
     VELOX_ASSERT_THROW(
-        parseDate(input, ParseMode::kHiveCast),
+        parseDate(input, ParseMode::kHiveText),
         fmt::format(
-            "Unable to parse date value. "
-            "Valid date string pattern is (YYYY-MM-DD), "
-            "optionally prefixed with [+-] and optionally followed by "
-            "'T' or whitespace and arbitrary text. Got: \"{}\"",
+            "Unable to parse Hive text date. Expected a valid year-month-day "
+            "prefix with an optional negative year and a date within the "
+            "32-bit day range. Got: \"{}\"",
             input));
   }
-  VELOX_ASSERT_THROW(
-      parseDate("2024-01-01T10:00", ParseMode::kPrestoCast),
-      "Unable to parse date value: \"2024-01-01T10:00\". "
-      "Valid date string pattern is (YYYY-MM-DD), "
-      "and can be prefixed with [+-]");
 }
 
 // bash command to verify:
@@ -366,88 +377,108 @@ TEST(DateTimeUtilTest, fromTimestampString) {
       parseTimestamp("2000-01-01T12:21:56", TimestampParseMode::kIso8601));
 }
 
-TEST(DateTimeUtilTest, fromTimestampStringHive) {
+TEST(DateTimeUtilTest, fromTimestampStringHiveText) {
   for (const auto* input : {
-           "2024-01-01",
            "2024-01-01 00:00:00",
+           "2024-1-1 0:0:0",
            "2024-01-01T00:00:00",
+           "2024-01-01t00:00",
+           "2024-01-01T00:00:00.",
            " \t2024-01-01T00:00:00 \t",
        }) {
     SCOPED_TRACE(input);
     EXPECT_EQ(
         Timestamp(1'704'067'200, 0),
-        parseTimestamp(input, TimestampParseMode::kHiveCast));
+        parseTimestamp(input, TimestampParseMode::kHiveText));
   }
   EXPECT_EQ(
       Timestamp(1'704'103'200, 0),
-      parseTimestamp("2024-01-01T10:00", TimestampParseMode::kHiveCast));
+      parseTimestamp("2024-01-01T10:00", TimestampParseMode::kHiveText));
   EXPECT_EQ(
-      Timestamp(1'704'067'200, 123'456'000),
+      Timestamp(1'704'067'200, 123'456'789),
       parseTimestamp(
-          "2024-01-01T00:00:00.123456789", TimestampParseMode::kHiveCast));
+          "2024-01-01T00:00:00.123456789", TimestampParseMode::kHiveText));
   EXPECT_EQ(
       Timestamp(1'704'067'200, 100'000'000),
-      parseTimestamp("2024-01-01T00:00:00.1", TimestampParseMode::kHiveCast));
+      parseTimestamp("2024-01-01T00:00:00.1", TimestampParseMode::kHiveText));
   EXPECT_EQ(
-      Timestamp(1'704'153'599, 999'999'000),
+      Timestamp(1'704'153'599, 999'999'999),
       parseTimestamp(
-          "2024-01-01T23:59:59.999999999", TimestampParseMode::kHiveCast));
+          "2024-01-01T23:59:59.999999999", TimestampParseMode::kHiveText));
   EXPECT_EQ(
       Timestamp(-1, 0),
-      parseTimestamp("1969-12-31T23:59:59", TimestampParseMode::kHiveCast));
-
-  for (const auto mode :
-       {TimestampParseMode::kHiveCast, TimestampParseMode::kPrestoCast}) {
-    EXPECT_EQ(
-        Timestamp(1'704'067'200, 100'000'000),
-        parseTimestamp("2024-01-01 00:00:001", mode));
-    EXPECT_EQ(
-        Timestamp(1'704'067'260, 0),
-        parseTimestamp("2024-01-01 00:00:60", mode));
-  }
-  for (const auto mode : {
-           TimestampParseMode::kLegacyCast,
-           TimestampParseMode::kSparkCast,
-           TimestampParseMode::kIso8601,
+      parseTimestamp("1969-12-31T23:59:59", TimestampParseMode::kHiveText));
+  EXPECT_EQ(
+      Timestamp(-1, 123'456'789),
+      parseTimestamp(
+          "1969-12-31 23:59:59.123456789", TimestampParseMode::kHiveText));
+  EXPECT_EQ(
+      Timestamp(0, 1),
+      parseTimestamp(
+          "1970-1-1 0:0:0.000000001", TimestampParseMode::kHiveText));
+  EXPECT_EQ(
+      Timestamp(-62'198'755'200, 0),
+      parseTimestamp("-0001-01-01T00:00", TimestampParseMode::kHiveText));
+  for (const auto* input : {
+           "10000-1-1 0:0:0",
+           "+10000-01-01T00:00",
        }) {
     EXPECT_EQ(
-        Timestamp(1'704'067'200, 100'000'000),
-        parseTimestamp("2024-01-01T00:00:001", mode));
-    EXPECT_EQ(
-        Timestamp(1'704'067'260, 0),
-        parseTimestamp("2024-01-01T00:00:60", mode));
+        Timestamp(253'402'300'800, 0),
+        parseTimestamp(input, TimestampParseMode::kHiveText));
   }
 
   for (const auto* input : {
+           "",
+           " \t",
+           "2024-01-01",
+           "2024-01-01 ",
+           "2024/01/01 00:00:00",
+           "+2024-01-01 00:00:00",
+           "+2024-01-01T00:00",
+           "-0-1-1 0:0:0",
+           "-0000-01-01T00:00",
+           "00000002024-01-01 00:00:00",
+           "999999999999999999999-01-01T00:00",
+           "999999999-01-01 00:00:00",
+           "2024-1-2T10:00",
+           "024-01-01T00:00",
+           "10000-01-01T00:00",
            "2024-01-01T",
            "2024-01-01T 00:00:00",
            "2024-01-01Tnot-a-time",
-           "2024-01-01t00:00:00",
            "2024-01-01TT00:00:00",
            "2023-02-29T00:00:00",
+           "2024-01-01T0:00",
+           "2024-01-01T00:0",
+           "2024-01-01T00:00:0",
            "2024-01-01T24:00:00",
            "2024-01-01T00:60:00",
            "2024-01-01T00:00:60",
            "2024-01-01T00:00:60.1",
            "2024-01-01T00:00:61",
            "2024-01-01T00:00:001",
-           "2024-01-01T00:00:00.",
-           "2024-01-01T00:00:00. \t",
+           "2024-01-01T00:00:00.1234567890",
+           "2024-01-01T00:00:00,1",
+           "2024-01-01T00:00.1",
+           "2024-01-01 10:00",
+           "2024-01-01 00:00:60",
+           "2024-01-01 00:00:001",
+           "2024-01-01 00:00:00.",
+           "2024-01-01 00:00:00.1234567890",
+           "2024-01-01  00:00:00",
+           "2024-01-01\t00:00:00",
            "2024-01-01T00:00:00Z",
            "2024-01-01T00:00:00+01:00",
        }) {
     SCOPED_TRACE(input);
     VELOX_ASSERT_THROW(
-        parseTimestamp(input, TimestampParseMode::kHiveCast),
+        parseTimestamp(input, TimestampParseMode::kHiveText),
         fmt::format(
             "Unable to parse timestamp value: \"{}\", "
             "expected format is (YYYY-MM-DD HH:MM:SS[.MS])",
             input));
   }
-  VELOX_ASSERT_THROW(
-      parseTimestamp("2024-01-01T00:00:00"),
-      "Unable to parse timestamp value: \"2024-01-01T00:00:00\", "
-      "expected format is (YYYY-MM-DD HH:MM:SS[.MS])");
 }
 
 TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
