@@ -28,6 +28,7 @@
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/HashProbe.h"
+#include "velox/exec/HashProbeStatNames.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -2288,11 +2289,15 @@ TEST_P(HashJoinTest, bloomFilterLocalProbe) {
         .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
           const auto testedRows =
               getOperatorRuntimeStats(
-                  task, 1, std::string(HashProbe::kBloomFilterTestedRows))
+                  task,
+                  1,
+                  std::string(HashProbeStatNames::kBloomFilterTestedRows))
                   .sum;
           const auto acceptedRows =
               getOperatorRuntimeStats(
-                  task, 1, std::string(HashProbe::kBloomFilterAcceptedRows))
+                  task,
+                  1,
+                  std::string(HashProbeStatNames::kBloomFilterAcceptedRows))
                   .sum;
           if (hasSpill) {
             verifiedSpillRun = true;
@@ -2367,11 +2372,15 @@ TEST_P(HashJoinTest, bloomFilterLocalProbeInt32Keys) {
         ASSERT_FALSE(hasSpill);
         const auto testedRows =
             getOperatorRuntimeStats(
-                task, 1, std::string(HashProbe::kBloomFilterTestedRows))
+                task,
+                1,
+                std::string(HashProbeStatNames::kBloomFilterTestedRows))
                 .sum;
         const auto acceptedRows =
             getOperatorRuntimeStats(
-                task, 1, std::string(HashProbe::kBloomFilterAcceptedRows))
+                task,
+                1,
+                std::string(HashProbeStatNames::kBloomFilterAcceptedRows))
                 .sum;
         EXPECT_EQ(testedRows, numRows);
         EXPECT_GE(acceptedRows, numRows * 50 / 100);
@@ -2448,15 +2457,21 @@ TEST_P(HashJoinTest, bypassBloomFilterLocalProbe) {
           ASSERT_FALSE(hasSpill);
           const auto testedRows =
               getOperatorRuntimeStats(
-                  task, 1, std::string(HashProbe::kBloomFilterTestedRows))
+                  task,
+                  1,
+                  std::string(HashProbeStatNames::kBloomFilterTestedRows))
                   .sum;
           const auto acceptedRows =
               getOperatorRuntimeStats(
-                  task, 1, std::string(HashProbe::kBloomFilterAcceptedRows))
+                  task,
+                  1,
+                  std::string(HashProbeStatNames::kBloomFilterAcceptedRows))
                   .sum;
           const auto bypassed =
               getOperatorRuntimeStats(
-                  task, 1, std::string(HashProbe::kBloomFilterBypassed))
+                  task,
+                  1,
+                  std::string(HashProbeStatNames::kBloomFilterBypassed))
                   .sum;
           EXPECT_EQ(100, testedRows);
           EXPECT_EQ(100, acceptedRows);
@@ -2496,11 +2511,15 @@ TEST_P(HashJoinTest, bypassBloomFilterLocalProbeWithoutSampling) {
         ASSERT_FALSE(hasSpill);
         const auto testedRows =
             getOperatorRuntimeStats(
-                task, 1, std::string(HashProbe::kBloomFilterTestedRows))
+                task,
+                1,
+                std::string(HashProbeStatNames::kBloomFilterTestedRows))
                 .sum;
         const auto acceptedRows =
             getOperatorRuntimeStats(
-                task, 1, std::string(HashProbe::kBloomFilterAcceptedRows))
+                task,
+                1,
+                std::string(HashProbeStatNames::kBloomFilterAcceptedRows))
                 .sum;
         EXPECT_EQ(0, testedRows);
         EXPECT_EQ(0, acceptedRows);

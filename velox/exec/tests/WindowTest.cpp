@@ -35,6 +35,7 @@
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 #include <limits>
+#include "velox/exec/WindowStatNames.h"
 
 using namespace facebook::velox::exec::test;
 
@@ -247,7 +248,8 @@ TEST_F(WindowTest, spillBatchReadTinyPartitions) {
   ASSERT_GT(stats.spilledPartitions, 0);
   ASSERT_EQ(
       stats.operatorStats.at("Window")
-          ->customStats[std::string(Window::kWindowSpillReadNumBatches)]
+          ->customStats[std::string(
+              WindowStatNames::kWindowSpillReadNumBatches)]
           .sum,
       size / minReadBatchRows);
 }
@@ -299,7 +301,8 @@ TEST_F(WindowTest, spillBatchReadHugePartitions) {
   ASSERT_GT(stats.spilledPartitions, 0);
   ASSERT_EQ(
       stats.operatorStats.at("Window")
-          ->customStats[std::string(Window::kWindowSpillReadNumBatches)]
+          ->customStats[std::string(
+              WindowStatNames::kWindowSpillReadNumBatches)]
           .sum,
       size / partitionRows);
 }

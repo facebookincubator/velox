@@ -44,6 +44,7 @@
 #include "velox/exec/tests/utils/SumNonPODAggregate.h"
 #include "velox/exec/tests/utils/TaskMonitor.h"
 
+#include "velox/exec/HashAggregationStatNames.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/LazyVector.h"
 
@@ -5277,7 +5278,8 @@ TEST_F(AggregationTest, barrierExecutionPartialAggregation) {
   ASSERT_EQ(
       PlanNodeStats::extract(task->taskStats(), partialNodeId)
           .customStats.count(
-              std::string(HashAggregation::kAbandonedPartialAggregationRows)),
+              std::string(
+                  HashAggregationStatNames::kAbandonedPartialAggregationRows)),
       0);
 }
 
@@ -5331,7 +5333,8 @@ TEST_F(AggregationTest, barrierExecutionAbandonedPartialAggregation) {
   ASSERT_GT(
       PlanNodeStats::extract(task->taskStats(), partialNodeId)
           .customStats
-          .at(std::string(HashAggregation::kAbandonedPartialAggregationRows))
+          .at(std::string(
+              HashAggregationStatNames::kAbandonedPartialAggregationRows))
           .sum,
       0);
 }

@@ -21,6 +21,7 @@
 #include <utility>
 
 #include "velox/exec/HashBuild.h"
+#include "velox/exec/HashBuildStatNames.h"
 #include "velox/exec/HashTable.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -324,7 +325,7 @@ class HashJoinBuildBenchmark : public VectorTestBase {
         if (operatorStat.operatorType == OperatorType::kHashBuild) {
           return operatorStat
                      .runtimeStats[std::string(
-                         HashBuild::kAbandonBuildNoDupHash)]
+                         HashBuildStatNames::kAbandonBuildNoDupHash)]
                      .count != 0;
         }
       }

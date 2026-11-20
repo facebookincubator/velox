@@ -49,46 +49,6 @@ class IndexLookupJoin : public Operator {
 
   void close() override;
 
-  /// Defines lookup runtime stats.
-  /// The end-to-end walltime in nanoseconds that the index connector do the
-  /// lookup.
-  static constexpr std::string_view kConnectorLookupWallTime{
-      "connectorLookupWallNanos"};
-  /// The cpu time in nanoseconds that the index connector process response from
-  /// storage client for followup processing by index join operator.
-  static constexpr std::string_view kConnectorResultPrepareTime{
-      "connectorResultPrepareCpuNanos"};
-  /// The cpu time in nanoseconds that the storage client process request for
-  /// remote storage lookup such as encoding the lookup input data into remotr
-  /// storage request.
-  static constexpr std::string_view kClientRequestProcessTime{
-      "clientRequestProcessCpuNanos"};
-  /// The walltime in nanoseconds that the storage client wait for the lookup
-  /// from remote storage.
-  static constexpr std::string_view kClientLookupWaitWallTime{
-      "clientlookupWaitWallNanos"};
-  /// The number of split requests sent to remote storage for a client lookup
-  /// request.
-  static constexpr std::string_view kClientNumStorageRequests{
-      "clientNumStorageRequests"};
-  /// The cpu time in nanoseconds that the storage client process response from
-  /// remote storage lookup such as decoding the response data into velox
-  /// vectors.
-  static constexpr std::string_view kClientResultProcessTime{
-      "clientResultProcessCpuNanos"};
-  /// The byte size of the raw result received from the remote storage lookup.
-  static constexpr std::string_view kClientLookupResultRawSize{
-      "clientLookupResultRawSize"};
-  /// The byte size of the result data in velox vectors that are decoded from
-  /// the raw data received from the remote storage lookup.
-  static constexpr std::string_view kClientLookupResultSize{
-      "clientLookupResultSize"};
-  /// The number of lookup results received from remote storage with error.
-  static constexpr std::string_view kClientNumErrorResults{
-      "clientNumErrorResults"};
-  /// The number of index splits provided for index lookup.
-  static constexpr std::string_view kNumIndexSplits{"numIndexSplits"};
-
  private:
   // Produces separate OperatorStats for IndexLookupJoin and IndexSource nodes.
   static std::vector<OperatorStats> splitStats(
