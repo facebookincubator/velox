@@ -65,6 +65,7 @@ velox_add_library(
   ArrayAppend.h
   ArrayConcat.h
   ArrayFlattenFunction.h
+  ArrayGetFunction.h
   ArrayInsert.h
   ArrayMinMaxFunction.h
   ArrayPrepend.h
