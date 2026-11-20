@@ -17,6 +17,7 @@
 #include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/expression/FunctionSignature.h"
 
 namespace facebook::velox::exec::rpc {
 
@@ -53,7 +54,7 @@ bool AsyncRPCFunctionRegistry::registerFunction(
   // a SIGSEGV crash (Static Initialization Order Fiasco).
   return registrations()
       .emplace(
-          name,
+          sanitizeName(name),
           Registration{
               std::move(factory), std::move(signatures), std::move(metadata)})
       .second;
@@ -63,11 +64,11 @@ std::optional<AsyncRPCFunctionRegistry::FunctionEntry>
 AsyncRPCFunctionRegistry::find(const std::string& name) {
   std::lock_guard<std::mutex> lock(mutex());
   const auto& all = registrations();
-  const auto it = all.find(name);
+  const auto it = all.find(sanitizeName(name));
   if (it == all.end()) {
     return std::nullopt;
   }
-  return FunctionEntry{name, it->second.signatures, it->second.metadata};
+  return FunctionEntry{it->first, it->second.signatures, it->second.metadata};
 }
 
 std::vector<AsyncRPCFunctionRegistry::FunctionEntry>
@@ -87,7 +88,7 @@ std::shared_ptr<AsyncRPCFunction> AsyncRPCFunctionRegistry::create(
     const std::string& name) {
   std::lock_guard<std::mutex> lock(mutex());
   const auto& all = registrations();
-  const auto it = all.find(name);
+  const auto it = all.find(sanitizeName(name));
   if (it == all.end()) {
     return nullptr;
   }
@@ -96,7 +97,7 @@ std::shared_ptr<AsyncRPCFunction> AsyncRPCFunctionRegistry::create(
 
 bool AsyncRPCFunctionRegistry::isRegistered(const std::string& name) {
   std::lock_guard<std::mutex> lock(mutex());
-  return registrations().contains(name);
+  return registrations().contains(sanitizeName(name));
 }
 
 std::unordered_set<std::string>

@@ -54,11 +54,11 @@ class LocalMergeTest : public OperatorTestBase {
         "NULLS LAST", "NULLS FIRST", "DESC NULLS FIRST", "DESC NULLS LAST"};
     for (const auto& sortOrderSql : sortOrderSqls) {
       const auto orderByClause = fmt::format("{} {}", key, sortOrderSql);
-      auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-      auto plan = PlanBuilder(planNodeIdGenerator)
+      PlanBuilder builder;
+      auto plan = builder.newPlan()
                       .localMerge(
                           {orderByClause},
-                          {PlanBuilder(planNodeIdGenerator)
+                          {builder.newPlan()
                                .values(inputVectors)
                                .orderBy({orderByClause}, true)
                                .planNode()})
@@ -71,12 +71,12 @@ class LocalMergeTest : public OperatorTestBase {
 
       std::vector<std::shared_ptr<const core::PlanNode>> sources;
       for (const auto& input : inputVectors) {
-        sources.push_back(PlanBuilder(planNodeIdGenerator)
-                              .values({input})
+        sources.push_back(builder.newPlan()
+                              .values(input)
                               .orderBy({orderByClause}, true)
                               .planNode());
       }
-      plan = PlanBuilder(planNodeIdGenerator)
+      plan = builder.newPlan()
                  .localMerge({orderByClause}, std::move(sources))
                  .planNode();
 
@@ -104,12 +104,11 @@ class LocalMergeTest : public OperatorTestBase {
             fmt::format("{} {}", key2, sortOrderSqls[j])};
         const auto orderBySql = fmt::format(
             "ORDER BY {}, {}", orderByClauses[0], orderByClauses[1]);
-        auto planNodeIdGenerator =
-            std::make_shared<core::PlanNodeIdGenerator>();
-        auto plan = PlanBuilder(planNodeIdGenerator)
+        PlanBuilder builder;
+        auto plan = builder.newPlan()
                         .localMerge(
                             orderByClauses,
-                            {PlanBuilder(planNodeIdGenerator)
+                            {builder.newPlan()
                                  .values(inputVectors)
                                  .orderBy(orderByClauses, true)
                                  .planNode()})
@@ -121,12 +120,12 @@ class LocalMergeTest : public OperatorTestBase {
 
         std::vector<std::shared_ptr<const core::PlanNode>> sources;
         for (const auto& input : inputVectors) {
-          sources.push_back(PlanBuilder(planNodeIdGenerator)
-                                .values({input})
+          sources.push_back(builder.newPlan()
+                                .values(input)
                                 .orderBy(orderByClauses, true)
                                 .planNode());
         }
-        plan = PlanBuilder(planNodeIdGenerator)
+        plan = builder.newPlan()
                    .localMerge(orderByClauses, std::move(sources))
                    .planNode();
 
@@ -172,17 +171,16 @@ TEST_F(LocalMergeTest, offByOne) {
       makeFlatVector<int64_t>({2, 3, 4, 5}),
   });
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .localMerge(
-              {"c0"},
-              {
-                  PlanBuilder(planNodeIdGenerator).values({data1}).planNode(),
-                  PlanBuilder(planNodeIdGenerator).values({data2}).planNode(),
-              })
-          .planNode();
+  auto plan = builder.newPlan()
+                  .localMerge(
+                      {"c0"},
+                      {
+                          builder.newPlan().values(data1).planNode(),
+                          builder.newPlan().values(data2).planNode(),
+                      })
+                  .planNode();
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
       .config(core::QueryConfig::kPreferredOutputBatchRows, "6")

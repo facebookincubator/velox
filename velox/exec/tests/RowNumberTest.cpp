@@ -58,12 +58,12 @@ TEST_F(RowNumberTest, basic) {
   createDuckDbTable({data});
 
   // No limit, emit row numbers.
-  auto plan = PlanBuilder().values({data}).rowNumber({"c0"}).planNode();
+  auto plan = PlanBuilder().values(data).rowNumber({"c0"}).planNode();
   assertQuery(plan, "SELECT *, row_number() over (partition by c0) FROM tmp");
 
   // No limit, don't emit row numbers.
   plan = PlanBuilder()
-             .values({data})
+             .values(data)
              .rowNumber({"c0"}, std::nullopt, false)
              .planNode();
   assertQuery(
@@ -72,8 +72,7 @@ TEST_F(RowNumberTest, basic) {
 
   auto testLimit = [&](int32_t limit) {
     // Limit, emit row numbers.
-    auto plan =
-        PlanBuilder().values({data}).rowNumber({"c0"}, limit).planNode();
+    auto plan = PlanBuilder().values(data).rowNumber({"c0"}, limit).planNode();
     assertQuery(
         plan,
         fmt::format(
@@ -83,7 +82,7 @@ TEST_F(RowNumberTest, basic) {
 
     // Limit, don't emit row numbers.
     plan =
-        PlanBuilder().values({data}).rowNumber({"c0"}, limit, false).planNode();
+        PlanBuilder().values(data).rowNumber({"c0"}, limit, false).planNode();
     assertQuery(
         plan,
         fmt::format(
@@ -260,8 +259,7 @@ TEST_F(RowNumberTest, maxSpillBytes) {
   const auto rowType =
       ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
   const auto vectors = createVectors(rowType, 1024, 15 << 20);
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator)
+  auto plan = PlanBuilder()
                   .values(vectors)
                   .rowNumber({"c0"}, 2, false)
                   .project({"c0", "c1"})

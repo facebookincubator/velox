@@ -239,10 +239,7 @@ class FsstQueryTest : public HiveConnectorTestBase,
   }
 
   // Builds the same consuming operators for the original-row and file arms.
-  core::PlanNodePtr finishPlan(
-      PlanBuilder& builder,
-      QueryAction action,
-      const std::shared_ptr<core::PlanNodeIdGenerator>& ids) {
+  core::PlanNodePtr finishPlan(PlanBuilder& builder, QueryAction action) {
     switch (action) {
       case QueryAction::kProject:
         return builder.project({"id", "value"}).planNode();
@@ -279,7 +276,7 @@ class FsstQueryTest : public HiveConnectorTestBase,
             .hashJoin(
                 {"value"},
                 {"key"},
-                PlanBuilder(ids, pool_.get()).values({right}).planNode(),
+                builder.newPlan().values(right).planNode(),
                 "",
                 {"id", "value", "label"},
                 action == QueryAction::kInnerJoin ? core::JoinType::kInner
@@ -297,11 +294,10 @@ class FsstQueryTest : public HiveConnectorTestBase,
       const std::vector<QueryCase>& queries) {
     auto file = writeInput(batches);
     ASSERT_FALSE(HasFatalFailure());
-    const auto type = asRowType(batches[0]->type());
+    const auto type = batches[0]->rowType();
     for (const auto& query : queries) {
       SCOPED_TRACE(query.name);
-      auto referenceIds = std::make_shared<core::PlanNodeIdGenerator>();
-      PlanBuilder referenceBuilder(referenceIds, pool_.get());
+      PlanBuilder referenceBuilder(pool_.get());
       referenceBuilder.values(batches);
       for (const auto& filter : query.pushdownFilters) {
         referenceBuilder.filter(filter);
@@ -310,8 +306,7 @@ class FsstQueryTest : public HiveConnectorTestBase,
         referenceBuilder.filter(query.remainingFilter);
       }
       const auto reference =
-          AssertQueryBuilder(
-              finishPlan(referenceBuilder, query.action, referenceIds))
+          AssertQueryBuilder(finishPlan(referenceBuilder, query.action))
               .copyResults(pool_.get());
       for (const bool fastPath : {false, true}) {
         for (const bool preserve : {false, true}) {
@@ -322,13 +317,12 @@ class FsstQueryTest : public HiveConnectorTestBase,
                     fastPath,
                     preserve,
                     cache));
-            auto ids = std::make_shared<core::PlanNodeIdGenerator>();
-            PlanBuilder builder(ids, pool_.get());
+            PlanBuilder builder(pool_.get());
             builder.tableScan(
                 type, query.pushdownFilters, query.remainingFilter);
             core::PlanNodeId scanId;
             builder.capturePlanNodeId(scanId);
-            auto plan = finishPlan(builder, query.action, ids);
+            auto plan = finishPlan(builder, query.action);
             auto split = HiveConnectorSplitBuilder(file->getPath())
                              .fileFormat(dwio::common::FileFormat::NIMBLE)
                              .build();

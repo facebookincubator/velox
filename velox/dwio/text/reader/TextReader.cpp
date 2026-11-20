@@ -218,6 +218,30 @@ TextRowReader::TextRowReader(
       (void)seekToRow(opts.skipRows());
     }
   }
+  initSplitRowRange();
+}
+
+void TextRowReader::initSplitRowRange() {
+  const auto& splitRowRange = options_.splitRowRange();
+  if (!splitRowRange.has_value()) {
+    return;
+  }
+  // Rows count from the first row the split would otherwise return, after
+  // any header lines skipped above.
+  constexpr auto kMax = std::numeric_limits<uint64_t>::max();
+  if (splitRowRange->firstRow > 0 && !atEOF_) {
+    // Skipping the partial line at the start of a byte range leaves the
+    // reader at the end of that line; start the next one so seekToRow()
+    // skips whole rows.
+    resetLine();
+    (void)seekToRow(
+        splitRowRange->firstRow > kMax - currentRow_
+            ? kMax
+            : currentRow_ + splitRowRange->firstRow);
+  }
+  endRow_ = splitRowRange->numRows > kMax - currentRow_
+      ? kMax
+      : currentRow_ + splitRowRange->numRows;
 }
 
 uint64_t TextRowReader::next(
@@ -226,6 +250,13 @@ uint64_t TextRowReader::next(
     const Mutation* mutation) {
   if (atEOF_) {
     return 0;
+  }
+  if (endRow_.has_value()) {
+    if (currentRow_ >= *endRow_) {
+      setEOF();
+      return 0;
+    }
+    rows = std::min<uint64_t>(rows, *endRow_ - currentRow_);
   }
 
   auto& t = schemaWithId_;
@@ -318,6 +349,9 @@ int64_t TextRowReader::nextRowNumber() {
 }
 
 int64_t TextRowReader::nextReadSize(uint64_t size) {
+  if (endRow_.has_value()) {
+    size = std::min<uint64_t>(size, *endRow_ - std::min(currentRow_, *endRow_));
+  }
   return static_cast<int64_t>(std::min(fileLength_ - currentRow_, size));
 }
 

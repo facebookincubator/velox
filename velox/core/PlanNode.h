@@ -4968,7 +4968,7 @@ class TopNNode : public PlanNode {
       const PlanNodeId& id,
       const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
       const std::vector<SortOrder>& sortingOrders,
-      int32_t count,
+      int64_t count,
       bool isPartial,
       const PlanNodePtr& source);
 
@@ -5001,7 +5001,7 @@ class TopNNode : public PlanNode {
       return *this;
     }
 
-    Builder& count(int32_t count) {
+    Builder& count(int64_t count) {
       count_ = count;
       return *this;
     }
@@ -5039,7 +5039,7 @@ class TopNNode : public PlanNode {
     std::optional<PlanNodeId> id_;
     std::optional<std::vector<FieldAccessTypedExprPtr>> sortingKeys_;
     std::optional<std::vector<SortOrder>> sortingOrders_;
-    std::optional<int32_t> count_;
+    std::optional<int64_t> count_;
     std::optional<bool> isPartial_;
     std::optional<PlanNodePtr> source_;
   };
@@ -5067,7 +5067,7 @@ class TopNNode : public PlanNode {
     return !isPartial_;
   }
 
-  int32_t count() const {
+  int64_t count() const {
     return count_;
   }
 
@@ -5088,7 +5088,7 @@ class TopNNode : public PlanNode {
 
   const std::vector<FieldAccessTypedExprPtr> sortingKeys_;
   const std::vector<SortOrder> sortingOrders_;
-  const int32_t count_;
+  const int64_t count_;
   const bool isPartial_;
   const std::vector<PlanNodePtr> sources_;
 };

@@ -355,14 +355,14 @@ class OperatorReplacementTest : public OperatorTestBase {
       const std::string& referenceQuery) {
     createDuckDbTable("t", {leftBatch});
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
 
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = builder.newPlan()
                     .values({leftBatch}, false)
                     .hashJoin(
                         {"c0"},
                         {"u1"},
-                        PlanBuilder(planNodeIdGenerator)
+                        builder.newPlan()
                             .values(rightBatch, false)
                             .project({"c0 AS u1"})
                             .planNode(),

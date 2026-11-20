@@ -186,7 +186,8 @@ void checkTypeCompatibility(
       /*recurse=*/true,
       [](const auto& t) { return t.type()->kind(); },
       [&selector](const auto& node) {
-        return selector.shouldReadNode(node.id());
+        return selector.shouldReadNode(node.id()) &&
+            selector.getNode(node.id())->isInContent();
       },
       exceptionMessageCreator);
 }

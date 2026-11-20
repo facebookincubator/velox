@@ -18,6 +18,7 @@
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/OperatorType.h"
+#include "velox/exec/TableScanStatNames.h"
 #include "velox/exec/Task.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -227,7 +228,7 @@ RowVectorPtr TableScan::getOutput() {
     {
       auto lockedStats = stats_.wlock();
       lockedStats->addRuntimeStat(
-          std::string(TableScan::kDataSourceReadWallNanos),
+          std::string(TableScanStatNames::kDataSourceReadWallNanos),
           RuntimeCounter(ioTimeUs * 1'000, RuntimeCounter::Unit::kNanos));
 
       if (!dataOptional.has_value()) {
@@ -287,13 +288,13 @@ RowVectorPtr TableScan::getOutput() {
       auto lockedStats = stats_.wlock();
       if (numPreloadedSplits_ > 0) {
         lockedStats->addRuntimeStat(
-            std::string(TableScan::kPreloadedSplits),
+            std::string(TableScanStatNames::kPreloadedSplits),
             RuntimeCounter(numPreloadedSplits_));
         numPreloadedSplits_ = 0;
       }
       if (numReadyPreloadedSplits_ > 0) {
         lockedStats->addRuntimeStat(
-            std::string(TableScan::kReadyPreloadedSplits),
+            std::string(TableScanStatNames::kReadyPreloadedSplits),
             RuntimeCounter(numReadyPreloadedSplits_));
         numReadyPreloadedSplits_ = 0;
       }
@@ -351,7 +352,7 @@ bool TableScan::getSplit() {
   }
 
   stats_.wlock()->addRuntimeStat(
-      std::string(TableScan::kConnectorSplitSize),
+      std::string(TableScanStatNames::kConnectorSplitSize),
       RuntimeCounter(static_cast<int64_t>(split.connectorSplit->size())));
   const auto& connectorSplit = split.connectorSplit;
   splitBatchSizeHint_ = connectorSplit->batchSizeHint;
@@ -401,7 +402,7 @@ bool TableScan::getSplit() {
     const folly::stop_watch<std::chrono::nanoseconds> moveWatch;
     auto preparedDataSource = connectorSplit->dataSource->move();
     stats_.wlock()->addRuntimeStat(
-        std::string(TableScan::kWaitForPreloadSplitNanos),
+        std::string(TableScanStatNames::kWaitForPreloadSplitNanos),
         RuntimeCounter(
             moveWatch.elapsed().count(), RuntimeCounter::Unit::kNanos));
     if (preparedDataSource == nullptr) {
@@ -411,7 +412,7 @@ bool TableScan::getSplit() {
       return false;
     }
     stats_.wlock()->addRuntimeStat(
-        std::string(TableScan::kPreloadSplitPrepareTimeNanos),
+        std::string(TableScanStatNames::kPreloadSplitPrepareTimeNanos),
         RuntimeCounter(
             connectorSplit->dataSource->prepareTiming().wallNanos,
             RuntimeCounter::Unit::kNanos));
@@ -424,7 +425,7 @@ bool TableScan::getSplit() {
       dataSource_->addSplit(connectorSplit);
     }
     stats_.wlock()->addRuntimeStat(
-        std::string(TableScan::kDataSourceAddSplitWallNanos),
+        std::string(TableScanStatNames::kDataSourceAddSplitWallNanos),
         RuntimeCounter(addSplitTimeUs * 1'000, RuntimeCounter::Unit::kNanos));
   }
   ++stats_.wlock()->numSplits;
@@ -600,7 +601,7 @@ void TableScan::close() {
   const auto scaledStats = scaledController_->stats();
   auto lockedStats = stats_.wlock();
   lockedStats->addRuntimeStat(
-      std::string(TableScan::kNumRunningScaleThreads),
+      std::string(TableScanStatNames::kNumRunningScaleThreads),
       RuntimeCounter(scaledStats.numRunningDrivers));
 }
 } // namespace facebook::velox::exec
