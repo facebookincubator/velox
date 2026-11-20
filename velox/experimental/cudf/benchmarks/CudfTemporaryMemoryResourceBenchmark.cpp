@@ -14,17 +14,26 @@
  * limitations under the License.
  */
 
-// Measures the cost the thread-local temporary memory resource dispatcher adds
-// to cuDF's implicit allocation path. The dispatcher keeps a pointer-keyed map
-// so a temporary freed on another thread still routes back to the resource
-// that allocated it, and that map is what this benchmark prices.
-//
-// Run against the memory resource modes that matter: "async" (the default) has
-// no host-side lock of its own, so the dispatcher is the only serialization
-// point, whereas "pool" already serializes every allocation on RMM's own
-// mutex.
+// Measures what charging cuDF's implicit temporary allocations to Velox pools
+// costs, on the resource stack registerCudf() installs. Each thread allocates
+// and frees on its own stream from the cuDF stream pool, as operators do. The
+// columns are:
+//   - direct: the statistics adaptor over the configured RMM resource, which
+//     is what cuDF allocated from before the dispatcher;
+//   - dispatch: the dispatcher outside any operator call, which falls back to
+//     the same adaptor;
+//   - scoped: the dispatcher inside an operator call, which charges a
+//     thread-safe leaf of a `gpu` custom root and keeps a copy of the
+//     resource per allocation.
 
+#include "velox/experimental/cudf/exec/CudfMemoryResource.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
+
+#include "velox/common/memory/MallocAllocator.h"
+#include "velox/common/memory/Memory.h"
+#include "velox/common/memory/MemoryArbitrator.h"
+
+#include <rmm/mr/statistics_resource_adaptor.hpp>
 
 #include <cuda/stream_ref>
 
@@ -34,6 +43,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <optional>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -45,14 +56,18 @@ DEFINE_int32(allocation_bytes, 4096, "Size of each temporary allocation.");
 namespace facebook::velox::cudf_velox {
 namespace {
 
-// Nanoseconds per allocate/free pair, averaged over all threads.
+using DeviceResource = cuda::mr::any_resource<cuda::mr::device_accessible>;
+
+// Nanoseconds per allocate/free pair, averaged over all threads. Thread i
+// allocates from 'resource' with 'operatorResources[i]' installed as the
+// operator's resources, or with none when 'operatorResources' is empty.
 double runTrial(
     rmm::device_async_resource_ref resource,
+    std::vector<CudfMemoryResource>& operatorResources,
     int32_t numThreads,
     int32_t allocationsPerThread,
     std::size_t bytes) {
   constexpr std::size_t kAlignment = 256;
-  const cuda::stream_ref stream{cudaStream_t{0}};
 
   std::atomic<int32_t> ready{0};
   std::atomic<bool> start{false};
@@ -60,7 +75,13 @@ double runTrial(
   std::vector<std::thread> threads;
   threads.reserve(numThreads);
   for (int32_t i = 0; i < numThreads; ++i) {
-    threads.emplace_back([&]() {
+    threads.emplace_back([&, i]() {
+      const auto stream = cudfGlobalStreamPool().get_stream();
+      std::optional<ScopedCudfMemoryResources> scope;
+      if (!operatorResources.empty()) {
+        rmm::device_async_resource_ref operatorResource{operatorResources[i]};
+        scope.emplace(operatorResource, operatorResource);
+      }
       ready.fetch_add(1);
       while (!start.load(std::memory_order_acquire)) {
       }
@@ -86,9 +107,40 @@ double runTrial(
       (static_cast<double>(numThreads) * allocationsPerThread);
 }
 
+// Returns one resource per thread, each charging its own leaf of 'gpuRoot',
+// like the operators of concurrent drivers.
+std::vector<CudfMemoryResource> makeOperatorResources(
+    const DeviceResource& upstream,
+    const std::shared_ptr<memory::MemoryPool>& gpuRoot,
+    const std::shared_ptr<memory::CustomMemoryResource>& resourceOwner,
+    int32_t numThreads) {
+  std::vector<CudfMemoryResource> resources;
+  resources.reserve(numThreads);
+  for (int32_t i = 0; i < numThreads; ++i) {
+    resources.emplace_back(
+        upstream,
+        gpuRoot->addLeafChild("operator." + std::to_string(i)),
+        resourceOwner);
+  }
+  return resources;
+}
+
 void runBenchmark() {
-  auto upstream =
-      createMemoryResource(FLAGS_memory_resource, FLAGS_memory_percent);
+  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
+  constexpr int64_t kCapacity = 1L << 40;
+  memory::MemoryAllocator::Options allocatorOptions;
+  allocatorOptions.capacity = kCapacity;
+  auto resourceOwner = std::make_shared<memory::CustomMemoryResource>(
+      std::string{kCudfMemoryResourceTag},
+      std::make_shared<memory::MallocAllocator>(allocatorOptions),
+      memory::MemoryArbitrator::create({}),
+      []() { return memory::MemoryReclaimer::create(0); },
+      kCapacity);
+  auto gpuRoot = memory::memoryManager()->addCustomRootPool(
+      "temporaryMemoryResourceBenchmark.gpu", resourceOwner);
+
+  DeviceResource upstream = rmm::mr::statistics_resource_adaptor{
+      createMemoryResource(FLAGS_memory_resource, FLAGS_memory_percent)};
   auto dispatcher = createThreadLocalTemporaryMemoryResource(upstream);
 
   const std::size_t bytes = FLAGS_allocation_bytes;
@@ -98,22 +150,48 @@ void runBenchmark() {
       bytes,
       FLAGS_allocations_per_thread);
   std::printf(
-      "%8s %14s %14s %10s\n", "threads", "direct(ns)", "dispatch(ns)", "ratio");
+      "%8s %12s %12s %12s %10s %10s\n",
+      "threads",
+      "direct(ns)",
+      "dispatch(ns)",
+      "scoped(ns)",
+      "dispatch/x",
+      "scoped/x");
 
+  std::vector<CudfMemoryResource> noOperatorResources;
   for (const int32_t numThreads : {1, 2, 4, 8, 16, 32}) {
-    // Warm the pool so the first trial does not pay for growth.
-    runTrial(upstream, numThreads, 1000, bytes);
+    auto operatorResources =
+        makeOperatorResources(upstream, gpuRoot, resourceOwner, numThreads);
 
-    const auto direct =
-        runTrial(upstream, numThreads, FLAGS_allocations_per_thread, bytes);
-    const auto dispatched =
-        runTrial(dispatcher, numThreads, FLAGS_allocations_per_thread, bytes);
+    // Warm the pool so the first trial does not pay for growth.
+    runTrial(upstream, noOperatorResources, numThreads, 1000, bytes);
+
+    const auto direct = runTrial(
+        upstream,
+        noOperatorResources,
+        numThreads,
+        FLAGS_allocations_per_thread,
+        bytes);
+    const auto dispatched = runTrial(
+        dispatcher,
+        noOperatorResources,
+        numThreads,
+        FLAGS_allocations_per_thread,
+        bytes);
+    const auto scoped = runTrial(
+        dispatcher,
+        operatorResources,
+        numThreads,
+        FLAGS_allocations_per_thread,
+        bytes);
     std::printf(
-        "%8d %14.1f %14.1f %10.2fx\n",
+        "%8d %12.1f %12.1f %12.1f %9.2fx %9.2fx\n",
         numThreads,
         direct,
         dispatched,
-        dispatched / direct);
+        scoped,
+        dispatched / direct,
+        scoped / direct);
   }
 }
 

@@ -18,70 +18,44 @@
 #include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 
-#include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/Task.h"
 
-#include <mutex>
-
 namespace facebook::velox::cudf_velox {
-namespace {
 
-std::shared_ptr<memory::CustomMemoryResource> cudfMemoryResourceOwner(
-    const core::QueryCtx& queryCtx) {
-  auto perQuery =
-      queryCtx.registry<memory::CustomMemoryResourceRegistry::Registry>(
-          memory::kCustomMemoryResourceRegistryKey);
-  auto& registry =
-      perQuery ? *perQuery : memory::CustomMemoryResourceRegistry::global();
-  return registry.find(std::string(kCudfMemoryResourceTag));
-}
-
-std::shared_ptr<CudfMemoryResourceRegistry> cudfMemoryResourceRegistry(
-    core::QueryCtx& queryCtx) {
-  if (auto registry = queryCtx.registry<CudfMemoryResourceRegistry>(
-          kCudfMemoryResourceRegistryKey)) {
-    return registry;
-  }
-
-  // QueryCtx does not currently offer an atomic get-or-create operation for
-  // registries. Serialize this cuDF-local lazy initialization and recheck.
-  static std::mutex initMutex;
-  std::lock_guard<std::mutex> lock(initMutex);
-  if (auto registry = queryCtx.registry<CudfMemoryResourceRegistry>(
-          kCudfMemoryResourceRegistryKey)) {
-    return registry;
-  }
-  auto registry = std::make_shared<CudfMemoryResourceRegistry>();
-  queryCtx.setRegistry(kCudfMemoryResourceRegistryKey, registry);
-  return registry;
-}
-
-} // namespace
-
-CudfOperatorMemoryResources CudfOperatorMemoryResources::resolve(
+CudfOperatorMemoryResources::CudfOperatorMemoryResources(
     exec::DriverCtx* driverCtx,
     memory::MemoryPool* gpuPool) {
-  CudfOperatorMemoryResources memoryResources;
   if (gpuPool == nullptr) {
-    return memoryResources;
+    return;
   }
 
-  auto queryCtx = driverCtx->task->queryCtx();
-  auto resourceOwner = cudfMemoryResourceOwner(*queryCtx);
-  VELOX_CHECK_NOT_NULL(
-      resourceOwner,
-      "No CustomMemoryResource registered for tag: {}",
-      kCudfMemoryResourceTag);
+  auto resourceOwner = cudfCustomMemoryResource(*driverCtx->task->queryCtx());
   VELOX_CHECK(
       mr_.has_value() && output_mr_.has_value(),
-      "cuDF memory resources must be initialized before creating operators");
+      "cuDF memory resources are not initialized; call registerCudf() first");
+  auto pool = gpuPool->shared_from_this();
+  temp_.emplace(*mr_, pool, resourceOwner);
+  if (*mr_ != *output_mr_) {
+    output_.emplace(*output_mr_, std::move(pool), std::move(resourceOwner));
+  }
+}
 
-  auto resources = cudfMemoryResourceRegistry(*queryCtx)->resourcesFor(
-      *mr_, *output_mr_, gpuPool->shared_from_this(), std::move(resourceOwner));
-  memoryResources.temp_ = resources.temp;
-  memoryResources.output_ = resources.output;
-  return memoryResources;
+ScopedCudfMemoryResources CudfOperatorMemoryResources::scoped() {
+  if (temp_.has_value()) {
+    rmm::device_async_resource_ref temp{*temp_};
+    return ScopedCudfMemoryResources{
+        temp,
+        output_.has_value() ? rmm::device_async_resource_ref{*output_} : temp};
+  }
+  // Deliberately not get_temp_mr(): that resolves to the thread-local
+  // temporary dispatcher, which delegates back here, so installing it as the
+  // scope's resource would nest the dispatcher inside itself.
+  VELOX_CHECK(
+      mr_.has_value(),
+      "cuDF memory resources are not initialized; call registerCudf() first");
+  return ScopedCudfMemoryResources{
+      rmm::device_async_resource_ref{*mr_}, get_output_mr()};
 }
 
 CudfOperatorBase::CudfOperatorBase(
@@ -104,10 +78,7 @@ CudfOperatorBase::CudfOperatorBase(
       NvtxHelper(color, operatorId, fmt::format("[{}]", planNodeId)),
       className_(operatorName),
       nvtxMethods_(nvtxMethods),
-      memoryResources_(
-          CudfOperatorMemoryResources::resolve(
-              driverCtx,
-              customPool(kCudfMemoryResourceTag))) {}
+      memoryResources_(driverCtx, customPool(kCudfMemoryResourceTag)) {}
 
 CudfSourceOperatorBase::CudfSourceOperatorBase(
     int32_t operatorId,
@@ -126,9 +97,6 @@ CudfSourceOperatorBase::CudfSourceOperatorBase(
       NvtxHelper(color, operatorId, fmt::format("[{}]", planNodeId)),
       className_(operatorName),
       nvtxMethods_(nvtxMethods),
-      memoryResources_(
-          CudfOperatorMemoryResources::resolve(
-              driverCtx,
-              customPool(kCudfMemoryResourceTag))) {}
+      memoryResources_(driverCtx, customPool(kCudfMemoryResourceTag)) {}
 
 } // namespace facebook::velox::cudf_velox

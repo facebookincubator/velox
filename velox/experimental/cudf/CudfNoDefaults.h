@@ -30,9 +30,9 @@
 // attribute prevents the inline body of get_current_device_resource_ref() from
 // being substituted, ensuring the call (and thus the error) survives.
 //
-// For intentional explicit usage where you want the current device memory
-// resource, use get_temp_mr(). It calls the underlying RMM
-// function directly, bypassing the error-attributed cudf wrapper.
+// For an intentional temporary resource, call get_temp_mr(): inside a cuDF
+// operator call it returns the resource that charges that operator, elsewhere
+// RMM's current device resource.
 
 #include "velox/experimental/cudf/CudfDefaultStreamOverload.h"
 #include "velox/experimental/cudf/CudfTemporaryMemoryResource.h"

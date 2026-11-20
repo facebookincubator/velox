@@ -16,7 +16,8 @@
 #pragma once
 
 #include "velox/exec/Operator.h"
-#include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/CudfMemoryResource.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
 
@@ -31,8 +32,7 @@ namespace facebook::velox::ucx_exchange {
 /// Instead of serializing and segmenting the partitioned data into an
 /// OutputBuffer, the UcxPartitionedOutput operator transfers entire
 /// cudf::packed_columns corresponding to CudfVectors to other workers.
-class UcxPartitionedOutput : public exec::Operator,
-                             public cudf_velox::NvtxHelper {
+class UcxPartitionedOutput : public cudf_velox::CudfOperatorBase {
  public:
   // Default minimum rows to accumulate before flushing. Matches HTTP
   // PartitionedOutput's ~10,000 row target. The process-wide default comes from
@@ -55,25 +55,26 @@ class UcxPartitionedOutput : public exec::Operator,
       bool eagerFlush,
       const std::shared_ptr<UcxOutputQueueManager>& queueManager);
 
-  void addInput(RowVectorPtr input) override;
-
-  /// Always returns nullptr. The action is to further process
-  /// unprocessed input. If all input has been processed, 'this' is in
-  /// a non-blocked state, otherwise blocked.
-  RowVectorPtr getOutput() override;
-
   /// always true but the caller will check isBlocked before adding input, hence
   /// the blocked state does not accumulate input.
   bool needsInput() const override {
     return true;
   }
 
-  // Returns kWaitForConsumer when output queues are full.
-  exec::BlockingReason isBlocked(ContinueFuture* future) override;
-
   // The operaor is finished when the queue manager say the queues have all been
   // drained ?
   bool isFinished() override;
+
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+
+  /// Always returns nullptr. The action is to further process
+  /// unprocessed input. If all input has been processed, 'this' is in
+  /// a non-blocked state, otherwise blocked.
+  RowVectorPtr doGetOutput() override;
+
+  // Returns kWaitForConsumer when output queues are full.
+  exec::BlockingReason doIsBlocked(ContinueFuture* future) override;
 
  private:
   std::shared_ptr<facebook::velox::ucx_exchange::UcxOutputQueueManager>
@@ -135,9 +136,13 @@ class UcxPartitionedOutput : public exec::Operator,
       cudf::table_view tableView,
       cuda::stream_ref stream);
 
-  rmm::device_async_resource_ref exchangeOutputMemoryResource() const;
+  // Returns the resource for packed output: the query's exchange resource, or
+  // the current output resource for queries without a `gpu` custom pool.
+  rmm::device_async_resource_ref exchangeOutputMemoryResource();
 
-  std::optional<rmm::device_async_resource_ref> exchangeOutputMemoryResource_;
+  // The query's exchange resource; empty for queries without a `gpu` custom
+  // pool.
+  std::optional<cudf_velox::CudfMemoryResource> exchangeOutputMemoryResource_;
   const std::weak_ptr<UcxOutputQueueManager> queueManager_;
   std::vector<column_index_t> partitionKeyIndices_;
   const size_t numPartitions_;

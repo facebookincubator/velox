@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
@@ -47,6 +48,7 @@
 #include <optional>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace facebook::velox::cudf_velox {
@@ -188,7 +190,7 @@ std::unique_ptr<cudf::table> makeDeviceTable(cuda::stream_ref stream) {
 class CudfMemoryResourceTest : public testing::Test {
  protected:
   static void SetUpTestSuite() {
-    memory::MemoryManager::initialize({});
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 };
 
@@ -296,16 +298,18 @@ TEST_F(CudfMemoryResourceTest, RetainsCompleteCustomPoolHierarchyAndOwner) {
 TEST_F(CudfMemoryResourceTest, RejectsAggregateAccountingPool) {
   auto root = memory::memoryManager()->addRootPool();
   auto state = std::make_shared<HostBackedResourceState>();
-  EXPECT_THROW(
-      (CudfMemoryResource{makeTestUpstream(state), root}), VeloxRuntimeError);
+  VELOX_ASSERT_THROW(
+      (CudfMemoryResource{makeTestUpstream(state), root}),
+      "cuDF memory accounting requires a leaf pool");
 }
 
 TEST_F(CudfMemoryResourceTest, RejectsNonThreadSafeAccountingPool) {
   auto root = memory::memoryManager()->addRootPool();
   auto pool = root->addLeafChild("nonThreadSafe", false);
   auto state = std::make_shared<HostBackedResourceState>();
-  EXPECT_THROW(
-      (CudfMemoryResource{makeTestUpstream(state), pool}), VeloxRuntimeError);
+  VELOX_ASSERT_THROW(
+      (CudfMemoryResource{makeTestUpstream(state), pool}),
+      "cuDF memory accounting requires a thread-safe pool");
 }
 
 TEST_F(CudfMemoryResourceTest, ReservationAndExternalAccountingCoexist) {
@@ -327,83 +331,6 @@ TEST_F(CudfMemoryResourceTest, ReservationAndExternalAccountingCoexist) {
   EXPECT_EQ(pool->usedBytes(), 0);
   pool->release();
   EXPECT_EQ(pool->reservedBytes(), 0);
-}
-
-TEST_F(CudfMemoryResourceTest, RegistryConstructionFailureIsRetryable) {
-  CudfMemoryResourceRegistry registry;
-  auto root = memory::memoryManager()->addRootPool();
-  auto pool = root->addLeafChild("cudfMemoryResourceRegistryRetryTest");
-  auto state = std::make_shared<HostBackedResourceState>();
-  auto upstream = makeTestUpstream(state);
-
-  state->failNextCopy = true;
-  EXPECT_THROW(
-      registry.resourcesFor(upstream, upstream, pool, nullptr),
-      std::runtime_error);
-
-  auto resources = registry.resourcesFor(upstream, upstream, pool, nullptr);
-  EXPECT_EQ(resources.temp, resources.output);
-}
-
-TEST_F(CudfMemoryResourceTest, RegistryValidatesStableInputs) {
-  CudfMemoryResourceRegistry registry;
-  auto owner = makeCustomResource();
-  auto otherOwner = makeCustomResource();
-  auto root = memory::memoryManager()->addCustomRootPool(
-      "cudfMemoryResourceRegistryStableRoot", owner);
-  auto pool = root->addLeafChild("operator");
-  auto stateA = std::make_shared<HostBackedResourceState>();
-  auto stateB = std::make_shared<HostBackedResourceState>();
-  auto upstreamA = makeTestUpstream(stateA);
-  auto upstreamB = makeTestUpstream(stateB);
-
-  auto resources = registry.resourcesFor(upstreamA, upstreamA, pool, owner);
-  EXPECT_EQ(resources.temp, resources.output);
-  auto repeated = registry.resourcesFor(upstreamA, upstreamA, pool, owner);
-  EXPECT_EQ(resources.temp, repeated.temp);
-
-  EXPECT_THROW(
-      registry.resourcesFor(upstreamB, upstreamA, pool, owner),
-      VeloxRuntimeError);
-  EXPECT_THROW(
-      registry.resourcesFor(upstreamA, upstreamA, pool, otherOwner),
-      VeloxRuntimeError);
-}
-
-TEST_F(CudfMemoryResourceTest, RegistryUsesDistinctOutputWrapperWhenNeeded) {
-  CudfMemoryResourceRegistry registry;
-  auto root = memory::memoryManager()->addRootPool();
-  auto pool = root->addLeafChild("cudfMemoryResourceDistinctWrappersTest");
-  auto stateA = std::make_shared<HostBackedResourceState>();
-  auto stateB = std::make_shared<HostBackedResourceState>();
-  auto resources = registry.resourcesFor(
-      makeTestUpstream(stateA), makeTestUpstream(stateB), pool, nullptr);
-  EXPECT_NE(resources.temp, resources.output);
-}
-
-TEST_F(CudfMemoryResourceTest, RegistryKeepsReferencedResourceAlive) {
-  auto registry = std::make_unique<CudfMemoryResourceRegistry>();
-  auto root = memory::memoryManager()->addRootPool();
-  auto pool = root->addLeafChild("cudfMemoryResourceRegistryTest");
-  std::weak_ptr<memory::MemoryPool> weakPool = pool;
-  auto state = std::make_shared<HostBackedResourceState>();
-  auto upstream = makeTestUpstream(state);
-  auto resources =
-      registry->resourcesFor(upstream, upstream, std::move(pool), nullptr);
-
-  constexpr std::size_t kBytes = 128;
-  auto* allocation = resources.output.allocate(
-      cudf::get_default_stream(), kBytes, alignof(std::max_align_t));
-  EXPECT_EQ(weakPool.lock()->usedBytes(), kBytes);
-  resources.output.deallocate(
-      cudf::get_default_stream(),
-      allocation,
-      kBytes,
-      alignof(std::max_align_t));
-
-  EXPECT_FALSE(weakPool.expired());
-  registry.reset();
-  EXPECT_TRUE(weakPool.expired());
 }
 
 TEST_F(CudfMemoryResourceTest, ScopedSelectionSupportsNesting) {
@@ -596,10 +523,57 @@ TEST_F(CudfMemoryResourceTest, ScopedSelectionIsThreadLocal) {
   EXPECT_TRUE(childSawOwnResources);
 }
 
+TEST_F(CudfMemoryResourceTest, OutputResourceRequiresRegistration) {
+  auto savedOutputMr = std::exchange(output_mr_, std::nullopt);
+  SCOPE_EXIT {
+    output_mr_ = std::move(savedOutputMr);
+  };
+  VELOX_ASSERT_THROW(
+      get_output_mr(),
+      "cuDF memory resources are not initialized; call registerCudf() first");
+}
+
+TEST_F(CudfMemoryResourceTest, CurrentResourceKeepsScopedResourceUntilFree) {
+  constexpr std::size_t kBytes = 256;
+  constexpr auto kAlignment = alignof(std::max_align_t);
+
+  auto fallbackState = std::make_shared<HostBackedResourceState>();
+  auto globalTemporaryResource =
+      createThreadLocalTemporaryMemoryResource(makeTestUpstream(fallbackState));
+  rmm::device_async_resource_ref currentResource{globalTemporaryResource};
+
+  auto root = memory::memoryManager()->addRootPool();
+  auto pool = root->addLeafChild("temporaryOutlivesOperator");
+  std::weak_ptr<memory::MemoryPool> weakPool = pool;
+  auto state = std::make_shared<HostBackedResourceState>();
+  void* allocation = nullptr;
+  {
+    // Stands in for an operator that allocates an implicit temporary and is
+    // destroyed before the temporary is freed.
+    CudfMemoryResource operatorResource{makeTestUpstream(state), pool};
+    pool.reset();
+    rmm::device_async_resource_ref operatorRef{operatorResource};
+    ScopedCudfMemoryResources scope{operatorRef, operatorRef};
+    allocation = currentResource.allocate(
+        cudf::get_default_stream(), kBytes, kAlignment);
+  }
+
+  ASSERT_FALSE(weakPool.expired());
+  EXPECT_EQ(weakPool.lock()->usedBytes(), kBytes);
+
+  std::thread([&] {
+    currentResource.deallocate(
+        cudf::get_default_stream(), allocation, kBytes, kAlignment);
+  }).join();
+  EXPECT_EQ(state->liveBytes, 0);
+  EXPECT_EQ(fallbackState->liveBytes, 0);
+  EXPECT_TRUE(weakPool.expired());
+}
+
 TEST_F(CudfMemoryResourceTest, ExchangeResourceRequiresTrackedQuery) {
   auto queryCtx = core::QueryCtx::Builder().queryId("untracked").build();
   EXPECT_FALSE(cudfExchangeOutputMemoryResource(*queryCtx).has_value());
-  EXPECT_EQ(cudfExchangeMemoryPool(*queryCtx), nullptr);
+  EXPECT_EQ(testingCudfExchangeMemoryPool(*queryCtx), nullptr);
 }
 
 TEST_F(CudfMemoryResourceTest, ExchangeResourcesAreScopedByQueryRoot) {
@@ -608,11 +582,9 @@ TEST_F(CudfMemoryResourceTest, ExchangeResourcesAreScopedByQueryRoot) {
     GTEST_SKIP() << "No CUDA device available";
   }
 
-  resetCudfExchangeMemoryResource();
   auto savedOutputMr = output_mr_;
   output_mr_ = createMemoryResource("cuda", 0);
   SCOPE_EXIT {
-    resetCudfExchangeMemoryResource();
     output_mr_ = std::move(savedOutputMr);
   };
 
@@ -628,9 +600,10 @@ TEST_F(CudfMemoryResourceTest, ExchangeResourcesAreScopedByQueryRoot) {
   ASSERT_TRUE(exchangeMrA.has_value());
   ASSERT_TRUE(exchangeMrB.has_value());
   EXPECT_NE(*exchangeMrA, *exchangeMrB);
+  EXPECT_EQ(*exchangeMrA, *cudfExchangeOutputMemoryResource(*queryCtxA));
 
-  auto exchangePoolA = cudfExchangeMemoryPool(*queryCtxA);
-  auto exchangePoolB = cudfExchangeMemoryPool(*queryCtxB);
+  auto exchangePoolA = testingCudfExchangeMemoryPool(*queryCtxA);
+  auto exchangePoolB = testingCudfExchangeMemoryPool(*queryCtxB);
   ASSERT_NE(exchangePoolA, nullptr);
   ASSERT_NE(exchangePoolB, nullptr);
   EXPECT_NE(exchangePoolA, exchangePoolB);
@@ -646,20 +619,47 @@ TEST_F(CudfMemoryResourceTest, ExchangeResourcesAreScopedByQueryRoot) {
     auto exchangeMrOtherDevice = cudfExchangeOutputMemoryResource(*queryCtxA);
     ASSERT_TRUE(exchangeMrOtherDevice.has_value());
     EXPECT_NE(*exchangeMrA, *exchangeMrOtherDevice);
-    auto exchangePoolOtherDevice = cudfExchangeMemoryPool(*queryCtxA);
+    auto exchangePoolOtherDevice = testingCudfExchangeMemoryPool(*queryCtxA);
     ASSERT_NE(exchangePoolOtherDevice, nullptr);
     EXPECT_NE(exchangePoolA, exchangePoolOtherDevice);
     CUDF_CUDA_TRY(cudaSetDevice(originalDevice));
   }
+}
 
-  EXPECT_THROW(resetCudfExchangeMemoryResource(), VeloxRuntimeError);
-  EXPECT_FALSE(tryResetCudfExchangeMemoryResource());
+TEST_F(CudfMemoryResourceTest, CopiedRegistriesDoNotShareExchangeResources) {
+  int deviceCount = 0;
+  if (cudaGetDeviceCount(&deviceCount) != cudaSuccess || deviceCount == 0) {
+    GTEST_SKIP() << "No CUDA device available";
+  }
 
-  queryCtxA.reset();
-  queryCtxB.reset();
-  exchangePoolA.reset();
-  exchangePoolB.reset();
-  EXPECT_TRUE(tryResetCudfExchangeMemoryResource());
+  auto savedOutputMr = output_mr_;
+  output_mr_ = createMemoryResource("cuda", 0);
+  SCOPE_EXIT {
+    output_mr_ = std::move(savedOutputMr);
+  };
+
+  auto owner = makeCustomResource();
+  auto source = makeTrackedQueryCtx(owner, "exchange-source");
+  ASSERT_TRUE(cudfExchangeOutputMemoryResource(*source).has_value());
+  auto sourcePool = testingCudfExchangeMemoryPool(*source);
+  ASSERT_NE(sourcePool, nullptr);
+
+  auto derivedRoot =
+      memory::memoryManager()->addCustomRootPool("exchange-derived.gpu", owner);
+  auto derived =
+      core::QueryCtx::Builder()
+          .queryId("exchange-derived")
+          .customPool(std::string{kCudfMemoryResourceTag}, derivedRoot)
+          .build();
+  derived->copyRegistriesFrom(*source);
+  EXPECT_EQ(testingCudfExchangeMemoryPool(*derived), nullptr);
+
+  ASSERT_TRUE(cudfExchangeOutputMemoryResource(*derived).has_value());
+  auto derivedPool = testingCudfExchangeMemoryPool(*derived);
+  ASSERT_NE(derivedPool, nullptr);
+  EXPECT_NE(derivedPool, sourcePool);
+  EXPECT_EQ(derivedPool->parent(), derivedRoot.get());
+  EXPECT_EQ(testingCudfExchangeMemoryPool(*source), sourcePool);
 }
 
 TEST_F(CudfMemoryResourceTest, PackedGpuMemoryIsChargedToExchangePool) {
@@ -668,11 +668,9 @@ TEST_F(CudfMemoryResourceTest, PackedGpuMemoryIsChargedToExchangePool) {
     GTEST_SKIP() << "No CUDA device available";
   }
 
-  resetCudfExchangeMemoryResource();
   auto savedOutputMr = output_mr_;
   output_mr_ = createMemoryResource("cuda", 0);
   SCOPE_EXIT {
-    resetCudfExchangeMemoryResource();
     output_mr_ = std::move(savedOutputMr);
   };
 
@@ -683,82 +681,35 @@ TEST_F(CudfMemoryResourceTest, PackedGpuMemoryIsChargedToExchangePool) {
       queryCtx->customPool(std::string{kCudfMemoryResourceTag});
   auto exchangeMr = cudfExchangeOutputMemoryResource(*queryCtx);
   ASSERT_TRUE(exchangeMr.has_value());
-  auto exchangePool = cudfExchangeMemoryPool(*queryCtx);
-  ASSERT_NE(exchangePool, nullptr);
+  std::weak_ptr<memory::MemoryPool> exchangePool =
+      testingCudfExchangeMemoryPool(*queryCtx);
+  ASSERT_FALSE(exchangePool.expired());
 
   cuda::stream_ref stream = cudf::get_default_stream();
   auto table = makeDeviceTable(stream);
   auto packed = cudf::pack(table->view(), stream, *exchangeMr);
   stream.sync();
+  exchangeMr.reset();
 
   ASSERT_NE(packed.gpu_data, nullptr);
   const auto packedBytes = packed.gpu_data->size();
   ASSERT_GT(packedBytes, 0);
-  EXPECT_EQ(exchangePool->usedBytes(), packedBytes);
+  EXPECT_EQ(exchangePool.lock()->usedBytes(), packedBytes);
   EXPECT_EQ(weakQueryPool.lock()->usedBytes(), packedBytes);
 
+  // The packed buffer keeps the exchange pool, the query's root and the
+  // custom resource alive after the query is gone.
   queryCtx.reset();
   owner.reset();
+  EXPECT_FALSE(exchangePool.expired());
   EXPECT_FALSE(weakQueryPool.expired());
   EXPECT_FALSE(weakOwner.expired());
-  EXPECT_EQ(exchangePool->usedBytes(), packedBytes);
-  EXPECT_THROW(resetCudfExchangeMemoryResource(), VeloxRuntimeError);
-  EXPECT_FALSE(tryResetCudfExchangeMemoryResource());
+  EXPECT_EQ(exchangePool.lock()->usedBytes(), packedBytes);
 
   packed.gpu_data.reset();
-  EXPECT_EQ(exchangePool->usedBytes(), 0);
-  EXPECT_EQ(weakQueryPool.lock()->usedBytes(), 0);
-  exchangePool.reset();
-  EXPECT_TRUE(tryResetCudfExchangeMemoryResource());
+  EXPECT_TRUE(exchangePool.expired());
   EXPECT_TRUE(weakQueryPool.expired());
   EXPECT_TRUE(weakOwner.expired());
-}
-
-TEST_F(CudfMemoryResourceTest, UnregisterRetainsBusyExchangeResourceSafely) {
-  int deviceCount = 0;
-  if (cudaGetDeviceCount(&deviceCount) != cudaSuccess || deviceCount == 0) {
-    GTEST_SKIP() << "No CUDA device available";
-  }
-
-  ASSERT_FALSE(cudfIsRegistered());
-  resetCudfExchangeMemoryResource();
-  auto savedTempMr = mr_;
-  auto savedOutputMr = output_mr_;
-  mr_ = createMemoryResource("cuda", 0);
-  output_mr_ = createMemoryResource("cuda", 0);
-  SCOPE_EXIT {
-    tryResetCudfExchangeMemoryResource();
-    mr_ = std::move(savedTempMr);
-    output_mr_ = std::move(savedOutputMr);
-  };
-
-  auto owner = makeCustomResource();
-  auto queryCtx = makeTrackedQueryCtx(owner, "busy-unregister");
-  auto exchangeMr = cudfExchangeOutputMemoryResource(*queryCtx);
-  ASSERT_TRUE(exchangeMr.has_value());
-  auto exchangePool = cudfExchangeMemoryPool(*queryCtx);
-  ASSERT_NE(exchangePool, nullptr);
-
-  cuda::stream_ref stream = cudf::get_default_stream();
-  auto table = makeDeviceTable(stream);
-  auto packed = cudf::pack(table->view(), stream, *exchangeMr);
-  stream.sync();
-  ASSERT_NE(packed.gpu_data, nullptr);
-  ASSERT_GT(packed.gpu_data->size(), 0);
-
-  queryCtx.reset();
-  owner.reset();
-  EXPECT_FALSE(tryResetCudfExchangeMemoryResource());
-  EXPECT_NO_THROW(unregisterCudf());
-  EXPECT_FALSE(cudfIsRegistered());
-  EXPECT_FALSE(mr_.has_value());
-  EXPECT_FALSE(output_mr_.has_value());
-  EXPECT_GT(exchangePool->usedBytes(), 0);
-
-  packed.gpu_data.reset();
-  EXPECT_EQ(exchangePool->usedBytes(), 0);
-  exchangePool.reset();
-  EXPECT_TRUE(tryResetCudfExchangeMemoryResource());
 }
 
 } // namespace

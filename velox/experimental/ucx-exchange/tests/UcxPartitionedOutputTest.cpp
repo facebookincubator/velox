@@ -26,14 +26,21 @@
 #include <rmm/device_buffer.hpp>
 #include <algorithm>
 #include <cuda/stream>
+#include <functional>
 #include <memory>
+#include <numeric>
+#include <optional>
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/memory/CustomMemoryResourceRegistry.h"
+#include "velox/common/memory/MallocAllocator.h"
+#include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/OutputTransportRegistry.h"
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfMemoryResource.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeRegistration.h"
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
@@ -62,6 +69,9 @@ class UcxPartitionedOutputTest : public testing::Test {
     pool_ = memory::memoryManager()->addLeafPool();
     queueManager_ = UcxOutputQueueManager::getInstanceRef();
     CudfConfig::getInstance().exchange = true;
+    // The operator binds the cuDF device and installs the cuDF memory
+    // resources in each of its methods.
+    cudfRegistration_.emplace();
   }
 
   void TearDown() override {
@@ -69,6 +79,7 @@ class UcxPartitionedOutputTest : public testing::Test {
       queueManager_->deleteResults(taskId_, destination);
     }
     queueManager_->removeTask(taskId_);
+    cudfRegistration_.reset();
   }
 
   // Builds the key column, marking the rows in 'nullRows' invalid.
@@ -150,6 +161,72 @@ class UcxPartitionedOutputTest : public testing::Test {
         kNumPartitions,
         /*numDrivers=*/1);
     return task;
+  }
+
+  // Like makeKeyPartitionedTask(), in a query whose `gpu` custom root holds at
+  // most 'capacity' bytes.
+  std::shared_ptr<Task> makeTrackedKeyPartitionedTask(
+      int64_t capacity,
+      const std::unordered_map<std::string, std::string>& extraConfig) {
+    memory::MemoryAllocator::Options allocatorOptions;
+    allocatorOptions.capacity = capacity;
+    auto resourceOwner = std::make_shared<memory::CustomMemoryResource>(
+        std::string{cudf_velox::kCudfMemoryResourceTag},
+        std::make_shared<memory::MallocAllocator>(allocatorOptions),
+        memory::MemoryArbitrator::create({}),
+        []() { return memory::MemoryReclaimer::create(0); },
+        capacity);
+    auto queryCtx = core::QueryCtx::Builder()
+                        .queryConfig(core::QueryConfig(extraConfig))
+                        .customPool(
+                            std::string{cudf_velox::kCudfMemoryResourceTag},
+                            memory::memoryManager()->addCustomRootPool(
+                                taskId_ + ".gpu", resourceOwner))
+                        .build();
+    auto customResources =
+        memory::CustomMemoryResourceRegistry::createRegistry(nullptr);
+    customResources->insert(
+        std::string{cudf_velox::kCudfMemoryResourceTag}, resourceOwner);
+    queryCtx->setRegistry<memory::CustomMemoryResourceRegistry::Registry>(
+        memory::kCustomMemoryResourceRegistryKey, customResources);
+
+    auto task = createPartitionedOutputTask(
+        taskId_,
+        std::move(queryCtx),
+        pool_,
+        UcxTestData::kTestRowType,
+        kNumPartitions,
+        {"c0"});
+    queueManager_->initializeTask(
+        task,
+        core::PartitionedOutputNode::Kind::kPartitioned,
+        kNumPartitions,
+        /*numDrivers=*/1);
+    return task;
+  }
+
+  // Returns the `gpu` leaf pool of the UcxPartitionedOutput operator of
+  // 'task'.
+  static memory::MemoryPool* operatorGpuPool(
+      const std::shared_ptr<Task>& task) {
+    memory::MemoryPool* operatorPool{nullptr};
+    std::function<bool(memory::MemoryPool*)> find =
+        [&](memory::MemoryPool* pool) {
+          if (pool->isLeaf()) {
+            if (pool->name().find(".cudfPartitionedOutput.") !=
+                std::string::npos) {
+              operatorPool = pool;
+            }
+          } else {
+            pool->visitChildren(find);
+          }
+          return operatorPool == nullptr;
+        };
+    task->queryCtx()
+        ->customPool(std::string{cudf_velox::kCudfMemoryResourceTag})
+        ->visitChildren(find);
+    VELOX_CHECK_NOT_NULL(operatorPool);
+    return operatorPool;
   }
 
   // Builds the operator the way a Task does: through the kUcx output transport
@@ -287,6 +364,7 @@ class UcxPartitionedOutputTest : public testing::Test {
   std::shared_ptr<memory::MemoryPool> pool_;
   std::shared_ptr<UcxOutputQueueManager> queueManager_;
   std::shared_ptr<exec::DriverCtx> driverCtx_;
+  std::optional<CudfRegistration> cudfRegistration_;
 };
 
 TEST_F(UcxPartitionedOutputTest, requiresProcessWideQueueManager) {
@@ -453,6 +531,62 @@ TEST_F(UcxPartitionedOutputTest, eagerFlushFromSessionPropertySendsEachBatch) {
   EXPECT_GT(numBufferedPages(), 0);
 
   finishPartitionedOutput(partitionedOutput);
+}
+
+// Partitioning runs in the operator's scope and is charged to its `gpu` leaf.
+// The packed partitions it queues are charged to the query's exchange pool
+// until they are sent.
+TEST_F(UcxPartitionedOutputTest, chargesPartitioningAndPackedOutput) {
+  cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
+  auto task = makeTrackedKeyPartitionedTask(1L << 30, /*extraConfig=*/{});
+  auto partitionedOutput = makePartitionedOutput(task);
+  feedBatch(
+      partitionedOutput.get(),
+      makeKeyColumn({1, 2, 3, 4, 5, 6}, {}, stream),
+      stream);
+  finishPartitionedOutput(partitionedOutput.get());
+
+  auto* operatorPool = operatorGpuPool(task);
+  EXPECT_GT(operatorPool->stats().numExternalAllocs, 0);
+  EXPECT_EQ(operatorPool->usedBytes(), 0);
+
+  const auto stats = queueManager_->stats(taskId_);
+  ASSERT_TRUE(stats.has_value());
+  ASSERT_GT(stats->bufferedBytes, 0);
+  auto exchangePool =
+      cudf_velox::testingCudfExchangeMemoryPool(*task->queryCtx());
+  ASSERT_NE(exchangePool, nullptr);
+  EXPECT_EQ(exchangePool->usedBytes(), stats->bufferedBytes);
+}
+
+// A flush that fails on a full `gpu` pool fails the task. The packed output of
+// earlier flushes still queued for other destinations is dropped with it,
+// releasing its device memory before the task is removed.
+TEST_F(UcxPartitionedOutputTest, failedFlushDropsQueuedOutput) {
+  cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
+  // Reservations are rounded up to whole MBs. The first batch needs 1 MB for
+  // its partitions and 1 MB for their packed copies. The second needs several
+  // MB on top of the first batch's queued output.
+  constexpr int64_t kCapacity = 3L << 20;
+  auto task = makeTrackedKeyPartitionedTask(
+      kCapacity, {{core::QueryConfig::kPartitionedOutputEagerFlush, "true"}});
+  auto partitionedOutput = makePartitionedOutput(task);
+  feedBatch(
+      partitionedOutput.get(),
+      makeKeyColumn({1, 2, 3, 4, 5, 6}, {}, stream),
+      stream);
+  ASSERT_GT(numBufferedPages(), 0);
+
+  std::vector<int32_t> keys(500'000);
+  std::iota(keys.begin(), keys.end(), 0);
+  VELOX_ASSERT_THROW(
+      feedBatch(
+          partitionedOutput.get(), makeKeyColumn(keys, {}, stream), stream),
+      "Exceeded memory pool capacity");
+  EXPECT_EQ(numBufferedPages(), 0);
+  EXPECT_EQ(
+      cudf_velox::testingCudfExchangeMemoryPool(*task->queryCtx())->usedBytes(),
+      0);
 }
 
 // The bug: both null-keyed rows land in a single hash bucket, so two of the

@@ -37,8 +37,6 @@ class CudfFilterProject : public CudfOperatorBase {
       const std::shared_ptr<const core::FilterNode>& filter,
       const std::shared_ptr<const core::ProjectNode>& project);
 
-  void doInitialize() override;
-
   bool needsInput() const override {
     return !input_;
   }
@@ -58,6 +56,8 @@ class CudfFilterProject : public CudfOperatorBase {
   bool isFinished() override;
 
  protected:
+  void doInitialize() override;
+
   void doAddInput(RowVectorPtr input) override;
   RowVectorPtr doGetOutput() override;
 

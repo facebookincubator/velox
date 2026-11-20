@@ -22,12 +22,9 @@
 
 #include <cuda/memory_resource>
 
-#include <atomic>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string_view>
-#include <unordered_map>
 
 namespace facebook::velox::core {
 class QueryCtx;
@@ -37,8 +34,6 @@ namespace facebook::velox::cudf_velox {
 
 /// Custom memory resource tag used for cuDF device memory accounting.
 inline constexpr std::string_view kCudfMemoryResourceTag{"gpu"};
-inline constexpr std::string_view kCudfMemoryResourceRegistryKey{
-    "cudfMemoryResource"};
 
 namespace detail {
 
@@ -87,20 +82,12 @@ class CudfMemoryResourceImpl {
       const CudfMemoryResourceImpl&,
       cuda::mr::device_accessible) noexcept {}
 
-  /// Returns the number of allocations handed out and not yet deallocated.
-  /// Unlike the pool's usedBytes(), this counts zero-byte allocations, which
-  /// are passed through to the upstream resource without being accounted.
-  int64_t liveAllocations() const noexcept {
-    return liveAllocations_.load(std::memory_order_acquire);
-  }
-
  private:
   // Declared first so it is destroyed last. MemoryPool borrows its allocator
   // and arbitrator from this object.
   std::shared_ptr<memory::CustomMemoryResource> resourceOwner_;
   std::shared_ptr<memory::MemoryPool> pool_;
   cuda::mr::any_resource<cuda::mr::device_accessible> upstream_;
-  std::atomic<int64_t> liveAllocations_{0};
 };
 
 } // namespace detail
@@ -124,64 +111,22 @@ class CudfMemoryResource
 static_assert(
     cuda::mr::resource_with<CudfMemoryResource, cuda::mr::device_accessible>);
 
-/// Query-scoped owner for reporting resources. cuDF APIs accept non-owning
-/// resource refs, so the resource objects must outlive output columns that can
-/// survive their producing operator.
-class CudfMemoryResourceRegistry {
- public:
-  struct ResourceRefs {
-    rmm::device_async_resource_ref temp;
-    rmm::device_async_resource_ref output;
-  };
-
-  ResourceRefs resourcesFor(
-      const cuda::mr::any_resource<cuda::mr::device_accessible>& tempUpstream,
-      const cuda::mr::any_resource<cuda::mr::device_accessible>& outputUpstream,
-      std::shared_ptr<memory::MemoryPool> pool,
-      std::shared_ptr<memory::CustomMemoryResource> resourceOwner);
-
- private:
-  struct Resources {
-    Resources(
-        cuda::mr::any_resource<cuda::mr::device_accessible> tempUpstream,
-        cuda::mr::any_resource<cuda::mr::device_accessible> outputUpstream,
-        std::shared_ptr<memory::MemoryPool> pool,
-        std::shared_ptr<memory::CustomMemoryResource> resourceOwner);
-
-    bool matches(
-        const cuda::mr::any_resource<cuda::mr::device_accessible>& tempUpstream,
-        const cuda::mr::any_resource<cuda::mr::device_accessible>&
-            outputUpstream,
-        const std::shared_ptr<memory::CustomMemoryResource>& resourceOwner)
-        const;
-
-    ResourceRefs refs();
-
-    // Declared before reporting resources so the borrowed allocator and
-    // arbitrator remain alive through pool and resource teardown.
-    std::shared_ptr<memory::CustomMemoryResource> resourceOwner;
-    cuda::mr::any_resource<cuda::mr::device_accessible> tempUpstream;
-    cuda::mr::any_resource<cuda::mr::device_accessible> outputUpstream;
-    CudfMemoryResource temp;
-    std::optional<CudfMemoryResource> output;
-  };
-
-  std::mutex mutex_;
-  std::unordered_map<memory::MemoryPool*, std::unique_ptr<Resources>>
-      resources_;
-};
-
-std::optional<rmm::device_async_resource_ref> cudfExchangeOutputMemoryResource(
-    core::QueryCtx& queryCtx);
-
-std::shared_ptr<memory::MemoryPool> cudfExchangeMemoryPool(
+/// Returns the CustomMemoryResource registered for kCudfMemoryResourceTag in
+/// the query's CustomMemoryResourceRegistry, or in the global one when the
+/// query has none. Throws if neither has one.
+std::shared_ptr<memory::CustomMemoryResource> cudfCustomMemoryResource(
     const core::QueryCtx& queryCtx);
 
-/// Releases retired exchange resources that have no live packed buffers.
-/// Returns true when no active or in-use exchange resources remain.
-bool tryResetCudfExchangeMemoryResource();
+/// Returns the resource for packed UCX exchange output of 'queryCtx' on the
+/// current CUDA device. It charges a leaf of the query's `gpu` custom root
+/// that all exchange operators of the query share. Returns std::nullopt for
+/// queries without a `gpu` custom pool.
+std::optional<CudfMemoryResource> cudfExchangeOutputMemoryResource(
+    core::QueryCtx& queryCtx);
 
-/// Strict test/shutdown helper. Fails if any query or packed buffer is active.
-void resetCudfExchangeMemoryResource();
+/// Returns the pool cudfExchangeOutputMemoryResource() charges on the current
+/// CUDA device, or nullptr if it has not created that resource.
+std::shared_ptr<memory::MemoryPool> testingCudfExchangeMemoryPool(
+    const core::QueryCtx& queryCtx);
 
 } // namespace facebook::velox::cudf_velox

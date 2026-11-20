@@ -70,8 +70,11 @@ class ThreadLocalTemporaryMemoryResourceImpl {
       void* pointer,
       std::size_t bytes,
       std::size_t alignment) noexcept {
-    resourceForDeallocation(pointer, bytes)
-        .deallocate_sync(pointer, bytes, alignment);
+    if (bytes == 0) {
+      currentResource().deallocate_sync(pointer, bytes, alignment);
+      return;
+    }
+    takeAllocation(pointer, bytes).deallocate_sync(pointer, bytes, alignment);
   }
 
   void*
@@ -92,7 +95,11 @@ class ThreadLocalTemporaryMemoryResourceImpl {
       void* pointer,
       std::size_t bytes,
       std::size_t alignment) noexcept {
-    resourceForDeallocation(pointer, bytes)
+    if (bytes == 0) {
+      currentResource().deallocate(stream, pointer, bytes, alignment);
+      return;
+    }
+    takeAllocation(pointer, bytes)
         .deallocate(stream, pointer, bytes, alignment);
   }
 
@@ -117,6 +124,11 @@ class ThreadLocalTemporaryMemoryResourceImpl {
         : rmm::device_async_resource_ref{fallback_};
   }
 
+  // Keeps a copy of 'resource' until the allocation is freed. The copy shares
+  // the resource, so the resource and the pool it charges stay alive however
+  // long the allocation outlives the scope that selected the resource.
+  // Zero-byte allocations are not remembered: they charge nothing, and the
+  // upstream may return the same pointer for all of them.
   void rememberAllocation(
       void* pointer,
       std::size_t bytes,
@@ -124,8 +136,10 @@ class ThreadLocalTemporaryMemoryResourceImpl {
     if (bytes == 0) {
       return;
     }
+    cuda::mr::any_resource<cuda::mr::device_accessible> owner{resource};
     std::lock_guard<std::mutex> lock(mutex_);
-    const auto inserted = allocations_.emplace(pointer, resource).second;
+    const auto inserted =
+        allocations_.try_emplace(pointer, std::move(owner)).second;
     VELOX_CHECK(
         inserted,
         "Duplicate outstanding cuDF temporary allocation: {} bytes at {}",
@@ -133,31 +147,32 @@ class ThreadLocalTemporaryMemoryResourceImpl {
         pointer);
   }
 
-  // A miss here means an allocation was not routed through this dispatcher,
-  // which would make the deallocation charge the wrong pool. There is no
-  // correct resource to fall back to, so as required by the RMM resource
-  // contract this noexcept path terminates rather than guess.
-  rmm::device_async_resource_ref resourceForDeallocation(
+  // Removes and returns the resource that allocated 'pointer'. The caller
+  // frees through it and drops it outside the lock, because dropping the last
+  // copy can destroy a MemoryPool, which locks its parent.
+  //
+  // A miss means an allocation was not routed through this dispatcher, which
+  // would make the deallocation charge the wrong pool. There is no correct
+  // resource to fall back to, so as required by the RMM resource contract
+  // this noexcept path terminates rather than guess.
+  cuda::mr::any_resource<cuda::mr::device_accessible> takeAllocation(
       void* pointer,
       std::size_t bytes) noexcept {
-    if (bytes == 0) {
-      return currentResource();
-    }
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto it = allocations_.find(pointer);
+    std::unique_lock<std::mutex> lock(mutex_);
+    auto node = allocations_.extract(pointer);
+    lock.unlock();
     VELOX_CHECK(
-        it != allocations_.end(),
+        !node.empty(),
         "Unknown cuDF temporary allocation during deallocation: {} bytes at {}",
         bytes,
         pointer);
-    auto resource = it->second;
-    allocations_.erase(it);
-    return resource;
+    return std::move(node.mapped());
   }
 
   cuda::mr::any_resource<cuda::mr::device_accessible> fallback_;
   std::mutex mutex_;
-  std::unordered_map<void*, rmm::device_async_resource_ref> allocations_;
+  std::unordered_map<void*, cuda::mr::any_resource<cuda::mr::device_accessible>>
+      allocations_;
 };
 
 class ThreadLocalTemporaryMemoryResource
@@ -286,7 +301,10 @@ rmm::device_async_resource_ref get_output_mr() {
   if (scopedOutputMr.has_value()) {
     return *scopedOutputMr;
   }
-  return rmm::device_async_resource_ref{output_mr_.value()};
+  VELOX_CHECK(
+      output_mr_.has_value(),
+      "cuDF memory resources are not initialized; call registerCudf() first");
+  return rmm::device_async_resource_ref{*output_mr_};
 }
 
 cuda::mr::any_resource<cuda::mr::device_accessible>

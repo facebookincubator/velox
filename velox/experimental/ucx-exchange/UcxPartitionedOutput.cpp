@@ -71,16 +71,14 @@ UcxPartitionedOutput::UcxPartitionedOutput(
     const std::shared_ptr<const core::PartitionedOutputNode>& planNode,
     bool eagerFlush,
     const std::shared_ptr<UcxOutputQueueManager>& queueManager)
-    : Operator(
+    : CudfOperatorBase(
+          operatorId,
           ctx,
           planNode->outputType(),
-          operatorId,
           planNode->id(),
-          "cudfPartitionedOutput"),
-      NvtxHelper(
+          "cudfPartitionedOutput",
           nvtx3::rgb{255, 215, 0}, // Gold
-          operatorId,
-          fmt::format("[{}]", planNode->id())),
+          NvtxMethodFlag::kAddInput | NvtxMethodFlag::kGetOutput),
       queueManager_(queueManager),
       numPartitions_(planNode->numPartitions()),
       replicateNullsAndAny_(planNode->isReplicateNullsAndAny()),
@@ -116,10 +114,9 @@ UcxPartitionedOutput::UcxPartitionedOutput(
   }
 }
 
-void UcxPartitionedOutput::addInput(RowVectorPtr input) {
+void UcxPartitionedOutput::doAddInput(RowVectorPtr input) {
   VLOG(3) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_
           << " addInput";
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfVector, "Input must be a CudfVector");
   VELOX_CHECK(
@@ -252,10 +249,11 @@ void UcxPartitionedOutput::flushPending() {
     pendingInputs_.clear();
     pendingRows_ = 0;
 
-  } catch (const rmm::bad_alloc& e) {
-    VLOG(1)
-        << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_
-        << " caught memory alloc error, removing all memory in output queues";
+  } catch (...) {
+    // Any failure fails the task. Drop what this flush and earlier ones queued
+    // so device memory is released now rather than when the task goes away.
+    VLOG(1) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_
+            << " failed to flush, removing all memory in output queues";
     pendingInputs_.clear();
     pendingRows_ = 0;
     for (int i = 0; i < numPartitions_; i++) {
@@ -265,7 +263,7 @@ void UcxPartitionedOutput::flushPending() {
   }
 }
 
-exec::BlockingReason UcxPartitionedOutput::isBlocked(ContinueFuture* future) {
+exec::BlockingReason UcxPartitionedOutput::doIsBlocked(ContinueFuture* future) {
   if (blockingReason_ != exec::BlockingReason::kNotBlocked) {
     *future = std::move(future_);
     blockingReason_ = exec::BlockingReason::kNotBlocked;
@@ -274,8 +272,7 @@ exec::BlockingReason UcxPartitionedOutput::isBlocked(ContinueFuture* future) {
   return exec::BlockingReason::kNotBlocked;
 }
 
-RowVectorPtr UcxPartitionedOutput::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+RowVectorPtr UcxPartitionedOutput::doGetOutput() {
   if (finished_) {
     return nullptr;
   }
@@ -600,8 +597,10 @@ void UcxPartitionedOutput::equalPartition(
 }
 
 rmm::device_async_resource_ref
-UcxPartitionedOutput::exchangeOutputMemoryResource() const {
-  return exchangeOutputMemoryResource_.value_or(get_output_mr());
+UcxPartitionedOutput::exchangeOutputMemoryResource() {
+  return exchangeOutputMemoryResource_.has_value()
+      ? rmm::device_async_resource_ref{*exchangeOutputMemoryResource_}
+      : get_output_mr();
 }
 
 void UcxPartitionedOutput::splitAndEnqueue(

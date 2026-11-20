@@ -77,8 +77,6 @@ class CudfReduce : public CudfOperatorBase {
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::AggregationNode> const& aggregationNode);
 
-  void doInitialize() override;
-
   bool needsInput() const override {
     return !noMoreInput_;
   }
@@ -86,6 +84,8 @@ class CudfReduce : public CudfOperatorBase {
   bool isFinished() override;
 
  protected:
+  void doInitialize() override;
+
   void doAddInput(RowVectorPtr input) override;
 
   RowVectorPtr doGetOutput() override;

@@ -43,7 +43,9 @@ extern std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>>
 extern std::optional<rmm::mr::statistics_resource_adaptor> statsMr_;
 extern std::optional<rmm::mr::statistics_resource_adaptor> outputStatsMr_;
 
-/// Returns the memory resource designated for output vector allocations.
+/// Returns the output resource selected for the current cuDF call, falling
+/// back to the process-wide output resource outside an operator call. Throws
+/// if registerCudf() has not initialized the latter.
 rmm::device_async_resource_ref get_output_mr();
 
 /// Live bytes currently allocated through the cuDF/RMM memory resource(s), or
@@ -59,18 +61,18 @@ int64_t cudfAllocatedBytes();
 ///
 /// This is a transitional bridge until every cuDF API accepts temp_mr. Only
 /// operational allocations whose allocation call occurs inside the cuDF API
-/// scope may use this resource. The selected resource is remembered for
-/// deallocation on any thread, but remains non-owning and must outlive the
-/// allocation. Returned columns and tables must use the explicit owning output
-/// resource instead.
+/// scope may use this resource. Each allocation keeps a copy of the selected
+/// resource until it is deallocated, on any thread. Returned columns and
+/// tables must use the explicit output resource instead.
 [[nodiscard]] cuda::mr::any_resource<cuda::mr::device_accessible>
 createThreadLocalTemporaryMemoryResource(
     cuda::mr::any_resource<cuda::mr::device_accessible> fallback);
 
 /// Installs per-call temporary and output resources for helpers that use
-/// get_temp_mr() and get_output_mr(). The selected resource objects themselves
-/// carry accounting identity, so allocations remain correctly attributed when
-/// cuDF uses a different thread or stream after receiving the resource ref.
+/// get_temp_mr() and get_output_mr(). The resources must outlive the scope.
+/// The selected resource objects themselves carry accounting identity, so
+/// allocations remain correctly attributed when cuDF uses a different thread or
+/// stream after receiving the resource ref.
 class ScopedCudfMemoryResources {
  public:
   ScopedCudfMemoryResources(
@@ -96,18 +98,6 @@ class ScopedCudfMemoryResources {
 /// resource.
 [[nodiscard]] cuda::mr::any_resource<cuda::mr::device_accessible>
 createMemoryResource(std::string_view mode, int percent);
-
-/// Releases retired UCX exchange resources with no live packed buffers.
-/// Returns true when no active or in-use exchange resources remain.
-///
-/// Defined in CudfMemoryResource.cpp and declared in both headers: callers of
-/// this one cannot include CudfMemoryResource.h, which drags in cudf headers
-/// that redefine the getters CudfNoDefaults.h poisons.
-bool tryResetCudfExchangeMemoryResource();
-
-/// Tears down all process-owned UCX exchange resources. There must be no
-/// active query users or live packed buffers.
-void resetCudfExchangeMemoryResource();
 
 /// Returns the global CUDA stream pool used by cudf.
 [[nodiscard]] cudf::detail::cuda_stream_pool& cudfGlobalStreamPool();
