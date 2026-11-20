@@ -21,7 +21,7 @@ Navigate to
 
 GitHub pages is configured to display the contents of the top-level docs directory
 found in the gh-pages branch. The documentation is available at
-https://facebookincubator.github.io/velox.
+https://docs.velox-lib.io.
 
 To publish updated documentation, copy the contents of the _build/html
 directory to the top-level docs folder and push to gh-pages branch.
@@ -88,7 +88,7 @@ A user must decode the file using base64 to add an entry and then encode it agai
 ```
 base64 -D -i velox/docs/mailmap_base64 -o .mailmap
 echo "Velox User <ABC Corp> <veloxuser@abccorp.com>" >> .mailmap
-base64 -i .mailmap -o velox/docs/mailmap_base64  
+base64 -i .mailmap -o velox/docs/mailmap_base64
 ```
 The affiliation is empty if none is found.
 To get the list of contributors in a specific month say June-2024, from the Velox root directory

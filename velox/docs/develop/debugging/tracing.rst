@@ -282,7 +282,7 @@ base class and override the `createPlanNode` method to create the specific plan 
 Query Trace Tool Usage
 ----------------------
 
-Enable tracing using configurations in https://facebookincubator.github.io/velox/configs.html#tracing.
+Enable tracing using configurations in https://docs.velox-lib.io/configs.html#tracing.
 After the traced query finishes, its metadata and the input data for the target tasks and operators
 are all saved in the directory specified by `query_trace_dir`.
 

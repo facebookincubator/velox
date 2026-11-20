@@ -68,7 +68,7 @@ mission, a few overarching principles and values are highlighted below.
 
 * **Readability.** As a library, Velox coding is optimized for the reader, not
   the writer. We appropriately add comments to our code, document APIs, and
-  produce [documentation](https://facebookincubator.github.io/velox/) about the
+  produce [documentation](https://docs.velox-lib.io/) about the
   main library components. It might take longer to write, but eases maintenance
   and other enhancements in the long run.
 
