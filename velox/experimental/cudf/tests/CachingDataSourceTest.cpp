@@ -17,8 +17,10 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CachingDataSource.h"
 
+#include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
+#include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
@@ -250,7 +252,8 @@ class CachingDataSourceTest : public testing::Test {
         path_,
         cache_.get(),
         cacheable,
-        stats_);
+        stats_,
+        /*ioStatistics=*/nullptr);
   }
   std::string fromDevice(const uint8_t* device, size_t bytes) {
     std::string result(bytes, '\0');
@@ -266,7 +269,8 @@ class CachingDataSourceTest : public testing::Test {
         path_,
         cache_.get(),
         true,
-        stats_);
+        stats_,
+        /*ioStatistics=*/nullptr);
   }
 
   void fillPattern(size_t bytes) {
@@ -494,7 +498,12 @@ TEST_F(CachingDataSourceTest, cachedPieceIsCopiedInChunks) {
   constexpr size_t kBytes = 2 * (16 << 20) + 5;
   fillPattern(kBytes);
   auto input = maybeCacheKvikioDataSource(
-      std::make_unique<MemorySource>(read_), path_, cache.get(), true, stats_);
+      std::make_unique<MemorySource>(read_),
+      path_,
+      cache.get(),
+      true,
+      stats_,
+      /*ioStatistics=*/nullptr);
   rmm::cuda_stream stream;
   rmm::device_buffer destination(
       kBytes, stream, cudf::get_current_device_resource_ref());
@@ -548,7 +557,9 @@ TEST_F(CachingDataSourceTest, cacheOffAndNonCacheableReturnSourceUnchanged) {
         std::move(source),
         path_,
         cacheable ? nullptr : cache_.get(),
-        cacheable);
+        cacheable,
+        /*ioStats=*/nullptr,
+        /*ioStatistics=*/nullptr);
     EXPECT_EQ(actual.get(), original);
   }
 }
@@ -566,7 +577,9 @@ TEST_F(CachingDataSourceTest, hostMissHitAndFileIdentity) {
       std::make_unique<MemorySource>(read_),
       "s3://test/another-file",
       cache_.get(),
-      true);
+      true,
+      /*ioStats=*/nullptr,
+      /*ioStatistics=*/nullptr);
   anotherFile->host_read(17, 512);
   EXPECT_EQ(read_->reads, 2);
 }
@@ -587,7 +600,12 @@ TEST_F(CachingDataSourceTest, ramMissReadsFromSsd) {
   auto cache = cache::AsyncDataCache::create(&allocator, std::move(ssdCache));
   fillPattern(read_->data.size());
   auto input = maybeCacheKvikioDataSource(
-      std::make_unique<MemorySource>(read_), path_, cache.get(), true, stats_);
+      std::make_unique<MemorySource>(read_),
+      path_,
+      cache.get(),
+      true,
+      stats_,
+      /*ioStatistics=*/nullptr);
 
   // RAM miss, SSD miss: remote read into a new RAM entry.
   input->host_read(64, 4096);
@@ -635,7 +653,12 @@ TEST_F(CachingDataSourceTest, shorterReadAfterSsdSaveReadsRemotely) {
   auto cache = cache::AsyncDataCache::create(&allocator, std::move(ssdCache));
   fillPattern(read_->data.size());
   auto input = maybeCacheKvikioDataSource(
-      std::make_unique<MemorySource>(read_), path_, cache.get(), true, stats_);
+      std::make_unique<MemorySource>(read_),
+      path_,
+      cache.get(),
+      true,
+      stats_,
+      /*ioStatistics=*/nullptr);
 
   input->host_read(64, 4096);
 
@@ -673,7 +696,12 @@ TEST_F(CachingDataSourceTest, onlyEntriesWithinSsdLimitAreSavedToSsd) {
   constexpr size_t kSsdLimitBytes = 1 << cache::SsdRun::kSizeBits;
   fillPattern(2 * kSsdLimitBytes + 1);
   auto input = maybeCacheKvikioDataSource(
-      std::make_unique<MemorySource>(read_), path_, cache.get(), true, stats_);
+      std::make_unique<MemorySource>(read_),
+      path_,
+      cache.get(),
+      true,
+      stats_,
+      /*ioStatistics=*/nullptr);
 
   input->host_read(0, kSsdLimitBytes);
   input->host_read(kSsdLimitBytes, kSsdLimitBytes + 1);
@@ -905,7 +933,8 @@ TEST_F(CachingDataSourceTest, synchronousReadsFromSingleThreadCaller) {
         path_,
         cache_.get(),
         true,
-        stats_);
+        stats_,
+        /*ioStatistics=*/nullptr);
     // Exercise each overload on a cache hit from a single-threaded caller.
     ASSERT_EQ(input->host_read(0, 100)->size(), 100);
     std::unique_ptr<cudf::io::datasource::buffer> owned;

@@ -18,9 +18,12 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/CachingDataSource.h"
 
+#include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/CacheTTLController.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
+#include "velox/common/file/File.h"
+#include "velox/common/io/IoStatistics.h"
 
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>

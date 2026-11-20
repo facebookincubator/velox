@@ -16,14 +16,20 @@
 
 #pragma once
 
-#include "velox/common/caching/AsyncDataCache.h"
-#include "velox/common/file/File.h"
-#include "velox/common/io/IoStatistics.h"
-
 #include <cudf/io/datasource.hpp>
 
 #include <memory>
 #include <string_view>
+
+namespace facebook::velox {
+namespace cache {
+class AsyncDataCache;
+}
+namespace io {
+class IoStatistics;
+}
+class IoStats;
+} // namespace facebook::velox
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
@@ -40,8 +46,8 @@ std::unique_ptr<cudf::io::datasource> maybeCacheKvikioDataSource(
     std::string_view path,
     cache::AsyncDataCache* cache,
     bool cacheable,
-    std::shared_ptr<IoStats> ioStats = nullptr,
-    std::shared_ptr<io::IoStatistics> ioStatistics = nullptr);
+    std::shared_ptr<IoStats> ioStats,
+    std::shared_ptr<io::IoStatistics> ioStatistics);
 
 /// Frees the pinned host buffers that the async data cache wrapper uses to copy
 /// to the GPU, after their last copies finish. Call it while CUDA is still
