@@ -20,6 +20,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/type/StringView.h"
+#include "velox/type/Timestamp.h"
 
 #include <glog/logging.h>
 #include <gmock/gmock.h>
@@ -513,6 +514,59 @@ TEST_F(BufferTest, testAllocateSizeOverflow) {
       AlignedBuffer::reallocate<int64_t>(&buf, 1ull << 62), VeloxException);
 }
 
+TEST_F(BufferTest, alignment) {
+  auto buffer = AlignedBuffer::allocate<int64_t>(4, pool_.get());
+  ASSERT_GE(buffer->alignment(), 16);
+  MockCachePin pin;
+  for (const size_t offset : {1, 2, 4, 8}) {
+    SCOPED_TRACE(offset);
+    auto view = BufferView<MockCachePin&>::create(
+        buffer->as<uint8_t>() + offset, sizeof(int64_t), pin);
+    EXPECT_EQ(view->alignment(), offset);
+  }
+  // A null start is aligned to any power of 2.
+  auto empty = BufferView<MockCachePin&>::create(nullptr, 0, pin);
+  EXPECT_GE(empty->alignment(), size_t{1} << 32);
+}
+
+DEBUG_ONLY_TEST_F(BufferTest, dcheckBufferAligned) {
+  auto checkBitmap = [](const BufferPtr& buffer) {
+    VELOX_DCHECK_BUFFER_ALIGNED(buffer, bool);
+  };
+  auto checkInt32 = [](const BufferPtr& buffer) {
+    VELOX_DCHECK_BUFFER_ALIGNED(buffer, int32_t);
+  };
+  auto checkTimestamp = [](const BufferPtr& buffer) {
+    VELOX_DCHECK_BUFFER_ALIGNED(buffer, Timestamp);
+  };
+  checkBitmap(nullptr);
+  checkTimestamp(nullptr);
+
+  auto buffer = AlignedBuffer::allocate<Timestamp>(4, pool_.get());
+  ASSERT_GE(buffer->alignment(), 16);
+  MockCachePin pin;
+  auto view = [&](size_t offset) {
+    return BufferView<MockCachePin&>::create(
+        buffer->as<uint8_t>() + offset, sizeof(Timestamp), pin);
+  };
+
+  // Bitmaps need 8 bytes.
+  checkBitmap(view(8));
+  VELOX_ASSERT_THROW(
+      checkBitmap(view(4)),
+      "(4 vs. 8) Vector buffer starts at a misaligned address.");
+  // Other buffers need their element width.
+  checkInt32(view(4));
+  VELOX_ASSERT_THROW(
+      checkInt32(view(2)),
+      "(2 vs. 4) Vector buffer starts at a misaligned address.");
+  // Timestamp is 16 bytes wide, which is more than its natural alignment.
+  checkTimestamp(buffer);
+  VELOX_ASSERT_THROW(
+      checkTimestamp(view(8)),
+      "(8 vs. 16) Vector buffer starts at a misaligned address.");
+}
+
 TEST_F(BufferTest, sliceBigintBuffer) {
   auto bufferPtr = AlignedBuffer::allocate<int64_t>(10, pool_.get());
   auto sliceBufferPtr = Buffer::slice<int64_t>(bufferPtr, 1, 5, pool_.get());
@@ -532,23 +586,42 @@ TEST_F(BufferTest, sliceBigintBuffer) {
 }
 
 TEST_F(BufferTest, sliceBooleanBuffer) {
-  auto bufferPtr = AlignedBuffer::allocate<bool>(16, pool_.get());
+  auto bufferPtr = AlignedBuffer::allocate<bool>(256, pool_.get());
   auto data = bufferPtr->asMutableRange<bool>();
-  for (int i = 0; i < 16; ++i) {
+  for (int i = 0; i < 256; ++i) {
     data[i] = (i % 2 != 0);
   }
-  auto sliceBufferPtr = Buffer::slice<bool>(bufferPtr, 8, 8, pool_.get());
-  ASSERT_TRUE(sliceBufferPtr->isView());
-  ASSERT_EQ(sliceBufferPtr->as<bool>(), bufferPtr->as<bool>() + 1);
 
-  sliceBufferPtr = Buffer::slice<bool>(bufferPtr, 5, 5, pool_.get());
-  ASSERT_FALSE(sliceBufferPtr->isView());
-  auto sliceData = sliceBufferPtr->asRange<bool>();
-  for (int i = 0; i < 5; ++i) {
-    ASSERT_EQ(sliceData[i], i % 2 == 0);
+  // Offsets that are multiples of 64 slice without a copy.
+  auto sliceBufferPtr = Buffer::slice<bool>(bufferPtr, 64, 64, pool_.get());
+  ASSERT_TRUE(sliceBufferPtr->isView());
+  ASSERT_EQ(sliceBufferPtr->as<uint64_t>(), bufferPtr->as<uint64_t>() + 1);
+
+  // Other offsets copy, so the slice stays 8-byte aligned, even at a multiple
+  // of 8 that a byte offset could express.
+  for (auto offset : {5, 8, 16, 100}) {
+    SCOPED_TRACE(fmt::format("offset: {}", offset));
+    sliceBufferPtr = Buffer::slice<bool>(bufferPtr, offset, 100, pool_.get());
+    ASSERT_FALSE(sliceBufferPtr->isView());
+    ASSERT_GE(sliceBufferPtr->alignment(), 8);
+    auto sliceData = sliceBufferPtr->asRange<bool>();
+    for (int i = 0; i < 100; ++i) {
+      ASSERT_EQ(sliceData[i], (offset + i) % 2 != 0) << i;
+    }
   }
   VELOX_ASSERT_THROW(
       Buffer::slice<bool>(bufferPtr, 5, 6, nullptr), "Pool must not be null.");
+
+  // Ranges past the 256 bits fail, whether the slice would copy or not.
+  VELOX_ASSERT_THROW(
+      Buffer::slice<bool>(bufferPtr, 8, 256, pool_.get()),
+      "(256 vs. 248) Slice length is past the end of the buffer.");
+  VELOX_ASSERT_THROW(
+      Buffer::slice<bool>(bufferPtr, 64, 256, pool_.get()),
+      "(256 vs. 192) Slice length is past the end of the buffer.");
+  VELOX_ASSERT_THROW(
+      Buffer::slice<bool>(bufferPtr, 264, 1, pool_.get()),
+      "(264 vs. 256) Slice offset is past the end of the buffer.");
 }
 
 TEST_F(BufferTest, testType) {
