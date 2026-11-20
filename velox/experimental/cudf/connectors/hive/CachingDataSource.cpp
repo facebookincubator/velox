@@ -324,7 +324,7 @@ class Reader {
       std::shared_ptr<io::IoStatistics> ioStatistics)
       : kvikioSource_(std::move(source)),
         cache_(dataCache),
-        fileId_(fileIds(), std::string(path)),
+        fileId_(fileIds(), path),
         ioStats_(std::move(stats)),
         ioStatistics_(std::move(ioStatistics)) {
     VELOX_CHECK_NOT_NULL(kvikioSource_);
