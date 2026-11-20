@@ -25,6 +25,7 @@
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
 #include <limits>
+#include <numeric>
 #include <type_traits>
 #include <vector>
 
@@ -515,6 +516,76 @@ TEST(RleEncodingBoolTest, countTrue) {
          false,
          false},
         useVarint);
+  }
+}
+
+TEST(RleEncodingTest, sumRange) {
+  auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  // Runs of 3, 1, 2, 4 and 1 rows, with a zero run, so ranges start and end
+  // inside runs and on run boundaries.
+  const std::vector<uint32_t> input{5, 5, 5, 0, 7, 7, 2, 2, 2, 2, 9};
+  for (const bool useVarint : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "useVarint=" << useVarint);
+    nimble::Buffer buffer{*pool};
+    nimble::Vector<uint32_t> values(pool.get(), input.begin(), input.end());
+    const nimble::Encoding::Options options{.useVarintRowCount = useVarint};
+    const auto encoded =
+        nimble::test::Encoder<nimble::RLEEncoding<uint32_t>>::encode(
+            buffer, values, nimble::CompressionType::Uncompressed, options);
+
+    for (uint32_t offset = 0; offset < input.size(); ++offset) {
+      for (uint32_t length = 1; offset + length <= input.size(); ++length) {
+        SCOPED_TRACE(
+            testing::Message() << "offset=" << offset << ", length=" << length);
+        const auto sums = nimble::RLEEncoding<uint32_t>::sumRange(
+            encoded, offset, length, options, pool.get());
+        EXPECT_EQ(
+            sums.sumBeforeRange,
+            std::accumulate(input.begin(), input.begin() + offset, 0ULL));
+        EXPECT_EQ(
+            sums.sumInRange,
+            std::accumulate(
+                input.begin() + offset, input.begin() + offset + length, 0ULL));
+      }
+    }
+
+    NIMBLE_ASSERT_THROW(
+        nimble::RLEEncoding<uint32_t>::sumRange(
+            encoded, /*offset=*/2, /*length=*/0, options, pool.get()),
+        "Cannot sum zero rows.");
+  }
+}
+
+TEST(RleEncodingTest, sumRangeAcrossRunChunks) {
+  auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  // 600 runs of 1 to 3 rows, so ranges span the 256-run chunks that sumRange
+  // reads the runs in.
+  std::vector<uint32_t> input;
+  for (uint32_t run = 0; run < 600; ++run) {
+    input.insert(input.end(), run % 3 + 1, run % 7 + 1);
+  }
+  nimble::Buffer buffer{*pool};
+  nimble::Vector<uint32_t> values(pool.get(), input.begin(), input.end());
+  const nimble::Encoding::Options options;
+  const auto encoded =
+      nimble::test::Encoder<nimble::RLEEncoding<uint32_t>>::encode(
+          buffer, values, nimble::CompressionType::Uncompressed, options);
+
+  const auto numRows = static_cast<uint32_t>(input.size());
+  for (uint32_t offset = 0; offset < numRows; offset += 97) {
+    for (uint32_t length = 1; offset + length <= numRows; length += 89) {
+      SCOPED_TRACE(
+          testing::Message() << "offset=" << offset << ", length=" << length);
+      const auto sums = nimble::RLEEncoding<uint32_t>::sumRange(
+          encoded, offset, length, options, pool.get());
+      EXPECT_EQ(
+          sums.sumBeforeRange,
+          std::accumulate(input.begin(), input.begin() + offset, 0ULL));
+      EXPECT_EQ(
+          sums.sumInRange,
+          std::accumulate(
+              input.begin() + offset, input.begin() + offset + length, 0ULL));
+    }
   }
 }
 

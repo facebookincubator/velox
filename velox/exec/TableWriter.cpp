@@ -18,6 +18,7 @@
 
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/OperatorType.h"
+#include "velox/exec/TableWriterStatNames.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -332,22 +333,23 @@ void TableWriter::updateStats(const connector::DataSink::Stats& stats) {
     }
     if (stats.numWrittenFiles != 0) {
       lockedStats->addRuntimeStat(
-          kNumWrittenFiles, RuntimeCounter(stats.numWrittenFiles));
+          TableWriterStatNames::kNumWrittenFiles,
+          RuntimeCounter(stats.numWrittenFiles));
     }
     if (stats.writeIOTimeUs != 0) {
       lockedStats->addRuntimeStat(
-          kWriteIOTime,
+          TableWriterStatNames::kWriteIOTime,
           RuntimeCounter(
               stats.writeIOTimeUs * 1000, RuntimeCounter::Unit::kNanos));
     }
     if (stats.recodeTimeNs != 0) {
       lockedStats->addRuntimeStat(
-          kWriteRecodeTime,
+          TableWriterStatNames::kWriteRecodeTime,
           RuntimeCounter(stats.recodeTimeNs, RuntimeCounter::Unit::kNanos));
     }
     if (stats.compressionTimeNs != 0) {
       lockedStats->addRuntimeStat(
-          kWriteCompressionTime,
+          TableWriterStatNames::kWriteCompressionTime,
           RuntimeCounter(
               stats.compressionTimeNs, RuntimeCounter::Unit::kNanos));
     }
@@ -365,7 +367,7 @@ void TableWriter::updateStats(const connector::DataSink::Stats& stats) {
               static_cast<uint64_t>(backgroundTimingStat->second.sum)});
     }
     lockedStats->addRuntimeStat(
-        kRunningWallNanos,
+        TableWriterStatNames::kRunningWallNanos,
         RuntimeCounter(
             creationWatch_.elapsed().count(), RuntimeCounter::Unit::kNanos));
   }

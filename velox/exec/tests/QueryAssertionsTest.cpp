@@ -20,6 +20,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/type/Variant.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook::velox::exec;
@@ -54,6 +55,27 @@ TEST_F(QueryAssertionsTest, basic) {
   EXPECT_NONFATAL_FAILURE(
       assertQuery(plan, "SELECT c0 + 1 FROM tmp"),
       "1 extra rows, 1 missing rows");
+}
+
+TEST_F(QueryAssertionsTest, orderedByTrailingRows) {
+  auto data = makeRowVector({
+      makeFlatVector<std::string>({"a", "b", "c"}),
+      makeFlatVector<int64_t>({1, 2, 3}),
+  });
+  auto prefix = makeRowVector({
+      makeFlatVector<std::string>({"a", "b"}),
+      makeFlatVector<int64_t>({1, 2}),
+  });
+  const auto type = asRowType(data->type());
+
+  EXPECT_NONFATAL_FAILURE(
+      VectorAssertions::equalOrderedBy(
+          VectorAssertions::toVariantRows(data), type, {prefix}, {1}),
+      "Missing rows: keys: 3");
+  EXPECT_NONFATAL_FAILURE(
+      VectorAssertions::equalOrderedBy(
+          VectorAssertions::toVariantRows(prefix), type, {data}, {1}),
+      "Got extra rows: keys: 3");
 }
 
 TEST_F(QueryAssertionsTest, noFloatColumn) {
@@ -107,8 +129,7 @@ TEST_F(QueryAssertionsTest, noFloatColumn) {
           size, [&](auto /*row*/) { return "string value"; }),
   });
   EXPECT_NONFATAL_FAILURE(
-      assertEqualResults({expected}, {actual}),
-      "Types of expected and actual results do not match");
+      assertEqualResults({expected}, {actual}), "Types differ");
 
   // Unmatched results with different sizes.
   actual = makeRowVector({
@@ -205,8 +226,7 @@ TEST_F(QueryAssertionsTest, singleFloatColumn) {
       makeFlatVector<int64_t>(size, [&](auto row) { return row; }),
   });
   EXPECT_NONFATAL_FAILURE(
-      assertEqualResults({expected}, {actual}),
-      "Types of expected and actual results do not match");
+      assertEqualResults({expected}, {actual}), "Types differ");
 
   // Unmatched results with different sizes.
   actual = makeRowVector({
@@ -452,8 +472,7 @@ TEST_F(QueryAssertionsTest, nullDecimalValue) {
   assertQueryWithThreadingConfigs(plan, "SELECT c0 FROM tmp");
 
   EXPECT_NONFATAL_FAILURE(
-      assertEqualResults({shortDecimal}, {longDecimal}),
-      "Types of expected and actual results do not match");
+      assertEqualResults({shortDecimal}, {longDecimal}), "Types differ");
 }
 
 TEST_F(QueryAssertionsTest, valuesMismatch) {
@@ -483,7 +502,7 @@ TEST_F(QueryAssertionsTest, noExpectedRows) {
   createDuckDbTable({actual});
 
   auto expected = makeRowVector({
-      makeFlatVector<int64_t>({}, BIGINT()),
+      makeFlatVector<int64_t>({}, DECIMAL(6, 2)),
   });
   auto plan = PlanBuilder().values({actual}).project({"c0"}).planNode();
   EXPECT_NONFATAL_FAILURE(
@@ -497,7 +516,7 @@ TEST_F(QueryAssertionsTest, noExpectedRows) {
 
 TEST_F(QueryAssertionsTest, noActualRows) {
   auto actual = makeRowVector({
-      makeFlatVector<int64_t>({}, BIGINT()),
+      makeFlatVector<int64_t>({}, DECIMAL(6, 2)),
   });
   createDuckDbTable({actual});
 

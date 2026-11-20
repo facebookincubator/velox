@@ -31,6 +31,7 @@
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/VectorReaders.h"
+#include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/TypeResolver.h"
 
@@ -1361,6 +1362,13 @@ PlanBuilder& PlanBuilder::localMerge(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::mixedUnion(std::vector<core::PlanNodePtr> sources) {
+  VELOX_CHECK_NULL(planNode_, "mixedUnion() must be the first call");
+  planNode_ = std::make_shared<core::MixedUnionNode>(
+      nextPlanNodeId(), std::move(sources));
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::orderBy(
     const std::vector<std::string>& keys,
     bool isPartial) {
@@ -1376,7 +1384,7 @@ PlanBuilder& PlanBuilder::orderBy(
 
 PlanBuilder& PlanBuilder::topN(
     const std::vector<std::string>& keys,
-    int32_t count,
+    int64_t count,
     bool isPartial) {
   VELOX_CHECK_NOT_NULL(planNode_, "TopN cannot be the source node");
   auto [sortingKeys, sortingOrders] =
@@ -1511,6 +1519,65 @@ PlanBuilder& PlanBuilder::assignUniqueId(const std::string& idName) {
   planNode_ = std::make_shared<core::AssignUniqueIdNode>(
       nextPlanNodeId(), idName, planNode_);
   VELOX_CHECK(planNode_->supportsBarrier());
+  return *this;
+}
+
+namespace {
+TypePtr resolveRPCType(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes) {
+  const auto entry = exec::rpc::AsyncRPCFunctionRegistry::find(name);
+  VELOX_USER_CHECK(entry.has_value(), "RPC function doesn't exist: {}", name);
+  for (const auto& signature : entry->signatures) {
+    SignatureBinder binder(*signature, argTypes, TypeCoercer::defaults());
+    if (binder.tryBind()) {
+      return binder.tryResolveType(signature->returnType());
+    }
+  }
+  VELOX_USER_FAIL(
+      "RPC function signature is not supported: {}. Supported signatures: {}.",
+      toString(name, argTypes),
+      toString(entry->signatures));
+}
+} // namespace
+
+PlanBuilder& PlanBuilder::rpc(
+    std::string_view call,
+    velox::rpc::RPCStreamingMode streamingMode,
+    int32_t dispatchBatchSize,
+    std::string executionPhase) {
+  VELOX_CHECK_NOT_NULL(planNode_, "RPC cannot be the source node");
+  const auto untyped =
+      parse::DuckSqlExpressionsParser(options_).parseExpr(std::string(call));
+  const auto* callExpr = untyped->as<core::CallExpr>();
+  VELOX_USER_CHECK_NOT_NULL(callExpr, "RPC must be a function call: {}", call);
+
+  std::vector<core::TypedExprPtr> inputs;
+  std::vector<TypePtr> argTypes;
+  for (const auto& input : callExpr->inputs()) {
+    inputs.push_back(inferTypes(input));
+    argTypes.push_back(inputs.back()->type());
+  }
+  const auto resultColumn = callExpr->alias().value_or("__rpc_result");
+  VELOX_USER_CHECK(
+      !planNode_->outputType()->containsChild(resultColumn),
+      "RPC result column already exists in the input. Use an alias: {}",
+      resultColumn);
+  auto typedCall = std::make_shared<core::CallTypedExpr>(
+      resolveRPCType(callExpr->name(), argTypes),
+      std::move(inputs),
+      callExpr->name());
+  auto outputType =
+      planNode_->outputType()->unionWith({resultColumn}, {typedCall->type()});
+  planNode_ = std::make_shared<core::RPCNode>(
+      nextPlanNodeId(),
+      planNode_,
+      std::move(typedCall),
+      resultColumn,
+      std::move(outputType),
+      streamingMode,
+      dispatchBatchSize,
+      std::move(executionPhase));
   return *this;
 }
 

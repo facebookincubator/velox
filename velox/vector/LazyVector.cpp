@@ -275,6 +275,9 @@ void LazyVector::load(RowSet rows, ValueHook* hook) const {
   loader_->load(rows, hook, size(), &vector_);
   if (!hook) {
     VELOX_CHECK_GE(vector_->size(), size());
+    if (memoDisabled()) {
+      vector_->disableMemo();
+    }
   }
 }
 
@@ -291,6 +294,9 @@ void LazyVector::loadVectorInternal() const {
     } else {
       // If the load produced a wrapper, load the wrapped vector.
       vector_->loadedVector();
+    }
+    if (memoDisabled()) {
+      vector_->disableMemo();
     }
     allLoaded_ = true;
     const_cast<LazyVector*>(this)->BaseVector::nulls_ = vector_->nulls_;

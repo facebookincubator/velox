@@ -545,9 +545,16 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSplitRowRange) {
       splitRowRange);
   EXPECT_EQ(
       configure(dwio::common::FileFormat::DWRF).splitRowRange(), splitRowRange);
+  EXPECT_EQ(
+      configure(dwio::common::FileFormat::ORC).splitRowRange(), splitRowRange);
+  EXPECT_EQ(
+      configure(dwio::common::FileFormat::PARQUET).splitRowRange(),
+      splitRowRange);
+  EXPECT_EQ(
+      configure(dwio::common::FileFormat::TEXT).splitRowRange(), splitRowRange);
   VELOX_ASSERT_THROW(
-      configure(dwio::common::FileFormat::PARQUET),
-      "Split row ranges are only supported for Nimble and DWRF files");
+      configure(dwio::common::FileFormat::JSON),
+      "Split row ranges are only supported for Nimble, DWRF, ORC, Parquet and text files");
 }
 
 TEST_F(FileConnectorUtilTest, testFiltersNoFilters) {

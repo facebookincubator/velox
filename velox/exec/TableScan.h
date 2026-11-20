@@ -60,40 +60,6 @@ class TableScan : public SourceOperator {
       const core::PlanNodeId& producer,
       const PushdownFilters& filters) override;
 
-  /// The name of runtime stats specific to table scan.
-  /// The number of running table scan drivers.
-  ///
-  /// NOTE: we only report the number of running scan drivers at the point that
-  /// all the splits have been dispatched.
-  static constexpr std::string_view kNumRunningScaleThreads =
-      "numRunningScaleThreads";
-
-  /// Time spent reading from the data source.
-  static constexpr std::string_view kDataSourceReadWallNanos =
-      "dataSourceReadWallNanos";
-
-  /// Number of splits that started background preload.
-  static constexpr std::string_view kPreloadedSplits = "preloadedSplits";
-
-  /// Number of preloaded splits that finished before being read.
-  static constexpr std::string_view kReadyPreloadedSplits =
-      "readyPreloadedSplits";
-
-  /// Size of the connector split.
-  static constexpr std::string_view kConnectorSplitSize = "connectorSplitSize";
-
-  /// Time waiting for a preloaded split to become available.
-  static constexpr std::string_view kWaitForPreloadSplitNanos =
-      "waitForPreloadSplitNanos";
-
-  /// Time for preload split preparation.
-  static constexpr std::string_view kPreloadSplitPrepareTimeNanos =
-      "preloadSplitPrepareTimeNanos";
-
-  /// Time spent adding a split to the data source.
-  static constexpr std::string_view kDataSourceAddSplitWallNanos =
-      "dataSourceAddSplitWallNanos";
-
   std::shared_ptr<ScaledScanController> testingScaledController() const {
     return scaledController_;
   }

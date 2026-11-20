@@ -1266,6 +1266,12 @@ TEST_F(ClusterIndexTest, keyChunkLookupsRequireStripeLayout) {
       clusterIndex->lookup(makeKeyRequest("k00"), givenKeyChunks),
       "Only a Stripe layout index looks up keys in given key chunks");
   NIMBLE_ASSERT_THROW(
+      clusterIndex->seekRow("k00", givenKeyChunks.front()),
+      "Only a Stripe layout index seeks keys in a given key chunk");
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->keyAtRow(0, givenKeyChunks.front()),
+      "Only a Stripe layout index reads keys from a given key chunk");
+  NIMBLE_ASSERT_THROW(
       clusterIndex->keyStreamId(),
       "Only a Stripe layout index keeps its key chunks in a stream of each stripe");
 }
@@ -1745,6 +1751,87 @@ TEST_F(ClusterIndexTest, lookupWithKeyChunks) {
   keyFile.reset();
   NIMBLE_ASSERT_THROW(
       clusterIndex->keyAtRow(0), "Unsupported key chunk compression type");
+}
+
+TEST_F(ClusterIndexTest, keyAtRowWithKeyChunks) {
+  const auto stripeKeys = fourStripeKeys();
+  const auto keyStreams = writeStripeKeyStreams(stripeKeys);
+  // The file the index reads key chunks from holds filler bytes, which do not
+  // decode, so keys are read only from the key chunks given.
+  auto clusterIndex = createClusterIndex(
+      createTestClusterIndex(
+          {"col1"},
+          "k00",
+          keyStreams.stripes,
+          {2, 2},
+          KeyStreamLayout::kStripe),
+      createKeyStreamFile(std::string(keyStreams.file.size(), 'x')),
+      /*pinIndex=*/true,
+      /*preloadIndex=*/false);
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->keyAtRow(0), "Unsupported key chunk compression type");
+
+  // A row of a key chunk is its offset in the stripe of the chunk.
+  for (uint32_t stripe = 0; stripe < stripeKeys.size(); ++stripe) {
+    SCOPED_TRACE(fmt::format("stripe {}", stripe));
+    const auto& keys = stripeKeys[stripe];
+    const auto keyChunk =
+        keyChunks(keyStreams, keyStreams.file, {stripe}).front();
+    for (uint32_t row = 0; row < keys.size(); ++row) {
+      EXPECT_EQ(clusterIndex->keyAtRow(row, keyChunk), keys[row]);
+    }
+    NIMBLE_ASSERT_THROW(
+        clusterIndex->keyAtRow(static_cast<uint32_t>(keys.size()), keyChunk),
+        "Row is past the key chunk of stripe");
+  }
+
+  // Even a pinned index keeps no chunk that it decoded from the given bytes,
+  // so it still reads the key streams of the file, which do not decode.
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->keyAtRow(5), "Unsupported key chunk compression type");
+}
+
+TEST_F(ClusterIndexTest, seekRowWithKeyChunks) {
+  const auto stripeKeys = fourStripeKeys();
+  const auto keyStreams = writeStripeKeyStreams(stripeKeys);
+  // The file the index reads key chunks from holds filler bytes, which do not
+  // decode, so keys are sought only in the key chunks given.
+  auto clusterIndex = createClusterIndex(
+      createTestClusterIndex(
+          {"col1"},
+          "k00",
+          keyStreams.stripes,
+          {2, 2},
+          KeyStreamLayout::kStripe),
+      createKeyStreamFile(std::string(keyStreams.file.size(), 'x')),
+      /*pinIndex=*/true,
+      /*preloadIndex=*/false);
+
+  for (uint32_t stripe = 0; stripe < stripeKeys.size(); ++stripe) {
+    SCOPED_TRACE(fmt::format("stripe {}", stripe));
+    const auto& keys = stripeKeys[stripe];
+    const auto keyChunk =
+        keyChunks(keyStreams, keyStreams.file, {stripe}).front();
+    // A key before every key of the chunk seeks its first row, and a key
+    // after every key of the chunk seeks none.
+    EXPECT_EQ(clusterIndex->seekRow("a", keyChunk), std::optional<uint32_t>(0));
+    EXPECT_EQ(clusterIndex->seekRow("z", keyChunk), std::nullopt);
+    for (uint32_t row = 0; row < keys.size(); ++row) {
+      SCOPED_TRACE(keys[row]);
+      EXPECT_EQ(clusterIndex->seekRow(keys[row], keyChunk), row);
+      // A key between two keys of the chunk seeks the row of the later one.
+      const auto nextRow = row + 1 < keys.size()
+          ? std::optional<uint32_t>(row + 1)
+          : std::nullopt;
+      EXPECT_EQ(clusterIndex->seekRow(keys[row] + "5", keyChunk), nextRow);
+    }
+  }
+
+  // Even a pinned index keeps no chunk that it decoded from the given bytes,
+  // so a lookup still reads the key streams of the file, which do not decode.
+  NIMBLE_ASSERT_THROW(
+      clusterIndex->lookup(makeKeyRequest("k05")),
+      "Unsupported key chunk compression type");
 }
 
 TEST_F(ClusterIndexTest, lookupChunk) {

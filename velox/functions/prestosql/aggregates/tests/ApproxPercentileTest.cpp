@@ -381,16 +381,16 @@ TEST_F(ApproxPercentileTest, partialFull) {
 TEST_F(ApproxPercentileTest, finalAggregateAccuracy) {
   auto batch = makeRowVector(
       {makeFlatVector<int32_t>(1000, [](auto row) { return row; })});
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   std::vector<std::shared_ptr<const core::PlanNode>> sources;
   for (int i = 0; i < 10; ++i) {
     sources.push_back(
-        PlanBuilder(planNodeIdGenerator)
-            .values({batch})
+        builder.newPlan()
+            .values(batch)
             .partialAggregation({}, {"approx_percentile(c0, 0.005, 0.0001)"})
             .planNode());
   }
-  auto op = PlanBuilder(planNodeIdGenerator)
+  auto op = builder.newPlan()
                 .localPartitionRoundRobin(sources)
                 .finalAggregation()
                 .planNode();
@@ -401,7 +401,7 @@ TEST_F(ApproxPercentileTest, tinyAccuracy) {
   auto rows = makeRowVector(
       {makeFlatVector<int32_t>({1, 2, 3}), makeConstant<double>(1e-9, 3)});
   auto plan = PlanBuilder()
-                  .values({rows})
+                  .values(rows)
                   .singleAggregation({}, {"approx_percentile(c0, 0.5, c1)"})
                   .planNode();
 
@@ -429,7 +429,7 @@ TEST_F(ApproxPercentileTest, nonFlatPercentileArray) {
       BaseVector::wrapInConstant(1, 0, percentiles),
   });
   auto plan = PlanBuilder()
-                  .values({rows})
+                  .values(rows)
                   .singleAggregation({}, {"approx_percentile(c0, c1)"})
                   .planNode();
   auto expected = makeRowVector({makeArrayVector<int32_t>({{0, 5, 9}})});
@@ -449,7 +449,7 @@ TEST_F(ApproxPercentileTest, invalidWeight) {
       groupingKeys.push_back("c2");
     }
     return PlanBuilder()
-        .values({rows})
+        .values(rows)
         .singleAggregation(groupingKeys, {"approx_percentile(c0, c1, 0.5)"})
         .planNode();
   };

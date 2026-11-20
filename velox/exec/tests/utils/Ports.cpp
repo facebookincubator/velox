@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/exec/tests/utils/PortUtil.h"
+#include "velox/exec/tests/utils/Ports.h"
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -24,9 +25,9 @@
 namespace facebook::velox::exec::test {
 namespace {
 
-void getFreePortsImpl(int numPorts, int* ports) {
+void getFreePortsImpl(size_t numPorts, uint16_t* ports) {
   const std::unique_ptr<int[]> sockets(new int[numPorts]);
-  for (int i = 0; i < numPorts; i++) {
+  for (size_t i = 0; i < numPorts; i++) {
     int sock = socket(PF_INET, SOCK_STREAM, 0);
     VELOX_CHECK_NE(sock, -1, "Error while creating socket: {}", errno);
     sockets[i] = sock;
@@ -46,24 +47,40 @@ void getFreePortsImpl(int numPorts, int* ports) {
     ports[i] = ntohs(addr.sin_port);
   }
 
-  for (int i = 0; i < numPorts; i++) {
+  for (size_t i = 0; i < numPorts; i++) {
     close(sockets[i]);
   }
 }
 
 } // namespace
 
-std::vector<int> getFreePorts(std::size_t numPorts) {
-  std::vector<int> ports;
+std::vector<uint16_t> Ports::findFreePorts(size_t numPorts) {
+  std::vector<uint16_t> ports;
   ports.resize(numPorts);
   getFreePortsImpl(numPorts, &ports[0]);
   return ports;
 }
 
-int getFreePort() {
-  int port;
+uint16_t Ports::findFreePort() {
+  uint16_t port;
   getFreePortsImpl(1, &port);
   return port;
+}
+
+bool Ports::isListening(uint16_t port) {
+  const int sock = socket(AF_INET, SOCK_STREAM, 0);
+  if (sock < 0) {
+    return false;
+  }
+
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(port);
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  const bool listening =
+      ::connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0;
+  close(sock);
+  return listening;
 }
 
 } // namespace facebook::velox::exec::test

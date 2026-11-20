@@ -539,7 +539,8 @@ void SelectiveColumnReader::addSkippedParentNulls(
     int64_t to,
     int32_t numNulls) {
   const auto rowsPerRowGroup = formatData_->rowsPerRowGroup();
-  if (rowsPerRowGroup.has_value() &&
+  // A file without a row index reports 0 rows per row group.
+  if (rowsPerRowGroup.value_or(0) > 0 &&
       from / rowsPerRowGroup.value() >
           parentNullsRecordedTo_ / rowsPerRowGroup.value()) {
     // the new nulls are in a different row group than the last.

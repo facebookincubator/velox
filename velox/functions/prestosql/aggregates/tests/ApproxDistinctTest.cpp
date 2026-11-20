@@ -416,18 +416,18 @@ TEST_F(ApproxDistinctTest, streaming) {
 // Ensure that we convert to dense HLL during merge when necessary.
 TEST_F(ApproxDistinctTest, memoryLeakInMerge) {
   constexpr int kSize = 500;
-  auto nodeIdGen = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   std::vector<core::PlanNodePtr> sources;
   for (int i = 0; i < 100; ++i) {
     auto c0 =
         makeFlatVector<int32_t>(kSize, [i](auto j) { return j + i * kSize; });
-    sources.push_back(PlanBuilder(nodeIdGen)
+    sources.push_back(builder.newPlan()
                           .values({makeRowVector({c0})})
                           .partialAggregation({}, {"approx_distinct(c0, 0.01)"})
                           .planNode());
   }
   core::PlanNodeId finalAgg;
-  auto op = PlanBuilder(nodeIdGen)
+  auto op = builder.newPlan()
                 .localMerge({}, std::move(sources))
                 .finalAggregation()
                 .capturePlanNodeId(finalAgg)
@@ -449,7 +449,7 @@ TEST_F(ApproxDistinctTest, mergeWithEmpty) {
           kSize, std::identity{}, [](auto i) { return i == 0; }),
   });
   auto op = PlanBuilder()
-                .values({input})
+                .values(input)
                 .singleAggregation({"c0"}, {"approx_set(c1)"})
                 .project({"coalesce(a0, empty_approx_set())"})
                 .singleAggregation({}, {"merge(p0)"})
@@ -465,7 +465,7 @@ TEST_F(ApproxDistinctTest, toIntermediate) {
       makeConstant<int64_t>(1, kSize),
   });
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .singleAggregation({"c0"}, {"approx_set(c1)"})
                   .planNode();
   auto digests = split(AssertQueryBuilder(plan).copyResults(pool()), 2);
@@ -623,7 +623,7 @@ TEST_F(ApproxDistinctTest, mergeMatchJava) {
          }
        })});
   auto op = PlanBuilder()
-                .values({data})
+                .values(data)
                 .singleAggregation({"c1"}, {"approx_set(c0)"})
                 .orderBy({"c1"}, false)
                 .project({"to_base64(cast(a0 as varbinary))"})

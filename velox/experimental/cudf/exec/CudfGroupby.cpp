@@ -28,6 +28,7 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/HashAggregation.h"
+#include "velox/exec/HashAggregationStatNames.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/PrestoQueryConfig.h"
@@ -2409,12 +2410,13 @@ CudfVectorPtr CudfGroupby::releaseAndResetBufferedResult() {
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
-        std::string(exec::HashAggregation::kFlushRowCount),
+        std::string(exec::HashAggregationStatNames::kFlushRowCount),
         RuntimeCounter(numOutputRows));
     lockedStats->addRuntimeStat(
-        std::string(exec::HashAggregation::kFlushTimes), RuntimeCounter(1));
+        std::string(exec::HashAggregationStatNames::kFlushTimes),
+        RuntimeCounter(1));
     lockedStats->addRuntimeStat(
-        std::string(exec::HashAggregation::kPartialAggregationPct),
+        std::string(exec::HashAggregationStatNames::kPartialAggregationPct),
         RuntimeCounter(aggregationPct));
   }
 

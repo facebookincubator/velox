@@ -318,7 +318,8 @@ void SelectiveStructColumnReaderBase::advanceFieldReaderFixedRowsPerRowGroup(
     dwio::common::SelectiveColumnReader* reader,
     const int64_t offset,
     const int32_t rowsPerRowGroup) {
-  if (!reader->isTopLevel()) {
+  // A file without a row index has no row groups to seek to.
+  if (!reader->isTopLevel() || rowsPerRowGroup == 0) {
     return;
   }
   const auto rowGroup = reader->readOffset() / rowsPerRowGroup;
@@ -340,18 +341,9 @@ void SelectiveStructColumnReaderBase::fillOutputRowsFromMutation(
     });
   } else {
     VELOX_CHECK_NOT_NULL(mutation_->randomSkip);
-    vector_size_t i = 0;
-    while (i < size) {
-      const auto skip = mutation_->randomSkip->nextSkip();
-      const auto remaining = size - i;
-      if (skip >= remaining) {
-        mutation_->randomSkip->consume(remaining);
-        break;
-      }
-      i += skip;
-      addOutputRow(i++);
-      mutation_->randomSkip->consume(skip + 1);
-    }
+    mutation_->randomSkip->forEachHit(size, [&](uint64_t row) {
+      addOutputRow(static_cast<vector_size_t>(row));
+    });
   }
 }
 
