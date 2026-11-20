@@ -272,12 +272,11 @@ ExpressionRunner supports the following flags:</p>
 <li><p><code class="docutils literal notranslate"><span class="pre">verify</span></code> evaluates the expression using common and simplified paths and compares the results. This is identical to a fuzzer run.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">common</span></code> evaluates the expression using common path and prints the results to stdout.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">simplified</span></code> evaluates the expression using simplified path and prints the results to stdout.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">query</span></code> evaluate SQL query specified in –sql or –sql_path and print out results. If –input_path is specified, the query may reference it as table ‘t’.</p></li>
 </ul>
 </div></blockquote>
 </li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--num_rows</span></code> optional number of rows to process in common and simplified modes. Default: 10. 0 means all rows. This flag is ignored in ‘verify’ mode.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--store_result_path</span></code> optional directory path for storing the results of evaluating SQL expression or query in ‘common’, ‘simplified’ or ‘query’ modes.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--store_result_path</span></code> optional directory path for storing the results of evaluating SQL expression in ‘common’ or ‘simplified’ modes.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--findMinimalSubExpression</span></code> optional Whether to find minimum failing subexpression on result mismatch. Set to false by default.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--useSeperatePoolForInput</span></code> optional If true (default), expression evaluator and input vectors use different memory pools. This helps trigger code-paths that can depend on vectors having different pools. For eg, when copying a flat string vector copies of the strings stored in the string buffers need to be created. If however, the pools were the same between the vectors then the buffers can simply be shared between them instead.</p></li>
 </ul>
