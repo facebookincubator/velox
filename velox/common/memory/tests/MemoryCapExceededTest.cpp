@@ -17,8 +17,10 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 #include <re2/re2.h>
 
@@ -117,12 +119,8 @@ TEST_P(MemoryCapExceededTest, singleDriver) {
   queryCtx->testingOverrideMemoryPool(
       memory::memoryManager()->addRootPool(
           queryCtx->queryId(), kMaxBytes, exec::MemoryReclaimer::create()));
-  CursorParameters params;
-  params.planNode = plan;
-  params.queryCtx = queryCtx;
-  params.maxDrivers = 1;
   try {
-    readCursor(params);
+    AssertQueryBuilder(plan).queryCtx(queryCtx).countResults();
     FAIL() << "Expected a MEM_CAP_EXCEEDED RuntimeException.";
   } catch (const VeloxException& e) {
     const auto errorMessage = e.message();
@@ -178,12 +176,11 @@ TEST_P(MemoryCapExceededTest, multipleDrivers) {
           queryCtx->queryId(), kMaxBytes, exec::MemoryReclaimer::create()));
 
   const int32_t numDrivers = 10;
-  CursorParameters params;
-  params.planNode = plan;
-  params.queryCtx = queryCtx;
-  params.maxDrivers = numDrivers;
   try {
-    readCursor(params);
+    AssertQueryBuilder(plan)
+        .queryCtx(queryCtx)
+        .maxDrivers(numDrivers)
+        .countResults();
     FAIL() << "Expected a MEM_CAP_EXCEEDED RuntimeException.";
   } catch (const VeloxException& e) {
     const auto errorMessage = e.message();
@@ -252,12 +249,8 @@ TEST_P(MemoryCapExceededTest, allocatorCapacityExceededError) {
     auto queryCtx = core::QueryCtx::create(executor_.get());
     queryCtx->testingOverrideMemoryPool(
         manager.addRootPool(queryCtx->queryId(), kMaxBytes));
-    CursorParameters params;
-    params.planNode = plan;
-    params.queryCtx = queryCtx;
-    params.maxDrivers = 1;
     try {
-      readCursor(params);
+      AssertQueryBuilder(plan).queryCtx(queryCtx).countResults();
       FAIL() << "Expected a MEM_CAP_EXCEEDED RuntimeException.";
     } catch (const VeloxException& e) {
       const auto errorMessage = e.message();
@@ -267,7 +260,7 @@ TEST_P(MemoryCapExceededTest, allocatorCapacityExceededError) {
             << "', but received '" << errorMessage << "'.";
       }
     }
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 

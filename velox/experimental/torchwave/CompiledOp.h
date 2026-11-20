@@ -373,6 +373,10 @@ struct LaunchData {
   std::vector<ValueCP> args;
   std::vector<int64_t> intArgs;
   std::vector<int64_t> intList;
+  /// For a slice whose start the device decides (DeviceSymbols): views the
+  /// whole extent of the sliced dim, and the fixups give the real start and
+  /// length.
+  bool wholeExtent{false};
 
   SizeExpr sizeExpr;
   int64_t numElements{0};

@@ -100,6 +100,10 @@ class SpillWriter : public serializer::SerializedPageFileWriter {
       uint64_t flushTimeUs,
       uint64_t writeTimeUs) override;
 
+  // Counts the file close in the write time: a file with buffered writes may
+  // finish uploading its data during close.
+  void closeFile() override;
+
   const RowTypePtr type_;
 
   const std::vector<SpillSortKey> sortingKeys_;

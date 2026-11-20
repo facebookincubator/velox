@@ -26,6 +26,7 @@
 #include <span>
 #include <string>
 #include <utility>
+#include <variant>
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -38,6 +39,7 @@
 #include "velox/common/file/File.h"
 #include "velox/common/fuzzer/Utils.h"
 #include "velox/common/io/IoStatistics.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/ReaderFactory.h"
@@ -64,6 +66,7 @@
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
 #include "velox/type/Filter.h"
+#include "velox/type/FloatingPointUtil.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 namespace facebook::nimble::fuzzer {
@@ -213,7 +216,7 @@ constexpr uint64_t kMinPairFiles = 10;
 // Encodings EncodingSizeEstimation can decline on the values rather than on
 // the stream type alone: Constant needs a single-valued stream, DeltaBlock a
 // per-block non-decreasing one, Sequence an arithmetic progression, Huffman an
-// alphabet of at least two values.
+// alphabet of at least two values, Reversed values that mostly descend.
 // Whether they land is therefore a property of the data draw rather than of
 // the schema, so unappliedPairs() reports them but does not demand them.
 bool hasDataPrecondition(EncodingType encodingType) {
@@ -222,6 +225,7 @@ bool hasDataPrecondition(EncodingType encodingType) {
       encodingType == EncodingType::EliasFano ||
       encodingType == EncodingType::PartitionedEliasFano ||
       encodingType == EncodingType::Sequence ||
+      encodingType == EncodingType::Reversed ||
       encodingType == EncodingType::Huffman;
 }
 
@@ -628,7 +632,88 @@ enum class MissingBoundsReason {
 struct DecodedChunkBounds {
   std::optional<std::pair<ChunkStatValue, ChunkStatValue>> bounds{};
   std::optional<MissingBoundsReason> missingReason{};
+
+  // Smallest and largest non-null values, compared with
+  // lessThanInFilterOrder():
+  // - NaN counts as a value.
+  // - Empty exactly when every row is null.
+  // - Follows none of the writer's rules for when to store bounds, unlike
+  //   'bounds'.
+  std::optional<std::pair<ChunkStatValue, ChunkStatValue>> extremes{};
 };
+
+// Orders values as Velox filters compare them:
+// - NaN is larger than every other value, so x > 1 accepts a NaN row.
+// - Bounds that leave a NaN out would let that filter skip the row.
+template <typename T>
+bool lessThanInFilterOrder(const T& lhs, const T& rhs) {
+  if constexpr (std::is_floating_point_v<T>) {
+    return velox::util::floating_point::NaNAwareLessThan<T>{}(lhs, rhs);
+  } else {
+    return lhs < rhs;
+  }
+}
+
+template <typename T>
+bool isNaNValue(const T& value) {
+  if constexpr (std::is_floating_point_v<T>) {
+    return std::isnan(value);
+  } else {
+    return false;
+  }
+}
+
+// Returns how bounds break the contract that readers rely on to skip data by
+// them, or nothing when they keep it:
+// - No bound may be NaN.
+// - 'lowest' and 'highest', the extremes of the values the bounds describe,
+//   must lie within them, compared with lessThanInFilterOrder().
+// The check predicts nothing, so it holds whatever rules the writer uses to
+// decide when to store bounds.
+template <typename T>
+std::optional<std::string> findBoundsViolation(
+    const std::optional<T>& min,
+    const std::optional<T>& max,
+    const std::optional<T>& lowest,
+    const std::optional<T>& highest) {
+  if (min.has_value()) {
+    if (isNaNValue(*min)) {
+      return "min is NaN";
+    }
+    if (lowest.has_value() && lessThanInFilterOrder(*lowest, *min)) {
+      return fmt::format("min {} is above the value {}", *min, *lowest);
+    }
+  }
+  if (max.has_value()) {
+    if (isNaNValue(*max)) {
+      return "max is NaN";
+    }
+    if (highest.has_value() && lessThanInFilterOrder(*max, *highest)) {
+      return fmt::format("max {} is below the value {}", *max, *highest);
+    }
+  }
+  return std::nullopt;
+}
+
+// Checks the bounds a V2 chunk index stores for a chunk against the extremes
+// of its decoded values. See findBoundsViolation().
+std::optional<std::string> findChunkBoundsViolation(
+    const std::pair<ChunkStatValue, ChunkStatValue>& bounds,
+    const std::pair<ChunkStatValue, ChunkStatValue>& extremes) {
+  NIMBLE_CHECK_EQ(bounds.first.index(), bounds.second.index());
+  NIMBLE_CHECK_EQ(extremes.first.index(), bounds.first.index());
+  NIMBLE_CHECK_EQ(extremes.second.index(), bounds.first.index());
+  return std::visit(
+      [&](const auto& min) {
+        using T = std::decay_t<decltype(min)>;
+        return findBoundsViolation<T>(
+            min,
+            std::get<T>(bounds.second),
+            std::get<T>(extremes.first),
+            std::get<T>(extremes.second));
+      },
+      bounds.first);
+}
 
 template <typename T>
 DecodedChunkBounds materializedChunkBounds(
@@ -654,6 +739,7 @@ DecodedChunkBounds materializedChunkBounds(
 
   std::optional<T> min;
   std::optional<T> max;
+  bool hasNaN{false};
   for (uint32_t row = 0; row < rowCount; ++row) {
     const bool isNonNull = !encoding.isNullable() || numNonNulls == rowCount ||
         velox::bits::isBitSet(
@@ -662,28 +748,35 @@ DecodedChunkBounds materializedChunkBounds(
       continue;
     }
     const auto value = values[row];
-    if constexpr (std::is_floating_point_v<T>) {
-      if (std::isnan(value)) {
-        return {.missingReason = MissingBoundsReason::kNaN};
-      }
+    hasNaN |= isNaNValue(value);
+    if (!min.has_value() || lessThanInFilterOrder(value, *min)) {
+      min = value;
     }
-    min = min.has_value() ? std::min(*min, value) : value;
-    max = max.has_value() ? std::max(*max, value) : value;
+    if (!max.has_value() || lessThanInFilterOrder(*max, value)) {
+      max = value;
+    }
   }
   NIMBLE_CHECK(min.has_value());
   NIMBLE_CHECK(max.has_value());
-  if constexpr (std::is_same_v<T, std::string_view>) {
-    if (min->size() > maxStringStatSize || max->size() > maxStringStatSize) {
-      return {.missingReason = MissingBoundsReason::kLongString};
-    }
-  }
-  return {
-      .bounds =
+  DecodedChunkBounds result{
+      .extremes =
           std::pair{
               toChunkStatValue(*min),
               toChunkStatValue(*max),
           },
   };
+  if (hasNaN) {
+    result.missingReason = MissingBoundsReason::kNaN;
+    return result;
+  }
+  if constexpr (std::is_same_v<T, std::string_view>) {
+    if (min->size() > maxStringStatSize || max->size() > maxStringStatSize) {
+      result.missingReason = MissingBoundsReason::kLongString;
+      return result;
+    }
+  }
+  result.bounds = result.extremes;
+  return result;
 }
 
 DecodedChunkBounds decodedChunkBounds(
@@ -1309,7 +1402,8 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
   if (encodingType == EncodingType::DeltaBlock ||
       encodingType == EncodingType::EliasFano ||
       encodingType == EncodingType::PartitionedEliasFano ||
-      encodingType == EncodingType::Sequence) {
+      encodingType == EncodingType::Sequence ||
+      encodingType == EncodingType::Reversed) {
     return !isFloatingPointDataType(dataType);
   }
   // Varint's gate is isIntegralType<physicalType>() && sizeof(T) >= 4, so the
@@ -1326,6 +1420,7 @@ bool isIntegralOnlyEncoding(EncodingType encodingType) {
       encodingType == EncodingType::EliasFano ||
       encodingType == EncodingType::PartitionedEliasFano ||
       encodingType == EncodingType::Sequence ||
+      encodingType == EncodingType::Reversed ||
       encodingType == EncodingType::PFOR ||
       encodingType == EncodingType::SimdForBitpack ||
       encodingType == EncodingType::Huffman;
@@ -1440,10 +1535,29 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
   const bool hasV2ChunkStats =
       tablet->hasOptionalSection(std::string{kChunkStatsV2Section});
 
-  if (chunkStatsEnabled) {
+  // The writer records no chunk stats for a stripe group whose stripes wrote
+  // no streams, e.g. because every column is a scalar that is null in every
+  // row of those stripes. When every group of the file is such a group, it
+  // writes no chunk stats section.
+  bool hasStreams{false};
+  for (uint32_t stripe = 0; stripe < tablet->stripeCount(); ++stripe) {
+    if (tablet->streamCount(tablet->stripeIdentifier(stripe)) > 0) {
+      hasStreams = true;
+      break;
+    }
+  }
+
+  if (chunkStatsEnabled && hasStreams) {
     NIMBLE_CHECK(!hasV1ChunkStats);
     NIMBLE_CHECK(hasV2ChunkStats);
     ++chunkStatsCoverage_.numV2IndexedFiles;
+  } else if (chunkStatsEnabled) {
+    NIMBLE_CHECK(!hasV1ChunkStats);
+    NIMBLE_CHECK(
+        !hasV2ChunkStats,
+        "Chunk stats section present in a file with no streams (seed {}).",
+        options_.seed);
+    ++chunkStatsCoverage_.numUnindexedFiles;
   } else {
     NIMBLE_CHECK(!hasV1ChunkStats);
     NIMBLE_CHECK(!hasV2ChunkStats);
@@ -1462,6 +1576,12 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
       NIMBLE_CHECK_NULL(
           chunkStats,
           "Chunk stats present in stripe {} but chunk stats are disabled (seed {}).",
+          stripe,
+          options_.seed);
+    } else if (tablet->streamCount(stripeIdentifier) == 0) {
+      NIMBLE_CHECK_NULL(
+          chunkStats,
+          "Chunk stats present in stripe {} of a group with no streams (seed {}).",
           stripe,
           options_.seed);
     } else {
@@ -1611,6 +1731,18 @@ void NimbleWriterFuzzer::verifyChunkStatsMetadata(
         NIMBLE_CHECK(indexedNullCount.has_value());
         NIMBLE_CHECK_EQ(*indexedNullCount, nullCount);
         const auto indexedBounds = streamIndex->chunkBounds(first.chunkIndex);
+        if (indexedBounds.has_value() && decodedBounds.extremes.has_value()) {
+          const auto violation =
+              findChunkBoundsViolation(*indexedBounds, *decodedBounds.extremes);
+          NIMBLE_CHECK(
+              !violation.has_value(),
+              "Chunk bounds at offset {} in stripe {}, stream {} do not hold every value: {} (seed {}).",
+              offset,
+              stripe,
+              streamId,
+              violation.value_or(""),
+              options_.seed);
+        }
         const auto indexedMin = streamIndex->chunkMinValue(first.chunkIndex);
         const auto indexedMax = streamIndex->chunkMaxValue(first.chunkIndex);
         NIMBLE_CHECK_EQ(indexedBounds.has_value(), bounds.has_value());
@@ -1712,8 +1844,19 @@ struct ExpectedNodeStats {
   std::optional<int64_t> integralMax;
   std::optional<double> floatingMin;
   std::optional<double> floatingMax;
+  bool floatingHasNanValues{false};
   std::optional<std::string> stringMin;
   std::optional<std::string> stringMax;
+
+  // Smallest and largest floating-point values, compared with
+  // lessThanInFilterOrder():
+  // - NaN counts as a value.
+  // - Follow none of the writer's rules for when to store bounds, unlike
+  //   'floatingMin' and 'floatingMax'.
+  // The integer and string bounds above need no separate extremes, because
+  // the writer applies no such rules to them.
+  std::optional<double> floatingLowest;
+  std::optional<double> floatingHighest;
 
   std::unique_ptr<velox::dwio::common::ColumnStatistics> toCommonStatistics()
       const {
@@ -1728,7 +1871,7 @@ struct ExpectedNodeStats {
           integralMax,
           std::nullopt);
     }
-    if (floatingMin.has_value()) {
+    if (floatingMin.has_value() || floatingHasNanValues) {
       return std::make_unique<velox::dwio::common::DoubleColumnStatistics>(
           valueCount,
           hasNull,
@@ -1752,6 +1895,38 @@ struct ExpectedNodeStats {
         valueCount, hasNull, std::nullopt, std::nullopt);
   }
 };
+
+// Tracks two things for a floating-point value:
+// - The extremes, compared with lessThanInFilterOrder().
+// - The bounds the writer stores. Drops both once a value is NaN, as the
+//   writer's statistics do.
+void addFloatingPointValue(ExpectedNodeStats& stats, double value) {
+  if (!stats.floatingLowest.has_value() ||
+      lessThanInFilterOrder(value, *stats.floatingLowest)) {
+    stats.floatingLowest = value;
+  }
+  if (!stats.floatingHighest.has_value() ||
+      lessThanInFilterOrder(*stats.floatingHighest, value)) {
+    stats.floatingHighest = value;
+  }
+
+  if (stats.floatingHasNanValues) {
+    return;
+  }
+  if (std::isnan(value)) {
+    stats.floatingHasNanValues = true;
+    stats.floatingMin.reset();
+    stats.floatingMax.reset();
+    return;
+  }
+  if (!stats.floatingMin.has_value()) {
+    stats.floatingMin = value;
+    stats.floatingMax = value;
+    return;
+  }
+  stats.floatingMin = std::min(*stats.floatingMin, value);
+  stats.floatingMax = std::max(*stats.floatingMax, value);
+}
 
 /// Accumulates expected stats for one batch into the per-node vector.
 /// 'validRows' are row indices where all ancestors are non-null.
@@ -1866,22 +2041,12 @@ void accumulateNodeStats(
       case velox::TypeKind::REAL: {
         double value = static_cast<double>(
             vector->as<velox::SimpleVector<float>>()->valueAt(row));
-        stats.floatingMin = stats.floatingMin.has_value()
-            ? std::min(*stats.floatingMin, value)
-            : value;
-        stats.floatingMax = stats.floatingMax.has_value()
-            ? std::max(*stats.floatingMax, value)
-            : value;
+        addFloatingPointValue(stats, value);
         break;
       }
       case velox::TypeKind::DOUBLE: {
         double value = vector->as<velox::SimpleVector<double>>()->valueAt(row);
-        stats.floatingMin = stats.floatingMin.has_value()
-            ? std::min(*stats.floatingMin, value)
-            : value;
-        stats.floatingMax = stats.floatingMax.has_value()
-            ? std::max(*stats.floatingMax, value)
-            : value;
+        addFloatingPointValue(stats, value);
         break;
       }
       case velox::TypeKind::VARCHAR:
@@ -1901,6 +2066,44 @@ void accumulateNodeStats(
         break;
     }
   }
+}
+
+// Checks the bounds of a node's file statistics against the extremes of its
+// values. See findBoundsViolation().
+std::optional<std::string> findFileBoundsViolation(
+    const velox::dwio::common::ColumnStatistics& actual,
+    const ExpectedNodeStats& values) {
+  if (const auto* integers =
+          dynamic_cast<const velox::dwio::common::IntegerColumnStatistics*>(
+              &actual);
+      integers != nullptr) {
+    return findBoundsViolation(
+        integers->getMinimum(),
+        integers->getMaximum(),
+        values.integralMin,
+        values.integralMax);
+  }
+  if (const auto* doubles =
+          dynamic_cast<const velox::dwio::common::DoubleColumnStatistics*>(
+              &actual);
+      doubles != nullptr) {
+    return findBoundsViolation(
+        doubles->getMinimum(),
+        doubles->getMaximum(),
+        values.floatingLowest,
+        values.floatingHighest);
+  }
+  if (const auto* strings =
+          dynamic_cast<const velox::dwio::common::StringColumnStatistics*>(
+              &actual);
+      strings != nullptr) {
+    return findBoundsViolation(
+        strings->getMinimum(),
+        strings->getMaximum(),
+        values.stringMin,
+        values.stringMax);
+  }
+  return std::nullopt;
 }
 
 } // namespace
@@ -1949,6 +2152,13 @@ void NimbleWriterFuzzer::verifyColumnStatistics(
       continue;
     }
     auto actual = nimbleActual->toCommonStatistics();
+    const auto violation = findFileBoundsViolation(*actual, expected[node]);
+    NIMBLE_CHECK(
+        !violation.has_value(),
+        "Node {} file statistics do not hold every value: {} (seed {}).",
+        node,
+        violation.value_or(""),
+        options_.seed);
     auto expectedCommon = expected[node].toCommonStatistics();
 
     NIMBLE_CHECK_EQ(
@@ -1992,26 +2202,27 @@ void NimbleWriterFuzzer::verifyColumnStatistics(
     auto* expectedDbl =
         dynamic_cast<velox::dwio::common::DoubleColumnStatistics*>(
             expectedCommon.get());
-    if (actualDbl != nullptr && expectedDbl != nullptr &&
-        expectedDbl->getMinimum().has_value()) {
-      // Both bounds are NaN whenever the column carries one, because the
-      // fuzzer generates NaN on purpose. Comparing with == would report those
-      // agreeing statistics as a mismatch, so reuse the round-trip
-      // comparison's NaN handling.
-      const auto checkBound = [&](std::string_view bound,
-                                  double actualValue,
-                                  double expectedValue) {
-        NIMBLE_CHECK(
-            decodedValueEquals(actualValue, expectedValue),
-            "Node {} double {} mismatch ({} vs. {}, seed {}).",
+    if (actualDbl != nullptr && expectedDbl != nullptr) {
+      NIMBLE_CHECK_EQ(
+          actualDbl->getMinimum().has_value(),
+          expectedDbl->getMinimum().has_value(),
+          "Node {} double bounds presence mismatch (seed {}).",
+          node,
+          options_.seed);
+      if (expectedDbl->getMinimum().has_value()) {
+        NIMBLE_CHECK_EQ(
+            *actualDbl->getMinimum(),
+            *expectedDbl->getMinimum(),
+            "Node {} double min mismatch (seed {}).",
             node,
-            bound,
-            actualValue,
-            expectedValue,
             options_.seed);
-      };
-      checkBound("min", *actualDbl->getMinimum(), *expectedDbl->getMinimum());
-      checkBound("max", *actualDbl->getMaximum(), *expectedDbl->getMaximum());
+        NIMBLE_CHECK_EQ(
+            *actualDbl->getMaximum(),
+            *expectedDbl->getMaximum(),
+            "Node {} double max mismatch (seed {}).",
+            node,
+            options_.seed);
+      }
     }
 
     auto* actualStr =
@@ -2324,6 +2535,11 @@ enum class LookupShape {
   kAtMost,
   kAtLeast,
   kBetween,
+  // Accepts only values above the column's largest value, so only
+  // floating-point NaN rows pass: Velox orders NaN above every other value.
+  // Anchored lookups never draw it, because it rejects their anchor rows. It
+  // stays last, so they draw from the shapes before it.
+  kAboveMax,
 };
 
 // An input row: the batch index, then the row within the batch.
@@ -2467,6 +2683,99 @@ LookupValues<T> drawValues(
       batches, column, randomRows, count, /*anchored=*/false);
 }
 
+// Returns the largest non-null, non-NaN value of column 'column', or nothing
+// when every row is null or NaN.
+template <typename T>
+std::optional<T> maxValue(
+    const std::vector<VectorPtr>& batches,
+    velox::column_index_t column,
+    const LookupRows& rows) {
+  auto values = collectValues<T>(
+      batches, column, rows.all, rows.all.size(), /*anchored=*/false);
+  if (values.values.empty()) {
+    return std::nullopt;
+  }
+  return std::move(values.values.back());
+}
+
+// Builds a floating-point filter that accepts only values above 'max', so only
+// NaN rows pass. The bound is the next larger value, inclusive, because
+// FloatingPointRange::testDoubleRange ignores whether a bound is exclusive:
+// statistics with maximum 'max' would never rule out x > max. Above +inf, the
+// bound stays exclusive.
+template <typename T>
+PointLookupFilter makeAboveMaxFloatingPointFilter(T max) {
+  const T lower = std::nextafter(max, std::numeric_limits<T>::infinity());
+  return {
+      std::make_unique<velox::common::FloatingPointRange<T>>(
+          lower,
+          /*lowerUnbounded=*/false,
+          /*lowerExclusive=*/lower == max,
+          lower,
+          /*upperUnbounded=*/true,
+          /*upperExclusive=*/false,
+          /*nullAllowed=*/false),
+      "aboveMax"};
+}
+
+// Builds a filter on column 'column' that accepts only values above the
+// column's largest value. File statistics may rule the file out for it only
+// when they cover every value, NaN included. Falls back to IS NULL when every
+// row is null or NaN.
+PointLookupFilter makeAboveMaxFilter(
+    const std::vector<VectorPtr>& batches,
+    velox::column_index_t column,
+    velox::TypeKind kind,
+    const LookupRows& rows) {
+  const auto isNull = [] {
+    return PointLookupFilter{
+        std::make_unique<velox::common::IsNull>(), "isNull"};
+  };
+  if (kind == velox::TypeKind::REAL) {
+    const auto max = maxValue<float>(batches, column, rows);
+    return max.has_value() ? makeAboveMaxFloatingPointFilter(*max) : isNull();
+  }
+  if (kind == velox::TypeKind::DOUBLE) {
+    const auto max = maxValue<double>(batches, column, rows);
+    return max.has_value() ? makeAboveMaxFloatingPointFilter(*max) : isNull();
+  }
+  if (kind == velox::TypeKind::VARCHAR || kind == velox::TypeKind::VARBINARY) {
+    const auto max = maxValue<std::string>(batches, column, rows);
+    if (!max.has_value()) {
+      return isNull();
+    }
+    return {
+        std::make_unique<velox::common::BytesRange>(
+            *max,
+            /*lowerUnbounded=*/false,
+            /*lowerExclusive=*/true,
+            *max,
+            /*upperUnbounded=*/true,
+            /*upperExclusive=*/false,
+            /*nullAllowed=*/false),
+        "aboveMax"};
+  }
+
+  // Reads the remaining kinds as integers. integerValueAt fails on any other.
+  const auto max = maxValue<int64_t>(batches, column, rows);
+  if (!max.has_value()) {
+    return isNull();
+  }
+  if (*max == std::numeric_limits<int64_t>::max()) {
+    // No value is larger, so the filter accepts the largest one.
+    return {
+        std::make_unique<velox::common::BigintRange>(
+            *max, *max, /*nullAllowed=*/false),
+        "equal"};
+  }
+  return {
+      std::make_unique<velox::common::BigintRange>(
+          *max + 1,
+          std::numeric_limits<int64_t>::max(),
+          /*nullAllowed=*/false),
+      "aboveMax"};
+}
+
 // Builds a range filter on floating-point values. Unanchored bounds are
 // randomly inclusive or exclusive. Equal bounds stay inclusive so the range is
 // not empty by construction.
@@ -2530,21 +2839,34 @@ PointLookupFilter makeFloatingPointFilter(
               /*upperExclusive=*/false,
               values.nullAllowed()),
           "atLeast"};
+    case LookupShape::kAboveMax:
+      NIMBLE_UNREACHABLE("makeAboveMaxFilter builds above-max filters.");
   }
   NIMBLE_UNREACHABLE("Unknown lookup shape.");
 }
 
 // Builds a filter on column 'column' whose bounds are drawn from the input:
-// equality, IN, at most, at least or between, as the column type allows.
-// Anchored filters accept every anchor row. Falls back to IS NULL when the
-// drawn rows hold no usable value.
+// equality, IN, at most, at least, between or above the largest value, as the
+// column type allows. Anchored filters accept every anchor row. Falls back to
+// IS NULL when the drawn rows hold no usable value.
 PointLookupFilter makeLookupFilter(
     const std::vector<VectorPtr>& batches,
     velox::column_index_t column,
     velox::TypeKind kind,
     const LookupRows& rows,
     FuzzerGenerator& rng) {
-  const auto shape = static_cast<LookupShape>(folly::Random::rand32(5, rng));
+  const auto numShapes = static_cast<uint32_t>(LookupShape::kAboveMax) +
+      (rows.anchors.empty() ? 1 : 0);
+  auto shape = static_cast<LookupShape>(folly::Random::rand32(numShapes, rng));
+  if (shape == LookupShape::kAboveMax) {
+    if (kind != velox::TypeKind::BOOLEAN &&
+        kind != velox::TypeKind::TIMESTAMP) {
+      return makeAboveMaxFilter(batches, column, kind, rows);
+    }
+    // Booleans have no range filter, and TimestampRange has no exclusive
+    // bound.
+    shape = LookupShape::kAtLeast;
+  }
   const uint32_t numValues = shape == LookupShape::kIn ? 3 : 2;
   const auto isNull = [] {
     return PointLookupFilter{
@@ -2603,6 +2925,8 @@ PointLookupFilter makeLookupFilter(
               "atLeast"};
         case LookupShape::kBetween:
           return {range(sorted.front(), sorted.back()), "between"};
+        case LookupShape::kAboveMax:
+          NIMBLE_UNREACHABLE("makeAboveMaxFilter builds above-max filters.");
       }
       NIMBLE_UNREACHABLE("Unknown lookup shape.");
     }
@@ -2684,6 +3008,9 @@ PointLookupFilter makeLookupFilter(
           return {range(velox::Timestamp::min(), sorted.back()), "atMost"};
         case LookupShape::kAtLeast:
           return {range(sorted.front(), velox::Timestamp::max()), "atLeast"};
+        case LookupShape::kAboveMax:
+          NIMBLE_UNREACHABLE(
+              "Timestamp lookups replace above-max with at least.");
       }
       NIMBLE_UNREACHABLE("Unknown lookup shape.");
     }
@@ -2781,6 +3108,55 @@ std::string describeFilters(
   return fmt::format("{}", fmt::join(descriptions, "; "));
 }
 
+// Runs the check the connector makes before it reads a split: whether the
+// statistics of a filtered column show that no row of the file passes its
+// filter. Returns whether the connector would skip the file. Fails when it
+// would skip a file holding 'expectedRows', the input rows that pass every
+// filter.
+bool fileSkippedByStats(
+    const velox::common::ScanSpec& scanSpec,
+    const velox::dwio::common::Reader& reader,
+    const RowTypePtr& schema,
+    const std::vector<VectorPtr>& batches,
+    const std::vector<ColumnFilter>& filters,
+    const std::vector<RowPosition>& expectedRows,
+    uint64_t seed) {
+  if (velox::connector::testFilters(
+          &scanSpec,
+          &reader,
+          /*filePath=*/"point lookup file",
+          /*partitionKey=*/{},
+          /*partitionKeysHandle=*/{},
+          /*asLocalTime=*/false)) {
+    return false;
+  }
+  if (!expectedRows.empty()) {
+    const auto [batchIndex, row] = expectedRows.front();
+    const auto& batch = *batches[batchIndex]->asUnchecked<velox::RowVector>();
+    std::vector<std::string> columns;
+    columns.reserve(filters.size());
+    for (const auto& [column, lookup] : filters) {
+      const auto& name = schema->nameOf(column);
+      const auto stats =
+          reader.columnStatistics(reader.typeWithId()->childByName(name)->id());
+      columns.push_back(
+          fmt::format(
+              "{}: value {}, filter {}, statistics {}",
+              name,
+              batch.childAt(column)->toString(row),
+              lookup.filter->toString(),
+              stats == nullptr ? std::string{"none"} : stats->toString()));
+    }
+    NIMBLE_FAIL(
+        "File statistics skip a file holding a row that passes every filter (seed {}, batch {}, row {}). {}",
+        seed,
+        batchIndex,
+        row,
+        fmt::join(columns, "; "));
+  }
+  return true;
+}
+
 } // namespace
 
 void NimbleWriterFuzzer::verifyPointLookup(
@@ -2829,6 +3205,16 @@ void NimbleWriterFuzzer::verifyPointLookup(
                         std::make_unique<velox::dwio::common::BufferedInput>(
                             readFile, *leafPool_),
                         readerOptions);
+  // The file is still read when the connector would skip it, so the row reader
+  // is checked to return no rows for it.
+  const bool skippedByFileStats = fileSkippedByStats(
+      *scanSpec,
+      *reader,
+      schema,
+      batches,
+      filters,
+      expectedRows,
+      options_.seed);
   velox::dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(scanSpec);
   rowOptions.setRequestedType(schema);
@@ -2874,6 +3260,9 @@ void NimbleWriterFuzzer::verifyPointLookup(
     if (stats.chunkSkippedRows > 0) {
       ++counts.numLookupsWithChunkSkips;
       counts.numChunkSkippedRows += stats.chunkSkippedRows;
+    }
+    if (skippedByFileStats) {
+      ++counts.numLookupsPrunedByFileStats;
     }
   };
   record(pointLookupCoverage_.byNumColumns[filters.size()]);
@@ -3179,9 +3568,11 @@ void NimbleWriterFuzzer::run() {
   fuzzerOptions.nullRatio = 0.2 * folly::Random::randDouble01(rng);
   // NaN and infinity are off by default and are exactly the values the
   // floating-point encodings are most likely to mishandle. A third of
-  // iterations leave NaN out, because a chunk holding one gets no min/max.
+  // iterations leave NaN out, because a chunk holding one gets no min/max. A
+  // third leave infinity out: a column holding +inf has no value above its
+  // largest one but NaN, so its file statistics can never rule out a lookup.
   fuzzerOptions.dataSpec = {/*includeNaN=*/!folly::Random::oneIn(3, rng),
-                            /*includeInfinity=*/true};
+                            /*includeInfinity=*/!folly::Random::oneIn(3, rng)};
   // Flat-map writers reject duplicate keys; normalization is what guarantees
   // the fuzzed maps are writable.
   fuzzerOptions.normalizeMapKeys = true;
@@ -3636,7 +4027,8 @@ void NimbleWriterFuzzer::logPointLookupCoverage() const {
             {{"lookups", counts.numLookups},
              {"withChunkSkips", counts.numLookupsWithChunkSkips},
              {"matchedRows", counts.numMatchedRows},
-             {"chunkSkippedRows", counts.numChunkSkippedRows}});
+             {"chunkSkippedRows", counts.numChunkSkippedRows},
+             {"prunedByFileStats", counts.numLookupsPrunedByFileStats}});
       };
   std::vector<std::string> byNumColumns;
   for (const auto& [numColumns, counts] : pointLookupCoverage_.byNumColumns) {

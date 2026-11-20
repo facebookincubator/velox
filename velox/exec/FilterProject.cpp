@@ -203,6 +203,7 @@ RowVectorPtr FilterProject::getOutput() {
   }
   SCOPE_EXIT {
     input_.reset();
+    exprs_->clearSharedSubexprs();
   };
 
   vector_size_t size = input_->size();

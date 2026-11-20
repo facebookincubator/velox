@@ -24,6 +24,7 @@
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/HashBuild.h"
+#include "velox/exec/HashBuildStatNames.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
@@ -210,12 +211,13 @@ int32_t maxHashBuildSpillLevel(const exec::Task& task) {
     for (auto& operatorStat : pipelineStat.operatorStats) {
       if (operatorStat.operatorType == OperatorType::kHashBuild) {
         if (operatorStat.runtimeStats.count(
-                std::string(HashBuild::kMaxSpillLevel)) == 0) {
+                std::string(HashBuildStatNames::kMaxSpillLevel)) == 0) {
           continue;
         }
         maxSpillLevel = std::max<int32_t>(
             maxSpillLevel,
-            operatorStat.runtimeStats[std::string(HashBuild::kMaxSpillLevel)]
+            operatorStat
+                .runtimeStats[std::string(HashBuildStatNames::kMaxSpillLevel)]
                 .max);
       }
     }
@@ -334,7 +336,7 @@ class HashJoinBuilder {
   HashJoinBuilder& probeVectors(std::vector<RowVectorPtr>&& probeVectors) {
     VELOX_CHECK(!probeVectors.empty());
     if (probeType_ == nullptr) {
-      probeType_ = asRowType(probeVectors[0]->type());
+      probeType_ = probeVectors[0]->rowType();
     }
     probeVectors_ = std::move(probeVectors);
     // NOTE: there is one value node copy per driver thread and if the value
@@ -378,7 +380,7 @@ class HashJoinBuilder {
   HashJoinBuilder& buildVectors(std::vector<RowVectorPtr>&& buildVectors) {
     VELOX_CHECK(!buildVectors.empty());
     if (buildType_ == nullptr) {
-      buildType_ = asRowType(buildVectors[0]->type());
+      buildType_ = buildVectors[0]->rowType();
     }
     buildVectors_ = std::move(buildVectors);
     // NOTE: there is one value node copy per driver thread and if the value
@@ -548,10 +550,10 @@ class HashJoinBuilder {
       SCOPED_TRACE(
           fmt::format(
               "{} numDrivers: {}", testData.debugString(), numDrivers_));
-      auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+      PlanBuilder builder(&pool_);
       std::shared_ptr<const core::HashJoinNode> joinNode;
       auto planNode =
-          PlanBuilder(planNodeIdGenerator, &pool_)
+          builder.newPlan()
               .values(
                   testData.probeParallelize ? probeVectors_ : allProbeVectors_,
                   testData.probeParallelize)
@@ -560,7 +562,7 @@ class HashJoinBuilder {
               .hashJoin(
                   probeKeys_,
                   buildKeys_,
-                  PlanBuilder(planNodeIdGenerator)
+                  builder.newPlan()
                       .values(
                           testData.buildParallelize ? buildVectors_
                                                     : allBuildVectors_,
@@ -920,17 +922,17 @@ class HashJoinTestBase : public HiveConnectorTestBase {
     createDuckDbTable("u", buildVectors);
 
     // Lazy vector is part of the filter but never gets loaded.
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     core::PlanNodeId probeScanId;
     core::PlanNodeId buildScanId;
-    auto op = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(asRowType(probeVectors[0]->type()))
+    auto op = builder.newPlan()
+                  .tableScan(probeVectors[0]->rowType())
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
                       {"c0"},
                       {"c0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .tableScan(asRowType(buildVectors[0]->type()))
+                      builder.newPlan()
+                          .tableScan(buildVectors[0]->rowType())
                           .capturePlanNodeId(buildScanId)
                           .planNode(),
                       filter,

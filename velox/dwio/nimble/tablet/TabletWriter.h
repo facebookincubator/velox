@@ -95,8 +95,8 @@ class TabletWriter {
     // Selects the on-disk chunk statistics representation.
     ChunkStatsVersion chunkStatsVersion{ChunkStatsVersion::kV2};
     // Skip writing chunk stats for a stripe group if the average number
-    // of chunks per stream is below this threshold. 0 disables chunk stats
-    // skipping.
+    // of chunks per stream is below this threshold. 0 disables this
+    // threshold; a stripe group with no streams still gets no chunk stats.
     float chunkStatsMinAvgChunks{0};
     // Maximum string or binary value length retained in per-chunk bounds.
     uint32_t maxChunkStringStatSize{
@@ -193,6 +193,17 @@ class TabletWriter {
   enum class State {
     kActive, // Writer is active and can accept data.
     kClosed, // Writer has been closed and no more data can be written.
+  };
+
+  // A stream's entries in the current stripe group with the sparse layout: one
+  // for each stripe where the stream has data.
+  struct SparseStreamEntries {
+    // Stripes where the stream has data, as indices within the group.
+    std::vector<uint32_t> stripes;
+    // The stream's offset within each of those stripes.
+    std::vector<uint32_t> offsets;
+    // The stream's size within each of those stripes.
+    std::vector<uint32_t> sizes;
   };
 
   TabletWriter(
@@ -301,15 +312,26 @@ class TabletWriter {
   // For each stripe, which stripe group it belongs to.
   std::vector<uint32_t> stripeGroupIndices_;
   // Accumulated offsets within each stripe relative to start of the stripe,
-  // with one value for each seen stream in the current OR PREVIOUS stripes.
+  // with one value for each stream up to the largest stream offset of that
+  // stripe. Empty with the sparse layout, which keeps sparseStreams_ instead.
   std::vector<std::vector<uint32_t>> streamOffsets_;
   // Accumulated stream sizes within each stripe. Same behavior as
   // streamOffsets_.
   std::vector<std::vector<uint32_t>> streamSizes_;
+  // With the sparse layout, the entries of each stream, indexed by stream ID.
+  // streamOffsets_ and streamSizes_ keep every stream of every stripe, because
+  // kRaw and dense kStreamMajor write them all, including the offsets of empty
+  // streams. The sparse layout writes only the streams with data. A flat map
+  // stripe has data in only a few of its streams, so keeping only those makes
+  // writer memory follow the entries the group stores rather than stripes times
+  // streams. Empty otherwise.
+  std::vector<SparseStreamEntries> sparseStreams_;
   // The streams with data in the current stripe group, one for each stripe
   // that has data for the stream: the entries of a sparse group. Counted only
   // with the sparse layout.
   uint64_t numNonEmptyStripeGroupStreams_{0};
+  // Number of stripes in the current stripe group.
+  uint32_t numGroupStripes_{0};
 
   // Current stripe group index.
   uint32_t stripeGroupIndex_{0};

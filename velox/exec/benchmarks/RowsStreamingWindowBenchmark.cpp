@@ -195,10 +195,7 @@ class RowsStreamingWindowBenchmark : public VectorTestBase {
       cursor = TaskCursor::create(params);
     }
 
-    uint64_t numResultRows = 0;
-    while (cursor->moveNext()) {
-      numResultRows += cursor->current()->size();
-    }
+    const auto numResultRows = cursor->countRows();
 
     BENCHMARK_SUSPEND {
       VELOX_CHECK_EQ(numResultRows, test.numRows);

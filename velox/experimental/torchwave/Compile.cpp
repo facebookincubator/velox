@@ -1878,6 +1878,11 @@ bool CompileCtx::concatOperandFusesInPlace(
   return true;
 }
 
+bool CompileCtx::isGroupedConcatResult(ValueCP value) const {
+  const auto* producer = value->producer();
+  return producer != nullptr && concatFillsInParallel(producer, types_);
+}
+
 void CompileCtx::decideConcatCarve(
     NodeCP concat,
     const std::vector<ValueCP>& operands,
@@ -2201,6 +2206,10 @@ void CompileCtx::decideConcatCarve(
     } else if (
         carvedOperands_.count(throughPlumbing ? writerId : operandId) != 0) {
       decision.reason = "already carved for an earlier concat";
+    } else if (isGroupedConcatResult(writer)) {
+      // Its own concat's group owns that buffer, so it cannot also be a band
+      // of this result.
+      decision.reason = "the result of a grouped concat";
     } else if (const auto cause = concatCopyCauseAfterPlumbing(
                    writer, written, dim, resultDtype, types_);
                cause != ConcatCopyCause::kNone) {
@@ -3882,9 +3891,18 @@ void addDuplicateExtraBindings(
     OpInvocation& op,
     const std::vector<ValueCP>& formalExtras,
     WaveGraph& waveGraph) {
+  std::vector<std::pair<ValueCP, ValueCP>> duplicates;
   for (auto* formal : formalExtras) {
     auto* actual = waveGraph.duplicateValue(formal);
     op.addBinding(formal->id(), actual->id());
+    duplicates.emplace_back(formal, actual);
+  }
+  if (duplicates.empty()) {
+    return;
+  }
+  auto bindings = std::make_shared<const FormalToActual>(op.bindings());
+  for (const auto& [formal, actual] : duplicates) {
+    waveGraph.recordDuplicate(actual->id(), formal->id(), bindings);
   }
 }
 

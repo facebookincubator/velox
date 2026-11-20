@@ -50,6 +50,8 @@ SerializedPageFile::SerializedPageFile(
 void SerializedPageFile::finish() {
   VELOX_CHECK_NOT_NULL(file_);
   size_ = file_->size();
+  common::testutil::TestValue::adjust(
+      "facebook::velox::serializer::SerializedPageFile::finish", this);
   file_->close();
   file_ = nullptr;
 }

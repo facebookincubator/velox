@@ -198,6 +198,13 @@ enum class EncodingType {
   /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
   /// without consulting the Nimble team (oncall: dwios).
   Sequence = 29,
+  /// Complements the order-preserving form of each integer value, so
+  /// descending values ascend, and stores the result in a nested encoding, so
+  /// that encodings that require non-decreasing values, such as EliasFano,
+  /// apply. See ReversedEncoding.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  Reversed = 30,
 };
 
 /// Serialized value of the removed BitRangeSplit encoding. It stays reserved so

@@ -399,6 +399,12 @@ Expression Evaluation Configuration
      - integer
      - 100
      - Controls maximum number of compiled regular expression patterns per batch.
+   * - expression.min_rows_for_peeling
+     - integer
+     - 0
+     - Minimum number of selected rows for expression evaluation to peel dictionary encodings off its inputs. Below it,
+       a function whose only non-constant input is a dictionary gets that input flattened instead, unless its rows are
+       large enough that copying them costs more than peeling.
    * - debug_disable_expression_with_peeling
      - bool
      - false
@@ -961,6 +967,11 @@ Common Options
      - bool
      - true
      - Enable selective Nimble reader. Session: ``selective_nimble_reader_enabled``.
+   * - ``nimble-lazy-file-stats``
+     - bool
+     - false
+     - Decode Nimble file column statistics on first use, and only those a read needs, instead of all
+       of them when the file is opened. Do not prepend ``hive.``. Session: ``nimble_lazy_file_stats``.
    * - ``index-enabled``
      - bool
      - false
@@ -1155,7 +1166,7 @@ Parquet Options (prefix ``hive.parquet.``)
        Session: ``parquet_writer_max_target_file_size``.
 
        Row-group sizing is independent of this setting. The soft byte target is configured by
-       ``writer.row-group-size``, while the row count is capped at 1,048,576. When
+       ``writer.row-group-size``, and the row count by ``writer.row-group-rows``. When
        ``writer.max-target-file-size`` is set, the writer may flush the current row group early so
        the accumulated file size is visible and rotation can occur.
    * - ``writer.enable-dictionary``
@@ -1193,6 +1204,10 @@ Parquet Options (prefix ``hive.parquet.``)
      - Soft target for the serialized row group size. The estimate includes compressed bytes for
        encoded pages and estimated bytes for data that has not yet been serialized into pages, so a
        row group may slightly exceed the target. Session: ``parquet_writer_row_group_size``.
+   * - ``writer.row-group-rows``
+     - integer
+     - 1048576
+     - Maximum number of rows in a row group. Session: ``parquet_writer_row_group_rows``.
    * - ``writer.created-by``
      - string
      - parquet-cpp-velox version 0.0.0

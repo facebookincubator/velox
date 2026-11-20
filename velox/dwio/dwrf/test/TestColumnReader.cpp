@@ -1314,8 +1314,9 @@ TEST_P(TestColumnReader, testIntDictSkipWithNulls) {
 // per-row path too: the fast path reads the flags one per non-null value, so
 // it would pick dictionary entries and literals for the wrong rows.
 TEST_P(TestColumnReader, testIntDictWithNullsAlwaysTrueFilter) {
+  // Scan spec filters apply to the selective reader only.
   if (!useSelectiveReader()) {
-    GTEST_SKIP() << "Scan spec filters apply to the selective reader only";
+    return;
   }
   proto::ColumnEncoding directEncoding;
   directEncoding.set_kind(proto::ColumnEncoding_Kind_DIRECT);

@@ -6415,29 +6415,6 @@ class TopNRowNumberNode : public PlanNode {
       bool partial,
       PlanNodePtr source);
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  /// Legacy constructor: a node without 'rowNumberColumnName' is partial.
-  TopNRowNumberNode(
-      PlanNodeId id,
-      RankFunction function,
-      std::vector<FieldAccessTypedExprPtr> partitionKeys,
-      std::vector<FieldAccessTypedExprPtr> sortingKeys,
-      std::vector<SortOrder> sortingOrders,
-      const std::optional<std::string>& rowNumberColumnName,
-      int32_t limit,
-      PlanNodePtr source)
-      : TopNRowNumberNode(
-            std::move(id),
-            function,
-            std::move(partitionKeys),
-            std::move(sortingKeys),
-            std::move(sortingOrders),
-            rowNumberColumnName,
-            limit,
-            /*partial=*/!rowNumberColumnName.has_value(),
-            std::move(source)) {}
-#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
-
   class Builder {
    public:
     Builder() = default;
@@ -6954,6 +6931,8 @@ class RPCNode : public PlanNode {
   /// @param streamingMode The streaming mode for RPC execution.
   /// @param dispatchBatchSize For BATCH mode pipelining: fire callBatch()
   ///        every N rows during addInput() instead of collecting all rows.
+  /// @param executionPhase Backend lifecycle phase. SUBMIT, POLL and COLLECT
+  ///        require BATCH dispatch; INLINE executes the original RPC call.
   RPCNode(
       const PlanNodeId& id,
       PlanNodePtr source,
@@ -6961,7 +6940,8 @@ class RPCNode : public PlanNode {
       std::string outputColumn,
       RowTypePtr outputType,
       rpc::RPCStreamingMode streamingMode = rpc::RPCStreamingMode::kPerRow,
-      int32_t dispatchBatchSize = 0);
+      int32_t dispatchBatchSize = 0,
+      std::string executionPhase = "INLINE");
 
   const PlanNodePtr& source() const {
     return sources_[0];
@@ -6992,9 +6972,12 @@ class RPCNode : public PlanNode {
     return dispatchBatchSize_;
   }
 
-  std::string_view name() const override {
-    return "RPC";
+  const std::string& executionPhase() const {
+    return executionPhase_;
   }
+
+  /// Returns the operator name used in phase reporting and plan serialization.
+  std::string_view name() const override;
 
   const RowTypePtr& outputType() const override {
     return outputType_;
@@ -7017,6 +7000,8 @@ class RPCNode : public PlanNode {
   RowTypePtr outputType_;
   rpc::RPCStreamingMode streamingMode_;
   int32_t dispatchBatchSize_{0};
+  // Preserves the lifecycle phase across plan serialization.
+  std::string executionPhase_;
 };
 
 using RPCNodePtr = std::shared_ptr<RPCNode>;

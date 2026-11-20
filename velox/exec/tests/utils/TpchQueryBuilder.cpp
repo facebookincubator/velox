@@ -294,7 +294,7 @@ TpchPlan TpchQueryBuilder::getQ2Plan() const {
 
   const std::string regionNameFilter = "r_name = 'EUROPE'";
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId supplierScanIdSubQuery;
   core::PlanNodeId partsuppScanIdSubQuery;
   core::PlanNodeId nationScanIdSubQuery;
@@ -305,7 +305,7 @@ TpchPlan TpchQueryBuilder::getQ2Plan() const {
   core::PlanNodeId nationScanId;
   core::PlanNodeId regionScanId;
 
-  auto regionSubQuery = PlanBuilder(planNodeIdGenerator)
+  auto regionSubQuery = builder.newPlan()
                             .filtersAsNode(filtersAsNode_)
                             .tableScan(
                                 kRegion,
@@ -316,7 +316,7 @@ TpchPlan TpchQueryBuilder::getQ2Plan() const {
                             .planNode();
 
   auto nationJoinRegionSubQuery =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kNation, nationSelectedRowTypeSubQuery, nationFileColumnsSubQuery)
@@ -330,7 +330,7 @@ TpchPlan TpchQueryBuilder::getQ2Plan() const {
           .planNode();
 
   auto supplierJoinNationJoinRegionSubQuery =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kSupplier,
@@ -345,7 +345,7 @@ TpchPlan TpchQueryBuilder::getQ2Plan() const {
               {"s_suppkey"})
           .planNode();
 
-  auto part = PlanBuilder(planNodeIdGenerator)
+  auto part = builder.newPlan()
                   .filtersAsNode(filtersAsNode_)
                   .tableScan(
                       kPart,
@@ -357,7 +357,7 @@ TpchPlan TpchQueryBuilder::getQ2Plan() const {
                   .filter("p_size = 15")
                   .planNode();
 
-  auto region = PlanBuilder(planNodeIdGenerator)
+  auto region = builder.newPlan()
                     .filtersAsNode(filtersAsNode_)
                     .tableScan(
                         kRegion,
@@ -368,7 +368,7 @@ TpchPlan TpchQueryBuilder::getQ2Plan() const {
                     .planNode();
 
   auto nationJoinRegion =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kNation, nationSelectedRowType, nationFileColumns)
           .captureScanNodeId(nationScanId)
@@ -381,7 +381,7 @@ TpchPlan TpchQueryBuilder::getQ2Plan() const {
           .planNode();
 
   auto supplierJoinNationJoinRegion =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanId)
@@ -394,7 +394,7 @@ TpchPlan TpchQueryBuilder::getQ2Plan() const {
           .planNode();
 
   auto partsuppJoinPartJoinSupplierJoinNationJoinRegion =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kPartsupp, partsuppSelectedRowType, partsuppFileColumns)
           .captureScanNodeId(partsuppScanId)
@@ -415,7 +415,7 @@ TpchPlan TpchQueryBuilder::getQ2Plan() const {
           .planNode();
 
   auto plan =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kPartsupp, partsuppSelectedRowType, partsuppFileColumns)
           .captureScanNodeId(partsuppScanIdSubQuery)
@@ -486,12 +486,12 @@ TpchPlan TpchQueryBuilder::getQ3Plan() const {
       formatDateFilter(shipDate, lineitemSelectedRowType, "'1995-03-15'", "");
   auto customerFilter = "c_mktsegment = 'BUILDING'";
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId lineitemPlanNodeId;
   core::PlanNodeId ordersPlanNodeId;
   core::PlanNodeId customerPlanNodeId;
 
-  auto customers = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto customers = builder.newPlan()
                        .filtersAsNode(filtersAsNode_)
                        .tableScan(
                            kCustomer,
@@ -502,7 +502,7 @@ TpchPlan TpchQueryBuilder::getQ3Plan() const {
                        .planNode();
 
   auto custkeyJoinNode =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .filtersAsNode(filtersAsNode_)
           .tableScan(
@@ -520,7 +520,7 @@ TpchPlan TpchQueryBuilder::getQ3Plan() const {
           .planNode();
 
   auto plan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kLineitem,
@@ -570,11 +570,11 @@ TpchPlan TpchQueryBuilder::getQ4Plan() const {
   std::string orderDateFilter = formatDateFilter(
       "o_orderdate", ordersSelectedRowType, "'1993-07-01'", "'1993-09-30'");
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId lineitemPlanNodeId;
   core::PlanNodeId ordersPlanNodeId;
 
-  auto orders = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto orders = builder.newPlan()
                     .filtersAsNode(filtersAsNode_)
                     .tableScan(
                         kOrders,
@@ -585,7 +585,7 @@ TpchPlan TpchQueryBuilder::getQ4Plan() const {
                     .planNode();
 
   auto plan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kLineitem,
@@ -646,7 +646,7 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
   std::string orderDateFilter = formatDateFilter(
       orderDate, ordersSelectedRowType, "'1994-01-01'", "'1994-12-31'");
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId customerScanNodeId;
   core::PlanNodeId ordersScanNodeId;
   core::PlanNodeId lineitemScanNodeId;
@@ -654,7 +654,7 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
   core::PlanNodeId nationScanNodeId;
   core::PlanNodeId regionScanNodeId;
 
-  auto region = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto region = builder.newPlan()
                     .filtersAsNode(filtersAsNode_)
                     .tableScan(
                         kRegion,
@@ -664,7 +664,7 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
                     .captureScanNodeId(regionScanNodeId)
                     .planNode();
 
-  auto orders = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto orders = builder.newPlan()
                     .filtersAsNode(filtersAsNode_)
                     .tableScan(
                         kOrders,
@@ -675,14 +675,14 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
                     .planNode();
 
   auto customer =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
           .captureScanNodeId(customerScanNodeId)
           .planNode();
 
   auto nationJoinRegion =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kNation, nationSelectedRowType, nationFileColumns)
           .captureScanNodeId(nationScanNodeId)
@@ -695,7 +695,7 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
           .planNode();
 
   auto supplierJoinNationRegion =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanNodeId)
@@ -708,7 +708,7 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
           .planNode();
 
   auto plan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
           .captureScanNodeId(lineitemScanNodeId)
@@ -810,7 +810,7 @@ TpchPlan TpchQueryBuilder::getQ7Plan() const {
   auto shipDateFilter = formatDateFilter(
       "l_shipdate", lineitemSelectedRowType, "'1995-01-01'", "'1996-12-31'");
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId supplierScanNodeId;
   core::PlanNodeId lineitemScanNodeId;
   core::PlanNodeId ordersScanNodeId;
@@ -819,7 +819,7 @@ TpchPlan TpchQueryBuilder::getQ7Plan() const {
   core::PlanNodeId custNationScanNodeId;
 
   auto custNation =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kNation, nationSelectedRowType, nationFileColumns, {nationFilter})
@@ -827,7 +827,7 @@ TpchPlan TpchQueryBuilder::getQ7Plan() const {
           .planNode();
 
   auto customerJoinNation =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
           .captureScanNodeId(customerScanNodeId)
@@ -841,7 +841,7 @@ TpchPlan TpchQueryBuilder::getQ7Plan() const {
           .planNode();
 
   auto ordersJoinCustomer =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kOrders, ordersSelectedRowType, ordersFileColumns)
           .captureScanNodeId(ordersScanNodeId)
@@ -854,7 +854,7 @@ TpchPlan TpchQueryBuilder::getQ7Plan() const {
           .planNode();
 
   auto suppNation =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kNation, nationSelectedRowType, nationFileColumns, {nationFilter})
@@ -862,7 +862,7 @@ TpchPlan TpchQueryBuilder::getQ7Plan() const {
           .planNode();
 
   auto supplierJoinNation =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanNodeId)
@@ -876,7 +876,7 @@ TpchPlan TpchQueryBuilder::getQ7Plan() const {
           .planNode();
 
   auto plan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kLineitem,
@@ -964,7 +964,7 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
   const auto orderDateFilter = formatDateFilter(
       "o_orderdate", ordersSelectedRowType, "'1995-01-01'", "'1996-12-31'");
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId partScanNodeId;
   core::PlanNodeId supplierScanNodeId;
   core::PlanNodeId lineitemScanNodeId;
@@ -975,14 +975,14 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
   core::PlanNodeId regionScanNodeId;
 
   auto nationWithName =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kNation, nationSelectedRowTypeWithName, nationFileColumnsWithName)
           .captureScanNodeId(nationScanNodeIdWithName)
           .planNode();
 
-  auto region = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto region = builder.newPlan()
                     .filtersAsNode(filtersAsNode_)
                     .tableScan(
                         kRegion,
@@ -992,7 +992,7 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
                     .captureScanNodeId(regionScanNodeId)
                     .planNode();
 
-  auto part = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto part = builder.newPlan()
                   .filtersAsNode(filtersAsNode_)
                   .tableScan(
                       kPart,
@@ -1003,7 +1003,7 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
                   .planNode();
 
   auto nationJoinRegion =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kNation, nationSelectedRowType, nationFileColumns)
           .captureScanNodeId(nationScanNodeId)
@@ -1012,7 +1012,7 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
           .planNode();
 
   auto customerJoinNationJoinRegion =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
           .captureScanNodeId(customerScanNodeId)
@@ -1025,7 +1025,7 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
           .planNode();
 
   auto ordersJoinCustomerJoinNationJoinRegion =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kOrders,
@@ -1042,7 +1042,7 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
           .planNode();
 
   auto supplierJoinNation =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanNodeId)
@@ -1055,7 +1055,7 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
           .planNode();
 
   auto plan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
           .captureScanNodeId(lineitemScanNodeId)
@@ -1145,7 +1145,7 @@ TpchPlan TpchQueryBuilder::getQ9Plan(const std::string& partFilter) const {
   auto nationSelectedRowType = getRowType(kNation, nationColumns);
   const auto& nationFileColumns = getFileColumnNames(kNation);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId partScanNodeId;
   core::PlanNodeId supplierScanNodeId;
   core::PlanNodeId lineitemScanNodeId;
@@ -1157,7 +1157,7 @@ TpchPlan TpchQueryBuilder::getQ9Plan(const std::string& partFilter) const {
       "l_extendedprice", "l_discount", "l_quantity"};
 
   auto part =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kPart, partSelectedRowType, partFileColumns, {}, partFilter)
@@ -1165,21 +1165,21 @@ TpchPlan TpchQueryBuilder::getQ9Plan(const std::string& partFilter) const {
           .planNode();
 
   auto supplier =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanNodeId)
           .planNode();
 
   auto nation =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kNation, nationSelectedRowType, nationFileColumns)
           .captureScanNodeId(nationScanNodeId)
           .planNode();
 
   auto lineitemJoinPartJoinSupplier =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
           .captureScanNodeId(lineitemScanNodeId)
@@ -1193,7 +1193,7 @@ TpchPlan TpchQueryBuilder::getQ9Plan(const std::string& partFilter) const {
           .planNode();
 
   auto partsuppJoinLineitemJoinPartJoinSupplier =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kPartsupp, partsuppSelectedRowType, partsuppFileColumns)
           .captureScanNodeId(partsuppScanNodeId)
@@ -1208,7 +1208,7 @@ TpchPlan TpchQueryBuilder::getQ9Plan(const std::string& partFilter) const {
           .planNode();
 
   auto plan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kOrders, ordersSelectedRowType, ordersFileColumns)
           .captureScanNodeId(ordersScanNodeId)
@@ -1283,20 +1283,20 @@ TpchPlan TpchQueryBuilder::getQ10Plan() const {
   const std::vector<std::string> customerOutputColumns = {
       "c_name", "c_acctbal", "c_phone", "c_address", "c_custkey", "c_comment"};
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId customerScanNodeId;
   core::PlanNodeId nationScanNodeId;
   core::PlanNodeId lineitemScanNodeId;
   core::PlanNodeId ordersScanNodeId;
 
   auto nation =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kNation, nationSelectedRowType, nationFileColumns)
           .captureScanNodeId(nationScanNodeId)
           .planNode();
 
-  auto orders = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto orders = builder.newPlan()
                     .filtersAsNode(filtersAsNode_)
                     .tableScan(
                         kOrders,
@@ -1307,7 +1307,7 @@ TpchPlan TpchQueryBuilder::getQ10Plan() const {
                     .planNode();
 
   auto partialPlan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
           .captureScanNodeId(customerScanNodeId)
@@ -1326,7 +1326,7 @@ TpchPlan TpchQueryBuilder::getQ10Plan() const {
               mergeColumnNames(customerOutputColumns, {"n_name", "o_orderkey"}))
           .planNode();
 
-  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto plan = builder.newPlan()
                   .filtersAsNode(filtersAsNode_)
                   .tableScan(
                       kLineitem,
@@ -1402,8 +1402,7 @@ TpchPlan TpchQueryBuilder::getQ11Plan() const {
   // Filter for nation name.
   const std::string nationNameFilter = "n_name = 'GERMANY'";
 
-  // Plan node ID generator.
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
   // Subquery plan nodes.
   core::PlanNodeId partsuppScanIdSubQuery;
@@ -1417,7 +1416,7 @@ TpchPlan TpchQueryBuilder::getQ11Plan() const {
 
   // Subquery plan to calculate filter cost.
   auto nationSubQuery =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kNation, nationRowType, nationFileColumns, {nationNameFilter})
@@ -1425,7 +1424,7 @@ TpchPlan TpchQueryBuilder::getQ11Plan() const {
           .planNode();
 
   auto supplierJoinNationSubQuery =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kSupplier, supplierRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanIdSubQuery)
@@ -1438,7 +1437,7 @@ TpchPlan TpchQueryBuilder::getQ11Plan() const {
           .planNode();
 
   auto subQueryPlan =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kPartsupp, partsuppRowTypeSubQuery, partsuppFileColumnsSubQuery)
@@ -1458,7 +1457,7 @@ TpchPlan TpchQueryBuilder::getQ11Plan() const {
 
   // Query plan.
   auto nation =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kNation, nationRowType, nationFileColumns, {nationNameFilter})
@@ -1466,7 +1465,7 @@ TpchPlan TpchQueryBuilder::getQ11Plan() const {
           .planNode();
 
   auto supplierJoinNation =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kSupplier, supplierRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanId)
@@ -1474,7 +1473,7 @@ TpchPlan TpchQueryBuilder::getQ11Plan() const {
           .planNode();
 
   auto plan =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kPartsupp, partsuppRowType, partsuppFileColumns)
           .captureScanNodeId(partsuppScanId)
@@ -1524,7 +1523,7 @@ TpchPlan TpchQueryBuilder::getQ12Plan() const {
   auto lineitemSelectedRowType = getRowType(kLineitem, lineitemColumns);
   const auto& lineitemFileColumns = getFileColumnNames(kLineitem);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId ordersScanNodeId;
   core::PlanNodeId lineitemScanNodeId;
 
@@ -1535,7 +1534,7 @@ TpchPlan TpchQueryBuilder::getQ12Plan() const {
   const std::string commitDateFilter = formatDateFilter(
       "l_commitdate", lineitemSelectedRowType, "", "'1995-01-01'");
 
-  auto lineitem = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto lineitem = builder.newPlan()
                       .filtersAsNode(filtersAsNode_)
                       .tableScan(
                           kLineitem,
@@ -1551,7 +1550,7 @@ TpchPlan TpchQueryBuilder::getQ12Plan() const {
                       .planNode();
 
   auto plan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kOrders, ordersSelectedRowType, ordersFileColumns, {})
           .captureScanNodeId(ordersScanNodeId)
@@ -1593,19 +1592,19 @@ TpchPlan TpchQueryBuilder::getQ13Plan() const {
   const auto customerSelectedRowType = getRowType(kCustomer, customerColumns);
   const auto& customerFileColumns = getFileColumnNames(kCustomer);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId customerScanNodeId;
   core::PlanNodeId ordersScanNodeId;
 
   auto customers =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
           .captureScanNodeId(customerScanNodeId)
           .planNode();
 
   auto plan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kOrders,
@@ -1650,18 +1649,18 @@ TpchPlan TpchQueryBuilder::getQ14Plan() const {
   const std::string shipDateFilter = formatDateFilter(
       shipDate, lineitemSelectedRowType, "'1995-09-01'", "'1995-09-30'");
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId lineitemScanNodeId;
   core::PlanNodeId partScanNodeId;
 
-  auto part = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto part = builder.newPlan()
                   .filtersAsNode(filtersAsNode_)
                   .tableScan(kPart, partSelectedRowType, partFileColumns)
                   .captureScanNodeId(partScanNodeId)
                   .planNode();
 
   auto plan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kLineitem,
@@ -1715,13 +1714,13 @@ TpchPlan TpchQueryBuilder::getQ15Plan() const {
   const std::string shipDateFilter = formatDateFilter(
       "l_shipdate", lineitemSelectedRowType, "'1996-01-01'", "'1996-03-31'");
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId lineitemScanNodeIdSubQuery;
   core::PlanNodeId lineitemScanNodeId;
   core::PlanNodeId supplierScanNodeId;
 
   auto maxRevenue =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kLineitem,
@@ -1740,7 +1739,7 @@ TpchPlan TpchQueryBuilder::getQ15Plan() const {
           .planNode();
 
   auto supplierWithMaxRevenue =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kLineitem,
@@ -1764,7 +1763,7 @@ TpchPlan TpchQueryBuilder::getQ15Plan() const {
           .planNode();
 
   auto plan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanNodeId)
@@ -1799,7 +1798,7 @@ TpchPlan TpchQueryBuilder::getQ16Plan() const {
   const auto partsuppSelectedRowType = getRowType(kPartsupp, partsuppColumns);
   const auto& partsuppFileColumns = getFileColumnNames(kPartsupp);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId partScanNodeId;
   core::PlanNodeId supplierScanNodeId;
   core::PlanNodeId partsuppScanNodeId;
@@ -1809,7 +1808,7 @@ TpchPlan TpchQueryBuilder::getQ16Plan() const {
   // subfield filter pushdown.
   parse::ParseOptions parseOptions;
   parseOptions.parseIntegerAsBigint = false;
-  auto part = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto part = builder.newPlan()
                   .setParseOptions(parseOptions)
                   .filtersAsNode(filtersAsNode_)
                   .tableScan(
@@ -1824,7 +1823,7 @@ TpchPlan TpchQueryBuilder::getQ16Plan() const {
                   .filter("p_brand <> 'Brand#45'")
                   .planNode();
 
-  auto supplier = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto supplier = builder.newPlan()
                       .filtersAsNode(filtersAsNode_)
                       .tableScan(
                           kSupplier,
@@ -1836,7 +1835,7 @@ TpchPlan TpchQueryBuilder::getQ16Plan() const {
                       .planNode();
 
   auto plan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kPartsupp, partsuppSelectedRowType, partsuppFileColumns)
           .captureScanNodeId(partsuppScanNodeId)
@@ -1890,13 +1889,13 @@ TpchPlan TpchQueryBuilder::getQ17Plan() const {
   auto partRowType = getRowType(kPart, partColumns);
   const auto& partFileColumns = getFileColumnNames(kPart);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId lineitemScanId;
   core::PlanNodeId lineitemAggScanId;
   core::PlanNodeId partScanId;
   core::PlanNodeId partAggScanId;
 
-  auto part = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto part = builder.newPlan()
                   .filtersAsNode(filtersAsNode_)
                   .tableScan(
                       kPart,
@@ -1906,14 +1905,14 @@ TpchPlan TpchQueryBuilder::getQ17Plan() const {
                   .captureScanNodeId(partScanId)
                   .planNode();
 
-  auto partAgg = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto partAgg = builder.newPlan()
                      .filtersAsNode(filtersAsNode_)
                      .tableScan(kPart, partRowType, partFileColumns, {})
                      .captureScanNodeId(partAggScanId)
                      .planNode();
 
   auto lineitemJoinPart =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kLineitem, lineitemRowType, lineitemFileColumns)
           .captureScanNodeId(lineitemScanId)
@@ -1926,7 +1925,7 @@ TpchPlan TpchQueryBuilder::getQ17Plan() const {
           .planNode();
 
   auto plan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kLineitem, lineitemRowType, lineitemFileColumns)
           .captureScanNodeId(lineitemAggScanId)
@@ -1976,13 +1975,13 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
   const auto customerSelectedRowType = getRowType(kCustomer, customerColumns);
   const auto& customerFileColumns = getFileColumnNames(kCustomer);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId customerScanNodeId;
   core::PlanNodeId ordersScanNodeId;
   core::PlanNodeId lineitemScanNodeId;
 
   auto bigOrders =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
           .captureScanNodeId(lineitemScanNodeId)
@@ -1993,7 +1992,7 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
           .planNode();
 
   auto plan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kOrders, ordersSelectedRowType, ordersFileColumns)
           .captureScanNodeId(ordersScanNodeId)
@@ -2011,7 +2010,7 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
           .hashJoin(
               {"o_custkey"},
               {"c_custkey"},
-              PlanBuilder(planNodeIdGenerator, pool_.get())
+              builder.newPlan()
                   .filtersAsNode(filtersAsNode_)
                   .tableScan(
                       kCustomer, customerSelectedRowType, customerFileColumns)
@@ -2054,7 +2053,7 @@ TpchPlan TpchQueryBuilder::getQ19Plan() const {
   auto partSelectedRowType = getRowType(kPart, partColumns);
   const auto& partFileColumns = getFileColumnNames(kPart);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId lineitemScanNodeId;
   core::PlanNodeId partScanNodeId;
 
@@ -2075,13 +2074,13 @@ TpchPlan TpchQueryBuilder::getQ19Plan() const {
       "     AND (l_quantity between 20.0 and 30.0)"
       "     AND (p_size BETWEEN 1 AND 15))";
 
-  auto part = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto part = builder.newPlan()
                   .filtersAsNode(filtersAsNode_)
                   .tableScan(kPart, partSelectedRowType, partFileColumns)
                   .captureScanNodeId(partScanNodeId)
                   .planNode();
 
-  auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto plan = builder.newPlan()
                   .filtersAsNode(filtersAsNode_)
                   .tableScan(
                       kLineitem,
@@ -2138,7 +2137,7 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
   const std::string shipDateFilter = formatDateFilter(
       "l_shipdate", lineitemSelectedRowType, "'1994-01-01'", "'1994-12-31'");
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId lineitemScanId;
   core::PlanNodeId partScanId;
   core::PlanNodeId partAggScanId;
@@ -2146,7 +2145,7 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
   core::PlanNodeId partsuppScanId;
   core::PlanNodeId nationScanId;
 
-  auto part = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto part = builder.newPlan()
                   .filtersAsNode(filtersAsNode_)
                   .tableScan(
                       kPart,
@@ -2157,7 +2156,7 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
                   .captureScanNodeId(partScanId)
                   .planNode();
 
-  auto partAgg = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto partAgg = builder.newPlan()
                      .filtersAsNode(filtersAsNode_)
                      .tableScan(
                          kPart,
@@ -2168,7 +2167,7 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
                      .captureScanNodeId(partAggScanId)
                      .planNode();
 
-  auto nation = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto nation = builder.newPlan()
                     .filtersAsNode(filtersAsNode_)
                     .tableScan(
                         kNation,
@@ -2179,7 +2178,7 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
                     .planNode();
 
   auto partsuppJoinPart =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kPartsupp, partsuppSelectedRowType, partsuppFileColumns)
           .captureScanNodeId(partsuppScanId)
@@ -2193,7 +2192,7 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
           .planNode();
 
   auto supplierJoinNation =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanId)
@@ -2206,7 +2205,7 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
           .planNode();
 
   auto plan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kLineitem,
@@ -2275,7 +2274,7 @@ TpchPlan TpchQueryBuilder::getQ21Plan() const {
   auto nationRowType = getRowType(kNation, nationColumns);
   const auto& nationFileColumns = getFileColumnNames(kNation);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId supplierScanNodeId;
   core::PlanNodeId lineitem1ScanNodeId;
   core::PlanNodeId lineitem2ScanNodeId;
@@ -2285,7 +2284,7 @@ TpchPlan TpchQueryBuilder::getQ21Plan() const {
   const std::string receiptCommitFilter = "l_receiptdate > l_commitdate";
 
   auto lineitem3 =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kLineitem,
@@ -2297,7 +2296,7 @@ TpchPlan TpchQueryBuilder::getQ21Plan() const {
           .project({"l_orderkey as l_orderkey_3", "l_suppkey as l_suppkey_3"})
           .planNode();
 
-  auto nation = PlanBuilder(planNodeIdGenerator, pool_.get())
+  auto nation = builder.newPlan()
                     .filtersAsNode(filtersAsNode_)
                     .tableScan(
                         kNation,
@@ -2308,7 +2307,7 @@ TpchPlan TpchQueryBuilder::getQ21Plan() const {
                     .planNode();
 
   auto supplierJoinNation =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kSupplier, supplierRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanNodeId)
@@ -2321,7 +2320,7 @@ TpchPlan TpchQueryBuilder::getQ21Plan() const {
           .planNode();
 
   auto lineitemJoinSupplier =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kLineitem,
@@ -2340,7 +2339,7 @@ TpchPlan TpchQueryBuilder::getQ21Plan() const {
           .planNode();
 
   auto ordersJoinLineitem1 =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kOrders,
@@ -2357,7 +2356,7 @@ TpchPlan TpchQueryBuilder::getQ21Plan() const {
           .planNode();
 
   auto plan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kLineitem, lineitem2RowType, lineitem2FileColumns)
           .captureScanNodeId(lineitem2ScanNodeId)
@@ -2413,20 +2412,20 @@ TpchPlan TpchQueryBuilder::getQ22Plan() const {
   const std::string phoneFilter =
       "substr(c_phone, 1, 2) IN ('13', '31', '23', '29', '30', '18', '17')";
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder(pool_.get());
   core::PlanNodeId customerScanNodeId;
   core::PlanNodeId customerScanNodeIdWithKey;
   core::PlanNodeId ordersScanNodeId;
 
   auto orders =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(kOrders, ordersSelectedRowType, ordersFileColumns)
           .captureScanNodeId(ordersScanNodeId)
           .planNode();
 
   auto customerAvgAccountBalance =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kCustomer,
@@ -2441,7 +2440,7 @@ TpchPlan TpchQueryBuilder::getQ22Plan() const {
           .planNode();
 
   auto plan =
-      PlanBuilder(planNodeIdGenerator, pool_.get())
+      builder.newPlan()
           .filtersAsNode(filtersAsNode_)
           .tableScan(
               kCustomer,

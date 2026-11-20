@@ -4464,6 +4464,9 @@ void PlanNode::registerSerDe() {
   registry.Register("MarkDistinctNode", MarkDistinctNode::create);
   registry.Register("MixedUnionNode", MixedUnionNode::create);
   registry.Register("RPCNode", RPCNode::create);
+  registry.Register("RpcSubmitNode", RPCNode::create);
+  registry.Register("RpcPollNode", RPCNode::create);
+  registry.Register("RpcCollectNode", RPCNode::create);
   registry.Register("FixedPointNode", FixedPointNode::create);
   registry.Register("StateSourceNode", StateSourceNode::create);
   registry.Register("StateHashJoinNode", StateHashJoinNode::create);
@@ -4741,14 +4744,24 @@ RPCNode::RPCNode(
     std::string outputColumn,
     RowTypePtr outputType,
     rpc::RPCStreamingMode streamingMode,
-    int32_t dispatchBatchSize)
+    int32_t dispatchBatchSize,
+    std::string executionPhase)
     : PlanNode(id),
       sources_{std::move(source)},
       call_(std::move(call)),
       outputColumn_(std::move(outputColumn)),
       outputType_(std::move(outputType)),
       streamingMode_(streamingMode),
-      dispatchBatchSize_(dispatchBatchSize) {
+      dispatchBatchSize_(dispatchBatchSize),
+      executionPhase_(std::move(executionPhase)) {
+  VELOX_USER_CHECK(
+      executionPhase_ == "INLINE" || executionPhase_ == "SUBMIT" ||
+          executionPhase_ == "POLL" || executionPhase_ == "COLLECT",
+      "Unknown RPC execution phase");
+  VELOX_USER_CHECK(
+      executionPhase_ == "INLINE" ||
+          streamingMode_ == rpc::RPCStreamingMode::kBatch,
+      "Deferred RPC requires BATCH dispatch");
   VELOX_CHECK_NOT_NULL(call_, "RPCNode call must not be null");
   VELOX_CHECK(
       outputType_->containsChild(outputColumn_),
@@ -4760,6 +4773,19 @@ RPCNode::RPCNode(
       call_->type()->toString(),
       outputType_->findChild(outputColumn_)->toString(),
       outputColumn_);
+}
+
+std::string_view RPCNode::name() const {
+  if (executionPhase_ == "SUBMIT") {
+    return "RpcSubmit";
+  }
+  if (executionPhase_ == "POLL") {
+    return "RpcPoll";
+  }
+  if (executionPhase_ == "COLLECT") {
+    return "RpcCollect";
+  }
+  return "RPC";
 }
 
 void RPCNode::addDetails(std::stringstream& stream) const {
@@ -4789,6 +4815,7 @@ folly::dynamic RPCNode::serialize() const {
   obj["streamingMode"] =
       streamingMode_ == rpc::RPCStreamingMode::kBatch ? "BATCH" : "PER_ROW";
   obj["dispatchBatchSize"] = dispatchBatchSize_;
+  obj["executionPhase"] = executionPhase_;
   return obj;
 }
 
@@ -4822,7 +4849,13 @@ PlanNodePtr RPCNode::create(const folly::dynamic& obj, void* context) {
     outputType = ROW(std::move(names), std::move(types));
   }
 
-  auto streamingMode = obj["streamingMode"].asString() == "BATCH"
+  const std::string streamingModeName =
+      obj.count("streamingMode") ? obj["streamingMode"].asString() : "PER_ROW";
+  VELOX_USER_CHECK(
+      streamingModeName == "PER_ROW" || streamingModeName == "BATCH",
+      "RPCNode streaming mode must be PER_ROW or BATCH: {}",
+      streamingModeName);
+  auto streamingMode = streamingModeName == "BATCH"
       ? rpc::RPCStreamingMode::kBatch
       : rpc::RPCStreamingMode::kPerRow;
   auto dispatchBatchSize =
@@ -4834,7 +4867,9 @@ PlanNodePtr RPCNode::create(const folly::dynamic& obj, void* context) {
       std::move(outputColumn),
       std::move(outputType),
       streamingMode,
-      dispatchBatchSize);
+      dispatchBatchSize,
+      obj.count("executionPhase") ? obj["executionPhase"].asString()
+                                  : "INLINE");
 }
 
 } // namespace facebook::velox::core

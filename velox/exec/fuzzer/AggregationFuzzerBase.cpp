@@ -24,6 +24,7 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/Spill.h"
+#include "velox/exec/fuzzer/ScopedOOMInjector.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/fuzzer/ArgumentTypeFuzzer.h"
 #include "velox/vector/VectorSaver.h"
@@ -559,6 +560,10 @@ velox::fuzzer::ResultOrError AggregationFuzzerBase::execute(
       builder.spillDirectory(spillDirectory->getPath())
           .config(core::QueryConfig::kSpillEnabled, true)
           .config(core::QueryConfig::kAggregationSpillEnabled, true)
+          // The window operator spills through the same ordered reader as the
+          // aggregate, so enable it for the window fuzzer. It is a no-op for
+          // plans without a window.
+          .config(core::QueryConfig::kWindowSpillEnabled, "true")
           .config(
               core::QueryConfig::kMaxSpillRunRows, randomMaxSpillRunRows(rng_))
           .config(

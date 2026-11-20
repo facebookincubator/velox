@@ -25,7 +25,7 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/type/Type.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
-#include "velox/vector/tests/utils/VectorTestBase.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -327,12 +327,13 @@ TEST_P(SortBufferTest, randomData) {
               flags.nullsFirst ? "NULLS FIRST" : "NULLS LAST"));
     }
     createDuckDbTable(inputVectors);
-    assertResultsOrdered(
-        outputs,
+    velox::test::VectorAssertions::equalOrderedBy(
+        duckDbQueryRunner_.executeOrdered(
+            fmt::format(
+                "SELECT * FROM tmp ORDER BY {}", folly::join(", ", orderBy)),
+            inputType_),
         inputType_,
-        fmt::format(
-            "SELECT * FROM tmp ORDER BY {}", folly::join(", ", orderBy)),
-        duckDbQueryRunner_,
+        outputs,
         testData.sortColumnIndices);
     statWriter_.clear();
   }

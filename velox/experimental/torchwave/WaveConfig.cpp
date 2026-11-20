@@ -89,6 +89,18 @@ std::string WaveConfig::toString() const {
   addBool("debugSingleOps", &WaveConfig::debugSingleOps);
   addBool("autoAdjustCost", &WaveConfig::autoAdjustCost);
   addBool("costCountsBarrierWait", &WaveConfig::costCountsBarrierWait);
+  addBool("concatResultSlots", &WaveConfig::concatResultSlots);
+  addBool("groupUnreleasedValues", &WaveConfig::groupUnreleasedValues);
+  addBool("groupViewedValues", &WaveConfig::groupViewedValues);
+  addBool("groupArena", &WaveConfig::groupArena);
+  addInt("groupArenaMaxBytes", &WaveConfig::groupArenaMaxBytes);
+  addBool("deviceSymbols", &WaveConfig::deviceSymbols);
+  addBool("checkGridDescriptor", &WaveConfig::checkGridDescriptor);
+  addBool("gridEqualFinish", &WaveConfig::gridEqualFinish);
+  addBool("deviceGrid", &WaveConfig::deviceGrid);
+  addBool("setupStream", &WaveConfig::setupStream);
+  addBool("checkSizeExprs", &WaveConfig::checkSizeExprs);
+  addBool("sizeExprsFromInputs", &WaveConfig::sizeExprsFromInputs);
   addBool("uniformCost", &WaveConfig::uniformCost);
   addBool("launchPerOp", &WaveConfig::launchPerOp);
   addBool("dedupProjectOps", &WaveConfig::dedupProjectOps);
@@ -112,6 +124,9 @@ std::string WaveConfig::toString() const {
   addBool("cseViews", &WaveConfig::cseViews);
   addBool("decomposeLists", &WaveConfig::decomposeLists);
   addBool("twMad", &WaveConfig::twMad);
+  addBool("packInputs", &WaveConfig::packInputs);
+  addBool("packWindows", &WaveConfig::packWindows);
+  addBool("packAbsorbGetter", &WaveConfig::packAbsorbGetter);
   addBool("twFusedMad", &WaveConfig::twFusedMad);
   addBool("madChains", &WaveConfig::madChains);
   addInt("madInsertBlocksPerSm", &WaveConfig::madInsertBlocksPerSm);

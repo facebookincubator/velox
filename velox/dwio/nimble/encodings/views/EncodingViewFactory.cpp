@@ -36,6 +36,7 @@
 #include "velox/dwio/nimble/encodings/views/PFOREncodingView.h"
 #include "velox/dwio/nimble/encodings/views/PartitionedEliasFanoEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/RLEEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/ReversedEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SentinelEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SequenceEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SimdForBitpackEncodingView.h"
@@ -130,6 +131,15 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "Dictionary encoding cannot be used for boolean data.");
+    case EncodingType::SharedDictionary:
+      if constexpr (isSharedDictionaryType<T>()) {
+        return std::make_unique<SharedDictionaryEncodingView<T>>(
+            data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "SharedDictionary encoding only supports integral and string data, "
+          "got {}.",
+          TypeTraits<T>::dataType);
     case EncodingType::SparseBool:
       if constexpr (std::is_same_v<T, bool>) {
         return std::make_unique<SparseBoolEncodingView>(data, pool, options);
@@ -173,6 +183,13 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "Sequence encoding only supports integral data types, got {}.",
+          TypeTraits<T>::dataType);
+    case EncodingType::Reversed:
+      if constexpr (isIntegralType<T>()) {
+        return std::make_unique<ReversedEncodingView<T>>(data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "Reversed encoding only supports integral data types, got {}.",
           TypeTraits<T>::dataType);
     case EncodingType::Huffman:
       if constexpr (
@@ -280,6 +297,7 @@ bool supportsEncodingView(EncodingType encodingType) {
       EncodingType::ALPRD,
       EncodingType::FixedBitWidth,
       EncodingType::Dictionary,
+      EncodingType::SharedDictionary,
       EncodingType::SparseBool,
       EncodingType::RLE,
       EncodingType::FOR,
@@ -287,6 +305,7 @@ bool supportsEncodingView(EncodingType encodingType) {
       EncodingType::EliasFano,
       EncodingType::PartitionedEliasFano,
       EncodingType::Sequence,
+      EncodingType::Reversed,
       EncodingType::Huffman,
       EncodingType::PFOR,
       EncodingType::SimdForBitpack,

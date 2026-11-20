@@ -17,6 +17,7 @@
 #include "velox/experimental/torchwave/Executor.h"
 
 #include "velox/experimental/torchwave/AllocGroup.h"
+#include "velox/experimental/torchwave/DeviceSymbols.h"
 #include "velox/experimental/torchwave/GroupAlloc.h"
 #include "velox/experimental/torchwave/StepProgram.h"
 #include "velox/experimental/torchwave/StepSupport.h"
@@ -51,7 +52,7 @@
 // Owned by velox/experimental/wave/common/Compile.cu; see initialize().
 DECLARE_bool(cuda_lineinfo);
 
-// Forward declaration of the CUDA runtime call used to synchronize the default
+// Forward declaration of the CUDA runtime call used to synchronize the torch
 // stream. This translation unit is built in a CPU-configured target without the
 // CUDA headers; the symbol resolves from the CUDA runtime linked into the final
 // binary. PyTorch dispatches eager standalone ops to the default stream.
@@ -89,10 +90,17 @@ bool isSymFloatOp(std::string_view target) {
 
 thread_local WaveThreadInfo threadInfo;
 
-// Synchronizes the CUDA default stream (stream 0), where eager ATen standalone
-// ops are dispatched, so they are complete before executeWave returns.
+// The calling thread's torch stream (setTorchStream), a cudaStream_t; nullptr
+// is the legacy default stream. tlsTorchStreamWrapper wraps it when it is not
+// nullptr.
+thread_local void* tlsTorchStream{nullptr};
+thread_local std::unique_ptr<facebook::velox::wave::Stream>
+    tlsTorchStreamWrapper;
+
+// Synchronizes the torch stream, where eager ATen standalone ops are
+// dispatched, so they are complete before executeWave returns.
 void syncTorchDefaultStream() {
-  cudaStreamSynchronize(nullptr);
+  syncTorchStream();
 }
 
 // Resets the torch CUDA caching allocator's peak stats on the active device so
@@ -112,6 +120,17 @@ int64_t peakAllocatedBytes() {
       .allocated_bytes[static_cast<size_t>(
           c10::CachingAllocator::StatType::AGGREGATE)]
       .peak;
+}
+
+// Bytes the torch CUDA caching allocator has allocated now, on the active
+// device.
+int64_t currentAllocatedBytes() {
+  auto* allocator = c10::getDeviceAllocator(c10::DeviceType::CUDA);
+  auto stats = allocator->getDeviceStats(c10::cuda::current_device());
+  return stats
+      .allocated_bytes[static_cast<size_t>(
+          c10::CachingAllocator::StatType::AGGREGATE)]
+      .current;
 }
 
 struct GlobalResources {
@@ -187,6 +206,9 @@ thread_local SetupCounters tSetupCounters;
 // nested phase of the same kind does not count its time twice.
 // NOLINTNEXTLINE(facebook-avoid-non-const-global-variables)
 thread_local uint32_t tOpenPhases = 0;
+// Allocator calls made under ScopedAllocCall, counted with the timing.
+// NOLINTNEXTLINE(facebook-avoid-non-const-global-variables)
+thread_local int64_t tAllocCalls = 0;
 
 bool setupTiming() {
   return WaveConfig::get().printTiming ||
@@ -199,9 +221,17 @@ int64_t threadAllocCallUs() {
       static_cast<double>(tAllocCallTicks) / tscTicksPerMicro());
 }
 
+int64_t threadAllocCalls() {
+  return tAllocCalls;
+}
+
 ScopedAllocCall::ScopedAllocCall()
     : timing_(setupTiming()),
-      start_(timing_ ? folly::hardware_timestamp() : 0) {}
+      start_(timing_ ? folly::hardware_timestamp() : 0) {
+  if (timing_) {
+    ++tAllocCalls;
+  }
+}
 
 ScopedAllocCall::~ScopedAllocCall() {
   if (timing_) {
@@ -357,7 +387,28 @@ void initialize() {
 }
 
 facebook::velox::wave::Stream& torchStream() {
-  return *globals()->torchStreamWrapper;
+  if (tlsTorchStream == nullptr) {
+    return *globals()->torchStreamWrapper;
+  }
+  return *tlsTorchStreamWrapper;
+}
+
+void setTorchStream(void* stream) {
+  if (stream == tlsTorchStream) {
+    return;
+  }
+  tlsTorchStream = stream;
+  tlsTorchStreamWrapper = stream == nullptr
+      ? nullptr
+      : facebook::velox::wave::Stream::external(stream);
+}
+
+void* torchStreamHandle() {
+  return tlsTorchStream;
+}
+
+void syncTorchStream() {
+  cudaStreamSynchronize(tlsTorchStream);
 }
 
 void waitForTorchStream(facebook::velox::wave::Stream& stream) {
@@ -955,6 +1006,52 @@ std::vector<c10::IValue> WaveGraphExecutor::runInputs(
   return executeWithPrefilledFrame(*pooledFrame);
 }
 
+std::vector<c10::IValue> WaveGraphExecutor::runInputsReuse(
+    std::vector<c10::IValue> inputs) {
+  std::lock_guard<std::mutex> reuseLock(reuseMutex_);
+  // Create the held frame on first use (makeDeviceFrame copies weights and
+  // constants to device once); subsequent calls keep it resident so the
+  // weights/constants are not re-copied and no pooled frame is
+  // fetched/returned. The prior run's non-persistent (intermediate/output)
+  // values must still be cleared each call: successive batches have different
+  // data-dependent shapes, so a stale-sized intermediate would otherwise be
+  // reused (e.g. a view onto a buffer sized for a previous batch).
+  // Weights/constants are persistent and survive the clear.
+  const bool timeIt = std::getenv("TW_TIME_EXEC") != nullptr;
+  using Clock = std::chrono::high_resolution_clock;
+  auto ms = [](Clock::time_point a, Clock::time_point b) {
+    return static_cast<double>(
+               std::chrono::duration_cast<std::chrono::microseconds>(b - a)
+                   .count()) /
+        1000.0;
+  };
+  auto t0 = Clock::now();
+  // A cleared reuse frame (freed intermediate buffers) -- or a freshly obtained
+  // one -- invalidates the launch cache's resolved value pointers/offsets, just
+  // as returnFrame's clear does on the pooled path. Bump the generation so
+  // executeWithPrefilledFrame rebuilds that cache; otherwise the reuse path
+  // launches kernels against stale/freed buffers -> illegal memory access on
+  // the second reuse call.
+  if (!reuseFrame_) {
+    reuseFrame_ = getFrame();
+    ++frameGeneration_;
+  } else {
+    resetFrame(*reuseFrame_);
+  }
+  auto t1 = Clock::now();
+  fillUserInputs(*reuseFrame_, std::move(inputs));
+  auto t2 = Clock::now();
+  auto out = executeWithPrefilledFrame(*reuseFrame_);
+  if (timeIt) {
+    syncTorchDefaultStream();
+    auto t3 = Clock::now();
+    LOG(ERROR) << "runInputsReuse ms: clear/getFrame=" << ms(t0, t1)
+               << " fillUserInputs=" << ms(t1, t2)
+               << " exec+sync=" << ms(t2, t3);
+  }
+  return out;
+}
+
 std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
     nativert::ExecutionFrame& frame) {
   // Move any user input tensors that are not on device to device.
@@ -987,7 +1084,19 @@ std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
     }
   }
 
-  executeWave(frame, *waveGraph_);
+  // A value above its capacity leaves the run's results invalid; the
+  // capacities have grown to what was seen, so the rerun binds a state sized
+  // for it. A value computed from a skipped op can itself come out short, so
+  // a few rounds may be needed.
+  constexpr int32_t kMaxSymbolReruns = 4;
+  for (int32_t attempt = 0; !executeWave(frame, *waveGraph_); ++attempt) {
+    TORCH_CHECK(
+        attempt < kMaxSymbolReruns,
+        "Device symbols: capacities still exceeded after ",
+        kMaxSymbolReruns,
+        " reruns");
+    ++numSymbolReruns_;
+  }
   if (WaveConfig::get().trace & WaveConfig::kTensors) {
     for (auto* value : graph_.outputs()) {
       const auto& iv = frame.getIValue(value->id());
@@ -1458,7 +1567,7 @@ void advanceSyncedStages(ExecutionState& state) {
     if (state.stream != nullptr) {
       state.stream->wait();
     }
-    cudaStreamSynchronize(nullptr);
+    syncTorchStream();
   }
 
   // kFrame trace: collect the graph-output value ids (outputNode's inputs), so
@@ -1626,6 +1735,8 @@ void bindGraph(ExecutionState& state, WaveGraph& waveGraph) {
       invocation->bindLaunches(state, returned);
     }
   }
+  auto* deviceSymbols =
+      state.deviceSymbolsMode ? waveGraph.deviceSymbols() : nullptr;
   // The values some sizing reads the elements of get a host copy in the step
   // that produces them, and count as returned there.
   folly::F14FastSet<int32_t> hostIds;
@@ -1656,6 +1767,9 @@ void bindGraph(ExecutionState& state, WaveGraph& waveGraph) {
   TORCH_CHECK(
       hostIds.empty(),
       "A value sizing reads the elements of has no producing kernel launch");
+  if (deviceSymbols != nullptr) {
+    deviceSymbols->selectSubstitutions(state, returned);
+  }
   for (const auto& node : waveGraph.nodes()) {
     if (auto* invocation = node->kernels()) {
       invocation->bindPrograms(state, returned);
@@ -1670,12 +1784,23 @@ void bindGraph(ExecutionState& state, WaveGraph& waveGraph) {
           stepKey(static_cast<int32_t>(node), static_cast<int32_t>(step));
       for (const auto& data : steps[step].kernels) {
         for (auto id : data.returnValues) {
-          producersOf[id].push_back(key);
+          // A value device symbols runs on its capacity is not waited for.
+          if (deviceSymbols == nullptr || returned.count(id) != 0) {
+            producersOf[id].push_back(key);
+          }
         }
       }
       for (const auto& copy : steps[step].hostCopies) {
         producersOf[copy.id].push_back(key);
       }
+    }
+  }
+  if (deviceSymbols != nullptr) {
+    deviceSymbols->resolveSources(state);
+    if (WaveConfig::get().checkSizeExprs) {
+      LOG(INFO) << "Size expressions: "
+                << deviceSymbols->inferReserveShapes(state)
+                << " shapes from symbolic reserves";
     }
   }
   for (auto& steps : state.stepVectors) {
@@ -1687,15 +1812,22 @@ void bindGraph(ExecutionState& state, WaveGraph& waveGraph) {
             *state.valueTypes,
             producersOf,
             sv.readIds);
+        if (deviceSymbols != nullptr) {
+          deviceSymbols->bindFixups(state, *sv.program);
+        }
       }
     }
+  }
+  if (deviceSymbols != nullptr &&
+      std::getenv("TW_DEVICE_SYMBOLS_TRACE") != nullptr) {
+    deviceSymbols->traceWaits(state, returned);
   }
   state.bound = true;
 }
 
 } // namespace
 
-void WaveGraphExecutor::executeWave(
+bool WaveGraphExecutor::executeWave(
     nativert::ExecutionFrame& frame,
     WaveGraph& waveGraph) {
   // Ensure the thread's CUDA device is set for tensor allocation.
@@ -1750,13 +1882,21 @@ void WaveGraphExecutor::executeWave(
   auto* g = globals();
 
   // Get a reusable ExecutionState from the pool.
-  auto statePtr = waveGraph.getState();
+  auto* deviceSymbols =
+      WaveConfig::get().deviceSymbols ? waveGraph.deviceSymbols() : nullptr;
+  auto statePtr = waveGraph.getState(
+      deviceSymbols != nullptr && deviceSymbols->ready() &&
+          !WaveConfig::get().debugSingleOps,
+      deviceSymbols != nullptr ? deviceSymbols->generation() : 0);
   auto& state = *statePtr;
   state.launchDebugInfos.clear();
   state.blockClocks.fill = kBlockClockHeaderWords;
   SCOPE_EXIT {
     if (statePtr->stream) {
       statePtr->streamPool->put(std::move(statePtr->stream));
+    }
+    if (statePtr->setupStream) {
+      statePtr->streamPool->put(std::move(statePtr->setupStream));
     }
     waveGraph.returnState(std::move(statePtr));
   };
@@ -1828,15 +1968,25 @@ void WaveGraphExecutor::executeWave(
   for (auto id : state.tableRoots) {
     publishFromFrame(frame, id);
   }
+  if (WaveConfig::get().checkSizeExprs &&
+      waveGraph.deviceSymbols() != nullptr) {
+    waveGraph.deviceSymbols()->reportSizeExprs(state.sizeExprSymbols);
+  }
   if (!state.bound) {
     bindGraph(state, waveGraph);
   }
   state.tableOnlyActive = !WaveConfig::get().debugSingleOps;
+  if (state.deviceSymbolsMode) {
+    deviceSymbols->beginExecution(state);
+  }
+  state.sizeExprSymbols.clear();
+  beginGroupArena(state);
   SCOPE_EXIT {
     // Values never released -- nothing read them last in a node -- still hold
     // their allocations. Every stream has been drained by now on the normal
     // path.
     releaseAllAllocations(state);
+    endGroupArena(state);
     state.tableOnlyActive = false;
     state.tableActive = false;
     setCurrentExecutionState(nullptr);
@@ -1890,6 +2040,8 @@ void WaveGraphExecutor::executeWave(
   // only this run's transient high-water mark.
   if (WaveConfig::get().trace & WaveConfig::kTiming) {
     resetPeakAllocatedBytes();
+    state.startAllocatedBytes = currentAllocatedBytes();
+    state.allocCallsAtStart = threadAllocCalls();
   }
 
   // Reset per-step lifecycle stages (step vectors are pooled across runs) so
@@ -1897,6 +2049,8 @@ void WaveGraphExecutor::executeWave(
   state.numLastUseEarly = 0;
   state.numLastUseAtNodeEnd = 0;
   state.numDeferredReturns = 0;
+  state.numReturnWaits = 0;
+  state.returnWaitUs = 0;
   state.deferredStepSpan = 0;
   state.runAheadSum = 0;
   state.runAheadSamples = 0;
@@ -1924,6 +2078,10 @@ void WaveGraphExecutor::executeWave(
   // The last steps' transfers may still be outstanding under
   // WaveConfig::deferD2h. Everything below reads the frame, so parse them now.
   resolveAllPendingReturns(state);
+  bool symbolsFit = true;
+  if (deviceSymbols != nullptr) {
+    symbolsFit = deviceSymbols->endExecution(state);
+  }
 
   // Sanity check (replaces the former deferred-standalone retry pass): every
   // standalone must have executed in place during the composite passes above.
@@ -2038,7 +2196,30 @@ void WaveGraphExecutor::executeWave(
       // high-water mark (reset at the start of the run above), so it captures
       // transient intra-step peaks rather than just the per-step samples.
       threadInfo.peakBytes = peakAllocatedBytes();
+      threadInfo.startBytes = state.startAllocatedBytes;
+      threadInfo.allocCalls = threadAllocCalls() - state.allocCallsAtStart;
       threadInfo.perfReport = makePerfReport(state, wallUs);
+    }
+    // Print the report on the same thread that produced it (avoids relying on a
+    // cross-thread thread_local read). Env-guarded so it does not perturb
+    // executor_test, which retrieves waveThreadInfo().perfReport itself.
+    if (std::getenv("TW_PRINT_PERF")) {
+      // The counters, not the whole report: it is tens of kilobytes and every
+      // execution produces one, so logging them all would cost more than the
+      // run being measured.
+      LOG(ERROR) << "[TW_PRINT_PERF] trace=" << WaveConfig::get().trace
+                 << " override="
+                 << (torch::wave::waveConfigOverride() != nullptr)
+                 << " perfReport.size=" << threadInfo.perfReport.size()
+                 << " runAheadMean="
+                 << (threadInfo.runAheadSamples > 0
+                         ? static_cast<double>(threadInfo.runAheadSum) /
+                             threadInfo.runAheadSamples
+                         : 0.0)
+                 << " runAheadMax=" << threadInfo.runAheadMax
+                 << " drainedStarts=" << threadInfo.numDrainedStarts << "/"
+                 << threadInfo.runAheadSamples
+                 << " peakBytes=" << threadInfo.peakBytes;
     }
     if (WaveConfig::get().throwOnError && !threadInfo.errors.empty()) {
       TORCH_CHECK(false, "Wave kernel error:\n", threadInfo.errors);
@@ -2047,6 +2228,7 @@ void WaveGraphExecutor::executeWave(
   // Both streams have been waited on and collectDebugInfo has read the elapsed
   // times, so the events can go back to their pools for the next run.
   releaseStepEvents(state);
+  return symbolsFit;
 }
 
 const WaveThreadInfo& waveThreadInfo() {
@@ -2283,6 +2465,122 @@ void recordStepClockRate(
 
 } // namespace
 
+void setWaveTrace(int32_t trace) {
+  WaveConfig::get().trace = trace;
+}
+
+int32_t getWaveTrace() {
+  return WaveConfig::get().trace;
+}
+
+void setFreeIntermediates(bool on) {
+  WaveConfig::get().freeIntermediates = on;
+}
+
+void setAutoAdjustCost(bool on) {
+  WaveConfig::get().autoAdjustCost = on;
+}
+
+void setIsCg(bool on) {
+  WaveConfig::get().isCg = on;
+}
+
+void setTwMad(bool on) {
+  WaveConfig::get().twMad = on;
+}
+
+void setPackInputs(bool on) {
+  WaveConfig::get().packInputs = on;
+}
+
+void setTwFusedMad(bool on) {
+  WaveConfig::get().twFusedMad = on;
+}
+
+void setMadChains(bool on) {
+  WaveConfig::get().madChains = on;
+}
+
+void setSinglePassSelect(bool on) {
+  WaveConfig::get().singlePassSelect = on;
+}
+
+void setFoldSharedChains(bool on) {
+  WaveConfig::get().foldSharedChains = on;
+}
+
+void setOrderBlocksByCost(bool on) {
+  WaveConfig::get().orderBlocksByCost = on;
+}
+
+void setPartitionLaunches(bool on) {
+  WaveConfig::get().partitionLaunches = on;
+}
+
+void setMaxLaunchWaves(int32_t waves) {
+  WaveConfig::get().maxLaunchWaves = waves;
+}
+
+void setLaunchSkewThreshold(double skew) {
+  WaveConfig::get().launchSkewThreshold = static_cast<float>(skew);
+}
+
+void setMinBlockUs(double us) {
+  WaveConfig::get().minBlockUs = static_cast<float>(us);
+}
+
+void setKernelCacheDir(const std::string& dir) {
+  WaveConfig::get().kernelCacheDir = dir;
+}
+
+void setAllStandalone(bool on) {
+  WaveConfig::get().allStandalone = on;
+}
+
+void setBlockSize(int32_t blockSize) {
+  WaveConfig::get().blockSize = blockSize;
+}
+
+void setNumSms(int32_t numSms) {
+  WaveConfig::get().numSms = numSms;
+}
+
+void setEnableReuse(bool on) {
+  WaveConfig::get().enableReuse = on;
+}
+
+void setElideClones(bool on) {
+  WaveConfig::get().elideClones = on;
+}
+
+void setStepLastUse(bool on) {
+  WaveConfig::get().stepLastUse = on;
+}
+
+void setSyncEachStep(bool on) {
+  WaveConfig::get().syncEachStep = on;
+}
+
+void setDeferD2h(bool on) {
+  WaveConfig::get().deferD2h = on;
+}
+
+void setRunAhead(bool on) {
+  WaveConfig::get().runAhead = on;
+}
+
+void setMaxDelayedFree(int64_t bytes) {
+  WaveConfig::get().maxDelayedFree = bytes;
+}
+
+void setDuplicateMetadata(bool on) {
+  WaveConfig::get().duplicateMetadata = on;
+}
+
+void setPerOpStandaloneTiming(bool on) {
+  WaveConfig::get().perOpStandaloneTiming = on;
+}
+
 void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
   auto& infos = state.launchDebugInfos;
   threadInfo.launches = infos;
@@ -2293,6 +2591,8 @@ void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
   threadInfo.numLastUseEarly = state.numLastUseEarly;
   threadInfo.numLastUseAtNodeEnd = state.numLastUseAtNodeEnd;
   threadInfo.numDeferredReturns = state.numDeferredReturns;
+  threadInfo.numReturnWaits = state.numReturnWaits;
+  threadInfo.returnWaitUs = state.returnWaitUs;
   threadInfo.deferredStepSpan = state.deferredStepSpan;
   threadInfo.runAheadSum = state.runAheadSum;
   threadInfo.runAheadSamples = state.runAheadSamples;
@@ -2416,7 +2716,8 @@ void WaveGraphExecutor::adjustCosts(ExecutionState& state) {
       continue;
     }
     auto& sv = state.stepVectors[seq][step];
-    if (sv.kernels.empty() || mi >= info.launches.size() ||
+    // The device updates its own multipliers.
+    if (sv.onDeviceGrid || sv.kernels.empty() || mi >= info.launches.size() ||
         info.launches[mi].numBlocks <= 0) {
       continue;
     }
@@ -2578,7 +2879,11 @@ std::string WaveGraphExecutor::makePerfReport(
         static_cast<double>(totalDataBytes) / 1e6);
   }
   ss << fmt::format(
-      "Peak GPU RAM: {}\n", facebook::velox::succinctBytes(info.peakBytes));
+      "Peak GPU RAM: {} ({} over the {} allocated at the run's start)\n",
+      facebook::velox::succinctBytes(info.peakBytes),
+      facebook::velox::succinctBytes(
+          std::max<int64_t>(0, info.peakBytes - info.startBytes)),
+      facebook::velox::succinctBytes(info.startBytes));
   if (WaveConfig::get().freeIntermediates) {
     ss << fmt::format(
         "Last-use release: {} values, {} before their node's last step\n",
@@ -2613,6 +2918,25 @@ std::string WaveGraphExecutor::makePerfReport(
           tensors,
           tensors - groups);
     }
+    // The saving above is over the grouped tensors only; this is every call
+    // the step path made, singles included.
+    ss << fmt::format(
+        "Allocator calls on the step path: {} (eager standalone ops not "
+        "counted)\n",
+        info.allocCalls);
+    if (state.deviceSymbolsMode && waveGraph_ != nullptr &&
+        waveGraph_->deviceSymbols() != nullptr) {
+      ss << waveGraph_->deviceSymbols()->report(state);
+    }
+    if (const auto* arena = state.groupArena.get()) {
+      ss << fmt::format(
+          "Group arena: {} carves from its slots, {} by the allocator, {} "
+          "buffer\n",
+          arena->hits,
+          arena->misses,
+          facebook::velox::succinctBytes(
+              arena->buffer.defined() ? arena->buffer.numel() : int64_t{0}));
+    }
   }
   if (info.maxDelayedFreeSeen > 0) {
     // The high-water mark is what the run-ahead adds to the peak; the stall
@@ -2624,6 +2948,10 @@ std::string WaveGraphExecutor::makePerfReport(
         info.numMemoryStalls,
         facebook::velox::succinctBytes(WaveConfig::get().maxDelayedFree));
   }
+  ss << fmt::format(
+      "Host waits on returned values: {} steps, {} us\n",
+      info.numReturnWaits,
+      info.returnWaitUs);
   if (info.numDeferredReturns > 0) {
     // A span of 1 is a transfer the very next step consumed, which is what
     // waiting at the producer already gave; the excess over 1 is the run-ahead

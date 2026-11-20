@@ -153,7 +153,7 @@ TEST_F(CustomTraceTest, customTrace) {
 
   // Trace the inputs from two operators.
   auto plan = PlanBuilder()
-                  .values({vector})
+                  .values(vector)
                   .project({"a * 10 as a"})
                   .capturePlanNodeId(traceNodeId1)
                   .project({"a * 10 as a"})
@@ -200,8 +200,7 @@ TEST_F(CustomTraceTest, exprOutputTrace) {
   auto vector = makeNamedRowVector(
       "a", makeFlatVector<int64_t>(10, [](auto row) { return row; }));
 
-  auto plan =
-      PlanBuilder().values({vector}).project({"a * 10 as a"}).planNode();
+  auto plan = PlanBuilder().values(vector).project({"a * 10 as a"}).planNode();
 
   TExprCapturedVectors capturedVectors;
   auto queryCtx =
@@ -235,7 +234,7 @@ TEST_F(CustomTraceTest, exprTraceOnlyMatchingFunctions) {
 
   // Two projections: multiply then plus. Only trace "plus".
   auto plan = PlanBuilder()
-                  .values({vector})
+                  .values(vector)
                   .project({"a * 10 as b", "a + 5 as c"})
                   .planNode();
 
@@ -271,7 +270,7 @@ TEST_F(CustomTraceTest, exprTraceMultipleInstances) {
        makeFlatVector<int64_t>(10, [](auto row) { return row + 100; })});
 
   auto plan = PlanBuilder()
-                  .values({vector})
+                  .values(vector)
                   .project({"a * 10 as c", "b * 20 as d"})
                   .planNode();
 
@@ -312,7 +311,7 @@ TEST_F(CustomTraceTest, exprTraceCseSharedNode) {
   // Both projections share the "a * 10" subexpression (CSE). The visited set
   // should ensure the shared multiply node is only traced once.
   auto plan = PlanBuilder()
-                  .values({vector})
+                  .values(vector)
                   .project({"a * 10 + 1 as b", "a * 10 + 2 as c"})
                   .planNode();
 
@@ -346,7 +345,7 @@ TEST_F(CustomTraceTest, exprTraceNullResult) {
 
   // try(a / 0) produces all nulls without throwing.
   auto plan =
-      PlanBuilder().values({vector}).project({"try(a / 0) as b"}).planNode();
+      PlanBuilder().values(vector).project({"try(a / 0) as b"}).planNode();
 
   TExprCapturedVectors capturedVectors;
   auto queryCtx =
@@ -375,8 +374,7 @@ TEST_F(CustomTraceTest, exprTraceOperatorScoping) {
   auto vector = makeNamedRowVector(
       "a", makeFlatVector<int64_t>(10, [](auto row) { return row; }));
 
-  auto plan =
-      PlanBuilder().values({vector}).project({"a * 10 as b"}).planNode();
+  auto plan = PlanBuilder().values(vector).project({"a * 10 as b"}).planNode();
 
   TExprCapturedVectors capturedVectors;
   auto queryCtx =
@@ -437,8 +435,7 @@ TEST_F(CustomTraceTest, exprTraceThrowingWriter) {
   auto vector = makeNamedRowVector(
       "a", makeFlatVector<int64_t>(10, [](auto row) { return row; }));
 
-  auto plan =
-      PlanBuilder().values({vector}).project({"a * 10 as a"}).planNode();
+  auto plan = PlanBuilder().values(vector).project({"a * 10 as a"}).planNode();
 
   auto queryCtx =
       core::QueryCtx::Builder()
@@ -497,8 +494,7 @@ TEST_F(CustomTraceTest, intraExprTracingCalledForTracedFunctions) {
   auto vector = makeNamedRowVector(
       "a", makeFlatVector<int64_t>(10, [](auto row) { return row; }));
 
-  auto plan =
-      PlanBuilder().values({vector}).project({"a * 10 as a"}).planNode();
+  auto plan = PlanBuilder().values(vector).project({"a * 10 as a"}).planNode();
 
   std::vector<std::string> activatedFunctions;
   auto queryCtx =
@@ -524,7 +520,7 @@ TEST_F(CustomTraceTest, intraExprTracingNotCalledForUntracedFunctions) {
       "a", makeFlatVector<int64_t>(10, [](auto row) { return row; }));
 
   auto plan = PlanBuilder()
-                  .values({vector})
+                  .values(vector)
                   .project({"a * 10 as b", "a + 5 as c"})
                   .planNode();
 
@@ -576,8 +572,7 @@ TEST_F(CustomTraceTest, intraExprTracingNotCalledWhenOperatorNotTraced) {
     std::vector<std::string>& activatedFunctions_;
   };
 
-  auto plan =
-      PlanBuilder().values({vector}).project({"a * 10 as a"}).planNode();
+  auto plan = PlanBuilder().values(vector).project({"a * 10 as a"}).planNode();
 
   std::vector<std::string> activatedFunctions;
   auto queryCtx =
@@ -791,7 +786,7 @@ TEST_F(CustomTraceTest, breakpointCallbackAlwaysStop) {
 
   core::PlanNodeId project1;
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .project({"a * 10 as a"})
                   .capturePlanNodeId(project1)
                   .planNode();
@@ -830,7 +825,7 @@ TEST_F(CustomTraceTest, breakpointCallbackNeverStop) {
 
   core::PlanNodeId project1;
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .project({"a * 10 as a"})
                   .capturePlanNodeId(project1)
                   .planNode();
@@ -913,7 +908,7 @@ TEST_F(CustomTraceTest, breakpointMixedCallbacks) {
 
   core::PlanNodeId project1, project2;
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .project({"a * 10 as a"})
                   .capturePlanNodeId(project1)
                   .project({"a * 10 as a"})
@@ -1109,20 +1104,20 @@ TEST_F(CustomTraceTest, parallelHashJoinBreakpoints) {
           makeFlatVector<int64_t>({100, 300, 500, 700}),
       });
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
   core::PlanNodeId probeProjectId;
   core::PlanNodeId buildProjectId;
   core::PlanNodeId joinId;
 
-  auto plan = PlanBuilder(planNodeIdGenerator)
+  auto plan = builder.newPlan()
                   .values({probeData}, /*parallelizable=*/true)
                   .project({"t_key", "t_val * 10 as t_val"})
                   .capturePlanNodeId(probeProjectId)
                   .hashJoin(
                       {"t_key"},
                       {"u_key"},
-                      PlanBuilder(planNodeIdGenerator)
+                      builder.newPlan()
                           .values({buildData}, /*parallelizable=*/true)
                           .project({"u_key", "u_val * 10 as u_val"})
                           .capturePlanNodeId(buildProjectId)
@@ -1234,7 +1229,7 @@ TEST_F(CustomTraceTest, moveStepWithPlanIdDefaultBehavior) {
 
   core::PlanNodeId project1, project2;
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .project({"a * 10 as a"})
                   .capturePlanNodeId(project1)
                   .project({"a * 10 as a"})

@@ -85,6 +85,15 @@ struct ColumnCase {
   bool isNonDecreasing{false};
 };
 
+// Returns whether 'encodingType' applies only when the policy offers encodings
+// for its nested stream. Reversed applies only when the policy also offers
+// EliasFano, PartitionedEliasFano or DeltaBlock for its nested stream. The
+// forced policy here offers none, so these never apply; their own tests cover
+// them.
+bool needsNestedCandidates(EncodingType encodingType) {
+  return encodingType == EncodingType::Reversed;
+}
+
 // The outcome a (column, encoding) pair must produce. Derived from the
 // encoders' stated contracts rather than from a previous run, so a pair that
 // stops applying to data it used to accept fails here instead of passing.
@@ -137,6 +146,9 @@ WriteOutcome expectedOutcome(
   // least 64 rows, the minimum average it accepts.
   if (encodingType == EncodingType::PartitionedEliasFano &&
       columnCase.isNonDecreasing) {
+    return WriteOutcome::kNotApplied;
+  }
+  if (needsNestedCandidates(encodingType)) {
     return WriteOutcome::kNotApplied;
   }
   // "Huffman encoding requires at least two symbols" -- a single-symbol
@@ -482,6 +494,9 @@ TEST_F(
   // shape. A zero here means the column cases no longer exercise that encoding
   // and the coverage this test claims is stale.
   for (const auto encodingType : encodings) {
+    if (needsNestedCandidates(encodingType)) {
+      continue;
+    }
     const auto entry = fuzzer.coverage().find(encodingType);
     ASSERT_NE(entry, fuzzer.coverage().end())
         << toString(encodingType) << " was never written";

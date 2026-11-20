@@ -2056,6 +2056,90 @@ TEST_P(TabletTest, chunkStatsV2WritePath) {
       decode(group->stream_chunk_null_counts()), testing::ElementsAre(1, 2, 3));
 }
 
+TEST_P(TabletTest, chunkStatsV2DuplicateStream) {
+  std::string file;
+  velox::InMemoryWriteFile writeFile(&file);
+  auto tabletWriter = nimble::TabletWriter::create(
+      &writeFile,
+      *pool_,
+      {
+          .metadataCompressionThreshold = std::numeric_limits<uint32_t>::max(),
+          .streamDeduplicationEnabled = true,
+          .enableChunkStats = true,
+          .chunkStatsMinAvgChunks = 0,
+      });
+
+  // Both streams hold the same 10 bytes, like an all-false null stream and an
+  // all-false boolean column, but are chunked differently and only the second
+  // has nulls.
+  nimble::Buffer buffer{*pool_};
+  std::vector<nimble::Stream> streams;
+  streams.push_back(
+      nimble::index::test::createStream(
+          buffer,
+          {.offset = 0,
+           .chunks = {
+               {.rowCount = 20, .size = 4, .nullCount = 0},
+               {.rowCount = 30, .size = 6, .nullCount = 0},
+           }}));
+  streams.push_back(
+      nimble::index::test::createStream(
+          buffer,
+          {.offset = 1,
+           .chunks = {{.rowCount = 50, .size = 10, .nullCount = 50}}}));
+  tabletWriter->writeStripe(50, std::move(streams));
+  EXPECT_EQ(tabletWriter->stats().duplicateStreamCount, 1);
+  tabletWriter->close();
+  writeFile.close();
+
+  nimble::TabletReader::Options readerOptions;
+  readerOptions.loadChunkStats = false;
+  auto tablet = createTabletReader(file, std::move(readerOptions));
+  auto rootSection =
+      tablet->loadOptionalSection(std::string(nimble::kChunkStatsV2Section));
+  ASSERT_TRUE(rootSection.has_value());
+  const auto* root = flatbuffers::GetRoot<nimble::serialization::ChunkStats>(
+      rootSection->content().data());
+  ASSERT_NE(root, nullptr);
+  ASSERT_NE(root->stripe_indexes(), nullptr);
+  ASSERT_EQ(root->stripe_indexes()->size(), 1);
+  const auto* groupSection = root->stripe_indexes()->Get(0);
+  ASSERT_NE(groupSection, nullptr);
+  ASSERT_LE(groupSection->offset() + groupSection->size(), file.size());
+  const auto* group =
+      flatbuffers::GetRoot<nimble::serialization::StripeChunkStatsV2>(
+          file.data() + groupSection->offset());
+  ASSERT_NE(group, nullptr);
+  ASSERT_NE(group->stream_chunk_counts(), nullptr);
+  const std::vector<uint32_t> streamChunkCounts{
+      group->stream_chunk_counts()->begin(),
+      group->stream_chunk_counts()->end()};
+  EXPECT_THAT(streamChunkCounts, testing::ElementsAre(2, 1));
+
+  const auto decode = [&](const auto* encodedStream) {
+    NIMBLE_CHECK_NOT_NULL(encodedStream);
+    const auto* data = encodedStream->data();
+    NIMBLE_CHECK_NOT_NULL(data);
+    auto encoding = nimble::EncodingFactory{}.create(
+        *pool_,
+        std::string_view{
+            reinterpret_cast<const char*>(data->data()), data->size()},
+        nullptr);
+    const auto rowCount = encoding->rowCount();
+    std::vector<uint32_t> values(rowCount);
+    encoding->materialize(rowCount, values.data());
+    return values;
+  };
+
+  EXPECT_THAT(
+      decode(group->stream_chunk_rows()), testing::ElementsAre(20, 50, 50));
+  EXPECT_THAT(
+      decode(group->stream_chunk_offsets()), testing::ElementsAre(0, 4, 0));
+  EXPECT_THAT(
+      decode(group->stream_chunk_null_counts()),
+      testing::ElementsAre(0, 0, 50));
+}
+
 TEST_P(TabletTest, prefersV2ChunkStatsWhenBothSectionsExist) {
   std::string file;
   velox::InMemoryWriteFile writeFile(&file);
@@ -6500,10 +6584,8 @@ TEST_P(TabletWithIndexTest, streamDeduplication) {
     EXPECT_EQ(stats.chunkKeys, (std::vector<std::string>{"bbb", "ccc"}));
   }
 
-  // Verify stream stats - all streams should have their own position index
-  // stats even though content is deduplicated.
-  // After deduplication, duplicate streams should have the same number of
-  // chunks as their source streams.
+  // Verify stream stats - each stream keeps its own chunk stats even though
+  // its content is deduplicated.
 
   // Stream 0: 2 chunks (rows: 40, 60)
   {
@@ -6513,11 +6595,10 @@ TEST_P(TabletWithIndexTest, streamDeduplication) {
   }
 
   // Stream 1: 2 chunks (rows: 50, 50) - duplicate content of stream 0
-  // Verify duplicate stream has same number of chunks as source stream (0)
   {
     auto stream1Stats = chunkHelper.streamStats(1);
     EXPECT_EQ(stream1Stats.chunkCounts, (std::vector<uint32_t>{2}));
-    EXPECT_EQ(stream1Stats.chunkRows, (std::vector<uint32_t>{40, 100}));
+    EXPECT_EQ(stream1Stats.chunkRows, (std::vector<uint32_t>{50, 100}));
   }
 
   // Stream 2: 3 chunks (rows: 30, 40, 30)
@@ -6528,11 +6609,10 @@ TEST_P(TabletWithIndexTest, streamDeduplication) {
   }
 
   // Stream 3: 3 chunks (rows: 35, 35, 30) - duplicate content of stream 2
-  // Verify duplicate stream has same number of chunks as source stream (2)
   {
     auto stream3Stats = chunkHelper.streamStats(3);
     EXPECT_EQ(stream3Stats.chunkCounts, (std::vector<uint32_t>{3}));
-    EXPECT_EQ(stream3Stats.chunkRows, (std::vector<uint32_t>{30, 70, 100}));
+    EXPECT_EQ(stream3Stats.chunkRows, (std::vector<uint32_t>{35, 70, 100}));
   }
 
   // Verify stream content - deduplicated streams should return same content
