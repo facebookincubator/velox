@@ -17,7 +17,9 @@
 
 #include <folly/container/F14Map.h>
 
+#include "velox/common/base/SimdUtil.h"
 #include "velox/vector/DecodedVector.h"
+#include "velox/vector/FlatMapVector.h"
 
 namespace facebook::velox {
 namespace {
@@ -236,7 +238,7 @@ MapVectorPtr mapConcatImpl(
         bool inserted = mapRow.insert(&keys[inputIdx], entryOffset, inputIdx);
         if (config.throwOnDuplicateKeys && !inserted) {
           VELOX_USER_FAIL(
-              "Duplicate map key {} was found.",
+              "Duplicate map key was found: {}",
               duplicateKeyMessage(keys[inputIdx], entryOffset));
         }
       }
@@ -298,9 +300,432 @@ MapVectorPtr mapConcatImpl(
       std::move(newValues));
 }
 
+// A key at an index of a keys vector, hashed and compared by value, so that
+// keys of different vectors can be looked up in one hash table.
+struct KeyAt {
+  const BaseVector* keys;
+  column_index_t index;
+
+  bool operator==(const KeyAt& other) const {
+    return keys->equalValueAt(other.keys, index, other.index);
+  }
+};
+
+struct KeyAtHasher {
+  uint64_t operator()(const KeyAt& key) const {
+    return key.keys->hashValueAt(key.index);
+  }
+};
+
+// Returns the result rows where a flat map holds the key at a channel, or null
+// when that is every selected row. The map rows are the selected rows where the
+// map is not null, or null when that is every row. A wrapped map also passes
+// its dictionary indices over the result rows, with index 0 in the rows it does
+// not contribute to, so that simd::gatherBits() reads only its in-map bits.
+BufferPtr selectedInMap(
+    const DecodedVector& decoded,
+    const FlatMapVector& flatMap,
+    const BufferPtr& mapRows,
+    const BufferPtr& indices,
+    column_index_t channel,
+    vector_size_t numRows,
+    memory::MemoryPool* pool) {
+  const auto* rawInMap = flatMap.rawInMapsAt(channel);
+  if (rawInMap == nullptr || decoded.isConstantMapping()) {
+    return mapRows;
+  }
+  if (indices == nullptr && mapRows == nullptr) {
+    return flatMap.inMapsAt(channel);
+  }
+  auto inMap = AlignedBuffer::allocate<bool>(numRows, pool);
+  auto* rawSourceInMap = inMap->asMutable<uint64_t>();
+  if (indices == nullptr) {
+    bits::andBits(
+        rawSourceInMap, mapRows->as<uint64_t>(), rawInMap, 0, numRows);
+  } else {
+    simd::gatherBits(
+        rawInMap,
+        folly::Range<const int32_t*>(indices->as<int32_t>(), numRows),
+        rawSourceInMap);
+    if (mapRows != nullptr) {
+      bits::andBits(rawSourceInMap, mapRows->as<uint64_t>(), 0, numRows);
+    }
+  }
+  return inMap;
+}
+
+// Returns the values of a key of a flat map, wrapped as the map is so that they
+// are indexed by result row.
+VectorPtr wrapValues(
+    DecodedVector& decoded,
+    const DecodedVector::DictionaryWrapping& wrapping,
+    const VectorPtr& values,
+    const SelectivityVector& rows,
+    memory::MemoryPool* pool) {
+  if (decoded.isConstantMapping()) {
+    return decoded.wrap(values, *pool, rows);
+  }
+  if (wrapping.indices == nullptr) {
+    return values;
+  }
+  return BaseVector::wrapInDictionary(
+      wrapping.nulls, wrapping.indices, rows.end(), values);
+}
+
+bool isNullConstant(const DecodedVector& decoded) {
+  return decoded.isConstantMapping() && decoded.isNullAt(0);
+}
+
+// Checks that every map is a flat map or a regular map with the result's key
+// type and returns the number of distinct keys of the flat maps plus the number
+// of entries of the regular maps, a rough guess at the result's keys. Unless
+// null maps count as empty, also sets 'resultNulls' to the rows where every map
+// is not null, or leaves it null when no map has nulls.
+vector_size_t estimateKeySizeAndCheckTypes(
+    std::span<DecodedVector* const> maps,
+    const SelectivityVector& rows,
+    const MapConcatConfig& config,
+    const TypePtr& keyType,
+    memory::MemoryPool* pool,
+    BufferPtr& resultNulls) {
+  const auto numRows = rows.end();
+  vector_size_t maxNumKeys{0};
+  auto checkKeyType = [&](const TypePtr& mapKeyType) {
+    VELOX_CHECK(
+        *keyType == *mapKeyType,
+        "Map key type mismatch: {} vs {}",
+        keyType->toString(),
+        mapKeyType->toString());
+  };
+  for (auto* map : maps) {
+    if (const auto* regularMap = map->base()->as<MapVector>();
+        regularMap != nullptr && !isNullConstant(*map)) {
+      checkKeyType(regularMap->mapKeys()->type());
+      maxNumKeys += regularMap->mapKeys()->size();
+    } else if (const auto* flatMap = map->base()->as<FlatMapVector>();
+               flatMap != nullptr && !isNullConstant(*map)) {
+      checkKeyType(flatMap->distinctKeys()->type());
+      maxNumKeys += flatMap->numDistinctKeys();
+    } else if (!isNullConstant(*map)) {
+      VELOX_FAIL("Unsupported map encoding: {}", map->base()->encoding());
+    }
+    if (config.emptyForNull) {
+      continue;
+    }
+    const auto* nulls = map->nulls(&rows);
+    if (nulls == nullptr) {
+      continue;
+    }
+    if (resultNulls == nullptr) {
+      resultNulls = allocateNulls(numRows, pool);
+      bits::copyBits(nulls, 0, resultNulls->asMutable<uint64_t>(), 0, numRows);
+    } else {
+      bits::andBits(resultNulls->asMutable<uint64_t>(), nulls, 0, numRows);
+    }
+  }
+  return maxNumKeys;
+}
+
+BufferPtr generateResultRowsBuffer(
+    const SelectivityVector& rows,
+    const BufferPtr& resultNulls,
+    memory::MemoryPool* pool) {
+  const auto numRows = rows.end();
+  const auto* selectedRowBits = rows.asRange().bits();
+  if (resultNulls != nullptr) {
+    auto resultRowsBuffer = AlignedBuffer::allocate<bool>(numRows, pool);
+    bits::andBits(
+        resultRowsBuffer->asMutable<uint64_t>(),
+        selectedRowBits,
+        resultNulls->as<uint64_t>(),
+        0,
+        numRows);
+    return resultRowsBuffer;
+  }
+  if (!rows.isAllSelected()) {
+    auto resultRowsBuffer = AlignedBuffer::allocate<bool>(numRows, pool);
+    bits::copyBits(
+        selectedRowBits,
+        0,
+        resultRowsBuffer->asMutable<uint64_t>(),
+        0,
+        numRows);
+    return resultRowsBuffer;
+  }
+  return nullptr;
+}
+
+void pullFromMap(
+    const DecodedVector& decoded,
+    const uint64_t* rowBits,
+    const SelectivityVector& rows,
+    const TypePtr& valueType,
+    const MapConcatConfig& config,
+    memory::MemoryPool* pool,
+    VectorPtr& keys,
+    vector_size_t& numKeys,
+    folly::F14FastMap<KeyAt, vector_size_t, KeyAtHasher>& keyChannels,
+    std::vector<VectorPtr>& mapValues,
+    std::vector<BufferPtr>& inMaps,
+    std::vector<bool>& isOriginal) {
+  if (detail::isAllNullVector(*decoded.base())) {
+    return;
+  }
+  const auto numRows = rows.end();
+  const auto& map = *decoded.base()->asUnchecked<MapVector>();
+  const auto& entryKeys = map.mapKeys();
+  const auto numKeysBefore = numKeys;
+  std::vector<std::vector<BaseVector::CopyRange>> valueRanges(numKeys);
+  std::vector<BufferPtr> keyRows(numKeys);
+  bits::forEachSetBit(
+      rowBits, rows.begin(), rows.end(), [&](vector_size_t row) {
+        const auto mapRow = decoded.index(row);
+        const auto offset = map.offsetAt(mapRow);
+        for (auto entry = offset; entry < offset + map.sizeAt(mapRow);
+             ++entry) {
+          VELOX_CHECK(!entryKeys->isNullAt(entry), "Map key cannot be null");
+          auto [it, inserted] = keyChannels.try_emplace(
+              KeyAt{entryKeys.get(), static_cast<column_index_t>(entry)},
+              numKeys);
+          if (inserted) {
+            keys->copy(entryKeys.get(), numKeys++, entry, 1);
+            valueRanges.emplace_back();
+            keyRows.emplace_back();
+          }
+          const auto channel = it->second;
+          if (keyRows[channel] == nullptr) {
+            keyRows[channel] =
+                AlignedBuffer::allocate<bool>(numRows, pool, false);
+          }
+          auto* rawKeyRows = keyRows[channel]->asMutable<uint64_t>();
+          if (bits::isBitSet(rawKeyRows, row)) {
+            if (config.throwOnDuplicateKeys) {
+              VELOX_USER_FAIL(
+                  "Duplicate map key was found: {}",
+                  entryKeys->wrappedVector()->toString(
+                      entryKeys->wrappedIndex(entry)));
+            }
+            valueRanges[channel].back().sourceIndex = entry;
+          } else {
+            bits::setBit(rawKeyRows, row);
+            valueRanges[channel].push_back({entry, row, 1});
+          }
+        }
+      });
+  for (vector_size_t channel = 0; channel < numKeys; ++channel) {
+    if (keyRows[channel] == nullptr) {
+      continue;
+    }
+    auto values = BaseVector::create(valueType, numRows, pool);
+    values->copyRanges(map.mapValues().get(), valueRanges[channel]);
+    if (channel >= numKeysBefore) {
+      mapValues.push_back(std::move(values));
+      inMaps.push_back(std::move(keyRows[channel]));
+      isOriginal.push_back(false);
+    } else {
+      isOriginal[channel] = FlatMapVector::mergeChannels(
+          rows,
+          values,
+          std::move(keyRows[channel]),
+          isOriginal[channel],
+          numRows,
+          pool,
+          config.throwOnDuplicateKeys,
+          *keys,
+          channel,
+          mapValues[channel],
+          inMaps[channel]);
+    }
+  }
+}
+
+// Concatenates the maps one at a time. A key the result does not have yet
+// shares the map's values. A key it already has is copied into values of its
+// own the first time, and later maps copy over it, so the last map wins.
+// Output keys are in the order they are first seen. When they are exactly the
+// keys of the first flat map, the result keeps its distinct keys and key index.
+// The entries of a regular map are copied into the result keys row by row,
+// with the last of duplicate keys in a row winning.
+FlatMapVectorPtr flatMapConcat(
+    memory::MemoryPool* pool,
+    const TypePtr& outputType,
+    std::span<DecodedVector* const> maps,
+    const SelectivityVector& rows,
+    const MapConcatConfig& config) {
+  const auto numMaps = maps.size();
+  const auto numRows = rows.end();
+  const auto& keyType = outputType->asMap().keyType();
+  BufferPtr resultNulls;
+  const auto maxNumKeys = estimateKeySizeAndCheckTypes(
+      maps, rows, config, keyType, pool, resultNulls);
+  const auto* selectedRowBits = rows.asRange().bits();
+  const auto resultRowsBuffer =
+      generateResultRowsBuffer(rows, resultNulls, pool);
+
+  auto keys = BaseVector::create(keyType, maxNumKeys, pool);
+  vector_size_t numKeys{0};
+  // Channels of the output keys by hash.
+  folly::F14FastMap<KeyAt, vector_size_t, KeyAtHasher> keyChannels;
+  keyChannels.reserve(maxNumKeys);
+  std::vector<VectorPtr> mapValues;
+  mapValues.reserve(maxNumKeys);
+  std::vector<BufferPtr> inMaps;
+  inMaps.reserve(maxNumKeys);
+  // Whether the values and in-map of each output key are still a map's,
+  // which the result must not write into.
+  std::vector<bool> isOriginal;
+  isOriginal.reserve(maxNumKeys);
+  vector_size_t numKeysFromFirstMap{0};
+  size_t firstMap{0};
+  while (firstMap + 1 < numMaps && isNullConstant(*maps[firstMap])) {
+    ++firstMap;
+  }
+  for (size_t i = firstMap; i < numMaps; ++i) {
+    if (isNullConstant(*maps[i])) {
+      continue;
+    }
+    auto& decoded = *maps[i];
+    auto mapRows = resultRowsBuffer;
+    const auto* rawNulls = decoded.nulls(&rows);
+    if (config.emptyForNull && rawNulls != nullptr) {
+      mapRows = AlignedBuffer::allocate<bool>(numRows, pool);
+      bits::andBits(
+          mapRows->asMutable<uint64_t>(),
+          selectedRowBits,
+          rawNulls,
+          0,
+          numRows);
+    }
+    if (decoded.base()->encoding() != VectorEncoding::Simple::FLAT_MAP) {
+      pullFromMap(
+          decoded,
+          mapRows != nullptr ? mapRows->as<uint64_t>() : selectedRowBits,
+          rows,
+          outputType->asMap().valueType(),
+          config,
+          pool,
+          keys,
+          numKeys,
+          keyChannels,
+          mapValues,
+          inMaps,
+          isOriginal);
+      continue;
+    }
+    const auto& flatMap = *decoded.base()->asUnchecked<FlatMapVector>();
+    DecodedVector::DictionaryWrapping wrapping;
+    if (!decoded.isIdentityMapping() && !decoded.isConstantMapping()) {
+      wrapping = decoded.dictionaryWrapping(*pool, rows);
+      if (mapRows != nullptr) {
+        auto* rawIndices = wrapping.indices->asMutable<vector_size_t>();
+        bits::forEachUnsetBit(
+            mapRows->as<uint64_t>(), 0, numRows, [&](vector_size_t row) {
+              rawIndices[row] = 0;
+            });
+      }
+    }
+    const auto& mapKeys = flatMap.distinctKeys();
+    for (column_index_t currentChannel = 0; currentChannel < mapKeys->size();
+         ++currentChannel) {
+      if (decoded.isConstantMapping()) {
+        const auto* rawInMap = flatMap.rawInMapsAt(currentChannel);
+        if (rawInMap != nullptr &&
+            !bits::isBitSet(rawInMap, decoded.index(0))) {
+          continue;
+        }
+      }
+      auto currentInMap = selectedInMap(
+          decoded,
+          flatMap,
+          mapRows,
+          wrapping.indices,
+          currentChannel,
+          numRows,
+          pool);
+      const auto* currentKeyRows = currentInMap != nullptr
+          ? currentInMap->as<uint64_t>()
+          : selectedRowBits;
+      // Skips a key whose values no selected row uses, before looking it up or
+      // touching its values, so that the result has no empty keys.
+      if (bits::findFirstBit(currentKeyRows, rows.begin(), rows.end()) >= 0) {
+        const auto& currentValues = flatMap.mapValuesAt(currentChannel);
+        auto [it, inserted] = keyChannels.try_emplace(
+            KeyAt{mapKeys.get(), currentChannel}, numKeys);
+
+        // The concatenated maps share this key, so their values must be merged.
+        if (!inserted) {
+          const auto resultChannel = it->second;
+          isOriginal[resultChannel] = FlatMapVector::mergeChannels(
+              rows,
+              wrapValues(decoded, wrapping, currentValues, rows, pool),
+              std::move(currentInMap),
+              isOriginal[resultChannel],
+              numRows,
+              pool,
+              config.throwOnDuplicateKeys,
+              *keys,
+              resultChannel,
+              mapValues[resultChannel],
+              inMaps[resultChannel]);
+        } else {
+          keys->copy(mapKeys.get(), numKeys++, currentChannel, 1);
+          mapValues.push_back(
+              wrapValues(decoded, wrapping, currentValues, rows, pool));
+          inMaps.push_back(std::move(currentInMap));
+          isOriginal.push_back(true);
+          if (i == firstMap) {
+            ++numKeysFromFirstMap;
+          }
+        }
+      }
+    }
+  }
+
+  keys->resize(numKeys);
+  const auto* firstFlatMap = maps[firstMap]->base()->as<FlatMapVector>();
+  const bool firstKeys = firstFlatMap != nullptr &&
+      numKeysFromFirstMap == firstFlatMap->numDistinctKeys() &&
+      numKeys == firstFlatMap->numDistinctKeys();
+  auto result = std::make_shared<FlatMapVector>(
+      pool,
+      outputType,
+      std::move(resultNulls),
+      numRows,
+      firstKeys ? firstFlatMap->distinctKeys() : keys,
+      std::move(mapValues),
+      std::move(inMaps));
+  if (firstKeys) {
+    result->shareKeyIndex(*firstFlatMap);
+  }
+  return result;
+}
+
+enum class ConcatEncoding { kFlatMap, kMap, kMixed };
+
+ConcatEncoding mapsToConcatEncodings(std::span<DecodedVector* const> maps) {
+  size_t numFlatMaps{0};
+  size_t numRegularMaps{0};
+  for (const auto* decoded : maps) {
+    if (!isNullConstant(*decoded)) {
+      if (decoded->base()->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+        ++numFlatMaps;
+      } else {
+        ++numRegularMaps;
+      }
+    }
+  }
+  if (numFlatMaps > 0 && numRegularMaps > 0) {
+    return ConcatEncoding::kMixed;
+  }
+  if (numFlatMaps > 0) {
+    return ConcatEncoding::kFlatMap;
+  }
+  return ConcatEncoding::kMap;
+}
+
 } // namespace
 
-MapVectorPtr mapConcat(
+VectorPtr mapConcat(
     memory::MemoryPool* pool,
     const TypePtr& outputType,
     std::span<DecodedVector* const> inputs,
@@ -308,15 +733,30 @@ MapVectorPtr mapConcat(
     const MapConcatConfig& config) {
   VELOX_CHECK_GT(inputs.size(), 0);
   VELOX_CHECK_LT(inputs.size(), std::numeric_limits<int8_t>::max());
-  const auto& keyType = outputType->asMap().keyType();
-  // Route to UpdateMapRow<void> (BaseVector::equalValueAt/hashValueAt) when the
-  // key type provides custom comparison, so that custom hash and equality are
-  // respected for dedup.
-  if (keyType->providesCustomComparison()) {
-    return mapConcatImpl<TypeKind::ROW>(pool, outputType, inputs, rows, config);
+  switch (mapsToConcatEncodings(inputs)) {
+    case ConcatEncoding::kFlatMap:
+    case ConcatEncoding::kMixed:
+      return flatMapConcat(pool, outputType, inputs, rows, config);
+    case ConcatEncoding::kMap: {
+      const auto& keyType = outputType->asMap().keyType();
+      // Route to UpdateMapRow<void> (BaseVector::equalValueAt/hashValueAt) when
+      // the key type provides custom comparison, so that custom hash and
+      // equality are respected for dedup.
+      if (keyType->providesCustomComparison()) {
+        return mapConcatImpl<TypeKind::ROW>(
+            pool, outputType, inputs, rows, config);
+      }
+      return VELOX_DYNAMIC_TYPE_DISPATCH(
+          mapConcatImpl,
+          keyType->kind(),
+          pool,
+          outputType,
+          inputs,
+          rows,
+          config);
+    }
   }
-  return VELOX_DYNAMIC_TYPE_DISPATCH(
-      mapConcatImpl, keyType->kind(), pool, outputType, inputs, rows, config);
+  VELOX_UNREACHABLE();
 }
 
 } // namespace facebook::velox
