@@ -3657,6 +3657,56 @@ TEST_F(TestReader, readFlatMapsAsFlatMapsWithSharedMapValues) {
   assertEqualVectors(makeFlatVector<int64_t>({8, 9}), values);
 }
 
+TEST_F(TestReader, deltaUpdateOfAllNullColumnWithPreviousBatchHeld) {
+  // Require exclusive ownership, as an updater that modifies values in place.
+  class ExclusiveUpdater : public DeltaColumnUpdater {
+   public:
+    void update(const RowSet& /*rows*/, VectorPtr& result) override {
+      VELOX_CHECK_NOT_NULL(result);
+      VELOX_CHECK_EQ(result.use_count(), 1);
+      ++numUpdates;
+    }
+
+    int32_t numUpdates{0};
+  };
+
+  constexpr vector_size_t kNumRows{100};
+  constexpr vector_size_t kBatchSize{20};
+  auto input = makeRowVector({
+      makeNullConstant(TypeKind::BIGINT, kNumRows),
+      makeFlatVector<int64_t>(kNumRows, std::identity{}),
+  });
+  auto [writer, reader] =
+      createWriterReader({input}, pool(), dataIoStats_, metadataIoStats_);
+  auto schema = asRowType(input->type());
+  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+  scanSpec->addAllChildFields(*schema);
+  ExclusiveUpdater updater;
+  scanSpec->childByName("c0")->setDeltaUpdate(&updater);
+  RowReaderOptions rowReaderOptions;
+  rowReaderOptions.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr batch = BaseVector::create(schema, 0, pool());
+  VectorPtr previousValues;
+  auto expected = makeNullConstant(TypeKind::BIGINT, kBatchSize);
+  int32_t numBatches{0};
+  while (rowReader->next(kBatchSize, batch) > 0) {
+    auto values = BaseVector::loadedVectorShared(
+        batch->asUnchecked<RowVector>()->childAt(0));
+    ASSERT_EQ(values->size(), batch->size());
+    assertEqualVectors(expected, values);
+    if (previousValues) {
+      ASSERT_NE(previousValues.get(), values.get());
+      assertEqualVectors(expected, previousValues);
+    }
+    previousValues = std::move(values);
+    ++numBatches;
+  }
+  EXPECT_EQ(numBatches, kNumRows / kBatchSize);
+  EXPECT_EQ(updater.numUpdates, numBatches);
+}
+
 TEST_F(TestReader, readFlatMapsAsFlatMapsReusingBuffers) {
   constexpr vector_size_t kNumRows{400};
   constexpr int32_t kNumKeys{8};
