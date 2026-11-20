@@ -18,6 +18,7 @@
 #include <arrow/c/abi.h>
 #include <arrow/c/bridge.h>
 #include <arrow/testing/gtest_util.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/Nulls.h"
@@ -1198,30 +1199,41 @@ TEST_P(ArrowBridgeImportTest, inputsMarkedReleased) {
   }
 }
 
-struct TestReleaseCalled {
-  static bool schemaReleaseCalled;
-  static bool arrayReleaseCalled;
-  static void releaseSchema(ArrowSchema*) {
-    schemaReleaseCalled = true;
+// Counts the releases of a structure in the int its private data points to.
+// Like a producer's release callback, releases the children that are not yet
+// released first.
+void countSchemaRelease(ArrowSchema* schema) {
+  for (int64_t i = 0; i < schema->n_children; ++i) {
+    if (schema->children[i]->release != nullptr) {
+      schema->children[i]->release(schema->children[i]);
+    }
   }
-  static void releaseArray(ArrowArray*) {
-    arrayReleaseCalled = true;
+  ++*static_cast<int*>(schema->private_data);
+  schema->release = nullptr;
+}
+
+void countArrayRelease(ArrowArray* array) {
+  for (int64_t i = 0; i < array->n_children; ++i) {
+    if (array->children[i]->release != nullptr) {
+      array->children[i]->release(array->children[i]);
+    }
   }
-};
-bool TestReleaseCalled::schemaReleaseCalled = false;
-bool TestReleaseCalled::arrayReleaseCalled = false;
+  ++*static_cast<int*>(array->private_data);
+  array->release = nullptr;
+}
 
 TEST_P(ArrowBridgeImportTest, releaseCalled) {
   const int32_t values[] = {1, 2, 3, 4};
   const void* buffers[] = {nullptr, values};
+  int numSchemaReleases{0};
+  int numArrayReleases{0};
 
   ArrowSchema arrowSchema = makeArrowSchema("i");
+  arrowSchema.release = countSchemaRelease;
+  arrowSchema.private_data = &numSchemaReleases;
   ArrowArray arrowArray = makeArrowArray(buffers, 2, 4, 0);
-
-  TestReleaseCalled::schemaReleaseCalled = false;
-  TestReleaseCalled::arrayReleaseCalled = false;
-  arrowSchema.release = TestReleaseCalled::releaseSchema;
-  arrowArray.release = TestReleaseCalled::releaseArray;
+  arrowArray.release = countArrayRelease;
+  arrowArray.private_data = &numArrayReleases;
 
   // Create a Velox Vector from Arrow and then destruct it. The owner calls
   // the release callbacks then, and the viewer leaves them to the caller.
@@ -1230,11 +1242,101 @@ TEST_P(ArrowBridgeImportTest, releaseCalled) {
   }
 
   if (isViewer()) {
-    EXPECT_FALSE(TestReleaseCalled::schemaReleaseCalled);
-    EXPECT_FALSE(TestReleaseCalled::arrayReleaseCalled);
+    EXPECT_EQ(numSchemaReleases, 0);
+    EXPECT_EQ(numArrayReleases, 0);
   } else {
-    EXPECT_TRUE(TestReleaseCalled::schemaReleaseCalled);
-    EXPECT_TRUE(TestReleaseCalled::arrayReleaseCalled);
+    EXPECT_EQ(numSchemaReleases, 1);
+    EXPECT_EQ(numArrayReleases, 1);
+  }
+}
+
+TEST_P(ArrowBridgeImportTest, releaseAfterFailedImport) {
+  const int64_t values[] = {1, 2, 3, 4};
+  const void* buffers[] = {nullptr, values};
+  int numSchemaReleases{0};
+  int numArrayReleases{0};
+
+  // Velox has no type for Arrow durations.
+  ArrowSchema arrowSchema = makeArrowSchema("tDu");
+  arrowSchema.release = countSchemaRelease;
+  arrowSchema.private_data = &numSchemaReleases;
+  ArrowArray arrowArray = makeArrowArray(buffers, 2, 4, 0);
+  arrowArray.release = countArrayRelease;
+  arrowArray.private_data = &numArrayReleases;
+
+  VELOX_ASSERT_THROW(
+      importFromArrow(arrowSchema, arrowArray, pool()),
+      "Unable to convert 'tDu' ArrowSchema format type to Velox");
+
+  // The owner marks the inputs released and releases each structure once. The
+  // viewer leaves the release callbacks alone and releases nothing.
+  if (isViewer()) {
+    EXPECT_EQ(arrowSchema.release, countSchemaRelease);
+    EXPECT_EQ(arrowArray.release, countArrayRelease);
+    EXPECT_EQ(numSchemaReleases, 0);
+    EXPECT_EQ(numArrayReleases, 0);
+  } else {
+    EXPECT_EQ(arrowSchema.release, nullptr);
+    EXPECT_EQ(arrowArray.release, nullptr);
+    EXPECT_EQ(numSchemaReleases, 1);
+    EXPECT_EQ(numArrayReleases, 1);
+  }
+}
+
+TEST_P(ArrowBridgeImportTest, releaseAfterFailedChildImport) {
+  const int32_t values[] = {1, 2, 3, 4};
+  const void* childBuffers[] = {nullptr, values};
+  const void* rowBuffers[] = {nullptr};
+  // Releases of the row, then of its two children.
+  std::vector<int> numSchemaReleases(3, 0);
+  std::vector<int> numArrayReleases(3, 0);
+
+  ArrowSchema childSchemas[] = {makeArrowSchema("i"), makeArrowSchema("i")};
+  ArrowArray childArrays[] = {
+      makeArrowArray(childBuffers, 2, 4, 0),
+      makeArrowArray(childBuffers, 2, 4, 0),
+  };
+  // The second child misses its values buffer, so the import fails after
+  // importing the first child.
+  childArrays[1].n_buffers = 1;
+  const char* names[] = {"a", "b"};
+  ArrowSchema* schemaChildren[2];
+  ArrowArray* arrayChildren[2];
+  for (int i = 0; i < 2; ++i) {
+    childSchemas[i].name = names[i];
+    childSchemas[i].release = countSchemaRelease;
+    childSchemas[i].private_data = &numSchemaReleases[i + 1];
+    childArrays[i].release = countArrayRelease;
+    childArrays[i].private_data = &numArrayReleases[i + 1];
+    schemaChildren[i] = &childSchemas[i];
+    arrayChildren[i] = &childArrays[i];
+  }
+
+  ArrowSchema arrowSchema = makeArrowSchema("+s");
+  arrowSchema.n_children = 2;
+  arrowSchema.children = schemaChildren;
+  arrowSchema.release = countSchemaRelease;
+  arrowSchema.private_data = &numSchemaReleases[0];
+  ArrowArray arrowArray = makeArrowArray(rowBuffers, 1, 4, 0);
+  arrowArray.n_children = 2;
+  arrowArray.children = arrayChildren;
+  arrowArray.release = countArrayRelease;
+  arrowArray.private_data = &numArrayReleases[0];
+
+  VELOX_ASSERT_THROW(
+      importFromArrow(arrowSchema, arrowArray, pool()),
+      "Primitive types expect two buffers as input");
+
+  if (isViewer()) {
+    EXPECT_EQ(arrowSchema.release, countSchemaRelease);
+    EXPECT_EQ(arrowArray.release, countArrayRelease);
+    EXPECT_THAT(numSchemaReleases, testing::ElementsAre(0, 0, 0));
+    EXPECT_THAT(numArrayReleases, testing::ElementsAre(0, 0, 0));
+  } else {
+    EXPECT_EQ(arrowSchema.release, nullptr);
+    EXPECT_EQ(arrowArray.release, nullptr);
+    EXPECT_THAT(numSchemaReleases, testing::ElementsAre(1, 1, 1));
+    EXPECT_THAT(numArrayReleases, testing::ElementsAre(1, 1, 1));
   }
 }
 
