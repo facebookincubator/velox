@@ -240,6 +240,206 @@ TEST_F(FlatMapVectorTest, fail) {
       type, keys, mapValues, std::vector<BufferPtr>{nullptr, nullptr}));
 }
 
+TEST_F(FlatMapVectorTest, flattenVector) {
+  VectorPtr flatMap = makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{1: 10, 2: 20}",
+      "{3: 30}",
+  });
+  auto expected = flatMap;
+  auto values = flatMap->as<FlatMapVector>()->mapValuesAt(0);
+  flatMap->as<FlatMapVector>()->mapValuesAt(0) =
+      BaseVector::wrapInDictionary(nullptr, makeIndices({0, 1}), 2, values);
+
+  BaseVector::flattenVector(flatMap);
+  ASSERT_EQ(flatMap->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  ASSERT_EQ(flatMap.get(), expected.get());
+  ASSERT_EQ(
+      flatMap->as<FlatMapVector>()->mapValuesAt(0)->encoding(),
+      VectorEncoding::Simple::FLAT);
+  test::assertEqualVectors(
+      makeFlatMapVectorFromJson<int32_t, int64_t>({
+          "{1: 10, 2: 20}",
+          "{3: 30}",
+      }),
+      flatMap);
+}
+
+TEST_F(FlatMapVectorTest, flattenWrappedVector) {
+  auto flatMap = makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{1: 10, 2: 20}",
+      "{3: 30}",
+      "{1: 11}",
+  });
+
+  {
+    VectorPtr vector = BaseVector::wrapInDictionary(
+        makeNulls({false, true, false}), makeIndices({2, 0, 0}), 3, flatMap);
+    BaseVector::flattenVector(vector);
+    ASSERT_EQ(vector->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    for (const auto& values : vector->as<FlatMapVector>()->mapValues()) {
+      ASSERT_EQ(values->encoding(), VectorEncoding::Simple::FLAT);
+    }
+    test::assertEqualVectors(
+        makeMapVectorFromJson<int32_t, int64_t>({
+            "{1: 11}",
+            "null",
+            "{1: 10, 2: 20}",
+        }),
+        vector);
+  }
+
+  {
+    VectorPtr vector = BaseVector::wrapInConstant(3, 1, flatMap);
+    BaseVector::flattenVector(vector);
+    ASSERT_EQ(vector->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    for (const auto& values : vector->as<FlatMapVector>()->mapValues()) {
+      ASSERT_EQ(values->encoding(), VectorEncoding::Simple::FLAT);
+    }
+    test::assertEqualVectors(
+        makeMapVectorFromJson<int32_t, int64_t>({
+            "{3: 30}",
+            "{3: 30}",
+            "{3: 30}",
+        }),
+        vector);
+  }
+
+  {
+    std::vector<std::vector<std::pair<int32_t, std::optional<int64_t>>>> maps;
+    for (int32_t row = 0; row < 1'000; ++row) {
+      maps.push_back({{row, row * 10}});
+    }
+    VectorPtr vector = BaseVector::wrapInDictionary(
+        nullptr,
+        makeIndices({10, 500}),
+        2,
+        maker_.flatMapVector<int32_t, int64_t>(maps));
+    BaseVector::flattenVector(vector);
+    ASSERT_EQ(vector->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    ASSERT_EQ(vector->as<FlatMapVector>()->numDistinctKeys(), 2);
+    test::assertEqualVectors(
+        makeMapVectorFromJson<int32_t, int64_t>({
+            "{10: 100}",
+            "{500: 5000}",
+        }),
+        vector);
+  }
+}
+
+TEST_F(FlatMapVectorTest, flattenLazyVector) {
+  auto flatMap = makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{1: 10, 2: 20}",
+      "{3: 30}",
+      "{1: 11}",
+      "{4: 40}",
+  });
+  auto lazy = [&](const VectorPtr& loaded) {
+    return std::make_shared<LazyVector>(
+        pool(),
+        loaded->type(),
+        loaded->size(),
+        std::make_unique<SimpleVectorLoader>(
+            [loaded](RowSet /*rows*/) { return loaded; }));
+  };
+  auto assertFlatMap =
+      [](const VectorPtr& vector,
+         const std::vector<std::optional<std::map<int32_t, int64_t>>>& expected,
+         column_index_t numDistinctKeys) {
+        ASSERT_EQ(vector->encoding(), VectorEncoding::Simple::FLAT_MAP);
+        const auto* flatMap = vector->as<FlatMapVector>();
+        ASSERT_EQ(flatMap->size(), expected.size());
+        ASSERT_EQ(flatMap->numDistinctKeys(), numDistinctKeys);
+        for (const auto& values : flatMap->mapValues()) {
+          ASSERT_NE(values, nullptr);
+          ASSERT_EQ(values->encoding(), VectorEncoding::Simple::FLAT);
+        }
+        const auto* keys = flatMap->distinctKeys()->as<SimpleVector<int32_t>>();
+        for (vector_size_t row = 0; row < expected.size(); ++row) {
+          SCOPED_TRACE(fmt::format("row {}", row));
+          ASSERT_EQ(flatMap->isNullAt(row), !expected[row].has_value());
+          if (!expected[row].has_value()) {
+            continue;
+          }
+          std::map<int32_t, int64_t> actual;
+          for (column_index_t channel = 0; channel < numDistinctKeys;
+               ++channel) {
+            if (flatMap->isInMap(channel, row)) {
+              actual.emplace(
+                  keys->valueAt(channel),
+                  flatMap->mapValuesAt(channel)
+                      ->asFlatVector<int64_t>()
+                      ->valueAt(row));
+            }
+          }
+          ASSERT_EQ(actual, *expected[row]);
+        }
+      };
+
+  {
+    VectorPtr vector = lazy(flatMap);
+    BaseVector::flattenVector(vector);
+    assertFlatMap(
+        vector,
+        {
+            std::map<int32_t, int64_t>{{1, 10}, {2, 20}},
+            std::map<int32_t, int64_t>{{3, 30}},
+            std::map<int32_t, int64_t>{{1, 11}},
+            std::map<int32_t, int64_t>{{4, 40}},
+        },
+        4);
+  }
+
+  {
+    VectorPtr vector = lazy(
+        BaseVector::wrapInDictionary(
+            makeNulls({false, true, false}),
+            makeIndices({2, 1, 0}),
+            3,
+            flatMap));
+    BaseVector::flattenVector(vector);
+    assertFlatMap(
+        vector,
+        {
+            std::map<int32_t, int64_t>{{1, 11}},
+            std::nullopt,
+            std::map<int32_t, int64_t>{{1, 10}, {2, 20}},
+        },
+        2);
+  }
+
+  {
+    VectorPtr vector = BaseVector::wrapInDictionary(
+        nullptr, makeIndices({3, 2, 3}), 3, lazy(flatMap));
+    BaseVector::flattenVector(vector);
+    assertFlatMap(
+        vector,
+        {
+            std::map<int32_t, int64_t>{{4, 40}},
+            std::map<int32_t, int64_t>{{1, 11}},
+            std::map<int32_t, int64_t>{{4, 40}},
+        },
+        2);
+  }
+
+  {
+    for (column_index_t channel = 0; channel < flatMap->numDistinctKeys();
+         ++channel) {
+      flatMap->mapValuesAt(channel) = lazy(flatMap->mapValuesAt(channel));
+    }
+    VectorPtr vector = flatMap;
+    BaseVector::flattenVector(vector);
+    assertFlatMap(
+        vector,
+        {
+            std::map<int32_t, int64_t>{{1, 10}, {2, 20}},
+            std::map<int32_t, int64_t>{{3, 30}},
+            std::map<int32_t, int64_t>{{1, 11}},
+            std::map<int32_t, int64_t>{{4, 40}},
+        },
+        4);
+  }
+}
+
 TEST_F(FlatMapVectorTest, empty) {
   auto flatMapVector = std::make_shared<FlatMapVector>(
       pool_.get(),
@@ -488,6 +688,55 @@ TEST_F(FlatMapVectorTest, withNulls) {
   EXPECT_TRUE(flatMapVector->isInMap(*channel, 2));
 }
 
+TEST_F(FlatMapVectorTest, retainedSize) {
+  auto distinctKeys = maker_.flatVector<std::string>({
+      "first key longer than inline",
+      "second key longer than inline",
+  });
+  std::vector<VectorPtr> mapValues{
+      maker_.flatVector<std::string>({
+          "first value longer than inline",
+          "short",
+          "third value longer than inline",
+      }),
+      maker_.flatVector<std::string>({
+          "fourth value longer than inline",
+          "fifth value longer than inline",
+          "sixth value longer than inline",
+      }),
+  };
+  std::vector<BufferPtr> inMaps{
+      nullptr,
+      AlignedBuffer::allocate<bool>(3, pool_.get(), true),
+  };
+  auto nulls = AlignedBuffer::allocate<bool>(3, pool_.get(), bits::kNotNull);
+  auto flatMap = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(VARCHAR(), VARCHAR()),
+      nulls,
+      3,
+      distinctKeys,
+      mapValues,
+      inMaps);
+
+  uint64_t expectedStringBufferSize{0};
+  const auto expectedRetainedSize = nulls->capacity() +
+      distinctKeys->retainedSize(expectedStringBufferSize) +
+      mapValues[0]->retainedSize(expectedStringBufferSize) +
+      mapValues[1]->retainedSize(expectedStringBufferSize) +
+      inMaps[1]->capacity();
+  uint64_t stringBufferSize{0};
+  EXPECT_EQ(flatMap->retainedSize(stringBufferSize), expectedRetainedSize);
+  EXPECT_EQ(stringBufferSize, expectedStringBufferSize);
+  EXPECT_GT(stringBufferSize, 0);
+
+  EXPECT_EQ(
+      flatMap->estimateFlatSize(),
+      nulls->capacity() + distinctKeys->estimateFlatSize() +
+          mapValues[0]->estimateFlatSize() + mapValues[1]->estimateFlatSize() +
+          inMaps[1]->capacity());
+}
+
 TEST_F(FlatMapVectorTest, containsNullAtValues) {
   auto flatMapVector = maker_.flatMapVectorNullable<int64_t, int64_t>({
       {{{1L, 10L}, {2L, 20L}}},
@@ -645,6 +894,180 @@ TEST_F(FlatMapVectorTest, copyRangesClearsTargetNulls) {
       {{1, 11}},
   });
   assertEqualVectors(expected, target);
+}
+
+TEST_F(FlatMapVectorTest, copyRangesSkipsDeadKeys) {
+  auto source = makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{1: 10, 2: 20}",
+      "{3: 30}",
+      "{1: 12, 4: 40}",
+      "{5: 50}",
+  });
+  auto target = BaseVector::createEmptyLike(source.get(), 2, pool());
+
+  std::vector<BaseVector::CopyRange> ranges = {
+      BaseVector::CopyRange{1, 0, 2},
+  };
+  target->copyRanges(
+      source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+  ASSERT_EQ(target->as<FlatMapVector>()->numDistinctKeys(), 3);
+  test::assertEqualVectors(
+      makeMapVectorFromJson<int32_t, int64_t>({
+          "{3: 30}",
+          "{1: 12, 4: 40}",
+      }),
+      target);
+}
+
+TEST_F(FlatMapVectorTest, copyRangesClearsTargetKeysDeadInSource) {
+  std::vector<BaseVector::CopyRange> ranges = {
+      BaseVector::CopyRange{1, 0, 2},
+  };
+
+  {
+    auto target = makeFlatMapVectorFromJson<int32_t, int64_t>({
+        "{1: 100, 2: 200}",
+        "{2: 201}",
+        "{1: 102}",
+    });
+    auto source = makeFlatMapVectorFromJson<int32_t, int64_t>({
+        "{1: 10, 2: 20}",
+        "{2: 21}",
+        "{3: 30}",
+    });
+    target->copyRanges(
+        source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+    ASSERT_EQ(target->numDistinctKeys(), 3);
+    test::assertEqualVectors(
+        makeMapVectorFromJson<int32_t, int64_t>({
+            "{2: 21}",
+            "{3: 30}",
+            "{1: 102}",
+        }),
+        target);
+  }
+
+  {
+    auto target = makeFlatMapVectorFromJson<int32_t, int64_t>({
+        "{1: 100}",
+        "{1: 101}",
+        "{1: 102}",
+    });
+    auto source = std::make_shared<FlatMapVector>(
+        pool(),
+        MAP(INTEGER(), BIGINT()),
+        makeNulls({false, true, true}),
+        3,
+        makeFlatVector<int32_t>({1}),
+        std::vector<VectorPtr>{makeFlatVector<int64_t>({10, 11, 12})},
+        std::vector<BufferPtr>{nullptr});
+    target->copyRanges(
+        source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+    ASSERT_FALSE(target->isInMap(0, 0));
+    ASSERT_FALSE(target->isInMap(0, 1));
+    ASSERT_TRUE(target->isInMap(0, 2));
+    test::assertEqualVectors(
+        makeMapVectorFromJson<int32_t, int64_t>({
+            "null",
+            "null",
+            "{1: 102}",
+        }),
+        target);
+  }
+}
+
+TEST_F(FlatMapVectorTest, copyRangesWithNullInMapAndNullRows) {
+  auto inMap = AlignedBuffer::allocate<bool>(3, pool(), false);
+  bits::setBit(inMap->asMutable<uint64_t>(), 0);
+  auto source = std::make_shared<FlatMapVector>(
+      pool(),
+      MAP(INTEGER(), BIGINT()),
+      makeNulls({false, true, true}),
+      3,
+      makeFlatVector<int32_t>({1, 2}),
+      std::vector<VectorPtr>{
+          makeFlatVector<int64_t>({10, 11, 12}),
+          makeFlatVector<int64_t>({20, 21, 22}),
+      },
+      std::vector<BufferPtr>{nullptr, inMap});
+
+  {
+    auto target = BaseVector::createEmptyLike(source.get(), 2, pool());
+    std::vector<BaseVector::CopyRange> ranges = {
+        BaseVector::CopyRange{1, 0, 2},
+    };
+    target->copyRanges(
+        source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+    ASSERT_EQ(target->as<FlatMapVector>()->numDistinctKeys(), 0);
+    test::assertEqualVectors(
+        makeMapVectorFromJson<int32_t, int64_t>({"null", "null"}), target);
+  }
+
+  {
+    auto target = BaseVector::createEmptyLike(source.get(), 2, pool());
+    std::vector<BaseVector::CopyRange> ranges = {
+        BaseVector::CopyRange{1, 0, 1},
+        BaseVector::CopyRange{0, 1, 1},
+    };
+    target->copyRanges(
+        source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+    ASSERT_EQ(target->as<FlatMapVector>()->numDistinctKeys(), 2);
+    test::assertEqualVectors(
+        makeMapVectorFromJson<int32_t, int64_t>({
+            "null",
+            "{1: 10, 2: 20}",
+        }),
+        target);
+  }
+}
+
+TEST_F(FlatMapVectorTest, copyRangesWithNullValuesVector) {
+  auto source = std::make_shared<FlatMapVector>(
+      pool(),
+      MAP(INTEGER(), BIGINT()),
+      nullptr,
+      2,
+      makeFlatVector<int32_t>({1, 2}),
+      std::vector<VectorPtr>{makeFlatVector<int64_t>({10, 11}), nullptr},
+      std::vector<BufferPtr>{nullptr, nullptr});
+  std::vector<BaseVector::CopyRange> ranges = {
+      BaseVector::CopyRange{0, 0, 2},
+  };
+
+  {
+    auto target = BaseVector::createEmptyLike(source.get(), 2, pool());
+    target->copyRanges(
+        source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+    ASSERT_EQ(target->as<FlatMapVector>()->numDistinctKeys(), 1);
+    test::assertEqualVectors(
+        makeMapVectorFromJson<int32_t, int64_t>({
+            "{1: 10}",
+            "{1: 11}",
+        }),
+        target);
+  }
+
+  {
+    auto target = makeFlatMapVectorFromJson<int32_t, int64_t>({
+        "{2: 200}",
+        "{2: 201}",
+    });
+    target->copyRanges(
+        source.get(), folly::Range<const BaseVector::CopyRange*>{ranges});
+
+    test::assertEqualVectors(
+        makeMapVectorFromJson<int32_t, int64_t>({
+            "{1: 10}",
+            "{1: 11}",
+        }),
+        target);
+  }
 }
 
 TEST_F(FlatMapVectorTest, copyFlatMapIntoMapVector) {
