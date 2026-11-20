@@ -1587,9 +1587,8 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
     bounds.set(
         velox::serializer::IndexBound{key, true},
         velox::serializer::IndexBound{key, true});
-    return index->lookup(
-        IndexLookup::LookupRequest::rangeScan(
-            encoder->encodeIndexBounds(bounds)));
+    return index->lookup(*IndexLookup::LookupRequest::rangeScan(
+        encoder->encodeIndexBounds(bounds)));
   };
 
   {
@@ -1813,13 +1812,12 @@ TEST_F(ClusterIndexWriterTest, hierarchicalIndexTakesTheKeysOfItsCodec) {
   };
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    const auto result = index->lookup(
-        IndexLookup::LookupRequest::rangeScan({
-            velox::serializer::EncodedKeyBounds{
-                .lowerKey = testData.lowerKey,
-                .upperKey = testData.upperKey,
-            },
-        }));
+    const auto result = index->lookup(*IndexLookup::LookupRequest::rangeScan({
+        velox::serializer::EncodedKeyBounds{
+            .lowerKey = testData.lowerKey,
+            .upperKey = testData.upperKey,
+        },
+    }));
     ASSERT_EQ(result.size(), 1);
     ASSERT_EQ(result[0].size(), 1);
     EXPECT_EQ(result[0][0].startRow, testData.startRow);
@@ -2074,9 +2072,8 @@ TEST_F(ClusterIndexWriterTest, hierarchicalFactoryUsesItsKeyFormat) {
             bound(testData.lower), testData.lowerInclusive},
         velox::serializer::IndexBound{
             bound(testData.upper), testData.upperInclusive});
-    const auto result = index->lookup(
-        IndexLookup::LookupRequest::rangeScan(
-            encoder->encodeIndexBounds(bounds)));
+    const auto result = index->lookup(*IndexLookup::LookupRequest::rangeScan(
+        encoder->encodeIndexBounds(bounds)));
     ASSERT_EQ(result.size(), 1);
     ASSERT_EQ(result[0].size(), 1);
     EXPECT_EQ(result[0][0].startRow, testData.startRow);
@@ -2207,7 +2204,7 @@ TEST_P(ClusterIndexWriterChunkTest, maxRowsPerKeyChunk) {
       .lowerKey = std::string(clusterIndex->minKey()),
       .upperKey = std::nullopt};
   auto firstResult = clusterIndex->lookup(
-      IndexLookup::LookupRequest::rangeScan({firstBounds}));
+      *IndexLookup::LookupRequest::rangeScan({firstBounds}));
   ASSERT_EQ(firstResult.size(), 1);
   ASSERT_EQ(firstResult[0].size(), 1);
   EXPECT_EQ(firstResult[0][0].startRow, 0);
@@ -2215,8 +2212,8 @@ TEST_P(ClusterIndexWriterChunkTest, maxRowsPerKeyChunk) {
   velox::serializer::EncodedKeyBounds lastBounds{
       .lowerKey = std::string(clusterIndex->maxKey()),
       .upperKey = std::nullopt};
-  auto lastResult =
-      clusterIndex->lookup(IndexLookup::LookupRequest::rangeScan({lastBounds}));
+  auto lastResult = clusterIndex->lookup(
+      *IndexLookup::LookupRequest::rangeScan({lastBounds}));
   ASSERT_EQ(lastResult.size(), 1);
   ASSERT_EQ(lastResult[0].size(), 1);
   EXPECT_EQ(lastResult[0][0].startRow, kNumRows - 1);

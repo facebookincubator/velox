@@ -352,6 +352,53 @@ TEST_P(NimbleIndexProjectorTest, projectorLooksUpAKeyCursor) {
   EXPECT_EQ(projector->stats().numReadStripes, 0);
 }
 
+TEST_P(NimbleIndexProjectorTest, projectionUsesRequestValidator) {
+  // Requires an index type without exposing the constraint to the projector.
+  class IndexTypeRangeRequest final : public index::IndexLookup::LookupRequest {
+   public:
+    // Creates a range request that requires the selected index type.
+    IndexTypeRangeRequest(
+        velox::serializer::EncodedKeyBounds bounds,
+        index::IndexType indexType)
+        : LookupRequest{std::vector<velox::serializer::EncodedKeyBounds>{std::move(bounds)}, nullptr},
+          indexType_{indexType} {}
+
+    // Rejects indexes that do not meet the request's requirement.
+    void validateFor(const index::IndexLookup& index) const override {
+      NIMBLE_USER_CHECK_EQ(
+          index.type(),
+          indexType_,
+          "Lookup request requires a different index type");
+    }
+
+   private:
+    // Index type required by this request.
+    const index::IndexType indexType_;
+  };
+
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projector = createProjector(subfields);
+  const auto bounds = makeRangeLookup(rowType, {"key"}, 2, 10);
+
+  const IndexTypeRangeRequest incompatible{bounds, index::IndexType::Hash};
+  NIMBLE_ASSERT_USER_THROW(
+      projector->projectStreams(incompatible, {}),
+      "Lookup request requires a different index type");
+  NIMBLE_ASSERT_USER_THROW(
+      projectRows(*projector, incompatible, {}),
+      "Lookup request requires a different index type");
+  EXPECT_EQ(dataIoStats_->read().count(), 0);
+
+  const IndexTypeRangeRequest request{bounds, index::IndexType::Cluster};
+  const auto streams = projector->projectStreams(request, {});
+  ASSERT_EQ(streams.responses.size(), 1);
+  EXPECT_EQ(streams.responses[0].slices.size(), 3);
+  EXPECT_EQ(projectRows(*projector, request, {}).values->size(), 8);
+}
+
 TEST_P(NimbleIndexProjectorTest, collectsNoTimingsWhenDisabled) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
   const auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
@@ -362,9 +409,8 @@ TEST_P(NimbleIndexProjectorTest, collectsNoTimingsWhenDisabled) {
     auto projector = createProjector(projectedSubfields);
     projector->setTimingEnabled(timingEnabled);
     const auto bounds = makeRangeLookup(rowType, {"key"}, 2, 10);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
-    projector->projectStreams(request, {});
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+    projector->projectStreams(*request, {});
     projector->lookup(bounds);
     projector->loadStripeStreams(/*stripeOffset=*/0, /*numStripes=*/1);
 
@@ -517,9 +563,9 @@ TEST_P(NimbleIndexProjectorTest, basicColumnProjection) {
 
   // Point lookup for key=50 (row index 5).
   auto pointBounds = makePointLookup(rowType, {"key"}, 50);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {pointBounds};
-  auto result = projector->projectStreams(request, {});
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan({pointBounds});
+  auto result = projector->projectStreams(*request, {});
 
   ASSERT_EQ(result.responses.size(), 1);
   const auto& response = result.responses[0];
@@ -593,14 +639,13 @@ TEST_P(NimbleIndexProjectorTest, projectsFlatRowsWithEncodingViews) {
   subfields.emplace_back("nullable_value");
   auto projector = createProjector(subfields);
 
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({
       makePointLookup(rowType, {"key"}, 150),
       makePointLookup(rowType, {"key"}, 5),
       makePointLookup(rowType, {"key"}, 999),
       makePointLookup(rowType, {"key"}, 120),
-  };
-  auto result = projectRows(*projector, request, {});
+  });
+  auto result = projectRows(*projector, *request, {});
 
   ASSERT_NE(result.values, nullptr);
   auto expected = vectorMaker_->rowVector(
@@ -657,11 +702,10 @@ TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedEncodingViews) {
   subfields.emplace_back("nullable_value");
   auto projector = createProjector(subfields);
 
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({
       makeRangeLookup(rowType, {"key"}, 3, 8),
       makePointLookup(rowType, {"key"}, 150),
-  };
+  });
   const auto expected = vectorMaker_->rowVector(
       {"value", "nullable_value"},
       {vectorMaker_->flatVector<int32_t>({30, 40, 50, 60, 70, 1'500}),
@@ -678,7 +722,7 @@ TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedEncodingViews) {
   for (const bool cacheEncodingView : {false, true, false}) {
     SCOPED_TRACE(fmt::format("cacheEncodingView={}", cacheEncodingView));
     const auto result = projectRows(
-        *projector, request, {.cacheEncodingView = cacheEncodingView});
+        *projector, *request, {.cacheEncodingView = cacheEncodingView});
     ASSERT_NE(result.values, nullptr);
     velox::test::assertEqualVectors(expected, result.values);
   }
@@ -719,12 +763,11 @@ TEST_P(NimbleIndexProjectorTest, projectsFileWithStripeKeyStreams) {
   auto projector = createProjector(subfields);
 
   // A key in the second stripe, and a range across the first two stripes.
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({
       makePointLookup(rowType, {"key"}, 150),
       makeRangeLookup(rowType, {"key"}, 95, 105),
-  };
-  const auto rows = projectRows(*projector, request, {});
+  });
+  const auto rows = projectRows(*projector, *request, {});
   std::vector<int32_t> expectedValues{1'500};
   for (int key = 95; key < 105; ++key) {
     expectedValues.push_back(key * 10);
@@ -735,9 +778,9 @@ TEST_P(NimbleIndexProjectorTest, projectsFileWithStripeKeyStreams) {
       rows.values);
 
   // The serialized slices decode with the projected schema.
-  NimbleIndexProjector::Request pointRequest;
-  pointRequest.keyBounds = {makePointLookup(rowType, {"key"}, 150)};
-  const auto streams = projector->projectStreams(pointRequest, {});
+  const auto pointRequest = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 150)});
+  const auto streams = projector->projectStreams(*pointRequest, {});
   ASSERT_EQ(streams.responses.size(), 1);
   ASSERT_EQ(streams.responses[0].slices.size(), 1);
   const auto coalesced = coalesceChunkSlice(streams.responses[0].slices[0]);
@@ -892,7 +935,7 @@ class NimbleIndexProjectorCoLoadTest : public NimbleIndexProjectorTest {
   // first hands back none.
   void expectCoLoadMatchesKeyChunksFirst(
       const std::vector<Subfield>& subfields,
-      const NimbleIndexProjector::Request& request,
+      const index::IndexLookup::LookupRequest& request,
       NimbleIndexProjector::Options options) {
     resetReaders();
     // Loads the index partition with a co-load, which decodes the key chunks
@@ -925,7 +968,9 @@ class NimbleIndexProjectorCoLoadTest : public NimbleIndexProjectorTest {
       if (expectedResponse.size == 0 &&
           !expectedResponse.resumeKey.has_value() &&
           response.resumeKey.has_value()) {
-        EXPECT_EQ(response.resumeKey, request.keyBounds[i].lowerKey);
+        EXPECT_EQ(
+            response.resumeKey,
+            request.rangeBound(static_cast<uint32_t>(i)).lowerKey);
       } else {
         EXPECT_EQ(response.resumeKey, expectedResponse.resumeKey);
       }
@@ -958,16 +1003,16 @@ TEST_P(NimbleIndexProjectorCoLoadTest, coLoadsKeyStreamsWithStripeStreams) {
 
     // Loads the index partition, which covers all three stripes, so the
     // projection below reads no index metadata.
-    NimbleIndexProjector::Request firstStripeRequest;
-    firstStripeRequest.keyBounds = {makePointLookup(rowType, {"key"}, 10)};
-    projectRows(*projector, firstStripeRequest, options);
+    auto firstStripeRequest = index::IndexLookup::LookupRequest::rangeScan(
+        {makePointLookup(rowType, {"key"}, 10)});
+    projectRows(*projector, *firstStripeRequest, options);
 
     const auto indexBytesBefore =
         indexBytesRead(*tabletReaderCache_, sinkData_);
     const auto dataReadsBefore = dataIoStats_->read().count();
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {makePointLookup(rowType, {"key"}, 300)};
-    const auto rows = projectRows(*projector, request, options);
+    auto request = index::IndexLookup::LookupRequest::rangeScan(
+        {makePointLookup(rowType, {"key"}, 300)});
+    const auto rows = projectRows(*projector, *request, options);
     velox::test::assertEqualVectors(
         vectorMaker_->rowVector(
             {"value"}, {vectorMaker_->flatVector<int32_t>({3'000})}),
@@ -989,6 +1034,32 @@ TEST_P(NimbleIndexProjectorCoLoadTest, coLoadsKeyStreamsWithStripeStreams) {
   }
 }
 
+TEST_P(NimbleIndexProjectorCoLoadTest, rowWindowPrecedesStripePlanning) {
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  writeStripeKeyStreamData(
+      makeEvenKeyBatches(*vectorMaker_, /*numBatches=*/3),
+      /*enableStreamChecksums=*/false);
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makeRangeLookup(rowType, {"key"}, 0, 600)},
+      std::make_shared<index::IndexLookup::LookupOptions>(RowRange{200, 205}));
+  const auto expected = vectorMaker_->rowVector(
+      {"value"}, {vectorMaker_->flatVector<int32_t>(evenKeyValues(400, 410))});
+  for (const bool coLoadKeyStreams : {false, true}) {
+    auto projector = createProjector(subfields);
+    const auto rows = projectRows(
+        *projector,
+        *request,
+        {.maxRows = 1, .coLoadKeyStreams = coLoadKeyStreams});
+    velox::test::assertEqualVectors(expected, rows.values);
+    ASSERT_EQ(rows.responses.size(), 1);
+    EXPECT_EQ(rows.responses[0].size, 5);
+    EXPECT_EQ(projector->stats().numReadStripes, 1);
+    EXPECT_EQ(projector->stats().numKeyStreamCoLoads, 0);
+  }
+}
+
 // A co-load reads the stripes a key bound can fall in before it knows whether
 // the key is in the file. A key missing from inside a stripe costs that
 // stripe, also ahead of a stripe that the projection reads rows from. A key
@@ -1004,13 +1075,12 @@ TEST_P(NimbleIndexProjectorCoLoadTest, coLoadReadsStripesOfMissingKeys) {
 
   // Key 301 falls in the second stripe, which holds keys 200 to 398. Key 1'000
   // is past the last key, 598.
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
+  auto request = index::IndexLookup::LookupRequest::rangeScan({
       makePointLookup(rowType, {"key"}, 301),
       makePointLookup(rowType, {"key"}, 1'000),
-  };
+  });
   {
-    const auto result = projector->projectStreams(request, {});
+    const auto result = projector->projectStreams(*request, {});
     ASSERT_EQ(result.responses.size(), 2);
     EXPECT_THAT(result.responses[0].slices, ::testing::IsEmpty());
     EXPECT_THAT(result.responses[1].slices, ::testing::IsEmpty());
@@ -1020,9 +1090,10 @@ TEST_P(NimbleIndexProjectorCoLoadTest, coLoadReadsStripesOfMissingKeys) {
     EXPECT_EQ(projector->stats().numLoadedStripes, 1);
   }
 
-  request.keyBounds = {makePointLookup(rowType, {"key"}, 1'000)};
+  request = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 1'000)});
   {
-    const auto result = projector->projectStreams(request, {});
+    const auto result = projector->projectStreams(*request, {});
     ASSERT_EQ(result.responses.size(), 1);
     EXPECT_THAT(result.responses[0].slices, ::testing::IsEmpty());
     EXPECT_EQ(dataIoStats_->read().count(), 1);
@@ -1034,12 +1105,12 @@ TEST_P(NimbleIndexProjectorCoLoadTest, coLoadReadsStripesOfMissingKeys) {
   // Key 11 falls in the first stripe and is missing, and key 300 is in the
   // second stripe. The co-load reads both stripes, and the projection reads
   // the rows of key 300 from the second.
-  request.keyBounds = {
+  request = index::IndexLookup::LookupRequest::rangeScan({
       makePointLookup(rowType, {"key"}, 11),
       makePointLookup(rowType, {"key"}, 300),
-  };
+  });
   {
-    const auto rows = projectRows(*projector, request, {});
+    const auto rows = projectRows(*projector, *request, {});
     velox::test::assertEqualVectors(
         vectorMaker_->rowVector(
             {"value"}, {vectorMaker_->flatVector<int32_t>({3'000})}),
@@ -1074,13 +1145,12 @@ TEST_P(NimbleIndexProjectorCoLoadTest, coLoadResolvesRangesAcrossStripes) {
   keysFrom500.upperKey.reset();
   auto keysBefore10 = makeRangeLookup(rowType, {"key"}, 0, 10);
   keysBefore10.lowerKey.reset();
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
+  auto request = index::IndexLookup::LookupRequest::rangeScan({
       makeRangeLookup(rowType, {"key"}, 190, 410),
       makePointLookup(rowType, {"key"}, 300),
       keysFrom500,
       keysBefore10,
-  };
+  });
   std::vector<int32_t> expectedValues;
   for (const auto& values :
        {evenKeyValues(190, 410),
@@ -1093,7 +1163,7 @@ TEST_P(NimbleIndexProjectorCoLoadTest, coLoadResolvesRangesAcrossStripes) {
       {"value"}, {vectorMaker_->flatVector<int32_t>(expectedValues)});
 
   auto projector = createProjector(subfields);
-  const auto rows = projectRows(*projector, request, {});
+  const auto rows = projectRows(*projector, *request, {});
   velox::test::assertEqualVectors(expected, rows.values);
   std::vector<vector_size_t> responseSizes;
   responseSizes.reserve(rows.responses.size());
@@ -1120,9 +1190,9 @@ TEST_P(NimbleIndexProjectorCoLoadTest, coLoadReadsStripesBetweenBounds) {
   subfields.emplace_back("value");
   auto projector = createProjector(subfields);
 
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makeRangeLookup(rowType, {"key"}, 190, 410)};
-  const auto rows = projectRows(*projector, request, {});
+  auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makeRangeLookup(rowType, {"key"}, 190, 410)});
+  const auto rows = projectRows(*projector, *request, {});
   velox::test::assertEqualVectors(
       vectorMaker_->rowVector(
           {"value"},
@@ -1140,7 +1210,7 @@ TEST_P(NimbleIndexProjectorCoLoadTest, coLoadReadsStripesBetweenBounds) {
   // limits stop the projection, for its key stream.
   auto limitedProjector = createProjector(subfields);
   const auto limitedRows =
-      projectRows(*limitedProjector, request, {.maxRows = 1});
+      projectRows(*limitedProjector, *request, {.maxRows = 1});
   velox::test::assertEqualVectors(
       vectorMaker_->rowVector(
           {"value"},
@@ -1164,12 +1234,11 @@ TEST_P(NimbleIndexProjectorCoLoadTest, coLoadSkipsReversedRanges) {
 
   // The reversed range has its bounds in the third and the first stripe, and
   // key 300 is in the second.
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
+  auto request = index::IndexLookup::LookupRequest::rangeScan({
       makeRangeLookup(rowType, {"key"}, 410, 190),
       makePointLookup(rowType, {"key"}, 300),
-  };
-  const auto rows = projectRows(*projector, request, {});
+  });
+  const auto rows = projectRows(*projector, *request, {});
   velox::test::assertEqualVectors(
       vectorMaker_->rowVector(
           {"value"}, {vectorMaker_->flatVector<int32_t>({3'000})}),
@@ -1244,15 +1313,15 @@ TEST_P(NimbleIndexProjectorCoLoadTest, coLoadAppliesLimits) {
        "maxBytes 1, maxRowsPerRequest 10"},
   };
   for (const auto& testRequest : testRequests) {
-    NimbleIndexProjector::Request request;
-    request.keyBounds = testRequest.keyBounds;
+    auto request =
+        index::IndexLookup::LookupRequest::rangeScan(testRequest.keyBounds);
     for (const auto& testSetting : testSettings) {
       SCOPED_TRACE(
           fmt::format("{}, {}", testRequest.name, testSetting.debugString()));
       auto options = testSetting.options;
       options.coLoadKeyStreams = false;
       auto expectedProjector = createProjector(subfields);
-      const auto expected = projectRows(*expectedProjector, request, options);
+      const auto expected = projectRows(*expectedProjector, *request, options);
       // Without a co-load, the projection loads only the stripes that it reads
       // rows from.
       const auto expectedStats = expectedProjector->stats();
@@ -1263,7 +1332,7 @@ TEST_P(NimbleIndexProjectorCoLoadTest, coLoadAppliesLimits) {
       const auto indexBytesBefore =
           indexBytesRead(*tabletReaderCache_, sinkData_);
       const auto dataReadsBefore = dataIoStats_->read().count();
-      const auto rows = projectRows(*projector, request, options);
+      const auto rows = projectRows(*projector, *request, options);
       velox::test::assertEqualVectors(expected.values, rows.values);
       ASSERT_EQ(rows.responses.size(), expected.responses.size());
       for (size_t i = 0; i < rows.responses.size(); ++i) {
@@ -1333,8 +1402,8 @@ TEST_P(
         keysBeforeEndOfThirdStripe}},
   };
   for (const auto& testRequest : testRequests) {
-    NimbleIndexProjector::Request request;
-    request.keyBounds = testRequest.keyBounds;
+    auto request =
+        index::IndexLookup::LookupRequest::rangeScan(testRequest.keyBounds);
     uint64_t numRows{0};
     uint64_t maxRequestRows{0};
     uint64_t plannedBytes{0};
@@ -1343,7 +1412,7 @@ TEST_P(
     {
       auto projector = createProjector(subfields);
       const auto rows =
-          projectRows(*projector, request, {.coLoadKeyStreams = false});
+          projectRows(*projector, *request, {.coLoadKeyStreams = false});
       numRows = rows.values->size();
       for (const auto& response : rows.responses) {
         maxRequestRows = std::max<uint64_t>(maxRequestRows, response.size);
@@ -1369,7 +1438,7 @@ TEST_P(
     for (const auto& options : testOptions) {
       SCOPED_TRACE(
           fmt::format("{}, {}", testRequest.name, limitsString(options)));
-      expectCoLoadMatchesKeyChunksFirst(subfields, request, options);
+      expectCoLoadMatchesKeyChunksFirst(subfields, *request, options);
     }
   }
 }
@@ -1434,13 +1503,13 @@ TEST_P(
 
     for (int projection = 0; projection < kNumProjectionsPerFile;
          ++projection) {
-      NimbleIndexProjector::Request request;
+      std::vector<velox::serializer::EncodedKeyBounds> bounds;
       std::string keyBoundsString;
       const auto numKeyBounds = randomIn(1, 6);
       for (int64_t i = 0; i < numKeyBounds; ++i) {
         if (folly::Random::oneIn(3, random)) {
           const auto key = randomKey();
-          request.keyBounds.push_back(makePointLookup(rowType, {"key"}, key));
+          bounds.push_back(makePointLookup(rowType, {"key"}, key));
           keyBoundsString += fmt::format(" {}", key);
           continue;
         }
@@ -1466,9 +1535,11 @@ TEST_P(
             " [{}, {})",
             keyBounds.lowerKey.has_value() ? std::to_string(lowerKey) : "-inf",
             keyBounds.upperKey.has_value() ? std::to_string(upperKey) : "inf");
-        request.keyBounds.push_back(std::move(keyBounds));
+        bounds.push_back(std::move(keyBounds));
       }
 
+      auto request =
+          index::IndexLookup::LookupRequest::rangeScan(std::move(bounds));
       int64_t numRows{0};
       int64_t maxRequestRows{0};
       int64_t plannedBytes{0};
@@ -1477,7 +1548,7 @@ TEST_P(
       {
         auto projector = createProjector(subfields);
         const auto rows =
-            projectRows(*projector, request, {.coLoadKeyStreams = false});
+            projectRows(*projector, *request, {.coLoadKeyStreams = false});
         numRows = rows.values->size();
         for (const auto& response : rows.responses) {
           maxRequestRows = std::max<int64_t>(maxRequestRows, response.size);
@@ -1505,7 +1576,7 @@ TEST_P(
               projection,
               keyBoundsString,
               limitsString(options)));
-      expectCoLoadMatchesKeyChunksFirst(subfields, request, options);
+      expectCoLoadMatchesKeyChunksFirst(subfields, *request, options);
     }
   }
 }
@@ -1525,20 +1596,19 @@ TEST_P(NimbleIndexProjectorCoLoadTest, coLoadCountsRequestsOverTheirStripes) {
   // of the first stripe through the fourth stripe, which holds the upper bound.
   // The projection reaches 150 rows in the third stripe. Counting key 10 over
   // the second stripe as well would stop the co-load there.
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
+  auto request = index::IndexLookup::LookupRequest::rangeScan({
       makePointLookup(rowType, {"key"}, 10),
       makeRangeLookup(rowType, {"key"}, 190, 700),
-  };
+  });
   NimbleIndexProjector::Options options{.maxRows = 150};
   options.coLoadKeyStreams = false;
   auto expectedProjector = createProjector(subfields);
-  const auto expected = projectRows(*expectedProjector, request, options);
+  const auto expected = projectRows(*expectedProjector, *request, options);
   EXPECT_EQ(expectedProjector->stats().numReadStripes, 3);
 
   options.coLoadKeyStreams = true;
   auto projector = createProjector(subfields);
-  const auto rows = projectRows(*projector, request, options);
+  const auto rows = projectRows(*projector, *request, options);
   velox::test::assertEqualVectors(expected.values, rows.values);
   EXPECT_EQ(projector->stats().numKeyStreamCoLoads, 1);
   EXPECT_EQ(projector->stats().numReadStripes, 3);
@@ -1564,23 +1634,22 @@ TEST_P(NimbleIndexProjectorCoLoadTest, coLoadCountsRowsUpToRequestCap) {
   // request, the projection takes 5 and 55 rows of the first range from the
   // first two stripes, and 5 and 55 rows of the second from the second and the
   // third stripe, where it reaches 100 rows.
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
+  auto request = index::IndexLookup::LookupRequest::rangeScan({
       makeRangeLookup(rowType, {"key"}, 190, 900),
       makeRangeLookup(rowType, {"key"}, 390, 900),
-  };
+  });
   NimbleIndexProjector::Options options{
       .maxRows = 100,
       .maxRowsPerRequest = 60,
   };
   options.coLoadKeyStreams = false;
   auto expectedProjector = createProjector(subfields);
-  const auto expected = projectRows(*expectedProjector, request, options);
+  const auto expected = projectRows(*expectedProjector, *request, options);
   EXPECT_EQ(expectedProjector->stats().numReadStripes, 3);
 
   options.coLoadKeyStreams = true;
   auto projector = createProjector(subfields);
-  const auto rows = projectRows(*projector, request, options);
+  const auto rows = projectRows(*projector, *request, options);
   velox::test::assertEqualVectors(expected.values, rows.values);
   EXPECT_EQ(projector->stats().numKeyStreamCoLoads, 1);
   EXPECT_EQ(projector->stats().numReadStripes, 3);
@@ -1627,17 +1696,16 @@ TEST_P(
   // the projection takes the 5 rows of the first range from the first stripe,
   // skips the second stripe, and takes key 2398 from the third stripe and 4
   // rows from the fourth.
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
+  auto request = index::IndexLookup::LookupRequest::rangeScan({
       makeRangeLookup(rowType, {"key"}, 190, 2300),
       makeRangeLookup(rowType, {"key"}, 2398, 2700),
-  };
+  });
   NimbleIndexProjector::Options options{.maxRowsPerRequest = 5};
   options.coLoadKeyStreams = false;
   uint64_t plannedBytes{0};
   {
     auto projector = createProjector(subfields);
-    projectRows(*projector, request, options);
+    projectRows(*projector, *request, options);
     ASSERT_EQ(projector->stats().numReadStripes, 3);
     plannedBytes = projector->stats().numPlannedBytes;
   }
@@ -1646,25 +1714,24 @@ TEST_P(
   // projection plans, so counting them would stop the co-load at the second
   // stripe and leave out the fourth.
   {
-    NimbleIndexProjector::Request secondStripeRequest;
-    secondStripeRequest.keyBounds = {
-        makeRangeLookup(rowType, {"key"}, 200, 2200)};
+    auto secondStripeRequest = index::IndexLookup::LookupRequest::rangeScan(
+        {makeRangeLookup(rowType, {"key"}, 200, 2200)});
     NimbleIndexProjector::Options secondStripeOptions;
     secondStripeOptions.coLoadKeyStreams = false;
     auto projector = createProjector(subfields);
-    projectRows(*projector, secondStripeRequest, secondStripeOptions);
+    projectRows(*projector, *secondStripeRequest, secondStripeOptions);
     ASSERT_EQ(projector->stats().numReadStripes, 1);
     ASSERT_GE(projector->stats().numPlannedBytes, plannedBytes);
   }
 
   options.maxBytes = plannedBytes;
   auto expectedProjector = createProjector(subfields);
-  const auto expected = projectRows(*expectedProjector, request, options);
+  const auto expected = projectRows(*expectedProjector, *request, options);
   EXPECT_EQ(expectedProjector->stats().numReadStripes, 3);
 
   options.coLoadKeyStreams = true;
   auto projector = createProjector(subfields);
-  const auto rows = projectRows(*projector, request, options);
+  const auto rows = projectRows(*projector, *request, options);
   velox::test::assertEqualVectors(expected.values, rows.values);
   EXPECT_EQ(projector->stats().numKeyStreamCoLoads, 1);
   EXPECT_EQ(projector->stats().numReadStripes, 3);
@@ -1691,17 +1758,17 @@ TEST_P(NimbleIndexProjectorCoLoadTest, coLoadSkipsStripesPastRequestCap) {
   // counts no row of the first stripe, which holds the lower bound, and 1 row
   // of the second, so it reads the third stripe for its key stream and skips
   // the fourth and the fifth.
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makeRangeLookup(rowType, {"key"}, 190, 900)};
+  auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makeRangeLookup(rowType, {"key"}, 190, 900)});
   NimbleIndexProjector::Options options{.maxRowsPerRequest = 1};
   options.coLoadKeyStreams = false;
   auto expectedProjector = createProjector(subfields);
-  const auto expected = projectRows(*expectedProjector, request, options);
+  const auto expected = projectRows(*expectedProjector, *request, options);
   EXPECT_EQ(expectedProjector->stats().numReadStripes, 1);
 
   options.coLoadKeyStreams = true;
   auto projector = createProjector(subfields);
-  const auto rows = projectRows(*projector, request, options);
+  const auto rows = projectRows(*projector, *request, options);
   velox::test::assertEqualVectors(expected.values, rows.values);
   EXPECT_EQ(projector->stats().numKeyStreamCoLoads, 1);
   EXPECT_EQ(projector->stats().numReadStripes, 1);
@@ -1732,18 +1799,17 @@ TEST_P(
   // reads the third, and skips the fourth, which only the range covers.
   auto keysFrom0 = makeRangeLookup(rowType, {"key"}, 0, 800);
   keysFrom0.upperKey.reset();
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
+  auto request = index::IndexLookup::LookupRequest::rangeScan({
       keysFrom0,
       makePointLookup(rowType, {"key"}, 450),
-  };
+  });
   NimbleIndexProjector::Options options{
       .maxRows = 11,
       .maxRowsPerRequest = 10,
       .needResumeKey = true,
   };
   auto projector = createProjector(subfields);
-  const auto rows = projectRows(*projector, request, options);
+  const auto rows = projectRows(*projector, *request, options);
   EXPECT_EQ(projector->stats().numReadStripes, 2);
   EXPECT_EQ(projector->stats().numLoadedStripes, 3);
   ASSERT_EQ(rows.responses.size(), 2);
@@ -1757,7 +1823,7 @@ TEST_P(
   // A projection that reads the key chunks first returns the same rows.
   options.coLoadKeyStreams = false;
   auto expectedProjector = createProjector(subfields);
-  const auto expected = projectRows(*expectedProjector, request, options);
+  const auto expected = projectRows(*expectedProjector, *request, options);
   velox::test::assertEqualVectors(expected.values, rows.values);
 }
 
@@ -1784,16 +1850,15 @@ TEST_P(
   // reaches the limit. The first range resumes at key 600, the first key of
   // the fourth stripe, and the second, which the projection does not reach, at
   // its lower key.
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
+  auto request = index::IndexLookup::LookupRequest::rangeScan({
       makeRangeLookup(rowType, {"key"}, 198, 990),
       makeRangeLookup(rowType, {"key"}, 810, 990),
-  };
+  });
 
   // Loads the index partition with a co-load, which decodes the key chunks
   // that it reads in place and keeps none, so that the co-load below reads no
   // index metadata and finds no key chunk decoded.
-  projectRows(*createProjector(subfields), request, {});
+  projectRows(*createProjector(subfields), *request, {});
 
   NimbleIndexProjector::Options options{
       .maxRows = 102,
@@ -1802,7 +1867,7 @@ TEST_P(
   auto projector = createProjector(subfields);
   const auto indexBytesBefore = indexBytesRead(*tabletReaderCache_, sinkData_);
   const auto dataReadsBefore = dataIoStats_->read().count();
-  const auto rows = projectRows(*projector, request, options);
+  const auto rows = projectRows(*projector, *request, options);
   EXPECT_EQ(dataIoStats_->read().count() - dataReadsBefore, 1);
   EXPECT_EQ(indexBytesRead(*tabletReaderCache_, sinkData_), indexBytesBefore);
   EXPECT_EQ(projector->stats().numKeyStreamCoLoads, 1);
@@ -1813,13 +1878,13 @@ TEST_P(
   EXPECT_EQ(
       rows.responses[0].resumeKey,
       makePointLookup(rowType, {"key"}, 600).lowerKey);
-  EXPECT_EQ(rows.responses[1].resumeKey, request.keyBounds[1].lowerKey);
+  EXPECT_EQ(rows.responses[1].resumeKey, request->rangeBound(1).lowerKey);
 
   // A projection that reads the key chunks first returns the same rows and
   // resume keys.
   options.coLoadKeyStreams = false;
   auto expectedProjector = createProjector(subfields);
-  const auto expected = projectRows(*expectedProjector, request, options);
+  const auto expected = projectRows(*expectedProjector, *request, options);
   EXPECT_EQ(expectedProjector->stats().numReadStripes, 3);
   velox::test::assertEqualVectors(expected.values, rows.values);
   ASSERT_EQ(expected.responses.size(), 2);
@@ -1849,17 +1914,16 @@ TEST_P(
   // fifth stripe, and key 811 falls in the fifth stripe without being in the
   // file. Under maxRows 102, the projection stops at the third stripe, and the
   // range resumes at key 600, the first key of the fourth stripe.
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
+  auto request = index::IndexLookup::LookupRequest::rangeScan({
       makeRangeLookup(rowType, {"key"}, 198, 990),
       makePointLookup(rowType, {"key"}, 811),
-  };
+  });
   for (const bool coLoadKeyStreams : {false, true}) {
     SCOPED_TRACE(fmt::format("coLoadKeyStreams={}", coLoadKeyStreams));
     auto projector = createProjector(subfields);
     const auto rows = projectRows(
         *projector,
-        request,
+        *request,
         {.maxRows = 102,
          .needResumeKey = true,
          .coLoadKeyStreams = coLoadKeyStreams});
@@ -1869,17 +1933,17 @@ TEST_P(
         makePointLookup(rowType, {"key"}, 600).lowerKey);
     EXPECT_EQ(rows.responses[1].size, 0);
     if (coLoadKeyStreams) {
-      EXPECT_EQ(rows.responses[1].resumeKey, request.keyBounds[1].lowerKey);
+      EXPECT_EQ(rows.responses[1].resumeKey, request->rangeBound(1).lowerKey);
     } else {
       EXPECT_FALSE(rows.responses[1].resumeKey.has_value());
     }
   }
 
-  NimbleIndexProjector::Request resumedRequest;
-  resumedRequest.keyBounds = {makePointLookup(rowType, {"key"}, 811)};
+  auto resumedRequest = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 811)});
   auto projector = createProjector(subfields);
   const auto rows =
-      projectRows(*projector, resumedRequest, {.needResumeKey = true});
+      projectRows(*projector, *resumedRequest, {.needResumeKey = true});
   ASSERT_EQ(rows.responses.size(), 1);
   EXPECT_EQ(rows.responses[0].size, 0);
   EXPECT_FALSE(rows.responses[0].resumeKey.has_value());
@@ -1905,13 +1969,12 @@ TEST_P(NimbleIndexProjectorCoLoadTest, coLoadLooksUpRangeWithoutLowerKey) {
   // key of the third stripe.
   auto keysBefore990 = makeRangeLookup(rowType, {"key"}, 0, 990);
   keysBefore990.lowerKey.reset();
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {keysBefore990};
+  auto request = index::IndexLookup::LookupRequest::rangeScan({keysBefore990});
 
   // Loads the index partition with a co-load, which decodes the key chunks
   // that it reads in place and keeps none, so that the co-load below reads no
   // index metadata and finds no key chunk decoded.
-  projectRows(*createProjector(subfields), request, {});
+  projectRows(*createProjector(subfields), *request, {});
 
   NimbleIndexProjector::Options options{
       .maxRows = 102,
@@ -1919,7 +1982,7 @@ TEST_P(NimbleIndexProjectorCoLoadTest, coLoadLooksUpRangeWithoutLowerKey) {
   };
   auto projector = createProjector(subfields);
   const auto indexBytesBefore = indexBytesRead(*tabletReaderCache_, sinkData_);
-  const auto rows = projectRows(*projector, request, options);
+  const auto rows = projectRows(*projector, *request, options);
   EXPECT_EQ(indexBytesRead(*tabletReaderCache_, sinkData_), indexBytesBefore);
   EXPECT_EQ(projector->stats().numReadStripes, 2);
   EXPECT_EQ(projector->stats().numLoadedStripes, 4);
@@ -1937,7 +2000,7 @@ TEST_P(NimbleIndexProjectorCoLoadTest, coLoadLooksUpRangeWithoutLowerKey) {
   // resume key.
   options.coLoadKeyStreams = false;
   auto expectedProjector = createProjector(subfields);
-  const auto expected = projectRows(*expectedProjector, request, options);
+  const auto expected = projectRows(*expectedProjector, *request, options);
   velox::test::assertEqualVectors(expected.values, rows.values);
   ASSERT_EQ(expected.responses.size(), 1);
   EXPECT_EQ(expected.responses[0].resumeKey, rows.responses[0].resumeKey);
@@ -1969,17 +2032,16 @@ TEST_P(
   // stripe. The co-load counts no row of the first stripe and 4 of the second,
   // so it reads the third stripe for its key stream and nothing of the fourth.
   const auto rowType = singleFeatureRowType();
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makeRangeLookup(
+  auto request = index::IndexLookup::LookupRequest::rangeScan({makeRangeLookup(
       rowType,
       {"key"},
       /*lowerKey=*/0,
-      /*upperKey=*/3 * kFeatureRowsPerBatch + 2)};
+      /*upperKey=*/3 * kFeatureRowsPerBatch + 2)});
 
   // Loads the index partition with a co-load, which decodes the key chunks
   // that it reads in place and keeps none, so that the co-load below reads no
   // index metadata and finds no key chunk decoded.
-  createProjector(subfields)->projectStreams(request, {});
+  createProjector(subfields)->projectStreams(*request, {});
 
   NimbleIndexProjector::Options options{
       .maxRowsPerRequest = kFeatureRowsPerBatch,
@@ -1987,7 +2049,7 @@ TEST_P(
   };
   auto projector = createProjector(subfields);
   const auto indexBytesBefore = indexBytesRead(*tabletReaderCache_, sinkData_);
-  const auto result = projector->projectStreams(request, options);
+  const auto result = projector->projectStreams(*request, options);
   EXPECT_EQ(indexBytesRead(*tabletReaderCache_, sinkData_), indexBytesBefore);
   EXPECT_EQ(projector->stats().numKeyStreamCoLoads, 1);
   EXPECT_EQ(projector->stats().numReadStripes, 1);
@@ -2006,7 +2068,7 @@ TEST_P(
   // resume key.
   options.coLoadKeyStreams = false;
   auto expectedProjector = createProjector(subfields);
-  const auto expected = expectedProjector->projectStreams(request, options);
+  const auto expected = expectedProjector->projectStreams(*request, options);
   ASSERT_EQ(expected.responses.size(), 1);
   ASSERT_EQ(expected.responses[0].slices.size(), 1);
   EXPECT_EQ(
@@ -2023,11 +2085,11 @@ TEST_P(NimbleIndexProjectorTest, coLoadNeedsStripeKeyStreams) {
   writeData(makeEvenKeyBatches(*vectorMaker_, /*numBatches=*/3), {"key"});
   std::vector<Subfield> subfields;
   subfields.emplace_back("value");
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makeRangeLookup(rowType, {"key"}, 190, 210)};
+  auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makeRangeLookup(rowType, {"key"}, 190, 210)});
 
   auto projector = createProjector(subfields);
-  const auto rows = projectRows(*projector, request, {});
+  const auto rows = projectRows(*projector, *request, {});
   velox::test::assertEqualVectors(
       vectorMaker_->rowVector(
           {"value"},
@@ -2061,18 +2123,18 @@ TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedData) {
       /*setMetadataIoStats=*/true,
       /*setIndexIoStats=*/true,
       /*cacheData=*/true);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makeRangeLookup(rowType, {"key"}, 10, 20)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makeRangeLookup(rowType, {"key"}, 10, 20)});
   const auto expected = vectorMaker_->rowVector(
       {"value"}, {vectorMaker_->flatVector<int32_t>(10, [](auto row) {
         return (row + 10) * 10;
       })});
 
-  const auto first = projectRows(*projector, request, {});
+  const auto first = projectRows(*projector, *request, {});
   velox::test::assertEqualVectors(expected, first.values);
   const auto ramHitsAfterFirstRead = dataIoStats_->ramHit().count();
 
-  const auto second = projectRows(*projector, request, {});
+  const auto second = projectRows(*projector, *request, {});
   velox::test::assertEqualVectors(expected, second.values);
   EXPECT_GT(dataIoStats_->ramHit().count(), ramHitsAfterFirstRead);
 }
@@ -2101,8 +2163,8 @@ TEST_P(NimbleIndexProjectorTest, blockCacheParameterControlsCaching) {
       {"value"}, {vectorMaker_->flatVector<int32_t>(10, [](auto row) {
         return (row + 10) * 10;
       })});
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makeRangeLookup(rowType, {"key"}, 10, 20)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makeRangeLookup(rowType, {"key"}, 10, 20)});
 
   // Shared reader options with IO stats and no cacheData flag; the projector's
   // behavior is driven by the BlockCache argument alone.
@@ -2127,9 +2189,9 @@ TEST_P(NimbleIndexProjectorTest, blockCacheParameterControlsCaching) {
         subfields,
         /*blockCache=*/nullptr,
         readerOptions);
-    const auto first = projectRows(*projector, request, {});
+    const auto first = projectRows(*projector, *request, {});
     velox::test::assertEqualVectors(expected, first.values);
-    const auto second = projectRows(*projector, request, {});
+    const auto second = projectRows(*projector, *request, {});
     velox::test::assertEqualVectors(expected, second.values);
     EXPECT_EQ(dataIoStats_->ramHit().count(), 0);
   }
@@ -2139,10 +2201,10 @@ TEST_P(NimbleIndexProjectorTest, blockCacheParameterControlsCaching) {
     auto* blockCache = getBlockCache(velox::checkedNotNull(dataCache()));
     auto projector = NimbleIndexProjector::create(
         *tabletReaderCache_, fileHandle, subfields, blockCache, readerOptions);
-    const auto first = projectRows(*projector, request, {});
+    const auto first = projectRows(*projector, *request, {});
     velox::test::assertEqualVectors(expected, first.values);
     const auto ramHitsAfterFirstRead = dataIoStats_->ramHit().count();
-    const auto second = projectRows(*projector, request, {});
+    const auto second = projectRows(*projector, *request, {});
     velox::test::assertEqualVectors(expected, second.values);
     EXPECT_GT(dataIoStats_->ramHit().count(), ramHitsAfterFirstRead);
   }
@@ -2210,8 +2272,8 @@ TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedDataAndStreamChecksums) {
         /*cacheData=*/true,
         /*verifyStreamChecksums=*/true);
   };
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makeRangeLookup(rowType, {"key"}, 10, 20)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makeRangeLookup(rowType, {"key"}, 10, 20)});
   const auto expected = vectorMaker_->rowVector(
       {"key", "value"},
       {vectorMaker_->flatVector<int64_t>(10, [](auto row) { return row + 10; }),
@@ -2219,10 +2281,10 @@ TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedDataAndStreamChecksums) {
            10, [](auto row) { return (row + 10) * 10; })});
 
   auto projector = createCachedVerifyingProjector();
-  const auto first = projectRows(*projector, request, {});
+  const auto first = projectRows(*projector, *request, {});
   velox::test::assertEqualVectors(expected, first.values);
   const auto ramHitsAfterFirstRead = dataIoStats_->ramHit().count();
-  const auto second = projectRows(*projector, request, {});
+  const auto second = projectRows(*projector, *request, {});
   velox::test::assertEqualVectors(expected, second.values);
   EXPECT_GT(dataIoStats_->ramHit().count(), ramHitsAfterFirstRead);
 
@@ -2233,7 +2295,7 @@ TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedDataAndStreamChecksums) {
   for (int attempt = 0; attempt < 2; ++attempt) {
     SCOPED_TRACE(fmt::format("attempt={}", attempt));
     NIMBLE_ASSERT_THROW(
-        projectRows(*corruptedProjector, request, {}),
+        projectRows(*corruptedProjector, *request, {}),
         "Stream checksum mismatch");
   }
 }
@@ -2259,13 +2321,12 @@ TEST_P(NimbleIndexProjectorTest, projectsNestedRowsWithFieldReader) {
   std::vector<Subfield> subfields;
   subfields.emplace_back("profile");
   auto projector = createProjector(subfields);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({
       makePointLookup(rowType, {"key"}, 7),
       makePointLookup(rowType, {"key"}, 2),
-  };
+  });
 
-  auto result = projectRows(*projector, request, {});
+  auto result = projectRows(*projector, *request, {});
 
   auto expectedProfiles = vectorMaker_->rowVector(
       {"age", "score"},
@@ -2298,11 +2359,10 @@ TEST_P(NimbleIndexProjectorTest, projectsStructSelectedWithItsField) {
   subfields.emplace_back("profile.score");
   subfields.emplace_back("profile");
   auto projector = createProjector(subfields);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({
       makePointLookup(rowType, {"key"}, 7),
       makePointLookup(rowType, {"key"}, 2),
-  };
+  });
   auto expected = vectorMaker_->rowVector(
       {"profile"},
       {vectorMaker_->rowVector(
@@ -2311,9 +2371,9 @@ TEST_P(NimbleIndexProjectorTest, projectsStructSelectedWithItsField) {
            vectorMaker_->flatVector<int64_t>({7'000, 2'000})})});
 
   velox::test::assertEqualVectors(
-      expected, projectRows(*projector, request, {}).values);
+      expected, projectRows(*projector, *request, {}).values);
 
-  const auto streams = projector->projectStreams(request, {});
+  const auto streams = projector->projectStreams(*request, {});
   ASSERT_EQ(streams.responses.size(), 2);
   for (vector_size_t i = 0; i < 2; ++i) {
     SCOPED_TRACE(fmt::format("request {}", i));
@@ -2365,9 +2425,9 @@ TEST_P(NimbleIndexProjectorTest, resultSlicesAreManaged) {
 
   // Range scan over all keys hits every stripe.
   auto rangeBounds = makeRangeLookup(rowType, {"key"}, 0, numRows * 10);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {rangeBounds};
-  auto result = projector->projectStreams(request, {});
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan({rangeBounds});
+  auto result = projector->projectStreams(*request, {});
 
   ASSERT_EQ(result.responses.size(), 1);
   const auto& response = result.responses[0];
@@ -2534,14 +2594,14 @@ class NimbleIndexProjectorMetadataLoadTest : public NimbleIndexProjectorTest {
 TEST_P(NimbleIndexProjectorMetadataLoadTest, stripesOfAGroupShareOneLoad) {
   ASSERT_NO_FATAL_FAILURE(
       writeGroupedStripes(/*numStripes=*/6, /*stripesPerGroup=*/3));
-  NimbleIndexProjector::Request request;
   {
-    request.keyBounds = {stripeKeys(/*firstStripe=*/0, /*numStripes=*/3)};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan(
+        {stripeKeys(/*firstStripe=*/0, /*numStripes=*/3)});
     auto projector = createValueProjector();
     NimbleIndexProjector::SerializedResult result;
     EXPECT_EQ(
         countMetadataReads(
-            [&] { result = projector->projectStreams(request, {}); }),
+            [&] { result = projector->projectStreams(*request, {}); }),
         std::make_pair(uint64_t{1}, stripeGroupBytes({0})));
     ASSERT_EQ(result.responses.size(), 1);
     ASSERT_EQ(result.responses[0].slices.size(), 3);
@@ -2564,16 +2624,17 @@ TEST_P(NimbleIndexProjectorMetadataLoadTest, stripesOfAGroupShareOneLoad) {
     // so the next projection loads it again.
     EXPECT_EQ(
         countMetadataReads([&] {
-          projector->projectStreams(request, {});
+          projector->projectStreams(*request, {});
         }).first,
         GetParam().pinMetadata ? 0 : 1);
   }
   {
     resetReaders();
-    request.keyBounds = {stripeKeys(/*firstStripe=*/0, /*numStripes=*/6)};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan(
+        {stripeKeys(/*firstStripe=*/0, /*numStripes=*/6)});
     auto projector = createValueProjector();
     EXPECT_EQ(
-        countMetadataReads([&] { projector->projectStreams(request, {}); }),
+        countMetadataReads([&] { projector->projectStreams(*request, {}); }),
         std::make_pair(uint64_t{2}, stripeGroupBytes({0, 1})));
   }
 }
@@ -2581,8 +2642,8 @@ TEST_P(NimbleIndexProjectorMetadataLoadTest, stripesOfAGroupShareOneLoad) {
 TEST_P(NimbleIndexProjectorMetadataLoadTest, windowLoadsGroupsWithinBudget) {
   ASSERT_NO_FATAL_FAILURE(
       writeGroupedStripes(/*numStripes=*/5, /*stripesPerGroup=*/1));
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {stripeKeys(/*firstStripe=*/0, /*numStripes=*/5)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {stripeKeys(/*firstStripe=*/0, /*numStripes=*/5)});
   const auto allGroupBytes = stripeGroupBytes({0, 1, 2, 3, 4});
 
   // The groups are equal in size, so one byte less than the size of two fits
@@ -2608,7 +2669,7 @@ TEST_P(NimbleIndexProjectorMetadataLoadTest, windowLoadsGroupsWithinBudget) {
     EXPECT_EQ(
         countMetadataReads([&] {
           result = projector->projectStreams(
-              request, {.maxStripeGroupMetadataBytesPerLoad = budget});
+              *request, {.maxStripeGroupMetadataBytesPerLoad = budget});
         }),
         std::make_pair(expectedLoads, allGroupBytes));
     ASSERT_EQ(result.responses.size(), 1);
@@ -2630,8 +2691,8 @@ TEST_P(NimbleIndexProjectorMetadataLoadTest, windowEndsAtFirstGroupOverBudget) {
   const auto budget = groupSize(1) + groupSize(2);
   ASSERT_GT(groupSize(0) + groupSize(1), budget);
   ASSERT_LE(groupSize(0) + groupSize(2), budget);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {stripeKeys(/*firstStripe=*/0, /*numStripes=*/5)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {stripeKeys(/*firstStripe=*/0, /*numStripes=*/5)});
 
   // The loads are {0} and {1, 2}. A first load of {0, 2} would release group 2
   // when planning reaches group 1, so unpinned metadata would read it twice.
@@ -2640,7 +2701,7 @@ TEST_P(NimbleIndexProjectorMetadataLoadTest, windowEndsAtFirstGroupOverBudget) {
   EXPECT_EQ(
       countMetadataReads([&] {
         result = projector->projectStreams(
-            request, {.maxStripeGroupMetadataBytesPerLoad = budget});
+            *request, {.maxStripeGroupMetadataBytesPerLoad = budget});
       }),
       std::make_pair(uint64_t{2}, stripeGroupBytes({0, 1, 2})));
   ASSERT_EQ(result.responses.size(), 1);
@@ -2650,8 +2711,8 @@ TEST_P(NimbleIndexProjectorMetadataLoadTest, windowEndsAtFirstGroupOverBudget) {
 TEST_P(NimbleIndexProjectorMetadataLoadTest, cachedGroupsCountTowardBudget) {
   ASSERT_NO_FATAL_FAILURE(
       writeGroupedStripes(/*numStripes=*/5, /*stripesPerGroup=*/1));
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {stripeKeys(/*firstStripe=*/0, /*numStripes=*/5)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {stripeKeys(/*firstStripe=*/0, /*numStripes=*/5)});
   auto projector = createValueProjector();
 
   // Holding stripe 1 keeps group 1 cached through the projection.
@@ -2664,7 +2725,7 @@ TEST_P(NimbleIndexProjectorMetadataLoadTest, cachedGroupsCountTowardBudget) {
   EXPECT_EQ(
       countMetadataReads([&] {
         result = projector->projectStreams(
-            request, {.maxStripeGroupMetadataBytesPerLoad = budget});
+            *request, {.maxStripeGroupMetadataBytesPerLoad = budget});
       }),
       std::make_pair(uint64_t{3}, stripeGroupBytes({0, 2, 3, 4})));
   ASSERT_EQ(result.responses.size(), 1);
@@ -2676,8 +2737,8 @@ TEST_P(
     windowReadsAheadOfRowAndByteLimits) {
   ASSERT_NO_FATAL_FAILURE(
       writeGroupedStripes(/*numStripes=*/6, /*stripesPerGroup=*/1));
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {stripeKeys(/*firstStripe=*/0, /*numStripes=*/6)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {stripeKeys(/*firstStripe=*/0, /*numStripes=*/6)});
 
   // Each limit leaves stripe 0 the only stripe planning locates, but a window
   // also reads the next groups that hold resolved stripes.
@@ -2693,7 +2754,7 @@ TEST_P(
         NimbleIndexProjector::SerializedResult result;
         EXPECT_EQ(
             countMetadataReads(
-                [&] { result = projector->projectStreams(request, options); }),
+                [&] { result = projector->projectStreams(*request, options); }),
             std::make_pair(uint64_t{1}, stripeGroupBytes(expectedGroups)));
         ASSERT_EQ(result.responses.size(), 1);
         EXPECT_EQ(result.responses[0].slices.size(), 1);
@@ -2735,16 +2796,14 @@ TEST_P(
     windowSkipsGroupsWithoutResolvedStripes) {
   ASSERT_NO_FATAL_FAILURE(
       writeGroupedStripes(/*numStripes=*/8, /*stripesPerGroup=*/2));
-  NimbleIndexProjector::Request request;
-
   // The requests come out of key order. Planning still visits stripes 0, 1, 6
   // and 7 in ascending order, which a load of several groups requires. They
   // live in groups 0 and 3, so a budget that fits two groups loads both at
   // once.
-  request.keyBounds = {
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({
       stripeKeys(/*firstStripe=*/6, /*numStripes=*/2),
       stripeKeys(/*firstStripe=*/0, /*numStripes=*/2),
-  };
+  });
   for (const auto& [budget, expectedLoads] :
        std::vector<std::pair<uint64_t, uint64_t>>{
            {0, 2},
@@ -2757,7 +2816,7 @@ TEST_P(
     EXPECT_EQ(
         countMetadataReads([&] {
           result = projector->projectStreams(
-              request, {.maxStripeGroupMetadataBytesPerLoad = budget});
+              *request, {.maxStripeGroupMetadataBytesPerLoad = budget});
         }),
         std::make_pair(expectedLoads, stripeGroupBytes({0, 3})));
     ASSERT_EQ(result.responses.size(), 2);
@@ -2769,15 +2828,13 @@ TEST_P(
 TEST_P(NimbleIndexProjectorMetadataLoadTest, laterRequestStartsNewWindow) {
   ASSERT_NO_FATAL_FAILURE(
       writeGroupedStripes(/*numStripes=*/8, /*stripesPerGroup=*/1));
-  NimbleIndexProjector::Request request;
-
   // The row cap stops the first request inside stripe 0 although its range
   // covers every stripe. The second request needs stripe 6, which neither
   // window here reaches from stripe 0.
-  request.keyBounds = {
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({
       stripeKeys(/*firstStripe=*/0, /*numStripes=*/8),
       stripeKeys(/*firstStripe=*/6, /*numStripes=*/1),
-  };
+  });
   for (const auto& [budget, expectedGroups] :
        std::vector<std::pair<uint64_t, std::vector<uint32_t>>>{
            {0, {0, 6}},
@@ -2790,7 +2847,7 @@ TEST_P(NimbleIndexProjectorMetadataLoadTest, laterRequestStartsNewWindow) {
     EXPECT_EQ(
         countMetadataReads([&] {
           result = projector->projectStreams(
-              request,
+              *request,
               {
                   .maxRowsPerRequest = kRowsPerStripe / 2,
                   .maxStripeGroupMetadataBytesPerLoad = budget,
@@ -2808,22 +2865,20 @@ TEST_P(
     windowServesStripePastSkippedGroups) {
   ASSERT_NO_FATAL_FAILURE(
       writeGroupedStripes(/*numStripes=*/8, /*stripesPerGroup=*/1));
-  NimbleIndexProjector::Request request;
-
   // The row cap stops the first request inside stripe 0, so planning skips
   // stripes 1 and 2. The second request's stripe 3 is still in the window that
   // stripe 0 loaded, so it needs no load of its own.
-  request.keyBounds = {
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({
       stripeKeys(/*firstStripe=*/0, /*numStripes=*/4),
       stripeKeys(/*firstStripe=*/3, /*numStripes=*/1),
-  };
+  });
   const auto budget = budgetForStripeGroups(4);
   auto projector = createValueProjector();
   NimbleIndexProjector::SerializedResult result;
   EXPECT_EQ(
       countMetadataReads([&] {
         result = projector->projectStreams(
-            request,
+            *request,
             {
                 .maxRowsPerRequest = kRowsPerStripe / 2,
                 .maxStripeGroupMetadataBytesPerLoad = budget,
@@ -2858,12 +2913,12 @@ TEST_P(
       StripeGroup::EncodingLayout::kRaw,
       /*metadataFlushThreshold=*/1);
   ASSERT_EQ(openSinkTablet()->stripeGroupsMetadata().size(), 4);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makeRangeLookup(
-      singleFeatureRowType(),
-      {"key"},
-      /*lowerKey=*/0,
-      /*upperKey=*/4 * kFeatureRowsPerBatch)};
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan({makeRangeLookup(
+          singleFeatureRowType(),
+          {"key"},
+          /*lowerKey=*/0,
+          /*upperKey=*/4 * kFeatureRowsPerBatch)});
   std::vector<Subfield> subfields;
   subfields.emplace_back("features[\"a\"]");
   const auto allGroupBytes = stripeGroupBytes({0, 1, 2, 3});
@@ -2879,7 +2934,7 @@ TEST_P(
     EXPECT_EQ(
         countMetadataReads([&] {
           result = projector->projectStreams(
-              request, {.maxStripeGroupMetadataBytesPerLoad = budget});
+              *request, {.maxStripeGroupMetadataBytesPerLoad = budget});
         }),
         std::make_pair(expectedLoads, allGroupBytes));
     ASSERT_EQ(result.responses.size(), 1);
@@ -2890,17 +2945,17 @@ TEST_P(
 TEST_P(NimbleIndexProjectorMetadataLoadTest, missingKeysLoadNoMetadata) {
   ASSERT_NO_FATAL_FAILURE(
       writeGroupedStripes(/*numStripes=*/4, /*stripesPerGroup=*/1));
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makeRangeLookup(
-      keyValueRowType(),
-      {"key"},
-      /*lowerKey=*/100 * kRowsPerStripe,
-      /*upperKey=*/200 * kRowsPerStripe)};
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan({makeRangeLookup(
+          keyValueRowType(),
+          {"key"},
+          /*lowerKey=*/100 * kRowsPerStripe,
+          /*upperKey=*/200 * kRowsPerStripe)});
   auto projector = createValueProjector();
   NimbleIndexProjector::SerializedResult result;
   EXPECT_EQ(
       countMetadataReads(
-          [&] { result = projector->projectStreams(request, {}); }),
+          [&] { result = projector->projectStreams(*request, {}); }),
       std::make_pair(uint64_t{0}, uint64_t{0}));
   ASSERT_EQ(result.responses.size(), 1);
   EXPECT_THAT(result.responses[0].slices, ::testing::IsEmpty());
@@ -2909,8 +2964,8 @@ TEST_P(NimbleIndexProjectorMetadataLoadTest, missingKeysLoadNoMetadata) {
 TEST_P(NimbleIndexProjectorMetadataLoadTest, projectRowsLoadsInWindows) {
   ASSERT_NO_FATAL_FAILURE(
       writeGroupedStripes(/*numStripes=*/5, /*stripesPerGroup=*/1));
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {stripeKeys(/*firstStripe=*/0, /*numStripes=*/5)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {stripeKeys(/*firstStripe=*/0, /*numStripes=*/5)});
   const NimbleIndexProjector::Options options{
       .maxStripeGroupMetadataBytesPerLoad = budgetForStripeGroups(2),
   };
@@ -2918,7 +2973,7 @@ TEST_P(NimbleIndexProjectorMetadataLoadTest, projectRowsLoadsInWindows) {
   NimbleIndexProjector::RowProjectionResult result;
   EXPECT_EQ(
       countMetadataReads(
-          [&] { result = projectRows(*projector, request, options); }),
+          [&] { result = projectRows(*projector, *request, options); }),
       std::make_pair(uint64_t{3}, stripeGroupBytes({0, 1, 2, 3, 4})));
 
   // Stripes located through a held group decode their own rows.
@@ -2946,8 +3001,8 @@ class NimbleIndexProjectorCoLoadMetadataTest
 TEST_P(NimbleIndexProjectorCoLoadMetadataTest, coLoadLoadsGroupsWithinBudget) {
   ASSERT_NO_FATAL_FAILURE(
       writeGroupedStripes(/*numStripes=*/5, /*stripesPerGroup=*/1));
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {stripeKeys(/*firstStripe=*/0, /*numStripes=*/5)};
+  auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {stripeKeys(/*firstStripe=*/0, /*numStripes=*/5)});
   for (const auto& [budget, expectedLoads] :
        std::vector<std::pair<uint64_t, uint64_t>>{
            {0, 5},
@@ -2960,12 +3015,12 @@ TEST_P(NimbleIndexProjectorCoLoadMetadataTest, coLoadLoadsGroupsWithinBudget) {
     const NimbleIndexProjector::Options options{
         .maxStripeGroupMetadataBytesPerLoad = budget,
     };
-    projector->projectStreams(request, options);
+    projector->projectStreams(*request, options);
 
     NimbleIndexProjector::SerializedResult result;
     EXPECT_EQ(
         countMetadataReads(
-            [&] { result = projector->projectStreams(request, options); }),
+            [&] { result = projector->projectStreams(*request, options); }),
         GetParam().pinMetadata
             ? std::make_pair(uint64_t{0}, uint64_t{0})
             : std::make_pair(expectedLoads, stripeGroupBytes({0, 1, 2, 3, 4})));
@@ -2989,12 +3044,11 @@ TEST_P(
     coLoadUnderLimitsLoadsGroupsWithinBudget) {
   ASSERT_NO_FATAL_FAILURE(
       writeGroupedStripes(/*numStripes=*/5, /*stripesPerGroup=*/1));
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
+  auto request = index::IndexLookup::LookupRequest::rangeScan({
       stripeKeys(/*firstStripe=*/0, /*numStripes=*/3),
       stripeKeys(/*firstStripe=*/3, /*numStripes=*/1),
       stripeKeys(/*firstStripe=*/4, /*numStripes=*/1),
-  };
+  });
   struct TestCase {
     uint64_t budget;
     uint64_t numLoads;
@@ -3024,11 +3078,11 @@ TEST_P(
         .maxRows = 1,
         .maxStripeGroupMetadataBytesPerLoad = testCase.budget,
     };
-    projector->projectStreams(request, options);
+    projector->projectStreams(*request, options);
 
     EXPECT_EQ(
         countMetadataReads(
-            [&] { projector->projectStreams(request, options); }),
+            [&] { projector->projectStreams(*request, options); }),
         GetParam().pinMetadata
             ? std::make_pair(uint64_t{0}, uint64_t{0})
             : std::make_pair(
@@ -3067,12 +3121,11 @@ TEST_P(
       StripeGroup::EncodingLayout::kRaw,
       /*metadataFlushThreshold=*/1);
   ASSERT_EQ(openSinkTablet()->stripeGroupsMetadata().size(), 4);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makeRangeLookup(
+  auto request = index::IndexLookup::LookupRequest::rangeScan({makeRangeLookup(
       singleFeatureRowType(),
       {"key"},
       /*lowerKey=*/0,
-      /*upperKey=*/4 * kFeatureRowsPerBatch)};
+      /*upperKey=*/4 * kFeatureRowsPerBatch)});
   std::vector<Subfield> subfields;
   subfields.emplace_back("features[\"a\"]");
   const auto allGroupBytes = stripeGroupBytes({0, 1, 2, 3});
@@ -3090,12 +3143,12 @@ TEST_P(
         .maxRows = 4 * kFeatureRowsPerBatch,
         .maxStripeGroupMetadataBytesPerLoad = budget,
     };
-    projector->projectStreams(request, options);
+    projector->projectStreams(*request, options);
 
     NimbleIndexProjector::SerializedResult result;
     EXPECT_EQ(
         countMetadataReads(
-            [&] { result = projector->projectStreams(request, options); }),
+            [&] { result = projector->projectStreams(*request, options); }),
         GetParam().pinMetadata ? std::make_pair(uint64_t{0}, uint64_t{0})
                                : std::make_pair(expectedLoads, allGroupBytes));
     ASSERT_EQ(result.responses.size(), 1);
@@ -3203,10 +3256,9 @@ TEST_P(NimbleIndexProjectorTest, stripeProjectingNoStreams) {
 
   // Spans every stripe, so the ones without "a" are still planned.
   auto bounds = makeRangeLookup(rowType, {"key"}, 0, 4 * kFeatureRowsPerBatch);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
 
-  auto result = projector->projectStreams(request, {});
+  auto result = projector->projectStreams(*request, {});
   ASSERT_EQ(result.responses.size(), 1);
   // Only the two stripes carrying "a" contribute; the others hold no projected
   // data, so they produce no slice.
@@ -3243,17 +3295,16 @@ TEST_P(NimbleIndexProjectorTest, emptyStripeCountsAsReachedUnderTruncation) {
   // Request 0 covers only the "b" stripe, so it is reached but gets no data.
   // Request 1 covers both "a" stripes; the first of them trips maxRows, so the
   // plan truncates with the second still unprocessed.
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
-      makeRangeLookup(rowType, {"key"}, 0, kFeatureRowsPerBatch),
-      makeRangeLookup(
-          rowType, {"key"}, kFeatureRowsPerBatch, 3 * kFeatureRowsPerBatch)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makeRangeLookup(rowType, {"key"}, 0, kFeatureRowsPerBatch),
+       makeRangeLookup(
+           rowType, {"key"}, kFeatureRowsPerBatch, 3 * kFeatureRowsPerBatch)});
 
   NimbleIndexProjector::Options options;
   options.needResumeKey = true;
   options.maxRows = kFeatureRowsPerBatch;
 
-  auto result = projector->projectStreams(request, options);
+  auto result = projector->projectStreams(*request, options);
   ASSERT_EQ(result.responses.size(), 2);
 
   // Request 0: reached, nothing to read, and — the point of the test — not
@@ -3286,8 +3337,7 @@ TEST_P(NimbleIndexProjectorTest, emptyStripeDoesNotConsumeRowBudget) {
   auto projector = createProjector(subfields);
 
   auto bounds = makeRangeLookup(rowType, {"key"}, 0, 2 * kFeatureRowsPerBatch);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
 
   // Budget for exactly one stripe. Spending it on the stripe that projects
   // nothing would leave the "a" stripe pruned and the response empty.
@@ -3295,7 +3345,7 @@ TEST_P(NimbleIndexProjectorTest, emptyStripeDoesNotConsumeRowBudget) {
   options.maxRowsPerRequest = kFeatureRowsPerBatch;
   options.needResumeKey = true;
 
-  auto result = projector->projectStreams(request, options);
+  auto result = projector->projectStreams(*request, options);
   ASSERT_EQ(result.responses.size(), 1);
   ASSERT_EQ(result.responses[0].slices.size(), 1);
   EXPECT_EQ(
@@ -3330,9 +3380,8 @@ TEST_P(NimbleIndexProjectorTest, emptyResult) {
 
   // Lookup key=1000, which doesn't exist (beyond max).
   auto bounds = makePointLookup(rowType, {"key"}, 1000);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
-  auto result = projector->projectStreams(request, {});
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+  auto result = projector->projectStreams(*request, {});
 
   ASSERT_EQ(result.responses.size(), 1);
   EXPECT_TRUE(result.responses[0].slices.empty());
@@ -3375,9 +3424,9 @@ TEST_P(NimbleIndexProjectorTest, multipleRequests) {
   auto bounds1 = makePointLookup(rowType, {"key"}, 50);
   auto bounds2 = makePointLookup(rowType, {"key"}, 95);
 
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds0, bounds1, bounds2};
-  auto result = projector->projectStreams(request, {});
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan({bounds0, bounds1, bounds2});
+  auto result = projector->projectStreams(*request, {});
 
   ASSERT_EQ(result.responses.size(), 3);
   uint64_t totalBytes = 0;
@@ -3424,9 +3473,9 @@ TEST_P(NimbleIndexProjectorTest, overlappingRequestsShareBody) {
   auto bounds0 = makeRangeLookup(rowType, {"key"}, 10, 40); // 30 rows
   auto bounds1 = makeRangeLookup(rowType, {"key"}, 25, 70); // 45 rows
 
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds0, bounds1};
-  auto result = projector->projectStreams(request, {});
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan({bounds0, bounds1});
+  auto result = projector->projectStreams(*request, {});
 
   ASSERT_EQ(result.responses.size(), 2);
   ASSERT_EQ(result.responses[0].slices.size(), 1);
@@ -3520,11 +3569,11 @@ TEST_P(NimbleIndexProjectorTest, slicesStripeBasedOnOverfetchRatio) {
           ::testing::Message()
           << "maxOverfetchRowsRatio=" << testCase.maxOverfetchRowsRatio);
       auto projector = createProjector(subfields);
-      NimbleIndexProjector::Request request;
-      request.keyBounds = {makeRangeLookup(rowType, {"key"}, 50, 150)};
+      const auto request = index::IndexLookup::LookupRequest::rangeScan(
+          {makeRangeLookup(rowType, {"key"}, 50, 150)});
       NimbleIndexProjector::Options options;
       options.maxOverfetchRowsRatio = testCase.maxOverfetchRowsRatio;
-      auto result = projector->projectStreams(request, options);
+      auto result = projector->projectStreams(*request, options);
 
       ASSERT_EQ(result.responses.size(), 1);
       ASSERT_EQ(result.responses[0].slices.size(), 1);
@@ -3555,11 +3604,11 @@ TEST_P(NimbleIndexProjectorTest, slicesPartialStripesAroundFullStripe) {
   subfields.emplace_back("value");
   auto projector = createProjector(subfields);
 
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makeRangeLookup(rowType, {"key"}, 10, 290)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makeRangeLookup(rowType, {"key"}, 10, 290)});
   NimbleIndexProjector::Options options;
   options.maxOverfetchRowsRatio = 0.0;
-  auto result = projector->projectStreams(request, options);
+  auto result = projector->projectStreams(*request, options);
 
   ASSERT_EQ(result.responses.size(), 1);
   ASSERT_EQ(result.responses[0].slices.size(), 3);
@@ -3643,8 +3692,7 @@ TEST_P(NimbleIndexProjectorTest, slicedRequestsShareShiftedBody) {
         << testCase.secondRequest.startRow << ", "
         << testCase.secondRequest.endRow << ")");
     auto projector = createProjector(subfields);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({
         makeRangeLookup(
             rowType,
             {"key"},
@@ -3655,10 +3703,10 @@ TEST_P(NimbleIndexProjectorTest, slicedRequestsShareShiftedBody) {
             {"key"},
             testCase.secondRequest.startRow,
             testCase.secondRequest.endRow),
-    };
+    });
     NimbleIndexProjector::Options options;
     options.maxOverfetchRowsRatio = 0.0;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
 
     ASSERT_EQ(result.responses.size(), 2);
     ASSERT_EQ(result.responses[0].slices.size(), 1);
@@ -3756,12 +3804,11 @@ TEST_P(NimbleIndexProjectorTest, projectsFlatMapWithoutConstantInMapStream) {
   for (const bool sliceStripe : {false, true}) {
     SCOPED_TRACE(fmt::format("sliceStripe={}", sliceStripe));
     auto projector = createProjector(subfields);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {
-        makeRangeLookup(rowType, {"key"}, kRequestStart, kRequestEnd)};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan(
+        {makeRangeLookup(rowType, {"key"}, kRequestStart, kRequestEnd)});
     NimbleIndexProjector::Options options;
     options.maxOverfetchRowsRatio = sliceStripe ? 0.0 : 1.0;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
 
     ASSERT_EQ(result.responses.size(), 1);
     ASSERT_EQ(result.responses[0].slices.size(), 1);
@@ -3822,10 +3869,10 @@ TEST_P(NimbleIndexProjectorTest, projectRowsKeepsNullFlatMapValues) {
         // The chunked writer keeps constant FlatMap in-map streams.
         /*enableChunking=*/!skipConstantInMapStreams);
     auto projector = createProjector(subfields);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {makeRangeLookup(rowType, {"key"}, 2, 10)};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan(
+        {makeRangeLookup(rowType, {"key"}, 2, 10)});
 
-    const auto result = projectRows(*projector, request, {});
+    const auto result = projectRows(*projector, *request, {});
 
     ASSERT_EQ(result.responses.size(), 1);
     const auto& response = result.responses[0];
@@ -3867,12 +3914,11 @@ TEST_P(NimbleIndexProjectorTest, preservesStreamRowCountEncoding) {
     for (const bool sliceStripe : {false, true}) {
       SCOPED_TRACE(fmt::format("sliceStripe={}", sliceStripe));
       auto projector = createProjector(subfields);
-      NimbleIndexProjector::Request request;
-      request.keyBounds = {
-          makeRangeLookup(rowType, {"key"}, kRequestStart, kRequestEnd)};
+      const auto request = index::IndexLookup::LookupRequest::rangeScan(
+          {makeRangeLookup(rowType, {"key"}, kRequestStart, kRequestEnd)});
       NimbleIndexProjector::Options options;
       options.maxOverfetchRowsRatio = sliceStripe ? 0.0 : 1.0;
-      auto result = projector->projectStreams(request, options);
+      auto result = projector->projectStreams(*request, options);
 
       ASSERT_EQ(result.responses.size(), 1);
       ASSERT_EQ(result.responses[0].slices.size(), 1);
@@ -4076,14 +4122,17 @@ TEST_P(NimbleIndexProjectorTest, fuzzesFlatMapPartialStripeProjection) {
         subfields.emplace_back("features[\"sparse\"]");
         subfields.emplace_back("payload");
         auto projector = createProjector(subfields);
-        NimbleIndexProjector::Request request;
+        std::vector<velox::serializer::EncodedKeyBounds> keyBounds;
+        keyBounds.reserve(requestRanges.size());
         for (const auto& requestRange : requestRanges) {
-          request.keyBounds.push_back(makeRangeLookup(
+          keyBounds.push_back(makeRangeLookup(
               rowType, {"key"}, requestRange.startRow, requestRange.endRow));
         }
+        const auto request =
+            index::IndexLookup::LookupRequest::rangeScan(std::move(keyBounds));
         NimbleIndexProjector::Options options;
         options.maxOverfetchRowsRatio = 0.0;
-        auto result = projector->projectStreams(request, options);
+        auto result = projector->projectStreams(*request, options);
 
         ASSERT_EQ(result.responses.size(), requestRanges.size());
         const RowRange packRange{
@@ -4218,9 +4267,8 @@ TEST_P(NimbleIndexProjectorTest, deduplicatedProjectedStreamsReadOnce) {
   auto projector = createProjector(subfields);
 
   auto bounds = makeRangeLookup(rowType, {"key"}, 0, numRows);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
-  auto result = projector->projectStreams(request, {});
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+  auto result = projector->projectStreams(*request, {});
 
   ASSERT_EQ(result.responses.size(), 1);
   ASSERT_EQ(result.responses[0].slices.size(), 1);
@@ -4277,9 +4325,8 @@ TEST_P(NimbleIndexProjectorTest, projectedNullableDataDeserializes) {
   auto projector = createProjector(subfields);
 
   auto bounds = makeRangeLookup(rowType, {"key"}, 10, 30);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
-  auto result = projector->projectStreams(request, {});
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+  auto result = projector->projectStreams(*request, {});
 
   ASSERT_EQ(result.responses.size(), 1);
   ASSERT_EQ(result.responses[0].slices.size(), 1);
@@ -4348,18 +4395,18 @@ TEST_P(NimbleIndexProjectorTest, projectedTabletTimestampsDeserialize) {
              {150, 151},
              {123, 260}}) {
       SCOPED_TRACE(fmt::format("keys [{}, {})", startKey, endKey));
-      NimbleIndexProjector::Request request;
-      request.keyBounds = {makeRangeLookup(rowType, {"key"}, startKey, endKey)};
+      const auto request = index::IndexLookup::LookupRequest::rangeScan(
+          {makeRangeLookup(rowType, {"key"}, startKey, endKey)});
       const auto expected =
           makeRows(startKey, static_cast<vector_size_t>(endKey - startKey));
 
-      const auto rows = projectRows(*projector, request, options);
+      const auto rows = projectRows(*projector, *request, options);
       ASSERT_EQ(rows.responses.size(), 1);
       expectVectorRows(
           rows.values->slice(rows.responses[0].offset, rows.responses[0].size),
           expected);
 
-      const auto streams = projector->projectStreams(request, options);
+      const auto streams = projector->projectStreams(*request, options);
       ASSERT_EQ(streams.responses.size(), 1);
       std::vector<folly::IOBuf> owned;
       std::vector<std::string_view> serializedBatches;
@@ -4441,18 +4488,18 @@ TEST_P(NimbleIndexProjectorTest, projectedTabletNullFlatMapsDeserialize) {
          std::vector<std::pair<int64_t, int64_t>>{
              {15, 16}, {130, 140}, {5, 37}, {0, kNumBatches * kRowsPerBatch}}) {
       SCOPED_TRACE(fmt::format("keys [{}, {})", startKey, endKey));
-      NimbleIndexProjector::Request request;
-      request.keyBounds = {makeRangeLookup(rowType, {"key"}, startKey, endKey)};
+      const auto request = index::IndexLookup::LookupRequest::rangeScan(
+          {makeRangeLookup(rowType, {"key"}, startKey, endKey)});
       const auto expected =
           makeRows(startKey, static_cast<vector_size_t>(endKey - startKey));
 
-      const auto rows = projectRows(*projector, request, options);
+      const auto rows = projectRows(*projector, *request, options);
       ASSERT_EQ(rows.responses.size(), 1);
       expectVectorRows(
           rows.values->slice(rows.responses[0].offset, rows.responses[0].size),
           expected);
 
-      const auto streams = projector->projectStreams(request, options);
+      const auto streams = projector->projectStreams(*request, options);
       ASSERT_EQ(streams.responses.size(), 1);
       std::vector<folly::IOBuf> owned;
       std::vector<std::string_view> serializedBatches;
@@ -4549,14 +4596,13 @@ TEST_P(NimbleIndexProjectorTest, projectedDedupStreamsDeserialize) {
       projectedRow.childAt(2)->asFlatMap().childAt(0)->kind(),
       Kind::ArrayWithOffsets);
 
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
-      makeRangeLookup(ROW({"key"}, {BIGINT()}), {"key"}, 2, 6)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makeRangeLookup(ROW({"key"}, {BIGINT()}), {"key"}, 2, 6)});
   // The stream slicer cannot slice these kinds, so every slice holds a whole
   // stripe and its header selects the requested rows.
   NimbleIndexProjector::Options projectOptions;
   projectOptions.maxOverfetchRowsRatio = 1.0;
-  const auto result = projector->projectStreams(request, projectOptions);
+  const auto result = projector->projectStreams(*request, projectOptions);
   ASSERT_EQ(result.responses.size(), 1);
   const auto& slices = result.responses[0].slices;
   ASSERT_EQ(slices.size(), 2);
@@ -4674,9 +4720,9 @@ TEST_P(NimbleIndexProjectorTest, projectedTabletNullBarrierFlag) {
         subfields.emplace_back(std::string{subfield});
         auto projector = createProjector(subfields);
         auto bounds = makeRangeLookup(rowType, {"key"}, 0, kRows);
-        NimbleIndexProjector::Request request;
-        request.keyBounds = {bounds};
-        auto result = projector->projectStreams(request, {});
+        const auto request =
+            index::IndexLookup::LookupRequest::rangeScan({bounds});
+        auto result = projector->projectStreams(*request, {});
 
         ASSERT_EQ(result.responses.size(), 1);
         ASSERT_EQ(result.responses[0].slices.size(), 1);
@@ -4831,11 +4877,11 @@ TEST_P(
   EXPECT_EQ(
       projectedMap.groupAt(0).groupKeys, (std::vector<std::string>{"1", "2"}));
 
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makeRangeLookup(rowType, {"key"}, 1, 3)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makeRangeLookup(rowType, {"key"}, 1, 3)});
   NimbleIndexProjector::Options options;
   options.maxOverfetchRowsRatio = 0;
-  auto result = projector->projectStreams(request, options);
+  auto result = projector->projectStreams(*request, options);
 
   ASSERT_EQ(result.responses.size(), 1);
   ASSERT_EQ(result.responses[0].slices.size(), batches.size());
@@ -4885,7 +4931,7 @@ TEST_P(
     EXPECT_EQ(absentMap.groupAt(0).groupId, HybridFlatMap::kDefaultGroupId);
     EXPECT_TRUE(absentMap.groupAt(0).groupKeys.empty());
 
-    auto absentResult = absentProjector->projectStreams(request, options);
+    auto absentResult = absentProjector->projectStreams(*request, options);
     ASSERT_EQ(absentResult.responses.size(), 1);
     ASSERT_EQ(absentResult.responses[0].slices.size(), batches.size());
     std::vector<folly::IOBuf> absentOwned;
@@ -4920,7 +4966,7 @@ TEST_P(
     std::vector<Subfield> absentOnlySubfields;
     absentOnlySubfields.emplace_back("features[42]");
     auto absentOnlyResult =
-        createProjector(absentOnlySubfields)->projectStreams(request, options);
+        createProjector(absentOnlySubfields)->projectStreams(*request, options);
     ASSERT_EQ(absentOnlyResult.responses.size(), 1);
     EXPECT_TRUE(absentOnlyResult.responses[0].slices.empty());
   }
@@ -4967,9 +5013,8 @@ TEST_P(
   subfields.emplace_back("nested.score");
   auto projector = createProjector(subfields);
   auto bounds = makeRangeLookup(rowType, {"key"}, 0, 15);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
-  auto result = projector->projectStreams(request, {});
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+  auto result = projector->projectStreams(*request, {});
 
   ASSERT_EQ(result.responses.size(), 1);
   ASSERT_EQ(result.responses[0].slices.size(), 3);
@@ -5043,9 +5088,8 @@ TEST_P(
   subfields.emplace_back("kept");
   auto projector = createProjector(subfields);
   auto bounds = makeRangeLookup(rowType, {"key"}, 0, kRows);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
-  auto result = projector->projectStreams(request, {});
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+  auto result = projector->projectStreams(*request, {});
 
   ASSERT_EQ(result.responses.size(), 1);
   ASSERT_EQ(result.responses[0].slices.size(), 1);
@@ -5453,9 +5497,8 @@ TEST_P(NimbleIndexProjectorTest, projectedComplexNullFuzzer) {
 
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, kRows);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
-    auto result = projector->projectStreams(request, {});
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+    auto result = projector->projectStreams(*request, {});
 
     ASSERT_EQ(result.responses.size(), 1);
     ASSERT_EQ(result.responses[0].slices.size(), kNumBatches);
@@ -5534,9 +5577,9 @@ TEST_P(NimbleIndexProjectorTest, projectedComplexNullFuzzer) {
     subfields.emplace_back("value");                                           \
     auto projector = createProjector(subfields);                               \
     auto bounds = makeRangeLookup(rowType, {"key"}, (lowerKey_), (upperKey_)); \
-    NimbleIndexProjector::Request request;                                     \
-    request.keyBounds = {bounds};                                              \
-    auto result = projector->projectStreams(request, {});                      \
+    const auto request =                                                       \
+        index::IndexLookup::LookupRequest::rangeScan({bounds});                \
+    auto result = projector->projectStreams(*request, {});                     \
     ASSERT_EQ(result.responses[0].slices.size(), 1);                           \
     const auto expectedOffset = static_cast<size_t>(lowerKey_);                \
     const auto expectedEnd = static_cast<size_t>(upperKey_);                   \
@@ -5608,9 +5651,8 @@ TEST_P(NimbleIndexProjectorTest, deserializerRowRangeOnBarrierWindowedSlice) {
   subfields.emplace_back("s");
   auto projector = createProjector(subfields);
   auto bounds = makeRangeLookup(rowType, {"key"}, kWindowStart, kWindowEnd);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
-  auto result = projector->projectStreams(request, {});
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+  auto result = projector->projectStreams(*request, {});
   ASSERT_EQ(result.responses[0].slices.size(), 1);
   const auto& slice = result.responses[0].slices[0];
   const auto header = readEmbeddedTabletChunkHeader(slice);
@@ -5717,9 +5759,8 @@ TEST_P(NimbleIndexProjectorTest, deserializerMultiBatchWithRowRange) {
   auto projector = createProjector(subfields);
 
   auto bounds = makeRangeLookup(rowType, {"key"}, 10, 40);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
-  auto result = projector->projectStreams(request, {});
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+  auto result = projector->projectStreams(*request, {});
   ASSERT_EQ(result.responses[0].slices.size(), 1);
 
   auto coalesced = result.responses[0].slices[0].cloneCoalescedAsValue();
@@ -5772,14 +5813,13 @@ TEST_P(NimbleIndexProjectorTest, deserializerMultiBatchMixedRanges) {
 
   // One projector call with four independent range requests; each produces
   // its own chunk slice (one per request × stripe intersection).
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({
       makeRangeLookup(rowType, {"key"}, 0, 20),
       makeRangeLookup(rowType, {"key"}, 30, 50),
       makeRangeLookup(rowType, {"key"}, 80, 100),
       makeRangeLookup(rowType, {"key"}, 0, 100),
-  };
-  auto result = projector->projectStreams(request, {});
+  });
+  auto result = projector->projectStreams(*request, {});
   ASSERT_EQ(result.responses.size(), 4);
 
   // Coalesce each response's chunk slice into a contiguous buffer the
@@ -5857,9 +5897,8 @@ TEST_P(NimbleIndexProjectorTest, deserializerMultiBatchMixedVersions) {
 
   // kTablet batch: range [10, 40) = 30 rows.
   auto bounds = makeRangeLookup(rowType, {"key"}, 10, 40);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
-  auto result = projector->projectStreams(request, {});
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+  auto result = projector->projectStreams(*request, {});
   ASSERT_EQ(result.responses[0].slices.size(), 1u);
   auto tabletOwned = result.responses[0].slices[0].cloneCoalescedAsValue();
 
@@ -5940,21 +5979,23 @@ TEST_P(NimbleIndexProjectorTest, stats) {
   std::vector<Subfield> subs;
   subs.emplace_back("value");
 
-  // Empty request should throw.
+  // Point lookup request should throw.
   {
     auto proj = createProjector(subs);
-    NimbleIndexProjector::Request request;
-    NIMBLE_ASSERT_THROW(
-        proj->projectStreams(request, {}), "keyBounds must not be empty");
+    auto bounds = makePointLookup(rowType, {"key"}, 15);
+    const auto request = index::IndexLookup::LookupRequest::pointLookup(
+        {bounds.lowerKey.value()});
+    NIMBLE_ASSERT_USER_THROW(
+        proj->projectStreams(*request, {}),
+        "Projection requires a range-scan request");
   }
 
   // Single point lookup: key=15 is in stripe 1 (rows 10..19).
   {
     auto proj = createProjector(subs);
     auto bounds = makePointLookup(rowType, {"key"}, 15);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
-    proj->projectStreams(request, {});
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+    proj->projectStreams(*request, {});
 
     EXPECT_EQ(proj->stats().numReadStripes, 1);
     EXPECT_EQ(proj->stats().numReadRows, rowsPerBatch);
@@ -5977,9 +6018,9 @@ TEST_P(NimbleIndexProjectorTest, stats) {
     auto proj = createProjector(subs);
     auto bounds0 = makePointLookup(rowType, {"key"}, 0);
     auto bounds1 = makePointLookup(rowType, {"key"}, numRows - 1);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds0, bounds1};
-    proj->projectStreams(request, {});
+    const auto request =
+        index::IndexLookup::LookupRequest::rangeScan({bounds0, bounds1});
+    proj->projectStreams(*request, {});
 
     EXPECT_EQ(proj->stats().numReadStripes, 2);
     EXPECT_EQ(
@@ -5994,9 +6035,8 @@ TEST_P(NimbleIndexProjectorTest, stats) {
   {
     auto proj = createProjector(subs);
     auto bounds = makePointLookup(rowType, {"key"}, numRows + 1'000);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
-    proj->projectStreams(request, {});
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+    proj->projectStreams(*request, {});
 
     EXPECT_EQ(proj->stats().numReadStripes, 0);
     EXPECT_EQ(proj->stats().numReadRows, 0);
@@ -6024,9 +6064,9 @@ DEBUG_ONLY_TEST_P(NimbleIndexProjectorTest, statsDuringProjection) {
   {
     std::vector<Subfield> subfields;
     subfields.emplace_back("value");
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {makeRangeLookup(rowType, {"key"}, 0, kNumRows)};
-    createProjector(subfields)->projectStreams(request, {});
+    const auto request = index::IndexLookup::LookupRequest::rangeScan(
+        {makeRangeLookup(rowType, {"key"}, 0, kNumRows)});
+    createProjector(subfields)->projectStreams(*request, {});
   }
 
   for (const std::string_view method :
@@ -6035,8 +6075,8 @@ DEBUG_ONLY_TEST_P(NimbleIndexProjectorTest, statsDuringProjection) {
     std::vector<Subfield> subfields;
     subfields.emplace_back("value");
     auto projector = createProjector(subfields);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {makeRangeLookup(rowType, {"key"}, 0, kNumRows)};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan(
+        {makeRangeLookup(rowType, {"key"}, 0, kNumRows)});
     std::promise<void> loadStarted;
     auto loading = loadStarted.get_future();
     std::promise<void> continueLoad;
@@ -6069,9 +6109,9 @@ DEBUG_ONLY_TEST_P(NimbleIndexProjectorTest, statsDuringProjection) {
         }));
     projectionTask = std::async(std::launch::async, [&] {
       if (method == "projectStreams") {
-        projector->projectStreams(request, {});
+        projector->projectStreams(*request, {});
       } else if (method == "co_projectRows") {
-        folly::coro::blockingWait(projector->co_projectRows(request, {}));
+        folly::coro::blockingWait(projector->co_projectRows(*request, {}));
       } else {
         projector->loadStripeStreams(0, 1);
       }
@@ -6203,9 +6243,9 @@ TEST_P(NimbleIndexProjectorTest, localReadModeStats) {
         subfields, makeFileHandle(dataReadFile, fileName));
     const auto fileBytesBeforeProject = dataReadFile->bytesRead();
 
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {makeRangeLookup(rowType, {"key"}, 0, numRows)};
-    auto result = projector->projectStreams(request, {});
+    const auto request = index::IndexLookup::LookupRequest::rangeScan(
+        {makeRangeLookup(rowType, {"key"}, 0, numRows)});
+    auto result = projector->projectStreams(*request, {});
 
     ASSERT_EQ(result.responses.size(), 1);
     ASSERT_EQ(result.responses[0].slices.size(), numBatches);
@@ -6341,9 +6381,9 @@ TEST_P(NimbleIndexProjectorTest, flatMapProjection) {
 
   // Point lookup for key=50 (row index 5).
   auto pointBounds = makePointLookup(rowType, {"key"}, 50);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {pointBounds};
-  auto result = projector->projectStreams(request, {});
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan({pointBounds});
+  auto result = projector->projectStreams(*request, {});
 
   ASSERT_EQ(result.responses.size(), 1);
   const auto& response = result.responses[0];
@@ -6441,9 +6481,8 @@ TEST_P(NimbleIndexProjectorTest, flatMapProjectionWithNarrowRowRange) {
 
   // Range [50, 100) → rows 5..9 (5 rows).
   auto bounds = makeRangeLookup(rowType, {"key"}, 50, 100);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
-  auto result = projector->projectStreams(request, {});
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+  auto result = projector->projectStreams(*request, {});
   ASSERT_EQ(result.responses.size(), 1);
   ASSERT_EQ(result.responses[0].slices.size(), 1u);
 
@@ -6580,9 +6619,8 @@ TEST_P(NimbleIndexProjectorTest, flatMapProjectionWithInterleavedMissingKeys) {
 
   auto bounds = makeRangeLookup(
       rowType, {"key"}, 0, static_cast<int64_t>(expectedRows.size()));
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
-  auto result = projector->projectStreams(request, {});
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+  auto result = projector->projectStreams(*request, {});
 
   ASSERT_EQ(result.responses.size(), 1);
   ASSERT_EQ(result.responses[0].slices.size(), keysByBatch.size());
@@ -6716,9 +6754,9 @@ TEST_P(NimbleIndexProjectorTest, flatMapKeyProjectionSchemaComparison) {
 
   // Verify schema decodes the projected data correctly.
   auto pointBounds = makePointLookup(rowType, {"key"}, 50);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {pointBounds};
-  auto result = projector->projectStreams(request, {});
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan({pointBounds});
+  auto result = projector->projectStreams(*request, {});
 
   ASSERT_EQ(result.responses.size(), 1);
   ASSERT_FALSE(result.responses[0].slices.empty());
@@ -6774,9 +6812,9 @@ TEST_P(NimbleIndexProjectorTest, flatMapIntKeyProjection) {
 
   // Point lookup for key=50 (row index 5).
   auto pointBounds = makePointLookup(rowType, {"key"}, 50);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {pointBounds};
-  auto result = projector->projectStreams(request, {});
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan({pointBounds});
+  auto result = projector->projectStreams(*request, {});
 
   ASSERT_EQ(result.responses.size(), 1);
   const auto& response = result.responses[0];
@@ -6891,9 +6929,9 @@ TEST_P(NimbleIndexProjectorTest, flatMapMissingKeys) {
     // present in the decoded MapVector entries (gap-fill renders their inMap
     // as all-false, producing no key entry).
     auto pointBounds = makePointLookup(rowType, {"key"}, 50);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {pointBounds};
-    auto result = projector->projectStreams(request, {});
+    const auto request =
+        index::IndexLookup::LookupRequest::rangeScan({pointBounds});
+    auto result = projector->projectStreams(*request, {});
     ASSERT_EQ(result.responses.size(), 1);
     ASSERT_FALSE(result.responses[0].slices.empty());
 
@@ -6991,9 +7029,8 @@ TEST_P(NimbleIndexProjectorTest, flatMapMissingKeyDeserializesAsNullField) {
   auto projector = createProjector(subfields);
 
   auto bounds = makeRangeLookup(rowType, {"key"}, 10, 20);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
-  auto result = projector->projectStreams(request, {});
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+  auto result = projector->projectStreams(*request, {});
 
   ASSERT_EQ(result.responses.size(), 1);
   ASSERT_EQ(result.responses[0].slices.size(), 1);
@@ -7216,9 +7253,8 @@ TEST_P(NimbleIndexProjectorTest, featureReorderingStorageReads) {
 
     // Point lookup for key in the middle.
     auto bounds = makePointLookup(rowType, {"key"}, numRows / 2);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
-    auto result = projector->projectStreams(request, {});
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+    auto result = projector->projectStreams(*request, {});
 
     ASSERT_EQ(result.responses.size(), 1);
     ASSERT_FALSE(result.responses[0].slices.empty());
@@ -7271,9 +7307,8 @@ TEST_P(NimbleIndexProjectorTest, readGapTracking) {
     auto projector = createProjector(subfields);
 
     auto bounds = makePointLookup(rowType, {"key"}, numRows / 2);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
-    projector->projectStreams(request, {});
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+    projector->projectStreams(*request, {});
 
     EXPECT_GT(dataIoStats_->readGap().count(), 0)
         << "Projecting non-adjacent columns should produce gaps";
@@ -7295,9 +7330,8 @@ TEST_P(NimbleIndexProjectorTest, readGapTracking) {
     auto projector = createProjector(subfields);
 
     auto bounds = makePointLookup(rowType, {"key"}, numRows / 2);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
-    projector->projectStreams(request, {});
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+    projector->projectStreams(*request, {});
 
     EXPECT_EQ(
         dataIoStats_->readGap().count(),
@@ -7319,12 +7353,11 @@ TEST_P(NimbleIndexProjectorTest, resumeKeyOnTruncation) {
   // at stripe boundaries and each stripe has 100 rows, the first stripe
   // (100 rows) exceeds the limit but is fully included.
   auto bounds = makeRangeLookup(rowType, {"key"}, 0, 500);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
   NimbleIndexProjector::Options options;
   options.maxRows = 50;
   options.needResumeKey = true;
-  auto result = projector->projectStreams(request, options);
+  auto result = projector->projectStreams(*request, options);
 
   ASSERT_EQ(result.responses.size(), 1);
   const auto& response = result.responses[0];
@@ -7364,9 +7397,8 @@ TEST_P(NimbleIndexProjectorTest, resumeKeyNotSetWithoutTruncation) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 50);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
-    auto result = projector->projectStreams(request, {});
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+    auto result = projector->projectStreams(*request, {});
     ASSERT_EQ(result.responses.size(), 1);
     EXPECT_FALSE(result.responses[0].resumeKey.has_value());
   }
@@ -7375,11 +7407,10 @@ TEST_P(NimbleIndexProjectorTest, resumeKeyNotSetWithoutTruncation) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 50);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRows = 10000;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
     ASSERT_EQ(result.responses.size(), 1);
     EXPECT_FALSE(result.responses[0].resumeKey.has_value());
   }
@@ -7388,11 +7419,10 @@ TEST_P(NimbleIndexProjectorTest, resumeKeyNotSetWithoutTruncation) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makePointLookup(rowType, {"key"}, 50);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRows = 10;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
     ASSERT_EQ(result.responses.size(), 1);
     EXPECT_FALSE(result.responses[0].resumeKey.has_value());
   }
@@ -7410,12 +7440,11 @@ TEST_P(NimbleIndexProjectorTest, softLimitAtStripeBoundary) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 500);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRows = 99;
     options.needResumeKey = true;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
 
     ASSERT_EQ(result.responses.size(), 1);
     uint64_t totalRows = 0;
@@ -7430,12 +7459,11 @@ TEST_P(NimbleIndexProjectorTest, softLimitAtStripeBoundary) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 500);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRows = 100;
     options.needResumeKey = true;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
 
     ASSERT_EQ(result.responses.size(), 1);
     uint64_t totalRows = 0;
@@ -7451,12 +7479,11 @@ TEST_P(NimbleIndexProjectorTest, softLimitAtStripeBoundary) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 500);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRows = 101;
     options.needResumeKey = true;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
 
     ASSERT_EQ(result.responses.size(), 1);
     uint64_t totalRows = 0;
@@ -7489,12 +7516,12 @@ TEST_P(NimbleIndexProjectorTest, resumeKeyPagination) {
 
   while (true) {
     auto projector = createProjector(subfields);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {currentBounds};
+    const auto request =
+        index::IndexLookup::LookupRequest::rangeScan({currentBounds});
     NimbleIndexProjector::Options options;
     options.maxRows = maxRows;
     options.needResumeKey = true;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
 
     ASSERT_EQ(result.responses.size(), 1);
     const auto& response = result.responses[0];
@@ -7537,12 +7564,12 @@ TEST_P(NimbleIndexProjectorTest, maxRowsTotalAcrossRequests) {
   auto bounds0 = makeRangeLookup(rowType, {"key"}, 0, 500);
   auto bounds1 = makeRangeLookup(rowType, {"key"}, 900, 1000);
 
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds0, bounds1};
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan({bounds0, bounds1});
   NimbleIndexProjector::Options options;
   options.maxRows = 50;
   options.needResumeKey = true;
-  auto result = projector->projectStreams(request, options);
+  auto result = projector->projectStreams(*request, options);
 
   ASSERT_EQ(result.responses.size(), 2);
 
@@ -7582,12 +7609,12 @@ TEST_P(NimbleIndexProjectorTest, noResumeKeyWhenRequestFullySatisfied) {
   auto bounds0 = makeRangeLookup(rowType, {"key"}, 0, 100);
   auto bounds1 = makeRangeLookup(rowType, {"key"}, 0, 500);
 
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds0, bounds1};
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan({bounds0, bounds1});
   NimbleIndexProjector::Options options;
   options.maxRows = 100;
   options.needResumeKey = true;
-  auto result = projector->projectStreams(request, options);
+  auto result = projector->projectStreams(*request, options);
 
   ASSERT_EQ(result.responses.size(), 2);
 
@@ -7617,11 +7644,10 @@ TEST_P(NimbleIndexProjectorTest, maxRowsExceedsTotal) {
 
   // maxRows larger than total matching rows — no truncation.
   auto bounds = makeRangeLookup(rowType, {"key"}, 0, 300);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
   NimbleIndexProjector::Options options;
   options.maxRows = 10000;
-  auto result = projector->projectStreams(request, options);
+  auto result = projector->projectStreams(*request, options);
 
   ASSERT_EQ(result.responses.size(), 1);
   uint64_t totalRows = 0;
@@ -7641,11 +7667,10 @@ TEST_P(NimbleIndexProjectorTest, maxRowsZeroMeansUnlimited) {
   auto projector = createProjector(subfields);
 
   auto bounds = makeRangeLookup(rowType, {"key"}, 0, 1000);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
   NimbleIndexProjector::Options options;
   options.maxRows = 0;
-  auto result = projector->projectStreams(request, options);
+  auto result = projector->projectStreams(*request, options);
 
   ASSERT_EQ(result.responses.size(), 1);
   uint64_t totalRows = 0;
@@ -7667,12 +7692,11 @@ TEST_P(NimbleIndexProjectorTest, maxRowsSingleRowStripes) {
 
   // maxRows=3: should process exactly 3 stripes (3 rows).
   auto bounds = makeRangeLookup(rowType, {"key"}, 0, 10);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
   NimbleIndexProjector::Options options;
   options.maxRows = 3;
   options.needResumeKey = true;
-  auto result = projector->projectStreams(request, options);
+  auto result = projector->projectStreams(*request, options);
 
   ASSERT_EQ(result.responses.size(), 1);
   uint64_t totalRows = 0;
@@ -7694,11 +7718,10 @@ TEST_P(NimbleIndexProjectorTest, maxRowsPerRequestClipping) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 500);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRowsPerRequest = 200;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
 
     ASSERT_EQ(result.responses.size(), 1);
     EXPECT_FALSE(result.responses[0].resumeKey.has_value());
@@ -7709,11 +7732,10 @@ TEST_P(NimbleIndexProjectorTest, maxRowsPerRequestClipping) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 500);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRowsPerRequest = 150;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
 
     ASSERT_EQ(result.responses.size(), 1);
     const auto& response = result.responses[0];
@@ -7739,11 +7761,11 @@ TEST_P(NimbleIndexProjectorTest, maxRowsPerRequestIndependentPruning) {
   auto bounds0 = makeRangeLookup(rowType, {"key"}, 0, 500);
   auto bounds1 = makeRangeLookup(rowType, {"key"}, 200, 800);
 
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds0, bounds1};
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan({bounds0, bounds1});
   NimbleIndexProjector::Options options;
   options.maxRowsPerRequest = 100;
-  auto result = projector->projectStreams(request, options);
+  auto result = projector->projectStreams(*request, options);
 
   ASSERT_EQ(result.responses.size(), 2);
 
@@ -7780,9 +7802,8 @@ TEST_P(NimbleIndexProjectorTest, maxBytesTruncation) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 100);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
-    auto result = projector->projectStreams(request, {});
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+    auto result = projector->projectStreams(*request, {});
     ASSERT_EQ(result.responses[0].slices.size(), 1);
     bytesPerStripe = projector->stats().numOutputBytes;
     ASSERT_GT(bytesPerStripe, 0);
@@ -7792,13 +7813,12 @@ TEST_P(NimbleIndexProjectorTest, maxBytesTruncation) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 500);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxBytes = bytesPerStripe * 2;
     options.needResumeKey = true;
 
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
     ASSERT_EQ(result.responses.size(), 1);
     const auto& response = result.responses[0];
 
@@ -7823,9 +7843,8 @@ TEST_P(NimbleIndexProjectorTest, maxBytesNoTruncation) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 100, 300);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
-    auto result = projector->projectStreams(request, {});
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+    auto result = projector->projectStreams(*request, {});
     ASSERT_EQ(result.responses.size(), 1);
     EXPECT_FALSE(result.responses[0].resumeKey.has_value());
   }
@@ -7834,11 +7853,10 @@ TEST_P(NimbleIndexProjectorTest, maxBytesNoTruncation) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 100, 300);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxBytes = std::numeric_limits<uint64_t>::max();
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
     ASSERT_EQ(result.responses.size(), 1);
     EXPECT_FALSE(result.responses[0].resumeKey.has_value());
   }
@@ -7856,9 +7874,9 @@ TEST_P(NimbleIndexProjectorTest, plannedBytesAndMaxBytesTruncations) {
                            int64_t upperKey,
                            const NimbleIndexProjector::Options& options) {
     auto projector = createProjector(subfields);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {makeRangeLookup(rowType, {"key"}, lowerKey, upperKey)};
-    projector->projectStreams(request, options);
+    const auto request = index::IndexLookup::LookupRequest::rangeScan(
+        {makeRangeLookup(rowType, {"key"}, lowerKey, upperKey)});
+    projector->projectStreams(*request, options);
     return projector->stats();
   };
 
@@ -7916,9 +7934,8 @@ TEST_P(NimbleIndexProjectorTest, maxBytesPagination) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 100);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
-    auto result = projector->projectStreams(request, {});
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+    auto result = projector->projectStreams(*request, {});
     ASSERT_EQ(result.responses[0].slices.size(), 1);
     bytesPerStripe = projector->stats().numOutputBytes;
   }
@@ -7934,13 +7951,13 @@ TEST_P(NimbleIndexProjectorTest, maxBytesPagination) {
     while (iterations < maxIterations) {
       ++iterations;
       auto projector = createProjector(subfields);
-      NimbleIndexProjector::Request request;
-      request.keyBounds = {currentBounds};
+      const auto request =
+          index::IndexLookup::LookupRequest::rangeScan({currentBounds});
       NimbleIndexProjector::Options options;
       options.maxBytes = maxBytes;
       options.needResumeKey = true;
 
-      auto result = projector->projectStreams(request, options);
+      auto result = projector->projectStreams(*request, options);
       EXPECT_EQ(result.responses.size(), 1);
       totalReadRows += projector->stats().numProjectedRows;
 
@@ -7976,9 +7993,8 @@ TEST_P(NimbleIndexProjectorTest, maxBytesAndMaxRowsInteraction) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 100);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
-    auto result = projector->projectStreams(request, {});
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+    auto result = projector->projectStreams(*request, {});
     ASSERT_EQ(result.responses[0].slices.size(), 1);
     bytesPerStripe = projector->stats().numOutputBytes;
   }
@@ -7989,14 +8005,13 @@ TEST_P(NimbleIndexProjectorTest, maxBytesAndMaxRowsInteraction) {
   // Case 1: Global row limit is tighter (50 rows < 3 stripes of bytes).
   {
     auto projector = createProjector(subfields);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRows = 50;
     options.maxBytes = bytesPerStripe * 3;
     options.needResumeKey = true;
 
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
     ASSERT_EQ(result.responses.size(), 1);
     ASSERT_TRUE(result.responses[0].resumeKey.has_value());
     EXPECT_EQ(projector->stats().numReadStripes, 1);
@@ -8008,14 +8023,13 @@ TEST_P(NimbleIndexProjectorTest, maxBytesAndMaxRowsInteraction) {
   // one extra stripe beyond the serialized-byte budget.
   {
     auto projector = createProjector(subfields);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRows = 500;
     options.maxBytes = bytesPerStripe;
     options.needResumeKey = true;
 
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
     ASSERT_EQ(result.responses.size(), 1);
     ASSERT_TRUE(result.responses[0].resumeKey.has_value());
     EXPECT_LE(projector->stats().numReadStripes, 2);
@@ -8035,13 +8049,12 @@ TEST_P(NimbleIndexProjectorTest, maxRowsPerRequestAndGlobalMaxRows) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 500);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRowsPerRequest = 100;
     options.maxRows = 500;
 
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
     ASSERT_EQ(result.responses.size(), 1);
     EXPECT_FALSE(result.responses[0].resumeKey.has_value());
     EXPECT_EQ(projector->stats().numProjectedRows, 100);
@@ -8053,14 +8066,13 @@ TEST_P(NimbleIndexProjectorTest, maxRowsPerRequestAndGlobalMaxRows) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 500);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRowsPerRequest = 300;
     options.maxRows = 50;
     options.needResumeKey = true;
 
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
     ASSERT_EQ(result.responses.size(), 1);
     EXPECT_TRUE(result.responses[0].resumeKey.has_value());
     EXPECT_EQ(projector->stats().numReadStripes, 1);
@@ -8072,13 +8084,12 @@ TEST_P(NimbleIndexProjectorTest, maxRowsPerRequestAndGlobalMaxRows) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 500);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRowsPerRequest = 50;
     options.maxRows = 500;
 
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
     ASSERT_EQ(result.responses.size(), 1);
     EXPECT_FALSE(result.responses[0].resumeKey.has_value());
     EXPECT_EQ(projector->stats().numProjectedRows, 50);
@@ -8098,12 +8109,12 @@ TEST_P(NimbleIndexProjectorTest, maxRowsPerRequestStripeAlignedSetsResumeKeys) {
 
   // maxRowsPerRequest=100 lands exactly on the stripe boundary; needResumeKey
   // makes each request resume from the next stripe that still contains it.
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds0, bounds1};
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan({bounds0, bounds1});
   NimbleIndexProjector::Options options;
   options.maxRowsPerRequest = 100;
   options.needResumeKey = true;
-  auto result = projector->projectStreams(request, options);
+  auto result = projector->projectStreams(*request, options);
 
   ASSERT_EQ(result.responses.size(), 2);
   EXPECT_EQ(projector->stats().numReadStripes, 2);
@@ -8132,12 +8143,12 @@ TEST_P(NimbleIndexProjectorTest, maxRowsPerRequestResumeKeyWithStripeGap) {
   auto bounds0 = makeRangeLookup(rowType, {"key"}, 300, 550);
   auto bounds1 = makeRangeLookup(rowType, {"key"}, 900, 1000);
 
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds0, bounds1};
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan({bounds0, bounds1});
   NimbleIndexProjector::Options options;
   options.maxRowsPerRequest = 100;
   options.needResumeKey = true;
-  auto result = projector->projectStreams(request, options);
+  auto result = projector->projectStreams(*request, options);
 
   ASSERT_EQ(result.responses.size(), 2);
   // Only the two stripes each request was capped in get planned; stripes 4-5
@@ -8165,10 +8176,10 @@ TEST_P(NimbleIndexProjectorTest, maxRowsPerRequestResumeKeyWithStripeGap) {
   // returned -- key 400 -- not the start of the stripe that shares request 0's
   // resolved stripe index. Resuming returns the remaining 150 rows.
   auto resumed = createProjector(subfields);
-  NimbleIndexProjector::Request resumeRequest;
-  resumeRequest.keyBounds = {velox::serializer::EncodedKeyBounds{
-      .lowerKey = capped.resumeKey.value(), .upperKey = bounds0.upperKey}};
-  auto resumeResult = resumed->projectStreams(resumeRequest, {});
+  const auto resumeRequest = index::IndexLookup::LookupRequest::rangeScan(
+      {velox::serializer::EncodedKeyBounds{
+          .lowerKey = capped.resumeKey.value(), .upperKey = bounds0.upperKey}});
+  auto resumeResult = resumed->projectStreams(*resumeRequest, {});
 
   ASSERT_EQ(resumeResult.responses.size(), 1);
   uint64_t resumedRows = 0;
@@ -8194,13 +8205,13 @@ TEST_P(NimbleIndexProjectorTest, truncationResumeKeyWithStripeGap) {
   auto bounds1 = makeRangeLookup(rowType, {"key"}, 500, 900);
 
   auto projector = createProjector(subfields);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds0, bounds1};
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan({bounds0, bounds1});
   NimbleIndexProjector::Options options;
   // Soft limit: stripe 0 (100 rows) is under it, stripe 5 crosses it.
   options.maxRows = 150;
   options.needResumeKey = true;
-  auto result = projector->projectStreams(request, options);
+  auto result = projector->projectStreams(*request, options);
 
   ASSERT_EQ(result.responses.size(), 2);
   EXPECT_EQ(projector->stats().numReadStripes, 2);
@@ -8223,12 +8234,13 @@ TEST_P(NimbleIndexProjectorTest, truncationResumeKeyWithStripeGap) {
   // Resuming from that key returns exactly the rows the gap-aware lookup said
   // were left: stripes 6-8, keys 600-899.
   auto resumed = createProjector(subfields);
-  NimbleIndexProjector::Request resumeRequest;
-  resumeRequest.keyBounds = {velox::serializer::EncodedKeyBounds{
-      .lowerKey = truncated.resumeKey.value(), .upperKey = bounds1.upperKey}};
+  const auto resumeRequest = index::IndexLookup::LookupRequest::rangeScan(
+      {velox::serializer::EncodedKeyBounds{
+          .lowerKey = truncated.resumeKey.value(),
+          .upperKey = bounds1.upperKey}});
   NimbleIndexProjector::Options resumeOptions;
   resumeOptions.needResumeKey = true;
-  auto resumeResult = resumed->projectStreams(resumeRequest, resumeOptions);
+  auto resumeResult = resumed->projectStreams(*resumeRequest, resumeOptions);
 
   ASSERT_EQ(resumeResult.responses.size(), 1);
   uint64_t resumedRows = 0;
@@ -8257,13 +8269,13 @@ TEST_P(
   // carries no ranges.
   const auto bounds0 = makeRangeLookup(rowType, {"key"}, 0, 100);
   const auto bounds1 = makeRangeLookup(rowType, {"key"}, 500, 900);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds0, bounds1};
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan({bounds0, bounds1});
   NimbleIndexProjector::Options options;
   // Stripe 0 alone reaches the soft limit, so planning stops before request 1.
   options.maxRows = 100;
   options.needResumeKey = true;
-  const auto result = projector->projectStreams(request, options);
+  const auto result = projector->projectStreams(*request, options);
 
   ASSERT_EQ(result.responses.size(), 2);
   EXPECT_FALSE(result.responses[0].resumeKey.has_value());
@@ -8289,13 +8301,13 @@ TEST_P(
   // Request 0 covers stripe 0 and request 1 covers stripe 1.
   const auto bounds0 = makeRangeLookup(rowType, {"key"}, 0, 100);
   const auto bounds1 = makeRangeLookup(rowType, {"key"}, 100, 200);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds0, bounds1};
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan({bounds0, bounds1});
   NimbleIndexProjector::Options options;
   // Stripe 0 alone reaches the soft limit, so planning stops before request 1.
   options.maxRows = 100;
   options.needResumeKey = true;
-  const auto result = projector->projectStreams(request, options);
+  const auto result = projector->projectStreams(*request, options);
 
   ASSERT_EQ(result.responses.size(), 2);
   EXPECT_FALSE(result.responses[0].resumeKey.has_value());
@@ -8327,15 +8339,14 @@ TEST_P(
 
   // Request 0 spans stripes 0-1 and is cut after stripe 0. Request 1 lies past
   // the last key.
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({
       makeRangeLookup(rowType, {"key"}, 0, 200),
       makeRangeLookup(rowType, {"key"}, 2'000, 2'100),
-  };
+  });
   NimbleIndexProjector::Options options;
   options.maxRows = 100;
   options.needResumeKey = true;
-  const auto result = projector->projectStreams(request, options);
+  const auto result = projector->projectStreams(*request, options);
 
   ASSERT_EQ(result.responses.size(), 2);
   EXPECT_TRUE(result.responses[0].resumeKey.has_value());
@@ -8356,11 +8367,10 @@ TEST_P(NimbleIndexProjectorTest, needResumeKeyGatesResumeKey) {
   // neither the response nor the last slice carries a resume key.
   {
     auto projector = createProjector(subfields);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRows = 50;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
     ASSERT_EQ(result.responses.size(), 1);
     const auto& response = result.responses[0];
     ASSERT_FALSE(response.slices.empty());
@@ -8371,12 +8381,11 @@ TEST_P(NimbleIndexProjectorTest, needResumeKeyGatesResumeKey) {
   // Same truncation with needResumeKey set -> resume key present.
   {
     auto projector = createProjector(subfields);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRows = 50;
     options.needResumeKey = true;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
     ASSERT_EQ(result.responses.size(), 1);
     EXPECT_TRUE(result.responses[0].resumeKey.has_value());
   }
@@ -8385,11 +8394,10 @@ TEST_P(NimbleIndexProjectorTest, needResumeKeyGatesResumeKey) {
   // request is returned capped with no resume key.
   {
     auto projector = createProjector(subfields);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRowsPerRequest = 150;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
     ASSERT_EQ(result.responses.size(), 1);
     EXPECT_FALSE(result.responses[0].resumeKey.has_value());
     EXPECT_EQ(projector->stats().numProjectedRows, 150);
@@ -8398,12 +8406,11 @@ TEST_P(NimbleIndexProjectorTest, needResumeKeyGatesResumeKey) {
   // Same per-request cap with needResumeKey set -> resume key present.
   {
     auto projector = createProjector(subfields);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRowsPerRequest = 150;
     options.needResumeKey = true;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
     ASSERT_EQ(result.responses.size(), 1);
     EXPECT_TRUE(result.responses[0].resumeKey.has_value());
     EXPECT_EQ(projector->stats().numProjectedRows, 150);
@@ -8423,12 +8430,11 @@ TEST_P(NimbleIndexProjectorTest, limitsTruncateButEmitNoResumeKeyWhenDisabled) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 500);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRows = 50;
     options.needResumeKey = false;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
 
     ASSERT_EQ(result.responses.size(), 1);
     const auto& response = result.responses[0];
@@ -8448,12 +8454,11 @@ TEST_P(NimbleIndexProjectorTest, limitsTruncateButEmitNoResumeKeyWhenDisabled) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 500);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRowsPerRequest = 150;
     options.needResumeKey = false;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
 
     ASSERT_EQ(result.responses.size(), 1);
     const auto& response = result.responses[0];
@@ -8470,21 +8475,20 @@ TEST_P(NimbleIndexProjectorTest, limitsTruncateButEmitNoResumeKeyWhenDisabled) {
     {
       auto probe = createProjector(subfields);
       auto bounds = makeRangeLookup(rowType, {"key"}, 0, 100);
-      NimbleIndexProjector::Request request;
-      request.keyBounds = {bounds};
-      auto result = probe->projectStreams(request, {});
+      const auto request =
+          index::IndexLookup::LookupRequest::rangeScan({bounds});
+      auto result = probe->projectStreams(*request, {});
       bytesPerStripe = probe->stats().numOutputBytes;
       ASSERT_GT(bytesPerStripe, 0);
     }
 
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 500);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxBytes = bytesPerStripe * 2;
     options.needResumeKey = false;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
 
     ASSERT_EQ(result.responses.size(), 1);
     const auto& response = result.responses[0];
@@ -8513,12 +8517,12 @@ TEST_P(NimbleIndexProjectorTest, maxRowsPerRequestResumeKeyPagination) {
   while (pages < 100) {
     ++pages;
     auto projector = createProjector(subfields);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {currentBounds};
+    const auto request =
+        index::IndexLookup::LookupRequest::rangeScan({currentBounds});
     NimbleIndexProjector::Options options;
     options.maxRowsPerRequest = 150;
     options.needResumeKey = true;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
     ASSERT_EQ(result.responses.size(), 1);
     const auto& response = result.responses[0];
 
@@ -8556,11 +8560,11 @@ TEST_P(
   auto bounds0 = makeRangeLookup(rowType, {"key"}, 0, 300);
   auto bounds1 = makeRangeLookup(rowType, {"key"}, 0, 300);
 
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds0, bounds1};
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan({bounds0, bounds1});
   NimbleIndexProjector::Options options;
   options.maxRowsPerRequest = 150;
-  auto result = projector->projectStreams(request, options);
+  auto result = projector->projectStreams(*request, options);
 
   ASSERT_EQ(result.responses.size(), 2);
   for (int i = 0; i < 2; ++i) {
@@ -8590,11 +8594,10 @@ TEST_P(NimbleIndexProjectorTest, maxRowsPerRequestSingleRow) {
   // maxRowsPerRequest=1: each request gets exactly 1 row, clipped from the
   // first row of the first matching stripe.
   auto bounds = makeRangeLookup(rowType, {"key"}, 0, 500);
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
   NimbleIndexProjector::Options options;
   options.maxRowsPerRequest = 1;
-  auto result = projector->projectStreams(request, options);
+  auto result = projector->projectStreams(*request, options);
 
   ASSERT_EQ(result.responses.size(), 1);
   const auto& response = result.responses[0];
@@ -8622,12 +8625,12 @@ TEST_P(NimbleIndexProjectorTest, maxRowsLargeScale) {
     while (pages < 100) {
       ++pages;
       auto projector = createProjector(subfields);
-      NimbleIndexProjector::Request request;
-      request.keyBounds = {currentBounds};
+      const auto request =
+          index::IndexLookup::LookupRequest::rangeScan({currentBounds});
       NimbleIndexProjector::Options options;
       options.maxRows = maxRows;
       options.needResumeKey = true;
-      auto result = projector->projectStreams(request, options);
+      auto result = projector->projectStreams(*request, options);
       EXPECT_EQ(result.responses.size(), 1);
       totalReadRows += projector->stats().numProjectedRows;
       if (!result.responses[0].resumeKey.has_value()) {
@@ -8665,12 +8668,12 @@ TEST_P(NimbleIndexProjectorTest, maxRowsMultiRequestMixedSatisfaction) {
   auto bounds2 = makeRangeLookup(rowType, {"key"}, 0, 500);
   auto bounds3 = makeRangeLookup(rowType, {"key"}, 950, 1000);
 
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {bounds0, bounds1, bounds2, bounds3};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {bounds0, bounds1, bounds2, bounds3});
   NimbleIndexProjector::Options options;
   options.maxRows = 100;
   options.needResumeKey = true;
-  auto result = projector->projectStreams(request, options);
+  auto result = projector->projectStreams(*request, options);
 
   ASSERT_EQ(result.responses.size(), 4);
 
@@ -8705,9 +8708,8 @@ TEST_P(NimbleIndexProjectorTest, maxBytesAndMaxRowsPerRequestInteraction) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 100);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
-    auto result = projector->projectStreams(request, {});
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+    auto result = projector->projectStreams(*request, {});
     ASSERT_EQ(result.responses[0].slices.size(), 1);
     bytesPerStripe = projector->stats().numOutputBytes;
   }
@@ -8717,13 +8719,12 @@ TEST_P(NimbleIndexProjectorTest, maxBytesAndMaxRowsPerRequestInteraction) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 500);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRowsPerRequest = 150;
     options.maxBytes = bytesPerStripe * 5;
 
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
     ASSERT_EQ(result.responses.size(), 1);
     EXPECT_FALSE(result.responses[0].resumeKey.has_value());
     EXPECT_EQ(projector->stats().numProjectedRows, 150);
@@ -8734,14 +8735,13 @@ TEST_P(NimbleIndexProjectorTest, maxBytesAndMaxRowsPerRequestInteraction) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 500);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
     NimbleIndexProjector::Options options;
     options.maxRowsPerRequest = 300;
     options.maxBytes = bytesPerStripe;
     options.needResumeKey = true;
 
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
     ASSERT_EQ(result.responses.size(), 1);
     EXPECT_TRUE(result.responses[0].resumeKey.has_value());
     EXPECT_LE(projector->stats().numReadStripes, 2);
@@ -8762,9 +8762,8 @@ TEST_P(NimbleIndexProjectorTest, maxBytesLargeScale) {
   {
     auto projector = createProjector(subfields);
     auto bounds = makeRangeLookup(rowType, {"key"}, 0, 200);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {bounds};
-    auto result = projector->projectStreams(request, {});
+    const auto request = index::IndexLookup::LookupRequest::rangeScan({bounds});
+    auto result = projector->projectStreams(*request, {});
     ASSERT_EQ(result.responses[0].slices.size(), 1);
     bytesPerStripe = projector->stats().numOutputBytes;
   }
@@ -8776,12 +8775,12 @@ TEST_P(NimbleIndexProjectorTest, maxBytesLargeScale) {
   while (pages < 100) {
     ++pages;
     auto projector = createProjector(subfields);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {currentBounds};
+    const auto request =
+        index::IndexLookup::LookupRequest::rangeScan({currentBounds});
     NimbleIndexProjector::Options options;
     options.maxBytes = bytesPerStripe * 3;
     options.needResumeKey = true;
-    auto result = projector->projectStreams(request, options);
+    auto result = projector->projectStreams(*request, options);
     EXPECT_EQ(result.responses.size(), 1);
     totalReadRows += projector->stats().numProjectedRows;
     if (!result.responses[0].resumeKey.has_value()) {
@@ -8974,7 +8973,7 @@ class NimbleIndexProjectorChecksumTest
 
   ProjectionSummary project(
       NimbleIndexProjector& projector,
-      const NimbleIndexProjector::Request& request,
+      const index::IndexLookup::LookupRequest& request,
       const NimbleIndexProjector::Options& options) {
     ProjectionSummary summary;
     if (GetParam().output == ProjectionOutput::kStreams) {
@@ -8999,7 +8998,7 @@ class NimbleIndexProjectorChecksumTest
   // key bound must select rows of a single stripe.
   std::vector<VectorPtr> projectValues(
       NimbleIndexProjector& projector,
-      const NimbleIndexProjector::Request& request) {
+      const index::IndexLookup::LookupRequest& request) {
     std::vector<VectorPtr> values;
     if (GetParam().output == ProjectionOutput::kStreams) {
       auto result = projector.projectStreams(request, {});
@@ -9031,7 +9030,7 @@ class NimbleIndexProjectorChecksumTest
 
   ProjectedOutput projectOutput(
       NimbleIndexProjector& projector,
-      const NimbleIndexProjector::Request& request) {
+      const index::IndexLookup::LookupRequest& request) {
     ProjectedOutput output;
     if (GetParam().output == ProjectionOutput::kStreams) {
       auto result = projector.projectStreams(request, {});
@@ -9097,9 +9096,9 @@ TEST_P(NimbleIndexProjectorChecksumTest, streamChecksumVerificationPasses) {
   auto projector = createVerifyingProjector(subfields);
 
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
-  auto result = project(*projector, request, {});
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 50)});
+  auto result = project(*projector, *request, {});
 
   ASSERT_EQ(result.responseHasData.size(), 1);
   EXPECT_TRUE(result.responseHasData[0]);
@@ -9128,10 +9127,10 @@ TEST_P(NimbleIndexProjectorChecksumTest, streamChecksumDetectsCorruptedStream) {
   auto projector = createVerifyingProjector(subfields);
 
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 50)});
   NIMBLE_ASSERT_THROW(
-      project(*projector, request, {}), "Stream checksum mismatch");
+      project(*projector, *request, {}), "Stream checksum mismatch");
 }
 
 // A projection that co-loads stripe key streams verifies them like the streams
@@ -9145,11 +9144,11 @@ TEST_P(
   std::vector<Subfield> subfields;
   subfields.emplace_back("value");
   const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makePointLookup(rowType, {"key"}, 10)};
+  auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 10)});
   const NimbleIndexProjector::Options options{.coLoadKeyStreams = true};
   EXPECT_THAT(
-      project(*createVerifyingProjector(subfields), request, options)
+      project(*createVerifyingProjector(subfields), *request, options)
           .responseHasData,
       ::testing::ElementsAre(true));
 
@@ -9167,7 +9166,7 @@ TEST_P(
   }
   resetReaders();
   NIMBLE_ASSERT_FILE_THROW(
-      project(*createVerifyingProjector(subfields), request, options),
+      project(*createVerifyingProjector(subfields), *request, options),
       "stripe 0, cluster index key stream");
 }
 
@@ -9200,18 +9199,20 @@ TEST_P(
   resetReaders();
 
   const NimbleIndexProjector::Options options{.coLoadKeyStreams = true};
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makeRangeLookup(rowType, {"key"}, 190, 410)};
+  auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makeRangeLookup(rowType, {"key"}, 190, 410)});
   NIMBLE_ASSERT_FILE_THROW(
-      project(*createVerifyingProjector(subfields), request, options),
+      project(*createVerifyingProjector(subfields), *request, options),
       "stripe 1, cluster index key stream");
-  request.keyBounds = {makePointLookup(rowType, {"key"}, 300)};
+  request = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 300)});
   NIMBLE_ASSERT_FILE_THROW(
-      project(*createVerifyingProjector(subfields), request, options),
+      project(*createVerifyingProjector(subfields), *request, options),
       "stripe 1, cluster index key stream");
-  request.keyBounds = {makePointLookup(rowType, {"key"}, 100)};
+  request = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 100)});
   EXPECT_THAT(
-      project(*createVerifyingProjector(subfields), request, options)
+      project(*createVerifyingProjector(subfields), *request, options)
           .responseHasData,
       ::testing::ElementsAre(true));
 }
@@ -9253,12 +9254,12 @@ TEST_P(
   subfields.emplace_back("value");
   const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
   // The co-load reads only stripe 1, at its first position.
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makePointLookup(rowType, {"key"}, 300)};
+  auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 300)});
   NIMBLE_ASSERT_FILE_THROW(
       project(
           *createVerifyingProjector(subfields),
-          request,
+          *request,
           {.coLoadKeyStreams = true}),
       ": stripe 1, stream ");
 }
@@ -9286,14 +9287,14 @@ TEST_P(
   std::vector<Subfield> subfields;
   subfields.emplace_back("value");
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 50)});
   NIMBLE_ASSERT_THROW(
-      project(*createVerifyingProjector(subfields), request, {}),
+      project(*createVerifyingProjector(subfields), *request, {}),
       "Stream checksum mismatch");
 
   // A projector that does not verify ignores the trailers.
-  const auto values = projectValues(*createProjector(subfields), request);
+  const auto values = projectValues(*createProjector(subfields), *request);
   ASSERT_EQ(values.size(), 1);
   velox::test::assertEqualVectors(
       vectorMaker_->rowVector(
@@ -9326,10 +9327,10 @@ TEST_P(
   std::vector<Subfield> subfields;
   subfields.emplace_back("value");
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 50)});
   const auto expectUnverified = [&](NimbleIndexProjector& projector) {
-    const auto values = projectValues(projector, request);
+    const auto values = projectValues(projector, *request);
     ASSERT_EQ(values.size(), 1);
     velox::test::assertEqualVectors(
         vectorMaker_->rowVector(
@@ -9341,7 +9342,7 @@ TEST_P(
   expectUnverified(*projector);
   projector->setVerifyStreamChecksums(true);
   NIMBLE_ASSERT_THROW(
-      project(*projector, request, {}), "Stream checksum mismatch");
+      project(*projector, *request, {}), "Stream checksum mismatch");
   projector->setVerifyStreamChecksums(false);
   expectUnverified(*projector);
 
@@ -9350,7 +9351,7 @@ TEST_P(
   expectUnverified(*verifyingProjector);
   verifyingProjector->setVerifyStreamChecksums(true);
   NIMBLE_ASSERT_THROW(
-      project(*verifyingProjector, request, {}), "Stream checksum mismatch");
+      project(*verifyingProjector, *request, {}), "Stream checksum mismatch");
 }
 
 // Toggles verification at random between point lookups and range scans on one
@@ -9398,24 +9399,23 @@ TEST_P(
             scan,
             firstRow));
     projector->setVerifyStreamChecksums(verify);
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {
-        scan ? makeRangeLookup(
-                   rowType,
-                   {"key"},
-                   firstRow * 10,
-                   (firstRow + numRows - 1) * 10 + 5)
-             : makePointLookup(rowType, {"key"}, firstRow * 10)};
+    const auto request = index::IndexLookup::LookupRequest::rangeScan(
+        {scan ? makeRangeLookup(
+                    rowType,
+                    {"key"},
+                    firstRow * 10,
+                    (firstRow + numRows - 1) * 10 + 5)
+              : makePointLookup(rowType, {"key"}, firstRow * 10)});
     if (verify) {
       NIMBLE_ASSERT_THROW(
-          project(*projector, request, {}), "Stream checksum mismatch");
+          project(*projector, *request, {}), "Stream checksum mismatch");
       continue;
     }
     std::vector<int32_t> expected(numRows);
     for (int row = 0; row < numRows; ++row) {
       expected[row] = (firstRow + row) * 100;
     }
-    const auto values = projectValues(*projector, request);
+    const auto values = projectValues(*projector, *request);
     ASSERT_EQ(values.size(), 1);
     velox::test::assertEqualVectors(
         vectorMaker_->rowVector(
@@ -9459,10 +9459,10 @@ TEST_P(
   std::vector<Subfield> subfields;
   subfields.emplace_back("value");
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 50)});
   const auto values =
-      projectValues(*createVerifyingProjector(subfields), request);
+      projectValues(*createVerifyingProjector(subfields), *request);
   ASSERT_EQ(values.size(), 1);
   velox::test::assertEqualVectors(
       vectorMaker_->rowVector(
@@ -9484,10 +9484,10 @@ TEST_P(
   auto projector = createVerifyingProjector(subfields);
 
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 50)});
 
-  auto result = project(*projector, request, {});
+  auto result = project(*projector, *request, {});
   ASSERT_EQ(result.responseHasData.size(), 1);
   EXPECT_TRUE(result.responseHasData[0]);
 }
@@ -9522,9 +9522,9 @@ TEST_P(
 
   auto projector = createProjector(subfields);
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
-  auto result = project(*projector, request, {});
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 50)});
+  auto result = project(*projector, *request, {});
   ASSERT_EQ(result.responseHasData.size(), 1);
   EXPECT_TRUE(result.responseHasData[0]);
 }
@@ -9575,11 +9575,10 @@ TEST_P(
 
     // The first and last rows, in the first and last stripe groups.
     auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
-    NimbleIndexProjector::Request request;
-    request.keyBounds = {
-        makePointLookup(rowType, {"key"}, 0),
-        makePointLookup(rowType, {"key"}, 39'990)};
-    const auto values = projectValues(*projector, request);
+    const auto request = index::IndexLookup::LookupRequest::rangeScan(
+        {makePointLookup(rowType, {"key"}, 0),
+         makePointLookup(rowType, {"key"}, 39'990)});
+    const auto values = projectValues(*projector, *request);
     ASSERT_EQ(values.size(), 2);
     velox::test::assertEqualVectors(
         vectorMaker_->rowVector(
@@ -9623,12 +9622,13 @@ TEST_P(
   const std::vector<int> rows{350, 5, 150};
   for (size_t call = 0; call < rows.size(); ++call) {
     SCOPED_TRACE(fmt::format("call={}", call));
-    NimbleIndexProjector::Request request;
+    std::vector<velox::serializer::EncodedKeyBounds> keyBounds;
     for (size_t i = 0; i <= call; ++i) {
-      request.keyBounds.push_back(
-          makePointLookup(rowType, {"key"}, rows[i] * 10));
+      keyBounds.push_back(makePointLookup(rowType, {"key"}, rows[i] * 10));
     }
-    const auto values = projectValues(*projector, request);
+    const auto request =
+        index::IndexLookup::LookupRequest::rangeScan(std::move(keyBounds));
+    const auto values = projectValues(*projector, *request);
     ASSERT_EQ(values.size(), call + 1);
     for (size_t i = 0; i <= call; ++i) {
       velox::test::assertEqualVectors(
@@ -9665,19 +9665,19 @@ TEST_P(
   subfields.emplace_back("value");
   auto projector = createVerifyingProjector(subfields);
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
-  NimbleIndexProjector::Request firstStripeRequest;
-  firstStripeRequest.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
-  NimbleIndexProjector::Request lastStripeRequest;
-  lastStripeRequest.keyBounds = {makePointLookup(rowType, {"key"}, 3'500)};
+  const auto firstStripeRequest = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 50)});
+  const auto lastStripeRequest = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 3'500)});
 
-  EXPECT_TRUE(project(*projector, firstStripeRequest, {}).responseHasData[0]);
+  EXPECT_TRUE(project(*projector, *firstStripeRequest, {}).responseHasData[0]);
 
   ASSERT_NO_FATAL_FAILURE(corruptProjectedStreams());
   // The error names the stripe the damaged stream is in.
   NIMBLE_ASSERT_FILE_THROW(
-      project(*projector, firstStripeRequest, {}), ": stripe 0, stream ");
+      project(*projector, *firstStripeRequest, {}), ": stripe 0, stream ");
 
-  auto result = project(*projector, lastStripeRequest, {});
+  auto result = project(*projector, *lastStripeRequest, {});
   ASSERT_EQ(result.responseHasData.size(), 1);
   EXPECT_TRUE(result.responseHasData[0]);
 }
@@ -9723,9 +9723,9 @@ TEST_P(
 
   auto rowType =
       ROW({"key", "valueA", "valueB"}, {BIGINT(), INTEGER(), INTEGER()});
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
-  auto result = project(*projector, request, {});
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 50)});
+  auto result = project(*projector, *request, {});
   ASSERT_EQ(result.responseHasData.size(), 1);
   EXPECT_TRUE(result.responseHasData[0]);
 }
@@ -9804,9 +9804,9 @@ TEST_P(NimbleIndexProjectorChecksumTest, streamChecksumsWithFlatMapColumns) {
   auto projector = createVerifyingProjector(subfields);
 
   auto rowType = ROW({"key", "features"}, {BIGINT(), MAP(VARCHAR(), BIGINT())});
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makePointLookup(rowType, {"key"}, 500)};
-  auto result = project(*projector, request, {});
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 500)});
+  auto result = project(*projector, *request, {});
   ASSERT_EQ(result.responseHasData.size(), 1);
   EXPECT_TRUE(result.responseHasData[0]);
 
@@ -9814,7 +9814,7 @@ TEST_P(NimbleIndexProjectorChecksumTest, streamChecksumsWithFlatMapColumns) {
   ASSERT_NO_FATAL_FAILURE(corruptProjectedStreams());
   auto corruptedProjector = createVerifyingProjector(subfields);
   NIMBLE_ASSERT_THROW(
-      project(*corruptedProjector, request, {}), "Stream checksum mismatch");
+      project(*corruptedProjector, *request, {}), "Stream checksum mismatch");
 }
 
 // Checksums present but verification off: reads proceed and corruption goes
@@ -9840,9 +9840,9 @@ TEST_P(
   auto projector = createProjector(subfields);
 
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makePointLookup(rowType, {"key"}, 50)};
-  auto result = project(*projector, request, {});
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 50)});
+  auto result = project(*projector, *request, {});
   ASSERT_EQ(result.responseHasData.size(), 1);
   EXPECT_TRUE(result.responseHasData[0]);
 }
@@ -9857,11 +9857,10 @@ TEST_P(
   const auto batches = makeStreamChecksumBatches(
       *vectorMaker_, /*numBatches=*/16, /*rowsPerBatch=*/250);
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {
-      makePointLookup(rowType, {"key"}, 10),
-      makeRangeLookup(rowType, {"key"}, 9'000, 21'000),
-      makePointLookup(rowType, {"key"}, 39'990)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 10),
+       makeRangeLookup(rowType, {"key"}, 9'000, 21'000),
+       makePointLookup(rowType, {"key"}, 39'990)});
   std::vector<Subfield> subfields;
   subfields.emplace_back("value");
 
@@ -9894,10 +9893,11 @@ TEST_P(
             .has_value());
 
     const auto verified =
-        projectOutput(*createVerifyingProjector(subfields), request);
-    const auto unverified = projectOutput(*createProjector(subfields), request);
+        projectOutput(*createVerifyingProjector(subfields), *request);
+    const auto unverified =
+        projectOutput(*createProjector(subfields), *request);
     setFile(std::move(withoutChecksums));
-    const auto expected = projectOutput(*createProjector(subfields), request);
+    const auto expected = projectOutput(*createProjector(subfields), *request);
 
     if (GetParam().output == ProjectionOutput::kStreams) {
       ASSERT_EQ(expected.slices.size(), 3);
@@ -10069,11 +10069,11 @@ TEST_P(
 
   std::vector<Subfield> subfields;
   subfields.emplace_back("value");
-  NimbleIndexProjector::Request request;
-  request.keyBounds = {makePointLookup(rowType, {"key"}, 500)};
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makePointLookup(rowType, {"key"}, 500)});
   const auto expected = vectorMaker_->rowVector(
       {"value"}, {vectorMaker_->flatVector<int32_t>({5'000})});
-  auto values = projectValues(*createVerifyingProjector(subfields), request);
+  auto values = projectValues(*createVerifyingProjector(subfields), *request);
   ASSERT_EQ(values.size(), 1);
   velox::test::assertEqualVectors(expected, values[0]);
 
@@ -10082,14 +10082,14 @@ TEST_P(
   for (const uint32_t fillerByte : {0U, kTrailerSize - 1}) {
     SCOPED_TRACE(fmt::format("fillerByte={}", fillerByte));
     flipTrailerBytes(fillerByte);
-    values = projectValues(*createVerifyingProjector(subfields), request);
+    values = projectValues(*createVerifyingProjector(subfields), *request);
     ASSERT_EQ(values.size(), 1);
     velox::test::assertEqualVectors(expected, values[0]);
   }
 
   flipTrailerBytes(/*byteInTrailer=*/kLeadingFillerSize);
   NIMBLE_ASSERT_THROW(
-      project(*createVerifyingProjector(subfields), request, {}),
+      project(*createVerifyingProjector(subfields), *request, {}),
       "Stream checksum mismatch");
 }
 
