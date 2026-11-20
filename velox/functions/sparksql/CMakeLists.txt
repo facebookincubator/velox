@@ -57,6 +57,7 @@ velox_add_library(
   Transform.cpp
   TransformKeys.cpp
   UnscaledValueFunction.cpp
+  UrlParser.cpp
   XxHash64.cpp
   HEADERS
   AnsiMode.h
@@ -106,6 +107,7 @@ velox_add_library(
   MaskFunction.h
   MightContain.h
   MonotonicallyIncreasingId.h
+  ParseUrl.h
   RaiseError.h
   Rand.h
   RandStr.h
@@ -123,6 +125,7 @@ velox_add_library(
   TransformKeys.h
   UnBase64Function.h
   UnscaledValueFunction.h
+  UrlParser.h
   Uuid.h
   VarcharTypeWriteSideCheck.h
   XxHash64.h
