@@ -972,6 +972,7 @@ WriterStreamContext::ensureSharedDictionaryWriter(
   SharedDictionaryWriter::Options dictionaryOptions{
       .scope = config.scope,
       .dictionaryId = config.dictionaryId,
+      .resolverKey = config.resolverKey,
       .useExternalAlphabet = config.useExternalAlphabet,
       .alphabetEncodings = config.alphabetEncodings,
       .encodingSelectionPolicyCreator =
@@ -1027,13 +1028,34 @@ void configureDictionary(
           "Shared dictionary value must be an integer or string scalar, got "
           "{}.",
           scalar.scalarDescriptor().scalarKind());
-      if (config.scope == SharedDictionaryScope::Stripe) {
-        NIMBLE_USER_CHECK_EQ(
-            config.dictionaryId,
-            0,
-            "Stripe shared dictionary config must leave dictionaryId unset.");
-        config.dictionaryId = schemaBuilder.createSharedDictionaryStream(
-            scalar.scalarDescriptor().offset());
+      // Stripe and File dictionaries are named inside the written file, so the
+      // writer allocates their ids here, once per configured value stream.
+      // External dictionaries are named by the caller and keep the id they came
+      // with, which the reader hands back to the resolver.
+      switch (config.scope) {
+        case SharedDictionaryScope::Stripe:
+          NIMBLE_USER_CHECK_EQ(
+              config.dictionaryId,
+              0,
+              "Stripe shared dictionary config must leave dictionaryId unset.");
+          config.dictionaryId = schemaBuilder.createSharedDictionaryStream(
+              scalar.scalarDescriptor().offset());
+          break;
+        case SharedDictionaryScope::File:
+          // TODO: Support one File dictionary shared by several value streams.
+          // Callers would label the streams that share, through a nonzero
+          // dictionaryId or a dedicated group field. collectDictionaryConfigs()
+          // would remap the labels to ids 0..k-1 in config order and start this
+          // counter at k, and the streams of one label would share a single
+          // TypedSharedDictionaryWriter instead of owning one each.
+          NIMBLE_USER_CHECK_EQ(
+              config.dictionaryId,
+              0,
+              "File shared dictionary config must leave dictionaryId unset.");
+          config.dictionaryId = schemaBuilder.createFileSharedDictionaryId();
+          break;
+        case SharedDictionaryScope::External:
+          break;
       }
       streamContext(scalar.scalarDescriptor())
           .setSharedDictionaryConfig(config);
@@ -1068,20 +1090,6 @@ void configureDictionary(
           "scalar, array element, or map value, got {}.",
           typeBuilder.kind());
   }
-}
-
-void maybeAddFileDictionaryId(
-    const SharedDictionaryConfig& config,
-    folly::F14FastSet<uint32_t>& fileDictionaryIds) {
-  if (config.scope != SharedDictionaryScope::File) {
-    return;
-  }
-  const bool inserted = fileDictionaryIds.insert(config.dictionaryId).second;
-  NIMBLE_USER_CHECK(
-      inserted,
-      "File shared dictionary ID {} is configured for multiple streams. "
-      "Cross-stream domains are not supported yet.",
-      config.dictionaryId);
 }
 
 const TypeWithId& resolveDictionaryValueType(
@@ -1480,7 +1488,6 @@ DictionaryConfigs collectDictionaryConfigs(
       velox::TypeKind::ROW,
       "Shared dictionary encoding requires a row root type, got {}.",
       type.type()->toString());
-  folly::F14FastSet<uint32_t> fileDictionaryIds;
   folly::F14FastSet<uint32_t> columnValueNodeIds;
   configs.columns.reserve(dictionaryEncodingConfig.columns.size());
   for (const auto& columnDictionary : dictionaryEncodingConfig.columns) {
@@ -1514,7 +1521,6 @@ DictionaryConfigs collectDictionaryConfigs(
         "value stream (schema node {}).",
         columnDictionary.fieldPath,
         valueNodeId);
-    maybeAddFileDictionaryId(columnDictionary.dictionary, fileDictionaryIds);
     const auto nodeId = static_cast<uint32_t>(fieldType.id());
     const auto inserted =
         configs.columns.emplace(nodeId, columnDictionary.dictionary).second;
@@ -1579,7 +1585,6 @@ DictionaryConfigs collectDictionaryConfigs(
             flatMapKey.valueSubfield,
             valueType.id());
       }
-      maybeAddFileDictionaryId(config, fileDictionaryIds);
       flatMapKeys[std::to_string(flatMapKey.key)].push_back(
           FlatmapEncodingLayoutContext::ValueDictionaryConfig{
               .valueSubfield = flatMapKey.valueSubfield, .dictionary = config});
