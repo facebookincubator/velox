@@ -96,7 +96,35 @@ TEST_F(SqlTest, tableScan) {
   assertSql("SELECT t.a, t.b, t.c, u.b FROM t left join u on t.a = u.a");
   assertSql(
       "SELECT t.a, t.b, t.c FROM t WHERE EXISTS (SELECT 1 FROM u WHERE t.a = u.a)");
+  assertSql(
+      "SELECT t.a FROM t WHERE EXISTS ("
+      "SELECT 1 FROM u WHERE u.a = t.a AND EXISTS ("
+      "SELECT 1 FROM t AS v WHERE v.a = u.a))");
   assertSql("SELECT t.a, t.b, t.c FROM t WHERE a < (SELECT max(u.a) FROM u)");
+}
+
+TEST_F(SqlTest, lateralJoin) {
+  auto data = makeRowVector(
+      {"a", "b"},
+      {makeNullableFlatVector<int64_t>({1, 1, 2, std::nullopt}),
+       makeFlatVector<int64_t>({10, 20, 30, 40})});
+  createDuckDbTable("t", {data});
+  planner_->registerTable("t", {data});
+
+  for (const auto& sql : {
+           "SELECT t.a, sub.b FROM t, LATERAL "
+           "(SELECT u.b FROM t u WHERE u.a = t.a) sub",
+           "SELECT t.a, sub.b FROM t CROSS JOIN LATERAL "
+           "(SELECT u.b FROM t u WHERE u.a > t.a) sub",
+           "SELECT t.a, sub.b FROM t JOIN LATERAL "
+           "(SELECT u.b FROM t u WHERE u.a IS NOT DISTINCT FROM t.a) sub "
+           "ON sub.b >= t.b",
+           "SELECT t.a, sub.b FROM t INNER JOIN LATERAL "
+           "(SELECT u.b FROM t u WHERE u.a = t.a OR u.b = t.b) sub ON true",
+       }) {
+    SCOPED_TRACE(sql);
+    assertSql(sql);
+  }
 }
 
 } // namespace facebook::velox::exec::test
