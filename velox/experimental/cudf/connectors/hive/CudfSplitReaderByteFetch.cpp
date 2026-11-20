@@ -44,8 +44,7 @@ fetchPageIndexes(
   std::vector<std::reference_wrapper<cudf::io::datasource>> dataSources{
       std::ref(*dataSource)};
   auto buffers = cudf::io::parquet::fetch_page_indexes_to_host(
-      dataSources,
-      std::span{pageIndexByteRanges.data(), pageIndexByteRanges.size()});
+      dataSources, std::span{pageIndexByteRanges});
 
   std::vector<cudf::host_span<const uint8_t>> spans;
   spans.reserve(buffers.size());

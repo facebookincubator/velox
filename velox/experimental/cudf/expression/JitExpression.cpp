@@ -66,7 +66,7 @@ ColumnOrView JitExpression::eval(
       return cudf::compute_column_jit(
           astInputTableView,
           expr_.cudfTree_.back(),
-          {},
+          /*fragments=*/{},
           stream,
           withTempMr(mr));
     }
