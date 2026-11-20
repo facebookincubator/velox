@@ -126,13 +126,12 @@ std::unique_ptr<cudf::column> makeLimitMask(
       mr);
 }
 
-bool supportsRankKey(const TypePtr& type, bool sortingKey) {
-  if (type->providesCustomComparison() ||
-      (sortingKey && (type->isArray() || type->isMap()))) {
+bool supportsRankSortingKey(const TypePtr& type) {
+  if (type->isArray() || type->isMap()) {
     return false;
   }
   for (uint32_t i = 0; i < type->size(); ++i) {
-    if (!supportsRankKey(type->childAt(i), sortingKey)) {
+    if (!supportsRankSortingKey(type->childAt(i))) {
       return false;
     }
   }
@@ -151,13 +150,8 @@ bool CudfTopNRowNumber::canRunOnGPU(const core::TopNRowNumberNode& node) {
     default:
       return false;
   }
-  for (const auto& key : node.partitionKeys()) {
-    if (!supportsRankKey(key->type(), /*sortingKey=*/false)) {
-      return false;
-    }
-  }
   for (const auto& key : node.sortingKeys()) {
-    if (!supportsRankKey(key->type(), /*sortingKey=*/true)) {
+    if (!supportsRankSortingKey(key->type())) {
       return false;
     }
   }
@@ -185,7 +179,7 @@ CudfTopNRowNumber::CudfTopNRowNumber(
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
   VELOX_CHECK(
       canRunOnGPU(*node),
-      "Unsupported ranking function or partitioning/sorting key types for CudfTopNRowNumber");
+      "Unsupported ranking function or sorting key types for CudfTopNRowNumber");
 
   partitionKeyIndices_.reserve(node->partitionKeys().size());
   for (const auto& key : node->partitionKeys()) {

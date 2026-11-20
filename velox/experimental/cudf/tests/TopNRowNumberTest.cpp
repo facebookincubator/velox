@@ -24,7 +24,6 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
 #include <limits>
@@ -777,8 +776,6 @@ TEST_F(TopNRowNumberTest, unsupportedRankKeys) {
       ARRAY(BIGINT()),
       MAP(BIGINT(), BIGINT()),
       ROW("nested", ARRAY(BIGINT())),
-      TIMESTAMP_WITH_TIME_ZONE(),
-      ROW("nested", TIMESTAMP_WITH_TIME_ZONE()),
   };
   for (const auto& function : {"rank", "dense_rank"}) {
     for (const auto& type : unsupportedSortingTypes) {
@@ -806,20 +803,6 @@ TEST_F(TopNRowNumberTest, unsupportedRankKeys) {
                 *std::dynamic_pointer_cast<const core::TopNRowNumberNode>(
                     plan)));
       }
-    }
-
-    for (const auto& type : std::vector<TypePtr>{
-             TIMESTAMP_WITH_TIME_ZONE(),
-             ROW("nested", TIMESTAMP_WITH_TIME_ZONE())}) {
-      auto data = BaseVector::create<RowVector>(
-          ROW({{"c0", type}, {"c1", BIGINT()}}), 0, pool());
-      auto plan = PlanBuilder()
-                      .values({data})
-                      .topNRank(function, {"c0"}, {"c1"}, 1, true)
-                      .planNode();
-      ASSERT_FALSE(
-          cudf_velox::CudfTopNRowNumber::canRunOnGPU(
-              *std::dynamic_pointer_cast<const core::TopNRowNumberNode>(plan)));
     }
   }
 
