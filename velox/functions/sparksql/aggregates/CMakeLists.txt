@@ -55,6 +55,7 @@ velox_link_libraries(
   velox_exec
   velox_expression_functions
   velox_aggregates
+  velox_functions_lib
   velox_vector
 )
 
