@@ -374,8 +374,8 @@ class SharedArbitrator : public memory::MemoryArbitrator {
       MemoryPool* pool,
       uint64_t requestBytes);
 
-  // Run arbitration to grow capacity for 'op'. The function returns true on
-  // success.
+  // Runs arbitration to grow capacity for 'op'. The function throws if the
+  // growth fails, for example when the capacity limits are exceeded.
   void growCapacity(ArbitrationOperation& op);
 
   // Invoked to start execution of 'op'. It waits for the serialized execution
@@ -386,12 +386,18 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   // operation waiting on the same participant to run if there is one.
   void finishArbitration(ArbitrationOperation* op);
 
-  // Invoked to check if the capacity growth exceeds the participant's max
-  // capacity limit or the arbitrator's capacity limit.
+  // Returns true if 'op' participant can grow its capacity by the request bytes
+  // under both its max capacity limit and the arbitrator capacity limit, based
+  // on the current capacity usage. Unlike 'ensureCapacity', the function
+  // doesn't reclaim memory.
   bool checkCapacityGrowth(ArbitrationOperation& op) const;
 
-  // Invoked to ensure the capacity growth won't exceed the participant's max
-  // capacity limit by reclaiming used memory from the participant itself.
+  // Tries to accommodate the 'op' capacity growth request, under both the
+  // participant's max capacity limit and the arbitrator capacity limit, by
+  // reclaiming memory from the participant itself. Returns false if the request
+  // alone exceeds the limits, in which case it doesn't reclaim anything, or if
+  // the limits still can't accommodate the growth after the reclaim. The caller
+  // shall fail the request as capacity exceeded on false.
   bool ensureCapacity(ArbitrationOperation& op);
 
   // Invoked to initialize the global arbitration on arbitrator start-up. It
@@ -512,8 +518,12 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   // youngest participant to abort if there is no eligible one.
   std::optional<ArbitrationCandidate> findAbortCandidate(bool force);
 
-  // Invoked to use free capacity from arbitrator to grow participant's
-  // capacity.
+  // Tries to grow 'op' participant's capacity using the arbitrator free
+  // capacity without waiting for it to become available, and returns false
+  // immediately if free capacity cannot be allocated to this participant right
+  // now, in which case the caller shall fall back to other means, such as
+  // reclaiming unused memory capacity from participants or global arbitration,
+  // before failing the operation.
   bool growWithFreeCapacity(ArbitrationOperation& op);
 
   // Checks if the operation has been aborted or not. The function throws if
@@ -524,21 +534,37 @@ class SharedArbitrator : public memory::MemoryArbitrator {
   // out.
   void checkIfTimeout(ArbitrationOperation& op);
 
-  // Checks if the request participant already has enough free capacity for the
-  // growth. This could happen if there are multiple arbitration operations from
-  // the same participant. When the first served operation succeeds, it might
-  // have reserved enough capacity for the followup operations.
+  // Tries to commit the request reservation from the participant's own free
+  // capacity without growing its capacity. It consumes no arbitrator free
+  // capacity. A participant may have multiple arbitration operations pending at
+  // the same time. They are served one at a time. It succeeds if the
+  // participant's free capacity can cover the request, e.g., because a prior
+  // served operation grew extra capacity, or the participant reclaimed its own
+  // used memory by spilling. Returns true if the reservation is committed and
+  // the operation is done.
   bool maybeGrowFromSelf(ArbitrationOperation& op);
 
-  // Invoked to grow 'participant' capacity by 'growBytes' and commit used
-  // reservation by 'reservationBytes'. The function throws if the growth fails.
+  // Grows 'participant' capacity by 'growBytes' and commits 'reservationBytes'
+  // used reservation. Requires that the caller has allocated 'growBytes' from
+  // the arbitrator free capacity before calling this function. Throws if the
+  // participant pool rejects the growth.
+  //
+  // NOTE: unlike 'checkedGrowOrFree()', this function doesn't free back the
+  // allocated capacity if the growth fails. The caller must do so. Prefer
+  // 'checkedGrowOrFree()' unless the caller already holds 'stateMutex_', where
+  // 'checkedGrowOrFree()' would deadlock on a failed growth, and the rollback
+  // must go through 'freeCapacityLocked()' instead.
   void checkedGrow(
       const ScopedArbitrationParticipant& participant,
       uint64_t growBytes,
       uint64_t reservationBytes);
 
-  // Grows 'participant' capacity like checkedGrow(), but frees 'growBytes' back
-  // to the arbitrator before rethrowing if the growth fails.
+  // Grows 'participant' capacity like 'checkedGrow()', but frees 'growBytes'
+  // back to the arbitrator before rethrowing if the growth fails, so the
+  // allocated capacity is either added to the participant or returned for
+  // re-allocation to other participants, including pending global arbitration
+  // waiters. Use this function only on paths that don't hold 'stateMutex_', as
+  // 'freeCapacity()' takes the lock.
   void checkedGrowOrFree(
       const ScopedArbitrationParticipant& participant,
       uint64_t growBytes,
