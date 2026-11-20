@@ -44,8 +44,8 @@ struct IsJsonScalarFunction {
   FOLLY_ALWAYS_INLINE Status call(bool& result, const arg_type<Json>& json) {
     simdjson::ondemand::document jsonDoc;
 
-    simdjson::padded_string paddedJson(json.data(), json.size());
-    auto errorCode = simdjsonParse(paddedJson).get(jsonDoc);
+    auto errorCode =
+        simdjsonParse(toPaddedStringView(json, paddedJson_)).get(jsonDoc);
     if (errorCode || jsonParsingError(jsonDoc)) {
       if (threadSkipErrorDetails()) {
         return Status::UserError();
@@ -62,6 +62,9 @@ struct IsJsonScalarFunction {
 
     return Status::OK();
   }
+
+ private:
+  std::string paddedJson_;
 };
 
 template <typename TExec>
@@ -80,8 +83,8 @@ struct JsonArrayContainsFunction {
 
     simdjson::ondemand::document jsonDoc;
 
-    simdjson::padded_string paddedJson(json.data(), json.size());
-    auto errorCode = simdjsonParse(paddedJson).get(jsonDoc);
+    auto errorCode =
+        simdjsonParse(toPaddedStringView(json, paddedJson_)).get(jsonDoc);
     if (errorCode || jsonParsingError(jsonDoc)) {
       return false;
     }
@@ -137,6 +140,9 @@ struct JsonArrayContainsFunction {
 
     return true;
   }
+
+ private:
+  std::string paddedJson_;
 };
 
 template <typename TExec>
@@ -147,8 +153,8 @@ struct JsonArrayGetFunction {
   call(out_type<Json>& result, const arg_type<Json>& jsonArray, int64_t index) {
     simdjson::ondemand::document jsonDoc;
 
-    simdjson::padded_string paddedJson(jsonArray.data(), jsonArray.size());
-    auto errorCode = simdjsonParse(paddedJson).get(jsonDoc);
+    auto errorCode =
+        simdjsonParse(toPaddedStringView(jsonArray, paddedJson_)).get(jsonDoc);
     if (errorCode || jsonParsingError(jsonDoc)) {
       return false;
     }
@@ -183,6 +189,9 @@ struct JsonArrayGetFunction {
     result.copy_from(resultStr);
     return true;
   }
+
+ private:
+  std::string paddedJson_;
 };
 
 // json_extract_scalar(json, json_path) -> varchar
@@ -246,8 +255,8 @@ struct JsonExtractScalarFunction {
         SIMDJsonExtractor::getInstance(std::string_view(jsonPath));
 
     // Check for valid json
-    simdjson::padded_string paddedJson(json.data(), json.size());
-    SIMDJSON_ASSIGN_OR_RAISE(auto doc, simdjsonParse(paddedJson));
+    SIMDJSON_ASSIGN_OR_RAISE(
+        auto doc, simdjsonParse(toPaddedStringView(json, paddedJson_)));
     if (auto val = jsonParsingError(doc)) {
       return val;
     }
@@ -262,6 +271,7 @@ struct JsonExtractScalarFunction {
       return simdjson::NO_SUCH_FIELD;
     }
   }
+  std::string paddedJson_;
 };
 
 template <typename T>
@@ -317,8 +327,8 @@ struct JsonSizeFunction {
     auto& extractor =
         SIMDJsonExtractor::getInstance(std::string_view(jsonPath));
     bool isDefinitePath = true;
-    simdjson::padded_string paddedJson(json.data(), json.size());
-    SIMDJSON_TRY(extractor.extract(paddedJson, consumer, isDefinitePath));
+    SIMDJSON_TRY(extractor.extract(
+        toPaddedStringView(json, paddedJson_), consumer, isDefinitePath));
 
     if (resultCount == 0) {
       // If the path didn't map to anything in the JSON object, return null.
@@ -329,6 +339,7 @@ struct JsonSizeFunction {
 
     return simdjson::SUCCESS;
   }
+  std::string paddedJson_;
 };
 
 /// json_array_length(jsonString) -> length
@@ -347,8 +358,8 @@ struct JsonArrayLengthFunction {
   FOLLY_ALWAYS_INLINE bool call(TOutput& len, const arg_type<Json>& json) {
     simdjson::ondemand::document jsonDoc;
 
-    simdjson::padded_string paddedJson(json.data(), json.size());
-    auto errorCode = simdjsonParse(paddedJson).get(jsonDoc);
+    auto errorCode =
+        simdjsonParse(toPaddedStringView(json, paddedJson_)).get(jsonDoc);
     // Check for valid json
     if (errorCode || jsonParsingError(jsonDoc)) {
       return false;
@@ -376,6 +387,9 @@ struct JsonArrayLengthFunction {
     len = numElements;
     return true;
   }
+
+ private:
+  std::string paddedJson_;
 };
 
 } // namespace facebook::velox::functions
