@@ -40,6 +40,7 @@
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MemoryPool.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -1240,6 +1241,90 @@ TEST_F(UcxExchangeFocusedTest, unresolvableProducerHostFailsConsumer) {
           std::chrono::seconds(30)),
       "Failed to connect to producer");
   exchange.close();
+}
+
+// A producer built before MetadataMsg carried the producer error ends each
+// message after its atEnd flag. The consumer cannot decode such a message and
+// must fail its query. The decode runs in a UCX callback on the Communicator
+// thread, and an exception escaping it would take the worker down instead.
+DEBUG_ONLY_TEST_F(UcxExchangeFocusedTest, undecodableMetadataFailsConsumer) {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool previousIntraNode = config.intraNodeExchange;
+  config.intraNodeExchange = false;
+  auto restoreIntraNode =
+      folly::makeGuard([&]() { config.intraNodeExchange = previousIntraNode; });
+
+  // Drops the trailing producer error length, and shortens the size in the
+  // header to match, as an older producer sends the message.
+  common::testutil::TestValue::enable();
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::ucx_exchange::UcxExchangeServer::sendMetadata",
+      std::function<void(std::pair<std::shared_ptr<uint8_t>, size_t>*)>(
+          [](std::pair<std::shared_ptr<uint8_t>, size_t>* serialized) {
+            serialized->second -= sizeof(WireErrorLengthType);
+            const auto totalSize = static_cast<uint32_t>(serialized->second);
+            std::memcpy(
+                serialized->first.get() + sizeof(kMagicNumber),
+                &totalSize,
+                sizeof(totalSize));
+          }));
+
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "oldFormatSrc";
+  const int partitionId = 0;
+  auto rowType = UcxTestData::kTestRowType;
+  auto srcTask = createSourceTask(srcTaskId, pool_, rowType);
+  queueManager()->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+  auto removeProducer = folly::makeGuard([&]() {
+    srcTask->requestAbort().wait();
+    queueManager()->removeTask(srcTaskId);
+  });
+  queueManager()->enqueue(
+      srcTaskId, partitionId, makePackedColumns(100), /*numRows=*/100);
+  queueManager()->noMoreData(srcTaskId);
+
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask = createExchangeTask(
+      taskPrefix + "oldFormatSink", rowType, partitionId, exchangeNodeId);
+  auto exchangeClient = std::make_shared<UcxExchangeClient>(
+      sinkTask->taskId(), sinkTask->destination(), /*numberOfConsumers=*/1);
+  auto split = remoteSplit(srcTaskId, partitionId);
+  exchangeClient->addRemoteTaskId(
+      std::dynamic_pointer_cast<exec::RemoteConnectorSplit>(
+          split.connectorSplit)
+          ->taskId);
+  exchangeClient->noMoreRemoteTasks();
+  auto driverCtx = std::make_shared<DriverCtx>(
+      sinkTask,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      kUngroupedGroupId,
+      /*partitionId=*/0);
+  UcxExchange exchange(
+      0, driverCtx.get(), sinkTask->planFragment().planNode, exchangeClient);
+
+  std::optional<std::string> error;
+  try {
+    drainToEnd(
+        exchange,
+        /*maxRows=*/std::numeric_limits<uint64_t>::max(),
+        std::chrono::seconds(30));
+  } catch (const VeloxException& e) {
+    error = e.message();
+  }
+  exchange.close();
+
+  EXPECT_THAT(
+      error,
+      testing::Optional(
+          testing::AllOf(
+              testing::HasSubstr("Cannot decode metadata from producer"),
+              testing::HasSubstr(
+                  "Insufficient data for producerError length"))));
 }
 
 // An intra-node consumer reads a page from IntraNodeTransferRegistry some time

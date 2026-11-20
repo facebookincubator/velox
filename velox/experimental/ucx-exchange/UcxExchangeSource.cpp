@@ -524,8 +524,20 @@ void UcxExchangeSource::onMetadata(
 
     auto ptr = std::make_shared<DataAndMetadata>();
 
-    ptr->metadata =
-        std::move(MetadataMsg::deserializeMetadataMsg(metadataMsg->data()));
+    // Runs in a UCX callback on the Communicator thread, which must not throw.
+    // A producer of another build sends a message this one cannot decode.
+    try {
+      ptr->metadata = MetadataMsg::deserializeMetadataMsg(metadataMsg->data());
+    } catch (const std::exception& e) {
+      failSource(
+          fmt::format(
+              "Cannot decode metadata from producer, which must run the same build as its consumer, host {}:{}, task {}: {}",
+              host_,
+              port_,
+              partitionKey_.toString(),
+              e.what()));
+      return;
+    }
 
     VLOG(3) << toString()
             << " Datasize bytes == " << ptr->metadata.dataSizeBytes;

@@ -16,6 +16,7 @@
 #include "velox/experimental/ucx-exchange/UcxExchangeServer.h"
 #include <glog/logging.h>
 #include "cuda_runtime.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/ucx-exchange/Communicator.h"
 #include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
@@ -367,7 +368,11 @@ void UcxExchangeServer::sendData() {
       metadataMsg->producerError = producerError_;
     }
 
-    auto [serializedMetadata, serMetaSize] = metadataMsg->serialize();
+    auto serialized = metadataMsg->serialize();
+    common::testutil::TestValue::adjust(
+        "facebook::velox::ucx_exchange::UcxExchangeServer::sendMetadata",
+        &serialized);
+    auto& [serializedMetadata, serMetaSize] = serialized;
 
     // send metadata.
     uint64_t metadataTag =
