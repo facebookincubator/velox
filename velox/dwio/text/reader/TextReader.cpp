@@ -27,6 +27,7 @@
 
 #include "velox/common/encode/Base64.h"
 #include "velox/dwio/common/exception/Exceptions.h"
+#include "velox/type/TimestampConversion.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 
 namespace facebook::velox::text {
@@ -961,7 +962,14 @@ void TextRowReader::readElement(
                 data,
                 insertionRow,
                 [](const std::string& s) -> std::optional<int32_t> {
-                  return DATE()->toDays(s);
+                  // Hive's LazyDate rejects fields shorter than eight bytes.
+                  if (s.size() < 8) {
+                    return std::nullopt;
+                  }
+                  const auto date = util::fromDateString(
+                      s.data(), s.size(), util::ParseMode::kHiveText);
+                  return date.hasValue() ? std::optional<int32_t>(date.value())
+                                         : std::nullopt;
                 });
           } else {
             putValue<int32_t, int32_t>(
@@ -1405,33 +1413,21 @@ void TextRowReader::readElement(
 
     case TypeKind::TIMESTAMP: {
       VELOX_DCHECK(t->equivalent(*TIMESTAMP()));
-      const std::string& s = getString(*this, isNull, delim);
-
-      // Early return if no data vector or at EOF
-      if ((atEOF_ && atSOL_) || (data == nullptr)) {
-        return;
-      }
-
-      auto flatVector = data->asChecked<FlatVector<Timestamp>>();
-      if (!flatVector) {
-        VELOX_FAIL(
-            "Vector for column type does not match: expected FlatVector<Timestamp>, got {}",
-            data ? data->type()->toString() : "null");
-        return;
-      }
-
-      if (s.empty()) {
-        isNull = true;
-        flatVector->setNull(insertionRow, true);
-      } else {
-        auto ts = util::Converter<TypeKind::TIMESTAMP>::tryCast(s).thenOrThrow(
-            std::identity{},
-            [&](const Status& status) { VELOX_USER_FAIL(status.message()); });
-        ts.toGMT(Timestamp::defaultTimezone());
-        flatVector->set(
-            insertionRow, Timestamp{ts.getSeconds(), ts.getNanos()});
-      }
-
+      const std::string& str = getString(*this, isNull, delim);
+      setValueFromString<Timestamp>(
+          str,
+          data,
+          insertionRow,
+          [](const std::string& s) -> std::optional<Timestamp> {
+            const auto timestamp = util::fromTimestampString(
+                s.data(), s.size(), util::TimestampParseMode::kHiveText);
+            if (timestamp.hasError()) {
+              return std::nullopt;
+            }
+            auto value = timestamp.value();
+            value.toGMT(Timestamp::defaultTimezone());
+            return value;
+          });
       break;
     }
 

@@ -21,6 +21,9 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
+
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
@@ -96,8 +99,8 @@ class TextReaderTest : public testing::Test,
     readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setFileSchema(type);
     readerOptions.setSerDeOptions(serDeOptions);
-    auto input =
-        std::make_unique<dwio::common::BufferedInput>(readFile, *pool());
+    auto input = std::make_unique<dwio::common::BufferedInput>(
+        std::move(readFile), *pool());
     return factory->createReader(std::move(input), readerOptions);
   }
 
@@ -171,6 +174,39 @@ class TextReaderTest : public testing::Test,
         ? std::optional<float>{static_cast<float>(*expected)}
         : std::nullopt;
     ASSERT_NO_FATAL_FAILURE(assertReadsAs(inputs, expectedReal, expected));
+  }
+
+  template <typename T>
+  void assertReadText(
+      const std::vector<std::pair<std::string, std::optional<T>>>& testCases,
+      const TypePtr& type) {
+    auto textFile = createTextFile(
+        testCases.size(), [&](size_t row) { return testCases[row].first; });
+    std::vector<std::optional<T>> expectedValues;
+    expectedValues.reserve(testCases.size());
+    for (const auto& testCase : testCases) {
+      expectedValues.push_back(testCase.second);
+    }
+    auto expected =
+        makeRowVector({makeNullableFlatVector<T>(expectedValues, type)});
+    for (const auto batchSize : {1, 3}) {
+      SCOPED_TRACE(batchSize);
+      auto reader = createReader(expected->rowType(), textFile->getPath());
+      dwio::common::RowReaderOptions rowReaderOptions;
+      setScanSpec(*expected->type(), rowReaderOptions);
+      auto rowReader = reader->createRowReader(rowReaderOptions);
+      VectorPtr result;
+      vector_size_t offset{0};
+      while (offset < expected->size()) {
+        const auto numRows =
+            static_cast<vector_size_t>(rowReader->next(batchSize, result));
+        ASSERT_GT(numRows, 0);
+        ASSERT_LE(numRows, expected->size() - offset);
+        assertEqualVectors(expected->slice(offset, numRows), result);
+        offset += numRows;
+      }
+      ASSERT_EQ(rowReader->next(batchSize, result), 0);
+    }
   }
 
   std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
@@ -343,16 +379,16 @@ TEST_F(TextReaderTest, headerAndCustomNullString) {
       makeNullableFlatVector<Timestamp>({
           Timestamp{1'695'378'095 + tzOffsetPDT, 148'000'000},
           Timestamp{1'695'690'351 + tzOffsetPDT, 0},
-          Timestamp{1'695'686'400 + tzOffsetPDT, 0},
+          std::nullopt,
           Timestamp{1'695'083'400 + tzOffsetPDT, 0},
           std::nullopt,
           Timestamp{1'695'657'091 + tzOffsetPDT, 209'000'000},
           Timestamp{1'695'690'437 + tzOffsetPDT, 469'123'000},
           Timestamp{1'696'540'679 + tzOffsetPDT, 976'000'000},
           Timestamp{1'695'657'171 + tzOffsetPDT, 637'000'000},
-          Timestamp{1'695'693'225 + tzOffsetPDT, 745'123'000},
+          Timestamp{1'695'693'225 + tzOffsetPDT, 745'123'456},
           std::nullopt,
-          Timestamp{1'695'406'246 + tzOffsetPDT, 0},
+          Timestamp{1'695'406'246 + tzOffsetPDT, 1},
           Timestamp{1'699'392'124 + tzOffsetPST, 736'000'000},
       }),
   });
@@ -1215,6 +1251,93 @@ TEST_F(TextReaderTest, readIntegerWithLeadingPlus) {
   ASSERT_EQ(rowReader->next(1, result), 0);
 }
 
+TEST_F(TextReaderTest, dateParsing) {
+  assertReadText<int32_t>(
+      {
+          {"2024-01-01", 19'723},
+          {"2024-01-01T10:00", 19'723},
+          {"2024-01-01Tnot-a-time", 19'723},
+          {"2024-01-01X10:00", 19'723},
+          {"2024-01-01t10:00", 19'723},
+          {"2024-01-0110:00", 19'723},
+          {"2024-01-01 ignored", 19'723},
+          {" \t2024-01-01\tignored", 19'723},
+          {"2024-02-29T23:59:59", 19'782},
+          {"1969-12-31T23:59:59", -1},
+          {"2024-1-2T10:00", 19'724},
+          {"+2024-01-01", std::nullopt},
+          {"-0-01-01", std::nullopt},
+          {"1-1-1", std::nullopt},
+          {"2023-02-29T10:00", std::nullopt},
+          {"2024/01/01T10:00", std::nullopt},
+          {"2024-001-01", std::nullopt},
+          {"2024-13-01", std::nullopt},
+          {"2024-01-00", std::nullopt},
+          {"2024-01", std::nullopt},
+          {"99999999999999999999-01-01", std::nullopt},
+          {"10000000-01-01", std::nullopt},
+          {"", std::nullopt},
+          {" \t ", std::nullopt},
+          {"\\N", std::nullopt},
+          {"2024-01-02", 19'724},
+      },
+      DATE());
+}
+
+TEST_F(TextReaderTest, timestampParsing) {
+  assertReadText<Timestamp>(
+      {
+          {"2024-01-01 00:00:00", Timestamp(1'704'096'000, 0)},
+          {"2024-1-1 0:0:0", Timestamp(1'704'096'000, 0)},
+          {"2024-1-2 3:4:5.123456789", Timestamp(1'704'193'445, 123'456'789)},
+          {"2024-01-01T00:00:00", Timestamp(1'704'096'000, 0)},
+          {"2024-01-01t00:00", Timestamp(1'704'096'000, 0)},
+          {"2024-01-01T00:00:00.", Timestamp(1'704'096'000, 0)},
+          {"2024-01-01T10:00", Timestamp(1'704'132'000, 0)},
+          {"2024-01-02T03:04", Timestamp(1'704'193'440, 0)},
+          {"2024-01-02t03:04:05.123456789",
+           Timestamp(1'704'193'445, 123'456'789)},
+          {"2024-01-02T03:04:05.", Timestamp(1'704'193'445, 0)},
+          {" \t2024-01-01T00:00:00 \t", Timestamp(1'704'096'000, 0)},
+          {"2024-01-01T00:00:00.123456789",
+           Timestamp(1'704'096'000, 123'456'789)},
+          {"2024-01-01 00:00:00.123456789",
+           Timestamp(1'704'096'000, 123'456'789)},
+          {"2024-01-01T00:00:00.000000001", Timestamp(1'704'096'000, 1)},
+          {"2024-01-01T00:00:00.1", Timestamp(1'704'096'000, 100'000'000)},
+          {"2024-01-01T23:59:59.999999999",
+           Timestamp(1'704'182'399, 999'999'999)},
+          {"2024-01-01", std::nullopt},
+          {"2024-01-01 10:00", std::nullopt},
+          {"2024-01-01 00:00:001", std::nullopt},
+          {"2024-01-01 00:00:60", std::nullopt},
+          {"2024-1-2T10:00", std::nullopt},
+          {"2024-01-01T1:00", std::nullopt},
+          {"2024-01-01T00:00:1", std::nullopt},
+          {"2024-01-01T", std::nullopt},
+          {"2024-01-01T 00:00:00", std::nullopt},
+          {"2024-01-01  00:00:00", std::nullopt},
+          {"2024-01-01\t00:00:00", std::nullopt},
+          {"2024-01-01Tnot-a-time", std::nullopt},
+          {"2024-01-01T24:00:00", std::nullopt},
+          {"2024-01-01T00:00:60", std::nullopt},
+          {"2024-01-01T00:00:001", std::nullopt},
+          {"2024-01-01 00:00:00.", std::nullopt},
+          {"2024-01-01T00:00:00.1234567890", std::nullopt},
+          {"2024-01-01T00:00:00Z", std::nullopt},
+          {"2024-01-01T00:00:00+01:00", std::nullopt},
+          {"2023-02-29T00:00:00", std::nullopt},
+          {"99999999999999999999-01-01 00:00:00", std::nullopt},
+          {"", std::nullopt},
+          {" \t ", std::nullopt},
+          {"\\N", std::nullopt},
+          {"2024-07-01 00:00:00", Timestamp(1'719'817'200, 0)},
+          {"2024-07-01T00:00:00", Timestamp(1'719'817'200, 0)},
+          {"\\N", std::nullopt},
+      },
+      TIMESTAMP());
+}
+
 TEST_F(TextReaderTest, simpleTypes) {
   const auto tzOffsetPST = 28'800;
   const auto tzOffsetPDT = 25'200;
@@ -1265,16 +1388,16 @@ TEST_F(TextReaderTest, simpleTypes) {
       makeNullableFlatVector<Timestamp>(
           {Timestamp{1'695'378'095 + tzOffsetPDT, 148'000'000},
            Timestamp{1'695'690'351 + tzOffsetPDT, 0},
-           Timestamp{1'695'686'400 + tzOffsetPDT, 0},
+           std::nullopt,
            Timestamp{1'695'083'400 + tzOffsetPDT, 0},
            std::nullopt,
            Timestamp{1'695'657'091 + tzOffsetPDT, 209'000'000},
            Timestamp{1'695'690'437 + tzOffsetPDT, 469'123'000},
            Timestamp{1'696'540'679 + tzOffsetPDT, 976'000'000},
            Timestamp{1'695'657'171 + tzOffsetPDT, 637'000'000},
-           Timestamp{1'695'693'225 + tzOffsetPDT, 745'123'000},
+           Timestamp{1'695'693'225 + tzOffsetPDT, 745'123'456},
            std::nullopt,
-           Timestamp{1'695'406'246 + tzOffsetPDT, 0},
+           Timestamp{1'695'406'246 + tzOffsetPDT, 1},
            Timestamp{1'699'392'124 + tzOffsetPST, 736'000'000}}),
   });
 
