@@ -39,6 +39,9 @@ Date and Time Operators
    * - ``/``
      - ``interval '15' second / 1.5``
      - ``0 00:00:10.000``
+   * - ``-``
+     - ``- interval '1' day``
+     - ``-1 00:00:00.000``
 
 .. function:: plus(x, y) -> [same as x]
    :noindex:
@@ -83,6 +86,15 @@ Date and Time Operators
     positive. Returns ``-106751991167 07:12:55.808`` when ``x`` is ``-0.0`` and
     ``interval day to second`` is not ``0``, or when the division overflows in
     negiative.
+
+.. function:: negate(x) -> [same as x]
+   :noindex:
+
+    Returns the negation of ``x``, an ``interval day to second`` or an
+    ``interval year to month``. Fails when ``x`` is
+    ``-106751991167 07:12:55.808`` for ``interval day to second`` or
+    ``-178956970-8`` for ``interval year to month``, which have no positive
+    counterparts.
 
 Date and Time Functions
 -----------------------

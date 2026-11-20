@@ -92,6 +92,10 @@
 <td><p><code class="docutils literal notranslate"><span class="pre">interval</span> <span class="pre">'15'</span> <span class="pre">second</span> <span class="pre">/</span> <span class="pre">1.5</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">00:00:10.000</span></code></p></td>
 </tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">-</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">-</span> <span class="pre">interval</span> <span class="pre">'1'</span> <span class="pre">day</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">-1</span> <span class="pre">00:00:00.000</span></code></p></td>
+</tr>
 </tbody>
 </table>
 <dl class="py function">
@@ -149,6 +153,18 @@ a double. Returns <code class="docutils literal notranslate"><span class="pre">0
 positive. Returns <code class="docutils literal notranslate"><span class="pre">-106751991167</span> <span class="pre">07:12:55.808</span></code> when <code class="docutils literal notranslate"><span class="pre">x</span></code> is <code class="docutils literal notranslate"><span class="pre">-0.0</span></code> and
 <code class="docutils literal notranslate"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></code> is not <code class="docutils literal notranslate"><span class="pre">0</span></code>, or when the division overflows in
 negiative.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">negate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the negation of <code class="docutils literal notranslate"><span class="pre">x</span></code>, an <code class="docutils literal notranslate"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></code> or an
+<code class="docutils literal notranslate"><span class="pre">interval</span> <span class="pre">year</span> <span class="pre">to</span> <span class="pre">month</span></code>. Fails when <code class="docutils literal notranslate"><span class="pre">x</span></code> is
+<code class="docutils literal notranslate"><span class="pre">-106751991167</span> <span class="pre">07:12:55.808</span></code> for <code class="docutils literal notranslate"><span class="pre">interval</span> <span class="pre">day</span> <span class="pre">to</span> <span class="pre">second</span></code> or
+<code class="docutils literal notranslate"><span class="pre">-178956970-8</span></code> for <code class="docutils literal notranslate"><span class="pre">interval</span> <span class="pre">year</span> <span class="pre">to</span> <span class="pre">month</span></code>, which have no positive
+counterparts.</p>
+</div></blockquote>
 </dd></dl>
 
 </section>
