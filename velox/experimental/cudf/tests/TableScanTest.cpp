@@ -253,8 +253,7 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
   }
 
   static PlanNodeStats getTableScanStats(const std::shared_ptr<Task>& task) {
-    const auto planStats = PlanNodeStats::extract(task->taskStats(), "0");
-    return std::move(planStats);
+    return PlanNodeStats::extract(task->taskStats(), "0");
   }
 
   // Returns whether the scan ran on the GPU, and expects the table scan adapter
@@ -777,7 +776,7 @@ TEST_F(TableScanTest, preloadSplits) {
   const auto planStats = PlanNodeStats::extract(task->taskStats(), plan->id());
   ASSERT_TRUE(planStats.hasCustomStat(TableScanStatNames::kPreloadedSplits));
   EXPECT_EQ(
-      customStats.at(std::string(TableScanStatNames::kPreloadedSplits)).sum,
+      planStats.customSum(TableScanStatNames::kPreloadedSplits),
       filePaths.size());
 }
 
@@ -882,8 +881,7 @@ TEST_F(TableScanTest, abandonPreloadedSplits) {
   // abandoned.
   const auto planStats = PlanNodeStats::extract(task->taskStats(), scanNodeId);
   ASSERT_TRUE(planStats.hasCustomStat(TableScanStatNames::kPreloadedSplits));
-  EXPECT_GE(
-      customStats.at(std::string(TableScanStatNames::kPreloadedSplits)).sum, 1);
+  EXPECT_GE(planStats.customSum(TableScanStatNames::kPreloadedSplits), 1);
 
   // Tear down while abandoned splits' payload fetches are still queued.
   task.reset();
@@ -1151,7 +1149,7 @@ TEST_P(TableScanTestParameterized, scanOnNonDefaultGpu) {
   const auto planStats = PlanNodeStats::extract(task->taskStats(), plan->id());
   ASSERT_TRUE(planStats.hasCustomStat(TableScanStatNames::kPreloadedSplits));
   EXPECT_EQ(
-      customStats.at(std::string(TableScanStatNames::kPreloadedSplits)).sum,
+      planStats.customSum(TableScanStatNames::kPreloadedSplits),
       filePaths.size());
 }
 
