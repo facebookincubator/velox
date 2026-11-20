@@ -77,6 +77,12 @@ class ParquetTypeWithId : public dwio::common::TypeWithId {
     return reinterpret_cast<const ParquetTypeWithId*>(parent());
   }
 
+  /// Returns true if the column is annotated with the UUID logical type.
+  bool isUuid() const {
+    return logicalType_.has_value() &&
+        logicalType_->getType() == thrift::LogicalType::Type::UUID;
+  }
+
   /// Fills 'info' and returns the mode for interpreting levels.
   LevelMode makeLevelInfo(LevelInfo& info) const;
 
