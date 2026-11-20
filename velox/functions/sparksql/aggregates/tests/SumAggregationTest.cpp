@@ -17,6 +17,7 @@
 #include <functional>
 
 #include "velox/exec/AggregateUtil.h"
+#include "velox/exec/HashAggregationStatNames.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -692,14 +693,15 @@ TEST_F(SumAggregationTest, abandonPartialAggregation) {
               "sum(b) FILTER (WHERE m), "
               "sum(r) FILTER (WHERE m) FROM tmp GROUP BY k");
 
-  const auto stats = exec::toPlanStats(task->taskStats());
+  const auto stats =
+      exec::PlanNodeStats::extract(task->taskStats(), partialNodeId);
   EXPECT_LT(
       0,
-      stats.at(partialNodeId)
-          .customStats.at("abandonedPartialAggregationRows")
-          .sum);
+      stats.customSum(
+          exec::HashAggregationStatNames::kAbandonedPartialAggregationRows));
   EXPECT_GT(
-      stats.at(partialNodeId).customStats.at("toIntermediateFastPathCalls").sum,
+      stats.customSum(
+          exec::HashAggregationStatNames::kToIntermediateFastPathCalls),
       0);
 }
 

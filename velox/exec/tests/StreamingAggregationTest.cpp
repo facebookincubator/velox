@@ -212,8 +212,7 @@ class StreamingAggregationTest
       ASSERT_EQ(taskStats.numBarriers, testData.hasBarrier ? numSplits : 0);
       ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
       ASSERT_EQ(
-          velox::exec::toPlanStats(taskStats)
-              .at(aggregationNodeId)
+          velox::exec::PlanNodeStats::extract(taskStats, aggregationNodeId)
               .outputVectors,
           expectedNumOuputBatches);
     }
@@ -324,8 +323,7 @@ class StreamingAggregationTest
         ASSERT_EQ(taskStats.numBarriers, testData.hasBarrier ? numSplits : 0);
         ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
         ASSERT_EQ(
-            velox::exec::toPlanStats(taskStats)
-                .at(aggregationNodeId)
+            velox::exec::PlanNodeStats::extract(taskStats, aggregationNodeId)
                 .outputVectors,
             expectedNumOuputBatches);
       }
@@ -359,8 +357,7 @@ class StreamingAggregationTest
         ASSERT_EQ(taskStats.numBarriers, barrierExecution ? numSplits : 0);
         ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
         ASSERT_EQ(
-            velox::exec::toPlanStats(taskStats)
-                .at(aggregationNodeId)
+            velox::exec::PlanNodeStats::extract(taskStats, aggregationNodeId)
                 .outputVectors,
             expectedNumOuputBatches);
       }
@@ -1238,8 +1235,8 @@ TEST_P(StreamingAggregationTest, clusteredInputWithBarrier) {
     ASSERT_EQ(taskStats.numBarriers, testData.barrierExecution ? numSplits : 0);
     ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
     ASSERT_EQ(
-        velox::exec::toPlanStats(taskStats)
-            .at(streamingAggregationNodeId)
+        velox::exec::PlanNodeStats::extract(
+            taskStats, streamingAggregationNodeId)
             .outputVectors,
         testData.numExpectedOutputBatches);
   }
@@ -1377,7 +1374,8 @@ TEST_F(StreamingAggregationTest, noGroupsSpanBatchesSingleGroup) {
   // immediately.
   const auto taskStats = task->taskStats();
   ASSERT_EQ(
-      velox::exec::toPlanStats(taskStats).at(aggregationNodeId).outputVectors,
+      velox::exec::PlanNodeStats::extract(taskStats, aggregationNodeId)
+          .outputVectors,
       keys.size());
 }
 
@@ -1443,7 +1441,8 @@ TEST_F(StreamingAggregationTest, noGroupsSpanBatches) {
     // Verify the number of output batches.
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
-        velox::exec::toPlanStats(taskStats).at(aggregationNodeId).outputVectors,
+        velox::exec::PlanNodeStats::extract(taskStats, aggregationNodeId)
+            .outputVectors,
         testData.expectedOutputBatches);
   }
 }
@@ -1592,7 +1591,8 @@ TEST_P(StreamingAggregationTest, needsInputWhenSplitOutput) {
           .assertResults("SELECT c0, array_agg(c1) FROM tmp GROUP BY c0");
   const auto taskStats = task->taskStats();
   ASSERT_EQ(
-      velox::exec::toPlanStats(taskStats).at(aggregationNodeId).outputVectors,
+      velox::exec::PlanNodeStats::extract(taskStats, aggregationNodeId)
+          .outputVectors,
       9);
 }
 // Verify that during createOutput, the aggregation state is destroyed.
