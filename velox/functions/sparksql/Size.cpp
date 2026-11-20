@@ -153,9 +153,13 @@ std::shared_ptr<exec::VectorFunction> makeSize(
   try {
     VELOX_CHECK_EQ(inputArgs.size(), 2);
     const auto& legacySizeOfNull = inputArgs[1].constantValue;
+    VELOX_USER_CHECK_NOT_NULL(
+        legacySizeOfNull,
+        "legacySizeOfNull must be a non-null constant boolean: {}",
+        name);
     VELOX_USER_CHECK(
-        legacySizeOfNull != nullptr && !legacySizeOfNull->isNullAt(0),
-        "{} requires legacySizeOfNull to be a non-null constant boolean",
+        !legacySizeOfNull->isNullAt(0),
+        "legacySizeOfNull must be a non-null constant boolean: {}",
         name);
     return std::make_shared<SizeFunction>(
         legacySizeOfNull->asUnchecked<ConstantVector<bool>>()->valueAt(0));

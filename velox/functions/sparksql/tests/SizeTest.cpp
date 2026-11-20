@@ -434,7 +434,7 @@ TEST_F(SizeTest, invalidLegacySizeOfNullIsDeferred) {
   auto data = makeRowVector({arrays, flags, conditions});
 
   const std::string errorMessage =
-      "size requires legacySizeOfNull to be a non-null constant boolean";
+      "legacySizeOfNull must be a non-null constant boolean: size";
   VELOX_ASSERT_THROW(evaluate("size(c0, c1)", data), errorMessage);
   VELOX_ASSERT_THROW(evaluate("size(c0, null::boolean)", data), errorMessage);
 
