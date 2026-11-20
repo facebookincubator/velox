@@ -194,19 +194,17 @@ class PinnedBufferPool {
   // is lent out at the time is put back later and freed by the next call.
   void freeAll();
 
- private:
-  friend class PinnedBuffer;
-
   struct Memory {
     int device{-1};
     uint8_t* data{nullptr};
     cudaEvent_t lastCopy{nullptr};
   };
 
-  PinnedBufferPool() = default;
-
   // Puts memory back on the free list of its device.
   void put(Memory memory);
+
+ private:
+  PinnedBufferPool() = default;
 
   rmm::host_device_async_resource_ref allocator_ =
       cudf::get_pinned_memory_resource();
