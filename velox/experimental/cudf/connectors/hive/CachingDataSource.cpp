@@ -574,7 +574,7 @@ class Reader {
 
   // Fills the new entry in 'pin', for the piece at 'offset', from the SSD
   // cache. Returns false when there is no SSD cache, or when the SSD cache
-  // does not hold the whole piece.
+  // holds no copy of exactly the piece's size.
   bool fillEntryFromSsd(cache::CachePin& pin, size_t offset) {
     auto* ssdCache = cache_->ssdCache();
     if (ssdCache == nullptr) {
@@ -585,8 +585,9 @@ class Reader {
     if (ssdPin.empty()) {
       return false;
     }
-    // The SSD copy may be shorter than the piece. Read the piece from KvikIO.
-    if (ssdPin.run().size() < pin.checkedEntry()->size()) {
+    // The SSD copy may differ in size from the piece. Read the piece from
+    // KvikIO in this case.
+    if (ssdPin.run().size() != pin.checkedEntry()->size()) {
       return false;
     }
     std::vector<cache::SsdPin> ssdPins;

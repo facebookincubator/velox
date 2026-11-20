@@ -610,6 +610,52 @@ TEST_F(CachingDataSourceTest, ramMissReadsFromSsd) {
   cache->shutdown();
 }
 
+// SsdFile::load() expects the SSD copy and the new RAM entry to have the same
+// size. With checksum read verification on, a debug build fails the read when
+// they differ. A shorter read at the offset of a saved entry is therefore read
+// remotely, not from SSD.
+TEST_F(CachingDataSourceTest, shorterReadAfterSsdSaveReadsRemotely) {
+  // The temp directory may be on tmpfs, which does not support O_DIRECT.
+  FLAGS_velox_ssd_odirect = false;
+  filesystems::registerLocalFileSystem();
+  auto directory = common::testutil::TempDirectoryPath::create();
+  folly::CPUThreadPoolExecutor ssdExecutor(1);
+  auto ssdCache = std::make_unique<cache::SsdCache>(cache::SsdCache::Config(
+      directory->getPath() + "/cache",
+      64 << 20,
+      1,
+      &ssdExecutor,
+      /*_checkpointIntervalBytes=*/0,
+      /*_disableFileCow=*/false,
+      /*_checksumEnabled=*/true,
+      /*_checksumReadVerificationEnabled=*/true));
+  // An allocator serves one cache. The fixture's allocator serves 'cache_'.
+  memory::MallocAllocator allocator(memory::MemoryAllocator::Options{
+      .capacity = 16 << 20, .reservationByteLimit = 0});
+  auto cache = cache::AsyncDataCache::create(&allocator, std::move(ssdCache));
+  fillPattern(read_->data.size());
+  auto input = maybeCacheKvikioDataSource(
+      std::make_unique<MemorySource>(read_), path_, cache.get(), true, stats_);
+
+  input->host_read(64, 4096);
+
+  // Write the 4096-byte entry to SSD, then drop it from RAM.
+  ASSERT_TRUE(cache->ssdCache()->startWrite());
+  cache->saveToSsd(/*saveAll=*/true);
+  cache->ssdCache()->waitForWriteToFinish();
+  cache->clear();
+
+  std::vector<uint8_t> dst(1024);
+  EXPECT_EQ(input->host_read(64, dst.size(), dst.data()), dst.size());
+  EXPECT_EQ(std::memcmp(dst.data(), read_->data.data() + 64, dst.size()), 0);
+  EXPECT_EQ(read_->reads, 2);
+  const auto metrics = stats_->stats();
+  EXPECT_EQ(metrics.at("cudfKvikioCacheMissBytes").sum, 4096 + 1024);
+  EXPECT_FALSE(metrics.contains("cudfKvikioCacheSsdBytes"));
+
+  cache->shutdown();
+}
+
 // An SSD cache entry holds at most 8 MiB. An entry of that size may be saved to
 // SSD. A larger entry is not.
 TEST_F(CachingDataSourceTest, onlyEntriesWithinSsdLimitAreSavedToSsd) {
