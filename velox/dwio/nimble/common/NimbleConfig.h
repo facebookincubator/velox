@@ -261,11 +261,25 @@ class Config : public velox::config::ConfigBase {
   /// compression outright.
   static Entry<uint32_t> METADATA_COMPRESSION_THRESHOLD;
 
+  /// Closes a stripe group once its estimated metadata reaches this many bytes;
+  /// see WriterOptions::metadataFlushThreshold. Unset leaves the writer's own
+  /// threshold (kMetadataFlushThreshold, 8MB); 0 closes a stripe group after
+  /// every stripe.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<uint32_t> METADATA_FLUSH_THRESHOLD;
+
   /// Selects how per-stripe-group stream offsets/sizes are serialized:
   /// "raw" (default, readable by all readers) or "stream_major".
   /// EXPERIMENTAL: see WriterOptions::experimentalStripeGroupEncodingLayout.
   // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
   static Entry<std::string> STRIPE_GROUP_ENCODING_LAYOUT;
+
+  /// Enables the sparse layout for "stream_major" stripe groups: each stream
+  /// holds its stripe list, and offsets and sizes only for the stripes where
+  /// it has data.
+  /// EXPERIMENTAL: see WriterOptions::experimentalStripeGroupSparseLayout.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<bool> STRIPE_GROUP_SPARSE_LAYOUT;
 
   /// Minimum average chunks per stripe before chunk stats are written.
   /// Only consulted when nimble.chunk.index.enabled is true.
