@@ -23,43 +23,45 @@ void FixedPointVerdicts::publish(
     const FixedPointOptions::LoopAddress& workerZero,
     int32_t iteration,
     bool converged) {
-  withVerdict(workerZero, iteration, [&](folly::SharedPromise<bool>& promise) {
-    promise.setValue(converged);
-  });
+  auto locked = verdicts_.wlock();
+  auto [it, inserted] = (*locked)[workerZero.worker].try_emplace(
+      workerZero.nesting, Verdict{iteration, {}});
+  auto& verdict = it->second;
+  VELOX_CHECK_LE(
+      verdict.iteration,
+      iteration,
+      "Fixed point verdict published out of order: {}",
+      workerZero.worker);
+  if (verdict.iteration < iteration) {
+    verdict = Verdict{iteration, {}};
+  }
+  verdict.promise.setValue(converged);
 }
 
 folly::SemiFuture<bool> FixedPointVerdicts::get(
     const FixedPointOptions::LoopAddress& workerZero,
     int32_t iteration) {
-  auto verdict = folly::SemiFuture<bool>::makeEmpty();
-  withVerdict(workerZero, iteration, [&](folly::SharedPromise<bool>& promise) {
-    verdict = promise.getSemiFuture();
-  });
-  return verdict;
+  auto locked = verdicts_.wlock();
+  auto [it, inserted] = (*locked)[workerZero.worker].try_emplace(
+      workerZero.nesting, Verdict{iteration, {}});
+  auto& verdict = it->second;
+  if (iteration < verdict.iteration) {
+    // Worker 0 starts an iteration only after one that did not converge.
+    return folly::makeSemiFuture(false);
+  }
+  if (iteration > verdict.iteration) {
+    // A peer asks for an iteration only after it receives the one before.
+    VELOX_CHECK(
+        verdict.promise.isFulfilled(),
+        "Fixed point verdict must be published before the next is requested: {}",
+        workerZero.worker);
+    verdict = Verdict{iteration, {}};
+  }
+  return verdict.promise.getSemiFuture();
 }
 
 void FixedPointVerdicts::erase(const std::string& worker) {
   verdicts_.wlock()->erase(worker);
-}
-
-void FixedPointVerdicts::withVerdict(
-    const FixedPointOptions::LoopAddress& workerZero,
-    int32_t iteration,
-    const std::function<void(folly::SharedPromise<bool>&)>& action) {
-  auto locked = verdicts_.wlock();
-  auto& loops = (*locked)[workerZero.worker];
-  auto [it, inserted] =
-      loops.try_emplace(workerZero.nesting, Verdict{iteration, {}});
-  auto& verdict = it->second;
-  VELOX_CHECK_LE(
-      verdict.iteration,
-      iteration,
-      "Fixed point verdict requested for an earlier iteration: {}",
-      workerZero.worker);
-  if (verdict.iteration < iteration) {
-    verdict = Verdict{iteration, {}};
-  }
-  action(verdict.promise);
 }
 
 } // namespace facebook::velox::exec
