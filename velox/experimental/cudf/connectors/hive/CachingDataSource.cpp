@@ -30,11 +30,13 @@
 #include <rmm/device_buffer.hpp>
 
 #include <cuda/stream>
+#include <cuda_runtime_api.h>
 
 #include <folly/Conv.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/executors/QueuedImmediateExecutor.h>
 #include <folly/executors/thread_factory/NamedThreadFactory.h>
+#include <glog/logging.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -155,8 +157,9 @@ void waitForStream(cuda::stream_ref stream, int device) {
     CUDF_CUDA_TRY(cudaStreamSynchronize(stream.get()));
   } catch (...) {
     // Make sure no copy still writes to the destination.
-    if (cudaDeviceSynchronize() != cudaSuccess) {
-      std::terminate();
+    if (const auto status = cudaDeviceSynchronize(); status != cudaSuccess) {
+      LOG(FATAL) << "cudaDeviceSynchronize failed after stream sync error: "
+                 << cudaGetErrorString(status);
     }
     throw;
   }
@@ -782,8 +785,7 @@ class CachingDataSource final : public cudf::io::datasource {
   std::unique_ptr<buffer>
   device_read(size_t offset, size_t bytes, cuda::stream_ref stream) override {
     const auto readSize = reader_->trimToFile(offset, bytes);
-    rmm::device_buffer result(
-        readSize, stream, get_temp_mr());
+    rmm::device_buffer result(readSize, stream, get_temp_mr());
     const auto bytesRead = device_read(
         offset, readSize, static_cast<uint8_t*>(result.data()), stream);
     result.resize(bytesRead, stream);
