@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/functions/Registerer.h"
+#include "velox/functions/lib/CheckedArithmetic.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/prestosql/DecimalFunctions.h"
@@ -94,6 +95,10 @@ void registerMathOperators(
       IntervalYearMonth,
       IntervalYearMonth,
       double>({prefix + "divide"}, {}, true, defaultOwner);
+  registerFunction<CheckedNegateFunction, IntervalDayTime, IntervalDayTime>(
+      {prefix + "negate"}, {}, true, defaultOwner);
+  registerFunction<CheckedNegateFunction, IntervalYearMonth, IntervalYearMonth>(
+      {prefix + "negate"}, {}, true, defaultOwner);
   registerBinaryFloatingPoint<ModulusFunction>({prefix + "mod"}, defaultOwner);
   registerBinaryIntegral<PModIntFunction>({prefix + "pmod"}, defaultOwner);
   registerBinaryFloatingPoint<PModFloatFunction>(
