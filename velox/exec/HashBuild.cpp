@@ -563,8 +563,12 @@ void HashBuild::addInput(RowVectorPtr input) {
         input->childAt(spillProbedFlagChannel_)->asFlatVector<bool>();
   }
 
+  const auto numSelected = activeRows_.countSelected();
+  newRowsBuffer_.resize(numSelected);
+  rows->newRows(numSelected, newRowsBuffer_.data());
+  int32_t newRowIndex{0};
   activeRows_.applyToSelected([&](auto rowIndex) {
-    char* newRow = rows->newRow();
+    char* newRow = newRowsBuffer_[newRowIndex++];
     // Store the columns for each row in sequence. At probe time
     // strings of the row will probably be in consecutive places, so
     // reading one will prime the cache for the next.

@@ -72,7 +72,7 @@ class AllocationPool {
 
   // Returns pointer to first unallocated byte in the current run.
   char* firstFreeInRun() {
-    VELOX_DCHECK_GT(testingFreeAddressableBytes(), 0);
+    VELOX_DCHECK_GT(freeAddressableBytes(), 0);
     return startOfRun_ + currentOffset_;
   }
 
@@ -104,8 +104,12 @@ class AllocationPool {
     hugePageThreshold_ = size;
   }
 
-  int64_t testingFreeAddressableBytes() const {
-    return freeAddressableBytes();
+  /// Returns the number of bytes between the first unallocated byte and the end
+  /// of the addresses mapped in the current run, i.e. the space a subsequent
+  /// allocateFixed() can use without starting a new run. This can be larger
+  /// than the space reported as allocated in 'pool_'.
+  int64_t freeAddressableBytes() const {
+    return bytesInRun_ - currentOffset_;
   }
 
  private:
@@ -121,13 +125,6 @@ class AllocationPool {
       return bytesInRun_;
     }
     return largeAllocations_.back().size();
-  }
-
-  // Returns the number of bytes between first unallocated and the end of the
-  // addresses mapped in the last Allocation/ContiguousAllocation. This can be
-  // larger than the space reported as allocated in 'pool_'.
-  int64_t freeAddressableBytes() const {
-    return bytesInRun_ - currentOffset_;
   }
 
   // Increases the reservation in 'pool_' if 'bytesRequested' moves
