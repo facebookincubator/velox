@@ -26,6 +26,7 @@
 #include "velox/common/base/Status.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/ToHex.h"
+#include "velox/functions/sparksql/SparkErrors.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/type/DecimalArithmetic.h"
 
@@ -853,7 +854,7 @@ template <typename TExec>
 struct CheckedDivideFunction {
   template <typename T>
   FOLLY_ALWAYS_INLINE Status call(T& result, const T& a, const T& b) {
-    VELOX_USER_RETURN_EQ(b, 0, "division by zero");
+    SPARK_USER_RETURN_EQ("DIVIDE_BY_ZERO", b, 0, "division by zero");
     if constexpr (std::is_integral_v<T>) {
       VELOX_USER_RETURN(
           a == std::numeric_limits<T>::min() && b == -1,

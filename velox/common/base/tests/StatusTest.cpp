@@ -108,6 +108,37 @@ TEST(StatusTest, testAbort) {
   ASSERT_DEATH(a.abort(), "");
 }
 
+TEST(StatusTest, errorCode) {
+  ASSERT_EQ("", Status::OK().errorCode());
+  ASSERT_EQ("", Status::UserError("error").errorCode());
+  EXPECT_THROW(
+      static_cast<void>(Status::OK().withErrorCode("SPARK:DIVIDE_BY_ZERO")),
+      std::invalid_argument);
+
+  const auto status =
+      Status::UserError("division by zero").withErrorCode("SPARK:X");
+  ASSERT_TRUE(status.isUserError());
+  ASSERT_EQ("division by zero", status.message());
+  ASSERT_EQ("SPARK:X", status.errorCode());
+  ASSERT_EQ("User error [SPARK:X]: division by zero", status.toString());
+
+  // Copy, move and withMessage keep the error code.
+  Status copy = status;
+  ASSERT_EQ("SPARK:X", copy.errorCode());
+  Status moved = std::move(copy);
+  ASSERT_EQ("SPARK:X", moved.errorCode());
+  const auto changed = status.withMessage("other");
+  ASSERT_EQ("other", changed.message());
+  ASSERT_EQ("SPARK:X", changed.errorCode());
+
+  // Equality includes the error code.
+  ASSERT_EQ(
+      status, Status::UserError("division by zero").withErrorCode("SPARK:X"));
+  ASSERT_NE(status, Status::UserError("division by zero"));
+  ASSERT_NE(
+      status, Status::UserError("division by zero").withErrorCode("SPARK:Y"));
+}
+
 Status returnIf(bool cond) {
   VELOX_RETURN_IF(cond, Status::Invalid("error"));
   return Status::OK();
