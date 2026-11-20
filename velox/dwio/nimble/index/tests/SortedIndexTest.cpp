@@ -155,7 +155,7 @@ class SortedIndexTestBase {
       int32_t idValue) {
     auto key = encodeLookupKey(columns, idValue);
     return index->lookup(
-        IndexLookup::LookupRequest::pointLookup({std::move(key)}));
+        *IndexLookup::LookupRequest::pointLookup({std::move(key)}));
   }
 
   IndexLookup::LookupResult rangeScan(
@@ -165,10 +165,9 @@ class SortedIndexTestBase {
       int32_t upperValue) {
     auto lowerKey = encodeLookupKey(columns, lowerValue);
     auto upperKey = encodeLookupKey(columns, upperValue);
-    return index->lookup(
-        IndexLookup::LookupRequest::rangeScan(
-            {velox::serializer::EncodedKeyBounds{
-                std::move(lowerKey), std::move(upperKey)}}));
+    return index->lookup(*IndexLookup::LookupRequest::rangeScan(
+        {velox::serializer::EncodedKeyBounds{
+            std::move(lowerKey), std::move(upperKey)}}));
   }
 
   std::string tempFilePath(const std::string& name) {
