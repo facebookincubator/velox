@@ -155,6 +155,35 @@ TEST_F(ComparisonsTest, between) {
   for (int i = 0; i < testData.size(); ++i) {
     EXPECT_EQ(result->valueAt(i), std::get<1>(testData[i])) << "at " << i;
   }
+
+  const auto between = [&](std::optional<int32_t> value,
+                           std::optional<int32_t> low,
+                           std::optional<int32_t> high) {
+    return evaluateOnce<bool>("c0 between c1 and c2", value, low, high);
+  };
+
+  EXPECT_EQ(false, between(51, std::nullopt, 42));
+  EXPECT_EQ(false, between(39, 40, std::nullopt));
+  EXPECT_EQ(std::nullopt, between(42, std::nullopt, 42));
+  EXPECT_EQ(std::nullopt, between(40, 40, std::nullopt));
+  EXPECT_EQ(std::nullopt, between(41, std::nullopt, std::nullopt));
+  EXPECT_EQ(std::nullopt, between(std::nullopt, 40, 42));
+  EXPECT_EQ(true, between(41, 40, 42));
+
+  EXPECT_EQ(
+      true,
+      evaluateOnce<bool>(
+          "not (c0 between c1 and c2)",
+          std::optional<int32_t>{51},
+          std::optional<int32_t>{},
+          std::optional<int32_t>{42}));
+  EXPECT_EQ(
+      std::nullopt,
+      evaluateOnce<bool>(
+          "not (c0 between c1 and c2)",
+          std::optional<int32_t>{42},
+          std::optional<int32_t>{},
+          std::optional<int32_t>{42}));
 }
 
 TEST_F(ComparisonsTest, betweenBool) {
