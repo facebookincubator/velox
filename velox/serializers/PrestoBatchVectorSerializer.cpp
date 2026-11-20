@@ -178,6 +178,9 @@ void PrestoBatchVectorSerializer::estimateSerializedSizeImpl(
           mapVector->mapValues(), childRanges, childSizes.data(), scratch);
       break;
     }
+    case VectorEncoding::Simple::FLAT_MAP:
+      estimateSerializedSizeInt(vector.get(), ranges, sizes, scratch);
+      break;
     case VectorEncoding::Simple::ARRAY: {
       auto arrayVector = vector->as<ArrayVector>();
       std::vector<IndexRange> childRanges;

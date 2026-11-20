@@ -205,8 +205,66 @@ void VectorStream::flattenStream(
   initializeFlatStream(vector, initialNumRows);
 }
 
+void VectorStream::startFlatMap() {
+  if (isFlatMapStream()) {
+    return;
+  }
+  VELOX_CHECK_EQ(
+      nonNullCount_,
+      0,
+      "Cannot append a flat map to a stream that holds regular maps: {}",
+      type_->toString());
+  VELOX_CHECK(!isConstantStream_);
+  VELOX_CHECK(!isDictionaryStream_);
+  values_.startWrite(0);
+  numFlatMapSegments_ = 0;
+  flatMapKeys_ = std::make_unique<FlatMapVector>(
+      streamArena_->pool(),
+      type_,
+      nullptr,
+      0,
+      BaseVector::create(type_->childAt(0), 0, streamArena_->pool()),
+      std::vector<VectorPtr>{},
+      std::vector<BufferPtr>{});
+  hasLengths_ = false;
+  initializeHeader(kFlatMap, *streamArena_);
+}
+
+std::pair<int32_t, bool> VectorStream::addFlatMapKey(
+    const VectorPtr& keys,
+    vector_size_t index) {
+  if (const auto channel = flatMapKeys_->getKeyChannel(keys, index)) {
+    return {channel.value(), false};
+  }
+  flatMapKeys_->appendDistinctKey(keys, index);
+  return {flatMapKeys_->numDistinctKeys() - 1, true};
+}
+
+// The FLAT_MAP column is: number of rows, nulls, the key column, number of
+// segments, byte size of the segment headers, the segment headers, then the
+// value column holding the values of each segment key by key. The key column
+// holds each key once, in the order the keys first appear in the page. A
+// segment header is its first row, number of rows and number of keys, then for
+// each key its channel in the key column and the number of non-null rows that
+// have it, followed by a bitmap with a bit per row of the segment unless every
+// non-null row has the key.
+void VectorStream::flushFlatMap(OutputStream* out) {
+  writeInt32(out, numRows());
+  flushNulls(out);
+  children_[0].flush(out);
+  writeInt32(out, numFlatMapSegments_);
+  writeInt32(out, values_.size());
+  values_.flush(out);
+  children_[1].flush(out);
+}
+
 void VectorStream::flush(OutputStream* out) {
   out->write(reinterpret_cast<char*>(header_.buffer), header_.size);
+
+  if (isFlatMapStream()) {
+    flushFlatMap(out);
+    return;
+  }
 
   if (encoding_.has_value()) {
     switch (encoding_.value()) {
@@ -308,6 +366,10 @@ void VectorStream::flushNulls(OutputStream* out) {
 
 void VectorStream::clear() {
   encoding_ = std::nullopt;
+  if (isFlatMapStream()) {
+    flatMapKeys_.reset();
+    hasLengths_ = true;
+  }
   initializeHeader(typeToEncodingName(type_), *streamArena_);
   nonNullCount_ = 0;
   nullCount_ = 0;

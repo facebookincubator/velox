@@ -107,6 +107,8 @@ Status PrestoVectorLexer::lexColumn() {
     VELOX_RETURN_NOT_OK(lexArray());
   } else if (encoding == kMap) {
     VELOX_RETURN_NOT_OK(lexMap());
+  } else if (encoding == kFlatMap) {
+    VELOX_RETURN_NOT_OK(lexFlatMap());
   } else if (encoding == kRow) {
     VELOX_RETURN_NOT_OK(lexRow());
   } else if (encoding == kDictionary) {
@@ -157,6 +159,19 @@ Status PrestoVectorLexer::lexMap() {
   const auto offsetBytes = (numRows + 1) * sizeof(int32_t);
   VELOX_RETURN_NOT_OK(lexBytes(offsetBytes, TokenType::OFFSETS));
   VELOX_RETURN_NOT_OK(lexNulls(numRows));
+  return Status::OK();
+}
+
+Status PrestoVectorLexer::lexFlatMap() {
+  int32_t numRows;
+  VELOX_RETURN_NOT_OK(lexInt(TokenType::NUM_ROWS, &numRows));
+  VELOX_RETURN_NOT_OK(lexNulls(numRows));
+  VELOX_RETURN_NOT_OK(lexColumn());
+  VELOX_RETURN_NOT_OK(lexInt<int32_t>(TokenType::FLAT_MAP_SEGMENTS));
+  int32_t segmentBytes;
+  VELOX_RETURN_NOT_OK(lexInt(TokenType::FLAT_MAP_SEGMENTS, &segmentBytes));
+  VELOX_RETURN_NOT_OK(lexBytes(segmentBytes, TokenType::FLAT_MAP_SEGMENTS));
+  VELOX_RETURN_NOT_OK(lexColumn());
   return Status::OK();
 }
 

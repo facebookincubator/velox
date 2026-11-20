@@ -20,6 +20,7 @@
 #include "velox/common/memory/StreamArena.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/BaseVector.h"
+#include "velox/vector/FlatMapVector.h"
 
 namespace facebook::velox::serializer::presto::detail {
 // Appendable container for serialized values. To append a value at a
@@ -168,6 +169,36 @@ class VectorStream {
     return isConstantStream_;
   }
 
+  // Switches a map stream to the FLAT_MAP encoding on the first flat map
+  // appended to it. Throws if the stream already holds regular maps.
+  void startFlatMap();
+
+  bool isFlatMapStream() const {
+    return flatMapKeys_ != nullptr;
+  }
+
+  // Returns the number of rows appended so far, including nulls.
+  int32_t numRows() const {
+    return nullCount_ + nonNullCount_;
+  }
+
+  // Returns the stream that receives the segment headers of a FLAT_MAP stream,
+  // the values stream, which map streams do not otherwise use.
+  ByteOutputStream& flatMapSegments() {
+    return values_;
+  }
+
+  void addFlatMapSegment() {
+    ++numFlatMapSegments_;
+  }
+
+  // Returns the channel in a FLAT_MAP stream of the key at 'index' in 'keys',
+  // and whether the key is new to the stream. The caller appends a new key to
+  // the key column, the first child stream.
+  std::pair<int32_t, bool> addFlatMapKey(
+      const VectorPtr& keys,
+      vector_size_t index);
+
   bool preserveEncodings() const {
     return opts_.preserveEncodings;
   }
@@ -215,6 +246,8 @@ class VectorStream {
       std::optional<VectorPtr> vector,
       vector_size_t initialNumRows);
 
+  void flushFlatMap(OutputStream* out);
+
   const TypePtr type_;
   StreamArena* const streamArena_;
   const bool isLongDecimal_;
@@ -234,6 +267,13 @@ class VectorStream {
   std::vector<VectorStream, memory::StlAllocator<VectorStream>> children_;
   bool isDictionaryStream_{false};
   bool isConstantStream_{false};
+  // Number of segments of a FLAT_MAP stream. Kept next to the flags above so
+  // that it fills their padding.
+  int32_t numFlatMapSegments_{0};
+  // A flat map with no rows whose distinct keys are those of a FLAT_MAP stream,
+  // in the order of their channels. Set only for a FLAT_MAP stream, so other
+  // streams do not grow.
+  std::unique_ptr<FlatMapVector> flatMapKeys_;
 };
 
 template <>
