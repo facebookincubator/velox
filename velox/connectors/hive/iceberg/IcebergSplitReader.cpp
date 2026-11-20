@@ -1327,6 +1327,9 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
 
   // Iceberg table stores all column's data in data file.
   for (const auto& childSpec : childrenSpecs) {
+    if (childSpec->columnType() != common::ScanSpec::ColumnType::kRegular) {
+      continue;
+    }
     const std::string& fieldName = childSpec->fieldName();
     if (auto iter = splitInfoColumns.find(fieldName);
         iter != splitInfoColumns.end()) {
