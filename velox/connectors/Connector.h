@@ -823,7 +823,7 @@ class ConnectorQueryCtx {
   const std::unordered_map<std::string, memory::MemoryPool*> customPools_;
   bool selectiveNimbleReaderEnabled_{false};
   core::QueryConfig::RowSizeTrackingMode rowSizeTrackingEnabled_{
-      core::QueryConfig::RowSizeTrackingMode::ENABLED_FOR_ALL};
+      core::QueryConfig::RowSizeTrackingMode::kEnabledForAll};
 };
 
 class Connector;

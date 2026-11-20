@@ -60,11 +60,11 @@ class IndexLookupTest : public ::testing::Test {
 TEST_F(IndexLookupTest, pointLookupRequest) {
   auto request = LookupRequest::pointLookup({"aaa", "bbb"});
 
-  EXPECT_EQ(request.mode(), LookupRequest::Mode::PointLookup);
-  EXPECT_EQ(request.size(), 2);
-  EXPECT_EQ(request.pointKey(0), "aaa");
-  EXPECT_EQ(request.pointKey(1), "bbb");
-  EXPECT_FALSE(request.options().rowRange.has_value());
+  EXPECT_EQ(request->mode(), LookupRequest::Mode::PointLookup);
+  EXPECT_EQ(request->size(), 2);
+  EXPECT_EQ(request->pointKey(0), "aaa");
+  EXPECT_EQ(request->pointKey(1), "bbb");
+  EXPECT_FALSE(request->options().rowRange.has_value());
 }
 
 TEST_F(IndexLookupTest, rangeScanRequest) {
@@ -72,10 +72,10 @@ TEST_F(IndexLookupTest, rangeScanRequest) {
       makeRangeKey("aaa", "zzz")};
   auto request = LookupRequest::rangeScan(keys);
 
-  EXPECT_EQ(request.mode(), LookupRequest::Mode::RangeScan);
-  EXPECT_EQ(request.size(), 1);
-  EXPECT_EQ(request.rangeBound(0).lowerKey.value(), "aaa");
-  EXPECT_EQ(request.rangeBound(0).upperKey.value(), "zzz");
+  EXPECT_EQ(request->mode(), LookupRequest::Mode::RangeScan);
+  EXPECT_EQ(request->size(), 1);
+  EXPECT_EQ(request->rangeBound(0).lowerKey.value(), "aaa");
+  EXPECT_EQ(request->rangeBound(0).upperKey.value(), "zzz");
 }
 
 TEST_F(IndexLookupTest, withOptions) {
@@ -83,10 +83,10 @@ TEST_F(IndexLookupTest, withOptions) {
       {"key"},
       std::make_shared<const LookupRequest::Options>(RowRange(10, 100)));
 
-  EXPECT_EQ(request.size(), 1);
-  EXPECT_TRUE(request.options().rowRange.has_value());
-  EXPECT_EQ(request.options().rowRange->startRow, 10);
-  EXPECT_EQ(request.options().rowRange->endRow, 100);
+  EXPECT_EQ(request->size(), 1);
+  EXPECT_TRUE(request->options().rowRange.has_value());
+  EXPECT_EQ(request->options().rowRange->startRow, 10);
+  EXPECT_EQ(request->options().rowRange->endRow, 100);
 }
 
 TEST_F(IndexLookupTest, emptyKeyBoundsThrows) {

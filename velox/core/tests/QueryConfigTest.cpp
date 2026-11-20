@@ -52,11 +52,53 @@ TEST_F(QueryConfigTest, setConfig) {
 }
 
 TEST_F(QueryConfigTest, invalidConfig) {
-  std::unordered_map<std::string, std::string> configData(
-      {{QueryConfig::kSessionTimezone, "invalid"}});
   VELOX_ASSERT_USER_THROW(
-      QueryCtx::create(nullptr, QueryConfig{std::move(configData)}),
+      QueryCtx::create(
+          nullptr, QueryConfig{{{QueryConfig::kSessionTimezone, "invalid"}}}),
       "session 'session_timezone' set with invalid value 'invalid'");
+}
+
+TEST_F(QueryConfigTest, outOfRangeConfig) {
+  const auto makeConfig = [](const char* key, const char* value) {
+    return QueryConfig{{{key, value}}};
+  };
+
+  for (const auto* key :
+       {QueryConfig::kMaxOutputBatchRows,
+        QueryConfig::kPreferredOutputBatchRows,
+        QueryConfig::kMaxLocalExchangePartitionCount,
+        QueryConfig::kLocalMergeMaxNumMergeSources,
+        QueryConfig::kLocalMergeSourceQueueSize,
+        QueryConfig::kTaskWriterCount,
+        QueryConfig::kTaskPartitionedWriterCount}) {
+    SCOPED_TRACE(key);
+    VELOX_ASSERT_USER_THROW(
+        makeConfig(key, "0"),
+        fmt::format("Session property must be at least 1: {}", key));
+    EXPECT_NO_THROW(makeConfig(key, "1"));
+  }
+
+  for (const auto* key :
+       {QueryConfig::kMaxOutputBatchRows,
+        QueryConfig::kPreferredOutputBatchRows,
+        QueryConfig::kMergeJoinOutputBatchStartSize,
+        QueryConfig::kTableScanOutputBatchRowsOverride}) {
+    SCOPED_TRACE(key);
+    VELOX_ASSERT_USER_THROW(
+        makeConfig(key, "2147483648"),
+        fmt::format("Session property cannot exceed 2147483647: {}", key));
+    EXPECT_NO_THROW(makeConfig(key, "2147483647"));
+  }
+
+  for (const auto* text : {"-1", "abc", "4294967296"}) {
+    SCOPED_TRACE(text);
+    VELOX_ASSERT_USER_THROW(
+        makeConfig(QueryConfig::kMaxOutputBatchRows, text),
+        fmt::format(
+            "Session property must be an integer between 0 and 4294967295: {} = {}",
+            QueryConfig::kMaxOutputBatchRows,
+            text));
+  }
 }
 
 TEST_F(QueryConfigTest, taskWriterCountConfig) {
