@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <cstring>
+
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/VectorStream.h"
@@ -113,8 +115,9 @@ class RowSerializer : public IterativeVectorSerializer {
       const TRowSize size =
           compactRow.serialize(row, rawBuffer + offset + sizeof(TRowSize));
 
-      // Write raw size. Needs to be in big endian order.
-      *(TRowSize*)(rawBuffer + offset) = folly::Endian::big(size);
+      // Packed row sizes can leave the next header unaligned.
+      const auto bigEndianSize = folly::Endian::big(size);
+      std::memcpy(rawBuffer + offset, &bigEndianSize, sizeof(bigEndianSize));
       offset += sizeof(TRowSize) + size;
     }
   }
@@ -206,8 +209,9 @@ class RowSerializer : public IterativeVectorSerializer {
         TRowSize size =
             rowSerializer.serialize(row, rawBuffer + offset + sizeof(TRowSize));
 
-        // Write raw size. Needs to be in big endian order.
-        *(TRowSize*)(rawBuffer + offset) = folly::Endian::big(size);
+        // Packed row sizes can leave the next header unaligned.
+        const auto bigEndianSize = folly::Endian::big(size);
+        std::memcpy(rawBuffer + offset, &bigEndianSize, sizeof(bigEndianSize));
         offset += sizeof(TRowSize) + size;
       }
     }
