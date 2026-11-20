@@ -1797,6 +1797,11 @@ void bindGraph(ExecutionState& state, WaveGraph& waveGraph) {
   }
   if (deviceSymbols != nullptr) {
     deviceSymbols->resolveSources(state);
+    if (WaveConfig::get().checkSizeExprs) {
+      LOG(INFO) << "Size expressions: "
+                << deviceSymbols->inferReserveShapes(state)
+                << " shapes from symbolic reserves";
+    }
   }
   for (auto& steps : state.stepVectors) {
     for (auto& sv : steps) {
@@ -1890,6 +1895,9 @@ bool WaveGraphExecutor::executeWave(
     if (statePtr->stream) {
       statePtr->streamPool->put(std::move(statePtr->stream));
     }
+    if (statePtr->setupStream) {
+      statePtr->streamPool->put(std::move(statePtr->setupStream));
+    }
     waveGraph.returnState(std::move(statePtr));
   };
 
@@ -1960,6 +1968,10 @@ bool WaveGraphExecutor::executeWave(
   for (auto id : state.tableRoots) {
     publishFromFrame(frame, id);
   }
+  if (WaveConfig::get().checkSizeExprs &&
+      waveGraph.deviceSymbols() != nullptr) {
+    waveGraph.deviceSymbols()->reportSizeExprs(state.sizeExprSymbols);
+  }
   if (!state.bound) {
     bindGraph(state, waveGraph);
   }
@@ -1967,6 +1979,7 @@ bool WaveGraphExecutor::executeWave(
   if (state.deviceSymbolsMode) {
     deviceSymbols->beginExecution(state);
   }
+  state.sizeExprSymbols.clear();
   beginGroupArena(state);
   SCOPE_EXIT {
     // Values never released -- nothing read them last in a node -- still hold
@@ -2703,7 +2716,8 @@ void WaveGraphExecutor::adjustCosts(ExecutionState& state) {
       continue;
     }
     auto& sv = state.stepVectors[seq][step];
-    if (sv.kernels.empty() || mi >= info.launches.size() ||
+    // The device updates its own multipliers.
+    if (sv.onDeviceGrid || sv.kernels.empty() || mi >= info.launches.size() ||
         info.launches[mi].numBlocks <= 0) {
       continue;
     }

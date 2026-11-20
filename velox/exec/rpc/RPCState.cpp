@@ -213,6 +213,13 @@ void RPCState::setMaxWindow(int64_t maxWindow) {
   window_ = CongestionController{maxWindow, maxWindow};
 }
 
+void RPCState::raisePerRowMaxWindow(int64_t maxWindow) {
+  std::lock_guard<std::mutex> l(mutex_);
+  if (streamingMode_ == RPCStreamingMode::kPerRow) {
+    window_.raiseMaxWindow(maxWindow);
+  }
+}
+
 // ===== Input batch storage =====
 
 int32_t RPCState::storeInputBatch(
@@ -499,8 +506,9 @@ void RPCState::completeRow(
     }
   }
   if (pending.has_value() && pending->lease != nullptr) {
-    const auto completion =
-        pending->lease->completeAndRelease(isHardOverload(readyRow.response));
+    const auto completion = pending->lease->completeAndRelease(
+        isHardOverload(readyRow.response),
+        readyRow.response.isCapacityRejection());
     readyRow.sharedOverloadHandled = completion.sharedOverloadHandled;
     readyRow.admissionEpoch = completion.overloadEpoch;
   }
@@ -516,6 +524,11 @@ void RPCState::completeRow(
   // A capacity rejection with a retry hint goes back for another admission
   // while its budget lasts. Completion already gave back its slot above.
   const auto& retryHint = readyRow.response.capacityRetry();
+  // Counted once, whether the rejection retries or becomes the row's output.
+  std::optional<velox::rpc::CapacityRetryCause> rejectionCause;
+  if (retryHint.has_value()) {
+    rejectionCause = retryHint->cause;
+  }
   if (capacityRetryEnabled && pending.has_value() && retryHint.has_value()) {
     const auto nowNs = steadyNowNs();
     // Both kinds count the retries the transport made in place during each
@@ -551,6 +564,7 @@ void RPCState::completeRow(
         std::lock_guard<std::mutex> l(mutex_);
         inFlight_--;
         ++numCompletionsSignaled_;
+        countRejectionLocked(retryHint->cause);
         if (pastBudget) {
           ++numCapacityRetryFloorRetries_;
         }
@@ -576,6 +590,8 @@ void RPCState::completeRow(
           retryFeedback_.overloaded = true;
           retryFeedback_.sharedOverloadHandled |=
               readyRow.sharedOverloadHandled;
+          retryFeedback_.nonCapacityOverload |=
+              retryHint->cause != velox::rpc::CapacityRetryCause::kCapacity;
         }
         // Wake the driver so it applies the overload to its window now.
         retryWaiters = takeWaitersLocked();
@@ -604,6 +620,9 @@ void RPCState::completeRow(
     // remaining parked.
     inFlight_--;
     ++numCompletionsSignaled_;
+    if (rejectionCause.has_value()) {
+      countRejectionLocked(*rejectionCause);
+    }
     if (!closed_ && !accountingFailed) {
       try {
         readyRows_.push_back(std::move(readyRow));
@@ -759,7 +778,8 @@ void RPCState::addPendingBatch(
                 .admissionEpoch = std::nullopt};
             if (auto lease = weakAdmissionLease.lock()) {
               const auto completion = lease->completeAndRelease(
-                  containsHardOverload(completed.responses));
+                  containsHardOverload(completed.responses),
+                  /*capacityRejection=*/false);
               completed.sharedOverloadHandled =
                   completion.sharedOverloadHandled;
               completed.admissionEpoch = completion.overloadEpoch;
@@ -783,7 +803,8 @@ void RPCState::addPendingBatch(
           .thenError([state = selfPtr, completionTimeNs, weakAdmissionLease](
                          folly::exception_wrapper ew) {
             if (auto lease = weakAdmissionLease.lock()) {
-              lease->completeAndRelease(false);
+              lease->completeAndRelease(
+                  /*hardOverload=*/false, /*capacityRejection=*/false);
             }
             completionTimeNs->store(steadyNowNs(), std::memory_order_relaxed);
             std::vector<ContinuePromise> waiters;
@@ -1195,6 +1216,19 @@ bool RPCState::allDispatchedWorkDoneLocked() const {
   return noMoreInput_ && inFlight_ == 0 && retryRows_.empty();
 }
 
+void RPCState::countRejectionLocked(velox::rpc::CapacityRetryCause cause) {
+  switch (cause) {
+    case velox::rpc::CapacityRetryCause::kQuota:
+      ++numQuotaRejections_;
+      return;
+    case velox::rpc::CapacityRetryCause::kCapacity:
+      ++numCapacityRejections_;
+      return;
+    case velox::rpc::CapacityRetryCause::kUnknown:
+      return;
+  }
+}
+
 std::vector<ContinuePromise> RPCState::takeWaitersLocked() {
   // Hand the waiter promises back to the caller to fulfill after releasing
   // mutex_. See the header for why setValue() must not run under mutex_.
@@ -1216,6 +1250,8 @@ RPCState::OperatorSnapshot RPCState::operatorSnapshot() const {
       .inFlight = inFlight_,
       .numCompletionsSignaled = numCompletionsSignaled_,
       .numCapacityRetries = numCapacityRetries_,
+      .numQuotaRejections = numQuotaRejections_,
+      .numCapacityRejections = numCapacityRejections_,
       .numCapacityRetryFloorRetries = numCapacityRetryFloorRetries_,
       .numOverloadedAttempts = numOverloadedAttempts_,
       .numSuccessesAfterOverload = numSuccessesAfterOverload_,

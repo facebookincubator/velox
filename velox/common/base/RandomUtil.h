@@ -84,6 +84,25 @@ class RandomSkipTracker {
     return false;
   }
 
+  /// Runs one trial for each of the next 'numElements' elements and calls
+  /// 'onHit(i)' with the index (0-based) of each hit, in order. Same as calling
+  /// `testOne' per element, but takes one random draw per hit.
+  template <typename OnHit>
+  void forEachHit(uint64_t numElements, OnHit&& onHit) {
+    uint64_t i = 0;
+    while (i < numElements) {
+      const auto skip = nextSkip();
+      const auto remaining = numElements - i;
+      if (skip >= remaining) {
+        consume(remaining);
+        return;
+      }
+      i += skip;
+      onHit(i++);
+      consume(skip + 1);
+    }
+  }
+
   double sampleRate() const {
     return sampleRate_;
   }

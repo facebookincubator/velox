@@ -113,6 +113,7 @@ jobs:
           CMAKE_POLICY_VERSION_MINIMUM: '3.5'
         run: |
           source scripts/setup-macos.sh
+          update_brew
           install_build_prerequisites
           install_velox_deps_from_brew
           install_gflags

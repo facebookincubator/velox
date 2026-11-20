@@ -165,9 +165,8 @@ class StreamingAggregationTest
 
     createDuckDbTable(inputVectors);
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId aggregationNodeId;
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = PlanBuilder()
                     .startTableScan()
                     .outputType(
                         std::dynamic_pointer_cast<const RowType>(
@@ -271,10 +270,10 @@ class StreamingAggregationTest
 
     createDuckDbTable(inputVectors);
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     {
       core::PlanNodeId aggregationNodeId;
-      auto plan = PlanBuilder(planNodeIdGenerator)
+      auto plan = builder.newPlan()
                       .startTableScan()
                       .outputType(
                           std::dynamic_pointer_cast<const RowType>(
@@ -335,7 +334,7 @@ class StreamingAggregationTest
     {
       core::PlanNodeId aggregationNodeId;
       auto plan =
-          PlanBuilder(planNodeIdGenerator)
+          builder.newPlan()
               .startTableScan()
               .outputType(
                   std::dynamic_pointer_cast<const RowType>(
@@ -534,11 +533,11 @@ class StreamingAggregationTest
 
     createDuckDbTable(inputVectors);
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     {
       core::PlanNodeId aggregationNodeId;
       auto plan =
-          PlanBuilder(planNodeIdGenerator)
+          builder.newPlan()
               .startTableScan()
               .outputType(
                   std::dynamic_pointer_cast<const RowType>(
@@ -600,7 +599,7 @@ class StreamingAggregationTest
 
     {
       core::PlanNodeId aggregationNodeId;
-      auto plan = PlanBuilder(planNodeIdGenerator)
+      auto plan = builder.newPlan()
                       .startTableScan()
                       .outputType(
                           std::dynamic_pointer_cast<const RowType>(
@@ -810,7 +809,7 @@ TEST_P(StreamingAggregationTest, closeUninitialized) {
       makeFlatVector<int64_t>({1, 2, 3}),
   });
   auto plan = PlanBuilder()
-                  .values({data})
+                  .values(data)
                   .addNode([](auto nodeId, auto source) -> core::PlanNodePtr {
                     return std::make_shared<core::ProjectNode>(
                         nodeId,
@@ -1190,10 +1189,9 @@ TEST_P(StreamingAggregationTest, clusteredInputWithBarrier) {
   const int numSplits = keys.size();
   auto tempFiles = writeToFiles(inputVectors);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId streamingAggregationNodeId;
   auto plan =
-      PlanBuilder(planNodeIdGenerator)
+      PlanBuilder()
           .startTableScan()
           .outputType(
               std::dynamic_pointer_cast<const RowType>(inputVectors[0]->type()))
@@ -1282,7 +1280,7 @@ TEST_P(StreamingAggregationTest, distinctAggregationsWithBarrier) {
 TEST_P(StreamingAggregationTest, constantInput) {
   auto data = makeRowVector({makeFlatVector<int32_t>({1, 1, 2, 2})});
   auto plan = PlanBuilder()
-                  .values({data})
+                  .values(data)
                   .partialStreamingAggregation({"c0"}, {"array_agg(3)"})
                   .finalAggregation()
                   .planNode();
@@ -1356,9 +1354,8 @@ TEST_F(StreamingAggregationTest, noGroupsSpanBatchesSingleGroup) {
   auto data = addPayload(keys, 1);
   createDuckDbTable(data);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId aggregationNodeId;
-  auto plan = PlanBuilder(planNodeIdGenerator)
+  auto plan = PlanBuilder()
                   .values(data)
                   .streamingAggregation(
                       {"c0"},
@@ -1423,9 +1420,8 @@ TEST_F(StreamingAggregationTest, noGroupsSpanBatches) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId aggregationNodeId;
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = PlanBuilder()
                     .values(data)
                     .streamingAggregation(
                         {"c0"},
@@ -1572,9 +1568,8 @@ TEST_P(StreamingAggregationTest, needsInputWhenSplitOutput) {
   }
   createDuckDbTable(batches);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId aggregationNodeId;
-  auto plan = PlanBuilder(planNodeIdGenerator)
+  auto plan = PlanBuilder()
                   .values(batches)
                   .streamingAggregation(
                       {"c0"},

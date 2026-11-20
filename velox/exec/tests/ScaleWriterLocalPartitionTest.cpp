@@ -633,9 +633,8 @@ TEST_F(ScaleWriterLocalPartitionTest, unpartitionBasic) {
     Operator::registerOperator(
         std::make_unique<FakeSourceNodeFactory>(testController));
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId exchnangeNodeId;
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = PlanBuilder()
                     .addNode([&](const core::PlanNodeId& id,
                                  const core::PlanNodePtr& input) {
                       return std::make_shared<FakeSourceNode>(id, rowType_);
@@ -735,9 +734,8 @@ TEST_P(ScaleWriterLocalPartitionTestParametrized, unpartitionFuzzer) {
     Operator::registerOperator(
         std::make_unique<FakeSourceNodeFactory>(testController));
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId exchnangeNodeId;
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = PlanBuilder()
                     .addNode([&](const core::PlanNodeId& id,
                                  const core::PlanNodePtr& input) {
                       return std::make_shared<FakeSourceNode>(id, rowType_);
@@ -844,9 +842,8 @@ TEST_F(ScaleWriterLocalPartitionTest, partitionBasic) {
     Operator::registerOperator(
         std::make_unique<FakeSourceNodeFactory>(testController));
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId exchnangeNodeId;
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = PlanBuilder()
                     .addNode([&](const core::PlanNodeId& id,
                                  const core::PlanNodePtr& input) {
                       return std::make_shared<FakeSourceNode>(id, rowType_);
@@ -976,9 +973,8 @@ TEST_P(ScaleWriterLocalPartitionTestParametrized, partitionFuzzer) {
     Operator::registerOperator(
         std::make_unique<FakeSourceNodeFactory>(testController));
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId exchnangeNodeId;
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = PlanBuilder()
                     .addNode([&](const core::PlanNodeId& id,
                                  const core::PlanNodePtr& input) {
                       return std::make_shared<FakeSourceNode>(id, rowType_);

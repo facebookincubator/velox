@@ -4968,7 +4968,7 @@ class TopNNode : public PlanNode {
       const PlanNodeId& id,
       const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
       const std::vector<SortOrder>& sortingOrders,
-      int32_t count,
+      int64_t count,
       bool isPartial,
       const PlanNodePtr& source);
 
@@ -5001,7 +5001,7 @@ class TopNNode : public PlanNode {
       return *this;
     }
 
-    Builder& count(int32_t count) {
+    Builder& count(int64_t count) {
       count_ = count;
       return *this;
     }
@@ -5039,7 +5039,7 @@ class TopNNode : public PlanNode {
     std::optional<PlanNodeId> id_;
     std::optional<std::vector<FieldAccessTypedExprPtr>> sortingKeys_;
     std::optional<std::vector<SortOrder>> sortingOrders_;
-    std::optional<int32_t> count_;
+    std::optional<int64_t> count_;
     std::optional<bool> isPartial_;
     std::optional<PlanNodePtr> source_;
   };
@@ -5067,7 +5067,7 @@ class TopNNode : public PlanNode {
     return !isPartial_;
   }
 
-  int32_t count() const {
+  int64_t count() const {
     return count_;
   }
 
@@ -5088,7 +5088,7 @@ class TopNNode : public PlanNode {
 
   const std::vector<FieldAccessTypedExprPtr> sortingKeys_;
   const std::vector<SortOrder> sortingOrders_;
-  const int32_t count_;
+  const int64_t count_;
   const bool isPartial_;
   const std::vector<PlanNodePtr> sources_;
 };
@@ -6414,29 +6414,6 @@ class TopNRowNumberNode : public PlanNode {
       int32_t limit,
       bool partial,
       PlanNodePtr source);
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  /// Legacy constructor: a node without 'rowNumberColumnName' is partial.
-  TopNRowNumberNode(
-      PlanNodeId id,
-      RankFunction function,
-      std::vector<FieldAccessTypedExprPtr> partitionKeys,
-      std::vector<FieldAccessTypedExprPtr> sortingKeys,
-      std::vector<SortOrder> sortingOrders,
-      const std::optional<std::string>& rowNumberColumnName,
-      int32_t limit,
-      PlanNodePtr source)
-      : TopNRowNumberNode(
-            std::move(id),
-            function,
-            std::move(partitionKeys),
-            std::move(sortingKeys),
-            std::move(sortingOrders),
-            rowNumberColumnName,
-            limit,
-            /*partial=*/!rowNumberColumnName.has_value(),
-            std::move(source)) {}
-#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
 
   class Builder {
    public:

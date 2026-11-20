@@ -157,14 +157,14 @@ class SpatialJoinTest : public OperatorTestBase {
         {makeNullableFlatVector<std::string>(expectedLeftWktsStr),
          makeNullableFlatVector<std::string>(expectedRightWktsStr)});
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     auto plan =
-        PlanBuilder(planNodeIdGenerator)
+        builder.newPlan()
             .values(probeBatches)
             .project({"ST_GeometryFromText(left_g) AS left_g"})
             .localPartitionRoundRobinRow()
             .spatialJoin(
-                PlanBuilder(planNodeIdGenerator)
+                builder.newPlan()
                     .values(buildBatches)
                     .project(
                         {"ST_GeometryFromText(right_g) AS right_g", "radius"})
@@ -180,8 +180,8 @@ class SpatialJoinTest : public OperatorTestBase {
                 {"ST_AsText(left_g) AS left_g",
                  "ST_AsText(right_g) AS right_g"})
             .planNode();
-    AssertQueryBuilder builder{plan};
-    builder.maxDrivers(maxDrivers)
+    AssertQueryBuilder queryBuilder{plan};
+    queryBuilder.maxDrivers(maxDrivers)
         .config(core::QueryConfig::kPreferredOutputBatchRows, maxBatchSize)
         .config(core::QueryConfig::kMaxOutputBatchRows, maxBatchSize)
         .assertResults({expectedRows});
@@ -677,14 +677,14 @@ TEST_F(SpatialJoinTest, failOnGroupedExecution) {
   std::vector<RowVectorPtr> batches{
       makeNamedRowVector("wkt", makeFlatVector<std::string>({"POINT(0 0)"}))};
   core::PlanNodeId groupedScanNodeId;
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto planFragment =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .values(batches)
           .capturePlanNodeId(groupedScanNodeId)
           .project({"ST_GeometryFromText(wkt) AS left_g"})
           .spatialJoin(
-              PlanBuilder(planNodeIdGenerator)
+              builder.newPlan()
                   .values(batches)
                   .project({"ST_GeometryFromText(wkt) AS right_g"})
                   .localPartition({})

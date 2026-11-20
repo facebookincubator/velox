@@ -18,24 +18,30 @@
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <gtest/gtest.h>
 
-#include "velox/common/caching/SsdCache.h"
+#include "velox/common/caching/AsyncDataCache.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
-#include "velox/exec/HashProbe.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/parse/ExpressionsParser.h"
-#include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+// TODO: Remove once Prestissimo migrates.
+#include "velox/exec/HashProbe.h"
+#endif
 
 namespace facebook::velox::exec::test {
 class OperatorTestBase : public virtual testing::Test,
                          public velox::test::VectorTestBase {
  public:
-  /// The following methods are used by google unit test framework to do
-  /// one-time setup/teardown for all the unit tests from OperatorTestBase. We
-  /// make them public as some benchmark like ReduceAgg also call these methods
-  /// to setup/teardown benchmark test environment.
+  /// Sets up the memory system with leak checks and the shared arbitrator,
+  /// registers Presto scalar and aggregate functions, and enables TestValue.
+  /// Called once per test suite. Public because benchmarks such as ReduceAgg
+  /// call it to set up the same environment.
   static void SetUpTestCase();
+
+  /// Shuts down the async data cache, waits for all tasks to be deleted, and
+  /// unregisters the shared arbitrator. Called once per test suite.
   static void TearDownTestCase();
 
   /// Sets up the velox memory system.
@@ -57,8 +63,14 @@ class OperatorTestBase : public virtual testing::Test,
   OperatorTestBase();
   ~OperatorTestBase() override;
 
+  /// Registers the default vector serde via registerVectorSerde() and the
+  /// named Presto, CompactRow and UnsafeRow serdes, creates driver and IO
+  /// executors, and starts the periodic stats reporter and the local exchange
+  /// source.
   void SetUp() override;
 
+  /// Waits for all tasks to be deleted, stops the stats reporter and the local
+  /// exchange source, releases memory pools, and resets the memory system.
   void TearDown() override;
 
   /// Allow base classes to register custom vector serde.
@@ -75,46 +87,35 @@ class OperatorTestBase : public virtual testing::Test,
     duckDbQueryRunner_.createTable(tableName, data);
   }
 
-  std::shared_ptr<Task> assertQuery(
-      const CursorParameters& params,
-      const std::string& duckDbSql);
-
-  std::shared_ptr<Task> assertQuery(
+  TaskPtr assertQuery(
       const core::PlanNodePtr& plan,
       const std::string& duckDbSql);
 
-  std::shared_ptr<Task> assertQuery(
+  TaskPtr assertQuery(
       const core::PlanNodePtr& plan,
-      const RowVectorPtr& expectedResults);
-
-  std::shared_ptr<Task> assertQuery(
-      const CursorParameters& params,
       const RowVectorPtr& expectedResults);
 
   /// Assumes plan has a single leaf node. All splits are added to that node.
-  std::shared_ptr<Task> assertQuery(
+  TaskPtr assertQuery(
       const core::PlanNodePtr& plan,
       const std::vector<std::shared_ptr<connector::ConnectorSplit>>&
           connectorSplits,
       const std::string& duckDbSql);
 
   /// Assumes plan has a single leaf node. All splits are added to that node.
-  std::shared_ptr<Task> assertQuery(
+  TaskPtr assertQuery(
       const core::PlanNodePtr& plan,
       std::vector<exec::Split>&& splits,
       const std::string& duckDbSql);
 
-  static std::shared_ptr<core::FieldAccessTypedExpr> toFieldExpr(
-      const std::string& name,
-      const RowTypePtr& rowType);
-
+  /// Parses a DuckDB SQL expression and resolves its types against 'rowType'.
   core::TypedExprPtr parseExpr(
-      const std::string& text,
-      RowTypePtr rowType,
+      const std::string& sql,
+      const RowTypePtr& rowType,
       const parse::ParseOptions& options = {});
 
  public:
-  static void deleteTaskAndCheckSpillDirectory(std::shared_ptr<Task>& task);
+  static void deleteTaskAndCheckSpillDirectory(TaskPtr& task);
 
  protected:
   // Used as default AsyncDataCache.

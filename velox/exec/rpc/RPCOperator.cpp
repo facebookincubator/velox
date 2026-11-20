@@ -23,6 +23,7 @@
 
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
+#include "velox/exec/rpc/RPCOperatorStatNames.h"
 #include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
 
 #define RPC_OP_LOG(severity) LOG(severity) << "[RPC_OP] "
@@ -160,12 +161,17 @@ void RPCOperator::initialize() {
   auto* driverCtx = operatorCtx_->driverCtx();
   VELOX_CHECK_NOT_NULL(driverCtx);
   const auto& queryConfig = driverCtx->queryConfig();
+  requestedFlowControlPolicy_ =
+      parseRPCFlowControlPolicy(queryConfig.rpcFlowControlPolicy());
   function_->setMemoryPool(operatorCtx_->pool()->shared_from_this());
   function_->initialize(
       queryConfig, inputTypes, constantInputs, rpcNode_->streamingMode());
   capacityRetryEnabled_ =
       rpcNode_->streamingMode() == RPCStreamingMode::kPerRow &&
       function_->mayReturnCapacityRetries();
+  capacityProbingEnabled_ =
+      requestedFlowControlPolicy_ == RPCFlowControlPolicy::kCapacityProbing &&
+      queryConfig.rpcRateLimiterAdaptiveEnabled() && capacityRetryEnabled_;
   state_->setCapacityRetryEnabled(capacityRetryEnabled_);
   *liveStatsSources_.wlock() =
       LiveStatsSources{.state = state_, .function = function_};
@@ -230,6 +236,9 @@ void RPCOperator::initializeRateLimiter() {
   const bool functionBoundsFirst = sessionHardLimit >= 0;
   RPCRateLimiter::Config policy;
   policy.adaptive = queryConfig.rpcRateLimiterAdaptiveEnabled();
+  policy.flowControlPolicy = capacityProbingEnabled_
+      ? RPCFlowControlPolicy::kCapacityProbing
+      : RPCFlowControlPolicy::kWindowAimd;
   const auto functionFloor = function_->configuredAdaptiveFloor();
   if (functionBoundsFirst && functionFloor > 0) {
     policy.floor = functionFloor;
@@ -243,6 +252,8 @@ void RPCOperator::initializeRateLimiter() {
   policy.decreaseFactor = queryConfig.rpcRateLimiterDecreaseFactor();
   policy.maxProbeInterval = std::chrono::milliseconds{maxProbeIntervalMs};
   const auto functionLimit = function_->configuredCeiling();
+  // True when neither the session nor the function bounds the limiter.
+  bool safetyCeilingOnly{false};
   if (sessionHardLimit < 0) {
     if (functionLimit > 0) {
       policy.ceiling = functionLimit;
@@ -259,6 +270,23 @@ void RPCOperator::initializeRateLimiter() {
   } else {
     policy.ceiling =
         policy.adaptive ? kDefaultAdaptiveHardLimit : kLegacyFixedLimit;
+    safetyCeilingOnly = true;
+  }
+
+  // A driver window ceiling the session sets holds under either policy.
+  if (capacityProbingEnabled_ && queryConfig.rpcCongestionMaxWindow() <= 0) {
+    // The shared limiter learns the backend's capacity, so a driver window
+    // must not hold the worker below the limiter's ceiling. A ceiling the
+    // function declares is its backend's sizing, so the window does not rise
+    // past it even when a session limit takes precedence for the limiter. The
+    // safety ceiling sizes nothing, so under it the window stays finite.
+    int64_t driverCeiling{policy.ceiling};
+    if (functionLimit > 0) {
+      driverCeiling = std::min(policy.ceiling, functionLimit);
+    } else if (safetyCeilingOnly) {
+      driverCeiling = RPCRateLimiter::kInitialAdaptiveLimit;
+    }
+    state_->raisePerRowMaxWindow(driverCeiling);
   }
 
   const auto lookup =
@@ -416,7 +444,13 @@ void RPCOperator::addInput(RowVectorPtr input) {
 
 void RPCOperator::dispatchDueRetries() {
   const auto feedback = state_->takeRetryFeedback();
-  if (feedback.overloaded) {
+  // WINDOW_AIMD halves the driver window on every overloaded retry. Under
+  // CAPACITY_PROBING the shared limiter already backed off from a capacity
+  // rejection, and it can always cut further or pace; any other rejection
+  // backs off as under WINDOW_AIMD.
+  const bool limiterBackedOff = capacityProbingEnabled_ &&
+      feedback.sharedOverloadHandled && !feedback.nonCapacityOverload;
+  if (feedback.overloaded && !limiterBackedOff) {
     recordCongestion(
         AsyncRPCFunction::CongestionSignal::kOverloaded,
         /*roundTripTimesNs=*/{},
@@ -1002,7 +1036,11 @@ RowVectorPtr RPCOperator::outputPerRow() {
     // the gradient/baseline.
     if (!hasError && row.response.isBackendOutcome()) {
       roundTripTimesNs.push_back(row.rttNs);
-      if (row.admissionEpoch.has_value()) {
+      // Under CAPACITY_PROBING a row the transport retried through overloads
+      // shows the backend refusing calls, so it earns the limiter no growth.
+      const bool earnsGrowth =
+          !capacityProbingEnabled_ || row.response.numOverloadedAttempts == 0;
+      if (row.admissionEpoch.has_value() && earnsGrowth) {
         const auto overloadEpoch = row.admissionEpoch.value();
         const auto it = std::find_if(
             successUnitsByEpoch.begin(),
@@ -1462,10 +1500,12 @@ void RPCOperator::addLiveProgressStats(
   if (sources->state == nullptr) {
     return;
   }
-  stats.runtimeStats[kRpcRequestsDispatched] =
+  stats.runtimeStats[RPCOperatorStatNames::kRpcRequestsDispatched] =
       RuntimeMetric(numRequestsDispatched_.load(std::memory_order_relaxed));
+  stats.runtimeStats[RPCOperatorStatNames::kRpcFlowControlRequestedPolicy] =
+      RuntimeMetric(static_cast<int64_t>(requestedFlowControlPolicy_));
   const auto snapshot = sources->state->operatorSnapshot();
-  stats.runtimeStats[kRpcCompletionsSignaled] =
+  stats.runtimeStats[RPCOperatorStatNames::kRpcCompletionsSignaled] =
       RuntimeMetric(snapshot.numCompletionsSignaled);
   // The transport's retry ladder, which the two counters above cannot see: a
   // retried request is dispatched once and completes once, however many
@@ -1473,7 +1513,7 @@ void RPCOperator::addLiveProgressStats(
   // watching for liveness can tell a transport working through a backoff
   // schedule from a backend that has stopped answering.
   if (sources->function != nullptr) {
-    stats.runtimeStats[kRpcRetriesAttempted] =
+    stats.runtimeStats[RPCOperatorStatNames::kRpcRetriesAttempted] =
         RuntimeMetric(sources->function->numRetriesAttempted());
   }
   // The backend's admission capacity trajectory: the capacity this operator
@@ -1489,42 +1529,51 @@ void RPCOperator::addLiveProgressStats(
   // report in that case, and no stats worth reporting either.
   if (sources->limiter != nullptr) {
     const auto limiterStats = sources->limiter->stats();
-    stats.runtimeStats[kRpcRateLimiterCap] =
+    stats.runtimeStats[RPCOperatorStatNames::kRpcFlowControlEffectivePolicy] =
+        RuntimeMetric(static_cast<int64_t>(limiterStats.flowControlPolicy));
+    stats.runtimeStats[RPCOperatorStatNames::kRpcRateLimiterCap] =
         RuntimeMetric(limiterStats.capacity);
-    stats.runtimeStats[kRpcRateLimiterHardLimit] =
+    stats.runtimeStats[RPCOperatorStatNames::kRpcRateLimiterHardLimit] =
         RuntimeMetric(limiterStats.hardLimit);
-    stats.runtimeStats[kRpcRateLimiterPeakPending] =
+    stats.runtimeStats[RPCOperatorStatNames::kRpcRateLimiterPeakPending] =
         RuntimeMetric(limiterStats.peakPending);
-    stats.runtimeStats[kRpcRateLimiterMinCap] =
+    stats.runtimeStats[RPCOperatorStatNames::kRpcRateLimiterMinCap] =
         RuntimeMetric(limiterStats.lowWaterCapacity);
-    stats.runtimeStats[kRpcRateLimiterLimitMilli] =
+    stats.runtimeStats[RPCOperatorStatNames::kRpcRateLimiterLimitMilli] =
         RuntimeMetric(limiterStats.limitMilli);
-    stats.runtimeStats[kRpcRateLimiterMinLimitMilli] =
+    stats.runtimeStats[RPCOperatorStatNames::kRpcRateLimiterMinLimitMilli] =
         RuntimeMetric(limiterStats.lowWaterLimitMilli);
-    stats.runtimeStats[kRpcRateLimiterServiceHorizonNanos] =
+    stats.runtimeStats
+        [RPCOperatorStatNames::kRpcRateLimiterServiceHorizonNanos] =
         RuntimeMetric(limiterStats.serviceHorizonNanos);
     if (sources->policyScoped) {
-      stats.runtimeStats[kRpcRateLimiterPolicyScoped] = RuntimeMetric(1);
+      stats.runtimeStats[RPCOperatorStatNames::kRpcRateLimiterPolicyScoped] =
+          RuntimeMetric(1);
     }
     if (sources->limiterBaseline.has_value()) {
       const auto& baseline = sources->limiterBaseline.value();
-      stats.runtimeStats[kRpcRateLimiterAttachedNanos] = RuntimeMetric(
-          limiterStats.clockNanos - baseline.clockNanos,
-          RuntimeCounter::Unit::kNanos);
-      stats.runtimeStats[kRpcRateLimiterPacingNanos] = RuntimeMetric(
-          limiterStats.pacingNanos - baseline.pacingNanos,
-          RuntimeCounter::Unit::kNanos);
-      stats.runtimeStats[kRpcRateLimiterLimitMilliUnitSeconds] = RuntimeMetric(
-          static_cast<int64_t>(std::llround(
-              1'000 *
-              (limiterStats.windowUnitSeconds - baseline.windowUnitSeconds))));
+      stats.runtimeStats[RPCOperatorStatNames::kRpcRateLimiterAttachedNanos] =
+          RuntimeMetric(
+              limiterStats.clockNanos - baseline.clockNanos,
+              RuntimeCounter::Unit::kNanos);
+      stats.runtimeStats[RPCOperatorStatNames::kRpcRateLimiterPacingNanos] =
+          RuntimeMetric(
+              limiterStats.pacingNanos - baseline.pacingNanos,
+              RuntimeCounter::Unit::kNanos);
+      stats.runtimeStats
+          [RPCOperatorStatNames::kRpcRateLimiterLimitMilliUnitSeconds] =
+          RuntimeMetric(
+              static_cast<int64_t>(std::llround(
+                  1'000 *
+                  (limiterStats.windowUnitSeconds -
+                   baseline.windowUnitSeconds))));
     }
-    stats.runtimeStats[kRpcStaleSuccessUnits] =
+    stats.runtimeStats[RPCOperatorStatNames::kRpcStaleSuccessUnits] =
         RuntimeMetric(numStaleSuccessUnits_.load(std::memory_order_relaxed));
   }
-  stats.runtimeStats[kRpcOverloadedAttempts] =
+  stats.runtimeStats[RPCOperatorStatNames::kRpcOverloadedAttempts] =
       RuntimeMetric(snapshot.numOverloadedAttempts);
-  stats.runtimeStats[kRpcSuccessesAfterOverload] =
+  stats.runtimeStats[RPCOperatorStatNames::kRpcSuccessesAfterOverload] =
       RuntimeMetric(snapshot.numSuccessesAfterOverload);
   if (!includeGauges) {
     return;
@@ -1533,7 +1582,8 @@ void RPCOperator::addLiveProgressStats(
   // task totals permanently, so publishing this at close() would leave a
   // positive in-flight reading in the finished task's stats long after the
   // RPCs completed. Live samples only.
-  stats.runtimeStats[kRpcInFlight] = RuntimeMetric(snapshot.inFlight);
+  stats.runtimeStats[RPCOperatorStatNames::kRpcInFlight] =
+      RuntimeMetric(snapshot.inFlight);
 }
 
 exec::OperatorStats RPCOperator::stats(bool clear) {
@@ -1546,18 +1596,20 @@ void RPCOperator::recordRuntimeStats() {
   auto lockedStats = stats_.wlock();
   addLiveProgressStats(*lockedStats, /*includeGauges=*/false);
   lockedStats->addRuntimeStat(
-      kRpcResponsesReceived, RuntimeCounter(numResponsesReceived_));
-  lockedStats->addRuntimeStat(kRpcErrorCount, RuntimeCounter(numErrors_));
+      RPCOperatorStatNames::kRpcResponsesReceived,
+      RuntimeCounter(numResponsesReceived_));
+  lockedStats->addRuntimeStat(
+      RPCOperatorStatNames::kRpcErrorCount, RuntimeCounter(numErrors_));
   if (totalBlockWaitNanos_ > 0) {
     lockedStats->addRuntimeStat(
-        kRpcWaitWallNanos,
+        RPCOperatorStatNames::kRpcWaitWallNanos,
         RuntimeCounter(
             static_cast<int64_t>(totalBlockWaitNanos_),
             RuntimeCounter::Unit::kNanos));
   }
   if (totalBackpressureWaitNanos_ > 0) {
     lockedStats->addRuntimeStat(
-        kRpcBackpressureWaitNanos,
+        RPCOperatorStatNames::kRpcBackpressureWaitNanos,
         RuntimeCounter(
             static_cast<int64_t>(totalBackpressureWaitNanos_),
             RuntimeCounter::Unit::kNanos));
@@ -1573,69 +1625,89 @@ void RPCOperator::recordRuntimeStats() {
   if (state_) {
     auto snapshot = state_->operatorSnapshot();
     lockedStats->addRuntimeStat(
-        kRpcCongestionWindowFinal, RuntimeCounter(snapshot.windowLimit));
+        RPCOperatorStatNames::kRpcCongestionWindowFinal,
+        RuntimeCounter(snapshot.windowLimit));
     lockedStats->addRuntimeStat(
-        kRpcPeakInFlight, RuntimeCounter(snapshot.peakInFlight));
+        RPCOperatorStatNames::kRpcPeakInFlight,
+        RuntimeCounter(snapshot.peakInFlight));
     if (snapshot.numShrinks > 0) {
       lockedStats->addRuntimeStat(
-          kRpcCongestionShrinks, RuntimeCounter(snapshot.numShrinks));
+          RPCOperatorStatNames::kRpcCongestionShrinks,
+          RuntimeCounter(snapshot.numShrinks));
     }
     if (snapshot.numOverloadShrinks > 0) {
       lockedStats->addRuntimeStat(
-          kRpcCongestionOverloadShrinks,
+          RPCOperatorStatNames::kRpcCongestionOverloadShrinks,
           RuntimeCounter(snapshot.numOverloadShrinks));
     }
     if (snapshot.numCapacityRetries > 0) {
       lockedStats->addRuntimeStat(
-          kRpcCapacityRetries, RuntimeCounter(snapshot.numCapacityRetries));
+          RPCOperatorStatNames::kRpcCapacityRetries,
+          RuntimeCounter(snapshot.numCapacityRetries));
+    }
+    if (snapshot.numQuotaRejections > 0) {
+      lockedStats->addRuntimeStat(
+          RPCOperatorStatNames::kRpcQuotaRejections,
+          RuntimeCounter(snapshot.numQuotaRejections));
+    }
+    if (snapshot.numCapacityRejections > 0) {
+      lockedStats->addRuntimeStat(
+          RPCOperatorStatNames::kRpcCapacityRejections,
+          RuntimeCounter(snapshot.numCapacityRejections));
     }
     if (snapshot.numCapacityRetryFloorRetries > 0) {
       lockedStats->addRuntimeStat(
-          kRpcCapacityRetryFloorRetries,
+          RPCOperatorStatNames::kRpcCapacityRetryFloorRetries,
           RuntimeCounter(snapshot.numCapacityRetryFloorRetries));
     }
     if (snapshot.baselineRttNs > 0) {
       lockedStats->addRuntimeStat(
-          kRpcBaselineRttNanos,
+          RPCOperatorStatNames::kRpcBaselineRttNanos,
           RuntimeCounter(snapshot.baselineRttNs, RuntimeCounter::Unit::kNanos));
     }
 
     if (snapshot.numRttSamples > 0) {
       lockedStats->addRuntimeStat(
-          kRpcRttMinWallNanos,
+          RPCOperatorStatNames::kRpcRttMinWallNanos,
           RuntimeCounter(snapshot.rttMinNs, RuntimeCounter::Unit::kNanos));
       lockedStats->addRuntimeStat(
-          kRpcRttMaxWallNanos,
+          RPCOperatorStatNames::kRpcRttMaxWallNanos,
           RuntimeCounter(snapshot.rttMaxNs, RuntimeCounter::Unit::kNanos));
       lockedStats->addRuntimeStat(
-          kRpcRttCount, RuntimeCounter(snapshot.numRttSamples));
+          RPCOperatorStatNames::kRpcRttCount,
+          RuntimeCounter(snapshot.numRttSamples));
     }
 
     lockedStats->addRuntimeStat(
-        kRpcStreamingMode,
+        RPCOperatorStatNames::kRpcStreamingMode,
         RuntimeCounter(
             snapshot.streamingMode == RPCStreamingMode::kBatch ? 1 : 0));
   }
 
   if (numErrorsRateLimited_ > 0) {
     lockedStats->addRuntimeStat(
-        kRpcErrorKindRateLimited, RuntimeCounter(numErrorsRateLimited_));
+        RPCOperatorStatNames::kRpcErrorKindRateLimited,
+        RuntimeCounter(numErrorsRateLimited_));
   }
   if (numErrorsTimeout_ > 0) {
     lockedStats->addRuntimeStat(
-        kRpcErrorKindTimeout, RuntimeCounter(numErrorsTimeout_));
+        RPCOperatorStatNames::kRpcErrorKindTimeout,
+        RuntimeCounter(numErrorsTimeout_));
   }
   if (numErrorsBackend_ > 0) {
     lockedStats->addRuntimeStat(
-        kRpcErrorKindBackendError, RuntimeCounter(numErrorsBackend_));
+        RPCOperatorStatNames::kRpcErrorKindBackendError,
+        RuntimeCounter(numErrorsBackend_));
   }
   if (numErrorsInvalidRequest_ > 0) {
     lockedStats->addRuntimeStat(
-        kRpcErrorKindInvalidRequest, RuntimeCounter(numErrorsInvalidRequest_));
+        RPCOperatorStatNames::kRpcErrorKindInvalidRequest,
+        RuntimeCounter(numErrorsInvalidRequest_));
   }
   if (numErrorsInternal_ > 0) {
     lockedStats->addRuntimeStat(
-        kRpcErrorKindInternal, RuntimeCounter(numErrorsInternal_));
+        RPCOperatorStatNames::kRpcErrorKindInternal,
+        RuntimeCounter(numErrorsInternal_));
   }
 }
 

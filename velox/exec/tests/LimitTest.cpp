@@ -100,16 +100,9 @@ TEST_F(LimitTest, limitOverLocalExchange) {
   cursor->task()->addSplit(
       scanNodeId, exec::Split(makeHiveConnectorSplit(file->getPath())));
 
-  int32_t numRead = 0;
-  while (cursor->moveNext()) {
-    auto vector = cursor->current();
-    numRead += vector->size();
-  }
-
   // Do not send no-more-splits message. Expect the task to finish without
   // receiving that message.
-
-  ASSERT_EQ(20, numRead);
+  ASSERT_EQ(cursor->countRows(), 20);
   ASSERT_TRUE(TaskMonitor::waitForCompletion(*cursor->task()));
 }
 
@@ -517,10 +510,10 @@ TEST_F(LimitTest, barrier) {
           taskStats.numFinishedSplits, testData.numExpectedFinishedSplits);
     }
     ASSERT_EQ(
-        exec::toPlanStats(taskStats).at(limitPlanNodeId).outputRows,
+        exec::PlanNodeStats::extract(taskStats, limitPlanNodeId).outputRows,
         testData.numExpectedOutputRows);
     ASSERT_EQ(
-        exec::toPlanStats(taskStats).at(limitPlanNodeId).outputVectors,
+        exec::PlanNodeStats::extract(taskStats, limitPlanNodeId).outputVectors,
         testData.numExpectedOutputBatches);
   }
 }

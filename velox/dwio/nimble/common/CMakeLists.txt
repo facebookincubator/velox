@@ -68,6 +68,9 @@ target_link_libraries(
   nimble_velox_schema
   nimble_velox_schema_fb
   nimble_common
+  nimble_encodings
+  velox_buffer
+  velox_memory
   Folly::folly
   fmt::fmt
 )
@@ -185,5 +188,6 @@ target_link_libraries(
   nimble_velox_schema
   nimble_velox_hybrid_flat_map
   nimble_common
+  nimble_encodings
   Folly::folly
 )

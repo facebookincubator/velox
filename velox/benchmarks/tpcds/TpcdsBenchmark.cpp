@@ -175,12 +175,10 @@ void TpcdsBenchmark::runMain(
     auto plan = queryBuilder_->getQueryPlan(
         FLAGS_run_query_verbose, planDir_, pool_.get());
 
-    auto [cursor, actualResults] = run(plan, queryConfigs_);
-    VELOX_CHECK(cursor, "Query terminated with error. Exiting");
-    auto task = cursor->task();
-    ensureTaskCompletion(task.get());
+    auto task = run(plan, queryConfigs_);
+    VELOX_CHECK(task, "Query terminated with error. Exiting");
     if (FLAGS_include_results) {
-      printResults(actualResults, out);
+      printResults(plan, queryConfigs_, out);
       out << std::endl;
     }
     const auto stats = task->taskStats();

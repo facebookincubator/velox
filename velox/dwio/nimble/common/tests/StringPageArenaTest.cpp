@@ -22,6 +22,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -108,7 +109,7 @@ TEST_F(StringPageArenaTest, writeStringFillsPageThenStartsNewOne) {
 
 TEST_F(StringPageArenaTest, writeStringLargerThanPageGetsItsOwnPage) {
   PageOwner pageOwner;
-  StringPageArena arena{pageOwner.factory(), /*minPageBytes=*/64};
+  StringPageArena arena{pool_.get(), pageOwner.factory(), /*minPageBytes=*/64};
   const std::string small(10, 's');
   const std::string large(100, 'l');
   EXPECT_EQ(arena.writeString(small), small);
@@ -137,39 +138,31 @@ TEST_F(StringPageArenaTest, writeFitsInPlace) {
   EXPECT_EQ(copies[2].data(), copies[1].data() + 10);
 }
 
-TEST_F(StringPageArenaTest, writeTakesNextPageWhenBoundDoesNotFit) {
+TEST_F(StringPageArenaTest, writeWithLooseBoundKeepsPageTail) {
   PageOwner pageOwner;
-  StringPageArena arena{pageOwner.factory(), /*minPageBytes=*/64};
-  arena.writeString(std::string(54, 'a'));
+  StringPageArena arena{pool_.get(), pageOwner.factory(), /*minPageBytes=*/64};
+  const auto first = arena.writeString(std::string(54, 'a'));
 
-  // A bound of 20 bytes does not fit in the page's last 10, so the write goes
-  // to a new page, though the 8 bytes written would fit.
-  char* writerOutput{nullptr};
-  const auto copy = arena.write(/*maxBytes=*/20, [&](char* output) {
-    writerOutput = output;
-    return writerOf("abcdefgh")(output);
-  });
-  EXPECT_EQ(copy, "abcdefgh");
-  EXPECT_EQ(copy.data(), writerOutput);
-  EXPECT_THAT(pageOwner.pageBytes(), ElementsAre(64, 64));
-
-  // The next string goes right after the 8 bytes in the new page.
-  EXPECT_EQ(arena.writeString("xyz").data(), copy.data() + 8);
+  // A bound of 20 bytes does not fit in the page's last 10, but the 8 bytes
+  // written do, so they go there through scratch.
+  const auto second = arena.write(/*maxBytes=*/20, writerOf("abcdefgh"));
+  EXPECT_EQ(second, "abcdefgh");
+  EXPECT_EQ(second.data(), first.data() + 54);
+  EXPECT_THAT(pageOwner.pageBytes(), ElementsAre(64));
 }
 
-TEST_F(StringPageArenaTest, writeWithBoundAbovePageTakesPageOfBound) {
+TEST_F(StringPageArenaTest, writeWithLargeBoundAllocatesActualSize) {
   PageOwner pageOwner;
-  StringPageArena arena{pageOwner.factory(), /*minPageBytes=*/64};
+  StringPageArena arena{pool_.get(), pageOwner.factory(), /*minPageBytes=*/64};
 
-  // A bound of 1,000 bytes takes a page of 1,000 bytes. The 990 bytes that
-  // the write leaves hold the next string, but not the next bound of 1,000
-  // bytes, which takes another page.
-  const std::string value(10, 'v');
-  const auto first = arena.write(/*maxBytes=*/1'000, writerOf(value));
-  EXPECT_EQ(arena.writeString(value).data(), first.data() + 10);
-  EXPECT_EQ(arena.write(/*maxBytes=*/1'000, writerOf(value)), value);
-  EXPECT_EQ(first, value);
-  EXPECT_THAT(pageOwner.pageBytes(), ElementsAre(1'000, 1'000));
+  // Neither write takes a page of its 1,000-byte bound. The first takes a page
+  // of the minimum size. The second does not fit in that page's last 54 bytes
+  // and takes a page of its 100 bytes.
+  const std::string small(10, 's');
+  const std::string large(100, 'l');
+  EXPECT_EQ(arena.write(/*maxBytes=*/1'000, writerOf(small)), small);
+  EXPECT_EQ(arena.write(/*maxBytes=*/1'000, writerOf(large)), large);
+  EXPECT_THAT(pageOwner.pageBytes(), ElementsAre(64, 100));
 }
 
 TEST_F(StringPageArenaTest, inlinePageAllocatesNothing) {
@@ -197,7 +190,7 @@ TEST_F(StringPageArenaTest, inlinePageAllocatesNothing) {
 
 TEST_F(StringPageArenaTest, resetReusesPages) {
   PageOwner pageOwner;
-  StringPageArena arena{pageOwner.factory(), /*minPageBytes=*/64};
+  StringPageArena arena{pool_.get(), pageOwner.factory(), /*minPageBytes=*/64};
 
   // Two 40-byte strings do not fit in one 64-byte page, so each takes a page.
   const std::string value(40, 'v');
@@ -251,9 +244,13 @@ TEST_F(StringPageArenaTest, factoryPagesOutliveArena) {
   std::string_view smallCopy;
   std::string_view largeCopy;
   {
-    StringPageArena arena{pageOwner.factory(), /*minPageBytes=*/64};
+    StringPageArena arena{
+        pool_.get(), pageOwner.factory(), /*minPageBytes=*/64};
     smallCopy = arena.writeString("small");
     largeCopy = arena.writeString(large);
+
+    // writeString() needs no scratch, so the pool allocates nothing.
+    EXPECT_EQ(pool_->usedBytes(), 0);
   }
   EXPECT_EQ(smallCopy, "small");
   EXPECT_EQ(largeCopy, large);
@@ -262,7 +259,8 @@ TEST_F(StringPageArenaTest, factoryPagesOutliveArena) {
 
 TEST_F(StringPageArenaTest, emptyFactoryFailsFirstPage) {
   // An arena without a factory works until a write needs a page.
-  StringPageArena arena{StringPageArena::PageFactory{}, /*minPageBytes=*/64};
+  StringPageArena arena{
+      pool_.get(), StringPageArena::PageFactory{}, /*minPageBytes=*/64};
   EXPECT_TRUE(arena.writeString("").empty());
   NIMBLE_ASSERT_THROW(
       arena.writeString("value"), "String page factory is empty.");
@@ -285,29 +283,37 @@ TEST_F(StringPageArenaTest, emptyStringsTakeNoPage) {
 TEST_F(StringPageArenaTest, writeRejectsSizeAboveBound) {
   StringPageArena arena{pool_.get(), /*minPageBytes=*/64, /*inlinePage=*/{}};
 
-  // The writer reports one byte more than the bound and writes nothing.
-  NIMBLE_ASSERT_THROW(
-      arena.write(
-          /*maxBytes=*/10, [](char* /*output*/) { return size_t{11}; }),
-      "Write exceeds its bound.");
+  // Returns a writer that reports one byte more than 'maxBytes' and writes
+  // nothing.
+  const auto overBound = [](size_t maxBytes) {
+    return [maxBytes](char* /*output*/) { return maxBytes + 1; };
+  };
+  {
+    // The bound fits in the page, so the write goes in place.
+    NIMBLE_ASSERT_THROW(
+        arena.write(/*maxBytes=*/10, overBound(10)),
+        "Write exceeds its bound.");
+  }
+  {
+    // The bound does not fit in a page, so the write goes through scratch.
+    NIMBLE_ASSERT_THROW(
+        arena.write(/*maxBytes=*/100, overBound(100)),
+        "Write exceeds its bound.");
+  }
 }
 
-TEST_F(StringPageArenaTest, writeRejectsBoundAboveFactoryPageLimit) {
+TEST_F(StringPageArenaTest, rejectsFactoryPageAboveLimit) {
   PageOwner pageOwner;
-  StringPageArena arena{pageOwner.factory(), /*minPageBytes=*/64};
 
-  // The factory takes a uint32 size, so a larger bound fails before the
-  // writer runs.
-  bool writerCalled{false};
+  // The factory takes a uint32 size, so a larger page fails before the factory
+  // runs. A minimum page size above the limit stands in for a string above it,
+  // which would take 4 GB to write.
+  StringPageArena arena{
+      pool_.get(),
+      pageOwner.factory(),
+      /*minPageBytes=*/size_t{std::numeric_limits<uint32_t>::max()} + 1};
   NIMBLE_ASSERT_FILE_THROW(
-      arena.write(
-          /*maxBytes=*/size_t{std::numeric_limits<uint32_t>::max()} + 1,
-          [&](char* /*output*/) {
-            writerCalled = true;
-            return size_t{0};
-          }),
-      "String page exceeds the supported size.");
-  EXPECT_FALSE(writerCalled);
+      arena.writeString("value"), "String page exceeds the supported size.");
   EXPECT_TRUE(pageOwner.pageBytes().empty());
 }
 
@@ -320,17 +326,28 @@ TEST_F(StringPageArenaTest, rejectsInvalidArguments) {
   {
     NIMBLE_ASSERT_THROW(
         StringPageArena(
-            pool_.get(), /*minPageBytes=*/size_t{0}, /*inlinePage=*/{}),
+            pool_.get(),
+            /*minPageBytes=*/size_t{0},
+            /*inlinePage=*/std::span<char>{}),
         "Minimum page size must be positive.");
   }
   {
     NIMBLE_ASSERT_THROW(
         StringPageArena(
-            StringPageArena::PageFactory{}, /*minPageBytes=*/size_t{0}),
+            nullptr, StringPageArena::PageFactory{}, /*minPageBytes=*/64),
+        "Memory pool must not be null.");
+  }
+  {
+    NIMBLE_ASSERT_THROW(
+        StringPageArena(
+            pool_.get(),
+            StringPageArena::PageFactory{},
+            /*minPageBytes=*/size_t{0}),
         "Minimum page size must be positive.");
   }
   {
     StringPageArena arena{
+        pool_.get(),
         [](uint32_t /*bytes*/) -> void* { return nullptr; },
         /*minPageBytes=*/64};
     NIMBLE_ASSERT_THROW(

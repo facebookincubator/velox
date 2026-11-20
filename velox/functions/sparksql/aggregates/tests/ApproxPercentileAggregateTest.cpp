@@ -278,13 +278,6 @@ TEST_F(ApproxPercentileAggregateTest, groupByAgg) {
 
 // Test Partial + Final aggregation mode (simulating distributed execution).
 TEST_F(ApproxPercentileAggregateTest, partialFinal) {
-  // Make sure partial aggregation runs out of memory after first batch.
-  CursorParameters params;
-  params.queryCtx = velox::core::QueryCtx::create(executor_.get());
-  params.queryCtx->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kMaxPartialAggregationMemory, "300000"},
-  });
-
   auto data = {
       makeRowVector({
           makeFlatVector<int32_t>(1'024, [](auto row) { return row % 117; }),
@@ -301,7 +294,7 @@ TEST_F(ApproxPercentileAggregateTest, partialFinal) {
   };
 
   // Build partial + final aggregation plan.
-  params.planNode =
+  auto plan =
       PlanBuilder()
           .values(data)
           .project({"c0", "c1", "0.9995"})
@@ -313,7 +306,10 @@ TEST_F(ApproxPercentileAggregateTest, partialFinal) {
       makeFlatVector<int32_t>(117, [](auto row) { return row; }),
       makeFlatVector<int32_t>(117, [](auto row) { return row < 7 ? 20 : 10; }),
   });
-  assertQuery(params, expected);
+  // Make sure partial aggregation runs out of memory after first batch.
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kMaxPartialAggregationMemory, "300000")
+      .assertResults(expected);
   TaskMonitor::waitForAllTasksDeleted();
 }
 
@@ -325,10 +321,9 @@ TEST_F(ApproxPercentileAggregateTest, partialFinalGroupBy) {
   auto inputRows = makeRowVector({groupKeys, values});
 
   // Build Partial + Final plan with group-by.
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({inputRows})
+      PlanBuilder()
+          .values(inputRows)
           .partialAggregation({"c0"}, {"spark_approx_percentile(c1, 0.5)"})
           .finalAggregation()
           .planNode();
@@ -344,18 +339,18 @@ TEST_F(ApproxPercentileAggregateTest, partialFinalGroupBy) {
 TEST_F(ApproxPercentileAggregateTest, finalAggregateAccuracy) {
   auto batch = makeRowVector(
       {makeFlatVector<int32_t>(1000, [](auto row) { return row; })});
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   std::vector<std::shared_ptr<const core::PlanNode>> sources;
   // Create 10 partial aggregation sources.
   for (int i = 0; i < 10; ++i) {
-    sources.push_back(PlanBuilder(planNodeIdGenerator)
-                          .values({batch})
+    sources.push_back(builder.newPlan()
+                          .values(batch)
                           .partialAggregation(
                               {}, {"spark_approx_percentile(c0, 0.005, 10000)"})
                           .planNode());
   }
   // Merge all partial results in final aggregation.
-  auto op = PlanBuilder(planNodeIdGenerator)
+  auto op = builder.newPlan()
                 .localPartitionRoundRobin(sources)
                 .finalAggregation()
                 .planNode();
@@ -381,7 +376,7 @@ TEST_F(ApproxPercentileAggregateTest, nonFlatPercentileArray) {
       BaseVector::wrapInConstant(1, 0, percentiles),
   });
   auto plan = PlanBuilder()
-                  .values({rows})
+                  .values(rows)
                   .singleAggregation({}, {"spark_approx_percentile(c0, c1)"})
                   .planNode();
   auto expected = makeRowVector({makeArrayVector<int32_t>({{0, 5, 9}})});
@@ -409,7 +404,7 @@ TEST_F(ApproxPercentileAggregateTest, dictionaryWrappedIntermediateArrays) {
 
   auto mergeExtract =
       PlanBuilder()
-          .values({wrappedIntermediate})
+          .values(wrappedIntermediate)
           .singleAggregation(
               {}, {"spark_approx_percentile_merge_extract_integer(c0)"})
           .planNode();
@@ -583,7 +578,7 @@ TEST_F(ApproxPercentileAggregateTest, accuracyBoundary) {
   {
     auto plan =
         PlanBuilder()
-            .values({rows})
+            .values(rows)
             .singleAggregation({}, {"spark_approx_percentile(c0, 0.5, 1)"})
             .planNode();
     auto result = AssertQueryBuilder(plan).copyResults(pool());
@@ -610,7 +605,7 @@ TEST_F(ApproxPercentileAggregateTest, multiplePercentiles) {
 
   // Test with array of different percentiles [0.1, 0.5, 0.9].
   auto plan = PlanBuilder()
-                  .values({rows})
+                  .values(rows)
                   .singleAggregation({}, {"spark_approx_percentile(c0, c1)"})
                   .planNode();
 
@@ -648,7 +643,7 @@ TEST_F(ApproxPercentileAggregateTest, largeDataset) {
   // Median of 0..99999 should be approximately 50000, allow ±5 error.
   auto plan =
       PlanBuilder()
-          .values({rows})
+          .values(rows)
           .singleAggregation({}, {"spark_approx_percentile(c0, 0.5, 10000)"})
           .planNode();
   auto result = AssertQueryBuilder(plan).copyResults(pool());
