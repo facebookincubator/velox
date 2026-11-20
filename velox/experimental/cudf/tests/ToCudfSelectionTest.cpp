@@ -268,6 +268,48 @@ TEST_F(ToCudfSelectionTest, fallbackDoesNotInsertGpuConversion) {
   EXPECT_EQ(stats.count("CudfOrderBy"), 0);
 }
 
+TEST_F(ToCudfSelectionTest, rowNumberRunsOnGpu) {
+  auto input = makeRowVector(
+      {"p", "v"},
+      {makeFlatVector<int64_t>({1, 1, 2, 1}),
+       makeFlatVector<int64_t>({10, 20, 30, 40})});
+
+  auto assertRowNumber = [&](const core::PlanNodePtr& plan,
+                             const RowVectorPtr& expected,
+                             bool onGpu) {
+    auto task = AssertQueryBuilder(plan)
+                    .config("cudf.enabled", true)
+                    .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
+                    .assertResults(expected);
+    const auto stats = toOperatorStats(task->taskStats());
+    EXPECT_EQ(stats.count("CudfRowNumber"), onGpu ? 1 : 0);
+    EXPECT_EQ(stats.count("RowNumber"), onGpu ? 0 : 1);
+  };
+
+  // No limit.
+  assertRowNumber(
+      PlanBuilder().values({input}).rowNumber({"p"}).planNode(),
+      makeRowVector(
+          {"p", "v", "row_number"},
+          {makeFlatVector<int64_t>({1, 1, 2, 1}),
+           makeFlatVector<int64_t>({10, 20, 30, 40}),
+           makeFlatVector<int64_t>({1, 2, 1, 3})}),
+      true);
+
+  // A TIMESTAMP WITH TIME ZONE key compares by its UTC value only, which
+  // cuDF does not, so it stays on the CPU.
+  auto zoned = makeRowVector(
+      {"tz"},
+      {makeFlatVector<int64_t>(
+          {pack(0, 0), pack(0, 1)}, TIMESTAMP_WITH_TIME_ZONE())});
+  assertRowNumber(
+      PlanBuilder().values({zoned}).rowNumber({"tz"}).planNode(),
+      makeRowVector(
+          {"tz", "row_number"},
+          {zoned->childAt(0), makeFlatVector<int64_t>({1, 2})}),
+      false);
+}
+
 TEST_F(ToCudfSelectionTest, unsupportedTypeBeforeLocalBoundary) {
   auto input = makeRowVector(
       {"k", "m"},
