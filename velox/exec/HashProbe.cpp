@@ -837,6 +837,9 @@ void HashProbe::addInput(RowVectorPtr input) {
       // 'nonNullInputRows_' later.
       decodeAndDetectNonNullKeys();
     }
+    // There are no join results to list.
+    lookup_->rows.clear();
+    resultIter_->reset(*lookup_);
     return;
   }
 
@@ -1363,16 +1366,16 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
 
     // Pre-load lazy input vectors within a reclaimable section so that the
     // subsequent non-reclaimable evalFilter/fillOutput does not trigger OOM.
-    // If memory reclaim spills the hash table during lazy loading,
-    // ensureLazyInputLoaded() spills the current input and sets input_ to
-    // nullptr. We must bail out because resultIter_ now references freed
-    // hash table rows.
     if (!toSpillOutput) {
       ensureLazyInputLoaded();
-      if (input_ == nullptr) {
+      VELOX_CHECK_NOT_NULL(table_);
+      if (!emptyBuildSide && table_->numDistinct() == 0) {
+        // Memory reclaim spilled the table while loading, before any output
+        // from 'input_'. Add 'input_' again to probe it after the spill.
+        VELOX_CHECK(needToSpillInput());
+        addInput(std::move(input_));
         return nullptr;
       }
-      VELOX_CHECK_NOT_NULL(table_);
     }
 
     numOut = evalFilter(numOut);
@@ -2097,37 +2100,18 @@ void HashProbe::ensureLazyInputLoaded() {
     return;
   }
 
-  const bool tableWasNonEmpty{table_->numDistinct() > 0};
-  {
-    loadingLazyInput_ = true;
-    SCOPE_EXIT {
-      loadingLazyInput_ = false;
-    };
-    Operator::ReclaimableSectionGuard guard(this);
-    if (testingTriggerSpill(pool()->name())) {
-      memory::testingRunArbitration(pool());
-    }
-    for (const auto channel : lazyChannels) {
-      ensureLoaded(channel);
-    }
+  loadingLazyInput_ = true;
+  SCOPE_EXIT {
+    loadingLazyInput_ = false;
+  };
+  Operator::ReclaimableSectionGuard guard(this);
+  TestValue::adjust(
+      "facebook::velox::exec::HashProbe::ensureLazyInputLoaded", this);
+  if (testingTriggerSpill(pool()->name())) {
+    memory::testingRunArbitration(pool());
   }
-
-  // If the hash table was spilled during lazy loading (it was non-empty
-  // before but is now empty), spill the current input so it can be re-probed
-  // during the restore pass. After spilling, resultIter_ references freed
-  // hash table rows, so we must abandon the current iteration by setting
-  // input_ to nullptr.
-  VELOX_CHECK_NOT_NULL(input_);
-  if (tableWasNonEmpty && table_->numDistinct() == 0) {
-    VELOX_CHECK_NOT_NULL(inputSpiller_);
-    spillInput(input_);
-    if (input_ != nullptr) {
-      // Non-spilled rows remain. For join types that skip probe on empty
-      // build side (inner, right, semi filter), dropping them is correct.
-      // For left/anti/full joins this would be data loss — fail loudly.
-      VELOX_CHECK(skipProbeOnEmptyBuild());
-    }
-    input_ = nullptr;
+  for (const auto channel : lazyChannels) {
+    ensureLoaded(channel);
   }
 }
 
