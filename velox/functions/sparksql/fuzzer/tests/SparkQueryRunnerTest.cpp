@@ -358,6 +358,18 @@ TEST_F(SparkQueryRunnerTest, DISABLED_literalArguments) {
       makeFlatVector<Timestamp>({Timestamp(-1, 999'999'000)}),
       makeFlatVector<Timestamp>({Timestamp(1, 234'567'000)}),
       makeNullableFlatVector<Timestamp>({std::nullopt}),
+      makeArrayVectorFromJson<int64_t>({"[1, null, 2]"}),
+      makeArrayVector<int64_t>({{}}),
+      BaseVector::createNullConstant(ARRAY(BIGINT()), 1, pool()),
+      makeMapVectorFromJson<int64_t, int64_t>({"{1: 2, 3: null}"}),
+      makeMapVector<int64_t, int64_t>({{}}),
+      BaseVector::createNullConstant(MAP(BIGINT(), BIGINT()), 1, pool()),
+      makeRowVector({
+          makeArrayVectorFromJson<int64_t>({"[1, null]"}),
+          makeNullableFlatVector<StringView>({std::nullopt}),
+      }),
+      makeRowVector({makeNullableFlatVector<int64_t>({std::nullopt})}),
+      BaseVector::createNullConstant(ROW("c0", BIGINT()), 1, pool()),
   });
   std::vector<std::string> aggregates;
   for (auto i = 0; i < constants->childrenSize(); ++i) {
