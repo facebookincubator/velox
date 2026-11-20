@@ -49,9 +49,11 @@
 #include <unordered_map>
 #include <vector>
 
-// A cuDF datasource for a file on S3 that serves every read (host_read,
-// host_read_async, device_read and device_read_async) from Velox's async data
-// cache, and does remote reads through KvikIO for the bytes it lacks.
+// A cuDF datasource that serves every read (host_read, host_read_async,
+// device_read and device_read_async) of a file from Velox's async data cache,
+// and reads the bytes the cache lacks through KvikIO. It is meant mainly for
+// remote files, where a cache hit saves a network read. Local files are
+// supported as well.
 //
 // Terms used in this file:
 //   - Range: the bytes one read asks for, given as a file offset and a size.
@@ -67,7 +69,8 @@
 //     on it exists. Not related to pinned buffers.
 //   - Pinned buffer: page-locked host memory, which the GPU can copy from
 //     directly. Copies to the GPU go through one. Not related to pins.
-//   - Remote read: a read from S3 through KvikIO.
+//   - KvikIO read: a read of the file through KvikIO, from remote storage or
+//     from a local disk.
 //
 // The requested byte range is served piece by piece, starting at its offset.
 // Each piece comes from one async data cache entry, looked up by (file, offset
@@ -76,10 +79,10 @@
 //     range. The next piece then starts where this entry ends.
 //   - No entry: fill a new entry with the bytes from this piece's offset to
 //     the end of the range, then copy its bytes. The bytes come from the SSD
-//     cache when it is enabled and holds them, otherwise from a remote read.
+//     cache when it is enabled and holds them, otherwise from a KvikIO read.
 //   - Entry being filled by another read: wait for it, then look it up again.
 //   - The async data cache cannot hold the piece (not enough free memory for
-//     it, or 2 GiB or more, the most an entry can hold): do a remote read of
+//     it, or 2 GiB or more, the most an entry can hold): do a KvikIO read of
 //     the bytes from this piece's offset to the end of the range, without the
 //     async data cache.
 //
@@ -87,7 +90,7 @@
 // at a time. For bytes read without the async data cache, KvikIO downloads
 // them into its own pinned buffers, then copies them to the GPU.
 // device_read_async() uses two thread pools: a fill thread brings the range
-// into the async data cache, waiting for its remote reads, then a copy thread
+// into the async data cache, waiting for its KvikIO reads, then a copy thread
 // copies it to the GPU. The returned future is ready once the bytes are in GPU
 // memory.
 
@@ -123,7 +126,7 @@ folly::Executor* fillExecutor() {
 
 // Threads that copy a range to the GPU, through pinned buffers from a shared
 // pool. The thread count is cudf.kvikio_cache_copy_threads, kept low to limit
-// pinned memory. A copy thread waits for a remote read only for the part of a
+// pinned memory. A copy thread waits for a KvikIO read only for the part of a
 // range that the async data cache cannot hold.
 folly::Executor* copyExecutor() {
   static auto* executor = [] {
@@ -556,8 +559,8 @@ class Reader {
       return pin;
     }
     // Miss: this read created a new, empty RAM entry. Fill it with the piece's
-    // bytes, from the SSD cache if the SSD cache holds them, otherwise from S3
-    // through KvikIO.
+    // bytes, from the SSD cache if the SSD cache holds them, otherwise from the
+    // file through KvikIO.
     if (fillEntryFromSsd(pin, offset)) {
       countBytes("cudfKvikioCacheSsdBytes", size);
     } else {

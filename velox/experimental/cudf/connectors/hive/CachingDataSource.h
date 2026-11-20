@@ -28,10 +28,12 @@ namespace facebook::velox::cudf_velox::connector::hive {
 
 /// Returns 'kvikioSource' wrapped so that its reads go through the async data
 /// cache, or 'kvikioSource' itself when the async data cache is null or the
-/// split is not cacheable. Presto marks splits cacheable only under soft or
-/// hard affinity scheduling (Hive config hive.node-selection-strategy, session
-/// property node_selection_strategy). With Presto's default NO_PREFERENCE, the
-/// async data cache is therefore never used.
+/// split is not cacheable. The async data cache is meant mainly for remote
+/// files. Local files are supported as well. Presto marks splits cacheable only
+/// under soft or hard affinity scheduling (Hive config
+/// hive.node-selection-strategy, session property node_selection_strategy).
+/// With Presto's default NO_PREFERENCE, the async data cache is therefore never
+/// used.
 std::unique_ptr<cudf::io::datasource> maybeCacheKvikioDataSource(
     std::unique_ptr<cudf::io::datasource> kvikioSource,
     std::string_view path,
