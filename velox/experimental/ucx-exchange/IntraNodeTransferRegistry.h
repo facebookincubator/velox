@@ -118,6 +118,10 @@ class IntraNodeTransferRegistry {
   /// @param taskId The task to cancel
   void cancelTask(std::string_view taskId);
 
+  /// Discards one published transfer and completes its retrieval promise.
+  /// Other destinations and future transfers for this task are unchanged.
+  void cancelTransfer(const IntraNodeTransferKey& key);
+
   /// @brief Remove a task from the cancelled set.
   /// Called when a task ID is (re)initialized, so that the cancelledTasks_
   /// set does not grow unboundedly across queries.

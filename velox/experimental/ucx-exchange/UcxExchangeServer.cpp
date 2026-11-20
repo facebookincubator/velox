@@ -85,6 +85,8 @@ UcxExchangeServer::UcxExchangeServer(
       partitionKeyHash_(fnv1a_32(partitionKey_.toString())),
       isIntraNodeTransfer_(isIntraNodeTransfer),
       queueMgr_(UcxOutputQueueManager::getInstanceRef()) {
+  outputQueue_ = queueMgr_->getQueueForServer(
+      partitionKey_.taskId, partitionKey_.destination);
   setState(ServerState::Created);
 
   if (isIntraNodeTransfer_) {
@@ -110,6 +112,9 @@ void UcxExchangeServer::process() {
   if (closed_.load(std::memory_order_acquire)) {
     return;
   }
+  if (destinationCancelled_.load(std::memory_order_acquire)) {
+    setState(ServerState::Done);
+  }
   switch (state_) {
     case ServerState::Created:
       setState(ServerState::ReadyToTransfer);
@@ -125,9 +130,7 @@ void UcxExchangeServer::process() {
       // Use weak_ptr to prevent use-after-free if close() is called during
       // callback
       std::weak_ptr<UcxExchangeServer> weakQueue = weak_from_this();
-      queueMgr_->getData(
-          partitionKey_.taskId,
-          partitionKey_.destination,
+      UcxDataAvailableCallback notify =
           [weakQueue](
               std::shared_ptr<cudf::packed_columns> data,
               vector_size_t numRows,
@@ -138,9 +141,11 @@ void UcxExchangeServer::process() {
             }
             // Check if close() was called - avoid processing if we're shutting
             // down
-            if (self->closed_.load(std::memory_order_acquire)) {
-              VLOG(3) << "@" << self->partitionKey_.taskId
-                      << " getData callback called after close, ignoring";
+            if (self->closed_.load(std::memory_order_acquire) ||
+                self->destinationCancelled_.load(std::memory_order_acquire)) {
+              VLOG(3)
+                  << "@" << self->partitionKey_.taskId
+                  << " getData callback called after finalization, ignoring";
               return;
             }
             // This upcall may be called from another thread than the
@@ -156,7 +161,15 @@ void UcxExchangeServer::process() {
             self->dataNumRows_ = numRows;
             self->setState(ServerState::DataReady);
             self->communicator_->addToWorkQueue(self);
-          });
+          };
+      if (!cancellationRequest_) {
+        receiveDestinationCancellation();
+      }
+      if (!outputQueue_) {
+        notify(nullptr, /*numRows=*/0, {});
+        break;
+      }
+      outputQueue_->getData(partitionKey_.destination, std::move(notify));
       this->communicator_->addToWorkQueue(getSelfPtr());
     } break;
     case ServerState::WaitingForDataFromQueue:
@@ -214,6 +227,8 @@ void UcxExchangeServer::close() {
   VLOG(3) << "@" << partitionKey_.taskId
           << " Close UcxExchangeServer to remote " << partitionKey_.toString();
 
+  finalizeTerminalMetadata();
+
   // Cancel any outstanding requests. With weak_ptr callbacks, the callbacks
   // will safely no-op if we're destroyed before they complete.
   if (metaRequest_ && !metaRequest_->isCompleted()) {
@@ -221,6 +236,9 @@ void UcxExchangeServer::close() {
   }
   if (dataRequest_ && !dataRequest_->isCompleted()) {
     dataRequest_->cancel();
+  }
+  if (cancellationRequest_ && !cancellationRequest_->isCompleted()) {
+    cancellationRequest_->cancel();
   }
 
   // Move all requests to the Communicator's deferred list so the GPU
@@ -232,6 +250,9 @@ void UcxExchangeServer::close() {
     }
     if (dataRequest_) {
       communicator_->deferRequestCleanup(std::move(dataRequest_));
+    }
+    if (cancellationRequest_) {
+      communicator_->deferRequestCleanup(std::move(cancellationRequest_));
     }
     for (auto& req : completedRequests_) {
       communicator_->deferRequestCleanup(std::move(req));
@@ -304,7 +325,9 @@ void UcxExchangeServer::sendData() {
               key, nullptr, /*numRows=*/0, /*atEnd=*/true);
       intraNodeAtEndPublished_ = true;
 
-      queueMgr_->deleteResults(partitionKey_.taskId, partitionKey_.destination);
+      if (outputQueue_) {
+        outputQueue_->deleteResults(partitionKey_.destination);
+      }
 
       // Wait for source to acknowledge atEnd before finishing
       setState(ServerState::WaitingForIntraNodeRetrieve);
@@ -351,6 +374,12 @@ void UcxExchangeServer::sendData() {
     // stays alive for UCP wireup replay.
     auto metaCtx = std::make_shared<MetaSendContext>();
     metaCtx->metadata = serializedMetadata;
+    const bool endOfStream = metadataMsg->atEnd;
+    if (endOfStream) {
+      // Completion may run inline, so publish the waiting state first.
+      terminalMetadataState_ = TerminalMetadataState::Pending;
+      setState(ServerState::WaitingForSendComplete);
+    }
 
     metaRequest_ =
         endpointRef_->endpoint_
@@ -358,7 +387,8 @@ void UcxExchangeServer::sendData() {
                 metaCtx->metadata.get(), serMetaSize, ucxx::Tag{metadataTag})
             .callbackFunction([tid = partitionKey_.toString(),
                                metadataTag,
-                               weakMeta](
+                               weakMeta,
+                               endOfStream](
                                   ucs_status_t status,
                                   std::shared_ptr<void> arg) {
               // Release the metadata buffer from the context. The context
@@ -386,9 +416,8 @@ void UcxExchangeServer::sendData() {
                         << " Error in sendData, send metadata "
                         << ucs_status_string(status)
                         << " failed for task: " << tid;
-                self->setState(ServerState::Done);
-                self->communicator_->addToWorkQueue(self);
               }
+              self->metadataSendComplete(status, endOfStream);
             })
             .callbackData(metaCtx)
             .build();
@@ -445,15 +474,79 @@ void UcxExchangeServer::sendData() {
                   })
               .callbackData(dataCtx)
               .build();
-    } else {
-      // Data pointer is null, so no more data will be coming.
-      VLOG(3) << "@" << partitionKey_.taskId
-              << " Finished transferring partition for task "
-              << partitionKey_.toString();
-      queueMgr_->deleteResults(partitionKey_.taskId, partitionKey_.destination);
-      setState(ServerState::Done);
-      communicator_->addToWorkQueue(getSelfPtr());
     }
+  }
+}
+
+void UcxExchangeServer::metadataSendComplete(
+    ucs_status_t status,
+    bool endOfStream) {
+  if (closed_.load(std::memory_order_acquire) ||
+      (status == UCS_OK && !endOfStream)) {
+    return;
+  }
+
+  if (endOfStream) {
+    if (terminalMetadataState_ != TerminalMetadataState::Pending) {
+      return;
+    }
+    terminalMetadataState_ = status == UCS_OK ? TerminalMetadataState::Succeeded
+                                              : TerminalMetadataState::Failed;
+  }
+
+  setState(ServerState::Done);
+  communicator_->addToWorkQueue(getSelfPtr());
+}
+
+void UcxExchangeServer::receiveDestinationCancellation() {
+  auto cancellation = std::make_shared<uint8_t>(0);
+  std::weak_ptr<UcxExchangeServer> weak = weak_from_this();
+  cancellationRequest_ =
+      endpointRef_->endpoint_
+          ->tagRecvBuilder(
+              cancellation.get(),
+              sizeof(*cancellation),
+              ucxx::Tag{getDestinationCancellationTag(partitionKeyHash_)},
+              ucxx::TagMaskFull)
+          .callbackFunction(
+              [weak](ucs_status_t status, std::shared_ptr<void> /*arg*/) {
+                if (auto self = weak.lock()) {
+                  self->destinationCancellationComplete(status);
+                }
+              })
+          .callbackData(cancellation)
+          .build();
+}
+
+void UcxExchangeServer::destinationCancellationComplete(ucs_status_t status) {
+  if (closed_.load(std::memory_order_acquire) || status != UCS_OK) {
+    return;
+  }
+  destinationCancelled_.store(true, std::memory_order_release);
+  if (isIntraNodeTransfer_ && intraNodeRetrieveFuture_.valid()) {
+    // Retire only this destination's published table. Task-wide cleanup may
+    // race with cancellation, so an already removed key is a no-op.
+    IntraNodeTransferRegistry::getInstance()->cancelTransfer(
+        {partitionKey_.taskId, partitionKey_.destination, sequenceNumber_});
+  }
+  setState(ServerState::Done);
+  communicator_->addToWorkQueue(getSelfPtr());
+}
+
+void UcxExchangeServer::finalizeTerminalMetadata() {
+  // Transport teardown can race with a consumer's early close. Incomplete
+  // output is left for explicit result deletion or task cleanup.
+  const bool canceled = destinationCancelled_.load(std::memory_order_acquire);
+  if (!canceled && terminalMetadataState_ == TerminalMetadataState::Failed) {
+    LOG(WARNING) << "UCX terminal metadata send failed for "
+                 << partitionKey_.toString()
+                 << "; output remains pending for task cleanup";
+  }
+  const bool outputConsumed =
+      canceled || terminalMetadataState_ == TerminalMetadataState::Succeeded;
+  terminalMetadataState_ = TerminalMetadataState::Finalized;
+  if (outputConsumed && outputQueue_) {
+    outputQueue_->deleteResults(partitionKey_.destination);
   }
 }
 
