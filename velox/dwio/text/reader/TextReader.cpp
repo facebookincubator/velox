@@ -138,11 +138,12 @@ FileContents::FileContents(
 
 TextRowReader::TextRowReader(
     std::shared_ptr<FileContents> fileContents,
-    const RowReaderOptions& opts)
+    const RowReaderOptions& opts,
+    std::shared_ptr<velox::common::ScanSpec> scanSpec)
     : RowReader(),
       contents_{fileContents},
       schemaWithId_{TypeWithId::create(fileContents->schema)},
-      scanSpec_{opts.scanSpec()},
+      scanSpec_{std::move(scanSpec)},
       selectedSchema_{nullptr},
       options_{opts},
       columnSelector_{
@@ -357,7 +358,7 @@ uint64_t TextRowReader::seekToRow(uint64_t rowNumber) {
 }
 
 const RowReaderOptions& TextRowReader::getDefaultOpts() {
-  static RowReaderOptions defaultOpts(nullptr);
+  static RowReaderOptions defaultOpts;
   return defaultOpts;
 }
 
@@ -1629,10 +1630,7 @@ const std::shared_ptr<const TypeWithId>& TextReader::typeWithId() const {
 
 std::unique_ptr<RowReader> TextReader::createRowReader(
     const RowReaderOptions& opts) const {
-  VELOX_CHECK(
-      opts.scanSpec() == options_.scanSpec(),
-      "RowReaderOptions must share the reader's ScanSpec");
-  return std::make_unique<TextRowReader>(contents_, opts);
+  return std::make_unique<TextRowReader>(contents_, opts, options_.scanSpec());
 }
 
 uint64_t TextReader::getFileLength() const {

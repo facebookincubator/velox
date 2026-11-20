@@ -198,7 +198,7 @@ class ConstantEncodingBenchmark : public velox::test::VectorTestBase {
             std::make_shared<InMemoryReadFile>(file<T>(config.nullable)),
             *pool()),
         readerOptions);
-    dwio::common::RowReaderOptions rowReaderOptions(scanSpec);
+    dwio::common::RowReaderOptions rowReaderOptions;
     rowReaderOptions.setRequestedType(inputType);
     rowReaderOptions.setEagerFirstStripeLoad(true);
     // Constant chunks take the bulk path only through the non-legacy encodings.

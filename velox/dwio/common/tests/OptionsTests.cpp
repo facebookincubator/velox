@@ -23,7 +23,7 @@ using namespace facebook::velox::dwio::common;
 
 TEST(OptionsTests, defaultRowNumberColumnInfoTest) {
   // appendRowNumberColumn flag should be false by default
-  RowReaderOptions rowReaderOptions(nullptr);
+  RowReaderOptions rowReaderOptions;
   ASSERT_EQ(std::nullopt, rowReaderOptions.rowNumberColumnInfo());
 }
 
@@ -57,7 +57,7 @@ TEST(OptionsTests, commonReaderOptions) {
 }
 
 TEST(OptionsTests, setRowNumberColumnInfoTest) {
-  RowReaderOptions rowReaderOptions(nullptr);
+  RowReaderOptions rowReaderOptions;
   RowNumberColumnInfo rowNumberColumnInfo;
   rowNumberColumnInfo.insertPosition = 0;
   rowNumberColumnInfo.name = "test";
@@ -68,7 +68,7 @@ TEST(OptionsTests, setRowNumberColumnInfoTest) {
 }
 
 TEST(OptionsTests, testRowNumberColumnInfoInCopy) {
-  RowReaderOptions rowReaderOptions(nullptr);
+  RowReaderOptions rowReaderOptions;
   RowReaderOptions rowReaderOptionsCopy{rowReaderOptions};
   ASSERT_EQ(std::nullopt, rowReaderOptionsCopy.rowNumberColumnInfo());
 

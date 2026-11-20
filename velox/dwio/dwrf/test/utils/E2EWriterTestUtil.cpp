@@ -121,7 +121,7 @@ namespace facebook::velox::dwrf {
   dwio::common::ReaderOptions readerOpts(&pool, nullptr);
   readerOpts.setDataIoStats(dataIoStats);
   readerOpts.setMetadataIoStats(metadataIoStats);
-  RowReaderOptions rowReaderOpts(nullptr);
+  RowReaderOptions rowReaderOpts;
   auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
   EXPECT_GE(numStripesUpper, reader->getNumberOfStripes());
   EXPECT_LE(numStripesLower, reader->getNumberOfStripes());

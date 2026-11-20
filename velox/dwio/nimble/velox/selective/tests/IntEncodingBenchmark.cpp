@@ -301,7 +301,7 @@ struct BenchmarkState : public velox::test::VectorTestBase {
         std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
         options);
 
-    dwio::common::RowReaderOptions rowOptions(scanSpec);
+    dwio::common::RowReaderOptions rowOptions;
     rowOptions.setRequestedType(
         std::dynamic_pointer_cast<const RowType>(rowType));
     rowOptions.setEagerFirstStripeLoad(false);

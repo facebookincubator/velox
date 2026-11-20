@@ -60,7 +60,7 @@ TEST_F(OrcReaderTest, testOrcReaderSimple) {
   auto reader = DwrfReader::create(
       createFileBufferedInput(simpleTest, readerOpts.memoryPool()), readerOpts);
 
-  RowReaderOptions rowReaderOptions(nullptr);
+  RowReaderOptions rowReaderOptions;
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   VectorPtr batch;
@@ -100,7 +100,7 @@ TEST_F(OrcReaderTest, testOrcReaderComplexTypes) {
   auto rowType = reader->rowType();
   EXPECT_TRUE(rowType->equivalent(*expectedType));
 
-  RowReaderOptions rowReaderOptions(nullptr);
+  RowReaderOptions rowReaderOptions;
   auto rowReader = reader->createRowReader(rowReaderOptions);
   VectorPtr batch;
 
@@ -119,7 +119,7 @@ TEST_F(OrcReaderTest, testOrcReaderVarchar) {
   auto reader = DwrfReader::create(
       createFileBufferedInput(varcharOrc, readerOpts.memoryPool()), readerOpts);
 
-  RowReaderOptions rowReaderOptions(nullptr);
+  RowReaderOptions rowReaderOptions;
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   VectorPtr batch;
@@ -152,7 +152,7 @@ TEST_F(OrcReaderTest, testOrcReaderDate) {
   auto reader = DwrfReader::create(
       createFileBufferedInput(dateOrc, readerOpts.memoryPool()), readerOpts);
 
-  RowReaderOptions rowReaderOptions(nullptr);
+  RowReaderOptions rowReaderOptions;
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   VectorPtr batch;
@@ -199,7 +199,7 @@ TEST_F(OrcReaderTest, testOrcReadAllType) {
   auto reader = DwrfReader::create(
       createFileBufferedInput(dateOrc, readerOpts.memoryPool()), readerOpts);
 
-  RowReaderOptions rowReaderOptions(nullptr);
+  RowReaderOptions rowReaderOptions;
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   VectorPtr batch;
@@ -279,7 +279,7 @@ TEST_F(OrcReaderTest, testOrcRlev2) {
   auto reader = DwrfReader::create(
       createFileBufferedInput(dateOrc, readerOpts.memoryPool()), readerOpts);
 
-  RowReaderOptions rowReaderOptions(spec);
+  RowReaderOptions rowReaderOptions;
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   auto batch = BaseVector::create(schema, 0, &readerOpts.memoryPool());
@@ -409,7 +409,7 @@ TEST_P(
   EXPECT_EQ(GetParam().contentLength, reader->getFooter().contentLength());
   EXPECT_EQ(GetParam().userMeta.size(), reader->getMetadataKeys().size());
 
-  RowReaderOptions rowReaderOptions(nullptr);
+  RowReaderOptions rowReaderOptions;
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   for (std::map<std::string, std::string>::const_iterator itr =
@@ -439,7 +439,7 @@ TEST_P(OrcReaderTestP, dwrfRowReaderReadAllColumnTypesExpectedRowDataRead) {
   auto reader = DwrfReader::create(
       createFileBufferedInput(dateOrc, readerOpts.memoryPool()), readerOpts);
 
-  RowReaderOptions rowReaderOptions(scanSpec);
+  RowReaderOptions rowReaderOptions;
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   size_t rowCount = 0;

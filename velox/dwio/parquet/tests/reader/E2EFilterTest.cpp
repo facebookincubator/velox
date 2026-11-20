@@ -981,7 +981,7 @@ TEST_F(E2EFilterTest, parquetMRVersionStringStatsRowGroupFiltering) {
     auto& parquetReader = dynamic_cast<ParquetReader&>(*reader);
     EXPECT_EQ(parquetReader.fileMetaData().numRowGroups(), 2);
 
-    RowReaderOptions rowReaderOpts(scanSpec);
+    RowReaderOptions rowReaderOpts;
     rowReaderOpts.select(
         std::make_shared<ColumnSelector>(rowType, rowType->names()));
     auto rowReader = reader->createRowReader(rowReaderOpts);

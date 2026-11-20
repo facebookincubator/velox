@@ -1995,7 +1995,7 @@ void NimbleWriterFuzzer::readAndVerify(
         readerOptions);
     checkSchema(*reader->rowType());
 
-    velox::dwio::common::RowReaderOptions rowOptions(scanSpec);
+    velox::dwio::common::RowReaderOptions rowOptions;
     rowOptions.setRequestedType(schema);
     rowOptions.setStringDecoderZeroCopy(
         readerPath == ReaderPath::kSelectiveDefaultDispatch);

@@ -122,7 +122,7 @@ class ParquetWriterTest : public ParquetTestBase {
     auto readerOptions = makeDefaultReaderOptions(makeScanSpec(schema));
     auto reader = createReaderInMemory(*sinkPtr, readerOptions);
     ASSERT_EQ(reader->numberOfRows(), data->size());
-    auto rowReader = createRowReaderFromReader(*reader, schema, readerOptions);
+    auto rowReader = createRowReaderFromReader(*reader, schema);
     assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
   }
 
@@ -551,7 +551,7 @@ TEST_F(ParquetWriterTest, compression) {
                             : CompressionKind::CompressionKind_SNAPPY);
   }
 
-  auto rowReader = createRowReaderFromReader(*reader, schema, readerOptions);
+  auto rowReader = createRowReaderFromReader(*reader, schema);
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
 }
 
@@ -614,7 +614,7 @@ TEST_F(ParquetWriterTest, compressionRoundTripAcrossPages) {
     auto reader = createReaderInMemory(*sinkPtr, readerOptions);
     ASSERT_EQ(reader->numberOfRows(), kRows);
 
-    auto rowReader = createRowReaderFromReader(*reader, schema, readerOptions);
+    auto rowReader = createRowReaderFromReader(*reader, schema);
     assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
   }
 }
@@ -943,7 +943,7 @@ TEST_F(ParquetWriterTest, preEpochInt96Timestamp) {
   ASSERT_EQ(reader->numberOfRows(), data->size());
   ASSERT_EQ(*reader->rowType(), *schema);
 
-  auto rowReader = createRowReaderFromReader(*reader, schema, readerOptions);
+  auto rowReader = createRowReaderFromReader(*reader, schema);
   assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
 
   // Read the Int96 values directly to verify the correctness of the conversion
@@ -1189,7 +1189,7 @@ TEST_F(ParquetWriterTest, configurableWriteSchema) {
     ASSERT_EQ(reader->numberOfRows(), kNumRows);
     EXPECT_EQ(reader->rowType()->toString(), newType->toString());
 
-    auto rowReader = createRowReaderFromReader(*reader, newType, readerOptions);
+    auto rowReader = createRowReaderFromReader(*reader, newType);
     assertReadWithReaderAndExpected(newType, *rowReader, expected, *leafPool_);
   };
 
@@ -1231,7 +1231,7 @@ TEST_F(ParquetWriterTest, updateWriterOptionsFromHiveConfig) {
   ASSERT_EQ(reader->numberOfRows(), data->size());
   ASSERT_EQ(*reader->rowType(), *data->rowType());
 
-  auto rowReaderOpts = makeRowReaderOpts(data->rowType(), readerOptions);
+  auto rowReaderOpts = makeRowReaderOpts(data->rowType());
 
   rowReaderOpts.setTimestampPrecision(TimestampPrecision::kNanoseconds);
   auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -1298,8 +1298,7 @@ TEST_F(ParquetWriterTest, enableStoreDecimalAsInteger) {
         ASSERT_EQ(types.size(), 3);
         verifyPhysicalTypes(types);
 
-        auto rowReader =
-            createRowReaderFromReader(*reader, rowType, readerOptions);
+        auto rowReader = createRowReaderFromReader(*reader, rowType);
         assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
       };
 
@@ -1611,7 +1610,7 @@ TEST_F(ParquetWriterTest, dictionaryPassthroughMultipleBatches) {
   auto expected = makeRowVector({makeFlatVector<StringView>(
       totalSize, [&](auto row) { return StringView(expectedStrings[row]); })});
 
-  auto rowReader = createRowReaderFromReader(*reader, schema, readerOptions);
+  auto rowReader = createRowReaderFromReader(*reader, schema);
   assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
 }
 
@@ -1663,7 +1662,7 @@ TEST_F(ParquetWriterTest, multiBatchDictionaryThenFlat) {
         return row < kBatchSize ? StringView(dictStrings[row % kDictSize])
                                 : StringView(flatStrings[row - kBatchSize]);
       })});
-  auto rowReader = createRowReaderFromReader(*reader, schema, readerOptions);
+  auto rowReader = createRowReaderFromReader(*reader, schema);
   assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
 }
 
@@ -1720,7 +1719,7 @@ TEST_F(ParquetWriterTest, multiBatchDictionaryThenForcedFlattenDictionary) {
       makeRowVector({makeFlatVector<StringView>(total, [&](auto row) {
         return StringView(dictStrings[(row % kBatchSize) % kDictSize]);
       })});
-  auto rowReader = createRowReaderFromReader(*reader, schema, readerOptions);
+  auto rowReader = createRowReaderFromReader(*reader, schema);
   assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
 }
 
@@ -2026,7 +2025,7 @@ TEST_F(ParquetWriterTest, allNulls) {
   ASSERT_EQ(reader->numberOfRows(), kRows);
   ASSERT_EQ(*reader->rowType(), *rowType);
 
-  auto rowReader = createRowReaderFromReader(*reader, rowType, readerOptions);
+  auto rowReader = createRowReaderFromReader(*reader, rowType);
   assertReadWithReaderAndExpected(rowType, *rowReader, vector, *leafPool_);
 }
 

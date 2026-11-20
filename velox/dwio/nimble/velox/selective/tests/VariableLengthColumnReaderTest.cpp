@@ -86,7 +86,7 @@ class VariableLengthColumnReaderTest : public ::testing::Test,
         std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
         options);
     auto type = asRowType(expected->type());
-    dwio::common::RowReaderOptions rowOptions(scanSpec);
+    dwio::common::RowReaderOptions rowOptions;
     rowOptions.setRequestedType(type);
     readers.rowReader = readers.reader->createRowReader(rowOptions);
     return readers;

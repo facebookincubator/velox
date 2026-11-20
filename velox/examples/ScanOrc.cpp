@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
                         readerOpts);
 
   VectorPtr batch;
-  RowReaderOptions rowReaderOptions(nullptr);
+  RowReaderOptions rowReaderOptions;
   auto rowReader = reader->createRowReader(rowReaderOptions);
   while (rowReader->next(500, batch)) {
     auto rowVector = batch->as<RowVector>();

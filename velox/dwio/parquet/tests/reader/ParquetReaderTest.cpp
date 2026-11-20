@@ -88,10 +88,11 @@ class ParquetReaderTest : public ParquetTestBase {
       const RowTypePtr& fileSchema,
       FilterMap filters,
       const RowVectorPtr& expected) {
-    auto readerOptions = makeDefaultReaderOptions(makeScanSpec(fileSchema));
+    auto scanSpec = makeScanSpec(fileSchema);
+    auto readerOptions = makeDefaultReaderOptions(scanSpec);
     auto reader = createReader(fileName, readerOptions);
     assertReadWithReaderAndFilters(
-        *reader, fileSchema, readerOptions, std::move(filters), expected);
+        *reader, fileSchema, *scanSpec, std::move(filters), expected);
   }
 
   // Builds ReaderOptions with the Parquet thrift footer-memory tracking
@@ -1422,8 +1423,7 @@ TEST_F(ParquetReaderTest, preloadSmallFile) {
   auto reader =
       std::make_unique<ParquetReader>(std::move(input), readerOptions);
 
-  auto rowReader =
-      createRowReaderFromReader(*reader, sampleSchema(), readerOptions);
+  auto rowReader = createRowReaderFromReader(*reader, sampleSchema());
 
   // Ensure the input is small parquet file.
   const auto fileSize = file->size();
@@ -1464,8 +1464,7 @@ TEST_F(ParquetReaderTest, prefetchRowGroups) {
     auto reader = createReader("multiple_row_groups.parquet", readerOptions);
     EXPECT_EQ(reader->fileMetaData().numRowGroups(), numRowGroups);
 
-    auto rowReader =
-        createRowReaderFromReader(*reader, rowType, readerOptions, false);
+    auto rowReader = createRowReaderFromReader(*reader, rowType, false);
     auto parquetRowReader = dynamic_cast<ParquetRowReader*>(rowReader.get());
 
     constexpr int kBatchSize = 1000;
@@ -1619,8 +1618,7 @@ TEST_F(ParquetReaderTest, readBinaryAsStringFromNation) {
   EXPECT_EQ(rowType->size(), 4ULL);
   EXPECT_EQ(rowType->childAt(1)->type()->kind(), TypeKind::VARCHAR);
 
-  auto rowReader =
-      createRowReaderFromReader(*reader, outputRowType, readerOptions);
+  auto rowReader = createRowReaderFromReader(*reader, outputRowType);
 
   auto expected = std::string("ALGERIA");
   VectorPtr result = BaseVector::create(outputRowType, 0, &(*leafPool_));
@@ -1651,8 +1649,7 @@ TEST_F(ParquetReaderTest, readComplexType) {
   EXPECT_EQ(rowType->size(), 4);
   EXPECT_EQ(*rowType, *outputRowType);
 
-  auto rowReader =
-      createRowReaderFromReader(*reader, outputRowType, readerOptions);
+  auto rowReader = createRowReaderFromReader(*reader, outputRowType);
 
   VectorPtr result = BaseVector::create(outputRowType, 0, &(*leafPool_));
   rowReader->next(1, result);
@@ -1691,8 +1688,7 @@ TEST_F(ParquetReaderTest, readFixedLenBinaryAsStringFromUuid) {
   EXPECT_EQ(rowType->size(), 1ULL);
   EXPECT_EQ(rowType->childAt(0)->type()->kind(), TypeKind::VARCHAR);
 
-  auto rowReader =
-      createRowReaderFromReader(*reader, outputRowType, readerOptions);
+  auto rowReader = createRowReaderFromReader(*reader, outputRowType);
 
   auto expected = std::string("5468454a-363f-ccc8-7d0b-76072a75dfaa");
   VectorPtr result = BaseVector::create(outputRowType, 0, &(*leafPool_));
@@ -1794,8 +1790,7 @@ TEST_F(ParquetReaderTest, arrayOfMapOfIntKeyStructValue) {
   auto type = reader->typeWithId();
   auto rowType = reader->rowType();
   scanSpec->addAllChildFields(*rowType);
-  auto rowReader =
-      createRowReaderFromReader(*reader, rowType, readerOptions, false);
+  auto rowReader = createRowReaderFromReader(*reader, rowType, false);
   auto result = BaseVector::create(rowType, 10, leafPool_.get());
   constexpr int kBatchSize = 1000;
   while (rowReader->next(kBatchSize, result)) {
@@ -1941,7 +1936,7 @@ TEST_F(ParquetReaderTest, legacyRepDefSource) {
   EXPECT_EQ(source.column, 1);
   EXPECT_EQ(source.kind, TypeKind::INTEGER);
 
-  RowReaderOptions options(scanSpec);
+  RowReaderOptions options;
   auto rowReader = reader->createRowReader(options);
   auto result = BaseVector::create(ROW({}, {}), 0, leafPool_.get());
   EXPECT_EQ(rowReader->next(20'000, result), 13'520);
@@ -2306,7 +2301,7 @@ TEST_F(ParquetReaderTest, readNullTypeWithRequestedSchema) {
   EXPECT_EQ(reader->numberOfRows(), kRows);
   EXPECT_EQ(reader->rowType()->toString(), rowType->toString());
 
-  auto rowReaderOpts = makeRowReaderOpts(rowType, readerOptions);
+  auto rowReaderOpts = makeRowReaderOpts(rowType);
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
@@ -2367,7 +2362,7 @@ TEST_F(ParquetReaderTest, timestampFilters) {
             timestampSpec->setProjectOut(projectTimestamp);
             auto readerOptions = makeDefaultReaderOptions(scanSpec);
             auto reader = createReaderInMemory(sink, readerOptions);
-            auto options = makeRowReaderOpts(data->rowType(), readerOptions);
+            auto options = makeRowReaderOpts(data->rowType());
             auto rowReader = reader->createRowReader(options);
             const auto outputType =
                 projectTimestamp ? data->rowType() : ROW("id", BIGINT());
@@ -2522,11 +2517,12 @@ TEST_F(ParquetReaderTest, timestampRowGroupPruning) {
           {Timestamp::fromMicros(10'000'000),
            Timestamp::fromMicros(11'000'000),
            Timestamp::fromMicros(12'000'000)})});
-  auto readerOptions = makeDefaultReaderOptions(makeScanSpec(rowType));
+  auto scanSpec = makeScanSpec(rowType);
+  auto readerOptions = makeDefaultReaderOptions(scanSpec);
   auto reader = createReaderInMemory(*sink, readerOptions);
   ASSERT_EQ(reader->fileMetaData().numRowGroups(), 2);
   assertReadWithReaderAndFilters(
-      *reader, rowType, readerOptions, std::move(filters), expected);
+      *reader, rowType, *scanSpec, std::move(filters), expected);
 }
 
 TEST_F(ParquetReaderTest, readTimeMillis) {
@@ -2641,7 +2637,7 @@ TEST_F(ParquetReaderTest, thriftMemoryTracking) {
   {
     auto reader = createReader("sample.parquet", readerOptions);
     EXPECT_EQ(reader->numberOfRows(), 20ULL);
-    auto rowReaderOpts = makeRowReaderOpts(sampleSchema(), readerOptions);
+    auto rowReaderOpts = makeRowReaderOpts(sampleSchema());
     auto rowReader = reader->createRowReader(rowReaderOpts);
 
     // Reported bytes must at least cover FileMetaData plus one ColumnChunk
@@ -2687,7 +2683,7 @@ TEST_F(ParquetReaderTest, thriftMemoryOwnedByReader) {
 
     {
       // Full-range row reader: no row groups skipped, no accounting change.
-      auto rowReaderOpts = makeRowReaderOpts(sampleSchema(), readerOptions);
+      auto rowReaderOpts = makeRowReaderOpts(sampleSchema());
       auto rowReader = reader->createRowReader(rowReaderOpts);
       EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
       EXPECT_EQ(leafPool_->stats().numExternalFrees, initialFrees);
@@ -2699,8 +2695,7 @@ TEST_F(ParquetReaderTest, thriftMemoryOwnedByReader) {
     // Range (0, 1) is out-of-file, so no row groups match — this also
     // sidesteps a pre-existing multi-row-reader prefetch limitation in
     // ParquetData::seekToRowGroup unrelated to footer accounting.
-    auto emptyRangeRowReaderOpts =
-        makeRowReaderOpts(sampleSchema(), readerOptions);
+    auto emptyRangeRowReaderOpts = makeRowReaderOpts(sampleSchema());
     emptyRangeRowReaderOpts.range(0, 1);
     auto emptyRangeRowReader = reader->createRowReader(emptyRangeRowReaderOpts);
     EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialAllocs + 1);
@@ -2719,7 +2714,7 @@ TEST_F(ParquetReaderTest, thriftMemoryRuntimeStat) {
   auto readerOptions =
       makeThriftTrackingReaderOptions(makeScanSpec(sampleSchema()));
   auto reader = createReader("sample.parquet", readerOptions);
-  auto rowReaderOpts = makeRowReaderOpts(sampleSchema(), readerOptions);
+  auto rowReaderOpts = makeRowReaderOpts(sampleSchema());
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   dwio::common::RuntimeStats stats;
@@ -2741,7 +2736,7 @@ TEST_F(ParquetReaderTest, thriftMemoryRuntimeStat) {
 TEST_F(ParquetReaderTest, thriftMemoryRuntimeStatAbsentWithoutTracking) {
   auto readerOptions = makeDefaultReaderOptions(makeScanSpec(sampleSchema()));
   auto reader = createReader("sample.parquet", readerOptions);
-  auto rowReaderOpts = makeRowReaderOpts(sampleSchema(), readerOptions);
+  auto rowReaderOpts = makeRowReaderOpts(sampleSchema());
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   dwio::common::RuntimeStats stats;
@@ -2764,7 +2759,7 @@ TEST_F(ParquetReaderTest, thriftMemoryNotTrackedByDefault) {
   {
     auto readerOptions = makeDefaultReaderOptions(makeScanSpec(sampleSchema()));
     auto reader = createReader("sample.parquet", readerOptions);
-    auto rowReaderOpts = makeRowReaderOpts(sampleSchema(), readerOptions);
+    auto rowReaderOpts = makeRowReaderOpts(sampleSchema());
     auto rowReader = reader->createRowReader(rowReaderOpts);
     EXPECT_EQ(leafPool_->stats().numExternalAllocs, initialExternalAllocs);
   }
@@ -2793,7 +2788,7 @@ TEST_F(ParquetReaderTest, thriftMemoryReleasedForSkippedRowGroups) {
         reader->fileMetaData().rowGroup(1).fileOffset();
     ASSERT_GT(secondRowGroupOffset, 0);
 
-    RowReaderOptions rowReaderOpts(readerOptions.scanSpec());
+    RowReaderOptions rowReaderOpts;
     rowReaderOpts.range(0, secondRowGroupOffset);
     auto rowReader = reader->createRowReader(rowReaderOpts);
 

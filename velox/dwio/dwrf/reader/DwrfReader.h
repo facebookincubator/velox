@@ -344,10 +344,10 @@ class DwrfReader : public dwio::common::Reader {
       int32_t stripeIx = -1);
 
   std::unique_ptr<dwio::common::RowReader> createRowReader(
-      const dwio::common::RowReaderOptions& options) const override;
+      const dwio::common::RowReaderOptions& options = {}) const override;
 
   std::unique_ptr<DwrfRowReader> createDwrfRowReader(
-      const dwio::common::RowReaderOptions& options) const;
+      const dwio::common::RowReaderOptions& options = {}) const;
 
   /**
    * Create a reader to the for the dwrf file.

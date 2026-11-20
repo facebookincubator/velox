@@ -199,7 +199,7 @@ class TestStripeStreams : public StripeStreamsBase {
   WriterContext& context_;
   const proto::StripeFooter& footer_;
   ColumnSelector selector_;
-  RowReaderOptions options_{nullptr};
+  RowReaderOptions options_;
   mutable std::vector<std::unique_ptr<DataBuffer<char>>> buffers_;
   StrictMock<MockStrideIndexProvider> mockStrideIndexProvider_;
 };

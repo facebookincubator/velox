@@ -671,7 +671,7 @@ TEST_F(HiveConnectorUtilTest, cacheRetention) {
 }
 
 TEST_F(HiveConnectorUtilTest, configureSstRowReaderOptions) {
-  dwio::common::RowReaderOptions rowReaderOpts(nullptr);
+  dwio::common::RowReaderOptions rowReaderOpts;
   auto hiveSplit =
       std::make_shared<hive::HiveConnectorSplit>("", "", FileFormat::SST);
   hiveSplit->serdeParameters = {
@@ -700,7 +700,7 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
             std::unordered_map<std::string, std::string>()));
     config::ConfigBase sessionProperties({});
 
-    dwio::common::RowReaderOptions rowReaderOpts(nullptr);
+    dwio::common::RowReaderOptions rowReaderOpts;
     auto hiveSplit =
         std::make_shared<hive::HiveConnectorSplit>("", "", FileFormat::DWRF);
 
@@ -726,7 +726,7 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
         std::make_shared<config::ConfigBase>(std::move(configProps)));
     config::ConfigBase sessionProperties({});
 
-    dwio::common::RowReaderOptions rowReaderOpts(nullptr);
+    dwio::common::RowReaderOptions rowReaderOpts;
     auto hiveSplit =
         std::make_shared<hive::HiveConnectorSplit>("", "", FileFormat::DWRF);
 
@@ -753,7 +753,7 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
         {hive::HiveConfig::kPreserveFlatMapsInMemorySession, "true"}};
     config::ConfigBase sessionProperties(std::move(sessionProps));
 
-    dwio::common::RowReaderOptions rowReaderOpts(nullptr);
+    dwio::common::RowReaderOptions rowReaderOpts;
     auto hiveSplit =
         std::make_shared<hive::HiveConnectorSplit>("", "", FileFormat::DWRF);
 
@@ -781,7 +781,7 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
         {hive::HiveConfig::kPreserveFlatMapsInMemorySession, "true"}};
     config::ConfigBase sessionProperties(std::move(sessionProps));
 
-    dwio::common::RowReaderOptions rowReaderOpts(nullptr);
+    dwio::common::RowReaderOptions rowReaderOpts;
     auto hiveSplit =
         std::make_shared<hive::HiveConnectorSplit>("", "", FileFormat::DWRF);
 

@@ -114,7 +114,7 @@ class E2EWriterTest : public testing::Test {
     dwio::common::ReaderOptions readerOpts(leafPool_.get(), nullptr);
     readerOpts.setDataIoStats(dataIoStats_);
     readerOpts.setMetadataIoStats(metadataIoStats_);
-    RowReaderOptions rowReaderOpts(nullptr);
+    RowReaderOptions rowReaderOpts;
     auto reader = createReader(*sinkPtr, readerOpts);
     auto rowReader = reader->createRowReader(rowReaderOpts);
     auto dwrfRowReader = dynamic_cast<dwrf::DwrfRowReader*>(rowReader.get());
@@ -179,7 +179,7 @@ class E2EWriterTest : public testing::Test {
     dwio::common::ReaderOptions readerOpts(leafPool_.get(), nullptr);
     readerOpts.setDataIoStats(dataIoStats_);
     readerOpts.setMetadataIoStats(metadataIoStats_);
-    RowReaderOptions rowReaderOpts(nullptr);
+    RowReaderOptions rowReaderOpts;
     auto reader = createReader(*sinkPtr, readerOpts);
     auto rowReader = reader->createRowReader(rowReaderOpts);
 
@@ -701,7 +701,7 @@ TEST_F(E2EWriterTest, presentStreamIsSuppressedOnFlatMap) {
   dwio::common::ReaderOptions readerOpts(leafPool_.get(), nullptr);
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  RowReaderOptions rowReaderOpts(nullptr);
+  RowReaderOptions rowReaderOpts;
   auto reader = createReader(*sinkPtr, readerOpts);
   auto rowReader = reader->createRowReader(rowReaderOpts);
   auto dwrfRowReader = dynamic_cast<dwrf::DwrfRowReader*>(rowReader.get());
@@ -1076,7 +1076,7 @@ TEST_F(E2EWriterTest, partialStride) {
   dwio::common::ReaderOptions readerOpts(leafPool_.get(), nullptr);
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
-  RowReaderOptions rowReaderOpts(nullptr);
+  RowReaderOptions rowReaderOpts;
   auto reader = createReader(*sinkPtr, readerOpts);
   ASSERT_EQ(
       batchSize - nullCount, reader->columnStatistics(1)->getNumberOfValues())
@@ -1291,7 +1291,7 @@ class E2EEncryptionTest : public E2EWriterTest {
 
   void validateFileContent(
       const ::facebook::velox::dwrf::DwrfReader& reader) const {
-    RowReaderOptions rowReaderOpts(nullptr);
+    RowReaderOptions rowReaderOpts;
     auto rowReader = reader.createRowReader(rowReaderOpts);
     // make sure size estimate works
     ASSERT_GT(rowReader->estimatedRowSize(), 0);
@@ -1359,7 +1359,7 @@ TEST_F(E2EEncryptionTest, encryptRoot) {
     ASSERT_EQ(typeid(encrypted) == typeid(const ColumnStatistics&), i == 0);
   }
 
-  RowReaderOptions rowReaderOpts(nullptr);
+  RowReaderOptions rowReaderOpts;
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   // make sure stripe footer doesn't have any stream/encoding
@@ -1441,7 +1441,7 @@ TEST_F(E2EEncryptionTest, encryptSelectedFields) {
         (i == 0 || i == 3 || i == 6 || i == 10 || i == 11));
   }
 
-  RowReaderOptions rowReaderOpts(nullptr);
+  RowReaderOptions rowReaderOpts;
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   // make sure stripe footer doesn't have any stream/encoding
@@ -1494,7 +1494,7 @@ TEST_F(E2EEncryptionTest, readWithoutKey) {
 
   // reading unencrypted column should not fail
   {
-    RowReaderOptions rowReaderOpts(nullptr);
+    RowReaderOptions rowReaderOpts;
     rowReaderOpts.select(
         std::make_shared<ColumnSelector>(type, std::vector<uint64_t>{0}));
     auto rowReader = reader->createRowReader(rowReaderOpts);
@@ -1504,7 +1504,7 @@ TEST_F(E2EEncryptionTest, readWithoutKey) {
 
   // fail when reading encrypted column
   {
-    RowReaderOptions rowReaderOpts(nullptr);
+    RowReaderOptions rowReaderOpts;
     rowReaderOpts.select(
         std::make_shared<ColumnSelector>(type, std::vector<uint64_t>{1}));
     VELOX_ASSERT_THROW(reader->createRowReader(rowReaderOpts), "");
@@ -1515,7 +1515,7 @@ TEST_F(E2EEncryptionTest, readWithoutKey) {
     auto scanSpec = std::make_shared<facebook::velox::common::ScanSpec>("root");
     scanSpec->addFieldRecursively("a", *type->childAt(0), 0);
     dwio::common::ReaderOptions readerOpts(leafPool_.get(), scanSpec);
-    RowReaderOptions rowReaderOpts(scanSpec);
+    RowReaderOptions rowReaderOpts;
     auto scanSpecReader = createReader(*sink_, readerOpts);
     auto rowReader = scanSpecReader->createRowReader(rowReaderOpts);
     VectorPtr batch =
@@ -1528,7 +1528,7 @@ TEST_F(E2EEncryptionTest, readWithoutKey) {
     auto scanSpec = std::make_shared<facebook::velox::common::ScanSpec>("root");
     scanSpec->addFieldRecursively("b", *type->childAt(1), 0);
     dwio::common::ReaderOptions readerOpts(leafPool_.get(), scanSpec);
-    RowReaderOptions rowReaderOpts(scanSpec);
+    RowReaderOptions rowReaderOpts;
     auto scanSpecReader = createReader(*sink_, readerOpts);
     VELOX_ASSERT_THROW(
         scanSpecReader->createRowReader(rowReaderOpts),

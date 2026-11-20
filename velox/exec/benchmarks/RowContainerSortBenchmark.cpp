@@ -37,9 +37,8 @@ std::string getExampleFilePath(const std::string& fileName) {
 
 dwio::common::RowReaderOptions getReaderOpts(
     const RowTypePtr& rowType,
-    const dwio::common::ReaderOptions& readerOptions,
     bool fileColumnNamesReadAsLowerCase = false) {
-  dwio::common::RowReaderOptions rowReaderOpts(readerOptions.scanSpec());
+  dwio::common::RowReaderOptions rowReaderOpts;
   rowReaderOpts.select(
       std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
           rowType, rowType->names(), nullptr, fileColumnNamesReadAsLowerCase));
@@ -74,7 +73,7 @@ std::vector<std::optional<StringView>> getDataFromFile() {
   readerOptions.setMetadataIoStats(metadataIoStats);
   facebook::velox::parquet::ParquetReader reader =
       createReader(sample, readerOptions);
-  auto rowReaderOpts = getReaderOpts(rowType, readerOptions);
+  auto rowReaderOpts = getReaderOpts(rowType);
   auto rowReader = reader.createRowReader(rowReaderOpts);
   auto data = BaseVector::create(rowType, 50000, pool.get());
   rowReader->next(50000, data);

@@ -106,7 +106,7 @@ std::unique_ptr<RowReader> ParquetReaderBenchmark::createReader(
   std::unique_ptr<Reader> reader =
       std::make_unique<ParquetReader>(std::move(input), readerOpts);
 
-  dwio::common::RowReaderOptions rowReaderOpts(scanSpec);
+  dwio::common::RowReaderOptions rowReaderOpts;
   rowReaderOpts.select(
       std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
           rowType, rowType->names()));

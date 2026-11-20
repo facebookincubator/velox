@@ -126,6 +126,10 @@ class ReaderBase {
     return fileSchemaWithId_;
   }
 
+  const std::shared_ptr<velox::common::ScanSpec>& scanSpec() const {
+    return scanSpec_;
+  }
+
   /// File-level column statistics from the vectorized stats optional section.
   /// Empty if absent.
   const std::vector<std::unique_ptr<ColumnStatistics>>& fileColumnStats()

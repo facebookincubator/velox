@@ -77,7 +77,7 @@ class ParquetReaderBuilder {
   /// Use for split-level / slice read tests.
   ParquetReaderBuilder& byteRange(uint64_t offset, uint64_t length);
 
-  /// Configures RowReaderOptions with only a ScanSpec and no ColumnSelector.
+  /// Creates the row reader without a ColumnSelector.
   /// By default, build() adds a ColumnSelector derived from the output type
   /// passed to readerBuilder(). Use
   /// this when tests should not select output columns explicitly—for example
@@ -153,9 +153,8 @@ class ParquetTestBase : public testing::Test,
   // Returns RowReaderOptions with a ColumnSelector for the given schema.
   dwio::common::RowReaderOptions makeRowReaderOpts(
       const RowTypePtr& rowType,
-      const dwio::common::ReaderOptions& readerOptions,
       bool fileColumnNamesReadAsLowerCase = false) {
-    dwio::common::RowReaderOptions rowReaderOpts(readerOptions.scanSpec());
+    dwio::common::RowReaderOptions rowReaderOpts;
     rowReaderOpts.select(
         std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
             rowType,
@@ -189,7 +188,7 @@ class ParquetTestBase : public testing::Test,
   void assertReadWithReaderAndFilters(
       dwio::common::Reader& reader,
       const RowTypePtr& fileSchema,
-      const dwio::common::ReaderOptions& readerOptions,
+      velox::common::ScanSpec& scanSpec,
       FilterMap filters,
       const RowVectorPtr& expected);
 
@@ -256,7 +255,6 @@ class ParquetTestBase : public testing::Test,
   std::unique_ptr<dwio::common::RowReader> createRowReaderFromReader(
       dwio::common::Reader& reader,
       const RowTypePtr& rowType,
-      const dwio::common::ReaderOptions& readerOptions,
       bool useColumnSelector = true);
 
   /// exampleFileName is a file under the parquet reader examples directory.

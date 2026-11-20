@@ -344,7 +344,9 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
   SelectiveNimbleRowReader(
       const std::shared_ptr<ReaderBase>& readerBase,
       const dwio::common::RowReaderOptions& options)
-      : lazyIoColumns_{computeLazyIoColumns(options)},
+      : lazyIoColumns_{computeLazyIoColumns(
+            options,
+            readerBase->scanSpec().get())},
         readerBase_{readerBase},
         options_{options},
         enableStripeStats_{featureGate()->enabled(
@@ -453,7 +455,8 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
   // spec and remaining filter columns. Returns a const set used for the
   // lifetime of this reader.
   static folly::F14FastSet<std::string> computeLazyIoColumns(
-      const dwio::common::RowReaderOptions& options);
+      const dwio::common::RowReaderOptions& options,
+      velox::common::ScanSpec* scanSpec);
 
   // Precomputed set of top-level column names that should use lazy I/O.
   // Const after construction — computed once per split.
@@ -639,7 +642,7 @@ void SelectiveNimbleRowReader::computeSkipRowRanges() {
     return;
   }
 
-  const auto* scanSpec = options_.scanSpec().get();
+  const auto* scanSpec = readerBase_->scanSpec().get();
   if (columnReader_ == nullptr || scanSpec == nullptr) {
     return;
   }
@@ -737,7 +740,7 @@ void SelectiveNimbleRowReader::computeStatsBasedRowSize() const {
     return;
   }
   auto totalLogicalSize = sumProjectedLogicalSize(
-      *readerBase_->fileSchemaWithId(), columnStats, *options_.scanSpec());
+      *readerBase_->fileSchemaWithId(), columnStats, *readerBase_->scanSpec());
   auto totalRows = readerBase_->tablet().tabletRowCount();
   if (totalRows > 0) {
     statsBasedRowSize_ = std::max<size_t>(1, totalLogicalSize / totalRows);
@@ -755,7 +758,7 @@ bool SelectiveNimbleRowReader::skipStripe(uint32_t stripe) const {
   }
   const auto& rootType = *readerBase_->fileSchemaWithId();
   const auto& rowType = rootType.type()->asRow();
-  const auto stableChildren = options_.scanSpec()->stableChildren();
+  const auto stableChildren = readerBase_->scanSpec()->stableChildren();
   for (const auto& childSpec : *stableChildren) {
     if (!childSpec->hasFilter() || childSpec->filter() == nullptr ||
         childSpec->isConstant() || !childSpec->readFromFile()) {
@@ -882,12 +885,12 @@ void SelectiveNimbleRowReader::initReadRange() {
 // filter, and is projected in the output. Returns empty set when lazy I/O is
 // disabled.
 folly::F14FastSet<std::string> SelectiveNimbleRowReader::computeLazyIoColumns(
-    const dwio::common::RowReaderOptions& options) {
+    const dwio::common::RowReaderOptions& options,
+    velox::common::ScanSpec* scanSpec) {
   folly::F14FastSet<std::string> lazyIoColumns;
   if (!options.lazyColumnIo()) {
     return lazyIoColumns;
   }
-  auto* scanSpec = options.scanSpec().get();
   VELOX_CHECK_NOT_NULL(scanSpec);
   const auto& remainingFilterColumns = options.remainingFilterColumns();
   const auto stableChildren = scanSpec->stableChildren();
@@ -934,7 +937,7 @@ void SelectiveNimbleRowReader::loadCurrentStripe() {
                                : readerBase_->fileSchema(),
       readerBase_->fileSchemaWithId(),
       params,
-      *options_.scanSpec(),
+      *readerBase_->scanSpec(),
       true);
   rowSizeTracker_->finalizeProjection();
   columnReader_->setIsTopLevel();
@@ -973,7 +976,7 @@ void SelectiveNimbleRowReader::initIndexBounds() {
       indexColumns,
       sortOrders,
       readerBase_->fileSchema(),
-      *options_.scanSpec(),
+      *readerBase_->scanSpec(),
       readerBase_->pool());
 
   if (!result.has_value()) {
@@ -981,7 +984,7 @@ void SelectiveNimbleRowReader::initIndexBounds() {
   }
 
   filtersToRestore_ = std::move(result->removedFilters);
-  options_.scanSpec()->resetCachedValues(/*doReorder=*/false);
+  readerBase_->scanSpec()->resetCachedValues(/*doReorder=*/false);
 
   clusterIndex_ = clusterIndex;
 
@@ -1066,13 +1069,13 @@ void SelectiveNimbleRowReader::restoreFilters() {
       filtersToRestore_.empty() || clusterIndex_ != nullptr,
       "filtersToRestore_ should only be set when index bounds are used");
   for (auto& [columnName, filter] : filtersToRestore_) {
-    auto* childSpec = options_.scanSpec()->childByName(columnName);
+    auto* childSpec = readerBase_->scanSpec()->childByName(columnName);
     if (childSpec != nullptr) {
       childSpec->setFilter(std::move(filter));
     }
   }
   filtersToRestore_.clear();
-  options_.scanSpec()->resetCachedValues(/*doReorder=*/false);
+  readerBase_->scanSpec()->resetCachedValues(/*doReorder=*/false);
 }
 
 void SelectiveNimbleRowReader::setAtEnd() {
@@ -1122,8 +1125,7 @@ class SelectiveNimbleReader : public dwio::common::Reader {
   SelectiveNimbleReader(
       std::unique_ptr<dwio::common::BufferedInput> input,
       const dwio::common::ReaderOptions& options)
-      : readerBase_(ReaderBase::create(std::move(input), options)),
-        options_(options) {
+      : readerBase_(ReaderBase::create(std::move(input), options)) {
     detail::initHook();
   }
 
@@ -1148,7 +1150,6 @@ class SelectiveNimbleReader : public dwio::common::Reader {
       const dwio::common::RowReaderOptions& options) const;
 
   const std::shared_ptr<ReaderBase> readerBase_;
-  const dwio::common::ReaderOptions options_;
 };
 
 std::optional<uint64_t> SelectiveNimbleReader::numberOfRows() const {
@@ -1177,9 +1178,6 @@ SelectiveNimbleReader::typeWithId() const {
 
 std::unique_ptr<dwio::common::RowReader> SelectiveNimbleReader::createRowReader(
     const dwio::common::RowReaderOptions& options) const {
-  NIMBLE_CHECK(
-      options.scanSpec() == options_.scanSpec(),
-      "RowReaderOptions must share the reader's ScanSpec");
   validateOmittedKeyColumnStorageAccess(options);
   return std::make_unique<SelectiveNimbleRowReader>(readerBase_, options);
 }
@@ -1187,9 +1185,6 @@ std::unique_ptr<dwio::common::RowReader> SelectiveNimbleReader::createRowReader(
 std::unique_ptr<dwio::common::IndexReader>
 SelectiveNimbleReader::createIndexReader(
     const dwio::common::RowReaderOptions& options) const {
-  NIMBLE_CHECK(
-      options.scanSpec() == options_.scanSpec(),
-      "RowReaderOptions must share the reader's ScanSpec");
   validateOmittedKeyColumnStorageAccess(options);
   // Empty files (no stripes) have no cluster index even when index config
   // is set. Return nullptr so the caller handles it as no-index.
@@ -1208,7 +1203,7 @@ void SelectiveNimbleReader::validateOmittedKeyColumnStorageAccess(
 
   const auto outputType = options.requestedType() ? options.requestedType()
                                                   : readerBase_->fileSchema();
-  const auto* scanSpec = options.scanSpec().get();
+  const auto* scanSpec = readerBase_->scanSpec().get();
   for (const auto& column :
        properties.clusterIndexKeyColumnsWithOmittedStorage()) {
     NIMBLE_USER_CHECK(

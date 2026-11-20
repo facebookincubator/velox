@@ -411,7 +411,7 @@ class Reader {
    * @return Row reader
    */
   virtual std::unique_ptr<RowReader> createRowReader(
-      const RowReaderOptions& options) const = 0;
+      const RowReaderOptions& options = {}) const = 0;
 
   /**
    * Create index reader object for index-based lookups.
@@ -420,7 +420,7 @@ class Reader {
    * @throws if index reading is not supported by the implementation
    */
   virtual std::unique_ptr<IndexReader> createIndexReader(
-      const RowReaderOptions& options) const {
+      const RowReaderOptions& options = {}) const {
     VELOX_UNSUPPORTED("Reader::createIndexReader() is not supported");
   }
 

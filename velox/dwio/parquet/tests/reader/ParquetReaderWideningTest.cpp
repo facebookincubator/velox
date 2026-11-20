@@ -84,7 +84,7 @@ class ParquetReaderWideningTest : public ParquetTestBase {
     auto readerOptions =
         makeWideningReaderOptions(readSchema, allowInt32Narrowing, scanSpec);
     auto reader = createReaderInMemory(*sink, readerOptions);
-    auto rowReaderOpts = makeRowReaderOpts(readSchema, readerOptions);
+    auto rowReaderOpts = makeRowReaderOpts(readSchema);
     auto rowReader = reader->createRowReader(rowReaderOpts);
     assertReadWithReaderAndExpected(
         readSchema, *rowReader, expected, *leafPool_);
@@ -278,7 +278,7 @@ void FloatToDoubleEvolutionTest::runFloatToDoubleScenario(
     }
   }
 
-  RowReaderOptions rowReaderOpts(scanSpec);
+  RowReaderOptions rowReaderOpts;
   rowReaderOpts.select(
       std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
           readSchema, readSchema->names()));

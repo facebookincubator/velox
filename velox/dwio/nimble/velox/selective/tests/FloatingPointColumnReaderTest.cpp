@@ -79,7 +79,7 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
         std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
         options);
 
-    dwio::common::RowReaderOptions rowOptions(scanSpec);
+    dwio::common::RowReaderOptions rowOptions;
     rowOptions.setRequestedType(asRowType(expected->type()));
     rowOptions.setStringDecoderZeroCopy(zeroCopy);
     readers.rowReader = readers.reader->createRowReader(rowOptions);

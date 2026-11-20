@@ -261,13 +261,11 @@ class FormatSpecificOptions {
 /// Options for creating a RowReader.
 class RowReaderOptions {
  public:
-  explicit RowReaderOptions(
-      std::shared_ptr<velox::common::ScanSpec> scanSpec) noexcept
+  RowReaderOptions() noexcept
       : dataStart_(0),
         dataLength_(std::numeric_limits<uint64_t>::max()),
         preloadStripe_(false),
-        projectSelectedType_(false),
-        scanSpec_(std::move(scanSpec)) {}
+        projectSelectedType_(false) {}
 
   /// For files that have structs as the top-level object, select the fields
   /// to read. The first field is 0, the second 1, and so on. By default,
@@ -380,11 +378,6 @@ class RowReaderOptions {
   void setRequestedType(RowTypePtr requestedType) {
     VELOX_CHECK_NULL(selector_);
     requestedType_ = std::move(requestedType);
-  }
-
-  /// The ScanSpec shared with the owning Reader.
-  const std::shared_ptr<velox::common::ScanSpec>& scanSpec() const {
-    return scanSpec_;
   }
 
   folly::Executor* ioExecutor() const {
@@ -643,7 +636,6 @@ class RowReaderOptions {
   ErrorTolerance errorTolerance_;
   std::shared_ptr<ColumnSelector> selector_;
   RowTypePtr requestedType_;
-  std::shared_ptr<velox::common::ScanSpec> scanSpec_{nullptr};
   std::shared_ptr<velox::common::MetadataFilter> metadataFilter_;
 
   // Node id for map column to a list of keys to be projected as a struct.
@@ -718,7 +710,7 @@ class ReaderOptions : public io::ReaderOptions {
   static constexpr uint64_t kDefaultFilePreloadThreshold =
       1024 * 1024 * 8; // 8MB
 
-  /// The ScanSpec is shared by the reader and all its row and index readers.
+  /// The reader, its row readers and its index readers use this ScanSpec.
   /// A null ScanSpec selects the non-selective reader path where supported.
   explicit ReaderOptions(
       velox::memory::MemoryPool* pool,

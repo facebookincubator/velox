@@ -253,13 +253,12 @@ class TestSerialize : public test::PrimitiveTypedTest<TestType> {
     auto rowType = test::createRowType<TestType>(numColumns_);
     auto scanSpec = std::make_shared<velox::common::ScanSpec>("");
     scanSpec->addAllChildFields(*rowType);
+    dwio::common::RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setRequestedType(rowType);
 
     auto file =
         test::ParquetTestFile::open(buffer, "FileSerializeTest", scanSpec);
     auto& reader = file.reader();
-    dwio::common::RowReaderOptions rowReaderOpts(scanSpec);
-    rowReaderOpts.setRequestedType(rowType);
-
     ASSERT_EQ(numColumns_, reader.fileMetaData().rowGroup(0).numColumns());
     ASSERT_EQ(numRowgroups_, reader.fileMetaData().numRowGroups());
     ASSERT_EQ(numRows, reader.fileMetaData().numRows());
@@ -577,13 +576,12 @@ TEST(TestBufferedRowGroupWriter, multiPageDisabledDictionary) {
   auto rowType = ROW({"col"}, {INTEGER()});
   auto scanSpec = std::make_shared<common::ScanSpec>("");
   scanSpec->addAllChildFields(*rowType);
+  dwio::common::RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setRequestedType(rowType);
 
   auto file = test::ParquetTestFile::open(
       buffer, "MultiPageDisabledDictionary", scanSpec);
   auto& reader = file.reader();
-  dwio::common::RowReaderOptions rowReaderOpts(scanSpec);
-  rowReaderOpts.setRequestedType(rowType);
-
   ASSERT_EQ(1, reader.fileMetaData().numRowGroups());
   auto rowGroup = reader.fileMetaData().rowGroup(0);
   ASSERT_EQ(1, rowGroup.numColumns());
@@ -632,12 +630,11 @@ TEST(ParquetRoundtrip, AllNulls) {
   auto rowType = ROW({"nulls"}, {INTEGER()});
   auto scanSpec = std::make_shared<velox::common::ScanSpec>("");
   scanSpec->addAllChildFields(*rowType);
+  dwio::common::RowReaderOptions rowReaderOpts;
+  rowReaderOpts.setRequestedType(rowType);
 
   auto file = test::ParquetTestFile::open(buffer, "AllNulls", scanSpec);
   auto& reader = file.reader();
-  dwio::common::RowReaderOptions rowReaderOpts(scanSpec);
-  rowReaderOpts.setRequestedType(rowType);
-
   auto rowGroup = reader.fileMetaData().rowGroup(0);
   ASSERT_EQ(1, rowGroup.numColumns());
   ASSERT_EQ(kNumRows, rowGroup.numRows());

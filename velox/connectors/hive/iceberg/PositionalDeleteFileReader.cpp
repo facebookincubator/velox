@@ -129,7 +129,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
     return;
   }
 
-  dwio::common::RowReaderOptions deleteRowReaderOpts(scanSpec);
+  dwio::common::RowReaderOptions deleteRowReaderOpts;
   configureRowReaderOptions(
       {},
       nullptr,

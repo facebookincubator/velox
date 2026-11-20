@@ -295,7 +295,7 @@ FileIndexReader::createIndexReader() {
           hiveSplit_->fileFormat == dwio::common::FileFormat::SST,
       "FileIndexReader only supports Nimble, Flux and SST file formats");
 
-  dwio::common::RowReaderOptions rowReaderOpts(scanSpec_);
+  dwio::common::RowReaderOptions rowReaderOpts;
   configureRowReaderOptions(
       tableHandle_->tableParameters(),
       /*metadataFilter=*/nullptr,

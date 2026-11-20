@@ -348,7 +348,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptions) {
   auto split = makeSplit(dwio::common::FileFormat::DWRF);
   auto rowType = ROW({"c0"}, {BIGINT()});
 
-  dwio::common::RowReaderOptions rowReaderOptions(nullptr);
+  dwio::common::RowReaderOptions rowReaderOptions;
   hive::configureRowReaderOptions(
       /*tableParameters=*/{},
       /*metadataFilter=*/nullptr,
@@ -374,7 +374,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
         {{hive::FileConfig::kNimbleStringDecoderZeroCopySession, "true"},
          {hive::FileConfig::kNimblePreserveDictionaryEncodingSession, "true"},
          {hive::FileConfig::kNimbleDictionaryAwareReadsSession, "true"}});
-    dwio::common::RowReaderOptions rowReaderOptions(nullptr);
+    dwio::common::RowReaderOptions rowReaderOptions;
     hive::configureRowReaderOptions(
         /*tableParameters=*/{},
         /*metadataFilter=*/nullptr,
@@ -393,7 +393,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
   // Keys absent => flags fall back to their default (false).
   {
     auto holder = makeConnectorQueryCtx();
-    dwio::common::RowReaderOptions rowReaderOptions(nullptr);
+    dwio::common::RowReaderOptions rowReaderOptions;
     hive::configureRowReaderOptions(
         /*tableParameters=*/{},
         /*metadataFilter=*/nullptr,
@@ -420,7 +420,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSkipRows) {
       {dwio::common::TableParameter::kSkipHeaderLineCount, "5"},
   };
 
-  dwio::common::RowReaderOptions rowReaderOptions(nullptr);
+  dwio::common::RowReaderOptions rowReaderOptions;
   hive::configureRowReaderOptions(
       tableParameters,
       /*metadataFilter=*/nullptr,
@@ -445,7 +445,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSplitRange) {
       /*length=*/5000);
   auto rowType = ROW({"c0"}, {BIGINT()});
 
-  dwio::common::RowReaderOptions rowReaderOptions(nullptr);
+  dwio::common::RowReaderOptions rowReaderOptions;
   hive::configureRowReaderOptions(
       /*tableParameters=*/{},
       /*metadataFilter=*/nullptr,

@@ -211,7 +211,7 @@ void RowReader::readWithRowNumber(
   const auto rowNumberColumnIndex = rowNumberColumnInfo->insertPosition;
   const auto& rowNumberColumnName = rowNumberColumnInfo->name;
   column_index_t numChildren{0};
-  for (auto& column : options.scanSpec()->children()) {
+  for (auto& column : columnReader->scanSpec()->children()) {
     if (column->keepValues()) {
       ++numChildren;
     }

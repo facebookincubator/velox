@@ -86,7 +86,7 @@ class NullColumnReaderTest : public ::testing::Test,
             BaseVector::createNullConstant(readType->childAt(i), 1, pool()));
       }
     }
-    dwio::common::RowReaderOptions rowOptions(scanSpec);
+    dwio::common::RowReaderOptions rowOptions;
     rowOptions.setRequestedType(readType);
     readers.rowReader = readers.reader->createRowReader(rowOptions);
     return readers;

@@ -199,7 +199,7 @@ class ColumnWriterStatsTest : public ::testing::Test {
     dwio::common::ReaderOptions readerOpts(leafPool_.get(), nullptr);
     readerOpts.setDataIoStats(dataIoStats_);
     readerOpts.setMetadataIoStats(metadataIoStats_);
-    RowReaderOptions rowReaderOpts(nullptr);
+    RowReaderOptions rowReaderOpts;
     auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
     return reader->createRowReader(rowReaderOpts);
   }

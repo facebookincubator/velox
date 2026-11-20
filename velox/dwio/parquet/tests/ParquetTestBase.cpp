@@ -34,9 +34,8 @@ dwio::common::ReaderOptions makeReaderOptions(
 }
 
 dwio::common::RowReaderOptions makeRowReaderOptsWithSelector(
-    const RowTypePtr& rowType,
-    const dwio::common::ReaderOptions& readerOptions) {
-  dwio::common::RowReaderOptions rowReaderOpts(readerOptions.scanSpec());
+    const RowTypePtr& rowType) {
+  dwio::common::RowReaderOptions rowReaderOpts;
   rowReaderOpts.select(
       std::make_shared<dwio::common::ColumnSelector>(
           rowType, rowType->names(), nullptr, false));
@@ -115,9 +114,9 @@ ParquetReaderBundle ParquetReaderBuilder::build() {
     reader = std::make_unique<ParquetReader>(std::move(input), readerOpts);
   }
 
-  dwio::common::RowReaderOptions rowReaderOpts(readerOpts.scanSpec());
+  dwio::common::RowReaderOptions rowReaderOpts;
   if (!withScanSpecOnly_) {
-    rowReaderOpts = makeRowReaderOptsWithSelector(outputType_, readerOpts);
+    rowReaderOpts = makeRowReaderOptsWithSelector(outputType_);
   }
   if (byteRange_.has_value()) {
     rowReaderOpts.range(byteRange_->first, byteRange_->second);
@@ -180,16 +179,15 @@ void ParquetTestBase::assertReadWithReaderAndExpected(
 void ParquetTestBase::assertReadWithReaderAndFilters(
     dwio::common::Reader& reader,
     const RowTypePtr& fileSchema,
-    const dwio::common::ReaderOptions& readerOptions,
+    velox::common::ScanSpec& scanSpec,
     FilterMap filters,
     const RowVectorPtr& expected) {
-  const auto& scanSpec = readerOptions.scanSpec();
   for (auto&& [column, filter] : filters) {
-    scanSpec->getOrCreateChild(velox::common::Subfield(column))
+    scanSpec.getOrCreateChild(velox::common::Subfield(column))
         ->setFilter(std::move(filter));
   }
 
-  auto rowReaderOpts = makeRowReaderOpts(fileSchema, readerOptions);
+  auto rowReaderOpts = makeRowReaderOpts(fileSchema);
   auto rowReader = reader.createRowReader(rowReaderOpts);
   assertReadWithReaderAndExpected(fileSchema, *rowReader, expected, *leafPool_);
 }
@@ -317,11 +315,10 @@ std::unique_ptr<dwio::common::RowReader>
 ParquetTestBase::createRowReaderFromReader(
     dwio::common::Reader& reader,
     const RowTypePtr& rowType,
-    const dwio::common::ReaderOptions& readerOptions,
     bool useColumnSelector) {
-  dwio::common::RowReaderOptions rowReaderOpts(readerOptions.scanSpec());
+  dwio::common::RowReaderOptions rowReaderOpts;
   if (useColumnSelector) {
-    rowReaderOpts = makeRowReaderOpts(rowType, readerOptions);
+    rowReaderOpts = makeRowReaderOpts(rowType);
   }
   return reader.createRowReader(rowReaderOpts);
 }

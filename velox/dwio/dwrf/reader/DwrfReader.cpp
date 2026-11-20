@@ -172,7 +172,8 @@ void DwrfUnit::ensureDecoders() {
       stripeIndex_,
       splitStats_.get());
 
-  auto* scanSpec = options_.scanSpec().get();
+  auto* scanSpec =
+      stripeReaderBase_.getReader().readerOptions().scanSpec().get();
   const auto& fileType = stripeReaderBase_.getReader().schemaWithId();
   FlatMapContext flatMapContext;
   flatMapContext.keySelectionCallback = options_.keySelectionCallback();
@@ -262,7 +263,7 @@ DwrfRowReader::DwrfRowReader(
     : StripeReaderBase(reader),
       options_(opts),
       columnSelector_{
-          options_.scanSpec() != nullptr
+          reader->readerOptions().scanSpec() != nullptr
               ? nullptr
               : std::make_shared<ColumnSelector>(ColumnSelector::apply(
                     options_.selector(),
@@ -1277,9 +1278,6 @@ std::unique_ptr<dwio::common::RowReader> DwrfReader::createRowReader(
 
 std::unique_ptr<DwrfRowReader> DwrfReader::createDwrfRowReader(
     const RowReaderOptions& opts) const {
-  VELOX_CHECK(
-      opts.scanSpec() == readerBase_->readerOptions().scanSpec(),
-      "RowReaderOptions must share the reader's ScanSpec");
   auto rowReader = std::make_unique<DwrfRowReader>(readerBase_, opts);
   if (opts.eagerFirstStripeLoad()) {
     // Load the first stripe on construction so that readers created in

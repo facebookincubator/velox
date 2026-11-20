@@ -187,7 +187,7 @@ TEST_P(E2EReaderTest, sharedDictionaryFlatmapReadAsStruct) {
       std::make_shared<LocalReadFile>(path), *pool);
   auto reader = DwrfReader::create(std::move(bufferedInput), readerOpts);
 
-  RowReaderOptions rowReaderOptions(nullptr);
+  RowReaderOptions rowReaderOptions;
   rowReaderOptions.setDecodingExecutor(GetParam().decodingExecutor());
   rowReaderOptions.setDecodingParallelismFactor(
       GetParam().decodingParallelismFactor());

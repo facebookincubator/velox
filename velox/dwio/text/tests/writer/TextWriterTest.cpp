@@ -286,7 +286,7 @@ TEST_F(TextWriterTest, verifyWriteWithTextReader) {
   auto input =
       std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = readerFactory->createReader(std::move(input), readerOptions);
-  dwio::common::RowReaderOptions rowReaderOptions(readerOptions.scanSpec());
+  dwio::common::RowReaderOptions rowReaderOptions;
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   EXPECT_EQ(*reader->rowType(), *schema);
@@ -556,7 +556,7 @@ TEST_F(TextWriterTest, verifyMapAndArrayComplexTypesWithTextReader) {
   auto input =
       std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = readerFactory->createReader(std::move(input), readerOptions);
-  dwio::common::RowReaderOptions rowReaderOptions(readerOptions.scanSpec());
+  dwio::common::RowReaderOptions rowReaderOptions;
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   // Change the expected value
@@ -749,7 +749,7 @@ TEST_F(TextWriterTest, verifyArrayTypesWithTextReader) {
   auto input =
       std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = readerFactory->createReader(std::move(input), readerOptions);
-  dwio::common::RowReaderOptions rowReaderOptions(readerOptions.scanSpec());
+  dwio::common::RowReaderOptions rowReaderOptions;
 
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -988,7 +988,7 @@ TEST_F(TextWriterTest, verifyMapTypesWithTextReader) {
   auto input =
       std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = readerFactory->createReader(std::move(input), readerOptions);
-  dwio::common::RowReaderOptions rowReaderOptions(readerOptions.scanSpec());
+  dwio::common::RowReaderOptions rowReaderOptions;
 
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -1144,7 +1144,7 @@ TEST_F(TextWriterTest, verifyNestedRowTypesWithTextReader) {
   auto input =
       std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = readerFactory->createReader(std::move(input), readerOptions);
-  dwio::common::RowReaderOptions rowReaderOptions(readerOptions.scanSpec());
+  dwio::common::RowReaderOptions rowReaderOptions;
 
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -1533,7 +1533,7 @@ TEST_F(
   auto input =
       std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = readerFactory->createReader(std::move(input), readerOptions);
-  dwio::common::RowReaderOptions rowReaderOptions(readerOptions.scanSpec());
+  dwio::common::RowReaderOptions rowReaderOptions;
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   EXPECT_EQ(*reader->rowType(), *schema);
@@ -1663,7 +1663,7 @@ TEST_F(TextWriterTest, verifySimpleEscapeCharTestWithTextReader) {
   auto input =
       std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = readerFactory->createReader(std::move(input), readerOptions);
-  dwio::common::RowReaderOptions rowReaderOptions(readerOptions.scanSpec());
+  dwio::common::RowReaderOptions rowReaderOptions;
 
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -1796,7 +1796,7 @@ TEST_F(TextWriterTest, verifyCustomEscapeCharTestWithTextReader) {
   auto input =
       std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = readerFactory->createReader(std::move(input), readerOptions);
-  dwio::common::RowReaderOptions rowReaderOptions(readerOptions.scanSpec());
+  dwio::common::RowReaderOptions rowReaderOptions;
 
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -1919,7 +1919,7 @@ TEST_F(TextWriterTest, verifyHeaderTestWithTextReader) {
   auto input =
       std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
   auto reader = readerFactory->createReader(std::move(input), readerOptions);
-  dwio::common::RowReaderOptions rowReaderOptions(readerOptions.scanSpec());
+  dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setSkipRows(1);
 
   auto rowReader = reader->createRowReader(rowReaderOptions);
