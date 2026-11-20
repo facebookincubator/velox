@@ -24,6 +24,7 @@
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/dwio/common/compression/Compression.h"
 #include "velox/dwio/parquet/common/RleEncodingInternal.h"
+#include "velox/dwio/parquet/reader/BigEndianDecimal.h"
 #include "velox/dwio/parquet/reader/BooleanDecoder.h"
 #include "velox/dwio/parquet/reader/ByteStreamSplitDecoder.h"
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
@@ -325,6 +326,9 @@ class PageReader {
       } else if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED) {
         nullsFromFastPath = false;
         deltaBpDecoder_->readWithVisitor<true>(nulls, visitor);
+      } else if (type_->parquetType_ == thrift::Type::FIXED_LEN_BYTE_ARRAY) {
+        nullsFromFastPath = false;
+        readFixedLenDecimals<true>(nulls, visitor);
       } else {
         directDecoder_->readWithVisitor<true>(
             nulls, visitor, nullsFromFastPath);
@@ -335,6 +339,8 @@ class PageReader {
         dictionaryIdDecoder_->readWithVisitor<false>(nullptr, dictVisitor);
       } else if (encoding_ == thrift::Encoding::DELTA_BINARY_PACKED) {
         deltaBpDecoder_->readWithVisitor<false>(nulls, visitor);
+      } else if (type_->parquetType_ == thrift::Type::FIXED_LEN_BYTE_ARRAY) {
+        readFixedLenDecimals<false>(nulls, visitor);
       } else {
         directDecoder_->readWithVisitor<false>(
             nulls,
@@ -342,6 +348,24 @@ class PageReader {
             !(this->type_->type()->isShortDecimal() &&
               type_->parquetType_ != thrift::Type::INT64));
       }
+    }
+  }
+
+  // Reads a PLAIN or DELTA_BYTE_ARRAY page of a FIXED_LEN_BYTE_ARRAY column
+  // with a non-string visitor. Such a column is a decimal, read as int64_t or
+  // int128_t, and makeDecoder() rejects other encodings for it.
+  template <bool hasNulls, typename Visitor>
+  void readFixedLenDecimals(const uint64_t* nulls, Visitor visitor) {
+    VELOX_DCHECK(type_->type()->isDecimal());
+    if constexpr (kIsDecimalValueType<typename Visitor::DataType>) {
+      if (encoding_ == thrift::Encoding::DELTA_BYTE_ARRAY) {
+        deltaByteArrDecoder_->readWithVisitor<hasNulls>(nulls, visitor);
+      } else {
+        VELOX_DCHECK_EQ(encoding_, thrift::Encoding::PLAIN);
+        stringDecoder_->readWithVisitor<hasNulls>(nulls, visitor);
+      }
+    } else {
+      VELOX_UNREACHABLE();
     }
   }
 
@@ -565,7 +589,9 @@ class PageReader {
 
   const tz::TimeZone* sessionTimezone_{nullptr};
 
-  // Decoders. Only one will be set at a time.
+  // Decoders. A decoder set up for a page is kept for later pages of the column
+  // chunk, so more than one is set if the pages use different encodings.
+  // 'encoding_' selects the decoder of the current page.
   std::unique_ptr<dwio::common::DirectDecoder<true>> directDecoder_;
   std::unique_ptr<RleBpDataDecoder> dictionaryIdDecoder_;
   std::unique_ptr<StringDecoder> stringDecoder_;

@@ -20,6 +20,7 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Nulls.h"
+#include "velox/dwio/parquet/reader/BigEndianDecimal.h"
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
 
 namespace facebook::velox::parquet {
@@ -122,11 +123,15 @@ class DeltaByteArrayDecoder {
   /// Default-constructed instance is uninitialized; call reset() first.
   DeltaByteArrayDecoder() = default;
 
-  explicit DeltaByteArrayDecoder(const char* start) {
-    reset(start);
+  DeltaByteArrayDecoder(const char* start, std::optional<int32_t> fixedLength) {
+    reset(start, fixedLength);
   }
 
-  void reset(const char* start) {
+  /// Starts decoding the page at 'start'. 'fixedLength' is the type length of
+  /// a FIXED_LEN_BYTE_ARRAY column, which every value must match, or
+  /// std::nullopt for a BYTE_ARRAY column.
+  void reset(const char* start, std::optional<int32_t> fixedLength) {
+    fixedLength_ = fixedLength;
     prefixLenDecoder_.emplace(start);
     int64_t numPrefix = prefixLenDecoder_->validValuesCount();
     bufferedPrefixLength_.resize(numPrefix);
@@ -162,6 +167,12 @@ class DeltaByteArrayDecoder {
       memcpy(lastValueBuf_.data() + prefixLength, suffix.data(), suffix.size());
     }
     lastValueLen_ = static_cast<int32_t>(need);
+    if (fixedLength_.has_value()) {
+      VELOX_CHECK_EQ(
+          lastValueLen_,
+          *fixedLength_,
+          "DELTA_BYTE_ARRAY value length must equal the FIXED_LEN_BYTE_ARRAY type length");
+    }
 
     numValidValues_--;
     return {lastValueBuf_.data(), static_cast<size_t>(lastValueLen_)};
@@ -204,7 +215,13 @@ class DeltaByteArrayDecoder {
         }
 
         // We are at a non-null value on a row to visit.
-        toSkip = visitor.process(readString(), atEnd);
+        using T = typename Visitor::DataType;
+        if constexpr (kIsDecimalValueType<T>) {
+          toSkip =
+              visitor.process(decimalFromBigEndian<T>(readString()), atEnd);
+        } else {
+          toSkip = visitor.process(readString(), atEnd);
+        }
       }
       ++current;
       if (toSkip) {
@@ -220,6 +237,7 @@ class DeltaByteArrayDecoder {
  private:
   std::optional<DeltaBpDecoder> prefixLenDecoder_;
   std::optional<DeltaLengthByteArrayDecoder> suffixDecoder_;
+  std::optional<int32_t> fixedLength_;
 
   // The string_view returned by readString() aliases this buffer.
   std::vector<char> lastValueBuf_;

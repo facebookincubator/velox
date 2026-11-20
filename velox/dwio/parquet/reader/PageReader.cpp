@@ -532,6 +532,35 @@ void PageReader::readDictionaryBytes(char* dest, int32_t numBytes) {
   stats_.accumulateStat(ParquetRuntimeStats::kPageLoadTimeNsMetric, readNs);
 }
 
+namespace {
+
+// Converts 'numValues' big-endian decimals of 'typeLength' bytes each, packed
+// at the start of 'data', to 'T' in place. Values no wider than 'T' are
+// converted from the end and wider values from the start, so that writing an
+// output value overwrites only input values that are already converted.
+template <typename T>
+void decimalsFromBigEndianInPlace(
+    char* data,
+    int32_t numValues,
+    int32_t typeLength) {
+  auto* values = reinterpret_cast<T*>(data);
+  const auto convert = [&](int32_t i) {
+    values[i] = decimalFromBigEndian<T>(std::string_view(
+        data + static_cast<int64_t>(i) * typeLength, typeLength));
+  };
+  if (typeLength <= static_cast<int32_t>(sizeof(T))) {
+    for (auto i = numValues - 1; i >= 0; --i) {
+      convert(i);
+    }
+  } else {
+    for (auto i = 0; i < numValues; ++i) {
+      convert(i);
+    }
+  }
+}
+
+} // namespace
+
 void PageReader::prepareDictionary(const PageHeader& pageHeader) {
   dictionary_.numValues = *pageHeader.dictionary_page_header()->num_values();
   VELOX_CHECK_GE(
@@ -673,55 +702,19 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
           dictionary_.numValues,
           veloxTypeLength,
           "FIXED_LEN_BYTE_ARRAY dictionary Velox byte size");
-      VELOX_CHECK_LE(numParquetBytes, numVeloxBytes);
-      dictionary_.values = AlignedBuffer::allocate<char>(numVeloxBytes, &pool_);
+      dictionary_.values = AlignedBuffer::allocate<char>(
+          std::max(numParquetBytes, numVeloxBytes), &pool_);
       auto data = dictionary_.values->asMutable<char>();
       readDictionaryBytes(data, numParquetBytes);
+      // Parquet decimal values have a fixed typeLength_ and are in big-endian
+      // layout.
       if (type_->type()->isShortDecimal()) {
-        // Parquet decimal values have a fixed typeLength_ and are in big-endian
-        // layout.
-        if (numParquetBytes < numVeloxBytes) {
-          auto values = dictionary_.values->asMutable<int64_t>();
-          for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
-            // Expand the Parquet type length values to Velox type length.
-            // We start from the end to allow in-place expansion.
-            auto sourceValue = data + (i * parquetTypeLength);
-            int64_t value = *sourceValue >= 0 ? 0 : -1;
-            memcpy(
-                reinterpret_cast<uint8_t*>(&value) + veloxTypeLength -
-                    parquetTypeLength,
-                sourceValue,
-                parquetTypeLength);
-            values[i] = value;
-          }
-        }
-        auto values = dictionary_.values->asMutable<int64_t>();
-        for (auto i = 0; i < dictionary_.numValues; ++i) {
-          values[i] = __builtin_bswap64(values[i]);
-        }
+        decimalsFromBigEndianInPlace<int64_t>(
+            data, dictionary_.numValues, parquetTypeLength);
         break;
       } else if (type_->type()->isLongDecimal()) {
-        // Parquet decimal values have a fixed typeLength_ and are in big-endian
-        // layout.
-        if (numParquetBytes < numVeloxBytes) {
-          auto values = dictionary_.values->asMutable<int128_t>();
-          for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
-            // Expand the Parquet type length values to Velox type length.
-            // We start from the end to allow in-place expansion.
-            auto sourceValue = data + (i * parquetTypeLength);
-            int128_t value = *sourceValue >= 0 ? 0 : -1;
-            memcpy(
-                reinterpret_cast<uint8_t*>(&value) + veloxTypeLength -
-                    parquetTypeLength,
-                sourceValue,
-                parquetTypeLength);
-            values[i] = value;
-          }
-        }
-        auto values = dictionary_.values->asMutable<int128_t>();
-        for (auto i = 0; i < dictionary_.numValues; ++i) {
-          values[i] = bits::builtin_bswap128(values[i]);
-        }
+        decimalsFromBigEndianInPlace<int128_t>(
+            data, dictionary_.numValues, parquetTypeLength);
         break;
       }
       VELOX_UNSUPPORTED(
@@ -915,22 +908,14 @@ void PageReader::makeDecoder() {
           }
           break;
         case thrift::Type::FIXED_LEN_BYTE_ARRAY:
-          if (type_->type()->isVarbinary() || type_->type()->isVarchar()) {
-            if (stringDecoder_) {
-              stringDecoder_->reset(
-                  pageData_, pageData_ + encodedDataSize_, type_->typeLength_);
-            } else {
-              stringDecoder_ = std::make_unique<StringDecoder>(
-                  pageData_, pageData_ + encodedDataSize_, type_->typeLength_);
-            }
+          // Strings and big-endian decimals are both read as fixed-length
+          // byte strings.
+          if (stringDecoder_) {
+            stringDecoder_->reset(
+                pageData_, pageData_ + encodedDataSize_, type_->typeLength_);
           } else {
-            directDecoder_ =
-                std::make_unique<dwio::common::DirectDecoder<true>>(
-                    std::make_unique<dwio::common::SeekableArrayInputStream>(
-                        pageData_, encodedDataSize_),
-                    false,
-                    type_->typeLength_,
-                    true);
+            stringDecoder_ = std::make_unique<StringDecoder>(
+                pageData_, pageData_ + encodedDataSize_, type_->typeLength_);
           }
           break;
         default: {
@@ -975,15 +960,31 @@ void PageReader::makeDecoder() {
           VELOX_UNSUPPORTED("RLE decoder only supports BOOLEAN");
       }
       break;
-    case Encoding::DELTA_BYTE_ARRAY:
-      if (parquetType == thrift::Type::BYTE_ARRAY) {
-        if (!deltaByteArrDecoder_) {
-          deltaByteArrDecoder_ = std::make_unique<DeltaByteArrayDecoder>();
-        }
-        deltaByteArrDecoder_->reset(pageData_);
-        break;
+    case Encoding::DELTA_BYTE_ARRAY: {
+      // Decimals are supported as FIXED_LEN_BYTE_ARRAY only. Other types are
+      // read as strings from BYTE_ARRAY or FIXED_LEN_BYTE_ARRAY.
+      // TODO: Support BYTE_ARRAY decimals, which also need PLAIN and
+      // dictionary page support.
+      const bool isSupported =
+          parquetType == thrift::Type::FIXED_LEN_BYTE_ARRAY ||
+          (parquetType == thrift::Type::BYTE_ARRAY &&
+           !type_->type()->isDecimal());
+      if (!isSupported) {
+        VELOX_UNSUPPORTED(
+            "DELTA_BYTE_ARRAY encoding is supported only for FIXED_LEN_BYTE_ARRAY columns and non-decimal BYTE_ARRAY columns. Parquet type: {}, Velox type: {}",
+            parquetType,
+            type_->type());
       }
-      [[fallthrough]];
+      if (!deltaByteArrDecoder_) {
+        deltaByteArrDecoder_ = std::make_unique<DeltaByteArrayDecoder>();
+      }
+      deltaByteArrDecoder_->reset(
+          pageData_,
+          parquetType == thrift::Type::FIXED_LEN_BYTE_ARRAY
+              ? std::optional<int32_t>(type_->typeLength_)
+              : std::nullopt);
+      break;
+    }
     case Encoding::BYTE_STREAM_SPLIT: {
       // Decode the split byte streams into a flat buffer, then use
       // DirectDecoder to serve values through the standard visitor path.
@@ -1059,25 +1060,43 @@ void PageReader::skip(int64_t numRows) {
     return;
   }
 
-  // Skip the decoder
-  if (isDictionary()) {
-    dictionaryIdDecoder_->skip(toSkip);
-  } else if (directDecoder_) {
-    directDecoder_->skip(toSkip);
-  } else if (stringDecoder_) {
-    stringDecoder_->skip(toSkip);
-  } else if (booleanDecoder_) {
-    booleanDecoder_->skip(toSkip);
-  } else if (deltaBpDecoder_) {
-    deltaBpDecoder_->skip(toSkip);
-  } else if (deltaByteArrDecoder_) {
-    deltaByteArrDecoder_->skip(toSkip);
-  } else if (deltaLengthByteArrDecoder_) {
-    deltaLengthByteArrDecoder_->skip(toSkip);
-  } else if (rleBooleanDecoder_) {
-    rleBooleanDecoder_->skip(toSkip);
-  } else {
-    VELOX_FAIL("No decoder to skip");
+  // Skip the decoder of the current page. Decoders of earlier pages may also be
+  // set.
+  switch (encoding_) {
+    case Encoding::RLE_DICTIONARY:
+    case Encoding::PLAIN_DICTIONARY:
+      dictionaryIdDecoder_->skip(toSkip);
+      break;
+    case Encoding::PLAIN:
+      switch (type_->parquetType_.value()) {
+        case thrift::Type::BOOLEAN:
+          booleanDecoder_->skip(toSkip);
+          break;
+        case thrift::Type::BYTE_ARRAY:
+        case thrift::Type::FIXED_LEN_BYTE_ARRAY:
+          stringDecoder_->skip(toSkip);
+          break;
+        default:
+          directDecoder_->skip(toSkip);
+      }
+      break;
+    case Encoding::DELTA_BINARY_PACKED:
+      deltaBpDecoder_->skip(toSkip);
+      break;
+    case Encoding::RLE:
+      rleBooleanDecoder_->skip(toSkip);
+      break;
+    case Encoding::DELTA_BYTE_ARRAY:
+      deltaByteArrDecoder_->skip(toSkip);
+      break;
+    case Encoding::BYTE_STREAM_SPLIT:
+      directDecoder_->skip(toSkip);
+      break;
+    case Encoding::DELTA_LENGTH_BYTE_ARRAY:
+      deltaLengthByteArrDecoder_->skip(toSkip);
+      break;
+    default:
+      VELOX_UNREACHABLE("No decoder to skip for encoding: {}", encoding_);
   }
 }
 

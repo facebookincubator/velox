@@ -445,41 +445,57 @@ TEST_F(E2EFilterTest, shortDecimalDictionary) {
 TEST_F(E2EFilterTest, shortDecimalDirect) {
   options_.enableDictionary = false;
   options_.dataPageSize = 4 * 1024;
+  // The writer stores short decimals as INT32 or INT64 by default.
+  // DELTA_BYTE_ARRAY needs them as FIXED_LEN_BYTE_ARRAY.
+  options_.enableStoreDecimalAsInteger = false;
 
-  // decimal(8, 5) maps to 4 bytes FLBA in Parquet.
-  // decimal(10, 5) maps to 5 bytes FLBA in Parquet.
-  // decimal(17, 5) maps to 8 bytes FLBA in Parquet.
-  for (const auto& type : {
-           "shortdecimal_val:decimal(8, 5)",
-           "shortdecimal_val:decimal(10, 5)",
-           "shortdecimal_val:decimal(17, 5)",
+  for (const auto encoding : {
+           parquet::arrow::Encoding::kPlain,
+           parquet::arrow::Encoding::kDeltaByteArray,
        }) {
+    SCOPED_TRACE(fmt::format("Encoding: {}", static_cast<int>(encoding)));
+    options_.encoding = encoding;
+
+    // decimal(8, 5) maps to 4 bytes FLBA in Parquet.
+    // decimal(10, 5) maps to 5 bytes FLBA in Parquet.
+    // decimal(17, 5) maps to 8 bytes FLBA in Parquet.
+    for (const auto& type : {
+             "shortdecimal_val:decimal(8, 5)",
+             "shortdecimal_val:decimal(10, 5)",
+             "shortdecimal_val:decimal(17, 5)",
+         }) {
+      testWithTypes(
+          type,
+          [&]() {
+            makeIntDistribution<int64_t>(
+                "shortdecimal_val",
+                10, // min
+                100, // max
+                22, // repeats
+                19, // rareFrequency
+                -40'000'000, // rareMin
+                40'000'000, // rareMax
+                true);
+          },
+          false,
+          {"shortdecimal_val"},
+          20);
+      EXPECT_TRUE(columnChunkUsesEncoding(encoding));
+    }
+
     testWithTypes(
-        type,
+        "shortdecimal_val:decimal(17, 5)",
         [&]() {
-          makeIntDistribution<int64_t>(
+          useSuppliedValues<int64_t>(
               "shortdecimal_val",
-              10, // min
-              100, // max
-              22, // repeats
-              19, // rareFrequency
-              -999, // rareMin
-              30000, // rareMax
-              true);
+              0,
+              {-479, 99'999'999'999'999'999, -99'999'999'999'999'999});
         },
         false,
         {"shortdecimal_val"},
         20);
+    EXPECT_TRUE(columnChunkUsesEncoding(encoding));
   }
-
-  testWithTypes(
-      "shortdecimal_val:decimal(10, 5)",
-      [&]() {
-        useSuppliedValues<int64_t>("shortdecimal_val", 0, {-479, 40000000});
-      },
-      false,
-      {"shortdecimal_val"},
-      20);
 }
 
 TEST_F(E2EFilterTest, shortDecimalStoredAsInt64Direct) {
@@ -547,41 +563,50 @@ TEST_F(E2EFilterTest, longDecimalDirect) {
   options_.enableDictionary = false;
   options_.dataPageSize = 4 * 1024;
 
-  // decimal(30, 10) maps to 13 bytes FLBA in Parquet.
-  // decimal(37, 15) maps to 16 bytes FLBA in Parquet.
-  for (const auto& type : {
-           "longdecimal_val:decimal(30, 10)",
-           "longdecimal_val:decimal(37, 15)",
+  for (const auto encoding : {
+           parquet::arrow::Encoding::kPlain,
+           parquet::arrow::Encoding::kDeltaByteArray,
        }) {
+    SCOPED_TRACE(fmt::format("Encoding: {}", static_cast<int>(encoding)));
+    options_.encoding = encoding;
+
+    // decimal(30, 10) maps to 13 bytes FLBA in Parquet.
+    // decimal(37, 15) maps to 16 bytes FLBA in Parquet.
+    for (const auto& type : {
+             "longdecimal_val:decimal(30, 10)",
+             "longdecimal_val:decimal(37, 15)",
+         }) {
+      testWithTypes(
+          type,
+          [&]() {
+            makeIntDistribution<int128_t>(
+                "longdecimal_val",
+                10, // min
+                100, // max
+                22, // repeats
+                19, // rareFrequency
+                -999, // rareMin
+                30'000, // rareMax
+                true);
+          },
+          true,
+          {"longdecimal_val"},
+          20);
+      EXPECT_TRUE(columnChunkUsesEncoding(encoding));
+    }
+
+    const auto large = HugeInt::build(1'546'093'991, 4'054'979'645);
     testWithTypes(
-        type,
+        "longdecimal_val:decimal(30, 10)",
         [&]() {
-          makeIntDistribution<int128_t>(
-              "longdecimal_val",
-              10, // min
-              100, // max
-              22, // repeats
-              19, // rareFrequency
-              -999, // rareMin
-              30000, // rareMax
-              true);
+          useSuppliedValues<int128_t>(
+              "longdecimal_val", 0, {-479, large, -large});
         },
-        true,
+        false,
         {"longdecimal_val"},
         20);
+    EXPECT_TRUE(columnChunkUsesEncoding(encoding));
   }
-
-  testWithTypes(
-      "longdecimal_val:decimal(30, 10)",
-      [&]() {
-        useSuppliedValues<int128_t>(
-            "longdecimal_val",
-            0,
-            {-479, HugeInt::build(1546093991, 4054979645)});
-      },
-      false,
-      {"longdecimal_val"},
-      20);
 }
 
 TEST_F(E2EFilterTest, stringDirect) {
