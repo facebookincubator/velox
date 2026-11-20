@@ -1129,7 +1129,7 @@ TEST_F(ParquetWriterTest, largeMetadata) {
 
   const auto* sinkPtr = write(data, options, writerOptions);
 
-  auto readerOpts = makeDefaultReaderOptions();
+  auto readerOpts = makeDefaultReaderOptions(nullptr);
   readerOpts.setFooterSpeculativeIoSize(1024);
   readerOpts.setFilePreloadThreshold(1024 * 8);
 

@@ -126,6 +126,7 @@ class ReaderBase {
     return fileSchemaWithId_;
   }
 
+  /// Returns the ScanSpec from ReaderOptions, shared by row and index readers.
   const std::shared_ptr<velox::common::ScanSpec>& scanSpec() const {
     return scanSpec_;
   }

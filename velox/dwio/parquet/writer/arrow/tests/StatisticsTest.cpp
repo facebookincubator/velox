@@ -466,7 +466,7 @@ class TestStatistics : public PrimitiveTypedTest<TestType> {
 
     ASSERT_OK_AND_ASSIGN(auto buffer, sink->Finish());
 
-    auto file = ParquetTestFile::open(buffer, "StatisticsTest");
+    auto file = ParquetTestFile::open(buffer, "StatisticsTest", nullptr);
     auto& reader = file.reader();
     auto rowGroup = reader.fileMetaData().rowGroup(0);
     auto columnChunk = rowGroup.columnChunk(0);
@@ -1004,7 +1004,7 @@ class TestStatisticsSortOrder : public ::testing::Test {
   void verifyParquetStats() {
     ASSERT_OK_AND_ASSIGN(auto pbuffer, parquetSink_->Finish());
 
-    auto file = ParquetTestFile::open(pbuffer, "StatisticsTest");
+    auto file = ParquetTestFile::open(pbuffer, "StatisticsTest", nullptr);
     auto& reader = file.reader();
     auto rowGroup = reader.fileMetaData().rowGroup(0);
     for (int i = 0; i < static_cast<int>(fields_.size()); i++) {
@@ -1287,7 +1287,7 @@ TEST_F(TestStatisticsSortOrderFLBA, decimalSortOrder) {
 
   ASSERT_OK_AND_ASSIGN(auto pbuffer, parquetSink_->Finish());
 
-  auto file = ParquetTestFile::open(pbuffer, "StatisticsTest");
+  auto file = ParquetTestFile::open(pbuffer, "StatisticsTest", nullptr);
   auto& reader = file.reader();
   auto rowGroup = reader.fileMetaData().rowGroup(0);
   auto columnChunk = rowGroup.columnChunk(0);

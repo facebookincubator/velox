@@ -83,7 +83,7 @@ class ParquetReaderBuilder {
   /// this when tests should not select output columns explicitly—for example
   /// empty projection (count(*)), metadata-only reads, or reading via
   /// ParquetReader::rowType() without a predetermined projection.
-  ParquetReaderBuilder& withScanSpecOnly();
+  ParquetReaderBuilder& withoutColumnSelector();
 
   /// Overrides the default ReaderOptions. The supplied options must include a
   /// non-null ScanSpec, which is reused by the row reader.
@@ -101,7 +101,7 @@ class ParquetReaderBuilder {
   const dwio::common::MemorySink* buffer_{nullptr};
   RowTypePtr outputType_;
   std::optional<std::pair<uint64_t, uint64_t>> byteRange_;
-  bool withScanSpecOnly_{false};
+  bool useColumnSelector_{true};
   std::optional<dwio::common::ReaderOptions> readerOptions_;
 };
 
@@ -141,14 +141,14 @@ class ParquetTestBase : public testing::Test,
 
   std::unique_ptr<facebook::velox::parquet::ParquetReader> createReader(
       const std::string& fileName) {
-    return createReader(fileName, makeDefaultReaderOptions());
+    return createReader(fileName, makeDefaultReaderOptions(nullptr));
   }
 
   // Creates a ReaderOptions pre-populated with the test's shared IoStatistics
   // and the leaf memory pool. Callers needing extra settings should obtain a
   // copy via this method and then apply their overrides.
   dwio::common::ReaderOptions makeDefaultReaderOptions(
-      std::shared_ptr<velox::common::ScanSpec> scanSpec = nullptr) const;
+      std::shared_ptr<velox::common::ScanSpec> scanSpec) const;
 
   // Returns RowReaderOptions with a ColumnSelector for the given schema.
   dwio::common::RowReaderOptions makeRowReaderOpts(
@@ -245,13 +245,11 @@ class ParquetTestBase : public testing::Test,
 
   std::unique_ptr<ParquetReader> createReaderInMemory(
       const dwio::common::MemorySink& sink) {
-    return createReaderInMemory(sink, makeDefaultReaderOptions());
+    return createReaderInMemory(sink, makeDefaultReaderOptions(nullptr));
   }
 
-  /// Creates a RowReader for reader. When useColumnSelector is true (default),
-  /// RowReaderOptions include a ColumnSelector for rowType;
-  /// otherwise only a ScanSpec is set (see
-  /// ParquetReaderBuilder::withScanSpecOnly).
+  /// Creates a RowReader for reader. By default, its RowReaderOptions include
+  /// a ColumnSelector for rowType.
   std::unique_ptr<dwio::common::RowReader> createRowReaderFromReader(
       dwio::common::Reader& reader,
       const RowTypePtr& rowType,

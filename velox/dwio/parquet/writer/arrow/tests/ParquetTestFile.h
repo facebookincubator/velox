@@ -42,7 +42,7 @@ class ParquetTestFile {
   static ParquetTestFile open(
       const std::shared_ptr<::arrow::Buffer>& buffer,
       const std::string& poolName,
-      std::shared_ptr<common::ScanSpec> scanSpec = nullptr);
+      std::shared_ptr<common::ScanSpec> scanSpec);
 
   ParquetReader& reader() {
     return *reader_;

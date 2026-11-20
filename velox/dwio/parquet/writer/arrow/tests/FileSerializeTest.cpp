@@ -540,7 +540,8 @@ TEST(TestBufferedRowGroupWriter, disabledDictionary) {
   rgWriter->close();
   fileWriter->close();
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
-  auto file = test::ParquetTestFile::open(buffer, "DisabledDictionary");
+  auto file =
+      test::ParquetTestFile::open(buffer, "DisabledDictionary", nullptr);
   auto& reader = file.reader();
   ASSERT_EQ(1, reader.fileMetaData().numRowGroups());
   auto rowGroup = reader.fileMetaData().rowGroup(0);

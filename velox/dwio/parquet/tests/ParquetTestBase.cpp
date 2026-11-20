@@ -82,8 +82,8 @@ ParquetReaderBuilder& ParquetReaderBuilder::byteRange(
   return *this;
 }
 
-ParquetReaderBuilder& ParquetReaderBuilder::withScanSpecOnly() {
-  withScanSpecOnly_ = true;
+ParquetReaderBuilder& ParquetReaderBuilder::withoutColumnSelector() {
+  useColumnSelector_ = false;
   return *this;
 }
 
@@ -115,7 +115,7 @@ ParquetReaderBundle ParquetReaderBuilder::build() {
   }
 
   dwio::common::RowReaderOptions rowReaderOpts;
-  if (!withScanSpecOnly_) {
+  if (useColumnSelector_) {
     rowReaderOpts = makeRowReaderOptsWithSelector(outputType_);
   }
   if (byteRange_.has_value()) {
