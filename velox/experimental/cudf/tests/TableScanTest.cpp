@@ -35,8 +35,10 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/parquet/RegisterParquetReader.h"
@@ -251,8 +253,7 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
   }
 
   static PlanNodeStats getTableScanStats(const std::shared_ptr<Task>& task) {
-    const auto planStats = PlanNodeStats::extract(task->taskStats(), "0");
-    return std::move(planStats);
+    return PlanNodeStats::extract(task->taskStats(), "0");
   }
 
   // Returns whether the scan ran on the GPU, and expects the table scan adapter
@@ -599,6 +600,163 @@ TEST_P(TableScanTestParameterized, allColumnsWithRowGroupPasses) {
   ASSERT_TRUE(planStats.dynamicFilterStats.empty());
 }
 
+// The data source choice has to follow the query, not just this process:
+// CudfHiveDataSource produces CudfVectors, and a query that turned cuDF off
+// has CPU operators downstream that cannot consume them. The engine copies the
+// query's 'cudf.enabled' into the catalog's session properties, which is the
+// only per-query input a connector gets.
+TEST_F(TableScanTest, dataSourceFollowsQueryCudfEnabled) {
+  const auto hiveConnector =
+      facebook::velox::connector::ConnectorRegistry::tryGet(
+          kCudfHiveConnectorId);
+  ASSERT_NE(hiveConnector, nullptr);
+
+  const auto tableHandle = makeTableHandle("parquet_table", rowType_);
+  const auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType_);
+
+  auto makeQueryCtx =
+      [&](const facebook::velox::config::ConfigBase* sessionProperties) {
+        return facebook::velox::connector::ConnectorQueryCtx::Builder()
+            .operatorPool(pool_.get())
+            .connectorPool(pool_.get())
+            .sessionProperties(sessionProperties)
+            .queryId("query.TableScanTest")
+            .taskId("task.TableScanTest")
+            .planNodeId("0")
+            .build();
+      };
+
+  // Nothing set: the worker-level default, which this fixture leaves enabled.
+  const facebook::velox::config::ConfigBase defaultProperties{{}};
+  const auto defaultQueryCtx = makeQueryCtx(&defaultProperties);
+  const auto gpuDataSource = hiveConnector->createDataSource(
+      rowType_, tableHandle, assignments, defaultQueryCtx.get());
+  EXPECT_NE(
+      dynamic_cast<
+          facebook::velox::cudf_velox::connector::hive::CudfHiveDataSource*>(
+          gpuDataSource.get()),
+      nullptr);
+
+  // The query opted out, so the CPU data source reads the same table.
+  const facebook::velox::config::ConfigBase disabledProperties{
+      {{std::string(facebook::velox::cudf_velox::CudfConfig::kCudfEnabled),
+        "false"}}};
+  const auto disabledQueryCtx = makeQueryCtx(&disabledProperties);
+  const auto cpuDataSource = hiveConnector->createDataSource(
+      rowType_, tableHandle, assignments, disabledQueryCtx.get());
+  EXPECT_EQ(
+      dynamic_cast<
+          facebook::velox::cudf_velox::connector::hive::CudfHiveDataSource*>(
+          cpuDataSource.get()),
+      nullptr);
+  EXPECT_NE(
+      dynamic_cast<facebook::velox::connector::hive::HiveDataSource*>(
+          cpuDataSource.get()),
+      nullptr);
+}
+
+// The table scan adapter and the connector read 'cudf.enabled' from different
+// places -- the adapter from the query config, the connector from the
+// catalog's session properties -- so a query that sets only one of them makes
+// them disagree. The adapter decides whether the scan is followed by a
+// conversion operator, so a disagreement is not a performance question: the
+// conversion either receives a vector of the wrong residency or is missing
+// altogether. Each case below runs a real scan, which is what puts both
+// decisions in one pipeline; wasCudfScanUsed() asserts they agree.
+TEST_F(TableScanTest, scanFollowsQueryCudfEnabledEndToEnd) {
+  const auto rowType = ROW({"c0"}, {BIGINT()});
+  const auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  const auto assignments =
+      facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
+          rowType);
+
+  // 'sessionProperty' is what an engine copies into the catalog the scan
+  // reads, std::nullopt when it copies nothing.
+  const auto testScan = [&](bool processWideEnabled,
+                            bool queryConfigEnabled,
+                            std::optional<bool> sessionProperty,
+                            bool expectCudfScan) {
+    SCOPED_TRACE(
+        fmt::format(
+            "process-wide: {}, query config: {}, session property: {}",
+            processWideEnabled,
+            queryConfigEnabled,
+            sessionProperty.has_value() ? (*sessionProperty ? "true" : "false")
+                                        : "absent"));
+
+    auto& config = CudfConfig::getInstance();
+    const bool savedEnabled = config.enabled;
+    SCOPE_EXIT {
+      config.enabled = savedEnabled;
+    };
+    config.enabled = processWideEnabled;
+
+    const auto scanPlan = PlanBuilder(pool_.get())
+                              .startTableScan()
+                              .connectorId(kCudfHiveConnectorId)
+                              .outputType(rowType)
+                              .dataColumns(rowType)
+                              .assignments(assignments)
+                              .endTableScan()
+                              .planNode();
+
+    // A file no earlier scan read; see wasCudfScanUsed().
+    const auto filePath = TempFilePath::create();
+    writeToFile(filePath->getPath(), data);
+
+    AssertQueryBuilder builder(scanPlan);
+    builder.config(CudfConfig::kCudfEnabled, queryConfigEnabled);
+    if (sessionProperty.has_value()) {
+      builder.connectorSessionProperty(
+          kCudfHiveConnectorId,
+          CudfConfig::kCudfEnabled,
+          *sessionProperty ? "true" : "false");
+    }
+
+    std::shared_ptr<Task> task;
+    const auto actual = builder.splits(makeCudfHiveConnectorSplits({filePath}))
+                            .copyResults(pool(), task);
+
+    assertEqualResults({data}, {actual});
+    EXPECT_EQ(wasCudfScanUsed(task, scanPlan->id()), expectCudfScan);
+  };
+
+  // The baseline the other cases vary from: both inputs say the query may use
+  // the GPU.
+  testScan(
+      /*processWideEnabled=*/true,
+      /*queryConfigEnabled=*/true,
+      /*sessionProperty=*/true,
+      /*expectCudfScan=*/true);
+
+  // The catalog turns cuDF off for a query the adapter converts. The scan has
+  // to stay on the CPU, and the adapter has to know that.
+  testScan(
+      /*processWideEnabled=*/true,
+      /*queryConfigEnabled=*/true,
+      /*sessionProperty=*/false,
+      /*expectCudfScan=*/false);
+
+  // "Disable globally, enable per query", the setup CudfConfig::enabled
+  // documents. The engine copied nothing into the catalog, so the connector
+  // reads the process-wide default and leaves the scan on the CPU.
+  testScan(
+      /*processWideEnabled=*/false,
+      /*queryConfigEnabled=*/true,
+      /*sessionProperty=*/std::nullopt,
+      /*expectCudfScan=*/false);
+
+  // The query turned cuDF off and the engine copied that to the catalog. The
+  // whole pipeline is CPU, which is the case the connector gating added.
+  testScan(
+      /*processWideEnabled=*/true,
+      /*queryConfigEnabled=*/false,
+      /*sessionProperty=*/false,
+      /*expectCudfScan=*/false);
+}
+
 // Splits prepared in the background by the preloader must produce the same
 // results as splits prepared on the driver thread.
 TEST_F(TableScanTest, preloadSplits) {
@@ -618,7 +776,7 @@ TEST_F(TableScanTest, preloadSplits) {
   const auto planStats = PlanNodeStats::extract(task->taskStats(), plan->id());
   ASSERT_TRUE(planStats.hasCustomStat(TableScanStatNames::kPreloadedSplits));
   EXPECT_EQ(
-      customStats.at(std::string(TableScanStatNames::kPreloadedSplits)).sum,
+      planStats.customSum(TableScanStatNames::kPreloadedSplits),
       filePaths.size());
 }
 
@@ -723,8 +881,7 @@ TEST_F(TableScanTest, abandonPreloadedSplits) {
   // abandoned.
   const auto planStats = PlanNodeStats::extract(task->taskStats(), scanNodeId);
   ASSERT_TRUE(planStats.hasCustomStat(TableScanStatNames::kPreloadedSplits));
-  EXPECT_GE(
-      customStats.at(std::string(TableScanStatNames::kPreloadedSplits)).sum, 1);
+  EXPECT_GE(planStats.customSum(TableScanStatNames::kPreloadedSplits), 1);
 
   // Tear down while abandoned splits' payload fetches are still queued.
   task.reset();
@@ -992,7 +1149,7 @@ TEST_P(TableScanTestParameterized, scanOnNonDefaultGpu) {
   const auto planStats = PlanNodeStats::extract(task->taskStats(), plan->id());
   ASSERT_TRUE(planStats.hasCustomStat(TableScanStatNames::kPreloadedSplits));
   EXPECT_EQ(
-      customStats.at(std::string(TableScanStatNames::kPreloadedSplits)).sum,
+      planStats.customSum(TableScanStatNames::kPreloadedSplits),
       filePaths.size());
 }
 

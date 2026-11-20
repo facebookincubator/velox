@@ -75,8 +75,14 @@ struct CudfConfig {
   /// Initialize from a map with the above keys.
   void initialize(std::unordered_map<std::string, std::string>&&);
 
-  /// Enable cudf by default.
-  /// Clients can disable here and enable it via the QueryConfig as well.
+  /// Enable cuDF by default. A query may override it with the kCudfEnabled
+  /// key, which it has to set both in the QueryConfig, read by the driver
+  /// adapter, and in the connector session properties of every catalog it
+  /// reads, read by the cuDF connectors -- a connector sees no query config,
+  /// so a catalog without an entry falls back to this value. Clients that
+  /// disable here and enable per query therefore have to set the session
+  /// properties too, or their table scans stay on the CPU while the rest of
+  /// the query runs on the GPU.
   bool enabled{true};
 
   /// Enable debug printing.

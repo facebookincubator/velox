@@ -19,6 +19,10 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
 
+namespace facebook::velox::connector {
+class ConnectorQueryCtx;
+} // namespace facebook::velox::connector
+
 namespace facebook::velox::cudf_velox {
 
 class CompileState {
@@ -52,5 +56,22 @@ void unregisterCudf();
 
 /// Returns true if cuDF is registered.
 bool cudfIsRegistered();
+
+/// Returns true when the query behind 'connectorQueryCtx' may use cuDF: cuDF
+/// is registered in this process and the query did not turn it off through the
+/// 'cudf.enabled' (CudfConfig::kCudfEnabled) session property of the catalog
+/// being read. An absent value means the process-wide CudfConfig default.
+///
+/// Both a cuDF connector, before it hands out a GPU data source, and the table
+/// scan adapter, before it reports that scan as producing GPU output, have to
+/// ask this, and have to get the same answer: a scan that reads on the CPU and
+/// is compiled as a GPU scan gets no conversion operator after it, and the
+/// next operator a host vector it cannot read. The catalog's session
+/// properties are the only per-query input a connector has -- a
+/// ConnectorQueryCtx carries no query config -- so an engine that turns cuDF
+/// off for a query has to copy 'cudf.enabled' into the session properties of
+/// the catalogs it reads as well as into the query config.
+bool cudfIsEnabled(
+    const ::facebook::velox::connector::ConnectorQueryCtx& connectorQueryCtx);
 
 } // namespace facebook::velox::cudf_velox
