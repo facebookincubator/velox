@@ -386,10 +386,24 @@ Mathematical Functions
         SELECT not false; -- true
         SELECT not NULL; -- NULL
 
-.. spark:function:: pmod(n, m) -> [same as n]
+.. spark:function:: pmod(n, m) -> [same as n] (ANSI compliant)
 
-    Returns the positive remainder of n divided by m.
+    Returns the modulo after adjusting a negative remainder by the divisor.
+    Results are nonnegative when the divisor is positive; negative divisors can
+    produce negative results.
     Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, REAL and DOUBLE.
+    Both operands must have the same type.
+
+    Null operands return null. With ``spark.ansi_enabled=false``, zero divisors
+    return null; with ``spark.ansi_enabled=true``, they raise a division-by-zero
+    error. ::
+
+        SELECT pmod(-7, 3); -- 2
+        SELECT pmod(-7, -3); -- -1
+        SELECT pmod(-1, CAST(-2147483648 AS INT)); -- 2147483647
+        SELECT pmod(-6.0D, 3.0D); -- -0.0
+        SELECT pmod(1, 0); -- NULL with ANSI mode disabled
+        SELECT pmod(1, 0); -- Division by zero error with ANSI mode enabled
 
 .. spark:function:: power(x, p) -> double
 
