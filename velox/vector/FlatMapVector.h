@@ -333,6 +333,8 @@ class FlatMapVector : public BaseVector {
     return true;
   }
 
+  uint64_t estimateFlatSize() const override;
+
   /// Returns the hash of the value at the given index in this vector.
   uint64_t hashValueAt(vector_size_t index) const override;
 
@@ -469,14 +471,7 @@ class FlatMapVector : public BaseVector {
       vector_size_t wrappedOtherIndex,
       CompareFlags flags) const;
 
-  uint64_t retainedSizeImpl(
-      uint64_t& /*totalStringBufferSize*/) const override {
-    // TODO: since FlatMapVector didn't override BaseVector::retainedSize(),
-    // this override of retainedSizeImpl keeps the original behavior of
-    // FlatMapVector::retainedSize(). We should update this method to reflect
-    // the actual memory usage of FlatMapVector.
-    return BaseVector::retainedSizeImpl();
-  }
+  uint64_t retainedSizeImpl(uint64_t& totalStringBufferSize) const override;
 
   // Vector containing the distinct map keys.
   VectorPtr distinctKeys_;
