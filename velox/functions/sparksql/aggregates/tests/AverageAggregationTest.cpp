@@ -60,20 +60,22 @@ class AverageAggregationTest : public AggregationTestBase {
                 intermediateType, "c0")});
     avgAggregate.rawInputTypes = {intermediateType};
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto child =
-        PlanBuilder(planNodeIdGenerator).values({intermediateInput}).planNode();
-
-    return std::make_shared<core::AggregationNode>(
-        planNodeIdGenerator->next(),
-        core::AggregationNode::Step::kSingle,
-        std::vector<core::FieldAccessTypedExprPtr>{},
-        std::vector<core::FieldAccessTypedExprPtr>{},
-        std::vector<std::string>{"c0"},
-        std::vector{avgAggregate},
-        /*ignoreNullKeys=*/false,
-        /*noGroupsSpanBatches=*/false,
-        std::move(child));
+    return PlanBuilder()
+        .values(intermediateInput)
+        .addNode(
+            [&](const core::PlanNodeId& id, const core::PlanNodePtr& source) {
+              return std::make_shared<core::AggregationNode>(
+                  id,
+                  core::AggregationNode::Step::kSingle,
+                  std::vector<core::FieldAccessTypedExprPtr>{},
+                  std::vector<core::FieldAccessTypedExprPtr>{},
+                  std::vector<std::string>{"c0"},
+                  std::vector{avgAggregate},
+                  /*ignoreNullKeys=*/false,
+                  /*noGroupsSpanBatches=*/false,
+                  source);
+            })
+        .planNode();
   }
 };
 
@@ -323,7 +325,7 @@ TEST_F(AverageAggregationTest, avgDecimalCompanionPartial) {
   auto input = makeRowVector(
       {makeFlatVector<int64_t>(shortDecimalRawVector, DECIMAL(12, 1))});
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .singleAggregation({}, {"spark_avg_partial(c0)"})
                   .planNode();
   const std::vector<int128_t> sumVector = {sum};
@@ -341,7 +343,7 @@ TEST_F(AverageAggregationTest, avgDecimalCompanionMerge) {
        makeFlatVector<int64_t>(std::vector<int64_t>{10, 10, 10})})});
 
   auto plan = PlanBuilder()
-                  .values({intermediateInput})
+                  .values(intermediateInput)
                   .singleAggregation({}, {"spark_avg_merge(c0)"})
                   .planNode();
   auto expected = makeRowVector({makeRowVector(

@@ -37,7 +37,7 @@ add_library(
   TpcdsQueryBuilder.cpp
   VeloxPlanLoader.cpp
   VectorTestUtil.cpp
-  PortUtil.cpp
+  Ports.cpp
   SerializedPageUtil.cpp
 )
 velox_add_test_headers(
@@ -57,6 +57,7 @@ velox_add_test_headers(
   OperatorTestBase.h
   PlanBuilder.h
   PortUtil.h
+  Ports.h
   QueryAssertions.h
   RowContainerTestBase.h
   SerializedPageUtil.h
@@ -79,6 +80,7 @@ target_link_libraries(
   velox_core
   velox_exception
   velox_expression
+  velox_async_rpc_function_registry
   velox_parse_parser
   velox_duckdb_conversion
   velox_dwio_common
