@@ -68,7 +68,7 @@ ColumnOrView JitExpression::eval(
           expr_.cudfTree_.back(),
           {},
           stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          withTempMr(mr));
     }
   }();
   if (finalize) {
@@ -76,11 +76,7 @@ ColumnOrView JitExpression::eval(
         cudf_velox::veloxToCudfDataType(expr_.expr_->type());
     auto resultView = asView(result);
     if (resultView.type() != requestedType) {
-      result = cudf::cast(
-          resultView,
-          requestedType,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+      result = cudf::cast(resultView, requestedType, stream, withTempMr(mr));
     }
   }
   return result;

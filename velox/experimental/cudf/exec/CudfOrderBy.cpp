@@ -117,7 +117,7 @@ void CudfOrderBy::doNoMoreInput() {
       columnOrder_,
       nullOrder_,
       stream,
-      cudf::memory_resources{get_output_mr(), get_temp_mr()});
+      withTempMr(get_output_mr()));
   auto const size = result->num_rows();
   outputTable_ = std::make_shared<CudfVector>(
       pool(), outputType_, size, std::move(result), stream);

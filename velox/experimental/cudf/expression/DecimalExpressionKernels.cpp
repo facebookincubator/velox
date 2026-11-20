@@ -76,11 +76,7 @@ std::unique_ptr<cudf::column> makeAllNullDecimalColumn(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   return cudf::make_fixed_width_column(
-      outputType,
-      size,
-      cudf::mask_state::ALL_NULL,
-      stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      outputType, size, cudf::mask_state::ALL_NULL, stream, withTempMr(mr));
 }
 
 void checkDecimalDivideTypes(cudf::type_id inType, cudf::type_id outType) {
@@ -171,17 +167,15 @@ std::unique_ptr<cudf::column> decimalDivide(
   checkDecimalDivideTypes(inType, outType);
 
   // Precompute the null stencil so the kernel never calls set_null.
-  auto [nullMask, nullCount] = cudf::bitmask_and(
-      cudf::table_view({lhs, rhs}),
-      stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+  auto [nullMask, nullCount] =
+      cudf::bitmask_and(cudf::table_view({lhs, rhs}), stream, withTempMr(mr));
   auto out = cudf::make_fixed_width_column(
       outputType,
       lhs.size(),
       std::move(nullMask),
       nullCount,
       stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      withTempMr(mr));
 
   const __int128_t rescaleFactor = DecimalUtil::kPowersOfTen[aRescale];
   checkDecimalBinaryOpStatus(
@@ -220,15 +214,14 @@ std::unique_ptr<cudf::column> decimalDivide(
   }
 
   // The scalar is valid here, so the column's mask is the whole stencil.
-  auto nullMask = cudf::copy_bitmask(
-      lhs, stream, cudf::memory_resources{mr, get_temp_mr()});
+  auto nullMask = cudf::copy_bitmask(lhs, stream, withTempMr(mr));
   auto out = cudf::make_fixed_width_column(
       outputType,
       lhs.size(),
       std::move(nullMask),
       lhs.null_count(),
       stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      withTempMr(mr));
 
   auto rhsValue = detail::getDecimalScalarValue(rhs, stream);
 
@@ -272,15 +265,14 @@ std::unique_ptr<cudf::column> decimalDivide(
   }
 
   // The scalar is valid here, so the column's mask is the whole stencil.
-  auto nullMask = cudf::copy_bitmask(
-      rhs, stream, cudf::memory_resources{mr, get_temp_mr()});
+  auto nullMask = cudf::copy_bitmask(rhs, stream, withTempMr(mr));
   auto out = cudf::make_fixed_width_column(
       outputType,
       rhs.size(),
       std::move(nullMask),
       rhs.null_count(),
       stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      withTempMr(mr));
 
   auto lhsValue = detail::getDecimalScalarValue(lhs, stream);
 

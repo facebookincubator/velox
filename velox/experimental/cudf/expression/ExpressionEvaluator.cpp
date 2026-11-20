@@ -163,14 +163,14 @@ std::unique_ptr<cudf::scalar> castDecimalScalar(
           numeric::scale_type{targetType.scale()},
           false,
           stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          withTempMr(mr));
     }
     return std::make_unique<cudf::fixed_point_scalar<numeric::decimal64>>(
         0,
         numeric::scale_type{targetType.scale()},
         false,
         stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        withTempMr(mr));
   }
 
   __int128_t rep;
@@ -197,16 +197,13 @@ std::unique_ptr<cudf::scalar> castDecimalScalar(
 
   if (targetType.id() == cudf::type_id::DECIMAL128) {
     return cudf::make_fixed_point_scalar<numeric::decimal128>(
-        rep,
-        numeric::scale_type{targetType.scale()},
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        rep, numeric::scale_type{targetType.scale()}, stream, withTempMr(mr));
   }
   return cudf::make_fixed_point_scalar<numeric::decimal64>(
       static_cast<int64_t>(rep),
       numeric::scale_type{targetType.scale()},
       stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      withTempMr(mr));
 }
 
 int32_t getDecimalPrecision(const TypePtr& type) {
@@ -444,7 +441,7 @@ void checkAllTrue(
       *cudf::make_all_aggregation<cudf::reduce_aggregation>(),
       boolType,
       stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      withTempMr(mr));
   auto* result = static_cast<cudf::scalar_type_t<bool>*>(allTrue.get());
   VELOX_USER_CHECK(
       result->is_valid(stream) && result->value(stream), "{}", userMessage);
@@ -473,13 +470,9 @@ class SplitFunction : public CudfFunction {
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     cudf::string_scalar delimiterScalar(
-        delimiter_, true, stream, cudf::memory_resources{mr, get_temp_mr()});
+        delimiter_, true, stream, withTempMr(mr));
     return cudf::strings::split_record(
-        inputCol,
-        delimiterScalar,
-        maxSplitCount_,
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        inputCol, delimiterScalar, maxSplitCount_, stream, withTempMr(mr));
   };
 
  private:
@@ -861,7 +854,7 @@ std::unique_ptr<cudf::column> yearsOf(
           {},
           std::nullopt,
           stream,
-          cudf::memory_resources{mr, get_temp_mr()})
+          withTempMr(mr))
           ->release()
           .front());
 }
@@ -889,7 +882,7 @@ std::unique_ptr<cudf::column> castTemporalToVarchar(
           "%Y" + afterYear,
           cudf::strings_column_view{},
           stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          withTempMr(mr));
     case YearRange::kFormatted:
       break;
     case YearRange::kBeyond:
@@ -1004,11 +997,7 @@ class CastFunction : public CudfFunction {
     if (temporalToVarchar_) {
       return castTemporalToVarchar(inputCol, isDate_, stream, mr);
     }
-    return cudf::cast(
-        inputCol,
-        targetCudfType_,
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+    return cudf::cast(inputCol, targetCudfType_, stream, withTempMr(mr));
   }
 
  private:
@@ -1037,7 +1026,7 @@ class CastFunction : public CudfFunction {
                {},
                std::nullopt,
                stream,
-               cudf::memory_resources{mr, get_temp_mr()})
+               withTempMr(mr))
         ->release();
   }
 
@@ -1175,8 +1164,7 @@ class CardinalityFunction : public CudfFunction {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    return cudf::lists::count_elements(
-        inputCol, stream, cudf::memory_resources{mr, get_temp_mr()});
+    return cudf::lists::count_elements(inputCol, stream, withTempMr(mr));
   }
 };
 
@@ -1191,10 +1179,7 @@ class IsNotNullFunction : public CudfFunction {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     VELOX_CHECK_EQ(inputColumns.size(), 1, "isnotnull expects 1 input");
-    return cudf::is_valid(
-        asView(inputColumns[0]),
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+    return cudf::is_valid(asView(inputColumns[0]), stream, withTempMr(mr));
   }
 };
 
@@ -1306,7 +1291,7 @@ __device__ void velox_round_double(
           {},
           std::nullopt,
           stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          withTempMr(mr));
       return std::move(transformed->release().front());
     }
 
@@ -1315,7 +1300,7 @@ __device__ void velox_round_double(
         scale_,
         cudf::rounding_method::HALF_UP,
         stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        withTempMr(mr));
   }
 
  private:
@@ -1347,11 +1332,7 @@ std::unique_ptr<cudf::column> finalizeDecimalDivision(
   if (result->type() == resultType) {
     return result;
   }
-  return cudf::cast(
-      result->view(),
-      resultType,
-      stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+  return cudf::cast(result->view(), resultType, stream, withTempMr(mr));
 }
 
 class BinaryFunction : public CudfFunction {
@@ -1406,21 +1387,13 @@ class BinaryFunction : public CudfFunction {
           if (lhsView.type().id() == cudf::type_id::DECIMAL64) {
             auto castType = cudf::data_type{
                 cudf::type_id::DECIMAL128, lhsView.type().scale()};
-            lhsCast = cudf::cast(
-                lhsView,
-                castType,
-                stream,
-                cudf::memory_resources{mr, get_temp_mr()});
+            lhsCast = cudf::cast(lhsView, castType, stream, withTempMr(mr));
             lhsView = lhsCast->view();
           }
           if (rhsView.type().id() == cudf::type_id::DECIMAL64) {
             auto castType = cudf::data_type{
                 cudf::type_id::DECIMAL128, rhsView.type().scale()};
-            rhsCast = cudf::cast(
-                rhsView,
-                castType,
-                stream,
-                cudf::memory_resources{mr, get_temp_mr()});
+            rhsCast = cudf::cast(rhsView, castType, stream, withTempMr(mr));
             rhsView = rhsCast->view();
           }
         }
@@ -1448,29 +1421,16 @@ class BinaryFunction : public CudfFunction {
         std::unique_ptr<cudf::column> lhsCast;
         std::unique_ptr<cudf::column> rhsCast;
         if (lhsView.type() != targetType) {
-          lhsCast = cudf::cast(
-              lhsView,
-              targetType,
-              stream,
-              cudf::memory_resources{mr, get_temp_mr()});
+          lhsCast = cudf::cast(lhsView, targetType, stream, withTempMr(mr));
           lhsView = lhsCast->view();
         }
         if (rhsView.type() != targetType) {
-          rhsCast = cudf::cast(
-              rhsView,
-              targetType,
-              stream,
-              cudf::memory_resources{mr, get_temp_mr()});
+          rhsCast = cudf::cast(rhsView, targetType, stream, withTempMr(mr));
           rhsView = rhsCast->view();
         }
         // @TODO Check for divide-by-zero as in the DECIMAL case above?
         return cudf::binary_operation(
-            lhsView,
-            rhsView,
-            op_,
-            type_,
-            stream,
-            cudf::memory_resources{mr, get_temp_mr()});
+            lhsView, rhsView, op_, type_, stream, withTempMr(mr));
       }
       if (cudf::is_fixed_point(type_)) {
         if (op_ == cudf::binary_operator::ADD ||
@@ -1489,12 +1449,7 @@ class BinaryFunction : public CudfFunction {
       }
       // @TODO Check for divide-by-zero as in the DECIMAL case above?
       return cudf::binary_operation(
-          lhsView,
-          rhsView,
-          op_,
-          type_,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          lhsView, rhsView, op_, type_, stream, withTempMr(mr));
     } else if (left_ == nullptr) {
       if (op_ == cudf::binary_operator::DIV && cudf::is_fixed_point(type_)) {
         if (decimalScalarIsZero(*right_, stream)) {
@@ -1509,7 +1464,7 @@ class BinaryFunction : public CudfFunction {
               lhsView,
               cudf::data_type{workingType.id(), lhsView.type().scale()},
               stream,
-              cudf::memory_resources{mr, get_temp_mr()});
+              withTempMr(mr));
           lhsView = lhsCast->view();
         }
         auto lhsScale = -lhsView.type().scale();
@@ -1534,30 +1489,16 @@ class BinaryFunction : public CudfFunction {
             cudf::data_type{targetTypeId, numeric::scale_type{-targetScale}};
         std::unique_ptr<cudf::column> lhsCast;
         if (lhsView.type() != targetType) {
-          lhsCast = cudf::cast(
-              lhsView,
-              targetType,
-              stream,
-              cudf::memory_resources{mr, get_temp_mr()});
+          lhsCast = cudf::cast(lhsView, targetType, stream, withTempMr(mr));
           lhsView = lhsCast->view();
         }
         if (right_->type() != targetType) {
           auto rhsScalar = castDecimalScalar(*right_, targetType, stream, mr);
           return cudf::binary_operation(
-              lhsView,
-              *rhsScalar,
-              op_,
-              type_,
-              stream,
-              cudf::memory_resources{mr, get_temp_mr()});
+              lhsView, *rhsScalar, op_, type_, stream, withTempMr(mr));
         }
         return cudf::binary_operation(
-            lhsView,
-            *right_,
-            op_,
-            type_,
-            stream,
-            cudf::memory_resources{mr, get_temp_mr()});
+            lhsView, *right_, op_, type_, stream, withTempMr(mr));
       }
       if (cudf::is_fixed_point(type_)) {
         if (op_ == cudf::binary_operator::ADD ||
@@ -1571,12 +1512,7 @@ class BinaryFunction : public CudfFunction {
         }
       }
       return cudf::binary_operation(
-          asView(inputColumns[0]),
-          *right_,
-          op_,
-          type_,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          asView(inputColumns[0]), *right_, op_, type_, stream, withTempMr(mr));
     }
     if (op_ == cudf::binary_operator::DIV && cudf::is_fixed_point(type_)) {
       auto rhsView = asView(inputColumns[0]);
@@ -1588,7 +1524,7 @@ class BinaryFunction : public CudfFunction {
             rhsView,
             cudf::data_type{workingType.id(), rhsView.type().scale()},
             stream,
-            cudf::memory_resources{mr, get_temp_mr()});
+            withTempMr(mr));
         rhsView = rhsCast->view();
       }
       auto lhsScale = -left_->type().scale();
@@ -1613,30 +1549,16 @@ class BinaryFunction : public CudfFunction {
           cudf::data_type{targetTypeId, numeric::scale_type{-targetScale}};
       std::unique_ptr<cudf::column> rhsCast;
       if (rhsView.type() != targetType) {
-        rhsCast = cudf::cast(
-            rhsView,
-            targetType,
-            stream,
-            cudf::memory_resources{mr, get_temp_mr()});
+        rhsCast = cudf::cast(rhsView, targetType, stream, withTempMr(mr));
         rhsView = rhsCast->view();
       }
       if (left_->type() != targetType) {
         auto lhsScalar = castDecimalScalar(*left_, targetType, stream, mr);
         return cudf::binary_operation(
-            *lhsScalar,
-            rhsView,
-            op_,
-            type_,
-            stream,
-            cudf::memory_resources{mr, get_temp_mr()});
+            *lhsScalar, rhsView, op_, type_, stream, withTempMr(mr));
       }
       return cudf::binary_operation(
-          *left_,
-          rhsView,
-          op_,
-          type_,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          *left_, rhsView, op_, type_, stream, withTempMr(mr));
     }
     if (cudf::is_fixed_point(type_)) {
       if (op_ == cudf::binary_operator::ADD ||
@@ -1650,12 +1572,7 @@ class BinaryFunction : public CudfFunction {
       }
     }
     return cudf::binary_operation(
-        *left_,
-        rhsView,
-        op_,
-        type_,
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        *left_, rhsView, op_, type_, stream, withTempMr(mr));
   }
 
  private:
@@ -1721,10 +1638,7 @@ class LogicalFunction : public CudfFunction {
     // columns if not all the inputs are literals.
     if (shortCircuitScalar_) {
       return cudf::make_column_from_scalar(
-          *shortCircuitScalar_,
-          rowCount,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          *shortCircuitScalar_, rowCount, stream, withTempMr(mr));
     }
 
     // Now build the vector of actual operands, each of which is either a
@@ -1755,10 +1669,7 @@ class LogicalFunction : public CudfFunction {
       const auto& only = operands[0];
       if (only.scalar) {
         return cudf::make_column_from_scalar(
-            *only.scalar,
-            rowCount,
-            stream,
-            cudf::memory_resources{mr, get_temp_mr()});
+            *only.scalar, rowCount, stream, withTempMr(mr));
       }
       return ColumnOrView(only.column);
     }
@@ -1774,41 +1685,18 @@ class LogicalFunction : public CudfFunction {
       // result was not determined in the constructor, for example, if the
       // inputs are 'true OR true' or 'false AND false'.
       auto tmp = cudf::make_column_from_scalar(
-          *left.scalar,
-          rowCount,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          *left.scalar, rowCount, stream, withTempMr(mr));
       result = cudf::binary_operation(
-          tmp->view(),
-          *right.scalar,
-          op_,
-          kBoolType,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          tmp->view(), *right.scalar, op_, kBoolType, stream, withTempMr(mr));
     } else if (left.scalar) {
       result = cudf::binary_operation(
-          *left.scalar,
-          right.column,
-          op_,
-          kBoolType,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          *left.scalar, right.column, op_, kBoolType, stream, withTempMr(mr));
     } else if (right.scalar) {
       result = cudf::binary_operation(
-          left.column,
-          *right.scalar,
-          op_,
-          kBoolType,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          left.column, *right.scalar, op_, kBoolType, stream, withTempMr(mr));
     } else {
       result = cudf::binary_operation(
-          left.column,
-          right.column,
-          op_,
-          kBoolType,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          left.column, right.column, op_, kBoolType, stream, withTempMr(mr));
     }
     for (size_t i = 2; i < operands.size(); ++i) {
       const auto& next = operands[i];
@@ -1819,7 +1707,7 @@ class LogicalFunction : public CudfFunction {
             op_,
             kBoolType,
             stream,
-            cudf::memory_resources{mr, get_temp_mr()});
+            withTempMr(mr));
       } else {
         result = cudf::binary_operation(
             result->view(),
@@ -1827,7 +1715,7 @@ class LogicalFunction : public CudfFunction {
             op_,
             kBoolType,
             stream,
-            cudf::memory_resources{mr, get_temp_mr()});
+            withTempMr(mr));
       }
     }
     return result;
@@ -1860,10 +1748,7 @@ class UnaryFunction : public CudfFunction {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     return cudf::unary_operation(
-        asView(inputColumns[0]),
-        op_,
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        asView(inputColumns[0]), op_, stream, withTempMr(mr));
   }
 
  private:
@@ -1903,7 +1788,7 @@ class BetweenFunction : public CudfFunction {
           cudf::binary_operator::GREATER_EQUAL,
           kBoolType,
           stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          withTempMr(mr));
     } else {
       geResultColumn = cudf::binary_operation(
           asView(inputColumns[0]),
@@ -1911,7 +1796,7 @@ class BetweenFunction : public CudfFunction {
           cudf::binary_operator::GREATER_EQUAL,
           kBoolType,
           stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          withTempMr(mr));
     }
     if (maxLiteral_) {
       leResultColumn = cudf::binary_operation(
@@ -1920,7 +1805,7 @@ class BetweenFunction : public CudfFunction {
           cudf::binary_operator::LESS_EQUAL,
           kBoolType,
           stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          withTempMr(mr));
     } else {
       leResultColumn = cudf::binary_operation(
           asView(inputColumns[0]),
@@ -1928,7 +1813,7 @@ class BetweenFunction : public CudfFunction {
           cudf::binary_operator::LESS_EQUAL,
           kBoolType,
           stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          withTempMr(mr));
     }
     return cudf::binary_operation(
         geResultColumn->view(),
@@ -1936,7 +1821,7 @@ class BetweenFunction : public CudfFunction {
         cudf::binary_operator::LOGICAL_AND,
         kBoolType,
         stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        withTempMr(mr));
   }
 
  private:
@@ -2004,7 +1889,7 @@ class GreatestLeastFunction : public CudfFunction {
     // All inputs were constant -- return the pre-folded scalar as a column.
     if (order_.empty()) {
       return cudf::make_column_from_scalar(
-          *foldedScalar_, 1, stream, cudf::memory_resources{mr, get_temp_mr()});
+          *foldedScalar_, 1, stream, withTempMr(mr));
     }
 
     // Accumulate across column inputs.
@@ -2018,7 +1903,7 @@ class GreatestLeastFunction : public CudfFunction {
           op_,
           type_,
           stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          withTempMr(mr));
     }
 
     // Apply the folded constant as a final (column, scalar) operation.
@@ -2026,12 +1911,7 @@ class GreatestLeastFunction : public CudfFunction {
       cudf::column_view lhs =
           result ? result->view() : asView(inputColumns[order_[0]]);
       result = cudf::binary_operation(
-          lhs,
-          *foldedScalar_,
-          op_,
-          type_,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          lhs, *foldedScalar_, op_, type_, stream, withTempMr(mr));
     }
     return result;
   }
@@ -2103,7 +1983,7 @@ class SwitchFunction : public CudfFunction {
     const auto* right = right_.get();
     if (!hasElseClause_) {
       nullElse = cudf::make_default_constructed_scalar(
-          resultType_, stream, cudf::memory_resources{mr, get_temp_mr()});
+          resultType_, stream, withTempMr(mr));
       right = nullElse.get();
     }
     if (left_ == nullptr && right == nullptr) {
@@ -2112,29 +1992,25 @@ class SwitchFunction : public CudfFunction {
           asView(inputColumns[2]),
           asView(inputColumns[0]),
           stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          withTempMr(mr));
     } else if (left_ == nullptr) {
       return cudf::copy_if_else(
           asView(inputColumns[1]),
           *right,
           asView(inputColumns[0]),
           stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          withTempMr(mr));
     } else if (right == nullptr) {
       return cudf::copy_if_else(
           *left_,
           asView(inputColumns[1]),
           asView(inputColumns[0]),
           stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          withTempMr(mr));
     }
     // right != null and left != null
     return cudf::copy_if_else(
-        *left_,
-        *right,
-        asView(inputColumns[0]),
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        *left_, *right, asView(inputColumns[0]), stream, withTempMr(mr));
   }
 
  private:
@@ -2179,10 +2055,7 @@ class CoalesceFunction : public CudfFunction {
       }
       auto size = asView(inputColumns[0]).size();
       return cudf::make_column_from_scalar(
-          *literalScalar_,
-          size,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          *literalScalar_, size, stream, withTempMr(mr));
     }
 
     VELOX_CHECK(
@@ -2199,18 +2072,12 @@ class CoalesceFunction : public CudfFunction {
     size_t stop = std::min(numColumnsBeforeLiteral_, inputColumns.size());
     for (size_t i = 1; i < stop && asView(result).has_nulls(); ++i) {
       result = cudf::replace_nulls(
-          asView(result),
-          asView(inputColumns[i]),
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          asView(result), asView(inputColumns[i]), stream, withTempMr(mr));
     }
 
     if (literalScalar_ && asView(result).has_nulls()) {
       result = cudf::replace_nulls(
-          asView(result),
-          *literalScalar_,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          asView(result), *literalScalar_, stream, withTempMr(mr));
     }
 
     return result;
@@ -2237,10 +2104,7 @@ class ExtractComponentFunction : public CudfFunction {
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     return cudf::datetime::extract_datetime_component(
-        inputCol,
-        component_,
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        inputCol, component_, stream, withTempMr(mr));
   }
 
  private:
@@ -2273,8 +2137,7 @@ class QuarterFunction : public CudfFunction {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    return cudf::datetime::extract_quarter(
-        inputCol, stream, cudf::memory_resources{mr, get_temp_mr()});
+    return cudf::datetime::extract_quarter(inputCol, stream, withTempMr(mr));
   }
 };
 
@@ -2290,8 +2153,7 @@ class DayOfYearFunction : public CudfFunction {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    return cudf::datetime::day_of_year(
-        inputCol, stream, cudf::memory_resources{mr, get_temp_mr()});
+    return cudf::datetime::day_of_year(inputCol, stream, withTempMr(mr));
   }
 };
 
@@ -2308,16 +2170,12 @@ class WeekFunction : public CudfFunction {
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     auto weekStrings = cudf::strings::from_timestamps(
-        inputCol,
-        "%V",
-        cudf::strings_column_view{},
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        inputCol, "%V", cudf::strings_column_view{}, stream, withTempMr(mr));
     return cudf::strings::to_integers(
         cudf::strings_column_view(weekStrings->view()),
         cudf::data_type(cudf::type_id::INT32),
         stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        withTempMr(mr));
   }
 };
 
@@ -2336,16 +2194,12 @@ class YearOfWeekFunction : public CudfFunction {
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
     auto yearStrings = cudf::strings::from_timestamps(
-        inputCol,
-        "%G",
-        cudf::strings_column_view{},
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        inputCol, "%G", cudf::strings_column_view{}, stream, withTempMr(mr));
     return cudf::strings::to_integers(
         cudf::strings_column_view(yearStrings->view()),
         cudf::data_type(cudf::type_id::INT32),
         stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        withTempMr(mr));
   }
 };
 
@@ -2361,8 +2215,7 @@ class LengthFunction : public CudfFunction {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    return cudf::strings::count_characters(
-        inputCol, stream, cudf::memory_resources{mr, get_temp_mr()});
+    return cudf::strings::count_characters(inputCol, stream, withTempMr(mr));
   }
 };
 
@@ -2378,8 +2231,7 @@ class LowerFunction : public CudfFunction {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    return cudf::strings::to_lower(
-        inputCol, stream, cudf::memory_resources{mr, get_temp_mr()});
+    return cudf::strings::to_lower(inputCol, stream, withTempMr(mr));
   }
 };
 
@@ -2395,8 +2247,7 @@ class UpperFunction : public CudfFunction {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
-    return cudf::strings::to_upper(
-        inputCol, stream, cudf::memory_resources{mr, get_temp_mr()});
+    return cudf::strings::to_upper(inputCol, stream, withTempMr(mr));
   }
 };
 
@@ -2448,20 +2299,15 @@ class ReplaceFunction : public CudfFunction {
     // replace(x, NULL, y) and replace(x, s, NULL) are NULL for every row.
     // Match Velox null propagation by producing an all-null varchar column.
     if (searchIsNull_ || replacementIsNull_) {
-      cudf::string_scalar nullString(
-          "", false, stream, cudf::memory_resources{mr, get_temp_mr()});
+      cudf::string_scalar nullString("", false, stream, withTempMr(mr));
       return cudf::make_column_from_scalar(
-          nullString,
-          inputCol.size(),
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          nullString, inputCol.size(), stream, withTempMr(mr));
     }
 
     const cudf::strings_column_view stringsView(inputCol);
-    cudf::string_scalar searchScalar(
-        search_, true, stream, cudf::memory_resources{mr, get_temp_mr()});
+    cudf::string_scalar searchScalar(search_, true, stream, withTempMr(mr));
     cudf::string_scalar replacementScalar(
-        replacement_, true, stream, cudf::memory_resources{mr, get_temp_mr()});
+        replacement_, true, stream, withTempMr(mr));
     // maxrepl == -1 replaces all occurrences. Nulls in the input column
     // propagate to a null result.
     return cudf::strings::replace(
@@ -2470,7 +2316,7 @@ class ReplaceFunction : public CudfFunction {
         replacementScalar,
         -1,
         stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        withTempMr(mr));
   }
 
  private:
@@ -2555,15 +2401,9 @@ class LikeFunction : public CudfFunction {
     cudf::column_view inputCol;
     if (inputIsConstant_) {
       cudf::string_scalar inputScalar(
-          input_,
-          !inputIsNull_,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          input_, !inputIsNull_, stream, withTempMr(mr));
       inputColumnHolder = cudf::make_column_from_scalar(
-          inputScalar,
-          outputRowCount,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          inputScalar, outputRowCount, stream, withTempMr(mr));
       inputCol = inputColumnHolder->view();
     } else {
       inputCol = asView(inputColumns[nextInput++]);
@@ -2572,13 +2412,10 @@ class LikeFunction : public CudfFunction {
     auto makeAllNullResult = [&]() {
       // Match Velox CPU null propagation for constant null pattern/escape
       // inputs by producing a fully null boolean column.
-      auto nullScalar = cudf::numeric_scalar<bool>(
-          false, false, stream, cudf::memory_resources{mr, get_temp_mr()});
+      auto nullScalar =
+          cudf::numeric_scalar<bool>(false, false, stream, withTempMr(mr));
       return cudf::make_column_from_scalar(
-          nullScalar,
-          inputCol.size(),
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          nullScalar, inputCol.size(), stream, withTempMr(mr));
     };
 
     if (patternIsConstant_ && patternIsNull_) {
@@ -2600,11 +2437,7 @@ class LikeFunction : public CudfFunction {
         validateConstantPattern(pattern_, escapeChar);
       }
       return cudf::strings::like(
-          inputCol,
-          pattern_,
-          escape_,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          inputCol, pattern_, escape_, stream, withTempMr(mr));
     }
 
     auto patternCol = asView(inputColumns[nextInput]);
@@ -2618,24 +2451,15 @@ class LikeFunction : public CudfFunction {
       // libcudf rejects null pattern rows for column/column LIKE. Replace them
       // only for the LIKE call after validation so the temporary column
       // overlaps less with the validation intermediates above.
-      cudf::string_scalar emptyPattern(
-          "", true, stream, cudf::memory_resources{mr, get_temp_mr()});
-      sanitizedPatternHolder = cudf::replace_nulls(
-          patternCol,
-          emptyPattern,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+      cudf::string_scalar emptyPattern("", true, stream, withTempMr(mr));
+      sanitizedPatternHolder =
+          cudf::replace_nulls(patternCol, emptyPattern, stream, withTempMr(mr));
       sanitizedPattern = sanitizedPatternHolder->view();
     }
 
-    cudf::string_scalar escapeScalar(
-        escape_, true, stream, cudf::memory_resources{mr, get_temp_mr()});
+    cudf::string_scalar escapeScalar(escape_, true, stream, withTempMr(mr));
     auto result = cudf::strings::like(
-        inputCol,
-        sanitizedPattern,
-        escapeScalar,
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        inputCol, sanitizedPattern, escapeScalar, stream, withTempMr(mr));
     sanitizedPatternHolder.reset();
     // Velox returns null if either the input or pattern row is null. cuDF
     // already propagated input nulls into the result, so only merge the pattern
@@ -2705,20 +2529,11 @@ std::unique_ptr<cudf::column> LikeFunction::makeEscapeTargetsColumn(
   // strip them before checking whether any invalid escape usage remains. This
   // keeps cuDF aligned with Velox CPU pattern validation semantics.
   cudf::string_scalar escapedEscapeScalar(
-      std::string(2, escape),
-      true,
-      stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      std::string(2, escape), true, stream, withTempMr(mr));
   cudf::string_scalar escapedPercentScalar(
-      std::string(1, escape) + '%',
-      true,
-      stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      std::string(1, escape) + '%', true, stream, withTempMr(mr));
   cudf::string_scalar escapedUnderscoreScalar(
-      std::string(1, escape) + '_',
-      true,
-      stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      std::string(1, escape) + '_', true, stream, withTempMr(mr));
   auto escapedEscapeView = escapedEscapeScalar.value(stream);
   auto escapedPercentView = escapedPercentScalar.value(stream);
   auto escapedUnderscoreView = escapedUnderscoreScalar.value(stream);
@@ -2730,7 +2545,7 @@ std::unique_ptr<cudf::column> LikeFunction::makeEscapeTargetsColumn(
       cudf::device_span<cudf::string_view const>{deviceTargetViews},
       cudf::string_view{nullptr, 0},
       stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      withTempMr(mr));
   // The temporary scalars and string_view array above back async work used to
   // build the output column, so wait for the stream before returning.
   stream.sync();
@@ -2740,10 +2555,9 @@ std::unique_ptr<cudf::column> LikeFunction::makeEscapeTargetsColumn(
 std::unique_ptr<cudf::column> LikeFunction::makeEscapeReplacementsColumn(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
-  cudf::string_scalar emptyString(
-      "", true, stream, cudf::memory_resources{mr, get_temp_mr()});
-  auto replacementsColumn = cudf::make_column_from_scalar(
-      emptyString, 1, stream, cudf::memory_resources{mr, get_temp_mr()});
+  cudf::string_scalar emptyString("", true, stream, withTempMr(mr));
+  auto replacementsColumn =
+      cudf::make_column_from_scalar(emptyString, 1, stream, withTempMr(mr));
   // make_column_from_scalar(string_scalar) reads the scalar's device string
   // data asynchronously, so keep the scalar alive until the stream completes.
   stream.sync();
@@ -2766,18 +2580,15 @@ void LikeFunction::validatePatternColumn(
       cudf::strings_column_view(targetsColumn_->view()),
       cudf::strings_column_view(replacementsColumn_->view()),
       stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      withTempMr(mr));
 
-  auto escapeScalar = cudf::string_scalar(
-      std::string(1, escape),
-      true,
-      stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+  auto escapeScalar =
+      cudf::string_scalar(std::string(1, escape), true, stream, withTempMr(mr));
   auto hasDanglingEscape = cudf::strings::contains(
       cudf::strings_column_view(normalized->view()),
       escapeScalar,
       stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      withTempMr(mr));
   normalized.reset();
 
   auto anyAggregation = cudf::make_any_aggregation<cudf::reduce_aggregation>();
@@ -2786,7 +2597,7 @@ void LikeFunction::validatePatternColumn(
       *anyAggregation,
       cudf::data_type{cudf::type_id::BOOL8},
       stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      withTempMr(mr));
   hasDanglingEscape.reset();
 
   auto const& invalidBool =
@@ -2847,15 +2658,9 @@ class StringPatternPredicateFunction : public CudfFunction {
     cudf::column_view inputCol;
     if (inputIsConstant_) {
       cudf::string_scalar inputScalar(
-          input_,
-          !inputIsNull_,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          input_, !inputIsNull_, stream, withTempMr(mr));
       inputColumnHolder = cudf::make_column_from_scalar(
-          inputScalar,
-          rowCount,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          inputScalar, rowCount, stream, withTempMr(mr));
       inputCol = inputColumnHolder->view();
     } else {
       inputCol = asView(inputColumns[nextInput++]);
@@ -2863,16 +2668,12 @@ class StringPatternPredicateFunction : public CudfFunction {
 
     if (patternIsConstant_) {
       if (patternIsNull_) {
-        auto nullScalar = cudf::numeric_scalar<bool>(
-            false, false, stream, cudf::memory_resources{mr, get_temp_mr()});
+        auto nullScalar =
+            cudf::numeric_scalar<bool>(false, false, stream, withTempMr(mr));
         return cudf::make_column_from_scalar(
-            nullScalar,
-            inputCol.size(),
-            stream,
-            cudf::memory_resources{mr, get_temp_mr()});
+            nullScalar, inputCol.size(), stream, withTempMr(mr));
       }
-      cudf::string_scalar patternScalar(
-          pattern_, true, stream, cudf::memory_resources{mr, get_temp_mr()});
+      cudf::string_scalar patternScalar(pattern_, true, stream, withTempMr(mr));
       return evaluateMatch(inputCol, patternScalar, stream, mr);
     }
 
@@ -2919,10 +2720,7 @@ class StartswithFunction : public StringPatternPredicateFunction {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     return cudf::strings::starts_with(
-        inputCol,
-        patternScalar,
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        inputCol, patternScalar, stream, withTempMr(mr));
   }
 
   std::unique_ptr<cudf::column> evaluateMatch(
@@ -2931,10 +2729,7 @@ class StartswithFunction : public StringPatternPredicateFunction {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     return cudf::strings::starts_with(
-        inputCol,
-        patternCol,
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        inputCol, patternCol, stream, withTempMr(mr));
   }
 };
 
@@ -2950,10 +2745,7 @@ class EndswithFunction : public StringPatternPredicateFunction {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     return cudf::strings::ends_with(
-        inputCol,
-        patternScalar,
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        inputCol, patternScalar, stream, withTempMr(mr));
   }
 
   std::unique_ptr<cudf::column> evaluateMatch(
@@ -2962,10 +2754,7 @@ class EndswithFunction : public StringPatternPredicateFunction {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     return cudf::strings::ends_with(
-        inputCol,
-        patternCol,
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        inputCol, patternCol, stream, withTempMr(mr));
   }
 };
 
@@ -2981,10 +2770,7 @@ class ContainsFunction : public StringPatternPredicateFunction {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     return cudf::strings::contains(
-        inputCol,
-        patternScalar,
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        inputCol, patternScalar, stream, withTempMr(mr));
   }
 
   std::unique_ptr<cudf::column> evaluateMatch(
@@ -2993,10 +2779,7 @@ class ContainsFunction : public StringPatternPredicateFunction {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     return cudf::strings::contains(
-        inputCol,
-        patternCol,
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        inputCol, patternCol, stream, withTempMr(mr));
   }
 };
 
@@ -3046,28 +2829,23 @@ class ConcatFunction : public CudfFunction {
       } else {
         // Create a column of the literal repeated for the entire output size.
         auto const& literal = it->second;
-        cudf::string_scalar scalar(
-            literal, true, stream, cudf::memory_resources{mr, get_temp_mr()});
+        cudf::string_scalar scalar(literal, true, stream, withTempMr(mr));
         auto col = cudf::make_column_from_scalar(
-            scalar,
-            outputSize,
-            stream,
-            cudf::memory_resources{mr, get_temp_mr()});
+            scalar, outputSize, stream, withTempMr(mr));
         columnViews.push_back(col->view());
         literalColumns.emplace_back(std::move(col));
       }
     }
 
     // Concatenate the columns, nulls as empty strings, no separators.
-    cudf::string_scalar emptyString(
-        "", true, stream, cudf::memory_resources{mr, get_temp_mr()});
+    cudf::string_scalar emptyString("", true, stream, withTempMr(mr));
     return cudf::strings::concatenate(
         cudf::table_view(columnViews),
         emptyString,
         emptyString,
         cudf::strings::separator_on_nulls::YES,
         stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        withTempMr(mr));
   }
 
  private:
@@ -3115,10 +2893,7 @@ class RowConstructorFunction : public CudfFunction {
       if (literal) {
         children.push_back(
             cudf::make_column_from_scalar(
-                *literal,
-                outputSize,
-                stream,
-                cudf::memory_resources{mr, get_temp_mr()}));
+                *literal, outputSize, stream, withTempMr(mr)));
       } else {
         VELOX_CHECK_LT(nextInputColumnIndex, inputColumns.size());
         children.push_back(
@@ -3132,12 +2907,9 @@ class RowConstructorFunction : public CudfFunction {
         std::move(children),
         0,
         cudf::create_null_mask(
-            0,
-            cudf::mask_state::UNALLOCATED,
-            stream,
-            cudf::memory_resources{mr, get_temp_mr()}),
+            0, cudf::mask_state::UNALLOCATED, stream, withTempMr(mr)),
         stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        withTempMr(mr));
   }
 
  private:
@@ -3158,8 +2930,7 @@ std::unique_ptr<cudf::column> RowConstructorFunction::makeOwnedColumn(
       [&](auto& value) -> std::unique_ptr<cudf::column> {
         using T = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<T, cudf::column_view>) {
-          return std::make_unique<cudf::column>(
-              value, stream, cudf::memory_resources{mr, get_temp_mr()});
+          return std::make_unique<cudf::column>(value, stream, withTempMr(mr));
         } else {
           return std::move(value);
         }
@@ -4025,8 +3796,8 @@ std::unique_ptr<cudf::column> FunctionExpression::makeStructChildColumn(
           auto const childView =
               cudf::structs_column_view(value).get_sliced_child(
                   childIndex, stream);
-          auto child = std::make_unique<cudf::column>(
-              childView, stream, cudf::memory_resources{mr, get_temp_mr()});
+          auto child =
+              std::make_unique<cudf::column>(childView, stream, withTempMr(mr));
           mergeNullSourceNullsIntoResult(*child, value, stream, mr);
           return child;
         } else {
@@ -4083,30 +3854,24 @@ cuda::device_buffer<cudf::bitmask_type> makeBranchRowMask(
     rmm::device_async_resource_ref mr) {
   // bools_to_mask clears false and null alike, already the then branch's set.
   if (takeWhenTrue) {
-    auto [mask, unusedUnsetCount] = cudf::bools_to_mask(
-        condition, stream, cudf::memory_resources{mr, get_temp_mr()});
+    auto [mask, unusedUnsetCount] =
+        cudf::bools_to_mask(condition, stream, withTempMr(mr));
     return std::move(*mask);
   }
   // The else branch also owns the null rows, and NOT maps null to null.
   auto negated = cudf::unary_operation(
-      condition,
-      cudf::unary_operator::NOT,
-      stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      condition, cudf::unary_operator::NOT, stream, withTempMr(mr));
   std::unique_ptr<cudf::column> elseCondition;
   if (negated->view().has_nulls()) {
     const cudf::numeric_scalar<bool> nullsTakeElse(
-        true, true, stream, cudf::memory_resources{mr, get_temp_mr()});
+        true, true, stream, withTempMr(mr));
     elseCondition = cudf::replace_nulls(
-        negated->view(),
-        nullsTakeElse,
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        negated->view(), nullsTakeElse, stream, withTempMr(mr));
   }
   auto [mask, unusedUnsetCount] = cudf::bools_to_mask(
       elseCondition ? elseCondition->view() : negated->view(),
       stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      withTempMr(mr));
   return std::move(*mask);
 }
 
@@ -4151,11 +3916,7 @@ MaskedInputs maskInputRows(
       beginBits.push_back(0);
     }
     auto [combined, nullCount] = cudf::bitmask_and(
-        masks,
-        beginBits,
-        input.size(),
-        stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        masks, beginBits, input.size(), stream, withTempMr(mr));
     std::vector<cudf::column_view> children;
     children.reserve(input.num_children());
     for (cudf::size_type child = 0; child < input.num_children(); ++child) {
@@ -4275,11 +4036,7 @@ ColumnOrView FunctionExpression::eval(
       const auto requestedType = cudf_velox::veloxToCudfDataType(expr_->type());
       auto resultView = asView(result);
       if (resultView.type() != requestedType) {
-        return cudf::cast(
-            resultView,
-            requestedType,
-            stream,
-            cudf::memory_resources{mr, get_temp_mr()});
+        return cudf::cast(resultView, requestedType, stream, withTempMr(mr));
       }
     }
     return result;

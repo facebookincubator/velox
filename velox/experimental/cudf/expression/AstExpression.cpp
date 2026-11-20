@@ -127,21 +127,14 @@ ColumnOrView ASTExpression::eval(
         LOG(INFO) << cudf::table_schema_to_string(astInputTableView);
       }
       return cudf::compute_column(
-          astInputTableView,
-          cudfTree_.back(),
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          astInputTableView, cudfTree_.back(), stream, withTempMr(mr));
     }
   }();
   if (finalize) {
     const auto requestedType = cudf_velox::veloxToCudfDataType(expr_->type());
     auto resultView = asView(result);
     if (resultView.type() != requestedType) {
-      result = cudf::cast(
-          resultView,
-          requestedType,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+      result = cudf::cast(resultView, requestedType, stream, withTempMr(mr));
     }
   }
   return result;

@@ -105,7 +105,7 @@ std::unique_ptr<cudf::column> transformWithTicksPerSecond(
       {},
       std::nullopt,
       stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      withTempMr(mr));
   return std::move(transformed->release().front());
 }
 

@@ -170,21 +170,10 @@ void CudfFilterProject::initialize() {
         const auto type = veloxToCudfDataType(projection->type());
         if (scalar->type() != type) {
           auto stream = getDefaultStreamForCurrentThread();
-          auto column = cudf::make_column_from_scalar(
-              *scalar,
-              1,
-              stream,
-              cudf::memory_resources{get_temp_mr(), get_temp_mr()});
-          column = cudf::cast(
-              column->view(),
-              type,
-              stream,
-              cudf::memory_resources{get_temp_mr(), get_temp_mr()});
-          scalar = cudf::get_element(
-              column->view(),
-              0,
-              stream,
-              cudf::memory_resources{get_temp_mr(), get_temp_mr()});
+          auto column =
+              cudf::make_column_from_scalar(*scalar, 1, stream, tempMrs());
+          column = cudf::cast(column->view(), type, stream, tempMrs());
+          scalar = cudf::get_element(column->view(), 0, stream, tempMrs());
           stream.sync();
         }
         constantProjections_.emplace_back(i, std::move(scalar));
@@ -320,7 +309,7 @@ void CudfFilterProject::filter(
         *cudf::make_all_aggregation<cudf::reduce_aggregation>(),
         cudf::data_type(cudf::type_id::BOOL8),
         stream,
-        cudf::memory_resources{get_temp_mr(), get_temp_mr()});
+        tempMrs());
     using ScalarType = cudf::scalar_type_t<bool>;
     auto result = static_cast<ScalarType*>(isAllTrue.get());
     // If filter is not all true, apply the filter
@@ -330,10 +319,7 @@ void CudfFilterProject::filter(
     auto filterTable =
         std::make_unique<cudf::table>(std::move(inputTableColumns));
     auto filteredTable = cudf::apply_retention_mask(
-        *filterTable,
-        filterColumnView,
-        stream,
-        cudf::memory_resources{get_output_mr(), get_temp_mr()});
+        *filterTable, filterColumnView, stream, withTempMr(get_output_mr()));
     inputTableColumns = filteredTable->release();
   }
 }
@@ -358,10 +344,7 @@ std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
   // Constant projections of a zero-column input.
   for (const auto& [outputChannel, scalar] : constantProjections_) {
     outputColumns[outputChannel] = cudf::make_column_from_scalar(
-        *scalar,
-        numRows,
-        stream,
-        cudf::memory_resources{get_output_mr(), get_temp_mr()});
+        *scalar, numRows, stream, withTempMr(get_output_mr()));
   }
   // computed resultProjections
   for (int i = 0; i < resultProjections_.size(); i++) {
@@ -375,9 +358,7 @@ std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
       auto view = std::get<cudf::column_view>(columnOrView);
       outputColumns[resultProjections_[i].outputChannel] =
           std::make_unique<cudf::column>(
-              view,
-              stream,
-              cudf::memory_resources{get_output_mr(), get_temp_mr()});
+              view, stream, withTempMr(get_output_mr()));
     }
   }
 
@@ -400,7 +381,7 @@ std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
       outputColumns[identity.outputChannel] = std::make_unique<cudf::column>(
           *inputTableColumns[identity.inputChannel],
           stream,
-          cudf::memory_resources{get_output_mr(), get_temp_mr()});
+          withTempMr(get_output_mr()));
     }
     VELOX_CHECK_GT(inputChannelCount[identity.inputChannel], 0);
     inputChannelCount[identity.inputChannel]--;

@@ -55,10 +55,7 @@ void mergeNullSourceNullsIntoResult(
   if (!result.nullable() && nullableSourceColumns.size() == 1) {
     auto nullSourceColumn = nullableSourceColumns.front();
     result.set_null_mask(
-        cudf::copy_bitmask(
-            nullSourceColumn,
-            stream,
-            cudf::memory_resources{mr, get_temp_mr()}),
+        cudf::copy_bitmask(nullSourceColumn, stream, withTempMr(mr)),
         nullSourceColumn.null_count());
     return;
   }
@@ -76,11 +73,7 @@ void mergeNullSourceNullsIntoResult(
     beginBits.push_back(nullSourceColumn.offset());
   }
   auto [nullMask, nullCount] = cudf::bitmask_and(
-      masks,
-      beginBits,
-      result.size(),
-      stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      masks, beginBits, result.size(), stream, withTempMr(mr));
   result.set_null_mask(std::move(nullMask), nullCount);
 }
 

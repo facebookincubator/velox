@@ -336,12 +336,10 @@ struct divideColumnColumnKernel {
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
   DecimalBinaryOpStatus operator()() const {
-    auto lhsDev = cudf::column_device_view::create(
-        lhs, stream, cudf::memory_resources{get_temp_mr(), get_temp_mr()});
-    auto rhsDev = cudf::column_device_view::create(
-        rhs, stream, cudf::memory_resources{get_temp_mr(), get_temp_mr()});
-    auto outDev = cudf::mutable_column_device_view::create(
-        out, stream, cudf::memory_resources{get_temp_mr(), get_temp_mr()});
+    auto lhsDev = cudf::column_device_view::create(lhs, stream, tempMrs());
+    auto rhsDev = cudf::column_device_view::create(rhs, stream, tempMrs());
+    auto outDev =
+        cudf::mutable_column_device_view::create(out, stream, tempMrs());
     return toDecimalBinaryOpStatus(launchOverflowChecked(
         lhs.size(),
         [&]() {
@@ -369,10 +367,9 @@ struct divideColumnScalarKernel {
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
   DecimalBinaryOpStatus operator()() const {
-    auto lhsDev = cudf::column_device_view::create(
-        lhs, stream, cudf::memory_resources{get_temp_mr(), get_temp_mr()});
-    auto outDev = cudf::mutable_column_device_view::create(
-        out, stream, cudf::memory_resources{get_temp_mr(), get_temp_mr()});
+    auto lhsDev = cudf::column_device_view::create(lhs, stream, tempMrs());
+    auto outDev =
+        cudf::mutable_column_device_view::create(out, stream, tempMrs());
     return toDecimalBinaryOpStatus(launchOverflowChecked(
         lhs.size(),
         [&]() {
@@ -400,10 +397,9 @@ struct divideScalarColumnKernel {
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
   DecimalBinaryOpStatus operator()() const {
-    auto rhsDev = cudf::column_device_view::create(
-        rhs, stream, cudf::memory_resources{get_temp_mr(), get_temp_mr()});
-    auto outDev = cudf::mutable_column_device_view::create(
-        out, stream, cudf::memory_resources{get_temp_mr(), get_temp_mr()});
+    auto rhsDev = cudf::column_device_view::create(rhs, stream, tempMrs());
+    auto outDev =
+        cudf::mutable_column_device_view::create(out, stream, tempMrs());
     return toDecimalBinaryOpStatus(launchOverflowChecked(
         rhs.size(),
         [&]() {
@@ -869,17 +865,15 @@ decimalBinaryOperationColColImpl(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   CUDF_EXPECTS(lhs.size() == rhs.size(), "Decimal binop requires equal sizes");
-  auto [nullMask, nullCount] = cudf::bitmask_and(
-      cudf::table_view({lhs, rhs}),
-      stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+  auto [nullMask, nullCount] =
+      cudf::bitmask_and(cudf::table_view({lhs, rhs}), stream, withTempMr(mr));
   auto result = cudf::make_fixed_width_column(
       outputType,
       lhs.size(),
       std::move(nullMask),
       nullCount,
       stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      withTempMr(mr));
 
   int32_t const statusFlag =
       launchDecimalBinaryColColKernel<LhsRep, RhsRep, OutRep>(
@@ -1029,18 +1023,17 @@ decimalBinaryOperationWithOverflow(
         lhs.size(),
         cudf::mask_state::ALL_NULL,
         stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        withTempMr(mr));
     return {std::move(result), DecimalBinaryOpStatus::kOk};
   }
-  auto nullMask = cudf::copy_bitmask(
-      lhs, stream, cudf::memory_resources{mr, get_temp_mr()});
+  auto nullMask = cudf::copy_bitmask(lhs, stream, withTempMr(mr));
   auto result = cudf::make_fixed_width_column(
       outputType,
       lhs.size(),
       std::move(nullMask),
       lhs.null_count(),
       stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      withTempMr(mr));
 
   int32_t const statusFlag = dispatchDecimalBinaryOperationColScalar(
       lhs, rhs, result->mutable_view(), op, outputPrecision, stream);
@@ -1063,18 +1056,17 @@ decimalBinaryOperationWithOverflow(
         rhs.size(),
         cudf::mask_state::ALL_NULL,
         stream,
-        cudf::memory_resources{mr, get_temp_mr()});
+        withTempMr(mr));
     return {std::move(result), DecimalBinaryOpStatus::kOk};
   }
-  auto nullMask = cudf::copy_bitmask(
-      rhs, stream, cudf::memory_resources{mr, get_temp_mr()});
+  auto nullMask = cudf::copy_bitmask(rhs, stream, withTempMr(mr));
   auto result = cudf::make_fixed_width_column(
       outputType,
       rhs.size(),
       std::move(nullMask),
       rhs.null_count(),
       stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      withTempMr(mr));
 
   int32_t const statusFlag = dispatchDecimalBinaryOperationScalarCol(
       lhs, rhs, result->mutable_view(), op, outputPrecision, stream);

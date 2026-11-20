@@ -760,7 +760,7 @@ std::vector<ColumnOrView> precomputeSubexpressions(
           *scalars[scalarIndex],
           inputColumnViews[dependent_column_index].size(),
           stream,
-          cudf::memory_resources{get_output_mr(), get_temp_mr()});
+          withTempMr(get_output_mr()));
       precomputedColumns.push_back(std::move(newColumn));
     } else if (ins_name == "nested_column") {
       // Nested column already exists in input. Don't materialize.

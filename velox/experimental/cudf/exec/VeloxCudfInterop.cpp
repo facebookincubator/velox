@@ -180,11 +180,8 @@ std::unique_ptr<cudf::table> toCudfTable(
       std::dynamic_pointer_cast<facebook::velox::BaseVector>(veloxTable),
       arrowSchema,
       arrowOptions);
-  auto tbl = cudf::from_arrow(
-      &arrowSchema,
-      &arrowArray,
-      stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+  auto tbl =
+      cudf::from_arrow(&arrowSchema, &arrowArray, stream, withTempMr(mr));
 
   // Synchronize before releasing Arrow resources.  cudf::from_arrow uses
   // cudaMemcpyBatchAsync (CUDA 13.0+) with cudaMemcpySrcAccessOrderStream,
@@ -273,8 +270,7 @@ RowVectorPtr toVeloxColumn(
   //
   // seves 1/17/26
 
-  auto arrowDeviceArray = cudf::to_arrow_host(
-      table, stream, cudf::memory_resources{mr, get_temp_mr()});
+  auto arrowDeviceArray = cudf::to_arrow_host(table, stream, withTempMr(mr));
   ArrowArray arrayCopy = arrowDeviceArray->array;
   arrowDeviceArray->array.release = nullptr;
 

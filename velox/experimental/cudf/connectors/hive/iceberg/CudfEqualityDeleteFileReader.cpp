@@ -190,9 +190,7 @@ void CudfEqualityDeleteFileReader::directReadEqualityDeleteFile(
   auto stream = cudfGlobalStreamPool().get_stream();
   auto mr = get_output_mr();
   deleteKeyTable_ = castDecimalColumnsToVeloxTypes(
-      cudf::io::read_parquet(
-          options, stream, cudf::memory_resources{mr, get_temp_mr()})
-          .tbl,
+      cudf::io::read_parquet(options, stream, withTempMr(mr)).tbl,
       equalityColumnTypes,
       /*numPrependedColumns=*/0,
       stream,
@@ -274,12 +272,7 @@ void CudfEqualityDeleteFileReader::applyDeletes(
   // side to know which data rows to delete.
   const auto probeTable = table.select(equalityColumnIndices_);
   const auto probeIndices =
-      deleteHashJoin_
-          ->inner_join(
-              probeTable,
-              stream,
-              cudf::memory_resources{get_temp_mr(), get_temp_mr()})
-          .first;
+      deleteHashJoin_->inner_join(probeTable, stream, tempMrs()).first;
 
   // Clear `deleteMask` at probe positions if any
   if (not probeIndices->is_empty()) {
