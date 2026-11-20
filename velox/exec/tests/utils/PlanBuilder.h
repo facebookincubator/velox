@@ -1258,7 +1258,7 @@ class PlanBuilder {
   /// By default, uses ASC NULLS LAST sort order, e.g. column "a" above will use
   /// ASC NULLS LAST and column "b" will use DESC NULLS LAST.
   PlanBuilder&
-  topN(const std::vector<std::string>& keys, int32_t count, bool isPartial);
+  topN(const std::vector<std::string>& keys, int64_t count, bool isPartial);
 
   /// Add a LimitNode.
   ///

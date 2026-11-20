@@ -1384,7 +1384,7 @@ PlanBuilder& PlanBuilder::orderBy(
 
 PlanBuilder& PlanBuilder::topN(
     const std::vector<std::string>& keys,
-    int32_t count,
+    int64_t count,
     bool isPartial) {
   VELOX_CHECK_NOT_NULL(planNode_, "TopN cannot be the source node");
   auto [sortingKeys, sortingOrders] =
