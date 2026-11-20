@@ -33,6 +33,11 @@ add_library(
   CudfMarkDistinct.cpp
   CudfNestedLoopJoin.cpp
   CudfOrderBy.cpp
+  CudfPlanNode.cpp
+  CudfPlanNodeConversion.cpp
+  CudfPlanNodeDefinitions.cpp
+  CudfPlanNodeTranslator.cpp
+  CudfPlanRewriter.cpp
   CudfReduce.cpp
   CudfTopN.cpp
   CudfTopNRowNumber.cpp
@@ -42,6 +47,7 @@ add_library(
   DecimalAggregationHostOps.cpp
   DecimalAggregationState.cpp
   GpuCapabilities.cpp
+  GpuPlacement.cpp
   GpuResources.cpp
   OperatorAdapters.cpp
   PrestoAggregateFunctions.cpp

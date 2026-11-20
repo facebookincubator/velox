@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodeConversion.h"
 #include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -139,9 +140,11 @@ bool supportsRankKey(const TypePtr& type, bool sortingKey) {
   return true;
 }
 
-} // namespace
-
-bool CudfTopNRowNumber::canRunOnGPU(const core::TopNRowNumberNode& node) {
+// Returns whether cuDF supports the ranking function of 'node' over its
+// partitioning and sorting keys. 'node' is a core::TopNRowNumberNode or a
+// CudfTopNRowNumberNode.
+template <typename TNode>
+bool supportsRanking(const TNode& node) {
   switch (node.rankFunction()) {
     case core::TopNRowNumberNode::RankFunction::kRowNumber:
       return true;
@@ -164,10 +167,25 @@ bool CudfTopNRowNumber::canRunOnGPU(const core::TopNRowNumberNode& node) {
   return true;
 }
 
+} // namespace
+
+bool CudfTopNRowNumber::canRunOnGPU(const core::TopNRowNumberNode& node) {
+  return supportsRanking(node);
+}
+
 CudfTopNRowNumber::CudfTopNRowNumber(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::TopNRowNumberNode>& node)
+    : CudfTopNRowNumber(
+          operatorId,
+          driverCtx,
+          toCudfPlanNode<CudfTopNRowNumberNode>(node)) {}
+
+CudfTopNRowNumber::CudfTopNRowNumber(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
+    const std::shared_ptr<const CudfTopNRowNumberNode>& node)
     : CudfOperatorBase(
           operatorId,
           driverCtx,
@@ -178,13 +196,13 @@ CudfTopNRowNumber::CudfTopNRowNumber(
           NvtxMethodFlag::kAll,
           std::nullopt,
           node),
-      node_(node),
+      rankFunction_(node->rankFunction()),
       limit_(node->limit()),
       generateRowNumber_(node->generateRowNumber()),
       inputType_(node->sources()[0]->outputType()),
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
   VELOX_CHECK(
-      canRunOnGPU(*node),
+      supportsRanking(*node),
       "Unsupported ranking function or partitioning/sorting key types for CudfTopNRowNumber");
 
   partitionKeyIndices_.reserve(node->partitionKeys().size());
@@ -246,7 +264,7 @@ CudfVectorPtr CudfTopNRowNumber::reduceBatchToLocalCandidates(
       sortedKeyTable->view(),
       localPartitionKeyIndices_,
       localSortKeyIndices_,
-      node_->rankFunction(),
+      rankFunction_,
       stream,
       mr);
   auto mask = makeLimitMask(*ranks, limit_, stream, mr);
@@ -295,7 +313,7 @@ CudfVectorPtr CudfTopNRowNumber::mergeAndPruneCandidates(
       merged->view(),
       partitionKeyIndices_,
       sortKeyIndices_,
-      node_->rankFunction(),
+      rankFunction_,
       stream,
       mr);
   auto mask = makeLimitMask(*ranks, limit_, stream, mr);
@@ -361,7 +379,7 @@ RowVectorPtr CudfTopNRowNumber::doGetOutput() {
       candidates_->getTableView(),
       partitionKeyIndices_,
       sortKeyIndices_,
-      node_->rankFunction(),
+      rankFunction_,
       stream,
       mr);
   // cuDF ranks are int32; Velox expects bigint.
