@@ -29,6 +29,7 @@ target_link_libraries(
   arrow
   GTest::gtest
   GTest::gtest_main
+  GTest::gmock
   glog::glog
   ${CMAKE_DL_LIBS}
 )
