@@ -19,6 +19,7 @@
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/HashProbeStatNames.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
@@ -432,7 +433,7 @@ void HashProbe::pushdownDynamicFilters() {
               checkedPointerCast<const common::BigintValuesUsingBloomFilter>(
                   filter.get());
           addRuntimeStat(
-              std::string(HashProbe::kBloomFilterSize),
+              std::string(HashProbeStatNames::kBloomFilterSize),
               RuntimeCounter(bloomFilter->blocksByteSize()));
         }
         return filter;
@@ -503,16 +504,20 @@ void HashProbe::applyBloomFilterForJoinProbe() {
       bypassBloomFilter_ = bloomFilterSampleAcceptedRows_ * 100 >=
           bloomFilterSampledRows_ * bypassBloomFilterMinPct_;
       if (bypassBloomFilter_) {
-        addRuntimeStat(std::string(kBloomFilterBypassed), RuntimeCounter(1));
+        addRuntimeStat(
+            std::string(HashProbeStatNames::kBloomFilterBypassed),
+            RuntimeCounter(1));
       }
     }
   }
 
   if (numTested > 0) {
     addRuntimeStat(
-        std::string(kBloomFilterTestedRows), RuntimeCounter(numTested));
+        std::string(HashProbeStatNames::kBloomFilterTestedRows),
+        RuntimeCounter(numTested));
     addRuntimeStat(
-        std::string(kBloomFilterAcceptedRows), RuntimeCounter(numAccepted));
+        std::string(HashProbeStatNames::kBloomFilterAcceptedRows),
+        RuntimeCounter(numAccepted));
   }
 }
 
@@ -1243,7 +1248,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
 
   if (replacedWithDynamicFilter_) {
     addRuntimeStat(
-        std::string(HashProbe::kReplacedWithDynamicFilterRows),
+        std::string(HashProbeStatNames::kReplacedWithDynamicFilterRows),
         RuntimeCounter(inputSize));
     auto output = Operator::fillOutput(inputSize, nullptr);
     input_ = nullptr;

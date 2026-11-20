@@ -92,7 +92,7 @@ velox_link_libraries(
   Folly::folly
 )
 
-velox_add_library(velox_rpc_operator RPCOperator.cpp HEADERS RPCOperator.h)
+velox_add_library(velox_rpc_operator RPCOperator.cpp HEADERS RPCOperator.h RPCOperatorStatNames.h)
 
 velox_link_libraries(
   velox_rpc_operator

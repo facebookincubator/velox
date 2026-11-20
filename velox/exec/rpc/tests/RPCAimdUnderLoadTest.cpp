@@ -48,6 +48,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/rpc/RPCOperator.h"
+#include "velox/exec/rpc/RPCOperatorStatNames.h"
 #include "velox/exec/rpc/RPCPlanNodeTranslator.h"
 #include "velox/exec/rpc/RPCRateLimiter.h"
 #include "velox/exec/rpc/tests/ResponseSimulator.h"
@@ -752,17 +753,18 @@ TEST_F(RPCAimdUnderLoadTest, windowAndRateLimiterBackOffThenRecover) {
   // (1) The mock injected exactly the burst window of rate-limit errors, and
   // the
   //     operator classified them by typed cause.
-  EXPECT_EQ(statSum(RPCOperator::kRpcErrorKindRateLimited), kBurstRows);
-  EXPECT_GT(statSum(RPCOperator::kRpcCongestionOverloadShrinks), 0);
+  EXPECT_EQ(
+      statSum(RPCOperatorStatNames::kRpcErrorKindRateLimited), kBurstRows);
+  EXPECT_GT(statSum(RPCOperatorStatNames::kRpcCongestionOverloadShrinks), 0);
 
   // (2) Overload -> the per-driver congestion window shrank at least once
   //     (this stat is only emitted when numShrinks > 0).
-  EXPECT_GT(statSum(RPCOperator::kRpcCongestionShrinks), 0);
+  EXPECT_GT(statSum(RPCOperatorStatNames::kRpcCongestionShrinks), 0);
 
   // (3) Overload -> this backend's rate-limiter cap backed off below its
   //     ceiling. rpcRateLimiterMinCap lands on every query, so presence alone
   //     says nothing about backoff; the value below the ceiling is the claim.
-  const int64_t minCap = statSum(RPCOperator::kRpcRateLimiterMinCap);
+  const int64_t minCap = statSum(RPCOperatorStatNames::kRpcRateLimiterMinCap);
   ASSERT_GT(minCap, 0)
       << "the low-water stat must be emitted, and a zero cap would mean the "
          "backend stalled outright rather than backed off";
@@ -770,7 +772,7 @@ TEST_F(RPCAimdUnderLoadTest, windowAndRateLimiterBackOffThenRecover) {
 
   // (4) After the burst, the clean success stream drove AIMD additive recovery:
   //     the final cap climbed back above the low-water mark.
-  const int64_t finalCap = statSum(RPCOperator::kRpcRateLimiterCap);
+  const int64_t finalCap = statSum(RPCOperatorStatNames::kRpcRateLimiterCap);
   EXPECT_GT(finalCap, minCap) << "cap should recover above its low-water mark";
 }
 
@@ -820,8 +822,8 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesBoundAttemptsToCapacity) {
         .numAttempts = CapacityRPCFunction::backendFor(kCapacityStepBackend)
                            ->numAttempts(),
         .numCapacityRetries =
-            stats.hasCustomStat(RPCOperator::kRpcCapacityRetries)
-            ? stats.customSum(RPCOperator::kRpcCapacityRetries)
+            stats.hasCustomStat(RPCOperatorStatNames::kRpcCapacityRetries)
+            ? stats.customSum(RPCOperatorStatNames::kRpcCapacityRetries)
             : 0,
         .numBlockedCalls = static_cast<int64_t>(stats.isBlockedTiming.count),
     };
@@ -872,9 +874,9 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesStopAtBudget) {
   }
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   EXPECT_EQ(
-      stats.customSum(RPCOperator::kRpcErrorKindRateLimited),
+      stats.customSum(RPCOperatorStatNames::kRpcErrorKindRateLimited),
       kCapacityExhaustedRows);
-  EXPECT_GT(stats.customSum(RPCOperator::kRpcCapacityRetries), 0);
+  EXPECT_GT(stats.customSum(RPCOperatorStatNames::kRpcCapacityRetries), 0);
 }
 
 // A function that returns hints without declaring them in
@@ -894,8 +896,8 @@ TEST_F(RPCAimdUnderLoadTest, undeclaredCapacityRetriesAreIgnored) {
           .countResults(task),
       4);
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcErrorKindRateLimited), 4);
-  EXPECT_FALSE(stats.hasCustomStat(RPCOperator::kRpcCapacityRetries));
+  EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcErrorKindRateLimited), 4);
+  EXPECT_FALSE(stats.hasCustomStat(RPCOperatorStatNames::kRpcCapacityRetries));
   EXPECT_EQ(
       CapacityRPCFunction::backendFor("layer2.test.capacity.undeclared.backend")
           ->numAttempts(),
@@ -929,8 +931,10 @@ TEST_F(RPCAimdUnderLoadTest, batchIgnoresCapacityRetries) {
           .countResults(task),
       kTotalRows);
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcErrorKindRateLimited), kBurstRows);
-  EXPECT_FALSE(stats.hasCustomStat(RPCOperator::kRpcCapacityRetries));
+  EXPECT_EQ(
+      stats.customSum(RPCOperatorStatNames::kRpcErrorKindRateLimited),
+      kBurstRows);
+  EXPECT_FALSE(stats.hasCustomStat(RPCOperatorStatNames::kRpcCapacityRetries));
 }
 
 // Several drivers share one backend and one limiter; every row is output
@@ -966,7 +970,7 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesWithSeveralDrivers) {
   }
   EXPECT_GT(
       PlanNodeStats::extract(task->taskStats(), plan->id())
-          .customSum(RPCOperator::kRpcCapacityRetries),
+          .customSum(RPCOperatorStatNames::kRpcCapacityRetries),
       0);
 }
 
@@ -1009,7 +1013,7 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesKeepRowIdentityAcrossBatches) {
   }
   EXPECT_GT(
       PlanNodeStats::extract(task->taskStats(), plan->id())
-          .customSum(RPCOperator::kRpcCapacityRetries),
+          .customSum(RPCOperatorStatNames::kRpcCapacityRetries),
       0);
 }
 
@@ -1089,10 +1093,11 @@ TEST_F(RPCAimdUnderLoadTest, perRowBackendErrorsDoNotBackOff) {
     return stats.hasCustomStat(key) ? stats.customSum(key) : -1;
   };
 
-  EXPECT_EQ(statSum(RPCOperator::kRpcErrorKindBackendError), kBurstRows);
-  EXPECT_EQ(statSum(RPCOperator::kRpcCongestionOverloadShrinks), -1);
-  EXPECT_EQ(statSum(RPCOperator::kRpcRateLimiterMinCap), kMaxLimit);
-  EXPECT_EQ(statSum(RPCOperator::kRpcRateLimiterCap), kMaxLimit);
+  EXPECT_EQ(
+      statSum(RPCOperatorStatNames::kRpcErrorKindBackendError), kBurstRows);
+  EXPECT_EQ(statSum(RPCOperatorStatNames::kRpcCongestionOverloadShrinks), -1);
+  EXPECT_EQ(statSum(RPCOperatorStatNames::kRpcRateLimiterMinCap), kMaxLimit);
+  EXPECT_EQ(statSum(RPCOperatorStatNames::kRpcRateLimiterCap), kMaxLimit);
 }
 
 // The BATCH arm of the same closed loop: overload burst -> the backend's cap
@@ -1147,15 +1152,15 @@ TEST_F(RPCAimdUnderLoadTest, batchRateLimiterBacksOffThenRecovers) {
   };
 
   // The burst actually landed and was classified by typed cause.
-  EXPECT_GT(statSum(RPCOperator::kRpcErrorKindRateLimited), 0)
+  EXPECT_GT(statSum(RPCOperatorStatNames::kRpcErrorKindRateLimited), 0)
       << "the burst must reach the operator as rate-limit errors";
-  EXPECT_GT(statSum(RPCOperator::kRpcCongestionOverloadShrinks), 0);
+  EXPECT_GT(statSum(RPCOperatorStatNames::kRpcCongestionOverloadShrinks), 0);
 
-  EXPECT_GT(statSum(RPCOperator::kRpcCongestionShrinks), 0)
+  EXPECT_GT(statSum(RPCOperatorStatNames::kRpcCongestionShrinks), 0)
       << "the per-driver window must shrink on batch overload";
 
   // Overload drove the backend's cap below its ceiling.
-  const int64_t minCap = statSum(RPCOperator::kRpcRateLimiterMinCap);
+  const int64_t minCap = statSum(RPCOperatorStatNames::kRpcRateLimiterMinCap);
   ASSERT_GT(minCap, 0)
       << "the low-water stat must be emitted, and a zero cap would mean the "
          "backend stalled outright rather than backed off";
@@ -1164,7 +1169,7 @@ TEST_F(RPCAimdUnderLoadTest, batchRateLimiterBacksOffThenRecovers) {
   // And the clean batches after the burst recovered it. This is the assertion
   // the unit-level test cannot make: recovery here is credited by the operator
   // through the real congestion classifier, one unit per drained batch.
-  const int64_t finalCap = statSum(RPCOperator::kRpcRateLimiterCap);
+  const int64_t finalCap = statSum(RPCOperatorStatNames::kRpcRateLimiterCap);
   EXPECT_GT(finalCap, minCap) << "cap should recover above its low-water mark";
 }
 
@@ -1212,10 +1217,11 @@ TEST_F(RPCAimdUnderLoadTest, batchBackendErrorsDoNotBackOff) {
     return stats.hasCustomStat(key) ? stats.customSum(key) : -1;
   };
 
-  EXPECT_EQ(statSum(RPCOperator::kRpcErrorKindBackendError), kBurstRows);
-  EXPECT_EQ(statSum(RPCOperator::kRpcCongestionOverloadShrinks), -1);
-  EXPECT_EQ(statSum(RPCOperator::kRpcRateLimiterMinCap), kMaxLimit);
-  EXPECT_EQ(statSum(RPCOperator::kRpcRateLimiterCap), kMaxLimit);
+  EXPECT_EQ(
+      statSum(RPCOperatorStatNames::kRpcErrorKindBackendError), kBurstRows);
+  EXPECT_EQ(statSum(RPCOperatorStatNames::kRpcCongestionOverloadShrinks), -1);
+  EXPECT_EQ(statSum(RPCOperatorStatNames::kRpcRateLimiterMinCap), kMaxLimit);
+  EXPECT_EQ(statSum(RPCOperatorStatNames::kRpcRateLimiterCap), kMaxLimit);
 }
 
 } // namespace

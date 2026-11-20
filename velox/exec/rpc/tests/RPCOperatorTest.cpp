@@ -55,6 +55,7 @@
 
 #include "velox/exec/Cursor.h"
 #include "velox/exec/Task.h"
+#include "velox/exec/rpc/RPCOperatorStatNames.h"
 
 namespace facebook::velox::exec::rpc {
 
@@ -1421,18 +1422,18 @@ class RPCOperatorTest : public OperatorTestBase {
         }));
     EXPECT_EQ(function->numAttempts.load(), 4);
     const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-    EXPECT_EQ(stats.customSum(RPCOperator::kRpcRequestsDispatched), 3);
-    EXPECT_EQ(stats.customSum(RPCOperator::kRpcResponsesReceived), 3);
-    EXPECT_EQ(stats.customSum(RPCOperator::kRpcErrorCount), 0);
-    EXPECT_EQ(stats.customSum(RPCOperator::kRpcCapacityRetries), 1);
+    EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcRequestsDispatched), 3);
+    EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcResponsesReceived), 3);
+    EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcErrorCount), 0);
+    EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcCapacityRetries), 1);
     const auto rejections = [&](const std::string& name) {
       return stats.hasCustomStat(name) ? stats.customSum(name) : 0;
     };
     EXPECT_EQ(
-        rejections(RPCOperator::kRpcQuotaRejections),
+        rejections(RPCOperatorStatNames::kRpcQuotaRejections),
         cause == velox::rpc::CapacityRetryCause::kQuota ? 1 : 0);
     EXPECT_EQ(
-        rejections(RPCOperator::kRpcCapacityRejections),
+        rejections(RPCOperatorStatNames::kRpcCapacityRejections),
         cause == velox::rpc::CapacityRetryCause::kCapacity ? 1 : 0);
     // Only CAPACITY_PROBING leaves the backoff of a named capacity rejection to
     // an adaptive shared limiter. WINDOW_AIMD, and CAPACITY_PROBING for any
@@ -1442,23 +1443,31 @@ class RPCOperatorTest : public OperatorTestBase {
     const bool namedCapacity =
         cause == velox::rpc::CapacityRetryCause::kCapacity;
     EXPECT_EQ(
-        stats.hasCustomStat(RPCOperator::kRpcCongestionOverloadShrinks),
+        stats.hasCustomStat(
+            RPCOperatorStatNames::kRpcCongestionOverloadShrinks),
         !(sharedAdaptive && capacityProbing && namedCapacity));
     EXPECT_EQ(
-        stats.customStat(RPCOperator::kRpcFlowControlEffectivePolicy).max,
+        stats.customStat(RPCOperatorStatNames::kRpcFlowControlEffectivePolicy)
+            .max,
         static_cast<int64_t>(flowControlPolicy));
     if (minimumSharedCapacity.has_value()) {
       EXPECT_EQ(
-          stats.customStat(RPCOperator::kRpcRateLimiterMinCap).min,
+          stats.customStat(RPCOperatorStatNames::kRpcRateLimiterMinCap).min,
           minimumSharedCapacity.value());
     } else if (!sharedAdaptive) {
-      EXPECT_EQ(stats.customStat(RPCOperator::kRpcRateLimiterMinCap).min, 64);
+      EXPECT_EQ(
+          stats.customStat(RPCOperatorStatNames::kRpcRateLimiterMinCap).min,
+          64);
     } else if (!capacityProbing) {
-      EXPECT_LT(stats.customStat(RPCOperator::kRpcRateLimiterMinCap).min, 64);
+      EXPECT_LT(
+          stats.customStat(RPCOperatorStatNames::kRpcRateLimiterMinCap).min,
+          64);
     } else {
       EXPECT_LT(
-          stats.customStat(RPCOperator::kRpcRateLimiterMinLimitMilli).min,
-          stats.customStat(RPCOperator::kRpcRateLimiterHardLimit).max * 1'000);
+          stats.customStat(RPCOperatorStatNames::kRpcRateLimiterMinLimitMilli)
+              .min,
+          stats.customStat(RPCOperatorStatNames::kRpcRateLimiterHardLimit).max *
+              1'000);
     }
   }
 
@@ -1468,7 +1477,7 @@ class RPCOperatorTest : public OperatorTestBase {
       const std::shared_ptr<exec::Task>& task) {
     return PlanNodeStats::extract(
                task->taskStats(), task->planFragment().planNode->id())
-        .hasCustomStat(RPCOperator::kRpcRateLimiterPolicyScoped);
+        .hasCustomStat(RPCOperatorStatNames::kRpcRateLimiterPolicyScoped);
   }
 
   static void expectRanOnSharedLimiter(
@@ -1583,7 +1592,7 @@ TEST_F(RPCOperatorTest, capacityProbingGivesNoGrowthForOverloadRetriedRows) {
         kRows);
     const auto limitMilli =
         PlanNodeStats::extract(task->taskStats(), plan->id())
-            .customStat(RPCOperator::kRpcRateLimiterLimitMilli)
+            .customStat(RPCOperatorStatNames::kRpcRateLimiterLimitMilli)
             .max;
     if (grows) {
       EXPECT_GT(limitMilli, 200'000);
@@ -1679,9 +1688,12 @@ TEST_F(RPCOperatorTest, windowAimdCutsDriverWindowOnEveryOverloadedRetry) {
 
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   EXPECT_EQ(
-      stats.customStat(RPCOperator::kRpcFlowControlEffectivePolicy).max, 0);
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcCapacityRetries), 3);
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcCongestionOverloadShrinks), 3);
+      stats.customStat(RPCOperatorStatNames::kRpcFlowControlEffectivePolicy)
+          .max,
+      0);
+  EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcCapacityRetries), 3);
+  EXPECT_EQ(
+      stats.customSum(RPCOperatorStatNames::kRpcCongestionOverloadShrinks), 3);
 }
 
 // A function's aggregate congestion verdict carries no capacity hint, so it
@@ -1739,12 +1751,14 @@ TEST_F(RPCOperatorTest, terminalCapacityRejectionStillCutsDriverWindow) {
           {input->childAt(0), makeNullConstant(TypeKind::VARCHAR, 1)}));
   EXPECT_EQ(function->numAttempts.load(), 1);
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcRequestsDispatched), 1);
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcResponsesReceived), 1);
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcErrorCount), 1);
-  EXPECT_FALSE(stats.hasCustomStat(RPCOperator::kRpcCapacityRetries));
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcCongestionOverloadShrinks), 1);
-  EXPECT_LT(stats.customStat(RPCOperator::kRpcRateLimiterMinCap).min, 64);
+  EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcRequestsDispatched), 1);
+  EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcResponsesReceived), 1);
+  EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcErrorCount), 1);
+  EXPECT_FALSE(stats.hasCustomStat(RPCOperatorStatNames::kRpcCapacityRetries));
+  EXPECT_EQ(
+      stats.customSum(RPCOperatorStatNames::kRpcCongestionOverloadShrinks), 1);
+  EXPECT_LT(
+      stats.customStat(RPCOperatorStatNames::kRpcRateLimiterMinCap).min, 64);
 }
 
 /// Runs Values(3 rows) → RPCNode → verifies passthrough + RPC result.
@@ -1796,8 +1810,8 @@ TEST_F(RPCOperatorTest, usesFunctionBatchTimeout) {
   ASSERT_EQ(result->size(), 1);
   ASSERT_TRUE(result->childAt(1)->isNullAt(0));
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  ASSERT_TRUE(stats.hasCustomStat(RPCOperator::kRpcErrorKindTimeout));
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcErrorKindTimeout), 1);
+  ASSERT_TRUE(stats.hasCustomStat(RPCOperatorStatNames::kRpcErrorKindTimeout));
+  EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcErrorKindTimeout), 1);
 }
 
 /// Null input rows should produce null in the RPC result column.
@@ -1883,7 +1897,7 @@ TEST_F(
       std::unordered_map<std::string, std::string>{}};
   EXPECT_EQ(
       PlanNodeStats::extract(task->taskStats(), plan->id())
-          .customStat(RPCOperator::kRpcRateLimiterHardLimit)
+          .customStat(RPCOperatorStatNames::kRpcRateLimiterHardLimit)
           .max,
       defaults.rpcRateLimiterMaxLimit())
       << "the later query ran under the shared limiter's ceiling";
@@ -1913,7 +1927,7 @@ TEST_F(RPCOperatorTest, explicitSessionLimitsAreHonoredOnSealedBackend) {
         .countResults(task);
     return Run{
         .lowestCap = PlanNodeStats::extract(task->taskStats(), plan->id())
-                         .customStat(RPCOperator::kRpcRateLimiterCap)
+                         .customStat(RPCOperatorStatNames::kRpcRateLimiterCap)
                          .min,
         .policyScoped = ranOnPolicyScopedLimiter(task)};
   };
@@ -1949,7 +1963,7 @@ TEST_F(RPCOperatorTest, defaultQueryDoesNotInheritAnotherQuerysPolicy) {
   const core::QueryConfig defaults{
       std::unordered_map<std::string, std::string>{}};
   EXPECT_EQ(
-      stats.customStat(RPCOperator::kRpcRateLimiterHardLimit).max,
+      stats.customStat(RPCOperatorStatNames::kRpcRateLimiterHardLimit).max,
       defaults.rpcRateLimiterMaxLimit());
   EXPECT_TRUE(ranOnPolicyScopedLimiter(task));
 }
@@ -1978,23 +1992,26 @@ TEST_F(RPCOperatorTest, eagerAdmissionReportsPolicyScopedLimiter) {
     // The default policy differs from the sealed one, so the query runs under
     // the default ceiling on a limiter of its own.
     const auto stats = runtimeStats("constant_setup_rpc", {});
-    EXPECT_TRUE(stats.hasCustomStat(RPCOperator::kRpcRateLimiterPolicyScoped));
-    ASSERT_TRUE(stats.hasCustomStat(RPCOperator::kRpcRateLimiterHardLimit));
+    EXPECT_TRUE(
+        stats.hasCustomStat(RPCOperatorStatNames::kRpcRateLimiterPolicyScoped));
+    ASSERT_TRUE(
+        stats.hasCustomStat(RPCOperatorStatNames::kRpcRateLimiterHardLimit));
     const core::QueryConfig defaults{
         std::unordered_map<std::string, std::string>{}};
     EXPECT_EQ(
-        stats.customStat(RPCOperator::kRpcRateLimiterHardLimit).max,
+        stats.customStat(RPCOperatorStatNames::kRpcRateLimiterHardLimit).max,
         defaults.rpcRateLimiterMaxLimit());
   }
   {
     const auto stats = runtimeStats("constant_setup_rpc", sessionFor(policy));
-    EXPECT_TRUE(stats.hasCustomStat(RPCOperator::kRpcRateLimiterCap));
-    EXPECT_FALSE(stats.hasCustomStat(RPCOperator::kRpcRateLimiterPolicyScoped));
+    EXPECT_TRUE(stats.hasCustomStat(RPCOperatorStatNames::kRpcRateLimiterCap));
+    EXPECT_FALSE(
+        stats.hasCustomStat(RPCOperatorStatNames::kRpcRateLimiterPolicyScoped));
   }
   {
     // A function that inspects rows first resolves no limiter without input.
     const auto stats = runtimeStats("demo_rpc", {});
-    EXPECT_FALSE(stats.hasCustomStat(RPCOperator::kRpcRateLimiterCap));
+    EXPECT_FALSE(stats.hasCustomStat(RPCOperatorStatNames::kRpcRateLimiterCap));
   }
 }
 
@@ -2144,8 +2161,10 @@ TEST_F(RPCOperatorTest, invalidRequestRowsAreCountedByErrorKind) {
   AssertQueryBuilder(plan).countResults(task);
 
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  ASSERT_TRUE(stats.hasCustomStat(RPCOperator::kRpcErrorKindInvalidRequest));
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcErrorKindInvalidRequest), 1);
+  ASSERT_TRUE(
+      stats.hasCustomStat(RPCOperatorStatNames::kRpcErrorKindInvalidRequest));
+  EXPECT_EQ(
+      stats.customSum(RPCOperatorStatNames::kRpcErrorKindInvalidRequest), 1);
 }
 
 TEST_F(RPCOperatorTest, localOnlyBatchPreservesPendingAdmittedRows) {
@@ -2634,9 +2653,10 @@ TEST_F(RPCOperatorTest, batchSuccessFromStaleEpochDoesNotUndoOverload) {
   EXPECT_EQ(limiterStats.capacity, 2)
       << "success admitted before overload must not recover the new epoch";
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  ASSERT_TRUE(stats.hasCustomStat(RPCOperator::kRpcStaleSuccessUnits));
+  ASSERT_TRUE(stats.hasCustomStat(RPCOperatorStatNames::kRpcStaleSuccessUnits));
   // The fan-out batch reserves one admission unit per row.
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcStaleSuccessUnits), kRows);
+  EXPECT_EQ(
+      stats.customSum(RPCOperatorStatNames::kRpcStaleSuccessUnits), kRows);
 }
 
 // No row of a rate-limited batch succeeds, so the batch earns no credit and has
@@ -2661,8 +2681,8 @@ TEST_F(RPCOperatorTest, rateLimitedBatchReportsNoStaleSuccess) {
   ASSERT_LT(limiter.stats().limitMilli, kCeiling * 1'000);
 
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  ASSERT_TRUE(stats.hasCustomStat(RPCOperator::kRpcStaleSuccessUnits));
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcStaleSuccessUnits), 0);
+  ASSERT_TRUE(stats.hasCustomStat(RPCOperatorStatNames::kRpcStaleSuccessUnits));
+  EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcStaleSuccessUnits), 0);
 }
 
 // A flush whose own overload cuts the window still reports its credit as stale
@@ -2691,8 +2711,8 @@ TEST_F(RPCOperatorTest, partlyRateLimitedBatchReportsStaleSuccess) {
 
   // One native flush holds one admission unit.
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  ASSERT_TRUE(stats.hasCustomStat(RPCOperator::kRpcStaleSuccessUnits));
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcStaleSuccessUnits), 1);
+  ASSERT_TRUE(stats.hasCustomStat(RPCOperatorStatNames::kRpcStaleSuccessUnits));
+  EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcStaleSuccessUnits), 1);
 }
 
 // Credit follows the rows, not the verdict: a batch whose rows succeed reports
@@ -2723,8 +2743,9 @@ TEST_F(RPCOperatorTest, staleBatchWithoutSuccessVerdictReportsStaleSuccess) {
   ASSERT_EQ(limiter.stats().capacity, 2);
 
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  ASSERT_TRUE(stats.hasCustomStat(RPCOperator::kRpcStaleSuccessUnits));
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcStaleSuccessUnits), kRows);
+  ASSERT_TRUE(stats.hasCustomStat(RPCOperatorStatNames::kRpcStaleSuccessUnits));
+  EXPECT_EQ(
+      stats.customSum(RPCOperatorStatNames::kRpcStaleSuccessUnits), kRows);
 }
 
 TEST_F(RPCOperatorTest, currentEpochSuccessRecoversAlongsideOverload) {
@@ -2751,8 +2772,8 @@ TEST_F(RPCOperatorTest, currentEpochSuccessRecoversAlongsideOverload) {
       << "a current-epoch success must recover after the overload marker";
   // The slow row was admitted before the overload.
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  ASSERT_TRUE(stats.hasCustomStat(RPCOperator::kRpcStaleSuccessUnits));
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcStaleSuccessUnits), 1);
+  ASSERT_TRUE(stats.hasCustomStat(RPCOperatorStatNames::kRpcStaleSuccessUnits));
+  EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcStaleSuccessUnits), 1);
 }
 
 // Successes after overloaded attempts are counted, but neither the driver
@@ -2781,10 +2802,11 @@ TEST_F(RPCOperatorTest, overloadedAttemptsAreCounted) {
   auto statSum = [&](const std::string& key) -> int64_t {
     return stats.hasCustomStat(key) ? stats.customSum(key) : -1;
   };
-  EXPECT_EQ(statSum(RPCOperator::kRpcCongestionOverloadShrinks), -1);
-  EXPECT_EQ(statSum(RPCOperator::kRpcSuccessesAfterOverload), kCeiling);
+  EXPECT_EQ(statSum(RPCOperatorStatNames::kRpcCongestionOverloadShrinks), -1);
   EXPECT_EQ(
-      statSum(RPCOperator::kRpcOverloadedAttempts),
+      statSum(RPCOperatorStatNames::kRpcSuccessesAfterOverload), kCeiling);
+  EXPECT_EQ(
+      statSum(RPCOperatorStatNames::kRpcOverloadedAttempts),
       OverloadedAttemptsRPCFunction::kNumOverloadedAttempts * kCeiling);
 }
 
@@ -2920,14 +2942,14 @@ TEST_F(
   // still trains the shared limiter's horizon.
   EXPECT_NE(limiter.stats().serviceHorizonNanos, 1'000'000'000);
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  EXPECT_FALSE(stats.hasCustomStat(RPCOperator::kRpcBaselineRttNanos));
+  EXPECT_FALSE(stats.hasCustomStat(RPCOperatorStatNames::kRpcBaselineRttNanos));
   auto statSum = [&](const std::string& key) -> int64_t {
     return stats.hasCustomStat(key) ? stats.customSum(key) : -1;
   };
   // 16 rows at 2 per batch complete as 8 flushes: 8 clean units lift the
   // BATCH window 2 -> 3. Without the NoLatency branch it would stay at 2;
   // counting rows instead of flushes would reach 4.
-  EXPECT_EQ(statSum(RPCOperator::kRpcCongestionWindowFinal), 3);
+  EXPECT_EQ(statSum(RPCOperatorStatNames::kRpcCongestionWindowFinal), 3);
 }
 
 TEST_F(
@@ -2983,7 +3005,7 @@ TEST_F(
   // Growth disabled: legacy behavior end to end — the BATCH window stays
   // pinned at its start, and the no-latency round trips still train the
   // shared service horizon instead of leaving it at the bootstrap.
-  EXPECT_EQ(statSum(RPCOperator::kRpcCongestionWindowFinal), 2);
+  EXPECT_EQ(statSum(RPCOperatorStatNames::kRpcCongestionWindowFinal), 2);
   EXPECT_NE(limiter.stats().serviceHorizonNanos, 1'000'000'000);
 }
 
@@ -3021,9 +3043,10 @@ TEST_F(RPCOperatorTest, lowWaterCapacityIsReportedWhenTheBackendStaysHealthy) {
   ASSERT_EQ(limiter.stats().capacity, kCeiling);
 
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  ASSERT_TRUE(stats.hasCustomStat(RPCOperator::kRpcRateLimiterMinCap))
+  ASSERT_TRUE(stats.hasCustomStat(RPCOperatorStatNames::kRpcRateLimiterMinCap))
       << "the low-water stat must land even when the backend never shrank";
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcRateLimiterMinCap), kCeiling);
+  EXPECT_EQ(
+      stats.customSum(RPCOperatorStatNames::kRpcRateLimiterMinCap), kCeiling);
 }
 
 // The shared limiter outlives the query and paces before the driver's first
@@ -3075,27 +3098,30 @@ TEST_F(RPCOperatorTest, limiterStatsCoverOnlyTheOperatorsSpan) {
   expectRanOnSharedLimiter(task);
 
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  ASSERT_TRUE(stats.hasCustomStat(RPCOperator::kRpcRateLimiterAttachedNanos));
+  ASSERT_TRUE(
+      stats.hasCustomStat(RPCOperatorStatNames::kRpcRateLimiterAttachedNanos));
   const auto& attached =
-      stats.customStat(RPCOperator::kRpcRateLimiterAttachedNanos);
+      stats.customStat(RPCOperatorStatNames::kRpcRateLimiterAttachedNanos);
   EXPECT_EQ(attached.unit, RuntimeCounter::Unit::kNanos);
   // One driver published it once, whatever the live samples did.
   EXPECT_EQ(attached.count, 1);
   EXPECT_GT(attached.sum, 0);
-  ASSERT_TRUE(stats.hasCustomStat(RPCOperator::kRpcRateLimiterPacingNanos));
+  ASSERT_TRUE(
+      stats.hasCustomStat(RPCOperatorStatNames::kRpcRateLimiterPacingNanos));
   const auto& pacing =
-      stats.customStat(RPCOperator::kRpcRateLimiterPacingNanos);
+      stats.customStat(RPCOperatorStatNames::kRpcRateLimiterPacingNanos);
   EXPECT_EQ(pacing.unit, RuntimeCounter::Unit::kNanos);
   EXPECT_EQ(pacing.sum, 0);
   // A constant window integrates to the window times the span.
-  ASSERT_TRUE(
-      stats.hasCustomStat(RPCOperator::kRpcRateLimiterLimitMilliUnitSeconds));
+  ASSERT_TRUE(stats.hasCustomStat(
+      RPCOperatorStatNames::kRpcRateLimiterLimitMilliUnitSeconds));
   EXPECT_EQ(
-      stats.customSum(RPCOperator::kRpcRateLimiterLimitMilliUnitSeconds),
+      stats.customSum(
+          RPCOperatorStatNames::kRpcRateLimiterLimitMilliUnitSeconds),
       std::llround(
           kCeiling * 1'000 * (static_cast<double>(attached.sum) / 1e9)));
-  ASSERT_TRUE(stats.hasCustomStat(RPCOperator::kRpcStaleSuccessUnits));
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcStaleSuccessUnits), 0);
+  ASSERT_TRUE(stats.hasCustomStat(RPCOperatorStatNames::kRpcStaleSuccessUnits));
+  EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcStaleSuccessUnits), 0);
 }
 
 // constant_setup_rpc binds the limiter in initialize(), before any input. The
@@ -3115,24 +3141,27 @@ TEST_F(RPCOperatorTest, limiterSpanStartsAtTheFirstAdmissionRequest) {
 
   {
     const auto customStats = runQuery({});
-    ASSERT_TRUE(customStats.hasCustomStat(RPCOperator::kRpcRateLimiterCap));
-    EXPECT_FALSE(
-        customStats.hasCustomStat(RPCOperator::kRpcRateLimiterAttachedNanos));
-    EXPECT_FALSE(
-        customStats.hasCustomStat(RPCOperator::kRpcRateLimiterPacingNanos));
+    ASSERT_TRUE(
+        customStats.hasCustomStat(RPCOperatorStatNames::kRpcRateLimiterCap));
     EXPECT_FALSE(customStats.hasCustomStat(
-        RPCOperator::kRpcRateLimiterLimitMilliUnitSeconds));
+        RPCOperatorStatNames::kRpcRateLimiterAttachedNanos));
+    EXPECT_FALSE(customStats.hasCustomStat(
+        RPCOperatorStatNames::kRpcRateLimiterPacingNanos));
+    EXPECT_FALSE(customStats.hasCustomStat(
+        RPCOperatorStatNames::kRpcRateLimiterLimitMilliUnitSeconds));
   }
   {
     const auto customStats = runQuery({"a", "b"});
-    ASSERT_TRUE(
-        customStats.hasCustomStat(RPCOperator::kRpcRateLimiterAttachedNanos));
+    ASSERT_TRUE(customStats.hasCustomStat(
+        RPCOperatorStatNames::kRpcRateLimiterAttachedNanos));
     EXPECT_GT(
-        customStats.customSum(RPCOperator::kRpcRateLimiterAttachedNanos), 0);
-    EXPECT_TRUE(
-        customStats.hasCustomStat(RPCOperator::kRpcRateLimiterPacingNanos));
+        customStats.customSum(
+            RPCOperatorStatNames::kRpcRateLimiterAttachedNanos),
+        0);
     EXPECT_TRUE(customStats.hasCustomStat(
-        RPCOperator::kRpcRateLimiterLimitMilliUnitSeconds));
+        RPCOperatorStatNames::kRpcRateLimiterPacingNanos));
+    EXPECT_TRUE(customStats.hasCustomStat(
+        RPCOperatorStatNames::kRpcRateLimiterLimitMilliUnitSeconds));
   }
 }
 
@@ -3167,11 +3196,11 @@ TEST_F(RPCOperatorTest, limiterSpanStatsFollowAMidQueryWindowChange) {
 
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   const auto attachedNanos =
-      stats.customSum(RPCOperator::kRpcRateLimiterAttachedNanos);
+      stats.customSum(RPCOperatorStatNames::kRpcRateLimiterAttachedNanos);
   const auto pacingNanos =
-      stats.customSum(RPCOperator::kRpcRateLimiterPacingNanos);
-  const auto limitMilliSeconds =
-      stats.customSum(RPCOperator::kRpcRateLimiterLimitMilliUnitSeconds);
+      stats.customSum(RPCOperatorStatNames::kRpcRateLimiterPacingNanos);
+  const auto limitMilliSeconds = stats.customSum(
+      RPCOperatorStatNames::kRpcRateLimiterLimitMilliUnitSeconds);
   // Each window held over the whole span bounds the integral, which is rounded
   // to the nearest milli-unit-second.
   const double attachedSeconds = static_cast<double>(attachedNanos) / 1e9;
@@ -3571,10 +3600,12 @@ TEST_F(RPCOperatorTest, deferredReceiptFailuresDoNotStartRecovery) {
   auto result = run(task);
   ASSERT_EQ(result->size(), 1);
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  ASSERT_TRUE(stats.hasCustomStat(RPCOperator::kRpcErrorCount));
-  ASSERT_TRUE(stats.hasCustomStat(RPCOperator::kRpcErrorKindBackendError));
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcErrorCount), 1);
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcErrorKindBackendError), 1);
+  ASSERT_TRUE(stats.hasCustomStat(RPCOperatorStatNames::kRpcErrorCount));
+  ASSERT_TRUE(
+      stats.hasCustomStat(RPCOperatorStatNames::kRpcErrorKindBackendError));
+  EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcErrorCount), 1);
+  EXPECT_EQ(
+      stats.customSum(RPCOperatorStatNames::kRpcErrorKindBackendError), 1);
   EXPECT_FALSE(limiter.stats().recovering);
   EXPECT_EQ(limiter.stats().limitMilli, 250);
   const auto* receipt = result->childAt(1)->asChecked<RowVector>();
@@ -3621,8 +3652,8 @@ TEST_F(RPCOperatorTest, concurrentDeferredPollOverloadsCutOneEpoch) {
   EXPECT_EQ(
       RPCRateLimiterRegistry::global().get("").stats().limitMilli, 10'000);
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcErrorCount), 2);
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcErrorKindRateLimited), 2);
+  EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcErrorCount), 2);
+  EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcErrorKindRateLimited), 2);
 }
 
 TEST_F(RPCOperatorTest, replayedReceiptFailuresDoNotBackOffAgain) {
@@ -3670,7 +3701,7 @@ TEST_F(RPCOperatorTest, replayedReceiptFailuresDoNotBackOffAgain) {
   for (const auto& id : {submitId, pollId, collectId}) {
     EXPECT_EQ(
         PlanNodeStats::extract(task->taskStats(), id)
-            .customSum(RPCOperator::kRpcErrorCount),
+            .customSum(RPCOperatorStatNames::kRpcErrorCount),
         1);
   }
 }
@@ -4351,13 +4382,14 @@ TEST_F(RPCOperatorTest, rpcLivenessStatsVisibleWhileDriverIsParked) {
         if (op.operatorType != "RPC") {
           continue;
         }
-        const auto inFlight = op.runtimeStats.find(RPCOperator::kRpcInFlight);
+        const auto inFlight =
+            op.runtimeStats.find(RPCOperatorStatNames::kRpcInFlight);
         if (inFlight != op.runtimeStats.end()) {
           peakInFlightWhileRunning =
               std::max(peakInFlightWhileRunning, inFlight->second.sum);
         }
         const auto completions =
-            op.runtimeStats.find(RPCOperator::kRpcCompletionsSignaled);
+            op.runtimeStats.find(RPCOperatorStatNames::kRpcCompletionsSignaled);
         if (completions != op.runtimeStats.end()) {
           completionsWhileRunning =
               std::max(completionsWhileRunning, completions->second.sum);
@@ -4401,10 +4433,11 @@ TEST_F(RPCOperatorTest, rpcLivenessStatsVisibleWhileDriverIsParked) {
       if (op.operatorType != "RPC") {
         continue;
       }
-      EXPECT_EQ(op.runtimeStats.count(RPCOperator::kRpcInFlight), 0)
+      EXPECT_EQ(op.runtimeStats.count(RPCOperatorStatNames::kRpcInFlight), 0)
           << "in-flight gauge was frozen into the finished task's stats";
       EXPECT_GT(
-          op.runtimeStats.at(RPCOperator::kRpcCompletionsSignaled).sum, 0);
+          op.runtimeStats.at(RPCOperatorStatNames::kRpcCompletionsSignaled).sum,
+          0);
     }
   }
 }
@@ -4459,10 +4492,12 @@ TEST_F(RPCOperatorTest, rpcRetriesAttemptedAdvancesWhileDriverIsParked) {
           continue;
         }
         return Sample{
-            .retries = readStat(op, RPCOperator::kRpcRetriesAttempted),
-            .dispatched = readStat(op, RPCOperator::kRpcRequestsDispatched),
-            .completions = readStat(op, RPCOperator::kRpcCompletionsSignaled),
-            .inFlight = readStat(op, RPCOperator::kRpcInFlight),
+            .retries = readStat(op, RPCOperatorStatNames::kRpcRetriesAttempted),
+            .dispatched =
+                readStat(op, RPCOperatorStatNames::kRpcRequestsDispatched),
+            .completions =
+                readStat(op, RPCOperatorStatNames::kRpcCompletionsSignaled),
+            .inFlight = readStat(op, RPCOperatorStatNames::kRpcInFlight),
         };
       }
     }
@@ -4713,7 +4748,7 @@ TEST_F(RPCOperatorTest, capacityProbingDriverWindowRisesToLimiterCeiling) {
     EXPECT_EQ(
         PlanNodeStats::extract(
             cursor->task()->taskStats(), params.planNode->id())
-            .customStat(RPCOperator::kRpcRateLimiterPeakPending)
+            .customStat(RPCOperatorStatNames::kRpcRateLimiterPeakPending)
             .max,
         testCase.expectedInFlight);
   }
@@ -4768,7 +4803,7 @@ TEST_F(RPCOperatorTest, driverWindowUnderSafetyCeilingFollowsPolicy) {
     EXPECT_EQ(
         PlanNodeStats::extract(
             cursor->task()->taskStats(), params.planNode->id())
-            .customStat(RPCOperator::kRpcRateLimiterPeakPending)
+            .customStat(RPCOperatorStatNames::kRpcRateLimiterPeakPending)
             .max,
         expectedPeak);
   }
@@ -4805,9 +4840,11 @@ TEST_F(RPCOperatorTest, nonAdaptiveCapacityProbingRequestSharesFixedLimiter) {
             }));
     const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
     EXPECT_EQ(
-        stats.customSum(RPCOperator::kRpcFlowControlRequestedPolicy),
+        stats.customSum(RPCOperatorStatNames::kRpcFlowControlRequestedPolicy),
         static_cast<int64_t>(requested));
-    EXPECT_EQ(stats.customSum(RPCOperator::kRpcFlowControlEffectivePolicy), 0);
+    EXPECT_EQ(
+        stats.customSum(RPCOperatorStatNames::kRpcFlowControlEffectivePolicy),
+        0);
     auto policy = base;
     policy.flowControlPolicy = requested;
     EXPECT_EQ(registry.getForPolicy(key, policy).limiter, original);
@@ -4855,9 +4892,12 @@ TEST_F(RPCOperatorTest, retryCapabilityAloneDoesNotSelectCapacityProbing) {
       cursor->task()->allDriversClosedFuture().wait(std::chrono::seconds{5}));
   const auto stats = PlanNodeStats::extract(
       cursor->task()->taskStats(), params.planNode->id());
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcRateLimiterPolicyScoped), 1);
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcFlowControlRequestedPolicy), 0);
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcFlowControlEffectivePolicy), 0);
+  EXPECT_EQ(
+      stats.customSum(RPCOperatorStatNames::kRpcRateLimiterPolicyScoped), 1);
+  EXPECT_EQ(
+      stats.customSum(RPCOperatorStatNames::kRpcFlowControlRequestedPolicy), 0);
+  EXPECT_EQ(
+      stats.customSum(RPCOperatorStatNames::kRpcFlowControlEffectivePolicy), 0);
 }
 
 TEST_F(RPCOperatorTest, flowControlPolicySelectionIsExplicitAndReported) {
@@ -4886,12 +4926,14 @@ TEST_F(RPCOperatorTest, flowControlPolicySelectionIsExplicitAndReported) {
         2);
     const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
     EXPECT_EQ(
-        stats.customSum(RPCOperator::kRpcFlowControlRequestedPolicy), code);
+        stats.customSum(RPCOperatorStatNames::kRpcFlowControlRequestedPolicy),
+        code);
     EXPECT_EQ(
-        stats.customSum(RPCOperator::kRpcFlowControlEffectivePolicy), code);
+        stats.customSum(RPCOperatorStatNames::kRpcFlowControlEffectivePolicy),
+        code);
     EXPECT_TRUE(
-        !stats.hasCustomStat(RPCOperator::kRpcCapacityRetries) ||
-        stats.customSum(RPCOperator::kRpcCapacityRetries) == 0);
+        !stats.hasCustomStat(RPCOperatorStatNames::kRpcCapacityRetries) ||
+        stats.customSum(RPCOperatorStatNames::kRpcCapacityRetries) == 0);
   }
 }
 
@@ -4912,8 +4954,10 @@ TEST_F(RPCOperatorTest, batchCapacityProbingRequestRunsWindowPolicy) {
           .countResults(task),
       2);
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcFlowControlRequestedPolicy), 1);
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcFlowControlEffectivePolicy), 0);
+  EXPECT_EQ(
+      stats.customSum(RPCOperatorStatNames::kRpcFlowControlRequestedPolicy), 1);
+  EXPECT_EQ(
+      stats.customSum(RPCOperatorStatNames::kRpcFlowControlEffectivePolicy), 0);
   // An ineligible request runs on the default query's limiter, not its own.
   expectRanOnSharedLimiter(task);
 }
@@ -4945,8 +4989,10 @@ TEST_F(RPCOperatorTest, perRowCapacityProbingRequestRunsWindowPolicy) {
           .countResults(task),
       2);
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcFlowControlRequestedPolicy), 1);
-  EXPECT_EQ(stats.customSum(RPCOperator::kRpcFlowControlEffectivePolicy), 0);
+  EXPECT_EQ(
+      stats.customSum(RPCOperatorStatNames::kRpcFlowControlRequestedPolicy), 1);
+  EXPECT_EQ(
+      stats.customSum(RPCOperatorStatNames::kRpcFlowControlEffectivePolicy), 0);
   expectRanOnSharedLimiter(task);
 }
 
@@ -4974,10 +5020,14 @@ TEST_F(
             .countResults(task),
         3);
     const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-    EXPECT_EQ(stats.customSum(RPCOperator::kRpcFlowControlRequestedPolicy), 1);
-    EXPECT_EQ(stats.customSum(RPCOperator::kRpcFlowControlEffectivePolicy), 0);
-    EXPECT_EQ(stats.customSum(RPCOperator::kRpcRequestsDispatched), 3);
-    EXPECT_EQ(stats.customSum(RPCOperator::kRpcResponsesReceived), 3);
+    EXPECT_EQ(
+        stats.customSum(RPCOperatorStatNames::kRpcFlowControlRequestedPolicy),
+        1);
+    EXPECT_EQ(
+        stats.customSum(RPCOperatorStatNames::kRpcFlowControlEffectivePolicy),
+        0);
+    EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcRequestsDispatched), 3);
+    EXPECT_EQ(stats.customSum(RPCOperatorStatNames::kRpcResponsesReceived), 3);
   };
 
   // Batch mode.

@@ -18,6 +18,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/TopNRowNumberStatNames.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -567,9 +568,10 @@ TEST_P(MultiTopNRowNumberTest, abandonPartial) {
         exec::PlanNodeStats::extract(task->taskStats(), topNRowNumberId);
     ASSERT_EQ(stats.outputRows, expectedOutputRows);
     if (expectAbandoned) {
-      ASSERT_EQ(stats.customSum(TopNRowNumber::kAbandonedPartial), 1);
+      ASSERT_EQ(stats.customSum(TopNRowNumberStatNames::kAbandonedPartial), 1);
     } else {
-      ASSERT_FALSE(stats.hasCustomStat(TopNRowNumber::kAbandonedPartial));
+      ASSERT_FALSE(
+          stats.hasCustomStat(TopNRowNumberStatNames::kAbandonedPartial));
     }
   };
 
@@ -613,7 +615,7 @@ TEST_P(MultiTopNRowNumberTest, abandonPartial) {
                     functionName_));
     ASSERT_FALSE(
         exec::PlanNodeStats::extract(task->taskStats(), topNRowNumberId)
-            .hasCustomStat(TopNRowNumber::kAbandonedPartial));
+            .hasCustomStat(TopNRowNumberStatNames::kAbandonedPartial));
   }
 }
 

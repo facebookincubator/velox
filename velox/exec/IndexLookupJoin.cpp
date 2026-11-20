@@ -21,6 +21,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/exec/IndexLookupJoinStatNames.h"
 #include "velox/exec/OperatorTraceWriter.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
@@ -688,7 +689,7 @@ bool IndexLookupJoin::collectIndexSplits(ContinueFuture* future) {
       {
         auto lockedStats = stats_.wlock();
         lockedStats->addRuntimeStat(
-            kNumIndexSplits,
+            IndexLookupJoinStatNames::kNumIndexSplits,
             RuntimeCounter(
                 static_cast<int64_t>(indexSplits_.size()),
                 RuntimeCounter::Unit::kNone));
@@ -1666,9 +1667,11 @@ void IndexLookupJoin::recordConnectorStats() {
 
   // Record lookup timing into the index stat writer. splitStats extracts these
   // to populate the IndexSource node's addInputTiming.
-  if (connectorStats.count(std::string(kConnectorLookupWallTime)) != 0) {
-    const auto& lookupWallTime =
-        connectorStats[std::string(kConnectorLookupWallTime)];
+  if (connectorStats.count(
+          std::string(IndexLookupJoinStatNames::kConnectorLookupWallTime)) !=
+      0) {
+    const auto& lookupWallTime = connectorStats[std::string(
+        IndexLookupJoinStatNames::kConnectorLookupWallTime)];
     indexStatWriter_->addCount(
         "lookupCount", static_cast<int64_t>(lookupWallTime.count));
     indexStatWriter_->addTiming(
@@ -1681,9 +1684,18 @@ void IndexLookupJoin::recordConnectorStats() {
         "lookupCpuNanos",
         std::chrono::nanoseconds(
             static_cast<int64_t>(
-                connectorStats[std::string(kConnectorResultPrepareTime)].sum +
-                connectorStats[std::string(kClientRequestProcessTime)].sum +
-                connectorStats[std::string(kClientResultProcessTime)].sum)));
+                connectorStats
+                    [std::string(
+                         IndexLookupJoinStatNames::kConnectorResultPrepareTime)]
+                        .sum +
+                connectorStats
+                    [std::string(
+                         IndexLookupJoinStatNames::kClientRequestProcessTime)]
+                        .sum +
+                connectorStats
+                    [std::string(
+                         IndexLookupJoinStatNames::kClientResultProcessTime)]
+                        .sum)));
   }
   // Copy index source stats into the operator's own runtimeStats so they are
   // visible through the task-level runtime stats path.

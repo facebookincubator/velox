@@ -39,6 +39,7 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/exec/TableWriterStatNames.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/TaskMonitor.h"
 
@@ -1518,15 +1519,25 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
     ASSERT_EQ(
         stats[1].runtimeStats["stripeSize"].count, testData.expectedNumStripes);
     ASSERT_EQ(
-        stats[1].runtimeStats[std::string(TableWriter::kNumWrittenFiles)].sum,
+        stats[1]
+            .runtimeStats[std::string(TableWriterStatNames::kNumWrittenFiles)]
+            .sum,
         1);
     ASSERT_EQ(
-        stats[1].runtimeStats[std::string(TableWriter::kNumWrittenFiles)].count,
+        stats[1]
+            .runtimeStats[std::string(TableWriterStatNames::kNumWrittenFiles)]
+            .count,
         1);
     ASSERT_GE(
-        stats[1].runtimeStats[std::string(TableWriter::kWriteIOTime)].sum, 0);
+        stats[1]
+            .runtimeStats[std::string(TableWriterStatNames::kWriteIOTime)]
+            .sum,
+        0);
     ASSERT_EQ(
-        stats[1].runtimeStats[std::string(TableWriter::kWriteIOTime)].count, 1);
+        stats[1]
+            .runtimeStats[std::string(TableWriterStatNames::kWriteIOTime)]
+            .count,
+        1);
   }
 }
 
@@ -2633,17 +2644,17 @@ TEST_P(AllTableWriterTest, tableWriterStats) {
       fixedWrittenBytes);
   ASSERT_EQ(
       stats.operatorStats.at("TableWrite")
-          ->customStat(TableWriter::kNumWrittenFiles)
+          ->customStat(TableWriterStatNames::kNumWrittenFiles)
           .sum,
       numWrittenFiles);
   ASSERT_GE(
       stats.operatorStats.at("TableWrite")
-          ->customStat(TableWriter::kWriteIOTime)
+          ->customStat(TableWriterStatNames::kWriteIOTime)
           .sum,
       0);
   ASSERT_GE(
       stats.operatorStats.at("TableWrite")
-          ->customStat(TableWriter::kRunningWallNanos)
+          ->customStat(TableWriterStatNames::kRunningWallNanos)
           .sum,
       0);
 }

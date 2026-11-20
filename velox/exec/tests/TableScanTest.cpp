@@ -53,8 +53,10 @@
 #include "velox/exec/DriverStats.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/HashProbe.h"
+#include "velox/exec/HashProbeStatNames.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableScan.h"
+#include "velox/exec/TableScanStatNames.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
@@ -1944,9 +1946,9 @@ TEST_F(TableScanTest, multipleSplits) {
         assertQuery(plan, filePaths, "SELECT * FROM tmp", numPrefetchSplit);
     const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
     if (numPrefetchSplit != 0) {
-      ASSERT_GT(stats.customSum(TableScan::kPreloadedSplits), 10);
+      ASSERT_GT(stats.customSum(TableScanStatNames::kPreloadedSplits), 10);
     } else {
-      ASSERT_FALSE(stats.hasCustomStat(TableScan::kPreloadedSplits));
+      ASSERT_FALSE(stats.hasCustomStat(TableScanStatNames::kPreloadedSplits));
     }
   }
 }
@@ -1960,7 +1962,7 @@ TEST_F(TableScanTest, preloadSplits) {
   auto task = assertQuery(
       plan, filePaths, "SELECT * FROM tmp", /*numPrefetchSplit=*/10);
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  ASSERT_EQ(stats.customSum(TableScan::kPreloadedSplits), 10);
+  ASSERT_EQ(stats.customSum(TableScanStatNames::kPreloadedSplits), 10);
 }
 
 TEST_F(TableScanTest, preloadingSplitClose) {
@@ -1984,7 +1986,7 @@ TEST_F(TableScanTest, preloadingSplitClose) {
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
 
   // Verify that split preloading is enabled.
-  ASSERT_GT(stats.customSum(TableScan::kPreloadedSplits), 1);
+  ASSERT_GT(stats.customSum(TableScanStatNames::kPreloadedSplits), 1);
 
   task.reset();
   // Once all task references are cleared, all the tasks should be destroyed.
@@ -3521,7 +3523,7 @@ TEST_F(TableScanTest, bucketPruning) {
     if (numPreloadSplits > 0) {
       EXPECT_GT(
           PlanNodeStats::extract(task->taskStats(), plan->id())
-              .customSum(TableScan::kPreloadedSplits),
+              .customSum(TableScanStatNames::kPreloadedSplits),
           0);
     }
   }
@@ -6041,7 +6043,7 @@ TEST_F(TableScanTest, bloomFilterPushdown) {
     ASSERT_EQ(
         joinStats.customSum(DriverStats::kDynamicFiltersProduced),
         parallelBuild ? 2 : 1);
-    ASSERT_GT(joinStats.customSum(HashProbe::kBloomFilterSize), 0);
+    ASSERT_GT(joinStats.customSum(HashProbeStatNames::kBloomFilterSize), 0);
   }
 }
 
@@ -6395,7 +6397,7 @@ TEST_F(TableScanTest, rowId) {
     }
     auto task = query.assertResults(expected);
     const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-    ASSERT_GT(stats.customSum(TableScan::kPreloadedSplits), 0);
+    ASSERT_GT(stats.customSum(TableScanStatNames::kPreloadedSplits), 0);
   }
   {
     SCOPED_TRACE("Remaining filter only");
@@ -6914,7 +6916,9 @@ TEST_F(TableScanTest, prevBatchEmptyAdaptivity) {
     const auto scanStats =
         PlanNodeStats::extract(task->taskStats(), plan->id());
     const auto numBatchesRead =
-        scanStats.customStat(TableScan::kDataSourceReadWallNanos).count - 1;
+        scanStats.customStat(TableScanStatNames::kDataSourceReadWallNanos)
+            .count -
+        1;
     const auto batchSizeWithoutAdaptivity =
         QueryConfig({}).preferredOutputBatchBytes() /
         (sizeof(int64_t) + stringBytes + sizeof(StringView));
@@ -7691,7 +7695,7 @@ TEST_F(TableScanTest, scanBatchCallbackStorageReadBytesPreload) {
 
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   // Without this the test would silently stop covering the handover path.
-  ASSERT_GT(stats.customSum(TableScan::kPreloadedSplits), 0);
+  ASSERT_GT(stats.customSum(TableScanStatNames::kPreloadedSplits), 0);
   const auto operatorBytes = stats.customSum(io::kStorageReadBytes);
   EXPECT_GT(operatorBytes, 0);
   EXPECT_EQ(summedEventBytes, operatorBytes);
@@ -7798,7 +7802,7 @@ TEST_F(TableScanTest, scanBatchCallbackPreloadedSplits) {
 
   ASSERT_GT(
       PlanNodeStats::extract(task->taskStats(), plan->id())
-          .customSum(TableScan::kPreloadedSplits),
+          .customSum(TableScanStatNames::kPreloadedSplits),
       0);
   EXPECT_THAT(reads, ::testing::ElementsAreArray(expected));
 }
