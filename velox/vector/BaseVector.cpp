@@ -1359,14 +1359,38 @@ void BaseVector::flattenVector(VectorPtr& vector) {
       BaseVector::flattenVector(mapVector->mapValues());
       return;
     }
+    case VectorEncoding::Simple::FLAT_MAP: {
+      auto* flatMap = vector->asUnchecked<FlatMapVector>();
+      for (column_index_t channel = 0; channel < flatMap->numDistinctKeys();
+           ++channel) {
+        BaseVector::flattenVector(flatMap->mapValuesAt(channel));
+      }
+      return;
+    }
     case VectorEncoding::Simple::LAZY: {
       vector = vector->asUnchecked<LazyVector>()->loadedVectorShared();
       BaseVector::flattenVector(vector);
       return;
     }
     default:
-      BaseVector::ensureWritable(
-          SelectivityVector::empty(), vector->type(), vector->pool(), vector);
+      if (vector->wrappedVector()->encoding() ==
+          VectorEncoding::Simple::FLAT_MAP) {
+        auto flatMap = std::make_shared<FlatMapVector>(
+            vector->pool(),
+            vector->type(),
+            nullptr,
+            vector->size(),
+            BaseVector::create(
+                vector->type()->asMap().keyType(), 0, vector->pool()),
+            std::vector<VectorPtr>{},
+            std::vector<BufferPtr>{});
+        flatMap->copy(vector.get(), 0, 0, vector->size());
+        vector = std::move(flatMap);
+        BaseVector::flattenVector(vector);
+      } else {
+        BaseVector::ensureWritable(
+            SelectivityVector::empty(), vector->type(), vector->pool(), vector);
+      }
   }
 }
 
