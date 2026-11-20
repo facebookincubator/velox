@@ -205,8 +205,8 @@ struct PointLookupCoverage {
   std::map<uint32_t, LookupCounts> byNumColumns;
 
   /// Keyed by column type, such as BIGINT, then by filter kind: equal, in,
-  /// atMost, atLeast, between, aboveMax, isNull or isNotNull. A lookup counts
-  /// once under each of its filters.
+  /// atMost, atLeast, between, notEqual, notIn, notBetween, orRanges, aboveMax,
+  /// isNull or isNotNull. A lookup counts once under each of its filters.
   std::map<std::string, std::map<std::string, LookupCounts>> byType;
 
   /// Keyed by "anchored" or "unanchored", then by the power-of-two floor of the

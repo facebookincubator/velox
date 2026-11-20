@@ -60,6 +60,7 @@ target_link_libraries(
   nimble_batch_reader
   nimble_velox_selective
   nimble_writer
+  velox_expression
   velox_file_connector
   velox_memory
   velox_vector_fuzzer
