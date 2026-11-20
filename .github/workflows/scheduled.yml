@@ -165,7 +165,7 @@ jobs:
       - name: Get Function Signature Stash
         continue-on-error: true
         timeout-minutes: 30
-        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        uses: apache/infrastructure-actions/stash/restore@24694de13374ba623ae8fc839c90bbc6c3009e12
         id: get-sig
         with:
           path: /tmp/signatures
@@ -174,7 +174,7 @@ jobs:
       - name: Restore ccache
         continue-on-error: true
         timeout-minutes: 30
-        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        uses: apache/infrastructure-actions/stash/restore@24694de13374ba623ae8fc839c90bbc6c3009e12
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-fuzzer-centos
@@ -528,7 +528,7 @@ jobs:
       - name: Restore baseline LocalRunnerService
         continue-on-error: true
         timeout-minutes: 30
-        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        uses: apache/infrastructure-actions/stash/restore@24694de13374ba623ae8fc839c90bbc6c3009e12
         id: get-baseline
         with:
           path: ${{ env.BASELINE_DIR }}
@@ -538,7 +538,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 30
         if: ${{ steps.get-baseline.outputs.stash-hit != 'true' }}
-        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        uses: apache/infrastructure-actions/stash/restore@24694de13374ba623ae8fc839c90bbc6c3009e12
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-baseline-local-runner-centos
