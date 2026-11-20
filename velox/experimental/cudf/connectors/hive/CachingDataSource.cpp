@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/CachingDataSource.h"
 
 #include "velox/common/caching/CacheTTLController.h"
@@ -780,7 +781,7 @@ class CachingDataSource final : public cudf::io::datasource {
   device_read(size_t offset, size_t bytes, cuda::stream_ref stream) override {
     const auto readSize = reader_->trimToFile(offset, bytes);
     rmm::device_buffer result(
-        readSize, stream, cudf::get_current_device_resource_ref());
+        readSize, stream, get_temp_mr());
     const auto bytesRead = device_read(
         offset, readSize, static_cast<uint8_t*>(result.data()), stream);
     result.resize(bytesRead, stream);
