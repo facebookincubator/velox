@@ -488,6 +488,55 @@ TEST_F(FlatMapVectorTest, withNulls) {
   EXPECT_TRUE(flatMapVector->isInMap(*channel, 2));
 }
 
+TEST_F(FlatMapVectorTest, retainedSize) {
+  auto distinctKeys = maker_.flatVector<std::string>({
+      "first key longer than inline",
+      "second key longer than inline",
+  });
+  std::vector<VectorPtr> mapValues{
+      maker_.flatVector<std::string>({
+          "first value longer than inline",
+          "short",
+          "third value longer than inline",
+      }),
+      maker_.flatVector<std::string>({
+          "fourth value longer than inline",
+          "fifth value longer than inline",
+          "sixth value longer than inline",
+      }),
+  };
+  std::vector<BufferPtr> inMaps{
+      nullptr,
+      AlignedBuffer::allocate<bool>(3, pool_.get(), true),
+  };
+  auto nulls = AlignedBuffer::allocate<bool>(3, pool_.get(), bits::kNotNull);
+  auto flatMap = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(VARCHAR(), VARCHAR()),
+      nulls,
+      3,
+      distinctKeys,
+      mapValues,
+      inMaps);
+
+  uint64_t expectedStringBufferSize{0};
+  const auto expectedRetainedSize = nulls->capacity() +
+      distinctKeys->retainedSize(expectedStringBufferSize) +
+      mapValues[0]->retainedSize(expectedStringBufferSize) +
+      mapValues[1]->retainedSize(expectedStringBufferSize) +
+      inMaps[1]->capacity();
+  uint64_t stringBufferSize{0};
+  EXPECT_EQ(flatMap->retainedSize(stringBufferSize), expectedRetainedSize);
+  EXPECT_EQ(stringBufferSize, expectedStringBufferSize);
+  EXPECT_GT(stringBufferSize, 0);
+
+  EXPECT_EQ(
+      flatMap->estimateFlatSize(),
+      nulls->capacity() + distinctKeys->estimateFlatSize() +
+          mapValues[0]->estimateFlatSize() + mapValues[1]->estimateFlatSize() +
+          inMaps[1]->capacity());
+}
+
 TEST_F(FlatMapVectorTest, containsNullAtValues) {
   auto flatMapVector = maker_.flatMapVectorNullable<int64_t, int64_t>({
       {{{1L, 10L}, {2L, 20L}}},
