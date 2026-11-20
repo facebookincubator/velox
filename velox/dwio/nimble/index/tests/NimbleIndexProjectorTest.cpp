@@ -4254,12 +4254,19 @@ TEST_P(NimbleIndexProjectorTest, deduplicatedProjectedStreamsReadOnce) {
        vectorMaker_->flatVector<int32_t>(values),
        vectorMaker_->flatVector<int32_t>(values)});
 
-  writeData(
-      {batch},
-      {"key"},
-      {},
-      /*stripeSize=*/1 << 20,
-      /*enableStreamDeduplication=*/true);
+  // Keep encoded bytes deterministic so the writer can alias these streams.
+  WriterOptions writerOptions;
+  writerOptions.encodingSelectionPolicyCreator =
+      [encodingFactory = ManualEncodingSelectionPolicyFactory{
+           {{EncodingType::FixedBitWidth, 1.0f}},
+           /*compressionOptions=*/std::nullopt}](DataType dataType) {
+        return encodingFactory.createPolicy(dataType);
+      };
+  writerOptions.clusterIndexConfig = makeClusterIndexConfig({"key"});
+  writerOptions.enableStreamDeduplication = true;
+  writeBatches({batch}, std::move(writerOptions));
+
+  ASSERT_GT(countDeduplicatedStreams(), 0);
 
   std::vector<Subfield> subfields;
   subfields.emplace_back("dup_a");
