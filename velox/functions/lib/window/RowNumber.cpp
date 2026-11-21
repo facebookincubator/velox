@@ -39,7 +39,7 @@ class RowNumberFunction : public exec::WindowFunction {
       const BufferPtr& /*frameEnds*/,
       const SelectivityVector& validRows,
       vector_size_t resultOffset,
-      const VectorPtr& result) override {
+      VectorPtr& result) override {
     if (resultType_->isInteger()) {
       applyTyped<int32_t>(peerGroupStarts, resultOffset, result);
     } else {

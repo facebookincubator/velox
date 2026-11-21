@@ -71,7 +71,7 @@ class NtileFunction : public exec::WindowFunction {
       const BufferPtr& /*frameEnds*/,
       const SelectivityVector& validRows,
       vector_size_t resultOffset,
-      const VectorPtr& result) override {
+      VectorPtr& result) override {
     int numRows = peerGroupStarts->size() / sizeof(vector_size_t);
 
     if (bucketColumn_.has_value()) {

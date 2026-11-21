@@ -40,7 +40,7 @@ class CumeDistFunction : public exec::WindowFunction {
       const BufferPtr& /*frameEnds*/,
       const SelectivityVector& validRows,
       vector_size_t resultOffset,
-      const VectorPtr& result) override {
+      VectorPtr& result) override {
     int numRows = peerGroupStarts->size() / sizeof(vector_size_t);
     auto* rawValues = result->asFlatVector<double>()->mutableRawValues();
     auto* peerGroupStartsVector = peerGroupStarts->as<vector_size_t>();
