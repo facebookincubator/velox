@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CachingDataSource.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
@@ -455,14 +456,17 @@ TEST_F(CachingDataSourceTest, asyncFailedAndShortFillsAreNotCached) {
       4096, stream, cudf::get_current_device_resource_ref());
   auto* dst = static_cast<uint8_t*>(destination.data());
   read_->failRead = true;
-  EXPECT_THROW(
-      input->device_read_async(0, 4096, dst, stream).get(), VeloxRuntimeError);
+  VELOX_ASSERT_RUNTIME_THROW(
+      input->device_read_async(0, 4096, dst, stream).get(),
+      "Injected remote failure");
   read_->shortRead = true;
-  EXPECT_THROW(
-      input->device_read_async(0, 4096, dst, stream).get(), VeloxRuntimeError);
+  VELOX_ASSERT_RUNTIME_THROW(
+      input->device_read_async(0, 4096, dst, stream).get(),
+      "Short KvikIO read while filling cache");
   control->failSubmission = true;
-  EXPECT_THROW(
-      input->device_read_async(0, 4096, dst, stream).get(), VeloxRuntimeError);
+  VELOX_ASSERT_RUNTIME_THROW(
+      input->device_read_async(0, 4096, dst, stream).get(),
+      "Injected submission failure");
   EXPECT_EQ(input->device_read_async(0, 4096, dst, stream).get(), 4096);
   EXPECT_EQ(input->device_read_async(0, 4096, dst, stream).get(), 4096);
   EXPECT_EQ(control->submitted, 3);
@@ -720,9 +724,11 @@ TEST_F(CachingDataSourceTest, onlyEntriesWithinSsdLimitAreSavedToSsd) {
 TEST_F(CachingDataSourceTest, failedAndShortReadsAreNotCached) {
   auto input = source();
   read_->shortRead = true;
-  EXPECT_THROW(input->host_read(31, 100), VeloxRuntimeError);
+  VELOX_ASSERT_RUNTIME_THROW(
+      input->host_read(31, 100), "Short KvikIO read while filling cache");
   read_->failRead = true;
-  EXPECT_THROW(input->host_read(31, 100), VeloxRuntimeError);
+  VELOX_ASSERT_RUNTIME_THROW(
+      input->host_read(31, 100), "Injected remote failure");
   EXPECT_EQ(input->host_read(31, 100)->size(), 100);
   EXPECT_EQ(read_->reads, 3);
   input->host_read(31, 100);
@@ -731,7 +737,8 @@ TEST_F(CachingDataSourceTest, failedAndShortReadsAreNotCached) {
 
 TEST_F(CachingDataSourceTest, nonContiguousCacheHit) {
   StringIdLease file(fileIds(), path_);
-  auto pin = cache_->findOrCreate({file.id(), 0}, read_->data.size(), false);
+  auto pin = cache_->findOrCreate(
+      {file.id(), 0}, read_->data.size(), /*contiguous=*/false);
   auto* entry = pin.checkedEntry();
   ASSERT_FALSE(entry->hasContiguousData());
   for (const auto& range : entry->dataRanges(read_->data.size())) {
@@ -770,7 +777,7 @@ TEST_F(CachingDataSourceTest, longerRangeReusesShortPrefix) {
   EXPECT_EQ(
       read_->recordedReads(), (ReadState::Requests{{1, 100}, {101, 100}}));
   StringIdLease file(fileIds(), path_);
-  auto pin = cache_->findOrCreate({file.id(), 1}, 100, true);
+  auto pin = cache_->findOrCreate({file.id(), 1}, 100, /*contiguous=*/true);
   EXPECT_EQ(pin.checkedEntry()->size(), 100);
 }
 
@@ -807,9 +814,11 @@ TEST_F(CachingDataSourceTest, failedHostSuffixPreservesCachedPrefix) {
   auto input = source();
   input->host_read(0, 1024);
   read_->shortRead = true;
-  EXPECT_THROW(input->host_read(0, 4096), VeloxRuntimeError);
+  VELOX_ASSERT_RUNTIME_THROW(
+      input->host_read(0, 4096), "Short KvikIO read while filling cache");
   read_->failRead = true;
-  EXPECT_THROW(input->host_read(0, 4096), VeloxRuntimeError);
+  VELOX_ASSERT_RUNTIME_THROW(
+      input->host_read(0, 4096), "Injected remote failure");
   EXPECT_EQ(input->host_read(0, 4096)->size(), 4096);
   EXPECT_EQ(
       read_->recordedReads(),
@@ -825,7 +834,7 @@ TEST_F(CachingDataSourceTest, uncachedFallbackReadsOnlyMissingSuffix) {
   input->host_read(0, 4096);
   // Hold the prefix so an unsuccessful large cache allocation cannot evict it.
   StringIdLease file(fileIds(), path_);
-  auto pin = cache_->findOrCreate({file.id(), 0}, 4096, true);
+  auto pin = cache_->findOrCreate({file.id(), 0}, 4096, /*contiguous=*/true);
   auto host = input->host_read(0, read_->data.size());
   EXPECT_EQ(host->size(), read_->data.size());
   EXPECT_EQ(std::memcmp(host->data(), read_->data.data(), host->size()), 0);
