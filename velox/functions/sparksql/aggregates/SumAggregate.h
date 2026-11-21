@@ -22,6 +22,10 @@
 
 namespace facebook::velox::functions::aggregate::sparksql {
 
+/// Registers Spark's sum. When Spark ANSI mode is enabled in the query config,
+/// the sum throws on integer overflow and when the final decimal result
+/// overflows. Otherwise it wraps around on integer overflow and returns null on
+/// decimal overflow.
 exec::AggregateRegistrationResult registerSum(
     const std::string& name,
     bool withCompanionFunctions,
