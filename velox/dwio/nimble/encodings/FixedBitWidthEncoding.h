@@ -16,6 +16,7 @@
 #pragma once
 
 #include <cstring>
+#include <optional>
 #include <span>
 #include <type_traits>
 
@@ -43,12 +44,64 @@ namespace facebook::nimble {
 template <typename T>
 class EncodingSelection;
 
+/// Typed lanes of FixedBitWidthEncoding (see its data layout). They use the
+/// bit-packed layout's rules with different parameters: the lane width rounds
+/// the bit width up as the bit-packed width does (to a multiple of 8), but to
+/// kNarrowLaneAlignmentBits or the type width, and the payload size is
+/// FixedBitArray::bufferSize() rounded up to whole lanes.
+struct FixedBitWidthTypedLanes {
+  /// Minimum stored bit width of a chunk for typed lanes.
+  static constexpr int kMinStoredBits{16};
+
+  /// Narrow lanes round the bit width up to a multiple of this: 16- or 32-bit
+  /// lanes.
+  static constexpr int kNarrowLaneAlignmentBits{16};
+
+  /// Returns the uncompressed payload size: whole lanes, and at least
+  /// FixedBitArray::bufferSize().
+  static uint64_t payloadSize(uint64_t rowCount, int laneBits) {
+    return velox::bits::roundUp(
+        FixedBitArray::bufferSize(rowCount, laneBits), laneBits / 8);
+  }
+
+  /// Returns whether 'compressionType' reads the payload's DataType. Only such
+  /// compressors gain from lanes: Managed Compression (MetaInternal) and
+  /// OpenZL encode them as integers. A byte-oriented compressor (Zstd, Lz4)
+  /// would only see a wider payload, and an uncompressed payload would only be
+  /// stored wider. A compression type added later takes no lanes until it is
+  /// listed here.
+  static constexpr bool compressorDataTypeAware(
+      CompressionType compressionType) {
+    return compressionType == CompressionType::MetaInternal ||
+        compressionType == CompressionType::OpenZL;
+  }
+};
+
 // Data layout is:
 // EncodingPrefix::kFixedPrefixSize bytes: standard Encoding prefix
 // 1 byte: compression type
 // sizeof(T) byte: baseline value
 // 1 byte: bit width
 // FixedBitArray::BufferSize(rowCount, bit_width) bytes: packed values.
+//
+// Typed lanes (Encoding::Options::fixedBitWidthTypedLanes) are the same layout
+// with a payload of FixedBitArray::bufferSize() rounded up to whole lanes,
+// exactly rowCount * bit_width / 8 + 8 bytes (FixedBitWidthTypedLanes),
+// compressed with a typed DataType instead of Undefined:
+// - Narrow lanes, for 32- and 64-bit types whose stored width is at most half
+//   the type width: a bit width of 16 (values of up to 16 bits) or 32, the
+//   minimum as baseline, compressed as Uint16 or Uint32.
+// - Full-width lanes, for every other eligible chunk (including every eligible
+//   16-bit chunk): the type's bit width and the minimum as baseline,
+//   compressed as the stream's DataType, the label TrivialEncoding uses.
+// The padding keeps typed compressors on whole lanes: Managed Compression's
+// typed graphs take only whole lanes, and in OpenZL's permissive mode, its
+// default, a rejected size is stored as zstd without an error. It also covers
+// FixedBitArray's reads of whole 64-bit words, up to 7 bytes past the first
+// byte of the last value.
+// Readers need no option for typed lanes: FixedBitArray does not depend on the
+// payload length, and compressed frames are self-describing, so decompressing
+// them as Undefined returns the same bytes.
 template <typename T>
 class FixedBitWidthEncoding final
     : public TypedEncoding<T, typename TypeTraits<T>::physicalType> {
@@ -138,6 +191,44 @@ class FixedBitWidthEncoding final
     }
     return velox::bits::nbytes(bitWidth * count);
   }
+
+  // The typed-lane decision, made only here: whether a chunk of 'numValues'
+  // values whose bit-packed width is 'storedBits' is stored as typed lanes
+  // under 'options' when compressed with 'compressionType'.
+  // - Only chunks encoded with an integer type take lanes. FixedBitWidth of
+  //   float or double keeps the bit-packed layout; values stored as integers,
+  //   such as the non-null values of a nullable float or double stream, can
+  //   take lanes.
+  // - Lanes widen the uncompressed payload. They pay off only for a compressor
+  //   that reads the payload's DataType and so sees whole integers
+  //   (FixedBitWidthTypedLanes::compressorDataTypeAware()).
+  // 'compressionType' is the chunk's compressor. A caller without one passes
+  // nullopt, and the compressor condition is then not checked.
+  static bool takesTypedLanes(
+      uint64_t numValues,
+      int storedBits,
+      std::optional<CompressionType> compressionType,
+      const Encoding::Options& options) {
+    if constexpr (!isIntegralType<T>()) {
+      return false;
+    } else {
+      return options.fixedBitWidthTypedLanes &&
+          storedBits >= FixedBitWidthTypedLanes::kMinStoredBits &&
+          numValues >= options.fixedBitWidthTypedLanesMinValues &&
+          (!compressionType.has_value() ||
+           FixedBitWidthTypedLanes::compressorDataTypeAware(*compressionType));
+    }
+  }
+
+  // Returns the lane width for a chunk of 'rowCount' values needing
+  // 'exactBits' bits and stored in 'storedBits', compressed with 'policy', or
+  // 0 when the chunk is bit-packed (see the data layout).
+  static int typedLaneBits(
+      uint32_t rowCount,
+      int exactBits,
+      int storedBits,
+      const CompressionPolicy& policy,
+      const Encoding::Options& options);
 
   int bitWidth_;
   physicalType baseline_;
@@ -333,27 +424,57 @@ std::string_view FixedBitWidthEncoding<T>::encode(
   const uint32_t rowCount = values.size();
   const int exactBitsRequired = velox::bits::bitsRequired(
       selection.statistics().max() - selection.statistics().min());
-  const int bitsRequired = options.fixedBitWidthUseExactBits
+  const int storedBitsRequired = options.fixedBitWidthUseExactBits
       ? exactBitsRequired
       : velox::bits::roundUp(exactBitsRequired, 8);
 
-  const uint32_t fixedBitArraySize =
-      FixedBitArray::bufferSize(values.size(), bitsRequired);
+  auto dataCompressionPolicy = selection.compressionPolicy();
+  const int laneBits = typedLaneBits(
+      rowCount,
+      exactBitsRequired,
+      storedBitsRequired,
+      *dataCompressionPolicy,
+      options);
+  const bool fullWidthLanes =
+      laneBits == 8 * static_cast<int>(sizeof(physicalType));
+
+  // typedLaneBits returns 0 (bit-packed), a narrow lane (16 or 32 bits), or the
+  // type width (full-width lanes); the payload DataType below relies on that.
+  NIMBLE_DCHECK(
+      laneBits == 0 || fullWidthLanes || laneBits == 16 || laneBits == 32,
+      "Unexpected typed lane width: {}",
+      laneBits);
+  const int bitsRequired = laneBits > 0 ? laneBits : storedBitsRequired;
+  const physicalType baseline = selection.statistics().min();
+  const uint32_t fixedBitArraySize = laneBits > 0
+      ? FixedBitWidthTypedLanes::payloadSize(rowCount, laneBits)
+      : FixedBitArray::bufferSize(values.size(), bitsRequired);
+
+  // Typed lanes compress the payload as Uint16, Uint32 or the stream's
+  // DataType, and the header does not record which. Decompression does not
+  // need it. OpenZL frames describe how to decode them. Managed Compression
+  // picks the decoder from the frame's magic bytes, and its dictionaries and
+  // OpenZL transforms are not tied to a category. So its fallback category,
+  // which Undefined selects, decodes frames written by the u16, u32 and u64
+  // categories. That requires the fallback category to keep OpenZL enabled.
+  const DataType payloadDataType = laneBits == 0 ? DataType::Undefined
+      : fullWidthLanes                           ? TypeTraits<T>::dataType
+      : laneBits == 16                           ? DataType::Uint16
+                                                 : DataType::Uint32;
 
   Vector<char> vector{&buffer.getMemoryPool()};
 
-  auto dataCompressionPolicy = selection.compressionPolicy();
   CompressionEncoder<T> compressionEncoder{
       buffer.getMemoryPool(),
       *dataCompressionPolicy,
-      DataType::Undefined,
+      payloadDataType,
       bitsRequired,
       fixedBitArraySize,
       [&]() {
         vector.resize(fixedBitArraySize);
         return std::span<char>{vector};
       },
-      [&, baseline = selection.statistics().min()](char*& pos) {
+      [&](char*& pos) {
         memset(pos, 0, fixedBitArraySize);
         FixedBitArray fba(pos, bitsRequired);
         fba.bulkSetWithBaseline(0, rowCount, values.data(), baseline);
@@ -374,12 +495,34 @@ std::string_view FixedBitWidthEncoding<T>::encode(
       pos);
   encoding::writeChar(
       static_cast<char>(compressionEncoder.compressionType()), pos);
-  encoding::write(selection.statistics().min(), pos);
+  encoding::write(baseline, pos);
   encoding::writeChar(bitsRequired, pos);
   compressionEncoder.write(pos);
 
   NIMBLE_DCHECK_EQ(encodingSize, pos - reserved, "Encoding size mismatch.");
   return {reserved, encodingSize};
+}
+
+template <typename T>
+int FixedBitWidthEncoding<T>::typedLaneBits(
+    uint32_t rowCount,
+    int exactBits,
+    int storedBits,
+    const CompressionPolicy& policy,
+    const Encoding::Options& options) {
+  if (!takesTypedLanes(
+          rowCount, storedBits, policy.config().compressionType, options)) {
+    return 0;
+  }
+
+  // The bit width rounds up as for bit-packed chunks, to a different
+  // multiple: narrow lanes, for 32- and 64-bit types whose stored width is at
+  // most half the type width, to 16 bits; every other chunk to the type width.
+  constexpr int kTypeBits = 8 * sizeof(physicalType);
+  const int alignmentBits = (2 * storedBits <= kTypeBits)
+      ? FixedBitWidthTypedLanes::kNarrowLaneAlignmentBits
+      : kTypeBits;
+  return velox::bits::roundUp(exactBits, alignmentBits);
 }
 
 template <typename T>
