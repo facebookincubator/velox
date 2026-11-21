@@ -68,6 +68,14 @@ Status::Status(StatusCode code, std::string msg) {
   state_->msg = std::move(msg);
 }
 
+Status Status::withErrorCode(std::string errorCode) && {
+  if (ok()) [[unlikely]] {
+    throw std::invalid_argument("Cannot attach error code to ok status");
+  }
+  state_->errorCode = std::move(errorCode);
+  return std::move(*this);
+}
+
 void Status::copyFrom(const Status& s) {
   delete state_;
   if (s.state_ == nullptr) {
@@ -88,6 +96,11 @@ std::string Status::toString() const {
   std::string result(codeAsString());
   if (state_ == nullptr) {
     return result;
+  }
+  if (!state_->errorCode.empty()) {
+    result += " [";
+    result += state_->errorCode;
+    result += "]";
   }
   result += ": ";
   result += state_->msg;

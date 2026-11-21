@@ -209,6 +209,32 @@ std::exception_ptr toVeloxUserError(const std::string& message) {
       false /*retriable*/));
 }
 
+// Builds a VeloxUserError from a user error status that carries an error code
+// (e.g. "SPARK:<condition>"), keeping that code instead of INVALID_ARGUMENT.
+VeloxUserError makeVeloxUserErrorWithCode(const Status& status) {
+  return VeloxUserError(
+      __FILE__,
+      __LINE__,
+      __FUNCTION__,
+      "",
+      status.message(),
+      error_source::kErrorSourceUser,
+      status.errorCode(),
+      false /*retriable*/);
+}
+
+std::exception_ptr toVeloxUserError(const Status& status) {
+  if (status.errorCode().empty()) {
+    return toVeloxUserError(status.message());
+  }
+  return std::make_exception_ptr(makeVeloxUserErrorWithCode(status));
+}
+
+[[noreturn]] void throwVeloxUserErrorWithCode(const Status& status) {
+  ++threadNumVeloxThrow();
+  throw makeVeloxUserErrorWithCode(status);
+}
+
 } // namespace
 
 void EvalCtx::setStatus(vector_size_t index, const Status& status) {
@@ -216,10 +242,13 @@ void EvalCtx::setStatus(vector_size_t index, const Status& status) {
 
   if (status.isUserError()) {
     if (throwOnError_) {
-      VELOX_USER_FAIL(status.message());
+      if (status.errorCode().empty()) {
+        VELOX_USER_FAIL(status.message());
+      }
+      throwVeloxUserErrorWithCode(status);
     }
     if (captureErrorDetails_) {
-      addError(index, toVeloxUserError(status.message()), errors_);
+      addError(index, toVeloxUserError(status), errors_);
     } else {
       addError(index, errors_);
     }
@@ -232,11 +261,14 @@ void EvalCtx::setStatuses(const SelectivityVector& rows, const Status& status) {
   VELOX_CHECK(!status.ok(), "Status must be an error");
   if (status.isUserError()) {
     if (throwOnError_) {
-      VELOX_USER_FAIL(status.message());
+      if (status.errorCode().empty()) {
+        VELOX_USER_FAIL(status.message());
+      }
+      throwVeloxUserErrorWithCode(status);
     }
 
     if (captureErrorDetails_) {
-      auto veloxException = toVeloxUserError(status.message());
+      auto veloxException = toVeloxUserError(status);
       rows.applyToSelected(
           [&](auto row) { addError(row, veloxException, errors_); });
     } else {

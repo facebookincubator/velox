@@ -1042,6 +1042,28 @@ TEST_F(ArithmeticTest, checkedDivide) {
   EXPECT_EQ(checkedDivide<double>(kInfDouble, 1), kInfDouble);
 }
 
+TEST_F(ArithmeticTest, checkedDivideErrorCode) {
+  // Division by zero carries the Spark error condition as the error code.
+  VELOX_ASSERT_USER_THROW_CODE(
+      checkedDivide<int32_t>(1, 0), "SPARK:DIVIDE_BY_ZERO", "division by zero");
+  VELOX_ASSERT_USER_THROW_CODE(
+      checkedDivide<double>(1.0, 0.0),
+      "SPARK:DIVIDE_BY_ZERO",
+      "division by zero");
+  // Errors not yet mapped to a Spark condition keep the default code.
+  VELOX_ASSERT_USER_THROW_CODE(
+      checkedDivide<int32_t>(INT32_MIN, -1),
+      error_code::kInvalidArgument,
+      "Arithmetic overflow: -2147483648 / -1");
+  // TRY still returns NULL.
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "try(checked_divide(c0, c1))",
+          std::optional<int32_t>(1),
+          std::optional<int32_t>(0)),
+      std::nullopt);
+}
+
 TEST_F(ArithmeticTest, checkedDiv) {
   EXPECT_EQ(checkedDiv<int8_t>(INT8_MAX, INT8_MIN), 0);
   EXPECT_EQ(checkedDiv<int16_t>(INT16_MIN, INT16_MAX), -1);
