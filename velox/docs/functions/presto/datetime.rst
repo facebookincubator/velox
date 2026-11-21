@@ -119,8 +119,8 @@ Enable session-zone semantics with
 register date-time functions with ``ignoreTimeZoneLabel`` set to true. The
 two settings apply the same semantic choice at different stages. The query
 configuration controls how deterministic functions render zoned timestamps.
-The registration argument selects the ``at_timezone`` overloads that return
-``TIMESTAMP``. Functions that inspect the stored zone label, such as
+The registration argument makes ``at_timezone`` return ``TIMESTAMP`` for
+timestamp values. Functions that inspect the stored zone label, such as
 ``timezone_hour`` and ``timezone_minute``, are exceptions.
 
 Use the false settings only to preserve existing behavior. Functions then
@@ -174,6 +174,12 @@ including wall clocks skipped by daylight-saving transitions.
     instant.
 
     For ``TIME WITH TIME ZONE``, ``zone`` must be a ``+HH:mm`` offset.
+
+    In both modes, ``at_timezone`` follows the SQL ``AT TIME ZONE`` type rules:
+
+    * ``DATE`` is rejected.
+    * ``TIME`` is accepted only through a coercion to ``TIME WITH TIME ZONE``.
+    * ``zone`` must be ``VARCHAR``.
 
 .. function:: current_date() -> date
 

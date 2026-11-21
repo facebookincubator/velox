@@ -57,6 +57,17 @@ bool registerFunction(
       aliases, {}, overwrite, defaultOwner);
 }
 
+/// The UDFHolder that the registerFunction below registers for 'Func'. A
+/// callable special form uses it to create a simple function without
+/// registering it.
+template <template <class> typename Func, typename TReturn, typename... TArgs>
+using SimpleFunctionHolder = core::UDFHolder<
+    Func<exec::VectorExec>,
+    exec::VectorExec,
+    TReturn,
+    ConstantChecker<TArgs...>,
+    typename UnwrapConstantType<TArgs>::type...>;
+
 // New registration function; mostly a copy from the function above, but taking
 // the inner "udf" struct directly, instead of the wrapper. We can keep both for
 // a while to maintain backwards compatibility, but the idea is to remove the
@@ -67,13 +78,7 @@ bool registerFunction(
     const std::vector<exec::SignatureVariable>& constraints = {},
     bool overwrite = true,
     std::string_view defaultOwner = {}) {
-  using funcClass = Func<exec::VectorExec>;
-  using holderClass = core::UDFHolder<
-      funcClass,
-      exec::VectorExec,
-      TReturn,
-      ConstantChecker<TArgs...>,
-      typename UnwrapConstantType<TArgs>::type...>;
+  using holderClass = SimpleFunctionHolder<Func, TReturn, TArgs...>;
   return exec::registerSimpleFunction<holderClass>(
       aliases, constraints, overwrite, defaultOwner);
 }
