@@ -1545,6 +1545,45 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
   // Valid double-to-decimal cases. Results are identical regardless of ANSI
   // mode, so they are shared between the ANSI ON and ANSI OFF tests.
   void testDoubleToDecimal() {
+    const auto preciseInput = makeNullableFlatVector<double>(
+        {7.754818242684634E16,
+         0.1234567890123456,
+         -7.754818242684634E16,
+         -0.1234567890123456,
+         std::nullopt});
+    testCast(
+        preciseInput,
+        makeNullableFlatVector<int128_t>(
+            {HugeInt::parse("775481824268463400000"),
+             1'235,
+             HugeInt::parse("-775481824268463400000"),
+             -1'235,
+             std::nullopt},
+            DECIMAL(21, 4)));
+    testCast(
+        preciseInput,
+        makeNullableFlatVector<int128_t>(
+            {HugeInt::parse("7754818242684634" + zeros(19)),
+             123'456'789'012'345'600,
+             HugeInt::parse("-7754818242684634" + zeros(19)),
+             -123'456'789'012'345'600,
+             std::nullopt},
+            DECIMAL(38, 18)));
+
+    testCast(
+        makeFlatVector<double>(
+            {0.1234567890123456,
+             -0.1234567890123456,
+             0.0,
+             -0.0,
+             std::numeric_limits<double>::denorm_min()}),
+        makeFlatVector<int64_t>(
+            {123'456'789'012'345'600, -123'456'789'012'345'600, 0, 0, 0},
+            DECIMAL(18, 18)));
+    testCast(
+        makeFlatVector<double>({5e-39, -5e-39}),
+        makeFlatVector<int128_t>({1, -1}, DECIMAL(38, 38)));
+
     const auto input = makeFlatVector<double>(
         {-3333.03,
          -2222.02,
@@ -1620,6 +1659,18 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
   // Valid real-to-decimal cases. Results are identical regardless of ANSI
   // mode, so they are shared between the ANSI ON and ANSI OFF tests.
   void testRealToDecimal() {
+    testCast(
+        makeNullableFlatVector<float>({0.1f, -0.1f, std::nullopt}),
+        makeNullableFlatVector<int128_t>(
+            {100'000'001'490'116'120, -100'000'001'490'116'120, std::nullopt},
+            DECIMAL(38, 18)));
+    testCast(
+        makeFlatVector<float>(
+            {std::numeric_limits<float>::min(),
+             -std::numeric_limits<float>::min(),
+             std::numeric_limits<float>::denorm_min()}),
+        makeFlatVector<int128_t>({1, -1, 0}, DECIMAL(38, 38)));
+
     const auto input = makeFlatVector<float>(
         {-3333.03,
          -2222.02,
@@ -1640,7 +1691,7 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
              -10'000,
              0,
              1'000'000,
-             999'999'000,
+             999'998'984,
              100'300,
              100'500,
              99'500,
@@ -1651,31 +1702,31 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
     testCast(
         input,
         makeFlatVector<int128_t>(
-            {HugeInt::parse("-333303" + zeros(16)),
-             HugeInt::parse("-222202" + zeros(16)),
+            {HugeInt::parse("-3333030029296875" + zeros(6)),
+             HugeInt::parse("-222202001953125" + zeros(7)),
              -1'000'000'000'000'000'000,
              0,
              HugeInt::parse("100" + zeros(18)),
-             HugeInt::parse("999999" + zeros(17)),
-             HugeInt::parse("1003" + zeros(16)),
-             HugeInt::parse("1005" + zeros(16)),
-             HugeInt::parse("995" + zeros(16)),
-             -2'123'450'000'000'000'000},
+             HugeInt::parse("999998984375" + zeros(11)),
+             HugeInt::parse("10029999732971191000"),
+             HugeInt::parse("10050000190734863000"),
+             HugeInt::parse("9949999809265137000"),
+             -2'123'450'040'817'260'700},
             DECIMAL(38, 18)));
     testCast(
         input,
         makeFlatVector<int128_t>(
-            {-33'330, -22'220, -10, 0, 1'000, 999'999, 100, 101, 100, -21},
+            {-33'330, -22'220, -10, 0, 1'000, 999'999, 100, 101, 99, -21},
             DECIMAL(20, 1)));
     testCast(
         makeNullableFlatVector<float>(
             {0.134567, 0.000015, 0.000001, 0.999999, 0.123456, std::nullopt}),
         makeNullableFlatVector<int128_t>(
-            {134'567'000'000'000'000,
-             15'000'000'000'000,
-             1'000'000'000'000,
-             999'999'000'000'000'000,
-             123'456'000'000'000'000,
+            {134'567'007'422'447'200,
+             14'999'999'621'068,
+             999'999'997'475,
+             999'998'986'721'038'800,
+             123'456'001'281'738'280,
              std::nullopt},
             DECIMAL(38, 18)));
 
