@@ -147,8 +147,6 @@ enum class EncodingType {
   // Stores string data compressed with FSST (Fast Static Symbol Table).
   // Trains a per-stripe symbol table and compresses each string independently,
   // enabling random access decompression without touching neighboring strings.
-  // EXPERIMENTAL: Not production-ready. Do not enable for production tables
-  // without consulting the Nimble team (oncall: dwios).
   Fsst = 19,
   // Canonical Huffman coding for integral values. Preserves row order and
   // stores periodic bit offsets for bounded random access.

@@ -355,9 +355,6 @@ struct EncodingSizeEstimation {
         return RLEEncoding<std::string_view>::estimateSize(
             entryCount, statistics, options);
       }
-      case EncodingType::Fsst: {
-        return FsstEncoding::estimateSize(entryCount, statistics, options);
-      }
       default: {
         return std::nullopt;
       }
@@ -373,6 +370,9 @@ struct EncodingSizeEstimation {
       case EncodingType::Constant: {
         return ConstantEncoding<std::string_view>::estimateSize(
             values, statistics, options);
+      }
+      case EncodingType::Fsst: {
+        return FsstEncoding::estimateSize(values, statistics, options);
       }
       default: {
         return estimateStringSize(
