@@ -305,6 +305,12 @@ class Config : public velox::config::ConfigBase {
   // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
   static Entry<uint64_t> FIXED_BIT_WIDTH_TYPED_LANES_MIN_VALUES;
 
+  /// MetaInternal compression level for FixedBitWidth chunks that take typed
+  /// lanes, in [1, 9]; 0 (default) keeps the table's level. Requires
+  /// MetaInternal compression. Maps to
+  /// WriterOptions::fixedBitWidthTypedLanesOpenzlLevel.
+  static Entry<uint32_t> FIXED_BIT_WIDTH_TYPED_LANES_OPENZL_LEVEL_OVERRIDE;
+
   /// Omits in-map streams for FlatMap features whose in-map flag is constant,
   /// which is the common case for dense feature sets.
   static Entry<bool> SKIP_CONSTANT_FLATMAP_IN_MAP_STREAMS;

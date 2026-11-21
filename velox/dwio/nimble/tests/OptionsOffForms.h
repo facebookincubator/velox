@@ -37,10 +37,15 @@ struct OffForm {
 };
 
 /// Returns the forms that must leave everything as it was before the
-/// typed-lanes options: the file and the published statistics. They are:
-/// options untouched (always first); every option set to its off value; and
-/// lanes off with the row floor at 1 and at its maximum, where the floor has no
-/// effect.
+/// typed-lanes options: the file, the published statistics and the compress
+/// calls. They are: options untouched (always first); every option set to its
+/// off value; and lanes off with the row floor at 1 and at its maximum, where
+/// the floor has no effect.
 std::vector<OffForm> offForms();
+
+/// Returns lanes off with a typed compression level for FixedBitWidth. Without
+/// lanes no FixedBitWidth payload is typed, so the level reaches nothing: the
+/// compress calls must not change. Valid with MetaInternal compression only.
+OffForm fixedBitWidthLevelWithoutLanes();
 
 } // namespace facebook::nimble::test::options_off

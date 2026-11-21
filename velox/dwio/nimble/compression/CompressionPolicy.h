@@ -154,6 +154,12 @@ struct CompressionOptions {
        {EncodingType::BlockBitPackingV2, 0.7f}};
 };
 
+/// Bounds of Encoding::Options::fixedBitWidthTypedLanesOpenzlLevel. The level
+/// is OpenZL's compression level, whose range OpenZL documents as "typically
+/// 1-9" (compressionLevel in openzl/prod/src/openzl/compress/gcparams.h).
+constexpr int32_t kMinTypedLanesOpenzlLevel = 1;
+constexpr int32_t kMaxTypedLanesOpenzlLevel = 9;
+
 class CompressionPolicy {
  public:
   virtual CompressionConfig config() const = 0;

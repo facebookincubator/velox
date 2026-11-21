@@ -60,6 +60,8 @@ struct WriterOptions {
         .sortDictionaryAlphabet = sortDictionaryAlphabet,
         .fixedBitWidthTypedLanes = fixedBitWidthTypedLanes,
         .fixedBitWidthTypedLanesMinValues = fixedBitWidthTypedLanesMinValues,
+        .fixedBitWidthTypedLanesOpenzlLevel =
+            fixedBitWidthTypedLanesOpenzlLevel,
         .subIntSplitDeltaPreTransform =
             FLAGS_nimble_subintsplit_delta_pretransform,
         .reversedMinDescendingRatio = reversedMinDescendingRatio,
@@ -330,6 +332,15 @@ struct WriterOptions {
 
   /// Minimum number of values in a chunk for fixedBitWidthTypedLanes.
   uint64_t fixedBitWidthTypedLanesMinValues{256};
+
+  /// MetaInternal compression level for FixedBitWidth chunks that take typed
+  /// lanes (see Encoding::Options::fixedBitWidthTypedLanesOpenzlLevel). Like
+  /// the typed lanes, it reaches every chunk the writer encodes through
+  /// buildEncodingOptions(), whatever encodingSelectionPolicyCreator was built
+  /// from: fresh, replayed, shared-dictionary and nested chunks alike. It must
+  /// be in [1, 9] and requires compressionOptions.compressionType to be
+  /// MetaInternal; the writer rejects anything else. Unset by default.
+  std::optional<int32_t> fixedBitWidthTypedLanesOpenzlLevel{};
 
   /// FSST is kept only when its final encoded size is at most this fraction of
   /// the original string bytes.
