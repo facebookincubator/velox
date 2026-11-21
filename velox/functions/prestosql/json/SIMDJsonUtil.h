@@ -55,7 +55,9 @@ simdjson::padded_string_view reusePaddedStringView(
     const std::string_view& json);
 
 /// Parse the input json string using a thread local on demand parser. Allow
-/// incomplete json input.
+/// incomplete json input. NOTE: The input MUST NOT have an unclosed string, as
+/// simdjson 4.3 then iterates it over the structural indexes of the previously
+/// parsed json, which can read out of bounds.
 simdjson::simdjson_result<simdjson::ondemand::document> simdjsonParseIncomplete(
     const simdjson::padded_string_view& json);
 
