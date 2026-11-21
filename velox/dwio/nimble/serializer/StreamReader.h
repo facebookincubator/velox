@@ -132,6 +132,19 @@ class StreamReader {
       const SharedDictionaryAlphabets& alphabets,
       const Encoding::Options& options);
 
+  /// Binds one stripe's streams as the overload above does, with buffers
+  /// that hold the bytes of `streams`, in any number and order. A read of
+  /// strings that covers most of the rows of the chunks it spans keeps the
+  /// values that lie in these buffers, or in the buffers of the encodings'
+  /// views, by holding the buffers in the output instead of copying the values
+  /// (EncodingViewDecoder::setChunkOwners()). Without `streamOwners`, only the
+  /// values in decompressed or decoded bytes are kept without a copy.
+  void setStreams(
+      std::span<const std::string_view> streams,
+      std::vector<velox::BufferPtr> streamOwners,
+      const SharedDictionaryAlphabets& alphabets,
+      const Encoding::Options& options);
+
   /// Decodes the next rows from the currently bound stripe asynchronously.
   /// Reuses uniquely owned vectors. Supplied output must match the projected
   /// schema; reset incompatible output before calling.
@@ -162,6 +175,7 @@ class StreamReader {
   // one. Requires one stream per projected stream.
   void prepareRead(
       std::span<const std::string_view> streams,
+      std::vector<velox::BufferPtr> streamOwners,
       const SharedDictionaryAlphabets& alphabets,
       const Encoding::Options& options);
 
@@ -244,6 +258,15 @@ class StreamReader {
   // the bound stripe accumulate in load order. Nothing looks them up, so the
   // order has no meaning.
   std::vector<velox::BufferPtr> decompressedChunks_;
+
+  // Hold the bytes of the streams of the bound stripe, as setStreams() takes
+  // them, until reset().
+  std::vector<velox::BufferPtr> streamOwners_;
+
+  // Hold the bytes of the chunks that loadChunks() split last: streamOwners_
+  // and the decompressed bytes of the stream's compressed chunks, for the
+  // decoder that binds them next, which takes them.
+  std::vector<velox::BufferPtr> loadedChunkOwners_;
 
   // Holds the encodings of the stream that loadChunks() split last, one per
   // chunk in stream order, for the decoder that binds them next. Reused across

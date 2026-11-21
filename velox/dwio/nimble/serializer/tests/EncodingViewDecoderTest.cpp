@@ -25,6 +25,7 @@
 #include <string_view>
 #include <vector>
 
+#include <fmt/format.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -41,6 +42,17 @@
 
 namespace facebook::nimble {
 namespace {
+
+// Returns true if all of 'value' lies in one of 'buffers'.
+bool liesIn(
+    std::string_view value,
+    const std::vector<velox::BufferPtr>& buffers) {
+  return std::any_of(buffers.begin(), buffers.end(), [&](const auto& buffer) {
+    const auto* begin = buffer->template as<char>();
+    return value.data() >= begin &&
+        value.data() + value.size() <= begin + buffer->size();
+  });
+}
 
 // Builds ordered, disjoint ranges with randomized gaps and lengths.
 std::vector<RowRange> makeRandomRanges(uint32_t rowCount, std::mt19937& rng) {
@@ -110,11 +122,30 @@ class EncodingViewDecoderTest : public ::testing::Test {
 
   template <typename T>
   std::string encode(std::span<const T> values) {
+    return encode<T>(values, EncodingType::Trivial, CompressionOptions{});
+  }
+
+  // Encodes 'values' with the selection policy limited to 'encodingType'
+  // and payloads left uncompressed, so that the views read their strings from
+  // the encoded bytes.
+  template <typename T>
+  std::string encodeUncompressed(
+      std::span<const T> values,
+      EncodingType encodingType) {
+    CompressionOptions compressionOptions;
+    compressionOptions.compressionType = CompressionType::Uncompressed;
+    return encode<T>(values, encodingType, compressionOptions);
+  }
+
+  template <typename T>
+  std::string encode(
+      std::span<const T> values,
+      EncodingType encodingType,
+      const CompressionOptions& compressionOptions) {
     Buffer buffer{*pool_};
     auto policy = std::make_unique<ManualEncodingSelectionPolicy<T>>(
-        std::vector<std::pair<EncodingType, float>>{
-            {EncodingType::Trivial, 1.0}},
-        CompressionOptions{},
+        std::vector<std::pair<EncodingType, float>>{{encodingType, 1.0}},
+        compressionOptions,
         std::nullopt);
     const auto encoded =
         EncodingFactory::encode<T>(std::move(policy), values, buffer);
@@ -164,6 +195,14 @@ class EncodingViewDecoderTest : public ::testing::Test {
               values.begin() + splitRows[i + 1]}));
     }
     return chunks;
+  }
+
+  // Copies 'bytes' into a new buffer, which can own the chunks of a decoder.
+  velox::BufferPtr copyToBuffer(std::string_view bytes) {
+    auto buffer =
+        velox::AlignedBuffer::allocate<char>(bytes.size(), pool_.get());
+    std::copy(bytes.begin(), bytes.end(), buffer->asMutable<char>());
+    return buffer;
   }
 
   std::unique_ptr<EncodingViewDecoder> makeDecoder(
@@ -696,6 +735,184 @@ TEST_F(EncodingViewDecoderTest, retainsStringsAcrossChunks) {
   const std::string_view retainedContent{
       stringBuffers[0]->as<char>(), stringBuffers[0]->size()};
   EXPECT_EQ(retainedContent, "first stringsecond string");
+}
+
+TEST_F(EncodingViewDecoderTest, keepsStringsInChunkOwners) {
+  const std::vector<std::string_view> values{
+      "first string",
+      "second string",
+      "third string",
+      "fourth string",
+      "fifth string",
+      "sixth string",
+      "seventh string",
+      "eighth string",
+  };
+  const auto stream =
+      encodeUncompressed<std::string_view>(values, EncodingType::Trivial);
+  const auto owner = copyToBuffer(stream);
+  const std::string_view chunk{owner->as<char>(), owner->size()};
+  {
+    // Reads half of the rows of the chunk, so the output holds the owner.
+    std::array<std::string_view, 4> output{};
+    std::vector<velox::BufferPtr> stringBuffers;
+    {
+      auto decoder = makeDecoder(chunk);
+      decoder->setChunkOwners({owner});
+      const std::array<RowRange, 1> ranges{{{2, 6}}};
+      EXPECT_EQ(
+          decoder->read(
+              ranges,
+              DataType::String,
+              output.data(),
+              /*getOutputNulls=*/nullptr,
+              stringBuffers),
+          4);
+    }
+    EXPECT_THAT(
+        output,
+        ::testing::ElementsAre(
+            "third string", "fourth string", "fifth string", "sixth string"));
+    EXPECT_THAT(stringBuffers, ::testing::ElementsAre(owner));
+    for (const auto value : output) {
+      EXPECT_TRUE(liesIn(value, {owner})) << value;
+    }
+  }
+  {
+    // Reads one row of eight, too few to keep the chunk alive for it.
+    std::array<std::string_view, 1> output{};
+    std::vector<velox::BufferPtr> stringBuffers;
+    auto decoder = makeDecoder(chunk);
+    decoder->setChunkOwners({owner});
+    const std::array<uint32_t, 1> rows{5};
+    EXPECT_EQ(
+        decoder->read(
+            rows,
+            DataType::String,
+            output.data(),
+            /*getOutputNulls=*/nullptr,
+            stringBuffers),
+        1);
+    EXPECT_THAT(output, ::testing::ElementsAre("sixth string"));
+    ASSERT_EQ(stringBuffers.size(), 1);
+    EXPECT_NE(stringBuffers[0], owner);
+    EXPECT_TRUE(liesIn(output[0], stringBuffers));
+  }
+}
+
+TEST_F(EncodingViewDecoderTest, keepsDecompressedStringsAfterTheDecoder) {
+  std::vector<std::string> strings;
+  for (int i = 0; i < 500; ++i) {
+    strings.push_back(fmt::format("compressible string value {:04d}", i % 10));
+  }
+  const std::vector<std::string_view> values{strings.begin(), strings.end()};
+  const auto stream = encode<std::string_view>(values);
+  std::vector<std::string_view> output(values.size());
+  std::vector<velox::BufferPtr> stringBuffers;
+  {
+    // No owners: the view's decompressed payload holds the strings.
+    auto decoder = makeDecoder(stream);
+    const std::array<RowRange, 1> ranges{
+        {{0, static_cast<uint32_t>(values.size())}}};
+    EXPECT_EQ(
+        decoder->read(
+            ranges,
+            DataType::String,
+            output.data(),
+            /*getOutputNulls=*/nullptr,
+            stringBuffers),
+        values.size());
+  }
+
+  EXPECT_THAT(output, ::testing::ElementsAreArray(values));
+  ASSERT_EQ(stringBuffers.size(), 1);
+  for (const auto value : output) {
+    EXPECT_TRUE(liesIn(value, stringBuffers)) << value;
+  }
+}
+
+TEST_F(EncodingViewDecoderTest, copiesStringsOutsideChunkOwners) {
+  const auto first = encodeUncompressed<std::string_view>(
+      std::vector<std::string_view>{"first string", "second string"},
+      EncodingType::Trivial);
+  const auto second = encodeUncompressed<std::string_view>(
+      std::vector<std::string_view>{"third string", "fourth string"},
+      EncodingType::Trivial);
+  // Only the first chunk has an owner. The second stays in a std::string.
+  const auto firstOwner = copyToBuffer(first);
+  const std::array<std::string_view, 2> chunks{
+      std::string_view{firstOwner->as<char>(), firstOwner->size()}, second};
+  std::array<std::string_view, 4> output{};
+  std::vector<velox::BufferPtr> stringBuffers;
+  {
+    auto decoder = makeDecoder(chunks);
+    decoder->setChunkOwners({firstOwner});
+    const std::array<RowRange, 1> ranges{{{0, 4}}};
+    EXPECT_EQ(
+        decoder->read(
+            ranges,
+            DataType::String,
+            output.data(),
+            /*getOutputNulls=*/nullptr,
+            stringBuffers),
+        4);
+  }
+
+  EXPECT_THAT(
+      output,
+      ::testing::ElementsAre(
+          "first string", "second string", "third string", "fourth string"));
+  ASSERT_EQ(stringBuffers.size(), 2);
+  EXPECT_EQ(stringBuffers[0], firstOwner);
+  EXPECT_EQ(
+      (std::string_view{
+          stringBuffers[1]->as<char>(), stringBuffers[1]->size()}),
+      "third stringfourth string");
+  for (const auto value : output) {
+    EXPECT_TRUE(liesIn(value, stringBuffers)) << value;
+  }
+}
+
+TEST_F(EncodingViewDecoderTest, keepsFsstStringsInDecodedBuffers) {
+  std::vector<std::string> strings;
+  for (int i = 0; i < 2'000; ++i) {
+    strings.push_back(fmt::format("repeated fsst prefix value {:06d}", i));
+  }
+  const std::vector<std::string_view> values{strings.begin(), strings.end()};
+  const auto stream =
+      encodeUncompressed<std::string_view>(values, EncodingType::Fsst);
+  ASSERT_EQ(
+      createEncodingView(stream, pool_.get())->encodingType(),
+      EncodingType::Fsst);
+  std::vector<std::string_view> output(values.size());
+  std::vector<velox::BufferPtr> stringBuffers;
+  {
+    auto decoder = makeDecoder(stream);
+    const std::array<RowRange, 1> ranges{
+        {{0, static_cast<uint32_t>(values.size())}}};
+    EXPECT_EQ(
+        decoder->read(
+            ranges,
+            DataType::String,
+            output.data(),
+            /*getOutputNulls=*/nullptr,
+            stringBuffers),
+        values.size());
+  }
+
+  // The values stay valid after the decoder and its views are gone.
+  EXPECT_THAT(output, ::testing::ElementsAreArray(values));
+  for (const auto value : output) {
+    EXPECT_TRUE(liesIn(value, stringBuffers)) << value;
+  }
+  // The view's buffers hold most strings. Only those the view keeps in itself
+  // are copied, into the last buffer.
+  uint64_t numValueBytes{0};
+  for (const auto value : values) {
+    numValueBytes += value.size();
+  }
+  ASSERT_GT(stringBuffers.size(), 1);
+  EXPECT_LT(stringBuffers.back()->size(), numValueBytes / 2);
 }
 
 TEST_F(EncodingViewDecoderTest, readsSequentialRowsAcrossChunks) {

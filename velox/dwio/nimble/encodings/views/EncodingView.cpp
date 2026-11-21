@@ -33,6 +33,13 @@ uint32_t EncodingView::read(
   return static_cast<uint32_t>(indices.size());
 }
 
+void EncodingView::addValueBuffers(
+    std::vector<velox::BufferPtr>& buffers) const {
+  if (decompressedPayload_ != nullptr) {
+    buffers.push_back(decompressedPayload_);
+  }
+}
+
 std::string_view EncodingView::decompressPayload(
     CompressionType compressionType,
     DataType dataType,

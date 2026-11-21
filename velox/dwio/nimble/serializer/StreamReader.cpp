@@ -217,7 +217,7 @@ folly::coro::Task<void> StreamReader::co_read(
   checkStreamCount(streams.size(), inputOffsets_.size());
   const auto outputRanges =
       makeOutputRanges(outputType_, ranges, outputOffset, output);
-  prepareRead(streams, /*alphabets=*/{}, options);
+  prepareRead(streams, /*streamOwners=*/{}, /*alphabets=*/{}, options);
 
   // The streams are only valid during this call.
   SCOPE_EXIT {
@@ -245,13 +245,21 @@ void StreamReader::setStreams(
     std::span<const std::string_view> streams,
     const SharedDictionaryAlphabets& alphabets,
     const Encoding::Options& options) {
+  setStreams(streams, /*streamOwners=*/{}, alphabets, options);
+}
+
+void StreamReader::setStreams(
+    std::span<const std::string_view> streams,
+    std::vector<velox::BufferPtr> streamOwners,
+    const SharedDictionaryAlphabets& alphabets,
+    const Encoding::Options& options) {
   checkStreamCount(streams.size(), inputOffsets_.size());
   if (!alphabets.empty()) {
     NIMBLE_USER_CHECK_NULL(
         options.sharedDictionaryAlphabet,
         "Shared dictionary alphabets must come from the map or the options, not both");
   }
-  prepareRead(streams, alphabets, options);
+  prepareRead(streams, std::move(streamOwners), alphabets, options);
 }
 
 StreamReader::CachedReader& StreamReader::reader() const {
@@ -282,10 +290,12 @@ void StreamReader::reset() {
   }
   streamsBound_ = false;
   decompressedChunks_.clear();
+  streamOwners_.clear();
 }
 
 void StreamReader::loadChunks(std::string_view stream) {
   loadedChunks_.clear();
+  loadedChunkOwners_ = streamOwners_;
   while (!stream.empty()) {
     NIMBLE_CHECK_FILE_GE(
         stream.size(), kChunkHeaderSize, "Truncated chunk header in stream");
@@ -315,6 +325,7 @@ void StreamReader::loadChunks(std::string_view stream) {
         payload,
         /*decompressCounter=*/nullptr);
     loadedChunks_.emplace_back(decompressed->as<char>(), decompressed->size());
+    loadedChunkOwners_.push_back(decompressed);
     decompressedChunks_.push_back(std::move(decompressed));
   }
 }
@@ -363,6 +374,7 @@ void StreamReader::rebuildReader(
       bindStream(streams[i], i, alphabets, [&] {
         // @lint-ignore NULLSAFECLANG nullable-dereference
         decoder->rebind(loadedChunks_, options_.bufferPool);
+        decoder->setChunkOwners(std::move(loadedChunkOwners_));
       });
       cachedReader.streamDecoders[i] = decoder;
       continue;
@@ -373,6 +385,7 @@ void StreamReader::rebuildReader(
     bindStream(streams[i], i, alphabets, [&] {
       decoder = std::make_unique<EncodingViewDecoder>(
           loadedChunks_, pool_, options_.bufferPool, encodingViewFactory);
+      decoder->setChunkOwners(std::move(loadedChunkOwners_));
     });
     cachedReader.streamDecoders[i] = decoder.get();
     cachedReader.decodersByStreamId.emplace(streamId, std::move(decoder));
@@ -383,9 +396,11 @@ void StreamReader::rebuildReader(
 
 void StreamReader::prepareRead(
     std::span<const std::string_view> streams,
+    std::vector<velox::BufferPtr> streamOwners,
     const SharedDictionaryAlphabets& alphabets,
     const Encoding::Options& options) {
   reset();
+  streamOwners_ = std::move(streamOwners);
   options_ = options;
   if (readerOptions_.parallelDecodeEnabled()) {
     // TODO: Make the encoding buffer pool safe for parallel decoding.
@@ -400,6 +415,8 @@ void StreamReader::prepareRead(
         bindStream(streams[i], i, alphabets, [&] {
           cachedReader_->streamDecoders[i]->rebind(
               loadedChunks_, options_.bufferPool);
+          cachedReader_->streamDecoders[i]->setChunkOwners(
+              std::move(loadedChunkOwners_));
         });
       }
     }

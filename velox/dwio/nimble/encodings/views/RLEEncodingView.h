@@ -64,6 +64,11 @@ class RLEEncodingView final : public TypedEncodingView<T> {
     this->releaseVectorBuffer(runEnds_);
   }
 
+  void addValueBuffers(std::vector<velox::BufferPtr>& buffers) const final {
+    TypedEncodingView<T>::addValueBuffers(buffers);
+    values_->addValueBuffers(buffers);
+  }
+
  private:
   T readTypedAt(uint32_t index) const final {
     NIMBLE_CHECK_LT(index, this->rowCount_);

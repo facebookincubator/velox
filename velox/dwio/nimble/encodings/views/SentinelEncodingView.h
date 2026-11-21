@@ -118,6 +118,11 @@ class SentinelEncodingView final : public TypedEncodingView<T> {
     return normalizeNulls(physicalOutput, numRows, &setNull);
   }
 
+  void addValueBuffers(std::vector<velox::BufferPtr>& buffers) const final {
+    TypedEncodingView<T>::addValueBuffers(buffers);
+    values_->addValueBuffers(buffers);
+  }
+
  private:
   T readTypedAt(uint32_t index) const final {
     return detail::castFromPhysicalType<T>(readPhysicalAt(index));
