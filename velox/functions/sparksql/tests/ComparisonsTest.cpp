@@ -229,6 +229,37 @@ TEST_F(ComparisonsTest, nullPredicatesTimestampUtc) {
   assertNullPredicates(makeFlatVector<Timestamp>({}, TIMESTAMP_UTC()), {});
 }
 
+TEST_F(ComparisonsTest, timestampUtc) {
+  const Timestamp beforeEpoch{-1, 999'999'000};
+  const Timestamp epoch{0, 0};
+  const Timestamp afterEpoch{1'704'067'200, 123'456'000};
+  auto data = makeRowVector({
+      makeNullableFlatVector<Timestamp>(
+          {beforeEpoch, epoch, afterEpoch, epoch, std::nullopt},
+          TIMESTAMP_UTC()),
+      makeNullableFlatVector<Timestamp>(
+          {epoch, epoch, epoch, afterEpoch, epoch}, TIMESTAMP_UTC()),
+  });
+
+  const auto assertComparison =
+      [&](const std::string& functionName,
+          const std::vector<std::optional<bool>>& expected) {
+        SCOPED_TRACE(functionName);
+        auto actual = evaluate<SimpleVector<bool>>(
+            fmt::format("{}(c0, c1)", functionName), data);
+        facebook::velox::test::assertEqualVectors(
+            makeNullableFlatVector<bool>(expected), actual);
+      };
+
+  assertComparison("lessthan", {true, false, false, true, std::nullopt});
+  assertComparison("lessthanorequal", {true, true, false, true, std::nullopt});
+  assertComparison("greaterthan", {false, false, true, false, std::nullopt});
+  assertComparison(
+      "greaterthanorequal", {false, true, true, false, std::nullopt});
+  assertComparison("equalto", {false, true, false, false, std::nullopt});
+  assertComparison("equalnullsafe", {false, true, false, false, false});
+}
+
 TEST_F(ComparisonsTest, equaltonullsafe) {
   const auto funcName = "equalnullsafe";
   auto testArrayInput = [&](const std::string& array1,
