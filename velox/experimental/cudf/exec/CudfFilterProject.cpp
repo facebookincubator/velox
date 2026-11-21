@@ -182,6 +182,12 @@ void CudfFilterProject::initialize() {
       bool identityProjection = checkAddIdentityProjection(
           projection, inputType, i, identityProjections_);
       if (!identityProjection) {
+        // A projection result becomes an output column, and eval() leaves a
+        // result whose type has no cuDF mapping uncast.
+        VELOX_CHECK(
+            isTypeSupportedByCudf(projection->type()),
+            "Projection result type is not supported by cuDF: {}",
+            projection->type());
         allExprs.push_back(projection);
         resultProjections_.emplace_back(allExprs.size() - 1, i);
       }
