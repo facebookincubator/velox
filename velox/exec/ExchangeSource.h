@@ -132,7 +132,7 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
     obj["destination"] = destination_;
     obj["sequence"] = sequence_;
     obj["requestPending"] = requestPending_.load();
-    obj["atEnd"] = atEnd_;
+    obj["atEnd"] = atEnd_.load();
     return obj;
   }
 
@@ -172,7 +172,11 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
 
   int64_t sequence_{0};
   std::atomic<bool> requestPending_{false};
-  bool atEnd_{false};
+  // Set by a source once it has produced all of its data. Atomic because a
+  // source may set it from its own thread while shouldRequestLocked() reads it
+  // under the exchange queue mutex and toString()/toJson() read it under no
+  // lock at all.
+  std::atomic<bool> atEnd_{false};
 };
 
 } // namespace facebook::velox::exec

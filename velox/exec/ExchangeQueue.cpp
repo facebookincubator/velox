@@ -64,6 +64,11 @@ void ExchangeQueue::enqueueLocked(
     return;
   }
 
+  if (closed_) {
+    page.reset();
+    return;
+  }
+
   totalBytes_ += page->size();
   if (peakBytes_ < totalBytes_) {
     peakBytes_ = totalBytes_;
