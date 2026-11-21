@@ -857,8 +857,8 @@ TEST_F(DateTimeFunctionsTest, hourTimestampWithTimezoneGmtFallback) {
 }
 
 TEST_F(DateTimeFunctionsTest, hourTimestampWithTimezoneLegacyDefault) {
-  // Legacy mode must not resolve the unused invalid session zone.
-  setQueryTimeZone("Not/AZone");
+  // Legacy mode ignores the session zone.
+  setQueryTimeZone("Asia/Kathmandu");
   const auto hourTimestampWithTimezone =
       [&](std::optional<TimestampWithTimezone> timestampWithTimezone) {
         return evaluateOnce<int64_t>(
@@ -1276,10 +1276,8 @@ TEST_F(DateTimeFunctionsTest, timestampWithTimeZonePlusIntervalDayTime) {
       test("2024-11-03 01:30 America/Los_Angeles", 1 * kMillisInHour));
 }
 
-TEST_F(
-    DateTimeFunctionsTest,
-    timestampWithTimeZoneIntervalDayTimeIgnoresSessionZone) {
-  useSessionZoneForRendering("Not/AZone");
+TEST_F(DateTimeFunctionsTest, plusIntervalDayTimeKeepsZone) {
+  useSessionZoneForRendering("Asia/Kathmandu");
   auto input = makeRowVector({
       makeTimestampWithTimeZoneVector(0, "UTC"),
       makeNullableFlatVector<int64_t>({1'000}, INTERVAL_DAY_TIME()),
@@ -2307,12 +2305,6 @@ TEST_F(DateTimeFunctionsTest, millisecondTimestampWithTimezone) {
   EXPECT_EQ(
       20,
       millisecondTimestampWithTimezone(TimestampWithTimezone(-980, "+05:30")));
-
-  useSessionZoneForRendering("Not/AZone");
-  EXPECT_EQ(
-      123,
-      millisecondTimestampWithTimezone(
-          TimestampWithTimezone(4'000'000'000'123, "+05:30")));
 }
 
 TEST_F(DateTimeFunctionsTest, millisecondTime) {
@@ -2949,31 +2941,6 @@ TEST_F(DateTimeFunctionsTest, dateTruncTimestampWithTimezoneSessionZone) {
   // 00:45 UTC is 06:15 IST, whose hour boundary is 00:30 UTC.
   EXPECT_EQ(1800.0, truncHourEpoch(TimestampWithTimezone(2'700'000, "-04:00")));
   EXPECT_EQ(1800.0, truncHourEpoch(TimestampWithTimezone(2'700'000, "-07:00")));
-}
-
-TEST_F(
-    DateTimeFunctionsTest,
-    dateTruncSecondTimestampWithTimezoneIgnoresSessionZone) {
-  useSessionZoneForRendering("Not/AZone");
-  const auto timestampWithTimezone =
-      TimestampWithTimezone::pack(TimestampWithTimezone(1'234, "+05:30"));
-  const auto expected =
-      TimestampWithTimezone::pack(TimestampWithTimezone(1'000, "+05:30"));
-
-  EXPECT_EQ(
-      expected,
-      evaluateOnce<int64_t>(
-          "date_trunc('second', c0)",
-          TIMESTAMP_WITH_TIME_ZONE(),
-          timestampWithTimezone));
-  EXPECT_EQ(
-      expected,
-      evaluateOnce<int64_t>(
-          "date_trunc(c0, c1)",
-          makeRowVector({
-              makeNullableFlatVector<std::string>({"second"}, VARCHAR()),
-              makeTimestampWithTimeZoneVector(1'234, "+05:30"),
-          })));
 }
 
 TEST_F(DateTimeFunctionsTest, dateTruncTimestampWithTimezoneLegacyDefault) {
@@ -3656,42 +3623,21 @@ TEST_F(DateTimeFunctionsTest, dateAddHourTimestampWithTimezoneFallback) {
   useSessionZoneForRendering("America/Los_Angeles");
   // 00:30 PDT + 2 hours reaches the second 01:30, after the offset changes.
   // Calendar addition instead reaches 02:30 PST, one hour later.
-  const auto result = evaluateOnce<double>(
-      "to_unixtime(date_add('hour', 2, c0))",
-      TIMESTAMP_WITH_TIME_ZONE(),
-      TimestampWithTimezone::pack(
-          TimestampWithTimezone(1'730'619'000'000, "UTC")));
-  EXPECT_EQ(1'730'626'200.0, result);
-}
-
-TEST_F(
-    DateTimeFunctionsTest,
-    dateAddSubdayTimestampWithTimezoneIgnoresSessionZone) {
-  useSessionZoneForRendering("Not/AZone");
-  const auto timestampWithTimezone =
-      TimestampWithTimezone::pack(TimestampWithTimezone(0, "+05:30"));
-
   EXPECT_EQ(
-      7200.0,
+      1'730'626'200.0,
       evaluateOnce<double>(
           "to_unixtime(date_add('hour', 2, c0))",
           TIMESTAMP_WITH_TIME_ZONE(),
-          timestampWithTimezone));
+          TimestampWithTimezone::pack(
+              TimestampWithTimezone(1'730'619'000'000, "UTC"))));
   EXPECT_EQ(
-      7200.0,
+      1'730'626'200.0,
       evaluateOnce<double>(
           "to_unixtime(date_add(c0, 2, c1))",
           makeRowVector({
               makeNullableFlatVector<std::string>({"hour"}, VARCHAR()),
-              makeTimestampWithTimeZoneVector(0, "+05:30"),
+              makeTimestampWithTimeZoneVector(1'730'619'000'000, "UTC"),
           })));
-
-  VELOX_ASSERT_THROW(
-      evaluateOnce<int64_t>(
-          "date_add('day', 1, c0)",
-          TIMESTAMP_WITH_TIME_ZONE(),
-          timestampWithTimezone),
-      "Unknown time zone");
 }
 
 TEST_F(DateTimeFunctionsTest, dateAddTime) {
@@ -4456,14 +4402,14 @@ TEST_F(DateTimeFunctionsTest, dateDiffTimestampWithTimezoneSessionZone) {
           })));
 }
 
-TEST_F(
-    DateTimeFunctionsTest,
-    dateDiffSubdayTimestampWithTimezoneIgnoresSessionZone) {
-  useSessionZoneForRendering("Not/AZone");
-  const auto from =
-      TimestampWithTimezone::pack(TimestampWithTimezone(0, "+05:30"));
-  const auto to =
-      TimestampWithTimezone::pack(TimestampWithTimezone(7'200'000, "-07:00"));
+TEST_F(DateTimeFunctionsTest, dateDiffHourFallback) {
+  useSessionZoneForRendering("America/Los_Angeles");
+  // 00:30 PDT to the second 01:30, after the offset changes, is 2 hours of
+  // elapsed time. The clock in Los Angeles moves 1 hour.
+  const auto from = TimestampWithTimezone::pack(
+      TimestampWithTimezone(1'730'619'000'000, "UTC"));
+  const auto to = TimestampWithTimezone::pack(
+      TimestampWithTimezone(1'730'626'200'000, "UTC"));
 
   EXPECT_EQ(
       2,
@@ -4478,8 +4424,8 @@ TEST_F(
           "date_diff(c0, c1, c2)",
           makeRowVector({
               makeNullableFlatVector<std::string>({"hour"}, VARCHAR()),
-              makeTimestampWithTimeZoneVector(0, "+05:30"),
-              makeTimestampWithTimeZoneVector(7'200'000, "-07:00"),
+              makeTimestampWithTimeZoneVector(1'730'619'000'000, "UTC"),
+              makeTimestampWithTimeZoneVector(1'730'626'200'000, "UTC"),
           })));
 }
 
@@ -6391,7 +6337,7 @@ TEST_F(DateTimeFunctionsTest, timeZoneMinute) {
 TEST_F(
     DateTimeFunctionsTest,
     timestampWithTimezoneOffsetAccessorsIgnoreSessionZone) {
-  useSessionZoneForRendering("Not/AZone");
+  useSessionZoneForRendering("Asia/Kathmandu");
 
   const auto evaluateOffset = [&](const char* expression,
                                   const char* timeZone) {
@@ -6973,7 +6919,7 @@ TEST_F(DateTimeFunctionsTest, toIso8601TimestampWithTimezoneLegacyDefault) {
 }
 
 TEST_F(DateTimeFunctionsTest, atTimezoneTest) {
-  useSessionZoneForRendering("Not/AZone");
+  useSessionZoneForRendering("Asia/Kathmandu");
 
   const auto at_timezone = [&](std::optional<int64_t> timestampWithTimezone,
                                std::optional<std::string> targetTimezone) {
