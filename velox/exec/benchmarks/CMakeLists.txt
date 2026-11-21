@@ -41,6 +41,18 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
+add_executable(velox_operator_batch_benchmark OperatorBatchBenchmark.cpp)
+
+target_link_libraries(
+  velox_operator_batch_benchmark
+  PRIVATE
+    velox_exec_test_lib
+    velox_vector_test_lib
+    velox_functions_prestosql
+    velox_aggregates
+    Folly::follybenchmark
+)
+
 add_executable(velox_exchange_benchmark ExchangeBenchmark.cpp)
 
 target_link_libraries(
