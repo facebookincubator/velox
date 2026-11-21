@@ -23,6 +23,7 @@ add_executable(
   CentralMomentsAggregationTest.cpp
   CollectListAggregateTest.cpp
   CollectSetAggregateTest.cpp
+  CountMinSketchAggregateTest.cpp
   CovarianceAggregatesTest.cpp
   FirstAggregateTest.cpp
   LastAggregateTest.cpp
