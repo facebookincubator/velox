@@ -22,10 +22,17 @@
 #include "velox/dwio/text/RegisterTextReader.h"
 #include "velox/dwio/text/RegisterTextWriter.h"
 #include "velox/dwio/text/tests/writer/FileReaderUtil.h"
+#include "velox/type/Conversions.h"
+#include "velox/type/HugeInt.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <limits>
+#include <optional>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 /// TODO: Add fuzzer test.
 
@@ -76,6 +83,52 @@ class TextWriterTest : public testing::Test,
     auto input =
         std::make_unique<dwio::common::BufferedInput>(readFile, *pool());
     return factory->createReader(std::move(input), readerOptions);
+  }
+
+  void assertWrite(const RowVectorPtr& data, std::string_view expected) {
+    auto sink = std::make_unique<dwio::common::MemorySink>(
+        1'024, dwio::common::FileSink::Options{.pool = leafPool_.get()});
+    const auto* memorySink = sink.get();
+    auto options = std::make_shared<WriterOptions>();
+    options->memoryPool = rootPool_.get();
+    options->schema = data->type();
+    options->serdeParameters = {
+        {SerDeOptions::kFieldDelim, ","},
+        {SerDeOptions::kCollectionDelim, "|"},
+        {SerDeOptions::kMapKeyDelim, "#"},
+    };
+    auto factory =
+        dwio::common::getWriterFactory(dwio::common::FileFormat::TEXT);
+    auto writer = factory->createWriter(std::move(sink), options);
+    writer->write(data);
+    writer->close();
+    EXPECT_EQ(
+        std::string_view(memorySink->data(), memorySink->size()), expected);
+  }
+
+  template <typename T>
+  void assertWrite(
+      const TypePtr& type,
+      const std::vector<std::pair<std::optional<T>, std::string>>& cases) {
+    auto values = makeFlatVector<T>(
+        cases.size(),
+        [&](auto row) { return cases[row].first.value_or(T{}); },
+        [&](auto row) { return !cases[row].first.has_value(); },
+        type);
+    std::string expected;
+    for (const auto& testCase : cases) {
+      expected += testCase.second + '\n';
+    }
+    assertWrite(makeRowVector({values}), expected);
+
+    expected.clear();
+    for (auto it = cases.rbegin(); it != cases.rend(); ++it) {
+      expected += it->second + '\n';
+    }
+    assertWrite(
+        makeRowVector(
+            {wrapInDictionary(makeIndicesInReverse(values->size()), values)}),
+        expected);
   }
 
   constexpr static float kInf = std::numeric_limits<float>::infinity();
@@ -176,9 +229,9 @@ TEST_F(TextWriterTest, write) {
   EXPECT_EQ(result[2][5], "3.100000");
 
   // double
-  EXPECT_EQ(result[0][6], "1.100000");
+  EXPECT_EQ(result[0][6], "1.1");
   EXPECT_EQ(result[1][6], "NaN");
-  EXPECT_EQ(result[2][6], "3.100000");
+  EXPECT_EQ(result[2][6], "3.1");
 
   // timestamp
   EXPECT_EQ(result[0][7], "1969-12-31 16:00:00.000");
@@ -194,6 +247,133 @@ TEST_F(TextWriterTest, write) {
   EXPECT_EQ(result[0][9], "aGVsbG8=");
   EXPECT_EQ(result[1][9], "d29ybGQ=");
   EXPECT_EQ(result[2][9], "Y3Bw");
+}
+
+TEST_F(TextWriterTest, writeDouble) {
+  gflags::FlagSaver flagSaver;
+  for (const bool legacyCast : {false, true}) {
+    FLAGS_experimental_enable_legacy_cast = legacyCast;
+    SCOPED_TRACE(fmt::format("experimental_enable_legacy_cast={}", legacyCast));
+    assertWrite<double>(
+        DOUBLE(),
+        {
+            {1.5, "1.5"},
+            {-1.5, "-1.5"},
+            {1.0, legacyCast ? "1" : "1.0"},
+            {-1.0, legacyCast ? "-1" : "-1.0"},
+            {0.0, legacyCast ? "0" : "0.0"},
+            {-0.0, legacyCast ? "-0" : "-0.0"},
+            {1.2345678901234567, "1.2345678901234567"},
+            {0.001, "0.001"},
+            {0.00012, "1.2E-4"},
+            {10'000'000.0, "1.0E7"},
+            {std::numeric_limits<double>::max(), "1.7976931348623157E308"},
+            {std::numeric_limits<double>::lowest(), "-1.7976931348623157E308"},
+            {std::numeric_limits<double>::denorm_min(),
+             "4.9406564584124654E-324"},
+            {std::numeric_limits<double>::infinity(), "Infinity"},
+            {-std::numeric_limits<double>::infinity(), "-Infinity"},
+            {kNaN, "NaN"},
+            {std::nullopt, R"(\N)"},
+        });
+  }
+}
+
+TEST_F(TextWriterTest, writeDate) {
+  assertWrite<int32_t>(
+      DATE(),
+      {
+          {19'723, "2024-01-01"},
+          {0, "1970-01-01"},
+          {-1, "1969-12-31"},
+          {11'016, "2000-02-29"},
+          {-719'162, "0001-01-01"},
+          {std::nullopt, R"(\N)"},
+      });
+}
+
+TEST_F(TextWriterTest, writeDecimal) {
+  assertWrite<int64_t>(
+      DECIMAL(5, 2),
+      {
+          {150, "1.50"},
+          {-150, "-1.50"},
+          {1, "0.01"},
+          {-1, "-0.01"},
+          {0, "0.00"},
+          {99'999, "999.99"},
+          {-99'999, "-999.99"},
+          {std::nullopt, R"(\N)"},
+      });
+  assertWrite<int64_t>(
+      DECIMAL(18, 0),
+      {
+          {999'999'999'999'999'999, "999999999999999999"},
+          {-999'999'999'999'999'999, "-999999999999999999"},
+          {0, "0"},
+          {std::nullopt, R"(\N)"},
+      });
+  assertWrite<int64_t>(
+      DECIMAL(18, 18),
+      {
+          {1, "0.000000000000000001"},
+          {-1, "-0.000000000000000001"},
+          {0, "0.000000000000000000"},
+          {std::nullopt, R"(\N)"},
+      });
+
+  const auto maxUnscaled =
+      HugeInt::parse("99999999999999999999999999999999999999");
+  assertWrite<int128_t>(
+      DECIMAL(38, 2),
+      {
+          {150, "1.50"},
+          {-1, "-0.01"},
+          {0, "0.00"},
+          {maxUnscaled, "999999999999999999999999999999999999.99"},
+          {-maxUnscaled, "-999999999999999999999999999999999999.99"},
+          {std::nullopt, R"(\N)"},
+      });
+  assertWrite<int128_t>(
+      DECIMAL(38, 0),
+      {
+          {maxUnscaled, "99999999999999999999999999999999999999"},
+          {-maxUnscaled, "-99999999999999999999999999999999999999"},
+          {0, "0"},
+          {std::nullopt, R"(\N)"},
+      });
+  assertWrite<int128_t>(
+      DECIMAL(38, 38),
+      {
+          {1, "0.00000000000000000000000000000000000001"},
+          {-1, "-0.00000000000000000000000000000000000001"},
+          {0, "0.00000000000000000000000000000000000000"},
+          {maxUnscaled, "0.99999999999999999999999999999999999999"},
+          {std::nullopt, R"(\N)"},
+      });
+}
+
+TEST_F(TextWriterTest, writeNestedConversions) {
+  auto dates =
+      makeNullableFlatVector<int32_t>({19'723, std::nullopt, -1}, DATE());
+  auto data = makeRowVector({
+      makeArrayVector(
+          {0}, wrapInDictionary(makeIndicesInReverse(dates->size()), dates)),
+      makeMapVector(
+          {0},
+          makeFlatVector<int32_t>({19'723, -1}, DATE()),
+          makeNullableFlatVector<int64_t>({150, std::nullopt}, DECIMAL(5, 2))),
+      makeRowVector({
+          makeFlatVector<double>({-std::numeric_limits<double>::infinity()}),
+          makeConstant<int128_t>(150, 1, DECIMAL(20, 2)),
+      }),
+      makeConstant<int32_t>(19'723, 1, DATE()),
+  });
+  assertWrite(
+      data,
+      "1969-12-31|\\N|2024-01-01,"
+      "2024-01-01#1.50|1969-12-31#\\N,"
+      "-Infinity|1.50,2024-01-01\n");
 }
 
 // The writer factory must translate the Hive serde 'field.delim' parameter on
@@ -427,19 +607,19 @@ TEST_F(TextWriterTest, mapAndArrayComplexTypes) {
   EXPECT_EQ(result[12][0], "13|11133333|333");
 
   // col_double_arr
-  EXPECT_EQ(result[0][1], "1.123000|1.312300");
-  EXPECT_EQ(result[1][1], "2.333000|-5512.000000|1.230000");
-  EXPECT_EQ(result[2][1], "-6.100000|65.777000");
-  EXPECT_EQ(result[3][1], "4.200000|24.000000|324.110000");
-  EXPECT_EQ(result[4][1], "47.200000|213.230000");
-  EXPECT_EQ(result[5][1], "79.500000|-44.110000");
-  EXPECT_EQ(result[6][1], "3.141593|441.124000");
-  EXPECT_EQ(result[7][1], "-221.145000|878.430000|-11.000000");
-  EXPECT_EQ(result[8][1], "93.120000|632.000000");
-  EXPECT_EQ(result[9][1], "-4123.110000|-177.100000");
-  EXPECT_EQ(result[10][1], "950.200000|-4412.000000");
-  EXPECT_EQ(result[11][1], "43.660000|33121.430000");
-  EXPECT_EQ(result[12][1], "-42.110000|-123.430000");
+  EXPECT_EQ(result[0][1], "1.123|1.3123");
+  EXPECT_EQ(result[1][1], "2.333|-5512.0|1.23");
+  EXPECT_EQ(result[2][1], "-6.1|65.777");
+  EXPECT_EQ(result[3][1], "4.2|24.0|324.11");
+  EXPECT_EQ(result[4][1], "47.2|213.23");
+  EXPECT_EQ(result[5][1], "79.5|-44.11");
+  EXPECT_EQ(result[6][1], "3.1415926|441.124");
+  EXPECT_EQ(result[7][1], "-221.145|878.43|-11.0");
+  EXPECT_EQ(result[8][1], "93.12|632.0");
+  EXPECT_EQ(result[9][1], "-4123.11|-177.1");
+  EXPECT_EQ(result[10][1], "950.2|-4412.0");
+  EXPECT_EQ(result[11][1], "43.66|33121.43");
+  EXPECT_EQ(result[12][1], "-42.11|-123.43");
 
   // col_map
   EXPECT_EQ(result[0][2], "1#false|111#true");
@@ -555,52 +735,12 @@ TEST_F(TextWriterTest, verifyMapAndArrayComplexTypesWithTextReader) {
   setScanSpec(*schema, rowReaderOptions);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
-  // Change the expected value
-  const auto expected = makeRowVector(
-      {makeArrayVector<int64_t>(
-           {{1, 11, 111},
-            {22, 22222},
-            {333, 33},
-            {4444, 44},
-            {5, 555},
-            {666, 66, 66},
-            {7777, 7, 777},
-            {8888, 88},
-            {9, 99},
-            {10, 10000},
-            {111, 1, 111},
-            {12, 11122222, 222},
-            {13, 11133333, 333}}),
-       makeArrayVector<double>(
-           {{1.123, 1.3123},
-            {2.333, -5512, 1.23},
-            {-6.1, 65.777},
-            {4.2, 24, 324.11},
-            {47.2, 213.23},
-            {79.5, -44.11},
-            {3.141593, 441.124},
-            {-221.145, 878.43, -11},
-            {93.12, 632},
-            {-4123.11, -177.1},
-            {950.2, -4412},
-            {43.66, 33121.43},
-            {-42.11, -123.43}}),
-       std::make_shared<MapVector>(
-           pool(),
-           MAP(keyVector->type(), valueVector->type()),
-           nullptr,
-           length,
-           offsets,
-           sizes,
-           keyVector,
-           valueVector)});
-
   EXPECT_EQ(*reader->rowType(), *schema);
 
   VectorPtr result;
   ASSERT_EQ(rowReader->next(13, result), 13);
   for (int i = 0; i < 13; ++i) {
-    EXPECT_TRUE(result->equalValueAt(expected.get(), i, i));
+    EXPECT_TRUE(result->equalValueAt(data.get(), i, i));
   }
 }
 
@@ -678,11 +818,11 @@ TEST_F(TextWriterTest, arrayTypes) {
   EXPECT_EQ(result[4][1], "test|array|string");
 
   // double array type
-  EXPECT_EQ(result[0][2], "1.100000|2.200000|3.300000");
-  EXPECT_EQ(result[1][2], "10.500000|20.700000");
+  EXPECT_EQ(result[0][2], "1.1|2.2|3.3");
+  EXPECT_EQ(result[1][2], "10.5|20.7");
   EXPECT_EQ(result[2][2], "");
-  EXPECT_EQ(result[3][2], "99.990000");
-  EXPECT_EQ(result[4][2], "1.000000|2.000000|3.000000|4.000000|5.000000");
+  EXPECT_EQ(result[3][2], "99.99");
+  EXPECT_EQ(result[4][2], "1.0|2.0|3.0|4.0|5.0");
 }
 
 TEST_F(TextWriterTest, verifyArrayTypesWithTextReader) {
@@ -1043,11 +1183,11 @@ TEST_F(TextWriterTest, nestedRowTypes) {
   EXPECT_EQ(result[4][0], "data");
 
   // nested row
-  EXPECT_EQ(result[0][1], "42|true|3.141590#2.718280");
-  EXPECT_EQ(result[1][1], "100|false|2.718280#1.414210#0.000000");
-  EXPECT_EQ(result[2][1], "-5|true|1.414210#-123.456000");
-  EXPECT_EQ(result[3][1], "0|false|0.000000#999.999000");
-  EXPECT_EQ(result[4][1], "999|true|-123.456000#42.000000#3.141590");
+  EXPECT_EQ(result[0][1], "42|true|3.14159#2.71828");
+  EXPECT_EQ(result[1][1], "100|false|2.71828#1.41421#0.0");
+  EXPECT_EQ(result[2][1], "-5|true|1.41421#-123.456");
+  EXPECT_EQ(result[3][1], "0|false|0.0#999.999");
+  EXPECT_EQ(result[4][1], "999|true|-123.456#42.0#3.14159");
 
   EXPECT_EQ(result[0][2], "false");
   EXPECT_EQ(result[1][2], "true");

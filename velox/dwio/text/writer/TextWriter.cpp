@@ -16,6 +16,8 @@
 
 #include "velox/dwio/text/writer/TextWriter.h"
 #include "velox/common/encode/Base64.h"
+#include "velox/type/Conversions.h"
+#include "velox/type/DecimalUtil.h"
 
 #include <folly/Conv.h>
 #include <cctype>
@@ -100,14 +102,8 @@ std::optional<std::string> toTextStr<float>(float val) {
 }
 
 template <>
-std::optional<std::string> toTextStr<double>(double val) {
-  if (std::isnan(val)) {
-    return std::optional("NaN");
-  } else if (std::isinf(val)) {
-    return std::optional("Infinity");
-  } else {
-    return {std::to_string(val)};
-  }
+std::optional<std::string> toTextStr<double>(double value) {
+  return util::Converter<TypeKind::VARCHAR>::tryCast(value).value();
 }
 
 template <>
@@ -215,12 +211,7 @@ void TextWriter::write(const VectorPtr& data) {
     for (size_t column = 0; column < numColumns; ++column) {
       delimiter = (column == 0) ? std::nullopt
                                 : std::optional(serDeOptions_.separators[0]);
-      writeCellValue(
-          decodedColumnVectors.at(column),
-          schema_->childAt(column)->kind(),
-          row,
-          0,
-          delimiter);
+      writeCellValue(decodedColumnVectors.at(column), row, 0, delimiter);
     }
     bufferedWriterSink_->write((char)serDeOptions_.newLine);
   }
@@ -241,7 +232,6 @@ void TextWriter::abort() {
 
 void TextWriter::writeCellValue(
     const std::shared_ptr<DecodedVector>& decodedColumnVector,
-    const TypeKind type,
     vector_size_t row,
     uint8_t depth,
     std::optional<uint8_t> delimiter) {
@@ -265,7 +255,8 @@ void TextWriter::writeCellValue(
   std::optional<std::string> dataStr = std::nullopt;
   std::optional<StringView> dataSV = std::nullopt;
 
-  switch (type) {
+  const auto& type = *decodedColumnVector->base()->type();
+  switch (type.kind()) {
     case TypeKind::BOOLEAN: {
       dataStr =
           toTextStr(folly::to<bool>(decodedColumnVector->valueAt<bool>(row)));
@@ -280,11 +271,14 @@ void TextWriter::writeCellValue(
       break;
     }
     case TypeKind::INTEGER: {
-      dataStr = toTextStr(decodedColumnVector->valueAt<int32_t>(row));
+      const auto value = decodedColumnVector->valueAt<int32_t>(row);
+      dataStr = type.isDate() ? DATE()->toString(value) : std::to_string(value);
       break;
     }
     case TypeKind::BIGINT: {
-      dataStr = toTextStr(decodedColumnVector->valueAt<int64_t>(row));
+      const auto value = decodedColumnVector->valueAt<int64_t>(row);
+      dataStr = type.isShortDecimal() ? DecimalUtil::toString(value, type)
+                                      : std::to_string(value);
       break;
     }
     case TypeKind::REAL: {
@@ -322,12 +316,7 @@ void TextWriter::writeCellValue(
       for (int i = 0; i < size; ++i) {
         delimiter = (i == 0) ? std::nullopt
                              : std::optional(getDelimiterForDepth(depth));
-        writeCellValue(
-            decodedElement,
-            arrVecPtr->elements().get()->typeKind(),
-            i,
-            depth,
-            delimiter);
+        writeCellValue(decodedElement, i, depth, delimiter);
       }
       return;
     }
@@ -349,20 +338,10 @@ void TextWriter::writeCellValue(
       for (int i = 0; i < size; ++i) {
         delimiter = (i == 0) ? std::nullopt
                              : std::optional(getDelimiterForDepth(depth));
-        writeCellValue(
-            decodedKeys,
-            mapVecPtr->mapKeys().get()->typeKind(),
-            i,
-            depth,
-            delimiter);
+        writeCellValue(decodedKeys, i, depth, delimiter);
 
         delimiter = std::optional(getDelimiterForDepth(depth + 1));
-        writeCellValue(
-            decodedValues,
-            mapVecPtr->mapValues().get()->typeKind(),
-            i,
-            depth,
-            delimiter);
+        writeCellValue(decodedValues, i, depth, delimiter);
       }
 
       return;
@@ -389,13 +368,19 @@ void TextWriter::writeCellValue(
             : std::optional(getDelimiterForDepth(depth));
         writeCellValue(
             decodedColumnVectors.at(column),
-            rowVecPtr->childAt(column)->typeKind(),
             actualRowIndex,
             depth,
             nestedRowDelimiter);
       }
       return;
     }
+    case TypeKind::HUGEINT:
+      if (type.isLongDecimal()) {
+        dataStr = DecimalUtil::toString(
+            decodedColumnVector->valueAt<int128_t>(row), type);
+        break;
+      }
+      [[fallthrough]];
     case TypeKind::UNKNOWN:
       [[fallthrough]];
     case TypeKind::FUNCTION:
@@ -405,8 +390,7 @@ void TextWriter::writeCellValue(
     case TypeKind::INVALID:
       [[fallthrough]];
     default:
-      VELOX_NYI(
-          "Text writer does not support type {}", TypeKindName::toName(type));
+      VELOX_NYI("Text writer does not support type {}", type.kind());
   }
 
   VELOX_CHECK(
