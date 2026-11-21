@@ -535,8 +535,11 @@ void CudfConfig::initialize(
         folly::to<int64_t>(config[kUcxPartitionedOutputBatchRows]);
   }
   if (config.find(kCudfKvikioCacheCopyThreads) != config.end()) {
-    kvikioCacheCopyThreads =
+    const auto threads =
         folly::to<int32_t>(config[kCudfKvikioCacheCopyThreads]);
+    VELOX_USER_CHECK_GT(
+        threads, 0, "{} must be positive", kCudfKvikioCacheCopyThreads);
+    kvikioCacheCopyThreads = threads;
   }
   if (config.find(kCudfLogFallback) != config.end()) {
     logFallback = folly::to<bool>(config[kCudfLogFallback]);

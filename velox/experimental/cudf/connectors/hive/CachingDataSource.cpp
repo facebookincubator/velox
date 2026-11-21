@@ -134,11 +134,6 @@ folly::Executor* fillExecutor() {
 folly::Executor* copyExecutor() {
   static auto* executor = [] {
     const auto threads = CudfConfig::getInstance().kvikioCacheCopyThreads;
-    VELOX_USER_CHECK_GT(
-        threads,
-        0,
-        "{} must be positive",
-        CudfConfig::kCudfKvikioCacheCopyThreads);
     return new folly::CPUThreadPoolExecutor(
         threads, std::make_shared<folly::NamedThreadFactory>("CudfCacheCopy"));
   }();
