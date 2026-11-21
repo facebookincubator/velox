@@ -50,16 +50,40 @@ class BloomFilterTest : public ::testing::Test {
     leafPool_ = pool_->addLeafChild("leaf");
   }
 
-  // Builds a filter over 'keys' and returns its serialized bytes.
+  // Returns a blocked config at 'bitsPerKey' that tells the builder to expect
+  // 'numKeys' keys, or that leaves it to count them when 'numKeys' is unset.
+  static BlockedBloomFilterConfig blockedConfig(
+      float bitsPerKey,
+      std::optional<uint64_t> numKeys) {
+    BlockedBloomFilterConfig config{bitsPerKey};
+    config.numKeys = numKeys;
+    return config;
+  }
+
+  // The two ways a builder can learn the size of its filter: from 'numKeys'
+  // given up front, or by counting the keys it receives before finish().
+  static std::vector<std::optional<uint64_t>> numKeysModes(uint64_t numKeys) {
+    return {numKeys, std::nullopt};
+  }
+
+  // Builds a filter over 'keys' with 'config' and returns its serialized
+  // bytes.
   std::string build(
       const std::vector<std::string>& keys,
-      float bitsPerKey = 10.0f) {
-    auto builder = createBloomFilterBuilder(
-        BlockedBloomFilterConfig{bitsPerKey}, keys.size(), pool());
+      const BlockedBloomFilterConfig& config) {
+    auto builder = createBloomFilterBuilder(config, pool());
     for (const auto& key : keys) {
       builder->insert(key);
     }
     return std::string{builder->finish()};
+  }
+
+  // Builds a filter over 'keys', telling the builder up front how many there
+  // are, and returns its serialized bytes.
+  std::string build(
+      const std::vector<std::string>& keys,
+      float bitsPerKey = 10.0f) {
+    return build(keys, blockedConfig(bitsPerKey, keys.size()));
   }
 
   std::unique_ptr<BloomFilterReader> open(std::string_view serialized) {
@@ -103,10 +127,8 @@ TEST_F(BloomFilterTest, emptyStringKey) {
 TEST_F(BloomFilterTest, duplicateInsertsAreIdempotent) {
   // Both filters must be sized identically, or they would differ for a reason
   // that has nothing to do with the repeated inserts.
-  auto once =
-      createBloomFilterBuilder(BlockedBloomFilterConfig{}, 1'000, pool());
-  auto repeated =
-      createBloomFilterBuilder(BlockedBloomFilterConfig{}, 1'000, pool());
+  auto once = createBloomFilterBuilder(blockedConfig(10.0f, 1'000), pool());
+  auto repeated = createBloomFilterBuilder(blockedConfig(10.0f, 1'000), pool());
   once->insert("dup");
   for (int i = 0; i < 3; ++i) {
     repeated->insert("dup");
@@ -116,6 +138,15 @@ TEST_F(BloomFilterTest, duplicateInsertsAreIdempotent) {
 
 TEST_F(BloomFilterTest, emptyFilterMatchesNothing) {
   const auto reader = open(build({}));
+  EXPECT_FALSE(reader->maybeContains(""));
+  EXPECT_FALSE(reader->maybeContains("anything"));
+}
+
+TEST_F(BloomFilterTest, sizingAtFinishWithNoKeys) {
+  const auto serialized = build({}, blockedConfig(10.0f, std::nullopt));
+  EXPECT_EQ(serialized.size(), kBlockSizeBytes + kTrailerSize);
+
+  const auto reader = open(serialized);
   EXPECT_FALSE(reader->maybeContains(""));
   EXPECT_FALSE(reader->maybeContains("anything"));
 }
@@ -166,13 +197,36 @@ TEST_F(BloomFilterTest, filterSizeMatchesTheSizingFormula) {
             testCase.numKeys,
             testCase.bitsPerKey));
     auto builder = createBloomFilterBuilder(
-        BlockedBloomFilterConfig{testCase.bitsPerKey},
-        testCase.numKeys,
-        pool());
+        blockedConfig(testCase.bitsPerKey, testCase.numKeys), pool());
     EXPECT_EQ(
         builder->finish().size(),
         testCase.expectedNumBlocks * kBlockSizeBytes + kTrailerSize);
   }
+}
+
+TEST_F(BloomFilterTest, sizingAtFinishMatchesUpFrontSizing) {
+  // A multiple of 128: at 10 bits per key that many keys fill whole 256-bit
+  // blocks exactly, so counting even one key too many adds a block.
+  const auto keys = makeKeys("key_", 9'984);
+  EXPECT_EQ(
+      build(keys, blockedConfig(10.0f, std::nullopt)),
+      build(keys, blockedConfig(10.0f, keys.size())));
+}
+
+TEST_F(BloomFilterTest, sizingAtFinishCollapsesAdjacentRepeats) {
+  // Sorted input repeats a key on consecutive rows. Sized at finish(), the
+  // filter must count each such key once. The key count is a multiple of 128
+  // for the same reason as above.
+  const auto keys = makeKeys("key_", 1'024);
+  std::vector<std::string> repeated;
+  repeated.reserve(2 * keys.size());
+  for (const auto& key : keys) {
+    repeated.push_back(key);
+    repeated.push_back(key);
+  }
+  EXPECT_EQ(
+      build(repeated, blockedConfig(10.0f, std::nullopt)),
+      build(keys, blockedConfig(10.0f, keys.size())));
 }
 
 TEST_F(BloomFilterTest, moreBitsPerKeyProduceLargerFilter) {
@@ -181,28 +235,36 @@ TEST_F(BloomFilterTest, moreBitsPerKeyProduceLargerFilter) {
 }
 
 TEST_F(BloomFilterTest, invalidBitsPerKey) {
-  for (const auto bitsPerKey :
-       {0.0f,
-        -1.0f,
-        std::numeric_limits<float>::infinity(),
-        std::numeric_limits<float>::quiet_NaN()}) {
-    SCOPED_TRACE(bitsPerKey);
-    NIMBLE_ASSERT_THROW(
-        createBloomFilterBuilder(
-            BlockedBloomFilterConfig{bitsPerKey}, 100, pool()),
-        "Bloom filter bits per key must be finite and positive");
+  // Rejected when the builder is created, whether or not the count is known,
+  // so a bad config fails before any keys are written.
+  for (const auto& numKeys : numKeysModes(100)) {
+    SCOPED_TRACE(numKeys.has_value() ? "count known" : "count unknown");
+    for (const auto bitsPerKey :
+         {0.0f,
+          -1.0f,
+          std::numeric_limits<float>::infinity(),
+          std::numeric_limits<float>::quiet_NaN()}) {
+      SCOPED_TRACE(bitsPerKey);
+      NIMBLE_ASSERT_THROW(
+          createBloomFilterBuilder(blockedConfig(bitsPerKey, numKeys), pool()),
+          "Bloom filter bits per key must be finite and positive");
+    }
   }
 }
 
 TEST_F(BloomFilterTest, bitsPerKeyTooLargeToSize) {
   // Finite and positive, but it asks for a filter that cannot be addressed.
   // Sizing must reject it rather than overflow into a small one.
+  const auto bitsPerKey = std::numeric_limits<float>::max();
   NIMBLE_ASSERT_THROW(
-      createBloomFilterBuilder(
-          BlockedBloomFilterConfig{std::numeric_limits<float>::max()},
-          1'000'000,
-          pool()),
+      createBloomFilterBuilder(blockedConfig(bitsPerKey, 1'000'000), pool()),
       "Bloom filter is too large");
+
+  // Without a count, sizing waits for finish(), so that is where it fails.
+  auto builder =
+      createBloomFilterBuilder(blockedConfig(bitsPerKey, std::nullopt), pool());
+  builder->insert("key");
+  NIMBLE_ASSERT_THROW(builder->finish(), "Bloom filter is too large");
 }
 
 TEST_F(BloomFilterTest, batchAgreesWithSingleKey) {
@@ -316,7 +378,6 @@ class CountingBloomFilterFactory final : public BloomFilterFactory {
 
   std::unique_ptr<BloomFilterBuilder> createBuilder(
       const BloomFilterConfig&,
-      uint64_t,
       velox::memory::MemoryPool*) const override {
     NIMBLE_FAIL("Not needed by these tests");
   }
@@ -333,6 +394,10 @@ class UnregisteredBloomFilterConfig final : public BloomFilterConfig {
  public:
   UnregisteredBloomFilterConfig()
       : BloomFilterConfig{static_cast<BloomFilterType>(201), 10.0f} {}
+
+  std::unique_ptr<BloomFilterConfig> clone() const override {
+    return std::make_unique<UnregisteredBloomFilterConfig>(*this);
+  }
 };
 
 // Claims the blocked layout while not being the config that layout expects.
@@ -340,13 +405,17 @@ class MislabeledBloomFilterConfig final : public BloomFilterConfig {
  public:
   MislabeledBloomFilterConfig()
       : BloomFilterConfig{BloomFilterType::kBlocked, 10.0f} {}
+
+  std::unique_ptr<BloomFilterConfig> clone() const override {
+    return std::make_unique<MislabeledBloomFilterConfig>(*this);
+  }
 };
 
 TEST_F(BloomFilterTest, builderRejectsUnregisteredType) {
   // Unlike the read side, a writer that cannot honor its configured layout
   // must fail rather than quietly produce a filter of some other shape.
   NIMBLE_ASSERT_THROW(
-      createBloomFilterBuilder(UnregisteredBloomFilterConfig{}, 100, pool()),
+      createBloomFilterBuilder(UnregisteredBloomFilterConfig{}, pool()),
       "No bloom filter factory is registered for type: 201");
 }
 
@@ -354,8 +423,22 @@ TEST_F(BloomFilterTest, builderRejectsConfigOfTheWrongType) {
   // The downcast a factory does on its config is checked, so a config whose
   // type byte disagrees with its class is caught rather than reinterpreted.
   VELOX_ASSERT_THROW(
-      createBloomFilterBuilder(MislabeledBloomFilterConfig{}, 100, pool()),
+      createBloomFilterBuilder(MislabeledBloomFilterConfig{}, pool()),
       "Failed to cast");
+}
+
+TEST_F(BloomFilterTest, cloneKeepsConcreteType) {
+  // A caller holding only the base, like the hash index writer setting its
+  // entry count, must get back a copy the factory can still downcast.
+  const auto original = blockedConfig(7.0f, 123);
+  const BloomFilterConfig& base = original;
+  const auto copy = base.clone();
+
+  const auto& copied =
+      checkedBloomFilterConfig<BlockedBloomFilterConfig>(*copy);
+  EXPECT_EQ(copied.type, BloomFilterType::kBlocked);
+  EXPECT_FLOAT_EQ(copied.bitsPerKey, 7.0f);
+  EXPECT_EQ(copied.numKeys, std::optional<uint64_t>{123});
 }
 
 TEST_F(BloomFilterTest, unregisteredTypeReadableOnceRegistered) {
@@ -391,24 +474,47 @@ TEST_F(BloomFilterTest, unregisteredTypeReadableOnceRegistered) {
 }
 
 TEST_F(BloomFilterTest, builderRejectsUseAfterFinish) {
-  auto builder =
-      createBloomFilterBuilder(BlockedBloomFilterConfig{}, 10, pool());
-  builder->insert("key");
-  builder->finish();
+  for (const auto& numKeys : numKeysModes(10)) {
+    SCOPED_TRACE(numKeys.has_value() ? "count known" : "count unknown");
+    auto builder =
+        createBloomFilterBuilder(blockedConfig(10.0f, numKeys), pool());
+    builder->insert("key");
+    builder->finish();
 
-  NIMBLE_ASSERT_THROW(
-      builder->insert("late"), "Cannot insert into a finished bloom filter");
-  NIMBLE_ASSERT_THROW(builder->finish(), "Bloom filter is already finished");
+    NIMBLE_ASSERT_THROW(
+        builder->insert("late"), "Cannot insert into a finished bloom filter");
+    NIMBLE_ASSERT_THROW(builder->finish(), "Bloom filter is already finished");
+  }
 }
 
 TEST_F(BloomFilterTest, memoryIsPoolTrackedAndReleased) {
   const auto memoryBefore = pool()->usedBytes();
   {
     auto builder =
-        createBloomFilterBuilder(BlockedBloomFilterConfig{}, 10'000, pool());
+        createBloomFilterBuilder(blockedConfig(10.0f, 10'000), pool());
     EXPECT_GT(pool()->usedBytes(), memoryBefore);
     const auto reader = open(builder->finish());
     EXPECT_GT(pool()->usedBytes(), memoryBefore);
+  }
+  EXPECT_EQ(pool()->usedBytes(), memoryBefore);
+}
+
+TEST_F(BloomFilterTest, sizingAtFinishReleasesHashes) {
+  const auto memoryBefore = pool()->usedBytes();
+  {
+    auto builder =
+        createBloomFilterBuilder(blockedConfig(10.0f, std::nullopt), pool());
+    for (const auto& key : makeKeys("key_", 10'000)) {
+      builder->insert(key);
+    }
+    const auto memoryWithHashes = pool()->usedBytes();
+    EXPECT_GT(memoryWithHashes, memoryBefore);
+
+    // A hash per key costs 8 bytes; the filter they size costs 1.25 bytes per
+    // key at 10 bits per key. Once finish() releases the hashes, the builder
+    // holds much less than it did.
+    builder->finish();
+    EXPECT_LT(pool()->usedBytes(), memoryWithHashes);
   }
   EXPECT_EQ(pool()->usedBytes(), memoryBefore);
 }
