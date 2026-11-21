@@ -33,6 +33,7 @@ add_executable(
   velox_dwio_common_test
   BitConcatenationTest.cpp
   BitPackDecoderTest.cpp
+  BufferUtilTest.cpp
   ChainedBufferTests.cpp
   ColumnRuntimeStatsTests.cpp
   ColumnSelectorTests.cpp
