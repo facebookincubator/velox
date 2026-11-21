@@ -31,6 +31,7 @@
 
 #include "velox/common/Casts.h"
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/caching/FileHandle.h"
 #include "velox/common/file/File.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/RowRange.h"
@@ -47,7 +48,6 @@ class MetadataInput;
 } // namespace facebook::nimble
 
 namespace facebook::velox {
-struct FileHandle;
 namespace io {
 class ReaderOptions;
 } // namespace io
@@ -109,8 +109,8 @@ class IndexLookup {
     BlockCache* blockCache{nullptr};
 
     /// Identity of the file in blockCache keys: fileHandle->uuid. Must name
-    /// 'file'.
-    const velox::FileHandle* fileHandle{nullptr};
+    /// 'file'. A copy, so the caller's handle need not outlive these options.
+    std::optional<velox::FileHandle> fileHandle{std::nullopt};
 
     /// If true, pins parsed index objects in the index cache with strong
     /// references so they are never evicted.

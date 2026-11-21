@@ -1530,7 +1530,7 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
     fileHandle.uuid = velox::StringIdLease(
         velox::fileIds(),
         "ClusterIndexWriterTest.hierarchicalKeyChunksUseIntegralColumns");
-    cachedOptions.fileHandle = &fileHandle;
+    cachedOptions.fileHandle = fileHandle;
     auto cachedIndex =
         clusterIndexFactory(descriptor->name)
             .createReader(makeRootSection(), pool_.get(), cachedOptions);
