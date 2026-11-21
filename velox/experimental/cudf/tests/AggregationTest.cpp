@@ -2816,6 +2816,98 @@ TEST_F(AggregationTest, maskedCountAndSumGrouped) {
           "SELECT k, count(v) FILTER (WHERE m), sum(v) FROM tmp GROUP BY k");
 }
 
+// count(DISTINCT) over INTEGER, VARCHAR and DECIMAL inputs, with nulls, an
+// all-null group (k = 3), a FILTER mask and a plain sum in the same node. With
+// one GPU batch per input vector, groups 1 and 2 span both batches, so a merge
+// of per-batch counts would give group 1 a wrong count for i.
+TEST_F(AggregationTest, countDistinctGroupby) {
+  auto first = makeRowVector(
+      {"k", "i", "s", "d", "m"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2, 2, 3}),
+          makeNullableFlatVector<int32_t>(
+              {10, 30, std::nullopt, 20, std::nullopt}),
+          makeNullableFlatVector<std::string>(
+              {"a", "b", std::nullopt, "a", std::nullopt}),
+          makeNullableFlatVector<int64_t>(
+              {100, 100, std::nullopt, 200, std::nullopt}, DECIMAL(10, 2)),
+          makeFlatVector<bool>({true, false, true, true, true}),
+      });
+  auto second = makeRowVector(
+      {"k", "i", "s", "d", "m"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3, 1}),
+          makeNullableFlatVector<int32_t>({20, 20, std::nullopt, 10}),
+          makeNullableFlatVector<std::string>({"a", "c", std::nullopt, "c"}),
+          makeNullableFlatVector<int64_t>(
+              {300, 200, std::nullopt, 100}, DECIMAL(10, 2)),
+          makeFlatVector<bool>({true, true, false, false}),
+      });
+  auto plan = PlanBuilder()
+                  .values({first, second})
+                  .singleAggregation(
+                      {"k"},
+                      {"count(distinct i)",
+                       "count(distinct s)",
+                       "count(distinct d)",
+                       "count(distinct i)",
+                       "sum(i)"},
+                      {"", "", "", "m", ""})
+                  .planNode();
+  AssertQueryBuilder(plan)
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1")
+      .assertResults(cpuResults(plan));
+}
+
+TEST_F(AggregationTest, countDistinctMixedCountsMultiBatch) {
+  auto first = makeRowVector(
+      {"k", "v", "m"},
+      {makeFlatVector<int64_t>({1, 1, 1, 2, 2}),
+       makeNullableFlatVector<int32_t>({10, 20, std::nullopt, 30, 40}),
+       makeNullableFlatVector<bool>({true, false, true, false, std::nullopt})});
+  auto second = makeRowVector(
+      {"k", "v", "m"},
+      {makeFlatVector<int64_t>({1, 1, 1, 2, 2}),
+       makeNullableFlatVector<int32_t>({10, 50, 60, 30, std::nullopt}),
+       makeNullableFlatVector<bool>(
+           {true, true, std::nullopt, false, std::nullopt})});
+  createDuckDbTable({first, second});
+  core::PlanNodeId aggregationId;
+  auto plan = PlanBuilder()
+                  .values({first, second})
+                  .singleAggregation(
+                      {"k"},
+                      {"count(distinct v)",
+                       "count(v)",
+                       "count(*)",
+                       "count(null)",
+                       "count(distinct v)",
+                       "count(v)",
+                       "count(*)",
+                       "count(null)"},
+                      {"", "", "", "", "m", "m", "m", "m"})
+                  .capturePlanNodeId(aggregationId)
+                  .planNode();
+  // Keep batches separate: v = 10 repeats across batches; k = 2 is all-masked.
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1")
+                  .assertResults(
+                      "SELECT k, count(distinct v), count(v), count(*), "
+                      "count(null), count(distinct v) FILTER (WHERE m), "
+                      "count(v) FILTER (WHERE m), count(*) FILTER (WHERE m), "
+                      "count(null) FILTER (WHERE m) FROM tmp GROUP BY k");
+  bool ranOnGpu = false;
+  for (const auto& pipeline : task->taskStats().pipelineStats) {
+    for (const auto& stats : pipeline.operatorStats) {
+      if (stats.planNodeId == aggregationId &&
+          stats.operatorType.starts_with("CudfGroupby")) {
+        ranOnGpu = true;
+      }
+    }
+  }
+  ASSERT_TRUE(ranOnGpu);
+}
+
 // Multi-stage masked count (partial + final).
 TEST_F(AggregationTest, maskedCountMultiStage) {
   auto data = makeRowVector(
