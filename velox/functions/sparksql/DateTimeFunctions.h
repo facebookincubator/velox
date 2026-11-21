@@ -577,6 +577,8 @@ struct DateTruncFunction {
       const arg_type<Varchar>* /*format*/,
       const arg_type<Timestamp>* /*timestamp*/) {
     timeZone_ = getTimeZoneFromConfig(config);
+    isVariableTimeZone_ = timeZone_ != nullptr && timeZone_->id() != 0 &&
+        !timeZone_->offset().has_value();
   }
 
   FOLLY_ALWAYS_INLINE bool call(
@@ -592,7 +594,30 @@ struct DateTruncFunction {
     if (!unitOption.has_value()) {
       return false;
     }
-    result = truncateTimestamp(timestamp, unitOption.value(), timeZone_);
+    const auto unit = unitOption.value();
+    // For variable time zones, historical offsets may not be whole minutes
+    // (e.g. Asia/Shanghai before 1928), and offset transitions (e.g. DST or
+    // LMT) may lie between the instant and its floored local minute. Spark
+    // truncates in session time zone with fallback to ZonedDateTime.truncatedTo
+    // when candidate offset differs. UTC and fixed-offset zones (which are
+    // whole minutes in Velox) can safely truncate UTC directly.
+    if (unit == DateTimeUnit::kMinute && isVariableTimeZone_) {
+      const int64_t localSeconds = getSeconds(timestamp, timeZone_);
+      const int64_t truncatedLocal =
+          truncateEpochTime({localSeconds, 0}, unit).seconds;
+      const int64_t secondsDelta = localSeconds - truncatedLocal;
+      result = Timestamp(timestamp.getSeconds() - secondsDelta, 0);
+      if (getSeconds(result, timeZone_) != truncatedLocal) {
+        result = Timestamp(
+            timeZone_
+                ->correct_nonexistent_time(std::chrono::seconds(truncatedLocal))
+                .count(),
+            0);
+        result.toGMT(*timeZone_);
+      }
+    } else {
+      result = truncateTimestamp(timestamp, unit, timeZone_);
+    }
     // Spark timestamps are int64 microseconds since the epoch, so truncating
     // the minimum timestamp to a coarser unit cannot be represented.
     if (result < Timestamp::minMicros() || result > Timestamp::maxMicros()) {
@@ -603,6 +628,7 @@ struct DateTruncFunction {
 
  private:
   const tz::TimeZone* timeZone_ = nullptr;
+  bool isVariableTimeZone_{false};
 };
 
 /// Truncates a date to a specified time unit. Return NULL if the format is
