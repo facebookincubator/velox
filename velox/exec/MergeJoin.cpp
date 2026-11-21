@@ -70,6 +70,8 @@ MergeJoin::MergeJoin(
           dynamicOutputBatchSizeEnabled_
               ? driverCtx->queryConfig().mergeJoinOutputBatchStartSize()
               : preferredOutputBatchRows_},
+      maxOutputBatchSize_{
+          std::max(outputBatchSize_, preferredOutputBatchRows_)},
       joinNode_(joinNode) {
   VELOX_USER_CHECK(
       core::MergeJoinNode::isSupported(joinType_),
@@ -128,12 +130,12 @@ void MergeJoin::initialize() {
     if (joinNode_->isLeftJoin() || joinNode_->isAntiJoin() ||
         joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
         isSemiFilterJoin(joinType_)) {
-      joinTracker_ = JoinTracker(preferredOutputBatchRows_, pool());
+      joinTracker_ = JoinTracker(maxOutputBatchSize_, pool());
     }
   } else if (joinNode_->isAntiJoin()) {
     // Anti join needs to track the left side rows that have no match on the
     // right.
-    joinTracker_ = JoinTracker(preferredOutputBatchRows_, pool());
+    joinTracker_ = JoinTracker(maxOutputBatchSize_, pool());
   }
 
   joinNode_.reset();
@@ -629,7 +631,7 @@ bool MergeJoin::prepareOutput(
       } else {
         inputs[i] = BaseVector::create(
             filterInputType_->childAt(i),
-            preferredOutputBatchRows_,
+            maxOutputBatchSize_,
             operatorCtx_->pool());
       }
     }
@@ -638,7 +640,7 @@ bool MergeJoin::prepareOutput(
         operatorCtx_->pool(),
         filterInputType_,
         nullptr,
-        preferredOutputBatchRows_,
+        maxOutputBatchSize_,
         std::move(inputs));
   }
   return false;
