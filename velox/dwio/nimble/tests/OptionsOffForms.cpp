@@ -27,6 +27,7 @@ std::vector<OffForm> offForms() {
        [](WriterOptions& options) {
          options.fixedBitWidthTypedLanes = false;
          options.fixedBitWidthTypedLanesMinValues = 256;
+         options.fixedBitWidthTypedLanesOpenzlLevel = std::nullopt;
        }},
       {"floorOneWithoutLanes",
        [](WriterOptions& options) {
@@ -40,6 +41,13 @@ std::vector<OffForm> offForms() {
              std::numeric_limits<uint64_t>::max();
        }},
   };
+}
+
+OffForm fixedBitWidthLevelWithoutLanes() {
+  return {"fixedBitWidthLevelWithoutLanes", [](WriterOptions& options) {
+            options.fixedBitWidthTypedLanes = false;
+            options.fixedBitWidthTypedLanesOpenzlLevel = 1;
+          }};
 }
 
 } // namespace facebook::nimble::test::options_off

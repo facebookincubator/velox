@@ -503,7 +503,9 @@ std::string_view FixedBitWidthEncoding<T>::encode(
         fba.bulkSetWithBaseline(0, rowCount, values.data(), baseline);
         pos += fixedBitArraySize;
         return pos;
-      }};
+      },
+      // Only typed-lane payloads are typed, so only they take the level.
+      options.fixedBitWidthTypedLanesOpenzlLevel};
 
   const uint32_t encodingSize =
       Encoding::serializePrefixSize(rowCount, useVarint) +

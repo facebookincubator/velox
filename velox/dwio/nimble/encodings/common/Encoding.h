@@ -28,6 +28,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <type_traits>
 #include <vector>
@@ -187,6 +188,12 @@ class Encoding {
     // TODO: Replace this value-count floor with a stream-size threshold in
     // bytes, so the floor tracks payload size rather than row count.
     uint64_t fixedBitWidthTypedLanesMinValues{256};
+
+    /// MetaInternal compression level for FixedBitWidth chunks that take typed
+    /// lanes, in place of the compression policy's level. Bit-packed chunks,
+    /// other encodings and other compressors are unaffected. Unset (the
+    /// default) changes nothing. Levels must be in [1, 9]; the writer checks.
+    std::optional<int32_t> fixedBitWidthTypedLanesOpenzlLevel{};
 
     /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
     /// splitting it into bit ranges, keeping whichever form encodes smaller.
