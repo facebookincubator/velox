@@ -18,6 +18,7 @@
 #include "velox/common/base/Crc.h"
 #include "velox/type/HugeInt.h"
 
+#include <bit>
 #include <cstring>
 #include <limits>
 #include <span>
@@ -795,7 +796,7 @@ TEST_F(BitUtilTest, forBatches) {
       EXPECT_EQ(0, index % 8);
       auto bitfield = reinterpret_cast<const uint8_t*>(bits)[index / 8] & mask;
       EXPECT_NE(0, bitfield & mask);
-      numSet += __builtin_popcount(bitfield);
+      numSet += std::popcount(static_cast<uint8_t>(bitfield));
     });
     EXPECT_EQ(numOnes, numSet);
     numSet = 0;
@@ -804,7 +805,7 @@ TEST_F(BitUtilTest, forBatches) {
       auto bitfield =
           reinterpret_cast<const uint64_t*>(bits)[index / 64] & mask;
       EXPECT_NE(0, bitfield & mask);
-      numSet += __builtin_popcountl(bitfield);
+      numSet += std::popcount(bitfield);
     });
     EXPECT_EQ(numOnes, numSet);
   };

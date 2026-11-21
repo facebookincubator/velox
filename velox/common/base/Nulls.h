@@ -32,7 +32,7 @@ constexpr char kNotNullByte = 0xff;
 
 // Null flags are generally uint64_t for efficient bit counting.
 constexpr uint64_t kNull64 = 0UL;
-constexpr uint64_t kNotNull64 = (~0UL);
+constexpr uint64_t kNotNull64 = (~0ULL);
 
 inline bool isBitNull(const uint64_t* bits, uint32_t index) {
   return isBitSet(bits, index) == kNull;
