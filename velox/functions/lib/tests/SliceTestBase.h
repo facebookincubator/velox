@@ -35,7 +35,7 @@ class SliceTestBase : public FunctionBaseTest {
       const ArrayVectorPtr& expectedArrayVector) {
     auto result = evaluate<ArrayVector>(expression, makeRowVector(parameters));
     ::facebook::velox::test::assertEqualVectors(expectedArrayVector, result);
-    EXPECT_FALSE(expectedArrayVector->hasOverlappingRanges());
+    EXPECT_FALSE(result->hasOverlappingRanges());
   }
 
   void basicTestCases() {
