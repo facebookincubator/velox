@@ -50,9 +50,11 @@ class IndexWriter {
   virtual void write(const velox::VectorPtr& input) = 0;
 
   /// Called before each stripe is written. Returns the chunks, encoded into
-  /// 'buffer', of the stream that the index stores in every stripe, or none
-  /// when it stores no stream in stripes. 'buffer' must outlive the chunks.
-  virtual std::vector<Chunk> finishStripe(Buffer& buffer) {
+  /// 'buffer', of each index stream, a stream that the index stores in every
+  /// stripe, in the order of the index stream ids that the index was created
+  /// with, or none when it stores no stream in stripes. 'buffer' must outlive
+  /// the chunks.
+  virtual std::vector<std::vector<Chunk>> finishStripe(Buffer& buffer) {
     return {};
   }
 

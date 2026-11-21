@@ -242,7 +242,7 @@ class ClusterIndexWriterTest : public testing::Test,
         type_,
         pool_.get(),
         {.keyStreamLayout = KeyStreamLayout::kStripe,
-         .keyStreamId = kKeyStreamId});
+         .indexStreamIds = {kKeyStreamId}});
   }
 
   velox::RowTypePtr type_;
@@ -913,7 +913,7 @@ TEST_F(ClusterIndexWriterTest, stripeKeyStreams) {
       type_,
       pool_.get(),
       {.keyStreamLayout = KeyStreamLayout::kStripe,
-       .keyStreamId = kKeyStreamId});
+       .indexStreamIds = {kKeyStreamId}});
 
   // Two stripes in one stripe group. The first stripe's keys arrive in two
   // batches. Each stripe's keys are one key chunk.
@@ -923,10 +923,13 @@ TEST_F(ClusterIndexWriterTest, stripeKeyStreams) {
   const auto firstStripe = writer->finishStripe(buffer);
   writer->write(makeKeyBatch({6, 7}));
   const auto secondStripe = writer->finishStripe(buffer);
+  // Each stripe stores one stream, its key stream.
   ASSERT_EQ(firstStripe.size(), 1);
-  EXPECT_EQ(firstStripe[0].rowCount, 5);
+  ASSERT_EQ(firstStripe[0].size(), 1);
+  EXPECT_EQ(firstStripe[0][0].rowCount, 5);
   ASSERT_EQ(secondStripe.size(), 1);
-  EXPECT_EQ(secondStripe[0].rowCount, 2);
+  ASSERT_EQ(secondStripe[0].size(), 1);
+  EXPECT_EQ(secondStripe[0][0].rowCount, 2);
 
   std::string group;
   WriteDataFn writeDataFn = [](const std::vector<std::string_view>&)
@@ -1004,7 +1007,17 @@ TEST_F(ClusterIndexWriterTest, stripeKeyStreamsRejectMisuse) {
             type_,
             pool_.get(),
             {.keyStreamLayout = KeyStreamLayout::kStripe}),
-        "Only the Stripe key stream layout has a key stream id, which it needs");
+        "A Stripe layout cluster index stores its keys in one stream of each stripe");
+  }
+  {
+    NIMBLE_ASSERT_THROW(
+        createWriter(
+            indexConfig(),
+            type_,
+            pool_.get(),
+            {.keyStreamLayout = KeyStreamLayout::kStripe,
+             .indexStreamIds = {kKeyStreamId, kKeyStreamId + 1}}),
+        "A Stripe layout cluster index stores its keys in one stream of each stripe");
   }
   {
     NIMBLE_ASSERT_THROW(
@@ -1013,8 +1026,8 @@ TEST_F(ClusterIndexWriterTest, stripeKeyStreamsRejectMisuse) {
             type_,
             pool_.get(),
             {.keyStreamLayout = KeyStreamLayout::kPartition,
-             .keyStreamId = kKeyStreamId}),
-        "Only the Stripe key stream layout has a key stream id, which it needs");
+             .indexStreamIds = {kKeyStreamId}}),
+        "A Partition layout cluster index stores no stream in stripes");
   }
   {
     auto writer = createStripeKeyStreamWriter();

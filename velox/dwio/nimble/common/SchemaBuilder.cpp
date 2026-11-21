@@ -654,13 +654,20 @@ std::optional<offset_size> SchemaBuilder::sharedDictionaryStreamOffset(
   return iterator->second;
 }
 
-offset_size SchemaBuilder::createClusterIndexKeyStream() {
+std::vector<offset_size> SchemaBuilder::createStripeIndexStreams(
+    uint32_t count) {
+  NIMBLE_CHECK_GT(count, 0);
   NIMBLE_CHECK_EQ(
       currentOffset_,
       0,
-      "The cluster index key stream must be the first stream allocated.");
-  clusterIndexKeyStreamOffset_ = allocateStreamOffset();
-  return clusterIndexKeyStreamOffset_.value();
+      "The stripe index streams must be the first streams allocated.");
+  std::vector<offset_size> streamIds;
+  streamIds.reserve(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    streamIds.emplace_back(allocateStreamOffset());
+  }
+  stripeIndexStreamCount_ = count;
+  return streamIds;
 }
 
 const std::shared_ptr<const TypeBuilder>& SchemaBuilder::root() const {

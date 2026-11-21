@@ -223,12 +223,13 @@ std::vector<Stream> DefaultLayoutPlanner::getLayout(
   // try and find matching streams for each type builder and append them to the
   // final ordered stream list.
 
-  // Lead with the cluster index key stream, so that a read of a stripe's keys
-  // and of the streams after them can be one read.
-  const auto keyStreamOffset =
-      velox::checkedNotNull(schemaBuilder_)->clusterIndexKeyStreamOffset();
-  if (keyStreamOffset.has_value()) {
-    tryAppendStream(keyStreamOffset.value());
+  // Lead with the stripe index streams, such as the cluster index key stream,
+  // in id order, so that a read of a stripe's keys and of the streams after
+  // them can be one read.
+  const auto numStripeIndexStreams =
+      velox::checkedNotNull(schemaBuilder_)->stripeIndexStreamCount();
+  for (uint32_t streamId = 0; streamId < numStripeIndexStreams; ++streamId) {
+    tryAppendStream(streamId);
   }
 
   // Then add the root's null stream
