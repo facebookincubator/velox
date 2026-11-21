@@ -140,6 +140,33 @@ NimbleIndexProjector::RowProjectionResult projectRows(
   return folly::coro::blockingWait(projector.co_projectRows(request, options));
 }
 
+std::vector<RowVectorPtr> makeEvenKeyBatches(
+    velox::test::VectorMaker& vectorMaker,
+    int64_t numBatches) {
+  std::vector<RowVectorPtr> batches;
+  for (int64_t batchIndex{0}; batchIndex < numBatches; ++batchIndex) {
+    const auto firstKey = batchIndex * kEvenKeyBatchRows * 2;
+    batches.push_back(vectorMaker.rowVector(
+        {"key", "value"},
+        {vectorMaker.flatVector<int64_t>(
+             kEvenKeyBatchRows,
+             [firstKey](auto row) { return firstKey + 2 * row; }),
+         vectorMaker.flatVector<int32_t>(
+             kEvenKeyBatchRows, [firstKey](auto row) {
+               return static_cast<int32_t>((firstKey + 2 * row) * 10);
+             })}));
+  }
+  return batches;
+}
+
+std::vector<int32_t> evenKeyValues(int64_t lowerKey, int64_t upperKey) {
+  std::vector<int32_t> values;
+  for (auto key = lowerKey + lowerKey % 2; key < upperKey; key += 2) {
+    values.push_back(static_cast<int32_t>(key * 10));
+  }
+  return values;
+}
+
 void NimbleIndexProjectorTestBase::SetUpTestCase() {
   memory::MemoryManager::testingSetInstance({});
 }
@@ -314,6 +341,30 @@ std::shared_ptr<TabletReader> NimbleIndexProjectorTestBase::openSinkTablet() {
       TabletReader::configureOptions(tabletReaderOptions));
 }
 
+uint64_t NimbleIndexProjectorTestBase::indexBytesRead() {
+  const auto cachedTablet =
+      velox::checkedNotNull(tabletReaderCache_.get())
+          ->testingGet(InMemoryReadFile(std::string_view(sinkData_)).getName());
+  NIMBLE_CHECK_NOT_NULL(
+      cachedTablet, "Create a projector before counting its index reads");
+  // The entry exposes its statistics read-only, and reading a counter needs a
+  // mutable copy.
+  io::IoStatistics stats;
+  stats.merge(cachedTablet->indexIoStats());
+  return stats.rawBytesRead();
+}
+
+std::string_view NimbleIndexProjectorTestBase::stripeKeyStream(
+    uint32_t keyStreamId,
+    uint32_t stripe) {
+  const auto tablet = openSinkTablet();
+  std::vector<TabletReader::StreamMetadata> locations(1);
+  tablet->streamLocations(
+      tablet->stripeIdentifier(stripe), {&keyStreamId, 1}, locations);
+  return std::string_view(sinkData_).substr(
+      tablet->stripeOffset(stripe) + locations[0].offset, locations[0].size);
+}
+
 std::vector<TestParam> NimbleIndexProjectorTestBase::getTestParams() {
   std::vector<TestParam> params;
   for (bool cacheMetadata : {false, true}) {
@@ -433,6 +484,7 @@ velox::FileHandle NimbleIndexProjectorTestBase::makeFileHandle(
 std::unique_ptr<NimbleIndexProjector>
 NimbleIndexProjectorTestBase::createProjector(
     const std::vector<Subfield>& projectedSubfields,
+    bool coLoadKeyStreams,
     bool setDataIoStats,
     bool setMetadataIoStats,
     bool setIndexIoStats) {
@@ -441,7 +493,10 @@ NimbleIndexProjectorTestBase::createProjector(
       makeFileHandle(),
       setDataIoStats,
       setMetadataIoStats,
-      setIndexIoStats);
+      setIndexIoStats,
+      /*cacheData=*/false,
+      /*verifyStreamChecksums=*/false,
+      coLoadKeyStreams);
 }
 
 NimbleIterator::EntryDecoder NimbleIndexProjectorTestBase::compactRowDecoder() {
@@ -487,15 +542,18 @@ NimbleIterator::EntryDecoder NimbleIndexProjectorTestBase::compactRowDecoder() {
 
 std::unique_ptr<NimbleIterator> NimbleIndexProjectorTestBase::createRowIterator(
     const std::vector<Subfield>& projectedSubfields,
-    const NimbleIterator::Options& options) {
-  return createEntryIterator(projectedSubfields, compactRowDecoder(), options);
+    const NimbleIterator::Options& options,
+    bool coLoadKeyStreams) {
+  return createEntryIterator(
+      projectedSubfields, compactRowDecoder(), options, coLoadKeyStreams);
 }
 
 std::unique_ptr<NimbleIterator>
 NimbleIndexProjectorTestBase::createEntryIterator(
     const std::vector<Subfield>& projectedSubfields,
     const NimbleIterator::EntryDecoder& entryDecoder,
-    const NimbleIterator::Options& options) {
+    const NimbleIterator::Options& options,
+    bool coLoadKeyStreams) {
   return createIterator(
       [&entryDecoder](
           std::unique_ptr<NimbleIndexProjector> projector,
@@ -505,7 +563,8 @@ NimbleIndexProjectorTestBase::createEntryIterator(
             std::move(projector), pool, entryDecoder, iteratorOptions);
       },
       projectedSubfields,
-      options);
+      options,
+      coLoadKeyStreams);
 }
 
 std::unique_ptr<NimbleIndexProjector>
@@ -516,7 +575,8 @@ NimbleIndexProjectorTestBase::createProjectorWithFileHandle(
     bool setMetadataIoStats,
     bool setIndexIoStats,
     bool cacheData,
-    bool verifyStreamChecksums) {
+    bool verifyStreamChecksums,
+    bool coLoadKeyStreams) {
   dwio::common::ReaderOptions readerOptions(leafPool_.get());
   configureReaderOptions(
       readerOptions,
@@ -525,6 +585,7 @@ NimbleIndexProjectorTestBase::createProjectorWithFileHandle(
       setIndexIoStats,
       cacheData,
       verifyStreamChecksums);
+  readerOptions.setCoLoadKeyStreams(coLoadKeyStreams);
   ensureTabletReaderCache();
   if (cacheData && blockCache_ == nullptr) {
     blockCache_ = getBlockCache(velox::checkedNotNull(dataCache()));
