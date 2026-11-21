@@ -3767,11 +3767,11 @@ class HashJoinNode : public AbstractJoinNode {
       const override;
 
   bool canSpill(const QueryConfig& queryConfig) const override {
-    // NOTE: as for now, we don't allow spilling for null-aware anti-join with
-    // filter set. It requires to cross join the null-key probe rows with all
-    // the build-side rows for filter evaluation which is not supported under
-    // spilling.
-    return !(isAntiJoin() && nullAware_ && filter() != nullptr) &&
+    // Null-aware anti and left semi project joins with a filter require
+    // evaluating null-key probe rows against all build-side rows, which is not
+    // supported under spilling.
+    return !((isAntiJoin() || isLeftSemiProjectJoin()) && nullAware_ &&
+             filter() != nullptr) &&
         queryConfig.joinSpillEnabled();
   }
 
