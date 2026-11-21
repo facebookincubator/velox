@@ -404,6 +404,7 @@ TEST_F(ArithmeticTest, div) {
   EXPECT_EQ(div<int64_t>(INT64_MIN, 0), std::nullopt);
 
   EXPECT_EQ(div<int64_t>(INT64_MIN, -1), INT64_MIN);
+  EXPECT_EQ(div<int32_t>(INT32_MIN, -1), 2147483648);
 
   EXPECT_EQ(div<int8_t>(INT8_MAX, INT8_MIN), 0);
   EXPECT_EQ(div<int16_t>(INT16_MIN, INT16_MAX), -1);
@@ -1050,11 +1051,120 @@ TEST_F(ArithmeticTest, checkedDiv) {
 
   EXPECT_EQ(checkedDiv<int64_t>(2, 3), 0);
   EXPECT_EQ(checkedDiv<int64_t>(3, 2), 1);
+  EXPECT_EQ(checkedDiv<int32_t>(INT32_MIN, -1), 2147483648);
   // Division by zero is always null.
   assertErrorForCheckedDiv<int64_t>(1, 0, "Division by zero");
   // Division overflow.
   assertErrorForCheckedDiv<int64_t>(
       INT64_MIN, -1, "Overflow in integral divide");
+}
+
+// add, subtract and multiply read spark.ansi_enabled: integral overflow wraps
+// around with ANSI mode off and is an error with it on.
+TEST_F(ArithmeticTest, arithmeticAnsi) {
+  const std::string kAnsiEnabled =
+      SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled);
+
+  queryCtx_->testingOverrideConfigUnsafe({{kAnsiEnabled, "false"}});
+  EXPECT_EQ(tryArithmetic<int8_t>("add", INT8_MAX, 1), INT8_MIN);
+  EXPECT_EQ(tryArithmetic<int16_t>("add", INT16_MAX, 1), INT16_MIN);
+  EXPECT_EQ(tryArithmetic<int32_t>("add", INT32_MAX, 1), INT32_MIN);
+  EXPECT_EQ(tryArithmetic<int64_t>("add", INT64_MAX, 1), INT64_MIN);
+  EXPECT_EQ(tryArithmetic<int32_t>("subtract", INT32_MIN, 1), INT32_MAX);
+  EXPECT_EQ(tryArithmetic<int64_t>("subtract", INT64_MIN, 1), INT64_MAX);
+  EXPECT_EQ(tryArithmetic<int32_t>("multiply", INT32_MAX, 2), -2);
+  EXPECT_EQ(tryArithmetic<int64_t>("multiply", INT64_MIN, -1), INT64_MIN);
+  EXPECT_EQ(tryArithmetic<int32_t>("add", 1, 2), 3);
+  EXPECT_EQ(tryArithmetic<double>("add", kInfDouble, 1), kInfDouble);
+  EXPECT_EQ(tryArithmetic<float>("multiply", kInf, 2), kInf);
+
+  queryCtx_->testingOverrideConfigUnsafe({{kAnsiEnabled, "true"}});
+  EXPECT_EQ(tryArithmetic<int32_t>("add", 1, 2), 3);
+  EXPECT_EQ(tryArithmetic<int32_t>("subtract", 5, 2), 3);
+  EXPECT_EQ(tryArithmetic<int32_t>("multiply", 3, -4), -12);
+  EXPECT_EQ(tryArithmetic<int32_t>("add", std::nullopt, 2), std::nullopt);
+  EXPECT_EQ(tryArithmetic<double>("add", kInfDouble, 1), kInfDouble);
+  EXPECT_EQ(tryArithmetic<float>("multiply", kInf, 2), kInf);
+  VELOX_ASSERT_THROW(
+      tryArithmetic<int8_t>("add", INT8_MAX, 1),
+      "Arithmetic overflow: 127 + 1");
+  VELOX_ASSERT_THROW(
+      tryArithmetic<int16_t>("add", INT16_MAX, 1),
+      "Arithmetic overflow: 32767 + 1");
+  VELOX_ASSERT_THROW(
+      tryArithmetic<int32_t>("add", INT32_MAX, 1),
+      "Arithmetic overflow: 2147483647 + 1");
+  VELOX_ASSERT_THROW(
+      tryArithmetic<int64_t>("add", INT64_MAX, 1),
+      "Arithmetic overflow: 9223372036854775807 + 1");
+  VELOX_ASSERT_THROW(
+      tryArithmetic<int32_t>("subtract", INT32_MIN, 1),
+      "Arithmetic overflow: -2147483648 - 1");
+  VELOX_ASSERT_THROW(
+      tryArithmetic<int64_t>("subtract", INT64_MIN, 1),
+      "Arithmetic overflow: -9223372036854775808 - 1");
+  VELOX_ASSERT_THROW(
+      tryArithmetic<int32_t>("multiply", INT32_MAX, 2),
+      "Arithmetic overflow: 2147483647 * 2");
+  VELOX_ASSERT_THROW(
+      tryArithmetic<int64_t>("multiply", INT64_MIN, -1),
+      "Arithmetic overflow: -9223372036854775808 * -1");
+  // try() turns the error into NULL.
+  const std::optional<int32_t> max = INT32_MAX;
+  const std::optional<int32_t> one = 1;
+  EXPECT_EQ(evaluateOnce<int32_t>("try(add(c0, c1))", max, one), std::nullopt);
+}
+
+// divide reads spark.ansi_enabled: division by zero is NULL with ANSI mode
+// off and an error with it on.
+TEST_F(ArithmeticTest, divideAnsi) {
+  const std::string kAnsiEnabled =
+      SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled);
+
+  queryCtx_->testingOverrideConfigUnsafe({{kAnsiEnabled, "false"}});
+  EXPECT_EQ(divide(1, 0), std::nullopt);
+  EXPECT_EQ(divide(kNan, 0), std::nullopt);
+
+  queryCtx_->testingOverrideConfigUnsafe({{kAnsiEnabled, "true"}});
+  EXPECT_EQ(divide(3, 2), 1.5);
+  EXPECT_EQ(divide(std::nullopt, 0), std::nullopt);
+  EXPECT_TRUE(std::isnan(divide(1, kNan).value_or(0)));
+  EXPECT_EQ(divide(1, kInf), 0);
+  VELOX_ASSERT_THROW(divide(1, 0), "Division by zero");
+  VELOX_ASSERT_THROW(divide(0, 0), "Division by zero");
+  VELOX_ASSERT_THROW(divide(kNan, 0), "Division by zero");
+  VELOX_ASSERT_THROW(divide(kInf, 0), "Division by zero");
+  const std::optional<double> one = 1;
+  const std::optional<double> zero = 0;
+  EXPECT_EQ(
+      evaluateOnce<double>("try(divide(c0, c1))", one, zero), std::nullopt);
+}
+
+// div reads spark.ansi_enabled: division by zero is NULL and BIGINT overflow
+// wraps around with ANSI mode off; both are errors with it on.
+TEST_F(ArithmeticTest, divAnsi) {
+  const std::string kAnsiEnabled =
+      SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled);
+
+  queryCtx_->testingOverrideConfigUnsafe({{kAnsiEnabled, "false"}});
+  EXPECT_EQ(div<int64_t>(1, 0), std::nullopt);
+  EXPECT_EQ(div<int64_t>(INT64_MIN, -1), INT64_MIN);
+
+  queryCtx_->testingOverrideConfigUnsafe({{kAnsiEnabled, "true"}});
+  EXPECT_EQ(div<int64_t>(3, 2), 1);
+  EXPECT_EQ(div<int8_t>(INT8_MAX, INT8_MIN), 0);
+  EXPECT_EQ(div<int32_t>(INT32_MIN, -1), 2147483648);
+  EXPECT_EQ(div<int64_t>(std::nullopt, 0), std::nullopt);
+  VELOX_ASSERT_THROW(div<int8_t>(1, 0), "Division by zero");
+  VELOX_ASSERT_THROW(div<int16_t>(1, 0), "Division by zero");
+  VELOX_ASSERT_THROW(div<int32_t>(1, 0), "Division by zero");
+  VELOX_ASSERT_THROW(div<int64_t>(1, 0), "Division by zero");
+  VELOX_ASSERT_THROW(div<int64_t>(0, 0), "Division by zero");
+  VELOX_ASSERT_THROW(
+      div<int64_t>(INT64_MIN, -1), "Overflow in integral divide");
+  const std::optional<int64_t> one = 1;
+  const std::optional<int64_t> zero = 0;
+  EXPECT_EQ(evaluateOnce<int64_t>("try(div(c0, c1))", one, zero), std::nullopt);
 }
 
 TEST_F(ArithmeticTest, abs) {
