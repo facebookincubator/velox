@@ -32,8 +32,8 @@
 #include "velox/tpcds/gen/dsdgen/include/config.h"
 #include "velox/tpcds/gen/dsdgen/include/grammar_support.h"
 #include "velox/tpcds/gen/dsdgen/include/porting.h"
-static int* LN;
-static char* FN;
+[[maybe_unused]] static int* LN;
+[[maybe_unused]] static char* FN;
 
 err_msg_t Errors[MAX_ERROR + 2] = {
     {
