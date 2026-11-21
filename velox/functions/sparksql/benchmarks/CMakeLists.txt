@@ -33,6 +33,17 @@ target_link_libraries(
   velox_vector_test_lib
 )
 
+add_executable(velox_sparksql_benchmarks_least_greatest LeastGreatestBenchmark.cpp)
+target_link_libraries(
+  velox_sparksql_benchmarks_least_greatest
+  velox_functions_spark
+  velox_functions_benchmark_util
+  velox_exec_test_lib
+  velox_parse_utils
+  Folly::folly
+  Folly::follybenchmark
+)
+
 add_executable(velox_sparksql_benchmarks_simd_compare SIMDCompareBenchmark.cpp)
 target_link_libraries(
   velox_sparksql_benchmarks_simd_compare

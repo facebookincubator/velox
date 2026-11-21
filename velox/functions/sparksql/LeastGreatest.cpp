@@ -40,14 +40,15 @@ class LeastGreatestFunction final : public exec::VectorFunction {
     context.ensureWritable(rows, outputType, result);
     FlatVector<T>& flatResult = *result->as<FlatVector<T>>();
 
-    // NULL all elements.
-    rows.applyToSelected(
-        [&](vector_size_t row) { flatResult.setNull(row, true); });
+    // Copying retains the first argument's string buffers. Later winners can
+    // invalidate its data-dependent metadata, including ASCII information.
+    flatResult.copy(args[0].get(), rows, nullptr);
+    result->resetDataDependentFlags(&rows);
 
     exec::LocalSelectivityVector cmpRows(context, nrows);
     exec::LocalDecodedVector decodedVectorHolder(context);
     // Column-wise process: one argument at a time.
-    for (size_t i = 0; i < nargs; i++) {
+    for (size_t i = 1; i < nargs; i++) {
       decodedVectorHolder.get()->decode(*args[i], rows);
 
       // Only compare with non-null elements of each argument
