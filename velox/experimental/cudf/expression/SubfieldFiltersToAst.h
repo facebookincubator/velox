@@ -23,6 +23,7 @@
 #include <cudf/scalar/scalar.hpp>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -44,34 +45,44 @@ struct SubfieldFilterDecimalType {
 using SubfieldFilterDecimalTypes =
     std::unordered_map<std::string, SubfieldFilterDecimalType>;
 
+// Native file units for top-level timestamp fields; absent fields use the
+// constant timestamp type (e.g. injected Iceberg columns).
+using SubfieldFilterTimestampTypes =
+    std::unordered_map<std::string, cudf::type_id>;
+
 bool hasDecimalSubfieldFilter(
     const common::SubfieldFilters& subfieldFilters,
     const RowTypePtr& inputRowSchema);
 
 /// Returns whether createAstFromSubfieldFilter() converts 'filter' on
 /// 'subfield'. It converts filters on top-level columns only. A scan with a
-/// filter it cannot convert must run on the CPU.
+/// filter it cannot convert must run on the CPU. Timestamp ranges are eligible
+/// here; conversion requires the reader's timestamp type.
 bool canCreateAstFromSubfieldFilter(
     const common::Subfield& subfield,
     const common::Filter& filter);
 
-// Convert subfield filters to cudf AST
+// Convert subfield filters to cudf AST. 'timestampType' is the cuDF type of
+// the TIMESTAMP columns being filtered; a TimestampRange filter requires it.
 cudf::ast::expression const& createAstFromSubfieldFilter(
     const common::Subfield& subfield,
     const common::Filter& filter,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    const SubfieldFilterDecimalTypes* decimalTypes = nullptr);
+    const SubfieldFilterDecimalTypes* decimalTypes = nullptr,
+    std::optional<cudf::type_id> timestampType = std::nullopt);
 
 // Build a single AST expression representing logical AND of all filters in
 // 'subfieldFilters'. The resulting expression reference is owned by the passed
-// 'tree'.
+// 'tree'. Per-column timestamp types override 'timestampType'.
 cudf::ast::expression const& createAstFromSubfieldFilters(
     const common::SubfieldFilters& subfieldFilters,
     cudf::ast::tree& tree,
     std::vector<std::unique_ptr<cudf::scalar>>& scalars,
     const RowTypePtr& inputRowSchema,
-    const SubfieldFilterDecimalTypes* decimalTypes = nullptr);
+    const SubfieldFilterDecimalTypes* decimalTypes = nullptr,
+    std::optional<cudf::type_id> timestampType = std::nullopt,
+    const SubfieldFilterTimestampTypes* timestampTypes = nullptr);
 
 } // namespace facebook::velox::cudf_velox

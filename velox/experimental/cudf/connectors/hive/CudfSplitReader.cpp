@@ -45,6 +45,7 @@
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
 #include <cudf/unary.hpp>
+#include <cudf/utilities/traits.hpp>
 
 #include <cuda_runtime.h>
 #include <nvtx3/nvtx3.hpp>
@@ -151,6 +152,28 @@ std::unique_ptr<cudf::column> castDecimalColumns(
   return col;
 }
 
+// TIMESTAMP_DAYS represents DATE and must not follow the timestamp setting.
+std::unique_ptr<cudf::column> castTimestampColumns(
+    std::unique_ptr<cudf::column> column,
+    cudf::data_type target,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  if (cudf::is_timestamp(column->type()) &&
+      column->type().id() != cudf::type_id::TIMESTAMP_DAYS) {
+    if (column->type() != target) {
+      return cudf::cast(column->view(), target, stream, mr);
+    }
+  } else if (column->num_children() > 0) {
+    return rebuildWithTransformedChildren(
+        std::move(column), [&](auto& children) {
+          for (auto& child : children) {
+            child = castTimestampColumns(std::move(child), target, stream, mr);
+          }
+        });
+  }
+  return column;
+}
+
 } // namespace
 
 std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
@@ -175,11 +198,7 @@ std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
 std::optional<cudf::type_id> constantTimestampType(
     const CudfHiveConfig& config,
     const config::ConfigBase* session) {
-  const auto timestampType = config.timestampTypeSession(session).id();
-  if (timestampType == cudf::type_id::TIMESTAMP_DAYS) {
-    return std::nullopt;
-  }
-  return timestampType;
+  return config.timestampTypeSession(session).id();
 }
 
 CudfSplitReader::CudfSplitReader(
@@ -348,6 +367,13 @@ void CudfSplitReader::setPushdownFilter(const cudf::ast::expression* filter) {
   hasSplitSpecificPushdownFilter_ = true;
 }
 
+void CudfSplitReader::setNativeTimestampFilter(
+    const cudf::ast::expression* filter) {
+  VELOX_CHECK_NOT_NULL(filter);
+  subfieldFilterAst_ = filter;
+  preserveNativeTimestamps_ = true;
+}
+
 void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
   stream_ = cudfGlobalStreamPool().get_stream();
   fileMetaDatas();
@@ -379,6 +405,19 @@ std::optional<CudfSplitReader::TableChunk> CudfSplitReader::next(
   auto chunkOpt = readNextChunk();
   if (!chunkOpt.has_value()) {
     return std::nullopt;
+  }
+
+  // The virtual read includes Iceberg deletes and deferred subfield filters.
+  // Only surviving values are rounded, before Hive remaining filters run.
+  if (preserveNativeTimestamps_) {
+    auto columns = chunkOpt->table->release();
+    const auto target = cudfHiveConfig_->timestampTypeSession(
+        connectorQueryCtx_->sessionProperties());
+    for (auto& column : columns) {
+      column = castTimestampColumns(
+          std::move(column), target, stream_, get_output_mr());
+    }
+    chunkOpt->table = std::make_unique<cudf::table>(std::move(columns));
   }
 
   TotalScanTimeCallbackData* callbackData =
@@ -712,7 +751,9 @@ void CudfSplitReader::setupReaderOptions() {
               cudfHiveConfig_->isAllowMismatchedCudfHiveSchemasSession(
                   sessionProperties))
           .timestamp_type(
-              cudfHiveConfig_->timestampTypeSession(sessionProperties))
+              preserveNativeTimestamps_
+                  ? cudf::data_type{cudf::type_id::EMPTY}
+                  : cudfHiveConfig_->timestampTypeSession(sessionProperties))
           // cuDF currently only folds ASCII letters, unlike the CPU reader's
           // UTF-8 folding, so non-ASCII names (rare case) that differ in case
           // do not match.
@@ -787,8 +828,33 @@ CudfSplitReader::fileMetaDatas() {
 void CudfSplitReader::createCudfReader() {
   fileMetaDatas();
 
-  // Check if we are reading all columns in order
   const auto& schema = fileMetaDatas_.front().schema;
+  if (preserveNativeTimestamps_) {
+    // Native INT96 decoding uses int64 nanoseconds, unlike decoding directly
+    // to the requested unit. Reject every read INT96 leaf before that narrower
+    // representation can overflow, including nested and hidden delete keys.
+    for (size_t index = 1; index < schema.size(); ++index) {
+      if (schema[index].type != cudf::io::parquet::Type::INT96) {
+        continue;
+      }
+      auto topLevel = index;
+      while (schema[topLevel].parent_idx != 0) {
+        topLevel = schema[topLevel].parent_idx;
+      }
+      const auto name = caseInsensitiveColumnNames_
+          ? functions::stringImpl::utf8StrToLowerCopy(schema[topLevel].name)
+          : schema[topLevel].name;
+      if (std::ranges::find(readColumnNames_, name) != readColumnNames_.end()) {
+        VELOX_UNSUPPORTED(
+            "Timestamp range filters are not supported when reading Parquet "
+            "INT96 column '{}': native nanosecond decoding cannot preserve "
+            "the full INT96 timestamp range",
+            name);
+      }
+    }
+  }
+
+  // Check if we are reading all columns in order
   readAllFileColumns_ = std::ranges::equal(
       schema.front().children_idx, readColumnNames_, {}, [&](auto childIdx) {
         const auto& name = schema[childIdx].name;
@@ -813,6 +879,23 @@ void CudfSplitReader::createCudfReader() {
   passReadLimit_ = cudfHiveConfig_->maxPassReadLimitSession(sessionProperties);
   serializeIoRequests_ =
       cudfHiveConfig_->serializeIoRequestsSession(sessionProperties);
+
+  // The pinned cuDF stats caster cannot decode INT96 bounds. Treat both
+  // modern and deprecated bounds as unknown, preserving null counts and
+  // pruning on other columns. Only the in-memory footer is changed.
+  for (auto& metadata : fileMetaDatas_) {
+    for (auto& rowGroup : metadata.row_groups) {
+      for (auto& column : rowGroup.columns) {
+        if (column.meta_data.type == cudf::io::parquet::Type::INT96) {
+          auto& stats = column.meta_data.statistics;
+          stats.min.reset();
+          stats.max.reset();
+          stats.min_value.reset();
+          stats.max_value.reset();
+        }
+      }
+    }
+  }
 
   // Create a hybrid scan reader over all sources of the split
   splitReader_ = std::make_unique<CudfParquetReader>(

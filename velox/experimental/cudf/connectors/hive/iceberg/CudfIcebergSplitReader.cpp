@@ -758,7 +758,16 @@ void CudfIcebergSplitReader::applyPositionalDeletes(
 void CudfIcebergSplitReader::applyEqualityDeletes(cudf::table_view input) {
   // Apply equality deletes against the running deleteMask_.
   for (auto& reader : equalityDeleteFileReaders_) {
-    reader->applyDeletes(input, readColumnNames_, deleteMaskView_, stream_);
+    reader->applyDeletes(
+        input,
+        readColumnNames_,
+        deleteMaskView_,
+        stream_,
+        preserveNativeTimestamps_
+            ? std::make_optional(
+                  cudfHiveConfig().timestampTypeSession(
+                      connectorQueryCtx_->sessionProperties()))
+            : std::nullopt);
   }
 }
 

@@ -33,6 +33,8 @@
 #include <cudf/io/parquet.hpp>
 #include <cudf/join/distinct_hash_join.hpp>
 #include <cudf/types.hpp>
+#include <cudf/unary.hpp>
+#include <cudf/utilities/traits.hpp>
 
 #include <limits>
 #include <unordered_map>
@@ -257,7 +259,8 @@ void CudfEqualityDeleteFileReader::applyDeletes(
     cudf::table_view table,
     const std::vector<std::string>& inputColumnNames,
     cudf::mutable_column_view const& deleteMask,
-    cuda::stream_ref stream) {
+    cuda::stream_ref stream,
+    std::optional<cudf::data_type> timestampType) {
   const auto numRows = table.num_rows();
   if (empty() or numRows == 0) {
     return;
@@ -270,7 +273,23 @@ void CudfEqualityDeleteFileReader::applyDeletes(
   // Use hash join to find probe indices that match any delete key.
   // inner_join returns (probeIndices, buildindices); we only need the probe
   // side to know which data rows to delete.
-  const auto probeTable = table.select(equalityColumnIndices_);
+  auto probeTable = table.select(equalityColumnIndices_);
+  std::vector<std::unique_ptr<cudf::column>> timestampKeys;
+  if (timestampType) {
+    // Preserve the pre-native-filter reader's equality-key precision without
+    // rounding the original columns used by deferred timestamp filters.
+    std::vector<cudf::column_view> keys(probeTable.begin(), probeTable.end());
+    for (auto& key : keys) {
+      if (cudf::is_timestamp(key.type()) &&
+          key.type().id() != cudf::type_id::TIMESTAMP_DAYS &&
+          key.type() != *timestampType) {
+        timestampKeys.push_back(
+            cudf::cast(key, *timestampType, stream, get_temp_mr()));
+        key = timestampKeys.back()->view();
+      }
+    }
+    probeTable = cudf::table_view{keys};
+  }
   const auto probeIndices =
       deleteHashJoin_->inner_join(probeTable, stream, get_temp_mr()).first;
 
