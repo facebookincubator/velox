@@ -15,6 +15,7 @@
 add_library(
   velox_cudf_hive_connector
   BufferedInputDataSource.cpp
+  CachingDataSource.cpp
   CudfHiveConfig.cpp
   CudfHiveConnector.cpp
   CudfHiveConnectorSplit.cpp

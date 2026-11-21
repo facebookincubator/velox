@@ -78,4 +78,16 @@ TEST(ConfigTest, rejectsNonPositiveBatchConcatTargets) {
       "cuDF BatchConcat minimum byte target must be a positive integer: -1");
 }
 
+TEST(ConfigTest, rejectsNonPositiveKvikioCacheCopyThreads) {
+  auto initialize = [](const char* value) {
+    CudfConfig config;
+    config.initialize({{CudfConfig::kCudfKvikioCacheCopyThreads, value}});
+  };
+
+  VELOX_ASSERT_USER_THROW(
+      initialize("0"), "cudf.kvikio_cache_copy_threads must be positive");
+  VELOX_ASSERT_USER_THROW(
+      initialize("-1"), "cudf.kvikio_cache_copy_threads must be positive");
+}
+
 } // namespace facebook::velox::cudf_velox::test
