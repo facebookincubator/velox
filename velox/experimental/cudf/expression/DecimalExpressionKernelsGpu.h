@@ -90,6 +90,24 @@ __int128_t getDecimalScalarValue(
     cuda::stream_ref stream);
 
 /**
+ * @brief Makes an all-null decimal column, e.g. for a NULL scalar operand.
+ *
+ * The data buffer is zero-filled: make_fixed_width_column leaves it
+ * uninitialized, and consumers such as copy_if_else and the Arrow export read
+ * null slots.
+ *
+ * @param outputType DECIMAL64 or DECIMAL128 type of the result.
+ * @param size Number of rows.
+ * @param stream CUDA stream used for the allocation and the fill.
+ * @param mr Device memory resource for the result.
+ */
+std::unique_ptr<cudf::column> makeAllNullDecimalColumn(
+    cudf::data_type outputType,
+    cudf::size_type size,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
+
+/**
  * @brief Dispatches a per-row device loop for fixed-point decimal division.
  *
  * Computes (lhs * rescaleFactor) / rhs with half-away-from-zero rounding on the
