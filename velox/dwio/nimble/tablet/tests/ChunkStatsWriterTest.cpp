@@ -20,8 +20,11 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
+#include <latch>
 #include <limits>
 #include <span>
+#include <thread>
 
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
@@ -107,6 +110,14 @@ class ChunkStatsWriterTest : public ::testing::Test {
             std::move(inputBuffer),
             CompressionType::Uncompressed,
             pool_.get())));
+  }
+
+  // Overwrites the scalar at 'position', which points into 'data'.
+  template <typename T>
+  static void
+  overwriteScalar(std::string& data, const void* position, T value) {
+    const auto offset = static_cast<const char*>(position) - data.data();
+    std::memcpy(data.data() + offset, &value, sizeof(T));
   }
 
   static std::vector<uint8_t> encodeTrivial(std::span<const uint32_t> values) {
@@ -1069,17 +1080,173 @@ TEST_F(ChunkStatsWriterTest, v2BoundViewsKeepTheirOffsets) {
       /*stripeCount=*/1,
       copyMetadata(fileIndex.groupMetadataSections.front()),
       *viewPool);
-  // A cached Trivial string view keeps one uint32 offset per row, for the min
-  // array and for the max array. An uncached view keeps its lengths stream
-  // instead and builds no offsets, so this pool stays empty. That is how the
-  // test notices a group that no longer sets cacheEncodingView.
-  EXPECT_GE(viewPool->usedBytes(), 2ULL * kNumChunks * sizeof(uint32_t));
+  // Creation builds the shared views but no bounds views.
+  const auto usedBytesAfterCreate = viewPool->usedBytes();
 
   // The cached views return the written bounds.
   const auto stream = chunkStats->createStreamIndex(0, 0, kNumChunks);
   ASSERT_NE(stream, nullptr);
   EXPECT_EQ(std::get<std::string>(*stream->chunkMinValue(7)), "a7");
   EXPECT_EQ(std::get<std::string>(*stream->chunkMaxValue(7)), "b7");
+
+  // Cached Trivial string views keep one uint32 offset per row for the min and
+  // max arrays. Uncached views build no offsets, so this catches a group that
+  // stops setting cacheEncodingView.
+  EXPECT_GE(
+      viewPool->usedBytes() - usedBytesAfterCreate,
+      2ULL * kNumChunks * sizeof(uint32_t));
+}
+
+TEST_F(ChunkStatsWriterTest, v2BuildsStreamBoundsOnFirstUse) {
+  auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
+  Buffer buffer{*pool_};
+  TestChunkFileIndex fileIndex;
+
+  writer.newStripe(2);
+  for (uint32_t streamId = 0; streamId < 2; ++streamId) {
+    auto chunks = createChunks(buffer, {{10, 4}, {20, 6}});
+    chunks[0].minValue = int64_t{1};
+    chunks[0].maxValue = int64_t{2};
+    chunks[1].minValue = int64_t{3};
+    chunks[1].maxValue = int64_t{4};
+    writer.addStream(streamId, chunks);
+  }
+  writer.writeGroup(2, 1, createMetadataSectionCallback(fileIndex));
+
+  // Corrupt the data type of stream 1's min values.
+  auto& groupData = fileIndex.groupMetadataSections.front();
+  const auto* group =
+      flatbuffers::GetRoot<serialization::StripeChunkStatsV2>(groupData.data());
+  auto* encodedMin = const_cast<flatbuffers::Vector<uint8_t>*>(
+      group->chunk_min_values()->Get(1)->data());
+  encodedMin->Mutate(
+      EncodingPrefix::kDataTypeOffset,
+      static_cast<uint8_t>(DataType::Undefined));
+
+  auto chunkStats = index::ChunkStatsGroup::create(
+      ChunkStatsVersion::kV2, 0, 1, copyMetadata(groupData), *pool_);
+  auto firstStream = chunkStats->createStreamIndex(
+      /*stripe=*/0, /*streamId=*/0, /*streamSize=*/10);
+  auto secondStream = chunkStats->createStreamIndex(
+      /*stripe=*/0, /*streamId=*/1, /*streamSize=*/10);
+  ASSERT_NE(firstStream, nullptr);
+  ASSERT_NE(secondStream, nullptr);
+
+  // Reading stream 0's bounds does not build stream 1's.
+  const auto bounds = firstStream->chunkBounds(/*chunkIndex=*/1);
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_EQ(bounds->first, ChunkStatValue{int64_t{3}});
+  EXPECT_EQ(bounds->second, ChunkStatValue{int64_t{4}});
+
+  // A failed build is not kept, so every read of stream 1 fails.
+  NIMBLE_ASSERT_FILE_THROW(
+      secondStream->chunkBounds(/*chunkIndex=*/2),
+      "Unsupported V2 chunk bounds data type");
+  NIMBLE_ASSERT_FILE_THROW(
+      secondStream->chunkMinValue(/*chunkIndex=*/3),
+      "Unsupported V2 chunk bounds data type");
+}
+
+// A corrupt min or max table fails only the bounds reads of its stream.
+TEST_F(ChunkStatsWriterTest, v2VerifiesStreamBoundsTablesOnFirstUse) {
+  auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
+  Buffer buffer{*pool_};
+  TestChunkFileIndex fileIndex;
+
+  writer.newStripe(2);
+  for (uint32_t streamId = 0; streamId < 2; ++streamId) {
+    auto chunks = createChunks(buffer, {{10, 4}, {20, 6}});
+    chunks[0].minValue = int64_t{1};
+    chunks[0].maxValue = int64_t{2};
+    chunks[1].minValue = int64_t{3};
+    chunks[1].maxValue = int64_t{4};
+    writer.addStream(streamId, chunks);
+  }
+  writer.writeGroup(2, 1, createMetadataSectionCallback(fileIndex));
+
+  // Point stream 1's min table at a vtable outside the buffer.
+  auto& groupData = fileIndex.groupMetadataSections.front();
+  const auto* group =
+      flatbuffers::GetRoot<serialization::StripeChunkStatsV2>(groupData.data());
+  overwriteScalar(
+      groupData,
+      group->chunk_min_values()->Get(1),
+      std::numeric_limits<flatbuffers::soffset_t>::max());
+
+  auto chunkStats = index::ChunkStatsGroup::create(
+      ChunkStatsVersion::kV2, 0, 1, copyMetadata(groupData), *pool_);
+  auto firstStream = chunkStats->createStreamIndex(
+      /*stripe=*/0, /*streamId=*/0, /*streamSize=*/10);
+  auto secondStream = chunkStats->createStreamIndex(
+      /*stripe=*/0, /*streamId=*/1, /*streamSize=*/10);
+  ASSERT_NE(firstStream, nullptr);
+  ASSERT_NE(secondStream, nullptr);
+
+  const auto bounds = firstStream->chunkBounds(/*chunkIndex=*/1);
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_EQ(bounds->first, ChunkStatValue{int64_t{3}});
+  EXPECT_EQ(bounds->second, ChunkStatValue{int64_t{4}});
+  NIMBLE_ASSERT_FILE_THROW(
+      secondStream->chunkBounds(/*chunkIndex=*/2),
+      "Invalid V2 chunk min values metadata");
+}
+
+// Threads racing to build the bounds views all read the written values.
+TEST_F(ChunkStatsWriterTest, v2ConcurrentReads) {
+  constexpr uint32_t kNumStreams{4};
+  auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
+  Buffer buffer{*pool_};
+  TestChunkFileIndex fileIndex;
+
+  writer.newStripe(kNumStreams);
+  for (uint32_t streamId = 0; streamId < kNumStreams; ++streamId) {
+    auto chunks = createChunks(buffer, {{10, 4, 1}, {20, 6, 2}});
+    chunks[0].minValue = int64_t{streamId};
+    chunks[0].maxValue = int64_t{streamId + 10};
+    writer.addStream(streamId, chunks);
+  }
+  writer.writeGroup(kNumStreams, 1, createMetadataSectionCallback(fileIndex));
+  const auto chunkStats = index::ChunkStatsGroup::create(
+      ChunkStatsVersion::kV2,
+      /*firstStripe=*/0,
+      /*stripeCount=*/1,
+      copyMetadata(fileIndex.groupMetadataSections.front()),
+      *pool_);
+
+  constexpr int kNumThreads{8};
+  std::vector<std::thread> threads;
+  threads.reserve(kNumThreads);
+  std::atomic<int> numMismatches{0};
+
+  // Start the threads together so they race to build each view.
+  std::latch start{kNumThreads};
+  for (int i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back([&]() {
+      start.arrive_and_wait();
+      for (uint32_t streamId = 0; streamId < kNumStreams; ++streamId) {
+        const auto stream = chunkStats->createStreamIndex(
+            /*stripe=*/0, streamId, /*streamSize=*/10);
+        if (stream == nullptr) {
+          ++numMismatches;
+          continue;
+        }
+        const auto firstChunk = 2 * streamId;
+        const auto bounds = stream->chunkBounds(firstChunk);
+        if (stream->rowCount() != 30 ||
+            stream->lookupChunk(15).chunkIndex != firstChunk + 1 ||
+            stream->chunkNullCount(firstChunk + 1) != 2U ||
+            !bounds.has_value() ||
+            bounds->second != ChunkStatValue{int64_t{streamId + 10}} ||
+            stream->chunkBounds(firstChunk + 1).has_value()) {
+          ++numMismatches;
+        }
+      }
+    });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+  EXPECT_EQ(numMismatches.load(), 0);
 }
 
 TEST_F(ChunkStatsWriterTest, v2StreamIndexExtendedApis) {
@@ -1620,6 +1787,41 @@ TEST_F(ChunkStatsWriterTest, v2RejectsInvalidRootShape) {
             ChunkStatsVersion::kV2, 0, 2, copyMetadata(groupData), *pool_),
         "stream chunk count size does not match");
   }
+
+  {
+    // Creation verifies the bounds vectors, though not the tables in them.
+    auto groupData = createV2BoundsData(
+        encodeConstant<int8_t>(1, /*rowCount=*/1),
+        encodeConstant<int8_t>(2, /*rowCount=*/1),
+        encodeConstant<bool>(true, /*rowCount=*/1));
+    const auto* group = flatbuffers::GetRoot<serialization::StripeChunkStatsV2>(
+        groupData.data());
+    overwriteScalar(
+        groupData,
+        group->chunk_max_values(),
+        std::numeric_limits<flatbuffers::uoffset_t>::max());
+    NIMBLE_ASSERT_FILE_THROW(
+        index::ChunkStatsGroup::create(
+            ChunkStatsVersion::kV2, 0, 1, copyMetadata(groupData), *pool_),
+        "Invalid V2 chunk stats metadata");
+  }
+
+  {
+    // Creation verifies the tables that all streams share.
+    const std::array<uint32_t, 1> chunkCounts{2};
+    const std::array<uint32_t, 2> values{10, 20};
+    auto groupData = createV2GroupData(chunkCounts, values, values, values);
+    const auto* group = flatbuffers::GetRoot<serialization::StripeChunkStatsV2>(
+        groupData.data());
+    overwriteScalar(
+        groupData,
+        group->stream_chunk_rows(),
+        std::numeric_limits<flatbuffers::soffset_t>::max());
+    NIMBLE_ASSERT_FILE_THROW(
+        index::ChunkStatsGroup::create(
+            ChunkStatsVersion::kV2, 0, 1, copyMetadata(groupData), *pool_),
+        "Invalid V2 chunk stats metadata");
+  }
 }
 
 TEST_F(ChunkStatsWriterTest, v2RequiresEncodedStreams) {
@@ -1714,9 +1916,13 @@ TEST_F(ChunkStatsWriterTest, v2RejectsInvalidChunkBoundsMetadata) {
     const std::array<uint8_t, 1> invalidMin{0};
     const auto max = encodeConstant<int8_t>(1, /*rowCount=*/1);
     const auto groupData = createV2BoundsData(invalidMin, max, presence);
+    auto chunkStats = index::ChunkStatsGroup::create(
+        ChunkStatsVersion::kV2, 0, 1, copyMetadata(groupData), *pool_);
+    auto stream = chunkStats->createStreamIndex(
+        /*stripe=*/0, /*streamId=*/0, /*streamSize=*/1);
+    ASSERT_NE(stream, nullptr);
     NIMBLE_ASSERT_THROW(
-        index::ChunkStatsGroup::create(
-            ChunkStatsVersion::kV2, 0, 1, copyMetadata(groupData), *pool_),
+        stream->chunkBounds(/*chunkIndex=*/0),
         "Encoded chunk min values array is too small");
   }
 
