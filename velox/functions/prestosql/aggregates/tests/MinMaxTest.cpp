@@ -61,49 +61,57 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
     static const std::string a0 = "a0";
 
     // Global aggregation.
-    testAggregations(
-        vectors, {}, {agg(c1)}, fmt::format("SELECT {} FROM tmp", agg(c1)));
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({agg(c1)})
+        .withCompanion()
+        .assertResults(fmt::format("SELECT {} FROM tmp", agg(c1)));
 
     // Group by aggregation.
-    testAggregations(
-        [&](auto& builder) {
-          builder.values(vectors).project({"c0 % 10", "c1"});
-        },
-        {"p0"},
-        {agg(c1)},
-        fmt::format("SELECT c0 % 10, {} FROM tmp GROUP BY 1", agg(c1)));
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation(
+            [&](auto& builder) { builder.project({"c0 % 10", "c1"}); })
+        .groupBy({"p0"})
+        .aggregates({agg(c1)})
+        .assertResults(
+            fmt::format("SELECT c0 % 10, {} FROM tmp GROUP BY 1", agg(c1)));
 
     // Masked aggregations.
     auto maskedAgg = agg(c1) + " filter (where mask)";
-    testAggregations(
-        vectors, {}, {maskedAgg}, fmt::format("SELECT {} FROM tmp", maskedAgg));
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({maskedAgg})
+        .assertResults(fmt::format("SELECT {} FROM tmp", maskedAgg));
 
-    testAggregations(
-        [&](auto& builder) {
-          builder.values(vectors).project({"c0 % 10", "c1", "mask"});
-        },
-        {"p0"},
-        {maskedAgg},
-        fmt::format("SELECT c0 % 10, {} FROM tmp GROUP BY 1", maskedAgg));
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation(
+            [&](auto& builder) { builder.project({"c0 % 10", "c1", "mask"}); })
+        .groupBy({"p0"})
+        .aggregates({maskedAgg})
+        .assertResults(
+            fmt::format("SELECT c0 % 10, {} FROM tmp GROUP BY 1", maskedAgg));
 
     // Encodings: use filter to wrap aggregation inputs in a dictionary.
-    testAggregations(
-        [&](auto& builder) {
-          builder.values(vectors)
-              .filter("c0 % 2 = 0")
-              .project({"c0 % 11", "c1"});
-        },
-        {"p0"},
-        {agg(c1)},
-        fmt::format(
-            "SELECT c0 % 11, {} FROM tmp WHERE c0 % 2 = 0 GROUP BY 1",
-            agg(c1)));
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation([&](auto& builder) {
+          builder.filter("c0 % 2 = 0").project({"c0 % 11", "c1"});
+        })
+        .groupBy({"p0"})
+        .aggregates({agg(c1)})
+        .assertResults(
+            fmt::format(
+                "SELECT c0 % 11, {} FROM tmp WHERE c0 % 2 = 0 GROUP BY 1",
+                agg(c1)));
 
-    testAggregations(
-        [&](auto& builder) { builder.values(vectors).filter("c0 % 2 = 0"); },
-        {},
-        {agg(c1)},
-        fmt::format("SELECT {} FROM tmp WHERE c0 % 2 = 0", agg(c1)));
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation([&](auto& builder) { builder.filter("c0 % 2 = 0"); })
+        .aggregates({agg(c1)})
+        .assertResults(
+            fmt::format("SELECT {} FROM tmp WHERE c0 % 2 = 0", agg(c1)));
   }
 
   template <typename T>
@@ -146,11 +154,10 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
           makeFlatVector<T>(std::vector<T>({kInf})),
           makeFlatVector<T>(std::vector<T>({-kInf}))};
 
-      testAggregations(
-          {data},
-          {},
-          {"max(c0)", "max(c1)", "max(c2)", "max(c3)", "max(c4)"},
-          {makeRowVector(expectedMaxValues)});
+      AggregationTester(*this)
+          .inputs(data)
+          .aggregates({"max(c0)", "max(c1)", "max(c2)", "max(c3)", "max(c4)"})
+          .assertResults(makeRowVector(expectedMaxValues));
 
       // Verify max pushed down to scan operator.
       std::vector<VectorPtr> expectedMinValues = {
@@ -160,11 +167,10 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
           makeFlatVector<T>(std::vector<T>({kInf})),
           makeFlatVector<T>(std::vector<T>({-kInf})),
       };
-      testAggregations(
-          {data},
-          {},
-          {"min(c0)", "min(c1)", "min(c2)", "min(c3)", "min(c4)"},
-          {makeRowVector(expectedMinValues)});
+      AggregationTester(*this)
+          .inputs(data)
+          .aggregates({"min(c0)", "min(c1)", "min(c2)", "min(c3)", "min(c4)"})
+          .assertResults(makeRowVector(expectedMinValues));
 
       // Verify max and min evaluated in aggregation operator.
       std::vector<VectorPtr> allExpectedValues = expectedMaxValues;
@@ -173,20 +179,20 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
           expectedMinValues.begin(),
           expectedMinValues.end());
 
-      testAggregations(
-          {data},
-          {},
-          {"max(c0)",
-           "max(c1)",
-           "max(c2)",
-           "max(c3)",
-           "max(c4)",
-           "min(c0)",
-           "min(c1)",
-           "min(c2)",
-           "min(c3)",
-           "min(c4)"},
-          {makeRowVector(allExpectedValues)});
+      AggregationTester(*this)
+          .inputs(data)
+          .aggregates(
+              {"max(c0)",
+               "max(c1)",
+               "max(c2)",
+               "max(c3)",
+               "max(c4)",
+               "min(c0)",
+               "min(c1)",
+               "min(c2)",
+               "min(c3)",
+               "min(c4)"})
+          .assertResults(makeRowVector(allExpectedValues));
     }
 
     // group-by aggregation.
@@ -200,11 +206,11 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
           makeFlatVector<T>({kInf, kInf}),
           makeFlatVector<T>({-kInf, -kInf})};
 
-      testAggregations(
-          {data},
-          {"c5"},
-          {"max(c0)", "max(c1)", "max(c2)", "max(c3)", "max(c4)"},
-          {makeRowVector(expectedMaxValues)});
+      AggregationTester(*this)
+          .inputs(data)
+          .groupBy({"c5"})
+          .aggregates({"max(c0)", "max(c1)", "max(c2)", "max(c3)", "max(c4)"})
+          .assertResults(makeRowVector(expectedMaxValues));
 
       // Verify min pushed down to scan operator.
       std::vector<VectorPtr> expectedMinValues = {
@@ -215,11 +221,11 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
           makeFlatVector<T>({kInf, kInf}),
           makeFlatVector<T>({-kInf, -kInf})};
 
-      testAggregations(
-          {data},
-          {"c5"},
-          {"min(c0)", "min(c1)", "min(c2)", "min(c3)", "min(c4)"},
-          {makeRowVector(expectedMinValues)});
+      AggregationTester(*this)
+          .inputs(data)
+          .groupBy({"c5"})
+          .aggregates({"min(c0)", "min(c1)", "min(c2)", "min(c3)", "min(c4)"})
+          .assertResults(makeRowVector(expectedMinValues));
 
       // Verify max and min evaluated in aggregation operator.
       std::vector<VectorPtr> allExpectedValues = expectedMaxValues;
@@ -228,20 +234,21 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
           expectedMinValues.begin() + 1, // skip the grouping key column
           expectedMinValues.end());
 
-      testAggregations(
-          {data},
-          {"c5"},
-          {"max(c0)",
-           "max(c1)",
-           "max(c2)",
-           "max(c3)",
-           "max(c4)",
-           "min(c0)",
-           "min(c1)",
-           "min(c2)",
-           "min(c3)",
-           "min(c4)"},
-          {makeRowVector(allExpectedValues)});
+      AggregationTester(*this)
+          .inputs(data)
+          .groupBy({"c5"})
+          .aggregates(
+              {"max(c0)",
+               "max(c1)",
+               "max(c2)",
+               "max(c3)",
+               "max(c4)",
+               "min(c0)",
+               "min(c1)",
+               "min(c2)",
+               "min(c3)",
+               "min(c4)"})
+          .assertResults(makeRowVector(allExpectedValues));
     }
 
     // Test for float point values nested inside complex type.
@@ -265,7 +272,10 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
                makeFlatVector<int32_t>(std::vector<int32_t>({2})),
            })});
 
-      testAggregations({data}, {}, {"min(c0)", "max(c0)"}, {expected});
+      AggregationTester(*this)
+          .inputs(data)
+          .aggregates({"min(c0)", "max(c0)"})
+          .assertResults(expected);
     }
 
     // group-by aggregation.
@@ -281,7 +291,11 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
                makeFlatVector<int32_t>(std::vector<int32_t>({1, 2})),
            })});
 
-      testAggregations({data}, {"c1"}, {"min(c0)", "max(c0)"}, {expected});
+      AggregationTester(*this)
+          .inputs(data)
+          .groupBy({"c1"})
+          .aggregates({"min(c0)", "max(c0)"})
+          .assertResults(expected);
     }
   }
 };
@@ -373,11 +387,10 @@ TEST_F(MinMaxTest, constVarchar) {
           makeNullConstant(TypeKind::VARCHAR, 1'000),
       })};
 
-  testAggregations(
-      {constVectors},
-      {},
-      {"min(c0)", "max(c0)", "min(c1)", "max(c1)"},
-      "SELECT 'apple', 'banana', null, null");
+  AggregationTester(*this)
+      .inputs(constVectors)
+      .aggregates({"min(c0)", "max(c0)", "min(c1)", "max(c1)"})
+      .assertResults("SELECT 'apple', 'banana', null, null");
 }
 
 TEST_F(MinMaxTest, minMaxTimestamp) {
@@ -385,21 +398,22 @@ TEST_F(MinMaxTest, minMaxTimestamp) {
   auto vectors = makeVectors(rowType, 1'000, 10);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      {"min(c1)", "max(c1)"},
-      "SELECT date_trunc('millisecond', min(c1)), "
-      "date_trunc('millisecond', max(c1)) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"min(c1)", "max(c1)"})
+      .assertResults(
+          "SELECT date_trunc('millisecond', min(c1)), "
+          "date_trunc('millisecond', max(c1)) FROM tmp");
 
-  testAggregations(
-      [&](auto& builder) {
-        builder.values(vectors).project({"c0 % 17 as k", "c1"});
-      },
-      {"k"},
-      {"min(c1)", "max(c1)"},
-      "SELECT c0 % 17, date_trunc('millisecond', min(c1)), "
-      "date_trunc('millisecond', max(c1)) FROM tmp GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation(
+          [&](auto& builder) { builder.project({"c0 % 17 as k", "c1"}); })
+      .groupBy({"k"})
+      .aggregates({"min(c1)", "max(c1)"})
+      .assertResults(
+          "SELECT c0 % 17, date_trunc('millisecond', min(c1)), "
+          "date_trunc('millisecond', max(c1)) FROM tmp GROUP BY 1");
 }
 
 TEST_F(MinMaxTest, largeValuesDate) {
@@ -407,11 +421,10 @@ TEST_F(MinMaxTest, largeValuesDate) {
       {makeConstant(60577, 100, DATE()), makeConstant(-57604, 100, DATE())})};
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      {"min(c0)", "max(c0)", "min(c1)", "max(c1)"},
-      "SELECT min(c0), max(c0), min(c1), max(c1) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"min(c0)", "max(c0)", "min(c1)", "max(c1)"})
+      .assertResults("SELECT min(c0), max(c0), min(c1), max(c1) FROM tmp");
 }
 
 TEST_F(MinMaxTest, minMaxDate) {
@@ -419,16 +432,18 @@ TEST_F(MinMaxTest, minMaxDate) {
   auto vectors = makeVectors(rowType, 1'000, 10);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors, {}, {"min(c1)", "max(c1)"}, "SELECT min(c1), max(c1) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"min(c1)", "max(c1)"})
+      .assertResults("SELECT min(c1), max(c1) FROM tmp");
 
-  testAggregations(
-      [&](auto& builder) {
-        builder.values(vectors).project({"c0 % 17 as k", "c1"});
-      },
-      {"k"},
-      {"min(c1)", "max(c1)"},
-      "SELECT c0 % 17, min(c1), max(c1) FROM tmp GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation(
+          [&](auto& builder) { builder.project({"c0 % 17 as k", "c1"}); })
+      .groupBy({"k"})
+      .aggregates({"min(c1)", "max(c1)"})
+      .assertResults("SELECT c0 % 17, min(c1), max(c1) FROM tmp GROUP BY 1");
 }
 
 TEST_F(MinMaxTest, minMaxUnknown) {
@@ -442,7 +457,10 @@ TEST_F(MinMaxTest, minMaxUnknown) {
       makeAllNullFlatVector<UnknownValue>(1),
   });
 
-  testAggregations({data}, {}, {"min(c1)", "max(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min(c1)", "max(c1)"})
+      .assertResults(expected);
 
   expected = makeRowVector({
       makeFlatVector<int64_t>({1, 2}),
@@ -450,7 +468,11 @@ TEST_F(MinMaxTest, minMaxUnknown) {
       makeAllNullFlatVector<UnknownValue>(2),
   });
 
-  testAggregations({data}, {"c0"}, {"min(c1)", "max(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"min(c1)", "max(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxTest, initialValue) {
@@ -462,11 +484,10 @@ TEST_F(MinMaxTest, initialValue) {
       makeFlatVector<double>({1, 2, 3, 4}),
       makeFlatVector<double>({-1, -2, -3, -4}),
   });
-  testAggregations(
-      {row},
-      {},
-      {"min(c0)", "max(c1)", "min(c2)", "max(c3)"},
-      "SELECT 1, -1, 1, -1");
+  AggregationTester(*this)
+      .inputs(row)
+      .aggregates({"min(c0)", "max(c1)", "min(c2)", "max(c3)"})
+      .assertResults("SELECT 1, -1, 1, -1");
 }
 
 TEST_F(MinMaxTest, maxShortDecimal) {
@@ -503,9 +524,11 @@ TEST_F(MinMaxTest, array) {
       }),
   });
 
-  VELOX_ASSERT_THROW(
-      testAggregations({data}, {}, {"min(c0)", "max(c0)"}, {expected}),
-      "ARRAY comparison not supported for values that contain nulls");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min(c0)", "max(c0)"})
+      .assertError(
+          "ARRAY comparison not supported for values that contain nulls");
 
   data = makeRowVector({
       makeNullableArrayVector<int64_t>({
@@ -514,7 +537,10 @@ TEST_F(MinMaxTest, array) {
           {6, 7, 8},
       }),
   });
-  testAggregations({data}, {}, {"min(c0)", "max(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min(c0)", "max(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxTest, row) {
@@ -542,9 +568,11 @@ TEST_F(MinMaxTest, row) {
            makeFlatVector<StringView>({"hij"_sv})}),
   });
 
-  VELOX_ASSERT_THROW(
-      testAggregations({data}, {}, {"min(c0)", "max(c0)"}, {expected}),
-      "ROW comparison not supported for values that contain nulls");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min(c0)", "max(c0)"})
+      .assertError(
+          "ROW comparison not supported for values that contain nulls");
 
   data = makeRowVector({
       makeRowVector({
@@ -560,7 +588,10 @@ TEST_F(MinMaxTest, row) {
           }),
       }),
   });
-  testAggregations({data}, {}, {"min(c0)", "max(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min(c0)", "max(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxTest, arrayCheckNulls) {
@@ -591,16 +622,17 @@ TEST_F(MinMaxTest, arrayCheckNulls) {
   });
 
   for (const auto& expr : {"min(c0)", "max(c0)"}) {
-    testFailingAggregations(
-        {batch, batchWithNull},
-        {},
-        {expr},
-        "ARRAY comparison not supported for values that contain nulls");
-    testFailingAggregations(
-        {batch, batchWithNull},
-        {"c1"},
-        {expr},
-        "ARRAY comparison not supported for values that contain nulls");
+    AggregationTester(*this)
+        .inputs({batch, batchWithNull})
+        .aggregates({expr})
+        .assertError(
+            "ARRAY comparison not supported for values that contain nulls");
+    AggregationTester(*this)
+        .inputs({batch, batchWithNull})
+        .groupBy({"c1"})
+        .aggregates({expr})
+        .assertError(
+            "ARRAY comparison not supported for values that contain nulls");
   }
 }
 
@@ -638,16 +670,17 @@ TEST_F(MinMaxTest, rowCheckNull) {
   });
 
   for (const auto& expr : {"min(c0)", "max(c0)"}) {
-    testFailingAggregations(
-        {batch, batchWithNull},
-        {},
-        {expr},
-        "ROW comparison not supported for values that contain nulls");
-    testFailingAggregations(
-        {batch, batchWithNull},
-        {"c1"},
-        {expr},
-        "ROW comparison not supported for values that contain nulls");
+    AggregationTester(*this)
+        .inputs({batch, batchWithNull})
+        .aggregates({expr})
+        .assertError(
+            "ROW comparison not supported for values that contain nulls");
+    AggregationTester(*this)
+        .inputs({batch, batchWithNull})
+        .groupBy({"c1"})
+        .aggregates({expr})
+        .assertError(
+            "ROW comparison not supported for values that contain nulls");
   }
 }
 
@@ -697,14 +730,13 @@ TEST_F(MinMaxTest, timestampWithTimezone) {
          makeFlatVector<int64_t>(
              std::vector<int64_t>{pack(4, 0)}, TIMESTAMP_WITH_TIME_ZONE())});
 
-    testAggregations(
-        {data},
-        {},
-        {
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({
             "min(c0)",
             "max(c0)",
-        },
-        {expected});
+        })
+        .assertResults(expected);
   }
 
   // group-by aggregation.
@@ -716,7 +748,11 @@ TEST_F(MinMaxTest, timestampWithTimezone) {
          makeFlatVector<int64_t>(
              {pack(3, 1), pack(4, 0)}, TIMESTAMP_WITH_TIME_ZONE())});
 
-    testAggregations({data}, {"c1"}, {"min(c0)", "max(c0)"}, {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .groupBy({"c1"})
+        .aggregates({"min(c0)", "max(c0)"})
+        .assertResults(expected);
   }
 }
 
@@ -748,11 +784,10 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
         }),
     });
 
-    testAggregations(
-        {data},
-        {},
-        {"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"},
-        {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"})
+        .assertResults(expected);
 
     // Add some nulls. Expect these to be ignored.
     data = makeRowVector({
@@ -772,11 +807,10 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
              std::nullopt}),
     });
 
-    testAggregations(
-        {data},
-        {},
-        {"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"},
-        {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"})
+        .assertResults(expected);
 
     // Test all null input.
     data = makeRowVector({
@@ -790,11 +824,10 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
         makeAllNullArrayVector(1, data->childAt(0)->type()),
     });
 
-    testAggregations(
-        {data},
-        {},
-        {"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"},
-        {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"})
+        .assertResults(expected);
 
     // Test the NULL handling in `N` param.
     data = makeRowVector({
@@ -823,19 +856,23 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
          // max(c0, c3): Since all N are NULL, the result is NULL.
          makeNullableArrayVector<T>({std::nullopt})});
 
-    testAggregations(
-        {data},
-        {},
-        {"min(c0, c1)", "min(c0, c3)", "max(c0, c2)", "max(c0, c3)"},
-        {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates(
+            {"min(c0, c1)", "min(c0, c3)", "max(c0, c2)", "max(c0, c3)"})
+        .assertResults(expected);
 
     // Second argument of max_n/min_n must be less than or equal to 10000.
-    VELOX_ASSERT_THROW(
-        testAggregations({data}, {}, {"min(c0, 10001)"}, {expected}),
-        "second argument of max/min must be less than or equal to 10000");
-    VELOX_ASSERT_THROW(
-        testAggregations({data}, {}, {"max(c0, 10001)"}, {expected}),
-        "second argument of max/min must be less than or equal to 10000");
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({"min(c0, 10001)"})
+        .assertError(
+            "second argument of max/min must be less than or equal to 10000");
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({"max(c0, 10001)"})
+        .assertError(
+            "second argument of max/min must be less than or equal to 10000");
   }
 
   template <typename T>
@@ -883,11 +920,10 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
             type),
     });
 
-    testAggregations(
-        {data},
-        {},
-        {"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"},
-        {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"})
+        .assertResults(expected);
 
     // Add some nulls. Expect these to be ignored.
     data = makeRowVector({
@@ -908,11 +944,10 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
             type),
     });
 
-    testAggregations(
-        {data},
-        {},
-        {"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"},
-        {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"})
+        .assertResults(expected);
 
     // Test all null input.
     data = makeRowVector({
@@ -927,11 +962,10 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
         makeAllNullArrayVector(1, data->childAt(0)->type()),
     });
 
-    testAggregations(
-        {data},
-        {},
-        {"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"},
-        {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"})
+        .assertResults(expected);
   }
 
   template <typename T>
@@ -961,11 +995,11 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
         }),
     });
 
-    testAggregations(
-        {data},
-        {"c0"},
-        {"min(c1, 2)", "min(c1, 5)", "max(c1, 3)", "max(c1, 7)"},
-        {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .groupBy({"c0"})
+        .aggregates({"min(c1, 2)", "min(c1, 5)", "max(c1, 3)", "max(c1, 7)"})
+        .assertResults(expected);
 
     // Add some nulls. Expect these to be ignored.
     data = makeRowVector({
@@ -974,11 +1008,11 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
             {1, 2, std::nullopt, 4, 3, 6, std::nullopt, 5, 7, 8}),
     });
 
-    testAggregations(
-        {data},
-        {"c0"},
-        {"min(c1, 2)", "min(c1, 5)", "max(c1, 3)", "max(c1, 7)"},
-        {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .groupBy({"c0"})
+        .aggregates({"min(c1, 2)", "min(c1, 5)", "max(c1, 3)", "max(c1, 7)"})
+        .assertResults(expected);
 
     // Test all null input.
     data = makeRowVector({
@@ -1016,11 +1050,11 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
         }),
     });
 
-    testAggregations(
-        {data},
-        {"c0"},
-        {"min(c1, 2)", "min(c1, 5)", "max(c1, 3)", "max(c1, 7)"},
-        {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .groupBy({"c0"})
+        .aggregates({"min(c1, 2)", "min(c1, 5)", "max(c1, 3)", "max(c1, 7)"})
+        .assertResults(expected);
 
     // Test the NULL handling in `N` param.
     data = makeRowVector({
@@ -1056,11 +1090,12 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
         makeNullableArrayVector<T>({std::nullopt, std::nullopt}),
     });
 
-    testAggregations(
-        {data},
-        {"c0"},
-        {"min(c1, c2)", "min(c1, c4)", "max(c1, c3)", "max(c1, c4)"},
-        {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .groupBy({"c0"})
+        .aggregates(
+            {"min(c1, c2)", "min(c1, c4)", "max(c1, c3)", "max(c1, c4)"})
+        .assertResults(expected);
   }
 
   template <typename T>
@@ -1107,11 +1142,11 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
             type),
     });
 
-    testAggregations(
-        {data},
-        {"c0"},
-        {"min(c1, 2)", "min(c1, 5)", "max(c1, 3)", "max(c1, 7)"},
-        {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .groupBy({"c0"})
+        .aggregates({"min(c1, 2)", "min(c1, 5)", "max(c1, 3)", "max(c1, 7)"})
+        .assertResults(expected);
 
     // Add some nulls. Expect these to be ignored.
     data = makeRowVector({
@@ -1130,11 +1165,11 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
             type),
     });
 
-    testAggregations(
-        {data},
-        {"c0"},
-        {"min(c1, 2)", "min(c1, 5)", "max(c1, 3)", "max(c1, 7)"},
-        {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .groupBy({"c0"})
+        .aggregates({"min(c1, 2)", "min(c1, 5)", "max(c1, 3)", "max(c1, 7)"})
+        .assertResults(expected);
 
     // Test all null input.
     data = makeRowVector({
@@ -1181,11 +1216,11 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
             ARRAY(type)),
     });
 
-    testAggregations(
-        {data},
-        {"c0"},
-        {"min(c1, 2)", "min(c1, 5)", "max(c1, 3)", "max(c1, 7)"},
-        {expected});
+    AggregationTester(*this)
+        .inputs(data)
+        .groupBy({"c0"})
+        .aggregates({"min(c1, 2)", "min(c1, 5)", "max(c1, 3)", "max(c1, 7)"})
+        .assertResults(expected);
   }
 
   template <typename T>
@@ -1212,16 +1247,15 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
            makeArrayVector<T>({{-1.1, 0.0, 1.1, 2.0, kNaN}}),
            makeArrayVector<T>({{kNaN, 2.0, 1.1, 0.0, -1.1}})});
 
-      testAggregations(
-          {data},
-          {},
-          {
+      AggregationTester(*this)
+          .inputs(data)
+          .aggregates({
               "min(c0, 6)",
               "max(c0, 6)",
               "min(c1, 6)",
               "max(c1, 6)",
-          },
-          {expected});
+          })
+          .assertResults(expected);
     }
 
     // group-by aggregation.
@@ -1233,11 +1267,11 @@ class MinMaxNTest : public functions::aggregate::test::AggregationTestBase {
            makeArrayVector<T>({{2.0, kNaN}, {-1.1, 0.0, 1.1}}),
            makeArrayVector<T>({{kNaN, 2.0}, {1.1, 0.0, -1.1}})});
 
-      testAggregations(
-          {data},
-          {"c2"},
-          {"min(c0, 3)", "max(c0, 3)", "min(c1, 3)", "max(c1, 3)"},
-          {expected});
+      AggregationTester(*this)
+          .inputs(data)
+          .groupBy({"c2"})
+          .aggregates({"min(c0, 3)", "max(c0, 3)", "min(c1, 3)", "max(c1, 3)"})
+          .assertResults(expected);
     }
   }
 };
@@ -1302,11 +1336,10 @@ TEST_F(MinMaxNTest, string) {
       }),
   });
 
-  testAggregations(
-      {data},
-      {},
-      {"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"})
+      .assertResults(expected);
 
   // Add some nulls. Expect these to be ignored.
   data = makeRowVector({makeNullableFlatVector<std::string>(
@@ -1320,11 +1353,10 @@ TEST_F(MinMaxNTest, string) {
        "xyz",
        std::nullopt})});
 
-  testAggregations(
-      {data},
-      {},
-      {"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"})
+      .assertResults(expected);
 
   // Test all null input.
   data = makeRowVector({makeNullableFlatVector<std::string>(
@@ -1345,11 +1377,10 @@ TEST_F(MinMaxNTest, string) {
       makeAllNullArrayVector(1, data->childAt(0)->type()),
   });
 
-  testAggregations(
-      {data},
-      {},
-      {"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"})
+      .assertResults(expected);
 
   // Test long string
   data = makeRowVector({makeFlatVector<std::string>(
@@ -1385,11 +1416,10 @@ TEST_F(MinMaxNTest, string) {
       }),
   });
 
-  testAggregations(
-      {data},
-      {},
-      {"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"min(c0, 2)", "min(c0, 5)", "max(c0, 3)", "max(c0, 7)"})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxNTest, incrementalWindow) {

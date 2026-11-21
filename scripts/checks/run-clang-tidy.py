@@ -79,8 +79,29 @@ def git_changed_lines(commit, exclude_dirs=None):
     return changed_lines
 
 
-def check_output(output):
-    return re.match(r"(^/.* warning: |^$)", output)
+# One clang-tidy diagnostic: file, line, column, severity, message, rules.
+DIAGNOSTIC_PATTERN = re.compile(
+    r"^(.*):(\d+):(\d+):\s+(error|warning):\s+(.*) \[([a-z0-9,\-]+)\]\s*$"
+)
+
+
+def is_compiler_diagnostic(rules):
+    # clang-diagnostic-* comes from compiling the file with the GCC flags, not
+    # from a check. The GCC build already compiles the code, so these say
+    # nothing about the change.
+    return all(rule.startswith("clang-diagnostic-") for rule in rules.split(","))
+
+
+def check_errors(diagnostics):
+    # Returns the errors that come from checks.
+    return [
+        d for d in diagnostics if d[3] == "error" and not is_compiler_diagnostic(d[5])
+    ]
+
+
+def unanalyzed_files(output):
+    # clang-tidy reports each file it could not compile.
+    return re.findall(r"^Error while processing (.*)\.$", output, re.MULTILINE)
 
 
 def tidy(args):
@@ -129,7 +150,6 @@ def tidy(args):
     # input file.
     extra_args = "--extra-arg=-Wno-nullability-completeness"
 
-    ok = True
     build_path = args.p or os.getenv("BUILD_PATH")
     build_path_str = f"-p {build_path}" if build_path else ""
 
@@ -144,25 +164,34 @@ def tidy(args):
         input=filtered_files,
     )
 
+    diagnostics = [
+        m.groups()
+        for m in map(DIAGNOSTIC_PATTERN.match, stdout.splitlines())
+        if m is not None
+    ]
+
     if in_gha:
-        clang_tidy_pattern = (
-            r"^(.*):(\d+):(\d+):\s+(error|warning):\s+(.*) \[([a-z0-9,\-]+)\]\s*$"
+        for file, line, col, severity, message, rule in diagnostics:
+            if severity == "error" and is_compiler_diagnostic(rule):
+                severity = "warning"
+            file = file.removeprefix("/__w/velox/velox/")
+            print(
+                f"::{severity} file={file},line={line},col={col},title={rule}::{message}"
+            )
+
+    unanalyzed = unanalyzed_files(stdout + "\n" + stderr)
+    if unanalyzed:
+        message = (
+            "Clang could not compile these files, so they were not analyzed: "
+            + ", ".join(file.removeprefix("/__w/velox/velox/") for file in unanalyzed)
         )
+        print(f"::warning title=clang-tidy::{message}" if in_gha else message)
 
-        for stdout_line in stdout.split("\n"):
-            m = re.match(clang_tidy_pattern, stdout_line)
-            if m is not None:
-                file, line, col, severity, message, rule = m.groups()
-                file = file.removeprefix("/__w/velox/velox/")
-                print(
-                    f"::{severity} file={file},line={line},col={col},title={rule}::{message}"
-                )
-
-    ok = check_output(stdout)
-    if not ok:
+    if check_errors(diagnostics):
         print(stdout)
+        return 1
 
-    return 0 if ok else 1
+    return 0
 
 
 def parse_args():

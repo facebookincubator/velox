@@ -17,9 +17,13 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/nimble/common/HybridFlatMap.h"
+#include "velox/dwio/nimble/common/SchemaBuilder.h"
+#include "velox/dwio/nimble/common/SchemaGenerated.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
-#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/type/Type.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
@@ -55,10 +59,11 @@ TEST_F(SerializerTest, hybridFlatMapRequiresSerializationFormat) {
       .hybridFlatMapColumns =
           {{"features",
             HybridFlatMap{
-                .groups =
-                    {{.groupId = 0, .groupKeys = {"1"}},
-                     {.groupId = HybridFlatMap::kDefaultGroupId,
-                      .groupKeys = {}}}}}},
+                ScalarKind::Int32,
+                {{.groupId = 0, .groupKeys = {"1"}},
+                 {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}}},
+                HybridFlatMap::KeyPresenceMode::kBitmap,
+            }}},
   };
 
   NIMBLE_ASSERT_THROW(
@@ -76,10 +81,12 @@ TEST_F(SerializerTest, validatesHybridFlatMapColumnConfiguration) {
               .hybridFlatMapColumns =
                   {{"missing",
                     HybridFlatMap{
-                        .groups =
-                            {{.groupId = 0, .groupKeys = {"1"}},
-                             {.groupId = HybridFlatMap::kDefaultGroupId,
-                              .groupKeys = {}}}}}},
+                        ScalarKind::Int32,
+                        {{.groupId = 0, .groupKeys = {"1"}},
+                         {.groupId = HybridFlatMap::kDefaultGroupId,
+                          .groupKeys = {}}},
+                        HybridFlatMap::KeyPresenceMode::kBitmap,
+                    }}},
           },
           type,
           pool_.get()),
@@ -93,10 +100,12 @@ TEST_F(SerializerTest, validatesHybridFlatMapColumnConfiguration) {
               .hybridFlatMapColumns =
                   {{"features",
                     HybridFlatMap{
-                        .groups =
-                            {{.groupId = 0, .groupKeys = {"1"}},
-                             {.groupId = HybridFlatMap::kDefaultGroupId,
-                              .groupKeys = {}}}}}},
+                        ScalarKind::Int32,
+                        {{.groupId = 0, .groupKeys = {"1"}},
+                         {.groupId = HybridFlatMap::kDefaultGroupId,
+                          .groupKeys = {}}},
+                        HybridFlatMap::KeyPresenceMode::kBitmap,
+                    }}},
           },
           type,
           pool_.get()),
@@ -110,10 +119,12 @@ TEST_F(SerializerTest, validatesHybridFlatMapColumnConfiguration) {
               .hybridFlatMapColumns =
                   {{"features",
                     HybridFlatMap{
-                        .groups =
-                            {{.groupId = 0, .groupKeys = {"1"}},
-                             {.groupId = HybridFlatMap::kDefaultGroupId,
-                              .groupKeys = {}}}}}},
+                        ScalarKind::Int32,
+                        {{.groupId = 0, .groupKeys = {"1"}},
+                         {.groupId = HybridFlatMap::kDefaultGroupId,
+                          .groupKeys = {}}},
+                        HybridFlatMap::KeyPresenceMode::kBitmap,
+                    }}},
           },
           scalarType,
           pool_.get()),
@@ -126,10 +137,11 @@ TEST_F(SerializerTest, hybridFlatMapSerializesDefaultFeature) {
       .hybridFlatMapColumns =
           {{"features",
             HybridFlatMap{
-                .groups =
-                    {{.groupId = 0, .groupKeys = {"1"}},
-                     {.groupId = HybridFlatMap::kDefaultGroupId,
-                      .groupKeys = {}}}}}},
+                ScalarKind::Int32,
+                {{.groupId = 0, .groupKeys = {"1"}},
+                 {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}}},
+                HybridFlatMap::KeyPresenceMode::kBitmap,
+            }}},
   };
 
   Serializer serializer{options, mapRowType(), pool_.get()};
@@ -138,6 +150,47 @@ TEST_F(SerializerTest, hybridFlatMapSerializesDefaultFeature) {
       {vectorMaker_->mapVector<int32_t, double>({{{1, 1.0}, {99, 99.0}}})});
   EXPECT_NO_THROW(
       serializer.serialize(input, OrderedRanges::of(0, input->size())));
+}
+
+TEST_F(SerializerTest, hybridFlatMapGroupKeysLayout) {
+  // Returns the encoding of the integer keys in the schema of `options`, or
+  // nullopt when the schema writes them as strings.
+  const auto groupKeysEncoding =
+      [&](const SerializerOptions& options) -> std::optional<EncodingType> {
+    Serializer serializer{options, mapRowType(), pool_.get()};
+    const auto nodes = serializer.schemaBuilder().schemaNodes();
+    const auto& serialized = nodes[1].attributes().at(0).second;
+    const auto* encoded =
+        flatbuffers::GetRoot<serialization::HybridFlatMap>(serialized.data())
+            ->encoded_group_keys();
+    if (encoded == nullptr) {
+      return std::nullopt;
+    }
+    return EncodingPrefix::encodingType(
+        {reinterpret_cast<const char*>(encoded->data()), encoded->size()});
+  };
+  SerializerOptions options{
+      .version = SerializationVersion::kSerialization,
+      .hybridFlatMapColumns =
+          {{"features",
+            HybridFlatMap{
+                ScalarKind::Int32,
+                {{.groupId = 0, .groupKeys = {"1", "2", "3"}},
+                 {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}}},
+                HybridFlatMap::KeyPresenceMode::kKeyList,
+            }}},
+  };
+  EXPECT_EQ(groupKeysEncoding(options), std::nullopt);
+
+  for (const auto encodingType :
+       {EncodingType::FixedBitWidth,
+        EncodingType::Varint,
+        EncodingType::EliasFano}) {
+    SCOPED_TRACE(toString(encodingType));
+    options.hybridFlatMapGroupKeysLayout.emplace(
+        encodingType, EncodingLayout::Config{}, CompressionType::Uncompressed);
+    EXPECT_EQ(groupKeysEncoding(options), encodingType);
+  }
 }
 
 } // namespace

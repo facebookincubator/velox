@@ -31,7 +31,6 @@
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
@@ -144,16 +143,11 @@ TYPED_TEST(PFOREncodingTest, readerFactoriesDecodeExistingData) {
   const auto encoded =
       EncodingFactory::encode<T>(this->createSelectionPolicy(), values, buffer);
 
-  for (const auto useLegacyReader : {false, true}) {
-    SCOPED_TRACE(fmt::format("legacy={}", useLegacyReader));
-    std::unique_ptr<Encoding> encoding = useLegacyReader
-        ? legacy::EncodingFactory{}.create(*this->pool_, encoded, nullptr)
-        : EncodingFactory{}.create(*this->pool_, encoded, nullptr);
-    std::vector<T> decoded(values.size());
-    encoding->materialize(
-        static_cast<uint32_t>(decoded.size()), decoded.data());
-    EXPECT_THAT(decoded, testing::ElementsAreArray(values));
-  }
+  std::unique_ptr<Encoding> encoding =
+      EncodingFactory{}.create(*this->pool_, encoded, nullptr);
+  std::vector<T> decoded(values.size());
+  encoding->materialize(static_cast<uint32_t>(decoded.size()), decoded.data());
+  EXPECT_THAT(decoded, testing::ElementsAreArray(values));
 }
 
 TYPED_TEST(PFOREncodingTest, allSameValues) {

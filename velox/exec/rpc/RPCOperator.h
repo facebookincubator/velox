@@ -121,61 +121,6 @@ class RPCOperator : public exec::Operator {
   /// mutex-protected snapshots reached through liveStatsSources_.
   exec::OperatorStats stats(bool clear) override;
 
-  /// Runtime stat names.
-  static inline const std::string kRpcRequestsDispatched{
-      "rpcRequestsDispatched"};
-  static inline const std::string kRpcResponsesReceived{"rpcResponsesReceived"};
-  static inline const std::string kRpcErrorCount{"rpcErrorCount"};
-  static inline const std::string kRpcWaitWallNanos{"rpcWaitWallNanos"};
-  static inline const std::string kRpcBackpressureWaitNanos{
-      "rpcBackpressureWaitNanos"};
-  static inline const std::string kRpcCongestionWindowFinal{
-      "rpcCongestionWindowFinal"};
-  static inline const std::string kRpcCongestionShrinks{"rpcCongestionShrinks"};
-  static inline const std::string kRpcCongestionOverloadShrinks{
-      "rpcCongestionOverloadShrinks"};
-  static inline const std::string kRpcBaselineRttNanos{"rpcBaselineRttNanos"};
-  static inline const std::string kRpcPeakInFlight{"rpcPeakInFlight"};
-  static inline const std::string kRpcRttMinWallNanos{"rpcRttMinWallNanos"};
-  static inline const std::string kRpcRttMaxWallNanos{"rpcRttMaxWallNanos"};
-  static inline const std::string kRpcRttCount{"rpcRttCount"};
-  static inline const std::string kRpcStreamingMode{"rpcStreamingMode"};
-  static inline const std::string kRpcErrorKindRateLimited{
-      "rpcErrorKindRateLimited"};
-  static inline const std::string kRpcErrorKindTimeout{"rpcErrorKindTimeout"};
-  static inline const std::string kRpcErrorKindBackendError{
-      "rpcErrorKindBackendError"};
-  static inline const std::string kRpcErrorKindInvalidRequest{
-      "rpcErrorKindInvalidRequest"};
-  static inline const std::string kRpcErrorKindInternal{"rpcErrorKindInternal"};
-  // Shared rate-limiter stats, refreshed on every stats() call.
-  static inline const std::string kRpcRateLimiterCap{"rpcRateLimiterCap"};
-  static inline const std::string kRpcRateLimiterHardLimit{
-      "rpcRateLimiterHardLimit"};
-  static inline const std::string kRpcRateLimiterPeakPending{
-      "rpcRateLimiterPeakPending"};
-  static inline const std::string kRpcRateLimiterMinCap{"rpcRateLimiterMinCap"};
-  static inline const std::string kRpcRateLimiterLimitMilli{
-      "rpcRateLimiterLimitMilli"};
-  static inline const std::string kRpcRateLimiterMinLimitMilli{
-      "rpcRateLimiterMinLimitMilli"};
-  static inline const std::string kRpcRateLimiterServiceHorizonNanos{
-      "rpcRateLimiterServiceHorizonNanos"};
-
-  /// Live liveness stats, refreshed on every stats() call rather than only at
-  /// close(). Units dispatched but not yet completed.
-  static inline const std::string kRpcInFlight{"rpcInFlight"};
-  /// Monotonic count of completions signaled by the transport. Advances from
-  /// the RPC executor threads, so it moves even while the driver is blocked.
-  static inline const std::string kRpcCompletionsSignaled{
-      "rpcCompletionsSignaled"};
-  /// Monotonic count of retry attempts the function's transports have
-  /// scheduled. A retry is neither a dispatch nor a completion, so a request
-  /// climbing a doubling backoff schedule leaves both counters above frozen
-  /// for as long as the ladder runs. Advances from the transport executor
-  /// threads, so it moves even while the driver is blocked.
-  static inline const std::string kRpcRetriesAttempted{"rpcRetriesAttempted"};
-
   /// Null once close() has run.
   const std::shared_ptr<RPCState>& testingState() const {
     return state_;
@@ -248,9 +193,14 @@ class RPCOperator : public exec::Operator {
   // the name lookups per batch.
   void initOutputProjections();
 
-  // Binds the shared limiter after the function has resolved any
-  // input-dependent transport setup. Subsequent inputs must keep the same key.
+  // Binds the limiter for this operator's policy after the function has
+  // resolved any input-dependent transport setup. Subsequent inputs must keep
+  // the same key.
   void initializeRateLimiter();
+
+  // Reserves up to 'want' admission units. The first call records the limiter
+  // snapshot that the span stats are measured from.
+  std::vector<RPCRateLimiter::Token> tryAcquireAdmission(int64_t want);
 
   // Resolves an input whose selected rows all complete synchronously without a
   // backend. The function's preparation result guarantees the futures are
@@ -278,7 +228,10 @@ class RPCOperator : public exec::Operator {
   // window and the shared admission cap. They must back off together: a
   // rate-limit storm is low-latency, so the latency gradient alone is blind to
   // it and only the error verdict makes the window shrink.
-  void recordCongestion(
+  //
+  // Returns the units in 'successUnitsByEpoch' that the shared limiter
+  // discarded because an overload arrived after their admission.
+  int64_t recordCongestion(
       AsyncRPCFunction::CongestionSignal signal,
       const std::vector<int64_t>& roundTripTimesNs,
       const std::vector<std::pair<uint64_t, int64_t>>& successUnitsByEpoch,
@@ -320,6 +273,11 @@ class RPCOperator : public exec::Operator {
   // whole input vector is dripped at the sustainable rate instead of blasted.
   void dispatchRowsUnderAdmission();
 
+  // Applies the window feedback of rejected attempts, then dispatches the
+  // retries that are due, ahead of new rows. Each retry takes a window slot
+  // and a fresh admission slot.
+  void dispatchDueRetries();
+
   // Whether the PER_ROW dispatch buffer still has undispatched rows.
   bool hasPendingRows() const {
     return pendingCursor_ < pendingNumRows_;
@@ -343,11 +301,17 @@ class RPCOperator : public exec::Operator {
   // state_ and function_), and racing on the pointers themselves is undefined
   // behaviour. Holding the read lock across the sample also keeps close() from
   // freeing RPCState or the function underneath an in-progress read. Off every
-  // hot path: written twice per operator, read once per stats sample.
+  // hot path: written a few times per operator, read once per stats sample.
   struct LiveStatsSources {
     std::shared_ptr<RPCState> state;
     RPCRateLimiter* limiter{nullptr};
+    // The limiter's stats at this driver's first admission request. The span
+    // stats are reported as the change since then.
+    std::optional<RPCRateLimiter::Stats> limiterBaseline{};
     std::shared_ptr<AsyncRPCFunction> function;
+    // True when 'limiter' is the controller for this operator's policy rather
+    // than the backend's shared one.
+    bool policyScoped{false};
   };
   folly::Synchronized<LiveStatsSources> liveStatsSources_;
 
@@ -356,12 +320,26 @@ class RPCOperator : public exec::Operator {
   std::shared_ptr<AsyncRPCFunction> function_;
   bool requiresRowInspectionBeforeAdmission_{true};
 
-  // Operators with the same admission key share rate-limiter capacity.
+  // Operators with the same admission key and rate-limiter policy share
+  // rate-limiter capacity.
   std::string admissionKey_;
 
-  // Process-scoped controller for admissionKey_, resolved before the first
-  // dispatch; outlives this operator.
+  // Process-scoped controller for admissionKey_ and this operator's resolved
+  // rate-limiter policy. Resolved before the first dispatch; outlives this
+  // operator.
   RPCRateLimiter* limiter_{nullptr};
+  // PER_ROW and AsyncRPCFunction::mayReturnCapacityRetries().
+  bool capacityRetryEnabled_{false};
+  // Policy rpc.flow_control_policy names, reported even when not eligible.
+  RPCFlowControlPolicy requestedFlowControlPolicy_{
+      RPCFlowControlPolicy::kWindowAimd};
+  // True when CAPACITY_PROBING is requested for adaptive PER_ROW execution of a
+  // function that may return capacity retries. Any other request runs exactly
+  // as WINDOW_AIMD.
+  bool capacityProbingEnabled_{false};
+
+  // Set by the first tryAcquireAdmission() call.
+  bool admissionRequested_{false};
 
   // Precomputed per-argument sources, in call()->inputs() order. Built once in
   // initialize() by walking the RPC call's argument expressions. A
@@ -390,6 +368,9 @@ class RPCOperator : public exec::Operator {
   // stats collector thread, hence atomic. Relaxed ordering is enough: these
   // are independent counters, not a handshake.
   std::atomic<int64_t> numRequestsDispatched_{0};
+  // Success units the shared limiter discarded as stale; see
+  // RPCOperatorStatNames::kRpcStaleSuccessUnits.
+  std::atomic<int64_t> numStaleSuccessUnits_{0};
   int64_t numResponsesReceived_{0};
   int64_t numErrors_{0};
   // Per-error-kind breakdown of numErrors_, populated by recordErrorKind().
@@ -435,11 +416,6 @@ class RPCOperator : public exec::Operator {
 
   // Whether we've detected the finish condition.
   bool finished_{false};
-
-  // Ceiling for batch RPC calls; the operator returns as soon as results are
-  // ready. An offline batch job can take many minutes in backend queueing and
-  // scheduling, so this needs generous headroom.
-  static constexpr auto kBatchRpcTimeout = std::chrono::milliseconds(3'600'000);
 
   // Block wait time tracking for runtime stats. Started when the operator
   // parks and reset when the wait ends.

@@ -152,7 +152,7 @@ void Unnest::addInput(RowVectorPtr input) {
 }
 
 void Unnest::maybeFinishDrain() {
-  if (FOLLY_UNLIKELY(isDraining())) {
+  if (isDraining()) [[unlikely]] {
     finishDrain();
   }
 }
@@ -264,7 +264,7 @@ void Unnest::generateRepeatedColumns(
   if (generateMarker) {
     range.forEachRow(
         [&](vector_size_t row, vector_size_t /*start*/, vector_size_t size) {
-          if (FOLLY_UNLIKELY(size == 0)) {
+          if (size == 0) [[unlikely]] {
             rawRepeatedIndices[index++] = row;
           } else {
             std::fill(
@@ -374,7 +374,7 @@ VectorPtr Unnest::generateOrdinalityVector(const RowRange& range) {
   } else {
     range.forEachRow(
         [&](vector_size_t /*row*/, vector_size_t start, vector_size_t size) {
-          if (FOLLY_LIKELY(size > 0)) {
+          if (size > 0) [[likely]] {
             std::iota(rawOrdinality, rawOrdinality + size, start + 1);
             rawOrdinality += size;
           } else {

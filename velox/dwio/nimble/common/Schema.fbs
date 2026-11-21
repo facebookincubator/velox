@@ -1,0 +1,136 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+namespace facebook.nimble.serialization;
+
+enum Kind:uint8 {
+  Int8 = 0,
+  UInt8,
+  Int16,
+  UInt16,
+  Int32,
+  UInt32,
+  Int64,
+  UInt64,
+  Float,
+  Double,
+  Bool,
+  String,
+  Binary,
+  TimestampMicroNano,
+  Row = 50,
+  Array,
+  Map,
+  ArrayWithOffsets,
+  SlidingWindowMap,
+  FlatMapInt8 = 100,
+  FlatMapUInt8,
+  FlatMapInt16,
+  FlatMapUInt16,
+  FlatMapInt32,
+  FlatMapUInt32,
+  FlatMapInt64,
+  FlatMapUInt64,
+  FlatMapFloat,
+  FlatMapDouble,
+  FlatMapBool,
+  FlatMapString,
+  FlatMapBinary,
+  HybridFlatMapInt8 = 150,
+  HybridFlatMapUInt8,
+  HybridFlatMapInt16,
+  HybridFlatMapUInt16,
+  HybridFlatMapInt32,
+  HybridFlatMapUInt32,
+  HybridFlatMapInt64,
+  HybridFlatMapUInt64,
+  HybridFlatMapFloat,
+  HybridFlatMapDouble,
+  HybridFlatMapBool,
+  HybridFlatMapString,
+  HybridFlatMapBinary,
+}
+
+// A generic string-keyed attribute pair attached to a schema node.
+// Carries cross-format per-column metadata.
+// TODO: Rename to `Attribute` with `name` and `value` fields.
+table StringPair {
+  key:string;
+  value:string;
+}
+
+/// How a Hybrid FlatMap batch records the keys of its Default group.
+enum HybridFlatMapKeyPresenceMode:uint8 {
+  /// A bitmap over Default's schema keys, which grow in first-seen order.
+  Bitmap = 0,
+  /// A typed list of the batch's Default keys; Default lists no schema keys.
+  KeyList,
+}
+
+/// Typed Hybrid FlatMap metadata. Physical stream descriptors and value types
+/// are represented by the group's child schema nodes, following FlatMap. The
+/// parallel ID and count vectors describe consecutive slices of the keys, in
+/// group_keys or encoded_group_keys. Each group's key order defines its
+/// key-presence bitmap.
+table HybridFlatMap {
+  group_ids:[uint32];
+  group_key_counts:[uint32];
+  /// The keys of every group in group order, as strings, unless writers encode
+  /// them in encoded_group_keys. Writers sort an explicit group's String keys
+  /// as strings and its integer keys by value, but older writers sorted integer
+  /// keys as strings, e.g. "10" before "9", so readers take the keys in the
+  /// order recorded.
+  group_keys:[string];
+  /// How batches record Default keys. With Bitmap, Default starts empty and
+  /// appends keys in first-seen order while writing; with KeyList, Default
+  /// lists no keys and each batch lists its own. Always written: readers
+  /// reject metadata without it.
+  default_group_key_presence_mode:HybridFlatMapKeyPresenceMode;
+  /// The keys of each group, for maps whose writer names an encoding for them:
+  /// one Nimble-encoded stream of the keys' type per group with keys, e.g. an
+  /// Int32 stream for Int32 keys and a String stream for String keys,
+  /// concatenated in group order, so a projection copies the streams of the
+  /// groups it keeps. Each group's keys ascend, by value for integer keys and
+  /// as strings for String keys, their key-presence bitmap order, except a
+  /// bitmap Default's, which stay in recorded order.
+  /// For example, groups {"9", "10"} and {"3"} are a stream of 9 then 10 and a
+  /// stream of 3. Each stream's encoding prefix names its encoding, and the
+  /// row count in that prefix is a varint. Streams are never compressed.
+  /// Omitted when no group has keys. A writer sets at most one of group_keys
+  /// and encoded_group_keys.
+  encoded_group_keys:[ubyte];
+  /// The size in bytes of each group's stream in encoded_group_keys, parallel
+  /// to group_ids, so group `i`'s stream follows the streams of the preceding
+  /// groups. A group without keys has size 0. Set exactly when
+  /// encoded_group_keys is.
+  encoded_group_key_sizes:[uint32];
+}
+
+table SchemaNode {
+  kind:Kind;
+  children:uint32;
+  name:string;
+  offset:uint32;
+  // Per-node string-keyed attribute bag. Appended at the end of the
+  // table for backward wire compatibility: older readers ignore unknown
+  // flatbuffer fields and existing files have no `attributes` set.
+  attributes:[StringPair];
+}
+
+table Schema {
+  nodes:[SchemaNode];
+}
+
+root_type Schema;

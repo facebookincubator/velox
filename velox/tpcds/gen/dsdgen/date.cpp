@@ -195,7 +195,6 @@ int strtodt(date_t* dest, const char* s) {
 int date_init(void) {
   printf("date_init is not yet complete\n");
   exit(1);
-  return (0);
 }
 
 /*

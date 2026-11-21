@@ -25,12 +25,15 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <sstream>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
 #include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAFunctions.h>
 #include <cuda_runtime.h> // @manual
+#include <fmt/format.h>
 #include <folly/compression/Compression.h>
 #include <glog/logging.h>
 #include <torch/csrc/export/pt2_archive_constants.h>
@@ -53,6 +56,14 @@ DEFINE_bool(
     false,
     "Time each eager standalone separately by syncing the torch stream after every one. That sync is what makes per-op numbers possible and is also the largest perturbation: it serializes the standalones against each other and against the wave stream, so per-step device times and GPU idle stop reflecting an untraced run");
 DEFINE_int32(num_repeats, 1, "Number of timed repetitions for each run type");
+DEFINE_string(
+    batch_inputs,
+    "",
+    "Comma-separated <name>_inputs.pt files, each a flat input list like the "
+    "model's own <base>_inputs.pt. After the model's own inputs, each is run "
+    "through the same compiled graph: once checked against <name>_results.pt "
+    "if that file exists, then --num_repeats timed runs. Measures a dynamic "
+    "graph over many batches without compiling it once per batch.");
 DEFINE_bool(
     standalone_kernels,
     false,
@@ -152,6 +163,62 @@ DEFINE_bool(
     auto_adjust_cost,
     true,
     "Adjust per-op cost multipliers after each execution based on actual thread block clocks. Defaults to WaveConfig's own default, which this flag assigns unconditionally: a different default here would silently override the engine's");
+DEFINE_bool(
+    cost_counts_barrier_wait,
+    true,
+    "With --auto_adjust_cost, count the time blocks wait at grid barriers as part of an op's cost");
+DEFINE_bool(
+    concat_result_slots,
+    true,
+    "Give a concat result the slot its lifetime group plans for it instead of a separate allocation");
+DEFINE_bool(
+    group_unreleased_values,
+    true,
+    "Group values that are never released with the others produced at the same point");
+DEFINE_bool(
+    group_viewed_values,
+    true,
+    "Group a value whose own node takes a table-derived view of it");
+DEFINE_bool(
+    group_arena,
+    true,
+    "Carve lifetime groups out of one persistent buffer laid out from the previous execution");
+DEFINE_bool(
+    device_symbols,
+    true,
+    "Run steps that would wait for a returned integer on a capacity, with device-side dim fixups");
+DEFINE_bool(
+    check_grid_descriptor,
+    false,
+    "Check at every grid that the step's grid descriptor gives each launch the element count the host sized it for");
+DEFINE_bool(
+    grid_equal_finish,
+    false,
+    "Give each launch blocks so that all launches of a step complete at the same time");
+DEFINE_bool(
+    device_grid,
+    false,
+    "Compute each step's grid on the device from the counts the device holds");
+DEFINE_bool(
+    setup_stream,
+    false,
+    "Run device-grid steps' parameter copies and setup kernels on a second stream");
+DEFINE_bool(
+    check_size_exprs,
+    false,
+    "Check that symbolic shapes give the dims the host sizes tensor parameters with");
+DEFINE_bool(
+    size_exprs_from_inputs,
+    false,
+    "With --check_size_exprs, derive shapes from graph-input dims as symbols");
+DEFINE_bool(
+    sym_shape_report,
+    false,
+    "Print how many tensor values have static, export-symbolic or no known shapes");
+DEFINE_int64(
+    group_arena_max_bytes,
+    16 << 20,
+    "Groups of at least this many bytes are allocated on their own, outside the group arena");
 
 DEFINE_bool(
     uniform_cost,
@@ -183,6 +250,34 @@ DEFINE_bool(
     true,
     "Merge copies into the columns of one tensor into a single copy of the stacked sources");
 DEFINE_bool(
+    reinplace_scatters,
+    true,
+    "Write functional select_scatter / slice_scatter chains in place");
+DEFINE_bool(
+    disjoint_write_ordering,
+    true,
+    "Leave in-place writes into provably disjoint regions unordered");
+DEFINE_bool(
+    static_leaf_index,
+    true,
+    "Read elementwise operands whose shapes the graph fixes at literal-divisor indices");
+DEFINE_bool(
+    constant_sizes,
+    true,
+    "Compute sizing calls whose operand shapes the graph fixes once, at bind");
+DEFINE_bool(
+    verify_static_sizes,
+    false,
+    "With --constant_sizes, also run those sizing calls and fail on a difference");
+DEFINE_bool(
+    fuse_through_views,
+    true,
+    "Compute the elementwise producer of a reshaping view inline in the view's consumer");
+DEFINE_bool(
+    fuse_row_reductions,
+    true,
+    "Evaluate the elementwise input of a row reduction in its row loop");
+DEFINE_bool(
     free_intermediates,
     true,
     "Release each ProjectNode's last-use value tensors right after its composite invocation executes, instead of at end-of-graph");
@@ -203,9 +298,29 @@ DEFINE_bool(
     true,
     "Drop the host stream waits that are not a real data or memory dependency (the per-node default-stream drain), so the host can queue steps arbitrarily far ahead of the device");
 DEFINE_bool(
+    pack_inputs,
+    false,
+    "Rewrite each packed input (a user input split into one view per feature) of the wave graph, and encode it for each run, each feature at its narrowest width");
+DEFINE_int32(
+    pack_threads,
+    1,
+    "With --pack_inputs, threads that encode a packed input");
+DEFINE_bool(
+    pack_windows,
+    true,
+    "With --pack_inputs, let the registered pack rewrites move row trimming (length guards, truncations) into the host encoding");
+DEFINE_bool(
+    pack_absorb_getter,
+    false,
+    "With --pack_inputs, let gathers read a packed slot in place instead of its tw.unpack_slot copy");
+DEFINE_bool(
     completion_counters,
     false,
     "Check step completion through host-mapped counters the streams write, instead of cudaEventQuery");
+DEFINE_bool(
+    verify_repeats,
+    false,
+    "Check the outputs of every timed repeat against the expected values, not only the first run's");
 DEFINE_bool(
     skip_repeated_waits,
     true,
@@ -214,14 +329,6 @@ DEFINE_int64(
     max_delayed_free,
     1LL << 30,
     "Ceiling in bytes on freeable memory sitting in already-issued but incomplete steps; exceeding it drains both streams before the next allocation. 0 disables");
-DEFINE_bool(
-    donate_buffers,
-    false,
-    "Hold a released wave-kernel buffer and hand it to a later wave kernel needing exactly the same byte size, instead of returning it to the caching allocator");
-DEFINE_int64(
-    donation_carry_bytes,
-    64LL << 20,
-    "Bytes of donatable buffers carried between executions; the pool is trimmed to this at the end of each run");
 DEFINE_bool(
     duplicate_metadata,
     false,
@@ -262,6 +369,15 @@ DEFINE_bool(
     concat_operands_in_place,
     true,
     "Leave a concat operand whose producer can write its band to be fused into the concat's own kernel, instead of pushing it into its own kernel a step earlier and copying it in");
+DEFINE_string(
+    prefer_per_sm,
+    "",
+    "Preferred blocks per SM for individual kernel ops, as a comma-separated "
+    "list of <opcode>=<blocks>, e.g. \"30=1,300=3\". A trailing comma is "
+    "allowed and empty entries are skipped. An op with a preference is packed "
+    "only with ops that share it, and its launch is capped at numSMs times the "
+    "preference. Opcodes are the op numbers the --trace=16 legend prints");
+
 DEFINE_bool(
     fold_shared_chains,
     true,
@@ -270,18 +386,6 @@ DEFINE_bool(
     mk_select,
     false,
     "In cg mode, expand tw.masked_select_jagged into its multi-kernel stages so the output list is sized to the exact selected count instead of the mask length");
-DEFINE_bool(
-    enable_alloc_group,
-    true,
-    "Allocate the outputs that share a lifetime out of one buffer instead of one allocator call each. Cooperative grid only, where the step boundaries a lifetime is expressed in are fixed before the first execution");
-DEFINE_bool(
-    enable_concat_alloc_group,
-    true,
-    "Give a fused cat/stack of more than two operands an allocation group of its own: the result is allocated at the step that produces the operands and each operand writes straight into the region it occupies, so the concat copies nothing");
-DEFINE_bool(
-    enable_lifetime_alloc_group,
-    true,
-    "With --enable_alloc_group, also group the outputs that merely share a lifetime. Off leaves only the concat groups, which isolates what the concat grouping costs and saves on its own");
 DEFINE_bool(
     order_blocks_by_cost,
     false,
@@ -499,6 +603,20 @@ std::string decompressGzToTemp(const std::string& gzPath) {
   return tmp;
 }
 
+// Reads a torch.save'd input list and flattens it into graph user inputs.
+std::vector<c10::IValue> loadFlatInputs(const std::string& path) {
+  auto ivalue = pickleLoadWithTypes(readFile(path));
+  std::vector<c10::IValue> inputs;
+  if (ivalue.isList()) {
+    for (const auto& item : ivalue.toListRef()) {
+      flattenIValue(item, inputs);
+    }
+  } else {
+    flattenIValue(ivalue, inputs);
+  }
+  return inputs;
+}
+
 } // namespace
 
 std::vector<c10::IValue> loadReferenceValues(const std::string& path) {
@@ -707,10 +825,84 @@ std::unique_ptr<ModelContext> ModelFixture::makeModelContext() {
   ctx->graph = std::move(model.graph);
   ctx->weights = weights;
   ctx->config = config;
+  ctx->symShapes = std::make_shared<SymShapes>(model.symShapes);
   return ctx;
 }
 
 // --- ExecutorTestBase ---
+
+namespace {
+
+// Parses --prefer_per_sm: a comma-separated list of <opcode>=<blocks>. A
+// trailing comma and empty entries are tolerated so a list can be built up by
+// appending. Throws on anything else rather than silently ignoring it -- a
+// typo here is a measurement that quietly did not happen.
+std::unordered_map<int32_t, int32_t> parsePreferPerSm(const std::string& spec) {
+  std::unordered_map<int32_t, int32_t> result;
+  size_t pos = 0;
+  while (pos < spec.size()) {
+    const size_t comma = spec.find(',', pos);
+    const std::string entry =
+        spec.substr(pos, comma == std::string::npos ? comma : comma - pos);
+    pos = comma == std::string::npos ? spec.size() : comma + 1;
+    if (entry.empty()) {
+      continue;
+    }
+    const size_t eq = entry.find('=');
+    TORCH_CHECK(
+        eq != std::string::npos && eq > 0 && eq + 1 < entry.size(),
+        "--prefer_per_sm entry '",
+        entry,
+        "' is not <opcode>=<blocks>");
+    const int32_t opCode = std::stoi(entry.substr(0, eq));
+    const int32_t blocks = std::stoi(entry.substr(eq + 1));
+    TORCH_CHECK(
+        blocks > 0,
+        "--prefer_per_sm entry '",
+        entry,
+        "' asks for ",
+        blocks,
+        " blocks per SM; the value is a width, and 0 means unspecified, so it "
+        "must be at least 1");
+    result[opCode] = blocks;
+  }
+  return result;
+}
+
+} // namespace
+
+namespace {
+
+std::optional<bool> cgFromFlags() {
+  return FLAGS_cg >= 0 ? std::optional<bool>(FLAGS_cg != 0) : std::nullopt;
+}
+
+std::optional<bool> singleBlockFromFlags() {
+  return FLAGS_single_block >= 0 ? std::optional<bool>(FLAGS_single_block != 0)
+                                 : std::nullopt;
+}
+
+} // namespace
+
+ScopedPlanMode::ScopedPlanMode()
+    : savedCg_{WaveConfig::get().isCg},
+      savedSingleBlock_{WaveConfig::get().useSingleBlock} {
+  if (savedCg_ == cgFromFlags() &&
+      savedSingleBlock_ == singleBlockFromFlags()) {
+    WaveConfig::get().isCg = std::nullopt;
+    WaveConfig::get().useSingleBlock = std::nullopt;
+  }
+}
+
+ScopedPlanMode::~ScopedPlanMode() {
+  WaveConfig::get().isCg = savedCg_;
+  WaveConfig::get().useSingleBlock = savedSingleBlock_;
+}
+
+void ExecutorTestBase::SetUp() {
+  WaveConfig::get().useSingleBlock = singleBlockFromFlags();
+  WaveConfig::get().isCg = cgFromFlags();
+}
 
 void ExecutorTestBase::SetUpTestSuite() {
   // Diagnostic: print device properties and test basic CUDA ops.
@@ -743,12 +935,6 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().allStandalone = FLAGS_standalone_kernels;
   WaveConfig::get().blockSize = FLAGS_block_dim;
   WaveConfig::get().trace = FLAGS_trace;
-  if (FLAGS_single_block >= 0) {
-    WaveConfig::get().useSingleBlock = FLAGS_single_block != 0;
-  }
-  if (FLAGS_cg >= 0) {
-    WaveConfig::get().isCg = FLAGS_cg != 0;
-  }
   WaveConfig::get().kernelCacheDir = FLAGS_kernel_cache_dir;
   WaveConfig::get().maxElementwiseVars = FLAGS_max_elementwise_vars;
   WaveConfig::get().outOfLineExprSize = FLAGS_out_of_line_expr_size;
@@ -762,6 +948,19 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().kernelLineInfo = FLAGS_kernel_line_info;
   WaveConfig::get().debugSingleOps = FLAGS_debug_single_ops;
   WaveConfig::get().autoAdjustCost = FLAGS_auto_adjust_cost;
+  WaveConfig::get().costCountsBarrierWait = FLAGS_cost_counts_barrier_wait;
+  WaveConfig::get().concatResultSlots = FLAGS_concat_result_slots;
+  WaveConfig::get().groupUnreleasedValues = FLAGS_group_unreleased_values;
+  WaveConfig::get().groupViewedValues = FLAGS_group_viewed_values;
+  WaveConfig::get().groupArena = FLAGS_group_arena;
+  WaveConfig::get().groupArenaMaxBytes = FLAGS_group_arena_max_bytes;
+  WaveConfig::get().deviceSymbols = FLAGS_device_symbols;
+  WaveConfig::get().checkGridDescriptor = FLAGS_check_grid_descriptor;
+  WaveConfig::get().gridEqualFinish = FLAGS_grid_equal_finish;
+  WaveConfig::get().deviceGrid = FLAGS_device_grid;
+  WaveConfig::get().setupStream = FLAGS_setup_stream;
+  WaveConfig::get().checkSizeExprs = FLAGS_check_size_exprs;
+  WaveConfig::get().sizeExprsFromInputs = FLAGS_size_exprs_from_inputs;
   WaveConfig::get().uniformCost = FLAGS_uniform_cost;
   WaveConfig::get().launchPerOp = FLAGS_launch_per_op;
   WaveConfig::get().dedupProjectOps = FLAGS_dedup_project_ops;
@@ -769,6 +968,13 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().enableReuse = FLAGS_enable_reuse;
   WaveConfig::get().elideClones = FLAGS_elide_clones;
   WaveConfig::get().recognizeDisjointCopies = FLAGS_recognize_disjoint_copies;
+  WaveConfig::get().reinplaceScatters = FLAGS_reinplace_scatters;
+  WaveConfig::get().disjointWriteOrdering = FLAGS_disjoint_write_ordering;
+  WaveConfig::get().staticLeafIndex = FLAGS_static_leaf_index;
+  WaveConfig::get().constantSizes = FLAGS_constant_sizes;
+  WaveConfig::get().verifyStaticSizes = FLAGS_verify_static_sizes;
+  WaveConfig::get().fuseThroughViews = FLAGS_fuse_through_views;
+  WaveConfig::get().fuseRowReductions = FLAGS_fuse_row_reductions;
   WaveConfig::get().freeIntermediates = FLAGS_free_intermediates;
   WaveConfig::get().stepLastUse = FLAGS_step_last_use;
   WaveConfig::get().syncEachStep = FLAGS_sync_each_step;
@@ -780,20 +986,17 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().duplicateMetadata = FLAGS_duplicate_metadata;
   WaveConfig::get().configPerOp = FLAGS_config_per_op;
   WaveConfig::get().deferSizeOutputs = FLAGS_defer_size_outputs;
-  WaveConfig::get().donateBuffers = FLAGS_donate_buffers;
-  WaveConfig::get().donationCarryBytes = FLAGS_donation_carry_bytes;
   WaveConfig::get().inputContiguous = FLAGS_input_contiguous;
   WaveConfig::get().cseCompute = FLAGS_cse_compute;
   WaveConfig::get().cseViews = FLAGS_cse_views;
   WaveConfig::get().decomposeLists = FLAGS_decompose_lists;
+  WaveConfig::get().packWindows = FLAGS_pack_windows;
+  WaveConfig::get().packAbsorbGetter = FLAGS_pack_absorb_getter;
   WaveConfig::get().metadataGetterStandalone = FLAGS_metadata_getter_standalone;
   WaveConfig::get().concatOperandsInPlace = FLAGS_concat_operands_in_place;
   WaveConfig::get().foldSharedChains = FLAGS_fold_shared_chains;
+  WaveConfig::get().preferBlocksPerSm = parsePreferPerSm(FLAGS_prefer_per_sm);
   WaveConfig::get().mkSelect = FLAGS_mk_select;
-  WaveConfig::get().enableAllocGroup = FLAGS_enable_alloc_group;
-  WaveConfig::get().enableConcatAllocGroup = FLAGS_enable_concat_alloc_group;
-  WaveConfig::get().enableLifetimeAllocGroup =
-      FLAGS_enable_lifetime_alloc_group;
   WaveConfig::get().orderBlocksByCost = FLAGS_order_blocks_by_cost;
   WaveConfig::get().partitionLaunches = FLAGS_partition_launches;
   WaveConfig::get().maxLaunchWaves = FLAGS_max_launch_waves;
@@ -1059,6 +1262,15 @@ void ExecutorTestBase::fillWaveFrame(
   }
 }
 
+void ExecutorTestBase::refillWaveFrame(
+    WaveGraphExecutor& executor,
+    const nativert::Graph& graph,
+    nativert::ExecutionFrame& frame,
+    const std::vector<c10::IValue>& deviceInputs) {
+  executor.resetFrame(frame);
+  fillWaveFrame(graph, frame, deviceInputs);
+}
+
 RunTiming ExecutorTestBase::runWave(
     ModelFixture& fixture,
     const std::vector<c10::IValue>& expected,
@@ -1113,7 +1325,7 @@ RunTiming ExecutorTestBase::runWave(
 
   auto hostOutputs = outputsToHost(waveOutputs, "wave");
   verifyOutputs(hostOutputs, expected, "wave");
-  return {dataMovUs, waveUs, waveThreadInfo().debugInfo};
+  return {dataMovUs, waveUs, blockDebugInfos()};
 }
 
 std::string ExecutorTestBase::runWaveExpectError(
@@ -1163,12 +1375,21 @@ void ExecutorTestBase::runTest(
 
 ExecutorTestBase::ModePlans ExecutorTestBase::compilePlans(
     const std::string& pt2File) {
+  ScopedPlanMode openMode;
+  return compilePlansAsConfigured(pt2File);
+}
+
+ExecutorTestBase::ModePlans ExecutorTestBase::compilePlansAsConfigured(
+    const std::string& pt2File) {
   auto baseDir = dataDir();
   auto pt2Path =
       pt2File[0] == '/' ? pt2File : getDataFilePath(baseDir, pt2File);
   auto fixture = ModelFixture::load(pt2Path);
   TORCH_CHECK(fixture != nullptr, "compilePlans: failed to load ", pt2Path);
   setGraphDevice(fixture->model.graph.get(), true);
+  if (FLAGS_pack_inputs) {
+    rewritePackedInputs(*fixture->model.graph);
+  }
   // Constructing the executor compiles and places the graph, populating the
   // grids CompiledPlan reads. CompiledPlan::from copies out plain strings, so
   // the executor and its WaveGraph need not outlive this call.
@@ -1197,15 +1418,12 @@ AllocGroupStats ExecutorTestBase::allocGroupStats(
   auto& config = WaveConfig::get();
   const auto savedCg = config.isCg;
   const auto savedFree = config.freeIntermediates;
-  const auto savedGroup = config.enableAllocGroup;
-  auto restore = folly::makeGuard([&, savedCg, savedFree, savedGroup] {
+  auto restore = folly::makeGuard([&, savedCg, savedFree] {
     config.isCg = savedCg;
     config.freeIntermediates = savedFree;
-    config.enableAllocGroup = savedGroup;
   });
   config.isCg = cg;
   config.freeIntermediates = true;
-  config.enableAllocGroup = true;
 
   WaveGraphExecutor waveExec(fixture->makeModelContext());
   auto* wave = waveExec.waveGraph();
@@ -1278,6 +1496,10 @@ void ExecutorTestBase::runTestWithFixture(
   }
 
   // Wave.
+  packRecipes_.clear();
+  if (FLAGS_pack_inputs) {
+    packRecipes_ = rewritePackedInputs(*fixture->model.graph);
+  }
   WaveGraphExecutor waveExec(fixture->makeModelContext());
   auto& graph = waveExec.graph();
 
@@ -1285,8 +1507,16 @@ void ExecutorTestBase::runTestWithFixture(
     auto mode = static_cast<Listing>(FLAGS_list - 1);
     std::cout << waveExec.waveGraph()->toString(mode) << std::endl;
   }
+  if (FLAGS_sym_shape_report) {
+    std::cout << "Inferred "
+              << inferSymShapes(fixture->model.symShapes, *waveExec.waveGraph())
+              << " symbolic shapes\n";
+    std::cout << symShapeCoverage(
+        fixture->model.symShapes, *waveExec.waveGraph());
+  }
 
   auto inputs = loadSampleInputs(*fixture);
+  encodePackedInputsForWave(inputs, displayName);
   auto [deviceInputs, dataMovUs] = inputsToDevice(inputs);
 
   if (FLAGS_single_ops != 1) {
@@ -1315,22 +1545,28 @@ void ExecutorTestBase::runTestWithFixture(
     // Repeated runs: refill inputs and re-execute only.
     int64_t waveMin = INT64_MAX, waveMax = 0, waveSum = 0;
     std::vector<int64_t> waveTimes(repeats);
-    std::vector<std::vector<DebugInfo>> lastDebugInfo;
+    std::vector<std::vector<BlockDebugInfo>> lastDebugInfo;
     for (int i = 0; i < repeats; ++i) {
-      fillWaveFrame(graph, *pooledFrame, deviceInputs);
+      refillWaveFrame(waveExec, graph, *pooledFrame, deviceInputs);
 
       syncBeforeTiming();
       auto start = Clock::now();
-      waveExec.executeWithPrefilledFrame(*pooledFrame);
+      auto repeatOutputs = waveExec.executeWithPrefilledFrame(*pooledFrame);
       auto us = std::chrono::duration_cast<std::chrono::microseconds>(
                     Clock::now() - start)
                     .count();
+      if (FLAGS_verify_repeats) {
+        verifyOutputs(
+            outputsToHost(repeatOutputs, "wave repeat"),
+            expected,
+            "wave repeat");
+      }
       waveTimes[i] = us;
       waveMin = std::min(waveMin, us);
       waveMax = std::max(waveMax, us);
       waveSum += us;
       if (i == repeats - 1) {
-        lastDebugInfo = waveThreadInfo().debugInfo;
+        lastDebugInfo = blockDebugInfos();
       }
       if (WaveConfig::get().trace & WaveConfig::kTiming) {
         const auto& report = waveThreadInfo().perfReport;
@@ -1360,7 +1596,7 @@ void ExecutorTestBase::runTestWithFixture(
       };
       std::map<int32_t, OpStats> opMap;
       for (const auto& b : blocks) {
-        auto& s = opMap[b.op];
+        auto& s = opMap[b.info.op];
         s.count++;
         s.minClocks = std::min(s.minClocks, b.clocks);
         s.maxClocks = std::max(s.maxClocks, b.clocks);
@@ -1389,6 +1625,16 @@ void ExecutorTestBase::runTestWithFixture(
     if (FLAGS_standalone_timing) {
       standaloneReport(waveExec);
     }
+    if (!FLAGS_batch_inputs.empty()) {
+      // Each batch brings its own inputs. Unless the single-op run below still
+      // needs them, the sample's device copies would only add their size to
+      // every batch's peak.
+      if (FLAGS_single_ops == 0) {
+        deviceInputs.clear();
+        deviceInputs.shrink_to_fit();
+      }
+      runBatchInputs(waveExec, graph);
+    }
   }
 
   if (FLAGS_single_ops != 0) {
@@ -1397,15 +1643,7 @@ void ExecutorTestBase::runTestWithFixture(
     auto debugFrame = waveExec.getFrame();
     ASSERT_NE(debugFrame, nullptr);
     for (int run = 0; run < 2; ++run) {
-      // The frame is reused across runs; clear the prior run's intermediates so
-      // this run recomputes from the refilled inputs.  Otherwise stale outputs
-      // make standalone ops (including in-place mutations) look
-      // already-computed (see nodeOutputsComputed) and get skipped, yielding
-      // stale results.
-      if (run > 0) {
-        debugFrame->clearNonPersistentValues();
-      }
-      fillWaveFrame(graph, *debugFrame, deviceInputs);
+      refillWaveFrame(waveExec, graph, *debugFrame, deviceInputs);
       auto outputs = waveExec.executeWithPrefilledFrame(*debugFrame);
       if (run == 1) {
         auto hostOutputs = outputsToHost(outputs, debugLabel);
@@ -1423,21 +1661,148 @@ void ExecutorTestBase::runTestWithFixture(
   }
 }
 
+void ExecutorTestBase::runBatchInputs(
+    WaveGraphExecutor& executor,
+    const nativert::Graph& graph) {
+  constexpr std::string_view kInputsSuffix{"_inputs.pt"};
+  const int repeats = std::max(FLAGS_num_repeats, 1);
+  std::vector<std::string> paths;
+  std::stringstream list(FLAGS_batch_inputs);
+  for (std::string path; std::getline(list, path, ',');) {
+    if (!path.empty()) {
+      paths.push_back(path);
+    }
+  }
+  int64_t sumOfMedians{0};
+  for (const auto& path : paths) {
+    ASSERT_TRUE(path.ends_with(kInputsSuffix))
+        << "--batch_inputs entry must end in _inputs.pt: " << path;
+    auto inputs = loadFlatInputs(path);
+    encodePackedInputsForWave(inputs, path);
+    auto [deviceInputs, dataMovUs] = inputsToDevice(inputs);
+    const auto resultsPath =
+        path.substr(0, path.size() - kInputsSuffix.size()) + "_results.pt";
+    std::vector<c10::IValue> expected;
+    if (std::ifstream(resultsPath).good()) {
+      expected = loadReferenceValues(resultsPath);
+    }
+    auto frame = executor.getFrame();
+    ASSERT_NE(frame, nullptr);
+    std::vector<int64_t> times;
+    for (int i = 0; i <= repeats; ++i) {
+      if (i == 0) {
+        fillWaveFrame(graph, *frame, deviceInputs);
+      } else {
+        refillWaveFrame(executor, graph, *frame, deviceInputs);
+      }
+      syncBeforeTiming();
+      const auto start = Clock::now();
+      auto outputs = executor.executeWithPrefilledFrame(*frame);
+      const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                          Clock::now() - start)
+                          .count();
+      if (i == 0 || FLAGS_verify_repeats) {
+        verifyOutputs(outputsToHost(outputs, path), expected, path);
+      }
+      if (i > 0) {
+        times.push_back(us);
+      }
+    }
+    executor.returnFrame(std::move(frame));
+    std::sort(times.begin(), times.end());
+    const auto median = times[times.size() / 2];
+    sumOfMedians += median;
+    LOG(INFO) << "batch " << path << " wave (" << repeats
+              << " repeats): min=" << times.front() << " median=" << median
+              << " max=" << times.back() << " us"
+              << (expected.empty() ? " (unverified)" : "");
+  }
+  LOG(INFO) << "batch_inputs: " << paths.size()
+            << " batches, sum of medians=" << sumOfMedians << " us";
+}
+
+namespace {
+
+// Microseconds to copy 'host' to the device, the second of two copies so that
+// the first takes the allocation.
+int64_t hostToDeviceUs(const at::Tensor& host) {
+  int64_t us{0};
+  for (int i = 0; i < 2; ++i) {
+    c10::cuda::device_synchronize();
+    const auto start = Clock::now();
+    auto device = host.to(at::kCUDA, /*non_blocking=*/true);
+    c10::cuda::device_synchronize();
+    us = std::chrono::duration_cast<std::chrono::microseconds>(
+             Clock::now() - start)
+             .count();
+  }
+  return us;
+}
+
+double gigabytesPerSecond(int64_t bytes, int64_t us) {
+  return us > 0 ? static_cast<double>(bytes) / static_cast<double>(us) / 1e3
+                : 0;
+}
+
+} // namespace
+
+void ExecutorTestBase::encodePackedInputsForWave(
+    std::vector<c10::IValue>& inputs,
+    std::string_view label) {
+  if (packRecipes_.empty()) {
+    return;
+  }
+  std::vector<at::Tensor> plain;
+  plain.reserve(packRecipes_.size());
+  for (const auto& recipe : packRecipes_) {
+    plain.push_back(inputs.at(recipe.inputIndex).toTensor());
+  }
+  std::vector<PackStats> stats;
+  encodePackedInputs(
+      packRecipes_,
+      inputs,
+      {.numThreads = FLAGS_pack_threads, .pinned = true},
+      &stats);
+  for (size_t i = 0; i < packRecipes_.size(); ++i) {
+    const auto& recipe = packRecipes_[i];
+    const auto& packStats = stats[i];
+    const auto plainUs = hostToDeviceUs(plain[i].pin_memory());
+    const auto packedUs = hostToDeviceUs(inputs[recipe.inputIndex].toTensor());
+    LOG(INFO) << fmt::format(
+        "{} pack {}: {:.1f} MB -> {:.1f} MB ({:.2f}x), slots by width "
+        "0/8/16/32/64: {}/{}/{}/{}/{}; encode {} us on {} threads (window {}, "
+        "range {}, layout {}, write {}), windows dropped {} values; H2D from "
+        "pinned: plain {} us ({:.1f} GB/s), packed {} us ({:.1f} GB/s)",
+        label,
+        recipe.inputName,
+        static_cast<double>(packStats.inputBytes) / 1e6,
+        static_cast<double>(packStats.packedBytes) / 1e6,
+        static_cast<double>(packStats.inputBytes) /
+            static_cast<double>(std::max<int64_t>(packStats.packedBytes, 1)),
+        packStats.slotsByWidth[0],
+        packStats.slotsByWidth[1],
+        packStats.slotsByWidth[2],
+        packStats.slotsByWidth[3],
+        packStats.slotsByWidth[4],
+        packStats.windowUs + packStats.totalUs,
+        FLAGS_pack_threads,
+        packStats.windowUs,
+        packStats.rangeUs,
+        packStats.layoutUs,
+        packStats.writeUs,
+        packStats.droppedValues,
+        plainUs,
+        gigabytesPerSecond(packStats.inputBytes, plainUs),
+        packedUs,
+        gigabytesPerSecond(packStats.packedBytes, packedUs));
+  }
+}
+
 std::vector<c10::IValue> ExecutorTestBase::loadSampleInputs(
     ModelFixture& fixture) {
   // If an external inputs file is available, load from it.
   if (!fixture.externalInputsPath.empty()) {
-    auto data = readFile(fixture.externalInputsPath);
-    auto ivalue = pickleLoadWithTypes(data);
-    std::vector<c10::IValue> inputs;
-    if (ivalue.isList()) {
-      for (const auto& item : ivalue.toListRef()) {
-        flattenIValue(item, inputs);
-      }
-    } else {
-      flattenIValue(ivalue, inputs);
-    }
-    return inputs;
+    return loadFlatInputs(fixture.externalInputsPath);
   }
 
   auto modelName = getModelNames(*fixture.reader)[0];
@@ -1488,8 +1853,11 @@ void ExecutorTestBase::verifyOutputs(
     const auto& actual = outputs[i];
     const auto& exp = expected[i];
     if (exp.isTensor()) {
-      ASSERT_TRUE(actual.isTensor())
-          << fullLabel << " output " << i << " expected tensor, got non-tensor";
+      if (!actual.isTensor()) {
+        ADD_FAILURE() << fullLabel << " output " << i
+                      << " expected tensor, got " << actual.tagKind();
+        continue;
+      }
       auto match = tensorsMatch(actual.toTensor(), exp.toTensor());
       auto limit = WaveConfig::get().tensorPrintElementLimit;
       EXPECT_TRUE(match) << fullLabel << " output " << i

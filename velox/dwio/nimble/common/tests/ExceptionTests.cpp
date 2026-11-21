@@ -375,6 +375,23 @@ TEST(ExceptionTests, checkNull) {
   NIMBLE_CHECK_NOT_NULL(validPtr);
 }
 
+TEST(ExceptionTests, checkFileNull) {
+  int value = 42;
+  int* validPointer = &value;
+
+  try {
+    NIMBLE_CHECK_FILE_NULL(validPointer, "Unexpected file pointer");
+    FAIL() << "Should have thrown";
+  } catch (const nimble::NimbleUserError& exception) {
+    EXPECT_EQ(exception.errorCode(), "CORRUPTED_FILE");
+    EXPECT_EQ(exception.errorSource(), "USER");
+    EXPECT_EQ(exception.errorMessage(), "Unexpected file pointer");
+  }
+
+  int* nullPointer = nullptr;
+  NIMBLE_CHECK_FILE_NULL(nullPointer);
+}
+
 TEST(ExceptionTests, checkFileNotNull) {
   int* nullPointer = nullptr;
   int value = 42;

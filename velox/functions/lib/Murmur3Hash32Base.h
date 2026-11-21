@@ -33,7 +33,7 @@ class Murmur3Hash32Base {
  protected:
   /// Hash the lower int, then combine with higher int, is a fast path of
   /// hashBytes.
-  static uint32_t hashInt64(uint64_t input, uint32_t seed) {
+  FOLLY_ALWAYS_INLINE static uint32_t hashInt64(uint64_t input, uint32_t seed) {
     uint32_t low = input;
     uint32_t high = input >> 32;
 

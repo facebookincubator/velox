@@ -261,6 +261,11 @@ class PageReader {
       uint32_t compressedSize,
       uint32_t uncompressedSize);
 
+  // Copies 'numBytes' of the current dictionary page into 'dest', from the
+  // decompressed page if the column is compressed, otherwise from the input
+  // stream.
+  void readDictionaryBytes(char* dest, int32_t numBytes);
+
   template <typename T>
   T readField(const char* FOLLY_NONNULL& ptr) {
     T data = folly::loadUnaligned<T>(ptr);

@@ -16,9 +16,11 @@
 
 #include "velox/experimental/torchwave/WaveConfig.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace torch::wave {
@@ -86,6 +88,19 @@ std::string WaveConfig::toString() const {
   addBool("kernelLineInfo", &WaveConfig::kernelLineInfo);
   addBool("debugSingleOps", &WaveConfig::debugSingleOps);
   addBool("autoAdjustCost", &WaveConfig::autoAdjustCost);
+  addBool("costCountsBarrierWait", &WaveConfig::costCountsBarrierWait);
+  addBool("concatResultSlots", &WaveConfig::concatResultSlots);
+  addBool("groupUnreleasedValues", &WaveConfig::groupUnreleasedValues);
+  addBool("groupViewedValues", &WaveConfig::groupViewedValues);
+  addBool("groupArena", &WaveConfig::groupArena);
+  addInt("groupArenaMaxBytes", &WaveConfig::groupArenaMaxBytes);
+  addBool("deviceSymbols", &WaveConfig::deviceSymbols);
+  addBool("checkGridDescriptor", &WaveConfig::checkGridDescriptor);
+  addBool("gridEqualFinish", &WaveConfig::gridEqualFinish);
+  addBool("deviceGrid", &WaveConfig::deviceGrid);
+  addBool("setupStream", &WaveConfig::setupStream);
+  addBool("checkSizeExprs", &WaveConfig::checkSizeExprs);
+  addBool("sizeExprsFromInputs", &WaveConfig::sizeExprsFromInputs);
   addBool("uniformCost", &WaveConfig::uniformCost);
   addBool("launchPerOp", &WaveConfig::launchPerOp);
   addBool("dedupProjectOps", &WaveConfig::dedupProjectOps);
@@ -93,6 +108,13 @@ std::string WaveConfig::toString() const {
   addBool("enableReuse", &WaveConfig::enableReuse);
   addBool("elideClones", &WaveConfig::elideClones);
   addBool("recognizeDisjointCopies", &WaveConfig::recognizeDisjointCopies);
+  addBool("reinplaceScatters", &WaveConfig::reinplaceScatters);
+  addBool("disjointWriteOrdering", &WaveConfig::disjointWriteOrdering);
+  addBool("staticLeafIndex", &WaveConfig::staticLeafIndex);
+  addBool("constantSizes", &WaveConfig::constantSizes);
+  addBool("verifyStaticSizes", &WaveConfig::verifyStaticSizes);
+  addBool("fuseThroughViews", &WaveConfig::fuseThroughViews);
+  addBool("fuseRowReductions", &WaveConfig::fuseRowReductions);
   addBool("skipRepeatedWaits", &WaveConfig::skipRepeatedWaits);
   addBool("completionCounters", &WaveConfig::completionCounters);
   addBool("scanOutputReturnBarrier", &WaveConfig::scanOutputReturnBarrier);
@@ -102,6 +124,13 @@ std::string WaveConfig::toString() const {
   addBool("cseViews", &WaveConfig::cseViews);
   addBool("decomposeLists", &WaveConfig::decomposeLists);
   addBool("twMad", &WaveConfig::twMad);
+  addBool("packInputs", &WaveConfig::packInputs);
+  addBool("packWindows", &WaveConfig::packWindows);
+  addBool("packAbsorbGetter", &WaveConfig::packAbsorbGetter);
+  addBool("twFusedMad", &WaveConfig::twFusedMad);
+  addBool("madChains", &WaveConfig::madChains);
+  addInt("madInsertBlocksPerSm", &WaveConfig::madInsertBlocksPerSm);
+  addInt("madInsertBlockSize", &WaveConfig::madInsertBlockSize);
   addBool("metadataGetterStandalone", &WaveConfig::metadataGetterStandalone);
   addBool("concatOperandsInPlace", &WaveConfig::concatOperandsInPlace);
   addBool("foldSharedChains", &WaveConfig::foldSharedChains);
@@ -114,11 +143,6 @@ std::string WaveConfig::toString() const {
   addBool("duplicateMetadata", &WaveConfig::duplicateMetadata);
   addBool("configPerOp", &WaveConfig::configPerOp);
   addBool("deferSizeOutputs", &WaveConfig::deferSizeOutputs);
-  addBool("donateBuffers", &WaveConfig::donateBuffers);
-  addInt("donationCarryBytes", &WaveConfig::donationCarryBytes);
-  addBool("enableAllocGroup", &WaveConfig::enableAllocGroup);
-  addBool("enableConcatAllocGroup", &WaveConfig::enableConcatAllocGroup);
-  addBool("enableLifetimeAllocGroup", &WaveConfig::enableLifetimeAllocGroup);
   addBool("orderBlocksByCost", &WaveConfig::orderBlocksByCost);
   addBool("partitionLaunches", &WaveConfig::partitionLaunches);
   addInt("maxLaunchWaves", &WaveConfig::maxLaunchWaves);
@@ -127,6 +151,19 @@ std::string WaveConfig::toString() const {
   addFloat("minBlockUs", &WaveConfig::minBlockUs);
   addBool("singlePassSelect", &WaveConfig::singlePassSelect);
   addBool("singlePass", &WaveConfig::singlePass);
+  if (!preferBlocksPerSm.empty()) {
+    std::vector<std::pair<int32_t, int32_t>> entries(
+        preferBlocksPerSm.begin(), preferBlocksPerSm.end());
+    std::sort(entries.begin(), entries.end());
+    std::string joined;
+    for (const auto& [opCode, blocks] : entries) {
+      if (!joined.empty()) {
+        joined += ",";
+      }
+      joined += std::to_string(opCode) + "=" + std::to_string(blocks);
+    }
+    parts.push_back("preferBlocksPerSm=" + joined);
+  }
 
   if (parts.empty()) {
     return "defaults";

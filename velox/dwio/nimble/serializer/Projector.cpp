@@ -23,12 +23,12 @@
 
 #include "folly/io/Cursor.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
 #include "velox/dwio/nimble/serializer/StreamDataWriter.h"
 #include "velox/dwio/nimble/serializer/legacy/TrailerReader.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
 #include "velox/type/Type.h"
 
 namespace facebook::nimble::serde {
@@ -105,15 +105,15 @@ inline void updateRequiredBarrier(
     bool inputRequiredBarrier,
     bool hasProjectedHybridFlatMaps,
     uint32_t streamSize,
-    const std::vector<bool>& rowOrFlatMapNullStreams,
+    const std::vector<bool>& barrierStreams,
     size_t outputStreamIdx,
     bool& outputRequiredBarrier) {
   if (!inputRequiredBarrier || streamSize == 0) {
     return;
   }
-  NIMBLE_DCHECK_LT(outputStreamIdx, rowOrFlatMapNullStreams.size());
+  NIMBLE_DCHECK_LT(outputStreamIdx, barrierStreams.size());
   outputRequiredBarrier |=
-      hasProjectedHybridFlatMaps || rowOrFlatMapNullStreams[outputStreamIdx];
+      hasProjectedHybridFlatMaps || barrierStreams[outputStreamIdx];
 }
 
 // Forward declaration for recursive calls from per-type helpers.
@@ -254,9 +254,11 @@ std::shared_ptr<const Type> updateHybridFlatMapColumnNames(
   if (!changed) {
     return inputType;
   }
+  // Renaming keeps every group, so the new type shares the groups, whose keys
+  // `groups` borrows, and the key index.
   return std::make_shared<HybridFlatMapType>(
       hybridMap.nullsDescriptor(),
-      hybridMap.keyScalarKind(),
+      hybridMap.hybridFlatMap(),
       std::move(groups),
       hybridMap.attributes());
 }
@@ -383,10 +385,11 @@ Projector::Projector(
     NIMBLE_CHECK(subfield.valid(), "Invalid subfield: {}", subfield.toString());
   }
 
-  projection_ = buildProjectedNimbleType(inputSchema_.get(), projectSubfields);
+  projection_ =
+      buildProjectedNimbleType(inputSchema_.get(), projectSubfields, pool_);
   NIMBLE_CHECK_EQ(
       projection_.streamOffsets.size(),
-      projection_.rowOrFlatMapNullStreams.size(),
+      projection_.barrierStreams.size(),
       "Projected stream indices and decode-barrier stream mask must align");
   hasProjectedHybridFlatMaps_ = selectsHybridGroup(projection_);
 
@@ -449,7 +452,7 @@ std::vector<uint32_t> Projector::projectStreamsContiguousUnsorted(
     const std::vector<uint32_t>& selectedStreamIndices,
     bool inputRequiredBarrier,
     bool hasProjectedHybridFlatMaps,
-    const std::vector<bool>& rowOrFlatMapNullStreams,
+    const std::vector<bool>& barrierStreams,
     bool& outputRequiredBarrier,
     std::unique_ptr<folly::IOBuf>& output) {
   std::vector<uint32_t> outputSizes(selectedStreamIndices.size(), 0);
@@ -504,7 +507,7 @@ std::vector<uint32_t> Projector::projectStreamsContiguousUnsorted(
         inputRequiredBarrier,
         hasProjectedHybridFlatMaps,
         streamSize,
-        rowOrFlatMapNullStreams,
+        barrierStreams,
         i,
         outputRequiredBarrier);
     if (numRunBytes > 0 && streamOffset == runStart + numRunBytes) {
@@ -532,7 +535,7 @@ std::vector<uint32_t> Projector::projectStreamsContiguousSorted(
     const std::vector<uint32_t>& selectedStreamIndices,
     bool inputRequiredBarrier,
     bool hasProjectedHybridFlatMaps,
-    const std::vector<bool>& rowOrFlatMapNullStreams,
+    const std::vector<bool>& barrierStreams,
     bool& outputRequiredBarrier,
     std::unique_ptr<folly::IOBuf>& output) {
   std::vector<uint32_t> outputSizes(selectedStreamIndices.size(), 0);
@@ -583,7 +586,7 @@ std::vector<uint32_t> Projector::projectStreamsContiguousSorted(
         inputRequiredBarrier,
         hasProjectedHybridFlatMaps,
         streamSize,
-        rowOrFlatMapNullStreams,
+        barrierStreams,
         selectedPosition,
         outputRequiredBarrier);
     if (numRunBytes > 0 && currentOffset == runStart + numRunBytes) {
@@ -615,7 +618,7 @@ std::vector<uint32_t> Projector::projectStreamsChainedSorted(
     const std::vector<uint32_t>& selectedStreamIndices,
     bool inputRequiredBarrier,
     bool hasProjectedHybridFlatMaps,
-    const std::vector<bool>& rowOrFlatMapNullStreams,
+    const std::vector<bool>& barrierStreams,
     bool& outputRequiredBarrier,
     std::unique_ptr<folly::IOBuf>& output) {
   std::vector<uint32_t> outputSizes(selectedStreamIndices.size(), 0);
@@ -663,7 +666,7 @@ std::vector<uint32_t> Projector::projectStreamsChainedSorted(
         inputRequiredBarrier,
         hasProjectedHybridFlatMaps,
         streamSize,
-        rowOrFlatMapNullStreams,
+        barrierStreams,
         selectedPosition,
         outputRequiredBarrier);
     numRunBytes += streamSize;
@@ -690,7 +693,7 @@ std::vector<uint32_t> Projector::projectStreamsChainedUnsorted(
     const std::vector<StreamMapping>& sortedStreamMappings,
     bool inputRequiredBarrier,
     bool hasProjectedHybridFlatMaps,
-    const std::vector<bool>& rowOrFlatMapNullStreams,
+    const std::vector<bool>& barrierStreams,
     bool& outputRequiredBarrier,
     std::unique_ptr<folly::IOBuf>& output) {
   std::vector<uint32_t> outputSizes(sortedStreamMappings.size(), 0);
@@ -747,7 +750,7 @@ std::vector<uint32_t> Projector::projectStreamsChainedUnsorted(
           inputRequiredBarrier,
           hasProjectedHybridFlatMaps,
           streamSize,
-          rowOrFlatMapNullStreams,
+          barrierStreams,
           outputStreamIdx,
           outputRequiredBarrier);
       numRunBytes += streamSize;
@@ -844,7 +847,7 @@ folly::IOBuf Projector::projectContiguous(
         projection_.streamOffsets,
         inputRequiredBarrier,
         hasProjectedHybridFlatMaps_,
-        projection_.rowOrFlatMapNullStreams,
+        projection_.barrierStreams,
         outputRequiredBarrier,
         output);
   } else {
@@ -856,7 +859,7 @@ folly::IOBuf Projector::projectContiguous(
         projection_.streamOffsets,
         inputRequiredBarrier,
         hasProjectedHybridFlatMaps_,
-        projection_.rowOrFlatMapNullStreams,
+        projection_.barrierStreams,
         outputRequiredBarrier,
         output);
   }
@@ -907,7 +910,7 @@ folly::IOBuf Projector::projectChained(
         projection_.streamOffsets,
         inputRequiredBarrier,
         hasProjectedHybridFlatMaps_,
-        projection_.rowOrFlatMapNullStreams,
+        projection_.barrierStreams,
         outputRequiredBarrier,
         output);
   } else {
@@ -918,7 +921,7 @@ folly::IOBuf Projector::projectChained(
         sortedStreamMappings_,
         inputRequiredBarrier,
         hasProjectedHybridFlatMaps_,
-        projection_.rowOrFlatMapNullStreams,
+        projection_.barrierStreams,
         outputRequiredBarrier,
         output);
   }

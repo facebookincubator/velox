@@ -34,10 +34,11 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/dwio/nimble/reader/BatchReader.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
-#include "velox/dwio/nimble/velox/BatchReader.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/vector/FlatVector.h"
 
@@ -154,7 +155,7 @@ class SortedIndexTestBase {
       int32_t idValue) {
     auto key = encodeLookupKey(columns, idValue);
     return index->lookup(
-        IndexLookup::LookupRequest::pointLookup({std::move(key)}));
+        *IndexLookup::LookupRequest::pointLookup({std::move(key)}));
   }
 
   IndexLookup::LookupResult rangeScan(
@@ -164,10 +165,9 @@ class SortedIndexTestBase {
       int32_t upperValue) {
     auto lowerKey = encodeLookupKey(columns, lowerValue);
     auto upperKey = encodeLookupKey(columns, upperValue);
-    return index->lookup(
-        IndexLookup::LookupRequest::rangeScan(
-            {velox::serializer::EncodedKeyBounds{
-                std::move(lowerKey), std::move(upperKey)}}));
+    return index->lookup(*IndexLookup::LookupRequest::rangeScan(
+        {velox::serializer::EncodedKeyBounds{
+            std::move(lowerKey), std::move(upperKey)}}));
   }
 
   std::string tempFilePath(const std::string& name) {
@@ -727,6 +727,7 @@ TEST_F(SortedIndexTest, indexDataReuseWithSameReader) {
       velox::memory::MemoryAllocator::Options{
           .capacity = 1UL << 30, .reservationByteLimit = 0});
   auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
 
   struct TestCase {
     bool cacheIndex;
@@ -778,7 +779,7 @@ TEST_F(SortedIndexTest, indexDataReuseWithSameReader) {
       fileHandle->file = readFile;
       fileHandle->uuid = velox::StringIdLease(ids, fileIdStr);
       fileHandle->groupId = velox::StringIdLease(ids, fileIdStr + "_group");
-      options.cache = cache.get();
+      options.blockCache = getBlockCache(cache.get());
       options.fileHandle = fileHandle.get();
     }
 
@@ -801,6 +802,7 @@ TEST_F(SortedIndexTest, indexDataReuseWithSameReader) {
     EXPECT_EQ(tablet->denseIndex({"value"}), tablet->denseIndex({"value"}));
   }
 
+  testingResetBlockCache();
   cache->shutdown();
 }
 
@@ -818,6 +820,7 @@ TEST_F(SortedIndexTest, indexDataReuseCrossReaders) {
       velox::memory::MemoryAllocator::Options{
           .capacity = 1UL << 30, .reservationByteLimit = 0});
   auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
 
   struct TestCase {
     bool cacheIndex;
@@ -876,7 +879,7 @@ TEST_F(SortedIndexTest, indexDataReuseCrossReaders) {
         fileHandle->file = readFile;
         fileHandle->uuid = fileId;
         fileHandle->groupId = groupId;
-        options.cache = cache.get();
+        options.blockCache = getBlockCache(cache.get());
         options.fileHandle = fileHandle.get();
       }
 
@@ -911,10 +914,13 @@ TEST_F(SortedIndexTest, indexDataReuseCrossReaders) {
       if (testCase.expectCrossReaderReuse) {
         EXPECT_GT(indexIoStats_->ramHit().count(), 0)
             << "Second reader should serve index data from cache";
+        EXPECT_EQ(indexIoStats_->read().sum(), 0)
+            << "Second reader should not read index data from the file";
       }
     }
   }
 
+  testingResetBlockCache();
   cache->shutdown();
 }
 

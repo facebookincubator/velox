@@ -164,6 +164,7 @@ void Merge::setupSpillMerger() {
               spillFile,
               spillConfig_->readBufferSize,
               pool(),
+              spillConfig_->executor,
               spillStats_.get()));
     }
     spillReadFilesGroups.push_back(std::move(spillReadFiles));
@@ -841,8 +842,8 @@ BlockingReason MergeExchange::addMergeSources(ContinueFuture* future) {
       }
     }
     // TODO Delay this call until all input data has been processed.
-    operatorCtx_->task()->multipleSplitsFinished(
-        false, remoteSourceTaskIds_.size(), 0);
+    operatorCtx_->task()->splitsFinished(
+        planNodeId(), *operatorCtx_->driverCtx());
     return BlockingReason::kNotBlocked;
   }
 }

@@ -72,16 +72,16 @@ class HashJoinRightSemiBenchmark : public VectorTestBase {
   }
 
   int64_t run(const BenchmarkParams& params, const BenchmarkData& data) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder(pool_.get());
     const std::string filter = params.withFilter ? "t1 >= 0" : "";
 
-    auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+    auto plan = builder.newPlan()
                     .values(data.probeVectors)
                     .project({"c0 AS t0", "c1 AS t1"})
                     .hashJoin(
                         {"t0"},
                         {"u0"},
-                        PlanBuilder(planNodeIdGenerator, pool_.get())
+                        builder.newPlan()
                             .values(data.buildVectors)
                             .project({"c0 AS u0", "c1 AS u1"})
                             .planNode(),

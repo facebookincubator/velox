@@ -714,14 +714,14 @@ TEST_F(PlanNodeBuilderTest, hashJoinNode) {
   const auto left =
       ValuesNode::Builder()
           .id("values_node_id_1")
-          .values({makeRowVector(
-              {"c0"}, {makeFlatVector<int64_t>(std::vector<int64_t>{1})})})
+          .values({makeNamedRowVector(
+              "c0", makeFlatVector<int64_t>(std::vector<int64_t>{1}))})
           .build();
   const auto right =
       ValuesNode::Builder()
           .id("values_node_id_2")
-          .values({makeRowVector(
-              {"c1"}, {makeFlatVector<int64_t>(std::vector<int64_t>{2})})})
+          .values({makeNamedRowVector(
+              "c1", makeFlatVector<int64_t>(std::vector<int64_t>{2}))})
           .build();
   const auto outputType = ROW({"c0", "match"}, {BIGINT(), BOOLEAN()});
 
@@ -767,14 +767,14 @@ TEST_F(PlanNodeBuilderTest, mergeJoinNode) {
   const auto left =
       ValuesNode::Builder()
           .id("values_node_id_1")
-          .values({makeRowVector(
-              {"c0"}, {makeFlatVector<int64_t>(std::vector<int64_t>{1})})})
+          .values({makeNamedRowVector(
+              "c0", makeFlatVector<int64_t>(std::vector<int64_t>{1}))})
           .build();
   const auto right =
       ValuesNode::Builder()
           .id("values_node_id_2")
-          .values({makeRowVector(
-              {"c1"}, {makeFlatVector<int64_t>(std::vector<int64_t>{2})})})
+          .values({makeNamedRowVector(
+              "c1", makeFlatVector<int64_t>(std::vector<int64_t>{2}))})
           .build();
   const auto outputType = ROW({"c0"}, {BIGINT()});
 
@@ -820,8 +820,8 @@ TEST_F(PlanNodeBuilderTest, indexLookupJoinNode) {
   const auto left =
       ValuesNode::Builder()
           .id("values_node_id_1")
-          .values({makeRowVector(
-              {"c0"}, {makeFlatVector<int64_t>(std::vector<int64_t>{1})})})
+          .values({makeNamedRowVector(
+              "c0", makeFlatVector<int64_t>(std::vector<int64_t>{1}))})
           .build();
   const auto right =
       TableScanNode::Builder()
@@ -876,14 +876,14 @@ TEST_F(PlanNodeBuilderTest, nestedLoopJoinNode) {
   const auto left =
       ValuesNode::Builder()
           .id("values_node_id_1")
-          .values({makeRowVector(
-              {"c0"}, {makeFlatVector<int64_t>(std::vector<int64_t>{1})})})
+          .values({makeNamedRowVector(
+              "c0", makeFlatVector<int64_t>(std::vector<int64_t>{1}))})
           .build();
   const auto right =
       ValuesNode::Builder()
           .id("values_node_id_2")
-          .values({makeRowVector(
-              {"c1"}, {makeFlatVector<int64_t>(std::vector<int64_t>{2})})})
+          .values({makeNamedRowVector(
+              "c1", makeFlatVector<int64_t>(std::vector<int64_t>{2}))})
           .build();
   const auto outputType = ROW({"c0"}, {BIGINT()});
 
@@ -1383,6 +1383,7 @@ TEST_F(PlanNodeBuilderTest, topNRowNumberNode) {
         EXPECT_EQ(node->sortingOrders(), sortingOrders);
         EXPECT_EQ(node->limit(), limit);
         EXPECT_TRUE(node->generateRowNumber());
+        EXPECT_FALSE(node->isPartial());
         EXPECT_EQ(node->outputType()->names().back(), rowNumberColumnName);
         EXPECT_EQ(node->sources().size(), 1);
         EXPECT_EQ(node->sources()[0], source_);
@@ -1395,6 +1396,7 @@ TEST_F(PlanNodeBuilderTest, topNRowNumberNode) {
                         .sortingOrders(sortingOrders)
                         .rowNumberColumnName(rowNumberColumnName)
                         .limit(limit)
+                        .isPartial(false)
                         .source(source_)
                         .build();
   verify(node);

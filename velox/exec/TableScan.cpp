@@ -18,6 +18,7 @@
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/OperatorType.h"
+#include "velox/exec/TableScanStatNames.h"
 #include "velox/exec/Task.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -227,7 +228,7 @@ RowVectorPtr TableScan::getOutput() {
     {
       auto lockedStats = stats_.wlock();
       lockedStats->addRuntimeStat(
-          std::string(TableScan::kDataSourceReadWallNanos),
+          std::string(TableScanStatNames::kDataSourceReadWallNanos),
           RuntimeCounter(ioTimeUs * 1'000, RuntimeCounter::Unit::kNanos));
 
       if (!dataOptional.has_value()) {
@@ -237,6 +238,18 @@ RowVectorPtr TableScan::getOutput() {
 
       lockedStats->rawInputPositions = dataSource_->getCompletedRows();
       lockedStats->rawInputBytes = dataSource_->getCompletedBytes();
+
+      // Report every read, including one whose rows the filters removed or
+      // whose output is dropped, so the events add up to all rows read.
+      const auto completedRowsDelta =
+          dataSource_->getCompletedRows() - prevCompletedRows;
+      if (completedRowsDelta > 0) {
+        core::ScanBatchEvent event;
+        event.numRows = completedRowsDelta;
+        event.wallTimeMicros = ioTimeUs;
+        event.planNodeId = planNodeId();
+        dataSource_->fireScanBatchCallback(event);
+      }
 
       RowVectorPtr data = std::move(dataOptional).value();
       // NOTE: even if we the scan output has been suppressed, we still need to
@@ -250,15 +263,6 @@ RowVectorPtr TableScan::getOutput() {
             flatSize = data->estimateFlatSize();
           }
           lockedStats->addInputVector(flatSize, data->size());
-          const auto completedRowsDelta =
-              dataSource_->getCompletedRows() - prevCompletedRows;
-          if (completedRowsDelta > 0) {
-            core::ScanBatchEvent event;
-            event.numRows = completedRowsDelta;
-            event.wallTimeMicros = ioTimeUs;
-            event.planNodeId = planNodeId();
-            dataSource_->fireScanBatchCallback(event);
-          }
           maxFilteringRatio_ = std::max(
               {maxFilteringRatio_,
                1.0 * data->size() / readBatchSize,
@@ -284,13 +288,13 @@ RowVectorPtr TableScan::getOutput() {
       auto lockedStats = stats_.wlock();
       if (numPreloadedSplits_ > 0) {
         lockedStats->addRuntimeStat(
-            std::string(TableScan::kPreloadedSplits),
+            std::string(TableScanStatNames::kPreloadedSplits),
             RuntimeCounter(numPreloadedSplits_));
         numPreloadedSplits_ = 0;
       }
       if (numReadyPreloadedSplits_ > 0) {
         lockedStats->addRuntimeStat(
-            std::string(TableScan::kReadyPreloadedSplits),
+            std::string(TableScanStatNames::kReadyPreloadedSplits),
             RuntimeCounter(numReadyPreloadedSplits_));
         numReadyPreloadedSplits_ = 0;
       }
@@ -301,7 +305,7 @@ RowVectorPtr TableScan::getOutput() {
     const bool emptySplit = currNumRawInputRows == rawInputRowsSinceLastSplit_;
     rawInputRowsSinceLastSplit_ = currNumRawInputRows;
 
-    driverCtx_->task->splitFinished(true, currentSplitWeight_);
+    driverCtx_->task->splitsFinished(planNodeId(), *driverCtx_);
     needNewSplit_ = true;
 
     // We only update scaled controller when we have finished a non-empty split.
@@ -343,15 +347,14 @@ bool TableScan::getSplit() {
     return false;
   }
 
-  if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
+  if (splitTracer_ != nullptr) [[unlikely]] {
     splitTracer_->write(split);
   }
 
   stats_.wlock()->addRuntimeStat(
-      std::string(TableScan::kConnectorSplitSize),
+      std::string(TableScanStatNames::kConnectorSplitSize),
       RuntimeCounter(static_cast<int64_t>(split.connectorSplit->size())));
   const auto& connectorSplit = split.connectorSplit;
-  currentSplitWeight_ = connectorSplit->splitWeight;
   splitBatchSizeHint_ = connectorSplit->batchSizeHint;
   needNewSplit_ = false;
 
@@ -399,7 +402,7 @@ bool TableScan::getSplit() {
     const folly::stop_watch<std::chrono::nanoseconds> moveWatch;
     auto preparedDataSource = connectorSplit->dataSource->move();
     stats_.wlock()->addRuntimeStat(
-        std::string(TableScan::kWaitForPreloadSplitNanos),
+        std::string(TableScanStatNames::kWaitForPreloadSplitNanos),
         RuntimeCounter(
             moveWatch.elapsed().count(), RuntimeCounter::Unit::kNanos));
     if (preparedDataSource == nullptr) {
@@ -409,7 +412,7 @@ bool TableScan::getSplit() {
       return false;
     }
     stats_.wlock()->addRuntimeStat(
-        std::string(TableScan::kPreloadSplitPrepareTimeNanos),
+        std::string(TableScanStatNames::kPreloadSplitPrepareTimeNanos),
         RuntimeCounter(
             connectorSplit->dataSource->prepareTiming().wallNanos,
             RuntimeCounter::Unit::kNanos));
@@ -422,7 +425,7 @@ bool TableScan::getSplit() {
       dataSource_->addSplit(connectorSplit);
     }
     stats_.wlock()->addRuntimeStat(
-        std::string(TableScan::kDataSourceAddSplitWallNanos),
+        std::string(TableScanStatNames::kDataSourceAddSplitWallNanos),
         RuntimeCounter(addSplitTimeUs * 1'000, RuntimeCounter::Unit::kNanos));
   }
   ++stats_.wlock()->numSplits;
@@ -598,7 +601,7 @@ void TableScan::close() {
   const auto scaledStats = scaledController_->stats();
   auto lockedStats = stats_.wlock();
   lockedStats->addRuntimeStat(
-      std::string(TableScan::kNumRunningScaleThreads),
+      std::string(TableScanStatNames::kNumRunningScaleThreads),
       RuntimeCounter(scaledStats.numRunningDrivers));
 }
 } // namespace facebook::velox::exec

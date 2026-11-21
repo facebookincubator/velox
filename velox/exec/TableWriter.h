@@ -69,7 +69,7 @@ class TableWriter : public Operator {
     // 'connectorPool_'.
     stats.memoryStats = MemoryStats::memStatsFromPool(connectorPool_);
 
-    if (FOLLY_LIKELY(dataSink_ != nullptr)) {
+    if (dataSink_ != nullptr) [[likely]] {
       const auto connectorStats = dataSink_->runtimeStats();
       for (const auto& [name, counter] : connectorStats) {
         stats.runtimeStats[name] = RuntimeMetric(counter.value, counter.unit);
@@ -78,19 +78,6 @@ class TableWriter : public Operator {
 
     return stats;
   }
-
-  /// The name of runtime stats specific to table writer.
-  /// The running wall time of a writer operator from creation to close.
-  static constexpr std::string_view kRunningWallNanos{"runningWallNanos"};
-  /// The number of files written by this writer operator.
-  static constexpr std::string_view kNumWrittenFiles{"numWrittenFiles"};
-  /// The file write IO walltime.
-  static constexpr std::string_view kWriteIOTime{"writeIOWallNanos"};
-  /// The walltime spend on file write data recoding.
-  static constexpr std::string_view kWriteRecodeTime{"writeRecodeWallNanos"};
-  /// The walltime spent on file write data compression.
-  static constexpr std::string_view kWriteCompressionTime{
-      "writeCompressionWallNanos"};
 
  private:
   // The memory reclaimer customized for connector which interface with the

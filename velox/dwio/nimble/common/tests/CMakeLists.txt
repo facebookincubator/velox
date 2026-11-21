@@ -26,13 +26,15 @@ add_executable(
   ExceptionTests.cpp
   FeatureGateTest.cpp
   FixedBitArrayTests.cpp
+  OrderedIntegerTest.cpp
+  StringPageArenaTest.cpp
+  StripeRangeTest.cpp
   TypesTest.cpp
   VarintTests.cpp
   VectorTest.cpp
   TestUtils.h
   NimbleCompare.h
   GTestUtils.h
-  ScopedFeatureGate.h
 )
 
 add_test(nimble_common_tests nimble_common_tests)
@@ -41,6 +43,7 @@ target_link_libraries(
   nimble_common_tests
   nimble_common
   velox_common_base
+  gmock
   gtest
   gtest_main
   glog::glog

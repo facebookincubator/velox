@@ -18,8 +18,8 @@
 #include <gtest/gtest.h>
 #include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/ConnectorRegistry.h"
-#include "velox/connectors/hive/FileConfig.h"
-#include "velox/connectors/hive/FileConnectorUtil.h"
+#include "velox/connectors/common/FileConfig.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
@@ -86,11 +86,12 @@ TEST_F(IcebergConnectorTest, splitColumnMappingMode) {
 }
 
 TEST_F(IcebergConnectorTest, splitMappingOverridesSession) {
-  auto fileConfig = std::make_shared<FileConfig>(
+  auto fileConfig = std::make_shared<connector::FileConfig>(
       std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>{}),
       "hive.");
-  setConnectorSessionProperty(FileConfig::kUseColumnNamesSession, "false");
+  setConnectorSessionProperty(
+      connector::FileConfig::kUseColumnNamesSession, "false");
   auto split = IcebergSplitBuilder("/tmp/testfile")
                    .connectorId(test::kIcebergConnectorId)
                    .fileFormat(dwio::common::FileFormat::PARQUET)
@@ -143,6 +144,34 @@ TEST_F(IcebergConnectorTest, columnHandleDefaultsToNoPostProcessor) {
       parquet::ParquetFieldId{1, {}});
 
   EXPECT_FALSE(handle.postProcessor());
+}
+
+TEST_F(IcebergConnectorTest, columnHandlePartitionMetadata) {
+  Type::registerSerDe();
+  IcebergColumnHandle::registerSerDe();
+  const IcebergColumnHandle column(
+      "day",
+      connector::FileColumnHandle::ColumnType::kPartitionKey,
+      DATE(),
+      parquet::ParquetFieldId{7, {}});
+  const connector::FileColumnHandle& fileColumn = column;
+  EXPECT_EQ(fileColumn.name(), "day");
+  EXPECT_EQ(fileColumn.schemaType(), DATE());
+  EXPECT_EQ(fileColumn.dataType(), DATE());
+  EXPECT_EQ(column.hiveType(), DATE());
+  EXPECT_TRUE(fileColumn.isPartitionKey());
+  EXPECT_TRUE(fileColumn.isPartitionDateValueDaysSinceEpoch());
+  EXPECT_TRUE(fileColumn.requiredSubfields().empty());
+  EXPECT_TRUE(fileColumn.extractions().empty());
+  EXPECT_FALSE(fileColumn.postProcessor());
+
+  const auto obj = fileColumn.serialize();
+  const auto copy = ISerializable::deserialize<IcebergColumnHandle>(obj);
+  EXPECT_EQ(copy->serialize(), obj);
+  EXPECT_EQ(copy->schemaType(), DATE());
+  EXPECT_EQ(copy->field().fieldId, 7);
+  EXPECT_TRUE(copy->isPartitionKey());
+  EXPECT_TRUE(copy->isPartitionDateValueDaysSinceEpoch());
 }
 
 } // namespace

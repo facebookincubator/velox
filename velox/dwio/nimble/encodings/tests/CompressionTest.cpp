@@ -196,6 +196,32 @@ TEST(CompressionTests, configuredCompressionPolicyUsesCompressionOptions) {
   EXPECT_EQ(compression.parameters.zstd.compressionLevel, 7);
 }
 
+TEST(CompressionTests, metaInternalDecompressionVerificationRateOverrides) {
+  const nimble::CompressionOptions options{
+      .compressionType = nimble::CompressionType::MetaInternal,
+      .internalDecompressionVerificationRateOverrides =
+          {{nimble::DataType::Int32, 1}, {nimble::DataType::Uint64, 1'000}},
+  };
+  const std::vector<std::pair<nimble::DataType, int32_t>> expected{
+      {nimble::DataType::Int32, 1}, {nimble::DataType::Uint64, 1'000}};
+
+  const nimble::ConfiguredCompressionPolicy configuredPolicy{
+      options, nimble::EncodingType::FixedBitWidth};
+  EXPECT_EQ(
+      configuredPolicy.config()
+          .parameters.metaInternal.decompressionVerificationRateOverrides,
+      expected);
+
+#ifndef DISABLE_META_INTERNAL_COMPRESSOR
+  const nimble::ReplayedCompressionPolicy replayedPolicy{
+      nimble::CompressionType::MetaInternal, options};
+  EXPECT_EQ(
+      replayedPolicy.config()
+          .parameters.metaInternal.decompressionVerificationRateOverrides,
+      expected);
+#endif
+}
+
 TEST(CompressionTests, configuredCompressionPolicyAcceptRatioOverride) {
   nimble::ConfiguredCompressionPolicy blockBitPackingPolicy{
       nimble::CompressionOptions{}, nimble::EncodingType::BlockBitPacking};

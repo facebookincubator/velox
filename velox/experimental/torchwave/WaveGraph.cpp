@@ -18,6 +18,7 @@
 #include "velox/experimental/torchwave/AllocGroup.h"
 #include "velox/experimental/torchwave/Compile.h"
 #include "velox/experimental/torchwave/CompiledOp.h"
+#include "velox/experimental/torchwave/DeviceSymbols.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/GraphOptimizer.h"
 #include "velox/experimental/torchwave/ParallelExpr.h"
@@ -205,6 +206,9 @@ std::unique_ptr<WaveGraph> WaveGraph::optimizeOnly(
   SCOPE_EXIT {
     waveGraph() = prevWaveGraph;
   };
+  if (WaveConfig::get().reinplaceScatters) {
+    reinplaceScatterChains(graph, *wg);
+  }
   if (WaveConfig::get().recognizeDisjointCopies) {
     rewriteDisjointCopies(graph, *wg);
   }
@@ -215,6 +219,28 @@ std::unique_ptr<WaveGraph> WaveGraph::optimizeOnly(
   wg->optimizer_ = std::make_unique<Optimizer>(*wg);
   wg->optimizer_->optimizeGraph(wg->graph_);
   return wg;
+}
+
+namespace {
+std::vector<GraphPass>& graphPasses() {
+  static std::vector<GraphPass> passes;
+  return passes;
+}
+} // namespace
+
+void registerGraphPass(GraphPass pass) {
+  graphPasses().push_back(std::move(pass));
+}
+
+namespace {
+std::vector<GraphPass>& decomposedGraphPasses() {
+  static std::vector<GraphPass> passes;
+  return passes;
+}
+} // namespace
+
+void registerDecomposedGraphPass(GraphPass pass) {
+  decomposedGraphPasses().push_back(std::move(pass));
 }
 
 WaveGraph::WaveGraph(ModelContext* modelContext)
@@ -231,8 +257,14 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
 
   initValueTypes(*graph_, types_, metaStorage_);
 
+  if (WaveConfig::get().reinplaceScatters) {
+    reinplaceScatterChains(*graph_, *this);
+  }
   if (WaveConfig::get().recognizeDisjointCopies) {
     rewriteDisjointCopies(*graph_, *this);
+  }
+  for (const auto& pass : graphPasses()) {
+    pass(*graph_, *this);
   }
   normalizeAndAnnotateGraph();
   for (auto* v : graph_->values()) {
@@ -263,6 +295,9 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
   // each column visible to the partitioner as its own cost.
   if (WaveConfig::get().decomposeLists) {
     decomposeListOps(*graph_, *this);
+  }
+  for (const auto& pass : decomposedGraphPasses()) {
+    pass(*graph_, *this);
   }
 
   // Last of the pre-partition passes: the clone CSE above merges equal values,
@@ -336,8 +371,9 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
     }
     auto* ck = inv->kernel();
     ck->warmup();
-    auto info = ck->kernelInfo();
-    LOG(INFO) << "Kernel " << ck->entryPoint() << ": " << info.toString();
+    for (int32_t entry = 0; entry < ck->numEntries(); ++entry) {
+      LOG(INFO) << "Kernel " << ck->entryInfoString(entry);
+    }
     // With configPerOp, the same numbers for each op on its own. Waiting here
     // rather than at construction keeps the per-op compiles overlapped with the
     // composites'.
@@ -407,19 +443,58 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
 
 WaveGraph::~WaveGraph() = default;
 
-std::unique_ptr<ExecutionState> WaveGraph::getState() {
+std::unique_ptr<ExecutionState> WaveGraph::getState(
+    bool deviceSymbols,
+    int64_t generation) {
   std::lock_guard<std::mutex> lock(statePoolMutex_);
-  if (!statePool_.empty()) {
-    auto state = std::move(statePool_.back());
-    statePool_.pop_back();
-    return state;
+  if (deviceSymbols) {
+    std::erase_if(statePool_, [&](const auto& state) {
+      return state->deviceSymbolsMode && state->symbolGeneration != generation;
+    });
   }
-  return std::make_unique<ExecutionState>();
+  for (auto it = statePool_.rbegin(); it != statePool_.rend(); ++it) {
+    if ((*it)->deviceSymbolsMode == deviceSymbols) {
+      auto state = std::move(*it);
+      statePool_.erase(std::next(it).base());
+      return state;
+    }
+  }
+  auto state = std::make_unique<ExecutionState>();
+  state->deviceSymbolsMode = deviceSymbols;
+  state->symbolGeneration = generation;
+  return state;
+}
+
+DeviceSymbols* WaveGraph::deviceSymbols() {
+  folly::call_once(deviceSymbolsOnce_, [&] {
+    if (modelContext_ != nullptr && modelContext_->symShapes != nullptr) {
+      deviceSymbols_ =
+          std::make_shared<DeviceSymbols>(modelContext_->symShapes, *this);
+    }
+  });
+  return deviceSymbols_.get();
 }
 
 void WaveGraph::returnState(std::unique_ptr<ExecutionState> state) {
   std::lock_guard<std::mutex> lock(statePoolMutex_);
   statePool_.push_back(std::move(state));
+}
+
+std::vector<int64_t> WaveGraph::lastValueSizes(nativert::ValueId id) {
+  std::lock_guard<std::mutex> lock(statePoolMutex_);
+  if (statePool_.empty()) {
+    return {};
+  }
+  const auto& state = *statePool_.back();
+  if (id < 0 || static_cast<size_t>(id) >= state.valueEntries.size()) {
+    return {};
+  }
+  const auto& entry = state.valueEntries[id];
+  if (entry.generation != state.tableGeneration ||
+      entry.kind != ValueEntry::kTensor) {
+    return {};
+  }
+  return std::vector<int64_t>(entry.t.dims, entry.t.dims + entry.t.rank);
 }
 
 void WaveGraph::normalizeAndAnnotateGraph() {

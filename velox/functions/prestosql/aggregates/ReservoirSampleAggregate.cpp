@@ -19,6 +19,7 @@
 #include <folly/Random.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/RandomUtil.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
@@ -66,20 +67,24 @@ struct ReservoirSampleAccumulator {
   /// @param vector The vector containing the value to add.
   /// @param row The row within the vector to add.
   /// @param isNull Whether the value at the given row is null.
+  /// @param randomGenerator Generator for the random choices.
   void addValueToReservoir(
       const BaseVector* vector,
       vector_size_t row,
-      bool isNull = false);
+      bool isNull,
+      folly::Random::DefaultGenerator& randomGenerator);
 
   /// Adds multiple values from a vector to the reservoir sample using
   /// reservoir sampling algorithm.
   /// @param vector The vector containing the values to add.
   /// @param offset Starting offset within the vector.
   /// @param size Number of values to add from the vector.
+  /// @param randomGenerator Generator for the random choices.
   void addValuesToReservoir(
       const BaseVector* vector,
       vector_size_t offset,
-      vector_size_t size);
+      vector_size_t size,
+      folly::Random::DefaultGenerator& randomGenerator);
 
   /// Merges reservoir samples from an ArrayVector row into this accumulator.
   /// @param otherSampleArrayVector ArrayVector containing the samples to merge.
@@ -87,11 +92,13 @@ struct ReservoirSampleAccumulator {
   /// to merge.
   /// @param otherProcessedCount Total number of processed input elements.
   /// @param otherMaxSampleSize: Max sample size to maintain in the reservoir.
+  /// @param randomGenerator Generator for the random choices.
   void mergeSamples(
       const ArrayVector& otherSampleArrayVector,
       vector_size_t otherRow,
       int64_t otherProcessedCount,
       int32_t otherMaxSampleSize,
+      folly::Random::DefaultGenerator& randomGenerator,
       memory::MemoryPool* pool);
 
   /// Merges reservoir samples from another vector into this accumulator.
@@ -100,12 +107,14 @@ struct ReservoirSampleAccumulator {
   /// @param otherSize Number of samples to merge from otherSampleVector.
   /// @param otherProcessedCount Total number of processed input elements.
   /// @param otherMaxSampleSize: Max sample size to maintain in the reservoir.
+  /// @param randomGenerator Generator for the random choices.
   void mergeSamples(
       const VectorPtr& otherSampleVector,
       vector_size_t otherOffset,
       vector_size_t otherSize,
       int64_t otherProcessedCount,
       int32_t otherMaxSampleSize,
+      folly::Random::DefaultGenerator& randomGenerator,
       memory::MemoryPool* pool);
 
   /// Sets the samples for this accumulator from a source vector.
@@ -212,7 +221,8 @@ void ReservoirSampleAccumulator::setInitialSamples(
 void ReservoirSampleAccumulator::addValueToReservoir(
     const BaseVector* vector,
     vector_size_t row,
-    bool isNull) {
+    bool isNull,
+    folly::Random::DefaultGenerator& randomGenerator) {
   VELOX_CHECK(isInitialized());
 
   processedCount = processedCount.value_or(0) + 1;
@@ -221,7 +231,8 @@ void ReservoirSampleAccumulator::addValueToReservoir(
   if (processedCount.value() <= maxSampleSize) {
     targetIndex = processedCount.value() - 1;
   } else {
-    const uint64_t random = folly::Random::rand64(processedCount.value());
+    const uint64_t random =
+        folly::Random::rand64(processedCount.value(), randomGenerator);
     if (random < samples->size()) {
       targetIndex = random;
     }
@@ -239,7 +250,8 @@ void ReservoirSampleAccumulator::addValueToReservoir(
 void ReservoirSampleAccumulator::addValuesToReservoir(
     const BaseVector* vector,
     vector_size_t offset,
-    vector_size_t size) {
+    vector_size_t size,
+    folly::Random::DefaultGenerator& randomGenerator) {
   VELOX_CHECK(isInitialized());
 
   SelectivityVector rows(maxSampleSize.value(), false);
@@ -254,7 +266,8 @@ void ReservoirSampleAccumulator::addValuesToReservoir(
     } else {
       processedCount = processedCount.value_or(0) + 1;
 
-      const uint64_t random = folly::Random::rand64(processedCount.value());
+      const uint64_t random =
+          folly::Random::rand64(processedCount.value(), randomGenerator);
       if (random < samples->size()) {
         toSource[random] = offset + i;
         rows.setValid(random, true);
@@ -271,6 +284,7 @@ void ReservoirSampleAccumulator::mergeSamples(
     vector_size_t otherRow,
     int64_t otherProcessedCount,
     int32_t otherMaxSampleSize,
+    folly::Random::DefaultGenerator& randomGenerator,
     memory::MemoryPool* pool) {
   if (otherSampleArrayVector.isNullAt(otherRow)) {
     return;
@@ -281,18 +295,19 @@ void ReservoirSampleAccumulator::mergeSamples(
       otherSampleArrayVector.sizeAt(otherRow),
       otherProcessedCount,
       otherMaxSampleSize,
+      randomGenerator,
       pool);
 }
 
 BufferPtr makeShuffledIndex(
     vector_size_t size,
     vector_size_t offset,
-    folly::ThreadLocalPRNG& randGen,
+    folly::Random::DefaultGenerator& randomGenerator,
     memory::MemoryPool* pool) {
   BufferPtr index = allocateIndices(size, pool);
   vector_size_t* rawIndex = index->asMutable<vector_size_t>();
   std::iota(rawIndex, rawIndex + size, offset);
-  std::shuffle(rawIndex, rawIndex + size, randGen);
+  std::shuffle(rawIndex, rawIndex + size, randomGenerator);
   return index;
 }
 
@@ -302,6 +317,7 @@ void ReservoirSampleAccumulator::mergeSamples(
     vector_size_t otherSize,
     int64_t otherProcessedCount,
     int32_t otherMaxSampleSize,
+    folly::Random::DefaultGenerator& randomGenerator,
     memory::MemoryPool* pool) {
   VELOX_DCHECK_GE(otherProcessedCount, 0);
   VELOX_DCHECK_GT(otherMaxSampleSize, 0);
@@ -324,7 +340,8 @@ void ReservoirSampleAccumulator::mergeSamples(
       otherMaxSampleSize);
 
   if (otherProcessedCount < maxSampleSize.value()) {
-    addValuesToReservoir(otherSampleVector.get(), otherOffset, otherSize);
+    addValuesToReservoir(
+        otherSampleVector.get(), otherOffset, otherSize, randomGenerator);
     return;
   }
 
@@ -341,27 +358,37 @@ void ReservoirSampleAccumulator::mergeSamples(
         otherMaxSampleSize,
         pool);
 
-    addValuesToReservoir(tempSamples.get(), 0, tempProcessedCount);
+    addValuesToReservoir(
+        tempSamples.get(), 0, tempProcessedCount, randomGenerator);
     return;
   }
 
   VectorPtr mergedSamples =
       BaseVector::create(elementType, maxSampleSize.value(), pool);
+  // Every subset of the combined input must be equally likely. That holds when
+  // the number of samples taken from each side matches drawing 'maxSampleSize'
+  // rows without replacement from both inputs: each draw picks a side with
+  // probability proportional to its remaining rows.
+  int64_t oneRemaining{processedCount.value()};
+  int64_t otherRemaining{otherProcessedCount};
   vector_size_t oneSelected = 0;
   for (vector_size_t i = 0; i < maxSampleSize.value(); ++i) {
-    if (folly::Random::rand64(processedCount.value() + otherProcessedCount) <
-        processedCount.value()) {
-      oneSelected++;
+    if (folly::Random::rand64(oneRemaining + otherRemaining, randomGenerator) <
+        oneRemaining) {
+      ++oneSelected;
+      --oneRemaining;
+    } else {
+      --otherRemaining;
     }
   }
 
   SelectivityVector rows(maxSampleSize.value(), false);
-  folly::ThreadLocalPRNG rng;
   if (oneSelected > 0) {
     rows.setValidRange(0, oneSelected, true);
     rows.updateBounds();
 
-    const BufferPtr oneIndex = makeShuffledIndex(sampleCount(), 0, rng, pool);
+    const BufferPtr oneIndex =
+        makeShuffledIndex(sampleCount(), 0, randomGenerator, pool);
     mergedSamples->copy(samples.get(), rows, oneIndex->as<vector_size_t>());
   }
 
@@ -371,7 +398,8 @@ void ReservoirSampleAccumulator::mergeSamples(
     rows.setValidRange(oneSelected, maxSampleSize.value(), true);
     rows.updateBounds();
 
-    BufferPtr otherIndex = makeShuffledIndex(otherSize, otherOffset, rng, pool);
+    BufferPtr otherIndex =
+        makeShuffledIndex(otherSize, otherOffset, randomGenerator, pool);
     // Shift the source indices of the mapping forward by oneSelected.
     auto* otherRawIndex = otherIndex->asMutable<vector_size_t>();
     for (vector_size_t i = 0; i < otherSelected; ++i) {
@@ -452,10 +480,15 @@ class ReservoirSampleAggregate : public exec::Aggregate {
   std::tuple<vector_size_t, vector_size_t, vector_size_t> computeTotalSamples(
       char** groups,
       int32_t numGroups) const;
+
+  // Picks the values to keep. Seeded with random::getSeed() so that tests can
+  // fix the seed and get the same samples on every run.
+  folly::Random::DefaultGenerator randomGenerator_;
 };
 
 ReservoirSampleAggregate::ReservoirSampleAggregate(TypePtr resultType)
-    : exec::Aggregate(std::move(resultType)) {}
+    : exec::Aggregate(std::move(resultType)),
+      randomGenerator_{random::getSeed()} {}
 
 int32_t ReservoirSampleAggregate::accumulatorFixedWidthSize() const {
   return sizeof(ReservoirSampleAccumulator);
@@ -529,6 +562,7 @@ void ReservoirSampleAggregate::extractValues(
         accumulator->sampleCount(),
         accumulator->processedCount.value(),
         accumulator->maxSampleSize.value(),
+        randomGenerator_,
         allocator_->pool());
 
     sampleArrayVector->setNull(i, false);
@@ -668,7 +702,8 @@ void ReservoirSampleAggregate::addRaw(
     accumulator->addValueToReservoir(
         valuesToSampleDecoded.base(),
         valuesToSampleDecoded.index(row),
-        valuesToSampleDecoded.isNullAt(row));
+        valuesToSampleDecoded.isNullAt(row),
+        randomGenerator_);
   });
 }
 
@@ -728,6 +763,7 @@ void ReservoirSampleAggregate::addIntermediate(
         decodedRow,
         seenCountVector->valueAt(decodedRow),
         maxSampleSizeVector->valueAt(decodedRow),
+        randomGenerator_,
         allocator_->pool());
     accumulator->setInitialSamples(
         initialSampleArrayVector->isNullAt(decodedRow)

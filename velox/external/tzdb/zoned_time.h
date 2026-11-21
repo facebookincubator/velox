@@ -173,7 +173,7 @@ template <class _TimeZonePtrOrName>
 using __time_zone_representation = std::conditional_t<
     std::is_convertible_v<_TimeZonePtrOrName, std::string_view>,
     const time_zone*,
-    folly::remove_cvref_t<_TimeZonePtrOrName>>;
+    std::remove_cvref_t<_TimeZonePtrOrName>>;
 
 template <class _TimeZonePtrOrName>
 zoned_time(_TimeZonePtrOrName&&)

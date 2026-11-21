@@ -27,29 +27,6 @@ namespace facebook::velox::exec {
 
 using velox::common::geospatial::GeometrySerializationType;
 
-void SpatialJoinBridge::setData(SpatialBuildResult buildResult) {
-  std::vector<ContinuePromise> promises;
-  {
-    std::lock_guard<std::mutex> l(mutex_);
-    VELOX_CHECK(!buildResult_.has_value(), "setData must be called only once");
-    buildResult_ = std::move(buildResult);
-    promises = std::move(promises_);
-  }
-  notify(std::move(promises));
-}
-
-std::optional<SpatialBuildResult> SpatialJoinBridge::dataOrFuture(
-    ContinueFuture* future) {
-  std::lock_guard<std::mutex> l(mutex_);
-  VELOX_CHECK(!cancelled_, "Getting data after the build side is aborted");
-  if (buildResult_.has_value()) {
-    return buildResult_.value();
-  }
-  promises_.emplace_back("SpatialJoinBridge::dataOrFuture");
-  *future = promises_.back().getSemiFuture();
-  return std::nullopt;
-}
-
 SpatialJoinBuild::SpatialJoinBuild(
     int32_t operatorId,
     DriverCtx* driverCtx,
@@ -198,7 +175,7 @@ SpatialIndex SpatialJoinBuild::buildSpatialIndex(
       double radius = radiusCol.valueAt<double>(i);
       const StringView geometryBytes = geometryCol.valueAt<StringView>(i);
       Envelope envelope = SpatialJoinBuild::readEnvelope(geometryBytes, radius);
-      if (FOLLY_UNLIKELY(envelope.isEmpty())) {
+      if (envelope.isEmpty()) [[unlikely]] {
         continue;
       }
       envelope.rowIndex = offset + geometryCol.index(i);

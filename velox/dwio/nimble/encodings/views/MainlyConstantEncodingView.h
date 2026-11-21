@@ -44,19 +44,30 @@ class MainlyConstantEncodingView final : public TypedEncodingView<T> {
         otherValueRanks_{this->template getVectorBuffer<uint32_t>()} {
     NIMBLE_CHECK_EQ(this->encodingType_, EncodingType::MainlyConstant);
     const char* pos = data.data() + this->dataOffset_;
-    const auto isCommonSize = encoding::readUint32(pos);
-    const std::string_view isCommon{pos, isCommonSize};
-    pos += isCommonSize;
-
-    const auto otherValuesSize = encoding::readUint32(pos);
+    const auto isCommon =
+        this->readSizedBytes(pos, "MainlyConstant common flags");
     otherValues_ = detail::createTypedEncodingView<T>(
-        {pos, otherValuesSize}, this->pool_, options);
+        this->readSizedBytes(pos, "MainlyConstant other values"),
+        this->pool_,
+        options);
     NIMBLE_CHECK_NOT_NULL(otherValues_);
-    pos += otherValuesSize;
 
+    if constexpr (std::is_same_v<physicalType, std::string_view>) {
+      NIMBLE_CHECK_FILE_GE(
+          this->remainingBytes(pos),
+          sizeof(uint32_t),
+          "Truncated MainlyConstant encoding.");
+      NIMBLE_CHECK_FILE_EQ(
+          this->remainingBytes(pos) - sizeof(uint32_t),
+          encoding::peek<uint32_t>(pos),
+          "Unexpected MainlyConstant view end.");
+    } else {
+      NIMBLE_CHECK_FILE_EQ(
+          this->remainingBytes(pos),
+          sizeof(physicalType),
+          "Unexpected MainlyConstant view end.");
+    }
     commonValue_ = encoding::read<physicalType>(pos);
-    NIMBLE_CHECK_EQ(
-        pos, data.data() + data.size(), "Unexpected MainlyConstant view end.");
 
     if (!options.cacheEncodingView) {
       isCommonView_ =
@@ -97,7 +108,10 @@ class MainlyConstantEncodingView final : public TypedEncodingView<T> {
       otherValueRanks_[word] = numOtherValues;
       numOtherValues += std::popcount(~isCommonBits_[word]);
     }
-    NIMBLE_CHECK_EQ(numOtherValues, otherValues_->rowCount());
+    NIMBLE_CHECK_FILE_EQ(
+        numOtherValues,
+        otherValues_->rowCount(),
+        "MainlyConstant other values do not match the common flags.");
   }
 
   // Returns whether the view holds the bitmap of the common rows and the rank

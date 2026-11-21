@@ -13,8 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/lib/DateTimeFormatter.h"
+#include <functional>
+
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/DateTimeFormatterBuilder.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -60,7 +62,7 @@ class DateTimeFormatterTest : public testing::Test {
   static Timestamp fromTimestampString(const StringView& timestamp) {
     return util::fromTimestampString(
                timestamp, util::TimestampParseMode::kPrestoCast)
-        .thenOrThrow(folly::identity, [&](const Status& status) {
+        .thenOrThrow(std::identity{}, [&](const Status& status) {
           VELOX_USER_FAIL("{}", status.message());
         });
   }
@@ -68,14 +70,14 @@ class DateTimeFormatterTest : public testing::Test {
   std::shared_ptr<DateTimeFormatter> getJodaDateTimeFormatter(
       const std::string_view& format) const {
     return buildJodaDateTimeFormatter(format).thenOrThrow(
-        folly::identity,
+        std::identity{},
         [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
   }
 
   std::shared_ptr<DateTimeFormatter> getMysqlDateTimeFormatter(
       const std::string_view& format) const {
     return buildMysqlDateTimeFormatter(format).thenOrThrow(
-        folly::identity,
+        std::identity{},
         [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
   }
 
@@ -95,7 +97,7 @@ class DateTimeFormatterTest : public testing::Test {
   DateTimeResult dateTimeResult(
       Expected<DateTimeResult> dateTimeResultExpected) {
     return dateTimeResultExpected.thenOrThrow(
-        folly::identity,
+        std::identity{},
         [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
   }
 
@@ -697,6 +699,19 @@ TEST_F(JodaDateTimeFormatterTest, parseDayOfMonth) {
   EXPECT_THROW(parseJoda("2001-02-29", "Y-M-d"), VeloxUserError);
 }
 
+TEST_F(JodaDateTimeFormatterTest, parseRepeatedDayOfMonth) {
+  EXPECT_EQ(
+      fromTimestampString("2000-01-15"), parseJoda("01/15", "dd/dd").timestamp);
+  EXPECT_EQ(
+      fromTimestampString("2000-01-01"), parseJoda("15/01", "dd/dd").timestamp);
+
+  VELOX_ASSERT_THROW(parseJoda("0/15", "dd/dd"), "Value 0 for dayOfMonth");
+  VELOX_ASSERT_THROW(parseJoda("15/0", "dd/dd"), "Value 0 for dayOfMonth");
+  VELOX_ASSERT_THROW(parseJoda("32/15", "dd/dd"), "Value 32 for dayOfMonth");
+  VELOX_ASSERT_THROW(parseJoda("15/32", "dd/dd"), "Value 32 for dayOfMonth");
+  VELOX_ASSERT_THROW(parseJoda("1/0/15", "dd/dd/dd"), "Value 0 for dayOfMonth");
+}
+
 TEST_F(JodaDateTimeFormatterTest, parseDayOfYear) {
   // Just day of year specifier should default to 2000. Also covers leap year
   // case
@@ -765,6 +780,23 @@ TEST_F(JodaDateTimeFormatterTest, parseDayOfYear) {
 
   EXPECT_THROW(parseJoda("0", "d"), VeloxUserError);
   EXPECT_THROW(parseJoda("367", "d"), VeloxUserError);
+}
+
+TEST_F(JodaDateTimeFormatterTest, parseRepeatedDayOfYear) {
+  EXPECT_EQ(
+      fromTimestampString("2000-12-31"),
+      parseJoda("2000 365/366", "y D/D").timestamp);
+  EXPECT_EQ(
+      fromTimestampString("2000-12-30"),
+      parseJoda("2000 366/365", "y D/D").timestamp);
+
+  VELOX_ASSERT_THROW(parseJoda("0/15", "D/D"), "Value 0 for dayOfYear");
+  VELOX_ASSERT_THROW(parseJoda("15/0", "D/D"), "Value 0 for dayOfYear");
+  VELOX_ASSERT_THROW(
+      parseJoda("2001 366/365", "y D/D"), "Value 366 for dayOfYear");
+  VELOX_ASSERT_THROW(
+      parseJoda("2001 365/366", "y D/D"), "Value 366 for dayOfYear");
+  VELOX_ASSERT_THROW(parseJoda("1/0/15", "D/D/D"), "Value 0 for dayOfYear");
 }
 
 TEST_F(JodaDateTimeFormatterTest, parseHourOfDay) {
@@ -1363,7 +1395,7 @@ TEST_F(JodaDateTimeFormatterTest, betterErrorMessaging) {
 
   VELOX_ASSERT_THROW(
       parseJoda("2057-02-429T14:48:14.891Z", "yyyy-MM-D'T'HH:mm:ss.SSSZ"),
-      "Value 429 for dayOfMonth must be in the range [1,365] for year 2057 and month 2.");
+      "Value 429 for dayOfYear must be in the range [1,365] for year 2057.");
 }
 
 class MysqlDateTimeTest : public DateTimeFormatterTest {};
@@ -1946,6 +1978,18 @@ TEST_F(MysqlDateTimeTest, parseDayOfMonth) {
   EXPECT_THROW(parseMysql("2001-02-29", "%Y-%m-%d"), VeloxUserError);
 }
 
+TEST_F(MysqlDateTimeTest, parseRepeatedDayOfMonth) {
+  EXPECT_EQ(fromTimestampString("2000-01-15"), parseMysql("01/15", "%d/%d"));
+  EXPECT_EQ(fromTimestampString("2000-01-01"), parseMysql("15/01", "%d/%d"));
+
+  VELOX_ASSERT_THROW(parseMysql("0/15", "%d/%d"), "Value 0 for dayOfMonth");
+  VELOX_ASSERT_THROW(parseMysql("15/0", "%d/%d"), "Value 0 for dayOfMonth");
+  VELOX_ASSERT_THROW(parseMysql("32/15", "%d/%d"), "Value 32 for dayOfMonth");
+  VELOX_ASSERT_THROW(parseMysql("15/32", "%d/%d"), "Value 32 for dayOfMonth");
+  VELOX_ASSERT_THROW(
+      parseMysql("1/0/15", "%d/%d/%d"), "Value 0 for dayOfMonth");
+}
+
 TEST_F(MysqlDateTimeTest, parseDayOfYear) {
   // Just day of year specifier should default to 2000. Also covers leap year
   // case
@@ -1994,6 +2038,23 @@ TEST_F(MysqlDateTimeTest, parseDayOfYear) {
 
   EXPECT_THROW(parseMysql("0", "%j"), VeloxUserError);
   EXPECT_THROW(parseMysql("367", "%j"), VeloxUserError);
+}
+
+TEST_F(MysqlDateTimeTest, parseRepeatedDayOfYear) {
+  EXPECT_EQ(
+      fromTimestampString("2000-12-31"),
+      parseMysql("2000 365/366", "%Y %j/%j"));
+  EXPECT_EQ(
+      fromTimestampString("2000-12-30"),
+      parseMysql("2000 366/365", "%Y %j/%j"));
+
+  VELOX_ASSERT_THROW(parseMysql("0/15", "%j/%j"), "Value 0 for dayOfYear");
+  VELOX_ASSERT_THROW(parseMysql("15/0", "%j/%j"), "Value 0 for dayOfYear");
+  VELOX_ASSERT_THROW(
+      parseMysql("2001 366/365", "%Y %j/%j"), "Value 366 for dayOfYear");
+  VELOX_ASSERT_THROW(
+      parseMysql("2001 365/366", "%Y %j/%j"), "Value 366 for dayOfYear");
+  VELOX_ASSERT_THROW(parseMysql("1/0/15", "%j/%j/%j"), "Value 0 for dayOfYear");
 }
 
 TEST_F(MysqlDateTimeTest, parseHourOfDay) {

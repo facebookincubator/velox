@@ -16,6 +16,7 @@
 #include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <limits>
 #include <optional>
 #include <span>
@@ -24,6 +25,7 @@
 
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/OrderedInteger.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -68,6 +70,40 @@ class EliasFanoEncodingTest : public ::testing::Test {
     EXPECT_EQ(encoding->dataType(), nimble::TypeTraits<T>::dataType);
     EXPECT_EQ(encoding->rowCount(), static_cast<uint32_t>(input.size()));
     EXPECT_EQ(output, input);
+  }
+
+  // Checks that every row of 'input' but the first and the last shares one
+  // bucket, and that List::lowerBound() agrees with std::lower_bound() for each
+  // value of 'input', its neighbors and the limits of T.
+  template <typename T>
+  void expectLowerBoundsInCrowdedBucket(const std::vector<T>& input) {
+    using PhysicalType = typename nimble::TypeTraits<T>::physicalType;
+    const auto encoding = createEncoding(input);
+    const auto& list =
+        dynamic_cast<const nimble::EliasFanoEncoding<T>&>(*encoding).list();
+    const auto bucketOf = [&](T value) {
+      return (nimble::toOrdered<T>(static_cast<PhysicalType>(value)) -
+              list.base()) >>
+          list.lowerBits();
+    };
+    ASSERT_EQ(bucketOf(input[1]), bucketOf(input[input.size() - 2]));
+
+    std::vector<T> targets{
+        std::numeric_limits<T>::min(), std::numeric_limits<T>::max()};
+    for (const auto value : input) {
+      targets.insert(targets.end(), {value - 1, value, value + 1});
+    }
+    for (const auto target : targets) {
+      SCOPED_TRACE(target);
+      const auto expected = static_cast<uint32_t>(
+          std::lower_bound(input.begin(), input.end(), target) - input.begin());
+      PhysicalType found{0};
+      ASSERT_EQ(
+          list.lowerBound(static_cast<PhysicalType>(target), found), expected);
+      if (expected < input.size()) {
+        ASSERT_EQ(static_cast<T>(found), input[expected]);
+      }
+    }
   }
 
   std::shared_ptr<velox::memory::MemoryPool> pool_;
@@ -152,6 +188,119 @@ TEST_F(EliasFanoEncodingTest, supportsRandomAccessAndValueLowerBound) {
   EXPECT_EQ(eliasFano->lowerBound(20), 1);
   EXPECT_EQ(eliasFano->lowerBound(21), 3);
   EXPECT_EQ(eliasFano->lowerBound(41), input.size());
+}
+
+TEST_F(EliasFanoEncodingTest, lowerBoundReturnsFoundValue) {
+  const std::vector<uint64_t> input{10, 20, 20, 40};
+  const auto encoding = createEncoding(input);
+  const auto& eliasFano =
+      dynamic_cast<const nimble::EliasFanoEncoding<uint64_t>&>(*encoding);
+
+  for (const uint64_t value : {0, 10, 15, 20, 21, 40}) {
+    SCOPED_TRACE(value);
+    uint64_t found{0};
+    const auto row = eliasFano.list().lowerBound(value, found);
+    EXPECT_EQ(row, eliasFano.lowerBound(value));
+    EXPECT_EQ(found, input[row]);
+  }
+  EXPECT_EQ(eliasFano.lowerBound(41), input.size());
+}
+
+TEST_F(EliasFanoEncodingTest, lowerBoundInCrowdedBucket) {
+  // Outliers at both ends widen the buckets until the dense run between them,
+  // with repeated values, falls in one, as clustered user ids do.
+  constexpr uint32_t kNumDenseRows{3'000};
+  const auto makeInput = [&](auto low, auto denseStart, auto high) {
+    std::vector<decltype(low)> input{low};
+    for (uint32_t i = 0; i < kNumDenseRows; ++i) {
+      input.push_back(denseStart + i * 7 - (i % 5 == 0 ? 7 : 0));
+    }
+    input.push_back(high);
+    return input;
+  };
+  {
+    expectLowerBoundsInCrowdedBucket(makeInput(
+        int64_t{-1'000'000'000'000},
+        int64_t{61'561'340'377'085},
+        int64_t{100'015'393'757'942}));
+  }
+  {
+    // The dense run falls in the last bucket that uint64 values can reach, so
+    // no bucket starts after it.
+    constexpr auto kMax = std::numeric_limits<uint64_t>::max();
+    expectLowerBoundsInCrowdedBucket(
+        makeInput(uint64_t{0}, kMax - 7 * kNumDenseRows, kMax));
+  }
+}
+
+TEST_F(EliasFanoEncodingTest, lowerBoundInSingleValueBucket) {
+  const std::vector<uint64_t> input{0, 32, 64, 128};
+  const auto encoding = createEncoding(input);
+  const auto& list =
+      dynamic_cast<const nimble::EliasFanoEncoding<uint64_t>&>(*encoding)
+          .list();
+  ASSERT_EQ(list.lowerBits(), 5);
+  for (const uint64_t target : {1, 31, 33, 63, 65, 127, 129}) {
+    SCOPED_TRACE(target);
+    const auto expected = static_cast<uint32_t>(
+        std::lower_bound(input.begin(), input.end(), target) - input.begin());
+    uint64_t found{0};
+    ASSERT_EQ(list.lowerBound(target, found), expected);
+    if (expected < input.size()) {
+      EXPECT_EQ(found, input[expected]);
+    }
+  }
+}
+
+TEST_F(EliasFanoEncodingTest, lowerBoundWithWideLowerBits) {
+  std::vector<uint64_t> input{0};
+  for (uint64_t i = 0; i < 126; ++i) {
+    input.push_back((uint64_t{1} << 63) + i * 7);
+  }
+  input.push_back(std::numeric_limits<uint64_t>::max());
+  const auto encoding = createEncoding(input);
+  const auto& list =
+      dynamic_cast<const nimble::EliasFanoEncoding<uint64_t>&>(*encoding)
+          .list();
+  ASSERT_EQ(list.lowerBits(), 56);
+  expectLowerBoundsInCrowdedBucket(input);
+}
+
+TEST_F(EliasFanoEncodingTest, listReadsWithoutEncoding) {
+  const std::vector<uint64_t> input{10, 20, 20, 40, 80};
+  auto encoding = createEncoding(input);
+  const auto list =
+      dynamic_cast<const nimble::EliasFanoEncoding<uint64_t>&>(*encoding)
+          .list();
+  encoding.reset();
+
+  for (uint32_t row = 0; row < input.size(); ++row) {
+    EXPECT_EQ(list.valueAt(row), input[row]);
+  }
+  std::vector<uint64_t> output(3);
+  list.materializeAt(
+      /*offset=*/1, static_cast<uint32_t>(output.size()), output.data());
+  EXPECT_EQ(output, (std::vector<uint64_t>{20, 20, 40}));
+  uint64_t found{0};
+  EXPECT_EQ(list.lowerBound(21, found), 3);
+  EXPECT_EQ(found, 40);
+  EXPECT_EQ(list.lowerBound(81, found), input.size());
+}
+
+TEST_F(EliasFanoEncodingTest, listChecksMaterializeRange) {
+  const std::vector<uint64_t> input{10, 20};
+  const auto encoding = createEncoding(input);
+  const auto& list =
+      dynamic_cast<const nimble::EliasFanoEncoding<uint64_t>&>(*encoding)
+          .list();
+  list.materializeAt(/*offset=*/2, /*rowCount=*/0, nullptr);
+  std::vector<uint64_t> output(2);
+  NIMBLE_ASSERT_THROW(
+      list.materializeAt(/*offset=*/3, /*rowCount=*/0, output.data()),
+      "Invalid encoding position");
+  NIMBLE_ASSERT_THROW(
+      list.materializeAt(/*offset=*/1, /*rowCount=*/2, output.data()),
+      "Reading past end of encoding");
 }
 
 TEST_F(EliasFanoEncodingTest, absoluteReadsPreserveSequentialPosition) {

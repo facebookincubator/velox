@@ -25,11 +25,6 @@ using facebook::velox::functions::XORShiftRandom;
 
 class XORShiftRandomTest : public testing::Test {};
 
-// Character pool matching Spark's randstr implementation.
-constexpr char kPool[] =
-    "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-constexpr int kPoolSize = 62;
-
 // Helper to generate randstr output using XORShiftRandom.
 // Matches Spark's ExpressionImplUtils.randStr implementation.
 std::string generateRandStr(int64_t seed, int32_t length) {

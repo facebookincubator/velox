@@ -18,6 +18,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -76,15 +77,14 @@ TEST_F(LimitTest, basic) {
   assertQuery(
       makePlan(1'234, 2'000), "SELECT * FROM tmp OFFSET 1234 LIMIT 2000");
 
-  assertQueryReturnsEmptyResult(makePlan(12'345, 10));
+  AssertQueryBuilder(makePlan(12'345, 10)).assertEmptyResults();
 }
 
 TEST_F(LimitTest, limitOverLocalExchange) {
   auto data = makeRowVector(
       {makeFlatVector<int32_t>(1'000, [](auto row) { return row; })});
 
-  auto file = TempFilePath::create();
-  writeToFile(file->getPath(), {data});
+  auto file = writeToFile(data);
 
   core::PlanNodeId scanNodeId;
 
@@ -100,17 +100,10 @@ TEST_F(LimitTest, limitOverLocalExchange) {
   cursor->task()->addSplit(
       scanNodeId, exec::Split(makeHiveConnectorSplit(file->getPath())));
 
-  int32_t numRead = 0;
-  while (cursor->moveNext()) {
-    auto vector = cursor->current();
-    numRead += vector->size();
-  }
-
   // Do not send no-more-splits message. Expect the task to finish without
   // receiving that message.
-
-  ASSERT_EQ(20, numRead);
-  ASSERT_TRUE(waitForTaskCompletion(cursor->task().get()));
+  ASSERT_EQ(cursor->countRows(), 20);
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*cursor->task()));
 }
 
 TEST_F(LimitTest, partialLimitEagerFlush) {
@@ -147,17 +140,15 @@ TEST_F(LimitTest, partialLimitEagerFlush) {
   test(false);
 }
 
-TEST_F(LimitTest, DISABLED_barrier) {
+TEST_F(LimitTest, barrier) {
   std::vector<RowVectorPtr> vectors;
-  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
   const int numSplits{5};
   const int numRowsPerSplit{1'000};
   for (int32_t i = 0; i < numSplits; ++i) {
     vectors.push_back(makeRowVector({makeFlatVector<int32_t>(
         numRowsPerSplit, [](auto row) { return row; })}));
-    tempFiles.push_back(TempFilePath::create());
   }
-  writeToFiles(toFilePaths(tempFiles), vectors);
+  auto tempFiles = writeToFiles(vectors);
   createDuckDbTable(vectors);
 
   struct {
@@ -185,8 +176,8 @@ TEST_F(LimitTest, DISABLED_barrier) {
   } testSettings[] = {
       // Test the case where the limit covers all the input rows
       // with barrier and not.
-      {false,
-       false,
+      {true,
+       true,
        0,
        numRowsPerSplit * numSplits,
        numSplits,
@@ -491,6 +482,11 @@ TEST_F(LimitTest, DISABLED_barrier) {
        numSplits},
   };
   for (const auto& testData : testSettings) {
+    // TODO: Re-enable parallel cases after fixing
+    // https://github.com/facebookincubator/velox/issues/19866
+    if (!testData.serialExecution) {
+      continue;
+    }
     SCOPED_TRACE(testData.toString());
     core::PlanNodeId limitPlanNodeId;
     auto plan = PlanBuilder()
@@ -509,11 +505,15 @@ TEST_F(LimitTest, DISABLED_barrier) {
                             testData.offset));
     const auto taskStats = task->taskStats();
     ASSERT_EQ(taskStats.numBarriers, testData.numExpectedBarriers);
+    if (testData.serialExecution) {
+      ASSERT_EQ(
+          taskStats.numFinishedSplits, testData.numExpectedFinishedSplits);
+    }
     ASSERT_EQ(
-        exec::toPlanStats(taskStats).at(limitPlanNodeId).outputRows,
+        exec::PlanNodeStats::extract(taskStats, limitPlanNodeId).outputRows,
         testData.numExpectedOutputRows);
     ASSERT_EQ(
-        exec::toPlanStats(taskStats).at(limitPlanNodeId).outputVectors,
+        exec::PlanNodeStats::extract(taskStats, limitPlanNodeId).outputVectors,
         testData.numExpectedOutputBatches);
   }
 }

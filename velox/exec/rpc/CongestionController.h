@@ -151,6 +151,10 @@ class CongestionController {
   /// count, so a trickle of rejections cannot ratchet the window up.
   void onCleanUnits(int64_t numUnits);
 
+  /// Raises the ceiling to 'maxWindow' when that is higher, and the window by
+  /// the same amount, so a window that starts at its ceiling still does.
+  void raiseMaxWindow(int64_t maxWindow);
+
   /// Enables and caps additive growth on clean no-latency completions,
   /// independent of maxWindow_. Non-positive disables this growth; set a
   /// positive value to bound discovery for a deployment whose knee is known.

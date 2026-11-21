@@ -27,9 +27,10 @@ table CompactEncoding {
 /// meaning forever. Readers skip fields of kinds they do not know by the
 /// field's size.
 enum StreamTrailerFieldKind : ubyte {
-  /// The stream's checksum: the file's ChecksumType hash of the stream's bytes,
-  /// narrowed to 32 bits as that type defines (for XXH3_64, the low 32 bits
-  /// XOR the high 32 bits) and stored little-endian. 4 bytes.
+  /// The stream's checksum: its bytes hashed with the file's ChecksumType
+  /// (recorded in the postscript), narrowed to 32 bits as that type defines
+  /// (for XXH3_64, the low 32 bits XOR the high 32 bits) and stored
+  /// little-endian. 4 bytes.
   Checksum32 = 0,
 }
 
@@ -55,13 +56,11 @@ table FileProperties {
   /// Experimental compact encoding state.
   compact_encoding:CompactEncoding;
 
-  /// Whether stripe groups carry per-stream checksum arrays (stream_checksums).
-  /// The algorithm is not recorded here: per-stream checksums use the same
-  /// ChecksumType as the whole-file checksum, which the postscript already
-  /// carries. Only legacy files set this: current writers put each checksum in
-  /// its stream's trailer (stream_trailer). A file never records checksums in
-  /// both places.
-  has_stream_checksums:bool = false;
+  /// Deprecated flag for per-stream checksum arrays in stripe groups. Writers
+  /// leave it unset: readers from before stream trailers would look for the
+  /// arrays. Current readers ignore it. Never remove it: the fields after it
+  /// would change slots.
+  has_stream_checksums:bool = false (deprecated);
 
   /// Fields of the trailer that follows every non-empty stream in the stripe
   /// data, in on-disk order. A stream's recorded offset and size cover only its
@@ -78,6 +77,17 @@ table FileProperties {
 
   /// Whether any top-level row in the file is null.
   has_top_level_nulls:bool = false;
+
+  /// Features a reader must support to read this file, as a bitset: feature i
+  /// is the bit with value 1 << (i % 8) in byte i / 8. Writers set only the
+  /// bits of features the file uses, end at the byte that holds the highest
+  /// one, and leave the field out when there are none. A reader refuses a file
+  /// that sets any bit the reader does not support, and checks this field
+  /// before the other fields of this table. Only set bits count, so extra zero
+  /// bytes change nothing. Bit numbers are assigned in RequiredFeature
+  /// (FileProperties.h). Once assigned, a bit is never reused and readers never
+  /// drop support for it.
+  required_features:[ubyte];
 }
 
 root_type FileProperties;

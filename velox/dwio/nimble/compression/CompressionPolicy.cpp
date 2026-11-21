@@ -70,6 +70,8 @@ CompressionConfig ConfiguredCompressionPolicy::config() const {
       compressionOptions_.useVariableBitWidthCompressor;
   config.parameters.metaInternal.compressionKey =
       compressionOptions_.metaInternalCompressionKey;
+  config.parameters.metaInternal.decompressionVerificationRateOverrides =
+      compressionOptions_.internalDecompressionVerificationRateOverrides;
   return config;
 }
 
@@ -160,6 +162,8 @@ CompressionConfig ReplayedCompressionPolicy::config() const {
       compressionOptions_.useVariableBitWidthCompressor;
   config.parameters.metaInternal.compressionKey =
       compressionOptions_.metaInternalCompressionKey;
+  config.parameters.metaInternal.decompressionVerificationRateOverrides =
+      compressionOptions_.internalDecompressionVerificationRateOverrides;
   return config;
 #endif
 }

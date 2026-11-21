@@ -17,7 +17,13 @@
 #include "velox/dwio/text/reader/TextReader.h"
 
 #include <boost/algorithm/string/predicate.hpp>
+#include <fast_float/fast_float.h>
+#include <functional>
+#include <limits>
+#include <locale>
 #include <string>
+#include <string_view>
+#include <system_error>
 
 #include "velox/common/encode/Base64.h"
 #include "velox/dwio/common/exception/Exceptions.h"
@@ -214,6 +220,30 @@ TextRowReader::TextRowReader(
       (void)seekToRow(opts.skipRows());
     }
   }
+  initSplitRowRange();
+}
+
+void TextRowReader::initSplitRowRange() {
+  const auto& splitRowRange = options_.splitRowRange();
+  if (!splitRowRange.has_value()) {
+    return;
+  }
+  // Rows count from the first row the split would otherwise return, after
+  // any header lines skipped above.
+  constexpr auto kMax = std::numeric_limits<uint64_t>::max();
+  if (splitRowRange->firstRow > 0 && !atEOF_) {
+    // Skipping the partial line at the start of a byte range leaves the
+    // reader at the end of that line; start the next one so seekToRow()
+    // skips whole rows.
+    resetLine();
+    (void)seekToRow(
+        splitRowRange->firstRow > kMax - currentRow_
+            ? kMax
+            : currentRow_ + splitRowRange->firstRow);
+  }
+  endRow_ = splitRowRange->numRows > kMax - currentRow_
+      ? kMax
+      : currentRow_ + splitRowRange->numRows;
 }
 
 uint64_t TextRowReader::next(
@@ -222,6 +252,13 @@ uint64_t TextRowReader::next(
     const Mutation* mutation) {
   if (atEOF_) {
     return 0;
+  }
+  if (endRow_.has_value()) {
+    if (currentRow_ >= *endRow_) {
+      setEOF();
+      return 0;
+    }
+    rows = std::min<uint64_t>(rows, *endRow_ - currentRow_);
   }
 
   auto& t = schemaWithId_;
@@ -314,6 +351,9 @@ int64_t TextRowReader::nextRowNumber() {
 }
 
 int64_t TextRowReader::nextReadSize(uint64_t size) {
+  if (endRow_.has_value()) {
+    size = std::min<uint64_t>(size, *endRow_ - std::min(currentRow_, *endRow_));
+  }
   return static_cast<int64_t>(std::min(fileLength_ - currentRow_, size));
 }
 
@@ -752,10 +792,9 @@ T TextRowReader::getInteger(TextRowReader& th, bool& isNull, DelimType& delim) {
     return 0;
   }
 
-  // Test if s is not acceptable integer format for
-  // the warehouse, for cases accepted by stol().
+  // Reject prefixes that are not valid for Hive text integers.
   char c = str[0];
-  if (c != '-' && !std::isdigit(static_cast<unsigned char>(c))) {
+  if (c != '-' && c != '+' && !std::isdigit(static_cast<unsigned char>(c))) {
     isNull = true;
     return 0;
   }
@@ -835,134 +874,64 @@ bool TextRowReader::getBoolean(
   return false;
 }
 
-namespace {
-
-static constexpr std::string_view kNaNStringView{"NaN"};
-static constexpr std::string_view kInfinityStringView{"Infinity"};
-static constexpr std::string_view kShortInfinityStringView{"Inf"};
-static constexpr std::string_view kNegInfinityStringView{"-Infinity"};
-static constexpr std::string_view kShortNegInfinityStringView{"-Inf"};
-
-bool unacceptableFloatingPoint(std::string& s) {
-  for (int i = 0; i < s.size(); ++i) {
-    char c = s.data()[i];
-    if (!(std::isalpha(c) || c == '-')) {
-      return false;
-    }
-  }
-
-  bool isNaN = boost::algorithm::iequals(s, kNaNStringView);
-
-  bool isInf = boost::algorithm::iequals(s, kInfinityStringView);
-  bool isShortInf = boost::algorithm::iequals(s, kShortInfinityStringView);
-
-  bool isNegInf = boost::algorithm::iequals(s, kNegInfinityStringView);
-  bool isShortNegInf =
-      boost::algorithm::iequals(s, kShortNegInfinityStringView);
-
-  return (!isNaN && !isInf && !isShortInf && !isNegInf && !isShortNegInf);
-}
-
-void trimStringInPlace(std::string& s) {
-  const auto isNotSpace = [](unsigned char ch) { return ch > 0x20; };
-  size_t start = 0;
-  size_t end = s.size();
-
-  // Find first non-whitespace character
-  while (start < end && !isNotSpace(s[start])) {
-    ++start;
-  }
-
-  // If the string is all whitespace
-  if (start == end) {
-    s.clear();
-    return;
-  }
-
-  // Find last non-whitespace character
-  size_t last = end - 1;
-  while (last > start && !isNotSpace(s[last])) {
-    --last;
-  }
-
-  // Erase leading and trailing whitespace
-  s = s.substr(start, last - start + 1);
-}
-
-} // namespace
-
-float TextRowReader::getFloat(
+template <typename T>
+T TextRowReader::getFloatingPoint(
     TextRowReader& th,
     bool& isNull,
     DelimType& delim) {
-  std::string& str = getString(th, isNull, delim);
-  if (str.empty()) {
-    isNull = true;
-  }
+  std::string_view input = getString(th, isNull, delim);
   if (isNull) {
     return 0;
   }
 
-  trimStringInPlace(str);
-
-  if (str.data()[0] == '.') {
-    th.ownedString_.insert(th.ownedString_.begin(), '0');
-    str = th.ownedString_;
+  // Trim leading and trailing bytes at most 0x20 without copying the field.
+  while (!input.empty() && static_cast<unsigned char>(input.front()) <= 0x20) {
+    input.remove_prefix(1);
   }
-
-  if (unacceptableFloatingPoint(str)) {
+  while (!input.empty() && static_cast<unsigned char>(input.back()) <= 0x20) {
+    input.remove_suffix(1);
+  }
+  if (input.empty()) {
     isNull = true;
-    return 0.0;
+    return 0;
   }
 
-  float v = 0.0;
-  unsigned long long scanPos = 0;
-  // We ignore ERANGE, since denormalized floats and
-  // infinities are acceptable.
-  auto scanCount = sscanf(str.c_str(), "%f%lln", &v, &scanPos);
-  if (scanCount != 1 || scanPos < str.size()) {
+  auto literal = input;
+  const bool negative = literal.front() == '-';
+  if (negative || literal.front() == '+') {
+    literal.remove_prefix(1);
+  }
+  if (literal == "NaN") {
+    return std::numeric_limits<T>::quiet_NaN();
+  }
+  if (boost::algorithm::iequals(literal, "inf", std::locale::classic()) ||
+      boost::algorithm::iequals(literal, "infinity", std::locale::classic())) {
+    const auto infinity = std::numeric_limits<T>::infinity();
+    return negative ? -infinity : infinity;
+  }
+
+  if (input.back() == 'f' || input.back() == 'F' || input.back() == 'd' ||
+      input.back() == 'D') {
+    input.remove_suffix(1);
+  }
+
+  T value{};
+  const auto* end = input.data() + input.size();
+  const auto [parsedEnd, error] = fast_float::from_chars(
+      input.data(),
+      end,
+      value,
+      fast_float::chars_format::general |
+          fast_float::chars_format::allow_leading_plus |
+          fast_float::chars_format::no_infnan);
+  // Keep fast_float's signed infinity/zero results on overflow/underflow.
+  // Special values are handled above, so suffixed NaN/Infinity stay invalid.
+  if (parsedEnd != end ||
+      (error != std::errc{} && error != std::errc::result_out_of_range)) {
     isNull = true;
-    return 0.0;
+    return 0;
   }
-  return v;
-}
-
-double
-TextRowReader::getDouble(TextRowReader& th, bool& isNull, DelimType& delim) {
-  std::string& str = getString(th, isNull, delim);
-  if (str.empty()) {
-    isNull = true;
-  }
-
-  if (isNull) {
-    return 0.0;
-  }
-
-  trimStringInPlace(str);
-
-  if (str.data()[0] == '.') {
-    th.ownedString_.insert(th.ownedString_.begin(), '0');
-    str = th.ownedString_;
-  }
-
-  // Filter out values from non-warehouse sources which
-  // other readers translate to null. Warehouse
-  // readers require upper-case values.
-  if (unacceptableFloatingPoint(str)) {
-    isNull = true;
-    return 0.0;
-  }
-
-  double v = 0.0;
-  unsigned long long scanPos = 0;
-  // We ignore ERANGE, since denormalized doubles and
-  // infinities are acceptable.
-  auto scanCount = sscanf(str.c_str(), "%lf%lln", &v, &scanPos);
-  if (scanCount != 1 || scanPos < str.size()) {
-    isNull = true;
-    return 0.0;
-  }
-  return v;
+  return value;
 }
 
 /// TODO: Reconsider error handling strategy for malformed data
@@ -1414,10 +1383,13 @@ void TextRowReader::readElement(
     case TypeKind::REAL:
       switch (reqT->kind()) {
         case TypeKind::REAL:
-          putValue<float, float>(getFloat, data, insertionRow, delim);
+          putValue<float, float>(
+              getFloatingPoint<float>, data, insertionRow, delim);
           break;
         case TypeKind::DOUBLE:
-          putValue<float, double>(getDouble, data, insertionRow, delim);
+          // Parse at the file column's precision before widening to DOUBLE.
+          putValue<float, double>(
+              getFloatingPoint<float>, data, insertionRow, delim);
           break;
         default:
           VELOX_FAIL(
@@ -1429,7 +1401,8 @@ void TextRowReader::readElement(
       break;
 
     case TypeKind::DOUBLE:
-      putValue<double, double>(getDouble, data, insertionRow, delim);
+      putValue<double, double>(
+          getFloatingPoint<double>, data, insertionRow, delim);
       break;
 
     case TypeKind::TIMESTAMP: {
@@ -1454,7 +1427,7 @@ void TextRowReader::readElement(
         flatVector->setNull(insertionRow, true);
       } else {
         auto ts = util::Converter<TypeKind::TIMESTAMP>::tryCast(s).thenOrThrow(
-            folly::identity,
+            std::identity{},
             [&](const Status& status) { VELOX_USER_FAIL(status.message()); });
         ts.toGMT(Timestamp::defaultTimezone());
         flatVector->set(

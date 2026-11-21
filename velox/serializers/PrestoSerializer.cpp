@@ -76,7 +76,7 @@ int64_t computeChecksum(
   }
   const int32_t dataSize = compressed ? compressedSize : uncompressedSize;
   bits::Crc32 crc32;
-  if (FOLLY_UNLIKELY(source->remainingSize() < dataSize)) {
+  if (source->remainingSize() < dataSize) [[unlikely]] {
     VELOX_FAIL(
         "Tried to read {} bytes, larger than what's remained in source {} "
         "bytes. Source details: {}",
@@ -87,7 +87,7 @@ int64_t computeChecksum(
   auto remainingBytes = dataSize;
   while (remainingBytes > 0) {
     auto data = source->nextView(remainingBytes);
-    if (FOLLY_UNLIKELY(data.size() == 0)) {
+    if (data.size() == 0) [[unlikely]] {
       VELOX_FAIL(
           "Reading 0 bytes from source. Source details: {}",
           source->toString());

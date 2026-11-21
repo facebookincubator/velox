@@ -18,6 +18,7 @@
 
 #include <folly/container/F14Set.h>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -231,6 +232,15 @@ struct TableParameter {
 struct RowNumberColumnInfo {
   column_index_t insertPosition;
   std::string name;
+};
+
+/// Rows of a split to read: 'numRows' rows starting at row 'firstRow', counted
+/// from the first row in the split's byte range.
+struct SplitRowRange {
+  uint64_t firstRow{0};
+  uint64_t numRows{std::numeric_limits<uint64_t>::max()};
+
+  bool operator==(const SplitRowRange& other) const = default;
 };
 
 /// Carries format-owned reader and writer options through the common reader
@@ -495,6 +505,16 @@ class RowReaderOptions {
     return skipRows_;
   }
 
+  /// Restricts reading to a range of the split's rows. Only the selective
+  /// Nimble reader supports it.
+  void setSplitRowRange(std::optional<SplitRowRange> splitRowRange) {
+    splitRowRange_ = splitRowRange;
+  }
+
+  const std::optional<SplitRowRange>& splitRowRange() const {
+    return splitRowRange_;
+  }
+
   bool preserveFlatMapsInMemory() const {
     return preserveFlatMapsInMemory_;
   }
@@ -563,14 +583,6 @@ class RowReaderOptions {
     indexEnabled_ = enabled;
   }
 
-  bool stringDecoderZeroCopy() const {
-    return stringDecoderZeroCopy_;
-  }
-
-  void setStringDecoderZeroCopy(bool stringDecoderZeroCopy) {
-    stringDecoderZeroCopy_ = stringDecoderZeroCopy;
-  }
-
   bool nimblePreserveDictionaryEncoding() const {
     return nimblePreserveDictionaryEncoding_;
   }
@@ -593,6 +605,16 @@ class RowReaderOptions {
 
   void setNimbleScanFastPath(bool value) {
     nimbleScanFastPath_ = value;
+  }
+
+  /// Returns whether the FSST decode cache is enabled.
+  bool nimbleFsstDecodeRepeatedPayloads() const {
+    return nimbleFsstDecodeRepeatedPayloads_;
+  }
+
+  /// Enables the FSST decode cache independently of the scan fast path.
+  void setNimbleFsstDecodeRepeatedPayloads(bool value) {
+    nimbleFsstDecodeRepeatedPayloads_ = value;
   }
 
   bool lazyColumnIo() const {
@@ -678,6 +700,7 @@ class RowReaderOptions {
   std::function<void(uint16_t)> stripeCountCallback_;
   bool eagerFirstStripeLoad_{true};
   uint64_t skipRows_{0};
+  std::optional<SplitRowRange> splitRowRange_;
 
   std::shared_ptr<UnitLoaderFactory> unitLoaderFactory_;
 
@@ -688,7 +711,6 @@ class RowReaderOptions {
   bool indexEnabled_{false};
   // Enables zero-copy string decoding in the Nimble selective reader,
   // using the non-legacy encoding path. Controlled via session property.
-  bool stringDecoderZeroCopy_{false};
   // Controls whether dictionary-encoded Nimble string columns return
   // DictionaryVector instead of FlatVector.
   bool nimblePreserveDictionaryEncoding_{false};
@@ -696,6 +718,8 @@ class RowReaderOptions {
   bool nimbleDictionaryAwareReads_{false};
   // Routes Nimble encodings through the scan fast path.
   bool nimbleScanFastPath_{false};
+  // Reuses decoded FSST strings within each encoding read call.
+  bool nimbleFsstDecodeRepeatedPayloads_{false};
   // Defers I/O for projected columns without pushdown or remaining filters.
   bool lazyColumnIo_{false};
   folly::F14FastSet<std::string> remainingFilterColumns_;
@@ -921,6 +945,15 @@ class ReaderOptions : public io::ReaderOptions {
     nimbleDirectBufferedInputEnabled_ = value;
   }
 
+  /// Whether Nimble decodes file column statistics on first use.
+  bool nimbleLazyFileStats() const {
+    return nimbleLazyFileStats_;
+  }
+
+  void setNimbleLazyFileStats(bool value) {
+    nimbleLazyFileStats_ = value;
+  }
+
   /// Whether to cache file metadata (footer, stripes, index) in the
   /// process-wide AsyncDataCache. When enabled, the first reader performs a
   /// speculative tail read and populates the cache; subsequent readers on the
@@ -988,6 +1021,18 @@ class ReaderOptions : public io::ReaderOptions {
     loadClusterIndex_ = value;
   }
 
+  /// Cluster index implementation to load. Empty selects the format's default.
+  /// A file written with a different implementation has no index under this
+  /// name, so it opens without one rather than silently reading the wrong
+  /// index. Only effective when loadClusterIndex() is also true.
+  const std::string& clusterIndexName() const {
+    return clusterIndexName_;
+  }
+
+  void setClusterIndexName(std::string value) {
+    clusterIndexName_ = std::move(value);
+  }
+
   /// Whether to eagerly preload all per-partition metadata and decode all
   /// per-partition key streams during file open. Only effective when
   /// loadClusterIndex() is also true. Implies pinning so preloaded chunks
@@ -1043,9 +1088,9 @@ class ReaderOptions : public io::ReaderOptions {
   }
 
   /// Process-wide async data cache for Nimble metadata caching. When both
-  /// fileHandle and cache are set, TabletReader creates a
-  /// CachedMetadataInput that caches decompressed footer, stripes, and
-  /// index metadata across readers on the same file.
+  /// fileHandle and cache are set and cacheMetadata() is true, TabletReader
+  /// caches decompressed footer, stripes, and index metadata across readers on
+  /// the same file, in the block cache that Nimble builds on this cache.
   cache::AsyncDataCache* cache() const {
     return cache_;
   }
@@ -1076,12 +1121,14 @@ class ReaderOptions : public io::ReaderOptions {
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
   bool nimbleDirectBufferedInputEnabled_{false};
+  bool nimbleLazyFileStats_{false};
   bool cacheMetadata_{false};
   bool pinMetadata_{false};
   bool cacheIndex_{false};
   bool pinIndex_{false};
   bool cacheData_{true};
   bool loadClusterIndex_{false};
+  std::string clusterIndexName_;
   bool preloadIndex_{false};
   bool verifyStreamChecksums_{false};
   bool loadChunkStats_{true};

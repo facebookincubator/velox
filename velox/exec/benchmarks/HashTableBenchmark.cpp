@@ -180,11 +180,8 @@ class HashTableBenchmark : public VectorTestBase {
       auto table = HashTable<true>::createForJoin(
           std::move(keyHashers),
           dependentTypes,
-          true,
-          false,
-          false, // hasCountFlag
-          1'000,
-          pool_.get());
+          pool_.get(),
+          {.allowDuplicates = true, .minTableSizeForParallelJoinBuild = 1'000});
 
       makeRows(params_.size, 1, sequence, params_.buildType, batches);
       copyVectorsToTable(batches, startOffset, table.get());
@@ -218,7 +215,7 @@ class HashTableBenchmark : public VectorTestBase {
         auto subtable = i == 0 ? topTable_.get() : otherTables[i - 1].get();
         RowContainerIterator iter;
         while (auto numRows = subtable->rows()->listRows(
-                   &iter, kInsertBatch, RowContainer::kUnlimited, insertRows)) {
+                   &iter, std::span(insertRows), RowContainer::kUnlimited)) {
           for (auto row = 0; row < numRows; ++row) {
             f14Table_->insert(reinterpret_cast<uint64_t*>(insertRows[row]));
           }
@@ -335,7 +332,6 @@ class HashTableBenchmark : public VectorTestBase {
     int32_t mask = powerOfTwo - 1;
     int32_t position = 0;
     int32_t delta = 1;
-    auto nextOffset = rowContainer->nextOffset();
 
     // We insert values in a geometric skip order. 1, 2, 4, 7,
     // 11,... where the skip increments by one. We wrap around at the
@@ -350,9 +346,6 @@ class HashTableBenchmark : public VectorTestBase {
         rowOfKey_[tableOffset + position] = newRow;
         auto batchIndex = position / batchSize;
         auto rowIndex = position % batchSize;
-        if (nextOffset) {
-          *reinterpret_cast<char**>(newRow + nextOffset) = nullptr;
-        }
         for (auto i = 0; i < batches[batchIndex]->type()->size(); ++i) {
           rowContainer->store(decoded[batchIndex][i], rowIndex, newRow, i);
         }

@@ -25,6 +25,8 @@
 #include <caffe2/serialize/inline_container.h> // @manual=//caffe2/caffe2/serialize:inline_container
 #include <torch/nativert/executor/ExecutorConfig.h>
 
+#include "velox/experimental/torchwave/PackedInput.h"
+
 namespace torch::wave {
 
 class WaveGraphExecutor;
@@ -65,6 +67,12 @@ class TorchWaveModel {
   /// device.
   std::vector<c10::IValue> run(std::vector<c10::IValue> inputs);
 
+  /// Like run() but reuses a single held execution frame across calls: weights
+  /// and constants stay resident (set once) and only the user inputs are
+  /// refilled. Single-threaded fast path (one in-flight call); use run() for
+  /// concurrent callers.
+  std::vector<c10::IValue> runReuse(std::vector<c10::IValue> inputs);
+
   /// Tensor-only convenience over run(): accepts tensor inputs and returns the
   /// tensor outputs (non-tensor outputs become undefined tensors).
   std::vector<at::Tensor> runTensors(std::vector<at::Tensor> inputs);
@@ -73,10 +81,18 @@ class TorchWaveModel {
     return *executor_;
   }
 
+  /// The packed inputs that load() rewrote, one recipe per input, when
+  /// WaveConfig::packInputs was set. run() then expects those inputs encoded,
+  /// e.g. by encodePackedInputs().
+  const std::vector<PackRecipe>& packRecipes() const {
+    return packRecipes_;
+  }
+
  private:
   TorchWaveModel(
       std::shared_ptr<caffe2::serialize::PyTorchStreamReader> reader,
-      std::unique_ptr<WaveGraphExecutor> executor);
+      std::unique_ptr<WaveGraphExecutor> executor,
+      std::vector<PackRecipe> packRecipes);
 
   // Keeps the .pt2 archive reader alive for the model's lifetime; weights and
   // constants may be read from it lazily during execution.
@@ -84,6 +100,8 @@ class TorchWaveModel {
 
   // Owns the compiled whole-graph WaveGraph and executes it on each run().
   std::unique_ptr<WaveGraphExecutor> executor_;
+
+  std::vector<PackRecipe> packRecipes_;
 };
 
 /// Converts the outputs of run() to tensors, mapping a non-tensor output to an

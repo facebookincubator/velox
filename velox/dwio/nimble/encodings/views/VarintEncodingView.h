@@ -16,6 +16,7 @@
 #pragma once
 
 #include <algorithm>
+#include <span>
 
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -44,6 +45,19 @@ class VarintEncodingView final : public TypedEncodingView<T> {
       : TypedEncodingView<T>{data, pool, options},
         values_{this->template getVectorBuffer<physicalType>()} {
     NIMBLE_CHECK_EQ(this->encodingType_, EncodingType::Varint);
+    // Decoders read each varint up to its last byte, so a non-empty payload
+    // must follow the baseline and end with one.
+    NIMBLE_CHECK_FILE_GE(
+        data.size(),
+        this->dataOffset_ + sizeof(physicalType) +
+            (this->rowCount_ > 0 ? 1 : 0),
+        "Varint payload is truncated");
+    if (this->rowCount_ > 0) {
+      NIMBLE_CHECK_FILE_EQ(
+          static_cast<uint8_t>(data.back()) & 0x80,
+          0,
+          "Varint payload is truncated");
+    }
     if (!this->options_.cacheEncodingView) {
       return;
     }
@@ -86,6 +100,33 @@ class VarintEncodingView final : public TypedEncodingView<T> {
     }
     std::copy(
         values_.data() + offset, values_.data() + offset + length, output);
+  }
+
+  // Without cacheEncodingView, decodes the stream once up to the largest index
+  // instead of once per index, which matters for a view read once per row,
+  // such as an ALP Dictionary alphabet.
+  void readPhysicalAt(std::span<const uint32_t> indices, physicalType* output)
+      const final {
+    if (indices.empty()) {
+      return;
+    }
+    const auto maxIndex = this->checkReadIndices(indices);
+    if (this->options_.cacheEncodingView) {
+      for (size_t i{0}; i < indices.size(); ++i) {
+        output[i] = values_[indices[i]];
+      }
+      return;
+    }
+    if (indices.size() == 1) {
+      readPhysical(maxIndex, 1, output);
+      return;
+    }
+    ScopedVector<physicalType> decoded{
+        maxIndex + 1, this->pool_, this->options_.bufferPool};
+    createDecoder()->materialize(maxIndex + 1, decoded.data());
+    for (size_t i{0}; i < indices.size(); ++i) {
+      output[i] = decoded[indices[i]];
+    }
   }
 
   // Holds every decoded value. Empty without cacheEncodingView.

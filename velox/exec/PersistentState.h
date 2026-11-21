@@ -46,8 +46,11 @@ class PersistentState {
   explicit PersistentState(std::shared_ptr<memory::MemoryPool> pool)
       : pool_{std::move(pool)} {}
 
-  memory::MemoryPool* pool() const {
-    return pool_.get();
+  /// The pool the entries are allocated in.  A holder of the pool keeps the
+  /// vectors and hash tables it took from this store valid after the store is
+  /// destroyed.
+  const std::shared_ptr<memory::MemoryPool>& pool() const {
+    return pool_;
   }
 
   /// Registers Vector entry 'name' with its append mode (from its

@@ -124,6 +124,7 @@ void ParquetWriterOptions::merge(
   mergeIfSet(
       parquetWriteTimestampUnit, parquetOverrides->parquetWriteTimestampUnit);
   mergeIfSet(enableDictionary, parquetOverrides->enableDictionary);
+  mergeIfSet(sizeStatisticsLevel, parquetOverrides->sizeStatisticsLevel);
   mergeIfSet(
       enableStoreDecimalAsInteger,
       parquetOverrides->enableStoreDecimalAsInteger);
@@ -134,6 +135,7 @@ void ParquetWriterOptions::merge(
   mergeIfSet(dataPageSize, parquetOverrides->dataPageSize);
   mergeIfSet(batchSize, parquetOverrides->batchSize);
   mergeIfSet(rowGroupSizeBytes, parquetOverrides->rowGroupSizeBytes);
+  mergeIfSet(rowGroupRows, parquetOverrides->rowGroupRows);
   mergeIfSet(createdBy, parquetOverrides->createdBy);
 }
 
@@ -242,6 +244,10 @@ std::shared_ptr<WriterProperties> getArrowParquetWriterOptions(
   }
   if (parquetOptions.createdBy.has_value()) {
     properties = properties->createdBy(parquetOptions.createdBy.value());
+  }
+  if (parquetOptions.sizeStatisticsLevel.has_value()) {
+    properties = properties->setSizeStatisticsLevel(
+        parquetOptions.sizeStatisticsLevel.value());
   }
   return properties->build();
 }
@@ -372,6 +378,24 @@ std::optional<bool> isParquetV2(std::optional<std::string> version) {
   VELOX_FAIL("Unsupported parquet datapage version {}", *version);
 }
 
+std::optional<arrow::SizeStatisticsLevel> toSizeStatisticsLevel(
+    std::optional<std::string> level) {
+  if (!level) {
+    return std::nullopt;
+  }
+  if (*level == "NONE") {
+    return arrow::SizeStatisticsLevel::kNone;
+  }
+  if (*level == "COLUMN_CHUNK") {
+    return arrow::SizeStatisticsLevel::kColumnChunk;
+  }
+  if (*level == "PAGE_AND_COLUMN_CHUNK") {
+    return arrow::SizeStatisticsLevel::kPageAndColumnChunk;
+  }
+  VELOX_USER_FAIL(
+      "Unsupported parquet writer size statistics level {}", *level);
+}
+
 std::optional<int64_t> toParquetPageSize(std::optional<std::string> pageSize) {
   if (!pageSize) {
     return std::nullopt;
@@ -468,7 +492,9 @@ Writer::Writer(
         parquetWriterOptions.rowGroupSizeBytes.value_or(
             DefaultFlushPolicy::kDefaultBytesInRowGroup);
     flushPolicy_ = std::make_unique<DefaultFlushPolicy>(
-        DefaultFlushPolicy::kDefaultRowsInGroup, bytesInRowGroup);
+        parquetWriterOptions.rowGroupRows.value_or(
+            DefaultFlushPolicy::kDefaultRowsInGroup),
+        bytesInRowGroup);
   }
   options_.timestampUnit = static_cast<TimestampUnit>(
       parquetWriteTimestampUnit.value_or(TimestampPrecision::kNanoseconds));
@@ -858,10 +884,20 @@ ParquetWriterFactory::createFormatOptions(
   parquetOptions->enableWritePageIndex = toBoolConfigValue(
       ParquetConfig::writerEnablePageIndex(connectorConfig, session),
       "enable write page index");
+  parquetOptions->sizeStatisticsLevel = toSizeStatisticsLevel(
+      ParquetConfig::writerSizeStatisticsLevel(connectorConfig, session));
   parquetOptions->dataPageSize = toParquetPageSize(
       ParquetConfig::writerPageSize(connectorConfig, session));
   parquetOptions->rowGroupSizeBytes = toParquetRowGroupSize(
       ParquetConfig::writerRowGroupSize(connectorConfig, session));
+  parquetOptions->rowGroupRows =
+      ParquetConfig::writerRowGroupRows(connectorConfig, session);
+  if (parquetOptions->rowGroupRows.has_value()) {
+    VELOX_USER_CHECK_GT(
+        *parquetOptions->rowGroupRows,
+        0,
+        "Parquet writer row group rows must be greater than zero");
+  }
   parquetOptions->batchSize = toParquetBatchSize(
       ParquetConfig::writerBatchSize(connectorConfig, session));
   parquetOptions->createdBy = ParquetConfig::writerCreatedBy(connectorConfig);

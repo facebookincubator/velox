@@ -252,6 +252,32 @@ class ScatterAddInPlaceTestPreproc(nn.Module):
         return out0, out1, out2, out3
 
 
+class ScatterAddRunsTestPreproc(nn.Module):
+    """Exercises the warp aggregation in tw.scatter_add on an index sorted into
+    runs, the shape of ROO's per-row counts (repeat_interleave of arange).
+
+    A warp whose active lanes all hit one destination sums with shuffles and
+    does one atomic; a warp spanning a run boundary falls back to an atomic per
+    lane. The element count is chosen so the loop ends on a fractional warp:
+    the last warp has fewer active lanes than 32, all inside the final run, so
+    the aggregated path runs with inactive lanes that must contribute nothing.
+      - out0: src is computed from 'flags' (the ROO form), so the operand is
+        evaluated only for lanes in range and the scatter is called by every
+        lane of the block.
+      - out1: src read from memory, the form with no elementwise producer.
+    int64 keeps the sums exact in any order.
+    """
+
+    def forward(
+        self, index: Tensor, flags: Tensor, src: Tensor
+    ) -> tuple[Tensor, Tensor]:
+        counts = torch.zeros(10, dtype=torch.int64, device=index.device)
+        counts.scatter_add_(0, index, ((flags & 3) != 0).to(torch.int64))
+        sums = torch.zeros(10, dtype=torch.int64, device=index.device)
+        sums.scatter_add_(0, index, src)
+        return counts, sums
+
+
 class ScatterAddCgConsumerTestPreproc(nn.Module):
     """Repro for the cooperative-grid failure on the ROO preproc: a fused
     tw.scatter_add whose src/index are far larger than the tensor it accumulates

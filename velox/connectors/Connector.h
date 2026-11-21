@@ -389,7 +389,9 @@ class DataSource {
     scanBatchCallback_ = std::move(callback);
   }
 
-  /// Called by TableScan after each non-empty batch with generic scan stats.
+  /// Called by TableScan after each read that scanned rows, with generic scan
+  /// stats. A read whose rows the filters removed, or whose output is dropped,
+  /// is reported too.
   /// Default is a no-op. Subclasses should override to create a
   /// connector-specific event (e.g., FileScanBatchEvent), enrich it with
   /// connector-specific fields, and call scanBatchCallback_.
@@ -821,7 +823,7 @@ class ConnectorQueryCtx {
   const std::unordered_map<std::string, memory::MemoryPool*> customPools_;
   bool selectiveNimbleReaderEnabled_{false};
   core::QueryConfig::RowSizeTrackingMode rowSizeTrackingEnabled_{
-      core::QueryConfig::RowSizeTrackingMode::ENABLED_FOR_ALL};
+      core::QueryConfig::RowSizeTrackingMode::kEnabledForAll};
 };
 
 class Connector;

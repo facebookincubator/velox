@@ -28,6 +28,7 @@
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/DeletionVectorReader.h"
+#include "velox/connectors/hive/iceberg/PartitionSpec.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -43,7 +44,8 @@ namespace {
 // the Puffin output directory) and writeKind(); inputColumns and partition
 // spec are not exercised by the deletion-vector path.
 IcebergInsertTableHandlePtr makeDeletionVectorHandle(
-    const std::string& outputDirectory) {
+    const std::string& outputDirectory,
+    bool includePartitionPaths = true) {
   auto locationHandle = std::make_shared<connector::hive::LocationHandle>(
       outputDirectory,
       outputDirectory,
@@ -55,7 +57,14 @@ IcebergInsertTableHandlePtr makeDeletionVectorHandle(
       /*partitionSpec=*/nullptr,
       /*compressionKind=*/std::nullopt,
       /*serdeParameters=*/std::unordered_map<std::string, std::string>{},
-      IcebergInsertTableHandle::WriteKind::kDeletionVector);
+      IcebergInsertTableHandle::WriteKind::kDeletionVector,
+      /*existingDeletionVectors=*/
+      std::unordered_map<
+          std::string,
+          IcebergInsertTableHandle::ExistingDeletionVector>{},
+      std::make_shared<const IcebergFileNameGenerator>(),
+      /*insertedColumns=*/std::vector<std::string>{},
+      includePartitionPaths);
 }
 
 // Like makeDeletionVectorHandle but carries a map of existing deletion vectors
@@ -208,7 +217,8 @@ class IcebergDeletionVectorSinkTest : public ::testing::Test {
       const std::vector<vector_size_t>& selected,
       bool filePathConstant,
       bool withLeadingIdColumn = false,
-      const std::string& partitionJson = "") {
+      const std::string& partitionJson = "",
+      int32_t specId = 0) {
     const auto baseSize = static_cast<vector_size_t>(allPositions.size());
     VectorPtr filePathVector;
     if (filePathConstant) {
@@ -220,7 +230,7 @@ class IcebergDeletionVectorSinkTest : public ::testing::Test {
     }
     auto positionVector = vectorMaker_->flatVector<int64_t>(allPositions);
     auto specIdVector = vectorMaker_->flatVector<int32_t>(
-        baseSize, [](vector_size_t /*i*/) { return 0; });
+        baseSize, [&](vector_size_t /*i*/) { return specId; });
     auto partitionVector = vectorMaker_->flatVector<StringView>(
         baseSize,
         [&](vector_size_t /*i*/) { return StringView(partitionJson); });
@@ -295,6 +305,34 @@ TEST_F(IcebergDeletionVectorSinkTest, singleFileSinglePosition) {
   auto deleted = readBackDeletedPositions(
       puffinPath, offset, length, recordCount, /*maxPos=*/42, pool_.get());
   EXPECT_EQ(deleted, std::vector<uint64_t>{42});
+}
+
+TEST_F(IcebergDeletionVectorSinkTest, flatLayoutWritesToTargetDirectory) {
+  auto dataDirectory = TempDirectoryPath::create();
+  auto targetDirectory = TempDirectoryPath::create();
+  auto handle = makeDeletionVectorHandle(
+      targetDirectory->getPath(), /*includePartitionPaths=*/false);
+
+  IcebergDeletionVectorSink sink(
+      ROW({"file_path", "pos"}, {VARCHAR(), BIGINT()}),
+      handle,
+      connectorQueryCtx_.get(),
+      connector::CommitStrategy::kNoCommit,
+      hiveConfig_);
+
+  const std::string dataFile =
+      dataDirectory->getPath() + "/id=1/data-file.parquet";
+  sink.appendData(makePositionDeleteRows({dataFile}, {42}));
+  EXPECT_TRUE(sink.finish());
+  const auto commitMessages = sink.close();
+
+  ASSERT_EQ(commitMessages.size(), 1);
+  const auto parsed = folly::parseJson(commitMessages[0]);
+  EXPECT_EQ(parsed["referencedDataFile"].asString(), dataFile);
+  EXPECT_EQ(
+      std::filesystem::path(parsed["path"].asString()).parent_path(),
+      std::filesystem::path(targetDirectory->getPath()));
+  EXPECT_TRUE(std::filesystem::is_empty(dataDirectory->getPath()));
 }
 
 // Writes a first DV for a data file, then runs a second sink that DELETEs a
@@ -898,6 +936,56 @@ TEST_F(IcebergDeletionVectorSinkTest, conflictingPartitionDataFails) {
           /*withLeadingIdColumn=*/false,
           R"({"partitionValues":["P2"]})")),
       "Conflicting partition_data for data file");
+}
+
+// A data file written before the table's partition spec evolved keeps its
+// old spec. The DV must commit under the row-id's spec_id, not the table's
+// current spec, or the coordinator demands partition data the file never had.
+TEST_F(IcebergDeletionVectorSinkTest, rowIdStructEmitsDataFileSpecId) {
+  auto tempDir = TempDirectoryPath::create();
+  auto locationHandle = std::make_shared<connector::hive::LocationHandle>(
+      tempDir->getPath(),
+      tempDir->getPath(),
+      connector::hive::LocationHandle::TableType::kExisting);
+  const auto currentSpec = std::make_shared<const IcebergPartitionSpec>(
+      /*specId=*/1,
+      std::vector<IcebergPartitionSpec::Field>{
+          {"p", VARCHAR(), TransformType::kIdentity, std::nullopt}});
+  auto handle = std::make_shared<const IcebergInsertTableHandle>(
+      /*inputColumns=*/std::vector<IcebergColumnHandlePtr>{},
+      locationHandle,
+      dwio::common::FileFormat::PARQUET,
+      currentSpec,
+      /*compressionKind=*/std::nullopt,
+      /*serdeParameters=*/std::unordered_map<std::string, std::string>{},
+      IcebergInsertTableHandle::WriteKind::kDeletionVector);
+
+  IcebergDeletionVectorSink sink(
+      ROW({"$row_id"},
+          {ROW(
+              {"_file", "_pos", "_spec_id", "partition_data"},
+              {VARCHAR(), BIGINT(), INTEGER(), VARCHAR()})}),
+      handle,
+      connectorQueryCtx_.get(),
+      connector::CommitStrategy::kNoCommit,
+      hiveConfig_);
+
+  const std::string dataFile = tempDir->getPath() + "/data-file.parquet";
+  sink.appendData(makeRowIdStructDeletePage(
+      dataFile,
+      /*allPositions=*/{0, 1, 2},
+      /*selected=*/{1},
+      /*filePathConstant=*/true,
+      /*withLeadingIdColumn=*/false,
+      /*partitionJson=*/"",
+      /*specId=*/0));
+  EXPECT_TRUE(sink.finish());
+
+  const auto messages = sink.close();
+  ASSERT_EQ(messages.size(), 1);
+  const auto parsed = folly::parseJson(messages[0]);
+  EXPECT_EQ(parsed["partitionSpecJson"].asInt(), 0);
+  EXPECT_EQ(parsed.count("partitionDataJson"), 0u);
 }
 
 TEST_F(IcebergDeletionVectorSinkTest, finishAndAbortAreIdempotent) {

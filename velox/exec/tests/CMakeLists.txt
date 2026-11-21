@@ -91,14 +91,13 @@ set(
   SpillStatsTest.cpp
   MarkSortedTest.cpp
   PartitionedOutputTest.cpp
-  # group3 (~584s): SpillerTest 584 + 9 lightweight
+  # group3 (~584s): SpillerTest 584 + 8 lightweight
   SpillerTest.cpp
   PlanNodeToSummaryStringTest.cpp
   CountingJoinTest.cpp
   CustomJoinTest.cpp
   TaskListenerTest.cpp
   SplitTest.cpp
-  SqlTest.cpp
   WindowFunctionRegistryTest.cpp
   StreamingEnforceDistinctTest.cpp
   HashBitRangeTest.cpp
@@ -154,6 +153,8 @@ set(
   VectorWindowPartitionTest.cpp
   FileExchangeTest.cpp
   CursorTest.cpp
+  SplitLifecycleTest.cpp
+  PortsTest.cpp
 )
 
 set(
@@ -216,6 +217,21 @@ if(VELOX_ENABLE_GEO)
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   )
   target_link_libraries(velox_exec_SpatialJoinTest ${VELOX_EXEC_TEST_DEPS})
+endif()
+
+if(VELOX_ENABLE_FAISS)
+  add_executable(
+    velox_exec_VectorSearchJoinTest
+    VectorSearchJoinTest.cpp
+    VectorSearchTest.cpp
+    Main.cpp
+  )
+  add_test(
+    NAME velox_exec_VectorSearchJoinTest
+    COMMAND velox_exec_VectorSearchJoinTest
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+  target_link_libraries(velox_exec_VectorSearchJoinTest ${VELOX_EXEC_TEST_DEPS} velox_vector_index)
 endif()
 
 add_executable(

@@ -21,7 +21,6 @@ endif()
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(tests)
 endif()
-add_subdirectory(legacy)
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(selection/tests)
 endif()
@@ -72,6 +71,8 @@ add_library(
   views/EncodingView.cpp
   views/DeltaBlockEncodingView.h
   views/EliasFanoEncodingView.h
+  views/PartitionedEliasFanoEncodingView.h
+  views/ReversedEncodingView.h
   views/EncodingViewFactory.cpp
   views/FsstEncodingView.cpp
   views/HuffmanEncodingView.h
@@ -82,6 +83,7 @@ add_library(
   views/SubIntSplitEncodingView.h
   views/RLEEncodingView.h
   views/SentinelEncodingView.h
+  views/SequenceEncodingView.h
   views/PFOREncodingView.h
   views/MainlyConstantEncodingView.h
   views/NullableEncodingView.h
@@ -93,8 +95,7 @@ add_library(
   views/EncodingView.h
   views/DictionaryEncodingView.h
   views/ConstantEncodingView.h
-  views/BlockBitPackingEncodingView.h
-  views/BitRangeSplitEncodingView.h
+  views/BlockBitPackingV2EncodingView.h
   views/ALPEncodingView.h
   views/ALPRDEncodingView.h
   selection/Statistics.h
@@ -112,6 +113,8 @@ add_library(
   common/EncodingFactory.h
   common/Encoding.h
   common/BufferedEncoding.h
+  deprecated/BlockBitPackingEncodingView.h
+  deprecated/BlockBitPackingEncoding.h
   VarintEncoding.h
   TrivialEncoding.h
   SubIntSplitEncoding.h
@@ -121,6 +124,8 @@ add_library(
   SharedDictionaryEncoding.h
   SharedDictionaryBuilder.h
   SentinelEncoding.h
+  SequenceEncoding.h
+  ReversedEncoding.h
   RLEEncoding.h
   PrefixEncoding.h
   PFOREncoding.h
@@ -132,12 +137,12 @@ add_library(
   FixedBitWidthEncoding.h
   EncodingSliceFactory.h
   EliasFanoEncoding.h
+  PartitionedEliasFanoEncoding.h
   DictionaryEncoding.h
   DeltaEncoding.h
   DeltaBlockEncoding.h
   ConstantEncoding.h
-  BlockBitPackingEncoding.h
-  BitRangeSplitEncoding.h
+  BlockBitPackingV2Encoding.h
   ALPEncoding.h
   ALPRDEncoding.h
 )

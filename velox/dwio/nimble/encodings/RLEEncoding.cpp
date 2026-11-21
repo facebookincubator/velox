@@ -197,4 +197,87 @@ uint32_t RLEEncoding<bool>::countTrue(
   return counts.numTrueInRange;
 }
 
+template <typename T>
+typename RLEEncoding<T>::RangeSums RLEEncoding<T>::sumRange(
+    std::string_view encoded,
+    uint32_t offset,
+    uint32_t length,
+    const Encoding::Options& options,
+    velox::memory::MemoryPool* pool) {
+  NIMBLE_CHECK_EQ(
+      EncodingPrefix::encodingType(encoded),
+      EncodingType::RLE,
+      "Expected RLE encoding.");
+  NIMBLE_CHECK_EQ(
+      EncodingPrefix::dataType(encoded),
+      TypeTraits<T>::dataType,
+      "Unexpected RLE data type.");
+  const auto sourceRowCount =
+      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
+  NIMBLE_CHECK_LE(offset, sourceRowCount);
+  NIMBLE_CHECK_LE(length, sourceRowCount - offset);
+  NIMBLE_CHECK_GT(length, 0, "Cannot sum zero rows.");
+
+  const char* pos = encoded.data() +
+      EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);
+  const uint32_t runLengthsSize = encoding::readUint32(pos);
+  const std::string_view runLengthsData{pos, runLengthsSize};
+  pos += runLengthsSize;
+  const std::string_view runValuesData{
+      pos, static_cast<size_t>(encoded.data() + encoded.size() - pos)};
+
+  const EncodingFactory encodingFactory{options};
+  const auto noStrings = [](uint32_t /*totalLength*/) -> void* {
+    return nullptr;
+  };
+  auto runLengthsEncoding =
+      encodingFactory.create(*pool, runLengthsData, noStrings);
+  auto runValuesEncoding =
+      encodingFactory.create(*pool, runValuesData, noStrings);
+  const auto runCount = runLengthsEncoding->rowCount();
+  NIMBLE_CHECK_FILE_EQ(
+      runCount,
+      runValuesEncoding->rowCount(),
+      "RLE run lengths and run values must have the same count.");
+
+  constexpr uint32_t kRunChunkSize{256};
+  const auto chunkCapacity = std::min<uint32_t>(runCount, kRunChunkSize);
+  ScopedVector<uint32_t> runLengths{chunkCapacity, pool, options.bufferPool};
+  ScopedVector<physicalType> runValues{chunkCapacity, pool, options.bufferPool};
+  RangeSums sums;
+  const uint64_t rangeEnd = static_cast<uint64_t>(offset) + length;
+  uint64_t row{0};
+  uint32_t run{0};
+  while (row < rangeEnd) {
+    NIMBLE_CHECK_FILE_LT(run, runCount, "RLE run lengths are too short.");
+    const auto chunkSize = std::min<uint32_t>(chunkCapacity, runCount - run);
+    runLengthsEncoding->materialize(chunkSize, runLengths->data());
+    runValuesEncoding->materialize(chunkSize, runValues->data());
+    for (uint32_t i = 0; i < chunkSize && row < rangeEnd; ++i) {
+      const uint64_t runStart = row;
+      const uint64_t runEnd = row + (*runLengths)[i];
+      const uint64_t value = (*runValues)[i];
+      if (runStart < offset) {
+        sums.sumBeforeRange +=
+            (std::min<uint64_t>(runEnd, offset) - runStart) * value;
+      }
+      const auto rangeStart = std::max<uint64_t>(runStart, offset);
+      const auto rangeLimit = std::min<uint64_t>(runEnd, rangeEnd);
+      if (rangeStart < rangeLimit) {
+        sums.sumInRange += (rangeLimit - rangeStart) * value;
+      }
+      row = runEnd;
+    }
+    run += chunkSize;
+  }
+  return sums;
+}
+
+template RLEEncoding<uint32_t>::RangeSums RLEEncoding<uint32_t>::sumRange(
+    std::string_view encoded,
+    uint32_t offset,
+    uint32_t length,
+    const Encoding::Options& options,
+    velox::memory::MemoryPool* pool);
+
 } // namespace facebook::nimble

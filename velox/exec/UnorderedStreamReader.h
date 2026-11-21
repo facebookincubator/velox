@@ -58,7 +58,7 @@ class UnorderedStreamReader {
   /// false if all the streams have been read out.
   bool nextBatch(RowVectorPtr& batch) {
     while (FOLLY_LIKELY(currentStream < streams_.size())) {
-      if (FOLLY_LIKELY(streams_[currentStream]->nextBatch(batch))) {
+      if (streams_[currentStream]->nextBatch(batch)) [[likely]] {
         return true;
       }
       ++currentStream;

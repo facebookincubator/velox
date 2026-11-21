@@ -36,15 +36,22 @@
 #include "velox/exec/rpc/RPCRateLimiter.h"
 
 #include <folly/futures/ManualTimekeeper.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
+#include <future>
+#include <iterator>
+#include <limits>
 #include <stdexcept>
 #include <system_error>
 #include <thread>
+#include <tuple>
 #include <vector>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 
 namespace facebook::velox::exec::rpc {
@@ -147,7 +154,68 @@ std::shared_ptr<RPCRateLimiter> makePacingLimiter(
   return std::make_shared<RPCRateLimiter>(
       std::move(admissionKey),
       [&clock] { return clock.now(); },
-      clock.timekeeper());
+      clock.timekeeper(),
+      [] { return 1.0; });
+}
+
+// Starts at 200 calls, with room for 1,000 and a configured floor of 50.
+std::shared_ptr<RPCRateLimiter> makeAdaptiveLimiter(
+    std::string admissionKey,
+    RPCFlowControlPolicy policy) {
+  auto limiter = std::make_shared<RPCRateLimiter>(std::move(admissionKey));
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 1'000,
+       .floor = 50,
+       .flowControlPolicy = policy});
+  return limiter;
+}
+
+// Acquires 'count' units as the operator does, a chunk at a time.
+std::vector<RPCRateLimiter::Token> acquire(
+    RPCRateLimiter& limiter,
+    int64_t count) {
+  std::vector<RPCRateLimiter::Token> tokens;
+  while (static_cast<int64_t>(tokens.size()) < count) {
+    auto chunk = limiter.tryAcquireUpTo(count - tokens.size());
+    if (chunk.empty()) {
+      break;
+    }
+    std::move(chunk.begin(), chunk.end(), std::back_inserter(tokens));
+  }
+  return tokens;
+}
+
+// Completes 'lease' with an overload not named as a lack of capacity. Returns
+// whether the shared limiter handled it.
+bool overloadHandled(RPCRateLimiter::AdmissionLease& lease) {
+  return lease
+      .completeAndRelease(/*hardOverload=*/true, /*capacityRejection=*/false)
+      .sharedOverloadHandled;
+}
+
+// Admits 'numInFlight' calls and has the backend refuse one of them, naming a
+// lack of serving capacity when 'capacityRejection' is true.
+void rejectOneOf(
+    RPCRateLimiter& limiter,
+    int64_t numInFlight,
+    bool capacityRejection) {
+  auto tokens = acquire(limiter, numInFlight);
+  ASSERT_EQ(tokens.size(), numInFlight);
+  auto lease = limiter.makeLease(std::move(tokens.back()));
+  tokens.pop_back();
+  lease->completeAndRelease(/*hardOverload=*/true, capacityRejection);
+}
+
+// Fills the window, holding its calls in 'inFlight', and completes one round:
+// a window of successes.
+void succeedOneFullRound(
+    RPCRateLimiter& limiter,
+    std::vector<RPCRateLimiter::Token>& inFlight) {
+  auto admitted = acquire(limiter, limiter.stats().capacity);
+  std::move(admitted.begin(), admitted.end(), std::back_inserter(inFlight));
+  limiter.onOutcome(
+      RPCRateLimiter::Outcome::kSuccess, limiter.stats().capacity);
 }
 
 void enableFractionalLimit(RPCRateLimiter& limiter, double minimumLimit) {
@@ -227,10 +295,10 @@ TEST_F(RPCRateLimiterTest, admissionLeaseCompletesExactlyOnce) {
   ASSERT_EQ(tokens.size(), 1);
   auto lease = limiter->makeLease(std::move(tokens));
 
-  EXPECT_TRUE(lease->completeAndRelease(true).sharedOverloadHandled);
+  EXPECT_TRUE(overloadHandled(*lease));
   EXPECT_EQ(limiter->stats().capacity, 2);
   EXPECT_EQ(limiter->stats().pending, 0);
-  EXPECT_FALSE(lease->completeAndRelease(true).sharedOverloadHandled);
+  EXPECT_FALSE(overloadHandled(*lease));
   lease->release();
   EXPECT_EQ(limiter->stats().capacity, 2);
   EXPECT_EQ(limiter->stats().pending, 0);
@@ -253,11 +321,13 @@ TEST_F(
   auto firstLease = limiter->makeLease(std::move(tokens.at(0)));
   auto secondLease = limiter->makeLease(std::move(tokens.at(1)));
 
-  const auto firstCompletion = firstLease->completeAndRelease(true);
+  const auto firstCompletion = firstLease->completeAndRelease(
+      /*hardOverload=*/true, /*capacityRejection=*/false);
   EXPECT_TRUE(firstCompletion.sharedOverloadHandled);
   EXPECT_EQ(limiter->stats().limitMilli, 100'000);
 
-  const auto secondCompletion = secondLease->completeAndRelease(true);
+  const auto secondCompletion = secondLease->completeAndRelease(
+      /*hardOverload=*/true, /*capacityRejection=*/false);
   EXPECT_TRUE(secondCompletion.sharedOverloadHandled);
   EXPECT_EQ(secondCompletion.overloadEpoch, firstCompletion.overloadEpoch);
   EXPECT_EQ(limiter->stats().limitMilli, 100'000);
@@ -265,7 +335,8 @@ TEST_F(
   auto nextTokens = limiter->tryAcquireUpTo(1);
   ASSERT_EQ(nextTokens.size(), 1);
   auto nextLease = limiter->makeLease(std::move(nextTokens.at(0)));
-  const auto nextCompletion = nextLease->completeAndRelease(true);
+  const auto nextCompletion = nextLease->completeAndRelease(
+      /*hardOverload=*/true, /*capacityRejection=*/false);
   EXPECT_TRUE(nextCompletion.sharedOverloadHandled);
   EXPECT_NE(nextCompletion.overloadEpoch, firstCompletion.overloadEpoch);
   EXPECT_EQ(limiter->stats().limitMilli, 50'000);
@@ -290,10 +361,10 @@ TEST_F(RPCRateLimiterTest, configAmendDoesNotSuppressCanonicalOverload) {
   limiter->amend([](RPCRateLimiter::Config& config) { config.ceiling = 16; });
   EXPECT_EQ(limiter->stats().limitMilli, 16'000);
 
-  EXPECT_TRUE(firstLease->completeAndRelease(true).sharedOverloadHandled);
+  EXPECT_TRUE(overloadHandled(*firstLease));
   EXPECT_EQ(limiter->stats().limitMilli, 8'000);
 
-  EXPECT_TRUE(secondLease->completeAndRelease(true).sharedOverloadHandled);
+  EXPECT_TRUE(overloadHandled(*secondLease));
   EXPECT_EQ(limiter->stats().limitMilli, 8'000);
 }
 
@@ -307,10 +378,11 @@ TEST_F(RPCRateLimiterTest, configAmendDoesNotSuppressCanonicalOverload) {
 // query -- the function's ceiling, then the operator's session properties --
 // with a window between them where a second query saw the backend still
 // unconfigured and overwrote, fixing one query's ceiling with another's floor.
-// There is one call site now, so that shape cannot be written to fail this.
+// A seal that checked and wrote under separate locks would let two callers
+// both seal. One race rarely shows either defect, so the test runs many.
 TEST_F(RPCRateLimiterTest, concurrentInitializersDoNotMixConfigurations) {
   constexpr int kThreads = 16;
-  auto& limiter = limiterFor("test.backend");
+  constexpr int kRounds = 50;
 
   // Each thread offers an internally consistent policy; the pairs are chosen
   // so a mixture is detectable.
@@ -322,38 +394,595 @@ TEST_F(RPCRateLimiterTest, concurrentInitializersDoNotMixConfigurations) {
     return {static_cast<int64_t>(100 * (i + 1)), static_cast<double>(i + 1)};
   };
 
+  for (int round = 0; round < kRounds; ++round) {
+    SCOPED_TRACE(round);
+    auto limiter = std::make_shared<RPCRateLimiter>("test.backend");
+    std::atomic<bool> go{false};
+    std::atomic<int> numSealed{0};
+    std::vector<std::thread> threads;
+    threads.reserve(kThreads);
+    for (int i = 0; i < kThreads; ++i) {
+      threads.emplace_back([&, i]() {
+        const auto policy = policyFor(i);
+        while (!go.load(std::memory_order_relaxed)) {
+        }
+        if (limiter->initializeOrMatch(
+                {.ceiling = policy.ceiling, .floor = policy.floor})) {
+          ++numSealed;
+        }
+      });
+    }
+    go.store(true);
+    for (auto& thread : threads) {
+      thread.join();
+    }
+    // Every policy has its own ceiling, so only the thread that sealed
+    // matches.
+    EXPECT_EQ(numSealed.load(), 1);
+
+    // Whatever landed must be exactly one thread's pair, not a blend.
+    const auto config = limiter->config();
+    bool matchesSomeThread = false;
+    for (int i = 0; i < kThreads; ++i) {
+      const auto policy = policyFor(i);
+      if (config.ceiling == policy.ceiling && config.floor == policy.floor) {
+        matchesSomeThread = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(matchesSomeThread)
+        << "configuration is a mixture: ceiling " << config.ceiling
+        << " with floor " << config.floor;
+  }
+}
+
+// initializeOrMatch() seals the first policy it sees and tells each later
+// caller whether the sealed policy is the one it asked for.
+TEST_F(RPCRateLimiterTest, initializeOrMatchReportsWhetherSealedPolicyMatches) {
+  auto& limiter = limiterFor("test.backend");
+  const RPCRateLimiter::Config small{.ceiling = 25};
+  const RPCRateLimiter::Config large{.ceiling = 100};
+
+  EXPECT_TRUE(limiter.initializeOrMatch(small));
+  EXPECT_TRUE(limiter.initializeOrMatch(small));
+  EXPECT_FALSE(limiter.initializeOrMatch(large));
+  EXPECT_EQ(limiter.config(), small);
+}
+
+// A later policy matches the sealed one when a limiter running it would admit
+// alike, and only then.
+TEST_F(RPCRateLimiterTest, initializeOrMatchMatchesPoliciesThatAdmitAlike) {
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  auto sealedWith = [](const std::string& admissionKey,
+                       const RPCRateLimiter::Config& policy) -> auto& {
+    auto& limiter = limiterFor(admissionKey);
+    EXPECT_TRUE(limiter.initializeOrMatch(policy));
+    return limiter;
+  };
+
+  {
+    // Out-of-range values compare as the values they clamp to.
+    auto& limiter = sealedWith(
+        "clamped",
+        {.adaptive = true,
+         .ceiling = 25,
+         .floor = 0.001,
+         .decreaseFactor = 0.99});
+    EXPECT_TRUE(limiter.initializeOrMatch(
+        {.adaptive = true, .ceiling = 25, .floor = 0, .decreaseFactor = 5}));
+    EXPECT_FALSE(limiter.initializeOrMatch(
+        {.adaptive = true,
+         .ceiling = 25,
+         .floor = 0.002,
+         .decreaseFactor = 0.99}));
+  }
+  {
+    // NaN compares as the default.
+    auto& limiter = sealedWith("nan", {.adaptive = true, .ceiling = 25});
+    EXPECT_TRUE(limiter.initializeOrMatch(
+        {.adaptive = true,
+         .ceiling = 25,
+         .floor = kNaN,
+         .decreaseFactor = kNaN}));
+  }
+  {
+    // Fixed capacity reads neither the floor nor the decrease factor.
+    auto& limiter = sealedWith(
+        "fixed", {.ceiling = 25, .floor = 4, .decreaseFactor = 0.25});
+    EXPECT_TRUE(limiter.initializeOrMatch({.ceiling = 25}));
+    EXPECT_FALSE(limiter.initializeOrMatch({.ceiling = 26}));
+    EXPECT_FALSE(limiter.initializeOrMatch(
+        {.adaptive = true, .ceiling = 25, .floor = 4}));
+  }
+  {
+    // A floor at or above a positive ceiling pins capacity at the ceiling.
+    auto& limiter =
+        sealedWith("pinned", {.adaptive = true, .ceiling = 25, .floor = 50});
+    EXPECT_TRUE(limiter.initializeOrMatch(
+        {.adaptive = true, .ceiling = 25, .floor = 25, .decreaseFactor = 0.9}));
+    EXPECT_TRUE(limiter.initializeOrMatch({.ceiling = 25}));
+    EXPECT_FALSE(limiter.initializeOrMatch(
+        {.adaptive = true, .ceiling = 25, .floor = 24}));
+  }
+  {
+    // A zero ceiling defers to the process default, which can change, so a
+    // large floor does not pin it.
+    auto& limiter =
+        sealedWith("deferred", {.adaptive = true, .ceiling = 0, .floor = 50});
+    EXPECT_FALSE(limiter.initializeOrMatch({.ceiling = 0}));
+  }
+}
+
+// initializeOrMatch() seals the clamped policy, so the limiter never reads an
+// out-of-range value: a factor above the range shrinks the window by 0.99, and
+// a NaN factor by the default.
+TEST_F(RPCRateLimiterTest, sealedPolicyIsClampedBeforeTheLimiterReadsIt) {
+  auto& aboveRange = limiterFor("above.range");
+  ASSERT_TRUE(aboveRange.initializeOrMatch(
+      {.adaptive = true, .ceiling = 100, .floor = 0, .decreaseFactor = 5}));
+  EXPECT_DOUBLE_EQ(aboveRange.config().floor, 0.001);
+  EXPECT_DOUBLE_EQ(aboveRange.config().decreaseFactor, 0.99);
+  aboveRange.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  EXPECT_EQ(aboveRange.stats().capacity, 99);
+
+  auto& nan = limiterFor("nan.factor");
+  ASSERT_TRUE(nan.initializeOrMatch(
+      {.adaptive = true,
+       .ceiling = 16,
+       .floor = 1,
+       .decreaseFactor = std::numeric_limits<double>::quiet_NaN()}));
+  nan.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  EXPECT_EQ(nan.stats().capacity, 8);
+}
+
+// A zero ceiling defers to the process default on every read. A sealed zero
+// ceiling follows a later change to the default, and it stays distinct from a
+// policy that names today's default.
+TEST_F(RPCRateLimiterTest, zeroCeilingStaysDeferredToProcessDefault) {
+  auto& limiter = limiterFor("test.backend");
+  ASSERT_TRUE(limiter.initializeOrMatch({.ceiling = 0}));
+  EXPECT_FALSE(limiter.initializeOrMatch(
+      {.ceiling = RPCRateLimiter::defaultCapacity()}));
+
+  RPCRateLimiter::setDefaultCapacity(5);
+  EXPECT_EQ(limiter.stats().hardLimit, 5);
+  EXPECT_EQ(limiter.stats().capacity, 5);
+  EXPECT_TRUE(limiter.initializeOrMatch({.ceiling = 0}));
+}
+
+// Policies that initializeOrMatch() treats as equal do admit alike: limiters
+// sealed with either follow the same capacity through overload and recovery.
+TEST_F(RPCRateLimiterTest, policiesThatMatchAdmitAlike) {
+  auto trajectory = [](const RPCRateLimiter::Config& policy) {
+    // A frozen clock: a recovering paced window grows with elapsed time, which
+    // would make the trajectory depend on scheduling.
+    auto limiter = std::make_shared<RPCRateLimiter>(
+        "test.backend",
+        [] { return std::chrono::steady_clock::time_point{}; },
+        nullptr,
+        [] { return 1.0; });
+    EXPECT_TRUE(limiter->initializeOrMatch(policy));
+    std::vector<std::tuple<int64_t, int64_t, int64_t, int64_t, int64_t>> steps;
+    auto record = [&] {
+      const auto stats = limiter->stats();
+      steps.emplace_back(
+          stats.capacity,
+          stats.hardLimit,
+          stats.lowWaterCapacity,
+          stats.limitMilli,
+          stats.lowWaterLimitMilli);
+    };
+    record();
+    for (int i = 0; i < 3; ++i) {
+      limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+      record();
+    }
+    for (int i = 0; i < 3; ++i) {
+      limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 10, 1'000'000);
+      record();
+    }
+    return steps;
+  };
+
+  const auto fixed = trajectory({.ceiling = 25});
+  EXPECT_EQ(
+      trajectory({.ceiling = 25, .floor = 4, .decreaseFactor = 0.25}), fixed);
+  EXPECT_EQ(trajectory({.adaptive = true, .ceiling = 25, .floor = 50}), fixed);
+  EXPECT_EQ(trajectory({.adaptive = true, .ceiling = 25, .floor = 25}), fixed);
+  // Above the initial adaptive window a pinned limiter holds its window at the
+  // ceiling, where fixed capacity holds none, and still admits alike.
+  EXPECT_EQ(
+      trajectory({.adaptive = true, .ceiling = 300, .floor = 300}),
+      trajectory({.ceiling = 300}));
+  // A policy that does not match moves differently, so the comparisons above
+  // can tell policies apart.
+  EXPECT_NE(trajectory({.adaptive = true, .ceiling = 25, .floor = 1}), fixed);
+  EXPECT_NE(
+      trajectory({.adaptive = true, .ceiling = 300, .floor = 1}),
+      trajectory({.ceiling = 300}));
+}
+
+// Over a grid of policies, every pair that initializeOrMatch() matches follows
+// the same capacity trajectory through overload and recovery, so matching
+// never merges policies that admit differently. The trajectory check cannot
+// see a change that merges fewer policies, so the number of matching pairs is
+// pinned as well.
+TEST_F(RPCRateLimiterTest, maxProbeIntervalIsPartOfThePolicy) {
+  auto& registry = RPCRateLimiterRegistry::global();
+  const RPCRateLimiter::Config oneMinute{
+      .adaptive = true, .ceiling = 25, .floor = 0.01};
+  auto tenSeconds = oneMinute;
+  tenSeconds.maxProbeInterval = std::chrono::seconds(10);
+
+  const auto first = registry.getForPolicy("test.probe-interval", oneMinute);
+  const auto second = registry.getForPolicy("test.probe-interval", tenSeconds);
+  EXPECT_FALSE(first.policyScoped);
+  EXPECT_TRUE(second.policyScoped);
+  EXPECT_NE(second.limiter, first.limiter);
+  EXPECT_EQ(
+      second.limiter->config().maxProbeInterval, std::chrono::seconds(10));
+
+  // A fixed limiter never paces, so the interval does not separate policies.
+  const RPCRateLimiter::Config fixed{.adaptive = false, .ceiling = 25};
+  auto fixedTenSeconds = fixed;
+  fixedTenSeconds.maxProbeInterval = std::chrono::seconds(10);
+  const auto fixedFirst =
+      registry.getForPolicy("test.probe-interval-fixed", fixed);
+  const auto fixedSecond =
+      registry.getForPolicy("test.probe-interval-fixed", fixedTenSeconds);
+  EXPECT_EQ(fixedSecond.limiter, fixedFirst.limiter);
+  EXPECT_FALSE(fixedSecond.policyScoped);
+}
+
+TEST_F(RPCRateLimiterTest, matchingPoliciesAdmitAlikeAcrossPolicyGrid) {
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  std::vector<RPCRateLimiter::Config> grid;
+  for (const bool adaptive : {false, true}) {
+    for (const int64_t ceiling : {0, 1, 25, 200, 250}) {
+      for (const double floor : {0.0, 0.5, 1.0, 25.0, 50.0, 300.0}) {
+        for (const double decrease : {0.25, 0.5, 0.99, kNaN}) {
+          grid.push_back({adaptive, ceiling, floor, decrease});
+        }
+      }
+    }
+  }
+  auto describe = [](const RPCRateLimiter::Config& policy) {
+    return "{adaptive=" + std::to_string(policy.adaptive) +
+        ", ceiling=" + std::to_string(policy.ceiling) +
+        ", floor=" + std::to_string(policy.floor) +
+        ", decrease=" + std::to_string(policy.decreaseFactor) + "}";
+  };
+  auto trajectory = [](const RPCRateLimiter::Config& policy) {
+    // A frozen clock: a recovering paced window grows with elapsed time, which
+    // would make the trajectory depend on scheduling.
+    auto limiter = std::make_shared<RPCRateLimiter>(
+        "test.backend",
+        [] { return std::chrono::steady_clock::time_point{}; },
+        nullptr,
+        [] { return 1.0; });
+    EXPECT_TRUE(limiter->initializeOrMatch(policy));
+    std::vector<int64_t> steps;
+    auto record = [&] {
+      const auto stats = limiter->stats();
+      steps.insert(
+          steps.end(),
+          {stats.capacity,
+           stats.limitMilli,
+           stats.lowWaterLimitMilli,
+           stats.hardLimit});
+    };
+    record();
+    for (int i = 0; i < 3; ++i) {
+      limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+      record();
+    }
+    for (int i = 0; i < 3; ++i) {
+      limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 10, 1'000'000);
+      record();
+    }
+    return steps;
+  };
+
+  std::vector<std::vector<int64_t>> trajectories;
+  std::vector<std::shared_ptr<RPCRateLimiter>> sealed;
+  for (const auto& policy : grid) {
+    trajectories.push_back(trajectory(policy));
+    sealed.push_back(std::make_shared<RPCRateLimiter>("test.backend"));
+    EXPECT_TRUE(sealed.back()->initializeOrMatch(policy));
+  }
+  int64_t matchingPairs{0};
+  int64_t divergentPairs{0};
+  std::string firstDivergent;
+  for (size_t a = 0; a < grid.size(); ++a) {
+    for (size_t b = 0; b < grid.size(); ++b) {
+      if (!sealed[a]->initializeOrMatch(grid[b])) {
+        continue;
+      }
+      ++matchingPairs;
+      if (trajectories[a] != trajectories[b] && divergentPairs++ == 0) {
+        firstDivergent = describe(grid[a]) + " and " + describe(grid[b]);
+      }
+    }
+  }
+  EXPECT_EQ(divergentPairs, 0)
+      << "matching policies admit differently, first " << firstDivergent;
+  // 240 policies fall into 68 classes; this is the sum of their squared sizes.
+  EXPECT_EQ(matchingPairs, 5166);
+}
+
+// A query gets the backend's shared limiter when its policy admits like the
+// sealed one, and otherwise the limiter for its own policy, which every later
+// query running that policy shares.
+TEST_F(RPCRateLimiterTest, getForPolicySharesLimitersByPolicy) {
+  auto& registry = RPCRateLimiterRegistry::global();
+  const RPCRateLimiter::Config small{
+      .adaptive = true, .ceiling = 25, .floor = 1};
+  const RPCRateLimiter::Config large{
+      .adaptive = true, .ceiling = 100, .floor = 1};
+
+  const auto first = registry.getForPolicy("test.backend", small);
+  EXPECT_EQ(first.limiter, &registry.get("test.backend"));
+  EXPECT_FALSE(first.policyScoped);
+
+  const auto second = registry.getForPolicy("test.backend", large);
+  EXPECT_NE(second.limiter, first.limiter);
+  EXPECT_TRUE(second.policyScoped);
+  EXPECT_EQ(second.limiter->config(), large);
+  EXPECT_EQ(registry.get("test.backend").config(), small);
+
+  {
+    const auto again = registry.getForPolicy("test.backend", large);
+    EXPECT_EQ(again.limiter, second.limiter);
+    EXPECT_TRUE(again.policyScoped);
+  }
+  {
+    // Admits like 'small', so it shares the shared limiter.
+    auto clampsToSmall = small;
+    clampsToSmall.decreaseFactor = std::numeric_limits<double>::quiet_NaN();
+    const auto alike = registry.getForPolicy("test.backend", clampsToSmall);
+    EXPECT_EQ(alike.limiter, first.limiter);
+    EXPECT_FALSE(alike.policyScoped);
+  }
+  {
+    // Policies one ULP apart get separate limiters, each sealed with a policy
+    // that matches its own.
+    auto oneUlpAway = large;
+    oneUlpAway.floor = std::nextafter(large.floor, 2.0);
+    const auto apart = registry.getForPolicy("test.backend", oneUlpAway);
+    EXPECT_NE(apart.limiter, second.limiter);
+    EXPECT_TRUE(apart.limiter->initializeOrMatch(oneUlpAway));
+    EXPECT_FALSE(apart.limiter->initializeOrMatch(large));
+  }
+  {
+    // A policy-scoped limiter is shared by every policy that matches the one
+    // it was created for, including that policy itself when the registry
+    // compares a reduced form of it.
+    ASSERT_FALSE(registry.getForPolicy("pinned.backend", small).policyScoped);
+    const RPCRateLimiter::Config pinned{
+        .adaptive = true, .ceiling = 60, .floor = 60};
+    const auto forPinned = registry.getForPolicy("pinned.backend", pinned);
+    EXPECT_TRUE(forPinned.policyScoped);
+    EXPECT_EQ(
+        registry.getForPolicy("pinned.backend", pinned).limiter,
+        forPinned.limiter);
+    EXPECT_EQ(
+        registry.getForPolicy("pinned.backend", {.ceiling = 60}).limiter,
+        forPinned.limiter);
+  }
+  {
+    // Another backend's limiters are its own, whatever the policy.
+    ASSERT_FALSE(registry.getForPolicy("other.backend", small).policyScoped);
+    const auto otherBackend = registry.getForPolicy("other.backend", large);
+    EXPECT_TRUE(otherBackend.policyScoped);
+    EXPECT_NE(otherBackend.limiter, second.limiter);
+  }
+}
+
+TEST_F(RPCRateLimiterTest, registryKeepsSeparateLimiterPerPolicy) {
+  auto& registry = RPCRateLimiterRegistry::global();
+  RPCRateLimiter::Config capacityProbing{
+      .adaptive = true,
+      .ceiling = 100,
+      .flowControlPolicy = RPCFlowControlPolicy::kCapacityProbing};
+  auto* first =
+      registry.getForPolicy("test.policy-limiters", capacityProbing).limiter;
+  auto windowAimd = capacityProbing;
+  windowAimd.flowControlPolicy = RPCFlowControlPolicy::kWindowAimd;
+  auto* second =
+      registry.getForPolicy("test.policy-limiters", windowAimd).limiter;
+  EXPECT_NE(first, second);
+  EXPECT_EQ(
+      registry.getForPolicy("test.policy-limiters", capacityProbing).limiter,
+      first);
+  EXPECT_EQ(
+      first->stats().flowControlPolicy, RPCFlowControlPolicy::kCapacityProbing);
+  EXPECT_EQ(
+      second->stats().flowControlPolicy, RPCFlowControlPolicy::kWindowAimd);
+}
+
+TEST_F(RPCRateLimiterTest, fixedCapacityRunsWindowAimd) {
+  const RPCRateLimiter::Config defaults;
+  EXPECT_EQ(defaults.flowControlPolicy, RPCFlowControlPolicy::kWindowAimd);
+  auto& registry = RPCRateLimiterRegistry::global();
+  RPCRateLimiter::Config fixed{
+      .ceiling = 20,
+      .flowControlPolicy = RPCFlowControlPolicy::kCapacityProbing};
+  const auto lookup = registry.getForPolicy("test.fixed-fallback", fixed);
+  EXPECT_EQ(
+      lookup.limiter->stats().flowControlPolicy,
+      RPCFlowControlPolicy::kWindowAimd);
+  fixed.flowControlPolicy = RPCFlowControlPolicy::kWindowAimd;
+  EXPECT_EQ(
+      registry.getForPolicy("test.fixed-fallback", fixed).limiter,
+      lookup.limiter);
+}
+
+TEST_F(RPCRateLimiterTest, flowControlPolicyNamesParseCaseInsensitively) {
+  const std::vector<std::pair<std::string_view, RPCFlowControlPolicy>> policies{
+      {"WINDOW_AIMD", RPCFlowControlPolicy::kWindowAimd},
+      {"CAPACITY_PROBING", RPCFlowControlPolicy::kCapacityProbing},
+  };
+  for (const auto& [name, policy] : policies) {
+    SCOPED_TRACE(name);
+    EXPECT_EQ(parseRPCFlowControlPolicy(name), policy);
+    EXPECT_EQ(RPCFlowControlPolicyName::toName(policy), name);
+  }
+  EXPECT_EQ(static_cast<int>(RPCFlowControlPolicy::kWindowAimd), 0);
+  EXPECT_EQ(static_cast<int>(RPCFlowControlPolicy::kCapacityProbing), 1);
+  EXPECT_EQ(
+      parseRPCFlowControlPolicy("cApAcItY_pRoBiNg"),
+      RPCFlowControlPolicy::kCapacityProbing);
+  for (const std::string_view invalid :
+       {"", "unknown", "1", " CAPACITY_PROBING", "CAPACITY_PROBING "}) {
+    SCOPED_TRACE(invalid);
+    VELOX_ASSERT_USER_THROW(
+        parseRPCFlowControlPolicy(invalid),
+        "RPC flow control policy must be WINDOW_AIMD or CAPACITY_PROBING; received '" +
+            std::string{invalid} + "'");
+  }
+}
+
+// However queries with different policies interleave on a fresh backend, each
+// runs under a limiter sealed with a policy that matches its own, and queries
+// share a limiter exactly when their policies match.
+TEST_F(RPCRateLimiterTest, concurrentQueriesGetTheLimiterForTheirPolicy) {
+  constexpr int kThreads = 32;
+  constexpr int kPolicies = 4;
+  auto policyFor = [](int thread) {
+    return RPCRateLimiter::Config{
+        .adaptive = true, .ceiling = 25 * (thread % kPolicies + 1), .floor = 1};
+  };
+  auto& registry = RPCRateLimiterRegistry::global();
+  std::vector<RPCRateLimiterRegistry::Lookup> lookups(kThreads);
   std::atomic<bool> go{false};
   std::vector<std::thread> threads;
   threads.reserve(kThreads);
   for (int i = 0; i < kThreads; ++i) {
     threads.emplace_back([&, i]() {
-      const auto policy = policyFor(i);
       while (!go.load(std::memory_order_relaxed)) {
       }
-      limiter.initializeOnce([policy](RPCRateLimiter::Config& config) {
-        config.ceiling = policy.ceiling;
-        config.floor = policy.floor;
-      });
+      lookups[i] = registry.getForPolicy("test.backend", policyFor(i));
     });
   }
   go.store(true);
-  for (auto& t : threads) {
-    t.join();
+  for (auto& thread : threads) {
+    thread.join();
   }
 
-  // Whatever landed must be exactly one thread's pair, not a blend.
-  const auto config = limiter.config();
-  bool matchesSomeThread = false;
+  const auto* shared = &registry.get("test.backend");
   for (int i = 0; i < kThreads; ++i) {
-    const auto policy = policyFor(i);
-    if (config.ceiling == policy.ceiling && config.floor == policy.floor) {
-      matchesSomeThread = true;
-      break;
+    EXPECT_TRUE(lookups[i].limiter->initializeOrMatch(policyFor(i))) << i;
+    EXPECT_EQ(lookups[i].policyScoped, lookups[i].limiter != shared) << i;
+    for (int j = 0; j < kThreads; ++j) {
+      EXPECT_EQ(
+          lookups[i].limiter == lookups[j].limiter,
+          i % kPolicies == j % kPolicies)
+          << i << " " << j;
     }
   }
-  EXPECT_TRUE(matchesSomeThread)
-      << "configuration is a mixture: ceiling " << config.ceiling
-      << " with floor " << config.floor;
+}
+
+// A policy limiter is sealed before any query can reach it, so a query that
+// gets it under contention already runs its own ceiling. One round rarely
+// lands a query in that window, so the test runs many.
+TEST_F(RPCRateLimiterTest, noQueryReachesAPolicyLimiterBeforeItIsSealed) {
+  constexpr int kThreads = 32;
+  constexpr int kPolicies = 4;
+  constexpr int kRounds = 200;
+  auto policyFor = [](int thread) {
+    return RPCRateLimiter::Config{
+        .adaptive = true, .ceiling = 25 * (thread % kPolicies + 1), .floor = 1};
+  };
+  auto& registry = RPCRateLimiterRegistry::global();
+  int64_t numUnsealedReads{0};
+  for (int round = 0; round < kRounds; ++round) {
+    const std::string backend = "unsealed.backend." + std::to_string(round);
+    ASSERT_FALSE(registry.getForPolicy(backend, {.ceiling = 7}).policyScoped);
+    std::vector<int64_t> hardLimits(kThreads);
+    std::atomic<bool> go{false};
+    std::vector<std::thread> threads;
+    threads.reserve(kThreads);
+    for (int i = 0; i < kThreads; ++i) {
+      threads.emplace_back([&, i]() {
+        while (!go.load(std::memory_order_relaxed)) {
+        }
+        hardLimits[i] = registry.getForPolicy(backend, policyFor(i))
+                            .limiter->stats()
+                            .hardLimit;
+      });
+    }
+    go.store(true);
+    for (auto& thread : threads) {
+      thread.join();
+    }
+    for (int i = 0; i < kThreads; ++i) {
+      numUnsealedReads += hardLimits[i] != policyFor(i).ceiling;
+    }
+  }
+  EXPECT_EQ(numUnsealedReads, 0) << "over " << kRounds * kThreads << " lookups";
+}
+
+// A query that finds no limiter for its policy builds one and publishes it,
+// unless another query published one for that policy in the meantime. Two
+// queries that interleave there share the limiter published first.
+TEST_F(RPCRateLimiterTest, queriesRacingToCreateAPolicyLimiterShareOne) {
+#ifdef NDEBUG
+  GTEST_SKIP() << "Needs TestValue injection, which release builds omit.";
+#endif
+  // The registry outlives each run, so every run takes a backend no earlier
+  // run has seen.
+  static std::atomic<int> numRuns{0};
+  const std::string backend = "race.backend." + std::to_string(numRuns++);
+  auto& registry = RPCRateLimiterRegistry::global();
+  ASSERT_FALSE(registry.getForPolicy(backend, {.ceiling = 25}).policyScoped);
+  const RPCRateLimiter::Config policy{.ceiling = 100};
+
+  std::promise<void> paused;
+  std::promise<void> resume;
+  const auto resumed = resume.get_future().share();
+  std::atomic<bool> pauseNext{true};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::rpc::RPCRateLimiterRegistry::getForPolicy",
+      std::function<void(RPCRateLimiterRegistry*)>(
+          [&](RPCRateLimiterRegistry* /*registry*/) {
+            if (pauseNext.exchange(false)) {
+              paused.set_value();
+              resumed.wait();
+            }
+          }));
+
+  RPCRateLimiter* slowLimiter{nullptr};
+  std::thread slow(
+      [&] { slowLimiter = registry.getForPolicy(backend, policy).limiter; });
+  const bool slowPaused =
+      paused.get_future().wait_for(std::chrono::seconds(30)) ==
+      std::future_status::ready;
+  const auto fast = registry.getForPolicy(backend, policy);
+  resume.set_value();
+  slow.join();
+
+  ASSERT_TRUE(slowPaused) << "the first query never reached the injection";
+  EXPECT_TRUE(fast.policyScoped);
+  EXPECT_EQ(slowLimiter, fast.limiter);
+}
+
+// Tests reset the registry between cases. A policy-scoped limiter stays listed
+// under its policy across the reset, so it must come back sealed with it.
+TEST_F(RPCRateLimiterTest, testingResetKeepsPolicyScopedLimitersSealed) {
+  auto& registry = RPCRateLimiterRegistry::global();
+  const RPCRateLimiter::Config pinned{
+      .adaptive = true, .ceiling = 100, .floor = 100};
+  ASSERT_FALSE(
+      registry.getForPolicy("reset.backend", {.ceiling = 25}).policyScoped);
+  const auto scoped = registry.getForPolicy("reset.backend", pinned);
+  ASSERT_TRUE(scoped.policyScoped);
+
+  registry.testingReset();
+  ASSERT_FALSE(
+      registry.getForPolicy("reset.backend", {.ceiling = 25}).policyScoped);
+  const auto again = registry.getForPolicy("reset.backend", pinned);
+  EXPECT_EQ(again.limiter, scoped.limiter);
+  EXPECT_EQ(again.limiter->config(), pinned);
 }
 
 TEST_F(RPCRateLimiterTest, admitOrWaitEitherAdmitsOrEnrols) {
@@ -402,6 +1031,23 @@ TEST_F(RPCRateLimiterTest, backpressureReliefOnRelease) {
   token1 = RPCRateLimiter::Token();
   EXPECT_TRUE(admission.wait.isReady());
   EXPECT_EQ(limiterFor(backend).stats().pending, 0);
+}
+
+TEST_F(RPCRateLimiterTest, statsCountParkedCallers) {
+  const std::string backend = "test.backend";
+  setCeiling(backend, 1);
+  EXPECT_EQ(limiterFor(backend).stats().waiting, 0);
+
+  auto token = limiterFor(backend).acquire();
+  auto first = limiterFor(backend).admitOrWait();
+  auto second = limiterFor(backend).admitOrWait();
+  ASSERT_FALSE(first.admitted);
+  ASSERT_FALSE(second.admitted);
+  EXPECT_EQ(limiterFor(backend).stats().waiting, 2);
+
+  // A release wakes the parked callers, which then retry admission.
+  token = RPCRateLimiter::Token();
+  EXPECT_EQ(limiterFor(backend).stats().waiting, 0);
 }
 
 TEST_F(RPCRateLimiterTest, integerWaitersRetryAdmissionOnRelease) {
@@ -752,6 +1398,241 @@ TEST_F(RPCRateLimiterTest, adaptiveFlooredAtMinLimit) {
   EXPECT_EQ(limiterFor(backend).stats().capacity, 4);
 }
 
+TEST_F(RPCRateLimiterTest, capacityProbingDoublesUntilFirstOverload) {
+  for (const auto& [policy, expected] :
+       std::vector<std::pair<RPCFlowControlPolicy, int64_t>>{
+           {RPCFlowControlPolicy::kWindowAimd, 200},
+           {RPCFlowControlPolicy::kCapacityProbing, 400},
+       }) {
+    SCOPED_TRACE(RPCFlowControlPolicyName::toName(policy));
+    auto limiter = makeAdaptiveLimiter("test.doubling", policy);
+    const auto inFlight = acquire(*limiter, 200);
+    limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 200);
+    EXPECT_EQ(limiter->stats().capacity, expected);
+  }
+}
+
+TEST_F(RPCRateLimiterTest, capacityProbingGrowsOnlyWhileTheWindowIsInUse) {
+  for (const auto& [policy, expected] :
+       std::vector<std::pair<RPCFlowControlPolicy, int64_t>>{
+           {RPCFlowControlPolicy::kWindowAimd, 201},
+           {RPCFlowControlPolicy::kCapacityProbing, 300},
+       }) {
+    SCOPED_TRACE(RPCFlowControlPolicyName::toName(policy));
+    // Doubling stops at twice the 150 calls in flight.
+    auto limiter = makeAdaptiveLimiter("test.in-use", policy);
+    const auto inFlight = acquire(*limiter, 150);
+    limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 400);
+    EXPECT_EQ(limiter->stats().capacity, expected);
+  }
+  for (const auto& [policy, expected] :
+       std::vector<std::pair<RPCFlowControlPolicy, int64_t>>{
+           {RPCFlowControlPolicy::kWindowAimd, 458},
+           {RPCFlowControlPolicy::kCapacityProbing, 300},
+       }) {
+    SCOPED_TRACE(RPCFlowControlPolicyName::toName(policy));
+    // So does growth after a quota rejection: twice the 150 calls of the
+    // round before.
+    auto limiter = makeAdaptiveLimiter("test.in-use-after-quota", policy);
+    rejectOneOf(*limiter, 150, /*capacityRejection=*/false);
+    EXPECT_EQ(limiter->stats().capacity, 100);
+    const auto inFlight = acquire(*limiter, 100);
+    limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 100'000);
+    EXPECT_EQ(limiter->stats().capacity, expected);
+  }
+  {
+    // An earlier burst of 200 calls bounds growth for one round only: after a
+    // cut to 29 from the 37 calls a backend held, rounds with 5 calls in
+    // flight grow once, then stop.
+    auto limiter = makeAdaptiveLimiter(
+        "test.in-use-per-round", RPCFlowControlPolicy::kCapacityProbing);
+    acquire(*limiter, 200);
+    rejectOneOf(*limiter, 38, /*capacityRejection=*/true);
+    EXPECT_EQ(limiter->stats().capacity, 29);
+    const auto inFlight = acquire(*limiter, 5);
+    for (int32_t round = 0; round < 6; ++round) {
+      limiter->onOutcome(
+          RPCRateLimiter::Outcome::kSuccess, limiter->stats().capacity);
+    }
+    EXPECT_EQ(limiter->stats().capacity, 33);
+  }
+}
+
+TEST_F(RPCRateLimiterTest, capacityProbingSlowStartEndsWhenResponsesSlowDown) {
+  auto limiter = std::make_shared<RPCRateLimiter>("test.slow-start-exit");
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 10'000,
+       .floor = 50,
+       .flowControlPolicy = RPCFlowControlPolicy::kCapacityProbing});
+  // Holds the window full before each batch of responses, so it is in use.
+  std::vector<RPCRateLimiter::Token> inFlight;
+  const auto respond = [&](int32_t numSuccesses,
+                           std::chrono::milliseconds latency) {
+    auto admitted = acquire(*limiter, limiter->stats().capacity);
+    std::move(admitted.begin(), admitted.end(), std::back_inserter(inFlight));
+    for (int32_t i = 0; i < numSuccesses; ++i) {
+      limiter->onOutcome(
+          RPCRateLimiter::Outcome::kSuccess,
+          1,
+          std::chrono::duration_cast<std::chrono::nanoseconds>(latency)
+              .count());
+    }
+  };
+  // The first response sets the fastest; a round of 200 as fast doubles.
+  respond(201, 100ms);
+  EXPECT_EQ(limiter->stats().capacity, 400);
+  // A round whose fastest response is 20% slower ends slow start, and the
+  // window then grows one call per round.
+  respond(400, 120ms);
+  EXPECT_EQ(limiter->stats().capacity, 799);
+  respond(800, 120ms);
+  EXPECT_EQ(limiter->stats().capacity, 800);
+}
+
+TEST_F(
+    RPCRateLimiterTest,
+    capacityRejectionKeepsEightyPercentOfCallsTheBackendHeld) {
+  for (const auto& [policy, expected] :
+       std::vector<std::pair<RPCFlowControlPolicy, int64_t>>{
+           {RPCFlowControlPolicy::kWindowAimd, 100},
+           {RPCFlowControlPolicy::kCapacityProbing, 79},
+       }) {
+    SCOPED_TRACE(RPCFlowControlPolicyName::toName(policy));
+    // The backend held 99 of the 100 calls in flight.
+    auto limiter = makeAdaptiveLimiter("test.capacity-cut", policy);
+    rejectOneOf(*limiter, 100, /*capacityRejection=*/true);
+    EXPECT_EQ(limiter->stats().capacity, expected);
+  }
+}
+
+TEST_F(RPCRateLimiterTest, capacityRejectionCutsBelowFloorIntoPacing) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.capacity-pacing", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 1'000,
+       .floor = 50,
+       .flowControlPolicy = RPCFlowControlPolicy::kCapacityProbing});
+  rejectOneOf(*limiter, 1, /*capacityRejection=*/true);
+  EXPECT_EQ(limiter->stats().limitMilli, 800);
+  // A rejection of the next paced call cuts from the paced window.
+  clock.advance(std::chrono::minutes(2));
+  rejectOneOf(*limiter, 1, /*capacityRejection=*/true);
+  EXPECT_EQ(limiter->stats().limitMilli, 640);
+}
+
+// However many paced calls are rejected, the window stops at the probe floor:
+// one call per rpc.ratelimiter.max_probe_interval_ms (60 s) at a service
+// horizon of 1 s.
+TEST_F(RPCRateLimiterTest, capacityProbingStopsAtTheProbeFloor) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.capacity-probe-floor", clock);
+  limiter->configure(
+      {.adaptive = true,
+       .ceiling = 1'000,
+       .floor = 50,
+       .flowControlPolicy = RPCFlowControlPolicy::kCapacityProbing});
+  for (int32_t i = 0; i < 40; ++i) {
+    clock.advance(std::chrono::minutes(5));
+    rejectOneOf(*limiter, 1, /*capacityRejection=*/true);
+  }
+  EXPECT_EQ(limiter->stats().limitMilli, 17);
+}
+
+TEST_F(RPCRateLimiterTest, capacityProbingQuotaRejectionCutsAsWindowAimd) {
+  for (const auto policy :
+       {RPCFlowControlPolicy::kWindowAimd,
+        RPCFlowControlPolicy::kCapacityProbing}) {
+    SCOPED_TRACE(RPCFlowControlPolicyName::toName(policy));
+    auto limiter = makeAdaptiveLimiter("test.quota-cut", policy);
+    std::vector<int64_t> capacities;
+    for (int32_t i = 0; i < 3; ++i) {
+      rejectOneOf(*limiter, 1, /*capacityRejection=*/false);
+      capacities.push_back(limiter->stats().capacity);
+    }
+    EXPECT_THAT(capacities, testing::ElementsAre(100, 50, 50));
+  }
+}
+
+// A backend with room for 100 calls refuses the other 100 of 200 within
+// milliseconds. The first rejection counts the 199 others as held; each later
+// one, still part of the same round, shows fewer were, so the cut ends at 80%
+// of the 100 the backend held. WINDOW_AIMD halves once.
+TEST_F(RPCRateLimiterTest, laterCapacityRejectionsOfARoundRefineItsCut) {
+  for (const auto& [policy, expected] :
+       std::vector<std::pair<RPCFlowControlPolicy, int64_t>>{
+           {RPCFlowControlPolicy::kWindowAimd, 100},
+           {RPCFlowControlPolicy::kCapacityProbing, 80},
+       }) {
+    SCOPED_TRACE(RPCFlowControlPolicyName::toName(policy));
+    auto limiter = makeAdaptiveLimiter("test.capacity-refine", policy);
+    auto tokens = acquire(*limiter, 200);
+    ASSERT_EQ(tokens.size(), 200);
+    for (int32_t i = 0; i < 100; ++i) {
+      auto lease = limiter->makeLease(std::move(tokens.back()));
+      tokens.pop_back();
+      lease->completeAndRelease(
+          /*hardOverload=*/true, /*capacityRejection=*/true);
+    }
+    EXPECT_EQ(limiter->stats().capacity, expected);
+  }
+}
+
+TEST_F(RPCRateLimiterTest, capacityProbingRegrowsTowardTheRefusedWindow) {
+  auto limiter = makeAdaptiveLimiter(
+      "test.capacity-regrowth", RPCFlowControlPolicy::kCapacityProbing);
+  rejectOneOf(*limiter, 100, /*capacityRejection=*/true);
+  std::vector<int64_t> capacities{limiter->stats().capacity};
+  std::vector<RPCRateLimiter::Token> inFlight;
+  for (int32_t round = 0; round < 12; ++round) {
+    succeedOneFullRound(*limiter, inFlight);
+    capacities.push_back(limiter->stats().capacity);
+  }
+  // Half the distance to 99, the calls the backend held, each round, then a
+  // step that doubles from one, up to 16.
+  EXPECT_THAT(
+      capacities,
+      testing::ElementsAre(
+          79, 89, 94, 96, 97, 98, 99, 100, 102, 106, 114, 130, 146));
+}
+
+TEST_F(RPCRateLimiterTest, capacityProbingRegrowsAtMostSixteenCallsPerRound) {
+  auto limiter = makeAdaptiveLimiter(
+      "test.capacity-regrowth-cap", RPCFlowControlPolicy::kCapacityProbing);
+  rejectOneOf(*limiter, 200, /*capacityRejection=*/true);
+  std::vector<int64_t> capacities{limiter->stats().capacity};
+  std::vector<RPCRateLimiter::Token> inFlight;
+  for (int32_t round = 0; round < 2; ++round) {
+    succeedOneFullRound(*limiter, inFlight);
+    capacities.push_back(limiter->stats().capacity);
+  }
+  // Half the distance from 159 to 199 is 20, so the first round adds 16.
+  EXPECT_THAT(capacities, testing::ElementsAre(159, 175, 187));
+}
+
+TEST_F(
+    RPCRateLimiterTest,
+    capacityProbingGrowsAsWindowAimdAfterQuotaRejection) {
+  auto limiter = makeAdaptiveLimiter(
+      "test.quota-growth", RPCFlowControlPolicy::kCapacityProbing);
+  rejectOneOf(*limiter, 100, /*capacityRejection=*/true);
+  rejectOneOf(*limiter, 50, /*capacityRejection=*/false);
+  EXPECT_EQ(limiter->stats().capacity, 50);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 50);
+  EXPECT_EQ(limiter->stats().capacity, 50);
+}
+
+TEST_F(RPCRateLimiterTest, capacityProbingQuotaRejectionEndsSlowStart) {
+  auto limiter = makeAdaptiveLimiter(
+      "test.quota-ends-slow-start", RPCFlowControlPolicy::kCapacityProbing);
+  rejectOneOf(*limiter, 200, /*capacityRejection=*/false);
+  EXPECT_EQ(limiter->stats().capacity, 100);
+  const auto inFlight = acquire(*limiter, 100);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 100);
+  EXPECT_EQ(limiter->stats().capacity, 100);
+}
+
 TEST_F(RPCRateLimiterTest, fractionalLimitUsesLearnedServiceHorizon) {
   ManualPacingClock clock;
   auto limiter = makePacingLimiter("test.fractional.backend", clock);
@@ -809,12 +1690,64 @@ TEST_F(RPCRateLimiterTest, staleSuccessUpdatesHorizonWithoutGrowingWindow) {
   EXPECT_TRUE(wait.wait.isReady());
 }
 
+TEST_F(RPCRateLimiterTest, staleSuccessIsReportedAsDiscarded) {
+  const std::string backend = "test.backend";
+  setCeiling(backend, 16);
+  setAdaptive(backend, /*enabled=*/true, /*floor=*/1, /*decreaseFactor=*/0.5);
+  auto& limiter = limiterFor(backend);
+  const auto staleEpoch = limiter.acquire().overloadEpoch();
+  limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  const auto currentEpoch = limiter.acquire().overloadEpoch();
+  ASSERT_EQ(limiter.stats().limitMilli, 8'000);
+
+  EXPECT_FALSE(limiter.onSuccessForEpoch(staleEpoch, 1, 0));
+  EXPECT_EQ(limiter.stats().limitMilli, 8'000);
+
+  EXPECT_TRUE(limiter.onSuccessForEpoch(currentEpoch, 1, 0));
+}
+
+TEST_F(RPCRateLimiterTest, staleSuccessWithNoCreditToLoseIsNotReported) {
+  const std::string backend = "test.backend";
+  setCeiling(backend, 16);
+  auto& limiter = limiterFor(backend);
+
+  // In fixed mode an overload still opens a new epoch, but success earns
+  // nothing.
+  const auto fixedEpoch = limiter.acquire().overloadEpoch();
+  limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  EXPECT_TRUE(limiter.onSuccessForEpoch(fixedEpoch, 1, 0));
+
+  // At the ceiling, recovery has nowhere to go.
+  setAdaptive(backend, /*enabled=*/true, /*floor=*/1, /*decreaseFactor=*/0.5);
+  const auto ceilingEpoch = limiter.acquire().overloadEpoch();
+  limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter.onOutcome(RPCRateLimiter::Outcome::kSuccess, 1'000);
+  ASSERT_EQ(limiter.stats().limitMilli, 16'000);
+  EXPECT_TRUE(limiter.onSuccessForEpoch(ceilingEpoch, 1, 0));
+}
+
+TEST_F(RPCRateLimiterTest, staleSuccessAfterDefaultCapacityDropIsNotReported) {
+  RPCRateLimiter::setDefaultCapacity(16);
+  const std::string backend = "test.default.backend";
+  setAdaptive(backend, /*enabled=*/true, /*floor=*/1, /*decreaseFactor=*/0.5);
+  auto& limiter = limiterFor(backend);
+  const auto staleEpoch = limiter.acquire().overloadEpoch();
+  limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+
+  // Lowering the default capacity below the stored window leaves it at the
+  // new ceiling, where recovery has nowhere to go.
+  RPCRateLimiter::setDefaultCapacity(4);
+  ASSERT_EQ(limiter.stats().limitMilli, 4'000);
+  EXPECT_TRUE(limiter.onSuccessForEpoch(staleEpoch, 1, 0));
+}
+
 TEST_F(RPCRateLimiterTest, timerSchedulingFailureFailsEveryWaiter) {
   ThrowingTimekeeper timekeeper;
   auto limiter = std::make_shared<RPCRateLimiter>(
       "test.throwing-timekeeper",
       [] { return std::chrono::steady_clock::time_point{}; },
-      &timekeeper);
+      &timekeeper,
+      [] { return 1.0; });
   enableFractionalLimit(*limiter, 0.25);
   limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
   limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
@@ -832,7 +1765,10 @@ TEST_F(RPCRateLimiterTest, timerSchedulingFailureFailsEveryWaiter) {
 TEST_F(RPCRateLimiterTest, timerFailureAllowsLaterWaiterToRearm) {
   FailOncePacingClock clock;
   auto limiter = std::make_shared<RPCRateLimiter>(
-      "test.recovering-timekeeper", [&clock] { return clock.now(); }, &clock);
+      "test.recovering-timekeeper",
+      [&clock] { return clock.now(); },
+      &clock,
+      [] { return 1.0; });
   enableFractionalLimit(*limiter, 0.25);
   limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
   limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
@@ -951,7 +1887,7 @@ TEST_F(RPCRateLimiterTest, losingPacedWaiterRearmsOnWinnerRelease) {
   EXPECT_EQ(limiter->tryAcquireUpTo(1).size(), 1);
 }
 
-TEST_F(RPCRateLimiterTest, fractionalLimitBacksOffAndRecoversToOne) {
+TEST_F(RPCRateLimiterTest, fractionalLimitRecoversWithTimeAfterASuccess) {
   ManualPacingClock clock;
   auto limiter = makePacingLimiter("test.paced.backend", clock);
   enableFractionalLimit(*limiter, 0.25);
@@ -964,12 +1900,96 @@ TEST_F(RPCRateLimiterTest, fractionalLimitBacksOffAndRecoversToOne) {
   EXPECT_EQ(limiter->stats().limitMilli, 250);
   EXPECT_EQ(limiter->stats().lowWaterLimitMilli, 250);
 
+  // Without a success the window waits. The first success starts recovery:
+  // the window then doubles every horizon, up to one, and the next paced
+  // admission commits the growth.
+  clock.advance(1s);
+  EXPECT_EQ(limiter->stats().limitMilli, 250);
   limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
-  EXPECT_EQ(limiter->stats().limitMilli, 500);
-  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+  EXPECT_EQ(limiter->stats().limitMilli, 250);
+  clock.advance(2s);
+  EXPECT_FALSE(limiter->tryAcquireUpTo(1).empty());
   EXPECT_EQ(limiter->stats().limitMilli, 1'000);
   EXPECT_EQ(limiter->stats().capacity, 1);
   EXPECT_EQ(limiter->stats().lowWaterLimitMilli, 250);
+}
+
+TEST_F(RPCRateLimiterTest, pacingTimeAccruesOnlyWhileTheWindowIsFractional) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.time", clock);
+  enableFractionalLimit(*limiter, 0.25);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_EQ(limiter->stats().limitMilli, 1'000);
+  clock.advance(5s);
+  EXPECT_EQ(limiter->stats().pacingNanos, 0);
+
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_EQ(limiter->stats().limitMilli, 500);
+  clock.advance(3s);
+  // The stretch still in progress counts.
+  EXPECT_EQ(limiter->stats().pacingNanos, std::chrono::nanoseconds{3s}.count());
+
+  // A success starts recovery. The window grows back to one unit, and
+  // admission stays paced until the next paced admission commits the growth.
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+  clock.advance(2s);
+  ASSERT_FALSE(limiter->tryAcquireUpTo(1).empty());
+  ASSERT_EQ(limiter->stats().limitMilli, 1'000);
+  clock.advance(7s);
+  EXPECT_EQ(limiter->stats().pacingNanos, std::chrono::nanoseconds{5s}.count());
+}
+
+TEST_F(RPCRateLimiterTest, windowUnitSecondsIntegratesTheWindowOverTime) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.window.integral", clock);
+  enableFractionalLimit(*limiter, 0.25);
+  const auto start = limiter->stats();
+  ASSERT_EQ(start.limitMilli, 2'000);
+
+  // Two units for 3s; four for 1s once the ceiling grows; two for 2s once an
+  // overload halves the window.
+  clock.advance(3s);
+  limiter->amend([](RPCRateLimiter::Config& config) { config.ceiling = 4; });
+  ASSERT_EQ(limiter->stats().limitMilli, 4'000);
+  clock.advance(1s);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_EQ(limiter->stats().limitMilli, 2'000);
+  clock.advance(2s);
+
+  const auto end = limiter->stats();
+  EXPECT_DOUBLE_EQ(
+      end.windowUnitSeconds - start.windowUnitSeconds, 2 * 3 + 4 * 1 + 2 * 2);
+  EXPECT_EQ(
+      end.clockNanos - start.clockNanos, std::chrono::nanoseconds{6s}.count());
+}
+
+TEST_F(RPCRateLimiterTest, windowUnitSecondsAccruesBeforeAHorizonSample) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.window.probe-floor", clock);
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 2,
+          .floor = 0.001,
+          .decreaseFactor = 0.5,
+          .maxProbeInterval = 10s,
+      });
+  // The 1s bootstrap horizon over the 10s probe interval sets a floor of 0.1.
+  for (int i = 0; i < 5; ++i) {
+    limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  }
+  ASSERT_EQ(limiter->stats().limitMilli, 100);
+  const auto start = limiter->stats();
+  clock.advance(10s);
+
+  // A 2s horizon sample raises the probe floor, and the window with it.
+  limiter->onOutcome(
+      RPCRateLimiter::Outcome::kSuccess,
+      1,
+      std::chrono::nanoseconds{2s}.count());
+  const auto end = limiter->stats();
+  ASSERT_EQ(end.limitMilli, 200);
+  EXPECT_DOUBLE_EQ(end.windowUnitSeconds - start.windowUnitSeconds, 0.1 * 10);
 }
 
 TEST_F(RPCRateLimiterTest, fractionalLimitRecoversWithCeilingOne) {
@@ -986,6 +2006,8 @@ TEST_F(RPCRateLimiterTest, fractionalLimitRecoversWithCeilingOne) {
   limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
   EXPECT_EQ(limiter->stats().limitMilli, 500);
   limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+  clock.advance(2s);
+  EXPECT_FALSE(limiter->tryAcquireUpTo(1).empty());
   EXPECT_EQ(limiter->stats().limitMilli, 1'000);
   EXPECT_EQ(limiter->stats().capacity, 1);
 }
@@ -1103,9 +2125,14 @@ TEST_F(RPCRateLimiterTest, fractionalLimitIncreaseReschedulesEarlierWake) {
   auto wait = limiter->admitOrWait();
   ASSERT_FALSE(wait.admitted);
 
+  // A fixed window of 0.25 waits 4 horizons. Once a success starts recovery,
+  // the window doubles every horizon and the wait is T(0.25) = log2(1 + ln2 /
+  // 0.25) = 1.9156 horizons.
   limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
-  ASSERT_EQ(limiter->stats().limitMilli, 500);
-  clock.advance(2s);
+  ASSERT_EQ(limiter->stats().limitMilli, 250);
+  clock.advance(1'915ms);
+  EXPECT_FALSE(wait.wait.isReady());
+  clock.advance(1ms);
   EXPECT_TRUE(wait.wait.isReady());
 }
 
@@ -1124,7 +2151,7 @@ TEST_F(RPCRateLimiterTest, pacingUsesAdmissionStartForNextDeadline) {
   EXPECT_TRUE(limiter->admitOrWait().admitted);
 }
 
-TEST_F(RPCRateLimiterTest, pacingSupportsOneRequestPerHundredSeconds) {
+TEST_F(RPCRateLimiterTest, pacingProbesAtLeastOncePerMaxInterval) {
   ManualPacingClock clock;
   auto limiter = makePacingLimiter("test.paced.backend", clock);
   enableFractionalLimit(*limiter, 0.01);
@@ -1133,14 +2160,287 @@ TEST_F(RPCRateLimiterTest, pacingSupportsOneRequestPerHundredSeconds) {
   for (int i = 0; i < 7; ++i) {
     limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
   }
-  ASSERT_EQ(limiter->stats().limitMilli, 10);
+  // The configured floor of 0.01 is raised to 1s / 60s, so probes are at most
+  // 60s apart.
+  ASSERT_EQ(limiter->stats().limitMilli, 17);
 
   auto wait = limiter->admitOrWait();
   ASSERT_FALSE(wait.admitted);
-  clock.advance(99'999ms);
+  clock.advance(59'999ms);
   EXPECT_FALSE(wait.wait.isReady());
   clock.advance(1ms);
   EXPECT_TRUE(wait.wait.isReady());
+}
+
+// Admits one call whenever pacing allows, completes it with 'outcome', and
+// returns the number of calls admitted before 'stop' returns true or 'limit'
+// elapses.
+int64_t runPacedCalls(
+    RPCRateLimiter& limiter,
+    ManualPacingClock& clock,
+    RPCRateLimiter::Outcome outcome,
+    std::chrono::seconds limit,
+    const std::function<bool()>& stop) {
+  const auto deadline = clock.now() + limit;
+  // Bounds the loop when calls are admitted without the clock moving, as they
+  // are once pacing stops.
+  constexpr int64_t kMaxCalls{10'000};
+  int64_t numCalls{0};
+  while (!stop() && clock.now() < deadline && numCalls < kMaxCalls) {
+    auto wait = limiter.admitOrWait();
+    while (!wait.admitted && !wait.wait.isReady() && clock.now() < deadline) {
+      clock.advance(100ms);
+    }
+    if (!limiter.tryAcquireUpTo(1).empty()) {
+      ++numCalls;
+      limiter.onOutcome(outcome, outcome == RPCRateLimiter::Outcome::kSuccess);
+    }
+  }
+  return numCalls;
+}
+
+TEST_F(RPCRateLimiterTest, outageBacksOffToOneProbePerMaxInterval) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.outage", clock);
+  enableFractionalLimit(*limiter, 0.001);
+
+  // Every call is rejected for an hour. The window falls until the gap between
+  // probes reaches the 60s maximum: a window of 1s / 60s.
+  const auto numProbes = runPacedCalls(
+      *limiter, clock, RPCRateLimiter::Outcome::kOverload, 3'600s, [] {
+        return false;
+      });
+
+  EXPECT_EQ(limiter->stats().limitMilli, 17);
+  EXPECT_GE(numProbes, 60);
+  EXPECT_LE(numProbes, 75);
+}
+
+TEST_F(RPCRateLimiterTest, backOffProbesComeEarlyByAtMostTheJitter) {
+  ManualPacingClock clock;
+  // The earliest draw: every probe comes 20% before the interval.
+  auto limiter = std::make_shared<RPCRateLimiter>(
+      "test.paced.outage-jitter",
+      [&clock] { return clock.now(); },
+      clock.timekeeper(),
+      [] { return 0.0; });
+  enableFractionalLimit(*limiter, 0.001);
+
+  // The window still backs off to 1s / 60s, but probes come every 48s rather
+  // than every 60s: 75 an hour instead of 60.
+  const auto numProbes = runPacedCalls(
+      *limiter, clock, RPCRateLimiter::Outcome::kOverload, 3'600s, [] {
+        return false;
+      });
+
+  EXPECT_EQ(limiter->stats().limitMilli, 17);
+  EXPECT_GE(numProbes, 75);
+  EXPECT_LE(numProbes, 90);
+}
+
+TEST_F(RPCRateLimiterTest, outageBackOffFollowsConfiguredMaxProbeInterval) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.outage-10s", clock);
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 2,
+          .floor = 0.001,
+          .decreaseFactor = 0.5,
+          .maxProbeInterval = 10s,
+      });
+
+  // An hour of rejections backs off to one probe per 10s: a window of
+  // 1s / 10s.
+  const auto numProbes = runPacedCalls(
+      *limiter, clock, RPCRateLimiter::Outcome::kOverload, 3'600s, [] {
+        return false;
+      });
+
+  EXPECT_EQ(limiter->stats().limitMilli, 100);
+  EXPECT_GE(numProbes, 360);
+  EXPECT_LE(numProbes, 375);
+}
+
+TEST_F(RPCRateLimiterTest, slowBackendStaysPacedDuringAnOutage) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.slow-outage", clock);
+  enableFractionalLimit(*limiter, 0.001);
+  // Calls take 120s, longer than the 60s probe interval.
+  limiter->onOutcome(
+      RPCRateLimiter::Outcome::kSuccess,
+      1,
+      std::chrono::duration_cast<std::chrono::nanoseconds>(120s).count());
+
+  // The window still backs off below one, so probes stay paced, 240s apart at
+  // a window of 0.5, rather than as fast as rejections return.
+  const auto numProbes = runPacedCalls(
+      *limiter, clock, RPCRateLimiter::Outcome::kOverload, 3'600s, [] {
+        return false;
+      });
+
+  EXPECT_EQ(limiter->stats().limitMilli, 500);
+  EXPECT_LE(numProbes, 20);
+}
+
+TEST_F(RPCRateLimiterTest, pacedWindowRecoversSoonAfterTheFirstSuccess) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.recovery", clock);
+  enableFractionalLimit(*limiter, 0.001);
+  runPacedCalls(
+      *limiter, clock, RPCRateLimiter::Outcome::kOverload, 3'600s, [] {
+        return false;
+      });
+  ASSERT_EQ(limiter->stats().limitMilli, 17);
+
+  // The backend recovers. The next probe comes within 60s.
+  const auto start = clock.now();
+  int64_t numSuccesses{0};
+  runPacedCalls(*limiter, clock, RPCRateLimiter::Outcome::kSuccess, 600s, [&] {
+    return numSuccesses++ > 0;
+  });
+  EXPECT_LE(clock.now() - start, 60s);
+
+  // Once it succeeds, the window doubles every horizon and reaches one about
+  // 6.5 horizons later. Growth by successes alone would take about 2 / 0.017
+  // horizons.
+  const auto firstSuccess = clock.now();
+  runPacedCalls(*limiter, clock, RPCRateLimiter::Outcome::kSuccess, 600s, [&] {
+    return limiter->available() > 0;
+  });
+  EXPECT_GT(limiter->available(), 0);
+  EXPECT_LE(clock.now() - firstSuccess, 8s);
+}
+
+namespace {
+// Advances the clock in 'step' increments until a paced call is admitted, and
+// returns the admission time.
+std::chrono::steady_clock::time_point admitNextPacedCall(
+    RPCRateLimiter& limiter,
+    ManualPacingClock& clock,
+    std::chrono::milliseconds step) {
+  for (int i = 0; i < 1'000'000; ++i) {
+    if (!limiter.tryAcquireUpTo(1).empty()) {
+      return clock.now();
+    }
+    clock.advance(step);
+  }
+  VELOX_FAIL("No paced call was admitted");
+}
+
+// Backs 'limiter' off to the 60s probe interval, then reports one paced
+// success, which starts time-based recovery.
+void startPacedRecovery(RPCRateLimiter& limiter, ManualPacingClock& clock) {
+  enableFractionalLimit(limiter, 0.001);
+  runPacedCalls(limiter, clock, RPCRateLimiter::Outcome::kOverload, 3'600s, [] {
+    return false;
+  });
+  admitNextPacedCall(limiter, clock, 100ms);
+  limiter.onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+}
+} // namespace
+
+TEST_F(RPCRateLimiterTest, lateOverloadCutsTheWindowItsCallWasAdmittedUnder) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.late-overload", clock);
+  startPacedRecovery(*limiter, clock);
+
+  const auto admitted = admitNextPacedCall(*limiter, clock, 100ms);
+  const auto admittedUnder = limiter->stats().limitMilli;
+
+  // The rejection arrives 5 horizons later, as a timeout would. The cut halves
+  // the window the call was admitted under, not the one projected since.
+  clock.advance(5s);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  const auto cut = limiter->stats().limitMilli;
+  EXPECT_LE(cut, admittedUnder / 2 + 1);
+
+  // Recovery has ended: the next probe waits the back-off interval of the cut
+  // window, and its admission commits no growth.
+  const auto next = admitNextPacedCall(*limiter, clock, 10ms);
+  EXPECT_GE(next - admitted, std::chrono::milliseconds(1'000'000 / cut - 10));
+  EXPECT_EQ(limiter->stats().limitMilli, cut);
+}
+
+TEST_F(RPCRateLimiterTest, nonOverloadFailureStopsRecoveryUntilTheNextSuccess) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.failure", clock);
+  startPacedRecovery(*limiter, clock);
+
+  const auto admitted = admitNextPacedCall(*limiter, clock, 10ms);
+  const auto window = limiter->stats().limitMilli;
+  limiter->onOutcome(RPCRateLimiter::Outcome::kFailure, 0);
+
+  // Back to the back-off interval of one horizon / window, measured from the
+  // failed call's admission, rather than the shrinking recovery interval.
+  const auto next = admitNextPacedCall(*limiter, clock, 10ms);
+  EXPECT_GE(
+      next - admitted, std::chrono::milliseconds(1'000'000 / window - 10));
+  EXPECT_EQ(limiter->stats().limitMilli, window);
+
+  // A success resumes recovery.
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+  runPacedCalls(*limiter, clock, RPCRateLimiter::Outcome::kSuccess, 600s, [&] {
+    return limiter->available() > 0;
+  });
+  EXPECT_GT(limiter->available(), 0);
+}
+
+TEST_F(RPCRateLimiterTest, pacedSuccessLearnsTheServiceHorizon) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.horizon", clock);
+  enableFractionalLimit(*limiter, 0.001);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_LT(limiter->stats().limitMilli, 1'000);
+
+  admitNextPacedCall(*limiter, clock, 100ms);
+  limiter->onOutcome(
+      RPCRateLimiter::Outcome::kSuccess,
+      1,
+      std::chrono::duration_cast<std::chrono::nanoseconds>(3s).count());
+  EXPECT_EQ(limiter->stats().serviceHorizonNanos, 3'000'000'000);
+}
+
+TEST_F(RPCRateLimiterTest, recoveringWindowAboveOneMinusLn2WaitsForCredit) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.near-one", clock);
+  enableFractionalLimit(*limiter, 0.001);
+  // From the ceiling of 2, two overloads leave a window of 0.5.
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_EQ(limiter->stats().limitMilli, 500);
+
+  const auto admitted = admitNextPacedCall(*limiter, clock, 10ms);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+
+  // Above 1 - ln2 the growing window reaches one before it accumulates a full
+  // admission: log2(1 / 0.5) + 1 - (1 - 0.5) / ln2 = 1.279 horizons, against
+  // 1.255 from the formula for smaller windows and 2 without recovery.
+  const auto next = admitNextPacedCall(*limiter, clock, 10ms);
+  EXPECT_GE(next - admitted, 1'270ms);
+  EXPECT_LE(next - admitted, 1'290ms);
+}
+
+TEST_F(RPCRateLimiterTest, zeroMaxProbeIntervalLetsTheWindowReachTheFloor) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.no-probe-floor", clock);
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 2,
+          .floor = 0.001,
+          .decreaseFactor = 0.5,
+          .maxProbeInterval = 0ms,
+      });
+
+  runPacedCalls(
+      *limiter, clock, RPCRateLimiter::Outcome::kOverload, 10'000s, [] {
+        return false;
+      });
+
+  EXPECT_EQ(limiter->stats().limitMilli, 1);
 }
 
 TEST_F(RPCRateLimiterTest, fractionalLimitDecreaseInvalidatesEarlierWake) {
@@ -1169,6 +2469,11 @@ TEST_F(RPCRateLimiterTest, leavingPacingWakesWaitersImmediately) {
   auto wait = limiter->admitOrWait();
   ASSERT_FALSE(wait.admitted);
 
+  // A success starts recovery; one horizon later 0.5 has doubled to one, before
+  // the paced wake at T(0.5) = 1.2787 horizons. The next outcome commits it.
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+  clock.advance(1s);
+  ASSERT_FALSE(wait.wait.isReady());
   limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
 
   EXPECT_EQ(limiter->stats().limitMilli, 1'000);

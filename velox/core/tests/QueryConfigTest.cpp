@@ -34,26 +34,71 @@ TEST_F(QueryConfigTest, emptyConfig) {
 
   ASSERT_FALSE(config.isLegacyCast());
   EXPECT_EQ(config.maxNumSplitsListenedTo(), 0);
+  EXPECT_FALSE(config.generateConstantMapsAsFlatMaps());
 }
 
 TEST_F(QueryConfigTest, setConfig) {
   std::string path = "/tmp/setConfig";
   std::unordered_map<std::string, std::string> configData(
       {{QueryConfig::kLegacyCast, "true"},
-       {QueryConfig::kRequestDataSizesMaxWaitSec, "12"}});
+       {QueryConfig::kRequestDataSizesMaxWaitSec, "12"},
+       {QueryConfig::kGenerateConstantMapsAsFlatMaps, "true"}});
   auto queryCtx = QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
   const QueryConfig& config = queryCtx->queryConfig();
 
   ASSERT_TRUE(config.isLegacyCast());
   EXPECT_EQ(config.requestDataSizesMaxWaitSec(), 12);
+  EXPECT_TRUE(config.generateConstantMapsAsFlatMaps());
 }
 
 TEST_F(QueryConfigTest, invalidConfig) {
-  std::unordered_map<std::string, std::string> configData(
-      {{QueryConfig::kSessionTimezone, "invalid"}});
   VELOX_ASSERT_USER_THROW(
-      QueryCtx::create(nullptr, QueryConfig{std::move(configData)}),
+      QueryCtx::create(
+          nullptr, QueryConfig{{{QueryConfig::kSessionTimezone, "invalid"}}}),
       "session 'session_timezone' set with invalid value 'invalid'");
+}
+
+TEST_F(QueryConfigTest, outOfRangeConfig) {
+  const auto makeConfig = [](const char* key, const char* value) {
+    return QueryConfig{{{key, value}}};
+  };
+
+  for (const auto* key :
+       {QueryConfig::kMaxOutputBatchRows,
+        QueryConfig::kPreferredOutputBatchRows,
+        QueryConfig::kMaxLocalExchangePartitionCount,
+        QueryConfig::kLocalMergeMaxNumMergeSources,
+        QueryConfig::kLocalMergeSourceQueueSize,
+        QueryConfig::kTaskWriterCount,
+        QueryConfig::kTaskPartitionedWriterCount}) {
+    SCOPED_TRACE(key);
+    VELOX_ASSERT_USER_THROW(
+        makeConfig(key, "0"),
+        fmt::format("Session property must be at least 1: {}", key));
+    EXPECT_NO_THROW(makeConfig(key, "1"));
+  }
+
+  for (const auto* key :
+       {QueryConfig::kMaxOutputBatchRows,
+        QueryConfig::kPreferredOutputBatchRows,
+        QueryConfig::kMergeJoinOutputBatchStartSize,
+        QueryConfig::kTableScanOutputBatchRowsOverride}) {
+    SCOPED_TRACE(key);
+    VELOX_ASSERT_USER_THROW(
+        makeConfig(key, "2147483648"),
+        fmt::format("Session property cannot exceed 2147483647: {}", key));
+    EXPECT_NO_THROW(makeConfig(key, "2147483647"));
+  }
+
+  for (const auto* text : {"-1", "abc", "4294967296"}) {
+    SCOPED_TRACE(text);
+    VELOX_ASSERT_USER_THROW(
+        makeConfig(QueryConfig::kMaxOutputBatchRows, text),
+        fmt::format(
+            "Session property must be an integer between 0 and 4294967295: {} = {}",
+            QueryConfig::kMaxOutputBatchRows,
+            text));
+  }
 }
 
 TEST_F(QueryConfigTest, taskWriterCountConfig) {
@@ -313,29 +358,58 @@ TEST_F(QueryConfigTest, singleSourceExchangeOptimizationConfig) {
   }
 }
 
-TEST_F(QueryConfigTest, useSessionTimezoneForTimestampWithTimezone) {
+TEST_F(QueryConfigTest, ignoreTimeZoneLabel) {
   {
     auto queryCtx = QueryCtx::create(nullptr, QueryConfig{{}});
     const QueryConfig& config = queryCtx->queryConfig();
-    EXPECT_FALSE(config.useSessionTimezoneForTimestampWithTimezone());
+    EXPECT_FALSE(config.ignoreTimeZoneLabel());
   }
 
   {
     std::unordered_map<std::string, std::string> configData(
-        {{QueryConfig::kUseSessionTimezoneForTimestampWithTimezone, "true"}});
+        {{QueryConfig::kIgnoreTimeZoneLabel, "true"}});
     auto queryCtx =
         QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
     const QueryConfig& config = queryCtx->queryConfig();
-    EXPECT_TRUE(config.useSessionTimezoneForTimestampWithTimezone());
+    EXPECT_TRUE(config.ignoreTimeZoneLabel());
   }
 
   {
     std::unordered_map<std::string, std::string> configData(
-        {{QueryConfig::kUseSessionTimezoneForTimestampWithTimezone, "false"}});
+        {{QueryConfig::kIgnoreTimeZoneLabel, "false"}});
     auto queryCtx =
         QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
     const QueryConfig& config = queryCtx->queryConfig();
-    EXPECT_FALSE(config.useSessionTimezoneForTimestampWithTimezone());
+    EXPECT_FALSE(config.ignoreTimeZoneLabel());
+  }
+
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{"use_session_timezone_for_timestamp_with_timezone", "true"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_TRUE(config.ignoreTimeZoneLabel());
+  }
+
+  {
+    std::unordered_map<std::string, std::string> configData(
+        {{"use_session_timezone_for_timestamp_with_timezone", "false"}});
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_FALSE(config.ignoreTimeZoneLabel());
+  }
+
+  {
+    std::unordered_map<std::string, std::string> configData({
+        {"use_session_timezone_for_timestamp_with_timezone", "true"},
+        {QueryConfig::kIgnoreTimeZoneLabel, "false"},
+    });
+    auto queryCtx =
+        QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
+    const QueryConfig& config = queryCtx->queryConfig();
+    EXPECT_FALSE(config.ignoreTimeZoneLabel());
   }
 }
 
@@ -344,7 +418,7 @@ TEST_F(QueryConfigTest, legacyTimestampWithTimezoneIsIgnored) {
       {{"legacy_timestamp_with_timezone", "false"}});
   auto queryCtx = QueryCtx::create(nullptr, QueryConfig{std::move(configData)});
   const QueryConfig& config = queryCtx->queryConfig();
-  EXPECT_FALSE(config.useSessionTimezoneForTimestampWithTimezone());
+  EXPECT_FALSE(config.ignoreTimeZoneLabel());
 }
 
 TEST_F(QueryConfigTest, operatorSpillFileCreateConfig) {

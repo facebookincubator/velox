@@ -54,6 +54,9 @@ struct PipelineStats {
 struct TaskStats {
   int32_t numTotalSplits{0};
   int32_t numFinishedSplits{0};
+  /// Splits accepted by the task but discarded when their consumers close.
+  /// Includes partially processed splits and queued splits that were not read.
+  int32_t numAbandonedSplits{0};
   int32_t numRunningSplits{0};
   int32_t numQueuedSplits{0};
   std::unordered_set<int32_t> completedSplitGroups;
@@ -61,7 +64,7 @@ struct TaskStats {
   // The number of barriers that have been processed by the task.
   int32_t numBarriers{0};
 
-  /// Table scan split stats.
+  /// Table scan work that still has a consumer. Excludes abandoned splits.
   int32_t numRunningTableScanSplits{0};
   int32_t numQueuedTableScanSplits{0};
   int64_t runningTableScanSplitWeights{0};
@@ -127,6 +130,12 @@ struct TaskStats {
   uint32_t memoryReclaimCount{0};
   /// The total memory reclamation time.
   uint64_t memoryReclaimMs{0};
+
+  /// Returns operator stats keyed by operator type, e.g.
+  /// OperatorType::kHashBuild. Stats of operators of the same type from
+  /// different plan nodes are merged together. OperatorType lists the types of
+  /// built-in operators; extensions such as cudf define their own.
+  std::unordered_map<std::string, OperatorStats> operatorStats() const;
 };
 
 } // namespace facebook::velox::exec

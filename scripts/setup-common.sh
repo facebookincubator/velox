@@ -151,12 +151,11 @@ function install_boost {
       fi
     fi
     if [[ "$(uname)" == "Linux" && ${USE_CLANG} != "false" ]]; then
-      ./bootstrap.sh --prefix="${INSTALL_PREFIX}" --with-toolset="clang-15"
-      # Switch the compiler from the clang-15 toolset which doesn't exist (clang-15.jam) to
-      # clang of version 15 when toolset clang-15 is used.
-      # This reconciles the project-config.jam generation with what the b2 build system allows for customization.
-      sed -i 's/using clang-15/using clang : 15/g' project-config.jam
-      ${SUDO} ./b2 "-j${NPROC}" -d0 install threading=multi toolset=clang-15 --without-python
+      # b2 takes the compiler from its configuration, not from CXX. CLANG_CXX is
+      # the Clang of the platform's setup script.
+      ./bootstrap.sh --prefix="${INSTALL_PREFIX}"
+      echo "using clang : : ${CLANG_CXX} ;" >>project-config.jam
+      ${SUDO} ./b2 "-j${NPROC}" -d0 install threading=multi toolset=clang --without-python
     else
       ./bootstrap.sh --prefix="${INSTALL_PREFIX}"
       ${SUDO} ./b2 "-j${NPROC}" -d0 install threading=multi --without-python
@@ -187,11 +186,6 @@ function install_grpc {
 function install_double_conversion {
   wget_and_untar https://github.com/google/double-conversion/archive/refs/tags/"${DOUBLE_CONVERSION_VERSION}".tar.gz double-conversion
   cmake_install_dir double-conversion -DBUILD_TESTING=OFF
-}
-
-function install_ranges_v3 {
-  wget_and_untar https://github.com/ericniebler/range-v3/archive/refs/tags/"${RANGE_V3_VERSION}".tar.gz ranges_v3
-  cmake_install_dir ranges_v3 -DRANGES_ENABLE_WERROR=OFF -DRANGE_V3_TESTS=OFF -DRANGE_V3_EXAMPLES=OFF
 }
 
 function install_abseil {

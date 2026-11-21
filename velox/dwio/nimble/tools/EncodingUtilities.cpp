@@ -16,7 +16,6 @@
 #include "velox/dwio/nimble/tools/EncodingUtilities.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Varint.h"
-#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
@@ -44,7 +43,8 @@ void extractCompressionType(
     // encodings.
     case EncodingType::Trivial:
     case EncodingType::FixedBitWidth:
-    case EncodingType::BlockBitPacking: {
+    case EncodingType::BlockBitPacking:
+    case EncodingType::BlockBitPackingV2: {
       auto pos = stream.data() + prefixSize(stream, useVarintRowCount);
       properties.insert(
           {EncodingPropertyType::Compression,
@@ -65,6 +65,7 @@ void extractCompressionType(
     case EncodingType::Delta:
     case EncodingType::DeltaBlock:
     case EncodingType::EliasFano:
+    case EncodingType::Sequence:
     case EncodingType::Constant:
     case EncodingType::MainlyConstant:
     case EncodingType::Prefix:
@@ -72,8 +73,9 @@ void extractCompressionType(
     case EncodingType::ALPRD:
     case EncodingType::Fsst:
     case EncodingType::PFOR:
+    case EncodingType::PartitionedEliasFano:
+    case EncodingType::Reversed:
     case EncodingType::SimdForBitpack:
-    case EncodingType::BitRangeSplit:
     // SubIntSplit integration is disabled; it carries no separate compression
     // byte, so treat it like the other encodings handled here.
     case EncodingType::SubIntSplit:
@@ -142,30 +144,12 @@ void traverseEncodings(
     case EncodingType::Prefix:
     case EncodingType::DeltaBlock:
     case EncodingType::EliasFano:
+    case EncodingType::Sequence:
     case EncodingType::SimdForBitpack:
     // The wrapped encoding is carried verbatim rather than as a nested
     // stream, so there is nothing to traverse into here.
     case EncodingType::Slice: {
       // don't have any nested encoding
-      break;
-    }
-    case EncodingType::BitRangeSplit: {
-      detail::BitRangeSplitEncodingBase::visitSections(
-          stream,
-          Encoding::Options{
-              .useVarintRowCount = useVarintRowCount,
-          },
-          [&](NestedEncodingIdentifier section,
-              const detail::BitRangeSplitEncodingBase::Section& metadata) {
-            traverseEncodings(
-                {metadata.data, metadata.dataBytes},
-                level + 1,
-                section,
-                "Bits" + std::to_string(metadata.bitStart) + "-" +
-                    std::to_string(metadata.bitEnd),
-                useVarintRowCount,
-                visitor);
-          });
       break;
     }
     case EncodingType::SubIntSplit: {
@@ -248,11 +232,12 @@ void traverseEncodings(
       }
       break;
     }
-    case EncodingType::BlockBitPacking: {
-      // Layout after the common prefix: compressionType [1 byte], blockSize
-      // [varint], numBlocks [varint], then three self-describing nested
-      // metadata sub-streams, each preceded by a varint size: the per-block
-      // baselines, bit widths, and data offsets.
+    case EncodingType::BlockBitPacking:
+    case EncodingType::BlockBitPackingV2: {
+      // Layout after the common prefix, the same for both versions:
+      // compressionType [1 byte], blockSize [varint], numBlocks [varint], then
+      // three self-describing nested metadata sub-streams, each preceded by a
+      // varint size: the per-block baselines, bit widths, and data offsets.
       const char* pos = stream.data() + dataOffset;
       encoding::readChar(pos); // compressionType
       varint::readVarint32(&pos); // blockSize
@@ -286,6 +271,26 @@ void traverseEncodings(
             level + 1,
             2,
             "DataOffsets",
+            useVarintRowCount,
+            visitor);
+      }
+      break;
+    }
+    case EncodingType::PartitionedEliasFano: {
+      // Layout after the common prefix: numPartitions and numGroups
+      // [varints], then the partition offsets and the partition bases, each a
+      // nested stream preceded by a varint size. The per-group Elias-Fano
+      // streams follow.
+      auto body = stream.substr(dataOffset);
+      encoding::readVarint32(body); // numPartitions
+      encoding::readVarint32(body); // numGroups
+      uint32_t childIndex{0};
+      for (const auto* name : {"PartitionOffsets", "PartitionBases"}) {
+        traverseEncodings(
+            encoding::readLengthPrefixedBytes(body),
+            level + 1,
+            childIndex++,
+            name,
             useVarintRowCount,
             visitor);
       }
@@ -477,6 +482,16 @@ void traverseEncodings(
           level + 1,
           1,
           "Nulls",
+          useVarintRowCount,
+          visitor);
+      break;
+    }
+    case EncodingType::Reversed: {
+      traverseEncodings(
+          stream.substr(dataOffset),
+          level + 1,
+          0,
+          "Values",
           useVarintRowCount,
           visitor);
       break;

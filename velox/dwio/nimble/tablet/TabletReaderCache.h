@@ -29,8 +29,8 @@
 #include "velox/common/caching/CachedFactory.h"
 #include "velox/common/caching/SimpleLRUCache.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
-#include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/type/Type.h"
 
 namespace facebook::nimble {

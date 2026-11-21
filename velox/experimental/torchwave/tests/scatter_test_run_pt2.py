@@ -19,6 +19,7 @@ import torch
 from velox.experimental.torchwave.tests.scatter_test import (
     ScatterAddCgConsumerTestPreproc,
     ScatterAddInPlaceTestPreproc,
+    ScatterAddRunsTestPreproc,
     ScatterAddTestPreproc,
     ScatterSrcTestPreproc,
     ScatterTestPreproc,
@@ -259,6 +260,34 @@ def main() -> None:
     cg_pt2 = os.path.join(output_dir, "scatter_add_cg_consumer_test.pt2")
     torch.export.save(cg_ep, cg_pt2)
     print(f"scatter_add cg consumer: {len(cg_ep.graph.nodes)} nodes -> {cg_pt2}")
+
+    # scatter_add over an index sorted into runs, ending on a fractional warp.
+    # The runs sum to 1045 elements: the last warp of the loop has 21 active
+    # lanes, all in the final run (bin 9 starts at element 1000), which
+    # exercises warp aggregation with inactive lanes. The run boundary at
+    # element 37 falls inside a warp, exercising the per-lane fallback; bin 6 is
+    # empty.
+    runs_lengths = torch.tensor([37, 1, 64, 5, 200, 3, 0, 90, 600, 45])
+    runs_index = torch.repeat_interleave(
+        torch.arange(runs_lengths.numel(), dtype=torch.int64), runs_lengths
+    )
+    runs_n = runs_index.numel()
+    assert runs_n == 1045 and runs_n % 32 == 21, runs_n
+    runs_flags = torch.arange(runs_n, dtype=torch.int64) % 7
+    runs_src = torch.arange(runs_n, dtype=torch.int64) % 11 - 3
+    runs_inputs = (runs_index, runs_flags, runs_src)
+    runs_module = ScatterAddRunsTestPreproc()
+    runs_results = [o.clone() for o in runs_module(*runs_inputs)]
+    torch.save(
+        runs_results, os.path.join(output_dir, "scatter_add_runs_test_results.pt")
+    )
+    with torch.no_grad():
+        runs_ep = torch.export.export(runs_module, runs_inputs, strict=False)
+    runs_targets = [str(n.target) for n in runs_ep.graph.nodes]
+    assert runs_targets.count("aten.scatter_add_.default") == 2, runs_targets
+    runs_pt2 = os.path.join(output_dir, "scatter_add_runs_test.pt2")
+    torch.export.save(runs_ep, runs_pt2)
+    print(f"scatter_add runs: {len(runs_ep.graph.nodes)} nodes -> {runs_pt2}")
 
     # slice_scatter dim=1 multi-row repro. rows (64) > inner extent (32) so a
     # per-row failure shows. out0 contiguous src (control); out1 non-contiguous

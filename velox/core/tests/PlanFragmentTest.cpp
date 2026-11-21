@@ -340,14 +340,14 @@ TEST_F(PlanFragmentTest, executionStrategyToString) {
 TEST_F(PlanFragmentTest, supportsBarrier) {
   // Plan fragment with plan node not supporting barrier.
   {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    const auto plan = PlanBuilder(planNodeIdGenerator)
+    PlanBuilder builder;
+    const auto plan = builder.newPlan()
                           .tableScan(rowType_)
                           .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
                           .hashJoin(
                               {"t0"},
                               {"u0"},
-                              PlanBuilder(planNodeIdGenerator)
+                              builder.newPlan()
                                   .tableScan(rowType_)
                                   .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
                                   .planNode(),
@@ -360,14 +360,14 @@ TEST_F(PlanFragmentTest, supportsBarrier) {
   }
   // Plan fragment with plan node supporting barrier.
   {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    PlanBuilder builder;
+    auto plan = builder.newPlan()
                     .tableScan(rowType_)
                     .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
                     .mergeJoin(
                         {"t0"},
                         {"u0"},
-                        PlanBuilder(planNodeIdGenerator)
+                        builder.newPlan()
                             .tableScan(rowType_)
                             .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
                             .planNode(),

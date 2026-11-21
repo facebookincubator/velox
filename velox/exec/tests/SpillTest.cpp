@@ -14,15 +14,23 @@
  * limitations under the License.
  */
 
+#include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <memory>
+#include <thread>
+
+#include <folly/executors/CPUThreadPoolExecutor.h>
 
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/MergeTestBase.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -37,6 +45,25 @@ using namespace facebook::velox::common::testutil;
 
 namespace {
 static const int64_t kGB = 1'000'000'000;
+
+// Tracks spill read-ahead separately from the filesystem's native I/O.
+class CountingExecutor : public folly::Executor {
+ public:
+  explicit CountingExecutor(size_t numThreads) : executor_(numThreads) {}
+
+  void add(folly::Func function) override {
+    numAdds_.fetch_add(1, std::memory_order_relaxed);
+    executor_.add(std::move(function));
+  }
+
+  uint64_t numAdds() const {
+    return numAdds_.load(std::memory_order_relaxed);
+  }
+
+ private:
+  std::atomic_uint64_t numAdds_{0};
+  folly::CPUThreadPoolExecutor executor_;
+};
 
 } // namespace
 
@@ -112,7 +139,9 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
 
  protected:
   static void SetUpTestCase() {
+    tests::utils::registerFaultyFileSystem();
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    TestValue::enable();
     if (!isRegisteredVectorSerde()) {
       facebook::velox::serializer::presto::PrestoVectorSerde::
           registerVectorSerde();
@@ -503,6 +532,8 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
     ASSERT_EQ(stats.spilledBytes, totalFileBytes);
     ASSERT_EQ(prevGStats.spilledBytes + totalFileBytes, newGStats.spilledBytes);
 
+    const auto numExistingFiles = fs->list(tempDir_->getPath()).size();
+    size_t numFinalFiles{0};
     bool usePreMerge = mergeWayThreshold >= 2;
     for (const auto& partitionId : partitionIds) {
       auto spillFiles = state_->finish(partitionId);
@@ -517,6 +548,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       spillConfig.fileCreateConfig = "";
       std::unique_ptr<TreeOfLosers<SpillMergeStream>> merge =
           spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_);
+      numFinalFiles += merge->numStreams();
       int numReadBatches = 0;
       // We expect all the rows in dense increasing order.
       for (auto i = 0; i < numBatches * numRowsPerBatch; ++i) {
@@ -586,9 +618,16 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
             finalStats.spillReads,
             succinctNanos(finalStats.spillReadTimeNanos),
             succinctNanos(finalStats.spillDeserializationTimeNanos)));
-    // Verify the spilled files are still there after spill state destruction.
-    for (const auto& spilledFile : spilledFileSet) {
-      ASSERT_TRUE(fs->exists(spilledFile));
+    // Verify pre-merge removes its inputs, including intermediate files,
+    // leaving only the final reader files and files from previous test runs.
+    ASSERT_EQ(
+        fs->list(tempDir_->getPath()).size(),
+        numExistingFiles - spilledFileSet.size() + numFinalFiles);
+    if (!usePreMerge) {
+      // Without pre-merge, all original spill files remain.
+      for (const auto& spilledFile : spilledFileSet) {
+        ASSERT_TRUE(fs->exists(spilledFile));
+      }
     }
     // Verify stats.
     const auto spillFileSizeCount =
@@ -656,6 +695,51 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
     }
   }
 
+  // Asserts that appending 'rows' fails on a row too wide to write with a spill
+  // failure, with nothing spilled.
+  void assertAppendRejectedBeforeWrite(const RowVectorPtr& rows) {
+    auto tempDirectory = TempDirectoryPath::create();
+    SpillState state(
+        [&]() -> const std::string& { return tempDirectory->getPath(); },
+        updateSpilledBytesCb_,
+        "test",
+        {},
+        kGB,
+        1 << 10,
+        compressionKind_,
+        std::nullopt,
+        pool(),
+        &spillStats_,
+        "");
+    const SpillPartitionId partitionId{0};
+    state.setPartitionSpilled(partitionId);
+    VELOX_ASSERT_RUNTIME_THROW_CODE(
+        state.appendToPartition(partitionId, rows),
+        error_code::kGenericSpillFailure,
+        "Serialized row exceeds 2GB");
+    ASSERT_EQ(spillStats_.spilledInputBytes, 0);
+    ASSERT_EQ(spillStats_.spilledRows, 0);
+    ASSERT_EQ(spillStats_.spilledBytes, 0);
+    ASSERT_EQ(spillStats_.spillWrites, 0);
+    ASSERT_TRUE(state.testingSpilledFilePaths().empty());
+  }
+
+  // Finishes the partition with 'id' and returns the number of rows in each of
+  // its pages.
+  std::vector<vector_size_t> finishAndReadPageSizes(
+      SpillState& state,
+      const SpillPartitionId& id) {
+    SpillPartition partition(id, state.finish(id));
+    auto reader =
+        partition.createUnorderedReader(1 << 20, pool(), &spillStats_);
+    RowVectorPtr output;
+    std::vector<vector_size_t> pageSizes;
+    while (reader->nextBatch(output)) {
+      pageSizes.push_back(output->size());
+    }
+    return pageSizes;
+  }
+
   folly::Random::DefaultGenerator rng_;
   std::shared_ptr<TempDirectoryPath> tempDir_;
   memory::MemoryAllocator* allocator_;
@@ -670,6 +754,59 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
   ConcurrentRuntimeStatWriter statWriter_;
   common::UpdateAndCheckSpillLimitCB updateSpilledBytesCb_;
 };
+
+TEST_P(SpillTest, orderedReaderUsesReadAheadExecutor) {
+  auto asyncFileSystem = tests::utils::faultyFileSystem();
+  CountingExecutor nativeExecutor(2);
+  CountingExecutor readAheadExecutor(2);
+  asyncFileSystem->setExecutor(&nativeExecutor);
+  const auto resetExecutor =
+      folly::makeGuard([&]() { asyncFileSystem->setExecutor(nullptr); });
+
+  constexpr int kNumBatches = 8;
+  constexpr int kNumRowsPerBatch = 100;
+  const SpillPartitionId partitionId{0};
+  setupSpillState({partitionId}, kGB, 0, kNumBatches, kNumRowsPerBatch);
+
+  auto spillFiles = state_->finish(partitionId);
+  ASSERT_EQ(spillFiles.size(), kNumBatches / 2);
+  for (auto& spillFile : spillFiles) {
+    spillFile.path = tests::utils::FaultyFileSystem::scheme() + spillFile.path;
+  }
+  SpillPartition spillPartition(partitionId, std::move(spillFiles));
+
+  auto spillConfig = common::SpillConfig();
+  spillConfig.executor = &readAheadExecutor;
+  spillConfig.numMaxMergeFiles = 2;
+  // Force multiple FileInputStream refills in both intermediate and final
+  // merge readers.
+  spillConfig.readBufferSize = 64;
+  spillConfig.writeBufferSize = 64;
+  spillConfig.updateAndCheckSpillLimitCb = [](int64_t) {};
+  spillConfig.fileCreateConfig = "";
+
+  auto merge =
+      spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_);
+  ASSERT_NE(merge, nullptr);
+  ASSERT_LE(merge->numStreams(), spillConfig.numMaxMergeFiles);
+
+  for (auto i = 0; i < values_.size(); ++i) {
+    auto* stream = merge->next();
+    ASSERT_NE(stream, nullptr) << i;
+    if (values_[i].has_value()) {
+      ASSERT_EQ(
+          values_[i].value(),
+          stream->decoded(0).valueAt<int64_t>(stream->currentIndex()))
+          << i;
+    } else {
+      ASSERT_TRUE(stream->decoded(0).isNullAt(stream->currentIndex())) << i;
+    }
+    stream->pop();
+  }
+  ASSERT_EQ(merge->next(), nullptr);
+  EXPECT_GT(readAheadExecutor.numAdds(), 0);
+  EXPECT_GT(nativeExecutor.numAdds(), 0);
+}
 
 TEST_P(SpillTest, spillState) {
   // Set the target file size to a large value to avoid new file creation
@@ -771,6 +908,44 @@ TEST_P(SpillTest, spillStateWithSmallTargetFileSize) {
   hybridSpillStateTest(1, 2, 8, 8, {CompareFlags{false, false}}, 8 * 2);
   hybridSpillStateTest(1, 2, 8, 8, {CompareFlags{false, true}}, 8 * 2);
   hybridSpillStateTest(1, 2, 8, 8, {}, 8 * 2);
+}
+
+// Buffered writes may finish uploading during close.
+DEBUG_ONLY_TEST_P(SpillTest, writeTimeIncludesFileClose) {
+  const auto closeDelay = std::chrono::milliseconds(100);
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::serializer::SerializedPageFile::finish",
+      std::function<void(void*)>(
+          [&](void*) { std::this_thread::sleep_for(closeDelay); }));
+
+  auto tempDirectory = TempDirectoryPath::create();
+  SpillState state(
+      [&]() -> const std::string& { return tempDirectory->getPath(); },
+      updateSpilledBytesCb_,
+      "test",
+      {},
+      kGB,
+      0,
+      compressionKind_,
+      std::nullopt,
+      pool(),
+      &spillStats_,
+      "");
+  const SpillPartitionId partitionId{0};
+  state.setPartitionSpilled(partitionId);
+  const auto prevGlobalStats = globalSpillStats();
+  state.appendToPartition(
+      partitionId, makeRowVector({makeFlatVector<int64_t>({1, 2, 3})}));
+  ASSERT_EQ(state.finish(partitionId).size(), 1);
+
+  ASSERT_EQ(spillStats_.spillWrites, 1);
+  ASSERT_GE(
+      spillStats_.spillWriteTimeNanos,
+      std::chrono::nanoseconds(closeDelay).count());
+  ASSERT_GE(
+      globalSpillStats().spillWriteTimeNanos -
+          prevGlobalStats.spillWriteTimeNanos,
+      spillStats_.spillWriteTimeNanos);
 }
 
 TEST_P(SpillTest, spillPartitionId) {
@@ -1486,38 +1661,225 @@ TEST_P(SpillTest, nonExistSpillFileOnDeletion) {
   state_.reset();
 }
 
-TEST_P(SpillTest, validatePerSpillWriteSize) {
-  struct TestRowVector : RowVector {
-    explicit TestRowVector(std::shared_ptr<const Type> type)
-        : RowVector(nullptr, type, nullptr, 0, {}) {}
+// A row estimated at 2GB or more fails the call before any row is written.
+DEBUG_ONLY_TEST_P(SpillTest, rejectOversizedSerializedRowBeforeWrite) {
+  constexpr vector_size_t kNumRows{10};
+  const auto rows = makeRowVector(
+      {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; })});
+  // Only the last row is too wide, so the rows before it are writable.
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::serializer::SerializedPageFileWriter::estimateRowSizes",
+      std::function<void(std::vector<vector_size_t>*)>(
+          [&](std::vector<vector_size_t>* rowSizes) {
+            (*rowSizes)[kNumRows - 1] =
+                std::numeric_limits<vector_size_t>::max();
+          }));
+  assertAppendRejectedBeforeWrite(rows);
+}
 
-    uint64_t estimateFlatSize() const override {
-      // Return 10GB
-      constexpr uint64_t tenGB = 10 * static_cast<uint64_t>(1024 * 1024 * 1024);
-      return tenGB;
-    }
+// A row of 4GB or more fails the call before any row is written, although its
+// serialized size does not fit the 32-bit estimate.
+TEST_P(SpillTest, rejectRowOver4GBBeforeWrite) {
+  // Size estimation reads only the string sizes, so the strings need no
+  // memory. Writing one would read past 'kPrefix'.
+  static const char kPrefix[] = "abcd";
+  auto makeMaxSizeString = [&]() {
+    auto strings =
+        BaseVector::create<FlatVector<StringView>>(VARCHAR(), 1, pool());
+    strings->setNoCopy(
+        0, StringView(kPrefix, std::numeric_limits<int32_t>::max()));
+    return strings;
   };
+  // Two strings of INT32_MAX bytes and one of 12 add up to 2^32+10.
+  const auto rows = makeRowVector(
+      {makeMaxSizeString(),
+       makeMaxSizeString(),
+       makeFlatVector<std::string>({std::string(12, 'x')})});
+  assertAppendRejectedBeforeWrite(rows);
+}
+
+namespace {
+// Reports 'flatSize', 10GB by default, so a vector of a few small rows can be
+// too big for one write.
+struct OversizedRowVector : RowVector {
+  explicit OversizedRowVector(
+      const RowVectorPtr& rows,
+      uint64_t flatSize = 10 * static_cast<uint64_t>(1'024 * 1'024 * 1'024))
+      : RowVector(
+            rows->pool(),
+            rows->type(),
+            nullptr,
+            rows->size(),
+            rows->children()),
+        flatSize_(flatSize) {}
+
+  uint64_t estimateFlatSize() const override {
+    return flatSize_;
+  }
+
+  const uint64_t flatSize_;
+};
+} // namespace
+
+// A vector estimated at 2GB or more is written in several pages instead of
+// being rejected, as long as no single row is that large. HashProbe spills a
+// probe input batch whole, so wide rows reach this from a regular join.
+TEST_P(SpillTest, splitOversizedWrite) {
+  constexpr vector_size_t kNumRows{10};
+  std::vector<std::string> payloads;
+  for (vector_size_t row = 0; row < kNumRows; ++row) {
+    payloads.emplace_back(100, 'a' + row);
+  }
+  const auto rows = makeRowVector({
+      makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
+      makeFlatVector<std::string>(payloads),
+  });
 
   auto tempDirectory = TempDirectoryPath::create();
   SpillState state(
       [&]() -> const std::string& { return tempDirectory->getPath(); },
       updateSpilledBytesCb_,
       "test",
-      SpillState::makeSortingKeys(std::vector<CompareFlags>(1)),
-      1024,
-      0,
+      {},
+      kGB,
+      1 << 10,
       compressionKind_,
       std::nullopt,
       pool(),
       &spillStats_,
       "");
-  SpillPartitionId partitionId{0};
+  const SpillPartitionId partitionId{0};
   state.setPartitionSpilled(partitionId);
-  ASSERT_TRUE(state.isPartitionSpilled(partitionId));
-  VELOX_ASSERT_THROW(
-      state.appendToPartition(
-          partitionId, std::make_shared<TestRowVector>(HUGEINT())),
-      "Spill bytes will overflow");
+  state.appendToPartition(
+      partitionId, std::make_shared<OversizedRowVector>(rows));
+  ASSERT_EQ(spillStats_.spilledRows, kNumRows);
+
+  SpillPartition partition(partitionId, state.finish(partitionId));
+  auto reader = partition.createUnorderedReader(1 << 20, pool(), &spillStats_);
+  RowVectorPtr output;
+  vector_size_t numReadRows{0};
+  while (reader->nextBatch(output)) {
+    for (vector_size_t row = 0; row < output->size(); ++row) {
+      ASSERT_TRUE(output->equalValueAt(rows.get(), row, numReadRows + row));
+    }
+    numReadRows += output->size();
+  }
+  ASSERT_EQ(numReadRows, kNumRows);
+}
+
+// The write buffer is capped at 1GB, so rows estimated at 600MB each go out one
+// per page however large the configured buffer is.
+DEBUG_ONLY_TEST_P(SpillTest, writeBufferCappedBelow2GBPages) {
+  constexpr vector_size_t kNumRows{4};
+  const auto rows = makeRowVector(
+      {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; })});
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::serializer::SerializedPageFileWriter::estimateRowSizes",
+      std::function<void(std::vector<vector_size_t>*)>(
+          [](std::vector<vector_size_t>* rowSizes) {
+            std::fill(rowSizes->begin(), rowSizes->end(), 600 << 20);
+          }));
+
+  auto tempDirectory = TempDirectoryPath::create();
+  SpillState state(
+      [&]() -> const std::string& { return tempDirectory->getPath(); },
+      updateSpilledBytesCb_,
+      "test",
+      {},
+      kGB,
+      std::numeric_limits<uint64_t>::max(),
+      compressionKind_,
+      std::nullopt,
+      pool(),
+      &spillStats_,
+      "");
+  const SpillPartitionId partitionId{0};
+  state.setPartitionSpilled(partitionId);
+  state.appendToPartition(partitionId, rows);
+  ASSERT_EQ(
+      finishAndReadPageSizes(state, partitionId),
+      std::vector<vector_size_t>(kNumRows, 1));
+}
+
+namespace {
+struct OpaquePayload {
+  int64_t value;
+};
+} // namespace
+
+// The serde can't estimate the size of OPAQUE values, so the writer appends
+// each vector that holds them without splitting it. Vectors share a page up to
+// the write buffer size, and one whose flat size would pass it starts a new
+// page.
+TEST_P(SpillTest, spillOpaqueValues) {
+  OpaqueType::registerSerialization<OpaquePayload>(
+      "spill_test_opaque_payload",
+      [](const std::shared_ptr<OpaquePayload>& payload) {
+        return std::to_string(payload->value);
+      },
+      [](const std::string& serialized) {
+        return std::make_shared<OpaquePayload>(
+            OpaquePayload{std::stoll(serialized)});
+      });
+  SCOPE_EXIT {
+    OpaqueType::unregisterSerialization(
+        OpaqueType::create<OpaquePayload>(), "spill_test_opaque_payload");
+  };
+  constexpr vector_size_t kNumRows{3};
+  const auto payloads = makeFlatVector<std::shared_ptr<void>>(
+      kNumRows,
+      [](vector_size_t row) {
+        return std::make_shared<OpaquePayload>(OpaquePayload{row});
+      },
+      nullptr,
+      OPAQUE<OpaquePayload>());
+  // The OPAQUE values sit inside a struct column, so only a look through the
+  // whole type finds them.
+  const auto rows = makeRowVector({makeRowVector({payloads})});
+
+  // A write buffer makes the writer estimate the size of each row, which it
+  // can't for OPAQUE values.
+  auto tempDirectory = TempDirectoryPath::create();
+  SpillState state(
+      [&]() -> const std::string& { return tempDirectory->getPath(); },
+      updateSpilledBytesCb_,
+      "test",
+      {},
+      kGB,
+      1 << 20,
+      compressionKind_,
+      std::nullopt,
+      pool(),
+      &spillStats_,
+      "");
+  const SpillPartitionId partitionId{0};
+  state.setPartitionSpilled(partitionId);
+  state.appendToPartition(partitionId, rows);
+  state.appendToPartition(partitionId, rows);
+  // Reports the whole write buffer, so it doesn't join the pending page.
+  state.appendToPartition(
+      partitionId, std::make_shared<OversizedRowVector>(rows, 1 << 20));
+
+  SpillPartition partition(partitionId, state.finish(partitionId));
+  auto reader = partition.createUnorderedReader(1 << 20, pool(), &spillStats_);
+  RowVectorPtr output;
+  std::vector<vector_size_t> pageSizes;
+  vector_size_t numReadRows{0};
+  while (reader->nextBatch(output)) {
+    pageSizes.push_back(output->size());
+    const auto* readPayloads = output->childAt(0)
+                                   ->as<RowVector>()
+                                   ->childAt(0)
+                                   ->as<SimpleVector<std::shared_ptr<void>>>();
+    for (vector_size_t row = 0; row < output->size(); ++row) {
+      ASSERT_EQ(
+          std::static_pointer_cast<OpaquePayload>(readPayloads->valueAt(row))
+              ->value,
+          (numReadRows + row) % kNumRows);
+    }
+    numReadRows += output->size();
+  }
+  ASSERT_EQ(pageSizes, (std::vector<vector_size_t>{2 * kNumRows, kNumRows}));
 }
 
 namespace {

@@ -26,6 +26,9 @@
 #include <tuple>
 #include <utility>
 
+#include "velox/experimental/torchwave/Derive.h"
+#include "velox/experimental/torchwave/Executor.h"
+#include "velox/experimental/torchwave/StepSupport.h"
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
 
@@ -36,6 +39,22 @@ int64_t alignAllocSize(int64_t bytes) {
 }
 
 namespace {
+
+// The base of the host-side view 'desc' when the step's table derives that view
+// and groups may take its base, else -1. Same test the binder applies when it
+// gives the view a DeriveOp.
+nativert::ValueId derivedViewBase(const OutputDesc& desc) {
+  if (!WaveConfig::get().groupViewedValues ||
+      WaveConfig::get().debugSingleOps) {
+    return -1;
+  }
+  const auto recipe = makeViewRecipe(desc.viewNode);
+  if (recipe == nullptr || !derivable(recipe->launch.standaloneShortcut) ||
+      recipe->data.args.empty() || recipe->data.args[0] == nullptr) {
+    return -1;
+  }
+  return recipe->data.args[0]->id();
+}
 
 int64_t requestBytes(const AllocRequest& request) {
   int64_t numel = 1;
@@ -105,6 +124,12 @@ AllocGroupBuffer allocateAllocGroup(const std::vector<AllocRequest>& requests) {
   return result;
 }
 
+namespace {
+// The release point of a group of never-released values: the frame's end,
+// kept apart from the -1 of graph-output groups.
+constexpr int32_t kUnreleasedFree = -2;
+} // namespace
+
 std::vector<AllocGroup> buildAllocGroups(
     const std::vector<AllocLifetime>& lifetimes,
     std::vector<nativert::ValueId>* ungrouped) {
@@ -132,7 +157,8 @@ std::vector<AllocGroup> buildAllocGroups(
 
   std::map<Key, AllocGroup> byKey;
   for (const auto& lifetime : lifetimes) {
-    if (lifetime.freeStep < 0) {
+    if (lifetime.freeStep < 0 && !lifetime.graphOutput &&
+        !lifetime.unreleased) {
       // Never released. Grouping it would hold every other slot in the group
       // alive for as long as it lives.
       if (ungrouped != nullptr) {
@@ -141,8 +167,9 @@ std::vector<AllocGroup> buildAllocGroups(
       continue;
     }
     TORCH_CHECK(
-        std::tie(lifetime.freeNode, lifetime.freeStep) >=
-            std::tie(lifetime.allocNode, lifetime.allocStep),
+        lifetime.graphOutput || lifetime.unreleased ||
+            std::tie(lifetime.freeNode, lifetime.freeStep) >=
+                std::tie(lifetime.allocNode, lifetime.allocStep),
         "Alloc lifetime frees at node ",
         lifetime.freeNode,
         " step ",
@@ -151,17 +178,23 @@ std::vector<AllocGroup> buildAllocGroups(
         lifetime.allocNode,
         " step ",
         lifetime.allocStep);
+    // Never-released values get a release point of their own, so they never
+    // share a group with graph outputs, whose buffers the caller keeps.
+    const int32_t freeNode =
+        lifetime.unreleased ? kUnreleasedFree : lifetime.freeNode;
+    const int32_t freeStep =
+        lifetime.unreleased ? kUnreleasedFree : lifetime.freeStep;
     Key key{
         lifetime.allocNode,
         lifetime.allocStep,
         lifetime.needsSync,
-        lifetime.freeNode,
-        lifetime.freeStep};
+        freeNode,
+        freeStep};
     auto& group = byKey[key];
     group.allocNode = lifetime.allocNode;
     group.allocStep = lifetime.allocStep;
-    group.freeNode = lifetime.freeNode;
-    group.freeStep = lifetime.freeStep;
+    group.freeNode = freeNode;
+    group.freeStep = freeStep;
     group.needsSync = lifetime.needsSync;
     group.actualIds.push_back(lifetime.actualId);
     group.dtypes.push_back(lifetime.dtype);
@@ -241,7 +274,8 @@ ProducedMap producedPoints(const std::vector<NodeFootprint>& nodes) {
 std::vector<AllocLifetime> graphAllocLifetimes(
     const std::vector<NodeFootprint>& nodes,
     AllocGroupStats* stats,
-    const folly::F14FastSet<nativert::ValueId>* claimed) {
+    const folly::F14FastSet<nativert::ValueId>* claimed,
+    const folly::F14FastSet<nativert::ValueId>* graphOutputs) {
   const auto produced = producedPoints(nodes);
   folly::F14FastMap<nativert::ValueId, ExecPoint> released;
   folly::F14FastMap<nativert::ValueId, ExecPoint> lastRead;
@@ -302,7 +336,30 @@ std::vector<AllocLifetime> graphAllocLifetimes(
     } else if (entry.numWrites > 1) {
       reject(&AllocGroupStats::numMultiWrite);
     } else if (releaseIt == released.end()) {
-      reject(&AllocGroupStats::numEscaping);
+      // A graph output lives to the end like the other graph outputs, so a
+      // group of them pins nothing that would otherwise be freed. Not one its
+      // own node borrows, for the reason numBorrowedInOwnNode gives.
+      if (graphOutputs != nullptr && graphOutputs->count(actualId) != 0 &&
+          (firstBorrowIt == firstBorrowNode.end() ||
+           firstBorrowIt->second != entry.at.first)) {
+        lifetime.graphOutput = true;
+        if (stats != nullptr) {
+          ++stats->numGrouped;
+          ++stats->numGraphOutputsGrouped;
+        }
+      } else if (
+          WaveConfig::get().groupUnreleasedValues &&
+          (graphOutputs == nullptr || graphOutputs->count(actualId) == 0) &&
+          (firstBorrowIt == firstBorrowNode.end() ||
+           firstBorrowIt->second != entry.at.first)) {
+        lifetime.unreleased = true;
+        if (stats != nullptr) {
+          ++stats->numGrouped;
+          ++stats->numUnreleasedGrouped;
+        }
+      } else {
+        reject(&AllocGroupStats::numEscaping);
+      }
     } else if (
         firstBorrowIt != firstBorrowNode.end() &&
         firstBorrowIt->second == entry.at.first) {
@@ -426,7 +483,14 @@ const char* FOLLY_NULLABLE operandUnmeasurableReason(
     return point < from ? "not in the frame at this point" : nullptr;
   }
   if (operand.hasReserveInChain) {
-    return "behind a reserveShape in its chain";
+    return "behind a reserve in its chain";
+  }
+  // The group reads such an operand's extent from its table entry, which
+  // only its own launch's Size writes.
+  if (operand.hasReserve) {
+    return point < readableFrom(operand.valueId)
+        ? "sized by its own reserve, not yet at this point"
+        : nullptr;
   }
   if (operand.sizeExpr.op == SizeShortcut::kNone) {
     return "no size shortcut for its extent";
@@ -515,21 +579,6 @@ ConcatFootprint concatFootprint(
       operand.copyDestId =
           destIt != bindings.end() ? destIt->second : input.copyDestId;
     }
-    // The reserve reads the frame through the invocation's bindings, which the
-    // group no longer has by the time it measures the operand. Bound here, by
-    // value: a reference to either map would dangle once the plan is the only
-    // thing left holding the footprint.
-    if (input.reserveShape != nullptr) {
-      operand.boundReserve =
-          [reserve = input.reserveShape, bindings, nodeMap = op.nodeMap()](
-              nativert::ExecutionFrame& frame) {
-            auto shapes = reserve(nullptr, frame, bindings, nullptr, nodeMap);
-            TORCH_CHECK(
-                !shapes.empty(),
-                "A concat operand's reserve function returned no shape");
-            return std::move(shapes[0]);
-          };
-    }
     footprint.operands.push_back(std::move(operand));
   }
   return footprint;
@@ -592,11 +641,29 @@ std::vector<AllocGroup> graphConcatGroups(
     }
   };
 
+  // The same holds for an operand placement carved. Its producer writes the
+  // band, and the concat's kernel emits no copy for it, so a concat refused or
+  // an operand left out here would leave that band unwritten.
+  auto checkNoOrphanCarves = [](const ConcatFootprint& concat,
+                                const char* reason) {
+    for (const auto& operand : concat.operands) {
+      TORCH_CHECK(
+          !operand.carve,
+          "Concat %",
+          concat.resultId,
+          " has an operand placement carved (%",
+          operand.valueId,
+          ") but gets no allocation group to bind the band: ",
+          reason);
+    }
+  };
+
   auto refuse = [&](int32_t AllocGroupStats::* counter,
                     const ConcatFootprint& concat,
                     const char* reason) {
     count(counter);
     checkNoOrphanCopies(concat, reason);
+    checkNoOrphanCarves(concat, reason);
     if (WaveConfig::get().trace & WaveConfig::kTiming) {
       std::cout << "  concat %" << concat.resultId << " of "
                 << concat.operands.size() << " operands not placed: " << reason
@@ -630,12 +697,9 @@ std::vector<AllocGroup> graphConcatGroups(
         // after the step that writes it -- and the host reads the extent back
         // before carving, which is what 'needsSync' below arranges.
 
-        // A reserve function reads whatever it likes, and nothing says what
-        // it needs is in the frame when the result would be laid out.
-        // uncarvedOperandShape still refuses to run one, so a group formed
-        // over such an operand aborts when it measures it -- the refusal and
-        // that check are a pair, and both go when the reserve becomes a
-        // legitimate source of dims.
+        // An operand behind a reserve in its chain is sized only when that
+        // producer's launch is, which can be after the result would be laid
+        // out.
         const ConcatInputInfo* behindReserve = nullptr;
         for (const auto& operand : concat.operands) {
           if (operand.hasReserveInChain) {
@@ -882,17 +946,28 @@ std::vector<AllocGroup> graphConcatGroups(
               written,
               ") was carved by placement but no launch of the compiled grid "
               "writes it");
-          if (occurrences[written] != 1) {
-            // cat([x, y, x]): one buffer cannot be two regions of the result.
-            // Placement counts occurrences too, so reaching this means the
-            // operand lists differ between the two.
-            leaveOut("joined at more than one position", operand.valueId);
-            continue;
-          }
-          if (claimed.count(written) != 0) {
-            leaveOut("already claimed by another group", operand.valueId);
-            continue;
-          }
+          // cat([x, y, x]): one buffer cannot be two regions of the result.
+          // Placement counts occurrences too, and gives the value a copy.
+          TORCH_CHECK(
+              occurrences[written] == 1,
+              "Concat %",
+              concat.resultId,
+              " operand %",
+              operand.valueId,
+              " was carved by placement but is joined at more than one "
+              "position");
+          // Placement copies a value an earlier concat carves or whose
+          // result it is, which are the two ways a value is claimed here.
+          TORCH_CHECK(
+              claimed.count(written) == 0,
+              "Concat %",
+              concat.resultId,
+              " operand %",
+              operand.valueId,
+              " (written as %",
+              written,
+              ") was carved by placement but another group already claims "
+              "it");
           // The band is bound to the value a launch writes. For an operand
           // reached through a prim.ListUnpack that is the packed value, not the
           // operand: the unpack aliases it into the operand's slot afterwards,
@@ -900,9 +975,10 @@ std::vector<AllocGroup> graphConcatGroups(
           accepted.push_back({i, written, it->second.at, it->second.needsSync});
         }
         // One group per step the members are sized at, rather than one group
-        // for the concat. They share the single result: materializeConcatGroup
-        // keeps an existing same-shape buffer instead of allocating, so the
-        // first group to run allocates it and the rest carve into that one.
+        // for the concat. They share the single result:
+        // materializeConcatGroupTable keeps an existing same-shape buffer
+        // instead of allocating, so the first group to run allocates it and the
+        // rest carve into that one.
         //
         // Every group measures the WHOLE result, carved members from the sizes
         // the collector captured and the rest through their own reserve or size
@@ -1074,9 +1150,18 @@ std::vector<LaunchFootprint> collectLaunchFootprints(
         }
         for (const auto& desc : data.actualOutputDescs) {
           if (desc.viewNode != nullptr) {
+            // A view the table derives reads only its base's entry, which
+            // sizing writes before the carve. The step derives it again once
+            // the base has storage.
+            const auto base = derivedViewBase(desc);
             // Already an actual node, so its operands need no translation.
             for (const auto& input : desc.viewNode->inputs()) {
-              if (input.value != nullptr) {
+              if (input.value == nullptr) {
+                continue;
+              }
+              if (input.value->id() == base) {
+                footprint.reads.push_back(base);
+              } else {
                 addBorrow(input.value->id());
               }
             }
@@ -1103,8 +1188,7 @@ std::vector<LaunchFootprint> collectLaunchFootprints(
             continue;
           }
           const auto& desc = data.actualOutputDescs[i];
-          const bool needsSync =
-              desc.reserveShape != nullptr || desc.shapeSetOnDevice;
+          const bool needsSync = desc.sizedByReserve() || desc.shapeSetOnDevice;
           const auto kind = i < data.actualOutputTypes.size()
               ? data.actualOutputTypes[i]
               : nativert::Type::Kind::Tensor;
@@ -1123,7 +1207,7 @@ std::vector<LaunchFootprint> collectLaunchFootprints(
           // execution time; only the identities are needed here.
           if (kind == nativert::Type::Kind::TensorList) {
             auto valueIt = idToValue.find(data.actualOutputs[i]);
-            if (desc.reserveShape == nullptr || valueIt == idToValue.end()) {
+            if (!desc.sizedByReserve() || valueIt == idToValue.end()) {
               continue;
             }
             for (const auto* element : valueIt->second->getListElements()) {
@@ -1217,7 +1301,8 @@ std::vector<NodeFootprint> collectNodeFootprints(
 }
 
 GraphAllocGroupPlan buildGraphAllocGroupPlan(
-    const std::vector<NodeFootprint>& nodes) {
+    const std::vector<NodeFootprint>& nodes,
+    const folly::F14FastSet<nativert::ValueId>* graphOutputs) {
   GraphAllocGroupPlan plan;
   plan.perNode.resize(nodes.size());
 
@@ -1225,24 +1310,14 @@ GraphAllocGroupPlan buildGraphAllocGroupPlan(
   // carves as one tensor, so those values are no longer the lifetime pass's to
   // place. Grouping them again would carve a second buffer over the first.
   folly::F14FastSet<nativert::ValueId> claimed;
-  auto concatGroups = concatAllocGroupEnabled()
-      ? graphConcatGroups(nodes, claimed, &plan.stats)
-      : std::vector<AllocGroup>{};
+  auto concatGroups = graphConcatGroups(nodes, claimed, &plan.stats);
 
   plan.concatPlaced = claimed;
 
-  auto lifetimes = graphAllocLifetimes(nodes, &plan.stats, &claimed);
+  auto lifetimes =
+      graphAllocLifetimes(nodes, &plan.stats, &claimed, graphOutputs);
   std::vector<nativert::ValueId> ungrouped;
-  // With the lifetime grouping off every lifetime becomes an allocation of its
-  // own, which is what the ordinary path does with the values it is handed.
-  std::vector<AllocGroup> groups;
-  if (WaveConfig::get().enableLifetimeAllocGroup) {
-    groups = buildAllocGroups(lifetimes, &ungrouped);
-  } else {
-    for (const auto& lifetime : lifetimes) {
-      ungrouped.push_back(lifetime.actualId);
-    }
-  }
+  std::vector<AllocGroup> groups = buildAllocGroups(lifetimes, &ungrouped);
   // Ahead of the lifetime groups at the same step: a concat group's members are
   // the outputs of that step's launches, and the ordinary path must find their
   // slots already there.
@@ -1315,7 +1390,8 @@ std::string allocGroupPlanReport(const GraphAllocGroupPlan& plan) {
   const auto& stats = plan.stats;
   std::string out = fmt::format(
       "Alloc group plan: {} groups over {} of {} allocated values, "
-      "{} fewer allocator calls per execution\n"
+      "{} fewer allocator calls per execution; {} of the values are graph "
+      "outputs, {} are never released\n"
       "  not grouped: {} never released, {} borrowed by their own node, "
       "{} written at several points, {} released before allocated, "
       "{} read after released, {} placed by a concat group\n"
@@ -1325,6 +1401,8 @@ std::string allocGroupPlanReport(const GraphAllocGroupPlan& plan) {
       stats.numGrouped,
       stats.numAllocated,
       stats.numGrouped - stats.numGroups,
+      stats.numGraphOutputsGrouped,
+      stats.numUnreleasedGrouped,
       stats.numEscaping,
       stats.numBorrowedInOwnNode,
       stats.numMultiWrite,
@@ -1439,8 +1517,14 @@ std::string allocGroupPlanReport(const GraphAllocGroupPlan& plan) {
 
 void installGraphAllocGroupPlans(WaveGraph& graph, const ValueTypes& types) {
   const auto& nodes = graph.nodes();
+  folly::F14FastSet<nativert::ValueId> graphOutputs;
+  for (const auto& input : graph.graph()->outputNode()->inputs()) {
+    if (input.value != nullptr) {
+      graphOutputs.insert(input.value->id());
+    }
+  }
   auto plan = buildGraphAllocGroupPlan(
-      collectNodeFootprints(nodes, graph.idToValue(), types));
+      collectNodeFootprints(nodes, graph.idToValue(), types), &graphOutputs);
   // Rendered now, printed later. The plan is settled while the graph compiles,
   // but the trace bits are typically set after that -- a caller that wants the
   // report turns tracing on around a run, by which time this has long returned.
@@ -1482,9 +1566,10 @@ AllocGroupCollector* currentAllocCollector() {
 }
 
 AllocGroupCollector::AllocGroupCollector(
-    const std::vector<const AllocGroup*>& groups) {
+    const std::vector<const AllocGroup*>& groups,
+    bool install) {
   TORCH_CHECK(
-      tCollector == nullptr,
+      !install || tCollector == nullptr,
       "An allocation-group collector is already installed on this thread");
   groups_.reserve(groups.size());
   for (const auto* group : groups) {
@@ -1517,13 +1602,32 @@ AllocGroupCollector::AllocGroupCollector(
     collected.sized.assign(collected.requests.size(), false);
     groups_.push_back(std::move(collected));
   }
-  tCollector = this;
+  if (install) {
+    tCollector = this;
+  }
 }
 
 AllocGroupCollector::AllocGroupCollector(const AllocGroup& group)
     : AllocGroupCollector(std::vector<const AllocGroup*>{&group}) {}
 
 AllocGroupCollector::~AllocGroupCollector() {
+  if (tCollector == this) {
+    tCollector = nullptr;
+  }
+}
+
+AllocGroupCollector::Scope::Scope(AllocGroupCollector& collector) {
+  TORCH_CHECK(
+      tCollector == nullptr,
+      "An allocation-group collector is already installed on this thread");
+  for (auto& collected : collector.groups_) {
+    collected.sized.assign(collected.sized.size(), false);
+    collected.materialized = false;
+  }
+  tCollector = &collector;
+}
+
+AllocGroupCollector::Scope::~Scope() {
   tCollector = nullptr;
 }
 
@@ -1586,219 +1690,16 @@ std::vector<AllocRequest> AllocGroupCollector::sizedRequests(size_t g) const {
 AllocGroupBuffer materializeAllocGroup(
     const std::vector<AllocRequest>& requests,
     nativert::ExecutionFrame& frame) {
+  ScopedSetupPhase phase(SetupPhase::kCarve);
   auto group = allocateAllocGroup(requests);
   for (size_t i = 0; i < requests.size(); ++i) {
-    frame.setIValue(requests[i].actualId, group.slots[i]);
+    writeFrame(frame, requests[i].actualId, group.slots[i]);
   }
   return group;
 }
 
 const ConcatGroupLayout* AllocGroupCollector::concatLayout(size_t g) const {
   return groups_[g].group->concat.get();
-}
-
-namespace {
-
-// The extent of an operand the group does not carve, measured against the
-// frame. Every such operand was either produced by an earlier launch -- in
-// which case its size expression is a plain "read this value's extent" -- or is
-// produced by the concat's own kernel, in which case the expression is over
-// values that already exist. graphConcatGroups refuses the concat otherwise.
-std::vector<Dim> uncarvedOperandShape(
-    const ConcatInputInfo& operand,
-    int8_t elementRank,
-    nativert::ExecutionFrame& frame) {
-  // A reserve function is how this operand's extent is computed everywhere
-  // else, so it is how the group computes it too. Bound to the invocation when
-  // the footprint was built; without that the call would read the frame through
-  // the wrong values, so its absence is an error rather than a fallback.
-  if (operand.reserveShape != nullptr) {
-    TORCH_CHECK(
-        operand.boundReserve != nullptr,
-        "Concat operand %",
-        operand.valueId,
-        " has a reserve function that was never bound to an invocation");
-    return operand.boundReserve(frame);
-  }
-  auto shape = operand.sizeExpr.op == SizeShortcut::kNone
-      ? std::vector<Dim>{}
-      : operand.sizeExpr.dims(&frame);
-  if (shape.empty()) {
-    // As in the concat's own reserve: a zero-length operand arrives as an
-    // undefined tensor and contributes nothing.
-    return std::vector<Dim>(elementRank, 0);
-  }
-  if (static_cast<int8_t>(shape.size()) < elementRank) {
-    // A broadcast size expression drops leading 1-dims; restore them.
-    shape.insert(shape.begin(), elementRank - shape.size(), 1);
-  }
-  return shape;
-}
-
-} // namespace
-
-AllocGroupBuffer materializeConcatGroup(
-    const ConcatGroupLayout& layout,
-    const std::vector<AllocRequest>& requests,
-    const std::vector<bool>& sized,
-    nativert::ExecutionFrame& frame) {
-  const ConcatSpec spec{
-      .isStack = layout.isStack, .dim = layout.dim, .outRank = layout.outRank};
-  const auto elementRank = spec.elementRank();
-
-  std::vector<std::vector<Dim>> operandShapes;
-  operandShapes.reserve(layout.operands.size());
-  std::vector<bool> carve(layout.operands.size(), false);
-  for (size_t i = 0; i < layout.operands.size(); ++i) {
-    const auto member = layout.memberOfOperand[i];
-    if (member >= 0 && sized.at(member)) {
-      const auto& dims = requests.at(member).dims;
-      operandShapes.emplace_back(dims.begin(), dims.end());
-      carve[i] = true;
-    } else {
-      operandShapes.push_back(
-          uncarvedOperandShape(layout.operands[i], elementRank, frame));
-    }
-    TORCH_CHECK(
-        static_cast<int8_t>(operandShapes.back().size()) == elementRank,
-        "Concat operand %",
-        layout.operands[i].valueId,
-        " measured as rank ",
-        operandShapes.back().size(),
-        ", expected rank ",
-        static_cast<int>(elementRank));
-  }
-
-  const auto outShape = concatResultShape(spec, operandShapes);
-  const std::vector<int64_t> outSizes(outShape.begin(), outShape.end());
-  if (WaveConfig::get().trace & WaveConfig::kTiming) {
-    // What the group actually laid out, against what it was told to. An
-    // operand measured as empty here that is not empty when the concat runs is
-    // how a group placed too early corrupts the result: its band is a
-    // zero-extent slice, and whatever fills it writes past the end.
-    // How much of the result its operands write in place, against how much a
-    // copy has to move. The operand COUNT does not answer this -- the carved
-    // and copied sets are wildly different sizes on the ROO graph -- so tally
-    // the elements each side actually accounts for.
-    // Three ways an operand's bytes reach the result, and they have to be
-    // counted apart: the group carves it a band, the concat's own kernel writes
-    // it in place, or a copy moves it. Only the last is traffic. Counting
-    // in-place as copied -- which lumping the two non-carved cases together
-    // does -- reports a graph that copies nothing as copying everything.
-    int64_t carvedElements = 0;
-    int64_t inPlaceElements = 0;
-    int64_t copiedElements = 0;
-    for (size_t i = 0; i < layout.operands.size(); ++i) {
-      int64_t elements = 1;
-      for (const auto dim : operandShapes.at(i)) {
-        elements *= static_cast<int64_t>(dim);
-      }
-      if (carve.at(i)) {
-        carvedElements += elements;
-      } else if (layout.operands[i].copyDestId >= 0) {
-        copiedElements += elements;
-      } else {
-        inPlaceElements += elements;
-      }
-    }
-    const auto bytesPer = static_cast<int64_t>(c10::elementSize(layout.dtype));
-    std::cout << "  concat %" << layout.resultId << " landed: carved "
-              << carvedElements * bytesPer << " B, inplace "
-              << inPlaceElements * bytesPer << " B, copied "
-              << copiedElements * bytesPer << " B" << std::endl;
-    std::vector<nativert::ValueId> measuredEmpty;
-    for (size_t i = 0; i < layout.operands.size(); ++i) {
-      const auto& shape = operandShapes.at(i);
-      if (std::find(shape.begin(), shape.end(), 0) != shape.end()) {
-        measuredEmpty.push_back(layout.operands[i].valueId);
-      }
-    }
-    std::cout << "  concat group %" << layout.resultId << " laid out as "
-              << fmt::format("{}", fmt::join(outSizes, "x")) << " from "
-              << layout.operands.size() << " operands, " << measuredEmpty.size()
-              << " measured empty";
-    for (size_t i = 0; i < measuredEmpty.size() && i < 8; ++i) {
-      std::cout << " %" << measuredEmpty.at(i);
-    }
-    std::cout << std::endl;
-  }
-  // A group whose layout is measurable no earlier than the concat's own launch
-  // is carved after that launch has been sized, which is after the concat's own
-  // reserve has allocated the result and handed a band of it to every operand
-  // its kernel computes. Allocating a second result there would leave those
-  // bands pointing into a buffer nothing reads. Keeping the one that is already
-  // the right shape makes the two agree on which buffer the bands are in --
-  // this one and the reserve carve the same regions of it, so whichever runs
-  // second finds its own work already done.
-  auto& existing = frame.getIValue(layout.resultId);
-  at::Tensor result;
-  if (existing.isTensor() && existing.toTensor().is_cuda() &&
-      existing.toTensor().sizes() == c10::IntArrayRef(outSizes)) {
-    result = existing.toTensor();
-  } else {
-    result = at::empty(
-        outSizes, at::TensorOptions().dtype(layout.dtype).device(at::kCUDA));
-  }
-
-  AllocGroupBuffer buffer;
-  buffer.base = result;
-  buffer.totalBytes = result.numel() * result.element_size();
-  buffer.slots.assign(requests.size(), at::Tensor());
-  buffer.offsets.assign(requests.size(), 0);
-
-  const auto joinStride = result.strides()[spec.dim];
-  const auto elementSize = static_cast<int64_t>(c10::elementSize(layout.dtype));
-  int64_t offset = 0;
-  for (size_t i = 0; i < layout.operands.size(); ++i) {
-    const int64_t extent =
-        spec.isStack ? 1 : static_cast<int64_t>(operandShapes[i].at(spec.dim));
-    // A cat operand spans 'extent' positions along the join axis from where the
-    // ones before it ended; a stack operand occupies the single position 'i'.
-    const int64_t start = spec.isStack ? static_cast<int64_t>(i) : offset;
-    offset += extent;
-    // Carved and copied are the two ways an operand reaches its band, and they
-    // are exclusive: a carved operand's producer writes the band itself, so a
-    // copy of it would have no destination to be given and would write to
-    // whatever the frame slot happened to hold. Placement and the group decide
-    // this separately and have to reach the same answer; when they do not, say
-    // so here rather than at the illegal access it becomes on the device.
-    TORCH_CHECK(
-        !(carve[i] && layout.operands[i].copyDestId >= 0),
-        "Concat operand %",
-        layout.operands[i].valueId,
-        " of result %",
-        layout.resultId,
-        " is both carved into the result and copied into it");
-    if (!carve[i]) {
-      // An operand an op of its own copies gets the band as that copy's
-      // destination. It has to be bound HERE rather than at the concat's own
-      // reserve: the group is materialized ahead of the operands, and the copy
-      // runs before the concat, so binding it later would hand the copy a
-      // buffer of its own and then drop what it wrote when the band replaced
-      // it. The operand itself keeps its buffer -- it is what the copy reads.
-      if (layout.operands[i].copyDestId >= 0) {
-        frame.setIValue(
-            layout.operands[i].copyDestId,
-            concatOperandView(result, spec, start, extent));
-      }
-      continue;
-    }
-    const auto member = layout.memberOfOperand[i];
-    auto view = concatOperandView(result, spec, start, extent);
-    buffer.offsets[member] = start * joinStride * elementSize;
-    frame.setIValue(layout.operands[i].valueId, view);
-    buffer.slots[member] = std::move(view);
-  }
-
-  // Written last: the concat's own reserve keeps a result that is already there
-  // at the right shape, and reaching that state before every operand has been
-  // placed would let a failure leave a result with nothing behind it.
-  frame.setIValue(layout.resultId, std::move(result));
-  return buffer;
-}
-
-bool concatAllocGroupEnabled() {
-  return allocGroupEnabled() && WaveConfig::get().enableConcatAllocGroup;
 }
 
 bool allocGroupEnabled() {
@@ -1824,12 +1725,16 @@ bool allocGroupEnabled() {
   // mode unusable at the one moment several of its decisions have to be taken:
   // the freeing is set after the graph is loaded, so a gate that reads it is
   // false while the graph compiles.
-  return config.enableAllocGroup && config.isCg.has_value();
+  return config.isCg.has_value();
 }
 
 LaunchGrid& allocGroupGrid(OpInvocation& op) {
+  return allocGroupGrid(*op.projectOp());
+}
+
+LaunchGrid& allocGroupGrid(ProjectOperation& projectOpRef) {
   const auto& config = WaveConfig::get();
-  auto* projectOp = op.projectOp();
+  auto* projectOp = &projectOpRef;
   // Forced single block is a whole-run choice, so the plan is built on that
   // grid and chooseGridVariant has nothing left to switch.
   if (config.useSingleBlock.has_value() && *config.useSingleBlock &&

@@ -152,6 +152,71 @@ struct WaveConfig {
   // actual thread block clock distribution.
   bool autoAdjustCost{true};
 
+  // With autoAdjustCost, measures an op by its blocks' whole run times,
+  // including time spent waiting at its grid barriers. When false, the waits
+  // are left out, so an op given more blocks than it can use does not look
+  // more expensive for the blocks that only wait.
+  bool costCountsBarrierWait{true};
+
+  // A concat result that the allocation plan put in a lifetime group takes its
+  // slot there: the concat sizes it into the step's collector and writes its
+  // operands' bands once the group is carved. When false, every such result is
+  // allocated on its own, as the plan's group then holds no slot for it.
+  bool concatResultSlots{true};
+
+  // Groups the values that are never released, and are not graph outputs, with
+  // the others produced at the same point. They all live until the frame is
+  // cleared, so sharing a buffer holds nothing longer than before.
+  bool groupUnreleasedValues{true};
+
+  // Lets a value join a group when its own node only takes a table-derived
+  // view of it. The view is derived for its shape while the step is sized and
+  // again, with storage, once the group is carved.
+  bool groupViewedValues{true};
+
+  // Carves lifetime groups out of one persistent buffer, laid out from the
+  // previous execution's lifetimes, instead of one allocator call per group.
+  bool groupArena{true};
+
+  // Groups of at least this many bytes are allocated on their own rather than
+  // given an arena slot. A few such allocations cost little, and leaving them
+  // to the allocator lets other buffers use their space while they are dead,
+  // which a slot of the arena never does.
+  int64_t groupArenaMaxBytes{16 << 20};
+
+  // Runs the steps that would wait for an integer the device returns on a
+  // capacity for it, with the device fixing up the real dims. See
+  // DeviceSymbols. Needs the export's symbolic shapes.
+  bool deviceSymbols{true};
+
+  // Checks, at every grid, that the GridDescriptor gives each launch the
+  // element count the host sized it for.
+  bool checkGridDescriptor{false};
+
+  // Gives each launch of a step blocks in proportion to its estimated work,
+  // input elements times cost per element times the measured cost
+  // adjustment, so that all launches complete at the same time. See
+  // assignBlocksEqualFinish.
+  bool gridEqualFinish{false};
+
+  // Computes each step's grid on the device from the element counts the
+  // device holds, with the gridEqualFinish rule, and updates the cost
+  // multipliers there from the previous execution's clocks. See DeviceGrid.
+  bool deviceGrid{false};
+
+  // Copies a device-grid step's parameters and runs its setup kernel on a
+  // second stream, so that the setup overlaps the steps before it. A step
+  // whose setup reads symbols the device holds waits for the step before it.
+  bool setupStream{false};
+
+  // Checks that the export's symbolic shapes give the dims the host sizes
+  // every tensor parameter with. See DeviceSymbols::checkSizeExprs.
+  bool checkSizeExprs{false};
+
+  // With checkSizeExprs: derive every shape from graph-input dims taken as
+  // symbols, in place of the export's expressions.
+  bool sizeExprsFromInputs{false};
+
   // Ablation knobs.  Each switches one optimization off so its contribution
   // can be measured by comparing runtimes; none is meant for production use.
 
@@ -181,11 +246,49 @@ struct WaveConfig {
   // the post-partition in-place rewrite alone.
   bool elideClones{true};
 
-  // If true, merge copies into the columns 0..k-1 of one tensor into a single
-  // copy of the stacked sources (rewriteDisjointCopies). Each copy mutates the
-  // target, which otherwise orders every copy after the previous one and cuts
-  // the graph into three partition layers per copy. On by default.
+  // If true, merge copies into each run of consecutive columns of one tensor
+  // into a single copy of the stacked sources (rewriteDisjointCopies). Each
+  // copy mutates the target, which otherwise orders every copy after the
+  // previous one and cuts the graph into three partition layers per copy. On by
+  // default.
   bool recognizeDisjointCopies{true};
+
+  // If true, write a functional chain of select_scatter / slice_scatter /
+  // index_put / scatter_add into a tensor nothing else reads as in-place writes
+  // into that tensor (reinplaceScatterChains). The column merge and the
+  // disjoint-write ordering then apply to it as to an in-place graph, and no
+  // scatter copies the whole tensor first. On by default.
+  bool reinplaceScatters{true};
+
+  // If true, an in-place write is not ordered against a touch of the same
+  // storage whose region is provably disjoint from the written one (constant
+  // selects and slices). A view, which reads no data, touches only the region
+  // it selects. Disjoint writes into one tensor can then run side by side. On
+  // by default.
+  bool disjointWriteOrdering{true};
+
+  // Reads an elementwise leaf whose shape and the expression's are both fixed
+  // by the graph at an index with literal divisors, instead of decomposing
+  // 'idx' through the leaf's descriptor at run time.
+  bool staticLeafIndex{true};
+
+  // Computes once, at bind, each sizing call whose operands all have shapes
+  // fixed by the graph, and skips the call at run time.
+  bool constantSizes{true};
+
+  // With constantSizes, still runs those sizing calls and fails when a result
+  // differs from the one computed at bind. For validation runs.
+  bool verifyStaticSizes{false};
+
+  // Computes the elementwise producer of a reshaping view inline in the view's
+  // elementwise consumer, at the consumer's index, instead of writing the
+  // producer's result to memory (see CompileCtx::fusesThroughView).
+  bool fuseThroughViews{true};
+
+  // Evaluates the elementwise input of a row reduction such as tw.any_rows in
+  // the reduction's row loop instead of writing it to memory (see
+  // CompileCtx::fusesRowReduction).
+  bool fuseRowReductions{true};
 
   // Force a launch boundary after a multi-block (non-cooperative) scan so every
   // cross-block consumer of its output reads a fully materialized buffer from a
@@ -257,21 +360,6 @@ struct WaveConfig {
   // meaningful with freeIntermediates, which is what makes the frees delayable.
   int64_t maxDelayedFree{1LL << 30};
 
-  // If true, hold a released wave-kernel buffer instead of returning it to the
-  // caching allocator, and hand it to a later wave kernel that needs exactly
-  // the same number of bytes. Allocation costs roughly the same per call at any
-  // size, so skipping the call is the win, not the memory. Safe without a sync
-  // because the wave stream is in order and the buffer is never unowned. Off by
-  // default.
-  bool donateBuffers{false};
-
-  // Bytes of donatable buffers carried between executions. The pool is trimmed
-  // to this at the end of each run. Distinct from maxDelayedFree, which bounds
-  // freeing held up by run-ahead within a run: carrying buffers across runs
-  // keeps them out of the caching allocator entirely, so hoarding the big ones
-  // makes every allocation the pool does NOT serve more expensive.
-  int64_t donationCarryBytes{64LL << 20};
-
   // If true, run the pre-partition metadata-duplication pass: rematerialize a
   // multiply-used metadata getter (sym_size / sym_numel) once per use site so
   // it stops being a shared value. A value with more than one user is a CSE
@@ -332,6 +420,44 @@ struct WaveConfig {
   // wave. The _tw operator must be registered before the graph compiles.
   bool twMad{false};
 
+  // Rewrite each packed input (PackedInput.h) before the graph compiles: an
+  // input whose values the graph splits into one view per feature then
+  // arrives encoded, each feature at its narrowest width, and the graph
+  // decodes it per feature. The caller encodes such inputs with the recipes
+  // that the compiled model keeps.
+  bool packInputs{false};
+
+  // With packInputs, let the registered pack rewrites move row trimming into
+  // the recipes: the host trims the rows of a slot before encoding it, and the
+  // op that trimmed them (a length guard, a truncation) leaves the graph.
+  bool packWindows{true};
+
+  // With packInputs, let a gather that reads a packed slot read it in place
+  // rather than through a tw.unpack_slot copy. Saves the copy at the price of
+  // the decode's registers in the gather.
+  bool packAbsorbGetter{false};
+
+  // Split merge-and-dedup into the fused TorchWave head and final ops instead
+  // of running a standalone operator (sparsenn's or, with twMad, TorchWave's).
+  bool twFusedMad{false};
+
+  // With twFusedMad, a metadata feature that a chain gather produces is read
+  // through the chain by the merge-and-dedup head or final instead of being
+  // materialized first.
+  bool madChains{true};
+
+  // If non-zero, the fused merge-and-dedup insert asks for enough dynamic
+  // shared memory that at most this many of its blocks are resident per SM.
+  // The memory is unused ballast, as for the standalone operator's insert
+  // kernel: the insert's hash table traffic is random, and fewer resident rows
+  // per SM keep more of it in cache.
+  int32_t madInsertBlocksPerSm{0};
+
+  // If non-zero, the threads per block of the launch that runs the fused
+  // merge-and-dedup insert. It gives each row one block and scans the row
+  // in-block, so a wider block puts more threads on a row.
+  int32_t madInsertBlockSize{0};
+
   // If true, a metadata getter (aten.sym_size.int / aten.sym_numel.default)
   // that is not a subexpression of a single fusable consumer runs as a
   // host-side shortcut standalone instead of a fused kernel op. Fused, such a
@@ -383,41 +509,6 @@ struct WaveConfig {
   // cg grid because each names its predecessor through inputFromPreviousKernel,
   // which breaks that producer into its own kernel whatever the grid mode.
   bool mkSelect{false};
-
-  // If true, allocate the outputs that share a lifetime out of one buffer
-  // instead of one allocator call each. Allocation costs roughly the same per
-  // call at any size, so the win is the call count: a step's outputs that all
-  // die at the same later step become one allocation carved into views. Only
-  // consulted in the cooperative-grid mode, where the grid -- and with it the
-  // step boundaries an allocation's lifetime is expressed in -- is settled
-  // before the first execution. Selects a separate execute path
-  // (executeAllocGroups) rather than branching inside the per-op one, and turns
-  // off buffer donation, whose size-matched reuse assumes per-output
-  // allocations.
-  bool enableAllocGroup{true};
-
-  // If true, a fused cat / stack of more than two operands gets an allocation
-  // group of its own: the whole result is allocated at the step that produces
-  // its operands, and each operand's frame slot is the region of the result it
-  // occupies, so the kernel that produces it writes in place and the concat
-  // copies nothing. Separate from enableAllocGroup, which it rides on, so the
-  // two can be measured apart.
-  bool enableConcatAllocGroup{true};
-
-  // If false, the lifetime grouping is skipped and only the concat groups are
-  // formed. Both still ride on enableAllocGroup, which they need for the plan
-  // to be installed at all; this splits the two apart so the concat grouping's
-  // own cost and benefit can be read off without the lifetime grouping's much
-  // larger numbers on top of it.
-  bool enableLifetimeAllocGroup{true};
-
-  // If true, a fused cat / stack of more than two operands stops emitting one
-  // copy per operand into its own kernel and instead pushes every operand into
-  // a kernel op of its own in the previous step. Each of those is sized by the
-  // operand it writes and gets its own share of the grid, so the operands fill
-  // the result side by side instead of walking a chain of __concatCopy calls in
-  // one block. The concat then becomes a kernel break that copies nothing.
-  bool parallelConcatFill{false};
 
   // If true, alongside each composite kernel also compile one single-op kernel
   // per op it contains, named <composite>_op_<opCode>. Diagnostic only: the
@@ -481,6 +572,36 @@ struct WaveConfig {
   // over several launches when it does not fit in one wave, which is what
   // makes the answer independent of how many ops the step happens to have.
   bool quantumGrid{false};
+
+  // Preferred blocks per SM for individual kernel ops, keyed by opcode. Absent
+  // or zero means unspecified, which is every op unless something says
+  // otherwise.
+  //
+  // An op with a preference is only packed into a launch with ops that share
+  // it, and that launch's capacity is numSMs times the preference rather than
+  // numSMs times the occupancy its shared memory allows. So a preference both
+  // segregates the op and narrows the grid it runs on.
+  //
+  // What it is for: an op whose access pattern is scattered may go faster with
+  // fewer concurrent warps -- less pressure on the memory system's outstanding
+  // requests, better L2 and TLB reuse. The other way to buy that is dynamic
+  // shared memory, which works (blocksPerSM divides sharedPerSM by the
+  // per-block request) but pays for it in L1: on an A100 shared and L1 come out
+  // of one 192 KB pool, so starving occupancy that way also starves the cache
+  // the op depends on. Narrowing the grid costs nothing but blocks.
+  //
+  // Manual for now -- set it from the command line, measure, and read the
+  // per-op block counts and clocks back out of the trace. The intent is that
+  // something eventually learns these the way autoAdjustCost learns cost
+  // multipliers, at which point this map is where the learned values land.
+  std::unordered_map<int32_t, int32_t> preferBlocksPerSm;
+
+  /// Preferred blocks per SM for the kernel op with this opcode, or 0 when
+  /// nothing is specified for it.
+  int32_t preferredBlocksPerSm(int32_t opCode) const {
+    auto it = preferBlocksPerSm.find(opCode);
+    return it == preferBlocksPerSm.end() ? 0 : it->second;
+  }
 
   /// Returns the active config: the thread-local override set by
   /// waveConfigOverride() when non-null, otherwise the process-wide singleton.

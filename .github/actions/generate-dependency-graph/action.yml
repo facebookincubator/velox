@@ -34,13 +34,6 @@ runs:
       shell: bash
       env:
         MAKEFLAGS: NUM_THREADS=8
-        # Mirror the adapters job: build FAISS from source instead of
-        # resolving the system-installed package. The system FAISS
-        # config (/usr/local/share/faiss/faiss-config.cmake) sets the
-        # link interface of the imported `faiss` target to include
-        # OpenMP::OpenMP_CXX without ever calling find_package(OpenMP)
-        # to define it, so a SYSTEM resolution fails the configure.
-        faiss_SOURCE: BUNDLED
       run: |
         # The adapters image exports CC/CXX pointing at GCC 12 (used
         # during image build); without an explicit override the

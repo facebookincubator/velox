@@ -27,6 +27,7 @@
 #include <folly/Uri.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/S3Config.h"
 
 #include <aws/core/utils/stream/PreallocatedStreamBuf.h>
 
@@ -201,6 +202,11 @@ std::string getNoProxyEnvVar();
 // The endpoint may contain a trailing '/' that is handled.
 std::optional<std::string> parseAWSStandardRegionName(
     std::string_view endpoint);
+
+/// Returns whether to use AWS FIPS endpoints: 's3.use-fips' when set, else the
+/// AWS_USE_FIPS_ENDPOINT environment variable, which the AWS C++ SDK does not
+/// read itself. False when neither is set.
+bool useFipsEndpoint(const S3Config& s3Config);
 
 class S3ProxyConfigurationBuilder {
  public:

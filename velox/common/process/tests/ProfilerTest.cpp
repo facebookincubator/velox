@@ -140,5 +140,4 @@ int main(int argc, char** argv) {
   // Signal handler required for ThreadDebugInfoTest
   folly::Init init(&argc, &argv, false);
   return RUN_ALL_TESTS();
-  return 0;
 }

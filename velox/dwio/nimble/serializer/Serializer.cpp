@@ -104,6 +104,10 @@ Serializer::Serializer(
           columnName);
       context_.addHybridFlatMapNode(child->id(), hybridMap);
     }
+    if (options_.hybridFlatMapGroupKeysLayout.has_value()) {
+      context_.setHybridFlatMapGroupKeysLayout(
+          *options_.hybridFlatMapGroupKeysLayout);
+    }
   }
 
   typeWithId_ = typeWithId;
@@ -151,6 +155,11 @@ Serializer::Serializer(
       for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
         const auto& group = hybridMap.groupAt(i);
         hybridMetadataStreamOffsets_.insert(group.inMapDescriptor.offset());
+        // A Default group that lists its keys writes typed keys, not bits. An
+        // empty list has no payload, so StreamDataWriter omits it regardless.
+        if (hybridMap.useKeyPresentList(group.groupId)) {
+          continue;
+        }
         const auto keyPresenceOffset = group.keyPresenceDescriptor.offset();
         hybridMetadataStreamOffsets_.insert(keyPresenceOffset);
         // Non-Default groups have fixed key catalogs, so an all-true

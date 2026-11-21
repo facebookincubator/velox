@@ -89,10 +89,7 @@ DEFINE_string(
     "simplified paths.\n"
     "common: evaluate the expression using common path and print out results.\n"
     "simplified: evaluate the expression using simplified path and print out "
-    "results.\n"
-    "query: evaluate SQL query specified in --sql or --sql_path and print out "
-    "results. If --input_paths is specified, the query may reference it as "
-    "table 't'. Note: --input_selectivity_vector_paths is ignored in this mode");
+    "results.");
 
 DEFINE_string(
     input_row_metadata_path,
@@ -127,7 +124,7 @@ DEFINE_uint32(
 
 static bool validateMode(const char* flagName, const std::string& value) {
   static const std::unordered_set<std::string> kModes = {
-      "common", "simplified", "verify", "query"};
+      "common", "simplified", "verify"};
   if (kModes.count(value) != 1) {
     std::cerr << "Invalid value for --" << flagName << ": " << value << ". ";
     std::cerr << "Valid values are: " << folly::join(", ", kModes) << "."
@@ -168,8 +165,8 @@ DEFINE_int32(
 DEFINE_string(
     store_result_path,
     "",
-    "Directory path for storing the results of evaluating SQL expression or "
-    "query in common, simplified or query modes.");
+    "Directory path for storing the results of evaluating SQL expression in "
+    "common or simplified modes.");
 
 DEFINE_string(
     fuzzer_repro_path,

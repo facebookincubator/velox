@@ -23,9 +23,9 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
 
 namespace facebook::nimble {
 
@@ -138,13 +138,14 @@ std::shared_ptr<CachedTabletReader> TabletReaderCache::Generator::create(
   ioOptions.setIndexIoStats(indexIoStats);
   ioOptions.setIOExecutor(executor_);
   options.ioOptions = std::move(ioOptions);
+  options.fileIoContext = {};
   auto tablet = TabletReader::create(
       properties.readFile, pools_[shardIdx].get(), options);
   auto section = tablet->loadOptionalSection(
       std::string(kSchemaSection), /*keepCache=*/true);
   NIMBLE_CHECK(section.has_value(), "Schema section not found in tablet");
-  auto nimbleSchema =
-      SchemaDeserializer::deserialize(section->content().data());
+  auto nimbleSchema = SchemaDeserializer::deserialize(
+      section->content().data(), pools_[shardIdx].get());
   auto veloxSchema = asRowType(convertToVeloxType(*nimbleSchema));
   auto entry = std::make_shared<CachedTabletReader>(
       std::move(tablet),

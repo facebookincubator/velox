@@ -45,6 +45,8 @@ class IExpr {
     kConcat = 7,
     kAggregate = 8,
     kWindow = 9,
+    /// A value bound after the expression is built (see PlaceholderExpr).
+    kPlaceholder = 10,
   };
 
   VELOX_DECLARE_EMBEDDED_ENUM_NAME(Kind)

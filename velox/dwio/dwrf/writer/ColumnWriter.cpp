@@ -25,6 +25,7 @@
 #include "velox/dwio/dwrf/writer/StatisticsBuilderUtils.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/FlatVector.h"
 
 using namespace facebook::velox::dwio::common;
@@ -2025,6 +2026,7 @@ uint64_t MapColumnWriter::write(
   uint64_t nullCount = 0;
 
   const MapVector* mapSlice;
+  MapVectorPtr flatMapAsMap;
   const vector_size_t* offsets;
   const vector_size_t* lengths;
   auto processRow = [&](size_t pos) {
@@ -2042,7 +2044,13 @@ uint64_t MapColumnWriter::write(
   if (slice->encoding() != VectorEncoding::Simple::MAP) {
     auto localDecoded = decode(slice, ranges);
     auto& decodedVector = localDecoded.get();
-    mapSlice = decodedVector.base()->as<MapVector>();
+    if (decodedVector.base()->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+      flatMapAsMap =
+          decodedVector.base()->asUnchecked<FlatMapVector>()->toMapVector();
+      mapSlice = flatMapAsMap.get();
+    } else {
+      mapSlice = decodedVector.base()->as<MapVector>();
+    }
     VELOX_CHECK_NOT_NULL(mapSlice, "unexpected vector type");
 
     writeNulls(decodedVector, ranges);

@@ -22,6 +22,8 @@ namespace facebook::nimble::index {
 /// Cluster index backed by flat Prefix or Trivial encoded key chunks.
 class ClusterIndex final : public ClusterIndexBase {
  public:
+  /// Opens the index; its keys sort under options.keyComparator, or bytewise
+  /// when it is null.
   static std::unique_ptr<ClusterIndex> create(
       Section rootSection,
       velox::memory::MemoryPool* pool,
@@ -33,7 +35,9 @@ class ClusterIndex final : public ClusterIndexBase {
   ClusterIndex(
       Section rootSection,
       std::shared_ptr<MetadataInput> metadataInput,
-      std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
+      std::shared_ptr<DataInput> dataInput,
+      KeyStreamLocator keyStreamLocator,
+      const KeyComparator* keyComparator,
       bool pinIndex,
       bool preloadIndex,
       velox::memory::MemoryPool* pool);

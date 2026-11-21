@@ -156,14 +156,14 @@ void VectorStream::appendNulls(
     nonNullCount_ += numNonNull;
     return;
   }
-  if (FOLLY_UNLIKELY(numNulls > 0 && nonNullCount_ > 0 && nullCount_ == 0)) {
+  if (numNulls > 0 && nonNullCount_ > 0 && nullCount_ == 0) [[unlikely]] {
     // There were only non-nulls up until now. Add the bits for them.
     nulls_.appendBool(false, nonNullCount_);
   }
   nullCount_ += numNulls;
   nonNullCount_ += numNonNull;
 
-  if (FOLLY_LIKELY(end <= 64)) {
+  if (end <= 64) [[likely]] {
     const uint64_t inverted = ~nulls[0];
     nulls_.appendBitsFresh(&inverted, begin, end);
     return;

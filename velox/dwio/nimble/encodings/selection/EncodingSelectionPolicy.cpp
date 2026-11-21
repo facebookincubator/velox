@@ -219,10 +219,14 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
       EncodingType::SimdForBitpack,
       EncodingType::SubIntSplit,
       EncodingType::BlockBitPacking,
+      EncodingType::BlockBitPackingV2,
       EncodingType::DeltaBlock,
       EncodingType::EliasFano,
+      EncodingType::PartitionedEliasFano,
+      EncodingType::Sequence,
       EncodingType::Fsst,
       EncodingType::Huffman,
+      EncodingType::Reversed,
   };
 }
 

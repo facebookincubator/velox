@@ -189,6 +189,9 @@ class TaskCursor {
     return moveNext(nullptr);
   }
 
+  /// Reads the rest of the task's output and returns the number of rows read.
+  uint64_t countRows();
+
   /// Steps through execution, returning either the input to the next operator
   /// with a breakpoint installed, or the next task output. If no breakpoints
   /// are set, then moveStep() == moveNext().
@@ -256,8 +259,9 @@ class RowCursor {
   vector_size_t numRows_{0};
 };
 
-/// Wait up to maxWaitMicros for all the task drivers to finish. The function
-/// returns true if all the drivers have finished, otherwise false.
+/// Waits up to maxWaitMicros for Task::allDriversClosedFuture(), which is
+/// realized once every driver that the task created has closed. Returns true if
+/// it is realized in time, otherwise false.
 ///
 /// NOTE: user must call this on a finished or failed task.
 bool waitForTaskDriversToFinish(

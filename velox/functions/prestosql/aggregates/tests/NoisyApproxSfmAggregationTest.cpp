@@ -134,8 +134,10 @@ TEST_F(NoisyApproxSfmAggregationTest, distinctNonPrivacy) {
        makeConstant(std::numeric_limits<double>::infinity(), 10)});
 
   const auto expectedResult = makeRowVector({makeConstant<int64_t>(10, 1)});
-  testAggregations(
-      {vectors}, {}, {"noisy_approx_distinct_sfm(c0, c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"noisy_approx_distinct_sfm(c0, c1)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(NoisyApproxSfmAggregationTest, setNonPrivacy) {
@@ -302,8 +304,10 @@ TEST_F(NoisyApproxSfmAggregationTest, emptyInput) {
 
   const auto expectedResult =
       makeRowVector({makeNullConstant(TypeKind::BIGINT, 1)});
-  testAggregations(
-      {vectors}, {}, {"noisy_approx_distinct_sfm(c0, c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"noisy_approx_distinct_sfm(c0, c1)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(NoisyApproxSfmAggregationTest, fuzzerInput) {

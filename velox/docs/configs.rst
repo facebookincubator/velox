@@ -22,11 +22,13 @@ Generic Configuration
      - 1024
      - Preferred number of rows to be returned by operators from Operator::getOutput. It is used when an estimate of
        average row size is not known. When the estimate of average row size is known, preferred_output_batch_bytes is used.
+       Must be at least 1.
    * - max_output_batch_rows
      - integer
      - 10000
      - Max number of rows that could be return by operators from Operator::getOutput. It is used when an estimate of
        average row size is known and preferred_output_batch_bytes is used to compute the number of output rows.
+       Must be at least 1.
    * - merge_join_output_batch_start_size
      - integer
      - 0
@@ -81,17 +83,18 @@ Generic Configuration
        supplied "America/Los_Angeles", then "1970-01-01" will be converted to -28800 instead of 0. Similarly, timestamp
        to date conversions will adhere to user 'session_timezone', e.g: Timestamp(0) to Date will be -1 (number of days
        since epoch) for "America/Los_Angeles".
-   * - use_session_timezone_for_timestamp_with_timezone
+   * - ignore_time_zone_label
      - bool
      - false
-     - Selects the time zone used to render a TIMESTAMP WITH TIME ZONE value. If true, values render the UTC instant in
-       the session time zone, so values that compare equal produce equal results. If false, each value renders in its
-       own embedded time zone. Covers field extraction (except ``timezone_hour`` and ``timezone_minute``, which report
+     - Selects whether to ignore a TIMESTAMP WITH TIME ZONE value's stored time zone label. If true, values render the
+       UTC instant in the session time zone, so values that compare equal produce equal results. If false, each value
+       renders using its stored time zone label. Covers field extraction (except ``timezone_hour`` and
+       ``timezone_minute``, which report
        the offset stored in the value), formatting, date arithmetic, and ``CAST`` to ``VARCHAR``, ``DATE``, ``TIME``
        and ``TIMESTAMP``. Of the interval operators only ``INTERVAL YEAR TO MONTH`` is affected; ``INTERVAL DAY TO
        SECOND`` operates on milliseconds and never consults a time zone. For ``CAST`` to ``TIMESTAMP``,
        ``adjust_timestamp_to_session_timezone=true`` returns the UTC instant. When that property is false, this
-       property selects the session or embedded time zone.
+       property selects the session or stored time zone.
    * - track_operator_cpu_usage
      - bool
      - true
@@ -121,11 +124,11 @@ Generic Configuration
      - Used for backpressure to block local exchange producers when the local exchange buffer reaches or exceeds this size.
    * - max_local_exchange_partition_count
      - integer
-     - 2^32
+     - 2^32 - 1
      - Limits the number of partitions created by a local exchange. Partitioning data too granularly can lead to poor performance.
        This setting allows increasing the task concurrency for all pipelines except the ones that require a local partitioning.
        Affects the number of drivers for pipelines containing LocalPartitionNode and cannot exceed the maximum number of
-       pipeline drivers configured for the task.
+       pipeline drivers configured for the task. Must be at least 1.
    * - exchange.max_buffer_size
      - integer
      - 32MB
@@ -139,6 +142,13 @@ Generic Configuration
        creating tiny batches which may have a negative impact on performance when the cost of creating vectors is high
        (for example, when there are many columns). To avoid latency degradation, the exchange client unblocks a consumer
        when 1% of the data size observed so far is accumulated.
+   * - exchange_output_batch_rows
+     - integer
+     - 0
+     - The number of rows the Exchange operator fills each output batch to. When positive, it replaces the target the
+       operator derives from preferred_output_batch_bytes and an estimate of the row size. A batch holds only pages
+       taken from the exchange queue together, at most preferred_output_batch_bytes, so it can have fewer rows. A Presto
+       page is never split, so a batch can exceed this by part of a page. 0 keeps the derived target.
    * - merge_exchange.max_buffer_size
      - integer
      - 128MB
@@ -158,6 +168,7 @@ Generic Configuration
      - integer
      - 2
      - Maximum number of vectors buffered in each local merge source before blocking to wait for consumers.
+       Must be at least 1.
    * - max_page_partitioning_buffer_size
      - integer
      - 32MB
@@ -189,10 +200,15 @@ Generic Configuration
    * - hash_probe_bloom_filter_pushdown_max_size
      - integer
      - 0
-     - The maximum byte size of Bloom filter that can be generated from hash
-       probe.  When set to 0, no Bloom filter will be generated.  To achieve
-       optimal performance, this should not be too larger than the CPU cache
-       size on the host.
+     - Maximum size in bytes of the Bloom filter that a hash join build
+       pushes down to the probe-side scan. 0 disables Bloom filters. A
+       build uses a Bloom filter when its keys have too many distinct
+       values for an exact filter. The filter takes about 1.2 bytes per
+       build-side row, so 16 MB covers builds of up to about 14 million
+       rows. Larger builds produce no Bloom filter. The scan tests every
+       row against the filter, so the filter should fit in the L3 cache
+       with room to spare. Half the L3 size works well, for example
+       16 MB on hosts with a 32 MB L3.
    * - bypass_hash_probe_bloom_filter_min_rows
      - integer
      - 0
@@ -256,6 +272,10 @@ Generic Configuration
      - false
      - By default, if a key is found in multiple given maps, that key's value in the resulting map comes from the last one of those maps.
        If true, throws exception when duplicate keys are found. This configuration is needed by Spark functions `CreateMap`, `MapFromArrays`, `MapFromEntries`, `StringToMap`, `MapConcat`, `TransformKeys`.
+   * - generate_constant_maps_as_flat_maps
+     - bool
+     - false
+     - If true, map functions that support it build a flat map when every key is constant. Today only Spark `CreateMap` supports it.
    * - index_lookup_join_max_prefetch_batches
      - integer
      - 0
@@ -387,6 +407,12 @@ Expression Evaluation Configuration
      - integer
      - 100
      - Controls maximum number of compiled regular expression patterns per batch.
+   * - expression.min_rows_for_peeling
+     - integer
+     - 0
+     - Minimum number of selected rows for expression evaluation to peel dictionary encodings off its inputs. Below it,
+       a function whose only non-constant input is a dictionary gets that input flattened instead, unless its rows are
+       large enough that copying them costs more than peeling.
    * - debug_disable_expression_with_peeling
      - bool
      - false
@@ -472,6 +498,11 @@ Spilling
      - boolean
      - false
      - When `spill_enabled` is true, determines whether LocalMerge operators can spill to disk to cap memory usage.
+   * - local_merge_max_num_merge_sources
+     - integer
+     - 2^32 - 1
+     - When `local_merge_spill_enabled` is true, the maximum number of sources a LocalMerge operator merges at a time.
+       Must be at least 1.
    * - mixed_grouped_mode_hash_join_spill_enabled
      - boolean
      - false
@@ -658,6 +689,12 @@ Aggregation
      - In streaming aggregation, wait until we have enough number of output rows
        to produce a batch of size specified by this. If set to 0, then
        Operator::outputBatchRows will be used as the min output batch rows.
+   * - vector_index_train_threads
+     - integer
+     - 1
+     - Number of threads :func:`vector_index_train` trains a codec on, for both
+       OpenMP and MKL. Positive. Training runs on its driver's thread with the
+       default; more threads compete with the other drivers on the host.
 
 Table Scan
 ------------
@@ -710,13 +747,13 @@ Table Writer
      - Description
    * - task_writer_count
      - integer
-     - 1
-     - The number of parallel table writer threads per task.
+     - 4
+     - The number of parallel table writer threads per task. Must be at least 1.
    * - task_partitioned_writer_count
      - integer
      - task_writer_count
      - The number of parallel table writer threads per task for partitioned
-       table writes. If not set, use 'task_writer_count' as default.
+       table writes. If not set, use 'task_writer_count' as default. Must be at least 1.
    * - scaled_writer_rebalance_max_memory_usage_ratio
      - double
      - 0.7
@@ -943,6 +980,11 @@ Common Options
      - bool
      - true
      - Enable selective Nimble reader. Session: ``selective_nimble_reader_enabled``.
+   * - ``nimble-lazy-file-stats``
+     - bool
+     - false
+     - Decode Nimble file column statistics on first use, and only those a read needs, instead of all
+       of them when the file is opened. Do not prepend ``hive.``. Session: ``nimble_lazy_file_stats``.
    * - ``index-enabled``
      - bool
      - false
@@ -1137,7 +1179,7 @@ Parquet Options (prefix ``hive.parquet.``)
        Session: ``parquet_writer_max_target_file_size``.
 
        Row-group sizing is independent of this setting. The soft byte target is configured by
-       ``writer.row-group-size``, while the row count is capped at 1,048,576. When
+       ``writer.row-group-size``, and the row count by ``writer.row-group-rows``. When
        ``writer.max-target-file-size`` is set, the writer may flush the current row group early so
        the accumulated file size is visible and rotation can occur.
    * - ``writer.enable-dictionary``
@@ -1175,6 +1217,10 @@ Parquet Options (prefix ``hive.parquet.``)
      - Soft target for the serialized row group size. The estimate includes compressed bytes for
        encoded pages and estimated bytes for data that has not yet been serialized into pages, so a
        row group may slightly exceed the target. Session: ``parquet_writer_row_group_size``.
+   * - ``writer.row-group-rows``
+     - integer
+     - 1048576
+     - Maximum number of rows in a row group. Session: ``parquet_writer_row_group_rows``.
    * - ``writer.created-by``
      - string
      - parquet-cpp-velox version 0.0.0
@@ -1192,6 +1238,14 @@ Parquet Options (prefix ``hive.parquet.``)
        Parquet through the Arrow bridge. When enabled, per-page statistics are stored in the page
        index instead of the data page headers, letting readers skip pages that cannot match a filter.
        Session: ``hive.parquet.writer.enable_page_index``.
+   * - ``writer.size-statistics-level``
+     - string
+     - PAGE_AND_COLUMN_CHUNK
+     - Controls Parquet size statistics written by the Arrow bridge. ``NONE`` disables size
+       statistics; ``COLUMN_CHUNK`` writes only column-chunk statistics; and
+       ``PAGE_AND_COLUMN_CHUNK`` writes both column-chunk and page-level statistics. Page-level
+       statistics require ``writer.enable-page-index`` to be enabled.
+       Session: ``hive.parquet.writer.size_statistics_level``.
 
 Nimble Options (prefix ``hive.nimble.``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1221,10 +1275,6 @@ Nimble Options (prefix ``hive.nimble.``)
        not be triggered. NOTE: lazy IO applies the same restriction as lazy materialization which doesn't
        allow lazy IO across stripes. Configure as ``nimble.lazy-column-io``; do not prepend ``hive.``.
        Session: ``nimble_lazy_column_io``.
-   * - ``string-decoder-zero-copy``
-     - bool
-     - false
-     - Enable zero-copy string decoding in Nimble selective reader. Configure as ``nimble.string-decoder-zero-copy``; do not prepend ``hive.``. Session: ``nimble_string_decoder_zero_copy``.
    * - ``preserve-dictionary-encoding``
      - bool
      - false
@@ -1310,6 +1360,11 @@ key set with the ``s3.`` prefix takes precedence over the same key set with the
      - bool
      - false
      - Utilize the configuration of the environment variables http_proxy, https_proxy, and no_proxy for use with the S3 API.
+   * - ``s3.use-fips``
+     - bool
+     -
+     - Use AWS FIPS endpoints. When unset, the ``AWS_USE_FIPS_ENDPOINT`` environment variable decides. Cannot be combined
+       with ``s3.endpoint``. See `FIPS Endpoints`_.
    * - ``s3.connect-timeout``
      - string
      -
@@ -1364,6 +1419,18 @@ explicitly set will override the base ``s3.`` values. The deprecated
 ``hive.s3.`` prefix follows the same rules (for example
 ``hive.s3.bucket.velox.endpoint``).
 These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apache.org/docs/current/hadoop-aws/tools/hadoop-aws/index.html>`_.
+
+FIPS Endpoints
+""""""""""""""
+``s3.use-fips`` sets ``useFIPS`` on the AWS SDK client, which then resolves the
+AWS FIPS endpoint for the region. It also applies to the STS calls of
+``s3.iam-role``. When unset, the environment variable ``AWS_USE_FIPS_ENDPOINT``
+decides. The AWS SDK rejects FIPS combined with ``s3.endpoint``, so requests
+fail with "A custom endpoint cannot be combined with FIPS". Set
+``s3.use-fips=false`` for buckets with a custom endpoint, including an explicit
+AWS FIPS endpoint. Web identity credentials also need ``AWS_ENDPOINT_URL_STS``
+set to the STS FIPS host name, such as ``sts-fips.us-east-1.amazonaws.com``.
+The CRT uses the value as the host, so a URL with a scheme fails to resolve.
 
 ``Google Cloud Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1507,6 +1574,13 @@ Spark-specific Configuration
      - integer
      -
      - The current task's Spark partition ID. It's set by the query engine (Spark) prior to task execution.
+   * - spark.legacy_coding_error_action
+     - bool
+     - false
+     - If true, the Spark ``encode`` function replaces unmappable characters instead of reporting an error.
+       Corresponds to Spark 4.0's ``spark.sql.legacy.codingErrorAction``.
+       Set to true to match Spark 3.x's replacement behavior for the supported charsets.
+       Additional JDK charset names and aliases remain unsupported in either mode.
    * - spark.legacy_date_formatter
      - bool
      - false

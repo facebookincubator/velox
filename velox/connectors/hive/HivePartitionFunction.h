@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <limits>
+
 #include "velox/core/PlanNode.h"
 #include "velox/vector/DecodedVector.h"
 
@@ -40,6 +42,12 @@ class HivePartitionFunction : public core::PartitionFunction {
 
   ~HivePartitionFunction() override = default;
 
+  /// Returns the bucket, one of 'numBuckets', of a row whose Hive hash is
+  /// 'hash'.
+  static int32_t bucket(uint32_t hash, int32_t numBuckets) {
+    return (hash & std::numeric_limits<int32_t>::max()) % numBuckets;
+  }
+
   std::optional<uint32_t> partition(
       const RowVector& input,
       std::vector<uint32_t>& partitions) override;
@@ -51,26 +59,6 @@ class HivePartitionFunction : public core::PartitionFunction {
  private:
   // Precompute single value hive hash for a constant partition key.
   void precompute(const BaseVector& value, size_t column_index_t);
-
-  void hash(
-      const DecodedVector& values,
-      TypeKind typeKind,
-      const SelectivityVector& rows,
-      bool mix,
-      std::vector<uint32_t>& hashes,
-      size_t poolIndex);
-
-  template <TypeKind kind>
-  void hashTyped(
-      const DecodedVector& /* values */,
-      const SelectivityVector& /* rows */,
-      bool /* mix */,
-      std::vector<uint32_t>& /* hashes */,
-      size_t /* poolIndex */) {
-    VELOX_UNSUPPORTED(
-        "Hive partitioning function doesn't support {} type",
-        TypeTraits<kind>::name);
-  }
 
   // Helper functions to retrieve reusable memory from pools.
   DecodedVector& getDecodedVector(size_t poolIndex = 0);

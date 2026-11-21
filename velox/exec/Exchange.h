@@ -90,7 +90,15 @@ class Exchange : public SourceOperator {
 
   RowVectorPtr getOutputFromRowPages(VectorSerde* serde);
 
+  // Returns the number of rows to fill the next output batch to.
+  uint64_t targetNumRows() const;
+
   const uint64_t preferredOutputBatchBytes_;
+
+  // From 'exchange_output_batch_rows'. When positive, the number of rows to
+  // fill each output batch to, instead of a target derived from
+  // 'preferredOutputBatchBytes_' and 'estimatedRowSize_'.
+  const uint32_t outputBatchRows_;
 
   const std::string serdeKind_;
 

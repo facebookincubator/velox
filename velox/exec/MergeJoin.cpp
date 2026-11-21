@@ -18,6 +18,7 @@
 #include <folly/container/F14Set.h>
 #include <algorithm>
 
+#include "velox/exec/MergeJoinStatNames.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
@@ -1421,8 +1422,8 @@ RowVectorPtr MergeJoin::handleSingleSideOutput() {
 }
 
 bool MergeJoin::canStreamLeftSide() const {
-  return streamLeftSideEnabled_ && filter_ == nullptr &&
-      (isInnerJoin(joinType_) || isLeftJoin(joinType_));
+  return streamLeftSideEnabled_ &&
+      (isInnerJoin(joinType_) || (filter_ == nullptr && isLeftJoin(joinType_)));
 }
 
 void MergeJoin::releaseConsumedLeftMatchInputs() {
@@ -1661,26 +1662,16 @@ RowVectorPtr MergeJoin::applyFilter(const RowVectorPtr& output) {
       }
     }
 
-    // Every time we start a new left key match, `processFilterResult()` will
-    // check if at least one row from the previous match passed the filter. If
-    // none did, it calls onMiss to add a record with null right projections
-    // to the output.
-    //
-    // Before we leave the current buffer, since we may not have seen the next
-    // left key match yet, the last key match may still be pending to produce
-    // a row (because `processFilterResult()` was not called yet).
-    //
-    // To handle this, we need to call `noMoreFilterResults()` unless the
-    // same current left key match may continue in the next buffer. So there
-    // are two cases to check:
-    //
-    // 1. If leftMatch_ is nullopt, there for sure the next buffer will
-    // contain a different key match.
-    //
-    // 2. leftMatch_ may not be nullopt, but may be related to a different
-    // (subsequent) left key. So we check if the last row in the batch has the
-    // same left row number as the last key match.
-    if (!leftMatch_ || !joinTracker_->isCurrentLeftMatch(numRows - 1)) {
+    // Filter state can span output batches only while the same outer row
+    // continues.
+    const auto& match =
+        isRightJoin(joinType_) || isRightSemiFilterJoin(joinType_) ? rightMatch_
+                                                                   : leftMatch_;
+    const bool continues = !provisionalRightOutputCursor_.has_value() &&
+        match && match->cursor &&
+        joinTracker_->isLastMatch(
+            match->inputs[match->cursor->batchIndex], match->cursor->rowIndex);
+    if (!continues) {
       joinTracker_->noMoreFilterResults(onMiss);
     }
   } else {
@@ -1739,13 +1730,13 @@ void MergeJoin::close() {
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
-        std::string(MergeJoin::kMatchedLeftRows),
+        std::string(MergeJoinStatNames::kMatchedLeftRows),
         RuntimeCounter(matchedLeftRows_));
     lockedStats->addRuntimeStat(
-        std::string(MergeJoin::kMatchedRightRows),
+        std::string(MergeJoinStatNames::kMatchedRightRows),
         RuntimeCounter(matchedRightRows_));
     lockedStats->addRuntimeStat(
-        std::string(MergeJoin::kStreamedLeftBatches),
+        std::string(MergeJoinStatNames::kStreamedLeftBatches),
         RuntimeCounter(streamedLeftBatches_));
   }
   if (rightSource_) {
