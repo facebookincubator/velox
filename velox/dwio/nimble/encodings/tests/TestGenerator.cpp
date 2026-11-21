@@ -945,6 +945,17 @@ int main(int argc, char* argv[]) {
       writeFileSliced<nimble::deprecated::BlockBitPackingEncoding<int64_t>>(
           rng, FLAGS_output_dir, 4096, 100, 3000);
     }
+    // BlockBitPackingV2 rejects empty streams too: parseHeader requires
+    // numBlocks to be greater than zero.
+    if (match("BlockBitPackingV2") && rowCount != 0) {
+      WRITE_NUMERIC_FILES(BlockBitPackingV2Encoding, rowCount);
+      // 3000 rows over the 1024-row default block size: three blocks, the last
+      // one short, so readers map rows past the first block.
+      writeFile<nimble::BlockBitPackingV2Encoding<int32_t>>(
+          rng, FLAGS_output_dir, 3000);
+      writeFile<nimble::BlockBitPackingV2Encoding<int64_t>>(
+          rng, FLAGS_output_dir, 3000);
+    }
     if (match("SparseBool")) {
       writeFile<nimble::SparseBoolEncoding>(rng, FLAGS_output_dir, rowCount);
     }
