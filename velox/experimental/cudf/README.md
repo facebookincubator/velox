@@ -4,7 +4,7 @@ Velox-cuDF is a Velox extension module that uses the cuDF library to implement a
 
 ## How Velox and cuDF work together
 
-Velox-cuDF implements the Velox [DriverAdapter](https://github.com/facebookincubator/velox/blob/d9f953cd23880f29593534f1ba9031c6cea8ba06/velox/exec/Driver.h#L695) interface as [CudfDriverAdapter](https://github.com/facebookincubator/velox/blob/226b92cefedce4b8a484bfc351260edbd3d2e501/velox/experimental/cudf/exec/ToCudf.cpp#L301) to rewrite query plans for GPU execution. Generally the cuDF DriverAdapter replaces operators one-to-one. For end-to-end GPU execution where cuDF replaces all of the Velox CPU operators, cuDF relies on Velox's [pipeline-based execution model](https://facebookincubator.github.io/velox/develop/task.html) to separate stages of execution, partition the work across drivers, and schedule concurrent work on the GPU.
+Velox-cuDF implements the Velox [DriverAdapter](https://github.com/facebookincubator/velox/blob/d9f953cd23880f29593534f1ba9031c6cea8ba06/velox/exec/Driver.h#L695) interface as [CudfDriverAdapter](https://github.com/facebookincubator/velox/blob/226b92cefedce4b8a484bfc351260edbd3d2e501/velox/experimental/cudf/exec/ToCudf.cpp#L301) to rewrite query plans for GPU execution. Generally the cuDF DriverAdapter replaces operators one-to-one. For end-to-end GPU execution where cuDF replaces all of the Velox CPU operators, cuDF relies on Velox's [pipeline-based execution model](https://docs.velox-lib.io/develop/task.html) to separate stages of execution, partition the work across drivers, and schedule concurrent work on the GPU.
 
 For more information please refer to our blog: "[Extending Velox - GPU Acceleration with cuDF](https://velox-lib.io/blog/extending-velox-with-cudf)."
 
@@ -34,7 +34,7 @@ Velox-cuDF builds are included in Velox CI as part of the [adapters build](https
 
 ### Configuring Velox-cuDF
 
-Velox-cuDF provides several configuration properties to control GPU execution behavior, memory management, and debugging. These configurations are available when compiled with cuDF support and can be set via Velox's configuration system. For a complete list of cuDF-specific configuration properties and their descriptions, see the [Cudf-specific Configuration section](https://facebookincubator.github.io/velox/configs.html#cudf-specific-configuration-experimental) in the Velox configuration documentation.
+Velox-cuDF provides several configuration properties to control GPU execution behavior, memory management, and debugging. These configurations are available when compiled with cuDF support and can be set via Velox's configuration system. For a complete list of cuDF-specific configuration properties and their descriptions, see the [Cudf-specific Configuration section](https://docs.velox-lib.io/configs.html#cudf-specific-configuration-experimental) in the Velox configuration documentation.
 
 ### Testing Velox with cuDF
 

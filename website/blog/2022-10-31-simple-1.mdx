@@ -10,7 +10,7 @@ _This blogpost is part of a series of blog posts that discuss different features
 
 ## Introduction to Simple Functions
 
-Scalar functions are one of the most used extension points in Velox. Since Velox is a vectorized engine, by nature functions are <a href="https://facebookincubator.github.io/velox/develop/scalar-functions.html#vector-functions">"vector functions"</a> that consume Velox vectors (batches of data) and produce vectors. Velox allows users to write functions as vector functions or as single-row operations "simple functions" that are converted to vector functions using template expansion through <a href="https://github.com/facebookincubator/velox/blob/main/velox/expression/SimpleFunctionAdapter.h">SimpleFunctionAdapter</a>.
+Scalar functions are one of the most used extension points in Velox. Since Velox is a vectorized engine, by nature functions are <a href="https://docs.velox-lib.io/develop/scalar-functions.html#vector-functions">"vector functions"</a> that consume Velox vectors (batches of data) and produce vectors. Velox allows users to write functions as vector functions or as single-row operations "simple functions" that are converted to vector functions using template expansion through <a href="https://github.com/facebookincubator/velox/blob/main/velox/expression/SimpleFunctionAdapter.h">SimpleFunctionAdapter</a>.
 
 <figure>
 <img src="/img/simple1_1.png"/>
@@ -108,4 +108,4 @@ Users can pre-process constant inputs of functions to avoid repeated computation
 
 
 
-For more information about how to write simple functions check the <a href="https://facebookincubator.github.io/velox/develop/scalar-functions.html">documentation</a> and the <a href="https://github.com/facebookincubator/velox/blob/main/velox/examples/SimpleFunctions.cpp">examples</a>.
+For more information about how to write simple functions check the <a href="https://docs.velox-lib.io/develop/scalar-functions.html">documentation</a> and the <a href="https://github.com/facebookincubator/velox/blob/main/velox/examples/SimpleFunctions.cpp">examples</a>.

@@ -182,7 +182,7 @@ functions to be written using Simple Function API.
 ## Non-throwing CAST
 
 CAST is complex. A single name refers to multiple dozen individual operations.
-The full matrix of <a href="https://facebookincubator.github.io/velox/functions/presto/conversion.html#supported-conversions">supported conversions</a> is available in the Velox
+The full matrix of <a href="https://docs.velox-lib.io/functions/presto/conversion.html#supported-conversions">supported conversions</a> is available in the Velox
 documentation. Not all casts throw. For example, cast from an integer to a
 string does not throw. However, casts from strings may fail in multiple ways. A
 common failure scenario is cast from an empty string. Laith Sakka optimized
