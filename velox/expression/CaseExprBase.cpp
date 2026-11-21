@@ -177,6 +177,8 @@ void CaseExprBase::computePropagatesNulls() {
   // - All THEN clauses and the optional ELSE clause propagate nulls.
   // - All THEN clauses and the optional ELSE clause use the same fields.
   // - The subject and all WHEN clauses use a subset of these fields.
+  // - Non-literal subjects and WHEN clauses propagate nulls from at least
+  //   one input field.
   // A null in any of these fields then makes every THEN and ELSE clause
   // return null, whichever case the row matches.
   propagatesNulls_ = false;
@@ -186,10 +188,17 @@ void CaseExprBase::computePropagatesNulls() {
     return clause->propagatesNulls() &&
         Expr::isSameFields(fields, clause->distinctFields());
   };
+  auto canPruneForCondition = [&](const ExprPtr& clause) {
+    const auto& conditionFields = clause->distinctFields();
+    // Field dependencies alone don't guarantee null propagation.
+    return Expr::isSubsetOfFields(conditionFields, fields) &&
+        (clause->isConstant() ||
+         (!conditionFields.empty() && clause->propagatesNulls()));
+  };
 
   for (size_t i = 0; i < numCases_; ++i) {
     if (!propagatesNullsOfFields(thenClause(i)) ||
-        !Expr::isSubsetOfFields(whenClause(i)->distinctFields(), fields)) {
+        !canPruneForCondition(whenClause(i))) {
       return;
     }
   }
@@ -198,8 +207,7 @@ void CaseExprBase::computePropagatesNulls() {
     return;
   }
 
-  if (hasSubject_ &&
-      !Expr::isSubsetOfFields(subject()->distinctFields(), fields)) {
+  if (hasSubject_ && !canPruneForCondition(subject())) {
     return;
   }
 

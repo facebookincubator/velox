@@ -2109,6 +2109,34 @@ TEST_P(ParameterizedExprTest, caseExprExceptionHandling) {
   }
 }
 
+TEST_P(ParameterizedExprTest, caseConditionErrorsWithNullResults) {
+  const auto input = makeRowVector(
+      {makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt})});
+  const auto expected =
+      BaseVector::createNullConstant(BIGINT(), input->size(), pool());
+  auto evaluateSimplified = [&](const std::string& expression) {
+    auto exprSet = compileExpression<exec::ExprSetSimplified>(
+        expression, asRowType(input->type()));
+    return evaluate(exprSet.get(), input);
+  };
+
+  for (const auto* expression :
+       {"if(1 / 0 > 0, c0)",
+        "case 1 when 1 / 0 then c0 else c0 end",
+        "case 1 / 0 when 1 then c0 else c0 end",
+        "if(if(true, 1, c0) / 0 > 0, c0, c0)",
+        "case 1 when if(true, 1, c0) / 0 then c0 else c0 end",
+        "case if(true, 1, c0) / 0 when 1 then c0 else c0 end",
+        "if(coalesce(c0, 1) / 0 > 0, c0, c0)"}) {
+    SCOPED_TRACE(expression);
+    VELOX_ASSERT_USER_THROW(evaluate(expression, input), "division by zero");
+    VELOX_ASSERT_USER_THROW(evaluateSimplified(expression), "division by zero");
+    const auto tryExpression = fmt::format("try({})", expression);
+    assertEqualVectors(expected, evaluate(tryExpression, input));
+    assertEqualVectors(expected, evaluateSimplified(tryExpression));
+  }
+}
+
 TEST_P(ParameterizedExprTest, switchExprWithNull) {
   vector_size_t size = 1'000;
   // Build an input with c0 column having nulls at odd row index.
