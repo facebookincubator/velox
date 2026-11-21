@@ -18,6 +18,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/exec/WindowFunction.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/ExpressionBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/TestIndexStorageConnector.h"
@@ -62,6 +63,20 @@ TEST_F(PlanBuilderTest, duplicateSubfield) {
               "a + b < 100")
           .planNode(),
       "Duplicate subfield: a");
+}
+
+TEST_F(PlanBuilderTest, complexConstants) {
+  const auto input = makeRowVector({makeFlatVector<int64_t>({1, 2})});
+  const auto constants = makeRowVector({makeFlatVector<int64_t>({7})});
+  auto builder = PlanBuilder(pool_.get());
+  builder.setComplexConstants(constants);
+  auto plan = builder.newPlan()
+                  .values({input})
+                  .project({"c0 + __complex_constant(c0) as value"})
+                  .singleAggregation({}, {"sum(value)"})
+                  .planNode();
+  AssertQueryBuilder(plan).assertResults(
+      makeRowVector({makeFlatVector<int64_t>({17})}));
 }
 
 TEST_F(PlanBuilderTest, invalidScalarFunctionCall) {
