@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <string>
@@ -31,147 +32,220 @@ TEST(SharedDictionaryConfigTest, defaultValues) {
   SharedDictionaryConfig dictionary;
   EXPECT_EQ(dictionary.scope, SharedDictionaryScope::Stripe);
   EXPECT_EQ(dictionary.dictionaryId, 0);
+  EXPECT_EQ(dictionary.resolverKey, 0);
   EXPECT_FALSE(dictionary.useExternalAlphabet);
   EXPECT_TRUE(dictionary.alphabetEncodings.empty());
 
   SharedDictionaryEncodingConfig config;
   EXPECT_TRUE(config.empty());
+  EXPECT_FALSE(config.hasStripeDictionary());
+  EXPECT_TRUE(config.alphabetEncodings.empty());
   EXPECT_TRUE(config.columns.empty());
-  EXPECT_TRUE(config.flatMaps.empty());
+  EXPECT_TRUE(config.provided.empty());
+  EXPECT_TRUE(config.providedFlatMaps.empty());
   EXPECT_EQ(config.externalResolver, nullptr);
 }
 
-TEST(SharedDictionaryConfigTest, config) {
+TEST(SharedDictionaryConfigTest, enabledColumns) {
+  const auto config = SharedDictionaryEncodingConfig::builder()
+                          .setAlphabetEncodings({EncodingType::FixedBitWidth})
+                          .addColumn("value", SharedDictionaryScope::File)
+                          .addColumn("features", SharedDictionaryScope::File)
+                          .build();
+
+  EXPECT_FALSE(config.empty());
+  // File scope is writer-assigned but not stripe scoped.
+  EXPECT_FALSE(config.hasStripeDictionary());
+  EXPECT_EQ(
+      config.alphabetEncodings,
+      std::vector<EncodingType>{EncodingType::FixedBitWidth});
+  EXPECT_THAT(
+      config.columns,
+      ::testing::UnorderedElementsAre(
+          ::testing::Pair("value", SharedDictionaryScope::File),
+          ::testing::Pair("features", SharedDictionaryScope::File)));
+  EXPECT_TRUE(config.provided.empty());
+  EXPECT_TRUE(config.providedFlatMaps.empty());
+}
+
+TEST(SharedDictionaryConfigTest, stripeScopeIsTheDefaultForEnabledColumns) {
+  const auto config =
+      SharedDictionaryEncodingConfig::builder().addColumn("value").build();
+  EXPECT_THAT(
+      config.columns,
+      ::testing::ElementsAre(
+          ::testing::Pair("value", SharedDictionaryScope::Stripe)));
+  EXPECT_TRUE(config.hasStripeDictionary());
+}
+
+TEST(SharedDictionaryConfigTest, enabledColumnsMayMixWriterAssignedScopes) {
+  // One file can hold both, which the per-value-stream configuration allowed
+  // and a single file-wide scope would not.
   const auto config =
       SharedDictionaryEncodingConfig::builder()
-          .addColumnDictionary(
-              "value",
-              SharedDictionaryConfig{
-                  .scope = SharedDictionaryScope::Stripe, .dictionaryId = 5})
-          .addColumnDictionary(
+          .addColumn("stripeColumn", SharedDictionaryScope::Stripe)
+          .addColumn("fileColumn", SharedDictionaryScope::File)
+          .build();
+  EXPECT_THAT(
+      config.columns,
+      ::testing::UnorderedElementsAre(
+          ::testing::Pair("stripeColumn", SharedDictionaryScope::Stripe),
+          ::testing::Pair("fileColumn", SharedDictionaryScope::File)));
+  EXPECT_TRUE(config.hasStripeDictionary());
+}
+
+TEST(SharedDictionaryConfigTest, providedDictionaries) {
+  const auto config =
+      SharedDictionaryEncodingConfig::builder()
+          .addProvidedDictionary(
               "nested.value",
               SharedDictionaryConfig{
                   .scope = SharedDictionaryScope::External, .dictionaryId = 9})
-          .addColumnDictionary(
+          .addProvidedDictionary(
               "nested.items[*].value",
               SharedDictionaryConfig{
-                  .scope = SharedDictionaryScope::File, .dictionaryId = 11})
-          .addFlatmapValueDictionary(
+                  .scope = SharedDictionaryScope::File,
+                  .useExternalAlphabet = true,
+                  .resolverKey = 11})
+          .addProvidedFlatmapValueDictionary(
               "features",
               /*key=*/42,
               SharedDictionaryConfig{
                   .scope = SharedDictionaryScope::File,
-                  .dictionaryId = 17,
                   .useExternalAlphabet = true,
+                  .resolverKey = 17,
                   .alphabetEncodings = {EncodingType::FixedBitWidth}},
               "items[*].score")
-          .addFlatmapValueDictionary(
+          .addProvidedFlatmapValueDictionary(
               "features",
               /*key=*/43,
               SharedDictionaryConfig{
-                  .scope = SharedDictionaryScope::File, .dictionaryId = 18})
+                  .scope = SharedDictionaryScope::External, .dictionaryId = 18})
           .build();
 
   EXPECT_FALSE(config.empty());
-  ASSERT_EQ(config.columns.size(), 3);
-  ASSERT_EQ(config.flatMaps.size(), 1);
-  EXPECT_EQ(config.externalResolver, nullptr);
+  EXPECT_FALSE(config.hasStripeDictionary());
+  EXPECT_TRUE(config.columns.empty());
+  ASSERT_EQ(config.provided.size(), 2);
+  ASSERT_EQ(config.providedFlatMaps.size(), 1);
 
-  EXPECT_EQ(config.columns[0].fieldPath, "value");
-  EXPECT_EQ(config.columns[0].dictionary.scope, SharedDictionaryScope::Stripe);
-  EXPECT_EQ(config.columns[0].dictionary.dictionaryId, 5);
-
-  EXPECT_EQ(config.columns[1].fieldPath, "nested.value");
+  // Struct members stay reachable here: a provided dictionary addresses one
+  // value stream, so a path is meaningful.
+  EXPECT_EQ(config.provided[0].fieldPath, "nested.value");
   EXPECT_EQ(
-      config.columns[1].dictionary.scope, SharedDictionaryScope::External);
-  EXPECT_EQ(config.columns[1].dictionary.dictionaryId, 9);
+      config.provided[0].dictionary.scope, SharedDictionaryScope::External);
+  EXPECT_EQ(config.provided[0].dictionary.dictionaryId, 9);
 
-  EXPECT_EQ(config.columns[2].fieldPath, "nested.items[*].value");
-  EXPECT_EQ(config.columns[2].dictionary.scope, SharedDictionaryScope::File);
-  EXPECT_EQ(config.columns[2].dictionary.dictionaryId, 11);
+  EXPECT_EQ(config.provided[1].fieldPath, "nested.items[*].value");
+  EXPECT_EQ(config.provided[1].dictionary.scope, SharedDictionaryScope::File);
+  EXPECT_TRUE(config.provided[1].dictionary.useExternalAlphabet);
+  EXPECT_EQ(config.provided[1].dictionary.resolverKey, 11);
 
-  const auto& columnDictionary = config.flatMaps[0];
-  EXPECT_EQ(columnDictionary.fieldPath, "features");
-  ASSERT_EQ(columnDictionary.keys.size(), 2);
-  const auto& keyDictionary = columnDictionary.keys[0];
-  EXPECT_EQ(keyDictionary.key, 42);
-  EXPECT_EQ(keyDictionary.valueSubfield, "items[*].score");
-  EXPECT_EQ(keyDictionary.dictionary.scope, SharedDictionaryScope::File);
-  EXPECT_EQ(keyDictionary.dictionary.dictionaryId, 17);
-  EXPECT_TRUE(keyDictionary.dictionary.useExternalAlphabet);
+  const auto& flatMap = config.providedFlatMaps[0];
+  EXPECT_EQ(flatMap.fieldPath, "features");
+  ASSERT_EQ(flatMap.keys.size(), 2);
+  EXPECT_EQ(flatMap.keys[0].key, 42);
+  EXPECT_EQ(flatMap.keys[0].valueSubfield, "items[*].score");
+  EXPECT_EQ(flatMap.keys[0].dictionary.resolverKey, 17);
   EXPECT_EQ(
-      keyDictionary.dictionary.alphabetEncodings,
+      flatMap.keys[0].dictionary.alphabetEncodings,
       std::vector<EncodingType>{EncodingType::FixedBitWidth});
-
-  const auto& arrayKeyDictionary = columnDictionary.keys[1];
-  EXPECT_EQ(arrayKeyDictionary.key, 43);
-  EXPECT_EQ(arrayKeyDictionary.valueSubfield, "");
-  EXPECT_EQ(arrayKeyDictionary.dictionary.scope, SharedDictionaryScope::File);
-  EXPECT_EQ(arrayKeyDictionary.dictionary.dictionaryId, 18);
+  EXPECT_EQ(flatMap.keys[1].key, 43);
+  EXPECT_EQ(flatMap.keys[1].valueSubfield, "");
+  EXPECT_EQ(flatMap.keys[1].dictionary.dictionaryId, 18);
 }
 
 TEST(SharedDictionaryConfigTest, builderSeedsExistingConfig) {
   const auto seedConfig =
-      SharedDictionaryEncodingConfig::builder()
-          .addColumnDictionary(
-              "value",
-              SharedDictionaryConfig{
-                  .scope = SharedDictionaryScope::Stripe, .dictionaryId = 5})
-          .build();
+      SharedDictionaryEncodingConfig::builder().addColumn("value").build();
   auto configCopy = seedConfig;
 
   const auto config =
       SharedDictionaryEncodingConfig::builder(std::move(configCopy))
-          .addFlatmapValueDictionary(
+          .addProvidedFlatmapValueDictionary(
               "features",
               /*key=*/10,
               SharedDictionaryConfig{
                   .scope = SharedDictionaryScope::External, .dictionaryId = 9})
           .build();
 
-  ASSERT_EQ(config.columns.size(), seedConfig.columns.size());
-  ASSERT_EQ(config.flatMaps.size(), 1);
-  EXPECT_EQ(config.columns[0].fieldPath, seedConfig.columns[0].fieldPath);
-  EXPECT_EQ(
-      config.columns[0].dictionary.scope,
-      seedConfig.columns[0].dictionary.scope);
-  EXPECT_EQ(
-      config.columns[0].dictionary.dictionaryId,
-      seedConfig.columns[0].dictionary.dictionaryId);
-  EXPECT_TRUE(seedConfig.flatMaps.empty());
-  EXPECT_EQ(config.flatMaps[0].fieldPath, "features");
-  ASSERT_EQ(config.flatMaps[0].keys.size(), 1);
-  EXPECT_EQ(config.flatMaps[0].keys[0].key, 10);
+  EXPECT_EQ(config.columns, seedConfig.columns);
+  EXPECT_TRUE(seedConfig.providedFlatMaps.empty());
+  ASSERT_EQ(config.providedFlatMaps.size(), 1);
+  EXPECT_EQ(config.providedFlatMaps[0].fieldPath, "features");
+  ASSERT_EQ(config.providedFlatMaps[0].keys.size(), 1);
+  EXPECT_EQ(config.providedFlatMaps[0].keys[0].key, 10);
 }
 
 TEST(SharedDictionaryConfigTest, builderRejectsDuplicateTargets) {
+  const SharedDictionaryConfig external{
+      .scope = SharedDictionaryScope::External};
   auto config =
       SharedDictionaryEncodingConfig::builder()
-          .addColumnDictionary("nested.value", SharedDictionaryConfig{})
-          .addFlatmapValueDictionary(
-              "features", /*key=*/42, SharedDictionaryConfig{})
-          .addFlatmapValueDictionary(
-              "features",
-              /*key=*/42,
-              SharedDictionaryConfig{},
-              "items[*].value")
+          .addColumn("value")
+          .addProvidedDictionary("nested.value", external)
+          .addProvidedFlatmapValueDictionary("features", /*key=*/42, external)
+          .addProvidedFlatmapValueDictionary(
+              "features", /*key=*/42, external, "items[*].value")
           .build();
   auto builder = SharedDictionaryEncodingConfig::builder(std::move(config));
 
   NIMBLE_ASSERT_USER_THROW(
-      builder.addColumnDictionary("nested.value", SharedDictionaryConfig{}),
-      "Duplicate shared dictionary column configuration for path "
+      builder.addColumn("value"),
+      "Duplicate shared dictionary column 'value'.");
+  NIMBLE_ASSERT_USER_THROW(
+      builder.addProvidedDictionary("nested.value", external),
+      "Duplicate provided shared dictionary configuration for path "
       "'nested.value'.");
   NIMBLE_ASSERT_USER_THROW(
-      builder.addFlatmapValueDictionary(
-          "features", /*key=*/42, SharedDictionaryConfig{}),
-      "Duplicate shared dictionary flat-map value configuration for path "
-      "'features', key 42, and value subfield ''.");
+      builder.addProvidedFlatmapValueDictionary(
+          "features", /*key=*/42, external),
+      "Duplicate provided shared dictionary flat-map value configuration for "
+      "path 'features', key 42, and value subfield ''.");
   NIMBLE_ASSERT_USER_THROW(
-      builder.addFlatmapValueDictionary(
-          "features", /*key=*/42, SharedDictionaryConfig{}, "items[*].value"),
-      "Duplicate shared dictionary flat-map value configuration for path "
-      "'features', key 42, and value subfield 'items[*].value'.");
+      builder.addProvidedFlatmapValueDictionary(
+          "features", /*key=*/42, external, "items[*].value"),
+      "Duplicate provided shared dictionary flat-map value configuration for "
+      "path 'features', key 42, and value subfield 'items[*].value'.");
+}
+
+TEST(SharedDictionaryConfigTest, builderRejectsColumnPaths) {
+  auto builder = SharedDictionaryEncodingConfig::builder();
+  NIMBLE_ASSERT_USER_THROW(
+      builder.addColumn(""),
+      "Shared dictionary column name must not be empty.");
+  NIMBLE_ASSERT_USER_THROW(
+      builder.addColumn("nested.value"),
+      "Shared dictionary column 'nested.value' must be a top-level writer "
+      "input column name, not a path.");
+  NIMBLE_ASSERT_USER_THROW(
+      builder.addColumn("features[*]"),
+      "Shared dictionary column 'features[*]' must be a top-level writer "
+      "input column name, not a path.");
+}
+
+TEST(SharedDictionaryConfigTest, builderRejectsWriterAssignedProvidedScopes) {
+  auto builder = SharedDictionaryEncodingConfig::builder();
+  NIMBLE_ASSERT_USER_THROW(
+      builder.addProvidedDictionary(
+          "value",
+          SharedDictionaryConfig{.scope = SharedDictionaryScope::Stripe}),
+      "Provided shared dictionary 'value' must use external scope, or file "
+      "scope with useExternalAlphabet.");
+  // File scope without a provided alphabet has no resolver key to carry.
+  NIMBLE_ASSERT_USER_THROW(
+      builder.addProvidedDictionary(
+          "value",
+          SharedDictionaryConfig{.scope = SharedDictionaryScope::File}),
+      "Provided shared dictionary 'value' must use external scope, or file "
+      "scope with useExternalAlphabet.");
+}
+
+TEST(SharedDictionaryConfigTest, builderRejectsExternalColumnScope) {
+  auto builder = SharedDictionaryEncodingConfig::builder();
+  NIMBLE_ASSERT_USER_THROW(
+      builder.addColumn("value", SharedDictionaryScope::External),
+      "Enabled column 'value' cannot use external scope");
 }
 
 TEST(SharedDictionaryConfigTest, builderRejectsInvalidPaths) {
@@ -226,15 +300,16 @@ TEST(SharedDictionaryConfigTest, builderRejectsInvalidPaths) {
     auto builder = SharedDictionaryEncodingConfig::builder();
     if (testCase.flatMap) {
       NIMBLE_ASSERT_USER_THROW(
-          builder.addFlatmapValueDictionary(
+          builder.addProvidedFlatmapValueDictionary(
               std::string{testCase.fieldPath},
               /*key=*/10,
-              SharedDictionaryConfig{}),
+              SharedDictionaryConfig{.scope = SharedDictionaryScope::External}),
           testCase.expectedMessage);
     } else {
       NIMBLE_ASSERT_USER_THROW(
-          builder.addColumnDictionary(
-              std::string{testCase.fieldPath}, SharedDictionaryConfig{}),
+          builder.addProvidedDictionary(
+              std::string{testCase.fieldPath},
+              SharedDictionaryConfig{.scope = SharedDictionaryScope::External}),
           testCase.expectedMessage);
     }
   }
@@ -275,10 +350,10 @@ TEST(SharedDictionaryConfigTest, builderRejectsInvalidValueSubfields) {
     SCOPED_TRACE(testCase.name);
     auto builder = SharedDictionaryEncodingConfig::builder();
     NIMBLE_ASSERT_USER_THROW(
-        builder.addFlatmapValueDictionary(
+        builder.addProvidedFlatmapValueDictionary(
             "features",
             /*key=*/10,
-            SharedDictionaryConfig{},
+            SharedDictionaryConfig{.scope = SharedDictionaryScope::External},
             std::string{testCase.valueSubfield}),
         testCase.expectedMessage);
   }

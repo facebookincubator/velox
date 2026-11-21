@@ -1191,14 +1191,16 @@ TEST_P(SelectiveNimbleReaderTest, sharedDictionaryStringColumn) {
         options.maxStreamChunkRawSize = 512;
         options.minStreamChunkRawSize = 1;
         test::configureSharedDictionarySelectionPolicy(options);
-        SharedDictionaryConfig dictionary{.scope = scope};
-        if (scope != SharedDictionaryScope::Stripe) {
-          dictionary.dictionaryId = 17;
+        auto builder = SharedDictionaryEncodingConfig::builder();
+        if (scope == SharedDictionaryScope::External) {
+          // An external dictionary is named by a caller-owned resolver key, so
+          // it stays configured per value stream.
+          builder.addProvidedDictionary(
+              "c0", SharedDictionaryConfig{.scope = scope, .dictionaryId = 17});
+        } else {
+          builder.addColumn("c0", scope);
         }
-        options.experimentalSharedDictionaryEncoding =
-            SharedDictionaryEncodingConfig::builder()
-                .addColumnDictionary("c0", std::move(dictionary))
-                .build();
+        options.experimentalSharedDictionaryEncoding = builder.build();
 
         const auto file = test::createNimbleFile(*rootPool(), input, options);
         auto scanSpec = std::make_shared<common::ScanSpec>("root");
