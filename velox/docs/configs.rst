@@ -200,10 +200,15 @@ Generic Configuration
    * - hash_probe_bloom_filter_pushdown_max_size
      - integer
      - 0
-     - The maximum byte size of Bloom filter that can be generated from hash
-       probe.  When set to 0, no Bloom filter will be generated.  To achieve
-       optimal performance, this should not be too larger than the CPU cache
-       size on the host.
+     - Maximum size in bytes of the Bloom filter that a hash join build
+       pushes down to the probe-side scan. 0 disables Bloom filters. A
+       build uses a Bloom filter when its keys have too many distinct
+       values for an exact filter. The filter takes about 1.2 bytes per
+       build-side row, so 16 MB covers builds of up to about 14 million
+       rows. Larger builds produce no Bloom filter. The scan tests every
+       row against the filter, so the filter should fit in the L3 cache
+       with room to spare. Half the L3 size works well, for example
+       16 MB on hosts with a 32 MB L3.
    * - bypass_hash_probe_bloom_filter_min_rows
      - integer
      - 0

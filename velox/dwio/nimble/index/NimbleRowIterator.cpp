@@ -119,8 +119,9 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
     co_return convert(std::move(rows), keyCursor);
   }
 
-  bool hasLoadedStripe(uint32_t stripeIndex) const override {
-    return stripeDecoder_ != nullptr && stripeDecoder_->hasStripe(stripeIndex);
+  const ProjectedStripe* loadedStripe(uint32_t stripeIndex) const override {
+    return hasLoadedStripe(stripeIndex) ? &stripeDecoder_->stripe.value()
+                                        : nullptr;
   }
 
   // Releases the stripe that the materializer holds and frees the output of
@@ -185,6 +186,11 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
     std::optional<ProjectedStripe> stripe;
     StreamReader streamReader;
   };
+
+  // Returns whether the decoder holds the stripe 'stripeIndex'.
+  bool hasLoadedStripe(uint32_t stripeIndex) const {
+    return stripeDecoder_ != nullptr && stripeDecoder_->hasStripe(stripeIndex);
+  }
 
   // Returns the decoder, which the first stripe builds.
   StripeDecoder& ensureStripeDecoder() {
@@ -391,11 +397,6 @@ class NimbleRowIterator final : public NimbleIterator {
   void seek(const velox::serializer::EncodedKeyBounds& bounds) override {
     resetState();
     setRowRange(cursor_->seek(bounds));
-  }
-
-  void seek(std::string encodedKey) override {
-    resetState();
-    setRowRange(cursor_->seek(std::move(encodedKey)));
   }
 
   void seekToFirst() override {
