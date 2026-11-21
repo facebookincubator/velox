@@ -2160,12 +2160,11 @@ TypePtr importFromArrow(const ArrowSchema& arrowSchema) {
   // For dictionaries, format encodes the index type, while the dictionary value
   // is encoded in the dictionary member, as per
   // https://arrow.apache.org/docs/format/CDataInterface.html#dictionary-encoded-arrays.
-
-  const char* format = arrowSchema.dictionary ? arrowSchema.dictionary->format
-                                              : arrowSchema.format;
-  ArrowSchema schema =
-      arrowSchema.dictionary ? *arrowSchema.dictionary : arrowSchema;
-  return importFromArrowImpl(format, schema);
+  // The dictionary values may be dictionary encoded too.
+  if (arrowSchema.dictionary) {
+    return importFromArrow(*arrowSchema.dictionary);
+  }
+  return importFromArrowImpl(arrowSchema.format, arrowSchema);
 }
 
 namespace {
@@ -2173,8 +2172,7 @@ namespace {
 enum class TimeUnit { kSecond, kMilli, kMicro, kNano };
 
 TimeUnit getTimeUnit(const ArrowSchema& arrowSchema) {
-  const char* format = arrowSchema.dictionary ? arrowSchema.dictionary->format
-                                              : arrowSchema.format;
+  const char* format = arrowSchema.format;
   VELOX_USER_CHECK_NOT_NULL(format);
   VELOX_USER_CHECK_GE(
       strlen(format),
@@ -2197,8 +2195,7 @@ TimeUnit getTimeUnit(const ArrowSchema& arrowSchema) {
 }
 
 TimestampUnit getTimestampUnit(const ArrowSchema& arrowSchema) {
-  const char* format = arrowSchema.dictionary ? arrowSchema.dictionary->format
-                                              : arrowSchema.format;
+  const char* format = arrowSchema.format;
   VELOX_USER_CHECK_NOT_NULL(format);
   VELOX_USER_CHECK_GE(
       strlen(format),
