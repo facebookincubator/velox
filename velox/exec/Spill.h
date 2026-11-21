@@ -433,10 +433,15 @@ class SpillPartitionIdLookup {
 /// vector.
 class SpillPartitionFunction {
  public:
+  /// 'scatterNullKeyRows': when true, rows with null join keys get rotating
+  /// partition assignments instead of hash-based ones (null keys hash to a
+  /// constant and would all land in one partition). Only legal for join types
+  /// where null keys can never match and carry no null-aware semantics.
   SpillPartitionFunction(
       const SpillPartitionIdLookup& lookup,
       const RowTypePtr& inputType,
-      const std::vector<column_index_t>& keyChannels);
+      const std::vector<column_index_t>& keyChannels,
+      bool scatterNullKeyRows = false);
 
   void partition(
       const RowVector& input,
@@ -444,6 +449,11 @@ class SpillPartitionFunction {
 
  private:
   const SpillPartitionIdLookup lookup_;
+
+  const bool scatterNullKeyRows_;
+
+  // Rotating sequence for scattering null-key rows.
+  uint64_t nullScatterSeq_{0};
 
   std::vector<std::unique_ptr<VectorHasher>> hashers_;
 
