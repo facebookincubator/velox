@@ -15,6 +15,7 @@ velox_add_library(
   velox_functions_string
   INTERFACE
   HEADERS
+  FullCaseMapping.h
   GreekFinalSigma.h
   StringCore.h
   StringImpl.h
