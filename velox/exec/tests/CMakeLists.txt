@@ -101,8 +101,9 @@ set(
   WindowFunctionRegistryTest.cpp
   StreamingEnforceDistinctTest.cpp
   HashBitRangeTest.cpp
-  # group4 (~575s): HashJoinTest ~575 + 9 lightweight
+  # group4 (~575s): HashJoinTest ~575 + 10 lightweight
   HashJoinTest.cpp
+  HashJoinWithCacheTest.cpp
   SpillTest.cpp
   WindowTest.cpp
   PrefixSortTest.cpp
