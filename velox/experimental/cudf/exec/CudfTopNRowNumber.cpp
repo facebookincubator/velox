@@ -44,9 +44,9 @@ cudf::table_view makePartitionKeys(
   if (!partitionKeyIndices.empty()) {
     return sortedView.select(partitionKeyIndices);
   }
-  auto zero = cudf::numeric_scalar<int8_t>(0, true, stream, mr);
-  singlePartitionCol =
-      cudf::make_column_from_scalar(zero, sortedView.num_rows(), stream, mr);
+  auto zero = cudf::numeric_scalar<int8_t>(0, true, stream, withTempMr(mr));
+  singlePartitionCol = cudf::make_column_from_scalar(
+      zero, sortedView.num_rows(), stream, withTempMr(mr));
   return cudf::table_view{{singlePartitionCol->view()}};
 }
 
@@ -73,7 +73,7 @@ std::unique_ptr<cudf::column> computeRanks(
         1,
         *rowNumberAggregation,
         stream,
-        mr);
+        withTempMr(mr));
   }
 
   auto sortingKeys = view.select(sortKeyIndices);
@@ -106,7 +106,7 @@ std::unique_ptr<cudf::column> computeRanks(
           cudf::order::ASCENDING,
           cudf::null_policy::INCLUDE,
           cudf::null_order::BEFORE));
-  auto result = grouper.scan(requests, stream, mr);
+  auto result = grouper.scan(requests, stream, withTempMr(mr));
   return std::move(result.second[0].results[0]);
 }
 
@@ -116,14 +116,15 @@ std::unique_ptr<cudf::column> makeLimitMask(
     int32_t limit,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
-  auto limitScalar = cudf::numeric_scalar<int64_t>(limit, true, stream, mr);
+  auto limitScalar =
+      cudf::numeric_scalar<int64_t>(limit, true, stream, withTempMr(mr));
   return cudf::binary_operation(
       ranks.view(),
       limitScalar,
       cudf::binary_operator::LESS_EQUAL,
       cudf::data_type(cudf::type_id::BOOL8),
       stream,
-      mr);
+      withTempMr(mr));
 }
 
 bool supportsRankKey(const TypePtr& type, bool sortingKey) {
@@ -234,14 +235,14 @@ CudfVectorPtr CudfTopNRowNumber::reduceBatchToLocalCandidates(
   auto inputView = cudfInput->getTableView();
   auto keyTable = inputView.select(allSortKeys_);
   auto indices = cudf::stable_sorted_order(
-      keyTable, allOrders_, allNullOrders_, stream, mr);
+      keyTable, allOrders_, allNullOrders_, stream, withTempMr(mr));
   auto sortedKeyTable = cudf::gather(
       keyTable,
       indices->view(),
       cudf::out_of_bounds_policy::DONT_CHECK,
       cudf::negative_index_policy::NOT_ALLOWED,
       stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      withTempMr(mr));
   auto ranks = computeRanks(
       sortedKeyTable->view(),
       localPartitionKeyIndices_,
@@ -255,7 +256,10 @@ CudfVectorPtr CudfTopNRowNumber::reduceBatchToLocalCandidates(
   // full payload, so batches with many rows per partition don't pay for
   // materializing rows that will be pruned immediately after.
   auto filteredIndicesTable = cudf::apply_retention_mask(
-      cudf::table_view{{indices->view()}}, mask->view(), stream, mr);
+      cudf::table_view{{indices->view()}},
+      mask->view(),
+      stream,
+      withTempMr(mr));
   auto filteredIndices = filteredIndicesTable->view().column(0);
 
   auto localCandidatesTable = cudf::gather(
@@ -264,7 +268,7 @@ CudfVectorPtr CudfTopNRowNumber::reduceBatchToLocalCandidates(
       cudf::out_of_bounds_policy::DONT_CHECK,
       cudf::negative_index_policy::NOT_ALLOWED,
       stream,
-      cudf::memory_resources{mr, get_temp_mr()});
+      withTempMr(mr));
   auto const size = localCandidatesTable->num_rows();
   return std::make_shared<CudfVector>(
       cudfInput->pool(),
@@ -286,7 +290,12 @@ CudfVectorPtr CudfTopNRowNumber::mergeAndPruneCandidates(
   std::vector<cudf::table_view> tableViews{
       previous->getTableView(), incoming->getTableView()};
   auto merged = cudf::merge(
-      tableViews, allSortKeys_, allOrders_, allNullOrders_, stream, mr);
+      tableViews,
+      allSortKeys_,
+      allOrders_,
+      allNullOrders_,
+      stream,
+      withTempMr(mr));
 
   // Ensure input-stream deallocations don't race with the merge kernel.
   streamsWaitForStream(*cudaEvent_, inputStreams, stream);
@@ -299,8 +308,8 @@ CudfVectorPtr CudfTopNRowNumber::mergeAndPruneCandidates(
       stream,
       mr);
   auto mask = makeLimitMask(*ranks, limit_, stream, mr);
-  auto pruned =
-      cudf::apply_retention_mask(merged->view(), mask->view(), stream, mr);
+  auto pruned = cudf::apply_retention_mask(
+      merged->view(), mask->view(), stream, withTempMr(mr));
 
   auto const size = pruned->num_rows();
   return std::make_shared<CudfVector>(
@@ -368,7 +377,7 @@ RowVectorPtr CudfTopNRowNumber::doGetOutput() {
   const auto rowNumberCudfType = cudf_velox::veloxToCudfDataType(
       outputType_->childAt(outputType_->size() - 1));
   if (ranks->type() != rowNumberCudfType) {
-    ranks = cudf::cast(*ranks, rowNumberCudfType, stream, mr);
+    ranks = cudf::cast(*ranks, rowNumberCudfType, stream, withTempMr(mr));
   }
 
   auto pool = candidates_->pool();

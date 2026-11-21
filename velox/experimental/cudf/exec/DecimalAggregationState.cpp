@@ -45,13 +45,13 @@ DecimalSumStateColumns reduceDecimal64SumCount(
       1,
       sumMaskState,
       stream,
-      mr);
+      withTempMr(mr));
   result.count = cudf::make_fixed_width_column(
       cudf::data_type{cudf::type_id::INT64},
       1,
       cudf::mask_state::UNALLOCATED,
       stream,
-      mr);
+      withTempMr(mr));
   detail::reduceDecimal64SumCount(
       input,
       result.sum->mutable_view(),
@@ -78,13 +78,13 @@ DecimalSumStateColumns deserializeDecimalSumState(
         0,
         cudf::mask_state::UNALLOCATED,
         stream,
-        mr);
+        withTempMr(mr));
     empty.count = cudf::make_fixed_width_column(
         cudf::data_type{cudf::type_id::INT64},
         0,
         cudf::mask_state::UNALLOCATED,
         stream,
-        mr);
+        withTempMr(mr));
     return empty;
   }
 
@@ -97,13 +97,13 @@ DecimalSumStateColumns deserializeDecimalSumState(
         numRows,
         cudf::mask_state::ALL_NULL,
         stream,
-        mr);
+        withTempMr(mr));
     allNull.count = cudf::make_fixed_width_column(
         cudf::data_type{cudf::type_id::INT64},
         numRows,
         cudf::mask_state::ALL_NULL,
         stream,
-        mr);
+        withTempMr(mr));
     return allNull;
   }
 
@@ -140,13 +140,13 @@ DecimalSumStateColumns deserializeDecimalSumState(
       numRows,
       cudf::mask_state::UNALLOCATED,
       stream,
-      mr);
+      withTempMr(mr));
   auto countCol = cudf::make_fixed_width_column(
       cudf::data_type{cudf::type_id::INT64},
       numRows,
       cudf::mask_state::UNALLOCATED,
       stream,
-      mr);
+      withTempMr(mr));
 
   auto sumView = sumCol->mutable_view();
   auto countView = countCol->mutable_view();
@@ -158,12 +158,10 @@ DecimalSumStateColumns deserializeDecimalSumState(
       alignof(int64_t));
 
   if (stateCol.nullable()) {
-    auto nullMask = cudf::copy_bitmask(
-        stateCol, stream, cudf::memory_resources{mr, get_temp_mr()});
+    auto nullMask = cudf::copy_bitmask(stateCol, stream, withTempMr(mr));
     auto nullCount = stateCol.null_count();
     sumCol->set_null_mask(std::move(nullMask), nullCount);
-    auto countMask = cudf::copy_bitmask(
-        stateCol, stream, cudf::memory_resources{mr, get_temp_mr()});
+    auto countMask = cudf::copy_bitmask(stateCol, stream, withTempMr(mr));
     countCol->set_null_mask(std::move(countMask), nullCount);
   }
 
@@ -220,7 +218,7 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
       numRows + 1,
       cudf::mask_state::UNALLOCATED,
       stream,
-      mr);
+      withTempMr(mr));
   auto offsetsView = offsetsCol->mutable_view();
 
   rmm::device_buffer charsBuf(
@@ -279,7 +277,11 @@ std::unique_ptr<cudf::column> computeDecimalAverage(
 
   auto numRows = sumCol.size();
   auto out = cudf::make_fixed_width_column(
-      sumCol.type(), numRows, cudf::mask_state::UNALLOCATED, stream, mr);
+      sumCol.type(),
+      numRows,
+      cudf::mask_state::UNALLOCATED,
+      stream,
+      withTempMr(mr));
 
   if (numRows > 0) {
     auto const rowCount = static_cast<int32_t>(numRows);

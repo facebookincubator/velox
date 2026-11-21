@@ -213,7 +213,7 @@ struct StateValidPredicate {
   }
 };
 
-std::pair<cuda::device_buffer<std::byte>, cudf::size_type>
+std::pair<cuda::device_buffer<cudf::bitmask_type>, cudf::size_type>
 buildStateValidityMaskImpl(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
@@ -223,16 +223,13 @@ buildStateValidityMaskImpl(
   if (numRows == 0) {
     return {
         cudf::create_null_mask(
-            0,
-            cudf::mask_state::UNALLOCATED,
-            stream,
-            cudf::memory_resources{mr, get_temp_mr()}),
+            0, cudf::mask_state::UNALLOCATED, stream, withTempMr(mr)),
         0};
   }
   auto sumDeviceView =
-      cudf::column_device_view::create(sumCol, stream, get_temp_mr());
+      cudf::column_device_view::create(sumCol, stream, tempMrs());
   auto countDeviceView =
-      cudf::column_device_view::create(countCol, stream, get_temp_mr());
+      cudf::column_device_view::create(countCol, stream, tempMrs());
   StateValidPredicate pred{*sumDeviceView, *countDeviceView};
   // Build a BOOL8 column of per-row validity, then convert via the public API.
   auto bools = cudf::make_fixed_width_column(
@@ -240,7 +237,7 @@ buildStateValidityMaskImpl(
       numRows,
       cudf::mask_state::UNALLOCATED,
       stream,
-      mr);
+      withTempMr(mr));
   auto iter = cuda::counting_iterator{0};
   thrust::transform(
       rmm::exec_policy(stream),
@@ -248,7 +245,8 @@ buildStateValidityMaskImpl(
       iter + numRows,
       bools->mutable_view().begin<bool>(),
       pred);
-  auto [mask, nullCount] = cudf::bools_to_mask(bools->view(), stream, mr);
+  auto [mask, nullCount] =
+      cudf::bools_to_mask(bools->view(), stream, withTempMr(mr));
   return {std::move(*mask), nullCount};
 }
 
@@ -423,7 +421,7 @@ bool unpackDecimalSumState(
   auto const numRows = stateCol.size();
   auto const n = static_cast<size_t>(numRows);
   auto stateDeviceView =
-      cudf::column_device_view::create(stateCol, stream, get_temp_mr());
+      cudf::column_device_view::create(stateCol, stream, tempMrs());
   int32_t initialInvalidState{0};
   rmm::device_scalar<int32_t> invalidState{
       initialInvalidState, stream, get_temp_mr()};
@@ -468,7 +466,7 @@ void packDecimalSumState(
           sumCol, counts, offsetsView, chars, numRows, stream});
 }
 
-std::pair<cuda::device_buffer<std::byte>, cudf::size_type>
+std::pair<cuda::device_buffer<cudf::bitmask_type>, cudf::size_type>
 buildStateValidityMask(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,

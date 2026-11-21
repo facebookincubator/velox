@@ -155,16 +155,23 @@ RowVectorPtr CudfGroupId::doGetOutput() {
     if (mapping[i] == kMissingGroupingKey) {
       // Create an all-null column for keys not in this grouping set
       auto nullScalar = cudf::make_default_constructed_scalar(
-          groupingKeyCudfTypes_[i], stream, tempMr);
-      outputColumns[i] =
-          cudf::make_column_from_scalar(*nullScalar, numRows, stream, outputMr);
+          groupingKeyCudfTypes_[i],
+          stream,
+          cudf::memory_resources{tempMr, tempMr});
+      outputColumns[i] = cudf::make_column_from_scalar(
+          *nullScalar,
+          numRows,
+          stream,
+          cudf::memory_resources{outputMr, tempMr});
     } else {
       auto inputIdx = mapping[i];
       if (isLastGroupingSet && inputColumnUsage[inputIdx] == 1) {
         outputColumns[i] = std::move(inputColumns_[inputIdx]);
       } else {
         outputColumns[i] = std::make_unique<cudf::column>(
-            *inputColumns_[inputIdx], stream, outputMr);
+            *inputColumns_[inputIdx],
+            stream,
+            cudf::memory_resources{outputMr, tempMr});
       }
       if (isLastGroupingSet) {
         VELOX_CHECK_GT(inputColumnUsage[inputIdx], 0);
@@ -189,7 +196,9 @@ RowVectorPtr CudfGroupId::doGetOutput() {
       outputColumns[outputIdx] = std::move(inputColumns_[inputIdx]);
     } else {
       outputColumns[outputIdx] = std::make_unique<cudf::column>(
-          *inputColumns_[inputIdx], stream, outputMr);
+          *inputColumns_[inputIdx],
+          stream,
+          cudf::memory_resources{outputMr, tempMr});
     }
     if (isLastGroupingSet) {
       VELOX_CHECK_GT(inputColumnUsage[inputIdx], 0);
@@ -199,9 +208,12 @@ RowVectorPtr CudfGroupId::doGetOutput() {
 
   // Add group_id column (constant BIGINT with current grouping set index)
   auto groupIdScalar = cudf::numeric_scalar<int64_t>(
-      static_cast<int64_t>(groupingSetIndex_), true, stream, tempMr);
-  outputColumns[outputType_->size() - 1] =
-      cudf::make_column_from_scalar(groupIdScalar, numRows, stream, outputMr);
+      static_cast<int64_t>(groupingSetIndex_),
+      true,
+      stream,
+      cudf::memory_resources{tempMr, tempMr});
+  outputColumns[outputType_->size() - 1] = cudf::make_column_from_scalar(
+      groupIdScalar, numRows, stream, cudf::memory_resources{outputMr, tempMr});
 
   // Build output table
   auto outputTable = std::make_unique<cudf::table>(std::move(outputColumns));

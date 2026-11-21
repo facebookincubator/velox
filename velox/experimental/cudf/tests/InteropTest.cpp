@@ -161,14 +161,14 @@ TEST_F(InteropTest, varbinaryLargeOffsets) {
       static_cast<cudf::size_type>(offsets.size()),
       rmm::device_buffer(
           offsets.data(), offsets.size() * sizeof(int64_t), stream, mr),
-      cuda::device_buffer<std::byte>(stream, mr, 0, cuda::no_init),
+      cuda::device_buffer<cudf::bitmask_type>(stream, mr, 0, cuda::no_init),
       0);
   auto stringsColumn = cudf::make_strings_column(
       static_cast<cudf::size_type>(values.size()),
       std::move(offsetsColumn),
       rmm::device_buffer(chars.data(), chars.size(), stream, mr),
       0,
-      cuda::device_buffer<std::byte>(stream, mr, 0, cuda::no_init));
+      cuda::device_buffer<cudf::bitmask_type>(stream, mr, 0, cuda::no_init));
   ASSERT_EQ(
       cudf::strings_column_view(stringsColumn->view()).offsets().type().id(),
       cudf::type_id::INT64);
