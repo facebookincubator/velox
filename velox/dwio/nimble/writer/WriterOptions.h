@@ -312,6 +312,8 @@ struct WriterOptions {
 
   /// When true, FOR-family payloads use the exact required bit width. When
   /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
+  /// FixedBitWidth chunks that take typed lanes (see fixedBitWidthTypedLanes)
+  /// use the byte-rounded width either way.
   bool fixedBitWidthUseExactBits{false};
 
   /// When true, integer dictionary alphabets are sorted by value. See
