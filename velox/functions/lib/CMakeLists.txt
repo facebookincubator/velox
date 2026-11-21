@@ -42,6 +42,7 @@ velox_link_libraries(velox_functions_lib_date_time_formatter velox_type_tz)
 
 velox_add_library(
   velox_functions_lib
+  ArrayContains.cpp
   ArrayShuffle.cpp
   ArraySort.cpp
   CheckDuplicateKeys.cpp
@@ -60,6 +61,7 @@ velox_add_library(
   Utf8Utils.cpp
   HEADERS
   ApproxMostFrequentStreamSummary.h
+  ArrayContains.h
   ArrayRemoveNullFunction.h
   ArrayShuffle.h
   ArraySort.h
