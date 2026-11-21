@@ -64,7 +64,7 @@ const config = {
         },
         items: [
           {
-            href: 'https://facebookincubator.github.io/velox/',
+            href: 'https://velox-lib.io/docs/',
             label: 'Docs',
             position: 'left',
           },
@@ -98,19 +98,19 @@ const config = {
             items: [
               {
                 label: 'Velox in 10 Minutes',
-                href: 'https://facebookincubator.github.io/velox/velox-in-10-min.html',
+                href: 'https://velox-lib.io/docs/velox-in-10-min.html',
               },
               {
                 label: 'Developer Guides',
-                href: 'https://facebookincubator.github.io/velox/develop.html',
+                href: 'https://velox-lib.io/docs/develop.html',
               },
               {
                 label: 'Presto Functions',
-                href: 'https://facebookincubator.github.io/velox/functions.html',
+                href: 'https://velox-lib.io/docs/functions.html',
               },
               {
                 label: 'Monthly Updates',
-                href: 'https://facebookincubator.github.io/velox/monthly-updates.html',
+                href: 'https://velox-lib.io/docs/monthly-updates.html',
               },
             ],
           },

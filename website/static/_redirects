@@ -1,0 +1,4 @@
+# Redirecting to /docs/ instead would loop, because Netlify matches /docs and
+# /docs/ alike. Relative links in the pages need a URL inside /docs/.
+/docs    /docs/index.html                                  301
+/docs/*  https://facebookincubator.github.io/velox/:splat  200
