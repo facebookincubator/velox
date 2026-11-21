@@ -28,6 +28,8 @@ TEST(ParquetReaderBenchmarkTest, basic) {
   run(5, "Varchar", VARCHAR(), 0, 0, 500, false);
   run(6, "Map", MAP(BIGINT(), BIGINT()), 100, 20, 500, false);
   run(7, "Array", ARRAY(BIGINT()), 100, 0, 500, false);
+  runIsNotNull(8, "BigInt", BIGINT(), 20, 500, true);
+  runIsNotNull(9, "Real", REAL(), 0, 500, false);
 }
 } // namespace
 } // namespace facebook::velox::parquet::test

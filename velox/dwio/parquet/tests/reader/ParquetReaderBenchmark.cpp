@@ -166,7 +166,8 @@ void ParquetReaderBenchmark::readSingleColumn(
     float startPct,
     float selectPct,
     uint8_t nullsRateX100,
-    uint32_t nextSize) {
+    uint32_t nextSize,
+    std::optional<velox::common::FilterKind> filterKind) {
   folly::BenchmarkSuspender suspender;
 
   auto rowType = ROW({columnName}, {type});
@@ -180,7 +181,10 @@ void ParquetReaderBenchmark::readSingleColumn(
   std::vector<FilterSpec> filterSpecs;
 
   // Filters on List and Map are not supported currently.
-  if (type->kind() != TypeKind::ARRAY && type->kind() != TypeKind::MAP) {
+  if (filterKind.has_value()) {
+    filterSpecs.emplace_back(
+        columnName, startPct, selectPct, *filterKind, false, false);
+  } else if (type->kind() != TypeKind::ARRAY && type->kind() != TypeKind::MAP) {
     filterSpecs.emplace_back(createFilterSpec(
         columnName, startPct, selectPct, rowType, false, false));
   }
@@ -228,7 +232,32 @@ void run(
       disableDictionary, rowType);
   BIGINT()->toString();
   benchmark.readSingleColumn(
-      columnName, type, 0, filterRateX100, nullsRateX100, nextSize);
+      columnName,
+      type,
+      0,
+      filterRateX100,
+      nullsRateX100,
+      nextSize,
+      std::nullopt);
+}
+
+void runIsNotNull(
+    uint32_t,
+    const std::string& columnName,
+    const TypePtr& type,
+    uint8_t nullsRateX100,
+    uint32_t nextSize,
+    bool disableDictionary) {
+  RowTypePtr rowType = ROW(columnName, type);
+  ParquetReaderBenchmark benchmark(disableDictionary, rowType);
+  benchmark.readSingleColumn(
+      columnName,
+      type,
+      0,
+      100,
+      nullsRateX100,
+      nextSize,
+      velox::common::FilterKind::kIsNotNull);
 }
 
 } // namespace facebook::velox::parquet::test
