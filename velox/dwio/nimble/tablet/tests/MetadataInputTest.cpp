@@ -40,6 +40,7 @@
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/File.h"
+#include "velox/common/file/FileIoContext.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/io/Options.h"
@@ -383,6 +384,65 @@ TEST_F(DirectMetadataInputTest, executorReadsAllButFirstGroup) {
   EXPECT_EQ(ioGroups[1].offset, section0.offset());
 }
 
+// Runs each task on a new thread and waits for it, so the task runs without
+// the caller's folly::RequestContext.
+class NewThreadExecutor final : public folly::Executor {
+ public:
+  void add(folly::Func func) override {
+    std::thread{std::move(func)}.join();
+  }
+};
+
+// Reads under a velox::ScopedFileIoContext pass the scope's context instead of
+// Options::fileIoContext, so only the scope's file options reach the storage
+// layer.
+TEST_F(DirectMetadataInputTest, readsUseScopedFileIoContext) {
+  // The gap between the sections exceeds the coalesce distance, so they form
+  // two IO groups and load() hands the second group to the executor.
+  const std::string data0 = "first";
+  const std::string data1 = "second";
+  const nimble::MetadataSection section0{
+      /*offset=*/0,
+      /*size=*/static_cast<uint32_t>(data0.size()),
+      nimble::CompressionType::Uncompressed,
+      /*uncompressedSize=*/static_cast<uint32_t>(data0.size()),
+  };
+  const nimble::MetadataSection section1{
+      /*offset=*/data0.size() + 100,
+      /*size=*/static_cast<uint32_t>(data1.size()),
+      nimble::CompressionType::Uncompressed,
+      /*uncompressedSize=*/static_cast<uint32_t>(data1.size()),
+  };
+  auto readFile = std::make_shared<nimble::testing::FileOptsRecordingReadFile>(
+      buildFileContent({section0, section1}, {data0, data1}));
+
+  // The executor reads the queued group on a thread without the scope's
+  // RequestContext, so only the context that load() resolves can carry it.
+  NewThreadExecutor executor;
+  auto options = makeMetadataInputOptions(/*maxCoalesceDistance=*/0);
+  options.executor = &executor;
+  options.fileIoContext.fileOpts = {{"input", "value"}};
+  auto input = nimble::MetadataInput::create(readFile.get(), options);
+
+  const folly::F14FastMap<std::string, std::string> scopeFileOpts{
+      {"scope", "value"}};
+  velox::FileIoContext scopeContext;
+  scopeContext.fileOpts = scopeFileOpts;
+  {
+    const velox::ScopedFileIoContext scope{scopeContext};
+    std::string raw(data0.size(), '\0');
+    input->readRaw(section0.offset(), raw.size(), raw.data());
+    EXPECT_EQ(raw, data0);
+    const auto results = input->load(std::array{section0, section1});
+    ASSERT_EQ(results.size(), 2);
+    EXPECT_EQ(results[0]->content(), data0);
+    EXPECT_EQ(results[1]->content(), data1);
+  }
+  const std::vector<folly::F14FastMap<std::string, std::string>> expected(
+      3, scopeFileOpts);
+  EXPECT_EQ(readFile->fileOpts(), expected);
+}
+
 TEST_F(DirectMetadataInputTest, ioStats) {
   constexpr uint64_t kInjectedDelayUs = 10'000;
   const std::string data = std::string(500, 'X');
@@ -678,7 +738,8 @@ using Read = std::vector<std::pair<uint64_t, uint64_t>>;
 // reports direct I/O and rejects unaligned reads. A direct-I/O read past the
 // end of the file then returns only the bytes before the end, as on Linux, and
 // leaves junk in the rest of its buffer. Without direct I/O, a read past the
-// end of the file fails. Runs an optional hook before each read.
+// end of the file fails. Runs an optional hook before each read, and records
+// the file options each read passes.
 class RecordingReadFile final : public velox::InMemoryReadFile {
  public:
   RecordingReadFile(std::string content, uint64_t alignment)
@@ -697,6 +758,7 @@ class RecordingReadFile final : public velox::InMemoryReadFile {
     if (beforeRead_) {
       beforeRead_();
     }
+    fileOpts_.wlock()->push_back(context.fileOpts);
     const auto start = offset;
     Read read;
     for (const auto& buffer : buffers) {
@@ -723,6 +785,7 @@ class RecordingReadFile final : public velox::InMemoryReadFile {
     if (beforeRead_) {
       beforeRead_();
     }
+    fileOpts_.wlock()->push_back(context.fileOpts);
     Read read;
     uint64_t bytesRead{0};
     for (size_t i = 0; i < regions.size(); ++i) {
@@ -771,6 +834,11 @@ class RecordingReadFile final : public velox::InMemoryReadFile {
     return *scatterDestinations_.rlock();
   }
 
+  // File options of each read, in the order read.
+  std::vector<folly::F14FastMap<std::string, std::string>> fileOpts() const {
+    return *fileOpts_.rlock();
+  }
+
   void setFailReads(bool failReads) {
     failReads_ = failReads;
   }
@@ -788,6 +856,9 @@ class RecordingReadFile final : public velox::InMemoryReadFile {
   mutable folly::Synchronized<std::vector<Read>> reads_;
   mutable folly::Synchronized<std::vector<Read>> scatterReads_;
   mutable folly::Synchronized<std::vector<const char*>> scatterDestinations_;
+  mutable folly::Synchronized<
+      std::vector<folly::F14FastMap<std::string, std::string>>>
+      fileOpts_;
 };
 
 // Delegates to another BlockCache and records the offset of each
@@ -1396,6 +1467,29 @@ TEST_F(CachedMetadataInputTest, readsPassFileIoContext) {
       std::vector<std::string>{std::string(200, 'a')});
   const std::vector<folly::F14FastMap<std::string, std::string>> expected{
       fileOpts,
+  };
+  EXPECT_EQ(file->fileOpts(), expected);
+}
+
+// Direct-I/O loads under a velox::ScopedFileIoContext pass the scope's context
+// instead of Options::fileIoContext.
+TEST_F(CachedMetadataInputTest, readsUseScopedFileIoContext) {
+  auto [file, sections] = makeFile({{0, "metadata"}}, kAlignment, kAlignment);
+  auto options = makeOptions(blockCache_);
+  options.fileIoContext.fileOpts = {{"input", "value"}};
+  auto input = MetadataInput::create(file.get(), options);
+
+  const folly::F14FastMap<std::string, std::string> scopeFileOpts{
+      {"scope", "value"}};
+  velox::FileIoContext scopeContext;
+  scopeContext.fileOpts = scopeFileOpts;
+  {
+    const velox::ScopedFileIoContext scope{scopeContext};
+    EXPECT_EQ(
+        contents(input->load(sections)), std::vector<std::string>{"metadata"});
+  }
+  const std::vector<folly::F14FastMap<std::string, std::string>> expected{
+      scopeFileOpts,
   };
   EXPECT_EQ(file->fileOpts(), expected);
 }
