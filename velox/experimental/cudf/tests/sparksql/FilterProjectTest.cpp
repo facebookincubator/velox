@@ -448,6 +448,26 @@ TEST_F(CudfFilterProjectTest, getReturnsNullForInvalidIndex) {
   assertExpressionMatchesCpu("get(c0, 3)", input, input->rowType());
 }
 
+// element_at over a constant map runs on the GPU as a lookup into the keys;
+// a missing or NULL key gives NULL.
+TEST_F(CudfFilterProjectTest, constantMapElementAt) {
+  auto input = makeRowVector(
+      {makeNullableFlatVector<std::string>({"a", "b", "z", std::nullopt})});
+
+  assertExpressionMatchesCpu(
+      "element_at(map('a', 1, 'b', 2), c0)", input, input->rowType());
+}
+
+// array_contains over a constant array runs on the GPU as a lookup into the
+// elements; a NULL probe gives NULL.
+TEST_F(CudfFilterProjectTest, constantArrayContains) {
+  auto input = makeRowVector(
+      {makeNullableFlatVector<std::string>({"a", "b", "z", std::nullopt})});
+
+  assertExpressionMatchesCpu(
+      "array_contains(array['a', 'b'], c0)", input, input->rowType());
+}
+
 TEST_F(CudfFilterProjectTest, getSupportsIntegralIndexTypes) {
   auto arrays = makeNullableArrayVector<int32_t>({
       {{1, 2, 3}},

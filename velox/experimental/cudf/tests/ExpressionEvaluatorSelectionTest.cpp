@@ -712,6 +712,63 @@ TEST_F(CudfExpressionSelectionTest, castAndTryCast) {
   ASSERT_FALSE(canExprRunOnGpu(badCast, queryCtx_.get(), pool_.get()));
 }
 
+// element_at and contains over a constant collection run on the GPU, except
+// in the unsupported forms below.
+TEST_F(CudfExpressionSelectionTest, constantLookupEligibility) {
+  const auto rowType = ROW(
+      {{"s", VARCHAR()},
+       {"d", DOUBLE()},
+       {"i", BIGINT()},
+       {"t", TIMESTAMP()},
+       {"m", MAP(VARCHAR(), BIGINT())},
+       {"arr", ARRAY(BIGINT())}});
+  const auto canRunOnGpu = [&](const std::string& sql) {
+    return canExprRunOnGpu(
+        optimizeTypedExpr(sql, rowType, queryCtx_.get(), execCtx_.get()),
+        queryCtx_.get(),
+        pool_.get());
+  };
+
+  EXPECT_TRUE(canRunOnGpu("element_at(map(array['a', 'b'], array[1, 2]), s)"));
+  EXPECT_TRUE(canRunOnGpu("contains(array[1, 5, 7], i)"));
+
+  // subscript raises on a missing key.
+  EXPECT_FALSE(canRunOnGpu("subscript(map(array['a', 'b'], array[1, 2]), s)"));
+  // REAL and DOUBLE keys and elements stay on the CPU conservatively.
+  EXPECT_FALSE(canRunOnGpu("element_at(map(array[1.5, 2.5], array[1, 2]), d)"));
+  EXPECT_FALSE(canRunOnGpu("contains(array[1.5, 2.5], d)"));
+  // contains gives NULL rather than false when a NULL element matches no row.
+  EXPECT_FALSE(canRunOnGpu("contains(array[1, null, 7], i)"));
+  // An empty array stays on the CPU too.
+  EXPECT_FALSE(canRunOnGpu("contains(array_constructor()::bigint[], i)"));
+  // So do collections that are not constant.
+  EXPECT_FALSE(canRunOnGpu("element_at(m, s)"));
+  EXPECT_FALSE(canRunOnGpu("contains(arr, i)"));
+  // So does a map with duplicate keys, which a cast from JSON can produce.
+  EXPECT_FALSE(canRunOnGpu(
+      "element_at(cast(json_parse('{\"1\": 1, \"01\": -1001}') as "
+      "map(bigint, bigint)), i)"));
+
+  // TIMESTAMP keys and elements stay distinct on the GPU only with
+  // nanoseconds.
+  const auto timestampMapLookup =
+      "element_at(map(array[TIMESTAMP '2025-01-01 00:00:00.000001', "
+      "TIMESTAMP '2025-01-01 00:00:00.000002'], array[1, 2]), t)";
+  const auto timestampArrayLookup =
+      "contains(array[TIMESTAMP '2025-01-01 00:00:00.000001'], t)";
+  auto& config = CudfConfig::getInstance();
+  const auto previousUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = previousUnit;
+  };
+  config.timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
+  EXPECT_TRUE(canRunOnGpu(timestampMapLookup));
+  EXPECT_TRUE(canRunOnGpu(timestampArrayLookup));
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MILLISECONDS;
+  EXPECT_FALSE(canRunOnGpu(timestampMapLookup));
+  EXPECT_FALSE(canRunOnGpu(timestampArrayLookup));
+}
+
 TEST_F(CudfExpressionSelectionTest, constantFoldingStringAllocatesOnCompile) {
   auto optimized = optimizeTypedExpr(
       "lower('ABCDEF')", rowType_, queryCtx_.get(), execCtx_.get());

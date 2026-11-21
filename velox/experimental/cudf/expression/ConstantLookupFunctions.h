@@ -1,0 +1,31 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include <string>
+
+namespace facebook::velox::cudf_velox {
+
+/// Registers 'name' as element_at over a non-empty constant map with a
+/// non-constant key. A missing or NULL key gives NULL.
+void registerConstantMapElementAtFunction(const std::string& name);
+
+/// Registers 'name' as contains over a non-empty constant array without NULL
+/// elements and a non-constant probe.
+void registerConstantArrayContainsFunction(const std::string& name);
+
+} // namespace facebook::velox::cudf_velox
