@@ -588,9 +588,6 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
         makeFlatVector<Timestamp>({Timestamp(1577836800, 0)}, TIMESTAMP_UTC()));
 
     // Timezone must not affect the result.
-    SCOPE_EXIT {
-      setTimezone("");
-    };
     setTimezone("America/Los_Angeles");
     testCast(
         makeFlatVector<int32_t>({18262}, DATE()),
@@ -608,9 +605,6 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
         makeFlatVector<int32_t>({0}, DATE()));
 
     // Kolkata (UTC+5:30) would shift -19800s to day 0; UTC gives day -1.
-    SCOPE_EXIT {
-      setTimezone("");
-    };
     setTimezone("Asia/Kolkata");
     testCast(
         makeFlatVector<Timestamp>({Timestamp(-19800, 0)}, TIMESTAMP_UTC()),
@@ -833,9 +827,6 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             TIMESTAMP_UTC()));
 
     // Session timezone does not affect TIMESTAMP_UTC.
-    SCOPE_EXIT {
-      setTimezone("");
-    };
     setTimezone("Asia/Shanghai");
     testCast(
         makeNullableFlatVector<std::string>(
@@ -2899,9 +2890,6 @@ TEST_F(SparkCastExprTestAnsiOff, timestampToTimestampUtc) {
 
   // America/Los_Angeles (PST = UTC-8): 2020-01-01 00:00:00 UTC
   // → local 2019-12-31 16:00:00 → stored as epoch 1577808000.
-  SCOPE_EXIT {
-    setTimezone("");
-  };
   setTimezone("America/Los_Angeles");
   testCast(
       makeFlatVector<Timestamp>({Timestamp(1'577'836'800, 0)}, TIMESTAMP()),
@@ -2917,9 +2905,6 @@ TEST_F(SparkCastExprTestAnsiOff, timestampToTimestampUtc) {
 }
 
 TEST_F(SparkCastExprTestAnsiOn, timestampToTimestampUtc) {
-  SCOPE_EXIT {
-    setTimezone("");
-  };
   setTimezone("America/Los_Angeles");
   testCast(
       makeFlatVector<Timestamp>({Timestamp(1'577'836'800, 0)}, TIMESTAMP()),
@@ -2941,9 +2926,6 @@ TEST_F(SparkCastExprTestAnsiOff, timestampUtcToTimestamp) {
 
   // America/Los_Angeles (PST = UTC-8): stored epoch 1577808000
   // → local 2019-12-31 16:00:00 → UTC 2020-01-01 00:00:00 = epoch 1577836800.
-  SCOPE_EXIT {
-    setTimezone("");
-  };
   setTimezone("America/Los_Angeles");
   testCast(
       makeFlatVector<Timestamp>({Timestamp(1'577'808'000, 0)}, TIMESTAMP_UTC()),
@@ -2958,9 +2940,6 @@ TEST_F(SparkCastExprTestAnsiOff, timestampUtcToTimestamp) {
 }
 
 TEST_F(SparkCastExprTestAnsiOn, timestampUtcToTimestamp) {
-  SCOPE_EXIT {
-    setTimezone("");
-  };
   setTimezone("America/Los_Angeles");
   testCast(
       makeFlatVector<Timestamp>({Timestamp(1'577'808'000, 0)}, TIMESTAMP_UTC()),
@@ -2973,9 +2952,6 @@ TEST_F(SparkCastExprTestAnsiOff, timestampUtcToTimestampDSTGap) {
   // 1941-12-25 in Hong Kong: clocks jumped from HKWT (UTC+8) to JST (UTC+9),
   // making midnight nonexistent. Spark adjusts to 00:30:00 JST, which is
   // 1941-12-24 15:30:00 UTC.
-  SCOPE_EXIT {
-    setTimezone("");
-  };
   setTimezone("Asia/Hong_Kong");
   testCast(
       makeFlatVector<Timestamp>({Timestamp(-884'217'600, 0)}, TIMESTAMP_UTC()),
@@ -2983,9 +2959,6 @@ TEST_F(SparkCastExprTestAnsiOff, timestampUtcToTimestampDSTGap) {
 }
 
 TEST_F(SparkCastExprTestAnsiOn, timestampUtcToTimestampDSTGap) {
-  SCOPE_EXIT {
-    setTimezone("");
-  };
   setTimezone("Asia/Hong_Kong");
   testCast(
       makeFlatVector<Timestamp>({Timestamp(-884'217'600, 0)}, TIMESTAMP_UTC()),
