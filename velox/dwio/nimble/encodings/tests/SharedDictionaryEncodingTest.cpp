@@ -336,7 +336,9 @@ TestSharedDictionaryWriter::Options writerOptions(
       .encodingSelectionPolicyCreator = testEncodingSelectionPolicyCreator(
           std::move(valueEncodingReadFactors)),
       .encodingOptions = Encoding::Options{},
-      .resolver = std::move(resolver)};
+      .resolver = std::move(resolver),
+      .alphabetCompressionOptions = std::nullopt,
+  };
 }
 
 class SharedDictionaryWriterPolicyEncodingTest

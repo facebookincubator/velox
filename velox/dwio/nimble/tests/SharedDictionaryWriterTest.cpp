@@ -157,7 +157,9 @@ TestSharedDictionaryWriter::Options writerOptions(
           std::move(valueEncodingReadFactors)),
       .encodingOptions =
           Encoding::Options{.useVarintRowCount = useVarintRowCount},
-      .resolver = std::move(resolver)};
+      .resolver = std::move(resolver),
+      .alphabetCompressionOptions = std::nullopt,
+  };
 }
 
 TestSharedDictionaryWriter createTestWriter(
