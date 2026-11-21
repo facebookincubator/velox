@@ -24,9 +24,11 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <random>
@@ -585,9 +587,11 @@ TEST(FixedBitWidthTypedLanesTest, thresholdBoundaries) {
       {1'000, 9, false, Layout::kNarrow16, Layout::kNarrow16},
       {1'000, 16, false, Layout::kNarrow16, Layout::kNarrow16},
       {1'000, 17, false, Layout::kNarrow32, Layout::kFullWidth},
-      // Exact width.
-      {1'000, 9, true, Layout::kPacked, Layout::kPacked},
-      {1'000, 15, true, Layout::kPacked, Layout::kPacked},
+      // Exact width: lanes are decided at the byte-rounded width, so 9 and 15
+      // bits take 16-bit lanes as without exact bits.
+      {1'000, 8, true, Layout::kPacked, Layout::kPacked},
+      {1'000, 9, true, Layout::kNarrow16, Layout::kNarrow16},
+      {1'000, 15, true, Layout::kNarrow16, Layout::kNarrow16},
       {1'000, 16, true, Layout::kNarrow16, Layout::kNarrow16},
       {1'000, 17, true, Layout::kNarrow32, Layout::kFullWidth},
   };
@@ -1238,6 +1242,317 @@ TEST(FixedBitWidthTypedLanesTest, offIsBitPacked) {
   expectPacked(uint16_t{}, 15);
   expectPacked(uint32_t{}, 31);
   expectPacked(int64_t{}, 63);
+}
+
+// With exact bits on, a chunk that takes typed lanes is stored exactly as
+// without exact bits: lanes are decided at the byte-rounded width. This closes
+// the 9-15-bit gap (now 16-bit lanes, or full-width lanes for 16-bit types)
+// and leaves 17-19-bit (32-bit) and 33-39-bit (64-bit) chunks as full-width
+// lanes.
+TEST(FixedBitWidthTypedLanesTest, exactBitsDoNotApplyToLaneChunks) {
+  const auto expectSameAsRounded = [](auto tag,
+                                      const std::vector<uint32_t>& widths,
+                                      auto expectedLayout) {
+    using T = decltype(tag);
+    for (const auto bits : widths) {
+      SCOPED_TRACE(fmt::format("sizeof {}, bits {}", sizeof(T), bits));
+      const auto values = spreadValues<T>(1'000, bits, 3);
+      const auto exact =
+          encode<T>(manualPolicy<T>(), values, lanesOn(256, true));
+      EXPECT_EQ(exact, encode<T>(manualPolicy<T>(), values, lanesOn(256)));
+      EXPECT_EQ(toString(layoutOf<T>(exact)), toString(expectedLayout(bits)));
+      EXPECT_EQ(decode<T>(exact), values);
+    }
+  };
+  const std::vector<uint32_t> narrow{9, 10, 11, 12, 13, 14, 15};
+  expectSameAsRounded(
+      uint16_t{}, narrow, [](uint32_t) { return Layout::kFullWidth; });
+  for (const auto& widths :
+       {narrow, std::vector<uint32_t>{16, 17, 18, 19, 24, 32}}) {
+    expectSameAsRounded(uint32_t{}, widths, [](uint32_t bits) {
+      return bits <= 16 ? Layout::kNarrow16 : Layout::kFullWidth;
+    });
+  }
+  for (const auto& widths :
+       {narrow, std::vector<uint32_t>{17, 31, 32, 33, 34, 37, 39, 40}}) {
+    expectSameAsRounded(int64_t{}, widths, [](uint32_t bits) {
+      return bits <= 16 ? Layout::kNarrow16
+          : bits <= 32  ? Layout::kNarrow32
+                        : Layout::kFullWidth;
+    });
+    expectSameAsRounded(uint64_t{}, widths, [](uint32_t bits) {
+      return bits <= 16 ? Layout::kNarrow16
+          : bits <= 32  ? Layout::kNarrow32
+                        : Layout::kFullWidth;
+    });
+  }
+}
+
+// With exact bits and lanes on, chunks that don't take lanes stay bit-packed at
+// the exact width, byte for byte as with lanes off: widths of 8 bits or less,
+// chunks below the floor, and a policy whose compressor takes no lanes (no
+// compression, Zstd or Lz4).
+TEST(FixedBitWidthTypedLanesTest, exactBitsStillApplyToBitPackedChunks) {
+  const auto expectExactPacked = [](auto tag,
+                                    uint32_t count,
+                                    uint32_t bits,
+                                    const auto& makePolicy) {
+    using T = decltype(tag);
+    SCOPED_TRACE(
+        fmt::format("sizeof {}, count {}, bits {}", sizeof(T), count, bits));
+    const auto values = spreadValues<T>(count, bits, 3);
+    const auto withLanes = encode<T>(
+        makePolicy.template operator()<T>(), values, lanesOn(256, true));
+    EXPECT_EQ(
+        withLanes,
+        encode<T>(makePolicy.template operator()<T>(), values, lanesOff(true)));
+    const auto chunk = readChunk<T>(withLanes);
+    ASSERT_EQ(chunk.encodingType, EncodingType::FixedBitWidth);
+    EXPECT_EQ(chunk.bitWidth, static_cast<int>(bits));
+    EXPECT_EQ(decode<T>(withLanes), values);
+  };
+  const auto compressing = []<typename T>() { return manualPolicy<T>(); };
+  auto uncompressedOptions = zstdOptions();
+  uncompressedOptions.compressionType = CompressionType::Uncompressed;
+  const auto uncompressed = [uncompressedOptions]<typename T>() {
+    return manualPolicy<T>(kFixedBitWidthOnly, uncompressedOptions);
+  };
+  const auto zstd = []<typename T>() {
+    return manualPolicy<T>(kFixedBitWidthOnly, zstdOptions());
+  };
+  const auto lz4 = []<typename T>() {
+    return manualPolicy<T>(kFixedBitWidthOnly, lz4Options());
+  };
+  for (const uint32_t bits : {1u, 5u, 8u}) {
+    expectExactPacked(uint32_t{}, 1'000, bits, compressing);
+    expectExactPacked(int64_t{}, 1'000, bits, compressing);
+  }
+  for (const uint32_t bits : {9u, 15u, 17u, 33u}) {
+    expectExactPacked(int64_t{}, 255, bits, compressing);
+    expectExactPacked(int64_t{}, 1'000, bits, uncompressed);
+    expectExactPacked(int64_t{}, 1'000, bits, zstd);
+    expectExactPacked(int64_t{}, 1'000, bits, lz4);
+  }
+  for (const uint32_t bits : {9u, 15u, 17u}) {
+    expectExactPacked(uint32_t{}, 255, bits, compressing);
+    expectExactPacked(uint32_t{}, 1'000, bits, uncompressed);
+    expectExactPacked(uint32_t{}, 1'000, bits, zstd);
+    expectExactPacked(uint32_t{}, 1'000, bits, lz4);
+  }
+}
+
+// FixedBitWidth's size estimate follows the same rule: a chunk that would take
+// lanes is priced at the byte-rounded width, every other chunk at the width
+// the options ask for.
+TEST(FixedBitWidthTypedLanesTest, estimateUsesRoundedWidthForLaneChunks) {
+  const auto estimate = [](auto tag,
+                           uint64_t rowCount,
+                           uint32_t bits,
+                           const Encoding::Options& options) {
+    using T = decltype(tag);
+    const uint64_t maxValue =
+        bits >= 64 ? ~uint64_t{0} : (uint64_t{1} << bits) - 1;
+    return FixedBitWidthEncoding<T>::estimateSize(
+        rowCount, 0, maxValue, options);
+  };
+  for (const uint32_t bits : {9u, 15u, 17u, 19u}) {
+    SCOPED_TRACE(fmt::format("bits {}", bits));
+    EXPECT_EQ(
+        estimate(uint32_t{}, 1'000, bits, lanesOn(256, true)),
+        estimate(uint32_t{}, 1'000, bits, lanesOn(256)));
+    EXPECT_LT(
+        estimate(uint32_t{}, 1'000, bits, lanesOff(true)),
+        estimate(uint32_t{}, 1'000, bits, lanesOn(256, true)));
+    // Below the floor: exact.
+    EXPECT_EQ(
+        estimate(uint32_t{}, 255, bits, lanesOn(256, true)),
+        estimate(uint32_t{}, 255, bits, lanesOff(true)));
+  }
+  for (const uint32_t bits : {33u, 39u}) {
+    SCOPED_TRACE(fmt::format("bits {}", bits));
+    EXPECT_EQ(
+        estimate(uint64_t{}, 1'000, bits, lanesOn(256, true)),
+        estimate(uint64_t{}, 1'000, bits, lanesOn(256)));
+  }
+  for (const uint32_t bits : {1u, 5u, 8u}) {
+    SCOPED_TRACE(fmt::format("bits {}", bits));
+    EXPECT_EQ(
+        estimate(uint32_t{}, 1'000, bits, lanesOn(256, true)),
+        estimate(uint32_t{}, 1'000, bits, lanesOff(true)));
+  }
+}
+
+// One case of the nested estimate tests: 'rows' values in runs of 4, every
+// other run (from the first) the common value, the minimum, and the others the
+// remaining 128 of 129 values spread over 'bits' bits in turn. 'encodingType'
+// is selected at the top, and its two nested streams are FixedBitWidth (the
+// is-common flags are SparseBool, whose indices are FixedBitWidth).
+// 'laneStreams' holds, for lanes on with exact bits, lanes off with exact bits,
+// and lanes on without them, how many of those two FixedBitWidth streams take
+// typed lanes. The three estimates are returned in 'estimates'.
+//
+// Each estimate is checked against the encoded size. Every payload here is
+// stored uncompressed, so the encoding is its estimate plus, for each
+// FixedBitWidth stream, the bytes stored past the priced width: FixedBitArray's
+// 7 bytes of slop for a bit-packed stream, which is stored at the priced width,
+// and the 8 bytes past the lanes of a lane stream, whose 16-bit lanes are its
+// byte-rounded width.
+template <typename T>
+void checkNestedEstimates(
+    EncodingType encodingType,
+    uint32_t bits,
+    const std::array<uint64_t, 3>& laneStreams,
+    uint32_t rows,
+    std::array<uint64_t, 3>& estimates) {
+  using PhysicalType = typename TypeTraits<T>::physicalType;
+  const auto spread = spreadValues<T>(129, bits);
+  std::vector<T> values(rows);
+  for (size_t i = 0; i < values.size(); ++i) {
+    const auto run = i / 4;
+    values[i] = run % 2 == 0 ? spread[0] : spread[(run / 2) % 128 + 1];
+  }
+  const auto physical = EncodingPhysicalType<T>::asEncodingPhysicalTypeSpan(
+      std::span<const T>{values});
+  const auto statistics = Statistics<PhysicalType>::create(physical);
+
+  // OpenZL reads the DataType, so integer chunks can take lanes, but it leaves
+  // every payload here uncompressed: each is below its minimum size.
+  auto compression = openzlOptions();
+  compression.openzlMinCompressionSize = uint64_t{1} << 30;
+  const ReadFactors top{{encodingType, 1.0f}};
+  const ReadFactors nested{
+      {EncodingType::FixedBitWidth, 1.0f}, {EncodingType::SparseBool, 1.0f}};
+  const uint64_t bitPackedSlop = FixedBitArray::bufferSize(0, 1);
+  const uint64_t lanePadding = FixedBitWidthTypedLanes::payloadSize(0, 16);
+
+  const std::array<Encoding::Options, 3> optionSets{
+      lanesOn(64, true), lanesOff(true), lanesOn(64)};
+  for (size_t i = 0; i < optionSets.size(); ++i) {
+    SCOPED_TRACE(fmt::format("option set {}", i));
+    const auto& options = optionSets[i];
+    const auto estimate = detail::EncodingSizeEstimation<T>::estimateSize(
+        encodingType, values.size(), statistics, options, nested);
+    ASSERT_TRUE(estimate.has_value());
+    estimates[i] = *estimate;
+
+    // Selection prices the candidate the same way.
+    ManualEncodingSelectionPolicy<T> policy{
+        top, compression, /*identifier=*/std::nullopt, nested};
+    const auto selected = policy.select(physical, statistics, options);
+    ASSERT_EQ(selected.encodingType, encodingType);
+    EXPECT_EQ(selected.estimatedSize, estimate);
+
+    const auto encoded =
+        encode<T>(manualPolicy<T>(top, compression, nested), values, options);
+    ASSERT_EQ(EncodingPrefix::encodingType(encoded), encodingType);
+    EXPECT_EQ(
+        encoded.size(),
+        *estimate + (2 - laneStreams[i]) * bitPackedSlop +
+            laneStreams[i] * lanePadding);
+    EXPECT_EQ(decode<T>(encoded), values);
+  }
+}
+
+// Integer Dictionary alphabets, RLE run values and MainlyConstant other values
+// and is-common indices are priced as they are stored: with exact bits and
+// lanes on, uint32 values over 13 bits and the 13-bit is-common indices take
+// 16-bit lanes and are priced at the byte-rounded width, while the dictionary
+// indices (8 bits) and the run lengths (0 bits) are bit-packed and keep the
+// exact width. Lane streams per option set are as in checkNestedEstimates().
+TEST(FixedBitWidthTypedLanesTest, nestedIntegerStreamsPricedAtRoundedWidth) {
+  for (const auto& [encodingType, laneStreams] :
+       std::vector<std::pair<EncodingType, std::array<uint64_t, 3>>>{
+           {EncodingType::Dictionary, {1, 0, 1}},
+           {EncodingType::RLE, {1, 0, 1}},
+           {EncodingType::MainlyConstant, {2, 0, 2}},
+       }) {
+    SCOPED_TRACE(toString(encodingType));
+    std::array<uint64_t, 3> estimates{};
+    checkNestedEstimates<uint32_t>(
+        encodingType, 13, laneStreams, 4'096, estimates);
+    // Values that take lanes are priced at the byte-rounded width.
+    EXPECT_LT(estimates[1], estimates[0]);
+  }
+}
+
+// Selection with Trivial at 0.5 and FixedBitWidth at 0.8: with exact bits, a
+// uint32 chunk needing 17 bits or a uint64 chunk needing 33 bits used to win
+// as FixedBitWidth and then be stored as full-width lanes. Priced at the
+// byte-rounded width, Trivial wins, as without exact bits. With lanes off, the
+// exact-width estimate and FixedBitWidth are kept.
+TEST(FixedBitWidthTypedLanesTest, exactBitsWideWindowsSelectTrivialUnderLanes) {
+  const ReadFactors trivialOrFixedBitWidth{
+      {EncodingType::Trivial, 0.5}, {EncodingType::FixedBitWidth, 0.8}};
+  auto uncompressedOptions = zstdOptions();
+  uncompressedOptions.compressionType = CompressionType::Uncompressed;
+  const auto selected = [&](auto tag,
+                            uint32_t bits,
+                            const Encoding::Options& options,
+                            std::optional<CompressionOptions> compression) {
+    using T = decltype(tag);
+    const auto values = spreadValues<T>(4'096, bits);
+    const auto encoded = encode<T>(
+        manualPolicy<T>(trivialOrFixedBitWidth, std::move(compression)),
+        values,
+        options);
+    EXPECT_EQ(decode<T>(encoded), values);
+    return EncodingPrefix::encodingType(encoded);
+  };
+  for (const auto& [name, run] : std::vector<std::pair<
+           std::string,
+           std::function<EncodingType(
+               const Encoding::Options&, std::optional<CompressionOptions>)>>>{
+           {"uint32 17 bits",
+            [&](const auto& options, const auto& compression) {
+              return selected(uint32_t{}, 17, options, compression);
+            }},
+           {"uint32 19 bits",
+            [&](const auto& options, const auto& compression) {
+              return selected(uint32_t{}, 19, options, compression);
+            }},
+           {"uint64 33 bits",
+            [&](const auto& options, const auto& compression) {
+              return selected(uint64_t{}, 33, options, compression);
+            }},
+           {"uint64 39 bits",
+            [&](const auto& options, const auto& compression) {
+              return selected(uint64_t{}, 39, options, compression);
+            }},
+       }) {
+    SCOPED_TRACE(name);
+    EXPECT_EQ(run(lanesOn(256, true), openzlOptions()), EncodingType::Trivial);
+    EXPECT_EQ(run(lanesOn(256), openzlOptions()), EncodingType::Trivial);
+    EXPECT_EQ(
+        run(lanesOff(true), openzlOptions()), EncodingType::FixedBitWidth);
+    for (const auto& noLanes :
+         {uncompressedOptions, zstdOptions(), lz4Options()}) {
+      SCOPED_TRACE(::facebook::nimble::toString(noLanes.compressionType));
+      // Without exact bits the estimate is byte-rounded, as with lanes off.
+      EXPECT_EQ(run(lanesOn(256), noLanes), EncodingType::Trivial);
+    }
+  }
+}
+
+// SubIntSplit sections set exact bits on and lanes off for themselves, so a
+// writer with exact bits and lanes on stores them as with lanes off.
+TEST(FixedBitWidthTypedLanesTest, subIntSplitSectionsUnchangedWithExactBits) {
+  std::vector<uint64_t> values(4'096);
+  for (size_t i = 0; i < values.size(); ++i) {
+    values[i] = (static_cast<uint64_t>(i % 7) << 40) | ((i * 7919) % 65'521);
+  }
+  PayloadLog log;
+  PayloadLog offLog;
+  EXPECT_EQ(
+      encode<uint64_t>(
+          forcedPolicy<uint64_t>(
+              EncodingType::SubIntSplit, EncodingType::FixedBitWidth, log),
+          values,
+          lanesOn(0, true)),
+      encode<uint64_t>(
+          forcedPolicy<uint64_t>(
+              EncodingType::SubIntSplit, EncodingType::FixedBitWidth, offLog),
+          values,
+          lanesOff(true)));
 }
 
 } // namespace

@@ -529,4 +529,7 @@ it encodes, so freshly selected, replayed (``encodingLayoutTree``, the
 selection cache, replay fallback), shared-dictionary and nested chunks all see
 them. ``FixedBitWidthEncoding::encode`` reads them. Producers that build their
 own ``Encoding::Options`` (tablet metadata, the cluster index, vectorized
-statistics) leave them off. SubIntSplit clears them for its sections.
+statistics) leave them off. SubIntSplit clears them for its sections. With
+``fixedBitWidthUseExactBits`` also on, a chunk that takes lanes uses the
+byte-rounded width, both in the lane decision and in FixedBitWidth's size
+estimate, which calls the encoder's lane decision.

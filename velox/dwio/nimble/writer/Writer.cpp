@@ -114,6 +114,12 @@ class WriterContext : public FieldWriterContext {
             this->options_.metricsLogger == nullptr
                 ? std::make_shared<MetricsLogger>()
                 : this->options_.metricsLogger} {
+    if (options_.fixedBitWidthUseExactBits &&
+        options_.fixedBitWidthTypedLanes) {
+      VLOG(1)
+          << "fixedBitWidthUseExactBits does not apply to FixedBitWidth "
+             "chunks that take typed lanes: they use the byte-rounded width.";
+    }
     inputBufferGrowthPolicy_ = this->options_.makeInputBufferGrowthPolicy();
     stringBufferGrowthPolicy_ = this->options_.makeStringBufferGrowthPolicy();
     ignoreTopLevelNulls_ = options_.ignoreTopLevelNulls;
