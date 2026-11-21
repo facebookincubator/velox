@@ -946,7 +946,7 @@ struct OffsetIndex {
   1: list<PageLocation> page_locations;
 
   /** Unencoded/uncompressed size for BYTE_ARRAY types. */
-  2: optional list<i64> unencoded_byte_array_data_bytes
+  2: optional list<i64> unencoded_byte_array_data_bytes;
 }
 
 /**
