@@ -47,7 +47,8 @@ class FixedBitWidthEncodingView final : public TypedEncodingView<T> {
         bitWidth_,
         8 * sizeof(physicalType),
         "FixedBitWidth bit width exceeds its data type.");
-    // Match FixedBitWidthEncoding: the packed payload has no scalar data type.
+    // Compressed frames are self-describing, so bit-packed and typed-lane
+    // payloads both decompress correctly with DataType::Undefined.
     const auto payload = this->decompressPayload(
         compressionType, DataType::Undefined, {pos, this->remainingBytes(pos)});
     NIMBLE_CHECK_FILE_GE(
