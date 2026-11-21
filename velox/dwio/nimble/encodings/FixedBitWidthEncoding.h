@@ -92,8 +92,9 @@ struct FixedBitWidthTypedLanes {
 //   the type width: a bit width of 16 (values of up to 16 bits) or 32, the
 //   minimum as baseline, compressed as Uint16 or Uint32.
 // - Full-width lanes, for every other eligible chunk (including every eligible
-//   16-bit chunk): the type's bit width and the minimum as baseline,
-//   compressed as the stream's DataType, the label TrivialEncoding uses.
+//   16-bit chunk): the type's bit width and a baseline of 0, so the payload is
+//   the raw values followed by 8 zero bytes, compressed as the stream's
+//   DataType, as TrivialEncoding compresses its values.
 // The padding keeps typed compressors on whole lanes: Managed Compression's
 // typed graphs take only whole lanes, and in OpenZL's permissive mode, its
 // default, a rejected size is stored as zstd without an error. It also covers
@@ -445,7 +446,15 @@ std::string_view FixedBitWidthEncoding<T>::encode(
       "Unexpected typed lane width: {}",
       laneBits);
   const int bitsRequired = laneBits > 0 ? laneBits : storedBitsRequired;
-  const physicalType baseline = selection.statistics().min();
+
+  // Only full-width typed lanes store raw values (baseline 0): rebasing can't
+  // narrow them. laneBits is 0 unless the chunk takes typed lanes, which needs
+  // fixedBitWidthTypedLanes, so with the option off every chunk is rebased on
+  // its minimum, as before.
+  // TODO: Skip the rebase for other chunks too where it can't narrow the bit
+  // width. That's a separate optimization, behind its own option.
+  const physicalType baseline =
+      fullWidthLanes ? physicalType{0} : selection.statistics().min();
   const uint32_t fixedBitArraySize = laneBits > 0
       ? FixedBitWidthTypedLanes::payloadSize(rowCount, laneBits)
       : FixedBitArray::bufferSize(values.size(), bitsRequired);
