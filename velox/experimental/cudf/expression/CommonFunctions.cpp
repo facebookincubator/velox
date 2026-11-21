@@ -67,7 +67,16 @@ void registerArrayAccessFunction(
           const core::QueryConfig&) {
         return makeArrayAccessFunction(expr, policy, pool);
       },
-      signatures);
+      signatures,
+      /*overwrite=*/true,
+      /*canEvaluate=*/nullptr,
+      // An index of 0 where indices start at 1, or a negative or out-of-bounds
+      // index the policy does not map to NULL.
+      [policy](const core::TypedExprPtr& /*expr*/) {
+        return policy.indexStartsAtOne ||
+            (!policy.allowNegativeIndices && !policy.nullOnNegativeIndices) ||
+            !policy.allowOutOfBound;
+      });
 }
 
 } // namespace facebook::velox::cudf_velox

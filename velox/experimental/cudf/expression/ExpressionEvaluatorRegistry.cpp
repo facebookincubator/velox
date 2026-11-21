@@ -74,6 +74,17 @@ void ensureBuiltinExpressionEvaluatorsRegistered() {
       },
       /*overwrite=*/false);
 
+  // Above the function evaluator, which would evaluate every operand over every
+  // row. The AST and JIT evaluators turn down the calls this one takes.
+  const int kSpecialFormPriority = 60;
+
+  registerCudfExpressionEvaluator(
+      "specialForm",
+      kSpecialFormPriority,
+      canEvaluateSpecialForm,
+      createSpecialFormExpression,
+      /*overwrite=*/false);
+
   registeredBuiltins = true;
 }
 

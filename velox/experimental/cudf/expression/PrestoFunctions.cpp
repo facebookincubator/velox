@@ -361,7 +361,11 @@ void registerPrestoFunctions(const std::string& prefix) {
            .returnType("date")
            .argumentType("date")
            .argumentType("interval day to second")
-           .build()});
+           .build()},
+      /*overwrite=*/true,
+      /*canEvaluate=*/nullptr,
+      // An interval that is not a whole number of days.
+      alwaysFailsOnInvalidRow);
 
   registerCudfFunction(
       prefix + "date_add",
@@ -380,7 +384,9 @@ void registerPrestoFunctions(const std::string& prefix) {
       true,
       [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
         return prestosql::DateAddFunction::canEvaluate(expr);
-      });
+      },
+      // A value outside INTEGER.
+      alwaysFailsOnInvalidRow);
 
   registerCudfFunction(
       prefix + "date_trunc",
@@ -420,7 +426,9 @@ void registerPrestoFunctions(const std::string& prefix) {
       true,
       [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
         return prestosql::FromUnixtimeFunction::canEvaluate(expr);
-      });
+      },
+      // Seconds past the range of the cuDF timestamp unit.
+      alwaysFailsOnInvalidRow);
 
   registerCudfFunction(
       prefix + "to_unixtime",
