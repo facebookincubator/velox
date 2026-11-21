@@ -58,6 +58,10 @@ struct WriterOptions {
         .blockBitPackingBlockSize = blockBitPackingBlockSize,
         .fixedBitWidthUseExactBits = fixedBitWidthUseExactBits,
         .sortDictionaryAlphabet = sortDictionaryAlphabet,
+        .fixedBitWidthTypedLanes = fixedBitWidthTypedLanes,
+        .fixedBitWidthTypedLanesMinValues = fixedBitWidthTypedLanesMinValues,
+        .fixedBitWidthTypedLanesOpenzlLevel =
+            fixedBitWidthTypedLanesOpenzlLevel,
         .subIntSplitDeltaPreTransform =
             FLAGS_nimble_subintsplit_delta_pretransform,
         .reversedMinDescendingRatio = reversedMinDescendingRatio,
@@ -310,6 +314,8 @@ struct WriterOptions {
 
   /// When true, FOR-family payloads use the exact required bit width. When
   /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
+  /// FixedBitWidth chunks that take typed lanes (see fixedBitWidthTypedLanes)
+  /// use the byte-rounded width either way.
   bool fixedBitWidthUseExactBits{false};
 
   /// When true, integer dictionary alphabets are sorted by value. See
@@ -317,6 +323,24 @@ struct WriterOptions {
   /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
   /// without consulting the Nimble team (oncall: dwios).
   bool sortDictionaryAlphabet{false};
+
+  /// Stores eligible FixedBitWidth chunks as typed lanes (see
+  /// Encoding::Options::fixedBitWidthTypedLanes). Applies to every chunk the
+  /// writer encodes as FixedBitWidth: freshly selected, replayed from
+  /// encodingLayoutTree or the selection cache, and nested. Off by default.
+  bool fixedBitWidthTypedLanes{false};
+
+  /// Minimum number of values in a chunk for fixedBitWidthTypedLanes.
+  uint64_t fixedBitWidthTypedLanesMinValues{256};
+
+  /// MetaInternal compression level for FixedBitWidth chunks that take typed
+  /// lanes (see Encoding::Options::fixedBitWidthTypedLanesOpenzlLevel). Like
+  /// the typed lanes, it reaches every chunk the writer encodes through
+  /// buildEncodingOptions(), whatever encodingSelectionPolicyCreator was built
+  /// from: fresh, replayed, shared-dictionary and nested chunks alike. It must
+  /// be in [1, 9] and requires compressionOptions.compressionType to be
+  /// MetaInternal; the writer rejects anything else. Unset by default.
+  std::optional<int32_t> fixedBitWidthTypedLanesOpenzlLevel{};
 
   /// FSST is kept only when its final encoded size is at most this fraction of
   /// the original string bytes.

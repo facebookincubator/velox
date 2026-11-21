@@ -495,6 +495,20 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
     "nimble.dictionary.sort_alphabet",
     false);
 
+/* static */ Config::Entry<bool> Config::FIXED_BIT_WIDTH_TYPED_LANES(
+    "nimble.fixedbitwidth.typed_lanes",
+    false);
+
+/* static */ Config::Entry<uint64_t>
+    Config::FIXED_BIT_WIDTH_TYPED_LANES_MIN_VALUES(
+        "nimble.fixedbitwidth.typed_lanes_min_values",
+        256);
+
+/* static */ Config::Entry<uint32_t>
+    Config::FIXED_BIT_WIDTH_TYPED_LANES_OPENZL_LEVEL_OVERRIDE(
+        "nimble.fixedbitwidth.typed_lanes_openzl_level",
+        0);
+
 /* static */ Config::Entry<bool> Config::SKIP_CONSTANT_FLATMAP_IN_MAP_STREAMS(
     "nimble.flatmap.skip_constant_in_map_streams",
     false);
