@@ -17,6 +17,7 @@
 #include "velox/dwio/nimble/index/ClusterIndexBase.h"
 
 #include <algorithm>
+#include <cstring>
 #include <numeric>
 #include <shared_mutex>
 
@@ -938,6 +939,28 @@ ClusterIndexBase::Layout ClusterIndexBase::layout(bool detail) const {
 // ClusterIndexBase::DecodedChunk
 // ---------------------------------------------------------------------------
 
+namespace {
+
+// Decodes a copy of the bytes of 'keyChunk' in a buffer from 'pool', so that a
+// cached chunk holds only the bytes of the chunk instead of the caller's whole
+// load, and never reads bytes that the caller frees.
+std::shared_ptr<DecodedKeyChunk> decodeKeyChunkCopy(
+    const IndexLookup::KeyChunk& keyChunk,
+    const KeyReaderFactory& readerFactory,
+    velox::memory::MemoryPool* pool) {
+  auto copy = velox::AlignedBuffer::allocate<char>(keyChunk.data.size(), pool);
+  std::memcpy(
+      copy->asMutable<char>(), keyChunk.data.data(), keyChunk.data.size());
+  const std::string_view chunk{copy->as<char>(), copy->size()};
+  return decodeKeyChunk(
+      chunk,
+      std::make_shared<velox::BufferPtr>(std::move(copy)),
+      readerFactory,
+      pool);
+}
+
+} // namespace
+
 ClusterIndexBase::DecodedChunk ClusterIndexBase::getDecodedChunk(
     const IndexPartitionBase* partition,
     const ChunkLocation& chunkLocation,
@@ -967,7 +990,7 @@ ClusterIndexBase::DecodedChunk ClusterIndexBase::getDecodedChunk(
         chunkLocation.chunkSize,
         "The given key chunk of stripe {} is not the key stream of the stripe",
         keyChunk->stripe);
-    decodedChunk.data = decodeKeyChunk(*keyChunk, keyReaderFactory_, pool_);
+    decodedChunk.data = decodeKeyChunkCopy(*keyChunk, keyReaderFactory_, pool_);
   } else {
     auto [chunk, handle] =
         dataInput_->read(loadedPartition.chunkStreamRegion(chunkLocation));
@@ -978,13 +1001,6 @@ ClusterIndexBase::DecodedChunk ClusterIndexBase::getDecodedChunk(
   velox::common::testutil::TestValue::adjust(
       "facebook::nimble::index::ClusterIndexBase::getDecodedChunk",
       decodedChunk.data.get());
-
-  // A chunk decoded from the caller's bytes stays out of the cache. Its handle
-  // would keep the caller's whole load alive there, and a chunk without one
-  // reads keys from bytes that the caller may free once the call returns.
-  if (fromKeyChunk) {
-    return decodedChunk;
-  }
 
   // Install under exclusive lock. Another thread may have filled the slot
   // while we were decoding — that's fine, both produce the same result.

@@ -1682,7 +1682,9 @@ TEST_F(ClusterIndexTest, keyCursorHoldsKeyChunks) {
 
 // A seek given the key chunk of the stripe of its lower bound resolves the
 // bound in it, and reads the key chunk of any other stripe through the index.
-// Its key cursor reads its keys the same way.
+// Its key cursor reads its keys the same way. The index caches the given chunk
+// from a copy of its bytes, so later seeks in the stripe reuse it without
+// holding the caller's bytes.
 TEST_F(ClusterIndexTest, seekWithKeyChunks) {
   const auto stripeKeys = fourStripeKeys();
   const auto keyStreams = writeStripeKeyStreams(stripeKeys);
@@ -1703,6 +1705,19 @@ TEST_F(ClusterIndexTest, seekWithKeyChunks) {
       /*pinIndex=*/false,
       /*preloadIndex=*/false);
 
+  // The bytes given for a stripe must be its key stream, neither short of it
+  // nor with more, such as its stream trailer. A miss checks them, so this runs
+  // before a seek caches the chunk.
+  const auto& keyStream = secondStripeChunk.data;
+  for (const auto size : {keyStream.size() - 1, keyStream.size() + 1}) {
+    SCOPED_TRACE(fmt::format("size {} of {}", size, keyStream.size()));
+    auto badKeyChunk = secondStripeChunk;
+    badKeyChunk.data = std::string_view(keyStream.data(), size);
+    NIMBLE_ASSERT_THROW(
+        fillerIndex->seek(makeKeyBounds("k06"), badKeyChunk),
+        "The given key chunk of stripe 1 is not the key stream of the stripe");
+  }
+
   // Both bounds of key k06 are in the second stripe, whose key chunk is given.
   {
     auto result = fillerIndex->seek(makeKeyBounds("k06"), secondStripeChunk);
@@ -1712,16 +1727,16 @@ TEST_F(ClusterIndexTest, seekWithKeyChunks) {
     EXPECT_FALSE(result.keyCursor->hasNext());
   }
 
-  // The bytes given for a stripe must be its key stream, neither short of it
-  // nor with more, such as its stream trailer.
-  const auto& keyStream = secondStripeChunk.data;
-  for (const auto size : {keyStream.size() - 1, keyStream.size() + 1}) {
-    SCOPED_TRACE(fmt::format("size {} of {}", size, keyStream.size()));
-    auto badKeyChunk = secondStripeChunk;
-    badKeyChunk.data = std::string_view(keyStream.data(), size);
-    NIMBLE_ASSERT_THROW(
-        fillerIndex->seek(makeKeyBounds("k06"), badKeyChunk),
-        "The given key chunk of stripe 1 is not the key stream of the stripe");
+  // The cached chunk holds a copy of the given bytes, so only the caller and
+  // 'secondStripeChunk' hold 'keyFile', and a seek in the stripe without the
+  // key chunk decodes nothing from the filler bytes of the file. Both bounds
+  // of key k05 are in the second stripe.
+  EXPECT_EQ(keyFile.use_count(), 2);
+  {
+    auto result = fillerIndex->seek(makeKeyBounds("k05"));
+    EXPECT_EQ(result.rows, RowRange(5, 6));
+    ASSERT_NE(result.keyCursor, nullptr);
+    EXPECT_EQ(result.keyCursor->next(), "k05");
   }
 
   // The upper bound of k06 to k10 is in the third stripe, whose key chunk the
