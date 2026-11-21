@@ -171,8 +171,11 @@ class VectorizedFileStats {
   Options options_;
   std::set<StatType> statTypes_;
   std::map<StatStreamType, std::unique_ptr<VectorizedStatistic>> statStreams_;
+
+  // Encodes stat streams using metadata defaults.
   EncodingSelectionPolicyCreator encodingSelectionPolicyCreator_ =
-      [encodingFactory = ManualEncodingSelectionPolicyFactory{}](
+      [encodingFactory =
+           ManualEncodingSelectionPolicyFactory::createForMetadata()](
           DataType dataType) -> std::unique_ptr<EncodingSelectionPolicyBase> {
     return encodingFactory.createPolicy(dataType);
   };

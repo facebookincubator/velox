@@ -14,11 +14,20 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <set>
+#include <string>
+#include <string_view>
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/FixedBitArray.h"
 #include "velox/dwio/nimble/common/SchemaUtils.h"
+#include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/stats/ColumnStatistics.h"
 #include "velox/dwio/nimble/stats/VectorizedStatistics.h"
 #include "velox/type/Type.h"
@@ -704,6 +713,193 @@ TEST_F(VectorizedFileStatsTests, stringStatsLengthLimitDropsLongMinMax) {
   auto* actualOverLimitStat = roundTrippedStats[2]->as<StringStatistics>();
   ASSERT_NE(actualOverLimitStat, nullptr);
   expectStringStatisticsEqual(expectedOverLimitStat, *actualOverLimitStat);
+}
+
+namespace {
+
+// Splits the output of VectorizedFileStats::serialize() into stat streams.
+std::vector<std::string_view> splitStatStreams(std::string_view serialized) {
+  const char* pos = serialized.data();
+  // Skips the version.
+  pos += sizeof(uint16_t);
+  const auto numStreams = encoding::read<uint8_t>(pos);
+  const auto typeBitWidth = encoding::read<uint8_t>(pos);
+  // Skips the stream types and the flag for encoded lengths.
+  pos += FixedBitArray::bufferSize(numStreams, typeBitWidth) + sizeof(uint8_t);
+  std::vector<uint64_t> lengths;
+  lengths.reserve(numStreams);
+  for (uint8_t i = 0; i < numStreams; ++i) {
+    lengths.push_back(encoding::readUint64(pos));
+  }
+  std::vector<std::string_view> streams;
+  streams.reserve(numStreams);
+  for (const auto length : lengths) {
+    streams.emplace_back(pos, length);
+    pos += length;
+  }
+  return streams;
+}
+
+// Encoding and compression types found in stat streams.
+struct StatStreamEncodings {
+  std::set<EncodingType> encodingTypes;
+  std::set<CompressionType> compressionTypes;
+};
+
+// Adds the types used by 'layout' and its nested encodings to 'encodings'.
+void collectEncodings(
+    const EncodingLayout& layout,
+    StatStreamEncodings& encodings) {
+  encodings.encodingTypes.insert(layout.encodingType());
+  encodings.compressionTypes.insert(layout.compressionType());
+  for (uint8_t i = 0; i < layout.childrenCount(); ++i) {
+    const auto& child = layout.child(i);
+    if (child.has_value()) {
+      collectEncodings(*child, encodings);
+    }
+  }
+}
+
+// Adds the types used by Nullable 'stream' to 'encodings'. Captures each child
+// separately, since EncodingLayoutCapture keeps only the value child.
+void collectStatStreamEncodings(
+    std::string_view stream,
+    StatStreamEncodings& encodings) {
+  encodings.encodingTypes.insert(EncodingPrefix::encodingType(stream));
+  const char* pos =
+      stream.data() + EncodingPrefix::prefixSize(stream, /*useVarint=*/false);
+  const auto valuesSize = encoding::readUint32(pos);
+  const std::string_view values{pos, valuesSize};
+  const std::string_view nullFlags{
+      pos + valuesSize,
+      static_cast<size_t>(stream.data() + stream.size() - pos - valuesSize)};
+  for (const auto child : {values, nullFlags}) {
+    collectEncodings(
+        EncodingLayoutCapture::capture(child, Encoding::Options{}), encodings);
+  }
+}
+
+} // namespace
+
+// Writes wide stats using metadata defaults and reads them back. Column-data
+// defaults would compress these streams, encode the sizes, which span many
+// orders of magnitude, as Varint, and the mostly-zero null counts as RLE.
+TEST_F(VectorizedFileStatsTests, serializeUsesMetadataDefaults) {
+  // Cycles integral, floating point and string columns. Every 7th has no
+  // bounds.
+  constexpr int kNumColumns = 999;
+  std::vector<std::string> names;
+  std::vector<velox::TypePtr> types;
+  std::vector<std::unique_ptr<ColumnStatistics>> ownedStats;
+  ownedStats.push_back(
+      std::make_unique<ColumnStatistics>(
+          10'000, 0, uint64_t{1} << 45, uint64_t{1} << 44));
+  for (int i = 0; i < kNumColumns; ++i) {
+    names.push_back("c" + std::to_string(i));
+    const uint64_t valueCount = 10'000 + i;
+    const uint64_t nullCount = i % 50 == 0 ? i : 0;
+    const uint64_t logicalSize = (uint64_t{1} << (i % 40)) + i;
+    const uint64_t physicalSize = logicalSize / 2;
+    const bool hasBounds = i % 7 != 0;
+    switch (i % 3) {
+      case 0:
+        types.push_back(velox::BIGINT());
+        ownedStats.push_back(
+            std::make_unique<IntegralStatistics>(
+                valueCount,
+                nullCount,
+                logicalSize,
+                physicalSize,
+                hasBounds ? std::optional<int64_t>{-i} : std::nullopt,
+                hasBounds ? std::optional<int64_t>{i} : std::nullopt));
+        break;
+      case 1:
+        types.push_back(velox::DOUBLE());
+        ownedStats.push_back(
+            std::make_unique<FloatingPointStatistics>(
+                valueCount,
+                nullCount,
+                logicalSize,
+                physicalSize,
+                hasBounds ? std::optional<double>{-0.5 * i} : std::nullopt,
+                hasBounds ? std::optional<double>{0.5 * i} : std::nullopt));
+        break;
+      default:
+        types.push_back(velox::VARCHAR());
+        ownedStats.push_back(
+            std::make_unique<StringStatistics>(
+                valueCount,
+                nullCount,
+                logicalSize,
+                physicalSize,
+                hasBounds ? std::optional<
+                                std::string>{"min_value_" + std::to_string(i)}
+                          : std::nullopt,
+                hasBounds ? std::optional<
+                                std::string>{"max_value_" + std::to_string(i)}
+                          : std::nullopt));
+    }
+  }
+  const auto schema = velox::ROW(std::move(names), std::move(types));
+  std::vector<ColumnStatistics*> columnStats;
+  columnStats.reserve(ownedStats.size());
+  for (const auto& stat : ownedStats) {
+    columnStats.push_back(stat.get());
+  }
+
+  VectorizedFileStats fileStats(columnStats, leafPool_.get());
+  nimble::Buffer buffer(*leafPool_);
+  const auto serialized = fileStats.serialize(buffer);
+
+  // 4 default streams plus 2 each for integral, floating point and string.
+  const auto streams = splitStatStreams(serialized);
+  ASSERT_EQ(streams.size(), 10);
+  StatStreamEncodings encodings;
+  for (const auto stream : streams) {
+    collectStatStreamEncodings(stream, encodings);
+  }
+  EXPECT_THAT(
+      encodings.encodingTypes,
+      testing::IsSubsetOf(
+          std::set<EncodingType>{
+              EncodingType::Nullable,
+              EncodingType::Constant,
+              EncodingType::Trivial,
+              EncodingType::FixedBitWidth,
+              EncodingType::Dictionary,
+          }));
+  EXPECT_EQ(
+      encodings.compressionTypes,
+      std::set<CompressionType>{CompressionType::Uncompressed});
+
+  const auto roundTrippedStats =
+      VectorizedFileStats::deserialize(serialized, *leafPool_)
+          ->toColumnStatistics(schema, convertToNimbleType(*schema));
+  ASSERT_EQ(roundTrippedStats.size(), ownedStats.size());
+  expectColumnStatisticsEqual(*ownedStats[0], *roundTrippedStats[0]);
+  for (int i = 0; i < kNumColumns; ++i) {
+    SCOPED_TRACE("column " + std::to_string(i));
+    const auto& expected = *ownedStats[i + 1];
+    const auto& actual = *roundTrippedStats[i + 1];
+    switch (i % 3) {
+      case 0:
+        ASSERT_NE(actual.as<IntegralStatistics>(), nullptr);
+        expectIntegralStatisticsEqual(
+            *expected.as<IntegralStatistics>(),
+            *actual.as<IntegralStatistics>());
+        break;
+      case 1:
+        ASSERT_NE(actual.as<FloatingPointStatistics>(), nullptr);
+        expectFloatingPointStatisticsEqual(
+            *expected.as<FloatingPointStatistics>(),
+            *actual.as<FloatingPointStatistics>());
+        break;
+      default:
+        ASSERT_NE(actual.as<StringStatistics>(), nullptr);
+        expectStringStatisticsEqual(
+            *expected.as<StringStatistics>(), *actual.as<StringStatistics>());
+    }
+  }
 }
 
 TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripWithTimestamp) {
