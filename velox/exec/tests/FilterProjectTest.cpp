@@ -59,11 +59,9 @@ class FilterProjectTest : public test::HiveConnectorTestBase {
 
     // A quick sanity check for memory usage reporting. Check that peak total
     // memory usage for the project node is > 0.
-    auto planStats = toPlanStats(task->taskStats());
-    auto projectNodeId = plan->id();
-    auto it = planStats.find(projectNodeId);
-    ASSERT_TRUE(it != planStats.end());
-    ASSERT_GT(it->second.peakMemoryBytes, 0);
+    ASSERT_GT(
+        PlanNodeStats::extract(task->taskStats(), plan->id()).peakMemoryBytes,
+        0);
   }
 
   RowVectorPtr makeTestVector(vector_size_t size = 100) const {
@@ -365,8 +363,10 @@ TEST_F(FilterProjectTest, numSilentThrow) {
                   .planNode();
 
   auto task = test::AssertQueryBuilder(plan).assertEmptyResults();
-  auto planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(100, planStats.at(filterId).customStats.at("numSilentThrow").sum);
+  ASSERT_EQ(
+      100,
+      PlanNodeStats::extract(task->taskStats(), filterId)
+          .customSum(DriverStats::kNumSilentThrow));
 }
 
 TEST_F(FilterProjectTest, statsSplitter) {
@@ -471,7 +471,8 @@ TEST_F(FilterProjectTest, barrier) {
     // one-to-one mapping and expects the upstream operator respects the output
     // batch size.
     ASSERT_EQ(
-        exec::toPlanStats(taskStats).at(projectPlanNodeId).outputVectors,
+        exec::PlanNodeStats::extract(taskStats, projectPlanNodeId)
+            .outputVectors,
         numSplits);
   }
 }

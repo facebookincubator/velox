@@ -83,4 +83,12 @@ std::shared_ptr<DecodedKeyChunk> decodeKeyChunk(
   return result;
 }
 
+std::shared_ptr<DecodedKeyChunk> decodeKeyChunk(
+    const IndexLookup::KeyChunk& keyChunk,
+    const KeyReaderFactory& readerFactory,
+    velox::memory::MemoryPool* pool) {
+  return decodeKeyChunk(
+      keyChunk.data, keyChunk.dataHandle, readerFactory, pool);
+}
+
 } // namespace facebook::nimble::index

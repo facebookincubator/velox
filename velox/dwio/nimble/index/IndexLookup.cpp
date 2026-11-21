@@ -29,6 +29,10 @@ IndexLookup::LookupRequest::defaultOptions() {
   return kDefaultOptions;
 }
 
+void IndexLookup::validateLookupRequest(const LookupRequest& request) const {
+  request.validateFor(*this);
+}
+
 void IndexLookup::Options::validate() const {
   NIMBLE_CHECK_NOT_NULL(file.get());
   NIMBLE_CHECK_NOT_NULL(ioOptions);

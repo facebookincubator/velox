@@ -16,6 +16,7 @@
 #include <limits>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/HashAggregationStatNames.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
@@ -507,14 +508,15 @@ TEST_F(MinMaxAggregationTest, partialCompanionAbandonPartialAggregation) {
           .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
           .assertResults("SELECT k, min(v) FROM tmp GROUP BY k");
 
-  const auto stats = exec::toPlanStats(task->taskStats());
+  const auto stats =
+      exec::PlanNodeStats::extract(task->taskStats(), partialNodeId);
   EXPECT_LT(
       0,
-      stats.at(partialNodeId)
-          .customStats.at("abandonedPartialAggregationRows")
-          .sum);
+      stats.customSum(
+          exec::HashAggregationStatNames::kAbandonedPartialAggregationRows));
   EXPECT_GT(
-      stats.at(partialNodeId).customStats.at("toIntermediateFastPathCalls").sum,
+      stats.customSum(
+          exec::HashAggregationStatNames::kToIntermediateFastPathCalls),
       0);
 }
 

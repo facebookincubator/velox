@@ -1210,7 +1210,8 @@ TEST_F(ChunkStatsWriterTest, v2RejectsInvalidChunkRows) {
   }
 }
 
-TEST_F(ChunkStatsWriterTest, v2UsesRleForChunkBoundPresence) {
+TEST_F(ChunkStatsWriterTest, v2UsesBitmapForChunkBoundPresence) {
+  // Metadata defaults have no RLE, so even long runs get a Trivial bitmap.
   auto& writer = createWriter(ChunkStatsVersion::kV2, 0);
   Buffer buffer{*pool_};
   TestChunkFileIndex fileIndex;
@@ -1235,7 +1236,7 @@ TEST_F(ChunkStatsWriterTest, v2UsesRleForChunkBoundPresence) {
   const std::string_view presenceData{
       reinterpret_cast<const char*>(encoded->data()), encoded->size()};
   EXPECT_EQ(EncodingPrefix::dataType(presenceData), DataType::Bool);
-  EXPECT_EQ(EncodingPrefix::encodingType(presenceData), EncodingType::RLE);
+  EXPECT_EQ(EncodingPrefix::encodingType(presenceData), EncodingType::Trivial);
 }
 
 TEST_F(ChunkStatsWriterTest, v2RoundTripsConstantStringBounds) {
