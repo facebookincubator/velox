@@ -17,34 +17,13 @@
 
 #include <optional>
 #include <string>
-#include <type_traits>
 #include <vector>
-
-#include <folly/container/F14Set.h>
 
 #include "velox/common/base/CompareFlags.h"
 #include "velox/functions/Udf.h"
-#include "velox/functions/sparksql/JavaFloatingPoint.h"
+#include "velox/type/FloatingPointUtil.h"
 
 namespace facebook::velox::functions::sparksql {
-
-namespace detail {
-
-// Selects the hash set for the top-level elements of an array of T. Floating
-// point elements compare as Java's equals() does, as in Spark: all NaNs are
-// equal, and -0.0 and 0.0 are different.
-template <typename T, typename = void>
-struct SparkElementSet {
-  using type = folly::F14FastSet<T>;
-};
-
-template <typename T>
-struct SparkElementSet<T, std::enable_if_t<std::is_floating_point_v<T>>> {
-  using type = folly::
-      F14FastSet<T, JavaFloatingPoint::Hash<T>, JavaFloatingPoint::Equals<T>>;
-};
-
-} // namespace detail
 
 /// arrays_overlap(array(E), array(E)) -> boolean
 ///
@@ -68,7 +47,9 @@ struct ArraysOverlapFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
 
   using Element = arg_type<T>;
-  using ElementSet = typename detail::SparkElementSet<Element>::type;
+  // Floating point elements compare as in Spark, which normalizes them before
+  // hashing: -0.0 equals 0.0 and all NaNs are equal.
+  using ElementSet = util::floating_point::HashSetNaNAware<Element>;
 
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
