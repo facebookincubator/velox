@@ -64,7 +64,7 @@ class SIMDJsonExtractor {
    */
   template <typename TConsumer>
   simdjson::error_code extract(
-      const simdjson::padded_string& json,
+      const simdjson::padded_string_view& json,
       TConsumer& consumer,
       bool& isDefinitePath);
 
@@ -129,7 +129,7 @@ simdjson::error_code extractArray(
 
 template <typename TConsumer>
 simdjson::error_code SIMDJsonExtractor::extract(
-    const simdjson::padded_string& paddedJson,
+    const simdjson::padded_string_view& paddedJson,
     TConsumer& consumer,
     bool& isDefinitePath) {
   SIMDJSON_ASSIGN_OR_RAISE(auto jsonDoc, simdjsonParse(paddedJson));
