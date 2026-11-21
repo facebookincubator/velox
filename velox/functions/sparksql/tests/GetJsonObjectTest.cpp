@@ -303,6 +303,20 @@ TEST_F(GetJsonObjectTest, rootValueOnly) {
   EXPECT_EQ(getJsonObject("   ", "$"), std::nullopt);
 }
 
+TEST_F(GetJsonObjectTest, unclosedString) {
+  // simdjson 4.3 iterates a JSON with an unclosed string over the structural
+  // indexes of the previously parsed JSON, so parse a short JSON first.
+  EXPECT_EQ(getJsonObject("{}", "$"), "{}");
+  // Spark does not read the unclosed string after the root value.
+  EXPECT_EQ(getJsonObject(R"({"a":{"b":1},"c":2} ")", "$.c"), "2");
+  EXPECT_EQ(getJsonObject(R"({"a":{"b":"x\"y"},"c":2} "z)", "$.c"), "2");
+  EXPECT_EQ(getJsonObject(R"({"a":{"b":"x\\"},"c":2} "z)", "$.c"), "2");
+  EXPECT_EQ(getJsonObject(R"([[1],2] "x)", "$[1]"), "2");
+  // An unclosed string in the root value makes it malformed.
+  EXPECT_EQ(getJsonObject(R"({"a":{"b":1},"c":"x)", "$.a"), std::nullopt);
+  EXPECT_EQ(getJsonObject(R"("x)", "$"), std::nullopt);
+}
+
 TEST_F(GetJsonObjectTest, singleQuotes) {
   EXPECT_EQ(getJsonObject(R"({"a":1,"b":'x'})", "$.a"), "1");
   EXPECT_EQ(getJsonObject(R"({"a":1,'b':2})", "$.a"), "1");

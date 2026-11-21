@@ -213,6 +213,11 @@ bool escapeControlCharacters(std::string_view input, std::string& output);
 // empty view if `json` does not start with a scalar.
 std::string_view rootScalar(std::string_view json);
 
+// Returns the position of the quote that opens the unclosed string in `json`,
+// or std::string_view::npos if every string is closed. As in simdjson, a quote
+// preceded by an odd number of backslashes is escaped.
+size_t findUnclosedString(std::string_view json);
+
 // Returns whether the character is a JSON digit, '0' to '9'.
 inline bool isJsonDigit(char character) {
   return character >= '0' && character <= '9';
@@ -263,6 +268,12 @@ struct GetJsonObjectFunction {
     if (hasInvalidEscapedChar(input.data(), input.size())) {
       return false;
     }
+    // simdjson 4.3 iterates a JSON with an unclosed string over the structural
+    // indexes of the previously parsed JSON, which can read out of bounds. Drop
+    // the unclosed string: Spark does not read the text after the root value,
+    // and the root value is malformed if the unclosed string is in it.
+    // TODO: Remove after upgrading simdjson to 5.0, which fixes the bug.
+    input = input.substr(0, detail::findUnclosedString(input));
     const auto formattedJsonPath = jsonPath_.has_value()
         ? jsonPath_.value()
         : pathNormalizer_.normalize(jsonPath);

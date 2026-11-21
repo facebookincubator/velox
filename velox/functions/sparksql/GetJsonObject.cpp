@@ -268,6 +268,21 @@ std::string_view rootScalar(std::string_view json) {
   return json.substr(begin, end - begin);
 }
 
+size_t findUnclosedString(std::string_view json) {
+  size_t start{std::string_view::npos};
+  for (auto quote = json.find('"'); quote != std::string_view::npos;
+       quote = json.find('"', quote + 1)) {
+    size_t backslashes{0};
+    while (backslashes < quote && json[quote - backslashes - 1] == '\\') {
+      ++backslashes;
+    }
+    if (backslashes % 2 == 0) {
+      start = start == std::string_view::npos ? quote : std::string_view::npos;
+    }
+  }
+  return start;
+}
+
 bool compactJson(std::string_view raw, std::string& out) {
   out.clear();
   bool inString{false};
