@@ -2032,8 +2032,10 @@ TEST_P(NimbleIndexProjectorTest, coLoadNeedsStripeKeyStreams) {
 
 // The stripes that a key can lie in come from index metadata alone. A lookup
 // given the key chunk that a stripe load read with the stripe resolves the key
-// in it, and so does its key cursor, without reading the index. Without the key
-// chunk, the lookup reads it through the index.
+// in it, and so does its key cursor, without reading the index. The index then
+// caches the chunk, so a later lookup in that stripe without the key chunk
+// reads no index either, and a lookup in another stripe reads its chunk through
+// the index.
 TEST_P(NimbleIndexProjectorTest, lookupResolvesKeysInGivenKeyChunk) {
   const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
   writeStripeKeyStreamData(
@@ -2074,6 +2076,15 @@ TEST_P(NimbleIndexProjectorTest, lookupResolvesKeysInGivenKeyChunk) {
   EXPECT_EQ(
       projector->lookup(bounds, /*keyChunk=*/std::nullopt, keyCursor),
       selections);
+  EXPECT_EQ(indexBytesRead(), indexBytesBefore);
+
+  // Key 500 is row 50 of the third stripe.
+  const auto thirdStripeSelections = projector->lookup(
+      makePointLookup(rowType, {"key"}, 500),
+      /*keyChunk=*/std::nullopt,
+      keyCursor);
+  ASSERT_EQ(thirdStripeSelections.size(), 1);
+  EXPECT_EQ(thirdStripeSelections[0].stripeIndex, 2);
   EXPECT_GT(indexBytesRead(), indexBytesBefore);
 }
 

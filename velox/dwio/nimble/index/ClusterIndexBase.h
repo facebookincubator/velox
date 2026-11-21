@@ -547,9 +547,10 @@ class ClusterIndexBase : public IndexLookup {
   // when the requested chunk matches the cached chunkIndex, otherwise the
   // slot is evicted and refilled. The returned DecodedChunk owns its
   // underlying buffer via shared_ptr / BufferPtr so it is safe to use past
-  // the call. The chunk of the stripe of 'keyChunk', a key chunk that a
-  // caller read, is decoded from it in place, and then not cached, since it
-  // reads the caller's bytes. Any other chunk is read from the file.
+  // the call. On a miss, the chunk of the stripe of 'keyChunk', a key chunk
+  // that a caller read, is decoded from a copy of its bytes and cached like a
+  // chunk read from the file, so later seeks in that stripe reuse it with or
+  // without a key chunk. Any other chunk is read from the file.
   DecodedChunk getDecodedChunk(
       const IndexPartitionBase* partition,
       const ChunkLocation& chunkLocation,
