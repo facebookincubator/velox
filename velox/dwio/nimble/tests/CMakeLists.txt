@@ -144,6 +144,42 @@ target_link_libraries(
   nimble_column_stats_utils
 )
 
+add_library(
+  nimble_options_off_fixtures
+  OptionsOffFixtures.cpp
+  OptionsOffFixtures.h
+  OptionsOffForms.cpp
+  OptionsOffForms.h
+  OptionsOffGolden.h
+)
+target_link_libraries(
+  nimble_options_off_fixtures
+  nimble_common
+  nimble_encodings
+  nimble_velox_shared_dictionary_config
+  nimble_writer
+  velox_file
+  velox_memory
+  velox_vector
+  velox_vector_test_lib
+)
+
+add_executable(nimble_options_off_tests OptionsOffGoldenTest.cpp)
+add_test(nimble_options_off_tests nimble_options_off_tests)
+
+target_link_libraries(
+  nimble_options_off_tests
+  nimble_options_off_fixtures
+  nimble_batch_reader
+  nimble_writer
+  nimble_common
+  velox_vector_test_lib
+  gmock
+  gtest
+  gtest_main
+  Folly::folly
+)
+
 add_executable(nimble_writer_chunking_fuzz_tests WriterChunkingFuzzTest.cpp)
 add_test(nimble_writer_chunking_fuzz_tests nimble_writer_chunking_fuzz_tests)
 
