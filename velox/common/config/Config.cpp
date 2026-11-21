@@ -169,7 +169,10 @@ std::string ConfigBase::toSessionKey(std::string_view configKey) {
 }
 
 std::optional<std::string> ConfigBase::access(const std::string& key) const {
-  std::shared_lock l{mutex_};
+  std::shared_lock lock{mutex_, std::defer_lock};
+  if (mutable_) {
+    lock.lock();
+  }
   if (auto it = configs_.find(key); it != configs_.end()) {
     return it->second;
   }
