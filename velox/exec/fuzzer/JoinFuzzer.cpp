@@ -81,7 +81,8 @@ class JoinFuzzer {
  public:
   JoinFuzzer(
       size_t initialSeed,
-      std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner);
+      std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner,
+      std::function<void(const TaskStats&)> taskStatsCallback);
 
   void go();
 
@@ -174,6 +175,7 @@ class JoinFuzzer {
 
   VectorFuzzer vectorFuzzer_;
   std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner_;
+  const std::function<void(const TaskStats&)> taskStatsCallback_;
 
   struct Stats {
     // The total number of iterations tested.
@@ -202,9 +204,11 @@ class JoinFuzzer {
 
 JoinFuzzer::JoinFuzzer(
     size_t initialSeed,
-    std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner)
+    std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner,
+    std::function<void(const TaskStats&)> taskStatsCallback)
     : vectorFuzzer_{getFuzzerOptions(), pool_.get()},
-      referenceQueryRunner_{std::move(referenceQueryRunner)} {
+      referenceQueryRunner_{std::move(referenceQueryRunner)},
+      taskStatsCallback_{std::move(taskStatsCallback)} {
   filesystems::registerLocalFileSystem();
 
   // Make sure not to run out of open file descriptors.
@@ -419,7 +423,11 @@ RowVectorPtr JoinFuzzer::execute(
   TestScopedSpillInjection scopedSpillInjection(spillPct);
   RowVectorPtr result;
   try {
-    result = builder.maxDrivers(2).copyResults(pool_.get());
+    std::shared_ptr<Task> task;
+    result = builder.maxDrivers(2).copyResults(pool_.get(), task);
+    if (taskStatsCallback_) {
+      taskStatsCallback_(task->taskStats());
+    }
   } catch (VeloxRuntimeError& e) {
     if (FLAGS_enable_oom_injection &&
         e.errorCode() == facebook::velox::error_code::kMemCapExceeded &&
@@ -912,7 +920,10 @@ void JoinFuzzer::go() {
 
 void joinFuzzer(
     size_t seed,
-    std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner) {
-  JoinFuzzer(seed, std::move(referenceQueryRunner)).go();
+    std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner,
+    std::function<void(const TaskStats&)> taskStatsCallback) {
+  JoinFuzzer(
+      seed, std::move(referenceQueryRunner), std::move(taskStatsCallback))
+      .go();
 }
 } // namespace facebook::velox::exec
