@@ -178,7 +178,7 @@ TopNRowNumber::TopNRowNumber(
         true,
         sizeof(TopRows),
         false,
-        1,
+        alignof(TopRows),
         nullptr,
         [](auto, auto) { VELOX_UNREACHABLE(); },
         [](auto) {}};
