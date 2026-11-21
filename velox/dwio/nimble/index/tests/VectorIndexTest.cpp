@@ -77,6 +77,21 @@ struct RecallMetrics {
   }
 };
 
+// In-memory file that reports direct I/O with 'alignment'.
+class DirectIoReadFile final : public velox::InMemoryReadFile {
+ public:
+  DirectIoReadFile(std::string content, uint64_t alignment)
+      : velox::InMemoryReadFile{std::move(content)}, alignment_{alignment} {}
+
+  bool directIo(uint64_t& alignment) const override {
+    alignment = alignment_;
+    return true;
+  }
+
+ private:
+  const uint64_t alignment_;
+};
+
 // Captures the two physical layers emitted by VectorIndexWriter.
 struct WrittenIndexes {
   // Stores all FAISS data sections at their recorded offsets.
@@ -1614,6 +1629,34 @@ TEST_F(VectorIndexTest, blockCacheServesIndexData) {
 
   testingResetBlockCache();
   cache->shutdown();
+}
+
+TEST_F(VectorIndexTest, readsAlignedBlocks) {
+  constexpr uint64_t kAlignment{4'096};
+  const auto written = writeIndexFromVectors(
+      makeConfig(VectorIndexType::kIvfFlat),
+      generateRandomVectors(100, kDimensions));
+  const auto indexSize = written.indexData.size();
+  ASSERT_NE(indexSize % kAlignment, 0);
+
+  // Bytes past the index let an aligned read extend beyond it.
+  const auto file = std::make_shared<DirectIoReadFile>(
+      written.indexData + std::string(kAlignment, '\0'), kAlignment);
+
+  auto ioStats = std::make_shared<velox::io::IoStatistics>();
+  velox::io::ReaderOptions ioOptions(pool());
+  ioOptions.setIndexIoStats(ioStats);
+  const IndexLookup::Options indexOptions{
+      .file = file,
+      .ioOptions = &ioOptions,
+  };
+  const auto directory = VectorIndexDirectory::create(
+      Section{MetadataBuffer{toPinnedBuffer(
+          MetadataBuffer::decompress(
+              written.directoryData, CompressionType::Uncompressed, pool()))}},
+      indexOptions);
+  EXPECT_NE(directory.load("embedding"), nullptr);
+  EXPECT_EQ(ioStats->read().sum(), velox::bits::roundUp(indexSize, kAlignment));
 }
 
 TEST_F(VectorIndexTest, partitionMetadataMatchesBuiltIndex) {

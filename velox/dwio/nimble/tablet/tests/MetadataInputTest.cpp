@@ -33,8 +33,6 @@
 #include <folly/Synchronized.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 
-#include "velox/common/base/CoalesceIo.h"
-#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/FileHandle.h"
 #include "velox/common/caching/FileIds.h"
@@ -42,11 +40,9 @@
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/io/IoStatistics.h"
-#include "velox/common/io/Options.h"
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
-#include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/common/tests/TestUtils.h"
@@ -58,613 +54,6 @@
 
 DECLARE_bool(velox_ssd_odirect);
 
-using namespace facebook;
-
-namespace {
-
-// Builds a flat file buffer containing sections at specified offsets.
-// Each section's data is written at its offset in the file. Gaps are
-// filled with 0xCC bytes so we can detect over-reads.
-std::string buildFileContent(
-    const std::vector<nimble::MetadataSection>& sections,
-    const std::vector<std::string>& sectionData) {
-  EXPECT_EQ(sections.size(), sectionData.size());
-  uint64_t fileSize = 0;
-  for (size_t i = 0; i < sections.size(); ++i) {
-    fileSize = std::max(fileSize, sections[i].offset() + sectionData[i].size());
-  }
-  std::string fileContent(fileSize, '\xCC');
-  for (size_t i = 0; i < sections.size(); ++i) {
-    std::memcpy(
-        fileContent.data() + sections[i].offset(),
-        sectionData[i].data(),
-        sectionData[i].size());
-  }
-  return fileContent;
-}
-
-class MetadataInputTestBase : public ::testing::Test {
- protected:
-  nimble::MetadataInput::Options makeMetadataInputOptions(
-      int32_t maxCoalesceDistance = 1 << 20,
-      int64_t maxCoalesceBytes = 128 << 20) {
-    return {
-        .pool = pool_.get(),
-        .ioStats = metadataIoStats_,
-        .maxCoalesceDistance = maxCoalesceDistance,
-        .maxCoalesceBytes = maxCoalesceBytes};
-  }
-
-  std::shared_ptr<velox::memory::MemoryPool> rootPool_;
-  std::shared_ptr<velox::memory::MemoryPool> pool_;
-  std::shared_ptr<velox::io::IoStatistics> dataIoStats_{
-      std::make_shared<velox::io::IoStatistics>()};
-  std::shared_ptr<velox::io::IoStatistics> metadataIoStats_{
-      std::make_shared<velox::io::IoStatistics>()};
-};
-
-struct SectionSpec {
-  std::string data;
-  nimble::CompressionType compressionType;
-  bool hasUncompressedSize{true};
-};
-
-struct EnqueueLoadReadTestParam {
-  std::vector<SectionSpec> specs;
-  std::string debugString() const {
-    return fmt::format(
-        "{} sections, [{}]",
-        specs.size(),
-        fmt::join(
-            specs | std::views::transform([](const auto& s) {
-              return fmt::format(
-                  "comp{}:sz{}:uncomp{}",
-                  static_cast<int>(s.compressionType),
-                  s.data.size(),
-                  s.hasUncompressedSize);
-            }),
-            ", "));
-  }
-};
-
-void buildSections(
-    const std::vector<SectionSpec>& specs,
-    velox::memory::MemoryPool* pool,
-    std::vector<nimble::MetadataSection>& sections,
-    std::vector<std::string>& fileDataParts) {
-  uint64_t offset = 0;
-  for (const auto& spec : specs) {
-    std::string onDiskData;
-    const uint32_t uncompressedSize = spec.data.size();
-    if (spec.compressionType == nimble::CompressionType::Zstd) {
-      auto compressed = nimble::ZstdCompression::compress(spec.data, pool);
-      ASSERT_TRUE(compressed.has_value());
-      onDiskData = {compressed.value()->as<char>(), compressed.value()->size()};
-    } else {
-      onDiskData = spec.data;
-    }
-    sections.emplace_back(
-        offset,
-        static_cast<uint32_t>(onDiskData.size()),
-        spec.compressionType,
-        spec.hasUncompressedSize ? std::optional<uint32_t>(uncompressedSize)
-                                 : std::nullopt);
-    fileDataParts.emplace_back(std::move(onDiskData));
-    offset += fileDataParts.back().size();
-  }
-}
-
-std::vector<EnqueueLoadReadTestParam> enqueueLoadReadTestSettings() {
-  return {
-      {{{"Hello, MetadataInput!", nimble::CompressionType::Uncompressed}}},
-      {{{std::string(1'000, 'A'), nimble::CompressionType::Zstd}}},
-      // Compressed without uncompressed size (old file format).
-      {{{std::string(1'000, 'A'), nimble::CompressionType::Zstd, false}}},
-      {{{"section-zero", nimble::CompressionType::Uncompressed},
-        {"section-one", nimble::CompressionType::Uncompressed},
-        {"section-two", nimble::CompressionType::Uncompressed}}},
-      {{{std::string(1'000, 'B'), nimble::CompressionType::Zstd},
-        {std::string(2'000, 'C'), nimble::CompressionType::Zstd}}},
-      {{{"uncompressed-first", nimble::CompressionType::Uncompressed},
-        {std::string(1'000, 'D'), nimble::CompressionType::Zstd}}},
-      {{{std::string(1'000, 'E'), nimble::CompressionType::Zstd},
-        {"uncompressed-second", nimble::CompressionType::Uncompressed}}},
-      {{{"head", nimble::CompressionType::Uncompressed},
-        {std::string(1'000, 'F'), nimble::CompressionType::Zstd},
-        {"tail", nimble::CompressionType::Uncompressed}}},
-      // Mixed: with and without uncompressed size.
-      {{{"with-size", nimble::CompressionType::Uncompressed, true},
-        {std::string(1'000, 'I'), nimble::CompressionType::Zstd, false},
-        {std::string(2'000, 'J'), nimble::CompressionType::Zstd, true}}},
-      // All without uncompressed size.
-      {{{std::string(1'000, 'K'), nimble::CompressionType::Zstd, false},
-        {std::string(2'000, 'L'), nimble::CompressionType::Zstd, false}}},
-      {{{std::string(64 * 1'024, 'G'), nimble::CompressionType::Uncompressed}}},
-      {{{std::string(64 * 1'024, 'H'), nimble::CompressionType::Zstd}}},
-  };
-}
-
-class DirectMetadataInputTest : public MetadataInputTestBase {
- protected:
-  static void SetUpTestCase() {
-    velox::memory::MemoryManager::testingSetInstance({});
-    velox::common::testutil::TestValue::enable();
-  }
-
-  void SetUp() override {
-    rootPool_ =
-        velox::memory::memoryManager()->addRootPool("DirectMetadataInputTest");
-    pool_ = rootPool_->addLeafChild("leaf");
-  }
-};
-
-TEST_F(DirectMetadataInputTest, loadSections) {
-  for (const auto& testData : enqueueLoadReadTestSettings()) {
-    SCOPED_TRACE(testData.debugString());
-
-    std::vector<nimble::MetadataSection> sections;
-    std::vector<std::string> fileDataParts;
-    buildSections(testData.specs, pool_.get(), sections, fileDataParts);
-
-    const auto fileContent = buildFileContent(sections, fileDataParts);
-    auto readFile = std::make_shared<velox::InMemoryReadFile>(fileContent);
-
-    const auto options = makeMetadataInputOptions();
-    auto input = nimble::MetadataInput::create(readFile.get(), options);
-
-    auto results = input->load(sections);
-    ASSERT_EQ(results.size(), sections.size());
-    for (uint32_t i = 0; i < sections.size(); ++i) {
-      ASSERT_NE(results[i], nullptr);
-      EXPECT_EQ(results[i]->content(), testData.specs[i].data);
-    }
-  }
-}
-
-TEST_F(DirectMetadataInputTest, reverseSectionOrder) {
-  const std::string data0 = "first-in-file";
-  const std::string data1 = "second-in-file";
-
-  const uint64_t offset0 = 0;
-  const uint64_t offset1 = data0.size();
-
-  nimble::MetadataSection section0{
-      offset0,
-      static_cast<uint32_t>(data0.size()),
-      nimble::CompressionType::Uncompressed,
-      static_cast<uint32_t>(data0.size())};
-  nimble::MetadataSection section1{
-      offset1,
-      static_cast<uint32_t>(data1.size()),
-      nimble::CompressionType::Uncompressed,
-      static_cast<uint32_t>(data1.size())};
-
-  const auto fileContent =
-      buildFileContent({section0, section1}, {data0, data1});
-  auto readFile = std::make_shared<velox::InMemoryReadFile>(fileContent);
-
-  const auto options = makeMetadataInputOptions();
-  auto input = nimble::MetadataInput::create(readFile.get(), options);
-
-  // Sections in reverse file order — should still work.
-  auto results = input->load(std::array{section1, section0});
-  EXPECT_EQ(results[0]->content(), data1);
-  EXPECT_EQ(results[1]->content(), data0);
-}
-
-TEST_F(DirectMetadataInputTest, duplicateSectionsThrow) {
-  const std::string data = "duplicate-metadata";
-  nimble::MetadataSection section{
-      0,
-      static_cast<uint32_t>(data.size()),
-      nimble::CompressionType::Uncompressed,
-      static_cast<uint32_t>(data.size())};
-  const auto fileContent = buildFileContent({section}, {data});
-  auto readFile = std::make_shared<velox::InMemoryReadFile>(fileContent);
-
-  const auto options = makeMetadataInputOptions();
-  auto input = nimble::MetadataInput::create(readFile.get(), options);
-
-  const std::array sections{section, section};
-  NIMBLE_ASSERT_THROW(
-      input->load(sections),
-      "Metadata input must not contain duplicate regions");
-}
-
-TEST_F(DirectMetadataInputTest, repeatedLoad) {
-  const std::string data = "repeat-test";
-  nimble::MetadataSection section{
-      0,
-      static_cast<uint32_t>(data.size()),
-      nimble::CompressionType::Uncompressed,
-      static_cast<uint32_t>(data.size())};
-  const auto fileContent = buildFileContent({section}, {data});
-  auto readFile = std::make_shared<velox::InMemoryReadFile>(fileContent);
-
-  const auto options = makeMetadataInputOptions();
-  auto input = nimble::MetadataInput::create(readFile.get(), options);
-
-  // Stateless: can call load() multiple times without reset.
-  auto results1 = input->load(std::array{section});
-  EXPECT_EQ(results1[0]->content(), data);
-
-  auto results2 = input->load(std::array{section});
-  EXPECT_EQ(results2[0]->content(), data);
-
-  // Empty input throws.
-  NIMBLE_ASSERT_THROW(
-      input->load(std::span<const nimble::MetadataSection>{}),
-      "No sections to load");
-}
-
-TEST_F(DirectMetadataInputTest, executorStartsNoTaskDuringLoad) {
-  // The gap between the sections exceeds the coalesce distance, so they form
-  // two IO groups and load() hands the second group to the executor.
-  const std::string data0 = "first";
-  const std::string data1 = "second";
-  const nimble::MetadataSection section0{
-      /*offset=*/0,
-      /*size=*/static_cast<uint32_t>(data0.size()),
-      nimble::CompressionType::Uncompressed,
-      /*uncompressedSize=*/static_cast<uint32_t>(data0.size()),
-  };
-  const nimble::MetadataSection section1{
-      /*offset=*/data0.size() + 100,
-      /*size=*/static_cast<uint32_t>(data1.size()),
-      nimble::CompressionType::Uncompressed,
-      /*uncompressedSize=*/static_cast<uint32_t>(data1.size()),
-  };
-  const auto fileContent =
-      buildFileContent({section0, section1}, {data0, data1});
-  auto readFile = std::make_shared<nimble::testing::TrackingReadFile>(
-      std::make_shared<velox::InMemoryReadFile>(fileContent));
-
-  // The manual executor starts no task until drain(), so load() reads both
-  // groups itself and returns while the task is still queued.
-  folly::ManualExecutor executor;
-  auto options = makeMetadataInputOptions(/*maxCoalesceDistance=*/0);
-  options.executor = &executor;
-  auto input = nimble::MetadataInput::create(readFile.get(), options);
-  const auto results = input->load(std::array{section0, section1});
-  ASSERT_EQ(results.size(), 2);
-  EXPECT_EQ(results[0]->content(), data0);
-  EXPECT_EQ(results[1]->content(), data1);
-
-  // load() reads the unqueued group before it claims the queued one. That
-  // gives a running executor time to start the queued one.
-  const auto ioGroups = readFile->ioGroups();
-  ASSERT_EQ(ioGroups.size(), 2);
-  EXPECT_EQ(ioGroups[0].offset, section0.offset());
-  EXPECT_EQ(ioGroups[1].offset, section1.offset());
-
-  // The queued task runs after load() returns and after the MetadataInput is
-  // destroyed, as when a cached tablet is evicted. ASAN reports any access to
-  // the freed state.
-  input.reset();
-  EXPECT_EQ(executor.drain(), 1);
-}
-
-TEST_F(DirectMetadataInputTest, executorReadsAllButFirstGroup) {
-  // The gap between the sections exceeds the coalesce distance, so they form
-  // two IO groups.
-  const std::string data0 = "first";
-  const std::string data1 = "second";
-  const nimble::MetadataSection section0{
-      /*offset=*/0,
-      /*size=*/static_cast<uint32_t>(data0.size()),
-      nimble::CompressionType::Uncompressed,
-      /*uncompressedSize=*/static_cast<uint32_t>(data0.size()),
-  };
-  const nimble::MetadataSection section1{
-      /*offset=*/data0.size() + 100,
-      /*size=*/static_cast<uint32_t>(data1.size()),
-      nimble::CompressionType::Uncompressed,
-      /*uncompressedSize=*/static_cast<uint32_t>(data1.size()),
-  };
-  const auto fileContent =
-      buildFileContent({section0, section1}, {data0, data1});
-  auto readFile = std::make_shared<nimble::testing::TrackingReadFile>(
-      std::make_shared<velox::InMemoryReadFile>(fileContent));
-
-  // The inline executor runs each task inside add(), so the first read is the
-  // group load() queued. load() then reads the first group and takes the
-  // queued group's finished read.
-  auto options = makeMetadataInputOptions(/*maxCoalesceDistance=*/0);
-  options.executor = &folly::InlineExecutor::instance();
-  auto input = nimble::MetadataInput::create(readFile.get(), options);
-  const auto results = input->load(std::array{section0, section1});
-  ASSERT_EQ(results.size(), 2);
-  EXPECT_EQ(results[0]->content(), data0);
-  EXPECT_EQ(results[1]->content(), data1);
-
-  const auto ioGroups = readFile->ioGroups();
-  ASSERT_EQ(ioGroups.size(), 2);
-  EXPECT_EQ(ioGroups[0].offset, section1.offset());
-  EXPECT_EQ(ioGroups[1].offset, section0.offset());
-}
-
-TEST_F(DirectMetadataInputTest, ioStats) {
-  constexpr uint64_t kInjectedDelayUs = 10'000;
-  const std::string data = std::string(500, 'X');
-  nimble::MetadataSection section{
-      0,
-      static_cast<uint32_t>(data.size()),
-      nimble::CompressionType::Uncompressed,
-      static_cast<uint32_t>(data.size())};
-  const auto fileContent = buildFileContent({section}, {data});
-  auto innerFile = std::make_shared<velox::InMemoryReadFile>(fileContent);
-  auto readFile =
-      std::make_shared<nimble::testing::TrackingReadFile>(innerFile);
-  readFile->setReadDelayUs(kInjectedDelayUs);
-
-  const auto readCountBefore = metadataIoStats_->read().count();
-  const auto readSumBefore = metadataIoStats_->read().sum();
-  const auto rawBytesBefore = metadataIoStats_->rawBytesRead();
-  const auto overreadBefore = metadataIoStats_->rawOverreadBytes();
-  const auto totalScanTimeBefore = metadataIoStats_->totalScanTimeNs();
-  const auto storageLatencySumBefore =
-      metadataIoStats_->storageReadLatencyUs().sum();
-  const auto storageLatencyCountBefore =
-      metadataIoStats_->storageReadLatencyUs().count();
-  const auto queryIoLatencyCountBefore =
-      metadataIoStats_->queryThreadIoLatencyUs().count();
-
-  const auto options = makeMetadataInputOptions();
-  auto input = nimble::MetadataInput::create(readFile.get(), options);
-  input->load(std::array{section});
-
-  EXPECT_GT(metadataIoStats_->read().count(), readCountBefore);
-  EXPECT_EQ(metadataIoStats_->read().sum() - readSumBefore, data.size());
-  EXPECT_EQ(metadataIoStats_->rawBytesRead() - rawBytesBefore, data.size());
-  EXPECT_EQ(metadataIoStats_->rawOverreadBytes(), overreadBefore);
-  EXPECT_GE(
-      metadataIoStats_->totalScanTimeNs() - totalScanTimeBefore,
-      kInjectedDelayUs * 1'000);
-  EXPECT_GT(
-      metadataIoStats_->storageReadLatencyUs().count(),
-      storageLatencyCountBefore);
-  EXPECT_GE(
-      metadataIoStats_->storageReadLatencyUs().sum() - storageLatencySumBefore,
-      kInjectedDelayUs);
-  EXPECT_GT(
-      metadataIoStats_->queryThreadIoLatencyUs().count(),
-      queryIoLatencyCountBefore);
-}
-
-struct SectionLayout {
-  uint64_t offset;
-  uint32_t size;
-};
-
-DEBUG_ONLY_TEST_F(DirectMetadataInputTest, ioCoalescing) {
-  struct TestParam {
-    std::vector<SectionLayout> sections;
-    int32_t maxCoalesceDistance;
-    int64_t maxCoalesceBytes;
-    int32_t expectedNumIos;
-    uint64_t expectedOverread;
-    std::string debugString() const {
-      return fmt::format(
-          "{} sections, maxCoalesceDistance {}, maxCoalesceBytes {}, expectedNumIos {}, expectedOverread {}",
-          sections.size(),
-          maxCoalesceDistance,
-          maxCoalesceBytes,
-          expectedNumIos,
-          expectedOverread);
-    }
-  };
-
-  constexpr int64_t kLargeBytes = 128 << 20;
-
-  std::vector<TestParam> testSettings = {
-      // Single section → 1 IO.
-      {{{0, 100}}, 0, kLargeBytes, 1, 0},
-      // Two contiguous sections → 1 IO.
-      {{{0, 100}, {100, 200}}, 0, kLargeBytes, 1, 0},
-      // Three contiguous sections → 1 IO.
-      {{{0, 50}, {50, 60}, {110, 90}}, 0, kLargeBytes, 1, 0},
-      // Two sections with small gap, distance=0 → 2 IOs.
-      {{{0, 100}, {150, 100}}, 0, kLargeBytes, 2, 0},
-      // Two sections with gap within coalesce distance → 1 IO.
-      {{{0, 100}, {150, 100}}, 100, kLargeBytes, 1, 50},
-      // Two sections with gap exceeding coalesce distance → 2 IOs.
-      {{{0, 100}, {250, 100}}, 100, kLargeBytes, 2, 0},
-      // Three sections: first two coalesce, third separate.
-      {{{0, 100}, {120, 80}, {500, 100}}, 50, kLargeBytes, 2, 20},
-      // Three sections: all coalesce with large distance.
-      {{{0, 100}, {200, 100}, {400, 100}}, 200, kLargeBytes, 1, 200},
-      // Large gap, small distance → separate IOs.
-      {{{0, 1'000}, {10'000, 1'000}}, 100, kLargeBytes, 2, 0},
-      // maxCoalesceBytes splits contiguous sections.
-      {{{0, 100}, {100, 100}, {200, 100}}, 0, 150, 2, 0},
-      // maxCoalesceBytes exactly fits two sections → third splits.
-      {{{0, 100}, {100, 100}, {200, 100}}, 0, 200, 2, 0},
-      // maxCoalesceBytes fits all three.
-      {{{0, 100}, {100, 100}, {200, 100}}, 0, 300, 1, 0},
-      // maxCoalesceBytes splits every section into its own IO.
-      {{{0, 100}, {100, 100}, {200, 100}}, 0, 50, 3, 0},
-      // maxCoalesceBytes with gap: gap coalesced but bytes limit splits.
-      {{{0, 100}, {150, 100}, {300, 100}}, 200, 200, 2, 50},
-  };
-
-  for (const auto& testData : testSettings) {
-    SCOPED_TRACE(testData.debugString());
-
-    // Build file with sections filled with deterministic data.
-    uint64_t fileSize = 0;
-    for (const auto& s : testData.sections) {
-      fileSize = std::max(fileSize, s.offset + s.size);
-    }
-    std::string fileContent(fileSize, '\xCC');
-    std::vector<std::string> expectedData;
-    std::vector<nimble::MetadataSection> sections;
-    for (uint32_t i = 0; i < testData.sections.size(); ++i) {
-      const auto& layout = testData.sections[i];
-      std::string data(layout.size, 'A' + i);
-      std::memcpy(fileContent.data() + layout.offset, data.data(), data.size());
-      sections.emplace_back(
-          layout.offset,
-          layout.size,
-          nimble::CompressionType::Uncompressed,
-          layout.size);
-      expectedData.push_back(std::move(data));
-    }
-
-    auto readFile = std::make_shared<velox::InMemoryReadFile>(fileContent);
-
-    const auto rawBytesBefore = metadataIoStats_->rawBytesRead();
-    const auto overreadBefore = metadataIoStats_->rawOverreadBytes();
-
-    velox::CoalesceIoStats capturedStats;
-    SCOPED_TESTVALUE_SET(
-        "facebook::nimble::MetadataInput::computeIoGroups",
-        std::function<void(const velox::CoalesceIoStats*)>(
-            [&](const velox::CoalesceIoStats* stats) {
-              capturedStats = *stats;
-            }));
-
-    const auto options = makeMetadataInputOptions(
-        testData.maxCoalesceDistance, testData.maxCoalesceBytes);
-    auto input = nimble::MetadataInput::create(readFile.get(), options);
-    input->load(sections);
-
-    EXPECT_EQ(capturedStats.numIos, testData.expectedNumIos);
-    EXPECT_EQ(capturedStats.extraBytes, testData.expectedOverread);
-
-    uint64_t expectedPayloadBytes = 0;
-    for (const auto& s : testData.sections) {
-      expectedPayloadBytes += s.size;
-    }
-    EXPECT_EQ(
-        metadataIoStats_->rawBytesRead() - rawBytesBefore,
-        expectedPayloadBytes);
-    EXPECT_EQ(
-        metadataIoStats_->rawOverreadBytes() - overreadBefore,
-        testData.expectedOverread);
-  }
-}
-
-TEST_F(DirectMetadataInputTest, ioError) {
-  struct TestParam {
-    std::vector<SectionSpec> specs;
-    int32_t maxCoalesceDistance;
-    std::string debugString() const {
-      return fmt::format(
-          "{} sections, maxCoalesceDistance {}, [{}]",
-          specs.size(),
-          maxCoalesceDistance,
-          fmt::join(
-              specs | std::views::transform([](const auto& s) {
-                return fmt::format(
-                    "comp{}:sz{}:uncomp{}",
-                    static_cast<int>(s.compressionType),
-                    s.data.size(),
-                    s.hasUncompressedSize);
-              }),
-              ", "));
-    }
-  };
-
-  std::vector<TestParam> testSettings = {
-      {{{std::string(100, 'A'), nimble::CompressionType::Uncompressed}}, 0},
-      {{{std::string(1'000, 'B'), nimble::CompressionType::Zstd}}, 0},
-      {{{std::string(1'000, 'C'), nimble::CompressionType::Zstd, false}}, 0},
-      {{{std::string(100, 'D'), nimble::CompressionType::Uncompressed},
-        {std::string(100, 'E'), nimble::CompressionType::Uncompressed}},
-       0},
-      {{{std::string(100, 'F'), nimble::CompressionType::Uncompressed},
-        {std::string(1'000, 'G'), nimble::CompressionType::Zstd, false}},
-       0},
-      {{{std::string(100, 'H'), nimble::CompressionType::Uncompressed},
-        {std::string(1'000, 'I'), nimble::CompressionType::Zstd},
-        {std::string(100, 'J'), nimble::CompressionType::Uncompressed}},
-       0},
-      {{{std::string(100, 'K'), nimble::CompressionType::Uncompressed},
-        {std::string(100, 'L'), nimble::CompressionType::Uncompressed}},
-       1 << 20},
-  };
-
-  for (const auto& testData : testSettings) {
-    SCOPED_TRACE(testData.debugString());
-
-    std::vector<nimble::MetadataSection> sections;
-    std::vector<std::string> fileDataParts;
-    buildSections(testData.specs, pool_.get(), sections, fileDataParts);
-
-    const auto fileContent = buildFileContent(sections, fileDataParts);
-    auto innerFile = std::make_shared<velox::InMemoryReadFile>(fileContent);
-    auto readFile =
-        std::make_shared<nimble::testing::TrackingReadFile>(innerFile);
-    readFile->setReadError(
-        std::make_exception_ptr(std::runtime_error("injected IO error")));
-
-    const auto options = makeMetadataInputOptions(testData.maxCoalesceDistance);
-    auto input = nimble::MetadataInput::create(readFile.get(), options);
-    EXPECT_THROW(input->load(sections), std::runtime_error);
-
-    // After IO error, retry with error cleared should succeed (stateless).
-    readFile->clearReadError();
-    auto results = input->load(sections);
-    for (uint32_t i = 0; i < results.size(); ++i) {
-      EXPECT_EQ(results[i]->content(), testData.specs[i].data);
-    }
-  }
-}
-
-TEST_F(DirectMetadataInputTest, readRawTracksIoStats) {
-  const std::string fileContent(4096, 'Z');
-  auto innerFile = std::make_shared<velox::InMemoryReadFile>(fileContent);
-  auto readFile =
-      std::make_shared<nimble::testing::TrackingReadFile>(innerFile);
-  constexpr uint64_t kInjectedDelayUs = 5'000;
-  readFile->setReadDelayUs(kInjectedDelayUs);
-
-  const auto options = makeMetadataInputOptions();
-  auto input = nimble::MetadataInput::create(readFile.get(), options);
-
-  const auto readCountBefore = metadataIoStats_->read().count();
-  const auto rawBytesBefore = metadataIoStats_->rawBytesRead();
-  const auto totalScanTimeBefore = metadataIoStats_->totalScanTimeNs();
-  const auto storageLatencyCountBefore =
-      metadataIoStats_->storageReadLatencyUs().count();
-  const auto queryIoLatencyCountBefore =
-      metadataIoStats_->queryThreadIoLatencyUs().count();
-
-  std::vector<char> dest(1024);
-  input->readRaw(0, dest.size(), dest.data());
-
-  EXPECT_EQ(metadataIoStats_->read().count() - readCountBefore, 1);
-  EXPECT_EQ(metadataIoStats_->rawBytesRead() - rawBytesBefore, dest.size());
-  EXPECT_GE(
-      metadataIoStats_->totalScanTimeNs() - totalScanTimeBefore,
-      kInjectedDelayUs * 1'000);
-  EXPECT_GT(
-      metadataIoStats_->storageReadLatencyUs().count(),
-      storageLatencyCountBefore);
-  EXPECT_GT(
-      metadataIoStats_->queryThreadIoLatencyUs().count(),
-      queryIoLatencyCountBefore);
-
-  EXPECT_EQ(
-      std::string(dest.data(), dest.size()),
-      fileContent.substr(0, dest.size()));
-}
-
-TEST_F(DirectMetadataInputTest, cacheMethodsThrow) {
-  auto file = std::make_shared<velox::InMemoryReadFile>(std::string(100, 'x'));
-  auto options = makeMetadataInputOptions();
-  auto input = nimble::MetadataInput::create(file.get(), options);
-  EXPECT_FALSE(input->cached());
-  NIMBLE_ASSERT_THROW(input->findCachedMetadata(0), "");
-  std::string_view data = "test";
-  std::span<const std::string_view> ranges(&data, 1);
-  NIMBLE_ASSERT_THROW(input->cacheMetadata(0, ranges), "");
-}
-
-} // namespace
-
-// --- CachedMetadataInput tests ---
-
 namespace facebook::nimble {
 namespace {
 
@@ -673,18 +62,33 @@ constexpr uint64_t kAlignment{4'096};
 // File offset and length of each range that one read fills.
 using Read = std::vector<std::pair<uint64_t, uint64_t>>;
 
-// In-memory file that records each positioned vector read, and each scatter
-// read, which it accepts only without direct I/O. With 'alignment' above 1 it
-// reports direct I/O and rejects unaligned reads. A direct-I/O read past the
-// end of the file then returns only the bytes before the end, as on Linux, and
-// leaves junk in the rest of its buffer. Without direct I/O, a read past the
-// end of the file fails. Runs an optional hook before each read.
+// In-memory file that records each positioned read, single or vector, and each
+// scatter read, which it accepts only without direct I/O. With 'alignment'
+// above 1 it reports direct I/O and rejects unaligned reads. A direct-I/O read
+// past the end of the file then returns only the bytes before the end, as on
+// Linux, and leaves junk in the rest of its buffer. Without direct I/O, a read
+// past the end of the file fails. Runs an optional hook before each read.
 class RecordingReadFile final : public velox::InMemoryReadFile {
  public:
   RecordingReadFile(std::string content, uint64_t alignment)
       : velox::InMemoryReadFile{std::move(content)}, alignment_{alignment} {}
 
+  using velox::InMemoryReadFile::pread;
   using velox::InMemoryReadFile::preadv;
+
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buf,
+      const velox::FileIoContext& context = {}) const override {
+    const velox::common::Region region{offset, length};
+    const folly::Range<char*> buffer{static_cast<char*>(buf), length};
+    preadv(
+        folly::Range<const velox::common::Region*>(&region, 1),
+        folly::Range<const folly::Range<char*>*>(&buffer, 1),
+        context);
+    return {static_cast<char*>(buf), length};
+  }
 
   uint64_t preadv(
       uint64_t offset,
@@ -703,7 +107,8 @@ class RecordingReadFile final : public velox::InMemoryReadFile {
       if (buffer.data() != nullptr) {
         NIMBLE_CHECK_LE(
             offset + buffer.size(), size(), "Read past the end of the file");
-        pread(offset, buffer.size(), buffer.data(), context);
+        velox::InMemoryReadFile::pread(
+            offset, buffer.size(), buffer.data(), context);
         read.emplace_back(offset, buffer.size());
         scatterDestinations_.wlock()->push_back(buffer.data());
       }
@@ -741,7 +146,8 @@ class RecordingReadFile final : public velox::InMemoryReadFile {
           "Unaligned read buffer");
       const auto bytesBeforeFileEnd =
           std::min(region.length, size() - std::min(region.offset, size()));
-      pread(region.offset, bytesBeforeFileEnd, buffers[i].data(), context);
+      velox::InMemoryReadFile::pread(
+          region.offset, bytesBeforeFileEnd, buffers[i].data(), context);
       std::memset(
           buffers[i].data() + bytesBeforeFileEnd,
           kJunk,
@@ -834,15 +240,14 @@ struct SectionSpec {
   bool hasUncompressedSize{true};
 };
 
-class CachedMetadataInputTest : public ::testing::Test {
+class MetadataInputTest : public ::testing::Test {
  protected:
   static void SetUpTestSuite() {
     velox::memory::MemoryManager::testingSetInstance({});
   }
 
   void SetUp() override {
-    pool_ =
-        velox::memory::memoryManager()->addLeafPool("CachedMetadataInputTest");
+    pool_ = velox::memory::memoryManager()->addLeafPool("MetadataInputTest");
 
     // An allocator accepts one cache for its lifetime, so each test brings its
     // own rather than registering another cache with the shared one.
@@ -921,8 +326,93 @@ class CachedMetadataInputTest : public ::testing::Test {
   // AsyncDataCache keys need file ids leased from velox::fileIds(). The inputs
   // read only the id of the handle.
   const velox::FileHandle fileHandle_{
-      .uuid = {velox::fileIds(), "CachedMetadataInputTest"}};
+      .uuid = {velox::fileIds(), "MetadataInputTest"}};
 };
+
+class DirectMetadataInputTest : public MetadataInputTest {};
+
+class CachedMetadataInputTest : public MetadataInputTest {};
+
+// Runs a test on both inputs, which share the read path. The parameter selects
+// CachedMetadataInput.
+class MetadataInputParamTest : public MetadataInputTest,
+                               public ::testing::WithParamInterface<bool> {
+ protected:
+  // Returns the block cache that selects the input under test, or null for
+  // DirectMetadataInput.
+  BlockCache* blockCache() const {
+    return GetParam() ? blockCache_ : nullptr;
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    MetadataInputs,
+    MetadataInputParamTest,
+    ::testing::Bool(),
+    [](const auto& info) {
+      return std::string{info.param ? "cached" : "direct"};
+    });
+
+// --- DirectMetadataInput tests ---
+
+// Without direct I/O, the input reads each merged range with one
+// scatter read, which skips the gaps between its sections and fills the
+// buffers that load() returns, so an uncompressed section is not copied.
+TEST_F(DirectMetadataInputTest, readsIntoSectionBuffersWithoutDirectIo) {
+  auto [file, sections] = makeFile(
+      {
+          {0, std::string(10, 'a')},
+          {50, std::string(10, 'b')},
+          {100, std::string(1'000, 'c'), CompressionType::Zstd},
+          {5'000, std::string(10, 'd')},
+      },
+      6'000,
+      1);
+  auto input = MetadataInput::create(
+      file.get(), makeOptions(nullptr, /*maxCoalesceDistance=*/100));
+
+  const auto buffers = input->load(sections);
+  EXPECT_EQ(
+      contents(buffers),
+      (std::vector<std::string>{
+          std::string(10, 'a'),
+          std::string(10, 'b'),
+          std::string(1'000, 'c'),
+          std::string(10, 'd'),
+      }));
+  const uint64_t compressedSize{sections[2].size()};
+  const std::vector<Read> expected{
+      {{0, 10}, {50, 10}, {100, compressedSize}},
+      {{5'000, 10}},
+  };
+  EXPECT_EQ(file->scatterReads(), expected);
+  EXPECT_TRUE(file->reads().empty());
+
+  const auto destinations = file->scatterDestinations();
+  ASSERT_EQ(destinations.size(), 4);
+  EXPECT_EQ(buffers[0]->content().data(), destinations[0]);
+  EXPECT_EQ(buffers[1]->content().data(), destinations[1]);
+  EXPECT_EQ(buffers[3]->content().data(), destinations[3]);
+
+  // The two 40-byte gaps are read and dropped.
+  EXPECT_EQ(ioStats_->read().sum(), 110 + compressedSize);
+  EXPECT_EQ(ioStats_->rawBytesRead(), 30 + compressedSize);
+  EXPECT_EQ(ioStats_->rawOverreadBytes(), 80);
+}
+
+TEST_F(DirectMetadataInputTest, rejectsCacheMethods) {
+  auto [file, sections] = makeFile({}, 100, 1);
+  auto input = MetadataInput::create(file.get(), makeOptions(nullptr));
+  NIMBLE_ASSERT_THROW(
+      input->findCachedMetadata(0),
+      "findCachedMetadata requires CachedMetadataInput");
+  const std::array<std::string_view, 1> ranges{"data"};
+  NIMBLE_ASSERT_THROW(
+      input->cacheMetadata(0, ranges),
+      "cacheMetadata requires CachedMetadataInput");
+}
+
+// --- CachedMetadataInput tests, and tests of both inputs ---
 
 TEST_F(CachedMetadataInputTest, create) {
   auto [file, sections] = makeFile({}, 100, 1);
@@ -935,22 +425,6 @@ TEST_F(CachedMetadataInputTest, create) {
     auto input = MetadataInput::create(file.get(), makeOptions(blockCache_));
     EXPECT_NE(dynamic_cast<CachedMetadataInput*>(input.get()), nullptr);
     EXPECT_TRUE(input->cached());
-  }
-  {
-    NIMBLE_ASSERT_USER_THROW(
-        MetadataInput::create(
-            file.get(), makeOptions(blockCache_, /*maxCoalesceDistance=*/-1)),
-        "maxCoalesceDistance must not be negative");
-  }
-  {
-    NIMBLE_ASSERT_USER_THROW(
-        MetadataInput::create(
-            file.get(),
-            makeOptions(
-                blockCache_,
-                /*maxCoalesceDistance=*/0,
-                /*maxCoalesceBytes=*/-1)),
-        "maxCoalesceBytes must not be negative");
   }
   {
     auto options = makeOptions(blockCache_);
@@ -966,6 +440,26 @@ TEST_F(CachedMetadataInputTest, create) {
     NIMBLE_ASSERT_USER_THROW(
         MetadataInput::create(file.get(), options),
         "blockCache requires fileHandle->uuid");
+  }
+}
+
+TEST_P(MetadataInputParamTest, rejectsNegativeCoalesceSettings) {
+  auto [file, sections] = makeFile({}, 100, 1);
+  {
+    NIMBLE_ASSERT_USER_THROW(
+        MetadataInput::create(
+            file.get(), makeOptions(blockCache(), /*maxCoalesceDistance=*/-1)),
+        "maxCoalesceDistance must not be negative");
+  }
+  {
+    NIMBLE_ASSERT_USER_THROW(
+        MetadataInput::create(
+            file.get(),
+            makeOptions(
+                blockCache(),
+                /*maxCoalesceDistance=*/0,
+                /*maxCoalesceBytes=*/-1)),
+        "maxCoalesceBytes must not be negative");
   }
 }
 
@@ -986,7 +480,7 @@ TEST_F(CachedMetadataInputTest, keepsFileId) {
       contents(input->load(sections)), std::vector<std::string>{"section"});
 }
 
-TEST_F(CachedMetadataInputTest, loadSections) {
+TEST_P(MetadataInputParamTest, loadSections) {
   const std::vector<SectionSpec> specs{
       {0, "uncompressed-head"},
       {5'000, std::string(1'000, 'Z'), CompressionType::Zstd},
@@ -1008,7 +502,7 @@ TEST_F(CachedMetadataInputTest, loadSections) {
         .uuid = {
             velox::fileIds(),
             fmt::format("CachedMetadataInputTest.loadSections.{}", alignment)}};
-    auto options = makeOptions(blockCache_);
+    auto options = makeOptions(blockCache());
     options.fileHandle = &fileHandle;
     auto input = MetadataInput::create(file.get(), options);
 
@@ -1027,7 +521,20 @@ TEST_F(CachedMetadataInputTest, loadSections) {
   }
 }
 
-TEST_F(CachedMetadataInputTest, readsInOneAlignedBatch) {
+TEST_P(MetadataInputParamTest, repeatedLoad) {
+  auto [file, sections] = makeFile({{0, "repeat-test"}}, 100, 1);
+  auto input = MetadataInput::create(file.get(), makeOptions(blockCache()));
+
+  // Stateless: can call load() multiple times without reset.
+  const std::vector<std::string> expected{"repeat-test"};
+  EXPECT_EQ(contents(input->load(sections)), expected);
+  EXPECT_EQ(contents(input->load(sections)), expected);
+
+  // Empty input throws.
+  NIMBLE_ASSERT_THROW(input->load({}), "No sections to load");
+}
+
+TEST_P(MetadataInputParamTest, readsInOneAlignedBatch) {
   const uint64_t fileSize = 6 * kAlignment + 100;
   auto [file, sections] = makeFile(
       {
@@ -1038,7 +545,7 @@ TEST_F(CachedMetadataInputTest, readsInOneAlignedBatch) {
       },
       fileSize,
       kAlignment);
-  auto input = MetadataInput::create(file.get(), makeOptions(blockCache_));
+  auto input = MetadataInput::create(file.get(), makeOptions(blockCache()));
 
   EXPECT_EQ(
       contents(input->load(sections)),
@@ -1122,7 +629,7 @@ TEST_F(CachedMetadataInputTest, readsIntoCacheEntriesWithoutDirectIo) {
   EXPECT_EQ(cachedBuffers[3]->content().data(), destinations[3]);
 }
 
-TEST_F(CachedMetadataInputTest, mergesReadsSharingABlock) {
+TEST_P(MetadataInputParamTest, mergesReadsSharingABlock) {
   auto [file, sections] = makeFile(
       {
           {100, std::string(100, 'a')},
@@ -1131,7 +638,7 @@ TEST_F(CachedMetadataInputTest, mergesReadsSharingABlock) {
       },
       3 * kAlignment,
       kAlignment);
-  auto input = MetadataInput::create(file.get(), makeOptions(blockCache_));
+  auto input = MetadataInput::create(file.get(), makeOptions(blockCache()));
 
   EXPECT_EQ(
       contents(input->load(sections)),
@@ -1144,7 +651,7 @@ TEST_F(CachedMetadataInputTest, mergesReadsSharingABlock) {
   EXPECT_EQ(file->reads(), expected);
 }
 
-TEST_F(CachedMetadataInputTest, coalescesReads) {
+TEST_P(MetadataInputParamTest, coalescesReads) {
   const std::vector<SectionSpec> specs{
       {0, std::string(10, 'a')},
       {50, std::string(10, 'b')},
@@ -1154,7 +661,7 @@ TEST_F(CachedMetadataInputTest, coalescesReads) {
     SCOPED_TRACE("Merges reads within the coalesce distance");
     auto [file, sections] = makeFile(specs, 1'000, 1);
     auto input = MetadataInput::create(
-        file.get(), makeOptions(blockCache_, /*maxCoalesceDistance=*/100));
+        file.get(), makeOptions(blockCache(), /*maxCoalesceDistance=*/100));
     input->load(sections);
     const std::vector<Read> expected{{{0, 10}, {50, 10}}, {{500, 10}}};
     EXPECT_EQ(file->scatterReads(), expected);
@@ -1167,7 +674,7 @@ TEST_F(CachedMetadataInputTest, coalescesReads) {
     const velox::FileHandle fileHandle{
         .uuid = {velox::fileIds(), "CachedMetadataInputTest.coalesceBytes"}};
     auto options = makeOptions(
-        blockCache_, /*maxCoalesceDistance=*/100, /*maxCoalesceBytes=*/15);
+        blockCache(), /*maxCoalesceDistance=*/100, /*maxCoalesceBytes=*/15);
     options.fileHandle = &fileHandle;
     auto input = MetadataInput::create(file.get(), options);
     input->load(sections);
@@ -1184,7 +691,7 @@ TEST_F(CachedMetadataInputTest, coalescesReads) {
     const velox::FileHandle fileHandle{
         .uuid = {velox::fileIds(), "CachedMetadataInputTest.coalesceDistance"}};
     auto options = makeOptions(
-        blockCache_, /*maxCoalesceDistance=*/static_cast<int32_t>(kGap));
+        blockCache(), /*maxCoalesceDistance=*/static_cast<int32_t>(kGap));
     options.fileHandle = &fileHandle;
     auto input = MetadataInput::create(file.get(), options);
     input->load(sections);
@@ -1195,13 +702,13 @@ TEST_F(CachedMetadataInputTest, coalescesReads) {
 
 // Without direct I/O, Options::executor runs every scatter read of a load but
 // the first, which load() runs itself.
-TEST_F(CachedMetadataInputTest, executorRunsAllButFirstScatterRead) {
+TEST_P(MetadataInputParamTest, executorRunsAllButFirstScatterRead) {
   const std::vector<SectionSpec> specs{{0, "first"}, {100, "second"}};
   const std::vector<std::string> expected{"first", "second"};
   {
     SCOPED_TRACE("The inline executor runs the queued read first");
     auto [file, sections] = makeFile(specs, 200, 1);
-    auto options = makeOptions(blockCache_);
+    auto options = makeOptions(blockCache());
     options.executor = &folly::InlineExecutor::instance();
     auto input = MetadataInput::create(file.get(), options);
 
@@ -1222,7 +729,7 @@ TEST_F(CachedMetadataInputTest, executorRunsAllButFirstScatterRead) {
     const velox::FileHandle fileHandle{
         .uuid = {velox::fileIds(), "CachedMetadataInputTest.manualExecutor"}};
     folly::ManualExecutor executor;
-    auto options = makeOptions(blockCache_);
+    auto options = makeOptions(blockCache());
     options.fileHandle = &fileHandle;
     options.executor = &executor;
     auto input = MetadataInput::create(file.get(), options);
@@ -1240,27 +747,37 @@ TEST_F(CachedMetadataInputTest, executorRunsAllButFirstScatterRead) {
   }
 }
 
-TEST_F(CachedMetadataInputTest, loadsEmptySection) {
+TEST_P(MetadataInputParamTest, loadsEmptySection) {
   auto [file, sections] = makeFile({{10, ""}}, 100, kAlignment);
-  auto input = MetadataInput::create(file.get(), makeOptions(blockCache_));
+  auto input = MetadataInput::create(file.get(), makeOptions(blockCache()));
 
   EXPECT_EQ(contents(input->load(sections)), std::vector<std::string>{""});
   EXPECT_TRUE(file->reads().empty());
 }
 
-TEST_F(CachedMetadataInputTest, loadsEmptySectionSharingOffset) {
+TEST_P(MetadataInputParamTest, loadsEmptySectionSharingOffset) {
   // The writer gives an empty section the offset of the section after it.
   for (const auto alignment : {uint64_t{1}, kAlignment}) {
     SCOPED_TRACE(fmt::format("alignment {}", alignment));
     auto [file, sections] = makeFile({{10, ""}, {10, "data"}}, 100, alignment);
-    auto input = MetadataInput::create(file.get(), makeOptions(blockCache_));
+
+    // A file id per alignment, so no case hits another case's entries.
+    const velox::FileHandle fileHandle{
+        .uuid = {
+            velox::fileIds(),
+            fmt::format(
+                "CachedMetadataInputTest.emptySectionSharingOffset.{}",
+                alignment)}};
+    auto options = makeOptions(blockCache());
+    options.fileHandle = &fileHandle;
+    auto input = MetadataInput::create(file.get(), options);
     EXPECT_EQ(
         contents(input->load(sections)),
         (std::vector<std::string>{"", "data"}));
   }
 }
 
-TEST_F(CachedMetadataInputTest, compressedSectionTooSmallThrows) {
+TEST_P(MetadataInputParamTest, compressedSectionTooSmallThrows) {
   auto [file, sections] = makeFile({}, 100, 1);
 
   // Neither holds the 4-byte uncompressed size. The second ends the file, so
@@ -1269,16 +786,16 @@ TEST_F(CachedMetadataInputTest, compressedSectionTooSmallThrows) {
       MetadataSection{10, 0, CompressionType::Zstd, 100},
       MetadataSection{98, 2, CompressionType::Zstd, 100},
   };
-  auto input = MetadataInput::create(file.get(), makeOptions(blockCache_));
+  auto input = MetadataInput::create(file.get(), makeOptions(blockCache()));
   for (const auto& section : tooSmall) {
     NIMBLE_ASSERT_FILE_THROW(
         input->load({&section, 1}), "Compressed metadata section is too small");
   }
 }
 
-TEST_F(CachedMetadataInputTest, sectionPastEndOfFileThrows) {
+TEST_P(MetadataInputParamTest, sectionPastEndOfFileThrows) {
   auto [file, sections] = makeFile({}, 100, 1);
-  auto input = MetadataInput::create(file.get(), makeOptions(blockCache_));
+  auto input = MetadataInput::create(file.get(), makeOptions(blockCache()));
   {
     SCOPED_TRACE("Offset past the end, with offset + size wrapping to 16");
     const MetadataSection section{
@@ -1299,7 +816,7 @@ TEST_F(CachedMetadataInputTest, sectionPastEndOfFileThrows) {
   }
 }
 
-TEST_F(CachedMetadataInputTest, overlappingSectionsRecordBytesRead) {
+TEST_P(MetadataInputParamTest, overlappingSectionsRecordBytesRead) {
   {
     SCOPED_TRACE("The second section starts a scatter read");
     const auto bytes = std::string(100, 'a') + std::string(100, 'b');
@@ -1308,7 +825,7 @@ TEST_F(CachedMetadataInputTest, overlappingSectionsRecordBytesRead) {
         MetadataSection{0, 200, CompressionType::Uncompressed, 200},
         MetadataSection{100, 100, CompressionType::Uncompressed, 100},
     };
-    auto input = MetadataInput::create(file.get(), makeOptions(blockCache_));
+    auto input = MetadataInput::create(file.get(), makeOptions(blockCache()));
     EXPECT_EQ(
         contents(input->load(overlapping)),
         (std::vector<std::string>{bytes, std::string(100, 'b')}));
@@ -1334,7 +851,7 @@ TEST_F(CachedMetadataInputTest, overlappingSectionsRecordBytesRead) {
     };
     const velox::FileHandle fileHandle{
         .uuid = {velox::fileIds(), "CachedMetadataInputTest.overlapping"}};
-    auto options = makeOptions(blockCache_);
+    auto options = makeOptions(blockCache());
     options.fileHandle = &fileHandle;
     auto input = MetadataInput::create(file.get(), options);
     EXPECT_EQ(
@@ -1347,10 +864,10 @@ TEST_F(CachedMetadataInputTest, overlappingSectionsRecordBytesRead) {
   }
 }
 
-TEST_F(CachedMetadataInputTest, recordsReadStats) {
+TEST_P(MetadataInputParamTest, recordsReadStats) {
   auto [file, sections] =
       makeFile({{100, std::string(200, 'a')}}, kAlignment, kAlignment);
-  auto input = MetadataInput::create(file.get(), makeOptions(blockCache_));
+  auto input = MetadataInput::create(file.get(), makeOptions(blockCache()));
 
   input->load(sections);
 
@@ -1363,12 +880,12 @@ TEST_F(CachedMetadataInputTest, recordsReadStats) {
 
 // A direct-I/O read that runs past the end of the file reads only the bytes
 // before the end, so only those count as read.
-TEST_F(CachedMetadataInputTest, readPastEndOfFileRecordsBytesBeforeEnd) {
+TEST_P(MetadataInputParamTest, readPastEndOfFileRecordsBytesBeforeEnd) {
   auto [file, sections] = makeFile(
       {{kAlignment + 100, std::string(200, 'a')}},
       kAlignment + 300,
       kAlignment);
-  auto input = MetadataInput::create(file.get(), makeOptions(blockCache_));
+  auto input = MetadataInput::create(file.get(), makeOptions(blockCache()));
 
   input->load(sections);
 
@@ -1379,15 +896,70 @@ TEST_F(CachedMetadataInputTest, readPastEndOfFileRecordsBytesBeforeEnd) {
   EXPECT_EQ(ioStats_->rawOverreadBytes(), 100);
 }
 
+TEST_P(MetadataInputParamTest, readRawTracksIoStats) {
+  const std::string fileContent(4'096, 'Z');
+  auto file = std::make_shared<nimble::testing::TrackingReadFile>(
+      std::make_shared<velox::InMemoryReadFile>(fileContent));
+  constexpr uint64_t kInjectedDelayUs{5'000};
+  file->setReadDelayUs(kInjectedDelayUs);
+  auto input = MetadataInput::create(file.get(), makeOptions(blockCache()));
+
+  std::vector<char> dest(1'024);
+  input->readRaw(0, dest.size(), dest.data());
+
+  EXPECT_EQ(ioStats_->read().count(), 1);
+  EXPECT_EQ(ioStats_->rawBytesRead(), dest.size());
+  EXPECT_GE(ioStats_->totalScanTimeNs(), kInjectedDelayUs * 1'000);
+  EXPECT_EQ(ioStats_->storageReadLatencyUs().count(), 1);
+  EXPECT_EQ(ioStats_->queryThreadIoLatencyUs().count(), 1);
+  EXPECT_EQ(
+      std::string(dest.data(), dest.size()),
+      fileContent.substr(0, dest.size()));
+
+  // A zero-byte read reads and records nothing.
+  input->readRaw(0, 0, dest.data());
+  EXPECT_EQ(ioStats_->read().count(), 1);
+}
+
+// With direct I/O, readRaw() reads the aligned blocks around the requested
+// bytes and copies the bytes out. The rest of the blocks counts as overread.
+TEST_P(MetadataInputParamTest, readRawAlignsForDirectIo) {
+  const uint64_t fileSize = 2 * kAlignment + 100;
+  const std::string tail(300, 't');
+  const auto file =
+      makeFile({{fileSize - tail.size(), tail}}, fileSize, kAlignment).first;
+  auto input = MetadataInput::create(file.get(), makeOptions(blockCache()));
+  {
+    SCOPED_TRACE("Reads the blocks around the bytes");
+    std::string dest(tail.size(), '\0');
+    input->readRaw(fileSize - tail.size(), dest.size(), dest.data());
+    EXPECT_EQ(dest, tail);
+
+    // The read covers the last two blocks, and runs past the end of the file.
+    const std::vector<Read> expectedReads{{{kAlignment, 2 * kAlignment}}};
+    EXPECT_EQ(file->reads(), expectedReads);
+    EXPECT_EQ(ioStats_->read().sum(), fileSize - kAlignment);
+    EXPECT_EQ(ioStats_->rawBytesRead(), tail.size());
+    EXPECT_EQ(
+        ioStats_->rawOverreadBytes(), fileSize - kAlignment - tail.size());
+  }
+  {
+    SCOPED_TRACE("Reads nothing for no bytes");
+    char dest{0};
+    input->readRaw(kAlignment, 0, &dest);
+    EXPECT_EQ(file->reads().size(), 1);
+  }
+}
+
 // Every read of the file passes Options::fileIoContext, so its file options
 // reach the storage layer.
-TEST_F(CachedMetadataInputTest, readsPassFileIoContext) {
+TEST_P(MetadataInputParamTest, readsPassFileIoContext) {
   const folly::F14FastMap<std::string, std::string> fileOpts{{"key", "value"}};
   auto file = std::make_shared<nimble::testing::FileOptsRecordingReadFile>(
       std::string(1'000, 'a'));
   const std::vector<MetadataSection> sections{
       {100, 200, CompressionType::Uncompressed}};
-  auto options = makeOptions(blockCache_);
+  auto options = makeOptions(blockCache());
   options.fileIoContext.fileOpts = fileOpts;
   auto input = MetadataInput::create(file.get(), options);
 
@@ -1400,9 +972,9 @@ TEST_F(CachedMetadataInputTest, readsPassFileIoContext) {
   EXPECT_EQ(file->fileOpts(), expected);
 }
 
-TEST_F(CachedMetadataInputTest, duplicateSectionsThrow) {
+TEST_P(MetadataInputParamTest, duplicateSectionsThrow) {
   auto [file, sections] = makeFile({{0, "duplicate"}}, 100, 1);
-  auto input = MetadataInput::create(file.get(), makeOptions(blockCache_));
+  auto input = MetadataInput::create(file.get(), makeOptions(blockCache()));
   NIMBLE_ASSERT_THROW(
       input->load(std::array{sections[0], sections[0]}),
       "Metadata input must not contain duplicate regions");
