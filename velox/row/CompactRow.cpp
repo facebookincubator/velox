@@ -285,10 +285,10 @@ void CompactRow::initialize(const TypePtr& type) {
 namespace {
 std::optional<int32_t> fixedValueSize(const TypePtr& type) {
   if (type->isTimestamp()) {
-    return sizeof(int64_t);
+    return static_cast<int32_t>(sizeof(int64_t));
   }
   if (type->isFixedWidth()) {
-    return type->cppSizeInBytes();
+    return static_cast<int32_t>(type->cppSizeInBytes());
   }
   return std::nullopt;
 }
@@ -308,7 +308,7 @@ std::optional<int32_t> CompactRow::fixedRowSize(const RowTypePtr& rowType) {
     }
   }
 
-  return size;
+  return static_cast<int32_t>(size);
 }
 
 int32_t CompactRow::rowSize(vector_size_t index) const {
