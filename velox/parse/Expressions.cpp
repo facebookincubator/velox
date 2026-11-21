@@ -13,9 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <typeinfo>
-
 #include "velox/parse/Expressions.h"
+
+#include <typeinfo>
 
 #include "velox/common/EnumDefine.h"
 
@@ -59,6 +59,7 @@ const auto& kindNames() {
       {IExpr::Kind::kAggregate, "Aggregate"},
       {IExpr::Kind::kWindow, "Window"},
       {IExpr::Kind::kPlaceholder, "Placeholder"},
+      {IExpr::Kind::kAtTimeZone, "AtTimeZone"},
   };
   return kNames;
 }
