@@ -69,12 +69,62 @@ bool fillPrestoStringOffsets(
   return device::fillPrestoStringOffsets(tasks, stream);
 }
 
-std::vector<int64_t> gatherStringOffsets(
-    const StringOffsets& offsets,
-    cudf::host_span<const int64_t> rows,
+std::vector<PageStats> prestoPageStats(
+    cudf::host_span<const PageStatsColumn> columns,
+    cudf::host_span<const int64_t> bounds,
     cuda::stream_ref stream) {
-  checkOffsetsType(offsets);
-  return device::gatherStringOffsets(offsets, rows, stream);
+  VELOX_CHECK(!bounds.empty(), "'bounds' must start with row 0");
+  VELOX_CHECK_EQ(bounds[0], 0, "'bounds' must start with row 0");
+  for (size_t i = 1; i < bounds.size(); ++i) {
+    VELOX_CHECK_GE(bounds[i], bounds[i - 1], "'bounds' must not decrease");
+  }
+  VELOX_CHECK_LE(
+      bounds[bounds.size() - 1],
+      std::numeric_limits<int32_t>::max(),
+      "'bounds' must stay within the cuDF row limit");
+  for (const auto& column : columns) {
+    if (column.offsets.offsets != nullptr) {
+      checkOffsetsType(column.offsets);
+    }
+  }
+  return device::prestoPageStats(columns, bounds, stream);
+}
+
+std::vector<bool> hasNonEmptyNullStrings(
+    cudf::host_span<const PageStatsColumn> columns,
+    int32_t numRows,
+    cuda::stream_ref stream) {
+  VELOX_CHECK_GE(numRows, 0, "'numRows' must not be negative");
+  for (const auto& column : columns) {
+    if (column.offsets.offsets != nullptr) {
+      checkOffsetsType(column.offsets);
+    }
+  }
+  const auto flags = device::hasNonEmptyNullStrings(columns, numRows, stream);
+  return std::vector<bool>(flags.begin(), flags.end());
+}
+
+void compactValidValues(
+    const void* src,
+    int32_t width,
+    const cudf::bitmask_type* mask,
+    int64_t firstBit,
+    int32_t numRows,
+    void* dst,
+    cuda::stream_ref stream) {
+  VELOX_CHECK(
+      width == 1 || width == 2 || width == 4 || width == 8 || width == 16,
+      "'width' must be 1, 2, 4, 8 or 16: {}",
+      width);
+  VELOX_CHECK_EQ(
+      reinterpret_cast<uintptr_t>(src) % width,
+      0,
+      "'src' must be aligned to 'width'");
+  VELOX_CHECK_EQ(
+      reinterpret_cast<uintptr_t>(dst) % width,
+      0,
+      "'dst' must be aligned to 'width'");
+  device::compactValidValues(src, width, mask, firstBit, numRows, dst, stream);
 }
 
 bool timestampsToMillis(

@@ -38,10 +38,27 @@ bool fillPrestoStringOffsets(
     cudf::host_span<const StringOffsetsTask> tasks,
     cuda::stream_ref stream);
 
-/// gatherStringOffsets() without the offsets type check.
-std::vector<int64_t> gatherStringOffsets(
-    const StringOffsets& offsets,
-    cudf::host_span<const int64_t> rows,
+/// prestoPageStats() without the argument checks.
+std::vector<PageStats> prestoPageStats(
+    cudf::host_span<const PageStatsColumn> columns,
+    cudf::host_span<const int64_t> bounds,
+    cuda::stream_ref stream);
+
+/// hasNonEmptyNullStrings() without the argument checks. Returns a byte per
+/// column that is not zero for true.
+std::vector<uint8_t> hasNonEmptyNullStrings(
+    cudf::host_span<const PageStatsColumn> columns,
+    int32_t numRows,
+    cuda::stream_ref stream);
+
+/// compactValidValues() without the width and alignment checks.
+void compactValidValues(
+    const void* src,
+    int32_t width,
+    const cudf::bitmask_type* mask,
+    int64_t firstBit,
+    int32_t numRows,
+    void* dst,
     cuda::stream_ref stream);
 
 /// timestampsToMillis() with the scale resolved: dst[i] = floor(src[i] * mul /
