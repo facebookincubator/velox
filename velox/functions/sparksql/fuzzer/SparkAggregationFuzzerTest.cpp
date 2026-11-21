@@ -25,6 +25,7 @@
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/TransformResultVerifier.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 #include "velox/functions/sparksql/fuzzer/SparkQueryRunner.h"
 #include "velox/serializers/CompactRowSerializer.h"
@@ -139,12 +140,22 @@ int main(int argc, char** argv) {
           {"max", nullptr},
       };
 
+  using facebook::velox::functions::sparksql::SparkQueryConfig;
+
+  // Velox runs the queries with these configs. Spark query runner sets ANSI
+  // mode and the session timezone in Spark from them.
+  const std::unordered_map<std::string, std::string> queryConfigs = {
+      {facebook::velox::core::QueryConfig::kSessionTimezone,
+       "America/Los_Angeles"},
+      {SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled), "false"},
+  };
+
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
   std::shared_ptr<facebook::velox::memory::MemoryPool> rootPool{
       facebook::velox::memory::memoryManager()->addRootPool()};
   auto sparkQueryRunner = std::make_unique<
       facebook::velox::functions::sparksql::fuzzer::SparkQueryRunner>(
-      rootPool.get(), "localhost:15002", "fuzzer", "aggregate");
+      rootPool.get(), "localhost:15002", "fuzzer", "aggregate", queryConfigs);
 
   using Runner = facebook::velox::exec::test::AggregationFuzzerRunner;
   using Options = facebook::velox::exec::test::AggregationFuzzerOptions;
@@ -156,6 +167,7 @@ int main(int argc, char** argv) {
   options.orderableGroupKeys = true;
   options.timestampPrecision =
       facebook::velox::VectorFuzzer::Options::TimestampPrecision::kMicroSeconds;
+  options.queryConfigs = queryConfigs;
   options.hiveConfigs = {
       {facebook::velox::connector::hive::HiveConfig::kReadTimestampUnit, "6"}};
   return Runner::run(initialSeed, std::move(sparkQueryRunner), options);

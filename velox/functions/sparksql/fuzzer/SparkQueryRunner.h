@@ -35,23 +35,16 @@ using facebook::velox::fuzzer::DataSpec;
 class SparkQueryRunner : public velox::exec::test::ReferenceQueryRunner {
  public:
   /// @param coordinatorUri Spark connect server endpoint, e.g. localhost:15002.
+  /// @param queryConfigs Velox query configs. ANSI mode ('spark.ansi_enabled')
+  /// and the session timezone ('session_timezone') are set from them in the
+  /// Spark session before each query, so that Spark runs queries with the same
+  /// settings as Velox instead of the Spark server defaults.
   SparkQueryRunner(
       memory::MemoryPool* pool,
       const std::string& coordinatorUri,
       const std::string& userId,
-      const std::string& userName)
-      : ReferenceQueryRunner(pool),
-        userId_(userId),
-        userName_(userName),
-        sessionId_(generateUUID()),
-        stub_(
-            spark::connect::SparkConnectService::NewStub(
-                grpc::CreateChannel(
-                    coordinatorUri,
-                    grpc::InsecureChannelCredentials()))) {
-    pool_ = aggregatePool()->addLeafChild("leaf");
-    copyPool_ = aggregatePool()->addLeafChild("copy");
-  };
+      const std::string& userName,
+      const std::unordered_map<std::string, std::string>& queryConfigs);
 
   RunnerType runnerType() const override {
     return RunnerType::kSparkQueryRunner;
@@ -107,10 +100,16 @@ class SparkQueryRunner : public velox::exec::test::ReferenceQueryRunner {
   // them into Velox RowVectors.
   std::vector<velox::RowVectorPtr> readArrowData(const std::string& data);
 
+  // Sets 'sessionConfigs_' in the Spark session through the Config RPC.
+  void setSessionConfigs();
+
   google::protobuf::Arena arena_;
   const std::string userId_;
   const std::string userName_;
   const std::string sessionId_;
+  // Spark session configs derived from the Velox query configs, e.g.
+  // {"spark.sql.ansi.enabled", "false"}.
+  const std::vector<std::pair<std::string, std::string>> sessionConfigs_;
   // Used to make gRPC calls to the SparkConnectService.
   std::unique_ptr<spark::connect::SparkConnectService::Stub> stub_;
   std::shared_ptr<velox::memory::MemoryPool> pool_;
