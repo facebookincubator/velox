@@ -15,11 +15,26 @@
  */
 
 #include "velox/core/QueryConfigProvider.h"
+#include <algorithm>
+
 #include <gtest/gtest.h>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryConfig.h"
 
 using namespace facebook::velox::config;
 using namespace facebook::velox::core;
+
+namespace {
+
+// Finds a property by name in a provider's materialized properties.
+const ConfigProperty* findProperty(
+    const std::vector<ConfigProperty>& properties,
+    std::string_view name) {
+  auto it = std::ranges::find(properties, name, &ConfigProperty::name);
+  return it == properties.end() ? nullptr : &*it;
+}
+
+} // namespace
 
 class QueryConfigProviderTest : public ::testing::Test {
  protected:
@@ -51,54 +66,46 @@ TEST_F(QueryConfigProviderTest, noDuplicateNames) {
 TEST_F(QueryConfigProviderTest, knownProperties) {
   auto props = provider_.properties();
 
-  auto findProp =
-      [&](const std::string& name) -> std::optional<ConfigProperty> {
-    for (const auto& prop : props) {
-      if (prop.name == name) {
-        return prop;
-      }
-    }
-    return std::nullopt;
-  };
-
   // Check a boolean property.
-  auto spillEnabled = findProp(QueryConfig::kSpillEnabled);
-  ASSERT_TRUE(spillEnabled.has_value());
+  auto spillEnabled = findProperty(props, QueryConfig::kSpillEnabled);
+  ASSERT_NE(spillEnabled, nullptr);
   EXPECT_EQ(spillEnabled->type, ConfigPropertyType::kBoolean);
   EXPECT_EQ(spillEnabled->defaultValue, "false");
 
   // Check a string property.
-  auto sessionTz = findProp(QueryConfig::kSessionTimezone);
-  ASSERT_TRUE(sessionTz.has_value());
+  auto sessionTz = findProperty(props, QueryConfig::kSessionTimezone);
+  ASSERT_NE(sessionTz, nullptr);
   EXPECT_EQ(sessionTz->type, ConfigPropertyType::kString);
   EXPECT_EQ(sessionTz->defaultValue, "");
 
   // Check an integer property (macro-registered).
-  auto startTime = findProp(QueryConfig::kSessionStartTime);
-  ASSERT_TRUE(startTime.has_value());
+  auto startTime = findProperty(props, QueryConfig::kSessionStartTime);
+  ASSERT_NE(startTime, nullptr);
   EXPECT_EQ(startTime->type, ConfigPropertyType::kInteger);
   EXPECT_EQ(startTime->defaultValue, "0");
 
   // Check a double property (macro-registered).
   auto cpuOverhead =
-      findProp(QueryConfig::kExprAdaptiveCpuSamplingMaxOverheadPct);
-  ASSERT_TRUE(cpuOverhead.has_value());
+      findProperty(props, QueryConfig::kExprAdaptiveCpuSamplingMaxOverheadPct);
+  ASSERT_NE(cpuOverhead, nullptr);
   EXPECT_EQ(cpuOverhead->type, ConfigPropertyType::kDouble);
   EXPECT_EQ(cpuOverhead->defaultValue, "1");
 
-  auto rpcRateLimiterMinLimit = findProp(QueryConfig::kRpcRateLimiterMinLimit);
-  ASSERT_TRUE(rpcRateLimiterMinLimit.has_value());
+  auto rpcRateLimiterMinLimit =
+      findProperty(props, QueryConfig::kRpcRateLimiterMinLimit);
+  ASSERT_NE(rpcRateLimiterMinLimit, nullptr);
   EXPECT_EQ(rpcRateLimiterMinLimit->type, ConfigPropertyType::kInteger);
   EXPECT_EQ(rpcRateLimiterMinLimit->defaultValue, "50");
 
-  auto rpcRateLimiterMaxLimit = findProp(QueryConfig::kRpcRateLimiterMaxLimit);
-  ASSERT_TRUE(rpcRateLimiterMaxLimit.has_value());
+  auto rpcRateLimiterMaxLimit =
+      findProperty(props, QueryConfig::kRpcRateLimiterMaxLimit);
+  ASSERT_NE(rpcRateLimiterMaxLimit, nullptr);
   EXPECT_EQ(rpcRateLimiterMaxLimit->type, ConfigPropertyType::kInteger);
   EXPECT_EQ(rpcRateLimiterMaxLimit->defaultValue, "200");
 
   auto rpcRateLimiterHardLimit =
-      findProp(QueryConfig::kRpcRateLimiterHardLimit);
-  ASSERT_TRUE(rpcRateLimiterHardLimit.has_value());
+      findProperty(props, QueryConfig::kRpcRateLimiterHardLimit);
+  ASSERT_NE(rpcRateLimiterHardLimit, nullptr);
   EXPECT_EQ(rpcRateLimiterHardLimit->type, ConfigPropertyType::kInteger);
   EXPECT_EQ(rpcRateLimiterHardLimit->defaultValue, "-1");
 }
@@ -109,29 +116,59 @@ TEST(QueryConfigProviderConfigOverridesTest, overridesApplied) {
        {QueryConfig::kSessionTimezone, "UTC"}});
   auto props = provider.properties();
 
-  auto findProp =
-      [&](const std::string& name) -> std::optional<ConfigProperty> {
-    for (const auto& prop : props) {
-      if (prop.name == name) {
-        return prop;
-      }
-    }
-    return std::nullopt;
-  };
-
   // Overridden properties reflect config-file values.
-  auto spillEnabled = findProp(QueryConfig::kSpillEnabled);
-  ASSERT_TRUE(spillEnabled.has_value());
+  auto spillEnabled = findProperty(props, QueryConfig::kSpillEnabled);
+  ASSERT_NE(spillEnabled, nullptr);
   EXPECT_EQ(spillEnabled->defaultValue, "true");
 
-  auto sessionTz = findProp(QueryConfig::kSessionTimezone);
-  ASSERT_TRUE(sessionTz.has_value());
+  auto sessionTz = findProperty(props, QueryConfig::kSessionTimezone);
+  ASSERT_NE(sessionTz, nullptr);
   EXPECT_EQ(sessionTz->defaultValue, "UTC");
 
   // Non-overridden properties retain code defaults.
-  auto startTime = findProp(QueryConfig::kSessionStartTime);
-  ASSERT_TRUE(startTime.has_value());
+  auto startTime = findProperty(props, QueryConfig::kSessionStartTime);
+  ASSERT_NE(startTime, nullptr);
   EXPECT_EQ(startTime->defaultValue, "0");
+}
+
+TEST(QueryConfigProviderConfigOverridesTest, fixedValues) {
+  // A config override equal to the fixed value is accepted.
+  const auto provider = QueryConfigProvider::withFixedValues(
+      /*configOverrides=*/
+      {{QueryConfig::kSpillEnabled, "true"},
+       {QueryConfig::kIgnoreTimeZoneLabel, "true"}},
+      /*fixedValues=*/{{QueryConfig::kIgnoreTimeZoneLabel, "true"}});
+
+  const auto properties = provider.properties();
+  const auto fixed =
+      findProperty(properties, QueryConfig::kIgnoreTimeZoneLabel);
+  ASSERT_NE(fixed, nullptr);
+  EXPECT_EQ(fixed->defaultValue, "true");
+  EXPECT_FALSE(fixed->sessionOverridable);
+
+  const auto sessionOverridable =
+      findProperty(properties, QueryConfig::kSpillEnabled);
+  ASSERT_NE(sessionOverridable, nullptr);
+  EXPECT_EQ(sessionOverridable->defaultValue, "true");
+  EXPECT_TRUE(sessionOverridable->sessionOverridable);
+}
+
+TEST(QueryConfigProviderConfigOverridesTest, fixedValueConflict) {
+  VELOX_ASSERT_THROW(
+      QueryConfigProvider::withFixedValues(
+          /*configOverrides=*/{{QueryConfig::kIgnoreTimeZoneLabel, "false"}},
+          /*fixedValues=*/{{QueryConfig::kIgnoreTimeZoneLabel, "true"}})
+          .properties(),
+      "Fixed query config value must match config override: "
+      "ignore_time_zone_label");
+}
+
+TEST(QueryConfigProviderConfigOverridesTest, unknownFixedValue) {
+  VELOX_ASSERT_THROW(
+      QueryConfigProvider::withFixedValues(
+          /*configOverrides=*/{}, /*fixedValues=*/{{"unknown", "true"}})
+          .properties(),
+      "Unknown fixed query config property: unknown");
 }
 
 TEST_F(QueryConfigProviderTest, normalizePassthrough) {

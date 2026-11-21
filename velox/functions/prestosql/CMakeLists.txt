@@ -40,6 +40,7 @@ velox_add_library(
   ArrayPosition.cpp
   ArraySort.cpp
   ArraySum.cpp
+  AtTimeZone.cpp
   Comparisons.cpp
   DecimalFunctions.cpp
   DestructureTDigest.cpp
@@ -85,6 +86,7 @@ velox_add_library(
   ArrayFunctions.h
   ArraySort.h
   ArraySubset.h
+  AtTimeZone.h
   BinaryFunctions.h
   BingTileFunctions.h
   Bitwise.h
