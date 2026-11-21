@@ -72,7 +72,7 @@ class LocalExchangeSourceImpl : public LocalExchangeSource {
     auto buffers = DefaultOutputBufferManager::getInstanceRef();
     VELOX_CHECK_NOT_NULL(buffers, "invalid DefaultOutputBufferManager");
     VELOX_CHECK(requestPending_);
-    auto requestedSequence = sequence_;
+    auto requestedSequence = sequence_.load();
     auto self = shared_from_this();
     // True until the request gets its result or times out.
     auto active = std::make_shared<std::atomic_bool>(true);
