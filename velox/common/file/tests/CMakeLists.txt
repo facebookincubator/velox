@@ -28,6 +28,7 @@ if(VELOX_BUILD_TESTING)
     velox_file_test
     FileTest.cpp
     FileInputStreamTest.cpp
+    FileIoContextTest.cpp
     FileIoTracerTest.cpp
     FileUtilsTest.cpp
   )

@@ -82,6 +82,10 @@ class MetadataInput {
     /// findCachedMetadata(), and the load of a section whose uncompressed size
     /// the file does not record.
     std::optional<uint32_t> maxCacheEntrySize{};
+
+    /// Passed to every read of the file, unless an active
+    /// velox::ScopedFileIoContext replaces it. The stats and pool inside it
+    /// must outlive this input.
     velox::FileIoContext fileIoContext{};
 
     /// When set, creates CachedMetadataInput, which caches decompressed
@@ -221,6 +225,8 @@ class MetadataInput {
   const int64_t maxCoalesceBytes_;
   folly::Executor* const executor_;
   const std::shared_ptr<velox::io::IoStatistics> ioStats_;
+  // Passed to every read of 'file_', unless an active
+  // velox::ScopedFileIoContext replaces it.
   const velox::FileIoContext fileIoContext_;
 };
 
