@@ -25,6 +25,7 @@
 #include <random>
 #include <span>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -65,6 +66,7 @@
 #include "velox/dwio/nimble/writer/EncodingSelectionPolicyFactory.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Filter.h"
 #include "velox/type/FloatingPointUtil.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -2535,10 +2537,18 @@ enum class LookupShape {
   kAtMost,
   kAtLeast,
   kBetween,
+  // Anchored lookups draw only the shapes above. The shapes below can reject
+  // anchor rows, so only unanchored lookups draw them.
+  //
+  // Rejects one to three values, as NOT IN does, or one value, as <> does.
+  kNotIn,
+  // Rejects one range, as NOT BETWEEN does.
+  kNotBetween,
+  // Accepts either of two ranges, as an OR of ranges does.
+  kOrRanges,
   // Accepts only values above the column's largest value, so only
   // floating-point NaN rows pass: Velox orders NaN above every other value.
-  // Anchored lookups never draw it, because it rejects their anchor rows. It
-  // stays last, so they draw from the shapes before it.
+  // Anchored lookups never draw it, because it rejects their anchor rows.
   kAboveMax,
 };
 
@@ -2839,24 +2849,243 @@ PointLookupFilter makeFloatingPointFilter(
               /*upperExclusive=*/false,
               values.nullAllowed()),
           "atLeast"};
+    case LookupShape::kNotIn:
+    case LookupShape::kNotBetween:
+    case LookupShape::kOrRanges:
     case LookupShape::kAboveMax:
-      NIMBLE_UNREACHABLE("makeAboveMaxFilter builds above-max filters.");
+      NIMBLE_UNREACHABLE("Unanchored-only shapes have their own builders.");
   }
   NIMBLE_UNREACHABLE("Unknown lookup shape.");
 }
 
+// Builds the range of values below 'value' with Velox's builders, excluding
+// 'value' itself when 'exclusive'. Integer and timestamp ranges always include
+// it.
+template <typename T>
+auto rangeBelow(const T& value, bool exclusive) {
+  if constexpr (std::is_same_v<T, float>) {
+    return exclusive ? velox::exec::lessThanFloat(value)
+                     : velox::exec::lessThanOrEqualFloat(value);
+  } else if constexpr (std::is_same_v<T, double>) {
+    return exclusive ? velox::exec::lessThanDouble(value)
+                     : velox::exec::lessThanOrEqualDouble(value);
+  } else if constexpr (std::is_same_v<T, std::string>) {
+    return exclusive ? velox::exec::lessThan(value)
+                     : velox::exec::lessThanOrEqual(value);
+  } else {
+    return velox::exec::lessThanOrEqual(value);
+  }
+}
+
+// Builds the range of values above 'value' with Velox's builders, excluding
+// 'value' itself when 'exclusive'. Integer and timestamp ranges always include
+// it.
+template <typename T>
+auto rangeAbove(const T& value, bool exclusive) {
+  if constexpr (std::is_same_v<T, float>) {
+    return exclusive ? velox::exec::greaterThanFloat(value)
+                     : velox::exec::greaterThanOrEqualFloat(value);
+  } else if constexpr (std::is_same_v<T, double>) {
+    return exclusive ? velox::exec::greaterThanDouble(value)
+                     : velox::exec::greaterThanOrEqualDouble(value);
+  } else if constexpr (std::is_same_v<T, std::string>) {
+    return exclusive ? velox::exec::greaterThan(value)
+                     : velox::exec::greaterThanOrEqual(value);
+  } else {
+    return velox::exec::greaterThanOrEqual(value);
+  }
+}
+
+// Builds the range from 'lower' to 'upper' with Velox's builders. String ranges
+// exclude both bounds when 'exclusive'.
+template <typename T>
+auto rangeBetween(const T& lower, const T& upper, bool exclusive) {
+  if constexpr (std::is_same_v<T, float>) {
+    return velox::exec::betweenFloat(lower, upper);
+  } else if constexpr (std::is_same_v<T, double>) {
+    return velox::exec::betweenDouble(lower, upper);
+  } else if constexpr (std::is_same_v<T, std::string>) {
+    return exclusive ? velox::exec::betweenExclusive(lower, upper)
+                     : velox::exec::between(lower, upper);
+  } else {
+    return velox::exec::between(lower, upper);
+  }
+}
+
+// Builds a filter that accepts either range, as Velox builds an OR of ranges:
+// BigintMultiRange for integers, otherwise MultiRange.
+template <typename Range>
+std::unique_ptr<velox::common::Filter> anyOf(
+    std::unique_ptr<Range> first,
+    std::unique_ptr<Range> second,
+    bool nullAllowed) {
+  if constexpr (std::is_same_v<Range, velox::common::BigintRange>) {
+    std::vector<std::unique_ptr<velox::common::BigintRange>> ranges;
+    ranges.push_back(std::move(first));
+    ranges.push_back(std::move(second));
+    return std::make_unique<velox::common::BigintMultiRange>(
+        std::move(ranges), nullAllowed);
+  } else {
+    return velox::exec::orFilter(
+        std::move(first), std::move(second), nullAllowed);
+  }
+}
+
+// Builds x <> 'value' the way Velox builds it for floating point and strings:
+// x < value OR x > value.
+template <typename T>
+std::unique_ptr<velox::common::Filter> notEqual(
+    const T& value,
+    bool nullAllowed) {
+  return velox::exec::orFilter(
+      rangeBelow(value, /*exclusive=*/true),
+      rangeAbove(value, /*exclusive=*/true),
+      nullAllowed);
+}
+
+// Builds a NOT IN, NOT BETWEEN or OR-of-ranges filter from 'values', distinct
+// values in ascending order, in the shapes Velox builds for those predicates.
+// 'shape' must be one Velox has for type T, as drawNegatedOrRangesFilter()
+// picks it. The filter accepts null when 'nullAllowed'. Returns no filter when
+// the values are too few.
+// - NOT IN: NegatedBigintRange or NegatedBigintValues for integers,
+//   NegatedBytesValues for strings. One floating-point value, and in half the
+//   draws one string, becomes x <> c instead.
+// - NOT BETWEEN: NegatedBigintRange for integers, NegatedBytesRange for
+//   strings, with exclusive bounds in half the string filters.
+// - OR of ranges: either [first, value before the middle] OR [middle, last],
+//   which rejects the values between the two ranges, or x < first OR
+//   x > last. Bounds are randomly exclusive where the type has exclusive
+//   bounds.
+template <typename T>
+PointLookupFilter makeNegatedOrRangesFilter(
+    const std::vector<T>& values,
+    LookupShape shape,
+    bool nullAllowed,
+    FuzzerGenerator& rng) {
+  if (values.empty()) {
+    return {nullptr, ""};
+  }
+  const auto& first = values.front();
+  const auto& last = values.back();
+  if constexpr (std::is_floating_point_v<T>) {
+    if (shape == LookupShape::kNotIn) {
+      return {notEqual(first, nullAllowed), "notEqual"};
+    }
+  }
+  if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, std::string>) {
+    if (shape == LookupShape::kNotIn) {
+      if constexpr (std::is_same_v<T, std::string>) {
+        if (values.size() == 1 && folly::Random::oneIn(2, rng)) {
+          return {notEqual(first, nullAllowed), "notEqual"};
+        }
+      }
+      return {
+          velox::exec::notIn(values, nullAllowed),
+          values.size() == 1 ? "notEqual" : "notIn"};
+    }
+    if (shape == LookupShape::kNotBetween) {
+      if constexpr (std::is_same_v<T, std::string>) {
+        if (first != last && folly::Random::oneIn(2, rng)) {
+          return {
+              velox::exec::notBetweenExclusive(first, last, nullAllowed),
+              "notBetween"};
+        }
+      }
+      return {velox::exec::notBetween(first, last, nullAllowed), "notBetween"};
+    }
+  }
+  if (values.size() < 2) {
+    return {nullptr, ""};
+  }
+  const bool lowerExclusive = folly::Random::oneIn(2, rng);
+  const bool upperExclusive = folly::Random::oneIn(2, rng);
+  if (folly::Random::oneIn(2, rng)) {
+    return {
+        anyOf(
+            rangeBelow(first, lowerExclusive),
+            rangeAbove(last, upperExclusive),
+            nullAllowed),
+        "orRanges"};
+  }
+  const auto& beforeMiddle = values[values.size() / 2 - 1];
+  const auto& middle = values[values.size() / 2];
+  return {
+      anyOf(
+          rangeBetween(
+              first, beforeMiddle, lowerExclusive && first < beforeMiddle),
+          rangeBetween(middle, last, upperExclusive && middle < last),
+          nullAllowed),
+      "orRanges"};
+}
+
+// Draws a NOT IN, NOT BETWEEN or OR-of-ranges filter on column 'column', with
+// values from random rows. The filter accepts null in 1 of 3 draws. Velox has
+// no NOT BETWEEN filter for floating point and neither negated filter for
+// timestamps, so those draw an OR of ranges instead. Returns no filter for
+// booleans, which have none of these filters, and when the rows hold too few
+// distinct values.
+PointLookupFilter drawNegatedOrRangesFilter(
+    const std::vector<VectorPtr>& batches,
+    velox::column_index_t column,
+    velox::TypeKind kind,
+    const LookupRows& rows,
+    LookupShape shape,
+    FuzzerGenerator& rng) {
+  if (kind == velox::TypeKind::BOOLEAN) {
+    return {nullptr, ""};
+  }
+  const bool floatingPoint =
+      kind == velox::TypeKind::REAL || kind == velox::TypeKind::DOUBLE;
+  const bool timestamp = kind == velox::TypeKind::TIMESTAMP;
+  if ((shape == LookupShape::kNotIn && timestamp) ||
+      (shape == LookupShape::kNotBetween && (floatingPoint || timestamp))) {
+    shape = LookupShape::kOrRanges;
+  }
+  const uint32_t numValues = shape == LookupShape::kNotIn
+      ? 1 + folly::Random::rand32(3, rng)
+      : shape == LookupShape::kNotBetween ? 2
+                                          : 4;
+  const bool nullAllowed = folly::Random::oneIn(3, rng);
+  const auto make = [&](auto type) {
+    using T = typename decltype(type)::type;
+    return makeNegatedOrRangesFilter(
+        drawValues<T>(batches, column, rows, numValues, rng).values,
+        shape,
+        nullAllowed,
+        rng);
+  };
+  if (kind == velox::TypeKind::REAL) {
+    return make(std::type_identity<float>{});
+  }
+  if (kind == velox::TypeKind::DOUBLE) {
+    return make(std::type_identity<double>{});
+  }
+  if (kind == velox::TypeKind::VARCHAR || kind == velox::TypeKind::VARBINARY) {
+    return make(std::type_identity<std::string>{});
+  }
+  if (timestamp) {
+    return make(std::type_identity<velox::Timestamp>{});
+  }
+
+  // Reads the remaining kinds as integers. integerValueAt fails on any other.
+  return make(std::type_identity<int64_t>{});
+}
+
 // Builds a filter on column 'column' whose bounds are drawn from the input:
-// equality, IN, at most, at least, between or above the largest value, as the
-// column type allows. Anchored filters accept every anchor row. Falls back to
-// IS NULL when the drawn rows hold no usable value.
+// equality, IN, at most, at least, between, NOT IN, <>, NOT BETWEEN, an OR of
+// ranges or above the largest value, as the column type allows. Anchored
+// filters accept every anchor row. Falls back to IS NULL when the drawn rows
+// hold no usable value.
 PointLookupFilter makeLookupFilter(
     const std::vector<VectorPtr>& batches,
     velox::column_index_t column,
     velox::TypeKind kind,
     const LookupRows& rows,
     FuzzerGenerator& rng) {
-  const auto numShapes = static_cast<uint32_t>(LookupShape::kAboveMax) +
-      (rows.anchors.empty() ? 1 : 0);
+  const auto numShapes = rows.anchors.empty()
+      ? static_cast<uint32_t>(LookupShape::kAboveMax) + 1
+      : static_cast<uint32_t>(LookupShape::kNotIn);
   auto shape = static_cast<LookupShape>(folly::Random::rand32(numShapes, rng));
   if (shape == LookupShape::kAboveMax) {
     if (kind != velox::TypeKind::BOOLEAN &&
@@ -2866,6 +3095,17 @@ PointLookupFilter makeLookupFilter(
     // Booleans have no range filter, and TimestampRange has no exclusive
     // bound.
     shape = LookupShape::kAtLeast;
+  }
+  if (shape == LookupShape::kNotIn || shape == LookupShape::kNotBetween ||
+      shape == LookupShape::kOrRanges) {
+    auto lookup =
+        drawNegatedOrRangesFilter(batches, column, kind, rows, shape, rng);
+    if (lookup.filter != nullptr) {
+      return lookup;
+    }
+    // Booleans have none of these filters, or the drawn rows hold too few
+    // distinct values.
+    shape = LookupShape::kBetween;
   }
   const uint32_t numValues = shape == LookupShape::kIn ? 3 : 2;
   const auto isNull = [] {
@@ -2925,8 +3165,11 @@ PointLookupFilter makeLookupFilter(
               "atLeast"};
         case LookupShape::kBetween:
           return {range(sorted.front(), sorted.back()), "between"};
+        case LookupShape::kNotIn:
+        case LookupShape::kNotBetween:
+        case LookupShape::kOrRanges:
         case LookupShape::kAboveMax:
-          NIMBLE_UNREACHABLE("makeAboveMaxFilter builds above-max filters.");
+          NIMBLE_UNREACHABLE("Unanchored-only shapes have their own builders.");
       }
       NIMBLE_UNREACHABLE("Unknown lookup shape.");
     }
@@ -3008,6 +3251,11 @@ PointLookupFilter makeLookupFilter(
           return {range(velox::Timestamp::min(), sorted.back()), "atMost"};
         case LookupShape::kAtLeast:
           return {range(sorted.front(), velox::Timestamp::max()), "atLeast"};
+        case LookupShape::kNotIn:
+        case LookupShape::kNotBetween:
+        case LookupShape::kOrRanges:
+          NIMBLE_UNREACHABLE(
+              "drawNegatedOrRangesFilter builds NOT IN, NOT BETWEEN and OR-of-ranges filters.");
         case LookupShape::kAboveMax:
           NIMBLE_UNREACHABLE(
               "Timestamp lookups replace above-max with at least.");

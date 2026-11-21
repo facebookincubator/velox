@@ -17,7 +17,10 @@
 // Thin gtest wrapper so CI can run the fuzzer loop. All setup and run logic is
 // shared with the standalone binary via NimbleWriterFuzzerRunner.
 
+#include <algorithm>
 #include <map>
+#include <string>
+#include <vector>
 
 #include <folly/init/Init.h>
 #include <folly/json.h>
@@ -231,13 +234,66 @@ TEST(NimbleWriterFuzzerTest, pointLookupsPruneFilesByStats) {
     return numPrunes;
   };
   // Runs until statistics rule out the file of an above-max lookup. About one
-  // lookup in 40 gets there, and an iteration runs 10 lookups.
+  // lookup in 50 gets there, and an iteration runs 10 lookups.
   for (int iteration = 0; iteration < 30 && numAboveMaxPrunes() == 0;
        ++iteration) {
     fuzzer.run();
     fuzzer.reSeed();
   }
   EXPECT_GT(numAboveMaxPrunes(), 0U);
+}
+
+// Checks that unanchored point lookups draw NOT IN, <>, NOT BETWEEN and
+// OR-of-ranges filters, and that readers skip chunks or files for some of them.
+// A lookup fails if the reader returns other rows than those its filters
+// accept.
+TEST(NimbleWriterFuzzerTest, pointLookupsDrawNegatedAndOrFilters) {
+  auto rootPool = velox::memory::memoryManager()->addRootPool(
+      "pointLookupsDrawNegatedAndOrFilters", velox::memory::kMaxMemory);
+  NimbleWriterFuzzerOptions options;
+  options.seed = 1;
+  options.batchSize = 64;
+  options.numBatches = 4;
+  NimbleWriterFuzzer fuzzer(options, *rootPool);
+  const std::vector<std::string> kinds{
+      "notIn", "notEqual", "notBetween", "orRanges"};
+  const auto countsOf = [&](const std::string& kind) {
+    PointLookupCoverage::LookupCounts total;
+    for (const auto& [type, byKind] : fuzzer.pointLookupCoverage().byType) {
+      const auto counts = byKind.find(kind);
+      if (counts != byKind.end()) {
+        total.numLookups += counts->second.numLookups;
+        total.numLookupsWithChunkSkips +=
+            counts->second.numLookupsWithChunkSkips;
+        total.numLookupsPrunedByFileStats +=
+            counts->second.numLookupsPrunedByFileStats;
+      }
+    }
+    return total;
+  };
+  const auto numSkips = [&] {
+    uint64_t total{0};
+    for (const auto& kind : kinds) {
+      const auto counts = countsOf(kind);
+      total +=
+          counts.numLookupsWithChunkSkips + counts.numLookupsPrunedByFileStats;
+    }
+    return total;
+  };
+  const auto covered = [&] {
+    return numSkips() > 0 &&
+        std::all_of(kinds.begin(), kinds.end(), [&](const auto& kind) {
+             return countsOf(kind).numLookups > 0;
+           });
+  };
+  for (int iteration = 0; iteration < 30 && !covered(); ++iteration) {
+    fuzzer.run();
+    fuzzer.reSeed();
+  }
+  for (const auto& kind : kinds) {
+    EXPECT_GT(countsOf(kind).numLookups, 0U) << kind;
+  }
+  EXPECT_GT(numSkips(), 0U);
 }
 
 TEST(NimbleWriterFuzzerTest, run) {
