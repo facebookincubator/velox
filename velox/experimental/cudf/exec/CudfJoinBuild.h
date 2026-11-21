@@ -25,7 +25,13 @@
 
 namespace facebook::velox::cudf_velox {
 
-/// Accumulates inputs and coordinates peer drivers for cuDF join builds.
+/// Shared lifecycle of the cuDF hash and nested loop join builds. Each build
+/// driver accumulates its non-empty input batches. In noMoreInput(), the last
+/// driver to arrive at the allPeersArrived() barrier moves the inputs of all
+/// peer drivers into its own, releases the peers and calls buildAndPublish().
+/// The other drivers wait at the barrier until they are released. getOutput()
+/// always returns nullptr. A driver is finished once noMoreInput() was called
+/// and it no longer waits at the barrier.
 class CudfJoinBuild : public CudfOperatorBase {
  public:
   bool needsInput() const final;
@@ -51,6 +57,9 @@ class CudfJoinBuild : public CudfOperatorBase {
   virtual void recordInputStats(const CudfVector& input) {}
 
   // Consumes accumulated inputs and publishes the build result to the bridge.
+  // Called exactly once per split group, on the driver elected by
+  // allPeersArrived(), with the inputs of every build driver. The peer drivers
+  // have already been released, so implementations must not access them.
   virtual void buildAndPublish(std::vector<CudfVectorPtr> inputs) = 0;
 
  private:

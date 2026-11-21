@@ -288,7 +288,6 @@ CudfHashJoinBuild::CudfHashJoinBuild(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     std::shared_ptr<const core::HashJoinNode> joinNode)
-    // TODO check outputType should be set or not?
     : CudfJoinBuild(
           operatorId,
           driverCtx,

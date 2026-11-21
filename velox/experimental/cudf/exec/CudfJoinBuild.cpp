@@ -16,9 +16,11 @@
 
 #include "velox/experimental/cudf/exec/CudfJoinBuild.h"
 
+#include "velox/common/Casts.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/Task.h"
 
+#include <folly/Demangle.h>
 #include <folly/ScopeGuard.h>
 
 #include <iterator>
@@ -36,12 +38,12 @@ CudfJoinBuild::CudfJoinBuild(
     : CudfOperatorBase(
           operatorId,
           driverCtx,
-          nullptr,
+          /*outputType=*/nullptr,
           joinNode->id(),
           operatorName,
-          nvtx3::rgb{65, 105, 225},
+          nvtx3::rgb{65, 105, 225}, // Royal Blue
           nvtxMethods,
-          std::nullopt,
+          /*spillConfig=*/std::nullopt,
           joinNode) {}
 
 bool CudfJoinBuild::needsInput() const {
@@ -75,6 +77,8 @@ RowVectorPtr CudfJoinBuild::doGetOutput() {
   return nullptr;
 }
 
+// Only the last driver to arrive gets past allPeersArrived(). It moves the
+// inputs of every peer into its own, releases the peers and then builds.
 void CudfJoinBuild::doNoMoreInput() {
   Operator::noMoreInput();
 
@@ -84,31 +88,34 @@ void CudfJoinBuild::doNoMoreInput() {
     return;
   }
 
-  SCOPE_EXIT {
-    peerOperators.clear();
-    for (auto& promise : promises) {
-      promise.setValue();
+  {
+    SCOPE_EXIT {
+      // Realize the promises so that the other Drivers (which were not
+      // the last to finish) can continue from the barrier and finish.
+      peerOperators.clear();
+      for (auto& promise : promises) {
+        promise.setValue();
+      }
+    };
+
+    for (const auto& peer : peerOperators) {
+      auto* build = checkedPointerCast<CudfJoinBuild>(peer.get());
+      VELOX_CHECK(
+          typeid(*build) == typeid(*this),
+          "Peer build type mismatch: expected {}, got {}",
+          folly::demangle(typeid(*this).name()),
+          folly::demangle(typeid(*build).name()));
+      inputs_.insert(
+          inputs_.end(),
+          std::make_move_iterator(build->inputs_.begin()),
+          std::make_move_iterator(build->inputs_.end()));
+      build->inputs_.clear();
+
+      auto retainedInputBatches = build->inputs_.size();
+      common::testutil::TestValue::adjust(
+          "facebook::velox::cudf_velox::CudfJoinBuild::doNoMoreInput::sourceDriverRetainedInputBatchesAfterTransfer",
+          &retainedInputBatches);
     }
-  };
-
-  for (const auto& peer : peerOperators) {
-    auto* build = peer->as<CudfJoinBuild>();
-    VELOX_CHECK_NOT_NULL(build);
-    VELOX_CHECK(
-        typeid(*build) == typeid(*this),
-        "Expected peer build type {}, got {}",
-        typeid(*this).name(),
-        typeid(*build).name());
-    inputs_.insert(
-        inputs_.end(),
-        std::make_move_iterator(build->inputs_.begin()),
-        std::make_move_iterator(build->inputs_.end()));
-    build->inputs_.clear();
-
-    auto retainedInputBatches = build->inputs_.size();
-    common::testutil::TestValue::adjust(
-        "facebook::velox::cudf_velox::CudfJoinBuild::doNoMoreInput::sourceDriverRetainedInputBatchesAfterTransfer",
-        &retainedInputBatches);
   }
 
   buildAndPublish(std::exchange(inputs_, {}));
