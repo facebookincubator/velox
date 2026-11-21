@@ -363,10 +363,9 @@ uint8_t gather8Bits(
     const int32_t* indices,
     int32_t numIndices,
     const A& arch = {}) {
-  constexpr int32_t kBatch = xsimd::batch<int32_t, A>::size;
   VELOX_DCHECK_LE(
       numIndices,
-      std::min(kBatch, 8),
+      std::min<int32_t>(xsimd::batch<int32_t, A>::size, 8),
       "gather8Bits takes at most 8 indices, and at most a batch of them.");
   return gather8Bits(
       bits,
