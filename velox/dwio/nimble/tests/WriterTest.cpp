@@ -696,7 +696,7 @@ TEST_F(WriterTest, subIntSplitRejectsDictionaryCollision) {
   options.subIntSplitEncodingSubfields = {"target"};
   options.experimentalSharedDictionaryEncoding =
       nimble::SharedDictionaryEncodingConfig::builder()
-          .addColumnDictionary("target", nimble::SharedDictionaryConfig{})
+          .addColumn("target")
           .build();
   expectWriterCreationThrows(
       velox::ROW("target", velox::BIGINT()),
@@ -1018,8 +1018,7 @@ TEST_F(WriterTest, fsstSubfieldRejectsSharedDictionaryCollision) {
     options.fsstEncodingSubfields = {testCase.fsstPath};
     options.experimentalSharedDictionaryEncoding =
         nimble::SharedDictionaryEncodingConfig::builder()
-            .addColumnDictionary(
-                testCase.dictionaryPath, nimble::SharedDictionaryConfig{})
+            .addColumn(testCase.dictionaryPath)
             .build();
     expectWriterCreationThrows(
         testCase.type,
@@ -1038,10 +1037,11 @@ TEST_F(WriterTest, fsstSubfieldRejectsFlatMapSharedDictionaryCollision) {
     options.flatMapColumns.emplace("features", std::set<std::string>{});
     options.experimentalSharedDictionaryEncoding =
         nimble::SharedDictionaryEncodingConfig::builder()
-            .addFlatmapValueDictionary(
+            .addProvidedFlatmapValueDictionary(
                 "features",
                 /*key=*/10,
-                nimble::SharedDictionaryConfig{},
+                nimble::SharedDictionaryConfig{
+                    .scope = nimble::SharedDictionaryScope::External},
                 std::move(dictionaryValuePath))
             .build();
     expectWriterCreationThrows(
@@ -1067,10 +1067,11 @@ TEST_F(WriterTest, fsstSubfieldAllowsSeparateFlatMapDictionaryStream) {
   options.flatMapColumns.emplace("features", std::set<std::string>{});
   options.experimentalSharedDictionaryEncoding =
       nimble::SharedDictionaryEncodingConfig::builder()
-          .addFlatmapValueDictionary(
+          .addProvidedFlatmapValueDictionary(
               "features",
               /*key=*/10,
-              nimble::SharedDictionaryConfig{},
+              nimble::SharedDictionaryConfig{
+                  .scope = nimble::SharedDictionaryScope::External},
               "other")
           .build();
 
@@ -1105,7 +1106,7 @@ TEST_F(WriterTest, fsstSubfieldAllowsSeparateSharedDictionaryStream) {
   options.fsstCompressionTargetRatio = 10;
   options.experimentalSharedDictionaryEncoding =
       nimble::SharedDictionaryEncodingConfig::builder()
-          .addColumnDictionary("dictionary", nimble::SharedDictionaryConfig{})
+          .addColumn("dictionary")
           .build();
   const auto file =
       writeWithWriterOptions(*rootPool_, vector, std::move(options));
@@ -2365,21 +2366,9 @@ TEST_F(WriterTest, featureReorderingSharedDictionaryStreamCollocation) {
       options.experimentalSharedDictionaryEncoding =
           nimble::SharedDictionaryEncodingConfig::builder(
               std::move(options.experimentalSharedDictionaryEncoding))
-              .addFlatmapValueDictionary(
-                  "flatmap",
-                  4,
-                  nimble::SharedDictionaryConfig{
-                      .scope = nimble::SharedDictionaryScope::Stripe})
-              .addFlatmapValueDictionary(
-                  "flatmap",
-                  2,
-                  nimble::SharedDictionaryConfig{
-                      .scope = nimble::SharedDictionaryScope::Stripe})
-              .addFlatmapValueDictionary(
-                  "flatmap",
-                  0,
-                  nimble::SharedDictionaryConfig{
-                      .scope = nimble::SharedDictionaryScope::Stripe})
+              // Enabling the column covers every key, where the old
+              // configuration had to name keys 4, 2 and 0 individually.
+              .addColumn("flatmap", nimble::SharedDictionaryScope::Stripe)
               .build();
 
       if (enableIndex) {
@@ -7731,11 +7720,7 @@ DEBUG_ONLY_TEST_F(WriterTest, cachedEncodingLayoutSkipsSharedDictionary) {
   options.flatMapColumns.emplace("c0", std::set<std::string>{});
   options.experimentalSharedDictionaryEncoding =
       nimble::SharedDictionaryEncodingConfig::builder()
-          .addFlatmapValueDictionary(
-              "c0",
-              /*key=*/10,
-              nimble::SharedDictionaryConfig{
-                  .scope = nimble::SharedDictionaryScope::File})
+          .addColumn("c0", nimble::SharedDictionaryScope::File)
           .build();
 
   std::string file;

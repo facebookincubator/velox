@@ -196,14 +196,15 @@ WriterOptions sharedDictionaryWriterOptions(
   }
   for (const auto& source : sources) {
     options.flatMapColumns.emplace(source.columnName, std::set<std::string>{});
-    builder.addFlatmapValueDictionary(
-        source.columnName,
-        source.dictionaryKey,
-        SharedDictionaryConfig{
-            .scope = source.scope,
-            .dictionaryId = source.scope == SharedDictionaryScope::External
-                ? source.dictionaryId
-                : 0});
+    if (source.scope == SharedDictionaryScope::External) {
+      builder.addProvidedFlatmapValueDictionary(
+          source.columnName,
+          source.dictionaryKey,
+          SharedDictionaryConfig{
+              .scope = source.scope, .dictionaryId = source.dictionaryId});
+      continue;
+    }
+    builder.addColumn(source.columnName, source.scope);
   }
   options.experimentalSharedDictionaryEncoding = builder.build();
   return options;

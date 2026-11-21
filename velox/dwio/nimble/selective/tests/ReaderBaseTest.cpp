@@ -202,10 +202,7 @@ class ReaderBaseTest : public ::testing::TestWithParam<CreationMode> {
     writerOptions.flatMapColumns.emplace("shared", std::set<std::string>{});
     writerOptions.experimentalSharedDictionaryEncoding =
         SharedDictionaryEncodingConfig::builder()
-            .addFlatmapValueDictionary(
-                "shared",
-                /*key=*/10,
-                SharedDictionaryConfig{.scope = scope})
+            .addColumn("shared", scope)
             .build();
 
     auto writer = std::make_unique<Writer>(

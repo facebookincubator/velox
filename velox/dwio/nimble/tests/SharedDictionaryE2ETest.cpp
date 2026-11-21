@@ -372,12 +372,10 @@ class SharedDictionaryE2ETest : public testing::Test {
   velox::RowVectorPtr makeNumericScalarStripe(StripeValueType stripeValueType) {
     velox::test::VectorMaker maker{leafPool_.get()};
     return maker.rowVector(
-        {"nested"},
-        {maker.rowVector(
-            {"value"},
-            {maker.flatVector<T>(kStripeRows, [stripeValueType](auto row) {
-              return scalarStripeValue<T>(stripeValueType, row);
-            })})});
+        {"value"},
+        {maker.flatVector<T>(kStripeRows, [stripeValueType](auto row) {
+          return scalarStripeValue<T>(stripeValueType, row);
+        })});
   }
 
   velox::RowVectorPtr makeStringStripe(
@@ -385,16 +383,14 @@ class SharedDictionaryE2ETest : public testing::Test {
       const velox::TypePtr& type) {
     velox::test::VectorMaker maker{leafPool_.get()};
     return maker.rowVector(
-        {"nested"},
-        {maker.rowVector(
-            {"value"},
-            {maker.flatVector<std::string>(
-                kStripeRows,
-                [stripeValueType](auto row) {
-                  return stringStripeValue(stripeValueType, row);
-                },
-                nullptr,
-                type)})});
+        {"value"},
+        {maker.flatVector<std::string>(
+            kStripeRows,
+            [stripeValueType](auto row) {
+              return stringStripeValue(stripeValueType, row);
+            },
+            nullptr,
+            type)});
   }
 
   velox::RowVectorPtr makeScalarStripe(
@@ -632,27 +628,54 @@ class SharedDictionaryE2ETest : public testing::Test {
     NIMBLE_UNREACHABLE("Unsupported file dictionary alphabet order.");
   }
 
-  void addFlatmapDictionary(
-      WriterOptions& options,
-      SharedDictionaryConfig dictionary) {
+  // Value streams these input shapes target sit behind a struct member or a
+  // flat-map value subfield, which only a path can name. Enabled columns name
+  // a top-level column and expand to every value stream under it, so these
+  // shapes are only configurable as provided dictionaries.
+  static bool requiresProvidedDictionary(InputType inputType) {
+    switch (inputType) {
+      case InputType::FlatMapScalar:
+      case InputType::NullableFlatMapScalar:
+      case InputType::FlatMapArray:
+      case InputType::FlatMapArrayArray:
+      case InputType::FlatMapMap:
+        return false;
+      case InputType::FlatMapRowValue:
+      case InputType::NestedScalar:
+      case InputType::NestedArray:
+      case InputType::NestedMap:
+      case InputType::NestedArrayRow:
+      case InputType::NestedMapRow:
+        return true;
+    }
+    NIMBLE_UNREACHABLE("Unsupported input type.");
+  }
+
+  // Provided dictionaries need a caller-owned resolver key, so a scope that
+  // has no resolver cannot express these shapes.
+  static bool supportsInputType(
+      InputType inputType,
+      SharedDictionaryScope scope) {
+    return !requiresProvidedDictionary(inputType) ||
+        scope == SharedDictionaryScope::External;
+  }
+
+  void enableColumn(WriterOptions& options, SharedDictionaryScope scope) {
     options.experimentalSharedDictionaryEncoding =
         SharedDictionaryEncodingConfig::builder(
             std::move(options.experimentalSharedDictionaryEncoding))
-            .addFlatmapValueDictionary(
-                "features",
-                /*key=*/10,
-                std::move(dictionary))
+            .addColumn("features", scope)
             .build();
   }
 
   void addFlatmapDictionary(
       WriterOptions& options,
       SharedDictionaryConfig dictionary,
-      std::string valueSubfield) {
+      std::string valueSubfield = "") {
     options.experimentalSharedDictionaryEncoding =
         SharedDictionaryEncodingConfig::builder(
             std::move(options.experimentalSharedDictionaryEncoding))
-            .addFlatmapValueDictionary(
+            .addProvidedFlatmapValueDictionary(
                 "features",
                 /*key=*/10,
                 std::move(dictionary),
@@ -667,7 +690,7 @@ class SharedDictionaryE2ETest : public testing::Test {
     options.experimentalSharedDictionaryEncoding =
         SharedDictionaryEncodingConfig::builder(
             std::move(options.experimentalSharedDictionaryEncoding))
-            .addColumnDictionary(std::move(fieldPath), std::move(dictionary))
+            .addProvidedDictionary(std::move(fieldPath), std::move(dictionary))
             .build();
   }
 
@@ -694,7 +717,11 @@ class SharedDictionaryE2ETest : public testing::Test {
       case InputType::FlatMapArrayArray:
       case InputType::FlatMapMap:
         options.flatMapColumns.emplace("features", std::set<std::string>{});
-        addFlatmapDictionary(options, std::move(dictionary));
+        if (dictionary.scope == SharedDictionaryScope::External) {
+          addFlatmapDictionary(options, std::move(dictionary));
+        } else {
+          enableColumn(options, dictionary.scope);
+        }
         return;
       case InputType::FlatMapRowValue:
         options.flatMapColumns.emplace("features", std::set<std::string>{});
@@ -935,9 +962,9 @@ class SharedDictionaryE2ETest : public testing::Test {
     auto options = makeSharedDictionaryWriterOptions();
     options.experimentalSharedDictionaryEncoding.externalResolver =
         std::move(resolver);
-    addDictionary(
+    options.flatMapColumns.emplace("features", std::set<std::string>{});
+    addFlatmapDictionary(
         options,
-        InputType::FlatMapScalar,
         SharedDictionaryConfig{
             .scope = SharedDictionaryScope::File,
             .useExternalAlphabet = true,
@@ -1389,6 +1416,9 @@ class SharedDictionaryE2ETabletReaderApiTest
 
 TEST_P(SharedDictionaryE2EInputTypeTest, stripeScopeRoundTrip) {
   const auto inputType = GetParam();
+  if (!supportsInputType(inputType, SharedDictionaryScope::Stripe)) {
+    GTEST_SKIP() << "Input shape needs a path, so it is provided-only.";
+  }
   const std::vector<StripeValueType> stripeValueTypes{
       StripeValueType::Dictionary, StripeValueType::Direct};
   const auto file =
@@ -1413,9 +1443,7 @@ TEST_F(SharedDictionaryE2ETest, predefinedFlatMapKeyUsesSharedDictionary) {
       StripeValueType::Dictionary, StripeValueType::Direct};
   auto options = makeSharedDictionaryWriterOptions();
   options.flatMapColumns.emplace("features", std::set<std::string>{"10"});
-  addFlatmapDictionary(
-      options,
-      sharedDictionaryConfig(SharedDictionaryScope::File, /*dictionaryId=*/7));
+  enableColumn(options, SharedDictionaryScope::File);
 
   std::vector<velox::RowVectorPtr> stripeInputs;
   stripeInputs.reserve(stripeValueTypes.size());
@@ -1439,6 +1467,9 @@ TEST_F(SharedDictionaryE2ETest, predefinedFlatMapKeyUsesSharedDictionary) {
 
 TEST_P(SharedDictionaryE2EInputTypeTest, fileScopeRoundTrip) {
   const auto inputType = GetParam();
+  if (!supportsInputType(inputType, SharedDictionaryScope::File)) {
+    GTEST_SKIP() << "Input shape needs a path, so it is provided-only.";
+  }
   const std::vector<StripeValueType> stripeValueTypes{
       StripeValueType::Dictionary, StripeValueType::Direct};
   const auto file =
@@ -1476,10 +1507,10 @@ TEST_F(SharedDictionaryE2ETest, sharedStripeDictionaryColumnPhysicalStats) {
 // dictionary regardless, so it must tolerate one that has nothing to encode.
 TEST_F(SharedDictionaryE2ETest, stripeScopeIdleStripe) {
   auto options = makeSharedDictionaryWriterOptions();
-  addColumnDictionary(
-      options,
-      sharedDictionaryConfig(SharedDictionaryScope::Stripe, /*dictionaryId=*/0),
-      "value");
+  options.experimentalSharedDictionaryEncoding =
+      SharedDictionaryEncodingConfig::builder()
+          .addColumn("value", SharedDictionaryScope::Stripe)
+          .build();
 
   velox::test::VectorMaker maker{leafPool_.get()};
   const auto valued = maker.rowVector(
@@ -1564,10 +1595,11 @@ TEST_P(SharedDictionaryE2EScalarValueTypeTest, columnRoundTrip) {
       StripeValueType::Dictionary};
   auto options = makeSharedDictionaryWriterOptions();
   test::configureSharedDictionarySelectionPolicy(options);
-  addColumnDictionary(
-      options,
-      sharedDictionaryConfig(testCase.scope, /*dictionaryId=*/7),
-      "nested.value");
+  options.experimentalSharedDictionaryEncoding =
+      SharedDictionaryEncodingConfig::builder(
+          std::move(options.experimentalSharedDictionaryEncoding))
+          .addColumn("value", testCase.scope)
+          .build();
 
   std::vector<velox::RowVectorPtr> stripeInputs;
   stripeInputs.reserve(stripeValueTypes.size());
@@ -1579,8 +1611,7 @@ TEST_P(SharedDictionaryE2EScalarValueTypeTest, columnRoundTrip) {
 
   auto tablet = openTablet(file);
   const auto schema = readSchema(*tablet);
-  const auto valueStreamId =
-      scalarStreamId(*schema->asRow().childAt(0)->asRow().childAt(0));
+  const auto valueStreamId = scalarStreamId(*schema->asRow().childAt(0));
   ASSERT_TRUE(hasSharedDictionary(*tablet, valueStreamId));
   expectDictionaryValueEncodingTypes(
       *tablet, valueStreamId, testCase.scope, stripeValueTypes);
@@ -1589,6 +1620,9 @@ TEST_P(SharedDictionaryE2EScalarValueTypeTest, columnRoundTrip) {
 
 TEST_P(SharedDictionaryE2EFlatMapRowValueSubfieldsTest, roundTrip) {
   const auto scope = GetParam();
+  if (!supportsInputType(InputType::FlatMapRowValue, scope)) {
+    GTEST_SKIP() << "Value subfields need a path, so they are provided-only.";
+  }
   const std::vector<StripeValueType> stripeValueTypes{
       StripeValueType::Dictionary, StripeValueType::Direct};
   std::shared_ptr<const ExternalDictionaryResolver> resolver;
@@ -1663,8 +1697,11 @@ TEST_F(SharedDictionaryE2ETest, fuzzRoundTrip) {
   for (size_t iteration{0}; iteration < kIterationCount; ++iteration) {
     const auto inputType = inputTypes[std::uniform_int_distribution<size_t>{
         0, inputTypes.size() - 1}(rng)];
-    const auto scope = scopes[std::uniform_int_distribution<size_t>{
+    auto scope = scopes[std::uniform_int_distribution<size_t>{
         0, scopes.size() - 1}(rng)];
+    if (!supportsInputType(inputType, scope)) {
+      scope = SharedDictionaryScope::External;
+    }
     const auto dictionaryTargetSet = randomDictionaryTargetSet(inputType, rng);
     const auto stripeCount = std::uniform_int_distribution<size_t>{1, 4}(rng);
     std::vector<StripeValueType> stripeValueTypes;
@@ -1799,42 +1836,6 @@ INSTANTIATE_TEST_SUITE_P(
           SharedDictionaryScopeName::toName(testInfo.param.scope));
     });
 
-TEST_F(SharedDictionaryE2ETest, stripeScopeRejectsConfiguredDictionaryId) {
-  auto input = makeDictionaryStripe(InputType::FlatMapScalar);
-  WriterOptions options;
-  addDictionary(
-      options,
-      InputType::FlatMapScalar,
-      SharedDictionaryConfig{
-          .scope = SharedDictionaryScope::Stripe, .dictionaryId = 7});
-
-  std::string file;
-  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
-  Writer writer{
-      input->type(), std::move(writeFile), *rootPool_, std::move(options)};
-  NIMBLE_ASSERT_USER_THROW(
-      writer.write(input),
-      "Stripe shared dictionary config must leave dictionaryId unset.");
-}
-
-TEST_F(SharedDictionaryE2ETest, fileScopeRejectsConfiguredDictionaryId) {
-  auto input = makeDictionaryStripe(InputType::FlatMapScalar);
-  WriterOptions options;
-  addDictionary(
-      options,
-      InputType::FlatMapScalar,
-      SharedDictionaryConfig{
-          .scope = SharedDictionaryScope::File, .dictionaryId = 7});
-
-  std::string file;
-  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
-  Writer writer{
-      input->type(), std::move(writeFile), *rootPool_, std::move(options)};
-  NIMBLE_ASSERT_USER_THROW(
-      writer.write(input),
-      "File shared dictionary config must leave dictionaryId unset.");
-}
-
 TEST_F(SharedDictionaryE2ETest, fileScopeAssignsSequentialDictionaryIds) {
   // Two configured columns, so the writer hands out 0 and 1 without the caller
   // tracking uniqueness. Before ids were writer-assigned, configuring two file
@@ -1853,14 +1854,11 @@ TEST_F(SharedDictionaryE2ETest, fileScopeAssignsSequentialDictionaryIds) {
        })});
 
   auto options = makeSharedDictionaryWriterOptions();
-  addColumnDictionary(
-      options,
-      SharedDictionaryConfig{.scope = SharedDictionaryScope::File},
-      "a");
-  addColumnDictionary(
-      options,
-      SharedDictionaryConfig{.scope = SharedDictionaryScope::File},
-      "b");
+  options.experimentalSharedDictionaryEncoding =
+      SharedDictionaryEncodingConfig::builder()
+          .addColumn("a", SharedDictionaryScope::File)
+          .addColumn("b", SharedDictionaryScope::File)
+          .build();
 
   const auto file = writeInput({input}, std::move(options));
   auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
@@ -1997,7 +1995,7 @@ TEST_P(
       addFlatmapDictionary(
           options,
           sharedDictionaryConfig(
-              SharedDictionaryScope::File, /*dictionaryId=*/17));
+              SharedDictionaryScope::External, /*dictionaryId=*/17));
       break;
     case InvalidDictionaryTarget::RegularRowColumnValue:
       input = maker.rowVector(
@@ -2009,10 +2007,10 @@ TEST_P(
       useSharedDictionarySelectionPolicy(options);
       options.experimentalSharedDictionaryEncoding =
           SharedDictionaryEncodingConfig::builder()
-              .addColumnDictionary(
+              .addProvidedDictionary(
                   "nested",
                   sharedDictionaryConfig(
-                      SharedDictionaryScope::File, /*dictionaryId=*/17))
+                      SharedDictionaryScope::External, /*dictionaryId=*/17))
               .build();
       break;
   }

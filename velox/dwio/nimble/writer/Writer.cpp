@@ -260,21 +260,7 @@ class WriterContext : public FieldWriterContext {
 
  private:
   static bool hasStripeDictionaryConfig(const WriterOptions& options) {
-    for (const auto& columnDictionary :
-         options.experimentalSharedDictionaryEncoding.columns) {
-      if (columnDictionary.dictionary.scope == SharedDictionaryScope::Stripe) {
-        return true;
-      }
-    }
-    for (const auto& flatMap :
-         options.experimentalSharedDictionaryEncoding.flatMaps) {
-      for (const auto& flatMapKey : flatMap.keys) {
-        if (flatMapKey.dictionary.scope == SharedDictionaryScope::Stripe) {
-          return true;
-        }
-      }
-    }
-    return false;
+    return options.experimentalSharedDictionaryEncoding.hasStripeDictionary();
   }
 
   const WriterOptions options_;
@@ -848,12 +834,18 @@ class FlatmapEncodingLayoutContext : public TypeBuilderContext {
 
   explicit FlatmapEncodingLayoutContext(
       KeyEncodingMap keyEncodings = {},
-      ValueDictionaryMap valueDictionaries = {})
+      ValueDictionaryMap valueDictionaries = {},
+      std::optional<SharedDictionaryConfig> allKeyDictionary = std::nullopt)
       : keyEncodings{std::move(keyEncodings)},
-        valueDictionaries{std::move(valueDictionaries)} {}
+        valueDictionaries{std::move(valueDictionaries)},
+        allKeyDictionary{std::move(allKeyDictionary)} {}
 
   const KeyEncodingMap keyEncodings;
   const ValueDictionaryMap valueDictionaries;
+  // Set when the whole column is enabled, so every key that materializes gets
+  // its own dictionary with these settings. Mutually exclusive with
+  // valueDictionaries, which names specific keys.
+  const std::optional<SharedDictionaryConfig> allKeyDictionary;
 };
 
 WriterStreamContext& streamContext(const StreamDescriptorBuilder& descriptor);
@@ -1445,10 +1437,103 @@ struct DictionaryConfigs {
   folly::F14FastMap<uint32_t, SharedDictionaryConfig> columns;
   folly::F14FastMap<uint32_t, FlatmapEncodingLayoutContext::ValueDictionaryMap>
       flatMaps;
+  // Flat-map columns enabled wholesale, mapped to the config every key of that
+  // column receives. Enabled columns name no keys, so the keys are discovered
+  // as the data materializes them.
+  folly::F14FastMap<uint32_t, SharedDictionaryConfig> allKeyFlatMaps;
 };
 
+// Rejects a shared dictionary on a value stream that targeted FSST or
+// SubIntSplit encoding already claims.
+void checkNoTargetedEncoding(
+    const detail::WriterContext& context,
+    uint32_t valueNodeId,
+    const std::string& fieldPath) {
+  NIMBLE_USER_CHECK(
+      !context.fsstEncodingNodeIds().contains(valueNodeId),
+      "Targeted FSST and shared dictionary column '{}' resolve to the same "
+      "value stream (schema node {}).",
+      fieldPath,
+      valueNodeId);
+  NIMBLE_USER_CHECK(
+      !context.subIntSplitEncodingNodeIds().contains(valueNodeId),
+      "Targeted SubIntSplit and shared dictionary column '{}' resolve to the same "
+      "value stream (schema node {}).",
+      fieldPath,
+      valueNodeId);
+}
+
+// Registers one enabled top-level column. Flat-map columns are recorded for
+// all keys and resolved later, when each key materializes; every other column
+// resolves to its single eligible value stream now.
+void collectEnabledColumn(
+    const TypeWithId& type,
+    const std::string& column,
+    const SharedDictionaryConfig& dictionary,
+    const detail::WriterContext& context,
+    DictionaryConfigs& configs) {
+  const auto& fieldType =
+      resolveValueStreamSubfield(type, parseValueStreamSubfield(column));
+  const auto nodeId = static_cast<uint32_t>(fieldType.id());
+
+  if (context.hasFlatMapNodeId(fieldType.id())) {
+    const auto inserted =
+        configs.allKeyFlatMaps.emplace(nodeId, dictionary).second;
+    NIMBLE_USER_CHECK(
+        inserted, "Duplicate shared dictionary column '{}'.", column);
+    return;
+  }
+
+  const auto& valueType = resolveDictionaryValueType(fieldType, column);
+  NIMBLE_USER_CHECK(
+      isSharedDictionaryLogicalType(*valueType.type()),
+      "Shared dictionary column '{}' must resolve to an integer or string "
+      "scalar, array element, or map value, got {}.",
+      column,
+      valueType.type()->toString());
+  checkNoTargetedEncoding(
+      context, static_cast<uint32_t>(valueType.id()), column);
+  const auto inserted = configs.columns.emplace(nodeId, dictionary).second;
+  NIMBLE_USER_CHECK(
+      inserted, "Duplicate shared dictionary column '{}'.", column);
+}
+
+// Registers one path-addressed provided dictionary.
+void collectProvidedDictionary(
+    const TypeWithId& type,
+    const ProvidedDictionary& provided,
+    const detail::WriterContext& context,
+    folly::F14FastSet<uint32_t>& valueNodeIds,
+    DictionaryConfigs& configs) {
+  const auto& fieldType = resolveValueStreamSubfield(
+      type, parseValueStreamSubfield(provided.fieldPath));
+  const auto& valueType =
+      resolveDictionaryValueType(fieldType, provided.fieldPath);
+  const auto valueNodeId = static_cast<uint32_t>(valueType.id());
+  NIMBLE_USER_CHECK(
+      valueNodeIds.insert(valueNodeId).second,
+      "Duplicate provided shared dictionary configuration for schema value "
+      "node {}.",
+      valueNodeId);
+  NIMBLE_USER_CHECK(
+      isSharedDictionaryLogicalType(*valueType.type()),
+      "Provided shared dictionary '{}' must resolve to an integer or string "
+      "scalar, array element, or map value, got {}.",
+      provided.fieldPath,
+      valueType.type()->toString());
+  checkNoTargetedEncoding(context, valueNodeId, provided.fieldPath);
+  const auto nodeId = static_cast<uint32_t>(fieldType.id());
+  const auto inserted =
+      configs.columns.emplace(nodeId, provided.dictionary).second;
+  NIMBLE_USER_CHECK(
+      inserted,
+      "Duplicate shared dictionary configuration for schema node {}.",
+      nodeId);
+}
+
 // Resolves shared dictionary configs to writer schema targets. Flat-map value
-// stream assignment is deferred until each configured key is materialized.
+// stream assignment is deferred until each key is materialized, for both
+// enabled columns and per-key provided dictionaries.
 DictionaryConfigs collectDictionaryConfigs(
     const TypeWithId& type,
     const detail::WriterContext& context) {
@@ -1468,58 +1553,31 @@ DictionaryConfigs collectDictionaryConfigs(
       velox::TypeKind::ROW,
       "Shared dictionary encoding requires a row root type, got {}.",
       type.type()->toString());
-  folly::F14FastSet<uint32_t> columnValueNodeIds;
+
   configs.columns.reserve(dictionaryEncodingConfig.columns.size());
-  for (const auto& columnDictionary : dictionaryEncodingConfig.columns) {
-    const auto subfield = parseValueStreamSubfield(columnDictionary.fieldPath);
-    const auto& fieldType = resolveValueStreamSubfield(type, subfield);
-    const auto& valueType =
-        resolveDictionaryValueType(fieldType, columnDictionary.fieldPath);
-    const auto valueNodeId = static_cast<uint32_t>(valueType.id());
-    const auto insertedValueNode =
-        columnValueNodeIds.insert(valueNodeId).second;
-    NIMBLE_USER_CHECK(
-        insertedValueNode,
-        "Duplicate shared dictionary column configuration for schema value "
-        "node {}.",
-        valueNodeId);
-    NIMBLE_USER_CHECK(
-        isSharedDictionaryLogicalType(*valueType.type()),
-        "Shared dictionary column '{}' must resolve to an integer or string "
-        "scalar, array element, or map value, got {}.",
-        columnDictionary.fieldPath,
-        valueType.type()->toString());
-    NIMBLE_USER_CHECK(
-        !fsstEncodingNodeIds.contains(valueNodeId),
-        "Targeted FSST and shared dictionary column '{}' resolve to the same "
-        "value stream (schema node {}).",
-        columnDictionary.fieldPath,
-        valueNodeId);
-    NIMBLE_USER_CHECK(
-        !subIntSplitEncodingNodeIds.contains(valueNodeId),
-        "Targeted SubIntSplit and shared dictionary column '{}' resolve to the same "
-        "value stream (schema node {}).",
-        columnDictionary.fieldPath,
-        valueNodeId);
-    const auto nodeId = static_cast<uint32_t>(fieldType.id());
-    const auto inserted =
-        configs.columns.emplace(nodeId, columnDictionary.dictionary).second;
-    NIMBLE_USER_CHECK(
-        inserted,
-        "Duplicate shared dictionary column configuration for schema node {}.",
-        nodeId);
+  for (const auto& [column, columnScope] : dictionaryEncodingConfig.columns) {
+    // The writer supplies the id, so a column entry carries only its scope and
+    // the file-wide alphabet encodings.
+    collectEnabledColumn(
+        type,
+        column,
+        SharedDictionaryConfig{
+            .scope = columnScope,
+            .alphabetEncodings = dictionaryEncodingConfig.alphabetEncodings},
+        context,
+        configs);
   }
 
-  configs.flatMaps.reserve(dictionaryEncodingConfig.flatMaps.size());
-  for (const auto& flatMap : dictionaryEncodingConfig.flatMaps) {
-    const auto subfield = parseValueStreamSubfield(flatMap.fieldPath);
-    NIMBLE_USER_CHECK_EQ(
-        subfield.path().size(),
-        1,
-        "Shared dictionary flat-map path '{}' must be a top-level writer input "
-        "column.",
-        flatMap.fieldPath);
-    const auto& fieldType = resolveValueStreamSubfield(type, subfield);
+  folly::F14FastSet<uint32_t> providedValueNodeIds;
+  for (const auto& provided : dictionaryEncodingConfig.provided) {
+    collectProvidedDictionary(
+        type, provided, context, providedValueNodeIds, configs);
+  }
+
+  configs.flatMaps.reserve(dictionaryEncodingConfig.providedFlatMaps.size());
+  for (const auto& flatMap : dictionaryEncodingConfig.providedFlatMaps) {
+    const auto& fieldType = resolveValueStreamSubfield(
+        type, parseValueStreamSubfield(flatMap.fieldPath));
     NIMBLE_USER_CHECK_EQ(
         fieldType.type()->kind(),
         velox::TypeKind::MAP,
@@ -1532,10 +1590,14 @@ DictionaryConfigs collectDictionaryConfigs(
         flatMap.fieldPath);
 
     const auto nodeId = static_cast<uint32_t>(fieldType.id());
+    NIMBLE_USER_CHECK(
+        !configs.allKeyFlatMaps.contains(nodeId),
+        "Flat-map column '{}' is both enabled and configured with provided "
+        "per-key dictionaries.",
+        flatMap.fieldPath);
     auto& flatMapKeys = configs.flatMaps[nodeId];
     const auto& mapValueType = *fieldType.childAt(1);
     for (const auto& flatMapKey : flatMap.keys) {
-      const auto& config = flatMapKey.dictionary;
       if (!fsstEncodingNodeIds.empty() || !subIntSplitEncodingNodeIds.empty()) {
         const TypeWithId* configuredType = &mapValueType;
         if (!flatMapKey.valueSubfield.empty()) {
@@ -1567,7 +1629,8 @@ DictionaryConfigs collectDictionaryConfigs(
       }
       flatMapKeys[std::to_string(flatMapKey.key)].push_back(
           FlatmapEncodingLayoutContext::ValueDictionaryConfig{
-              .valueSubfield = flatMapKey.valueSubfield, .dictionary = config});
+              .valueSubfield = flatMapKey.valueSubfield,
+              .dictionary = flatMapKey.dictionary});
     }
   }
   return configs;
@@ -1602,6 +1665,16 @@ void configureFlatMapValueStreams(
     if (it != flatMapContext.keyEncodings.end()) {
       initializeEncodingLayouts(fieldType, *it->second);
     }
+  }
+
+  // An enabled column gives every key its own dictionary, so this key needs no
+  // configuration of its own.
+  if (flatMapContext.allKeyDictionary.has_value()) {
+    configureDictionary(
+        fieldType,
+        flatMapContext.allKeyDictionary.value(),
+        context.schemaBuilder());
+    return;
   }
 
   auto it = flatMapContext.valueDictionaries.find(std::string{fieldKey});
@@ -1645,12 +1718,19 @@ void configureAddedType(
     if (dictionaryIt != dictionaryConfigs.flatMaps.end()) {
       valueDictionaries = dictionaryIt->second;
     }
-    const bool hasFlatMapValueEncoding =
-        !keyEncodings.empty() || !valueDictionaries.empty();
+    std::optional<SharedDictionaryConfig> allKeyDictionary;
+    auto allKeyIt = dictionaryConfigs.allKeyFlatMaps.find(nodeId);
+    if (allKeyIt != dictionaryConfigs.allKeyFlatMaps.end()) {
+      allKeyDictionary = allKeyIt->second;
+    }
+    const bool hasFlatMapValueEncoding = !keyEncodings.empty() ||
+        !valueDictionaries.empty() || allKeyDictionary.has_value();
     if (hasFlatMapValueEncoding) {
       type.setContext(
           std::make_unique<FlatmapEncodingLayoutContext>(
-              std::move(keyEncodings), std::move(valueDictionaries)));
+              std::move(keyEncodings),
+              std::move(valueDictionaries),
+              std::move(allKeyDictionary)));
     }
     const auto* predefinedKeys = context.getFlatMapNodeKeys(nodeId);
     if (predefinedKeys != nullptr && hasFlatMapValueEncoding) {

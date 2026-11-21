@@ -8928,20 +8928,20 @@ TEST_P(NimbleIndexProjectorTest, rejectsSharedDictionaryEncoding) {
         SharedDictionaryScope::External}) {
     SCOPED_TRACE(
         fmt::format("scope={}", SharedDictionaryScopeName::toName(scope)));
-    SharedDictionaryConfig dictionary{.scope = scope};
-    if (scope == SharedDictionaryScope::External) {
-      // Stripe and File scope name the dictionary inside the written file and
-      // assign the id themselves, rejecting a caller-assigned one. External
-      // dictionaries live in the caller's store, so the id is theirs to pick.
-      dictionary.dictionaryId = kDictionaryId;
-    }
-
     WriterOptions options;
     options.clusterIndexConfig = makeClusterIndexConfig({"key"});
-    options.experimentalSharedDictionaryEncoding =
-        SharedDictionaryEncodingConfig::builder()
-            .addColumnDictionary("value", std::move(dictionary))
-            .build();
+    auto builder = SharedDictionaryEncodingConfig::builder();
+    if (scope == SharedDictionaryScope::External) {
+      // External dictionaries live in the caller's store, so the id is theirs
+      // to pick and the configuration stays addressed by path.
+      builder.addProvidedDictionary(
+          "value",
+          SharedDictionaryConfig{
+              .scope = scope, .dictionaryId = kDictionaryId});
+    } else {
+      builder.addColumn("value", scope);
+    }
+    options.experimentalSharedDictionaryEncoding = builder.build();
     if (scope == SharedDictionaryScope::External) {
       // An external alphabet is supplied rather than built from the data, so
       // it has to already hold every value written above.
