@@ -1144,6 +1144,15 @@ jobs:
         env:
           LIBHDFS3_CONF: ${{ github.workspace }}/scripts/ci/hdfs-client.xml
           LSAN_OPTIONS: detect_leaks=0
+          # Protobuf annotates its RepeatedField storage and poisons freed arena
+          # blocks through inline helpers that are only active in code built
+          # with ASan. Velox is built with ASan but the image's libprotobuf is
+          # not, so the two sides disagree about which memory is accessible and
+          # ASan reports container-overflow and use-after-poison inside Protobuf.
+          # Ignore container annotations and library-requested poisoning; Velox
+          # does not poison memory itself, so its own code is still fully
+          # checked.
+          ASAN_OPTIONS: detect_container_overflow=0:allow_user_poisoning=0
         working-directory: _build/debug
         run: |
           source /setup-classpath.sh
