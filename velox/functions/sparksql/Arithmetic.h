@@ -523,6 +523,23 @@ struct Expm1Function {
   }
 };
 
+/// Raises 'base' to the power of 'exponent' like Java's StrictMath.pow, which
+/// Spark calls. C pow returns 1 when 'base' is 1 for any exponent, and when
+/// 'base' is -1 and the exponent is infinite. Java returns NaN for a NaN
+/// exponent and for an infinite exponent when the absolute value of 'base' is
+/// 1.
+template <typename T>
+struct PowerFunction {
+  FOLLY_ALWAYS_INLINE void call(double& result, double base, double exponent) {
+    if (std::isnan(exponent) ||
+        (std::isinf(exponent) && std::abs(base) == 1.0)) {
+      result = std::numeric_limits<double>::quiet_NaN();
+      return;
+    }
+    result = std::pow(base, exponent);
+  }
+};
+
 template <typename T>
 struct CotFunction {
   FOLLY_ALWAYS_INLINE void call(double& result, double a) {

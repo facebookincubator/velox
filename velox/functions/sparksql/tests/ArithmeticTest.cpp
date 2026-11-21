@@ -767,6 +767,42 @@ TEST_F(ArithmeticTest, hypot) {
   EXPECT_DOUBLE_EQ(5.70087712549569, hypot(3.5, -4.5).value());
 }
 
+TEST_F(ArithmeticTest, power) {
+  const auto power = [&](std::optional<double> base,
+                         std::optional<double> exponent) {
+    return evaluateOnce<double>("power(c0, c1)", base, exponent);
+  };
+
+  EXPECT_EQ(power(2, 3), 8.0);
+  EXPECT_EQ(power(2, -1), 0.5);
+  EXPECT_EQ(power(std::nullopt, 2), std::nullopt);
+  EXPECT_EQ(power(2, std::nullopt), std::nullopt);
+
+  // Java's StrictMath.pow returns NaN for an infinite exponent when the
+  // absolute value of the base is 1. C pow returns 1.
+  EXPECT_TRUE(std::isnan(power(1, kInfDouble).value()));
+  EXPECT_TRUE(std::isnan(power(1, -kInfDouble).value()));
+  EXPECT_TRUE(std::isnan(power(-1, kInfDouble).value()));
+  EXPECT_TRUE(std::isnan(power(-1, -kInfDouble).value()));
+
+  // A NaN exponent gives NaN, also for base 1.
+  EXPECT_TRUE(std::isnan(power(1, kNanDouble).value()));
+  EXPECT_TRUE(std::isnan(power(2, kNanDouble).value()));
+
+  // Cases where Java and C agree.
+  EXPECT_EQ(power(kNanDouble, 0), 1.0);
+  EXPECT_EQ(power(0, 0), 1.0);
+  EXPECT_EQ(power(1, 5), 1.0);
+  EXPECT_EQ(power(-1, 3), -1.0);
+  EXPECT_EQ(power(0, -1), kInfDouble);
+  EXPECT_EQ(power(-0.0, -1), -kInfDouble);
+  EXPECT_EQ(power(2, kInfDouble), kInfDouble);
+  EXPECT_EQ(power(0.5, kInfDouble), 0.0);
+  EXPECT_EQ(power(2, 1024), kInfDouble);
+  EXPECT_TRUE(std::isnan(power(-8, 1.0 / 3).value()));
+  EXPECT_TRUE(std::signbit(power(-0.0, 3).value()));
+}
+
 TEST_F(ArithmeticTest, cot) {
   const auto cot = [&](std::optional<double> a) {
     return evaluateOnce<double>("cot(c0)", a);
