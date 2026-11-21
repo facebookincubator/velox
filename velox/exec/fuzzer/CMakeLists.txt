@@ -15,13 +15,16 @@
 # Generate Thrift library for LocalRunnerService early since velox_fuzzer_util
 # depends on it when VELOX_ENABLE_LOCAL_RUNNER_SERVICE is enabled.
 if(VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
-  include(FBThriftCppLibrary)
-  add_fbthrift_cpp_library(
+  add_library(local_runner_service_thrift)
+  thrift_generate(
     local_runner_service_thrift
     if/LocalRunnerService.thrift
-    SERVICES
-    LocalRunnerService
+    LANGUAGE cpp2
+    SERVICES LocalRunnerService
+    INCLUDE_DIRECTORIES ${PROJECT_SOURCE_DIR} ${THRIFT_INCLUDE_DIR}
   )
+  target_include_directories(local_runner_service_thrift PUBLIC ${PROJECT_BINARY_DIR})
+  target_link_libraries(local_runner_service_thrift PUBLIC thrift::rpc)
   target_compile_options(local_runner_service_thrift PRIVATE -Wno-error=deprecated-declarations)
 endif()
 
@@ -302,7 +305,7 @@ if(VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
     velox_common_base
     velox_memory
     Folly::folly
-    FBThrift::thriftcpp2
+    thrift::rpc
     gflags
     glog::glog
   )

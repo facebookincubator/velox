@@ -3,8 +3,6 @@
 line_length: 100
 indent: 2
 definitions:
-  - CMake/third-party/FBCMakeParseArgs.cmake
-  - CMake/third-party/FBThriftCppLibrary.cmake
   - velox/experimental/breeze/cmake
   - velox/experimental/breeze/test
   - velox/experimental/breeze/perftest

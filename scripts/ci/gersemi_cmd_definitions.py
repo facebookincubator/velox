@@ -64,6 +64,33 @@ command_definitions = {
         "front_positional_arguments": ["var_name", "envvar_name", "default"]
     },
     "velox_sources": builtin_commands["target_sources"],
+    "thrift_add_library": {
+        "front_positional_arguments": ["name", "file"],
+        "options": ["LEGACY_STRICT"],
+        "one_value_keywords": ["LANGUAGE", "OUTPUT_DIRECTORY", "INCLUDE_PREFIX"],
+        "multi_value_keywords": [
+            "SERVICES",
+            "DEPENDS",
+            "OPTIONS",
+            "INCLUDE_DIRECTORIES",
+        ],
+    },
+    "thrift_generate": {
+        "front_positional_arguments": ["target", "file"],
+        "options": ["LEGACY_STRICT"],
+        "one_value_keywords": [
+            "LANGUAGE",
+            "OUTPUT_DIRECTORY",
+            "INCLUDE_PREFIX",
+            "NAMESPACE",
+        ],
+        "multi_value_keywords": [
+            "SERVICES",
+            "OPTIONS",
+            "INCLUDE_DIRECTORIES",
+            "FILE_DEPENDS",
+        ],
+    },
     "velox_add_cudf_test": {
         "one_value_keywords": ["NAME", "TIMEOUT"],
         "multi_value_keywords": ["SOURCES", "LIBS"],
