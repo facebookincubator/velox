@@ -19,12 +19,8 @@
 # The versions should match the declared versions in this file.
 
 # Build dependencies versions.
-# Note: When updating FB_OS_VERSION, ensure that
-# CMake/third-party/FBThriftCppLibrary.cmake is updated
-# with the matching version from fbthrift:
-# <fbthrift_github>/build/fbcode_builder/CMake/FBThriftCppLibrary.cmake
-# The new FB_OS version of fbthrift might require changes such that thrift
-# files are generated properly on all platforms.
+# Note: Velox generates code with thrift_generate() and thrift_add_library()
+# from Thrift's CMake package, so FB_OS_VERSION must be a release that has them.
 FB_OS_VERSION="v2026.09.07.00"
 FMT_VERSION="11.2.0"
 BOOST_VERSION="boost-1.84.0"
