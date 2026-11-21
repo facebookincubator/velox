@@ -15,6 +15,7 @@
  */
 #include "velox/functions/lib/RegistrationHelpers.h"
 #include "velox/functions/prestosql/URLFunctions.h"
+#include "velox/functions/sparksql/UrlDecode.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -22,6 +23,8 @@ void registerUrlFunctions(const std::string& prefix) {
   registerFunction<UrlEncodeFunction, Varchar, Varchar>(
       {prefix + "url_encode"});
   registerFunction<UrlDecodeFunction, Varchar, Varchar>(
+      {prefix + "url_decode"});
+  registerFunction<UrlDecodeFunction, Varchar, Varchar, bool>(
       {prefix + "url_decode"});
 }
 

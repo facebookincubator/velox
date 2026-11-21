@@ -123,6 +123,7 @@ velox_add_library(
   TransformKeys.h
   UnBase64Function.h
   UnscaledValueFunction.h
+  UrlDecode.h
   Uuid.h
   VarcharTypeWriteSideCheck.h
   XxHash64.h
