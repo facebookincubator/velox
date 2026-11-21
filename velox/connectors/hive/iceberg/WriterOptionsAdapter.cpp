@@ -43,16 +43,26 @@ class ParquetWriterOptionsAdapter : public WriterOptionsAdapter {
   void applyPreConfigs(dwio::common::WriterOptions& options) const override {
     // Per Iceberg spec (https://iceberg.apache.org/spec/#parquet):
     // - Timestamps must be stored with microsecond precision.
-    // - Timestamps must NOT be adjusted to UTC; written as-is without
-    //   timezone conversion (empty string disables conversion).
+    // - For timestamptz (timestamp with time zone), values are normalized to
+    //   UTC and Parquet metadata must record isAdjustedToUTC=true (achieved by
+    //   setting timestamp timezone to "UTC").
+    // - For timestamp without time zone (timestamp_ntz), values are written
+    //   without timezone adjustment (empty string disables conversion,
+    //   setting isAdjustedToUTC=false in Parquet footer).
     //
     // Settings are routed through serdeParameters so the common writer options
     // can carry them until the Parquet writer constructor reads them. The value
     // "6" represents microseconds (TimestampPrecision::kMicroseconds).
     options.serdeParameters[std::string(
         parquet::ParquetConfig::kWriterSerdeTimestampUnit)] = "6";
-    options.serdeParameters[std::string(
-        parquet::ParquetConfig::kWriterSerdeTimestampTimezone)] = "";
+
+    // Preserve any caller-specified timestamp timezone (e.g. "UTC" for timestamptz).
+    // If not specified, default to empty string for timestamp_ntz.
+    const auto tzKey =
+        std::string(parquet::ParquetConfig::kWriterSerdeTimestampTimezone);
+    if (options.serdeParameters.find(tzKey) == options.serdeParameters.end()) {
+      options.serdeParameters[tzKey] = "";
+    }
   }
 };
 
