@@ -257,6 +257,18 @@ struct WriterOptions {
   /// using dictionary maps.
   folly::F14FastSet<std::string> deduplicatedMapColumns{};
 
+  /// Columns whose arrays are written as sliding window arrays: each row is a
+  /// window over one shared elements stream, so a row that slides the
+  /// previous row stores only its new elements. Suits sliding-window event
+  /// features. Supports arrays of fixed-width scalars. A column must not also
+  /// be in dictionaryArrayColumns.
+  /// NOTE: For each column, ALL the arrays inside this column are written as
+  /// sliding window arrays.
+  /// EXPERIMENTAL: Not production-ready. Readers built before this schema kind
+  /// cannot read the files it writes. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  folly::F14FastSet<std::string> slidingWindowArrayColumns{};
+
   /// The metric logger would come populated with access descriptor information,
   /// application generated query id or specific sampling configs.
   std::shared_ptr<MetricsLogger> metricsLogger{};

@@ -176,6 +176,22 @@ void addLabels(
       addLabels(array.elements(), labelIndex, "", labels, offsetToLabel);
       break;
     }
+    case Kind::SlidingWindowArray: {
+      const auto& array = node->asSlidingWindowArray();
+      const auto offsetsOffset = array.offsetsDescriptor().offset();
+      const auto lengthsOffset = array.lengthsDescriptor().offset();
+      NIMBLE_CHECK_LT(labelIndex, labels.size(), "Unexpected label index.");
+      NIMBLE_CHECK_GT(
+          offsetToLabel.size(), offsetsOffset, "Unexpected offset.");
+      NIMBLE_CHECK_GT(
+          offsetToLabel.size(), lengthsOffset, "Unexpected offset.");
+      labels.emplace_back(labels[labelIndex] + name);
+      labelIndex = labels.size() - 1;
+      offsetToLabel[offsetsOffset] = labelIndex;
+      offsetToLabel[lengthsOffset] = labelIndex;
+      addLabels(array.elements(), labelIndex, "", labels, offsetToLabel);
+      break;
+    }
   }
 }
 } // namespace
@@ -253,6 +269,14 @@ StreamLabels::StreamLabels(const std::shared_ptr<const Type>& root) {
           }
           case Kind::ArrayWithOffsets: {
             const auto& array = type.asArrayWithOffsets();
+            maxOffset =
+                std::max<size_t>(maxOffset, array.offsetsDescriptor().offset());
+            maxOffset =
+                std::max<size_t>(maxOffset, array.lengthsDescriptor().offset());
+            break;
+          }
+          case Kind::SlidingWindowArray: {
+            const auto& array = type.asSlidingWindowArray();
             maxOffset =
                 std::max<size_t>(maxOffset, array.offsetsDescriptor().offset());
             maxOffset =
