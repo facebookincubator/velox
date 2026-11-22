@@ -71,7 +71,7 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   auto firstFileSplit = std::make_shared<connector::FileConnectorSplit>(
       paimonSplit_->connectorId,
       firstFile.path,
-      paimonSplit_->fileFormat(),
+      firstFile.fileFormat,
       /*_start=*/0,
       /*_length=*/std::numeric_limits<uint64_t>::max(),
       /*splitWeight=*/0,

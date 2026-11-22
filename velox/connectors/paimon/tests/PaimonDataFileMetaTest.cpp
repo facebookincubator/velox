@@ -29,6 +29,7 @@ using namespace facebook::velox;
 TEST(PaimonDataFileTest, serializeRoundTrip) {
   PaimonDataFile file;
   file.path = "data.parquet";
+  file.fileFormat = dwio::common::FileFormat::PARQUET;
   file.size = 4096;
   file.rowCount = 500;
   file.level = 1;
@@ -44,6 +45,7 @@ TEST(PaimonDataFileTest, serializeRoundTrip) {
   auto deserialized = PaimonDataFile::create(serialized);
 
   EXPECT_EQ(deserialized.path, "data.parquet");
+  EXPECT_EQ(deserialized.fileFormat, dwio::common::FileFormat::PARQUET);
   EXPECT_EQ(deserialized.size, 4096);
   EXPECT_EQ(deserialized.rowCount, 500);
   EXPECT_EQ(deserialized.level, 1);
@@ -63,6 +65,7 @@ TEST(PaimonDataFileTest, serializeRoundTrip) {
 TEST(PaimonDataFileTest, serializeNoDeletionFile) {
   PaimonDataFile file;
   file.path = "data.orc";
+  file.fileFormat = dwio::common::FileFormat::ORC;
   file.size = 1024;
 
   auto serialized = file.serialize();
@@ -76,6 +79,7 @@ TEST(PaimonDataFileTest, serializeNoDeletionFile) {
 TEST(PaimonDataFileTest, serializeDefaultValues) {
   PaimonDataFile file;
   file.path = "data.orc";
+  file.fileFormat = dwio::common::FileFormat::ORC;
 
   auto serialized = file.serialize();
   auto deserialized = PaimonDataFile::create(serialized);
@@ -91,17 +95,44 @@ TEST(PaimonDataFileTest, serializeDefaultValues) {
   EXPECT_EQ(deserialized.type, PaimonDataFile::Type::kData);
   EXPECT_EQ(deserialized.source, PaimonDataFile::Source::kAppend);
   EXPECT_FALSE(deserialized.deletionFile.has_value());
+  EXPECT_EQ(deserialized.fileFormat, dwio::common::FileFormat::ORC);
+}
+
+TEST(PaimonDataFileTest, serializeFileFormat) {
+  {
+    PaimonDataFile file;
+    file.path = "data.nimble";
+    file.fileFormat = dwio::common::FileFormat::NIMBLE;
+    auto serialized = file.serialize();
+    EXPECT_EQ(serialized["fileFormat"].asString(), "nimble");
+    EXPECT_EQ(
+        PaimonDataFile::create(serialized).fileFormat,
+        dwio::common::FileFormat::NIMBLE);
+    serialized["fileFormat"] = "lance";
+    VELOX_ASSERT_USER_THROW(
+        PaimonDataFile::create(serialized),
+        "Unknown Paimon data file format: lance");
+  }
+  {
+    PaimonDataFile file;
+    file.path = "data";
+    VELOX_ASSERT_USER_THROW(
+        PaimonDataFile::create(file.serialize()),
+        "Unknown Paimon data file format: unknown");
+  }
 }
 
 TEST(PaimonDataFileTest, toString) {
   PaimonDataFile file;
   file.path = "data.orc";
+  file.fileFormat = dwio::common::FileFormat::ORC;
   file.size = 1024;
   file.rowCount = 100;
   file.level = 0;
 
   auto str = file.toString();
   EXPECT_THAT(str, testing::HasSubstr("data.orc"));
+  EXPECT_THAT(str, testing::HasSubstr("format=orc"));
   EXPECT_THAT(str, testing::HasSubstr("size=1024"));
   EXPECT_THAT(str, testing::HasSubstr("rows=100"));
   EXPECT_THAT(str, testing::HasSubstr("level=0"));
@@ -130,6 +161,7 @@ TEST(PaimonDataFileTest, toStringChangelog) {
 TEST(PaimonDataFileTest, defaultValues) {
   PaimonDataFile file;
   EXPECT_TRUE(file.path.empty());
+  EXPECT_EQ(file.fileFormat, dwio::common::FileFormat::UNKNOWN);
   EXPECT_EQ(file.size, 0);
   EXPECT_EQ(file.rowCount, 0);
   EXPECT_EQ(file.level, 0);

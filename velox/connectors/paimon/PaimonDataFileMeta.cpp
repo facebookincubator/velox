@@ -69,9 +69,10 @@ PaimonDataFile::Source PaimonDataFile::sourceFromString(
 
 std::string PaimonDataFile::toString() const {
   return fmt::format(
-      "{{path={}, size={}, rows={}, level={}, type={}, source={}, "
+      "{{path={}, format={}, size={}, rows={}, level={}, type={}, source={}, "
       "deletionFile={}}}",
       path,
+      fileFormat,
       size,
       rowCount,
       level,
@@ -83,6 +84,7 @@ std::string PaimonDataFile::toString() const {
 folly::dynamic PaimonDataFile::serialize() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["filePath"] = path;
+  obj["fileFormat"] = dwio::common::FileFormatName::toName(fileFormat);
   obj["fileSize"] = size;
   obj["rowCount"] = rowCount;
   obj["level"] = level;
@@ -102,6 +104,13 @@ folly::dynamic PaimonDataFile::serialize() const {
 PaimonDataFile PaimonDataFile::create(const folly::dynamic& obj) {
   PaimonDataFile file;
   file.path = obj["filePath"].asString();
+  const auto formatName = obj["fileFormat"].asString();
+  file.fileFormat = dwio::common::toFileFormat(formatName);
+  VELOX_USER_CHECK_NE(
+      file.fileFormat,
+      dwio::common::FileFormat::UNKNOWN,
+      "Unknown Paimon data file format: {}",
+      formatName);
   file.size = static_cast<uint64_t>(obj["fileSize"].asInt());
   file.rowCount = static_cast<uint64_t>(obj["rowCount"].asInt());
   file.level = static_cast<int32_t>(obj["level"].asInt());

@@ -124,6 +124,13 @@ bool PaimonSplitReader::ensureFileSplitReader() {
   while (currentFileIndex_ < fileSplits_.size()) {
     // Point to the current file.
     fileSplit_ = fileSplits_[currentFileIndex_];
+    // The data source configured the reader options for the first file, and
+    // some of them depend on the file format, which can change between files.
+    // The shared configuration takes a new format only when none is set.
+    if (fileSplit_->fileFormat != baseReaderOpts_.fileFormat()) {
+      baseReaderOpts_.setFileFormat(dwio::common::FileFormat::UNKNOWN);
+      configureBaseReaderOptions();
+    }
 
     // TODO: Add historical-schema adaptation using per-file schema metadata.
     connector::FileSplitReader::prepareSplit(metadataFilter_, *runtimeStats_);
@@ -172,7 +179,7 @@ PaimonSplitReader::makeFileConnectorSplit(
   return std::make_shared<connector::FileConnectorSplit>(
       paimonSplit_->connectorId,
       dataFile.path,
-      paimonSplit_->fileFormat(),
+      dataFile.fileFormat,
       /*_start=*/0,
       /*_length=*/std::numeric_limits<uint64_t>::max(),
       /*splitWeight=*/0,
