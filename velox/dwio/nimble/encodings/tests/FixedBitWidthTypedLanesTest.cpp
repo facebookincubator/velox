@@ -299,6 +299,7 @@ Layout layoutOf(std::string_view encoded) {
       chunk.payload.size(),
       FixedBitWidthTypedLanes::payloadSize(chunk.rowCount, chunk.bitWidth));
   if (chunk.bitWidth == kTypeBits) {
+    EXPECT_EQ(chunk.baseline, 0);
     return Layout::kFullWidth;
   }
   if (chunk.bitWidth == 16) {
@@ -676,6 +677,93 @@ TEST(FixedBitWidthTypedLanesTest, narrowLanesMatchTestedLayout) {
           encode<uint64_t>(manualPolicy<uint64_t>(), incompressible, lanesOn()))
           .compressionType,
       CompressionType::Uncompressed);
+}
+
+// Full-width lanes hold the raw values, as TrivialEncoding does, plus 8 zero
+// bytes, at baseline 0.
+TEST(FixedBitWidthTypedLanesTest, fullWidthPayloadIsTrivialPayloadPlusPad) {
+  const auto expectFullWidth = [](const auto& values) {
+    using T = typename std::decay_t<decltype(values)>::value_type;
+    SCOPED_TRACE(fmt::format("sizeof {}", sizeof(T)));
+    const auto encoded = encode<T>(manualPolicy<T>(), values, lanesOn());
+    const auto chunk = readChunk<T>(encoded);
+    ASSERT_EQ(chunk.encodingType, EncodingType::FixedBitWidth);
+    EXPECT_EQ(chunk.bitWidth, 8 * sizeof(T));
+    EXPECT_EQ(chunk.baseline, 0);
+
+    const auto trivial = encode<T>(
+        manualPolicy<T>({{EncodingType::Trivial, 1.0}}), values, lanesOff());
+    ASSERT_EQ(EncodingPrefix::encodingType(trivial), EncodingType::Trivial);
+    const char* pos = trivial.data() + EncodingPrefix::kFixedPrefixSize;
+    const auto compressionType = static_cast<CompressionType>(*pos++);
+    std::string_view stored{
+        pos, static_cast<size_t>(trivial.data() + trivial.size() - pos)};
+    std::string trivialPayload{stored};
+    if (compressionType != CompressionType::Uncompressed) {
+      auto raw = Compression::uncompress(
+          leafPool(), compressionType, DataType::Undefined, stored, nullptr);
+      trivialPayload = std::string{raw->as<char>(), raw->size()};
+    }
+    EXPECT_EQ(chunk.payload, trivialPayload + std::string(8, '\0'));
+    EXPECT_EQ(decode<T>(encoded), values);
+  };
+  expectFullWidth(lowEntropyValues<uint16_t>(4'096, 16, 0));
+  expectFullWidth(lowEntropyValues<int16_t>(4'096, 12, 100));
+  expectFullWidth(lowEntropyValues<uint32_t>(4'096, 24, 3));
+  expectFullWidth(lowEntropyValues<int32_t>(4'096, 32, 0));
+  expectFullWidth(lowEntropyValues<uint64_t>(4'096, 40, 1'000));
+  // 41 to 48 bits: 64-bit chunks over 44 and 48 bits are more than half the
+  // type width, so they take full-width lanes too.
+  expectFullWidth(lowEntropyValues<int64_t>(4'096, 44, 1'000));
+  expectFullWidth(lowEntropyValues<uint64_t>(4'096, 48, 7));
+  expectFullWidth(lowEntropyValues<int64_t>(4'096, 64, 0));
+  expectFullWidth(spreadValues<uint64_t>(4'099, 64));
+  // Signed values whose two's complement spans the whole type.
+  std::vector<int64_t> signedMix(4'096);
+  for (size_t i = 0; i < signedMix.size(); ++i) {
+    signedMix[i] = (i % 2 == 0 ? -1 : 1) * static_cast<int64_t>(i * 977);
+  }
+  expectFullWidth(signedMix);
+}
+
+// A full-width chunk is priced at its packed width, the byte-rounded bit width,
+// not at the width of its lanes: the estimate is the same with lanes on or off,
+// so selection makes the same choice either way. The chunk is still stored in
+// lanes of the type's width plus 8 zero bytes.
+TEST(FixedBitWidthTypedLanesTest, fullWidthChunksArePricedAtPackedWidth) {
+  const auto check = [](auto tag, uint32_t bits) {
+    using T = decltype(tag);
+    using PhysicalType = typename TypeTraits<T>::physicalType;
+    SCOPED_TRACE(fmt::format("sizeof {}, {} bits", sizeof(T), bits));
+    constexpr uint32_t kRows{4'096};
+    const auto values = spreadValues<T>(kRows, bits);
+    const std::span<const PhysicalType> physical{
+        reinterpret_cast<const PhysicalType*>(values.data()), values.size()};
+    const auto statistics = Statistics<PhysicalType>::create(physical);
+    // Data layout: prefix, compression type, baseline, bit width, payload.
+    const uint64_t header =
+        EncodingPrefix::kFixedPrefixSize + 2 + sizeof(PhysicalType);
+    const uint64_t packedBits = (bits + 7) / 8 * 8;
+    const uint64_t packed = header + kRows * packedBits / 8;
+    EXPECT_EQ(
+        FixedBitWidthEncoding<T>::estimateSize(kRows, statistics, lanesOn()),
+        packed);
+    EXPECT_EQ(
+        FixedBitWidthEncoding<T>::estimateSize(kRows, statistics, lanesOff()),
+        packed);
+
+    const auto encoded = encode<T>(manualPolicy<T>(), values, lanesOn());
+    const auto chunk = readChunk<T>(encoded);
+    ASSERT_EQ(chunk.encodingType, EncodingType::FixedBitWidth);
+    EXPECT_EQ(chunk.bitWidth, 8 * sizeof(T));
+    EXPECT_EQ(chunk.payload.size(), kRows * sizeof(T) + 8);
+    EXPECT_EQ(decode<T>(encoded), values);
+  };
+  check(uint32_t{}, 24);
+  check(int32_t{}, 20);
+  check(int64_t{}, 40);
+  check(uint64_t{}, 48);
+  check(int64_t{}, 56);
 }
 
 // Lanes need compression: an Uncompressed policy, or no compression options,
