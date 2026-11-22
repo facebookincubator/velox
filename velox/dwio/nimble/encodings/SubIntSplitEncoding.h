@@ -562,6 +562,9 @@ std::string_view SubIntSplitEncoding<T>::encodeImpl(
   // width, so the decode path is unaffected.
   Encoding::Options sectionOptions = options;
   sectionOptions.fixedBitWidthUseExactBits = true;
+  // Sections stay bit-packed at their exact width: typed lanes would widen
+  // them back to whole lanes.
+  sectionOptions.fixedBitWidthTypedLanes = false;
 
   std::vector<std::string_view> payloads;
   payloads.reserve(sections.size());
