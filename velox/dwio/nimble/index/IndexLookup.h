@@ -124,7 +124,7 @@ class IndexLookup {
 
     /// If true, key chunk readers build their encoding views with
     /// Encoding::Options::cacheEncodingView, trading memory for faster repeated
-    /// seeks into chunks that stay resident. Only hierarchical key chunks read
+    /// seeks into chunks that stay resident. Only trie key chunks read
     /// through encoding views.
     bool cacheKeyEncodingViews{false};
 

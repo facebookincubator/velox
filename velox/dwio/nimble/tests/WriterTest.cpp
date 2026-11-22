@@ -8777,9 +8777,9 @@ TEST_P(WriterIndexTest, keyStreamLayout) {
   }
 }
 
-// A hierarchical cluster index reads the same keys and finds the same rows
+// A trie cluster index reads the same keys and finds the same rows
 // whether it stores its key chunks in stripes or after them.
-TEST_F(WriterTest, hierarchicalClusterIndexStripeKeyStreams) {
+TEST_F(WriterTest, trieClusterIndexStripeKeyStreams) {
   constexpr int kNumBatches = 4;
   constexpr int kBatchSize = 100;
   const auto type = velox::ROW(
@@ -8808,7 +8808,7 @@ TEST_F(WriterTest, hierarchicalClusterIndexStripeKeyStreams) {
     options.metadataFlushThreshold = 1;
     options.clusterIndexConfig =
         nimble::index::ClusterIndexConfigBuilder{
-            nimble::index::kHierarchicalClusterIndexName}
+            nimble::index::kTrieClusterIndexName}
             .withKeyColumns({"key_col"})
             .withEnforceKeyOrder(true)
             .withMaxRowsPerKeyChunk(64)
@@ -8827,7 +8827,7 @@ TEST_F(WriterTest, hierarchicalClusterIndexStripeKeyStreams) {
   };
   const auto openTablet = [&](const std::string& file) {
     auto options = makeTestTabletOptions(leafPool_.get());
-    options.clusterIndexName = nimble::index::kHierarchicalClusterIndexName;
+    options.clusterIndexName = nimble::index::kTrieClusterIndexName;
     return nimble::TabletReader::create(
         std::make_shared<velox::InMemoryReadFile>(file),
         leafPool_.get(),
@@ -8848,7 +8848,7 @@ TEST_F(WriterTest, hierarchicalClusterIndexStripeKeyStreams) {
     SCOPED_TRACE(fmt::format("row {}", row));
     const auto key = expectedIndex->keyAtRow(row);
     EXPECT_EQ(index->keyAtRow(row), key);
-    // Hierarchical keys must be complete, so a key's successor cannot bound a
+    // Trie keys must be complete, so a key's successor cannot bound a
     // range scan; a point lookup finds the rows of the key.
     const auto request =
         nimble::index::IndexLookup::LookupRequest::pointLookup({key});
