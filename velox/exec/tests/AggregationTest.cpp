@@ -2162,6 +2162,7 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {
             .spillDirectory(tempDirectory->getPath())
             .config(QueryConfig::kSpillEnabled, true)
             .config(QueryConfig::kAggregationSpillEnabled, true)
+            .config(QueryConfig::kSpillNumPartitionBits, "0")
             .config(
                 QueryConfig::kPreferredOutputBatchBytes,
                 std::to_string(testData.maxOutputBytes))
@@ -2227,6 +2228,7 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpillForOrderedAggr) {
             .spillDirectory(tempDirectory->getPath())
             .config(QueryConfig::kSpillEnabled, true)
             .config(QueryConfig::kAggregationSpillEnabled, true)
+            .config(QueryConfig::kSpillNumPartitionBits, "0")
             .config(
                 QueryConfig::kPreferredOutputBatchBytes,
                 std::to_string(testData.maxOutputBytes))

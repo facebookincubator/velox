@@ -3860,12 +3860,13 @@ DEBUG_ONLY_TEST_P(HashJoinTest, exceededMaxSpillLevel) {
       .planNode(plan)
       // Always trigger spilling.
       .injectSpill(false)
-      .maxSpillLevel(0)
+      .config(core::QueryConfig::kMaxSpillLevel, "0")
       .spillDirectory(tempDirectory->getPath())
       .referenceQuery(
           "SELECT t_k1, t_k2, t_v1, u_k1, u_k2, u_v1 FROM t, u WHERE t.t_k1 = u.u_k1")
       .config(core::QueryConfig::kSpillStartPartitionBit, "29")
       .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
+        ASSERT_EQ(maxHashBuildSpillLevel(*task), 0);
         auto opStats = toOperatorStats(task->taskStats());
         ASSERT_EQ(
             opStats.at("HashProbe")
@@ -6401,7 +6402,7 @@ TEST_P(MultiThreadedHashJoinTest, leftJoin) {
       .joinOutputLayout({"row_number", "c0", "c1", "u_c0"})
       .referenceQuery(
           "SELECT t.row_number, t.c0, t.c1, u.c0 FROM t LEFT JOIN u ON t.c0 = u.c0")
-      .verifier([&](const std::shared_ptr<Task>& task, bool /*unused*/) {
+      .verifier([&](const std::shared_ptr<Task>& task, bool spilled) {
         int nullJoinBuildKeyCount = 0;
         int nullJoinProbeKeyCount = 0;
 
@@ -6416,7 +6417,11 @@ TEST_P(MultiThreadedHashJoinTest, leftJoin) {
           }
         }
         ASSERT_EQ(nullJoinBuildKeyCount, 33 * GetParam().numDrivers);
-        ASSERT_EQ(nullJoinProbeKeyCount, 34 * GetParam().numDrivers);
+        if (spilled) {
+          ASSERT_LE(nullJoinProbeKeyCount, 34 * GetParam().numDrivers);
+        } else {
+          ASSERT_EQ(nullJoinProbeKeyCount, 34 * GetParam().numDrivers);
+        }
       })
       .run();
 }
