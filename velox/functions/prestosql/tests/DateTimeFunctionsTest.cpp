@@ -3638,6 +3638,16 @@ TEST_F(DateTimeFunctionsTest, dateAddHourTimestampWithTimezoneFallback) {
               makeNullableFlatVector<std::string>({"hour"}, VARCHAR()),
               makeTimestampWithTimeZoneVector(1'730'619'000'000, "UTC"),
           })));
+
+  // Day units use the session zone. A day after 2024-03-09 12:00 PST is
+  // 2024-03-10 12:00 PDT, 23 hours later, where the +05:30 label gives 24.
+  EXPECT_EQ(
+      1'710'097'200.0,
+      evaluateOnce<double>(
+          "to_unixtime(date_add('day', 1, c0))",
+          TIMESTAMP_WITH_TIME_ZONE(),
+          TimestampWithTimezone::pack(
+              TimestampWithTimezone(1'710'014'400'000, "+05:30"))));
 }
 
 TEST_F(DateTimeFunctionsTest, dateAddTime) {
