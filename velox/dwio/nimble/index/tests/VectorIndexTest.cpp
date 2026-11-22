@@ -1606,7 +1606,7 @@ TEST_F(VectorIndexTest, blockCacheServesIndexData) {
             .ioOptions = &ioOptions,
             .maxCacheEntrySize = maxCacheEntrySize,
             .blockCache = getBlockCache(cache.get()),
-            .fileHandle = &fileHandle,
+            .fileHandle = fileHandle,
         };
         const auto directory = VectorIndexDirectory::create(
             Section{MetadataBuffer{toPinnedBuffer(
@@ -1627,6 +1627,67 @@ TEST_F(VectorIndexTest, blockCacheServesIndexData) {
   EXPECT_EQ(loadWithNewDirectory(std::nullopt)->read().sum(), 0)
       << "The second directory reads the index from the cache";
 
+  testingResetBlockCache();
+  cache->shutdown();
+}
+
+// A reader builds a vector index's input when the index first loads, after
+// create() returns, so the caller may have released its file handle by then.
+TEST_F(VectorIndexTest, cachedVectorIndexLoadsAfterFileHandleIsReleased) {
+  constexpr uint32_t kNumVectors{200};
+  constexpr uint32_t kQueryRow{42};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  WriterOptions writerOptions;
+  writerOptions.vectorIndexConfigs = {makeConfig(VectorIndexType::kIvfFlat)};
+  writerOptions.vectorIndexWriterFactory = VectorIndexWriter::create;
+  std::string fileData;
+  Writer writer(
+      createType(),
+      std::make_unique<velox::InMemoryWriteFile>(&fileData),
+      *pool_,
+      std::move(writerOptions));
+  writer.write(makeInputFromVectors(data, kDimensions));
+  writer.close();
+
+  const auto readFile =
+      std::make_shared<velox::InMemoryReadFile>(std::string_view{fileData});
+  auto allocator = std::make_shared<velox::memory::MallocAllocator>(
+      velox::memory::MemoryAllocator::Options{.capacity = 1UL << 30});
+  auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
+  std::shared_ptr<TabletReader> tablet;
+  {
+    auto fileHandle = std::make_unique<velox::FileHandle>();
+    fileHandle->file = readFile;
+    fileHandle->uuid = velox::StringIdLease(
+        velox::fileIds(),
+        "VectorIndexTest.cachedVectorIndexLoadsAfterFileHandleIsReleased");
+    TabletReader::Options readerOptions;
+    readerOptions.cacheIndex = true;
+    readerOptions.blockCache = getBlockCache(cache.get());
+    readerOptions.fileHandle = fileHandle.get();
+    readerOptions.ioOptions.emplace(pool())
+        .setMetadataIoStats(std::make_shared<velox::io::IoStatistics>())
+        .setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
+    tablet = TabletReader::create(readFile, pool(), readerOptions);
+  }
+
+  auto vectorIndex = tablet->vectorIndex("embedding");
+  ASSERT_NE(vectorIndex, nullptr);
+  const auto queryBegin = data.begin() + kQueryRow * kDimensions;
+  const std::vector<float> query(queryBegin, queryBegin + kDimensions);
+  const auto searchResult = vectorIndex->search({
+      .numQueries = 1,
+      .queryVectors = query,
+      .numNeighbors = 1,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+  });
+  const auto results = searchResult.results(0);
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results.front().rowId, kQueryRow);
+
+  vectorIndex.reset();
+  tablet.reset();
   testingResetBlockCache();
   cache->shutdown();
 }

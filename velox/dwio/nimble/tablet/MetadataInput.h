@@ -16,13 +16,13 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string_view>
 #include <vector>
 
 #include <optional>
-#include "folly/Function.h"
 #include "folly/Range.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/SsdCache.h"
@@ -148,7 +148,7 @@ class MetadataInput {
   // Receives the file bytes of one section, given the section's index in the
   // span passed to readSections(). The bytes are valid only during the call.
   using ReadCallback =
-      folly::FunctionRef<void(uint32_t index, std::string_view data)>;
+      std::function<void(uint32_t index, std::string_view data)>;
 
   // Reads sections[i] for each i in 'sortedIndices', which must be in file
   // offset order, in one positioned vector read and passes each section's
@@ -156,7 +156,17 @@ class MetadataInput {
   void readSections(
       std::span<const MetadataSection> sections,
       std::span<const uint32_t> sortedIndices,
-      ReadCallback callback) const;
+      const ReadCallback& callback) const;
+
+  // Requires !directIo(). Reads sections[i] for each i in 'sortedIndices',
+  // which must be in file offset order, into destinations[i], which must hold
+  // sections[i].size() bytes. Each merged range is one scatter read, which
+  // skips the gaps between its sections. Options::executor, when set, runs
+  // every scatter read but the first.
+  void readSections(
+      std::span<const MetadataSection> sections,
+      std::span<const uint32_t> sortedIndices,
+      std::span<const folly::Range<char*>> destinations) const;
 
   // Returns 'data', compressed with 'compressionType', decompressed into a new
   // pool buffer.
@@ -175,16 +185,6 @@ class MetadataInput {
   bool directIo() const {
     return alignment_ > 1;
   }
-
-  // Requires !directIo(). Reads sections[i] for each i in 'sortedIndices',
-  // which must be in file offset order, into destinations[i], which must hold
-  // sections[i].size() bytes. Each merged range is one scatter read, which
-  // skips the gaps between its sections. Options::executor, when set, runs
-  // every scatter read but the first.
-  void readSections(
-      std::span<const MetadataSection> sections,
-      std::span<const uint32_t> sortedIndices,
-      std::span<const folly::Range<char*>> destinations) const;
 
   struct IoGroup {
     uint64_t offset;
