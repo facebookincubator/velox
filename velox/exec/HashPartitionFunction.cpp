@@ -17,6 +17,7 @@
 #include <velox/exec/VectorHasher.h>
 
 #include "velox/common/base/XxHashInline.h"
+#include "velox/exec/Spill.h"
 
 namespace facebook::velox::exec {
 namespace {
@@ -45,10 +46,12 @@ HashPartitionFunction::HashPartitionFunction(
     const HashBitRange& hashBitRange,
     const RowTypePtr& inputType,
     const std::vector<column_index_t>& keyChannels,
-    const std::vector<VectorPtr>& constValues)
+    const std::vector<VectorPtr>& constValues,
+    bool forSpill)
     : localExchange_{false},
       numPartitions_{hashBitRange.numPartitions()},
-      hashBitRange_(hashBitRange) {
+      hashBitRange_(hashBitRange),
+      forSpill_{forSpill} {
   VELOX_CHECK_GT(hashBitRange.numPartitions(), 0);
   VELOX_CHECK(!keyChannels.empty());
   init(inputType, keyChannels, constValues);
@@ -96,7 +99,11 @@ std::optional<uint32_t> HashPartitionFunction::partition(
 
   partitions.resize(size);
   if (hashBitRange_.has_value()) {
-    if (localExchange_) {
+    if (forSpill_) {
+      for (vector_size_t row = 0; row < size; ++row) {
+        partitions[row] = hashBitRange_->partition(spillHash(hashes_[row]));
+      }
+    } else if (localExchange_) {
       for (auto i = 0; i < size; ++i) {
         partitions[i] = hashBitRange_->partition(localExchangeHash(hashes_[i]));
       }

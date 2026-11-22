@@ -40,7 +40,8 @@ class HashPartitionFunction : public core::PartitionFunction {
       const HashBitRange& hashBitRange,
       const RowTypePtr& inputType,
       const std::vector<column_index_t>& keyChannels,
-      const std::vector<VectorPtr>& constValues = {});
+      const std::vector<VectorPtr>& constValues = {},
+      bool forSpill = false);
 
   ~HashPartitionFunction() override = default;
 
@@ -61,6 +62,7 @@ class HashPartitionFunction : public core::PartitionFunction {
   const bool localExchange_;
   const int numPartitions_;
   const std::optional<HashBitRange> hashBitRange_ = std::nullopt;
+  const bool forSpill_{false};
   std::vector<std::unique_ptr<VectorHasher>> hashers_;
 
   // Reusable memory.

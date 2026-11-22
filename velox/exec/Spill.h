@@ -17,6 +17,7 @@
 #pragma once
 
 #include <folly/container/F14Set.h>
+#include <folly/hash/Hash.h>
 
 #include <re2/re2.h>
 #include "velox/common/base/SpillConfig.h"
@@ -33,6 +34,10 @@
 #include "velox/vector/VectorStream.h"
 
 namespace facebook::velox::exec {
+
+inline uint64_t spillHash(uint64_t hash) {
+  return folly::hash::twang_mix64(hash);
+}
 
 class SpillMergeStream;
 
