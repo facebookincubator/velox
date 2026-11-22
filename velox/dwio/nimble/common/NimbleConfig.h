@@ -324,6 +324,16 @@ class Config : public velox::config::ConfigBase {
   /// their gaps. See WriterOptions::sortDictionaryAlphabet.
   static Entry<bool> SORT_DICTIONARY_ALPHABET;
 
+  /// Stores eligible FixedBitWidth chunks as typed lanes. Maps to
+  /// WriterOptions::fixedBitWidthTypedLanes. Off by default.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<bool> FIXED_BIT_WIDTH_TYPED_LANES;
+
+  /// Minimum number of values in a chunk for typed lanes, at least 1. Maps to
+  /// WriterOptions::fixedBitWidthTypedLanesMinValues; default 256.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<uint64_t> FIXED_BIT_WIDTH_TYPED_LANES_MIN_VALUES;
+
   /// Omits in-map streams for FlatMap features whose in-map flag is constant,
   /// which is the common case for dense feature sets.
   static Entry<bool> SKIP_CONSTANT_FLATMAP_IN_MAP_STREAMS;
