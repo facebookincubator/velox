@@ -866,6 +866,30 @@ TEST_F(
   EXPECT_EQ(estimate, expectedEstimate.value());
 }
 
+TEST_F(
+    SharedDictionaryEncodingTest,
+    alphabetCandidatesDoNotRestrictNestedStreams) {
+  // Forcing Trivial for a string alphabet restricts the alphabet itself. Its
+  // lengths stream, nearly all 8, still picks a compact encoding instead of
+  // being left with no candidates and falling back to Trivial.
+  std::vector<std::string> strings;
+  strings.reserve(1'000);
+  for (int i = 0; i < 999; ++i) {
+    strings.push_back(fmt::format("s{:07}", i));
+  }
+  strings.emplace_back("s12345678");
+  const std::vector<std::string_view> values{strings.begin(), strings.end()};
+
+  const auto encoded = SharedDictionaryAlphabet::encode<std::string_view>(
+      values, std::array{EncodingType::Trivial}, *buffer_);
+
+  const auto layout = EncodingLayoutCapture::capture(encoded, {});
+  ASSERT_EQ(layout.encodingType(), EncodingType::Trivial);
+  const auto& lengths = layout.child(EncodingIdentifiers::Trivial::Lengths);
+  ASSERT_TRUE(lengths.has_value());
+  EXPECT_NE(lengths->encodingType(), EncodingType::Trivial);
+}
+
 TEST_F(SharedDictionaryEncodingTest, alphabetRoundTripsWithAndWithoutView) {
   struct TestCase {
     std::string testName;
