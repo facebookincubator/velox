@@ -147,22 +147,52 @@ std::vector<SortOrder> getSortOrders(
   return result;
 }
 
-// Returns the file region of the key stream of each stripe of a Stripe layout
-// partition, from the metadata of its stripes with the location of the key
-// stream in each. Checks that each stripe has a key stream, which every key
-// chunk read then trusts.
-std::vector<velox::common::Region> getKeyStreamRegions(
-    std::span<const StripeMetadata> stripes) {
+// Returns the index streams of each stripe: 'keyStreamId', then the auxiliary
+// index streams 'auxIndexStreamIds' that the subclass reads in the Stripe
+// layout. Checks that auxiliary index streams exist only in that layout, and
+// that none of them is the key stream.
+std::vector<uint32_t> indexStreamIds(
+    KeyStreamLayout keyStreamLayout,
+    uint32_t keyStreamId,
+    std::vector<uint32_t> auxIndexStreamIds) {
+  if (keyStreamLayout != KeyStreamLayout::kStripe) {
+    NIMBLE_CHECK(
+        auxIndexStreamIds.empty(),
+        "Only a Stripe layout cluster index has auxiliary index streams");
+  }
+  for (const auto streamId : auxIndexStreamIds) {
+    NIMBLE_CHECK_FILE_NE(
+        streamId,
+        keyStreamId,
+        "An auxiliary index stream of the cluster index must not be its key stream");
+  }
+  auxIndexStreamIds.insert(auxIndexStreamIds.begin(), keyStreamId);
+  return auxIndexStreamIds;
+}
+
+// Returns the file region of each index stream of each stripe of a Stripe
+// layout partition, stripe-major, from the metadata of its stripes with the
+// locations of those 'numStreams' streams in each: the key stream, then the
+// auxiliary index streams. Checks that each stripe has all of them, which
+// every read of them then trusts.
+std::vector<velox::common::Region> indexStreamRegions(
+    std::span<const StripeMetadata> stripes,
+    uint32_t numStreams) {
   std::vector<velox::common::Region> regions;
-  regions.reserve(stripes.size());
+  regions.reserve(stripes.size() * numStreams);
   for (const auto& stripe : stripes) {
     NIMBLE_CHECK_EQ(
         stripe.streams.size(),
-        1,
-        "Key stream locator must locate one stream per stripe");
-    const auto& keyStream = stripe.streams[0];
-    NIMBLE_CHECK_FILE_GT(keyStream.size, 0, "Stripe has no key stream");
-    regions.emplace_back(stripe.offset + keyStream.offset, keyStream.size);
+        numStreams,
+        "Key stream locator must locate each requested stream per stripe");
+    NIMBLE_CHECK_FILE_GT(stripe.streams[0].size, 0, "Stripe has no key stream");
+    for (const auto& stream : std::span{stripe.streams}.subspan(1)) {
+      NIMBLE_CHECK_FILE_GT(
+          stream.size, 0, "Stripe has no stream of the cluster index");
+    }
+    for (const auto& stream : stripe.streams) {
+      regions.emplace_back(stripe.offset + stream.offset, stream.size);
+    }
   }
   return regions;
 }
@@ -255,6 +285,7 @@ ClusterIndexBase::ClusterIndexBase(
     std::shared_ptr<MetadataInput> metadataInput,
     std::shared_ptr<DataInput> dataInput,
     KeyStreamLocator keyStreamLocator,
+    std::vector<uint32_t> auxIndexStreamIds,
     KeyReaderFactory keyReaderFactory,
     const KeyComparator* keyComparator,
     bool pinIndex,
@@ -276,6 +307,10 @@ ClusterIndexBase::ClusterIndexBase(
       dataInput_{std::move(dataInput)},
       keyStreamLocator_{std::move(keyStreamLocator)},
       keyStreamId_{indexRoot_->key_stream_id()},
+      indexStreamIds_{indexStreamIds(
+          keyStreamLayout_,
+          keyStreamId_,
+          std::move(auxIndexStreamIds))},
       keyReaderFactory_{std::move(keyReaderFactory)},
       keyComparator_{keyComparator},
       pool_{pool},
@@ -770,16 +805,19 @@ class IndexPartition final : public ClusterIndexBase::IndexPartitionBase {
 class IndexGroup final : public ClusterIndexBase::IndexPartitionBase {
  public:
   // 'keyStreamMetadata' holds the metadata of each stripe of the group, with
-  // the location of its key stream.
+  // the locations of its 'numStreams' index streams: the key stream, then the
+  // auxiliary index streams.
   IndexGroup(
       uint32_t id,
       std::unique_ptr<MetadataBuffer> metadata,
       std::span<const StripeMetadata> keyStreamMetadata,
+      uint32_t numStreams,
       bool pinIndex)
       : IndexPartitionBase{id, std::move(metadata)},
         group_{flatbuffers::GetRoot<serialization::ClusterIndexGroup>(
             metadata_->content().data())},
-        keyStreamRegions_{getKeyStreamRegions(keyStreamMetadata)},
+        numStreams_{numStreams},
+        indexStreamRegions_{indexStreamRegions(keyStreamMetadata, numStreams)},
         stripes_{getStripes(keyStreamMetadata)},
         stripeRows_{getStripeRows(*group_, keyStreamMetadata)} {
     allocateDecodedChunks(pinIndex);
@@ -814,8 +852,7 @@ class IndexGroup final : public ClusterIndexBase::IndexPartitionBase {
   }
 
   velox::common::Region keyStreamRegion(uint32_t keyStreamIdx) const override {
-    NIMBLE_CHECK_LT(keyStreamIdx, keyStreamRegions_.size());
-    return keyStreamRegions_[keyStreamIdx];
+    return streamRegion(keyStreamIdx, /*streamIndex=*/0);
   }
 
   uint32_t chunkStripe(uint32_t chunkIdx) const override {
@@ -823,10 +860,24 @@ class IndexGroup final : public ClusterIndexBase::IndexPartitionBase {
     return stripes_[chunkIdx];
   }
 
+  // Returns the file region of located stream 'streamIndex' of the stripe that
+  // holds chunk 'chunkIdx': the key stream at 0, then the streams the subclass
+  // reads.
+  velox::common::Region streamRegion(uint32_t chunkIdx, uint32_t streamIndex)
+      const {
+    NIMBLE_CHECK_LT(chunkIdx, stripeRows_.size());
+    NIMBLE_CHECK_LT(streamIndex, numStreams_);
+    return indexStreamRegions_[chunkIdx * numStreams_ + streamIndex];
+  }
+
  private:
   const serialization::ClusterIndexGroup* const group_;
-  // File region of the key stream of each stripe, without its stream trailer.
-  const std::vector<velox::common::Region> keyStreamRegions_;
+  // Number of streams that the index locates in each stripe.
+  const uint32_t numStreams_;
+  // File region of each located stream of each stripe, without its stream
+  // trailer, stripe-major: the key stream, then the streams the subclass
+  // reads.
+  const std::vector<velox::common::Region> indexStreamRegions_;
   // Stripe of the file of each stripe of the group.
   const std::vector<uint32_t> stripes_;
   // Accumulated row counts per stripe (prefix sum, group-wide): the chunk rows
@@ -835,6 +886,18 @@ class IndexGroup final : public ClusterIndexBase::IndexPartitionBase {
 };
 
 } // namespace detail
+
+velox::common::Region ClusterIndexBase::indexStreamRegion(
+    uint32_t partitionId,
+    uint32_t chunkIdx,
+    uint32_t streamIndex) const {
+  NIMBLE_CHECK_LT(streamIndex + 1, indexStreamIds_.size());
+  const auto& partition = *velox::checkedNotNull(loadPartition(partitionId));
+  NIMBLE_CHECK_EQ(partition.layout(), KeyStreamLayout::kStripe);
+  const auto& group = static_cast<const detail::IndexGroup&>(partition);
+  // The key stream comes first.
+  return group.streamRegion(chunkIdx, streamIndex + 1);
+}
 
 void ClusterIndexBase::initializePartition(
     uint32_t partitionId,
@@ -848,10 +911,14 @@ void ClusterIndexBase::initializePartition(
   }
 
   // A partition holds the stripes of the stripe group of the same index.
-  const auto keyStreamMetadata = keyStreamLocator_(
-      partitionId, std::span<const uint32_t>{&keyStreamId_, 1});
+  const auto keyStreamMetadata =
+      keyStreamLocator_(partitionId, indexStreamIds_);
   auto group = std::make_unique<detail::IndexGroup>(
-      partitionId, std::move(metadata), keyStreamMetadata, pinIndex_);
+      partitionId,
+      std::move(metadata),
+      keyStreamMetadata,
+      static_cast<uint32_t>(indexStreamIds_.size()),
+      pinIndex_);
   NIMBLE_CHECK_FILE_EQ(
       group->chunkRows().back(),
       partitionRows_.at(partitionId + 1) - partitionRows_.at(partitionId),

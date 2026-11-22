@@ -76,6 +76,7 @@ HierarchicalClusterIndex::HierarchicalClusterIndex(
           std::move(metadataInput),
           std::move(dataInput),
           std::move(keyStreamLocator),
+          /*auxIndexStreamIds=*/{},
           [cacheKeyEncodingViews, keyCodec](
               std::string_view encodedKeys,
               std::function<void*(uint32_t)> stringBufferFactory,

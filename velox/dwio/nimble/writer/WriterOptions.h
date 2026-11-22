@@ -170,8 +170,10 @@ struct WriterOptions {
   /// read can load a stripe's keys together with its data, and ignores the
   /// maxRowsPerKeyChunk of clusterIndexConfig. Readers that predate kStripe
   /// read the stripes of its files, but fail to open the cluster index.
-  /// kStripe requires clusterIndexConfig, and a cluster index implementation
-  /// built on ClusterIndexWriterBase.
+  /// kStripe requires clusterIndexConfig, and a cluster index whose factory
+  /// supports it. Such an index can store more data of each stripe in more
+  /// index streams after the key stream: see
+  /// ClusterIndexFactory::numIndexStreams().
   /// EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
   /// production tables without consulting the Nimble team (oncall: dwios).
   index::KeyStreamLayout clusterIndexKeyStreamLayout{
