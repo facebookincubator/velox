@@ -516,3 +516,17 @@ decompressCounter
 velox/dwio/nimble/compression/Compression.h · velox/dwio/common/Statistics.h
 
 Ke Wang · 2026-06-25
+
+
+FixedBitWidth typed lanes
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``WriterOptions::fixedBitWidthTypedLanes`` and
+``WriterOptions::fixedBitWidthTypedLanesMinValues`` reach
+``Encoding::Options`` through ``buildEncodingOptions()``, like
+``fixedBitWidthUseExactBits``. The writer builds the options for every chunk
+it encodes, so freshly selected, replayed (``encodingLayoutTree``, the
+selection cache, replay fallback), shared-dictionary and nested chunks all see
+them. ``FixedBitWidthEncoding::encode`` reads them. Producers that build their
+own ``Encoding::Options`` (tablet metadata, the cluster index, vectorized
+statistics) leave them off. SubIntSplit clears them for its sections.

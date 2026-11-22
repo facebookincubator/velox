@@ -58,6 +58,8 @@ struct WriterOptions {
         .blockBitPackingBlockSize = blockBitPackingBlockSize,
         .fixedBitWidthUseExactBits = fixedBitWidthUseExactBits,
         .sortDictionaryAlphabet = sortDictionaryAlphabet,
+        .fixedBitWidthTypedLanes = fixedBitWidthTypedLanes,
+        .fixedBitWidthTypedLanesMinValues = fixedBitWidthTypedLanesMinValues,
         .subIntSplitDeltaPreTransform =
             FLAGS_nimble_subintsplit_delta_pretransform,
         .reversedMinDescendingRatio = reversedMinDescendingRatio,
@@ -319,6 +321,15 @@ struct WriterOptions {
   /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
   /// without consulting the Nimble team (oncall: dwios).
   bool sortDictionaryAlphabet{false};
+
+  /// Stores eligible FixedBitWidth chunks as typed lanes (see
+  /// Encoding::Options::fixedBitWidthTypedLanes). Applies to every chunk the
+  /// writer encodes as FixedBitWidth: freshly selected, replayed from
+  /// encodingLayoutTree or the selection cache, and nested. Off by default.
+  bool fixedBitWidthTypedLanes{false};
+
+  /// Minimum number of values in a chunk for fixedBitWidthTypedLanes.
+  uint64_t fixedBitWidthTypedLanesMinValues{256};
 
   /// FSST is kept only when its final encoded size is at most this fraction of
   /// the original string bytes.
