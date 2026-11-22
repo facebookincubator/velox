@@ -1621,8 +1621,7 @@ class QueryConfig {
       "the transport answered only after retrying an overload in place earn "
       "it no growth. Driver windows start "
       "at the rate limiter's ceiling instead of 100 when that is higher, but "
-      "not above a ceiling the function declares, nor above 200 when only the "
-      "safety ceiling of rpc.ratelimiter.hard_limit=0 applies; a session's "
+      "not above a ceiling the function declares; a session's "
       "rpc.congestion.max_window still sets them. A CAPACITY_PROBING query "
       "gets its own rate limiter per backend, with its own ceiling. Any other "
       "value fails the query.")
@@ -1648,20 +1647,20 @@ class QueryConfig {
       "Queries that resolve to the same policy share a backend's rate "
       "limiter, and each distinct policy gets its own.")
 
-  /// Legacy integral override for the adaptive congestion-window floor.
+  /// Floor of a backend's adaptive rate-limit capacity.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterMinLimit,
       rpcRateLimiterMinLimit,
       "rpc.ratelimiter.min_limit",
       int64_t,
       50,
-      "Integral override for a backend's adaptive congestion-window floor. "
-      "While rpc.ratelimiter.hard_limit is -1, a positive value replaces the "
-      "function's floor. When rpc.ratelimiter.hard_limit is 0 or more, or this "
-      "property is 0, the function's floor applies; it may be fractional, "
-      "pacing discrete admissions using the learned service horizon. This "
-      "value, or 50 if it is 0, applies when the function declares no floor. "
-      "Only used when "
+      "Floor of a backend's adaptive congestion window. A positive value "
+      "replaces the function's floor. When this property is 0, the "
+      "function's floor applies; it may be fractional, pacing discrete "
+      "admissions using the learned service horizon. This value, or 50 if it "
+      "is 0, applies when the function declares no floor. Under WINDOW_AIMD, "
+      "a floor at or above the ceiling pins the limit at the ceiling. Only "
+      "used when "
       "rpc.ratelimiter.adaptive_enabled is true. "
       "Queries that resolve to the same policy share a backend's rate "
       "limiter, and each distinct policy gets its own.")
@@ -1681,45 +1680,39 @@ class QueryConfig {
       "Queries that resolve to the same policy share a backend's rate "
       "limiter, and each distinct policy gets its own.")
 
-  /// Legacy ceiling for a backend's rate-limit capacity.
+  /// Ceiling of a backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterMaxLimit,
       rpcRateLimiterMaxLimit,
       "rpc.ratelimiter.max_limit",
       int64_t,
       200,
-      "Legacy session ceiling for the per-backend rate-limit capacity, shared "
-      "across drivers. Default 200. Zero defers to the function ceiling or the "
-      "built-in legacy limit. A positive value overrides the function ceiling. "
+      "Session ceiling for the per-backend rate-limit capacity, shared across "
+      "drivers. Default 200. A positive value replaces the function's "
+      "ceiling, even a smaller one. Zero defers to the function's ceiling or, "
+      "when it declares none, the process default of 20. "
+      "rpc.ratelimiter.hard_limit, a deprecated alias, takes its place when "
+      "set to 0 or more. "
       "With admission-controlled dispatch this cap bounds in-flight work "
       "against that backend across every driver on the worker that runs the "
       "same policy; the adaptive "
       "limiter shrinks from here toward rpc.ratelimiter.min_limit under "
-      "overload. Superseded by rpc.ratelimiter.hard_limit when that property "
-      "is non-negative. "
+      "overload. "
       "Queries that resolve to the same policy share a backend's rate "
       "limiter, and each distinct policy gets its own.")
 
-  /// Versioned hard ceiling for a backend's rate-limit capacity.
+  /// Deprecated alias of rpc.ratelimiter.max_limit.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterHardLimit,
       rpcRateLimiterHardLimit,
       "rpc.ratelimiter.hard_limit",
       int64_t,
       -1,
-      "Versioned session hard ceiling for the per-backend rate-limit capacity, "
-      "and the switch to the function's bounds. Minus one keeps the session's "
-      "precedence: rpc.ratelimiter.min_limit and rpc.ratelimiter.max_limit "
-      "override the function's floor and ceiling. Zero or more lets the "
-      "function's floor and ceiling win, since session properties apply to "
-      "every function in the query, and ignores rpc.ratelimiter.max_limit. A "
-      "positive value caps the function's ceiling, the smaller winning, and is "
-      "the ceiling when the function declares none. Zero adds no session "
-      "ceiling: with no function ceiling, adaptive mode starts at 200 and may "
-      "grow to a 1,000,000 safety ceiling, and fixed mode uses 200. To use the "
-      "function's bounds and keep a cap, set the cap here, e.g. 200. Queries that resolve to the same "
-      "policy share a backend's rate limiter, and each distinct policy gets "
-      "its own.")
+      "Deprecated alias of rpc.ratelimiter.max_limit; set that instead. A "
+      "value of 0 or more is used in place of rpc.ratelimiter.max_limit, so 0 "
+      "uses the function's ceiling. -1, the default, leaves "
+      "rpc.ratelimiter.max_limit in effect. It does not affect the floor; set "
+      "rpc.ratelimiter.min_limit to 0 for the function's floor.")
 
   /// Longest gap between paced probes of an overloaded backend.
   VELOX_QUERY_CONFIG(

@@ -32,8 +32,6 @@
 namespace facebook::velox::exec::rpc {
 
 namespace {
-constexpr int64_t kLegacyFixedLimit{200};
-constexpr int64_t kDefaultAdaptiveHardLimit{1'000'000};
 // Limiter floor when neither the function nor the session declares one.
 constexpr double kDefaultAdaptiveFloor{50.0};
 
@@ -161,6 +159,19 @@ void RPCOperator::initialize() {
   auto* driverCtx = operatorCtx_->driverCtx();
   VELOX_CHECK_NOT_NULL(driverCtx);
   const auto& queryConfig = driverCtx->queryConfig();
+  // Logged by the first driver only, so each task logs once.
+  if (const auto hardLimit = queryConfig.rpcRateLimiterHardLimit();
+      hardLimit >= 0 && driverCtx->driverId == 0) {
+    RPC_OP_LOG(WARNING)
+        << "Task " << taskId()
+        << " sets the deprecated rpc.ratelimiter.hard_limit (Presto: "
+           "native_rpc_ratelimiter_hard_limit) to "
+        << hardLimit
+        << ", which is used as rpc.ratelimiter.max_limit and no longer selects "
+           "the function's floor. Set rpc.ratelimiter.max_limit instead (0 "
+           "uses the function's declared ceiling), with "
+           "rpc.ratelimiter.min_limit=0 to keep the function's floor.";
+  }
   requestedFlowControlPolicy_ =
       parseRPCFlowControlPolicy(queryConfig.rpcFlowControlPolicy());
   function_->setMemoryPool(operatorCtx_->pool()->shared_from_this());
@@ -212,14 +223,14 @@ void RPCOperator::initializeRateLimiter() {
   admissionKey_ = function_->admissionKey();
   const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
   const auto sessionFloor = queryConfig.rpcRateLimiterMinLimit();
-  const auto legacySessionLimit = queryConfig.rpcRateLimiterMaxLimit();
+  const auto sessionMaxLimit = queryConfig.rpcRateLimiterMaxLimit();
   const auto sessionHardLimit = queryConfig.rpcRateLimiterHardLimit();
   const auto maxProbeIntervalMs =
       queryConfig.rpcRateLimiterMaxProbeIntervalMs();
   VELOX_USER_CHECK_GE(
       sessionFloor, 0, "rpc.ratelimiter.min_limit must be non-negative");
   VELOX_USER_CHECK_GE(
-      legacySessionLimit, 0, "rpc.ratelimiter.max_limit must be non-negative");
+      sessionMaxLimit, 0, "rpc.ratelimiter.max_limit must be non-negative");
   VELOX_USER_CHECK_GE(
       sessionHardLimit, -1, "rpc.ratelimiter.hard_limit must be at least -1");
   VELOX_USER_CHECK_GE(
@@ -227,22 +238,17 @@ void RPCOperator::initializeRateLimiter() {
       0,
       "rpc.ratelimiter.max_probe_interval_ms must be non-negative");
 
-  // A hard limit of 0 or more opts into the function's bounds taking
-  // precedence: session properties apply to every function in the query,
-  // while the function declares bounds for its own backend. The default of -1
-  // keeps the session's precedence. With 0 or more, max_limit no longer
-  // applies: a positive hard limit is the ceiling when the function declares
-  // none, and 0 leaves only the safety ceiling.
-  const bool functionBoundsFirst = sessionHardLimit >= 0;
+  // rpc.ratelimiter.hard_limit is a deprecated alias of max_limit and takes its
+  // place when set.
+  const auto sessionCeiling =
+      sessionHardLimit >= 0 ? sessionHardLimit : sessionMaxLimit;
   RPCRateLimiter::Config policy;
   policy.adaptive = queryConfig.rpcRateLimiterAdaptiveEnabled();
   policy.flowControlPolicy = capacityProbingEnabled_
       ? RPCFlowControlPolicy::kCapacityProbing
       : RPCFlowControlPolicy::kWindowAimd;
   const auto functionFloor = function_->configuredAdaptiveFloor();
-  if (functionBoundsFirst && functionFloor > 0) {
-    policy.floor = functionFloor;
-  } else if (sessionFloor > 0) {
+  if (sessionFloor > 0) {
     policy.floor = static_cast<double>(sessionFloor);
   } else if (functionFloor > 0) {
     policy.floor = functionFloor;
@@ -252,25 +258,11 @@ void RPCOperator::initializeRateLimiter() {
   policy.decreaseFactor = queryConfig.rpcRateLimiterDecreaseFactor();
   policy.maxProbeInterval = std::chrono::milliseconds{maxProbeIntervalMs};
   const auto functionLimit = function_->configuredCeiling();
-  // True when neither the session nor the function bounds the limiter.
-  bool safetyCeilingOnly{false};
-  if (sessionHardLimit < 0) {
-    if (functionLimit > 0) {
-      policy.ceiling = functionLimit;
-    }
-    if (legacySessionLimit > 0) {
-      policy.ceiling = legacySessionLimit;
-    }
-  } else if (functionLimit > 0 && sessionHardLimit > 0) {
-    policy.ceiling = std::min(functionLimit, sessionHardLimit);
-  } else if (functionLimit > 0) {
+  if (functionLimit > 0) {
     policy.ceiling = functionLimit;
-  } else if (sessionHardLimit > 0) {
-    policy.ceiling = sessionHardLimit;
-  } else {
-    policy.ceiling =
-        policy.adaptive ? kDefaultAdaptiveHardLimit : kLegacyFixedLimit;
-    safetyCeilingOnly = true;
+  }
+  if (sessionCeiling > 0) {
+    policy.ceiling = sessionCeiling;
   }
 
   // A driver window ceiling the session sets holds under either policy.
@@ -278,13 +270,10 @@ void RPCOperator::initializeRateLimiter() {
     // The shared limiter learns the backend's capacity, so a driver window
     // must not hold the worker below the limiter's ceiling. A ceiling the
     // function declares is its backend's sizing, so the window does not rise
-    // past it even when a session limit takes precedence for the limiter. The
-    // safety ceiling sizes nothing, so under it the window stays finite.
+    // past it even when a session limit takes precedence for the limiter.
     int64_t driverCeiling{policy.ceiling};
     if (functionLimit > 0) {
       driverCeiling = std::min(policy.ceiling, functionLimit);
-    } else if (safetyCeilingOnly) {
-      driverCeiling = RPCRateLimiter::kInitialAdaptiveLimit;
     }
     state_->raisePerRowMaxWindow(driverCeiling);
   }

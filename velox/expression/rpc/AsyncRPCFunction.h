@@ -188,10 +188,9 @@ class AsyncRPCFunction {
   }
 
   /// Returns the concurrency ceiling requested by function options, or 0 when
-  /// unset. It takes precedence over rpc.ratelimiter.max_limit when
-  /// rpc.ratelimiter.hard_limit is 0 or more, and a positive hard limit caps
-  /// it. The operator resolves it with the session properties into the query's
-  /// rate-limiter policy.
+  /// unset. A positive rpc.ratelimiter.max_limit replaces it; 0 leaves it in
+  /// effect. The operator resolves it with the session properties into the
+  /// query's rate-limiter policy.
   virtual int64_t configuredCeiling() const {
     return 0;
   }
@@ -212,8 +211,8 @@ class AsyncRPCFunction {
 
   /// Returns the adaptive-window floor requested by the resolved backend, or 0
   /// when unset. The operator resolves it into the query's rate-limiter
-  /// policy. It takes precedence over rpc.ratelimiter.min_limit when
-  /// rpc.ratelimiter.hard_limit is 0 or more.
+  /// policy. A positive rpc.ratelimiter.min_limit replaces it; 0 leaves it in
+  /// effect.
   virtual double configuredAdaptiveFloor() const {
     return 0.0;
   }

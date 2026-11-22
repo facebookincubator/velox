@@ -81,8 +81,8 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
 
     /// Lower bound on the adaptive congestion window, in admission units per
     /// successful service horizon. Resolved from the function's floor and
-    /// rpc.ratelimiter.min_limit; rpc.ratelimiter.hard_limit selects which
-    /// wins. Under CAPACITY_PROBING it bounds only the backoff from overloads
+    /// rpc.ratelimiter.min_limit, which replaces it when positive. Under
+    /// CAPACITY_PROBING it bounds only the backoff from overloads
     /// not named as a lack of capacity; a capacity rejection cuts below it.
     double floor{0.01};
 

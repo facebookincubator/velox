@@ -313,20 +313,15 @@ costs one unit per row.
   retain the historical "rate limiter" terminology.
 
 A query's policy is resolved from its session properties and its function's
-stable bounds, and ``rpc.ratelimiter.hard_limit`` selects whose bounds win.
-Minus one, the default, keeps the session's precedence: a positive
-``rpc.ratelimiter.min_limit`` (default 50) replaces ``configuredAdaptiveFloor()``
-and a positive ``rpc.ratelimiter.max_limit`` (default 200) replaces
-``configuredCeiling()``. Zero or more lets the function's bounds win, since
-session properties apply to every function in the query while a function
-declares bounds for its own backend, and ``max_limit`` no longer applies. A
-positive value caps ``configuredCeiling()``, the smaller winning, and is the
-ceiling when the function declares none. Zero adds no session ceiling: with no
-function ceiling, the window starts at 200 and may grow to the 1,000,000 safety
-ceiling. To use the function's bounds and keep a cap, set ``hard_limit`` to the
-cap, such as 200. ``min_limit`` still applies when the function declares no
-floor. Adaptive control defaults to enabled with a decrease factor of 0.5. The
-first query to reach an admission key seals its shared limiter with its policy.
+stable bounds. A positive ``rpc.ratelimiter.min_limit`` (default 50) replaces
+``configuredAdaptiveFloor()``; set it to 0 to use the function's floor, which
+may be fractional. ``min_limit`` still applies when the function declares no
+floor. A positive ``rpc.ratelimiter.max_limit`` (default 200) replaces
+``configuredCeiling()``; set it to 0 to use the function's ceiling.
+``rpc.ratelimiter.hard_limit`` is a deprecated alias of ``max_limit``: a value
+of 0 or more is used in its place.
+Adaptive control defaults to enabled with a decrease factor of 0.5. The first
+query to reach an admission key seals its shared limiter with its policy.
 A later query whose resolved policy differs runs under a limiter for that
 policy, so the limiters for one key can together admit the sum of their
 ceilings. Each limiter lives until the worker restarts.
@@ -340,10 +335,10 @@ serving capacity, or ``kQuota`` for a rate quota such as requests or tokens per
 minute. The default, ``kUnknown``, is answered as a quota is, which is how
 ``WINDOW_AIMD`` answers every rejection.
 
-With ``rpc.ratelimiter.hard_limit=0`` and no function ceiling,
-``rpcRateLimiterHardLimit`` is 1,000,000 while the current and lifetime
-low-water windows start at 200. A low-water value of 200 therefore does not
-prove overload. With a decrease factor of 0.5, overloads from successive
+An adaptive limiter starts at 200 or at its ceiling, if lower, and the current
+and lifetime low-water windows start there, so a low-water value equal to the
+start does not prove overload.
+With a decrease factor of 0.5, overloads from successive
 admission epochs move the window from 200 to 100 to 50; completions admitted in
 the same epoch coalesce after the first decrease. If the function floor permits
 fractional pacing, successive overload epochs can move the window from 1 to 0.5
@@ -357,7 +352,7 @@ call whatever ``rpc.ratelimiter.min_limit`` is, so this floor is what still
 admits one call per interval while the backend rejects everything.
 Healthy completions never shrink the window: after the first paced success it
 doubles every service horizon back to 1, then additive growth resumes, clamped
-at the hard limit. A non-overload failure stops that growth until the next
+at the ceiling. A non-overload failure stops that growth until the next
 success, and an overload cuts the window as it stood when the rejected call was
 admitted.
 

@@ -123,9 +123,6 @@ shared limiter, not a fixed driver window, sets how many calls a worker keeps in
 flight. It does not rise past a ceiling the function declares, which sizes the
 function's backend even when a session limit takes precedence for the limiter,
 and it does not rise at all when the session sets `rpc.congestion.max_window`.
-When only the 1,000,000 safety ceiling of `rpc.ratelimiter.hard_limit=0` bounds
-the limiter, it rises to 200, where an adaptive limiter starts, so a driver
-never holds an unbounded number of calls.
 
 Each driver reports `rpcFlowControlRequestedPolicy` and
 `rpcFlowControlEffectivePolicy` (0 for `WINDOW_AIMD`, 1 for

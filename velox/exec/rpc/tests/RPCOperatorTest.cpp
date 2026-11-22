@@ -3241,7 +3241,7 @@ TEST_F(RPCOperatorTest, sessionZeroDelegatesToPerLimiterFloor) {
   EXPECT_EQ(cappedLimiter.stats().hardLimit, 2);
 }
 
-TEST_F(RPCOperatorTest, functionFloorOverridesSessionFloor) {
+TEST_F(RPCOperatorTest, hardLimitSetsOnlyTheCeiling) {
   auto input =
       makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = PlanBuilder().values(input).rpc("capped_rpc(prompt)").planNode();
@@ -3252,10 +3252,10 @@ TEST_F(RPCOperatorTest, functionFloorOverridesSessionFloor) {
           .countResults(),
       1);
 
-  // The function's floor (0.5) wins; a positive hard limit still caps its
-  // ceiling (64).
+  // The session's floor (4) replaces the function's (0.5); the deprecated hard
+  // limit replaces only the ceiling (64).
   const auto& limiter = RPCRateLimiterRegistry::global().get("capped-rpc");
-  EXPECT_DOUBLE_EQ(limiter.config().floor, 0.5);
+  EXPECT_DOUBLE_EQ(limiter.config().floor, 4.0);
   EXPECT_EQ(limiter.stats().hardLimit, 8);
 }
 
@@ -3272,7 +3272,9 @@ TEST_F(RPCOperatorTest, defaultHardLimitKeepsSessionPrecedence) {
   EXPECT_EQ(limiter.stats().hardLimit, 200);
 }
 
-TEST_F(RPCOperatorTest, zeroHardLimitSelectsFunctionBounds) {
+// The deprecated hard limit of 0 is max_limit=0: the function's ceiling (64),
+// or the default capacity when it declares none, with the session's floor.
+TEST_F(RPCOperatorTest, zeroHardLimitActsAsZeroMaxLimit) {
   auto input =
       makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = PlanBuilder().values(input).rpc("capped_rpc(prompt)").planNode();
@@ -3285,8 +3287,51 @@ TEST_F(RPCOperatorTest, zeroHardLimitSelectsFunctionBounds) {
       1);
 
   const auto& limiter = RPCRateLimiterRegistry::global().get("capped-rpc");
-  EXPECT_DOUBLE_EQ(limiter.config().floor, 0.5);
+  EXPECT_DOUBLE_EQ(limiter.config().floor, 4.0);
   EXPECT_EQ(limiter.stats().hardLimit, 64);
+
+  auto undeclared = PlanBuilder()
+                        .values(input)
+                        .rpc("undeclared_bounds_rpc(prompt)")
+                        .planNode();
+  ASSERT_EQ(
+      AssertQueryBuilder(undeclared)
+          .config(core::QueryConfig::kRpcRateLimiterHardLimit, 0)
+          .countResults(),
+      1);
+  EXPECT_EQ(
+      RPCRateLimiterRegistry::global()
+          .get("undeclared-bounds-rpc")
+          .stats()
+          .hardLimit,
+      20);
+}
+
+// max_limit=0 with min_limit=0 gives the function's floor and ceiling, and the
+// default floor (50) and capacity (20) when the function declares neither.
+TEST_F(RPCOperatorTest, zeroSessionBoundsUseFunctionBounds) {
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
+  for (const auto& functionName : {"capped_rpc", "undeclared_bounds_rpc"}) {
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .rpc(fmt::format("{}(prompt)", functionName))
+                    .planNode();
+    ASSERT_EQ(
+        AssertQueryBuilder(plan)
+            .config(core::QueryConfig::kRpcRateLimiterMaxLimit, 0)
+            .config(core::QueryConfig::kRpcRateLimiterMinLimit, 0)
+            .countResults(),
+        1);
+  }
+
+  auto& registry = RPCRateLimiterRegistry::global();
+  const auto& capped = registry.get("capped-rpc");
+  EXPECT_DOUBLE_EQ(capped.config().floor, 0.5);
+  EXPECT_EQ(capped.stats().hardLimit, 64);
+  const auto& undeclared = registry.get("undeclared-bounds-rpc");
+  EXPECT_DOUBLE_EQ(undeclared.config().floor, 50.0);
+  EXPECT_EQ(undeclared.stats().hardLimit, 20);
 }
 
 TEST_F(RPCOperatorTest, sessionBoundsApplyWhenFunctionDeclaresNone) {
@@ -3324,21 +3369,21 @@ TEST_F(RPCOperatorTest, defaultBoundsApplyWhenNeitherDeclares) {
   EXPECT_EQ(limiter.stats().hardLimit, 200);
 }
 
-TEST_F(RPCOperatorTest, optedInQueryGetsItsOwnLimiterOnASharedKey) {
+TEST_F(RPCOperatorTest, pacedQueryGetsItsOwnLimiterOnASharedKey) {
   auto input =
       makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
   auto plan = PlanBuilder().values(input).rpc("capped_rpc(prompt)").planNode();
   // The default query seals the shared limiter with the session's bounds.
   AssertQueryBuilder(plan).countResults();
-  // A query that opts in resolves to the function's floor and ceiling.
+  // A query that opts in to pacing resolves to the function's floor.
   AssertQueryBuilder(plan)
-      .config(core::QueryConfig::kRpcRateLimiterHardLimit, 0)
+      .config(core::QueryConfig::kRpcRateLimiterMinLimit, 0)
       .countResults();
 
   auto& registry = RPCRateLimiterRegistry::global();
   EXPECT_DOUBLE_EQ(registry.get("capped-rpc").config().floor, 50.0);
   RPCRateLimiter::Config optedIn{
-      .adaptive = true, .ceiling = 64, .floor = 0.5, .decreaseFactor = 0.5};
+      .adaptive = true, .ceiling = 200, .floor = 0.5, .decreaseFactor = 0.5};
   const auto lookup = registry.getForPolicy("capped-rpc", optedIn);
   EXPECT_TRUE(lookup.policyScoped);
   EXPECT_GE(lookup.limiter->stats().peakPending, 1);
@@ -3383,21 +3428,6 @@ TEST_F(RPCOperatorTest, laterFunctionLeavesSharedLimiterPolicyUnchanged) {
   EXPECT_TRUE(scoped.policyScoped);
   EXPECT_EQ(scoped.limiter->stats().peakPending, 1);
   EXPECT_DOUBLE_EQ(scoped.limiter->config().floor, 1.0);
-}
-
-TEST_F(RPCOperatorTest, explicitUnboundedAdaptiveLimitUsesSafetyCeiling) {
-  auto input =
-      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
-  auto plan = PlanBuilder().values(input).rpc("demo_rpc(prompt)").planNode();
-  ASSERT_EQ(
-      AssertQueryBuilder(plan)
-          .config(core::QueryConfig::kRpcRateLimiterHardLimit, 0)
-          .countResults(),
-      1);
-
-  const auto limiterStats = RPCRateLimiterRegistry::global().get("").stats();
-  EXPECT_EQ(limiterStats.hardLimit, 1'000'000);
-  EXPECT_EQ(limiterStats.capacity, 200);
 }
 
 TEST_F(RPCOperatorTest, defaultFixedLimitPreservesLegacyCapacity) {
@@ -3827,21 +3857,30 @@ TEST_F(RPCOperatorTest, negativeRateLimiterBoundsAreRejected) {
   }
 }
 
-TEST_F(RPCOperatorTest, functionAndSessionHardLimitsUseSmallerValue) {
+// The deprecated hard limit takes max_limit's place: it replaces the
+// function's ceiling (64), larger or smaller, and wins over max_limit.
+TEST_F(RPCOperatorTest, positiveHardLimitTakesMaxLimitsPlace) {
   auto input =
       makeNamedRowVector("prompt", makeFlatVector<StringView>({"bounded"}));
-  auto plan = PlanBuilder().values(input).rpc("capped_rpc(prompt)").planNode();
-  ASSERT_EQ(
-      AssertQueryBuilder(plan)
-          .config(core::QueryConfig::kRpcRateLimiterMaxLimit, 32)
-          .config(core::QueryConfig::kRpcRateLimiterHardLimit, 32)
-          .countResults(),
-      1);
-
-  const auto limiterStats =
-      RPCRateLimiterRegistry::global().get("capped-rpc").stats();
-  EXPECT_EQ(limiterStats.hardLimit, 32);
-  EXPECT_EQ(limiterStats.capacity, 32);
+  for (const auto& [hardLimit, maxLimit] :
+       std::vector<std::pair<int64_t, int64_t>>{
+           {32, 128}, {100, 200}, {300, 200}}) {
+    SCOPED_TRACE(fmt::format("hard {} max {}", hardLimit, maxLimit));
+    auto plan =
+        PlanBuilder().values(input).rpc("capped_rpc(prompt)").planNode();
+    std::shared_ptr<exec::Task> task;
+    ASSERT_EQ(
+        AssertQueryBuilder(plan)
+            .config(core::QueryConfig::kRpcRateLimiterMaxLimit, maxLimit)
+            .config(core::QueryConfig::kRpcRateLimiterHardLimit, hardLimit)
+            .countResults(task),
+        1);
+    EXPECT_EQ(
+        PlanNodeStats::extract(task->taskStats(), plan->id())
+            .customStat(RPCOperatorStatNames::kRpcRateLimiterHardLimit)
+            .max,
+        hardLimit);
+  }
 }
 
 // Reversed responses: the mock returns results in reverse order.
@@ -4751,61 +4790,6 @@ TEST_F(RPCOperatorTest, capacityProbingDriverWindowRisesToLimiterCeiling) {
             .customStat(RPCOperatorStatNames::kRpcRateLimiterPeakPending)
             .max,
         testCase.expectedInFlight);
-  }
-}
-
-// With rpc.ratelimiter.hard_limit=0 and no function ceiling, only the
-// 1,000,000 safety ceiling bounds the limiter, so a CAPACITY_PROBING driver
-// window rises only to where an adaptive limiter starts, 200. A WINDOW_AIMD
-// driver window stays at its default of 100. Responses are held until the
-// first window's worth has been dispatched, so no latency sample can move the
-// window before the peak is reached.
-TEST_F(RPCOperatorTest, driverWindowUnderSafetyCeilingFollowsPolicy) {
-  constexpr int32_t kRows = 1'000;
-  std::vector<std::string> prompts;
-  prompts.reserve(kRows);
-  for (int32_t i = 0; i < kRows; ++i) {
-    prompts.push_back(fmt::format("prompt{}", i));
-  }
-  for (const auto& [policy, expectedPeak] :
-       std::vector<std::pair<std::string, int64_t>>{
-           {"WINDOW_AIMD", 100}, {"CAPACITY_PROBING", 200}}) {
-    SCOPED_TRACE(policy);
-    auto function = std::make_shared<HeldPacedCeilingRPCFunction>(
-        fmt::format("driver_window_safety_ceiling_{}", expectedPeak), 0);
-    registerInstance(function);
-    CursorParameters params;
-    params.planNode = PlanBuilder()
-                          .values(makeNamedRowVector(
-                              "prompt", makeFlatVector<std::string>(prompts)))
-                          .rpc(fmt::format("{}(prompt)", function->name()))
-                          .planNode();
-    params.maxDrivers = 1;
-    params.queryConfigs = {
-        {core::QueryConfig::kRpcFlowControlPolicy, policy},
-        {core::QueryConfig::kRpcRateLimiterAdaptiveEnabled, "true"},
-        {core::QueryConfig::kRpcRateLimiterHardLimit, "0"},
-        {core::QueryConfig::kRpcRateLimiterMinLimit, "1"},
-    };
-    auto cursor = TaskCursor::create(params);
-    cursor->start();
-    // Reads output as it comes, so output backpressure cannot stall dispatch.
-    uint64_t outputRows = 0;
-    std::thread reader([&] { outputRows = cursor->countRows(); });
-    const bool firstWindow = function->waitForDispatches(expectedPeak);
-    function->releaseResponses();
-    reader.join();
-
-    ASSERT_TRUE(firstWindow);
-    EXPECT_EQ(outputRows, kRows);
-    ASSERT_TRUE(
-        cursor->task()->allDriversClosedFuture().wait(std::chrono::seconds{5}));
-    EXPECT_EQ(
-        PlanNodeStats::extract(
-            cursor->task()->taskStats(), params.planNode->id())
-            .customStat(RPCOperatorStatNames::kRpcRateLimiterPeakPending)
-            .max,
-        expectedPeak);
   }
 }
 
