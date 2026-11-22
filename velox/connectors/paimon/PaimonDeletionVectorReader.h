@@ -15,14 +15,12 @@
  */
 #pragma once
 
-#include <cstdint>
 #include <memory>
 
 #include "velox/common/config/Config.h"
 #include "velox/common/file/TokenProvider.h"
+#include "velox/connectors/common/DeletionVectorReader.h"
 #include "velox/connectors/paimon/PaimonDeletionFile.h"
-#include "velox/dwio/common/RoaringBitmapView.h"
-#include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::connector::paimon {
 
@@ -33,8 +31,7 @@ namespace facebook::velox::connector::paimon {
 /// versions Paimon Java writes are supported; PaimonDeletionFile describes
 /// them. The positions are 0-based row offsets within the data file,
 /// independent of the physical file format used for the data rows.
-/// RoaringBitmapView decodes the bitmap without expanding its positions.
-class PaimonDeletionVectorReader {
+class PaimonDeletionVectorReader : public connector::DeletionVectorReader {
  public:
   /// @param deletionFile Paimon deletion-file metadata containing the file
   ///        path, byte offset, byte length, and cardinality if recorded.
@@ -48,42 +45,14 @@ class PaimonDeletionVectorReader {
       std::shared_ptr<const config::ConfigBase> connectorConfig,
       std::shared_ptr<filesystems::TokenProvider> tokenProvider);
 
-  /// Sets the bits of the deleted rows among the 'size' rows that start at
-  /// row 'baseReadOffset' of the data file. Batches must be read in
-  /// increasing row order.
-  void readDeletePositions(
-      uint64_t baseReadOffset,
-      uint64_t size,
-      BufferPtr deleteBitmap);
-
-  /// Returns true when all deleted positions have been consumed.
-  bool noMoreData() const;
-
  private:
-  // Reads the frame of the deletion vector, checks its length against the
+  // Reads the frame of the deletion vector from the start of the frame
+  // through at least the end of its bitmap, checks its length against the
   // deletion file and parses its bitmap.
-  void loadBitmap();
+  Bitmap readBitmap(ReadFile& file, const FileIoContext& ioContext) override;
 
   // Location of the deletion vector frame in its index file.
   const PaimonDeletionFile deletionFile_;
-
-  memory::MemoryPool* const pool_;
-
-  // Connector config and query token provider to open the deletion file
-  // with. Kept because the file is opened on the first readDeletePositions()
-  // call.
-  const std::shared_ptr<const config::ConfigBase> connectorConfig_;
-  const std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
-
-  // Bytes read from the start of the frame through at least the end of its
-  // bitmap, which bitmap_ points into.
-  BufferPtr frame_;
-
-  // The deleted row positions of the data file.
-  dwio::common::RoaringBitmapView bitmap_;
-
-  // Whether loadBitmap() has read the deletion vector.
-  bool loaded_{false};
 };
 
 } // namespace facebook::velox::connector::paimon

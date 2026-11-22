@@ -25,7 +25,6 @@
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/File.h"
-#include "velox/common/file/FileSystems.h"
 
 namespace facebook::velox::connector::paimon {
 namespace {
@@ -55,10 +54,14 @@ PaimonDeletionVectorReader::PaimonDeletionVectorReader(
     memory::MemoryPool* pool,
     std::shared_ptr<const config::ConfigBase> connectorConfig,
     std::shared_ptr<filesystems::TokenProvider> tokenProvider)
-    : deletionFile_(deletionFile),
-      pool_(pool),
-      connectorConfig_(std::move(connectorConfig)),
-      tokenProvider_(std::move(tokenProvider)) {
+    : connector::DeletionVectorReader(
+          deletionFile.path,
+          /*splitOffset=*/0,
+          pool,
+          std::move(connectorConfig),
+          /*fileReadOps=*/{},
+          std::move(tokenProvider)),
+      deletionFile_(deletionFile) {
   // Paimon Java writes frames of at most 2 GB, so the length fits an int32 in
   // both frame versions.
   static constexpr uint64_t kMaxDeletionVectorLength =
@@ -78,18 +81,10 @@ PaimonDeletionVectorReader::PaimonDeletionVectorReader(
   }
 }
 
-void PaimonDeletionVectorReader::loadBitmap() {
-  if (loaded_) {
-    return;
-  }
-  loaded_ = true;
-
-  auto fs = filesystems::getFileSystem(deletionFile_.path, connectorConfig_);
-  filesystems::FileOptions options;
-  options.tokenProvider = tokenProvider_;
-  auto readFile = fs->openFileForRead(deletionFile_.path, options);
-
-  const auto fileSize = readFile->size();
+PaimonDeletionVectorReader::Bitmap PaimonDeletionVectorReader::readBitmap(
+    ReadFile& file,
+    const FileIoContext& ioContext) {
+  const auto fileSize = file.size();
   const auto offset = deletionFile_.offset;
   VELOX_CHECK_LE(
       offset,
@@ -105,9 +100,6 @@ void PaimonDeletionVectorReader::loadBitmap() {
   // the CRC of a version 2 frame and may pass the frame, so the read stops at
   // the end of the file. A length too short for the magic number still reads
   // the header, so that the checks below report the frame.
-  //
-  // TODO: Read through a dwio input stream so that the read can use the cache
-  // or direct IO.
   const auto numFrameBytes = std::min(
       std::max(deletionFile_.length, kMagicBytes) + kFrameLengthBytes,
       fileSize - offset);
@@ -116,9 +108,8 @@ void PaimonDeletionVectorReader::loadBitmap() {
       kHeaderBytes,
       "Paimon deletion-vector frame header is truncated: {}",
       deletionFile_.path);
-  frame_ = AlignedBuffer::allocate<char>(numFrameBytes, pool_);
-  auto* frame = frame_->asMutable<char>();
-  readFile->pread(offset, numFrameBytes, frame);
+  auto frameBytes = readBytes(file, offset, numFrameBytes, ioContext);
+  const auto* frame = frameBytes->as<char>();
 
   uint32_t frameLength;
   std::memcpy(&frameLength, frame, sizeof(uint32_t));
@@ -164,33 +155,18 @@ void PaimonDeletionVectorReader::loadBitmap() {
       offset + kHeaderBytes + bitmapLength,
       fileSize);
 
-  bitmap_ = dwio::common::RoaringBitmapView(
+  dwio::common::RoaringBitmapView bitmap(
       std::string_view(frame + kHeaderBytes, bitmapLength),
       roaring64 ? dwio::common::RoaringBitmapView::Format::k64Bit
                 : dwio::common::RoaringBitmapView::Format::k32Bit);
   if (deletionFile_.cardinality.has_value()) {
     VELOX_CHECK_EQ(
-        bitmap_.cardinality(),
+        bitmap.cardinality(),
         *deletionFile_.cardinality,
         "Paimon deletion-vector cardinality mismatch: {}",
         deletionFile_.path);
   }
-}
-
-void PaimonDeletionVectorReader::readDeletePositions(
-    uint64_t baseReadOffset,
-    uint64_t size,
-    BufferPtr deleteBitmap) {
-  loadBitmap();
-  const auto begin = static_cast<int64_t>(baseReadOffset);
-  bitmap_.apply(
-      begin,
-      begin + static_cast<int64_t>(size),
-      deleteBitmap->asMutable<uint8_t>());
-}
-
-bool PaimonDeletionVectorReader::noMoreData() const {
-  return loaded_ && bitmap_.exhausted();
+  return {std::move(frameBytes), std::move(bitmap)};
 }
 
 } // namespace facebook::velox::connector::paimon
