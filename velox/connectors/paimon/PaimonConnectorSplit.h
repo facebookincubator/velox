@@ -89,8 +89,8 @@ class PaimonConnectorSplit : public connector::ConnectorSplit {
   /// @param connectorId Connector identifier.
   /// @param snapshotId Snapshot ID associated with the planner-selected files.
   /// @param tableType Whether this is an append-only or primary-key table.
-  /// @param fileFormat File format of the data files (e.g., ORC, Parquet).
-  /// @param dataFiles Non-empty collection of files in this logical split.
+  /// @param dataFiles Non-empty collection of files in this logical split,
+  ///        each with its format.
   /// @param partitionKeys Partition key-value pairs. Keys map to partition
   ///        column names; values are nullopt for null partitions.
   /// @param tableBucketNumber Optional bucket identifier for this split.
@@ -100,7 +100,6 @@ class PaimonConnectorSplit : public connector::ConnectorSplit {
       const std::string& connectorId,
       int64_t snapshotId,
       PaimonTableType tableType,
-      dwio::common::FileFormat fileFormat,
       const std::vector<PaimonDataFile>& dataFiles,
       std::unordered_map<std::string, std::optional<std::string>> partitionKeys,
       std::optional<int32_t> tableBucketNumber,
@@ -131,10 +130,6 @@ class PaimonConnectorSplit : public connector::ConnectorSplit {
     return rawConvertible_;
   }
 
-  dwio::common::FileFormat fileFormat() const {
-    return fileFormat_;
-  }
-
   std::string toString() const override;
 
   folly::dynamic serialize() const override;
@@ -147,7 +142,6 @@ class PaimonConnectorSplit : public connector::ConnectorSplit {
  private:
   const int64_t snapshotId_;
   const PaimonTableType tableType_;
-  const dwio::common::FileFormat fileFormat_;
   const std::vector<PaimonDataFile> dataFiles_;
   const std::unordered_map<std::string, std::optional<std::string>>
       partitionKeys_;
@@ -161,15 +155,16 @@ class PaimonConnectorSplitBuilder {
   PaimonConnectorSplitBuilder(
       std::string connectorId,
       int64_t snapshotId,
-      PaimonTableType tableType,
-      dwio::common::FileFormat fileFormat)
+      PaimonTableType tableType)
       : connectorId_(std::move(connectorId)),
         snapshotId_(snapshotId),
-        tableType_(tableType),
-        fileFormat_(fileFormat) {}
+        tableType_(tableType) {}
 
-  PaimonConnectorSplitBuilder&
-  addFile(std::string filePath, uint64_t fileSize, int32_t level = 0);
+  PaimonConnectorSplitBuilder& addFile(
+      std::string filePath,
+      dwio::common::FileFormat fileFormat,
+      uint64_t fileSize,
+      int32_t level = 0);
 
   PaimonConnectorSplitBuilder& partitionKey(
       std::string name,
@@ -185,7 +180,6 @@ class PaimonConnectorSplitBuilder {
   const std::string connectorId_;
   const int64_t snapshotId_;
   const PaimonTableType tableType_;
-  const dwio::common::FileFormat fileFormat_;
   std::vector<PaimonDataFile> dataFiles_;
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys_;
   std::optional<int32_t> tableBucketNumber_;

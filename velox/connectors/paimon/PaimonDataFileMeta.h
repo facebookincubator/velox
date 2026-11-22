@@ -25,6 +25,7 @@
 #include <folly/CPortability.h>
 
 #include "velox/connectors/paimon/PaimonDeletionFile.h"
+#include "velox/dwio/common/Options.h"
 
 namespace facebook::velox::connector::paimon {
 
@@ -90,6 +91,12 @@ struct PaimonDataFile {
 
   /// Path to the file (ORC, Parquet, etc.).
   std::string path;
+
+  /// Format of the file. Paimon names each file after its format, and the
+  /// files of a split can differ in format, e.g. with 'file.format.per.level'
+  /// or after 'file.format' changes. PaimonConnectorSplit rejects a file
+  /// without a format.
+  dwio::common::FileFormat fileFormat{dwio::common::FileFormat::UNKNOWN};
 
   /// Size of the file in bytes.
   uint64_t size{0};
