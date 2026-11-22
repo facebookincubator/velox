@@ -16,6 +16,8 @@
 
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
 
+#include <cmath>
+
 #include <algorithm>
 #include <memory>
 #include <typeinfo>
@@ -82,8 +84,6 @@ VectorPtr getChildBySubfield(
   return vector;
 }
 
-uint32_t AbstractColumnStats::counter_ = 0;
-
 template <>
 std::unique_ptr<Filter> ColumnStats<bool>::makeRangeFilter(
     const FilterSpec& filterSpec) {
@@ -116,7 +116,7 @@ std::unique_ptr<Filter> ColumnStats<float>::makeRangeFilter(
       upper,
       upperUnbounded,
       false,
-      filterSpec.selectPct > 25);
+      drawNullAllowed(filterSpec));
 }
 
 template <>
@@ -155,7 +155,7 @@ std::unique_ptr<Filter> ColumnStats<double>::makeRangeFilter(
       upper,
       upperUnbounded,
       false,
-      filterSpec.selectPct > 25);
+      drawNullAllowed(filterSpec));
 }
 
 template <>
@@ -218,7 +218,8 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRandomFilter(
   StringView lower = valueAtPct(filterSpec.startPct, &lowerIndex);
   StringView upper =
       valueAtPct(filterSpec.startPct + filterSpec.selectPct, &upperIndex);
-  if (upperIndex - lowerIndex < 1000 && ++counter_ % 10 <= 3) {
+  const bool nullAllowed = drawNullAllowed(filterSpec);
+  if (upperIndex - lowerIndex < 1000 && folly::Random::rand32(10, rng_) <= 3) {
     std::vector<std::string> inRange;
     inRange.reserve(upperIndex - lowerIndex);
     for (StringView s : values_) {
@@ -227,16 +228,15 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRandomFilter(
         inRange.push_back(s.getString());
       }
     }
-    if (counter_ % 2 == 0 && filterSpec.selectPct != 100.0) {
+    if (folly::Random::oneIn(2, rng_) && filterSpec.selectPct != 100.0) {
       return std::make_unique<velox::common::NegatedBytesValues>(
-          inRange, filterSpec.selectPct < 75);
+          inRange, nullAllowed);
     }
-    return std::make_unique<velox::common::BytesValues>(
-        inRange, filterSpec.selectPct > 25);
+    return std::make_unique<velox::common::BytesValues>(inRange, nullAllowed);
   }
 
   // sometimes create a negated filter instead
-  if (counter_ % 4 == 1 && filterSpec.selectPct < 100.0) {
+  if (folly::Random::oneIn(4, rng_) && filterSpec.selectPct < 100.0) {
     return std::make_unique<velox::common::NegatedBytesRange>(
         std::string(lower),
         false,
@@ -244,7 +244,7 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRandomFilter(
         std::string(upper),
         false,
         false,
-        filterSpec.selectPct < 75);
+        nullAllowed);
   }
 
   return std::make_unique<velox::common::BytesRange>(
@@ -254,7 +254,7 @@ std::unique_ptr<Filter> ColumnStats<StringView>::makeRandomFilter(
       std::string(upper),
       false,
       false,
-      filterSpec.selectPct > 25);
+      nullAllowed);
 }
 
 template <>
@@ -270,7 +270,7 @@ std::unique_ptr<Filter> ColumnStats<Timestamp>::makeRangeFilter(
       valueAtPct(filterSpec.startPct + filterSpec.selectPct, &upperIndex);
 
   return std::make_unique<velox::common::TimestampRange>(
-      lower, upper, filterSpec.selectPct > 25);
+      lower, upper, drawNullAllowed(filterSpec));
 }
 
 template <>
@@ -287,26 +287,32 @@ std::unique_ptr<Filter> ColumnStats<Timestamp>::makeRowGroupSkipRangeFilter(
     const std::vector<RowVectorPtr>& batches,
     const Subfield& subfield) {
   Timestamp max;
-  bool hasMax = false;
-  for (const auto& batch : batches) {
-    auto values = getChildBySubfield(batch.get(), subfield, rootType_)
-                      ->as<SimpleVector<Timestamp>>();
-    DWIO_ENSURE_NOT_NULL(
-        values,
-        "Failed to convert to SimpleVector<Timestamp> for batch of kind ",
-        batch->type()->kindName());
-    for (auto i = 0; i < values->size(); ++i) {
-      if (values->isNullAt(i)) {
-        continue;
-      }
-      if (hasMax && max < values->valueAt(i)) {
-        max = values->valueAt(i);
-      } else if (!hasMax) {
-        max = values->valueAt(i);
-        hasMax = true;
-      }
-    }
+  columnMax(batches, subfield, max);
+  return std::make_unique<velox::common::TimestampRange>(max, max, false);
+}
+
+// The string counterpart of one past the maximum. kMaxString is chosen to
+// exceed the test data, which makes this identical to the row group skip
+// specialization above -- there the filter selecting nothing is the reason
+// VARCHAR is left out of supportsRowGroupSkip, here it is what is wanted.
+template <>
+std::unique_ptr<Filter> ColumnStats<StringView>::makeEmptyResultRangeFilter(
+    const std::vector<RowVectorPtr>& /*batches*/,
+    const Subfield& /*subfield*/) {
+  static std::string max = kMaxString;
+  return std::make_unique<velox::common::BytesRange>(
+      max, false, false, max, false, false, false);
+}
+
+template <>
+std::unique_ptr<Filter> ColumnStats<Timestamp>::makeEmptyResultRangeFilter(
+    const std::vector<RowVectorPtr>& batches,
+    const Subfield& subfield) {
+  Timestamp max;
+  if (!columnMax(batches, subfield, max) || max == Timestamp::max()) {
+    return nullptr;
   }
+  ++max;
   return std::make_unique<velox::common::TimestampRange>(max, max, false);
 }
 
@@ -382,6 +388,82 @@ std::vector<std::string> FilterGenerator::makeFilterables(
   return filterables;
 }
 
+namespace {
+
+// Row group skip filters are produced by makeRowGroupSkipRangeFilter, which is
+// only implemented for the kinds below. The generic template builds a
+// BigintRange out of getIntegerValue(), so floating point and HUGEINT would
+// narrow into a filter of the wrong type, and the complex type override fails
+// outright. VARCHAR is excluded on purpose: its specialization returns a filter
+// built from kMaxString, a sentinel picked to exceed *test* data, which selects
+// nothing against real data.
+bool supportsRowGroupSkip(const TypePtr& type) {
+  const auto kind = type->kind();
+  return kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
+      kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
+      kind == TypeKind::TIMESTAMP;
+}
+
+// An empty result filter is built one step past the column maximum, so the
+// kinds are those where "one step past" is exact and expressible: the integral
+// kinds, where getIntegerValue is lossless and the bound is max + 1, plus the
+// two with a specialization of their own. Floating point is excluded because
+// getIntegerValue truncates, and HUGEINT because the bound would not survive
+// the narrowing to int64_t; in both cases the filter could silently overlap a
+// real value. BOOLEAN is excluded because there is no value above true.
+bool supportsEmptyResult(const TypePtr& type) {
+  const auto kind = type->kind();
+  return kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
+      kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
+      kind == TypeKind::VARCHAR || kind == TypeKind::TIMESTAMP;
+}
+
+// Draws a filter selectivity in percent.
+//
+// The previous scheme picked from {1, 10, 20, 30} and {76, 80, ... 100}, which
+// left two gaps that matter for reader coverage: nothing between 31% and 75%,
+// which is exactly where a filter partially overlaps a stripe or a row group
+// and boundary handling is interesting, and a degenerate match-everything
+// filter at 100% roughly one draw in thirteen.
+//
+// Splits the range into three equally weighted regimes instead. The low band is
+// log-uniform because selectivity there spans two orders of magnitude and a
+// uniform draw would almost never produce the very selective filters that
+// exercise skipping; the other two are uniform. Capped below 100 so the filter
+// always excludes something and startPct below always has a non-empty range to
+// draw from.
+float randomSelectPct(folly::Random::DefaultGenerator& rng) {
+  switch (folly::Random::rand32(3, rng)) {
+    case 0: {
+      // Highly selective: log-uniform over [0.5, 10).
+      constexpr double kMin = 0.5;
+      constexpr double kMax = 10.0;
+      const double logMin = std::log(kMin);
+      const double span = std::log(kMax) - logMin;
+      return static_cast<float>(
+          std::exp(logMin + folly::Random::randDouble01(rng) * span));
+    }
+    case 1:
+      // The band the old scheme could not reach at all.
+      return static_cast<float>(10.0 + folly::Random::randDouble01(rng) * 65.0);
+    default:
+      // Permissive, but never all-inclusive.
+      return static_cast<float>(75.0 + folly::Random::randDouble01(rng) * 24.0);
+  }
+}
+
+// Resolves a top level field by name. Returns nullptr for the dotted subfield
+// paths a caller may supply directly, which findChild does not accept.
+TypePtr topLevelFieldType(const RowType& rowType, const std::string& name) {
+  if (name.find('.') != std::string::npos) {
+    return nullptr;
+  }
+  auto index = rowType.getChildIdxIfExists(name);
+  return index.has_value() ? rowType.childAt(*index) : nullptr;
+}
+
+} // namespace
+
 std::vector<FilterSpec> FilterGenerator::makeRandomSpecs(
     const std::vector<std::string>& filterable,
     int32_t countX100) {
@@ -407,22 +489,47 @@ std::vector<FilterSpec> FilterGenerator::makeRandomSpecs(
     specs.emplace_back();
     specs.back().field = name;
     auto category = folly::Random::rand32(rng_) % 13;
-    if (category == 0) {
-      specs.back().selectPct = 1;
-    } else if (category < 4) {
-      specs.back().selectPct = category * 10;
-    } else if (category == 11) {
+    if (category == 11) {
       specs.back().filterKind = FilterKind::kIsNull;
     } else if (category == 12) {
       specs.back().filterKind = FilterKind::kIsNotNull;
     } else {
-      specs.back().selectPct = 60 + category * 4;
+      specs.back().selectPct = randomSelectPct(rng_);
     }
 
     specs.back().startPct = specs.back().selectPct < 100
         ? folly::Random::rand32(rng_) %
             static_cast<int32_t>(100 - specs.back().selectPct)
         : 0;
+
+    // Ask for a min/max row group skip filter on a fraction of the specs. This
+    // is an independent draw rather than another `category` so the value filter
+    // distribution above is left alone, and it skips the null kinds because
+    // rowGroupSkipFilter ignores filterKind and would silently replace them.
+    const auto fieldType = topLevelFieldType(*rowType_, name);
+    if (fieldType != nullptr && supportsRowGroupSkip(fieldType) &&
+        specs.back().filterKind != FilterKind::kIsNull &&
+        specs.back().filterKind != FilterKind::kIsNotNull &&
+        folly::Random::rand32(rng_) % 10 == 0) {
+      specs.back().isForRowGroupSkip = true;
+    }
+  }
+
+  // Optionally turn the last spec into one that matches nothing. The last one
+  // and no other: makeSubfieldFilters narrows the reference rows in place as it
+  // walks the specs, so an empty result anywhere earlier would leave every
+  // later column sampling an empty row set and degenerating into an IsNull
+  // filter. Guarded on the probability first so that the default draws nothing
+  // and leaves the sequence above untouched.
+  if (emptyResultProbability_ > 0.0 && !specs.empty() &&
+      folly::Random::randDouble01(rng_) < emptyResultProbability_) {
+    auto& last = specs.back();
+    const auto fieldType = topLevelFieldType(*rowType_, last.field);
+    if (fieldType != nullptr && supportsEmptyResult(fieldType) &&
+        !last.isForRowGroupSkip && last.filterKind != FilterKind::kIsNull &&
+        last.filterKind != FilterKind::kIsNotNull) {
+      last.isForEmptyResult = true;
+    }
   }
 
   return specs;
@@ -477,46 +584,46 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
     std::unique_ptr<AbstractColumnStats> stats;
     switch (vector->typeKind()) {
       case TypeKind::BOOLEAN:
-        stats = makeStats<TypeKind::BOOLEAN>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::BOOLEAN>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::TINYINT:
-        stats = makeStats<TypeKind::TINYINT>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::TINYINT>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::SMALLINT:
-        stats = makeStats<TypeKind::SMALLINT>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::SMALLINT>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::INTEGER:
-        stats = makeStats<TypeKind::INTEGER>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::INTEGER>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::BIGINT:
-        stats = makeStats<TypeKind::BIGINT>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::BIGINT>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::HUGEINT:
-        stats = makeStats<TypeKind::HUGEINT>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::HUGEINT>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::VARCHAR:
-        stats = makeStats<TypeKind::VARCHAR>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::VARCHAR>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::VARBINARY:
-        stats = makeStats<TypeKind::VARBINARY>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::VARBINARY>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::REAL:
-        stats = makeStats<TypeKind::REAL>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::REAL>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::DOUBLE:
-        stats = makeStats<TypeKind::DOUBLE>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::DOUBLE>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::TIMESTAMP:
-        stats = makeStats<TypeKind::TIMESTAMP>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::TIMESTAMP>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::ROW:
-        stats = makeStats<TypeKind::ROW>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::ROW>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::ARRAY:
-        stats = makeStats<TypeKind::ARRAY>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::ARRAY>(vector->type(), rowType_, rng_);
         break;
       case TypeKind::MAP:
-        stats = makeStats<TypeKind::MAP>(vector->type(), rowType_);
+        stats = makeStats<TypeKind::MAP>(vector->type(), rowType_, rng_);
         break;
       default:
         VELOX_CHECK(
@@ -528,6 +635,8 @@ SubfieldFilters FilterGenerator::makeSubfieldFilters(
     std::unique_ptr<Filter> filter;
     if (filterSpec.isForRowGroupSkip) {
       filter = stats->rowGroupSkipFilter(batches, subfield, hitRows);
+    } else if (filterSpec.isForEmptyResult) {
+      filter = stats->emptyResultFilter(batches, subfield, hitRows);
     } else {
       filter = stats->filter(batches, filterSpec, hitRows);
     }
