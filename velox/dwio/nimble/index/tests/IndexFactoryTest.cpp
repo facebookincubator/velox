@@ -104,7 +104,7 @@ class TestClusterIndexFactory final : public ClusterIndexFactory {
         EncodingLayout{EncodingType::Prefix, {}, CompressionType::Uncompressed},
         10'000,
         CompressionType::Uncompressed,
-        /*hierarchicalKeyEncodingReadFactors=*/{}};
+        /*trieKeyEncodingReadFactors=*/{}};
     return ClusterIndexWriter::create(
         builtInConfig, inputType, pool, writerOptions);
   }
@@ -159,7 +159,7 @@ class ReverseOrderClusterIndexFactory final : public ClusterIndexFactory {
         EncodingLayout{EncodingType::Prefix, {}, CompressionType::Uncompressed},
         /*maxRowsPerKeyChunk=*/4,
         CompressionType::Uncompressed,
-        /*hierarchicalKeyEncodingReadFactors=*/{}};
+        /*trieKeyEncodingReadFactors=*/{}};
     return ClusterIndexWriter::create(
         builtInConfig, inputType, pool, writerOptions);
   }
@@ -829,15 +829,14 @@ TEST_F(IndexFactoryTest, customKeyOrderEndToEnd) {
 TEST_F(IndexFactoryTest, builtInClusterFactoryIsRegistered) {
   EXPECT_EQ(clusterIndexFactory(kClusterIndexName).name(), kClusterIndexName);
   EXPECT_EQ(
-      clusterIndexFactory(kHierarchicalClusterIndexName).name(),
-      kHierarchicalClusterIndexName);
+      clusterIndexFactory(kTrieClusterIndexName).name(), kTrieClusterIndexName);
 }
 
 // The built-in cluster indexes store their keys in one index stream of each
 // stripe in the Stripe key stream layout, and nothing in stripes in the
 // Partition layout.
 TEST_F(IndexFactoryTest, builtInClusterFactoryIndexStreams) {
-  for (const auto name : {kClusterIndexName, kHierarchicalClusterIndexName}) {
+  for (const auto name : {kClusterIndexName, kTrieClusterIndexName}) {
     SCOPED_TRACE(name);
     const auto& factory = clusterIndexFactory(name);
     EXPECT_EQ(factory.numIndexStreams(KeyStreamLayout::kStripe), 1);
