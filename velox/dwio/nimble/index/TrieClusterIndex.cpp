@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/nimble/index/HierarchicalClusterIndex.h"
+#include "velox/dwio/nimble/index/TrieClusterIndex.h"
 
 #include "velox/common/io/Options.h"
-#include "velox/dwio/nimble/index/HierarchicalKeyReader.h"
+#include "velox/dwio/nimble/index/TrieKeyReader.h"
 
 namespace facebook::nimble::index {
 
-std::unique_ptr<HierarchicalClusterIndex> HierarchicalClusterIndex::create(
+std::unique_ptr<TrieClusterIndex> TrieClusterIndex::create(
     Section rootSection,
-    std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
+    std::shared_ptr<const TrieKeyCodec> keyCodec,
     velox::memory::MemoryPool* pool,
     const Options& options) {
   NIMBLE_CHECK_NOT_NULL(keyCodec);
@@ -37,19 +37,19 @@ std::unique_ptr<HierarchicalClusterIndex> HierarchicalClusterIndex::create(
       static_cast<const void*>(pool),
       "ioOptions pool must match the provided pool");
 
-  // Hierarchical key chunks search per-column integer levels, whose order is
+  // Trie key chunks search per-column integer levels, whose order is
   // the order of the keys of the codec: bytewise by default.
   if (keyCodec->keyComparator() == nullptr) {
     NIMBLE_CHECK_NULL(
         options.keyComparator,
-        "Hierarchical cluster index requires bytewise key order");
+        "Trie cluster index requires bytewise key order");
   } else {
     NIMBLE_CHECK_EQ(
         static_cast<const void*>(options.keyComparator),
         static_cast<const void*>(keyCodec->keyComparator()),
-        "Hierarchical cluster index requires the key order of its codec");
+        "Trie cluster index requires the key order of its codec");
   }
-  return std::unique_ptr<HierarchicalClusterIndex>(new HierarchicalClusterIndex(
+  return std::unique_ptr<TrieClusterIndex>(new TrieClusterIndex(
       std::move(rootSection),
       std::move(keyCodec),
       createIndexMetadataInput(options),
@@ -61,9 +61,9 @@ std::unique_ptr<HierarchicalClusterIndex> HierarchicalClusterIndex::create(
       pool));
 }
 
-HierarchicalClusterIndex::HierarchicalClusterIndex(
+TrieClusterIndex::TrieClusterIndex(
     Section rootSection,
-    std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
+    std::shared_ptr<const TrieKeyCodec> keyCodec,
     std::shared_ptr<MetadataInput> metadataInput,
     std::shared_ptr<DataInput> dataInput,
     KeyStreamLocator keyStreamLocator,
@@ -81,7 +81,7 @@ HierarchicalClusterIndex::HierarchicalClusterIndex(
               std::string_view encodedKeys,
               std::function<void*(uint32_t)> stringBufferFactory,
               velox::memory::MemoryPool* keyPool) {
-            return createHierarchicalKeyReader(
+            return createTrieKeyReader(
                 encodedKeys,
                 stringBufferFactory,
                 cacheKeyEncodingViews,
@@ -93,6 +93,6 @@ HierarchicalClusterIndex::HierarchicalClusterIndex(
           preloadIndex,
           pool) {}
 
-HierarchicalClusterIndex::~HierarchicalClusterIndex() = default;
+TrieClusterIndex::~TrieClusterIndex() = default;
 
 } // namespace facebook::nimble::index
