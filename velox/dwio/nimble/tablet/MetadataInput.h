@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <optional>
+#include "folly/Function.h"
 #include "folly/Range.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/SsdCache.h"
@@ -39,6 +40,15 @@ struct FileHandle;
 namespace facebook::nimble {
 
 /// Reads metadata sections from a Nimble file with IO coalescing.
+///
+/// Reads them the way DataInput reads stripe data. Each load() coalesces the
+/// sections it must read from the file, aligns the reads for direct I/O, and
+/// submits them as one positioned vector read, which a file backed by RocksDB
+/// serves with a single MultiRead. Each section then gets its own allocation,
+/// so no read padding outlives the load. Without direct I/O, each merged range
+/// is instead one scatter read into the buffers of its sections, and
+/// Options::executor runs them in parallel. A file without a native batched
+/// preadv() reads the regions of a direct-I/O load one after another.
 ///
 /// Stateless, thread-safe API: load() takes a span of sections and returns
 /// decompressed MetadataBuffers. All per-call state is local — no member
@@ -65,7 +75,7 @@ class MetadataInput {
     int64_t maxCoalesceBytes{velox::io::ReaderOptions::kDefaultCoalesceBytes};
 
     /// Runs the coalesced reads of a load in parallel when set. A direct-I/O
-    /// load of CachedMetadataInput is one batched read instead.
+    /// load is one batched read instead.
     folly::Executor* executor{nullptr};
 
     /// fileHandle->uuid is the id of the file in the keys of 'blockCache', so
@@ -118,7 +128,9 @@ class MetadataInput {
 
   /// Raw tracked read for bootstrap IO (e.g. speculative footer read)
   /// before section boundaries are known. Records bytes and latency into
-  /// the same ioStats used by load().
+  /// the same ioStats used by load(). With direct I/O, reads the aligned
+  /// blocks around the bytes into a scratch buffer and copies the bytes out,
+  /// and the rest of the blocks counts as overread, as in load().
   void readRaw(uint64_t offset, uint64_t size, void* dest);
 
   /// Caches data at the given offset from multiple contiguous ranges.
@@ -133,56 +145,63 @@ class MetadataInput {
  protected:
   MetadataInput(velox::ReadFile* file, const Options& options);
 
-  struct LoadedSection {
-    explicit LoadedSection(MetadataSection _section) : section{_section} {}
+  // Receives the file bytes of one section, given the section's index in the
+  // span passed to readSections(). The bytes are valid only during the call.
+  using ReadCallback =
+      folly::FunctionRef<void(uint32_t index, std::string_view data)>;
 
-    MetadataSection section;
-    std::shared_ptr<MetadataBuffer> buffer;
-  };
+  // Reads sections[i] for each i in 'sortedIndices', which must be in file
+  // offset order, in one positioned vector read and passes each section's
+  // bytes to 'callback'.
+  void readSections(
+      std::span<const MetadataSection> sections,
+      std::span<const uint32_t> sortedIndices,
+      ReadCallback callback) const;
 
-  // Per-section read state produced by prepareBuffers().
-  // buffers[i] owns the allocated memory.
-  // readRanges[i] is the writable destination for IO.
-  struct ReadBuffers {
-    std::vector<velox::BufferPtr> buffers;
-    std::vector<folly::Range<char*>> readRanges;
-  };
+  // Returns 'data', compressed with 'compressionType', decompressed into a new
+  // pool buffer.
+  std::shared_ptr<MetadataBuffer> decompress(
+      std::string_view data,
+      CompressionType compressionType) const;
 
-  /// Sorts by file offset internally, computes coalesced IO groups,
-  /// and executes preadv. Does not reorder readRanges — the caller's
-  /// buffers[i] ↔ loadIndices[i] correspondence is preserved.
-  void loadFromFile(
-      const std::vector<LoadedSection>& sections,
-      const std::vector<uint32_t>& loadIndices,
-      const std::vector<folly::Range<char*>>& readRanges);
+  // Returns 'data', compressed with 'compressionType', decompressed into a new
+  // pool buffer, or 'data' itself when uncompressed.
+  std::shared_ptr<MetadataBuffer> decompress(
+      velox::BufferPtr data,
+      CompressionType compressionType) const;
 
-  /// Overload for loading all sections (sequential indices).
-  void loadFromFile(
-      const std::vector<LoadedSection>& sections,
-      const std::vector<folly::Range<char*>>& readRanges);
+  // Returns true if reads from the file use direct I/O. A direct-I/O read
+  // covers whole aligned blocks, so it cannot land in the buffer of a section.
+  bool directIo() const {
+    return alignment_ > 1;
+  }
 
-  /// Decompresses the buffer into a MetadataBuffer. For uncompressed data,
-  /// passes the buffer directly (zero copy).
-  std::shared_ptr<MetadataBuffer> decompressAndStore(
-      const MetadataSection& section,
-      velox::BufferPtr&& buffer);
-
-  /// Extracts results from loaded sections into a vector of MetadataBuffers.
-  static std::vector<std::shared_ptr<MetadataBuffer>> extractResults(
-      std::vector<LoadedSection>&& sections);
+  // Requires !directIo(). Reads sections[i] for each i in 'sortedIndices',
+  // which must be in file offset order, into destinations[i], which must hold
+  // sections[i].size() bytes. Each merged range is one scatter read, which
+  // skips the gaps between its sections. Options::executor, when set, runs
+  // every scatter read but the first.
+  void readSections(
+      std::span<const MetadataSection> sections,
+      std::span<const uint32_t> sortedIndices,
+      std::span<const folly::Range<char*>> destinations) const;
 
   struct IoGroup {
     uint64_t offset;
     std::vector<folly::Range<char*>> ranges;
   };
 
-  // Computes IO group boundaries using coalesceIo, then builds preadv
+  // Computes IO group boundaries using coalesce(), then builds preadv
   // ranges for each group with null-data ranges for gaps.
-  // 'readRanges' provides the writable destination for each section.
-  std::vector<IoGroup> computeIoGroups(
-      const std::vector<LoadedSection>& sections,
-      const std::vector<uint32_t>& loadIndices,
-      const std::vector<folly::Range<char*>>& readRanges);
+  // 'readIndices' must be in file offset order.
+  // 'destinations' provides the writable destination for each section.
+  // Appends the groups to 'ioGroups'. Returns the bytes they read, gaps
+  // included.
+  uint64_t computeIoGroups(
+      std::span<const MetadataSection> sections,
+      std::span<const uint32_t> readIndices,
+      std::span<const folly::Range<char*>> destinations,
+      std::vector<IoGroup>& ioGroups) const;
 
   // Dispatches IO groups in parallel via AsyncSource when executor is
   // available, records IO stats, and propagates the first error.
@@ -192,9 +211,6 @@ class MetadataInput {
   // without uncompressed_size — will be deprecated).
   static std::optional<uint32_t> resolveUncompressedSize(
       const MetadataSection& section);
-
-  // Records coalesced IO stats (payload, total read, overread).
-  void recordCoalescedIoStats(const velox::CoalesceIoStats& ioStats);
 
   // RAII guard that measures elapsed time and records it as query thread
   // IO latency when the scope exits.
@@ -222,56 +238,6 @@ class MetadataInput {
   folly::Executor* const executor_;
   const std::shared_ptr<velox::io::IoStatistics> ioStats_;
   const velox::FileIoContext fileIoContext_;
-};
-
-/// Direct metadata loading with IO coalescing, no caching.
-class DirectMetadataInput : public MetadataInput {
- public:
-  std::vector<std::shared_ptr<MetadataBuffer>> load(
-      std::span<const MetadataSection> sections) override;
-
- private:
-  void prepareBuffers(
-      const std::vector<LoadedSection>& sections,
-      ReadBuffers& readBuffers);
-
-  friend class MetadataInput;
-
-  DirectMetadataInput(velox::ReadFile* file, const Options& options);
-};
-
-/// Metadata input that caches decompressed sections in Options::blockCache,
-/// keyed by (Options::fileHandle->uuid, compressed file offset). A section
-/// whose uncompressed size the file does not record is cached after its read,
-/// at the size its compressed bytes start with. An empty section, and a section
-/// above Options::maxCacheEntrySize, bypass the cache. A section too large for
-/// any cache entry means a corrupt file, and fails. Without direct I/O, reads
-/// an uncompressed section that misses straight into its new cache entry, so
-/// caching it takes no copy.
-///
-/// Reads the sections that miss the way DataInput reads stripe data. Each
-/// load() coalesces the sections it must read from the file, aligns the reads
-/// for direct I/O, and submits them as one positioned vector read, which a file
-/// backed by RocksDB serves with a single MultiRead. Each section then gets its
-/// own allocation, so no read padding outlives the load. Without direct I/O,
-/// each merged range is instead one scatter read into the buffers of its
-/// sections, and Options::executor runs them in parallel. A file without a
-/// native batched preadv() reads the regions of a direct-I/O load one after
-/// another.
-class CachedMetadataInput final : public MetadataInput {
- public:
-  bool cached() const override {
-    return true;
-  }
-
-  std::vector<std::shared_ptr<MetadataBuffer>> load(
-      std::span<const MetadataSection> sections) override;
-
-  std::unique_ptr<MetadataBuffer> findCachedMetadata(uint64_t offset) override;
-
-  void cacheMetadata(
-      uint64_t cacheOffset,
-      std::span<const std::string_view> ranges) override;
 
  private:
   // A merged read covering the sections at positions [begin, end) of the
@@ -292,6 +258,89 @@ class CachedMetadataInput final : public MetadataInput {
     size_t end{0};
   };
 
+  // Merges the reads of the sections at 'sortedIndices'. Reads that share an
+  // aligned block always merge, so the returned reads never overlap.
+  std::vector<ReadGroup> coalesce(
+      std::span<const MetadataSection> sections,
+      std::span<const uint32_t> sortedIndices) const;
+
+  // Reads 'groups' into 'buffer' in one positioned vector read. 'payloadBytes'
+  // is the section bytes they cover.
+  void readGroups(
+      std::span<const ReadGroup> groups,
+      char* buffer,
+      uint64_t payloadBytes) const;
+
+  // Records the reads of one load: 'readBytes' bytes read from the file in
+  // 'storageReadNs', of which 'payloadBytes' are section bytes.
+  void recordReadStats(
+      uint64_t storageReadNs,
+      uint64_t readBytes,
+      uint64_t payloadBytes) const;
+
+  // Records the bytes of the reads of one load, whose latencies are recorded
+  // separately: 'readBytes' bytes read from the file, of which 'payloadBytes'
+  // are section bytes.
+  void recordReadBytes(uint64_t readBytes, uint64_t payloadBytes) const;
+
+  // Alignment of read offsets, buffers, and lengths; 1 without direct I/O.
+  const uint64_t alignment_;
+};
+
+/// Metadata input without caching. With direct I/O, decompresses or copies each
+/// section out of the aligned read buffer of the load, which load() frees.
+/// Without direct I/O, reads each section straight into the buffer it returns,
+/// so an uncompressed section is returned without a copy.
+class DirectMetadataInput final : public MetadataInput {
+ public:
+  std::vector<std::shared_ptr<MetadataBuffer>> load(
+      std::span<const MetadataSection> sections) override;
+
+ private:
+  friend class MetadataInput;
+
+  // Reads sections[i] for each i in 'sortedIndices', which must be in file
+  // offset order, in one positioned vector read, and sets buffers[i] to what
+  // decompress() returns for its bytes.
+  void loadDirectIo(
+      std::span<const MetadataSection> sections,
+      std::span<const uint32_t> sortedIndices,
+      std::span<std::shared_ptr<MetadataBuffer>> buffers) const;
+
+  // Requires !directIo(). Like loadDirectIo(), but reads each merged range in
+  // one scatter read, which skips the gaps between its sections.
+  void loadBufferedIo(
+      std::span<const MetadataSection> sections,
+      std::span<const uint32_t> sortedIndices,
+      std::span<std::shared_ptr<MetadataBuffer>> buffers) const;
+
+  DirectMetadataInput(velox::ReadFile* file, const Options& options);
+};
+
+/// Metadata input that caches decompressed sections in Options::blockCache,
+/// keyed by (Options::fileHandle->uuid, compressed file offset). A section
+/// whose uncompressed size the file does not record is cached after its read,
+/// at the size its compressed bytes start with. An empty section, and a section
+/// above Options::maxCacheEntrySize, bypass the cache. A section too large for
+/// any cache entry means a corrupt file, and fails. Without direct I/O, reads
+/// an uncompressed section that misses straight into its new cache entry, so
+/// caching it takes no copy.
+class CachedMetadataInput final : public MetadataInput {
+ public:
+  bool cached() const override {
+    return true;
+  }
+
+  std::vector<std::shared_ptr<MetadataBuffer>> load(
+      std::span<const MetadataSection> sections) override;
+
+  std::unique_ptr<MetadataBuffer> findCachedMetadata(uint64_t offset) override;
+
+  void cacheMetadata(
+      uint64_t cacheOffset,
+      std::span<const std::string_view> ranges) override;
+
+ private:
   // Returns the sealed entry of 'section' on a hit. On a miss, returns a new
   // entry for the read to fill, or an empty entry when the section is cached
   // after the read, or not cached at all.
@@ -343,59 +392,6 @@ class CachedMetadataInput final : public MetadataInput {
       std::span<BlockCache::Entry> newEntries,
       std::span<std::shared_ptr<MetadataBuffer>> buffers);
 
-  // Returns 'data', compressed with 'compressionType', decompressed into a new
-  // pool buffer.
-  std::shared_ptr<MetadataBuffer> decompress(
-      std::string_view data,
-      CompressionType compressionType) const;
-
-  // Returns 'data', compressed with 'compressionType', decompressed into a new
-  // pool buffer, or 'data' itself when uncompressed.
-  std::shared_ptr<MetadataBuffer> decompress(
-      velox::BufferPtr data,
-      CompressionType compressionType) const;
-
-  // Returns true if reads from the file use direct I/O. A direct-I/O read
-  // covers whole aligned blocks, so it cannot land in the buffer of a section.
-  bool directIo() const {
-    return alignment_ > 1;
-  }
-
-  // Requires !directIo(). Reads sections[i] for each i in 'sortedIndices',
-  // which must be in file offset order, into destinations[i], which must hold
-  // sections[i].size() bytes. Each merged range is one scatter read, which
-  // skips the gaps between its sections. Options::executor, when set, runs
-  // every scatter read but the first.
-  void readSections(
-      std::span<const MetadataSection> sections,
-      std::span<const uint32_t> sortedIndices,
-      std::span<const folly::Range<char*>> destinations) const;
-
-  // Merges the reads of the sections at 'sortedIndices'. Reads that share an
-  // aligned block always merge, so the returned reads never overlap.
-  std::vector<ReadGroup> coalesce(
-      std::span<const MetadataSection> sections,
-      std::span<const uint32_t> sortedIndices) const;
-
-  // Reads 'groups' into 'buffer' in one positioned vector read. 'payloadBytes'
-  // is the section bytes they cover.
-  void readGroups(
-      std::span<const ReadGroup> groups,
-      char* buffer,
-      uint64_t payloadBytes) const;
-
-  // Records the reads of one load: 'readBytes' bytes read from the file in
-  // 'storageReadNs', of which 'payloadBytes' are section bytes.
-  void recordReadStats(
-      uint64_t storageReadNs,
-      uint64_t readBytes,
-      uint64_t payloadBytes) const;
-
-  // Records the bytes of the reads of one load, whose latencies are recorded
-  // separately: 'readBytes' bytes read from the file, of which 'payloadBytes'
-  // are section bytes.
-  void recordReadBytes(uint64_t readBytes, uint64_t payloadBytes) const;
-
   CachedMetadataInput(velox::ReadFile* file, const Options& options);
 
   // Holds the decompressed sections, and the metadata that cacheMetadata()
@@ -407,9 +403,6 @@ class CachedMetadataInput final : public MetadataInput {
 
   // Entries above this size bypass the cache.
   const std::optional<uint32_t> maxCacheEntrySize_;
-
-  // Alignment of read offsets, buffers, and lengths; 1 without direct I/O.
-  const uint64_t alignment_;
 
   friend class MetadataInput;
 };

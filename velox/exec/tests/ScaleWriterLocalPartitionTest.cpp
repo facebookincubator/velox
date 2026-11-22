@@ -633,9 +633,8 @@ TEST_F(ScaleWriterLocalPartitionTest, unpartitionBasic) {
     Operator::registerOperator(
         std::make_unique<FakeSourceNodeFactory>(testController));
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId exchnangeNodeId;
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = PlanBuilder()
                     .addNode([&](const core::PlanNodeId& id,
                                  const core::PlanNodePtr& input) {
                       return std::make_shared<FakeSourceNode>(id, rowType_);
@@ -675,31 +674,18 @@ TEST_F(ScaleWriterLocalPartitionTest, unpartitionBasic) {
         ++nonEmptyConsumers;
       }
     }
-    auto planStats = toPlanStats(task->taskStats());
+    const auto stats =
+        PlanNodeStats::extract(task->taskStats(), exchnangeNodeId);
     if (testData.expectedRebalance) {
-      ASSERT_GT(
-          planStats.at(exchnangeNodeId)
-              .customStats
-              .at(std::string(ScaleWriterLocalPartition::kScaledWriters))
-              .sum,
-          0);
+      const auto& scaledWriters =
+          stats.customStat(ScaleWriterLocalPartition::kScaledWriters);
+      ASSERT_GT(scaledWriters.sum, 0);
       ASSERT_LE(
-          planStats.at(exchnangeNodeId)
-              .customStats
-              .at(std::string(ScaleWriterLocalPartition::kScaledWriters))
-              .sum,
-          planStats.at(exchnangeNodeId)
-                  .customStats
-                  .at(std::string(ScaleWriterLocalPartition::kScaledWriters))
-                  .count *
-              (testData.numConsumers - 1));
+          scaledWriters.sum, scaledWriters.count * (testData.numConsumers - 1));
       ASSERT_GT(nonEmptyConsumers, 1);
     } else {
-      ASSERT_EQ(
-          planStats.at(exchnangeNodeId)
-              .customStats.count(
-                  std::string(ScaleWriterLocalPartition::kScaledWriters)),
-          0);
+      ASSERT_FALSE(
+          stats.hasCustomStat(ScaleWriterLocalPartition::kScaledWriters));
       ASSERT_EQ(nonEmptyConsumers, 1);
     }
 
@@ -735,9 +721,8 @@ TEST_P(ScaleWriterLocalPartitionTestParametrized, unpartitionFuzzer) {
     Operator::registerOperator(
         std::make_unique<FakeSourceNodeFactory>(testController));
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId exchnangeNodeId;
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = PlanBuilder()
                     .addNode([&](const core::PlanNodeId& id,
                                  const core::PlanNodePtr& input) {
                       return std::make_shared<FakeSourceNode>(id, rowType_);
@@ -844,9 +829,8 @@ TEST_F(ScaleWriterLocalPartitionTest, partitionBasic) {
     Operator::registerOperator(
         std::make_unique<FakeSourceNodeFactory>(testController));
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId exchnangeNodeId;
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = PlanBuilder()
                     .addNode([&](const core::PlanNodeId& id,
                                  const core::PlanNodePtr& input) {
                       return std::make_shared<FakeSourceNode>(id, rowType_);
@@ -887,60 +871,30 @@ TEST_F(ScaleWriterLocalPartitionTest, partitionBasic) {
                     kScaleWriterMinPartitionProcessedBytesRebalanceThreshold,
                 "0")
             .copyResults(pool_.get(), task);
-    auto planStats = toPlanStats(task->taskStats());
+    const auto stats =
+        PlanNodeStats::extract(task->taskStats(), exchnangeNodeId);
     if (testData.expectedRebalance) {
       // NOTE: thre is time race across multiple drivers on the shared balancer
       // stats reporting which can't totally avoid in tests under some extreme
       // conditions like the rebalance happens on the last close driver.
-      ASSERT_LE(
-          planStats.at(exchnangeNodeId)
-              .customStats.count(
-                  std::string(
-                      ScaleWriterPartitioningLocalPartition::
-                          kScaledPartitions)),
-          1);
-      if (planStats.at(exchnangeNodeId)
-              .customStats.count(
-                  std::string(
-                      ScaleWriterPartitioningLocalPartition::
-                          kScaledPartitions)) == 1) {
+      if (stats.hasCustomStat(
+              ScaleWriterPartitioningLocalPartition::kScaledPartitions)) {
         ASSERT_GT(
-            planStats.at(exchnangeNodeId)
-                .customStats
-                .at(std::string(
-                    ScaleWriterPartitioningLocalPartition::kScaledPartitions))
-                .sum,
+            stats.customSum(
+                ScaleWriterPartitioningLocalPartition::kScaledPartitions),
             0);
       }
-      ASSERT_EQ(
-          planStats.at(exchnangeNodeId)
-              .customStats.count(
-                  std::string(
-                      ScaleWriterPartitioningLocalPartition::
-                          kRebalanceTriggers)),
-          1);
+      ASSERT_TRUE(stats.hasCustomStat(
+          ScaleWriterPartitioningLocalPartition::kRebalanceTriggers));
       ASSERT_GT(
-          planStats.at(exchnangeNodeId)
-              .customStats
-              .at(std::string(
-                  ScaleWriterPartitioningLocalPartition::kRebalanceTriggers))
-              .sum,
+          stats.customSum(
+              ScaleWriterPartitioningLocalPartition::kRebalanceTriggers),
           0);
     } else {
-      ASSERT_EQ(
-          planStats.at(exchnangeNodeId)
-              .customStats.count(
-                  std::string(
-                      ScaleWriterPartitioningLocalPartition::
-                          kScaledPartitions)),
-          0);
-      ASSERT_EQ(
-          planStats.at(exchnangeNodeId)
-              .customStats.count(
-                  std::string(
-                      ScaleWriterPartitioningLocalPartition::
-                          kRebalanceTriggers)),
-          0);
+      ASSERT_FALSE(stats.hasCustomStat(
+          ScaleWriterPartitioningLocalPartition::kScaledPartitions));
+      ASSERT_FALSE(stats.hasCustomStat(
+          ScaleWriterPartitioningLocalPartition::kRebalanceTriggers));
       verifyDisjointPartitionKeys(testController.get());
     }
     testController->clear();
@@ -976,9 +930,8 @@ TEST_P(ScaleWriterLocalPartitionTestParametrized, partitionFuzzer) {
     Operator::registerOperator(
         std::make_unique<FakeSourceNodeFactory>(testController));
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId exchnangeNodeId;
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = PlanBuilder()
                     .addNode([&](const core::PlanNodeId& id,
                                  const core::PlanNodePtr& input) {
                       return std::make_shared<FakeSourceNode>(id, rowType_);

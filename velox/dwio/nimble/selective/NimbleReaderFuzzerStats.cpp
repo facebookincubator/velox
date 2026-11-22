@@ -51,8 +51,6 @@ void updateDictionaryAwareReads(
   const std::pair<bool, std::string_view> pathsTaken[]{
       {paths.addValue(), kAddValuePath},
       {paths.addValues(), kAddValuesPath},
-      {paths.mergeBulkNullsDense(), kMergeBulkNullsDensePath},
-      {paths.mergeBulkNullsSparse(), kMergeBulkNullsSparsePath},
   };
   for (const auto& [taken, path] : pathsTaken) {
     if (taken) {

@@ -26,7 +26,7 @@
 #include <string_view>
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/common/file/FileSystems.h"
+#include "velox/common/file/File.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -188,7 +188,7 @@ BlobLocation locateBlobFromPuffinFooter(
 // ([length: 4B BE][magic][bitmap][CRC-32: 4B BE]), validating the magic and
 // CRC-32, and returns a view of the inner roaring bitmap. If 'blob' is not
 // framed (legacy raw roaring bitmap), returns it unchanged.
-std::string_view unframeDeletionVector(const std::string& blob) {
+std::string_view unframeDeletionVector(std::string_view blob) {
   constexpr size_t kLengthSize = kDeletionVectorLengthSize;
   constexpr size_t kCrcSize = kDeletionVectorCrcSize;
   constexpr size_t kHeaderSize = kLengthSize + kDeletionVectorMagicSize;
@@ -223,12 +223,28 @@ std::string_view unframeDeletionVector(const std::string& blob) {
   const auto computedCrc = static_cast<uint32_t>(crc);
   VELOX_CHECK_EQ(storedCrc, computedCrc, "Deletion-vector-v1 CRC-32 mismatch.");
 
-  return std::string_view(blob).substr(
+  return blob.substr(
       kHeaderSize, magicAndVectorLength - kDeletionVectorMagicSize);
 }
 
-uint32_t readLittleEndian32(const uint8_t* data) {
-  return readLittleEndian32(reinterpret_cast<const char*>(data));
+// Detects whether 'bitmap' is a 64-bit or legacy 32-bit roaring bitmap and
+// parses it.
+dwio::common::RoaringBitmapView parseRoaringBitmap(std::string_view bitmap) {
+  if (bitmap.size() < 8) {
+    VELOX_FAIL(
+        "Deletion vector blob too small: {} bytes, expected at least 8.",
+        bitmap.size());
+  }
+
+  // Peek at first 4 bytes to detect 32-bit vs 64-bit format. A legacy 32-bit
+  // RoaringBitmap holds positions in [0, 2^32).
+  const uint32_t firstWord = readLittleEndian32(bitmap.data());
+  const bool is32BitFormat = (firstWord == kSerialCookieNoRun) ||
+      ((firstWord & 0xFFFF) == kSerialCookie);
+  return dwio::common::RoaringBitmapView(
+      bitmap,
+      is32BitFormat ? dwio::common::RoaringBitmapView::Format::k32Bit
+                    : dwio::common::RoaringBitmapView::Format::k64Bit);
 }
 } // namespace
 
@@ -239,15 +255,18 @@ static_assert(
 DeletionVectorReader::DeletionVectorReader(
     const IcebergDeleteFile& dvFile,
     uint64_t splitOffset,
-    memory::MemoryPool* /*pool*/,
+    memory::MemoryPool* pool,
     std::shared_ptr<const config::ConfigBase> connectorConfig,
     folly::F14FastMap<std::string, std::string> fileReadOps,
     std::shared_ptr<filesystems::TokenProvider> tokenProvider)
-    : dvFile_(dvFile),
-      splitOffset_(splitOffset),
-      connectorConfig_(std::move(connectorConfig)),
-      fileReadOps_(std::move(fileReadOps)),
-      tokenProvider_(std::move(tokenProvider)) {
+    : connector::DeletionVectorReader(
+          dvFile.filePath,
+          splitOffset,
+          pool,
+          std::move(connectorConfig),
+          std::move(fileReadOps),
+          std::move(tokenProvider)),
+      dvFile_(dvFile) {
   VELOX_CHECK(
       dvFile_.content == FileContent::kDeletionVector,
       "Expected deletion vector file but got content type: {}",
@@ -262,12 +281,9 @@ DeletionVectorReader::DeletionVectorReader(
       dvFile_.recordCount);
 }
 
-void DeletionVectorReader::loadBitmap() {
-  if (loaded_) {
-    return;
-  }
-  loaded_ = true;
-
+DeletionVectorReader::Bitmap DeletionVectorReader::readBitmap(
+    ReadFile& file,
+    const FileIoContext& ioContext) {
   // Prefer the typed contentOffset / contentLength fields. The legacy
   // bounds-map encoding (kDvOffsetFieldId / kDvLengthFieldId) is kept as a
   // fallback for callers that have not migrated yet.
@@ -306,31 +322,14 @@ void DeletionVectorReader::loadBitmap() {
     haveBlobLocation = haveOffset && haveLength;
   }
 
-  // Pass the connector config (e.g. hive.manifold.* credentials) so
-  // config-requiring filesystems like Manifold resolve a properly-configured
-  // client for the Puffin read. Passing nullptr here previously left the
-  // Manifold client unconfigured and segfaulted in openFileForRead.
-  auto fs = filesystems::getFileSystem(dvFile_.filePath, connectorConfig_);
-  VELOX_CHECK_NOT_NULL(
-      fs,
-      "No filesystem registered for deletion vector file: {}",
-      dvFile_.filePath);
-  filesystems::FileOptions options;
-  options.fileReadOps = fileReadOps_;
-  options.tokenProvider = tokenProvider_;
-  auto readFile = fs->openFileForRead(dvFile_.filePath, options);
-  VELOX_CHECK_NOT_NULL(
-      readFile, "Failed to open deletion vector file: {}", dvFile_.filePath);
-
-  auto fileSize = readFile->size();
-  const FileIoContext ioContext(/*stats=*/nullptr, fileReadOps_);
+  const auto fileSize = file.size();
 
   // Nothing in the manifest located the blob. A Puffin file describes its own
   // blobs, so parse the footer rather than guessing. Non-Puffin inputs keep
   // the legacy whole-file behaviour, which is how raw roaring blobs are read.
-  if (!haveBlobLocation && startsWithPuffinMagic(*readFile, ioContext)) {
-    const auto location = locateBlobFromPuffinFooter(
-        *readFile, dvFile_.referencedDataFile, ioContext);
+  if (!haveBlobLocation && startsWithPuffinMagic(file, ioContext)) {
+    const auto location =
+        locateBlobFromPuffinFooter(file, dvFile_.referencedDataFile, ioContext);
     blobOffset = location.offset;
     blobLength = location.length;
   }
@@ -349,57 +348,20 @@ void DeletionVectorReader::loadBitmap() {
       blobOffset + blobLength,
       fileSize);
 
-  blob_.assign(blobLength, '\0');
-  readFile->pread(blobOffset, blobLength, blob_.data(), ioContext);
+  auto blob = readBytes(file, blobOffset, blobLength, ioContext);
 
   // Unwrap the Iceberg deletion-vector-v1 frame (validates magic + CRC-32),
   // then parse the inner roaring bitmap. Legacy unframed blobs pass through.
-  const auto bitmap = unframeDeletionVector(blob_);
-  bitmapOffset_ = static_cast<size_t>(bitmap.data() - blob_.data());
-  bitmapSize_ = bitmap.size();
-  parseRoaringBitmap();
-}
-
-void DeletionVectorReader::parseRoaringBitmap() {
-  if (bitmapSize_ < 8) {
-    VELOX_FAIL(
-        "Deletion vector blob too small: {} bytes, expected at least 8.",
-        bitmapSize_);
-  }
-
-  // Peek at first 4 bytes to detect 32-bit vs 64-bit format. A legacy 32-bit
-  // RoaringBitmap holds positions in [0, 2^32).
-  const uint32_t firstWord = readLittleEndian32(bitmapData());
-  const bool is32BitFormat = (firstWord == kSerialCookieNoRun) ||
-      ((firstWord & 0xFFFF) == kSerialCookie);
-  bitmap_ = dwio::common::RoaringBitmapView(
-      std::string_view(blob_).substr(bitmapOffset_, bitmapSize_),
-      is32BitFormat ? dwio::common::RoaringBitmapView::Format::k32Bit
-                    : dwio::common::RoaringBitmapView::Format::k64Bit);
-}
-
-void DeletionVectorReader::readDeletePositions(
-    uint64_t baseReadOffset,
-    uint64_t size,
-    BufferPtr deleteBitmap) {
-  loadBitmap();
-
-  const auto lower = static_cast<int64_t>(splitOffset_ + baseReadOffset);
-  bitmap_.apply(
-      lower,
-      lower + static_cast<int64_t>(size),
-      deleteBitmap->asMutable<uint8_t>());
-}
-
-bool DeletionVectorReader::noMoreData() const {
-  return loaded_ && bitmap_.exhausted();
+  auto bitmap = parseRoaringBitmap(
+      unframeDeletionVector(std::string_view(blob->as<char>(), blobLength)));
+  return {std::move(blob), std::move(bitmap)};
 }
 
 const std::vector<int64_t>& DeletionVectorReader::deletedPositions() {
-  loadBitmap();
+  const auto& deletionVector = bitmap();
   if (!positionsExpanded_) {
     positionsExpanded_ = true;
-    deletedPositions_ = bitmap_.positions();
+    deletedPositions_ = deletionVector.positions();
   }
   return deletedPositions_;
 }

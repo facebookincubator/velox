@@ -1998,13 +1998,27 @@ std::unique_ptr<index::IndexWriter> Writer::createClusterIndexWriter(
       index::IndexFamily::Cluster,
       "Cluster index configuration must use the cluster family: {}",
       config.name);
+  const auto& factory = index::clusterIndexFactory(config.name);
   index::ClusterIndexFactory::Options writerOptions{
       .keyStreamLayout = keyStreamLayout};
-  if (keyStreamLayout == index::KeyStreamLayout::kStripe) {
-    writerOptions.keyStreamId = schemaBuilder.createClusterIndexKeyStream();
+  const auto numIndexStreams = factory.numIndexStreams(keyStreamLayout);
+  if (keyStreamLayout == index::KeyStreamLayout::kPartition) {
+    NIMBLE_CHECK_EQ(
+        numIndexStreams,
+        0,
+        "A Partition layout cluster index must store no stream in stripes: {}",
+        config.name);
+  } else {
+    NIMBLE_CHECK_GT(
+        numIndexStreams,
+        0,
+        "A Stripe layout cluster index must store its keys in a stream of each stripe: {}",
+        config.name);
+    const auto streamIds =
+        schemaBuilder.createStripeIndexStreams(numIndexStreams);
+    writerOptions.indexStreamIds.assign(streamIds.begin(), streamIds.end());
   }
-  auto writer = index::clusterIndexFactory(config.name)
-                    .createWriter(config, type, pool, writerOptions);
+  auto writer = factory.createWriter(config, type, pool, writerOptions);
   NIMBLE_CHECK_NOT_NULL(
       writer, "Cluster index factory returned a null writer: {}", config.name);
   return writer;
@@ -2525,29 +2539,32 @@ void Writer::writeDictionarySection(
           fileDictionaries));
 }
 
-void Writer::writeStripeKeyStream() {
+void Writer::writeStripeIndexStreams() {
   if (clusterIndexWriter_ == nullptr) {
     return;
   }
   ensureEncodingBuffer();
-  auto chunks = clusterIndexWriter_->finishStripe(*encodingBuffer_);
-  const auto keyStreamOffset =
-      context_->schemaBuilder().clusterIndexKeyStreamOffset();
-  if (!keyStreamOffset.has_value()) {
-    NIMBLE_CHECK(
-        chunks.empty(),
-        "A cluster index without a key stream stores nothing in stripes");
-    return;
-  }
-  // The ClusterIndexGroup records the last key of one key chunk per stripe.
+  auto streams = clusterIndexWriter_->finishStripe(*encodingBuffer_);
+  const auto numStripeIndexStreams =
+      context_->schemaBuilder().stripeIndexStreamCount();
   NIMBLE_CHECK_EQ(
-      chunks.size(), 1, "The key stream of a stripe must be one key chunk");
-  NIMBLE_CHECK_LT(keyStreamOffset.value(), encodedStreams_.size());
-  auto& keyStream = encodedStreams_[keyStreamOffset.value()];
-  NIMBLE_CHECK(keyStream.chunks.empty());
-  const uint64_t keyStreamBytes = chunks.front().contentSize();
-  keyStream.chunks = std::move(chunks);
-  context_->updateStripeEncodedPhysicalSize(keyStreamBytes);
+      streams.size(),
+      numStripeIndexStreams,
+      "A cluster index must return the chunks of each of its index streams");
+  // The stripe index streams are ids [0, count). The ClusterIndexGroup records
+  // the last key of one key chunk per stripe, and the other streams of the
+  // index hold its data of the same rows.
+  for (uint32_t streamId = 0; streamId < numStripeIndexStreams; ++streamId) {
+    auto& chunks = streams[streamId];
+    NIMBLE_CHECK_EQ(
+        chunks.size(), 1, "Each index stream of a stripe must be one chunk");
+    NIMBLE_CHECK_LT(streamId, encodedStreams_.size());
+    auto& stream = encodedStreams_[streamId];
+    NIMBLE_CHECK(stream.chunks.empty());
+    const uint64_t streamBytes = chunks.front().contentSize();
+    stream.chunks = std::move(chunks);
+    context_->updateStripeEncodedPhysicalSize(streamBytes);
+  }
 }
 
 void Writer::addIndexKey(const velox::VectorPtr& input) {
@@ -3686,7 +3703,7 @@ bool Writer::writeStripe() {
     writeStreams();
   }
   writeStripeDictionaryStreams();
-  writeStripeKeyStream();
+  writeStripeIndexStreams();
 
   uint64_t stripeSize{0};
   {

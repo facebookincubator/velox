@@ -245,8 +245,9 @@ class SharedDictionaryAlphabet {
 
   /// Serializes alphabet entries into the form the constructor accepts.
   ///
-  /// candidateEncodings restricts the encoding selection policy. An empty list
-  /// falls back to the default encoding selection policy.
+  /// candidateEncodings restricts the alphabet's own encoding; nested streams
+  /// always choose from the default candidates. An empty list falls back to the
+  /// default encoding selection policy.
   template <typename T>
   static std::string_view encode(
       std::span<const T> values,
@@ -403,9 +404,14 @@ class SharedDictionaryAlphabet {
     // Compression is disabled because supportsEncodingView() only sees the
     // encoding type, so a compressed stream would be mistaken for one the
     // reader can index into.
+    //
+    // candidateEncodings restricts the alphabet's own encoding. Nested streams,
+    // such as the lengths of a string alphabet, choose from every default
+    // candidate instead of inheriting that restriction.
     const ManualEncodingSelectionPolicyFactory factory{
         encodingReadFactors(candidateEncodings),
-        /*compressionOptions=*/std::nullopt};
+        /*compressionOptions=*/std::nullopt,
+        ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors()};
     auto policy = factory.createPolicy(TypeTraits<T>::dataType);
     return std::unique_ptr<EncodingSelectionPolicy<T>>(
         static_cast<EncodingSelectionPolicy<T>*>(policy.release()));

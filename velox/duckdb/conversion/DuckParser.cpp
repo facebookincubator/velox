@@ -394,7 +394,10 @@ core::ExprPtr parseFunctionExpr(
   for (const auto& c : functionExpr.children) {
     params.emplace_back(parseExpr(*c, options));
   }
-  auto func = normalizeFuncName(functionExpr.function_name);
+  // DuckDB names both unary and binary minus "-".
+  std::string func = functionExpr.function_name == "-" && params.size() == 1
+      ? "negate"
+      : normalizeFuncName(functionExpr.function_name);
 
   if (params.size() == 1) {
     if (auto interval = tryParseInterval(func, params[0], getAlias(expr))) {

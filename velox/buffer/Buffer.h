@@ -17,6 +17,7 @@
 #pragma once
 
 #include <iomanip>
+#include <type_traits>
 
 #include <boost/intrusive_ptr.hpp>
 #include <fmt/format.h>
@@ -184,6 +185,11 @@ class Buffer {
     return (static_cast<uint8_t>(type_) & kPODMask) != 0;
   }
 
+  /// Returns the largest power of 2 that the start address is a multiple of.
+  /// A buffer with no memory, whose start is null, is aligned to any power of
+  /// 2. Vector buffers check it (see VELOX_DCHECK_BUFFER_ALIGNED).
+  size_t alignment() const;
+
   friend std::ostream& operator<<(std::ostream& os, const Buffer& buffer) {
     std::ios_base::fmtflags f(os.flags());
 
@@ -214,8 +220,9 @@ class Buffer {
   }
 
   /// Slice a buffer with specific type T.
-  /// For boolean type and if the 'offset' is not multiple of 8, return a
-  /// shifted copy, new buffer is allocated from 'pool'.
+  /// For boolean type and if the 'offset' is not multiple of 64, return a
+  /// shifted copy, new buffer is allocated from 'pool'. This keeps a sliced
+  /// bitmap 8-byte aligned.
   /// Otherwise return a BufferView into the original buffer (with shared
   /// ownership of original buffer).
   ///
@@ -845,6 +852,20 @@ class BufferView : public Buffer {
 };
 
 } // namespace facebook::velox
+
+/// Checks in debug builds that 'buffer', a BufferPtr, is null or starts at the
+/// alignment that a vector buffer of 'T' needs (see Buffer): 8 bytes for a
+/// bitmap of bool, the width of 'T' otherwise. A failure names the line that
+/// calls it.
+#define VELOX_DCHECK_BUFFER_ALIGNED(buffer, T)                      \
+  do {                                                              \
+    if ((buffer) != nullptr) {                                      \
+      VELOX_DCHECK_GE(                                              \
+          (buffer)->alignment(),                                    \
+          (std::is_same_v<T, bool> ? sizeof(uint64_t) : sizeof(T)), \
+          "Vector buffer starts at a misaligned address.");         \
+    }                                                               \
+  } while (false)
 
 // fmt formatter specialization for Buffer::Type
 template <>

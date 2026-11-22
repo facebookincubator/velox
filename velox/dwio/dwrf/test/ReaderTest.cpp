@@ -2460,6 +2460,42 @@ createWriterReader(
   return std::make_pair(std::move(writer), std::move(reader));
 }
 
+TEST_F(TestReader, partitionColumnsWithExtraFileFields) {
+  const auto fileData = makeRowVector(
+      {"data", "$row_group_id", "$row_number"},
+      {makeFlatVector<int64_t>({10, 20}),
+       makeFlatVector<StringView>({"group-a", "group-b"}),
+       makeFlatVector<int64_t>({0, 1})});
+  const auto contentSchema = ROW("data", BIGINT());
+  const auto requestedSchema = ROW({
+      {"data", BIGINT()},
+      {"ds", VARCHAR()},
+      {"pipeline", VARCHAR()},
+      {"ts", VARCHAR()},
+  });
+  const auto expected = makeRowVector(
+      requestedSchema->names(),
+      {fileData->childAt(0),
+       makeNullConstant(TypeKind::VARCHAR, 2),
+       makeNullConstant(TypeKind::VARCHAR, 2),
+       makeNullConstant(TypeKind::VARCHAR, 2)});
+  auto [writer, reader] =
+      createWriterReader({fileData}, pool(), dataIoStats_, metadataIoStats_);
+
+  for (bool projectSelectedType : {false, true}) {
+    SCOPED_TRACE(projectSelectedType);
+    RowReaderOptions options;
+    options.select(
+        std::make_shared<ColumnSelector>(requestedSchema, contentSchema));
+    options.setProjectSelectedType(projectSelectedType);
+    auto rowReader = reader->createRowReader(options);
+    VectorPtr result;
+    ASSERT_EQ(2, rowReader->next(2, result));
+    assertEqualVectors(expected, result);
+    EXPECT_EQ(0, rowReader->next(2, result));
+  }
+}
+
 struct FlatMapReaderWithKeyFilter {
   std::unique_ptr<dwrf::Writer> writer;
   std::unique_ptr<DwrfReader> reader;

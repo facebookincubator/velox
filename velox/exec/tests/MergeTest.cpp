@@ -695,9 +695,9 @@ DEBUG_ONLY_TEST_F(MergeTest, localMergeSmallBatch) {
                   .assertResults(
                       "SELECT * FROM tmp ORDER BY " + orderByClause,
                       std::vector<uint32_t>{keyIndex});
-  auto taskStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(taskStats[nodeId].outputRows, 30);
-  ASSERT_EQ(taskStats[nodeId].outputVectors, 1);
+  const auto stats = PlanNodeStats::extract(task->taskStats(), nodeId);
+  ASSERT_EQ(stats.outputRows, 30);
+  ASSERT_EQ(stats.outputVectors, 1);
   promiseThread.join();
 }
 

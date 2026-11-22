@@ -325,8 +325,8 @@ void TabletWriter::writeStripe(uint32_t rowCount, std::vector<Stream> streams) {
             })->offset +
           1;
 
-  auto& stripeStreamOffsets = streamOffsets_.emplace_back(streamCount, 0);
-  auto& stripeStreamSizes = streamSizes_.emplace_back(streamCount, 0);
+  std::vector<uint32_t> stripeStreamOffsets(streamCount, 0);
+  std::vector<uint32_t> stripeStreamSizes(streamCount, 0);
 
   finishStripeChunkStats(streamCount);
 
@@ -399,11 +399,25 @@ void TabletWriter::writeStripe(uint32_t rowCount, std::vector<Stream> streams) {
   }
 
   if (options_.stripeGroupSparseLayoutEnabled) {
-    numNonEmptyStripeGroupStreams_ += std::count_if(
-        stripeStreamSizes.begin(), stripeStreamSizes.end(), [](uint32_t size) {
-          return size != 0;
-        });
+    // The sparse layout keeps an entry only for each stream with data.
+    if (sparseStreams_.size() < streamCount) {
+      sparseStreams_.resize(streamCount);
+    }
+    for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
+      if (stripeStreamSizes[streamId] == 0) {
+        continue;
+      }
+      auto& entries = sparseStreams_[streamId];
+      entries.stripes.push_back(numGroupStripes_);
+      entries.offsets.push_back(stripeStreamOffsets[streamId]);
+      entries.sizes.push_back(stripeStreamSizes[streamId]);
+      ++numNonEmptyStripeGroupStreams_;
+    }
+  } else {
+    streamOffsets_.push_back(std::move(stripeStreamOffsets));
+    streamSizes_.push_back(std::move(stripeStreamSizes));
   }
+  ++numGroupStripes_;
 
   stripeSizes_.push_back(file_->size() - stripeOffsets_.back());
 
@@ -498,19 +512,14 @@ namespace {
 // must list only encodings with O(1) stateless point access (the EncodingView
 // requirement); the selector picks the smallest predicted size among them,
 // biased by each candidate's read weight. When `readFactors` is empty the
-// writer falls back to `kDefaultReadFactors` below.
+// writer uses metadata defaults.
 template <typename T>
 std::unique_ptr<EncodingSelectionPolicy<T>> makeMetadataEncodingPolicy(
     const std::vector<std::pair<EncodingType, float>>& readFactors) {
-  static const std::vector<std::pair<EncodingType, float>> kDefaultReadFactors{
-      {EncodingType::Constant, 1.0},
-      {EncodingType::Trivial, 1.0},
-      {EncodingType::FixedBitWidth, 1.0},
-      {EncodingType::Dictionary, 1.0},
-  };
-  ManualEncodingSelectionPolicyFactory factory{
-      readFactors.empty() ? kDefaultReadFactors : readFactors,
-      /*compressionOptions=*/std::nullopt};
+  const auto factory = readFactors.empty()
+      ? ManualEncodingSelectionPolicyFactory::createForMetadata()
+      : ManualEncodingSelectionPolicyFactory{
+            readFactors, /*compressionOptions=*/std::nullopt};
   auto base = factory.createPolicy(TypeTraits<T>::dataType);
   return std::unique_ptr<EncodingSelectionPolicy<T>>(
       static_cast<EncodingSelectionPolicy<T>*>(base.release()));
@@ -531,37 +540,6 @@ std::vector<uint32_t> transposeStreamMetadata(
     }
   }
   return streamValues;
-}
-
-// Builds the stripe list of a stream, the stripes where it has data (a non-zero
-// size), and keeps in `offsets` and `sizes` only those stripes. Returns an
-// empty list when the stream has data in every stripe, which needs no list,
-// and leaves all three empty when it has data in none.
-std::vector<uint32_t> buildStripeList(
-    std::vector<uint32_t>& offsets,
-    std::vector<uint32_t>& sizes) {
-  const auto numNonEmptyStripes = static_cast<size_t>(std::count_if(
-      sizes.begin(), sizes.end(), [](uint32_t size) { return size != 0; }));
-  if (numNonEmptyStripes == sizes.size()) {
-    return {};
-  }
-  // Sized exactly, because the deduplicating encoder keeps the arrays.
-  std::vector<uint32_t> stripes;
-  std::vector<uint32_t> listedOffsets;
-  std::vector<uint32_t> listedSizes;
-  stripes.reserve(numNonEmptyStripes);
-  listedOffsets.reserve(numNonEmptyStripes);
-  listedSizes.reserve(numNonEmptyStripes);
-  for (uint32_t stripe = 0; stripe < sizes.size(); ++stripe) {
-    if (sizes[stripe] != 0) {
-      stripes.push_back(stripe);
-      listedOffsets.push_back(offsets[stripe]);
-      listedSizes.push_back(sizes[stripe]);
-    }
-  }
-  offsets = std::move(listedOffsets);
-  sizes = std::move(listedSizes);
-  return stripes;
 }
 
 // Encodes the metadata arrays of a stream-major stripe group into
@@ -619,7 +597,7 @@ class MetadataArrayEncoder {
   // Receives the encoded entries.
   flatbuffers::FlatBufferBuilder& builder_;
 
-  // Selects the encoding of each array. Empty selects kDefaultReadFactors.
+  // Selects the encoding of each array. Empty uses metadata defaults.
   const std::vector<std::pair<EncodingType, float>>& encodingReadFactors_;
 
   // Encodes each distinct array once when true.
@@ -699,11 +677,23 @@ void TabletWriter::writeStripeGroupWithStreamMajorLayout(
   };
 
   for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
-    auto offsets =
-        transposeStreamMetadata(streamId, stripeCount, streamOffsets_);
-    auto sizes = transposeStreamMetadata(streamId, stripeCount, streamSizes_);
+    // The stream's offset and size in each stripe of the group. With the
+    // sparse layout, only in the stripes where it has data, in the order of
+    // its stripe list.
+    std::vector<uint32_t> offsets;
+    std::vector<uint32_t> sizes;
     if (sparseLayout) {
-      encodedStripes.push_back(encodeOrOmit(buildStripeList(offsets, sizes)));
+      auto& entries = sparseStreams_[streamId];
+      // A stream with data in every stripe needs no stripe list.
+      if (entries.stripes.size() == stripeCount) {
+        entries.stripes.clear();
+      }
+      encodedStripes.push_back(encodeOrOmit(std::move(entries.stripes)));
+      offsets = std::move(entries.offsets);
+      sizes = std::move(entries.sizes);
+    } else {
+      offsets = transposeStreamMetadata(streamId, stripeCount, streamOffsets_);
+      sizes = transposeStreamMetadata(streamId, stripeCount, streamSizes_);
     }
     encodedOffsets.push_back(encodeOrOmit(std::move(offsets)));
     encodedSizes.push_back(encodeOrOmit(std::move(sizes)));
@@ -799,7 +789,7 @@ TabletWriter::createOptionalMetadataSection(
 }
 
 void TabletWriter::tryWriteStripeGroup(bool force) {
-  const auto stripeCount = streamOffsets_.size();
+  const size_t stripeCount = numGroupStripes_;
   if (stripeCount == 0) {
     return;
   }
@@ -815,17 +805,20 @@ void TabletWriter::tryWriteStripeGroup(bool force) {
     return;
   }
 
-  const auto maxStreamCountIt = std::max_element(
-      streamOffsets_.begin(),
-      streamOffsets_.end(),
-      [](const auto& a, const auto& b) { return a.size() < b.size(); });
-  NIMBLE_CHECK(maxStreamCountIt != streamOffsets_.end());
+  // sparseStreams_ grows to the largest stream count of the group's stripes.
+  size_t streamCount = sparseStreams_.size();
+  if (!sparseLayout) {
+    const auto maxStreamCountIt = std::max_element(
+        streamOffsets_.begin(),
+        streamOffsets_.end(),
+        [](const auto& a, const auto& b) { return a.size() < b.size(); });
+    NIMBLE_CHECK(maxStreamCountIt != streamOffsets_.end());
+    streamCount = maxStreamCountIt->size();
+  }
 
-  const auto streamCount = maxStreamCountIt->size();
-
-  // Each stripe may have different stream count recorded.
-  // We need to pad shorter stripes to the full length of stream count.
-  // Handled by the |transposeStreamMetadata| helper inside
+  // Without the sparse layout, each stripe may have different stream count
+  // recorded. We need to pad shorter stripes to the full length of stream
+  // count. Handled by the |transposeStreamMetadata| helper inside
   // serializeStripeGroup.
   auto builder = serializeStripeGroup(streamCount, stripeCount);
   if (sparseLayout) {
@@ -843,7 +836,9 @@ void TabletWriter::tryWriteStripeGroup(bool force) {
 void TabletWriter::finishStripeGroup() {
   streamOffsets_.clear();
   streamSizes_.clear();
+  sparseStreams_.clear();
   numNonEmptyStripeGroupStreams_ = 0;
+  numGroupStripes_ = 0;
   // Move to the next stripe group
   ++stripeGroupIndex_;
 }

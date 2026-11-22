@@ -111,7 +111,7 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
   }
   auto probeType = ROW({"c0", "c1"}, {INTEGER(), BIGINT()});
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   // 100 key values in [35, 233] range.
   auto rightKey = makeFlatVector<int32_t>(
       numRowsBuild, [](auto row) { return 35 + row * 2; });
@@ -122,12 +122,12 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
   createDuckDbTable("t", {leftVectors});
   createDuckDbTable("u", {rightVectors});
 
-  auto buildSide = PlanBuilder(planNodeIdGenerator)
+  auto buildSide = builder.newPlan()
                        .values(rightVectors)
                        .project({"c0 AS u_c0", "c1 AS u_c1"})
                        .planNode();
   core::PlanNodeId leftScanId;
-  auto op = PlanBuilder(planNodeIdGenerator)
+  auto op = builder.newPlan()
                 .tableScan(probeType)
                 .capturePlanNodeId(leftScanId)
                 .hashJoin(
@@ -587,7 +587,7 @@ TEST_F(PrintPlanWithStatsTest, taskAPI) {
   });
 
   const auto plan = PlanBuilder()
-                        .tableScan(asRowType(data->type()))
+                        .tableScan(data->rowType())
                         .singleAggregation({"c0"}, {"sum(c1)"}, {})
                         .planFragment();
 

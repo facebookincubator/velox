@@ -803,19 +803,19 @@ DEBUG_ONLY_TEST_P(
             ([&](Task* /*unused*/) { taskPauseWait.notify(); })));
 
     std::thread joinThread([&]() {
-      auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+      PlanBuilder builder;
       core::PlanNodeId joinNodeId;
       auto task =
           newQueryBuilder()
               .queryCtx(joinQueryCtx)
               .serialExecution(isSerialExecutionMode_)
-              .plan(PlanBuilder(planNodeIdGenerator)
+              .plan(builder.newPlan()
                         .values(vectors)
                         .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
                         .hashJoin(
                             {"t0"},
                             {"u0"},
-                            PlanBuilder(planNodeIdGenerator)
+                            builder.newPlan()
                                 .values(vectors)
                                 .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
                                 .planNode(),
@@ -881,11 +881,10 @@ DEBUG_ONLY_TEST_P(
   ASSERT_EQ(queryCtx->pool()->capacity(), 0);
   ASSERT_EQ(queryCtx->pool()->maxCapacity(), kMemoryCapacity);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   newQueryBuilder()
       .config(core::QueryConfig::kSpillEnabled, false)
       .queryCtx(queryCtx)
-      .plan(PlanBuilder(planNodeIdGenerator, pool())
+      .plan(PlanBuilder(pool())
                 .values(vectors)
                 // Set filter projection to trigger memory allocation on
                 // driver init.

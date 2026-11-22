@@ -242,7 +242,7 @@ class ClusterIndexWriterTest : public testing::Test,
         type_,
         pool_.get(),
         {.keyStreamLayout = KeyStreamLayout::kStripe,
-         .keyStreamId = kKeyStreamId});
+         .indexStreamIds = {kKeyStreamId}});
   }
 
   velox::RowTypePtr type_;
@@ -913,7 +913,7 @@ TEST_F(ClusterIndexWriterTest, stripeKeyStreams) {
       type_,
       pool_.get(),
       {.keyStreamLayout = KeyStreamLayout::kStripe,
-       .keyStreamId = kKeyStreamId});
+       .indexStreamIds = {kKeyStreamId}});
 
   // Two stripes in one stripe group. The first stripe's keys arrive in two
   // batches. Each stripe's keys are one key chunk.
@@ -923,10 +923,13 @@ TEST_F(ClusterIndexWriterTest, stripeKeyStreams) {
   const auto firstStripe = writer->finishStripe(buffer);
   writer->write(makeKeyBatch({6, 7}));
   const auto secondStripe = writer->finishStripe(buffer);
+  // Each stripe stores one stream, its key stream.
   ASSERT_EQ(firstStripe.size(), 1);
-  EXPECT_EQ(firstStripe[0].rowCount, 5);
+  ASSERT_EQ(firstStripe[0].size(), 1);
+  EXPECT_EQ(firstStripe[0][0].rowCount, 5);
   ASSERT_EQ(secondStripe.size(), 1);
-  EXPECT_EQ(secondStripe[0].rowCount, 2);
+  ASSERT_EQ(secondStripe[0].size(), 1);
+  EXPECT_EQ(secondStripe[0][0].rowCount, 2);
 
   std::string group;
   WriteDataFn writeDataFn = [](const std::vector<std::string_view>&)
@@ -1004,7 +1007,17 @@ TEST_F(ClusterIndexWriterTest, stripeKeyStreamsRejectMisuse) {
             type_,
             pool_.get(),
             {.keyStreamLayout = KeyStreamLayout::kStripe}),
-        "Only the Stripe key stream layout has a key stream id, which it needs");
+        "A Stripe layout cluster index stores its keys in one stream of each stripe");
+  }
+  {
+    NIMBLE_ASSERT_THROW(
+        createWriter(
+            indexConfig(),
+            type_,
+            pool_.get(),
+            {.keyStreamLayout = KeyStreamLayout::kStripe,
+             .indexStreamIds = {kKeyStreamId, kKeyStreamId + 1}}),
+        "A Stripe layout cluster index stores its keys in one stream of each stripe");
   }
   {
     NIMBLE_ASSERT_THROW(
@@ -1013,8 +1026,8 @@ TEST_F(ClusterIndexWriterTest, stripeKeyStreamsRejectMisuse) {
             type_,
             pool_.get(),
             {.keyStreamLayout = KeyStreamLayout::kPartition,
-             .keyStreamId = kKeyStreamId}),
-        "Only the Stripe key stream layout has a key stream id, which it needs");
+             .indexStreamIds = {kKeyStreamId}}),
+        "A Partition layout cluster index stores no stream in stripes");
   }
   {
     auto writer = createStripeKeyStreamWriter();
@@ -1587,9 +1600,8 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
     bounds.set(
         velox::serializer::IndexBound{key, true},
         velox::serializer::IndexBound{key, true});
-    return index->lookup(
-        IndexLookup::LookupRequest::rangeScan(
-            encoder->encodeIndexBounds(bounds)));
+    return index->lookup(*IndexLookup::LookupRequest::rangeScan(
+        encoder->encodeIndexBounds(bounds)));
   };
 
   {
@@ -1813,13 +1825,12 @@ TEST_F(ClusterIndexWriterTest, hierarchicalIndexTakesTheKeysOfItsCodec) {
   };
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    const auto result = index->lookup(
-        IndexLookup::LookupRequest::rangeScan({
-            velox::serializer::EncodedKeyBounds{
-                .lowerKey = testData.lowerKey,
-                .upperKey = testData.upperKey,
-            },
-        }));
+    const auto result = index->lookup(*IndexLookup::LookupRequest::rangeScan({
+        velox::serializer::EncodedKeyBounds{
+            .lowerKey = testData.lowerKey,
+            .upperKey = testData.upperKey,
+        },
+    }));
     ASSERT_EQ(result.size(), 1);
     ASSERT_EQ(result[0].size(), 1);
     EXPECT_EQ(result[0][0].startRow, testData.startRow);
@@ -2074,9 +2085,8 @@ TEST_F(ClusterIndexWriterTest, hierarchicalFactoryUsesItsKeyFormat) {
             bound(testData.lower), testData.lowerInclusive},
         velox::serializer::IndexBound{
             bound(testData.upper), testData.upperInclusive});
-    const auto result = index->lookup(
-        IndexLookup::LookupRequest::rangeScan(
-            encoder->encodeIndexBounds(bounds)));
+    const auto result = index->lookup(*IndexLookup::LookupRequest::rangeScan(
+        encoder->encodeIndexBounds(bounds)));
     ASSERT_EQ(result.size(), 1);
     ASSERT_EQ(result[0].size(), 1);
     EXPECT_EQ(result[0][0].startRow, testData.startRow);
@@ -2207,7 +2217,7 @@ TEST_P(ClusterIndexWriterChunkTest, maxRowsPerKeyChunk) {
       .lowerKey = std::string(clusterIndex->minKey()),
       .upperKey = std::nullopt};
   auto firstResult = clusterIndex->lookup(
-      IndexLookup::LookupRequest::rangeScan({firstBounds}));
+      *IndexLookup::LookupRequest::rangeScan({firstBounds}));
   ASSERT_EQ(firstResult.size(), 1);
   ASSERT_EQ(firstResult[0].size(), 1);
   EXPECT_EQ(firstResult[0][0].startRow, 0);
@@ -2215,8 +2225,8 @@ TEST_P(ClusterIndexWriterChunkTest, maxRowsPerKeyChunk) {
   velox::serializer::EncodedKeyBounds lastBounds{
       .lowerKey = std::string(clusterIndex->maxKey()),
       .upperKey = std::nullopt};
-  auto lastResult =
-      clusterIndex->lookup(IndexLookup::LookupRequest::rangeScan({lastBounds}));
+  auto lastResult = clusterIndex->lookup(
+      *IndexLookup::LookupRequest::rangeScan({lastBounds}));
   ASSERT_EQ(lastResult.size(), 1);
   ASSERT_EQ(lastResult[0].size(), 1);
   EXPECT_EQ(lastResult[0][0].startRow, kNumRows - 1);

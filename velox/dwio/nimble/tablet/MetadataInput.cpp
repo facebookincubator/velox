@@ -29,12 +29,9 @@
 #include "velox/dwio/nimble/tablet/IoAlignment.h"
 
 #include "folly/ScopeGuard.h"
-#include "folly/io/Cursor.h"
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/BitUtil.h"
-#include "velox/common/base/CoalesceIo.h"
 #include "velox/common/memory/MemoryAllocator.h"
-#include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 
 namespace facebook::nimble {
@@ -59,55 +56,69 @@ MetadataInput::MetadataInput(velox::ReadFile* file, const Options& options)
       maxCoalesceBytes_{options.maxCoalesceBytes},
       executor_{options.executor},
       ioStats_{options.ioStats},
-      fileIoContext_{options.fileIoContext} {
-  NIMBLE_CHECK_NOT_NULL(file_);
+      fileIoContext_{options.fileIoContext},
+      alignment_{[&]() {
+        NIMBLE_CHECK_NOT_NULL(file_);
+        return readAlignment(*file_);
+      }()} {
   NIMBLE_CHECK_NOT_NULL(pool_);
   NIMBLE_CHECK_NOT_NULL(ioStats_.get());
-}
-
-std::vector<std::shared_ptr<MetadataBuffer>> MetadataInput::extractResults(
-    std::vector<LoadedSection>&& sections) {
-  std::vector<std::shared_ptr<MetadataBuffer>> results;
-  results.reserve(sections.size());
-  for (auto& loaded : sections) {
-    NIMBLE_CHECK_NOT_NULL(loaded.buffer);
-    results.emplace_back(std::move(loaded.buffer));
-  }
-  return results;
+  NIMBLE_USER_CHECK_GE(
+      options.maxCoalesceDistance,
+      0,
+      "maxCoalesceDistance must not be negative");
+  NIMBLE_USER_CHECK_GE(
+      options.maxCoalesceBytes, 0, "maxCoalesceBytes must not be negative");
+  NIMBLE_CHECK_GT(alignment_, 0);
+  NIMBLE_CHECK(
+      velox::bits::isPowerOfTwo(alignment_), "alignment must be a power of 2");
+  NIMBLE_CHECK_LE(
+      alignment_,
+      static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()),
+      "alignment exceeds the memory allocator limit");
 }
 
 void MetadataInput::readRaw(uint64_t offset, uint64_t size, void* dest) {
+  // A zero-byte read has nothing to read, and a direct-I/O read buffer cannot
+  // be empty.
+  if (size == 0) {
+    return;
+  }
+
   // Measure at nanosecond resolution so that fast (e.g. in-memory or cached)
   // reads still register a non-zero scan time; truncating to microseconds
   // would lose sub-microsecond reads entirely.
   uint64_t storageReadNs{0};
+  if (!directIo()) {
+    {
+      velox::NanosecondTimer timer{&storageReadNs};
+      file_->pread(offset, size, static_cast<char*>(dest), fileIoContext_);
+    }
+    recordReadStats(storageReadNs, size, size);
+    return;
+  }
+
+  // A direct-I/O read covers whole aligned blocks, so it cannot land in
+  // 'dest'. It reads into a scratch buffer, and the requested bytes are copied
+  // out.
+  const auto fileSize = file_->size();
+  const auto region = alignedRegion({offset, size}, alignment_, fileSize);
+  const auto allocationAlignment = static_cast<uint32_t>(std::max<uint64_t>(
+      alignment_, velox::memory::MemoryAllocator::kMinAlignment));
+  auto* buffer = static_cast<char*>(pool_->allocateAligned(
+      static_cast<int64_t>(region.length), allocationAlignment));
+  SCOPE_EXIT {
+    pool_->freeAligned(
+        buffer, static_cast<int64_t>(region.length), allocationAlignment);
+  };
   {
     velox::NanosecondTimer timer{&storageReadNs};
-    file_->pread(offset, size, static_cast<char*>(dest), fileIoContext_);
+    file_->pread(region.offset, region.length, buffer, fileIoContext_);
   }
-  const uint64_t storageReadUs = storageReadNs / 1'000;
-  ioStats_->queryThreadIoLatencyUs().increment(storageReadUs);
-  ioStats_->storageReadLatencyUs().increment(storageReadUs);
-  ioStats_->incTotalScanTimeNs(storageReadNs);
-  ioStats_->read().increment(size);
-  ioStats_->incRawBytesRead(size);
-}
+  std::memcpy(dest, buffer + (offset - region.offset), size);
 
-std::shared_ptr<MetadataBuffer> MetadataInput::decompressAndStore(
-    const MetadataSection& section,
-    velox::BufferPtr&& buffer) {
-  NIMBLE_CHECK_EQ(
-      section.size(), buffer->size(), "Buffer size mismatch with section size");
-  if (section.compressionType() == CompressionType::Uncompressed) {
-    return std::make_shared<MetadataBuffer>(toPinnedBuffer(std::move(buffer)));
-  }
-  NIMBLE_CHECK_EQ(
-      static_cast<int>(section.compressionType()),
-      static_cast<int>(CompressionType::Zstd),
-      "Unsupported metadata compression type");
-  std::string_view data{buffer->as<char>(), buffer->size()};
-  return std::make_shared<MetadataBuffer>(
-      toPinnedBuffer(ZstdCompression::uncompress(data, pool_)));
+  // A read past the end of the file returns only the bytes before the end.
+  recordReadStats(storageReadNs, fileReadBytes({&region, 1}, fileSize), size);
 }
 
 std::optional<uint32_t> MetadataInput::resolveUncompressedSize(
@@ -121,85 +132,35 @@ std::optional<uint32_t> MetadataInput::resolveUncompressedSize(
   return std::nullopt;
 }
 
-std::vector<MetadataInput::IoGroup> MetadataInput::computeIoGroups(
-    const std::vector<LoadedSection>& sections,
-    const std::vector<uint32_t>& loadIndices,
-    const std::vector<folly::Range<char*>>& readRanges) {
-  std::vector<int32_t> items(loadIndices.size());
-  std::iota(items.begin(), items.end(), 0);
-
-  int64_t coalescedBytes = 0;
-  std::vector<int32_t> groupEnds;
-
-  const auto ioStats = velox::coalesceIo<int32_t, char>(
-      items,
-      /*maxGap=*/maxCoalesceDistance_,
-      /*rangesPerIo=*/std::numeric_limits<int32_t>::max(),
-      /*offsetFunc=*/
-      [&](int32_t i) -> uint64_t {
-        return sections[loadIndices[i]].section.offset();
-      },
-      /*sizeFunc=*/
-      [&](int32_t i) -> int32_t {
-        return sections[loadIndices[i]].section.size();
-      },
-      /*numRanges=*/
-      [&](int32_t i) -> int32_t {
-        const auto size = sections[loadIndices[i]].section.size();
-        if (coalescedBytes + size > maxCoalesceBytes_) {
-          coalescedBytes = 0;
-          return velox::kNoCoalesce;
-        }
-        coalescedBytes += size;
-        return 1;
-      },
-      /*addRanges=*/
-      [&](const int32_t& /*i*/, std::vector<char>& ranges) {
-        // Dummy range so coalesceIo sees non-empty ranges for kNoCoalesce
-        // flush check.
-        ranges.push_back(0);
-      },
-      /*skipRange=*/
-      [&](int32_t /*gap*/, std::vector<char>& /*ranges*/) {},
-      /*ioFunc=*/
-      [&](const std::vector<int32_t>& /*items*/,
-          int32_t /*begin*/,
-          int32_t end,
-          uint64_t /*offset*/,
-          const std::vector<char>& /*ranges*/) {
-        coalescedBytes = 0;
-        groupEnds.push_back(end);
-      });
-
-  NIMBLE_CHECK_EQ(
-      ioStats.duplicateRegions,
-      0,
-      "Metadata input must not contain duplicate regions");
-  recordCoalescedIoStats(ioStats);
-  velox::common::testutil::TestValue::adjust(
-      "facebook::nimble::MetadataInput::computeIoGroups",
-      const_cast<velox::CoalesceIoStats*>(&ioStats));
-
-  std::vector<IoGroup> ioGroups;
-  int32_t groupStart = 0;
-  for (const auto groupEnd : groupEnds) {
-    IoGroup group;
-    group.offset = sections[loadIndices[groupStart]].section.offset();
-    auto lastEnd = group.offset;
-    for (int32_t i = groupStart; i < groupEnd; ++i) {
-      const auto& section = sections[loadIndices[i]].section;
-      if (section.offset() > lastEnd) {
-        const auto gap = section.offset() - lastEnd;
-        group.ranges.emplace_back(
-            nullptr, reinterpret_cast<char*>(static_cast<uint64_t>(gap)));
+uint64_t MetadataInput::computeIoGroups(
+    std::span<const MetadataSection> sections,
+    std::span<const uint32_t> readIndices,
+    std::span<const folly::Range<char*>> destinations,
+    std::vector<IoGroup>& ioGroups) const {
+  // The ranges of a scatter read are the destinations of its sections in file
+  // order, with a null range over each gap, which the read skips. A section
+  // that overlaps the one before it, which only a corrupt file has, starts a
+  // new read, since a scatter read cannot go back.
+  uint64_t readBytes{0};
+  for (const auto& group : coalesce(sections, readIndices)) {
+    uint64_t readEnd{0};
+    for (auto i = group.begin; i < group.end; ++i) {
+      const auto index = readIndices[i];
+      const auto& section = sections[index];
+      if (i == group.begin || section.offset() < readEnd) {
+        ioGroups.push_back(IoGroup{.offset = section.offset(), .ranges = {}});
+      } else if (section.offset() > readEnd) {
+        const auto gap = section.offset() - readEnd;
+        ioGroups.back().ranges.emplace_back(
+            nullptr, reinterpret_cast<char*>(gap));
+        readBytes += gap;
       }
-      group.ranges.emplace_back(readRanges[i]);
-      lastEnd = section.offset() + section.size();
+      ioGroups.back().ranges.push_back(destinations[index]);
+      readBytes += section.size();
+      readEnd = section.offset() + section.size();
     }
-    ioGroups.emplace_back(std::move(group));
-    groupStart = groupEnd;
   }
-  return ioGroups;
+  return readBytes;
 }
 
 void MetadataInput::executeIoGroups(std::vector<IoGroup>& ioGroups) const {
@@ -249,91 +210,6 @@ void MetadataInput::executeIoGroups(std::vector<IoGroup>& ioGroups) const {
   }
 }
 
-void MetadataInput::loadFromFile(
-    const std::vector<LoadedSection>& sections,
-    const std::vector<uint32_t>& loadIndices,
-    const std::vector<folly::Range<char*>>& readRanges) {
-  if (loadIndices.empty()) {
-    return;
-  }
-
-  // Sort by file offset for IO coalescing. Reorder both loadIndices
-  // and readRanges in lock-step. The caller's buffers[i] ↔
-  // loadIndices[i] correspondence is preserved.
-  std::vector<uint32_t> sortOrder(loadIndices.size());
-  std::iota(sortOrder.begin(), sortOrder.end(), 0);
-  std::sort(sortOrder.begin(), sortOrder.end(), [&](auto lhs, auto rhs) {
-    return sections[loadIndices[lhs]].section.offset() <
-        sections[loadIndices[rhs]].section.offset();
-  });
-
-  std::vector<uint32_t> sortedIndices(loadIndices.size());
-  std::vector<folly::Range<char*>> sortedRanges(readRanges.size());
-  for (size_t i = 0; i < sortOrder.size(); ++i) {
-    sortedIndices[i] = loadIndices[sortOrder[i]];
-    sortedRanges[i] = readRanges[sortOrder[i]];
-  }
-
-  auto ioGroups = computeIoGroups(sections, sortedIndices, sortedRanges);
-  executeIoGroups(ioGroups);
-}
-
-void MetadataInput::loadFromFile(
-    const std::vector<LoadedSection>& sections,
-    const std::vector<folly::Range<char*>>& readRanges) {
-  std::vector<uint32_t> loadIndices(sections.size());
-  std::iota(loadIndices.begin(), loadIndices.end(), 0);
-  loadFromFile(sections, loadIndices, readRanges);
-}
-
-void MetadataInput::recordCoalescedIoStats(
-    const velox::CoalesceIoStats& ioStats) {
-  ioStats_->read().increment(ioStats.payloadBytes + ioStats.extraBytes);
-  ioStats_->incRawBytesRead(ioStats.payloadBytes);
-  ioStats_->incRawOverreadBytes(ioStats.extraBytes);
-}
-
-// --- DirectMetadataInput ---
-
-DirectMetadataInput::DirectMetadataInput(
-    velox::ReadFile* file,
-    const Options& options)
-    : MetadataInput(file, options) {}
-
-void DirectMetadataInput::prepareBuffers(
-    const std::vector<LoadedSection>& sections,
-    ReadBuffers& readBuffers) {
-  readBuffers.buffers.resize(sections.size());
-  readBuffers.readRanges.resize(sections.size());
-  for (size_t i = 0; i < sections.size(); ++i) {
-    const auto size = sections[i].section.size();
-    readBuffers.buffers[i] =
-        velox::AlignedBuffer::allocateExact<char>(size, pool_);
-    readBuffers.readRanges[i] = {
-        readBuffers.buffers[i]->asMutable<char>(), size};
-  }
-}
-
-std::vector<std::shared_ptr<MetadataBuffer>> DirectMetadataInput::load(
-    std::span<const MetadataSection> sections) {
-  NIMBLE_CHECK(!sections.empty(), "No sections to load");
-
-  std::vector<LoadedSection> loadSections(sections.begin(), sections.end());
-  ReadBuffers readBuffers;
-  prepareBuffers(loadSections, readBuffers);
-
-  loadFromFile(loadSections, readBuffers.readRanges);
-
-  for (size_t i = 0; i < loadSections.size(); ++i) {
-    loadSections[i].buffer = decompressAndStore(
-        loadSections[i].section, std::move(readBuffers.buffers[i]));
-  }
-
-  return extractResults(std::move(loadSections));
-}
-
-// --- CachedMetadataInput ---
-
 namespace {
 
 // Returns the indices of 'sections' in file offset order. Fails when two
@@ -371,6 +247,252 @@ std::vector<uint32_t> sortByOffset(std::span<const MetadataSection> sections) {
   }
   return sortIndices;
 }
+
+} // namespace
+
+std::vector<MetadataInput::ReadGroup> MetadataInput::coalesce(
+    std::span<const MetadataSection> sections,
+    std::span<const uint32_t> sortedIndices) const {
+  const auto fileSize = file_->size();
+  std::vector<ReadGroup> groups;
+  uint64_t groupBytes{0};
+  for (size_t i = 0; i < sortedIndices.size(); ++i) {
+    const auto& section = sections[sortedIndices[i]];
+    const auto region =
+        alignedRegion({section.offset(), section.size()}, alignment_, fileSize);
+    if (groups.empty()) {
+      groups.push_back(ReadGroup{.region = region, .begin = i, .end = i + 1});
+      groupBytes = section.size();
+      continue;
+    }
+    auto& lastGroup = groups.back();
+    const auto groupEnd = lastGroup.region.offset + lastGroup.region.length;
+    if (region.offset < groupEnd ||
+        (region.offset - groupEnd <=
+             static_cast<uint64_t>(maxCoalesceDistance_) &&
+         groupBytes + section.size() <=
+             static_cast<uint64_t>(maxCoalesceBytes_))) {
+      lastGroup.region.length =
+          std::max(groupEnd, region.offset + region.length) -
+          lastGroup.region.offset;
+      lastGroup.end = i + 1;
+      groupBytes += section.size();
+      continue;
+    }
+    groups.push_back(ReadGroup{.region = region, .begin = i, .end = i + 1});
+    groupBytes = section.size();
+  }
+
+  uint64_t destBufferOffset{0};
+  for (auto& group : groups) {
+    group.destBufferOffset = destBufferOffset;
+    destBufferOffset += group.region.length;
+  }
+  return groups;
+}
+
+void MetadataInput::readGroups(
+    std::span<const ReadGroup> groups,
+    char* buffer,
+    uint64_t payloadBytes) const {
+  std::vector<velox::common::Region> regions;
+  std::vector<folly::Range<char*>> buffers;
+  regions.reserve(groups.size());
+  buffers.reserve(groups.size());
+  for (const auto& group : groups) {
+    regions.push_back(group.region);
+    buffers.emplace_back(
+        buffer + group.destBufferOffset,
+        static_cast<size_t>(group.region.length));
+  }
+
+  // Measure at nanosecond resolution so that fast reads still register a
+  // non-zero scan time.
+  uint64_t storageReadNs{0};
+  uint64_t bytesRead{0};
+  {
+    velox::NanosecondTimer timer{&storageReadNs};
+    bytesRead = file_->preadv(
+        folly::Range<const velox::common::Region*>(
+            regions.data(), regions.size()),
+        folly::Range<const folly::Range<char*>*>(
+            buffers.data(), buffers.size()),
+        fileIoContext_);
+  }
+
+  // A read past the end of the file returns only the bytes before the end.
+  const auto fileBytes = fileReadBytes(regions, file_->size());
+  NIMBLE_CHECK_GE(bytesRead, fileBytes, "preadv returned a short read");
+  recordReadStats(storageReadNs, fileBytes, payloadBytes);
+}
+
+void MetadataInput::recordReadStats(
+    uint64_t storageReadNs,
+    uint64_t readBytes,
+    uint64_t payloadBytes) const {
+  const uint64_t storageReadUs = storageReadNs / 1'000;
+  ioStats_->queryThreadIoLatencyUs().increment(storageReadUs);
+  ioStats_->storageReadLatencyUs().increment(storageReadUs);
+  ioStats_->incTotalScanTimeNs(storageReadNs);
+  recordReadBytes(readBytes, payloadBytes);
+}
+
+void MetadataInput::recordReadBytes(uint64_t readBytes, uint64_t payloadBytes)
+    const {
+  ioStats_->read().increment(readBytes);
+
+  // Overlapping sections, which only a corrupt file has, can make the payload
+  // exceed the bytes read.
+  const auto readPayloadBytes = std::min(payloadBytes, readBytes);
+  ioStats_->incRawBytesRead(readPayloadBytes);
+  ioStats_->incRawOverreadBytes(readBytes - readPayloadBytes);
+}
+
+void MetadataInput::readSections(
+    std::span<const MetadataSection> sections,
+    std::span<const uint32_t> sortedIndices,
+    ReadCallback callback) const {
+  std::vector<uint32_t> readIndices;
+  readIndices.reserve(sortedIndices.size());
+  uint64_t payloadBytes{0};
+  for (const auto index : sortedIndices) {
+    // An empty section needs no read, and a read buffer cannot be empty. The
+    // view still points at valid memory, as callers may pass it to memcpy.
+    if (sections[index].size() == 0) {
+      callback(index, std::string_view{"", 0});
+      continue;
+    }
+    readIndices.push_back(index);
+    payloadBytes += sections[index].size();
+  }
+  if (readIndices.empty()) {
+    return;
+  }
+
+  const auto groups = coalesce(sections, readIndices);
+  const auto bufferSize =
+      groups.back().destBufferOffset + groups.back().region.length;
+  const auto allocationAlignment = static_cast<uint32_t>(std::max<uint64_t>(
+      alignment_, velox::memory::MemoryAllocator::kMinAlignment));
+  auto* buffer = static_cast<char*>(pool_->allocateAligned(
+      static_cast<int64_t>(bufferSize), allocationAlignment));
+  SCOPE_EXIT {
+    pool_->freeAligned(
+        buffer, static_cast<int64_t>(bufferSize), allocationAlignment);
+  };
+  readGroups(groups, buffer, payloadBytes);
+
+  for (const auto& group : groups) {
+    for (auto i = group.begin; i < group.end; ++i) {
+      const auto index = readIndices[i];
+      const auto& section = sections[index];
+      callback(
+          index,
+          {buffer + group.destBufferOffset +
+               (section.offset() - group.region.offset),
+           section.size()});
+    }
+  }
+}
+
+void MetadataInput::readSections(
+    std::span<const MetadataSection> sections,
+    std::span<const uint32_t> sortedIndices,
+    std::span<const folly::Range<char*>> destinations) const {
+  NIMBLE_CHECK(!directIo(), "readSections() must not read a direct-I/O file");
+  NIMBLE_CHECK_EQ(destinations.size(), sections.size());
+  std::vector<uint32_t> readIndices;
+  readIndices.reserve(sortedIndices.size());
+  uint64_t payloadBytes{0};
+  for (const auto index : sortedIndices) {
+    NIMBLE_CHECK_EQ(
+        destinations[index].size(),
+        sections[index].size(),
+        "Destination size mismatch with section size");
+
+    // An empty section needs no read.
+    if (sections[index].size() == 0) {
+      continue;
+    }
+    readIndices.push_back(index);
+    payloadBytes += sections[index].size();
+  }
+  if (readIndices.empty()) {
+    return;
+  }
+
+  std::vector<IoGroup> ioGroups;
+  const auto readBytes =
+      computeIoGroups(sections, readIndices, destinations, ioGroups);
+  executeIoGroups(ioGroups);
+  recordReadBytes(readBytes, payloadBytes);
+}
+
+std::shared_ptr<MetadataBuffer> MetadataInput::decompress(
+    std::string_view data,
+    CompressionType compressionType) const {
+  return std::make_shared<MetadataBuffer>(
+      toPinnedBuffer(MetadataBuffer::decompress(data, compressionType, pool_)));
+}
+
+std::shared_ptr<MetadataBuffer> MetadataInput::decompress(
+    velox::BufferPtr data,
+    CompressionType compressionType) const {
+  return std::make_shared<MetadataBuffer>(toPinnedBuffer(
+      MetadataBuffer::decompress(std::move(data), compressionType, pool_)));
+}
+
+// --- DirectMetadataInput ---
+
+DirectMetadataInput::DirectMetadataInput(
+    velox::ReadFile* file,
+    const Options& options)
+    : MetadataInput(file, options) {}
+
+std::vector<std::shared_ptr<MetadataBuffer>> DirectMetadataInput::load(
+    std::span<const MetadataSection> sections) {
+  NIMBLE_CHECK(!sections.empty(), "No sections to load");
+  const auto sortedIndices = sortByOffset(sections);
+  std::vector<std::shared_ptr<MetadataBuffer>> buffers(sections.size());
+  if (directIo()) {
+    loadDirectIo(sections, sortedIndices, buffers);
+  } else {
+    loadBufferedIo(sections, sortedIndices, buffers);
+  }
+  return buffers;
+}
+
+void DirectMetadataInput::loadDirectIo(
+    std::span<const MetadataSection> sections,
+    std::span<const uint32_t> sortedIndices,
+    std::span<std::shared_ptr<MetadataBuffer>> buffers) const {
+  readSections(
+      sections, sortedIndices, [&](uint32_t index, std::string_view data) {
+        buffers[index] = decompress(data, sections[index].compressionType());
+      });
+}
+
+void DirectMetadataInput::loadBufferedIo(
+    std::span<const MetadataSection> sections,
+    std::span<const uint32_t> sortedIndices,
+    std::span<std::shared_ptr<MetadataBuffer>> buffers) const {
+  std::vector<velox::BufferPtr> readBuffers(sections.size());
+  std::vector<folly::Range<char*>> destinations(sections.size());
+  for (size_t i = 0; i < sections.size(); ++i) {
+    const auto size = sections[i].size();
+    readBuffers[i] = velox::AlignedBuffer::allocateExact<char>(size, pool_);
+    destinations[i] = {readBuffers[i]->asMutable<char>(), size};
+  }
+  readSections(sections, sortedIndices, destinations);
+  for (size_t i = 0; i < sections.size(); ++i) {
+    buffers[i] =
+        decompress(std::move(readBuffers[i]), sections[i].compressionType());
+  }
+}
+
+// --- CachedMetadataInput ---
+
+namespace {
 
 // Moves a sealed entry into bytes that keep it pinned.
 PinnedBuffer pinnedBuffer(BlockCache::Entry entry) {
@@ -425,122 +547,45 @@ CachedMetadataInput::CachedMetadataInput(
             options.fileHandle, "blockCache requires fileHandle");
         return options.fileHandle->uuid;
       }()},
-      maxCacheEntrySize_{options.maxCacheEntrySize},
-      alignment_{readAlignment(*file_)} {
+      maxCacheEntrySize_{options.maxCacheEntrySize} {
   NIMBLE_CHECK_NOT_NULL(blockCache_);
   NIMBLE_USER_CHECK(fileId_.hasValue(), "blockCache requires fileHandle->uuid");
-  NIMBLE_USER_CHECK_GE(
-      options.maxCoalesceDistance,
-      0,
-      "maxCoalesceDistance must not be negative");
-  NIMBLE_USER_CHECK_GE(
-      options.maxCoalesceBytes, 0, "maxCoalesceBytes must not be negative");
-  NIMBLE_CHECK_GT(alignment_, 0);
-  NIMBLE_CHECK(
-      velox::bits::isPowerOfTwo(alignment_), "alignment must be a power of 2");
-  NIMBLE_CHECK_LE(
-      alignment_,
-      static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()),
-      "alignment exceeds the memory allocator limit");
 }
 
-std::vector<CachedMetadataInput::ReadGroup> CachedMetadataInput::coalesce(
-    std::span<const MetadataSection> sections,
-    std::span<const uint32_t> sortedIndices) const {
-  const auto fileSize = file_->size();
-  std::vector<ReadGroup> groups;
-  uint64_t groupBytes{0};
-  for (size_t i = 0; i < sortedIndices.size(); ++i) {
-    const auto& section = sections[sortedIndices[i]];
-    const auto region =
-        alignedRegion({section.offset(), section.size()}, alignment_, fileSize);
-    if (groups.empty()) {
-      groups.push_back(ReadGroup{.region = region, .begin = i, .end = i + 1});
-      groupBytes = section.size();
+std::vector<std::shared_ptr<MetadataBuffer>> CachedMetadataInput::load(
+    std::span<const MetadataSection> sections) {
+  NIMBLE_CHECK(!sections.empty(), "No sections to load");
+  std::vector<std::shared_ptr<MetadataBuffer>> buffers(sections.size());
+  // Entries created before the read, for the read to fill.
+  std::vector<BlockCache::Entry> newEntries(sections.size());
+  std::vector<uint32_t> missIndices;
+
+  // Entries are claimed in file offset order, the order of every load of this
+  // file, so loads waiting on each other's unfilled entries cannot deadlock.
+  // The claim that cacheSection() makes after the read is the exception.
+  const auto sortedIndices = sortByOffset(sections);
+  for (const auto index : sortedIndices) {
+    auto entry = find(sections[index]);
+    if (!entry.empty() && entry.sealed()) {
+      ioStats_->incRawBytesRead(sections[index].size());
+      buffers[index] =
+          std::make_shared<MetadataBuffer>(pinnedBuffer(std::move(entry)));
       continue;
     }
-    auto& lastGroup = groups.back();
-    const auto groupEnd = lastGroup.region.offset + lastGroup.region.length;
-    if (region.offset < groupEnd ||
-        (region.offset - groupEnd <=
-             static_cast<uint64_t>(maxCoalesceDistance_) &&
-         groupBytes + section.size() <=
-             static_cast<uint64_t>(maxCoalesceBytes_))) {
-      lastGroup.region.length =
-          std::max(groupEnd, region.offset + region.length) -
-          lastGroup.region.offset;
-      lastGroup.end = i + 1;
-      groupBytes += section.size();
-      continue;
-    }
-    groups.push_back(ReadGroup{.region = region, .begin = i, .end = i + 1});
-    groupBytes = section.size();
+    newEntries[index] = std::move(entry);
+    missIndices.push_back(index);
   }
 
-  uint64_t destBufferOffset{0};
-  for (auto& group : groups) {
-    group.destBufferOffset = destBufferOffset;
-    destBufferOffset += group.region.length;
-  }
-  return groups;
-}
-
-void CachedMetadataInput::readGroups(
-    std::span<const ReadGroup> groups,
-    char* buffer,
-    uint64_t payloadBytes) const {
-  std::vector<velox::common::Region> regions;
-  std::vector<folly::Range<char*>> buffers;
-  regions.reserve(groups.size());
-  buffers.reserve(groups.size());
-  for (const auto& group : groups) {
-    regions.push_back(group.region);
-    buffers.emplace_back(
-        buffer + group.destBufferOffset,
-        static_cast<size_t>(group.region.length));
+  if (missIndices.empty()) {
+    return buffers;
   }
 
-  // Measure at nanosecond resolution so that fast reads still register a
-  // non-zero scan time.
-  uint64_t storageReadNs{0};
-  uint64_t bytesRead{0};
-  {
-    velox::NanosecondTimer timer{&storageReadNs};
-    bytesRead = file_->preadv(
-        folly::Range<const velox::common::Region*>(
-            regions.data(), regions.size()),
-        folly::Range<const folly::Range<char*>*>(
-            buffers.data(), buffers.size()),
-        fileIoContext_);
+  if (directIo()) {
+    loadDirectIo(sections, missIndices, newEntries, buffers);
+  } else {
+    loadBufferedIo(sections, missIndices, newEntries, buffers);
   }
-
-  // A read past the end of the file returns only the bytes before the end.
-  const auto fileBytes = fileReadBytes(regions, file_->size());
-  NIMBLE_CHECK_GE(bytesRead, fileBytes, "preadv returned a short read");
-  recordReadStats(storageReadNs, fileBytes, payloadBytes);
-}
-
-void CachedMetadataInput::recordReadStats(
-    uint64_t storageReadNs,
-    uint64_t readBytes,
-    uint64_t payloadBytes) const {
-  const uint64_t storageReadUs = storageReadNs / 1'000;
-  ioStats_->queryThreadIoLatencyUs().increment(storageReadUs);
-  ioStats_->storageReadLatencyUs().increment(storageReadUs);
-  ioStats_->incTotalScanTimeNs(storageReadNs);
-  recordReadBytes(readBytes, payloadBytes);
-}
-
-void CachedMetadataInput::recordReadBytes(
-    uint64_t readBytes,
-    uint64_t payloadBytes) const {
-  ioStats_->read().increment(readBytes);
-
-  // Overlapping sections, which only a corrupt file has, can make the payload
-  // exceed the bytes read.
-  const auto readPayloadBytes = std::min(payloadBytes, readBytes);
-  ioStats_->incRawBytesRead(readPayloadBytes);
-  ioStats_->incRawOverreadBytes(readBytes - readPayloadBytes);
+  return buffers;
 }
 
 void CachedMetadataInput::loadDirectIo(
@@ -548,54 +593,11 @@ void CachedMetadataInput::loadDirectIo(
     std::span<const uint32_t> missIndices,
     std::span<BlockCache::Entry> newEntries,
     std::span<std::shared_ptr<MetadataBuffer>> buffers) {
-  std::vector<uint32_t> readIndices;
-  readIndices.reserve(missIndices.size());
-  uint64_t payloadBytes{0};
-  for (const auto index : missIndices) {
-    // An empty section needs no read, and a read buffer cannot be empty. The
-    // view still points at valid memory, as cacheSection() may pass it to
-    // memcpy.
-    if (sections[index].size() == 0) {
-      buffers[index] = cacheSection(
-          sections[index],
-          std::string_view{"", 0},
-          newEntries[index],
-          /*readBuffer=*/nullptr);
-      continue;
-    }
-    readIndices.push_back(index);
-    payloadBytes += sections[index].size();
-  }
-  if (readIndices.empty()) {
-    return;
-  }
-
-  const auto groups = coalesce(sections, readIndices);
-  const auto bufferSize =
-      groups.back().destBufferOffset + groups.back().region.length;
-  const auto allocationAlignment = static_cast<uint32_t>(std::max<uint64_t>(
-      alignment_, velox::memory::MemoryAllocator::kMinAlignment));
-  auto* buffer = static_cast<char*>(pool_->allocateAligned(
-      static_cast<int64_t>(bufferSize), allocationAlignment));
-  SCOPE_EXIT {
-    pool_->freeAligned(
-        buffer, static_cast<int64_t>(bufferSize), allocationAlignment);
-  };
-  readGroups(groups, buffer, payloadBytes);
-
-  for (const auto& group : groups) {
-    for (auto i = group.begin; i < group.end; ++i) {
-      const auto index = readIndices[i];
-      const auto& section = sections[index];
-      buffers[index] = cacheSection(
-          section,
-          {buffer + group.destBufferOffset +
-               (section.offset() - group.region.offset),
-           section.size()},
-          newEntries[index],
-          /*readBuffer=*/nullptr);
-    }
-  }
+  readSections(
+      sections, missIndices, [&](uint32_t index, std::string_view data) {
+        buffers[index] = cacheSection(
+            sections[index], data, newEntries[index], /*readBuffer=*/nullptr);
+      });
 }
 
 void CachedMetadataInput::loadBufferedIo(
@@ -638,109 +640,6 @@ void CachedMetadataInput::loadBufferedIo(
     buffers[index] =
         cacheSection(section, data, entry, std::move(readBuffers[index]));
   }
-}
-
-void CachedMetadataInput::readSections(
-    std::span<const MetadataSection> sections,
-    std::span<const uint32_t> sortedIndices,
-    std::span<const folly::Range<char*>> destinations) const {
-  NIMBLE_CHECK(!directIo(), "readSections() must not read a direct-I/O file");
-  NIMBLE_CHECK_EQ(destinations.size(), sections.size());
-  std::vector<uint32_t> readIndices;
-  readIndices.reserve(sortedIndices.size());
-  uint64_t payloadBytes{0};
-  for (const auto index : sortedIndices) {
-    NIMBLE_CHECK_EQ(
-        destinations[index].size(),
-        sections[index].size(),
-        "Destination size mismatch with section size");
-
-    // An empty section needs no read.
-    if (sections[index].size() == 0) {
-      continue;
-    }
-    readIndices.push_back(index);
-    payloadBytes += sections[index].size();
-  }
-  if (readIndices.empty()) {
-    return;
-  }
-
-  // The ranges of a scatter read are the destinations of its sections in file
-  // order, with a null range over each gap, which the read skips. A section
-  // that overlaps the one before it, which only a corrupt file has, starts a
-  // new read, since a scatter read cannot go back.
-  std::vector<IoGroup> reads;
-  uint64_t readBytes{0};
-  for (const auto& group : coalesce(sections, readIndices)) {
-    uint64_t readEnd{0};
-    for (auto i = group.begin; i < group.end; ++i) {
-      const auto index = readIndices[i];
-      const auto& section = sections[index];
-      if (i == group.begin || section.offset() < readEnd) {
-        reads.push_back(IoGroup{.offset = section.offset(), .ranges = {}});
-      } else if (section.offset() > readEnd) {
-        const auto gap = section.offset() - readEnd;
-        reads.back().ranges.emplace_back(nullptr, reinterpret_cast<char*>(gap));
-        readBytes += gap;
-      }
-      reads.back().ranges.push_back(destinations[index]);
-      readBytes += section.size();
-      readEnd = section.offset() + section.size();
-    }
-  }
-  executeIoGroups(reads);
-  recordReadBytes(readBytes, payloadBytes);
-}
-
-std::shared_ptr<MetadataBuffer> CachedMetadataInput::decompress(
-    std::string_view data,
-    CompressionType compressionType) const {
-  return std::make_shared<MetadataBuffer>(
-      toPinnedBuffer(MetadataBuffer::decompress(data, compressionType, pool_)));
-}
-
-std::shared_ptr<MetadataBuffer> CachedMetadataInput::decompress(
-    velox::BufferPtr data,
-    CompressionType compressionType) const {
-  return std::make_shared<MetadataBuffer>(toPinnedBuffer(
-      MetadataBuffer::decompress(std::move(data), compressionType, pool_)));
-}
-
-std::vector<std::shared_ptr<MetadataBuffer>> CachedMetadataInput::load(
-    std::span<const MetadataSection> sections) {
-  NIMBLE_CHECK(!sections.empty(), "No sections to load");
-  std::vector<std::shared_ptr<MetadataBuffer>> buffers(sections.size());
-  // Entries created before the read, for the read to fill.
-  std::vector<BlockCache::Entry> newEntries(sections.size());
-  std::vector<uint32_t> missIndices;
-
-  // Entries are claimed in file offset order, the order of every load of this
-  // file, so loads waiting on each other's unfilled entries cannot deadlock.
-  // The claim that cacheSection() makes after the read is the exception.
-  const auto sortedIndices = sortByOffset(sections);
-  for (const auto index : sortedIndices) {
-    auto entry = find(sections[index]);
-    if (!entry.empty() && entry.sealed()) {
-      ioStats_->incRawBytesRead(sections[index].size());
-      buffers[index] =
-          std::make_shared<MetadataBuffer>(pinnedBuffer(std::move(entry)));
-      continue;
-    }
-    newEntries[index] = std::move(entry);
-    missIndices.push_back(index);
-  }
-
-  if (missIndices.empty()) {
-    return buffers;
-  }
-
-  if (directIo()) {
-    loadDirectIo(sections, missIndices, newEntries, buffers);
-  } else {
-    loadBufferedIo(sections, missIndices, newEntries, buffers);
-  }
-  return buffers;
 }
 
 std::shared_ptr<MetadataBuffer> CachedMetadataInput::cacheSection(

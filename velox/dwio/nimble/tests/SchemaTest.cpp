@@ -532,33 +532,35 @@ TEST(SchemaTests, sharedDictionaryStream) {
       "Shared dictionary value stream is not allocated");
 }
 
-TEST(SchemaTests, clusterIndexKeyStream) {
+TEST(SchemaTests, stripeIndexStreams) {
   {
     nimble::SchemaBuilder builder;
-    EXPECT_FALSE(builder.clusterIndexKeyStreamOffset().has_value());
-    EXPECT_EQ(builder.createClusterIndexKeyStream(), 0);
-    EXPECT_EQ(builder.clusterIndexKeyStreamOffset(), 0);
+    EXPECT_EQ(builder.stripeIndexStreamCount(), 0);
+    EXPECT_EQ(
+        builder.createStripeIndexStreams(2),
+        (std::vector<nimble::offset_size>{0, 1}));
+    EXPECT_EQ(builder.stripeIndexStreamCount(), 2);
 
-    // No schema node references the key stream, so the schema's streams
-    // start after it.
+    // No schema node references the stripe index streams, so the schema's
+    // streams start after them.
     auto row = builder.createRowTypeBuilder(1);
     auto scalar = builder.createScalarTypeBuilder(nimble::ScalarKind::Int32);
     row->addChild("c0", scalar);
-    EXPECT_EQ(row->nullsDescriptor().offset(), 1);
-    EXPECT_EQ(scalar->scalarDescriptor().offset(), 2);
-    EXPECT_EQ(builder.nodeCount(), 3);
+    EXPECT_EQ(row->nullsDescriptor().offset(), 2);
+    EXPECT_EQ(scalar->scalarDescriptor().offset(), 3);
+    EXPECT_EQ(builder.nodeCount(), 4);
     const auto nodes = builder.schemaNodes();
     EXPECT_EQ(nodes.size(), 2);
     for (const auto& node : nodes) {
-      EXPECT_NE(node.offset(), 0);
+      EXPECT_GE(node.offset(), 2);
     }
   }
   {
     nimble::SchemaBuilder builder;
     builder.createScalarTypeBuilder(nimble::ScalarKind::Int32);
     NIMBLE_ASSERT_THROW(
-        builder.createClusterIndexKeyStream(),
-        "The cluster index key stream must be the first stream allocated");
+        builder.createStripeIndexStreams(1),
+        "The stripe index streams must be the first streams allocated");
   }
 }
 

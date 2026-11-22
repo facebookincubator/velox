@@ -958,41 +958,46 @@ TEST_F(VectorHasherTest, int128BoundaryCollisions) {
 
 TEST_F(VectorHasherTest, int128BoundaryCollisionsForRows) {
   constexpr int32_t kNumGroups = 100;
-  constexpr int32_t kValueOffset = 0;
-  constexpr int32_t kNullByte = sizeof(int128_t);
-  constexpr int32_t kRowSize = sizeof(int128_t) + 1;
+  constexpr int32_t kNullByte = sizeof(int64_t) + sizeof(int128_t);
+  constexpr int32_t kRowSize = 32;
   constexpr uint8_t kNullMask = 1;
 
-  std::vector<std::array<char, kRowSize>> rowData(kNumGroups);
-  std::vector<char*> groups(kNumGroups);
-  for (auto row = 0; row < kNumGroups; ++row) {
-    rowData[row].fill(0);
-    groups[row] = rowData[row].data();
+  // Keep row storage aligned to exercise both aligned and unaligned keys.
+  struct alignas(16) Row {
+    std::array<char, kRowSize> data;
+  };
+  for (const int32_t valueOffset : {0, 8}) {
+    SCOPED_TRACE(valueOffset);
+    std::vector<Row> rowData(kNumGroups);
+    std::vector<char*> groups(kNumGroups);
+    for (auto row = 0; row < kNumGroups; ++row) {
+      rowData[row].data.fill(0);
+      groups[row] = rowData[row].data.data();
+      ASSERT_EQ(
+          valueOffset,
+          reinterpret_cast<uintptr_t>(groups[row] + valueOffset) %
+              alignof(int128_t));
 
-    int64_t baseValue = row % 10;
-    int128_t highBits = static_cast<int128_t>(row / 10) << 64;
-    HugeInt::serialize(highBits + baseValue, groups[row] + kValueOffset);
-  }
+      const int64_t baseValue = row % 10;
+      const int128_t highBits = static_cast<int128_t>(row / 10) << 64;
+      HugeInt::serialize(highBits + baseValue, groups[row] + valueOffset);
+    }
 
-  auto rowHasher = VectorHasher::create(HUGEINT(), 0);
-  raw_vector<uint64_t> rowResult(kNumGroups);
-
-  // Verify row-wise path used by hash table modes maps 128-bit values exactly.
-  rowHasher->analyze(
-      groups.data(), kNumGroups, kValueOffset, kNullByte, kNullMask);
-  rowHasher->enableValueIds(1, 0);
-  ASSERT_TRUE(rowHasher->computeValueIdsForRows(
-      groups.data(),
-      kNumGroups,
-      kValueOffset,
-      kNullByte,
-      kNullMask,
-      rowResult));
-
-  for (auto row = 0; row < kNumGroups; ++row) {
-    ASSERT_EQ(row + 1, rowResult[row])
-        << "Expected a distinct value id for an int128_t value that differs "
-           "only in high bits.";
+    auto rowHasher = VectorHasher::create(HUGEINT(), 0);
+    raw_vector<uint64_t> rowResult(kNumGroups);
+    rowHasher->analyze(
+        groups.data(), kNumGroups, valueOffset, kNullByte, kNullMask);
+    rowHasher->enableValueIds(1, 0);
+    ASSERT_TRUE(rowHasher->computeValueIdsForRows(
+        groups.data(),
+        kNumGroups,
+        valueOffset,
+        kNullByte,
+        kNullMask,
+        rowResult));
+    for (auto row = 0; row < kNumGroups; ++row) {
+      EXPECT_EQ(row + 1, rowResult[row]);
+    }
   }
 }
 

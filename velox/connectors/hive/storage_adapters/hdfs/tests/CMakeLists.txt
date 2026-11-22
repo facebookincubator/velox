@@ -22,6 +22,7 @@ target_link_libraries(
   velox_hdfs
   velox_core
   velox_exec_test_lib
+  velox_hive_storage_adapters_server_startup
   velox_hive_connector
   velox_dwio_common_exception
   velox_exec
@@ -62,6 +63,7 @@ target_link_libraries(
   velox_dwio_parquet_writer
   velox_hdfs
   velox_exec_test_lib
+  velox_hive_storage_adapters_server_startup
   velox_exec
   GTest::gtest
   GTest::gtest_main

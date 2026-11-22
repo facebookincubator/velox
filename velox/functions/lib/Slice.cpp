@@ -77,11 +77,14 @@ class SliceFunction : public exec::VectorFunction {
         args[2]->typeKind(),
         "Function slice() requires start and length to be the same type");
 
-    // If the 2nd and 3rd parameters are not constants, we need to ensure that
-    // the 1st parameter is not a constant, so slice() doesn't generate
-    // overlapping ranges. To prevent this, we flatten the first parameter in
-    // these cases.
-    if (!args[1]->isConstantEncoding() || !args[2]->isConstantEncoding()) {
+    // With non-constant start or length, a constant or dictionary-encoded 1st
+    // parameter maps several rows to the same input range, so slice() would
+    // generate overlapping output ranges. Flatten it into a new ArrayVector in
+    // that case. An ArrayVector input is left as is: its output ranges are
+    // sub-ranges of its own rows, and flattening it would rewrite its
+    // elements in place while other threads may be reading the same input.
+    if ((!args[1]->isConstantEncoding() || !args[2]->isConstantEncoding()) &&
+        args[0]->loadedVector()->encoding() != VectorEncoding::Simple::ARRAY) {
       BaseVector::flattenVector(args[0]);
     }
 

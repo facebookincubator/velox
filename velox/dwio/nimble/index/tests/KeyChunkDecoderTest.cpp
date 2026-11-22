@@ -62,23 +62,31 @@ class KeyChunkDecoderTest : public ::testing::TestWithParam<EncodingType> {
     return result;
   }
 
+  // Creates readers of flat keys in bytewise order.
+  static KeyReaderFactory flatKeyReaderFactory() {
+    return [](std::string_view encodedKeys,
+              std::function<void*(uint32_t)> stringBufferFactory,
+              velox::memory::MemoryPool* pool) {
+      return createFlatKeyReader(
+          encodedKeys,
+          std::move(stringBufferFactory),
+          /*comparator=*/nullptr,
+          pool);
+    };
+  }
+
   // Decodes 'chunk', whose bytes 'handle' keeps alive.
   std::shared_ptr<DecodedKeyChunk> decode(
       std::string_view chunk,
       DataInput::Handle handle) {
     return decodeKeyChunk(
-        chunk,
-        std::move(handle),
-        [](std::string_view encodedKeys,
-           std::function<void*(uint32_t)> stringBufferFactory,
-           velox::memory::MemoryPool* pool) {
-          return createFlatKeyReader(
-              encodedKeys,
-              std::move(stringBufferFactory),
-              /*comparator=*/nullptr,
-              pool);
-        },
-        leafPool_.get());
+        chunk, std::move(handle), flatKeyReaderFactory(), leafPool_.get());
+  }
+
+  // Decodes 'keyChunk', a key chunk that a caller read itself.
+  std::shared_ptr<DecodedKeyChunk> decode(
+      const IndexLookup::KeyChunk& keyChunk) {
+    return decodeKeyChunk(keyChunk, flatKeyReaderFactory(), leafPool_.get());
   }
 
   std::shared_ptr<velox::memory::MemoryPool> pool_;
@@ -233,6 +241,28 @@ TEST_P(KeyChunkDecoderTest, keepsHandleOfUncompressedChunk) {
 
   result.reset();
   EXPECT_TRUE(weakHandle.expired());
+}
+
+// Decoding a key chunk that a caller read only reads the chunk. The decoded
+// chunk holds a copy of its data handle, so it keeps the bytes alive after the
+// caller drops the chunk.
+TEST_P(KeyChunkDecoderTest, keepsDataHandleOfKeyChunk) {
+  const std::vector<std::string_view> keys = {"apple", "banana", "cherry"};
+  auto bytes = std::make_shared<std::string>(encodeChunk(keys));
+  const std::weak_ptr<std::string> weakBytes{bytes};
+
+  auto result = decode(
+      IndexLookup::KeyChunk{.stripe = 0, .data = *bytes, .dataHandle = bytes});
+  bytes.reset();
+  ASSERT_NE(result, nullptr);
+  ASSERT_NE(result->reader, nullptr);
+  EXPECT_EQ(
+      result->reader->materialize(0, 3),
+      (std::vector<std::string>{"apple", "banana", "cherry"}));
+  EXPECT_FALSE(weakBytes.expired());
+
+  result.reset();
+  EXPECT_TRUE(weakBytes.expired());
 }
 
 TEST_P(KeyChunkDecoderTest, rejectsTruncatedChunk) {

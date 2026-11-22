@@ -18,6 +18,7 @@
 #include <folly/container/F14Set.h>
 #include <algorithm>
 
+#include "velox/exec/MergeJoinStatNames.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
@@ -1729,13 +1730,13 @@ void MergeJoin::close() {
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
-        std::string(MergeJoin::kMatchedLeftRows),
+        std::string(MergeJoinStatNames::kMatchedLeftRows),
         RuntimeCounter(matchedLeftRows_));
     lockedStats->addRuntimeStat(
-        std::string(MergeJoin::kMatchedRightRows),
+        std::string(MergeJoinStatNames::kMatchedRightRows),
         RuntimeCounter(matchedRightRows_));
     lockedStats->addRuntimeStat(
-        std::string(MergeJoin::kStreamedLeftBatches),
+        std::string(MergeJoinStatNames::kStreamedLeftBatches),
         RuntimeCounter(streamedLeftBatches_));
   }
   if (rightSource_) {

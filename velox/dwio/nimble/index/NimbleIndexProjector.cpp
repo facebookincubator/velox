@@ -21,6 +21,7 @@
 #include <limits>
 #include <numeric>
 #include <optional>
+#include <typeinfo>
 #include <utility>
 
 #include "folly/ScopeGuard.h"
@@ -245,7 +246,9 @@ std::unique_ptr<NimbleIndexProjector> NimbleIndexProjector::create(
       fileHandle.file, TabletReader::configureOptions(options));
   auto projection =
       std::make_shared<NimbleTypeProjection>(buildProjectedNimbleType(
-          cached->nimbleSchema().get(), projectedSubfields));
+          cached->nimbleSchema().get(),
+          projectedSubfields,
+          &options.memoryPool()));
   // Aliased onto `cached` so the projector owns the cache entry, not just the
   // tablet. The entry holds the IoStatistics the tablet writes its metadata and
   // index reads into, and retiring it hands those totals off and stops watching
@@ -276,7 +279,8 @@ std::unique_ptr<NimbleIndexProjector> NimbleIndexProjector::create(
       std::move(projection),
       &options.memoryPool(),
       options.dataIoStats(),
-      options.verifyStreamChecksums()));
+      options.verifyStreamChecksums(),
+      options.coLoadKeyStreams()));
 }
 
 NimbleIndexProjector::NimbleIndexProjector(
@@ -286,20 +290,22 @@ NimbleIndexProjector::NimbleIndexProjector(
     std::shared_ptr<const NimbleTypeProjection> projection,
     velox::memory::MemoryPool* pool,
     std::shared_ptr<velox::io::IoStatistics> ioStats,
-    bool verifyStreamChecksums)
+    bool verifyStreamChecksums,
+    bool coLoadKeyStreams)
     : file_{std::move(file)},
       tablet_{std::move(tablet)},
       ioStats_{std::move(ioStats)},
       pool_{pool},
       clusterIndex_{velox::checkedNotNull(tablet_->clusterIndex())},
       numStripes_{tablet_->stripeCount()},
-      stripeKeyLayout_{
+      coLoadKeyStreams_{
+          coLoadKeyStreams &&
           clusterIndex_->keyStreamLayout() == index::KeyStreamLayout::kStripe},
       projection_{std::move(projection)},
       hasProjectedHybridFlatMaps_{hasProjectedHybridFlatMaps(*projection_)},
       coLoadStreamIds_{
-          stripeKeyLayout_ ? coLoadStreamIds(*projection_, *clusterIndex_)
-                           : std::vector<uint32_t>{}},
+          coLoadKeyStreams_ ? coLoadStreamIds(*projection_, *clusterIndex_)
+                            : std::vector<uint32_t>{}},
       dataInput_{std::move(dataInput)} {
   NIMBLE_CHECK(
       !tablet_->properties().hasTopLevelNulls(),
@@ -346,10 +352,11 @@ void NimbleIndexProjector::initStreamChecksum(bool verifyStreamChecksums) {
 }
 
 void NimbleIndexProjector::loadStripes(
-    const Request& request,
+    const index::IndexLookup::LookupRequest& request,
     const Options& options) {
   initRequest(request, options);
-  if (!stripeKeyLayout_ || !options.coLoadKeyStreams) {
+  if (!coLoadKeyStreams_ || request.options().rowRange.has_value() ||
+      typeid(request) != typeid(index::IndexLookup::LookupRequest)) {
     lookupRows();
     prepareStripes();
     loadStripeStreams();
@@ -365,7 +372,7 @@ void NimbleIndexProjector::loadStripes(
 }
 
 NimbleIndexProjector::SerializedResult NimbleIndexProjector::projectStreams(
-    const Request& request,
+    const index::IndexLookup::LookupRequest& request,
     const Options& options) {
   SCOPE_EXIT {
     clearRequest();
@@ -376,7 +383,7 @@ NimbleIndexProjector::SerializedResult NimbleIndexProjector::projectStreams(
 
 folly::coro::Task<NimbleIndexProjector::RowProjectionResult>
 NimbleIndexProjector::co_projectRows(
-    const Request& request,
+    const index::IndexLookup::LookupRequest& request,
     const Options& options) {
   ensureStreamReader();
   SCOPE_EXIT {
@@ -472,40 +479,34 @@ NimbleIndexProjector::co_projectRows(
 std::vector<StripeSelection> NimbleIndexProjector::lookup(
     const velox::serializer::EncodedKeyBounds& bounds) {
   std::unique_ptr<index::KeyCursor> keyCursor;
-  return lookup(bounds, keyCursor);
+  return lookup(bounds, /*keyChunk=*/std::nullopt, keyCursor);
 }
 
 std::vector<StripeSelection> NimbleIndexProjector::lookup(
     const velox::serializer::EncodedKeyBounds& bounds,
+    const std::optional<index::ClusterIndexBase::KeyChunk>& keyChunk,
     std::unique_ptr<index::KeyCursor>& keyCursor) {
   NIMBLE_CHECK_NULL(ctx_.request, "Cannot look up rows during a projection");
   OptionalCpuWallTimer timer{
       timingEnabled_, [this](const velox::CpuWallTiming& timing) {
         recordStatsTiming(&Stats::lookupTiming, timing);
       }};
-  auto result = clusterIndex().seek(bounds);
+  auto result = clusterIndex().seek(bounds, keyChunk);
   keyCursor = std::move(result.keyCursor);
   return lookup(result.rows);
 }
 
-std::vector<StripeSelection> NimbleIndexProjector::lookup(
-    std::string encodedKey) {
-  std::unique_ptr<index::KeyCursor> keyCursor;
-  return lookup(std::move(encodedKey), keyCursor);
-}
-
-std::vector<StripeSelection> NimbleIndexProjector::lookup(
-    std::string encodedKey,
-    std::unique_ptr<index::KeyCursor>& keyCursor) {
-  // The successor of a key is the key followed by a zero byte.
-  auto successor = encodedKey;
-  successor.push_back('\0');
-  return lookup(
-      velox::serializer::EncodedKeyBounds{
-          .lowerKey = std::move(encodedKey),
-          .upperKey = std::move(successor),
-      },
-      keyCursor);
+nimble::StripeRange NimbleIndexProjector::lookupStripes(
+    const velox::serializer::EncodedKeyBounds& bounds) {
+  NIMBLE_CHECK_NULL(ctx_.request, "Cannot look up rows during a projection");
+  OptionalCpuWallTimer timer{
+      timingEnabled_, [this](const velox::CpuWallTiming& timing) {
+        recordStatsTiming(&Stats::lookupTiming, timing);
+      }};
+  const auto stripes = clusterIndex_->lookupStripes(
+      *index::IndexLookup::LookupRequest::rangeScan({bounds}));
+  NIMBLE_CHECK_EQ(stripes.size(), 1);
+  return stripes.front();
 }
 
 std::vector<StripeSelection> NimbleIndexProjector::lookup(
@@ -543,24 +544,39 @@ NimbleIndexProjector::loadStripeStreams(
     clearRequest();
   };
 
-  std::vector<StripeIdentifier> stripes;
   {
     OptionalCpuWallTimer timer{
         timingEnabled_, [this](const velox::CpuWallTiming& timing) {
           recordStatsTiming(&Stats::prepareTiming, timing);
         }};
-    stripes = tablet_->stripeIdentifiers(stripeOffset, numStripes);
+    const auto stripes = tablet_->stripeIdentifiers(stripeOffset, numStripes);
     NIMBLE_CHECK_EQ(stripes.size(), numStripes);
+    // The key stream of a stripe holds the key chunk of its rows.
+    if (coLoadKeyStreams_) {
+      std::vector<uint32_t> stripeIndices(numStripes);
+      std::iota(stripeIndices.begin(), stripeIndices.end(), stripeOffset);
+      addStripesToCoLoad(stripeIndices, stripes);
+    }
     for (uint32_t i{0}; i < numStripes; ++i) {
       const auto stripeIndex = stripeOffset + i;
-      const auto streams = locateStripeStreams(stripes[i]);
+      const auto streams = coLoadKeyStreams_
+          ? locateCoLoadedStreams(stripeIndex)
+          : locateStripeStreams(stripes[i]);
       appendStripePlan(stripeIndex, /*rangeOffset=*/0, streams);
       updateStats([projectedBytes = streams.projectedBytes](Stats& stats) {
         stats.numPlannedBytes += projectedBytes;
       });
     }
   }
-  loadStripeStreams();
+
+  std::vector<index::ClusterIndexBase::KeyChunk> keyChunks;
+  if (coLoadKeyStreams_) {
+    keyChunks = loadCoLoadedStreams();
+    NIMBLE_CHECK_EQ(keyChunks.size(), numStripes);
+    assignCoLoadedStreams();
+  } else {
+    loadStripeStreams();
+  }
 
   OptionalCpuWallTimer timer{
       timingEnabled_, [this](const velox::CpuWallTiming& timing) {
@@ -598,6 +614,8 @@ NimbleIndexProjector::loadStripeStreams(
                 },
             .streams = std::move(streams),
             .dataHandle = ctx_.dataHandle,
+            .keyChunk = keyChunks.empty() ? std::nullopt
+                                          : std::make_optional(keyChunks[i]),
         });
   }
   return result;
@@ -970,11 +988,14 @@ void NimbleIndexProjector::prepareStripes() {
 }
 
 void NimbleIndexProjector::initRequest(
-    const Request& request,
+    const index::IndexLookup::LookupRequest& request,
     const Options& options) {
   NIMBLE_CHECK_NULL(ctx_.request, "Projection is not reentrant");
   NIMBLE_CHECK_NULL(ctx_.options, "Projection is not reentrant");
-  NIMBLE_CHECK_GT(request.keyBounds.size(), 0, "keyBounds must not be empty");
+  NIMBLE_USER_CHECK_EQ(
+      request.mode(),
+      index::IndexLookup::LookupRequest::Mode::RangeScan,
+      "Projection requires a range-scan request");
   NIMBLE_CHECK(
       std::isfinite(options.maxOverfetchRowsRatio) &&
           options.maxOverfetchRowsRatio >= 0.0 &&
@@ -983,7 +1004,7 @@ void NimbleIndexProjector::initRequest(
       options.maxOverfetchRowsRatio);
   ctx_.request = &request;
   ctx_.options = &options;
-  ctx_.numRequests = static_cast<uint32_t>(request.keyBounds.size());
+  ctx_.numRequests = static_cast<uint32_t>(request.size());
 }
 
 void NimbleIndexProjector::clearRequest() {
@@ -1043,13 +1064,8 @@ void NimbleIndexProjector::lookupRows() {
         recordStatsTiming(&Stats::lookupTiming, timing);
       }};
 
-  // Without a co-load, the lookup reads the key chunks that it needs from the
-  // file. A co-load loads no key chunk only when no request selects a stripe,
-  // so the lookup then reads none.
   const auto result = ctx_.coLoadedKeyChunks.empty()
-      ? clusterIndex_->lookup(
-            index::IndexLookup::LookupRequest::rangeScan(
-                ctx_.request->keyBounds))
+      ? clusterIndex_->lookup(*ctx_.request)
       : lookupCoLoadedRows();
 
   struct ResolvedRequest {
@@ -1167,7 +1183,7 @@ RowRange NimbleIndexProjector::coLoadedRequestRows(
   if (firstKeyChunk == nullptr) {
     return {};
   }
-  const auto& keyBounds = ctx_.request->keyBounds[requestIndex];
+  const auto& keyBounds = ctx_.request->rangeBound(requestIndex);
   auto startRow =
       static_cast<uint32_t>(tablet_->stripeStartRow(stripes.startStripe));
   if (keyBounds.lowerKey.has_value()) {
@@ -1361,8 +1377,7 @@ void NimbleIndexProjector::coLoadStripes() {
         timingEnabled_, [this](const velox::CpuWallTiming& timing) {
           recordStatsTiming(&Stats::lookupTiming, timing);
         }};
-    ctx_.coLoadRequestStripes = clusterIndex_->lookupStripes(
-        index::IndexLookup::LookupRequest::rangeScan(ctx_.request->keyBounds));
+    ctx_.coLoadRequestStripes = clusterIndex_->lookupStripes(*ctx_.request);
   }
   const auto& requestStripes = ctx_.coLoadRequestStripes;
   selectStripesToCoLoad(requestStripes);
@@ -1389,18 +1404,12 @@ void NimbleIndexProjector::coLoadStripes() {
     }
     if (!isCoLoaded(stripes.startStripe)) {
       NIMBLE_CHECK(
-          ctx_.request->keyBounds[requestIndex].lowerKey.has_value(),
+          ctx_.request->rangeBound(requestIndex).lowerKey.has_value(),
           "A request without a lower key must start in a loaded stripe");
       ctx_.unloadedRequests.emplace_back(requestIndex);
     }
   }
-  {
-    OptionalCpuWallTimer timer{
-        timingEnabled_, [this](const velox::CpuWallTiming& timing) {
-          recordStatsTiming(&Stats::scanTiming, timing);
-        }};
-    ctx_.coLoadedKeyChunks = loadCoLoadedStreams();
-  }
+  ctx_.coLoadedKeyChunks = loadCoLoadedStreams();
 }
 
 void NimbleIndexProjector::selectStripesToCoLoad(
@@ -1569,8 +1578,25 @@ void NimbleIndexProjector::addCoLoadedStripe(
       ctx_.coLoadedStreams.end(), streams.begin(), streams.end());
 }
 
+void NimbleIndexProjector::addStripesToCoLoad(
+    std::span<const uint32_t> stripes,
+    std::span<const StripeIdentifier> stripeIdentifiers) {
+  NIMBLE_CHECK_EQ(stripeIdentifiers.size(), stripes.size());
+  ctx_.coLoadedStripes.reserve(stripes.size());
+  ctx_.coLoadedStreams.reserve(stripes.size() * coLoadStreamIds_.size());
+  std::vector<StripeGroup::StreamMetadata> streams(coLoadStreamIds_.size());
+  for (size_t i = 0; i < stripes.size(); ++i) {
+    tablet_->streamLocations(stripeIdentifiers[i], coLoadStreamIds_, streams);
+    addCoLoadedStripe(stripes[i], streams);
+  }
+}
+
 std::vector<index::ClusterIndexBase::KeyChunk>
 NimbleIndexProjector::loadCoLoadedStreams() {
+  OptionalCpuWallTimer timer{
+      timingEnabled_, [this](const velox::CpuWallTiming& timing) {
+        recordStatsTiming(&Stats::scanTiming, timing);
+      }};
   const auto& coLoadedStripes = ctx_.coLoadedStripes;
   const auto numProjectedStreams = projection_->streamOffsets.size();
 
@@ -1613,11 +1639,13 @@ NimbleIndexProjector::coLoadedKeyChunks() const {
     // Drops the stream trailer, which the load read to verify the stream.
     keyChunks.push_back(
         {.stripe = coLoadedStripes[index],
-         .data = std::string_view{
-             dataInput_
-                 ->bufferRef(ctx_.dataInputIndices[keyStreamIndex].value())
-                 .data,
-             ctx_.coLoadedStreams[keyStreamIndex].size}});
+         .data =
+             std::string_view{
+                 dataInput_
+                     ->bufferRef(ctx_.dataInputIndices[keyStreamIndex].value())
+                     .data,
+                 ctx_.coLoadedStreams[keyStreamIndex].size},
+         .dataHandle = ctx_.dataHandle});
   }
   return keyChunks;
 }
@@ -2406,7 +2434,7 @@ void NimbleIndexProjector::prepareResumeKeys() {
       if (resumeKey.has_value()) {
         continue;
       }
-      const auto& keyBounds = ctx_.request->keyBounds[range.requestIndex];
+      const auto& keyBounds = ctx_.request->rangeBound(range.requestIndex);
       NIMBLE_CHECK(
           keyBounds.lowerKey.has_value(),
           "Request {} has no lowerKey: unbounded lower requests start from "
@@ -2421,7 +2449,7 @@ void NimbleIndexProjector::prepareResumeKeys() {
   // or not it matches rows.
   for (const auto requestIndex : ctx_.unloadedRequests) {
     ctx_.resumeKeys[requestIndex] =
-        *ctx_.request->keyBounds[requestIndex].lowerKey;
+        *ctx_.request->rangeBound(requestIndex).lowerKey;
   }
 }
 

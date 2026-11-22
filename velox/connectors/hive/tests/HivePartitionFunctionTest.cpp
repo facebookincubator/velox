@@ -950,3 +950,33 @@ TEST_F(HivePartitionFunctionTest, skew) {
           badLocalHashFunction.get())
           ->testingBucketToPartition());
 }
+
+TEST_F(HivePartitionFunctionTest, localExchangeAlignedBucketRuns) {
+  for (const int bucketCount : {1024, 1022}) {
+    for (const int numPartitions : {2, 4, 8}) {
+      SCOPED_TRACE(
+          testing::Message()
+          << "buckets " << bucketCount << ", partitions " << numPartitions);
+      connector::hive::HivePartitionFunctionSpec spec(
+          bucketCount,
+          std::vector<column_index_t>{0},
+          std::vector<VectorPtr>{});
+      const auto function = spec.create(numPartitions, /*localExchange=*/true);
+      const auto& bucketToPartition =
+          static_cast<connector::hive::HivePartitionFunction*>(function.get())
+              ->testingBucketToPartition();
+      ASSERT_EQ(bucketToPartition.size(), static_cast<size_t>(bucketCount));
+      for (int start = 0; start < bucketCount; start += numPartitions) {
+        const int end = std::min(start + numPartitions, bucketCount);
+        const std::unordered_set<int> partitions(
+            bucketToPartition.begin() + start, bucketToPartition.begin() + end);
+        ASSERT_EQ(partitions.size(), static_cast<size_t>(end - start)) << start;
+      }
+      const auto other = spec.create(numPartitions, /*localExchange=*/true);
+      ASSERT_EQ(
+          bucketToPartition,
+          static_cast<connector::hive::HivePartitionFunction*>(other.get())
+              ->testingBucketToPartition());
+    }
+  }
+}
