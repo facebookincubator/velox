@@ -351,7 +351,7 @@ void MetadataInput::recordReadBytes(uint64_t readBytes, uint64_t payloadBytes)
 void MetadataInput::readSections(
     std::span<const MetadataSection> sections,
     std::span<const uint32_t> sortedIndices,
-    ReadCallback callback) const {
+    const ReadCallback& callback) const {
   std::vector<uint32_t> readIndices;
   readIndices.reserve(sortedIndices.size());
   uint64_t payloadBytes{0};
