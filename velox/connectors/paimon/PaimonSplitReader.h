@@ -71,11 +71,14 @@ class PaimonSplitReader : public connector::FileSplitReader {
     runtimeStats_ = &runtimeStats;
   }
 
- private:
-  // Builds a FileConnectorSplit from a PaimonDataFile.
-  std::shared_ptr<connector::FileConnectorSplit> makeFileConnectorSplit(
-      const PaimonDataFile& dataFile) const;
+  /// Builds the FileConnectorSplit that reads 'dataFile' of 'paimonSplit'.
+  /// Reader options come from the split of the first file, so every split of
+  /// a Paimon file must come from here.
+  static std::shared_ptr<connector::FileConnectorSplit> makeFileConnectorSplit(
+      const PaimonConnectorSplit& paimonSplit,
+      const PaimonDataFile& dataFile);
 
+ private:
   // Reuses the current reader or lazily prepares the next non-empty file.
   // Returns false when no files remain.
   bool ensureFileSplitReader();
