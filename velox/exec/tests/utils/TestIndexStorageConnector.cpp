@@ -19,6 +19,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/exec/IndexLookupJoin.h"
+#include "velox/exec/IndexLookupJoinStatNames.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
@@ -69,12 +70,9 @@ std::shared_ptr<TestIndexTable> TestIndexTable::create(
   // Create the table.
   auto table = HashTable<false>::createForJoin(
       std::move(hashers),
-      /*dependentTypes=*/dependentTypes,
-      /*allowDuplicates=*/true,
-      /*hasProbedFlag=*/false,
-      /*hasCountFlag=*/false,
-      /*minTableSizeForParallelJoinBuild=*/1,
-      &pool);
+      dependentTypes,
+      &pool,
+      {.allowDuplicates = true, .minTableSizeForParallelJoinBuild = 1});
 
   // Insert data into the row container.
   auto* rowContainer = table->rows();
@@ -199,7 +197,7 @@ size_t countEqualJoinKeys(
 // 'result'. Reuses 'result' children where possible.
 void extractColumns(
     BaseHashTable* table,
-    folly::Range<char* const*> rows,
+    RowSpan rows,
     folly::Range<const IdentityProjection*> projections,
     memory::MemoryPool* pool,
     const std::vector<TypePtr>& resultTypes,
@@ -347,13 +345,13 @@ void TestIndexSource::recordCpuTiming(const CpuWallTiming& timing) {
   std::lock_guard<std::mutex> l(mutex_);
   if (timing.wallNanos != 0) {
     addOperatorRuntimeStats(
-        std::string(IndexLookupJoin::kConnectorLookupWallTime),
+        std::string(IndexLookupJoinStatNames::kConnectorLookupWallTime),
         RuntimeCounter(timing.wallNanos, RuntimeCounter::Unit::kNanos),
         runtimeStats_);
     // This is just for testing purpose to check if the runtime stats has been
     // set properly.
     addOperatorRuntimeStats(
-        std::string(IndexLookupJoin::kClientLookupWaitWallTime),
+        std::string(IndexLookupJoinStatNames::kClientLookupWaitWallTime),
         RuntimeCounter(timing.wallNanos, RuntimeCounter::Unit::kNanos),
         runtimeStats_);
   }
@@ -361,7 +359,7 @@ void TestIndexSource::recordCpuTiming(const CpuWallTiming& timing) {
     // This is just for testing purpose to check if the runtime stats has been
     // set properly.
     addOperatorRuntimeStats(
-        std::string(IndexLookupJoin::kConnectorResultPrepareTime),
+        std::string(IndexLookupJoinStatNames::kConnectorResultPrepareTime),
         RuntimeCounter(timing.cpuNanos, RuntimeCounter::Unit::kNanos),
         runtimeStats_);
   }
@@ -426,7 +424,7 @@ TestIndexSource::ResultIterator::next(
 }
 
 void TestIndexSource::ResultIterator::extractLookupColumns(
-    folly::Range<char* const*> rows,
+    RowSpan rows,
     RowVectorPtr& result) {
   if (result == nullptr) {
     result = BaseVector::create<RowVector>(
@@ -498,8 +496,8 @@ TestIndexSource::ResultIterator::syncLookup(vector_size_t size) {
     auto numOut = source_->indexTable()->table->listJoinResults(
         *lookupResultIter_,
         /*includeMisses=*/true,
-        folly::Range(rawInputRowMapping_, size),
-        folly::Range(rawOutputRowMapping_, size),
+        std::span(rawInputRowMapping_, size),
+        std::span(rawOutputRowMapping_, size),
         // TODO: support max bytes output later.
         /*maxBytes=*/std::numeric_limits<uint64_t>::max());
     outputRowMapping_->setSize(numOut * sizeof(char*));
@@ -530,9 +528,7 @@ TestIndexSource::ResultIterator::syncLookup(vector_size_t size) {
     }
     outputRowMapping_->setSize(numHits * sizeof(char*));
     inputHitIndices_->setSize(numHits * sizeof(vector_size_t));
-    extractLookupColumns(
-        folly::Range<char* const*>(rawOutputRowMapping_, numHits),
-        lookupOutput_);
+    extractLookupColumns(RowSpan(rawOutputRowMapping_, numHits), lookupOutput_);
     VELOX_CHECK_EQ(lookupOutput_->size(), numHits);
     VELOX_CHECK_EQ(inputHitIndices_->size() / sizeof(vector_size_t), numHits);
     return std::make_unique<connector::IndexSource::Result>(
@@ -584,7 +580,7 @@ RowVectorPtr TestIndexSource::ResultIterator::createConditionInput() {
 
   extractColumns(
       source_->indexTable()->table.get(),
-      folly::Range<char* const*>(rawOutputRowMapping_, numRows),
+      RowSpan(rawOutputRowMapping_, numRows),
       source_->conditionTableProjections_,
       source_->pool_.get(),
       source_->conditionInputType_->children(),

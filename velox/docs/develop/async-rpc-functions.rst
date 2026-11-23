@@ -331,6 +331,15 @@ A later query whose resolved policy differs runs under a limiter for that
 policy, so the limiters for one key can together admit the sum of their
 ceilings. Each limiter lives until the worker restarts.
 
+``CAPACITY_PROBING`` cuts and regrows differently only for rejections the
+function names as a lack of serving capacity; its faster startup and larger
+driver windows apply to every query that opts in. To name such rejections,
+return a ``CapacityRetry``
+whose ``cause`` is ``CapacityRetryCause::kCapacity`` when the backend is out of
+serving capacity, or ``kQuota`` for a rate quota such as requests or tokens per
+minute. The default, ``kUnknown``, is answered as a quota is, which is how
+``WINDOW_AIMD`` answers every rejection.
+
 With ``rpc.ratelimiter.hard_limit=0`` and no function ceiling,
 ``rpcRateLimiterHardLimit`` is 1,000,000 while the current and lifetime
 low-water windows start at 200. A low-water value of 200 therefore does not
@@ -343,6 +352,9 @@ within ``rpc.ratelimiter.max_probe_interval_ms`` (60 seconds by default) while
 rejections return quickly. A probe that hangs until it times out holds the only
 paced slot, so timeouts space probes at least one timeout apart. The floor is
 also a minimum load of one probe per interval per worker; zero removes it.
+Under ``CAPACITY_PROBING`` a capacity rejection can cut the window below one
+call whatever ``rpc.ratelimiter.min_limit`` is, so this floor is what still
+admits one call per interval while the backend rejects everything.
 Healthy completions never shrink the window: after the first paced success it
 doubles every service horizon back to 1, then additive growth resumes, clamped
 at the hard limit. A non-overload failure stops that growth until the next
@@ -356,6 +368,15 @@ divide: pacing time over attached time is the share of attached time spent
 pacing, and the window integral over attached seconds is the average committed
 window in thousandths of a unit; recovery growth counts once the limiter commits
 it to the window. Prestissimo publishes them as ``RPC.<planNodeId>.<name>``.
+
+To see whether a query's session limits replaced its function's bounds, compare
+``rpcFunctionCeiling`` with ``rpcRateLimiterHardLimit``, and
+``rpcFunctionFloorMilli`` with ``rpcRateLimiterFloorMilli``. The function's
+stats appear only when it declares that bound. ``rpcRateLimiterFloorMilli`` is
+the floor the limiter enforces, raised to the probe floor, and appears only
+when the limiter adapts and that floor is below its ceiling. Floors are in
+thousandths of an admission unit. Every driver reports the same values, so
+compare the maximum per plan node; the sum grows with the number of drivers.
 
 ``evaluateCongestion()`` returns one of five verdicts. Canonical typed overload
 backs off shared admission at completion time before its lease is released; the

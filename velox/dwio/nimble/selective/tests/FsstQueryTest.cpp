@@ -15,6 +15,8 @@
  */
 
 #include <folly/Conv.h>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <optional>
@@ -33,6 +35,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 namespace facebook::nimble::test {
 namespace {
@@ -82,7 +85,7 @@ class FsstQueryTest : public HiveConnectorTestBase,
   }
 
   void TearDown() override {
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
     unregisterSelectiveNimbleReaderFactory();
     HiveConnectorTestBase::TearDown();
   }
@@ -236,10 +239,7 @@ class FsstQueryTest : public HiveConnectorTestBase,
   }
 
   // Builds the same consuming operators for the original-row and file arms.
-  core::PlanNodePtr finishPlan(
-      PlanBuilder& builder,
-      QueryAction action,
-      const std::shared_ptr<core::PlanNodeIdGenerator>& ids) {
+  core::PlanNodePtr finishPlan(PlanBuilder& builder, QueryAction action) {
     switch (action) {
       case QueryAction::kProject:
         return builder.project({"id", "value"}).planNode();
@@ -276,7 +276,7 @@ class FsstQueryTest : public HiveConnectorTestBase,
             .hashJoin(
                 {"value"},
                 {"key"},
-                PlanBuilder(ids, pool_.get()).values({right}).planNode(),
+                builder.newPlan().values(right).planNode(),
                 "",
                 {"id", "value", "label"},
                 action == QueryAction::kInnerJoin ? core::JoinType::kInner
@@ -294,11 +294,10 @@ class FsstQueryTest : public HiveConnectorTestBase,
       const std::vector<QueryCase>& queries) {
     auto file = writeInput(batches);
     ASSERT_FALSE(HasFatalFailure());
-    const auto type = asRowType(batches[0]->type());
+    const auto type = batches[0]->rowType();
     for (const auto& query : queries) {
       SCOPED_TRACE(query.name);
-      auto referenceIds = std::make_shared<core::PlanNodeIdGenerator>();
-      PlanBuilder referenceBuilder(referenceIds, pool_.get());
+      PlanBuilder referenceBuilder(pool_.get());
       referenceBuilder.values(batches);
       for (const auto& filter : query.pushdownFilters) {
         referenceBuilder.filter(filter);
@@ -307,44 +306,54 @@ class FsstQueryTest : public HiveConnectorTestBase,
         referenceBuilder.filter(query.remainingFilter);
       }
       const auto reference =
-          AssertQueryBuilder(
-              finishPlan(referenceBuilder, query.action, referenceIds))
+          AssertQueryBuilder(finishPlan(referenceBuilder, query.action))
               .copyResults(pool_.get());
       for (const bool fastPath : {false, true}) {
         for (const bool preserve : {false, true}) {
-          SCOPED_TRACE(
-              fmt::format("fastPath={}, preserve={}", fastPath, preserve));
-          auto ids = std::make_shared<core::PlanNodeIdGenerator>();
-          PlanBuilder builder(ids, pool_.get());
-          builder.tableScan(type, query.pushdownFilters, query.remainingFilter);
-          core::PlanNodeId scanId;
-          builder.capturePlanNodeId(scanId);
-          auto plan = finishPlan(builder, query.action, ids);
-          auto split = HiveConnectorSplitBuilder(file->getPath())
-                           .fileFormat(dwio::common::FileFormat::NIMBLE)
-                           .build();
-          const auto actual =
-              AssertQueryBuilder(plan)
-                  .split(scanId, split)
-                  .config(
-                      core::QueryConfig::kPreferredOutputBatchRows,
-                      fastPath ? 113 : 7)
-                  .connectorSessionProperty(
-                      kHiveConnectorId,
-                      connector::FileConfig::kNimbleScanFastPathSession,
-                      fastPath ? "true" : "false")
-                  .connectorSessionProperty(
-                      kHiveConnectorId,
-                      connector::FileConfig::
-                          kNimblePreserveDictionaryEncodingSession,
-                      preserve ? "true" : "false")
-                  .copyResults(pool_.get());
-          ASSERT_TRUE(assertEqualResults({reference}, {actual}));
-          if (query.action == QueryAction::kOrderAscending ||
-              query.action == QueryAction::kOrderDescending) {
-            ASSERT_EQ(reference->size(), actual->size());
-            for (vector_size_t row = 0; row < reference->size(); ++row) {
-              ASSERT_TRUE(reference->equalValueAt(actual.get(), row, row));
+          for (const bool cache : {false, true}) {
+            SCOPED_TRACE(
+                fmt::format(
+                    "fastPath={}, preserve={}, cache={}",
+                    fastPath,
+                    preserve,
+                    cache));
+            PlanBuilder builder(pool_.get());
+            builder.tableScan(
+                type, query.pushdownFilters, query.remainingFilter);
+            core::PlanNodeId scanId;
+            builder.capturePlanNodeId(scanId);
+            auto plan = finishPlan(builder, query.action);
+            auto split = HiveConnectorSplitBuilder(file->getPath())
+                             .fileFormat(dwio::common::FileFormat::NIMBLE)
+                             .build();
+            const auto actual =
+                AssertQueryBuilder(plan)
+                    .split(scanId, split)
+                    .config(
+                        core::QueryConfig::kPreferredOutputBatchRows,
+                        fastPath ? 113 : 7)
+                    .connectorSessionProperty(
+                        kHiveConnectorId,
+                        connector::FileConfig::kNimbleScanFastPathSession,
+                        fastPath ? "true" : "false")
+                    .connectorSessionProperty(
+                        kHiveConnectorId,
+                        connector::FileConfig::
+                            kNimblePreserveDictionaryEncodingSession,
+                        preserve ? "true" : "false")
+                    .connectorSessionProperty(
+                        kHiveConnectorId,
+                        connector::FileConfig::
+                            kNimbleFsstDecodeRepeatedPayloadsSession,
+                        cache ? "true" : "false")
+                    .copyResults(pool_.get());
+            ASSERT_TRUE(assertEqualResults({reference}, {actual}));
+            if (query.action == QueryAction::kOrderAscending ||
+                query.action == QueryAction::kOrderDescending) {
+              ASSERT_EQ(reference->size(), actual->size());
+              for (vector_size_t row = 0; row < reference->size(); ++row) {
+                ASSERT_TRUE(reference->equalValueAt(actual.get(), row, row));
+              }
             }
           }
         }
@@ -352,6 +361,46 @@ class FsstQueryTest : public HiveConnectorTestBase,
     }
   }
 };
+
+// Exports verified physical files and original rows for the local Presto SQL
+// harness. The environment variable keeps this opt-in fixture out of CI runs.
+TEST_P(FsstQueryTest, exportPrestoFixtures) {
+  const auto* exportDir = std::getenv("FSST_PRESTO_EXPORT_DIR");
+  if (exportDir == nullptr) {
+    GTEST_SKIP();
+  }
+  const auto batches = makeInput(false);
+  const auto file = writeInput(batches);
+  ASSERT_FALSE(HasFailure());
+  const auto layout = folly::to<std::string>(static_cast<int>(GetParam()));
+  const auto dir = std::filesystem::path(exportDir) / layout;
+  std::filesystem::create_directories(dir);
+  std::filesystem::copy_file(
+      file->getPath(),
+      dir / "data.nimble",
+      std::filesystem::copy_options::overwrite_existing);
+  std::ofstream rows(dir / "original.tsv");
+  constexpr std::string_view hex = "0123456789abcdef";
+  for (const auto& batch : batches) {
+    const auto* ids = batch->childAt(0)->as<FlatVector<int64_t>>();
+    const auto* strings = batch->childAt(1)->as<FlatVector<StringView>>();
+    const auto* gates = batch->childAt(2)->as<FlatVector<int64_t>>();
+    for (vector_size_t row = 0; row < batch->size(); ++row) {
+      rows << ids->valueAt(row) << '\t';
+      if (strings->isNullAt(row)) {
+        rows << "NULL";
+      } else {
+        const auto value = strings->valueAt(row);
+        for (const unsigned char byte : value) {
+          rows << hex[byte >> 4] << hex[byte & 15];
+        }
+      }
+      rows << '\t' << gates->valueAt(row) << '\n';
+    }
+  }
+  rows.close();
+  ASSERT_TRUE(rows.good());
+}
 
 TEST_P(FsstQueryTest, queryOperators) {
   checkQueries(

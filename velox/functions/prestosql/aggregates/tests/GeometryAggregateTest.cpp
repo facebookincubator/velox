@@ -46,14 +46,15 @@ class GeometryAggregateTest : public AggregationTestBase {
       outputSql = "SELECT NULL";
     }
 
-    testAggregations(
-        [&](exec::test::PlanBuilder& builder) {
-          builder.values({data}).project({"st_geometryfromtext(c0) AS geom"});
-        },
-        {},
-        {fmt::format("{}(geom) as agg", aggregation)},
-        {"st_astext(agg)"},
-        [&](auto& builder) { return builder.assertResults(outputSql); });
+    AggregationTester(*this)
+        .inputs(data)
+        .preAggregation([&](auto& builder) {
+          builder.project({"st_geometryfromtext(c0) AS geom"});
+        })
+        .aggregates({fmt::format("{}(geom) as agg", aggregation)})
+        .project({"st_astext(agg)"})
+        .assertResults(
+            [&](auto& builder) { return builder.assertResults(outputSql); });
   }
 };
 

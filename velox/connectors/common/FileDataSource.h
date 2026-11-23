@@ -53,6 +53,13 @@ struct FileScanBatchEvent : public core::ScanBatchEvent {
   /// Bytes fetched from storage producing this batch, including any read
   /// amplification from coalescing adjacent regions.
   uint64_t storageReadBytes{0};
+  /// The split this batch was read from.
+  const FileConnectorSplit* split{nullptr};
+  /// File row number where this batch's read started. The read covered rows
+  /// [rowStart, rowStart + numRows), including rows filters removed inside the
+  /// scan. dwio::common::RowReader::kAtEnd when the split reader opens its file
+  /// inside the read, as Paimon does.
+  int64_t rowStart{0};
 };
 
 class FileConfig;
@@ -118,6 +125,13 @@ class FileDataSource : public DataSource {
 
   void setFromDataSource(std::unique_ptr<DataSource> sourceUnique) override;
 
+  /// Sets the options passed to the split reader's prepareSplit() for every
+  /// split added after this call. The reader forwards them to the FileSystem
+  /// when it opens the file and on every read. Empty by default.
+  void setFileReadOps(folly::F14FastMap<std::string, std::string> fileReadOps) {
+    fileReadOps_ = std::move(fileReadOps);
+  }
+
   int64_t estimatedRowSize() override;
 
   const common::SubfieldFilters* getFilters() const override {
@@ -130,6 +144,12 @@ class FileDataSource : public DataSource {
 
  protected:
   virtual std::unique_ptr<FileSplitReader> createSplitReader();
+
+  // Returns true to skip 'split_' without opening its file. The split then
+  // returns no rows and counts toward skippedSplits.
+  virtual bool skipSplit() {
+    return false;
+  }
 
   FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const ioExecutor_;
@@ -162,6 +182,10 @@ class FileDataSource : public DataSource {
   // Cumulative dataIoStats_->read().sum() as of the last scan batch event, so
   // each event reports only the bytes read since the previous one.
   uint64_t lastEventStorageReadBytes_{0};
+
+  // File row number where the last read started. The scan batch event of that
+  // read reports it as rowStart.
+  int64_t lastReadStart_{0};
 
   /// Column handles for the split info columns keyed on their column names.
   std::unordered_map<std::string, FileColumnHandlePtr> infoColumns_;
@@ -229,6 +253,8 @@ class FileDataSource : public DataSource {
   /// HiveColumnHandle::postProcessor(). Applied after reading and filtering to
   /// transform column values. Indexed by output column position.
   std::vector<std::function<void(VectorPtr&)>> columnPostProcessors_;
+  // Passed to the split reader for each split. See setFileReadOps().
+  folly::F14FastMap<std::string, std::string> fileReadOps_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   RowVectorPtr emptyOutput_;
   std::atomic_uint64_t totalRemainingFilterTime_{0};

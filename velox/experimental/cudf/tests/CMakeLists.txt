@@ -33,7 +33,7 @@ set(CUDF_TESTS_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
 #     [TIMEOUT <seconds>]
 #   )
 #
-# gtest and gtest_main are always appended to LIBS.
+# gtest, gtest_main and gmock are always appended to LIBS.
 # Default timeout: 300 seconds
 function(velox_add_cudf_test)
   set(options "")
@@ -49,7 +49,7 @@ function(velox_add_cudf_test)
   set_target_properties(${ARG_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CUDF_TESTS_OUTPUT_DIR})
   add_test(NAME ${ARG_NAME} COMMAND ${ARG_NAME} WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
   set_tests_properties(${ARG_NAME} PROPERTIES LABELS cuda_driver TIMEOUT ${ARG_TIMEOUT})
-  target_link_libraries(${ARG_NAME} ${ARG_LIBS} gtest gtest_main)
+  target_link_libraries(${ARG_NAME} ${ARG_LIBS} gtest gtest_main gmock)
 endfunction()
 
 if(VELOX_ENABLE_ABFS)
@@ -66,6 +66,7 @@ if(VELOX_ENABLE_ABFS)
       velox_file
       velox_exec
       velox_exec_test_lib
+      velox_hive_storage_adapters_server_startup
       velox_test_util
   )
   target_compile_options(velox_cudf_abfs_read_test PRIVATE -Wno-deprecated-declarations)
@@ -110,7 +111,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_gpu_capabilities_test
   SOURCES Main.cpp GpuCapabilitiesTest.cpp
-  LIBS velox_cudf_exec Folly::folly gmock
+  LIBS velox_cudf_exec Folly::folly
 )
 
 velox_add_cudf_test(
@@ -129,7 +130,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_vector_test
   SOURCES Main.cpp CudfVectorTest.cpp
-  LIBS velox_cudf_vector velox_vector_test_lib cudf::cudf
+  LIBS velox_cudf_vector velox_vector_test_lib cudf::cudf gmock
 )
 
 velox_add_cudf_test(
@@ -261,6 +262,12 @@ velox_add_cudf_test(
   LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
 )
 
+velox_add_cudf_test(
+  NAME velox_cudf_presto_page_device_test
+  SOURCES Main.cpp PrestoPageDeviceTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_presto_serializer
+)
+
 if(VELOX_ENABLE_S3)
   velox_add_cudf_test(
     NAME velox_cudf_s3_read_test
@@ -270,6 +277,7 @@ if(VELOX_ENABLE_S3)
       velox_cudf_hive_connector
       velox_exec
       velox_exec_test_lib
+      velox_hive_storage_adapters_server_startup
       velox_file
       velox_s3fs
       velox_stats_reporter_utils
@@ -325,7 +333,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_tocudf_selection_test
   SOURCES Main.cpp ToCudfSelectionTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_vector_fuzzer gmock
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_vector_fuzzer
 )
 
 velox_add_cudf_test(
@@ -337,7 +345,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_topnrownumber_test
   SOURCES Main.cpp TopNRowNumberTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_window fmt::fmt
 )
 
 # Only built when VELOX_ENABLE_UCX_EXCHANGE is on; without it the ucx-exchange

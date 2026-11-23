@@ -200,6 +200,7 @@ EncodingLayout EncodingLayoutCapture::capture(
     case EncodingType::Prefix:
     case EncodingType::DeltaBlock:
     case EncodingType::EliasFano:
+    case EncodingType::Sequence:
     case EncodingType::SimdForBitpack:
     case EncodingType::FrequencyPartition:
     case EncodingType::Huffman:
@@ -287,15 +288,15 @@ EncodingLayout EncodingLayoutCapture::capture(
       break;
     }
     case EncodingType::PartitionedEliasFano: {
-      // PartitionedEliasFano nests three directories: partition offsets,
-      // partition bases and partition group offsets. The group streams that
-      // follow are always EliasFano and carry no selectable layout.
+      // PartitionedEliasFano nests two directories: partition offsets and
+      // partition bases. The group streams that follow are always EliasFano
+      // and carry no selectable layout.
       auto body = encoding.substr(prefixSize);
       encoding::readVarint32(body); // numPartitions
       encoding::readVarint32(body); // numGroups
 
-      children.reserve(3);
-      for (uint32_t child = 0; child < 3; ++child) {
+      children.reserve(2);
+      for (uint32_t child = 0; child < 2; ++child) {
         const auto bytes = encoding::readLengthPrefixedBytes(body);
         const char* pos = bytes.data();
         captureChild(
@@ -456,6 +457,14 @@ EncodingLayout EncodingLayoutCapture::capture(
       // For nullable encodings we only capture the data encoding part, so we
       // are "overwriting" the current captured node with the nested data node.
       return EncodingLayoutCapture::capture({pos, dataBytes}, options);
+    }
+    case EncodingType::Reversed: {
+      // Unlike Nullable and Sentinel, Reversed changes the values its nested
+      // stream holds, so the layout keeps the Reversed node and captures the
+      // nested stream as its only child.
+      children.emplace_back(
+          EncodingLayoutCapture::capture(encoding.substr(prefixSize), options));
+      break;
     }
     case EncodingType::Sentinel: {
       // For sentinel encodings we only capture the data encoding part, so we

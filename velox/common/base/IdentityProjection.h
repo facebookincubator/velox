@@ -23,6 +23,13 @@ namespace facebook::velox {
 /// Represents a column copied from an input channel to an output channel,
 /// possibly with rows removed or duplicated.
 struct IdentityProjection {
+  IdentityProjection() = default;
+
+  // Clang 15 does not support initializing an aggregate with parentheses, e.g.
+  // emplace_back(input, output), so the type needs a constructor.
+  IdentityProjection(uint32_t inputChannel, uint32_t outputChannel)
+      : inputChannel{inputChannel}, outputChannel{outputChannel} {}
+
   /// Identifies the source column.
   uint32_t inputChannel{0};
 

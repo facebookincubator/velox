@@ -78,67 +78,65 @@ class InteropTest : public ::testing::Test, public VectorTestBase {
 // ========== Integer types ==========
 
 TEST_F(InteropTest, tinyint) {
-  auto input =
-      makeRowVector({"c0"}, {makeFlatVector<int8_t>({1, -2, 3, 0, 127, -128})});
+  auto input = makeNamedRowVector(
+      "c0", makeFlatVector<int8_t>({1, -2, 3, 0, 127, -128}));
   roundTrip(input);
 }
 
 TEST_F(InteropTest, smallint) {
-  auto input = makeRowVector(
-      {"c0"}, {makeFlatVector<int16_t>({1, -2, 300, 0, 32767, -32768})});
+  auto input = makeNamedRowVector(
+      "c0", makeFlatVector<int16_t>({1, -2, 300, 0, 32767, -32768}));
   roundTrip(input);
 }
 
 TEST_F(InteropTest, integer) {
-  auto input = makeRowVector(
-      {"c0"},
-      {makeFlatVector<int32_t>({1, -2, 300, 0, 2147483647, -2147483648})});
+  auto input = makeNamedRowVector(
+      "c0", makeFlatVector<int32_t>({1, -2, 300, 0, 2147483647, -2147483648}));
   roundTrip(input);
 }
 
 TEST_F(InteropTest, bigint) {
-  auto input = makeRowVector(
-      {"c0"},
-      {makeFlatVector<int64_t>({1, -2, 300, 0, 9223372036854775807LL})});
+  auto input = makeNamedRowVector(
+      "c0", makeFlatVector<int64_t>({1, -2, 300, 0, 9223372036854775807LL}));
   roundTrip(input);
 }
 
 // ========== Floating point types ==========
 
 TEST_F(InteropTest, real) {
-  auto input = makeRowVector(
-      {"c0"}, {makeFlatVector<float>({1.5f, -2.5f, 0.0f, 3.14f})});
+  auto input = makeNamedRowVector(
+      "c0", makeFlatVector<float>({1.5f, -2.5f, 0.0f, 3.14f}));
   roundTrip(input);
 }
 
 TEST_F(InteropTest, double_type) {
-  auto input = makeRowVector(
-      {"c0"}, {makeFlatVector<double>({1.5, -2.5, 0.0, 3.14159265358979})});
+  auto input = makeNamedRowVector(
+      "c0", makeFlatVector<double>({1.5, -2.5, 0.0, 3.14159265358979}));
   roundTrip(input);
 }
 
 // ========== Boolean ==========
 
 TEST_F(InteropTest, boolean) {
-  auto input = makeRowVector(
-      {"c0"}, {makeFlatVector<bool>({true, false, true, true, false})});
+  auto input = makeNamedRowVector(
+      "c0", makeFlatVector<bool>({true, false, true, true, false}));
   roundTrip(input);
 }
 
 // ========== String types ==========
 
 TEST_F(InteropTest, varchar) {
-  auto input = makeRowVector(
-      {"c0"},
-      {makeFlatVector<StringView>(
-          {"hello", "world", "", "a longer string value", "x"})});
+  auto input = makeNamedRowVector(
+      "c0",
+      makeFlatVector<StringView>(
+          {"hello", "world", "", "a longer string value", "x"}));
   roundTrip(input);
 }
 
 TEST_F(InteropTest, varbinary) {
-  auto input = makeRowVector(
-      {"c0"},
-      {makeFlatVector<StringView>({"binary\x00data"_sv, "more"_sv, ""_sv})});
+  auto input = makeNamedRowVector(
+      "c0",
+      makeFlatVector<StringView>({"binary\x00data"_sv, "more"_sv, ""_sv}));
   roundTrip(input);
 }
 
@@ -182,7 +180,7 @@ TEST_F(InteropTest, varbinaryLargeOffsets) {
 
   std::vector<StringView> views(values.begin(), values.end());
   auto expected =
-      makeRowVector({"c0"}, {makeFlatVector<StringView>(views, VARBINARY())});
+      makeNamedRowVector("c0", makeFlatVector<StringView>(views, VARBINARY()));
   auto result = cudf_velox::with_arrow::toVeloxColumn(
       table.view(), pool_.get(), expected->type(), stream, mr);
   stream.sync();
@@ -197,8 +195,8 @@ TEST_F(InteropTest, varbinaryExportedFormat) {
   auto stream = cudf::get_default_stream();
   auto mr = cudf::get_current_device_resource_ref();
 
-  auto input = makeRowVector(
-      {"c0"}, {makeFlatVector<StringView>({"a"_sv, "bc"_sv}, VARBINARY())});
+  auto input = makeNamedRowVector(
+      "c0", makeFlatVector<StringView>({"a"_sv, "bc"_sv}, VARBINARY()));
   auto table =
       cudf_velox::with_arrow::toCudfTable(input, pool_.get(), stream, mr);
   ASSERT_EQ(
@@ -210,54 +208,54 @@ TEST_F(InteropTest, varbinaryExportedFormat) {
 // ========== With nulls ==========
 
 TEST_F(InteropTest, integerWithNulls) {
-  auto input = makeRowVector(
-      {"c0"},
-      {makeNullableFlatVector<int32_t>({1, std::nullopt, 3, std::nullopt, 5})});
+  auto input = makeNamedRowVector(
+      "c0",
+      makeNullableFlatVector<int32_t>({1, std::nullopt, 3, std::nullopt, 5}));
   roundTrip(input);
 }
 
 TEST_F(InteropTest, booleanWithNulls) {
-  auto input = makeRowVector(
-      {"c0"},
-      {makeNullableFlatVector<bool>(
-          {true, std::nullopt, false, std::nullopt, true})});
+  auto input = makeNamedRowVector(
+      "c0",
+      makeNullableFlatVector<bool>(
+          {true, std::nullopt, false, std::nullopt, true}));
   roundTrip(input);
 }
 
 TEST_F(InteropTest, varcharWithNulls) {
-  auto input = makeRowVector(
-      {"c0"},
-      {makeNullableFlatVector<StringView>(
-          {"hello"_sv, std::nullopt, "world"_sv, std::nullopt})});
+  auto input = makeNamedRowVector(
+      "c0",
+      makeNullableFlatVector<StringView>(
+          {"hello"_sv, std::nullopt, "world"_sv, std::nullopt}));
   roundTrip(input);
 }
 
 TEST_F(InteropTest, doubleWithNulls) {
-  auto input = makeRowVector(
-      {"c0"},
-      {makeNullableFlatVector<double>(
-          {1.1, std::nullopt, 3.3, std::nullopt, 5.5})});
+  auto input = makeNamedRowVector(
+      "c0",
+      makeNullableFlatVector<double>(
+          {1.1, std::nullopt, 3.3, std::nullopt, 5.5}));
   roundTrip(input);
 }
 
 // ========== Timestamp ==========
 
 TEST_F(InteropTest, timestamp) {
-  auto input = makeRowVector(
-      {"c0"},
-      {makeFlatVector<Timestamp>(
+  auto input = makeNamedRowVector(
+      "c0",
+      makeFlatVector<Timestamp>(
           {Timestamp(0, 0),
            Timestamp(1, 500000000),
            Timestamp(100, 0),
-           Timestamp(1000000, 999999999)})});
+           Timestamp(1000000, 999999999)}));
   roundTrip(input);
 }
 
 TEST_F(InteropTest, timestampWithNulls) {
-  auto input = makeRowVector(
-      {"c0"},
-      {makeNullableFlatVector<Timestamp>(
-          {Timestamp(0, 0), std::nullopt, Timestamp(100, 0), std::nullopt})});
+  auto input = makeNamedRowVector(
+      "c0",
+      makeNullableFlatVector<Timestamp>(
+          {Timestamp(0, 0), std::nullopt, Timestamp(100, 0), std::nullopt}));
   roundTrip(input);
 }
 
@@ -294,29 +292,29 @@ TEST_F(InteropTest, emptyInput) {
 }
 
 TEST_F(InteropTest, emptyBoolean) {
-  auto input = makeRowVector({"c0"}, {makeFlatVector<bool>({})});
+  auto input = makeNamedRowVector("c0", makeFlatVector<bool>({}));
   roundTrip(input);
 }
 
 TEST_F(InteropTest, emptyDouble) {
-  auto input = makeRowVector({"c0"}, {makeFlatVector<double>({})});
+  auto input = makeNamedRowVector("c0", makeFlatVector<double>({}));
   roundTrip(input);
 }
 
 TEST_F(InteropTest, emptyTimestamp) {
-  auto input = makeRowVector({"c0"}, {makeFlatVector<Timestamp>({})});
+  auto input = makeNamedRowVector("c0", makeFlatVector<Timestamp>({}));
   roundTrip(input);
 }
 
 TEST_F(InteropTest, emptyArray) {
-  auto input = makeRowVector({"c0"}, {makeArrayVector<int32_t>({})});
+  auto input = makeNamedRowVector("c0", makeArrayVector<int32_t>({}));
   roundTrip(input);
 }
 
 TEST_F(InteropTest, emptyStruct) {
   auto structVector = makeRowVector(
       {makeFlatVector<int32_t>({}), makeFlatVector<StringView>({})});
-  auto input = makeRowVector({"c0"}, {structVector});
+  auto input = makeNamedRowVector("c0", structVector);
   roundTrip(input);
 }
 
@@ -333,63 +331,63 @@ TEST_F(InteropTest, emptyMultipleColumns) {
 // ========== All nulls ==========
 
 TEST_F(InteropTest, allNulls) {
-  auto input = makeRowVector(
-      {"c0"},
-      {makeNullableFlatVector<int32_t>(
-          {std::nullopt, std::nullopt, std::nullopt})});
+  auto input = makeNamedRowVector(
+      "c0",
+      makeNullableFlatVector<int32_t>(
+          {std::nullopt, std::nullopt, std::nullopt}));
   roundTrip(input);
 }
 
 TEST_F(InteropTest, allNullsString) {
-  auto input = makeRowVector(
-      {"c0"},
-      {makeNullableFlatVector<StringView>(
-          {std::nullopt, std::nullopt, std::nullopt})});
+  auto input = makeNamedRowVector(
+      "c0",
+      makeNullableFlatVector<StringView>(
+          {std::nullopt, std::nullopt, std::nullopt}));
   roundTrip(input);
 }
 
 // ========== ARRAY (LIST) types ==========
 
 TEST_F(InteropTest, arrayOfIntegers) {
-  auto input = makeRowVector(
-      {"c0"},
-      {makeArrayVector<int32_t>({
+  auto input = makeNamedRowVector(
+      "c0",
+      makeArrayVector<int32_t>({
           {1, 2, 3},
           {4, 5},
           {6},
           {},
           {7, 8, 9, 10},
-      })});
+      }));
   roundTrip(input);
 }
 
 TEST_F(InteropTest, arrayOfStrings) {
-  auto input = makeRowVector(
-      {"c0"},
-      {makeArrayVector<StringView>({
+  auto input = makeNamedRowVector(
+      "c0",
+      makeArrayVector<StringView>({
           {"hello"_sv, "world"_sv},
           {},
           {"foo"_sv, "bar"_sv, "baz"_sv},
-      })});
+      }));
   roundTrip(input);
 }
 
 TEST_F(InteropTest, arrayOfVarbinary) {
-  auto input = makeRowVector(
-      {"c0"},
-      {makeArrayVector<StringView>(
-          {{"hello"_sv, "world"_sv}, {}, {"foo"_sv}}, VARBINARY())});
+  auto input = makeNamedRowVector(
+      "c0",
+      makeArrayVector<StringView>(
+          {{"hello"_sv, "world"_sv}, {}, {"foo"_sv}}, VARBINARY()));
   roundTrip(input);
 }
 
 TEST_F(InteropTest, arrayOfDoubles) {
-  auto input = makeRowVector(
-      {"c0"},
-      {makeArrayVector<double>({
+  auto input = makeNamedRowVector(
+      "c0",
+      makeArrayVector<double>({
           {1.1, 2.2, 3.3},
           {},
           {4.4},
-      })});
+      }));
   roundTrip(input);
 }
 
@@ -408,7 +406,7 @@ TEST_F(InteropTest, arrayWithNulls) {
       sizes,
       elements);
 
-  auto input = makeRowVector({"c0"}, {arrayVector});
+  auto input = makeNamedRowVector("c0", arrayVector);
   roundTrip(input);
 }
 
@@ -418,7 +416,7 @@ TEST_F(InteropTest, structSimple) {
   auto structVector = makeRowVector(
       {makeFlatVector<int32_t>({1, 2, 3, 4}),
        makeFlatVector<StringView>({"a"_sv, "b"_sv, "c"_sv, "d"_sv})});
-  auto input = makeRowVector({"c0"}, {structVector});
+  auto input = makeNamedRowVector("c0", structVector);
   roundTrip(input);
 }
 
@@ -428,7 +426,7 @@ TEST_F(InteropTest, structWithNulls) {
        makeNullableFlatVector<double>({1.1, 2.2, std::nullopt, 4.4})},
       // Null the struct itself at row 1.
       [](auto row) { return row == 1; });
-  auto input = makeRowVector({"c0"}, {structVector});
+  auto input = makeNamedRowVector("c0", structVector);
   roundTrip(input);
 }
 
@@ -437,7 +435,7 @@ TEST_F(InteropTest, structMultipleFields) {
       {makeFlatVector<int64_t>({10, 20, 30}),
        makeFlatVector<bool>({true, false, true}),
        makeFlatVector<StringView>({"x"_sv, "y"_sv, "z"_sv})});
-  auto input = makeRowVector({"c0"}, {structVector});
+  auto input = makeNamedRowVector("c0", structVector);
   roundTrip(input);
 }
 
@@ -463,7 +461,7 @@ TEST_F(InteropTest, arrayOfArrays) {
       outerSizes,
       innerArray);
 
-  auto input = makeRowVector({"c0"}, {outerArray});
+  auto input = makeNamedRowVector("c0", outerArray);
   roundTrip(input);
 }
 
@@ -475,7 +473,7 @@ TEST_F(InteropTest, structWithArray) {
   });
   auto intChild = makeFlatVector<int64_t>({10, 20, 30});
   auto structVector = makeRowVector({intChild, arrayChild});
-  auto input = makeRowVector({"c0"}, {structVector});
+  auto input = makeNamedRowVector("c0", structVector);
   roundTrip(input);
 }
 
@@ -494,7 +492,7 @@ TEST_F(InteropTest, arrayOfStructs) {
       sizes,
       structElements);
 
-  auto input = makeRowVector({"c0"}, {arrayVector});
+  auto input = makeNamedRowVector("c0", arrayVector);
   roundTrip(input);
 }
 

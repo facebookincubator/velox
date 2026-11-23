@@ -18,6 +18,7 @@
 
 #include <folly/container/F14Set.h>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -231,6 +232,15 @@ struct TableParameter {
 struct RowNumberColumnInfo {
   column_index_t insertPosition;
   std::string name;
+};
+
+/// Rows of a split to read: 'numRows' rows starting at row 'firstRow', counted
+/// from the first row in the split's byte range.
+struct SplitRowRange {
+  uint64_t firstRow{0};
+  uint64_t numRows{std::numeric_limits<uint64_t>::max()};
+
+  bool operator==(const SplitRowRange& other) const = default;
 };
 
 /// Carries format-owned reader and writer options through the common reader
@@ -503,6 +513,16 @@ class RowReaderOptions {
     return skipRows_;
   }
 
+  /// Restricts reading to a range of the split's rows. Only the selective
+  /// Nimble reader supports it.
+  void setSplitRowRange(std::optional<SplitRowRange> splitRowRange) {
+    splitRowRange_ = splitRowRange;
+  }
+
+  const std::optional<SplitRowRange>& splitRowRange() const {
+    return splitRowRange_;
+  }
+
   bool preserveFlatMapsInMemory() const {
     return preserveFlatMapsInMemory_;
   }
@@ -689,6 +709,7 @@ class RowReaderOptions {
   std::function<void(uint16_t)> stripeCountCallback_;
   bool eagerFirstStripeLoad_{true};
   uint64_t skipRows_{0};
+  std::optional<SplitRowRange> splitRowRange_;
 
   std::shared_ptr<UnitLoaderFactory> unitLoaderFactory_;
 
@@ -933,6 +954,15 @@ class ReaderOptions : public io::ReaderOptions {
     nimbleDirectBufferedInputEnabled_ = value;
   }
 
+  /// Whether Nimble decodes file column statistics on first use.
+  bool nimbleLazyFileStats() const {
+    return nimbleLazyFileStats_;
+  }
+
+  void setNimbleLazyFileStats(bool value) {
+    nimbleLazyFileStats_ = value;
+  }
+
   /// Whether to cache file metadata (footer, stripes, index) in the
   /// process-wide AsyncDataCache. When enabled, the first reader performs a
   /// speculative tail read and populates the cache; subsequent readers on the
@@ -1000,6 +1030,18 @@ class ReaderOptions : public io::ReaderOptions {
     loadClusterIndex_ = value;
   }
 
+  /// Cluster index implementation to load. Empty selects the format's default.
+  /// A file written with a different implementation has no index under this
+  /// name, so it opens without one rather than silently reading the wrong
+  /// index. Only effective when loadClusterIndex() is also true.
+  const std::string& clusterIndexName() const {
+    return clusterIndexName_;
+  }
+
+  void setClusterIndexName(std::string value) {
+    clusterIndexName_ = std::move(value);
+  }
+
   /// Whether to eagerly preload all per-partition metadata and decode all
   /// per-partition key streams during file open. Only effective when
   /// loadClusterIndex() is also true. Implies pinning so preloaded chunks
@@ -1021,6 +1063,17 @@ class ReaderOptions : public io::ReaderOptions {
 
   void setVerifyStreamChecksums(bool value) {
     verifyStreamChecksums_ = value;
+  }
+
+  /// Whether to read the cluster index key stream of each stripe with the
+  /// stripe's streams, when the file stores its key chunks in stripes.
+  /// Currently only supported by the Nimble index projector path. Default true.
+  bool coLoadKeyStreams() const {
+    return coLoadKeyStreams_;
+  }
+
+  void setCoLoadKeyStreams(bool value) {
+    coLoadKeyStreams_ = value;
   }
 
   /// Whether to load and initialize the chunk stats during file open.
@@ -1055,9 +1108,9 @@ class ReaderOptions : public io::ReaderOptions {
   }
 
   /// Process-wide async data cache for Nimble metadata caching. When both
-  /// fileHandle and cache are set, TabletReader creates a
-  /// CachedMetadataInput that caches decompressed footer, stripes, and
-  /// index metadata across readers on the same file.
+  /// fileHandle and cache are set and cacheMetadata() is true, TabletReader
+  /// caches decompressed footer, stripes, and index metadata across readers on
+  /// the same file, in the block cache that Nimble builds on this cache.
   cache::AsyncDataCache* cache() const {
     return cache_;
   }
@@ -1088,14 +1141,17 @@ class ReaderOptions : public io::ReaderOptions {
   bool adjustTimestampToTimezone_{false};
   bool selectiveNimbleReaderEnabled_{false};
   bool nimbleDirectBufferedInputEnabled_{false};
+  bool nimbleLazyFileStats_{false};
   bool cacheMetadata_{false};
   bool pinMetadata_{false};
   bool cacheIndex_{false};
   bool pinIndex_{false};
   bool cacheData_{true};
   bool loadClusterIndex_{false};
+  std::string clusterIndexName_;
   bool preloadIndex_{false};
   bool verifyStreamChecksums_{false};
+  bool coLoadKeyStreams_{true};
   bool loadChunkStats_{true};
   bool allowEmptyFile_{false};
   const FileHandle* fileHandle_{nullptr};

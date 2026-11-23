@@ -50,6 +50,7 @@
 #include "velox/functions/prestosql/types/UuidType.h"
 #include "velox/functions/prestosql/types/parser/TypeParser.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 
 using namespace facebook::velox;
 
@@ -385,7 +386,8 @@ PrestoQueryRunner::execute(const core::PlanNodePtr& plan) {
       result = executeAndReturnVector(plan);
   if (result.first) {
     return std::make_pair(
-        exec::test::materialize(*result.first), result.second);
+        velox::test::VectorAssertions::toMultiset(*result.first),
+        result.second);
   }
   return std::make_pair(std::nullopt, result.second);
 }

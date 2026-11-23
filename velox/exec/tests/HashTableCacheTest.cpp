@@ -99,12 +99,9 @@ static std::shared_ptr<BaseHashTable> makeTestJoinHashTable(
   hashers.emplace_back(std::make_unique<VectorHasher>(BIGINT(), 0));
   auto table = HashTable<false>::createForJoin(
       std::move(hashers),
-      {}, /*dependentTypes*/
-      true /*allowDuplicates*/,
-      false /*hasProbedFlag*/,
-      false /*hasCountFlag*/,
-      1 /*minTableSizeForParallelJoinBuild*/,
-      pool);
+      {},
+      pool,
+      {.allowDuplicates = true, .minTableSizeForParallelJoinBuild = 1});
   store(*table->rows(), data);
   table->prepareJoinTable(
       {}, BaseHashTable::kNoSpillInputStartPartitionBit, 1'000'000);

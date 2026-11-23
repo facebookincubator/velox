@@ -17,6 +17,9 @@
 #pragma once
 
 #include <cstdint>
+#include <string_view>
+
+#include <fmt/format.h>
 
 #include "velox/common/EnumDeclare.h"
 
@@ -44,3 +47,16 @@ class VectorIndexMetricValue {
 };
 
 } // namespace facebook::velox::common::vectorindex
+
+template <>
+struct fmt::formatter<facebook::velox::common::vectorindex::VectorIndexMetric>
+    : fmt::formatter<std::string_view> {
+  auto format(
+      facebook::velox::common::vectorindex::VectorIndexMetric metric,
+      fmt::format_context& ctx) const {
+    return fmt::formatter<std::string_view>::format(
+        facebook::velox::common::vectorindex::VectorIndexMetricName::toName(
+            metric),
+        ctx);
+  }
+};

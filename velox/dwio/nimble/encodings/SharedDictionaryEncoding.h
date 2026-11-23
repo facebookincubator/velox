@@ -245,8 +245,10 @@ class SharedDictionaryAlphabet {
 
   /// Serializes alphabet entries into the form the constructor accepts.
   ///
-  /// candidateEncodings restricts the encoding selection policy. An empty list
-  /// falls back to the default encoding selection policy.
+  /// candidateEncodings restricts the alphabet's own encoding; nested streams
+  /// always choose from the default candidates. An empty list uses the
+  /// default candidates except Dictionary, MainlyConstant and RLE, which
+  /// cannot win on distinct entries.
   template <typename T>
   static std::string_view encode(
       std::span<const T> values,
@@ -403,9 +405,14 @@ class SharedDictionaryAlphabet {
     // Compression is disabled because supportsEncodingView() only sees the
     // encoding type, so a compressed stream would be mistaken for one the
     // reader can index into.
+    //
+    // candidateEncodings restricts the alphabet's own encoding. Nested streams,
+    // such as the lengths of a string alphabet, choose from every default
+    // candidate instead of inheriting that restriction.
     const ManualEncodingSelectionPolicyFactory factory{
         encodingReadFactors(candidateEncodings),
-        /*compressionOptions=*/std::nullopt};
+        /*compressionOptions=*/std::nullopt,
+        ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors()};
     auto policy = factory.createPolicy(TypeTraits<T>::dataType);
     return std::unique_ptr<EncodingSelectionPolicy<T>>(
         static_cast<EncodingSelectionPolicy<T>*>(policy.release()));
@@ -414,7 +421,17 @@ class SharedDictionaryAlphabet {
   static std::vector<std::pair<EncodingType, float>> encodingReadFactors(
       std::span<const EncodingType> candidateEncodings) {
     if (candidateEncodings.empty()) {
-      return ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors();
+      // Alphabet entries are distinct, so encodings that pay off only on
+      // repeated values cannot win. Skipping them also skips the unique-value
+      // statistics Dictionary and MainlyConstant would compute.
+      auto readFactors =
+          ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors();
+      std::erase_if(readFactors, [](const auto& entry) {
+        return entry.first == EncodingType::Dictionary ||
+            entry.first == EncodingType::MainlyConstant ||
+            entry.first == EncodingType::RLE;
+      });
+      return readFactors;
     }
     std::vector<std::pair<EncodingType, float>> readFactors;
     readFactors.reserve(candidateEncodings.size());
@@ -754,11 +771,10 @@ std::string_view SharedDictionaryEncoding<T>::slice(
     Buffer& buffer,
     const Encoding::Options& options) {
   static_assert(isSharedDictionaryType<T>());
-  const auto sourceRowCount =
-      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
-  NIMBLE_CHECK_LE(offset, sourceRowCount);
-  NIMBLE_CHECK_LE(length, sourceRowCount - offset);
-  NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+  EncodingPrefix::checkSliceRange(
+      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount),
+      offset,
+      length);
 
   NIMBLE_CHECK_NOT_NULL(
       options.sharedDictionaryAlphabet,

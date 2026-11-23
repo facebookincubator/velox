@@ -175,6 +175,20 @@ TEST_F(StringTest, conv) {
   EXPECT_EQ(conv("-15", 10, 16), "FFFFFFFFFFFFFFF1");
   EXPECT_EQ(conv("9223372036854775807", 36, 16), "FFFFFFFFFFFFFFFF");
 
+  // Powers of the target base and values just above them.
+  EXPECT_EQ(conv("3E8", 16, 10), "1000");
+  EXPECT_EQ(conv("1000", 10, 10), "1000");
+  EXPECT_EQ(conv("1000000", 10, 10), "1000000");
+  EXPECT_EQ(conv("1000000000", 10, 10), "1000000000");
+  EXPECT_EQ(conv("1000000000000", 10, 10), "1000000000000");
+  EXPECT_EQ(conv("1000000000000000", 10, 10), "1000000000000000");
+  EXPECT_EQ(conv("DE0B6B3A7640000", 16, 10), "1000000000000000000");
+  EXPECT_EQ(conv("1000000000000002112", 10, 10), "1000000000000002112");
+  EXPECT_EQ(conv("1000000000000002113", 10, 10), "1000000000000002113");
+  EXPECT_EQ(conv("1000", 10, -10), "1000");
+  EXPECT_EQ(conv("-1000", 10, -10), "-1000");
+  EXPECT_EQ(conv("4913", 10, 17), "1000");
+
   // Leading and trailing spaces.
   EXPECT_EQ(conv("15 ", 10, 16), "F");
   EXPECT_EQ(conv(" 15 ", 10, 16), "F");
@@ -200,6 +214,63 @@ TEST_F(StringTest, conv) {
   EXPECT_EQ(conv(" ", 10, 16), std::nullopt);
   EXPECT_EQ(conv("", std::nullopt, 16), std::nullopt);
   EXPECT_EQ(conv("", 10, std::nullopt), std::nullopt);
+}
+
+TEST_F(StringTest, convPowersOfBase) {
+  // Reference conversion of a non-negative value, in upper case like Spark.
+  const auto toDigits = [](uint64_t value, int32_t base) {
+    std::string digits;
+    do {
+      const auto digit = static_cast<int32_t>(value % base);
+      digits.insert(
+          digits.begin(),
+          static_cast<char>(digit < 10 ? '0' + digit : 'A' + digit - 10));
+      value /= base;
+    } while (value != 0);
+    return digits;
+  };
+
+  const auto testConv = [&](const std::vector<std::string>& inputs,
+                            int32_t toBase,
+                            const std::vector<std::string>& expected) {
+    const auto size = static_cast<vector_size_t>(inputs.size());
+    const auto result = evaluate(
+        "conv(c0, c1, c2)",
+        makeRowVector({
+            makeFlatVector<std::string>(inputs),
+            makeConstant<int32_t>(10, size),
+            makeConstant<int32_t>(toBase, size),
+        }));
+    velox::test::assertEqualVectors(
+        makeFlatVector<std::string>(expected), result);
+  };
+
+  for (int32_t base = 2; base <= 36; ++base) {
+    SCOPED_TRACE("base " + std::to_string(base));
+    std::vector<std::string> inputs;
+    std::vector<std::string> expected;
+    std::vector<std::string> signedInputs;
+    std::vector<std::string> signedExpected;
+    // Every power of 'base' that fits in 64 bits, and its neighbors.
+    for (uint64_t power = base;; power *= base) {
+      for (const uint64_t value : {power - 1, power, power + 1}) {
+        inputs.push_back(std::to_string(value));
+        expected.push_back(toDigits(value, base));
+        if (value <=
+            static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+          signedInputs.push_back(std::to_string(value));
+          signedExpected.push_back(toDigits(value, base));
+          signedInputs.push_back("-" + std::to_string(value));
+          signedExpected.push_back("-" + toDigits(value, base));
+        }
+      }
+      if (power > std::numeric_limits<uint64_t>::max() / base) {
+        break;
+      }
+    }
+    testConv(inputs, base, expected);
+    testConv(signedInputs, -base, signedExpected);
+  }
 }
 
 TEST_F(StringTest, levenshtein) {

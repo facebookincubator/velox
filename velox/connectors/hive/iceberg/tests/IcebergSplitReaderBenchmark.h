@@ -22,6 +22,7 @@
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
+#include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/DataSetBuilder.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
@@ -39,6 +40,14 @@ constexpr uint32_t kNumBatches = 50;
 constexpr uint32_t kNumRowsPerRowGroup = 10000;
 constexpr double kFilterErrorMargin = 0.2;
 
+/// How deleted row positions are stored for a data file.
+enum class DeleteFileKind {
+  /// Iceberg V2 positional delete files of (file_path, pos) rows.
+  kPositional,
+  /// One Iceberg V3 deletion vector in a Puffin file.
+  kDeletionVector,
+};
+
 class IcebergSplitReaderBenchmark {
  public:
   explicit IcebergSplitReaderBenchmark() {
@@ -48,6 +57,7 @@ class IcebergSplitReaderBenchmark {
     dataSetBuilder_ =
         std::make_unique<facebook::velox::test::DataSetBuilder>(*leafPool_, 0);
     filesystems::registerLocalFileSystem();
+    dwio::common::registerFileSinks();
     dwrf::registerDwrfReaderFactory();
   }
 
@@ -80,18 +90,25 @@ class IcebergSplitReaderBenchmark {
       std::unique_ptr<connector::hive::iceberg::IcebergSplitReader>
           icebergSplitReader);
 
+  /// Reads one column of a data file whose deleted rows are stored as
+  /// 'deleteFileKind'. 'numDeleteFiles' splits the same deleted positions
+  /// across that many positional delete files; a deletion vector is always one
+  /// file.
   void readSingleColumn(
       const std::string& columnName,
       const TypePtr& type,
       float startPct,
       float selectPct,
       float deleteRate,
-      uint32_t nextSize);
+      uint32_t nextSize,
+      DeleteFileKind deleteFileKind,
+      int32_t numDeleteFiles);
 
   std::vector<std::shared_ptr<connector::hive::HiveConnectorSplit>>
-  createIcebergSplitsWithPositionalDelete(
+  createIcebergSplitsWithDeletes(
       int32_t deleteRowsPercentage,
-      int32_t deleteFilesCount);
+      DeleteFileKind deleteFileKind,
+      int32_t numDeleteFiles);
 
   std::vector<std::string> listFiles(const std::string& dirPath);
 
@@ -106,7 +123,12 @@ class IcebergSplitReaderBenchmark {
 
   std::string writePositionDeleteFile(
       const std::string& dataFilePath,
-      int64_t numDeleteRows);
+      const std::vector<int64_t>& deleteRows,
+      int32_t fileIndex);
+
+  connector::hive::iceberg::IcebergDeleteFile writeDeletionVectorFile(
+      const std::string& dataFilePath,
+      const std::vector<int64_t>& deleteRows);
 
  private:
   const std::string fileName_ = "test.data";
@@ -131,6 +153,17 @@ void run(
     const TypePtr& type,
     float filterRateX100,
     float deleteRateX100,
+    uint32_t nextSize);
+
+/// Reads every row of one BIGINT column with 'deleteRateX100' percent of rows
+/// deleted, stored as 'deleteFileKind' in 'numDeleteFiles' files.
+void runDeletes(
+    uint32_t,
+    const std::string& columnName,
+    const TypePtr& type,
+    float deleteRateX100,
+    DeleteFileKind deleteFileKind,
+    int32_t numDeleteFiles,
     uint32_t nextSize);
 
 } // namespace facebook::velox::iceberg::reader::test

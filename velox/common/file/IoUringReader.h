@@ -21,11 +21,9 @@
 #include <limits>
 #include <optional>
 #include <string>
-#include <vector>
 
 #include <folly/Range.h>
 #include <folly/SharedMutex.h>
-#include <folly/container/F14Map.h>
 #include <folly/container/IntrusiveList.h>
 #include <folly/io/async/Liburing.h>
 
@@ -44,7 +42,6 @@ namespace facebook::velox {
 class IoUringReader {
  public:
   static constexpr int32_t kDefaultQueueDepth{4'096};
-  static constexpr int32_t kDefaultRegisteredFileSlots{8'192};
 
   struct Options {
     /// Number of submission queue entries requested for the io_uring instance.
@@ -55,11 +52,6 @@ class IoUringReader {
     /// Number of completion queue entries requested for the io_uring instance.
     /// Initialization fails if the kernel rejects the configured depth.
     int32_t completionQueueDepth{kDefaultQueueDepth};
-
-    /// Number of registered-file slots to register for this io_uring instance.
-    /// This bounds how many distinct fds can be reused without updating the
-    /// kernel registered-file table.
-    int32_t registeredFileSlots{kDefaultRegisteredFileSlots};
 
     /// Requests IORING_SETUP_SINGLE_ISSUER when supported. This tells the
     /// kernel one task submits to the ring, which matches per-thread readers.
@@ -99,7 +91,7 @@ class IoUringReader {
     /// Largest number of SQEs submitted in one batch.
     uint64_t maxBatchSize{0};
 
-    /// Number of successful registered-file slot updates.
+    /// Number of files registered in the registered-file table.
     uint64_t registeredFileUpdates{0};
 
     /// Adds counters from another stats snapshot.
@@ -160,7 +152,14 @@ class IoUringReader {
 
 #if FOLLY_HAS_LIBURING
   void initializeRing();
+
+  // Registers 'fd' in the ring's one-slot registered-file table for one read()
+  // call.
   std::optional<int> registerFileForRead(int fd);
+
+  // Clears the slot that registerFileForRead() filled.
+  void unregisterFileForRead() noexcept;
+
   void recordRead(size_t count);
   void recordBatch(size_t count);
 
@@ -173,20 +172,6 @@ class IoUringReader {
 
   uint64_t submitAndWaitForReads(size_t count);
 
-  struct RegisteredFile {
-    // Raw fd number last registered in this registered-file slot.
-    int fd{-1};
-
-    // Device id from fstat() used to detect fd number reuse.
-    uint64_t device{0};
-
-    // Inode number from fstat() used to detect fd number reuse.
-    uint64_t inode{0};
-
-    // Open-file status flags from fcntl(F_GETFL).
-    int statusFlags{0};
-  };
-
   // Kernel ring owned by this reader.
   io_uring ring_{};
 
@@ -198,15 +183,6 @@ class IoUringReader {
 
   // Effective io_uring setup flags used by this reader.
   uint32_t setupFlags_{0};
-
-  // Registered-file slots registered with the kernel for this ring.
-  std::vector<RegisteredFile> registeredFiles_;
-
-  // Map from raw fd number to the registered-file slot that currently holds it.
-  folly::F14FastMap<int, size_t> fdToRegisteredFileSlot_;
-
-  // Next registered-file slot to replace after all slots have been used.
-  size_t nextRegisteredFileSlot_{0};
 
   // Whether the registered-file table has been registered with the kernel.
   bool fileTableInitialized_{false};

@@ -30,6 +30,10 @@
 #include "velox/common/compression/Compression.h"
 #include "velox/common/compression/Lz4Compression.h"
 
+// Declares the LZ4 frame error codes.
+#define LZ4F_STATIC_LINKING_ONLY
+#include <lz4frame.h>
+
 namespace facebook::velox::common {
 
 namespace {
@@ -96,6 +100,13 @@ std::function<uint64_t()> makeRandomInputSize() {
   return [=]() mutable -> uint64_t { return sizeDistribution(engine); };
 }
 
+// Returns the name of an LZ4 frame error code, which depends on the LZ4
+// version.
+std::string lz4FrameErrorName(LZ4F_errorCodes code) {
+  return LZ4F_getErrorName(
+      static_cast<LZ4F_errorCode_t>(-static_cast<ptrdiff_t>(code)));
+}
+
 // Check roundtrip of one-shot compression and decompression functions.
 void checkCodecRoundtrip(
     Codec* c1,
@@ -129,7 +140,9 @@ void checkCodecRoundtrip(
   // failure.
   static const std::unordered_map<std::string_view, std::string>
       compressionFailures = {
-          {"lz4", "LZ4 compression failed: ERROR_dstMaxSize_tooSmall"},
+          {"lz4",
+           "LZ4 compression failed: " +
+               lz4FrameErrorName(LZ4F_ERROR_dstMaxSize_tooSmall)},
           {"lz4_raw", "LZ4 compression failed"},
           {"lz4_hadoop", "LZ4 compression failed"}};
   VELOX_ASSERT_ERROR_STATUS(

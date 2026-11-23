@@ -336,9 +336,8 @@ std::shared_ptr<const Payload> payload;
   * `int* foo;` `const Bar& bar;` NOT `int *foo;` `const Bar &bar`;
   * Beware that `int* foo, bar;` will be parsed as declaring `foo` as an `int*`
     and `bar` as an `int`. Note that multiple declaration is discouraged.
-* Use trailing commas in multi-line initializer lists, enum definitions, and
-  function-call argument lists that span multiple lines. This produces cleaner
-  diffs when items are added or reordered.
+* Use trailing commas in multi-line initializer lists and enum definitions.
+  This produces cleaner diffs when items are added or reordered.
 * For member variables:
   * Group member variable and methods based on their visibility (public,
     protected and private)
@@ -664,6 +663,9 @@ so a passing test suite says little about them.
   `FooTest.cpp` contains the `FooTest` suite.
 * **Use `TEST()` for empty fixtures, `TEST_F()` only when the fixture is
   used.**
+* **No `DISABLED_` tests.** A disabled test must still compile, so it costs
+  maintenance, yet it never runs, so it protects nothing and rots. Fix the
+  test or delete it.
 * **No copy-pasted test blocks.** If two tests differ only in one parameter,
   use a loop or a local lambda.
 * **Place new tests next to related existing tests**, not at the end of the

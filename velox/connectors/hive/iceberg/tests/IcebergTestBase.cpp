@@ -19,6 +19,7 @@
 #include <filesystem>
 
 #include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/hive/iceberg/DeletionVectorWriter.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
@@ -206,7 +207,8 @@ void addColumnHandles(
 IcebergInsertTableHandlePtr IcebergTestBase::createInsertTableHandle(
     const RowTypePtr& rowType,
     const std::string& outputDirectoryPath,
-    const std::vector<PartitionField>& partitionFields) {
+    const std::vector<PartitionField>& partitionFields,
+    bool includePartitionPaths) {
   std::vector<IcebergColumnHandlePtr> columnHandles;
   addColumnHandles(rowType, partitionFields, columnHandles);
 
@@ -222,15 +224,25 @@ IcebergInsertTableHandlePtr IcebergTestBase::createInsertTableHandle(
       locationHandle,
       /*tableStorageFormat=*/fileFormat_,
       partitionSpec,
-      /*compressionKind=*/common::CompressionKind::CompressionKind_ZSTD);
+      /*compressionKind=*/common::CompressionKind::CompressionKind_ZSTD,
+      /*serdeParameters=*/std::unordered_map<std::string, std::string>{},
+      IcebergInsertTableHandle::WriteKind::kData,
+      /*existingDeletionVectors=*/
+      std::unordered_map<
+          std::string,
+          IcebergInsertTableHandle::ExistingDeletionVector>{},
+      std::make_shared<const IcebergFileNameGenerator>(),
+      /*insertedColumns=*/std::vector<std::string>{},
+      includePartitionPaths);
 }
 
 std::shared_ptr<IcebergDataSink> IcebergTestBase::createDataSink(
     const RowTypePtr& rowType,
     const std::string& outputDirectoryPath,
-    const std::vector<PartitionField>& partitionFields) {
-  auto tableHandle =
-      createInsertTableHandle(rowType, outputDirectoryPath, partitionFields);
+    const std::vector<PartitionField>& partitionFields,
+    bool includePartitionPaths) {
+  auto tableHandle = createInsertTableHandle(
+      rowType, outputDirectoryPath, partitionFields, includePartitionPaths);
   return std::make_shared<IcebergDataSink>(
       rowType,
       tableHandle,
@@ -243,11 +255,13 @@ std::shared_ptr<IcebergDataSink> IcebergTestBase::createDataSink(
 std::shared_ptr<IcebergDataSink> IcebergTestBase::createDataSinkAndAppendData(
     const std::vector<RowVectorPtr>& vectors,
     const std::string& dataPath,
-    const std::vector<PartitionField>& partitionFields) {
+    const std::vector<PartitionField>& partitionFields,
+    bool includePartitionPaths) {
   VELOX_CHECK(!vectors.empty(), "vectors cannot be empty");
 
   auto rowType = vectors.front()->rowType();
-  auto dataSink = createDataSink(rowType, dataPath, partitionFields);
+  auto dataSink =
+      createDataSink(rowType, dataPath, partitionFields, includePartitionPaths);
 
   for (const auto& vector : vectors) {
     dataSink->appendData(vector);
@@ -369,8 +383,7 @@ IcebergTestBase::makeIcebergSplitWithInfoColumns(
 
 std::shared_ptr<common::testutil::TempFilePath> IcebergTestBase::writeDataFile(
     const std::vector<RowVectorPtr>& data) {
-  auto file = common::testutil::TempFilePath::create();
-  writeToFile(file->getPath(), data);
+  auto file = writeToFile(data);
   return file;
 }
 
@@ -412,6 +425,44 @@ IcebergTestBase::writeDwrfFileWithFieldIds(
   }
   writer.close();
   return file;
+}
+
+std::pair<std::shared_ptr<TempDirectoryPath>, IcebergDeleteFile>
+IcebergTestBase::writeDeletionVector(
+    const std::string& referencedDataFile,
+    const std::vector<int64_t>& deletedPositions) {
+  DeletionVectorWriter writer;
+  writer.addDeletedPositions(deletedPositions);
+  const auto blob = writer.serialize();
+
+  // LocalFileSink refuses to open an existing file, so write the Puffin into
+  // a fresh path under a temp directory rather than a pre-created TempFile.
+  auto puffinDir = TempDirectoryPath::create();
+  const std::string puffinPath = puffinDir->getPath() + "/deletes.puffin";
+  auto sink = dwio::common::FileSink::create(
+      "file:" + puffinPath, {.pool = pool_.get()});
+  const auto [blobOffset, blobLength] = writePuffinFile(
+      *sink,
+      *pool_,
+      blob,
+      referencedDataFile,
+      static_cast<int64_t>(deletedPositions.size()));
+  sink->close();
+
+  IcebergDeleteFile dvFile(
+      FileContent::kDeletionVector,
+      puffinPath,
+      fileFormat_,
+      /*recordCount=*/deletedPositions.size(),
+      /*fileSizeInBytes=*/getFileSize(puffinPath),
+      /*equalityFieldIds=*/{},
+      /*lowerBounds=*/{},
+      /*upperBounds=*/{},
+      /*dataSequenceNumber=*/0,
+      /*contentOffset=*/static_cast<int64_t>(blobOffset),
+      /*contentLength=*/static_cast<int64_t>(blobLength),
+      /*referencedDataFile=*/referencedDataFile);
+  return {puffinDir, dvFile};
 }
 
 #ifdef VELOX_ENABLE_PARQUET

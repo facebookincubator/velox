@@ -13,7 +13,7 @@
 # limitations under the License.
 add_library(
   nimble_index
-  HierarchicalKeyReader.cpp
+  TrieKeyReader.cpp
   BlockedBloomFilter.cpp
   BloomFilter.cpp
   ChunkStats.cpp
@@ -25,11 +25,12 @@ add_library(
   ClusterIndexWriterBase.cpp
   DenseIndexFactory.cpp
   DenseIndexRegistry.cpp
+  FlatClusterIndexFactory.cpp
   HashIndex.cpp
   HashIndexWriter.cpp
-  HierarchicalClusterIndex.cpp
-  HierarchicalClusterIndexFactory.cpp
-  HierarchicalClusterIndexWriter.cpp
+  TrieClusterIndex.cpp
+  TrieClusterIndexFactory.cpp
+  TrieClusterIndexWriter.cpp
   IndexConfig.cpp
   IndexFilter.cpp
   IndexKeyEncoder.cpp
@@ -45,11 +46,11 @@ add_library(
   VectorIndexWriter.h
   VectorIndexConfig.h
   SortedIndexWriter.h
-  HierarchicalClusterIndex.h
-  HierarchicalClusterIndexFactory.h
-  HierarchicalClusterIndexWriter.h
-  HierarchicalKeyFormat.h
-  HierarchicalKeyReader.h
+  TrieClusterIndex.h
+  TrieClusterIndexFactory.h
+  TrieClusterIndexWriter.h
+  TrieKeyFormat.h
+  TrieKeyReader.h
   SortedIndexConfig.h
   SortedIndex.h
   SortOrder.h
@@ -68,6 +69,7 @@ add_library(
   IndexFactoryRegistry.h
   IndexConstants.h
   IndexConfig.h
+  FlatClusterIndexFactory.h
   HashIndexWriter.h
   HashIndexUtils.h
   HashIndexConfig.h
@@ -88,8 +90,10 @@ add_library(
 
 target_link_libraries(
   nimble_index
+  nimble_block_cache
   nimble_common
   nimble_compression
+  nimble_data_input
   nimble_encodings
   nimble_tablet_common
   nimble_cluster_index_fb

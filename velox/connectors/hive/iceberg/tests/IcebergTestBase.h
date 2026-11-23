@@ -70,12 +70,14 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   std::shared_ptr<IcebergDataSink> createDataSink(
       const RowTypePtr& rowType,
       const std::string& outputDirectoryPath,
-      const std::vector<PartitionField>& partitionFields = {});
+      const std::vector<PartitionField>& partitionFields = {},
+      bool includePartitionPaths = true);
 
   std::shared_ptr<IcebergDataSink> createDataSinkAndAppendData(
       const std::vector<RowVectorPtr>& vectors,
       const std::string& dataPath,
-      const std::vector<PartitionField>& partitionFields = {});
+      const std::vector<PartitionField>& partitionFields = {},
+      bool includePartitionPaths = true);
 
   std::vector<std::shared_ptr<ConnectorSplit>> createSplitsForDirectory(
       const std::string& directory);
@@ -116,6 +118,17 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   std::shared_ptr<common::testutil::TempFilePath> writeDwrfFileWithFieldIds(
       const std::vector<RowVectorPtr>& data,
       const std::vector<int32_t>& icebergFieldIds);
+
+  /// Writes a spec-compliant Puffin deletion-vector-v1 file (PFA1 frame + magic
+  /// + portable roaring bitmap + standard CRC-32) for 'deletedPositions',
+  /// mirroring what Spark/Iceberg emits, and returns an IcebergDeleteFile
+  /// pointing at the DV blob inside it. The returned TempDirectoryPath keeps
+  /// the Puffin file alive for the duration of the scan. Requires the
+  /// LocalFileSink factory to be registered.
+  std::pair<std::shared_ptr<TempDirectoryPath>, IcebergDeleteFile>
+  writeDeletionVector(
+      const std::string& referencedDataFile,
+      const std::vector<int64_t>& deletedPositions);
 
 #ifdef VELOX_ENABLE_PARQUET
   /// Writes a Parquet file. 'icebergFieldIds[i]' is stamped as the Parquet
@@ -209,7 +222,8 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
   IcebergInsertTableHandlePtr createInsertTableHandle(
       const RowTypePtr& rowType,
       const std::string& outputDirectoryPath,
-      const std::vector<PartitionField>& partitionFields = {});
+      const std::vector<PartitionField>& partitionFields,
+      bool includePartitionPaths);
 
   std::vector<std::string> listPartitionDirectories(
       const std::string& dataPath);

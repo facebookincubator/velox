@@ -15,13 +15,26 @@
  */
 
 #include "velox/exec/VectorHasher.h"
+
+#include <cstring>
+
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/HashStringAllocator.h"
+#include "velox/exec/Operator.h"
 #include "velox/type/FloatingPointUtil.h"
+#include "velox/vector/FlatVector.h"
+#include "velox/vector/VectorTypeUtils.h"
 
 namespace facebook::velox::exec {
+
+template <typename T>
+inline T VectorHasher::valueAt(const char* group, int32_t offset) {
+  T value;
+  std::memcpy(&value, group + offset, sizeof(T));
+  return value;
+}
 
 #define VALUE_ID_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...)                \
   [&]() {                                                                   \
@@ -360,7 +373,7 @@ bool VectorHasher::computeValueIds(
 }
 
 bool VectorHasher::computeValueIdsForRows(
-    char** groups,
+    char* const* groups,
     int32_t numGroups,
     int32_t offset,
     int32_t nullByte,
@@ -381,7 +394,7 @@ bool VectorHasher::computeValueIdsForRows(
 
 template <>
 bool VectorHasher::makeValueIdsForRows<TypeKind::VARCHAR>(
-    char** groups,
+    char* const* groups,
     int32_t numGroups,
     int32_t offset,
     int32_t nullByte,
@@ -1021,7 +1034,8 @@ std::string VectorHasher::toString() const {
   return out.str();
 }
 
-std::vector<std::unique_ptr<VectorHasher>> createVectorHashers(
+// static
+std::vector<std::unique_ptr<VectorHasher>> VectorHasher::createForKeys(
     const RowTypePtr& rowType,
     const std::vector<core::FieldAccessTypedExprPtr>& keys) {
   const auto numKeys = keys.size();
@@ -1031,10 +1045,11 @@ std::vector<std::unique_ptr<VectorHasher>> createVectorHashers(
     const auto channel = exprToChannel(key.get(), rowType);
     keyChannels.push_back(channel);
   }
-  return createVectorHashers(rowType, keyChannels);
+  return createForKeys(rowType, keyChannels);
 }
 
-std::vector<std::unique_ptr<VectorHasher>> createVectorHashers(
+// static
+std::vector<std::unique_ptr<VectorHasher>> VectorHasher::createForKeys(
     const RowTypePtr& rowType,
     const std::vector<column_index_t>& keyChannels) {
   const auto numKeys = keyChannels.size();

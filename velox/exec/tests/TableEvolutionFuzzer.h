@@ -252,9 +252,12 @@ class TableEvolutionFuzzer {
     std::vector<std::pair<std::string, TypePtr>> additionalColumns;
 
     /// Rewrites a freshly fuzzed, flattened batch before sizing, writing, or
-    /// retaining it for the in-memory oracle. The row offset is within the
-    /// current file and the seed identifies the current fuzzer iteration.
-    std::function<void(const RowVectorPtr&, uint64_t, uint64_t)>
+    /// retaining it for the in-memory oracle. The arguments after the batch
+    /// are the seed of the current fuzzer iteration, the schema evolution step
+    /// that writes the batch, counting from 0, and the batch's row offset
+    /// within that step's file. Each step writes its own files, so the step
+    /// lets a driver give each step's files different values.
+    std::function<void(const RowVectorPtr&, uint64_t, int, uint64_t)>
         dataBatchMutator;
 
     /// Returns extra writer serde params to merge for one file, or none when
@@ -280,6 +283,10 @@ class TableEvolutionFuzzer {
     /// Probability that each fuzzed element is NULL. Default 0 (no nulls).
     /// Set to e.g. 0.1 for format-specific fuzzers that need null coverage.
     double nullRatio = 0;
+
+    /// Special REAL and DOUBLE values, such as NaN and infinity, that the data
+    /// generator draws. Default draws none.
+    fuzzer::DataSpec dataSpec{/*includeNaN=*/false, /*includeInfinity=*/false};
 
     /// Runtime stat keys to collect from operator stats into
     /// ScanPlanCoverage::customRuntimeStats. Format-specific drivers populate
@@ -410,10 +417,16 @@ class TableEvolutionFuzzer {
   /// and relies on schema evolution to add them, which a fixed file schema
   /// cannot accommodate.
   ///
+  /// Runs at least one query shape, then stops early once 'deadline' passes.
+  /// Each shape scans the whole file twice, so on a slow file the shapes of a
+  /// single call can otherwise take far longer than the caller's whole budget.
+  ///
   /// Returns false, having done nothing, when the file carries no columns or no
   /// rows. Neither is a finding, and neither becomes one on a retry, so a
   /// caller looping to a deadline should stop rather than call again.
-  bool runOnInputFile(const InputFile& inputFile);
+  bool runOnInputFile(
+      const InputFile& inputFile,
+      std::chrono::steady_clock::time_point deadline);
 
   const CoverageAccumulator& coverageStats() const {
     return coverageStats_;

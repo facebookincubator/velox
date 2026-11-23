@@ -35,7 +35,8 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
     const std::shared_ptr<IoStats>& ioStats,
     dwio::common::RuntimeStats& runtimeStats,
     uint64_t splitOffset,
-    const std::string& connectorId)
+    const std::string& connectorId,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps)
     : deleteFile_(deleteFile),
       baseFilePath_(baseFilePath),
       fileHandleFactory_(fileHandleFactory),
@@ -96,14 +97,18 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   const FileHandleKey fileHandleKey{
       .filename = deleteFile_.filePath,
       .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
-  auto deleteFileHandleCachePtr = fileHandleFactory_->generate(fileHandleKey);
+  FileProperties fileProperties;
+  fileProperties.fileReadOps = fileReadOps;
+  auto deleteFileHandleCachePtr =
+      fileHandleFactory_->generate(fileHandleKey, &fileProperties);
   auto deleteFileInput = connector::BufferedInputBuilder::getInstance()->create(
       *deleteFileHandleCachePtr,
       deleteReaderOpts,
       connectorQueryCtx,
       ioStatistics_,
       ioStats_,
-      executor_);
+      executor_,
+      fileReadOps);
 
   auto deleteReader =
       dwio::common::getReaderFactory(deleteReaderOpts.fileFormat())

@@ -186,10 +186,7 @@ class PrefixSort {
       std::optional<uint32_t> maxStringLength = std::nullopt;
       if (keyTypes[i]->kind() == TypeKind::VARBINARY ||
           keyTypes[i]->kind() == TypeKind::VARCHAR) {
-        const auto stats = rowContainer->columnStats(i);
-        if (stats.has_value()) {
-          maxStringLength = stats.value().maxBytes();
-        }
+        maxStringLength = rowContainer->columnStats(i).maxBytes();
       }
       maxStringLengths.emplace_back(maxStringLength);
       columnHasNulls.emplace_back(rowContainer->columnHasNulls(i));

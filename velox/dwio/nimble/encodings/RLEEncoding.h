@@ -235,11 +235,10 @@ class RLEEncodingBase
       uint32_t length,
       Buffer& buffer,
       const Encoding::Options& options = {}) {
-    const auto sourceRowCount =
-        EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
-    NIMBLE_CHECK_LE(offset, sourceRowCount);
-    NIMBLE_CHECK_LE(length, sourceRowCount - offset);
-    NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+    EncodingPrefix::checkSliceRange(
+        EncodingPrefix::readRowCount(encoded, options.useVarintRowCount),
+        offset,
+        length);
 
     const auto sourcePrefixSize =
         EncodingPrefix::prefixSize(encoded, options.useVarintRowCount);
@@ -613,6 +612,26 @@ class RLEEncoding final : public internal::RLEEncodingBase<T, RLEEncoding<T>> {
         numNonNulls,
         rawIndices);
   }
+
+  /// Value sums before and inside a row range.
+  struct RangeSums {
+    /// Sum of the values before the range offset.
+    uint64_t sumBeforeRange{0};
+
+    /// Sum of the values inside the range.
+    uint64_t sumInRange{0};
+  };
+
+  /// Returns the value sums before and inside non-empty rows [offset, offset +
+  /// length) of a uint32_t RLE stream, such as the lengths of an array or map.
+  /// Walks the runs, so the cost grows with the runs before the range end, not
+  /// with its rows. Defined for uint32_t only.
+  static RangeSums sumRange(
+      std::string_view encoded,
+      uint32_t offset,
+      uint32_t length,
+      const Encoding::Options& options,
+      velox::memory::MemoryPool* pool);
 
   /// Estimates RLE bytes, including configured ALP/ALPRD run-value candidates
   /// for floating-point logical types.
@@ -1046,7 +1065,7 @@ void RLEEncoding<T>::bulkScan(
         vector_size_t numRows;
         if constexpr (kScatterValues) {
           auto end = selectedRowIndex + numInRun;
-          if (FOLLY_UNLIKELY(end == numSelected)) {
+          if (end == numSelected) [[unlikely]] {
             numRows = visitor.numRows() - visitor.rowIndex();
           } else {
             numRows = scatterRows[end] - visitor.rowIndex();
@@ -1069,7 +1088,7 @@ void RLEEncoding<T>::bulkScan(
       currentRow += consumed;
       selectedRowIndex += numInRun;
     }
-    if (FOLLY_UNLIKELY(selectedRowIndex == numSelected)) {
+    if (selectedRowIndex == numSelected) [[unlikely]] {
       break;
     }
     currentRow += this->copiesRemaining_;

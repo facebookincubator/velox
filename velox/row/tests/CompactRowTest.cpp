@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/row/CompactRow.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -149,6 +150,50 @@ TEST_F(CompactRowTest, fixedRowSize) {
       CompactRow::fixedRowSize(ROW({BIGINT(), ROW({VARCHAR()})})));
 
   ASSERT_EQ(1, CompactRow::fixedRowSize(ROW({UNKNOWN()})));
+}
+
+TEST_F(CompactRowTest, deserializeWithNulls) {
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>({10, 20, 30, 40}),
+      makeFlatVector<std::string>({"a", "bb", "", "long"}),
+      makeArrayVector<int64_t>({{1, 2}, {3}, {}, {4, 5}}),
+      makeRowVector({
+          makeFlatVector<int32_t>({1, 2, 3, 4}),
+          makeFlatVector<std::string>({"x", "y", "z", "w"}),
+      }),
+  });
+  const auto rowType = asRowType(data->type());
+  const CompactRow compactRow{data};
+  std::vector<std::string> serialized;
+  for (vector_size_t row = 0; row < data->size(); ++row) {
+    serialized.emplace_back(compactRow.rowSize(row), '\0');
+    compactRow.serialize(row, serialized.back().data());
+  }
+  for (const bool allNull : {false, true}) {
+    SCOPED_TRACE(allNull);
+    auto nulls = allocateNulls(data->size(), pool());
+    auto* rawNulls = nulls->asMutable<uint64_t>();
+    std::vector<std::string_view> views{serialized.begin(), serialized.end()};
+    for (vector_size_t row = 0; row < data->size(); ++row) {
+      const bool isNull = allNull || row % 2 == 1;
+      bits::setNull(rawNulls, row, isNull);
+      data->setNull(row, isNull);
+      if (isNull) {
+        views[row] = {};
+      }
+    }
+
+    const auto decoded = CompactRow::deserialize(views, nulls, rowType, pool());
+
+    assertEqualVectors(data, decoded);
+    for (vector_size_t row = 0; row < data->size(); ++row) {
+      if (data->isNullAt(row)) {
+        for (const auto& child : decoded->children()) {
+          EXPECT_TRUE(child->isNullAt(row));
+        }
+      }
+    }
+  }
 }
 
 TEST_F(CompactRowTest, rowSizeString) {
@@ -417,6 +462,36 @@ TEST_F(CompactRowTest, mix) {
   testRoundTrip(data);
 }
 
+TEST_F(CompactRowTest, unknownArrayBeforeValue) {
+  auto arrays =
+      makeArrayVector({0, 1, 3, 3}, makeAllNullFlatVector<UnknownValue>(13));
+  arrays->setNull(1, true);
+  auto data = makeRowVector({
+      arrays,
+      makeFlatVector<int64_t>({11, 22, 33, 44}),
+  });
+
+  CompactRow row(data);
+  // Non-null arrays use just their element count, regardless of length.
+  constexpr auto kRowWithArraySize = 1 + sizeof(int64_t) + sizeof(int32_t);
+  EXPECT_EQ(kRowWithArraySize, row.rowSize(0));
+  EXPECT_EQ(1 + sizeof(int64_t), row.rowSize(1));
+  EXPECT_EQ(kRowWithArraySize, row.rowSize(2));
+  EXPECT_EQ(kRowWithArraySize, row.rowSize(3));
+
+  testRoundTrip(data);
+}
+
+TEST_F(CompactRowTest, unknownArrayBeforeLongString) {
+  auto data = makeRowVector({
+      makeArrayVector({0}, makeAllNullFlatVector<UnknownValue>(1)),
+      makeFlatVector<int64_t>({-1}),
+      makeFlatVector<std::string>({std::string(1 << 23, 'x')}),
+  });
+
+  testRoundTrip(data);
+}
+
 TEST_F(CompactRowTest, arrayOfBigint) {
   auto data = makeRowVector({
       makeArrayVector<int64_t>({
@@ -517,6 +592,16 @@ TEST_F(CompactRowTest, map) {
   });
 
   testRoundTrip(data);
+}
+
+TEST_F(CompactRowTest, flatMapUnsupported) {
+  auto data = makeRowVector({makeFlatMapVector<int32_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{1, 11}},
+  })});
+  VELOX_ASSERT_THROW(
+      CompactRow{data},
+      "Unsupported map vector encoding for CompactRow: FLAT_MAP");
 }
 
 TEST_F(CompactRowTest, row) {

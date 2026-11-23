@@ -16,7 +16,7 @@
 #include "velox/functions/prestosql/aggregates/VectorCountAggregate.h"
 
 #include "velox/common/base/CheckedArithmetic.h"
-#include "velox/common/vectorindex/LocalVectorIndex.h"
+#include "velox/common/vectorindex/FaissLocalVectorIndex.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/expression/FunctionSignature.h"
 
@@ -46,7 +46,7 @@ class VectorCountAggregate {
         exec::arg_type<VectorIndex> index) {
       numEmbeddings = checkedPlus<int64_t>(
           numEmbeddings,
-          common::vectorindex::LocalVectorIndex::size(
+          common::vectorindex::FaissLocalVectorIndex::size(
               std::string_view(index.data(), index.size())));
     }
 

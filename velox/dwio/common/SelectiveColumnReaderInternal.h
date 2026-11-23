@@ -76,6 +76,9 @@ void SelectiveColumnReader::prepareRead(
   if (nullsInReadRange_ &&
       bits::isAllSet(
           nullsInReadRange_->as<uint64_t>(), 0, numRows, bits::kNotNull)) {
+    if (nullsInReadRange_->isMutable()) {
+      reusableNullsInReadRange_ = std::move(nullsInReadRange_);
+    }
     nullsInReadRange_ = nullptr;
   }
 
@@ -140,7 +143,10 @@ void SelectiveColumnReader::getFlatValues(
                 pool_, rows.size(), true, type, TVector());
       }
       *result = flatMapValueConstantNullValues_;
-    } else {
+    } else if (
+        !*result || (scanSpec_->deltaUpdate() && result->use_count() != 1) ||
+        !(*result)->isConstantEncoding() || *(*result)->type() != *type ||
+        (*result)->size() != rows.size() || !(*result)->isNullAt(0)) {
       *result = std::make_shared<ConstantVector<TVector>>(
           pool_, rows.size(), true, type, TVector());
     }
@@ -172,6 +178,20 @@ void SelectiveColumnReader::getFlatValues(
           std::move(stringBuffers_));
     }
     *result = flatMapValueFlatValues_;
+  } else if (
+      *result && result->use_count() == 1 &&
+      (*result)->encoding() == VectorEncoding::Simple::FLAT &&
+      (*result)->type() == type && (*result)->as<FlatVector<TVector>>()) {
+    (*result)->resetDataDependentFlags(nullptr);
+    auto* flat = result->get()->asUnchecked<FlatVector<TVector>>();
+    flat->unsafeSetSize(numValues_);
+    const auto& nulls = resultNulls();
+    if (nulls && nulls->size() < bits::nbytes(numValues_)) {
+      nulls->setSize(bits::nbytes(numValues_));
+    }
+    flat->setNulls(nulls);
+    flat->unsafeSetValues(values_);
+    flat->setStringBuffers(std::move(stringBuffers_));
   } else {
     *result = std::make_shared<FlatVector<TVector>>(
         pool_,

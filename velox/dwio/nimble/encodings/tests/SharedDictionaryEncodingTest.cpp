@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -47,6 +48,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSizeEstimation.h"
 #include "velox/dwio/nimble/encodings/tests/SharedDictionaryEncodingTestUtils.h"
+#include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 #include "velox/dwio/nimble/writer/SharedDictionaryWriter.h"
 
 namespace facebook::nimble {
@@ -864,6 +866,74 @@ TEST_F(
   EXPECT_EQ(estimate, expectedEstimate.value());
 }
 
+TEST_F(
+    SharedDictionaryEncodingTest,
+    alphabetCandidatesDoNotRestrictNestedStreams) {
+  // Forcing Trivial for a string alphabet restricts the alphabet itself. Its
+  // lengths stream, nearly all 8, still picks a compact encoding instead of
+  // being left with no candidates and falling back to Trivial.
+  std::vector<std::string> strings;
+  strings.reserve(1'000);
+  for (int i = 0; i < 999; ++i) {
+    strings.push_back(fmt::format("s{:07}", i));
+  }
+  strings.emplace_back("s12345678");
+  const std::vector<std::string_view> values{strings.begin(), strings.end()};
+
+  const auto encoded = SharedDictionaryAlphabet::encode<std::string_view>(
+      values, std::array{EncodingType::Trivial}, *buffer_);
+
+  const auto layout = EncodingLayoutCapture::capture(encoded, {});
+  ASSERT_EQ(layout.encodingType(), EncodingType::Trivial);
+  const auto& lengths = layout.child(EncodingIdentifiers::Trivial::Lengths);
+  ASSERT_TRUE(lengths.has_value());
+  EXPECT_NE(lengths->encodingType(), EncodingType::Trivial);
+}
+
+TEST_F(SharedDictionaryEncodingTest, alphabetDefaultSkipsRepetitionEncodings) {
+  // Long runs would make RLE or MainlyConstant the smallest encoding if they
+  // were candidates. A real alphabet holds no repeats; repeats here expose
+  // which encodings the default alphabet policy considers.
+  std::vector<int32_t> values(2'000, 7);
+  std::fill(values.begin() + 1'000, values.end(), 8);
+
+  const auto encoded = SharedDictionaryAlphabet::encode<int32_t>(
+      values, std::span<const EncodingType>{}, *buffer_);
+
+  EXPECT_THAT(
+      EncodingLayoutCapture::capture(encoded, {}).encodingType(),
+      ::testing::Not(
+          ::testing::AnyOf(
+              EncodingType::Dictionary,
+              EncodingType::MainlyConstant,
+              EncodingType::RLE)));
+}
+
+TEST_F(
+    SharedDictionaryEncodingTest,
+    alphabetDefaultKeepsRepetitionEncodingsForStringLengths) {
+  // Distinct strings can still share a length, so the lengths stream nested
+  // under a Trivial string alphabet keeps every default candidate.
+  std::vector<std::string> strings;
+  strings.reserve(1'000);
+  for (int i = 0; i < 999; ++i) {
+    strings.push_back(fmt::format("s{:07}", i));
+  }
+  strings.emplace_back("s12345678");
+  const std::vector<std::string_view> values{strings.begin(), strings.end()};
+
+  const auto encoded = SharedDictionaryAlphabet::encode<std::string_view>(
+      values, std::span<const EncodingType>{}, *buffer_);
+
+  const auto layout = EncodingLayoutCapture::capture(encoded, {});
+  ASSERT_EQ(layout.encodingType(), EncodingType::Trivial);
+  const auto& lengths = layout.child(EncodingIdentifiers::Trivial::Lengths);
+  ASSERT_TRUE(lengths.has_value());
+  EXPECT_THAT(
+      lengths->encodingType(),
+      ::testing::AnyOf(EncodingType::MainlyConstant, EncodingType::RLE));
+}
+
 TEST_F(SharedDictionaryEncodingTest, alphabetRoundTripsWithAndWithoutView) {
   struct TestCase {
     std::string testName;
@@ -1031,6 +1101,143 @@ TEST_F(SharedDictionaryEncodingTest, encodingRejectsInvalidAlphabet) {
         createEncoding(encoded, options),
         "Shared dictionary alphabet has unexpected type.");
   }
+}
+
+TEST_F(SharedDictionaryEncodingTest, viewReadsRowsThroughAlphabet) {
+  const std::vector<uint32_t> indices{2, 0, 3, 1, 2, 2, 0};
+  const std::string encoded{test::encodeSharedDictionary(*buffer_, indices)};
+  const std::vector<int32_t> alphabetValues{10, 20, 30, 40};
+  Encoding::Options options;
+  options.sharedDictionaryAlphabet =
+      test::createSharedDictionaryAlphabet<int32_t>(
+          alphabetValues, std::span<const EncodingType>{}, pool_.get());
+
+  for (const auto cacheEncodingView : {false, true}) {
+    SCOPED_TRACE(fmt::format("cacheEncodingView={}", cacheEncodingView));
+    options.cacheEncodingView = cacheEncodingView;
+    const auto view =
+        detail::createTypedEncodingView<int32_t>(encoded, pool_.get(), options);
+    EXPECT_EQ(view->encodingType(), EncodingType::SharedDictionary);
+    EXPECT_EQ(view->dataType(), DataType::Int32);
+    ASSERT_EQ(view->rowCount(), indices.size());
+    EXPECT_EQ(view->readAt(2), 40);
+
+    std::vector<int32_t> rows(indices.size());
+    view->read(
+        /*offset=*/0, static_cast<uint32_t>(indices.size()), rows.data());
+    EXPECT_THAT(rows, testing::ElementsAre(30, 10, 40, 20, 30, 30, 10));
+
+    const std::vector<uint32_t> selectedRows{6, 1, 1, 3};
+    std::vector<int32_t> selected(selectedRows.size());
+    view->readAt(selectedRows, selected.data());
+    EXPECT_THAT(selected, testing::ElementsAre(10, 10, 10, 20));
+
+    const std::array<RowRange, 2> ranges{{{1, 3}, {5, 7}}};
+    std::vector<int32_t> rangeRows(4);
+    EXPECT_EQ(view->read(ranges, /*setNull=*/{}, rangeRows.data()), 4);
+    EXPECT_THAT(rangeRows, testing::ElementsAre(10, 40, 30, 10));
+  }
+}
+
+TEST_F(SharedDictionaryEncodingTest, viewReadsStringRows) {
+  const std::vector<uint32_t> indices{3, 1, 1, 0, 2};
+  const std::string encoded{SharedDictionaryEncoding<std::string_view>::encode(
+      indices, createNestedPolicy, *buffer_)};
+  const std::vector<std::string_view> alphabetValues{
+      "apple", "banana", "", "cherry"};
+  Encoding::Options options;
+  options.sharedDictionaryAlphabet =
+      test::createSharedDictionaryAlphabet<std::string_view>(
+          alphabetValues, std::array{EncodingType::Trivial}, pool_.get());
+
+  for (const auto cacheEncodingView : {false, true}) {
+    SCOPED_TRACE(fmt::format("cacheEncodingView={}", cacheEncodingView));
+    options.cacheEncodingView = cacheEncodingView;
+    const auto view = detail::createTypedEncodingView<std::string_view>(
+        encoded, pool_.get(), options);
+    EXPECT_EQ(view->readAt(0), "cherry");
+
+    std::vector<std::string_view> rows(indices.size());
+    view->read(
+        /*offset=*/0, static_cast<uint32_t>(indices.size()), rows.data());
+    EXPECT_THAT(
+        rows, testing::ElementsAre("cherry", "banana", "banana", "apple", ""));
+
+    const std::vector<uint32_t> selectedRows{4, 0};
+    std::vector<std::string_view> selected(selectedRows.size());
+    view->readAt(selectedRows, selected.data());
+    EXPECT_THAT(selected, testing::ElementsAre("", "cherry"));
+  }
+}
+
+TEST_F(SharedDictionaryEncodingTest, viewReadsNullableRows) {
+  // Rows 1 and 3 are null, and the shared dictionary encodes the other rows.
+  const std::string values{test::encodeSharedDictionary(*buffer_, {2, 0, 1})};
+  const std::array<bool, 5> nonNulls{true, false, true, false, true};
+  const ManualEncodingSelectionPolicyFactory nullsPolicyFactory{
+      {{EncodingType::Trivial, 1.0}}, std::nullopt};
+  const std::string nulls{EncodingFactory::encode<bool>(
+      typedPolicy<bool>(nullsPolicyFactory.createPolicy(DataType::Bool)),
+      nonNulls,
+      *buffer_)};
+  const std::string encoded{NullableEncoding<int32_t>::encodeNullable(
+      static_cast<uint32_t>(nonNulls.size()), values, nulls, *buffer_)};
+  const std::vector<int32_t> alphabetValues{10, 20, 30, 40};
+  Encoding::Options options;
+  options.sharedDictionaryAlphabet =
+      test::createSharedDictionaryAlphabet<int32_t>(
+          alphabetValues, std::span<const EncodingType>{}, pool_.get());
+
+  const auto view = createEncodingView(encoded, pool_.get(), options);
+  std::vector<int32_t> rows(nonNulls.size());
+  std::vector<uint32_t> nullRows;
+  const std::array<RowRange, 1> ranges{{{0, 5}}};
+  EXPECT_EQ(
+      view->read(
+          ranges, [&](uint32_t row) { nullRows.push_back(row); }, rows.data()),
+      3);
+  EXPECT_THAT(nullRows, testing::ElementsAre(1, 3));
+  // The values of null rows are undefined.
+  EXPECT_THAT(rows, testing::ElementsAre(30, testing::_, 10, testing::_, 20));
+}
+
+TEST_F(SharedDictionaryEncodingTest, viewRejectsInvalidAlphabet) {
+  const std::string encoded{test::encodeSharedDictionary(*buffer_, {0})};
+
+  {
+    SCOPED_TRACE("missing alphabet");
+    NIMBLE_ASSERT_USER_THROW(
+        createEncodingView(encoded, pool_.get(), Encoding::Options{}),
+        "Shared dictionary encoding requires an alphabet.");
+  }
+
+  {
+    SCOPED_TRACE("alphabet type mismatch");
+    const std::vector<int64_t> alphabetValues{10, 20};
+    Encoding::Options options;
+    options.sharedDictionaryAlphabet =
+        test::createSharedDictionaryAlphabet<int64_t>(
+            alphabetValues, std::span<const EncodingType>{}, pool_.get());
+    NIMBLE_ASSERT_USER_THROW(
+        createEncodingView(encoded, pool_.get(), options),
+        "Shared dictionary alphabet has unexpected type.");
+  }
+}
+
+TEST_F(SharedDictionaryEncodingTest, viewRejectsFloatingPointData) {
+  // Shared dictionaries hold integral and string values only, so no writer
+  // produces a floating-point stream. Relabel an integer stream to get one.
+  std::string encoded{test::encodeSharedDictionary(*buffer_, {0})};
+  encoded[1] = static_cast<char>(DataType::Float);
+  const std::vector<int32_t> alphabetValues{10};
+  Encoding::Options options;
+  options.sharedDictionaryAlphabet =
+      test::createSharedDictionaryAlphabet<int32_t>(
+          alphabetValues, std::span<const EncodingType>{}, pool_.get());
+
+  NIMBLE_ASSERT_USER_THROW(
+      createEncodingView(encoded, pool_.get(), options),
+      "SharedDictionary encoding only supports integral and string data");
 }
 
 TEST_F(SharedDictionaryEncodingTest, sliceConvertsToLocalDictionary) {

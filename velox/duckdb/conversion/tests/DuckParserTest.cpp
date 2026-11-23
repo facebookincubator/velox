@@ -297,6 +297,7 @@ TEST(DuckParserTest, expressions) {
   // Arithmetic operators.
   EXPECT_EQ("plus(1,0)", parseExpr("1 + 0")->toString());
   EXPECT_EQ("minus(1,0)", parseExpr("1 - 0")->toString());
+  EXPECT_EQ("negate(\"c0\")", parseExpr("-c0")->toString());
   EXPECT_EQ("multiply(1,0)", parseExpr("1 * 0")->toString());
   EXPECT_EQ("divide(1,0)", parseExpr("1 / 0")->toString());
   EXPECT_EQ("mod(1,0)", parseExpr("1 % 0")->toString());

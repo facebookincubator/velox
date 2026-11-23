@@ -37,6 +37,138 @@ namespace torch::wave {
 
 namespace {
 
+// True when the value 'id' is a tensor whose dims the graph fixes.
+bool isStaticTensor(const ValueTypes& types, int32_t id) {
+  if (id < 0 || static_cast<size_t>(id) >= types.constraints.size() ||
+      types.types.at(id) == nullptr) {
+    return false;
+  }
+  const auto& constraint = types.constraints[id];
+  return constraint.rank >= 0 && constraint.rank <= kMaxDims &&
+      constraint.dims.size() == static_cast<size_t>(constraint.rank) &&
+      std::all_of(constraint.dims.begin(), constraint.dims.end(), [](auto dim) {
+           return dim >= 0;
+         });
+}
+
+// True when every operand of 'size' is fixed by the graph: tensors of static
+// shape, constant scalars, and no host-side tensor data.
+bool hasStaticOperands(const BoundSize& size, const ValueTypes& types) {
+  if (size.fn == nullptr || size.concat >= 0 ||
+      !size.args.hostTensors.empty()) {
+    return false;
+  }
+  auto isConstant = [](const ScalarRef& ref) {
+    return ref.kind != ScalarRef::kValue;
+  };
+  if (!std::all_of(
+          size.args.scalars.begin(), size.args.scalars.end(), isConstant)) {
+    return false;
+  }
+  for (const auto& list : size.args.intLists) {
+    if (!std::all_of(list.begin(), list.end(), isConstant)) {
+      return false;
+    }
+  }
+  for (const auto& group : size.args.tensors) {
+    for (auto id : group) {
+      if (!isStaticTensor(types, id)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+// A table holding the static shape of every tensor the Sizes in 'candidates'
+// read, for running their ReserveFns at bind.
+std::vector<ValueEntry> staticShapeEntries(
+    const StepProgram& program,
+    const std::vector<int32_t>& candidates,
+    const ValueTypes& types) {
+  int32_t maxId = -1;
+  for (auto index : candidates) {
+    for (const auto& group : program.sizes.at(index).args.tensors) {
+      for (auto id : group) {
+        maxId = std::max(maxId, id);
+      }
+    }
+  }
+  std::vector<ValueEntry> entries(maxId + 1);
+  for (int32_t id = 0; id <= maxId; ++id) {
+    if (!isStaticTensor(types, id)) {
+      continue;
+    }
+    const auto& dims = types.constraints.at(id).dims;
+    auto& entry = entries.at(id);
+    entry.generation = 1;
+    entry.kind = ValueEntry::kTensor;
+    entry.t.rank = static_cast<int8_t>(dims.size());
+    entry.t.elementSize =
+        static_cast<uint8_t>(c10::elementSize(types.types.at(id)->dtype()));
+    int64_t stride = 1;
+    for (int32_t d = static_cast<int32_t>(dims.size()) - 1; d >= 0; --d) {
+      entry.t.dims[d] = static_cast<int32_t>(dims[d]);
+      entry.t.strides[d] = static_cast<int32_t>(stride);
+      stride *= dims[d];
+    }
+    entry.t.numEl = static_cast<uint32_t>(stride);
+  }
+  return entries;
+}
+
+bool sameShapes(const Shape* lhs, const Shape* rhs, int32_t count) {
+  for (int32_t i = 0; i < count; ++i) {
+    if (lhs[i].rank != rhs[i].rank ||
+        !std::equal(lhs[i].dims, lhs[i].dims + lhs[i].rank, rhs[i].dims)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Computes each Size whose operands the graph fixes, once, and marks it
+// constant. A result that changes with the launch's block size (one entry per
+// block or tile) is left to run every execution.
+void foldConstantSizes(StepProgram& program, const ValueTypes& types) {
+  std::vector<int32_t> candidates;
+  for (size_t i = 0; i < program.sizes.size(); ++i) {
+    if (hasStaticOperands(program.sizes[i], types)) {
+      candidates.push_back(static_cast<int32_t>(i));
+    }
+  }
+  if (candidates.empty()) {
+    return;
+  }
+  auto entries = staticShapeEntries(program, candidates, types);
+  const ValueTable table{
+      .entries = entries.data(),
+      .size = static_cast<int32_t>(entries.size()),
+      .generation = 1};
+  auto& code = program.code;
+  for (int32_t i = 0; i < code.numSizes; ++i) {
+    auto& op = code.sizes[i];
+    if (!std::binary_search(candidates.begin(), candidates.end(), op.source)) {
+      continue;
+    }
+    const auto count = op.shapes.size;
+    std::vector<Shape> atBlockSize(count);
+    std::vector<Shape> atDoubleBlockSize(count);
+    auto args = code.argsOf(op, table);
+    if (!op.fn(args, atBlockSize.data(), count)) {
+      continue;
+    }
+    args.blockSize = std::max(1, op.blockSize) * 2;
+    if (!op.fn(args, atDoubleBlockSize.data(), count) ||
+        !sameShapes(atBlockSize.data(), atDoubleBlockSize.data(), count)) {
+      continue;
+    }
+    std::copy(
+        atBlockSize.begin(), atBlockSize.end(), code.shapes + op.shapes.begin);
+    op.constant = true;
+  }
+}
+
 int32_t actualIdOf(ValueCP value, const FormalToActual& bindings) {
   auto it = bindings.find(value->id());
   return it != bindings.end() ? it->second : value->id();
@@ -58,14 +190,29 @@ addSizeExprSize(StepProgram& program, const SizeExpr& expr, ReserveFn fn) {
   return static_cast<int32_t>(program.sizes.size() - 1);
 }
 
+// True when 'expr' reads one of 'outputs'.
+bool readsAnyOutput(
+    const SizeExpr& expr,
+    const std::vector<nativert::ValueId>& outputs) {
+  for (auto id : expr.values) {
+    if (std::find(outputs.begin(), outputs.end(), id) != outputs.end()) {
+      return true;
+    }
+  }
+  return std::any_of(expr.args.begin(), expr.args.end(), [&](const auto& arg) {
+    return readsAnyOutput(arg, outputs);
+  });
+}
+
 int32_t addCountSize(StepProgram& program, const SizeExpr& expr) {
   const bool broadcast = expr.broadcast || !expr.constShapes.empty();
   return addSizeExprSize(
       program,
       expr,
-      broadcast                           ? broadcastCountReserve
-          : expr.op == SizeShortcut::kSum ? sumCountReserve
-                                          : maxCountReserve);
+      broadcast                               ? broadcastCountReserve
+          : expr.op == SizeShortcut::kSum     ? sumCountReserve
+          : expr.op == SizeShortcut::kProduct ? productCountReserve
+                                              : maxCountReserve);
 }
 
 int32_t addDimsSize(StepProgram& program, const SizeExpr& expr) {
@@ -336,6 +483,22 @@ std::vector<BoundOutput> describedOutputs(
   return outputs;
 }
 
+// Adds a check for each tensor whose shape the launch's code assumes,
+// naming the value the launch fills at that offset.
+void addShapeChecks(StepProgram& program, const LaunchData& data) {
+  for (const auto& [offset, shape] : data.launch->op->staticShapes()) {
+    for (size_t i = 0; i < data.tensorOffsets.size(); ++i) {
+      if (data.tensorOffsets[i] == offset) {
+        program.shapeChecks.push_back(
+            {.valueId = data.tensorsInFrame.at(i),
+             .dims = shape.dims,
+             .contiguous = shape.contiguous});
+        break;
+      }
+    }
+  }
+}
+
 // Records where the launch's tensors, scalars and returns live in its
 // parameter block, and adds the
 // fill ops that rewrite them every execution. 'base' is the launch's offset in
@@ -456,10 +619,14 @@ void bindLaunchFill(
     program.fills.push_back(
         {.kind = FillOp::kUninited, .offset = base + offset, .kernel = kernel});
   }
-  for (auto offset : kernelOp->barrierCounters()) {
-    program.fills.push_back(
-        {.kind = FillOp::kZero32, .offset = base + offset, .kernel = kernel});
+  for (const auto* offsets :
+       {&kernelOp->barrierCounters(), &kernelOp->counters()}) {
+    for (auto offset : *offsets) {
+      program.fills.push_back(
+          {.kind = FillOp::kZero32, .offset = base + offset, .kernel = kernel});
+    }
   }
+  addShapeChecks(program, data);
 }
 
 // Writes what does not change between executions into the step's pinned
@@ -678,6 +845,7 @@ void CompositeInvocation::bindPrograms(
         launch.countFromReserve = true;
       } else {
         launch.countSize = addCountSize(program, data.sizeExpr);
+        launch.recount = readsAnyOutput(data.sizeExpr, data.actualOutputs);
         if (byLargestInput && data.sizeExpr.op == SizeShortcut::kMax &&
             !data.sizeExpr.broadcast && data.sizeExpr.constShapes.empty()) {
           launch.largestShapeSize =
@@ -710,6 +878,54 @@ void CompositeInvocation::bindPrograms(
       program.launches.push_back(std::move(launch));
     }
 
+    // Under device alloc, a slot after the launches' parameters for each view
+    // the step makes: the setup writes it if a step off the path reads it.
+    if (WaveConfig::get().deviceAlloc) {
+      folly::F14FastSet<int32_t> filled;
+      for (const auto& fill : program.fills) {
+        filled.insert(fill.valueId);
+      }
+      std::vector<int32_t> views;
+      for (const auto& launch : program.launches) {
+        for (const auto& bound : launch.outputs) {
+          if (bound.kind == BoundOutput::kView) {
+            views.push_back(bound.valueId);
+          }
+        }
+      }
+      auto cursor = roundUp(sv.launchParamBytes, int64_t{16});
+      // The setup writes a whole Tensor there; the host copies back the
+      // TableTensor at its start.
+      const auto slotBytes = roundUp(
+          static_cast<int64_t>(std::max(sizeof(Tensor), sizeof(TableTensor))),
+          int64_t{16});
+      for (auto id : views) {
+        if (id < 0 || !filled.insert(id).second) {
+          continue;
+        }
+        program.fills.push_back(
+            {.kind = FillOp::kTensor,
+             .offset = static_cast<int32_t>(cursor),
+             .valueId = id,
+             .kernel = FillOp::kExport});
+        cursor += slotBytes;
+      }
+      // A shortcut's tensors: only one that bindTableOnly makes a derive is
+      // made on the table, where the setup can place it.
+      sv.exportSlots.clear();
+      for (const auto& data : sv.shortcutStandalones) {
+        for (auto id : data.actualOutputs) {
+          auto it = idToValue.find(id);
+          if (it != idToValue.end() &&
+              it->second->type().kind() == nativert::Type::Kind::Tensor &&
+              filled.insert(id).second) {
+            sv.exportSlots[id] = static_cast<int32_t>(cursor);
+            cursor += slotBytes;
+          }
+        }
+      }
+      sv.paramRegionBytes = cursor;
+    }
     sv.blockInfoOffset = roundUp(sv.paramRegionBytes, int64_t{16});
     program.totalPinnedBytes = sv.blockInfoOffset +
         static_cast<int64_t>(sv.blockCapacity) *
@@ -745,7 +961,15 @@ void bindTableOnly(ExecutionState& state, WaveGraph& waveGraph) {
   const auto numValues = static_cast<size_t>(waveGraph.graph()->numValues());
   std::vector<uint8_t> candidate(numValues, 0);
   std::vector<uint8_t> hostRead(numValues, 0);
+  // Whether a value's host reads are all as an input of a step's standalone.
+  std::vector<uint8_t> otherHostRead(numValues, 0);
   auto markHostRead = [&](nativert::ValueId id) {
+    if (id >= 0 && static_cast<size_t>(id) < numValues) {
+      hostRead[id] = 1;
+      otherHostRead[id] = 1;
+    }
+  };
+  auto markStandaloneRead = [&](nativert::ValueId id) {
     if (id >= 0 && static_cast<size_t>(id) < numValues) {
       hostRead[id] = 1;
     }
@@ -821,7 +1045,7 @@ void bindTableOnly(ExecutionState& state, WaveGraph& waveGraph) {
       }
       for (const auto& data : sv.standalones) {
         for (auto id : data.actualInputs) {
-          markHostRead(id);
+          markStandaloneRead(id);
         }
         for (auto id : data.actualOutputs) {
           markHostRead(id);
@@ -868,9 +1092,17 @@ void bindTableOnly(ExecutionState& state, WaveGraph& waveGraph) {
       }
     }
   }
+  // The values the host reads only as graph outputs, at the end.
+  state.outputOnly.assign(numValues, 0);
+  state.standaloneReadOnly.assign(numValues, 0);
   for (size_t id = 0; id < numValues; ++id) {
     const auto valueId = static_cast<nativert::ValueId>(id);
+    state.standaloneReadOnly[id] = candidate[id] && hostRead[id] &&
+            !otherHostRead[id] && !waveGraph.isGraphOutput(valueId)
+        ? 1
+        : 0;
     if (waveGraph.isGraphOutput(valueId)) {
+      state.outputOnly[id] = hostRead[id] == 0 ? 1 : 0;
       hostRead[id] = 1;
     }
   }
@@ -964,7 +1196,8 @@ void bindTableOnly(ExecutionState& state, WaveGraph& waveGraph) {
             .kind = kind,
             .intList = data.intList,
             .shortcut =
-                static_cast<int32_t>(sv.program->derivedShortcuts.size())};
+                static_cast<int32_t>(sv.program->derivedShortcuts.size()),
+            .wholeExtent = data.wholeExtent};
         bool derive = false;
         if (kind == StandaloneShortcut::kListPack) {
           derive = packDerives(data);
@@ -1009,6 +1242,17 @@ void bindTableOnly(ExecutionState& state, WaveGraph& waveGraph) {
           sv.program->derivedShortcuts.push_back(*unpack);
         } else {
           sv.program->derivedShortcuts.push_back(std::move(data));
+        }
+        for (auto id :
+             op.output >= 0 ? std::vector<int32_t>{op.output} : op.outputs) {
+          auto slot = sv.exportSlots.find(id);
+          if (slot != sv.exportSlots.end()) {
+            sv.program->fills.push_back(
+                {.kind = FillOp::kTensor,
+                 .offset = slot->second,
+                 .valueId = id,
+                 .kernel = FillOp::kExport});
+          }
         }
         sv.program->derives.push_back(std::move(op));
       }
@@ -1181,6 +1425,7 @@ void packStepCode(
         .countSize = launch.countSize,
         .largestShapeSize = launch.largestShapeSize,
         .countFromReserve = launch.countFromReserve,
+        .recount = launch.recount,
         .staticNumElements = launch.staticNumElements};
     op.outputs = addOutputs(launch.outputs);
     op.largestOutputs = addOutputs(launch.largestOutputs);
@@ -1205,7 +1450,8 @@ void packStepCode(
            .constants = addConsts(op.constants),
            .intList = addConsts(op.intList),
            .shortcut = op.shortcut,
-           .secondShortcut = op.secondShortcut});
+           .secondShortcut = op.secondShortcut,
+           .wholeExtent = op.wholeExtent});
     }
     return records;
   };
@@ -1285,6 +1531,9 @@ void packStepCode(
   code.numDerives = static_cast<int32_t>(derives.size());
   code.waitProducers = waitProducers;
   code.readProducers = readProducers;
+  if (WaveConfig::get().constantSizes) {
+    foldConstantSizes(program, types);
+  }
 }
 
 } // namespace torch::wave

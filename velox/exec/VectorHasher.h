@@ -22,9 +22,9 @@
 
 #include <velox/type/Filter.h>
 #include "velox/common/memory/RawVector.h"
+#include "velox/core/Expressions.h"
 #include "velox/exec/Operator.h"
-#include "velox/vector/FlatVector.h"
-#include "velox/vector/VectorTypeUtils.h"
+#include "velox/vector/DecodedVector.h"
 
 namespace facebook::velox::exec {
 
@@ -169,6 +169,16 @@ class VectorHasher {
     return std::make_unique<VectorHasher>(std::move(type), channel);
   }
 
+  /// Creates a hasher for each of 'keys', columns of 'rowType', with the
+  /// key's channel in 'rowType'.
+  static std::vector<std::unique_ptr<VectorHasher>> createForKeys(
+      const RowTypePtr& rowType,
+      const std::vector<core::FieldAccessTypedExprPtr>& keys);
+
+  static std::vector<std::unique_ptr<VectorHasher>> createForKeys(
+      const RowTypePtr& rowType,
+      const std::vector<column_index_t>& keyChannels);
+
   column_index_t channel() const {
     return channel_;
   }
@@ -231,7 +241,7 @@ class VectorHasher {
 
   // Same as computeValueIds, but takes input stored row-wise.
   bool computeValueIdsForRows(
-      char** groups,
+      char* const* groups,
       int32_t numGroups,
       int32_t offset,
       int32_t nullByte,
@@ -439,7 +449,7 @@ class VectorHasher {
 
   template <TypeKind Kind>
   bool makeValueIdsForRows(
-      char** groups,
+      char* const* groups,
       int32_t numGroups,
       int32_t offset,
       int32_t nullByte,
@@ -631,10 +641,9 @@ class VectorHasher {
     return (group[nullByte] & nullMask) != 0;
   }
 
+  // Reads a key from packed row storage, which may be unaligned for T.
   template <typename T>
-  static inline T valueAt(const char* group, int32_t offset) {
-    return *reinterpret_cast<const T*>(group + offset);
-  }
+  static T valueAt(const char* group, int32_t offset);
 
   template <bool typeProvidesCustomComparison, TypeKind Kind>
   void hashValues(const SelectivityVector& rows, bool mix, uint64_t* result);
@@ -693,7 +702,7 @@ class VectorHasher {
 
 template <>
 bool VectorHasher::makeValueIdsForRows<TypeKind::VARCHAR>(
-    char** groups,
+    char* const* groups,
     int32_t numGroups,
     int32_t offset,
     int32_t nullByte,
@@ -773,8 +782,8 @@ inline uint64_t VectorHasher::valueId(bool value) {
 }
 template <>
 inline uint64_t VectorHasher::valueId(Timestamp value) {
-  if (FOLLY_UNLIKELY(
-          value.getNanos() % Timestamp::kNanosecondsInMillisecond != 0)) {
+  if (value.getNanos() % Timestamp::kNanosecondsInMillisecond != 0)
+      [[unlikely]] {
     // The timestamp is in nanosecond or microsecond precision. The values are
     // not mappable to milliseconds without precision loss.
     setRangeOverflow();
@@ -823,15 +832,6 @@ template <>
 bool VectorHasher::makeValueIdsDecoded<bool, false>(
     const SelectivityVector& rows,
     uint64_t* result);
-
-/// Creates VectorHasher instances for specified columns.
-std::vector<std::unique_ptr<VectorHasher>> createVectorHashers(
-    const RowTypePtr& rowType,
-    const std::vector<core::FieldAccessTypedExprPtr>& keys);
-
-std::vector<std::unique_ptr<VectorHasher>> createVectorHashers(
-    const RowTypePtr& rowType,
-    const std::vector<column_index_t>& keyChannels);
 
 } // namespace facebook::velox::exec
 

@@ -16,6 +16,8 @@
 
 #include "velox/dwio/nimble/selective/ReaderBase.h"
 
+#include <cstring>
+
 #include "velox/buffer/Buffer.h"
 #include "velox/common/file/File.h"
 #include "velox/dwio/common/InputStream.h"
@@ -79,10 +81,11 @@ class SeekableStreamLoader final : public StreamLoader {
 };
 
 std::shared_ptr<const facebook::nimble::Type> loadSchema(
-    const TabletReader& tablet) {
+    const TabletReader& tablet,
+    memory::MemoryPool& pool) {
   auto section = tablet.loadOptionalSection(kSchemaSectionString);
   NIMBLE_CHECK(section.has_value());
-  return SchemaDeserializer::deserialize(section->content().data());
+  return SchemaDeserializer::deserialize(section->content().data(), &pool);
 }
 
 TypePtr getFileSchema(
@@ -134,6 +137,7 @@ std::shared_ptr<ReaderBase> ReaderBase::create(
   input = maybePreloadInput(std::move(input), options);
 
   auto tabletOptions = TabletReader::configureOptions(options);
+  tabletOptions.fileIoContext = input->getInputStream()->fileIoContext();
 
   auto tablet = TabletReader::create(
       input->getReadFile(), &options.memoryPool(), tabletOptions);
@@ -141,7 +145,7 @@ std::shared_ptr<ReaderBase> ReaderBase::create(
   auto* pool = &options.memoryPool();
   const auto& randomSkip = options.randomSkip();
   const auto& scanSpec = options.scanSpec();
-  const auto nimbleSchema = loadSchema(*tablet);
+  const auto nimbleSchema = loadSchema(*tablet, *pool);
   auto fileSchema =
       asRowType(getFileSchema(options, convertToVeloxType(*nimbleSchema)));
 
@@ -152,6 +156,7 @@ std::shared_ptr<ReaderBase> ReaderBase::create(
       scanSpec,
       nimbleSchema,
       std::move(fileSchema),
+      options.nimbleLazyFileStats(),
       pool));
 }
 
@@ -180,6 +185,7 @@ std::shared_ptr<ReaderBase> ReaderBase::create(
       scanSpec,
       cachedTablet->nimbleSchema(),
       std::move(fileSchema),
+      options.nimbleLazyFileStats(),
       pool));
 }
 
@@ -190,6 +196,7 @@ ReaderBase::ReaderBase(
     const std::shared_ptr<velox::common::ScanSpec>& scanSpec,
     std::shared_ptr<const Type> nimbleSchema,
     velox::RowTypePtr fileSchema,
+    bool lazyFileStats,
     velox::memory::MemoryPool* pool)
     : input_{std::move(input)},
       tablet_{std::move(tablet)},
@@ -199,6 +206,9 @@ ReaderBase::ReaderBase(
       nimbleSchema_{std::move(nimbleSchema)},
       fileSchema_{std::move(fileSchema)},
       fileColumnStats_{[&]() -> std::vector<std::unique_ptr<ColumnStatistics>> {
+        if (lazyFileStats) {
+          return {};
+        }
         auto statsSection =
             tablet_->loadOptionalSection(std::string(kVectorizedStatsSection));
         if (!statsSection.has_value()) {
@@ -210,7 +220,47 @@ ReaderBase::ReaderBase(
           return {};
         }
         return fileStats->toColumnStatistics(fileSchema_, nimbleSchema_);
+      }()},
+      lazyStats_{[&]() -> std::unique_ptr<VectorizedFileStats> {
+        if (!lazyFileStats) {
+          return nullptr;
+        }
+        auto statsSection =
+            tablet_->loadOptionalSection(std::string(kVectorizedStatsSection));
+        if (!statsSection.has_value()) {
+          return nullptr;
+        }
+        auto section =
+            std::make_shared<const Section>(std::move(*statsSection));
+        const auto payload = section->content();
+        return VectorizedFileStats::deserialize(
+            payload, std::move(section), fileSchema_, *pool_);
       }()} {}
+
+bool ReaderBase::hasFileColumnStatistics() const {
+  return lazyStats_ != nullptr || !fileColumnStats_.empty();
+}
+
+const ColumnStatistics* ReaderBase::fileColumnStatistics(
+    uint32_t nodeId) const {
+  if (lazyStats_ != nullptr) {
+    return lazyStats_->columnStatistics(nodeId);
+  }
+  return nodeId < fileColumnStats_.size() ? fileColumnStats_[nodeId].get()
+                                          : nullptr;
+}
+
+std::optional<uint64_t> ReaderBase::fileColumnLogicalSize(
+    uint32_t nodeId) const {
+  if (lazyStats_ != nullptr) {
+    return lazyStats_->logicalSize(nodeId);
+  }
+  const auto* stats = fileColumnStatistics(nodeId);
+  if (stats == nullptr) {
+    return std::nullopt;
+  }
+  return stats->getLogicalSize();
+}
 
 void LazyInput::load() {
   if (!loaded_) {
@@ -228,17 +278,14 @@ LazyInput* StripeStreams::createLazyInput() {
 std::optional<common::Region> StripeStreams::streamRegion(int streamId) const {
   NIMBLE_CHECK(stripeIdentifier_.has_value());
   const auto& tablet = readerBase_->tablet();
-  if (streamId >= tablet.streamCount(*stripeIdentifier_)) {
-    return std::nullopt;
-  }
-  const auto size = tablet.streamSize(*stripeIdentifier_, streamId);
-  if (size == 0) {
+  const TabletReader::StreamMetadata location = tablet.streamLocation(
+      *stripeIdentifier_, static_cast<uint32_t>(streamId));
+  if (location.size == 0) {
     return std::nullopt;
   }
   common::Region region;
-  region.offset = tablet.stripeOffset(stripe_) +
-      tablet.streamOffset(*stripeIdentifier_, streamId);
-  region.length = size;
+  region.offset = tablet.stripeOffset(stripe_) + location.offset;
+  region.length = location.size;
   return region;
 }
 
@@ -318,25 +365,23 @@ std::vector<std::optional<StreamLocation>> StripeStreams::locateStreams(
   NIMBLE_CHECK(stripeIdentifier_.has_value());
 
   const auto& tablet = readerBase_->tablet();
-  const auto streamCount = tablet.streamCount(*stripeIdentifier_);
   // File offset where this stripe's data begins.
   const auto stripeOffset = tablet.stripeOffset(stripe_);
 
-  std::vector<std::optional<StreamLocation>> locations(streamIds.size());
+  std::vector<TabletReader::StreamMetadata> locations(streamIds.size());
+  tablet.streamLocations(*stripeIdentifier_, streamIds, locations);
+  std::vector<std::optional<StreamLocation>> fileLocations(streamIds.size());
   for (size_t i = 0; i < streamIds.size(); ++i) {
-    const auto streamId = streamIds[i];
-    if (streamId >= streamCount) {
+    // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
+    const TabletReader::StreamMetadata& location = locations[i];
+    if (location.size == 0) {
       continue;
     }
-    const auto streamSize = tablet.streamSize(*stripeIdentifier_, streamId);
-    if (streamSize == 0) {
-      continue;
-    }
-    const auto streamOffset = tablet.streamOffset(*stripeIdentifier_, streamId);
-    locations[i] = StreamLocation{
-        streamId, common::Region{stripeOffset + streamOffset, streamSize}};
+    fileLocations[i] = StreamLocation{
+        streamIds[i],
+        common::Region{stripeOffset + location.offset, location.size}};
   }
-  return locations;
+  return fileLocations;
 }
 
 std::shared_ptr<index::StreamIndex> StripeStreams::streamIndex(
@@ -349,9 +394,8 @@ std::shared_ptr<index::StreamIndex> StripeStreams::streamIndex(
   }
   // A stream absent from this stripe group (e.g. added by later schema
   // evolution or a flat-map feature not present in this group) has no chunk
-  // index. Gate on streamCount as streamRegion()/locateStreams() do, so an
-  // out-of-range stream id does not reach streamSize() (which check-fails on
-  // out-of-range).
+  // index. Gate on streamCount, so an out-of-range stream id does not reach
+  // streamSize(), which check-fails on it.
   if (streamId >= readerBase_->tablet().streamCount(*stripeIdentifier_)) {
     return nullptr;
   }

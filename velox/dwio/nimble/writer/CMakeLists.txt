@@ -15,6 +15,7 @@
 add_library(
   nimble_writer
   ChunkedStreamWriter.cpp
+  BufferPolicy.cpp
   BufferPolicy.h
   EncodingLayoutTree.cpp
   EncodingSelectionPolicyFactory.cpp
@@ -23,6 +24,7 @@ add_library(
   StreamChunker.cpp
   Writer.cpp
   WriterDefaultMetadataOSS.cpp
+  WriterDefaultMetadata.h
   WriterMemoryReclaimer.cpp
   WriterOptions.h
   WriterFactory.h

@@ -18,10 +18,13 @@
 #include "velox/experimental/torchwave/AllocGroup.h"
 #include "velox/experimental/torchwave/Cat.h"
 #include "velox/experimental/torchwave/Compile.h"
+#include "velox/experimental/torchwave/DeviceGrid.h"
+#include "velox/experimental/torchwave/DeviceSymbols.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/GroupAlloc.h"
 #include "velox/experimental/torchwave/NodePrinter.h"
 #include "velox/experimental/torchwave/Standalones.h"
+#include "velox/experimental/torchwave/StaticDims.h"
 #include "velox/experimental/torchwave/StepProgram.h"
 #include "velox/experimental/torchwave/StepSupport.h"
 #include "velox/experimental/torchwave/Utils.h"
@@ -37,6 +40,7 @@
 #include <gflags/gflags.h>
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <fstream>
@@ -80,11 +84,37 @@ namespace torch::wave {
 
 namespace {
 
-// Synchronizes the CUDA default stream (stream 0), where eager ATen standalone
-// ops are dispatched. Used to order them against wave-stream work before a
-// composite invocation returns.
+// Logs the static dims of an elementwise expression's root and leaves, the
+// coverage check for shape specialization.
+void traceStaticDims(std::string_view label, const ElementExpr& ee) {
+  const auto& types = waveGraph()->types();
+  auto describe = [&](ValueCP value) {
+    auto dims = staticDimsOf(types, value);
+    std::string text = fmt::format("%{}", value->id());
+    if (!dims) {
+      return text + "[?]";
+    }
+    text += "[";
+    for (size_t i = 0; i < dims->size(); ++i) {
+      text += fmt::format("{}{}", i > 0 ? "," : "", (*dims)[i]);
+    }
+    return text + "]";
+  };
+  std::string leaves;
+  for (auto* value : ee.inputs) {
+    if (value->type().kind() == nativert::Type::Kind::Tensor) {
+      leaves += " " + describe(value);
+    }
+  }
+  LOG(INFO) << "static dims " << label << ": root " << describe(ee.output)
+            << " leaves" << leaves;
+}
+
+// Synchronizes the torch stream, where eager ATen standalone ops are
+// dispatched. Used to order them against wave-stream work before a composite
+// invocation returns.
 void syncTorchDefaultStream() {
-  cudaStreamSynchronize(nullptr);
+  syncTorchStream();
 }
 
 // Bytes currently held in live tensors by the torch CUDA caching allocator on
@@ -487,6 +517,75 @@ void traceGrid(int32_t sequenceNumber, int32_t stepIdx, const StepVectors& sv) {
   std::cout << text << std::endl;
 }
 
+// Blocks per launch so that every launch completes at the same time: a
+// launch with work c on b blocks takes c / b, so each gets ceil(c / T) blocks
+// for the smallest common time T at which the blocks fit in 'targetBlocks'.
+// Each count stays within [1, maxBlocks]; a launch that reaches either bound
+// drops out and the others share the rest. When even one block apiece does
+// not fit, every launch gets one.
+//
+// T is searched in log T between maxCost / targetBlocks and maxCost: each of
+// kEqualFinishRounds rounds tries kEqualFinishPoints points of the interval
+// and keeps the one between the last that does not fit and the first that
+// does. The device grid kernel searches the same points, one warp each.
+std::vector<int32_t> assignBlocksEqualFinish(
+    const std::vector<float>& costs,
+    const std::vector<int32_t>& maxBlocks,
+    int32_t targetBlocks) {
+  constexpr int32_t kEqualFinishPoints = 16;
+  constexpr int32_t kEqualFinishRounds = 4;
+  const auto numLaunches = costs.size();
+  std::vector<int32_t> blocks(numLaunches, 1);
+  // Multiplies by the inverse time, as the device grid kernel does.
+  auto blocksAt = [&](double time, std::vector<int32_t>& out) {
+    const double inverse = time > 0 ? 1.0 / time : 0;
+    int64_t total = 0;
+    for (size_t i = 0; i < numLaunches; ++i) {
+      const double wanted = inverse > 0 ? std::ceil(costs[i] * inverse) : 1.0;
+      out[i] = static_cast<int32_t>(
+          std::clamp<double>(wanted, 1.0, std::max(1, maxBlocks[i])));
+      total += out[i];
+    }
+    return total;
+  };
+  double maxCost = 0;
+  for (auto cost : costs) {
+    maxCost = std::max<double>(maxCost, cost);
+  }
+  if (maxCost <= 0 ||
+      static_cast<int64_t>(numLaunches) >= static_cast<int64_t>(targetBlocks)) {
+    return blocks;
+  }
+  // At time maxCost every launch fits in one block.
+  double fits = maxCost;
+  double low = std::log(maxCost / targetBlocks);
+  double high = std::log(maxCost);
+  std::vector<int32_t> trial(numLaunches);
+  for (int32_t round = 0; round < kEqualFinishRounds; ++round) {
+    const double step = (high - low) / kEqualFinishPoints;
+    int32_t smallest = kEqualFinishPoints;
+    for (int32_t k = 0; k < kEqualFinishPoints; ++k) {
+      const double time = std::exp(low + (high - low) * k / kEqualFinishPoints);
+      if (blocksAt(time, trial) <= targetBlocks) {
+        smallest = k;
+        fits = time;
+        break;
+      }
+    }
+    if (smallest == 0) {
+      break;
+    }
+    if (smallest < kEqualFinishPoints) {
+      high = low + step * smallest;
+      low = low + step * (smallest - 1);
+    } else {
+      low = low + step * (kEqualFinishPoints - 1);
+    }
+  }
+  blocksAt(fits, blocks);
+  return blocks;
+}
+
 } // namespace
 
 int32_t makeGrid(
@@ -496,6 +595,7 @@ int32_t makeGrid(
     int32_t maxBlocksPerSM,
     int32_t staticSharedPerBlock,
     const std::function<int32_t(int32_t)>& occupancyFor) {
+  TORCH_CHECK(!launches.empty(), "A grid must have at least one launch");
   auto unitCost = [&](size_t i) {
     return WaveConfig::get().uniformCost ? 1.0f
                                          : launches[i].launch->op->unitCost();
@@ -563,7 +663,31 @@ int32_t makeGrid(
   // maxBlocks.
   sv.numBlocksPerLaunch.resize(launches.size());
   int32_t totalAssigned = 0;
-  for (size_t i = 0; i < launches.size(); ++i) {
+  const bool equalFinish = WaveConfig::get().gridEqualFinish;
+  if (equalFinish) {
+    const auto equalBlocks =
+        assignBlocksEqualFinish(sv.costs, sv.maxBlocks, targetBlocks);
+    TORCH_CHECK(equalBlocks.size() == launches.size());
+    std::copy(
+        equalBlocks.begin(), equalBlocks.end(), sv.numBlocksPerLaunch.begin());
+    // Fewer blocks so that all but the last process a multiple of blockSize
+    // elements.
+    for (size_t i = 0; i < launches.size(); ++i) {
+      auto& assigned = sv.numBlocksPerLaunch[i];
+      if (assigned > 1) {
+        const auto elemsPerBlock =
+            (launches[i].numElements + assigned - 1) / assigned;
+        const auto alignedElems =
+            roundUp(elemsPerBlock, static_cast<int64_t>(blockSize));
+        assigned = std::max(
+            1,
+            static_cast<int32_t>(
+                (launches[i].numElements + alignedElems - 1) / alignedElems));
+      }
+      totalAssigned += assigned;
+    }
+  }
+  for (size_t i = 0; !equalFinish && i < launches.size(); ++i) {
     // Operations marked alwaysSingleBlock always get exactly one block.
     if (launches[i].launch->op && launches[i].launch->op->alwaysSingleBlock()) {
       sv.numBlocksPerLaunch[i] = 1;
@@ -686,7 +810,7 @@ int32_t makeGrid(
 
   // Balance projected latency: move blocks from the largest-blocked op to the
   // highest-latency op when the highest-latency op has fewer blocks.
-  if (launches.size() > 1) {
+  if (launches.size() > 1 && !equalFinish) {
     for (int32_t pass = 0; pass < 20; ++pass) {
       int32_t highLatIdx = -1;
       float highLat = 0;
@@ -743,7 +867,6 @@ int32_t makeGrid(
   for (size_t i = 0; i < launches.size(); ++i) {
     launches[i].expectedFraction = totalCost > 0 ? sv.costs[i] / totalCost : 0;
   }
-
   const auto device =
       currentGridDevice(maxBlocksPerSM, staticSharedPerBlock, occupancyFor);
   const auto gridOps = describeGridOps(launches, sv);
@@ -776,6 +899,424 @@ int32_t makeGrid(
 // --- Launch ---
 
 namespace {
+
+// Gathers what a device-side grid needs of the step whose grid makeGrid just
+// laid out.
+void buildGridDescriptor(
+    const std::vector<LaunchData>& launches,
+    StepVectors& sv,
+    int32_t blockSize) {
+  auto& grid = sv.program->grid;
+  grid.launches.assign(launches.size(), GridLaunchDesc{});
+  // Where the step's parameters hold each value, and whether as an integer.
+  folly::F14FastMap<nativert::ValueId, std::pair<int32_t, bool>> offsetOf;
+  for (const auto& fill : sv.program->fills) {
+    if (fill.kind == FillOp::kTensor || fill.kind == FillOp::kShapeOnly ||
+        fill.kind == FillOp::kScalar) {
+      offsetOf.emplace(
+          fill.valueId,
+          std::make_pair(fill.offset, fill.kind == FillOp::kScalar));
+    }
+  }
+  for (size_t i = 0; i < launches.size(); ++i) {
+    const auto& data = launches[i];
+    const auto* op = data.launch->op;
+    auto& desc = grid.launches[i];
+    const float adjust =
+        data.costAdjustFactor > 0 ? data.costAdjustFactor : 1.0f;
+    desc.opCode = op->opCode();
+    desc.costPerInput =
+        (WaveConfig::get().uniformCost ? 1.0f : op->unitCost()) * adjust;
+    desc.elementsPerThread = elementsPerThreadForCost(desc.costPerInput);
+    desc.blocksPerSm = data.launch->blocksPerSm;
+    desc.singleBlock = op->alwaysSingleBlock();
+    const auto& expr = data.sizeExpr;
+    std::vector<nativert::ValueId> values;
+    auto count = GridLaunchDesc::Count::kMax;
+    if (expr.op == SizeShortcut::kNone) {
+      // Sized by the reserve of its one output.
+      if (!data.actualOutputs.empty()) {
+        values.push_back(data.actualOutputs[0]);
+      }
+    } else if (expr.args.empty()) {
+      values = expr.values;
+      const bool broadcast = expr.broadcast || !expr.constShapes.empty();
+      count = broadcast                   ? GridLaunchDesc::Count::kBroadcast
+          : expr.op == SizeShortcut::kSum ? GridLaunchDesc::Count::kSum
+          : expr.op == SizeShortcut::kProduct ? GridLaunchDesc::Count::kProduct
+                                              : GridLaunchDesc::Count::kMax;
+      for (const auto& shape : expr.constShapes) {
+        desc.constShapes.emplace_back(shape.begin(), shape.end());
+      }
+    } else {
+      count = GridLaunchDesc::Count::kHost;
+    }
+    for (auto id : values) {
+      auto it = offsetOf.find(id);
+      if (it == offsetOf.end()) {
+        count = GridLaunchDesc::Count::kHost;
+        break;
+      }
+      desc.countOffsets.push_back(it->second.first);
+      desc.countIsScalar.push_back(it->second.second);
+    }
+    // As the host has it in runBoundLaunch: the outputs count too.
+    if (count == GridLaunchDesc::Count::kMax && countsOutputs(expr)) {
+      for (auto id : data.actualOutputs) {
+        auto it = offsetOf.find(id);
+        if (it != offsetOf.end() && !it->second.second) {
+          desc.countOffsets.push_back(it->second.first);
+          desc.countIsScalar.push_back(false);
+        }
+      }
+    }
+    desc.count = count;
+  }
+  grid.targetBlocks = sv.gridStats.targetBlocks;
+  grid.blockSize = blockSize;
+  grid.cooperative = sv.isCgGrid;
+  grid.blockCapacity = sv.blockCapacity;
+}
+
+} // namespace
+
+int64_t gridCount(const GridLaunchDesc& desc, const uint8_t* base) {
+  using Count = GridLaunchDesc::Count;
+  if (desc.count == Count::kHost) {
+    return -1;
+  }
+  if (desc.countOffsets.empty() && desc.constShapes.empty()) {
+    return 1;
+  }
+  int64_t count = desc.count == Count::kProduct ? 1 : 0;
+  int32_t dims[kMaxDims] = {1, 1, 1, 1};
+  int32_t rank = 0;
+  // Right-aligned; a dim of 1 broadcasts and an empty dim empties the
+  // result, as the device grid kernel has it.
+  auto broadcastIn = [&](const int32_t* termDims, int32_t termRank) {
+    rank = std::max(rank, termRank);
+    for (int32_t d = 0; d < termRank; ++d) {
+      auto& dim = dims[kMaxDims - termRank + d];
+      const auto term = termDims[d];
+      dim = term == 1             ? dim
+          : dim == 1              ? term
+          : dim == 0 || term == 0 ? 0
+                                  : std::max(dim, term);
+    }
+  };
+  for (size_t t = 0; t < desc.countOffsets.size(); ++t) {
+    const auto* term = base + desc.countOffsets[t];
+    if (desc.countIsScalar[t]) {
+      const auto value = *reinterpret_cast<const int64_t*>(term);
+      count = desc.count == Count::kProduct ? count * value
+                                            : std::max(count, value);
+      continue;
+    }
+    const auto* tensor = reinterpret_cast<const Tensor*>(term);
+    if (desc.count == Count::kProduct) {
+      count *= tensor->numEl;
+    } else if (desc.count == Count::kSum) {
+      count += tensor->numEl;
+    } else if (desc.count == Count::kMax) {
+      count = std::max<int64_t>(count, tensor->numEl);
+    } else {
+      broadcastIn(tensor->dims, tensor->rank);
+    }
+  }
+  if (desc.count == Count::kBroadcast) {
+    for (const auto& shape : desc.constShapes) {
+      broadcastIn(shape.data(), static_cast<int32_t>(shape.size()));
+    }
+    count = 1;
+    for (int32_t d = kMaxDims - rank; d < kMaxDims; ++d) {
+      count *= dims[d];
+    }
+  }
+  return count;
+}
+
+namespace {
+
+// Compares the element count the descriptor gives each launch with the count
+// the host sized it for.
+void checkGridDescriptor(
+    const std::vector<LaunchData>& launches,
+    const StepVectors& sv,
+    const uint8_t* pinnedBase,
+    int32_t sequenceNumber,
+    int32_t stepIdx) {
+  static std::atomic<int32_t> numReported{0};
+  const auto& grid = sv.program->grid;
+  for (size_t i = 0; i < launches.size(); ++i) {
+    // An operand absent this execution empties the launch; the descriptor
+    // counts only launches with all their operands.
+    if (launches[i].numElements == 0) {
+      continue;
+    }
+    const auto count = gridCount(grid.launches[i], pinnedBase);
+    // A cooperative grid gives an empty launch blocks anyway; see
+    // checkUnreadyOperands.
+    if (count < 0 || (count == 0 && WaveConfig::get().isCg.value_or(false))) {
+      continue;
+    }
+    if (count != launches[i].numElements && numReported++ < 20) {
+      LOG(WARNING) << "Grid descriptor of step " << sequenceNumber << "."
+                   << stepIdx << " launch " << i << " gives " << count
+                   << " elements, the host sized " << launches[i].numElements;
+    }
+  }
+}
+
+// The most blocks launch 'i' of 'grid' takes for 'n' elements, as the device
+// grid kernel computes it.
+int32_t launchBlockCap(
+    const GridDescriptor& grid,
+    size_t i,
+    int64_t n,
+    int32_t numSMs) {
+  const auto& desc = grid.launches.at(i);
+  const int64_t perBlock = std::max(1, grid.blockSize * desc.elementsPerThread);
+  int64_t cap = desc.singleBlock ? 1 : (n + perBlock - 1) / perBlock;
+  if (desc.blocksPerSm > 0) {
+    cap = std::min<int64_t>(cap, int64_t{numSMs} * desc.blocksPerSm);
+  }
+  return static_cast<int32_t>(std::max<int64_t>(cap, 1));
+}
+
+// Compares what the device grid computed for the step just launched with the
+// host: the element counts with the host's sizes, and, where those agree, the
+// blocks with assignBlocksEqualFinish over the costs the device derived from
+// its multipliers and the same caps.
+void checkDeviceGrid(
+    StepVectors& sv,
+    facebook::velox::wave::Stream& stream,
+    int32_t sequenceNumber,
+    int32_t stepIdx) {
+  static std::atomic<int32_t> numCountReports{0};
+  static std::atomic<int32_t> numBlockReports{0};
+  static std::atomic<int64_t> numChecked{0};
+  static std::atomic<int64_t> numCompared{0};
+  static std::atomic<int64_t> numCountDiffs{0};
+  static std::atomic<int64_t> numBlockDiffs{0};
+  stream.wait();
+  const auto result = readDeviceGrid(*sv.deviceGrid);
+  const auto& grid = sv.program->grid;
+  const auto numLaunches = sv.kernels.size();
+  bool comparable = true;
+  for (size_t i = 0; i < numLaunches; ++i) {
+    if (result.counts[i] != sv.kernels[i].numElements) {
+      comparable = false;
+      ++numCountDiffs;
+      if (numCountReports++ < 5) {
+        LOG(WARNING) << "Device grid " << sequenceNumber << "." << stepIdx
+                     << " launch " << i << " counts " << result.counts[i]
+                     << ", the host sized " << sv.kernels[i].numElements;
+      }
+    }
+  }
+  ++numChecked;
+  if (comparable) {
+    ++numCompared;
+    std::vector<float> costs(numLaunches);
+    std::vector<int32_t> maxBlocks(numLaunches);
+    const int32_t numSMs = currentGridDevice(0, 0).numSMs;
+    for (size_t i = 0; i < numLaunches; ++i) {
+      const auto n = sv.kernels[i].numElements;
+      const float unitCost =
+          grid.launches[i].costPerInput / sv.deviceGrid->multipliers[i];
+      costs[i] = static_cast<float>(n) * unitCost * result.multipliers[i];
+      maxBlocks[i] = launchBlockCap(grid, i, n, numSMs);
+    }
+    auto blocks = assignBlocksEqualFinish(costs, maxBlocks, grid.targetBlocks);
+    for (size_t i = 0; i < numLaunches; ++i) {
+      const auto n = sv.kernels[i].numElements;
+      auto& assigned = blocks.at(i);
+      if (assigned > 1) {
+        const auto aligned = roundUp(
+            (n + assigned - 1) / assigned,
+            static_cast<int64_t>(grid.blockSize));
+        assigned =
+            std::max(1, static_cast<int32_t>((n + aligned - 1) / aligned));
+      }
+      if (assigned != result.blocks[i]) {
+        ++numBlockDiffs;
+        if (numBlockReports++ < 20) {
+          LOG(WARNING) << "Device grid " << sequenceNumber << "." << stepIdx
+                       << " launch " << i << " gives " << result.blocks[i]
+                       << " blocks, the host " << assigned;
+        }
+      }
+    }
+  }
+  if (numChecked % 200 == 0) {
+    LOG(INFO) << "Device grid check: " << numChecked << " steps, "
+              << numCompared << " compared, " << numCountDiffs << " count and "
+              << numBlockDiffs << " block differences";
+  }
+}
+
+// How the export slot 'device' differs from the host's Tensor 'host', or empty.
+// A step off the path does not fill the slot's static header, so rank and
+// element type are the host's.
+std::string exportDifference(
+    const TableTensor& host,
+    const TableTensor& device) {
+  std::string difference;
+  for (int32_t d = 0; d < host.rank; ++d) {
+    if (device.dims[d] != host.dims[d]) {
+      difference += fmt::format(
+          " dim {} is {}, host {};", d, device.dims[d], host.dims[d]);
+    } else if (host.dims[d] != 1 && device.strides[d] != host.strides[d]) {
+      difference += fmt::format(
+          " stride {} is {}, host {};", d, device.strides[d], host.strides[d]);
+    }
+  }
+  if (device.numEl != host.numEl) {
+    difference +=
+        fmt::format(" numEl is {}, host {};", device.numEl, host.numEl);
+  }
+  if (host.numEl > 0 && device.storage != host.storage) {
+    difference += fmt::format(
+        " storage is host {:+} bytes;",
+        reinterpret_cast<intptr_t>(device.storage) -
+            reinterpret_cast<intptr_t>(host.storage));
+  }
+  return difference;
+}
+
+// Whether the host's Tensor differs from the export slot only by dims at a
+// capacity: the host sizes values of data-dependent dims at their capacities.
+bool hostAtCapacity(const TableTensor& host, const TableTensor& device) {
+  bool larger = false;
+  for (int32_t d = 0; d < host.rank; ++d) {
+    if (device.dims[d] > host.dims[d]) {
+      return false;
+    }
+    larger = larger || device.dims[d] < host.dims[d];
+  }
+  return larger && device.storage == host.storage;
+}
+
+// Compares each export slot the setup of a step off the path placed with the
+// host's Tensor of its value.
+void checkExports(
+    const StepVectors& sv,
+    ExecutionState& state,
+    uint8_t* deviceBase,
+    int32_t sequenceNumber,
+    int32_t stepIdx) {
+  static std::atomic<int32_t> numReports{0};
+  static std::atomic<int64_t> numChecked{0};
+  static std::atomic<int64_t> numDifferent{0};
+  static std::atomic<int64_t> numAtCapacity{0};
+  static std::atomic<int64_t> numUnwritten{0};
+  const auto& program = *sv.program;
+  if (program.placedExports.empty()) {
+    return;
+  }
+  const auto begin = roundUp(sv.launchParamBytes, int64_t{16});
+  std::vector<uint8_t> slots(sv.paramRegionBytes - begin);
+  state.stream->wait();
+  state.stream->deviceToHostAsync(
+      slots.data(), deviceBase + begin, sv.paramRegionBytes - begin);
+  state.stream->wait();
+  const auto& table = state.valueTable;
+  for (const auto& fill : program.fills) {
+    const auto id = fill.valueId;
+    if (fill.kernel != FillOp::kExport ||
+        program.placedExports.count(fill.offset) == 0 || !table.valid(id) ||
+        !table.isTensor(id)) {
+      continue;
+    }
+    TableTensor device;
+    std::memcpy(&device, slots.data() + fill.offset - begin, sizeof(device));
+    ++numChecked;
+    const auto& host = table.tensor(id);
+    const auto difference = exportDifference(host, device);
+    if (difference.empty()) {
+      continue;
+    }
+    if (hostAtCapacity(host, device)) {
+      ++numAtCapacity;
+      continue;
+    }
+    // A setup that finds a value over its capacity leaves the step to the
+    // host and writes no dims.
+    if (device.storage == nullptr && device.numEl == 0) {
+      ++numUnwritten;
+      continue;
+    }
+    ++numDifferent;
+    if (numReports++ < 10) {
+      LOG(WARNING) << "Export check: step " << sequenceNumber << "." << stepIdx
+                   << " %" << id << ":" << difference;
+    }
+  }
+  LOG_EVERY_N(WARNING, 500)
+      << "Export check: " << numChecked << " slots, " << numDifferent
+      << " differ, " << numAtCapacity << " host dims at a capacity, "
+      << numUnwritten << " not written";
+}
+
+// The most blocks the device grid of 'sv' can give its launches: each at most
+// its element count over the elements a block takes, from the host's sizes,
+// which bound the counts the device reads.
+int32_t deviceGridBound(const StepVectors& sv) {
+  const auto& grid = sv.program->grid;
+  const int32_t numSMs = currentGridDevice(0, 0).numSMs;
+  int64_t bound = 0;
+  for (size_t i = 0; i < sv.kernels.size() && bound < grid.targetBlocks; ++i) {
+    // NOLINTNEXTLINE(facebook-hte-ParameterUncheckedArrayBounds)
+    bound += launchBlockCap(grid, i, sv.kernels[i].numElements, numSMs);
+  }
+  return static_cast<int32_t>(std::min<int64_t>(bound, grid.targetBlocks));
+}
+
+// Packs the grid descriptor of 'sv' for the device once per grid choice, after
+// the host grid that built it. A step whose grid is split into several
+// launches or has a count the parameters do not carry keeps the host grid.
+void maybePackDeviceGrid(StepVectors& sv) {
+  const auto& config = WaveConfig::get();
+  if (!config.deviceGrid || config.debugSingleOps || config.launchPerOp ||
+      sv.program == nullptr ||
+      (sv.deviceGridTried && sv.deviceGridChoices == sv.gridChoiceBitmap)) {
+    return;
+  }
+  // A step split into several launches may come out whole at the next grid.
+  if (sv.segments.size() > 1) {
+    return;
+  }
+  sv.deviceGridTried = true;
+  sv.deviceGridChoices = sv.gridChoiceBitmap;
+  sv.deviceGrid = nullptr;
+  const auto& grid = sv.program->grid;
+  const auto numLaunches = sv.kernels.size();
+  if (grid.launches.size() != numLaunches ||
+      sv.paramOffsets.size() < numLaunches ||
+      static_cast<int64_t>(numLaunches) >= grid.targetBlocks ||
+      grid.targetBlocks > sv.blockCapacity) {
+    return;
+  }
+  std::vector<int32_t> paramOffsets(numLaunches);
+  std::vector<float> costAdjust(numLaunches);
+  for (size_t i = 0; i < numLaunches; ++i) {
+    paramOffsets[i] = static_cast<int32_t>(sv.paramOffsets[i]);
+    costAdjust[i] = sv.kernels[i].costAdjustFactor;
+  }
+  auto deviceGrid = std::make_shared<DeviceGrid>();
+  if (packDeviceGrid(
+          grid,
+          paramOffsets,
+          costAdjust,
+          currentGridDevice(0, 0).numSMs,
+          *deviceGrid)) {
+    sv.deviceGrid = std::move(deviceGrid);
+  }
+  if (config.trace & WaveConfig::kGrid) {
+    std::cout << "  device grid: " << (sv.deviceGrid ? "packed" : "host")
+              << " launches=" << numLaunches << std::endl;
+  }
+}
 
 // Marks every launch in 'sv' with LaunchData::d2hProducer: the step whose
 // device-to-host transfer produced a value it reads, i.e. the step whose
@@ -913,7 +1454,10 @@ void recordD2hProducers(ExecutionState& state, const StepVectors& sv) {
   };
   for (const auto& data : sv.kernels) {
     for (auto id : data.returnValues) {
-      record(id);
+      // Device symbols runs it on its capacity: nothing waits for it.
+      if (state.symbolUnreturned.count(id) == 0) {
+        record(id);
+      }
     }
   }
   for (const auto& copy : sv.hostCopies) {
@@ -922,6 +1466,38 @@ void recordD2hProducers(ExecutionState& state, const StepVectors& sv) {
 }
 
 } // namespace
+
+bool CompositeInvocation::prepareCountFreeGrid(StepVectors& sv) {
+  auto usable = [&] {
+    return sv.deviceGrid != nullptr &&
+        sv.deviceGridChoices == sv.gridChoiceBitmap &&
+        sv.deviceGrid->numLaunches == static_cast<int32_t>(sv.kernels.size()) &&
+        sv.segments.size() <= 1;
+  };
+  if (usable()) {
+    return true;
+  }
+  if (sv.program == nullptr || sv.kernels.empty() || !kernel_) {
+    return false;
+  }
+  // Full width: every launch could use all the blocks.
+  for (auto& data : sv.kernels) {
+    data.numElements = int64_t{1} << 30;
+  }
+  const auto blockSize = makeGrid(
+      sv.kernels,
+      sv,
+      sv.blockSize,
+      kernel_->maxOccupancy(sv.entry),
+      /*staticSharedPerBlock=*/0,
+      occupancyQuery(kernel_.get(), sv.entry));
+  sv.cachedBlockSize = blockSize;
+  ++sv.gridVersion;
+  buildGridDescriptor(sv.kernels, sv, blockSize);
+  sv.deviceGridTried = false;
+  maybePackDeviceGrid(sv);
+  return usable();
+}
 
 void setViewReadIds(LaunchData& data) {
   data.viewReadIds.clear();
@@ -1066,6 +1642,11 @@ Launch::Launch(
     }
     auto* cpuValue = waveGraph.newTensorValue(
         waveGraph.placeholderNode(), waveGraph.uniqueName("cpu_copy"), dtype);
+    auto& constraints = waveGraph.types().constraints;
+    if (static_cast<size_t>(id) < constraints.size() &&
+        static_cast<size_t>(cpuValue->id()) < constraints.size()) {
+      constraints[cpuValue->id()].rank = constraints[id].rank;
+    }
     argOnDevice.push_back(deviceValue);
     argOnCpu.push_back(cpuValue);
   }
@@ -1540,6 +2121,9 @@ CompositeKernel::CompositeKernel(
 
       for (const auto& ee : kop->elementExprs()) {
         int32_t outputOff = kop->paramOffset(ee.output);
+        if (getenv("TW_STATIC_DIMS_TRACE") != nullptr) {
+          traceStaticDims(kop->label(), ee);
+        }
         for (auto* v : ee.inputs) {
           if (v->type().kind() != nativert::Type::Kind::Tensor) {
             continue;
@@ -1547,9 +2131,15 @@ CompositeKernel::CompositeKernel(
           inElementExpr.insert(v);
           const auto leafOff = kop->paramOffset(v);
           const auto refIt = kop->broadcastRefs().find(leafOff);
+          const auto leafRefIt = ee.leafRefs.find(v);
           paramOffs.push_back(leafOff);
-          outputOffs.push_back(
-              refIt != kop->broadcastRefs().end() ? refIt->second : outputOff);
+          if (leafRefIt != ee.leafRefs.end()) {
+            outputOffs.push_back(kop->paramOffset(leafRefIt->second));
+          } else {
+            outputOffs.push_back(
+                refIt != kop->broadcastRefs().end() ? refIt->second
+                                                    : outputOff);
+          }
           auto ait = ee.altParamOffset.find(v);
           altOffs.push_back(ait != ee.altParamOffset.end() ? ait->second : -1);
         }
@@ -1783,6 +2373,7 @@ CompositeKernel::CompositeKernel(
   // uses: a step runs with the registers its own ops need, and the modules
   // compile in parallel.
   std::vector<std::string> moduleTexts;
+  std::vector<std::string> unboundedTexts;
   std::vector<std::vector<std::string>> moduleEntryPoints;
   std::vector<std::string> moduleFiles;
   {
@@ -1866,6 +2457,10 @@ CompositeKernel::CompositeKernel(
            << "  LEAVE();\n"
            << "}\n\n";
       std::vector<std::string> points;
+      // Each "__launch_bounds__" the module's minBlocks adds, and what the
+      // entry would carry without it: the unbounded variant is compiled too,
+      // and warmup() keeps whichever fits more blocks.
+      std::vector<std::pair<std::string, std::string>> bounds;
       for (const int32_t threads : sizes) {
         const auto name = kernelName + "_s" + std::to_string(module) +
             (threads == WaveConfig::get().blockSize
@@ -1875,8 +2470,14 @@ CompositeKernel::CompositeKernel(
         text << "#define " << kBlockSizeMacro << " " << threads << "\n"
              << "__global__ ";
         if (minBlocks > 0) {
-          text << "__launch_bounds__(" << threads << ", "
-               << std::min(minBlocks, 2048 / threads) << ") ";
+          auto bounded = "__launch_bounds__(" + std::to_string(threads) + ", " +
+              std::to_string(std::min(minBlocks, 2048 / threads)) + ") ";
+          bounds.emplace_back(
+              bounded,
+              threads > WaveConfig::get().blockSize
+                  ? "__launch_bounds__(" + std::to_string(threads) + ") "
+                  : std::string());
+          text << bounded;
         } else if (threads > WaveConfig::get().blockSize) {
           text << "__launch_bounds__(" << threads << ") ";
         }
@@ -1888,6 +2489,7 @@ CompositeKernel::CompositeKernel(
       }
       text << "} // namespace torch::wave\n";
       std::string code = text.str();
+      bool overridden = false;
       if (!FLAGS_debug_kernel_dir.empty()) {
         auto debugFile = fmt::format("{}_s{}.cu", kernelName, module);
         auto debugPath =
@@ -1898,10 +2500,24 @@ CompositeKernel::CompositeKernel(
               std::istreambuf_iterator<char>(in),
               std::istreambuf_iterator<char>());
           LOG(INFO) << "Reading code of " << debugFile << " from " << debugPath;
+          overridden = true;
         } else {
           LOG(INFO) << "No debug version for " << debugFile;
         }
       }
+      // A register bound can also raise a kernel's registers: one that needs
+      // 32 left alone may take the 40 that six blocks per SM allow, and lose
+      // two blocks. So the module is compiled both ways.
+      std::string unbounded;
+      if (!bounds.empty() && !overridden) {
+        unbounded = code;
+        for (const auto& [bounded, plain] : bounds) {
+          auto pos = unbounded.find(bounded);
+          TORCH_CHECK(pos != std::string::npos);
+          unbounded.replace(pos, bounded.size(), plain);
+        }
+      }
+      unboundedTexts.push_back(std::move(unbounded));
       moduleTexts.push_back(std::move(code));
       moduleEntryPoints.push_back(std::move(points));
       moduleFiles.push_back(
@@ -1932,17 +2548,39 @@ CompositeKernel::CompositeKernel(
         spec.headers = nullptr;
         return spec;
       };
-      if (!WaveConfig::get().kernelCacheDir.empty()) {
-        static facebook::velox::wave::KernelFsCache cache(
-            WaveConfig::get().kernelCacheDir);
-        modules_.push_back(cache.getKernel(moduleTexts[m], std::move(genFunc)));
-      } else {
-        modules_.push_back(
-            facebook::velox::wave::CompiledKernel::getKernel(
-                moduleTexts[m], std::move(genFunc)));
+      modules_.push_back(compileModule(moduleTexts[m], std::move(genFunc)));
+      std::unique_ptr<facebook::velox::wave::CompiledKernel> unbounded;
+      if (!unboundedTexts.at(m).empty()) {
+        unbounded = compileModule(
+            unboundedTexts.at(m),
+            [code = unboundedTexts.at(m),
+             points = moduleEntryPoints[m],
+             file = moduleFiles[m] + ".unbounded"]() {
+              facebook::velox::wave::KernelSpec spec;
+              spec.code = code;
+              spec.entryPoints = points;
+              spec.filePath = file;
+              spec.numHeaders = 0;
+              spec.headers = nullptr;
+              return spec;
+            });
       }
+      unboundedModules_.push_back(std::move(unbounded));
     }
   }
+}
+
+std::unique_ptr<facebook::velox::wave::CompiledKernel>
+CompositeKernel::compileModule(
+    const std::string& text,
+    std::function<facebook::velox::wave::KernelSpec()> genFunc) {
+  if (!WaveConfig::get().kernelCacheDir.empty()) {
+    static facebook::velox::wave::KernelFsCache cache(
+        WaveConfig::get().kernelCacheDir);
+    return cache.getKernel(text, std::move(genFunc));
+  }
+  return facebook::velox::wave::CompiledKernel::getKernel(
+      text, std::move(genFunc));
 }
 
 void CompositeKernel::warmup() {
@@ -1956,7 +2594,36 @@ void CompositeKernel::warmup() {
   for (auto& module : modules_) {
     module->launch(0, 1, 1, 0, &stream, args);
   }
+  for (auto& module : unboundedModules_) {
+    if (module) {
+      module->launch(0, 1, 1, 0, &stream, args);
+    }
+  }
   stream.wait();
+  // Keep the unbounded variant of a module unless the bounded one fits more
+  // blocks per SM at some entry: at equal occupancy it cannot have spilled.
+  for (size_t m = 0; m < unboundedModules_.size(); ++m) {
+    auto& unbounded = unboundedModules_[m];
+    if (!unbounded) {
+      continue;
+    }
+    bool boundedBetter = false;
+    for (size_t e = 0; e < entryModule_.size(); ++e) {
+      if (entryModule_[e] != static_cast<int32_t>(m)) {
+        continue;
+      }
+      const auto local = entryLocal_[e];
+      const auto threads = entryBlockSize_[e];
+      if (modules_[m]->occupancy(local, threads, 0) >
+          unbounded->occupancy(local, threads, 0)) {
+        boundedBetter = true;
+      }
+    }
+    if (!boundedBetter) {
+      modules_[m] = std::move(unbounded);
+    }
+    unbounded.reset();
+  }
 }
 
 std::vector<std::pair<std::string, facebook::velox::wave::KernelInfo>>
@@ -2372,6 +3039,7 @@ void CompositeInvocation::layoutParamSlots(int32_t stepIdx, StepVectors& sv) {
   }
   sv.opSlotBegin.push_back(static_cast<int32_t>(sv.slotOffsets.size()));
   sv.paramRegionBytes = cursor;
+  sv.launchParamBytes = cursor;
 
   // Everything this step can read, unioned over the same three variants. Same
   // sources and same reason as Compile.cpp's opReadSet: orderingInputs is what
@@ -2790,6 +3458,17 @@ bool readShapeIntoTable(
   }
   auto& entry = state->valueEntries[id];
   auto& t = entry.t;
+  // A value a step on the device path made has no host entry: it takes the
+  // whole descriptor its setup and kernel wrote.
+  if (state->deviceAllocActive &&
+      static_cast<size_t>(id) < state->deviceOnlyValue.size() &&
+      state->deviceOnlyValue[id] != 0) {
+    std::memcpy(&t, &returned, sizeof(TableTensor));
+    entry.kind = ValueEntry::kTensor;
+    entry.flags = 0;
+    entry.generation = state->tableGeneration;
+    return true;
+  }
   const auto owner = state->valueCold[id].owner;
   if (owner >= 0 && t.elementSize > 0) {
     const auto& buffer = state->allocations[owner].buffer;
@@ -2900,6 +3579,13 @@ void readScalarFromDevice(
     bool trace) {
   auto val = *reinterpret_cast<const T*>(pinnedBase + absOffset);
   if constexpr (std::is_same_v<T, int64_t>) {
+    if (auto* state = currentExecutionState(); state != nullptr &&
+        state->waveGraph != nullptr && WaveConfig::get().deviceSymbols) {
+      auto* symbols = state->waveGraph->deviceSymbols();
+      if (symbols != nullptr && symbols->observeReturn(*state, id, val)) {
+        return;
+      }
+    }
     if (readScalarIntoTable(id, val)) {
       return;
     }
@@ -2967,6 +3653,11 @@ void processReturnData(
     }
   }
   bool trace = WaveConfig::get().trace & WaveConfig::kTensors;
+  auto* symbolState = currentExecutionState();
+  if (symbolState != nullptr &&
+      (!symbolState->deviceSymbolsMode || symbolState->waveGraph == nullptr)) {
+    symbolState = nullptr;
+  }
   for (size_t i = 0; i < sv.kernels.size(); ++i) {
     auto& data = sv.kernels[i];
     if (data.returnValues.empty()) {
@@ -2977,6 +3668,14 @@ void processReturnData(
       auto absOffset = sv.paramOffsets.at(i) + data.returnOffsets.at(j);
       auto typeKind = data.returnTypes[j];
       if (typeKind == nativert::Type::Kind::Tensor) {
+        if (symbolState != nullptr &&
+            symbolState->waveGraph->deviceSymbols()->observeReturnDims(
+                *symbolState,
+                actualId,
+                reinterpret_cast<const Tensor*>(pinnedBase + absOffset)
+                    ->dims[0])) {
+          continue;
+        }
         resizeTensorFromDevice(frame, actualId, pinnedBase, absOffset, trace);
       } else if (typeKind == nativert::Type::Kind::TensorList) {
         for (const auto& tlp : data.tensorLists) {
@@ -3271,6 +3970,7 @@ void CompositeInvocation::materializeStepGroups(
           collector.sizedMask(g),
           state,
           numCarved);
+      noteGroupBase(state, collector.group(g), buffer.base);
     } else {
       // A complete group carves every request; only a partial one needs the
       // copy of the sized ones.
@@ -3285,7 +3985,8 @@ void CompositeInvocation::materializeStepGroups(
         continue;
       }
       buffer = state.tableOnlyActive
-          ? materializeAllocGroupTable(requests, frame, state)
+          ? materializeAllocGroupTable(
+                requests, frame, state, collector.group(g))
           : materializeAllocGroup(requests, frame);
       numCarved = static_cast<int32_t>(requests.size());
     }
@@ -3384,7 +4085,9 @@ void CompositeInvocation::finishStep(
     }
   }
   markD2hDependencies(state, sv);
-  if (!state.pendingReturns.empty()) {
+  // A step on the device path reads returned values on the device.
+  if (!state.pendingReturns.empty() &&
+      !(state.deviceAllocActive && sv.deviceAllocStep)) {
     checkNoPendingReads(state, sv, sequenceNumber_, stepIdx);
   }
   if (doTiming) {
@@ -3487,7 +4190,22 @@ void CompositeInvocation::finishStep(
     }
   }
 
-  {
+  sv.onDeviceGrid = sv.deviceGrid != nullptr &&
+      sv.deviceGridChoices == sv.gridChoiceBitmap &&
+      sv.deviceGrid->numLaunches == static_cast<int32_t>(sv.kernels.size()) &&
+      sv.segments.size() <= 1 && !WaveConfig::get().debugSingleOps &&
+      !WaveConfig::get().launchPerOp;
+  if (sv.onDeviceGrid) {
+    // The device writes the block table over the empty flags.
+    auto* empty = pinnedBase + sv.blockInfoOffset;
+    for (size_t i = 0; i < sv.kernels.size(); ++i) {
+      empty[i] = sv.kernels[i].numElements == 0 ? 1 : 0;
+    }
+    blockSize = sv.cachedBlockSize;
+    sv.blockInfoPinned = nullptr;
+    sv.deviceGridBlocks = deviceGridBound(sv);
+    sv.gridUs = 0;
+  } else {
     auto t0 = Clock::now();
     if (gridSizesMatch(sv.kernels, sv)) {
       blockSize = sv.cachedBlockSize;
@@ -3506,6 +4224,12 @@ void CompositeInvocation::finishStep(
       sv.cachedBlockSize = blockSize;
       ++sv.gridVersion;
       updateGridSizeBounds(sv.kernels, sv);
+      if (sv.program != nullptr) {
+        buildGridDescriptor(sv.kernels, sv, blockSize);
+      }
+    }
+    if (WaveConfig::get().checkGridDescriptor && sv.program != nullptr) {
+      checkGridDescriptor(sv.kernels, sv, pinnedBase, sequenceNumber_, stepIdx);
     }
     if (doTiming) {
       sv.gridUs = elapsed(t0);
@@ -3513,9 +4237,11 @@ void CompositeInvocation::finishStep(
     if (WaveConfig::get().trace & WaveConfig::kGrid) {
       traceGrid(sequenceNumber_, stepIdx, sv);
     }
+    maybePackDeviceGrid(sv);
   }
 
-  auto numBlocks = sv.blocks.size();
+  auto numBlocks = sv.onDeviceGrid ? static_cast<size_t>(sv.deviceGridBlocks)
+                                   : sv.blocks.size();
   TORCH_CHECK(
       numBlocks <= static_cast<size_t>(sv.blockCapacity),
       "makeGrid produced ",
@@ -3526,7 +4252,7 @@ void CompositeInvocation::finishStep(
       stepIdx,
       " but the buffer was reserved for ",
       sv.blockCapacity);
-  {
+  if (!sv.onDeviceGrid) {
     auto t0 = Clock::now();
     writeBlockInfos(sv, pinnedBase, deviceBase, deviceDebugBase);
     if (doTiming) {
@@ -3539,12 +4265,23 @@ void CompositeInvocation::finishStep(
     traceStep(stepIdx, sv, currentGridChoices);
   }
 
-  state.launchDebugInfos.push_back(
-      {reinterpret_cast<DebugInfo*>(pinnedBase + totalPinnedBytes),
-       deviceDebugBase,
-       static_cast<int32_t>(numBlocks),
-       sequenceNumber_,
-       stepIdx});
+  const auto clockOffset =
+      reserveLaunchClocks(state, static_cast<int32_t>(numBlocks));
+  sv.previousClocksInPlace = clockOffset == sv.clockOffset &&
+      static_cast<int32_t>(numBlocks) == sv.clockBlocks;
+  sv.clockOffset = clockOffset;
+  sv.clockBlocks = static_cast<int32_t>(numBlocks);
+  state.launchDebugInfos.push_back({
+      reinterpret_cast<DebugInfo*>(pinnedBase + totalPinnedBytes),
+      deviceDebugBase,
+      static_cast<int32_t>(numBlocks),
+      sequenceNumber_,
+      stepIdx,
+      sv.clockOffset,
+      sv.onDeviceGrid
+          ? nullptr
+          : reinterpret_cast<const BlockInfo*>(pinnedBase + sv.blockInfoOffset),
+  });
 
   auto& stepEvents = newStepEvents(state, sequenceNumber_, stepIdx);
   int64_t standaloneElapsed = 0;
@@ -3584,7 +4321,14 @@ void CompositeInvocation::finishStep(
     stepEvents.waveBegin->record(*state.stream);
   }
 
+  if (WaveConfig::get().checkSizeExprs && sv.program != nullptr &&
+      state.waveGraph->deviceSymbols() != nullptr) {
+    state.waveGraph->deviceSymbols()->checkSizeExprs(
+        state, *sv.program, pinnedBase, sequenceNumber_, stepIdx);
+  }
   prepareHostCopies(state, sv);
+  state.stepOrdinal = state.nextStepOrdinal++;
+  state.ordinalSteps.emplace_back(sequenceNumber_, stepIdx);
   const bool hasTransfer = returnBegin >= 0 || !sv.hostCopies.empty();
   const bool deferReturn = WaveConfig::get().deferD2h && hasTransfer &&
       !WaveConfig::get().debugSingleOps;
@@ -3597,8 +4341,9 @@ void CompositeInvocation::finishStep(
         pinnedBase,
         deviceBase,
         sv.blockInfoOffset +
-            static_cast<int64_t>(numBlocks) *
-                static_cast<int64_t>(sizeof(BlockInfo)),
+            (sv.onDeviceGrid ? static_cast<int64_t>(sv.kernels.size())
+                             : static_cast<int64_t>(numBlocks) *
+                     static_cast<int64_t>(sizeof(BlockInfo))),
         returnBegin,
         returnEnd,
         deviceDebugBase,
@@ -3610,6 +4355,13 @@ void CompositeInvocation::finishStep(
         &stepEvents);
     state.lastWaveDone = stepEvents.waveDone.get();
     advanceCompletedStages(state);
+    if (sv.onDeviceGrid && WaveConfig::get().checkGridDescriptor) {
+      checkDeviceGrid(sv, *state.stream, sequenceNumber_, stepIdx);
+    }
+    if (WaveConfig::get().checkExports && sv.program != nullptr &&
+        !(state.deviceAllocActive && sv.deviceAllocStep)) {
+      checkExports(sv, state, deviceBase, sequenceNumber_, stepIdx);
+    }
 
     if (deferReturn) {
       state.pendingReturns.push_back(
@@ -3725,6 +4477,28 @@ void CompositeInvocation::launch(
   TorchWaveParams params{};
   params.info = reinterpret_cast<BlockInfo*>(deviceBase + sv.blockInfoOffset);
   params.debugInfo = deviceDebugBase;
+  // The step's clocks, then its barrier clocks, in the execution's clock
+  // buffer, whose word 0 is the error count.
+  int64_t* deviceClocks = nullptr;
+  if (auto* executionState = currentExecutionState();
+      executionState != nullptr && sv.clockOffset >= 0) {
+    auto* words = executionState->blockClocks.device->as<int64_t>();
+    deviceClocks = words + sv.clockOffset;
+    params.errorCount = reinterpret_cast<unsigned long long*>(words);
+  }
+  auto setClocks = [&](int32_t firstBlock) {
+    params.clocks =
+        deviceClocks != nullptr ? deviceClocks + firstBlock : nullptr;
+    params.barrierClocks = deviceClocks != nullptr
+        ? deviceClocks + numBlocks + firstBlock
+        : nullptr;
+  };
+  setClocks(0);
+  if (auto* executionState = currentExecutionState();
+      executionState != nullptr && executionState->failureWords.defined()) {
+    params.failure = executionState->failureWords.data_ptr<int32_t>();
+    params.stepOrdinal = executionState->stepOrdinal;
+  }
   void* args[] = {&params};
 
   // Ops declare their extern __shared__ needs through
@@ -3743,8 +4517,9 @@ void CompositeInvocation::launch(
   // wide fan-out of single-block ops (whose total block count can exceed the
   // device co-residency limit) launch normally instead of failing the
   // cooperative launch's block cap ("too many blocks in cooperative launch").
-  bool cooperative = false;
-  if (sv.isCgGrid) {
+  // The device may give a barrier op several blocks.
+  bool cooperative = sv.onDeviceGrid && sv.isCgGrid;
+  if (sv.isCgGrid && !sv.onDeviceGrid) {
     for (size_t ki = 0; ki < sv.kernels.size(); ++ki) {
       const auto& kd = sv.kernels.at(ki);
       if (kd.launch && kd.launch->op &&
@@ -3765,14 +4540,14 @@ void CompositeInvocation::launch(
   // slice of the block array and with only the shared memory its own ops need
   // -- which is where the occupancy a split buys actually lands.
   std::vector<LaunchSegment> wholeStep;
-  if (sv.segments.empty()) {
+  if (sv.segments.empty() || sv.onDeviceGrid) {
     wholeStep.push_back(
         {.firstBlock = 0,
          .numBlocks = numBlocks,
          .dynamicShared = dynShared,
          .cooperative = cooperative});
   }
-  const auto& segments = sv.segments.empty() ? wholeStep : sv.segments;
+  const auto& segments = wholeStep.empty() ? sv.segments : wholeStep;
   auto* deviceBlocks =
       reinterpret_cast<BlockInfo*>(deviceBase + sv.blockInfoOffset);
   auto launchSegment = [&](const LaunchSegment& segment) {
@@ -3783,6 +4558,7 @@ void CompositeInvocation::launch(
     params.debugInfo = deviceDebugBase != nullptr
         ? deviceDebugBase + segment.firstBlock
         : nullptr;
+    setClocks(segment.firstBlock);
     // A step that was not split keeps deciding this here, from the block
     // counts as they stand at launch time rather than as makeGrid left them.
     // The two agree, but this one cannot go stale behind a reused grid.
@@ -3823,6 +4599,7 @@ void CompositeInvocation::launch(
       params.info = deviceBlocks + segFirst;
       params.debugInfo =
           deviceDebugBase != nullptr ? deviceDebugBase + segFirst : nullptr;
+      setClocks(segFirst);
       for (int32_t active = segFirst; active < segEnd; ++active) {
         // launchIndices has one entry per block; at() so a short vector fails
         // loudly instead of reading out of bounds.
@@ -3874,10 +4651,13 @@ void CompositeInvocation::launch(
           for (size_t li = 0; li < sv.kernels.size(); ++li) {
             if (sv.kernels[li].invocation == sv.kernels[launchIdx].invocation) {
               auto* kernelOp = sv.kernels[li].launch->op;
-              for (auto offset : kernelOp->barrierCounters()) {
-                int32_t zero = 0;
-                auto* dest = deviceBase + sv.paramOffsets.at(li) + offset;
-                stream->hostToDeviceAsync(dest, &zero, sizeof(zero));
+              for (const auto* offsets :
+                   {&kernelOp->barrierCounters(), &kernelOp->counters()}) {
+                for (auto offset : *offsets) {
+                  int32_t zero = 0;
+                  auto* dest = deviceBase + sv.paramOffsets.at(li) + offset;
+                  stream->hostToDeviceAsync(dest, &zero, sizeof(zero));
+                }
               }
             }
           }
@@ -3944,7 +4724,76 @@ void CompositeInvocation::launch(
       betweenLaunchAndSync();
     }
   } else {
-    stream->hostToDeviceAsync(deviceBase, pinnedBase, h2dBytes);
+    const bool hasFixups =
+        sv.program != nullptr && sv.program->symbolFixups != nullptr;
+    auto* state = currentExecutionState();
+    TORCH_CHECK(
+        !hasFixups ||
+            (state != nullptr && state->waveGraph != nullptr &&
+             state->waveGraph->deviceSymbols() != nullptr),
+        "A step with symbol fixups runs outside a device-symbols execution");
+    auto* setupStream = stream;
+    // Without an execution state the setup runs on the step's stream.
+    if (sv.onDeviceGrid && WaveConfig::get().setupStream && state != nullptr) {
+      if (state->setupStream == nullptr) {
+        state->setupStream = state->streamPool->get();
+        state->setupDone =
+            std::make_unique<facebook::velox::wave::Event>(/*withTime=*/false);
+      }
+      setupStream = state->setupStream.get();
+      // The fixups read symbols earlier steps produce.
+      if (hasFixups && state->lastWaveDone != nullptr) {
+        state->lastWaveDone->wait(*setupStream);
+      }
+    }
+    if (hasFixups && WaveConfig::get().deviceSizingPoison) {
+      DeviceSymbols::poisonSizedParams(*sv.program->symbolFixups, pinnedBase);
+    }
+    copyAddresses(*state, *setupStream);
+    // A resident block gets only its block table part.
+    const bool resident = hasFixups && sv.allWordsFromSetup &&
+        (WaveConfig::get().residentBlocks || state->deviceAllocActive);
+    const int64_t h2dBegin =
+        resident && sv.residentBase == deviceBase ? sv.blockInfoOffset : 0;
+    if (h2dBytes > h2dBegin) {
+      setupStream->hostToDeviceAsync(
+          deviceBase + h2dBegin, pinnedBase + h2dBegin, h2dBytes - h2dBegin);
+    }
+    if (state->deviceAllocActive && sv.deviceAllocStep) {
+      ++state->numPathLaunches;
+      state->numPathParamUploads += h2dBegin == 0 ? 1 : 0;
+    }
+    sv.residentBase = resident ? deviceBase : nullptr;
+    if (sv.onDeviceGrid) {
+      // One kernel runs the fixups and then the grid.
+      FixupArgs fixups;
+      if (hasFixups) {
+        fixups = state->waveGraph->deviceSymbols()->prepareFixups(
+            *state, *sv.program->symbolFixups);
+      }
+      runDeviceGrid(
+          *sv.deviceGrid,
+          deviceBase,
+          sv.blockInfoOffset,
+          numBlocks,
+          deviceDebugBase,
+          CHECK_NOTNULL(deviceClocks),
+          sv.previousClocksInPlace,
+          hasFixups ? &fixups : nullptr,
+          setupStream,
+          state->failureWords.defined()
+              ? state->failureWords.data_ptr<int32_t>()
+              : nullptr,
+          state->stepOrdinal);
+      if (setupStream != stream) {
+        // Safe to re-record at the next step: the wait has captured it.
+        state->setupDone->record(*setupStream);
+        state->setupDone->wait(*stream);
+      }
+    } else if (hasFixups) {
+      state->waveGraph->deviceSymbols()->runFixups(
+          *state, *sv.program->symbolFixups, deviceBase, stream);
+    }
     for (const auto& segment : segments) {
       if (!WaveConfig::get().launchPerOp) {
         launchSegment(segment);

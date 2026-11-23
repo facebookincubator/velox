@@ -296,8 +296,19 @@ class CompositeKernel {
     std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel;
   };
 
+  // Returns the kernel for module source 'text', from the on-disk cache in
+  // WaveConfig::kernelCacheDir when set, else from the in-process cache.
+  // 'genFunc' produces the KernelSpec on a miss.
+  static std::unique_ptr<facebook::velox::wave::CompiledKernel> compileModule(
+      const std::string& text,
+      std::function<facebook::velox::wave::KernelSpec()> genFunc);
+
   // The compiled modules, one per distinct set of ops that share a step.
   std::vector<std::unique_ptr<facebook::velox::wave::CompiledKernel>> modules_;
+  // Per module: the variant compiled without its ops' minimum blocks per SM,
+  // or null. warmup() keeps one of the two and clears these.
+  std::vector<std::unique_ptr<facebook::velox::wave::CompiledKernel>>
+      unboundedModules_;
   std::string entryPoint_;
   std::vector<std::unique_ptr<ProjectOperation>> ops_;
   std::vector<std::unique_ptr<KernelOperation>> kernelOpStorage_;
@@ -340,6 +351,14 @@ struct TensorListParam {
   std::vector<nativert::ValueId> elementIds;
 };
 
+/// Whether a launch counted by 'expr' also counts its outputs: one counted by
+/// its largest input, whose outputs can be larger than any input (a cat, a
+/// gather, an expanding row op). The count gives the launch its blocks.
+inline bool countsOutputs(const SizeExpr& expr) {
+  return expr.op == SizeShortcut::kMax && !expr.broadcast &&
+      expr.constShapes.empty() && expr.args.empty();
+}
+
 /// Runtime state for a single kernel launch: actual value IDs, parameter
 /// offsets, and return info.
 struct LaunchData {
@@ -362,6 +381,10 @@ struct LaunchData {
   std::vector<ValueCP> args;
   std::vector<int64_t> intArgs;
   std::vector<int64_t> intList;
+  /// For a slice whose start the device decides (DeviceSymbols): views the
+  /// whole extent of the sliced dim, and the fixups give the real start and
+  /// length.
+  bool wholeExtent{false};
 
   SizeExpr sizeExpr;
   int64_t numElements{0};
@@ -498,6 +521,12 @@ class CompositeInvocation {
     return prePassStandalones_;
   }
 
+  /// Builds the grid of a step on the device path without host counts: the
+  /// host grid over placeholder counts gives the block size and the target,
+  /// and the device grid assigns the blocks from the real counts. Returns
+  /// whether the step has its device grid.
+  bool prepareCountFreeGrid(StepVectors& sv);
+
   const AllocGroupPlan* allocGroupPlan() const {
     return allocGroupPlan_.get();
   }
@@ -596,6 +625,11 @@ class CompositeInvocation {
 
   /// Runs the node's steps from their bound programs.
   void executeBound(ExecutionState& state);
+
+  /// The host part of a step on the device path: its groups from their
+  /// recorded demands, and no sizing.
+  void
+  runDeviceAllocStep(int32_t stepIdx, StepVectors& sv, ExecutionState& state);
 
   /// Sizes a bound launch and places its outputs.
   void runBoundLaunch(

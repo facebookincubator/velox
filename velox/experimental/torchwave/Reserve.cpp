@@ -312,6 +312,22 @@ bool sumCountReserve(const ReserveArgs& args, Shape* out, int32_t /*numOut*/) {
   return true;
 }
 
+bool productCountReserve(
+    const ReserveArgs& args,
+    Shape* out,
+    int32_t /*numOut*/) {
+  int64_t result = 1;
+  for (auto id : values(args)) {
+    if (const auto* t = tensorOperand(args, id)) {
+      result *= t->numEl;
+    } else if (intOperand(args, id)) {
+      result *= args.table->scalar(id);
+    }
+  }
+  out[0].setVector(static_cast<Dim>(result));
+  return true;
+}
+
 bool broadcastCountReserve(
     const ReserveArgs& args,
     Shape* out,

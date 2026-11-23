@@ -528,6 +528,7 @@ class SpillPartition {
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> createOrderedReaderInternal(
       uint64_t bufferSize,
       memory::MemoryPool* pool,
+      folly::Executor* readAheadExecutor,
       exec::SpillStats* spillStats);
 
   SpillPartitionId id_;

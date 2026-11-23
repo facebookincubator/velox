@@ -41,8 +41,9 @@ TEST(FixedPointVerdictsTest, publishAndGet) {
   ASSERT_FALSE(verdicts.get(nestedLoop, 0).isReady());
 }
 
-// Only the latest iteration's verdict is kept: a new iteration replaces it,
-// and asking for an earlier one fails.
+// The store keeps each loop's latest iteration. A request for it gets its
+// verdict, and a request for an earlier iteration gets "not converged": worker
+// 0 starts an iteration only after one that did not converge.
 TEST(FixedPointVerdictsTest, latestIteration) {
   FixedPointVerdicts verdicts;
   const FixedPointOptions::LoopAddress loop{"w0", {}};
@@ -53,9 +54,47 @@ TEST(FixedPointVerdictsTest, latestIteration) {
   verdicts.publish(loop, 1, true);
   ASSERT_TRUE(std::move(next).get());
 
+  auto earlier = verdicts.get(loop, 0);
+  ASSERT_TRUE(earlier.isReady());
+  ASSERT_FALSE(std::move(earlier).get());
+}
+
+// Worker 0 runs ahead of a peer that has yet to receive an earlier verdict, as
+// when the body moves no rows between workers and worker 0 decides from its own
+// rows. The slow peer still gets "not converged" for every iteration worker 0
+// passed, and a fast peer's request for the next iteration waits for it.
+TEST(FixedPointVerdictsTest, runAhead) {
+  FixedPointVerdicts verdicts;
+  const FixedPointOptions::LoopAddress loop{"w0", {}};
+
+  verdicts.publish(loop, 0, false);
+  verdicts.publish(loop, 1, false);
+  verdicts.publish(loop, 2, false);
+
+  auto fast = verdicts.get(loop, 3);
+  ASSERT_FALSE(fast.isReady());
+
+  for (int32_t iteration = 0; iteration < 3; ++iteration) {
+    SCOPED_TRACE(iteration);
+    auto slow = verdicts.get(loop, iteration);
+    ASSERT_TRUE(slow.isReady());
+    ASSERT_FALSE(std::move(slow).get());
+  }
+
+  verdicts.publish(loop, 3, true);
+  ASSERT_TRUE(std::move(fast).get());
+}
+
+// A peer asks for an iteration only after it receives the one before, so a
+// request that skips an unpublished verdict is an internal error.
+TEST(FixedPointVerdictsTest, skippedVerdict) {
+  FixedPointVerdicts verdicts;
+  const FixedPointOptions::LoopAddress loop{"w0", {}};
+
+  auto pending = verdicts.get(loop, 0);
   VELOX_ASSERT_THROW(
-      verdicts.get(loop, 0),
-      "Fixed point verdict requested for an earlier iteration: w0");
+      verdicts.get(loop, 1),
+      "Fixed point verdict must be published before the next is requested: w0");
 }
 
 // Erasing worker 0 drops the verdicts of all its loops.

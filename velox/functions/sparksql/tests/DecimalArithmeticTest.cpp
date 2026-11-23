@@ -713,6 +713,21 @@ TEST_F(DecimalArithmeticTest, multiply) {
            DECIMAL(38, 31))});
 }
 
+TEST_F(DecimalArithmeticTest, divideLargeDivisor) {
+  const auto power = velox::DecimalUtil::kPowersOfTen[38];
+  testArithmeticFunction(
+      "divide",
+      makeFlatVector<int128_t>({1, -1, -1, 1}, DECIMAL(38, 6)),
+      {makeFlatVector<int128_t>(
+           {9 * velox::DecimalUtil::kPowersOfTen[31],
+            -9 * velox::DecimalUtil::kPowersOfTen[31],
+            9 * velox::DecimalUtil::kPowersOfTen[31],
+            -9 * velox::DecimalUtil::kPowersOfTen[31]},
+           DECIMAL(38, 0)),
+       makeFlatVector<int128_t>(
+           {power - 1, power - 1, -power + 1, -power + 1}, DECIMAL(38, 0))});
+}
+
 TEST_F(DecimalArithmeticTest, divide) {
   auto shortFlat = makeFlatVector<int64_t>({1000, 2000}, DECIMAL(17, 3));
   // Divide short and short, returning long.

@@ -37,21 +37,21 @@ VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE double toUnixtime(
 
 VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE Timestamp
 fromUnixtime(double unixtime) {
-  if (FOLLY_UNLIKELY(std::isnan(unixtime))) {
+  if (std::isnan(unixtime)) [[unlikely]] {
     return Timestamp(0, 0);
   }
 
-  if (FOLLY_UNLIKELY(unixtime >= static_cast<double>(Timestamp::kMaxSeconds))) {
+  if (unixtime >= static_cast<double>(Timestamp::kMaxSeconds)) [[unlikely]] {
     return Timestamp::maxMillis();
   }
 
-  if (FOLLY_UNLIKELY(unixtime <= static_cast<double>(Timestamp::kMinSeconds))) {
+  if (unixtime <= static_cast<double>(Timestamp::kMinSeconds)) [[unlikely]] {
     return Timestamp::minMillis();
   }
 
   auto seconds = std::floor(unixtime);
   auto milliseconds = std::llround((unixtime - seconds) * kMillisInSecond);
-  if (FOLLY_UNLIKELY(milliseconds == kMillisInSecond)) {
+  if (milliseconds == kMillisInSecond) [[unlikely]] {
     ++seconds;
     milliseconds = 0;
   }
@@ -61,21 +61,21 @@ fromUnixtime(double unixtime) {
 
 VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE int64_t
 fromUnixtime(double unixtime, int16_t timeZoneId) {
-  if (FOLLY_UNLIKELY(std::isnan(unixtime))) {
+  if (std::isnan(unixtime)) [[unlikely]] {
     return pack(0, timeZoneId);
   }
 
   static const int64_t kMin = std::numeric_limits<int64_t>::min();
 
-  if (FOLLY_UNLIKELY(unixtime >= kMinDoubleAboveInt64Max)) {
+  if (unixtime >= kMinDoubleAboveInt64Max) [[unlikely]] {
     return pack(std::numeric_limits<int64_t>::max(), timeZoneId);
   }
 
-  if (FOLLY_UNLIKELY(unixtime <= kMin)) {
+  if (unixtime <= kMin) [[unlikely]] {
     return pack(std::numeric_limits<int64_t>::min(), timeZoneId);
   }
 
-  if (FOLLY_UNLIKELY(std::isinf(unixtime))) {
+  if (std::isinf(unixtime)) [[unlikely]] {
     return unixtime < 0 ? pack(std::numeric_limits<int64_t>::min(), timeZoneId)
                         : pack(std::numeric_limits<int64_t>::max(), timeZoneId);
   }

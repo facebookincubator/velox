@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "velox/common/future/VeloxPromise.h"
+#include "velox/exec/rpc/RPCFlowControlPolicy.h"
 
 namespace folly {
 class exception_wrapper;
@@ -81,7 +82,8 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// Lower bound on the adaptive congestion window, in admission units per
     /// successful service horizon. Resolved from the function's floor and
     /// rpc.ratelimiter.min_limit; rpc.ratelimiter.hard_limit selects which
-    /// wins.
+    /// wins. Under CAPACITY_PROBING it bounds only the backoff from overloads
+    /// not named as a lack of capacity; a capacity rejection cuts below it.
     double floor{0.01};
 
     /// Multiplicative-decrease factor applied on overload, in (0, 1). Maps to
@@ -94,6 +96,11 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// apart as the floor allows. Maps to
     /// rpc.ratelimiter.max_probe_interval_ms.
     std::chrono::milliseconds maxProbeInterval{60'000};
+
+    /// How the window answers overloads. The operator resolves the request
+    /// against streaming mode, adaptation and retry capability; a limiter that
+    /// does not adapt always runs WINDOW_AIMD.
+    RPCFlowControlPolicy flowControlPolicy{RPCFlowControlPolicy::kWindowAimd};
 
     /// Field-wise equality. Limiters compare policies after reducing them to
     /// the fields a limiter reads; see initializeOrMatch().
@@ -127,8 +134,22 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// Hard upper bound on the adaptive congestion window.
     int64_t hardLimit{0};
 
+    /// Floor the adaptive window cannot back off below, in thousandths of an
+    /// admission unit: the configured floor, raised to the probe floor and
+    /// capped at the ceiling. Zero when no floor applies: the limiter does not
+    /// adapt, or its floor reaches the ceiling and holds the window there.
+    int64_t floorMilli{0};
+
     /// In-flight requests right now.
     int64_t pending{0};
+
+    /// Callers parked in admitOrWait(). A positive count means work is ready
+    /// that the backend's window does not admit: the window is full, or, when
+    /// pacing a window below one unit, the next admission is not yet due, which
+    /// can hold callers with nothing in flight. A caller that abandons its wait
+    /// stays counted until the next wake-up, a release that frees a slot or
+    /// the pacing timer, which wakes every waiter.
+    int64_t waiting{0};
 
     /// High-water in-flight count over this limiter's lifetime.
     int64_t peakPending{0};
@@ -175,6 +196,9 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// The limiter's clock at this snapshot, for timing the interval between
     /// two snapshots.
     int64_t clockNanos{0};
+
+    /// Policy the limiter runs.
+    RPCFlowControlPolicy flowControlPolicy{RPCFlowControlPolicy::kWindowAimd};
   };
 
   /// One in-flight request slot, released on destruction so a slot is returned
@@ -246,7 +270,11 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// Applies canonical typed-overload feedback, when requested, before any
     /// token destruction can wake waiters. Canonical overloads from the same
     /// admission epoch are coalesced into one multiplicative decrease.
-    Completion completeAndRelease(bool hardOverload) noexcept;
+    /// 'capacityRejection' marks an overload the backend named as a lack of
+    /// serving capacity; see RPCFlowControlPolicy.
+    Completion completeAndRelease(
+        bool hardOverload,
+        bool capacityRejection) noexcept;
 
     /// Releases without feedback, as used when the owning query closes.
     void release() noexcept;
@@ -349,7 +377,8 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   /// number of successful items the batch represents and is read only for
   /// Outcome::kSuccess. Recovery doubles a fractional limit until one, then
   /// grows additively. `rttNs` is a successful service-horizon sample; other
-  /// outcomes ignore both values.
+  /// outcomes ignore both values. An overload fed here names no lack of
+  /// capacity, so CAPACITY_PROBING answers it as WINDOW_AIMD does.
   void onOutcome(Outcome outcome, int64_t units, int64_t rttNs);
 
   /// Observes a successful service-horizon sample, but applies window recovery
@@ -361,6 +390,9 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   bool onSuccessForEpoch(uint64_t overloadEpoch, int64_t units, int64_t rttNs);
 
   Stats stats() const;
+
+  /// Window an adaptive limiter starts at, or its ceiling if lower.
+  static constexpr int64_t kInitialAdaptiveLimit{200};
 
   /// Fallback ceiling for backends configured with ceiling == 0.
   static void setDefaultCapacity(int64_t capacity);
@@ -392,7 +424,8 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
 
   // Config::floor, raised so paced probes are at most the maximum probe
   // interval apart (up to a floor of 0.5, which keeps pacing on), and clamped
-  // to at most the ceiling. Caller holds mutex_.
+  // to at most the ceiling. CAPACITY_PROBING leaves Config::floor out, which
+  // applyOverloadLocked() applies to its other overloads. Caller holds mutex_.
   double floorLocked(double ceiling) const;
 
   // True while overload has reduced the congestion window below one unit.
@@ -466,14 +499,27 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
 
   // Multiplicative decrease: halves capacity by Config::decreaseFactor, down
   // to the floor. A no-op when adaptation is off, and never raises capacity.
+  // Treats the overload as not naming a lack of capacity.
   void onOverload();
 
   // Handles canonical overload once per admission epoch. Returns true when
   // handled or coalesced, so the driver never repeats shared feedback.
-  bool handleOverloadForEpoch(uint64_t overloadEpoch);
+  bool handleOverloadForEpoch(
+      uint64_t overloadEpoch,
+      bool capacityRejection,
+      int64_t rejectedUnits);
 
   // Applies one decrease with mutex_ held.
-  void applyOverloadLocked();
+  // 'rejectedUnits' are the units of the rejected attempt, still counted as
+  // pending.
+  void applyOverloadLocked(bool capacityRejection, int64_t rejectedUnits);
+
+  // CAPACITY_PROBING only. A capacity rejection of a call admitted before the
+  // last capacity cut shows the backend held fewer calls than that cut counted:
+  // the calls rejected since were still in flight then. Lowers the growth
+  // target and the window to match, never raising either, without starting a
+  // new round. Caller holds mutex_.
+  void refineCapacityCutLocked(int64_t rejectedUnits);
 
   // Ends time-based recovery after a non-overload failure.
   void onFailure();
@@ -484,7 +530,15 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // Applies success recovery with mutex_ held.
   void applySuccessLocked(int64_t units, int64_t rttNs);
 
-  // True when a success would grow the window: adaptation is on and the window
+  // The window after 'units' successes at window 'current', which is at least
+  // one call. Caller holds mutex_.
+  double grownWindowLocked(double current, int64_t units) const;
+
+  // Restarts CAPACITY_PROBING's slow start and forgets its growth target.
+  // Caller holds mutex_.
+  void resetProbingLocked();
+
+  // True when a success may grow the window: adaptation is on and the window
   // is below the ceiling. Only the stale-success verdict uses it: a success at
   // the ceiling still runs applySuccessLocked(), which hands the window back to
   // the ceiling without growing it. Caller holds mutex_.
@@ -538,6 +592,27 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // Lowest initialized adaptive limit. Zero means no adaptive low-water mark
   // has been recorded.
   double lowWaterLimit_{0.0};
+
+  // CAPACITY_PROBING only. True until the first overload, or until responses
+  // slow down: nothing has shown where the backend's limit is, so the window
+  // doubles every round.
+  bool doubling_{true};
+
+  // CAPACITY_PROBING only. A round is a window of successes. Slow start uses
+  // the fastest response of any round so far and of the current round: it
+  // ends when a round's fastest is an eighth slower than the fastest so far,
+  // as the backend is then queuing calls, not serving more. Growth stops at
+  // twice the most calls in flight this round or the last.
+  int64_t fastestRttNanos_{0};
+  int64_t roundFastestRttNanos_{0};
+  int64_t roundSuccessesLeft_{0};
+  int64_t roundPeakPending_{0};
+  int64_t lastRoundPeakPending_{0};
+
+  // CAPACITY_PROBING only. The window growth heads for after a capacity
+  // rejection: the calls the backend held when it refused. Zero after an
+  // overload not named as a lack of capacity, which grows as WINDOW_AIMD does.
+  double growthTarget_{0.0};
 
   // Pacing time and window-time integral accrued up to lastAccrual_. stats()
   // adds the interval since then without accruing it.

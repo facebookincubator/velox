@@ -18,6 +18,7 @@
 #include <folly/container/F14Set.h>
 #include <algorithm>
 
+#include "velox/exec/MergeJoinStatNames.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
@@ -1421,8 +1422,8 @@ RowVectorPtr MergeJoin::handleSingleSideOutput() {
 }
 
 bool MergeJoin::canStreamLeftSide() const {
-  return streamLeftSideEnabled_ && filter_ == nullptr &&
-      (isInnerJoin(joinType_) || isLeftJoin(joinType_));
+  return streamLeftSideEnabled_ &&
+      (isInnerJoin(joinType_) || (filter_ == nullptr && isLeftJoin(joinType_)));
 }
 
 void MergeJoin::releaseConsumedLeftMatchInputs() {
@@ -1729,13 +1730,13 @@ void MergeJoin::close() {
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
-        std::string(MergeJoin::kMatchedLeftRows),
+        std::string(MergeJoinStatNames::kMatchedLeftRows),
         RuntimeCounter(matchedLeftRows_));
     lockedStats->addRuntimeStat(
-        std::string(MergeJoin::kMatchedRightRows),
+        std::string(MergeJoinStatNames::kMatchedRightRows),
         RuntimeCounter(matchedRightRows_));
     lockedStats->addRuntimeStat(
-        std::string(MergeJoin::kStreamedLeftBatches),
+        std::string(MergeJoinStatNames::kStreamedLeftBatches),
         RuntimeCounter(streamedLeftBatches_));
   }
   if (rightSource_) {

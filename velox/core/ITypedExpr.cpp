@@ -36,6 +36,11 @@ const auto& exprKindNames() {
 }
 } // namespace
 
+TypedExprPtr ITypedExpr::withInputs(std::vector<TypedExprPtr> inputs) const {
+  VELOX_CHECK_EQ(inputs.size(), inputs_.size());
+  return withInputsImpl(std::move(inputs));
+}
+
 VELOX_DEFINE_ENUM_NAME(ExprKind, exprKindNames);
 
 namespace {

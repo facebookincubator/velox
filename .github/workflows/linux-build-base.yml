@@ -214,12 +214,14 @@ jobs:
           BUILD_PROFILE=adapters USE_CLANG="${USE_CLANG}" source .github/scripts/cmake-flags.sh
           EXTRA_CMAKE_FLAGS=("${CMAKE_FLAGS[@]}")
           if [[ "${USE_CLANG}" = "true" ]]; then
-             scripts/setup-centos9.sh install_clang15; export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15; CUDA_FLAGS="-ccbin /usr/lib64/llvm15/bin/clang++-15";
+             # Build with the Clang that CentOS ships, with its OpenMP runtime,
+             # which vector search (FAISS) needs. EPEL's clang15 has none.
+             scripts/setup-centos9.sh install_clang_with_openmp; export CC=clang; export CXX=clang++; CUDA_FLAGS="-ccbin $(command -v clang++)";
           fi
           source /opt/rh/gcc-toolset-14/enable
           g++ --version
           # CC/CXX are set to GCC12 in the adapters image build and it needs to be overridden
-          # after sourcing GCC14. Keep clang-15 for the Clang build.
+          # after sourcing GCC14. Keep Clang for the Clang build.
           if [[ "${USE_CLANG}" != "true" ]]; then
             export CC=gcc CXX=g++
           fi

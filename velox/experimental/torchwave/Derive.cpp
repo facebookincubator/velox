@@ -162,8 +162,10 @@ bool slice(
   auto g = geometryOf(*self);
   const auto dim = wrapDim(dimArg, g.rank);
   const auto extent = g.sizes[dim];
-  auto start = startArg.value_or(0);
-  auto end = endArg.value_or(std::numeric_limits<int64_t>::max());
+  auto start = op.wholeExtent ? 0 : startArg.value_or(0);
+  auto end = op.wholeExtent
+      ? extent
+      : endArg.value_or(std::numeric_limits<int64_t>::max());
   if (start < 0) {
     start += extent;
   }

@@ -71,6 +71,7 @@ Exchange::Exchange(
           operatorType),
       preferredOutputBatchBytes_{
           driverCtx->queryConfig().preferredOutputBatchBytes()},
+      outputBatchRows_{driverCtx->queryConfig().exchangeOutputBatchRows()},
       serdeKind_{exchangeNode->serdeKind()},
       serdeOptions_{getVectorSerdeOptions(
           common::stringToCompressionKind(operatorCtx_->driverCtx()
@@ -107,7 +108,7 @@ void Exchange::getSplits(ContinueFuture* future) {
     }
 
     if (split.hasConnectorSplit()) {
-      if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
+      if (splitTracer_ != nullptr) [[unlikely]] {
         splitTracer_->write(split);
       }
       ++stats_.wlock()->numSplits;
@@ -177,19 +178,25 @@ RowVectorPtr Exchange::getOutput() {
   return getOutputFromRowPages(serde);
 }
 
+uint64_t Exchange::targetNumRows() const {
+  if (outputBatchRows_ > 0) {
+    return outputBatchRows_;
+  }
+  // Start conservatively, then use the estimate.
+  if (!estimatedRowSize_.has_value()) {
+    return kInitialOutputRows;
+  }
+  return std::max(
+      preferredOutputBatchBytes_ / estimatedRowSize_.value(),
+      kInitialOutputRows);
+}
+
 RowVectorPtr Exchange::getOutputFromColumnarPages(VectorSerde* serde) {
   if (currentPages_.empty()) {
     return nullptr;
   }
 
-  // Calculate target row count based on estimated row size, similar to
-  // getOutputFromRowPages.
-  // Start conservatively, then use estimates.
-  const auto numRows = estimatedRowSize_.has_value()
-      ? std::max(
-            (preferredOutputBatchBytes_ / estimatedRowSize_.value()),
-            kInitialOutputRows)
-      : kInitialOutputRows;
+  const auto numRows = targetNumRows();
 
   // Process pages one-by-one from currentPages_ pointed by columnarPageIdx_.
   // Within each page, deserialize vectors incrementally until we hit the target
@@ -275,12 +282,7 @@ RowVectorPtr Exchange::getOutputFromRowPages(VectorSerde* serde) {
     inputStream_ = mergedRowPage_->prepareStreamForDeserialize();
   }
 
-  auto numRows = kInitialOutputRows;
-  if (estimatedRowSize_.has_value()) {
-    numRows = std::max(
-        (preferredOutputBatchBytes_ / estimatedRowSize_.value()),
-        kInitialOutputRows);
-  }
+  const auto numRows = targetNumRows();
 
   // Check if the serde supports batched deserialization
   serde->deserialize(

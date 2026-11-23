@@ -55,7 +55,7 @@ class BingTileCastOperator final : public exec::CastOperator {
       // 3. add an error to any false rows (uncommon)
       context.applyToSelectedNoThrow(rows, [&](auto row) {
         const uint64_t tileInt = bingTileResult->valueAt(row);
-        if (FOLLY_UNLIKELY(!BingTileType::isBingTileIntValid(tileInt))) {
+        if (!BingTileType::isBingTileIntValid(tileInt)) [[unlikely]] {
           std::optional<std::string> reasonOpt =
               BingTileType::bingTileInvalidReason(tileInt);
           if (reasonOpt.has_value()) {

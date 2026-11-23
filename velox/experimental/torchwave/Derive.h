@@ -52,6 +52,8 @@ struct DeriveOp {
   /// the list unpack an unbind or split absorbed.
   int32_t shortcut{-1};
   int32_t secondShortcut{-1};
+  /// See LaunchData::wholeExtent.
+  bool wholeExtent{false};
 };
 
 /// A DeriveOp packed into a StepCode: its lists are spans into the code's ids
@@ -71,6 +73,7 @@ struct DeriveRec {
   Span intList;
   int32_t shortcut{-1};
   int32_t secondShortcut{-1};
+  bool wholeExtent{false};
 };
 
 /// What runDerive reads of one op.
@@ -82,6 +85,7 @@ struct DeriveView {
   ArrayView<int64_t> intList;
   ArrayView<int32_t> outputs;
   ArrayView<int32_t> elements;
+  bool wholeExtent{false};
 };
 
 /// Whether 'kind' can run as a DeriveOp.

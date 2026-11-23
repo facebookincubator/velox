@@ -165,6 +165,24 @@ TEST_F(HiveConnectorSerDeTest, hiveTableHandle) {
     }
     testSerde(*tableHandle);
   }
+
+  auto bucketedTableHandle = makeTableHandle(
+      common::test::singleSubfieldFilter("c1", in({1, 2})),
+      parseExpr("c1 > c4", rowType),
+      "hive_table",
+      rowType,
+      /*indexColumns=*/{},
+      /*storageParameters=*/{},
+      /*dbName=*/"",
+      std::make_shared<HiveBucketProperty>(
+          HiveBucketProperty::Kind::kHiveCompatible,
+          8,
+          std::vector<std::string>{"c1"},
+          std::vector<TypePtr>{BIGINT()},
+          std::vector<HiveSortingColumnPtr>{std::make_shared<HiveSortingColumn>(
+              "c4", core::SortOrder{true, true})}));
+  ASSERT_NE(bucketedTableHandle->bucketProperty(), nullptr);
+  testSerde(*bucketedTableHandle);
 }
 
 TEST_F(HiveConnectorSerDeTest, hiveColumnHandle) {
@@ -185,6 +203,7 @@ TEST_F(HiveConnectorSerDeTest, hiveColumnHandle) {
       connector::FileColumnHandle::ColumnType::kSynthesized,
       connector::FileColumnHandle::ColumnType::kRowIndex,
       connector::FileColumnHandle::ColumnType::kRowId,
+      connector::FileColumnHandle::ColumnType::kReadRange,
   };
 
   for (auto columnHandleType : columnHandleTypes) {
@@ -233,9 +252,8 @@ TEST_F(HiveConnectorSerDeTest, hiveInsertTableHandle) {
       1024,
       std::vector<std::string>{"id", "row"},
       std::vector<TypePtr>{VARCHAR(), BOOLEAN()},
-      std::vector<std::shared_ptr<const HiveSortingColumn>>{
-          std::make_shared<HiveSortingColumn>(
-              "id", core::SortOrder{true, true})});
+      std::vector<HiveSortingColumnPtr>{std::make_shared<HiveSortingColumn>(
+          "id", core::SortOrder{true, true})});
 
   std::unordered_map<std::string, std::string> serdeParameters = {
       {"key1", "value1"},
@@ -257,9 +275,9 @@ TEST_F(HiveConnectorSerDeTest, hiveInsertTableHandle) {
           dwio::common::FileFormat::NIMBLE,
           common::CompressionKind::CompressionKind_SNAPPY,
           serdeParameters,
-          nullptr, // writerOptions
-          false, // ensureFiles
-          storageParameters);
+          false, // writeEmptyFile
+          storageParameters,
+          HiveConfig::InsertExistingPartitionsBehavior::kOverwrite);
   testSerde(*hiveInsertTableHandle);
 }
 
@@ -344,6 +362,18 @@ TEST_F(HiveConnectorSerDeTest, hiveConnectorSplit) {
   ASSERT_EQ(clone4->physicalFilePath, split4.physicalFilePath);
   ASSERT_EQ(clone4->readPath(), split4.physicalFilePath);
   ASSERT_EQ(clone4->filePath, filePath);
+
+  auto split5 = HiveConnectorSplitBuilder(filePath)
+                    .connectorId(connectorId)
+                    .fileFormat(dwio::common::FileFormat::NIMBLE)
+                    .splitRowRange({.firstRow = 16'000})
+                    .build();
+  testSerde(*split5);
+  const auto clone5 =
+      ISerializable::deserialize<HiveConnectorSplit>(split5->serialize());
+  ASSERT_EQ(clone5->splitRowRange, split5->splitRowRange);
+  ASSERT_EQ(
+      clone5->splitRowRange->numRows, std::numeric_limits<uint64_t>::max());
 }
 
 TEST_F(HiveConnectorSerDeTest, hiveConnectorSplitFileProperties) {

@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
@@ -48,6 +49,7 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
 #include "velox/exec/EnforceSingleRow.h"
@@ -143,6 +145,42 @@ void OperatorAdapterRegistry::clear() {
   adapters_.clear();
 }
 
+namespace {
+
+// Returns whether legacy_cast leaves a cast from 'source' to 'target' as is: a
+// cast between BOOLEAN, integer, REAL, DOUBLE, DECIMAL and DATE types, or from
+// VARCHAR to DATE or DECIMAL.
+// NOTE: The list is short on purpose. legacy_cast changes how a VARCHAR parses
+// as a TIMESTAMP, how a TIMESTAMP, REAL or DOUBLE prints as a VARCHAR, and
+// whether a VARCHAR with non-ASCII characters casts to an integer.
+bool isLegacyCastIndependent(const TypePtr& source, const TypePtr& target) {
+  const auto isNumberOrDate = [](const TypePtr& type) {
+    return type->isDate() || type->isDecimal() ||
+        (std::string_view(type->name()) == type->kindName() &&
+         (type->isBoolean() || type->isTinyint() || type->isSmallint() ||
+          type->isInteger() || type->isBigint() || type->isReal() ||
+          type->isDouble()));
+  };
+  if (source->isVarchar()) {
+    return target->isDate() || target->isDecimal();
+  }
+  return isNumberOrDate(source) && isNumberOrDate(target);
+}
+
+// Returns whether 'expr' holds a CAST or TRY_CAST that legacy_cast may change.
+bool containsLegacyCastDependentCast(const core::TypedExprPtr& expr) {
+  if (expr->isCastKind() &&
+      !isLegacyCastIndependent(expr->inputs().at(0)->type(), expr->type())) {
+    return true;
+  }
+  return std::any_of(
+      expr->inputs().begin(), expr->inputs().end(), [](const auto& input) {
+        return containsLegacyCastDependentCast(input);
+      });
+}
+
+} // namespace
+
 /// TableScanAdapter - Keeps original operator (produces GPU output)
 class TableScanAdapter : public OperatorAdapter {
  public:
@@ -155,7 +193,7 @@ class TableScanAdapter : public OperatorAdapter {
   bool canRunOnGPU(
       const exec::Operator* op,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* /*ctx*/) const override {
+      exec::DriverCtx* ctx) const override {
     auto tableScanNode =
         std::dynamic_pointer_cast<const core::TableScanNode>(planNode);
     if (!tableScanNode) {
@@ -173,16 +211,50 @@ class TableScanAdapter : public OperatorAdapter {
         std::dynamic_pointer_cast<facebook::velox::cudf_velox::connector::hive::
                                       iceberg::CudfIcebergConnector>(connector);
 
-    bool canRunOnGPU =
-        cudfHiveConnector != nullptr or cudfIcebergConnector != nullptr;
-
-    if (!canRunOnGPU) {
+    if (cudfHiveConnector == nullptr && cudfIcebergConnector == nullptr) {
       LOG_FALLBACK(
           "TableScan connector is not CudfHiveConnector or CudfIcebergConnector, PlanNode id: {}",
           planNode->id());
+      return false;
     }
 
-    return canRunOnGPU;
+    // Ask with the ConnectorQueryCtx the TableScan creates for the connector,
+    // so that this decision matches the data source the connector picks.
+    // unsupportedReason() allocates only from the operator pool, so no
+    // connector pool is needed.
+    const auto connectorQueryCtx = op->operatorCtx()->createConnectorQueryCtx(
+        tableScanNode->tableHandle()->connectorId(),
+        planNode->id(),
+        /*connectorPool=*/nullptr);
+    if (const auto reason = facebook::velox::cudf_velox::connector::hive::
+            CudfHiveDataSource::unsupportedReason(
+                tableScanNode->tableHandle(), *connectorQueryCtx)) {
+      LOG_FALLBACK(
+          "TableScan is not supported by the cuDF data source, PlanNode id: {}: {}",
+          planNode->id(),
+          *reason);
+      return false;
+    }
+
+    // The data source folds the remaining filter without legacy_cast, which
+    // changes how some literals cast, such as a TIMESTAMP literal. The
+    // connector cannot see legacy_cast to fall back, so the scan fails unless
+    // every cast in the filter is one legacy_cast leaves as is.
+    // TODO: Remove this check once the data source folds with the session
+    // QueryConfig (facebookincubator/velox#19476).
+    const auto hiveTableHandle = std::dynamic_pointer_cast<
+        const velox::connector::hive::HiveTableHandle>(
+        tableScanNode->tableHandle());
+    VELOX_CHECK_NOT_NULL(hiveTableHandle);
+    const auto& remainingFilter = hiveTableHandle->remainingFilter();
+    if (ctx->queryConfig().isLegacyCast() && remainingFilter &&
+        containsLegacyCastDependentCast(remainingFilter)) {
+      VELOX_UNSUPPORTED(
+          "Remaining filter with a cast that legacy_cast may change is not supported by the cuDF data source: {}",
+          remainingFilter->toString());
+    }
+
+    return true;
   }
 
   bool acceptsGpuInput() const override {
@@ -765,8 +837,7 @@ class TopNRowNumberAdapter : public OperatorAdapter {
     if (!node) {
       return false;
     }
-    return node->rankFunction() ==
-        core::TopNRowNumberNode::RankFunction::kRowNumber;
+    return CudfTopNRowNumber::canRunOnGPU(*node);
   }
 
   bool acceptsGpuInput() const override {

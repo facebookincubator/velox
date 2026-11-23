@@ -117,7 +117,7 @@ class CudfBatchConcatTest : public OperatorTestBase {
 
   core::PlanNodePtr createAggregationPlan(const RowVectorPtr& input) {
     return PlanBuilder()
-        .values({input})
+        .values(input)
         .singleAggregation({}, {"count(*)"})
         .planNode();
   }
@@ -142,12 +142,12 @@ class CudfBatchConcatTest : public OperatorTestBase {
   // from coalescing small batches.
   core::PlanNodePtr createFragmentedSource(
       const std::vector<RowVectorPtr>& vectors,
-      std::shared_ptr<core::PlanNodeIdGenerator> generator) {
+      const PlanBuilder& builder) {
     std::vector<core::PlanNodePtr> sources;
     for (const auto& vec : vectors) {
-      sources.push_back(PlanBuilder(generator).values({vec}).planNode());
+      sources.push_back(builder.newPlan().values(vec).planNode());
     }
-    return PlanBuilder(generator).localPartitionRoundRobin(sources).planNode();
+    return builder.newPlan().localPartitionRoundRobin(sources).planNode();
   }
 
   // Returns the CudfBatchConcat stats for the given plan node, or nullptr if
@@ -175,10 +175,8 @@ TEST_F(CudfBatchConcatTest, singleColumnBearingInputPassesThrough) {
   updateCudfConfig(/*min=*/4, /*max=*/std::nullopt);
 
   auto input = makeRowVector({makeFlatSequence<int64_t>(0, 4)});
-  auto plan = PlanBuilder()
-                  .values({input})
-                  .singleAggregation({}, {"sum(c0)"})
-                  .planNode();
+  auto plan =
+      PlanBuilder().values(input).singleAggregation({}, {"sum(c0)"}).planNode();
   auto task = createTask(plan);
   DriverCtx driverCtx(task, 0, 0, 0, 0);
   CudfBatchConcat concat(0, &driverCtx, plan);
@@ -349,12 +347,12 @@ TEST_F(CudfBatchConcatTest, concatReducesBatchesBeforeAggregation) {
   }
   createDuckDbTable(vectors);
 
-  auto generator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId aggNodeId;
 
-  auto plan = PlanBuilder(generator)
+  auto plan = builder.newPlan()
                   .addNode([&](auto id, auto pool) {
-                    return createFragmentedSource(vectors, generator);
+                    return createFragmentedSource(vectors, builder);
                   })
                   .singleAggregation({}, {"sum(c0)"})
                   .capturePlanNodeId(aggNodeId)
@@ -393,12 +391,12 @@ TEST_F(CudfBatchConcatTest, concatFlushesMidStreamAtByteTarget) {
   updateCudfByteConfig(/*minBytes=*/3 * batchBytes, /*maxRows=*/std::nullopt);
   CudfConfig::getInstance().concatOptimizationEnabled = true;
 
-  auto generator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId aggNodeId;
 
-  auto plan = PlanBuilder(generator)
+  auto plan = builder.newPlan()
                   .addNode([&](auto id, auto pool) {
-                    return createFragmentedSource(vectors, generator);
+                    return createFragmentedSource(vectors, builder);
                   })
                   .singleAggregation({}, {"sum(c0)"})
                   .capturePlanNodeId(aggNodeId)
@@ -430,12 +428,12 @@ TEST_F(CudfBatchConcatTest, concatNotInsertedWhenDisabled) {
   }
   createDuckDbTable(vectors);
 
-  auto generator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId aggNodeId;
 
-  auto plan = PlanBuilder(generator)
+  auto plan = builder.newPlan()
                   .addNode([&](auto id, auto pool) {
-                    return createFragmentedSource(vectors, generator);
+                    return createFragmentedSource(vectors, builder);
                   })
                   .singleAggregation({}, {"sum(c0)"})
                   .capturePlanNodeId(aggNodeId)
@@ -464,12 +462,12 @@ TEST_F(CudfBatchConcatTest, concatMergesAllOnFlushWithHighThreshold) {
   }
   createDuckDbTable(vectors);
 
-  auto generator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId aggNodeId;
 
-  auto plan = PlanBuilder(generator)
+  auto plan = builder.newPlan()
                   .addNode([&](auto id, auto pool) {
-                    return createFragmentedSource(vectors, generator);
+                    return createFragmentedSource(vectors, builder);
                   })
                   .singleAggregation({}, {"sum(c0)"})
                   .capturePlanNodeId(aggNodeId)
@@ -505,12 +503,12 @@ TEST_F(CudfBatchConcatTest, concatWithGroupedAggregation) {
   }
   createDuckDbTable(vectors);
 
-  auto generator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId aggNodeId;
 
-  auto plan = PlanBuilder(generator)
+  auto plan = builder.newPlan()
                   .addNode([&](auto id, auto pool) {
-                    return createFragmentedSource(vectors, generator);
+                    return createFragmentedSource(vectors, builder);
                   })
                   .singleAggregation({"c0"}, {"sum(c1)"})
                   .capturePlanNodeId(aggNodeId)
@@ -538,11 +536,10 @@ TEST_F(CudfBatchConcatTest, concatPreservesZeroColumnRowCountForCountStar) {
   });
   createDuckDbTable({data});
 
-  auto generator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId aggNodeId;
 
-  auto plan = PlanBuilder(generator)
-                  .values({data})
+  auto plan = PlanBuilder()
+                  .values(data)
                   .filter("c0 > 0")
                   .project({})
                   .singleAggregation({}, {"count(*)"})
@@ -579,22 +576,22 @@ TEST_F(CudfBatchConcatTest, concatBeforeHashJoinProbe) {
 
   // Build side: small dimension table.
   auto buildVector =
-      makeRowVector({"u_c0"}, {makeFlatVector<int64_t>({0, 1, 2})});
+      makeNamedRowVector("u_c0", makeFlatVector<int64_t>({0, 1, 2}));
 
   createDuckDbTable("probe", probeVectors);
   createDuckDbTable("build", {buildVector});
 
-  auto generator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId joinNodeId;
 
-  auto plan = PlanBuilder(generator)
+  auto plan = builder.newPlan()
                   .addNode([&](auto id, auto pool) {
-                    return createFragmentedSource(probeVectors, generator);
+                    return createFragmentedSource(probeVectors, builder);
                   })
                   .hashJoin(
                       {"c0"},
                       {"u_c0"},
-                      PlanBuilder(generator).values({buildVector}).planNode(),
+                      builder.newPlan().values(buildVector).planNode(),
                       "",
                       {"c0", "c1"},
                       core::JoinType::kInner)
@@ -631,22 +628,22 @@ TEST_F(CudfBatchConcatTest, rightJoinCollectsMatchedRowsFromPeerProbes) {
         {"c0", "c1"},
         {makeConstant<int64_t>(i, 10), makeFlatSequence<int64_t>(i * 10, 10)}));
   }
-  auto buildVector = makeRowVector(
-      {"u_c0"}, {makeFlatSequence<int64_t>(0, probeVectors.size())});
+  auto buildVector = makeNamedRowVector(
+      "u_c0", makeFlatSequence<int64_t>(0, probeVectors.size()));
 
   createDuckDbTable("probe", probeVectors);
   createDuckDbTable("build", {buildVector});
 
-  auto generator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId joinNodeId;
-  auto plan = PlanBuilder(generator)
+  auto plan = builder.newPlan()
                   .addNode([&](auto id, auto pool) {
-                    return createFragmentedSource(probeVectors, generator);
+                    return createFragmentedSource(probeVectors, builder);
                   })
                   .hashJoin(
                       {"c0"},
                       {"u_c0"},
-                      PlanBuilder(generator).values({buildVector}).planNode(),
+                      builder.newPlan().values(buildVector).planNode(),
                       "",
                       {"c0", "c1", "u_c0"},
                       core::JoinType::kRight)
@@ -677,12 +674,12 @@ TEST_F(CudfBatchConcatTest, concatSplitsZeroColumnBatchesAtMaxThreshold) {
   }
   createDuckDbTable(vectors);
 
-  auto generator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId aggNodeId;
 
-  auto plan = PlanBuilder(generator)
+  auto plan = builder.newPlan()
                   .addNode([&](auto id, auto pool) {
-                    return createFragmentedSource(vectors, generator);
+                    return createFragmentedSource(vectors, builder);
                   })
                   .filter("c0 >= 0")
                   .project({})
@@ -713,7 +710,7 @@ TEST_F(CudfBatchConcatTest, singleZeroColumnBatchSplitsAtMaxThreshold) {
 
   core::PlanNodeId aggNodeId;
   auto plan = PlanBuilder()
-                  .values({data})
+                  .values(data)
                   .filter("c0 >= 0")
                   .project({})
                   .singleAggregation({}, {"count(*)"})

@@ -868,6 +868,10 @@ class ExprSet {
   /// used by memory arbitration to reclaim memory.
   void clearCache();
 
+  /// Releases the results of shared subexpressions computed for the current
+  /// batch, which are valid only within that batch.
+  void clearSharedSubexprs();
+
   core::ExecCtx* execCtx() const {
     return execCtx_;
   }
@@ -924,8 +928,6 @@ class ExprSet {
       bool excludeSpecialForm = false) const;
 
  protected:
-  void clearSharedSubexprs();
-
   /// Initializes adaptive CPU sampling state on the EvalCtx. Sets
   /// sampling flags, max overhead percentage, and measures CpuWallTimer
   /// overhead once per ExprSet.

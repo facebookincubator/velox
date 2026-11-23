@@ -171,15 +171,8 @@ TEST_F(CudfGroupIdTest, groupingSetsOutput) {
       *reversedOrderGroupIdNode->outputType(), *reversedOrderExpectedRowType);
   ASSERT_EQ(*orderGroupIdNode->outputType(), *orderExpectedRowType);
 
-  CursorParameters orderParams;
-  orderParams.planNode = orderPlan;
-  auto orderResult = readCursor(orderParams);
-
-  CursorParameters reversedOrderParams;
-  reversedOrderParams.planNode = reversedOrderPlan;
-  auto reversedOrderResult = readCursor(reversedOrderParams);
-
-  assertEqualResults(orderResult.second, reversedOrderResult.second);
+  AssertQueryBuilder(reversedOrderPlan)
+      .assertResults(AssertQueryBuilder(orderPlan).copyResults(pool()));
 }
 
 // Test matching core Velox: AggregationTest.groupingSetsSameKey

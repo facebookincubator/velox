@@ -33,9 +33,6 @@ class KHyperLogLogAggregateTest : public AggregationTestBase {
   void SetUp() override {
     AggregationTestBase::SetUp();
     registerKHyperLogLogType();
-    // Disable tests which do raw binary comparison.
-    disableTestStreaming();
-    disableTestIncremental();
     pool_ = facebook::velox::memory::memoryManager()->addLeafPool();
     hsa_ = std::make_unique<HashStringAllocator>(pool_.get());
     allocator_ = hsa_.get();
@@ -73,17 +70,21 @@ class KHyperLogLogAggregateTest : public AggregationTestBase {
   }
 
   // Helper to verify aggregation results have expected cardinalities.
-  // Uses testAggregations with a custom assert function to test all
+  // Uses AggregationTester with a custom assert function to test all
   // aggregation plan paths.
   void testAggregationWithCardinality(
       const std::vector<RowVectorPtr>& data,
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
       const std::map<int32_t, int64_t>& keysToExpectedCardinalities) {
+    // The streaming and incremental checks compare sketches byte by byte, and
+    // equal sketches can differ in bytes.
     AggregationTester(*this)
         .inputs(data)
         .groupBy(groupingKeys)
         .aggregates(aggregates)
+        .disableStreaming()
+        .disableIncremental()
         .assertResults([&](AssertQueryBuilder& builder) {
           std::shared_ptr<exec::Task> task;
           auto result = builder.copyResults(pool_.get(), task);
@@ -168,7 +169,8 @@ TEST_F(KHyperLogLogAggregateTest, globalAggIntegersWithNulls) {
       {{0, 3}});
 
   // All nulls
-  auto expected = makeRowVector({makeNullConstant(TypeKind::VARBINARY, 1)});
+  auto expected = makeRowVector(
+      {BaseVector::createNullConstant(KHYPERLOGLOG(), 1, pool())});
   AggregationTester(*this)
       .inputs(makeRowVector({
           makeNullableFlatVector<int64_t>(
@@ -345,7 +347,7 @@ TEST_F(KHyperLogLogAggregateTest, unknownType) {
        makeAllNullFlatVector<UnknownValue>(10)});
 
   auto expected = makeRowVector(
-      {makeNullableFlatVector<StringView>({std::nullopt}, VARBINARY())});
+      {makeNullableFlatVector<StringView>({std::nullopt}, KHYPERLOGLOG())});
 
   AggregationTester(*this)
       .inputs(data)

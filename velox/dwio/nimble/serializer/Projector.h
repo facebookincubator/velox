@@ -38,6 +38,9 @@ using Subfield = velox::common::Subfield;
 /// Copies only the byte ranges for selected columns/subfields, preserving
 /// compression and avoiding decode-encode overhead.
 ///
+/// A compressed kBlob body is decompressed first. The output then holds a copy
+/// of the selected streams instead of sharing the input's memory.
+///
 /// Supported projections:
 /// - Top-level columns: "a", "b", "c"
 /// - Nested struct fields: "a.b.c", "struct_col.field1"
@@ -159,6 +162,19 @@ class Projector {
       const folly::IOBuf& input,
       SerializationVersion inputVersion) const;
 
+  // Projects the body of a contiguous IOBuf: the streams, which start at
+  // 'dataOffset', and the stream-sizes trailer at the end of 'input'.
+  folly::IOBuf projectContiguous(
+      const folly::IOBuf& input,
+      size_t dataOffset,
+      uint32_t rowCount,
+      bool inputRequiredBarrier,
+      SerializationVersion inputVersion) const;
+
+  // Projects a kBlob input, whose body is decompressed first when it is
+  // compressed.
+  folly::IOBuf projectBlob(const folly::IOBuf& input) const;
+
   // Projects a chained IOBuf using folly::io::Cursor.
   folly::IOBuf projectChained(
       const folly::IOBuf& input,
@@ -185,7 +201,7 @@ class Projector {
       const std::vector<uint32_t>& selectedStreamIndices,
       bool inputRequiredBarrier,
       bool hasProjectedHybridFlatMaps,
-      const std::vector<bool>& rowOrFlatMapNullStreams,
+      const std::vector<bool>& barrierStreams,
       bool& outputRequiredBarrier,
       std::unique_ptr<folly::IOBuf>& output);
 
@@ -200,7 +216,7 @@ class Projector {
       const std::vector<uint32_t>& selectedStreamIndices,
       bool inputRequiredBarrier,
       bool hasProjectedHybridFlatMaps,
-      const std::vector<bool>& rowOrFlatMapNullStreams,
+      const std::vector<bool>& barrierStreams,
       bool& outputRequiredBarrier,
       std::unique_ptr<folly::IOBuf>& output);
 
@@ -214,7 +230,7 @@ class Projector {
       const std::vector<uint32_t>& selectedStreamIndices,
       bool inputRequiredBarrier,
       bool hasProjectedHybridFlatMaps,
-      const std::vector<bool>& rowOrFlatMapNullStreams,
+      const std::vector<bool>& barrierStreams,
       bool& outputRequiredBarrier,
       std::unique_ptr<folly::IOBuf>& output);
 
@@ -228,7 +244,7 @@ class Projector {
       const std::vector<StreamMapping>& sortedStreamMappings,
       bool inputRequiredBarrier,
       bool hasProjectedHybridFlatMaps,
-      const std::vector<bool>& rowOrFlatMapNullStreams,
+      const std::vector<bool>& barrierStreams,
       bool& outputRequiredBarrier,
       std::unique_ptr<folly::IOBuf>& output);
 

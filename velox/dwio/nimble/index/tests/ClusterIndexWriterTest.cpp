@@ -21,27 +21,30 @@
 
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/caching/FileHandle.h"
+#include "velox/common/caching/FileIds.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/io/Options.h"
+#include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/dwio/common/BufferedInput.h"
-#include "velox/dwio/common/SeekableInputStream.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/index/ClusterIndexFactory.h"
-#include "velox/dwio/nimble/index/HierarchicalClusterIndex.h"
-#include "velox/dwio/nimble/index/HierarchicalClusterIndexFactory.h"
-#include "velox/dwio/nimble/index/HierarchicalClusterIndexWriter.h"
-#include "velox/dwio/nimble/index/HierarchicalKeyFormat.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/index/IndexKeyEncoder.h"
 #include "velox/dwio/nimble/index/KeyChunkDecoder.h"
 #include "velox/dwio/nimble/index/KeyComparator.h"
 #include "velox/dwio/nimble/index/SortOrder.h"
+#include "velox/dwio/nimble/index/TrieClusterIndex.h"
+#include "velox/dwio/nimble/index/TrieClusterIndexFactory.h"
+#include "velox/dwio/nimble/index/TrieClusterIndexWriter.h"
+#include "velox/dwio/nimble/index/TrieKeyFormat.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/MetadataInput.h"
 #include "velox/serializers/KeyEncoder.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -66,10 +69,10 @@ class ReverseKeyComparator final : public KeyComparator {
   }
 };
 
-// A hierarchical key codec whose keys are the levels big-endian at their
+// A trie key codec whose keys are the levels big-endian at their
 // widths with every bit inverted, so they sort in reverse bytewise order, which
 // its comparator gives. It takes only complete keys.
-class InvertedKeyCodec final : public HierarchicalKeyCodec {
+class InvertedKeyCodec final : public TrieKeyCodec {
  public:
   size_t keySize(std::span<const uint8_t> levelWidths) const override {
     size_t bytes{0};
@@ -128,6 +131,8 @@ class ClusterIndexWriterTest : public testing::Test,
   static constexpr std::string_view kCol0{"col0"};
   static constexpr std::string_view kCol1{"col1"};
   static constexpr std::string_view kCol2{"col2"};
+  // Stream of each stripe that holds its key chunks in the Stripe layout.
+  static constexpr uint32_t kKeyStreamId{5};
 
   static std::shared_ptr<const IndexConfig> buildIndexConfig(
       std::vector<std::string> columns,
@@ -154,14 +159,14 @@ class ClusterIndexWriterTest : public testing::Test,
     return builder.build();
   }
 
-  static std::shared_ptr<const IndexConfig> buildHierarchicalIndexConfig(
+  static std::shared_ptr<const IndexConfig> buildTrieIndexConfig(
       std::vector<std::string> columns,
       std::vector<SortOrder> sortOrders,
       bool enforceKeyOrder,
       bool noDuplicateKey = false,
       uint64_t maxRowsPerKeyChunk = 10'000,
       CompressionType keyChunkCompressionType = CompressionType::Uncompressed) {
-    auto builder = ClusterIndexConfigBuilder{kHierarchicalClusterIndexName}
+    auto builder = ClusterIndexConfigBuilder{kTrieClusterIndexName}
                        .withKeyColumns(std::move(columns))
                        .withSortOrders(std::move(sortOrders))
                        .withEnforceKeyOrder(enforceKeyOrder)
@@ -176,8 +181,10 @@ class ClusterIndexWriterTest : public testing::Test,
   static std::unique_ptr<IndexWriter> createWriter(
       const std::shared_ptr<const IndexConfig>& config,
       const velox::TypePtr& type,
-      velox::memory::MemoryPool* pool) {
-    return clusterIndexFactory(config->name).createWriter(*config, type, pool);
+      velox::memory::MemoryPool* pool,
+      const ClusterIndexFactory::Options& options = {}) {
+    return clusterIndexFactory(config->name)
+        .createWriter(*config, type, pool, options);
   }
 
   void SetUp() override {
@@ -215,6 +222,29 @@ class ClusterIndexWriterTest : public testing::Test,
         noDuplicateKey);
   }
 
+  // Returns a batch of type_ whose index column holds 'keys'.
+  velox::RowVectorPtr makeKeyBatch(const std::vector<int32_t>& keys) {
+    const auto numRows = static_cast<velox::vector_size_t>(keys.size());
+    return makeRowVector(
+        {std::string(kCol0), std::string(kCol1), std::string(kCol2)},
+        {makeFlatVector<velox::StringView>(
+             numRows, [](auto /*row*/) { return velox::StringView{"a"}; }),
+         makeFlatVector<int32_t>(keys),
+         makeFlatVector<velox::StringView>(
+             numRows, [](auto /*row*/) { return velox::StringView{"b"}; })});
+  }
+
+  // Creates a writer of indexConfig() that stores its keys in the Stripe
+  // layout, in stream kKeyStreamId of each stripe.
+  std::unique_ptr<IndexWriter> createStripeKeyStreamWriter() {
+    return createWriter(
+        indexConfig(),
+        type_,
+        pool_.get(),
+        {.keyStreamLayout = KeyStreamLayout::kStripe,
+         .indexStreamIds = {kKeyStreamId}});
+  }
+
   velox::RowTypePtr type_;
 };
 
@@ -247,19 +277,17 @@ TEST_F(ClusterIndexWriterTest, createWithValidConfig) {
     }
   }
 
-  auto hierarchicalConfig = buildHierarchicalIndexConfig(
+  auto trieConfig = buildTrieIndexConfig(
       {"col0"},
       {SortOrder{.ascending = true}},
       /*enforceKeyOrder=*/true,
       /*noDuplicateKey=*/false,
       /*maxRowsPerKeyChunk=*/10'000,
       CompressionType::Uncompressed);
-  const auto hierarchicalWriter = createWriter(
-      hierarchicalConfig, velox::ROW({{"col0", velox::BIGINT()}}), pool_.get());
+  const auto trieWriter = createWriter(
+      trieConfig, velox::ROW({{"col0", velox::BIGINT()}}), pool_.get());
   EXPECT_NE(
-      dynamic_cast<const HierarchicalClusterIndexWriter*>(
-          hierarchicalWriter.get()),
-      nullptr);
+      dynamic_cast<const TrieClusterIndexWriter*>(trieWriter.get()), nullptr);
 }
 
 TEST_F(ClusterIndexWriterTest, createWithInvalidConfig) {
@@ -306,8 +334,8 @@ TEST_F(ClusterIndexWriterTest, createWithInvalidConfig) {
   }
 
   {
-    SCOPED_TRACE("hierarchical non-integral column");
-    auto config = buildHierarchicalIndexConfig(
+    SCOPED_TRACE("trie non-integral column");
+    auto config = buildTrieIndexConfig(
         {"col0"},
         {SortOrder{.ascending = true}},
         /*enforceKeyOrder=*/true,
@@ -317,12 +345,12 @@ TEST_F(ClusterIndexWriterTest, createWithInvalidConfig) {
     NIMBLE_ASSERT_USER_THROW(
         createWriter(
             config, velox::ROW({{"col0", velox::VARCHAR()}}), pool_.get()),
-        "Hierarchical key column must be integral");
+        "Trie key column must be integral");
   }
 
   {
-    SCOPED_TRACE("hierarchical without key order enforcement");
-    auto config = buildHierarchicalIndexConfig(
+    SCOPED_TRACE("trie without key order enforcement");
+    auto config = buildTrieIndexConfig(
         {"col0"},
         {SortOrder{.ascending = true}},
         /*enforceKeyOrder=*/false,
@@ -332,7 +360,7 @@ TEST_F(ClusterIndexWriterTest, createWithInvalidConfig) {
     NIMBLE_ASSERT_USER_THROW(
         createWriter(
             config, velox::ROW({{"col0", velox::BIGINT()}}), pool_.get()),
-        "Hierarchical key chunks require enforceKeyOrder=true");
+        "Trie key chunks require enforceKeyOrder=true");
   }
 }
 
@@ -393,7 +421,7 @@ TEST_F(ClusterIndexWriterTest, keyChunkCompressionProducesRequestedChunkCodec) {
     CreateMetadataSectionFn createMetadataFn = [&](std::string_view) {
       return MetadataSection{nextSectionId++, 0, CompressionType::Uncompressed};
     };
-    writer->flush(writeDataFn, createMetadataFn);
+    writer->finishStripeGroup(writeDataFn, createMetadataFn);
 
     // The first chunk's header compression-type byte (the last byte of the
     // 5-byte header) reflects the configured codec.
@@ -405,10 +433,9 @@ TEST_F(ClusterIndexWriterTest, keyChunkCompressionProducesRequestedChunkCodec) {
     // Decode the writer's actual output and confirm every codec round-trips to
     // the same keys as the uncompressed run: compression must not alter
     // content.
-    velox::BufferPtr decodeBuffer;
     auto decoded = decodeKeyChunk(
-        std::make_unique<velox::dwio::common::SeekableArrayInputStream>(
-            keyStreamData.data(), keyStreamData.size()),
+        keyStreamData,
+        /*handle=*/nullptr,
         [](std::string_view encodedKeys,
            std::function<void*(uint32_t)> stringBufferFactory,
            velox::memory::MemoryPool* pool) {
@@ -418,7 +445,6 @@ TEST_F(ClusterIndexWriterTest, keyChunkCompressionProducesRequestedChunkCodec) {
               /*comparator=*/nullptr,
               pool);
         },
-        decodeBuffer,
         pool_.get());
     ASSERT_NE(decoded, nullptr);
     ASSERT_NE(decoded->reader, nullptr);
@@ -561,7 +587,7 @@ TEST_F(ClusterIndexWriterTest, multiColumnWithDifferentSortOrders) {
     const auto singleColType = velox::ROW({{"col0", velox::INTEGER()}});
 
     // Create input data.
-    auto batch = makeRowVector({"col0"}, {makeFlatVector<int32_t>({1, 2, 3})});
+    auto batch = makeNamedRowVector("col0", makeFlatVector<int32_t>({1, 2, 3}));
 
     // Write with ascending order.
     auto configAsc = buildIndexConfig(
@@ -868,6 +894,152 @@ TEST_F(ClusterIndexWriterTest, noDuplicateKey) {
 
     NIMBLE_ASSERT_USER_THROW(
         writer->write(batch), "Encoded keys must be in ascending order");
+  }
+}
+
+TEST_F(ClusterIndexWriterTest, stripeKeyStreams) {
+  // Chunks of up to two rows, which the Stripe layout ignores.
+  auto writer = createWriter(
+      buildIndexConfig(
+          {std::string(kCol1)},
+          EncodingLayout{
+              EncodingType::Prefix, {}, CompressionType::Uncompressed},
+          /*sortOrders=*/{},
+          /*enforceKeyOrder=*/false,
+          /*noDuplicateKey=*/false,
+          /*maxRowsPerKeyChunk=*/2),
+      type_,
+      pool_.get(),
+      {.keyStreamLayout = KeyStreamLayout::kStripe,
+       .indexStreamIds = {kKeyStreamId}});
+
+  // Two stripes in one stripe group. The first stripe's keys arrive in two
+  // batches. Each stripe's keys are one key chunk.
+  Buffer buffer{*pool_};
+  writer->write(makeKeyBatch({1, 2}));
+  writer->write(makeKeyBatch({3, 4, 5}));
+  const auto firstStripe = writer->finishStripe(buffer);
+  writer->write(makeKeyBatch({6, 7}));
+  const auto secondStripe = writer->finishStripe(buffer);
+  // Each stripe stores one stream, its key stream.
+  ASSERT_EQ(firstStripe.size(), 1);
+  ASSERT_EQ(firstStripe[0].size(), 1);
+  EXPECT_EQ(firstStripe[0][0].rowCount, 5);
+  ASSERT_EQ(secondStripe.size(), 1);
+  ASSERT_EQ(secondStripe[0].size(), 1);
+  EXPECT_EQ(secondStripe[0][0].rowCount, 2);
+
+  std::string group;
+  WriteDataFn writeDataFn = [](const std::vector<std::string_view>&)
+      -> std::pair<uint64_t, uint32_t> {
+    ADD_FAILURE() << "A Stripe layout index writes no key stream blob";
+    return {0, 0};
+  };
+  CreateMetadataSectionFn createMetadataFn = [&](std::string_view metadata) {
+    group = std::string(metadata);
+    return MetadataSection{
+        0,
+        static_cast<uint32_t>(metadata.size()),
+        CompressionType::Uncompressed};
+  };
+  writer->finishStripeGroup(writeDataFn, createMetadataFn);
+
+  std::string root;
+  createMetadataFn = [&](std::string_view metadata) {
+    root = std::string(metadata);
+    return MetadataSection{
+        0,
+        static_cast<uint32_t>(metadata.size()),
+        CompressionType::Uncompressed};
+  };
+  ASSERT_TRUE(writer->close(writeDataFn, createMetadataFn).has_value());
+  const auto* indexRoot =
+      flatbuffers::GetRoot<serialization::ClusterIndex>(root.data());
+  EXPECT_EQ(
+      indexRoot->key_stream_layout(), serialization::KeyStreamLayout_Stripe);
+  EXPECT_EQ(indexRoot->key_stream_id(), kKeyStreamId);
+  EXPECT_EQ(indexRoot->index_partitions(), nullptr);
+  ASSERT_NE(indexRoot->index_groups(), nullptr);
+  EXPECT_EQ(indexRoot->index_groups()->size(), 1);
+  EXPECT_THAT(
+      std::vector<uint32_t>(
+          indexRoot->partition_row_counts()->begin(),
+          indexRoot->partition_row_counts()->end()),
+      testing::ElementsAre(7));
+
+  // The group holds the last key of each stripe. The second is the last key
+  // of the group, which the root also holds.
+  const auto* stripeKeys =
+      flatbuffers::GetRoot<serialization::ClusterIndexGroup>(group.data())
+          ->stripe_keys();
+  ASSERT_NE(stripeKeys, nullptr);
+  ASSERT_EQ(stripeKeys->size(), 2);
+  EXPECT_LT(
+      stripeKeys->Get(0)->string_view(), stripeKeys->Get(1)->string_view());
+  ASSERT_EQ(indexRoot->partition_keys()->size(), 2);
+  EXPECT_EQ(
+      stripeKeys->Get(1)->string_view(),
+      indexRoot->partition_keys()->Get(1)->string_view());
+}
+
+// A Partition layout index keeps its keys in one blob per stripe group, so it
+// returns no chunks for the stripes.
+TEST_F(ClusterIndexWriterTest, partitionKeyStreamsStoreNothingInStripes) {
+  auto writer = createWriter(indexConfig(), type_, pool_.get());
+  writer->write(makeKeyBatch({1, 2}));
+  Buffer buffer{*pool_};
+  EXPECT_TRUE(writer->finishStripe(buffer).empty());
+}
+
+TEST_F(ClusterIndexWriterTest, stripeKeyStreamsRejectMisuse) {
+  WriteDataFn writeDataFn = [](const std::vector<std::string_view>&)
+      -> std::pair<uint64_t, uint32_t> { return {0, 0}; };
+  CreateMetadataSectionFn createMetadataFn = [](std::string_view) {
+    return MetadataSection{0, 0, CompressionType::Uncompressed};
+  };
+  Buffer buffer{*pool_};
+  {
+    NIMBLE_ASSERT_THROW(
+        createWriter(
+            indexConfig(),
+            type_,
+            pool_.get(),
+            {.keyStreamLayout = KeyStreamLayout::kStripe}),
+        "A Stripe layout cluster index stores its keys in one stream of each stripe");
+  }
+  {
+    NIMBLE_ASSERT_THROW(
+        createWriter(
+            indexConfig(),
+            type_,
+            pool_.get(),
+            {.keyStreamLayout = KeyStreamLayout::kStripe,
+             .indexStreamIds = {kKeyStreamId, kKeyStreamId + 1}}),
+        "A Stripe layout cluster index stores its keys in one stream of each stripe");
+  }
+  {
+    NIMBLE_ASSERT_THROW(
+        createWriter(
+            indexConfig(),
+            type_,
+            pool_.get(),
+            {.keyStreamLayout = KeyStreamLayout::kPartition,
+             .indexStreamIds = {kKeyStreamId}}),
+        "A Partition layout cluster index stores no stream in stripes");
+  }
+  {
+    auto writer = createStripeKeyStreamWriter();
+    NIMBLE_ASSERT_THROW(
+        writer->finishStripe(buffer), "A stripe must have keys");
+  }
+  {
+    auto writer = createStripeKeyStreamWriter();
+    writer->write(makeKeyBatch({1, 2}));
+    writer->finishStripe(buffer);
+    writer->write(makeKeyBatch({3, 4}));
+    NIMBLE_ASSERT_THROW(
+        writer->finishStripeGroup(writeDataFn, createMetadataFn),
+        "Keys written after the last finishStripe() belong to no stripe");
   }
 }
 
@@ -1201,7 +1373,7 @@ class ClusterIndexWriterChunkTest
     : public ClusterIndexWriterTest,
       public ::testing::WithParamInterface<uint64_t> {};
 
-TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
+TEST_F(ClusterIndexWriterTest, trieKeyChunksUseIntegralColumns) {
   const std::vector<std::string> keyColumns{
       "boolKey", "tinyKey", "smallKey", "intKey", "bigKey"};
   const std::vector<SortOrder> sortOrders{
@@ -1217,7 +1389,7 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
        {keyColumns[2], velox::SMALLINT()},
        {keyColumns[3], velox::INTEGER()},
        {keyColumns[4], velox::BIGINT()}});
-  auto config = buildHierarchicalIndexConfig(
+  auto config = buildTrieIndexConfig(
       keyColumns,
       sortOrders,
       /*enforceKeyOrder=*/true,
@@ -1268,18 +1440,18 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
         static_cast<uint32_t>(data.size()),
     };
   };
-  writer->flush(writeData, createMetadata);
+  writer->finishStripeGroup(writeData, createMetadata);
   const auto descriptor = writer->close(writeData, createMetadata);
   ASSERT_TRUE(descriptor.has_value());
-  EXPECT_EQ(descriptor->name, kHierarchicalClusterIndexName);
+  EXPECT_EQ(descriptor->name, kTrieClusterIndexName);
   ASSERT_EQ(metadata.size(), 2);
 
   const auto makeRootSection = [&]() {
-    return Section{MetadataBuffer(
+    return Section{MetadataBuffer(toPinnedBuffer(
         MetadataBuffer::decompress(
             toBufferPtr(metadata.at(metadata.size() - 1), pool_.get()),
             CompressionType::Uncompressed,
-            pool_.get()))};
+            pool_.get())))};
   };
   auto file =
       std::make_shared<velox::InMemoryReadFile>(keyStreamData + metadata.at(0));
@@ -1290,21 +1462,20 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
   const auto index =
       clusterIndexFactory(descriptor->name)
           .createReader(makeRootSection(), pool_.get(), indexOptions);
-  EXPECT_NE(
-      dynamic_cast<const HierarchicalClusterIndex*>(index.get()), nullptr);
+  EXPECT_NE(dynamic_cast<const TrieClusterIndex*>(index.get()), nullptr);
 
   {
-    // Hierarchical key chunks keep bytewise order, so a key comparator fails.
+    // Trie key chunks keep bytewise order, so a key comparator fails.
     const ReverseKeyComparator comparator;
     auto comparatorOptions = indexOptions;
     comparatorOptions.keyComparator = &comparator;
     NIMBLE_ASSERT_THROW(
-        HierarchicalClusterIndex::create(
+        TrieClusterIndex::create(
             makeRootSection(),
-            NimbleHierarchicalClusterIndexFactory{}.testingKeyCodec(),
+            nimbleKeyCodec(),
             pool_.get(),
             comparatorOptions),
-        "Hierarchical cluster index requires bytewise key order");
+        "Trie cluster index requires bytewise key order");
   }
 
   ASSERT_EQ(index->layout(/*detail=*/true).partitions.at(0).numChunks, 2);
@@ -1324,15 +1495,15 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
       flatKeys.emplace_back(key);
     }
   }
-  std::vector<std::string> hierarchicalKeys;
+  std::vector<std::string> trieKeys;
   auto keyCursor =
       index->keyCursor(RowRange{0, static_cast<uint32_t>(flatKeys.size())});
   while (keyCursor->hasNext()) {
-    hierarchicalKeys.emplace_back(keyCursor->next());
+    trieKeys.emplace_back(keyCursor->next());
   }
-  EXPECT_EQ(hierarchicalKeys, flatKeys);
+  EXPECT_EQ(trieKeys, flatKeys);
 
-  // Batches of hierarchical keys cross the chunk boundary mid-batch, and the
+  // Batches of trie keys cross the chunk boundary mid-batch, and the
   // keys of the first chunk stay valid past it.
   for (const auto& [startRow, maxKeys] :
        std::vector<std::pair<uint32_t, size_t>>{
@@ -1353,6 +1524,45 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
     EXPECT_EQ(
         std::vector<std::string>(keys.begin(), keys.end()),
         std::vector<std::string>(flatKeys.begin() + startRow, flatKeys.end()));
+  }
+
+  {
+    // With blockCache, the key stream is read into the block cache.
+    auto allocator = std::make_shared<velox::memory::MallocAllocator>(
+        velox::memory::MemoryAllocator::Options{
+            .capacity = 1UL << 30, .reservationByteLimit = 0});
+    auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+    testingResetBlockCache();
+    auto cachedOptions = indexOptions;
+    cachedOptions.blockCache = getBlockCache(cache.get());
+    velox::FileHandle fileHandle;
+    fileHandle.file = cachedOptions.file;
+    fileHandle.uuid = velox::StringIdLease(
+        velox::fileIds(),
+        "ClusterIndexWriterTest.trieKeyChunksUseIntegralColumns");
+    cachedOptions.fileHandle = fileHandle;
+    auto cachedIndex =
+        clusterIndexFactory(descriptor->name)
+            .createReader(makeRootSection(), pool_.get(), cachedOptions);
+    std::vector<std::string> cachedKeys;
+    auto cachedKeyCursor = cachedIndex->keyCursor(
+        RowRange{0, static_cast<uint32_t>(flatKeys.size())});
+    while (cachedKeyCursor->hasNext()) {
+      cachedKeys.emplace_back(cachedKeyCursor->next());
+    }
+    EXPECT_EQ(cachedKeys, flatKeys);
+
+    // The file starts with the key stream, so its first chunk is at offset 0.
+    velox::io::IoStatistics probeStats;
+    EXPECT_FALSE(
+        cachedOptions.blockCache
+            ->find(
+                cachedOptions.fileHandle->uuid.id(), /*offset=*/0, probeStats)
+            .empty());
+    cachedKeyCursor.reset();
+    cachedIndex.reset();
+    testingResetBlockCache();
+    cache->shutdown();
   }
 
   const auto keyType = velox::ROW(
@@ -1387,9 +1597,8 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
     bounds.set(
         velox::serializer::IndexBound{key, true},
         velox::serializer::IndexBound{key, true});
-    return index->lookup(
-        IndexLookup::LookupRequest::rangeScan(
-            encoder->encodeIndexBounds(bounds)));
+    return index->lookup(*IndexLookup::LookupRequest::rangeScan(
+        encoder->encodeIndexBounds(bounds)));
   };
 
   {
@@ -1411,13 +1620,12 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
 // A level stores a key column value as an unsigned integer in the order of the
 // column: an integer with its sign bit flipped, false as 1 and true as 2, and
 // every bit inverted for a descending column.
-TEST_F(ClusterIndexWriterTest, normalizeHierarchicalKeyValue) {
+TEST_F(ClusterIndexWriterTest, normalizeTrieKeyValue) {
   const auto normalize = [](const auto& values, bool ascending) {
     std::vector<uint64_t> levels;
     levels.reserve(values.size());
     for (const auto value : values) {
-      levels.emplace_back(
-          HierarchicalKeyFormat::normalizeKeyValue(value, ascending));
+      levels.emplace_back(TrieKeyFormat::normalizeKeyValue(value, ascending));
     }
     return levels;
   };
@@ -1493,22 +1701,22 @@ TEST_F(ClusterIndexWriterTest, normalizeHierarchicalKeyValue) {
   }
 }
 
-// A hierarchical index takes and returns the keys of its codec, in the order
+// A trie index takes and returns the keys of its codec, in the order
 // of the codec's comparator, across the chunks that those keys bound. It opens
 // only with that comparator.
-TEST_F(ClusterIndexWriterTest, hierarchicalIndexTakesTheKeysOfItsCodec) {
+TEST_F(ClusterIndexWriterTest, trieIndexTakesTheKeysOfItsCodec) {
   const std::vector<std::string> keyColumns{"first", "second"};
   const auto type = velox::ROW(keyColumns, velox::BIGINT());
-  const auto config = buildHierarchicalIndexConfig(
+  const auto config = buildTrieIndexConfig(
       keyColumns,
       {SortOrder{.ascending = true}, SortOrder{.ascending = true}},
       /*enforceKeyOrder=*/true,
       /*noDuplicateKey=*/false,
       /*maxRowsPerKeyChunk=*/2);
-  const std::shared_ptr<const HierarchicalKeyCodec> keyCodec =
+  const std::shared_ptr<const TrieKeyCodec> keyCodec =
       std::make_shared<const InvertedKeyCodec>();
-  auto writer = HierarchicalClusterIndexWriter::create(
-      *config, type, keyCodec, pool_.get());
+  auto writer =
+      TrieClusterIndexWriter::create(*config, type, keyCodec, pool_.get());
   for (const auto& [first, second] :
        std::vector<std::pair<std::vector<int64_t>, std::vector<int64_t>>>{
            {{1, 1}, {10, 10}},
@@ -1544,14 +1752,14 @@ TEST_F(ClusterIndexWriterTest, hierarchicalIndexTakesTheKeysOfItsCodec) {
         static_cast<uint32_t>(data.size()),
     };
   };
-  writer->flush(writeData, createMetadata);
+  writer->finishStripeGroup(writeData, createMetadata);
   ASSERT_TRUE(writer->close(writeData, createMetadata).has_value());
   const auto makeRootSection = [&]() {
-    return Section{MetadataBuffer(
+    return Section{MetadataBuffer(toPinnedBuffer(
         MetadataBuffer::decompress(
             toBufferPtr(metadata.back(), pool_.get()),
             CompressionType::Uncompressed,
-            pool_.get()))};
+            pool_.get())))};
   };
   auto file =
       std::make_shared<velox::InMemoryReadFile>(keyStreamData + metadata.at(0));
@@ -1562,12 +1770,12 @@ TEST_F(ClusterIndexWriterTest, hierarchicalIndexTakesTheKeysOfItsCodec) {
 
   {
     NIMBLE_ASSERT_THROW(
-        HierarchicalClusterIndex::create(
+        TrieClusterIndex::create(
             makeRootSection(), keyCodec, pool_.get(), options),
-        "Hierarchical cluster index requires the key order of its codec");
+        "Trie cluster index requires the key order of its codec");
   }
   options.keyComparator = keyCodec->keyComparator();
-  const auto index = HierarchicalClusterIndex::create(
+  const auto index = TrieClusterIndex::create(
       makeRootSection(), keyCodec, pool_.get(), options);
   ASSERT_EQ(index->layout(/*detail=*/true).partitions.at(0).numChunks, 3);
 
@@ -1613,13 +1821,12 @@ TEST_F(ClusterIndexWriterTest, hierarchicalIndexTakesTheKeysOfItsCodec) {
   };
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
-    const auto result = index->lookup(
-        IndexLookup::LookupRequest::rangeScan({
-            velox::serializer::EncodedKeyBounds{
-                .lowerKey = testData.lowerKey,
-                .upperKey = testData.upperKey,
-            },
-        }));
+    const auto result = index->lookup(*IndexLookup::LookupRequest::rangeScan({
+        velox::serializer::EncodedKeyBounds{
+            .lowerKey = testData.lowerKey,
+            .upperKey = testData.upperKey,
+        },
+    }));
     ASSERT_EQ(result.size(), 1);
     ASSERT_EQ(result[0].size(), 1);
     EXPECT_EQ(result[0][0].startRow, testData.startRow);
@@ -1662,17 +1869,15 @@ encodeBounds(
   return keys;
 }
 
-// The built-in hierarchical index has the default key format, whose key encoder
+// The built-in trie index has the default key format, whose key encoder
 // writes the keys and the lookup bounds of the Velox key encoder byte for byte.
 // An exclusive lower bound and an inclusive upper bound move to the next values
 // in sort order, carrying into the columns before. An inclusive upper bound on
 // the last values has no upper key, and an exclusive lower bound on them fails.
 // The key encoder requires a sort order for each key column.
-TEST_F(ClusterIndexWriterTest, hierarchicalFactoryKeyEncoderWritesNimbleKeys) {
-  const auto& factory = clusterIndexFactory(kHierarchicalClusterIndexName);
-  ASSERT_NE(
-      dynamic_cast<const NimbleHierarchicalClusterIndexFactory*>(&factory),
-      nullptr);
+TEST_F(ClusterIndexWriterTest, trieFactoryKeyEncoderWritesNimbleKeys) {
+  const auto& factory = clusterIndexFactory(kTrieClusterIndexName);
+  ASSERT_NE(dynamic_cast<const TrieClusterIndexFactory*>(&factory), nullptr);
   EXPECT_EQ(factory.keyComparator(), nullptr);
 
   const std::vector<std::string> keyColumns{"tinyKey", "smallKey", "bigKey"};
@@ -1752,21 +1957,21 @@ TEST_F(ClusterIndexWriterTest, hierarchicalFactoryKeyEncoderWritesNimbleKeys) {
             keyColumns,
             velox::serializer::IndexBound{lastRow, false},
             velox::serializer::IndexBound{lastRow, true}),
-        "Exclusive lower bound of a hierarchical index has no next key");
+        "Exclusive lower bound of a trie index has no next key");
   }
   {
     NIMBLE_ASSERT_USER_THROW(
         factory.createKeyEncoder(keyColumns, type, {}, pool_.get()),
-        "Hierarchical index key encoder requires a sort order for each key column");
+        "Trie index key encoder requires a sort order for each key column");
   }
 }
 
-// A hierarchical index factory with its own key codec makes every part of the
+// A trie index factory with its own key codec makes every part of the
 // index use it: its writer writes those keys, and its reader opens with their
 // order, which the caller does not pass. Its key encoder writes the keys that
 // the key cursor returns, and lookup bounds that find their rows.
-TEST_F(ClusterIndexWriterTest, hierarchicalFactoryUsesItsKeyFormat) {
-  const NimbleHierarchicalClusterIndexFactory factory{
+TEST_F(ClusterIndexWriterTest, trieFactoryUsesItsKeyFormat) {
+  const TrieClusterIndexFactory factory{
       "test.inverted_keys", std::make_shared<const InvertedKeyCodec>()};
   EXPECT_NE(factory.keyComparator(), nullptr);
 
@@ -1784,7 +1989,11 @@ TEST_F(ClusterIndexWriterTest, hierarchicalFactoryUsesItsKeyFormat) {
       keyColumns,
       {makeFlatVector<int64_t>({1, 1, 2, 3}),
        makeFlatVector<int64_t>({10, 20, 5, 1})});
-  auto writer = factory.createWriter(*config, type, pool_.get());
+  auto writer = factory.createWriter(
+      *config,
+      type,
+      pool_.get(),
+      /*options=*/{});
   writer->write(rows);
 
   std::string keyStreamData;
@@ -1811,7 +2020,7 @@ TEST_F(ClusterIndexWriterTest, hierarchicalFactoryUsesItsKeyFormat) {
         static_cast<uint32_t>(data.size()),
     };
   };
-  writer->flush(writeData, createMetadata);
+  writer->finishStripeGroup(writeData, createMetadata);
   ASSERT_TRUE(writer->close(writeData, createMetadata).has_value());
   auto file =
       std::make_shared<velox::InMemoryReadFile>(keyStreamData + metadata.at(0));
@@ -1819,11 +2028,11 @@ TEST_F(ClusterIndexWriterTest, hierarchicalFactoryUsesItsKeyFormat) {
   ioOptions.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
   ioOptions.setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
   const auto index = factory.createReader(
-      Section{MetadataBuffer(
+      Section{MetadataBuffer(toPinnedBuffer(
           MetadataBuffer::decompress(
               toBufferPtr(metadata.back(), pool_.get()),
               CompressionType::Uncompressed,
-              pool_.get()))},
+              pool_.get())))},
       pool_.get(),
       IndexLookup::Options{.file = file, .ioOptions = &ioOptions});
   ASSERT_EQ(index->layout(/*detail=*/true).partitions.at(0).numChunks, 2);
@@ -1871,9 +2080,8 @@ TEST_F(ClusterIndexWriterTest, hierarchicalFactoryUsesItsKeyFormat) {
             bound(testData.lower), testData.lowerInclusive},
         velox::serializer::IndexBound{
             bound(testData.upper), testData.upperInclusive});
-    const auto result = index->lookup(
-        IndexLookup::LookupRequest::rangeScan(
-            encoder->encodeIndexBounds(bounds)));
+    const auto result = index->lookup(*IndexLookup::LookupRequest::rangeScan(
+        encoder->encodeIndexBounds(bounds)));
     ASSERT_EQ(result.size(), 1);
     ASSERT_EQ(result[0].size(), 1);
     EXPECT_EQ(result[0][0].startRow, testData.startRow);
@@ -1937,7 +2145,7 @@ TEST_P(ClusterIndexWriterChunkTest, maxRowsPerKeyChunk) {
     return MetadataSection(
         0, metadataSize, CompressionType::Uncompressed, metadataSize);
   };
-  writer->flush(writeDataFn, createMetadataFn);
+  writer->finishStripeGroup(writeDataFn, createMetadataFn);
 
   // Close the writer and capture the root index payload.
   WriteDataFn noopWriteDataFn2 = [](const std::vector<std::string_view>&)
@@ -1950,19 +2158,24 @@ TEST_P(ClusterIndexWriterChunkTest, maxRowsPerKeyChunk) {
   ASSERT_EQ(partitionMetadata.size(), 2);
 
   // Load ClusterIndex from serialized data and verify layout.
-  Section rootSection{MetadataBuffer(
+  Section rootSection{MetadataBuffer(toPinnedBuffer(
       MetadataBuffer::decompress(
           toBufferPtr(rootIndexData, pool_.get()),
           CompressionType::Uncompressed,
-          pool_.get()))};
+          pool_.get())))};
   auto metadataFile =
       std::make_shared<velox::InMemoryReadFile>(partitionMetadata[0]);
   auto ioStats = std::make_shared<velox::io::IoStatistics>();
   auto metadataInput = MetadataInput::create(
       metadataFile.get(),
       MetadataInput::Options{.pool = pool_.get(), .ioStats = ioStats});
-  auto dataInput = std::make_unique<velox::dwio::common::BufferedInput>(
-      std::make_shared<velox::InMemoryReadFile>(keyStreamData), *pool_);
+  auto keyStreamFile = std::make_shared<velox::InMemoryReadFile>(keyStreamData);
+  auto dataInput = std::make_shared<DirectDataInput>(
+      keyStreamFile,
+      DirectDataInput::Options{
+          .pool = pool_.get(),
+          .ioStats = std::make_shared<velox::io::IoStatistics>(),
+      });
 
   auto clusterIndex = test::ClusterIndexTestHelper::create(
       std::move(rootSection),
@@ -1982,7 +2195,8 @@ TEST_P(ClusterIndexWriterChunkTest, maxRowsPerKeyChunk) {
   const auto& partition = layout.partitions[0];
   EXPECT_EQ(partition.numRows, kNumRows);
   EXPECT_GT(partition.metadataSizeBytes, 0);
-  EXPECT_GT(partition.keyStreamRegion.length, 0);
+  ASSERT_EQ(partition.keyStreamRegions.size(), 1);
+  EXPECT_GT(partition.keyStreamRegions[0].length, 0);
 
   // Verify chunk count. encodeKeyChunks absorbs tail when remaining < 2 *
   // maxRows, so expected chunks = floor(numRows / maxRows) when tail is
@@ -1998,7 +2212,7 @@ TEST_P(ClusterIndexWriterChunkTest, maxRowsPerKeyChunk) {
       .lowerKey = std::string(clusterIndex->minKey()),
       .upperKey = std::nullopt};
   auto firstResult = clusterIndex->lookup(
-      IndexLookup::LookupRequest::rangeScan({firstBounds}));
+      *IndexLookup::LookupRequest::rangeScan({firstBounds}));
   ASSERT_EQ(firstResult.size(), 1);
   ASSERT_EQ(firstResult[0].size(), 1);
   EXPECT_EQ(firstResult[0][0].startRow, 0);
@@ -2006,8 +2220,8 @@ TEST_P(ClusterIndexWriterChunkTest, maxRowsPerKeyChunk) {
   velox::serializer::EncodedKeyBounds lastBounds{
       .lowerKey = std::string(clusterIndex->maxKey()),
       .upperKey = std::nullopt};
-  auto lastResult =
-      clusterIndex->lookup(IndexLookup::LookupRequest::rangeScan({lastBounds}));
+  auto lastResult = clusterIndex->lookup(
+      *IndexLookup::LookupRequest::rangeScan({lastBounds}));
   ASSERT_EQ(lastResult.size(), 1);
   ASSERT_EQ(lastResult[0].size(), 1);
   EXPECT_EQ(lastResult[0][0].startRow, kNumRows - 1);

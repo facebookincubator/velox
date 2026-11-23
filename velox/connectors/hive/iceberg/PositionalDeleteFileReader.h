@@ -17,6 +17,7 @@
 #pragma once
 
 #include <folly/Executor.h>
+#include <folly/container/F14Map.h>
 #include <memory>
 
 #include "velox/connectors/Connector.h"
@@ -69,6 +70,8 @@ class PositionalDeleteFileReader {
   ///   data file. Delete positions are absolute within the file, so this offset
   ///   is used to translate them to split-relative positions.
   /// @param connectorId Connector ID for constructing the internal split.
+  /// @param fileReadOps Options forwarded to the FileSystem when the delete
+  ///   file is opened and on every read from it.
   PositionalDeleteFileReader(
       const IcebergDeleteFile& deleteFile,
       const std::string& baseFilePath,
@@ -80,7 +83,8 @@ class PositionalDeleteFileReader {
       const std::shared_ptr<IoStats>& ioStats,
       dwio::common::RuntimeStats& runtimeStats,
       uint64_t splitOffset,
-      const std::string& connectorId);
+      const std::string& connectorId,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps);
 
   /// Reads delete positions for the current batch and sets corresponding bits
   /// in the deletion bitmap.

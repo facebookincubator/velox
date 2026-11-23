@@ -51,7 +51,11 @@ TEST_F(SetAggTest, global) {
       }),
   });
 
-  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Null inputs.
   data = makeRowVector({
@@ -63,7 +67,11 @@ TEST_F(SetAggTest, global) {
       makeArrayVectorFromJson<int32_t>({"[1, 2, 4, 5, 6, 7, null]"}),
   });
 
-  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // All inputs are null.
   data = makeRowVector({
@@ -74,7 +82,11 @@ TEST_F(SetAggTest, global) {
       makeArrayVectorFromJson<int32_t>({"[null]"}),
   });
 
-  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SetAggTest, groupBy) {
@@ -91,12 +103,12 @@ TEST_F(SetAggTest, groupBy) {
       }),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"set_agg(c1)"},
-      {"c0", "array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"set_agg(c1)"})
+      .project({"c0", "array_sort(a0)"})
+      .assertResults(expected);
 
   // Null inputs.
   data = makeRowVector({
@@ -122,12 +134,12 @@ TEST_F(SetAggTest, groupBy) {
       }),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"set_agg(c1)"},
-      {"c0", "array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"set_agg(c1)"})
+      .project({"c0", "array_sort(a0)"})
+      .assertResults(expected);
 
   // All inputs are null for a group.
   data = makeRowVector({
@@ -153,12 +165,12 @@ TEST_F(SetAggTest, groupBy) {
       }),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"set_agg(c1)"},
-      {"c0", "array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"set_agg(c1)"})
+      .project({"c0", "array_sort(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SetAggTest, shortDecimal) {
@@ -189,7 +201,11 @@ TEST_F(SetAggTest, shortDecimal) {
           type),
   });
 
-  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Test with some NULL inputs (short decimals)
   data = makeRowVector({
@@ -222,7 +238,11 @@ TEST_F(SetAggTest, shortDecimal) {
           ARRAY(type)),
   });
 
-  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Test with all NULL inputs (short decimals)
   data = makeRowVector({
@@ -241,7 +261,11 @@ TEST_F(SetAggTest, shortDecimal) {
           ARRAY(type)),
   });
 
-  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SetAggTest, longDecimal) {
@@ -280,7 +304,11 @@ TEST_F(SetAggTest, longDecimal) {
           type),
   });
 
-  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Test with some NULL inputs (long decimals)
   data = makeRowVector({
@@ -317,7 +345,11 @@ TEST_F(SetAggTest, longDecimal) {
           ARRAY(type)),
   });
 
-  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Test with all NULL inputs (long decimals)
   data = makeRowVector({
@@ -336,7 +368,11 @@ TEST_F(SetAggTest, longDecimal) {
           ARRAY(type)),
   });
 
-  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 }
 
 std::vector<std::optional<std::string>> generateStrings(
@@ -370,7 +406,11 @@ TEST_F(SetAggTest, globalVarchar) {
       makeNullableArrayVector(
           std::vector<std::vector<std::optional<std::string>>>{strings}),
   });
-  testAggregations(data, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   VectorFuzzer::Options options;
   VectorFuzzer fuzzer(options, pool());
@@ -379,7 +419,11 @@ TEST_F(SetAggTest, globalVarchar) {
       makeRowVector({fuzzer.fuzzDictionary(stringVector, 1'000)}),
   };
 
-  testAggregations(data, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Some nulls.
   auto stringsAndNull = strings;
@@ -395,14 +439,22 @@ TEST_F(SetAggTest, globalVarchar) {
           std::vector<std::vector<std::optional<std::string>>>{stringsAndNull}),
   });
 
-  testAggregations(data, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   data = {
       makeRowVector({fuzzer.fuzzDictionary(stringVector, 1'000)}),
       makeRowVector({fuzzer.fuzzDictionary(stringVectorWithNulls, 1'000)}),
   };
 
-  testAggregations(data, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // All inputs are null.
   data = {makeRowVector({makeAllNullFlatVector<StringView>(1'000)})};
@@ -412,7 +464,11 @@ TEST_F(SetAggTest, globalVarchar) {
               {std::nullopt},
           }),
   });
-  testAggregations(data, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SetAggTest, groupByVarchar) {
@@ -445,12 +501,12 @@ TEST_F(SetAggTest, groupByVarchar) {
       }),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"set_agg(c1)"},
-      {"c0", "array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"set_agg(c1)"})
+      .project({"c0", "array_sort(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SetAggTest, globalArray) {
@@ -475,7 +531,11 @@ TEST_F(SetAggTest, globalArray) {
           })),
   });
 
-  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SetAggTest, groupByArray) {
@@ -505,12 +565,12 @@ TEST_F(SetAggTest, groupByArray) {
           })),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"c0"},
-      {"set_agg(c1)"},
-      {"c0", "array_sort(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"c0"})
+      .aggregates({"set_agg(c1)"})
+      .project({"c0", "array_sort(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SetAggTest, arrayNestedNulls) {
@@ -535,12 +595,11 @@ TEST_F(SetAggTest, arrayNestedNulls) {
          {{std::nullopt, 7}},
          {{std::nullopt, std::nullopt}}}}})});
 
-  testAggregations(
-      {batch1, batch1, batch2, batch2},
-      {},
-      {"set_agg(c0)"},
-      {"\"$internal$canonicalize\"(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({batch1, batch1, batch2, batch2})
+      .aggregates({"set_agg(c0)"})
+      .project({"\"$internal$canonicalize\"(a0)"})
+      .assertResults(expected);
 
   expected = makeRowVector(
       {makeFlatVector<int32_t>({1, 2, 3, 4}),
@@ -550,12 +609,12 @@ TEST_F(SetAggTest, arrayNestedNulls) {
              {{{{2, 3}}, {{3, std::nullopt}}}},
              {{{{8, 9}}, {{std::nullopt, std::nullopt}}}}}})});
 
-  testAggregations(
-      {batch1, batch1, batch2, batch2},
-      {"c1"},
-      {"set_agg(c0)"},
-      {"c1", "\"$internal$canonicalize\"(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({batch1, batch1, batch2, batch2})
+      .groupBy({"c1"})
+      .aggregates({"set_agg(c0)"})
+      .project({"c1", "\"$internal$canonicalize\"(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SetAggTest, mapNestedNulls) {
@@ -587,12 +646,11 @@ TEST_F(SetAggTest, mapNestedNulls) {
            {{1, std::nullopt}, {2, 7}},
            {{1, std::nullopt}, {2, std::nullopt}}}))});
 
-  testAggregations(
-      {batch1, batch1, batch2, batch2},
-      {},
-      {"set_agg(c0)"},
-      {"\"$internal$canonicalize\"(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({batch1, batch1, batch2, batch2})
+      .aggregates({"set_agg(c0)"})
+      .project({"\"$internal$canonicalize\"(a0)"})
+      .assertResults(expected);
 
   expected = makeRowVector(
       {makeFlatVector<int32_t>({1, 2, 3, 4}),
@@ -608,12 +666,12 @@ TEST_F(SetAggTest, mapNestedNulls) {
                 {{1, 8}, {2, 9}},
                 {{1, std::nullopt}, {2, std::nullopt}}}))});
 
-  testAggregations(
-      {batch1, batch1, batch2, batch2},
-      {"c1"},
-      {"set_agg(c0)"},
-      {"c1", "\"$internal$canonicalize\"(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({batch1, batch1, batch2, batch2})
+      .groupBy({"c1"})
+      .aggregates({"set_agg(c0)"})
+      .project({"c1", "\"$internal$canonicalize\"(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SetAggTest, rowNestedNulls) {
@@ -652,12 +710,11 @@ TEST_F(SetAggTest, rowNestedNulls) {
                 "bb"_sv,
                 std::nullopt})}))});
 
-  testAggregations(
-      {batch1, batch1, batch2, batch2},
-      {},
-      {"set_agg(c0)"},
-      {"\"$internal$canonicalize\"(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({batch1, batch1, batch2, batch2})
+      .aggregates({"set_agg(c0)"})
+      .project({"\"$internal$canonicalize\"(a0)"})
+      .assertResults(expected);
 
   expected = makeRowVector(
       {makeFlatVector<int32_t>({1, 2, 3, 4}),
@@ -681,12 +738,12 @@ TEST_F(SetAggTest, rowNestedNulls) {
                      "dd"_sv,
                      std::nullopt})}))});
 
-  testAggregations(
-      {batch1, batch1, batch2, batch2},
-      {"c1"},
-      {"set_agg(c0)"},
-      {"c1", "\"$internal$canonicalize\"(a0)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({batch1, batch1, batch2, batch2})
+      .groupBy({"c1"})
+      .aggregates({"set_agg(c0)"})
+      .project({"c1", "\"$internal$canonicalize\"(a0)"})
+      .assertResults(expected);
 }
 
 TEST_F(SetAggTest, inputOrder) {
@@ -804,7 +861,11 @@ TEST_F(SetAggTest, nans) {
       }),
   });
 
-  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Group by aggregation, Primitive type.
   expected = makeRowVector({
@@ -815,8 +876,12 @@ TEST_F(SetAggTest, nans) {
       makeFlatVector<int32_t>({1, 2}),
   });
 
-  testAggregations(
-      {data}, {"c1"}, {"set_agg(c0)"}, {"array_sort(a0)", "c1"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c1"})
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)", "c1"})
+      .assertResults(expected);
 
   // Global aggregation, Complex type key (ROW(String, Double)).
   // Input Type:  Row(Row(string, double), int)
@@ -849,7 +914,11 @@ TEST_F(SetAggTest, nans) {
            }),
            makeFlatVector<double>({1, 2, kNaN})}))});
 
-  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Group by aggregation, Complex type.
   // Output Type:  Row(Array(Row(string, double)), int)
@@ -869,8 +938,12 @@ TEST_F(SetAggTest, nans) {
       makeFlatVector<int32_t>({1, 2}),
   });
 
-  testAggregations(
-      {data}, {"c1"}, {"set_agg(c0)"}, {"array_sort(a0)", "c1"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c1"})
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)", "c1"})
+      .assertResults(expected);
 }
 
 TEST_F(SetAggTest, timestampWithTimezone) {
@@ -893,7 +966,11 @@ TEST_F(SetAggTest, timestampWithTimezone) {
       {{pack(0, 0), pack(1, 0), pack(2, 0), pack(3, 3)}},
       TIMESTAMP_WITH_TIME_ZONE())});
 
-  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Group by aggregation, Primitive type.
   expected = makeRowVector({
@@ -903,8 +980,12 @@ TEST_F(SetAggTest, timestampWithTimezone) {
       makeFlatVector<int32_t>({1, 2}),
   });
 
-  testAggregations(
-      {data}, {"c1"}, {"set_agg(c0)"}, {"array_sort(a0)", "c1"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c1"})
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)", "c1"})
+      .assertResults(expected);
 
   // Global aggregation, wrapped in complex type.
   data = makeRowVector({
@@ -928,7 +1009,11 @@ TEST_F(SetAggTest, timestampWithTimezone) {
           {pack(0, 0), pack(1, 0), pack(2, 0), pack(3, 3)},
           TIMESTAMP_WITH_TIME_ZONE())}))});
 
-  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   // Group by aggregation, wrapped in complex type.
   expected = makeRowVector({
@@ -940,8 +1025,12 @@ TEST_F(SetAggTest, timestampWithTimezone) {
       makeFlatVector<int32_t>({1, 2}),
   });
 
-  testAggregations(
-      {data}, {"c1"}, {"set_agg(c0)"}, {"array_sort(a0)", "c1"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c1"})
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)", "c1"})
+      .assertResults(expected);
 }
 
 TEST_F(SetAggTest, unknownType) {
@@ -960,7 +1049,11 @@ TEST_F(SetAggTest, unknownType) {
           ARRAY(type)),
   });
 
-  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 
   data = makeRowVector({
       makeFlatVector<int32_t>({1, 1, 1, 2, 2, 2, 2, 3, 3, 3}),
@@ -975,8 +1068,12 @@ TEST_F(SetAggTest, unknownType) {
           ARRAY(type)),
   });
 
-  testAggregations(
-      {data}, {"c0"}, {"set_agg(c1)"}, {"c0", "array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"set_agg(c1)"})
+      .project({"c0", "array_sort(a0)"})
+      .assertResults(expected);
 
   data = makeRowVector({
       makeNullableFlatVector<UnknownValue>(
@@ -989,7 +1086,11 @@ TEST_F(SetAggTest, unknownType) {
           ARRAY(type)),
   });
 
-  testAggregations({data}, {}, {"set_agg(c0)"}, {"array_sort(a0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"set_agg(c0)"})
+      .project({"array_sort(a0)"})
+      .assertResults(expected);
 }
 } // namespace
 } // namespace facebook::velox::aggregate::test

@@ -151,7 +151,7 @@ class IPAddressCastOperator : public exec::CastOperator {
       const auto ipAddrVal = decoded.valueAt<int128_t>(row);
       const auto tryPrefixLength =
           ipaddress::tryIpPrefixLengthFromIPAddressType(ipAddrVal);
-      if (FOLLY_UNLIKELY(tryPrefixLength.hasError())) {
+      if (tryPrefixLength.hasError()) [[unlikely]] {
         context.setStatus(row, std::move(tryPrefixLength).error());
         return;
       }

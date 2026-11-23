@@ -250,10 +250,10 @@ struct ScalarList {
 
 /// Struct for returning errors to host. Each block has one. These may be
 /// checked at a delay, so return status that requires action on host side must
-/// be sent in returnStatus, not here.
+/// be sent in returnStatus, not here. The host reads them only when the
+/// execution's error count says a block recorded an error. A block's timing is
+/// in TorchWaveParams::clocks and barrierClocks.
 struct DebugInfo {
-  int64_t clocks{0};
-  int64_t barrierClocks{0};
   int32_t op{0};
   int32_t line{0};
   /// Site-defined values printed after the line number, most sites using only
@@ -286,6 +286,17 @@ struct BlockInfo {
   int64_t barrierClocks;
 };
 
+/// failure[0] of an execution in which no step has failed. Otherwise it is the
+/// ordinal of the first step whose setup failed, or of the step after one
+/// whose kernel hit an error; every setup and composite block of that step and
+/// later ones returns at entry. failure[1] is nonzero after a kernel error.
+/// The byte pattern 0x7f lets a memset write it.
+constexpr int32_t kNoFailedStep = 0x7f7f7f7f;
+
+/// The failure words: the first failed step, the kernel-error flag, then the
+/// first kernel error's step ordinal, op code and line.
+constexpr int32_t kNumFailureWords = 8;
+
 /// Top-level kernel parameter struct containing BlockInfo array and debug
 /// pointers.
 struct TorchWaveParams {
@@ -293,10 +304,55 @@ struct TorchWaveParams {
   /// If nullptr the BlockInfos are in inlineInfo.
   BlockInfo* info;
   DebugInfo* debugInfo;
+  /// Per block of the launch, at blockIdx.x: the clocks from ENTRY to LEAVE,
+  /// and of those the clocks spent waiting in op barriers. Slices of the
+  /// execution's clock buffer. Null to not time the launch.
+  int64_t* clocks;
+  int64_t* barrierClocks;
+  /// Word 0 of the execution's clock buffer: the number of blocks that
+  /// recorded an error in their DebugInfo. Null to not count.
+  unsigned long long* errorCount;
+  /// The execution's failure words (see kNoFailedStep), or nullptr. A block
+  /// returns at entry when failure[0] <= stepOrdinal.
+  const int32_t* failure;
+  /// The step's ordinal in the execution, in launch order across composite
+  /// nodes.
+  int32_t stepOrdinal;
   /// If the grid fits in kMaxInlineBlocks BlockInfos, they are inlined here
   /// to avoid a separate device allocation for the block info array.
   static constexpr int32_t kMaxInlineBlocks = 100;
   BlockInfo inlineInfo[kMaxInlineBlocks];
 };
+
+/// A block's BlockInfo as ENTRY copies it to shared memory, with the
+/// execution's failure words and the step's ordinal, which kernelError needs.
+/// Device functions take it as a BlockInfo&.
+struct BlockState : BlockInfo {
+  const int32_t* failure;
+  int32_t stepOrdinal;
+};
+
+#ifdef __CUDACC__
+/// At a bad operand (an index out of range, sizes that do not match): this
+/// op's results and everything after them are invalid. Marks the execution
+/// failed from the next step on, so the later setups and composite kernels
+/// return at entry and nothing runs on the bad data; blocks of this step still
+/// pass their entry check. The first error records its step, op and line for
+/// the host, which raises the error at its next sync (spec S6). Returns
+/// whether the block also has a DebugInfo to fill in.
+__device__ inline bool kernelError(BlockInfo& block, int32_t line) {
+  auto& state = static_cast<BlockState&>(block);
+  if (state.failure != nullptr) {
+    auto* words = const_cast<int32_t*>(state.failure);
+    atomicMin(words, state.stepOrdinal + 1);
+    if (atomicCAS(words + 1, 0, 1) == 0) {
+      words[2] = state.stepOrdinal;
+      words[3] = block.op;
+      words[4] = line;
+    }
+  }
+  return block.debugInfo != nullptr;
+}
+#endif
 
 } // namespace torch::wave
