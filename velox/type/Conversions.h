@@ -552,7 +552,11 @@ struct Converter<
   }
 
   static Expected<T> tryCast(const double& v) {
-    if constexpr (TPolicy::truncate) {
+    // Spark narrows double to float with a Java (float) cast in every mode,
+    // including try_cast. It rounds to the nearest float: values at least half
+    // an ulp beyond FLT_MAX become +/-Infinity, closer ones round to FLT_MAX.
+    if constexpr (
+        TPolicy::truncate || std::is_same_v<TPolicy, SparkTryCastPolicy>) {
       return T(v);
     } else {
       return tryCast<double>(v);
