@@ -351,6 +351,14 @@ struct TensorListParam {
   std::vector<nativert::ValueId> elementIds;
 };
 
+/// Whether a launch counted by 'expr' also counts its outputs: one counted by
+/// its largest input, whose outputs can be larger than any input (a cat, a
+/// gather, an expanding row op). The count gives the launch its blocks.
+inline bool countsOutputs(const SizeExpr& expr) {
+  return expr.op == SizeShortcut::kMax && !expr.broadcast &&
+      expr.constShapes.empty() && expr.args.empty();
+}
+
 /// Runtime state for a single kernel launch: actual value IDs, parameter
 /// offsets, and return info.
 struct LaunchData {
@@ -513,6 +521,12 @@ class CompositeInvocation {
     return prePassStandalones_;
   }
 
+  /// Builds the grid of a step on the device path without host counts: the
+  /// host grid over placeholder counts gives the block size and the target,
+  /// and the device grid assigns the blocks from the real counts. Returns
+  /// whether the step has its device grid.
+  bool prepareCountFreeGrid(StepVectors& sv);
+
   const AllocGroupPlan* allocGroupPlan() const {
     return allocGroupPlan_.get();
   }
@@ -611,6 +625,11 @@ class CompositeInvocation {
 
   /// Runs the node's steps from their bound programs.
   void executeBound(ExecutionState& state);
+
+  /// The host part of a step on the device path: its groups from their
+  /// recorded demands, and no sizing.
+  void
+  runDeviceAllocStep(int32_t stepIdx, StepVectors& sv, ExecutionState& state);
 
   /// Sizes a bound launch and places its outputs.
   void runBoundLaunch(

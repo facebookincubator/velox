@@ -192,6 +192,10 @@ DEFINE_bool(
     false,
     "Check at every grid that the step's grid descriptor gives each launch the element count the host sized it for");
 DEFINE_bool(
+    check_exports,
+    false,
+    "Compare each export slot a setup writes with the host's Tensor of the value");
+DEFINE_bool(
     grid_equal_finish,
     false,
     "Give each launch blocks so that all launches of a step complete at the same time");
@@ -199,6 +203,26 @@ DEFINE_bool(
     device_grid,
     false,
     "Compute each step's grid on the device from the counts the device holds");
+DEFINE_int32(
+    test_failed_step,
+    -1,
+    "Start each execution with this step marked failed, to test the failure words");
+DEFINE_bool(
+    check_demands,
+    false,
+    "Compare each group's demand from its setup with the host's buffer size");
+DEFINE_bool(
+    device_alloc,
+    false,
+    "Size the groups of steps on the device path from their setups' recorded demands; implies the device sizing, placement and grid flags");
+DEFINE_int32(
+    device_alloc_margin,
+    25,
+    "With --device_alloc, percent added to each recorded demand");
+DEFINE_bool(
+    resident_blocks,
+    false,
+    "With --device_sizing --device_placement, keep the parameters of steps the setup writes completely on the device");
 DEFINE_bool(
     setup_stream,
     false,
@@ -211,6 +235,22 @@ DEFINE_bool(
     size_exprs_from_inputs,
     false,
     "With --check_size_exprs, derive shapes from graph-input dims as symbols");
+DEFINE_bool(
+    device_sizing,
+    false,
+    "With --device_size_check, the setup kernel writes the sizes it computes");
+DEFINE_bool(
+    device_sizing_poison,
+    false,
+    "With --device_sizing, zero the host's dims of the parameters the device sizes");
+DEFINE_bool(
+    device_placement,
+    false,
+    "With --device_sizing, the setup kernel writes where allocation group members start");
+DEFINE_bool(
+    device_size_check,
+    false,
+    "Evaluate sizes derived from graph-input dims on the device and count differences from the host's");
 DEFINE_bool(
     sym_shape_report,
     false,
@@ -956,11 +996,27 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().groupArenaMaxBytes = FLAGS_group_arena_max_bytes;
   WaveConfig::get().deviceSymbols = FLAGS_device_symbols;
   WaveConfig::get().checkGridDescriptor = FLAGS_check_grid_descriptor;
+  WaveConfig::get().checkExports = FLAGS_check_exports;
   WaveConfig::get().gridEqualFinish = FLAGS_grid_equal_finish;
   WaveConfig::get().deviceGrid = FLAGS_device_grid;
   WaveConfig::get().setupStream = FLAGS_setup_stream;
+  WaveConfig::get().residentBlocks = FLAGS_resident_blocks;
+  WaveConfig::get().testFailedStep = FLAGS_test_failed_step;
+  WaveConfig::get().checkDemands = FLAGS_check_demands;
   WaveConfig::get().checkSizeExprs = FLAGS_check_size_exprs;
   WaveConfig::get().sizeExprsFromInputs = FLAGS_size_exprs_from_inputs;
+  WaveConfig::get().deviceSizeCheck = FLAGS_device_size_check;
+  WaveConfig::get().deviceSizing = FLAGS_device_sizing;
+  WaveConfig::get().deviceSizingPoison = FLAGS_device_sizing_poison;
+  WaveConfig::get().devicePlacement = FLAGS_device_placement;
+  WaveConfig::get().deviceAlloc = FLAGS_device_alloc;
+  WaveConfig::get().deviceAllocMarginPct = FLAGS_device_alloc_margin;
+  if (FLAGS_device_alloc) {
+    WaveConfig::get().deviceSizeCheck = true;
+    WaveConfig::get().deviceSizing = true;
+    WaveConfig::get().devicePlacement = true;
+    WaveConfig::get().deviceGrid = true;
+  }
   WaveConfig::get().uniformCost = FLAGS_uniform_cost;
   WaveConfig::get().launchPerOp = FLAGS_launch_per_op;
   WaveConfig::get().dedupProjectOps = FLAGS_dedup_project_ops;
