@@ -1042,6 +1042,12 @@ void configureDictionary(
           std::move(config),
           schemaBuilder);
       return;
+    case Kind::SlidingWindowArray:
+      configureDictionary(
+          typeBuilder.asSlidingWindowArray().elements(),
+          std::move(config),
+          schemaBuilder);
+      return;
     case Kind::Map:
       configureDictionary(
           typeBuilder.asMap().values(), std::move(config), schemaBuilder);
@@ -1718,6 +1724,24 @@ std::unique_ptr<FieldWriter> createRootFieldWriter(
     }
   }
 
+  if (!context.options().slidingWindowArrayColumns.empty()) {
+    context.clearAndReserveSlidingWindowArrayNodeIds(
+        context.options().slidingWindowArrayColumns.size());
+    for (const auto& column : context.options().slidingWindowArrayColumns) {
+      NIMBLE_USER_CHECK(
+          !context.options().dictionaryArrayColumns.contains(column),
+          "Column must not be in both dictionaryArrayColumns and "
+          "slidingWindowArrayColumns: {}",
+          column);
+      findNodeIds(
+          *type->childByName(column),
+          context.slidingWindowArrayNodeIds(),
+          [](const TypeWithId& type) {
+            return type.type()->kind() == velox::TypeKind::ARRAY;
+          });
+    }
+  }
+
   if (!context.options().deduplicatedMapColumns.empty()) {
     context.clearAndReserveDeduplicatedMapNodeIds(
         context.options().deduplicatedMapColumns.size());
@@ -1937,6 +1961,26 @@ void initializeEncodingLayouts(
           NIMBLE_CHECK(
               encodingLayoutTree.childrenCount() == 2,
               "Invalid encoding layout tree. ArrayWithOffset node should have exactly two children.");
+          initializeEncodingLayouts(
+              arrayBuilder.elements(), encodingLayoutTree.child(0));
+        }
+        break;
+      }
+      case Kind::SlidingWindowArray: {
+        NIMBLE_CHECK_EQ(
+            encodingLayoutTree.schemaKind(),
+            Kind::SlidingWindowArray,
+            "Incompatible encoding layout node. Expecting sliding window array node.");
+        auto& arrayBuilder = typeBuilder.asSlidingWindowArray();
+        SET_STREAM_CONTEXT(
+            arrayBuilder, offsetsDescriptor, SlidingWindowArray::OffsetsStream);
+        SET_STREAM_CONTEXT(
+            arrayBuilder, lengthsDescriptor, SlidingWindowArray::LengthsStream);
+        if (encodingLayoutTree.childrenCount() > 0) {
+          NIMBLE_CHECK_EQ(
+              encodingLayoutTree.childrenCount(),
+              1,
+              "Invalid encoding layout tree. SlidingWindowArray node should have exactly one child.");
           initializeEncodingLayouts(
               arrayBuilder.elements(), encodingLayoutTree.child(0));
         }

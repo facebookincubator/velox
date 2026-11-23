@@ -2343,6 +2343,24 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeLazyStringWithStats) {
   }
 }
 
+TEST_P(SelectiveNimbleReaderTest, slidingWindowArrayUnsupported) {
+  const auto vector = makeRowVector(
+      {makeArrayVector<int64_t>({{1, 2, 3}, {2, 3, 4}, {3, 4, 5}})});
+  const auto rowType = asRowType(vector->type());
+  const auto file = test::createNimbleFile(
+      *rootPool(), vector, {.slidingWindowArrayColumns = {"c0"}});
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  const auto readAll = [&]() {
+    auto readers = makeReaders(vector, file, scanSpec);
+    auto result = BaseVector::create(rowType, 0, pool());
+    readers.rowReader->next(vector->size(), result);
+  };
+  NIMBLE_ASSERT_THROW(
+      readAll(),
+      "The selective reader does not support SlidingWindowArray columns");
+}
+
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsLastRunFilteredOut) {
   checkArrayWithOffsets(
       {NullableArrayData{1}, NullableArrayData{}, NullableArrayData{}},

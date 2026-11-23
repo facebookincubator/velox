@@ -16,7 +16,10 @@
 #include "velox/dwio/nimble/writer/FieldWriter.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
+#include <limits>
+#include <optional>
 #include <type_traits>
 
 #include <folly/container/F14Set.h>
@@ -3216,6 +3219,345 @@ std::unique_ptr<FieldWriter> createArrayWithOffsetsFieldWriter(
   }
 }
 
+// Writes the ARRAY columns in WriterOptions::slidingWindowArrayColumns. See
+// SlidingWindowArrayTypeBuilder for the layout.
+//
+// Keeps the base window: the window of the last row that appended elements.
+// The base always ends at the last element written in the stripe. A row
+// reuses the base when the base, slid forward by k values, and the row agree
+// on their common prefix. If the row is longer, it appends only its values
+// past the end of the base and becomes the new base. If not, it appends
+// nothing. Any other row appends all its values and becomes the new base. For
+// example, rows [1, 2, 3], [2, 3, 4] and [3] give elements [1, 2, 3, 4],
+// offsets [0, 1, 2] and lengths [3, 3, 1].
+//
+// The slide never makes a row start before the previous row, so offsets never
+// decrease within a stripe and the reader reads the elements stream forward
+// only. Values compare by bit pattern, so -0.0 and NaN payloads round trip.
+template <velox::TypeKind K>
+class SlidingWindowArrayFieldWriter : public FieldWriter {
+  using SourceType = typename velox::TypeTraits<K>::NativeType;
+  using Bits = std::conditional_t<
+      sizeof(SourceType) == 1,
+      uint8_t,
+      std::conditional_t<
+          sizeof(SourceType) == 2,
+          uint16_t,
+          std::conditional_t<sizeof(SourceType) == 4, uint32_t, uint64_t>>>;
+  static_assert(sizeof(Bits) == sizeof(SourceType));
+
+  // Holds the bit pattern of an element, or nothing for a null element.
+  using Element = std::optional<Bits>;
+
+ public:
+  SlidingWindowArrayFieldWriter(
+      FieldWriterContext& context,
+      const std::shared_ptr<const velox::dwio::common::TypeWithId>& type)
+      : FieldWriter{context, context.schemaBuilder().createSlidingWindowArrayTypeBuilder()},
+        elements_{FieldWriter::create(context, type->childAt(0))},
+        statisticsCollector_{context.getStatsCollector(type->id())},
+        elementStatisticsCollector_{
+            context.getStatsCollector(type->childAt(0)->id())},
+        offsetsStream_{context.createNullableContentStreamData<uint32_t>(
+            typeBuilder_->asSlidingWindowArray().offsetsDescriptor(),
+            type->id())},
+        lengthsStream_{context.createContentStreamData<uint32_t>(
+            typeBuilder_->asSlidingWindowArray().lengthsDescriptor(),
+            type->id())},
+        ingestRows_{context.bufferMemoryPool().get()},
+        borderLengths_{context.bufferMemoryPool().get()},
+        baseRows_{context.bufferMemoryPool().get()} {
+    typeBuilder_->asSlidingWindowArray().setChildren(elements_->typeBuilder());
+  }
+
+  void write(const velox::VectorPtr& vector, const OrderedRanges& ranges)
+      override {
+    auto decodingContext = context_.decodingContext();
+    auto& decoded = decodingContext.decode(vector, ranges);
+    const auto* array = decoded.base()->template as<velox::ArrayVector>();
+    NIMBLE_CHECK_NOT_NULL(array, "Unexpected vector type");
+    const auto* rawOffsets = array->rawOffsets();
+    const auto* rawSizes = array->rawSizes();
+    const auto& elements = array->elements();
+    auto elementsDecodingContext = context_.decodingContext();
+    auto& decodedElements = elementsDecodingContext.decode(
+        elements, OrderedRanges::of(0, elements->size()));
+
+    offsetsStream_.ensureAdditionalNullsCapacity(
+        decoded.mayHaveNulls(), ranges.size());
+    auto& offsets = offsetsStream_.mutableData();
+    auto& lengths = lengthsStream_.mutableData();
+    OrderedRanges appendedRanges;
+    // Counts the elements of all rows, and those that are null, including
+    // the elements the base already holds.
+    uint64_t numElements{0};
+    uint64_t numNullElements{0};
+    uint64_t numAppendedNullElements{0};
+    DecodedAdapter<> iterableVector{decoded};
+    const auto numNonNulls = iterateNonNullIndices<true>(
+        ranges,
+        offsetsStream_.mutableNonNulls(),
+        iterableVector,
+        [&](velox::vector_size_t index) {
+          const auto rowOffset = rawOffsets[index];
+          const auto rowLength = rawSizes[index];
+          loadRows(decodedElements, rowOffset, rowLength);
+          const auto numAppended =
+              static_cast<velox::vector_size_t>(ingestRows(offsets, lengths));
+          // The appended values are the last ones of the row.
+          const auto firstAppended = rowLength - numAppended;
+          numElements += rowLength;
+          for (velox::vector_size_t i = 0; i < rowLength; ++i) {
+            if (!ingestRows_[i].has_value()) {
+              ++numNullElements;
+              if (i >= firstAppended) {
+                ++numAppendedNullElements;
+              }
+            }
+          }
+          if (numAppended > 0) {
+            appendedRanges.add(rowOffset + firstAppended, numAppended);
+          }
+        });
+
+    if (appendedRanges.size() > 0) {
+      elements_->write(elements, appendedRanges);
+    }
+
+    // The elements writer sees only the appended elements. Add the elements
+    // that rows share with the base, so the element statistics count every
+    // element of every row.
+    const uint64_t numSharedElements = numElements - appendedRanges.size();
+    if (numSharedElements > 0 && elementStatisticsCollector_ != nullptr) {
+      const uint64_t numSharedNullElements =
+          numNullElements - numAppendedNullElements;
+      elementStatisticsCollector_->addCounts(
+          numSharedElements, numSharedNullElements);
+      elementStatisticsCollector_->addLogicalSize(
+          (numSharedElements - numSharedNullElements) * sizeof(SourceType) +
+          numSharedNullElements);
+    }
+
+    if (statisticsCollector_ != nullptr) {
+      RawSizeContext rawSizeContext;
+      statisticsCollector_->addCounts(
+          ranges.size(), ranges.size() - numNonNulls);
+      statisticsCollector_->addLogicalSize(
+          getRawSizeFromVector(vector, ranges, rawSizeContext));
+    }
+  }
+
+  void reset() override {
+    offsetsStream_.reset();
+    lengthsStream_.reset();
+    elements_->reset();
+    baseRows_.clear();
+    baseStart_ = 0;
+    lastRowStart_ = 0;
+    numStoredElements_ = 0;
+  }
+
+  void close() override {
+    elements_->close();
+  }
+
+ private:
+  // Loads the elements of one row into 'ingestRows_'.
+  void loadRows(
+      const velox::DecodedVector& elements,
+      velox::vector_size_t offset,
+      velox::vector_size_t length) {
+    ingestRows_.clear();
+    for (auto i = offset; i < offset + length; ++i) {
+      if (elements.isNullAt(i)) {
+        ingestRows_.emplace_back();
+      } else {
+        ingestRows_.emplace_back(
+            std::bit_cast<Bits>(elements.valueAt<SourceType>(i)));
+      }
+    }
+  }
+
+  // Appends the offset and length of the row in 'ingestRows_' and updates the
+  // base. Returns the number of trailing row values that the caller appends to
+  // the elements stream. The stored elements already hold the others.
+  uint32_t ingestRows(
+      nimble::Vector<uint32_t>& offsets,
+      nimble::Vector<uint32_t>& lengths) {
+    const auto length = static_cast<uint32_t>(ingestRows_.size());
+    lengths.push_back(length);
+    if (length == 0) {
+      offsets.push_back(lastRowStart_);
+      return 0;
+    }
+
+    const auto slide = findSlide();
+    if (!slide.has_value()) {
+      lastRowStart_ = numStoredElements_;
+      baseStart_ = numStoredElements_;
+      offsets.push_back(lastRowStart_);
+      appendRows(length);
+      baseRows_.clear();
+      baseRows_.insert(baseRows_.end(), ingestRows_.begin(), ingestRows_.end());
+      return length;
+    }
+
+    lastRowStart_ = baseStart_ + slide.value();
+    offsets.push_back(lastRowStart_);
+    const auto baseLength = static_cast<uint32_t>(baseRows_.size());
+    const auto numShared = std::min(baseLength - slide.value(), length);
+    if (numShared == length) {
+      return 0;
+    }
+
+    // The base ends at the last stored element, so the rest of the row appends
+    // right after it, and the row stays one contiguous range of the elements
+    // stream.
+    const auto numAppended = length - numShared;
+    appendRows(numAppended);
+    baseStart_ = lastRowStart_;
+    baseRows_.clear();
+    baseRows_.insert(baseRows_.end(), ingestRows_.begin(), ingestRows_.end());
+    return numAppended;
+  }
+
+  // Returns the smallest number of values by which the base slides forward to
+  // hold the row in 'ingestRows_' or start it, or std::nullopt if there is
+  // none. The base slid forward by k values is the base without its first k
+  // values. Slides by at least 'lastRowStart_ - baseStart_' values, so the row
+  // never starts before the previous row and offsets don't decrease. Skips
+  // slides that cannot match, as Knuth-Morris-Pratt does, so the time is linear
+  // in the base and row lengths, also on long runs of one value.
+  std::optional<uint32_t> findSlide() {
+    const auto length = static_cast<uint32_t>(ingestRows_.size());
+    const auto baseLength = static_cast<uint32_t>(baseRows_.size());
+    borderLengths_.clear();
+    borderLengths_.push_back(0);
+
+    // Counts the leading row values known to match the slid base.
+    uint32_t numMatched{0};
+    for (auto slide = lastRowStart_ - baseStart_; slide < baseLength;) {
+      const auto numShared = std::min(baseLength - slide, length);
+      const auto mismatch = std::mismatch(
+          ingestRows_.begin() + numMatched,
+          ingestRows_.begin() + numShared,
+          baseRows_.begin() + slide + numMatched);
+      numMatched = static_cast<uint32_t>(mismatch.first - ingestRows_.begin());
+      if (numMatched == numShared) {
+        return slide;
+      }
+      if (numMatched == 0) {
+        ++slide;
+        continue;
+      }
+
+      // A match at a shorter slide would need a border of the matched row
+      // values longer than their longest one. The next candidate keeps the
+      // longest border matched.
+      const auto border = borderLength(numMatched);
+      slide += numMatched - border;
+      numMatched = border;
+    }
+    return std::nullopt;
+  }
+
+  // Returns the length of the longest border of the first 'size' row values.
+  // A border is a proper prefix that is also a suffix: the longest border of
+  // [1, 2, 1, 2] is [1, 2]. Extends 'borderLengths_' only as far as the search
+  // in findSlide() falls back.
+  uint32_t borderLength(uint32_t size) {
+    for (auto i = static_cast<uint32_t>(borderLengths_.size()); i < size; ++i) {
+      auto border = borderLengths_[i - 1];
+      while (border > 0 && ingestRows_[i] != ingestRows_[border]) {
+        border = borderLengths_[border - 1];
+      }
+      if (ingestRows_[i] == ingestRows_[border]) {
+        ++border;
+      }
+      borderLengths_.push_back(border);
+    }
+    return borderLengths_[size - 1];
+  }
+
+  // Counts 'count' more elements appended to the elements stream of the
+  // stripe.
+  void appendRows(uint32_t count) {
+    NIMBLE_CHECK_LE(
+        static_cast<uint64_t>(numStoredElements_) + count,
+        std::numeric_limits<uint32_t>::max(),
+        "Too many sliding window array elements in one stripe");
+    numStoredElements_ += count;
+  }
+
+  const std::unique_ptr<FieldWriter> elements_;
+  StatisticsCollector* const statisticsCollector_;
+  StatisticsCollector* const elementStatisticsCollector_;
+
+  NullableContentStreamData<uint32_t>& offsetsStream_;
+  ContentStreamData<uint32_t>& lengthsStream_;
+  // Holds the elements of the row being written. Reused across rows.
+  nimble::Vector<Element> ingestRows_;
+  // Holds, at index i, the length of the longest border of the first i + 1
+  // values in 'ingestRows_'. Filled on demand by borderLength().
+  nimble::Vector<uint32_t> borderLengths_;
+  // Holds the elements of the base window.
+  nimble::Vector<Element> baseRows_;
+  // Start of the base window in the elements stream of the stripe. The base
+  // window ends at 'numStoredElements_'.
+  uint32_t baseStart_{0};
+  // Start of the window of the last non-null, non-empty row. That row is the
+  // base or a window inside it, so baseStart_ <= lastRowStart_ <=
+  // numStoredElements_. The next row never starts before it, so its slide is
+  // at least 'lastRowStart_ - baseStart_'.
+  uint32_t lastRowStart_{0};
+  // Number of elements written to the elements stream in the stripe.
+  uint32_t numStoredElements_{0};
+};
+
+std::unique_ptr<FieldWriter> createSlidingWindowArrayFieldWriter(
+    FieldWriterContext& context,
+    const std::shared_ptr<const velox::dwio::common::TypeWithId>& type) {
+  NIMBLE_CHECK_EQ(
+      type->type()->kind(),
+      velox::TypeKind::ARRAY,
+      "Sliding window array field must be an ARRAY.");
+  NIMBLE_CHECK_EQ(
+      type->size(), 1, "Sliding window array field must have one child.");
+  const auto kind = type->childAt(0)->type()->kind();
+  switch (kind) {
+    case velox::TypeKind::TINYINT:
+      return std::make_unique<
+          SlidingWindowArrayFieldWriter<velox::TypeKind::TINYINT>>(
+          context, type);
+    case velox::TypeKind::SMALLINT:
+      return std::make_unique<
+          SlidingWindowArrayFieldWriter<velox::TypeKind::SMALLINT>>(
+          context, type);
+    case velox::TypeKind::INTEGER:
+      return std::make_unique<
+          SlidingWindowArrayFieldWriter<velox::TypeKind::INTEGER>>(
+          context, type);
+    case velox::TypeKind::BIGINT:
+      return std::make_unique<
+          SlidingWindowArrayFieldWriter<velox::TypeKind::BIGINT>>(
+          context, type);
+    case velox::TypeKind::REAL:
+      return std::make_unique<
+          SlidingWindowArrayFieldWriter<velox::TypeKind::REAL>>(context, type);
+    case velox::TypeKind::DOUBLE:
+      return std::make_unique<
+          SlidingWindowArrayFieldWriter<velox::TypeKind::DOUBLE>>(
+          context, type);
+    default:
+      // TODO: Support string and complex element types. The writer matches
+      // windows by comparing fixed-width bit patterns, which those types do
+      // not have.
+      NIMBLE_NOT_IMPLEMENTED(
+          "Sliding window arrays of this element type are not supported: {}",
+          kind);
+  }
+}
+
 } // namespace
 
 DecodingContextPool::DecodingContext::DecodingContext(
@@ -3357,9 +3699,13 @@ std::unique_ptr<FieldWriter> FieldWriter::create(
       break;
     }
     case velox::TypeKind::ARRAY: {
-      field = context.hasDictionaryArrayNodeId(type->id())
-          ? createArrayWithOffsetsFieldWriter(context, type)
-          : std::make_unique<ArrayFieldWriter>(context, type);
+      if (context.hasSlidingWindowArrayNodeId(type->id())) {
+        field = createSlidingWindowArrayFieldWriter(context, type);
+      } else if (context.hasDictionaryArrayNodeId(type->id())) {
+        field = createArrayWithOffsetsFieldWriter(context, type);
+      } else {
+        field = std::make_unique<ArrayFieldWriter>(context, type);
+      }
       break;
     }
     case velox::TypeKind::MAP: {

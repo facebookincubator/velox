@@ -58,6 +58,13 @@ void appendAllNestedStreams(
       appendAllNestedStreams(arrayWithOffsets.elements(), childrenOffsets);
       break;
     }
+    case Kind::SlidingWindowArray: {
+      auto& array = type.asSlidingWindowArray();
+      childrenOffsets.push_back(array.offsetsDescriptor().offset());
+      childrenOffsets.push_back(array.lengthsDescriptor().offset());
+      appendAllNestedStreams(array.elements(), childrenOffsets);
+      break;
+    }
     case Kind::Map: {
       auto& map = type.asMap();
       childrenOffsets.push_back(map.lengthsDescriptor().offset());

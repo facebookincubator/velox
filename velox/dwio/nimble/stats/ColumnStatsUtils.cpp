@@ -87,6 +87,17 @@ void aggregateStats(
       aggregateStats(arrayWithOffsets.elements(), columnStats, offset);
       break;
     }
+    case Kind::SlidingWindowArray: {
+      // Rows share elements, so the stored size is deduplicated like that of
+      // ArrayWithOffsets.
+      const auto& array = builder.asSlidingWindowArray();
+      offset = array.lengthsDescriptor().offset();
+      columnStats[offset.value()].dedupedLogicalSize =
+          columnStats[offset.value()].nullCount * kNullSize;
+      updateStats(array.offsetsDescriptor().offset(), offset.value());
+      aggregateStats(array.elements(), columnStats, offset);
+      break;
+    }
     case Kind::Map: {
       const auto& map = builder.asMap();
       offset = map.lengthsDescriptor().offset();

@@ -77,6 +77,15 @@ void addNamedTypes(
 
       break;
     }
+    case nimble::Kind::SlidingWindowArray: {
+      auto& array = node.asSlidingWindowArray();
+      result.emplace_back(array.offsetsDescriptor().offset(), prefix + "swa.o");
+      result.emplace_back(array.lengthsDescriptor().offset(), prefix + "swa.l");
+      addNamedTypes(
+          array.elements(), folly::to<std::string>(prefix, "swa.e:"), result);
+
+      break;
+    }
     case nimble::Kind::Map: {
       auto& map = node.asMap();
       result.emplace_back(map.lengthsDescriptor().offset(), prefix + "m");

@@ -60,6 +60,7 @@ std::string toString(Kind kind) {
     CASE(FlatMap);
     CASE(SlidingWindowMap);
     CASE(HybridFlatMap);
+    CASE(SlidingWindowArray);
 #undef CASE
   }
   NIMBLE_UNREACHABLE("Unknown: {}.", static_cast<int32_t>(kind));

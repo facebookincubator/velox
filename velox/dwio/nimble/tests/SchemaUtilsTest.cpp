@@ -128,6 +128,12 @@ void expectSameType(const Type& a, const Type& b, const std::string& path) {
           *b.asArrayWithOffsets().elements(),
           path + "[]");
       break;
+    case Kind::SlidingWindowArray:
+      expectSameType(
+          *a.asSlidingWindowArray().elements(),
+          *b.asSlidingWindowArray().elements(),
+          path + "[]");
+      break;
     case Kind::Map:
       expectSameType(*a.asMap().keys(), *b.asMap().keys(), path + ".keys");
       expectSameType(
@@ -358,6 +364,93 @@ TEST(SchemaUtilsTest, convertArrayWithOffsetsToVelox) {
   EXPECT_EQ(velox::TypeKind::ARRAY, veloxType->kind());
   EXPECT_EQ(
       velox::TypeKind::BIGINT, veloxType->asArray().elementType()->kind());
+}
+
+TEST(SchemaUtilsTest, convertSlidingWindowArrayToVelox) {
+  SchemaBuilder schemaBuilder;
+  NIMBLE_SCHEMA(
+      schemaBuilder,
+      NIMBLE_ROW({{"swa", NIMBLE_SLIDINGWINDOWARRAY(NIMBLE_BIGINT())}}));
+  auto nimbleType = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  auto veloxType = convertToVeloxType(*nimbleType->asRow().childAt(0));
+  EXPECT_EQ(velox::TypeKind::ARRAY, veloxType->kind());
+  EXPECT_EQ(
+      velox::TypeKind::BIGINT, veloxType->asArray().elementType()->kind());
+}
+
+TEST(SchemaUtilsTest, projectSlidingWindowArrayUnsupported) {
+  {
+    SchemaBuilder schemaBuilder;
+    NIMBLE_SCHEMA(
+        schemaBuilder,
+        NIMBLE_ROW({{"swa", NIMBLE_SLIDINGWINDOWARRAY(NIMBLE_BIGINT())}}));
+    const auto source = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+    NIMBLE_ASSERT_THROW(
+        buildProjectedNimbleType(source.get(), makeSubfields({"swa"})),
+        "Projection of SlidingWindowArray data is not supported");
+  }
+  {
+    SchemaBuilder schemaBuilder;
+    test::FlatMapChildAdder featuresAdder;
+    NIMBLE_SCHEMA(
+        schemaBuilder,
+        NIMBLE_ROW({
+            {"features",
+             NIMBLE_FLATMAP(
+                 String,
+                 NIMBLE_SLIDINGWINDOWARRAY(NIMBLE_BIGINT()),
+                 featuresAdder)},
+        }));
+    featuresAdder.addChild("a");
+    const auto source = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+    NIMBLE_ASSERT_THROW(
+        buildProjectedNimbleType(
+            source.get(), makeSubfields({"features[\"a\"]"})),
+        "Projection of SlidingWindowArray data is not supported");
+  }
+  {
+    SchemaBuilder schemaBuilder;
+    NIMBLE_SCHEMA(
+        schemaBuilder,
+        NIMBLE_ROW({
+            {"session",
+             NIMBLE_ROW({
+                 {"id", NIMBLE_BIGINT()},
+                 {"events", NIMBLE_SLIDINGWINDOWARRAY(NIMBLE_BIGINT())},
+             })},
+        }));
+    const auto source = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+    NIMBLE_ASSERT_THROW(
+        buildProjectedNimbleType(source.get(), makeSubfields({"session"})),
+        "Projection of SlidingWindowArray data is not supported");
+    // The projected subfield leaves the SlidingWindowArray out, and the
+    // projection still fails, since its column holds one.
+    NIMBLE_ASSERT_THROW(
+        buildProjectedNimbleType(source.get(), makeSubfields({"session.id"})),
+        "Projection of SlidingWindowArray data is not supported");
+  }
+}
+
+TEST(SchemaUtilsTest, projectColumnBesideSlidingWindowArray) {
+  SchemaBuilder schemaBuilder;
+  NIMBLE_SCHEMA(
+      schemaBuilder,
+      NIMBLE_ROW({
+          {"id", NIMBLE_BIGINT()},
+          {"swa", NIMBLE_SLIDINGWINDOWARRAY(NIMBLE_BIGINT())},
+      }));
+  const auto source = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  const auto projection =
+      buildProjectedNimbleType(source.get(), makeSubfields({"id"}));
+  const auto& row = projection.nimbleType->asRow();
+  ASSERT_EQ(row.childrenCount(), 1);
+  EXPECT_EQ(row.nameAt(0), "id");
+  const auto& sourceRow = source->asRow();
+  EXPECT_THAT(
+      projection.streamOffsets,
+      ElementsAre(
+          sourceRow.nullsDescriptor().offset(),
+          sourceRow.childAt(0)->asScalar().scalarDescriptor().offset()));
 }
 
 TEST(SchemaUtilsTest, convertMapToVelox) {

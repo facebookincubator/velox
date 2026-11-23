@@ -15,6 +15,7 @@
  */
 #include <gtest/gtest.h>
 #include <optional>
+#include <sstream>
 
 #include "velox/dwio/nimble/common/SchemaBuilder.h"
 #include "velox/dwio/nimble/common/SchemaReader.h"
@@ -506,6 +507,40 @@ TEST(SchemaTests, roundTrip) {
 
   auto result = nimble::SchemaReader::getSchema(nodes);
   nimble::test::compareSchema(nodes, result);
+}
+
+TEST(SchemaTests, slidingWindowArraySchemaNodes) {
+  nimble::SchemaBuilder builder;
+  NIMBLE_SCHEMA(
+      builder,
+      NIMBLE_ROW({{"c1", NIMBLE_SLIDINGWINDOWARRAY(NIMBLE_INTEGER())}}));
+
+  // The SlidingWindowArray node carries the lengths stream. The offsets stream
+  // follows as a uint32 scalar node, then the elements.
+  const auto nodes = builder.schemaNodes();
+  nimble::test::verifySchemaNodes(
+      nodes,
+      {
+          {nimble::Kind::Row, 3, nimble::ScalarKind::Bool, std::nullopt, 1},
+          {nimble::Kind::SlidingWindowArray,
+           2,
+           nimble::ScalarKind::UInt32,
+           "c1"},
+          {nimble::Kind::Scalar, 1, nimble::ScalarKind::UInt32},
+          {nimble::Kind::Scalar, 0, nimble::ScalarKind::Int32},
+      });
+  verifyLabels(nodes, {"/", "/0", "/0", "/0"});
+
+  const auto schema = nimble::SchemaReader::getSchema(nodes);
+  const auto& array = schema->asRow().childAt(0)->asSlidingWindowArray();
+  EXPECT_EQ(array.offsetsDescriptor().offset(), 1);
+  EXPECT_EQ(array.lengthsDescriptor().offset(), 2);
+  EXPECT_EQ(array.elements()->asScalar().scalarDescriptor().offset(), 0);
+
+  std::ostringstream out;
+  out << builder;
+  EXPECT_NE(out.str().find("[o:1,l:2]SLIDINGWINDOWARRAY"), std::string::npos)
+      << out.str();
 }
 
 TEST(SchemaTests, sharedDictionaryStream) {
