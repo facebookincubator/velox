@@ -48,6 +48,8 @@ SerializationVersion getInputVersion(std::string_view input) {
   // slice actually is, so reject the input rather than mislabel it.
   // TODO: Accept kTablet again and emit kTablet with the chunk-header flag
   // cleared once that flag exists.
+  //
+  // kBlob input is not supported yet.
   NIMBLE_CHECK(
       version == SerializationVersion::kSerialization ||
           version == SerializationVersion::kProjection,

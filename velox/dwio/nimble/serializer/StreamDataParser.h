@@ -81,6 +81,13 @@ void readTrailerStreamMetadata(
     std::vector<uint32_t>& streamSizes,
     std::vector<uint32_t>& uniqueStreamSizesScratch);
 
+/// Decompresses the kBlob payload 'payload', which 'compressionType'
+/// compressed, and checks that the body can hold its trailer.
+velox::BufferPtr decompressBlob(
+    CompressionType compressionType,
+    std::string_view payload,
+    velox::memory::MemoryPool& pool);
+
 } // namespace detail
 
 class StreamDataParser {
@@ -107,6 +114,9 @@ class StreamDataParser {
   /// `callback(offset, data)` per stream. For kTablet, `data` is the
   /// chunk-stripped (and decompressed, if needed) payload; for every other
   /// version it is the raw stream bytes. Empty streams are skipped.
+  /// A compressed kBlob body is decompressed first, so each stream's
+  /// `data` points into the decompressed body. Like the stripped kTablet
+  /// payloads, that body stays valid until reset() or the parser is destroyed.
   /// Must be called at most once per `initialize()` (consumes the per-blob
   /// cursor).
   ///
@@ -120,6 +130,7 @@ class StreamDataParser {
   /// over hundreds of keys).
   template <typename Callback>
   void iterateStreams(Callback&& callback) {
+    decompressBlob();
     if (legacyHeaderless_) {
       // Legacy headerless format: streams in order with inline u32 sizes.
       uint32_t offset = 0;
@@ -169,8 +180,8 @@ class StreamDataParser {
       }
       pos_ = end_; // Skip past trailer.
     } else {
-      // kLegacyCompact/kLegacySerialization/kSerialization/kProjection:
-      // sizes-only sparse trailer.
+      // kLegacyCompact/kLegacySerialization/kSerialization/kProjection/
+      // kBlob: sizes-only sparse trailer.
       // Each stream's body offset is the prefix sum of preceding sizes, so
       // streams are walked sequentially. Production blobs at kLegacyCompact are
       // decoded via the legacy reader (frozen snapshot of the pre-two-array
@@ -226,12 +237,14 @@ class StreamDataParser {
     return requiredBarrier_;
   }
 
-  /// Releases owned kTablet stream payload buffers after a decode run consumes
-  /// the string_views returned by iterateStreams(). This does not reset the
-  /// current initialized blob cursor/header because callers may initialize the
-  /// next batch before flushing the previous run.
+  /// Releases owned kTablet stream payload buffers and decompressed
+  /// kBlob bodies after a decode run consumes the string_views
+  /// returned by iterateStreams(). This does not reset the current initialized
+  /// blob cursor/header because callers may initialize the next batch before
+  /// flushing the previous run.
   void reset() {
     strippedStreamBuffer_.reset();
+    decompressedBlobs_.clear();
   }
 
   /// Returns the row range embedded in the per-slice header for kTablet
@@ -246,6 +259,13 @@ class StreamDataParser {
   // Lazily acquires the arena backing stripped tablet stream payloads.
   Buffer& ensureStrippedStreamBuffer();
 
+  // Replaces a compressed kBlob payload at the cursor with its decompressed
+  // body, which decompressedBlobs_ keeps until reset(). Leaves any other
+  // payload as is. iterateStreams() calls it rather than initialize(), because
+  // a caller may call reset() for the previous decode run after it initializes
+  // this batch.
+  void decompressBlob();
+
   // True for the removed legacy headerless format.
   const bool legacyHeaderless_;
   velox::memory::MemoryPool* const pool_;
@@ -257,6 +277,9 @@ class StreamDataParser {
   bool requiredBarrier_{false};
   // Encoding stream row-count format read from the serialization header.
   bool streamEncodingUsesVarintRowCount_{true};
+  // Codec of a kBlob payload, read from the serialization header.
+  // Uncompressed for every other version.
+  CompressionType blobCompression_{CompressionType::Uncompressed};
   // True when kTablet streams retain their storage chunk framing.
   bool streamHasChunkHeader_{false};
   // Per-request row range embedded in the kTablet header (post-rowCount,
@@ -269,6 +292,10 @@ class StreamDataParser {
   // materialized. The arena may span several appended batches.
   EncodingBufferPool strippedStreamBufferPool_;
   std::unique_ptr<ScopedEncodingBuffer> strippedStreamBuffer_;
+  // Keeps the decompressed bodies of the kBlob batches iterated
+  // since the last reset() alive, because the streams of a decode run point
+  // into them. The order means nothing.
+  std::vector<velox::BufferPtr> decompressedBlobs_;
   // Reusable parallel buffers for the per-blob trailer. Refilled by
   // iterateStreams(): streamIds_ holds the ids of non-zero stream slots (sorted
   // ascending) and streamSizes_ their byte sizes. For kTablet,

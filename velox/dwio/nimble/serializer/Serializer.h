@@ -58,6 +58,11 @@ class Serializer {
   }
 
  private:
+  // Checks the kBlob options and selects Trivial for every stream, so writes
+  // skip the search for a smaller encoding. The policy compresses the values
+  // of each stream with compressionOptions.
+  void initBlobOptions();
+
   // Build stream encoding layouts map from the encoding layout tree.
   // Also sets up event handler for dynamically discovered FlatMap keys.
   // Called when encodingLayoutTree is specified.

@@ -23,6 +23,7 @@
 
 #include "velox/dwio/nimble/common/FixedBitArray.h"
 #include "velox/dwio/nimble/common/Varint.h"
+#include "velox/dwio/nimble/compression/Compression.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 
 namespace facebook::nimble::serde {
@@ -333,6 +334,34 @@ readTrailerStreamMetadata(const folly::IOBuf& input) {
   return {std::move(streamIds), std::move(streamSizes)};
 }
 
+velox::BufferPtr decompressBlob(
+    CompressionType compressionType,
+    std::string_view payload,
+    velox::memory::MemoryPool& pool) {
+  // Zstd and Lz4 payloads start with their u32 uncompressed size, which the
+  // codecs read without a bounds check.
+  NIMBLE_CHECK_FILE_GE(
+      payload.size(), sizeof(uint32_t), "Truncated kBlob payload");
+  auto body = Compression::uncompress(
+      pool,
+      compressionType,
+      DataType::Undefined,
+      payload,
+      /*decompressCounter=*/nullptr);
+
+  // The body is a buffer of its own, so a trailer that claims more bytes than
+  // the body holds would make the trailer reader read before the buffer.
+  NIMBLE_CHECK_FILE_GE(
+      body->size(),
+      sizeof(uint32_t),
+      "kBlob body is too small for its trailer size");
+  NIMBLE_CHECK_FILE_LE(
+      readTrailerSize(body->as<char>() + body->size()) + sizeof(uint32_t),
+      body->size(),
+      "kBlob trailer is larger than its body");
+  return body;
+}
+
 } // namespace detail
 
 StreamDataParser::StreamDataParser(velox::memory::MemoryPool* pool)
@@ -370,7 +399,19 @@ uint32_t StreamDataParser::initialize(std::string_view data) {
       header.flags.streamEncodingUsesVarintRowCount;
   streamHasChunkHeader_ = header.flags.streamHasChunkHeader;
   rowRange_ = header.rowRange;
+  blobCompression_ = header.blobCompression;
   return header.rowCount;
+}
+
+void StreamDataParser::decompressBlob() {
+  if (blobCompression_ == CompressionType::Uncompressed) {
+    return;
+  }
+  auto body = detail::decompressBlob(
+      blobCompression_, {pos_, static_cast<size_t>(end_ - pos_)}, *pool_);
+  pos_ = body->as<char>();
+  end_ = pos_ + body->size();
+  decompressedBlobs_.push_back(std::move(body));
 }
 
 } // namespace facebook::nimble::serde
