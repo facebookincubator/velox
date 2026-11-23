@@ -71,13 +71,15 @@ struct InputChunk {
       cudf::table_view view,
       cuda::stream_ref stream,
       CudfVectorPtr owner,
-      std::shared_ptr<cudf::table> tableOwner = nullptr)
+      std::shared_ptr<cudf::table> tableOwner = nullptr,
+      uint64_t flatSize = 0)
       : pool(pool),
         type(std::move(type)),
         view(view),
         stream(stream),
         owner(std::move(owner)),
-        tableOwner(std::move(tableOwner)) {}
+        tableOwner(std::move(tableOwner)),
+        flatSize(flatSize) {}
 
   memory::MemoryPool* pool{nullptr};
   TypePtr type;
@@ -85,6 +87,9 @@ struct InputChunk {
   cuda::stream_ref stream;
   CudfVectorPtr owner;
   std::shared_ptr<cudf::table> tableOwner;
+  // Approximate size of the rows in bytes. Set by whoever makes the chunk,
+  // and zero where nothing uses it.
+  uint64_t flatSize{0};
 
   size_t size() const {
     return static_cast<size_t>(view.num_rows());
@@ -96,8 +101,9 @@ struct InputChunk {
 };
 
 // Splits 'input' into one chunk per routing target. The chunks are slices of
-// one table allocated from 'mr', which they share. A target that gets no rows
-// gets an empty chunk.
+// one table allocated from 'mr', which they share, and each chunk's flat size
+// is its share of that table by rows. A target that gets no rows gets an empty
+// chunk.
 [[nodiscard]] std::vector<InputChunk> routeChunkByHash(
     const InputChunk& input,
     const HashRouting& routing,
@@ -119,6 +125,12 @@ class BufferedStateOps {
   // Return a cheap, conservative upper bound on the row count after adding
   // `input` to `leaf`.
   virtual size_t estimatedMergedRowUpperBound(
+      const BufferedState& leaf,
+      const InputChunk& input) const = 0;
+
+  // Return a cheap, conservative upper bound on leafFlatSize() after adding
+  // `input` to `leaf`. Only called when PBS has a byte limit.
+  virtual uint64_t estimatedMergedBytesUpperBound(
       const BufferedState& leaf,
       const InputChunk& input) const = 0;
 
@@ -180,9 +192,11 @@ class BufferedStateOps {
 // changes, an incoming batch is hash partitioned once, straight to its leaves,
 // however often they have been split.
 //
-// The bucket count bounds the number of leaves, and a leaf that holds a single
-// bucket cannot be split. Such a leaf keeps growing past the row limit, up to
-// the hard row limit.
+// A leaf is split when it would pass the row limit or the byte limit. The
+// bucket count bounds the number of leaves, and a leaf that holds a single
+// bucket cannot be split. Such a leaf keeps growing past both limits, up to
+// the hard row limit. The byte limit is a target only: sizes are estimates,
+// and passing it never fails.
 //
 // Typical usage:
 // 1. Define a `BufferedStateOps` implementation for the operator.
@@ -205,12 +219,16 @@ class PartitionedBufferedState {
   // cudf::hash_partition() has a fast path for up to this many partitions.
   static constexpr int32_t kDefaultNumBuckets = 1024;
 
+  static constexpr uint64_t kNoByteLimit = std::numeric_limits<uint64_t>::max();
+
   struct Options {
     // A leaf that would hold more rows than this is split.
     size_t maxRowsPerLeaf{0};
     // The most rows that a leaf can hold. Only a leaf that cannot be split
     // grows beyond maxRowsPerLeaf.
     size_t hardMaxRowsPerLeaf{std::numeric_limits<cudf::size_type>::max()};
+    // A leaf whose flat size would exceed this many bytes is split.
+    uint64_t maxBytesPerLeaf{kNoByteLimit};
     int32_t numBuckets{kDefaultNumBuckets};
     uint32_t hashSeed{kDefaultHashSeed};
   };
@@ -244,6 +262,10 @@ class PartitionedBufferedState {
   void splitLeafAndAddInput(size_t leafIndex, InputChunk bufferedInput);
 
   void ensureLeafWithinLimit(size_t leafIndex);
+
+  bool hasByteLimit() const {
+    return options_.maxBytesPerLeaf != kNoByteLimit;
+  }
 
   // Rebuilds the bucket bounds of the leaves after a split.
   void updateRouting();

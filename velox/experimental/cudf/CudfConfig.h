@@ -58,6 +58,8 @@ struct CudfConfig {
       "cudf.streaming_groupby_capacity_multiplier"};
   static constexpr const char* kCudfStreamingGroupbyMaxPartitionKeys{
       "cudf.streaming_groupby_max_partition_keys"};
+  static constexpr const char* kCudfGroupbyMaxPartitionBytes{
+      "cudf.groupby_max_partition_bytes"};
   static constexpr const char* kCudfTimestampUnit{"cudf.timestamp_unit"};
   static constexpr const char* kUcxExchange{"cudf.exchange"};
   static constexpr const char* kUcxxErrorHandling{"ucxx.error_handling"};
@@ -185,6 +187,20 @@ struct CudfConfig {
   /// batch, so keep the number of tables in the tens. When not set, a table is
   /// split only when it reaches the most keys that libcudf can hold in one.
   std::optional<int32_t> streamingGroupbyMaxPartitionKeys;
+
+  /// Target size in bytes of one hash partition of the state that a final or
+  /// single grouped aggregation buffers: one table of merged groups on the
+  /// regular groupby path, one streaming_groupby table on the streaming path.
+  /// A partition that would grow beyond it is split into partitions for parts
+  /// of its keys, chosen by a hash of the keys.
+  ///
+  /// This is a target, not a bound. Sizes are estimates, a partition that
+  /// cannot be split any further keeps growing, and merging a batch into a
+  /// partition or growing a streaming_groupby table briefly needs two to three
+  /// times the partition. On the streaming path every table adds a fixed cost
+  /// per batch, so keep the number of tables in the tens. When not set, only
+  /// the row and key limits split a partition.
+  std::optional<uint64_t> groupbyMaxPartitionBytes;
 
   /// Minimum rows to accumulate before GPU-side concatenation (default 100k).
   /// Applies when batchSizeMinBytes is unset, and always to zero-column

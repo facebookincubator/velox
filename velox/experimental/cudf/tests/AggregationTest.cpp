@@ -54,6 +54,8 @@ class AggregationTest : public OperatorTestBase {
     filesystems::registerLocalFileSystem();
     savedBatchSizeMaxThreshold_ =
         cudf_velox::CudfConfig::getInstance().batchSizeMaxThreshold;
+    savedGroupbyMaxPartitionBytes_ =
+        cudf_velox::CudfConfig::getInstance().groupbyMaxPartitionBytes;
     savedStreamingGroupbyEnabled_ =
         cudf_velox::CudfConfig::getInstance().streamingGroupbyEnabled;
     cudf_velox::CudfConfig::getInstance().streamingGroupbyEnabled = false;
@@ -65,6 +67,8 @@ class AggregationTest : public OperatorTestBase {
   void TearDown() override {
     cudf_velox::CudfConfig::getInstance().batchSizeMaxThreshold =
         savedBatchSizeMaxThreshold_;
+    cudf_velox::CudfConfig::getInstance().groupbyMaxPartitionBytes =
+        savedGroupbyMaxPartitionBytes_;
     cudf_velox::CudfConfig::getInstance().streamingGroupbyEnabled =
         savedStreamingGroupbyEnabled_;
     cudf_velox::unregisterCudf();
@@ -271,6 +275,7 @@ class AggregationTest : public OperatorTestBase {
            DOUBLE(),
            VARCHAR()})};
   std::optional<int32_t> savedBatchSizeMaxThreshold_;
+  std::optional<uint64_t> savedGroupbyMaxPartitionBytes_;
   bool savedStreamingGroupbyEnabled_{false};
 };
 
@@ -1431,6 +1436,62 @@ TEST_F(AggregationTest, partitionedBufferedStateDeepSplits) {
   }
 }
 
+// The buffered state is split by its size in bytes while it is far below any
+// row limit.
+TEST_F(AggregationTest, partitionedBufferedStateByteLimit) {
+  constexpr int32_t kBatchRows = 50;
+  std::vector<RowVectorPtr> vectors;
+  for (int32_t batch = 0; batch < 20; ++batch) {
+    vectors.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            kBatchRows, [&](auto row) { return (batch * 31 + row * 7) % 400; }),
+        makeFlatVector<int64_t>(
+            kBatchRows, [&](auto row) { return batch + row; }),
+        makeFlatVector<double>(
+            kBatchRows, [&](auto row) { return (batch + row) * 0.5; }),
+    }));
+  }
+  createDuckDbTable(vectors);
+
+  const std::vector<std::string> aggregates{
+      "count(1)", "sum(c1)", "avg(c2)", "min(c1)", "max(c2)"};
+  const std::string sql =
+      "SELECT c0, count(1), sum(c1), avg(c2), min(c1), max(c2) "
+      "FROM tmp GROUP BY 1";
+
+  // Returns the number of partitions that the state of the last aggregation
+  // of the plan had.
+  auto runAndCountPartitions = [&](bool single) {
+    core::PlanNodeId aggregationId;
+    auto builder = PlanBuilder().values(vectors);
+    if (single) {
+      builder.singleAggregation({"c0"}, aggregates);
+    } else {
+      builder.partialAggregation({"c0"}, aggregates).finalAggregation();
+    }
+    auto task =
+        AssertQueryBuilder(duckDbQueryRunner_)
+            .maxDrivers(1)
+            .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, kBatchRows)
+            .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+            .plan(builder.capturePlanNodeId(aggregationId).planNode())
+            .assertResults(sql);
+    return streamingGroupbyStatSum(
+        task, aggregationId, cudf_velox::kGroupbyStatePartitionsStat);
+  };
+
+  for (bool single : {false, true}) {
+    SCOPED_TRACE(single);
+    cudf_velox::CudfConfig::getInstance().groupbyMaxPartitionBytes =
+        std::nullopt;
+    EXPECT_EQ(runAndCountPartitions(single), 1);
+
+    // 400 groups of about 60 bytes each.
+    cudf_velox::CudfConfig::getInstance().groupbyMaxPartitionBytes = 4096;
+    EXPECT_GE(runAndCountPartitions(single), 6);
+  }
+}
+
 TEST_F(AggregationTest, companionAggregatesStayOnNonStreamingPathWithRowCap) {
   setBatchSizeMaxThreshold(1);
 
@@ -1669,6 +1730,42 @@ TEST_F(StreamingGroupbyAggregationTest, noSplitBelowKeyLimit) {
       task, finalAggId, cudf_velox::kStreamingGroupbyUsedStat));
   EXPECT_FALSE(hasStreamingGroupbyStat(
       task, finalAggId, cudf_velox::kStreamingGroupbySplitsStat));
+}
+
+TEST_F(StreamingGroupbyAggregationTest, splitsTableAtByteLimit) {
+  constexpr int32_t kBatchRows = 8;
+  constexpr int32_t kNumBatches = 16;
+  auto vectors = makeHighCardinalityBatches(kBatchRows, kNumBatches);
+  createDuckDbTable(vectors);
+  // A table of one BIGINT key and one sum takes about 24 bytes per key of
+  // capacity and 8 per key, so 128 keys do not fit in one table.
+  cudf_velox::CudfConfig::getInstance().groupbyMaxPartitionBytes = 2048;
+
+  core::PlanNodeId finalAggId;
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .maxDrivers(1)
+          .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, kBatchRows)
+          .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+          .plan(
+              PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"c0"}, {"sum(c1)"})
+                  .finalAggregation()
+                  .capturePlanNodeId(finalAggId)
+                  .planNode())
+          .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
+
+  EXPECT_TRUE(hasStreamingGroupbyStat(
+      task, finalAggId, cudf_velox::kStreamingGroupbyUsedStat));
+  EXPECT_GT(
+      streamingGroupbyStatSum(
+          task, finalAggId, cudf_velox::kStreamingGroupbySplitsStat),
+      0);
+  EXPECT_GT(
+      streamingGroupbyStatSum(
+          task, finalAggId, cudf_velox::kGroupbyStatePartitionsStat),
+      1);
 }
 
 // Keys come back in later batches, after the table that holds them has been

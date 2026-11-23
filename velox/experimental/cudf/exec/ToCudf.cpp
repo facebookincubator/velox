@@ -505,6 +505,15 @@ void CudfConfig::initialize(
         value);
     streamingGroupbyMaxPartitionKeys = maxKeys.value();
   }
+  if (config.find(kCudfGroupbyMaxPartitionBytes) != config.end()) {
+    const auto& value = config[kCudfGroupbyMaxPartitionBytes];
+    const auto maxBytes = folly::tryTo<uint64_t>(value);
+    VELOX_USER_CHECK(
+        maxBytes.hasValue() && maxBytes.value() > 0,
+        "cuDF groupby partition byte target must be a positive integer: {}",
+        value);
+    groupbyMaxPartitionBytes = maxBytes.value();
+  }
   if (config.find(kCudfFunctionNamePrefix) != config.end()) {
     functionNamePrefix = config[kCudfFunctionNamePrefix];
   }

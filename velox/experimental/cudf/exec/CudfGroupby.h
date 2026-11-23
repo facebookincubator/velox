@@ -43,6 +43,10 @@ inline constexpr std::string_view kStreamingGroupbyRebuildsStat{
 // into tables for parts of its hash buckets.
 inline constexpr std::string_view kStreamingGroupbySplitsStat{
     "streamingGroupbySplits"};
+// Number of hash partitions that the buffered state of a final or single
+// grouped aggregation had when its input ended.
+inline constexpr std::string_view kGroupbyStatePartitionsStat{
+    "groupbyStatePartitions"};
 
 // Type-specific adapter between Velox final-aggregation state and libcudf's
 // flattened streaming_groupby request/result interface. prepareInput() must be
@@ -238,6 +242,10 @@ class CudfGroupby : public CudfOperatorBase {
 
   void recordPartialFlushStats(const CudfVector& output);
 
+  // Records the number of partitions of 'state' once, when it is first
+  // drained.
+  void recordStatePartitions(const PartitionedBufferedState& state);
+
   bool initializeStreamingGroupby(
       const RowTypePtr& inputRowSchema,
       const std::vector<VectorPtr>& constants,
@@ -300,6 +308,7 @@ class CudfGroupby : public CudfOperatorBase {
   std::unique_ptr<PartitionedBufferedState> streamingBufferedState_;
   // True once a batch has been added to 'streamingBufferedState_'.
   bool streamingGroupbyUsed_{false};
+  bool statePartitionsRecorded_{false};
   std::optional<cuda::stream_ref> streamingGroupbyStream_;
   std::unique_ptr<CudaEvent> streamingGroupbyEvent_;
 };

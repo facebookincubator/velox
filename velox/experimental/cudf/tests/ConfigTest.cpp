@@ -39,6 +39,7 @@ TEST(ConfigTest, cudfConfig) {
       {CudfConfig::kCudfStreamingGroupbyEnabled, "true"},
       {CudfConfig::kCudfStreamingGroupbyCapacityMultiplier, "3.5"},
       {CudfConfig::kCudfStreamingGroupbyMaxPartitionKeys, "1000000"},
+      {CudfConfig::kCudfGroupbyMaxPartitionBytes, "4294967296"},
       {CudfConfig::kCudfAllowCpuFallback, "false"},
       {CudfConfig::kCudfBatchSizeMinThreshold, "123456"},
       {CudfConfig::kCudfBatchSizeMinBytes, "2147483648"}};
@@ -47,6 +48,7 @@ TEST(ConfigTest, cudfConfig) {
   ASSERT_FALSE(config.streamingGroupbyEnabled);
   ASSERT_EQ(config.streamingGroupbyCapacityMultiplier, 2.0);
   ASSERT_FALSE(config.streamingGroupbyMaxPartitionKeys);
+  ASSERT_FALSE(config.groupbyMaxPartitionBytes);
   config.initialize(std::move(options));
   ASSERT_EQ(config.enabled, false);
   ASSERT_EQ(config.debugEnabled, true);
@@ -56,6 +58,7 @@ TEST(ConfigTest, cudfConfig) {
   ASSERT_EQ(config.streamingGroupbyEnabled, true);
   ASSERT_EQ(config.streamingGroupbyCapacityMultiplier, 3.5);
   ASSERT_EQ(config.streamingGroupbyMaxPartitionKeys.value(), 1'000'000);
+  ASSERT_EQ(config.groupbyMaxPartitionBytes.value(), 4'294'967'296);
   ASSERT_EQ(config.allowCpuFallback, false);
   ASSERT_EQ(config.batchSizeMinThreshold, 123'456);
   ASSERT_EQ(config.batchSizeMinBytes.value(), 2'147'483'648);
@@ -75,6 +78,12 @@ TEST(ConfigTest, rejectsNonPositiveGroupbyPartitionLimits) {
       initialize(CudfConfig::kCudfStreamingGroupbyMaxPartitionKeys, "many"),
       "cuDF streaming groupby partition key limit must be a positive "
       "integer: many");
+  VELOX_ASSERT_USER_THROW(
+      initialize(CudfConfig::kCudfGroupbyMaxPartitionBytes, "0"),
+      "cuDF groupby partition byte target must be a positive integer: 0");
+  VELOX_ASSERT_USER_THROW(
+      initialize(CudfConfig::kCudfGroupbyMaxPartitionBytes, "-1"),
+      "cuDF groupby partition byte target must be a positive integer: -1");
 }
 
 TEST(ConfigTest, rejectsNonPositiveBatchConcatTargets) {

@@ -47,6 +47,7 @@
 #include <cudf/structs/structs_column_view.hpp>
 #include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
+#include <cudf/utilities/traits.hpp>
 
 #include <cuda/std/numeric>
 
@@ -1669,6 +1670,12 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
     return asLeafState(leaf).chunk.size() + input.size();
   }
 
+  uint64_t estimatedMergedBytesUpperBound(
+      const BufferedState& leaf,
+      const InputChunk& input) const override {
+    return asLeafState(leaf).chunk.flatSize + input.flatSize;
+  }
+
   std::unique_ptr<BufferedState> createLeaf(InputChunk input) override {
     if (isFinalStep()) {
       // A final step's input is not compacted in prepareInput(), and a leaf
@@ -1700,8 +1707,7 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
   }
 
   uint64_t leafFlatSize(const BufferedState& leaf) const override {
-    const auto& chunk = asLeafState(leaf).chunk;
-    return chunk.owner ? chunk.owner->estimateFlatSize() : 0;
+    return asLeafState(leaf).chunk.flatSize;
   }
 
   std::vector<InputChunk> routeInput(
@@ -1773,20 +1779,30 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
   }
 
   InputChunk makeOwnedChunk(CudfVectorPtr owner, const TypePtr& type) const {
+    const auto flatSize = owner->estimateFlatSize();
     return InputChunk{
         owner->pool(),
         type,
         owner->getTableView(),
         owner->stream(),
-        std::move(owner)};
+        std::move(owner),
+        nullptr,
+        flatSize};
   }
 
   InputChunk makeBorrowedChunk(
       CudfVectorPtr owner,
       const TypePtr& type,
       cudf::table_view view) const {
+    const auto flatSize = owner->estimateFlatSize();
     return InputChunk{
-        owner->pool(), type, view, owner->stream(), std::move(owner)};
+        owner->pool(),
+        type,
+        view,
+        owner->stream(),
+        std::move(owner),
+        nullptr,
+        flatSize};
   }
 
   // Merges the incoming chunk 'right' into the leaf chunk 'left' with one
@@ -1842,6 +1858,9 @@ struct StreamingGroupbyLeafState final : public BufferedState {
   std::unique_ptr<cudf::groupby::streaming_groupby> groupby;
   // max_distinct_keys of 'groupby'.
   size_t capacity{0};
+  // Flat size and rows of the chunks that were aggregated into 'groupby'.
+  uint64_t inputBytes{0};
+  size_t inputRows{0};
 };
 
 } // namespace
@@ -1851,8 +1870,8 @@ struct StreamingGroupbyLeafState final : public BufferedState {
 // then the columns that the streaming requests read.
 class StreamingGroupbyBufferedStateOps final : public BufferedStateOps {
  public:
-  explicit StreamingGroupbyBufferedStateOps(CudfGroupby& owner)
-      : owner_(owner) {
+  StreamingGroupbyBufferedStateOps(CudfGroupby& owner, uint64_t maxBytesPerLeaf)
+      : owner_(owner), maxBytesPerLeaf_(maxBytesPerLeaf) {
     // makeStreamingGroupbyInputView() puts the keys first.
     keyIndices_.resize(owner_.groupingKeyInputChannels_.size());
     std::iota(keyIndices_.begin(), keyIndices_.end(), 0);
@@ -1863,13 +1882,17 @@ class StreamingGroupbyBufferedStateOps final : public BufferedStateOps {
     const auto view =
         owner_.makeStreamingGroupbyInputView(rawInput->getTableView(), stream);
     if (preparedTypes_.empty()) {
-      preparedTypes_.reserve(view.num_columns());
-      for (const auto& column : view) {
-        preparedTypes_.push_back(column.type());
-      }
+      setPreparedTypes(view);
     }
+    const auto flatSize = rawInput->estimateFlatSize();
     return InputChunk{
-        rawInput->pool(), nullptr, view, stream, std::move(rawInput)};
+        rawInput->pool(),
+        nullptr,
+        view,
+        stream,
+        std::move(rawInput),
+        nullptr,
+        flatSize};
   }
 
   size_t estimatedMergedRowUpperBound(
@@ -1878,14 +1901,33 @@ class StreamingGroupbyBufferedStateOps final : public BufferedStateOps {
     return leafRowCount(leaf) + input.size();
   }
 
+  uint64_t estimatedMergedBytesUpperBound(
+      const BufferedState& leaf,
+      const InputChunk& input) const override {
+    const auto& state = asLeafState(leaf);
+    // A table that takes the input needs room for every input row, as if
+    // none of them had a key that it already holds.
+    const auto numKeys = leafRowCount(leaf) + input.size();
+    return tableBytes(std::max(state.capacity, numKeys)) +
+        keyBytes(
+               numKeys,
+               state.inputBytes + input.flatSize,
+               state.inputRows + input.size());
+  }
+
   std::unique_ptr<BufferedState> createLeaf(InputChunk input) override {
     auto leaf = std::make_unique<StreamingGroupbyLeafState>();
+    leaf->inputBytes = input.flatSize;
+    leaf->inputRows = input.size();
     // max_distinct_keys is a logical capacity. libcudf's 0.5 cuco load factor
     // allocates roughly two physical hash slots per logical key. The
     // configured multiplier controls both this initial logical headroom and
-    // subsequent geometric growth.
-    leaf->capacity = scaleStreamingGroupbyCapacity(
-        input.size(), capacityMultiplier(), streamingGroupbySafeCapacity());
+    // subsequent geometric growth, within the byte limit.
+    leaf->capacity = limitCapacityByBytes(
+        scaleStreamingGroupbyCapacity(
+            input.size(), capacityMultiplier(), streamingGroupbySafeCapacity()),
+        input.size(),
+        *leaf);
     leaf->groupby = owner_.createStreamingGroupby(leaf->capacity);
     leaf->groupby->aggregate(input.view, input.stream);
     return leaf;
@@ -1894,6 +1936,8 @@ class StreamingGroupbyBufferedStateOps final : public BufferedStateOps {
   void addInputToLeaf(BufferedState& leaf, InputChunk input) override {
     auto& state = asLeafState(leaf);
     const auto requiredCapacity = leafRowCount(leaf) + input.size();
+    state.inputBytes += input.flatSize;
+    state.inputRows += input.size();
     if (requiredCapacity <= state.capacity) {
       state.groupby->aggregate(input.view, input.stream);
       return;
@@ -1903,8 +1947,12 @@ class StreamingGroupbyBufferedStateOps final : public BufferedStateOps {
     VELOX_CHECK_LE(requiredCapacity, safeCapacity);
     const auto geometricCapacity = scaleStreamingGroupbyCapacity(
         state.capacity, capacityMultiplier(), safeCapacity);
-    const auto newCapacity =
-        std::min(std::max(requiredCapacity, geometricCapacity), safeCapacity);
+    // Growing geometrically must not be what takes the table past the byte
+    // limit.
+    const auto newCapacity = limitCapacityByBytes(
+        std::min(std::max(requiredCapacity, geometricCapacity), safeCapacity),
+        requiredCapacity,
+        state);
 
     // Overflow invalidates streaming_groupby. Grow transactionally before
     // insertion, aggregate the new batch into the replacement, then merge the
@@ -1927,8 +1975,10 @@ class StreamingGroupbyBufferedStateOps final : public BufferedStateOps {
     return static_cast<size_t>(asLeafState(leaf).groupby->distinct_keys());
   }
 
-  uint64_t leafFlatSize(const BufferedState& /*leaf*/) const override {
-    return 0;
+  uint64_t leafFlatSize(const BufferedState& leaf) const override {
+    const auto& state = asLeafState(leaf);
+    return tableBytes(state.capacity) +
+        keyBytes(leafRowCount(leaf), state.inputBytes, state.inputRows);
   }
 
   std::vector<InputChunk> routeInput(
@@ -1965,13 +2015,15 @@ class StreamingGroupbyBufferedStateOps final : public BufferedStateOps {
           i);
     }
     auto table = std::make_shared<cudf::table>(std::move(columns));
+    const auto flatSize = table->alloc_size();
     InputChunk state{
         owner_.pool(),
         nullptr,
         table->view(),
         stateStream(),
         nullptr,
-        std::move(table)};
+        std::move(table),
+        flatSize};
 
     auto parts = routeInput(state, routing);
     // The parts are a copy of the groups.
@@ -2023,9 +2075,74 @@ class StreamingGroupbyBufferedStateOps final : public BufferedStateOps {
       std::vector<cudf::groupby::aggregation_result>>;
 
   CudfGroupby& owner_;
+  const uint64_t maxBytesPerLeaf_;
   std::vector<cudf::size_type> keyIndices_;
   // Column types of a prepared input.
   std::vector<cudf::data_type> preparedTypes_;
+  // Bits that libcudf allocates for every key of a table's capacity: two hash
+  // slots at its 0.5 load factor, the location of the key, and a value and a
+  // validity bit for every request.
+  uint64_t capacityBits_{0};
+  // Bits of one stored key, when every key column has a fixed width.
+  std::optional<uint64_t> fixedKeyBits_;
+
+  void setPreparedTypes(cudf::table_view prepared) {
+    preparedTypes_.reserve(prepared.num_columns());
+    capacityBits_ = 4 * sizeof(cudf::size_type) * 8;
+    uint64_t keyBits = 0;
+    bool fixedWidthKeys = true;
+    for (cudf::size_type i = 0; i < prepared.num_columns(); ++i) {
+      const auto type = prepared.column(i).type();
+      preparedTypes_.push_back(type);
+      const auto valueBits =
+          cudf::is_fixed_width(type) ? cudf::size_of(type) * 8 + 1 : 0;
+      if (i < keyIndices_.size()) {
+        keyBits += valueBits;
+        fixedWidthKeys &= cudf::is_fixed_width(type);
+      } else {
+        capacityBits_ += valueBits;
+      }
+    }
+    if (fixedWidthKeys) {
+      fixedKeyBits_ = keyBits;
+    }
+  }
+
+  // Size of the structures of a table that are allocated for its capacity.
+  uint64_t tableBytes(size_t capacity) const {
+    return capacity * capacityBits_ / 8;
+  }
+
+  // Size of 'numKeys' stored keys. For keys of variable width this is an
+  // estimate from the average size of the 'inputRows' rows that came in, which
+  // counts their values too.
+  uint64_t keyBytes(size_t numKeys, uint64_t inputBytes, size_t inputRows)
+      const {
+    if (fixedKeyBits_.has_value()) {
+      return numKeys * *fixedKeyBits_ / 8;
+    }
+    return inputRows == 0
+        ? 0
+        : static_cast<uint64_t>(
+              static_cast<double>(inputBytes) / inputRows * numKeys);
+  }
+
+  // Returns 'capacity' lowered to what keeps a table of 'numKeys' keys within
+  // the byte limit, but not below 'numKeys'.
+  size_t limitCapacityByBytes(
+      size_t capacity,
+      size_t numKeys,
+      const StreamingGroupbyLeafState& leaf) const {
+    if (maxBytesPerLeaf_ == PartitionedBufferedState::kNoByteLimit) {
+      return capacity;
+    }
+    const auto keys = keyBytes(numKeys, leaf.inputBytes, leaf.inputRows);
+    const auto tableBudget =
+        maxBytesPerLeaf_ > keys ? maxBytesPerLeaf_ - keys : 0;
+    const auto maxCapacity = static_cast<size_t>(
+        static_cast<double>(tableBudget) * 8 / capacityBits_);
+    return std::max(numKeys, std::min(capacity, maxCapacity));
+  }
 
   StreamingGroupbyLeafState& asLeafState(BufferedState& leaf) const {
     return static_cast<StreamingGroupbyLeafState&>(leaf);
@@ -2375,6 +2492,7 @@ CudfVectorPtr CudfGroupby::finalizeStreamingGroupby() {
   }
 
   // One table per call.
+  recordStatePartitions(*streamingBufferedState_);
   auto result = streamingBufferedState_->drainNextOutput();
   if (!result) {
     streamingBufferedState_.reset();
@@ -2472,6 +2590,8 @@ void CudfGroupby::initialize() {
     if (isFinalOrSingle) {
       PartitionedBufferedState::Options options;
       options.maxRowsPerLeaf = maxBufferedRows;
+      options.maxBytesPerLeaf = cudfConfig.groupbyMaxPartitionBytes.value_or(
+          PartitionedBufferedState::kNoByteLimit);
       partitionedBufferedState_ = std::make_unique<PartitionedBufferedState>(
           std::make_unique<GroupbyBufferedStateOps>(*this), options);
     } else if (isPartialOutput_) {
@@ -2497,8 +2617,13 @@ void CudfGroupby::initialize() {
         ? std::min<size_t>(*maxPartitionKeys, safeCapacity)
         : safeCapacity;
     options.hardMaxRowsPerLeaf = safeCapacity;
+    options.maxBytesPerLeaf =
+        CudfConfig::getInstance().groupbyMaxPartitionBytes.value_or(
+            PartitionedBufferedState::kNoByteLimit);
     streamingBufferedState_ = std::make_unique<PartitionedBufferedState>(
-        std::make_unique<StreamingGroupbyBufferedStateOps>(*this), options);
+        std::make_unique<StreamingGroupbyBufferedStateOps>(
+            *this, options.maxBytesPerLeaf),
+        options);
   }
 
   // Check that aggregate result type match the output type.
@@ -2641,6 +2766,16 @@ CudfVectorPtr CudfGroupby::finalizeGroupedStates(
       stream);
 }
 
+void CudfGroupby::recordStatePartitions(const PartitionedBufferedState& state) {
+  if (statePartitionsRecorded_) {
+    return;
+  }
+  statePartitionsRecorded_ = true;
+  stats_.wlock()->addRuntimeStat(
+      std::string{kGroupbyStatePartitionsStat},
+      RuntimeCounter(static_cast<int64_t>(state.numLeaves())));
+}
+
 void CudfGroupby::recordPartialFlushStats(const CudfVector& output) {
   const auto numOutputRows = output.size();
   const double aggregationPct =
@@ -2702,6 +2837,9 @@ RowVectorPtr CudfGroupby::doGetOutput() {
   // At this point isPartialOutput_ is false (handled above) and noMoreInput_
   // is true (guarded by the check above).
   if (incrementalAggregationEnabled_) {
+    if (partitionedBufferedState_) {
+      recordStatePartitions(*partitionedBufferedState_);
+    }
     auto result = partitionedBufferedState_
         ? partitionedBufferedState_->drainNextOutput()
         : nullptr;

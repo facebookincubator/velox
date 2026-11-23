@@ -51,6 +51,10 @@ struct TableLeafState final : public BufferedState {
 
 class IdentityBufferedStateOps final : public BufferedStateOps {
  public:
+  // The size that a leaf reports for each of its rows. A fixed number, so that
+  // the byte limit tests do not depend on how cuDF allocates a column.
+  static constexpr uint64_t kRowBytes = 8;
+
   IdentityBufferedStateOps(memory::MemoryPool* pool, RowTypePtr rowType)
       : pool_(pool), rowType_(std::move(rowType)), keyIndices_{0} {}
 
@@ -62,6 +66,12 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
       const BufferedState& leaf,
       const InputChunk& input) const override {
     return asLeaf(leaf).chunk.size() + input.size();
+  }
+
+  uint64_t estimatedMergedBytesUpperBound(
+      const BufferedState& leaf,
+      const InputChunk& input) const override {
+    return (asLeaf(leaf).chunk.size() + input.size()) * kRowBytes;
   }
 
   std::unique_ptr<BufferedState> createLeaf(InputChunk input) override {
@@ -78,8 +88,7 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   }
 
   uint64_t leafFlatSize(const BufferedState& leaf) const override {
-    const auto& chunk = asLeaf(leaf).chunk;
-    return chunk.owner ? chunk.owner->estimateFlatSize() : 0;
+    return asLeaf(leaf).chunk.size() * kRowBytes;
   }
 
   // Routes on the host with the hash set by setPartitioning(), or on the
@@ -418,6 +427,59 @@ TEST_F(PartitionedBufferedStateTest, singleBucketGrowsUpToHardLimit) {
   EXPECT_EQ(drainAll(state), (std::vector<std::vector<int64_t>>{{1, 2, 3, 4}}));
 }
 
+TEST_F(PartitionedBufferedStateTest, byteLimitSplitsLeaf) {
+  const auto rowBytes = IdentityBufferedStateOps::kRowBytes;
+
+  auto ops =
+      makeHostOps([](int64_t key) { return static_cast<uint32_t>(key); });
+  PartitionedBufferedState state(
+      std::move(ops),
+      {.maxRowsPerLeaf = 100,
+       .maxBytesPerLeaf = 3 * rowBytes,
+       .numBuckets = 8});
+
+  state.addInput(makeCudfVector({0, 1}));
+  EXPECT_EQ(state.numLeaves(), 1);
+  // Four rows are over the byte limit, far below the row limit.
+  state.addInput(makeCudfVector({4, 5}));
+  EXPECT_EQ(state.numLeaves(), 2);
+  // Three rows are not.
+  state.addInput(makeCudfVector({2, 6}));
+  EXPECT_EQ(state.numLeaves(), 2);
+
+  // A batch far over the limit is divided into as many leaves as it needs.
+  state.addInput(makeCudfVector({8, 9, 10, 11, 16, 17, 18, 19}));
+  EXPECT_EQ(state.numLeaves(), 5);
+
+  EXPECT_EQ(
+      drainAll(state),
+      (std::vector<std::vector<int64_t>>{
+          {0, 8, 16}, {1, 9, 17}, {2, 10, 18}, {4, 5, 6}, {11, 19}}));
+  EXPECT_TRUE(state.empty());
+}
+
+TEST_F(PartitionedBufferedStateTest, byteLimitIsATarget) {
+  const auto rowBytes = IdentityBufferedStateOps::kRowBytes;
+
+  // Every key is in bucket 0.
+  auto ops = makeHostOps([](int64_t /*key*/) { return 0U; });
+  PartitionedBufferedState state(
+      std::move(ops),
+      {.maxRowsPerLeaf = 100,
+       .maxBytesPerLeaf = 2 * rowBytes,
+       .numBuckets = 8});
+
+  // The leaf is split down to bucket 0 alone and then keeps growing: passing
+  // the byte limit does not fail.
+  for (int64_t key = 1; key <= 6; ++key) {
+    state.addInput(makeCudfVector({key}));
+  }
+  EXPECT_EQ(state.numLeaves(), 4);
+  EXPECT_EQ(
+      drainAll(state), (std::vector<std::vector<int64_t>>{{1, 2, 3, 4, 5, 6}}));
+  EXPECT_TRUE(state.empty());
+}
+
 TEST_F(PartitionedBufferedStateTest, splitLeavesAreRoutedOnce) {
   auto ops =
       makeHostOps([](int64_t key) { return static_cast<uint32_t>(key); });
@@ -521,6 +583,38 @@ TEST_F(PartitionedBufferedStateTest, deviceRoutingIsConsistent) {
       ASSERT_EQ(parts[i], -1) << "key " << keys[i];
     }
   }
+}
+
+TEST_F(PartitionedBufferedStateTest, routedChunksShareTheSizeOfTheirTable) {
+  std::vector<int64_t> keys(1'000);
+  std::iota(keys.begin(), keys.end(), 0);
+  auto input = makeChunk(keys);
+
+  HashRouting routing;
+  routing.keyIndices = {0};
+  routing.seed = PartitionedBufferedState::kDefaultHashSeed;
+  routing.numBuckets = 16;
+  routing.bucketBounds = {0, 4, 8, 12, 16};
+  const auto chunks = routeChunkByHash(input, routing, get_output_mr());
+  ASSERT_EQ(chunks.size(), 4);
+
+  const auto tableBytes = chunks[0].tableOwner->alloc_size();
+  ASSERT_GT(tableBytes, 0);
+  size_t numRows = 0;
+  uint64_t numBytes = 0;
+  for (const auto& chunk : chunks) {
+    ASSERT_GT(chunk.size(), 0);
+    EXPECT_EQ(chunk.tableOwner, chunks[0].tableOwner);
+    // Each chunk's size is its share of the table by rows.
+    EXPECT_NEAR(
+        chunk.flatSize,
+        static_cast<double>(tableBytes) * chunk.size() / keys.size(),
+        1);
+    numRows += chunk.size();
+    numBytes += chunk.flatSize;
+  }
+  EXPECT_EQ(numRows, keys.size());
+  EXPECT_LE(numBytes, tableBytes);
 }
 
 TEST_F(PartitionedBufferedStateTest, deviceRoutingKeepsKeysTogether) {

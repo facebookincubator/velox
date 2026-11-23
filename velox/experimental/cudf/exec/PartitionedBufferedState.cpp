@@ -81,10 +81,18 @@ std::vector<InputChunk> routeChunkByHash(
       offsets.begin() + 1, offsets.end() - 1);
   auto views = cudf::split(tableOwner->view(), splits, input.stream);
   VELOX_CHECK_EQ(views.size(), chunks.size());
+  const auto bytesPerRow =
+      static_cast<double>(tableOwner->alloc_size()) / input.size();
   for (size_t i = 0; i < chunks.size(); ++i) {
     if (views[i].num_rows() > 0) {
       chunks[i] = InputChunk{
-          input.pool, input.type, views[i], input.stream, nullptr, tableOwner};
+          input.pool,
+          input.type,
+          views[i],
+          input.stream,
+          nullptr,
+          tableOwner,
+          static_cast<uint64_t>(bytesPerRow * views[i].num_rows())};
     }
   }
   return chunks;
@@ -97,6 +105,7 @@ PartitionedBufferedState::PartitionedBufferedState(
   VELOX_CHECK_NOT_NULL(ops_);
   VELOX_CHECK_GT(options_.maxRowsPerLeaf, 0);
   VELOX_CHECK_LE(options_.maxRowsPerLeaf, options_.hardMaxRowsPerLeaf);
+  VELOX_CHECK_GT(options_.maxBytesPerLeaf, 0);
   VELOX_CHECK_GE(options_.numBuckets, 2);
   // One leaf holds every bucket.
   leaves_.emplace_back();
@@ -183,7 +192,11 @@ void PartitionedBufferedState::insert(
   // split the leaf and the input together.
   const auto projectedRows = ops_->estimatedMergedRowUpperBound(
       *leaves_[leafIndex].state, bufferedInput);
-  if (projectedRows > options_.maxRowsPerLeaf) {
+  if (projectedRows > options_.maxRowsPerLeaf ||
+      (hasByteLimit() &&
+       ops_->estimatedMergedBytesUpperBound(
+           *leaves_[leafIndex].state, bufferedInput) >
+           options_.maxBytesPerLeaf)) {
     splitLeafAndAddInput(leafIndex, std::move(bufferedInput));
     return;
   }
@@ -225,9 +238,19 @@ void PartitionedBufferedState::splitLeafAndAddInput(
   }
 
   // Divide the leaf's buckets into as many equal parts as bring it within
-  // the limit if its rows are spread evenly over them.
-  const auto requiredChildren =
+  // the limits if its rows are spread evenly over them.
+  auto requiredChildren =
       (totalRows + options_.maxRowsPerLeaf - 1) / options_.maxRowsPerLeaf;
+  if (hasByteLimit()) {
+    const auto& state = *leaves_[leafIndex].state;
+    const auto totalBytes = bufferedInput.empty()
+        ? ops_->leafFlatSize(state)
+        : ops_->estimatedMergedBytesUpperBound(state, bufferedInput);
+    requiredChildren = std::max<size_t>(
+        requiredChildren,
+        totalBytes / options_.maxBytesPerLeaf +
+            (totalBytes % options_.maxBytesPerLeaf != 0));
+  }
   const auto numChildren =
       std::max<size_t>(2, std::min(requiredChildren, numLeafBuckets));
 
@@ -286,7 +309,12 @@ void PartitionedBufferedState::splitLeafAndAddInput(
 
 void PartitionedBufferedState::ensureLeafWithinLimit(size_t leafIndex) {
   const auto& leaf = leaves_[leafIndex];
-  if (leaf.state && leaf.rows > options_.maxRowsPerLeaf) {
+  if (!leaf.state) {
+    return;
+  }
+  if (leaf.rows > options_.maxRowsPerLeaf ||
+      (hasByteLimit() &&
+       ops_->leafFlatSize(*leaf.state) > options_.maxBytesPerLeaf)) {
     splitLeafAndAddInput(leafIndex, InputChunk{});
   }
 }
