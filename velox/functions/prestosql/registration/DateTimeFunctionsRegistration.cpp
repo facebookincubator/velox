@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+#include "velox/expression/SpecialFormRegistry.h"
 #include "velox/functions/Registerer.h"
+#include "velox/functions/prestosql/AtTimeZone.h"
 #include "velox/functions/prestosql/DateTimeFunctions.h"
 #include "velox/functions/prestosql/TimeIntervalYearMonth.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneRegistration.h"
@@ -92,8 +94,7 @@ void registerFromUnixtime(
 
 void registerSimpleFunctions(
     const std::string& prefix,
-    std::string_view defaultOwner,
-    bool ignoreTimeZoneLabel) {
+    std::string_view defaultOwner) {
   // Date time functions.
   registerFunction<ToUnixtimeFunction, double, Timestamp>(
       {prefix + "to_unixtime"}, {}, true, defaultOwner);
@@ -348,36 +349,6 @@ void registerSimpleFunctions(
   registerFunction<ToISO8601Function, Varchar, TimestampWithTimezone>(
       {prefix + "to_iso8601"}, {}, true, defaultOwner);
 
-  if (ignoreTimeZoneLabel) {
-    registerFunction<
-        AtTimezoneToTimestampFunction,
-        Timestamp,
-        TimestampWithTimezone,
-        Varchar>({prefix + "at_timezone"}, {}, true, defaultOwner);
-    registerFunction<
-        AtTimezoneFromTimestampToTimestampFunction,
-        Timestamp,
-        Timestamp,
-        Varchar>({prefix + "at_timezone"}, {}, true, defaultOwner);
-  } else {
-    registerFunction<
-        AtTimezoneFunction,
-        TimestampWithTimezone,
-        TimestampWithTimezone,
-        Varchar>({prefix + "at_timezone"}, {}, true, defaultOwner);
-    registerFunction<
-        AtTimezoneFromTimestampFunction,
-        TimestampWithTimezone,
-        Timestamp,
-        Varchar>({prefix + "at_timezone"}, {}, true, defaultOwner);
-  }
-
-  registerFunction<
-      AtTimezoneTimeWithTimezoneFunction,
-      TimeWithTimezone,
-      TimeWithTimezone,
-      Varchar>({prefix + "at_timezone"}, {}, true, defaultOwner);
-
   registerFunction<ToMillisecondFunction, int64_t, IntervalDayTime>(
       {prefix + "to_milliseconds"}, {}, true, defaultOwner);
 
@@ -404,6 +375,10 @@ void registerDateTimeFunctions(
     bool ignoreTimeZoneLabel) {
   registerTimestampWithTimeZoneType();
   registerTimeWithTimezoneType();
-  registerSimpleFunctions(prefix, defaultOwner, ignoreTimeZoneLabel);
+  registerSimpleFunctions(prefix, defaultOwner);
+  exec::registerFunctionCallToSpecialForm(
+      prefix + prestosql::kAtTimeZone,
+      std::make_unique<prestosql::AtTimeZoneCallToSpecialForm>(
+          prefix + prestosql::kAtTimeZone, ignoreTimeZoneLabel, defaultOwner));
 }
 } // namespace facebook::velox::functions

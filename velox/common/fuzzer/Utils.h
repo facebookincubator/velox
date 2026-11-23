@@ -211,21 +211,6 @@ int16_t generateRandomTimezoneOffset(
     FuzzerGenerator& rng,
     double frequentlyUsedProbability = 0.25);
 
-/// Convert timezone offset in minutes to "+HH:mm" or "-HH:mm" format
-/// Always uses Presto-compatible +HH:mm format (never +HH or +HHmm)
-///
-/// Examples:
-/// - 0 → "+00:00"
-/// - 330 → "+05:30"
-/// - -300 → "-05:00"
-/// - 840 → "+14:00"
-/// - -840 → "-14:00"
-///
-/// @param offsetMinutes Timezone offset in minutes [-840, 840]
-/// @return Timezone offset string in "+HH:mm" or "-HH:mm" format
-/// @throws VeloxException if offsetMinutes is out of range [-840, 840]
-std::string timezoneOffsetToString(int16_t offsetMinutes);
-
 template <
     typename T,
     typename std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
