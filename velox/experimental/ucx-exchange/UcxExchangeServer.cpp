@@ -233,6 +233,13 @@ void UcxExchangeServer::close() {
     dataRequest_->cancel();
   }
 
+  // A server that waits for data leaves its callback in the producer's queue.
+  // For a placeholder of a producer that never arrives, nothing else would
+  // remove it.
+  if (getState() == ServerState::WaitingForDataFromQueue) {
+    queueMgr_->releaseReader(partitionKey_.taskId, partitionKey_.destination);
+  }
+
   // Move all requests to the Communicator's deferred list so the GPU
   // buffers they reference (via their arg shared_ptr) stay alive until
   // UCX has fully processed any in-flight operations.

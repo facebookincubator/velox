@@ -300,6 +300,22 @@ bool UcxOutputQueue::checkBlocked(ContinueFuture* future) {
   return false;
 }
 
+bool UcxOutputQueue::releaseReader(int destination) {
+  std::lock_guard<std::mutex> l(mutex_);
+  if (destination >= 0 && static_cast<size_t>(destination) < queues_.size()) {
+    if (auto& queue = queues_[destination]) {
+      queue->clearNotify();
+    }
+  } else if (auto it = pendingQueues_.find(destination);
+             it != pendingQueues_.end() && it->second != nullptr) {
+    it->second->clearNotify();
+    if (task_ == nullptr) {
+      pendingQueues_.erase(it);
+    }
+  }
+  return task_ == nullptr && queues_.empty() && pendingQueues_.empty();
+}
+
 std::shared_ptr<exec::Task> UcxOutputQueue::task() {
   std::lock_guard<std::mutex> l(mutex_);
   return task_;

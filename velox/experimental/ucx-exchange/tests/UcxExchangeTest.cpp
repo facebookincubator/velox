@@ -1205,6 +1205,74 @@ TEST_F(UcxExchangeFocusedTest, endpointClosedMidStreamFailsConsumer) {
   exchange.close();
 }
 
+// A consumer can connect to a producer task that is never created on the
+// worker, for instance when its query was aborted while the task was being
+// scheduled. The consumer's server then waits on a placeholder queue that no
+// task will initialize or remove. When the connection fails, the server
+// closes, and the placeholder must go with it.
+TEST_F(UcxExchangeFocusedTest, endpointFailureDropsPlaceholder) {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool previousIntraNode = config.intraNodeExchange;
+  config.intraNodeExchange = false;
+  auto restoreIntraNode =
+      folly::makeGuard([&]() { config.intraNodeExchange = previousIntraNode; });
+
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "neverCreatedSrc";
+  const int partitionId = 0;
+  auto rowType = UcxTestData::kTestRowType;
+
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask = createExchangeTask(
+      taskPrefix + "neverCreatedSink", rowType, partitionId, exchangeNodeId);
+  auto exchangeClient = std::make_shared<UcxExchangeClient>(
+      sinkTask->taskId(), sinkTask->destination(), /*numberOfConsumers=*/1);
+  auto split = remoteSplit(srcTaskId, partitionId);
+  exchangeClient->addRemoteTaskId(
+      std::dynamic_pointer_cast<exec::RemoteConnectorSplit>(
+          split.connectorSplit)
+          ->taskId);
+  exchangeClient->noMoreRemoteTasks();
+  auto driverCtx = std::make_shared<DriverCtx>(
+      sinkTask,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      kUngroupedGroupId,
+      /*partitionId=*/0);
+  UcxExchange exchange(
+      0, driverCtx.get(), sinkTask->planFragment().planNode, exchangeClient);
+  // Starts the source, which connects to the producer's worker.
+  ContinueFuture future = ContinueFuture::makeEmpty();
+  exchange.isBlocked(&future);
+
+  // The server asked for data and left a placeholder.
+  const auto waitFor = [](const std::function<bool()>& done) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (!done()) {
+      if (std::chrono::steady_clock::now() > deadline) {
+        return false;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return true;
+  };
+  ASSERT_TRUE(
+      waitFor([&]() { return queueManager()->stats(srcTaskId).has_value(); }));
+
+  // Fail the connection the way a dead peer does.
+  auto communicator = Communicator::getInstance();
+  auto endpoint = communicator->assocEndpointRef(
+      nullptr, HostPort{"127.0.0.1", communicator->getListenerPort()});
+  ASSERT_NE(endpoint, nullptr);
+  communicator->deferEndpointCleanup(endpoint);
+
+  EXPECT_TRUE(waitFor([&]() {
+    return !queueManager()->stats(srcTaskId).has_value();
+  })) << "The placeholder outlived the server that waited on it";
+  exchange.close();
+}
+
 // A producer the consumer cannot connect to must fail the consumer, rather than
 // end its stream as if the producer had sent nothing. The host name below is
 // rejected by getaddrinfo locally, without a DNS round trip, so endpoint

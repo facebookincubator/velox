@@ -148,6 +148,9 @@ class UcxDestinationQueue {
   /// the callback.
   UcxDataAvailable getAndClearNotify();
 
+  /// Forgets the waiting reader's callback, if any.
+  void clearNotify();
+
   /// Finishes this destination buffer, set finished stats.
   void finish();
 
@@ -157,8 +160,6 @@ class UcxDestinationQueue {
   std::string toString();
 
  private:
-  void clearNotify();
-
   // A queued page and the logical row count the producer gave it. Paired here
   // rather than recovered from the page, which reports no rows when it has no
   // columns.
@@ -293,6 +294,13 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// through IntraNodeTransferRegistry. Each page it receives counts as
   /// undelivered until intraNodePageRetrieved().
   void getIntraNodeData(int destination, UcxDataAvailableCallback notify);
+
+  /// @brief Forgets the reader of 'destination' whose server closed. A
+  /// placeholder also drops that reader's pending entry; an initialized queue
+  /// keeps it, and only loses the callback. Entries that mark deleted results
+  /// stay.
+  /// @return True if this is a placeholder that no reader waits on.
+  bool releaseReader(int destination);
 
   /// @brief Records that the consumer of 'destination' read a page it got
   /// through getIntraNodeData().

@@ -614,6 +614,108 @@ TEST_F(UcxOutputQueueManagerTest, pendingReadersBeforeInitialization) {
   }
 }
 
+// A server that closes while it waits on a placeholder leaves nothing that
+// would ever remove the placeholder if its producer never arrives. Releasing
+// the last reader drops it, and the task can still be initialized later.
+TEST_F(UcxOutputQueueManagerTest, releasingLastReaderDropsPlaceholder) {
+  const std::string taskId = "placeholderWithClosedReaders";
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  bool fired{false};
+  auto receive = [&fired](
+                     std::shared_ptr<cudf::packed_columns> /*data*/,
+                     vector_size_t /*numRows*/,
+                     std::vector<int64_t> /*remainingBytes*/,
+                     std::optional<std::string> /*error*/) { fired = true; };
+  queueManager_->getData(taskId, 0, receive);
+  queueManager_->getData(taskId, 1, receive);
+  ASSERT_TRUE(queueManager_->stats(taskId).has_value());
+
+  queueManager_->releaseReader(taskId, 0);
+  EXPECT_TRUE(queueManager_->stats(taskId).has_value());
+  queueManager_->releaseReader(taskId, 1);
+  EXPECT_FALSE(queueManager_->stats(taskId).has_value());
+  EXPECT_FALSE(fired);
+
+  auto task = initializeTask(
+      taskId, /*numDestinations=*/1, /*numDrivers=*/1, /*cleanup=*/false);
+  enqueue(taskId, /*size=*/10);
+  noMoreData(taskId);
+  fetch(taskId, 0);
+  fetchEndMarker(taskId, 0);
+  EXPECT_TRUE(queueManager_->isFinished(taskId));
+  EXPECT_FALSE(fired);
+  queueManager_->removeTask(taskId);
+}
+
+// A call that holds the placeholder for another reason, as the host's
+// monitoring does through stats(), must not keep it once its last reader is
+// released: nothing would try to drop it again.
+DEBUG_ONLY_TEST_F(
+    UcxOutputQueueManagerTest,
+    placeholderHeldByStatsIsDroppedWithLastReader) {
+  const std::string taskId = "placeholderHeldByStats";
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  queueManager_->getData(
+      taskId,
+      0,
+      [](std::shared_ptr<cudf::packed_columns> /*data*/,
+         vector_size_t /*numRows*/,
+         std::vector<int64_t> /*remainingBytes*/,
+         std::optional<std::string> /*error*/) {});
+  bool released{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::ucx_exchange::UcxOutputQueueManager::stats",
+      std::function<void(UcxOutputQueueManager*)>(
+          [&](UcxOutputQueueManager* manager) {
+            if (!released) {
+              released = true;
+              manager->releaseReader(taskId, 0);
+            }
+          }));
+
+  EXPECT_TRUE(queueManager_->stats(taskId).has_value());
+  ASSERT_TRUE(released);
+  EXPECT_FALSE(queueManager_->stats(taskId).has_value());
+}
+
+// getData() installs its reader on a placeholder after it released the queue
+// manager's lock. Releasing the placeholder's last other reader in between
+// must keep it, or the arriving reader would wait on a queue no producer can
+// find.
+DEBUG_ONLY_TEST_F(UcxOutputQueueManagerTest, arrivingReaderKeepsPlaceholder) {
+  const std::string taskId = "placeholderWithArrivingReader";
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  queueManager_->getData(
+      taskId,
+      1,
+      [](std::shared_ptr<cudf::packed_columns> /*data*/,
+         vector_size_t /*numRows*/,
+         std::vector<int64_t> /*remainingBytes*/,
+         std::optional<std::string> /*error*/) {});
+  bool released{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::ucx_exchange::UcxOutputQueueManager::getData::beforeInstall",
+      std::function<void(UcxOutputQueueManager*)>(
+          [&](UcxOutputQueueManager* manager) {
+            if (!released) {
+              released = true;
+              manager->releaseReader(taskId, 1);
+            }
+          }));
+  bool receivedData{false};
+  queueManager_->getData(taskId, 0, receiveData(0, receivedData));
+  ASSERT_TRUE(released);
+  ASSERT_TRUE(queueManager_->stats(taskId).has_value());
+
+  auto task = initializeTask(
+      taskId, /*numDestinations=*/1, /*numDrivers=*/1, /*cleanup=*/false);
+  enqueue(taskId, /*size=*/10);
+  EXPECT_TRUE(receivedData);
+  noMoreData(taskId);
+  fetchEndMarker(taskId, 0);
+  queueManager_->removeTask(taskId);
+}
+
 TEST_F(UcxOutputQueueManagerTest, multiFetchers) {
   const std::vector<bool> earlyTerminations = {false, true};
   for (const auto earlyTermination : earlyTerminations) {

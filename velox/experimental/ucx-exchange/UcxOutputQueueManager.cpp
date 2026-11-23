@@ -49,9 +49,9 @@ void UcxOutputQueueManager::initializeTask(
       common::testutil::TestValue::adjust(
           "facebook::velox::ucx_exchange::UcxOutputQueueManager::initializeTask",
           task.get());
-      auto it = queues.find(taskId);
-      if (it == queues.end()) {
-        queues[taskId] = std::make_shared<UcxOutputQueue>(
+      auto it = queues.byTaskId.find(taskId);
+      if (it == queues.byTaskId.end()) {
+        queues.byTaskId[taskId] = std::make_shared<UcxOutputQueue>(
             std::move(task), numDestinations, numDrivers, kind);
       } else {
         if (!it->second->initialize(
@@ -148,11 +148,12 @@ void UcxOutputQueueManager::getDataImpl(
     bool intraNode) {
   std::shared_ptr<UcxOutputQueue> outputQueue;
   bool taskRemoved = false;
+  bool arrivingAtPlaceholder = false;
   std::optional<std::string> producerError;
   std::string taskIdStr{taskId};
   queues_.withLock([&](auto& queues) {
-    auto it = queues.find(taskIdStr);
-    if (it == queues.end()) {
+    auto it = queues.byTaskId.find(taskIdStr);
+    if (it == queues.byTaskId.end()) {
       // Late readers of removed tasks must receive EOS, with the reason the
       // task was removed with, rather than wait on a new placeholder.
       if (removedTasks_.withLock([&](auto& removed) {
@@ -174,17 +175,35 @@ void UcxOutputQueueManager::getDataImpl(
           << "[QUEUE-MGR] task=" << taskId << " dest=" << destination
           << " creating placeholder queue (server arrived before task init)";
       outputQueue = std::make_shared<UcxOutputQueue>(nullptr, 0, 0);
-      queues[taskIdStr] = outputQueue;
+      queues.byTaskId[taskIdStr] = outputQueue;
     } else {
       // queue exists.
       outputQueue = it->second;
     }
+    if (!outputQueue->isInitialized()) {
+      ++queues.numArrivingReaders[outputQueue.get()];
+      arrivingAtPlaceholder = true;
+    }
+  });
+  auto arrived = folly::makeGuard([&]() {
+    if (!arrivingAtPlaceholder) {
+      return;
+    }
+    queues_.withLock([&](auto& queues) {
+      auto it = queues.numArrivingReaders.find(outputQueue.get());
+      if (--it->second == 0) {
+        queues.numArrivingReaders.erase(it);
+      }
+    });
   });
   if (taskRemoved) {
     // Fire callback immediately with the end marker the task was removed with.
     notify(nullptr, /*numRows=*/0, {}, std::move(producerError));
     return;
   }
+  common::testutil::TestValue::adjust(
+      "facebook::velox::ucx_exchange::UcxOutputQueueManager::getData::beforeInstall",
+      this);
   // outside of lock. Queue must exist.
   // get the data or install the notify callback.
   if (intraNode) {
@@ -201,6 +220,21 @@ void UcxOutputQueueManager::intraNodePageRetrieved(
   if (auto queue = getQueueIfExists(taskId)) {
     queue->intraNodePageRetrieved(destination);
   }
+}
+
+void UcxOutputQueueManager::releaseReader(
+    std::string_view taskId,
+    int destination) {
+  queues_.withLock([&](auto& queues) {
+    auto it = queues.byTaskId.find(std::string{taskId});
+    if (it == queues.byTaskId.end() ||
+        !it->second->releaseReader(destination)) {
+      return;
+    }
+    if (!queues.numArrivingReaders.contains(it->second.get())) {
+      queues.byTaskId.erase(it);
+    }
+  });
 }
 
 bool UcxOutputQueueManager::canUseIntraNode(std::string_view taskId) {
@@ -265,13 +299,13 @@ void UcxOutputQueueManager::removeTask(const std::string& taskId) {
         "facebook::velox::ucx_exchange::UcxOutputQueueManager::removeTask::afterProducerError",
         this);
     decided = queues_.withLock([&](auto& queues) {
-      auto it = queues.find(taskIdStr);
-      auto currentQueue = it == queues.end() ? nullptr : it->second;
+      auto it = queues.byTaskId.find(taskIdStr);
+      auto currentQueue = it == queues.byTaskId.end() ? nullptr : it->second;
       if (currentQueue != expectedQueue) {
         expectedQueue = std::move(currentQueue);
         return false;
       }
-      if (it == queues.end()) {
+      if (it == queues.byTaskId.end()) {
         // The task never created its queue, as when initializeTask() threw
         // before registering one. A consumer that arrives later must fail
         // rather than wait on a placeholder that no task will remove, and the
@@ -286,7 +320,7 @@ void UcxOutputQueueManager::removeTask(const std::string& taskId) {
         });
         return true;
       }
-      queues.erase(it);
+      queues.byTaskId.erase(it);
       // Insert into removedTasks_ while still holding the queues_ lock
       // to prevent getData() from seeing a gap between erase and insert,
       // which would cause it to create a zombie placeholder queue.
@@ -316,8 +350,8 @@ std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueueIfExists(
     std::string_view taskId) {
   std::string taskIdStr{taskId};
   return queues_.withLock([&](auto& queues) {
-    auto it = queues.find(taskIdStr);
-    return it == queues.end() ? nullptr : it->second;
+    auto it = queues.byTaskId.find(taskIdStr);
+    return it == queues.byTaskId.end() ? nullptr : it->second;
   });
 }
 
@@ -325,9 +359,11 @@ std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueue(
     std::string_view taskId) {
   std::string taskIdStr{taskId};
   return queues_.withLock([&](auto& queues) {
-    auto it = queues.find(taskIdStr);
+    auto it = queues.byTaskId.find(taskIdStr);
     VELOX_CHECK(
-        it != queues.end(), "Output cudf queue for task not found: {}", taskId);
+        it != queues.byTaskId.end(),
+        "Output cudf queue for task not found: {}",
+        taskId);
     return it->second;
   });
 }
@@ -336,6 +372,8 @@ std::optional<exec::OutputBuffer::Stats> UcxOutputQueueManager::stats(
     const std::string& taskId) {
   auto queue = getQueueIfExists(taskId);
   if (queue != nullptr) {
+    common::testutil::TestValue::adjust(
+        "facebook::velox::ucx_exchange::UcxOutputQueueManager::stats", this);
     return queue->stats();
   }
   return std::nullopt;

@@ -124,6 +124,11 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
       int destination,
       UcxDataAvailableCallback notify);
 
+  /// @brief Forgets the reader of 'destination' of a server that closed, so
+  /// that the task's queue keeps no callback of a server that is gone. Drops a
+  /// placeholder queue once no reader waits on it.
+  void releaseReader(std::string_view taskId, int destination);
+
   /// @brief Records that the consumer of 'destination' read a page it got
   /// through getIntraNodeData(). Called from IntraNodeTransferRegistry::poll()
   /// under the registry lock, so it must not throw or call into the registry.
@@ -173,10 +178,17 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
       UcxDataAvailableCallback notify,
       bool intraNode);
 
-  folly::Synchronized<
-      std::unordered_map<std::string, std::shared_ptr<UcxOutputQueue>>,
-      std::mutex>
-      queues_;
+  // The queues of the tasks, and what releaseReader() must know about them.
+  struct Queues {
+    std::unordered_map<std::string, std::shared_ptr<UcxOutputQueue>> byTaskId;
+    // How many getData() calls hold a placeholder whose reader they have not
+    // installed yet. They take the placeholder under the lock and install
+    // their reader after releasing it, so releaseReader() must keep a
+    // placeholder that has any.
+    std::unordered_map<const UcxOutputQueue*, int> numArrivingReaders;
+  };
+
+  folly::Synchronized<Queues, std::mutex> queues_;
 
   // What a removal leaves behind for consumers that arrive after it.
   struct RemovedTask {
