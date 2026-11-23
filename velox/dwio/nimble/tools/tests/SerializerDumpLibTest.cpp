@@ -18,6 +18,7 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/SchemaReader.h"
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
 #include "velox/dwio/nimble/tools/SerializerDumpLib.h"
 #include "velox/vector/ComplexVector.h"
@@ -93,6 +94,30 @@ TEST_F(SerializerDumpLibTest, basicStats) {
   auto str = dump.toString();
   EXPECT_FALSE(str.empty());
   EXPECT_NE(str.find("Nimble encoding dump"), std::string::npos);
+}
+
+TEST_F(SerializerDumpLibTest, rejectsBlob) {
+  auto type = velox::ROW({"x"}, {velox::INTEGER()});
+  Serializer serializer{
+      SerializerOptions{.version = SerializationVersion::kBlob},
+      type,
+      leafPool_.get()};
+  auto values = velox::BaseVector::create(velox::INTEGER(), 3, leafPool_.get());
+  auto* flatValues = values->asFlatVector<int32_t>();
+  for (int i = 0; i < 3; ++i) {
+    flatValues->set(i, i);
+  }
+  auto rowVector = std::make_shared<velox::RowVector>(
+      leafPool_.get(), type, nullptr, 3, std::vector<velox::VectorPtr>{values});
+  const std::string serialized(
+      serializer.serialize(rowVector, OrderedRanges::of(0, rowVector->size())));
+
+  tools::SerializationDump dump(
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()),
+      leafPool_.get());
+  NIMBLE_ASSERT_THROW(
+      dump.addSerialization(serialized),
+      "SerializationDump does not read kBlob blobs yet");
 }
 
 TEST_F(SerializerDumpLibTest, multipleSerializations) {

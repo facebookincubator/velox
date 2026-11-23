@@ -133,20 +133,35 @@ class Config : public velox::config::ConfigBase {
   /// policy, leaving the writer on the flush-policy path.
   ///
   /// Currently supported:
-  ///   type:user_sequence[,user_id_column:<name>|,user_id_column_index:<n>]
+  ///   type:user_sequence[,grouping_columns:<name>;<name>;...]
+  ///                     [,user_id_column:<name>|,user_id_column_index:<n>]
   ///                     [,max_rows_per_stripe:<n>]
-  ///       Cuts a stripe at every change of an int64 grouping column, with an
-  ///       optional hard row cap 'max_rows_per_stripe' (default 0, meaning
-  ///       uncapped). Each emitted stripe therefore holds rows for exactly one
-  ///       key, which is what the cluster-index read path expects. See
+  ///                     [,target_groups_per_stripe:<n>]
+  ///       Cuts a stripe at every change of the grouping columns.
+  ///       'max_rows_per_stripe' caps the rows of each stripe, so a group with
+  ///       more rows spans several stripes; 0 (default) sets no cap.
+  ///       'target_groups_per_stripe' (default 1, must be positive) packs that
+  ///       many contiguous groups into a stripe before a group change cuts it.
+  ///       With the defaults, each emitted stripe holds rows for exactly one
+  ///       group, which is what the cluster-index read path expects. See
   ///       UserSequenceBufferPolicy.h.
   ///
-  ///       Address the grouping column by 'user_id_column' (a name, matching
-  ///       how nimble.index.columns is spelled) or by 'user_id_column_index'
-  ///       (a zero-based position, default 0). Supplying both is an error.
-  ///       Prefer the name: this column must be the same one the cluster index
-  ///       is keyed on, and a position silently follows a reordered projection
-  ///       onto a different column.
+  ///       'grouping_columns' names, in order, the columns whose value tuple
+  ///       identifies a group, e.g. "grouping_columns:user_id;event_type" cuts
+  ///       at every change of user ID or event type. Columns may be of any
+  ///       type and must not repeat.
+  ///
+  ///       Without 'grouping_columns', the group is one BIGINT user ID column,
+  ///       addressed by 'user_id_column' (a name) or by 'user_id_column_index'
+  ///       (a zero-based position, default 0). Supplying both, or either with
+  ///       'grouping_columns', is an error. These spellings predate
+  ///       'grouping_columns' and stay because Sequence Storage tables persist
+  ///       'user_id_column' in their serde params.
+  ///
+  ///       Name columns as nimble.index.columns spells them: the grouping
+  ///       columns must be the ones the cluster index is keyed on, and a
+  ///       position silently follows a reordered projection onto a different
+  ///       column.
   ///
   /// NOTE: buffer and flush policies are mutually exclusive. When a buffer
   /// policy is installed Writer routes every write() through it and never
@@ -211,6 +226,23 @@ class Config : public velox::config::ConfigBase {
   // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
   static Entry<bool> INDEX_OMIT_KEY_COLUMN_STORAGE;
 
+  /// Names the registered cluster index to build. Empty (default) selects the
+  /// built-in cluster index. Settings that only some indexes take go in
+  /// nimble.index.properties.
+  /// Requires nimble.index.columns when non-empty.
+  /// EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
+  /// production tables without consulting the Nimble team (oncall: dwios).
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<std::string> INDEX_NAME;
+
+  /// Configures the cluster index that nimble.index.name selects, as
+  /// comma-separated "key:value" pairs (mirrors nimble.buffer_policy_config).
+  /// Each index takes its own keys, so the writer that builds the index
+  /// validates them. Empty (default) sets none.
+  /// Requires nimble.index.columns when non-empty.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<std::string> INDEX_PROPERTIES;
+
   // EXPERIMENTAL: BlockBitPacking encoding is not production-ready. Do not
   // enable for production tables without consulting the Nimble team
   // (oncall: dwios).
@@ -244,11 +276,25 @@ class Config : public velox::config::ConfigBase {
   /// compression outright.
   static Entry<uint32_t> METADATA_COMPRESSION_THRESHOLD;
 
+  /// Closes a stripe group once its estimated metadata reaches this many bytes;
+  /// see WriterOptions::metadataFlushThreshold. Unset leaves the writer's own
+  /// threshold (kMetadataFlushThreshold, 8MB); 0 closes a stripe group after
+  /// every stripe.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<uint32_t> METADATA_FLUSH_THRESHOLD;
+
   /// Selects how per-stripe-group stream offsets/sizes are serialized:
   /// "raw" (default, readable by all readers) or "stream_major".
   /// EXPERIMENTAL: see WriterOptions::experimentalStripeGroupEncodingLayout.
   // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
   static Entry<std::string> STRIPE_GROUP_ENCODING_LAYOUT;
+
+  /// Enables the sparse layout for "stream_major" stripe groups: each stream
+  /// holds its stripe list, and offsets and sizes only for the stripes where
+  /// it has data.
+  /// EXPERIMENTAL: see WriterOptions::experimentalStripeGroupSparseLayout.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<bool> STRIPE_GROUP_SPARSE_LAYOUT;
 
   /// Minimum average chunks per stripe before chunk stats are written.
   /// Only consulted when nimble.chunk.index.enabled is true.
@@ -277,6 +323,23 @@ class Config : public velox::config::ConfigBase {
   /// Sorts integer dictionary alphabets by value so they can be stored by
   /// their gaps. See WriterOptions::sortDictionaryAlphabet.
   static Entry<bool> SORT_DICTIONARY_ALPHABET;
+
+  /// Stores eligible FixedBitWidth chunks as typed lanes. Maps to
+  /// WriterOptions::fixedBitWidthTypedLanes. Off by default.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<bool> FIXED_BIT_WIDTH_TYPED_LANES;
+
+  /// Minimum number of values in a chunk for typed lanes, at least 1. Maps to
+  /// WriterOptions::fixedBitWidthTypedLanesMinValues; default 256.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<uint64_t> FIXED_BIT_WIDTH_TYPED_LANES_MIN_VALUES;
+
+  /// MetaInternal compression level for FixedBitWidth chunks that take typed
+  /// lanes, in [1, 9]; 0 (default) keeps the table's level. Requires
+  /// MetaInternal compression. Maps to
+  /// WriterOptions::fixedBitWidthTypedLanesOpenzlLevel.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<uint32_t> FIXED_BIT_WIDTH_TYPED_LANES_OPENZL_LEVEL_OVERRIDE;
 
   /// Omits in-map streams for FlatMap features whose in-map flag is constant,
   /// which is the common case for dense feature sets.

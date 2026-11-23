@@ -176,6 +176,48 @@ TEST_F(SliceTest, varcharVariableInput) {
       expectedArrayVector);
 }
 
+TEST_F(SliceTest, variableInputDoesNotModifyArrayElements) {
+  // The input vector may be shared with other drivers evaluating the same
+  // expression, so slice() must not change it, including the encoding of its
+  // elements.
+  auto elements = wrapInDictionary(
+      makeIndicesInReverse(6),
+      makeFlatVector<std::string>({"a", "b", "c", "d", "e", "f"}));
+  auto arrayVector = makeArrayVector({0, 3}, elements);
+  auto startsVector = makeFlatVector<int64_t>({2, 1});
+  auto lengthsVector = makeFlatVector<int64_t>({2, 1});
+
+  auto expected = makeArrayVector<std::string>({{"e", "d"}, {"c"}});
+  testSlice(
+      "slice(C0, C1, C2)",
+      {arrayVector, startsVector, lengthsVector},
+      expected);
+
+  EXPECT_EQ(arrayVector->elements(), elements);
+}
+
+TEST_F(SliceTest, dictionaryInputWithVariableStart) {
+  // Rows 0 and 1 share an array, as do rows 2 and 3. slice() must not return
+  // overlapping ranges for them, and must not change the shared input.
+  auto elements = wrapInDictionary(
+      makeIndicesInReverse(6),
+      makeFlatVector<std::string>({"a", "b", "c", "d", "e", "f"}));
+  auto arrayVector = makeArrayVector({0, 3}, elements);
+  auto dictionaryVector =
+      wrapInDictionary(makeIndices({0, 0, 1, 1}), arrayVector);
+  auto startsVector = makeFlatVector<int64_t>({1, 2, 1, 3});
+  auto lengthsVector = makeFlatVector<int64_t>({2, 2, 1, 1});
+
+  auto expected =
+      makeArrayVector<std::string>({{"f", "e"}, {"e", "d"}, {"c"}, {"a"}});
+  testSlice(
+      "slice(C0, C1, C2)",
+      {dictionaryVector, startsVector, lengthsVector},
+      expected);
+
+  EXPECT_EQ(arrayVector->elements(), elements);
+}
+
 TEST_F(SliceTest, allIndicesGreaterThanArraySize) {
   auto startsVector = makeFlatVector<int64_t>(
       kVectorSize, [](vector_size_t /*row*/) { return 8; });

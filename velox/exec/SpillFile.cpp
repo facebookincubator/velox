@@ -158,6 +158,7 @@ std::unique_ptr<SpillReadFile> SpillReadFile::create(
     const SpillFileInfo& fileInfo,
     uint64_t bufferSize,
     memory::MemoryPool* pool,
+    folly::Executor* readAheadExecutor,
     exec::SpillStats* stats) {
   return std::unique_ptr<SpillReadFile>(new SpillReadFile(
       fileInfo.id,
@@ -168,6 +169,7 @@ std::unique_ptr<SpillReadFile> SpillReadFile::create(
       fileInfo.sortingKeys,
       fileInfo.compressionKind,
       pool,
+      readAheadExecutor,
       stats));
 }
 
@@ -180,6 +182,7 @@ SpillReadFile::SpillReadFile(
     const std::vector<SpillSortKey>& sortingKeys,
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
+    folly::Executor* readAheadExecutor,
     exec::SpillStats* stats)
     : serializer::SerializedPageFileReader(
           path,
@@ -193,6 +196,7 @@ SpillReadFile::SpillReadFile(
               0.8,
               /*_nullsFirst=*/true),
           pool,
+          readAheadExecutor,
           &stats->ioStats),
       id_(id),
       path_(path),

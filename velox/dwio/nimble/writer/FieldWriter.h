@@ -281,6 +281,19 @@ class FieldWriterContext {
     deduplicatedMapNodeIds_.reserve(size);
   }
 
+  inline folly::F14FastSet<uint32_t>& slidingWindowArrayNodeIds() {
+    return slidingWindowArrayNodeIds_;
+  }
+
+  inline bool hasSlidingWindowArrayNodeId(uint32_t nodeId) const {
+    return slidingWindowArrayNodeIds_.contains(nodeId);
+  }
+
+  inline void clearAndReserveSlidingWindowArrayNodeIds(size_t size) {
+    slidingWindowArrayNodeIds_.clear();
+    slidingWindowArrayNodeIds_.reserve(size);
+  }
+
   inline bool ignoreTopLevelNulls() const {
     return ignoreTopLevelNulls_;
   }
@@ -527,6 +540,7 @@ class FieldWriterContext {
   folly::F14FastMap<uint32_t, std::set<std::string>> flatMapNodes_;
   folly::F14FastSet<uint32_t> dictionaryArrayNodeIds_;
   folly::F14FastSet<uint32_t> deduplicatedMapNodeIds_;
+  folly::F14FastSet<uint32_t> slidingWindowArrayNodeIds_;
   bool ignoreTopLevelNulls_{false};
   bool disableSharedStringBuffers_{false};
   uint32_t maxFlatMapKeys_{kDefaultMaxFlatMapKeys};

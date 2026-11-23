@@ -61,6 +61,10 @@ bool Type::isArrayWithOffsets() const {
   return kind_ == Kind::ArrayWithOffsets;
 }
 
+bool Type::isSlidingWindowArray() const {
+  return kind_ == Kind::SlidingWindowArray;
+}
+
 bool Type::isMap() const {
   return kind_ == Kind::Map;
 }
@@ -111,6 +115,14 @@ const ArrayWithOffsetsType& Type::asArrayWithOffsets() const {
       "Cannot cast to ArrayWithOffsets. Current type is {}.",
       toString(kind_));
   return dynamic_cast<const ArrayWithOffsetsType&>(*this);
+}
+
+const SlidingWindowArrayType& Type::asSlidingWindowArray() const {
+  NIMBLE_CHECK(
+      isSlidingWindowArray(),
+      "Cannot cast to SlidingWindowArray. Current type is {}.",
+      toString(kind_));
+  return dynamic_cast<const SlidingWindowArrayType&>(*this);
 }
 
 const MapType& Type::asMap() const {
@@ -469,6 +481,28 @@ const std::shared_ptr<const Type>& ArrayWithOffsetsType::elements() const {
   return elements_;
 }
 
+SlidingWindowArrayType::SlidingWindowArrayType(
+    StreamDescriptor offsetsDescriptor,
+    StreamDescriptor lengthsDescriptor,
+    std::shared_ptr<const Type> elements,
+    std::vector<std::pair<std::string, std::string>> attributes)
+    : Type(Kind::SlidingWindowArray, std::move(attributes)),
+      offsetsDescriptor_{std::move(offsetsDescriptor)},
+      lengthsDescriptor_{std::move(lengthsDescriptor)},
+      elements_{std::move(elements)} {}
+
+const StreamDescriptor& SlidingWindowArrayType::offsetsDescriptor() const {
+  return offsetsDescriptor_;
+}
+
+const StreamDescriptor& SlidingWindowArrayType::lengthsDescriptor() const {
+  return lengthsDescriptor_;
+}
+
+const std::shared_ptr<const Type>& SlidingWindowArrayType::elements() const {
+  return elements_;
+}
+
 namespace {
 
 // Moves the value of HybridFlatMapType::kAttributeName, which must appear once,
@@ -703,6 +737,21 @@ NamedType getType(
               std::move(attributes)),
           .name = node.name()};
     }
+    case Kind::SlidingWindowArray: {
+      const auto& offsetsNode = nodes[index++];
+      NIMBLE_CHECK_FILE(
+          offsetsNode.kind() == Kind::Scalar &&
+              offsetsNode.scalarKind() == ScalarKind::UInt32,
+          "Sliding window array offsets must have a uint32 scalar type.");
+      auto elements = getType(index, nodes, pool).type;
+      return {
+          .type = std::make_shared<SlidingWindowArrayType>(
+              StreamDescriptor{offsetsNode.offset(), offsetsNode.scalarKind()},
+              StreamDescriptor{offset, ScalarKind::UInt32},
+              std::move(elements),
+              std::move(attributes)),
+          .name = node.name()};
+    }
 
     default: {
       NIMBLE_UNREACHABLE("Unknown node kind: ", toString(kind));
@@ -767,6 +816,15 @@ void traverseSchema(
           visitor,
           {.name = "elements", .parentType = type.get()});
 
+      break;
+    }
+    case Kind::SlidingWindowArray: {
+      traverseSchema(
+          index,
+          level + 1,
+          type->asSlidingWindowArray().elements(),
+          visitor,
+          {.name = "elements", .parentType = type.get()});
       break;
     }
     case Kind::Map: {
@@ -866,6 +924,11 @@ std::ostream& operator<<(
           out << "[o:" << array.offsetsDescriptor().offset()
               << ",l:" << array.lengthsDescriptor().offset() << "]"
               << "OFFSETARRAY\n";
+        } else if (type.isSlidingWindowArray()) {
+          const auto& array = type.asSlidingWindowArray();
+          out << "[o:" << array.offsetsDescriptor().offset()
+              << ",l:" << array.lengthsDescriptor().offset() << "]"
+              << "SLIDINGWINDOWARRAY\n";
         } else if (type.isRow()) {
           auto& row = type.asRow();
           out << "[" << row.nullsDescriptor().offset() << "]" << "ROW[";

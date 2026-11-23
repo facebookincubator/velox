@@ -53,6 +53,10 @@ namespace {
 constexpr std::string_view kCustomClusterIndexName{"test.cluster.v1"};
 constexpr std::string_view kReverseOrderClusterIndexName{
     "test.cluster.reverse_order.v1"};
+constexpr std::string_view kMissingIndexStreamClusterIndexName{
+    "test.cluster.missing_index_stream.v1"};
+constexpr std::string_view kInvalidIndexStreamsClusterIndexName{
+    "test.cluster.invalid_index_streams.v1"};
 constexpr std::string_view kCustomDenseIndexName{"test.dense.v1"};
 constexpr std::string_view kValidationDenseIndexName{
     "test.dense.validation.v1"};
@@ -100,7 +104,7 @@ class TestClusterIndexFactory final : public ClusterIndexFactory {
         EncodingLayout{EncodingType::Prefix, {}, CompressionType::Uncompressed},
         10'000,
         CompressionType::Uncompressed,
-        /*hierarchicalKeyEncodingReadFactors=*/{}};
+        /*trieKeyEncodingReadFactors=*/{}};
     return ClusterIndexWriter::create(
         builtInConfig, inputType, pool, writerOptions);
   }
@@ -155,7 +159,7 @@ class ReverseOrderClusterIndexFactory final : public ClusterIndexFactory {
         EncodingLayout{EncodingType::Prefix, {}, CompressionType::Uncompressed},
         /*maxRowsPerKeyChunk=*/4,
         CompressionType::Uncompressed,
-        /*hierarchicalKeyEncodingReadFactors=*/{}};
+        /*trieKeyEncodingReadFactors=*/{}};
     return ClusterIndexWriter::create(
         builtInConfig, inputType, pool, writerOptions);
   }
@@ -186,6 +190,93 @@ class ReverseOrderClusterIndexFactory final : public ClusterIndexFactory {
   const ReverseKeyComparator comparator_;
 };
 
+// Asks for two index streams of each stripe in the Stripe key stream layout,
+// but writes the cluster index of TestClusterIndexFactory, which stores data
+// only in the first: its key stream.
+class MissingIndexStreamClusterIndexFactory final : public ClusterIndexFactory {
+ public:
+  std::string_view name() const override {
+    return kMissingIndexStreamClusterIndexName;
+  }
+
+  uint32_t numIndexStreams(KeyStreamLayout keyStreamLayout) const override {
+    return keyStreamLayout == KeyStreamLayout::kStripe ? 2 : 0;
+  }
+
+  std::unique_ptr<IndexWriter> createWriter(
+      const IndexConfig& config,
+      const velox::TypePtr& inputType,
+      velox::memory::MemoryPool* pool,
+      const Options& writerOptions) const override {
+    NIMBLE_CHECK_EQ(writerOptions.indexStreamIds.size(), 2);
+    return clusterIndexFactory(kCustomClusterIndexName)
+        .createWriter(
+            config,
+            inputType,
+            pool,
+            {.keyStreamLayout = writerOptions.keyStreamLayout,
+             .indexStreamIds = {writerOptions.indexStreamIds.front()}});
+  }
+
+  std::unique_ptr<IndexKeyEncoder> createKeyEncoder(
+      const std::vector<std::string>& columns,
+      const velox::RowTypePtr& inputType,
+      const std::vector<SortOrder>& sortOrders,
+      velox::memory::MemoryPool* pool) const override {
+    return clusterIndexFactory(kClusterIndexName)
+        .createKeyEncoder(columns, inputType, sortOrders, pool);
+  }
+
+  std::unique_ptr<ClusterIndexBase> createReader(
+      Section rootSection,
+      velox::memory::MemoryPool* pool,
+      const IndexLookup::Options& options) const override {
+    return clusterIndexFactory(kClusterIndexName)
+        .createReader(std::move(rootSection), pool, options);
+  }
+};
+
+// Asks for no index stream of each stripe in the Stripe key stream layout, and
+// for one in the Partition layout, which the Writer rejects before it creates
+// the index writer.
+class InvalidIndexStreamsClusterIndexFactory final
+    : public ClusterIndexFactory {
+ public:
+  std::string_view name() const override {
+    return kInvalidIndexStreamsClusterIndexName;
+  }
+
+  uint32_t numIndexStreams(KeyStreamLayout keyStreamLayout) const override {
+    return keyStreamLayout == KeyStreamLayout::kPartition ? 1 : 0;
+  }
+
+  std::unique_ptr<IndexWriter> createWriter(
+      const IndexConfig& config,
+      const velox::TypePtr& inputType,
+      velox::memory::MemoryPool* pool,
+      const Options& writerOptions) const override {
+    return clusterIndexFactory(kCustomClusterIndexName)
+        .createWriter(config, inputType, pool, writerOptions);
+  }
+
+  std::unique_ptr<IndexKeyEncoder> createKeyEncoder(
+      const std::vector<std::string>& columns,
+      const velox::RowTypePtr& inputType,
+      const std::vector<SortOrder>& sortOrders,
+      velox::memory::MemoryPool* pool) const override {
+    return clusterIndexFactory(kClusterIndexName)
+        .createKeyEncoder(columns, inputType, sortOrders, pool);
+  }
+
+  std::unique_ptr<ClusterIndexBase> createReader(
+      Section rootSection,
+      velox::memory::MemoryPool* pool,
+      const IndexLookup::Options& options) const override {
+    return clusterIndexFactory(kClusterIndexName)
+        .createReader(std::move(rootSection), pool, options);
+  }
+};
+
 class NamedIndexWriter final : public IndexWriter {
  public:
   NamedIndexWriter(std::string name, std::unique_ptr<IndexWriter> writer)
@@ -195,7 +286,7 @@ class NamedIndexWriter final : public IndexWriter {
     writer_->write(input);
   }
 
-  std::vector<Chunk> finishStripe(Buffer& buffer) override {
+  std::vector<std::vector<Chunk>> finishStripe(Buffer& buffer) override {
     return writer_->finishStripe(buffer);
   }
 
@@ -424,6 +515,10 @@ class IndexFactoryTest : public testing::Test {
         std::make_shared<const TestClusterIndexFactory>());
     registerClusterIndexFactory(
         std::make_shared<const ReverseOrderClusterIndexFactory>());
+    registerClusterIndexFactory(
+        std::make_shared<const MissingIndexStreamClusterIndexFactory>());
+    registerClusterIndexFactory(
+        std::make_shared<const InvalidIndexStreamsClusterIndexFactory>());
     registerDenseIndexFactory(
         std::make_shared<const HashDelegatingDenseIndexFactory>());
     registerDenseIndexFactory(
@@ -734,8 +829,57 @@ TEST_F(IndexFactoryTest, customKeyOrderEndToEnd) {
 TEST_F(IndexFactoryTest, builtInClusterFactoryIsRegistered) {
   EXPECT_EQ(clusterIndexFactory(kClusterIndexName).name(), kClusterIndexName);
   EXPECT_EQ(
-      clusterIndexFactory(kHierarchicalClusterIndexName).name(),
-      kHierarchicalClusterIndexName);
+      clusterIndexFactory(kTrieClusterIndexName).name(), kTrieClusterIndexName);
+}
+
+// The built-in cluster indexes store their keys in one index stream of each
+// stripe in the Stripe key stream layout, and nothing in stripes in the
+// Partition layout.
+TEST_F(IndexFactoryTest, builtInClusterFactoryIndexStreams) {
+  for (const auto name : {kClusterIndexName, kTrieClusterIndexName}) {
+    SCOPED_TRACE(name);
+    const auto& factory = clusterIndexFactory(name);
+    EXPECT_EQ(factory.numIndexStreams(KeyStreamLayout::kStripe), 1);
+    EXPECT_EQ(factory.numIndexStreams(KeyStreamLayout::kPartition), 0);
+  }
+}
+
+// The Writer allocates the index streams of each stripe that the factory asks
+// for, and checks that the index writer stores data in each of them.
+TEST_F(IndexFactoryTest, rejectMissingIndexStream) {
+  WriterOptions options;
+  options.clusterIndexConfig = std::make_shared<const TestIndexConfig>(
+      IndexFamily::Cluster, std::string{kMissingIndexStreamClusterIndexName});
+  options.clusterIndexKeyStreamLayout = KeyStreamLayout::kStripe;
+  auto writer = makeWriter("missing_index_stream", std::move(options));
+  writer->write(makeBatch());
+  NIMBLE_ASSERT_THROW(
+      writer->close(),
+      "A cluster index must return the chunks of each of its index streams");
+}
+
+// The Writer checks that the factory asks for index streams of each stripe in
+// the Stripe key stream layout only.
+TEST_F(IndexFactoryTest, rejectInvalidIndexStreams) {
+  {
+    WriterOptions options;
+    options.clusterIndexConfig = std::make_shared<const TestIndexConfig>(
+        IndexFamily::Cluster,
+        std::string{kInvalidIndexStreamsClusterIndexName});
+    options.clusterIndexKeyStreamLayout = KeyStreamLayout::kStripe;
+    NIMBLE_ASSERT_THROW(
+        makeWriter("stripe_without_index_streams", std::move(options)),
+        "A Stripe layout cluster index must store its keys in a stream of each stripe");
+  }
+  {
+    WriterOptions options;
+    options.clusterIndexConfig = std::make_shared<const TestIndexConfig>(
+        IndexFamily::Cluster,
+        std::string{kInvalidIndexStreamsClusterIndexName});
+    NIMBLE_ASSERT_THROW(
+        makeWriter("partition_with_index_streams", std::move(options)),
+        "A Partition layout cluster index must store no stream in stripes");
+  }
 }
 
 TEST_F(IndexFactoryTest, builtInDenseFactoriesAreRegistered) {

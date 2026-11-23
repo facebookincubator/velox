@@ -22,6 +22,7 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CoalesceIo.h"
+#include "velox/common/file/FileIoContext.h"
 #include "velox/common/memory/MemoryAllocator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
@@ -282,7 +283,7 @@ void DirectDataInput::executeIoGroups(
           readRegions_.data(), readRegions_.size()),
       folly::Range<const folly::Range<char*>*>(
           readBuffers_.data(), readBuffers_.size()),
-      fileIoContext_);
+      velox::ScopedFileIoContext::resolve(fileIoContext_));
   NIMBLE_CHECK_GE(
       bytesRead,
       fileReadBytes(readRegions_, file_->size()),
@@ -425,7 +426,7 @@ std::pair<std::string_view, DataInput::Handle> DirectDataInput::read(
     bytesRead = file_->preadv(
         folly::Range<const Region*>(&readRegion, 1),
         folly::Range<const folly::Range<char*>*>(&destination, 1),
-        fileIoContext_);
+        velox::ScopedFileIoContext::resolve(fileIoContext_));
   }
   NIMBLE_CHECK_GE(
       bytesRead,
@@ -626,7 +627,7 @@ void CachedDataInput::loadCacheMissGroups(
         folly::Range<const Region*>(readRegions.data(), readRegions.size()),
         folly::Range<const folly::Range<char*>*>(
             readBuffers.data(), readBuffers.size()),
-        fileIoContext_);
+        velox::ScopedFileIoContext::resolve(fileIoContext_));
   }
   NIMBLE_CHECK_GE(
       bytesRead,

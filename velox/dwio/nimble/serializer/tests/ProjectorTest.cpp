@@ -124,10 +124,17 @@ struct FormatParam {
   SerializationVersion projectVersion;
   EncodingType streamSizesEncodingType{EncodingType::Trivial};
   size_t bufferPoolCapacity{velox::BufferPool::kDefaultCapacity};
+  // Codec of the whole body of a kBlob input. Other input versions ignore it.
+  CompressionOptions blobCompressionOptions{
+      .compressionType = CompressionType::Lz4};
 
   std::string name() const {
     auto base =
         fmt::format("{}To{}", toString(inputVersion), toString(projectVersion));
+    if (inputVersion == SerializationVersion::kBlob) {
+      base += fmt::format(
+          "_{}Blob", toString(blobCompressionOptions.compressionType));
+    }
     if (streamSizesEncodingType != EncodingType::Trivial) {
       base += fmt::format("_{}StreamSizes", toString(streamSizesEncodingType));
     }
@@ -170,6 +177,20 @@ std::vector<FormatParam> allFormatCombinations() {
        SerializationVersion::kProjection,
        EncodingType::FixedBitWidth,
        /*bufferPoolCapacity=*/0},
+      // kBlob input with a compressed body, and with an uncompressed one. The
+      // accept ratio keeps the compressed bodies of the small test batches.
+      {SerializationVersion::kBlob,
+       SerializationVersion::kProjection,
+       EncodingType::Trivial,
+       velox::BufferPool::kDefaultCapacity,
+       {.compressionAcceptRatio = 2.0F,
+        .compressionType = CompressionType::Lz4,
+        .lz4MinCompressionSize = 0}},
+      {SerializationVersion::kBlob,
+       SerializationVersion::kProjection,
+       EncodingType::Trivial,
+       velox::BufferPool::kDefaultCapacity,
+       {.compressionType = CompressionType::Uncompressed}},
   };
 }
 
@@ -374,7 +395,9 @@ class ProjectorFormatTest : public ProjectorTestBase,
  protected:
   // Get serializer options for input format.
   SerializerOptions inputSerializerOptions() const {
-    return SerializerOptions{.version = GetParam().inputVersion};
+    return SerializerOptions{
+        .version = GetParam().inputVersion,
+        .blobCompressionOptions = GetParam().blobCompressionOptions};
   }
 
   // Get projector options for output format.
@@ -796,10 +819,13 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.name();
     });
 
-// Non-parameterized tests for special cases.
-class ProjectorTest : public ProjectorTestBase {};
+// Tests for special cases. The parameterized ones run once per Serializer
+// writer version of their input.
+class ProjectorTest
+    : public ProjectorTestBase,
+      public ::testing::WithParamInterface<SerializationVersion> {};
 
-TEST_F(ProjectorTest, columnProjectionDeserializerBuildsProjectedType) {
+TEST_P(ProjectorTest, columnProjectionDeserializerBuildsProjectedType) {
   auto type = ROW({
       {"a", INTEGER()},
       {"b", BIGINT()},
@@ -814,10 +840,8 @@ TEST_F(ProjectorTest, columnProjectionDeserializerBuildsProjectedType) {
           makeStringVector({"x", "y", "z"}),
       });
 
-  auto serialized =
-      serialize(vec, type, {.version = SerializationVersion::kSerialization});
-  auto inputSchema =
-      getNimbleSchema(type, {.version = SerializationVersion::kSerialization});
+  auto serialized = serialize(vec, type, {.version = GetParam()});
+  auto inputSchema = getNimbleSchema(type, {.version = GetParam()});
 
   Deserializer deserializer{inputSchema, makeSubfields({"b"}), pool_.get(), {}};
   VectorPtr output;
@@ -836,14 +860,13 @@ TEST_F(ProjectorTest, columnProjectionDeserializerBuildsProjectedType) {
   EXPECT_EQ(b->valueAt(2), 300);
 }
 
-TEST_F(ProjectorTest, columnProjectionDeserializerCanBeReused) {
+TEST_P(ProjectorTest, columnProjectionDeserializerCanBeReused) {
   auto type = ROW({
       {"a", INTEGER()},
       {"b", BIGINT()},
   });
 
-  auto inputSchema =
-      getNimbleSchema(type, {.version = SerializationVersion::kSerialization});
+  auto inputSchema = getNimbleSchema(type, {.version = GetParam()});
   Deserializer deserializer{inputSchema, makeSubfields({"b"}), pool_.get(), {}};
 
   auto makeInput = [&](const std::vector<int32_t>& aValues,
@@ -856,7 +879,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerCanBeReused) {
                 makeIntVector<int64_t>(bValues),
             }),
         type,
-        {.version = SerializationVersion::kSerialization});
+        {.version = GetParam()});
   };
 
   VectorPtr firstOutput;
@@ -881,7 +904,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerCanBeReused) {
   EXPECT_EQ(secondB->valueAt(2), 500);
 }
 
-TEST_F(ProjectorTest, columnProjectionDeserializerProjectsNestedFields) {
+TEST_P(ProjectorTest, columnProjectionDeserializerProjectsNestedFields) {
   auto type = ROW({
       {"outer",
        ROW({
@@ -904,10 +927,8 @@ TEST_F(ProjectorTest, columnProjectionDeserializerProjectsNestedFields) {
           makeIntVector<int64_t>({100, 200}),
       });
 
-  auto serialized =
-      serialize(vec, type, {.version = SerializationVersion::kSerialization});
-  auto inputSchema =
-      getNimbleSchema(type, {.version = SerializationVersion::kSerialization});
+  auto serialized = serialize(vec, type, {.version = GetParam()});
+  auto inputSchema = getNimbleSchema(type, {.version = GetParam()});
 
   Deserializer deserializer{
       inputSchema, makeSubfields({"outer.inner1"}), pool_.get(), {}};
@@ -931,7 +952,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerProjectsNestedFields) {
   EXPECT_EQ(inner1->valueAt(1), 20);
 }
 
-TEST_F(
+TEST_P(
     ProjectorTest,
     columnProjectionDeserializerEmptySelectionReadsAllFields) {
   auto type = ROW({
@@ -946,10 +967,8 @@ TEST_F(
           makeIntVector<int64_t>({100, 200, 300}),
       });
 
-  auto serialized =
-      serialize(vec, type, {.version = SerializationVersion::kSerialization});
-  auto inputSchema =
-      getNimbleSchema(type, {.version = SerializationVersion::kSerialization});
+  auto serialized = serialize(vec, type, {.version = GetParam()});
+  auto inputSchema = getNimbleSchema(type, {.version = GetParam()});
 
   Deserializer deserializer{inputSchema, {}, pool_.get(), {}};
   VectorPtr output;
@@ -973,7 +992,7 @@ TEST_F(
   EXPECT_EQ(b->valueAt(2), 300);
 }
 
-TEST_F(ProjectorTest, columnProjectionDeserializerSelectsAllFieldsExplicitly) {
+TEST_P(ProjectorTest, columnProjectionDeserializerSelectsAllFieldsExplicitly) {
   auto type = ROW({
       {"a", INTEGER()},
       {"b", BIGINT()},
@@ -984,10 +1003,8 @@ TEST_F(ProjectorTest, columnProjectionDeserializerSelectsAllFieldsExplicitly) {
           makeIntVector<int32_t>({1, 2, 3}),
           makeIntVector<int64_t>({100, 200, 300}),
       });
-  auto serialized =
-      serialize(vec, type, {.version = SerializationVersion::kSerialization});
-  auto inputSchema =
-      getNimbleSchema(type, {.version = SerializationVersion::kSerialization});
+  auto serialized = serialize(vec, type, {.version = GetParam()});
+  auto inputSchema = getNimbleSchema(type, {.version = GetParam()});
 
   Deserializer deserializer{
       inputSchema, makeSubfields({"a", "b"}), pool_.get(), {}};
@@ -1001,7 +1018,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerSelectsAllFieldsExplicitly) {
   EXPECT_TRUE(output->equalValueAt(vec.get(), 2, 2));
 }
 
-TEST_F(ProjectorTest, columnProjectionDeserializerOrdersFieldsByName) {
+TEST_P(ProjectorTest, columnProjectionDeserializerOrdersFieldsByName) {
   auto type = ROW({
       {"c", VARCHAR()},
       {"a", INTEGER()},
@@ -1014,10 +1031,8 @@ TEST_F(ProjectorTest, columnProjectionDeserializerOrdersFieldsByName) {
           makeIntVector<int32_t>({1, 2}),
           makeIntVector<int64_t>({100, 200}),
       });
-  auto serialized =
-      serialize(vec, type, {.version = SerializationVersion::kSerialization});
-  auto inputSchema =
-      getNimbleSchema(type, {.version = SerializationVersion::kSerialization});
+  auto serialized = serialize(vec, type, {.version = GetParam()});
+  auto inputSchema = getNimbleSchema(type, {.version = GetParam()});
 
   Deserializer deserializer{
       inputSchema, makeSubfields({"c", "a"}), pool_.get(), {}};
@@ -1032,7 +1047,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerOrdersFieldsByName) {
       row->childAt(1)->asChecked<FlatVector<StringView>>()->valueAt(0), "x");
 }
 
-TEST_F(ProjectorTest, columnProjectionDeserializerProjectsNestedScenarios) {
+TEST_P(ProjectorTest, columnProjectionDeserializerProjectsNestedScenarios) {
   auto type = ROW({
       {"z",
        ROW({
@@ -1055,10 +1070,8 @@ TEST_F(ProjectorTest, columnProjectionDeserializerProjectsNestedScenarios) {
       {makeStringVector({"p", "q"}), makeIntVector<int32_t>({1, 2})});
   auto input = makeSimpleRowVector(
       {"z", "a", "ignored"}, {z, a, makeIntVector<int64_t>({15, 25})});
-  auto serialized =
-      serialize(input, type, {.version = SerializationVersion::kSerialization});
-  auto inputSchema =
-      getNimbleSchema(type, {.version = SerializationVersion::kSerialization});
+  auto serialized = serialize(input, type, {.version = GetParam()});
+  auto inputSchema = getNimbleSchema(type, {.version = GetParam()});
 
   Deserializer deserializer{
       inputSchema,
@@ -1111,7 +1124,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerRejectsDuplicateSubfields) {
       "Duplicate column projection subfield");
 }
 
-TEST_F(ProjectorTest, columnProjectionDeserializerNestedFuzzer) {
+TEST_P(ProjectorTest, columnProjectionDeserializerNestedFuzzer) {
   constexpr vector_size_t kBatchSize = 32;
   constexpr int kIterations = 10;
   auto type = ROW({
@@ -1124,8 +1137,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerNestedFuzzer) {
       {"m", BIGINT()},
       {"unused", VARCHAR()},
   });
-  auto inputSchema =
-      getNimbleSchema(type, {.version = SerializationVersion::kSerialization});
+  auto inputSchema = getNimbleSchema(type, {.version = GetParam()});
   Deserializer deserializer{
       inputSchema,
       makeSubfields({"z.y", "z.x.b", "z.x.a", "a", "m"}),
@@ -1154,8 +1166,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerNestedFuzzer) {
     }
     auto input = std::make_shared<RowVector>(
         pool_.get(), type, nullptr, kBatchSize, std::move(inputChildren));
-    auto serialized = serialize(
-        input, type, {.version = SerializationVersion::kSerialization});
+    auto serialized = serialize(input, type, {.version = GetParam()});
     VectorPtr output;
     deserializer.deserialize(serialized, output);
 
@@ -1189,7 +1200,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerNestedFuzzer) {
   }
 }
 
-TEST_F(ProjectorTest, columnProjectionDeserializerReadsTopLevelFlatMap) {
+TEST_P(ProjectorTest, columnProjectionDeserializerReadsTopLevelFlatMap) {
   auto type = ROW({
       {"id", BIGINT()},
       {"features", MAP(INTEGER(), DOUBLE())},
@@ -1224,7 +1235,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerReadsTopLevelFlatMap) {
       vec,
       type,
       {
-          .version = SerializationVersion::kSerialization,
+          .version = GetParam(),
           .flatMapColumns = {{"features", {}}},
       });
 
@@ -1252,7 +1263,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerReadsTopLevelFlatMap) {
   EXPECT_DOUBLE_EQ(values->valueAt(offset), 1.5);
 }
 
-TEST_F(ProjectorTest, columnProjectionDeserializerReadsFlatMapKey) {
+TEST_P(ProjectorTest, columnProjectionDeserializerReadsFlatMapKey) {
   auto type = ROW({
       {"features", MAP(INTEGER(), DOUBLE())},
   });
@@ -1282,7 +1293,7 @@ TEST_F(ProjectorTest, columnProjectionDeserializerReadsFlatMapKey) {
       vec,
       type,
       {
-          .version = SerializationVersion::kSerialization,
+          .version = GetParam(),
           .flatMapColumns = {{"features", {}}},
       });
 
@@ -1364,7 +1375,7 @@ TEST_F(ProjectorTest, incompatibleFormatsRejected) {
 
     NIMBLE_ASSERT_THROW(
         projector.project(std::string_view(tabletInput)),
-        "Input must be kLegacyCompact, kLegacySerialization, kSerialization, or kProjection");
+        "Input must be kLegacyCompact, kLegacySerialization, kSerialization, kProjection, or kBlob");
   }
 }
 
@@ -1393,7 +1404,7 @@ TEST_F(ProjectorTest, emptyProjectionInvalid) {
 // Note: this is no longer a byte-level pass-through because input is
 // kSerialization while the Projector's output is kProjection (different
 // version bytes for independent format evolution).
-TEST_F(ProjectorTest, fullProjectionPassThrough) {
+TEST_P(ProjectorTest, fullProjectionPassThrough) {
   auto type = ROW({
       {"a", INTEGER()},
       {"b", BIGINT()},
@@ -1408,7 +1419,7 @@ TEST_F(ProjectorTest, fullProjectionPassThrough) {
           makeStringVector({"x", "y", "z"}),
       });
 
-  SerializerOptions serOpts{.version = SerializationVersion::kSerialization};
+  SerializerOptions serOpts{.version = GetParam()};
   auto serialized = serialize(vec, type, serOpts);
   auto inputSchema = getNimbleSchema(type, serOpts);
 
@@ -1477,7 +1488,7 @@ TEST_F(ProjectorTest, unsupportedMapKeyProjection) {
 }
 
 // Test FlatMap serialization/deserialization without projection.
-TEST_F(ProjectorTest, flatMapSerializeDeserializeNoProjction) {
+TEST_P(ProjectorTest, flatMapSerializeDeserializeNoProjction) {
   auto type = ROW({
       {"id", BIGINT()},
       {"features", MAP(INTEGER(), DOUBLE())},
@@ -1528,7 +1539,7 @@ TEST_F(ProjectorTest, flatMapSerializeDeserializeNoProjction) {
 
   // Serialize with FlatMap encoding.
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"features", {}}},
   };
   auto [serialized, inputSchema] = serializeWithSchema(vec, type, serOpts);
@@ -1547,7 +1558,7 @@ TEST_F(ProjectorTest, flatMapSerializeDeserializeNoProjction) {
 }
 
 // Full FlatMap projection (no key subscripts) is not supported.
-TEST_F(ProjectorTest, projectEntireFlatMapColumn) {
+TEST_P(ProjectorTest, projectEntireFlatMapColumn) {
   auto type = ROW({
       {"id", BIGINT()},
       {"features", MAP(INTEGER(), DOUBLE())},
@@ -1596,7 +1607,7 @@ TEST_F(ProjectorTest, projectEntireFlatMapColumn) {
       std::vector<VectorPtr>{ids, mapVector});
 
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"features", {}}},
   };
   auto [serialized, inputSchema] = serializeWithSchema(vec, type, serOpts);
@@ -1613,7 +1624,7 @@ TEST_F(ProjectorTest, projectEntireFlatMapColumn) {
 }
 
 // Test FlatMap full projection (all keys) works.
-TEST_F(ProjectorTest, projectFlatMapAllKeys) {
+TEST_P(ProjectorTest, projectFlatMapAllKeys) {
   auto type = ROW({
       {"id", BIGINT()},
       {"features", MAP(INTEGER(), DOUBLE())},
@@ -1664,7 +1675,7 @@ TEST_F(ProjectorTest, projectFlatMapAllKeys) {
 
   // Serialize with FlatMap encoding.
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"features", {}}},
   };
   auto [serialized, inputSchema] = serializeWithSchema(vec, type, serOpts);
@@ -1706,7 +1717,7 @@ TEST_F(ProjectorTest, projectFlatMapAllKeys) {
 
 // Test that buildProjectedNimbleType schema matches projector schema for
 // FlatMap key projection, and both decode correctly.
-TEST_F(ProjectorTest, flatMapKeyProjectionSchemaComparison) {
+TEST_P(ProjectorTest, flatMapKeyProjectionSchemaComparison) {
   auto type = ROW({
       {"id", BIGINT()},
       {"features", MAP(INTEGER(), DOUBLE())},
@@ -1754,7 +1765,7 @@ TEST_F(ProjectorTest, flatMapKeyProjectionSchemaComparison) {
       std::vector<VectorPtr>{ids, mapVector});
 
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"features", {}}},
   };
   auto [serialized, inputSchema] = serializeWithSchema(vec, type, serOpts);
@@ -1816,7 +1827,7 @@ TEST_F(ProjectorTest, flatMapKeyProjectionSchemaComparison) {
 
 // Full FlatMap projection (no key subscripts) is not supported by
 // buildProjectedNimbleType — it requires explicit key selection.
-TEST_F(ProjectorTest, flatMapFullProjectionSchemaTypeMismatch) {
+TEST_P(ProjectorTest, flatMapFullProjectionSchemaTypeMismatch) {
   auto type = ROW({
       {"id", BIGINT()},
       {"features", MAP(INTEGER(), DOUBLE())},
@@ -1864,7 +1875,7 @@ TEST_F(ProjectorTest, flatMapFullProjectionSchemaTypeMismatch) {
       std::vector<VectorPtr>{ids, mapVector});
 
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"features", {}}},
   };
   auto [serialized, inputSchema] = serializeWithSchema(vec, type, serOpts);
@@ -1881,7 +1892,7 @@ TEST_F(ProjectorTest, flatMapFullProjectionSchemaTypeMismatch) {
 }
 
 // Test FlatMap stream indices are correct.
-TEST_F(ProjectorTest, flatMapStreamIndices) {
+TEST_P(ProjectorTest, flatMapStreamIndices) {
   auto type = ROW({
       {"id", BIGINT()},
       {"features", MAP(INTEGER(), DOUBLE())},
@@ -1932,7 +1943,7 @@ TEST_F(ProjectorTest, flatMapStreamIndices) {
 
   // Serialize with FlatMap encoding.
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"features", {}}},
   };
   auto [serialized, inputSchema] = serializeWithSchema(vec, type, serOpts);
@@ -3295,6 +3306,31 @@ TEST_F(ProjectorTest, hybridFlatMapProjectionKeepsGroupKeysEncoding) {
   EXPECT_THAT(rereadGroups[0].groupKeys, ElementsAre("1", "2"));
 }
 
+TEST_F(ProjectorTest, projectTypeKeepsSlidingWindowArrayColumn) {
+  SchemaBuilder builder;
+  auto events = builder.createSlidingWindowArrayTypeBuilder();
+  events->setChildren(builder.createScalarTypeBuilder(ScalarKind::Int64));
+  auto root = builder.createRowTypeBuilder(2);
+  root->addChild("id", builder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("events", events);
+  const auto inputSchema = SchemaReader::getSchema(builder.schemaNodes());
+
+  // The renaming walks the SlidingWindowArray column that the projection
+  // leaves out.
+  const auto projectType =
+      ROW({{"new_id", BIGINT()}, {"events", ARRAY(BIGINT())}});
+  Projector projector(
+      inputSchema,
+      makeSubfields({"new_id"}),
+      pool_.get(),
+      {.projectVersion = SerializationVersion::kProjection,
+       .projectType = projectType});
+
+  const auto& projected = projector.projectedSchema()->asRow();
+  ASSERT_EQ(projected.childrenCount(), 1);
+  EXPECT_EQ(projected.nameAt(0), "new_id");
+}
+
 TEST_F(ProjectorTest, hybridFlatMapRejectsEmptyProjectedKey) {
   const auto type = ROW({{"features", MAP(VARCHAR(), DOUBLE())}});
   SerializerOptions validOptions{
@@ -3317,7 +3353,7 @@ TEST_F(ProjectorTest, hybridFlatMapRejectsEmptyProjectedKey) {
 }
 
 // Test projecting FlatMap with single key.
-TEST_F(ProjectorTest, projectFlatMapSingleKey) {
+TEST_P(ProjectorTest, projectFlatMapSingleKey) {
   auto type = ROW({
       {"id", BIGINT()},
       {"features", MAP(INTEGER(), DOUBLE())},
@@ -3371,7 +3407,7 @@ TEST_F(ProjectorTest, projectFlatMapSingleKey) {
   // Use serializeWithSchema to get schema AFTER serialization (when FlatMap
   // keys are discovered).
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"features", {}}},
   };
   auto [serialized, inputSchema] = serializeWithSchema(vec, type, serOpts);
@@ -3419,7 +3455,7 @@ TEST_F(ProjectorTest, projectFlatMapSingleKey) {
 }
 
 // Test projecting multiple FlatMap keys.
-TEST_F(ProjectorTest, projectFlatMapMultipleKeys) {
+TEST_P(ProjectorTest, projectFlatMapMultipleKeys) {
   auto type = ROW({
       {"id", BIGINT()},
       {"features", MAP(VARCHAR(), INTEGER())},
@@ -3472,7 +3508,7 @@ TEST_F(ProjectorTest, projectFlatMapMultipleKeys) {
   // Serialize with FlatMap encoding.
   // Use serializeWithSchema to get schema AFTER serialization.
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"features", {}}},
   };
   auto [serialized, inputSchema] = serializeWithSchema(vec, type, serOpts);
@@ -3520,7 +3556,7 @@ TEST_F(ProjectorTest, projectFlatMapMultipleKeys) {
 // Test projecting FlatMap with only non-existent keys: the projected schema
 // contains a placeholder child per requested key, and the round-trip decoded
 // output produces null values for those keys.
-TEST_F(ProjectorTest, projectFlatMapNonExistentKey) {
+TEST_P(ProjectorTest, projectFlatMapNonExistentKey) {
   auto type = ROW({
       {"id", BIGINT()},
       {"features", MAP(INTEGER(), DOUBLE())},
@@ -3571,7 +3607,7 @@ TEST_F(ProjectorTest, projectFlatMapNonExistentKey) {
 
   // Serialize with FlatMap encoding to discover keys 1, 2, 3.
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"features", {}}},
   };
   auto [serialized, inputSchema] = serializeWithSchema(vec, type, serOpts);
@@ -3612,7 +3648,7 @@ TEST_F(ProjectorTest, projectFlatMapNonExistentKey) {
   }
 }
 
-TEST_F(ProjectorTest, flatMapMissingKeyDeserializesAsNullField) {
+TEST_P(ProjectorTest, flatMapMissingKeyDeserializesAsNullField) {
   auto type = ROW({
       {"id", BIGINT()},
       {"features", MAP(VARCHAR(), BIGINT())},
@@ -3646,7 +3682,7 @@ TEST_F(ProjectorTest, flatMapMissingKeyDeserializesAsNullField) {
       std::vector<VectorPtr>{makeIntVector<int64_t>({1, 2, 3, 4}), features});
 
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"features", {}}},
   };
   auto [serialized, inputSchema] = serializeWithSchema(input, type, serOpts);
@@ -3688,7 +3724,7 @@ TEST_F(ProjectorTest, flatMapMissingKeyDeserializesAsNullField) {
 // Exercises the `emitPlaceholderOffsets` Row branch end-to-end (Row.nulls +
 // 2 inner scalars = 3 kNoSourceStreamOffset value slots + 1 inMap slot per
 // missing key).
-TEST_F(ProjectorTest, projectFlatMapNonExistentKeyRowValue) {
+TEST_P(ProjectorTest, projectFlatMapNonExistentKeyRowValue) {
   auto valueRowType = ROW({{"a", INTEGER()}, {"b", VARCHAR()}});
   auto type =
       ROW({{"id", BIGINT()}, {"features", MAP(INTEGER(), valueRowType)}});
@@ -3742,7 +3778,7 @@ TEST_F(ProjectorTest, projectFlatMapNonExistentKeyRowValue) {
       std::vector<VectorPtr>{ids, mapVector});
 
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"features", {}}},
   };
   auto [serialized, inputSchema] = serializeWithSchema(vec, type, serOpts);
@@ -3786,7 +3822,7 @@ TEST_F(ProjectorTest, projectFlatMapNonExistentKeyRowValue) {
 // Exercises the `emitPlaceholderOffsets` Array branch end-to-end (Array
 // lengths + 1 element scalar = 2 kNoSourceStreamOffset value slots + 1 inMap
 // per key).
-TEST_F(ProjectorTest, projectFlatMapNonExistentKeyArrayValue) {
+TEST_P(ProjectorTest, projectFlatMapNonExistentKeyArrayValue) {
   auto valueArrayType = ARRAY(INTEGER());
   auto type =
       ROW({{"id", BIGINT()}, {"features", MAP(INTEGER(), valueArrayType)}});
@@ -3850,7 +3886,7 @@ TEST_F(ProjectorTest, projectFlatMapNonExistentKeyArrayValue) {
       std::vector<VectorPtr>{ids, mapVector});
 
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"features", {}}},
   };
   auto [serialized, inputSchema] = serializeWithSchema(vec, type, serOpts);
@@ -3901,7 +3937,7 @@ TEST_F(ProjectorTest, projectFlatMapNonExistentKeyArrayValue) {
 //
 // Asserted end-to-end semantics: data["1"]=10.0, data["2"] absent/null,
 // data["3"]=30.0.
-TEST_F(ProjectorTest, missingKeyInMiddleProducesPlaceholder) {
+TEST_P(ProjectorTest, missingKeyInMiddleProducesPlaceholder) {
   auto type = ROW({{"data", MAP(INTEGER(), DOUBLE())}});
 
   // One row, two entries: keys 1 and 3 (key 2 is intentionally absent).
@@ -3938,7 +3974,7 @@ TEST_F(ProjectorTest, missingKeyInMiddleProducesPlaceholder) {
 
   // Serialize as FlatMap — blob will have streams only for keys "1" and "3".
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"data", {}}},
   };
   auto [blob, sourceSchema] = serializeWithSchema(vec, type, serOpts);
@@ -4029,7 +4065,7 @@ TEST_F(ProjectorTest, streamIndicesCorrect) {
   EXPECT_EQ(indices[1], 2); // Column b
 }
 
-TEST_F(ProjectorTest, nullBarrierFlagFollowsProjectedNullStreams) {
+TEST_P(ProjectorTest, nullBarrierFlagFollowsProjectedNullStreams) {
   constexpr vector_size_t kRows = 3;
 
   struct SerializedInput {
@@ -4039,45 +4075,44 @@ TEST_F(ProjectorTest, nullBarrierFlagFollowsProjectedNullStreams) {
     bool expectedInputRequiredBarrier;
   };
 
-  auto makeNestedRowInput = [&](std::string_view name,
-                                bool profileHasNull,
-                                bool rootHasNull) {
-    auto type = ROW({
-        {"id", BIGINT()},
-        {"profile", ROW({{"score", INTEGER()}})},
-    });
+  auto makeNestedRowInput =
+      [&](std::string_view name, bool profileHasNull, bool rootHasNull) {
+        auto type = ROW({
+            {"id", BIGINT()},
+            {"profile", ROW({{"score", INTEGER()}})},
+        });
 
-    auto ids = makeIntVector<int64_t>({1, 2, 3});
-    auto scores = makeIntVector<int32_t>({10, 20, 30});
-    auto profile = std::make_shared<RowVector>(
-        pool_.get(),
-        ROW({{"score", INTEGER()}}),
-        nullptr,
-        kRows,
-        std::vector<VectorPtr>{scores});
-    if (profileHasNull) {
-      profile->setNull(1, true);
-    }
-    auto input = std::make_shared<RowVector>(
-        pool_.get(),
-        type,
-        nullptr,
-        kRows,
-        std::vector<VectorPtr>{ids, profile});
-    if (rootHasNull) {
-      input->setNull(2, true);
-    }
+        auto ids = makeIntVector<int64_t>({1, 2, 3});
+        auto scores = makeIntVector<int32_t>({10, 20, 30});
+        auto profile = std::make_shared<RowVector>(
+            pool_.get(),
+            ROW({{"score", INTEGER()}}),
+            nullptr,
+            kRows,
+            std::vector<VectorPtr>{scores});
+        if (profileHasNull) {
+          profile->setNull(1, true);
+        }
+        auto input = std::make_shared<RowVector>(
+            pool_.get(),
+            type,
+            nullptr,
+            kRows,
+            std::vector<VectorPtr>{ids, profile});
+        if (rootHasNull) {
+          input->setNull(2, true);
+        }
 
-    SerializerOptions serOpts{.version = SerializationVersion::kSerialization};
-    auto serialized = serialize(input, type, serOpts);
-    auto inputSchema = getNimbleSchema(type, serOpts);
-    return SerializedInput{
-        .name = name,
-        .serialized = std::move(serialized),
-        .schema = std::move(inputSchema),
-        .expectedInputRequiredBarrier = profileHasNull || rootHasNull,
-    };
-  };
+        SerializerOptions serOpts{.version = GetParam()};
+        auto serialized = serialize(input, type, serOpts);
+        auto inputSchema = getNimbleSchema(type, serOpts);
+        return SerializedInput{
+            .name = name,
+            .serialized = std::move(serialized),
+            .schema = std::move(inputSchema),
+            .expectedInputRequiredBarrier = profileHasNull || rootHasNull,
+        };
+      };
 
   auto makeFlatMapRowInput = [&](std::string_view name, bool valueRowHasNull) {
     auto valueType = ROW({{"score", INTEGER()}});
@@ -4120,7 +4155,7 @@ TEST_F(ProjectorTest, nullBarrierFlagFollowsProjectedNullStreams) {
         std::vector<VectorPtr>{ids, features});
 
     SerializerOptions serOpts{
-        .version = SerializationVersion::kSerialization,
+        .version = GetParam(),
         .flatMapColumns = {{"features", {}}},
     };
     auto [serialized, inputSchema] = serializeWithSchema(input, type, serOpts);
@@ -4188,7 +4223,7 @@ TEST_F(ProjectorTest, nullBarrierFlagFollowsProjectedNullStreams) {
         kRows,
         std::vector<VectorPtr>{ids, nullableScores, items, attrs});
 
-    SerializerOptions serOpts{.version = SerializationVersion::kSerialization};
+    SerializerOptions serOpts{.version = GetParam()};
     auto [serialized, inputSchema] = serializeWithSchema(input, type, serOpts);
     return SerializedInput{
         .name = name,
@@ -4330,14 +4365,14 @@ TEST_F(ProjectorTest, nullBarrierFlagFollowsProjectedNullStreams) {
   }
 }
 
-TEST_F(ProjectorTest, projectedRowNullMixedBatchPreserveNulls) {
+TEST_P(ProjectorTest, projectedRowNullMixedBatchPreserveNulls) {
   constexpr vector_size_t kRowsPerBatch = 3;
 
   auto type = ROW({
       {"id", BIGINT()},
       {"score", INTEGER()},
   });
-  SerializerOptions serOpts{.version = SerializationVersion::kSerialization};
+  SerializerOptions serOpts{.version = GetParam()};
   auto inputSchema = getNimbleSchema(type, serOpts);
   Projector projector(
       inputSchema,
@@ -4397,14 +4432,14 @@ TEST_F(ProjectorTest, projectedRowNullMixedBatchPreserveNulls) {
   EXPECT_EQ(ids->valueAt(5), 6);
 }
 
-TEST_F(ProjectorTest, projectedNestedRowNullsMixedBatchPreserveNulls) {
+TEST_P(ProjectorTest, projectedNestedRowNullsMixedBatchPreserveNulls) {
   constexpr vector_size_t kRowsPerBatch = 3;
 
   auto type = ROW({
       {"id", BIGINT()},
       {"profile", ROW({{"score", INTEGER()}})},
   });
-  SerializerOptions serOpts{.version = SerializationVersion::kSerialization};
+  SerializerOptions serOpts{.version = GetParam()};
   auto inputSchema = getNimbleSchema(type, serOpts);
   Projector projector(
       inputSchema,
@@ -4470,7 +4505,7 @@ TEST_F(ProjectorTest, projectedNestedRowNullsMixedBatchPreserveNulls) {
   EXPECT_EQ(scores->valueAt(5), 60);
 }
 
-TEST_F(ProjectorTest, projectedFlatMapNullsMixedBatchPreserveNulls) {
+TEST_P(ProjectorTest, projectedFlatMapNullsMixedBatchPreserveNulls) {
   constexpr vector_size_t kRowsPerBatch = 3;
 
   auto valueType = ROW({{"score", INTEGER()}});
@@ -4479,7 +4514,7 @@ TEST_F(ProjectorTest, projectedFlatMapNullsMixedBatchPreserveNulls) {
       {"features", MAP(VARCHAR(), valueType)},
   });
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"features", {}}},
   };
 
@@ -4569,7 +4604,7 @@ TEST_F(ProjectorTest, projectedFlatMapNullsMixedBatchPreserveNulls) {
   EXPECT_EQ(scores->valueAt(features->offsetAt(5)), 60);
 }
 
-TEST_F(ProjectorTest, projectedUnselectedNullColumnDoesNotRequireNullBarrier) {
+TEST_P(ProjectorTest, projectedUnselectedNullColumnDoesNotRequireNullBarrier) {
   constexpr vector_size_t kRowsPerBatch = 4;
 
   auto type = ROW({
@@ -4577,7 +4612,7 @@ TEST_F(ProjectorTest, projectedUnselectedNullColumnDoesNotRequireNullBarrier) {
       {"kept", ROW({{"score", INTEGER()}})},
       {"skipped", ROW({{"score", INTEGER()}})},
   });
-  SerializerOptions serOpts{.version = SerializationVersion::kSerialization};
+  SerializerOptions serOpts{.version = GetParam()};
   auto inputSchema = getNimbleSchema(type, serOpts);
   Projector projector(
       inputSchema,
@@ -4631,7 +4666,7 @@ TEST_F(ProjectorTest, projectedUnselectedNullColumnDoesNotRequireNullBarrier) {
   EXPECT_EQ(scores->valueAt(3), 40);
 }
 
-TEST_F(ProjectorTest, projectedComplexNullFuzzerPreservesNulls) {
+TEST_P(ProjectorTest, projectedComplexNullFuzzerPreservesNulls) {
   constexpr vector_size_t kRowsPerBatch = 8;
   constexpr int kIterations = 8;
   constexpr int kBatches = 4;
@@ -4676,7 +4711,7 @@ TEST_F(ProjectorTest, projectedComplexNullFuzzerPreservesNulls) {
   });
 
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"flatAttrs", {}}},
   };
   const auto rowType = velox::checkedPointerCast<const velox::RowType>(type);
@@ -5133,7 +5168,7 @@ TEST_F(ProjectorTest, projectedComplexNullFuzzerPreservesNulls) {
 }
 
 // Test auto name mapping via projectType for schema evolution (column renames).
-TEST_F(ProjectorTest, projectWithUpdatedRowType) {
+TEST_P(ProjectorTest, projectWithUpdatedRowType) {
   // Input schema uses old column names.
   auto inputType = ROW({
       {"old_id", INTEGER()},
@@ -5169,7 +5204,7 @@ TEST_F(ProjectorTest, projectWithUpdatedRowType) {
       std::vector<VectorPtr>{ids, names, values});
 
   // Serialize with old column names.
-  SerializerOptions serOpts{.version = SerializationVersion::kSerialization};
+  SerializerOptions serOpts{.version = GetParam()};
   auto [serialized, inputSchema] = serializeWithSchema(vec, inputType, serOpts);
 
   // Query uses new column names from projectType.
@@ -5216,7 +5251,7 @@ TEST_F(ProjectorTest, projectWithUpdatedRowType) {
 }
 
 // Test auto name mapping with nested ROW inside FlatMap value.
-TEST_F(ProjectorTest, projectWithUpdatedNestedRowType) {
+TEST_P(ProjectorTest, projectWithUpdatedNestedRowType) {
   // Input schema has old nested field names.
   auto inputType = ROW({
       {"id", INTEGER()},
@@ -5280,7 +5315,7 @@ TEST_F(ProjectorTest, projectWithUpdatedNestedRowType) {
 
   // Serialize with FlatMap to discover keys.
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"features", {}}},
   };
   auto [serialized, inputSchema] = serializeWithSchema(vec, inputType, serOpts);
@@ -5335,7 +5370,7 @@ TEST_F(ProjectorTest, projectWithUpdatedNestedRowType) {
   EXPECT_EQ(nestedProjectedRow.nameAt(0), "new_value");
 }
 
-TEST_F(ProjectorTest, projectNestedFieldUnderFlatMapValue) {
+TEST_P(ProjectorTest, projectNestedFieldUnderFlatMapValue) {
   // Input schema has old nested field names.
   auto inputType = ROW({
       {"id", INTEGER()},
@@ -5398,7 +5433,7 @@ TEST_F(ProjectorTest, projectNestedFieldUnderFlatMapValue) {
       std::vector<VectorPtr>{ids, mapVector});
 
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"features", {}}},
   };
   auto [serialized, inputSchema] = serializeWithSchema(vec, inputType, serOpts);
@@ -5444,7 +5479,7 @@ TEST_F(ProjectorTest, projectNestedFieldUnderFlatMapValue) {
 // This validates that projected schema offsets match the data layout when
 // input stream offsets from different FlatMap subtrees interleave numerically
 // (e.g., map_b nulls offset falls between map_a nulls and map_a's first child).
-TEST_F(ProjectorTest, projectMultipleFlatMapColumns) {
+TEST_P(ProjectorTest, projectMultipleFlatMapColumns) {
   // Row with two FlatMap columns.
   auto type = ROW({
       {"map_a", MAP(VARCHAR(), INTEGER())},
@@ -5520,7 +5555,7 @@ TEST_F(ProjectorTest, projectMultipleFlatMapColumns) {
 
   // Serialize both maps as FlatMaps.
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"map_a", {}}, {"map_b", {}}},
   };
   auto [serialized, inputSchema] = serializeWithSchema(vec, type, serOpts);
@@ -5770,8 +5805,61 @@ TEST_F(ProjectorTestBase, flatMapConstantInMapStreams) {
   }
 }
 
+// A chained kBlob input projects like a contiguous one, with a compressed body
+// and with an uncompressed one.
+TEST_F(ProjectorTest, chainedBlobInput) {
+  auto type = ROW({
+      {"a", INTEGER()},
+      {"b", BIGINT()},
+  });
+  auto vec = makeSimpleRowVector(
+      {"a", "b"},
+      {
+          makeIntVector<int32_t>({1, 2, 3}),
+          makeIntVector<int64_t>({100, 200, 300}),
+      });
+  auto subfields = makeSubfields({"b"});
+
+  for (const auto compressionType :
+       {CompressionType::Lz4, CompressionType::Uncompressed}) {
+    SCOPED_TRACE(fmt::format("compressionType={}", compressionType));
+    const SerializerOptions options{
+        .version = SerializationVersion::kBlob,
+        .blobCompressionOptions = {
+            .compressionAcceptRatio = 2.0F,
+            .compressionType = compressionType,
+            .lz4MinCompressionSize = 0}};
+    const auto serialized = serialize(vec, type, options);
+    const char* pos = serialized.data();
+    ASSERT_EQ(
+        readSerializationHeader(pos, serialized.data() + serialized.size())
+            .blobCompression,
+        compressionType);
+
+    // Splits the blob inside its payload.
+    const auto mid = serialized.size() / 2;
+    auto chainedBuf = folly::IOBuf::copyBuffer(serialized.data(), mid);
+    chainedBuf->appendToChain(
+        folly::IOBuf::copyBuffer(
+            serialized.data() + mid, serialized.size() - mid));
+
+    Projector projector(
+        getNimbleSchema(type, options), subfields, pool_.get(), {});
+    const auto projected = projector.project(*chainedBuf);
+    chainedBuf.reset();
+
+    auto result =
+        deserialize(toString(projected), projector.projectedSchema(), {});
+    ASSERT_EQ(result->size(), 3);
+    auto bCol = result->as<RowVector>()->childAt(0)->as<FlatVector<int64_t>>();
+    EXPECT_EQ(bCol->valueAt(0), 100);
+    EXPECT_EQ(bCol->valueAt(1), 200);
+    EXPECT_EQ(bCol->valueAt(2), 300);
+  }
+}
+
 // Test that chained IOBuf input works correctly.
-TEST_F(ProjectorTest, chainedIOBufInput) {
+TEST_P(ProjectorTest, chainedIOBufInput) {
   auto type = ROW({
       {"a", INTEGER()},
       {"b", BIGINT()},
@@ -5786,7 +5874,7 @@ TEST_F(ProjectorTest, chainedIOBufInput) {
           makeStringVector({"x", "y", "z"}),
       });
 
-  SerializerOptions serOpts{.version = SerializationVersion::kSerialization};
+  SerializerOptions serOpts{.version = GetParam()};
   auto serialized = serialize(vec, type, serOpts);
   auto inputSchema = getNimbleSchema(type, serOpts);
 
@@ -5814,8 +5902,8 @@ TEST_F(ProjectorTest, chainedIOBufInput) {
   EXPECT_EQ(bCol->valueAt(2), 300);
 
   // Verify projecting all columns from chained IOBuf still deserializes back.
-  // Byte-level equality with `serialized` no longer holds because input is
-  // kSerialization and output is kProjection (different version bytes).
+  // Byte-level equality with `serialized` no longer holds because the output
+  // is kProjection (a different version byte).
   auto allSubfields = makeSubfields({"a", "b", "c"});
   Projector allColumnsProjector(inputSchema, allSubfields, pool_.get(), {});
   auto allColumnsResult = allColumnsProjector.project(*chainedBuf);
@@ -5827,7 +5915,7 @@ TEST_F(ProjectorTest, chainedIOBufInput) {
 // Verifies inputStreamsSorted_ is true for non-FlatMap projections (stream
 // indices are naturally sorted in DFS order) and that the sorted fast path
 // produces correct results for both contiguous and chained IOBuf inputs.
-TEST_F(ProjectorTest, sortedStreamIndicesFastPath) {
+TEST_P(ProjectorTest, sortedStreamIndicesFastPath) {
   auto type = ROW({
       {"a", INTEGER()},
       {"b", BIGINT()},
@@ -5842,7 +5930,7 @@ TEST_F(ProjectorTest, sortedStreamIndicesFastPath) {
           makeStringVector({"x", "y", "z"}),
       });
 
-  SerializerOptions serOpts{.version = SerializationVersion::kSerialization};
+  SerializerOptions serOpts{.version = GetParam()};
   auto serialized = serialize(vec, type, serOpts);
   auto inputSchema = getNimbleSchema(type, serOpts);
 
@@ -5899,7 +5987,7 @@ TEST_F(ProjectorTest, sortedStreamIndicesFastPath) {
 // Verifies inputStreamsSorted_ is false when multiple FlatMap columns cause
 // interleaved stream indices, and that the reorder path produces correct
 // results for both contiguous and chained IOBuf inputs.
-TEST_F(ProjectorTest, unsortedStreamIndicesReorderPath) {
+TEST_P(ProjectorTest, unsortedStreamIndicesReorderPath) {
   auto type = ROW({
       {"map_a", MAP(VARCHAR(), INTEGER())},
       {"map_b", MAP(VARCHAR(), BIGINT())},
@@ -5969,7 +6057,7 @@ TEST_F(ProjectorTest, unsortedStreamIndicesReorderPath) {
       pool_.get(), type, nullptr, numRows, std::vector<VectorPtr>{mapA, mapB});
 
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"map_a", {}}, {"map_b", {}}},
   };
   auto [serialized, inputSchema] = serializeWithSchema(vec, type, serOpts);
@@ -6046,7 +6134,7 @@ TEST_F(ProjectorTest, unsortedStreamIndicesReorderPath) {
 // Verifies that a single FlatMap column with sorted keys uses the sorted
 // fast path (keys are alphabetically sorted in projected schema, and file
 // order matches alphabetical order).
-TEST_F(ProjectorTest, singleFlatMapSortedFastPath) {
+TEST_P(ProjectorTest, singleFlatMapSortedFastPath) {
   auto type = ROW({
       {"id", BIGINT()},
       {"features", MAP(VARCHAR(), DOUBLE())},
@@ -6093,7 +6181,7 @@ TEST_F(ProjectorTest, singleFlatMapSortedFastPath) {
       pool_.get(), type, nullptr, numRows, std::vector<VectorPtr>{ids, mapVec});
 
   SerializerOptions serOpts{
-      .version = SerializationVersion::kSerialization,
+      .version = GetParam(),
       .flatMapColumns = {{"features", {}}},
   };
   auto [serialized, inputSchema] = serializeWithSchema(vec, type, serOpts);
@@ -6126,7 +6214,7 @@ TEST_F(ProjectorTest, singleFlatMapSortedFastPath) {
 }
 
 // Verifies that projected output does not compress stream sizes in the trailer.
-TEST_F(ProjectorTest, projectedTrailerNoCompression) {
+TEST_P(ProjectorTest, projectedTrailerNoCompression) {
   // Create a row with many columns to produce a large stream sizes trailer.
   std::vector<std::string> names;
   std::vector<VectorPtr> children;
@@ -6139,7 +6227,7 @@ TEST_F(ProjectorTest, projectedTrailerNoCompression) {
   auto vec = makeSimpleRowVector(names, children);
 
   // Serialize with kLegacyCompact.
-  SerializerOptions serOpts{.version = SerializationVersion::kSerialization};
+  SerializerOptions serOpts{.version = GetParam()};
   auto serialized = serialize(vec, type, serOpts);
   auto inputSchema = getNimbleSchema(type, serOpts);
 
@@ -6192,6 +6280,9 @@ TEST_F(ProjectorTest, fuzzMixedVersionProjection) {
       {.version = SerializationVersion::kSerialization,
        .streamIndicesEncodingType = EncodingType::FixedBitWidth,
        .streamSizesEncodingType = EncodingType::Varint},
+      {.version = SerializationVersion::kBlob},
+      {.version = SerializationVersion::kBlob,
+       .blobCompressionOptions = {.compressionType = CompressionType::Zstd}},
   };
 
   // Output projection versions.
@@ -6278,5 +6369,13 @@ TEST_F(ProjectorTest, fuzzMixedVersionProjection) {
     }
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    WriterVersions,
+    ProjectorTest,
+    ::testing::Values(
+        SerializationVersion::kSerialization,
+        SerializationVersion::kBlob),
+    [](const auto& info) { return toString(info.param); });
 
 } // namespace facebook::nimble::serde

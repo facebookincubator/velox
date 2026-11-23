@@ -33,11 +33,13 @@
 #include "velox/experimental/torchwave/StaticDims.h"
 #include "velox/experimental/torchwave/StepProgram.h"
 #include "velox/experimental/torchwave/StepSupport.h"
+#include "velox/experimental/torchwave/SymShape.h"
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/ValueTable.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
 #include "velox/experimental/torchwave/WaveGraph.h"
 
+#include <torch/library.h>
 #include <torch/nativert/graph/Graph.h>
 
 DEFINE_string(
@@ -60,6 +62,8 @@ DEFINE_int64(
     0,
     "Seed for --run_synthetic data generation (deterministic)");
 DECLARE_string(reference_frame);
+DECLARE_int32(num_repeats);
+DECLARE_bool(verify_repeats);
 DECLARE_string(save_reference_frame);
 
 namespace torch::wave {
@@ -125,13 +129,16 @@ makeTensorMeta(c10::ScalarType dtype, int64_t rank, int64_t sizeValue = 1) {
 // entry in 'runs' (each a positional CPU-tensor input set by graph user-input
 // order), reusing one executor and its pooled frame/state across runs so a
 // multi-run call exercises state reuse (and grid-choice caching) across
-// executions. Returns the last run's host output tensors. 'afterRun', if
-// given, is called after each execution while the executor, and so the
-// waveThreadInfo() clocks that point into its buffers, is still alive.
+// executions. 'symShapes', when given, are the symbolic shapes an export
+// would carry, which device sizing needs. 'afterRun', if given, is called after
+// each execution while the executor, and so the waveThreadInfo() clocks that
+// point into its buffers, is still alive. Returns the last run's host output
+// tensors.
 std::vector<at::Tensor> runWaveProgrammatic(
     std::unique_ptr<nativert::Graph> graph,
     const std::unordered_map<std::string, torch::_export::TensorMeta>& meta,
     const std::vector<std::vector<at::Tensor>>& runs,
+    std::shared_ptr<SymShapes> symShapes,
     const std::function<void()>& afterRun = nullptr) {
   graph->setTensorValuesMeta(meta);
   setGraphDevice(graph.get(), /*isCuda=*/true);
@@ -139,6 +146,7 @@ std::vector<at::Tensor> runWaveProgrammatic(
   auto ctx = std::make_unique<ModelContext>();
   ctx->weights = std::make_shared<nativert::Weights>(graph.get());
   ctx->graph = std::move(graph);
+  ctx->symShapes = std::move(symShapes);
 
   WaveGraphExecutor exec(std::move(ctx));
   const auto& runGraph = exec.graph();
@@ -181,6 +189,14 @@ std::vector<at::Tensor> runWaveProgrammatic(
     }
   }
   return hostOutputs;
+}
+
+std::vector<at::Tensor> runWaveProgrammatic(
+    std::unique_ptr<nativert::Graph> graph,
+    const std::unordered_map<std::string, torch::_export::TensorMeta>& meta,
+    const std::vector<std::vector<at::Tensor>>& runs,
+    const std::function<void()>& afterRun = nullptr) {
+  return runWaveProgrammatic(std::move(graph), meta, runs, nullptr, afterRun);
 }
 
 // compilePlans for a programmatic graph: same steps as the .pt2 path, so a
@@ -1047,6 +1063,71 @@ return(%o)
         at::zeros_like(x),
         at::randint(0, 3, {500, rowLen}, at::kLong));
     runModes(kRuntimeShapeGraph, meta, {x, y}, at::lt(x, y).any(1));
+  }
+}
+
+// sort over the last dim of rows with a static length runs as tw.sort_rows,
+// one block per row. Equal keys keep their order, as in aten's stable sort.
+TEST_F(ExecutorTest, sortRowsTest) {
+  auto resetConfig =
+      folly::makeGuard([] { WaveConfig::get().isCg = std::nullopt; });
+  struct Case {
+    int64_t rowLen;
+    c10::ScalarType dtype;
+    bool descending;
+  };
+  for (const auto& c :
+       {Case{5, c10::ScalarType::Long, false},
+        Case{200, c10::ScalarType::Long, false},
+        Case{2048, c10::ScalarType::Long, false},
+        Case{200, c10::ScalarType::Float, true}}) {
+    SCOPED_TRACE(
+        fmt::format(
+            "row {} {} descending {}",
+            c.rowLen,
+            c10::toString(c.dtype),
+            c.descending));
+    const auto graph = fmt::format(
+        R"(graph(%x):
+%v = torch.ops.aten.view.default(self=%x, size=[-1, {}])
+%s, %i = torch.ops.aten.sort.default(self=%v, dim=1, descending={})
+return(%s, %i)
+)",
+        c.rowLen,
+        c.descending ? "true" : "false");
+    std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+    meta["x"] = makeTensorMeta(c.dtype, 1);
+    meta["v"] = makeTensorMeta(c.dtype, 2);
+    meta["s"] = makeTensorMeta(c.dtype, 2);
+    meta["i"] = makeTensorMeta(c10::ScalarType::Long, 2);
+    const auto plan = compilePlanProgrammatic(
+        nativert::stringToGraph(graph), meta, CompiledPlan::Mode::kMultiKernel);
+    int32_t sortKernels = 0;
+    for (const auto& node : plan.nodes()) {
+      for (const auto& step : node.steps) {
+        for (const auto& kernel : step.kernels) {
+          sortKernels += kernel.has("tw.sort_rows") ? 1 : 0;
+        }
+      }
+    }
+    EXPECT_EQ(sortKernels, 1) << plan.describe();
+    // Few distinct keys, so most have ties.
+    auto x = at::randint(0, 20, {300 * c.rowLen}, at::kLong).to(c.dtype);
+    if (c.dtype == c10::ScalarType::Float) {
+      x.index_put_({at::arange(0, x.numel(), 7, at::kLong)}, NAN);
+    }
+    auto [values, indices] =
+        at::sort(x.view({300, c.rowLen}), /*stable=*/true, 1, c.descending);
+    for (bool cg : {false, true}) {
+      SCOPED_TRACE(fmt::format("cg {}", cg));
+      WaveConfig::get().isCg = cg;
+      auto outputs =
+          runWaveProgrammatic(nativert::stringToGraph(graph), meta, {{x}});
+      ASSERT_EQ(outputs.size(), 2);
+      EXPECT_TRUE(at::equal(outputs[1], indices))
+          << firstDifference(outputs[1], indices);
+      EXPECT_TRUE(at::allclose(outputs[0], values, 0, 0, /*equal_nan=*/true));
+    }
   }
 }
 
@@ -5383,6 +5464,435 @@ return(%o)
   auto reference = at::cat({at::zeros({1}, at::kLong), at::cumsum(sel, 0)}, 0);
   EXPECT_TRUE(tensorsMatch(outputs[0], reference))
       << firstDifference(outputs[0], reference);
+}
+
+// With the device flags, the setup of each placed group writes the bytes it
+// computes the group needs to the demand table. The host still sizes, and
+// carves exactly that, so every demand equals its buffer's size. Groups need a
+// settled grid choice, so both are run.
+TEST_F(ExecutorTest, setupDemandsMatchHostSizes) {
+  auto resetConfig = folly::makeGuard([] {
+    WaveConfig::get().deviceSizeCheck = false;
+    WaveConfig::get().deviceSizing = false;
+    WaveConfig::get().devicePlacement = false;
+    WaveConfig::get().checkDemands = false;
+    WaveConfig::get().isCg = std::nullopt;
+  });
+  WaveConfig::get().deviceSizeCheck = true;
+  WaveConfig::get().deviceSizing = true;
+  WaveConfig::get().devicePlacement = true;
+  WaveConfig::get().checkDemands = true;
+  const int64_t checks = gDemandChecks;
+  const int64_t mismatches = gDemandMismatches;
+  for (const bool cg : {false, true}) {
+    WaveConfig::get().isCg = cg;
+    runTest("data/rows_nd_test.pt2", "data/rows_nd_test_results.pt");
+    runTest("data/cat_nd_test.pt2", "data/cat_nd_test_results.pt");
+    runTest("data/nonzero_test.pt2", "data/nonzero_test_results.pt");
+    runTest("data/scatter_add_test.pt2", "data/scatter_add_test_results.pt");
+  }
+  EXPECT_GT(gDemandChecks - checks, 0);
+  EXPECT_EQ(gDemandMismatches - mismatches, 0);
+}
+
+// Under deviceAlloc, the executions after the first run the steps on the
+// device path without host sizing: their groups come from the demands the
+// setups recorded, and the steps off the path fetch the descriptors they read.
+// Every repeat must match the expected outputs.
+TEST_F(ExecutorTest, deviceAllocRepeatsMatch) {
+  auto& config = WaveConfig::get();
+  const auto savedRepeats = FLAGS_num_repeats;
+  const auto savedVerify = FLAGS_verify_repeats;
+  auto resetConfig = folly::makeGuard([&, savedRepeats, savedVerify] {
+    config.deviceAlloc = false;
+    config.deviceSizeCheck = false;
+    config.deviceSizing = false;
+    config.devicePlacement = false;
+    config.deviceGrid = false;
+    config.isCg = std::nullopt;
+    FLAGS_num_repeats = savedRepeats;
+    FLAGS_verify_repeats = savedVerify;
+  });
+  config.deviceAlloc = true;
+  config.deviceSizeCheck = true;
+  config.deviceSizing = true;
+  config.devicePlacement = true;
+  config.deviceGrid = true;
+  config.isCg = true;
+  FLAGS_num_repeats = 3;
+  FLAGS_verify_repeats = true;
+  const int64_t before = gDeviceAllocStepRuns;
+  runTest("data/cat_nd_test.pt2", "data/cat_nd_test_results.pt");
+  runTest(
+      "data/cat_alloc_group_test.pt2", "data/cat_alloc_group_test_results.pt");
+  runTest(
+      "data/repeat_interleave_test.pt2",
+      "data/repeat_interleave_test_results.pt");
+  runTest("data/scatter_add_test.pt2", "data/scatter_add_test_results.pt");
+  EXPECT_GT(gDeviceAllocStepRuns - before, 0);
+}
+
+// Turns on device alloc for the scope: the executions after the first run the
+// steps on the device path.
+class DeviceAllocScope {
+ public:
+  explicit DeviceAllocScope(bool cg) {
+    auto& config = WaveConfig::get();
+    config.deviceAlloc = true;
+    config.deviceSizeCheck = true;
+    config.deviceSizing = true;
+    config.devicePlacement = true;
+    config.deviceGrid = true;
+    config.checkExports = true;
+    config.isCg = cg;
+  }
+
+  ~DeviceAllocScope() {
+    auto& config = WaveConfig::get();
+    config.deviceAlloc = false;
+    config.deviceSizeCheck = false;
+    config.deviceSizing = false;
+    config.devicePlacement = false;
+    config.deviceGrid = false;
+    config.checkExports = false;
+    config.isCg = std::nullopt;
+  }
+};
+
+// The export's shapes of x [s0], m [s0] and s = x[m] [u0], the values of
+// kMaskedPrefix below, and of 'sameAsS', which have s's shape; device sizing
+// derives the rest.
+std::shared_ptr<SymShapes> maskedSymShapes(
+    const std::vector<std::string>& sameAsS) {
+  auto shapes = std::make_shared<SymShapes>();
+  const std::string input("Symbol('s0', integer=True, positive=True)");
+  addSymShape(*shapes, "x", {input}, {int64_t{1}});
+  addSymShape(*shapes, "m", {input}, {int64_t{1}});
+  for (const auto& name : sameAsS) {
+    addSymShape(
+        *shapes,
+        name,
+        {std::string("Symbol('u0', integer=True)")},
+        {int64_t{1}});
+  }
+  return shapes;
+}
+
+// Runs the graph 'makeGraph' returns, which starts with kMaskedPrefix below,
+// three times on the same inputs under device alloc, with and without cg, and
+// checks the last outputs against 'expected' and that steps ran on the device
+// path. 'shapes' are the export's shapes.
+void expectDeviceAllocOutputs(
+    const std::function<std::unique_ptr<nativert::Graph>()>& makeGraph,
+    const std::unordered_map<std::string, torch::_export::TensorMeta>& meta,
+    const SymShapes& shapes,
+    const std::vector<at::Tensor>& inputs,
+    const std::vector<at::Tensor>& expected) {
+  const int64_t before = gDeviceAllocStepRuns;
+  for (const bool cg : {false, true}) {
+    SCOPED_TRACE(fmt::format("cg {}", cg));
+    DeviceAllocScope scope(cg);
+    auto outputs = runWaveProgrammatic(
+        makeGraph(),
+        meta,
+        {inputs, inputs, inputs},
+        std::make_shared<SymShapes>(shapes));
+    ASSERT_EQ(outputs.size(), expected.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+      EXPECT_TRUE(tensorsMatch(outputs[i], expected[i]))
+          << "output " << i << ": " << firstDifference(outputs[i], expected[i]);
+    }
+  }
+  EXPECT_GT(gDeviceAllocStepRuns - before, 0);
+}
+
+// x[m] for a mask m: a data-dependent extent, so the steps after it are
+// sized on the device.
+constexpr const char* kMaskedPrefix = R"(graph(%x, %m):
+%l[] = prim.ListPack(l0=%m)
+%s = torch.ops.aten.index.Tensor(self=%x, indices=%l)
+)";
+
+std::unordered_map<std::string, torch::_export::TensorMeta> maskedMeta(
+    const std::vector<std::string>& longs) {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["m"] = makeTensorMeta(c10::ScalarType::Bool, 1);
+  for (const auto& name : longs) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  return meta;
+}
+
+// A view of an eager op's output (flip has no kernel), read by a kernel and
+// returned: the setup places the view and its export from the address the
+// host writes for the flip's output once it returns.
+TEST_F(ExecutorTest, deviceAllocViewOfEagerOutput) {
+  const auto graph = std::string(kMaskedPrefix) + R"(
+%a = torch.ops.aten.add.Tensor(self=%s, other=%s)
+%f = torch.ops.aten.flip.default(self=%a, dims=[0])
+%v = torch.ops.aten.unsqueeze.default(self=%f, dim=1)
+%y = torch.ops.aten.mul.Tensor(self=%v, other=%v)
+return(%y, %v)
+)";
+  auto x = at::randint(0, 1000, {2000}, at::kLong);
+  auto m = x > 300;
+  auto s = x.index({m});
+  auto v = at::flip(s + s, {0}).unsqueeze(1);
+  auto meta = maskedMeta({"x", "s", "a", "f"});
+  meta["v"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["y"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  expectDeviceAllocOutputs(
+      [&] { return nativert::stringToGraph(graph); },
+      meta,
+      *maskedSymShapes({"s", "a", "f"}),
+      {x, m},
+      {v * v, v});
+}
+
+// A custom op with no kernel and no shape rule, which runs eagerly.
+TORCH_LIBRARY(tw_test, m) {
+  m.def("reverse(Tensor self) -> Tensor");
+}
+
+TORCH_LIBRARY_IMPL(tw_test, CompositeExplicitAutograd, m) {
+  m.impl("reverse", [](const at::Tensor& self) { return at::flip(self, {0}); });
+}
+
+// A custom eager op whose export gives a fixed extent its output does not
+// have, as a fake kernel's would, read by a kernel: the kernel's output takes
+// the extent the eager op returns.
+TEST_F(ExecutorTest, deviceAllocEagerOutputExtent) {
+  const auto graph = std::string(kMaskedPrefix) + R"(
+%f = torch.ops.tw_test.reverse.default(self=%s)
+%y = torch.ops.aten.add.Tensor(self=%f, other=%f)
+return(%y)
+)";
+  auto x = at::randint(0, 1000, {2000}, at::kLong);
+  auto m = x > 300;
+  auto f = at::flip(x.index({m}), {0});
+  auto shapes = maskedSymShapes({"s"});
+  addSymShape(*shapes, "f", {x.size(0)}, {int64_t{1}});
+  expectDeviceAllocOutputs(
+      [&] { return nativert::stringToGraph(graph); },
+      maskedMeta({"x", "s", "f", "y"}),
+      *shapes,
+      {x, m},
+      {f + f});
+}
+
+// A stack whose operands the stack's launch writes in place into its bands:
+// the setup sizes the operands, and the host writes their headers.
+TEST_F(ExecutorTest, deviceAllocStackOfInPlaceOperands) {
+  const auto graph = std::string(kMaskedPrefix) + R"(
+%a = torch.ops.aten.add.Tensor(self=%s, other=%s)
+%b = torch.ops.aten.mul.Tensor(self=%s, other=%s)
+%p[] = prim.ListPack(l0=%a, l1=%b)
+%t = torch.ops.aten.stack.default(tensors=%p, dim=1)
+return(%t)
+)";
+  auto x = at::randint(0, 1000, {2000}, at::kLong);
+  auto m = x > 300;
+  auto s = x.index({m});
+  auto meta = maskedMeta({"x", "s", "a", "b"});
+  meta["t"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  expectDeviceAllocOutputs(
+      [&] { return nativert::stringToGraph(graph); },
+      meta,
+      *maskedSymShapes({"s", "a", "b"}),
+      {x, m},
+      {at::stack({s + s, s * s}, 1)});
+}
+
+// A view a step on the device path makes, returned and read by an eager op:
+// both read it from its export slot.
+TEST_F(ExecutorTest, deviceAllocViewHostReads) {
+  const auto graph = std::string(kMaskedPrefix) + R"(
+%a = torch.ops.aten.mul.Tensor(self=%s, other=%s)
+%v = torch.ops.aten.slice.Tensor(self=%a, dim=0, start=2, end=900, step=3)
+%f = torch.ops.aten.flip.default(self=%v, dims=[0])
+return(%v, %f)
+)";
+  auto x = at::randint(0, 1000, {2000}, at::kLong);
+  auto m = x > 300;
+  auto s = x.index({m});
+  auto v = (s * s).slice(0, 2, 900, 3);
+  expectDeviceAllocOutputs(
+      [&] { return nativert::stringToGraph(graph); },
+      maskedMeta({"x", "s", "a", "v", "f"}),
+      *maskedSymShapes({"s", "a"}),
+      {x, m},
+      {v, at::flip(v, {0})});
+}
+
+// x[m] followed by its own length: cat(x[m], [n]) where n is sym_size(x[m],
+// 0), a SymInt the text format cannot type, so the graph is parsed with a
+// constant and then rewritten.
+std::unique_ptr<nativert::Graph> makeMaskedLengthGraph() {
+  const auto text = std::string(kMaskedPrefix) + R"(
+%f = torch.ops.aten.new_full.default(self=%s, size=[1], fill_value=7)
+%c[] = prim.ListPack(l0=%s, l1=%f)
+%o = torch.ops.aten.cat.default(tensors=%c)
+return (%o)
+)";
+  auto graph = nativert::stringToGraph(text);
+  nativert::Node* full = nullptr;
+  for (auto& node : graph->nodes()) {
+    if (node.target() == "torch.ops.aten.new_full.default") {
+      full = &node;
+    }
+  }
+  auto* size = graph->createNode(
+      "torch.ops.aten.sym_size.int", {{"self", graph->tryGetValue("s")}});
+  size->addAttribute({"dim", int64_t{0}});
+  auto* n = size->addOutput("n", nativert::Type(nativert::Type::Kind::SymInt));
+  graph->insertBefore(size, full);
+  auto* dynamicFull = graph->createNode(
+      "torch.ops.aten.new_full.default",
+      {{"self", full->inputs()[0].value}, {"fill_value", n}});
+  dynamicFull->addAttribute({"size", std::vector<int64_t>{1}});
+  auto* fullOut = dynamicFull->addOutput(
+      "f2", nativert::Type(nativert::Type::Kind::Tensor));
+  graph->insertBefore(dynamicFull, full);
+  graph->replaceAllUses(full->outputs()[0], fullOut);
+  graph->removeNode(full);
+  graph->renumberValues();
+  return graph;
+}
+
+// A sym_size of a data-dependent extent, read by a fill on the device path:
+// its readers get the scalar from a setup record.
+TEST_F(ExecutorTest, deviceAllocSymSize) {
+  auto x = at::randint(0, 1000, {2000}, at::kLong);
+  auto m = x > 300;
+  auto s = x.index({m});
+  expectDeviceAllocOutputs(
+      makeMaskedLengthGraph,
+      maskedMeta({"x", "s", "f", "f2", "o"}),
+      *maskedSymShapes({"s"}),
+      {x, m},
+      {at::cat({s, at::full({1}, s.size(0), at::kLong)})});
+}
+
+// A gather with an index out of range raises a kernel error at the end of the
+// execution, naming the step and op; the steps after it do not run. The same
+// executor then runs good indices correctly: the error leaves the compiled
+// graph usable.
+TEST_F(ExecutorTest, kernelErrorStopsExecution) {
+  auto graph = nativert::stringToGraph(R"(graph(%x, %i):
+%list[] = prim.ListPack(l0=%i)
+%g = torch.ops.aten.index.Tensor(self=%x, indices=%list)
+%c = torch.ops.aten.cumsum.default(self=%g, dim=0)
+return(%g, %c)
+)");
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["x"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["i"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["g"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["c"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  graph->setTensorValuesMeta(meta);
+  setGraphDevice(graph.get(), /*isCuda=*/true);
+  auto ctx = std::make_unique<ModelContext>();
+  ctx->weights = std::make_shared<nativert::Weights>(graph.get());
+  ctx->graph = std::move(graph);
+  WaveGraphExecutor exec(std::move(ctx));
+  const auto& runGraph = exec.graph();
+  const auto& inputNames = runGraph.signature().userInputs();
+  auto run = [&](const at::Tensor& x, const at::Tensor& index) {
+    std::vector<c10::IValue> inputs{x, index};
+    auto [deviceInputs, transferUs] = inputsToDevice(inputs);
+    auto frame = exec.getFrame();
+    for (size_t i = 0; i < 2; ++i) {
+      frame->setIValue(
+          runGraph.tryGetValue(inputNames[i])->id(), deviceInputs[i]);
+    }
+    auto returnFrame =
+        folly::makeGuard([&] { exec.returnFrame(std::move(frame)); });
+    auto outputs = exec.executeWithPrefilledFrame(*frame);
+    std::vector<at::Tensor> host;
+    for (auto& value : outputsToHost(outputs, "kernelError")) {
+      host.push_back(value.toTensor());
+    }
+    return host;
+  };
+  auto x = at::arange(100'000, at::kLong) * 3;
+  auto good = at::arange(50'000, at::kLong) * 2;
+  auto bad = good.clone();
+  bad[777] = 1'000'000;
+  try {
+    run(x, bad);
+    FAIL() << "No error for an index out of range";
+  } catch (const c10::Error& e) {
+    const std::string message = e.what();
+    EXPECT_NE(message.find("Wave kernel error in node"), std::string::npos)
+        << message;
+    EXPECT_NE(message.find("the later steps did not run"), std::string::npos)
+        << message;
+  }
+  auto outputs = run(x, good);
+  ASSERT_EQ(outputs.size(), 2);
+  auto gathered = x.index_select(0, good);
+  EXPECT_TRUE(tensorsMatch(outputs[0], gathered));
+  EXPECT_TRUE(tensorsMatch(outputs[1], at::cumsum(gathered, 0)));
+}
+
+// With step k marked failed in the failure words, the setups and composite
+// kernels of step k and every later step return at entry, and the steps before
+// it run. The chained cumsums finish their outputs in order, so the outputs
+// that come out right are a prefix: none with step 0 failed, all with no step
+// failed, and never fewer as k grows.
+TEST_F(ExecutorTest, failedStepStopsLaterSteps) {
+  auto resetConfig = folly::makeGuard([] {
+    WaveConfig::get().testFailedStep = -1;
+    WaveConfig::get().isCg = std::nullopt;
+  });
+  constexpr const char* kGraph = R"(graph(%x):
+%a = torch.ops.aten.cumsum.default(self=%x, dim=0)
+%b = torch.ops.aten.cumsum.default(self=%a, dim=0)
+%c = torch.ops.aten.cumsum.default(self=%b, dim=0)
+return(%a, %b, %c)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const char* name : {"x", "a", "b", "c"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  for (const bool cg : {false, true}) {
+    WaveConfig::get().isCg = cg ? std::optional<bool>(true) : std::nullopt;
+    int32_t lastRight = 0;
+    bool sawPartial = false;
+    for (const int32_t failed : {0, 1, 2, 3, 4, 6, 8, 12, -1}) {
+      WaveConfig::get().testFailedStep = failed;
+      // Inputs differ per run, so an output left unwritten cannot hold the
+      // right values from an earlier run's buffer.
+      auto x = (at::arange(200'000, at::kLong) + failed + 2) % 5;
+      auto outputs =
+          runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{x}});
+      ASSERT_EQ(outputs.size(), 3);
+      auto expected = at::cumsum(x, 0);
+      int32_t numRight = 0;
+      bool prefix = true;
+      bool seenWrong = false;
+      for (const auto& output : outputs) {
+        const bool right = tensorsMatch(output, expected);
+        prefix = prefix && !(right && seenWrong);
+        seenWrong = seenWrong || !right;
+        numRight += right ? 1 : 0;
+        expected = at::cumsum(expected, 0);
+      }
+      SCOPED_TRACE(fmt::format("cg {} failed step {}", cg, failed));
+      EXPECT_TRUE(prefix);
+      if (failed == 0) {
+        EXPECT_EQ(numRight, 0);
+      } else if (failed < 0) {
+        EXPECT_EQ(numRight, 3);
+      } else {
+        EXPECT_GE(numRight, lastRight);
+      }
+      sawPartial = sawPartial || (numRight > 0 && numRight < 3);
+      lastRight = numRight;
+    }
+    // The chain spans several steps, so some failed step falls between them.
+    EXPECT_TRUE(sawPartial) << "cg " << cg;
+  }
 }
 
 } // namespace

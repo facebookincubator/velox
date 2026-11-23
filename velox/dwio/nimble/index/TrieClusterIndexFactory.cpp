@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/dwio/nimble/index/HierarchicalClusterIndexFactory.h"
+#include "velox/dwio/nimble/index/TrieClusterIndexFactory.h"
 
 #include <algorithm>
 #include <array>
@@ -24,10 +24,10 @@
 #include "velox/buffer/Buffer.h"
 #include "velox/common/Casts.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
-#include "velox/dwio/nimble/index/HierarchicalClusterIndex.h"
-#include "velox/dwio/nimble/index/HierarchicalClusterIndexWriter.h"
-#include "velox/dwio/nimble/index/HierarchicalKeyFormat.h"
 #include "velox/dwio/nimble/index/IndexConstants.h"
+#include "velox/dwio/nimble/index/TrieClusterIndex.h"
+#include "velox/dwio/nimble/index/TrieClusterIndexWriter.h"
+#include "velox/dwio/nimble/index/TrieKeyFormat.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 
@@ -42,53 +42,53 @@ uint64_t levelValueAt(
     velox::vector_size_t row,
     velox::TypeKind kind,
     bool ascending) {
-  // hierarchicalKeyTypes() admits only the integral kinds below.
+  // trieKeyTypes() admits only the integral kinds below.
   // NOLINTNEXTLINE(clang-diagnostic-switch-enum)
   switch (kind) {
     case velox::TypeKind::BOOLEAN:
-      return HierarchicalKeyFormat::normalizeKeyValue(
+      return TrieKeyFormat::normalizeKeyValue(
           values.valueAt<bool>(row), ascending);
     case velox::TypeKind::TINYINT:
-      return HierarchicalKeyFormat::normalizeKeyValue(
+      return TrieKeyFormat::normalizeKeyValue(
           values.valueAt<int8_t>(row), ascending);
     case velox::TypeKind::SMALLINT:
-      return HierarchicalKeyFormat::normalizeKeyValue(
+      return TrieKeyFormat::normalizeKeyValue(
           values.valueAt<int16_t>(row), ascending);
     case velox::TypeKind::INTEGER:
-      return HierarchicalKeyFormat::normalizeKeyValue(
+      return TrieKeyFormat::normalizeKeyValue(
           values.valueAt<int32_t>(row), ascending);
     case velox::TypeKind::BIGINT:
-      return HierarchicalKeyFormat::normalizeKeyValue(
+      return TrieKeyFormat::normalizeKeyValue(
           values.valueAt<int64_t>(row), ascending);
     default:
-      NIMBLE_UNREACHABLE("Unsupported hierarchical key type: {}.", kind);
+      NIMBLE_UNREACHABLE("Unsupported trie key type: {}.", kind);
   }
 }
 
 // Returns the type of each of 'columns' of 'inputType'. Throws unless each is
 // an integral column of 'inputType', which a level of the index can hold.
-std::vector<velox::TypePtr> hierarchicalKeyTypes(
+std::vector<velox::TypePtr> trieKeyTypes(
     const std::vector<std::string>& columns,
     const velox::RowType& inputType) {
   NIMBLE_USER_CHECK(
-      !columns.empty(), "Hierarchical index key encoder requires key columns.");
+      !columns.empty(), "Trie index key encoder requires key columns.");
   NIMBLE_USER_CHECK_LE(
       columns.size(),
       std::numeric_limits<uint8_t>::max(),
-      "Hierarchical key chunks support at most 255 columns.");
+      "Trie key chunks support at most 255 columns.");
   std::vector<velox::TypePtr> types;
   types.reserve(columns.size());
   for (const auto& column : columns) {
     const auto index = inputType.getChildIdxIfExists(column);
     NIMBLE_USER_CHECK(
-        index.has_value(), "Hierarchical key column is missing: '{}'.", column);
+        index.has_value(), "Trie key column is missing: '{}'.", column);
     const auto& type = inputType.childAt(*index);
     const auto kind = type->kind();
     NIMBLE_USER_CHECK(
         kind == velox::TypeKind::BOOLEAN || kind == velox::TypeKind::TINYINT ||
             kind == velox::TypeKind::SMALLINT ||
             kind == velox::TypeKind::INTEGER || kind == velox::TypeKind::BIGINT,
-        "Hierarchical key column must be integral: '{}', type {}.",
+        "Trie key column must be integral: '{}', type {}.",
         column,
         kind);
     types.push_back(type);
@@ -112,29 +112,29 @@ uint64_t maxLevelValue(uint8_t width) {
                                    : (uint64_t{1} << (8 * width)) - 1;
 }
 
-// The key encoder of a hierarchical cluster index, which writes its keys with
+// The key encoder of a trie cluster index, which writes its keys with
 // the codec of the index. The key columns of a row give the values of the
 // levels, as they give them to the writer of the index. It is not thread-safe:
 // its calls reuse a buffer of the values of the levels.
-class NimbleHierarchicalIndexKeyEncoder final : public IndexKeyEncoder {
+class NimbleTrieIndexKeyEncoder final : public IndexKeyEncoder {
  public:
-  NimbleHierarchicalIndexKeyEncoder(
+  NimbleTrieIndexKeyEncoder(
       const std::vector<std::string>& columns,
       const velox::RowType& inputType,
       const std::vector<SortOrder>& sortOrders,
-      std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
+      std::shared_ptr<const TrieKeyCodec> keyCodec,
       velox::memory::MemoryPool* pool)
       : keyCodec_{velox::checkedNotNull(std::move(keyCodec))},
         pool_{velox::checkedNotNull(pool)},
         columns_{columns},
         sortOrders_{sortOrders},
-        keyTypes_{hierarchicalKeyTypes(columns, inputType)},
+        keyTypes_{trieKeyTypes(columns, inputType)},
         levelWidths_{levelWidths(keyTypes_)},
         keySize_{keyCodec_->keySize(levelWidths_)} {
     NIMBLE_USER_CHECK_EQ(
         sortOrders_.size(),
         columns_.size(),
-        "Hierarchical index key encoder requires a sort order for each key column.");
+        "Trie index key encoder requires a sort order for each key column.");
   }
 
   void encode(
@@ -147,7 +147,7 @@ class NimbleHierarchicalIndexKeyEncoder final : public IndexKeyEncoder {
     const size_t numBytes = numRows * keySize_;
     auto* output = static_cast<char*>(bufferAllocator(numBytes));
     if (numBytes > 0) {
-      NIMBLE_CHECK_NOT_NULL(output, "Hierarchical key allocator returned null");
+      NIMBLE_CHECK_NOT_NULL(output, "Trie key allocator returned null");
     }
     keyCodec_->encodeKeys(levels, levelWidths_, output);
     encodedKeys.clear();
@@ -161,7 +161,7 @@ class NimbleHierarchicalIndexKeyEncoder final : public IndexKeyEncoder {
       const velox::serializer::IndexBounds& indexBounds) override {
     NIMBLE_USER_CHECK(
         indexBounds.validate(),
-        "Hierarchical index key encoder requires valid index bounds.");
+        "Trie index key encoder requires valid index bounds.");
     std::vector<velox::serializer::EncodedKeyBounds> results(
         indexBounds.numRows());
     if (indexBounds.lowerBound.has_value()) {
@@ -172,7 +172,7 @@ class NimbleHierarchicalIndexKeyEncoder final : public IndexKeyEncoder {
         if (!lowerBound.inclusive) {
           NIMBLE_USER_CHECK(
               increment(rowLevels),
-              "Exclusive lower bound of a hierarchical index has no next key.");
+              "Exclusive lower bound of a trie index has no next key.");
         }
         results[row].lowerKey = keyCodec_->encodeKey(rowLevels, levelWidths_);
       }
@@ -216,20 +216,18 @@ class NimbleHierarchicalIndexKeyEncoder final : public IndexKeyEncoder {
       const auto& column = columns_[level];
       const auto index = rowType.getChildIdxIfExists(column);
       NIMBLE_USER_CHECK(
-          index.has_value(),
-          "Hierarchical key column is missing: '{}'.",
-          column);
+          index.has_value(), "Trie key column is missing: '{}'.", column);
       const auto kind = keyTypes_[level]->kind();
       NIMBLE_USER_CHECK_EQ(
           rowType.childAt(*index)->kind(),
           kind,
-          "Hierarchical key column changed its type: '{}'.",
+          "Trie key column changed its type: '{}'.",
           column);
       const velox::DecodedVector values{*rows.childAt(*index)};
       for (velox::vector_size_t row = 0; row < rows.size(); ++row) {
         NIMBLE_USER_CHECK(
             !values.isNullAt(row),
-            "Hierarchical key column must not be null: '{}'.",
+            "Trie key column must not be null: '{}'.",
             column);
         levels[static_cast<size_t>(row) * numLevels + level] =
             levelValueAt(values, row, kind, sortOrders_[level].ascending);
@@ -262,7 +260,7 @@ class NimbleHierarchicalIndexKeyEncoder final : public IndexKeyEncoder {
   }
 
   // Writes the keys of the index.
-  const std::shared_ptr<const HierarchicalKeyCodec> keyCodec_;
+  const std::shared_ptr<const TrieKeyCodec> keyCodec_;
   // Allocates levels_.
   velox::memory::MemoryPool* const pool_;
   // The key columns, one per level.
@@ -285,7 +283,7 @@ class NimbleHierarchicalIndexKeyEncoder final : public IndexKeyEncoder {
 // big-endian, which sorts bytewise. It takes only complete keys. The class is
 // final, so the compiler resolves its own calls of keySize() and encodeKey()
 // without a virtual dispatch, which encodeKeys() relies on for each row.
-class NimbleHierarchicalKeyCodec final : public HierarchicalKeyCodec {
+class NimbleTrieKeyCodec final : public TrieKeyCodec {
  public:
   size_t keySize(std::span<const uint8_t> levelWidths) const override {
     size_t bytes{0};
@@ -320,8 +318,7 @@ class NimbleHierarchicalKeyCodec final : public HierarchicalKeyCodec {
           break;
         default:
           NIMBLE_UNREACHABLE(
-              "Unsupported hierarchical key level width: {}",
-              levelWidths[level]);
+              "Unsupported trie key level width: {}", levelWidths[level]);
       }
       key += levelWidths[level];
     }
@@ -349,13 +346,13 @@ class NimbleHierarchicalKeyCodec final : public HierarchicalKeyCodec {
     NIMBLE_CHECK_EQ(
         target.size(),
         keySize(levelWidths),
-        "HierarchicalKeyReader requires a complete encoded key.");
+        "TrieKeyReader requires a complete encoded key.");
     size_t offset{0};
     for (size_t level = 0; level < levelWidths.size(); ++level) {
       NIMBLE_CHECK_EQ(
           target[offset],
           0,
-          "HierarchicalKeyReader requires non-null encoded key components.");
+          "TrieKeyReader requires non-null encoded key components.");
       const auto width = levelWidths[level];
       std::array<char, sizeof(uint64_t)> encodedBytes{};
       std::copy_n(
@@ -372,13 +369,13 @@ class NimbleHierarchicalKeyCodec final : public HierarchicalKeyCodec {
 
 } // namespace
 
-const std::shared_ptr<const HierarchicalKeyCodec>& nimbleKeyCodec() {
-  static const std::shared_ptr<const HierarchicalKeyCodec> keyCodec =
-      std::make_shared<const NimbleHierarchicalKeyCodec>();
+const std::shared_ptr<const TrieKeyCodec>& nimbleKeyCodec() {
+  static const std::shared_ptr<const TrieKeyCodec> keyCodec =
+      std::make_shared<const NimbleTrieKeyCodec>();
   return keyCodec;
 }
 
-std::string HierarchicalKeyCodec::encodeKey(
+std::string TrieKeyCodec::encodeKey(
     std::span<const uint64_t> levels,
     std::span<const uint8_t> levelWidths) const {
   std::string key(keySize(levelWidths), '\0');
@@ -386,7 +383,7 @@ std::string HierarchicalKeyCodec::encodeKey(
   return key;
 }
 
-void HierarchicalKeyCodec::encodeKeys(
+void TrieKeyCodec::encodeKeys(
     std::span<const uint64_t> levels,
     std::span<const uint8_t> levelWidths,
     char* keys) const {
@@ -400,60 +397,59 @@ void HierarchicalKeyCodec::encodeKeys(
   }
 }
 
-HierarchicalClusterIndexFactory::HierarchicalClusterIndexFactory()
-    : HierarchicalClusterIndexFactory{
-          std::string{kHierarchicalClusterIndexName},
+TrieClusterIndexFactory::TrieClusterIndexFactory()
+    : TrieClusterIndexFactory{
+          std::string{kTrieClusterIndexName},
           nimbleKeyCodec()} {}
 
-HierarchicalClusterIndexFactory::HierarchicalClusterIndexFactory(
+TrieClusterIndexFactory::TrieClusterIndexFactory(
     std::string name,
-    std::shared_ptr<const HierarchicalKeyCodec> keyCodec)
+    std::shared_ptr<const TrieKeyCodec> keyCodec)
     : name_{std::move(name)},
       keyCodec_{velox::checkedNotNull(std::move(keyCodec))} {}
 
-std::string_view HierarchicalClusterIndexFactory::name() const {
+std::string_view TrieClusterIndexFactory::name() const {
   return name_;
 }
 
-std::unique_ptr<IndexWriter> HierarchicalClusterIndexFactory::createWriter(
+std::unique_ptr<IndexWriter> TrieClusterIndexFactory::createWriter(
     const IndexConfig& config,
     const velox::TypePtr& inputType,
     velox::memory::MemoryPool* pool,
     const Options& options) const {
   NIMBLE_USER_CHECK_EQ(config.family, IndexFamily::Cluster);
   NIMBLE_USER_CHECK_EQ(config.name, name());
-  return HierarchicalClusterIndexWriter::create(
+  return TrieClusterIndexWriter::create(
       config, inputType, keyCodec_, pool, options);
 }
 
-std::unique_ptr<IndexKeyEncoder>
-HierarchicalClusterIndexFactory::createKeyEncoder(
+std::unique_ptr<IndexKeyEncoder> TrieClusterIndexFactory::createKeyEncoder(
     const std::vector<std::string>& columns,
     const velox::RowTypePtr& inputType,
     const std::vector<SortOrder>& sortOrders,
     velox::memory::MemoryPool* pool) const {
   NIMBLE_USER_CHECK_NOT_NULL(
-      inputType, "Hierarchical index key encoder requires an input type.");
-  return std::make_unique<NimbleHierarchicalIndexKeyEncoder>(
+      inputType, "Trie index key encoder requires an input type.");
+  return std::make_unique<NimbleTrieIndexKeyEncoder>(
       columns, *inputType, sortOrders, keyCodec_, pool);
 }
 
-std::unique_ptr<ClusterIndexBase> HierarchicalClusterIndexFactory::createReader(
+std::unique_ptr<ClusterIndexBase> TrieClusterIndexFactory::createReader(
     Section rootSection,
     velox::memory::MemoryPool* pool,
     const IndexLookup::Options& options) const {
   auto readerOptions = options;
   readerOptions.keyComparator = keyComparator();
-  return HierarchicalClusterIndex::create(
+  return TrieClusterIndex::create(
       std::move(rootSection), keyCodec_, pool, readerOptions);
 }
 
-const KeyComparator* HierarchicalClusterIndexFactory::keyComparator() const {
+const KeyComparator* TrieClusterIndexFactory::keyComparator() const {
   return keyCodec_->keyComparator();
 }
 
-const std::shared_ptr<const HierarchicalKeyCodec>&
-HierarchicalClusterIndexFactory::testingKeyCodec() const {
+const std::shared_ptr<const TrieKeyCodec>&
+TrieClusterIndexFactory::testingKeyCodec() const {
   return keyCodec_;
 }
 

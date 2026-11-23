@@ -375,6 +375,10 @@ bool sameLogicalType(const TypeLike& lhs, const TypeLike& rhs) {
       return sameLogicalType(
           dereferenceType(lhs.asArrayWithOffsets().elements()),
           dereferenceType(rhs.asArrayWithOffsets().elements()));
+    case Kind::SlidingWindowArray:
+      return sameLogicalType(
+          dereferenceType(lhs.asSlidingWindowArray().elements()),
+          dereferenceType(rhs.asSlidingWindowArray().elements()));
     case Kind::Map:
       return sameLogicalType(
                  dereferenceType(lhs.asMap().keys()),
