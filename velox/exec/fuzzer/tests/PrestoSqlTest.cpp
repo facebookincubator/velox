@@ -388,6 +388,16 @@ TEST(PrestoSqlTest, toConstantSql) {
       {ARRAY(BIGINT()),
        Variant::array({int64_t(1), Variant::null(TypeKind::BIGINT)}),
        "cast(ARRAY[1, cast(null as BIGINT)] as ARRAY(BIGINT))"},
+      {ARRAY(DECIMAL(10, 2)),
+       Variant::array(
+           {int64_t(123), int64_t(-5), Variant::null(TypeKind::BIGINT)}),
+       "cast(ARRAY[cast('1.23' as DECIMAL(10, 2)), "
+       "cast('-0.05' as DECIMAL(10, 2)), "
+       "cast(null as DECIMAL(10, 2))] as ARRAY(DECIMAL(10, 2)))"},
+      {ARRAY(DECIMAL(25, 2)),
+       Variant::array({int128_t{123'456'789'012'345'678} * 100 + 90}),
+       "cast(ARRAY[cast('123456789012345678.90' as DECIMAL(25, 2))] "
+       "as ARRAY(DECIMAL(25, 2)))"},
       {MAP(BIGINT(), VARCHAR()),
        Variant::map({{int64_t(1), Variant("a'b")}}),
        "cast(MAP(ARRAY[1], ARRAY['a''b']) as MAP(BIGINT, VARCHAR))"},

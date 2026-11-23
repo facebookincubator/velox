@@ -352,6 +352,9 @@ std::string toConstantSql(const core::ConstantTypedExpr& constant) {
     sql << fmt::format("INTERVAL '{}' YEAR TO MONTH", constant.toString());
   } else if (type->isIntervalDayTime()) {
     sql << fmt::format("INTERVAL '{}' DAY TO SECOND", constant.toString());
+  } else if (type->isDecimal()) {
+    sql << fmt::format(
+        "cast('{}' as {})", value.toStringAsVector(type), typeSql);
   } else if (type->isBigint()) {
     sql << value.value<int64_t>();
   } else if (type->isPrimitiveType()) {
