@@ -48,10 +48,10 @@ struct GpuLocalVectorIndexOptions {
 
 /// Returns an accelerator that runs local indexes on a GPU through FAISS's
 /// own GPU kernels. kFlat, kIvfFlat and kIvfSq are copied with
-/// index_cpu_to_gpu. kHnswSq stays on the CPU, except a graph too small to
-/// search, which is an exact flat index when 'requireDevice' is set. Searches
-/// on one device run one at a time. Throws if 'options.device' is not a CUDA
-/// device.
+/// index_cpu_to_gpu. Tiny kHnswSq indexes can use an exact flat search over
+/// reconstructed vectors for device probes or when 'requireDevice' is set.
+/// Searches on one device run one at a time. Throws if 'options.device' is
+/// not a CUDA device.
 std::shared_ptr<const LocalVectorIndexAccelerator>
 makeGpuLocalVectorIndexAccelerator(
     const GpuLocalVectorIndexOptions& options = {});

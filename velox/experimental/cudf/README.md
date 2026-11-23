@@ -58,11 +58,13 @@ by default).
 When the joins and rerank run on the GPU, candidate rows pass between
 them in GPU memory.
 
-The GPU join path supports Flat and IVF-Flat inner and left joins with
-cuDF-supported input and output columns. It can search every index (no
-equality keys) or select indexes by matching any number of integer and
-`VARCHAR` key columns together. Other joins use the CPU probe and can
-still use GPU FAISS for eligible indexes.
+The GPU join path supports inner and left joins over FAISS Flat, IVF-Flat,
+IVF-SQ, and tiny HNSW-SQ indexes with cuDF-supported input and output
+columns. For HNSW-SQ indexes built by Velox, the GPU probe can search up to
+four embeddings using an exhaustive Flat search over reconstructed vectors.
+It can search every index (no equality keys) or select indexes by matching
+any number of integer and `VARCHAR` key columns together. Other joins use
+the CPU probe and can still use GPU FAISS for eligible indexes.
 `cudf.vector_search_min_index_size` defaults to 1,024 embeddings per index
 for FAISS searches with CPU input and output buffers. A GPU join can load
 smaller eligible indexes on demand because its query and result buffers

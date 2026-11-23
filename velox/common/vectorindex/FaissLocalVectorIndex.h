@@ -130,8 +130,8 @@ class FaissLocalVectorIndex : public LocalVectorIndex {
     return accelerated_.get();
   }
 
-  /// Reuses the existing device copy or attempts a device-only copy once
-  /// for a small index. CPU callers of search() keep their existing path.
+  /// Reuses the existing device copy or attempts a probe-only copy once.
+  /// search() uses only the device copy loaded when the index was opened.
   const LocalVectorIndexAccelerator::Index* deviceIndexForProbe() const;
 
   void search(

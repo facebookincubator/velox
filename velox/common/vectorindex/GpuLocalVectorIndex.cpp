@@ -233,7 +233,7 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
   DeviceIds deviceIds_;
 };
 
-// An exact flat copy of a kHnswSq index too small for an HNSW graph. The
+// An exact flat copy of the reconstructed vectors in a tiny kHnswSq index. The
 // device index numbers embeddings in the order they were added; 'ids' maps
 // them back to the local index ids.
 class MappedIndex : public LocalVectorIndexAccelerator::Index {
@@ -352,14 +352,12 @@ class MappedIndex : public LocalVectorIndexAccelerator::Index {
   DeviceIds deviceIds_;
 };
 
-// FAISS has no GPU HNSW index. A graph too small to search as HNSW, when the
-// caller requires a device index, is searched exactly with GpuIndexFlat.
-// Returns null for a real HNSW graph and when a device index is not required.
+// FAISS has no GPU HNSW index. Use GpuIndexFlat to search reconstructed vectors
+// when the graph is small enough for the existing flat conversion.
 std::unique_ptr<LocalVectorIndexAccelerator::Index> loadSmallHnsw(
     const std::shared_ptr<Device>& device,
-    const faiss::IndexIDMap& idMap,
-    bool requireDevice) {
-  if (!requireDevice || idMap.ntotal < 1) {
+    const faiss::IndexIDMap& idMap) {
+  if (idMap.ntotal < 1) {
     return nullptr;
   }
   const auto& graph = dynamic_cast<const faiss::IndexHNSW&>(*idMap.index);
@@ -434,7 +432,9 @@ class GpuAccelerator : public LocalVectorIndexAccelerator {
 
   std::unique_ptr<Index> load(VectorIndexKind type, const faiss::Index& index)
       const override {
-    if (!options_.requireDevice && index.ntotal < options_.minSearchSize) {
+    if (!options_.requireDevice &&
+        (type == VectorIndexKind::kHnswSq ||
+         index.ntotal < options_.minSearchSize)) {
       return nullptr;
     }
     return loadDeviceIndex(type, index);
@@ -443,7 +443,9 @@ class GpuAccelerator : public LocalVectorIndexAccelerator {
   std::unique_ptr<Index> loadForDeviceProbe(
       VectorIndexKind type,
       const faiss::Index& index) const override {
-    if (options_.requireDevice || index.ntotal >= options_.minSearchSize) {
+    if (options_.requireDevice ||
+        (type != VectorIndexKind::kHnswSq &&
+         index.ntotal >= options_.minSearchSize)) {
       return nullptr;
     }
     return loadDeviceIndex(type, index);
@@ -458,9 +460,7 @@ class GpuAccelerator : public LocalVectorIndexAccelerator {
       faiss::gpu::DeviceScope scope(device_->id);
       if (type == VectorIndexKind::kHnswSq) {
         auto flat = loadSmallHnsw(
-            device_,
-            dynamic_cast<const faiss::IndexIDMap&>(index),
-            options_.requireDevice);
+            device_, dynamic_cast<const faiss::IndexIDMap&>(index));
         VELOX_CHECK(
             flat != nullptr || !options_.requireDevice,
             "HNSW SQ has no FAISS GPU index");

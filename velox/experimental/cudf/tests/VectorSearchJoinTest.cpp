@@ -335,6 +335,9 @@ TEST_F(VectorSearchJoinTest, waitsForDifferentProducerStream) {
 }
 
 TEST_F(VectorSearchJoinTest, partialIvfResults) {
+  unregisterCudf();
+  CudfConfig::getInstance().vectorSearchMinIndexSize = 1'024;
+  registerCudf();
   // The production builder caps nlist at one list per 39 embeddings.
   constexpr int32_t kRows = 84;
   std::vector<float> values(kRows * 2);
@@ -343,29 +346,29 @@ TEST_F(VectorSearchJoinTest, partialIvfResults) {
     values[2 * row] = row < kRows / 2 ? 1.0f : -1.0f;
     ids[row] = row == 0 ? -2 : kLargeId + row;
   }
-  auto build = makeRowVector(
-      {"metadata", "index_bytes"},
-      {makeFlatVector<int64_t>({10}),
-       makeFlatVector<std::string>(
-           {pack(
-               values,
-               ids,
-               VectorIndexKind::kIvfFlat,
-               {.nlist = 2, .nprobe = 1})},
-           VARBINARY())});
   auto input = makeRowVector(
       {"query", "embedding"},
       {makeFlatVector<int64_t>({7, 8}),
        makeArrayVector<float>({{2, 0}, {-1, 0}})});
-  const auto task =
-      run(plan({input}, build, core::JoinType::kInner, false, false, kRows))
-          .assertResults(makeRowVector(
-              {makeFlatVector<int64_t>(
-                   kRows, [](auto row) { return row < kRows / 2 ? 7 : 8; }),
-               makeFlatVector<int64_t>(kRows, [](auto) { return 10; }),
-               makeFlatVector<int64_t>(ids),
-               makeFlatVector<float>(kRows, [](auto) { return 1.0f; })}));
-  expectDeviceProbes(*task);
+  const auto expected = makeRowVector(
+      {makeFlatVector<int64_t>(
+           kRows, [](auto row) { return row < kRows / 2 ? 7 : 8; }),
+       makeFlatVector<int64_t>(kRows, [](auto) { return 10; }),
+       makeFlatVector<int64_t>(ids),
+       makeFlatVector<float>(kRows, [](auto) { return 1.0f; })});
+  for (const auto kind : {VectorIndexKind::kIvfFlat, VectorIndexKind::kIvfSq}) {
+    SCOPED_TRACE(VectorIndexKindName::toName(kind));
+    auto build = makeRowVector(
+        {"metadata", "index_bytes"},
+        {makeFlatVector<int64_t>({10}),
+         makeFlatVector<std::string>(
+             {pack(values, ids, kind, {.nlist = 2, .nprobe = 1})},
+             VARBINARY())});
+    const auto task =
+        run(plan({input}, build, core::JoinType::kInner, false, false, kRows))
+            .assertResults(expected);
+    expectDeviceProbes(*task);
+  }
 }
 
 TEST_F(VectorSearchJoinTest, multipleProbeDrivers) {
@@ -456,6 +459,31 @@ TEST_F(VectorSearchJoinTest, smallIndexesStayOnGpuWithDeviceProbe) {
   expectDeviceProbes(*task);
 }
 
+TEST_F(VectorSearchJoinTest, smallHnswUsesGpuProbe) {
+  auto input = makeRowVector(
+      {"query", "embedding"},
+      {makeFlatVector<int64_t>({7, 8}),
+       makeArrayVector<float>({{2, 1}, {1, -2}})});
+  const auto bytes = pack(
+      {1, 0, 0, 1, -1, 0, 0, -1},
+      {-2, kLargeId, 21, 22},
+      VectorIndexKind::kHnswSq);
+  EXPECT_FALSE(FaissLocalVectorIndex(bytes, VectorIndexMetric::kCosine, {})
+                   .accelerated());
+  auto build = makeRowVector(
+      {"metadata", "index_bytes"},
+      {makeConstant<int64_t>(10, 1),
+       makeFlatVector<std::string>({bytes}, VARBINARY())});
+  const auto node =
+      plan({input}, build, core::JoinType::kInner, false, false, 3);
+  unregisterCudf();
+  const auto expected = run(node).copyResults(pool());
+  registerCudf();
+  ASSERT_EQ(expected->size(), 6);
+  const auto task = run(node).assertResults(expected);
+  expectDeviceProbes(*task);
+}
+
 TEST_F(VectorSearchJoinTest, fallbackBeforeInput) {
   auto input = makeRowVector(
       {"query", "embedding"},
@@ -464,9 +492,13 @@ TEST_F(VectorSearchJoinTest, fallbackBeforeInput) {
       {"metadata", "index_bytes"},
       {makeConstant<int64_t>(10, 1),
        makeFlatVector<std::string>(
-           {pack({1, 0, 0, 1}, {-2, kLargeId}, VectorIndexKind::kHnswSq)},
+           {pack(
+               {1, 0, 0, 1, -1, 0, 0, -1, 0.6f, 0.8f},
+               {-2, kLargeId, 21, 22, 23},
+               VectorIndexKind::kHnswSq)},
            VARBINARY())});
-  const auto node = plan({input}, build);
+  const auto node =
+      plan({input}, build, core::JoinType::kInner, false, false, 2);
   unregisterCudf();
   const auto expected = run(node).copyResults(pool());
   registerCudf();

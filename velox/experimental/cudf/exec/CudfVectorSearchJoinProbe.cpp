@@ -44,7 +44,6 @@ namespace {
 
 using common::vectorindex::FaissLocalVectorIndex;
 using common::vectorindex::LocalVectorIndex;
-using common::vectorindex::VectorIndexKind;
 using Size = cudf::size_type;
 
 // Scratch and compacted output can each hold one copy of a candidate.
@@ -195,11 +194,7 @@ exec::BlockingReason CudfVectorSearchJoinProbe::isBlocked(
     const auto* index =
         dynamic_cast<const FaissLocalVectorIndex*>(&table_->indexAt(row));
     const auto k = table_->numResults(row, node_->k());
-    const auto* deviceIndex = index &&
-            (index->kind() == VectorIndexKind::kFlat ||
-             index->kind() == VectorIndexKind::kIvfFlat)
-        ? index->deviceIndexForProbe()
-        : nullptr;
+    const auto* deviceIndex = index ? index->deviceIndexForProbe() : nullptr;
     if (!deviceIndex || !deviceIndex->supportsDeviceSearch(k)) {
       // The driver has already wired GPU input and output. Run the original
       // CPU probe between conversions for this driver.

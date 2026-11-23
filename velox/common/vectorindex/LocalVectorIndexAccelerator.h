@@ -91,8 +91,8 @@ class LocalVectorIndexAccelerator {
       VectorIndexKind type,
       const faiss::Index& index) const = 0;
 
-  /// Tries to load an index skipped by load() because it was too small for
-  /// host-buffer searches. A device-resident probe can avoid those transfers.
+  /// Tries to load an index for a device-resident probe when load() left it
+  /// on the CPU. Device-resident lookups can avoid per-search transfers.
   virtual std::unique_ptr<Index> loadForDeviceProbe(
       VectorIndexKind /*type*/,
       const faiss::Index& /*index*/) const {
