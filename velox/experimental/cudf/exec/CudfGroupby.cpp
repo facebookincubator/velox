@@ -44,6 +44,7 @@
 #include <cudf/partitioning.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
+#include <cudf/structs/structs_column_view.hpp>
 #include <cudf/transform.hpp>
 #include <cudf/unary.hpp>
 
@@ -830,16 +831,19 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
       case core::AggregationNode::Step::kIntermediate:
       case core::AggregationNode::Step::kFinal: {
         // In intermediate and final aggregation, the previously computed sum
-        // and count are in the child columns of the input column.
+        // and count are in the child columns of the input column. The input
+        // can be a slice of a larger table, as a partition of the buffered
+        // state is, and child() ignores the slice.
+        const cudf::structs_column_view state{tbl.column(inputIndex)};
         auto& request = requests.emplace_back();
         sumIdx_ = requests.size() - 1;
-        request.values = tbl.column(inputIndex).child(0);
+        request.values = state.get_sliced_child(0, stream);
         request.aggregations.push_back(
             cudf::make_sum_aggregation<cudf::groupby_aggregation>());
 
         auto& request2 = requests.emplace_back();
         countIdx_ = requests.size() - 1;
-        request2.values = tbl.column(inputIndex).child(1);
+        request2.values = state.get_sliced_child(1, stream);
         // The counts are already computed in partial aggregation, so we just
         // need to sum them up again.
         request2.aggregations.push_back(
