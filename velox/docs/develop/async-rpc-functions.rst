@@ -369,6 +369,15 @@ pacing, and the window integral over attached seconds is the average committed
 window in thousandths of a unit; recovery growth counts once the limiter commits
 it to the window. Prestissimo publishes them as ``RPC.<planNodeId>.<name>``.
 
+To see whether a query's session limits replaced its function's bounds, compare
+``rpcFunctionCeiling`` with ``rpcRateLimiterHardLimit``, and
+``rpcFunctionFloorMilli`` with ``rpcRateLimiterFloorMilli``. The function's
+stats appear only when it declares that bound. ``rpcRateLimiterFloorMilli`` is
+the floor the limiter enforces, raised to the probe floor, and appears only
+when the limiter adapts and that floor is below its ceiling. Floors are in
+thousandths of an admission unit. Every driver reports the same values, so
+compare the maximum per plan node; the sum grows with the number of drivers.
+
 ``evaluateCongestion()`` returns one of five verdicts. Canonical typed overload
 backs off shared admission at completion time before its lease is released; the
 driver later consumes the recorded marker to back off its local window without
