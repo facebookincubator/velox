@@ -30,6 +30,7 @@
 #include <utility>
 #include <vector>
 
+#include <fmt/ranges.h> // IWYU pragma: keep
 #include <folly/Synchronized.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 
