@@ -4242,6 +4242,68 @@ TEST_P(BatchReaderTest, slidingWindowArrayDictionaryInput) {
   EXPECT_EQ(array->elements()->size(), 5);
 }
 
+TEST_P(BatchReaderTest, slidingWindowArrayDictionaryElements) {
+  const auto rowType = velox::ROW({
+      {"events", velox::ARRAY(velox::BIGINT())},
+  });
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+
+  // The elements are a dictionary over [1, 2, 3, 4, null] that reads
+  // [1, 2, 3, 2, 3, 4, 3, 4, null], so the writer decodes them. The rows
+  // [1, 2, 3], [2, 3, 4] and [3, 4, null] slide forward one value at a time.
+  const std::vector<velox::vector_size_t> dictionaryIndices{
+      0, 1, 2, 1, 2, 3, 2, 3, 4};
+  const auto numElements =
+      static_cast<velox::vector_size_t>(dictionaryIndices.size());
+  auto indices = velox::allocateIndices(numElements, leafPool_.get());
+  std::copy(
+      dictionaryIndices.begin(),
+      dictionaryIndices.end(),
+      indices->asMutable<velox::vector_size_t>());
+  const auto elements = velox::BaseVector::wrapInDictionary(
+      /*nulls=*/nullptr,
+      indices,
+      numElements,
+      vectorMaker.flatVectorNullable<int64_t>({1, 2, 3, 4, std::nullopt}));
+  const std::vector<velox::vector_size_t> offsets{0, 3, 6};
+  const auto data = vectorMaker.rowVector(
+      {"events"}, {vectorMaker.arrayVector(offsets, elements)});
+  const auto expected = vectorMaker.rowVector(
+      {"events"},
+      {vectorMaker.arrayVectorNullable<int64_t>({
+          std::vector<std::optional<int64_t>>{1, 2, 3},
+          std::vector<std::optional<int64_t>>{2, 3, 4},
+          std::vector<std::optional<int64_t>>{3, 4, std::nullopt},
+      })});
+
+  nimble::WriterOptions writerOptions;
+  writerOptions.slidingWindowArrayColumns.insert("events");
+  std::string file;
+  nimble::Writer writer(
+      rowType,
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      std::move(writerOptions));
+  writer.write(data);
+  writer.close();
+
+  const auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto reader = createBatchReader(readFile, *leafPool_);
+  velox::VectorPtr result;
+  ASSERT_TRUE(reader->next(data->size(), result));
+  ASSERT_EQ(result->size(), expected->size());
+  for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
+    ASSERT_TRUE(vectorEquals(expected, result, row))
+        << "Mismatch at row " << row;
+  }
+
+  // The rows store [1, 2, 3, 4, null] once.
+  const auto* array =
+      result->as<velox::RowVector>()->childAt(0)->as<velox::ArrayVector>();
+  ASSERT_NE(array, nullptr);
+  EXPECT_EQ(array->elements()->size(), 5);
+}
+
 TEST_P(BatchReaderTest, slidingWindowArrayUnsupported) {
   {
     const auto rowType = velox::ROW({

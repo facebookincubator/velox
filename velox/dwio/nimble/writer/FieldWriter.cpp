@@ -3237,17 +3237,10 @@ std::unique_ptr<FieldWriter> createArrayWithOffsetsFieldWriter(
 template <velox::TypeKind K>
 class SlidingWindowArrayFieldWriter : public FieldWriter {
   using SourceType = typename velox::TypeTraits<K>::NativeType;
-  using Bits = std::conditional_t<
-      sizeof(SourceType) == 1,
-      uint8_t,
-      std::conditional_t<
-          sizeof(SourceType) == 2,
-          uint16_t,
-          std::conditional_t<sizeof(SourceType) == 4, uint32_t, uint64_t>>>;
-  static_assert(sizeof(Bits) == sizeof(SourceType));
 
   // Holds the bit pattern of an element, or nothing for a null element.
-  using Element = std::optional<Bits>;
+  using Element =
+      std::optional<typename nimble::TypeTraits<SourceType>::physicalType>;
 
  public:
   SlidingWindowArrayFieldWriter(
@@ -3272,19 +3265,74 @@ class SlidingWindowArrayFieldWriter : public FieldWriter {
 
   void write(const velox::VectorPtr& vector, const OrderedRanges& ranges)
       override {
+    // Reads an array vector in place and decodes only a wrapped one, as
+    // MultiValueFieldWriter::ingestLengths() does.
+    if (const auto* array = vector->as<velox::ArrayVector>()) {
+      writeArrays(vector, ranges, *array, FlatAdapter<>{vector});
+      return;
+    }
     auto decodingContext = context_.decodingContext();
     auto& decoded = decodingContext.decode(vector, ranges);
     const auto* array = decoded.base()->template as<velox::ArrayVector>();
     NIMBLE_CHECK_NOT_NULL(array, "Unexpected vector type");
-    const auto* rawOffsets = array->rawOffsets();
-    const auto* rawSizes = array->rawSizes();
-    const auto& elements = array->elements();
-    auto elementsDecodingContext = context_.decodingContext();
-    auto& decodedElements = elementsDecodingContext.decode(
-        elements, OrderedRanges::of(0, elements->size()));
+    writeArrays(vector, ranges, *array, DecodedAdapter<>{decoded});
+  }
 
+  void reset() override {
+    offsetsStream_.reset();
+    lengthsStream_.reset();
+    elements_->reset();
+    baseRows_.clear();
+    baseStart_ = 0;
+    lastRowStart_ = 0;
+    numStoredElements_ = 0;
+  }
+
+  void close() override {
+    elements_->close();
+  }
+
+ private:
+  // Reads flat elements in place and decodes only other encodings. Decoding
+  // covers the whole elements vector, and under a flat map the rows of every
+  // key share one elements vector, so each key would pay for the elements of
+  // all keys.
+  template <typename Arrays>
+  void writeArrays(
+      const velox::VectorPtr& vector,
+      const OrderedRanges& ranges,
+      const velox::ArrayVector& arrayBase,
+      const Arrays& array) {
+    const auto& elements = arrayBase.elements();
+    if (elements->template asFlatVector<SourceType>() != nullptr) {
+      writeRows(
+          vector, ranges, arrayBase, array, FlatAdapter<SourceType>{elements});
+      return;
+    }
+    auto decodingContext = context_.decodingContext();
+    auto& decodedElements = decodingContext.decode(
+        elements, OrderedRanges::of(0, elements->size()));
+    writeRows(
+        vector,
+        ranges,
+        arrayBase,
+        array,
+        DecodedAdapter<SourceType>{decodedElements});
+  }
+
+  // Writes the rows in 'ranges'. 'array' reads the rows of 'vector' as rows
+  // of 'arrayBase', and 'elements' reads the elements of 'arrayBase'.
+  template <typename Arrays, typename Elements>
+  void writeRows(
+      const velox::VectorPtr& vector,
+      const OrderedRanges& ranges,
+      const velox::ArrayVector& arrayBase,
+      const Arrays& array,
+      const Elements& elements) {
+    const auto* rawOffsets = arrayBase.rawOffsets();
+    const auto* rawSizes = arrayBase.rawSizes();
     offsetsStream_.ensureAdditionalNullsCapacity(
-        decoded.mayHaveNulls(), ranges.size());
+        array.hasNulls(), ranges.size());
     auto& offsets = offsetsStream_.mutableData();
     auto& lengths = lengthsStream_.mutableData();
     OrderedRanges appendedRanges;
@@ -3293,15 +3341,14 @@ class SlidingWindowArrayFieldWriter : public FieldWriter {
     uint64_t numElements{0};
     uint64_t numNullElements{0};
     uint64_t numAppendedNullElements{0};
-    DecodedAdapter<> iterableVector{decoded};
     const auto numNonNulls = iterateNonNullIndices<true>(
         ranges,
         offsetsStream_.mutableNonNulls(),
-        iterableVector,
+        array,
         [&](velox::vector_size_t index) {
           const auto rowOffset = rawOffsets[index];
           const auto rowLength = rawSizes[index];
-          loadRows(decodedElements, rowOffset, rowLength);
+          loadRows(elements, rowOffset, rowLength);
           const auto numAppended =
               static_cast<velox::vector_size_t>(ingestRows(offsets, lengths));
           // The appended values are the last ones of the row.
@@ -3321,7 +3368,7 @@ class SlidingWindowArrayFieldWriter : public FieldWriter {
         });
 
     if (appendedRanges.size() > 0) {
-      elements_->write(elements, appendedRanges);
+      elements_->write(arrayBase.elements(), appendedRanges);
     }
 
     // The elements writer sees only the appended elements. Add the elements
@@ -3347,33 +3394,26 @@ class SlidingWindowArrayFieldWriter : public FieldWriter {
     }
   }
 
-  void reset() override {
-    offsetsStream_.reset();
-    lengthsStream_.reset();
-    elements_->reset();
-    baseRows_.clear();
-    baseStart_ = 0;
-    lastRowStart_ = 0;
-    numStoredElements_ = 0;
-  }
-
-  void close() override {
-    elements_->close();
-  }
-
- private:
   // Loads the elements of one row into 'ingestRows_'.
+  template <typename Elements>
   void loadRows(
-      const velox::DecodedVector& elements,
+      const Elements& elements,
       velox::vector_size_t offset,
       velox::vector_size_t length) {
     ingestRows_.clear();
+    if (!elements.hasNulls()) {
+      for (auto i = offset; i < offset + length; ++i) {
+        ingestRows_.emplace_back(
+            std::bit_cast<typename Element::value_type>(elements.valueAt(i)));
+      }
+      return;
+    }
     for (auto i = offset; i < offset + length; ++i) {
       if (elements.isNullAt(i)) {
         ingestRows_.emplace_back();
       } else {
         ingestRows_.emplace_back(
-            std::bit_cast<Bits>(elements.valueAt<SourceType>(i)));
+            std::bit_cast<typename Element::value_type>(elements.valueAt(i)));
       }
     }
   }
