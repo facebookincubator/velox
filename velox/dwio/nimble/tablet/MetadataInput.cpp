@@ -31,6 +31,7 @@
 #include "folly/ScopeGuard.h"
 #include "velox/common/base/AsyncSource.h"
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/file/FileIoContext.h"
 #include "velox/common/memory/MemoryAllocator.h"
 #include "velox/common/time/Timer.h"
 
@@ -92,7 +93,11 @@ void MetadataInput::readRaw(uint64_t offset, uint64_t size, void* dest) {
   if (!directIo()) {
     {
       velox::NanosecondTimer timer{&storageReadNs};
-      file_->pread(offset, size, static_cast<char*>(dest), fileIoContext_);
+      file_->pread(
+          offset,
+          size,
+          static_cast<char*>(dest),
+          velox::ScopedFileIoContext::resolve(fileIoContext_));
     }
     recordReadStats(storageReadNs, size, size);
     return;
@@ -113,7 +118,11 @@ void MetadataInput::readRaw(uint64_t offset, uint64_t size, void* dest) {
   };
   {
     velox::NanosecondTimer timer{&storageReadNs};
-    file_->pread(region.offset, region.length, buffer, fileIoContext_);
+    file_->pread(
+        region.offset,
+        region.length,
+        buffer,
+        velox::ScopedFileIoContext::resolve(fileIoContext_));
   }
   std::memcpy(dest, buffer + (offset - region.offset), size);
 
@@ -164,24 +173,30 @@ uint64_t MetadataInput::computeIoGroups(
 }
 
 void MetadataInput::executeIoGroups(std::vector<IoGroup>& ioGroups) const {
+  // Resolved on this thread, because the executor's threads need not carry the
+  // RequestContext that holds a velox::ScopedFileIoContext.
+  const auto& fileIoContext =
+      velox::ScopedFileIoContext::resolve(fileIoContext_);
+
   // Shared with the executor tasks below, which can outlive this call.
   std::vector<std::shared_ptr<velox::AsyncSource<folly::Unit>>> asyncIos;
   asyncIos.reserve(ioGroups.size());
   for (const auto& group : ioGroups) {
     asyncIos.emplace_back(
-        std::make_shared<velox::AsyncSource<folly::Unit>>([this, &group]() {
-          // Measure at nanosecond resolution so that fast reads still register
-          // a non-zero scan time; truncating to microseconds would lose
-          // sub-microsecond reads entirely.
-          uint64_t storageReadNs{0};
-          {
-            velox::NanosecondTimer ioTimer(&storageReadNs);
-            file_->preadv(group.offset, group.ranges, fileIoContext_);
-          }
-          ioStats_->storageReadLatencyUs().increment(storageReadNs / 1'000);
-          ioStats_->incTotalScanTimeNs(storageReadNs);
-          return std::make_unique<folly::Unit>();
-        }));
+        std::make_shared<velox::AsyncSource<folly::Unit>>(
+            [this, &group, &fileIoContext]() {
+              // Measure at nanosecond resolution so that fast reads still
+              // register a non-zero scan time; truncating to microseconds would
+              // lose sub-microsecond reads entirely.
+              uint64_t storageReadNs{0};
+              {
+                velox::NanosecondTimer ioTimer(&storageReadNs);
+                file_->preadv(group.offset, group.ranges, fileIoContext);
+              }
+              ioStats_->storageReadLatencyUs().increment(storageReadNs / 1'000);
+              ioStats_->incTotalScanTimeNs(storageReadNs);
+              return std::make_unique<folly::Unit>();
+            }));
   }
 
   QueryIoLatencyGuard queryIoGuard{ioStats_.get()};
@@ -191,7 +206,7 @@ void MetadataInput::executeIoGroups(std::vector<IoGroup>& ioGroups) const {
     for (size_t i = 1; i < asyncIos.size(); ++i) {
       // move() below reads any group whose task has not started, so a task can
       // run after this call returns. It then finds its read done and exits
-      // without touching 'group' or this object.
+      // without touching 'group', 'fileIoContext' or this object.
       executor_->add([asyncIo = asyncIos[i]]() { asyncIo->prepare(); });
     }
   }
@@ -317,7 +332,7 @@ void MetadataInput::readGroups(
             regions.data(), regions.size()),
         folly::Range<const folly::Range<char*>*>(
             buffers.data(), buffers.size()),
-        fileIoContext_);
+        velox::ScopedFileIoContext::resolve(fileIoContext_));
   }
 
   // A read past the end of the file returns only the bytes before the end.
