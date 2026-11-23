@@ -244,7 +244,14 @@ class PinnedBuffer {
   void copyToGpu(size_t bytes, uint8_t* dst, cuda::stream_ref stream) {
     CUDF_CUDA_TRY(cudaMemcpyAsync(
         dst, memory_.data, bytes, cudaMemcpyHostToDevice, stream.get()));
-    CUDF_CUDA_TRY(cudaEventRecord(memory_.lastCopy, stream.get()));
+    try {
+      CUDF_CUDA_TRY(cudaEventRecord(memory_.lastCopy, stream.get()));
+    } catch (...) {
+      // In a rare case event record throws, this ensures the copy finishes
+      // using the bounce buffer
+      waitForStream(stream, memory_.device);
+      throw;
+    }
   }
 
  private:
