@@ -172,6 +172,8 @@ class IntraNodeTransferRegistry {
   // a task each keep it frozen. The transparent comparator lets unfreezeTask()
   // find a task without allocating: it runs from a scope guard.
   std::multiset<std::string, std::less<>> frozenTasks_;
+  // Taken before UcxOutputQueueManager::queues_ and UcxOutputQueue::mutex_,
+  // since poll() runs onRetrieved under it.
   std::mutex mutex_;
 };
 

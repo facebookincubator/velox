@@ -149,7 +149,9 @@ void UcxDestinationQueue::clearNotify() {
 }
 
 void UcxDestinationQueue::intraNodePageRetrieved() {
-  // Runs on the Communicator thread, so it must not throw.
+  // Runs on the Communicator thread, where an exception ends the process. Only
+  // debug builds check the count, so that tests stop on one that would go
+  // negative; release builds skip the decrement.
   VELOX_DCHECK_GT(intraNodePagesInFlight_, 0);
   if (intraNodePagesInFlight_ > 0) {
     --intraNodePagesInFlight_;

@@ -120,26 +120,23 @@ void UcxExchangeSource::process() {
       HostPort hp{host_, port_};
       std::shared_ptr<UcxExchangeSource> selfPtr = getSelfPtr();
       std::shared_ptr<EndpointRef> epRef;
+      std::optional<std::string> connectError;
       try {
         epRef = communicator_->assocEndpointRef(selfPtr, hp);
+        if (epRef == nullptr) {
+          connectError = "no endpoint";
+        }
       } catch (const std::exception& e) {
-        failSource(
-            fmt::format(
-                "Failed to connect to producer, host {}:{}, task {}: {}",
-                host_,
-                port_,
-                partitionKey_.toString(),
-                e.what()));
-        break;
+        connectError = e.what();
       }
-      if (epRef == nullptr) {
+      if (connectError.has_value()) {
         failSource(
             fmt::format(
                 "Failed to connect to producer, host {}:{}, task {}: {}",
                 host_,
                 port_,
                 partitionKey_.toString(),
-                "no endpoint"));
+                *connectError));
         break;
       }
       setEndpoint(epRef);
