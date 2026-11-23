@@ -1510,6 +1510,65 @@ TEST_F(
               "Producer task ended before sending all its output")));
 }
 
+// A task error can quote user data in any language. The producer error keeps
+// at most 4'096 bytes of it, and the cut must not split a character, which
+// would leave invalid UTF-8 in the consumer's error message.
+TEST_F(UcxOutputQueueManagerTest, truncatedProducerErrorKeepsWholeCharacters) {
+  // Returns whether 'text' consists of whole UTF-8 characters.
+  const auto isWholeUtf8 = [](std::string_view text) {
+    size_t i = 0;
+    while (i < text.size()) {
+      const auto lead = static_cast<unsigned char>(text[i]);
+      const size_t length = lead < 0x80 ? 1
+          : (lead >> 5) == 0x06         ? 2
+          : (lead >> 4) == 0x0E         ? 3
+          : (lead >> 3) == 0x1E         ? 4
+                                        : 0;
+      if (length == 0 || i + length > text.size()) {
+        return false;
+      }
+      for (size_t j = 1; j < length; ++j) {
+        if ((static_cast<unsigned char>(text[i + j]) & 0xC0) != 0x80) {
+          return false;
+        }
+      }
+      i += length;
+    }
+    return true;
+  };
+
+  // A run of two-byte characters, once at an even and once at an odd offset,
+  // so that one case cuts inside a character whatever the text before it.
+  for (const std::string lead : {"", "a"}) {
+    SCOPED_TRACE(fmt::format("lead of {} bytes", lead.size()));
+    const auto taskId = fmt::format("truncatedUtf8Error{}", lead.size());
+    auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+    std::string message = lead;
+    for (int i = 0; i < 3'000; ++i) {
+      message += "\xC3\xA9";
+    }
+    task->setError(message);
+    queueManager_->removeTask(taskId);
+
+    std::optional<std::string> producerError;
+    queueManager_->getData(
+        taskId,
+        0,
+        [&producerError](
+            std::shared_ptr<cudf::packed_columns> /*data*/,
+            vector_size_t /*numRows*/,
+            std::vector<int64_t> /*remainingBytes*/,
+            std::optional<std::string> error) {
+          producerError = std::move(error);
+        });
+    ASSERT_TRUE(producerError.has_value());
+    EXPECT_THAT(*producerError, testing::EndsWith("...(truncated)"));
+    EXPECT_LE(producerError->size(), 4'096);
+    EXPECT_TRUE(isWholeUtf8(*producerError))
+        << "Ends with: " << producerError->substr(producerError->size() - 20);
+  }
+}
+
 // The record of a removed task answers consumers that arrive after the removal
 // for as long as the host keeps the producer's Task. Once the Task is
 // destroyed, the next removal drops the record, in the queue manager and in

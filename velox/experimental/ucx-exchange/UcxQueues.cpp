@@ -748,7 +748,12 @@ std::string taskErrorMessage(const exec::Task& task) {
 std::string truncateProducerError(std::string reason) {
   static constexpr std::string_view kTruncated{"...(truncated)"};
   if (reason.size() > kMaxProducerErrorSize) {
-    reason.resize(kMaxProducerErrorSize - kTruncated.size());
+    auto end = kMaxProducerErrorSize - kTruncated.size();
+    while (end > 0 &&
+           (static_cast<unsigned char>(reason[end]) & 0xC0) == 0x80) {
+      --end;
+    }
+    reason.resize(end);
     reason.append(kTruncated);
   }
   return reason;
