@@ -92,6 +92,9 @@ in standard notation. With the default value of `false`, `1.0`, `0.0`, and
 are written as `1`, `0`, and `-0`. The flag does not change scientific notation
 selection in the text writer.
 
+DOUBLE output is not guaranteed to match Hive's Java-based formatting byte
+for byte.
+
 DATE fields use the ISO date representation, such as `2024-01-01`, rather than
 the number of days since the epoch.
 
