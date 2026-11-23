@@ -3282,6 +3282,10 @@ class SlidingWindowArrayFieldWriter : public FieldWriter {
     offsetsStream_.reset();
     lengthsStream_.reset();
     elements_->reset();
+    // Frees the scratch buffers at the end of a stripe. Rows of one stripe
+    // reuse them.
+    ingestRows_.clear();
+    borderLengths_.clear();
     baseRows_.clear();
     baseStart_ = 0;
     lastRowStart_ = 0;
@@ -3341,6 +3345,7 @@ class SlidingWindowArrayFieldWriter : public FieldWriter {
     uint64_t numElements{0};
     uint64_t numNullElements{0};
     uint64_t numAppendedNullElements{0};
+    const bool mayHaveNullElements = elements.hasNulls();
     const auto numNonNulls = iterateNonNullIndices<true>(
         ranges,
         offsetsStream_.mutableNonNulls(),
@@ -3354,11 +3359,13 @@ class SlidingWindowArrayFieldWriter : public FieldWriter {
           // The appended values are the last ones of the row.
           const auto firstAppended = rowLength - numAppended;
           numElements += rowLength;
-          for (velox::vector_size_t i = 0; i < rowLength; ++i) {
-            if (!ingestRows_[i].has_value()) {
-              ++numNullElements;
-              if (i >= firstAppended) {
-                ++numAppendedNullElements;
+          if (mayHaveNullElements) {
+            for (velox::vector_size_t i = 0; i < rowLength; ++i) {
+              if (!ingestRows_[i].has_value()) {
+                ++numNullElements;
+                if (i >= firstAppended) {
+                  ++numAppendedNullElements;
+                }
               }
             }
           }
@@ -3400,7 +3407,9 @@ class SlidingWindowArrayFieldWriter : public FieldWriter {
       const Elements& elements,
       velox::vector_size_t offset,
       velox::vector_size_t length) {
-    ingestRows_.clear();
+    // resize(0) keeps the buffer for the next row. nimble::Vector::clear()
+    // frees it, so each row would allocate it again from the memory pool.
+    ingestRows_.resize(0);
     if (!elements.hasNulls()) {
       for (auto i = offset; i < offset + length; ++i) {
         ingestRows_.emplace_back(
@@ -3437,7 +3446,7 @@ class SlidingWindowArrayFieldWriter : public FieldWriter {
       baseStart_ = numStoredElements_;
       offsets.push_back(lastRowStart_);
       appendRows(length);
-      baseRows_.clear();
+      baseRows_.resize(0);
       baseRows_.insert(baseRows_.end(), ingestRows_.begin(), ingestRows_.end());
       return length;
     }
@@ -3456,7 +3465,7 @@ class SlidingWindowArrayFieldWriter : public FieldWriter {
     const auto numAppended = length - numShared;
     appendRows(numAppended);
     baseStart_ = lastRowStart_;
-    baseRows_.clear();
+    baseRows_.resize(0);
     baseRows_.insert(baseRows_.end(), ingestRows_.begin(), ingestRows_.end());
     return numAppended;
   }
@@ -3471,7 +3480,7 @@ class SlidingWindowArrayFieldWriter : public FieldWriter {
   std::optional<uint32_t> findSlide() {
     const auto length = static_cast<uint32_t>(ingestRows_.size());
     const auto baseLength = static_cast<uint32_t>(baseRows_.size());
-    borderLengths_.clear();
+    borderLengths_.resize(0);
     borderLengths_.push_back(0);
 
     // Counts the leading row values known to match the slid base.
