@@ -75,7 +75,9 @@ class IcebergInsertTest : public test::IcebergTestBase {
       const RowTypePtr& rowType,
       const std::string& outputPath,
       const std::vector<std::string>& insertedColumns,
-      const std::unordered_map<std::string, std::string>& writeDefaults) {
+      const std::unordered_map<std::string, std::string>& writeDefaults,
+      const std::unordered_map<std::string, std::string>& serdeParameters =
+          {}) {
     std::vector<IcebergColumnHandlePtr> columnHandles;
     columnHandles.reserve(rowType->size());
     for (auto i = 0; i < rowType->size(); ++i) {
@@ -106,41 +108,6 @@ class IcebergInsertTest : public test::IcebergTestBase {
         fileFormat_,
         /*partitionSpec=*/nullptr,
         common::CompressionKind::CompressionKind_ZSTD,
-        /*serdeParameters=*/std::unordered_map<std::string, std::string>{},
-        IcebergInsertTableHandle::WriteKind::kData,
-        /*existingDeletionVectors=*/
-        std::unordered_map<
-            std::string,
-            IcebergInsertTableHandle::ExistingDeletionVector>{},
-        std::make_shared<const IcebergFileNameGenerator>(),
-        insertedColumns);
-  }
-
-  IcebergInsertTableHandlePtr makeInsertTableHandle(
-      const RowTypePtr& rowType,
-      const std::string& outputPath,
-      const std::unordered_map<std::string, std::string>& serdeParameters =
-          {}) {
-    std::vector<IcebergColumnHandlePtr> columnHandles;
-    columnHandles.reserve(rowType->size());
-    for (auto i = 0; i < rowType->size(); ++i) {
-      const auto& name = rowType->nameOf(i);
-      const auto& type = rowType->childAt(i);
-      const parquet::ParquetFieldId field{static_cast<int32_t>(i + 1), {}};
-      columnHandles.push_back(std::make_shared<const IcebergColumnHandle>(
-          name,
-          connector::FileColumnHandle::ColumnType::kRegular,
-          type,
-          field));
-    }
-    auto locationHandle = std::make_shared<LocationHandle>(
-        outputPath, outputPath, LocationHandle::TableType::kNew);
-    return std::make_shared<const IcebergInsertTableHandle>(
-        columnHandles,
-        locationHandle,
-        fileFormat_,
-        /*partitionSpec=*/nullptr,
-        common::CompressionKind::CompressionKind_ZSTD,
         serdeParameters,
         IcebergInsertTableHandle::WriteKind::kData,
         /*existingDeletionVectors=*/
@@ -148,7 +115,7 @@ class IcebergInsertTest : public test::IcebergTestBase {
             std::string,
             IcebergInsertTableHandle::ExistingDeletionVector>{},
         std::make_shared<const IcebergFileNameGenerator>(),
-        /*insertedColumns=*/std::vector<std::string>{});
+        insertedColumns);
   }
 
   // Writes @p vectors through a sink built from @p handle, asserts that the
@@ -1066,7 +1033,12 @@ TEST_F(IcebergInsertTest, timestampAndTimestampTzFooterAnnotations) {
       {std::string(parquet::ParquetConfig::kWriterSerdeTimestampTimezone),
        "UTC"}};
 
-  auto handle = makeInsertTableHandle(rowType, dataPath, serdeParameters);
+  auto handle = makeWriteDefaultHandle(
+      rowType,
+      dataPath,
+      /*insertedColumns=*/{},
+      /*writeDefaults=*/{},
+      serdeParameters);
 
   auto batch = makeRowVector(
       rowType->names(),
