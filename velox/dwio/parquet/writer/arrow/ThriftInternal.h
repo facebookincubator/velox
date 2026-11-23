@@ -249,10 +249,12 @@ static inline EncryptionAlgorithm fromThrift(
   EncryptionAlgorithm encryptionAlgorithm;
   if (encryption.getType() == Type::Type::AES_GCM_V1) {
     encryptionAlgorithm.algorithm = ParquetCipher::kAesGcmV1;
-    encryptionAlgorithm.aad = fromThrift(encryption.get_AES_GCM_V1());
+    encryptionAlgorithm.aad =
+        fromThrift(encryption.AES_GCM_V1().as_const().value());
   } else if (encryption.getType() == Type::Type::AES_GCM_CTR_V1) {
     encryptionAlgorithm.algorithm = ParquetCipher::kAesGcmCtrV1;
-    encryptionAlgorithm.aad = fromThrift(encryption.get_AES_GCM_CTR_V1());
+    encryptionAlgorithm.aad =
+        fromThrift(encryption.AES_GCM_CTR_V1().as_const().value());
   } else {
     throw ParquetException("Unsupported algorithm");
   }
