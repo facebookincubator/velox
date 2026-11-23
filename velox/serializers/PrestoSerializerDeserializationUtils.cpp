@@ -16,6 +16,7 @@
 #include "velox/serializers/PrestoSerializerDeserializationUtils.h"
 
 #include "velox/functions/prestosql/types/UuidType.h"
+#include "velox/vector/FlatMapVector.h"
 
 namespace facebook::velox::serializer::presto::detail {
 namespace {
@@ -178,6 +179,25 @@ void readRowVectorStructNulls(
   }
 }
 
+void readFlatMapVectorStructNulls(
+    ByteInputStream* source,
+    const TypePtr& type,
+    bool useLosslessTimestamp,
+    Scratch& scratch) {
+  const vector_size_t size = source->read<int32_t>();
+  const auto numNonNull = valueCount(source, size, scratch);
+  readStructNullsColumns(
+      source, {type->childAt(0)}, useLosslessTimestamp, scratch);
+  const auto numKeys = source->read<int32_t>();
+  for (auto i = 0; i < numKeys; ++i) {
+    if (source->read<int32_t>() != numNonNull) {
+      source->skip(bits::nbytes(size));
+    }
+    readStructNullsColumns(
+        source, {type->childAt(1)}, useLosslessTimestamp, scratch);
+  }
+}
+
 std::string readLengthPrefixedString(ByteInputStream* source) {
   int32_t size = source->read<int32_t>();
   VELOX_CHECK_GE(size, 0, "Invalid serialized string size: {}", size);
@@ -265,6 +285,9 @@ void readStructNullsColumns(
           source, columnType, useLosslessTimestamp, scratch);
     } else if (encoding == kDictionary) {
       readDictionaryVectorStructNulls(
+          source, columnType, useLosslessTimestamp, scratch);
+    } else if (encoding == kFlatMap && columnType->isMap()) {
+      readFlatMapVectorStructNulls(
           source, columnType, useLosslessTimestamp, scratch);
     } else {
       checkTypeEncoding(encoding, columnType);
@@ -1041,6 +1064,154 @@ void readMapVector(
       source, size, resultOffset, incomingNulls, numIncomingNulls, *mapVector);
 }
 
+FlatMapVectorPtr readFlatMapPage(
+    ByteInputStream* source,
+    const TypePtr& type,
+    velox::memory::MemoryPool* pool,
+    const PrestoVectorSerde::PrestoOptions& opts) {
+  const vector_size_t numRows = source->read<int32_t>();
+  const auto& keyType = type->childAt(0);
+  const auto& valueType = type->childAt(1);
+  auto flatMap = std::make_shared<FlatMapVector>(
+      pool,
+      type,
+      nullptr,
+      numRows,
+      BaseVector::create(keyType, 0, pool),
+      std::vector<VectorPtr>{},
+      std::vector<BufferPtr>{});
+  readNulls(source, numRows, 0, nullptr, 0, *flatMap);
+
+  std::vector<VectorPtr> keyColumn{BaseVector::create(keyType, 0, pool)};
+  readColumns(source, {keyType}, 0, nullptr, 0, pool, opts, keyColumn);
+  const auto numKeys = source->read<int32_t>();
+  VELOX_CHECK_EQ(
+      numKeys,
+      keyColumn[0]->size(),
+      "Number of flat map keys does not match the key column");
+
+  const auto* rawNulls = flatMap->rawNulls();
+  const vector_size_t numNonNull =
+      rawNulls == nullptr ? numRows : bits::countBits(rawNulls, 0, numRows);
+  // A key in every row takes its column as is. Any other key reads its column
+  // straight into the rows that have it, set in its in-map bits or, without
+  // them, in the nulls, leaving the other rows null.
+  std::vector<BufferPtr> inMaps(numKeys);
+  std::vector<VectorPtr> mapValues(numKeys);
+  const std::vector<TypePtr> valueTypes{valueType};
+  std::vector<VectorPtr> valueColumn(1);
+  for (auto i = 0; i < numKeys; ++i) {
+    const vector_size_t count = source->read<int32_t>();
+    VELOX_CHECK(
+        count > 0 && count <= numNonNull,
+        "Invalid number of rows with a flat map key: {}",
+        count);
+    if (count != numNonNull) {
+      inMaps[i] = AlignedBuffer::allocate<bool>(numRows, pool);
+      source->readBytes(inMaps[i]->asMutable<uint8_t>(), bits::nbytes(numRows));
+      VELOX_CHECK_EQ(
+          bits::countBits(inMaps[i]->as<uint64_t>(), 0, numRows), count);
+    }
+    const uint64_t* rowsWithKey{nullptr};
+    if (count != numRows) {
+      rowsWithKey = inMaps[i] != nullptr ? inMaps[i]->as<uint64_t>() : rawNulls;
+    }
+    valueColumn[0] = BaseVector::create(valueType, 0, pool);
+    readColumns(
+        source,
+        valueTypes,
+        0,
+        rowsWithKey,
+        rowsWithKey != nullptr ? numRows : 0,
+        pool,
+        opts,
+        valueColumn);
+    VELOX_CHECK_EQ(valueColumn[0]->size(), numRows);
+    mapValues[i] = std::move(valueColumn[0]);
+  }
+  return std::make_shared<FlatMapVector>(
+      pool,
+      type,
+      flatMap->nulls(),
+      numRows,
+      std::move(keyColumn[0]),
+      std::move(mapValues),
+      std::move(inMaps));
+}
+
+void readFlatMapVector(
+    ByteInputStream* source,
+    const TypePtr& type,
+    vector_size_t resultOffset,
+    const uint64_t* incomingNulls,
+    int32_t numIncomingNulls,
+    velox::memory::MemoryPool* pool,
+    const PrestoVectorSerde::PrestoOptions& opts,
+    VectorPtr& result) {
+  VELOX_CHECK(
+      type->isMap(),
+      "FLAT_MAP encoding requires a map type: {}",
+      type->toString());
+  auto page = readFlatMapPage(source, type, pool, opts);
+
+  // Reading a new vector with no parent nulls, so the page itself is the
+  // result and nothing is copied.
+  if (resultOffset == 0 && incomingNulls == nullptr) {
+    result = std::move(page);
+    return;
+  }
+  // Reading a new vector under parent nulls. Starts from an empty flat map so
+  // the page rows can be copied in around the rows that are null in the parent.
+  // When appending, the rows are copied after the existing ones instead.
+  if (resultOffset == 0) {
+    result = std::make_shared<FlatMapVector>(
+        pool,
+        type,
+        nullptr,
+        0,
+        BaseVector::create(type->childAt(0), 0, pool),
+        std::vector<VectorPtr>{},
+        std::vector<BufferPtr>{});
+  }
+  VELOX_CHECK_EQ(
+      result->encoding(),
+      VectorEncoding::Simple::FLAT_MAP,
+      "Cannot append a flat map page to a vector of regular maps: {}",
+      type->toString());
+  const auto numRows = page->size();
+  const auto numNewValues = sizeWithIncomingNulls(numRows, numIncomingNulls);
+  result->resize(resultOffset + numNewValues);
+  SelectivityVector rows(resultOffset + numNewValues, false);
+  rows.setValidRange(resultOffset, resultOffset + numNewValues, true);
+  rows.updateBounds();
+  BaseVector::ensureWritable(rows, type, pool, result);
+  if (incomingNulls == nullptr) {
+    const BaseVector::CopyRange range{0, resultOffset, numRows};
+    result->copyRanges(page.get(), folly::Range(&range, 1));
+    return;
+  }
+
+  std::vector<BaseVector::CopyRange> ranges;
+  vector_size_t sourceIndex{0};
+  bits::forEachSetBit(
+      incomingNulls, 0, numIncomingNulls, [&](vector_size_t row) {
+        const auto targetIndex = resultOffset + row;
+        if (!ranges.empty() &&
+            ranges.back().targetIndex + ranges.back().count == targetIndex) {
+          ++ranges.back().count;
+        } else {
+          ranges.push_back({sourceIndex, targetIndex, 1});
+        }
+        ++sourceIndex;
+      });
+  VELOX_CHECK_EQ(sourceIndex, numRows);
+  result->copyRanges(page.get(), folly::Range(ranges.data(), ranges.size()));
+  bits::forEachUnsetBit(
+      incomingNulls, 0, numIncomingNulls, [&](vector_size_t row) {
+        result->setNull(resultOffset + row, true);
+      });
+}
+
 void readRowVector(
     ByteInputStream* source,
     const TypePtr& type,
@@ -1340,6 +1511,16 @@ void readColumns(
           pool,
           opts,
           columnResult);
+    } else if (encoding == kFlatMap) {
+      readFlatMapVector(
+          source,
+          columnType,
+          resultOffset,
+          incomingNulls,
+          numIncomingNulls,
+          pool,
+          opts,
+          columnResult);
     } else {
       auto typeToEncoding = typeToEncodingName(columnType);
       if (encoding != typeToEncoding) {
@@ -1357,6 +1538,15 @@ void readColumns(
         }
       }
       checkTypeEncoding(encoding, columnType);
+      if (columnResult != nullptr &&
+          columnResult->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+        VELOX_CHECK_EQ(
+            resultOffset,
+            0,
+            "Cannot append a regular map page to a flat map: {}",
+            columnType->toString());
+        columnResult = BaseVector::create(columnType, 0, pool);
+      }
       if (columnResult != nullptr &&
           (columnResult->encoding() == VectorEncoding::Simple::CONSTANT ||
            columnResult->encoding() == VectorEncoding::Simple::DICTIONARY)) {

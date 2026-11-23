@@ -107,6 +107,8 @@ Status PrestoVectorLexer::lexColumn() {
     VELOX_RETURN_NOT_OK(lexArray());
   } else if (encoding == kMap) {
     VELOX_RETURN_NOT_OK(lexMap());
+  } else if (encoding == kFlatMap) {
+    VELOX_RETURN_NOT_OK(lexFlatMap());
   } else if (encoding == kRow) {
     VELOX_RETURN_NOT_OK(lexRow());
   } else if (encoding == kDictionary) {
@@ -157,6 +159,28 @@ Status PrestoVectorLexer::lexMap() {
   const auto offsetBytes = (numRows + 1) * sizeof(int32_t);
   VELOX_RETURN_NOT_OK(lexBytes(offsetBytes, TokenType::OFFSETS));
   VELOX_RETURN_NOT_OK(lexNulls(numRows));
+  return Status::OK();
+}
+
+Status PrestoVectorLexer::lexFlatMap() {
+  int32_t numRows;
+  VELOX_RETURN_NOT_OK(lexInt(TokenType::NUM_ROWS, &numRows));
+  int32_t numNonNull{numRows};
+  VELOX_RETURN_NOT_OK(lexNulls(numNonNull));
+  VELOX_RETURN_NOT_OK(lexColumn());
+  int32_t numKeys;
+  VELOX_RETURN_NOT_OK(lexInt(TokenType::FLAT_MAP_PRESENCE, &numKeys));
+  VELOX_RETURN_IF(
+      numKeys < 0, Status::Invalid("Negative number of keys: {}", numKeys));
+  for (int32_t key = 0; key < numKeys; ++key) {
+    int32_t numPresent;
+    VELOX_RETURN_NOT_OK(lexInt(TokenType::FLAT_MAP_PRESENCE, &numPresent));
+    if (numPresent != numNonNull) {
+      VELOX_RETURN_NOT_OK(
+          lexBytes(bits::nbytes(numRows), TokenType::FLAT_MAP_PRESENCE));
+    }
+    VELOX_RETURN_NOT_OK(lexColumn());
+  }
   return Status::OK();
 }
 
