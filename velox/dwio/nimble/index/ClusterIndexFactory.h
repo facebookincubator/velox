@@ -15,13 +15,16 @@
  */
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string_view>
+#include <vector>
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/index/IndexKeyEncoder.h"
 #include "velox/dwio/nimble/index/IndexLookup.h"
+#include "velox/dwio/nimble/index/IndexTypes.h"
 #include "velox/dwio/nimble/index/IndexWriter.h"
 #include "velox/dwio/nimble/index/KeyComparator.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
@@ -33,14 +36,35 @@ class ClusterIndexBase;
 
 class ClusterIndexFactory {
  public:
+  /// Options of the writers that createWriter() creates.
+  struct Options {
+    /// Where the index stores its key chunks.
+    KeyStreamLayout keyStreamLayout{KeyStreamLayout::kPartition};
+    /// In the Stripe layout, the index streams of every stripe: the streams of
+    /// the stripe that hold its index data, numIndexStreams() of them, the key
+    /// stream first. Empty in the Partition layout.
+    std::vector<uint32_t> indexStreamIds{};
+  };
+
   virtual ~ClusterIndexFactory() = default;
 
   virtual std::string_view name() const = 0;
 
+  /// Returns how many index streams every stripe has with 'keyStreamLayout':
+  /// the key stream in the Stripe layout, and none in the Partition layout.
+  /// The Writer allocates them before the streams of the schema, and passes
+  /// their ids to createWriter() in Options::indexStreamIds.
+  virtual uint32_t numIndexStreams(KeyStreamLayout keyStreamLayout) const {
+    return keyStreamLayout == KeyStreamLayout::kStripe ? 1 : 0;
+  }
+
+  /// Creates a writer of the index with 'options'. An index that cannot store
+  /// its keys in stripes rejects the Stripe layout.
   virtual std::unique_ptr<IndexWriter> createWriter(
       const IndexConfig& config,
       const velox::TypePtr& inputType,
-      velox::memory::MemoryPool* pool) const = 0;
+      velox::memory::MemoryPool* pool,
+      const Options& options) const = 0;
 
   virtual std::unique_ptr<IndexKeyEncoder> createKeyEncoder(
       const std::vector<std::string>& columns,

@@ -27,6 +27,7 @@
 #include "velox/dwio/nimble/tablet/FooterGenerated.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
+#include "velox/dwio/nimble/tablet/StripeGroupFlushPolicy.h"
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::nimble {
@@ -67,6 +68,15 @@ class TabletWriter {
 
   struct Options {
     std::unique_ptr<LayoutPlanner> layoutPlanner{nullptr};
+    /// Target size of a stripe group's metadata, before compression. The
+    /// writer closes a group once its estimated metadata reaches this size, at
+    /// 13 bytes per entry, the offset and size of a stream id in a stripe. kRaw
+    /// and dense kStreamMajor count an entry for each stream of the last stripe
+    /// in every stripe. The sparse layout counts the entries it stores, one
+    /// with a stripe index for each stream with data, and after the first group
+    /// takes the last written group's serialized bytes per entry, so later
+    /// groups close near the threshold.
+    /// See StripeGroupFlushPolicy.
     uint32_t metadataFlushThreshold{kMetadataFlushThreshold};
     uint32_t metadataCompressionThreshold{kMetadataCompressionThreshold};
     ChecksumType checksumType{ChecksumType::XXH3_64};
@@ -85,8 +95,8 @@ class TabletWriter {
     // Selects the on-disk chunk statistics representation.
     ChunkStatsVersion chunkStatsVersion{ChunkStatsVersion::kV2};
     // Skip writing chunk stats for a stripe group if the average number
-    // of chunks per stream is below this threshold. 0 disables chunk stats
-    // skipping.
+    // of chunks per stream is below this threshold. 0 disables this
+    // threshold; a stripe group with no streams still gets no chunk stats.
     float chunkStatsMinAvgChunks{0};
     // Maximum string or binary value length retained in per-chunk bounds.
     uint32_t maxChunkStringStatSize{
@@ -102,9 +112,17 @@ class TabletWriter {
     std::vector<std::pair<EncodingType, float>>
         stripeGroupEncodingLayoutReadFactors{};
     /// When true, identical kStreamMajor offsets or sizes arrays share one
-    /// encoding in the same stripe group.
+    /// encoding in the same stripe group. A group with the sparse layout
+    /// deduplicates its arrays regardless.
     /// Enabling this can increase temporary writer memory.
     bool stripeGroupMetadataDeduplicationEnabled{false};
+    /// When true, kStreamMajor stripe groups use the sparse layout: each stream
+    /// holds its stripe list, the stripes where it has data, and offsets and
+    /// sizes only for those stripes; see StreamMajorStripeGroup in Footer.fbs.
+    /// Requires kStreamMajor. A reader that predates it cannot read such a
+    /// group, except when every stream has data in every stripe, so every
+    /// reader must support it before a writer enables it.
+    bool stripeGroupSparseLayoutEnabled{false};
     // Callback invoked at stripe group flush boundaries. Used by index
     // writers (e.g., ClusterIndexWriter) to write partition data aligned
     // with stripe groups.
@@ -177,6 +195,17 @@ class TabletWriter {
     kClosed, // Writer has been closed and no more data can be written.
   };
 
+  // A stream's entries in the current stripe group with the sparse layout: one
+  // for each stripe where the stream has data.
+  struct SparseStreamEntries {
+    // Stripes where the stream has data, as indices within the group.
+    std::vector<uint32_t> stripes;
+    // The stream's offset within each of those stripes.
+    std::vector<uint32_t> offsets;
+    // The stream's size within each of those stripes.
+    std::vector<uint32_t> sizes;
+  };
+
   TabletWriter(
       velox::WriteFile* file,
       velox::memory::MemoryPool& pool,
@@ -204,10 +233,13 @@ class TabletWriter {
   // Write stripe group metadata entry and also add that to footer sections if
   // exceeds metadata flush size.
   void tryWriteStripeGroup(bool force = false);
-  bool shouldWriteStripeGroup(bool force) const;
+
   // Serialize the current stripe group's metadata, dispatching to the
   // layout-specific helper below per options_.stripeGroupEncodingLayout.
-  void writeStripeGroup(size_t streamCount, size_t stripeCount);
+  flatbuffers::FlatBufferBuilder serializeStripeGroup(
+      size_t streamCount,
+      size_t stripeCount);
+
   // Serialize the current stripe group's per-stream offsets/sizes into
   // `builder` using the kRaw / kStreamMajor layout respectively.
   void writeStripeGroupWithRawLayout(
@@ -267,6 +299,8 @@ class TabletWriter {
   const std::unique_ptr<Checksum> streamChecksum_;
   // Chunk-level position index.
   const std::unique_ptr<ChunkStatsWriter> chunkStatsWriter_;
+  // Decides when to close the current stripe group.
+  StripeGroupFlushPolicy stripeGroupFlushPolicy_;
 
   // Number of rows in each stripe.
   std::vector<uint32_t> stripeRowCounts_;
@@ -278,11 +312,26 @@ class TabletWriter {
   // For each stripe, which stripe group it belongs to.
   std::vector<uint32_t> stripeGroupIndices_;
   // Accumulated offsets within each stripe relative to start of the stripe,
-  // with one value for each seen stream in the current OR PREVIOUS stripes.
+  // with one value for each stream up to the largest stream offset of that
+  // stripe. Empty with the sparse layout, which keeps sparseStreams_ instead.
   std::vector<std::vector<uint32_t>> streamOffsets_;
   // Accumulated stream sizes within each stripe. Same behavior as
   // streamOffsets_.
   std::vector<std::vector<uint32_t>> streamSizes_;
+  // With the sparse layout, the entries of each stream, indexed by stream ID.
+  // streamOffsets_ and streamSizes_ keep every stream of every stripe, because
+  // kRaw and dense kStreamMajor write them all, including the offsets of empty
+  // streams. The sparse layout writes only the streams with data. A flat map
+  // stripe has data in only a few of its streams, so keeping only those makes
+  // writer memory follow the entries the group stores rather than stripes times
+  // streams. Empty otherwise.
+  std::vector<SparseStreamEntries> sparseStreams_;
+  // The streams with data in the current stripe group, one for each stripe
+  // that has data for the stream: the entries of a sparse group. Counted only
+  // with the sparse layout.
+  uint64_t numNonEmptyStripeGroupStreams_{0};
+  // Number of stripes in the current stripe group.
+  uint32_t numGroupStripes_{0};
 
   // Current stripe group index.
   uint32_t stripeGroupIndex_{0};

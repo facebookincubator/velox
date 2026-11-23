@@ -165,7 +165,8 @@ class OrderByTest : public OperatorTestBase {
       const std::vector<uint32_t>& sortingKeys) {
     {
       SCOPED_TRACE("run without spilling");
-      assertQueryOrdered(planNode, duckDbSql, sortingKeys);
+      AssertQueryBuilder(planNode, duckDbQueryRunner_)
+          .assertResults(duckDbSql, sortingKeys);
     }
   }
 
@@ -252,7 +253,10 @@ TEST_F(OrderByTest, orderByNodeReportsBothPlanNodeBoundaries) {
   createDuckDbTable({data});
   auto plan = PlanBuilder().values({data}).orderBy({"c0"}, false).planNode();
 
-  auto task = assertQueryOrdered(plan, "SELECT * FROM tmp ORDER BY c0", {0});
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .assertResults(
+              "SELECT * FROM tmp ORDER BY c0", std::vector<uint32_t>{0});
 
   int numCudfOrderBy = 0;
   for (const auto& pipeline : task->taskStats().pipelineStats) {
@@ -435,16 +439,15 @@ TEST_F(OrderByTest, outputBatchRows) {
           std::to_string(testData.maxOutBatchRows)},
          {facebook::velox::cudf_velox::CudfToVelox::kPassthroughMode,
           "false"}});
-    CursorParameters params;
-    params.planNode = plan;
-    params.queryCtx = queryCtx;
-    auto task = assertQueryOrdered(
-        params, "SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST", {0});
+    auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                    .queryCtx(queryCtx)
+                    .assertResults(
+                        "SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST",
+                        std::vector<uint32_t>{0});
 
     EXPECT_EQ(
         testData.expectedOutputVectors,
-        toPlanStats(task->taskStats())
-            .at(orderById)
+        PlanNodeStats::extract(task->taskStats(), orderById)
             .operatorStats.at("CudfToVelox")
             ->outputVectors);
   }

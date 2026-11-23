@@ -28,10 +28,12 @@
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/ReversedEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/benchmarks/BenchmarkUtils.h"
 
+#include <algorithm>
 #include <iostream>
 #include <limits>
 
@@ -185,6 +187,12 @@ Vector<uint32_t> makePartitionedEliasFanoUint32(uint32_t n = kNumElements) {
   return data;
 }
 
+Vector<uint32_t> makeDecreasingUint32(uint32_t n = kNumElements) {
+  auto data = makeIncreasing<uint32_t>(n);
+  std::reverse(data.begin(), data.end());
+  return data;
+}
+
 Vector<std::string_view> makeFsstStrings(uint32_t n = kNumElements) {
   static std::vector<std::string> storage;
   if (storage.size() != n) {
@@ -323,6 +331,12 @@ SLICE_BENCHMARKS(
     EncodingType::PartitionedEliasFano,
     makePartitionedEliasFanoUint32());
 SLICE_BENCHMARKS(
+    ReversedUint32,
+    ReversedEncoding<uint32_t>,
+    uint32_t,
+    EncodingType::Reversed,
+    makeDecreasingUint32());
+SLICE_BENCHMARKS(
     PFORUint32,
     PFOREncoding<uint32_t>,
     uint32_t,
@@ -447,6 +461,8 @@ int main(int argc, char** argv) {
         "PartitionedEliasFanoUint32",
         EncodingType::PartitionedEliasFano,
         makePartitionedEliasFanoUint32());
+    printSize<ReversedEncoding<uint32_t>>(
+        "ReversedUint32", EncodingType::Reversed, makeDecreasingUint32());
     printSize<PFOREncoding<uint32_t>>(
         "PFORUint32", EncodingType::PFOR, makePforUint32());
     printSize<SimdForBitpackEncoding<uint32_t>>(

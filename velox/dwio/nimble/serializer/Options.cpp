@@ -32,6 +32,8 @@ std::string toString(SerializationVersion version) {
       return "kProjection";
     case SerializationVersion::kTablet:
       return "kTablet";
+    case SerializationVersion::kBlob:
+      return "kBlob";
     default:
       NIMBLE_FAIL(
           "Unknown SerializationVersion: {}", static_cast<int>(version));

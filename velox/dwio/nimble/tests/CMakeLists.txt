@@ -71,7 +71,9 @@ add_executable(
   BufferPolicyTest.cpp
   ChunkedStreamTest.cpp
   DecodedVectorManagerTest.cpp
+  FieldIdResolverTest.cpp
   EncodingLayoutTreeTest.cpp
+  FieldReaderTest.cpp
   LayoutPlannerTest.cpp
   OrderedRangesTest.cpp
   RawSizeContextTest.cpp
@@ -115,6 +117,11 @@ target_link_libraries(
   nimble_shared_dictionary_test_utils
   nimble_writer_test_utils
   nimble_batch_reader
+  nimble_velox_field_reader
+  nimble_velox_schema_builder
+  nimble_serializer
+  nimble_deserializer
+  nimble_velox_reader_factory
   nimble_velox_shared_dictionary_config
   nimble_writer
   nimble_velox_layout_planner
@@ -135,6 +142,42 @@ target_link_libraries(
   Folly::folly
   raw_size_utils
   nimble_column_stats_utils
+)
+
+add_library(
+  nimble_options_off_fixtures
+  OptionsOffFixtures.cpp
+  OptionsOffFixtures.h
+  OptionsOffForms.cpp
+  OptionsOffForms.h
+  OptionsOffGolden.h
+)
+target_link_libraries(
+  nimble_options_off_fixtures
+  nimble_common
+  nimble_encodings
+  nimble_velox_shared_dictionary_config
+  nimble_writer
+  velox_file
+  velox_memory
+  velox_vector
+  velox_vector_test_lib
+)
+
+add_executable(nimble_options_off_tests OptionsOffGoldenTest.cpp)
+add_test(nimble_options_off_tests nimble_options_off_tests)
+
+target_link_libraries(
+  nimble_options_off_tests
+  nimble_options_off_fixtures
+  nimble_batch_reader
+  nimble_writer
+  nimble_common
+  velox_vector_test_lib
+  gmock
+  gtest
+  gtest_main
+  Folly::folly
 )
 
 add_executable(nimble_writer_chunking_fuzz_tests WriterChunkingFuzzTest.cpp)
@@ -175,3 +218,16 @@ target_link_libraries(
 add_executable(raw_size_benchmark RawSizeBenchmark.cpp)
 
 target_link_libraries(raw_size_benchmark raw_size_utils Folly::folly Folly::follybenchmark)
+
+add_executable(sliding_window_array_read_benchmark SlidingWindowArrayReadBenchmark.cpp)
+
+target_link_libraries(
+  sliding_window_array_read_benchmark
+  nimble_batch_reader
+  nimble_writer
+  velox_file
+  velox_memory
+  velox_vector
+  Folly::folly
+  Folly::follybenchmark
+)

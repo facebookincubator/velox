@@ -73,9 +73,6 @@ class TopNRowNumberSpiller;
 
 class TopNRowNumber : public Operator {
  public:
-  /// Runtime stat key indicating partial TopN was abandoned.
-  static constexpr std::string_view kAbandonedPartial = "abandonedPartial";
-
   TopNRowNumber(
       int32_t operatorId,
       DriverCtx* driverCtx,
@@ -290,6 +287,10 @@ class TopNRowNumber : public Operator {
   const int32_t limit_;
 
   const bool generateRowNumber_;
+
+  // Whether this is a partial step, which may pass its input through when it
+  // filters too few rows.
+  const bool partial_;
 
   const size_t numPartitionKeys_;
   const size_t numSortingKeys_;

@@ -103,7 +103,8 @@ IcebergInsertTableHandlePtr IcebergMergeSink::cloneHandleWithKind(
       kind,
       original.existingDeletionVectors(),
       original.fileNameGenerator(),
-      original.insertedColumns());
+      original.insertedColumns(),
+      original.includePartitionPaths());
 }
 
 RowTypePtr IcebergMergeSink::projectDataInputType(

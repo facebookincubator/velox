@@ -55,7 +55,6 @@
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/index/ClusterIndexFactory.h"
 #include "velox/dwio/nimble/index/DenseIndexFactory.h"
-#include "velox/dwio/nimble/index/HashIndexWriter.h"
 #include "velox/dwio/nimble/index/IndexSerialization.h"
 #include "velox/dwio/nimble/index/SortedIndexWriter.h"
 #include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
@@ -115,6 +114,27 @@ class WriterContext : public FieldWriterContext {
             this->options_.metricsLogger == nullptr
                 ? std::make_shared<MetricsLogger>()
                 : this->options_.metricsLogger} {
+    if (const auto level = options_.fixedBitWidthTypedLanesOpenzlLevel) {
+      NIMBLE_USER_CHECK(
+          *level >= kMinTypedLanesOpenzlLevel &&
+              *level <= kMaxTypedLanesOpenzlLevel,
+          "fixedBitWidthTypedLanesOpenzlLevel must be in [{}, {}], got {}.",
+          kMinTypedLanesOpenzlLevel,
+          kMaxTypedLanesOpenzlLevel,
+          *level);
+      NIMBLE_USER_CHECK(
+          options_.compressionOptions.compressionType ==
+              CompressionType::MetaInternal,
+          "fixedBitWidthTypedLanesOpenzlLevel requires MetaInternal "
+          "compression, got {}.",
+          toString(options_.compressionOptions.compressionType));
+    }
+    if (options_.fixedBitWidthUseExactBits &&
+        options_.fixedBitWidthTypedLanes) {
+      VLOG(1)
+          << "fixedBitWidthUseExactBits does not apply to FixedBitWidth "
+             "chunks that take typed lanes: they use the byte-rounded width.";
+    }
     inputBufferGrowthPolicy_ = this->options_.makeInputBufferGrowthPolicy();
     stringBufferGrowthPolicy_ = this->options_.makeStringBufferGrowthPolicy();
     ignoreTopLevelNulls_ = options_.ignoreTopLevelNulls;
@@ -1022,6 +1042,12 @@ void configureDictionary(
           std::move(config),
           schemaBuilder);
       return;
+    case Kind::SlidingWindowArray:
+      configureDictionary(
+          typeBuilder.asSlidingWindowArray().elements(),
+          std::move(config),
+          schemaBuilder);
+      return;
     case Kind::Map:
       configureDictionary(
           typeBuilder.asMap().values(), std::move(config), schemaBuilder);
@@ -1698,6 +1724,24 @@ std::unique_ptr<FieldWriter> createRootFieldWriter(
     }
   }
 
+  if (!context.options().slidingWindowArrayColumns.empty()) {
+    context.clearAndReserveSlidingWindowArrayNodeIds(
+        context.options().slidingWindowArrayColumns.size());
+    for (const auto& column : context.options().slidingWindowArrayColumns) {
+      NIMBLE_USER_CHECK(
+          !context.options().dictionaryArrayColumns.contains(column),
+          "Column must not be in both dictionaryArrayColumns and "
+          "slidingWindowArrayColumns: {}",
+          column);
+      findNodeIds(
+          *type->childByName(column),
+          context.slidingWindowArrayNodeIds(),
+          [](const TypeWithId& type) {
+            return type.type()->kind() == velox::TypeKind::ARRAY;
+          });
+    }
+  }
+
   if (!context.options().deduplicatedMapColumns.empty()) {
     context.clearAndReserveDeduplicatedMapNodeIds(
         context.options().deduplicatedMapColumns.size());
@@ -1922,6 +1966,26 @@ void initializeEncodingLayouts(
         }
         break;
       }
+      case Kind::SlidingWindowArray: {
+        NIMBLE_CHECK_EQ(
+            encodingLayoutTree.schemaKind(),
+            Kind::SlidingWindowArray,
+            "Incompatible encoding layout node. Expecting sliding window array node.");
+        auto& arrayBuilder = typeBuilder.asSlidingWindowArray();
+        SET_STREAM_CONTEXT(
+            arrayBuilder, offsetsDescriptor, SlidingWindowArray::OffsetsStream);
+        SET_STREAM_CONTEXT(
+            arrayBuilder, lengthsDescriptor, SlidingWindowArray::LengthsStream);
+        if (encodingLayoutTree.childrenCount() > 0) {
+          NIMBLE_CHECK_EQ(
+              encodingLayoutTree.childrenCount(),
+              1,
+              "Invalid encoding layout tree. SlidingWindowArray node should have exactly one child.");
+          initializeEncodingLayouts(
+              arrayBuilder.elements(), encodingLayoutTree.child(0));
+        }
+        break;
+      }
       case Kind::FlatMap: {
         NIMBLE_UNREACHABLE("Flatmap handled already");
       }
@@ -1983,8 +2047,14 @@ std::unique_ptr<index::VectorIndexWriter> createVectorIndexWriter(
 std::unique_ptr<index::IndexWriter> Writer::createClusterIndexWriter(
     const WriterOptions& options,
     const velox::TypePtr& type,
-    velox::memory::MemoryPool* pool) {
+    velox::memory::MemoryPool* pool,
+    SchemaBuilder& schemaBuilder) {
+  const auto keyStreamLayout = options.clusterIndexKeyStreamLayout;
   if (options.clusterIndexConfig == nullptr) {
+    NIMBLE_USER_CHECK_NE(
+        keyStreamLayout,
+        index::KeyStreamLayout::kStripe,
+        "The Stripe cluster index key stream layout requires a cluster index");
     return nullptr;
   }
   const auto& config = *options.clusterIndexConfig;
@@ -1993,8 +2063,27 @@ std::unique_ptr<index::IndexWriter> Writer::createClusterIndexWriter(
       index::IndexFamily::Cluster,
       "Cluster index configuration must use the cluster family: {}",
       config.name);
-  auto writer =
-      index::clusterIndexFactory(config.name).createWriter(config, type, pool);
+  const auto& factory = index::clusterIndexFactory(config.name);
+  index::ClusterIndexFactory::Options writerOptions{
+      .keyStreamLayout = keyStreamLayout};
+  const auto numIndexStreams = factory.numIndexStreams(keyStreamLayout);
+  if (keyStreamLayout == index::KeyStreamLayout::kPartition) {
+    NIMBLE_CHECK_EQ(
+        numIndexStreams,
+        0,
+        "A Partition layout cluster index must store no stream in stripes: {}",
+        config.name);
+  } else {
+    NIMBLE_CHECK_GT(
+        numIndexStreams,
+        0,
+        "A Stripe layout cluster index must store its keys in a stream of each stripe: {}",
+        config.name);
+    const auto streamIds =
+        schemaBuilder.createStripeIndexStreams(numIndexStreams);
+    writerOptions.indexStreamIds.assign(streamIds.begin(), streamIds.end());
+  }
+  auto writer = factory.createWriter(config, type, pool, writerOptions);
   NIMBLE_CHECK_NOT_NULL(
       writer, "Cluster index factory returned a null writer: {}", config.name);
   return writer;
@@ -2098,7 +2187,8 @@ Writer::Writer(
       clusterIndexWriter_{createClusterIndexWriter(
           context_->options(),
           type,
-          &(*context_->bufferMemoryPool()))},
+          &(*context_->bufferMemoryPool()),
+          context_->schemaBuilder())},
       denseIndexWriters_{createDenseIndexWriters(
           context_->options(),
           type,
@@ -2133,6 +2223,8 @@ Writer::Writer(
                    .experimentalStripeGroupEncodingLayoutReadFactors,
            .stripeGroupMetadataDeduplicationEnabled =
                context_->options().experimentalStripeGroupMetadataDeduplication,
+           .stripeGroupSparseLayoutEnabled =
+               context_->options().experimentalStripeGroupSparseLayout,
            .stripeGroupFlushCallback =
                (clusterIndexWriter_ != nullptr || !denseIndexWriters_.empty())
                ? TabletWriter::StripeGroupFlushCallback(
@@ -2140,11 +2232,11 @@ Writer::Writer(
                          const WriteDataFn& writeDataFn,
                          const CreateMetadataSectionFn& createMetadataFn) {
                        if (clusterIndexWriter_ != nullptr) {
-                         clusterIndexWriter_->flush(
+                         clusterIndexWriter_->finishStripeGroup(
                              writeDataFn, createMetadataFn);
                        }
                        for (const auto& denseIndex : denseIndexWriters_) {
-                         denseIndex.writer->flush(
+                         denseIndex.writer->finishStripeGroup(
                              writeDataFn, createMetadataFn);
                        }
                      })
@@ -2510,6 +2602,34 @@ void Writer::writeDictionarySection(
           fileDictionaryReferences,
           externalDictionaryReferences,
           fileDictionaries));
+}
+
+void Writer::writeStripeIndexStreams() {
+  if (clusterIndexWriter_ == nullptr) {
+    return;
+  }
+  ensureEncodingBuffer();
+  auto streams = clusterIndexWriter_->finishStripe(*encodingBuffer_);
+  const auto numStripeIndexStreams =
+      context_->schemaBuilder().stripeIndexStreamCount();
+  NIMBLE_CHECK_EQ(
+      streams.size(),
+      numStripeIndexStreams,
+      "A cluster index must return the chunks of each of its index streams");
+  // The stripe index streams are ids [0, count). The ClusterIndexGroup records
+  // the last key of one key chunk per stripe, and the other streams of the
+  // index hold its data of the same rows.
+  for (uint32_t streamId = 0; streamId < numStripeIndexStreams; ++streamId) {
+    auto& chunks = streams[streamId];
+    NIMBLE_CHECK_EQ(
+        chunks.size(), 1, "Each index stream of a stripe must be one chunk");
+    NIMBLE_CHECK_LT(streamId, encodedStreams_.size());
+    auto& stream = encodedStreams_[streamId];
+    NIMBLE_CHECK(stream.chunks.empty());
+    const uint64_t streamBytes = chunks.front().contentSize();
+    stream.chunks = std::move(chunks);
+    context_->updateStripeEncodedPhysicalSize(streamBytes);
+  }
 }
 
 void Writer::addIndexKey(const velox::VectorPtr& input) {
@@ -3648,6 +3768,7 @@ bool Writer::writeStripe() {
     writeStreams();
   }
   writeStripeDictionaryStreams();
+  writeStripeIndexStreams();
 
   uint64_t stripeSize{0};
   {

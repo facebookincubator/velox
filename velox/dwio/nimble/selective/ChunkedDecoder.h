@@ -153,7 +153,7 @@ class ChunkedDecoder {
     // reading, where each chunk we need to align the result nulls to byte
     // boundary then shift.
     params.prepareResultNulls = [&resultNullsPrepared, &visitor, &rows] {
-      if (FOLLY_UNLIKELY(!resultNullsPrepared)) {
+      if (!resultNullsPrepared) [[unlikely]] {
         // Pass the real read-range null state so prepareNulls short-circuits
         // (no allocate/clear) when the range carries no nulls. Only mark the
         // buffer prepared when prepareNulls actually allocated it: on a
@@ -178,7 +178,7 @@ class ChunkedDecoder {
               .inMap() == nulls->template as<uint64_t>()) {
         params.makeReaderNulls =
             [&readerNullsMade, &nulls, pool = pool_]() mutable {
-              if (FOLLY_UNLIKELY(!readerNullsMade)) {
+              if (!readerNullsMade) [[unlikely]] {
                 nulls = velox::AlignedBuffer::copy(pool, nulls);
                 readerNullsMade = true;
               }
@@ -194,7 +194,7 @@ class ChunkedDecoder {
           visitor, nulls->template as<uint64_t>(), params, saveStringBuffersFn);
     } else {
       params.makeReaderNulls = [&readerNullsMade, this, numRows, &visitor] {
-        if (FOLLY_UNLIKELY(!readerNullsMade)) {
+        if (!readerNullsMade) [[unlikely]] {
           auto& nulls = visitor.reader().nullsInReadRange();
           if (!nulls) {
             nulls = velox::AlignedBuffer::allocate<bool>(
@@ -241,7 +241,7 @@ class ChunkedDecoder {
       uint32_t offset{0};
       uint32_t endOffset{0};
       for (int64_t i = 0; i < totalNumValues;) {
-        if (FOLLY_UNLIKELY(remainingValues_ == 0)) {
+        if (remainingValues_ == 0) [[unlikely]] {
           loadNextChunk();
         }
 
@@ -264,7 +264,7 @@ class ChunkedDecoder {
       }
     } else {
       for (int64_t i = 0; i < totalNumValues;) {
-        if (FOLLY_UNLIKELY(remainingValues_ == 0)) {
+        if (remainingValues_ == 0) [[unlikely]] {
           loadNextChunk();
         }
 
@@ -356,7 +356,7 @@ class ChunkedDecoder {
     // reading, where each chunk we need to align the result nulls to byte
     // boundary then shift.
     params.prepareResultNulls = [&resultNullsPrepared, &visitor, &rows] {
-      if (FOLLY_UNLIKELY(!resultNullsPrepared)) {
+      if (!resultNullsPrepared) [[unlikely]] {
         // Pass the real read-range null state so prepareNulls short-circuits
         // (no allocate/clear) when the range carries no nulls. Only mark the
         // buffer prepared when prepareNulls actually allocated it: on a
@@ -381,7 +381,7 @@ class ChunkedDecoder {
               .inMap() == nulls->template as<uint64_t>()) {
         params.makeReaderNulls =
             [&readerNullsMade, &nulls, pool = pool_]() mutable {
-              if (FOLLY_UNLIKELY(!readerNullsMade)) {
+              if (!readerNullsMade) [[unlikely]] {
                 nulls = velox::AlignedBuffer::copy(pool, nulls);
                 readerNullsMade = true;
               }
@@ -398,7 +398,7 @@ class ChunkedDecoder {
     } else {
       const auto numRows = visitor.numRows();
       params.makeReaderNulls = [&readerNullsMade, this, numRows, &visitor] {
-        if (FOLLY_UNLIKELY(!readerNullsMade)) {
+        if (!readerNullsMade) [[unlikely]] {
           auto& nulls = visitor.reader().nullsInReadRange();
           if (!nulls) {
             nulls = velox::AlignedBuffer::allocate<bool>(
@@ -486,7 +486,7 @@ class ChunkedDecoder {
       // + refresh scan state) or to abandon to the flat fallback when the next
       // chunk is not dictionary-compatible. Hoisting the load here gives those
       // a clean seam.
-      if (FOLLY_UNLIKELY(remainingValues_ == 0)) {
+      if (remainingValues_ == 0) [[unlikely]] {
         // Jumps to the chunk holding the next row, so the load below opens it
         // instead of the next chunk. The chunk left behind was read in an
         // earlier pass, so its string buffers are already kept.
@@ -588,7 +588,7 @@ class ChunkedDecoder {
       word &= mask;
     }
     auto c = __builtin_popcountll(word);
-    if (FOLLY_UNLIKELY(c > 0 && remainingValues_ == 0)) {
+    if (c > 0 && remainingValues_ == 0) [[unlikely]] {
       loadNextChunk();
     }
     if (c == 0 || numNonNulls + c < remainingValues_) {
@@ -793,7 +793,7 @@ class ChunkedDecoder {
         skipToNextRowChunk<kHasNulls>(visitor, nulls, params);
       }
       if constexpr (!kHasNulls) {
-        if (FOLLY_UNLIKELY(remainingValues_ == 0)) {
+        if (remainingValues_ == 0) [[unlikely]] {
           loadNextChunk();
         }
       }

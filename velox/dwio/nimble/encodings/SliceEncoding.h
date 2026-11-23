@@ -58,7 +58,7 @@
 ///
 /// When the inner encoding structurally supports it, wrap() folds the delta
 /// into the copied inner bytes at write time (baseline rewrite for
-/// FixedBitWidth / PFOR / Constant, per-value shift-during-copy for
+/// FixedBitWidth / PFOR / Constant / Sequence, per-value shift-during-copy for
 /// uncompressed Trivial, recurse into the values child for Nullable). In that
 /// case the on-wire delta is zero and the decode-time shift loop is skipped.
 /// Otherwise the delta rides on the wire and the reader applies it at
@@ -184,10 +184,10 @@ class SliceEncoding final
     encoding_->materialize(rowCount, buffer);
     // Read-time fallback that applies the on-wire delta to every value. When
     // wrap() folded the delta into the inner encoding's own bytes (baseline
-    // rewrite for FixedBitWidth / PFOR / Constant, per-value shift-during-
-    // copy for uncompressed Trivial, forward-to-values-child for Nullable),
-    // valueDelta_ is zero on the wire and this loop is skipped. It stays as
-    // the fallback for encodings that cannot absorb a constant shift
+    // rewrite for FixedBitWidth / PFOR / Constant / Sequence, per-value
+    // shift-during-copy for uncompressed Trivial, forward-to-values-child for
+    // Nullable), valueDelta_ is zero on the wire and this loop is skipped. It
+    // stays as the fallback for encodings that cannot absorb a constant shift
     // structurally (RLE, Dictionary, Huffman, MainlyConstant, BlockBitPacking,
     // ...) and for the runtime-conditional cases where push-down was rejected
     // (compressed Trivial, Nullable whose values child cannot itself absorb
@@ -333,11 +333,11 @@ class SliceEncoding final
 
     // Write the inner bytes. Push-down folders write directly into the
     // reserved region -- no scratch buffer allocation. Folders that use a
-    // baseline field (FixedBitWidth, PFOR, Constant) memcpy the source first
-    // then rewrite the baseline in place; Trivial shifts values while copying.
-    // Each folder returns the number of bytes it wrote so the post-write
-    // assertion can catch any drift between the reserved size and what the
-    // folder produced.
+    // baseline field (FixedBitWidth, PFOR, Constant, Sequence) memcpy the
+    // source first then rewrite the baseline in place; Trivial shifts values
+    // while copying. Each folder returns the number of bytes it wrote so the
+    // post-write assertion can catch any drift between the reserved size and
+    // what the folder produced.
     const size_t bytesWritten = pushdownValueDelta
         ? applyValueDeltaPushdown(
               encoded, valueDelta, options.useVarintRowCount, pos)

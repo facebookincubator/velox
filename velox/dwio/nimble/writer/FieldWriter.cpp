@@ -16,7 +16,10 @@
 #include "velox/dwio/nimble/writer/FieldWriter.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
+#include <limits>
+#include <optional>
 #include <type_traits>
 
 #include <folly/container/F14Set.h>
@@ -879,7 +882,22 @@ class MapFieldWriter : public MultiValueFieldWriter {
   void write(const velox::VectorPtr& vector, const OrderedRanges& ranges)
       override {
     OrderedRanges childRanges;
-    auto map = ingestLengths<velox::MapVector>(vector, ranges, childRanges);
+    velox::MapVectorPtr flatMapAsMap;
+    velox::VectorPtr input = vector;
+    if (vector->wrappedVector()->encoding() ==
+        velox::VectorEncoding::Simple::FLAT_MAP) {
+      flatMapAsMap = vector->wrappedVector()
+                         ->asUnchecked<velox::FlatMapVector>()
+                         ->toMapVector();
+      if (vector->encoding() == velox::VectorEncoding::Simple::FLAT_MAP) {
+        input = flatMapAsMap;
+      } else {
+        auto decodingContext = context_.decodingContext();
+        input = decodingContext.decode(vector, ranges)
+                    .wrap(flatMapAsMap, *vector, vector->size());
+      }
+    }
+    auto map = ingestLengths<velox::MapVector>(input, ranges, childRanges);
     if (childRanges.size() > 0) {
       keys_->write(map->mapKeys(), childRanges);
       values_->write(map->mapValues(), childRanges);
@@ -1337,6 +1355,7 @@ class FlatMapValueFieldWriter {
 
   void reset() {
     inMapStream_.reset();
+    ranges_.clear();
     // File stats collection is done sequentially onto
     // the same underlying object.
     // We will allocate additional stat builders per value writer
@@ -2043,9 +2062,11 @@ class HybridFlatMapFieldWriter : public FieldWriter {
   using StreamKeyType = std::
       conditional_t<K == velox::TypeKind::VARCHAR, std::string_view, KeyType>;
 
-  // Keys live in the type builder so the schema catalog and key-presence
-  // bitmaps share one order. A Default group that lists its keys per batch
-  // writes them to its key-presence stream instead.
+  // Grouped keys live in hybridMap_, and the type builder reads them in place.
+  // With a bitmap, the Default keys live in defaultKeys_, which the type
+  // builder also views, so the schema catalog and the key-presence bitmaps
+  // share one order. A Default group that lists its keys per batch writes them
+  // to its key-presence stream instead.
   struct Group {
     Group(
         uint32_t groupId,
@@ -2112,20 +2133,31 @@ class HybridFlatMapFieldWriter : public FieldWriter {
             context.schemaBuilder().createHybridFlatMapTypeBuilder(
                 NimbleTypeTraits<K>::scalarKind,
                 configuredHybridFlatMap(context, type->id())
-                    .defaultGroupKeyPresenceMode())),
+                    .defaultGroupKeyPresenceMode(),
+                /*projection=*/false,
+                context.hybridFlatMapGroupKeysLayout())),
         valueType_{type->childAt(1)},
         nodeId_{type->id()},
         hybridMap_{[&] {
           const auto& hybridFlatMap =
               configuredHybridFlatMap(context, type->id());
-          if (!hybridFlatMap.hasGroupLookupIndex()) {
-            return HybridFlatMap{
-                NimbleTypeTraits<K>::scalarKind, hybridFlatMap};
-          }
-          // A HybridFlatMap built with every group has every key checked for
-          // its key kind, and its copies share its groups and lookup index.
+
+          // The writer appends the Default keys it sees, so it needs a Default
+          // group that lists none, as every writer configuration has. A
+          // schema's groups may leave Default out or list its recorded keys.
+          // A configuration must come from the writer constructor, the only
+          // one that checks keys are canonical. This guard checks only the
+          // Default group and the key kind. Copies share the groups and the
+          // key index.
+          const auto& defaultGroup = hybridFlatMap.groups().back();
+          NIMBLE_USER_CHECK(
+              HybridFlatMap::isDefaultGroup(defaultGroup.groupId),
+              "Hybrid FlatMap configuration must have a Default group.");
+          NIMBLE_USER_CHECK(
+              defaultGroup.groupKeys.empty(),
+              "Hybrid FlatMap configuration cannot list Default keys.");
           NIMBLE_USER_CHECK_EQ(
-              *hybridFlatMap.keyKind(),
+              hybridFlatMap.keyKind(),
               NimbleTypeTraits<K>::scalarKind,
               "Hybrid FlatMap configuration is for keys of another type.");
           return hybridFlatMap;
@@ -2219,29 +2251,33 @@ class HybridFlatMapFieldWriter : public FieldWriter {
     return HybridFlatMap::canonicalKey(NimbleTypeTraits<K>::scalarKind, key);
   }
 
+  // Returns the keys the schema lists for group `groupIndex` of hybridMap_:
+  // the grouped keys of an explicit group, or the Default keys this writer
+  // appends to defaultKeys_.
+  const std::vector<std::string>& groupKeys(size_t groupIndex) const {
+    const auto& group = hybridMap_.groups()[groupIndex];
+    return HybridFlatMap::isDefaultGroup(group.groupId) ? defaultKeys_
+                                                        : group.groupKeys;
+  }
+
   // Materializes the fixed group topology and its physical stream descriptors.
-  // reset() retains only this immutable grouping state.
+  // reset() keeps this grouping state and the Default keys in defaultKeys_,
+  // which the schema views.
   void initGroups() {
     const auto& hybridGroups = hybridMap_.groups();
     auto& hybridTypeBuilder = typeBuilder_->asHybridFlatMap();
-    const bool useDefaultKeyList =
-        hybridTypeBuilder.useKeyPresentList(HybridFlatMap::kDefaultGroupId);
 
     groups_.reserve(hybridGroups.size());
 
     // Each group owns a complete value subtree; the schema node carries its
-    // key-presence and in-map descriptors. When Default lists each batch's
-    // keys, the schema reads the grouped keys from hybridMap_ instead of
-    // copying them.
+    // key-presence and in-map descriptors. The schema views the grouped
+    // keys in hybridMap_ and the Default keys in defaultKeys_.
     const auto addGroup = [&](size_t groupIndex) {
       const auto& group = hybridGroups[groupIndex];
       const auto groupId = group.groupId;
       auto valueWriter = FieldWriter::create(context_, valueType_);
-      const auto descriptors = useDefaultKeyList
-          ? hybridTypeBuilder.addGroup(
-                hybridMap_, groupIndex, valueWriter->typeBuilder())
-          : hybridTypeBuilder.addGroup(
-                groupId, group.groupKeys, valueWriter->typeBuilder());
+      const auto descriptors = hybridTypeBuilder.addGroup(
+          groupId, groupKeys(groupIndex), valueWriter->typeBuilder());
       // The reader consumes each group's key-presence and in-map metadata
       // atomically. Streams are created in offset order, key presence first.
       ContentStreamData<bool>* keyPresenceBitmap{nullptr};
@@ -2277,7 +2313,8 @@ class HybridFlatMapFieldWriter : public FieldWriter {
       }
     }
 
-    // ingestMap() reads group i's keys from type builder group i.
+    // Type builder group i views hybridGroups[i]'s keys, or defaultKeys_ for
+    // Default. ingestMap() reads the same keys for groups_[i].
     NIMBLE_CHECK_EQ(hybridTypeBuilder.groupCount(), groups_.size());
 
     NIMBLE_CHECK(
@@ -2309,10 +2346,11 @@ class HybridFlatMapFieldWriter : public FieldWriter {
         batch->second.inMap.resize(nonNullCount, false);
         return batch->second;
       }
-      // With a bitmap, Default keys join the schema when first observed and
-      // retain that schema ordinal.
+      // With a bitmap, Default keys join the schema when first observed, in
+      // defaultKeys_, which the type builder views, and retain that schema
+      // ordinal.
       if (defaultKeySet_.insert(key).second) {
-        typeBuilder_->asHybridFlatMap().appendDefaultGroupKey(key);
+        defaultKeys_.push_back(key);
       }
       groupIndex = *defaultGroupIndex_;
     }
@@ -2394,9 +2432,9 @@ class HybridFlatMapFieldWriter : public FieldWriter {
 
   // Builds per-key state for one MapVector batch, then emits each group's key
   // presence bitmap in schema order. Row ordinals exclude null maps. With a
-  // bitmap, Default keys remain in the schema catalog across resets in
-  // first-seen order; a Default group that lists its keys emits each batch's
-  // keys in first-seen order within the batch instead.
+  // bitmap, Default keys remain in defaultKeys_, the schema catalog, across
+  // resets in first-seen order; a Default group that lists its keys emits each
+  // batch's keys in first-seen order within the batch instead.
   void ingestMap(const velox::VectorPtr& vector, const OrderedRanges& ranges) {
     NIMBLE_CHECK(!written_, "Hybrid FlatMap supports one write per reset.");
     written_ = true;
@@ -2491,7 +2529,6 @@ class HybridFlatMapFieldWriter : public FieldWriter {
     NIMBLE_CHECK(
         defaultGroupIndex_.has_value(),
         "Hybrid FlatMap Default group is not initialized.");
-    const auto& hybridTypeBuilder = typeBuilder_->asHybridFlatMap();
     for (size_t groupIndex = 0; groupIndex < groups_.size(); ++groupIndex) {
       auto& group = groups_[groupIndex];
       std::vector<velox::vector_size_t> groupValueIndices;
@@ -2508,16 +2545,16 @@ class HybridFlatMapFieldWriter : public FieldWriter {
         writeGroupValues(group, values, groupValueIndices);
         continue;
       }
-      const auto& groupKeys = hybridTypeBuilder.groupAt(groupIndex).groupKeys;
+      const auto& keys = groupKeys(groupIndex);
       const bool hasPresentKey =
-          std::any_of(groupKeys.begin(), groupKeys.end(), [&](const auto& key) {
+          std::any_of(keys.begin(), keys.end(), [&](const auto& key) {
             return batches.contains(key);
           });
       if (!hasPresentKey) {
         continue;
       }
       auto& keyPresence = group.keyPresenceBitmap->mutableData();
-      for (const auto& key : groupKeys) {
+      for (const auto& key : keys) {
         const auto batchIt = batches.find(key);
         const bool keyPresent = batchIt != batches.end();
         keyPresence.push_back(keyPresent);
@@ -2540,16 +2577,20 @@ class HybridFlatMapFieldWriter : public FieldWriter {
 
   const std::shared_ptr<const velox::dwio::common::TypeWithId>& valueType_;
   const uint32_t nodeId_;
-  // The column's Hybrid FlatMap for its key type, whose group lookup index
-  // finds the group of each grouped key: a copy of the one in the writer
-  // options when that one was built with every group, which shares its groups
-  // and lookup index; otherwise one the binding constructor builds, which
-  // builds its own.
+  // The column's Hybrid FlatMap for its key type: a copy of the one in the
+  // writer options, which shares its groups and the lookup that finds the
+  // group of each grouped key. The type builder and ingestMap() read the
+  // grouped keys in these shared groups.
   const HybridFlatMap hybridMap_;
   const HybridFlatMapTypeBuilder& hybridTypeBuilder_;
   NullsStreamData& nullsStream_;
   std::vector<Group> groups_;
-  // With a bitmap, the Default keys this writer appended to its schema.
+  // The schema's Default keys. Its type builder views them in every mode, so
+  // the schema is read only while this writer lives. They hold keys only with
+  // a bitmap, in first-seen order, which is the order of the Default
+  // key-presence bits. reset() keeps them.
+  std::vector<std::string> defaultKeys_;
+  // The keys of defaultKeys_, so a known Default key costs one hash.
   folly::F14FastSet<std::string> defaultKeySet_;
   std::optional<size_t> defaultGroupIndex_;
   SharedStatisticsCollector* statisticsCollector_{nullptr};
@@ -3178,6 +3219,394 @@ std::unique_ptr<FieldWriter> createArrayWithOffsetsFieldWriter(
   }
 }
 
+// Writes the ARRAY columns in WriterOptions::slidingWindowArrayColumns. See
+// SlidingWindowArrayTypeBuilder for the layout.
+//
+// Keeps the base window: the window of the last row that appended elements.
+// The base always ends at the last element written in the stripe. A row
+// reuses the base when the base, slid forward by k values, and the row agree
+// on their common prefix. If the row is longer, it appends only its values
+// past the end of the base and becomes the new base. If not, it appends
+// nothing. Any other row appends all its values and becomes the new base. For
+// example, rows [1, 2, 3], [2, 3, 4] and [3] give elements [1, 2, 3, 4],
+// offsets [0, 1, 2] and lengths [3, 3, 1].
+//
+// The slide never makes a row start before the previous row, so offsets never
+// decrease within a stripe and the reader reads the elements stream forward
+// only. Values compare by bit pattern, so -0.0 and NaN payloads round trip.
+template <velox::TypeKind K>
+class SlidingWindowArrayFieldWriter : public FieldWriter {
+  using SourceType = typename velox::TypeTraits<K>::NativeType;
+
+  // Holds the bit pattern of an element, or nothing for a null element.
+  using Element =
+      std::optional<typename nimble::TypeTraits<SourceType>::physicalType>;
+
+ public:
+  SlidingWindowArrayFieldWriter(
+      FieldWriterContext& context,
+      const std::shared_ptr<const velox::dwio::common::TypeWithId>& type)
+      : FieldWriter{context, context.schemaBuilder().createSlidingWindowArrayTypeBuilder()},
+        elements_{FieldWriter::create(context, type->childAt(0))},
+        statisticsCollector_{context.getStatsCollector(type->id())},
+        elementStatisticsCollector_{
+            context.getStatsCollector(type->childAt(0)->id())},
+        offsetsStream_{context.createNullableContentStreamData<uint32_t>(
+            typeBuilder_->asSlidingWindowArray().offsetsDescriptor(),
+            type->id())},
+        lengthsStream_{context.createContentStreamData<uint32_t>(
+            typeBuilder_->asSlidingWindowArray().lengthsDescriptor(),
+            type->id())},
+        ingestRows_{context.bufferMemoryPool().get()},
+        borderLengths_{context.bufferMemoryPool().get()},
+        baseRows_{context.bufferMemoryPool().get()} {
+    typeBuilder_->asSlidingWindowArray().setChildren(elements_->typeBuilder());
+  }
+
+  void write(const velox::VectorPtr& vector, const OrderedRanges& ranges)
+      override {
+    // Reads an array vector in place and decodes only a wrapped one, as
+    // MultiValueFieldWriter::ingestLengths() does.
+    if (const auto* array = vector->as<velox::ArrayVector>()) {
+      writeArrays(vector, ranges, *array, FlatAdapter<>{vector});
+      return;
+    }
+    auto decodingContext = context_.decodingContext();
+    auto& decoded = decodingContext.decode(vector, ranges);
+    const auto* array = decoded.base()->template as<velox::ArrayVector>();
+    NIMBLE_CHECK_NOT_NULL(array, "Unexpected vector type");
+    writeArrays(vector, ranges, *array, DecodedAdapter<>{decoded});
+  }
+
+  void reset() override {
+    offsetsStream_.reset();
+    lengthsStream_.reset();
+    elements_->reset();
+    // Frees the scratch buffers at the end of a stripe. Rows of one stripe
+    // reuse them.
+    ingestRows_.clear();
+    borderLengths_.clear();
+    baseRows_.clear();
+    baseStart_ = 0;
+    lastRowStart_ = 0;
+    numStoredElements_ = 0;
+  }
+
+  void close() override {
+    elements_->close();
+  }
+
+ private:
+  // Reads flat elements in place and decodes only other encodings. Decoding
+  // covers the whole elements vector, and under a flat map the rows of every
+  // key share one elements vector, so each key would pay for the elements of
+  // all keys.
+  template <typename Arrays>
+  void writeArrays(
+      const velox::VectorPtr& vector,
+      const OrderedRanges& ranges,
+      const velox::ArrayVector& arrayBase,
+      const Arrays& array) {
+    const auto& elements = arrayBase.elements();
+    if (elements->template asFlatVector<SourceType>() != nullptr) {
+      writeRows(
+          vector, ranges, arrayBase, array, FlatAdapter<SourceType>{elements});
+      return;
+    }
+    auto decodingContext = context_.decodingContext();
+    auto& decodedElements = decodingContext.decode(
+        elements, OrderedRanges::of(0, elements->size()));
+    writeRows(
+        vector,
+        ranges,
+        arrayBase,
+        array,
+        DecodedAdapter<SourceType>{decodedElements});
+  }
+
+  // Writes the rows in 'ranges'. 'array' reads the rows of 'vector' as rows
+  // of 'arrayBase', and 'elements' reads the elements of 'arrayBase'.
+  template <typename Arrays, typename Elements>
+  void writeRows(
+      const velox::VectorPtr& vector,
+      const OrderedRanges& ranges,
+      const velox::ArrayVector& arrayBase,
+      const Arrays& array,
+      const Elements& elements) {
+    const auto* rawOffsets = arrayBase.rawOffsets();
+    const auto* rawSizes = arrayBase.rawSizes();
+    offsetsStream_.ensureAdditionalNullsCapacity(
+        array.hasNulls(), ranges.size());
+    auto& offsets = offsetsStream_.mutableData();
+    auto& lengths = lengthsStream_.mutableData();
+    OrderedRanges appendedRanges;
+    // Counts the elements of all rows, and those that are null, including
+    // the elements the base already holds.
+    uint64_t numElements{0};
+    uint64_t numNullElements{0};
+    uint64_t numAppendedNullElements{0};
+    const bool mayHaveNullElements = elements.hasNulls();
+    const auto numNonNulls = iterateNonNullIndices<true>(
+        ranges,
+        offsetsStream_.mutableNonNulls(),
+        array,
+        [&](velox::vector_size_t index) {
+          const auto rowOffset = rawOffsets[index];
+          const auto rowLength = rawSizes[index];
+          loadRows(elements, rowOffset, rowLength);
+          const auto numAppended =
+              static_cast<velox::vector_size_t>(ingestRows(offsets, lengths));
+          // The appended values are the last ones of the row.
+          const auto firstAppended = rowLength - numAppended;
+          numElements += rowLength;
+          if (mayHaveNullElements) {
+            for (velox::vector_size_t i = 0; i < rowLength; ++i) {
+              if (!ingestRows_[i].has_value()) {
+                ++numNullElements;
+                if (i >= firstAppended) {
+                  ++numAppendedNullElements;
+                }
+              }
+            }
+          }
+          if (numAppended > 0) {
+            appendedRanges.add(rowOffset + firstAppended, numAppended);
+          }
+        });
+
+    if (appendedRanges.size() > 0) {
+      elements_->write(arrayBase.elements(), appendedRanges);
+    }
+
+    // The elements writer sees only the appended elements. Add the elements
+    // that rows share with the base, so the element statistics count every
+    // element of every row.
+    const uint64_t numSharedElements = numElements - appendedRanges.size();
+    if (numSharedElements > 0 && elementStatisticsCollector_ != nullptr) {
+      const uint64_t numSharedNullElements =
+          numNullElements - numAppendedNullElements;
+      elementStatisticsCollector_->addCounts(
+          numSharedElements, numSharedNullElements);
+      elementStatisticsCollector_->addLogicalSize(
+          (numSharedElements - numSharedNullElements) * sizeof(SourceType) +
+          numSharedNullElements);
+    }
+
+    if (statisticsCollector_ != nullptr) {
+      RawSizeContext rawSizeContext;
+      statisticsCollector_->addCounts(
+          ranges.size(), ranges.size() - numNonNulls);
+      statisticsCollector_->addLogicalSize(
+          getRawSizeFromVector(vector, ranges, rawSizeContext));
+    }
+  }
+
+  // Loads the elements of one row into 'ingestRows_'.
+  template <typename Elements>
+  void loadRows(
+      const Elements& elements,
+      velox::vector_size_t offset,
+      velox::vector_size_t length) {
+    // resize(0) keeps the buffer for the next row. nimble::Vector::clear()
+    // frees it, so each row would allocate it again from the memory pool.
+    ingestRows_.resize(0);
+    if (!elements.hasNulls()) {
+      for (auto i = offset; i < offset + length; ++i) {
+        ingestRows_.emplace_back(
+            std::bit_cast<typename Element::value_type>(elements.valueAt(i)));
+      }
+      return;
+    }
+    for (auto i = offset; i < offset + length; ++i) {
+      if (elements.isNullAt(i)) {
+        ingestRows_.emplace_back();
+      } else {
+        ingestRows_.emplace_back(
+            std::bit_cast<typename Element::value_type>(elements.valueAt(i)));
+      }
+    }
+  }
+
+  // Appends the offset and length of the row in 'ingestRows_' and updates the
+  // base. Returns the number of trailing row values that the caller appends to
+  // the elements stream. The stored elements already hold the others.
+  uint32_t ingestRows(
+      nimble::Vector<uint32_t>& offsets,
+      nimble::Vector<uint32_t>& lengths) {
+    const auto length = static_cast<uint32_t>(ingestRows_.size());
+    lengths.push_back(length);
+    if (length == 0) {
+      offsets.push_back(lastRowStart_);
+      return 0;
+    }
+
+    const auto slide = findSlide();
+    if (!slide.has_value()) {
+      lastRowStart_ = numStoredElements_;
+      baseStart_ = numStoredElements_;
+      offsets.push_back(lastRowStart_);
+      appendRows(length);
+      baseRows_.resize(0);
+      baseRows_.insert(baseRows_.end(), ingestRows_.begin(), ingestRows_.end());
+      return length;
+    }
+
+    lastRowStart_ = baseStart_ + slide.value();
+    offsets.push_back(lastRowStart_);
+    const auto baseLength = static_cast<uint32_t>(baseRows_.size());
+    const auto numShared = std::min(baseLength - slide.value(), length);
+    if (numShared == length) {
+      return 0;
+    }
+
+    // The base ends at the last stored element, so the rest of the row appends
+    // right after it, and the row stays one contiguous range of the elements
+    // stream.
+    const auto numAppended = length - numShared;
+    appendRows(numAppended);
+    baseStart_ = lastRowStart_;
+    baseRows_.resize(0);
+    baseRows_.insert(baseRows_.end(), ingestRows_.begin(), ingestRows_.end());
+    return numAppended;
+  }
+
+  // Returns the smallest number of values by which the base slides forward to
+  // hold the row in 'ingestRows_' or start it, or std::nullopt if there is
+  // none. The base slid forward by k values is the base without its first k
+  // values. Slides by at least 'lastRowStart_ - baseStart_' values, so the row
+  // never starts before the previous row and offsets don't decrease. Skips
+  // slides that cannot match, as Knuth-Morris-Pratt does, so the time is linear
+  // in the base and row lengths, also on long runs of one value.
+  std::optional<uint32_t> findSlide() {
+    const auto length = static_cast<uint32_t>(ingestRows_.size());
+    const auto baseLength = static_cast<uint32_t>(baseRows_.size());
+    borderLengths_.resize(0);
+    borderLengths_.push_back(0);
+
+    // Counts the leading row values known to match the slid base.
+    uint32_t numMatched{0};
+    for (auto slide = lastRowStart_ - baseStart_; slide < baseLength;) {
+      const auto numShared = std::min(baseLength - slide, length);
+      const auto mismatch = std::mismatch(
+          ingestRows_.begin() + numMatched,
+          ingestRows_.begin() + numShared,
+          baseRows_.begin() + slide + numMatched);
+      numMatched = static_cast<uint32_t>(mismatch.first - ingestRows_.begin());
+      if (numMatched == numShared) {
+        return slide;
+      }
+      if (numMatched == 0) {
+        ++slide;
+        continue;
+      }
+
+      // A match at a shorter slide would need a border of the matched row
+      // values longer than their longest one. The next candidate keeps the
+      // longest border matched.
+      const auto border = borderLength(numMatched);
+      slide += numMatched - border;
+      numMatched = border;
+    }
+    return std::nullopt;
+  }
+
+  // Returns the length of the longest border of the first 'size' row values.
+  // A border is a proper prefix that is also a suffix: the longest border of
+  // [1, 2, 1, 2] is [1, 2]. Extends 'borderLengths_' only as far as the search
+  // in findSlide() falls back.
+  uint32_t borderLength(uint32_t size) {
+    for (auto i = static_cast<uint32_t>(borderLengths_.size()); i < size; ++i) {
+      auto border = borderLengths_[i - 1];
+      while (border > 0 && ingestRows_[i] != ingestRows_[border]) {
+        border = borderLengths_[border - 1];
+      }
+      if (ingestRows_[i] == ingestRows_[border]) {
+        ++border;
+      }
+      borderLengths_.push_back(border);
+    }
+    return borderLengths_[size - 1];
+  }
+
+  // Counts 'count' more elements appended to the elements stream of the
+  // stripe.
+  void appendRows(uint32_t count) {
+    NIMBLE_CHECK_LE(
+        static_cast<uint64_t>(numStoredElements_) + count,
+        std::numeric_limits<uint32_t>::max(),
+        "Too many sliding window array elements in one stripe");
+    numStoredElements_ += count;
+  }
+
+  const std::unique_ptr<FieldWriter> elements_;
+  StatisticsCollector* const statisticsCollector_;
+  StatisticsCollector* const elementStatisticsCollector_;
+
+  NullableContentStreamData<uint32_t>& offsetsStream_;
+  ContentStreamData<uint32_t>& lengthsStream_;
+  // Holds the elements of the row being written. Reused across rows.
+  nimble::Vector<Element> ingestRows_;
+  // Holds, at index i, the length of the longest border of the first i + 1
+  // values in 'ingestRows_'. Filled on demand by borderLength().
+  nimble::Vector<uint32_t> borderLengths_;
+  // Holds the elements of the base window.
+  nimble::Vector<Element> baseRows_;
+  // Start of the base window in the elements stream of the stripe. The base
+  // window ends at 'numStoredElements_'.
+  uint32_t baseStart_{0};
+  // Start of the window of the last non-null, non-empty row. That row is the
+  // base or a window inside it, so baseStart_ <= lastRowStart_ <=
+  // numStoredElements_. The next row never starts before it, so its slide is
+  // at least 'lastRowStart_ - baseStart_'.
+  uint32_t lastRowStart_{0};
+  // Number of elements written to the elements stream in the stripe.
+  uint32_t numStoredElements_{0};
+};
+
+std::unique_ptr<FieldWriter> createSlidingWindowArrayFieldWriter(
+    FieldWriterContext& context,
+    const std::shared_ptr<const velox::dwio::common::TypeWithId>& type) {
+  NIMBLE_CHECK_EQ(
+      type->type()->kind(),
+      velox::TypeKind::ARRAY,
+      "Sliding window array field must be an ARRAY.");
+  NIMBLE_CHECK_EQ(
+      type->size(), 1, "Sliding window array field must have one child.");
+  const auto kind = type->childAt(0)->type()->kind();
+  switch (kind) {
+    case velox::TypeKind::TINYINT:
+      return std::make_unique<
+          SlidingWindowArrayFieldWriter<velox::TypeKind::TINYINT>>(
+          context, type);
+    case velox::TypeKind::SMALLINT:
+      return std::make_unique<
+          SlidingWindowArrayFieldWriter<velox::TypeKind::SMALLINT>>(
+          context, type);
+    case velox::TypeKind::INTEGER:
+      return std::make_unique<
+          SlidingWindowArrayFieldWriter<velox::TypeKind::INTEGER>>(
+          context, type);
+    case velox::TypeKind::BIGINT:
+      return std::make_unique<
+          SlidingWindowArrayFieldWriter<velox::TypeKind::BIGINT>>(
+          context, type);
+    case velox::TypeKind::REAL:
+      return std::make_unique<
+          SlidingWindowArrayFieldWriter<velox::TypeKind::REAL>>(context, type);
+    case velox::TypeKind::DOUBLE:
+      return std::make_unique<
+          SlidingWindowArrayFieldWriter<velox::TypeKind::DOUBLE>>(
+          context, type);
+    default:
+      // TODO: Support string and complex element types. The writer matches
+      // windows by comparing fixed-width bit patterns, which those types do
+      // not have.
+      NIMBLE_NOT_IMPLEMENTED(
+          "Sliding window arrays of this element type are not supported: {}",
+          kind);
+  }
+}
+
 } // namespace
 
 DecodingContextPool::DecodingContext::DecodingContext(
@@ -3319,9 +3748,13 @@ std::unique_ptr<FieldWriter> FieldWriter::create(
       break;
     }
     case velox::TypeKind::ARRAY: {
-      field = context.hasDictionaryArrayNodeId(type->id())
-          ? createArrayWithOffsetsFieldWriter(context, type)
-          : std::make_unique<ArrayFieldWriter>(context, type);
+      if (context.hasSlidingWindowArrayNodeId(type->id())) {
+        field = createSlidingWindowArrayFieldWriter(context, type);
+      } else if (context.hasDictionaryArrayNodeId(type->id())) {
+        field = createArrayWithOffsetsFieldWriter(context, type);
+      } else {
+        field = std::make_unique<ArrayFieldWriter>(context, type);
+      }
       break;
     }
     case velox::TypeKind::MAP: {

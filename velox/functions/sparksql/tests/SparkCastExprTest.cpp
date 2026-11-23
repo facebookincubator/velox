@@ -588,9 +588,6 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
         makeFlatVector<Timestamp>({Timestamp(1577836800, 0)}, TIMESTAMP_UTC()));
 
     // Timezone must not affect the result.
-    SCOPE_EXIT {
-      setTimezone("");
-    };
     setTimezone("America/Los_Angeles");
     testCast(
         makeFlatVector<int32_t>({18262}, DATE()),
@@ -608,9 +605,6 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
         makeFlatVector<int32_t>({0}, DATE()));
 
     // Kolkata (UTC+5:30) would shift -19800s to day 0; UTC gives day -1.
-    SCOPE_EXIT {
-      setTimezone("");
-    };
     setTimezone("Asia/Kolkata");
     testCast(
         makeFlatVector<Timestamp>({Timestamp(-19800, 0)}, TIMESTAMP_UTC()),
@@ -833,9 +827,6 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             TIMESTAMP_UTC()));
 
     // Session timezone does not affect TIMESTAMP_UTC.
-    SCOPE_EXIT {
-      setTimezone("");
-    };
     setTimezone("Asia/Shanghai");
     testCast(
         makeNullableFlatVector<std::string>(
@@ -2899,9 +2890,6 @@ TEST_F(SparkCastExprTestAnsiOff, timestampToTimestampUtc) {
 
   // America/Los_Angeles (PST = UTC-8): 2020-01-01 00:00:00 UTC
   // → local 2019-12-31 16:00:00 → stored as epoch 1577808000.
-  SCOPE_EXIT {
-    setTimezone("");
-  };
   setTimezone("America/Los_Angeles");
   testCast(
       makeFlatVector<Timestamp>({Timestamp(1'577'836'800, 0)}, TIMESTAMP()),
@@ -2917,9 +2905,6 @@ TEST_F(SparkCastExprTestAnsiOff, timestampToTimestampUtc) {
 }
 
 TEST_F(SparkCastExprTestAnsiOn, timestampToTimestampUtc) {
-  SCOPE_EXIT {
-    setTimezone("");
-  };
   setTimezone("America/Los_Angeles");
   testCast(
       makeFlatVector<Timestamp>({Timestamp(1'577'836'800, 0)}, TIMESTAMP()),
@@ -2941,9 +2926,6 @@ TEST_F(SparkCastExprTestAnsiOff, timestampUtcToTimestamp) {
 
   // America/Los_Angeles (PST = UTC-8): stored epoch 1577808000
   // → local 2019-12-31 16:00:00 → UTC 2020-01-01 00:00:00 = epoch 1577836800.
-  SCOPE_EXIT {
-    setTimezone("");
-  };
   setTimezone("America/Los_Angeles");
   testCast(
       makeFlatVector<Timestamp>({Timestamp(1'577'808'000, 0)}, TIMESTAMP_UTC()),
@@ -2958,9 +2940,6 @@ TEST_F(SparkCastExprTestAnsiOff, timestampUtcToTimestamp) {
 }
 
 TEST_F(SparkCastExprTestAnsiOn, timestampUtcToTimestamp) {
-  SCOPE_EXIT {
-    setTimezone("");
-  };
   setTimezone("America/Los_Angeles");
   testCast(
       makeFlatVector<Timestamp>({Timestamp(1'577'808'000, 0)}, TIMESTAMP_UTC()),
@@ -2973,9 +2952,6 @@ TEST_F(SparkCastExprTestAnsiOff, timestampUtcToTimestampDSTGap) {
   // 1941-12-25 in Hong Kong: clocks jumped from HKWT (UTC+8) to JST (UTC+9),
   // making midnight nonexistent. Spark adjusts to 00:30:00 JST, which is
   // 1941-12-24 15:30:00 UTC.
-  SCOPE_EXIT {
-    setTimezone("");
-  };
   setTimezone("Asia/Hong_Kong");
   testCast(
       makeFlatVector<Timestamp>({Timestamp(-884'217'600, 0)}, TIMESTAMP_UTC()),
@@ -2983,9 +2959,6 @@ TEST_F(SparkCastExprTestAnsiOff, timestampUtcToTimestampDSTGap) {
 }
 
 TEST_F(SparkCastExprTestAnsiOn, timestampUtcToTimestampDSTGap) {
-  SCOPE_EXIT {
-    setTimezone("");
-  };
   setTimezone("Asia/Hong_Kong");
   testCast(
       makeFlatVector<Timestamp>({Timestamp(-884'217'600, 0)}, TIMESTAMP_UTC()),
@@ -3561,6 +3534,95 @@ TEST_F(SparkCastExprTestAnsiOn, tryCastNumericToIntegralOverflow) {
   testTryCast<float, int32_t>("integer", {3.0e10f}, {std::nullopt});
 }
 
+TEST_F(SparkCastExprTestAnsiOn, castDecimalToIntegralOverflow) {
+  // Casts that overflow the target integral type throw under ANSI mode.
+  testThrow<int64_t>(
+      DECIMAL(9, 0),
+      SMALLINT(),
+      {999'999'999},
+      "Cannot cast DECIMAL(9, 0) '999999999' to SMALLINT. Out of bounds.");
+  testThrow<int64_t>(
+      DECIMAL(3, 0),
+      TINYINT(),
+      {-129},
+      "Cannot cast DECIMAL(3, 0) '-129' to TINYINT. Out of bounds.");
+  testThrow<int64_t>(
+      DECIMAL(10, 0),
+      INTEGER(),
+      {2'147'483'648},
+      "Cannot cast DECIMAL(10, 0) '2147483648' to INTEGER. Out of bounds.");
+  testThrow<int128_t>(
+      DECIMAL(19, 0),
+      BIGINT(),
+      {static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1},
+      "Cannot cast DECIMAL(19, 0) '9223372036854775808' to BIGINT. Out of bounds.");
+  testThrow<int128_t>(
+      DECIMAL(20, 0),
+      BIGINT(),
+      {static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1},
+      "Cannot cast DECIMAL(20, 0) '-9223372036854775809' to BIGINT. Out of bounds.");
+
+  // Scaled values are truncated toward zero before the range check.
+  testThrow<int64_t>(
+      DECIMAL(7, 2),
+      SMALLINT(),
+      {3'276'800},
+      "Cannot cast DECIMAL(7, 2) '32768.00' to SMALLINT. Out of bounds.");
+  testThrow<int128_t>(
+      DECIMAL(20, 2),
+      TINYINT(),
+      {12'800},
+      "Cannot cast DECIMAL(20, 2) '128.00' to TINYINT. Out of bounds.");
+  testCast(
+      makeFlatVector<int64_t>({3'276'799, -3'276'899}, DECIMAL(7, 2)),
+      makeFlatVector<int16_t>({32'767, -32'768}));
+  testCast(
+      makeFlatVector<int128_t>({12'799, -12'899}, DECIMAL(20, 2)),
+      makeFlatVector<int8_t>({127, -128}));
+
+  // Precision > 18: Velox truncates the exact value, so 127.999999999999999999
+  // casts to 127. Spark converts it to DOUBLE first, which rounds to 128.0 and
+  // throws. See the note in conversion.rst.
+  const int128_t kScale18 = 1'000'000'000'000'000'000;
+  testCast(
+      makeFlatVector<int128_t>(
+          {128 * kScale18 - 1, -129 * kScale18 + 1}, DECIMAL(21, 18)),
+      makeFlatVector<int8_t>({127, -128}));
+}
+
+TEST_F(SparkCastExprTestAnsiOn, tryCastDecimalToIntegralOverflow) {
+  // try_cast returns null on overflow and truncates in-range values.
+  testTryCast<int64_t, int16_t>(
+      "smallint",
+      {999'999'999, 3'276'800, 3'276'799},
+      {std::nullopt, std::nullopt, 32'767},
+      DECIMAL(9, 2));
+  testTryCast<int128_t, int64_t>(
+      "bigint",
+      {static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1},
+      {std::nullopt},
+      DECIMAL(19, 0));
+}
+
+TEST_F(SparkCastExprTest, ansiCastModeDecimalToIntegralOverflow) {
+  setAnsiSupport(false);
+
+  VELOX_ASSERT_THROW(
+      evaluateCastModeSpecialForm(
+          kSparkAnsiCast,
+          SMALLINT(),
+          makeFlatVector<int64_t>({999'999'999}, DECIMAL(9, 0))),
+      "Cannot cast DECIMAL(9, 0) '999999999' to SMALLINT. Out of bounds.");
+}
+
+TEST_F(SparkCastExprTestAnsiOff, castDecimalToIntegralOverflow) {
+  // Casts that overflow the target integral type wrap when ANSI mode is
+  // disabled.
+  testCast<int64_t, int16_t>(
+      "smallint", {999'999'999}, {-13'825}, DECIMAL(9, 0));
+  testCast<int64_t, int16_t>("smallint", {3'276'800}, {-32'768}, DECIMAL(7, 2));
+}
+
 TEST_F(SparkCastExprTestAnsiOff, castNumericToIntegralOverflow) {
   // Casts that overflow the target integral type wrap or saturate when ANSI
   // mode is disabled.
@@ -3569,6 +3631,32 @@ TEST_F(SparkCastExprTestAnsiOff, castNumericToIntegralOverflow) {
       "smallint", {100000}, {static_cast<int16_t>(100000)});
   testCast<double, int32_t>(
       "integer", {3.0e10}, {std::numeric_limits<int32_t>::max()});
+
+  testCast(
+      makeFlatVector<double>({0x1p63, std::nextafter(0x1p63, 0.0), -0x1p63}),
+      makeFlatVector<int64_t>(
+          {std::numeric_limits<int64_t>::max(),
+           std::numeric_limits<int64_t>::max() - 1'023,
+           std::numeric_limits<int64_t>::min()}),
+      /*isTryCast=*/false);
+  testCast(
+      makeFlatVector<float>({0x1p63f}),
+      makeFlatVector<int64_t>({std::numeric_limits<int64_t>::max()}),
+      /*isTryCast=*/false);
+  testCast(
+      makeFlatVector<float>({0x1p31f}),
+      makeFlatVector<int32_t>({std::numeric_limits<int32_t>::max()}),
+      /*isTryCast=*/false);
+  // Spark saturates to INT32_MAX before narrowing to TINYINT or SMALLINT,
+  // so both casts retain the low bits and produce -1.
+  testCast(
+      makeFlatVector<float>({0x1p31f}),
+      makeFlatVector<int8_t>({-1}),
+      /*isTryCast=*/false);
+  testCast(
+      makeFlatVector<float>({0x1p31f}),
+      makeFlatVector<int16_t>({-1}),
+      /*isTryCast=*/false);
 }
 
 TEST_F(SparkCastExprTestAnsiOff, tryCastFloatToIntegralSaturation) {

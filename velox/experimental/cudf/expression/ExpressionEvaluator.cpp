@@ -1196,10 +1196,21 @@ __device__ void velox_round_double(
   const double truncated = trunc(number);
   const double fraction = number - truncated;
   if (fraction == 0.0) { *out = number; return; }
+  const double scaled = number * factor;
+  // 2^52 is the reciprocal of DOUBLE epsilon.
+  if (isfinite(factor) && fabs(scaled) >= 0x1p52) {
+    // Decrementing the bits of a finite, nonzero value moves toward zero.
+    const double spacing = fabs(
+        number - __longlong_as_double(__double_as_longlong(number) - 1));
+    if (spacing * factor > 1) {
+      *out = number;
+      return;
+    }
+  }
   // Threshold matches Velox CPU: for small magnitudes the factor-multiply
   // path has less precision loss than the truncate + fraction path.
   if (fabs(number) < 17592186044415.0) {
-    *out = round(number * factor) / factor;
+    *out = round(scaled) / factor;
     return;
   }
   const double roundedFractions = round(fraction * factor) / factor;

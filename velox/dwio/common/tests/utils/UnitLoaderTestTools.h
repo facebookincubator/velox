@@ -50,7 +50,6 @@ class LoadUnitMock : public LoadUnit {
   }
 
   void unload() override {
-    VELOX_CHECK(isLoaded());
     unitsLoaded_[unitId_] = false;
   }
 

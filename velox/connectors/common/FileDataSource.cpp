@@ -420,8 +420,12 @@ void FileDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   VLOG(1) << "Adding split " << split_->toString();
 
-  if (splitReader_) {
-    splitReader_.reset();
+  splitReader_.reset();
+
+  if (skipSplit()) {
+    ++runtimeStats_.skippedSplits;
+    runtimeStats_.skippedSplitBytes += split_->length;
+    return;
   }
 
   splitReader_ = createSplitReader();
@@ -458,11 +462,11 @@ std::optional<RowVectorPtr> FileDataSource::next(
     uint64_t size,
     velox::ContinueFuture& /*future*/) {
   VELOX_CHECK(split_ != nullptr, "No split to process. Call addSplit first.");
-  VELOX_CHECK_NOT_NULL(splitReader_, "No split reader present");
 
   TestValue::adjust("facebook::velox::connector::FileDataSource::next", this);
 
-  if (splitReader_->emptySplit()) {
+  // A skipped split has no reader.
+  if (splitReader_ == nullptr || splitReader_->emptySplit()) {
     resetSplit();
     return nullptr;
   }
@@ -480,6 +484,9 @@ std::optional<RowVectorPtr> FileDataSource::next(
     output_ = BaseVector::create(outputRowType, 0, pool_);
   }
 
+  if (scanBatchCallback_) {
+    lastReadStart_ = splitReader_->nextRowNumber();
+  }
   const auto rowsScanned = splitReader_->next(size, output_);
   completedRows_ += rowsScanned;
   if (rowsScanned == 0) {
@@ -579,6 +586,8 @@ void FileDataSource::fireScanBatchCallback(core::ScanBatchEvent event) {
     if (!split_->partitionKeys.empty()) {
       fileEvent.partitionKeys = &split_->partitionKeys;
     }
+    fileEvent.split = split_.get();
+    fileEvent.rowStart = lastReadStart_;
   }
   scanBatchCallback_(fileEvent);
 }
@@ -631,7 +640,9 @@ void FileDataSource::setFromDataSource(
       *fileScanState_->scanSpec);
   fileScanState_ = std::move(source->fileScanState_);
   splitReader_ = std::move(source->splitReader_);
-  splitReader_->setConnectorQueryCtx(connectorQueryCtx_);
+  if (splitReader_) {
+    splitReader_->setConnectorQueryCtx(connectorQueryCtx_);
+  }
   // New io will be accounted on the stats of 'source'. Add the existing
   // balance to that.
   source->dataIoStats_->merge(*dataIoStats_);
@@ -678,7 +689,9 @@ vector_size_t FileDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {
 
 void FileDataSource::resetSplit() {
   split_.reset();
-  splitReader_->resetSplit();
+  if (splitReader_) {
+    splitReader_->resetSplit();
+  }
   // Keep readers around to hold adaptation.
 }
 

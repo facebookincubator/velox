@@ -296,6 +296,11 @@ MetadataBuilder& MetadataBuilder::multiBlockReturnBarrier(bool val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::rowReduction(RowReduction reduction) {
+  md_.rowReduction = std::move(reduction);
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::scanOutputReturnBarrier(bool val) {
   md_.scanOutputReturnBarrier = val;
   return *this;
@@ -308,6 +313,13 @@ MetadataBuilder& MetadataBuilder::alwaysSingleBlock(bool val) {
 
 MetadataBuilder& MetadataBuilder::gridSizeSumsInputs(bool val) {
   md_.gridSizeSumsInputs = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::gridCount(
+    SizeShortcut kind,
+    std::vector<OperandName> operands) {
+  md_.gridCount = Metadata::GridCount{kind, std::move(operands)};
   return *this;
 }
 

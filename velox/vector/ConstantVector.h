@@ -237,7 +237,7 @@ class ConstantVector final : public SimpleVector<T> {
   const BufferPtr& wrapInfo() const override {
     static const DummyReleaser kDummy;
     auto* wrapInfo = wrapInfo_.load();
-    if (FOLLY_UNLIKELY(!wrapInfo)) {
+    if (!wrapInfo) [[unlikely]] {
       wrapInfo = new BufferPtr(
           BufferView<DummyReleaser>::create(
               reinterpret_cast<const uint8_t*>(&index_),

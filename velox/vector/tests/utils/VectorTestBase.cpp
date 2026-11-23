@@ -17,6 +17,7 @@
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include "velox/vector/FlatMapVector.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 
 namespace facebook::velox::test {
 
@@ -160,32 +161,14 @@ VectorPtr VectorTestBase::asArray(VectorPtr elements) {
 }
 
 void assertEqualVectors(const VectorPtr& expected, const VectorPtr& actual) {
-  ASSERT_EQ(expected->size(), actual->size());
-  ASSERT_TRUE(expected->type()->equivalent(*actual->type()))
-      << "Expected " << expected->type()->toString() << ", but got "
-      << actual->type()->toString();
-  for (auto i = 0; i < expected->size(); i++) {
-    ASSERT_TRUE(expected->equalValueAt(actual.get(), i, i))
-        << "at " << i << ": expected " << expected->toString(i) << ", but got "
-        << actual->toString(i);
-  }
+  VectorAssertions::equal(expected, actual);
 }
 
 void assertEqualVectors(
     const VectorPtr& expected,
     const VectorPtr& actual,
     const SelectivityVector& rowsToCompare) {
-  ASSERT_LE(rowsToCompare.end(), actual->size())
-      << "Vectors should at least have the required amount of rows that need "
-         "to be verified.";
-  ASSERT_TRUE(expected->type()->equivalent(*actual->type()))
-      << "Expected " << expected->type()->toString() << ", but got "
-      << actual->type()->toString();
-  rowsToCompare.applyToSelected([&](vector_size_t i) {
-    ASSERT_TRUE(expected->equalValueAt(actual.get(), i, i))
-        << "at " << i << ": expected " << expected->toString(i) << ", but got "
-        << actual->toString(i);
-  });
+  VectorAssertions::equal(expected, actual, rowsToCompare);
 }
 
 void assertCopyableVector(const VectorPtr& vector) {

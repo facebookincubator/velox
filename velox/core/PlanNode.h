@@ -4968,7 +4968,7 @@ class TopNNode : public PlanNode {
       const PlanNodeId& id,
       const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
       const std::vector<SortOrder>& sortingOrders,
-      int32_t count,
+      int64_t count,
       bool isPartial,
       const PlanNodePtr& source);
 
@@ -5001,7 +5001,7 @@ class TopNNode : public PlanNode {
       return *this;
     }
 
-    Builder& count(int32_t count) {
+    Builder& count(int64_t count) {
       count_ = count;
       return *this;
     }
@@ -5039,7 +5039,7 @@ class TopNNode : public PlanNode {
     std::optional<PlanNodeId> id_;
     std::optional<std::vector<FieldAccessTypedExprPtr>> sortingKeys_;
     std::optional<std::vector<SortOrder>> sortingOrders_;
-    std::optional<int32_t> count_;
+    std::optional<int64_t> count_;
     std::optional<bool> isPartial_;
     std::optional<PlanNodePtr> source_;
   };
@@ -5067,7 +5067,7 @@ class TopNNode : public PlanNode {
     return !isPartial_;
   }
 
-  int32_t count() const {
+  int64_t count() const {
     return count_;
   }
 
@@ -5088,7 +5088,7 @@ class TopNNode : public PlanNode {
 
   const std::vector<FieldAccessTypedExprPtr> sortingKeys_;
   const std::vector<SortOrder> sortingOrders_;
-  const int32_t count_;
+  const int64_t count_;
   const bool isPartial_;
   const std::vector<PlanNodePtr> sources_;
 };
@@ -6386,9 +6386,7 @@ class TopNRowNumberNode : public PlanNode {
     kDenseRank,
   };
 
-  static const char* rankFunctionName(RankFunction function);
-
-  static RankFunction rankFunctionFromName(std::string_view name);
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(RankFunction);
 
   /// @param rankFunction RanksFunction (row_number, rank, dense_rank) for TopN.
   /// @param partitionKeys Partitioning keys. May be empty.
@@ -6397,10 +6395,15 @@ class TopNRowNumberNode : public PlanNode {
   /// @param sortingOrders Sorting orders, one per sorting key.
   /// @param rowNumberColumnName Optional name of the column containing row
   /// numbers or rank or dense_rank. If not specified, the output doesn't
-  /// include 'row_number' column. This is used when computing partial results.
-  /// @param limit Per-partition limit. The number of
-  /// rows produced by this node will not exceed this value for any given
-  /// partition. Extra rows will be dropped.
+  /// include that column.
+  /// @param limit Per-partition limit. Unless 'partial', the number of rows
+  /// produced by this node will not exceed this value for any given partition.
+  /// Extra rows will be dropped.
+  /// @param partial True for a step that runs on part of each partition's rows
+  /// before a final step that sees them all. A partial step may stop
+  /// filtering and pass its input through, leaving the limit to the final
+  /// step, so it must not have 'rowNumberColumnName'. Any other step applies
+  /// the limit exactly.
   TopNRowNumberNode(
       PlanNodeId id,
       RankFunction function,
@@ -6409,6 +6412,7 @@ class TopNRowNumberNode : public PlanNode {
       std::vector<SortOrder> sortingOrders,
       const std::optional<std::string>& rowNumberColumnName,
       int32_t limit,
+      bool partial,
       PlanNodePtr source);
 
   class Builder {
@@ -6424,6 +6428,7 @@ class TopNRowNumberNode : public PlanNode {
           ? std::make_optional(other.outputType()->names().back())
           : std::nullopt;
       limit_ = other.limit();
+      isPartial_ = other.isPartial();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
       function_ = other.rankFunction();
@@ -6465,6 +6470,11 @@ class TopNRowNumberNode : public PlanNode {
       return *this;
     }
 
+    Builder& isPartial(bool isPartial) {
+      isPartial_ = isPartial;
+      return *this;
+    }
+
     Builder& source(PlanNodePtr source) {
       source_ = std::move(source);
       return *this;
@@ -6486,6 +6496,8 @@ class TopNRowNumberNode : public PlanNode {
       VELOX_USER_CHECK(
           limit_.has_value(), "TopNRowNumberNode limit is not set");
       VELOX_USER_CHECK(
+          isPartial_.has_value(), "TopNRowNumberNode isPartial is not set");
+      VELOX_USER_CHECK(
           source_.has_value(), "TopNRowNumberNode source is not set");
 
       return std::make_shared<TopNRowNumberNode>(
@@ -6496,6 +6508,7 @@ class TopNRowNumberNode : public PlanNode {
           sortingOrders_.value(),
           rowNumberColumnName_.value(),
           limit_.value(),
+          isPartial_.value(),
           source_.value());
     }
 
@@ -6507,6 +6520,7 @@ class TopNRowNumberNode : public PlanNode {
     std::optional<std::vector<SortOrder>> sortingOrders_;
     std::optional<std::optional<std::string>> rowNumberColumnName_;
     std::optional<int32_t> limit_;
+    std::optional<bool> isPartial_;
     std::optional<PlanNodePtr> source_;
   };
 
@@ -6553,6 +6567,10 @@ class TopNRowNumberNode : public PlanNode {
     return outputType_->size() > sources_[0]->outputType()->size();
   }
 
+  bool isPartial() const {
+    return partial_;
+  }
+
   std::string_view name() const override {
     return "TopNRowNumber";
   }
@@ -6572,6 +6590,8 @@ class TopNRowNumberNode : public PlanNode {
   const std::vector<SortOrder> sortingOrders_;
 
   const int32_t limit_;
+
+  const bool partial_;
 
   const std::vector<PlanNodePtr> sources_;
 
@@ -6911,6 +6931,8 @@ class RPCNode : public PlanNode {
   /// @param streamingMode The streaming mode for RPC execution.
   /// @param dispatchBatchSize For BATCH mode pipelining: fire callBatch()
   ///        every N rows during addInput() instead of collecting all rows.
+  /// @param executionPhase Backend lifecycle phase. SUBMIT, POLL and COLLECT
+  ///        require BATCH dispatch; INLINE executes the original RPC call.
   RPCNode(
       const PlanNodeId& id,
       PlanNodePtr source,
@@ -6918,7 +6940,8 @@ class RPCNode : public PlanNode {
       std::string outputColumn,
       RowTypePtr outputType,
       rpc::RPCStreamingMode streamingMode = rpc::RPCStreamingMode::kPerRow,
-      int32_t dispatchBatchSize = 0);
+      int32_t dispatchBatchSize = 0,
+      std::string executionPhase = "INLINE");
 
   const PlanNodePtr& source() const {
     return sources_[0];
@@ -6949,9 +6972,12 @@ class RPCNode : public PlanNode {
     return dispatchBatchSize_;
   }
 
-  std::string_view name() const override {
-    return "RPC";
+  const std::string& executionPhase() const {
+    return executionPhase_;
   }
+
+  /// Returns the operator name used in phase reporting and plan serialization.
+  std::string_view name() const override;
 
   const RowTypePtr& outputType() const override {
     return outputType_;
@@ -6974,48 +7000,25 @@ class RPCNode : public PlanNode {
   RowTypePtr outputType_;
   rpc::RPCStreamingMode streamingMode_;
   int32_t dispatchBatchSize_{0};
+  // Preserves the lifecycle phase across plan serialization.
+  std::string executionPhase_;
 };
 
 using RPCNodePtr = std::shared_ptr<RPCNode>;
 
 } // namespace facebook::velox::core
 
-template <>
-struct fmt::formatter<facebook::velox::core::PartitionedOutputNode::Kind>
-    : formatter<std::string_view> {
-  auto format(
-      facebook::velox::core::PartitionedOutputNode::Kind s,
-      format_context& ctx) const {
-    return formatter<std::string_view>::format(
-        facebook::velox::core::PartitionedOutputNode::toName(s), ctx);
-  }
-};
-
-template <>
-struct fmt::formatter<facebook::velox::core::JoinType> : formatter<int> {
-  auto format(facebook::velox::core::JoinType s, format_context& ctx) const {
-    return formatter<int>::format(static_cast<int>(s), ctx);
-  }
-};
-
-template <>
-struct fmt::formatter<facebook::velox::core::TopNRowNumberNode::RankFunction>
-    : formatter<std::string> {
-  auto format(
-      facebook::velox::core::TopNRowNumberNode::RankFunction f,
-      format_context& ctx) const {
-    return formatter<std::string>::format(
-        facebook::velox::core::TopNRowNumberNode::rankFunctionName(f), ctx);
-  }
-};
-
-template <>
-struct fmt::formatter<facebook::velox::core::AggregationNode::Step>
-    : formatter<std::string_view> {
-  auto format(
-      facebook::velox::core::AggregationNode::Step s,
-      format_context& ctx) const {
-    return formatter<std::string_view>::format(
-        facebook::velox::core::AggregationNode::toName(s), ctx);
-  }
-};
+VELOX_EMBEDDED_ENUM_FORMATTER(facebook::velox::core::AggregationNode, Step);
+VELOX_EMBEDDED_ENUM_FORMATTER(facebook::velox::core::LocalPartitionNode, Type);
+VELOX_EMBEDDED_ENUM_FORMATTER(
+    facebook::velox::core::PartitionedOutputNode,
+    Kind);
+VELOX_ENUM_FORMATTER(facebook::velox::core::JoinType);
+VELOX_EMBEDDED_ENUM_FORMATTER(
+    facebook::velox::core::VectorSearchJoinNode,
+    IndexSide);
+VELOX_EMBEDDED_ENUM_FORMATTER(facebook::velox::core::WindowNode, WindowType);
+VELOX_EMBEDDED_ENUM_FORMATTER(facebook::velox::core::WindowNode, BoundType);
+VELOX_EMBEDDED_ENUM_FORMATTER(
+    facebook::velox::core::TopNRowNumberNode,
+    RankFunction);

@@ -362,7 +362,7 @@ bulkVarintDecodeBmi2Table(uint64_t& n, const char* pos, T*& output) {
 
     // Case 63 (all continuation bytes) requires accumulating carryover
     // rather than replacing it. This case is extremely rare
-    if (FOLLY_UNLIKELY(cb == 63)) {
+    if (cb == 63) [[unlikely]] {
       carryover |= pext_u64(word, 0x00007f7f7f7f7f7fULL) << carryoverBits;
       carryoverBits += 42;
       NIMBLE_CHECK_FILE_LT(carryoverBits, 64, "Varint is longer than 64 bits.");
@@ -447,7 +447,7 @@ bulkVarintDecodeBmi2Table(uint64_t& n, const char* pos, T*& output) {
 
     // Case 63 (all continuation bytes) requires accumulating carryover
     // rather than replacing it. This case is extremely rare
-    if (FOLLY_UNLIKELY(gb == 63)) {
+    if (gb == 63) [[unlikely]] {
       svuint64_t cbits = svbext_u64(svWord, kCarryoverMask);
       carryover |= cbits << carryoverBits;
       carryoverBits += 42;

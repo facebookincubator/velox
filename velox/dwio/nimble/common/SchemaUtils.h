@@ -85,7 +85,8 @@ struct ColumnEncodings {
 
 /// Non-owning projection plan for one top-level Hybrid FlatMap column.
 struct ProjectedHybridFlatMap {
-  /// Source Hybrid FlatMap. It must outlive this projection plan.
+  /// Source Hybrid FlatMap. It must outlive this projection plan. The projected
+  /// schema builder views its group keys.
   const HybridFlatMapType* source;
 
   /// Selected group indices in source-schema order. Empty when every requested
@@ -108,12 +109,15 @@ using ProjectedHybridFlatMaps =
 ///
 /// When columnEncodings is provided, creates encoding-specific nimble types
 /// (ArrayWithOffsets, SlidingWindowMap, FlatMap) to match data serialized with
-/// these encodings. When empty (default), uses plain nimble types.
+/// these encodings. When empty (default), uses plain nimble types. Projected
+/// Hybrid FlatMap nodes read their groups with `pool`, which they require
+/// (SchemaReader::getSchema()).
 std::shared_ptr<const Type> buildProjectedNimbleType(
     const velox::RowType& type,
     const std::vector<velox::common::Subfield>& projectedSubfields,
     const ColumnEncodings& columnEncodings = {},
-    const ProjectedHybridFlatMaps& projectedHybridFlatMaps = {});
+    const ProjectedHybridFlatMaps& projectedHybridFlatMaps = {},
+    velox::memory::MemoryPool* pool = nullptr);
 
 /// Contains a projected Nimble schema and its mapping to source streams.
 struct NimbleTypeProjection {
@@ -135,9 +139,11 @@ struct NimbleTypeProjection {
 /// group selects the whole Default group and callers filter its keys. A column
 /// with no selected group holds a keyless Default group whose streams map to no
 /// source stream, so non-null rows decode as empty maps and null rows stay
-/// null.
+/// null. Hybrid FlatMap nodes read their groups with `pool`, which they
+/// require.
 NimbleTypeProjection buildProjectedNimbleType(
     const Type* type,
-    const std::vector<velox::common::Subfield>& projectedSubfields);
+    const std::vector<velox::common::Subfield>& projectedSubfields,
+    velox::memory::MemoryPool* pool = nullptr);
 
 } // namespace facebook::nimble

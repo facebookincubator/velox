@@ -16,6 +16,7 @@
 
 #include "velox/exec/SpillFile.h"
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/time/Timer.h"
 #include "velox/serializers/SerializedPageFile.h"
 
 namespace facebook::velox::exec {
@@ -86,6 +87,19 @@ void SpillWriter::updateWriteStats(
   updateAndCheckLimitCb_(spilledBytes);
 }
 
+void SpillWriter::closeFile() {
+  if (currentFile_ == nullptr) {
+    return;
+  }
+  uint64_t closeTimeNs{0};
+  {
+    NanosecondWallTimer timer(&closeTimeNs);
+    serializer::SerializedPageFileWriter::closeFile();
+  }
+  stats_->spillWriteTimeNanos.fetch_add(closeTimeNs, std::memory_order_relaxed);
+  updateGlobalSpillFileCloseTime(closeTimeNs);
+}
+
 void SpillWriter::updateFileStats(
     const serializer::SerializedPageFile::FileInfo& file) {
   stats_->spilledFiles.fetch_add(1, std::memory_order_relaxed);
@@ -144,6 +158,7 @@ std::unique_ptr<SpillReadFile> SpillReadFile::create(
     const SpillFileInfo& fileInfo,
     uint64_t bufferSize,
     memory::MemoryPool* pool,
+    folly::Executor* readAheadExecutor,
     exec::SpillStats* stats) {
   return std::unique_ptr<SpillReadFile>(new SpillReadFile(
       fileInfo.id,
@@ -154,6 +169,7 @@ std::unique_ptr<SpillReadFile> SpillReadFile::create(
       fileInfo.sortingKeys,
       fileInfo.compressionKind,
       pool,
+      readAheadExecutor,
       stats));
 }
 
@@ -166,6 +182,7 @@ SpillReadFile::SpillReadFile(
     const std::vector<SpillSortKey>& sortingKeys,
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
+    folly::Executor* readAheadExecutor,
     exec::SpillStats* stats)
     : serializer::SerializedPageFileReader(
           path,
@@ -179,6 +196,7 @@ SpillReadFile::SpillReadFile(
               0.8,
               /*_nullsFirst=*/true),
           pool,
+          readAheadExecutor,
           &stats->ioStats),
       id_(id),
       path_(path),

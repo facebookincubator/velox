@@ -17,6 +17,7 @@
 #include <functional>
 
 #include "velox/exec/AggregateUtil.h"
+#include "velox/exec/HashAggregationStatNames.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -226,7 +227,7 @@ TEST_F(SumAggregationTest, decimalSumCompanionPartial) {
   auto input = makeRowVector(
       {makeFlatVector<int64_t>(shortDecimalRawVector, DECIMAL(10, 1))});
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .singleAggregation({}, {"spark_sum_partial(c0)"})
                   .planNode();
   std::vector<int128_t> sumVector = {sum};
@@ -244,7 +245,7 @@ TEST_F(SumAggregationTest, decimalSumCompanionMerge) {
        makeFlatVector<bool>(std::vector<bool>{false, false, false})})});
 
   auto plan = PlanBuilder()
-                  .values({intermediateInput})
+                  .values(intermediateInput)
                   .singleAggregation({}, {"spark_sum_merge(c0)"})
                   .planNode();
   auto expected = makeRowVector({makeRowVector(
@@ -351,17 +352,17 @@ TEST_F(SumAggregationTest, decimalSum) {
           {makeNullableFlatVector<int32_t>({1}),
            makeFlatVector<int128_t>(
                std::vector<int128_t>{HugeInt::build(56, 190476)},
-               DECIMAL(38, 2))}),
+               DECIMAL(30, 2))}),
       makeRowVector(
           {makeNullableFlatVector<int32_t>({2}),
            makeFlatVector<int128_t>(
                std::vector<int128_t>{HugeInt::build(145, 70776)},
-               DECIMAL(38, 2))}),
+               DECIMAL(30, 2))}),
       makeRowVector(
           {makeNullableFlatVector<int32_t>({3}),
            makeFlatVector<int128_t>(
                std::vector<int128_t>{HugeInt::build(87, 18073)},
-               DECIMAL(38, 2))})};
+               DECIMAL(30, 2))})};
 
   AggregationTester(*this)
       .inputs(inputLongDecimalRows)
@@ -458,7 +459,7 @@ TEST_F(SumAggregationTest, decimalLargeCountRowsOverflow) {
            {5000'000'000'100L, 5000'000'000'000L}, DECIMAL(13, 2)),
        makeFlatVector<bool>({false, false})})});
   auto node = PlanBuilder(pool())
-                  .values({accumulators})
+                  .values(accumulators)
                   .finalAggregation({}, {"spark_sum(c0)"}, {{DECIMAL(3, 2)}})
                   .planNode();
   auto expected = makeRowVector(
@@ -561,7 +562,7 @@ TEST_F(SumAggregationTest, sumDistinct) {
 
   auto plan =
       PlanBuilder()
-          .values({input})
+          .values(input)
           .singleAggregation({"c0"}, {"avg_partial(c1)"})
           .singleAggregation({"c0"}, {"avg_merge(a0)"})
           .singleAggregation({}, {"sum_partial(c0)", "avg_merge(a0)"})
@@ -587,14 +588,12 @@ TEST_F(SumAggregationTest, dummySum) {
   });
   createDuckDbTable({input});
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto child =
-      PlanBuilder(planNodeIdGenerator)
-          .values({input})
+      PlanBuilder()
+          .values(input)
           .singleAggregation({"c0"}, {"avg_partial(c1)"})
           .singleAggregation({"c0"}, {"avg_merge(a0)"})
-          .singleAggregation({}, {"dummy_sum_partial(c0)", "avg_merge(a0)"})
-          .planNode();
+          .singleAggregation({}, {"dummy_sum_partial(c0)", "avg_merge(a0)"});
 
   // "PlanBuilder::aggregation" relies on "inferTypes" to resolve the result
   // type from intermediate type. In this test, we manually construct the
@@ -622,16 +621,21 @@ TEST_F(SumAggregationTest, dummySum) {
   avgAggregate.rawInputTypes = {ROW({DOUBLE(), BIGINT()})};
   aggregates.emplace_back(avgAggregate);
 
-  auto plan = std::make_shared<core::AggregationNode>(
-      planNodeIdGenerator->next(),
-      core::AggregationNode::Step::kSingle,
-      std::vector<core::FieldAccessTypedExprPtr>{},
-      std::vector<core::FieldAccessTypedExprPtr>{},
-      std::vector<std::string>{"c0", "c1"},
-      std::move(aggregates),
-      /*ignoreNullKeys=*/false,
-      /*noGroupsSpanBatches=*/false,
-      std::move(child));
+  auto plan = child
+                  .addNode([&](const core::PlanNodeId& id,
+                               const core::PlanNodePtr& source) {
+                    return std::make_shared<core::AggregationNode>(
+                        id,
+                        core::AggregationNode::Step::kSingle,
+                        std::vector<core::FieldAccessTypedExprPtr>{},
+                        std::vector<core::FieldAccessTypedExprPtr>{},
+                        std::vector<std::string>{"c0", "c1"},
+                        std::move(aggregates),
+                        /*ignoreNullKeys=*/false,
+                        /*noGroupsSpanBatches=*/false,
+                        source);
+                  })
+                  .planNode();
 
   assertQuery(plan, "SELECT sum(distinct c0), avg(c1) from tmp");
 }
@@ -682,21 +686,22 @@ TEST_F(SumAggregationTest, abandonPartialAggregation) {
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
           .maxDrivers(1)
-          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
-          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
           .assertResults(
               "SELECT k, sum(i) FILTER (WHERE m), "
               "sum(b) FILTER (WHERE m), "
               "sum(r) FILTER (WHERE m) FROM tmp GROUP BY k");
 
-  const auto stats = exec::toPlanStats(task->taskStats());
+  const auto stats =
+      exec::PlanNodeStats::extract(task->taskStats(), partialNodeId);
   EXPECT_LT(
       0,
-      stats.at(partialNodeId)
-          .customStats.at("abandonedPartialAggregationRows")
-          .sum);
+      stats.customSum(
+          exec::HashAggregationStatNames::kAbandonedPartialAggregationRows));
   EXPECT_GT(
-      stats.at(partialNodeId).customStats.at("toIntermediateFastPathCalls").sum,
+      stats.customSum(
+          exec::HashAggregationStatNames::kToIntermediateFastPathCalls),
       0);
 }
 

@@ -26,6 +26,7 @@
 #include <memory>
 #include <string_view>
 #include <vector>
+#include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/SchemaBuilder.h"
 #include "velox/dwio/nimble/common/SchemaReader.h"
@@ -44,6 +45,14 @@ using testing::IsEmpty;
 using testing::Optional;
 
 namespace {
+
+// Returns the pool that Hybrid FlatMap schemas are read and written with.
+velox::memory::MemoryPool& schemaPool() {
+  // Owns its manager, which tests that reset the default manager cannot free.
+  static velox::memory::MemoryManager manager;
+  static const auto pool = manager.addLeafPool();
+  return *pool;
+}
 
 std::vector<Subfield> makeSubfields(
     std::initializer_list<std::string_view> paths) {
@@ -117,6 +126,12 @@ void expectSameType(const Type& a, const Type& b, const std::string& path) {
       expectSameType(
           *a.asArrayWithOffsets().elements(),
           *b.asArrayWithOffsets().elements(),
+          path + "[]");
+      break;
+    case Kind::SlidingWindowArray:
+      expectSameType(
+          *a.asSlidingWindowArray().elements(),
+          *b.asSlidingWindowArray().elements(),
           path + "[]");
       break;
     case Kind::Map:
@@ -349,6 +364,93 @@ TEST(SchemaUtilsTest, convertArrayWithOffsetsToVelox) {
   EXPECT_EQ(velox::TypeKind::ARRAY, veloxType->kind());
   EXPECT_EQ(
       velox::TypeKind::BIGINT, veloxType->asArray().elementType()->kind());
+}
+
+TEST(SchemaUtilsTest, convertSlidingWindowArrayToVelox) {
+  SchemaBuilder schemaBuilder;
+  NIMBLE_SCHEMA(
+      schemaBuilder,
+      NIMBLE_ROW({{"swa", NIMBLE_SLIDINGWINDOWARRAY(NIMBLE_BIGINT())}}));
+  auto nimbleType = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  auto veloxType = convertToVeloxType(*nimbleType->asRow().childAt(0));
+  EXPECT_EQ(velox::TypeKind::ARRAY, veloxType->kind());
+  EXPECT_EQ(
+      velox::TypeKind::BIGINT, veloxType->asArray().elementType()->kind());
+}
+
+TEST(SchemaUtilsTest, projectSlidingWindowArrayUnsupported) {
+  {
+    SchemaBuilder schemaBuilder;
+    NIMBLE_SCHEMA(
+        schemaBuilder,
+        NIMBLE_ROW({{"swa", NIMBLE_SLIDINGWINDOWARRAY(NIMBLE_BIGINT())}}));
+    const auto source = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+    NIMBLE_ASSERT_THROW(
+        buildProjectedNimbleType(source.get(), makeSubfields({"swa"})),
+        "Projection of SlidingWindowArray data is not supported");
+  }
+  {
+    SchemaBuilder schemaBuilder;
+    test::FlatMapChildAdder featuresAdder;
+    NIMBLE_SCHEMA(
+        schemaBuilder,
+        NIMBLE_ROW({
+            {"features",
+             NIMBLE_FLATMAP(
+                 String,
+                 NIMBLE_SLIDINGWINDOWARRAY(NIMBLE_BIGINT()),
+                 featuresAdder)},
+        }));
+    featuresAdder.addChild("a");
+    const auto source = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+    NIMBLE_ASSERT_THROW(
+        buildProjectedNimbleType(
+            source.get(), makeSubfields({"features[\"a\"]"})),
+        "Projection of SlidingWindowArray data is not supported");
+  }
+  {
+    SchemaBuilder schemaBuilder;
+    NIMBLE_SCHEMA(
+        schemaBuilder,
+        NIMBLE_ROW({
+            {"session",
+             NIMBLE_ROW({
+                 {"id", NIMBLE_BIGINT()},
+                 {"events", NIMBLE_SLIDINGWINDOWARRAY(NIMBLE_BIGINT())},
+             })},
+        }));
+    const auto source = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+    NIMBLE_ASSERT_THROW(
+        buildProjectedNimbleType(source.get(), makeSubfields({"session"})),
+        "Projection of SlidingWindowArray data is not supported");
+    // The projected subfield leaves the SlidingWindowArray out, and the
+    // projection still fails, since its column holds one.
+    NIMBLE_ASSERT_THROW(
+        buildProjectedNimbleType(source.get(), makeSubfields({"session.id"})),
+        "Projection of SlidingWindowArray data is not supported");
+  }
+}
+
+TEST(SchemaUtilsTest, projectColumnBesideSlidingWindowArray) {
+  SchemaBuilder schemaBuilder;
+  NIMBLE_SCHEMA(
+      schemaBuilder,
+      NIMBLE_ROW({
+          {"id", NIMBLE_BIGINT()},
+          {"swa", NIMBLE_SLIDINGWINDOWARRAY(NIMBLE_BIGINT())},
+      }));
+  const auto source = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  const auto projection =
+      buildProjectedNimbleType(source.get(), makeSubfields({"id"}));
+  const auto& row = projection.nimbleType->asRow();
+  ASSERT_EQ(row.childrenCount(), 1);
+  EXPECT_EQ(row.nameAt(0), "id");
+  const auto& sourceRow = source->asRow();
+  EXPECT_THAT(
+      projection.streamOffsets,
+      ElementsAre(
+          sourceRow.nullsDescriptor().offset(),
+          sourceRow.childAt(0)->asScalar().scalarDescriptor().offset()));
 }
 
 TEST(SchemaUtilsTest, convertMapToVelox) {
@@ -633,18 +735,25 @@ TEST(SchemaUtilsTest, projectionStreamOffsets) {
           features.inMapDescriptorAt(1).offset()));
 }
 
+// The keys that groups holding none lend to a type builder.
+const std::vector<std::string> kNoGroupKeys;
+
 TEST(SchemaUtilsTest, remapsEveryHybridValueTypeStream) {
-  SchemaBuilder builder;
+  SchemaBuilder builder{&schemaPool()};
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int64, HybridFlatMap::KeyPresenceMode::kBitmap);
-  hybridMap->addGroup(0, {"1"}, makeAllKindValueType(builder));
+  const std::vector<std::string> groupKeys{"1"};
+  hybridMap->addGroup(0, groupKeys, makeAllKindValueType(builder));
   hybridMap->addGroup(
-      HybridFlatMap::kDefaultGroupId, {}, makeAllKindValueType(builder));
+      HybridFlatMap::kDefaultGroupId,
+      kNoGroupKeys,
+      makeAllKindValueType(builder));
   root->addChild("features", hybridMap);
-  const auto source = SchemaReader::getSchema(builder.schemaNodes());
-  const auto projection =
-      buildProjectedNimbleType(source.get(), makeSubfields({"features[1]"}));
+  const auto source =
+      SchemaReader::getSchema(builder.schemaNodes(), &schemaPool());
+  const auto projection = buildProjectedNimbleType(
+      source.get(), makeSubfields({"features[1]"}), &schemaPool());
   const auto& projectedMap =
       projection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
   ASSERT_EQ(projectedMap.groupCount(), 1);
@@ -752,7 +861,7 @@ TEST(SchemaUtilsTest, remapsEveryHybridValueTypeStream) {
   expectedBarriers[18] = true;
   EXPECT_EQ(projection.barrierStreams, expectedBarriers);
 
-  SchemaBuilder nestedFlatMapBuilder;
+  SchemaBuilder nestedFlatMapBuilder{&schemaPool()};
   auto nestedRoot = nestedFlatMapBuilder.createRowTypeBuilder(1);
   auto nestedHybrid = nestedFlatMapBuilder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
@@ -763,35 +872,39 @@ TEST(SchemaUtilsTest, remapsEveryHybridValueTypeStream) {
         "1", nestedFlatMapBuilder.createScalarTypeBuilder(ScalarKind::Int64));
     return value;
   };
-  nestedHybrid->addGroup(0, {"1"}, makeFlatMapValue());
+  const std::vector<std::string> nestedGroupKeys{"1"};
+  nestedHybrid->addGroup(0, nestedGroupKeys, makeFlatMapValue());
   nestedHybrid->addGroup(
-      HybridFlatMap::kDefaultGroupId, {}, makeFlatMapValue());
+      HybridFlatMap::kDefaultGroupId, kNoGroupKeys, makeFlatMapValue());
   nestedRoot->addChild("features", nestedHybrid);
-  const auto nestedSchema =
-      SchemaReader::getSchema(nestedFlatMapBuilder.schemaNodes());
+  const auto nestedSchema = SchemaReader::getSchema(
+      nestedFlatMapBuilder.schemaNodes(), &schemaPool());
   NIMBLE_ASSERT_THROW(
       buildProjectedNimbleType(
-          nestedSchema.get(), makeSubfields({"features[1]"})),
+          nestedSchema.get(), makeSubfields({"features[1]"}), &schemaPool()),
       "Nested FlatMap values are not supported");
 }
 
 TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
-  SchemaBuilder builder;
+  SchemaBuilder builder{&schemaPool()};
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int64, HybridFlatMap::KeyPresenceMode::kBitmap);
-  const auto addGroup = [&](uint32_t groupId, std::vector<std::string> keys) {
+  const auto addGroup = [&](uint32_t groupId,
+                            const std::vector<std::string>& keys) {
     hybridMap->addGroup(
-        groupId,
-        std::move(keys),
-        builder.createScalarTypeBuilder(ScalarKind::Double));
+        groupId, keys, builder.createScalarTypeBuilder(ScalarKind::Double));
   };
-  addGroup(0, {"1"});
-  addGroup(1, {"2", "3"});
-  addGroup(HybridFlatMap::kDefaultGroupId, {});
-  hybridMap->appendDefaultGroupKey("9");
+  const std::vector<std::string> firstGroupKeys{"1"};
+  const std::vector<std::string> secondGroupKeys{"2", "3"};
+  std::vector<std::string> defaultKeys;
+  addGroup(0, firstGroupKeys);
+  addGroup(1, secondGroupKeys);
+  addGroup(HybridFlatMap::kDefaultGroupId, defaultKeys);
+  defaultKeys.push_back("9");
   root->addChild("features", hybridMap);
-  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto schema =
+      SchemaReader::getSchema(builder.schemaNodes(), &schemaPool());
   const auto& sourceRoot = schema->asRow();
   const auto& sourceMap = sourceRoot.childAt(0)->asHybridFlatMap();
 
@@ -799,7 +912,8 @@ TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
   // projected schema and stream mapping.
   std::vector<Subfield> subfields;
   subfields.emplace_back("features[2]");
-  const auto projection = buildProjectedNimbleType(schema.get(), subfields);
+  const auto projection =
+      buildProjectedNimbleType(schema.get(), subfields, &schemaPool());
   const auto& projectedMap =
       projection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
 
@@ -825,11 +939,11 @@ TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
   EXPECT_THAT(
       projection.barrierStreams, ElementsAre(true, true, false, true, false));
 
-  SchemaSerializer serializer;
+  SchemaSerializer serializer{&schemaPool()};
   const auto serializedProjection =
       std::string(serializer.serialize(*projection.nimbleType));
   const auto roundTripped =
-      SchemaDeserializer::deserialize(serializedProjection);
+      SchemaDeserializer::deserialize(serializedProjection, &schemaPool());
   const auto& roundTrippedMap =
       roundTripped->asRow().childAt(0)->asHybridFlatMap();
   ASSERT_EQ(roundTrippedMap.groupCount(), 1);
@@ -843,7 +957,7 @@ TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
   std::vector<Subfield> unconfigured;
   unconfigured.emplace_back("features[9]");
   const auto defaultProjection =
-      buildProjectedNimbleType(schema.get(), unconfigured);
+      buildProjectedNimbleType(schema.get(), unconfigured, &schemaPool());
   const auto& defaultMap =
       defaultProjection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
   ASSERT_EQ(defaultMap.groupCount(), 1);
@@ -863,7 +977,8 @@ TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
   std::vector<Subfield> mixed;
   mixed.emplace_back("features[2]");
   mixed.emplace_back("features[9]");
-  const auto mixedProjection = buildProjectedNimbleType(schema.get(), mixed);
+  const auto mixedProjection =
+      buildProjectedNimbleType(schema.get(), mixed, &schemaPool());
   const auto& mixedMap =
       mixedProjection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
   ASSERT_EQ(mixedMap.groupCount(), 2);
@@ -895,7 +1010,7 @@ TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
   reordered.emplace_back("features[1]");
   reordered.emplace_back("features[2]");
   const auto reorderedProjection =
-      buildProjectedNimbleType(schema.get(), reordered);
+      buildProjectedNimbleType(schema.get(), reordered, &schemaPool());
   const auto& reorderedMap =
       reorderedProjection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
   ASSERT_EQ(reorderedMap.groupCount(), 3);
@@ -909,27 +1024,30 @@ TEST(SchemaUtilsTest, hybridProjectionRetainsOnlySelectedGroups) {
 }
 
 TEST(SchemaUtilsTest, hybridProjectionUsesEmptyDefaultForAbsentKeys) {
-  SchemaBuilder builder;
+  SchemaBuilder builder{&schemaPool()};
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int64, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> groupKeys{"1"};
   hybridMap->addGroup(
-      0, {"1"}, builder.createScalarTypeBuilder(ScalarKind::Double));
+      0, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Double));
+  std::vector<std::string> defaultKeys;
   hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      defaultKeys,
       builder.createScalarTypeBuilder(ScalarKind::Double));
-  hybridMap->appendDefaultGroupKey("9");
+  defaultKeys.push_back("9");
   root->addChild("features", hybridMap);
-  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto schema =
+      SchemaReader::getSchema(builder.schemaNodes(), &schemaPool());
   const auto& sourceRoot = schema->asRow();
   const auto& sourceMap = sourceRoot.childAt(0)->asHybridFlatMap();
 
   // A key in no group keeps the column as a keyless Default group whose
   // streams map to no source stream.
   {
-    const auto projection =
-        buildProjectedNimbleType(schema.get(), makeSubfields({"features[99]"}));
+    const auto projection = buildProjectedNimbleType(
+        schema.get(), makeSubfields({"features[99]"}), &schemaPool());
     const auto& projectedMap =
         projection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
     ASSERT_EQ(projectedMap.groupCount(), 1);
@@ -949,9 +1067,10 @@ TEST(SchemaUtilsTest, hybridProjectionUsesEmptyDefaultForAbsentKeys) {
     EXPECT_THAT(
         projection.barrierStreams, ElementsAre(true, true, false, true, false));
 
-    SchemaSerializer serializer;
+    SchemaSerializer serializer{&schemaPool()};
     const auto roundTripped = SchemaDeserializer::deserialize(
-        std::string(serializer.serialize(*projection.nimbleType)));
+        std::string(serializer.serialize(*projection.nimbleType)),
+        &schemaPool());
     const auto& roundTrippedMap =
         roundTripped->asRow().childAt(0)->asHybridFlatMap();
     ASSERT_EQ(roundTrippedMap.groupCount(), 1);
@@ -963,7 +1082,9 @@ TEST(SchemaUtilsTest, hybridProjectionUsesEmptyDefaultForAbsentKeys) {
   // An absent key next to a configured key adds no group.
   {
     const auto projection = buildProjectedNimbleType(
-        schema.get(), makeSubfields({"features[1]", "features[99]"}));
+        schema.get(),
+        makeSubfields({"features[1]", "features[99]"}),
+        &schemaPool());
     const auto& projectedMap =
         projection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
     ASSERT_EQ(projectedMap.groupCount(), 1);
@@ -982,10 +1103,12 @@ TEST(SchemaUtilsTest, hybridProjectionUsesEmptyDefaultForAbsentKeys) {
   // Projecting configured key 1 drops Default. Projecting that schema again
   // with an absent key still yields the keyless Default group.
   {
-    const auto configured =
-        buildProjectedNimbleType(schema.get(), makeSubfields({"features[1]"}));
+    const auto configured = buildProjectedNimbleType(
+        schema.get(), makeSubfields({"features[1]"}), &schemaPool());
     const auto projection = buildProjectedNimbleType(
-        configured.nimbleType.get(), makeSubfields({"features[99]"}));
+        configured.nimbleType.get(),
+        makeSubfields({"features[99]"}),
+        &schemaPool());
     const auto& projectedMap =
         projection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
     ASSERT_EQ(projectedMap.groupCount(), 1);
@@ -1007,18 +1130,20 @@ TEST(SchemaUtilsTest, hybridProjectionUsesEmptyDefaultForAbsentKeys) {
 }
 
 TEST(SchemaUtilsTest, hybridProjectionSelectsKeyListDefaultForUngroupedKey) {
-  SchemaBuilder builder;
+  SchemaBuilder builder{&schemaPool()};
   auto root = builder.createRowTypeBuilder(1);
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int64, HybridFlatMap::KeyPresenceMode::kKeyList);
+  const std::vector<std::string> groupKeys{"1"};
   hybridMap->addGroup(
-      0, {"1"}, builder.createScalarTypeBuilder(ScalarKind::Double));
+      0, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Double));
   hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      kNoGroupKeys,
       builder.createScalarTypeBuilder(ScalarKind::Double));
   root->addChild("features", hybridMap);
-  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto schema =
+      SchemaReader::getSchema(builder.schemaNodes(), &schemaPool());
   const auto& sourceRoot = schema->asRow();
   const auto& sourceMap = sourceRoot.childAt(0)->asHybridFlatMap();
   const auto& sourceGroup = sourceMap.groupAt(0);
@@ -1027,8 +1152,8 @@ TEST(SchemaUtilsTest, hybridProjectionSelectsKeyListDefaultForUngroupedKey) {
   // Any batch may list a key in no configured group in its Default, so the key
   // selects the whole Default group, which keeps listing its keys.
   {
-    const auto projection =
-        buildProjectedNimbleType(schema.get(), makeSubfields({"features[99]"}));
+    const auto projection = buildProjectedNimbleType(
+        schema.get(), makeSubfields({"features[99]"}), &schemaPool());
     const auto& projectedMap =
         projection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
     EXPECT_EQ(
@@ -1045,9 +1170,10 @@ TEST(SchemaUtilsTest, hybridProjectionSelectsKeyListDefaultForUngroupedKey) {
             sourceDefault.keyPresenceDescriptor.offset(),
             sourceDefault.inMapDescriptor.offset()));
 
-    SchemaSerializer serializer;
+    SchemaSerializer serializer{&schemaPool()};
     const auto roundTripped = SchemaDeserializer::deserialize(
-        std::string(serializer.serialize(*projection.nimbleType)));
+        std::string(serializer.serialize(*projection.nimbleType)),
+        &schemaPool());
     const auto& roundTrippedMap =
         roundTripped->asRow().childAt(0)->asHybridFlatMap();
     EXPECT_EQ(
@@ -1061,7 +1187,9 @@ TEST(SchemaUtilsTest, hybridProjectionSelectsKeyListDefaultForUngroupedKey) {
   // A configured key next to an ungrouped key selects both groups.
   {
     const auto projection = buildProjectedNimbleType(
-        schema.get(), makeSubfields({"features[1]", "features[99]"}));
+        schema.get(),
+        makeSubfields({"features[1]", "features[99]"}),
+        &schemaPool());
     EXPECT_THAT(
         projection.streamOffsets,
         ElementsAre(
@@ -1078,10 +1206,12 @@ TEST(SchemaUtilsTest, hybridProjectionSelectsKeyListDefaultForUngroupedKey) {
   // A source that projected Default away has nothing to select for an
   // ungrouped key, so the column keeps a keyless Default group.
   {
-    const auto configured =
-        buildProjectedNimbleType(schema.get(), makeSubfields({"features[1]"}));
+    const auto configured = buildProjectedNimbleType(
+        schema.get(), makeSubfields({"features[1]"}), &schemaPool());
     const auto projection = buildProjectedNimbleType(
-        configured.nimbleType.get(), makeSubfields({"features[99]"}));
+        configured.nimbleType.get(),
+        makeSubfields({"features[99]"}),
+        &schemaPool());
     const auto& projectedMap =
         projection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
     ASSERT_EQ(projectedMap.groupCount(), 1);
@@ -1809,24 +1939,25 @@ TEST(SchemaUtilsTest, nestedFlatMapProjectionFails) {
 }
 
 TEST(SchemaUtilsTest, hybridFlatMapProjectionUsesSchemaGroups) {
-  SchemaBuilder schemaBuilder;
+  SchemaBuilder schemaBuilder{&schemaPool()};
   auto root = schemaBuilder.createRowTypeBuilder(1);
   auto features = schemaBuilder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> groupKeys{"configured"};
   features->addGroup(
-      0,
-      {"configured"},
-      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+      0, groupKeys, schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   features->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      kNoGroupKeys,
       schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   root->addChild("features", features);
-  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  const auto schema =
+      SchemaReader::getSchema(schemaBuilder.schemaNodes(), &schemaPool());
   std::vector<Subfield> subfields;
   subfields.emplace_back("features");
 
-  const auto projection = buildProjectedNimbleType(schema.get(), subfields);
+  const auto projection =
+      buildProjectedNimbleType(schema.get(), subfields, &schemaPool());
   const auto& projectedMap =
       projection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
   ASSERT_EQ(projectedMap.groupCount(), 2);
@@ -1834,7 +1965,7 @@ TEST(SchemaUtilsTest, hybridFlatMapProjectionUsesSchemaGroups) {
   EXPECT_EQ(projectedMap.groupAt(1).groupId, HybridFlatMap::kDefaultGroupId);
 
   const auto configuredProjection = buildProjectedNimbleType(
-      schema.get(), makeSubfields({"features[\"configured\"]"}));
+      schema.get(), makeSubfields({"features[\"configured\"]"}), &schemaPool());
   const auto& configuredMap =
       configuredProjection.nimbleType->asRow().childAt(0)->asHybridFlatMap();
   ASSERT_EQ(configuredMap.groupCount(), 1);
@@ -1843,36 +1974,40 @@ TEST(SchemaUtilsTest, hybridFlatMapProjectionUsesSchemaGroups) {
       configuredMap.groupAt(0).groupKeys,
       (std::vector<std::string>{"configured"}));
   NIMBLE_ASSERT_THROW(
-      buildProjectedNimbleType(schema.get(), makeSubfields({"features[\"\"]"})),
+      buildProjectedNimbleType(
+          schema.get(), makeSubfields({"features[\"\"]"}), &schemaPool()),
       "Hybrid FlatMap key projection cannot use an empty key");
   NIMBLE_ASSERT_THROW(
       buildProjectedNimbleType(
-          schema.get(), makeSubfields({"features[\"configured\"].nested"})),
+          schema.get(),
+          makeSubfields({"features[\"configured\"].nested"}),
+          &schemaPool()),
       "Nested projection inside hybrid FlatMap key 'configured' is not supported");
 }
 
 TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingColumn) {
-  SchemaBuilder schemaBuilder;
+  SchemaBuilder schemaBuilder{&schemaPool()};
   auto root = schemaBuilder.createRowTypeBuilder(2);
   auto features = schemaBuilder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> groupKeys{"configured"};
   features->addGroup(
-      0,
-      {"configured"},
-      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+      0, groupKeys, schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   features->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      kNoGroupKeys,
       schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   root->addChild("features", features);
   root->addChild(
       "id", schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
-  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  const auto schema =
+      SchemaReader::getSchema(schemaBuilder.schemaNodes(), &schemaPool());
   std::vector<Subfield> subfields;
   subfields.emplace_back("features[\"configured\"]");
   subfields.emplace_back("id");
 
-  const auto projection = buildProjectedNimbleType(schema.get(), subfields);
+  const auto projection =
+      buildProjectedNimbleType(schema.get(), subfields, &schemaPool());
 
   // A projected descriptor offset indexes projection.streamOffsets. The final
   // Hybrid FlatMap shape is built before the following column, so the latter
@@ -1899,20 +2034,26 @@ TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingColumn) {
 }
 
 TEST(SchemaUtilsTest, hybridFlatMapEmptyDefaultNumbersFollowingColumn) {
-  SchemaBuilder schemaBuilder;
+  SchemaBuilder schemaBuilder{&schemaPool()};
   auto root = schemaBuilder.createRowTypeBuilder(2);
   auto features = schemaBuilder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
-  features->addGroup(0, {"configured"}, makeAllKindValueType(schemaBuilder));
+  const std::vector<std::string> groupKeys{"configured"};
+  features->addGroup(0, groupKeys, makeAllKindValueType(schemaBuilder));
   features->addGroup(
-      HybridFlatMap::kDefaultGroupId, {}, makeAllKindValueType(schemaBuilder));
+      HybridFlatMap::kDefaultGroupId,
+      kNoGroupKeys,
+      makeAllKindValueType(schemaBuilder));
   root->addChild("features", features);
   root->addChild(
       "id", schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
-  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  const auto schema =
+      SchemaReader::getSchema(schemaBuilder.schemaNodes(), &schemaPool());
 
   const auto projection = buildProjectedNimbleType(
-      schema.get(), makeSubfields({"features[\"absent\"]", "id"}));
+      schema.get(),
+      makeSubfields({"features[\"absent\"]", "id"}),
+      &schemaPool());
 
   // The keyless Default group needs one placeholder for each value stream, then
   // one each for key presence and in-map. A wrong count would shift the
@@ -1930,7 +2071,7 @@ TEST(SchemaUtilsTest, hybridFlatMapEmptyDefaultNumbersFollowingColumn) {
   EXPECT_EQ(projection.streamOffsets, expectedStreamOffsets);
   EXPECT_EQ(
       projection.streamOffsets.size(),
-      schemaNodes(*projection.nimbleType).size());
+      schemaNodes(*projection.nimbleType, &schemaPool()).size());
 
   std::vector<bool> expectedBarriers(expectedStreamOffsets.size(), false);
   expectedBarriers[0] = true;
@@ -1959,17 +2100,16 @@ TEST(SchemaUtilsTest, hybridFlatMapEmptyDefaultNumbersFollowingColumn) {
 }
 
 TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingFlatMap) {
-  SchemaBuilder schemaBuilder;
+  SchemaBuilder schemaBuilder{&schemaPool()};
   auto root = schemaBuilder.createRowTypeBuilder(2);
   auto features = schemaBuilder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> groupKeys{"configured"};
   features->addGroup(
-      0,
-      {"configured"},
-      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+      0, groupKeys, schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   features->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      kNoGroupKeys,
       schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   root->addChild("features", features);
   auto flatMap = schemaBuilder.createFlatMapTypeBuilder(ScalarKind::String);
@@ -1978,12 +2118,14 @@ TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingFlatMap) {
   flatMap->addChild(
       "b", schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   root->addChild("fm", flatMap);
-  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  const auto schema =
+      SchemaReader::getSchema(schemaBuilder.schemaNodes(), &schemaPool());
   std::vector<Subfield> subfields;
   subfields.emplace_back("features[\"configured\"]");
   subfields.emplace_back("fm[\"a\"]");
 
-  const auto projection = buildProjectedNimbleType(schema.get(), subfields);
+  const auto projection =
+      buildProjectedNimbleType(schema.get(), subfields, &schemaPool());
 
   // A FlatMap carries an in-map descriptor per key alongside its nulls stream,
   // so it verifies every following descriptor is allocated after the HFM.
@@ -1998,32 +2140,35 @@ TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingFlatMap) {
 }
 
 TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersMultipleHybridColumns) {
-  SchemaBuilder schemaBuilder;
+  SchemaBuilder schemaBuilder{&schemaPool()};
   auto root = schemaBuilder.createRowTypeBuilder(3);
-  const auto addHybrid = [&](std::string_view name) {
+  const auto addHybrid = [&](std::string_view name,
+                             const std::vector<std::string>& groupKeys) {
     auto map = schemaBuilder.createHybridFlatMapTypeBuilder(
         ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
     map->addGroup(
-        0,
-        {std::string{name} + "_key"},
-        schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+        0, groupKeys, schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
     map->addGroup(
         HybridFlatMap::kDefaultGroupId,
-        {},
+        kNoGroupKeys,
         schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
     root->addChild(std::string{name}, map);
   };
-  addHybrid("first");
-  addHybrid("second");
+  const std::vector<std::string> firstGroupKeys{"first_key"};
+  const std::vector<std::string> secondGroupKeys{"second_key"};
+  addHybrid("first", firstGroupKeys);
+  addHybrid("second", secondGroupKeys);
   root->addChild(
       "id", schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
-  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  const auto schema =
+      SchemaReader::getSchema(schemaBuilder.schemaNodes(), &schemaPool());
   std::vector<Subfield> subfields;
   subfields.emplace_back("first[\"first_key\"]");
   subfields.emplace_back("second[\"second_key\"]");
   subfields.emplace_back("id");
 
-  const auto projection = buildProjectedNimbleType(schema.get(), subfields);
+  const auto projection =
+      buildProjectedNimbleType(schema.get(), subfields, &schemaPool());
 
   // Each selected HFM is built with its final stream count before the next
   // column, so the second HFM and trailing scalar receive cumulative offsets.
@@ -2037,17 +2182,16 @@ TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersMultipleHybridColumns) {
 }
 
 TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingNestedRow) {
-  SchemaBuilder schemaBuilder;
+  SchemaBuilder schemaBuilder{&schemaPool()};
   auto root = schemaBuilder.createRowTypeBuilder(2);
   auto features = schemaBuilder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> groupKeys{"configured"};
   features->addGroup(
-      0,
-      {"configured"},
-      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+      0, groupKeys, schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   features->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      kNoGroupKeys,
       schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   root->addChild("features", features);
   auto nested = schemaBuilder.createRowTypeBuilder(2);
@@ -2057,12 +2201,14 @@ TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingNestedRow) {
   array->setChildren(schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   nested->addChild("array", array);
   root->addChild("nested", nested);
-  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  const auto schema =
+      SchemaReader::getSchema(schemaBuilder.schemaNodes(), &schemaPool());
   std::vector<Subfield> subfields;
   subfields.emplace_back("features[\"configured\"]");
   subfields.emplace_back("nested");
 
-  const auto projection = buildProjectedNimbleType(schema.get(), subfields);
+  const auto projection =
+      buildProjectedNimbleType(schema.get(), subfields, &schemaPool());
 
   // The following nested subtree is allocated contiguously after the HFM.
   const auto& projectedNested =
@@ -2078,26 +2224,28 @@ TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingNestedRow) {
 }
 
 TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingArrayWithOffsets) {
-  SchemaBuilder schemaBuilder;
+  SchemaBuilder schemaBuilder{&schemaPool()};
   auto root = schemaBuilder.createRowTypeBuilder(2);
   auto features = schemaBuilder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> groupKeys{"configured"};
   features->addGroup(
-      0,
-      {"configured"},
-      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+      0, groupKeys, schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   features->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      kNoGroupKeys,
       schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   root->addChild("features", features);
   auto array = schemaBuilder.createArrayWithOffsetsTypeBuilder();
   array->setChildren(schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   root->addChild("array", array);
-  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  const auto schema =
+      SchemaReader::getSchema(schemaBuilder.schemaNodes(), &schemaPool());
 
   const auto projection = buildProjectedNimbleType(
-      schema.get(), makeSubfields({"features[\"configured\"]", "array"}));
+      schema.get(),
+      makeSubfields({"features[\"configured\"]", "array"}),
+      &schemaPool());
 
   const auto& projectedArray =
       projection.nimbleType->asRow().childAt(1)->asArrayWithOffsets();
@@ -2109,7 +2257,7 @@ TEST(SchemaUtilsTest, hybridFlatMapProjectionNumbersFollowingArrayWithOffsets) {
 }
 
 TEST(SchemaUtilsTest, hybridFlatMapConvertsToVeloxMap) {
-  SchemaBuilder builder;
+  SchemaBuilder builder{&schemaPool()};
   const auto makeValue = [&]() {
     auto array = builder.createArrayTypeBuilder();
     array->setChildren(builder.createScalarTypeBuilder(ScalarKind::String));
@@ -2117,10 +2265,13 @@ TEST(SchemaUtilsTest, hybridFlatMapConvertsToVeloxMap) {
   };
   auto hybridMap = builder.createHybridFlatMapTypeBuilder(
       ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
-  hybridMap->addGroup(0, {"1"}, makeValue());
-  hybridMap->addGroup(HybridFlatMap::kDefaultGroupId, {}, makeValue());
+  const std::vector<std::string> groupKeys{"1"};
+  hybridMap->addGroup(0, groupKeys, makeValue());
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId, kNoGroupKeys, makeValue());
 
-  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto schema =
+      SchemaReader::getSchema(builder.schemaNodes(), &schemaPool());
   const auto veloxType = convertToVeloxType(*schema);
   ASSERT_EQ(veloxType->kind(), velox::TypeKind::MAP);
   EXPECT_EQ(veloxType->asMap().keyType()->kind(), velox::TypeKind::INTEGER);

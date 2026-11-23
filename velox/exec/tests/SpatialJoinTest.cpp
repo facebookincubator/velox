@@ -123,12 +123,12 @@ class SpatialJoinTest : public OperatorTestBase {
     std::vector<RowVectorPtr> buildBatches;
     if (separateBatches) {
       for (const auto& wkt : probeWktsStr) {
-        probeBatches.push_back(makeRowVector(
-            {"left_g"}, {makeNullableFlatVector<std::string>({wkt})}));
+        probeBatches.push_back(makeNamedRowVector(
+            "left_g", makeNullableFlatVector<std::string>({wkt})));
       }
       if (probeBatches.empty()) {
-        probeBatches.push_back(makeRowVector(
-            {"left_g"}, {makeNullableFlatVector<std::string>({})}));
+        probeBatches.push_back(makeNamedRowVector(
+            "left_g", makeNullableFlatVector<std::string>({})));
       }
 
       for (size_t idx = 0; idx < buildWktsStr.size(); ++idx) {
@@ -145,8 +145,8 @@ class SpatialJoinTest : public OperatorTestBase {
              makeNullableFlatVector<double>({})}));
       }
     } else {
-      probeBatches.push_back(makeRowVector(
-          {"left_g"}, {makeNullableFlatVector<std::string>(probeWktsStr)}));
+      probeBatches.push_back(makeNamedRowVector(
+          "left_g", makeNullableFlatVector<std::string>(probeWktsStr)));
       buildBatches.push_back(makeRowVector(
           {"right_g", "radius"},
           {makeNullableFlatVector<std::string>(buildWktsStr),
@@ -157,14 +157,14 @@ class SpatialJoinTest : public OperatorTestBase {
         {makeNullableFlatVector<std::string>(expectedLeftWktsStr),
          makeNullableFlatVector<std::string>(expectedRightWktsStr)});
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     auto plan =
-        PlanBuilder(planNodeIdGenerator)
+        builder.newPlan()
             .values(probeBatches)
             .project({"ST_GeometryFromText(left_g) AS left_g"})
             .localPartitionRoundRobinRow()
             .spatialJoin(
-                PlanBuilder(planNodeIdGenerator)
+                builder.newPlan()
                     .values(buildBatches)
                     .project(
                         {"ST_GeometryFromText(right_g) AS right_g", "radius"})
@@ -180,8 +180,8 @@ class SpatialJoinTest : public OperatorTestBase {
                 {"ST_AsText(left_g) AS left_g",
                  "ST_AsText(right_g) AS right_g"})
             .planNode();
-    AssertQueryBuilder builder{plan};
-    builder.maxDrivers(maxDrivers)
+    AssertQueryBuilder queryBuilder{plan};
+    queryBuilder.maxDrivers(maxDrivers)
         .config(core::QueryConfig::kPreferredOutputBatchRows, maxBatchSize)
         .config(core::QueryConfig::kMaxOutputBatchRows, maxBatchSize)
         .assertResults({expectedRows});
@@ -675,16 +675,16 @@ TEST_F(SpatialJoinTest, testEmptyProbe) {
 
 TEST_F(SpatialJoinTest, failOnGroupedExecution) {
   std::vector<RowVectorPtr> batches{
-      makeRowVector({"wkt"}, {makeFlatVector<std::string>({"POINT(0 0)"})})};
+      makeNamedRowVector("wkt", makeFlatVector<std::string>({"POINT(0 0)"}))};
   core::PlanNodeId groupedScanNodeId;
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto planFragment =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .values(batches)
           .capturePlanNodeId(groupedScanNodeId)
           .project({"ST_GeometryFromText(wkt) AS left_g"})
           .spatialJoin(
-              PlanBuilder(planNodeIdGenerator)
+              builder.newPlan()
                   .values(batches)
                   .project({"ST_GeometryFromText(wkt) AS right_g"})
                   .localPartition({})

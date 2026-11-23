@@ -58,6 +58,13 @@ void appendAllNestedStreams(
       appendAllNestedStreams(arrayWithOffsets.elements(), childrenOffsets);
       break;
     }
+    case Kind::SlidingWindowArray: {
+      auto& array = type.asSlidingWindowArray();
+      childrenOffsets.push_back(array.offsetsDescriptor().offset());
+      childrenOffsets.push_back(array.lengthsDescriptor().offset());
+      appendAllNestedStreams(array.elements(), childrenOffsets);
+      break;
+    }
     case Kind::Map: {
       auto& map = type.asMap();
       childrenOffsets.push_back(map.lengthsDescriptor().offset());
@@ -118,7 +125,8 @@ std::vector<Stream> DefaultLayoutPlanner::getLayout(
   auto& root = type->asRow();
 
   // Layout logic:
-  // 1. Root stream (Row nulls) is always first
+  // 1. Root stream (Row nulls) is always first, after the cluster index key
+  //    stream when the schema builder has one.
   // 2. Later, all flat maps included in config are layed out.
   //    For each map, we layout all the features included in the config for
   //    that map, in the order they appeared in the config. For each feature, we
@@ -222,7 +230,16 @@ std::vector<Stream> DefaultLayoutPlanner::getLayout(
   // try and find matching streams for each type builder and append them to the
   // final ordered stream list.
 
-  // First add the root's null stream
+  // Lead with the stripe index streams, such as the cluster index key stream,
+  // in id order, so that a read of a stripe's keys and of the streams after
+  // them can be one read.
+  const auto numStripeIndexStreams =
+      velox::checkedNotNull(schemaBuilder_)->stripeIndexStreamCount();
+  for (uint32_t streamId = 0; streamId < numStripeIndexStreams; ++streamId) {
+    tryAppendStream(streamId);
+  }
+
+  // Then add the root's null stream
   appendStream(root.nullsDescriptor().offset());
 
   // Then, add all ordered flat maps

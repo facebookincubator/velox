@@ -18,8 +18,12 @@
 #include "velox/experimental/torchwave/CompiledOp.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/Registry.h"
+#include "velox/experimental/torchwave/StaticDims.h"
+#include "velox/experimental/torchwave/SymShape.h"
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
+
+#include <folly/CppAttributes.h>
 
 #include <cmath>
 #include <limits>
@@ -399,6 +403,50 @@ bool isLastDimOfRows(NodeCP node, const ValueTypes& types) {
     }
   }
   return dim == rank - 1 || dim == -1;
+}
+
+// The longest row tw.sort_rows sorts in shared memory.
+constexpr int64_t kMaxSortRow = 2048;
+
+// sort along the last dim of an input of rank 2 or more with rows of a static
+// length of at most kMaxSortRow runs as tw.sort_rows.
+std::vector<std::pair<ValueCP, ValueCP>>
+replaceSortOfRows(NodeCP node, ValueTypes& types, WaveGraph& /*waveGraph*/) {
+  auto* self = inputAt(node, 0);
+  const auto* dimAttr = node->tryGetAttribute("dim");
+  if (dimAttr == nullptr || !isLastDimOfRows(node, types)) {
+    return {};
+  }
+  const auto dims = staticDimsOf(types, self);
+  if (!dims.has_value() || dims->empty() || dims->back() < 1 ||
+      dims->back() > kMaxSortRow ||
+      static_cast<size_t>(self->id()) >= types.types.size() ||
+      types.types[self->id()] == nullptr) {
+    return {};
+  }
+  const auto dtype = types.types[self->id()]->dtype();
+  if (dtype != c10::ScalarType::Long && dtype != c10::ScalarType::Int &&
+      dtype != c10::ScalarType::Short && dtype != c10::ScalarType::Char &&
+      dtype != c10::ScalarType::Byte && dtype != c10::ScalarType::Float &&
+      dtype != c10::ScalarType::Double) {
+    return {};
+  }
+  int64_t maxRow = 1;
+  while (maxRow < dims->back()) {
+    maxRow <<= 1;
+  }
+  bool descending = false;
+  if (const auto* attr = node->tryGetAttribute("descending")) {
+    if (const auto* flag = std::get_if<bool>(&attr->value)) {
+      descending = *flag;
+    }
+  }
+  auto* mutableNode = const_cast<nativert::Node*>(node);
+  mutableNode->addAttribute(
+      {"sort_descending", static_cast<int64_t>(descending ? 1 : 0)});
+  mutableNode->addAttribute({"max_row", maxRow});
+  mutableNode->setTarget("tw.sort_rows");
+  return {};
 }
 
 // new_ones(x, [sym_numel(y)]) with a 1-D y is ones_like(y): the size list is
@@ -1166,6 +1214,11 @@ bool allButLastDimReserve(
   return true;
 }
 
+bool firstDimReserve(const ReserveArgs& args, Shape* out, int32_t /*numOut*/) {
+  out[0].setVector(static_cast<Dim>(args.tensor(0).dims[0]));
+  return true;
+}
+
 // An open-addressing table of the smallest power of two at least twice the
 // input's element count, plus one.
 bool hashTableReserve(const ReserveArgs& args, Shape* out, int32_t /*numOut*/) {
@@ -1396,6 +1449,350 @@ std::string transposeTileTemplateArg(NodeCP node, CompileCtx* /*ctx*/) {
 
 int64_t transposeTileSharedBytes(NodeCP node, int32_t /*blockSize*/) {
   return hasTransposeTile(node) ? kTransposeTileBytes : 0;
+}
+
+// The symbolic forms of the reserves above, for sizing on the device.
+
+bool symSizeAttr(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  if (args.intLists.empty()) {
+    return false;
+  }
+  out.at(0) = denseShape(args.intLists[0]);
+  return true;
+}
+
+bool symInputShape(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* input = args.tensor(0);
+  if (input == nullptr) {
+    return false;
+  }
+  out.at(0) = denseShape(input->dims);
+  return true;
+}
+
+bool symArangeSpan(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  if (args.scalars.size() < 2 || !args.scalars[0] || !args.scalars[1]) {
+    return false;
+  }
+  out.at(0) = vectorShape(symAdd(
+      *args.scalars[1], symMul(SymExpr::constant(-1), *args.scalars[0])));
+  return true;
+}
+
+bool symLeadingDims(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* input = args.tensor(0);
+  if (input == nullptr || args.scalars.empty() || !args.scalars[0] ||
+      !args.scalars[0]->isConstant()) {
+    return false;
+  }
+  const auto keep = static_cast<size_t>(args.scalars[0]->value);
+  if (keep > input->dims.size()) {
+    return false;
+  }
+  out.at(0) = denseShape(
+      std::vector<SymExpr>(
+          input->dims.begin(),
+          input->dims.begin() + static_cast<std::ptrdiff_t>(keep)));
+  return true;
+}
+
+bool symIndexSelect(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* self = args.tensor(0);
+  const auto* index = args.tensor(1);
+  if (self == nullptr || index == nullptr || args.scalars.empty() ||
+      !args.scalars[0] || !args.scalars[0]->isConstant()) {
+    return false;
+  }
+  auto dims = self->dims;
+  auto dim = args.scalars[0]->value;
+  dim = dim < 0 ? dim + static_cast<int64_t>(dims.size()) : dim;
+  if (dim < 0 || dim >= static_cast<int64_t>(dims.size())) {
+    return false;
+  }
+  dims[dim] = numelOf(*index);
+  out.at(0) = denseShape(std::move(dims));
+  return true;
+}
+
+bool symScalar(const SymReserveArgs&, std::vector<SymShape>& out, int32_t) {
+  out.at(0) = SymShape{};
+  return true;
+}
+
+SymExpr ceilDiv(const SymExpr& numerator, int64_t denominator) {
+  return symFloorDiv(
+      symAdd(numerator, SymExpr::constant(denominator - 1)),
+      SymExpr::constant(denominator));
+}
+
+bool symNumBlocks(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* input = args.tensor(0);
+  if (input == nullptr || args.blockSize <= 0) {
+    return false;
+  }
+  out.at(0) = vectorShape(
+      symMax(SymExpr::constant(1), ceilDiv(numelOf(*input), args.blockSize)));
+  return true;
+}
+
+// The flag words, rounded to even, then two accumulators of two words per
+// tile.
+bool symLookbackState(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* input = args.tensor(0);
+  if (input == nullptr || args.blockSize <= 0) {
+    return false;
+  }
+  const auto tiles = symMax(
+      SymExpr::constant(1),
+      ceilDiv(
+          numelOf(*input),
+          static_cast<int64_t>(args.blockSize) * kSinglePassItemsPerThread));
+  const auto flagWords = symMul(
+      SymExpr::constant(2),
+      symFloorDiv(symAdd(tiles, SymExpr::constant(1)), SymExpr::constant(2)));
+  out.at(0) =
+      vectorShape(symAdd(flagWords, symMul(SymExpr::constant(4), tiles)));
+  return true;
+}
+
+// The operand with the most elements, by the values the export traced; one
+// element without operands.
+const SymShape* FOLLY_NULLABLE largestOperand(const SymReserveArgs& args) {
+  const SymShape* best = nullptr;
+  int64_t bestNumel = -1;
+  for (const auto& group : args.tensors) {
+    for (const auto* shape : group) {
+      if (shape == nullptr) {
+        continue;
+      }
+      const auto numel = tracedValue(numelOf(*shape)).value_or(0);
+      if (best == nullptr || numel > bestNumel) {
+        best = shape;
+        bestNumel = numel;
+      }
+    }
+  }
+  return best;
+}
+
+bool symMaxShape(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  bool anyOperand = false;
+  for (const auto& group : args.tensors) {
+    anyOperand |= !group.empty();
+  }
+  if (!anyOperand) {
+    out.at(0) = vectorShape(SymExpr::constant(1));
+    return true;
+  }
+  const auto* best = largestOperand(args);
+  if (best == nullptr) {
+    return false;
+  }
+  out.at(0) = denseShape(best->dims);
+  return true;
+}
+
+bool symNonzero(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t numOut) {
+  if (!symMaxShape(args, out, numOut)) {
+    return false;
+  }
+  auto dims = out.at(0).dims;
+  if (!dims.empty()) {
+    dims.push_back(SymExpr::constant(1));
+  }
+  out.at(0) = denseShape(std::move(dims));
+  return true;
+}
+
+bool symArangeStep(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  if (args.scalars.size() < 3 || !args.scalars[0] || !args.scalars[1] ||
+      !args.scalars[2] || !args.scalars[2]->isConstant() ||
+      args.scalars[2]->value <= 0) {
+    return false;
+  }
+  out.at(0) = vectorShape(symMax(
+      SymExpr::constant(0),
+      ceilDiv(
+          symAdd(
+              *args.scalars[1],
+              symMul(SymExpr::constant(-1), *args.scalars[0])),
+          args.scalars[2]->value)));
+  return true;
+}
+
+// 'total' along 'dim', or in all when 'dim' is absent or negative.
+bool symRepeatInterleaveFinal(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  if (args.scalars.empty() || !args.scalars[0]) {
+    return false;
+  }
+  const auto& total = *args.scalars[0];
+  const auto* input = args.tensor(0);
+  const bool hasDim = args.scalars.size() > 1 && args.scalars[1].has_value();
+  if (!hasDim ||
+      (args.scalars[1]->isConstant() && args.scalars[1]->value < 0)) {
+    out.at(0) = vectorShape(total);
+    return true;
+  }
+  if (input == nullptr || !args.scalars[1]->isConstant() ||
+      args.scalars[1]->value >= static_cast<int64_t>(input->dims.size())) {
+    return false;
+  }
+  auto dims = input->dims;
+  dims[args.scalars[1]->value] = total;
+  out.at(0) = denseShape(std::move(dims));
+  return true;
+}
+
+bool symRepeatInterleaveBcast(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* input = args.tensor(0);
+  if (input == nullptr) {
+    return false;
+  }
+  if (args.scalars.empty() || !args.scalars[0]) {
+    out.at(0) = vectorShape(numelOf(*input));
+    return true;
+  }
+  if (!args.scalars[0]->isConstant() || args.scalars[0]->value < 0 ||
+      args.scalars[0]->value >= static_cast<int64_t>(input->dims.size())) {
+    return false;
+  }
+  out.at(0) = vectorShape(input->dims[args.scalars[0]->value]);
+  return true;
+}
+
+bool symPadLastDim(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* input = args.tensor(0);
+  if (input == nullptr || input->dims.empty() || args.intLists.empty() ||
+      args.intLists[0].size() < 2) {
+    return false;
+  }
+  const auto& pad = args.intLists.at(0);
+  auto dims = input->dims;
+  dims.back() = symAdd(dims.back(), symAdd(pad.at(0), pad.at(1)));
+  out.at(0) = denseShape(std::move(dims));
+  return true;
+}
+
+bool symHashTable(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* input = args.tensor(0);
+  if (input == nullptr) {
+    return false;
+  }
+  const auto numel = numelOf(*input);
+  if (!numel.isConstant()) {
+    return false;
+  }
+  int64_t tableSize = 1;
+  while (tableSize < numel.value * 2) {
+    tableSize *= 2;
+  }
+  out.at(0) = vectorShape(SymExpr::constant(tableSize + 1));
+  return true;
+}
+
+bool symRepeat(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  const auto* self = args.tensor(0);
+  if (self == nullptr || args.intLists.empty() ||
+      args.intLists[0].size() < self->dims.size()) {
+    return false;
+  }
+  const auto& repeats = args.intLists[0];
+  const auto offset = repeats.size() - self->dims.size();
+  std::vector<SymExpr> dims;
+  dims.reserve(repeats.size());
+  for (size_t d = 0; d < repeats.size(); ++d) {
+    if (d < offset) {
+      dims.push_back(repeats[d]);
+    } else {
+      dims.push_back(symMul(repeats[d], self->dims[d - offset]));
+    }
+  }
+  out.at(0) = denseShape(std::move(dims));
+  return true;
+}
+
+bool symBincountFinal(
+    const SymReserveArgs& args,
+    std::vector<SymShape>& out,
+    int32_t) {
+  if (args.scalars.size() < 2 || !args.scalars[0] || !args.scalars[1]) {
+    return false;
+  }
+  out.at(0) = vectorShape(symMax(
+      symMax(symAdd(*args.scalars[0], SymExpr::constant(1)), *args.scalars[1]),
+      SymExpr::constant(0)));
+  return true;
+}
+
+void registerSymReserves() {
+  registerSymReserve(sizeAttrReserve, symSizeAttr);
+  registerSymReserve(inputShapeReserve, symInputShape);
+  registerSymReserve(firstListElementReserve, symInputShape);
+  registerSymReserve(inputNumelReserve, symNumel);
+  registerSymReserve(inputShapePlusOneReserve, symNumelPlusOne);
+  registerSymReserve(arangeEndReserve, symScalarLength);
+  registerSymReserve(scalarLengthReserve, symScalarLength);
+  registerSymReserve(arangeSpanReserve, symArangeSpan);
+  registerSymReserve(leadingDimsReserve, symLeadingDims);
+  registerSymReserve(firstDimReserve, symFirstDim);
+  registerSymReserve(indexSelectShape, symIndexSelect);
+  registerSymReserve(scalarReserve, symScalar);
+  registerSymReserve(numBlocksReserve, symNumBlocks);
+  registerSymReserve(lookbackStateReserve, symLookbackState);
+  registerSymReserve(maxShapeReserve, symMaxShape);
+  registerSymReserve(nonzeroShape, symNonzero);
+  registerSymReserve(arangeStepReserve, symArangeStep);
+  registerSymReserve(repeatInterleaveFinalShape, symRepeatInterleaveFinal);
+  registerSymReserve(repeatInterleaveBcastShape, symRepeatInterleaveBcast);
+  registerSymReserve(padLastDimReserve, symPadLastDim);
+  registerSymReserve(hashTableReserve, symHashTable);
+  registerSymReserve(repeatShape, symRepeat);
+  registerSymReserve(bincountFinalShape, symBincountFinal);
 }
 
 void registerRankPreservingStandalone(
@@ -2010,6 +2407,50 @@ void registerRowBuiltins(const std::string& scanHeader) {
       .multiBlockReturnBarrier()
       .outputConstraints(rowReduceConstraint(2))
       .registerOp();
+  // sort(dim=-1) of an input of rank 2 or more whose rows have a static
+  // length of at most kMaxSortRow: one block per row, the row sorted in the
+  // kernel's dynamic shared memory. 'max_row' is the row length rounded up to
+  // a power of two, 'sort_descending' 0 or 1.
+  auto rowShapeReturn = ArgumentMeta{
+      .isRegister = false,
+      .reserve = maxShapeReserve,
+      .reserveInputs = {.elementwiseLeaves = 0},
+      .shapeFromInput = 0};
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.sort_rows",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("self", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("values", c10::TensorType::get()),
+              c10::Argument("indices", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .argumentMeta({{.isRegister = false, .randomAccess = true}})
+      .returnMeta({rowShapeReturn, rowShapeReturn})
+      .ignoreAttrs({"dim", "descending", "stable"})
+      .headerFile(scanHeader)
+      .deviceFunc("sort_rows")
+      .typeTemplateParams({0})
+      .hasBlockSizeTemplateParam()
+      .templateAttrs({"sort_descending", "max_row"})
+      .dynamicSharedMemory([](NodeCP node, int32_t /*blockSize*/) -> int64_t {
+        const auto* maxRow = node->tryGetAttribute("max_row");
+        const auto* rows =
+            maxRow != nullptr ? std::get_if<int64_t>(&maxRow->value) : nullptr;
+        // An 8-byte key and a 4-byte position per element.
+        return rows != nullptr ? *rows * 12 : 0;
+      })
+      .multiBlockReturnBarrier()
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            ValueConstraint c{
+                .rank = types.rank(inputAt(node, 0)),
+                .contiguity = Contiguity::kContiguous};
+            return {c, c};
+          })
+      .registerOp();
 }
 
 } // namespace
@@ -2109,9 +2550,110 @@ void registerInPlaceScatterBuiltins() {
   }
 }
 
+// The index getters return the broadcast of their index list: the rank of
+// the highest-rank index, laid out densely.
+std::vector<ValueConstraint> indexListConstraint(
+    NodeCP node,
+    const ValueTypes& types) {
+  auto* list = inputAt(node, 1);
+  auto* pack = list != nullptr ? list->producer() : nullptr;
+  if (pack == nullptr || pack->target() != "prim.ListPack") {
+    return {};
+  }
+  int8_t rank = -1;
+  for (const auto& element : pack->inputs()) {
+    const auto elementRank = types.rank(element.value);
+    if (elementRank < 0) {
+      return {};
+    }
+    rank = std::max(rank, elementRank);
+  }
+  return {{.rank = rank, .contiguity = Contiguity::kContiguous}};
+}
+
+// Adds a tensor output of 'dtype' to 'node'. The output is read by other
+// nodes, so it must not be newTensorValue's per-op scratch: congruent nodes
+// share one compiled op, and scratch would get a private copy per invocation.
+nativert::Value* addTensorOutput(
+    nativert::Node* node,
+    c10::ScalarType dtype,
+    WaveGraph& waveGraph) {
+  auto* graph = waveGraph.graph();
+  auto* value = node->addOutput(
+      graph->getUniqueValueName(),
+      nativert::Type(nativert::Type::Kind::Tensor));
+  waveGraph.registerTensorMeta(value, dtype);
+  return value;
+}
+
+const nativert::TensorMeta* FOLLY_NULLABLE
+metaOf(const ValueTypes& types, ValueCP value) {
+  auto id = value->id();
+  if (id < 0 || static_cast<size_t>(id) >= types.types.size()) {
+    return nullptr;
+  }
+  return types.types[id];
+}
+
+// x[view(c, size)] with a 1-D x is view(x[c], size): indexing a vector maps
+// each index element to one output element, so the output takes the index's
+// shape and a reshape of the index can move to the output. Indexing by 'c'
+// itself lets the index expression fuse into the gather, which a view between
+// them prevents. Returns the view of the new gather, or nullptr when the
+// pattern does not apply.
+ValueCP FOLLY_NULLABLE unflattenIndexOfVector(
+    NodeCP node,
+    ValueCP self,
+    NodeCP listPack,
+    ValueTypes& types,
+    WaveGraph& waveGraph) {
+  if (self == nullptr || listPack == nullptr ||
+      listPack->target() != "prim.ListPack" || listPack->inputs().size() != 1 ||
+      types.rank(self) != 1) {
+    return nullptr;
+  }
+  auto* flat = listPack->inputs()[0].value;
+  auto* view = flat->producer();
+  if (view == nullptr || view->target() != "torch.ops.aten.view.default") {
+    return nullptr;
+  }
+  const auto* sizeAttr = view->tryGetAttribute("size");
+  if (sizeAttr == nullptr ||
+      !std::holds_alternative<std::vector<int64_t>>(sizeAttr->value)) {
+    return nullptr;
+  }
+  auto* index = inputAt(view, 0);
+  const auto* selfMeta = metaOf(types, self);
+  const auto* indexMeta = metaOf(types, index);
+  if (selfMeta == nullptr || indexMeta == nullptr || types.rank(index) < 1 ||
+      (indexMeta->dtype() != c10::ScalarType::Long &&
+       indexMeta->dtype() != c10::ScalarType::Int)) {
+    return nullptr;
+  }
+  auto* graph = waveGraph.graph();
+  auto* mutableNode = const_cast<nativert::Node*>(node);
+  auto* pack = graph->createNode(
+      "prim.ListPack", {{"l0", const_cast<nativert::Value*>(index)}});
+  graph->insertBefore(pack, mutableNode);
+  auto* list = waveGraph.newListValue(pack, "unflat_indices");
+  auto* gather = graph->createNode(
+      "torch.ops.aten.index.Tensor",
+      {{"self", const_cast<nativert::Value*>(self)}, {"indices", list}});
+  graph->insertBefore(gather, mutableNode);
+  auto* gathered = addTensorOutput(gather, selfMeta->dtype(), waveGraph);
+  auto* reshape =
+      graph->createNode("torch.ops.aten.view.default", {{"self", gathered}});
+  reshape->addAttribute(
+      {"size", std::get<std::vector<int64_t>>(sizeAttr->value)});
+  graph->insertBefore(reshape, mutableNode);
+  return addTensorOutput(reshape, selfMeta->dtype(), waveGraph);
+}
+
 } // namespace
 
 void registerBuiltins() {
+  registerSymReserves();
+  registerAtenShapeRules();
   // With WaveConfig::singlePass the two scans and the stream compaction get one
   // implementation, the decoupled look-back form, in place of the multi-kernel
   // and the cooperative-grid expansions. It replaces both so the choice does
@@ -2510,6 +3052,10 @@ void registerBuiltins() {
       .normalize(castScalarAttrsToInputDtype)
       .registerOp();
   MetadataBuilder("torch.ops.aten.nan_to_num.default")
+      .elementwise()
+      .normalize(resolveNanToNumDefaults)
+      .registerOp();
+  MetadataBuilder("torch.ops.aten.nan_to_num_.default")
       .elementwise()
       .normalize(resolveNanToNumDefaults)
       .registerOp();
@@ -2925,6 +3471,34 @@ void registerBuiltins() {
       .hasDtypeTemplateParam()
       .registerOp();
 
+  // tw.unpack_slot: the 'size' int64 values of slot 'slot' of a packed input
+  // (PackedInput.h), decoded to memory by a device function. It replaces one
+  // output of the split of a packed input, so 'size' is that output's split
+  // size. Like tw.arange_mem, it is sized by its reserve from 'size', a size
+  // argument whose value is on the host when the reserve runs. 'slot' is a
+  // constant, so the decodes of all slots of a packed input are one op.
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.unpack_slot",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("size", c10::IntType::get()),
+              c10::Argument("packed", c10::TensorType::get()),
+              c10::Argument("slot", c10::IntType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .argumentMeta(
+          {{.isRegister = false}, {.isRegister = false}, {.isRegister = false}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserve = scalarLengthReserve,
+            .reserveInputs = {.scalars = {"size"}}}})
+      .headerFile("velox/experimental/torchwave/Unpack.cuh")
+      .deviceFunc("unpack_slot")
+      .outputConstraints(rank1Constraint)
+      .registerOp();
+
   MetadataBuilder("torch.ops.aten.arange.start")
       .elementwiseFunc("__arange_start")
       .hasIdxArg()
@@ -3271,6 +3845,10 @@ void registerBuiltins() {
             auto* self = inputAt(node, 0);
             auto* indices = inputAt(node, 1);
             auto* listPack = indices ? indices->producer() : nullptr;
+            if (auto* unflat = unflattenIndexOfVector(
+                    node, self, listPack, types, waveGraph)) {
+              return {{node->outputs()[0], unflat}};
+            }
             if (self && listPack && listPack->target() == "prim.ListPack") {
               auto selfId = self->id();
               // selfOk gates access to the source dtype (needed to type the new
@@ -3443,6 +4021,7 @@ void registerBuiltins() {
                 .reserveInputs = {.tensors = {1}}}})
           .typeTemplateParams({0})
           .hasBlockInfo()
+          .outputConstraints(indexListConstraint)
           .registerOp();
     }
 
@@ -3471,6 +4050,7 @@ void registerBuiltins() {
               .reserve = firstListElementReserve,
               .reserveInputs = {.tensors = {1}}}})
         .typeTemplateParams({0})
+        .outputConstraints(indexListConstraint)
         .registerOp();
   }
 
@@ -4287,6 +4867,8 @@ void registerBuiltins() {
             auto* self = inputAt(node, 0);
             ValueConstraint constraint;
             constraint.rank = static_cast<int8_t>(types.rank(self) + 1);
+            // The inserted dim has extent 1, so the layout stays dense.
+            constraint.contiguity = types.contiguity(self);
             return {constraint};
           })
       .registerOp();
@@ -4326,6 +4908,44 @@ void registerBuiltins() {
             constraint.rank =
                 static_cast<int8_t>(inputRank - (endDim - startDim));
             return {constraint};
+          })
+      // A flatten that merges nothing is its input. One that merges every dim
+      // is reshape(self, [-1]), which is a view of a contiguous input and a
+      // copy of any other.
+      .maybeReplace(
+          [](NodeCP node,
+             ValueTypes& types,
+             WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
+            auto* self = inputAt(node, 0);
+            const auto selfId = self->id();
+            if (selfId >= static_cast<int>(types.types.size()) ||
+                !types.types[selfId] || types.rank(self) < 1) {
+              return {};
+            }
+            const int64_t inputRank = types.rank(self);
+            auto dim = [&](const char* name, int64_t defaultDim) {
+              const auto* attr = node->tryGetAttribute(name);
+              const auto value =
+                  attr ? std::get<int64_t>(attr->value) : defaultDim;
+              return value < 0 ? value + inputRank : value;
+            };
+            const auto startDim = dim("start_dim", 0);
+            const auto endDim = dim("end_dim", -1);
+            if (startDim >= endDim) {
+              return {{node->outputs()[0], self}};
+            }
+            if (startDim != 0 || endDim != inputRank - 1) {
+              return {};
+            }
+            auto* graph = waveGraph.graph();
+            auto* reshape = graph->createNode(
+                "torch.ops.aten.reshape.default", {{"self", self}});
+            reshape->addAttribute({"shape", std::vector<int64_t>{-1}});
+            graph->insertBefore(reshape, const_cast<nativert::Node*>(node));
+            auto* output = waveGraph.newTensorValue(
+                reshape, "flatten", types.types[selfId]->dtype());
+            types.constraints.at(output->id()).rank = 1;
+            return {{node->outputs()[0], output}};
           })
       .registerOp();
 
@@ -6223,6 +6843,15 @@ void registerBuiltins() {
             .reserveInputs = {.tensors = {0}, .scalars = {"keep"}}}})
       .headerFile(kScanHeader)
       .deviceFunc("any_rows")
+      .rowReduction(
+          {.keepAttr = "keep",
+           .accumulatorType = "bool",
+           .init = "false",
+           .combine = "{0} |= {1}",
+           .groupCombine =
+               "(((__ballot_sync(0xffffffff, {0}) >> (lane & ~({1}u - 1))) & "
+               "(0xffffffffu >> (32 - {1}))) != 0)",
+           .blockCombine = "(__syncthreads_or({0}) != 0)"})
       .hasBlockSizeTemplateParam()
       .templateAttrs({"keep"})
       .multiBlockReturnBarrier()
@@ -6647,6 +7276,7 @@ void registerBuiltins() {
                 .contiguity = Contiguity::kContiguous};
             return {c, c};
           })
+      .maybeReplace(replaceSortOfRows)
       .registerOp();
   // sort.stable: same (values, indices) shapes as sort.default.
   MetadataBuilder("torch.ops.aten.sort.stable")
@@ -6660,6 +7290,7 @@ void registerBuiltins() {
                 .contiguity = Contiguity::kContiguous};
             return {c, c};
           })
+      .maybeReplace(replaceSortOfRows)
       .registerOp();
   // bincount: output length is data-dependent (max(input) + 1, at least
   // minlength), so it splits into a max head -- whose result sizes the output

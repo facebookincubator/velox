@@ -17,6 +17,7 @@
 #pragma once
 
 #include <iomanip>
+#include <type_traits>
 
 #include <boost/intrusive_ptr.hpp>
 #include <fmt/format.h>
@@ -49,6 +50,20 @@ using BufferPtr = boost::intrusive_ptr<Buffer>;
 // consecutive batches of output if the buffer is singly referenced. A
 // new Buffer should be made if there are other references to the last
 // used Buffer.
+//
+// Buffers held by vectors (nulls, values, indices, offsets and sizes) follow
+// one contract, so that a vector can wrap memory from Arrow and other external
+// sources without a copy:
+// - A buffer starts aligned to its element width. Bitmaps (nulls and boolean
+//   values) start 8-byte aligned.
+// - A buffer may end at its valid bytes rounded up to its alignment, with
+//   nothing addressable after that. Values, indices, offsets and sizes may end
+//   at their last element. A bitmap of n bits spans bits::nwords(n) words, not
+//   just bits::nbytes(n) bytes.
+// - Code may read past the last valid byte only up to that end. Such reads stay
+//   inside the buffer's memory and never cross a page.
+// - Padding is not a property of every buffer. A function that needs it says so
+//   next to its signature, and its callers pass an AlignedBuffer.
 //
 // NOTE: References to sizes represent number of bytes.
 class Buffer {
@@ -170,6 +185,11 @@ class Buffer {
     return (static_cast<uint8_t>(type_) & kPODMask) != 0;
   }
 
+  /// Returns the largest power of 2 that the start address is a multiple of.
+  /// A buffer with no memory, whose start is null, is aligned to any power of
+  /// 2. Vector buffers check it (see VELOX_DCHECK_BUFFER_ALIGNED).
+  size_t alignment() const;
+
   friend std::ostream& operator<<(std::ostream& os, const Buffer& buffer) {
     std::ios_base::fmtflags f(os.flags());
 
@@ -200,8 +220,9 @@ class Buffer {
   }
 
   /// Slice a buffer with specific type T.
-  /// For boolean type and if the 'offset' is not multiple of 8, return a
-  /// shifted copy, new buffer is allocated from 'pool'.
+  /// For boolean type and if the 'offset' is not multiple of 64, return a
+  /// shifted copy, new buffer is allocated from 'pool'. This keeps a sliced
+  /// bitmap 8-byte aligned.
   /// Otherwise return a BufferView into the original buffer (with shared
   /// ownership of original buffer).
   ///
@@ -347,6 +368,11 @@ FOLLY_ALWAYS_INLINE void intrusive_ptr_release(Buffer* buffer) noexcept {
 template <typename T>
 class NonPODAlignedBuffer;
 
+// Owns memory from a MemoryPool. The data starts kSizeofAlignedBuffer bytes
+// into the pool's allocation, so it is aligned to the smaller of the pool's
+// alignment and 64 bytes, and followed by at least simd::kPadding addressable
+// bytes past capacity(). Only code that knows it has an AlignedBuffer may rely
+// on that padding: a vector can also hold BufferViews, which have none.
 class AlignedBuffer : public Buffer {
  public:
   static constexpr int16_t kAlignment = 64;
@@ -772,7 +798,9 @@ class NonPODAlignedBuffer : public Buffer {
 };
 
 // Immutable view over externally managed memory. When the last reference is
-// destroyed, release() is called on 'releaser'.
+// destroyed, release() is called on 'releaser'. Has no padding: the memory may
+// end at size() rounded up to the buffer's alignment. A BufferView held by a
+// vector must meet the contract described on Buffer.
 template <typename Releaser>
 class BufferView : public Buffer {
  public:
@@ -824,6 +852,20 @@ class BufferView : public Buffer {
 };
 
 } // namespace facebook::velox
+
+/// Checks in debug builds that 'buffer', a BufferPtr, is null or starts at the
+/// alignment that a vector buffer of 'T' needs (see Buffer): 8 bytes for a
+/// bitmap of bool, the width of 'T' otherwise. A failure names the line that
+/// calls it.
+#define VELOX_DCHECK_BUFFER_ALIGNED(buffer, T)                      \
+  do {                                                              \
+    if ((buffer) != nullptr) {                                      \
+      VELOX_DCHECK_GE(                                              \
+          (buffer)->alignment(),                                    \
+          (std::is_same_v<T, bool> ? sizeof(uint64_t) : sizeof(T)), \
+          "Vector buffer starts at a misaligned address.");         \
+    }                                                               \
+  } while (false)
 
 // fmt formatter specialization for Buffer::Type
 template <>

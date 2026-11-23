@@ -24,6 +24,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/core/PlanNode.h"
+#include "velox/exec/IndexLookupJoinStatNames.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/BackpressureTestNode.h"
@@ -2815,13 +2816,10 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithInnerJoin) {
     queryBuilder.plan(plan)
         .config(
             core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-            std::to_string(GetParam().numPrefetches))
+            GetParam().numPrefetches)
         .config(
-            core::QueryConfig::kPreferredOutputBatchRows,
-            std::to_string(testData.maxBatchRows))
-        .config(
-            core::QueryConfig::kPreferredOutputBatchBytes,
-            std::to_string(1ULL << 30))
+            core::QueryConfig::kPreferredOutputBatchRows, testData.maxBatchRows)
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1ULL << 30)
         .config(
             core::QueryConfig::kIndexLookupJoinSplitOutput,
             testData.splitOutput ? "true" : "false")
@@ -2838,7 +2836,7 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithInnerJoin) {
     const auto task = queryBuilder.assertResults(
         "SELECT t.c4, u.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
     ASSERT_EQ(
-        toPlanStats(task->taskStats()).at(joinNodeId_).outputVectors,
+        PlanNodeStats::extract(task->taskStats(), joinNodeId_).outputVectors,
         testData.numExpectedOutputBatch);
   }
 }
@@ -3046,13 +3044,10 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithLeftJoin) {
     queryBuilder.plan(plan)
         .config(
             core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-            std::to_string(GetParam().numPrefetches))
+            GetParam().numPrefetches)
         .config(
-            core::QueryConfig::kPreferredOutputBatchRows,
-            std::to_string(testData.maxBatchRows))
-        .config(
-            core::QueryConfig::kPreferredOutputBatchBytes,
-            std::to_string(1ULL << 30))
+            core::QueryConfig::kPreferredOutputBatchRows, testData.maxBatchRows)
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1ULL << 30)
         .config(
             core::QueryConfig::kIndexLookupJoinSplitOutput,
             testData.splitOutput ? "true" : "false")
@@ -3069,7 +3064,7 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithLeftJoin) {
     const auto task = queryBuilder.assertResults(
         "SELECT t.c4, u.c5 FROM t LEFT JOIN u ON t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
     ASSERT_EQ(
-        toPlanStats(task->taskStats()).at(joinNodeId_).outputVectors,
+        PlanNodeStats::extract(task->taskStats(), joinNodeId_).outputVectors,
         testData.numExpectedOutputBatch);
     const auto probeScanId = probeScanNodeId_;
     auto planWithMatchColumn = makeLookupPlan(
@@ -3190,13 +3185,9 @@ TEST_P(IndexLookupJoinTest, splitOutputNodeOverride) {
     queryBuilder.plan(plan)
         .config(
             core::QueryConfig::kIndexLookupJoinMaxPrefetchBatches,
-            std::to_string(GetParam().numPrefetches))
-        .config(
-            core::QueryConfig::kPreferredOutputBatchRows,
-            std::to_string(maxBatchRows))
-        .config(
-            core::QueryConfig::kPreferredOutputBatchBytes,
-            std::to_string(1ULL << 30))
+            GetParam().numPrefetches)
+        .config(core::QueryConfig::kPreferredOutputBatchRows, maxBatchRows)
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1ULL << 30)
         .config(
             core::QueryConfig::kIndexLookupJoinSplitOutput,
             testData.configSplitOutput ? "true" : "false")
@@ -3213,7 +3204,7 @@ TEST_P(IndexLookupJoinTest, splitOutputNodeOverride) {
     const auto task = queryBuilder.assertResults(
         "SELECT t.c4, u.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
     ASSERT_EQ(
-        toPlanStats(task->taskStats()).at(joinNodeId).outputVectors,
+        PlanNodeStats::extract(task->taskStats(), joinNodeId).outputVectors,
         expectedNumOutputVectors);
   }
 }
@@ -3280,14 +3271,9 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, statsSplitter) {
       GetParam().needsIndexSplit,
       "SELECT u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
 
-  auto taskStats = toPlanStats(task->taskStats());
-
-  // Verify that both the IndexLookupJoin node and IndexSource node have stats.
-  ASSERT_GT(taskStats.count(joinNodeId_), 0);
-  ASSERT_GT(taskStats.count(indexScanNodeId_), 0);
-
-  const auto& joinStats = taskStats.at(joinNodeId_);
-  const auto& indexSourceStats = taskStats.at(indexScanNodeId_);
+  const auto joinStats = PlanNodeStats::extract(task->taskStats(), joinNodeId_);
+  const auto indexSourceStats =
+      PlanNodeStats::extract(task->taskStats(), indexScanNodeId_);
 
   EXPECT_GT(joinStats.inputRows, 0);
   EXPECT_GT(joinStats.outputRows, 0);
@@ -3301,14 +3287,11 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, statsSplitter) {
 
   EXPECT_GT(indexSourceStats.addInputTiming.count, 0);
 
+  EXPECT_TRUE(indexSourceStats.hasCustomStat(
+      IndexLookupJoinStatNames::kConnectorLookupWallTime));
   EXPECT_GT(
-      indexSourceStats.customStats.count(
-          std::string(IndexLookupJoin::kConnectorLookupWallTime)),
-      0);
-  EXPECT_GT(
-      indexSourceStats.customStats
-          .at(std::string(IndexLookupJoin::kConnectorLookupWallTime))
-          .sum,
+      indexSourceStats.customSum(
+          IndexLookupJoinStatNames::kConnectorLookupWallTime),
       0);
 
   // backgroundTiming should be cleared from join stats (moved to IndexSource).
@@ -3376,10 +3359,8 @@ TEST_P(IndexLookupJoinTest, scanStatsNotInflated) {
       GetParam().needsIndexSplit,
       "SELECT u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
 
-  auto taskStats = toPlanStats(task->taskStats());
-
-  ASSERT_GT(taskStats.count(probeScanNodeId_), 0);
-  const auto& scanStats = taskStats.at(probeScanNodeId_);
+  const auto scanStats =
+      PlanNodeStats::extract(task->taskStats(), probeScanNodeId_);
 
   EXPECT_GT(scanStats.inputRows, 0);
   EXPECT_GT(scanStats.inputBytes, 0);
@@ -3393,9 +3374,8 @@ TEST_P(IndexLookupJoinTest, scanStatsNotInflated) {
   // But IndexLookupJoin's splitStats copies combinedStats to create the join
   // node stats, so we must explicitly erase them to avoid exposing residual
   // lazy stats on the join node.
-  const auto& joinStats = taskStats.at(joinNodeId_);
-  EXPECT_EQ(
-      joinStats.customStats.count(std::string(LazyVector::kInputBytes)), 0);
+  const auto joinStats = PlanNodeStats::extract(task->taskStats(), joinNodeId_);
+  EXPECT_FALSE(joinStats.hasCustomStat(LazyVector::kInputBytes));
 }
 
 /// Verifies that IndexSource stats report rows BEFORE the join filter is
@@ -3470,13 +3450,9 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, statsSplitterWithFilter) {
       GetParam().needsIndexSplit,
       "SELECT u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2 AND u.c3 % 2 = 0");
 
-  auto taskStats = toPlanStats(task->taskStats());
-
-  ASSERT_GT(taskStats.count(joinNodeId_), 0);
-  ASSERT_GT(taskStats.count(indexScanNodeId_), 0);
-
-  const auto& joinStats = taskStats.at(joinNodeId_);
-  const auto& indexSourceStats = taskStats.at(indexScanNodeId_);
+  const auto joinStats = PlanNodeStats::extract(task->taskStats(), joinNodeId_);
+  const auto indexSourceStats =
+      PlanNodeStats::extract(task->taskStats(), indexScanNodeId_);
 
   EXPECT_GT(joinStats.inputRows, 0);
   EXPECT_GT(joinStats.outputRows, 0);

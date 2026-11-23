@@ -25,6 +25,7 @@
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/exception/Exception.h"
 #include "velox/type/Filter.h"
+#include "velox/type/FloatingPointUtil.h"
 #include "velox/type/Subfield.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/SimpleVector.h"
@@ -145,7 +146,16 @@ class ColumnStats : public AbstractColumnStats {
 
       addSample(values, batchRow(row));
     }
-    if constexpr (!std::is_same_v<T, ComplexType>) {
+    if constexpr (std::is_floating_point_v<T>) {
+      // Sorts NaN last, where Velox orders it. '<' leaves NaN unordered, so a
+      // NaN can land anywhere and split the values into separately sorted
+      // runs. Sorted last, a NaN drawn as the upper bound makes the range
+      // filter unbounded above, which passes NaN as Velox does.
+      std::sort(
+          values_.begin(),
+          values_.end(),
+          velox::util::floating_point::NaNAwareLessThan<T>{});
+    } else if constexpr (!std::is_same_v<T, ComplexType>) {
       std::sort(values_.begin(), values_.end());
     }
   }

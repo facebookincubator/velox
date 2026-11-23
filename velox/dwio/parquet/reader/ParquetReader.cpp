@@ -1731,6 +1731,7 @@ class ParquetRowReader::Impl {
         bits::setBit(res.filterResult.data(), i);
       }
     }
+    applySplitRowRange(rowGroupInRange, res.filterResult.data());
 
     columnReader_->filterRowGroups(0, parquetStatsContext_, res);
     if (auto& metadataFilter = options_.metadataFilter()) {
@@ -1777,6 +1778,53 @@ class ParquetRowReader::Impl {
       // remainder is released by ~ReaderBase.
       readerBase_->releaseThriftBytes(freedThriftSize);
     }
+  }
+
+  // Narrows the row groups in the byte range to those holding rows of the
+  // split row range, if one is set, and records the range in file rows.
+  // Row groups outside it are excluded like row groups outside the byte
+  // range.
+  void applySplitRowRange(
+      std::vector<bool>& rowGroupInRange,
+      uint64_t* excluded) {
+    const auto& splitRowRange = options_.splitRowRange();
+    if (!splitRowRange.has_value()) {
+      return;
+    }
+    // The split's rows are the rows of the row groups in its byte range.
+    std::optional<uint64_t> splitStartRow;
+    uint64_t splitNumRows = 0;
+    uint64_t rowNumber = 0;
+    for (auto i = 0; i < rowGroups_.size(); ++i) {
+      const uint64_t numRows = *rowGroups_[i].num_rows();
+      if (rowGroupInRange[i]) {
+        if (!splitStartRow.has_value()) {
+          splitStartRow = rowNumber;
+        }
+        splitNumRows += numRows;
+      }
+      rowNumber += numRows;
+    }
+    uint64_t startRow = 0;
+    uint64_t endRow = 0;
+    if (splitStartRow.has_value() && splitRowRange->firstRow < splitNumRows) {
+      startRow = *splitStartRow + splitRowRange->firstRow;
+      endRow = startRow +
+          std::min(splitRowRange->numRows,
+                   splitNumRows - splitRowRange->firstRow);
+    }
+    rowNumber = 0;
+    for (auto i = 0; i < rowGroups_.size(); ++i) {
+      const uint64_t numRows = *rowGroups_[i].num_rows();
+      if (rowGroupInRange[i] &&
+          (rowNumber + numRows <= startRow || rowNumber >= endRow)) {
+        rowGroupInRange[i] = false;
+        bits::setBit(excluded, i);
+      }
+      rowNumber += numRows;
+    }
+    splitRowRangeStart_ = startRow;
+    splitRowRangeEnd_ = endRow;
   }
 
   int64_t nextRowNumber() {
@@ -1862,8 +1910,22 @@ class ParquetRowReader::Impl {
     currentRowGroupPtr_ = &rowGroups_[rowGroupIds_[nextRowGroupIdsIdx_]];
     rowsInCurrentRowGroup_ = *currentRowGroupPtr_->num_rows();
     currentRowInGroup_ = 0;
+    const auto firstRow = firstRowOfRowGroup_[nextRowGroupIdsIdx_];
     nextRowGroupIdsIdx_++;
     columnReader_->seekToRowGroup(nextRowGroupIndex);
+    if (splitRowRangeEnd_.has_value()) {
+      // Only the first and last row groups can hold rows outside the range.
+      rowsInCurrentRowGroup_ =
+          std::min(rowsInCurrentRowGroup_, *splitRowRangeEnd_ - firstRow);
+      if (*splitRowRangeStart_ > firstRow) {
+        // Start reading at the range's first row. Columns catch up on the next
+        // read: each reads its repetition and definition levels up to the new
+        // offset and skips to it, as after a batch whose rows all fail a
+        // filter.
+        currentRowInGroup_ = *splitRowRangeStart_ - firstRow;
+        columnReader_->setReadOffset(currentRowInGroup_);
+      }
+    }
     return true;
   }
 
@@ -1882,6 +1944,9 @@ class ParquetRowReader::Impl {
   uint64_t rowsInCurrentRowGroup_;
   uint64_t currentRowInGroup_;
   uint32_t skippedStrides_{0};
+  // File rows [start, end) of the split row range, if one is set.
+  std::optional<uint64_t> splitRowRangeStart_;
+  std::optional<uint64_t> splitRowRangeEnd_;
 
   std::unique_ptr<dwio::common::SelectiveColumnReader> columnReader_;
 

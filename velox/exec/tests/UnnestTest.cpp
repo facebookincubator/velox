@@ -40,13 +40,18 @@ class UnnestTest : public HiveConnectorTestBase,
   }
 
  protected:
-  CursorParameters makeCursorParameters(
-      const core::PlanNodePtr& planNode) const {
-    CursorParameters params;
-    params.planNode = planNode;
-    params.queryConfigs[core::QueryConfig::kPreferredOutputBatchRows] =
-        std::to_string(batchSize_);
-    return params;
+  // Returns a builder that runs 'planNode' with this test's batch size.
+  AssertQueryBuilder queryBuilder(const core::PlanNodePtr& planNode) {
+    AssertQueryBuilder builder(planNode, duckDbQueryRunner_);
+    builder.config(
+        core::QueryConfig::kPreferredOutputBatchRows,
+        std::to_string(batchSize_));
+    return builder;
+  }
+
+  // Asserts that 'planNode' returns no rows with this test's batch size.
+  void assertEmptyResults(const core::PlanNodePtr& planNode) {
+    queryBuilder(planNode).assertEmptyResults();
   }
 
   const vector_size_t batchSize_{GetParam()};
@@ -66,9 +71,9 @@ TEST_P(UnnestTest, basicArray) {
 
   // TODO Add tests with empty arrays. This requires better support in DuckDB.
 
-  auto op = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}).planNode();
-  auto params = makeCursorParameters(op);
-  assertQuery(params, "SELECT c0, UNNEST(c1) FROM tmp WHERE c0 % 7 > 0");
+  auto op = PlanBuilder().values(vector).unnest({"c0"}, {"c1"}).planNode();
+  queryBuilder(op).assertResults(
+      "SELECT c0, UNNEST(c1) FROM tmp WHERE c0 % 7 > 0");
 }
 
 TEST_P(UnnestTest, skipArrayElement) {
@@ -80,7 +85,7 @@ TEST_P(UnnestTest, skipArrayElement) {
   // Prune the array element: only the replicated column is emitted, one row per
   // array element.
   auto plan = PlanBuilder()
-                  .values({vector})
+                  .values(vector)
                   .unnest(
                       {"c0"},
                       {"c1"},
@@ -88,11 +93,9 @@ TEST_P(UnnestTest, skipArrayElement) {
                   .planNode();
 
   auto expected =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 1, 1, 2, 2})});
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 1, 1, 2, 2}));
   AssertQueryBuilder(plan)
-      .config(
-          core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(batchSize_))
+      .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(expected);
 }
 
@@ -105,7 +108,7 @@ TEST_P(UnnestTest, skipMapValue) {
   // Keep only the map key; prune the value.
   auto plan =
       PlanBuilder()
-          .values({vector})
+          .values(vector)
           .unnest(
               {"c0"},
               {"c1"},
@@ -117,9 +120,7 @@ TEST_P(UnnestTest, skipMapValue) {
       {makeFlatVector<int64_t>({1, 1, 2}),
        makeFlatVector<int32_t>({10, 11, 20})});
   AssertQueryBuilder(plan)
-      .config(
-          core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(batchSize_))
+      .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(expected);
 }
 
@@ -132,7 +133,7 @@ TEST_P(UnnestTest, skipMapKey) {
   // Keep only the map value; prune the key.
   auto plan =
       PlanBuilder()
-          .values({vector})
+          .values(vector)
           .unnest(
               {"c0"},
               {"c1"},
@@ -144,9 +145,7 @@ TEST_P(UnnestTest, skipMapKey) {
       {makeFlatVector<int64_t>({1, 1, 2}),
        makeFlatVector<double>({1.5, 2.5, 3.5})});
   AssertQueryBuilder(plan)
-      .config(
-          core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(batchSize_))
+      .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(expected);
 }
 
@@ -159,7 +158,7 @@ TEST_P(UnnestTest, skipMixedArrayAndMap) {
 
   // Prune the array element and the map value; keep only the map key.
   auto plan = PlanBuilder()
-                  .values({vector})
+                  .values(vector)
                   .unnest(
                       {"c0"},
                       {"c1", "c2"},
@@ -172,9 +171,7 @@ TEST_P(UnnestTest, skipMixedArrayAndMap) {
       {makeFlatVector<int64_t>({1, 1, 2}),
        makeFlatVector<int32_t>({100, 101, 200})});
   AssertQueryBuilder(plan)
-      .config(
-          core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(batchSize_))
+      .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(expected);
 }
 
@@ -188,7 +185,7 @@ TEST_P(UnnestTest, skipAllArrayToCount) {
   // over it must equal the total number of array elements.
   auto plan =
       PlanBuilder()
-          .values({vector})
+          .values(vector)
           .unnest(
               {}, {"c0"}, std::vector<std::optional<std::string>>{std::nullopt})
           .singleAggregation({}, {"count(1)"})
@@ -197,9 +194,7 @@ TEST_P(UnnestTest, skipAllArrayToCount) {
   auto expected =
       makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{5})});
   AssertQueryBuilder(plan)
-      .config(
-          core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(batchSize_))
+      .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(expected);
 }
 
@@ -214,7 +209,7 @@ TEST_P(UnnestTest, skipMapKeyWithOrdinalityAndMarker) {
   // pruned but trailing ordinality/marker columns remain.
   auto plan =
       PlanBuilder()
-          .values({vector})
+          .values(vector)
           .unnest(
               {"c0"},
               {"c1"},
@@ -230,9 +225,7 @@ TEST_P(UnnestTest, skipMapKeyWithOrdinalityAndMarker) {
        makeFlatVector<int64_t>({1, 2, 1}),
        makeFlatVector<bool>({true, true, true})});
   AssertQueryBuilder(plan)
-      .config(
-          core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(batchSize_))
+      .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(expected);
 }
 
@@ -251,7 +244,7 @@ TEST_P(UnnestTest, skipArrayOfRowElement) {
   // Keep: the ROW element is emitted as one ROW(BIGINT, VARCHAR) column.
   auto keepPlan =
       PlanBuilder()
-          .values({vector})
+          .values(vector)
           .unnest({"c0"}, {"c1"}, std::vector<std::optional<std::string>>{"e"})
           .planNode();
   auto keepExpected = makeRowVector(
@@ -262,26 +255,22 @@ TEST_P(UnnestTest, skipArrayOfRowElement) {
            makeFlatVector<std::string>({"x", "y", "z", "p", "q"}),
        })});
   AssertQueryBuilder(keepPlan)
-      .config(
-          core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(batchSize_))
+      .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(keepExpected);
 
   // Prune: the ROW column is dropped entirely; only the replicated column
   // remains, with cardinality preserved.
   auto skipPlan = PlanBuilder()
-                      .values({vector})
+                      .values(vector)
                       .unnest(
                           {"c0"},
                           {"c1"},
                           std::vector<std::optional<std::string>>{std::nullopt})
                       .planNode();
   auto skipExpected =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 1, 1, 2, 2})});
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 1, 1, 2, 2}));
   AssertQueryBuilder(skipPlan)
-      .config(
-          core::QueryConfig::kPreferredOutputBatchRows,
-          std::to_string(batchSize_))
+      .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
       .assertResults(skipExpected);
 }
 
@@ -324,10 +313,9 @@ TEST_P(UnnestTest, arrayWithIdentityMap) {
              [](auto row, auto index) { return index * (row % 3); })});
     createDuckDbTable({vector});
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId unnestPlanNodeId;
-    auto plan = PlanBuilder(planNodeIdGenerator)
-                    .values({vector})
+    auto plan = PlanBuilder()
+                    .values(vector)
                     .unnest({"c0"}, {"c1"})
                     .capturePlanNodeId(unnestPlanNodeId)
                     .planNode();
@@ -335,11 +323,11 @@ TEST_P(UnnestTest, arrayWithIdentityMap) {
     auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
                     .config(
                         core::QueryConfig::kPreferredOutputBatchRows,
-                        std::to_string(testData.outputBatchSize))
+                        testData.outputBatchSize)
                     .assertResults("SELECT c0, UNNEST(c1) FROM tmp");
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
-        exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,
+        exec::PlanNodeStats::extract(taskStats, unnestPlanNodeId).outputVectors,
         testData.expectedOutputBatches);
   }
 }
@@ -386,10 +374,9 @@ TEST_P(UnnestTest, arrayWithoutIdentityMap) {
              [](auto row, auto index) { return index * (row % 3); })});
     createDuckDbTable({vector});
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId unnestPlanNodeId;
-    auto plan = PlanBuilder(planNodeIdGenerator)
-                    .values({vector})
+    auto plan = PlanBuilder()
+                    .values(vector)
                     .unnest({"c0"}, {"c1", "c2"})
                     .capturePlanNodeId(unnestPlanNodeId)
                     .planNode();
@@ -398,11 +385,11 @@ TEST_P(UnnestTest, arrayWithoutIdentityMap) {
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .config(
                 core::QueryConfig::kPreferredOutputBatchRows,
-                std::to_string(testData.outputBatchSize))
+                testData.outputBatchSize)
             .assertResults("SELECT c0, UNNEST(c1), UNNEST(c2) FROM tmp");
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
-        exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,
+        exec::PlanNodeStats::extract(taskStats, unnestPlanNodeId).outputVectors,
         testData.expectedOutputBatches);
   }
 }
@@ -421,22 +408,20 @@ TEST_P(UnnestTest, arrayWithNull) {
            [](auto row, auto index) { return index * (row % 3); })});
   createDuckDbTable({vector});
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId unnestPlanNodeId;
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .values({vector})
+  auto plan = PlanBuilder()
+                  .values(vector)
                   .unnest({"c0"}, {"c1", "c2"})
                   .capturePlanNodeId(unnestPlanNodeId)
                   .planNode();
 
-  auto task =
-      AssertQueryBuilder(plan, duckDbQueryRunner_)
-          .config(
-              core::QueryConfig::kPreferredOutputBatchRows, std::to_string(25))
-          .assertResults("SELECT c0, UNNEST(c1), UNNEST(c2) FROM tmp");
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .config(core::QueryConfig::kPreferredOutputBatchRows, 25)
+                  .assertResults("SELECT c0, UNNEST(c1), UNNEST(c2) FROM tmp");
   const auto taskStats = task->taskStats();
   ASSERT_EQ(
-      exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors, 164);
+      exec::PlanNodeStats::extract(taskStats, unnestPlanNodeId).outputVectors,
+      164);
 }
 
 TEST_P(UnnestTest, arrayWithOrdinality) {
@@ -451,10 +436,8 @@ TEST_P(UnnestTest, arrayWithOrdinality) {
       {makeNullableFlatVector<double>({1.1, 2.2, 3.3, 4.4, 5.5, std::nullopt}),
        array});
 
-  auto op = PlanBuilder()
-                .values({vector})
-                .unnest({"c0"}, {"c1"}, "ordinal")
-                .planNode();
+  auto op =
+      PlanBuilder().values(vector).unnest({"c0"}, {"c1"}, "ordinal").planNode();
 
   auto expected = makeRowVector(
       {makeNullableFlatVector<double>(
@@ -471,8 +454,7 @@ TEST_P(UnnestTest, arrayWithOrdinality) {
        makeNullableFlatVector<int32_t>(
            {1, 2, std::nullopt, 4, 5, 6, std::nullopt, 7, 8, 9}),
        makeNullableFlatVector<int64_t>({1, 2, 3, 4, 1, 2, 1, 1, 2, 3})});
-  auto params = makeCursorParameters(op);
-  assertQuery(params, expected);
+  queryBuilder(op).assertResults(expected);
 
   // Test with array wrapped in dictionary.
   auto reversedIndices = makeIndicesInReverse(6);
@@ -480,7 +462,7 @@ TEST_P(UnnestTest, arrayWithOrdinality) {
       {makeNullableFlatVector<double>({1.1, 2.2, 3.3, 4.4, 5.5, std::nullopt}),
        wrapInDictionary(reversedIndices, 6, array)});
   op = PlanBuilder()
-           .values({vectorInDict})
+           .values(vectorInDict)
            .unnest({"c0"}, {"c1"}, "ordinal")
            .planNode();
 
@@ -499,8 +481,7 @@ TEST_P(UnnestTest, arrayWithOrdinality) {
        makeNullableFlatVector<int32_t>(
            {7, 8, 9, std::nullopt, 5, 6, 1, 2, std::nullopt, 4}),
        makeNullableFlatVector<int64_t>({1, 2, 3, 1, 1, 2, 1, 2, 3, 4})});
-  params = makeCursorParameters(op);
-  assertQuery(params, expectedInDict);
+  queryBuilder(op).assertResults(expectedInDict);
 }
 
 TEST_P(UnnestTest, arrayWithMarker) {
@@ -611,8 +592,7 @@ TEST_P(UnnestTest, arrayWithMarker) {
                   .values({testData.input})
                   .unnest({"c0"}, {"c1"}, ordinalityName, markerName)
                   .planNode();
-    auto params = makeCursorParameters(op);
-    assertQuery(params, testData.expected);
+    queryBuilder(op).assertResults(testData.expected);
   }
 }
 
@@ -624,7 +604,7 @@ TEST_P(UnnestTest, basicMap) {
            [](auto /* row */) { return 2; },
            [](auto row) { return row % 2; },
            [](auto row) { return row % 2 + 1; })});
-  auto op = PlanBuilder().values({vector}).unnest({"c0"}, {"c1"}).planNode();
+  auto op = PlanBuilder().values(vector).unnest({"c0"}, {"c1"}).planNode();
   // DuckDB doesn't support Unnest from MAP column. Hence,using 2 separate array
   // columns with the keys and values part of the MAP to validate.
   auto duckDbVector = makeRowVector(
@@ -638,8 +618,7 @@ TEST_P(UnnestTest, basicMap) {
            [](auto /* row */) { return 2; },
            [](auto /* row */, auto index) { return index + 1; })});
   createDuckDbTable({duckDbVector});
-  auto params = makeCursorParameters(op);
-  assertQuery(params, "SELECT c0, UNNEST(c1), UNNEST(c2) FROM tmp");
+  queryBuilder(op).assertResults("SELECT c0, UNNEST(c1), UNNEST(c2) FROM tmp");
 }
 
 TEST_P(UnnestTest, mapWithOrdinality) {
@@ -650,10 +629,8 @@ TEST_P(UnnestTest, mapWithOrdinality) {
   auto vector =
       makeRowVector({makeNullableFlatVector<int32_t>({1, 2, 3}), map});
 
-  auto op = PlanBuilder()
-                .values({vector})
-                .unnest({"c0"}, {"c1"}, "ordinal")
-                .planNode();
+  auto op =
+      PlanBuilder().values(vector).unnest({"c0"}, {"c1"}, "ordinal").planNode();
 
   auto expected = makeRowVector(
       {makeNullableFlatVector<int32_t>({1, 1, 2, 2, 2, 3}),
@@ -661,8 +638,7 @@ TEST_P(UnnestTest, mapWithOrdinality) {
        makeNullableFlatVector<double>(
            {1.1, std::nullopt, 3.3, 4.4, 5.5, std::nullopt}),
        makeNullableFlatVector<int64_t>({1, 2, 1, 2, 3, 1})});
-  auto params = makeCursorParameters(op);
-  assertQuery(params, expected);
+  queryBuilder(op).assertResults(expected);
 
   // Test with map wrapped in dictionary.
   auto reversedIndices = makeIndicesInReverse(3);
@@ -670,7 +646,7 @@ TEST_P(UnnestTest, mapWithOrdinality) {
       {makeNullableFlatVector<int32_t>({1, 2, 3}),
        wrapInDictionary(reversedIndices, 3, map)});
   op = PlanBuilder()
-           .values({vectorInDict})
+           .values(vectorInDict)
            .unnest({"c0"}, {"c1"}, "ordinal")
            .planNode();
 
@@ -680,8 +656,7 @@ TEST_P(UnnestTest, mapWithOrdinality) {
        makeNullableFlatVector<double>(
            {std::nullopt, 3.3, 4.4, 5.5, 1.1, std::nullopt}),
        makeNullableFlatVector<int64_t>({1, 1, 2, 3, 1, 2})});
-  params = makeCursorParameters(op);
-  assertQuery(params, expectedInDict);
+  queryBuilder(op).assertResults(expectedInDict);
 }
 
 TEST_P(UnnestTest, mapWithMarker) {
@@ -765,8 +740,7 @@ TEST_P(UnnestTest, mapWithMarker) {
                   .values({testData.input})
                   .unnest({"c0"}, {"c1"}, ordinalityName, markerName)
                   .planNode();
-    auto params = makeCursorParameters(op);
-    assertQuery(params, testData.expected);
+    queryBuilder(op).assertResults(testData.expected);
   }
 }
 
@@ -792,7 +766,7 @@ TEST_P(UnnestTest, multipleColumns) {
        makeArrayVector(offsets, makeConstant<int32_t>(7, 700))});
 
   auto op = PlanBuilder()
-                .values({vector})
+                .values(vector)
                 .unnest({"c0"}, {"c1", "c2", "c3"})
                 .planNode();
 
@@ -817,9 +791,7 @@ TEST_P(UnnestTest, multipleColumns) {
            nullEvery(7)),
        makeArrayVector(offsets, makeConstant<int32_t>(7, 700))});
   createDuckDbTable({duckDbVector});
-  auto params = makeCursorParameters(op);
-  assertQuery(
-      params,
+  queryBuilder(op).assertResults(
       "SELECT c0, UNNEST(c1), UNNEST(c2), UNNEST(c3), UNNEST(c4) FROM tmp");
 }
 
@@ -845,7 +817,7 @@ TEST_P(UnnestTest, multipleColumnsWithOrdinality) {
        makeArrayVector(offsets, makeConstant<int32_t>(7, 700))});
 
   auto op = PlanBuilder()
-                .values({vector})
+                .values(vector)
                 .unnest({"c0"}, {"c1", "c2", "c3"}, "ordinal")
                 .planNode();
 
@@ -888,9 +860,7 @@ TEST_P(UnnestTest, multipleColumnsWithOrdinality) {
              return index + 1;
            })});
   createDuckDbTable({duckDbVector});
-  auto params = makeCursorParameters(op);
-  assertQuery(
-      params,
+  queryBuilder(op).assertResults(
       "SELECT c0, UNNEST(c1), UNNEST(c2), UNNEST(c3), UNNEST(c4), UNNEST(c5) FROM tmp");
 
   // Test with empty arrays and maps.
@@ -906,7 +876,7 @@ TEST_P(UnnestTest, multipleColumnsWithOrdinality) {
             {}})});
 
   op = PlanBuilder()
-           .values({vector})
+           .values(vector)
            .unnest({"c0"}, {"c1", "c2"}, "ordinal")
            .planNode();
 
@@ -956,8 +926,7 @@ TEST_P(UnnestTest, multipleColumnsWithOrdinality) {
             std::nullopt,
             std::nullopt}),
        makeNullableFlatVector<int64_t>({1, 2, 3, 4, 1, 2, 3, 1, 2, 1})});
-  params = makeCursorParameters(op);
-  assertQuery(params, expected);
+  queryBuilder(op).assertResults(expected);
 }
 
 TEST_P(UnnestTest, allEmptyOrNullArrays) {
@@ -974,16 +943,13 @@ TEST_P(UnnestTest, allEmptyOrNullArrays) {
            [](auto /* row */, auto index) { return index; },
            nullEvery(7))});
 
-  auto op =
-      PlanBuilder().values({vector}).unnest({"c0"}, {"c1", "c2"}).planNode();
-  auto params = makeCursorParameters(op);
-  assertQueryReturnsEmptyResult(params);
-
-  op = PlanBuilder()
-           .values({vector})
-           .unnest({"c0"}, {"c1", "c2"}, "ordinal")
-           .planNode();
-  assertQueryReturnsEmptyResult(params);
+  assertEmptyResults(
+      PlanBuilder().values(vector).unnest({"c0"}, {"c1", "c2"}).planNode());
+  assertEmptyResults(
+      PlanBuilder()
+          .values(vector)
+          .unnest({"c0"}, {"c1", "c2"}, "ordinal")
+          .planNode());
 }
 
 TEST_P(UnnestTest, allEmptyOrNullMaps) {
@@ -1002,17 +968,13 @@ TEST_P(UnnestTest, allEmptyOrNullMaps) {
            [](auto /* row */) { return 0; },
            nullEvery(7))});
 
-  auto op =
-      PlanBuilder().values({vector}).unnest({"c0"}, {"c1", "c2"}).planNode();
-  auto params = makeCursorParameters(op);
-  assertQueryReturnsEmptyResult(params);
-
-  op = PlanBuilder()
-           .values({vector})
-           .unnest({"c0"}, {"c1", "c2"}, "ordinal")
-           .planNode();
-  params = makeCursorParameters(op);
-  assertQueryReturnsEmptyResult(params);
+  assertEmptyResults(
+      PlanBuilder().values(vector).unnest({"c0"}, {"c1", "c2"}).planNode());
+  assertEmptyResults(
+      PlanBuilder()
+          .values(vector)
+          .unnest({"c0"}, {"c1", "c2"}, "ordinal")
+          .planNode());
 }
 
 TEST_P(UnnestTest, batchSize) {
@@ -1023,7 +985,7 @@ TEST_P(UnnestTest, batchSize) {
   // Unnest 1K rows into 3K rows.
   core::PlanNodeId unnestId;
   auto plan = PlanBuilder()
-                  .values({data})
+                  .values(data)
                   .project({"sequence(1, 3) as s"})
                   .unnest({}, {"s"})
                   .capturePlanNodeId(unnestId)
@@ -1033,24 +995,22 @@ TEST_P(UnnestTest, batchSize) {
       makeFlatVector<int64_t>(1'000 * 3, [](auto row) { return 1 + row % 3; }),
   });
 
-  auto task = AssertQueryBuilder(plan)
-                  .config(
-                      core::QueryConfig::kPreferredOutputBatchRows,
-                      std::to_string(batchSize_))
-                  .assertResults({expected});
-  auto stats = exec::toPlanStats(task->taskStats());
+  auto task =
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
+          .assertResults({expected});
+  const auto stats = exec::PlanNodeStats::extract(task->taskStats(), unnestId);
 
-  ASSERT_EQ(3'000, stats.at(unnestId).outputRows);
+  ASSERT_EQ(3'000, stats.outputRows);
   int32_t expectedNumVectors = 3'000 / batchSize_;
   if (3'000 % batchSize_ != 0) {
     expectedNumVectors++;
   }
-  ASSERT_EQ(expectedNumVectors, stats.at(unnestId).outputVectors);
+  ASSERT_EQ(expectedNumVectors, stats.outputVectors);
 }
 
 TEST_P(UnnestTest, barrier) {
   std::vector<RowVectorPtr> vectors;
-  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
   const int numSplits{5};
   const int numRowsPerSplit{1'00};
   for (int32_t i = 0; i < 5; ++i) {
@@ -1058,16 +1018,14 @@ TEST_P(UnnestTest, barrier) {
         makeFlatVector<int64_t>(numRowsPerSplit, [](auto row) { return row; }),
     });
     vectors.push_back(vector);
-    tempFiles.push_back(TempFilePath::create());
   }
-  writeToFiles(toFilePaths(tempFiles), vectors);
+  auto tempFiles = writeToFiles(vectors);
   createDuckDbTable(vectors);
 
   // Unnest 1K rows into 3K rows.
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId unnestPlanNodeId;
   const auto plan =
-      PlanBuilder(planNodeIdGenerator)
+      PlanBuilder()
           .startTableScan()
           .outputType(
               std::dynamic_pointer_cast<const RowType>(vectors[0]->type()))
@@ -1111,27 +1069,24 @@ TEST_P(UnnestTest, barrier) {
             .config(
                 SparkQueryConfig::qualify(SparkQueryConfig::kPartitionId), "0")
             .config(
-                core::QueryConfig::kMaxSplitPreloadPerDriver,
-                std::to_string(tempFiles.size()))
+                core::QueryConfig::kMaxSplitPreloadPerDriver, tempFiles.size())
             .splits(makeHiveConnectorSplits(tempFiles))
             .serialExecution(testData.serialExecution)
             .maxDrivers(testData.serialExecution ? 1 : 3)
             .barrierExecution(testData.barrierExecution)
             .config(
                 core::QueryConfig::kPreferredOutputBatchRows,
-                std::to_string(testData.numOutputRows))
+                testData.numOutputRows)
             .assertResults(expectedResult);
     const auto taskStats = task->taskStats();
     ASSERT_EQ(taskStats.numBarriers, testData.barrierExecution ? numSplits : 0);
     ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
-    ASSERT_EQ(
-        exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputRows,
-        numSplits * numRowsPerSplit * 3);
+    const auto unnestStats =
+        exec::PlanNodeStats::extract(taskStats, unnestPlanNodeId);
+    ASSERT_EQ(unnestStats.outputRows, numSplits * numRowsPerSplit * 3);
     // NOTE: unnest operator produce the same number of output batches no
     // matter it is under barrier execution mode or not.
-    ASSERT_EQ(
-        exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,
-        numExpectedOutputVectors);
+    ASSERT_EQ(unnestStats.outputVectors, numExpectedOutputVectors);
   }
 }
 
@@ -1148,9 +1103,8 @@ TEST_P(UnnestTest, spiltOutput) {
   createDuckDbTable(vectors);
 
   // Unnest 256 rows into 768 rows.
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId unnestPlanNodeId;
-  const auto plan = PlanBuilder(planNodeIdGenerator)
+  const auto plan = PlanBuilder()
                         .values(vectors)
                         .project({"sequence(1, 3) as s"})
                         .unnest({}, {"s"})
@@ -1178,17 +1132,16 @@ TEST_P(UnnestTest, spiltOutput) {
       {false, bits::divRoundUp(inputBatchSize * 3, GetParam()) * numBatches}};
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.toString());
-    auto task = AssertQueryBuilder(plan)
-                    .config(
-                        core::QueryConfig::kPreferredOutputBatchRows,
-                        std::to_string(GetParam()))
-                    .config(
-                        core::QueryConfig::kUnnestSplitOutput,
-                        testData.produceSingleOutput ? "false" : "true")
-                    .assertResults(expectedResult);
+    auto task =
+        AssertQueryBuilder(plan)
+            .config(core::QueryConfig::kPreferredOutputBatchRows, GetParam())
+            .config(
+                core::QueryConfig::kUnnestSplitOutput,
+                testData.produceSingleOutput ? "false" : "true")
+            .assertResults(expectedResult);
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
-        exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,
+        exec::PlanNodeStats::extract(taskStats, unnestPlanNodeId).outputVectors,
         testData.expectedNumOutputVectors);
   }
 }
@@ -1211,10 +1164,10 @@ TEST_P(UnnestTest, splitOutputNodeOverride) {
           [](auto row) { return 1 + row % 3; }),
   });
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
   // Create a plan with project node to generate the sequence.
-  auto projectPlan = PlanBuilder(planNodeIdGenerator)
+  auto projectPlan = builder.newPlan()
                          .values(vectors)
                          .project({"sequence(1, 3) as s"})
                          .planNode();
@@ -1255,33 +1208,38 @@ TEST_P(UnnestTest, splitOutputNodeOverride) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.toString());
 
-    core::PlanNodeId unnestPlanNodeId;
-    auto unnestNode = std::make_shared<core::UnnestNode>(
-        planNodeIdGenerator->next(),
-        std::vector<std::shared_ptr<const core::FieldAccessTypedExpr>>{},
-        unnestFields,
-        std::vector<std::optional<std::string>>{"s_e"},
-        std::nullopt,
-        std::nullopt,
-        testData.nodeSplitOutput,
-        projectPlan);
-    unnestPlanNodeId = unnestNode->id();
+    auto unnestNode =
+        builder.newPlan()
+            .addNode([&](const core::PlanNodeId& id,
+                         const core::PlanNodePtr& /*source*/) {
+              return std::make_shared<core::UnnestNode>(
+                  id,
+                  std::vector<
+                      std::shared_ptr<const core::FieldAccessTypedExpr>>{},
+                  unnestFields,
+                  std::vector<std::optional<std::string>>{"s_e"},
+                  std::nullopt,
+                  std::nullopt,
+                  testData.nodeSplitOutput,
+                  projectPlan);
+            })
+            .planNode();
+    const auto unnestPlanNodeId = unnestNode->id();
 
     const int expectedNumOutputVectors = testData.expectSplit
         ? bits::divRoundUp(inputBatchSize * 3, GetParam()) * numBatches
         : numBatches;
 
-    auto task = AssertQueryBuilder(unnestNode)
-                    .config(
-                        core::QueryConfig::kPreferredOutputBatchRows,
-                        std::to_string(GetParam()))
-                    .config(
-                        core::QueryConfig::kUnnestSplitOutput,
-                        testData.configSplitOutput ? "true" : "false")
-                    .assertResults(expectedResult);
+    auto task =
+        AssertQueryBuilder(unnestNode)
+            .config(core::QueryConfig::kPreferredOutputBatchRows, GetParam())
+            .config(
+                core::QueryConfig::kUnnestSplitOutput,
+                testData.configSplitOutput ? "true" : "false")
+            .assertResults(expectedResult);
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
-        exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,
+        exec::PlanNodeStats::extract(taskStats, unnestPlanNodeId).outputVectors,
         expectedNumOutputVectors);
   }
 }

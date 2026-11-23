@@ -18,7 +18,8 @@
 
 #include "velox/common/config/Config.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
-#include "velox/exec/tests/utils/PortUtil.h"
+#include "velox/connectors/hive/storage_adapters/test_common/ServerStartup.h"
+#include "velox/exec/tests/utils/Ports.h"
 
 #include "boost/process.hpp"
 
@@ -38,7 +39,8 @@ class SiloServer {
  public:
   SiloServer() : tempPath_(TempDirectoryPath::create()) {
     constexpr auto kHostAddressTemplate = "127.0.0.1:{}";
-    auto ports = facebook::velox::exec::test::getFreePorts(2);
+    auto ports = facebook::velox::exec::test::Ports::findFreePorts(2);
+    port_ = ports[0];
     connectionString_ = fmt::format(kHostAddressTemplate, ports[0]);
     consoleAddress_ = fmt::format(kHostAddressTemplate, ports[1]);
   }
@@ -77,6 +79,7 @@ class SiloServer {
 
  private:
   const std::shared_ptr<TempDirectoryPath> tempPath_;
+  uint16_t port_;
   std::string connectionString_;
   std::string consoleAddress_;
   const std::string accessKey_ = kSiloAccessKey;
@@ -112,6 +115,10 @@ void SiloServer::start() {
   } catch (const std::exception& e) {
     VELOX_FAIL("Failed to launch Silo server: {}", e.what());
   }
+  facebook::velox::test::ServerStartup::wait(
+      fmt::format("SiloServer on port {}", port_),
+      [this] { return facebook::velox::exec::test::Ports::isListening(port_); },
+      [this] { return serverProcess_->running(); });
 }
 
 void SiloServer::stop() {

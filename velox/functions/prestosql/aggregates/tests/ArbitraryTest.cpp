@@ -358,12 +358,7 @@ TEST_F(ArbitraryTest, timestamp) {
                   .singleAggregation({}, {"arbitrary(c1)"})
                   .planNode();
 
-  auto result = readSingleValue(plan);
-  ASSERT_TRUE(!result.isNull());
-  ASSERT_EQ(result.kind(), TypeKind::TIMESTAMP);
-
-  auto timestamp = result.value<Timestamp>();
-  ASSERT_EQ(timestamp, Timestamp(100, 1));
+  AssertQueryBuilder(plan).assertSingleResult(Timestamp(100, 1));
 
   AggregationTester(*this)
       .inputs(data)
@@ -399,12 +394,7 @@ TEST_F(ArbitraryTest, date) {
                   .singleAggregation({}, {"arbitrary(c1)"})
                   .planNode();
 
-  auto result = readSingleValue(plan);
-  ASSERT_TRUE(!result.isNull());
-  ASSERT_EQ(result.kind(), TypeKind::INTEGER);
-
-  auto date = result.value<int32_t>();
-  ASSERT_EQ(date, 125);
+  AssertQueryBuilder(plan).assertSingleResult(int32_t{125});
 
   AggregationTester(*this)
       .inputs(data)
@@ -441,8 +431,7 @@ TEST_F(ArbitraryTest, interval) {
                   .singleAggregation({}, {"arbitrary(c1)"})
                   .planNode();
 
-  auto interval = readSingleValue(plan);
-  ASSERT_EQ(interval.value<int64_t>(), 125);
+  AssertQueryBuilder(plan).assertSingleResult(int64_t{125});
 
   AggregationTester(*this)
       .inputs(data)
@@ -598,9 +587,9 @@ TEST_F(ArbitraryTest, spilling) {
   exec::TestScopedSpillInjection scopedSpillInjection(100);
   spillDirectory = TempDirectoryPath::create();
   builder.spillDirectory(spillDirectory->getPath())
-      .config(core::QueryConfig::kSpillEnabled, "true")
-      .config(core::QueryConfig::kAggregationSpillEnabled, "true")
-      .config(core::QueryConfig::kSpillNumPartitionBits, "0");
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(core::QueryConfig::kAggregationSpillEnabled, true)
+      .config(core::QueryConfig::kSpillNumPartitionBits, 0);
 
   auto result = builder.maxDrivers(2).copyResults(pool_.get());
   ::facebook::velox::test::assertEqualVectors(expected, result);

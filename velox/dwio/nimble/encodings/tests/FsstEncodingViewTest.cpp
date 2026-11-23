@@ -21,6 +21,7 @@
 #include <limits>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <random>
 #include <span>
 #include <string>
@@ -249,15 +250,21 @@ TEST_P(FsstEncodingViewTest, decodedChunksUseMemoryPool) {
     decodedBytes += value.size();
   }
 
-  // Only cached views allocate decoded chunks, so only they grow the pool on
-  // a read. Both settings must release everything they took from the pool.
-  std::string_view actual;
-  view->readAt(0, &actual);
-  EXPECT_EQ(actual, values[0]);
+  // A cached view decodes the whole chunk, and a view without caching keeps
+  // the strings that it decodes alone in blocks from the pool. Both settings
+  // must release everything they took from the pool.
+  std::vector<std::string_view> chunk(values.size());
+  view->read(0, static_cast<uint32_t>(values.size()), chunk.data());
+  for (uint32_t row = 0; row < values.size(); ++row) {
+    EXPECT_EQ(chunk[row], values[row]) << "row " << row;
+  }
   if (cacheEncodingView()) {
     EXPECT_GE(decodePool->usedBytes(), bytesBeforeDecode + decodedBytes);
+  } else {
+    EXPECT_GT(decodePool->usedBytes(), bytesBeforeDecode);
   }
   const auto bytesAfterDecode = decodePool->usedBytes();
+  std::string_view actual;
   view->readAt(1, &actual);
   EXPECT_EQ(actual, values[1]);
   if (cacheEncodingView()) {
@@ -265,6 +272,134 @@ TEST_P(FsstEncodingViewTest, decodedChunksUseMemoryPool) {
   }
   view.reset();
   EXPECT_EQ(decodePool->usedBytes(), bytesBeforeView);
+}
+
+TEST_P(FsstEncodingViewTest, sparseReadsDecodeOnlyTheirRows) {
+  std::vector<std::string> storage;
+  auto values = makeValues(storage, 4'096);
+  const auto encoded = encodeFsst(values);
+  velox::memory::MemoryManager manager;
+  const auto rootPool = manager.addRootPool();
+  const auto decodePool = rootPool->addLeafChild("fsst-sparse-reads");
+  const auto view = createEncodingView(
+      encoded, decodePool.get(), {.cacheEncodingView = cacheEncodingView()});
+  const auto bytesBeforeReads = decodePool->usedBytes();
+
+  // A take of a few rows of each chunk, through any read, decodes just those
+  // rows, so even a cached view allocates no decoded chunk from the pool.
+  size_t chunkBytes{0};
+  for (uint32_t row = 0; row < 1'024; ++row) {
+    chunkBytes += values[row].size();
+  }
+  std::string_view value;
+  view->readAt(5, &value);
+  EXPECT_EQ(value, values[5]);
+
+  const std::vector<uint32_t> indices{3'070, 1'030, 2'050, 1'030};
+  std::vector<std::string_view> indexed(indices.size());
+  view->readAt(indices, indexed.data());
+  for (size_t i = 0; i < indices.size(); ++i) {
+    EXPECT_EQ(indexed[i], values[indices[i]]) << "index " << indices[i];
+  }
+
+  constexpr uint32_t kRangeRows = 4;
+  std::vector<std::string_view> range(kRangeRows);
+  view->read(2'100, kRangeRows, range.data());
+  for (uint32_t i = 0; i < kRangeRows; ++i) {
+    EXPECT_EQ(range[i], values[2'100 + i]) << "row " << 2'100 + i;
+  }
+
+  const std::array<RowRange, 2> ranges{
+      RowRange{10, 13}, RowRange{4'000, 4'001}};
+  std::vector<std::string_view> selected(4);
+  EXPECT_EQ(view->read(ranges, [](uint32_t) {}, selected.data()), 4);
+  EXPECT_EQ(selected[0], values[10]);
+  EXPECT_EQ(selected[1], values[11]);
+  EXPECT_EQ(selected[2], values[12]);
+  EXPECT_EQ(selected[3], values[4'000]);
+
+  EXPECT_LT(decodePool->usedBytes() - bytesBeforeReads, chunkBytes);
+}
+
+TEST_P(FsstEncodingViewTest, rowReadsDecodeChunkOnceTheyAskForEnoughOfIt) {
+  std::vector<std::string> storage;
+  auto values = makeValues(storage, 1'024);
+  const auto encoded = encodeFsst(values);
+  velox::memory::MemoryManager manager;
+  const auto rootPool = manager.addRootPool();
+  const auto decodePool = rootPool->addLeafChild("fsst-row-reads");
+  const auto view = createEncodingView(
+      encoded, decodePool.get(), {.cacheEncodingView = cacheEncodingView()});
+  size_t decodedBytes{0};
+  for (const auto value : values) {
+    decodedBytes += value.size();
+  }
+
+  // Reads of one row at a time decode their rows alone, until they have asked
+  // for enough rows of the chunk for a cached view to decode the whole chunk,
+  // which allocates the decoded bytes of every row of the chunk in one read.
+  std::vector<std::string_view> rows(values.size());
+  std::optional<uint32_t> firstRowAfterChunkDecode;
+  for (uint32_t row = 0; row < values.size(); ++row) {
+    const auto bytesBeforeRead = decodePool->usedBytes();
+    view->readAt(row, &rows[row]);
+    if (!firstRowAfterChunkDecode.has_value() &&
+        decodePool->usedBytes() >= bytesBeforeRead + decodedBytes) {
+      firstRowAfterChunkDecode = row;
+    }
+  }
+  if (cacheEncodingView()) {
+    ASSERT_TRUE(firstRowAfterChunkDecode.has_value());
+    EXPECT_GT(*firstRowAfterChunkDecode, 0);
+    EXPECT_LT(*firstRowAfterChunkDecode, values.size() / 2);
+  } else {
+    EXPECT_FALSE(firstRowAfterChunkDecode.has_value());
+  }
+
+  // The strings of the rows read before the chunk was decoded stay valid.
+  for (uint32_t row = 0; row < values.size(); ++row) {
+    EXPECT_EQ(rows[row], values[row]) << "row " << row;
+  }
+}
+
+TEST_P(FsstEncodingViewTest, rangeReadDecidesOnceForAllItsRowsOfChunk) {
+  std::vector<std::string> storage;
+  auto values = makeValues(storage, 3'500);
+  const auto encoded = encodeFsst(values);
+  const auto view = createEncodingView(
+      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+
+  // Asks for a few rows of chunks 0 and 3, most rows of chunk 1, and every
+  // other row of chunk 2 in ranges of one row.
+  std::vector<RowRange> ranges{{5, 6}, {1'000, 2'000}};
+  for (uint32_t row = 2'048; row < 3'072; row += 2) {
+    ranges.emplace_back(row, row + 1);
+  }
+  ranges.emplace_back(3'100, 3'101);
+  ranges.emplace_back(3'400, 3'401);
+  std::vector<uint32_t> rows;
+  for (const auto& range : ranges) {
+    for (auto row = range.startRow; row < range.endRow; ++row) {
+      rows.push_back(row);
+    }
+  }
+  std::vector<std::string_view> output(rows.size());
+  EXPECT_EQ(view->read(ranges, [](uint32_t) {}, output.data()), rows.size());
+  for (size_t i = 0; i < rows.size(); ++i) {
+    EXPECT_EQ(output[i], values[rows[i]]) << "row " << rows[i];
+  }
+
+  // The read took each row from where later reads of the row take it: from
+  // the decoded chunk for chunks 1 and 2, of which it asked for enough rows,
+  // and from the string decoded for the row alone for chunks 0 and 3.
+  for (size_t i = 0; i < rows.size(); ++i) {
+    if (output[i].empty()) {
+      continue;
+    }
+    std::string_view again;
+    view->readAt(rows[i], &again);
+    EXPECT_EQ(again.data(), output[i].data()) << "row " << rows[i];
+  }
 }
 
 TEST_P(FsstEncodingViewTest, supportsConcurrentReadsAcrossChunks) {
@@ -290,19 +425,20 @@ TEST_P(FsstEncodingViewTest, returnedStringsStayValidAcrossReads) {
       encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
   std::string_view first;
   view->readAt(17, &first);
+
+  // A row read again returns the same bytes, so the view decoded it once.
+  std::string_view again;
+  view->readAt(17, &again);
+  EXPECT_EQ(first.data(), again.data());
   // Callers such as MainlyConstant fill one output from several reads of a
   // view, so a string must outlive the reads that follow it, including a read
-  // of its own row.
+  // of its own row and the decode of its chunk.
   for (uint32_t row = 0; row < values.size(); ++row) {
     std::string_view value;
     view->readAt(row, &value);
     EXPECT_EQ(value, values[row]);
   }
   EXPECT_EQ(first, values[17]);
-  // A row read again returns the same bytes, so the view decoded it once.
-  std::string_view again;
-  view->readAt(17, &again);
-  EXPECT_EQ(first.data(), again.data());
 }
 
 TEST_P(FsstEncodingViewTest, readsScatteredAndRepeatedIndices) {
@@ -317,6 +453,69 @@ TEST_P(FsstEncodingViewTest, readsScatteredAndRepeatedIndices) {
   for (size_t i = 0; i < indices.size(); ++i) {
     EXPECT_EQ(output[i], values[indices[i]]) << "index " << indices[i];
   }
+}
+
+TEST_P(FsstEncodingViewTest, readsLongStringsAlone) {
+  std::vector<std::string> storage;
+  auto values = makeValues(storage, 2'048);
+  // Each of these rows decodes to more bytes than all the short rows of the
+  // view together.
+  std::string longValue;
+  for (uint32_t i = 0; i < 100'000; ++i) {
+    longValue.push_back(static_cast<char>((i * 7) % 256));
+  }
+  for (const auto row : {7, 8, 1'500}) {
+    values[row] = longValue;
+  }
+  const auto encoded = encodeFsst(values);
+  const auto view = createEncodingView(
+      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+
+  // Asks for few enough rows of each chunk that a cached view decodes them
+  // alone too.
+  const std::vector<uint32_t> indices{6, 7, 8, 9, 1'499, 1'500, 1'501};
+  std::vector<std::string_view> output(indices.size());
+  view->readAt(indices, output.data());
+  std::string_view value;
+  view->readAt(2'000, &value);
+  EXPECT_EQ(value, values[2'000]);
+  for (size_t i = 0; i < indices.size(); ++i) {
+    EXPECT_EQ(output[i], values[indices[i]]) << "index " << indices[i];
+  }
+}
+
+TEST_P(FsstEncodingViewTest, readsStringsThatExpandBeyondTheChunkEstimate) {
+  // FSST encodes each run of eight repeated bytes as one code, so these
+  // strings decode to about eight times their compressed size, more than a
+  // cached view first allocates for a chunk.
+  std::vector<std::string> storage;
+  storage.reserve(2'048);
+  Vector<std::string_view> values{pool_.get()};
+  for (uint32_t row = 0; row < 2'048; ++row) {
+    storage.emplace_back(
+        std::string(256 + row % 64, 'a') + std::to_string(row % 10));
+    values.push_back(storage.back());
+  }
+  const auto encoded = encodeFsst(values);
+  const auto view = createEncodingView(
+      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+  std::vector<std::string_view> output(values.size());
+  view->read(0, view->rowCount(), output.data());
+  for (uint32_t row = 0; row < values.size(); ++row) {
+    EXPECT_EQ(output[row], values[row]) << "row " << row;
+  }
+}
+
+TEST_P(FsstEncodingViewTest, rejectsOutOfRangeIndices) {
+  std::vector<std::string> storage;
+  auto values = makeValues(storage, 256);
+  const auto encoded = encodeFsst(values);
+  const auto view = createEncodingView(
+      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+  const std::vector<uint32_t> indices{3, 256};
+  std::vector<std::string_view> output(indices.size());
+  NIMBLE_ASSERT_THROW(
+      view->readAt(indices, output.data()), "Read index out of range");
 }
 
 TEST_P(FsstEncodingViewTest, readsZeroTerminatedSymbolTable) {

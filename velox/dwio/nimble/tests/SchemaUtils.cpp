@@ -106,6 +106,21 @@ void compareSchema(
 
       break;
     }
+    case nimble::Kind::SlidingWindowArray: {
+      const auto& array = type->asSlidingWindowArray();
+      EXPECT_EQ(array.lengthsDescriptor().offset(), node.offset());
+      EXPECT_EQ(nimble::ScalarKind::UInt32, node.scalarKind());
+      EXPECT_EQ(0, node.childrenCount());
+
+      const auto& offsetNode = nodes[index++];
+      EXPECT_FALSE(offsetNode.name().has_value());
+      EXPECT_EQ(Kind::Scalar, offsetNode.kind());
+      EXPECT_EQ(ScalarKind::UInt32, offsetNode.scalarKind());
+      EXPECT_EQ(array.offsetsDescriptor().offset(), offsetNode.offset());
+
+      compareSchema(index, nodes, array.elements());
+      break;
+    }
     case nimble::Kind::Map: {
       auto& map = type->asMap();
       EXPECT_EQ(map.lengthsDescriptor().offset(), node.offset());
@@ -192,6 +207,14 @@ std::shared_ptr<nimble::ArrayWithOffsetsTypeBuilder> arrayWithOffsets(
   arrayWithOffsets->setChildren(std::move(elements));
 
   return arrayWithOffsets;
+}
+
+std::shared_ptr<nimble::SlidingWindowArrayTypeBuilder> slidingWindowArray(
+    nimble::SchemaBuilder& builder,
+    std::shared_ptr<nimble::TypeBuilder> elements) {
+  auto array = builder.createSlidingWindowArrayTypeBuilder();
+  array->setChildren(std::move(elements));
+  return array;
 }
 
 std::shared_ptr<nimble::MapTypeBuilder> map(

@@ -282,8 +282,7 @@ TEST_F(IndexLookupJoinReplayerTest, test) {
   std::shared_ptr<Task> task;
 
   // Create a file for the probe data
-  const auto sourceFilePath = TempFilePath::create();
-  writeToFile(sourceFilePath->getPath(), probeInput_);
+  const auto sourceFilePath = writeToFile(probeInput_);
 
   // Run the query with tracing enabled
   auto results =
@@ -364,8 +363,7 @@ TEST_F(IndexLookupJoinReplayerTest, testWithIndexSplits) {
   const auto traceRoot = fmt::format("{}/{}", testDir->getPath(), "traceRoot");
   std::shared_ptr<Task> task;
 
-  const auto sourceFilePath = TempFilePath::create();
-  writeToFile(sourceFilePath->getPath(), probeInput_);
+  const auto sourceFilePath = writeToFile(probeInput_);
 
   // Provide index splits to the original query.
   auto results =

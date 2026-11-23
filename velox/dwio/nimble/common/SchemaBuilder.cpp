@@ -16,6 +16,7 @@
 #include "velox/dwio/nimble/common/SchemaBuilder.h"
 
 #include <algorithm>
+#include <type_traits>
 
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/HybridFlatMap.h"
@@ -63,6 +64,10 @@ ArrayWithOffsetsTypeBuilder& TypeBuilder::asArrayWithOffsets() {
   return dynamic_cast<ArrayWithOffsetsTypeBuilder&>(*this);
 }
 
+SlidingWindowArrayTypeBuilder& TypeBuilder::asSlidingWindowArray() {
+  return dynamic_cast<SlidingWindowArrayTypeBuilder&>(*this);
+}
+
 const ScalarTypeBuilder& TypeBuilder::asScalar() const {
   return dynamic_cast<const ScalarTypeBuilder&>(*this);
 }
@@ -97,6 +102,10 @@ const HybridFlatMapTypeBuilder& TypeBuilder::asHybridFlatMap() const {
 
 const ArrayWithOffsetsTypeBuilder& TypeBuilder::asArrayWithOffsets() const {
   return dynamic_cast<const ArrayWithOffsetsTypeBuilder&>(*this);
+}
+
+const SlidingWindowArrayTypeBuilder& TypeBuilder::asSlidingWindowArray() const {
+  return dynamic_cast<const SlidingWindowArrayTypeBuilder&>(*this);
 }
 
 Kind TypeBuilder::kind() const {
@@ -207,6 +216,38 @@ void ArrayWithOffsetsTypeBuilder::setChildren(
     std::shared_ptr<TypeBuilder> elements) {
   NIMBLE_CHECK_NULL(
       elements_, "ArrayWithOffsetsTypeBuilder elements already initialized.");
+  schemaBuilder_.registerChild(elements);
+  elements_ = std::move(elements);
+}
+
+SlidingWindowArrayTypeBuilder::SlidingWindowArrayTypeBuilder(
+    SchemaBuilder& schemaBuilder)
+    : TypeBuilder(schemaBuilder, Kind::SlidingWindowArray),
+      offsetsDescriptor_{
+          schemaBuilder_.allocateStreamOffset(),
+          ScalarKind::UInt32},
+      lengthsDescriptor_{
+          schemaBuilder_.allocateStreamOffset(),
+          ScalarKind::UInt32} {}
+
+const StreamDescriptorBuilder&
+SlidingWindowArrayTypeBuilder::offsetsDescriptor() const {
+  return offsetsDescriptor_;
+}
+
+const StreamDescriptorBuilder&
+SlidingWindowArrayTypeBuilder::lengthsDescriptor() const {
+  return lengthsDescriptor_;
+}
+
+const TypeBuilder& SlidingWindowArrayTypeBuilder::elements() const {
+  return *elements_;
+}
+
+void SlidingWindowArrayTypeBuilder::setChildren(
+    std::shared_ptr<TypeBuilder> elements) {
+  NIMBLE_CHECK_NULL(
+      elements_, "SlidingWindowArrayTypeBuilder elements already initialized.");
   schemaBuilder_.registerChild(elements);
   elements_ = std::move(elements);
 }
@@ -362,11 +403,13 @@ HybridFlatMapTypeBuilder::HybridFlatMapTypeBuilder(
     SchemaBuilder& schemaBuilder,
     ScalarKind keyScalarKind,
     HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
-    bool requiresDefaultGroup)
+    bool requiresDefaultGroup,
+    std::optional<EncodingLayout> groupKeysLayout)
     : TypeBuilder{schemaBuilder, Kind::HybridFlatMap},
       keyScalarKind_{keyScalarKind},
       requiresDefaultGroup_{requiresDefaultGroup},
       defaultGroupKeyPresenceMode_{defaultGroupKeyPresenceMode},
+      groupKeysLayout_{std::move(groupKeysLayout)},
       nullsDescriptor_{
           schemaBuilder_.allocateStreamOffset(),
           ScalarKind::Bool} {}
@@ -394,17 +437,20 @@ bool HybridFlatMapTypeBuilder::useKeyPresentList(uint32_t groupId) const {
       defaultGroupKeyPresenceMode_, groupId);
 }
 
-HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::addGroup(
+const EncodingLayout* HybridFlatMapTypeBuilder::groupKeysLayout() const {
+  return groupKeysLayout_.has_value() ? &*groupKeysLayout_ : nullptr;
+}
+
+HybridFlatMapTypeBuilder::Group HybridFlatMapTypeBuilder::addGroup(
     uint32_t groupId,
-    std::vector<std::string> groupKeys,
+    const std::vector<std::string>& groupKeys,
     std::shared_ptr<TypeBuilder> valueType) {
-  NIMBLE_CHECK(
-      !boundMap_.has_value(),
-      "Hybrid FlatMap groups cannot mix bound and listed keys.");
   const auto isDefaultGroup = HybridFlatMap::isDefaultGroup(groupId);
-  NIMBLE_CHECK(
-      !isDefaultGroup || !defaultGroupIndex_.has_value(),
-      "Hybrid FlatMap has multiple Default groups.");
+  if (isDefaultGroup) {
+    NIMBLE_CHECK(
+        !defaultGroupIndex_.has_value(),
+        "Hybrid FlatMap has multiple Default groups.");
+  }
   NIMBLE_CHECK(
       std::none_of(
           groups_.begin(),
@@ -412,88 +458,13 @@ HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::addGroup(
           [&](const auto& group) { return group.groupId == groupId; }),
       "Duplicate Hybrid FlatMap group ID: {}.",
       groupId);
-  detail::checkHybridFlatMapGroupKeys(groupId, groupKeys);
   detail::checkHybridFlatMapDefaultKeys(
       defaultGroupKeyPresenceMode_, groupId, groupKeys);
-
-  // Inserting also rejects a key repeated within this group, which the sorted
-  // check above does not cover for Default keys in first-seen order.
-  for (const auto& key : groupKeys) {
-    const bool isNewKey = keys_.insert(key).second;
-    NIMBLE_CHECK(isNewKey, "Duplicate Hybrid FlatMap key: '{}'.", key);
-  }
-  return storeGroup(
-      groupId,
-      std::move(groupKeys),
-      /*boundGroupKeys=*/nullptr,
-      std::move(valueType));
-}
-
-HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::addGroup(
-    const HybridFlatMap& bound,
-    size_t groupIndex,
-    std::shared_ptr<TypeBuilder> valueType) {
-  if (!boundMap_.has_value()) {
-    NIMBLE_CHECK(
-        groups_.empty(),
-        "Hybrid FlatMap groups cannot mix bound and listed keys.");
-    NIMBLE_CHECK_EQ(
-        defaultGroupKeyPresenceMode_,
-        HybridFlatMap::KeyPresenceMode::kKeyList,
-        "Bound Hybrid FlatMap groups must have a Default group that lists its "
-        "keys.");
-    NIMBLE_CHECK(
-        bound.keyKind().has_value(),
-        "Hybrid FlatMap groups must come from a bound HybridFlatMap.");
-    NIMBLE_CHECK_EQ(
-        *bound.keyKind(),
-        keyScalarKind_,
-        "Bound Hybrid FlatMap is for keys of another type.");
-    NIMBLE_CHECK_EQ(
-        bound.defaultGroupKeyPresenceMode(),
-        defaultGroupKeyPresenceMode_,
-        "Bound Hybrid FlatMap has another Default key presence mode.");
-    boundMap_.emplace(bound);
-  }
-
-  // Copies of a HybridFlatMap with a group lookup share its groups, so the
-  // groups of the same bound HybridFlatMap have one address.
-  NIMBLE_CHECK(
-      &boundMap_->groups() == &bound.groups(),
-      "Hybrid FlatMap groups must all come from one bound HybridFlatMap, "
-      "which has a group lookup.");
-  NIMBLE_CHECK_EQ(
-      groupIndex,
-      groups_.size(),
-      "Hybrid FlatMap bound groups must be added in order.");
-  const auto& boundGroups = boundMap_->groups();
-  NIMBLE_CHECK_LT(
-      groupIndex,
-      boundGroups.size(),
-      "Hybrid FlatMap bound group index is out of range.");
-  const auto& group = boundGroups[groupIndex];
-
-  // A bound HybridFlatMap holds checked, sorted keys in each explicit group
-  // and ends with its only Default group, which has no keys.
-  return storeGroup(
-      group.groupId,
-      /*groupKeys=*/{},
-      HybridFlatMap::isDefaultGroup(group.groupId) ? nullptr : &group.groupKeys,
-      std::move(valueType));
-}
-
-HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::storeGroup(
-    uint32_t groupId,
-    std::vector<std::string> groupKeys,
-    const std::vector<std::string>* boundGroupKeys,
-    std::shared_ptr<TypeBuilder> valueType) {
-  const auto isDefaultGroup = HybridFlatMap::isDefaultGroup(groupId);
   schemaBuilder_.registerChild(valueType);
-  auto& group = groups_.emplace_back(
+  groups_.push_back(
       StoredGroup{
           .groupId = groupId,
-          .groupKeys = std::move(groupKeys),
-          .boundGroupKeys = boundGroupKeys,
+          .groupKeys = groupKeys,
           .keyPresenceDescriptor = std::make_unique<StreamDescriptorBuilder>(
               schemaBuilder_.allocateStreamOffset(),
               useKeyPresentList(groupId) ? keyScalarKind_ : ScalarKind::Bool),
@@ -504,27 +475,17 @@ HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::storeGroup(
   if (isDefaultGroup) {
     defaultGroupIndex_ = groups_.size() - 1;
   }
-  NIMBLE_CHECK_NOT_NULL(
-      group.keyPresenceDescriptor,
-      "Hybrid FlatMap key-presence descriptor is not initialized.");
-  return {
-      .keyPresenceDescriptor = *group.keyPresenceDescriptor,
-      .inMapDescriptor = *group.inMapDescriptor,
-  };
+  return groupAt(groups_.size() - 1);
 }
 
-void HybridFlatMapTypeBuilder::appendDefaultGroupKey(std::string key) {
-  NIMBLE_CHECK(
-      defaultGroupIndex_.has_value(),
-      "Hybrid FlatMap Default group is not initialized.");
-  NIMBLE_CHECK_EQ(
-      defaultGroupKeyPresenceMode_,
-      HybridFlatMap::KeyPresenceMode::kBitmap,
-      "Hybrid FlatMap Default keys are listed per batch, not in the schema.");
-  NIMBLE_CHECK(!key.empty(), "Hybrid FlatMap key cannot be empty.");
-  const bool isNewKey = keys_.insert(key).second;
-  NIMBLE_CHECK(isNewKey, "Duplicate Hybrid FlatMap key: '{}'.", key);
-  groups_[*defaultGroupIndex_].groupKeys.push_back(std::move(key));
+HybridFlatMapTypeBuilder::Group HybridFlatMapTypeBuilder::addGroup(
+    uint32_t groupId,
+    const std::vector<std::string>& groupKeys,
+    std::string_view encodedKeys,
+    std::shared_ptr<TypeBuilder> valueType) {
+  addGroup(groupId, groupKeys, std::move(valueType));
+  groups_.back().encodedKeys = encodedKeys;
+  return groupAt(groups_.size() - 1);
 }
 
 size_t HybridFlatMapTypeBuilder::groupCount() const {
@@ -538,16 +499,17 @@ HybridFlatMapTypeBuilder::Group HybridFlatMapTypeBuilder::groupAt(
   NIMBLE_CHECK_NOT_NULL(
       group.keyPresenceDescriptor,
       "Hybrid FlatMap key-presence descriptor is not initialized.");
-  const auto& groupKeys =
-      group.boundGroupKeys != nullptr ? *group.boundGroupKeys : group.groupKeys;
   return {
       .groupId = group.groupId,
-      .groupKeys = groupKeys,
+      .groupKeys = group.groupKeys,
       .keyPresenceDescriptor = *group.keyPresenceDescriptor,
       .inMapDescriptor = *group.inMapDescriptor,
       .valueType = *group.valueType,
+      .encodedKeys = group.encodedKeys,
   };
 }
+
+SchemaBuilder::SchemaBuilder(velox::memory::MemoryPool* pool) : pool_{pool} {}
 
 std::shared_ptr<ScalarTypeBuilder> SchemaBuilder::createScalarTypeBuilder(
     ScalarKind scalarKind) {
@@ -597,6 +559,21 @@ SchemaBuilder::createArrayWithOffsetsTypeBuilder() {
   struct MakeSharedEnabler : public ArrayWithOffsetsTypeBuilder {
     explicit MakeSharedEnabler(SchemaBuilder& schemaBuilder)
         : ArrayWithOffsetsTypeBuilder{schemaBuilder} {}
+  };
+
+  auto type = std::make_shared<MakeSharedEnabler>(*this);
+
+  // This new type builder is not attached to a parent, therefore it is a new
+  // tree "root" (as of now), so we add it to the roots list.
+  roots_.insert(type);
+  return type;
+}
+
+std::shared_ptr<SlidingWindowArrayTypeBuilder>
+SchemaBuilder::createSlidingWindowArrayTypeBuilder() {
+  struct MakeSharedEnabler : public SlidingWindowArrayTypeBuilder {
+    explicit MakeSharedEnabler(SchemaBuilder& schemaBuilder)
+        : SlidingWindowArrayTypeBuilder{schemaBuilder} {}
   };
 
   auto type = std::make_shared<MakeSharedEnabler>(*this);
@@ -666,7 +643,8 @@ std::shared_ptr<HybridFlatMapTypeBuilder>
 SchemaBuilder::createHybridFlatMapTypeBuilder(
     ScalarKind keyScalarKind,
     HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
-    bool projection) {
+    bool projection,
+    std::optional<EncodingLayout> groupKeysLayout) {
   NIMBLE_USER_CHECK(
       HybridFlatMap::supportedKeyKind(keyScalarKind),
       "Hybrid FlatMap key kind is unsupported: {}.",
@@ -676,15 +654,21 @@ SchemaBuilder::createHybridFlatMapTypeBuilder(
         SchemaBuilder& schemaBuilder,
         ScalarKind keyScalarKind,
         HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
-        bool projection)
+        bool projection,
+        std::optional<EncodingLayout> groupKeysLayout)
         : HybridFlatMapTypeBuilder(
               schemaBuilder,
               keyScalarKind,
               defaultGroupKeyPresenceMode,
-              /*requiresDefaultGroup=*/!projection) {}
+              /*requiresDefaultGroup=*/!projection,
+              std::move(groupKeysLayout)) {}
   };
   auto type = std::make_shared<MakeSharedEnabler>(
-      *this, keyScalarKind, defaultGroupKeyPresenceMode, projection);
+      *this,
+      keyScalarKind,
+      defaultGroupKeyPresenceMode,
+      projection,
+      std::move(groupKeysLayout));
   roots_.insert(type);
   return type;
 }
@@ -723,6 +707,22 @@ std::optional<offset_size> SchemaBuilder::sharedDictionaryStreamOffset(
     return std::nullopt;
   }
   return iterator->second;
+}
+
+std::vector<offset_size> SchemaBuilder::createStripeIndexStreams(
+    uint32_t count) {
+  NIMBLE_CHECK_GT(count, 0);
+  NIMBLE_CHECK_EQ(
+      currentOffset_,
+      0,
+      "The stripe index streams must be the first streams allocated.");
+  std::vector<offset_size> streamIds;
+  streamIds.reserve(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    streamIds.emplace_back(allocateStreamOffset());
+  }
+  stripeIndexStreamCount_ = count;
+  return streamIds;
 }
 
 const std::shared_ptr<const TypeBuilder>& SchemaBuilder::root() const {
@@ -779,23 +779,100 @@ void validateForSerialization(const HybridFlatMapTypeBuilder& hybridMap) {
   // reference and the comparison starts at 1.
   const auto& expectedValueType = hybridMap.groupAt(0).valueType;
   for (size_t i = 1; i < hybridMap.groupCount(); ++i) {
-    const auto& valueType = hybridMap.groupAt(i).valueType;
-    const bool hasSameLogicalType =
-        detail::sameLogicalType(expectedValueType, valueType);
+    const bool hasSameLogicalType = detail::sameLogicalType(
+        expectedValueType, hybridMap.groupAt(i).valueType);
     NIMBLE_CHECK(
         hasSameLogicalType,
         "Hybrid FlatMap groups must have the same logical value type.");
   }
+
+  // The owner of the Default keys can append to them after addGroup() checked
+  // them, so a Default group that lists its keys per batch is checked again.
+  for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+    const auto& group = hybridMap.groupAt(i);
+    detail::checkHybridFlatMapDefaultKeys(
+        hybridMap.defaultGroupKeyPresenceMode(),
+        group.groupId,
+        group.groupKeys);
+  }
 }
 
-// A reader-side type validates its groups in HybridFlatMapType's constructor.
+// A reader-side type validates its groups when its HybridFlatMap is built.
 void validateForSerialization(const HybridFlatMapType&) {}
 
+// Returns the HybridFlatMap attribute of a type builder: copies of the IDs and
+// of the keys it views, which a bitmap Default's owner appends to between
+// calls, with the keys encoded in the builder's layout, when it names one,
+// allocating from `pool`.
+std::string serializeHybridFlatMap(
+    const HybridFlatMapTypeBuilder& hybridMap,
+    velox::memory::MemoryPool* pool) {
+  std::vector<HybridFlatMap::Group> groups;
+  groups.reserve(hybridMap.groupCount());
+  for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+    const auto group = hybridMap.groupAt(i);
+    groups.push_back(
+        HybridFlatMap::Group{
+            .groupId = group.groupId,
+            .groupKeys = group.groupKeys,
+            .encodedKeys = std::string(group.encodedKeys),
+        });
+  }
+  return HybridFlatMap::serialize(
+      hybridMap.keyScalarKind(),
+      groups,
+      hybridMap.defaultGroupKeyPresenceMode(),
+      hybridMap.groupKeysLayout(),
+      pool);
+}
+
+// Returns the HybridFlatMap attribute of a reader-side type: the groups its
+// HybridFlatMap holds, which copy the streams their keys were recorded in.
+std::string serializeHybridFlatMap(
+    const HybridFlatMapType& hybridMap,
+    velox::memory::MemoryPool* pool) {
+  return HybridFlatMap::serialize(
+      hybridMap.keyScalarKind(),
+      hybridMap.hybridFlatMap().groups(),
+      hybridMap.defaultGroupKeyPresenceMode(),
+      /*groupKeysLayout=*/nullptr,
+      pool);
+}
+
+// Stores `serialized` groups as the reserved Hybrid FlatMap attribute among
+// `attributes`, the attributes of a schema node: appends it when absent, or
+// replaces its stale value in place.
+void setHybridFlatMapAttribute(
+    std::vector<std::pair<std::string, std::string>>& attributes,
+    std::string serialized) {
+  const auto isHybridFlatMapAttribute = [](const auto& attribute) {
+    return attribute.first == HybridFlatMapType::kAttributeName;
+  };
+  const auto existing = std::find_if(
+      attributes.begin(), attributes.end(), isHybridFlatMapAttribute);
+  if (existing == attributes.end()) {
+    attributes.emplace_back(
+        HybridFlatMapType::kAttributeName, std::move(serialized));
+  } else {
+    existing->second = std::move(serialized);
+  }
+
+  NIMBLE_CHECK_EQ(
+      std::count_if(
+          attributes.begin(), attributes.end(), isHybridFlatMapAttribute),
+      1,
+      "Hybrid FlatMap metadata attribute must be unique.");
+}
+
+// Appends the nodes of `type` and its descendants, the first named `name`.
+// Hybrid FlatMap type builders that name a group keys layout encode their
+// keys, allocating from `pool`.
 template <typename TypeLike>
 void addSchemaNode(
     std::vector<SchemaNode>& nodes,
     const TypeLike& type,
-    std::optional<std::string> name = std::nullopt) {
+    std::optional<std::string> name,
+    velox::memory::MemoryPool* pool) {
   // Attributes are owned by the logical type and are emitted onto the first
   // (primary) SchemaNode for that type. Synthetic child stream
   // descriptor nodes (e.g. nanos for TimestampMicroNano, offsets for
@@ -839,7 +916,8 @@ void addSchemaNode(
           std::move(name),
           /*childrenCount*/ 0,
           type.attributes());
-      addSchemaNode(nodes, schemaChild(array.elements()));
+      addSchemaNode(
+          nodes, schemaChild(array.elements()), /*name=*/std::nullopt, pool);
       break;
     }
     case Kind::ArrayWithOffsets: {
@@ -856,7 +934,26 @@ void addSchemaNode(
           array.offsetsDescriptor().offset(),
           ScalarKind::UInt32,
           std::nullopt);
-      addSchemaNode(nodes, schemaChild(array.elements()));
+      addSchemaNode(
+          nodes, schemaChild(array.elements()), /*name=*/std::nullopt, pool);
+      break;
+    }
+    case Kind::SlidingWindowArray: {
+      const auto& array = type.asSlidingWindowArray();
+      nodes.emplace_back(
+          type.kind(),
+          array.lengthsDescriptor().offset(),
+          ScalarKind::UInt32,
+          std::move(name),
+          /*childrenCount*/ 0,
+          type.attributes());
+      nodes.emplace_back(
+          Kind::Scalar,
+          array.offsetsDescriptor().offset(),
+          ScalarKind::UInt32,
+          std::nullopt);
+      addSchemaNode(
+          nodes, schemaChild(array.elements()), /*name=*/std::nullopt, pool);
       break;
     }
     case Kind::Row: {
@@ -869,7 +966,7 @@ void addSchemaNode(
           row.childrenCount(),
           type.attributes());
       for (size_t i = 0; i < row.childrenCount(); ++i) {
-        addSchemaNode(nodes, schemaChild(row.childAt(i)), row.nameAt(i));
+        addSchemaNode(nodes, schemaChild(row.childAt(i)), row.nameAt(i), pool);
       }
       break;
     }
@@ -882,8 +979,10 @@ void addSchemaNode(
           std::move(name),
           /*childrenCount*/ 0,
           type.attributes());
-      addSchemaNode(nodes, schemaChild(map.keys()));
-      addSchemaNode(nodes, schemaChild(map.values()));
+      addSchemaNode(
+          nodes, schemaChild(map.keys()), /*name=*/std::nullopt, pool);
+      addSchemaNode(
+          nodes, schemaChild(map.values()), /*name=*/std::nullopt, pool);
       break;
     }
     case Kind::SlidingWindowMap: {
@@ -900,8 +999,10 @@ void addSchemaNode(
           map.lengthsDescriptor().offset(),
           ScalarKind::UInt32,
           std::nullopt);
-      addSchemaNode(nodes, schemaChild(map.keys()));
-      addSchemaNode(nodes, schemaChild(map.values()));
+      addSchemaNode(
+          nodes, schemaChild(map.keys()), /*name=*/std::nullopt, pool);
+      addSchemaNode(
+          nodes, schemaChild(map.values()), /*name=*/std::nullopt, pool);
       break;
     }
     case Kind::FlatMap: {
@@ -925,7 +1026,8 @@ void addSchemaNode(
             map.inMapDescriptorAt(i).offset(),
             ScalarKind::Bool,
             map.nameAt(i));
-        addSchemaNode(nodes, schemaChild(map.childAt(i)));
+        addSchemaNode(
+            nodes, schemaChild(map.childAt(i)), /*name=*/std::nullopt, pool);
       }
 
       break;
@@ -933,20 +1035,9 @@ void addSchemaNode(
     case Kind::HybridFlatMap: {
       const auto& hybridMap = type.asHybridFlatMap();
       validateForSerialization(hybridMap);
-      std::vector<HybridFlatMap::Group> groups;
-      groups.reserve(hybridMap.groupCount());
-      for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
-        const auto& group = hybridMap.groupAt(i);
-        groups.push_back(
-            HybridFlatMap::Group{
-                .groupId = group.groupId,
-                .groupKeys = group.groupKeys,
-            });
-      }
       auto attributes = type.attributes();
-      HybridFlatMap::fromSchema(
-          std::move(groups), hybridMap.defaultGroupKeyPresenceMode())
-          .setAttribute(attributes);
+      setHybridFlatMapAttribute(
+          attributes, serializeHybridFlatMap(hybridMap, pool));
       nodes.emplace_back(
           type.kind(),
           hybridMap.nullsDescriptor().offset(),
@@ -966,7 +1057,8 @@ void addSchemaNode(
             group.inMapDescriptor.offset(),
             group.inMapDescriptor.scalarKind(),
             std::nullopt);
-        addSchemaNode(nodes, schemaChild(group.valueType));
+        addSchemaNode(
+            nodes, schemaChild(group.valueType), /*name=*/std::nullopt, pool);
       }
       break;
     }
@@ -982,13 +1074,15 @@ std::vector<SchemaNode> SchemaBuilder::schemaNodes() const {
   auto& root = this->root();
   std::vector<SchemaNode> nodes;
   nodes.reserve(currentOffset_);
-  addSchemaNode(nodes, *root);
+  addSchemaNode(nodes, *root, /*name=*/std::nullopt, pool_);
   return nodes;
 }
 
-std::vector<SchemaNode> schemaNodes(const Type& type) {
+std::vector<SchemaNode> schemaNodes(
+    const Type& type,
+    velox::memory::MemoryPool* pool) {
   std::vector<SchemaNode> nodes;
-  addSchemaNode(nodes, type);
+  addSchemaNode(nodes, type, /*name=*/std::nullopt, pool);
   return nodes;
 }
 
@@ -1079,6 +1173,15 @@ void printType(
       const auto& array = builder.asArrayWithOffsets();
       out << "[" << array.offsetsDescriptor().offset() << ","
           << array.lengthsDescriptor().offset() << "]OFFSETARRAY\n";
+      printType(out, array.elements(), indentation + 2, "elements");
+      out << "\n";
+      break;
+    }
+    case Kind::SlidingWindowArray: {
+      const auto& array = builder.asSlidingWindowArray();
+      out << "[o:" << array.offsetsDescriptor().offset()
+          << ",l:" << array.lengthsDescriptor().offset()
+          << "]SLIDINGWINDOWARRAY\n";
       printType(out, array.elements(), indentation + 2, "elements");
       out << "\n";
       break;

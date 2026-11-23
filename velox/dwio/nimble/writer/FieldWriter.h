@@ -199,7 +199,9 @@ class FieldWriterContext {
     flatMapNodes_.reserve(size);
   }
 
-  /// Registers the logical grouping for a Hybrid FlatMap node.
+  /// Registers the logical grouping for a Hybrid FlatMap node. The node's
+  /// schema views the Default keys its field writer records, so read
+  /// schemaBuilder() only while that writer lives.
   void addHybridFlatMapNode(uint32_t nodeId, const HybridFlatMap& hybridMap) {
     NIMBLE_CHECK(
         !hasFlatMapNodeId(nodeId),
@@ -210,10 +212,24 @@ class FieldWriterContext {
         uniqueNode, "Hybrid FlatMap grouping already set for node {}", nodeId);
   }
 
-  /// Returns the logical grouping registered for a Hybrid FlatMap node.
-  HybridFlatMap* hybridFlatMapNode(uint32_t nodeId) {
+  /// Returns the HybridFlatMap registered for a Hybrid FlatMap node: the
+  /// writer configuration, whose Default group holds no keys. With a bitmap,
+  /// the node's field writer records the Default keys, which its schema views.
+  const HybridFlatMap* hybridFlatMapNode(uint32_t nodeId) const {
     auto it = hybridFlatMaps_.find(nodeId);
     return it == hybridFlatMaps_.end() ? nullptr : &it->second;
+  }
+
+  /// Sets the encoding of the keys that the schema of every Hybrid FlatMap
+  /// node records (SerializerOptions::hybridFlatMapGroupKeysLayout), before
+  /// the nodes' field writers are created.
+  void setHybridFlatMapGroupKeysLayout(EncodingLayout layout) {
+    hybridFlatMapGroupKeysLayout_.emplace(std::move(layout));
+  }
+
+  /// Returns the layout setHybridFlatMapGroupKeysLayout() set, if any.
+  const std::optional<EncodingLayout>& hybridFlatMapGroupKeysLayout() const {
+    return hybridFlatMapGroupKeysLayout_;
   }
 
   inline void reserveHybridFlatMapNodes(size_t size) {
@@ -263,6 +279,19 @@ class FieldWriterContext {
   inline void clearAndReserveDeduplicatedMapNodeIds(size_t size) {
     deduplicatedMapNodeIds_.clear();
     deduplicatedMapNodeIds_.reserve(size);
+  }
+
+  inline folly::F14FastSet<uint32_t>& slidingWindowArrayNodeIds() {
+    return slidingWindowArrayNodeIds_;
+  }
+
+  inline bool hasSlidingWindowArrayNodeId(uint32_t nodeId) const {
+    return slidingWindowArrayNodeIds_.contains(nodeId);
+  }
+
+  inline void clearAndReserveSlidingWindowArrayNodeIds(size_t size) {
+    slidingWindowArrayNodeIds_.clear();
+    slidingWindowArrayNodeIds_.reserve(size);
   }
 
   inline bool ignoreTopLevelNulls() const {
@@ -497,12 +526,21 @@ class FieldWriterContext {
  protected:
   MemoryPoolHolder bufferMemoryPool_;
   std::mutex flatMapSchemaMutex_;
-  SchemaBuilder schemaBuilder_;
+  // Declared before schemaBuilder_ so it is destroyed after it: the schema's
+  // Hybrid FlatMap type builders view grouped keys in these HybridFlatMaps'
+  // shared groups. They view each Default group's keys in its field writer,
+  // whichever mode records them.
+  folly::F14FastMap<uint32_t, HybridFlatMap> hybridFlatMaps_;
+  // See hybridFlatMapGroupKeysLayout().
+  std::optional<EncodingLayout> hybridFlatMapGroupKeysLayout_;
+  // Encodes Hybrid FlatMap group keys from the buffer pool, which is
+  // initialized first.
+  SchemaBuilder schemaBuilder_{bufferMemoryPool_.get()};
 
   folly::F14FastMap<uint32_t, std::set<std::string>> flatMapNodes_;
-  folly::F14FastMap<uint32_t, HybridFlatMap> hybridFlatMaps_;
   folly::F14FastSet<uint32_t> dictionaryArrayNodeIds_;
   folly::F14FastSet<uint32_t> deduplicatedMapNodeIds_;
+  folly::F14FastSet<uint32_t> slidingWindowArrayNodeIds_;
   bool ignoreTopLevelNulls_{false};
   bool disableSharedStringBuffers_{false};
   uint32_t maxFlatMapKeys_{kDefaultMaxFlatMapKeys};

@@ -466,6 +466,11 @@ void updateGlobalSpillWriteStats(
   stats.spillWriteTimeNanos.fetch_add(writeTimeNs, std::memory_order_relaxed);
 }
 
+void updateGlobalSpillFileCloseTime(uint64_t timeNs) {
+  localSpillStats().spillWriteTimeNanos.fetch_add(
+      timeNs, std::memory_order_relaxed);
+}
+
 void updateGlobalSpillReadStats(
     uint64_t spillReads,
     uint64_t spillReadBytes,

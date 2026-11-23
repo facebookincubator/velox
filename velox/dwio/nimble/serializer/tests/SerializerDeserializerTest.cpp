@@ -33,6 +33,7 @@
 #include "velox/dwio/nimble/common/SchemaSerialization.h"
 #include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/serializer/Deserializer.h"
 #include "velox/dwio/nimble/serializer/Projector.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
@@ -50,6 +51,7 @@
 #include "velox/vector/SelectivityVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace facebook;
 using namespace facebook::nimble;
@@ -60,9 +62,14 @@ using facebook::nimble::test::makeTestTabletOptions;
 // exercise the compressionOptions path in ReplayedEncodingSelectionPolicy.
 struct TestParams {
   SerializationVersion version{SerializationVersion::kSerialization};
-  // Compression options used with encodingLayoutTree.
-  // nullopt (default) means no compression.
+  // Compression options used with encodingLayoutTree, and by kBlob
+  // for each stream in writeAndVerify().
+  // nullopt (default) disables per-stream compression.
   std::optional<CompressionOptions> compressionOptions{};
+  // Codec for the whole kBlob body in writeAndVerify(). Other
+  // versions ignore it.
+  CompressionOptions blobCompressionOptions{
+      .compressionType = CompressionType::Lz4};
   // Encoding type for stream sizes in compact trailer.
   EncodingType streamSizesEncodingType{EncodingType::Trivial};
   // Max cached buffers per per-stream BufferPool. 0 disables pooling.
@@ -91,6 +98,10 @@ class SerializationTest : public ::testing::TestWithParam<TestParams> {
 
   const std::optional<CompressionOptions>& compressionOptions() const {
     return GetParam().compressionOptions;
+  }
+
+  const CompressionOptions& blobCompressionOptions() const {
+    return GetParam().blobCompressionOptions;
   }
 
   size_t bufferPoolCapacity() const {
@@ -293,6 +304,8 @@ class SerializationTest : public ::testing::TestWithParam<TestParams> {
     SerializerOptions options{
         .version = version(),
         .flatMapColumns = flatMapColumns,
+        .compressionOptions = compressionOptions(),
+        .blobCompressionOptions = blobCompressionOptions(),
         .streamIndicesEncodingType = streamSizesEncodingType(),
         .streamSizesEncodingType = streamSizesEncodingType(),
     };
@@ -346,6 +359,9 @@ class SerializationTest : public ::testing::TestWithParam<TestParams> {
     }
   }
 };
+
+// Runs a test once per Serializer writer version.
+class SerializationVersionTest : public SerializationTest {};
 
 TEST_P(SerializationTest, fuzzSimple) {
   auto type = velox::ROW({
@@ -955,6 +971,13 @@ void collectStreamOffsets(
       collectStreamOffsets(*arr.elements(), offsets);
       break;
     }
+    case nimble::Kind::SlidingWindowArray: {
+      const auto& arr = type.asSlidingWindowArray();
+      offsets.insert(arr.offsetsDescriptor().offset());
+      offsets.insert(arr.lengthsDescriptor().offset());
+      collectStreamOffsets(*arr.elements(), offsets);
+      break;
+    }
     case nimble::Kind::Map: {
       const auto& map = type.asMap();
       offsets.insert(map.lengthsDescriptor().offset());
@@ -1010,6 +1033,10 @@ std::string formatName(const ::testing::TestParamInfo<TestParams>& info) {
       break;
     case SerializationVersion::kLegacySerialization:
       name = "LegacySerializationFormat";
+      break;
+    case SerializationVersion::kBlob:
+      name = "BlobFormat_" +
+          toString(info.param.blobCompressionOptions.compressionType) + "Blob";
       break;
   }
   // Add compression suffix for encoding modes.
@@ -1477,8 +1504,8 @@ HybridFlatMapGroupingCase makeHybridFlatMapGrouping(
 }
 
 // Checks that the written schema's groups match the grouping: group IDs in
-// order, configured keys sorted as strings and Default keys in first-seen
-// order.
+// order, explicit groups' keys sorted (by value for integer keys) and Default
+// keys in first-seen order.
 void verifyHybridFlatMapGroups(
     const HybridFlatMapType& actual,
     const HybridFlatMapGroupingCase& expected) {
@@ -1489,8 +1516,17 @@ void verifyHybridFlatMapGroups(
     if (HybridFlatMap::isDefaultGroup(expectedGroup.groupId)) {
       expectedKeys = expected.expectedDefaultKeys;
     } else {
-      // Configured keys are stored sorted as strings, so "10" precedes "9".
-      std::sort(expectedKeys.begin(), expectedKeys.end());
+      // Explicit groups store their keys as a writer configuration sorts
+      // them: integer keys by value, so "9" precedes "10".
+      expectedKeys =
+          HybridFlatMap{
+              actual.keyScalarKind(),
+              {{.groupId = expectedGroup.groupId,
+                .groupKeys = std::move(expectedKeys)},
+               {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}}},
+              HybridFlatMap::KeyPresenceMode::kBitmap}
+              .groups()[0]
+              .groupKeys;
     }
     EXPECT_EQ(actual.groupAt(i).groupId, expectedGroup.groupId);
     EXPECT_EQ(actual.groupAt(i).groupKeys, expectedKeys);
@@ -1708,7 +1744,9 @@ TEST_P(SerializationTest, hybridFlatMapEncodingFuzz) {
             column,
             HybridFlatMap{
                 keyKindOf(*mapColumn->type()->asMap().keyType()),
-                grouping.groups});
+                grouping.groups,
+                HybridFlatMap::KeyPresenceMode::kBitmap,
+            });
         groupings.emplace(column, std::move(grouping));
       }
 
@@ -1716,8 +1754,8 @@ TEST_P(SerializationTest, hybridFlatMapEncodingFuzz) {
       Serializer serializer{options, testCase.type, pool_.get()};
       const std::string serialized{
           serializer.serialize(input, OrderedRanges::of(0, input->size()))};
-      const auto schema =
-          SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+      const auto schema = SchemaReader::getSchema(
+          serializer.schemaBuilder().schemaNodes(), pool_.get());
       for (const auto& [column, grouping] : groupings) {
         SCOPED_TRACE(column);
         verifyHybridFlatMapGroups(
@@ -1789,9 +1827,10 @@ TEST_P(SerializationTest, hybridFlatMapEncodingFuzz) {
       groups.push_back(
           {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}});
       HybridFlatMap grouping{
-          keyKindOf(*mapColumn->type()->asMap().keyType()), std::move(groups)};
-      grouping.setDefaultGroupKeyPresenceMode(
-          HybridFlatMap::KeyPresenceMode::kKeyList);
+          keyKindOf(*mapColumn->type()->asMap().keyType()),
+          std::move(groups),
+          HybridFlatMap::KeyPresenceMode::kKeyList,
+      };
       keyListColumns.emplace(column, std::move(grouping));
 
       std::set<std::string> keys;
@@ -1902,7 +1941,7 @@ TEST_P(SerializationTest, hybridFlatMapEncodingFuzz) {
     // Built once from the first batch's schema bytes and reused for every
     // batch.
     const auto keyListSchema =
-        SchemaDeserializer::deserialize(keyListSchemas.front());
+        SchemaDeserializer::deserialize(keyListSchemas.front(), pool_.get());
     const serde::Projector projector{keyListSchema, subfields, pool_.get(), {}};
     const Deserializer keyListDeserializer{
         keyListSchema, pool_.get(), deserializerOptions()};
@@ -3034,7 +3073,7 @@ TEST_P(SerializationTest, nullableStreamsRoundTrip) {
   }
 }
 
-TEST_F(SerializationTest, rowNullStreamOmissionRoundTrips) {
+TEST_P(SerializationVersionTest, rowNullStreamOmissionRoundTrips) {
   constexpr velox::vector_size_t kRows = 8;
   auto nestedType = velox::ROW({{"value", velox::INTEGER()}});
   auto type = velox::ROW({{"nested", nestedType}});
@@ -3068,7 +3107,7 @@ TEST_F(SerializationTest, rowNullStreamOmissionRoundTrips) {
 
   auto serializeAndVerify = [&](bool allNull, bool expectNestedNullStream) {
     SerializerOptions options{
-        .version = SerializationVersion::kSerialization,
+        .version = version(),
         .streamIndicesEncodingType = EncodingType::Trivial,
         .streamSizesEncodingType = EncodingType::Trivial,
     };
@@ -3116,7 +3155,7 @@ TEST_F(SerializationTest, rowNullStreamOmissionRoundTrips) {
   serializeAndVerify(/*allNull=*/true, /*expectNestedNullStream=*/true);
 }
 
-TEST_F(SerializationTest, nestedEncodingBufferCacheSizeConfigured) {
+TEST_P(SerializationVersionTest, nestedEncodingBufferCacheSizeConfigured) {
   constexpr velox::vector_size_t kRows = 16;
   auto type = velox::ROW({{"value", velox::BIGINT()}});
 
@@ -3164,7 +3203,7 @@ TEST_F(SerializationTest, nestedEncodingBufferCacheSizeConfigured) {
     SCOPED_TRACE(testCase.name);
 
     SerializerOptions options{
-        .version = SerializationVersion::kSerialization,
+        .version = version(),
     };
     if (testCase.setMaxCachedNestedEncodingBuffers) {
       options.maxCachedNestedEncodingBuffers =
@@ -3192,7 +3231,7 @@ TEST_F(SerializationTest, nestedEncodingBufferCacheSizeConfigured) {
   }
 }
 
-TEST_F(SerializationTest, encodedSerializerRoundTripsTopLevelRowNulls) {
+TEST_P(SerializationVersionTest, encodedSerializerRoundTripsTopLevelRowNulls) {
   constexpr velox::vector_size_t kRows = 6;
   auto type = velox::ROW({
       {"id", velox::INTEGER()},
@@ -3220,7 +3259,7 @@ TEST_F(SerializationTest, encodedSerializerRoundTripsTopLevelRowNulls) {
   };
 
   SerializerOptions options{
-      .version = SerializationVersion::kSerialization,
+      .version = version(),
       .streamIndicesEncodingType = EncodingType::Trivial,
       .streamSizesEncodingType = EncodingType::Trivial,
   };
@@ -3254,7 +3293,7 @@ TEST_F(SerializationTest, encodedSerializerRoundTripsTopLevelRowNulls) {
   }
 }
 
-TEST_F(SerializationTest, regularDataNullsDoNotRequireNullBarrier) {
+TEST_P(SerializationVersionTest, regularDataNullsDoNotRequireNullBarrier) {
   constexpr velox::vector_size_t kRows = 3;
   auto type = velox::ROW({
       {"scalar", velox::INTEGER()},
@@ -3328,7 +3367,7 @@ TEST_F(SerializationTest, regularDataNullsDoNotRequireNullBarrier) {
       std::vector<velox::VectorPtr>{scalar, items, attrs});
 
   SerializerOptions options{
-      .version = SerializationVersion::kSerialization,
+      .version = version(),
       .streamIndicesEncodingType = EncodingType::Trivial,
       .streamSizesEncodingType = EncodingType::Trivial,
   };
@@ -3353,7 +3392,7 @@ TEST_F(SerializationTest, regularDataNullsDoNotRequireNullBarrier) {
   }
 }
 
-TEST_F(SerializationTest, serializerRejectsFixedStreamRowCountEncoding) {
+TEST_P(SerializationVersionTest, serializerRejectsFixedStreamRowCountEncoding) {
   constexpr velox::vector_size_t kRows{4};
   auto type = velox::ROW({{"value", velox::INTEGER()}});
 
@@ -3365,7 +3404,7 @@ TEST_F(SerializationTest, serializerRejectsFixedStreamRowCountEncoding) {
       pool_.get(), type, nullptr, kRows, std::vector<velox::VectorPtr>{values});
 
   SerializerOptions options{
-      .version = SerializationVersion::kSerialization,
+      .version = version(),
       .streamIndicesEncodingType = EncodingType::Trivial,
       .encodingOptions = Encoding::Options{.useVarintRowCount = false},
       .streamSizesEncodingType = EncodingType::Trivial,
@@ -3376,7 +3415,9 @@ TEST_F(SerializationTest, serializerRejectsFixedStreamRowCountEncoding) {
       "Non-tablet writers must use varint stream row counts");
 }
 
-TEST_F(SerializationTest, deserializesInputWithoutStreamVarintRowCountFlag) {
+TEST_P(
+    SerializationVersionTest,
+    deserializesInputWithoutStreamVarintRowCountFlag) {
   constexpr velox::vector_size_t kRows{4};
   auto type = velox::ROW({{"value", velox::INTEGER()}});
 
@@ -3388,7 +3429,7 @@ TEST_F(SerializationTest, deserializesInputWithoutStreamVarintRowCountFlag) {
       pool_.get(), type, nullptr, kRows, std::vector<velox::VectorPtr>{values});
 
   SerializerOptions options{
-      .version = SerializationVersion::kSerialization,
+      .version = version(),
       .streamIndicesEncodingType = EncodingType::Trivial,
       .streamSizesEncodingType = EncodingType::Trivial,
   };
@@ -3414,7 +3455,7 @@ TEST_F(SerializationTest, deserializesInputWithoutStreamVarintRowCountFlag) {
   }
 }
 
-TEST_F(SerializationTest, deserializerReadsPhysicalRootNullStream) {
+TEST_P(SerializationVersionTest, deserializerReadsPhysicalRootNullStream) {
   constexpr size_t kRows = 3;
   auto type = velox::ROW({{"value", velox::INTEGER()}});
   auto schema = convertToNimbleType(*type);
@@ -3425,7 +3466,7 @@ TEST_F(SerializationTest, deserializerReadsPhysicalRootNullStream) {
   const std::array<int32_t, kRows> allValues = {11, 22, 33};
   const std::array<int32_t, 2> nonNullValues = {11, 33};
   const SerializerOptions options{
-      .version = SerializationVersion::kSerialization,
+      .version = version(),
       .streamIndicesEncodingType = EncodingType::Trivial,
       .streamSizesEncodingType = EncodingType::Trivial,
   };
@@ -3462,8 +3503,8 @@ TEST_F(SerializationTest, deserializerReadsPhysicalRootNullStream) {
     std::sort(streams.begin(), streams.end());
 
     std::string serialized;
-    const auto flagsOffset = serde::writeSerializationHeader(
-        serialized, SerializationVersion::kSerialization, kRows);
+    const auto flagsOffset =
+        serde::writeSerializationHeader(serialized, version(), kRows);
     const bool requiredBarrier = !std::all_of(
         rootNonNulls.begin(), rootNonNulls.end(), [](bool nonNull) {
           return nonNull;
@@ -3521,14 +3562,14 @@ TEST_F(SerializationTest, deserializerReadsPhysicalRootNullStream) {
   EXPECT_EQ(nullableValues->valueAt(2), nonNullValues[1]);
 }
 
-TEST_F(
-    SerializationTest,
+TEST_P(
+    SerializationVersionTest,
     encodedSerializerNullableContentNullBitmapAcrossBatches) {
   constexpr velox::vector_size_t kRows = 4;
   auto type = velox::ROW({{"value", velox::INTEGER()}});
 
   SerializerOptions options{
-      .version = SerializationVersion::kSerialization,
+      .version = version(),
       .streamIndicesEncodingType = EncodingType::Trivial,
       .streamSizesEncodingType = EncodingType::Trivial,
   };
@@ -3599,7 +3640,7 @@ TEST_F(
   }
 }
 
-TEST_F(SerializationTest, encodedSerializerNestedRowNullsAcrossBatches) {
+TEST_P(SerializationVersionTest, encodedSerializerNestedRowNullsAcrossBatches) {
   constexpr velox::vector_size_t kRows = 5;
   auto nestedType = velox::ROW({{"score", velox::BIGINT()}});
   auto type = velox::ROW({
@@ -3608,7 +3649,7 @@ TEST_F(SerializationTest, encodedSerializerNestedRowNullsAcrossBatches) {
   });
 
   SerializerOptions options{
-      .version = SerializationVersion::kSerialization,
+      .version = version(),
       .streamIndicesEncodingType = EncodingType::Trivial,
       .streamSizesEncodingType = EncodingType::Trivial,
   };
@@ -3704,8 +3745,8 @@ TEST_F(SerializationTest, encodedSerializerNestedRowNullsAcrossBatches) {
   }
 }
 
-TEST_F(
-    SerializationTest,
+TEST_P(
+    SerializationVersionTest,
     encodedSerializerNestedRowNullsUnderArrayAcrossBatches) {
   constexpr velox::vector_size_t kRows = 2;
   auto nestedType = velox::ROW({{"score", velox::BIGINT()}});
@@ -3714,7 +3755,7 @@ TEST_F(
   });
 
   SerializerOptions options{
-      .version = SerializationVersion::kSerialization,
+      .version = version(),
       .streamIndicesEncodingType = EncodingType::Trivial,
       .streamSizesEncodingType = EncodingType::Trivial,
   };
@@ -3991,10 +4032,12 @@ TEST_P(SerializationTest, unsupportedWriterVersionsRejected) {
   const std::vector<TestCase> testCases{
       TestCase{
           .version = SerializationVersion::kProjection,
-          .expectedMessage = "Serializer writes must use kSerialization"},
+          .expectedMessage =
+              "Serializer writes must use kSerialization or kBlob"},
       TestCase{
           .version = SerializationVersion::kTablet,
-          .expectedMessage = "Serializer writes must use kSerialization"},
+          .expectedMessage =
+              "Serializer writes must use kSerialization or kBlob"},
   };
   for (const auto& testCase : testCases) {
     SCOPED_TRACE(fmt::format("version={}", toString(testCase.version)));
@@ -4224,6 +4267,10 @@ TEST_F(SerializationTest, legacyHeaderlessMalformedBlobs) {
 
 // Test encoding layout tree for non-FlatMap types.
 TEST_P(SerializationTest, encodingLayoutTree) {
+  if (version() == SerializationVersion::kBlob) {
+    GTEST_SKIP() << "kBlob rejects encodingLayoutTree.";
+  }
+
   // ROW type with scalar, string, and nested Map(Array(Array(Int))) children.
   auto type = velox::ROW({
       {"int_val", velox::INTEGER()},
@@ -4474,6 +4521,10 @@ TEST_P(SerializationTest, encodingLayoutTree) {
 // EncodingLayoutTree and verifies data integrity through the full
 // Serializer → Deserializer path.
 TEST_P(SerializationTest, pforColumnarRoundTrip) {
+  if (version() == SerializationVersion::kBlob) {
+    GTEST_SKIP() << "kBlob rejects encodingLayoutTree.";
+  }
+
   auto type = velox::ROW({
       {"int_val", velox::INTEGER()},
       {"long_val", velox::BIGINT()},
@@ -4553,6 +4604,10 @@ TEST_P(SerializationTest, pforColumnarRoundTrip) {
 // integrity through the full Serializer → Deserializer path, exercising the
 // nested per-block metadata sub-streams (baselines, bit widths, data offsets).
 TEST_P(SerializationTest, blockBitPackingColumnarRoundTrip) {
+  if (version() == SerializationVersion::kBlob) {
+    GTEST_SKIP() << "kBlob rejects encodingLayoutTree.";
+  }
+
   auto type = velox::ROW({
       {"int_val", velox::INTEGER()},
       {"long_val", velox::BIGINT()},
@@ -4631,6 +4686,10 @@ TEST_P(SerializationTest, blockBitPackingColumnarRoundTrip) {
 // SimdForBitpack via EncodingLayoutTree on integer columns and verifies data
 // integrity through the full Serializer → Deserializer path.
 TEST_P(SerializationTest, simdForBitpackColumnarRoundTrip) {
+  if (version() == SerializationVersion::kBlob) {
+    GTEST_SKIP() << "kBlob rejects encodingLayoutTree.";
+  }
+
   auto type = velox::ROW({
       {"int_val", velox::INTEGER()},
       {"long_val", velox::BIGINT()},
@@ -4703,6 +4762,10 @@ TEST_P(SerializationTest, simdForBitpackColumnarRoundTrip) {
 // Test encoding layout tree for FlatMap with dynamic key discovery and nested
 // types.
 TEST_P(SerializationTest, encodingLayoutTreeFlatMap) {
+  if (version() == SerializationVersion::kBlob) {
+    GTEST_SKIP() << "kBlob rejects encodingLayoutTree.";
+  }
+
   // Use nested types to test:
   // - features: MAP(INTEGER, ARRAY(DOUBLE)) - FlatMap with nested array values
   // - tags: MAP(VARCHAR, DOUBLE) - FlatMap with string keys and scalar values
@@ -5015,6 +5078,10 @@ TEST_P(SerializationTest, encodingLayoutTreeFlatMap) {
 
 // Test that wrong encoding layout tree kind throws an error.
 TEST_P(SerializationTest, encodingLayoutTreeWrongKind) {
+  if (version() == SerializationVersion::kBlob) {
+    GTEST_SKIP() << "kBlob rejects encodingLayoutTree.";
+  }
+
   // Test: Pass Row layout for a Scalar column.
   auto type = velox::ROW({{"int_val", velox::INTEGER()}});
 
@@ -5046,6 +5113,10 @@ TEST_P(SerializationTest, encodingLayoutTreeWrongKind) {
 
 // Test that FlatMap vs Map mismatch throws an error.
 TEST_P(SerializationTest, encodingLayoutTreeFlatMapForMap) {
+  if (version() == SerializationVersion::kBlob) {
+    GTEST_SKIP() << "kBlob rejects encodingLayoutTree.";
+  }
+
   // Test: Pass FlatMap layout for a Map column.
   auto type =
       velox::ROW({{"map_val", velox::MAP(velox::INTEGER(), velox::DOUBLE())}});
@@ -5078,6 +5149,10 @@ TEST_P(SerializationTest, encodingLayoutTreeFlatMapForMap) {
 
 // Test that Map vs FlatMap mismatch throws an error.
 TEST_P(SerializationTest, encodingLayoutTreeMapForFlatMap) {
+  if (version() == SerializationVersion::kBlob) {
+    GTEST_SKIP() << "kBlob rejects encodingLayoutTree.";
+  }
+
   // Test: Pass Map layout for a FlatMap column.
   const auto type =
       velox::ROW({{"map_val", velox::MAP(velox::INTEGER(), velox::DOUBLE())}});
@@ -7160,6 +7235,9 @@ TEST_F(SerializationTest, fuzzMixedVersionSerialization) {
       {.version = SerializationVersion::kSerialization,
        .streamIndicesEncodingType = EncodingType::Delta,
        .streamSizesEncodingType = EncodingType::Delta},
+      {.version = SerializationVersion::kBlob},
+      {.version = SerializationVersion::kBlob,
+       .blobCompressionOptions = {.compressionType = CompressionType::Zstd}},
   };
 
   const int iterations = 10;
@@ -8195,21 +8273,378 @@ TEST_F(SerializationTest, legacySerializationProductionBlobRoundtrip) {
   }
 }
 
-TEST_F(SerializationTest, serializerHonorsRequestedEncodedVersion) {
+namespace {
+
+// Builds rows that compress well: a sequence that starts at 'firstId',
+// repeated strings longer than StringView inlines, nulls, and a nested row.
+// When 'innerNullEvery' is positive, every 'innerNullEvery'-th nested row is
+// null, which makes the batch need a barrier.
+velox::RowVectorPtr makeBlobRows(
+    velox::test::VectorMaker& maker,
+    velox::vector_size_t numRows,
+    int64_t firstId,
+    int32_t innerNullEvery) {
+  auto inner = maker.rowVector(
+      {"value"},
+      {maker.flatVector<double>(numRows, [](auto row) { return row * 0.25; })});
+  if (innerNullEvery > 0) {
+    for (velox::vector_size_t row = 0; row < numRows; row += innerNullEvery) {
+      inner->setNull(row, true);
+    }
+  }
+  return maker.rowVector(
+      {"id", "label", "nullable", "inner"},
+      {
+          maker.flatVector<int64_t>(
+              numRows, [firstId](auto row) { return firstId + row; }),
+          maker.flatVector<velox::StringView>(
+              numRows,
+              [](auto row) {
+                return velox::StringView(
+                    row % 3 == 0 ? "a label longer than inline storage"
+                                 : "another label longer than inline storage");
+              }),
+          maker.flatVector<int32_t>(
+              numRows,
+              [](auto row) { return row; },
+              velox::test::VectorMaker::nullEvery(4)),
+          inner,
+      });
+}
+
+// Returns the serialization header of 'serialized'.
+serde::SerializationHeader readHeader(std::string_view serialized) {
+  const char* pos = serialized.data();
+  return serde::readSerializationHeader(
+      pos, serialized.data() + serialized.size());
+}
+
+// Expects 'serialized', which 'serializer' wrote, to read back as 'expected'.
+void expectRoundTrip(
+    const Serializer& serializer,
+    std::string_view serialized,
+    const velox::VectorPtr& expected,
+    velox::memory::MemoryPool* pool) {
+  const Deserializer deserializer{
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()), pool};
+  velox::VectorPtr output;
+  deserializer.deserialize(serialized, output);
+  velox::test::assertEqualVectors(expected, output);
+}
+
+// Returns an Lz4 payload that decompresses to 'body'. The payload is the u32
+// body size, then an Lz4 block that holds one run of literal bytes. The
+// block's first byte stores the run length in its high 4 bits. 'body' must be
+// shorter than 15 bytes, because a length of 15 means that length bytes
+// follow.
+std::string makeLz4Payload(std::string_view body) {
+  NIMBLE_CHECK_LT(
+      body.size(), size_t{15}, "Body must be shorter than 15 bytes");
+  std::string payload(sizeof(uint32_t), '\0');
+  char* pos = payload.data();
+  encoding::writeUint32(static_cast<uint32_t>(body.size()), pos);
+  payload += static_cast<char>(body.size() << 4);
+  payload += body;
+  return payload;
+}
+
+} // namespace
+
+TEST_F(SerializationTest, blobRoundTripsEachBlobCodec) {
+  velox::test::VectorMaker maker{pool_.get()};
+  const auto input = makeBlobRows(
+      maker, /*numRows=*/1'000, /*firstId=*/0, /*innerNullEvery=*/0);
+  for (const auto compressionType :
+       {CompressionType::Lz4,
+        CompressionType::Zstd,
+#ifndef DISABLE_META_INTERNAL_COMPRESSOR
+        CompressionType::MetaInternal,
+#endif
+        CompressionType::OpenZL,
+        CompressionType::Uncompressed}) {
+    SCOPED_TRACE(fmt::format("compressionType={}", compressionType));
+    Serializer serializer{
+        SerializerOptions{
+            .version = SerializationVersion::kBlob,
+            .blobCompressionOptions = {.compressionType = compressionType},
+        },
+        input->type(),
+        pool_.get()};
+    const std::string serialized{
+        serializer.serialize(input, OrderedRanges::of(0, input->size()))};
+    EXPECT_EQ(readHeader(serialized).blobCompression, compressionType);
+    expectRoundTrip(serializer, serialized, input, pool_.get());
+  }
+}
+
+TEST_F(SerializationTest, blobRoundTripsEmptyBatch) {
+  velox::test::VectorMaker maker{pool_.get()};
+  const auto input =
+      makeBlobRows(maker, /*numRows=*/0, /*firstId=*/0, /*innerNullEvery=*/0);
+  Serializer serializer{
+      SerializerOptions{.version = SerializationVersion::kBlob},
+      input->type(),
+      pool_.get()};
+  const std::string serialized{
+      serializer.serialize(input, OrderedRanges::of(0, input->size()))};
+  EXPECT_EQ(readHeader(serialized).rowCount, 0);
+  expectRoundTrip(serializer, serialized, input, pool_.get());
+}
+
+TEST_F(SerializationTest, blobKeepsBodyUncompressedWhenCompressionDoesNotPay) {
+  velox::test::VectorMaker maker{pool_.get()};
+
+  // Random bytes leave Lz4 nothing to compress.
+  {
+    constexpr velox::vector_size_t kNumRows{64};
+    constexpr uint32_t kSeed{42};
+    std::mt19937 rng{kSeed};
+    std::vector<std::string> randomValues(kNumRows);
+    for (auto& value : randomValues) {
+      value.resize(1'024);
+      for (auto& byte : value) {
+        byte = static_cast<char>(rng());
+      }
+    }
+    const auto input = maker.rowVector(
+        {"payload"},
+        {maker.flatVector<velox::StringView>(kNumRows, [&](auto row) {
+          return velox::StringView(randomValues[row]);
+        })});
+    Serializer serializer{
+        SerializerOptions{.version = SerializationVersion::kBlob},
+        input->type(),
+        pool_.get()};
+    const std::string serialized{
+        serializer.serialize(input, OrderedRanges::of(0, input->size()))};
+    EXPECT_EQ(
+        readHeader(serialized).blobCompression, CompressionType::Uncompressed);
+    expectRoundTrip(serializer, serialized, input, pool_.get());
+  }
+
+  // An accept ratio of 0 rejects every compressed size.
+  {
+    const auto input = makeBlobRows(
+        maker, /*numRows=*/1'000, /*firstId=*/0, /*innerNullEvery=*/0);
+    Serializer serializer{
+        SerializerOptions{
+            .version = SerializationVersion::kBlob,
+            .blobCompressionOptions =
+                {.compressionAcceptRatio = 0.0F,
+                 .compressionType = CompressionType::Lz4},
+        },
+        input->type(),
+        pool_.get()};
+    const std::string serialized{
+        serializer.serialize(input, OrderedRanges::of(0, input->size()))};
+    EXPECT_EQ(
+        readHeader(serialized).blobCompression, CompressionType::Uncompressed);
+    expectRoundTrip(serializer, serialized, input, pool_.get());
+  }
+
+  // A body below the codec's minimum size is not compressed.
+  {
+    const auto input = makeBlobRows(
+        maker, /*numRows=*/1'000, /*firstId=*/0, /*innerNullEvery=*/0);
+    Serializer serializer{
+        SerializerOptions{
+            .version = SerializationVersion::kBlob,
+            .blobCompressionOptions =
+                {.compressionType = CompressionType::Lz4,
+                 .lz4MinCompressionSize = uint64_t{1} << 30},
+        },
+        input->type(),
+        pool_.get()};
+    const std::string serialized{
+        serializer.serialize(input, OrderedRanges::of(0, input->size()))};
+    EXPECT_EQ(
+        readHeader(serialized).blobCompression, CompressionType::Uncompressed);
+    expectRoundTrip(serializer, serialized, input, pool_.get());
+  }
+}
+
+TEST_F(SerializationTest, blobDecodesBatchesAroundBarrier) {
+  velox::test::VectorMaker maker{pool_.get()};
+  constexpr size_t kNumBatches{4};
+  constexpr size_t kBarrierBatchIndex{2};
+  constexpr velox::vector_size_t kRowsPerBatch{100};
+  constexpr velox::vector_size_t kFirstSelectedRow{10};
+  constexpr velox::vector_size_t kNumSelectedRows{20};
+
+  // The batch with null nested rows needs a barrier, so the deserializer
+  // decodes it on its own, between a run of the two batches before it and a
+  // run of the batch after it.
+  std::vector<velox::RowVectorPtr> inputs;
+  inputs.reserve(kNumBatches);
+  for (size_t batchIndex = 0; batchIndex < kNumBatches; ++batchIndex) {
+    inputs.push_back(makeBlobRows(
+        maker,
+        kRowsPerBatch,
+        /*firstId=*/static_cast<int64_t>(batchIndex) * 1'000,
+        /*innerNullEvery=*/batchIndex == kBarrierBatchIndex ? 5 : 0));
+  }
+  const auto expected =
+      velox::BaseVector::create(inputs.front()->type(), 0, pool_.get());
+  const auto expectedSelected =
+      velox::BaseVector::create(inputs.front()->type(), 0, pool_.get());
+  for (const auto& input : inputs) {
+    expected->append(input.get());
+    expectedSelected->append(
+        input->slice(kFirstSelectedRow, kNumSelectedRows).get());
+  }
+
+  Serializer serializer{
+      SerializerOptions{.version = SerializationVersion::kBlob},
+      inputs.front()->type(),
+      pool_.get()};
+  const Deserializer deserializer{
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()),
+      pool_.get()};
+  velox::VectorPtr output;
+  velox::VectorPtr selected;
+  {
+    std::vector<std::string> serialized;
+    for (size_t batchIndex = 0; batchIndex < kNumBatches; ++batchIndex) {
+      const auto& input = inputs[batchIndex];
+      serialized.emplace_back(
+          serializer.serialize(input, OrderedRanges::of(0, input->size())));
+      const auto header = readHeader(serialized.back());
+      EXPECT_EQ(header.blobCompression, CompressionType::Lz4);
+      EXPECT_EQ(header.flags.requiredBarrier, batchIndex == kBarrierBatchIndex);
+    }
+
+    const std::vector<std::string_view> batches{
+        serialized.begin(), serialized.end()};
+    deserializer.deserialize(batches, output);
+    const nimble::RowRange selectedRows{
+        kFirstSelectedRow, kFirstSelectedRow + kNumSelectedRows};
+    deserializer.deserialize(
+        batches,
+        std::vector<nimble::RowRange>(batches.size(), selectedRows),
+        selected);
+  }
+
+  // The blobs and their decompressed bodies are gone, so the outputs must own
+  // their bytes.
+  velox::test::assertEqualVectors(expected, output);
+  velox::test::assertEqualVectors(expectedSelected, selected);
+}
+
+TEST_F(SerializationTest, blobDecodesMixedVersionBatches) {
+  velox::test::VectorMaker maker{pool_.get()};
+  constexpr velox::vector_size_t kRowsPerBatch{100};
+  const std::vector<velox::RowVectorPtr> inputs{
+      makeBlobRows(maker, kRowsPerBatch, /*firstId=*/0, /*innerNullEvery=*/0),
+      makeBlobRows(
+          maker, kRowsPerBatch, /*firstId=*/1'000, /*innerNullEvery=*/0),
+      makeBlobRows(
+          maker, kRowsPerBatch, /*firstId=*/2'000, /*innerNullEvery=*/0),
+  };
+  const auto expected =
+      velox::BaseVector::create(inputs.front()->type(), 0, pool_.get());
+  for (const auto& input : inputs) {
+    expected->append(input.get());
+  }
+
+  // One Deserializer reads all three batches in one decode run, so it must
+  // take the codec of each batch from that batch's header.
+  const std::vector<SerializerOptions> batchOptions{
+      {.version = SerializationVersion::kBlob},
+      {.version = SerializationVersion::kSerialization},
+      {.version = SerializationVersion::kBlob,
+       .blobCompressionOptions =
+           {.compressionType = CompressionType::Uncompressed}},
+  };
+  const std::vector<CompressionType> expectedCodecs{
+      CompressionType::Lz4,
+      CompressionType::Uncompressed,
+      CompressionType::Uncompressed,
+  };
+  std::vector<std::string> serialized;
+  std::shared_ptr<const Type> schema;
+  for (size_t batchIndex = 0; batchIndex < inputs.size(); ++batchIndex) {
+    const auto& input = inputs[batchIndex];
+    Serializer serializer{batchOptions[batchIndex], input->type(), pool_.get()};
+    serialized.emplace_back(
+        serializer.serialize(input, OrderedRanges::of(0, input->size())));
+    EXPECT_EQ(
+        readHeader(serialized.back()).blobCompression,
+        expectedCodecs[batchIndex]);
+
+    // The batches share a type, so every Serializer writes the same schema.
+    schema = SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+  }
+
+  const Deserializer deserializer{schema, pool_.get()};
+  const std::vector<std::string_view> batches{
+      serialized.begin(), serialized.end()};
+  velox::VectorPtr output;
+  deserializer.deserialize(batches, output);
+  velox::test::assertEqualVectors(expected, output);
+}
+
+TEST_F(SerializationTest, blobRejectsCorruptPayload) {
+  velox::test::VectorMaker maker{pool_.get()};
+  const auto input = makeBlobRows(
+      maker, /*numRows=*/1'000, /*firstId=*/0, /*innerNullEvery=*/0);
+  Serializer serializer{
+      SerializerOptions{.version = SerializationVersion::kBlob},
+      input->type(),
+      pool_.get()};
+  const std::string serialized{
+      serializer.serialize(input, OrderedRanges::of(0, input->size()))};
+
+  // Keeps the header, which declares an Lz4 payload, and replaces the payload.
+  const char* payload = serialized.data();
+  const auto header = serde::readSerializationHeader(
+      payload, serialized.data() + serialized.size());
+  ASSERT_EQ(header.blobCompression, CompressionType::Lz4);
+  const std::string headerBytes{serialized.data(), payload};
+  const Deserializer deserializer{
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()),
+      pool_.get()};
+  velox::VectorPtr output;
+
+  // The payload is one byte shorter than the codec's u32 body size.
+  {
+    const auto corrupt = headerBytes + std::string(sizeof(uint32_t) - 1, '\0');
+    NIMBLE_ASSERT_FILE_THROW(
+        deserializer.deserialize(corrupt, output), "Truncated kBlob payload");
+  }
+
+  // The body is too short to end with the u32 trailer size.
+  {
+    const auto corrupt = headerBytes + makeLz4Payload("ab");
+    NIMBLE_ASSERT_FILE_THROW(
+        deserializer.deserialize(corrupt, output),
+        "kBlob body is too small for its trailer size");
+  }
+
+  // The body holds only a trailer size, which claims more bytes than it has.
+  {
+    std::string body(sizeof(uint32_t), '\0');
+    char* pos = body.data();
+    encoding::writeUint32(1'000, pos);
+    const auto corrupt = headerBytes + makeLz4Payload(body);
+    NIMBLE_ASSERT_FILE_THROW(
+        deserializer.deserialize(corrupt, output),
+        "kBlob trailer is larger than its body");
+  }
+}
+
+TEST_P(SerializationVersionTest, serializerHonorsRequestedEncodedVersion) {
   auto type = velox::ROW({{"x", velox::INTEGER()}});
   auto col = velox::BaseVector::create(velox::INTEGER(), 1, pool_.get());
   col->asFlatVector<int32_t>()->set(0, 42);
   auto row = std::make_shared<velox::RowVector>(
       pool_.get(), type, nullptr, 1, std::vector<velox::VectorPtr>{col});
 
-  SerializerOptions options{.version = SerializationVersion::kSerialization};
+  SerializerOptions options{.version = version()};
   Serializer serializer{options, type, pool_.get()};
   std::string blob;
   serializer.serialize(row, OrderedRanges::of(0, 1), blob);
   ASSERT_FALSE(blob.empty());
-  EXPECT_EQ(
-      static_cast<uint8_t>(blob[0]),
-      static_cast<uint8_t>(SerializationVersion::kSerialization));
+  EXPECT_EQ(static_cast<uint8_t>(blob[0]), static_cast<uint8_t>(version()));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -8260,5 +8695,26 @@ INSTANTIATE_TEST_SUITE_P(
         TestParams{
             .version = SerializationVersion::kSerialization,
             .streamSizesEncodingType = EncodingType::Varint,
-            .bufferPoolCapacity = 0}),
+            .bufferPoolCapacity = 0},
+        // kBlob with the default Lz4 blob codec.
+        TestParams{.version = SerializationVersion::kBlob},
+        // kBlob with compressed streams and an uncompressed blob
+        // (for the tests that call writeAndVerify()).
+        TestParams{
+            .version = SerializationVersion::kBlob,
+            .compressionOptions =
+                CompressionOptions{
+                    .compressionAcceptRatio = 1.0f,
+                    .compressionType = CompressionType::Zstd,
+                    .zstdMinCompressionSize = 0},
+            .blobCompressionOptions =
+                {.compressionType = CompressionType::Uncompressed}}),
+    formatName);
+
+INSTANTIATE_TEST_SUITE_P(
+    WriterVersions,
+    SerializationVersionTest,
+    ::testing::Values(
+        TestParams{.version = SerializationVersion::kSerialization},
+        TestParams{.version = SerializationVersion::kBlob}),
     formatName);

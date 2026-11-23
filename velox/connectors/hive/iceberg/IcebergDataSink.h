@@ -41,11 +41,9 @@ namespace facebook::velox::connector::hive::iceberg {
 
 class IcebergFileNameGenerator : public FileNameGenerator {
  public:
-  IcebergFileNameGenerator() {}
-
   std::pair<std::string, std::string> gen(
       std::optional<uint32_t> bucketId,
-      const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const HiveInsertTableHandlePtr& insertTableHandle,
       const ConnectorQueryCtx& connectorQueryCtx,
       uint32_t maxNumBuckets,
       bool commitRequired) const override;
@@ -132,6 +130,9 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
   /// INSERT and for first-time mutations; populated by the coordinator for a
   /// V3 repeated mutation so the deletion-vector sink seeds the new DV with
   /// the prior DV's positions.
+  /// @param includePartitionPaths When false, writes data and deletion-vector
+  /// files directly in the location handle's directory, without partition
+  /// subdirectories. Partition values still go to the commit message.
   IcebergInsertTableHandle(
       std::vector<IcebergColumnHandlePtr> inputColumns,
       LocationHandlePtr locationHandle,
@@ -142,9 +143,10 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
       WriteKind writeKind = WriteKind::kData,
       std::unordered_map<std::string, ExistingDeletionVector>
           existingDeletionVectors = {},
-      std::shared_ptr<const FileNameGenerator> fileNameGenerator =
+      FileNameGeneratorPtr fileNameGenerator =
           std::make_shared<const IcebergFileNameGenerator>(),
-      std::vector<std::string> insertedColumns = {});
+      std::vector<std::string> insertedColumns = {},
+      bool includePartitionPaths = true);
 
   /// Returns the Iceberg partition specification that defines how the table
   /// is partitioned.
@@ -176,12 +178,17 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
     return insertedColumns_;
   }
 
+  bool includePartitionPaths() const {
+    return includePartitionPaths_;
+  }
+
  private:
   const IcebergPartitionSpecPtr partitionSpec_;
   const WriteKind writeKind_;
   const std::unordered_map<std::string, ExistingDeletionVector>
       existingDeletionVectors_;
   const std::vector<std::string> insertedColumns_;
+  const bool includePartitionPaths_;
 };
 
 using IcebergInsertTableHandlePtr =
@@ -277,6 +284,14 @@ class IcebergDataSink : public HiveDataSink {
   // into an Iceberg compliant directory path
   // (e.g., "date_year=2023/id_bucket=5").
   std::string getPartitionName(uint32_t partitionId) const override;
+
+  // Same as the Hive writer parameters, except that when
+  // includePartitionPaths() is false the target and write directories are the
+  // location handle's, without the partition subdirectory, so every file of
+  // the write lands in the directory the caller registered.
+  WriterParameters getWriterParameters(
+      const std::optional<std::string>& partition,
+      std::optional<uint32_t> bucketId) const override;
 
   // Ensures a writer exists for the given writer ID and returns its index.
   // If the writer doesn't exist, creates it by calling appendWriter().

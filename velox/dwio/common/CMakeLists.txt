@@ -52,6 +52,7 @@ velox_add_library(
   Range.cpp
   Reader.cpp
   ReaderFactory.cpp
+  RoaringBitmapView.cpp
   ScanSpec.cpp
   SeekableInputStream.cpp
   SelectiveByteRleColumnReader.cpp
@@ -114,6 +115,7 @@ velox_add_library(
   Reader.h
   ReaderFactory.h
   Retry.h
+  RoaringBitmapView.h
   ScanSpec.h
   SeekableInputStream.h
   SelectiveByteRleColumnReader.h

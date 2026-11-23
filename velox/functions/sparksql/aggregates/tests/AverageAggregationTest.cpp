@@ -18,6 +18,7 @@
 #include <folly/init/Init.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/HashAggregationStatNames.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
@@ -60,20 +61,22 @@ class AverageAggregationTest : public AggregationTestBase {
                 intermediateType, "c0")});
     avgAggregate.rawInputTypes = {intermediateType};
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto child =
-        PlanBuilder(planNodeIdGenerator).values({intermediateInput}).planNode();
-
-    return std::make_shared<core::AggregationNode>(
-        planNodeIdGenerator->next(),
-        core::AggregationNode::Step::kSingle,
-        std::vector<core::FieldAccessTypedExprPtr>{},
-        std::vector<core::FieldAccessTypedExprPtr>{},
-        std::vector<std::string>{"c0"},
-        std::vector{avgAggregate},
-        /*ignoreNullKeys=*/false,
-        /*noGroupsSpanBatches=*/false,
-        std::move(child));
+    return PlanBuilder()
+        .values(intermediateInput)
+        .addNode(
+            [&](const core::PlanNodeId& id, const core::PlanNodePtr& source) {
+              return std::make_shared<core::AggregationNode>(
+                  id,
+                  core::AggregationNode::Step::kSingle,
+                  std::vector<core::FieldAccessTypedExprPtr>{},
+                  std::vector<core::FieldAccessTypedExprPtr>{},
+                  std::vector<std::string>{"c0"},
+                  std::vector{avgAggregate},
+                  /*ignoreNullKeys=*/false,
+                  /*noGroupsSpanBatches=*/false,
+                  source);
+            })
+        .planNode();
   }
 };
 
@@ -323,7 +326,7 @@ TEST_F(AverageAggregationTest, avgDecimalCompanionPartial) {
   auto input = makeRowVector(
       {makeFlatVector<int64_t>(shortDecimalRawVector, DECIMAL(12, 1))});
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .singleAggregation({}, {"spark_avg_partial(c0)"})
                   .planNode();
   const std::vector<int128_t> sumVector = {sum};
@@ -341,7 +344,7 @@ TEST_F(AverageAggregationTest, avgDecimalCompanionMerge) {
        makeFlatVector<int64_t>(std::vector<int64_t>{10, 10, 10})})});
 
   auto plan = PlanBuilder()
-                  .values({intermediateInput})
+                  .values(intermediateInput)
                   .singleAggregation({}, {"spark_avg_merge(c0)"})
                   .planNode();
   auto expected = makeRowVector({makeRowVector(
@@ -407,20 +410,21 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
           .maxDrivers(1)
-          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
-          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
           .assertResults(
               "SELECT k, avg(i) FILTER (WHERE m), "
               "avg(d) FILTER (WHERE m) FROM tmp GROUP BY k");
 
-  const auto stats = exec::toPlanStats(task->taskStats());
+  const auto stats =
+      exec::PlanNodeStats::extract(task->taskStats(), partialNodeId);
   EXPECT_LT(
       0,
-      stats.at(partialNodeId)
-          .customStats.at("abandonedPartialAggregationRows")
-          .sum);
+      stats.customSum(
+          exec::HashAggregationStatNames::kAbandonedPartialAggregationRows));
   EXPECT_GT(
-      stats.at(partialNodeId).customStats.at("toIntermediateFastPathCalls").sum,
+      stats.customSum(
+          exec::HashAggregationStatNames::kToIntermediateFastPathCalls),
       0);
 
   // Exercise the all-selected, non-null fast paths for different and matching
@@ -434,15 +438,14 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
              .planNode();
   task = AssertQueryBuilder(plan, duckDbQueryRunner_)
              .maxDrivers(1)
-             .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
-             .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+             .config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+             .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
              .assertResults("SELECT k, avg(b), avg(v) FROM tmp GROUP BY k");
 
-  const auto fastStats = exec::toPlanStats(task->taskStats());
   EXPECT_GE(
-      fastStats.at(fastPartialNodeId)
-          .customStats.at("toIntermediateFastPathCalls")
-          .sum,
+      exec::PlanNodeStats::extract(task->taskStats(), fastPartialNodeId)
+          .customSum(
+              exec::HashAggregationStatNames::kToIntermediateFastPathCalls),
       2);
 }
 

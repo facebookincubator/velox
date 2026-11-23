@@ -112,6 +112,7 @@ velox_add_library(
   TableWriteMerge.cpp
   TableWriter.cpp
   Task.cpp
+  TaskStats.cpp
   TaskStructs.cpp
   TaskTraceReader.cpp
   TaskTraceWriter.cpp
@@ -166,15 +167,19 @@ velox_add_library(
   GroupId.h
   GroupingSet.h
   HashAggregation.h
+  HashAggregationStatNames.h
   HashBitRange.h
   HashBuild.h
+  HashBuildStatNames.h
   HashJoinBridge.h
   HashPartitionFunction.h
   HashProbe.h
+  HashProbeStatNames.h
   HashTable.h
   HashTableCache.h
   HilbertIndex.h
   IndexLookupJoin.h
+  IndexLookupJoinStatNames.h
   IndexLookupJoinBridge.h
   JoinBridge.h
   Limit.h
@@ -188,6 +193,7 @@ velox_add_library(
   MemoryReclaimer.h
   Merge.h
   MergeJoin.h
+  MergeJoinStatNames.h
   MergeSource.h
   MixedUnion.h
   NestedLoopJoinBuild.h
@@ -236,8 +242,10 @@ velox_add_library(
   StreamingEnforceDistinct.h
   Strings.h
   TableScan.h
+  TableScanStatNames.h
   TableWriteMerge.h
   TableWriter.h
+  TableWriterStatNames.h
   Task.h
   TaskStats.h
   TaskStructs.h
@@ -245,6 +253,7 @@ velox_add_library(
   TaskTraceWriter.h
   TopN.h
   TopNRowNumber.h
+  TopNRowNumberStatNames.h
   TraceUtil.h
   Unnest.h
   UnorderedStreamReader.h
@@ -257,6 +266,7 @@ velox_add_library(
   VectorSearchJoinEmbeddings.h
   VectorSearchJoinTable.h
   Window.h
+  WindowStatNames.h
   WindowFunction.h
   WindowPartition.h
 )

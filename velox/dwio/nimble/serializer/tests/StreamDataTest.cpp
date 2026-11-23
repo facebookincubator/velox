@@ -202,6 +202,12 @@ TEST_F(StreamDataParserHeaderTest, readsStreamRowCountEncodingByVersion) {
           .streamEncodingUsesVarintRowCount = false,
           .buffer = buildTabletBuffer(kRowCount),
       },
+      {
+          .version = SerializationVersion::kBlob,
+          .streamEncodingUsesVarintRowCount = true,
+          .buffer = buildSerializedBuffer(
+              SerializationVersion::kBlob, kRowCount, "stream-data"),
+      },
   };
 
   for (const auto& testCase : testCases) {
@@ -215,6 +221,70 @@ TEST_F(StreamDataParserHeaderTest, readsStreamRowCountEncodingByVersion) {
         parser.streamEncodingUsesVarintRowCount(),
         testCase.streamEncodingUsesVarintRowCount);
   }
+}
+
+class StreamDataParserBlobTest : public StreamDataParserHeaderTest {
+ protected:
+  // Returns a kBlob buffer with one stream. The body holds the
+  // stream and the trailer. The payload is the u32 body size, then the body
+  // as an Lz4 block.
+  static std::string buildLz4Buffer(
+      uint32_t rowCount,
+      std::string_view stream) {
+    const auto uncompressed =
+        buildSerializedBuffer(SerializationVersion::kBlob, rowCount, stream);
+    const auto headerSize =
+        estimateSerializationHeaderSize(SerializationVersion::kBlob, rowCount);
+    const std::string_view body{
+        uncompressed.data() + headerSize, uncompressed.size() - headerSize};
+
+    // The blob compression byte ends the header.
+    std::string buffer{uncompressed.data(), headerSize};
+    buffer.back() = static_cast<char>(CompressionType::Lz4);
+    std::string payload(
+        sizeof(uint32_t) + LZ4_compressBound(static_cast<int>(body.size())),
+        '\0');
+    char* pos = payload.data();
+    encoding::writeUint32(static_cast<uint32_t>(body.size()), pos);
+    const auto blockSize = LZ4_compress_default(
+        body.data(),
+        pos,
+        static_cast<int>(body.size()),
+        static_cast<int>(payload.size() - sizeof(uint32_t)));
+    payload.resize(sizeof(uint32_t) + blockSize);
+    return buffer + payload;
+  }
+};
+
+TEST_F(StreamDataParserBlobTest, keepsDecompressedBodyUntilReset) {
+  constexpr uint32_t kRowCount{7};
+  const std::string stream(4'096, 'a');
+  const auto buffer = buildLz4Buffer(kRowCount, stream);
+
+  // The fixture's pool hangs off the memory manager's default root, which does
+  // not track usage.
+  const auto rootPool = memory::memoryManager()->addRootPool("blob_parser");
+  const auto parserPool = rootPool->addLeafChild("parser");
+  StreamDataParser parser{parserPool.get()};
+  const auto initialUsedBytes = parserPool->usedBytes();
+
+  // initialize() does not decompress yet: a caller may still call reset() for
+  // an earlier decode run before iterateStreams() reads this batch.
+  EXPECT_EQ(parser.initialize(buffer), kRowCount);
+  EXPECT_EQ(parserPool->usedBytes(), initialUsedBytes);
+  parser.reset();
+
+  std::vector<std::pair<uint32_t, std::string>> streams;
+  parser.iterateStreams([&](uint32_t offset, std::string_view data) {
+    streams.emplace_back(offset, std::string{data});
+  });
+  const std::vector<std::pair<uint32_t, std::string>> expectedStreams{
+      {0, stream}};
+  EXPECT_EQ(streams, expectedStreams);
+  EXPECT_GT(parserPool->usedBytes(), initialUsedBytes);
+
+  parser.reset();
+  EXPECT_EQ(parserPool->usedBytes(), initialUsedBytes);
 }
 
 class TabletChunkStripTest : public ::testing::Test {
@@ -1000,6 +1070,25 @@ TEST_F(WriteHeaderTest, maxRowCount) {
       SerializationVersion::kSerialization,
       std::numeric_limits<uint32_t>::max(),
       {});
+}
+
+TEST_F(WriteHeaderTest, rejectsUnsupportedBlobCompression) {
+  const SerializerOptions options{
+      .version = SerializationVersion::kBlob,
+      .blobCompressionOptions =
+          {.compressionType = static_cast<CompressionType>(99)},
+  };
+  std::string buffer;
+
+  NIMBLE_ASSERT_USER_THROW(
+      (StreamDataWriter<std::string>{
+          options,
+          buffer,
+          /*rowCount=*/1,
+          pool_.get(),
+          /*streamEncodingLayouts=*/nullptr}),
+      "kBlob blob compression must be Lz4, Zstd, MetaInternal, OpenZL or Uncompressed");
+  EXPECT_TRUE(buffer.empty());
 }
 
 TEST_F(WriteHeaderTest, estimateHeaderSizeCompactRaw) {

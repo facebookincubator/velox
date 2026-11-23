@@ -189,11 +189,19 @@ class ChunkStatsWriterImpl final : public ChunkStatsWriter {
     NIMBLE_CHECK_NOT_NULL(groupIndex_);
     NIMBLE_CHECK_EQ(stripeCount, groupIndex_->size());
     NIMBLE_CHECK_GT(stripeCount, 0);
-    NIMBLE_CHECK_GT(streamCount, 0);
 
     SCOPE_EXIT {
       groupIndex_.reset();
     };
+
+    // A group whose stripes wrote no streams has nothing to index, e.g. when
+    // every column is a scalar that is null in every row of those stripes. It
+    // gets an empty section, which readers treat as a group without chunk
+    // stats.
+    if (streamCount == 0) {
+      chunkStatsSections_.emplace_back(0, 0, CompressionType::Uncompressed);
+      return;
+    }
 
     // Compute total number of chunks across all streams and stripes.
     uint32_t totalNumChunks{0};
@@ -348,18 +356,15 @@ MetadataSection writeGroupV1(
   return createMetadataSection(asView(builder));
 }
 
-// Encodes values and resets the reusable scratch buffer.
+// Encodes values using metadata defaults and resets the scratch buffer.
 template <typename T>
 flatbuffers::Offset<serialization::EncodedStream> encodeTypedArray(
     flatbuffers::FlatBufferBuilder& builder,
     std::span<const T> values,
-    Buffer& encodingBuffer,
-    std::vector<std::pair<EncodingType, float>> encodingReadFactors) {
-  ManualEncodingSelectionPolicyFactory factory{
-      std::move(encodingReadFactors),
-      /*compressionOptions=*/std::nullopt,
-  };
-  auto base = factory.createPolicy(TypeTraits<T>::dataType);
+    Buffer& encodingBuffer) {
+  auto base =
+      ManualEncodingSelectionPolicyFactory::createForMetadata().createPolicy(
+          TypeTraits<T>::dataType);
   auto policy = std::unique_ptr<EncodingSelectionPolicy<T>>(
       static_cast<EncodingSelectionPolicy<T>*>(base.release()));
   const auto encoded =
@@ -376,15 +381,7 @@ flatbuffers::Offset<serialization::EncodedStream> encodeArray(
     flatbuffers::FlatBufferBuilder& builder,
     const std::vector<uint32_t>& values,
     Buffer& encodingBuffer) {
-  return encodeTypedArray<uint32_t>(
-      builder,
-      values,
-      encodingBuffer,
-      {
-          {EncodingType::Constant, 1.0},
-          {EncodingType::Trivial, 1.0},
-          {EncodingType::FixedBitWidth, 1.0},
-      });
+  return encodeTypedArray<uint32_t>(builder, values, encodingBuffer);
 }
 
 flatbuffers::Offset<serialization::EncodedStream> encodeBooleanArray(
@@ -394,12 +391,7 @@ flatbuffers::Offset<serialization::EncodedStream> encodeBooleanArray(
   return encodeTypedArray<bool>(
       builder,
       std::span<const bool>{values.data(), values.size()},
-      encodingBuffer,
-      {
-          {EncodingType::Constant, 1.0},
-          {EncodingType::Trivial, 1.0},
-          {EncodingType::RLE, 1.0},
-      });
+      encodingBuffer);
 }
 
 flatbuffers::Offset<serialization::EncodedStream> emptyEncodedStream(
@@ -497,25 +489,16 @@ void encodeTypedStreamBounds(
     mins.push_back(boundValue<T>(bounds.mins.at(chunk)));
     maxs.push_back(boundValue<T>(bounds.maxs.at(chunk)));
   }
-  std::vector<std::pair<EncodingType, float>> encodingReadFactors{
-      {EncodingType::Constant, 1.0},
-      {EncodingType::Trivial, 1.0},
-  };
-  encodingReadFactors.emplace_back(
-      std::is_same_v<T, bool> ? EncodingType::RLE : EncodingType::FixedBitWidth,
-      1.0);
   encodedMins.push_back(
       encodeTypedArray<T>(
           builder,
           std::span<const T>{mins.data(), mins.size()},
-          encodingBuffer,
-          encodingReadFactors));
+          encodingBuffer));
   encodedMaxs.push_back(
       encodeTypedArray<T>(
           builder,
           std::span<const T>{maxs.data(), maxs.size()},
-          encodingBuffer,
-          encodingReadFactors));
+          encodingBuffer));
 }
 
 void encodeStreamBounds(
