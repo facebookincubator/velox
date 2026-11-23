@@ -175,6 +175,7 @@ void registerIn(const std::string& prefix) {
   registerInFn<bool>(prefix);
   registerInFn<Varchar>(prefix);
   registerInFn<Timestamp>(prefix);
+  registerInFn<TimestampUtc>(prefix);
   registerInFn<Date>(prefix);
   registerInFn<ShortDecimal<P1, S1>>(prefix);
   registerInFn<LongDecimal<P1, S1>>(prefix);
