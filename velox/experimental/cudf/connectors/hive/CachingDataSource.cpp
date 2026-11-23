@@ -247,7 +247,7 @@ class PinnedBuffer {
     try {
       CUDF_CUDA_TRY(cudaEventRecord(memory_.lastCopy, stream.get()));
     } catch (...) {
-      // In a rare case event record throws, this ensures the copy finishes
+      // In a rare case event recording fails, this ensures the copy finishes
       // using the bounce buffer
       waitForStream(stream, memory_.device);
       throw;
