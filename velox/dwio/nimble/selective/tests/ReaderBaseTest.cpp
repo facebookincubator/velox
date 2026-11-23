@@ -147,8 +147,13 @@ class ReaderBaseTest : public ::testing::TestWithParam<CreationMode> {
   }
 
   std::shared_ptr<ReaderBase> createReaderBase(const std::string& fileData) {
+    return createReaderBase(fileData, makeReaderOptions());
+  }
+
+  std::shared_ptr<ReaderBase> createReaderBase(
+      const std::string& fileData,
+      const velox::dwio::common::ReaderOptions& readerOpts) {
     auto readFile = std::make_shared<velox::InMemoryReadFile>(fileData);
-    auto readerOpts = makeReaderOptions();
 
     switch (GetParam()) {
       case CreationMode::kDirect: {
@@ -383,12 +388,51 @@ TEST_P(ReaderBaseTest, fileColumnStatistics) {
   EXPECT_EQ(reader->fileColumnLogicalSize(numNodes), std::nullopt);
 }
 
+TEST_P(ReaderBaseTest, lazyFileStatsMatchEager) {
+  const auto fileData = writeStatsTestFile(/*enableVectorizedStats=*/true);
+  const auto eager = createReaderBase(fileData, makeReaderOptions());
+  auto lazyOpts = makeReaderOptions();
+  lazyOpts.setNimbleLazyFileStats(true);
+  const auto lazy = createReaderBase(fileData, lazyOpts);
+
+  EXPECT_TRUE(eager->hasFileColumnStatistics());
+  EXPECT_TRUE(lazy->hasFileColumnStatistics());
+  const uint32_t numNodes = eager->fileSchemaWithId()->maxId() + 1;
+  for (uint32_t nodeId = 0; nodeId < numNodes; ++nodeId) {
+    SCOPED_TRACE(fmt::format("nodeId {}", nodeId));
+    const auto* expected = eager->fileColumnStatistics(nodeId);
+    const auto* actual = lazy->fileColumnStatistics(nodeId);
+    ASSERT_NE(expected, nullptr);
+    ASSERT_NE(actual, nullptr);
+    EXPECT_EQ(actual->getType(), expected->getType());
+    EXPECT_EQ(actual->getValueCount(), expected->getValueCount());
+    EXPECT_EQ(actual->getNullCount(), expected->getNullCount());
+    EXPECT_EQ(actual->getLogicalSize(), expected->getLogicalSize());
+    EXPECT_EQ(actual->getPhysicalSize(), expected->getPhysicalSize());
+    EXPECT_EQ(
+        actual->toCommonStatistics()->toString(),
+        expected->toCommonStatistics()->toString());
+    EXPECT_EQ(
+        lazy->fileColumnLogicalSize(nodeId),
+        eager->fileColumnLogicalSize(nodeId));
+  }
+  EXPECT_EQ(eager->fileColumnStatistics(numNodes), nullptr);
+  EXPECT_EQ(lazy->fileColumnStatistics(numNodes), nullptr);
+  EXPECT_EQ(eager->fileColumnLogicalSize(numNodes), std::nullopt);
+  EXPECT_EQ(lazy->fileColumnLogicalSize(numNodes), std::nullopt);
+}
+
 TEST_P(ReaderBaseTest, fileStatsAbsent) {
-  const auto reader =
-      createReaderBase(writeStatsTestFile(/*enableVectorizedStats=*/false));
-  EXPECT_FALSE(reader->hasFileColumnStatistics());
-  EXPECT_EQ(reader->fileColumnStatistics(1), nullptr);
-  EXPECT_EQ(reader->fileColumnLogicalSize(1), std::nullopt);
+  const auto fileData = writeStatsTestFile(/*enableVectorizedStats=*/false);
+  for (const bool lazyFileStats : {false, true}) {
+    SCOPED_TRACE(fmt::format("lazyFileStats {}", lazyFileStats));
+    auto readerOpts = makeReaderOptions();
+    readerOpts.setNimbleLazyFileStats(lazyFileStats);
+    const auto reader = createReaderBase(fileData, readerOpts);
+    EXPECT_FALSE(reader->hasFileColumnStatistics());
+    EXPECT_EQ(reader->fileColumnStatistics(1), nullptr);
+    EXPECT_EQ(reader->fileColumnLogicalSize(1), std::nullopt);
+  }
 }
 
 TEST_P(ReaderBaseTest, locateStreams) {

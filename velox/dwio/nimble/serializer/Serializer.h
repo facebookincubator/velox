@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "folly/ScopeGuard.h"
 #include "folly/container/F14Set.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/nimble/common/Vector.h"
@@ -43,7 +44,9 @@ class Serializer {
       const velox::VectorPtr& vector,
       const OrderedRanges& ranges) const;
 
-  // Takes any buffer-like object and serialize the vector into it.
+  /// Takes any buffer-like object and appends the serialized vector to it.
+  /// When serialization throws, leaves the buffer as it was and drops the rows
+  /// of the batch, so the next call writes only its own rows.
   template <typename T>
   void serialize(
       const velox::VectorPtr& vector,
@@ -109,6 +112,14 @@ void Serializer::serialize(
     const OrderedRanges& ranges,
     T& buffer) const {
   validateSupportedInput(vector, ranges);
+
+  // Leaves the caller's buffer as it was when the batch fails. Also drops the
+  // rows of the failed batch, so that they cannot leak into the next one.
+  const auto originalBufferSize = buffer.size();
+  SCOPE_FAIL {
+    writer_->reset();
+    buffer.resize(originalBufferSize);
+  };
   writer_->write(vector, ranges);
 
   serde::StreamDataWriter<T> streamWriter{
@@ -148,6 +159,8 @@ void Serializer::serialize(
   }
   streamWriter.close();
 
+  // Replacing the string arena allocates, so it stays out of the scope guard,
+  // whose body must not throw.
   writer_->reset();
   context_.resetStringBuffer();
 }

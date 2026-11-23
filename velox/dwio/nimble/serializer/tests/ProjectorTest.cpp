@@ -3295,6 +3295,31 @@ TEST_F(ProjectorTest, hybridFlatMapProjectionKeepsGroupKeysEncoding) {
   EXPECT_THAT(rereadGroups[0].groupKeys, ElementsAre("1", "2"));
 }
 
+TEST_F(ProjectorTest, projectTypeKeepsSlidingWindowArrayColumn) {
+  SchemaBuilder builder;
+  auto events = builder.createSlidingWindowArrayTypeBuilder();
+  events->setChildren(builder.createScalarTypeBuilder(ScalarKind::Int64));
+  auto root = builder.createRowTypeBuilder(2);
+  root->addChild("id", builder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("events", events);
+  const auto inputSchema = SchemaReader::getSchema(builder.schemaNodes());
+
+  // The renaming walks the SlidingWindowArray column that the projection
+  // leaves out.
+  const auto projectType =
+      ROW({{"new_id", BIGINT()}, {"events", ARRAY(BIGINT())}});
+  Projector projector(
+      inputSchema,
+      makeSubfields({"new_id"}),
+      pool_.get(),
+      {.projectVersion = SerializationVersion::kProjection,
+       .projectType = projectType});
+
+  const auto& projected = projector.projectedSchema()->asRow();
+  ASSERT_EQ(projected.childrenCount(), 1);
+  EXPECT_EQ(projected.nameAt(0), "new_id");
+}
+
 TEST_F(ProjectorTest, hybridFlatMapRejectsEmptyProjectedKey) {
   const auto type = ROW({{"features", MAP(VARCHAR(), DOUBLE())}});
   SerializerOptions validOptions{

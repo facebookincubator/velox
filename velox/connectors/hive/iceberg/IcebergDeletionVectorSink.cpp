@@ -284,9 +284,9 @@ void IcebergDeletionVectorSink::seedFromExistingDeletionVector(
   const auto& descriptor = it->second;
 
   // Reconstruct the existing DV as an IcebergDeleteFile and read its positions
-  // through the same DeletionVectorReader used on the read path. The reader
-  // ignores the memory pool argument, so nullptr is safe; the connector config
-  // resolves the (possibly warm-storage / Manifold) filesystem for the Puffin.
+  // through the same DeletionVectorReader used on the read path. The connector
+  // config resolves the (possibly warm-storage / Manifold) filesystem for the
+  // Puffin.
   const IcebergDeleteFile dvFile(
       FileContent::kDeletionVector,
       descriptor.puffinPath,
@@ -301,7 +301,10 @@ void IcebergDeletionVectorSink::seedFromExistingDeletionVector(
       descriptor.contentLength,
       dataFile);
   DeletionVectorReader reader(
-      dvFile, /*splitOffset=*/0, /*pool=*/nullptr, hiveConfig_->config());
+      dvFile,
+      /*splitOffset=*/0,
+      connectorQueryCtx_->memoryPool(),
+      hiveConfig_->config());
   state.writer.addDeletedPositions(reader.deletedPositions());
 }
 

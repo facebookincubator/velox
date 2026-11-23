@@ -192,6 +192,20 @@ void appendProjectionStreams(
           *array.elements(), streamOffsets, barrierStreams, allowFlatMap);
       return;
     }
+    case Kind::SlidingWindowArray: {
+      // The offsets are positions in the elements stream of their own stripe,
+      // so a batch holding them is decoded on its own.
+      const auto& array = type.asSlidingWindowArray();
+      append(
+          array.offsetsDescriptor().offset(),
+          /*isBarrierStream=*/true);
+      append(
+          array.lengthsDescriptor().offset(),
+          /*isBarrierStream=*/true);
+      appendProjectionStreams(
+          *array.elements(), streamOffsets, barrierStreams, allowFlatMap);
+      return;
+    }
     case Kind::Map: {
       const auto& map = type.asMap();
       append(map.lengthsDescriptor().offset());
@@ -296,6 +310,8 @@ const TypeBuilder& allSubscriptValueType(
       return type.asArray().elements();
     case Kind::ArrayWithOffsets:
       return type.asArrayWithOffsets().elements();
+    case Kind::SlidingWindowArray:
+      return type.asSlidingWindowArray().elements();
     case Kind::Map:
       return type.asMap().values();
     case Kind::SlidingWindowMap:
@@ -395,6 +411,10 @@ velox::TypePtr convertToVeloxType(const Type& type) {
       const auto& arrayWithOffsetsType = type.asArrayWithOffsets();
       return std::make_shared<const velox::ArrayType>(
           convertToVeloxType(*arrayWithOffsetsType.elements()));
+    }
+    case Kind::SlidingWindowArray: {
+      return std::make_shared<const velox::ArrayType>(
+          convertToVeloxType(*type.asSlidingWindowArray().elements()));
     }
     case Kind::Map: {
       const auto& mapType = type.asMap();
@@ -849,6 +869,12 @@ std::shared_ptr<TypeBuilder> buildHybridFlatMapValueType(
           builder, *source.asArrayWithOffsets().elements()));
       return withAttributes(std::move(result));
     }
+    case Kind::SlidingWindowArray: {
+      auto result = builder.createSlidingWindowArrayTypeBuilder();
+      result->setChildren(buildHybridFlatMapValueType(
+          builder, *source.asSlidingWindowArray().elements()));
+      return withAttributes(std::move(result));
+    }
     case Kind::Map: {
       const auto& map = source.asMap();
       auto result = builder.createMapTypeBuilder();
@@ -1222,8 +1248,11 @@ void emitPlaceholderStreamOffsets(
           array.elements().get(), projectedStreamOffsets, barrierStreams);
       return;
     }
-    case Kind::ArrayWithOffsets: {
-      const auto& array = valueType->asArrayWithOffsets();
+    case Kind::ArrayWithOffsets:
+    case Kind::SlidingWindowArray: {
+      const auto& elements = valueType->kind() == Kind::ArrayWithOffsets
+          ? valueType->asArrayWithOffsets().elements()
+          : valueType->asSlidingWindowArray().elements();
       appendProjectedStream(
           projectedStreamOffsets,
           barrierStreams,
@@ -1235,7 +1264,7 @@ void emitPlaceholderStreamOffsets(
           UINT32_MAX,
           /*isBarrierStream=*/true);
       emitPlaceholderStreamOffsets(
-          array.elements().get(), projectedStreamOffsets, barrierStreams);
+          elements.get(), projectedStreamOffsets, barrierStreams);
       return;
     }
     case Kind::Map: {
@@ -1456,27 +1485,54 @@ void projectHybridFlatMapStreamOffsets(
   }
 }
 
-// Classifies each top-level column of the source nimble Row by `Kind` to
-// build the encoding hints the velox-source `buildProjectedNimbleType`
-// overload requires: FlatMap → flatMapColumns, ArrayWithOffsets →
-// dictionaryArrayColumns, SlidingWindowMap → deduplicatedMapColumns. Other
-// kinds produce no entry (plain encoding). A FlatMap whose values are
-// ArrayWithOffsets or SlidingWindowMap also lands in dictionaryArrayColumns or
-// deduplicatedMapColumns, so that its projected keys keep the value kind of
-// the source streams.
+// Returns true if 'type' or any type below it is a SlidingWindowArray.
+bool hasSlidingWindowArray(const std::shared_ptr<const Type>& type) {
+  bool found{false};
+  SchemaReader::traverseSchema(
+      type,
+      [&](uint32_t /*level*/,
+          const Type& node,
+          const SchemaReader::NodeInfo& /*info*/) {
+        found |= node.isSlidingWindowArray();
+      });
+  return found;
+}
+
+// Classifies each projected top-level column of the source nimble Row by
+// `Kind` to build the encoding hints the velox-source
+// `buildProjectedNimbleType` overload requires: FlatMap → flatMapColumns,
+// ArrayWithOffsets → dictionaryArrayColumns, SlidingWindowMap →
+// deduplicatedMapColumns. Other kinds produce no entry (plain encoding). A
+// FlatMap whose values are ArrayWithOffsets or SlidingWindowMap also lands in
+// dictionaryArrayColumns or deduplicatedMapColumns, so that its projected keys
+// keep the value kind of the source streams. Columns outside the projection
+// need no entry, since the velox-source builder skips them. A projected column
+// that holds a SlidingWindowArray anywhere fails, even when its projected
+// subfields leave the SlidingWindowArray out.
 // Internal helper of `buildProjectedNimbleType` (nimble-source overload).
-ColumnEncodings getColumnEncodings(const RowType& nimbleType) {
+ColumnEncodings getColumnEncodings(
+    const RowType& nimbleType,
+    const std::set<size_t>& columnIndices) {
   ColumnEncodings encodings;
-  for (size_t i = 0; i < nimbleType.childrenCount(); ++i) {
-    const auto& name = nimbleType.nameAt(i);
-    switch (nimbleType.childAt(i)->kind()) {
+  for (const auto columnIndex : columnIndices) {
+    const auto& name = nimbleType.nameAt(columnIndex);
+    const auto& column = nimbleType.childAt(columnIndex);
+
+    // TODO: Project SlidingWindowArray data. The velox-source builder takes
+    // each column's encoding from ColumnEncodings, which has no entry for this
+    // kind, so the projected schema would declare a plain Array over
+    // SlidingWindowArray streams.
+    if (hasSlidingWindowArray(column)) {
+      NIMBLE_NOT_IMPLEMENTED(
+          "Projection of SlidingWindowArray data is not supported: {}", name);
+    }
+    switch (column->kind()) {
       case Kind::FlatMap: {
         encodings.flatMapColumns.insert(std::string(name));
         // The writer gives every FlatMap at least one key, a dummy one when all
         // maps are empty, and the values of all keys the same kind, which the
         // projections of missing keys follow as well.
-        const auto valueKind =
-            nimbleType.childAt(i)->asFlatMap().childAt(0)->kind();
+        const auto valueKind = column->asFlatMap().childAt(0)->kind();
         if (valueKind == Kind::ArrayWithOffsets) {
           encodings.dictionaryArrayColumns.insert(std::string(name));
         } else if (valueKind == Kind::SlidingWindowMap) {
@@ -1557,7 +1613,7 @@ NimbleTypeProjection buildProjectedNimbleType(
   // view cannot represent and reserve the exact descriptor count for later
   // siblings.
   auto veloxSource = convertToVeloxType(*type);
-  const auto encodings = getColumnEncodings(rootRow);
+  const auto encodings = getColumnEncodings(rootRow, selectedColumnIndices);
   projection.nimbleType = buildProjectedNimbleType(
       veloxSource->asRow(),
       projectedSubfields,

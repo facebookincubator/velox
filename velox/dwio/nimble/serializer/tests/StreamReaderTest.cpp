@@ -2204,6 +2204,56 @@ TEST_F(StreamReaderTest, readsSelectedDeduplicatedArrays) {
       ::testing::ElementsAre(NullableArray{{10, 11}}, NullableArray{{14, 15}}));
 }
 
+TEST_F(StreamReaderTest, readsSelectedSlidingWindowArrays) {
+  // Rows 0, 1, 3 and 4 are the windows [10, 11, 12], [11, 12, 13], [11, 12]
+  // and [13] over one elements stream. Row 2 is null.
+  const auto offsets = encodeNullableChunk<uint32_t>(
+      {0, 1, std::nullopt, 1, 3}, EncodingType::Trivial);
+  const auto lengths = encodeChunk<uint32_t>(
+      std::array<uint32_t, 4>{3, 3, 2, 1}, EncodingType::Trivial);
+  const auto elements = encodeChunk<int64_t>(
+      std::array<int64_t, 4>{10, 11, 12, 13}, EncodingType::Trivial);
+  const auto type = std::make_shared<const SlidingWindowArrayType>(
+      StreamDescriptor{0, ScalarKind::UInt32},
+      StreamDescriptor{1, ScalarKind::UInt32},
+      std::make_shared<const ScalarType>(
+          StreamDescriptor{2, ScalarKind::Int64}));
+  const std::array<std::string_view, 3> streams{offsets, lengths, elements};
+  using NullableArray = std::optional<std::vector<int64_t>>;
+
+  {
+    // Rows 3 and 4 fall inside the window of row 1, so all three rows share
+    // the three output elements [11, 12, 13].
+    StreamReader reader{type, pool_.get(), /*options=*/{}};
+    auto output = velox::BaseVector::create(
+        velox::ARRAY(velox::BIGINT()), 4, pool_.get());
+    const std::array<RowRange, 2> ranges{{{1, 3}, {3, 5}}};
+    runRead(reader, streams, ranges, /*outputOffset=*/0, output);
+    EXPECT_THAT(
+        readArrays(output, /*offset=*/0, /*count=*/4),
+        ::testing::ElementsAre(
+            NullableArray{{11, 12, 13}},
+            NullableArray{std::nullopt},
+            NullableArray{{11, 12}},
+            NullableArray{{13}}));
+    EXPECT_EQ(output->as<velox::ArrayVector>()->elements()->size(), 3);
+  }
+  {
+    // Row 4 starts where the window of row 0 ends, so its element is staged
+    // as a separate range.
+    StreamReader reader{type, pool_.get(), /*options=*/{}};
+    auto output = velox::BaseVector::create(
+        velox::ARRAY(velox::BIGINT()), 2, pool_.get());
+    const std::array<RowRange, 2> ranges{{{0, 1}, {4, 5}}};
+    runRead(reader, streams, ranges, /*outputOffset=*/0, output);
+    EXPECT_THAT(
+        readArrays(output, /*offset=*/0, /*count=*/2),
+        ::testing::ElementsAre(
+            NullableArray{{10, 11, 12}}, NullableArray{{13}}));
+    EXPECT_EQ(output->as<velox::ArrayVector>()->elements()->size(), 4);
+  }
+}
+
 TEST_F(StreamReaderTest, readsSelectedSlidingWindowMaps) {
   const auto offsets = encodeNullableChunk<uint32_t>(
       {0, 0, std::nullopt, 2, 2}, EncodingType::Trivial);

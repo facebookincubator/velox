@@ -242,12 +242,16 @@ class ClusterIndexBase : public IndexLookup {
   // order; 'keyReaderFactory' must create readers that seek in the same order.
   // 'dataInput' reads the key streams. A cached input keeps one cache entry per
   // key chunk. 'keyStreamLocator' locates the key streams of the stripes, and
-  // may be empty unless the index stores its key chunks in stripes.
+  // may be empty unless the index stores its key chunks in stripes. In the
+  // Stripe layout, 'auxIndexStreamIds' names the auxiliary index streams of
+  // each stripe, which the subclass reads, and which the index locates together
+  // with the key stream: see indexStreamRegion().
   ClusterIndexBase(
       Section rootSection,
       std::shared_ptr<MetadataInput> metadataInput,
       std::shared_ptr<DataInput> dataInput,
       KeyStreamLocator keyStreamLocator,
+      std::vector<uint32_t> auxIndexStreamIds,
       KeyReaderFactory keyReaderFactory,
       const KeyComparator* keyComparator,
       bool pinIndex,
@@ -276,6 +280,16 @@ class ClusterIndexBase : public IndexLookup {
   // valid for the lifetime of this index because partitions are never
   // evicted.
   folly::Range<const uint32_t*> partitionChunkRows(uint32_t partitionId) const;
+
+  // Returns the file region, without its stream trailer, of the auxiliary index
+  // stream 'auxIndexStreamIds[streamIndex]' of the constructor in the stripe
+  // that holds chunk 'chunkIdx' of Stripe layout partition 'partitionId',
+  // counting from the first chunk of the partition. Loads the partition
+  // metadata on first access.
+  velox::common::Region indexStreamRegion(
+      uint32_t partitionId,
+      uint32_t chunkIdx,
+      uint32_t streamIndex) const;
 
   // Start row of each partition. Size is numPartitions() + 1; the last entry
   // is the file's total row count.
@@ -547,9 +561,10 @@ class ClusterIndexBase : public IndexLookup {
   // when the requested chunk matches the cached chunkIndex, otherwise the
   // slot is evicted and refilled. The returned DecodedChunk owns its
   // underlying buffer via shared_ptr / BufferPtr so it is safe to use past
-  // the call. The chunk of the stripe of 'keyChunk', a key chunk that a
-  // caller read, is decoded from it in place, and then not cached, since it
-  // reads the caller's bytes. Any other chunk is read from the file.
+  // the call. On a miss, the chunk of the stripe of 'keyChunk', a key chunk
+  // that a caller read, is decoded from a copy of its bytes and cached like a
+  // chunk read from the file, so later seeks in that stripe reuse it with or
+  // without a key chunk. Any other chunk is read from the file.
   DecodedChunk getDecodedChunk(
       const IndexPartitionBase* partition,
       const ChunkLocation& chunkLocation,
@@ -624,6 +639,9 @@ class ClusterIndexBase : public IndexLookup {
   const KeyStreamLocator keyStreamLocator_;
   // Stripe layout only. Id of the key stream of every stripe.
   const uint32_t keyStreamId_;
+  // Stripe layout only. Ids of the index streams of each stripe: the key
+  // stream, then the auxiliary index streams that the subclass reads.
+  const std::vector<uint32_t> indexStreamIds_;
   const KeyReaderFactory keyReaderFactory_;
 
   // Order of the encoded keys, or null for bytewise order.
