@@ -57,12 +57,18 @@ struct ReadState {
   void recordRead(size_t offset, size_t bytes) {
     std::lock_guard<std::mutex> lock(mutex);
     requests.emplace_back(offset, bytes);
+    threads.push_back(std::this_thread::get_id());
     ++reads;
   }
 
   Requests recordedReads() {
     std::lock_guard<std::mutex> lock(mutex);
     return requests;
+  }
+
+  std::vector<std::thread::id> recordedThreads() {
+    std::lock_guard<std::mutex> lock(mutex);
+    return threads;
   }
 
   std::string data = std::string(8192, 'x');
@@ -73,6 +79,7 @@ struct ReadState {
   std::shared_future<void> gate;
   std::mutex mutex;
   Requests requests;
+  std::vector<std::thread::id> threads;
 };
 
 class MemorySource : public cudf::io::datasource {
@@ -927,6 +934,20 @@ TEST_F(CachingDataSourceTest, synchronousReadsUseCacheAndClampRanges) {
       3);
   EXPECT_EQ(fromDevice(dst, 3), read_->data.substr(input->size() - 3));
   EXPECT_THROW(input->device_read(0, 1, nullptr, stream), VeloxRuntimeError);
+}
+
+TEST_F(CachingDataSourceTest, perThreadDefaultStreamReadsOnCallingThread) {
+  auto input = source();
+  const cuda::stream_ref stream{cudaStreamPerThread};
+  rmm::device_buffer destination(
+      4096, stream, cudf::get_current_device_resource_ref());
+  auto* dst = static_cast<uint8_t*>(destination.data());
+  auto bytesInGpu = input->device_read_async(0, 4096, dst, stream);
+  EXPECT_EQ(
+      read_->recordedThreads(),
+      std::vector<std::thread::id>{std::this_thread::get_id()});
+  EXPECT_EQ(bytesInGpu.get(), 4096);
+  EXPECT_EQ(fromDevice(dst, 4096), read_->data.substr(0, 4096));
 }
 
 TEST_F(CachingDataSourceTest, synchronousReadsFromSingleThreadCaller) {

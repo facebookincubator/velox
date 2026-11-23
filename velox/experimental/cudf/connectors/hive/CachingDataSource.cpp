@@ -166,6 +166,15 @@ void waitForStream(cuda::stream_ref stream, int device) {
   }
 }
 
+// Borrowed from RMM.
+bool isPerThreadDefaultStream(cuda::stream_ref stream) {
+#ifdef CUDA_API_PER_THREAD_DEFAULT_STREAM
+  return stream.get() == cudaStreamPerThread || stream.get() == nullptr;
+#else
+  return stream.get() == cudaStreamPerThread;
+#endif
+}
+
 class PinnedBuffer;
 
 // Pinned host memory used as a bounce buffer for copies from the async data
@@ -730,6 +739,18 @@ class CachingDataSource final : public cudf::io::datasource {
       size_t bytes,
       uint8_t* dst,
       cuda::stream_ref stream) override {
+    // cudaStreamPerThread picks a different stream on each thread. The read
+    // must run on the thread that passed it, not on a fill or copy thread.
+    if (isPerThreadDefaultStream(stream)) {
+      std::promise<size_t> result;
+      try {
+        result.set_value(device_read(offset, bytes, dst, stream));
+      } catch (...) {
+        result.set_exception(std::current_exception());
+      }
+      return result.get_future();
+    }
+
     bytes = reader_->trimToFile(offset, bytes);
     if (bytes == 0) {
       std::promise<size_t> nothingToRead;
@@ -742,6 +763,8 @@ class CachingDataSource final : public cudf::io::datasource {
     auto copiesQueuedPromise = std::make_shared<std::promise<size_t>>();
     auto copiesQueued = copiesQueuedPromise->get_future();
 
+    // The future has a deferred policy and will run on the thread that calls
+    // get().
     auto bytesInGpu = std::async(
         std::launch::deferred,
         [copiesQueued = std::move(copiesQueued), read]() mutable {
