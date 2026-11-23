@@ -113,6 +113,7 @@ velox_add_library(
   RegexFunctions.h
   SimpleComparisonMatcher.h
   Size.h
+  SparkErrors.h
   SparkPartitionId.h
   Split.h
   String.h
