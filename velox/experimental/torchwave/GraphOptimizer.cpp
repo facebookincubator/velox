@@ -20,6 +20,7 @@
 
 #include <c10/core/ScalarType.h>
 
+#include "velox/experimental/torchwave/StaticDims.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
 
 namespace torch::wave {
@@ -113,6 +114,23 @@ void Optimizer::setConstraint(
   }
 }
 
+void Optimizer::setStaticDims(const nativert::Node* producer) {
+  auto dims = inferStaticDims(producer, types_);
+  const auto& outputs = producer->outputs();
+  for (size_t i = 0; i < outputs.size() && i < dims.size(); ++i) {
+    const auto id = outputs[i]->id();
+    if (!dims.at(i).has_value() || id < 0) {
+      continue;
+    }
+    ensureConstraint(id);
+    auto& constraint = types_.constraints[id];
+    if (constraint.rank >= 0 &&
+        static_cast<size_t>(constraint.rank) == dims.at(i)->size()) {
+      constraint.dims = std::move(*dims.at(i));
+    }
+  }
+}
+
 void Optimizer::optimizeGraph(nativert::Graph* graph) {
   graph_ = graph;
   types_.constraints.resize(types_.types.size());
@@ -163,6 +181,99 @@ void Optimizer::optimizeNode(const nativert::Node* node) {
   }
 }
 
+int32_t Optimizer::fillMissingRanks() {
+  types_.constraints.resize(types_.types.size());
+  auto isTensor = [&](const nativert::Value* value) {
+    return value != nullptr && value->id() >= 0 &&
+        value->type().kind() == nativert::Type::Kind::Tensor &&
+        static_cast<size_t>(value->id()) < types_.types.size() &&
+        types_.types[value->id()] != nullptr;
+  };
+  auto rankOf = [&](const nativert::Value* value) -> int8_t {
+    const auto id = value->id();
+    return id >= 0 && static_cast<size_t>(id) < types_.constraints.size()
+        ? types_.constraints[id].rank
+        : int8_t{-1};
+  };
+  auto setRank = [&](const nativert::Value* value, int8_t rank) {
+    if (rank >= 0 && isTensor(value) && rankOf(value) < 0) {
+      types_.constraints[value->id()].rank = rank;
+    }
+  };
+  auto fillNode = [&](const nativert::Node& node) {
+    const auto& outputs = node.outputs();
+    if (std::none_of(outputs.begin(), outputs.end(), [&](const auto* output) {
+          return isTensor(output) && rankOf(output) < 0;
+        })) {
+      return;
+    }
+    if (const auto* metadata = Registry::metadata(node.target())) {
+      if (metadata->rankArgument.has_value()) {
+        const auto ordinal = *metadata->rankArgument;
+        if (ordinal >= 0 &&
+            static_cast<size_t>(ordinal) < node.inputs().size()) {
+          for (const auto* output : outputs) {
+            setRank(output, rankOf(node.inputs()[ordinal].value));
+          }
+        }
+      } else if (metadata->outputConstraints) {
+        const auto constraints = metadata->outputConstraints(&node, types_);
+        for (size_t i = 0; i < outputs.size() && i < constraints.size(); ++i) {
+          setRank(outputs[i], constraints[i].rank);
+        }
+      } else if (metadata->elementwise) {
+        int8_t maxRank = -1;
+        bool known = true;
+        for (const auto& input : node.inputs()) {
+          if (isTensor(input.value)) {
+            known = known && rankOf(input.value) >= 0;
+            maxRank = std::max(maxRank, rankOf(input.value));
+          }
+        }
+        if (known) {
+          for (const auto* output : outputs) {
+            setRank(output, maxRank);
+          }
+        }
+      }
+    }
+    // The export's TensorMeta has the rank of every value it typed; a value a
+    // pass made has a dtype-only meta, whose rank says nothing.
+    for (const auto* output : outputs) {
+      if (isTensor(output) && !waveGraph_.isCreatedValue(output)) {
+        setRank(output, static_cast<int8_t>(types_.types[output->id()]->dim()));
+      }
+    }
+  };
+  std::vector<nativert::Graph*> graphs{waveGraph_.graph()};
+  for (const auto& variant : waveGraph_.variantGraphs()) {
+    graphs.push_back(variant.get());
+  }
+  // Variant graphs read main-graph values and the other way around, in no
+  // one order: repeat until nothing changes.
+  int32_t missing = 0;
+  for (int32_t round = 0; round < 4; ++round) {
+    for (auto* graph : graphs) {
+      for (const auto& node : graph->nodes()) {
+        fillNode(node);
+      }
+    }
+    int32_t stillMissing = 0;
+    for (auto* graph : graphs) {
+      for (const auto& node : graph->nodes()) {
+        for (const auto* output : node.outputs()) {
+          stillMissing += isTensor(output) && rankOf(output) < 0 ? 1 : 0;
+        }
+      }
+    }
+    if (stillMissing == missing && round > 0) {
+      break;
+    }
+    missing = stillMissing;
+  }
+  return missing;
+}
+
 void Optimizer::visitValue(const nativert::Value* value) {
   auto* producer = value->producer();
   // Model inputs, weights and constants. A weight or constant is producer-less,
@@ -178,6 +289,12 @@ void Optimizer::visitValue(const nativert::Value* value) {
       types_.constraints[id].rank =
           static_cast<int8_t>(types_.types[id]->dim());
       types_.constraints[id].externallyOwned = true;
+      // Weights and constants have exact sizes. A user input's TensorMeta can
+      // be a placeholder, so its dims stay unknown.
+      if (!producer && !types_.types[id]->hasSymbolicShape()) {
+        auto sizes = types_.types[id]->sizes();
+        types_.constraints[id].dims.assign(sizes.begin(), sizes.end());
+      }
       if (WaveConfig::get().inputContiguous) {
         // The caller asserts these are contiguous. executeWave verifies each
         // one at runtime and throws otherwise.
@@ -242,6 +359,7 @@ void Optimizer::visitValue(const nativert::Value* value) {
       }
     }
   }
+  setStaticDims(producer);
 
   // Insert casts where PyTorch type promotion differs from C++ rules.
   if (metadata->arithmeticPromotion) {
@@ -340,6 +458,7 @@ void Optimizer::visitValue(const nativert::Value* value) {
     auto replacements = metadata->maybeReplace(producer, types_, waveGraph_);
     bool replacedGraphOutput = false;
     for (auto& [oldValue, newValue] : replacements) {
+      waveGraph_.recordReplacement(oldValue->name(), newValue->name());
       graph_->replaceAllUses(
           const_cast<nativert::Value*>(oldValue),
           const_cast<nativert::Value*>(newValue));

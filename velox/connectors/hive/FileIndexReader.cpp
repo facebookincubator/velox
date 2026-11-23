@@ -270,6 +270,12 @@ std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
   auto fileHandleCachePtr = fileHandleFactory_->generate(
       fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
   VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
+  // The file reader caches its metadata and index in the data cache only when
+  // it has both the cache and the file handle, whose id keys the entries.
+  if (auto* cache = connectorQueryCtx_->cache()) {
+    readerOpts.setFileHandle(&(*fileHandleCachePtr));
+    readerOpts.setCache(cache);
+  }
 
   auto baseFileInput = connector::BufferedInputBuilder::getInstance()->create(
       *fileHandleCachePtr,

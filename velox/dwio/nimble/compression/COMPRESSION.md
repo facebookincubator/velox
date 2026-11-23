@@ -118,6 +118,28 @@ struct CompressionOptions {
 
 Separate from per-stream data compression, metadata sections (stripe groups, optional sections) in the file footer are compressed with Zstd when they exceed `metadataCompressionThreshold` (default: 64 KB). Configure via `WriterOptions::metadataCompressionThreshold`.
 
+### Compression level for FixedBitWidth typed lanes
+
+`WriterOptions::fixedBitWidthTypedLanesOpenzlLevel` (serde key
+`nimble.fixedbitwidth.typed_lanes_openzl_level`, one integer level) gives the
+payloads of FixedBitWidth chunks that take typed lanes their own MetaInternal
+level. It is unset by default (serde value 0).
+
+- **Where it applies.** FixedBitWidth passes the level with every payload, and a
+  payload is typed only when the chunk takes typed lanes (see
+  `docs/Encodings.md`); bit-packed payloads pass `DataType::Undefined`. There is
+  one condition, in `Compression::compress`: a level is passed, the payload is
+  typed, and the compressor is MetaInternal. In that case the compressor gets
+  the policy's configuration with only the MetaInternal level replaced. No other
+  encoding passes a level, and chunk-level stream compression
+  (`chunkCompression`) is never affected.
+- **Fresh and replayed chunks alike.** The level comes from the writer's
+  options, the same source as the encoding options, so freshly selected,
+  replayed, shared-dictionary and nested chunks all see it. That holds whatever
+  compression options the selection policy creator was built from.
+- **Validation.** The writer requires a level in [1, 9] and MetaInternal
+  compression: Zstd, OpenZL, Lz4 and Uncompressed tables are rejected.
+
 ## How Compression Selection Works
 
 Compression is **not** per-column — a single `CompressionOptions` applies uniformly to all streams. The per-stream decision is accept/reject:
@@ -339,7 +361,7 @@ Add compression round-trip tests in `velox/dwio/nimble/encodings/tests/` or `vel
 | `compression/CompressionPolicy.cpp` | `ConfiguredCompressionPolicy` implementation |
 | `compression/ZstdCompressor.{h,cpp}` | Zstd codec (good reference implementation) |
 | `compression/Lz4Compressor.{h,cpp}` | LZ4 codec |
-| `compression/fb/MetaInternalCompressor.{h,cpp}` | Zstrong/Managed Compression (internal only) |
+| `fb_velox/dwio/nimble/compression/MetaInternalCompressor.{h,cpp}` | Zstrong/Managed Compression (internal only) |
 | `compression/BUCK` | Build target for all compression code |
 | `encodings/selection/EncodingSelectionPolicy.h` | Encoding selection policy |
 | `velox/WriterOptions.h` | `WriterOptions::compressionOptions` |

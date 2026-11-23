@@ -225,8 +225,9 @@ class SerializedPageFileReader {
   /// 'path' is the file path to read from. 'bufferSize' is the read buffer
   /// size. 'type' is the row type of the data. 'serde' is the VectorSerde
   /// instance to use. 'readOptions' specifies the deserialization options.
-  /// 'pool' is used for buffering. 'ioStats' is used to collect
-  /// filesystem I/O stats such as wsServiceTime.
+  /// 'pool' is used for buffering. 'readAheadExecutor' is not owned and must
+  /// outlive this reader. 'ioStats' is used to collect filesystem I/O stats
+  /// such as wsServiceTime.
   SerializedPageFileReader(
       const std::string& path,
       uint64_t bufferSize,
@@ -234,6 +235,7 @@ class SerializedPageFileReader {
       VectorSerde* serde,
       std::unique_ptr<VectorSerde::Options> readOptions,
       memory::MemoryPool* pool,
+      folly::Executor* readAheadExecutor,
       IoStats* ioStats);
 
   virtual ~SerializedPageFileReader() = default;

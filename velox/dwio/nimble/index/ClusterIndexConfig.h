@@ -29,7 +29,7 @@
 
 namespace facebook::nimble::index {
 
-/// Configuration shared by the built-in flat and hierarchical cluster indexes.
+/// Configuration shared by the built-in flat and trie cluster indexes.
 /// The configuration of an index that nests one, such as a weighted cluster
 /// index, extends it.
 ///
@@ -45,8 +45,8 @@ struct ClusterIndexConfig : IndexConfig {
       EncodingLayout encodingLayout,
       uint64_t maxRowsPerKeyChunk,
       CompressionType keyChunkCompressionType,
-      std::vector<std::pair<EncodingType, float>>
-          hierarchicalKeyEncodingReadFactors = {})
+      std::vector<std::pair<EncodingType, float>> trieKeyEncodingReadFactors =
+          {})
       : IndexConfig{IndexFamily::Cluster, std::move(indexName)},
         columns{std::move(columns)},
         sortOrders{std::move(sortOrders)},
@@ -55,8 +55,7 @@ struct ClusterIndexConfig : IndexConfig {
         encodingLayout{std::move(encodingLayout)},
         maxRowsPerKeyChunk{maxRowsPerKeyChunk},
         keyChunkCompressionType{keyChunkCompressionType},
-        hierarchicalKeyEncodingReadFactors{
-            std::move(hierarchicalKeyEncodingReadFactors)} {}
+        trieKeyEncodingReadFactors{std::move(trieKeyEncodingReadFactors)} {}
 
   /// Columns encoded into index keys for data pruning.
   std::vector<std::string> columns;
@@ -67,27 +66,27 @@ struct ClusterIndexConfig : IndexConfig {
   bool enforceKeyOrder;
   /// Whether duplicate encoded keys are rejected when key order is enforced.
   bool noDuplicateKey;
-  /// Encoding layout for flat keys. Hierarchical indexes select the encoding
-  /// of each key sequence from hierarchicalKeyEncodingReadFactors.
+  /// Encoding layout for flat keys. Trie indexes select the encoding
+  /// of each key sequence from trieKeyEncodingReadFactors.
   EncodingLayout encodingLayout;
   /// Maximum rows per key chunk. Smaller values improve lookup granularity at
-  /// the cost of additional metadata.
+  /// the cost of additional metadata. Ignored in the Stripe key stream layout,
+  /// where the keys of each stripe are one key chunk.
   uint64_t maxRowsPerKeyChunk;
   /// Chunk compression for encoded keys. Only Uncompressed, Zstd, and Lz4 are
   /// supported.
   CompressionType keyChunkCompressionType;
-  /// Encoding candidates and read factors for the sequences of hierarchical
+  /// Encoding candidates and read factors for the sequences of trie
   /// key chunks, chosen by the standard encoding selection. They apply to both
   /// the value sequences and the child offset sequences. Empty uses the
-  /// hierarchical writer's candidates: Constant, EliasFano, FixedBitWidth,
+  /// trie writer's candidates: Constant, EliasFano, FixedBitWidth,
   /// Trivial and PartitionedEliasFano. Keys whose levels repeat a few values
   /// can pass
   /// ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors() to let
   /// Dictionary and the other default encodings compete, for smaller but slower
   /// chunks. Every encoding must be one the selection supports. Flat indexes
   /// ignore it.
-  std::vector<std::pair<EncodingType, float>>
-      hierarchicalKeyEncodingReadFactors;
+  std::vector<std::pair<EncodingType, float>> trieKeyEncodingReadFactors;
 };
 
 /// Builds configuration for a registered cluster-index implementation. The
@@ -149,9 +148,9 @@ class ClusterIndexConfigBuilder {
     return *this;
   }
 
-  ClusterIndexConfigBuilder& withHierarchicalKeyEncodingReadFactors(
+  ClusterIndexConfigBuilder& withTrieKeyEncodingReadFactors(
       std::vector<std::pair<EncodingType, float>> readFactors) {
-    hierarchicalKeyEncodingReadFactors_ = std::move(readFactors);
+    trieKeyEncodingReadFactors_ = std::move(readFactors);
     return *this;
   }
 
@@ -166,7 +165,7 @@ class ClusterIndexConfigBuilder {
         encodingLayout_,
         maxRowsPerKeyChunk_,
         keyChunkCompressionType_,
-        hierarchicalKeyEncodingReadFactors_);
+        trieKeyEncodingReadFactors_);
   }
 
  private:
@@ -182,8 +181,7 @@ class ClusterIndexConfigBuilder {
       CompressionType::Uncompressed};
   uint64_t maxRowsPerKeyChunk_{10'000};
   CompressionType keyChunkCompressionType_{CompressionType::Uncompressed};
-  std::vector<std::pair<EncodingType, float>>
-      hierarchicalKeyEncodingReadFactors_;
+  std::vector<std::pair<EncodingType, float>> trieKeyEncodingReadFactors_;
 };
 
 } // namespace facebook::nimble::index

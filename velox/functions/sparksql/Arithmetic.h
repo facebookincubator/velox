@@ -111,7 +111,7 @@ struct AbsFunction {
   template <typename T>
   FOLLY_ALWAYS_INLINE Status call(T& result, const T& a) {
     if constexpr (std::is_integral_v<T>) {
-      if (FOLLY_UNLIKELY(a == std::numeric_limits<T>::min())) {
+      if (a == std::numeric_limits<T>::min()) [[unlikely]] {
         if (ansiEnabled_) {
           // In ANSI mode, returns an overflow error.
           if (threadSkipErrorDetails()) {
@@ -249,7 +249,7 @@ struct UnaryMinusFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE Status call(TInput& result, const TInput a) {
     if constexpr (std::is_integral_v<TInput>) {
-      if (FOLLY_UNLIKELY(a == std::numeric_limits<TInput>::min())) {
+      if (a == std::numeric_limits<TInput>::min()) [[unlikely]] {
         if (failOnError_) {
           if (threadSkipErrorDetails()) {
             return Status::UserError();

@@ -26,6 +26,9 @@ static const char* kIndeterminateKeyErrorMessage =
 template <bool AllowDuplicateKeys>
 class MapFunction : public exec::VectorFunction {
  public:
+  explicit MapFunction(bool generateConstantMapsAsFlatMaps)
+      : generateConstantMapsAsFlatMaps_{generateConstantMapsAsFlatMaps} {}
+
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -116,6 +119,10 @@ class MapFunction : public exec::VectorFunction {
       context.moveOrCopyResult(mapVector, rows, result);
     } else if (decodedKeys->isConstantMapping()) {
       // Constant keys.
+      if (generateConstantMapsAsFlatMaps_) {
+        VELOX_NYI(
+            "Flat maps for constant map keys are not implemented in map()");
+      }
       auto keysIndex = decodedKeys->index(rows.begin());
       auto valueIndices = decodedValues->indices();
 
@@ -368,18 +375,26 @@ class MapFunction : public exec::VectorFunction {
       VELOX_USER_FAIL(kDuplicateKey, duplicateKey);
     }
   }
+
+  bool generateConstantMapsAsFlatMaps_;
 };
 } // namespace
 
-VELOX_DECLARE_VECTOR_FUNCTION(
+VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
     udf_map,
     MapFunction</*AllowDuplicateKeys=*/false>::signatures(),
-    std::make_unique<MapFunction</*AllowDuplicateKeys=*/false>>());
+    [](const std::string& /*name*/,
+       const std::vector<exec::VectorFunctionArg>& /*inputArgs*/,
+       const core::QueryConfig& config) {
+      return std::make_shared<MapFunction</*AllowDuplicateKeys=*/false>>(
+          config.generateConstantMapsAsFlatMaps());
+    });
 
 VELOX_DECLARE_VECTOR_FUNCTION(
     udf_map_allow_duplicates,
     MapFunction</*AllowDuplicateKeys=*/true>::signatures(),
-    std::make_unique<MapFunction</*AllowDuplicateKeys=*/true>>());
+    std::make_unique<MapFunction</*AllowDuplicateKeys=*/true>>(
+        /*generateConstantMapsAsFlatMaps=*/false));
 
 void registerMapFunction(
     const std::string& name,

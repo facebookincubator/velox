@@ -570,18 +570,22 @@ struct VectorInitializer<velox::FlatVector<T>> {
       resetIfNotWritable(output, nulls, values);
     }
 
-    ensureBuffer<bool, /* ShouldAllocate */ false>(&nulls, rowCount, pool);
-    ensureBuffer<T>(&values, rowCount, pool);
+    ensureBuffer<bool, /*ShouldAllocate=*/false>(&nulls, rowCount, pool);
 
-    if (!output) {
-      output = std::make_shared<velox::FlatVector<T>>(
-          pool,
-          veloxType,
-          nulls,
-          rowCount,
-          values,
-          std::vector<velox::BufferPtr>());
+    if (output != nullptr) {
+      // The caller resizes the reused vector's owned storage before writing.
+      ensureBuffer<T, /*ShouldAllocate=*/false>(&values, rowCount, pool);
+      return static_cast<velox::FlatVector<T>*>(output.get());
     }
+
+    ensureBuffer<T>(&values, rowCount, pool);
+    output = std::make_shared<velox::FlatVector<T>>(
+        pool,
+        veloxType,
+        nulls,
+        rowCount,
+        values,
+        std::vector<velox::BufferPtr>());
 
     return static_cast<velox::FlatVector<T>*>(output.get());
   }
@@ -606,21 +610,28 @@ struct VectorInitializer<velox::ArrayVector> {
       resetIfNotWritable(output, nulls, sizes, offsets);
     }
 
-    ensureBuffer<bool, /* ShouldAllocate */ false>(&nulls, rowCount, pool);
+    ensureBuffer<bool, /*ShouldAllocate=*/false>(&nulls, rowCount, pool);
+
+    if (output != nullptr) {
+      // The caller resizes the reused vector's owned storage before writing.
+      ensureBuffer<velox::vector_size_t, /*ShouldAllocate=*/false>(
+          &offsets, rowCount, pool);
+      ensureBuffer<velox::vector_size_t, /*ShouldAllocate=*/false>(
+          &sizes, rowCount, pool);
+      return static_cast<velox::ArrayVector*>(output.get());
+    }
+
     ensureBuffer<velox::vector_size_t>(&offsets, rowCount, pool);
     ensureBuffer<velox::vector_size_t>(&sizes, rowCount, pool);
-
-    if (!output) {
-      output = std::make_shared<velox::ArrayVector>(
-          pool,
-          veloxType,
-          nulls,
-          rowCount,
-          std::move(offsets),
-          std::move(sizes),
-          /* elements */ elements,
-          0 /*nullCount*/);
-    }
+    output = std::make_shared<velox::ArrayVector>(
+        pool,
+        veloxType,
+        nulls,
+        rowCount,
+        std::move(offsets),
+        std::move(sizes),
+        /* elements */ elements,
+        0 /*nullCount*/);
 
     return static_cast<velox::ArrayVector*>(output.get());
   }
@@ -646,22 +657,29 @@ struct VectorInitializer<velox::MapVector> {
       resetIfNotWritable(output, nulls, sizes, offsets);
     }
 
-    ensureBuffer<bool, /* ShouldAllocate */ false>(&nulls, rowCount, pool);
+    ensureBuffer<bool, /*ShouldAllocate=*/false>(&nulls, rowCount, pool);
+
+    if (output != nullptr) {
+      // The caller resizes the reused vector's owned storage before writing.
+      ensureBuffer<velox::vector_size_t, /*ShouldAllocate=*/false>(
+          &offsets, rowCount, pool);
+      ensureBuffer<velox::vector_size_t, /*ShouldAllocate=*/false>(
+          &sizes, rowCount, pool);
+      return static_cast<velox::MapVector*>(output.get());
+    }
+
     ensureBuffer<velox::vector_size_t>(&offsets, rowCount, pool);
     ensureBuffer<velox::vector_size_t>(&sizes, rowCount, pool);
-
-    if (!output) {
-      output = std::make_shared<velox::MapVector>(
-          pool,
-          veloxType,
-          nulls,
-          rowCount,
-          std::move(offsets),
-          std::move(sizes),
-          /* keys*/ mapKeys,
-          /*values*/ mapValues,
-          0 /*nullCount*/);
-    }
+    output = std::make_shared<velox::MapVector>(
+        pool,
+        veloxType,
+        nulls,
+        rowCount,
+        std::move(offsets),
+        std::move(sizes),
+        /* keys*/ mapKeys,
+        /*values*/ mapValues,
+        0 /*nullCount*/);
 
     return static_cast<velox::MapVector*>(output.get());
   }
@@ -2789,6 +2807,457 @@ class ArrayWithOffsetsFieldReaderFactory final : public FieldReaderFactory {
 
  private:
   std::unique_ptr<FieldReaderFactory> elements_;
+};
+
+// Reads a SlidingWindowArray (see SlidingWindowArrayType). Row windows may
+// overlap, so the output ArrayVector lets overlapping rows point at the same
+// elements instead of copying them.
+//
+// The sequential path keeps the position reached in the elements stream and
+// the tail: the elements from the start of the last non-empty row read to
+// that position. Window starts never decrease within a stripe, so the next
+// row starts in the tail or after it, and the elements stream is read
+// forward only.
+class SlidingWindowArrayFieldReader final
+    : public VariableLengthFieldReaderBase {
+ public:
+  SlidingWindowArrayFieldReader(
+      velox::memory::MemoryPool& pool,
+      velox::TypePtr type,
+      Decoder* decoder,
+      Decoder* offsetDecoder,
+      std::unique_ptr<FieldReader> elementsReader)
+      : VariableLengthFieldReaderBase{pool, std::move(type), decoder},
+        offsetDecoder_{offsetDecoder},
+        elementsReader_{std::move(elementsReader)},
+        offsetsBuffer_{&pool},
+        offsetNulls_{&pool} {}
+
+  std::optional<std::pair<uint32_t, uint64_t>> estimatedRowSize() const final {
+    // TODO: Implement estimatedRowSize for SlidingWindowArrayFieldReader. Rows
+    // share elements, so the size of an array row must count each stored
+    // element once, not once per row that holds it.
+    return std::nullopt;
+  }
+
+  folly::coro::Task<void> co_next(
+      uint32_t count,
+      velox::VectorPtr& output,
+      const velox::bits::Bitmap* scatterBitmap) final {
+    const auto rowCount = scatterCount(count, scatterBitmap);
+    auto* vector = VectorInitializer<velox::ArrayVector>::initialize(
+        type_, rowCount, pool_, output);
+    vector->resize(static_cast<velox::vector_size_t>(rowCount));
+    auto* rawOffsets = vector->offsets()->asMutable<velox::vector_size_t>();
+    auto* rawSizes = vector->sizes()->asMutable<velox::vector_size_t>();
+
+    const auto numNonNulls = offsetDecoder_->next(
+        count,
+        rawOffsets,
+        [&]() { return ensureNulls(vector, rowCount); },
+        stringBuffers_,
+        scatterBitmap);
+    const uint64_t* rawNulls{nullptr};
+    if (numNonNulls == rowCount) {
+      vector->resetNulls();
+    } else {
+      vector->setNullCount(
+          static_cast<velox::vector_size_t>(rowCount - numNonNulls));
+      rawNulls = vector->rawNulls();
+    }
+    readLengths(numNonNulls);
+
+    // Turns the stripe offsets into offsets in the output elements, which hold
+    // the stripe elements ['firstRowStart', 'maxRowEnd').
+    std::optional<uint32_t> firstRowStart;
+    uint32_t lastRowStart{0};
+    uint64_t maxRowEnd{0};
+    uint32_t lengthIndex{0};
+    for (uint32_t row = 0; row < rowCount; ++row) {
+      if (rawNulls != nullptr && velox::bits::isBitNull(rawNulls, row)) {
+        rawOffsets[row] = 0;
+        rawSizes[row] = 0;
+        continue;
+      }
+      const auto length = lengthsBuffer_[lengthIndex++];
+      rawSizes[row] = static_cast<velox::vector_size_t>(length);
+      if (length == 0) {
+        rawOffsets[row] = 0;
+        continue;
+      }
+      const auto rowStart = static_cast<uint32_t>(rawOffsets[row]);
+      if (!firstRowStart.has_value()) {
+        firstRowStart = rowStart;
+      }
+      NIMBLE_CHECK_FILE_GE(
+          rowStart,
+          lastRowStart,
+          "Sliding window array offsets must not decrease");
+      lastRowStart = rowStart;
+      maxRowEnd = std::max<uint64_t>(
+          maxRowEnd, static_cast<uint64_t>(rowStart) + length);
+      rawOffsets[row] =
+          static_cast<velox::vector_size_t>(rowStart - *firstRowStart);
+    }
+
+    if (!firstRowStart.has_value()) {
+      if (vector->elements() != nullptr) {
+        vector->elements()->resize(0);
+      }
+      co_return;
+    }
+    co_await loadElements(
+        *firstRowStart, lastRowStart, maxRowEnd, vector->elements());
+  }
+
+  folly::coro::Task<void> co_read(
+      std::span<const RowRange> sourceRanges,
+      std::span<const velox::BaseVector::CopyRange> outputRanges,
+      velox::VectorPtr& output) final {
+    auto* vector = prepareSelectedOutput<velox::ArrayVector>(
+        sourceRanges, outputRanges, output);
+
+    // The lengths stream holds one entry per non-null row, so finding the
+    // length of a row needs the nulls of every row before it.
+    const auto endRow = sourceRanges.back().endRow;
+    offsetsBuffer_.resize(endRow);
+    const std::array<RowRange, 1> offsetRange{{{0, endRow}}};
+    const auto numNonNullRows = offsetDecoder_->read(
+        offsetRange,
+        DataType::Uint32,
+        offsetsBuffer_.data(),
+        [&]() {
+          offsetNulls_.resize(velox::bits::nwords(endRow));
+          return offsetNulls_.data();
+        },
+        stringBuffers_);
+    const auto* rawOffsetNulls =
+        numNonNullRows == endRow ? nullptr : offsetNulls_.data();
+    lengthsBuffer_.resize(numNonNullRows);
+    if (numNonNullRows > 0) {
+      const std::array<RowRange, 1> lengthRange{{{0, numNonNullRows}}};
+      const auto numLengths = decoder_->read(
+          lengthRange,
+          DataType::Uint32,
+          lengthsBuffer_.data(),
+          /*getOutputNulls=*/nullptr,
+          stringBuffers_);
+      NIMBLE_CHECK_FILE_EQ(
+          numLengths,
+          numNonNullRows,
+          "Sliding window array lengths must not contain nulls");
+    }
+
+    childSourceRanges_.clear();
+    childOutputRanges_.clear();
+    auto& elements = vector->elements();
+    auto* rawOffsets = vector->mutableOffsets(output->size())
+                           ->asMutable<velox::vector_size_t>();
+    auto* rawSizes =
+        vector->mutableSizes(output->size())->asMutable<velox::vector_size_t>();
+    auto* rawOutputNulls = output->mutableRawNulls();
+    // The output may already hold rows from earlier calls, as when the index
+    // projector fills one output stripe by stripe. Their elements stay in
+    // place, so the elements of the rows read here go after them.
+    auto outputElementOffset = elements->size();
+    velox::vector_size_t sourceElementOffset{0};
+    // The segment is the last stripe element range staged for the child
+    // reader. A row starting inside it extends it rather than staging its
+    // elements again.
+    std::optional<uint64_t> segmentSourceStart;
+    uint64_t segmentSourceEnd{0};
+    velox::vector_size_t segmentOutputStart{0};
+    uint32_t lengthIndex{0};
+    uint32_t row{0};
+    for (size_t rangeIndex{0}; rangeIndex < sourceRanges.size(); ++rangeIndex) {
+      const auto& sourceRange = sourceRanges[rangeIndex];
+      const auto& outputRange = outputRanges[rangeIndex];
+      NIMBLE_CHECK_EQ(sourceRange.numRows(), outputRange.count);
+      lengthIndex += rawOffsetNulls == nullptr
+          ? sourceRange.startRow - row
+          : static_cast<uint32_t>(velox::bits::countBits(
+                rawOffsetNulls,
+                static_cast<int32_t>(row),
+                static_cast<int32_t>(sourceRange.startRow)));
+      for (row = sourceRange.startRow; row < sourceRange.endRow; ++row) {
+        const auto outputRow = outputRange.targetIndex +
+            static_cast<velox::vector_size_t>(row - sourceRange.startRow);
+        if (rawOffsetNulls != nullptr &&
+            velox::bits::isBitNull(rawOffsetNulls, row)) {
+          velox::bits::setNull(rawOutputNulls, outputRow, true);
+          rawOffsets[outputRow] = outputElementOffset;
+          rawSizes[outputRow] = 0;
+          continue;
+        }
+        velox::bits::setNull(rawOutputNulls, outputRow, false);
+        const auto length = lengthsBuffer_[lengthIndex++];
+        rawSizes[outputRow] = static_cast<velox::vector_size_t>(length);
+        if (length == 0) {
+          rawOffsets[outputRow] = outputElementOffset;
+          continue;
+        }
+        const uint64_t start = offsetsBuffer_[row];
+        const uint64_t end = start + length;
+        NIMBLE_CHECK_LE(
+            length,
+            std::numeric_limits<velox::vector_size_t>::max() -
+                outputElementOffset,
+            "Selected array elements exceed the Velox vector row limit");
+        if (!segmentSourceStart.has_value() || start >= segmentSourceEnd) {
+          segmentSourceStart = start;
+          segmentSourceEnd = end;
+          segmentOutputStart = outputElementOffset;
+          childSourceRanges_.emplace_back(
+              static_cast<uint32_t>(start), static_cast<uint32_t>(end));
+          childOutputRanges_.push_back({
+              .sourceIndex = sourceElementOffset,
+              .targetIndex = outputElementOffset,
+              .count = static_cast<velox::vector_size_t>(length),
+          });
+          sourceElementOffset += static_cast<velox::vector_size_t>(length);
+          outputElementOffset += static_cast<velox::vector_size_t>(length);
+        } else {
+          NIMBLE_CHECK_FILE_GE(
+              start,
+              *segmentSourceStart,
+              "Sliding window array offsets must not decrease");
+          if (end > segmentSourceEnd) {
+            const auto numExtra =
+                static_cast<velox::vector_size_t>(end - segmentSourceEnd);
+            childSourceRanges_.back().endRow += numExtra;
+            childOutputRanges_.back().count += numExtra;
+            sourceElementOffset += numExtra;
+            outputElementOffset += numExtra;
+            segmentSourceEnd = end;
+          }
+        }
+        rawOffsets[outputRow] = segmentOutputStart +
+            static_cast<velox::vector_size_t>(start - *segmentSourceStart);
+      }
+    }
+
+    elements->resize(outputElementOffset);
+    // No child range means every selected row is null or an empty array, so
+    // the elements reader has nothing to read.
+    if (!childSourceRanges_.empty()) {
+      co_await elementsReader_->co_read(
+          childSourceRanges_, childOutputRanges_, elements);
+    }
+  }
+
+  folly::coro::Task<void> co_skip(uint32_t count) final {
+    // Skips only the offsets and lengths. The elements stream stays where it
+    // is: a later row can start inside the windows of the skipped rows, and its
+    // start is known only once it is read. loadElements() then skips the
+    // elements before it.
+    //
+    // Decodes the skipped rows in batches of 'kSkipBatchSize' on the stack, so
+    // a long skip allocates nothing. The nulls give the number of lengths to
+    // skip, and the offsets give the start of the last skipped window.
+    // @lint-ignore CLANGTIDY cppcoreguidelines-pro-type-member-init
+    std::array<uint32_t, kSkipBatchSize> offsets;
+    // @lint-ignore CLANGTIDY cppcoreguidelines-pro-type-member-init
+    std::array<char, nullBytes(kSkipBatchSize)> nulls;
+    std::optional<uint32_t> lastRowStart;
+    while (count > 0) {
+      const auto batchSize = std::min(count, kSkipBatchSize);
+      const auto numNonNulls = offsetDecoder_->next(
+          batchSize,
+          offsets.data(),
+          [&]() { return nulls.data(); },
+          stringBuffers_,
+          /*scatterOutputBitmap=*/nullptr);
+      readLengths(numNonNulls);
+      uint32_t lengthIndex{0};
+      for (uint32_t row = 0; row < batchSize; ++row) {
+        if (numNonNulls != batchSize &&
+            !velox::bits::isBitSet(
+                reinterpret_cast<const uint8_t*>(nulls.data()), row)) {
+          continue;
+        }
+        if (lengthsBuffer_[lengthIndex++] > 0) {
+          lastRowStart = offsets[row];
+        }
+      }
+      count -= batchSize;
+    }
+
+    // Later rows start at or after the last skipped window, so the tail is
+    // needed only if that window starts before the elements read so far.
+    if (lastRowStart.has_value() && *lastRowStart >= elementsPosition_) {
+      tail_.reset();
+      tailStart_ = elementsPosition_;
+    }
+    co_return;
+  }
+
+  void reset() final {
+    FieldReader::reset();
+    offsetDecoder_->reset();
+    elementsReader_->reset();
+    tail_.reset();
+    tailStart_ = 0;
+    elementsPosition_ = 0;
+  }
+
+ private:
+  // Reads 'count' window lengths into 'lengthsBuffer_'.
+  void readLengths(uint32_t count) {
+    lengthsBuffer_.resize(count);
+    if (count == 0) {
+      return;
+    }
+    const auto numLengths = decoder_->next(
+        count,
+        lengthsBuffer_.data(),
+        [&]() {
+          ensureBuffer<bool>(&lengthNulls_, count, pool_);
+          return lengthNulls_->asMutable<void>();
+        },
+        stringBuffers_,
+        /*scatterOutputBitmap=*/nullptr);
+    NIMBLE_CHECK_FILE_EQ(
+        numLengths,
+        count,
+        "Sliding window array lengths must not contain nulls");
+  }
+
+  // Sets 'elements' to the stripe elements ['firstRowStart', 'maxRowEnd'),
+  // which the windows of the batch's rows cover. Takes the part before
+  // 'elementsPosition_' from the tail and reads the rest. The new tail begins
+  // at 'lastRowStart', the window start of the last non-empty row, since no
+  // later row starts before it.
+  folly::coro::Task<void> loadElements(
+      uint64_t firstRowStart,
+      uint64_t lastRowStart,
+      uint64_t maxRowEnd,
+      velox::VectorPtr& elements) {
+    NIMBLE_CHECK_LE(
+        firstRowStart,
+        lastRowStart,
+        "The first row window must not start after the last one");
+    NIMBLE_CHECK_LT(
+        lastRowStart,
+        maxRowEnd,
+        "The last non-empty row window must end after its start");
+    NIMBLE_CHECK_LE(
+        maxRowEnd - firstRowStart,
+        static_cast<uint64_t>(std::numeric_limits<velox::vector_size_t>::max()),
+        "Array elements exceed the Velox vector row limit");
+    const auto numFromTail = static_cast<velox::vector_size_t>(
+        firstRowStart < elementsPosition_
+            ? std::min(maxRowEnd, elementsPosition_) - firstRowStart
+            : 0);
+    if (numFromTail > 0) {
+      NIMBLE_CHECK_FILE_GE(
+          firstRowStart,
+          tailStart_,
+          "Sliding window array offsets must not decrease");
+    }
+    const auto readStart = std::max(firstRowStart, elementsPosition_);
+    const auto numToRead = static_cast<velox::vector_size_t>(
+        maxRowEnd > readStart ? maxRowEnd - readStart : 0);
+    if (readStart > elementsPosition_) {
+      // Skips the elements before this batch that no row reads, including
+      // those of rows co_skip() passed over.
+      co_await elementsReader_->co_skip(
+          static_cast<uint32_t>(readStart - elementsPosition_));
+      elementsPosition_ = readStart;
+    }
+
+    if (numFromTail == 0) {
+      co_await elementsReader_->co_next(
+          numToRead, elements, /*scatterBitmap=*/nullptr);
+    } else {
+      if (numToRead > 0) {
+        co_await elementsReader_->co_next(
+            numToRead, readBuffer_, /*scatterBitmap=*/nullptr);
+      }
+      auto combined = velox::BaseVector::create(
+          type_->childAt(0), numFromTail + numToRead, pool_);
+      combined->copy(
+          tail_.get(),
+          /*targetIndex=*/0,
+          static_cast<velox::vector_size_t>(firstRowStart - tailStart_),
+          numFromTail);
+      if (numToRead > 0) {
+        combined->copy(
+            readBuffer_.get(), numFromTail, /*sourceIndex=*/0, numToRead);
+      }
+      elements = std::move(combined);
+    }
+
+    if (numToRead == 0) {
+      co_return;
+    }
+    elementsPosition_ = maxRowEnd;
+    const auto numTail =
+        static_cast<velox::vector_size_t>(maxRowEnd - lastRowStart);
+    tail_ = velox::BaseVector::create(type_->childAt(0), numTail, pool_);
+    tail_->copy(
+        elements.get(),
+        /*targetIndex=*/0,
+        static_cast<velox::vector_size_t>(lastRowStart - firstRowStart),
+        numTail);
+    tailStart_ = lastRowStart;
+  }
+
+  // Reads the window start of each row.
+  Decoder* const offsetDecoder_;
+  // Reads the elements stream that the windows of all rows share.
+  const std::unique_ptr<FieldReader> elementsReader_;
+
+  // --- State of co_read() ---
+  // Window start of each row in [0, end of the ranges) of the current
+  // co_read(). Kept across calls to reuse the allocation.
+  Vector<uint32_t> offsetsBuffer_;
+  // Nulls of the rows in 'offsetsBuffer_'. Kept across calls to reuse the
+  // allocation.
+  Vector<uint64_t> offsetNulls_;
+
+  // --- State of co_next() and co_skip() ---
+  // Stripe elements ['tailStart_', 'elementsPosition_') that a later row can
+  // still use. Rows never start before the last non-empty row, so the tail
+  // begins at that row's window start.
+  velox::VectorPtr tail_;
+  // Elements that co_next() reads past the tail, before it joins them with the
+  // elements it takes from the tail.
+  velox::VectorPtr readBuffer_;
+  // Stripe position of the first element of 'tail_'. tailStart_ <=
+  // elementsPosition_, so the tail holds 'elementsPosition_ - tailStart_'
+  // elements, none when the two are equal. No later row starts before it.
+  uint64_t tailStart_{0};
+  // Number of stripe elements 'elementsReader_' has read or skipped, which is
+  // the stripe position of the next element it returns. The tail ends here.
+  uint64_t elementsPosition_{0};
+};
+
+class SlidingWindowArrayFieldReaderFactory final : public FieldReaderFactory {
+ public:
+  SlidingWindowArrayFieldReaderFactory(
+      velox::TypePtr veloxType,
+      const Type* type,
+      std::unique_ptr<FieldReaderFactory> elements,
+      velox::memory::MemoryPool* pool)
+      : FieldReaderFactory{std::move(veloxType), type, pool},
+        elements_{std::move(elements)} {}
+
+  std::unique_ptr<FieldReader> createReader(
+      const folly::F14FastMap<offset_size, std::unique_ptr<Decoder>>& decoders)
+      final {
+    return createReaderImpl<SlidingWindowArrayFieldReader>(
+        decoders,
+        nimbleType_->asSlidingWindowArray().lengthsDescriptor(),
+        [&]() {
+          return getDecoder(
+              decoders,
+              nimbleType_->asSlidingWindowArray().offsetsDescriptor());
+        },
+        [&]() { return elements_->createReader(decoders); });
+  }
+
+ private:
+  const std::unique_ptr<FieldReaderFactory> elements_;
 };
 
 class SlidingWindowMapFieldReader final : public FieldReader {
@@ -6347,7 +6816,8 @@ std::unique_ptr<FieldReaderFactory> createFieldReaderFactory(
     }
     case velox::TypeKind::ARRAY: {
       NIMBLE_CHECK(
-          nimbleType->isArray() || nimbleType->isArrayWithOffsets(),
+          nimbleType->isArray() || nimbleType->isArrayWithOffsets() ||
+              nimbleType->isSlidingWindowArray(),
           "Provided schema doesn't match file schema.");
       NIMBLE_CHECK_EQ(
           veloxType->size(),
@@ -6372,6 +6842,27 @@ std::unique_ptr<FieldReaderFactory> createFieldReaderFactory(
             : std::make_unique<NullFieldReaderFactory>(
                   elementType->type(), pool);
         return std::make_unique<ArrayFieldReaderFactory>(
+            veloxType->type(), nimbleType.get(), std::move(elements), pool);
+      } else if (nimbleType->isSlidingWindowArray()) {
+        const auto& nimbleArray = nimbleType->asSlidingWindowArray();
+        offsets.emplace_back(nimbleArray.lengthsDescriptor().offset());
+        offsets.emplace_back(nimbleArray.offsetsDescriptor().offset());
+        auto& elementType = veloxType->childAt(0);
+        auto elements = isSelected(elementType->id())
+            ? createFieldReaderFactory(
+                  parameters,
+                  decodePlanBuilder,
+                  getDecodePool,
+                  nimbleArray.elements(),
+                  elementType,
+                  offsets,
+                  isSelected,
+                  level + 1,
+                  /*name=*/nullptr,
+                  pool)
+            : std::make_unique<NullFieldReaderFactory>(
+                  elementType->type(), pool);
+        return std::make_unique<SlidingWindowArrayFieldReaderFactory>(
             veloxType->type(), nimbleType.get(), std::move(elements), pool);
       } else {
         auto& nimbleArrayWithOffsets = nimbleType->asArrayWithOffsets();

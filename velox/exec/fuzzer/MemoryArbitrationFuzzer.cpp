@@ -32,6 +32,7 @@
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/UnsafeRowSerializer.h"
@@ -393,7 +394,7 @@ std::vector<RowVectorPtr> MemoryArbitrationFuzzer::generateBuildInput(
   std::vector<std::string> names = buildKeys;
   std::vector<TypePtr> types;
   for (const auto& key : probeKeys) {
-    types.push_back(asRowType(probeInput[0]->type())->findChild(key));
+    types.push_back(probeInput[0]->rowType()->findChild(key));
   }
 
   // Add up to 3 payload columns.
@@ -477,9 +478,8 @@ MemoryArbitrationFuzzer::hashJoinPlans(
   auto outputColumns =
       (core::isLeftSemiProjectJoin(joinType) ||
        core::isLeftSemiFilterJoin(joinType) || core::isAntiJoin(joinType))
-      ? asRowType(probeInput[0]->type())->names()
-      : test::concat(
-            asRowType(probeInput[0]->type()), asRowType(buildInput[0]->type()))
+      ? probeInput[0]->rowType()->names()
+      : test::concat(probeInput[0]->rowType(), buildInput[0]->rowType())
             ->names();
 
   if (core::isLeftSemiProjectJoin(joinType) ||
@@ -488,15 +488,13 @@ MemoryArbitrationFuzzer::hashJoinPlans(
   }
 
   std::vector<PlanWithSplits> plans;
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = test::PlanBuilder(planNodeIdGenerator)
+  test::PlanBuilder builder;
+  auto plan = builder.newPlan()
                   .values(probeInput)
                   .hashJoin(
                       probeKeys,
                       buildKeys,
-                      test::PlanBuilder(planNodeIdGenerator)
-                          .values(buildInput)
-                          .planNode(),
+                      builder.newPlan().values(buildInput).planNode(),
                       /*filter=*/"",
                       outputColumns,
                       joinType,
@@ -509,18 +507,17 @@ MemoryArbitrationFuzzer::hashJoinPlans(
     return plans;
   }
 
-  planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  const auto probeType = asRowType(probeInput[0]->type());
-  const auto buildType = asRowType(buildInput[0]->type());
+  const auto probeType = probeInput[0]->rowType();
+  const auto buildType = buildInput[0]->rowType();
   core::PlanNodeId probeScanId;
   core::PlanNodeId buildScanId;
-  plan = test::PlanBuilder(planNodeIdGenerator)
+  plan = builder.newPlan()
              .tableScan(probeType)
              .capturePlanNodeId(probeScanId)
              .hashJoin(
                  probeKeys,
                  buildKeys,
-                 test::PlanBuilder(planNodeIdGenerator)
+                 builder.newPlan()
                      .tableScan(buildType)
                      .capturePlanNodeId(buildScanId)
                      .planNode(),
@@ -588,14 +585,13 @@ MemoryArbitrationFuzzer::aggregatePlans(const std::string& tableDir) {
       aggregateInput, fmt::format("{}/aggregate", tableDir), writerPool_);
 
   std::vector<PlanWithSplits> plans;
-  const auto inputRowType = asRowType(aggregateInput[0]->type());
+  const auto inputRowType = aggregateInput[0]->rowType();
   {
     // Single final aggregation plan.
-    const auto planNodeIdGenerator =
-        std::make_shared<core::PlanNodeIdGenerator>();
+    test::PlanBuilder builder;
     core::PlanNodeId scanId;
     auto plan = PlanWithSplits{
-        test::PlanBuilder(planNodeIdGenerator)
+        builder.newPlan()
             .tableScan(inputRowType)
             .capturePlanNodeId(scanId)
             .singleAggregation(groupingKeys, aggregates, {})
@@ -614,11 +610,10 @@ MemoryArbitrationFuzzer::aggregatePlans(const std::string& tableDir) {
 
   {
     // Partial -> final aggregation plan.
-    const auto planNodeIdGenerator =
-        std::make_shared<core::PlanNodeIdGenerator>();
+    test::PlanBuilder builder;
     core::PlanNodeId scanId;
     auto plan = PlanWithSplits{
-        test::PlanBuilder(planNodeIdGenerator)
+        builder.newPlan()
             .tableScan(inputRowType)
             .capturePlanNodeId(scanId)
             .partialAggregation(groupingKeys, aggregates, {})
@@ -639,11 +634,10 @@ MemoryArbitrationFuzzer::aggregatePlans(const std::string& tableDir) {
 
   {
     // Partial -> intermediate -> final aggregation plan.
-    const auto planNodeIdGenerator =
-        std::make_shared<core::PlanNodeIdGenerator>();
+    test::PlanBuilder builder;
     core::PlanNodeId scanId;
     auto plan = PlanWithSplits{
-        test::PlanBuilder(planNodeIdGenerator)
+        builder.newPlan()
             .tableScan(inputRowType)
             .capturePlanNodeId(scanId)
             .partialAggregation(groupingKeys, aggregates, {})
@@ -692,11 +686,11 @@ MemoryArbitrationFuzzer::rowNumberPlans(const std::string& tableDir) {
   const std::vector<Split> splits = test::makeSplits(
       input, fmt::format("{}/row_number", tableDir), writerPool_);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  test::PlanBuilder builder;
   core::PlanNodeId scanId;
   plan = PlanWithSplits{
-      test::PlanBuilder(planNodeIdGenerator)
-          .tableScan(asRowType(input[0]->type()))
+      builder.newPlan()
+          .tableScan(input[0]->rowType())
           .capturePlanNodeId(scanId)
           .rowNumber(keyNames)
           .project(projectFields)
@@ -717,7 +711,7 @@ MemoryArbitrationFuzzer::topNRowNumberPlans(const std::string& tableDir) {
 
   std::vector<PlanWithSplits> plans;
 
-  const auto inputType = asRowType(input[0]->type());
+  const auto inputType = input[0]->rowType();
   std::vector<std::string> sortingKeys;
 
   std::unordered_set<std::string> partitionKeySet(
@@ -759,12 +753,12 @@ MemoryArbitrationFuzzer::topNRowNumberPlans(const std::string& tableDir) {
   const std::vector<Split> splits = test::makeSplits(
       input, fmt::format("{}/topn_row_number", tableDir), writerPool_);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  test::PlanBuilder builder;
   core::PlanNodeId scanId;
   // TableScan Plan with Parition Keys
   plan = PlanWithSplits{
-      test::PlanBuilder(planNodeIdGenerator)
-          .tableScan(asRowType(input[0]->type()))
+      builder.newPlan()
+          .tableScan(input[0]->rowType())
           .capturePlanNodeId(scanId)
           .topNRank(
               rankFunction, keyNames, sortingKeys, limit, generateRowNumber)
@@ -810,11 +804,10 @@ MemoryArbitrationFuzzer::orderByPlans(const std::string& tableDir) {
   const std::vector<Split> splits = test::makeSplits(
       input, fmt::format("{}/order_by", tableDir), writerPool_);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId scanId;
   plan = PlanWithSplits{
-      test::PlanBuilder(std::move(planNodeIdGenerator))
-          .tableScan(asRowType(input[0]->type()))
+      test::PlanBuilder()
+          .tableScan(input[0]->rowType())
           .capturePlanNodeId(scanId)
           .orderBy(keyNames, false)
           .planNode(),
@@ -926,7 +919,7 @@ void MemoryArbitrationFuzzer::verify() {
   auto plans = allPlans(tableScanDir->getPath());
 
   SCOPE_EXIT {
-    test::waitForAllTasksToBeDeleted();
+    test::TaskMonitor::waitForAllTasksDeleted();
     if (auto faultyFileSystem = std::dynamic_pointer_cast<FaultyFileSystem>(
             filesystems::getFileSystem(spillDirectory->getPath(), nullptr))) {
       faultyFileSystem->clearFileFaultInjections();

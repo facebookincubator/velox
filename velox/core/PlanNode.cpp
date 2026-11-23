@@ -2948,36 +2948,22 @@ PlanNodePtr RowNumberNode::create(const folly::dynamic& obj, void* context) {
 }
 
 namespace {
-std::unordered_map<TopNRowNumberNode::RankFunction, std::string>
-rankFunctionNames() {
-  return {
-      {TopNRowNumberNode::RankFunction::kRowNumber, "row_number"},
-      {TopNRowNumberNode::RankFunction::kRank, "rank"},
-      {TopNRowNumberNode::RankFunction::kDenseRank, "dense_rank"},
-  };
+const auto& rankFunctionNames() {
+  static const folly::
+      F14FastMap<TopNRowNumberNode::RankFunction, std::string_view>
+          kNames = {
+              {TopNRowNumberNode::RankFunction::kRowNumber, "row_number"},
+              {TopNRowNumberNode::RankFunction::kRank, "rank"},
+              {TopNRowNumberNode::RankFunction::kDenseRank, "dense_rank"},
+          };
+  return kNames;
 }
 } // namespace
 
-// static
-const char* TopNRowNumberNode::rankFunctionName(
-    TopNRowNumberNode::RankFunction function) {
-  static const auto kFunctionNames = rankFunctionNames();
-  auto it = kFunctionNames.find(function);
-  VELOX_CHECK(
-      it != kFunctionNames.cend(),
-      "Invalid rank function {}",
-      static_cast<int>(function));
-  return it->second.c_str();
-}
-
-// static
-TopNRowNumberNode::RankFunction TopNRowNumberNode::rankFunctionFromName(
-    std::string_view name) {
-  static const auto kFunctionNames = invertMap(rankFunctionNames());
-  auto it = kFunctionNames.find(name.data());
-  VELOX_CHECK(it != kFunctionNames.cend(), "Invalid rank function {}", name);
-  return it->second;
-}
+VELOX_DEFINE_EMBEDDED_ENUM_NAME(
+    TopNRowNumberNode,
+    RankFunction,
+    rankFunctionNames)
 
 TopNRowNumberNode::TopNRowNumberNode(
     PlanNodeId id,
@@ -3034,7 +3020,7 @@ TopNRowNumberNode::TopNRowNumberNode(
 }
 
 void TopNRowNumberNode::addDetails(std::stringstream& stream) const {
-  stream << rankFunctionName(function_) << " ";
+  stream << toName(function_) << " ";
 
   if (!partitionKeys_.empty()) {
     stream << "partition by (";
@@ -3055,7 +3041,7 @@ void TopNRowNumberNode::addDetails(std::stringstream& stream) const {
 
 folly::dynamic TopNRowNumberNode::serialize() const {
   auto obj = PlanNode::serialize();
-  obj["function"] = rankFunctionName(function_);
+  obj["function"] = toName(function_);
   obj["partitionKeys"] = ISerializable::serialize(partitionKeys_);
   obj["sortingKeys"] = ISerializable::serialize(sortingKeys_);
   obj["sortingOrders"] = serializeSortingOrders(sortingOrders_);
@@ -3078,7 +3064,7 @@ PlanNodePtr TopNRowNumberNode::create(
     const folly::dynamic& obj,
     void* context) {
   auto source = deserializeSingleSource(obj, context);
-  auto function = rankFunctionFromName(obj["function"].asString());
+  auto function = toRankFunction(obj["function"].asString());
   auto partitionKeys = deserializeFields(obj["partitionKeys"], context);
   auto sortingKeys = deserializeFields(obj["sortingKeys"], context);
 
@@ -4116,7 +4102,7 @@ TopNNode::TopNNode(
     const PlanNodeId& id,
     const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
     const std::vector<SortOrder>& sortingOrders,
-    int32_t count,
+    int64_t count,
     bool isPartial,
     const PlanNodePtr& source)
     : PlanNode(id),
@@ -4478,6 +4464,9 @@ void PlanNode::registerSerDe() {
   registry.Register("MarkDistinctNode", MarkDistinctNode::create);
   registry.Register("MixedUnionNode", MixedUnionNode::create);
   registry.Register("RPCNode", RPCNode::create);
+  registry.Register("RpcSubmitNode", RPCNode::create);
+  registry.Register("RpcPollNode", RPCNode::create);
+  registry.Register("RpcCollectNode", RPCNode::create);
   registry.Register("FixedPointNode", FixedPointNode::create);
   registry.Register("StateSourceNode", StateSourceNode::create);
   registry.Register("StateHashJoinNode", StateHashJoinNode::create);
@@ -4755,14 +4744,24 @@ RPCNode::RPCNode(
     std::string outputColumn,
     RowTypePtr outputType,
     rpc::RPCStreamingMode streamingMode,
-    int32_t dispatchBatchSize)
+    int32_t dispatchBatchSize,
+    std::string executionPhase)
     : PlanNode(id),
       sources_{std::move(source)},
       call_(std::move(call)),
       outputColumn_(std::move(outputColumn)),
       outputType_(std::move(outputType)),
       streamingMode_(streamingMode),
-      dispatchBatchSize_(dispatchBatchSize) {
+      dispatchBatchSize_(dispatchBatchSize),
+      executionPhase_(std::move(executionPhase)) {
+  VELOX_USER_CHECK(
+      executionPhase_ == "INLINE" || executionPhase_ == "SUBMIT" ||
+          executionPhase_ == "POLL" || executionPhase_ == "COLLECT",
+      "Unknown RPC execution phase");
+  VELOX_USER_CHECK(
+      executionPhase_ == "INLINE" ||
+          streamingMode_ == rpc::RPCStreamingMode::kBatch,
+      "Deferred RPC requires BATCH dispatch");
   VELOX_CHECK_NOT_NULL(call_, "RPCNode call must not be null");
   VELOX_CHECK(
       outputType_->containsChild(outputColumn_),
@@ -4774,6 +4773,19 @@ RPCNode::RPCNode(
       call_->type()->toString(),
       outputType_->findChild(outputColumn_)->toString(),
       outputColumn_);
+}
+
+std::string_view RPCNode::name() const {
+  if (executionPhase_ == "SUBMIT") {
+    return "RpcSubmit";
+  }
+  if (executionPhase_ == "POLL") {
+    return "RpcPoll";
+  }
+  if (executionPhase_ == "COLLECT") {
+    return "RpcCollect";
+  }
+  return "RPC";
 }
 
 void RPCNode::addDetails(std::stringstream& stream) const {
@@ -4803,6 +4815,7 @@ folly::dynamic RPCNode::serialize() const {
   obj["streamingMode"] =
       streamingMode_ == rpc::RPCStreamingMode::kBatch ? "BATCH" : "PER_ROW";
   obj["dispatchBatchSize"] = dispatchBatchSize_;
+  obj["executionPhase"] = executionPhase_;
   return obj;
 }
 
@@ -4836,7 +4849,13 @@ PlanNodePtr RPCNode::create(const folly::dynamic& obj, void* context) {
     outputType = ROW(std::move(names), std::move(types));
   }
 
-  auto streamingMode = obj["streamingMode"].asString() == "BATCH"
+  const std::string streamingModeName =
+      obj.count("streamingMode") ? obj["streamingMode"].asString() : "PER_ROW";
+  VELOX_USER_CHECK(
+      streamingModeName == "PER_ROW" || streamingModeName == "BATCH",
+      "RPCNode streaming mode must be PER_ROW or BATCH: {}",
+      streamingModeName);
+  auto streamingMode = streamingModeName == "BATCH"
       ? rpc::RPCStreamingMode::kBatch
       : rpc::RPCStreamingMode::kPerRow;
   auto dispatchBatchSize =
@@ -4848,7 +4867,9 @@ PlanNodePtr RPCNode::create(const folly::dynamic& obj, void* context) {
       std::move(outputColumn),
       std::move(outputType),
       streamingMode,
-      dispatchBatchSize);
+      dispatchBatchSize,
+      obj.count("executionPhase") ? obj["executionPhase"].asString()
+                                  : "INLINE");
 }
 
 } // namespace facebook::velox::core

@@ -34,6 +34,7 @@
 #include <folly/compression/elias_fano/EliasFanoCoding.h>
 #include <folly/lang/Bits.h>
 
+#include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/OrderedInteger.h"
@@ -164,7 +165,19 @@ class EliasFanoEncoding final
       kSkipQuantum,
       kForwardQuantum,
       kUpperFirst>;
+
+  // Returns false from a move past the end of the list. Searches such as
+  // lowerBound() rely on it to report a missing value.
   using Reader = folly::compression::EliasFanoReader<Encoder>;
+
+  // Skips the end-of-list check that Reader makes on every move, which the
+  // decode loops would otherwise pay once per row. A move past the end is
+  // undefined instead of failing, so callers must check the row range before
+  // reading.
+  using UncheckedReader = folly::compression::EliasFanoReader<
+      Encoder,
+      folly::compression::instructions::Default,
+      /*kUnchecked=*/true>;
 
   // Number of bytes between the common prefix and the Folly payload.
   static constexpr uint8_t kHeaderSize{/*base=*/sizeof(uint64_t) +
@@ -205,11 +218,11 @@ class EliasFanoEncoding final
   struct RandomReadCache {
     uint64_t encodingId{0};
     const uint8_t* payload{nullptr};
-    std::optional<Reader> reader;
+    std::optional<UncheckedReader> reader;
   };
 
   // Returns this thread's reusable cursor for random reads on this encoding.
-  Reader& randomReader() const;
+  UncheckedReader& randomReader() const;
 
   // Assigns a never-reused key so thread-local cursors survive address reuse.
   static uint64_t nextEncodingId() {
@@ -221,7 +234,7 @@ class EliasFanoEncoding final
   physicalType readNextValue();
 
   // Creates the stateful cursor on its first sequential operation.
-  Reader& ensureReader();
+  UncheckedReader& ensureReader();
 
   // Non-owning parsed view over the serialized Folly payload.
   List list_;
@@ -229,8 +242,9 @@ class EliasFanoEncoding final
   // Identifies this parsed stream in the per-thread random-read cache.
   const uint64_t encodingId_{nextEncodingId()};
 
-  // Cursor created on demand for the stateful Encoding interface.
-  std::optional<Reader> reader_;
+  // Cursor created on demand for the stateful Encoding interface. Every
+  // sequential operation checks 'row_' against the row count first.
+  std::optional<UncheckedReader> reader_;
 
   // Next logical row consumed by the stateful Encoding interface.
   uint32_t row_{0};
@@ -406,7 +420,8 @@ void EliasFanoEncoding<T>::reset() {
 }
 
 template <typename T>
-typename EliasFanoEncoding<T>::Reader& EliasFanoEncoding<T>::ensureReader() {
+typename EliasFanoEncoding<T>::UncheckedReader&
+EliasFanoEncoding<T>::ensureReader() {
   if (!reader_.has_value()) {
     reader_.emplace(list_.open());
   }
@@ -414,8 +429,8 @@ typename EliasFanoEncoding<T>::Reader& EliasFanoEncoding<T>::ensureReader() {
 }
 
 template <typename T>
-typename EliasFanoEncoding<T>::Reader& EliasFanoEncoding<T>::randomReader()
-    const {
+typename EliasFanoEncoding<T>::UncheckedReader&
+EliasFanoEncoding<T>::randomReader() const {
   static thread_local RandomReadCache cache;
   if (cache.encodingId != encodingId_ || cache.payload != list_.payload()) {
     cache.encodingId = encodingId_;
@@ -430,13 +445,7 @@ void EliasFanoEncoding<T>::skip(uint32_t rowCount) {
   NIMBLE_CHECK_LE(row_, this->rowCount(), "Invalid encoding position.");
   NIMBLE_CHECK_LE(
       rowCount, this->rowCount() - row_, "Skipping past end of encoding.");
-  if (rowCount == 0) {
-    // Folly reports its initial before-first cursor as invalid for skip(0).
-    // The generic Encoding interface treats a zero-row advance as a no-op.
-    return;
-  }
-  const bool skipped = ensureReader().skip(rowCount);
-  NIMBLE_CHECK(skipped, "Unexpected end of EliasFano stream.");
+  ensureReader().skip(rowCount);
   row_ += rowCount;
 }
 
@@ -445,8 +454,7 @@ typename EliasFanoEncoding<T>::physicalType EliasFanoEncoding<T>::readValue(
     uint32_t row) const {
   NIMBLE_CHECK_LT(row, this->rowCount(), "Reading past end of encoding.");
   auto& reader = randomReader();
-  const bool found = reader.jump(row);
-  NIMBLE_CHECK(found, "Failed to seek EliasFano row.");
+  reader.jump(row);
   return fromOrdered<T>(list_.base() + reader.value());
 }
 
@@ -455,8 +463,7 @@ typename EliasFanoEncoding<T>::physicalType
 EliasFanoEncoding<T>::readNextValue() {
   NIMBLE_CHECK_LT(row_, this->rowCount(), "Reading past end of encoding.");
   auto& reader = ensureReader();
-  const bool advanced = reader.next();
-  NIMBLE_CHECK(advanced, "Unexpected end of EliasFano stream.");
+  reader.next();
   ++row_;
   return fromOrdered<T>(list_.base() + reader.value());
 }
@@ -512,9 +519,9 @@ EliasFanoEncoding<T>::List::open() const {
 template <typename T>
 typename EliasFanoEncoding<T>::physicalType EliasFanoEncoding<T>::List::valueAt(
     uint32_t row) const {
-  Reader reader{open()};
-  const bool found = reader.jump(row);
-  NIMBLE_CHECK(found, "Failed to seek EliasFano row.");
+  NIMBLE_CHECK_LT(row, rowCount_, "Reading past end of encoding.");
+  UncheckedReader reader{open()};
+  reader.jump(row);
   return fromOrdered<T>(base_ + reader.value());
 }
 
@@ -528,12 +535,74 @@ uint32_t EliasFanoEncoding<T>::List::lowerBound(
     found = fromOrdered<T>(base_);
     return 0;
   }
-  Reader reader{open()};
-  if (!reader.jumpTo(ordered - base_)) {
+
+  // A bucket holds the values that share their upper bits. Folly's jumpTo()
+  // reads every row of the target's bucket before the target, and clustered
+  // values crowd a few buckets with most of the rows. Every value of a bucket
+  // is at least its start, so jumping there reads no rows, and the lower bits
+  // of a bucket ascend, so a binary search over them finds the target.
+  // TODO: Benchmark Folly's jumpTo() for small buckets and choose a fallback
+  // threshold, including the cost of finding bucket boundaries.
+  const uint64_t target = ordered - base_;
+  const uint64_t lowerMask = velox::bits::lowMask(lowerBits_);
+  const uint64_t bucketStart = target & ~lowerMask;
+  const auto list = open();
+  Reader reader{list};
+  if (!reader.jumpTo(bucketStart)) {
     return rowCount_;
   }
-  found = fromOrdered<T>(base_ + reader.value());
-  return static_cast<uint32_t>(reader.position());
+  if (reader.value() >= target) {
+    found = fromOrdered<T>(base_ + reader.value());
+    return static_cast<uint32_t>(reader.position());
+  }
+  uint32_t begin = static_cast<uint32_t>(reader.position()) + 1;
+  if (begin == rowCount_) {
+    return rowCount_;
+  }
+
+  // The target's bucket ends where the next one starts.
+  Reader nextBucket{reader};
+  const bool hasNextBucket =
+      bucketStart <= std::numeric_limits<uint64_t>::max() - lowerMask - 1 &&
+      nextBucket.skipTo(bucketStart + lowerMask + 1);
+  const auto bucketEnd =
+      hasNextBucket ? static_cast<uint32_t>(nextBucket.position()) : rowCount_;
+  if (begin == bucketEnd) {
+    found = fromOrdered<T>(base_ + nextBucket.value());
+    return bucketEnd;
+  }
+
+  // Reads as Folly's private readLowerPart() does. The upper bits and the
+  // trailing padding after the lower bits keep the 8-byte load in the payload,
+  // and kMaxLowerBits keeps the shifted value within it.
+  const auto lowerBitsAt = [&](uint32_t row) {
+    const uint64_t bit = uint64_t{row} * lowerBits_;
+    return (velox::bits::loadPartialWord(
+                list.lower + bit / 8, /*size=*/sizeof(uint64_t)) >>
+            (bit % 8)) &
+        lowerMask;
+  };
+
+  // The bucket's first row is below the target, so the search starts after it.
+  const uint64_t targetLowerBits = target & lowerMask;
+  uint32_t end = bucketEnd;
+  while (begin < end) {
+    const auto middle = begin + (end - begin) / 2;
+    if (lowerBitsAt(middle) < targetLowerBits) {
+      begin = middle + 1;
+    } else {
+      end = middle;
+    }
+  }
+  if (begin < bucketEnd) {
+    found = fromOrdered<T>(base_ + (bucketStart | lowerBitsAt(begin)));
+    return begin;
+  }
+  if (!hasNextBucket) {
+    return rowCount_;
+  }
+  found = fromOrdered<T>(base_ + nextBucket.value());
+  return bucketEnd;
 }
 
 template <typename T>
@@ -556,15 +625,11 @@ void EliasFanoEncoding<T>::List::materializeAt(
     return;
   }
 
-  Reader reader{open()};
-  const bool found = reader.jump(offset);
-  NIMBLE_CHECK(found, "Failed to seek EliasFano row.");
+  UncheckedReader reader{open()};
+  reader.skip(offset);
   for (uint32_t i = 0; i < rowCount; ++i) {
+    reader.next();
     output[i] = fromOrdered<T>(base_ + reader.value());
-    if (i + 1 < rowCount) {
-      const bool advanced = reader.next();
-      NIMBLE_CHECK(advanced, "Unexpected end of EliasFano stream.");
-    }
   }
 }
 
@@ -574,9 +639,12 @@ void EliasFanoEncoding<T>::materialize(uint32_t rowCount, void* buffer) {
   NIMBLE_CHECK_LE(
       rowCount, this->rowCount() - row_, "Reading past end of encoding.");
   auto* output = static_cast<physicalType*>(buffer);
+  auto& reader = ensureReader();
   for (uint32_t i = 0; i < rowCount; ++i) {
-    output[i] = readNextValue();
+    reader.next();
+    output[i] = fromOrdered<T>(list_.base() + reader.value());
   }
+  row_ += rowCount;
 }
 
 template <typename T>

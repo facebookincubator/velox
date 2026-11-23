@@ -429,7 +429,7 @@ declares an interface and its `.cpp` supplies the policy or algorithm.
 | `writer/WriterOptions.h` | Carries resolved SubIntSplit schema targets into the writer. |
 | `writer/Writer.cpp` | Applies explicit targets to value streams and resolves precedence with layout-tree and other stream configuration. |
 | `velox/NimbleConfig.*` | Declares and parses `nimble.subintsplit.columns` from serde properties. |
-| `writer/fb/NimbleWriterOptionBuilder.cpp` | Transfers the parsed serde configuration into `WriterOptions`. |
+| `fb_velox/dwio/nimble/writer/NimbleWriterOptionBuilder.cpp` | Transfers the parsed serde configuration into `WriterOptions`. |
 
 ### Validation and measurement
 
@@ -444,7 +444,7 @@ declares an interface and its `.cpp` supplies the policy or algorithm.
 | `encodings/tests/SubIntSplitDeltaTest.cpp` | Delta choice, round trips, and restricted reader operations. |
 | `fuzzer/encoding/` | Randomized full decode and `EncodingView` equivalence across supported types and data characteristics. |
 | `velox/tests/WriterTest.cpp` | End-to-end serde paths, nested targeting, validation errors, and null preservation. |
-| `writer/fb/tests/NimbleWriterOptionBuilderTest.cpp` | Configuration propagation from serde properties to writer options. |
+| `fb_velox/dwio/nimble/writer/tests/NimbleWriterOptionBuilderTest.cpp` | Configuration propagation from serde properties to writer options. |
 | `encodings/benchmarks/SubIntSplitVsOpenZLBenchmark.cpp` | Focused codec storage, encode, and full-decode comparison. |
 | `scripts/suryadev/subintsplit_bench/` | Reproducible production-corpus correctness and performance comparison. |
 | `scripts/suryadev/nimble_read_bench/` | End-to-end synthetic projection and selective-filter measurements. |

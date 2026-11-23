@@ -164,13 +164,6 @@ class FileDataSourceTest : public exec::test::HiveConnectorTestBase {
         hiveConfig_);
   }
 
-  std::shared_ptr<exec::test::TempFilePath> writeScanFile(
-      const RowVectorPtr& input) {
-    auto file = exec::test::TempFilePath::create();
-    writeToFile(file->getPath(), input);
-    return file;
-  }
-
   static RowVectorPtr next(DataSource& source, uint64_t size = 100) {
     ContinueFuture future = ContinueFuture::makeEmpty();
     auto result = source.next(size, future);
@@ -207,7 +200,7 @@ TEST_F(FileDataSourceTest, scanStateIsolationAndReuse) {
       {makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5}),
        makeConstant<int64_t>(0, 6)});
   const auto schema = asRowType(input->type());
-  const auto file = writeScanFile(input);
+  const auto file = writeToFile(input);
   const auto filter = std::make_shared<common::BigintRange>(0, 5, false);
   common::SubfieldFilters filters;
   filters.emplace(common::Subfield("c0"), filter);
@@ -262,7 +255,7 @@ TEST_F(FileDataSourceTest, bucketConversionReusesNestedAdaptation) {
       makeRowVector({"r", "k"}, {nested, makeConstant<int64_t>(0, 100)});
   const auto schema = asRowType(input->type());
   const auto outputType = ROW({{"r", nested->type()}});
-  const auto file = writeScanFile(input);
+  const auto file = writeToFile(input);
 
   // Cover both ways bucket conversion changes physical column requirements:
   // adding an unprojected column and expanding a pruned complex column.
@@ -332,7 +325,7 @@ TEST_F(FileDataSourceTest, bucketConversionReusesNestedAdaptation) {
 TEST_F(FileDataSourceTest, takeoverTransfersStateButNotExpression) {
   const auto input =
       makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5})});
-  const auto file = writeScanFile(input);
+  const auto file = writeToFile(input);
   const auto table =
       makeTableHandle({}, parseExpr("c0 % 2 = 0", type_), "test", type_);
   auto source = makeSource(type_, table, assignments_);
@@ -375,7 +368,7 @@ TEST_F(FileDataSourceTest, takeoverTransfersStateButNotExpression) {
 
 TEST_F(FileDataSourceTest, readerReleasedBeforeValidationFilters) {
   const auto file =
-      writeScanFile(makeRowVector({makeFlatVector<int64_t>({1, 2})}));
+      writeToFile(makeRowVector({makeFlatVector<int64_t>({1, 2})}));
   const auto table = makeTableHandle({}, nullptr, "test", type_);
   int destroyedReaders = 0;
   const auto observe = [&](BorrowingFileDataSource& source) {
@@ -425,7 +418,7 @@ TEST_F(FileDataSourceTest, remainingFilterAndOutputReuse) {
   });
   const auto input = makeRowVector({numbers, strings});
   const auto schema = asRowType(input->type());
-  const auto file = writeScanFile(input);
+  const auto file = writeToFile(input);
   const auto outputType = ROW({{"value", VARCHAR()}});
   auto source = makeSource(
       outputType,
@@ -467,7 +460,7 @@ TEST_F(FileDataSourceTest, extractionProducedTypeStaysInState) {
       {"x", "y"}, {values, makeFlatVector<std::string>({"a", "b", "c"})});
   const auto input = makeRowVector({"r"}, {nested});
   const auto schema = asRowType(input->type());
-  const auto file = writeScanFile(input);
+  const auto file = writeToFile(input);
   const auto outputType = ROW({{"value", BIGINT()}});
   const ColumnHandleMap assignments{
       {"value",
@@ -505,7 +498,7 @@ TEST_F(FileDataSourceTest, publishedFilterPayloadIsShared) {
     filter->insert(value);
   }
   const auto file =
-      writeScanFile(makeRowVector({makeFlatVector<int64_t>(values)}));
+      writeToFile(makeRowVector({makeFlatVector<int64_t>(values)}));
   const common::Subfield field("c0");
   common::SubfieldFilters filters;
   filters.emplace(field.clone(), filter);

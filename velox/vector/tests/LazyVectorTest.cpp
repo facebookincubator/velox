@@ -738,6 +738,27 @@ TEST_F(LazyVectorTest, chain) {
   assertEqualVectors(expected, lazy);
 }
 
+// mayContainLazy() is true for the encodings that can hold a lazy vector,
+// itself or underneath, and false for the others.
+TEST_F(LazyVectorTest, mayContainLazy) {
+  constexpr vector_size_t size = 10;
+  auto flat = makeFlatIdentityVector<int32_t>(size);
+
+  EXPECT_FALSE(flat->mayContainLazy());
+  EXPECT_FALSE(
+      makeArrayVectorFromJson<int32_t>({"[1, 2]", "[3]"})->mayContainLazy());
+  auto map = makeMapVectorFromJson<int32_t, int32_t>({"{1: 2}"});
+  EXPECT_FALSE(map->mayContainLazy());
+
+  EXPECT_TRUE(
+      vectorMaker_.lazyFlatVector<int32_t>(size, [](auto row) { return row; })
+          ->mayContainLazy());
+  EXPECT_TRUE(
+      wrapInDictionary(makeIndicesInReverse(size), flat)->mayContainLazy());
+  EXPECT_TRUE(BaseVector::wrapInConstant(size, 0, flat)->mayContainLazy());
+  EXPECT_TRUE(makeRowVector({flat})->mayContainLazy());
+}
+
 // Verify containsLazyNotLoaded is lazily evaluated and correctly recomputed
 // after invalidation for RowVectors.
 TEST_F(LazyVectorTest, containsLazyNotLoadedLazyEvaluation) {

@@ -154,7 +154,7 @@ TEST_F(ToCudfSelectionTest, supportedPrestoDateAddDateUsesCudf) {
            DATE())});
 
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .project({"date_add('month', amount, event_date) AS result"})
                   .planNode();
 
@@ -178,7 +178,7 @@ TEST_F(ToCudfSelectionTest, prestoDateAddVariableUnitFallsBack) {
            DATE())});
 
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .project({"date_add(unit, amount, event_date) AS result"})
                   .planNode();
 
@@ -194,7 +194,7 @@ TEST_F(ToCudfSelectionTest, logicalTypesFallBackBeforeConversion) {
     SCOPED_TRACE(values->type()->toString());
     auto input = makeRowVector(
         {"id", "value"}, {makeFlatVector<int32_t>({1, -1}), values});
-    auto plan = PlanBuilder().values({input}).filter("id > 0").planNode();
+    auto plan = PlanBuilder().values(input).filter("id > 0").planNode();
 
     std::shared_ptr<Task> task;
     auto result = AssertQueryBuilder(plan)
@@ -223,7 +223,7 @@ TEST_F(ToCudfSelectionTest, timeToVarcharCastFallsBack) {
   auto input = makeRowVector(
       {makeNullableFlatVector<int64_t>({0, 3'661'000, std::nullopt}, TIME())});
   auto plan =
-      PlanBuilder().values({input}).project({"cast(c0 as varchar)"}).planNode();
+      PlanBuilder().values(input).project({"cast(c0 as varchar)"}).planNode();
 
   std::shared_ptr<Task> task;
   auto result = AssertQueryBuilder(plan)
@@ -235,7 +235,7 @@ TEST_F(ToCudfSelectionTest, timeToVarcharCastFallsBack) {
   facebook::velox::test::assertEqualVectors(expected, result);
   EXPECT_FALSE(wasCudfFilterProjectUsed(task));
   EXPECT_TRUE(wasDefaultFilterProjectUsed(task));
-  EXPECT_EQ(toOperatorStats(task->taskStats()).count("CudfFromVelox"), 0);
+  EXPECT_EQ(task->taskStats().operatorStats().count("CudfFromVelox"), 0);
 }
 
 TEST_F(ToCudfSelectionTest, fallbackDoesNotInsertGpuConversion) {
@@ -244,7 +244,7 @@ TEST_F(ToCudfSelectionTest, fallbackDoesNotInsertGpuConversion) {
       {makeFlatVector<int64_t>({2, 1}),
        makeMapVector<int64_t, int64_t>({{{20, 200}}, {{10, 100}}})});
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .project({"k"})
                   .rowNumber({})
                   .orderBy({"k ASC"}, false)
@@ -261,7 +261,7 @@ TEST_F(ToCudfSelectionTest, fallbackDoesNotInsertGpuConversion) {
       {makeFlatVector<int64_t>({1, 2}), makeFlatVector<int64_t>({2, 1})});
   facebook::velox::test::assertEqualVectors(expected, result);
 
-  const auto stats = toOperatorStats(task->taskStats());
+  const auto stats = task->taskStats().operatorStats();
   EXPECT_EQ(stats.count("RowNumber"), 1);
   EXPECT_EQ(stats.count("OrderBy"), 1);
   EXPECT_EQ(stats.count("CudfFromVelox"), 0);
@@ -273,30 +273,27 @@ TEST_F(ToCudfSelectionTest, unsupportedTypeBeforeLocalBoundary) {
       {"k", "m"},
       {makeFlatVector<int64_t>({2, 1}),
        makeMapVector<int64_t, int64_t>({{{20, 200}}, {{10, 100}}})});
-  auto other = makeRowVector({"k"}, {makeFlatVector<int64_t>({3})});
-  auto expected = makeRowVector({"k"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto other = makeNamedRowVector("k", makeFlatVector<int64_t>({3}));
+  auto expected = makeNamedRowVector("k", makeFlatVector<int64_t>({1, 2, 3}));
 
   for (bool merge : {false, true}) {
     SCOPED_TRACE(merge ? "LocalMerge" : "LocalPartition");
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     std::vector<core::PlanNodePtr> sources{
-        PlanBuilder(planNodeIdGenerator)
-            .values({input})
+        builder.newPlan()
+            .values(input)
             .project({"k"})
             .orderBy({"k"}, true)
             .planNode(),
-        PlanBuilder(planNodeIdGenerator)
-            .values({other})
-            .orderBy({"k"}, true)
-            .planNode()};
+        builder.newPlan().values(other).orderBy({"k"}, true).planNode()};
 
-    PlanBuilder builder(planNodeIdGenerator);
+    auto rootBuilder = builder.newPlan();
     if (merge) {
-      builder.localMerge({"k"}, sources);
+      rootBuilder.localMerge({"k"}, sources);
     } else {
-      builder.localPartition({}, sources);
+      rootBuilder.localPartition({}, sources);
     }
-    auto plan = builder.orderBy({"k"}, false).planNode();
+    auto plan = rootBuilder.orderBy({"k"}, false).planNode();
 
     AssertQueryBuilder(plan)
         .config("cudf.enabled", true)
@@ -324,7 +321,7 @@ DEBUG_ONLY_TEST_F(ToCudfSelectionTest, fromVeloxUsesInputType) {
   // The project falls back to the CPU, and the aggregation runs on the GPU.
   auto plan =
       PlanBuilder()
-          .values({input})
+          .values(input)
           .project({"date_add(unit, amount, event_date) AS result", "amount"})
           .singleAggregation({}, {"count(1) AS cnt", "sum(amount) AS total"})
           .planNode();
@@ -368,15 +365,15 @@ DEBUG_ONLY_TEST_F(ToCudfSelectionTest, fromVeloxUsesBuildSideTypeForJoin) {
            DATE()),
        makeFlatVector<int64_t>({1, 2, 3, 4})});
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({probe})
+      builder.newPlan()
+          .values(probe)
           .hashJoin(
               {"p_key"},
               {"b_key"},
-              PlanBuilder(planNodeIdGenerator)
-                  .values({build})
+              builder.newPlan()
+                  .values(build)
                   // Falls back to the CPU, so CudfFromVelox feeds HashBuild.
                   .project({"date_add(unit, amount, event_date) AS d", "b_key"})
                   .planNode(),
@@ -416,7 +413,7 @@ DEBUG_ONLY_TEST_F(ToCudfSelectionTest, fromVeloxUsesInputTypeForZeroColumns) {
       pool(), ROW({}, {}), nullptr, 4, std::vector<VectorPtr>{});
 
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .singleAggregation({}, {"count(1) AS cnt"})
                   .planNode();
 
@@ -447,7 +444,7 @@ TEST_F(ToCudfSelectionTest, prestoDateAddTimestampFallsBack) {
            TIMESTAMP())});
 
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .project({"date_add('day', amount, event_ts) AS result"})
                   .planNode();
 
@@ -459,13 +456,13 @@ TEST_F(ToCudfSelectionTest, prestoDateAddTimestampFallsBack) {
 }
 
 TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneFallsBack) {
-  auto input = makeRowVector(
-      {"event_ts"},
-      {makeFlatVector<Timestamp>(
-          {Timestamp(1767314700, 0), Timestamp(1767318300, 0)}, TIMESTAMP())});
+  auto input = makeNamedRowVector(
+      "event_ts",
+      makeFlatVector<Timestamp>(
+          {Timestamp(1767314700, 0), Timestamp(1767318300, 0)}, TIMESTAMP()));
 
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .project({"date_trunc('hour', event_ts) AS result"})
                   .planNode();
 
@@ -481,13 +478,13 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncTimestampAdjustTimezoneFallsBack) {
 }
 
 TEST_F(ToCudfSelectionTest, prestoDateTruncSubHourAdjustTimezoneUsesCudf) {
-  auto input = makeRowVector(
-      {"event_ts"},
-      {makeFlatVector<Timestamp>(
-          {Timestamp(1767314700, 0), Timestamp(1767318300, 0)}, TIMESTAMP())});
+  auto input = makeNamedRowVector(
+      "event_ts",
+      makeFlatVector<Timestamp>(
+          {Timestamp(1767314700, 0), Timestamp(1767318300, 0)}, TIMESTAMP()));
 
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .project(
                       {"date_trunc('second', event_ts) AS second",
                        "date_trunc('minute', event_ts) AS minute"})
@@ -507,13 +504,13 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncSubHourAdjustTimezoneUsesCudf) {
 TEST_F(
     ToCudfSelectionTest,
     nestedPrestoDateTruncTimestampAdjustTimezoneFallsBack) {
-  auto input = makeRowVector(
-      {"event_ts"},
-      {makeFlatVector<Timestamp>(
-          {Timestamp(1767314700, 0), Timestamp(1767318300, 0)}, TIMESTAMP())});
+  auto input = makeNamedRowVector(
+      "event_ts",
+      makeFlatVector<Timestamp>(
+          {Timestamp(1767314700, 0), Timestamp(1767318300, 0)}, TIMESTAMP()));
 
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .project({"date_trunc('hour', event_ts) = "
                             "TIMESTAMP '2026-01-02 00:00:00' AS result"})
                   .planNode();
@@ -535,14 +532,14 @@ TEST_F(
 }
 
 TEST_F(ToCudfSelectionTest, prestoDateTruncDateAdjustTimezoneUsesCudf) {
-  auto input = makeRowVector(
-      {"event_date"},
-      {makeFlatVector<int32_t>(
+  auto input = makeNamedRowVector(
+      "event_date",
+      makeFlatVector<int32_t>(
           {DATE()->toDays("2026-01-02"), DATE()->toDays("2026-01-03")},
-          DATE())});
+          DATE()));
 
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .project({"date_trunc('day', event_date) AS result"})
                   .planNode();
 
@@ -560,12 +557,12 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncDateAdjustTimezoneUsesCudf) {
 // A TIMESTAMP cast to VARCHAR runs on the GPU in UTC and falls back to the CPU
 // when the session prints it in its own time zone or in the legacy form.
 TEST_F(ToCudfSelectionTest, castTimestampToVarcharFallsBackToCpu) {
-  auto input = makeRowVector(
-      {"event_ts"},
-      {makeFlatVector<Timestamp>({Timestamp(1'767'314'700, 0)}, TIMESTAMP())});
+  auto input = makeNamedRowVector(
+      "event_ts",
+      makeFlatVector<Timestamp>({Timestamp(1'767'314'700, 0)}, TIMESTAMP()));
 
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .project({"cast(event_ts as varchar) AS result"})
                   .planNode();
 
@@ -598,11 +595,11 @@ TEST_F(ToCudfSelectionTest, castTimestampToVarcharFallsBackToCpu) {
 }
 
 TEST_F(ToCudfSelectionTest, replaceConstantSearchUsesCudf) {
-  auto input = makeRowVector(
-      {"s"}, {makeFlatVector<std::string>({"2021-01-31", "a-b-c", "abc"})});
+  auto input = makeNamedRowVector(
+      "s", makeFlatVector<std::string>({"2021-01-31", "a-b-c", "abc"}));
 
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .project({"replace(s, '-', '') AS result"})
                   .planNode();
 
@@ -616,11 +613,11 @@ TEST_F(ToCudfSelectionTest, replaceConstantSearchUsesCudf) {
 TEST_F(ToCudfSelectionTest, replaceEmptySearchFallsBack) {
   // The empty-search semantics differ from cudf::strings::replace, so the empty
   // constant search is declined and evaluated on CPU.
-  auto input = makeRowVector(
-      {"s"}, {makeFlatVector<std::string>({"2021-01-31", "a-b-c", "abc"})});
+  auto input = makeNamedRowVector(
+      "s", makeFlatVector<std::string>({"2021-01-31", "a-b-c", "abc"}));
 
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .project({"replace(s, '', 'x') AS result"})
                   .planNode();
 
@@ -640,7 +637,7 @@ TEST_F(ToCudfSelectionTest, replaceColumnSearchFallsBack) {
        makeFlatVector<std::string>({"-", "b", "y"})});
 
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .project({"replace(s, search, '') AS result"})
                   .planNode();
 
@@ -655,11 +652,11 @@ TEST_F(ToCudfSelectionTest, replaceNullSearchUsesCudf) {
   // A null constant search is offloaded (not declined), so ReplaceFunction's
   // all-null branch runs on the GPU rather than the call being folded to a null
   // constant upstream. Guards that the hand-written null path is actually live.
-  auto input = makeRowVector(
-      {"s"}, {makeFlatVector<std::string>({"2021-01-31", "a-b-c", "abc"})});
+  auto input = makeNamedRowVector(
+      "s", makeFlatVector<std::string>({"2021-01-31", "a-b-c", "abc"}));
 
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .project({"replace(s, CAST(NULL AS VARCHAR), 'x') AS result"})
                   .planNode();
 
@@ -668,6 +665,60 @@ TEST_F(ToCudfSelectionTest, replaceNullSearchUsesCudf) {
 
   ASSERT_TRUE(wasCudfFilterProjectUsed(task));
   ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, strposColumnStringConstantSubstringUsesCudf) {
+  auto input = makeRowVector(
+      {"s"},
+      {makeFlatVector<std::string>(
+          {"aws managed database", "no match here", "database services"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"strpos(s, 'database') AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, strposColumnStringColumnSubstringUsesCudf) {
+  auto input = makeRowVector(
+      {"s", "sub"},
+      {makeFlatVector<std::string>({"alpha beta", "gamma", "delta epsilon"}),
+       makeFlatVector<std::string>({"beta", "x", "epsilon"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"strpos(s, sub) AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, strposWithInstanceFallsBack) {
+  // Only the 2-argument strpos is registered for the GPU, so the 3-argument
+  // strpos(string, substring, instance) runs on the CPU.
+  auto input = makeRowVector(
+      {"s"}, {makeFlatVector<std::string>({"banana", "abc", "xyz"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"strpos(s, 'a', 2) AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
 }
 
 // Test supported aggregation should use CUDF
@@ -736,7 +787,7 @@ TEST_F(ToCudfSelectionTest, arrayAggOrderByFallsBack) {
 
   auto run = [&](const std::string& aggregate, const std::string& sql) {
     auto plan = PlanBuilder()
-                    .values({data})
+                    .values(data)
                     .singleAggregation({"k"}, {aggregate})
                     .planNode();
     return AssertQueryBuilder(duckDbQueryRunner_)
@@ -934,7 +985,7 @@ TEST_F(ToCudfSelectionTest, complexGroupingKeyExpressionsFallsBack) {
 
   auto plan =
       PlanBuilder()
-          .values({input})
+          .values(input)
           .project({"c0", "c1", "c2", "to_big_endian_64(c0) AS complex_key"})
           .aggregation(
               {"complex_key"},
@@ -1031,7 +1082,7 @@ TEST_F(ToCudfSelectionTest, zeroColumnCountStarUsesCudf) {
 
   auto plan =
       PlanBuilder()
-          .values({data})
+          .values(data)
           .filter("c0 > 0")
           .project({})
           .aggregation(
@@ -1056,7 +1107,7 @@ TEST_F(ToCudfSelectionTest, zeroColumnCountConstantUsesGpu) {
 
   auto plan =
       PlanBuilder()
-          .values({data})
+          .values(data)
           .filter("c0 > 0")
           .project({})
           .aggregation(
@@ -1079,7 +1130,7 @@ TEST_F(ToCudfSelectionTest, zeroColumnConstantProjectionsUseCudf) {
   createDuckDbTable({data});
 
   auto plan = PlanBuilder()
-                  .values({data})
+                  .values(data)
                   .filter("c0 > 1")
                   .project({})
                   .project({"'x' AS s", "7 AS n"})
@@ -1104,7 +1155,7 @@ TEST_F(ToCudfSelectionTest, zeroColumnFilterFallsBack) {
   createDuckDbTable({data});
 
   auto fusedPlan = PlanBuilder()
-                       .values({data})
+                       .values(data)
                        .project({})
                        .filter("1 < 2")
                        .project({"'x' AS s"})
@@ -1117,7 +1168,7 @@ TEST_F(ToCudfSelectionTest, zeroColumnFilterFallsBack) {
   ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
 
   auto filterOnlyPlan = PlanBuilder()
-                            .values({data})
+                            .values(data)
                             .project({})
                             .filter("1 < 2")
                             .singleAggregation({}, {"count(1)"})
@@ -1136,7 +1187,7 @@ TEST_F(ToCudfSelectionTest, zeroColumnNonConstantProjectionFallsBack) {
   createDuckDbTable({data});
 
   auto plan = PlanBuilder()
-                  .values({data})
+                  .values(data)
                   .project({})
                   .project({"1 + 2 AS n"})
                   .singleAggregation({"n"}, {"count(1)"})

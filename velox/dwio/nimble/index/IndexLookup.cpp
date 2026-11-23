@@ -17,9 +17,8 @@
 
 #include "velox/common/caching/FileHandle.h"
 #include "velox/common/io/Options.h"
-#include "velox/dwio/common/CachedBufferedInput.h"
-#include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/tablet/DataInput.h"
 #include "velox/dwio/nimble/tablet/MetadataInput.h"
 
 namespace facebook::nimble::index {
@@ -30,15 +29,15 @@ IndexLookup::LookupRequest::defaultOptions() {
   return kDefaultOptions;
 }
 
+void IndexLookup::validateLookupRequest(const LookupRequest& request) const {
+  request.validateFor(*this);
+}
+
 void IndexLookup::Options::validate() const {
   NIMBLE_CHECK_NOT_NULL(file.get());
   NIMBLE_CHECK_NOT_NULL(ioOptions);
   NIMBLE_CHECK_NOT_NULL(ioOptions->indexIoStats(), "indexIoStats must be set");
-  NIMBLE_CHECK_EQ(
-      fileHandle != nullptr,
-      cache != nullptr,
-      "fileHandle and cache must both be set or neither");
-  if (fileHandle != nullptr) {
+  if (fileHandle.has_value()) {
     NIMBLE_CHECK_EQ(
         static_cast<const void*>(file.get()),
         static_cast<const void*>(fileHandle->file.get()),
@@ -57,43 +56,44 @@ std::shared_ptr<MetadataInput> createIndexMetadataInput(
       .maxCoalesceDistance = options.ioOptions->maxCoalesceDistance(),
       .maxCoalesceBytes = options.ioOptions->maxCoalesceBytes(),
       .executor = options.ioOptions->ioExecutor().get(),
-      .fileHandle = options.fileHandle,
-      .cache = options.cache,
+      .fileHandle =
+          options.fileHandle.has_value() ? &*options.fileHandle : nullptr,
       .maxCacheEntrySize = options.maxCacheEntrySize,
       .fileIoContext = options.fileIoContext,
+      .blockCache = options.blockCache,
   };
   return MetadataInput::create(options.file.get(), metadataOptions);
 }
 
-std::shared_ptr<velox::dwio::common::BufferedInput> createIndexDataInput(
+std::shared_ptr<DataInput> createIndexDataInput(
     const IndexLookup::Options& options) {
-  auto readFile = options.file;
-  auto indexIoStats = options.ioOptions->indexIoStats();
-  if (options.cache != nullptr) {
-    return std::make_shared<velox::dwio::common::CachedBufferedInput>(
-        std::move(readFile),
-        velox::dwio::common::MetricsLog::voidLog(),
-        options.fileHandle->uuid,
-        options.cache,
-        nullptr,
-        velox::StringIdLease(),
-        std::move(indexIoStats),
-        nullptr,
-        nullptr,
-        *options.ioOptions,
-        options.fileIoContext.fileOpts);
+  auto* pool = &options.ioOptions->memoryPool();
+  auto ioStats = options.ioOptions->indexIoStats();
+  if (options.blockCache != nullptr) {
+    NIMBLE_USER_CHECK(
+        options.fileHandle.has_value(), "blockCache requires fileHandle");
+    NIMBLE_USER_CHECK(
+        options.fileHandle->uuid.hasValue(),
+        "blockCache requires fileHandle->uuid");
+    return std::make_shared<CachedDataInput>(
+        options.file,
+        CachedDataInput::Options{
+            .pool = pool,
+            .cache = options.blockCache,
+            .fileId = options.fileHandle->uuid,
+            .ioStats = std::move(ioStats),
+            .fileIoContext = options.fileIoContext,
+        });
   }
-  return std::make_shared<velox::dwio::common::DirectBufferedInput>(
-      std::move(readFile),
-      velox::dwio::common::MetricsLog::voidLog(),
-      velox::StringIdLease(),
-      nullptr,
-      velox::StringIdLease(),
-      std::move(indexIoStats),
-      nullptr,
-      nullptr,
-      *options.ioOptions,
-      options.fileIoContext.fileOpts);
+  return std::make_shared<DirectDataInput>(
+      options.file,
+      DirectDataInput::Options{
+          .pool = pool,
+          .ioStats = std::move(ioStats),
+          .maxCoalesceDistance = options.ioOptions->maxCoalesceDistance(),
+          .maxCoalesceBytes = options.ioOptions->maxCoalesceBytes(),
+          .fileIoContext = options.fileIoContext,
+      });
 }
 
 std::string toString(IndexType indexType) {

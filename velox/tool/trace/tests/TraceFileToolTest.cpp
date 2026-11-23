@@ -126,24 +126,22 @@ class TraceFileToolTest : public HiveConnectorTestBase {
       const std::vector<std::string>& buildKeys,
       const std::vector<RowVectorPtr>& probeInput,
       const std::vector<RowVectorPtr>& buildInput) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     const std::vector<Split> probeSplits =
         makeSplits(probeInput, fmt::format("{}/probe", tableDir), pool());
     const std::vector<Split> buildSplits =
         makeSplits(buildInput, fmt::format("{}/build", tableDir), pool());
     core::PlanNodeId probeScanId;
     core::PlanNodeId buildScanId;
-    const auto outputColumns = concat(
-                                   asRowType(probeInput_[0]->type()),
-                                   asRowType(buildInput_[0]->type()))
-                                   ->names();
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    const auto outputColumns =
+        concat(probeInput_[0]->rowType(), buildInput_[0]->rowType())->names();
+    auto plan = builder.newPlan()
                     .tableScan(probeType_)
                     .capturePlanNodeId(probeScanId)
                     .hashJoin(
                         probeKeys,
                         buildKeys,
-                        PlanBuilder(planNodeIdGenerator)
+                        builder.newPlan()
                             .tableScan(buildType_)
                             .capturePlanNodeId(buildScanId)
                             .planNode(),

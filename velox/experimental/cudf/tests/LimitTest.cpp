@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -86,5 +87,5 @@ TEST_F(LimitTest, basic) {
   assertQuery(
       makePlan(1'234, 2'000), "SELECT * FROM tmp OFFSET 1234 LIMIT 2000");
 
-  assertQueryReturnsEmptyResult(makePlan(12'345, 10));
+  AssertQueryBuilder(makePlan(12'345, 10)).assertEmptyResults();
 }

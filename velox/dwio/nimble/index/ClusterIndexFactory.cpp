@@ -16,8 +16,8 @@
 #include "velox/dwio/nimble/index/ClusterIndexFactory.h"
 
 #include "velox/dwio/nimble/index/FlatClusterIndexFactory.h"
-#include "velox/dwio/nimble/index/HierarchicalClusterIndexFactory.h"
 #include "velox/dwio/nimble/index/IndexFactoryRegistry.h"
+#include "velox/dwio/nimble/index/TrieClusterIndexFactory.h"
 
 namespace facebook::nimble::index {
 
@@ -34,7 +34,7 @@ void ensureBuiltInFactoriesRegistered() {
     factoryRegistry().registerFactory(
         std::make_shared<const FlatClusterIndexFactory>());
     factoryRegistry().registerFactory(
-        std::make_shared<const HierarchicalClusterIndexFactory>());
+        std::make_shared<const TrieClusterIndexFactory>());
     return true;
   }();
   (void)registered;

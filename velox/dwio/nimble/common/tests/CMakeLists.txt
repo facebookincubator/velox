@@ -27,6 +27,8 @@ add_executable(
   FeatureGateTest.cpp
   FixedBitArrayTests.cpp
   OrderedIntegerTest.cpp
+  StringPageArenaTest.cpp
+  StripeRangeTest.cpp
   TypesTest.cpp
   VarintTests.cpp
   VectorTest.cpp
@@ -41,6 +43,7 @@ target_link_libraries(
   nimble_common_tests
   nimble_common
   velox_common_base
+  gmock
   gtest
   gtest_main
   glog::glog

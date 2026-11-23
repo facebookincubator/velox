@@ -443,6 +443,22 @@ TEST(EncodingLayoutTests, partitionedEliasFano) {
   EXPECT_TRUE(captured.child(1).has_value());
 }
 
+TEST(EncodingLayoutTests, reversed) {
+  nimble::EncodingLayout expected{
+      nimble::EncodingType::Reversed,
+      {},
+      nimble::CompressionType::Uncompressed,
+      {
+          nimble::EncodingLayout{
+              nimble::EncodingType::EliasFano,
+              {},
+              nimble::CompressionType::Uncompressed},
+      }};
+
+  testSerialization(expected);
+  testCapture<uint32_t>(expected, {50, 40, 40, 7, 3, 0});
+}
+
 TEST(EncodingLayoutTests, sparseBool) {
   nimble::EncodingLayout expected{
       nimble::EncodingType::SparseBool,

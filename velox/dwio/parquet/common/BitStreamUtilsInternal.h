@@ -121,7 +121,7 @@ inline uint64_t ReadLittleEndianWord(
     const uint8_t* buffer,
     int bytesRemaining) {
   uint64_t leValue = 0;
-  if (FOLLY_LIKELY(bytesRemaining >= 8)) {
+  if (bytesRemaining >= 8) [[likely]] {
     memcpy(&leValue, buffer, 8);
   } else {
     memcpy(&leValue, buffer, bytesRemaining);
@@ -257,13 +257,13 @@ inline bool BitWriter::PutValue(uint64_t v, int numBits) {
     VELOX_DCHECK_EQ(v >> numBits, 0, "v = {}, numBits = {}", v, numBits);
   }
 
-  if (FOLLY_UNLIKELY(byteOffset_ * 8 + bitOffset_ + numBits > maxBytes_ * 8))
+  if (byteOffset_ * 8 + bitOffset_ + numBits > maxBytes_ * 8) [[unlikely]]
     return false;
 
   bufferedValues_ |= v << bitOffset_;
   bitOffset_ += numBits;
 
-  if (FOLLY_UNLIKELY(bitOffset_ >= 64)) {
+  if (bitOffset_ >= 64) [[unlikely]] {
     // Flush bufferedValues_ and write out bits of v that did not fit
     bufferedValues_ = folly::Endian::little(bufferedValues_);
     memcpy(buffer_ + byteOffset_, &bufferedValues_, 8);
@@ -332,7 +332,7 @@ inline void GetValue_(
     *bufferedValues = detail::ReadLittleEndianWord(
         buffer + *byteOffset, maxBytes - *byteOffset);
     // Read bits of v that crossed into new bufferedValues_
-    if (FOLLY_LIKELY(numBits - *bitOffset < static_cast<int>(8 * sizeof(T)))) {
+    if (numBits - *bitOffset < static_cast<int>(8 * sizeof(T))) [[likely]] {
       // if shift exponent(numBits - *bitOffset) is not less than sizeof(T),
       // *v will not change and the following code may cause a runtime error
       // that the shift exponent is too large
@@ -373,7 +373,7 @@ inline int BitReader::GetBatch(int numBits, T* v, int batchSize) {
   }
 
   int i = 0;
-  if (FOLLY_UNLIKELY(bitOffset != 0)) {
+  if (bitOffset != 0) [[unlikely]] {
     for (; i < batchSize && bitOffset != 0; ++i) {
       detail::GetValue_(
           numBits,
@@ -446,12 +446,12 @@ inline int BitReader::GetBatch(int numBits, T* v, int batchSize) {
 
 template <typename T>
 inline bool BitReader::GetAligned(int numBytes, T* v) {
-  if (FOLLY_UNLIKELY(numBytes > static_cast<int>(sizeof(T)))) {
+  if (numBytes > static_cast<int>(sizeof(T))) [[unlikely]] {
     return false;
   }
 
   int bytesRead = static_cast<int>(::arrow::bit_util::BytesForBits(bitOffset_));
-  if (FOLLY_UNLIKELY(byteOffset_ + bytesRead + numBytes > maxBytes_)) {
+  if (byteOffset_ + bytesRead + numBytes > maxBytes_) [[unlikely]] {
     return false;
   }
 
@@ -478,7 +478,7 @@ inline bool BitReader::GetAligned(int numBytes, T* v) {
 inline bool BitReader::Advance(int64_t numBits) {
   int64_t bitsRequired = bitOffset_ + numBits;
   int64_t bytesRequired = ::arrow::bit_util::BytesForBits(bitsRequired);
-  if (FOLLY_UNLIKELY(bytesRequired > maxBytes_ - byteOffset_)) {
+  if (bytesRequired > maxBytes_ - byteOffset_) [[unlikely]] {
     return false;
   }
   byteOffset_ += static_cast<int>(bitsRequired >> 3);
@@ -503,7 +503,7 @@ inline bool BitReader::GetVlqInt(uint32_t* v) {
 
   for (int i = 0; i < kMaxVlqByteLength; i++) {
     uint8_t byte = 0;
-    if (FOLLY_UNLIKELY(!GetAligned<uint8_t>(1, &byte))) {
+    if (!GetAligned<uint8_t>(1, &byte)) [[unlikely]] {
       return false;
     }
     tmp |= static_cast<uint32_t>(byte & 0x7F) << (7 * i);
@@ -547,7 +547,7 @@ inline bool BitReader::GetVlqInt(uint64_t* v) {
 
   for (int i = 0; i < kMaxVlqByteLengthForInt64; i++) {
     uint8_t byte = 0;
-    if (FOLLY_UNLIKELY(!GetAligned<uint8_t>(1, &byte))) {
+    if (!GetAligned<uint8_t>(1, &byte)) [[unlikely]] {
       return false;
     }
     tmp |= static_cast<uint64_t>(byte & 0x7F) << (7 * i);

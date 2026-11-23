@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/Executor.h>
 #include <folly/Range.h>
 
 #include "velox/dwio/common/Options.h"
@@ -40,12 +41,11 @@ namespace facebook::velox::nimble {
 constexpr folly::StringPiece kNimbleWriteFileBufferSizeBytesKey =
     "nimble.write.file_buffer_size_bytes";
 
-// Nimble writer options exposed to Velox library users. We shold only expose
-// engine options (like thread pools) but not query-specific ones. The latter
-// should use query writer serde options.
+// Nimble writer options a connector sets on the writer options it builds, e.g.
+// the Iceberg connector's schema attributes. Engine resources, such as the
+// encoding executor, belong to the WriterFactory. Query settings go through
+// serde parameters.
 struct NimbleWriterOptions : public dwio::common::WriterOptions {
-  folly::Executor::KeepAlive<> encodingExecutor;
-
   /// Per-type attributes routed through to
   /// `facebook::nimble::WriterOptions::schemaAttributes` when this
   /// dwio::common::WriterOptions instance is used to spawn a NIMBLE writer.
@@ -69,18 +69,29 @@ class WriterFactory : public dwio::common::WriterFactory {
   // The base must be named explicitly: an unqualified WriterFactory(...) here
   // resolves to this class, making the initializer a delegating constructor to
   // itself rather than a call to the base.
-  WriterFactory()
-      : dwio::common::WriterFactory(dwio::common::FileFormat::NIMBLE) {}
+  /// @param encodingExecutor Encodes the streams of each stripe in parallel
+  /// for every writer this factory creates. Without one, writers encode
+  /// serially.
+  explicit WriterFactory(folly::Executor::KeepAlive<> encodingExecutor = {})
+      : dwio::common::WriterFactory(dwio::common::FileFormat::NIMBLE),
+        encodingExecutor_(std::move(encodingExecutor)) {}
 
   std::unique_ptr<dwio::common::Writer> createWriter(
       std::unique_ptr<dwio::common::FileSink> sink,
       const std::shared_ptr<dwio::common::WriterOptions>& options) override;
 
   std::unique_ptr<dwio::common::WriterOptions> createWriterOptions() override;
+
+ private:
+  const folly::Executor::KeepAlive<> encodingExecutor_;
 };
 
-inline void registerNimbleWriterFactory() {
-  dwio::common::registerWriterFactory(std::make_shared<WriterFactory>());
+/// Registers the Nimble writer factory. See WriterFactory for
+/// 'encodingExecutor'.
+inline void registerNimbleWriterFactory(
+    folly::Executor::KeepAlive<> encodingExecutor = {}) {
+  dwio::common::registerWriterFactory(
+      std::make_shared<WriterFactory>(std::move(encodingExecutor)));
 }
 
 inline void unregisterNimbleWriterFactory() {

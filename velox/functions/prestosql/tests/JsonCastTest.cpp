@@ -1879,7 +1879,7 @@ TEST_F(JsonCastTest, castFromJsonWithEscapingForSpecialUniocodeCharacters) {
     ASSERT_TRUE(!castRow->isNullAt(0));
 
     auto expected =
-        makeRowVector({"x"}, {makeFlatVector<std::string>({expectedJson})});
+        makeNamedRowVector("x", makeFlatVector<std::string>({expectedJson}));
     test::assertEqualVectors(expected, castRow);
   };
 

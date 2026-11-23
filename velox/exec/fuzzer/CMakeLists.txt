@@ -38,6 +38,7 @@ add_library(
   PrestoQueryRunnerToSqlPlanNodeVisitor.cpp
   FuzzerUtil.cpp
   PrestoSql.cpp
+  ScopedOOMInjector.cpp
 )
 velox_add_test_headers(
   velox_fuzzer_util
@@ -52,6 +53,7 @@ velox_add_test_headers(
   PrestoQueryRunnerToSqlPlanNodeVisitor.h
   PrestoSql.h
   ReferenceQueryRunner.h
+  ScopedOOMInjector.h
   VeloxQueryRunner.h
 )
 
@@ -278,6 +280,7 @@ add_executable(velox_exchange_fuzzer ExchangeFuzzer.cpp)
 target_link_libraries(
   velox_exchange_fuzzer
   velox_exec_test_lib
+  velox_fuzzer_util
   velox_aggregates
   velox_vector_test_lib
   velox_vector_fuzzer

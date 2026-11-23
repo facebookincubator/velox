@@ -54,6 +54,8 @@ const StreamDescriptor& getMainDescriptor(const Type& type) {
       return type.asHybridFlatMap().nullsDescriptor();
     case Kind::ArrayWithOffsets:
       return type.asArrayWithOffsets().offsetsDescriptor();
+    case Kind::SlidingWindowArray:
+      return type.asSlidingWindowArray().offsetsDescriptor();
     case Kind::SlidingWindowMap:
       return type.asSlidingWindowMap().offsetsDescriptor();
     default:
@@ -61,16 +63,19 @@ const StreamDescriptor& getMainDescriptor(const Type& type) {
   }
 }
 
-// Returns the offset of the stream of the dedup kinds, ArrayWithOffsets and
-// SlidingWindowMap, that holds the lengths of their distinct arrays or maps,
-// next to the per-row offsets of their main stream. Returns std::nullopt for
-// other types.
+// Returns the offset of the stream of the dedup kinds, ArrayWithOffsets,
+// SlidingWindowMap and SlidingWindowArray, that holds the lengths of their
+// distinct arrays, maps or windows, next to the per-row offsets of their main
+// stream. Returns std::nullopt for other types.
 std::optional<offset_size> getDedupLengthsOffset(const Type& type) {
   if (type.isArrayWithOffsets()) {
     return type.asArrayWithOffsets().lengthsDescriptor().offset();
   }
   if (type.isSlidingWindowMap()) {
     return type.asSlidingWindowMap().lengthsDescriptor().offset();
+  }
+  if (type.isSlidingWindowArray()) {
+    return type.asSlidingWindowArray().lengthsDescriptor().offset();
   }
   return std::nullopt;
 }
@@ -666,7 +671,7 @@ void Deserializer::deserialize(
 void Deserializer::appendToOutput(
     velox::VectorPtr&& decoded,
     velox::VectorPtr& output) const {
-  if (FOLLY_LIKELY(output == nullptr)) {
+  if (output == nullptr) [[likely]] {
     output = std::move(decoded);
     return;
   }
@@ -722,7 +727,7 @@ velox::VectorPtr Deserializer::projectOutput(
 }
 
 void Deserializer::decodeRun(DecodeRun& run, velox::VectorPtr& output) const {
-  if (FOLLY_UNLIKELY(run.batches == 0)) {
+  if (run.batches == 0) [[unlikely]] {
     return;
   }
   const auto ops = buildDecodeOps(runRanges_);
@@ -758,10 +763,10 @@ void Deserializer::appendStreamSegments(
         false);
   }
   parser_->iterateStreams([&](uint32_t offset, std::string_view streamData) {
-    if (FOLLY_UNLIKELY(offset > maxStreamOffset)) {
+    if (offset > maxStreamOffset) [[unlikely]] {
       return;
     }
-    if (FOLLY_UNLIKELY(!shouldDecodeStream(offset))) {
+    if (!shouldDecodeStream(offset)) [[unlikely]] {
       return;
     }
     if (trackMapValueStreams) {
@@ -818,8 +823,12 @@ uint32_t Deserializer::appendBatch(
     velox::VectorPtr& output) const {
   const auto rowCount = parser_->initialize(batch);
   const auto requiredBarrier = parser_->requiredBarrier();
-  if (FOLLY_UNLIKELY(requiredBarrier)) {
+  if (requiredBarrier) [[unlikely]] {
     decodeRun(run, output);
+
+    // Frees the previous run's stream buffers so the parser does not hold them
+    // while it reads this batch. reset() keeps this batch's cursor and header.
+    parser_->reset();
   }
 
   // Rows this batch exposes: the parser's rowRange (kTablet header) or the
@@ -864,7 +873,7 @@ uint32_t Deserializer::appendBatch(
   }
   run.rows += rowCount;
   ++run.batches;
-  if (FOLLY_UNLIKELY(requiredBarrier)) {
+  if (requiredBarrier) [[unlikely]] {
     decodeRun(run, output);
     parser_->reset();
   }

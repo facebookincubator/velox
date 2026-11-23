@@ -59,17 +59,15 @@ void DefRepLevelsToListInfo(
       // offsets can be null for structs with repeated children (we don't need
       // to know offsets until we get to the children).
       if (offsets != nullptr) {
-        if (FOLLY_UNLIKELY(
-                *offsets == std::numeric_limits<OffsetType>::max())) {
+        if (*offsets == std::numeric_limits<OffsetType>::max()) [[unlikely]] {
           VELOX_FAIL("List index overflow.");
         }
         *offsets += 1;
       }
     } else {
-      if (FOLLY_UNLIKELY(
-              (validBitsWriter.has_value() &&
-               validBitsWriter->position() >= output->valuesReadUpperBound) ||
-              (offsets - origPos) >= output->valuesReadUpperBound)) {
+      if ((validBitsWriter.has_value() &&
+           validBitsWriter->position() >= output->valuesReadUpperBound) ||
+          (offsets - origPos) >= output->valuesReadUpperBound) [[unlikely]] {
         VELOX_FAIL(
             "Definition levels exceeded upper bound: {}",
             output->valuesReadUpperBound);
@@ -85,8 +83,7 @@ void DefRepLevelsToListInfo(
         // cumulative and subtract when validating fixed size lists.
         *offsets = *(offsets - 1);
         if (defLevels[x] >= levelInfo.defLevel) {
-          if (FOLLY_UNLIKELY(
-                  *offsets == std::numeric_limits<OffsetType>::max())) {
+          if (*offsets == std::numeric_limits<OffsetType>::max()) [[unlikely]] {
             VELOX_FAIL("List index overflow.");
           }
           *offsets += 1;

@@ -845,7 +845,7 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
   void testSerialization(VectorPtr source) {
     // Serialization functions expect loaded vectors.
     source = BaseVector::loadedVectorShared(source);
-    auto sourceRow = makeRowVector({"c"}, {source});
+    auto sourceRow = makeNamedRowVector("c", source);
     auto sourceRowType = asRowType(sourceRow->type());
 
     VectorStreamGroup even(pool(), nullptr);

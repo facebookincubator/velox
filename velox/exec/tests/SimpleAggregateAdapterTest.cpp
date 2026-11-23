@@ -17,6 +17,7 @@
 #include <folly/CPortability.h>
 
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/RowContainer.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/tests/SimpleAggregateFunctionsRegistration.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"

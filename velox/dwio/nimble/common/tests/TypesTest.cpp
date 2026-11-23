@@ -55,6 +55,8 @@ TEST(TypesTest, encodingTypeStringConversion) {
       {EncodingType::EliasFano, "EliasFano"},
       {EncodingType::PartitionedEliasFano, "PartitionedEliasFano"},
       {EncodingType::BlockBitPackingV2, "BlockBitPackingV2"},
+      {EncodingType::Sequence, "Sequence"},
+      {EncodingType::Reversed, "Reversed"},
   };
   for (const auto& [type, name] : testCases) {
     SCOPED_TRACE(name);

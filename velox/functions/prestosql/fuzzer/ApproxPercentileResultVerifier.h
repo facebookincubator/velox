@@ -246,7 +246,7 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
       const std::optional<std::string>& weightField,
       const core::FieldAccessTypedExprPtr& mask) {
     VELOX_CHECK(!input.empty());
-    const auto rowType = asRowType(input[0]->type());
+    const auto rowType = input[0]->rowType();
 
     std::vector<std::string> projections = groupingKeys_;
     projections.push_back(fmt::format("{} as x", valueField));
@@ -435,7 +435,7 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
       const TypePtr& resultType,
       bool isArray) {
     VELOX_CHECK(!input.empty());
-    const auto rowType = asRowType(input[0]->type());
+    const auto rowType = input[0]->rowType();
     const bool weighted = weightField.has_value();
 
     std::vector<std::string> projections = groupingKeys_;
@@ -591,14 +591,14 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
   // For each row ([k1, k2,] x) in 'result', lookup min_pct and max_pct in
   // 'allRanges_'. Return a vector of ([k1, k2,] x, min_pct, max_pct) rows.
   RowVectorPtr getPercentileRanges(const RowVectorPtr& result) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
 
     core::PlanNodePtr expectedSource;
     core::PlanNodePtr actualSource;
     if (result->childAt(name_)->type()->isArray()) {
       expectedSource =
-          PlanBuilder(planNodeIdGenerator)
-              .values({allRanges_})
+          builder.newPlan()
+              .values(allRanges_)
               .appendColumns({fmt::format(
                   "sequence(0, {}) as s", percentiles_.size() - 1)})
               .unnest(
@@ -610,8 +610,8 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
                   {name_, "min_pct", "max_pct", "pct_index - 1 as pct_index"}))
               .planNode();
 
-      actualSource = PlanBuilder(planNodeIdGenerator)
-                         .values({result})
+      actualSource = builder.newPlan()
+                         .values(result)
                          .unnest(groupingKeys_, {name_}, "pct_index")
                          .project(append(
                              groupingKeys_,
@@ -623,13 +623,13 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
                              }))
                          .planNode();
     } else {
-      expectedSource = PlanBuilder(planNodeIdGenerator)
-                           .values({allRanges_})
+      expectedSource = builder.newPlan()
+                           .values(allRanges_)
                            .appendColumns({"0 as pct_index"})
                            .planNode();
 
-      actualSource = PlanBuilder(planNodeIdGenerator)
-                         .values({result})
+      actualSource = builder.newPlan()
+                         .values(result)
                          .appendColumns({
                              "null::double as min_pct",
                              "null::double as max_pct",
@@ -638,7 +638,7 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
                          .planNode();
     }
 
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = builder.newPlan()
                     .localPartition({}, {expectedSource, actualSource})
                     .singleAggregation(
                         append(groupingKeys_, {name_, "pct_index"}),
@@ -700,13 +700,12 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
   //         value = actual
   // )
   RowVectorPtr getPercentileRangesForWindow(const RowVectorPtr& result) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
 
     core::PlanNodePtr expectedSource;
     core::PlanNodePtr actualSource;
     core::PlanNodePtr plan;
-    expectedSource =
-        PlanBuilder(planNodeIdGenerator).values({allRanges_}).planNode();
+    expectedSource = builder.newPlan().values(allRanges_).planNode();
     auto expectedType = allRanges_->type()->asRow().findChild("expected");
     std::stringstream ss;
     toTypeSql(expectedType, ss);
@@ -714,8 +713,8 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
 
     if (result->childAt(name_)->type()->isArray()) {
       actualSource =
-          PlanBuilder(planNodeIdGenerator)
-              .values({result})
+          builder.newPlan()
+              .values(result)
               .project(append(
                   groupingKeys_,
                   {"row_number",
@@ -732,7 +731,7 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
               .planNode();
 
       plan =
-          PlanBuilder(planNodeIdGenerator)
+          builder.newPlan()
               .localPartition({}, {expectedSource, actualSource})
               .singleAggregation(
                   append(groupingKeys_, {"pct_index", "row_number"}),
@@ -753,8 +752,8 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
 
     } else {
       actualSource =
-          PlanBuilder(planNodeIdGenerator)
-              .values({result})
+          builder.newPlan()
+              .values(result)
               .project(append(
                   groupingKeys_,
                   {"row_number",
@@ -764,7 +763,7 @@ class ApproxPercentileResultVerifier : public ResultVerifier {
               .planNode();
 
       plan =
-          PlanBuilder(planNodeIdGenerator)
+          builder.newPlan()
               .localPartition({}, {expectedSource, actualSource})
               .singleAggregation(
                   append(groupingKeys_, {"row_number"}),

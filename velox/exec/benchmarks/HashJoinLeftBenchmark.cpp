@@ -87,15 +87,15 @@ class HashJoinLeftBenchmark : public VectorTestBase {
       int32_t hitPct) {
     auto pattern =
         makeBatches(kProbePatternRows, [&](int64_t row, vector_size_t size) {
-          return makeRowVector(
-              {"t0"}, {makeFlatVector<int64_t>(size, [&](vector_size_t index) {
+          return makeNamedRowVector(
+              "t0", makeFlatVector<int64_t>(size, [&](vector_size_t index) {
                 const auto probeRow = row + index;
                 const auto random = folly::hash::twang_mix64(probeRow);
                 if (random % 100 < hitPct) {
                   return buildKey(random % numBuildRows);
                 }
                 return static_cast<int64_t>(random | uint64_t{1});
-              })});
+              }));
         });
     std::vector<RowVectorPtr> probeVectors;
     for (int32_t repeat = 0; repeat < kProbeRepeats; ++repeat) {
@@ -108,15 +108,13 @@ class HashJoinLeftBenchmark : public VectorTestBase {
       const BenchmarkParams& params,
       const std::vector<RowVectorPtr>& buildVectors,
       const std::vector<RowVectorPtr>& probeVectors) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan = PlanBuilder(planNodeIdGenerator, pool_.get())
+    PlanBuilder builder(pool_.get());
+    auto plan = builder.newPlan()
                     .values(probeVectors)
                     .hashJoin(
                         {"t0"},
                         {"u0"},
-                        PlanBuilder(planNodeIdGenerator, pool_.get())
-                            .values(buildVectors)
-                            .planNode(),
+                        builder.newPlan().values(buildVectors).planNode(),
                         "",
                         {"t0", "u1"},
                         core::JoinType::kLeft)

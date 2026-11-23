@@ -27,7 +27,9 @@
 #include "velox/core/PlanNode.h"
 
 #include <gtest/gtest.h>
+#include <utility>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/exec/rpc/tests/ResponseSimulator.h"
 #include "velox/exec/rpc/tests/TextOutput.h"
@@ -112,6 +114,9 @@ class RPCNodeTest : public testing::Test {
  protected:
   static void SetUpTestSuite() {
     memory::MemoryManager::testingSetInstance({});
+    Type::registerSerDe();
+    core::ITypedExpr::registerSerDe();
+    core::PlanNode::registerSerDe();
   }
 
   void SetUp() override {
@@ -119,6 +124,21 @@ class RPCNodeTest : public testing::Test {
         std::make_shared<ResponseSimulator>(std::chrono::milliseconds(10));
     function_ = std::make_shared<MockAsyncRPCFunction>(simulator_);
     pool_ = memory::memoryManager()->addLeafPool();
+  }
+
+  // Supplies a non-null source so serde also exercises its registry entry.
+  core::RPCNodePtr makeRPCNode(std::string executionPhase) {
+    auto source = std::make_shared<core::ValuesNode>(
+        "values", std::vector<RowVectorPtr>{});
+    return std::make_shared<core::RPCNode>(
+        "rpc-serde",
+        std::move(source),
+        std::make_shared<core::CallTypedExpr>(VARCHAR(), "mock_rpc_function"),
+        "response",
+        ROW("response", VARCHAR()),
+        rpc::RPCStreamingMode::kBatch,
+        32,
+        std::move(executionPhase));
   }
 
   std::shared_ptr<ResponseSimulator> simulator_;
@@ -154,6 +174,59 @@ TEST_F(RPCNodeTest, rpcNodeWithBatchMode) {
 
   EXPECT_EQ(rpcNode->streamingMode(), rpc::RPCStreamingMode::kBatch);
   EXPECT_EQ(rpcNode->dispatchBatchSize(), 100);
+}
+
+TEST_F(RPCNodeTest, deferredPhaseSerialization) {
+  for (const auto& [phase, name] :
+       {std::pair{"SUBMIT", "RpcSubmit"},
+        std::pair{"POLL", "RpcPoll"},
+        std::pair{"COLLECT", "RpcCollect"}}) {
+    SCOPED_TRACE(phase);
+    auto rpcNode = makeRPCNode(phase);
+    const auto serialized = rpcNode->serialize();
+    EXPECT_EQ(serialized["name"].asString(), std::string(name) + "Node");
+    auto restored = std::dynamic_pointer_cast<const core::RPCNode>(
+        ISerializable::deserialize<core::PlanNode>(serialized, pool_.get()));
+    ASSERT_NE(restored, nullptr);
+    EXPECT_EQ(restored->executionPhase(), phase);
+    EXPECT_EQ(restored->name(), name);
+    EXPECT_EQ(restored->id(), rpcNode->id());
+    EXPECT_EQ(restored->functionName(), rpcNode->functionName());
+    EXPECT_EQ(restored->outputColumn(), rpcNode->outputColumn());
+    EXPECT_EQ(*restored->outputType(), *rpcNode->outputType());
+    EXPECT_EQ(restored->source()->id(), rpcNode->source()->id());
+    EXPECT_EQ(restored->streamingMode(), rpc::RPCStreamingMode::kBatch);
+    EXPECT_EQ(restored->dispatchBatchSize(), 32);
+  }
+}
+
+TEST_F(RPCNodeTest, legacySerializationDefaultsToInline) {
+  auto serialized = makeRPCNode("INLINE")->serialize();
+  serialized.erase("executionPhase");
+  auto restored = std::dynamic_pointer_cast<const core::RPCNode>(
+      ISerializable::deserialize<core::PlanNode>(serialized, pool_.get()));
+  ASSERT_NE(restored, nullptr);
+  EXPECT_EQ(restored->executionPhase(), "INLINE");
+  EXPECT_EQ(restored->name(), "RPC");
+}
+
+TEST_F(RPCNodeTest, serializationRejectsInvalidExecutionPhase) {
+  auto serialized = makeRPCNode("INLINE")->serialize();
+  serialized["executionPhase"] = "INVALID";
+  VELOX_ASSERT_THROW(
+      ISerializable::deserialize<core::PlanNode>(serialized, pool_.get()),
+      "Unknown RPC execution phase");
+}
+
+TEST_F(RPCNodeTest, serializationRejectsDeferredPerRow) {
+  for (const auto* phase : {"SUBMIT", "POLL", "COLLECT"}) {
+    SCOPED_TRACE(phase);
+    auto serialized = makeRPCNode(phase)->serialize();
+    serialized["streamingMode"] = "PER_ROW";
+    VELOX_ASSERT_THROW(
+        ISerializable::deserialize<core::PlanNode>(serialized, pool_.get()),
+        "Deferred RPC requires BATCH dispatch");
+  }
 }
 
 TEST_F(RPCNodeTest, functionDispatchPerRow) {

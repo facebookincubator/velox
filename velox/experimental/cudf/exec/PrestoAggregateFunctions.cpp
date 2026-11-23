@@ -138,6 +138,9 @@ void registerPrestoAggregateFunctions(const std::string& prefix) {
   registerArrayAgg(core::AggregationNode::Step::kPartial, "T");
   registerArrayAgg(core::AggregationNode::Step::kFinal, "array(T)");
   registerArrayAgg(core::AggregationNode::Step::kIntermediate, "array(T)");
+  // array_agg honors a FILTER mask on the grouped path, its only one.
+  maskSupportedAggregations(getGroupbyAggregationRegistry())
+      .insert(prefix + "array_agg");
 }
 
 } // namespace facebook::velox::cudf_velox

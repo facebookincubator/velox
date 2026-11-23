@@ -121,7 +121,7 @@ void IcebergDataSource::addDynamicFilter(
       VELOX_CHECK_NOT_NULL(icebergSplitReader);
       icebergSplitReader->enableFilterForDynamicFilter(columnName);
     }
-    connector::FileDataSource::addDynamicFilter(outputChannel, filter);
+    HiveDataSource::addDynamicFilter(outputChannel, filter);
     return;
   }
 
@@ -214,6 +214,10 @@ void IcebergDataSource::setFromDataSource(
       source->scanSpecState_.dynamicFilterColumns.end());
   HiveDataSource::setFromDataSource(std::move(sourceUnique));
 
+  // A skipped split has no reader.
+  if (splitReader_ == nullptr) {
+    return;
+  }
   auto* icebergSplitReader =
       dynamic_cast<IcebergSplitReader*>(splitReader_.get());
   VELOX_CHECK_NOT_NULL(icebergSplitReader);

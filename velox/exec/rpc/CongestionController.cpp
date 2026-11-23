@@ -94,6 +94,15 @@ void CongestionController::onSample(int64_t rttNs) {
       static_cast<double>(observedRttNs) * kBaselineSmoothing);
 }
 
+void CongestionController::raiseMaxWindow(int64_t maxWindow) {
+  const auto raised = std::clamp<int64_t>(maxWindow, 1, kMaxWindowCeiling);
+  if (raised <= maxWindow_) {
+    return;
+  }
+  effective_ += static_cast<double>(raised - maxWindow_);
+  maxWindow_ = raised;
+}
+
 void CongestionController::onCleanUnits(int64_t numUnits) {
   if (numUnits <= 0 || cleanMaxWindow_ <= 0) {
     return;

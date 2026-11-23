@@ -1013,6 +1013,32 @@ TEST_P(PrestoSerializerTest, serializeNoRowsSelected) {
   assertEqualVectors(deserialized, expected);
 }
 
+TEST_P(PrestoSerializerTest, flatMapUnsupported) {
+  auto paramOptions = getParamSerdeOptions(nullptr);
+  auto arena = std::make_unique<StreamArena>(pool_.get());
+  auto rowVector = makeRowVector({makeFlatMapVector<int32_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{1, 11}},
+  })});
+  auto serializer = serde_->createIterativeSerializer(
+      asRowType(rowVector->type()),
+      rowVector->size(),
+      arena.get(),
+      &paramOptions);
+  Scratch scratch;
+
+  const IndexRange range{0, rowVector->size()};
+  VELOX_ASSERT_THROW(
+      serializer->append(rowVector, folly::Range(&range, 1), scratch),
+      "PrestoVectorSerde does not support flat map vectors");
+
+  const std::vector<vector_size_t> rows{0, 1};
+  VELOX_ASSERT_THROW(
+      serializer->append(
+          rowVector, folly::Range(rows.data(), rows.size()), scratch),
+      "PrestoVectorSerde does not support flat map vectors");
+}
+
 TEST_P(PrestoSerializerTest, emptyArray) {
   auto arrayVector = makeArrayVector<int32_t>(
       1'000,

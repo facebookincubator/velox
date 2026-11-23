@@ -39,12 +39,14 @@ class PaimonConnectorSplitTest : public testing::Test {
 TEST_F(PaimonConnectorSplitTest, basic) {
   PaimonDataFile file0;
   file0.path = "s3://bucket/table/dt=2024-01-01/bucket-0/data-001.orc";
+  file0.fileFormat = FileFormat::ORC;
   file0.size = 1024;
   file0.rowCount = 100;
   file0.level = 0;
 
   PaimonDataFile file1;
   file1.path = "s3://bucket/table/dt=2024-01-01/bucket-0/data-002.orc";
+  file1.fileFormat = FileFormat::ORC;
   file1.size = 2048;
   file1.rowCount = 200;
   file1.level = 1;
@@ -56,20 +58,20 @@ TEST_F(PaimonConnectorSplitTest, basic) {
       kConnectorId,
       /*snapshotId=*/1,
       PaimonTableType::kPrimaryKey,
-      FileFormat::DWRF,
       files,
       partitionKeys,
       0);
 
   EXPECT_EQ(split->snapshotId(), 1);
   EXPECT_EQ(split->tableType(), PaimonTableType::kPrimaryKey);
-  EXPECT_EQ(split->fileFormat(), FileFormat::DWRF);
   EXPECT_TRUE(split->rawConvertible());
   EXPECT_EQ(split->tableBucketNumber(), 0);
   ASSERT_EQ(split->dataFiles().size(), 2);
   EXPECT_EQ(split->dataFiles()[0].path, files[0].path);
+  EXPECT_EQ(split->dataFiles()[0].fileFormat, FileFormat::ORC);
   EXPECT_EQ(split->dataFiles()[0].size, 1024);
   EXPECT_EQ(split->dataFiles()[1].path, files[1].path);
+  EXPECT_EQ(split->dataFiles()[1].fileFormat, FileFormat::ORC);
   EXPECT_EQ(split->dataFiles()[1].size, 2048);
   ASSERT_EQ(split->partitionKeys().count("dt"), 1);
   EXPECT_EQ(split->partitionKeys().at("dt"), "2024-01-01");
@@ -78,6 +80,7 @@ TEST_F(PaimonConnectorSplitTest, basic) {
 TEST_F(PaimonConnectorSplitTest, nimbleFormat) {
   PaimonDataFile file0;
   file0.path = "s3://bucket/table/data-001.nimble";
+  file0.fileFormat = FileFormat::NIMBLE;
   file0.size = 4096;
   file0.rowCount = 100;
   std::vector<PaimonDataFile> files{file0};
@@ -86,19 +89,19 @@ TEST_F(PaimonConnectorSplitTest, nimbleFormat) {
       kConnectorId,
       /*snapshotId=*/1,
       PaimonTableType::kAppendOnly,
-      FileFormat::NIMBLE,
       files,
       PartitionKeys{},
       std::nullopt);
 
   ASSERT_EQ(split->dataFiles().size(), 1);
   EXPECT_EQ(split->tableType(), PaimonTableType::kAppendOnly);
-  EXPECT_EQ(split->fileFormat(), FileFormat::NIMBLE);
+  EXPECT_EQ(split->dataFiles()[0].fileFormat, FileFormat::NIMBLE);
 }
 
 TEST_F(PaimonConnectorSplitTest, parquetFormat) {
   PaimonDataFile file0;
   file0.path = "s3://bucket/table/data-001.parquet";
+  file0.fileFormat = FileFormat::PARQUET;
   file0.size = 4096;
   file0.rowCount = 100;
   std::vector<PaimonDataFile> files{file0};
@@ -107,13 +110,12 @@ TEST_F(PaimonConnectorSplitTest, parquetFormat) {
       kConnectorId,
       /*snapshotId=*/1,
       PaimonTableType::kAppendOnly,
-      FileFormat::PARQUET,
       files,
       PartitionKeys{},
       std::nullopt);
 
   ASSERT_EQ(split->dataFiles().size(), 1);
-  EXPECT_EQ(split->fileFormat(), FileFormat::PARQUET);
+  EXPECT_EQ(split->dataFiles()[0].fileFormat, FileFormat::PARQUET);
 }
 
 TEST_F(PaimonConnectorSplitTest, emptyFilesThrows) {
@@ -123,16 +125,30 @@ TEST_F(PaimonConnectorSplitTest, emptyFilesThrows) {
           kConnectorId,
           /*snapshotId=*/1,
           PaimonTableType::kAppendOnly,
-          FileFormat::NIMBLE,
           noFiles,
           PartitionKeys{},
           std::nullopt),
       "PaimonConnectorSplit requires non-empty dataFiles");
 }
 
+TEST_F(PaimonConnectorSplitTest, fileWithoutFormatThrows) {
+  PaimonDataFile file;
+  file.path = "data-001";
+  VELOX_ASSERT_THROW(
+      std::make_shared<PaimonConnectorSplit>(
+          kConnectorId,
+          /*snapshotId=*/1,
+          PaimonTableType::kAppendOnly,
+          std::vector<PaimonDataFile>{file},
+          PartitionKeys{},
+          std::nullopt),
+      "Paimon data file must have a format: data-001");
+}
+
 TEST_F(PaimonConnectorSplitTest, rawConvertibleWithDeleteRowCountThrows) {
   PaimonDataFile file;
   file.path = "data-001.orc";
+  file.fileFormat = FileFormat::ORC;
   file.size = 1024;
   file.rowCount = 100;
   file.level = 1;
@@ -144,7 +160,6 @@ TEST_F(PaimonConnectorSplitTest, rawConvertibleWithDeleteRowCountThrows) {
           kConnectorId,
           /*snapshotId=*/1,
           PaimonTableType::kPrimaryKey,
-          FileFormat::DWRF,
           files,
           PartitionKeys{},
           std::nullopt,
@@ -155,6 +170,7 @@ TEST_F(PaimonConnectorSplitTest, rawConvertibleWithDeleteRowCountThrows) {
 TEST_F(PaimonConnectorSplitTest, notRawConvertibleWithDeleteRowCount) {
   PaimonDataFile file;
   file.path = "data-001.orc";
+  file.fileFormat = FileFormat::ORC;
   file.size = 1024;
   file.rowCount = 100;
   file.level = 1;
@@ -165,7 +181,6 @@ TEST_F(PaimonConnectorSplitTest, notRawConvertibleWithDeleteRowCount) {
       kConnectorId,
       /*snapshotId=*/1,
       PaimonTableType::kPrimaryKey,
-      FileFormat::DWRF,
       files,
       PartitionKeys{},
       std::nullopt,
@@ -178,17 +193,20 @@ TEST_F(PaimonConnectorSplitTest, notRawConvertibleWithDeleteRowCount) {
 TEST_F(PaimonConnectorSplitTest, toStringOutput) {
   PaimonDataFile f0;
   f0.path = "data-001.orc";
+  f0.fileFormat = FileFormat::ORC;
   f0.size = 1024;
   f0.rowCount = 100;
 
   PaimonDataFile f1;
   f1.path = "data-002.orc";
+  f1.fileFormat = FileFormat::ORC;
   f1.size = 2048;
   f1.rowCount = 200;
   f1.level = 1;
 
   PaimonDataFile f2;
   f2.path = "data-003.orc";
+  f2.fileFormat = FileFormat::ORC;
   f2.size = 512;
   f2.rowCount = 50;
   f2.level = 2;
@@ -199,7 +217,6 @@ TEST_F(PaimonConnectorSplitTest, toStringOutput) {
       kConnectorId,
       /*snapshotId=*/42,
       PaimonTableType::kPrimaryKey,
-      FileFormat::DWRF,
       files,
       PartitionKeys{},
       std::nullopt);
@@ -218,6 +235,7 @@ TEST_F(PaimonConnectorSplitTest, toStringOutput) {
 TEST_F(PaimonConnectorSplitTest, nullPartitionValue) {
   PaimonDataFile file0;
   file0.path = "data-001.orc";
+  file0.fileFormat = FileFormat::ORC;
   file0.size = 1024;
   file0.rowCount = 100;
   std::vector<PaimonDataFile> files{file0};
@@ -227,7 +245,6 @@ TEST_F(PaimonConnectorSplitTest, nullPartitionValue) {
       kConnectorId,
       /*snapshotId=*/1,
       PaimonTableType::kAppendOnly,
-      FileFormat::DWRF,
       files,
       partitionKeys,
       std::nullopt);
@@ -237,26 +254,27 @@ TEST_F(PaimonConnectorSplitTest, nullPartitionValue) {
 }
 
 TEST_F(PaimonConnectorSplitTest, builder) {
-  auto split = PaimonConnectorSplitBuilder(
-                   kConnectorId,
-                   /*snapshotId=*/5,
-                   PaimonTableType::kPrimaryKey,
-                   FileFormat::PARQUET)
-                   .addFile("s3://bucket/data-001.parquet", 1024, 0)
-                   .addFile("s3://bucket/data-002.parquet", 2048, 1)
-                   .partitionKey("dt", "2024-01-01")
-                   .partitionKey("country", std::nullopt)
-                   .tableBucketNumber(3)
-                   .build();
+  auto split =
+      PaimonConnectorSplitBuilder(
+          kConnectorId,
+          /*snapshotId=*/5,
+          PaimonTableType::kPrimaryKey)
+          .addFile("s3://bucket/data-001.parquet", FileFormat::PARQUET, 1024, 0)
+          .addFile("s3://bucket/data-002.orc", FileFormat::ORC, 2048, 1)
+          .partitionKey("dt", "2024-01-01")
+          .partitionKey("country", std::nullopt)
+          .tableBucketNumber(3)
+          .build();
 
   EXPECT_EQ(split->snapshotId(), 5);
-  EXPECT_EQ(split->fileFormat(), FileFormat::PARQUET);
   EXPECT_TRUE(split->rawConvertible());
 
   ASSERT_EQ(split->dataFiles().size(), 2);
   EXPECT_EQ(split->dataFiles()[0].path, "s3://bucket/data-001.parquet");
+  EXPECT_EQ(split->dataFiles()[0].fileFormat, FileFormat::PARQUET);
   EXPECT_EQ(split->dataFiles()[0].size, 1024);
-  EXPECT_EQ(split->dataFiles()[1].path, "s3://bucket/data-002.parquet");
+  EXPECT_EQ(split->dataFiles()[1].path, "s3://bucket/data-002.orc");
+  EXPECT_EQ(split->dataFiles()[1].fileFormat, FileFormat::ORC);
   EXPECT_EQ(split->dataFiles()[1].size, 2048);
   EXPECT_EQ(split->tableBucketNumber(), 3);
   EXPECT_EQ(split->partitionKeys().at("dt"), "2024-01-01");
@@ -267,13 +285,12 @@ TEST_F(PaimonConnectorSplitTest, builderDefaults) {
   auto split = PaimonConnectorSplitBuilder(
                    kConnectorId,
                    /*snapshotId=*/1,
-                   PaimonTableType::kAppendOnly,
-                   FileFormat::NIMBLE)
-                   .addFile("data.nimble", 512)
+                   PaimonTableType::kAppendOnly)
+                   .addFile("data.nimble", FileFormat::NIMBLE, 512)
                    .build();
 
   ASSERT_EQ(split->dataFiles().size(), 1);
-  EXPECT_EQ(split->fileFormat(), FileFormat::NIMBLE);
+  EXPECT_EQ(split->dataFiles()[0].fileFormat, FileFormat::NIMBLE);
   EXPECT_EQ(split->tableBucketNumber(), std::nullopt);
   EXPECT_TRUE(split->partitionKeys().empty());
 }
@@ -281,6 +298,7 @@ TEST_F(PaimonConnectorSplitTest, builderDefaults) {
 TEST_F(PaimonConnectorSplitTest, serializeRoundTrip) {
   PaimonDataFile meta;
   meta.path = "s3://bucket/data-001.parquet";
+  meta.fileFormat = FileFormat::PARQUET;
   meta.size = 4096;
   meta.rowCount = 1000;
   meta.level = 2;
@@ -299,7 +317,6 @@ TEST_F(PaimonConnectorSplitTest, serializeRoundTrip) {
       kConnectorId,
       /*snapshotId=*/42,
       PaimonTableType::kPrimaryKey,
-      FileFormat::PARQUET,
       files,
       partitionKeys,
       /*tableBucketNumber=*/7,
@@ -311,13 +328,14 @@ TEST_F(PaimonConnectorSplitTest, serializeRoundTrip) {
   EXPECT_EQ(deserialized->connectorId, kConnectorId);
   EXPECT_EQ(deserialized->snapshotId(), 42);
   EXPECT_EQ(deserialized->tableType(), PaimonTableType::kPrimaryKey);
-  EXPECT_EQ(deserialized->fileFormat(), FileFormat::PARQUET);
+  EXPECT_EQ(serialized.count("fileFormat"), 0);
   EXPECT_FALSE(deserialized->rawConvertible());
   EXPECT_EQ(deserialized->tableBucketNumber(), 7);
 
   ASSERT_EQ(deserialized->dataFiles().size(), 1);
   const auto& file = deserialized->dataFiles()[0];
   EXPECT_EQ(file.path, "s3://bucket/data-001.parquet");
+  EXPECT_EQ(file.fileFormat, FileFormat::PARQUET);
   EXPECT_EQ(file.size, 4096);
   EXPECT_EQ(file.rowCount, 1000);
   EXPECT_EQ(file.level, 2);

@@ -160,18 +160,13 @@ class StreamingAggregationTest
       uint32_t expectedNumOuputBatches) {
     const auto inputVectors = addPayload(keys, 2);
 
-    std::vector<std::shared_ptr<TempFilePath>> tempFiles;
     const int numSplits = keys.size();
-    for (int32_t i = 0; i < numSplits; ++i) {
-      tempFiles.push_back(TempFilePath::create());
-    }
-    writeToFiles(toFilePaths(tempFiles), inputVectors);
+    auto tempFiles = writeToFiles(inputVectors);
 
     createDuckDbTable(inputVectors);
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId aggregationNodeId;
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = PlanBuilder()
                     .startTableScan()
                     .outputType(
                         std::dynamic_pointer_cast<const RowType>(
@@ -217,8 +212,7 @@ class StreamingAggregationTest
       ASSERT_EQ(taskStats.numBarriers, testData.hasBarrier ? numSplits : 0);
       ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
       ASSERT_EQ(
-          velox::exec::toPlanStats(taskStats)
-              .at(aggregationNodeId)
+          velox::exec::PlanNodeStats::extract(taskStats, aggregationNodeId)
               .outputVectors,
           expectedNumOuputBatches);
     }
@@ -270,19 +264,15 @@ class StreamingAggregationTest
       uint32_t outputBatchSize,
       uint32_t expectedNumOuputBatches) {
     const auto inputVectors = addPayload(keys, 2);
-    std::vector<std::shared_ptr<TempFilePath>> tempFiles;
     const int numSplits = keys.size();
-    for (int32_t i = 0; i < numSplits; ++i) {
-      tempFiles.push_back(TempFilePath::create());
-    }
-    writeToFiles(toFilePaths(tempFiles), inputVectors);
+    auto tempFiles = writeToFiles(inputVectors);
 
     createDuckDbTable(inputVectors);
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     {
       core::PlanNodeId aggregationNodeId;
-      auto plan = PlanBuilder(planNodeIdGenerator)
+      auto plan = builder.newPlan()
                       .startTableScan()
                       .outputType(
                           std::dynamic_pointer_cast<const RowType>(
@@ -333,8 +323,7 @@ class StreamingAggregationTest
         ASSERT_EQ(taskStats.numBarriers, testData.hasBarrier ? numSplits : 0);
         ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
         ASSERT_EQ(
-            velox::exec::toPlanStats(taskStats)
-                .at(aggregationNodeId)
+            velox::exec::PlanNodeStats::extract(taskStats, aggregationNodeId)
                 .outputVectors,
             expectedNumOuputBatches);
       }
@@ -343,7 +332,7 @@ class StreamingAggregationTest
     {
       core::PlanNodeId aggregationNodeId;
       auto plan =
-          PlanBuilder(planNodeIdGenerator)
+          builder.newPlan()
               .startTableScan()
               .outputType(
                   std::dynamic_pointer_cast<const RowType>(
@@ -368,8 +357,7 @@ class StreamingAggregationTest
         ASSERT_EQ(taskStats.numBarriers, barrierExecution ? numSplits : 0);
         ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
         ASSERT_EQ(
-            velox::exec::toPlanStats(taskStats)
-                .at(aggregationNodeId)
+            velox::exec::PlanNodeStats::extract(taskStats, aggregationNodeId)
                 .outputVectors,
             expectedNumOuputBatches);
       }
@@ -537,20 +525,16 @@ class StreamingAggregationTest
       const std::vector<RowVectorPtr>& keys,
       uint32_t outputBatchSize) {
     const auto inputVectors = addPayload(keys);
-    std::vector<std::shared_ptr<TempFilePath>> tempFiles;
     const int numSplits = keys.size();
-    for (int32_t i = 0; i < numSplits; ++i) {
-      tempFiles.push_back(TempFilePath::create());
-    }
-    writeToFiles(toFilePaths(tempFiles), inputVectors);
+    auto tempFiles = writeToFiles(inputVectors);
 
     createDuckDbTable(inputVectors);
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     {
       core::PlanNodeId aggregationNodeId;
       auto plan =
-          PlanBuilder(planNodeIdGenerator)
+          builder.newPlan()
               .startTableScan()
               .outputType(
                   std::dynamic_pointer_cast<const RowType>(
@@ -612,7 +596,7 @@ class StreamingAggregationTest
 
     {
       core::PlanNodeId aggregationNodeId;
-      auto plan = PlanBuilder(planNodeIdGenerator)
+      auto plan = builder.newPlan()
                       .startTableScan()
                       .outputType(
                           std::dynamic_pointer_cast<const RowType>(
@@ -822,7 +806,7 @@ TEST_P(StreamingAggregationTest, closeUninitialized) {
       makeFlatVector<int64_t>({1, 2, 3}),
   });
   auto plan = PlanBuilder()
-                  .values({data})
+                  .values(data)
                   .addNode([](auto nodeId, auto source) -> core::PlanNodePtr {
                     return std::make_shared<core::ProjectNode>(
                         nodeId,
@@ -1199,17 +1183,12 @@ TEST_P(StreamingAggregationTest, clusteredInputWithBarrier) {
       makeFlatVector<int32_t>({17, 18, 19}),
   };
   auto inputVectors = addPayload(keys, 1);
-  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
   const int numSplits = keys.size();
-  for (int32_t i = 0; i < numSplits; ++i) {
-    tempFiles.push_back(TempFilePath::create());
-  }
-  writeToFiles(toFilePaths(tempFiles), inputVectors);
+  auto tempFiles = writeToFiles(inputVectors);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId streamingAggregationNodeId;
   auto plan =
-      PlanBuilder(planNodeIdGenerator)
+      PlanBuilder()
           .startTableScan()
           .outputType(
               std::dynamic_pointer_cast<const RowType>(inputVectors[0]->type()))
@@ -1256,8 +1235,8 @@ TEST_P(StreamingAggregationTest, clusteredInputWithBarrier) {
     ASSERT_EQ(taskStats.numBarriers, testData.barrierExecution ? numSplits : 0);
     ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
     ASSERT_EQ(
-        velox::exec::toPlanStats(taskStats)
-            .at(streamingAggregationNodeId)
+        velox::exec::PlanNodeStats::extract(
+            taskStats, streamingAggregationNodeId)
             .outputVectors,
         testData.numExpectedOutputBatches);
   }
@@ -1298,7 +1277,7 @@ TEST_P(StreamingAggregationTest, distinctAggregationsWithBarrier) {
 TEST_P(StreamingAggregationTest, constantInput) {
   auto data = makeRowVector({makeFlatVector<int32_t>({1, 1, 2, 2})});
   auto plan = PlanBuilder()
-                  .values({data})
+                  .values(data)
                   .partialStreamingAggregation({"c0"}, {"array_agg(3)"})
                   .finalAggregation()
                   .planNode();
@@ -1372,9 +1351,8 @@ TEST_F(StreamingAggregationTest, noGroupsSpanBatchesSingleGroup) {
   auto data = addPayload(keys, 1);
   createDuckDbTable(data);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId aggregationNodeId;
-  auto plan = PlanBuilder(planNodeIdGenerator)
+  auto plan = PlanBuilder()
                   .values(data)
                   .streamingAggregation(
                       {"c0"},
@@ -1396,7 +1374,8 @@ TEST_F(StreamingAggregationTest, noGroupsSpanBatchesSingleGroup) {
   // immediately.
   const auto taskStats = task->taskStats();
   ASSERT_EQ(
-      velox::exec::toPlanStats(taskStats).at(aggregationNodeId).outputVectors,
+      velox::exec::PlanNodeStats::extract(taskStats, aggregationNodeId)
+          .outputVectors,
       keys.size());
 }
 
@@ -1439,9 +1418,8 @@ TEST_F(StreamingAggregationTest, noGroupsSpanBatches) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId aggregationNodeId;
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = PlanBuilder()
                     .values(data)
                     .streamingAggregation(
                         {"c0"},
@@ -1463,7 +1441,8 @@ TEST_F(StreamingAggregationTest, noGroupsSpanBatches) {
     // Verify the number of output batches.
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
-        velox::exec::toPlanStats(taskStats).at(aggregationNodeId).outputVectors,
+        velox::exec::PlanNodeStats::extract(taskStats, aggregationNodeId)
+            .outputVectors,
         testData.expectedOutputBatches);
   }
 }
@@ -1588,9 +1567,8 @@ TEST_P(StreamingAggregationTest, needsInputWhenSplitOutput) {
   }
   createDuckDbTable(batches);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId aggregationNodeId;
-  auto plan = PlanBuilder(planNodeIdGenerator)
+  auto plan = PlanBuilder()
                   .values(batches)
                   .streamingAggregation(
                       {"c0"},
@@ -1613,7 +1591,8 @@ TEST_P(StreamingAggregationTest, needsInputWhenSplitOutput) {
           .assertResults("SELECT c0, array_agg(c1) FROM tmp GROUP BY c0");
   const auto taskStats = task->taskStats();
   ASSERT_EQ(
-      velox::exec::toPlanStats(taskStats).at(aggregationNodeId).outputVectors,
+      velox::exec::PlanNodeStats::extract(taskStats, aggregationNodeId)
+          .outputVectors,
       9);
 }
 // Verify that during createOutput, the aggregation state is destroyed.

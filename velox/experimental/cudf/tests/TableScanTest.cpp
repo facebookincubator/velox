@@ -44,6 +44,7 @@
 #include "velox/exec/Exchange.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableScan.h"
+#include "velox/exec/TableScanStatNames.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
@@ -250,8 +251,7 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
   }
 
   static PlanNodeStats getTableScanStats(const std::shared_ptr<Task>& task) {
-    auto planStats = toPlanStats(task->taskStats());
-    return std::move(planStats.at("0"));
+    return PlanNodeStats::extract(task->taskStats(), "0");
   }
 
   // Returns whether the scan ran on the GPU, and expects the table scan adapter
@@ -262,15 +262,12 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
   static bool wasCudfScanUsed(
       const std::shared_ptr<Task>& task,
       const core::PlanNodeId& planNodeId) {
-    const auto planStats = toPlanStats(task->taskStats());
-    const auto& scanStats = planStats.at(planNodeId);
+    const auto scanStats =
+        PlanNodeStats::extract(task->taskStats(), planNodeId);
     const bool adapterUsedCudf =
         scanStats.operatorStats.count("CudfToVelox") > 0;
-    const bool connectorUsedCudf =
-        scanStats.customStats.count(
-            std::string(
-                cudf_velox::connector::hive::CudfHiveDataSource::
-                    kDwioStorageReadBytes)) > 0;
+    const bool connectorUsedCudf = scanStats.hasCustomStat(
+        cudf_velox::connector::hive::CudfHiveDataSource::kDwioStorageReadBytes);
     EXPECT_EQ(adapterUsedCudf, connectorUsedCudf);
     return adapterUsedCudf;
   }
@@ -508,18 +505,16 @@ TEST_P(TableScanTestParameterized, allColumns) {
 
         // A quick sanity check for memory usage reporting. Check that peak
         // total memory usage for the project node is > 0.
-        auto planStats = toPlanStats(task->taskStats());
-        auto scanNodeId = plan->id();
-        auto it = planStats.find(scanNodeId);
-        ASSERT_TRUE(it != planStats.end());
+        const auto scanStats =
+            PlanNodeStats::extract(task->taskStats(), plan->id());
         // TODO (dm): enable this test once we start to track gpu memory
-        // ASSERT_TRUE(it->second.peakMemoryBytes > 0);
+        // ASSERT_TRUE(scanStats.peakMemoryBytes > 0);
 
         //  Verifies there is no dynamic filter stats.
-        ASSERT_TRUE(it->second.dynamicFilterStats.empty());
+        ASSERT_TRUE(scanStats.dynamicFilterStats.empty());
 
         // TODO: We are not writing any customStats yet so disable this check
-        // ASSERT_LT(0, it->second.customStats.at("ioWaitWallNanos").sum);
+        // ASSERT_LT(0, scanStats.customSum("ioWaitWallNanos"));
       };
 
   const bool useBufferedInput = GetParam();
@@ -589,12 +584,10 @@ TEST_P(TableScanTestParameterized, allColumnsWithRowGroupPasses) {
                   .splits(splits)
                   .assertResults(duckDbSql);
 
-  auto planStats = toPlanStats(task->taskStats());
-  auto it = planStats.find(plan->id());
-  ASSERT_TRUE(it != planStats.end());
+  const auto planStats = PlanNodeStats::extract(task->taskStats(), plan->id());
 
   // Reading in chunks must not change the number of rows returned.
-  const auto& scanStats = it->second.operatorStatsFor("TableScan");
+  const auto& scanStats = planStats.operatorStatsFor("TableScan");
   EXPECT_EQ(scanStats.outputRows, 5 * 10 * 1'000);
 
   // Splitting the read into chunks must produce more than one output vector
@@ -602,7 +595,7 @@ TEST_P(TableScanTestParameterized, allColumnsWithRowGroupPasses) {
   EXPECT_GT(scanStats.outputVectors, splits.size());
 
   //  Verifies there is no dynamic filter stats.
-  ASSERT_TRUE(it->second.dynamicFilterStats.empty());
+  ASSERT_TRUE(planStats.dynamicFilterStats.empty());
 }
 
 // Splits prepared in the background by the preloader must produce the same
@@ -621,11 +614,10 @@ TEST_F(TableScanTest, preloadSplits) {
                   .splits(makeCudfHiveConnectorSplits(filePaths))
                   .assertResults("SELECT * FROM tmp");
 
-  auto planStats = toPlanStats(task->taskStats());
-  const auto& customStats = planStats.at(plan->id()).customStats;
-  ASSERT_EQ(customStats.count(std::string(TableScan::kPreloadedSplits)), 1);
+  const auto planStats = PlanNodeStats::extract(task->taskStats(), plan->id());
+  ASSERT_TRUE(planStats.hasCustomStat(TableScanStatNames::kPreloadedSplits));
   EXPECT_EQ(
-      customStats.at(std::string(TableScan::kPreloadedSplits)).sum,
+      planStats.customSum(std::string(TableScanStatNames::kPreloadedSplits)),
       filePaths.size());
 }
 
@@ -657,11 +649,9 @@ TEST_F(TableScanTest, preloadingSplitClose) {
                   .splits(makeCudfHiveConnectorSplits(filePaths))
                   .assertResults("SELECT * FROM tmp");
 
-  auto planStats = toPlanStats(task->taskStats());
+  const auto planStats = PlanNodeStats::extract(task->taskStats(), plan->id());
   EXPECT_GT(
-      planStats.at(plan->id())
-          .customStats.at(std::string(TableScan::kPreloadedSplits))
-          .sum,
+      planStats.customSum(std::string(TableScanStatNames::kPreloadedSplits)),
       1);
 
   task.reset();
@@ -730,10 +720,11 @@ TEST_F(TableScanTest, abandonPreloadedSplits) {
   // after it are preloaded. The stat counts the preloaded splits that were
   // read, so it confirms preloading was on but cannot measure how many were
   // abandoned.
-  auto planStats = toPlanStats(task->taskStats());
-  const auto& customStats = planStats.at(scanNodeId).customStats;
-  ASSERT_EQ(customStats.count(std::string(TableScan::kPreloadedSplits)), 1);
-  EXPECT_GE(customStats.at(std::string(TableScan::kPreloadedSplits)).sum, 1);
+  const auto planStats = PlanNodeStats::extract(task->taskStats(), scanNodeId);
+  ASSERT_TRUE(planStats.hasCustomStat(TableScanStatNames::kPreloadedSplits));
+  EXPECT_GE(
+      planStats.customSum(std::string(TableScanStatNames::kPreloadedSplits)),
+      1);
 
   // Tear down while abandoned splits' payload fetches are still queued.
   task.reset();
@@ -752,9 +743,9 @@ TEST_F(TableScanTest, filterPrunesAllRowGroups) {
   auto rowType = ROW({"c0"}, {BIGINT()});
   // One row group per vector, all holding values well below the filter bound.
   std::vector<RowVectorPtr> vectors = {
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3})}),
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({4, 5, 6})}),
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({7, 8, 9})}),
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3})),
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({4, 5, 6})),
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({7, 8, 9})),
   };
   auto filePath = TempFilePath::create();
   writeToFile(filePath->getPath(), vectors);
@@ -789,8 +780,8 @@ TEST_F(TableScanTest, filterPrunesAllRowGroups) {
           .assertResults(
               fmt::format("SELECT c0 FROM tmp WHERE c0 = {}", kUnmatchedValue));
 
-  auto planStats = toPlanStats(task->taskStats());
-  EXPECT_EQ(planStats.at(plan->id()).outputRows, 0);
+  const auto planStats = PlanNodeStats::extract(task->taskStats(), plan->id());
+  EXPECT_EQ(planStats.outputRows, 0);
 }
 
 // Table schemas use lowercase names while the file keeps mixed-case names. The
@@ -886,11 +877,8 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
 
   // A quick sanity check for memory usage reporting. Check that peak total
   // memory usage for the project node is > 0.
-  auto planStats = toPlanStats(task->taskStats());
-  auto scanNodeId = plan->id();
-  auto it = planStats.find(scanNodeId);
-  ASSERT_TRUE(it != planStats.end());
-  auto rawInputBytes = it->second.rawInputBytes;
+  const auto scanStats = PlanNodeStats::extract(task->taskStats(), plan->id());
+  auto rawInputBytes = scanStats.rawInputBytes;
   // Reduced from 500 to 400 as cudf CudfHive writer seems to be writing smaller
   // files.
   ASSERT_GE(rawInputBytes, 400);
@@ -1001,11 +989,10 @@ TEST_P(TableScanTestParameterized, scanOnNonDefaultGpu) {
                   .splits(makeCudfHiveConnectorSplits(filePaths))
                   .assertResults("SELECT * FROM tmp");
 
-  auto planStats = toPlanStats(task->taskStats());
-  const auto& customStats = planStats.at(plan->id()).customStats;
-  ASSERT_EQ(customStats.count(std::string(TableScan::kPreloadedSplits)), 1);
+  const auto planStats = PlanNodeStats::extract(task->taskStats(), plan->id());
+  ASSERT_TRUE(planStats.hasCustomStat(TableScanStatNames::kPreloadedSplits));
   EXPECT_EQ(
-      customStats.at(std::string(TableScan::kPreloadedSplits)).sum,
+      planStats.customSum(std::string(TableScanStatNames::kPreloadedSplits)),
       filePaths.size());
 }
 
@@ -1140,10 +1127,9 @@ TEST_F(TableScanTest, partitionedTable) {
                     .splits({makePartitionedSplit(
                         filePath->getPath(), {{"pkey", "a"}})})
                     .assertResults("SELECT 'a', c0, c1 FROM tmp");
-    const auto planStats = toPlanStats(task->taskStats());
-    EXPECT_GT(
-        planStats.at(plan->id()).operatorStatsFor("TableScan").outputVectors,
-        1);
+    const auto planStats =
+        PlanNodeStats::extract(task->taskStats(), plan->id());
+    EXPECT_GT(planStats.operatorStatsFor("TableScan").outputVectors, 1);
   }
 
   {
@@ -2156,17 +2142,14 @@ TEST_F(TableScanTest, remainingFilterExtraction) {
   auto task = assertQuery(plan, {filePath}, "SELECT * FROM tmp WHERE c0 = 1");
 
   // Verify the filter was fully extracted: no post-read remaining filter ran.
-  auto planStats = toPlanStats(task->taskStats());
-  const auto& scanStats = planStats.at(plan->id());
-  auto it = scanStats.customStats.find("totalRemainingFilterWallNanos");
-  ASSERT_NE(it, scanStats.customStats.end());
-  EXPECT_EQ(it->second.sum, 0)
+  const auto scanStats = PlanNodeStats::extract(task->taskStats(), plan->id());
+  EXPECT_EQ(scanStats.customSum("totalRemainingFilterWallNanos"), 0)
       << "Expected no remaining filter time when filter is fully extracted";
 }
 
 TEST_F(TableScanTest, remainingFilterEligibility) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4})});
+  auto data = makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3, 4}));
   const auto assignments =
       facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
           rowType);
@@ -2203,20 +2186,20 @@ TEST_F(TableScanTest, remainingFilterEligibility) {
   // A supported, non-extractable remaining filter keeps the scan on GPU.
   testFilter(
       "c0 % 2 = 0",
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({2, 4})}),
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({2, 4})),
       true);
 
   // An unsupported nested function falls back to the CPU Hive data source.
   testFilter(
       "to_big_endian_64(c0) = to_big_endian_64(CAST(1 AS BIGINT))",
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1})}),
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1})),
       false);
 
   // The data source extracts this filter into a subfield filter the cuDF AST
   // cannot express, so the scan falls back to the CPU Hive data source.
   testFilter(
       "c0 not in (1, 3)",
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({2, 4})}),
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({2, 4})),
       false);
 
   // The data source extracts this filter into a sample rate. The cuDF data
@@ -2265,13 +2248,18 @@ TEST_F(TableScanTest, remainingFilterEligibility) {
             .copyResults(pool(), task);
 
     assertEqualResults(
-        {makeRowVector({"c0"}, {makeFlatVector<int64_t>({2, 4, 2, 4, 2, 4})})},
+        {makeNamedRowVector("c0", makeFlatVector<int64_t>({2, 4, 2, 4, 2, 4}))},
         {actual});
     EXPECT_EQ(wasCudfScanUsed(task, scanPlan->id()), expectCudfScan);
-    const auto planStats = toPlanStats(task->taskStats());
-    const auto& customStats = planStats.at(scanPlan->id()).customStats;
-    ASSERT_EQ(customStats.count(std::string(TableScan::kPreloadedSplits)), 1);
-    EXPECT_GT(customStats.at(std::string(TableScan::kPreloadedSplits)).sum, 0);
+    const auto planStats =
+        PlanNodeStats::extract(task->taskStats(), scanPlan->id());
+    const auto& customStats = planStats.customStats;
+    ASSERT_EQ(
+        customStats.count(std::string(TableScanStatNames::kPreloadedSplits)),
+        1);
+    EXPECT_GT(
+        customStats.at(std::string(TableScanStatNames::kPreloadedSplits)).sum,
+        0);
   };
   testPreloadedSplits("c0 % 2 = 0", true);
   testPreloadedSplits("c0 not in (1, 3)", false);
@@ -2279,7 +2267,7 @@ TEST_F(TableScanTest, remainingFilterEligibility) {
 
 TEST_F(TableScanTest, subfieldFilterEligibility) {
   auto rowType = ROW("c0", BIGINT());
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4})});
+  auto data = makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3, 4}));
   const auto assignments =
       facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
           rowType);
@@ -2315,14 +2303,14 @@ TEST_F(TableScanTest, subfieldFilterEligibility) {
 
   testFilter(
       "c0 in (1, 3)",
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 3})}),
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 3})),
       true);
 
   // The cuDF AST has no negated list of values, so the scan falls back to the
   // CPU Hive data source.
   testFilter(
       "c0 not in (1, 3)",
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({2, 4})}),
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({2, 4})),
       false);
 
   // The cuDF data source reads top-level columns only, so a filter on a nested
@@ -2335,7 +2323,7 @@ TEST_F(TableScanTest, subfieldFilterEligibility) {
         nestedFilePath->getPath(),
         makeRowVector(
             {"s", "c1"},
-            {makeRowVector({"a"}, {makeFlatVector<int64_t>({1, 2})}),
+            {makeNamedRowVector("a", makeFlatVector<int64_t>({1, 2})),
              makeFlatVector<int64_t>({10, 20})}));
     auto scanPlan = PlanBuilder(pool_.get())
                         .startTableScan()
@@ -2351,21 +2339,21 @@ TEST_F(TableScanTest, subfieldFilterEligibility) {
                       .splits(makeCudfHiveConnectorSplits({nestedFilePath}))
                       .copyResults(pool(), task);
     assertEqualResults(
-        {makeRowVector({"c1"}, {makeFlatVector<int64_t>({10})})}, {actual});
+        {makeNamedRowVector("c1", makeFlatVector<int64_t>({10}))}, {actual});
     EXPECT_FALSE(wasCudfScanUsed(task, scanPlan->id()));
   }
 }
 
 TEST_F(TableScanTest, remainingFilterTimestampTimezoneEligibility) {
   auto rowType = ROW({"event_ts"}, {TIMESTAMP()});
-  auto data = makeRowVector(
-      {"event_ts"},
-      {makeFlatVector<Timestamp>(
+  auto data = makeNamedRowVector(
+      "event_ts",
+      makeFlatVector<Timestamp>(
           {
               Timestamp(1767297600, 0), // 2026-01-01 20:00:00 UTC.
               Timestamp(1767258000, 0), // 2026-01-01 09:00:00 UTC.
           },
-          TIMESTAMP())});
+          TIMESTAMP()));
   const auto assignments =
       facebook::velox::exec::test::HiveConnectorTestBase::allRegularColumns(
           rowType);
@@ -2404,11 +2392,11 @@ TEST_F(TableScanTest, remainingFilterTimestampTimezoneEligibility) {
     EXPECT_EQ(wasCudfScanUsed(task, scanPlan->id()), expectCudfScan);
   };
 
-  auto firstRow = makeRowVector(
-      {"event_ts"},
-      {makeFlatVector<Timestamp>(
+  auto firstRow = makeNamedRowVector(
+      "event_ts",
+      makeFlatVector<Timestamp>(
           {Timestamp(1767297600, 0)},
-          TIMESTAMP())}); // 2026-01-01 20:00:00 UTC.
+          TIMESTAMP())); // 2026-01-01 20:00:00 UTC.
   auto noRows = makeRowVector(rowType, 0);
 
   // Without session-timezone adjustment, day truncation is safe on GPU.
@@ -3041,7 +3029,7 @@ TEST_F(TableScanTest, nullableDecimalFilterUsesSplitPhysicalType) {
         expectedIds.insert(expectedIds.end(), {2, 8});
       }
       auto expected =
-          makeRowVector({"c1"}, {makeFlatVector<int64_t>(expectedIds)});
+          makeNamedRowVector("c1", makeFlatVector<int64_t>(expectedIds));
       AssertQueryBuilder(plan)
           .maxDrivers(1)
           .splits(makeCudfHiveConnectorSplits(
@@ -3099,13 +3087,13 @@ TEST_F(TableScanTest, remainingFilterCastDateToVarchar) {
   const auto day = DATE()->toDays("2026-01-02");
   const auto filePath = TempFilePath::create();
   auto plan = makeRemainingFilterPlan(
-      makeRowVector({"c0"}, {makeFlatVector<int32_t>({day, 0}, DATE())}),
+      makeNamedRowVector("c0", makeFlatVector<int32_t>({day, 0}, DATE())),
       "cast(c0 as varchar) like '2026-%'",
       filePath);
   AssertQueryBuilder(plan)
       .splits(makeCudfHiveConnectorSplits({filePath}))
       .assertResults(
-          makeRowVector({"c0"}, {makeFlatVector<int32_t>({day}, DATE())}));
+          makeNamedRowVector("c0", makeFlatVector<int32_t>({day}, DATE())));
 }
 
 TEST_F(TableScanTest, unsupportedScanColumnProjectedOut) {
@@ -3130,10 +3118,10 @@ TEST_F(TableScanTest, unsupportedScanColumnProjectedOut) {
                     .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
                     .split(makeCudfHiveConnectorSplit(filePath->getPath()))
                     .copyResults(pool(), task);
-  auto expected = makeRowVector({"k"}, {makeFlatVector<int64_t>({1, 2})});
+  auto expected = makeNamedRowVector("k", makeFlatVector<int64_t>({1, 2}));
   facebook::velox::test::assertEqualVectors(expected, result);
 
-  const auto operatorStats = toOperatorStats(task->taskStats());
+  const auto operatorStats = task->taskStats().operatorStats();
   EXPECT_EQ(operatorStats.count("CudfFilterProject"), 0);
   EXPECT_EQ(operatorStats.count("FilterProject"), 1);
 }
@@ -3170,31 +3158,31 @@ TEST_F(TableScanTest, unsupportedScanOutputFallsBack) {
 // must be cast from DECIMAL32 to DECIMAL64.
 TEST_F(TableScanTest, lowPrecisionDecimalScan) {
   auto rowType = ROW({"d"}, {DECIMAL(7, 2)});
-  auto vector = makeRowVector(
-      {"d"},
-      {makeNullableFlatVector<int64_t>(
-          {12345, std::nullopt, -2500, 300}, DECIMAL(7, 2))});
+  auto vector = makeNamedRowVector(
+      "d",
+      makeNullableFlatVector<int64_t>(
+          {12345, std::nullopt, -2500, 300}, DECIMAL(7, 2)));
   assertDecimalScanRoundTrip(vector, rowType);
 }
 
 TEST_F(TableScanTest, lowPrecisionDecimalScanNoCast) {
   auto rowType = ROW({"d"}, {DECIMAL(12, 4)});
-  auto vector = makeRowVector(
-      {"d"},
-      {makeNullableFlatVector<int64_t>(
-          {123456789, std::nullopt, -999999}, DECIMAL(12, 4))});
+  auto vector = makeNamedRowVector(
+      "d",
+      makeNullableFlatVector<int64_t>(
+          {123456789, std::nullopt, -999999}, DECIMAL(12, 4)));
   assertDecimalScanRoundTrip(vector, rowType);
 }
 
 TEST_F(TableScanTest, nestedDecimalScan) {
   auto rowType = ROW({"s"}, {ROW({"x", "d"}, {INTEGER(), DECIMAL(7, 2)})});
-  auto vector = makeRowVector(
-      {"s"},
-      {makeRowVector(
+  auto vector = makeNamedRowVector(
+      "s",
+      makeRowVector(
           {"x", "d"},
           {makeNullableFlatVector<int32_t>({1, 2, std::nullopt}),
            makeNullableFlatVector<int64_t>(
-               {100, std::nullopt, -200}, DECIMAL(7, 2))})});
+               {100, std::nullopt, -200}, DECIMAL(7, 2))}));
   assertDecimalScanRoundTrip(vector, rowType);
 }
 
@@ -3202,7 +3190,7 @@ TEST_F(TableScanTest, arrayDecimalScan) {
   auto rowType = ROW({"a"}, {ARRAY(DECIMAL(7, 2))});
   auto elements = makeNullableFlatVector<int64_t>(
       {100, 200, std::nullopt, 300}, DECIMAL(7, 2));
-  auto vector = makeRowVector({"a"}, {makeArrayVector({0, 2}, elements)});
+  auto vector = makeNamedRowVector("a", makeArrayVector({0, 2}, elements));
   assertDecimalScanRoundTrip(vector, rowType);
 }
 
@@ -3219,9 +3207,9 @@ TEST_F(TableScanTest, multiLevelNestedDecimalScan) {
                ROW({"y", "a"}, {INTEGER(), ARRAY(DECIMAL(7, 2))})})});
   auto listElements = makeNullableFlatVector<int64_t>(
       {100, 200, std::nullopt, 300, 400}, DECIMAL(7, 2));
-  auto vector = makeRowVector(
-      {"s"},
-      {makeRowVector(
+  auto vector = makeNamedRowVector(
+      "s",
+      makeRowVector(
           {"x", "d", "nested"},
           {makeNullableFlatVector<int32_t>({1, 2, std::nullopt}),
            makeNullableFlatVector<int64_t>(
@@ -3229,6 +3217,6 @@ TEST_F(TableScanTest, multiLevelNestedDecimalScan) {
            makeRowVector(
                {"y", "a"},
                {makeNullableFlatVector<int32_t>({10, std::nullopt, 30}),
-                makeArrayVector({0, 2, 4}, listElements)})})});
+                makeArrayVector({0, 2, 4}, listElements)})}));
   assertDecimalScanRoundTrip(vector, rowType);
 }

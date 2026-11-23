@@ -15,6 +15,7 @@
  */
 #include <gtest/gtest.h>
 #include <optional>
+#include <sstream>
 
 #include "velox/dwio/nimble/common/SchemaBuilder.h"
 #include "velox/dwio/nimble/common/SchemaReader.h"
@@ -508,6 +509,40 @@ TEST(SchemaTests, roundTrip) {
   nimble::test::compareSchema(nodes, result);
 }
 
+TEST(SchemaTests, slidingWindowArraySchemaNodes) {
+  nimble::SchemaBuilder builder;
+  NIMBLE_SCHEMA(
+      builder,
+      NIMBLE_ROW({{"c1", NIMBLE_SLIDINGWINDOWARRAY(NIMBLE_INTEGER())}}));
+
+  // The SlidingWindowArray node carries the lengths stream. The offsets stream
+  // follows as a uint32 scalar node, then the elements.
+  const auto nodes = builder.schemaNodes();
+  nimble::test::verifySchemaNodes(
+      nodes,
+      {
+          {nimble::Kind::Row, 3, nimble::ScalarKind::Bool, std::nullopt, 1},
+          {nimble::Kind::SlidingWindowArray,
+           2,
+           nimble::ScalarKind::UInt32,
+           "c1"},
+          {nimble::Kind::Scalar, 1, nimble::ScalarKind::UInt32},
+          {nimble::Kind::Scalar, 0, nimble::ScalarKind::Int32},
+      });
+  verifyLabels(nodes, {"/", "/0", "/0", "/0"});
+
+  const auto schema = nimble::SchemaReader::getSchema(nodes);
+  const auto& array = schema->asRow().childAt(0)->asSlidingWindowArray();
+  EXPECT_EQ(array.offsetsDescriptor().offset(), 1);
+  EXPECT_EQ(array.lengthsDescriptor().offset(), 2);
+  EXPECT_EQ(array.elements()->asScalar().scalarDescriptor().offset(), 0);
+
+  std::ostringstream out;
+  out << builder;
+  EXPECT_NE(out.str().find("[o:1,l:2]SLIDINGWINDOWARRAY"), std::string::npos)
+      << out.str();
+}
+
 TEST(SchemaTests, sharedDictionaryStream) {
   nimble::SchemaBuilder builder;
   auto scalar = builder.createScalarTypeBuilder(nimble::ScalarKind::Int32);
@@ -530,6 +565,38 @@ TEST(SchemaTests, sharedDictionaryStream) {
   NIMBLE_ASSERT_THROW(
       builder.createSharedDictionaryStream(builder.nodeCount()),
       "Shared dictionary value stream is not allocated");
+}
+
+TEST(SchemaTests, stripeIndexStreams) {
+  {
+    nimble::SchemaBuilder builder;
+    EXPECT_EQ(builder.stripeIndexStreamCount(), 0);
+    EXPECT_EQ(
+        builder.createStripeIndexStreams(2),
+        (std::vector<nimble::offset_size>{0, 1}));
+    EXPECT_EQ(builder.stripeIndexStreamCount(), 2);
+
+    // No schema node references the stripe index streams, so the schema's
+    // streams start after them.
+    auto row = builder.createRowTypeBuilder(1);
+    auto scalar = builder.createScalarTypeBuilder(nimble::ScalarKind::Int32);
+    row->addChild("c0", scalar);
+    EXPECT_EQ(row->nullsDescriptor().offset(), 2);
+    EXPECT_EQ(scalar->scalarDescriptor().offset(), 3);
+    EXPECT_EQ(builder.nodeCount(), 4);
+    const auto nodes = builder.schemaNodes();
+    EXPECT_EQ(nodes.size(), 2);
+    for (const auto& node : nodes) {
+      EXPECT_GE(node.offset(), 2);
+    }
+  }
+  {
+    nimble::SchemaBuilder builder;
+    builder.createScalarTypeBuilder(nimble::ScalarKind::Int32);
+    NIMBLE_ASSERT_THROW(
+        builder.createStripeIndexStreams(1),
+        "The stripe index streams must be the first streams allocated");
+  }
 }
 
 // Custom context classes for testing checkedContext

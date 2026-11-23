@@ -28,6 +28,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <type_traits>
 #include <vector>
@@ -158,7 +159,41 @@ class Encoding {
 
     /// When true, FOR-family payloads use the exact required bit width. When
     /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
+    /// FixedBitWidth chunks that take typed lanes (see fixedBitWidthTypedLanes)
+    /// use the byte-rounded width either way.
     bool fixedBitWidthUseExactBits{false};
+
+    /// When true, DictionaryEncoding orders an integer alphabet by physical
+    /// value instead of by first occurrence. A sorted alphabet ascends, so it
+    /// can be stored with encodings that need ascending input, such as
+    /// DeltaBlock and EliasFano, which store a gap per value instead of the
+    /// full value width. Only the writer reads this option: a reader looks
+    /// indices up in the stored alphabet whatever its order.
+    bool sortDictionaryAlphabet{false};
+
+    /// When true, FixedBitWidthEncoding stores eligible integer chunks as
+    /// typed lanes: values in whole 16-, 32- or type-width lanes, handed to
+    /// compression with a typed DataType instead of Undefined, so typed
+    /// compressors see integers rather than a bit-packed blob. A chunk is
+    /// eligible when it is encoded with an integer type, its bit width rounded
+    /// up to whole bytes is at least 16 (fixedBitWidthUseExactBits does not
+    /// apply to lanes), it has at least
+    /// fixedBitWidthTypedLanesMinValues values and its compression policy's
+    /// compressor reads the payload's DataType (Managed Compression or OpenZL,
+    /// see FixedBitWidthTypedLanes::compressorDataTypeAware()). Readers need no
+    /// option. See FixedBitWidthEncoding.
+    bool fixedBitWidthTypedLanes{false};
+
+    /// Minimum number of values in a chunk for fixedBitWidthTypedLanes.
+    // TODO: Replace this value-count floor with a stream-size threshold in
+    // bytes, so the floor tracks payload size rather than row count.
+    uint64_t fixedBitWidthTypedLanesMinValues{256};
+
+    /// MetaInternal compression level for FixedBitWidth chunks that take typed
+    /// lanes, in place of the compression policy's level. Bit-packed chunks,
+    /// other encodings and other compressors are unaffected. Unset (the
+    /// default) changes nothing. Levels must be in [1, 9]; the writer checks.
+    std::optional<int32_t> fixedBitWidthTypedLanesOpenzlLevel{};
 
     /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
     /// splitting it into bit ranges, keeping whichever form encodes smaller.
@@ -174,6 +209,15 @@ class Encoding {
     /// skip() and readWithVisitor() reject them. Do not enable for production
     /// until restatement points are added.
     bool subIntSplitDeltaPreTransform{false};
+
+    /// Reversed estimates a stream only when its values descend between
+    /// adjacent rows more than this many times as often as they ascend. Each
+    /// ascending pair starts a new partition in the reversed values, so
+    /// Reversed rarely shrinks a stream that ascends often. The default of 1
+    /// estimates every stream that descends more often than it ascends. A
+    /// larger ratio skips more streams, saving the copy and the nested
+    /// estimates on each. Only the writer reads this option.
+    double reversedMinDescendingRatio{1.0};
 
     /// Per-column decoding statistics for timing decompression.
     velox::dwio::common::DecodingStats* decodingStats = nullptr;

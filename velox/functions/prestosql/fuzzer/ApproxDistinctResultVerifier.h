@@ -97,34 +97,34 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
     // Union 'result' with 'expected_', group by on 'groupingKeys_' and produce
     // pairs of actual and expected values per group. We cannot use join because
     // grouping keys may have nulls.
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto expectedSource = PlanBuilder(planNodeIdGenerator)
-                              .values({expected_})
+    PlanBuilder builder;
+    auto expectedSource = builder.newPlan()
+                              .values(expected_)
                               .appendColumns({"'expected' as label"})
                               .planNode();
     core::PlanNodePtr actualSource;
     if (isApproxSet_) {
       auto projectColumns =
-          makeProjectColumnsForApproxSet(asRowType(result->type())->names());
-      actualSource = PlanBuilder(planNodeIdGenerator)
-                         .values({result})
+          makeProjectColumnsForApproxSet(result->rowType()->names());
+      actualSource = builder.newPlan()
+                         .values(result)
                          .project(projectColumns)
                          .appendColumns({"'actual' as label"})
                          .planNode();
     } else {
-      actualSource = PlanBuilder(planNodeIdGenerator)
-                         .values({result})
+      actualSource = builder.newPlan()
+                         .values(result)
                          .appendColumns({"'actual' as label"})
                          .planNode();
     }
 
     if (verifyWindow_) {
       return verifyWindow(
-          expectedSource, actualSource, planNodeIdGenerator, result->pool());
+          expectedSource, actualSource, builder, result->pool());
     }
 
     auto mapAgg = fmt::format("map_agg(label, {}) as m", name_);
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    auto plan = builder.newPlan()
                     .localPartition({}, {expectedSource, actualSource})
                     .singleAggregation(groupingKeys_, {mapAgg})
                     .project({"m['actual'] as a", "m['expected'] as e"})
@@ -195,7 +195,7 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
   bool verifyWindow(
       core::PlanNodePtr& expectedSource,
       core::PlanNodePtr& actualSource,
-      std::shared_ptr<core::PlanNodeIdGenerator>& planNodeIdGenerator,
+      const PlanBuilder& builder,
       memory::MemoryPool* pool) {
     auto mapAgg = fmt::format("map_agg(label, {}) as m", name_);
 
@@ -209,7 +209,7 @@ class ApproxDistinctResultVerifier : public ResultVerifier {
         "cast(abs(m['actual'] - m['expected']) as double) / cast(m['expected'] as double) as gap");
 
     auto plan =
-        PlanBuilder(planNodeIdGenerator)
+        builder.newPlan()
             .localPartition({}, {expectedSource, actualSource})
             .singleAggregation(keys, {mapAgg})
             .project(projections)

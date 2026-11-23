@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -35,6 +36,8 @@
 #include "velox/dwio/nimble/common/RowRange.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/Zigzag.h"
+#include "velox/dwio/nimble/compression/Compression.h"
+#include "velox/dwio/nimble/compression/CompressionPolicy.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
@@ -532,9 +535,10 @@ template <typename T>
 class StreamDataWriter {
  public:
   /// Constructor. Writes the compact header prefix (version, row count,
-  /// flags).
+  /// flags, and the blob compression byte for kBlob).
   ///
-  /// @param pool Memory pool for encoding buffer allocation.
+  /// @param pool Memory pool for encoding buffer allocation, and for
+  ///        compressing the kBlob body in close().
   /// @param streamEncodingLayouts Optional encoding layouts for replaying
   ///        captured encodings. When provided, looks up EncodingLayout by
   ///        stream offset and uses ReplayedEncodingSelectionPolicy.
@@ -549,7 +553,10 @@ class StreamDataWriter {
   /// Write data for a single stream.
   void writeData(const nimble::StreamData& streamData);
 
-  /// Close the writer, appending the stream-sizes trailer.
+  /// Close the writer, appending the stream-sizes trailer. For
+  /// kBlob, close() then compresses the body, which holds the
+  /// streams and the trailer, in the output buffer, unless
+  /// blobCompressionOptions keeps the body uncompressed.
   void close();
 
  private:
@@ -559,9 +566,14 @@ class StreamDataWriter {
       std::string_view data,
       std::span<const bool> nonNulls = {});
 
+  // Compresses the kBlob body, which holds the streams and the trailer, in the
+  // output buffer, unless blobCompressionOptions keeps it uncompressed.
+  void compressBlob();
+
   // --- Const members ---
   const SerializerOptions& options_;
-  // Memory pool for encoding scratch buffers.
+  // Memory pool for encoding scratch buffers, and for compressing the
+  // kBlob body in close().
   velox::memory::MemoryPool* const pool_;
   // Scratch buffer holding one encoded stream before it is copied to output.
   const std::unique_ptr<nimble::Buffer> streamEncodingBuffer_;
@@ -578,6 +590,8 @@ class StreamDataWriter {
   // missing/empty).
   std::vector<uint32_t> streamSizes_;
   // Byte offset of the serialization header flags byte, patched in close().
+  // For kBlob, the blob compression byte follows it, and close() sets it to
+  // the codec of the payload.
   size_t headerFlagsOffset_{0};
   bool requiredBarrier_{false};
 };
@@ -601,8 +615,19 @@ StreamDataWriter<T>::StreamDataWriter(
   const auto version = options_.version;
   NIMBLE_CHECK(
       usesCompactHeaderFlags(version),
-      "StreamDataWriter writes require kSerialization or kProjection. Got: {}",
+      "StreamDataWriter writes require kSerialization, kProjection or kBlob. Got: {}",
       version);
+
+  // Every reader rejects a kBlob blob with any other codec. The
+  // Serializer checks this at construction. This check covers direct callers.
+  if (version == SerializationVersion::kBlob) {
+    NIMBLE_USER_CHECK(
+        isSupportedBlobCompression(
+            options_.blobCompressionOptions.compressionType),
+        "kBlob blob compression must be Lz4, Zstd, MetaInternal, OpenZL or Uncompressed. Got: {}",
+        options_.blobCompressionOptions.compressionType);
+  }
+
   headerFlagsOffset_ =
       writeSerializationHeader(outputBuffer_, version, rowCount);
   NIMBLE_CHECK_LT(
@@ -712,6 +737,50 @@ void StreamDataWriter<T>::close() {
       options_.streamIndicesEncodingType,
       options_.streamSizesEncodingType,
       outputBuffer_);
+
+  if (options_.version == SerializationVersion::kBlob) {
+    compressBlob();
+  }
+}
+
+template <typename T>
+void StreamDataWriter<T>::compressBlob() {
+  // writeSerializationHeader() puts the blob compression byte right after the
+  // flags byte, and the body follows it.
+  const size_t blobCompressionOffset = headerFlagsOffset_ + 1;
+  const size_t bodyOffset = blobCompressionOffset + 1;
+  const std::string_view body{
+      outputBuffer_.data() + bodyOffset, outputBuffer_.size() - bodyOffset};
+
+  // Lz4 and Zstd payloads store the body size as a u32, and detail::extend()
+  // takes a u32 size. The limit also covers the other codecs, so that every
+  // codec accepts the same batches.
+  NIMBLE_USER_CHECK_LE(
+      body.size(),
+      size_t{std::numeric_limits<uint32_t>::max()},
+      "kBlob bodies must be smaller than 4 GiB");
+
+  // The encoder keeps the body as is when the codec is Uncompressed, when the
+  // body is below the codec's minimum size, or when compression misses the
+  // accept ratio. With Lz4, it also keeps bodies larger than about 2 GiB,
+  // which Lz4 cannot compress.
+  const auto& blobOptions = options_.blobCompressionOptions;
+  const ReplayedCompressionPolicy blobCompressionPolicy{
+      blobOptions.compressionType, blobOptions};
+  CompressionEncoder<char> blobEncoder{
+      *pool_, blobCompressionPolicy, DataType::Undefined, body};
+  outputBuffer_.data()[blobCompressionOffset] =
+      static_cast<char>(blobEncoder.compressionType());
+  if (blobEncoder.compressionType() == CompressionType::Uncompressed) {
+    return;
+  }
+
+  // The encoder holds the payload in its own buffer, so the body can be
+  // dropped before the payload is copied in.
+  outputBuffer_.resize(bodyOffset);
+  auto* pos = detail::extend(
+      outputBuffer_, static_cast<uint32_t>(blobEncoder.getSize()));
+  blobEncoder.write(pos);
 }
 
 } // namespace facebook::nimble::serde

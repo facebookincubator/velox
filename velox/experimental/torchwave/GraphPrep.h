@@ -52,4 +52,14 @@ int32_t rewriteGpuIncompatibleOps(nativert::Graph& graph);
 /// copies inserted.
 int32_t insertCpuOnlyCopies(nativert::Graph& graph);
 
+/// Retargets the sparsenn merge-and-dedup nodes
+/// (fb.fused_datafm_merge_and_dedup_by_reference[_optimized]) to their fused
+/// TorchWave "_tw" CUDA equivalents, but ONLY when those _tw ops are actually
+/// registered in the dispatcher (registerTorchWaveMergeAndDedup was called,
+/// i.e. the caller linked the torchwave_meta merge-and-dedup kernels). When
+/// they are absent this is a no-op and the base op runs as a nativert
+/// standalone, so the same load() path serves both the base engine and the
+/// fused-ops build. Mutates 'graph'; returns the number of nodes rewritten.
+int32_t rewriteMergeAndDedupToTw(nativert::Graph& graph);
+
 } // namespace torch::wave

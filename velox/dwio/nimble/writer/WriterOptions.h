@@ -25,6 +25,7 @@
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
+#include "velox/dwio/nimble/index/IndexTypes.h"
 #include "velox/dwio/nimble/index/VectorIndexConfig.h"
 #include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/ChunkStatsWriter.h"
@@ -56,8 +57,14 @@ struct WriterOptions {
         .useVarintRowCount = experimentalCompactRowCountEncoding,
         .blockBitPackingBlockSize = blockBitPackingBlockSize,
         .fixedBitWidthUseExactBits = fixedBitWidthUseExactBits,
+        .sortDictionaryAlphabet = sortDictionaryAlphabet,
+        .fixedBitWidthTypedLanes = fixedBitWidthTypedLanes,
+        .fixedBitWidthTypedLanesMinValues = fixedBitWidthTypedLanesMinValues,
+        .fixedBitWidthTypedLanesOpenzlLevel =
+            fixedBitWidthTypedLanesOpenzlLevel,
         .subIntSplitDeltaPreTransform =
             FLAGS_nimble_subintsplit_delta_pretransform,
+        .reversedMinDescendingRatio = reversedMinDescendingRatio,
         .sharedDictionaryAlphabet = {},
         .fsstCompressionTargetRatio = fsstCompressionTargetRatio};
   }
@@ -105,8 +112,8 @@ struct WriterOptions {
   ChunkStatsVersion chunkStatsVersion{ChunkStatsVersion::kV2};
 
   /// Skip writing chunk stats for a stripe group if the average number
-  /// of chunks per stream is below this threshold. 0 disables chunk stats
-  /// skipping.
+  /// of chunks per stream is below this threshold. 0 disables this
+  /// threshold; a stripe group with no streams still gets no chunk stats.
   float chunkStatsMinAvgChunks{0};
 
   /// Maximum string or binary value length retained in per-chunk bounds.
@@ -137,6 +144,17 @@ struct WriterOptions {
   /// Enabling this can increase temporary writer memory.
   bool experimentalStripeGroupMetadataDeduplication{false};
 
+  /// NOTE: !!! This is under experimentation and please do not turn on in
+  /// production use case !!!
+  /// When true, kStreamMajor stripe groups use the sparse layout: each stream
+  /// holds its stripe list, the stripes where it has data, and stripe-group
+  /// offsets and sizes only for those stripes. Streams with identical arrays
+  /// share one copy. Requires experimentalStripeGroupEncodingLayout to be
+  /// kStreamMajor. A reader that predates it cannot read such a file, except
+  /// when every stream has data in every stripe, so every reader must support
+  /// it before a writer enables it.
+  bool experimentalStripeGroupSparseLayout{false};
+
   /// If set, the cluster index on the specified columns will be built during
   /// writing. It is the primary index over key-ordered data and stores
   /// per-chunk boundary keys per stripe-group partition for binary-search
@@ -150,6 +168,20 @@ struct WriterOptions {
   /// EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
   /// production tables without consulting the Nimble team (oncall: dwios).
   bool experimentalOmitClusterIndexKeyColumnStorage{false};
+
+  /// Where the cluster index stores its key chunks. kStripe stores the keys of
+  /// each stripe as one key chunk in the stripe's first stream, so that one
+  /// read can load a stripe's keys together with its data, and ignores the
+  /// maxRowsPerKeyChunk of clusterIndexConfig. Readers that predate kStripe
+  /// read the stripes of its files, but fail to open the cluster index.
+  /// kStripe requires clusterIndexConfig, and a cluster index whose factory
+  /// supports it. Such an index can store more data of each stripe in more
+  /// index streams after the key stream: see
+  /// ClusterIndexFactory::numIndexStreams().
+  /// EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
+  /// production tables without consulting the Nimble team (oncall: dwios).
+  index::KeyStreamLayout clusterIndexKeyStreamLayout{
+      index::KeyStreamLayout::kPartition};
 
   /// Enables compact varint row-count encoding for encoded data streams. The
   /// value is persisted in file properties so readers can select the matching
@@ -227,6 +259,18 @@ struct WriterOptions {
   /// using dictionary maps.
   folly::F14FastSet<std::string> deduplicatedMapColumns{};
 
+  /// Columns whose arrays are written as sliding window arrays: each row is a
+  /// window over one shared elements stream, so a row that slides the
+  /// previous row stores only its new elements. Suits sliding-window event
+  /// features. Supports arrays of fixed-width scalars. A column must not also
+  /// be in dictionaryArrayColumns.
+  /// NOTE: For each column, ALL the arrays inside this column are written as
+  /// sliding window arrays.
+  /// EXPERIMENTAL: Not production-ready. Readers built before this schema kind
+  /// cannot read the files it writes. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  folly::F14FastSet<std::string> slidingWindowArrayColumns{};
+
   /// The metric logger would come populated with access descriptor information,
   /// application generated query id or specific sampling configs.
   std::shared_ptr<MetricsLogger> metricsLogger{};
@@ -284,11 +328,42 @@ struct WriterOptions {
 
   /// When true, FOR-family payloads use the exact required bit width. When
   /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
+  /// FixedBitWidth chunks that take typed lanes (see fixedBitWidthTypedLanes)
+  /// use the byte-rounded width either way.
   bool fixedBitWidthUseExactBits{false};
+
+  /// When true, integer dictionary alphabets are sorted by value. See
+  /// Encoding::Options::sortDictionaryAlphabet.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  bool sortDictionaryAlphabet{false};
+
+  /// Stores eligible FixedBitWidth chunks as typed lanes (see
+  /// Encoding::Options::fixedBitWidthTypedLanes). Applies to every chunk the
+  /// writer encodes as FixedBitWidth: freshly selected, replayed from
+  /// encodingLayoutTree or the selection cache, and nested. Off by default.
+  bool fixedBitWidthTypedLanes{false};
+
+  /// Minimum number of values in a chunk for fixedBitWidthTypedLanes.
+  uint64_t fixedBitWidthTypedLanesMinValues{256};
+
+  /// MetaInternal compression level for FixedBitWidth chunks that take typed
+  /// lanes (see Encoding::Options::fixedBitWidthTypedLanesOpenzlLevel). Like
+  /// the typed lanes, it reaches every chunk the writer encodes through
+  /// buildEncodingOptions(), whatever encodingSelectionPolicyCreator was built
+  /// from: fresh, replayed, shared-dictionary and nested chunks alike. It must
+  /// be in [1, 9] and requires compressionOptions.compressionType to be
+  /// MetaInternal; the writer rejects anything else. Unset by default.
+  std::optional<int32_t> fixedBitWidthTypedLanesOpenzlLevel{};
 
   /// FSST is kept only when its final encoded size is at most this fraction of
   /// the original string bytes.
   double fsstCompressionTargetRatio{0.6};
+
+  /// Reversed estimates a stream only when its values descend between adjacent
+  /// rows more than this many times as often as they ascend. See
+  /// Encoding::Options::reversedMinDescendingRatio.
+  double reversedMinDescendingRatio{1.0};
 
   /// Maximum number of scratch vector buffers retained by each per-encode-task
   /// scratch pool. 0 disables scratch vector buffer caching. Disabled by

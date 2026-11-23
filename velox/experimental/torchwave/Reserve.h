@@ -240,6 +240,10 @@ bool maxCountReserve(const ReserveArgs& args, Shape* out, int32_t numOut);
 bool sumCountReserve(const ReserveArgs& args, Shape* out, int32_t numOut);
 bool broadcastCountReserve(const ReserveArgs& args, Shape* out, int32_t numOut);
 
+/// The product of the values' counts (a tensor's numel, an integer's value),
+/// as a 1-d Shape: a launch over all combinations of its operands.
+bool productCountReserve(const ReserveArgs& args, Shape* out, int32_t numOut);
+
 /// The dims of kMax: the shape of the largest tensor value, the first one when
 /// several are equal; rank -1 when no value is a tensor.
 bool maxShapeReserve(const ReserveArgs& args, Shape* out, int32_t numOut);

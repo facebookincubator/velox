@@ -19,6 +19,7 @@
 #include "velox/dwio/nimble/common/SchemaTypes.h"
 
 #include <algorithm>
+#include <iterator>
 
 namespace facebook::nimble {
 
@@ -28,10 +29,6 @@ struct NamedType {
   std::shared_ptr<const Type> type;
   std::optional<std::string> name;
 };
-
-void validateAndIndexHybridFlatMapGroups(
-    const std::vector<HybridFlatMapType::Group>& groups,
-    folly::F14FastMap<std::string_view, size_t>& groupIndices);
 
 } // namespace
 
@@ -62,6 +59,10 @@ bool Type::isArray() const {
 
 bool Type::isArrayWithOffsets() const {
   return kind_ == Kind::ArrayWithOffsets;
+}
+
+bool Type::isSlidingWindowArray() const {
+  return kind_ == Kind::SlidingWindowArray;
 }
 
 bool Type::isMap() const {
@@ -114,6 +115,14 @@ const ArrayWithOffsetsType& Type::asArrayWithOffsets() const {
       "Cannot cast to ArrayWithOffsets. Current type is {}.",
       toString(kind_));
   return dynamic_cast<const ArrayWithOffsetsType&>(*this);
+}
+
+const SlidingWindowArrayType& Type::asSlidingWindowArray() const {
+  NIMBLE_CHECK(
+      isSlidingWindowArray(),
+      "Cannot cast to SlidingWindowArray. Current type is {}.",
+      toString(kind_));
+  return dynamic_cast<const SlidingWindowArrayType&>(*this);
 }
 
 const MapType& Type::asMap() const {
@@ -345,26 +354,42 @@ std::optional<size_t> FlatMapType::findChild(std::string_view name) const {
 
 HybridFlatMapType::HybridFlatMapType(
     StreamDescriptor nullsDescriptor,
-    ScalarKind keyScalarKind,
+    HybridFlatMap hybridFlatMap,
     std::vector<Group> groups,
-    HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
     std::vector<std::pair<std::string, std::string>> attributes)
     : Type(Kind::HybridFlatMap, std::move(attributes)),
       nullsDescriptor_{std::move(nullsDescriptor)},
-      keyScalarKind_{keyScalarKind},
-      defaultGroupKeyPresenceMode_{defaultGroupKeyPresenceMode},
+      hybridFlatMap_{std::move(hybridFlatMap)},
       groups_{std::move(groups)} {
-  NIMBLE_CHECK(
-      HybridFlatMap::supportedKeyKind(keyScalarKind_),
-      "Hybrid FlatMap key kind is unsupported: {}.",
-      keyScalarKind_);
-  validateAndIndexHybridFlatMapGroups(groups_, groupIndices_);
+  const auto& recordedGroups = hybridFlatMap_.groups();
+  NIMBLE_CHECK_EQ(
+      groups_.size(),
+      recordedGroups.size(),
+      "Hybrid FlatMap group metadata must match its child count.");
+  for (size_t i = 0; i < groups_.size(); ++i) {
+    NIMBLE_CHECK_EQ(
+        groups_[i].groupId,
+        recordedGroups[i].groupId,
+        "Hybrid FlatMap group must have the ID its metadata records.");
+    NIMBLE_CHECK(
+        &groups_[i].groupKeys == &recordedGroups[i].groupKeys,
+        "Hybrid FlatMap group must borrow the keys its metadata records.");
+  }
+
+  // HybridFlatMap has at least one group.
+  const auto& expectedValueType = *groups_.front().valueType;
+  for (size_t i = 1; i < groups_.size(); ++i) {
+    const bool hasSameLogicalType =
+        detail::sameLogicalType(expectedValueType, *groups_[i].valueType);
+    NIMBLE_CHECK(
+        hasSameLogicalType,
+        "Hybrid FlatMap groups must have the same logical value type.");
+  }
   for (const auto& group : groups_) {
-    detail::checkHybridFlatMapDefaultKeys(
-        defaultGroupKeyPresenceMode_, group.groupId, group.groupKeys);
     NIMBLE_CHECK_EQ(
         group.keyPresenceDescriptor.scalarKind(),
-        useKeyPresentList(group.groupId) ? keyScalarKind_ : ScalarKind::Bool,
+        useKeyPresentList(group.groupId) ? hybridFlatMap_.keyKind()
+                                         : ScalarKind::Bool,
         "Hybrid FlatMap key-presence stream must be boolean, or use the map "
         "key kind for a Default group that lists its keys.");
   }
@@ -375,17 +400,20 @@ const StreamDescriptor& HybridFlatMapType::nullsDescriptor() const {
 }
 
 ScalarKind HybridFlatMapType::keyScalarKind() const {
-  return keyScalarKind_;
+  return hybridFlatMap_.keyKind();
+}
+
+const HybridFlatMap& HybridFlatMapType::hybridFlatMap() const {
+  return hybridFlatMap_;
 }
 
 HybridFlatMap::KeyPresenceMode HybridFlatMapType::defaultGroupKeyPresenceMode()
     const {
-  return defaultGroupKeyPresenceMode_;
+  return hybridFlatMap_.defaultGroupKeyPresenceMode();
 }
 
 bool HybridFlatMapType::useKeyPresentList(uint32_t groupId) const {
-  return HybridFlatMap::hasKeyPresenceList(
-      defaultGroupKeyPresenceMode_, groupId);
+  return hybridFlatMap_.useKeyPresentList(groupId);
 }
 
 size_t HybridFlatMapType::groupCount() const {
@@ -416,7 +444,7 @@ std::optional<size_t> HybridFlatMapType::findProjectionGroup(
     std::string_view key) const {
   auto groupIndex = findGroup(key);
   if (!groupIndex.has_value() &&
-      defaultGroupKeyPresenceMode_ ==
+      defaultGroupKeyPresenceMode() ==
           HybridFlatMap::KeyPresenceMode::kKeyList) {
     groupIndex = defaultGroupIndex();
   }
@@ -424,11 +452,7 @@ std::optional<size_t> HybridFlatMapType::findProjectionGroup(
 }
 
 std::optional<size_t> HybridFlatMapType::findGroup(std::string_view key) const {
-  const auto iterator = groupIndices_.find(key);
-  if (iterator == groupIndices_.end()) {
-    return std::nullopt;
-  }
-  return iterator->second;
+  return hybridFlatMap_.findGroup(key);
 }
 
 const Type& HybridFlatMapType::valueType() const {
@@ -457,35 +481,60 @@ const std::shared_ptr<const Type>& ArrayWithOffsetsType::elements() const {
   return elements_;
 }
 
+SlidingWindowArrayType::SlidingWindowArrayType(
+    StreamDescriptor offsetsDescriptor,
+    StreamDescriptor lengthsDescriptor,
+    std::shared_ptr<const Type> elements,
+    std::vector<std::pair<std::string, std::string>> attributes)
+    : Type(Kind::SlidingWindowArray, std::move(attributes)),
+      offsetsDescriptor_{std::move(offsetsDescriptor)},
+      lengthsDescriptor_{std::move(lengthsDescriptor)},
+      elements_{std::move(elements)} {}
+
+const StreamDescriptor& SlidingWindowArrayType::offsetsDescriptor() const {
+  return offsetsDescriptor_;
+}
+
+const StreamDescriptor& SlidingWindowArrayType::lengthsDescriptor() const {
+  return lengthsDescriptor_;
+}
+
+const std::shared_ptr<const Type>& SlidingWindowArrayType::elements() const {
+  return elements_;
+}
+
 namespace {
 
-// Validates `groups`, filling `groupIndices` from their keys, and checks that
-// every group has the same logical value type. The views in `groupIndices`
-// refer to keys owned by `groups`.
-void validateAndIndexHybridFlatMapGroups(
-    const std::vector<HybridFlatMapType::Group>& groups,
-    folly::F14FastMap<std::string_view, size_t>& groupIndices) {
-  detail::validateHybridFlatMapGroups(
-      groups.size(),
-      /*hasDefault=*/false,
-      [&groups](size_t index) { return groups[index].groupId; },
-      [&groups](size_t index) -> const auto& {
-        return groups[index].groupKeys;
-      },
-      groupIndices);
-  const auto& expectedValueType = *groups.front().valueType;
-  for (size_t i = 1; i < groups.size(); ++i) {
-    const bool hasSameLogicalType =
-        detail::sameLogicalType(expectedValueType, *groups[i].valueType);
-    NIMBLE_CHECK(
-        hasSameLogicalType,
-        "Hybrid FlatMap groups must have the same logical value type.");
-  }
+// Moves the value of HybridFlatMapType::kAttributeName, which must appear once,
+// out of `attributes`, the attributes of a Hybrid FlatMap schema node, and
+// leaves the others in order.
+std::string takeHybridFlatMapAttribute(
+    std::vector<std::pair<std::string, std::string>>& attributes) {
+  const auto reservedBegin = std::stable_partition(
+      attributes.begin(), attributes.end(), [](const auto& attribute) {
+        return attribute.first != HybridFlatMapType::kAttributeName;
+      });
+  NIMBLE_CHECK(
+      reservedBegin != attributes.end(),
+      "Hybrid FlatMap metadata attribute is missing.");
+  NIMBLE_CHECK_EQ(
+      static_cast<size_t>(std::distance(reservedBegin, attributes.end())),
+      size_t{1},
+      "Hybrid FlatMap metadata attribute must be unique.");
+  auto serialized = std::move(reservedBegin->second);
+  attributes.erase(reservedBegin, attributes.end());
+  return serialized;
 }
 
 } // namespace
 
-NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
+// Builds the type at `index` of `nodes` and its descendants, advancing
+// `index` past them. Hybrid FlatMap nodes decode their encoded group keys from
+// `pool` (HybridFlatMap's schema constructor).
+NamedType getType(
+    offset_size& index,
+    const std::vector<SchemaNode>& nodes,
+    velox::memory::MemoryPool* pool) {
   // Runtime check: recursion into value subtrees consumes an unbounded number
   // of nodes, so a truncated schema blob must be rejected in release builds.
   NIMBLE_CHECK_LT(index, nodes.size(), "Index out of range.");
@@ -520,7 +569,7 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
           .name = node.name()};
     }
     case Kind::Array: {
-      auto elements = getType(index, nodes).type;
+      auto elements = getType(index, nodes, pool).type;
       return {
           .type = std::make_shared<ArrayType>(
               StreamDescriptor{offset, ScalarKind::UInt32},
@@ -529,8 +578,8 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
           .name = node.name()};
     }
     case Kind::Map: {
-      auto keys = getType(index, nodes).type;
-      auto values = getType(index, nodes).type;
+      auto keys = getType(index, nodes, pool).type;
+      auto values = getType(index, nodes, pool).type;
       return {
           .type = std::make_shared<MapType>(
               StreamDescriptor{offset, ScalarKind::UInt32},
@@ -545,8 +594,8 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
           lengthsNode.kind() == Kind::Scalar &&
               lengthsNode.scalarKind() == ScalarKind::UInt32,
           "SlidingWindowMap field must have a uint32 scalar type.");
-      auto keys = getType(index, nodes).type;
-      auto values = getType(index, nodes).type;
+      auto keys = getType(index, nodes, pool).type;
+      auto values = getType(index, nodes, pool).type;
       return {
           .type = std::make_shared<SlidingWindowMapType>(
               StreamDescriptor{offset, ScalarKind::UInt32},
@@ -561,7 +610,7 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
       std::vector<std::string> names{childrenCount};
       std::vector<std::shared_ptr<const Type>> children{childrenCount};
       for (auto i = 0; i < childrenCount; ++i) {
-        auto namedType = getType(index, nodes);
+        auto namedType = getType(index, nodes, pool);
         NIMBLE_CHECK(namedType.name.has_value(), "Row fields must have names.");
         children[i] = namedType.type;
         names[i] = namedType.name.value();
@@ -591,7 +640,7 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
             "Flat map in-map field must have a boolean scalar type.");
         NIMBLE_CHECK(
             inMapNode.name().has_value(), "Flat map fields must have names.");
-        auto field = getType(index, nodes);
+        auto field = getType(index, nodes, pool);
         names[i] = inMapNode.name().value();
         inMapDescriptors[i] = std::make_unique<StreamDescriptor>(
             inMapNode.offset(), inMapNode.scalarKind());
@@ -608,17 +657,21 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
           .name = node.name()};
     }
     case Kind::HybridFlatMap: {
-      auto metadata = HybridFlatMap::extractAttribute(attributes);
-      NIMBLE_CHECK_EQ(
+      // Each group takes at least three nodes: its key-presence and in-map
+      // streams and its value subtree.
+      NIMBLE_CHECK_LE(
           node.childrenCount(),
-          metadata.groups().size(),
-          "Hybrid FlatMap group metadata must match its child count.");
-      const auto defaultGroupKeyPresenceMode =
-          metadata.defaultGroupKeyPresenceMode();
-      auto groupsMetadata = std::move(metadata).releaseGroups();
-      std::vector<HybridFlatMapType::Group> groups;
-      groups.reserve(groupsMetadata.size());
-      for (auto& groupMetadata : groupsMetadata) {
+          (nodes.size() - index) / 3,
+          "Incomplete Hybrid FlatMap group.");
+      // Reads each group's streams and value subtree before its ID and keys,
+      // which the groups borrow from the HybridFlatMap parsed below.
+      std::vector<StreamDescriptor> keyPresenceDescriptors;
+      std::vector<StreamDescriptor> inMapDescriptors;
+      std::vector<std::shared_ptr<const Type>> valueTypes;
+      keyPresenceDescriptors.reserve(node.childrenCount());
+      inMapDescriptors.reserve(node.childrenCount());
+      valueTypes.reserve(node.childrenCount());
+      for (size_t i = 0; i < node.childrenCount(); ++i) {
         NIMBLE_CHECK_LT(
             index + 2, nodes.size(), "Incomplete Hybrid FlatMap group.");
         const auto& keyPresenceNode = nodes[index++];
@@ -631,29 +684,41 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
             inMapNode.kind() == Kind::Scalar &&
                 inMapNode.scalarKind() == ScalarKind::Bool,
             "Hybrid FlatMap in-map stream must be boolean.");
-        auto values = getType(index, nodes);
+        auto values = getType(index, nodes, pool);
         NIMBLE_CHECK(
             !values.name.has_value(),
             "Hybrid FlatMap group value child must be unnamed.");
+        keyPresenceDescriptors.emplace_back(
+            keyPresenceNode.offset(), keyPresenceNode.scalarKind());
+        inMapDescriptors.emplace_back(
+            inMapNode.offset(), inMapNode.scalarKind());
+        valueTypes.push_back(std::move(values.type));
+      }
+      HybridFlatMap hybridFlatMap{
+          node.scalarKind(), takeHybridFlatMapAttribute(attributes), pool};
+      const auto& recordedGroups = hybridFlatMap.groups();
+      NIMBLE_CHECK_EQ(
+          valueTypes.size(),
+          recordedGroups.size(),
+          "Hybrid FlatMap group metadata must match its child count.");
+      std::vector<HybridFlatMapType::Group> groups;
+      groups.reserve(recordedGroups.size());
+      for (size_t i = 0; i < recordedGroups.size(); ++i) {
         groups.push_back(
             HybridFlatMapType::Group{
-                .groupId = groupMetadata.groupId,
-                .groupKeys = std::move(groupMetadata.groupKeys),
-                .keyPresenceDescriptor =
-                    StreamDescriptor{
-                        keyPresenceNode.offset(), keyPresenceNode.scalarKind()},
-                .inMapDescriptor =
-                    StreamDescriptor{
-                        inMapNode.offset(), inMapNode.scalarKind()},
-                .valueType = std::move(values.type),
+                .groupId = recordedGroups[i].groupId,
+                .groupKeys = recordedGroups[i].groupKeys,
+                .keyPresenceDescriptor = keyPresenceDescriptors[i],
+                .inMapDescriptor = inMapDescriptors[i],
+                .valueType = std::move(valueTypes[i]),
+                .encodedKeys = recordedGroups[i].encodedKeys,
             });
       }
       return {
           .type = std::make_shared<HybridFlatMapType>(
               StreamDescriptor{offset, ScalarKind::Bool},
-              node.scalarKind(),
+              std::move(hybridFlatMap),
               std::move(groups),
-              defaultGroupKeyPresenceMode,
               std::move(attributes)),
           .name = node.name()};
     }
@@ -663,9 +728,24 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
           offsetsNode.kind() == Kind::Scalar &&
               offsetsNode.scalarKind() == ScalarKind::UInt32,
           "Array with offsets field must have a uint32 scalar type.");
-      auto elements = getType(index, nodes).type;
+      auto elements = getType(index, nodes, pool).type;
       return {
           .type = std::make_shared<ArrayWithOffsetsType>(
+              StreamDescriptor{offsetsNode.offset(), offsetsNode.scalarKind()},
+              StreamDescriptor{offset, ScalarKind::UInt32},
+              std::move(elements),
+              std::move(attributes)),
+          .name = node.name()};
+    }
+    case Kind::SlidingWindowArray: {
+      const auto& offsetsNode = nodes[index++];
+      NIMBLE_CHECK_FILE(
+          offsetsNode.kind() == Kind::Scalar &&
+              offsetsNode.scalarKind() == ScalarKind::UInt32,
+          "Sliding window array offsets must have a uint32 scalar type.");
+      auto elements = getType(index, nodes, pool).type;
+      return {
+          .type = std::make_shared<SlidingWindowArrayType>(
               StreamDescriptor{offsetsNode.offset(), offsetsNode.scalarKind()},
               StreamDescriptor{offset, ScalarKind::UInt32},
               std::move(elements),
@@ -680,10 +760,10 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
 }
 
 std::shared_ptr<const Type> SchemaReader::getSchema(
-    const std::vector<SchemaNode>& nodes) {
+    const std::vector<SchemaNode>& nodes,
+    velox::memory::MemoryPool* pool) {
   offset_size index{0};
-  auto namedType = getType(index, nodes);
-  return namedType.type;
+  return getType(index, nodes, pool).type;
 }
 
 void traverseSchema(
@@ -736,6 +816,15 @@ void traverseSchema(
           visitor,
           {.name = "elements", .parentType = type.get()});
 
+      break;
+    }
+    case Kind::SlidingWindowArray: {
+      traverseSchema(
+          index,
+          level + 1,
+          type->asSlidingWindowArray().elements(),
+          visitor,
+          {.name = "elements", .parentType = type.get()});
       break;
     }
     case Kind::Map: {
@@ -835,6 +924,11 @@ std::ostream& operator<<(
           out << "[o:" << array.offsetsDescriptor().offset()
               << ",l:" << array.lengthsDescriptor().offset() << "]"
               << "OFFSETARRAY\n";
+        } else if (type.isSlidingWindowArray()) {
+          const auto& array = type.asSlidingWindowArray();
+          out << "[o:" << array.offsetsDescriptor().offset()
+              << ",l:" << array.lengthsDescriptor().offset() << "]"
+              << "SLIDINGWINDOWARRAY\n";
         } else if (type.isRow()) {
           auto& row = type.asRow();
           out << "[" << row.nullsDescriptor().offset() << "]" << "ROW[";

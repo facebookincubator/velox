@@ -18,14 +18,14 @@
 #include <fmt/format.h>
 #include <folly/dynamic.h>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace facebook::velox::connector::paimon {
 
 /// Paimon deletion file — a serialized Roaring Bitmap tracking deleted row
-/// positions within an existing data file. Only used for primary-key tables
-/// with deletion-vectors.enabled=true. Append-only tables have no concept of
-/// row-level deletes (no primary key to identify specific rows).
+/// positions within an existing data file. Primary-key and append-only tables
+/// both attach them to data files when deletion-vectors.enabled=true.
 ///
 /// # How Deletion Vectors Work
 ///
@@ -63,22 +63,25 @@ namespace facebook::velox::connector::paimon {
 /// # File Format
 ///
 /// Deletion files are NOT stored in a columnar format (not Parquet/ORC/Nimble)
-/// and not in a row-based format (not compact row). They use a custom binary
-/// format:
-///   - Core payload: standard RoaringBitmap portable binary serialization
-///     (cross-language spec from RoaringFormatSpec). C++ can read this with
-///     the CRoaring library; Java uses org.roaringbitmap.RoaringBitmap.
-///   - Container packing: when multiple bitmaps are packed into a single file,
-///     Paimon uses a simple custom binary layout with length-prefixed entries
-///     mapping data file names to their bitmap bytes.
+/// and not in a row-based format (not compact row). A deletion file is a
+/// Paimon index file: a version byte followed by the deletion vectors of
+/// several data files. The manifest, not the index file, maps each data file
+/// to the byte range of its vector. Each vector is framed as
+///
+///   [length][magic][bitmap][CRC]
+///
+/// where the length and the CRC are big-endian int32s and the length counts
+/// the magic and the bitmap. Paimon writes two frame versions:
+///   - V1: big-endian magic 1581511376 and a 32-bit RoaringBitmap in the
+///     portable RoaringFormatSpec serialization. 'length' equals the frame
+///     length.
+///   - V2: little-endian magic 1681511377 and a Roaring64 bitmap, the Iceberg
+///     deletion vector layout. 'length' also counts the frame length field and
+///     the CRC, so it is the frame length plus 8.
 ///
 /// Each bitmap contains 0-based row positions of deleted rows within its
-/// associated data file.
-///
-/// Multiple deletion bitmaps can be packed into a single container file.
-/// 'offset' and 'length' specify the byte range within the container where
-/// this bitmap's data lives. For standalone deletion files, offset is 0 and
-/// length equals the file size.
+/// associated data file. 'offset' is the position of the frame's length field
+/// within the index file.
 ///
 /// # Relationship to RowKind-Based Deletes
 ///
@@ -98,26 +101,29 @@ namespace facebook::velox::connector::paimon {
 /// row positions during scanning.
 struct PaimonDeletionFile {
   /// @param path Path to the deletion file.
-  /// @param offset Byte offset within the container file.
-  /// @param length Number of bytes of bitmap data (must be > 0).
-  /// @param cardinality Number of deleted rows (must be > 0).
+  /// @param offset Byte offset of the deletion vector frame in the file.
+  /// @param length Deletion vector length as Paimon records it, which depends
+  ///        on the frame version (must be > 0).
+  /// @param cardinality Number of deleted rows (must be > 0), or std::nullopt
+  ///        if Paimon did not record it.
   PaimonDeletionFile(
       std::string path,
       uint64_t offset,
       uint64_t length,
-      uint64_t cardinality);
+      std::optional<uint64_t> cardinality);
 
   std::string path;
 
-  // Byte offset within the container file where this bitmap starts.
+  // Byte offset of the deletion vector frame within the deletion file.
   uint64_t offset;
 
-  // Number of bytes of bitmap data. Must be > 0.
+  // Deletion vector length as Paimon records it: the frame length for V1
+  // frames, and the frame length plus 8 for V2 frames. Must be > 0.
   uint64_t length;
 
   // Number of deleted rows (pre-computed for stats without reading bitmap).
-  // Must be > 0.
-  uint64_t cardinality;
+  // Must be > 0. Paimon 0.9 does not record it.
+  std::optional<uint64_t> cardinality;
 
   std::string toString() const;
   folly::dynamic serialize() const;
