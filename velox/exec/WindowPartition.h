@@ -154,7 +154,6 @@ class WindowPartition {
   /// Sets in 'rawFrameBounds' the frame boundary for the k range
   /// preceding/following frame.
   /// @param isStartBound start or end boundary of the frame.
-  /// @param isPreceding preceding or following boundary.
   /// @param frameColumn column which has the range boundary for that row.
   /// @param startRow starting row in the partition for this buffer computation.
   /// @param numRows number of rows to compute buffer for.
@@ -165,7 +164,6 @@ class WindowPartition {
   /// that are invalid.
   virtual void computeKRangeFrameBounds(
       bool isStartBound,
-      bool isPreceding,
       column_index_t frameColumn,
       vector_size_t startRow,
       vector_size_t numRows,

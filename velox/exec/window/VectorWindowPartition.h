@@ -95,7 +95,6 @@ class VectorWindowPartition : public WindowPartition {
   /// Computes k range frame bounds for retained input vector rows.
   void computeKRangeFrameBounds(
       bool isStartBound,
-      bool isPreceding,
       column_index_t frameColumn,
       vector_size_t startRow,
       vector_size_t numRows,

@@ -147,13 +147,12 @@ class KRangeWindowBenchmark : public VectorTestBase {
         {"curToFoll", "current row", "off1 following"},
         {"precToFoll", "off0 preceding", "off1 following"},
     };
-    const auto k = std::to_string(kOffset);
     const std::vector<std::string> projections{
         "p",
         "s",
         "v",
-        fmt::format("s - cast({} as bigint) as off0", k),
-        fmt::format("s + cast({} as bigint) as off1", k)};
+        fmt::format("s - cast({} as bigint) as off0", kOffset),
+        fmt::format("s + cast({} as bigint) as off1", kOffset)};
     // first_value() takes constant time per row, so frame bound computation
     // dominates. sum() aggregates over every row of a sliding frame.
     const std::vector<std::pair<std::string, std::string>> functions{
@@ -231,11 +230,11 @@ class KRangeWindowBenchmark : public VectorTestBase {
       VELOX_CHECK_EQ(numResultRows, test.numRows);
       const auto stats = cursor->task()->taskStats();
       for (const auto& pipeline : stats.pipelineStats) {
-        for (const auto& op : pipeline.operatorStats) {
-          if (op.operatorType == OperatorType::kWindow) {
-            windowTiming.add(op.addInputTiming);
-            windowTiming.add(op.finishTiming);
-            windowTiming.add(op.getOutputTiming);
+        for (const auto& operatorStats : pipeline.operatorStats) {
+          if (operatorStats.operatorType == OperatorType::kWindow) {
+            windowTiming.add(operatorStats.addInputTiming);
+            windowTiming.add(operatorStats.finishTiming);
+            windowTiming.add(operatorStats.getOutputTiming);
           }
         }
       }

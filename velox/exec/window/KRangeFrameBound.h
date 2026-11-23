@@ -89,33 +89,11 @@ class KRangeFrameBound {
   }
 
  private:
-  /// Returns the first row in [rows.startRow(), rows.partitionEnd()) whose
-  /// ORDER BY value is at or after the frame value of 'frameValueRow' in sort
-  /// order, or strictly after it for an end bound. Returns partitionEnd() if
-  /// there is none. The cost is logarithmic in the distance from 'hint' to the
-  /// result.
-  template <WindowPartitionAccessor Rows>
-  static vector_size_t gallopingSearch(
-      const Rows& rows,
-      bool isStartBound,
-      vector_size_t hint,
-      vector_size_t frameValueRow,
-      column_index_t frameColumn,
-      const CompareFlags& flags) {
-    return gallop(rows.startRow(), rows.partitionEnd(), hint, [&](int64_t row) {
-      const auto result = rows.compareFrameValue(
-          static_cast<vector_size_t>(row), frameValueRow, frameColumn, flags);
-      // 'flags' compare nulls as values, so the result is always ordered.
-      VELOX_CHECK(result.has_value());
-      return isStartBound ? result.value() >= 0 : result.value() > 0;
-    });
-  }
-
-  /// Returns the first row in [begin, end) for which 'isAfter' is true, or
-  /// 'end' if there is none. 'isAfter' must be false before the result and
-  /// true from it on. Checks rows 1, 2, 4, ... away from 'hint', then binary
-  /// searches the last gap. Positions are int64_t so that the steps cannot
-  /// overflow vector_size_t.
+  // Returns the first row in [begin, end) for which 'isAfter' is true, or
+  // 'end' if there is none. 'isAfter' must be false before the result and true
+  // from it on. Checks rows 1, 2, 4, ... away from 'hint', then binary searches
+  // the last gap. Positions are int64_t so that the steps cannot overflow
+  // vector_size_t.
   template <typename IsAfter>
   static vector_size_t
   gallop(int64_t begin, int64_t end, int64_t hint, const IsAfter& isAfter) {
@@ -125,23 +103,23 @@ class KRangeFrameBound {
     // which 'isAfter' is true.
     int64_t low = begin;
     int64_t high = end;
-    if (hint == end || isAfter(hint)) {
-      high = hint;
-      for (int64_t step = 1; high - step >= begin; step *= 2) {
-        if (!isAfter(high - step)) {
-          low = high - step + 1;
+    if (hint < end && !isAfter(hint)) {
+      low = hint + 1;
+      for (int64_t step = 1; hint + step < end; step *= 2) {
+        if (isAfter(hint + step)) {
+          high = hint + step;
           break;
         }
-        high -= step;
+        low = hint + step + 1;
       }
     } else {
-      low = hint + 1;
-      for (int64_t step = 1; low - 1 + step < end; step *= 2) {
-        if (isAfter(low - 1 + step)) {
-          high = low - 1 + step;
+      high = hint;
+      for (int64_t step = 1; hint - step >= begin; step *= 2) {
+        if (!isAfter(hint - step)) {
+          low = hint - step + 1;
           break;
         }
-        low += step;
+        high = hint - step;
       }
     }
 
@@ -154,18 +132,6 @@ class KRangeFrameBound {
       }
     }
     return static_cast<vector_size_t>(low);
-  }
-
-  /// Maps a gallopingSearch() result to a frame bound: the row itself for a
-  /// start bound and the row before it for an end bound, or partitionEnd() + 1
-  /// if the search found no row.
-  template <WindowPartitionAccessor Rows>
-  static vector_size_t
-  toFrameBound(const Rows& rows, bool isStartBound, vector_size_t position) {
-    if (position == rows.partitionEnd()) {
-      return rows.partitionEnd() + 1;
-    }
-    return isStartBound ? position : position - 1;
   }
 
   template <typename T, WindowPartitionAccessor Rows>
@@ -205,10 +171,27 @@ class KRangeFrameBound {
         continue;
       }
 
-      const auto position = gallopingSearch(
-          rows, isStartBound, hint, currentRow, frameColumn, flags);
-      rawFrameBounds[i] = toFrameBound(rows, isStartBound, position);
+      // The first row at or after the bound value for a start bound, or
+      // strictly after it for an end bound.
+      const auto position =
+          gallop(rows.startRow(), rows.partitionEnd(), hint, [&](int64_t row) {
+            const auto result = rows.compareFrameValue(
+                static_cast<vector_size_t>(row),
+                currentRow,
+                frameColumn,
+                flags);
+            // 'flags' compare nulls as values, so the result is always
+            // ordered.
+            VELOX_CHECK(result.has_value());
+            return isStartBound ? result.value() >= 0 : result.value() > 0;
+          });
       hint = position;
+      // A bound value after every row is reported as partitionEnd() + 1.
+      if (position == rows.partitionEnd()) {
+        rawFrameBounds[i] = rows.partitionEnd() + 1;
+      } else {
+        rawFrameBounds[i] = isStartBound ? position : position - 1;
+      }
     }
   }
 };
