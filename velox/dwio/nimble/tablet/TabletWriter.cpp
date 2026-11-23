@@ -350,6 +350,10 @@ void TabletWriter::writeStripe(uint32_t rowCount, std::vector<Stream> streams) {
         index,
         "Invalid stripe stream sizes capacity.");
 
+    // Equal bytes can still differ in chunk boundaries and null counts.
+    // Keep each stream's own chunk stats, including duplicates.
+    addStreamChunkStats(index, stream.chunks);
+
     if (options_.streamDeduplicationEnabled) {
       const auto [it, inserted] = uniqueStreams.emplace(&stream, index);
       if (!inserted) {
@@ -367,8 +371,6 @@ void TabletWriter::writeStripe(uint32_t rowCount, std::vector<Stream> streams) {
         stripeStreamOffsets[index] = stripeStreamOffsets[originalIndex];
         // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
         stripeStreamSizes[index] = stripeStreamSizes[originalIndex];
-        // Equal bytes can still differ in chunk boundaries and null counts.
-        addStreamChunkStats(index, stream.chunks);
         continue;
       }
     }
@@ -382,7 +384,6 @@ void TabletWriter::writeStripe(uint32_t rowCount, std::vector<Stream> streams) {
         static_cast<uint32_t>(file_->size() - stripeOffsets_.back());
 
     const auto streamChecksum = writeStreamWithChecksum(stream);
-    addStreamChunkStats(index, stream.chunks);
 
     NIMBLE_DCHECK_LT(
         file_->size() - (stripeStreamOffsets[index] + stripeOffsets_.back()),
