@@ -5578,6 +5578,11 @@ class MergedFlatMapFieldReader final
             output->size(),
             this->pool_);
       } else {
+        // Reset retained state, not just the top-level size: nested elements
+        // from previous reads would otherwise shift this read's child write
+        // offsets and force realloc-copies of dead rows. prepareForReuse
+        // keeps the buffers and drops the sizes, so regrow is allocation-free.
+        nodeValue->prepareForReuse();
         nodeValue->resize(output->size());
       }
       co_await this->keyNodes_[i]->co_readAsChild(
