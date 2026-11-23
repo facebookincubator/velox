@@ -825,6 +825,10 @@ uint32_t Deserializer::appendBatch(
   const auto requiredBarrier = parser_->requiredBarrier();
   if (requiredBarrier) [[unlikely]] {
     decodeRun(run, output);
+
+    // Frees the previous run's stream buffers so the parser does not hold them
+    // while it reads this batch. reset() keeps this batch's cursor and header.
+    parser_->reset();
   }
 
   // Rows this batch exposes: the parser's rowRange (kTablet header) or the

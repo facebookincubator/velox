@@ -435,18 +435,20 @@ bool isProjectorInputVersion(SerializationVersion version) {
   return version == SerializationVersion::kLegacyCompact ||
       version == SerializationVersion::kLegacySerialization ||
       version == SerializationVersion::kSerialization ||
-      version == SerializationVersion::kProjection;
+      version == SerializationVersion::kProjection ||
+      version == SerializationVersion::kBlob;
 }
 
 // Validates the input version header is a supported compact non-tablet format.
 // kLegacyCompact is read via the legacy reader; kLegacySerialization,
 // kSerialization, and kProjection use the two-array sparse trailer reader.
 // kTablet is rejected because the Projector does not strip chunk headers.
+// A kBlob body uses the two-array sparse trailer reader once decompressed.
 SerializationVersion getAndValidateInputVersion(const folly::IOBuf& input) {
   const auto version = static_cast<SerializationVersion>(*input.data());
   NIMBLE_CHECK(
       isProjectorInputVersion(version),
-      "Input must be kLegacyCompact, kLegacySerialization, kSerialization, or kProjection; got: {}",
+      "Input must be kLegacyCompact, kLegacySerialization, kSerialization, kProjection, or kBlob; got: {}",
       version);
   return version;
 }
@@ -819,11 +821,44 @@ folly::IOBuf Projector::buildProjectedOutput(
 
 folly::IOBuf Projector::project(const folly::IOBuf& input) const {
   const auto inputVersion = getAndValidateInputVersion(input);
+  if (inputVersion == SerializationVersion::kBlob) {
+    return projectBlob(input);
+  }
 
   if (!input.isChained()) {
     return projectContiguous(input, inputVersion);
   }
   return projectChained(input, inputVersion);
+}
+
+folly::IOBuf Projector::projectBlob(const folly::IOBuf& input) const {
+  // The payload must be contiguous to decompress.
+  const auto blob = input.cloneCoalescedAsValue();
+  const auto* data = reinterpret_cast<const char*>(blob.data());
+  const auto* end = data + blob.length();
+  const auto* pos = data;
+  const auto header = readSerializationHeader(pos, end);
+  if (header.blobCompression == CompressionType::Uncompressed) {
+    return projectContiguous(
+        blob,
+        static_cast<size_t>(pos - data),
+        header.rowCount,
+        header.flags.requiredBarrier,
+        SerializationVersion::kBlob);
+  }
+
+  const auto body = detail::decompressBlob(
+      header.blobCompression, {pos, static_cast<size_t>(end - pos)}, *pool_);
+  auto output = projectContiguous(
+      folly::IOBuf::wrapBufferAsValue(body->as<char>(), body->size()),
+      /*dataOffset=*/0,
+      header.rowCount,
+      header.flags.requiredBarrier,
+      SerializationVersion::kBlob);
+
+  // The selected streams point into the body, which this call frees.
+  output.coalesce();
+  return output;
 }
 
 folly::IOBuf Projector::projectContiguous(
@@ -834,8 +869,20 @@ folly::IOBuf Projector::projectContiguous(
   const auto* pos = data + sizeof(uint8_t);
   const uint32_t rowCount = varint::readVarint32(&pos);
   const auto inputFlags = readHeaderFlags(pos, inputVersion);
-  const bool inputRequiredBarrier = inputFlags.requiredBarrier;
+  return projectContiguous(
+      input,
+      static_cast<size_t>(pos - data),
+      rowCount,
+      inputFlags.requiredBarrier,
+      inputVersion);
+}
 
+folly::IOBuf Projector::projectContiguous(
+    const folly::IOBuf& input,
+    size_t dataOffset,
+    uint32_t rowCount,
+    bool inputRequiredBarrier,
+    SerializationVersion inputVersion) const {
   IOBufSection header(
       estimateSerializationHeaderSize(options_.projectVersion, rowCount));
   const auto flagsOffset =
@@ -850,7 +897,6 @@ folly::IOBuf Projector::projectContiguous(
       : detail::readTrailerStreamMetadata(input);
 
   // Extract selected streams as zero-copy sub-range clones.
-  const auto dataOffset = static_cast<size_t>(pos - data);
   bool outputRequiredBarrier{false};
   NIMBLE_CHECK_FILE(
       !hasProjectedHybridFlatMaps_ || inputRequiredBarrier,

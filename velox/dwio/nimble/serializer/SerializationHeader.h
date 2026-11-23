@@ -66,6 +66,9 @@ struct SerializationHeader {
   HeaderFlags flags;
   /// Row range embedded in kTablet headers. nullopt for other versions.
   std::optional<RowRange> rowRange;
+  /// Codec of the payload that follows a kBlob header. Uncompressed
+  /// for other versions, whose body follows the header as is.
+  CompressionType blobCompression{CompressionType::Uncompressed};
 };
 
 namespace detail {
@@ -157,6 +160,11 @@ inline HeaderFlags parseVersionedHeaderFlags(
 
 } // namespace detail
 
+/// Reads the flags byte at `pos`, which follows the row count, and advances
+/// past it. kLegacyCompact and kLegacySerialization have no flags byte. For
+/// them, returns the default flags and leaves `pos` unchanged. kTablet and
+/// kBlob have more header fields after the flags byte, so code that
+/// skips the whole header must use readSerializationHeader() instead.
 inline HeaderFlags readHeaderFlags(
     const char*& pos,
     SerializationVersion version) {
@@ -190,16 +198,20 @@ inline bool readRequiredBarrierFlag(
 
 /// Reads the serialization header from `*pos`, detecting the version from the
 /// first byte. Advances `*pos` past all header fields. For kTablet, also reads
-/// the row range and resume key length fields.
+/// the row range and resume key length fields. For kBlob, also reads
+/// the blob compression byte.
 SerializationHeader readSerializationHeader(const char*& pos, const char* end);
 
 /// Writes a nullable-format serialization header to buffer.
 /// Returns the byte offset of the flags byte within `buffer`. The flags byte
 /// is initialized with the varint row-count flag and may be patched before the
 /// buffer is consumed.
-/// Writes [version:1B][rowCount:varint][flags:1B].
+/// Writes [version:1B][rowCount:varint][flags:1B], and for kBlob
+/// also [blobCompression:1B] right after the flags byte. That byte is
+/// initialized to Uncompressed, and the writer sets it to the codec of the
+/// payload once the body is complete.
 /// Legacy formats are read-only; new serializer/projector writes use
-/// kSerialization or kProjection.
+/// kSerialization, kProjection or kBlob.
 /// kTablet headers must use createTabletChunkHeader() instead.
 template <typename T>
 size_t writeSerializationHeader(
@@ -208,7 +220,7 @@ size_t writeSerializationHeader(
     uint32_t rowCount) {
   NIMBLE_CHECK(
       usesCompactHeaderFlags(version),
-      "Serialization header writes require kSerialization or kProjection. Got: {}",
+      "Serialization header writes require kSerialization, kProjection or kBlob. Got: {}",
       version);
 
   auto* versionPos = detail::extend(buffer, 1);
@@ -222,19 +234,28 @@ size_t writeSerializationHeader(
       /*requiredBarrier=*/false,
       /*streamEncodingUsesVarintRowCount=*/true,
       /*streamHasChunkHeader=*/false));
+  if (version == SerializationVersion::kBlob) {
+    // StreamDataWriter::close() sets the codec of the payload once the body is
+    // complete. Until then, the body that follows is uncompressed.
+    auto* blobCompressionPos = detail::extend(buffer, 1);
+    *blobCompressionPos = static_cast<char>(CompressionType::Uncompressed);
+  }
   return flagsOffset;
 }
 
 /// Returns the exact byte size of a writable compact serialization header.
-/// Valid only for kSerialization and kProjection.
+/// Valid only for kSerialization, kProjection and kBlob.
 inline size_t estimateSerializationHeaderSize(
     SerializationVersion version,
     uint32_t rowCount) {
   NIMBLE_CHECK(
       usesCompactHeaderFlags(version),
-      "Serialization header writes require kSerialization or kProjection. Got: {}",
+      "Serialization header writes require kSerialization, kProjection or kBlob. Got: {}",
       version);
-  return sizeof(uint8_t) + sizeof(uint8_t) + varint::varintSize(rowCount);
+  const size_t blobHeaderSize =
+      version == SerializationVersion::kBlob ? sizeof(uint8_t) : 0;
+  return sizeof(uint8_t) + sizeof(uint8_t) + varint::varintSize(rowCount) +
+      blobHeaderSize;
 }
 
 // ---- Tablet chunk header (kTablet only) ----
