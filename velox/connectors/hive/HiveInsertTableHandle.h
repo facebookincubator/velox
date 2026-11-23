@@ -175,39 +175,6 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
       const std::unordered_map<std::string, std::string>& storageParameters =
           {});
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  /// Leaves the behavior for existing partitions unset: the writers read it
-  /// from the session property 'insert_existing_partitions_behavior'.
-  /// 'writerOptions' must be null.
-  HiveInsertTableHandle(
-      std::vector<HiveColumnHandlePtr> inputColumns,
-      std::shared_ptr<const LocationHandle> locationHandle,
-      dwio::common::FileFormat storageFormat = dwio::common::FileFormat::DWRF,
-      HiveBucketPropertyPtr bucketProperty = nullptr,
-      std::optional<common::CompressionKind> compressionKind = {},
-      const std::unordered_map<std::string, std::string>& serdeParameters = {},
-      const std::shared_ptr<dwio::common::WriterOptions>& writerOptions =
-          nullptr,
-      const bool ensureFiles = false,
-      FileNameGeneratorPtr fileNameGenerator =
-          std::make_shared<const HiveInsertFileNameGenerator>(),
-      const std::unordered_map<std::string, std::string>& storageParameters =
-          {})
-      : HiveInsertTableHandle(
-            std::move(inputColumns),
-            std::move(locationHandle),
-            std::nullopt,
-            storageFormat,
-            std::move(bucketProperty),
-            compressionKind,
-            serdeParameters,
-            ensureFiles,
-            std::move(fileNameGenerator),
-            storageParameters) {
-    VELOX_CHECK_NULL(writerOptions);
-  }
-#endif
-
   virtual ~HiveInsertTableHandle() = default;
 
   const std::vector<HiveColumnHandlePtr>& inputColumns() const {
@@ -244,9 +211,8 @@ class HiveInsertTableHandle : public ConnectorInsertTableHandle {
     return writeEmptyFile_;
   }
 
-  /// Unset for a handle built by the backward-compatible constructor and for
-  /// a serialized handle without it. The writers then read the session
-  /// property 'insert_existing_partitions_behavior'.
+  /// Unset for a serialized handle without it. The writers then read the
+  /// session property 'insert_existing_partitions_behavior'.
   std::optional<HiveConfig::InsertExistingPartitionsBehavior>
   insertExistingPartitionsBehavior() const {
     return insertExistingPartitionsBehavior_;

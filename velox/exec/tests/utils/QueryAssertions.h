@@ -19,11 +19,6 @@
 #include "velox/exec/tests/utils/DuckDbQueryRunner.h"
 #include "velox/vector/ComplexVector.h"
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-#include "velox/exec/tests/utils/TaskMonitor.h"
-#include "velox/vector/tests/utils/VectorAssertions.h"
-#endif
-
 namespace facebook::velox::exec::test {
 
 /// Scoped abort percentage utility that allows user to trigger abort during the
@@ -54,69 +49,6 @@ void readCursorAsync(
     std::function<ContinueFuture(TaskCursor*)> addSplits,
     uint64_t maxWaitMicros,
     const std::function<void(const RowVectorPtr&)>& onBatch);
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-// TODO: Remove once Prestissimo migrates.
-/// Legacy query runner. Use AssertQueryBuilder instead.
-inline std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
-readCursor(
-    const CursorParameters& params,
-    std::function<void(TaskCursor*)> addSplits =
-        [](TaskCursor* taskCursor) {
-          if (taskCursor->noMoreSplits()) {
-            return;
-          }
-          taskCursor->setNoMoreSplits();
-        },
-    uint64_t maxWaitMicros = 5'000'000) {
-  auto cursor = TaskCursor::create(params);
-  // Declared after 'cursor' so that it is destroyed first, also on exception.
-  std::vector<RowVectorPtr> result;
-  readCursorAsync(
-      *cursor,
-      [addSplitsVoid = std::move(addSplits)](TaskCursor* cursor) {
-        addSplitsVoid(cursor);
-        return ContinueFuture::makeEmpty();
-      },
-      maxWaitMicros,
-      [&](const RowVectorPtr& vector) { result.push_back(vector); });
-  return {std::move(cursor), std::move(result)};
-}
-
-/// Legacy forms of TaskMonitor methods.
-inline bool waitForTaskCompletion(
-    exec::Task* task,
-    uint64_t maxWaitMicros = TaskMonitor::kDefaultMaxWaitMicros) {
-  return TaskMonitor::waitForCompletion(*task, maxWaitMicros);
-}
-
-inline bool waitForTaskFailure(
-    exec::Task* task,
-    uint64_t maxWaitMicros = TaskMonitor::kDefaultMaxWaitMicros) {
-  return TaskMonitor::waitForFailure(*task, maxWaitMicros);
-}
-
-inline bool waitForTaskStateChange(
-    exec::Task* task,
-    TaskState state,
-    uint64_t maxWaitMicros = TaskMonitor::kDefaultMaxWaitMicros) {
-  return TaskMonitor::waitForStateChange(*task, state, maxWaitMicros);
-}
-
-inline void waitForAllTasksToBeDeleted(uint64_t maxWaitUs = 3'000'000) {
-  TaskMonitor::waitForAllTasksDeleted(maxWaitUs);
-}
-
-/// Legacy form of VectorAssertions::equalMultisets against DuckDB results.
-inline void assertResults(
-    const std::vector<RowVectorPtr>& results,
-    const RowTypePtr& resultType,
-    const std::string& duckDbSql,
-    DuckDbQueryRunner& duckDbQueryRunner) {
-  velox::test::VectorAssertions::equalMultisets(
-      duckDbQueryRunner.execute(duckDbSql, resultType), resultType, results);
-}
-#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
 
 /// Same as VectorAssertions::equalMultisets.
 bool assertEqualResults(
