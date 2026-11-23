@@ -674,6 +674,75 @@ TEST_P(NimbleIndexProjectorTest, projectsFlatRowsWithEncodingViews) {
   EXPECT_EQ(projector->stats().numProjectedRows, 3);
 }
 
+TEST_P(NimbleIndexProjectorTest, projectsNeighborRequestsOfOneStripe) {
+  constexpr int kNumRows{200};
+  std::vector<int64_t> keys(kNumRows);
+  std::vector<int32_t> values(kNumRows);
+  std::vector<std::vector<int64_t>> ids(kNumRows);
+  for (int row{0}; row < kNumRows; ++row) {
+    keys[row] = row;
+    values[row] = row * 10;
+    ids[row] = std::vector<int64_t>(row % 3, row);
+  }
+  writeData(
+      {vectorMaker_->rowVector(
+          {"key", "value", "ids"},
+          {vectorMaker_->flatVector<int64_t>(keys),
+           vectorMaker_->flatVector<int32_t>(values),
+           vectorMaker_->arrayVector<int64_t>(ids)})},
+      {"key"},
+      /*flatMapColumns=*/{},
+      /*stripeSize=*/1 << 20);
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  subfields.emplace_back("ids");
+  auto projector = createProjector(subfields);
+  // Requests whose rows follow each other in the stripe and in the output,
+  // then a repeated row, a row before the previous one, a range, a missing
+  // key and a row after a gap.
+  const std::vector<int64_t> pointKeys{10, 11, 12, 12, 11};
+  std::vector<velox::serializer::EncodedKeyBounds> lookups;
+  lookups.reserve(pointKeys.size() + 3);
+  for (const auto key : pointKeys) {
+    lookups.push_back(makePointLookup(rowType, {"key"}, key));
+  }
+  lookups.push_back(makeRangeLookup(rowType, {"key"}, 20, 24));
+  lookups.push_back(makePointLookup(rowType, {"key"}, 999));
+  lookups.push_back(makePointLookup(rowType, {"key"}, 40));
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan(std::move(lookups));
+  const auto result = projectRows(*projector, *request, {});
+
+  const std::vector<int64_t> expectedKeys{
+      10, 11, 12, 12, 11, 20, 21, 22, 23, 40};
+  std::vector<int32_t> expectedValues;
+  std::vector<std::vector<int64_t>> expectedIds;
+  expectedValues.reserve(expectedKeys.size());
+  expectedIds.reserve(expectedKeys.size());
+  for (const auto key : expectedKeys) {
+    expectedValues.push_back(static_cast<int32_t>(key * 10));
+    expectedIds.push_back(ids[key]);
+  }
+  velox::test::assertEqualVectors(
+      vectorMaker_->rowVector(
+          {"value", "ids"},
+          {vectorMaker_->flatVector<int32_t>(expectedValues),
+           vectorMaker_->arrayVector<int64_t>(expectedIds)}),
+      result.values);
+  std::vector<vector_size_t> responseOffsets;
+  std::vector<vector_size_t> responseSizes;
+  for (const auto& response : result.responses) {
+    responseOffsets.push_back(response.offset);
+    responseSizes.push_back(response.size);
+  }
+  EXPECT_EQ(
+      responseOffsets, std::vector<vector_size_t>({0, 1, 2, 3, 4, 5, 9, 9}));
+  EXPECT_EQ(
+      responseSizes, std::vector<vector_size_t>({1, 1, 1, 1, 1, 4, 0, 1}));
+}
+
 TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedEncodingViews) {
   auto rowType =
       ROW({"key", "value", "nullable_value"}, {BIGINT(), INTEGER(), TINYINT()});
