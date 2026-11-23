@@ -540,6 +540,16 @@ TEST_F(InteropTest, constant) {
   roundTrip(input);
 }
 
+TEST_F(InteropTest, wrappedArrays) {
+  auto base = makeArrayVector<float>({{1, 2}, {}, {3}});
+  constexpr vector_size_t kRows = 4;
+  auto indices = makeIndices(kRows, [](auto row) { return (row + 2) % 3; });
+  auto dictionary = BaseVector::wrapInDictionary(nullptr, indices, kRows, base);
+  auto nullConstant =
+      BaseVector::createNullConstant(ARRAY(REAL()), kRows, pool_.get());
+  roundTrip(makeRowVector({dictionary, nullConstant}));
+}
+
 TEST_F(InteropTest, unsupportedLogicalTypes) {
   EXPECT_FALSE(isTypeSupportedByCudf(INTERVAL_YEAR_MONTH()));
   EXPECT_FALSE(isTypeSupportedByCudf(TIME()));
