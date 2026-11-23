@@ -58,7 +58,9 @@ namespace facebook::nimble {
 //   deserialize(data, rowRanges, out)
 // equals concatenation of per-batch slices
 //   deserialize(data[i]).slice(rowRanges[i].startRow, rowRanges[i].numRows()).
-class DeserializerSkipTest : public ::testing::Test {
+// Each case runs once per Serializer writer version.
+class DeserializerSkipTest
+    : public ::testing::TestWithParam<SerializationVersion> {
  protected:
   static void SetUpTestCase() {
     velox::memory::MemoryManager::testingSetInstance(
@@ -71,16 +73,16 @@ class DeserializerSkipTest : public ::testing::Test {
     vm_ = std::make_unique<velox::test::VectorMaker>(pool_.get());
   }
 
-  // Serialize the given input vectors as kSerialization batches. Returns the
-  // serialized byte strings plus the nimble schema needed to construct a
-  // Deserializer.
+  // Serialize the given input vectors as batches of the version under test.
+  // Returns the serialized byte strings plus the nimble schema needed to
+  // construct a Deserializer.
   std::pair<std::vector<std::string>, std::shared_ptr<const Type>> serialize(
       const velox::TypePtr& type,
       const std::vector<velox::VectorPtr>& inputs,
       const folly::F14FastMap<std::string, std::set<std::string>>&
           flatMapColumns = {}) {
     SerializerOptions options{
-        .version = SerializationVersion::kSerialization,
+        .version = GetParam(),
         .flatMapColumns = flatMapColumns,
     };
     Serializer serializer{options, type, pool_.get()};
@@ -331,7 +333,7 @@ class DeserializerSkipTest : public ::testing::Test {
   std::unique_ptr<velox::test::VectorMaker> vm_;
 };
 
-TEST_F(DeserializerSkipTest, reportsOutputRowsPerInputBatch) {
+TEST_P(DeserializerSkipTest, reportsOutputRowsPerInputBatch) {
   const std::vector<velox::VectorPtr> inputs{
       makeBarrierBatch(/*base=*/100, /*rows=*/3, /*nestedNullRows=*/{}),
       makeBarrierBatch(/*base=*/200, /*rows=*/4, /*nestedNullRows=*/{1}),
@@ -397,7 +399,7 @@ TEST_F(DeserializerSkipTest, reportsOutputRowsPerInputBatch) {
 
 // --- Dense scalar column, no nulls -----------------------------------------
 
-TEST_F(DeserializerSkipTest, denseIntNoNullsSingleBatch) {
+TEST_P(DeserializerSkipTest, denseIntNoNullsSingleBatch) {
   auto type = velox::ROW({{"a", velox::INTEGER()}});
   auto batch = vm_->rowVector(
       {"a"}, {vm_->flatVector<int32_t>(20, [](velox::vector_size_t i) {
@@ -419,7 +421,7 @@ TEST_F(DeserializerSkipTest, denseIntNoNullsSingleBatch) {
 
 // --- Dense scalar column, with nulls ---------------------------------------
 
-TEST_F(DeserializerSkipTest, denseIntWithNullsSingleBatch) {
+TEST_P(DeserializerSkipTest, denseIntWithNullsSingleBatch) {
   auto type = velox::ROW({{"a", velox::INTEGER()}});
   auto batch = vm_->rowVector(
       {"a"},
@@ -434,7 +436,7 @@ TEST_F(DeserializerSkipTest, denseIntWithNullsSingleBatch) {
 
 // --- Dense string column, no nulls -----------------------------------------
 
-TEST_F(DeserializerSkipTest, denseStringNoNullsSingleBatch) {
+TEST_P(DeserializerSkipTest, denseStringNoNullsSingleBatch) {
   auto type = velox::ROW({{"s", velox::VARCHAR()}});
   auto batch = vm_->rowVector(
       {"s"},
@@ -462,7 +464,7 @@ TEST_F(DeserializerSkipTest, denseStringNoNullsSingleBatch) {
 
 // --- Dense string column, with nulls ---------------------------------------
 
-TEST_F(DeserializerSkipTest, denseStringWithNullsSingleBatch) {
+TEST_P(DeserializerSkipTest, denseStringWithNullsSingleBatch) {
   auto type = velox::ROW({{"s", velox::VARCHAR()}});
   auto batch = vm_->rowVector(
       {"s"},
@@ -481,7 +483,7 @@ TEST_F(DeserializerSkipTest, denseStringWithNullsSingleBatch) {
   checkSkip(schema, serialized, 3, 3);
 }
 
-TEST_F(DeserializerSkipTest, sparseStringDeserialize) {
+TEST_P(DeserializerSkipTest, sparseStringDeserialize) {
   auto type = velox::ROW({{"col", velox::VARCHAR()}});
   constexpr velox::vector_size_t kSize = 10'000;
 
@@ -529,7 +531,7 @@ TEST_F(DeserializerSkipTest, sparseStringDeserialize) {
 // `blob_`/`pos_`. The result is either a data race the sanitizers catch, a
 // heap-use-after-free during materialize, or silent string content corruption
 // that fails deep equality against the reference decode.
-TEST_F(DeserializerSkipTest, concurrentSkipStringNoSharedBuffers) {
+TEST_P(DeserializerSkipTest, concurrentSkipStringNoSharedBuffers) {
   auto type = velox::ROW({{"s", velox::VARCHAR()}});
   constexpr int32_t kRows = 200;
   // >12 bytes forces out-of-line StringView so the output vector actually
@@ -610,7 +612,7 @@ TEST_F(DeserializerSkipTest, concurrentSkipStringNoSharedBuffers) {
 
 // --- Multi-batch: skip across batch boundary -------------------------------
 
-TEST_F(DeserializerSkipTest, denseIntMultipleBatchesSkipAcrossBoundary) {
+TEST_P(DeserializerSkipTest, denseIntMultipleBatchesSkipAcrossBoundary) {
   auto type = velox::ROW({{"a", velox::INTEGER()}});
   auto b1 = vm_->rowVector(
       {"a"}, {vm_->flatVector<int32_t>(10, [](velox::vector_size_t i) {
@@ -640,7 +642,7 @@ TEST_F(DeserializerSkipTest, denseIntMultipleBatchesSkipAcrossBoundary) {
 
 // --- FlatMap column (in-map + scattered value), no null values -------------
 
-TEST_F(DeserializerSkipTest, flatMapNoNullValuesSingleBatch) {
+TEST_P(DeserializerSkipTest, flatMapNoNullValuesSingleBatch) {
   // Explicit per-row key subsets exercise in-map presence gaps (some rows
   // are missing certain keys) and scattered value reads.
   using MapEntries = std::vector<std::pair<int32_t, std::optional<int32_t>>>;
@@ -673,7 +675,7 @@ TEST_F(DeserializerSkipTest, flatMapNoNullValuesSingleBatch) {
 
 // --- FlatMap column with NULL values ---------------------------------------
 
-TEST_F(DeserializerSkipTest, flatMapWithNullValuesSingleBatch) {
+TEST_P(DeserializerSkipTest, flatMapWithNullValuesSingleBatch) {
   // Some map values are null. The value stream for those keys carries null
   // bits alongside the scatter bitmap (from the in-map presence stream).
   using MapEntries = std::vector<std::pair<int32_t, std::optional<int32_t>>>;
@@ -703,7 +705,7 @@ TEST_F(DeserializerSkipTest, flatMapWithNullValuesSingleBatch) {
 
 // --- FlatMap column across multiple batches --------------------------------
 
-TEST_F(DeserializerSkipTest, flatMapMultipleBatchesSkipAcrossBoundary) {
+TEST_P(DeserializerSkipTest, flatMapMultipleBatchesSkipAcrossBoundary) {
   using MapEntries = std::vector<std::pair<int32_t, std::optional<int32_t>>>;
 
   // b1: keys 0 and 1 only.
@@ -756,7 +758,7 @@ TEST_F(DeserializerSkipTest, flatMapMultipleBatchesSkipAcrossBoundary) {
 // branch. Before the fix, `BatchedStreamDecoder::skip` on an in-map
 // decoder with empty segments tripped `NIMBLE_CHECK(!isInMapStream() && ...)`;
 // after the fix `skipInMap` handles the empty case.
-TEST_F(DeserializerSkipTest, skipHandlesInMapWithEmptyStreamSegments) {
+TEST_P(DeserializerSkipTest, skipHandlesInMapWithEmptyStreamSegments) {
   auto type =
       velox::ROW({{"m", velox::MAP(velox::INTEGER(), velox::INTEGER())}});
   using MapEntries = std::vector<std::pair<int32_t, std::optional<int32_t>>>;
@@ -792,7 +794,7 @@ TEST_F(DeserializerSkipTest, skipHandlesInMapWithEmptyStreamSegments) {
 
 // --- Row-null skip: top-level row nulls ------------------------------------
 
-TEST_F(DeserializerSkipTest, rowLevelNullsSingleBatch) {
+TEST_P(DeserializerSkipTest, rowLevelNullsSingleBatch) {
   // Top-level row nulls (e.g. via appendNulls) exercise the empty
   // streamSegments_ branch in skip (Row null stream reconstructed as
   // all-non-null when nothing was written on the wire), plus the null
@@ -814,7 +816,7 @@ TEST_F(DeserializerSkipTest, rowLevelNullsSingleBatch) {
 // segment; the next read must correctly clamp the partial-segment write.
 // Regression guard for a prior `fillInMapGap` invariant that assumed
 // segments never straddled a skip boundary.
-TEST_F(DeserializerSkipTest, flatMapAllPresentSegmentStraddleSkip) {
+TEST_P(DeserializerSkipTest, flatMapAllPresentSegmentStraddleSkip) {
   using MapEntries = std::vector<std::pair<int32_t, std::optional<int32_t>>>;
   std::vector<MapEntries> maps;
   maps.reserve(10);
@@ -839,7 +841,7 @@ TEST_F(DeserializerSkipTest, flatMapAllPresentSegmentStraddleSkip) {
 
 // Skip almost the whole batch (999 of 1000 rows), decode a single tail
 // row. Stresses `skipEncoded` walking many queued segments cheaply.
-TEST_F(DeserializerSkipTest, denseIntLargeSkipTinyRead) {
+TEST_P(DeserializerSkipTest, denseIntLargeSkipTinyRead) {
   auto type = velox::ROW({{"a", velox::INTEGER()}});
   auto batch = vm_->rowVector(
       {"a"}, {vm_->flatVector<int32_t>(1000, [](velox::vector_size_t i) {
@@ -854,7 +856,7 @@ TEST_F(DeserializerSkipTest, denseIntLargeSkipTinyRead) {
 
 // Full skip (skipRows == totalRows). Decode 0 rows after skipping the
 // whole run — output should be an empty non-null vector.
-TEST_F(DeserializerSkipTest, denseIntFullSkip) {
+TEST_P(DeserializerSkipTest, denseIntFullSkip) {
   auto type = velox::ROW({{"a", velox::INTEGER()}});
   auto batch = vm_->rowVector(
       {"a"}, {vm_->flatVector<int32_t>(20, [](velox::vector_size_t i) {
@@ -870,7 +872,7 @@ TEST_F(DeserializerSkipTest, denseIntFullSkip) {
 // so ranges are disjoint (can't be expressed as a single run-level
 // window). Verifies planReaderOps coalesces contiguous windows and
 // separates them by exactly one skip.
-TEST_F(DeserializerSkipTest, manyBatchesDisjointRowRanges) {
+TEST_P(DeserializerSkipTest, manyBatchesDisjointRowRanges) {
   auto type = velox::ROW({{"a", velox::INTEGER()}});
   constexpr uint32_t kBatchSize = 10;
   constexpr size_t kNumBatches = 20;
@@ -885,7 +887,7 @@ TEST_F(DeserializerSkipTest, manyBatchesDisjointRowRanges) {
         })}));
   }
 
-  SerializerOptions options{.version = SerializationVersion::kSerialization};
+  SerializerOptions options{.version = GetParam()};
   Serializer serializer{options, type, pool_.get()};
   std::vector<std::string> serialized;
   serialized.reserve(inputs.size());
@@ -936,7 +938,7 @@ TEST_F(DeserializerSkipTest, manyBatchesDisjointRowRanges) {
 // Array<int>: the lengths stream drives per-row width; skip must advance
 // both the lengths cursor and (indirectly) the elements cursor via the
 // FieldReader tree.
-TEST_F(DeserializerSkipTest, arrayIntSingleBatch) {
+TEST_P(DeserializerSkipTest, arrayIntSingleBatch) {
   auto type = velox::ROW({{"a", velox::ARRAY(velox::INTEGER())}});
   std::vector<std::vector<int32_t>> arrays;
   arrays.reserve(12);
@@ -959,7 +961,7 @@ TEST_F(DeserializerSkipTest, arrayIntSingleBatch) {
 // Map<int,int> (non-FlatMap): distinct from FlatMap in that entries are
 // per-row, not per-key. Skip advances offsets/lengths/keys/values
 // together via the reader tree.
-TEST_F(DeserializerSkipTest, mapIntIntSingleBatch) {
+TEST_P(DeserializerSkipTest, mapIntIntSingleBatch) {
   auto type =
       velox::ROW({{"m", velox::MAP(velox::INTEGER(), velox::INTEGER())}});
   using MapEntries = std::vector<std::pair<int32_t, std::optional<int32_t>>>;
@@ -990,7 +992,7 @@ TEST_F(DeserializerSkipTest, mapIntIntSingleBatch) {
 // the same schema without nulls leaves it clear. If this helper ever stopped
 // producing barrier batches, those tests would silently run on ordinary
 // batches and still pass.
-TEST_F(DeserializerSkipTest, barrierFlagSetOnlyWhenNestedRowHasNulls) {
+TEST_P(DeserializerSkipTest, barrierFlagSetOnlyWhenNestedRowHasNulls) {
   auto readBarrierFlag = [&](const std::string& blob) {
     DeserializerOptions dsOpts{};
     serde::StreamDataParser parser{pool_.get()};
@@ -1010,7 +1012,7 @@ TEST_F(DeserializerSkipTest, barrierFlagSetOnlyWhenNestedRowHasNulls) {
 // A null-barrier batch decodes standalone, which is exactly the unit a
 // rowRange applies to. Uses the file's equivalence property:
 // deserialize(data, ranges) == deserialize(data) sliced by the same window.
-TEST_F(DeserializerSkipTest, barrierSingleBatchWithRowRange) {
+TEST_P(DeserializerSkipTest, barrierSingleBatchWithRowRange) {
   auto [serialized, schema] =
       serialize(barrierType(), {makeBarrierBatch(0, 10, {3, 7})});
   checkSkip(schema, serialized, /*skipRows=*/2, /*decodeRows=*/5);
@@ -1018,7 +1020,7 @@ TEST_F(DeserializerSkipTest, barrierSingleBatchWithRowRange) {
 
 // A barrier batch sandwiched between ordinary ones: the run is flushed before
 // and after it, so the ranges must still line up across all three.
-TEST_F(DeserializerSkipTest, barrierBatchAmongNonBarrierBatches) {
+TEST_P(DeserializerSkipTest, barrierBatchAmongNonBarrierBatches) {
   auto [serialized, schema] = serialize(
       barrierType(),
       {makeBarrierBatch(0, 5, {}),
@@ -1028,7 +1030,7 @@ TEST_F(DeserializerSkipTest, barrierBatchAmongNonBarrierBatches) {
 }
 
 // Every batch flagged: each becomes its own run.
-TEST_F(DeserializerSkipTest, barrierEveryBatch) {
+TEST_P(DeserializerSkipTest, barrierEveryBatch) {
   auto [serialized, schema] = serialize(
       barrierType(),
       {makeBarrierBatch(0, 5, {2}),
@@ -1039,7 +1041,7 @@ TEST_F(DeserializerSkipTest, barrierEveryBatch) {
 
 // Range boundaries against a barrier batch: whole batch, empty, and a window
 // that ends exactly on the batch boundary.
-TEST_F(DeserializerSkipTest, barrierBatchRangeBoundaries) {
+TEST_P(DeserializerSkipTest, barrierBatchRangeBoundaries) {
   auto [serialized, schema] = serialize(
       barrierType(),
       {makeBarrierBatch(0, 6, {0, 5}), makeBarrierBatch(6, 6, {2})});
@@ -1057,7 +1059,7 @@ TEST_F(DeserializerSkipTest, barrierBatchRangeBoundaries) {
 // reader skip instead, exercising the sentinel's clamping in skipInMap and
 // fillInMapGap. Key "b" is on even rows only, so its in-map stream is really
 // written and both in-map shapes are covered in one batch.
-TEST_F(DeserializerSkipTest, barrierFlatMapInMapWithRowRange) {
+TEST_P(DeserializerSkipTest, barrierFlatMapInMapWithRowRange) {
   std::vector<std::vector<std::string>> keysByRow;
   for (int i = 0; i < 8; ++i) {
     std::vector<std::string> keys{"a"};
@@ -1079,7 +1081,7 @@ TEST_F(DeserializerSkipTest, barrierFlatMapInMapWithRowRange) {
 
 // Same shape across several barrier batches, so the sentinel is re-created per
 // batch and the reader is reset between runs.
-TEST_F(DeserializerSkipTest, barrierFlatMapInMapMultipleBatches) {
+TEST_P(DeserializerSkipTest, barrierFlatMapInMapMultipleBatches) {
   auto makeBatch = [&](int rows) {
     std::vector<std::vector<std::string>> keysByRow;
     for (int i = 0; i < rows; ++i) {
@@ -1099,7 +1101,7 @@ TEST_F(DeserializerSkipTest, barrierFlatMapInMapMultipleBatches) {
   checkSkip(schema, serialized, /*skipRows=*/2, /*decodeRows=*/11);
 }
 
-TEST_F(DeserializerSkipTest, rejectRowRangeStartRowAfterEndRow) {
+TEST_P(DeserializerSkipTest, rejectRowRangeStartRowAfterEndRow) {
   auto type = velox::ROW({{"a", velox::INTEGER()}});
   auto batch = vm_->rowVector(
       {"a"}, {vm_->flatVector<int32_t>(10, [](velox::vector_size_t i) {
@@ -1116,7 +1118,7 @@ TEST_F(DeserializerSkipTest, rejectRowRangeStartRowAfterEndRow) {
 }
 
 // Bad per-batch rowRange: endRow past batch rowCount.
-TEST_F(DeserializerSkipTest, rejectRowRangeEndRowPastBatchRowCount) {
+TEST_P(DeserializerSkipTest, rejectRowRangeEndRowPastBatchRowCount) {
   auto type = velox::ROW({{"a", velox::INTEGER()}});
   auto batch = vm_->rowVector(
       {"a"}, {vm_->flatVector<int32_t>(10, [](velox::vector_size_t i) {
@@ -1135,7 +1137,7 @@ TEST_F(DeserializerSkipTest, rejectRowRangeEndRowPastBatchRowCount) {
 // Many ranges out of one batch must match feeding the same batch once per
 // range through the multi-batch overload, which is the pattern this
 // overload replaces.
-TEST_F(DeserializerSkipTest, singleBatchMultipleRanges) {
+TEST_P(DeserializerSkipTest, singleBatchMultipleRanges) {
   auto type = velox::ROW({{"a", velox::INTEGER()}});
   constexpr velox::vector_size_t kRows = 1000;
   auto batch = vm_->rowVector(
@@ -1177,7 +1179,7 @@ TEST_F(DeserializerSkipTest, singleBatchMultipleRanges) {
 // buildDecodeOps only emits a skip when a range starts past the cursor, so
 // out-of-order or overlapping ranges would silently fold into the preceding
 // read instead of failing.
-TEST_F(DeserializerSkipTest, rejectUnsortedOrOverlappingSingleBatchRanges) {
+TEST_P(DeserializerSkipTest, rejectUnsortedOrOverlappingSingleBatchRanges) {
   auto type = velox::ROW({{"a", velox::INTEGER()}});
   auto batch = vm_->rowVector(
       {"a"}, {vm_->flatVector<int32_t>(100, [](velox::vector_size_t i) {
@@ -1211,7 +1213,7 @@ TEST_F(DeserializerSkipTest, rejectUnsortedOrOverlappingSingleBatchRanges) {
 }
 
 // Bad input: data.size() != rowRanges.size().
-TEST_F(DeserializerSkipTest, rejectMismatchedRowRangesSize) {
+TEST_P(DeserializerSkipTest, rejectMismatchedRowRangesSize) {
   auto type = velox::ROW({{"a", velox::INTEGER()}});
   auto batch = vm_->rowVector(
       {"a"}, {vm_->flatVector<int32_t>(10, [](velox::vector_size_t i) {
@@ -1227,5 +1229,13 @@ TEST_F(DeserializerSkipTest, rejectMismatchedRowRangesSize) {
       nimble::RowRange{0, 5}, nimble::RowRange{0, 5}};
   EXPECT_THROW(ds.deserialize(views, ranges, out), NimbleUserError);
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    WriterVersions,
+    DeserializerSkipTest,
+    ::testing::Values(
+        SerializationVersion::kSerialization,
+        SerializationVersion::kBlob),
+    [](const auto& info) { return toString(info.param); });
 
 } // namespace facebook::nimble
