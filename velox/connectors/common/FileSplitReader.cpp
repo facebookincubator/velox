@@ -233,10 +233,12 @@ FileProperties FileSplitReader::makeFileProperties(
   for (const auto& [key, value] : fileReadOps) {
     fileProperties.fileReadOps.insert_or_assign(key, value);
   }
-  if (!tableHandle_->dbName().empty()) {
+  // The table's identity authorizes the file unless the reader's ops name
+  // another table's, as for a file of a side table read in place of the base.
+  if (!tableHandle_->dbName().empty() && !fileReadOps.contains(kDbNameKey)) {
     fileProperties.fileReadOps[kDbNameKey] = tableHandle_->dbName();
   }
-  if (!tableHandle_->name().empty()) {
+  if (!tableHandle_->name().empty() && !fileReadOps.contains(kTableNameKey)) {
     fileProperties.fileReadOps[kTableNameKey] = tableHandle_->name();
   }
   // Per-operation counters are attributed to the data source that opened the
