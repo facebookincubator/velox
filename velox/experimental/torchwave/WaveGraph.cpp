@@ -438,6 +438,10 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
     ensureAllocGroupPlans([&] { installGraphAllocGroupPlans(*this, types_); });
   }
 
+  // Values the rewrites and the kernel variants made after the constraint
+  // pass have no rank; the device path needs one for each value it sizes.
+  const auto noRank = optimizer_->fillMissingRanks();
+  LOG_IF(INFO, noRank > 0) << noRank << " tensor values have no rank";
   optimizer_.reset();
 }
 
@@ -659,6 +663,12 @@ nativert::Value* WaveGraph::duplicateValue(ValueCP original) {
   nativert::Value* result;
   if (original->type().kind() == nativert::Type::Kind::Tensor) {
     result = newTensorValue(placeholderNode_, original->name(), dtype);
+    // A duplicate stands for its original: the same rank.
+    if (static_cast<size_t>(original->id()) < types_.constraints.size() &&
+        static_cast<size_t>(result->id()) < types_.constraints.size()) {
+      types_.constraints[result->id()].rank =
+          types_.constraints[original->id()].rank;
+    }
   } else {
     result = newScalarValue(placeholderNode_, original->name(), dtype);
   }
@@ -674,12 +684,16 @@ nativert::Value* newVariantTensorValue(
     nativert::Node* node,
     WaveGraph* waveGraph,
     std::string_view name,
-    c10::ScalarType dtype) {
+    c10::ScalarType dtype,
+    int8_t rank) {
   if (!waveGraph->currentVariantGraph()) {
-    return waveGraph->newTensorValue(node, name, dtype);
+    auto* value = waveGraph->newTensorValue(node, name, dtype);
+    waveGraph->types().constraints.at(value->id()).rank = rank;
+    return value;
   }
   auto* mainValue =
       waveGraph->newTensorValue(waveGraph->placeholderNode(), name, dtype);
+  waveGraph->types().constraints.at(mainValue->id()).rank = rank;
   auto* copy =
       node->addOutput(std::string(mainValue->name()), mainValue->type());
   copy->setId(mainValue->id());
