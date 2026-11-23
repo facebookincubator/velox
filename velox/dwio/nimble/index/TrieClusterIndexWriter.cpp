@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/nimble/index/HierarchicalClusterIndexWriter.h"
+#include "velox/dwio/nimble/index/TrieClusterIndexWriter.h"
 
 #include <algorithm>
 #include <array>
@@ -37,8 +37,8 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
-#include "velox/dwio/nimble/index/HierarchicalKeyFormat.h"
 #include "velox/dwio/nimble/index/KeyChunkBuilder.h"
+#include "velox/dwio/nimble/index/TrieKeyFormat.h"
 #include "velox/vector/DecodedVector.h"
 
 namespace facebook::nimble::index {
@@ -108,16 +108,15 @@ std::vector<std::pair<EncodingType, float>> keySequenceEncodingReadFactors(
     const ClusterIndexConfig& config) {
   const auto possibleEncodings =
       ManualEncodingSelectionPolicyFactory::possibleEncodings();
-  for (const auto& [encoding, readFactor] :
-       config.hierarchicalKeyEncodingReadFactors) {
+  for (const auto& [encoding, readFactor] : config.trieKeyEncodingReadFactors) {
     NIMBLE_USER_CHECK(
         std::find(
             possibleEncodings.begin(), possibleEncodings.end(), encoding) !=
             possibleEncodings.end(),
-        "Hierarchical key read factors name an encoding the selection does not support: {}",
+        "Trie key read factors name an encoding the selection does not support: {}",
         encoding);
   }
-  return config.hierarchicalKeyEncodingReadFactors;
+  return config.trieKeyEncodingReadFactors;
 }
 
 // Reports an order violation using normalized key components.
@@ -139,10 +138,10 @@ std::vector<std::pair<EncodingType, float>> keySequenceEncodingReadFactors(
       folly::join(", ", prevKey));
 }
 
-class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
+class TrieKeyChunkBuilder final : public KeyChunkBuilder {
  public:
-  HierarchicalKeyChunkBuilder(
-      std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
+  TrieKeyChunkBuilder(
+      std::shared_ptr<const TrieKeyCodec> keyCodec,
       const velox::RowTypePtr& inputType,
       std::span<const velox::column_index_t> keyColumnIndices,
       std::span<const SortOrder> sortOrders,
@@ -162,13 +161,12 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
         childBuffer_{*velox::checkedNotNull(pool)} {
     NIMBLE_CHECK_NOT_NULL(pool);
     NIMBLE_USER_CHECK(
-        enforceKeyOrder,
-        "Hierarchical key chunks require enforceKeyOrder=true.");
+        enforceKeyOrder, "Trie key chunks require enforceKeyOrder=true.");
     NIMBLE_CHECK_EQ(keyColumnIndices_.size(), sortOrders_.size());
     NIMBLE_USER_CHECK_LE(
         keyColumnIndices_.size(),
         std::numeric_limits<uint8_t>::max(),
-        "Hierarchical key chunks support at most 255 columns.");
+        "Trie key chunks support at most 255 columns.");
     keyColumns_.reserve(keyColumnIndices_.size());
     keyColumnKinds_.reserve(keyColumnIndices_.size());
     levelWidths_.reserve(keyColumnIndices_.size());
@@ -181,7 +179,7 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
               kind == velox::TypeKind::SMALLINT ||
               kind == velox::TypeKind::INTEGER ||
               kind == velox::TypeKind::BIGINT,
-          "Hierarchical key column must be integral: '{}', type {}.",
+          "Trie key column must be integral: '{}', type {}.",
           inputType->nameOf(columnIndex),
           kind);
       keyColumnKinds_.push_back(kind);
@@ -344,7 +342,7 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
         NIMBLE_USER_CHECK_GT(
             currentValue,
             previousValue,
-            "HierarchicalKeyReader rows must be non-decreasing.");
+            "TrieKeyReader rows must be non-decreasing.");
         return level;
       }
     }
@@ -386,7 +384,7 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
   }
 
   // Encodes each level's values and the child offsets into each level as one
-  // sequence apiece, in HierarchicalKeyFormat order.
+  // sequence apiece, in TrieKeyFormat order.
   void encodeIndex() const {
     const auto numLevels = index_.levels.size();
     NIMBLE_CHECK(encodedLevelKeySequences_.empty());
@@ -407,7 +405,7 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
           break;
         default:
           NIMBLE_UNREACHABLE(
-              "Unsupported hierarchical key width: {}", levelWidths_.at(level));
+              "Unsupported trie key width: {}", levelWidths_.at(level));
       }
     }
     if (index_.hasDuplicateKeys()) {
@@ -428,7 +426,7 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
     // [physicalWidth:u8] * levels
     // [valueCount:u32] * levels
     // [sequenceSize:u32][encodedSequenceBytes] * sequences
-    uint64_t encodingBytes = HierarchicalKeyFormat::kHeaderSize +
+    uint64_t encodingBytes = TrieKeyFormat::kHeaderSize +
         numLevels * sizeof(uint8_t) + numLevels * sizeof(uint32_t);
     for (const auto sequence : encodedLevelKeySequences_) {
       encodingBytes += sizeof(uint32_t) + sequence.size();
@@ -441,7 +439,7 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
 
     char* const reserved = &*velox::checkedNotNull(buffer.reserve(encodedSize));
     char* position = reserved;
-    encoding::write<uint8_t>(HierarchicalKeyFormat::kVersion, position);
+    encoding::write<uint8_t>(TrieKeyFormat::kVersion, position);
     encoding::write<uint8_t>(static_cast<uint8_t>(numLevels), position);
     encoding::writeUint32(numRows, position);
     for (const auto width : levelWidths_) {
@@ -484,8 +482,7 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
       if (decoded.isConstantMapping()) {
         velox::simd::simdFill(
             outputValues,
-            HierarchicalKeyFormat::normalizeKeyValue(
-                decoded.valueAt<T>(0), ascending),
+            TrieKeyFormat::normalizeKeyValue(decoded.valueAt<T>(0), ascending),
             static_cast<uint32_t>(size));
         return;
       }
@@ -494,25 +491,25 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
           const auto* inputValues =
               velox::checkedNotNull(decoded.data<uint64_t>());
           for (velox::vector_size_t row = 0; row < size; ++row) {
-            outputValues[row] = HierarchicalKeyFormat::normalizeKeyValue(
+            outputValues[row] = TrieKeyFormat::normalizeKeyValue(
                 velox::bits::isBitSet(inputValues, row), ascending);
           }
         } else {
           const auto* inputValues = velox::checkedNotNull(decoded.data<T>());
           for (velox::vector_size_t row = 0; row < size; ++row) {
-            outputValues[row] = HierarchicalKeyFormat::normalizeKeyValue(
-                inputValues[row], ascending);
+            outputValues[row] =
+                TrieKeyFormat::normalizeKeyValue(inputValues[row], ascending);
           }
         }
         return;
       }
       for (velox::vector_size_t row = 0; row < size; ++row) {
-        outputValues[row] = HierarchicalKeyFormat::normalizeKeyValue(
+        outputValues[row] = TrieKeyFormat::normalizeKeyValue(
             decoded.valueAt<T>(row), ascending);
       }
       return;
     }
-    NIMBLE_UNREACHABLE("Unsupported hierarchical key type: {}.", kind);
+    NIMBLE_UNREACHABLE("Unsupported trie key type: {}.", kind);
   }
 
   std::vector<uint64_t> keyColumnsAt(size_t row) const {
@@ -574,7 +571,7 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
 
   // Writes the keys that bound the partitions and the chunks from the values
   // of the levels.
-  const std::shared_ptr<const HierarchicalKeyCodec> keyCodec_;
+  const std::shared_ptr<const TrieKeyCodec> keyCodec_;
   const std::vector<velox::column_index_t> keyColumnIndices_;
   const std::vector<SortOrder> sortOrders_;
   const bool noDuplicateKey_;
@@ -596,9 +593,9 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
   std::optional<std::vector<uint64_t>> lastKey_;
 };
 
-// Creates the key-chunk builder used by the hierarchical writer.
-std::unique_ptr<KeyChunkBuilder> createHierarchicalKeyChunkBuilder(
-    std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
+// Creates the key-chunk builder used by the trie writer.
+std::unique_ptr<KeyChunkBuilder> createTrieKeyChunkBuilder(
+    std::shared_ptr<const TrieKeyCodec> keyCodec,
     const velox::RowTypePtr& inputType,
     std::span<const velox::column_index_t> keyColumnIndices,
     std::span<const SortOrder> sortOrders,
@@ -606,7 +603,7 @@ std::unique_ptr<KeyChunkBuilder> createHierarchicalKeyChunkBuilder(
     bool noDuplicateKey,
     std::vector<std::pair<EncodingType, float>> levelEncodingReadFactors,
     velox::memory::MemoryPool* pool) {
-  return std::make_unique<HierarchicalKeyChunkBuilder>(
+  return std::make_unique<TrieKeyChunkBuilder>(
       std::move(keyCodec),
       inputType,
       keyColumnIndices,
@@ -619,32 +616,29 @@ std::unique_ptr<KeyChunkBuilder> createHierarchicalKeyChunkBuilder(
 
 } // namespace
 
-std::unique_ptr<HierarchicalClusterIndexWriter>
-HierarchicalClusterIndexWriter::create(
+std::unique_ptr<TrieClusterIndexWriter> TrieClusterIndexWriter::create(
     const IndexConfig& config,
     const velox::TypePtr& inputType,
-    std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
+    std::shared_ptr<const TrieKeyCodec> keyCodec,
     velox::memory::MemoryPool* pool,
     const ClusterIndexFactory::Options& options) {
   NIMBLE_USER_CHECK_EQ(config.family, IndexFamily::Cluster);
   NIMBLE_CHECK_NOT_NULL(pool, "memory pool must not be null");
-  const auto& hierarchicalConfig =
-      checkedIndexConfig<ClusterIndexConfig>(config);
-  return std::unique_ptr<HierarchicalClusterIndexWriter>(
-      new HierarchicalClusterIndexWriter(
-          hierarchicalConfig,
-          velox::asRowType(inputType),
-          getSortOrders(hierarchicalConfig),
-          std::move(keyCodec),
-          pool,
-          options));
+  const auto& trieConfig = checkedIndexConfig<ClusterIndexConfig>(config);
+  return std::unique_ptr<TrieClusterIndexWriter>(new TrieClusterIndexWriter(
+      trieConfig,
+      velox::asRowType(inputType),
+      getSortOrders(trieConfig),
+      std::move(keyCodec),
+      pool,
+      options));
 }
 
-HierarchicalClusterIndexWriter::HierarchicalClusterIndexWriter(
+TrieClusterIndexWriter::TrieClusterIndexWriter(
     const ClusterIndexConfig& config,
     const velox::RowTypePtr& inputType,
     std::vector<SortOrder> sortOrders,
-    std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
+    std::shared_ptr<const TrieKeyCodec> keyCodec,
     velox::memory::MemoryPool* pool,
     const ClusterIndexFactory::Options& options)
     : ClusterIndexWriterBase{
@@ -656,9 +650,11 @@ HierarchicalClusterIndexWriter::HierarchicalClusterIndexWriter(
               .maxRowsPerKeyChunk = config.maxRowsPerKeyChunk,
               .keyChunkCompressionType = config.keyChunkCompressionType,
               .keyStreamLayout = options.keyStreamLayout,
-              .keyStreamId = options.keyStreamId,
+              .keyStreamId = stripeKeyStreamId(
+                  options.keyStreamLayout,
+                  options.indexStreamIds),
           },
-          createHierarchicalKeyChunkBuilder(
+          createTrieKeyChunkBuilder(
               std::move(keyCodec),
               inputType,
               getKeyColumnIndices({config.columns}, inputType),
@@ -669,6 +665,6 @@ HierarchicalClusterIndexWriter::HierarchicalClusterIndexWriter(
               pool),
           pool} {}
 
-HierarchicalClusterIndexWriter::~HierarchicalClusterIndexWriter() = default;
+TrieClusterIndexWriter::~TrieClusterIndexWriter() = default;
 
 } // namespace facebook::nimble::index

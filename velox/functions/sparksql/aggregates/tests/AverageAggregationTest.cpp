@@ -18,6 +18,7 @@
 #include <folly/init/Init.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/HashAggregationStatNames.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
@@ -415,14 +416,15 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
               "SELECT k, avg(i) FILTER (WHERE m), "
               "avg(d) FILTER (WHERE m) FROM tmp GROUP BY k");
 
-  const auto stats = exec::toPlanStats(task->taskStats());
+  const auto stats =
+      exec::PlanNodeStats::extract(task->taskStats(), partialNodeId);
   EXPECT_LT(
       0,
-      stats.at(partialNodeId)
-          .customStats.at("abandonedPartialAggregationRows")
-          .sum);
+      stats.customSum(
+          exec::HashAggregationStatNames::kAbandonedPartialAggregationRows));
   EXPECT_GT(
-      stats.at(partialNodeId).customStats.at("toIntermediateFastPathCalls").sum,
+      stats.customSum(
+          exec::HashAggregationStatNames::kToIntermediateFastPathCalls),
       0);
 
   // Exercise the all-selected, non-null fast paths for different and matching
@@ -440,11 +442,10 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
              .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
              .assertResults("SELECT k, avg(b), avg(v) FROM tmp GROUP BY k");
 
-  const auto fastStats = exec::toPlanStats(task->taskStats());
   EXPECT_GE(
-      fastStats.at(fastPartialNodeId)
-          .customStats.at("toIntermediateFastPathCalls")
-          .sum,
+      exec::PlanNodeStats::extract(task->taskStats(), fastPartialNodeId)
+          .customSum(
+              exec::HashAggregationStatNames::kToIntermediateFastPathCalls),
       2);
 }
 

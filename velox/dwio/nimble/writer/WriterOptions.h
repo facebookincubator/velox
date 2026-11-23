@@ -58,6 +58,10 @@ struct WriterOptions {
         .blockBitPackingBlockSize = blockBitPackingBlockSize,
         .fixedBitWidthUseExactBits = fixedBitWidthUseExactBits,
         .sortDictionaryAlphabet = sortDictionaryAlphabet,
+        .fixedBitWidthTypedLanes = fixedBitWidthTypedLanes,
+        .fixedBitWidthTypedLanesMinValues = fixedBitWidthTypedLanesMinValues,
+        .fixedBitWidthTypedLanesOpenzlLevel =
+            fixedBitWidthTypedLanesOpenzlLevel,
         .subIntSplitDeltaPreTransform =
             FLAGS_nimble_subintsplit_delta_pretransform,
         .reversedMinDescendingRatio = reversedMinDescendingRatio,
@@ -170,8 +174,10 @@ struct WriterOptions {
   /// read can load a stripe's keys together with its data, and ignores the
   /// maxRowsPerKeyChunk of clusterIndexConfig. Readers that predate kStripe
   /// read the stripes of its files, but fail to open the cluster index.
-  /// kStripe requires clusterIndexConfig, and a cluster index implementation
-  /// built on ClusterIndexWriterBase.
+  /// kStripe requires clusterIndexConfig, and a cluster index whose factory
+  /// supports it. Such an index can store more data of each stripe in more
+  /// index streams after the key stream: see
+  /// ClusterIndexFactory::numIndexStreams().
   /// EXPERIMENTAL: Cluster index is not production-ready. Do not enable for
   /// production tables without consulting the Nimble team (oncall: dwios).
   index::KeyStreamLayout clusterIndexKeyStreamLayout{
@@ -253,6 +259,18 @@ struct WriterOptions {
   /// using dictionary maps.
   folly::F14FastSet<std::string> deduplicatedMapColumns{};
 
+  /// Columns whose arrays are written as sliding window arrays: each row is a
+  /// window over one shared elements stream, so a row that slides the
+  /// previous row stores only its new elements. Suits sliding-window event
+  /// features. Supports arrays of fixed-width scalars. A column must not also
+  /// be in dictionaryArrayColumns.
+  /// NOTE: For each column, ALL the arrays inside this column are written as
+  /// sliding window arrays.
+  /// EXPERIMENTAL: Not production-ready. Readers built before this schema kind
+  /// cannot read the files it writes. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  folly::F14FastSet<std::string> slidingWindowArrayColumns{};
+
   /// The metric logger would come populated with access descriptor information,
   /// application generated query id or specific sampling configs.
   std::shared_ptr<MetricsLogger> metricsLogger{};
@@ -310,6 +328,8 @@ struct WriterOptions {
 
   /// When true, FOR-family payloads use the exact required bit width. When
   /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
+  /// FixedBitWidth chunks that take typed lanes (see fixedBitWidthTypedLanes)
+  /// use the byte-rounded width either way.
   bool fixedBitWidthUseExactBits{false};
 
   /// When true, integer dictionary alphabets are sorted by value. See
@@ -317,6 +337,24 @@ struct WriterOptions {
   /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
   /// without consulting the Nimble team (oncall: dwios).
   bool sortDictionaryAlphabet{false};
+
+  /// Stores eligible FixedBitWidth chunks as typed lanes (see
+  /// Encoding::Options::fixedBitWidthTypedLanes). Applies to every chunk the
+  /// writer encodes as FixedBitWidth: freshly selected, replayed from
+  /// encodingLayoutTree or the selection cache, and nested. Off by default.
+  bool fixedBitWidthTypedLanes{false};
+
+  /// Minimum number of values in a chunk for fixedBitWidthTypedLanes.
+  uint64_t fixedBitWidthTypedLanesMinValues{256};
+
+  /// MetaInternal compression level for FixedBitWidth chunks that take typed
+  /// lanes (see Encoding::Options::fixedBitWidthTypedLanesOpenzlLevel). Like
+  /// the typed lanes, it reaches every chunk the writer encodes through
+  /// buildEncodingOptions(), whatever encodingSelectionPolicyCreator was built
+  /// from: fresh, replayed, shared-dictionary and nested chunks alike. It must
+  /// be in [1, 9] and requires compressionOptions.compressionType to be
+  /// MetaInternal; the writer rejects anything else. Unset by default.
+  std::optional<int32_t> fixedBitWidthTypedLanesOpenzlLevel{};
 
   /// FSST is kept only when its final encoded size is at most this fraction of
   /// the original string bytes.

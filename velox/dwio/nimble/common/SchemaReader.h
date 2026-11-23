@@ -50,6 +50,7 @@ class MapType;
 class FlatMapType;
 class HybridFlatMapType;
 class SlidingWindowMapType;
+class SlidingWindowArrayType;
 
 class Type {
  public:
@@ -64,6 +65,7 @@ class Type {
   bool isFlatMap() const;
   bool isHybridFlatMap() const;
   bool isSlidingWindowMap() const;
+  bool isSlidingWindowArray() const;
 
   const ScalarType& asScalar() const;
   const TimestampMicroNanoType& asTimestampMicroNano() const;
@@ -74,6 +76,7 @@ class Type {
   const FlatMapType& asFlatMap() const;
   const HybridFlatMapType& asHybridFlatMap() const;
   const SlidingWindowMapType& asSlidingWindowMap() const;
+  const SlidingWindowArrayType& asSlidingWindowArray() const;
 
   /// Returns the per-type string-keyed attribute bag. Insertion order
   /// matches the writer-side `TypeBuilder::attributes()` it was sourced
@@ -371,6 +374,31 @@ class ArrayWithOffsetsType : public Type {
   std::shared_ptr<const Type> elements_;
 };
 
+/// Reads an array whose rows are windows over one shared elements stream.
+/// Row i holds elements [offset(i), offset(i) + length(i)). Windows of
+/// consecutive rows may overlap. Within a stripe, offsets never decrease.
+class SlidingWindowArrayType : public Type {
+ public:
+  SlidingWindowArrayType(
+      StreamDescriptor offsetsDescriptor,
+      StreamDescriptor lengthsDescriptor,
+      std::shared_ptr<const Type> elements,
+      std::vector<std::pair<std::string, std::string>> attributes = {});
+
+  /// Holds the window start of each row, with nulls.
+  const StreamDescriptor& offsetsDescriptor() const;
+
+  /// Holds the window length of each non-null row.
+  const StreamDescriptor& lengthsDescriptor() const;
+
+  const std::shared_ptr<const Type>& elements() const;
+
+ protected:
+  StreamDescriptor offsetsDescriptor_;
+  StreamDescriptor lengthsDescriptor_;
+  std::shared_ptr<const Type> elements_;
+};
+
 class SchemaReader {
  public:
   // Construct type tree from an ordered list of schema nodes.
@@ -466,6 +494,8 @@ bool visitValueStreamLeaves(const TypeT& type, Visitor& visit) {
       return visit(type.asArray().lengthsDescriptor().offset());
     case Kind::ArrayWithOffsets:
       return visit(type.asArrayWithOffsets().offsetsDescriptor().offset());
+    case Kind::SlidingWindowArray:
+      return visit(type.asSlidingWindowArray().offsetsDescriptor().offset());
     case Kind::Map:
       return visit(type.asMap().lengthsDescriptor().offset());
     case Kind::SlidingWindowMap:
@@ -546,6 +576,13 @@ bool visitPresenceStreamOffsets(
     }
     case Kind::ArrayWithOffsets: {
       const auto& array = type.asArrayWithOffsets();
+      return visitStream(array.offsetsDescriptor().offset()) ||
+          visitStream(array.lengthsDescriptor().offset()) ||
+          visitPresenceStreamOffsets(
+                 *array.elements(), level + 1, visitType, visitStream);
+    }
+    case Kind::SlidingWindowArray: {
+      const auto& array = type.asSlidingWindowArray();
       return visitStream(array.offsetsDescriptor().offset()) ||
           visitStream(array.lengthsDescriptor().offset()) ||
           visitPresenceStreamOffsets(

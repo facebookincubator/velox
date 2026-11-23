@@ -64,6 +64,10 @@ ArrayWithOffsetsTypeBuilder& TypeBuilder::asArrayWithOffsets() {
   return dynamic_cast<ArrayWithOffsetsTypeBuilder&>(*this);
 }
 
+SlidingWindowArrayTypeBuilder& TypeBuilder::asSlidingWindowArray() {
+  return dynamic_cast<SlidingWindowArrayTypeBuilder&>(*this);
+}
+
 const ScalarTypeBuilder& TypeBuilder::asScalar() const {
   return dynamic_cast<const ScalarTypeBuilder&>(*this);
 }
@@ -98,6 +102,10 @@ const HybridFlatMapTypeBuilder& TypeBuilder::asHybridFlatMap() const {
 
 const ArrayWithOffsetsTypeBuilder& TypeBuilder::asArrayWithOffsets() const {
   return dynamic_cast<const ArrayWithOffsetsTypeBuilder&>(*this);
+}
+
+const SlidingWindowArrayTypeBuilder& TypeBuilder::asSlidingWindowArray() const {
+  return dynamic_cast<const SlidingWindowArrayTypeBuilder&>(*this);
 }
 
 Kind TypeBuilder::kind() const {
@@ -208,6 +216,38 @@ void ArrayWithOffsetsTypeBuilder::setChildren(
     std::shared_ptr<TypeBuilder> elements) {
   NIMBLE_CHECK_NULL(
       elements_, "ArrayWithOffsetsTypeBuilder elements already initialized.");
+  schemaBuilder_.registerChild(elements);
+  elements_ = std::move(elements);
+}
+
+SlidingWindowArrayTypeBuilder::SlidingWindowArrayTypeBuilder(
+    SchemaBuilder& schemaBuilder)
+    : TypeBuilder(schemaBuilder, Kind::SlidingWindowArray),
+      offsetsDescriptor_{
+          schemaBuilder_.allocateStreamOffset(),
+          ScalarKind::UInt32},
+      lengthsDescriptor_{
+          schemaBuilder_.allocateStreamOffset(),
+          ScalarKind::UInt32} {}
+
+const StreamDescriptorBuilder&
+SlidingWindowArrayTypeBuilder::offsetsDescriptor() const {
+  return offsetsDescriptor_;
+}
+
+const StreamDescriptorBuilder&
+SlidingWindowArrayTypeBuilder::lengthsDescriptor() const {
+  return lengthsDescriptor_;
+}
+
+const TypeBuilder& SlidingWindowArrayTypeBuilder::elements() const {
+  return *elements_;
+}
+
+void SlidingWindowArrayTypeBuilder::setChildren(
+    std::shared_ptr<TypeBuilder> elements) {
+  NIMBLE_CHECK_NULL(
+      elements_, "SlidingWindowArrayTypeBuilder elements already initialized.");
   schemaBuilder_.registerChild(elements);
   elements_ = std::move(elements);
 }
@@ -529,6 +569,21 @@ SchemaBuilder::createArrayWithOffsetsTypeBuilder() {
   return type;
 }
 
+std::shared_ptr<SlidingWindowArrayTypeBuilder>
+SchemaBuilder::createSlidingWindowArrayTypeBuilder() {
+  struct MakeSharedEnabler : public SlidingWindowArrayTypeBuilder {
+    explicit MakeSharedEnabler(SchemaBuilder& schemaBuilder)
+        : SlidingWindowArrayTypeBuilder{schemaBuilder} {}
+  };
+
+  auto type = std::make_shared<MakeSharedEnabler>(*this);
+
+  // This new type builder is not attached to a parent, therefore it is a new
+  // tree "root" (as of now), so we add it to the roots list.
+  roots_.insert(type);
+  return type;
+}
+
 std::shared_ptr<RowTypeBuilder> SchemaBuilder::createRowTypeBuilder(
     size_t childrenCount) {
   struct MakeSharedEnabler : public RowTypeBuilder {
@@ -654,13 +709,20 @@ std::optional<offset_size> SchemaBuilder::sharedDictionaryStreamOffset(
   return iterator->second;
 }
 
-offset_size SchemaBuilder::createClusterIndexKeyStream() {
+std::vector<offset_size> SchemaBuilder::createStripeIndexStreams(
+    uint32_t count) {
+  NIMBLE_CHECK_GT(count, 0);
   NIMBLE_CHECK_EQ(
       currentOffset_,
       0,
-      "The cluster index key stream must be the first stream allocated.");
-  clusterIndexKeyStreamOffset_ = allocateStreamOffset();
-  return clusterIndexKeyStreamOffset_.value();
+      "The stripe index streams must be the first streams allocated.");
+  std::vector<offset_size> streamIds;
+  streamIds.reserve(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    streamIds.emplace_back(allocateStreamOffset());
+  }
+  stripeIndexStreamCount_ = count;
+  return streamIds;
 }
 
 const std::shared_ptr<const TypeBuilder>& SchemaBuilder::root() const {
@@ -860,6 +922,24 @@ void addSchemaNode(
     }
     case Kind::ArrayWithOffsets: {
       const auto& array = type.asArrayWithOffsets();
+      nodes.emplace_back(
+          type.kind(),
+          array.lengthsDescriptor().offset(),
+          ScalarKind::UInt32,
+          std::move(name),
+          /*childrenCount*/ 0,
+          type.attributes());
+      nodes.emplace_back(
+          Kind::Scalar,
+          array.offsetsDescriptor().offset(),
+          ScalarKind::UInt32,
+          std::nullopt);
+      addSchemaNode(
+          nodes, schemaChild(array.elements()), /*name=*/std::nullopt, pool);
+      break;
+    }
+    case Kind::SlidingWindowArray: {
+      const auto& array = type.asSlidingWindowArray();
       nodes.emplace_back(
           type.kind(),
           array.lengthsDescriptor().offset(),
@@ -1093,6 +1173,15 @@ void printType(
       const auto& array = builder.asArrayWithOffsets();
       out << "[" << array.offsetsDescriptor().offset() << ","
           << array.lengthsDescriptor().offset() << "]OFFSETARRAY\n";
+      printType(out, array.elements(), indentation + 2, "elements");
+      out << "\n";
+      break;
+    }
+    case Kind::SlidingWindowArray: {
+      const auto& array = builder.asSlidingWindowArray();
+      out << "[o:" << array.offsetsDescriptor().offset()
+          << ",l:" << array.lengthsDescriptor().offset()
+          << "]SLIDINGWINDOWARRAY\n";
       printType(out, array.elements(), indentation + 2, "elements");
       out << "\n";
       break;

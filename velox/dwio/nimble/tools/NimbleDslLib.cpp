@@ -506,6 +506,12 @@ void NimbleDslLib::describe() {
             ",l:" + std::to_string(a.lengthsDescriptor().offset());
         break;
       }
+      case Kind::SlidingWindowArray: {
+        const auto& array = childType->asSlidingWindowArray();
+        offsets = "o:" + std::to_string(array.offsetsDescriptor().offset()) +
+            ",l:" + std::to_string(array.lengthsDescriptor().offset());
+        break;
+      }
       case Kind::SlidingWindowMap: {
         const auto& s = childType->asSlidingWindowMap();
         offsets = "o:" + std::to_string(s.offsetsDescriptor().offset()) +

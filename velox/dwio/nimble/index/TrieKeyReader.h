@@ -25,8 +25,8 @@
 #include <vector>
 
 #include "velox/dwio/nimble/common/Types.h"
-#include "velox/dwio/nimble/index/HierarchicalClusterIndexFactory.h"
 #include "velox/dwio/nimble/index/KeyReader.h"
+#include "velox/dwio/nimble/index/TrieClusterIndexFactory.h"
 
 namespace facebook::nimble::index {
 
@@ -35,7 +35,7 @@ class ChildOffsets;
 class KeySequence;
 } // namespace detail
 
-/// Reads one hierarchical chunk for a sorted integral composite key.
+/// Reads one trie chunk for a sorted integral composite key.
 ///
 /// Each column level holds one encoded sequence of the distinct values under
 /// every parent value plus child offsets locating each parent's run of
@@ -52,20 +52,20 @@ class KeySequence;
 /// format that the rest of the index uses, one zero flag byte followed by the
 /// native-width big-endian value bytes for each column. `get()` rebuilds a key
 /// and `seek()` accepts one.
-class HierarchicalKeyReader final : public KeyReader {
+class TrieKeyReader final : public KeyReader {
  public:
   /// Opens a serialized index without materializing its keys. With
   /// 'cacheEncodingViews', every sequence's view keeps the lookup structures
   /// of Encoding::Options::cacheEncodingView, which suits a chunk that stays
   /// resident and serves many lookups. 'keyCodec' defines the keys that reads
   /// take and return for the values of the levels.
-  HierarchicalKeyReader(
+  TrieKeyReader(
       std::string_view data,
       bool cacheEncodingViews,
-      std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
+      std::shared_ptr<const TrieKeyCodec> keyCodec,
       velox::memory::MemoryPool* pool);
 
-  ~HierarchicalKeyReader() override;
+  ~TrieKeyReader() override;
 
   /// Returns the first row at or after 'value' when inclusive, or the first
   /// row past it otherwise. Repeated keys form one run, so the two forms
@@ -134,11 +134,11 @@ class HierarchicalKeyReader final : public KeyReader {
       const;
 
   // Defines the keys that reads take and return for the values of the levels.
-  const std::shared_ptr<const HierarchicalKeyCodec> keyCodec_;
+  const std::shared_ptr<const TrieKeyCodec> keyCodec_;
 
   // Total source rows represented by the leaf values.
   uint32_t rowCount_{0};
-  // Number of key columns and hierarchy levels.
+  // Number of key columns and trie levels.
   uint32_t numLevels_{0};
   // The byte width of each level.
   std::vector<uint8_t> levelWidths_;
@@ -149,13 +149,13 @@ class HierarchicalKeyReader final : public KeyReader {
   std::vector<std::unique_ptr<detail::KeySequence>> levelSequences_;
 };
 
-/// Creates a HierarchicalKeyReader; 'cacheEncodingViews' and 'keyCodec' are
+/// Creates a TrieKeyReader; 'cacheEncodingViews' and 'keyCodec' are
 /// forwarded to it.
-std::unique_ptr<KeyReader> createHierarchicalKeyReader(
+std::unique_ptr<KeyReader> createTrieKeyReader(
     std::string_view encodedKeys,
     const std::function<void*(uint32_t)>& stringBufferFactory,
     bool cacheEncodingViews,
-    std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
+    std::shared_ptr<const TrieKeyCodec> keyCodec,
     velox::memory::MemoryPool* pool);
 
 } // namespace facebook::nimble::index

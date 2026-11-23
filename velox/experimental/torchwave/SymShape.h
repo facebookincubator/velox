@@ -89,6 +89,11 @@ std::optional<SymExpr> parseSympy(std::string_view text);
 struct SymShape {
   std::vector<SymExpr> dims;
   std::vector<SymExpr> strides;
+  /// For a view: the value whose storage it views, never itself a view, and
+  /// where it starts in that storage, in elements. Empty for a value with
+  /// storage of its own.
+  std::string base;
+  SymExpr offset{SymExpr::constant(0)};
 
   /// True when some dim or stride depends on a symbol whose name starts with
   /// 'prefix' ('u' for data-dependent, 's' for input dims).
@@ -190,6 +195,16 @@ bool isHostDimSymbol(std::string_view symbol);
 /// value. Exports specialize dims to their traced values, so a dim that is a
 /// constant in one place is an input dim symbol in another.
 bool sameDim(const SymExpr& lhs, const SymExpr& rhs);
+
+/// A symbol for element 'index' of the integer tensor named 'tensor': an
+/// extent the contents of a device tensor decide, such as one share of
+/// cumulative lengths a kernel writes.
+SymExpr elementSymbol(std::string_view tensor, int64_t index);
+
+/// The tensor name and index an elementSymbol names, or nullopt for another
+/// symbol.
+std::optional<std::pair<std::string, int64_t>> parseElementSymbol(
+    std::string_view symbol);
 
 /// A shape with 'dims', laid out densely.
 SymShape denseShape(std::vector<SymExpr> dims);

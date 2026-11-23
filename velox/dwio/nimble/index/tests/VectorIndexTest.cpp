@@ -77,6 +77,21 @@ struct RecallMetrics {
   }
 };
 
+// In-memory file that reports direct I/O with 'alignment'.
+class DirectIoReadFile final : public velox::InMemoryReadFile {
+ public:
+  DirectIoReadFile(std::string content, uint64_t alignment)
+      : velox::InMemoryReadFile{std::move(content)}, alignment_{alignment} {}
+
+  bool directIo(uint64_t& alignment) const override {
+    alignment = alignment_;
+    return true;
+  }
+
+ private:
+  const uint64_t alignment_;
+};
+
 // Captures the two physical layers emitted by VectorIndexWriter.
 struct WrittenIndexes {
   // Stores all FAISS data sections at their recorded offsets.
@@ -1591,7 +1606,7 @@ TEST_F(VectorIndexTest, blockCacheServesIndexData) {
             .ioOptions = &ioOptions,
             .maxCacheEntrySize = maxCacheEntrySize,
             .blockCache = getBlockCache(cache.get()),
-            .fileHandle = &fileHandle,
+            .fileHandle = fileHandle,
         };
         const auto directory = VectorIndexDirectory::create(
             Section{MetadataBuffer{toPinnedBuffer(
@@ -1614,6 +1629,95 @@ TEST_F(VectorIndexTest, blockCacheServesIndexData) {
 
   testingResetBlockCache();
   cache->shutdown();
+}
+
+// A reader builds a vector index's input when the index first loads, after
+// create() returns, so the caller may have released its file handle by then.
+TEST_F(VectorIndexTest, cachedVectorIndexLoadsAfterFileHandleIsReleased) {
+  constexpr uint32_t kNumVectors{200};
+  constexpr uint32_t kQueryRow{42};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  WriterOptions writerOptions;
+  writerOptions.vectorIndexConfigs = {makeConfig(VectorIndexType::kIvfFlat)};
+  writerOptions.vectorIndexWriterFactory = VectorIndexWriter::create;
+  std::string fileData;
+  Writer writer(
+      createType(),
+      std::make_unique<velox::InMemoryWriteFile>(&fileData),
+      *pool_,
+      std::move(writerOptions));
+  writer.write(makeInputFromVectors(data, kDimensions));
+  writer.close();
+
+  const auto readFile =
+      std::make_shared<velox::InMemoryReadFile>(std::string_view{fileData});
+  auto allocator = std::make_shared<velox::memory::MallocAllocator>(
+      velox::memory::MemoryAllocator::Options{.capacity = 1UL << 30});
+  auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
+  std::shared_ptr<TabletReader> tablet;
+  {
+    auto fileHandle = std::make_unique<velox::FileHandle>();
+    fileHandle->file = readFile;
+    fileHandle->uuid = velox::StringIdLease(
+        velox::fileIds(),
+        "VectorIndexTest.cachedVectorIndexLoadsAfterFileHandleIsReleased");
+    TabletReader::Options readerOptions;
+    readerOptions.cacheIndex = true;
+    readerOptions.blockCache = getBlockCache(cache.get());
+    readerOptions.fileHandle = fileHandle.get();
+    readerOptions.ioOptions.emplace(pool())
+        .setMetadataIoStats(std::make_shared<velox::io::IoStatistics>())
+        .setIndexIoStats(std::make_shared<velox::io::IoStatistics>());
+    tablet = TabletReader::create(readFile, pool(), readerOptions);
+  }
+
+  auto vectorIndex = tablet->vectorIndex("embedding");
+  ASSERT_NE(vectorIndex, nullptr);
+  const auto queryBegin = data.begin() + kQueryRow * kDimensions;
+  const std::vector<float> query(queryBegin, queryBegin + kDimensions);
+  const auto searchResult = vectorIndex->search({
+      .numQueries = 1,
+      .queryVectors = query,
+      .numNeighbors = 1,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+  });
+  const auto results = searchResult.results(0);
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results.front().rowId, kQueryRow);
+
+  vectorIndex.reset();
+  tablet.reset();
+  testingResetBlockCache();
+  cache->shutdown();
+}
+
+TEST_F(VectorIndexTest, readsAlignedBlocks) {
+  constexpr uint64_t kAlignment{4'096};
+  const auto written = writeIndexFromVectors(
+      makeConfig(VectorIndexType::kIvfFlat),
+      generateRandomVectors(100, kDimensions));
+  const auto indexSize = written.indexData.size();
+  ASSERT_NE(indexSize % kAlignment, 0);
+
+  // Bytes past the index let an aligned read extend beyond it.
+  const auto file = std::make_shared<DirectIoReadFile>(
+      written.indexData + std::string(kAlignment, '\0'), kAlignment);
+
+  auto ioStats = std::make_shared<velox::io::IoStatistics>();
+  velox::io::ReaderOptions ioOptions(pool());
+  ioOptions.setIndexIoStats(ioStats);
+  const IndexLookup::Options indexOptions{
+      .file = file,
+      .ioOptions = &ioOptions,
+  };
+  const auto directory = VectorIndexDirectory::create(
+      Section{MetadataBuffer{toPinnedBuffer(
+          MetadataBuffer::decompress(
+              written.directoryData, CompressionType::Uncompressed, pool()))}},
+      indexOptions);
+  EXPECT_NE(directory.load("embedding"), nullptr);
+  EXPECT_EQ(ioStats->read().sum(), velox::bits::roundUp(indexSize, kAlignment));
 }
 
 TEST_F(VectorIndexTest, partitionMetadataMatchesBuiltIndex) {

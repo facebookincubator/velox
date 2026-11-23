@@ -324,6 +324,10 @@ DrawnWriterSettings randomizeWriterOptions(
 
   options.enableStreamDeduplication = folly::Random::oneIn(2, rng);
   options.fixedBitWidthUseExactBits = folly::Random::oneIn(2, rng);
+  // Typed lanes with a floor anywhere from every chunk to the default, so
+  // small fuzzed chunks reach them too.
+  options.fixedBitWidthTypedLanes = folly::Random::oneIn(2, rng);
+  options.fixedBitWidthTypedLanesMinValues = folly::Random::rand32(257, rng);
   // Ratios above 1.0 keep FSST even when it does not shrink the data, so the
   // encoding is actually exercised instead of rejected on size.
   options.fsstCompressionTargetRatio =
@@ -459,6 +463,15 @@ void collectPhysicalStreamRoles(const Type& type, PhysicalStreamRoles& roles) {
           array.offsetsDescriptor().offset(), "ArrayWithOffsets.offsets");
       roles.kinds.emplace(
           array.lengthsDescriptor().offset(), "ArrayWithOffsets.lengths");
+      collectPhysicalStreamRoles(*array.elements(), roles);
+      return;
+    }
+    case Kind::SlidingWindowArray: {
+      const auto& array = type.asSlidingWindowArray();
+      roles.kinds.emplace(
+          array.offsetsDescriptor().offset(), "SlidingWindowArray.offsets");
+      roles.kinds.emplace(
+          array.lengthsDescriptor().offset(), "SlidingWindowArray.lengths");
       collectPhysicalStreamRoles(*array.elements(), roles);
       return;
     }

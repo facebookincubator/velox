@@ -16,16 +16,38 @@
 
 #include "velox/common/file/FileInputStream.h"
 
+#include <limits>
+
 namespace facebook::velox::common {
+
+struct FileInputStream::ReadAheadResult {
+  ReadAheadResult() = default;
+  ReadAheadResult(const ReadAheadResult&) = delete;
+  ReadAheadResult& operator=(const ReadAheadResult&) = delete;
+  ReadAheadResult(ReadAheadResult&&) = delete;
+  ReadAheadResult& operator=(ReadAheadResult&&) = delete;
+
+  ~ReadAheadResult() {
+    if (readFuture.valid()) {
+      readFuture.wait();
+    }
+  }
+
+  // Keeps native completion reachable after the producer releases its worker.
+  folly::SemiFuture<uint64_t> readFuture{
+      folly::SemiFuture<uint64_t>::makeEmpty()};
+};
 
 FileInputStream::FileInputStream(
     std::unique_ptr<ReadFile>&& file,
     uint64_t bufferSize,
-    memory::MemoryPool* pool)
+    memory::MemoryPool* pool,
+    folly::Executor* readAheadExecutor)
     : file_(std::move(file)),
       fileSize_(file_->size()),
       bufferSize_(std::min(fileSize_, bufferSize)),
       pool_(pool),
+      readAheadExecutor_(readAheadExecutor),
       readAheadEnabled_((bufferSize_ < fileSize_) && file_->hasPreadvAsync()) {
   VELOX_CHECK_NOT_NULL(pool_);
   VELOX_CHECK_GT(fileSize_, 0, "Empty FileInputStream");
@@ -38,15 +60,11 @@ FileInputStream::FileInputStream(
 }
 
 FileInputStream::~FileInputStream() {
-  if (!readAheadWait_.valid()) {
-    return;
-  }
-  try {
-    readAheadWait_.wait();
-  } catch (const std::exception& ex) {
-    // ignore any prefetch error when query has failed.
-    LOG(WARNING) << "FileInputStream read-ahead failed on destruction "
-                 << ex.what();
+  if (readAheadSource_ != nullptr) {
+    // Cancel unstarted work or drain the producer and its pending I/O before
+    // releasing the destination buffer and ReadFile.
+    readAheadSource_->close();
+    readAheadSource_.reset();
   }
 }
 
@@ -58,12 +76,14 @@ void FileInputStream::readNextRange() {
   uint64_t readTimeNs{0};
   {
     NanosecondWallTimer timer{&readTimeNs};
-    if (readAheadWait_.valid()) {
-      readBytes = std::move(readAheadWait_)
-                      .via(&folly::QueuedImmediateExecutor::instance())
-                      .wait()
-                      .value();
-      VELOX_CHECK(!readAheadWait_.valid());
+    if (readAheadSource_ != nullptr) {
+      auto readAheadSource = std::move(readAheadSource_);
+      auto result = readAheadSource->move();
+      VELOX_CHECK_NOT_NULL(result);
+      const auto size = result->readFuture.wait().value();
+      VELOX_CHECK_LE(size, std::numeric_limits<int32_t>::max());
+      readBytes = static_cast<int32_t>(size);
+      VELOX_CHECK_NULL(readAheadSource_);
       VELOX_CHECK_LT(
           0, readBytes, "Read past end of FileInputStream {}", fileSize_);
       advanceBuffer();
@@ -205,7 +225,7 @@ uint64_t FileInputStream::readSize() const {
 }
 
 void FileInputStream::maybeIssueReadahead() {
-  VELOX_CHECK(!readAheadWait_.valid());
+  VELOX_CHECK_NULL(readAheadSource_);
   if (!readAheadEnabled_) {
     return;
   }
@@ -215,8 +235,30 @@ void FileInputStream::maybeIssueReadahead() {
   }
   std::vector<folly::Range<char*>> ranges;
   ranges.emplace_back(nextBuffer()->asMutable<char>(), size);
-  readAheadWait_ = file_->preadvAsync(fileOffset_, ranges);
-  VELOX_CHECK(readAheadWait_.valid());
+  auto source = std::make_shared<AsyncSource<ReadAheadResult>>(
+      [file = file_.get(), offset = fileOffset_, ranges = std::move(ranges)] {
+        // Install ownership before starting I/O so allocation or activation
+        // failures cannot detach a read that still uses the stream's buffer.
+        auto result = std::make_unique<ReadAheadResult>();
+        result->readFuture = folly::makeSemiFutureWith(
+            [&]() { return file->preadvAsync(offset, ranges); });
+        // Activate deferred reads here. Native asynchronous reads can remain
+        // pending without occupying a read-ahead executor worker.
+        result->readFuture =
+            std::move(result->readFuture)
+                .via(&folly::QueuedImmediateExecutor::instance());
+        return result;
+      });
+  // TODO: Make preadvAsync truly asynchronous so read-ahead needs no executor.
+  if (readAheadExecutor_ != nullptr) {
+    try {
+      readAheadExecutor_->add([source]() { source->prepare(); });
+    } catch (...) {
+      source->close();
+      throw;
+    }
+  }
+  readAheadSource_ = std::move(source);
 }
 
 void FileInputStream::updateStats(uint64_t readBytes, uint64_t readTimeNs) {

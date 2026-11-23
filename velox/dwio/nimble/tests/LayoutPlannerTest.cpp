@@ -77,6 +77,15 @@ void addNamedTypes(
 
       break;
     }
+    case nimble::Kind::SlidingWindowArray: {
+      auto& array = node.asSlidingWindowArray();
+      result.emplace_back(array.offsetsDescriptor().offset(), prefix + "swa.o");
+      result.emplace_back(array.lengthsDescriptor().offset(), prefix + "swa.l");
+      addNamedTypes(
+          array.elements(), folly::to<std::string>(prefix, "swa.e:"), result);
+
+      break;
+    }
     case nimble::Kind::Map: {
       auto& map = node.asMap();
       result.emplace_back(map.lengthsDescriptor().offset(), prefix + "m");
@@ -536,9 +545,9 @@ TEST(DefaultLayoutPlannerTests, sharedDictionaryFollowsValueStream) {
           "r.c3(2).s"}));
 }
 
-TEST(DefaultLayoutPlannerTests, clusterIndexKeyStreamLeads) {
+TEST(DefaultLayoutPlannerTests, stripeIndexStreamsLead) {
   nimble::SchemaBuilder builder;
-  const auto keyStreamOffset = builder.createClusterIndexKeyStream();
+  const auto indexStreamIds = builder.createStripeIndexStreams(2);
   NIMBLE_SCHEMA(
       builder,
       NIMBLE_ROW({
@@ -546,15 +555,18 @@ TEST(DefaultLayoutPlannerTests, clusterIndexKeyStreamLeads) {
           {"c2", NIMBLE_TINYINT()},
       }));
 
-  // The key stream comes last, so the planner has to move it.
+  // The index streams come last, the second before the first, so the planner
+  // has to move and reorder them.
   const auto namedTypes = getNamedTypes(*builder.root());
   std::vector<nimble::Stream> streams;
-  streams.reserve(namedTypes.size() + 1);
+  streams.reserve(namedTypes.size() + indexStreamIds.size());
   for (const auto& [offset, name] : namedTypes) {
     streams.push_back(nimble::Stream{offset, {{.content = {name}}}});
   }
   streams.push_back(
-      nimble::Stream{keyStreamOffset, {{.content = {"cluster index keys"}}}});
+      nimble::Stream{indexStreamIds[1], {{.content = {"index weights"}}}});
+  streams.push_back(
+      nimble::Stream{indexStreamIds[0], {{.content = {"index keys"}}}});
 
   nimble::DefaultLayoutPlanner planner{&builder, std::nullopt};
   streams = planner.getLayout(std::move(streams));
@@ -567,7 +579,7 @@ TEST(DefaultLayoutPlannerTests, clusterIndexKeyStreamLeads) {
   EXPECT_EQ(
       streamNames,
       (std::vector<std::string>{
-          "cluster index keys", "r", "r.c1(0).s", "r.c2(1).s"}));
+          "index keys", "index weights", "r", "r.c1(0).s", "r.c2(1).s"}));
 }
 
 TEST(DefaultLayoutPlannerTests, nonFlatMapOrdinalsAreIgnored) {

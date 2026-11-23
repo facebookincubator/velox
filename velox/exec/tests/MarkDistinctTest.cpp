@@ -140,8 +140,8 @@ class MarkDistinctTest : public OperatorTestBase {
     }
     auto task = builder.assertResults(duckDbSql);
 
-    auto taskStats = exec::toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(*markDistinctId);
+    const auto planStats =
+        exec::PlanNodeStats::extract(task->taskStats(), *markDistinctId);
     ASSERT_GT(planStats.spilledBytes, 0);
     ASSERT_GT(planStats.spilledRows, 0);
     ASSERT_GT(planStats.spilledFiles, 0);
@@ -368,8 +368,8 @@ DEBUG_ONLY_TEST_F(MarkDistinctTest, reclaimDuringInputOrOutput) {
             .plan(plan)
             .assertResults(duckDbSql);
 
-    auto taskStats = exec::toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(*markDistinctId);
+    const auto planStats =
+        exec::PlanNodeStats::extract(task->taskStats(), *markDistinctId);
     ASSERT_GT(planStats.spilledBytes, 0);
     ASSERT_GT(planStats.spilledFiles, 0);
     ASSERT_GT(planStats.spilledRows, 0);
@@ -473,8 +473,8 @@ DEBUG_ONLY_TEST_F(MarkDistinctTest, recursiveSpill) {
             .plan(plan)
             .assertResults(duckDbSql);
 
-    auto taskStats = exec::toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(*markDistinctId);
+    const auto planStats =
+        exec::PlanNodeStats::extract(task->taskStats(), *markDistinctId);
     ASSERT_GT(planStats.spilledBytes, 0);
     ASSERT_GT(planStats.spilledFiles, 0);
     ASSERT_GT(planStats.spilledRows, 0);
@@ -483,9 +483,11 @@ DEBUG_ONLY_TEST_F(MarkDistinctTest, recursiveSpill) {
     auto runTimeStats =
         task->taskStats().pipelineStats.back().operatorStats.at(1).runtimeStats;
     if (targetNumSpills > maxSpillLevel) {
-      ASSERT_GT(runTimeStats["exceededMaxSpillLevel"].sum, 0);
+      ASSERT_GT(
+          runTimeStats[std::string(Operator::kExceededMaxSpillLevel)].sum, 0);
     } else {
-      ASSERT_EQ(runTimeStats.count("exceededMaxSpillLevel"), 0);
+      ASSERT_EQ(
+          runTimeStats.count(std::string(Operator::kExceededMaxSpillLevel)), 0);
     }
 
     task.reset();
@@ -597,8 +599,8 @@ TEST_F(MarkDistinctTest, memoryUsage) {
 
       if (spillEnable) {
         peakBytesWithSpilling = queryCtx->pool()->peakBytes();
-        auto taskStats = exec::toPlanStats(task->taskStats());
-        const auto& stats = taskStats.at(markDistinctId);
+        const auto stats =
+            exec::PlanNodeStats::extract(task->taskStats(), markDistinctId);
 
         ASSERT_GT(stats.spilledBytes, 0);
         ASSERT_GT(stats.spilledRows, 0);

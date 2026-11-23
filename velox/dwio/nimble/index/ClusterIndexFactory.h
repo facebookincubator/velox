@@ -17,8 +17,8 @@
 
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <string_view>
+#include <vector>
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
@@ -40,14 +40,23 @@ class ClusterIndexFactory {
   struct Options {
     /// Where the index stores its key chunks.
     KeyStreamLayout keyStreamLayout{KeyStreamLayout::kPartition};
-    /// In the Stripe layout, the stream of every stripe that holds the
-    /// stripe's key chunk. Unset in the Partition layout.
-    std::optional<uint32_t> keyStreamId{};
+    /// In the Stripe layout, the index streams of every stripe: the streams of
+    /// the stripe that hold its index data, numIndexStreams() of them, the key
+    /// stream first. Empty in the Partition layout.
+    std::vector<uint32_t> indexStreamIds{};
   };
 
   virtual ~ClusterIndexFactory() = default;
 
   virtual std::string_view name() const = 0;
+
+  /// Returns how many index streams every stripe has with 'keyStreamLayout':
+  /// the key stream in the Stripe layout, and none in the Partition layout.
+  /// The Writer allocates them before the streams of the schema, and passes
+  /// their ids to createWriter() in Options::indexStreamIds.
+  virtual uint32_t numIndexStreams(KeyStreamLayout keyStreamLayout) const {
+    return keyStreamLayout == KeyStreamLayout::kStripe ? 1 : 0;
+  }
 
   /// Creates a writer of the index with 'options'. An index that cannot store
   /// its keys in stripes rejects the Stripe layout.

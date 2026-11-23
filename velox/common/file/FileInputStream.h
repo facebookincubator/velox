@@ -19,6 +19,7 @@
 #include <cstdint>
 
 #include "velox/buffer/Buffer.h"
+#include "velox/common/base/AsyncSource.h"
 #include "velox/common/file/File.h"
 #include "velox/common/memory/ByteStream.h"
 
@@ -27,10 +28,15 @@ namespace facebook::velox::common {
 /// Readonly byte input stream backed by file.
 class FileInputStream : public ByteInputStream {
  public:
+  /// Starts read-ahead eagerly on the optional, unowned 'readAheadExecutor' for
+  /// files that support asynchronous reads. The executor must outlive the
+  /// stream. Requires pending file I/O to make progress independently of calls
+  /// that read or destroy the stream.
   FileInputStream(
       std::unique_ptr<ReadFile>&& file,
       uint64_t bufferSize,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      folly::Executor* readAheadExecutor = nullptr);
 
   ~FileInputStream() override;
 
@@ -72,15 +78,16 @@ class FileInputStream : public ByteInputStream {
   Stats stats() const;
 
  private:
+  // Drains pending I/O before the stream releases its read buffers and file.
+  struct ReadAheadResult;
+
   void doSeek(int64_t skipBytes);
 
   // Invoked to read the next byte range from the file in a buffer.
   void readNextRange();
 
-  // Issues readahead if underlying file system supports async mode read.
-  //
-  // TODO: we might consider to use AsyncSource to support read-ahead on
-  // filesystem which doesn't support async mode read.
+  // Prepares the read of the next buffer. It runs on the read-ahead executor
+  // when there is one, otherwise on the reader at the next refill.
   void maybeIssueReadahead();
 
   inline uint64_t readSize() const;
@@ -112,6 +119,8 @@ class FileInputStream : public ByteInputStream {
   const uint64_t fileSize_;
   const uint64_t bufferSize_;
   memory::MemoryPool* const pool_;
+  // Schedules read-ahead and must outlive this stream.
+  folly::Executor* const readAheadExecutor_;
   const bool readAheadEnabled_;
 
   // Offset of the next byte to read from file.
@@ -119,9 +128,9 @@ class FileInputStream : public ByteInputStream {
 
   std::vector<BufferPtr> buffers_;
   uint32_t bufferIndex_{0};
-  // Sets to read-ahead future if valid.
-  folly::SemiFuture<uint64_t> readAheadWait_{
-      folly::SemiFuture<uint64_t>::makeEmpty()};
+  // Keeps queued read-ahead and pending native I/O alive until consumed or
+  // closed.
+  std::shared_ptr<AsyncSource<ReadAheadResult>> readAheadSource_;
 
   ByteRange range_;
 

@@ -25,6 +25,10 @@
 #include "velox/experimental/torchwave/Cat.h"
 #include "velox/experimental/torchwave/Executor.h"
 
+namespace facebook::velox::wave {
+class Stream;
+} // namespace facebook::velox::wave
+
 namespace torch::wave {
 
 /// Adds 'buffer' to the state's allocation records and returns its index,
@@ -48,6 +52,18 @@ void writeMemberEntry(
     const std::vector<int64_t>& dims,
     c10::ScalarType dtype,
     int32_t owner);
+
+/// Writes the base and the capacity (its bytes) of 'buffer', the carve of
+/// 'group', to the group's address table slots, when the setup places it.
+void noteGroupBase(
+    ExecutionState& state,
+    const AllocGroup* group,
+    const at::Tensor& buffer);
+
+/// Allocates 'group' on the device path: its recorded demand plus the margin,
+/// with its base and capacity in the address table. Its values get no table
+/// entries; they own the buffer, which goes when the last of them is freed.
+void allocateDeviceGroup(ExecutionState& state, const AllocGroup& group);
 
 /// Allocates a tensor of 'dims' and 'dtype' for 'id' as an allocation of its
 /// own and writes only its table entry.
@@ -146,6 +162,30 @@ bool holdsTensorOfDims(
 
 /// Whether 'id' lives in the table alone this execution.
 bool isTableOnly(const ExecutionState& state, nativert::ValueId id);
+
+/// Writes 'address' to slot 'slot' of the group base table's pinned copy.
+void setAddress(ExecutionState& state, int32_t slot, int64_t address);
+
+/// Copies the group base slots written since the last copy to the device,
+/// on 'stream', before a setup kernel that loads them.
+void copyAddresses(
+    ExecutionState& state,
+    facebook::velox::wave::Stream& stream);
+
+/// Writes the dims and strides of the tensor parameter at 'param' to the
+/// shape slot of 'valueId', if it has one.
+void setValueShape(
+    ExecutionState& state,
+    int32_t valueId,
+    const uint8_t* param);
+
+/// Gives the derived entry of 'id' the owner of 'source', whose storage it
+/// views: the source's allocation, or a new one holding the source's frame
+/// tensor so the derived value can be materialized and outlives the source.
+void takeOwner(
+    ExecutionState& state,
+    nativert::ValueId id,
+    nativert::ValueId source);
 
 /// Gives the frame a tensor (or integer) for the table entry of 'id'. A
 /// tensor's storage is in its owner's buffer, or else in the frame tensor of

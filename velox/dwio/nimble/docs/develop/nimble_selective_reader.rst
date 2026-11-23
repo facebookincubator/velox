@@ -108,7 +108,7 @@ rowReader- > next()
 SelectiveNimbleReader()
 """""""""""""""""""""""
 
-ReaderBase::create() → read footer, cluster index, footer column stats
+ReaderBase::create() → read footer, cluster index, footer column stats (on first use with ``nimbleLazyFileStats``)
 
 createRowReader()
 """""""""""""""""
