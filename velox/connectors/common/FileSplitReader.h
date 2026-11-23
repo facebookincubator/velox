@@ -173,6 +173,12 @@ class FileSplitReader {
   void createReader(
       const folly::F14FastMap<std::string, std::string>& fileReadOps = {});
 
+  // Returns the properties to open the split's file with: the split's own,
+  // with 'fileReadOps' and the table's identity added. A reader that opens
+  // the split's file again uses them so the file opens the same way.
+  FileProperties makeFileProperties(
+      const folly::F14FastMap<std::string, std::string>& fileReadOps) const;
+
   // Adjust the scan spec according to the current split, then return the
   // adapted row type.
   RowTypePtr getAdaptedRowType() const;

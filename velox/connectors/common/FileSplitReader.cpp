@@ -223,16 +223,8 @@ std::string FileSplitReader::toString() const {
       static_cast<const void*>(baseRowReader_.get()));
 }
 
-void FileSplitReader::createReader(
-    const folly::F14FastMap<std::string, std::string>& fileReadOps) {
-  VELOX_CHECK_NE(
-      baseReaderOpts_.fileFormat(), dwio::common::FileFormat::UNKNOWN);
-
-  FileHandleCachedPtr fileHandleCachePtr;
-  FileHandleKey fileHandleKey{
-      .filename = fileSplit_->readPath(),
-      .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
-
+FileProperties FileSplitReader::makeFileProperties(
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
   // The split's own fileReadOps only add keys; the reader's keys win. Like the
   // reader's, they take effect only when the file is opened: the file handle
   // cache key ignores them, so a cached handle keeps the ops it was opened
@@ -253,6 +245,20 @@ void FileSplitReader::createReader(
   // report one data source's reads against another's.
   fileProperties.ioStatistics =
       fileHandleFactory_->maxSize() == 0 ? dataIoStats_.get() : nullptr;
+  return fileProperties;
+}
+
+void FileSplitReader::createReader(
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) {
+  VELOX_CHECK_NE(
+      baseReaderOpts_.fileFormat(), dwio::common::FileFormat::UNKNOWN);
+
+  FileHandleCachedPtr fileHandleCachePtr;
+  FileHandleKey fileHandleKey{
+      .filename = fileSplit_->readPath(),
+      .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
+
+  auto fileProperties = makeFileProperties(fileReadOps);
 
   try {
     fileHandleCachePtr = fileHandleFactory_->generate(
