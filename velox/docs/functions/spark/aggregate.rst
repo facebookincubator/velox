@@ -181,21 +181,17 @@ General Aggregate Functions
     depends on the Java runtime version. Spark's DayTimeIntervalType inputs
     are not supported.
 
+    TIMESTAMP and TIMESTAMP_UTC inputs must have whole-microsecond precision
+    and fit in a signed 64-bit number of microseconds since the Unix epoch.
+    Inputs outside these requirements raise an error.
+
+    The ``spark.sql.legacy.histogramNumericPropagateInputType=false`` behavior,
+    which returns DOUBLE centers regardless of input type, is not supported.
+
     Results can vary with input order and aggregation-tree shape. See Spark's
     `histogram_numeric documentation
     <https://spark.apache.org/docs/latest/api/sql/index.html#histogram_numeric>`_
     for the function semantics.
-
-.. spark:function:: histogram_numeric_legacy(x, numBins) -> array(row(x double, y double))
-
-    Computes a histogram using the same input and bin-count rules as
-    ``histogram_numeric``, but returns DOUBLE centers. Also supports DECIMAL
-    inputs without reconstructing Decimal centers. Matches
-    ``spark.sql.legacy.histogramNumericPropagateInputType=false``.
-    DECIMAL input handling matches Spark 3.5.5+ and 4.0.0+
-    (`SPARK-50769 <https://issues.apache.org/jira/browse/SPARK-50769>`_).
-    Earlier Spark versions throw ``ClassCastException`` for DECIMAL inputs.
-    Spark's DayTimeIntervalType inputs are not supported.
 
 .. spark:function:: kurtosis(x) -> double
 

@@ -15,7 +15,6 @@
  */
 
 #include <algorithm>
-#include <bit>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -39,8 +38,6 @@
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/HistogramNumericAggregate.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
-#include "velox/type/HugeInt.h"
-#include "velox/vector/DecodedVector.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
@@ -85,43 +82,28 @@ class HistogramNumericAggregateTest : public AggregationTestBase {
 
 TEST_F(HistogramNumericAggregateTest, registrationAndSignatures) {
   const auto names = exec::getAggregateFunctionNames();
-  for (const auto* name : {
-           "histogram_numeric",
-           "histogram_numeric_legacy",
-       }) {
-    EXPECT_NE(std::find(names.begin(), names.end(), name), names.end()) << name;
-  }
+  EXPECT_NE(
+      std::find(names.begin(), names.end(), "histogram_numeric"), names.end());
   EXPECT_EQ(
       exec::getAggregateFunctionSignatures("histogram_numeric")->size(), 10);
-  EXPECT_EQ(
-      exec::getAggregateFunctionSignatures("histogram_numeric_legacy")->size(),
-      11);
   EXPECT_TRUE(
       exec::getAggregateFunctionSignatures("histogram_numeric_partial")
           .has_value());
-  EXPECT_TRUE(
-      exec::getAggregateFunctionSignatures("histogram_numeric_legacy_partial")
-          .has_value());
   registerHistogramNumericAggregates(
       "no_companions_", /*withCompanionFunctions=*/false, /*overwrite=*/true);
-  for (const auto* name : {
-           "no_companions_histogram_numeric",
-           "no_companions_histogram_numeric_legacy",
-       }) {
-    EXPECT_TRUE(exec::getAggregateFunctionSignatures(name).has_value());
-    EXPECT_FALSE(
-        exec::getAggregateFunctionSignatures(std::string(name) + "_partial")
-            .has_value());
-  }
+  EXPECT_TRUE(
+      exec::getAggregateFunctionSignatures("no_companions_histogram_numeric")
+          .has_value());
+  EXPECT_FALSE(
+      exec::getAggregateFunctionSignatures(
+          "no_companions_histogram_numeric_partial")
+          .has_value());
 }
 
 TEST_F(HistogramNumericAggregateTest, rejectsMismatchedResultCenterType) {
   const core::QueryConfig config({});
   const auto* canonical = exec::getAggregateFunctionEntry("histogram_numeric");
-  const auto* legacy =
-      exec::getAggregateFunctionEntry("histogram_numeric_legacy");
   ASSERT_NE(canonical, nullptr);
-  ASSERT_NE(legacy, nullptr);
   const std::vector<std::pair<TypePtr, TypePtr>> cases{
       {INTEGER(), DOUBLE()},
       {DATE(), INTEGER()},
@@ -142,20 +124,27 @@ TEST_F(HistogramNumericAggregateTest, rejectsMismatchedResultCenterType) {
               centerType->toString()));
     }
   }
-  VELOX_ASSERT_USER_THROW(
-      legacy->factory(
-          core::AggregationNode::Step::kSingle,
-          {INTEGER(), INTEGER()},
-          ARRAY(ROW({{"x", INTEGER()}, {"y", DOUBLE()}})),
-          config),
-      "histogram_numeric result center type mismatch: expected DOUBLE, got INTEGER");
 }
 
-TEST_F(HistogramNumericAggregateTest, doubleAndLegacyResults) {
+TEST_F(HistogramNumericAggregateTest, doubleResults) {
   auto input = makeRowVector({makeFlatVector<double>({1, 2, 3})});
   auto expected = expectedDouble({{1, 1}, {2, 1}, {3, 1}});
-  assertSingle(input, "histogram_numeric(c0, 3)", expected);
-  assertSingle(input, "histogram_numeric_legacy(c0, 3)", expected);
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"histogram_numeric(c0, INTEGER '3')"})
+      .assertResults(expected);
+}
+
+TEST_F(HistogramNumericAggregateTest, sortedAndDistinctConstantNumBins) {
+  const auto input = makeRowVector({makeConstant<double>(1, 3)});
+  const std::vector<std::pair<std::string, double>> cases{
+      {"histogram_numeric(DISTINCT c0, INTEGER '4')", 1},
+      {"histogram_numeric(c0, INTEGER '4' ORDER BY c0)", 3},
+  };
+  for (const auto& [expression, height] : cases) {
+    SCOPED_TRACE(expression);
+    assertSingle(input, expression, expectedDouble({{1, height}}));
+  }
 }
 
 TEST_F(HistogramNumericAggregateTest, typedIntegralResults) {
@@ -191,10 +180,6 @@ TEST_F(HistogramNumericAggregateTest, bigintCenterLimitsAndRounding) {
         .aggregates({"histogram_numeric(c0, INTEGER '2')"})
         .withCompanion()
         .assertResults(expected);
-    assertSingle(
-        input,
-        "histogram_numeric_legacy(c0, 2)",
-        expectedDouble({{static_cast<double>(value), 1}}));
   }
 }
 
@@ -227,12 +212,6 @@ TEST_F(HistogramNumericAggregateTest, groupedTypedResults) {
   const auto keys = makeFlatVector<int32_t>({0, 0, 0, 1, 1, 1});
   const auto expectedKeys = makeFlatVector<int32_t>({0, 1});
   const auto heights = makeConstant<double>(1, 6);
-  const auto legacyBins = makeArrayVector(
-      {0, 3},
-      makeRowVector(
-          {"x", "y"},
-          {makeFlatVector<double>({-2, 1, 4, 10, 20, 30}), heights}));
-  const auto legacyExpected = makeRowVector({expectedKeys, legacyBins});
   for (const auto& centers : values) {
     SCOPED_TRACE(centers->type()->toString());
     const auto input = makeRowVector({keys, centers});
@@ -240,72 +219,64 @@ TEST_F(HistogramNumericAggregateTest, groupedTypedResults) {
     const auto bins =
         makeArrayVector({0, 3}, makeRowVector({"x", "y"}, {centers, heights}));
     const auto expected = makeRowVector({expectedKeys, bins});
-    for (const auto* name : {"histogram_numeric", "histogram_numeric_legacy"}) {
-      SCOPED_TRACE(name);
-      const auto expression = fmt::format("{}(c1, INTEGER '3')", name);
-      const auto& result = std::string_view(name) == "histogram_numeric"
-          ? expected
-          : legacyExpected;
-      AggregationTester(*this)
-          .inputs(batches)
-          .groupBy({"c0"})
-          .aggregates({expression})
-          .assertResults(result);
+    const std::string expression = "histogram_numeric(c1, INTEGER '3')";
+    AggregationTester(*this)
+        .inputs(batches)
+        .groupBy({"c0"})
+        .aggregates({expression})
+        .assertResults(expected);
 
-      // These distinct inputs never trim, so results are order-independent even
-      // though the aggregate's metadata disables automatic spill/streaming
-      // tests.
-      {
-        SCOPED_TRACE("Single with spilling");
-        core::PlanNodeId aggregationNodeId;
-        const auto plan = PlanBuilder()
-                              .values(batches)
-                              .singleAggregation({"c0"}, {expression})
-                              .capturePlanNodeId(aggregationNodeId)
-                              .planNode();
-        const auto spillDirectory =
-            common::testutil::TempDirectoryPath::create();
-        exec::TestScopedSpillInjection scopedSpillInjection(100);
-        const auto task =
-            AssertQueryBuilder(plan)
-                .config(core::QueryConfig::kSpillEnabled, true)
-                .config(core::QueryConfig::kAggregationSpillEnabled, true)
-                .spillDirectory(spillDirectory->getPath())
-                .assertResults(result);
-        EXPECT_GT(
-            exec::toPlanStats(task->taskStats())
-                .at(aggregationNodeId)
-                .spilledBytes,
-            0);
-      }
+    // These distinct inputs never trim, so results are order-independent even
+    // though the aggregate's metadata disables automatic spill/streaming
+    // tests.
+    {
+      SCOPED_TRACE("Single with spilling");
+      core::PlanNodeId aggregationNodeId;
+      const auto plan = PlanBuilder()
+                            .values(batches)
+                            .singleAggregation({"c0"}, {expression})
+                            .capturePlanNodeId(aggregationNodeId)
+                            .planNode();
+      const auto spillDirectory = common::testutil::TempDirectoryPath::create();
+      exec::TestScopedSpillInjection scopedSpillInjection(100);
+      const auto task =
+          AssertQueryBuilder(plan)
+              .config(core::QueryConfig::kSpillEnabled, true)
+              .config(core::QueryConfig::kAggregationSpillEnabled, true)
+              .spillDirectory(spillDirectory->getPath())
+              .assertResults(expected);
+      EXPECT_GT(
+          exec::toPlanStats(task->taskStats())
+              .at(aggregationNodeId)
+              .spilledBytes,
+          0);
+    }
 
-      {
-        SCOPED_TRACE("Streaming single");
-        const auto plan = PlanBuilder()
-                              .values(batches)
-                              .streamingAggregation(
-                                  {"c0"},
-                                  {expression},
-                                  {},
-                                  core::AggregationNode::Step::kSingle,
-                                  false)
-                              .planNode();
-        AssertQueryBuilder(plan).assertResults(result);
-      }
+    {
+      SCOPED_TRACE("Streaming single");
+      const auto plan = PlanBuilder()
+                            .values(batches)
+                            .streamingAggregation(
+                                {"c0"},
+                                {expression},
+                                {},
+                                core::AggregationNode::Step::kSingle,
+                                false)
+                            .planNode();
+      AssertQueryBuilder(plan).assertResults(expected);
+    }
 
-      for (const auto intermediate : {false, true}) {
-        SCOPED_TRACE(
-            fmt::format(
-                "Streaming partial + final, intermediate={}", intermediate));
-        PlanBuilder builder;
-        builder.values(batches).partialStreamingAggregation(
-            {"c0"}, {expression});
-        if (intermediate) {
-          builder.intermediateAggregation();
-        }
-        builder.finalAggregation();
-        AssertQueryBuilder(builder.planNode()).assertResults(result);
+    for (const auto intermediate : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "Streaming partial + final, intermediate={}", intermediate));
+      PlanBuilder builder;
+      builder.values(batches).partialStreamingAggregation({"c0"}, {expression});
+      if (intermediate) {
+        builder.intermediateAggregation();
       }
+      builder.finalAggregation();
+      AssertQueryBuilder(builder.planNode()).assertResults(expected);
     }
   }
 }
@@ -315,23 +286,16 @@ TEST_F(HistogramNumericAggregateTest, companions) {
   const auto input =
       makeRowVector({makeFlatVector<int32_t>({0, 0, 0, 1, 1, 1}), centers});
   const auto heights = makeConstant<double>(1, 6);
-  for (const auto* name : {"histogram_numeric", "histogram_numeric_legacy"}) {
-    SCOPED_TRACE(name);
-    VectorPtr outputCenters = std::string_view(name) == "histogram_numeric"
-        ? VectorPtr(centers)
-        : makeFlatVector<double>({-2, 1, 4, 10, 20, 30});
-    const auto expected = makeRowVector({
-        makeFlatVector<int32_t>({0, 1}),
-        makeArrayVector(
-            {0, 3}, makeRowVector({"x", "y"}, {outputCenters, heights})),
-    });
-    AggregationTester(*this)
-        .inputs(split(input, 3))
-        .groupBy({"c0"})
-        .aggregates({fmt::format("{}(c1, INTEGER '3')", name)})
-        .withCompanion()
-        .assertResults(expected);
-  }
+  const auto expected = makeRowVector({
+      makeFlatVector<int32_t>({0, 1}),
+      makeArrayVector({0, 3}, makeRowVector({"x", "y"}, {centers, heights})),
+  });
+  AggregationTester(*this)
+      .inputs(split(input, 3))
+      .groupBy({"c0"})
+      .aggregates({"histogram_numeric(c1, INTEGER '3')"})
+      .withCompanion()
+      .assertResults(expected);
 }
 
 TEST_F(HistogramNumericAggregateTest, trimmingNarrowsIntegralCenters) {
@@ -388,10 +352,6 @@ TEST_F(HistogramNumericAggregateTest, timestampCentersAtMicrosecondLimits) {
           .aggregates({"histogram_numeric(c0, INTEGER '2')"})
           .withCompanion()
           .assertResults(expected);
-      assertSingle(
-          input,
-          "histogram_numeric_legacy(c0, 2)",
-          expectedDouble({{static_cast<double>(value.toMicros()), 1}}));
     }
   }
 }
@@ -411,18 +371,13 @@ TEST_F(HistogramNumericAggregateTest, rejectsInvalidTimestampInputs) {
     for (const auto& [value, message] : cases) {
       const auto input =
           makeRowVector({makeFlatVector<Timestamp>({value}, type)});
-      for (const auto* name :
-           {"histogram_numeric", "histogram_numeric_legacy"}) {
-        SCOPED_TRACE(name);
-        const auto plan =
-            PlanBuilder()
-                .values({input})
-                .singleAggregation(
-                    {}, {fmt::format("{}(c0, INTEGER '2')", name)})
-                .planNode();
-        VELOX_ASSERT_USER_THROW(
-            AssertQueryBuilder(plan).copyResults(pool()), message);
-      }
+      const auto plan =
+          PlanBuilder()
+              .values({input})
+              .singleAggregation({}, {"histogram_numeric(c0, INTEGER '2')"})
+              .planNode();
+      VELOX_ASSERT_USER_THROW(
+          AssertQueryBuilder(plan).copyResults(pool()), message);
     }
   }
 }
@@ -448,29 +403,25 @@ TEST_F(HistogramNumericAggregateTest, companionsPreserveEmptyCapacity) {
            makeRowVector({makeNullableFlatVector<double>({std::nullopt})}),
            makeRowVector({makeFlatVector<double>({1, 2, 3})}),
        }) {
-    for (const auto* name : {"histogram_numeric", "histogram_numeric_legacy"}) {
-      for (const auto masked : {false, true}) {
-        SCOPED_TRACE(
-            fmt::format("{}: {} rows, masked={}", name, input->size(), masked));
-        if (!masked && input->size() == 3) {
-          continue;
-        }
-        PlanBuilder builder;
-        builder.values({input}).project({"c0", "false AS keep"});
-        builder.singleAggregation(
-            {},
-            {fmt::format("{}_partial(c0, INTEGER '3')", name)},
-            masked ? std::vector<std::string>{"keep"}
-                   : std::vector<std::string>{});
-        AssertQueryBuilder(builder.planNode()).assertResults(expected);
-        builder.singleAggregation({}, {fmt::format("{}_merge(a0)", name)});
-        AssertQueryBuilder(builder.planNode()).assertResults(expected);
-        builder.singleAggregation(
-            {},
-            {fmt::format(
-                "{}_merge_extract_array_row_double_double_endrow(a0)", name)});
-        AssertQueryBuilder(builder.planNode()).assertResults(expectedNull);
+    for (const auto masked : {false, true}) {
+      SCOPED_TRACE(fmt::format("{} rows, masked={}", input->size(), masked));
+      if (!masked && input->size() == 3) {
+        continue;
       }
+      PlanBuilder builder;
+      builder.values({input}).project({"c0", "false AS keep"});
+      builder.singleAggregation(
+          {},
+          {"histogram_numeric_partial(c0, INTEGER '3')"},
+          masked ? std::vector<std::string>{"keep"}
+                 : std::vector<std::string>{});
+      AssertQueryBuilder(builder.planNode()).assertResults(expected);
+      builder.singleAggregation({}, {"histogram_numeric_merge(a0)"});
+      AssertQueryBuilder(builder.planNode()).assertResults(expected);
+      builder.singleAggregation(
+          {},
+          {"histogram_numeric_merge_extract_array_row_double_double_endrow(a0)"});
+      AssertQueryBuilder(builder.planNode()).assertResults(expectedNull);
     }
   }
 }
@@ -480,49 +431,35 @@ TEST_F(HistogramNumericAggregateTest, companionsValidateEmptyNumBins) {
            makeRowVector({makeFlatVector<double>({})}),
            makeRowVector({makeNullableFlatVector<double>({std::nullopt})}),
        }) {
-    for (const auto* name : {"histogram_numeric", "histogram_numeric_legacy"}) {
-      SCOPED_TRACE(fmt::format("{}: {} rows", name, input->size()));
-      for (const auto* numBins : {"INTEGER '1'", "CAST(NULL AS INTEGER)"}) {
-        auto plan =
-            PlanBuilder()
-                .values({input})
-                .singleAggregation(
-                    {}, {fmt::format("{}_partial(c0, {})", name, numBins)})
-                .planNode();
-        VELOX_ASSERT_USER_THROW(
-            AssertQueryBuilder(plan).copyResults(pool()),
-            std::string_view(numBins) == "INTEGER '1'"
-                ? "numBins must be at least 2"
-                : "histogram_numeric numBins argument must not be null");
-      }
+    SCOPED_TRACE(fmt::format("{} rows", input->size()));
+    for (const auto* numBins : {"INTEGER '1'", "CAST(NULL AS INTEGER)"}) {
+      auto plan =
+          PlanBuilder()
+              .values({input})
+              .singleAggregation(
+                  {},
+                  {fmt::format("histogram_numeric_partial(c0, {})", numBins)})
+              .planNode();
+      VELOX_ASSERT_USER_THROW(
+          AssertQueryBuilder(plan).copyResults(pool()),
+          std::string_view(numBins) == "INTEGER '1'"
+              ? "numBins must be at least 2"
+              : "histogram_numeric numBins argument must not be null");
     }
   }
 }
 
 TEST_F(HistogramNumericAggregateTest, validatesNumBinsWithoutNonNullValues) {
-  auto input = makeRowVector({makeNullableFlatVector<double>({std::nullopt})});
-  parse::ParseOptions options;
-  options.parseIntegerAsBigint = false;
-
-  auto singlePlan = PlanBuilder()
-                        .setParseOptions(options)
-                        .values({input})
-                        .singleAggregation({}, {"histogram_numeric(c0, 1)"})
-                        .planNode();
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(singlePlan).copyResults(pool()),
-      "numBins must be at least 2");
-
-  auto partialFinalPlan =
-      PlanBuilder()
-          .setParseOptions(options)
-          .values({input})
-          .partialAggregation({}, {"histogram_numeric(c0, 1)"})
-          .finalAggregation()
-          .planNode();
-  VELOX_ASSERT_THROW(
-      AssertQueryBuilder(partialFinalPlan).copyResults(pool()),
-      "numBins must be at least 2");
+  for (const auto& input : {
+           makeRowVector({makeFlatVector<double>({})}),
+           makeRowVector({makeNullableFlatVector<double>({std::nullopt})}),
+       }) {
+    SCOPED_TRACE(input->size());
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates({"histogram_numeric(c0, INTEGER '1')"})
+        .assertError("numBins must be at least 2");
+  }
 }
 
 TEST_F(HistogramNumericAggregateTest, windowTypedNumBins) {
@@ -533,21 +470,17 @@ TEST_F(HistogramNumericAggregateTest, windowTypedNumBins) {
           {"x", "y"},
           {makeFlatVector<double>({0, 0, 1, 0, 1.5, 1, 3}),
            makeFlatVector<double>({1, 1, 1, 1, 2, 3, 1})}))});
-  for (const auto* name : {"histogram_numeric", "histogram_numeric_legacy"}) {
-    SCOPED_TRACE(name);
-    for (const auto* literal : {"INTEGER '2'", "CAST('2' AS INTEGER)"}) {
-      SCOPED_TRACE(literal);
-      const auto plan =
-          PlanBuilder()
-              .values({input})
-              .window({fmt::format(
-                  "{}(c0, {}) over (order by c0 rows between unbounded preceding and current row)",
-                  name,
-                  literal)})
-              .project({"w0"})
-              .planNode();
-      AssertQueryBuilder(plan).assertResults(expected);
-    }
+  for (const auto* literal : {"INTEGER '2'", "CAST('2' AS INTEGER)"}) {
+    SCOPED_TRACE(literal);
+    const auto plan =
+        PlanBuilder()
+            .values({input})
+            .window({fmt::format(
+                "histogram_numeric(c0, {}) over (order by c0 rows between unbounded preceding and current row)",
+                literal)})
+            .project({"w0"})
+            .planNode();
+    AssertQueryBuilder(plan).assertResults(expected);
   }
 }
 
@@ -557,26 +490,22 @@ TEST_F(HistogramNumericAggregateTest, windowEmptyFramesValidateNumBins) {
       ARRAY(ROW({"x", "y"}, DOUBLE())), 1, pool())});
   parse::ParseOptions options;
   options.parseIntegerAsBigint = false;
-  for (const auto* name : {"histogram_numeric", "histogram_numeric_legacy"}) {
-    SCOPED_TRACE(name);
-    for (const auto numBins : {1, 2}) {
-      auto plan =
-          PlanBuilder()
-              .setParseOptions(options)
-              .values({input})
-              .window({fmt::format(
-                  "{}(c0, {}) over (order by c0 rows between 1 preceding and 1 preceding)",
-                  name,
-                  numBins)})
-              .project({"w0"})
-              .planNode();
-      if (numBins == 1) {
-        VELOX_ASSERT_THROW(
-            AssertQueryBuilder(plan).copyResults(pool()),
-            "numBins must be at least 2");
-      } else {
-        AssertQueryBuilder(plan).assertResults(expected);
-      }
+  for (const auto numBins : {1, 2}) {
+    auto plan =
+        PlanBuilder()
+            .setParseOptions(options)
+            .values({input})
+            .window({fmt::format(
+                "histogram_numeric(c0, {}) over (order by c0 rows between 1 preceding and 1 preceding)",
+                numBins)})
+            .project({"w0"})
+            .planNode();
+    if (numBins == 1) {
+      VELOX_ASSERT_THROW(
+          AssertQueryBuilder(plan).copyResults(pool()),
+          "numBins must be at least 2");
+    } else {
+      AssertQueryBuilder(plan).assertResults(expected);
     }
   }
 }
@@ -592,13 +521,16 @@ TEST_F(
       {INTEGER(),
        BaseVector::createNullConstant(INTEGER(), 1, pool()),
        std::nullopt}};
-  for (const auto* name : {"histogram_numeric", "histogram_numeric_legacy"}) {
-    SCOPED_TRACE(name);
-    VELOX_ASSERT_USER_THROW(
-        exec::WindowFunction::create(
-            name, args, resultType, false, pool(), &allocator, config),
-        "histogram_numeric numBins argument must not be null");
-  }
+  VELOX_ASSERT_USER_THROW(
+      exec::WindowFunction::create(
+          "histogram_numeric",
+          args,
+          resultType,
+          false,
+          pool(),
+          &allocator,
+          config),
+      "histogram_numeric numBins argument must not be null");
 }
 
 TEST_F(HistogramNumericAggregateTest, decimalCentersUnsupported) {
@@ -637,96 +569,8 @@ TEST_F(HistogramNumericAggregateTest, decimalCentersUnsupported) {
               argTypes,
               step == Step::kPartial ? VARBINARY() : resultType,
               config),
-          "histogram_numeric does not support DECIMAL centers; use "
-          "histogram_numeric_legacy for DOUBLE centers");
+          "histogram_numeric does not support DECIMAL centers");
     }
-  }
-}
-
-TEST_F(HistogramNumericAggregateTest, decimalLegacy) {
-  const std::vector<std::pair<RowVectorPtr, RowVectorPtr>> cases{
-      {makeRowVector({makeFlatVector<int64_t>({125, 250}, DECIMAL(3, 2))}),
-       expectedDouble({{1.25, 1}, {2.5, 1}})},
-      {makeRowVector({makeFlatVector<int64_t>(
-           {999'999'999'999'999'999}, DECIMAL(18, 0))}),
-       expectedDouble({{1e18, 1}})},
-      {makeRowVector({makeFlatVector<int128_t>(
-           {HugeInt::parse("100000000000000000000000")}, DECIMAL(38, 0))}),
-       expectedDouble({{1e23, 1}})},
-  };
-  for (const auto& [input, expected] : cases) {
-    SCOPED_TRACE(input->childAt(0)->type()->toString());
-    AggregationTester(*this)
-        .inputs(input)
-        .aggregates({"histogram_numeric_legacy(c0, INTEGER '2')"})
-        .withCompanion()
-        .assertResults(expected);
-  }
-}
-
-TEST_F(HistogramNumericAggregateTest, decimalLegacyNormalizationBoundaries) {
-  struct TestCase {
-    int32_t precision;
-    int32_t scale;
-    std::string unscaled;
-    double expected;
-  };
-  const std::vector<TestCase> cases{
-      {18, 18, "999999999999999999", 1.0},
-      {18, 18, "-1", -1e-18},
-      {3, 2, "10", 0.1},
-      {1, 1, "0", 0.0},
-      {19, 0, "9999999999999999999", 1e19},
-      {19, 19, "9999999999999999999", 1.0},
-      {38, 0, "99999999999999999999999999999999999999", 1e38},
-      {38, 38, "99999999999999999999999999999999999999", 1.0},
-      {38, 38, "-99999999999999999999999999999999999999", -1.0},
-      {38, 38, "-1", -1e-38},
-      {21,
-       20,
-       "100000000000000011103",
-       std::bit_cast<double>(uint64_t{0x3ff0000000000001})},
-      {21,
-       20,
-       "-100000000000000011103",
-       std::bit_cast<double>(uint64_t{0xbff0000000000001})},
-      {21, 20, "100000000000000011102", 1.0},
-      {16, 0, "9007199254740992", 0x1p53},
-      {16, 0, "-9007199254740992", -0x1p53},
-      {23, 22, "9007199254740992", 9.007199254740992e-7},
-      {24, 23, "9007199254740992", 9.007199254740992e-8},
-      {23, 22, "9007199254740993", 9.007199254740993e-7},
-  };
-  for (const auto& test : cases) {
-    SCOPED_TRACE(
-        fmt::format(
-            "DECIMAL({}, {}): {}", test.precision, test.scale, test.unscaled));
-    const auto type = DECIMAL(test.precision, test.scale);
-    const auto unscaled = HugeInt::parse(test.unscaled);
-    const VectorPtr values = type->isShortDecimal()
-        ? VectorPtr(
-              makeFlatVector<int64_t>({static_cast<int64_t>(unscaled)}, type))
-        : makeFlatVector<int128_t>({unscaled}, type);
-    const auto input = makeRowVector({values});
-    AggregationTester(*this)
-        .inputs(input)
-        .aggregates({"histogram_numeric_legacy(c0, INTEGER '2')"})
-        .withCompanion()
-        .assertResults(expectedDouble({{test.expected, 1}}));
-    const auto plan = PlanBuilder()
-                          .values({input})
-                          .singleAggregation(
-                              {}, {"histogram_numeric_legacy(c0, INTEGER '2')"})
-                          .planNode();
-    const auto result = AssertQueryBuilder(plan).copyResults(pool());
-    const auto* bins = result->childAt(0)->as<ArrayVector>();
-    ASSERT_FALSE(bins->isNullAt(0));
-    ASSERT_EQ(bins->sizeAt(0), 1);
-    const auto* rows = bins->elements()->as<RowVector>();
-    DecodedVector centers(*rows->childAt(0));
-    EXPECT_EQ(
-        std::bit_cast<uint64_t>(centers.valueAt<double>(bins->offsetAt(0))),
-        std::bit_cast<uint64_t>(test.expected));
   }
 }
 

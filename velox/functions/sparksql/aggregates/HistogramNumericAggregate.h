@@ -20,9 +20,8 @@
 
 namespace facebook::velox::functions::aggregate::sparksql {
 
-/// Registers Spark-compatible histogram_numeric aggregates. The canonical
-/// function preserves the input center type, excluding Decimal. The legacy
-/// function accepts Decimal inputs and returns DOUBLE centers.
+/// Registers Spark-compatible histogram_numeric with input-typed centers,
+/// excluding Decimal.
 void registerHistogramNumericAggregates(
     const std::string& prefix,
     bool withCompanionFunctions,
