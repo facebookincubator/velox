@@ -24,7 +24,7 @@
 // versions, FlatBuffers among them, so its golden digests hold only for the
 // internal build. The published statistics are compared with the set it
 // published then. Managed Compression output depends on configs served at run
-// time, so it is not covered here.
+// time, so its compress calls are checked by an internal test instead.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
