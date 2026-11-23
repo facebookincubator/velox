@@ -779,39 +779,70 @@ TEST_F(UcxExchangeTaskTest, lateConsumerOfFailedProducerFails) {
 
 // A consumer that stops reading early, here after a LIMIT, has all it needs.
 // It must finish successfully, and cancelling its producer afterwards, as the
-// coordinator does, must leave the Communicator able to serve later cases.
+// coordinator does, must leave the Communicator able to serve later cases. The
+// consumer closes before its streams end, which releases its servers; an
+// intra-node server waits for a page that the consumer never reads.
 TEST_F(UcxExchangeTaskTest, limitBeforeProducerFinishesStillSucceeds) {
   registerSerdes();
   exec::ExchangeTransportRegistry::unregisterAll();
   exec::OutputTransportRegistry::unregisterAll();
   CudfRegistration cudfRegistration;
-  const auto taskPrefix = getUniqueTaskPrefix();
-  TaskShuffleResults results;
-  StartedTasks startedTasks(&results);
 
-  const auto producerId = taskPrefix + "endlessProducer";
-  auto producer = startEndlessProducer(producerId, pool_.get());
-  startedTasks.add(producer);
+  for (const bool intraNode : {false, true}) {
+    SCOPED_TRACE(intraNode ? "intra-node" : "remote");
+    ScopedIntraNodeExchange intraNodeExchange(intraNode);
+    const auto taskPrefix = getUniqueTaskPrefix();
+    {
+      TaskShuffleResults results;
+      StartedTasks startedTasks(&results);
 
-  core::PlanNodeId exchangeNodeId;
-  auto consumer = makeTaskShuffleTask(
-      taskPrefix + "limitedConsumer",
-      ucxConsumerPlan(/*limit=*/10, exchangeNodeId),
-      results.consumer());
-  startedTasks.add(consumer);
-  consumer->start(1);
-  consumer->addSplit(exchangeNodeId, remoteSplit(producerId, 0));
-  consumer->noMoreSplits(exchangeNodeId);
+      const auto producerId = taskPrefix + "endlessProducer";
+      auto producer = startEndlessProducer(producerId, pool_.get());
+      startedTasks.add(producer);
 
-  ASSERT_TRUE(
-      exec::test::TaskMonitor::waitForCompletion(
-          *consumer, kTaskShuffleMaxWaitMicros))
-      << exec::taskStateString(consumer->state()) << ": "
-      << consumer->errorMessage();
-  EXPECT_EQ(totalRows(results.batches()), 10);
+      core::PlanNodeId exchangeNodeId;
+      auto consumer = makeTaskShuffleTask(
+          taskPrefix + "limitedConsumer",
+          ucxConsumerPlan(/*limit=*/10, exchangeNodeId),
+          results.consumer());
+      startedTasks.add(consumer);
+      consumer->start(1);
+      consumer->addSplit(exchangeNodeId, remoteSplit(producerId, 0));
+      consumer->noMoreSplits(exchangeNodeId);
 
-  EXPECT_TRUE(producer->requestCancel().wait(
-      std::chrono::microseconds(kTaskShuffleMaxWaitMicros)));
+      ASSERT_TRUE(
+          exec::test::TaskMonitor::waitForCompletion(
+              *consumer, kTaskShuffleMaxWaitMicros))
+          << exec::taskStateString(consumer->state()) << ": "
+          << consumer->errorMessage();
+      EXPECT_EQ(totalRows(results.batches()), 10);
+
+      EXPECT_TRUE(producer->requestCancel().wait(
+          std::chrono::microseconds(kTaskShuffleMaxWaitMicros)));
+    }
+
+    // A later exchange still gets all its rows.
+    const auto producers = makeInterleavedProducers(
+        pool_.get(),
+        taskPrefix + "laterProducer",
+        /*numProducers=*/1,
+        /*numRowsPerProducer=*/64);
+    core::PlanNodeId exchangeNodeId;
+    const auto consumerPlan =
+        ucxConsumerPlan(/*limit=*/std::nullopt, exchangeNodeId);
+    const auto actual = runTaskShuffle(
+        std::string{core::TransportKind::kUcx},
+        producers,
+        consumerPlan,
+        exchangeNodeId,
+        taskPrefix + "laterConsumer",
+        [this](const std::string& taskId) { return remoteSplit(taskId, 0); },
+        pool_.get(),
+        /*numConsumerDrivers=*/1,
+        /*consumerStats=*/nullptr);
+    EXPECT_TRUE(
+        exec::test::assertEqualResults(allBatchesOf(producers), actual));
+  }
 }
 
 // A fragment whose output layout is empty ships rows that carry no columns --
