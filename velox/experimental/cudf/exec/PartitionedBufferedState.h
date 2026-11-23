@@ -22,17 +22,44 @@
 
 #include <deque>
 #include <memory>
-#include <optional>
+#include <utility>
 #include <vector>
 
 namespace facebook::velox::cudf_velox {
 
-struct PartitionSpec {
-  int32_t numPartitions;
+// Describes how rows are routed to targets. A hash of the keys puts every row
+// in one of 'numBuckets' buckets, the way cudf::hash_partition() assigns rows
+// to that many partitions, and target i takes the buckets
+// [bucketBounds[i], bucketBounds[i + 1]).
+//
+// Every routing of one PartitionedBufferedState uses the same keys, seed and
+// bucket count, so a row is in the same bucket whenever it is routed. Only the
+// bucket bounds differ from one routing to the next.
+struct HashRouting {
   std::vector<cudf::size_type> keyIndices;
-  cudf::hash_id hashId{cudf::hash_id::HASH_MURMUR3};
   uint32_t seed{cudf::DEFAULT_HASH_SEED};
+  int32_t numBuckets{1};
+  // Ascending bucket numbers, one more than there are targets. The routed
+  // rows must all be in the buckets [bucketBounds.front(),
+  // bucketBounds.back()).
+  std::vector<int32_t> bucketBounds;
+
+  int32_t numTargets() const {
+    return static_cast<int32_t>(bucketBounds.size()) - 1;
+  }
 };
+
+// Reorders 'input' so that rows with the same routing target are contiguous.
+// Returns the reordered table and routing.numTargets() + 1 offsets: target i
+// holds rows [offsets[i], offsets[i + 1]). Costs one cudf::hash_partition()
+// of the table, whatever the number of targets.
+[[nodiscard]] std::
+    pair<std::unique_ptr<cudf::table>, std::vector<cudf::size_type>>
+    partitionByHashRouting(
+        cudf::table_view input,
+        const HashRouting& routing,
+        cuda::stream_ref stream,
+        rmm::device_async_resource_ref mr);
 
 struct InputChunk {
   InputChunk() : stream(cudaStream_t{cudaStreamDefault}) {}
@@ -99,19 +126,17 @@ class BufferedStateOps {
   // TODO (dm): This should be part of BufferedState
   virtual uint64_t leafFlatSize(const BufferedState& leaf) const = 0;
 
-  // Partition one prepared chunk according to an internal node's partition
-  // spec and return one child chunk per partition. The input remains valid so
-  // PBS can retry with a different seed if partitioning makes no progress.
-  virtual std::vector<InputChunk> partitionInput(
+  // Split one prepared chunk into one chunk per routing target. The input
+  // remains valid.
+  virtual std::vector<InputChunk> routeInput(
       const InputChunk& input,
-      const PartitionSpec& spec) = 0;
+      const HashRouting& routing) = 0;
 
-  // Split one overflowing leaf into child leaves according to `spec` and
-  // return one child state per partition. The leaf remains valid so PBS can
-  // retry with a different seed if partitioning makes no progress.
+  // Split one leaf into one child state per routing target. The leaf remains
+  // valid.
   virtual std::vector<std::unique_ptr<BufferedState>> repartitionLeaf(
       const BufferedState& leaf,
-      const PartitionSpec& spec) = 0;
+      const HashRouting& routing) = 0;
 
   // Finalize one leaf and return one output batch.
   virtual CudfVectorPtr finalizeLeaf(std::unique_ptr<BufferedState> leaf) = 0;
@@ -120,24 +145,33 @@ class BufferedStateOps {
   virtual const std::vector<cudf::size_type>& keyIndices() const = 0;
 };
 
-// Owns a recursive hash-partition tree for operators that must buffer grouped
-// state until all input is received.
+// Owns hash-partitioned leaves for operators that must buffer grouped state
+// until all input is received.
 //
-// PBS only manages the partition tree and leaf row limits. It does not know
-// the concrete type of state stored in a leaf. The caller supplies a
+// PBS only manages the leaves and their row limits. It does not know the
+// concrete type of state stored in a leaf. The caller supplies a
 // `BufferedStateOps` implementation that defines:
 // - how raw input becomes an `InputChunk`,
 // - what concrete `BufferedState` subclass each leaf holds,
 // - how a chunk is added to a leaf,
 // - how a leaf reports its logical row count,
-// - how prepared input is partitioned at internal nodes,
+// - how prepared input is routed to the leaves,
 // - how an overflowing leaf is repartitioned into child leaves,
 // - and how one leaf is finalized into one output batch.
 //
-// Use PBS when all rows for the same grouping key must continue to route to the
-// same subtree, but one in-memory leaf may grow past a safe row limit. PBS
-// keeps splitting oversized leaves into more hash partitions and then drains
-// one finalized leaf at a time at the end.
+// Use PBS when all rows for the same grouping key must reach the same leaf,
+// but one in-memory leaf may grow past a safe row limit.
+//
+// A hash of the grouping keys puts every row in one of a fixed number of
+// buckets. A leaf holds a contiguous range of buckets, and the leaves together
+// cover all of them. PBS starts with one leaf that holds every bucket and
+// needs no routing. A leaf that overflows is replaced by leaves for parts of
+// its bucket range; no other leaf is touched. Since a row's bucket never
+// changes, an incoming batch is hash partitioned once, straight to its leaves,
+// however often they have been split.
+//
+// The bucket count bounds the number of leaves, and a leaf that holds a single
+// bucket cannot be split.
 //
 // Typical usage:
 // 1. Define a `BufferedStateOps` implementation for the operator.
@@ -151,21 +185,20 @@ class BufferedStateOps {
 // groupby to avoid eager materialization when a permuted view is sufficient.
 class PartitionedBufferedState {
  public:
-  struct Node {
-    size_t leafRows{0};
-    std::unique_ptr<BufferedState> leafState;
-    std::optional<PartitionSpec> partitionSpec;
-    std::vector<std::unique_ptr<Node>> children;
+  // Seed of the routing hash. Differs from the seeds of the exchanges that may
+  // have partitioned the input by the same keys, so that their partitioning
+  // says nothing about the buckets used here.
+  static constexpr uint32_t kDefaultHashSeed =
+      cudf::DEFAULT_HASH_SEED ^ 0xc2b2ae35U;
 
-    bool isLeaf() const {
-      return !partitionSpec.has_value();
-    }
-  };
+  // cudf::hash_partition() has a fast path for up to this many partitions.
+  static constexpr int32_t kDefaultNumBuckets = 1024;
 
   PartitionedBufferedState(
       std::unique_ptr<BufferedStateOps> ops,
       size_t maxRowsPerLeaf,
-      uint32_t initialHashSeed = cudf::DEFAULT_HASH_SEED);
+      int32_t numBuckets = kDefaultNumBuckets,
+      uint32_t hashSeed = kDefaultHashSeed);
 
   void addInput(CudfVectorPtr rawInput);
 
@@ -173,27 +206,37 @@ class PartitionedBufferedState {
 
   bool empty() const;
 
+  // Number of leaves, including the ones that hold no rows.
+  size_t numLeaves() const {
+    return leaves_.size();
+  }
+
  private:
-  void insert(Node& node, InputChunk bufferedInput);
+  struct Leaf {
+    // The leaf holds the rows of the buckets [bucketBegin, bucketEnd).
+    int32_t bucketBegin{0};
+    int32_t bucketEnd{0};
+    size_t rows{0};
+    std::unique_ptr<BufferedState> state;
+  };
 
-  void splitLeaf(Node& node);
+  void insert(size_t leafIndex, InputChunk bufferedInput);
 
-  void splitLeafAndAddInput(Node& node, InputChunk bufferedInput);
+  void splitLeafAndAddInput(size_t leafIndex, InputChunk bufferedInput);
 
-  CudfVectorPtr drainNextOutput(Node& node);
+  void ensureLeafWithinLimit(size_t leafIndex);
 
-  PartitionSpec makePartitionSpec(size_t totalRows);
-
-  void ensureLeafWithinLimit(Node& node);
-
-  std::vector<InputChunk> partitionInput(
-      const InputChunk& input,
-      const PartitionSpec& spec);
+  // Rebuilds the bucket bounds of the leaves after a split.
+  void updateRouting();
 
   std::unique_ptr<BufferedStateOps> ops_;
   const size_t maxRowsPerLeaf_;
-  std::unique_ptr<Node> root_;
-  uint32_t nextHashSeed_;
+  // In bucket order.
+  std::vector<Leaf> leaves_;
+  // Routes an incoming batch to 'leaves_'.
+  HashRouting routing_;
+  bool routingStale_{false};
+  size_t nextLeafToDrain_{0};
 };
 
 // Owns one active leaf for operators that may flush early instead of

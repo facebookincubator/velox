@@ -14,64 +14,70 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/PartitionedBufferedState.h"
-#include "velox/experimental/cudf/exec/Utilities.h"
 
+#include <algorithm>
+#include <iterator>
 #include <limits>
 
 namespace facebook::velox::cudf_velox {
-namespace {
 
-// Avoid spinning forever when a single partition key cannot be split.
-constexpr uint32_t kMaxSplitSeedAttempts = 4;
+std::pair<std::unique_ptr<cudf::table>, std::vector<cudf::size_type>>
+partitionByHashRouting(
+    cudf::table_view input,
+    const HashRouting& routing,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  VELOX_CHECK_GE(routing.numTargets(), 1);
+  VELOX_CHECK_GE(routing.bucketBounds.front(), 0);
+  VELOX_CHECK_LE(routing.bucketBounds.back(), routing.numBuckets);
 
-bool nodeEmpty(const PartitionedBufferedState::Node& node) {
-  if (node.isLeaf()) {
-    return node.leafState == nullptr;
+  // One pass groups the rows by bucket. A target is a range of buckets, so
+  // its rows are contiguous in the result.
+  // TODO: cudf::hash_partition_indices() (cudf#20891) returns the row indices
+  // grouped by bucket instead of the reordered table. With it the rows of one
+  // target at a time could be gathered here.
+  auto [partitioned, bucketOffsets] = cudf::hash_partition(
+      input,
+      routing.keyIndices,
+      routing.numBuckets,
+      cudf::hash_id::HASH_MURMUR3,
+      routing.seed,
+      stream,
+      mr);
+  VELOX_CHECK_EQ(bucketOffsets.size(), routing.numBuckets + 1);
+
+  std::vector<cudf::size_type> offsets;
+  offsets.reserve(routing.bucketBounds.size());
+  for (auto bucket : routing.bucketBounds) {
+    offsets.push_back(bucketOffsets[bucket]);
   }
-
-  for (const auto& child : node.children) {
-    if (child && !nodeEmpty(*child)) {
-      return false;
-    }
-  }
-  return true;
+  VELOX_CHECK_EQ(
+      offsets.front(), 0, "Rows below the first bucket of the routing");
+  VELOX_CHECK_EQ(
+      offsets.back(),
+      input.num_rows(),
+      "Rows above the last bucket of the routing");
+  return {std::move(partitioned), std::move(offsets)};
 }
-
-size_t countNonEmptyChildren(
-    const std::vector<std::unique_ptr<BufferedState>>& storedPartitions,
-    const std::vector<InputChunk>& incomingPartitions,
-    const BufferedStateOps& ops) {
-  VELOX_CHECK_EQ(storedPartitions.size(), incomingPartitions.size());
-
-  size_t nonEmptyChildren = 0;
-  for (size_t i = 0; i < incomingPartitions.size(); ++i) {
-    if ((storedPartitions[i] && ops.leafRowCount(*storedPartitions[i]) > 0) ||
-        !incomingPartitions[i].empty()) {
-      ++nonEmptyChildren;
-    }
-  }
-  return nonEmptyChildren;
-}
-
-struct SplitLeafAttempt {
-  PartitionSpec spec;
-  std::vector<std::unique_ptr<BufferedState>> storedPartitions;
-  std::vector<InputChunk> incomingPartitions;
-};
-
-} // namespace
 
 PartitionedBufferedState::PartitionedBufferedState(
     std::unique_ptr<BufferedStateOps> ops,
     size_t maxRowsPerLeaf,
-    uint32_t initialHashSeed)
-    : ops_(std::move(ops)),
-      maxRowsPerLeaf_(maxRowsPerLeaf),
-      root_(std::make_unique<Node>()),
-      nextHashSeed_(initialHashSeed) {
+    int32_t numBuckets,
+    uint32_t hashSeed)
+    : ops_(std::move(ops)), maxRowsPerLeaf_(maxRowsPerLeaf) {
   VELOX_CHECK_NOT_NULL(ops_);
   VELOX_CHECK_GT(maxRowsPerLeaf_, 0);
+  VELOX_CHECK_GE(numBuckets, 2);
+  // One leaf holds every bucket.
+  leaves_.emplace_back();
+  leaves_.back().bucketEnd = numBuckets;
+  routing_.keyIndices = ops_->keyIndices();
+  routing_.seed = hashSeed;
+  routing_.numBuckets = numBuckets;
+  updateRouting();
 }
 
 void PartitionedBufferedState::addInput(CudfVectorPtr rawInput) {
@@ -79,179 +85,199 @@ void PartitionedBufferedState::addInput(CudfVectorPtr rawInput) {
     return;
   }
 
-  auto compacted = ops_->prepareInput(std::move(rawInput));
-  if (compacted.empty()) {
+  auto prepared = ops_->prepareInput(std::move(rawInput));
+  if (prepared.empty()) {
+    return;
+  }
+  nextLeafToDrain_ = 0;
+
+  if (leaves_.size() == 1) {
+    insert(0, std::move(prepared));
     return;
   }
 
-  insert(*root_, std::move(compacted));
+  if (routingStale_) {
+    updateRouting();
+  }
+  // One hash partitioning pass takes the batch to its leaves, however often
+  // they have been split.
+  auto chunks = ops_->routeInput(prepared, routing_);
+  VELOX_CHECK_EQ(chunks.size(), leaves_.size());
+  prepared = InputChunk{};
+  // A leaf that splits puts its children in its place, which moves the leaves
+  // after it. Going backwards keeps the leaves that still wait for their
+  // chunk where they were.
+  for (auto i = chunks.size(); i-- > 0;) {
+    insert(i, std::move(chunks[i]));
+  }
 }
 
 CudfVectorPtr PartitionedBufferedState::drainNextOutput() {
-  return drainNextOutput(*root_);
+  for (; nextLeafToDrain_ < leaves_.size(); ++nextLeafToDrain_) {
+    auto& leaf = leaves_[nextLeafToDrain_];
+    if (!leaf.state) {
+      continue;
+    }
+    leaf.rows = 0;
+    if (auto output = ops_->finalizeLeaf(std::move(leaf.state))) {
+      ++nextLeafToDrain_;
+      return output;
+    }
+  }
+  return nullptr;
 }
 
 bool PartitionedBufferedState::empty() const {
-  return nodeEmpty(*root_);
+  return std::none_of(leaves_.begin(), leaves_.end(), [](const Leaf& leaf) {
+    return leaf.state != nullptr;
+  });
 }
 
-void PartitionedBufferedState::insert(Node& node, InputChunk bufferedInput) {
+void PartitionedBufferedState::insert(
+    size_t leafIndex,
+    InputChunk bufferedInput) {
   if (bufferedInput.empty()) {
     return;
   }
 
-  // If node is not a leaf, it is an internal node and any input has to be
-  // partitioned and inserted into child nodes.
-  if (!node.isLeaf()) {
-    auto partitions = partitionInput(bufferedInput, *node.partitionSpec);
-    VELOX_CHECK_EQ(partitions.size(), node.children.size());
-    for (size_t i = 0; i < partitions.size(); ++i) {
-      if (!partitions[i].empty()) {
-        insert(*node.children[i], std::move(partitions[i]));
-      }
+  // If the leaf is empty, initialize it with the input.
+  if (!leaves_[leafIndex].state) {
+    auto state = ops_->createLeaf(std::move(bufferedInput));
+    if (state) {
+      auto& leaf = leaves_[leafIndex];
+      leaf.rows = ops_->leafRowCount(*state);
+      leaf.state = std::move(state);
+      ensureLeafWithinLimit(leafIndex);
     }
     return;
   }
 
-  // If node is a leaf but empty, initialize it with the input.
-  if (!node.leafState) {
-    node.leafState = ops_->createLeaf(std::move(bufferedInput));
-    if (node.leafState) {
-      node.leafRows = ops_->leafRowCount(*node.leafState);
-      ensureLeafWithinLimit(node);
-    }
-    return;
-  }
-
-  // If node is a leaf and not empty, check if the input can be added to the
-  // leaf. If not, split the leaf and insert the input into the new subtree.
-  const auto projectedRows =
-      ops_->estimatedMergedRowUpperBound(*node.leafState, bufferedInput);
+  // If the leaf is not empty, check if the input can be added to it. If not,
+  // split the leaf and the input together.
+  const auto projectedRows = ops_->estimatedMergedRowUpperBound(
+      *leaves_[leafIndex].state, bufferedInput);
   if (projectedRows > maxRowsPerLeaf_) {
-    splitLeafAndAddInput(node, std::move(bufferedInput));
+    splitLeafAndAddInput(leafIndex, std::move(bufferedInput));
     return;
   }
 
-  ops_->addInputToLeaf(*node.leafState, std::move(bufferedInput));
-  node.leafRows = ops_->leafRowCount(*node.leafState);
-  ensureLeafWithinLimit(node);
-}
-
-void PartitionedBufferedState::splitLeaf(Node& node) {
-  splitLeafAndAddInput(node, InputChunk{});
+  auto& leaf = leaves_[leafIndex];
+  ops_->addInputToLeaf(*leaf.state, std::move(bufferedInput));
+  leaf.rows = ops_->leafRowCount(*leaf.state);
+  ensureLeafWithinLimit(leafIndex);
 }
 
 void PartitionedBufferedState::splitLeafAndAddInput(
-    Node& node,
+    size_t leafIndex,
     InputChunk bufferedInput) {
-  VELOX_CHECK(node.isLeaf());
-  VELOX_CHECK(node.leafState || !bufferedInput.empty());
+  VELOX_CHECK_NOT_NULL(leaves_[leafIndex].state);
 
-  const auto totalRows = node.leafRows + bufferedInput.size();
-  auto splitAttempt = [&]() {
-    for (uint32_t attempt = 1;; ++attempt) {
-      auto spec = makePartitionSpec(totalRows);
-      auto storedPartitions = node.leafState
-          ? ops_->repartitionLeaf(*node.leafState, spec)
-          : std::vector<std::unique_ptr<BufferedState>>(spec.numPartitions);
-      auto incomingPartitions = partitionInput(bufferedInput, spec);
-      const auto nonEmptyChildren =
-          countNonEmptyChildren(storedPartitions, incomingPartitions, *ops_);
-
-      if (nonEmptyChildren > 1) {
-        // Found a partition spec that can split the leaf into more than one
-        // child. If nonEmptyChildren = 1, then the partition spec could not
-        // split and we'd have no meaningful progress.
-        return SplitLeafAttempt{
-            std::move(spec),
-            std::move(storedPartitions),
-            std::move(incomingPartitions)};
-      }
-
-      VELOX_CHECK_LT(
-          attempt,
-          kMaxSplitSeedAttempts,
-          "Partitioning buffered state made no progress after {} hash seed "
-          "attempts: {} rows exceeded the per-leaf limit of {} rows using {} "
-          "hash partitions. This can happen when every row has the same "
-          "partition key.",
-          kMaxSplitSeedAttempts,
-          totalRows,
-          maxRowsPerLeaf_,
-          spec.numPartitions);
-    }
-  }();
-
-  node.leafRows = 0;
-  node.leafState.reset();
-  node.partitionSpec = splitAttempt.spec;
-  node.children.clear();
-  node.children.reserve(splitAttempt.spec.numPartitions);
-  for (int32_t i = 0; i < splitAttempt.spec.numPartitions; ++i) {
-    node.children.push_back(std::make_unique<Node>());
-  }
-
-  for (size_t i = 0; i < node.children.size(); ++i) {
-    if (splitAttempt.storedPartitions[i]) {
-      auto& child = *node.children[i];
-      child.leafRows = ops_->leafRowCount(*splitAttempt.storedPartitions[i]);
-      child.leafState = std::move(splitAttempt.storedPartitions[i]);
-      ensureLeafWithinLimit(child);
-    }
-    if (!splitAttempt.incomingPartitions[i].empty()) {
-      insert(*node.children[i], std::move(splitAttempt.incomingPartitions[i]));
-    }
-  }
-}
-
-CudfVectorPtr PartitionedBufferedState::drainNextOutput(Node& node) {
-  if (!node.isLeaf()) {
-    for (auto& child : node.children) {
-      if (child) {
-        auto output = drainNextOutput(*child);
-        if (output) {
-          return output;
-        }
-      }
-    }
-    return nullptr;
-  }
-
-  if (!node.leafState) {
-    return nullptr;
-  }
-
-  node.leafRows = 0;
-  return ops_->finalizeLeaf(std::move(node.leafState));
-}
-
-PartitionSpec PartitionedBufferedState::makePartitionSpec(size_t totalRows) {
+  const auto bucketBegin = leaves_[leafIndex].bucketBegin;
+  const auto bucketEnd = leaves_[leafIndex].bucketEnd;
+  const auto numLeafBuckets = static_cast<size_t>(bucketEnd - bucketBegin);
+  const auto totalRows = leaves_[leafIndex].rows + bufferedInput.size();
   VELOX_CHECK_GT(totalRows, maxRowsPerLeaf_);
 
-  const auto requiredPartitions =
+  if (numLeafBuckets == 1) {
+    // A single bucket cannot be divided. The projected row count is an upper
+    // bound, since input rows whose key the leaf already holds merge into it,
+    // so merge when that is possible and count what is left.
+    auto& leaf = leaves_[leafIndex];
+    if (!bufferedInput.empty() &&
+        totalRows <= std::numeric_limits<cudf::size_type>::max()) {
+      ops_->addInputToLeaf(*leaf.state, std::move(bufferedInput));
+      leaf.rows = ops_->leafRowCount(*leaf.state);
+      bufferedInput = InputChunk{};
+    }
+    VELOX_CHECK(
+        bufferedInput.empty() && leaf.rows <= maxRowsPerLeaf_,
+        "Cannot partition buffered state any further: {} rows exceeded the "
+        "per-leaf limit of {} rows in one of {} hash buckets. This can happen "
+        "when many rows have the same partition key.",
+        totalRows,
+        maxRowsPerLeaf_,
+        routing_.numBuckets);
+    return;
+  }
+
+  // Divide the leaf's buckets into as many equal parts as bring it within
+  // the limit if its rows are spread evenly over them.
+  const auto requiredChildren =
       (totalRows + maxRowsPerLeaf_ - 1) / maxRowsPerLeaf_;
-  const auto numPartitions =
-      std::max<size_t>(2, std::min(requiredPartitions, totalRows));
-  VELOX_CHECK_LE(numPartitions, std::numeric_limits<int32_t>::max());
+  const auto numChildren =
+      std::max<size_t>(2, std::min(requiredChildren, numLeafBuckets));
 
-  return PartitionSpec{
-      static_cast<int32_t>(numPartitions),
-      ops_->keyIndices(),
-      cudf::hash_id::HASH_MURMUR3,
-      nextHashSeed_++};
-}
+  HashRouting split;
+  split.keyIndices = routing_.keyIndices;
+  split.seed = routing_.seed;
+  split.numBuckets = routing_.numBuckets;
+  split.bucketBounds.reserve(numChildren + 1);
+  for (size_t child = 0; child <= numChildren; ++child) {
+    split.bucketBounds.push_back(
+        bucketBegin +
+        static_cast<int32_t>(numLeafBuckets * child / numChildren));
+  }
 
-void PartitionedBufferedState::ensureLeafWithinLimit(Node& node) {
-  if (node.isLeaf() && node.leafState && node.leafRows > maxRowsPerLeaf_) {
-    splitLeaf(node);
+  auto storedPartitions =
+      ops_->repartitionLeaf(*leaves_[leafIndex].state, split);
+  auto incomingPartitions = bufferedInput.empty()
+      ? std::vector<InputChunk>(numChildren)
+      : ops_->routeInput(bufferedInput, split);
+  VELOX_CHECK_EQ(storedPartitions.size(), numChildren);
+  VELOX_CHECK_EQ(incomingPartitions.size(), numChildren);
+  bufferedInput = InputChunk{};
+
+  // The children take the place of the leaf, in bucket order.
+  std::vector<Leaf> children(numChildren);
+  for (size_t child = 0; child < numChildren; ++child) {
+    auto& childLeaf = children[child];
+    childLeaf.bucketBegin = split.bucketBounds[child];
+    childLeaf.bucketEnd = split.bucketBounds[child + 1];
+    if (storedPartitions[child]) {
+      childLeaf.rows = ops_->leafRowCount(*storedPartitions[child]);
+      childLeaf.state = std::move(storedPartitions[child]);
+    }
+  }
+  leaves_.erase(leaves_.begin() + leafIndex);
+  leaves_.insert(
+      leaves_.begin() + leafIndex,
+      std::make_move_iterator(children.begin()),
+      std::make_move_iterator(children.end()));
+  routingStale_ = true;
+
+  // A child that is still over the limit, as when all rows landed in it, is
+  // split again. That moves the children after it, so go backwards.
+  for (auto child = numChildren; child-- > 0;) {
+    const auto childIndex = leafIndex + child;
+    // insert() splits the child again if it does not fit together with its
+    // share of the input, so the child is only checked here when it gets no
+    // input.
+    if (!incomingPartitions[child].empty()) {
+      insert(childIndex, std::move(incomingPartitions[child]));
+    } else {
+      ensureLeafWithinLimit(childIndex);
+    }
   }
 }
 
-std::vector<InputChunk> PartitionedBufferedState::partitionInput(
-    const InputChunk& input,
-    const PartitionSpec& spec) {
-  return input.empty() ? std::vector<InputChunk>(spec.numPartitions)
-                       : ops_->partitionInput(input, spec);
+void PartitionedBufferedState::ensureLeafWithinLimit(size_t leafIndex) {
+  const auto& leaf = leaves_[leafIndex];
+  if (leaf.state && leaf.rows > maxRowsPerLeaf_) {
+    splitLeafAndAddInput(leafIndex, InputChunk{});
+  }
+}
+
+void PartitionedBufferedState::updateRouting() {
+  routing_.bucketBounds.clear();
+  routing_.bucketBounds.reserve(leaves_.size() + 1);
+  for (const auto& leaf : leaves_) {
+    VELOX_DCHECK(
+        routing_.bucketBounds.empty() ||
+        routing_.bucketBounds.back() == leaf.bucketBegin);
+    routing_.bucketBounds.push_back(leaf.bucketBegin);
+  }
+  routing_.bucketBounds.push_back(leaves_.back().bucketEnd);
+  routingStale_ = false;
 }
 
 FlushableBufferedState::FlushableBufferedState(

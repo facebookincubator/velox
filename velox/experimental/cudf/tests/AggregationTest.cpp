@@ -1368,6 +1368,65 @@ TEST_F(AggregationTest, finalAggregationRecursivePartitioning) {
       .assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
 }
 
+// Many more groups than fit in one leaf of the buffered state, so the leaves
+// are split several times and later batches are routed to the split leaves.
+TEST_F(AggregationTest, partitionedBufferedStateDeepSplits) {
+  struct {
+    int32_t maxRowsPerLeaf;
+    int32_t numBatches;
+    int32_t batchSize;
+    int32_t numKeys;
+  } settings[] = {{16, 20, 50, 400}, {4, 40, 4, 100}};
+
+  for (const auto& setting : settings) {
+    SCOPED_TRACE(
+        fmt::format(
+            "maxRowsPerLeaf {} batchSize {}",
+            setting.maxRowsPerLeaf,
+            setting.batchSize));
+    setBatchSizeMaxThreshold(setting.maxRowsPerLeaf);
+    std::vector<RowVectorPtr> vectors;
+    for (int32_t batch = 0; batch < setting.numBatches; ++batch) {
+      vectors.push_back(makeRowVector({
+          makeFlatVector<int64_t>(
+              setting.batchSize,
+              [&](auto row) {
+                return (batch * 31 + row * 7) % setting.numKeys;
+              }),
+          makeFlatVector<int64_t>(
+              setting.batchSize, [&](auto row) { return batch + row; }),
+          makeFlatVector<double>(
+              setting.batchSize, [&](auto row) { return (batch + row) * 0.5; }),
+      }));
+    }
+    createDuckDbTable(vectors);
+
+    const std::vector<std::string> aggregates{
+        "count(1)", "sum(c1)", "avg(c2)", "min(c1)", "max(c2)"};
+    const std::string sql =
+        "SELECT c0, count(1), sum(c1), avg(c2), min(c1), max(c2) "
+        "FROM tmp GROUP BY 1";
+
+    AssertQueryBuilder(duckDbQueryRunner_)
+        .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+        .plan(
+            PlanBuilder()
+                .values(vectors)
+                .partialAggregation({"c0"}, aggregates)
+                .finalAggregation()
+                .planNode())
+        .assertResults(sql);
+
+    AssertQueryBuilder(duckDbQueryRunner_)
+        .plan(
+            PlanBuilder()
+                .values(vectors)
+                .singleAggregation({"c0"}, aggregates)
+                .planNode())
+        .assertResults(sql);
+  }
+}
+
 TEST_F(AggregationTest, companionAggregatesStayOnNonStreamingPathWithRowCap) {
   setBatchSizeMaxThreshold(1);
 

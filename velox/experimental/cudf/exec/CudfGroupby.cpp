@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationState.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -1703,23 +1703,17 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
     return chunk.owner ? chunk.owner->estimateFlatSize() : 0;
   }
 
-  std::vector<InputChunk> partitionInput(
+  std::vector<InputChunk> routeInput(
       const InputChunk& input,
-      const PartitionSpec& spec) override {
+      const HashRouting& routing) override {
     if (input.empty()) {
-      return std::vector<InputChunk>(spec.numPartitions);
+      return std::vector<InputChunk>(routing.numTargets());
     }
 
-    auto [partitionedTable, partitionOffsets] = cudf::hash_partition(
-        input.view,
-        spec.keyIndices,
-        spec.numPartitions,
-        spec.hashId,
-        spec.seed,
-        input.stream,
-        get_output_mr());
+    auto [partitionedTable, partitionOffsets] = partitionByHashRouting(
+        input.view, routing, input.stream, get_output_mr());
 
-    VELOX_CHECK_EQ(partitionOffsets.size(), spec.numPartitions + 1);
+    VELOX_CHECK_EQ(partitionOffsets.size(), routing.numTargets() + 1);
     VELOX_CHECK_EQ(partitionOffsets.front(), 0);
 
     partitionOffsets.erase(partitionOffsets.begin());
@@ -1729,8 +1723,8 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
         std::shared_ptr<cudf::table>(std::move(partitionedTable));
     auto partitionViews = cudf::split(
         partitionedTableOwner->view(), partitionOffsets, input.stream);
-    std::vector<InputChunk> chunks(spec.numPartitions);
-    for (int32_t i = 0; i < spec.numPartitions; ++i) {
+    std::vector<InputChunk> chunks(routing.numTargets());
+    for (int32_t i = 0; i < routing.numTargets(); ++i) {
       auto partition = partitionViews[i];
       if (partition.num_rows() > 0) {
         chunks[i] = makeBorrowedChunk(
@@ -1747,11 +1741,11 @@ class GroupbyBufferedStateOps final : public BufferedStateOps {
 
   std::vector<std::unique_ptr<BufferedState>> repartitionLeaf(
       const BufferedState& leaf,
-      const PartitionSpec& spec) override {
-    auto partitions = partitionInput(asLeafState(leaf).chunk, spec);
+      const HashRouting& routing) override {
+    auto partitions = routeInput(asLeafState(leaf).chunk, routing);
 
-    std::vector<std::unique_ptr<BufferedState>> leaves(spec.numPartitions);
-    for (int32_t i = 0; i < spec.numPartitions; ++i) {
+    std::vector<std::unique_ptr<BufferedState>> leaves(routing.numTargets());
+    for (int32_t i = 0; i < routing.numTargets(); ++i) {
       if (!partitions[i].empty()) {
         leaves[i] =
             std::make_unique<GroupbyLeafState>(std::move(partitions[i]));

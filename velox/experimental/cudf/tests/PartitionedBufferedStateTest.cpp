@@ -14,17 +14,28 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/exec/PartitionedBufferedState.h"
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/PartitionedBufferedState.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <cudf/copying.hpp>
+#include <cudf/filling.hpp>
+#include <cudf/partitioning.hpp>
+#include <cudf/scalar/scalar.hpp>
+
 #include <algorithm>
+#include <chrono>
 #include <functional>
+#include <iostream>
 #include <limits>
+#include <numeric>
+#include <unordered_map>
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -71,19 +82,33 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
     return chunk.owner ? chunk.owner->estimateFlatSize() : 0;
   }
 
-  std::vector<InputChunk> partitionInput(
+  // Routes on the host with the hash set by setPartitioning(), or on the
+  // device with the hash of the keys when none is set.
+  std::vector<InputChunk> routeInput(
       const InputChunk& input,
-      const PartitionSpec& spec) override {
-    std::vector<std::vector<int64_t>> buckets(spec.numPartitions);
-    for (auto key : extractKeys(input)) {
-      auto bucket = partitionFn_(key, spec.seed, spec.numPartitions);
-      VELOX_CHECK_GE(bucket, 0);
-      VELOX_CHECK_LT(bucket, spec.numPartitions);
-      buckets[bucket].push_back(key);
+      const HashRouting& routing) override {
+    ++numRouteCalls_;
+    numRoutedRows_ += input.size();
+    if (!hashFn_) {
+      return routeOnDevice(input, routing);
     }
 
-    std::vector<InputChunk> partitions(spec.numPartitions);
-    for (int32_t i = 0; i < spec.numPartitions; ++i) {
+    std::vector<std::vector<int64_t>> buckets(routing.numTargets());
+    for (auto key : extractKeys(input)) {
+      const auto bucket =
+          static_cast<int32_t>(hashFn_(key) % routing.numBuckets);
+      VELOX_CHECK_GE(bucket, routing.bucketBounds.front());
+      VELOX_CHECK_LT(bucket, routing.bucketBounds.back());
+      const auto target = std::upper_bound(
+                              routing.bucketBounds.begin(),
+                              routing.bucketBounds.end(),
+                              bucket) -
+          routing.bucketBounds.begin() - 1;
+      buckets[target].push_back(key);
+    }
+
+    std::vector<InputChunk> partitions(routing.numTargets());
+    for (int32_t i = 0; i < routing.numTargets(); ++i) {
       if (!buckets[i].empty()) {
         partitions[i] = makeChunk_(buckets[i]);
       }
@@ -93,11 +118,11 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
 
   std::vector<std::unique_ptr<BufferedState>> repartitionLeaf(
       const BufferedState& leaf,
-      const PartitionSpec& spec) override {
-    auto partitions = partitionInput(asLeaf(leaf).chunk, spec);
+      const HashRouting& routing) override {
+    auto partitions = routeInput(asLeaf(leaf).chunk, routing);
 
-    std::vector<std::unique_ptr<BufferedState>> leaves(spec.numPartitions);
-    for (int32_t i = 0; i < spec.numPartitions; ++i) {
+    std::vector<std::unique_ptr<BufferedState>> leaves(routing.numTargets());
+    for (int32_t i = 0; i < routing.numTargets(); ++i) {
       if (!partitions[i].empty()) {
         leaves[i] = std::make_unique<TableLeafState>(std::move(partitions[i]));
       }
@@ -106,9 +131,16 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   }
 
   CudfVectorPtr finalizeLeaf(std::unique_ptr<BufferedState> leaf) override {
-    auto tableLeaf = std::unique_ptr<TableLeafState>(
-        static_cast<TableLeafState*>(leaf.release()));
-    return tableLeaf->chunk.owner;
+    auto chunk = std::move(asLeaf(*leaf).chunk);
+    if (chunk.owner) {
+      return chunk.owner;
+    }
+    // A chunk routed on the device is a slice of a shared table.
+    auto table = std::make_unique<cudf::table>(
+        chunk.view, chunk.stream, get_output_mr());
+    const auto numRows = table->num_rows();
+    return std::make_shared<CudfVector>(
+        pool_, rowType_, numRows, std::move(table), chunk.stream);
   }
 
   const std::vector<cudf::size_type>& keyIndices() const override {
@@ -118,10 +150,23 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   void setPartitioning(
       std::function<std::vector<int64_t>(const InputChunk&)> extractKeys,
       std::function<InputChunk(const std::vector<int64_t>&)> makeChunk,
-      std::function<int32_t(int64_t, uint32_t, int32_t)> partitionFn) {
+      std::function<uint32_t(int64_t)> hashFn) {
     extractKeys_ = std::move(extractKeys);
     makeChunk_ = std::move(makeChunk);
-    partitionFn_ = std::move(partitionFn);
+    hashFn_ = std::move(hashFn);
+  }
+
+  size_t numRouteCalls() const {
+    return numRouteCalls_;
+  }
+
+  size_t numRoutedRows() const {
+    return numRoutedRows_;
+  }
+
+  void resetRouteCounters() {
+    numRouteCalls_ = 0;
+    numRoutedRows_ = 0;
   }
 
  private:
@@ -131,7 +176,9 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
 
   std::function<std::vector<int64_t>(const InputChunk&)> extractKeys_;
   std::function<InputChunk(const std::vector<int64_t>&)> makeChunk_;
-  std::function<int32_t(int64_t, uint32_t, int32_t)> partitionFn_;
+  std::function<uint32_t(int64_t)> hashFn_;
+  size_t numRouteCalls_{0};
+  size_t numRoutedRows_{0};
 
   TableLeafState& asLeaf(BufferedState& leaf) const {
     return static_cast<TableLeafState&>(leaf);
@@ -175,6 +222,26 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   std::vector<int64_t> extractKeys(const InputChunk& input) const {
     return extractKeys_(input);
   }
+
+  std::vector<InputChunk> routeOnDevice(
+      const InputChunk& input,
+      const HashRouting& routing) const {
+    auto [table, offsets] = partitionByHashRouting(
+        input.view, routing, input.stream, get_output_mr());
+    offsets.erase(offsets.begin());
+    offsets.pop_back();
+
+    auto tableOwner = std::shared_ptr<cudf::table>(std::move(table));
+    auto views = cudf::split(tableOwner->view(), offsets, input.stream);
+    std::vector<InputChunk> partitions(routing.numTargets());
+    for (int32_t i = 0; i < routing.numTargets(); ++i) {
+      if (views[i].num_rows() > 0) {
+        partitions[i] = InputChunk{
+            pool_, rowType_, views[i], input.stream, nullptr, tableOwner};
+      }
+    }
+    return partitions;
+  }
 };
 
 class PartitionedBufferedStateTest : public ::testing::Test,
@@ -200,6 +267,18 @@ class PartitionedBufferedStateTest : public ::testing::Test,
     stream.sync();
     return std::make_shared<CudfVector>(
         pool_.get(), rowType_, row->size(), std::move(table), stream);
+  }
+
+  // Makes ops that route on the host by 'hashFn' of the key.
+  std::unique_ptr<IdentityBufferedStateOps> makeHostOps(
+      std::function<uint32_t(int64_t)> hashFn) {
+    auto ops =
+        std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_);
+    ops->setPartitioning(
+        [this](const InputChunk& input) { return toKeys(input); },
+        [this](const std::vector<int64_t>& keys) { return makeChunk(keys); },
+        std::move(hashFn));
+    return ops;
   }
 
   InputChunk makeChunk(const std::vector<int64_t>& keys) {
@@ -252,86 +331,352 @@ class PartitionedBufferedStateTest : public ::testing::Test,
   RowTypePtr rowType_{ROW({"c0"}, {BIGINT()})};
 };
 
+// The tests that route on the host use eight buckets and a key's value as its
+// hash, so key k is in bucket k % 8.
 TEST_F(PartitionedBufferedStateTest, mergesLeafDirectlyBelowCap) {
-  auto ops = std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_);
-  ops->setPartitioning(
-      [&](const InputChunk& input) { return toKeys(input); },
-      [&](const std::vector<int64_t>& keys) { return makeChunk(keys); },
-      [](int64_t key, uint32_t /* seed */, int32_t numPartitions) {
-        return static_cast<int32_t>(key % numPartitions);
-      });
-  PartitionedBufferedState state(std::move(ops), 10, 0);
+  auto ops =
+      makeHostOps([](int64_t key) { return static_cast<uint32_t>(key); });
+  auto* opsPtr = ops.get();
+  PartitionedBufferedState state(std::move(ops), 10, 8);
 
   state.addInput(makeCudfVector({1, 2}));
   state.addInput(makeCudfVector({3, 4}));
 
+  // Nothing is routed while one leaf holds everything.
+  EXPECT_EQ(opsPtr->numRouteCalls(), 0);
+  EXPECT_EQ(state.numLeaves(), 1);
   EXPECT_EQ(drainAll(state), (std::vector<std::vector<int64_t>>{{1, 2, 3, 4}}));
   EXPECT_TRUE(state.empty());
 }
 
 TEST_F(PartitionedBufferedStateTest, topLevelSplitKeepsRoutingStable) {
-  auto ops = std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_);
-  ops->setPartitioning(
-      [&](const InputChunk& input) { return toKeys(input); },
-      [&](const std::vector<int64_t>& keys) { return makeChunk(keys); },
-      [](int64_t key, uint32_t /* seed */, int32_t numPartitions) {
-        return static_cast<int32_t>(key % numPartitions);
-      });
-  PartitionedBufferedState state(std::move(ops), 3, 0);
+  auto ops =
+      makeHostOps([](int64_t key) { return static_cast<uint32_t>(key); });
+  PartitionedBufferedState state(std::move(ops), 3, 8);
 
-  state.addInput(makeCudfVector({0, 2}));
-  state.addInput(makeCudfVector({1, 3}));
+  state.addInput(makeCudfVector({0, 1}));
+  // Splits into the buckets [0, 4) and [4, 8).
   state.addInput(makeCudfVector({4, 5}));
+  EXPECT_EQ(state.numLeaves(), 2);
 
+  state.addInput(makeCudfVector({2, 6}));
+
+  EXPECT_EQ(state.numLeaves(), 2);
   EXPECT_EQ(
       drainAll(state),
-      (std::vector<std::vector<int64_t>>{{0, 2, 4}, {1, 3, 5}}));
+      (std::vector<std::vector<int64_t>>{{0, 1, 2}, {4, 5, 6}}));
   EXPECT_TRUE(state.empty());
 }
 
 TEST_F(PartitionedBufferedStateTest, overflowingChildSplitsAgain) {
-  auto ops = std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_);
-  ops->setPartitioning(
-      [&](const InputChunk& input) { return toKeys(input); },
-      [&](const std::vector<int64_t>& keys) { return makeChunk(keys); },
-      [](int64_t key, uint32_t seed, int32_t numPartitions) {
-        auto value = seed == 0 ? key : key / 10;
-        return static_cast<int32_t>(value % numPartitions);
-      });
-  PartitionedBufferedState state(std::move(ops), 2, 0);
+  auto ops =
+      makeHostOps([](int64_t key) { return static_cast<uint32_t>(key); });
+  PartitionedBufferedState state(std::move(ops), 2, 8);
 
-  state.addInput(makeCudfVector({0, 10}));
-  state.addInput(makeCudfVector({20, 1}));
-  state.addInput(makeCudfVector({30}));
+  state.addInput(makeCudfVector({0, 2}));
+  // Splits into [0, 4) and [4, 8). The first child then holds {0, 2} and gets
+  // 1, so it splits again into [0, 2) and [2, 4). The second child stays as
+  // it is.
+  state.addInput(makeCudfVector({1, 4}));
+  EXPECT_EQ(state.numLeaves(), 3);
 
+  // Reaches the leaf [2, 4) without passing through its parent.
+  state.addInput(makeCudfVector({3}));
+
+  EXPECT_EQ(state.numLeaves(), 3);
   EXPECT_EQ(
       drainAll(state),
-      (std::vector<std::vector<int64_t>>{{0, 20}, {1}, {10, 30}}));
+      (std::vector<std::vector<int64_t>>{{0, 1}, {2, 3}, {4}}));
   EXPECT_TRUE(state.empty());
 }
 
-TEST_F(PartitionedBufferedStateTest, noProgressSplitRetriesNewSeeds) {
-  auto ops = std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_);
-  std::vector<uint32_t> seeds;
-  ops->setPartitioning(
-      [&](const InputChunk& input) { return toKeys(input); },
-      [&](const std::vector<int64_t>& keys) { return makeChunk(keys); },
-      [&](int64_t key, uint32_t seed, int32_t numPartitions) {
-        if (seeds.empty() || seeds.back() != seed) {
-          seeds.push_back(seed);
-        }
-        if (seed < 2) {
-          return 0;
-        }
-        return static_cast<int32_t>(key % numPartitions);
-      });
-  PartitionedBufferedState state(std::move(ops), 2, 0);
+TEST_F(PartitionedBufferedStateTest, splitThatSeparatesNothingGoesOn) {
+  auto ops =
+      makeHostOps([](int64_t key) { return static_cast<uint32_t>(key); });
+  PartitionedBufferedState state(std::move(ops), 2, 8);
 
-  state.addInput(makeCudfVector({1, 2, 3}));
+  // All three rows are in the first half of the buckets, so the first split
+  // leaves them together and the half is split again.
+  state.addInput(makeCudfVector({0, 1, 3}));
+  EXPECT_EQ(state.numLeaves(), 3);
 
-  EXPECT_EQ(seeds, (std::vector<uint32_t>{0, 1, 2}));
-  EXPECT_EQ(drainAll(state), (std::vector<std::vector<int64_t>>{{1, 3}, {2}}));
+  // The second half of the buckets is an empty leaf until a row arrives.
+  state.addInput(makeCudfVector({5}));
+
+  EXPECT_EQ(state.numLeaves(), 3);
+  EXPECT_EQ(
+      drainAll(state), (std::vector<std::vector<int64_t>>{{0, 1}, {3}, {5}}));
   EXPECT_TRUE(state.empty());
+}
+
+TEST_F(PartitionedBufferedStateTest, singleBucketCannotSplit) {
+  // Every key is in bucket 0.
+  auto ops = makeHostOps([](int64_t /*key*/) { return 0U; });
+  PartitionedBufferedState state(std::move(ops), 2, 8);
+
+  state.addInput(makeCudfVector({1}));
+  state.addInput(makeCudfVector({2}));
+  EXPECT_EQ(state.numLeaves(), 1);
+
+  // The third row does not fit. The leaf is split down to bucket 0 alone,
+  // which still holds all three rows.
+  VELOX_ASSERT_THROW(
+      state.addInput(makeCudfVector({3})),
+      "Cannot partition buffered state any further");
+  EXPECT_EQ(state.numLeaves(), 4);
+}
+
+TEST_F(PartitionedBufferedStateTest, splitLeavesAreRoutedOnce) {
+  auto ops =
+      makeHostOps([](int64_t key) { return static_cast<uint32_t>(key); });
+  auto* opsPtr = ops.get();
+  PartitionedBufferedState state(std::move(ops), 2, 8);
+
+  // Eight rows need four leaves of two rows, so the first split divides the
+  // buckets in four.
+  state.addInput(makeCudfVector({0, 1, 2, 3, 4, 5, 6, 7}));
+  EXPECT_EQ(state.numLeaves(), 4);
+
+  // Keys 8 and 10 are in buckets 0 and 2. Their leaves overflow and split
+  // into single buckets.
+  state.addInput(makeCudfVector({8, 10}));
+  EXPECT_EQ(state.numLeaves(), 6);
+
+  // A batch for leaves that are the result of two splits is partitioned in
+  // one pass over its rows, not once per split.
+  opsPtr->resetRouteCounters();
+  state.addInput(makeCudfVector({9, 11}));
+  EXPECT_EQ(opsPtr->numRouteCalls(), 1);
+  EXPECT_EQ(opsPtr->numRoutedRows(), 2);
+  EXPECT_EQ(state.numLeaves(), 6);
+
+  EXPECT_EQ(
+      drainAll(state),
+      (std::vector<std::vector<int64_t>>{
+          {0, 8}, {1, 9}, {2, 10}, {3, 11}, {4, 5}, {6, 7}}));
+  EXPECT_TRUE(state.empty());
+}
+
+// A row must be in the same bucket whenever it is routed: that is what lets a
+// leaf split in place.
+TEST_F(PartitionedBufferedStateTest, deviceRoutingIsConsistent) {
+  std::vector<int64_t> keys(1'000);
+  std::iota(keys.begin(), keys.end(), 0);
+  auto input = makeChunk(keys);
+
+  HashRouting routing;
+  routing.keyIndices = {0};
+  routing.seed = PartitionedBufferedState::kDefaultHashSeed;
+  routing.numBuckets = 16;
+
+  // Routes 'rows' and returns the target of each key, or -1 for a key that is
+  // not in 'rows'.
+  auto targetsOf = [&](cudf::table_view rows, const HashRouting& routing) {
+    auto [table, offsets] =
+        partitionByHashRouting(rows, routing, input.stream, get_output_mr());
+    EXPECT_EQ(offsets.size(), routing.numTargets() + 1);
+    EXPECT_EQ(table->num_rows(), rows.num_rows());
+    const auto routedKeys = toKeys(
+        InputChunk{
+            pool_.get(), rowType_, table->view(), input.stream, nullptr});
+    std::vector<int32_t> targets(keys.size(), -1);
+    for (int32_t target = 0; target < routing.numTargets(); ++target) {
+      for (auto row = offsets[target]; row < offsets[target + 1]; ++row) {
+        targets[routedKeys[row]] = target;
+      }
+    }
+    return targets;
+  };
+
+  routing.bucketBounds = {0, 8, 16};
+  const auto halves = targetsOf(input.view, routing);
+
+  routing.bucketBounds = {0, 4, 8, 12, 16};
+  const auto quarters = targetsOf(input.view, routing);
+
+  routing.bucketBounds = {
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+  const auto buckets = targetsOf(input.view, routing);
+
+  std::vector<size_t> rowsPerBucket(16, 0);
+  for (size_t i = 0; i < keys.size(); ++i) {
+    ASSERT_GE(buckets[i], 0);
+    ASSERT_EQ(buckets[i] / 4, quarters[i]) << "key " << keys[i];
+    ASSERT_EQ(buckets[i] / 8, halves[i]) << "key " << keys[i];
+    ++rowsPerBucket[buckets[i]];
+  }
+  // The hash spreads the keys over all buckets.
+  for (auto rows : rowsPerBucket) {
+    EXPECT_GT(rows, 20);
+  }
+
+  // Splitting the rows of one target, as a leaf split does, sends each row to
+  // the part that holds its bucket.
+  routing.bucketBounds = {0, 4, 8, 12, 16};
+  auto [table, offsets] = partitionByHashRouting(
+      input.view, routing, input.stream, get_output_mr());
+  auto secondQuarter = cudf::slice(
+      table->view(),
+      std::vector<cudf::size_type>{offsets[1], offsets[2]},
+      input.stream);
+  routing.bucketBounds = {4, 6, 8};
+  const auto parts = targetsOf(secondQuarter.front(), routing);
+  for (size_t i = 0; i < keys.size(); ++i) {
+    if (quarters[i] == 1) {
+      ASSERT_EQ(parts[i], (buckets[i] - 4) / 2) << "key " << keys[i];
+    } else {
+      ASSERT_EQ(parts[i], -1) << "key " << keys[i];
+    }
+  }
+}
+
+TEST_F(PartitionedBufferedStateTest, deviceRoutingKeepsKeysTogether) {
+  constexpr size_t kMaxRowsPerLeaf = 64;
+  auto ops = std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_);
+  auto* opsPtr = ops.get();
+  PartitionedBufferedState state(std::move(ops), kMaxRowsPerLeaf);
+
+  // 300 distinct keys, each seen three or four times across the batches.
+  size_t numRows = 0;
+  for (int64_t batch = 0; batch < 10; ++batch) {
+    std::vector<int64_t> keys(100);
+    for (int64_t i = 0; i < 100; ++i) {
+      keys[i] = (batch * 37 + i * 7) % 300;
+    }
+    numRows += keys.size();
+
+    opsPtr->resetRouteCounters();
+    const auto leavesBefore = state.numLeaves();
+    state.addInput(makeCudfVector(keys));
+    if (leavesBefore > 1 && state.numLeaves() == leavesBefore) {
+      // No leaf split, so the batch was partitioned exactly once.
+      EXPECT_EQ(opsPtr->numRouteCalls(), 1);
+      EXPECT_EQ(opsPtr->numRoutedRows(), keys.size());
+    }
+  }
+  EXPECT_GE(state.numLeaves(), numRows / kMaxRowsPerLeaf);
+
+  std::unordered_map<int64_t, size_t> outputOfKey;
+  size_t numOutputRows = 0;
+  size_t numOutputs = 0;
+  while (auto output = state.drainNextOutput()) {
+    EXPECT_LE(output->size(), kMaxRowsPerLeaf);
+    for (auto key : toKeys(output)) {
+      auto [it, inserted] = outputOfKey.emplace(key, numOutputs);
+      EXPECT_EQ(it->second, numOutputs) << "key " << key << " is in two leaves";
+    }
+    numOutputRows += output->size();
+    ++numOutputs;
+  }
+  EXPECT_EQ(numOutputRows, numRows);
+  EXPECT_EQ(outputOfKey.size(), 300);
+  EXPECT_GE(numOutputs, numRows / kMaxRowsPerLeaf);
+  EXPECT_TRUE(state.empty());
+}
+
+// Times how long it takes to bring one batch to its leaves as the number of
+// leaves grows. Not a correctness test: run it by name with
+// --gtest_also_run_disabled_tests.
+TEST_F(PartitionedBufferedStateTest, DISABLED_routingCostByLeafCount) {
+  constexpr cudf::size_type kNumRows = 20'000'000;
+  constexpr int kNumPayloadColumns = 3;
+  constexpr int kRepeats = 5;
+  constexpr uint32_t kMaxSplits = 10;
+
+  auto stream = cudfGlobalStreamPool().get_stream();
+  auto mr = get_output_mr();
+
+  std::vector<std::unique_ptr<cudf::column>> columns;
+  for (int i = 0; i <= kNumPayloadColumns; ++i) {
+    cudf::numeric_scalar<int64_t> init(i * 1'000, true, stream, mr);
+    columns.push_back(cudf::sequence(kNumRows, init, stream, mr));
+  }
+  cudf::table table(std::move(columns));
+  const auto input = table.view();
+  const std::vector<cudf::size_type> keyIndices{0};
+
+  // Best of kRepeats, in milliseconds.
+  auto time = [&](const std::function<void()>& fn) {
+    double best = std::numeric_limits<double>::max();
+    for (int i = 0; i < kRepeats; ++i) {
+      stream.sync();
+      const auto start = std::chrono::steady_clock::now();
+      fn();
+      stream.sync();
+      const std::chrono::duration<double, std::milli> elapsed =
+          std::chrono::steady_clock::now() - start;
+      best = std::min(best, elapsed.count());
+    }
+    return best;
+  };
+
+  // A tree with a hash seed per level: every level partitions the rows it
+  // receives in two and copies them.
+  std::function<void(cudf::table_view, uint32_t, uint32_t&)> routePerLevel =
+      [&](cudf::table_view rows, uint32_t levels, uint32_t& seed) {
+        if (levels == 0 || rows.num_rows() == 0) {
+          return;
+        }
+        auto [partitioned, offsets] = cudf::hash_partition(
+            rows,
+            keyIndices,
+            2,
+            cudf::hash_id::HASH_MURMUR3,
+            seed++,
+            stream,
+            mr);
+        auto halves = cudf::split(
+            partitioned->view(),
+            std::vector<cudf::size_type>{offsets[1]},
+            stream);
+        for (auto& half : halves) {
+          routePerLevel(half, levels - 1, seed);
+        }
+      };
+
+  std::cout
+      << "rows=" << kNumRows << " columns=" << input.num_columns()
+      << " (int64), times in ms, best of " << kRepeats << "\n"
+      << "splits leaves seedPerLevel bucketRanges hashPartitionToLeaves\n";
+  for (uint32_t splits = 1; splits <= kMaxSplits; ++splits) {
+    const auto numLeaves = int32_t{1} << splits;
+
+    const auto seedPerLevel = time([&] {
+      uint32_t seed = 0;
+      routePerLevel(input, splits, seed);
+    });
+
+    // Leaves are equal ranges of the default number of buckets.
+    HashRouting routing;
+    routing.keyIndices = keyIndices;
+    routing.seed = PartitionedBufferedState::kDefaultHashSeed;
+    routing.numBuckets = PartitionedBufferedState::kDefaultNumBuckets;
+    for (int32_t leaf = 0; leaf <= numLeaves; ++leaf) {
+      routing.bucketBounds.push_back(leaf * (routing.numBuckets / numLeaves));
+    }
+    const auto bucketRanges = time([&] {
+      auto [partitioned, offsets] =
+          partitionByHashRouting(input, routing, stream, mr);
+      offsets.erase(offsets.begin());
+      offsets.pop_back();
+      auto leaves = cudf::split(partitioned->view(), offsets, stream);
+    });
+
+    // cudf::hash_partition() with one partition per leaf.
+    const auto hashPartitionToLeaves = time([&] {
+      auto [partitioned, offsets] = cudf::hash_partition(
+          input,
+          keyIndices,
+          numLeaves,
+          cudf::hash_id::HASH_MURMUR3,
+          routing.seed,
+          stream,
+          mr);
+    });
+
+    std::cout << splits << " " << numLeaves << " " << seedPerLevel << " "
+              << bucketRanges << " " << hashPartitionToLeaves << "\n";
+  }
 }
 
 TEST_F(PartitionedBufferedStateTest, flushableStateEmitsAtEnd) {
