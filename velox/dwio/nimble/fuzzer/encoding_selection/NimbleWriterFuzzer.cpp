@@ -229,6 +229,47 @@ bool hasDataPrecondition(EncodingType encodingType) {
       encodingType == EncodingType::Huffman;
 }
 
+// Keeps Reversed as the only value candidate through a Nullable wrapper.
+// Its transformed values need ordered nested candidates for estimation and
+// encoding.
+template <typename T>
+class ForcedReversedEncodingSelectionPolicy
+    : public ManualEncodingSelectionPolicy<T> {
+ public:
+  explicit ForcedReversedEncodingSelectionPolicy(
+      std::optional<CompressionOptions> compressionOptions)
+      : ManualEncodingSelectionPolicy<T>{
+            {{EncodingType::Reversed, 1.0f}},
+            compressionOptions,
+            std::nullopt,
+            std::vector<std::pair<EncodingType, float>>{
+                {EncodingType::EliasFano, 1.0f},
+                {EncodingType::PartitionedEliasFano, 1.0f},
+                {EncodingType::DeltaBlock, 1.0f},
+            }},
+        compressionOptions_{std::move(compressionOptions)} {}
+
+ protected:
+  std::unique_ptr<EncodingSelectionPolicyBase> createImpl(
+      EncodingType parentEncodingType,
+      NestedEncodingIdentifier nestedEncodingIdentifier,
+      DataType nestedDataType) override {
+    if (parentEncodingType == EncodingType::Nullable &&
+        nestedEncodingIdentifier == EncodingIdentifiers::Nullable::Data) {
+      UNIQUE_PTR_FACTORY(
+          nestedDataType,
+          ForcedReversedEncodingSelectionPolicy,
+          compressionOptions_);
+    }
+    return ManualEncodingSelectionPolicy<T>::createImpl(
+        parentEncodingType, nestedEncodingIdentifier, nestedDataType);
+  }
+
+ private:
+  // Compression settings inherited by the nullable values policy.
+  const std::optional<CompressionOptions> compressionOptions_;
+};
+
 // Wraps 'creator' so an integral-only encoding is skipped on floating-point
 // streams alone, instead of being dropped from every schema that holds one.
 // Excluding it schema-wide would also exclude it from the integer columns
@@ -1026,18 +1067,18 @@ void makeAllNull(velox::BaseVector& vector) {
   }
 }
 
-// Rewrites an integer column to a non-decreasing sequence, the one shape
-// DeltaBlock accepts. Repeats are drawn in so the result is not a pure ramp,
-// which would make the delta stream uniformly one. 'cursor' carries the last
+// Rewrites an integer column to a monotonic sequence. Repeats avoid a pure
+// ramp whose delta stream is uniformly one. 'cursor' carries the last
 // value emitted for this column across batches: the estimator checks ordering
 // per block and chunk boundaries do not follow batch boundaries, so a
 // per-batch restart would leave most blocks out of order and the shape
 // unusable.
 template <typename T>
-void makeNonDecreasing(
+void makeMonotonic(
     velox::FlatVector<T>* vector,
     int64_t& cursor,
     uint64_t totalRows,
+    bool descending,
     FuzzerGenerator& rng) {
   constexpr int64_t kMinValue = std::numeric_limits<T>::min();
   constexpr int64_t kMaxValue = std::numeric_limits<T>::max();
@@ -1055,16 +1096,16 @@ void makeNonDecreasing(
       continue;
     }
     // The range guard is a backstop for a caller passing too few rows;
-    // saturating is still non-decreasing, just degenerate.
-    if (cursor < kMaxValue &&
-        folly::Random::randDouble01(rng) < stepProbability) {
-      ++cursor;
+    // saturating is still monotonic, just degenerate.
+    const bool canStep = descending ? cursor > kMinValue : cursor < kMaxValue;
+    if (canStep && folly::Random::randDouble01(rng) < stepProbability) {
+      cursor += descending ? -1 : 1;
     }
     vector->set(i, static_cast<T>(cursor));
   }
 }
 
-// The signed integer kinds makeNonDecreasing can rewrite. TIMESTAMP also
+// The signed integer kinds makeMonotonic can rewrite. TIMESTAMP also
 // reaches the writer as Int64 but is left alone: its Velox representation is
 // not a plain integer.
 bool isIntegerKind(velox::TypeKind kind) {
@@ -1099,6 +1140,7 @@ enum class ColumnShape {
   kDefault,
   kConstant,
   kNonDecreasing,
+  kNonIncreasing,
   kCappingJson,
   kSharedPrefixes,
   // Nulls every row of every other batch, so a chunk cut at a batch boundary
@@ -1124,7 +1166,9 @@ std::vector<ColumnShape> drawColumnShapes(
     } else if (
         isIntegerKind(schema->childAt(i)->kind()) &&
         folly::Random::oneIn(4, rng)) {
-      shapes.push_back(ColumnShape::kNonDecreasing);
+      shapes.push_back(
+          folly::Random::oneIn(2, rng) ? ColumnShape::kNonDecreasing
+                                       : ColumnShape::kNonIncreasing);
     } else if (
         schema->childAt(i)->kind() == velox::TypeKind::VARCHAR &&
         folly::Random::oneIn(2, rng)) {
@@ -1147,7 +1191,7 @@ std::vector<ColumnShape> drawColumnShapes(
 // the one shape that also applies to complex columns. Applied to only some
 // iterations so purely random data is still exercised.
 //
-// 'cursors' holds the running value of each non-decreasing column and is
+// 'cursors' holds the running value of each monotonic column and is
 // updated in place, so successive batches continue the sequence. 'batchIndex'
 // picks the batches kNullBatches nulls.
 void applyEncodingFriendlyShapes(
@@ -1179,8 +1223,11 @@ void applyEncodingFriendlyShapes(
     }
     const bool collapseToConstant =
         shapes.at(childIndex) == ColumnShape::kConstant;
-    const bool makeMonotonic =
-        shapes.at(childIndex) == ColumnShape::kNonDecreasing;
+    const bool isMonotonic =
+        shapes.at(childIndex) == ColumnShape::kNonDecreasing ||
+        shapes.at(childIndex) == ColumnShape::kNonIncreasing;
+    const bool descending =
+        shapes.at(childIndex) == ColumnShape::kNonIncreasing;
     const bool makeJson = shapes.at(childIndex) == ColumnShape::kCappingJson;
     auto& cursor = cursors.at(childIndex);
     switch (child->typeKind()) {
@@ -1192,33 +1239,49 @@ void applyEncodingFriendlyShapes(
       case velox::TypeKind::TINYINT:
         if (collapseToConstant) {
           makeConstant(child->asFlatVector<int8_t>());
-        } else if (makeMonotonic) {
-          makeNonDecreasing(
-              child->asFlatVector<int8_t>(), cursor, totalRows, rng);
+        } else if (isMonotonic) {
+          makeMonotonic(
+              child->asFlatVector<int8_t>(),
+              cursor,
+              totalRows,
+              descending,
+              rng);
         }
         break;
       case velox::TypeKind::SMALLINT:
         if (collapseToConstant) {
           makeConstant(child->asFlatVector<int16_t>());
-        } else if (makeMonotonic) {
-          makeNonDecreasing(
-              child->asFlatVector<int16_t>(), cursor, totalRows, rng);
+        } else if (isMonotonic) {
+          makeMonotonic(
+              child->asFlatVector<int16_t>(),
+              cursor,
+              totalRows,
+              descending,
+              rng);
         }
         break;
       case velox::TypeKind::INTEGER:
         if (collapseToConstant) {
           makeConstant(child->asFlatVector<int32_t>());
-        } else if (makeMonotonic) {
-          makeNonDecreasing(
-              child->asFlatVector<int32_t>(), cursor, totalRows, rng);
+        } else if (isMonotonic) {
+          makeMonotonic(
+              child->asFlatVector<int32_t>(),
+              cursor,
+              totalRows,
+              descending,
+              rng);
         }
         break;
       case velox::TypeKind::BIGINT:
         if (collapseToConstant) {
           makeConstant(child->asFlatVector<int64_t>());
-        } else if (makeMonotonic) {
-          makeNonDecreasing(
-              child->asFlatVector<int64_t>(), cursor, totalRows, rng);
+        } else if (isMonotonic) {
+          makeMonotonic(
+              child->asFlatVector<int64_t>(),
+              cursor,
+              totalRows,
+              descending,
+              rng);
         }
         break;
       case velox::TypeKind::REAL:
@@ -1490,6 +1553,14 @@ std::string NimbleWriterFuzzer::writeFile(
       "Encoding selection config produced no policy creator for '{}'.",
       selectionConfig);
   EncodingSelectionPolicyCreator policyCreator = std::move(*parsedCreator);
+  if (encodingType == EncodingType::Reversed) {
+    policyCreator =
+        [compressionOptions = writerOptions.compressionOptions](
+            DataType dataType) -> std::unique_ptr<EncodingSelectionPolicyBase> {
+      UNIQUE_PTR_FACTORY(
+          dataType, ForcedReversedEncodingSelectionPolicy, compressionOptions);
+    };
+  }
 
   // The write-side gate admits floating point directly for SimdForBitpack and
   // Huffman. A Nullable float's nested policy can also admit DeltaBlock after
@@ -3610,13 +3681,15 @@ void NimbleWriterFuzzer::run() {
           columnShapes.begin(),
           columnShapes.end(),
           ColumnShape::kNullBatches) != columnShapes.end();
-  // Seeded from the type minimum so a non-decreasing column spans the widest
-  // range its type allows before saturating.
+  // Starts each monotonic column at its type's boundary so it has room to
+  // step throughout the file.
   std::vector<int64_t> monotonicCursors(
       schema->size(), std::numeric_limits<int64_t>::min());
   for (auto i = 0; i < schema->size(); ++i) {
     if (columnShapes.at(i) == ColumnShape::kNonDecreasing) {
       monotonicCursors.at(i) = minValueOf(schema->childAt(i)->kind());
+    } else if (columnShapes.at(i) == ColumnShape::kNonIncreasing) {
+      monotonicCursors.at(i) = -(minValueOf(schema->childAt(i)->kind()) + 1);
     }
   }
 

@@ -445,9 +445,9 @@ class NimbleWriterFuzzer {
 
  private:
   // Writes 'batches', returning the file bytes. When 'encodingType' is set,
-  // that is the only candidate offered to the random policy; otherwise the
-  // policy chooses from its full default set. The write type is taken from
-  // batches[0].
+  // that is the only value candidate. Reversed additionally offers ordered
+  // encodings for its nested values. Otherwise the policy chooses from its
+  // full default set. The write type is taken from batches[0].
   std::string writeFile(
       const std::vector<velox::VectorPtr>& batches,
       std::optional<EncodingType> encodingType,
