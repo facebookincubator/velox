@@ -38,6 +38,7 @@
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/File.h"
+#include "velox/common/file/FileIoContext.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/memory/MallocAllocator.h"
@@ -67,7 +68,8 @@ using Read = std::vector<std::pair<uint64_t, uint64_t>>;
 // above 1 it reports direct I/O and rejects unaligned reads. A direct-I/O read
 // past the end of the file then returns only the bytes before the end, as on
 // Linux, and leaves junk in the rest of its buffer. Without direct I/O, a read
-// past the end of the file fails. Runs an optional hook before each read.
+// past the end of the file fails. Runs an optional hook before each read, and
+// records the file options each read passes.
 class RecordingReadFile final : public velox::InMemoryReadFile {
  public:
   RecordingReadFile(std::string content, uint64_t alignment)
@@ -101,6 +103,7 @@ class RecordingReadFile final : public velox::InMemoryReadFile {
     if (beforeRead_) {
       beforeRead_();
     }
+    fileOpts_.wlock()->push_back(context.fileOpts);
     const auto start = offset;
     Read read;
     for (const auto& buffer : buffers) {
@@ -128,6 +131,7 @@ class RecordingReadFile final : public velox::InMemoryReadFile {
     if (beforeRead_) {
       beforeRead_();
     }
+    fileOpts_.wlock()->push_back(context.fileOpts);
     Read read;
     uint64_t bytesRead{0};
     for (size_t i = 0; i < regions.size(); ++i) {
@@ -177,6 +181,11 @@ class RecordingReadFile final : public velox::InMemoryReadFile {
     return *scatterDestinations_.rlock();
   }
 
+  // File options of each read, in the order read.
+  std::vector<folly::F14FastMap<std::string, std::string>> fileOpts() const {
+    return *fileOpts_.rlock();
+  }
+
   void setFailReads(bool failReads) {
     failReads_ = failReads;
   }
@@ -194,6 +203,9 @@ class RecordingReadFile final : public velox::InMemoryReadFile {
   mutable folly::Synchronized<std::vector<Read>> reads_;
   mutable folly::Synchronized<std::vector<Read>> scatterReads_;
   mutable folly::Synchronized<std::vector<const char*>> scatterDestinations_;
+  mutable folly::Synchronized<
+      std::vector<folly::F14FastMap<std::string, std::string>>>
+      fileOpts_;
 };
 
 // Delegates to another BlockCache and records the offset of each
@@ -970,6 +982,61 @@ TEST_P(MetadataInputParamTest, readsPassFileIoContext) {
       fileOpts,
   };
   EXPECT_EQ(file->fileOpts(), expected);
+}
+
+// Runs each task on a new thread and waits for it, so the task runs without
+// the caller's folly::RequestContext.
+class NewThreadExecutor final : public folly::Executor {
+ public:
+  void add(folly::Func func) override {
+    std::thread{std::move(func)}.join();
+  }
+};
+
+// Reads under a velox::ScopedFileIoContext pass the scope's context instead of
+// Options::fileIoContext, so only the scope's file options reach the storage
+// layer.
+TEST_P(MetadataInputParamTest, readsUseScopedFileIoContext) {
+  const folly::F14FastMap<std::string, std::string> scopeFileOpts{
+      {"scope", "value"}};
+  velox::FileIoContext scopeContext;
+  scopeContext.fileOpts = scopeFileOpts;
+  for (const auto alignment : {uint64_t{1}, kAlignment}) {
+    SCOPED_TRACE(fmt::format("alignment {}", alignment));
+    // The gap between the sections exceeds the coalesce distance. Without
+    // direct I/O, they form two scatter reads, and load() hands the second to
+    // the executor. With direct I/O, load() reads both in one batch.
+    auto [file, sections] = makeFile(
+        {{0, "first"}, {2 * kAlignment, "second"}}, 3 * kAlignment, alignment);
+
+    // A file id per alignment, so no case hits another case's entries.
+    const velox::FileHandle fileHandle{
+        .uuid = {
+            velox::fileIds(),
+            fmt::format(
+                "MetadataInputTest.readsUseScopedFileIoContext.{}",
+                alignment)}};
+    // The executor reads the queued group on a thread without the scope's
+    // RequestContext, so only the context that load() resolves can carry it.
+    NewThreadExecutor executor;
+    auto options = makeOptions(blockCache());
+    options.fileHandle = &fileHandle;
+    options.executor = &executor;
+    options.fileIoContext.fileOpts = {{"input", "value"}};
+    auto input = MetadataInput::create(file.get(), options);
+    {
+      const velox::ScopedFileIoContext scope{scopeContext};
+      std::string raw(5, '\0');
+      input->readRaw(0, raw.size(), raw.data());
+      EXPECT_EQ(raw, "first");
+      EXPECT_EQ(
+          contents(input->load(sections)),
+          (std::vector<std::string>{"first", "second"}));
+    }
+    const std::vector<folly::F14FastMap<std::string, std::string>> expected(
+        alignment == 1 ? 3 : 2, scopeFileOpts);
+    EXPECT_EQ(file->fileOpts(), expected);
+  }
 }
 
 TEST_P(MetadataInputParamTest, duplicateSectionsThrow) {
