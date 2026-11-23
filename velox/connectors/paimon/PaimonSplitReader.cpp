@@ -61,7 +61,7 @@ PaimonSplitReader::PaimonSplitReader(
   const auto& dataFiles = paimonSplit_->dataFiles();
   fileSplits_.reserve(dataFiles.size());
   for (const auto& dataFile : dataFiles) {
-    fileSplits_.emplace_back(makeFileConnectorSplit(dataFile));
+    fileSplits_.emplace_back(makeFileConnectorSplit(*paimonSplit_, dataFile));
   }
 }
 
@@ -173,11 +173,24 @@ void PaimonSplitReader::finishFileSplitReader() {
   emptySplit_ = false;
 }
 
+// static
 std::shared_ptr<connector::FileConnectorSplit>
 PaimonSplitReader::makeFileConnectorSplit(
-    const PaimonDataFile& dataFile) const {
+    const PaimonConnectorSplit& paimonSplit,
+    const PaimonDataFile& dataFile) {
+  // TODO: Bind columns by field ID (ColumnMappingMode::kFieldId, or
+  // kParquetFieldId for Parquet) for every Paimon table, as Paimon does, so
+  // that reads survive renamed and dropped columns. Paimon ORC files keep the
+  // IDs in "paimon.id" attributes, and the ORC reader reads only "iceberg.id".
+
+  // Primary-key files put the key, sequence number and row kind columns
+  // before the table columns, so bind table columns to file columns by name.
+  std::optional<dwio::common::ColumnMappingMode> columnMappingMode;
+  if (paimonSplit.tableType() == PaimonTableType::kPrimaryKey) {
+    columnMappingMode = dwio::common::ColumnMappingMode::kName;
+  }
   return std::make_shared<connector::FileConnectorSplit>(
-      paimonSplit_->connectorId,
+      paimonSplit.connectorId,
       dataFile.path,
       dataFile.fileFormat,
       /*_start=*/0,
@@ -185,7 +198,8 @@ PaimonSplitReader::makeFileConnectorSplit(
       /*splitWeight=*/0,
       /*cacheable=*/true,
       /*_properties=*/std::nullopt,
-      paimonSplit_->partitionKeys());
+      paimonSplit.partitionKeys(),
+      columnMappingMode);
 }
 
 } // namespace facebook::velox::connector::paimon
