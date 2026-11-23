@@ -593,8 +593,8 @@ class Reader {
   }
 
   // Fills the new entry in 'pin', for the piece at 'offset', from the SSD
-  // cache. Returns false when there is no SSD cache, or when the SSD cache
-  // holds no copy of exactly the piece's size.
+  // cache. Returns false when there is no SSD cache, when the SSD cache holds
+  // no copy of exactly the piece's size, or when reading the SSD cache fails.
   bool fillEntryFromSsd(cache::CachePin& pin, size_t offset) {
     auto* ssdCache = cache_->ssdCache();
     if (ssdCache == nullptr) {
@@ -616,7 +616,17 @@ class Reader {
     // copied. Move it into the vector, then back.
     std::vector<cache::CachePin> pins;
     pins.push_back(std::move(pin));
-    ssdFile.load(ssdPins, pins);
+    try {
+      ssdFile.load(ssdPins, pins);
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "IOERR: Failed SSD cache load "
+                 << pins[0].checkedEntry()->toString() << ": " << e.what();
+      // Erase the unusable SSD cache entry. A later RAM miss then reads from
+      // KvikIO, not from the SSD cache.
+      ssdFile.erase(cache::RawFileCacheKey{fileId_.id(), offset});
+      pin = std::move(pins[0]);
+      return false;
+    }
     pin = std::move(pins[0]);
     return true;
   }

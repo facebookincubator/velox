@@ -39,6 +39,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <future>
 #include <limits>
@@ -635,6 +637,74 @@ TEST_F(CachingDataSourceTest, ramMissReadsFromSsd) {
   const auto metrics = stats_->stats();
   EXPECT_EQ(metrics.at("cudfKvikioCacheMissBytes").sum, 4096);
   EXPECT_EQ(metrics.at("cudfKvikioCacheSsdBytes").sum, 4096);
+
+  cache->shutdown();
+}
+
+// A failed SSD cache read falls back to KvikIO and erases the SSD cache entry.
+// A later RAM miss therefore reads from KvikIO, not from the SSD cache.
+TEST_F(CachingDataSourceTest, failedSsdReadFallsBackToKvikio) {
+  // The temp directory may be on tmpfs, which does not support O_DIRECT.
+  FLAGS_velox_ssd_odirect = false;
+  filesystems::registerLocalFileSystem();
+  auto directory = common::testutil::TempDirectoryPath::create();
+  folly::CPUThreadPoolExecutor ssdExecutor(1);
+  const auto ssdPrefix = directory->getPath() + "/cache";
+  auto ssdCache = std::make_unique<cache::SsdCache>(cache::SsdCache::Config(
+      ssdPrefix,
+      64 << 20,
+      1,
+      &ssdExecutor,
+      /*_checkpointIntervalBytes=*/0,
+      /*_disableFileCow=*/false,
+      /*_checksumEnabled=*/true,
+      /*_checksumReadVerificationEnabled=*/true));
+  // An allocator serves one cache. The fixture's allocator serves 'cache_'.
+  memory::MallocAllocator allocator(memory::MemoryAllocator::Options{
+      .capacity = 16 << 20, .reservationByteLimit = 0});
+  auto cache = cache::AsyncDataCache::create(&allocator, std::move(ssdCache));
+  fillPattern(read_->data.size());
+  auto input = maybeCacheKvikioDataSource(
+      std::make_unique<MemorySource>(read_),
+      path_,
+      cache.get(),
+      true,
+      stats_,
+      /*ioStatistics=*/nullptr);
+
+  input->host_read(64, 4096);
+
+  // Write the entry to SSD, then drop it from RAM.
+  ASSERT_TRUE(cache->ssdCache()->startWrite());
+  cache->saveToSsd(/*saveAll=*/true);
+  cache->ssdCache()->waitForWriteToFinish();
+  cache->clear();
+
+  // Overwrite the SSD cache file, the only one with 1 shard. Its checksum check
+  // then fails the SSD cache read.
+  const auto ssdFilePath = ssdPrefix + "0";
+  {
+    std::fstream ssdFile(
+        ssdFilePath, std::ios::in | std::ios::out | std::ios::binary);
+    ASSERT_TRUE(ssdFile.is_open());
+    const std::string garbage(std::filesystem::file_size(ssdFilePath), 'z');
+    ssdFile.write(garbage.data(), garbage.size());
+  }
+
+  // RAM miss, failed SSD cache read.
+  // The bytes come from a second KvikIO read.
+  std::vector<uint8_t> dst(4096);
+  EXPECT_EQ(input->host_read(64, dst.size(), dst.data()), dst.size());
+  EXPECT_EQ(std::memcmp(dst.data(), read_->data.data() + 64, dst.size()), 0);
+  EXPECT_EQ(read_->reads, 2);
+  EXPECT_EQ(cache->ssdCache()->stats().readSsdCorruptions, 1);
+
+  // RAM miss again.
+  // The SSD cache entry is gone, and no SSD cache read fails.
+  cache->clear();
+  EXPECT_EQ(input->host_read(64, dst.size(), dst.data()), dst.size());
+  EXPECT_EQ(read_->reads, 3);
+  EXPECT_EQ(cache->ssdCache()->stats().readSsdCorruptions, 1);
 
   cache->shutdown();
 }
