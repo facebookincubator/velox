@@ -485,6 +485,23 @@ TEST(SchemaSerializationTest, arrayWithOffsetsType) {
       arr.elements()->asScalar().scalarDescriptor().scalarKind());
 }
 
+TEST(SchemaSerializationTest, slidingWindowArrayType) {
+  SchemaBuilder schemaBuilder;
+  NIMBLE_SCHEMA(
+      schemaBuilder,
+      NIMBLE_ROW({{"swa", NIMBLE_SLIDINGWINDOWARRAY(NIMBLE_BIGINT())}}));
+  auto root = roundTrip(schemaBuilder);
+  auto& row = root->asRow();
+  ASSERT_EQ(1, row.childrenCount());
+  EXPECT_EQ(Kind::SlidingWindowArray, row.childAt(0)->kind());
+  const auto& array = row.childAt(0)->asSlidingWindowArray();
+  EXPECT_NE(
+      array.offsetsDescriptor().offset(), array.lengthsDescriptor().offset());
+  EXPECT_EQ(
+      ScalarKind::Int64,
+      array.elements()->asScalar().scalarDescriptor().scalarKind());
+}
+
 TEST(SchemaSerializationTest, slidingWindowMapType) {
   SchemaBuilder schemaBuilder;
   NIMBLE_SCHEMA(

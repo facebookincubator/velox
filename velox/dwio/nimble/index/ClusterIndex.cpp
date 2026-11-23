@@ -59,6 +59,7 @@ ClusterIndex::ClusterIndex(
           std::move(metadataInput),
           std::move(dataInput),
           std::move(keyStreamLocator),
+          /*auxIndexStreamIds=*/{},
           [keyComparator](
               std::string_view encodedKeys,
               std::function<void*(uint32_t)> stringBufferFactory,

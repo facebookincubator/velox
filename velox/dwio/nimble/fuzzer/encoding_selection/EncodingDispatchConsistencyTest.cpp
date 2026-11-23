@@ -142,8 +142,7 @@ WriteOutcome expectedOutcome(
     return WriteOutcome::kNotApplied;
   }
   // PartitionedEliasFano declines a stream with fewer than two ascending runs,
-  // which plain EliasFano covers. The cycling columns have two runs of at
-  // least 64 rows, the minimum average it accepts.
+  // which plain EliasFano covers.
   if (encodingType == EncodingType::PartitionedEliasFano &&
       columnCase.isNonDecreasing) {
     return WriteOutcome::kNotApplied;

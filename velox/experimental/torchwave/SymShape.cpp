@@ -589,6 +589,16 @@ std::optional<SymShape> inferNode(const SymShapes& shapes, NodeCP node) {
     }
     return SymShape{.dims = *dims, .strides = contiguousStrides(*dims)};
   }
+  // An in-place copy returns 'self', strides and storage included.
+  if (target == "torch.ops.aten.copy_.default") {
+    const auto* self = node->tryGetInput("self");
+    const auto* shape =
+        self != nullptr ? shapeOf(shapes, self->value) : nullptr;
+    if (shape == nullptr) {
+      return std::nullopt;
+    }
+    return *shape;
+  }
   if (keepsSelfShape(target)) {
     const auto* self = node->tryGetInput("self");
     if (self == nullptr) {
@@ -894,6 +904,29 @@ std::optional<int64_t> tracedValue(const SymExpr& expr) {
     traced[name] = std::stoll(name.substr(1));
   }
   return expr.evaluate(traced);
+}
+
+SymExpr elementSymbol(std::string_view tensor, int64_t index) {
+  return SymExpr{
+      .kind = SymExpr::Kind::kSymbol,
+      .symbol = fmt::format("e:{}:{}", tensor, index)};
+}
+
+std::optional<std::pair<std::string, int64_t>> parseElementSymbol(
+    std::string_view symbol) {
+  const auto last = symbol.rfind(':');
+  if (symbol.size() < 5 || symbol.substr(0, 2) != "e:" ||
+      last == std::string_view::npos || last < 2) {
+    return std::nullopt;
+  }
+  const auto index = symbol.substr(last + 1);
+  if (index.empty() || !std::all_of(index.begin(), index.end(), [](char c) {
+        return std::isdigit(static_cast<unsigned char>(c));
+      })) {
+    return std::nullopt;
+  }
+  return std::make_pair(
+      std::string(symbol.substr(2, last - 2)), std::stoll(std::string(index)));
 }
 
 bool sameDim(const SymExpr& lhs, const SymExpr& rhs) {

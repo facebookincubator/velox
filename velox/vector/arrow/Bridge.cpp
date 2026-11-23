@@ -2983,20 +2983,20 @@ VectorPtr importFromArrowImpl(
           delete toDelete;
         }
       });
-  VectorPtr imported = importFromArrowImpl(
-      arrowSchema,
-      arrowArray,
+  // The releasers own the structures from here on, also if the import fails,
+  // so mark the inputs released before importing from the copies.
+  arrowSchema.release = nullptr;
+  arrowArray.release = nullptr;
+
+  return importFromArrowImpl(
+      *schemaReleaser,
+      *arrayReleaser,
       pool,
       /*isViewer=*/false,
       [&schemaReleaser, &arrayReleaser](const void* buffer, size_t length) {
         return wrapInBufferViewAsOwner(
             buffer, length, schemaReleaser, arrayReleaser);
       });
-
-  arrowSchema.release = nullptr;
-  arrowArray.release = nullptr;
-
-  return imported;
 }
 
 } // namespace

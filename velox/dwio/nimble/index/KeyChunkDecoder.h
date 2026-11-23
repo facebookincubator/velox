@@ -22,6 +22,7 @@
 
 #include "velox/buffer/Buffer.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/nimble/index/IndexLookup.h"
 #include "velox/dwio/nimble/index/KeyReader.h"
 #include "velox/dwio/nimble/tablet/DataInput.h"
 
@@ -56,6 +57,15 @@ using KeyReaderFactory = std::function<std::unique_ptr<KeyReader>(
 std::shared_ptr<DecodedKeyChunk> decodeKeyChunk(
     std::string_view chunk,
     DataInput::Handle handle,
+    const KeyReaderFactory& readerFactory,
+    velox::memory::MemoryPool* pool);
+
+/// Decodes 'keyChunk', a key chunk that a caller read itself, as
+/// decodeKeyChunk() above decodes its data. Only reads 'keyChunk': the returned
+/// DecodedKeyChunk holds a copy of its dataHandle when it reads an uncompressed
+/// payload in place.
+std::shared_ptr<DecodedKeyChunk> decodeKeyChunk(
+    const IndexLookup::KeyChunk& keyChunk,
     const KeyReaderFactory& readerFactory,
     velox::memory::MemoryPool* pool);
 

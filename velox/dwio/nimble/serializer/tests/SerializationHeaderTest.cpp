@@ -160,6 +160,14 @@ std::vector<SerializationHeaderSizeParam> serializationHeaderSizeParams() {
           .version = SerializationVersion::kProjection,
           .requiredBarrier = true,
       },
+      {
+          .version = SerializationVersion::kBlob,
+          .requiredBarrier = false,
+      },
+      {
+          .version = SerializationVersion::kBlob,
+          .requiredBarrier = true,
+      },
   };
 
   std::vector<SerializationHeaderSizeParam> params;
@@ -371,6 +379,8 @@ TEST_P(SerializationHeaderRoundTripTest, writeReadRoundtrip) {
   EXPECT_EQ(header.rowCount, testCase.rowCount);
   EXPECT_EQ(header.flags.requiredBarrier, testCase.requiredBarrier);
   EXPECT_FALSE(header.rowRange.has_value());
+  EXPECT_EQ(header.blobCompression, CompressionType::Uncompressed);
+  EXPECT_EQ(pos, buffer.data() + buffer.size());
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -412,6 +422,18 @@ INSTANTIATE_TEST_SUITE_P(
             .version = SerializationVersion::kProjection,
             .rowCount = 1000,
             .requiredBarrier = true,
+        },
+        SerializationHeaderRoundTripParam{
+            .name = "blobNoNullBarrier",
+            .version = SerializationVersion::kBlob,
+            .rowCount = 1000,
+            .requiredBarrier = false,
+        },
+        SerializationHeaderRoundTripParam{
+            .name = "blobRequiredBarrier",
+            .version = SerializationVersion::kBlob,
+            .rowCount = 1000,
+            .requiredBarrier = true,
         }),
     [](const ::testing::TestParamInfo<SerializationHeaderRoundTripParam>&
            info) { return info.param.name; });
@@ -424,6 +446,60 @@ TEST(SerializationHeaderTest, readRejectsUnsupportedVersion) {
       readSerializationHeader(pos, pos + buffer.size()), "Unsupported version");
 }
 
+TEST(SerializationHeaderTest, readsBlobCompression) {
+  for (const auto compressionType :
+       {CompressionType::Uncompressed,
+        CompressionType::Zstd,
+        CompressionType::MetaInternal,
+        CompressionType::Lz4,
+        CompressionType::OpenZL}) {
+    SCOPED_TRACE(fmt::format("compressionType={}", compressionType));
+    std::string buffer;
+    const auto flagsOffset = writeSerializationHeader(
+        buffer, SerializationVersion::kBlob, /*rowCount=*/100);
+    ASSERT_EQ(buffer.size(), flagsOffset + 2);
+    EXPECT_EQ(
+        static_cast<CompressionType>(buffer[flagsOffset + 1]),
+        CompressionType::Uncompressed);
+    buffer[flagsOffset + 1] = static_cast<char>(compressionType);
+
+    const char* pos = buffer.data();
+    const auto header = readSerializationHeader(pos, pos + buffer.size());
+    EXPECT_EQ(header.version, SerializationVersion::kBlob);
+    EXPECT_EQ(header.rowCount, 100);
+    EXPECT_EQ(header.blobCompression, compressionType);
+    EXPECT_EQ(pos, buffer.data() + buffer.size());
+  }
+}
+
+TEST(SerializationHeaderTest, readRejectsUnsupportedBlobCompression) {
+  // OpenZL (4) is the last codec.
+  for (const uint8_t compressionByte : {uint8_t{5}, uint8_t{99}}) {
+    SCOPED_TRACE(fmt::format("compressionByte={}", compressionByte));
+    std::string buffer;
+    const auto flagsOffset = writeSerializationHeader(
+        buffer, SerializationVersion::kBlob, /*rowCount=*/100);
+    buffer[flagsOffset + 1] = static_cast<char>(compressionByte);
+
+    const char* pos = buffer.data();
+    NIMBLE_ASSERT_FILE_THROW(
+        readSerializationHeader(pos, pos + buffer.size()),
+        "Unsupported kBlob blob compression");
+  }
+}
+
+TEST(SerializationHeaderTest, readRejectsTruncatedBlobCompression) {
+  std::string buffer;
+  writeSerializationHeader(
+      buffer, SerializationVersion::kBlob, /*rowCount=*/100);
+  buffer.pop_back();
+
+  const char* pos = buffer.data();
+  NIMBLE_ASSERT_FILE_THROW(
+      readSerializationHeader(pos, pos + buffer.size()),
+      "Truncated header (blob compression)");
+}
+
 TEST(SerializationHeaderTest, writeNullableHeaderRejectsNonNullableVersions) {
   for (const auto version :
        {SerializationVersion::kLegacyCompact,
@@ -433,7 +509,7 @@ TEST(SerializationHeaderTest, writeNullableHeaderRejectsNonNullableVersions) {
     std::string buffer;
     NIMBLE_ASSERT_THROW(
         writeSerializationHeader(buffer, version, 100),
-        "Serialization header writes require kSerialization or kProjection");
+        "Serialization header writes require kSerialization, kProjection or kBlob");
   }
 }
 
@@ -445,7 +521,7 @@ TEST(SerializationHeaderTest, estimateRejectsReadOnlyVersions) {
     SCOPED_TRACE(toString(version));
     NIMBLE_ASSERT_THROW(
         estimateSerializationHeaderSize(version, 100),
-        "Serialization header writes require kSerialization or kProjection");
+        "Serialization header writes require kSerialization, kProjection or kBlob");
   }
 }
 

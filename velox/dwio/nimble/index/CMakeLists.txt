@@ -13,7 +13,7 @@
 # limitations under the License.
 add_library(
   nimble_index
-  HierarchicalKeyReader.cpp
+  TrieKeyReader.cpp
   BlockedBloomFilter.cpp
   BloomFilter.cpp
   ChunkStats.cpp
@@ -28,9 +28,9 @@ add_library(
   FlatClusterIndexFactory.cpp
   HashIndex.cpp
   HashIndexWriter.cpp
-  HierarchicalClusterIndex.cpp
-  HierarchicalClusterIndexFactory.cpp
-  HierarchicalClusterIndexWriter.cpp
+  TrieClusterIndex.cpp
+  TrieClusterIndexFactory.cpp
+  TrieClusterIndexWriter.cpp
   IndexConfig.cpp
   IndexFilter.cpp
   IndexKeyEncoder.cpp
@@ -46,11 +46,11 @@ add_library(
   VectorIndexWriter.h
   VectorIndexConfig.h
   SortedIndexWriter.h
-  HierarchicalClusterIndex.h
-  HierarchicalClusterIndexFactory.h
-  HierarchicalClusterIndexWriter.h
-  HierarchicalKeyFormat.h
-  HierarchicalKeyReader.h
+  TrieClusterIndex.h
+  TrieClusterIndexFactory.h
+  TrieClusterIndexWriter.h
+  TrieKeyFormat.h
+  TrieKeyReader.h
   SortedIndexConfig.h
   SortedIndex.h
   SortOrder.h

@@ -77,7 +77,8 @@ std::shared_ptr<TypeBuilder> makeComplexValueType(SchemaBuilder& builder) {
   return row;
 }
 
-class DeserializerTest : public ::testing::Test {
+// Runs each test once per Serializer writer version.
+class DeserializerTest : public ::testing::TestWithParam<SerializationVersion> {
  protected:
   static void SetUpTestSuite() {
     velox::memory::MemoryManager::testingSetInstance(
@@ -112,7 +113,7 @@ class DeserializerTest : public ::testing::Test {
     const auto input = makeInput(inputMaps);
     Serializer serializer{
         SerializerOptions{
-            .version = SerializationVersion::kSerialization,
+            .version = GetParam(),
             .hybridFlatMapColumns =
                 {{"features",
                   makeHybridFlatMap(
@@ -174,12 +175,12 @@ class DeserializerTest : public ::testing::Test {
   std::shared_ptr<velox::memory::MemoryPool> pool_;
 };
 
-TEST_F(DeserializerTest, acceptsRegularFlatMapSchema) {
+TEST_P(DeserializerTest, acceptsRegularFlatMapSchema) {
   const auto type =
       velox::ROW({{"features", velox::MAP(velox::INTEGER(), velox::BIGINT())}});
   Serializer serializer{
       SerializerOptions{
-          .version = SerializationVersion::kSerialization,
+          .version = GetParam(),
           .flatMapColumns = {{"features", {"1"}}},
       },
       type,
@@ -211,7 +212,7 @@ TEST_F(DeserializerTest, traversesComplexHybridValueSubtrees) {
   EXPECT_NO_THROW(Deserializer(schema, pool_.get()));
 }
 
-TEST_F(DeserializerTest, hybridFlatMapOmitsConstantGroupMetadata) {
+TEST_P(DeserializerTest, hybridFlatMapOmitsConstantGroupMetadata) {
   velox::test::VectorMaker vectorMaker{pool_.get()};
   const auto makeInput = [&](const std::vector<std::string>& maps) {
     return vectorMaker.rowVector(
@@ -272,7 +273,7 @@ TEST_F(DeserializerTest, hybridFlatMapOmitsConstantGroupMetadata) {
   const auto type = makeInput(batches.front().maps)->type();
   Serializer serializer{
       SerializerOptions{
-          .version = SerializationVersion::kSerialization,
+          .version = GetParam(),
           .hybridFlatMapColumns =
               {{"features",
                 makeHybridFlatMap(
@@ -322,7 +323,7 @@ TEST_F(DeserializerTest, hybridFlatMapOmitsConstantGroupMetadata) {
   velox::test::assertEqualVectors(makeInput(expectedMaps), output);
 }
 
-TEST_F(DeserializerTest, hybridFlatMapOmitsAllTrueKeyPresenceForFixedGroups) {
+TEST_P(DeserializerTest, hybridFlatMapOmitsAllTrueKeyPresenceForFixedGroups) {
   velox::test::VectorMaker vectorMaker{pool_.get()};
   const auto makeInput = [&](const std::vector<std::string>& maps) {
     return vectorMaker.rowVector(
@@ -339,7 +340,7 @@ TEST_F(DeserializerTest, hybridFlatMapOmitsAllTrueKeyPresenceForFixedGroups) {
   const auto type = makeInput(batchMaps.front())->type();
   Serializer serializer{
       SerializerOptions{
-          .version = SerializationVersion::kSerialization,
+          .version = GetParam(),
           .hybridFlatMapColumns =
               {{"features",
                 makeHybridFlatMap(
@@ -405,7 +406,7 @@ TEST_F(DeserializerTest, hybridFlatMapOmitsAllTrueKeyPresenceForFixedGroups) {
   velox::test::assertEqualVectors(makeInput(expectedMaps), output);
 }
 
-TEST_F(DeserializerTest, hybridFlatMapOmitsAllFalseDefaultGroupMetadata) {
+TEST_P(DeserializerTest, hybridFlatMapOmitsAllFalseDefaultGroupMetadata) {
   velox::test::VectorMaker vectorMaker{pool_.get()};
   const auto makeInput = [&](const std::vector<std::string>& maps) {
     return vectorMaker.rowVector(
@@ -414,7 +415,7 @@ TEST_F(DeserializerTest, hybridFlatMapOmitsAllFalseDefaultGroupMetadata) {
 
   Serializer serializer{
       SerializerOptions{
-          .version = SerializationVersion::kSerialization,
+          .version = GetParam(),
           .hybridFlatMapColumns =
               {{"features",
                 makeHybridFlatMap(
@@ -485,7 +486,7 @@ TEST_F(DeserializerTest, hybridFlatMapOmitsAllFalseDefaultGroupMetadata) {
   velox::test::assertEqualVectors(makeInput(expectedMaps), output);
 }
 
-TEST_F(DeserializerTest, hybridFlatMapKeyListKeepsSchemaAcrossBatches) {
+TEST_P(DeserializerTest, hybridFlatMapKeyListKeepsSchemaAcrossBatches) {
   velox::test::VectorMaker vectorMaker{pool_.get()};
   const auto makeInput = [&](const std::vector<std::string>& maps) {
     return vectorMaker.rowVector(
@@ -520,7 +521,7 @@ TEST_F(DeserializerTest, hybridFlatMapKeyListKeepsSchemaAcrossBatches) {
     SCOPED_TRACE(fmt::format("skipConstantMetadata={}", skipConstantMetadata));
     Serializer serializer{
         SerializerOptions{
-            .version = SerializationVersion::kSerialization,
+            .version = GetParam(),
             .hybridFlatMapColumns = {{"features", hybridMap}},
             .skipConstantHybridFlatMapMetadataStreams = skipConstantMetadata,
         },
@@ -562,7 +563,7 @@ TEST_F(DeserializerTest, hybridFlatMapKeyListKeepsSchemaAcrossBatches) {
   }
 }
 
-TEST_F(DeserializerTest, hybridFlatMapMetadataIsRetainedByDefault) {
+TEST_P(DeserializerTest, hybridFlatMapMetadataIsRetainedByDefault) {
   velox::test::VectorMaker vectorMaker{pool_.get()};
   const auto input = vectorMaker.rowVector(
       {"features"},
@@ -570,6 +571,7 @@ TEST_F(DeserializerTest, hybridFlatMapMetadataIsRetainedByDefault) {
           {"{1: 10, 2: 20}", "{1: 11, 2: 21}"})});
   Serializer serializer{
       SerializerOptions{
+          .version = GetParam(),
           .hybridFlatMapColumns =
               {{"features",
                 makeHybridFlatMap(
@@ -595,7 +597,7 @@ TEST_F(DeserializerTest, hybridFlatMapMetadataIsRetainedByDefault) {
   EXPECT_TRUE(offsets.contains(group.inMapDescriptor.offset()));
 }
 
-TEST_F(DeserializerTest, hybridFlatMapRoundTripsMixedDefault) {
+TEST_P(DeserializerTest, hybridFlatMapRoundTripsMixedDefault) {
   constexpr velox::vector_size_t kRows = 4;
   auto mapType = velox::MAP(velox::INTEGER(), velox::DOUBLE());
   auto keys = velox::BaseVector::create(velox::INTEGER(), 8, pool_.get());
@@ -636,7 +638,7 @@ TEST_F(DeserializerTest, hybridFlatMapRoundTripsMixedDefault) {
       pool_.get(), type, nullptr, kRows, std::vector<velox::VectorPtr>{map});
   Serializer serializer{
       SerializerOptions{
-          .version = SerializationVersion::kSerialization,
+          .version = GetParam(),
           .hybridFlatMapColumns =
               {{"features",
                 makeHybridFlatMap(
@@ -811,7 +813,7 @@ TEST_F(DeserializerTest, hybridFlatMapRoundTripsMixedDefault) {
   EXPECT_TRUE(input->equalValueAt(output.get(), 2, 1));
 }
 
-TEST_F(DeserializerTest, hybridFlatMapRoundTripsDefaultOnly) {
+TEST_P(DeserializerTest, hybridFlatMapRoundTripsDefaultOnly) {
   // The rows cover a non-empty map, a null map, an empty map and a null value,
   // and one key repeats across rows.
   verifyDefaultOnlyRoundTrip<int64_t>(
@@ -833,6 +835,14 @@ TEST_F(DeserializerTest, hybridFlatMapRoundTripsDefaultOnly) {
            .expectedMaps = {"{}", "null", "{}", "{}"}},
       });
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    WriterVersions,
+    DeserializerTest,
+    ::testing::Values(
+        SerializationVersion::kSerialization,
+        SerializationVersion::kBlob),
+    [](const auto& info) { return toString(info.param); });
 
 } // namespace
 } // namespace facebook::nimble

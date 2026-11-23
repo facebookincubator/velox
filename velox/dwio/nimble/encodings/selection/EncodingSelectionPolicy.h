@@ -395,6 +395,20 @@ class ManualEncodingSelectionPolicyFactory {
   static std::vector<std::pair<EncodingType, float>>
   defaultEncodingReadFactors();
 
+  /// Returns the candidates for file metadata (stripe groups, chunk stats,
+  /// file stats).
+  ///
+  /// - Each supports constant-time point reads through an EncodingView, unlike
+  ///   RLE and Varint.
+  static std::vector<std::pair<EncodingType, float>>
+  metadataEncodingReadFactors();
+
+  /// Returns a factory with metadata defaults:
+  ///
+  /// - Candidates from metadataEncodingReadFactors().
+  /// - No compression, so readers can read one value without decompressing.
+  static ManualEncodingSelectionPolicyFactory createForMetadata();
+
   /// Parses semicolon-delimited runtime read-factor config.
   /// Allows explicit opt-in to parseable encodings that are not part of
   /// defaultEncodingReadFactors().
