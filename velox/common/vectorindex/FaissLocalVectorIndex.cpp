@@ -312,10 +312,24 @@ FaissLocalVectorIndex::FaissLocalVectorIndex(
   }
   if (accelerator != nullptr) {
     accelerated_ = accelerator->load(kind_, *index_);
+    if (!accelerated_) {
+      probeAccelerator_ = accelerator;
+    }
   }
 }
 
 FaissLocalVectorIndex::~FaissLocalVectorIndex() = default;
+
+const LocalVectorIndexAccelerator::Index*
+FaissLocalVectorIndex::deviceIndexForProbe() const {
+  if (accelerated_ || !probeAccelerator_) {
+    return accelerated_.get();
+  }
+  std::call_once(probeIndexOnce_, [&] {
+    probeIndex_ = probeAccelerator_->loadForDeviceProbe(kind_, *index_);
+  });
+  return probeIndex_.get();
+}
 
 VectorIndexKind FaissLocalVectorIndex::kind() const {
   return kind_;

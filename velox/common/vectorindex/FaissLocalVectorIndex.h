@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string_view>
 
@@ -129,6 +130,10 @@ class FaissLocalVectorIndex : public LocalVectorIndex {
     return accelerated_.get();
   }
 
+  /// Reuses the existing device copy or attempts a device-only copy once
+  /// for a small index. CPU callers of search() keep their existing path.
+  const LocalVectorIndexAccelerator::Index* deviceIndexForProbe() const;
+
   void search(
       const Embeddings& queries,
       int64_t k,
@@ -140,6 +145,9 @@ class FaissLocalVectorIndex : public LocalVectorIndex {
   VectorIndexKind kind_;
   // Refers to 'index_', so it is declared after it to be destroyed first.
   std::unique_ptr<LocalVectorIndexAccelerator::Index> accelerated_;
+  std::shared_ptr<const LocalVectorIndexAccelerator> probeAccelerator_;
+  mutable std::once_flag probeIndexOnce_;
+  mutable std::unique_ptr<LocalVectorIndexAccelerator::Index> probeIndex_;
 };
 
 } // namespace facebook::velox::common::vectorindex

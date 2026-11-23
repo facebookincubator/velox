@@ -63,14 +63,20 @@ cuDF-supported input and output columns. It can search every index (no
 equality keys) or select indexes by matching any number of integer and
 `VARCHAR` key columns together. Other joins use the CPU probe and can
 still use GPU FAISS for eligible indexes.
-`cudf.vector_search_min_index_size` defaults to 1,024 embeddings per index.
-An index below that threshold is searched on the CPU, including a centroid
-index used by a routing join. `VectorSearchJoinBuild` still opens the
-indexes and prepares the build side on the CPU.
+`cudf.vector_search_min_index_size` defaults to 1,024 embeddings per index
+for FAISS searches with CPU input and output buffers. A GPU join can load
+smaller eligible indexes on demand because its query and result buffers
+are already on the GPU. `VectorSearchJoinBuild` opens the indexes and
+prepares the build side on the CPU.
+Probe drivers on the same device share FAISS resources and serialize the
+search calls, so adding drivers does not make FAISS searches run in parallel.
 
 The [SQL-shaped `vector_search(...)` example](../../exec/tests/VectorSearchTest.cpp)
 uses two equality keys for routing and three for the local-index search.
 Both sets of keys are supported by the GPU join path.
+
+With `cudf.vector_search_enabled=false`, a `TopNRowNumber` directly after
+a vector search join runs on the CPU even if cuDF is enabled for the query.
 
 To train and fill eligible IVF-Flat and IVF-SQ indexes on the GPU with
 `vector_index_build`, set `cudf.vector_index_build_enabled=true` together

@@ -25,10 +25,6 @@
 #include "velox/exec/VectorSearchJoinBridge.h"
 #include "velox/exec/VectorSearchJoinProbe.h"
 
-#include <algorithm>
-#include <limits>
-#include <numeric>
-
 #include <cudf/copying.hpp>
 #include <cudf/join/filtered_join.hpp>
 #include <cudf/join/join.hpp>
@@ -38,6 +34,10 @@
 #include <cudf/utilities/error.hpp>
 
 #include <rmm/device_uvector.hpp>
+
+#include <algorithm>
+#include <limits>
+#include <numeric>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -67,23 +67,30 @@ cudf::column_view view(
 } // namespace
 
 struct CudfVectorSearchJoinProbe::State {
-  State(cuda::stream_ref stream, uint64_t budget, size_t dimension, int64_t maxK)
+  State(
+      cuda::stream_ref stream,
+      uint64_t budget,
+      size_t dimension,
+      int64_t maxK)
       : stream{stream},
         mr{cudf::get_current_device_resource_ref()},
-        maxCandidates(std::clamp<uint64_t>(
-            budget / kCandidateBytes,
-            maxK,
-            std::numeric_limits<Size>::max())),
-        maxMatchPairs(std::clamp<uint64_t>(
-            budget / (8 * sizeof(Size)),
-            1,
-            std::numeric_limits<Size>::max())),
-        maxSliceRows(std::clamp<uint64_t>(
-            budget /
-                (2 * sizeof(float) * dimension + maxK * kCandidateBytes +
-                 3 * sizeof(Size)),
-            1,
-            std::min<int64_t>(maxCandidates / maxK, maxMatchPairs))),
+        maxCandidates(
+            std::clamp<uint64_t>(
+                budget / kCandidateBytes,
+                maxK,
+                std::numeric_limits<Size>::max())),
+        maxMatchPairs(
+            std::clamp<uint64_t>(
+                budget / (8 * sizeof(Size)),
+                1,
+                std::numeric_limits<Size>::max())),
+        maxSliceRows(
+            std::clamp<uint64_t>(
+                budget /
+                    (2 * sizeof(float) * dimension + maxK * kCandidateBytes +
+                     3 * sizeof(Size)),
+                1,
+                std::min<int64_t>(maxCandidates / maxK, maxMatchPairs))),
         queryValues{0, stream, mr},
         groupValues{0, stream, mr},
         groupRows{0, stream, mr},
@@ -188,11 +195,12 @@ exec::BlockingReason CudfVectorSearchJoinProbe::isBlocked(
     const auto* index =
         dynamic_cast<const FaissLocalVectorIndex*>(&table_->indexAt(row));
     const auto k = table_->numResults(row, node_->k());
-    if (index == nullptr ||
-        (index->kind() != VectorIndexKind::kFlat &&
-         index->kind() != VectorIndexKind::kIvfFlat) ||
-        index->deviceIndex() == nullptr ||
-        !index->deviceIndex()->supportsDeviceSearch(k)) {
+    const auto* deviceIndex = index &&
+            (index->kind() == VectorIndexKind::kFlat ||
+             index->kind() == VectorIndexKind::kIvfFlat)
+        ? index->deviceIndexForProbe()
+        : nullptr;
+    if (!deviceIndex || !deviceIndex->supportsDeviceSearch(k)) {
       // The driver has already wired GPU input and output. Run the original
       // CPU probe between conversions for this driver.
       fallback_ = std::make_unique<exec::VectorSearchJoinProbe>(
@@ -238,6 +246,9 @@ void CudfVectorSearchJoinProbe::doAddInput(RowVectorPtr input) {
     return;
   }
   if (!state_) {
+    VELOX_CHECK(
+        node_->metric() == common::vectorindex::VectorIndexMetric::kCosine);
+    VELOX_CHECK_GT(maxK_, 0);
     state_ = std::make_unique<State>(
         gpuInput->stream(),
         operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes(),
@@ -315,16 +326,17 @@ void CudfVectorSearchJoinProbe::prepareSlice() {
             {state.sliceStart, state.sliceStart + state.sliceSize},
             state.stream)
             .front();
-    matches = cudf::contains(
-        state.buildKeys.column(0), keys, state.stream, state.mr);
+    matches =
+        cudf::contains(state.buildKeys.column(0), keys, state.stream, state.mr);
   } else if (state.keyFilter) {
     // Only validate embeddings that will be searched. A semi join finds
     // matching queries once, even when several indexes share the same key.
-    const auto keys = cudf::slice(
-                          input.select(probeKeyChannels_),
-                          {state.sliceStart, state.sliceStart + state.sliceSize},
-                          state.stream)
-                          .front();
+    const auto keys =
+        cudf::slice(
+            input.select(probeKeyChannels_),
+            {state.sliceStart, state.sliceStart + state.sliceSize},
+            state.stream)
+            .front();
     matchedRows = state.keyFilter->semi_join(keys, state.stream, state.mr);
     if (matchedRows->is_empty()) {
       return;
@@ -414,11 +426,10 @@ void CudfVectorSearchJoinProbe::prepareMatchTile() {
   state.nextGroup = 0;
   state.nextMatch = 0;
   state.counts.assign(tileRows, 0);
-  const auto right = cudf::slice(
-                         state.buildKeys,
-                         {state.tileStart, state.nextIndex},
-                         state.stream)
-                         .front();
+  const auto right =
+      cudf::slice(
+          state.buildKeys, {state.tileStart, state.nextIndex}, state.stream)
+          .front();
   auto [probe, build] = cudf::inner_join(
       state.eligibleKeys->view(),
       right,
@@ -518,7 +529,7 @@ bool CudfVectorSearchJoinProbe::fillResults() {
     }
     const auto& index =
         static_cast<const FaissLocalVectorIndex&>(table_->indexAt(buildRow));
-    const auto* deviceIndex = index.deviceIndex();
+    const auto* deviceIndex = index.deviceIndexForProbe();
     VELOX_CHECK(deviceIndex->searchDevice(
         values,
         queryCount,

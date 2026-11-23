@@ -33,6 +33,8 @@
 #include <cudf/lists/lists_column_view.hpp>
 
 #include <chrono>
+#include <cmath>
+#include <numeric>
 #include <thread>
 
 namespace facebook::velox::cudf_velox {
@@ -163,9 +165,7 @@ class VectorSearchJoinTest : public exec::test::OperatorTestBase {
     return builder;
   }
 
-  static int64_t operatorCount(
-      const exec::Task& task,
-      std::string_view type) {
+  static int64_t operatorCount(const exec::Task& task, std::string_view type) {
     int64_t result = 0;
     for (const auto& pipeline : task.taskStats().pipelineStats) {
       for (const auto& op : pipeline.operatorStats) {
@@ -369,31 +369,109 @@ TEST_F(VectorSearchJoinTest, partialIvfResults) {
 }
 
 TEST_F(VectorSearchJoinTest, multipleProbeDrivers) {
+  constexpr vector_size_t kIndexRows = 256;
+  constexpr vector_size_t kQueries = 128;
+  constexpr int32_t kDrivers = 4;
+  constexpr int64_t k = 7;
+  constexpr float kAngleStep = 0.02f;
+  std::vector<float> embeddings;
+  std::vector<int64_t> ids(kIndexRows);
+  std::iota(ids.begin(), ids.end(), kLargeId);
+  for (vector_size_t row = 0; row < kIndexRows; ++row) {
+    const float angle = row * kAngleStep;
+    embeddings.insert(embeddings.end(), {std::cos(angle), std::sin(angle)});
+  }
+  std::vector<std::vector<float>> queries;
+  for (vector_size_t row = 0; row < kQueries; ++row) {
+    const float angle = (2 * row + 0.31f) * kAngleStep;
+    queries.push_back({std::cos(angle), std::sin(angle)});
+  }
+  auto input = makeRowVector(
+      {"query", "embedding"},
+      {makeFlatVector<int64_t>(kQueries, [](auto row) { return row; }),
+       makeArrayVector<float>(queries)});
+  auto build = makeRowVector(
+      {"metadata", "index_bytes"},
+      {makeConstant<int64_t>(10, 1),
+       makeFlatVector<std::string>(
+           {pack(
+               embeddings,
+               ids,
+               VectorIndexKind::kIvfFlat,
+               {.nlist = 4, .nprobe = 4})},
+           VARBINARY())});
+  const auto runWithDrivers = [&](bool parallel, int32_t drivers) {
+    auto builder =
+        run(plan({input}, build, core::JoinType::kInner, false, parallel, k));
+    builder.maxDrivers(drivers)
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1 << 20)
+        .config(CudfFromVelox::kGpuBatchSizeRows, kQueries);
+    return builder;
+  };
+  unregisterCudf();
+  const auto cpu = runWithDrivers(false, 1).copyResults(pool());
+  registerCudf();
+  ASSERT_EQ(cpu->size(), kQueries * k);
+  std::shared_ptr<exec::Task> serialTask;
+  const auto serial = runWithDrivers(false, 1).copyResults(pool(), serialTask);
+  ASSERT_TRUE(exec::test::assertEqualResults({cpu}, {serial}));
+  expectDeviceProbes(*serialTask);
+  const auto parallelTask =
+      runWithDrivers(true, kDrivers)
+          .assertResults(std::vector<RowVectorPtr>(kDrivers, serial));
+  expectDeviceProbes(*parallelTask, kDrivers);
+}
+
+TEST_F(VectorSearchJoinTest, smallIndexesStayOnGpuWithDeviceProbe) {
+  constexpr int32_t kMinIndexSize = 1'024;
+  unregisterCudf();
+  CudfConfig::getInstance().vectorSearchMinIndexSize = kMinIndexSize;
+  registerCudf();
+  std::vector<float> embeddings;
+  std::vector<int64_t> ids(kMinIndexSize);
+  std::iota(ids.begin(), ids.end(), kLargeId);
+  embeddings.insert(embeddings.end(), {1, 0});
+  for (int32_t row = 1; row < kMinIndexSize; ++row) {
+    embeddings.insert(embeddings.end(), {0, 1});
+  }
+  const auto small = pack({1, 0}, {-2});
+  const auto large = pack(embeddings, ids);
+  // Opening the same small index for host searches still respects the cutoff.
+  const FaissLocalVectorIndex hostIndex(small, VectorIndexMetric::kCosine, {});
+  EXPECT_FALSE(hostIndex.accelerated());
+  auto build = makeRowVector(
+      {"metadata", "index_bytes"},
+      {makeFlatVector<int64_t>({10, 20}),
+       makeFlatVector<std::string>({small, large}, VARBINARY())});
   auto input = makeRowVector(
       {"query", "embedding"},
       {makeFlatVector<int64_t>({7}), makeArrayVector<float>({{2, 0}})});
-  std::shared_ptr<exec::Task> task;
-  EXPECT_EQ(
-      run(plan({input}, buildRows(), core::JoinType::kInner, false, true))
-          .maxDrivers(4)
-          .countResults(task),
-      12);
-  expectDeviceProbes(*task, 4);
+  const auto task =
+      run(plan({input}, build, core::JoinType::kInner, false, false, 1))
+          .assertResults(makeRowVector(
+              {makeFlatVector<int64_t>({7, 7}),
+               makeFlatVector<int64_t>({10, 20}),
+               makeFlatVector<int64_t>({-2, kLargeId}),
+               makeFlatVector<float>({1, 1})}));
+  expectDeviceProbes(*task);
 }
 
 TEST_F(VectorSearchJoinTest, fallbackBeforeInput) {
-  unregisterCudf();
-  CudfConfig::getInstance().vectorSearchMinIndexSize = 100;
-  registerCudf();
   auto input = makeRowVector(
       {"query", "embedding"},
       {makeFlatVector<int64_t>({7}), makeArrayVector<float>({{2, 0}})});
-  const auto task = run(plan({input}, buildRows()))
-                        .assertResults(makeRowVector(
-                            {makeFlatVector<int64_t>({7, 7, 7}),
-                             makeFlatVector<int64_t>({10, 10, 20}),
-                             makeFlatVector<int64_t>({-2, kLargeId, -2}),
-                             makeFlatVector<float>({1, 0, 0})}));
+  auto build = makeRowVector(
+      {"metadata", "index_bytes"},
+      {makeConstant<int64_t>(10, 1),
+       makeFlatVector<std::string>(
+           {pack({1, 0, 0, 1}, {-2, kLargeId}, VectorIndexKind::kHnswSq)},
+           VARBINARY())});
+  const auto node = plan({input}, build);
+  unregisterCudf();
+  const auto expected = run(node).copyResults(pool());
+  registerCudf();
+  ASSERT_EQ(expected->size(), 2);
+  const auto task = run(node).assertResults(expected);
   EXPECT_EQ(operatorCount(*task, "CudfVectorSearchJoinProbe"), 1);
   EXPECT_EQ(deviceFallbacks(*task), 1);
 }
@@ -452,13 +530,12 @@ TEST_F(VectorSearchJoinTest, singleKeyTypeEligibility) {
         {makeFlatVector<int64_t>({7}),
          route,
          makeArrayVector<float>({{2, 0}})});
-    const auto task =
-        run(plan({input}, build, core::JoinType::kInner, true))
-            .assertResults(makeRowVector(
-                {makeFlatVector<int64_t>({7, 7}),
-                 makeFlatVector<int64_t>({10, 10}),
-                 makeFlatVector<int64_t>({-2, kLargeId}),
-                 makeFlatVector<float>({1, 0})}));
+    const auto task = run(plan({input}, build, core::JoinType::kInner, true))
+                          .assertResults(makeRowVector(
+                              {makeFlatVector<int64_t>({7, 7}),
+                               makeFlatVector<int64_t>({10, 10}),
+                               makeFlatVector<int64_t>({-2, kLargeId}),
+                               makeFlatVector<float>({1, 0})}));
     expectDeviceProbes(*task, expectGpu ? 1 : 0);
     EXPECT_EQ(operatorCount(*task, "VectorSearchJoinProbe"), expectGpu ? 0 : 1);
   };
@@ -516,7 +593,12 @@ TEST_F(VectorSearchJoinTest, vectorSearchFlagControlsJoinsAndRerank) {
               "embedding",
               "index_bytes",
               10,
-              {"query", "ordinal", "cluster_id", "metadata", "neighbor", "score"},
+              {"query",
+               "ordinal",
+               "cluster_id",
+               "metadata",
+               "neighbor",
+               "score"},
               "neighbor",
               "score")
           .topNRowNumber({"ordinal"}, {"score DESC"}, 10, false)
@@ -566,21 +648,20 @@ TEST_F(VectorSearchJoinTest, multiKeyLeftJoin) {
             pack({1, 0}, {50})},
            VARBINARY())});
   auto ids = std::make_shared<core::PlanNodeIdGenerator>();
-  const auto node =
-      PlanBuilder(ids)
-          .values({input})
-          .vectorSearchJoin(
-              {"ds", "route"},
-              {"i_ds", "i_route"},
-              PlanBuilder(ids).values({build}).planNode(),
-              "embedding",
-              "index_bytes",
-              1,
-              {"query", "neighbor", "score"},
-              "neighbor",
-              "score",
-              core::JoinType::kLeft)
-          .planNode();
+  const auto node = PlanBuilder(ids)
+                        .values({input})
+                        .vectorSearchJoin(
+                            {"ds", "route"},
+                            {"i_ds", "i_route"},
+                            PlanBuilder(ids).values({build}).planNode(),
+                            "embedding",
+                            "index_bytes",
+                            1,
+                            {"query", "neighbor", "score"},
+                            "neighbor",
+                            "score",
+                            core::JoinType::kLeft)
+                        .planNode();
   const auto expected = makeRowVector(
       {makeFlatVector<int64_t>({0, 0, 1, 2, 3, 4}),
        makeNullableFlatVector<int64_t>(

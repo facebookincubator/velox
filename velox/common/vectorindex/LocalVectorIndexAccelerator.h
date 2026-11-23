@@ -91,6 +91,14 @@ class LocalVectorIndexAccelerator {
       VectorIndexKind type,
       const faiss::Index& index) const = 0;
 
+  /// Tries to load an index skipped by load() because it was too small for
+  /// host-buffer searches. A device-resident probe can avoid those transfers.
+  virtual std::unique_ptr<Index> loadForDeviceProbe(
+      VectorIndexKind /*type*/,
+      const faiss::Index& /*index*/) const {
+    return nullptr;
+  }
+
   /// Trains 'index', an empty local index of 'type' as
   /// LocalVectorIndex::build() makes it, on 'embeddings', then adds them with
   /// 'ids'. Returns false, leaving 'index' empty, to have build() train and

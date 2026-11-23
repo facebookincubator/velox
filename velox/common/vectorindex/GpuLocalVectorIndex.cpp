@@ -437,6 +437,22 @@ class GpuAccelerator : public LocalVectorIndexAccelerator {
     if (!options_.requireDevice && index.ntotal < options_.minSearchSize) {
       return nullptr;
     }
+    return loadDeviceIndex(type, index);
+  }
+
+  std::unique_ptr<Index> loadForDeviceProbe(
+      VectorIndexKind type,
+      const faiss::Index& index) const override {
+    if (options_.requireDevice || index.ntotal >= options_.minSearchSize) {
+      return nullptr;
+    }
+    return loadDeviceIndex(type, index);
+  }
+
+ private:
+  std::unique_ptr<Index> loadDeviceIndex(
+      VectorIndexKind type,
+      const faiss::Index& index) const {
     const std::lock_guard<std::mutex> lock(device_->mutex);
     try {
       faiss::gpu::DeviceScope scope(device_->id);
@@ -483,6 +499,7 @@ class GpuAccelerator : public LocalVectorIndexAccelerator {
     }
   }
 
+ public:
   bool build(
       VectorIndexKind type,
       faiss::Index& index,
