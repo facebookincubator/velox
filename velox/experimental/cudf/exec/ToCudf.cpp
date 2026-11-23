@@ -495,6 +495,16 @@ void CudfConfig::initialize(
     streamingGroupbyCapacityMultiplier =
         folly::to<double>(config[kCudfStreamingGroupbyCapacityMultiplier]);
   }
+  if (config.find(kCudfStreamingGroupbyMaxPartitionKeys) != config.end()) {
+    const auto& value = config[kCudfStreamingGroupbyMaxPartitionKeys];
+    const auto maxKeys = folly::tryTo<int32_t>(value);
+    VELOX_USER_CHECK(
+        maxKeys.hasValue() && maxKeys.value() > 0,
+        "cuDF streaming groupby partition key limit must be a positive "
+        "integer: {}",
+        value);
+    streamingGroupbyMaxPartitionKeys = maxKeys.value();
+  }
   if (config.find(kCudfFunctionNamePrefix) != config.end()) {
     functionNamePrefix = config[kCudfFunctionNamePrefix];
   }

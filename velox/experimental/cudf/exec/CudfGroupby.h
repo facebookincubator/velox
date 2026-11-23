@@ -33,11 +33,16 @@ namespace facebook::velox::cudf_velox {
 
 class CudaEvent;
 class GroupbyBufferedStateOps;
+class StreamingGroupbyBufferedStateOps;
 
 inline constexpr std::string_view kStreamingGroupbyUsedStat{
     "streamingGroupbyUsed"};
 inline constexpr std::string_view kStreamingGroupbyRebuildsStat{
     "streamingGroupbyRebuilds"};
+// Number of times a streaming_groupby table that reached its limit was split
+// into tables for parts of its hash buckets.
+inline constexpr std::string_view kStreamingGroupbySplitsStat{
+    "streamingGroupbySplits"};
 
 // Type-specific adapter between Velox final-aggregation state and libcudf's
 // flattened streaming_groupby request/result interface. prepareInput() must be
@@ -214,6 +219,7 @@ class CudfGroupby : public CudfOperatorBase {
 
  private:
   friend class GroupbyBufferedStateOps;
+  friend class StreamingGroupbyBufferedStateOps;
 
   CudfVectorPtr doGroupByAggregation(
       cudf::table_view tableView,
@@ -289,10 +295,13 @@ class CudfGroupby : public CudfOperatorBase {
 
   std::vector<std::unique_ptr<StreamingGroupbyAggregator>>
       streamingGroupbyAggregators_;
-  std::unique_ptr<cudf::groupby::streaming_groupby> streamingGroupby_;
+  // Buffered state of a streaming final step: hash-partitioned
+  // streaming_groupby tables that are each kept within the key limit.
+  std::unique_ptr<PartitionedBufferedState> streamingBufferedState_;
+  // True once a batch has been added to 'streamingBufferedState_'.
+  bool streamingGroupbyUsed_{false};
   std::optional<cuda::stream_ref> streamingGroupbyStream_;
   std::unique_ptr<CudaEvent> streamingGroupbyEvent_;
-  size_t streamingGroupbyCapacity_{0};
 };
 
 } // namespace facebook::velox::cudf_velox

@@ -21,6 +21,7 @@
 #include <cudf/partitioning.hpp>
 
 #include <deque>
+#include <limits>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -94,6 +95,14 @@ struct InputChunk {
   }
 };
 
+// Splits 'input' into one chunk per routing target. The chunks are slices of
+// one table allocated from 'mr', which they share. A target that gets no rows
+// gets an empty chunk.
+[[nodiscard]] std::vector<InputChunk> routeChunkByHash(
+    const InputChunk& input,
+    const HashRouting& routing,
+    rmm::device_async_resource_ref mr);
+
 // Serve as the opaque base type for strategy-owned leaf state.
 class BufferedState {
  public:
@@ -132,10 +141,11 @@ class BufferedStateOps {
       const InputChunk& input,
       const HashRouting& routing) = 0;
 
-  // Split one leaf into one child state per routing target. The leaf remains
-  // valid.
+  // Split one leaf into one child state per routing target. The leaf is
+  // consumed, so that its memory can be released as soon as its rows have been
+  // moved.
   virtual std::vector<std::unique_ptr<BufferedState>> repartitionLeaf(
-      const BufferedState& leaf,
+      std::unique_ptr<BufferedState> leaf,
       const HashRouting& routing) = 0;
 
   // Finalize one leaf and return one output batch.
@@ -171,7 +181,8 @@ class BufferedStateOps {
 // however often they have been split.
 //
 // The bucket count bounds the number of leaves, and a leaf that holds a single
-// bucket cannot be split.
+// bucket cannot be split. Such a leaf keeps growing past the row limit, up to
+// the hard row limit.
 //
 // Typical usage:
 // 1. Define a `BufferedStateOps` implementation for the operator.
@@ -194,11 +205,19 @@ class PartitionedBufferedState {
   // cudf::hash_partition() has a fast path for up to this many partitions.
   static constexpr int32_t kDefaultNumBuckets = 1024;
 
+  struct Options {
+    // A leaf that would hold more rows than this is split.
+    size_t maxRowsPerLeaf{0};
+    // The most rows that a leaf can hold. Only a leaf that cannot be split
+    // grows beyond maxRowsPerLeaf.
+    size_t hardMaxRowsPerLeaf{std::numeric_limits<cudf::size_type>::max()};
+    int32_t numBuckets{kDefaultNumBuckets};
+    uint32_t hashSeed{kDefaultHashSeed};
+  };
+
   PartitionedBufferedState(
       std::unique_ptr<BufferedStateOps> ops,
-      size_t maxRowsPerLeaf,
-      int32_t numBuckets = kDefaultNumBuckets,
-      uint32_t hashSeed = kDefaultHashSeed);
+      const Options& options);
 
   void addInput(CudfVectorPtr rawInput);
 
@@ -230,7 +249,7 @@ class PartitionedBufferedState {
   void updateRouting();
 
   std::unique_ptr<BufferedStateOps> ops_;
-  const size_t maxRowsPerLeaf_;
+  const Options options_;
   // In bucket order.
   std::vector<Leaf> leaves_;
   // Routes an incoming batch to 'leaves_'.

@@ -56,6 +56,8 @@ struct CudfConfig {
       "cudf.streaming_groupby_enabled"};
   static constexpr const char* kCudfStreamingGroupbyCapacityMultiplier{
       "cudf.streaming_groupby_capacity_multiplier"};
+  static constexpr const char* kCudfStreamingGroupbyMaxPartitionKeys{
+      "cudf.streaming_groupby_max_partition_keys"};
   static constexpr const char* kCudfTimestampUnit{"cudf.timestamp_unit"};
   static constexpr const char* kUcxExchange{"cudf.exchange"};
   static constexpr const char* kUcxxErrorHandling{"ucxx.error_handling"};
@@ -174,6 +176,15 @@ struct CudfConfig {
   /// Multiplier used to derive streaming_groupby's initial logical capacity
   /// from the first batch and to grow capacity when it is exhausted.
   double streamingGroupbyCapacityMultiplier{2.0};
+
+  /// Most distinct keys that one streaming_groupby table holds before it is
+  /// split into tables for parts of its keys, chosen by a hash of the keys. A
+  /// final aggregation starts with one table. Splitting keeps the steps in
+  /// which the state grows small. Once there is more than one table, every
+  /// batch is hash partitioned once, and every table adds a fixed cost per
+  /// batch, so keep the number of tables in the tens. When not set, a table is
+  /// split only when it reaches the most keys that libcudf can hold in one.
+  std::optional<int32_t> streamingGroupbyMaxPartitionKeys;
 
   /// Minimum rows to accumulate before GPU-side concatenation (default 100k).
   /// Applies when batchSizeMinBytes is unset, and always to zero-column

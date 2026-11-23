@@ -90,7 +90,7 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
     ++numRouteCalls_;
     numRoutedRows_ += input.size();
     if (!hashFn_) {
-      return routeOnDevice(input, routing);
+      return routeChunkByHash(input, routing, get_output_mr());
     }
 
     std::vector<std::vector<int64_t>> buckets(routing.numTargets());
@@ -117,9 +117,10 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   }
 
   std::vector<std::unique_ptr<BufferedState>> repartitionLeaf(
-      const BufferedState& leaf,
+      std::unique_ptr<BufferedState> leaf,
       const HashRouting& routing) override {
-    auto partitions = routeInput(asLeaf(leaf).chunk, routing);
+    auto partitions = routeInput(asLeaf(*leaf).chunk, routing);
+    leaf.reset();
 
     std::vector<std::unique_ptr<BufferedState>> leaves(routing.numTargets());
     for (int32_t i = 0; i < routing.numTargets(); ++i) {
@@ -222,26 +223,6 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   std::vector<int64_t> extractKeys(const InputChunk& input) const {
     return extractKeys_(input);
   }
-
-  std::vector<InputChunk> routeOnDevice(
-      const InputChunk& input,
-      const HashRouting& routing) const {
-    auto [table, offsets] = partitionByHashRouting(
-        input.view, routing, input.stream, get_output_mr());
-    offsets.erase(offsets.begin());
-    offsets.pop_back();
-
-    auto tableOwner = std::shared_ptr<cudf::table>(std::move(table));
-    auto views = cudf::split(tableOwner->view(), offsets, input.stream);
-    std::vector<InputChunk> partitions(routing.numTargets());
-    for (int32_t i = 0; i < routing.numTargets(); ++i) {
-      if (views[i].num_rows() > 0) {
-        partitions[i] = InputChunk{
-            pool_, rowType_, views[i], input.stream, nullptr, tableOwner};
-      }
-    }
-    return partitions;
-  }
 };
 
 class PartitionedBufferedStateTest : public ::testing::Test,
@@ -337,7 +318,8 @@ TEST_F(PartitionedBufferedStateTest, mergesLeafDirectlyBelowCap) {
   auto ops =
       makeHostOps([](int64_t key) { return static_cast<uint32_t>(key); });
   auto* opsPtr = ops.get();
-  PartitionedBufferedState state(std::move(ops), 10, 8);
+  PartitionedBufferedState state(
+      std::move(ops), {.maxRowsPerLeaf = 10, .numBuckets = 8});
 
   state.addInput(makeCudfVector({1, 2}));
   state.addInput(makeCudfVector({3, 4}));
@@ -352,7 +334,8 @@ TEST_F(PartitionedBufferedStateTest, mergesLeafDirectlyBelowCap) {
 TEST_F(PartitionedBufferedStateTest, topLevelSplitKeepsRoutingStable) {
   auto ops =
       makeHostOps([](int64_t key) { return static_cast<uint32_t>(key); });
-  PartitionedBufferedState state(std::move(ops), 3, 8);
+  PartitionedBufferedState state(
+      std::move(ops), {.maxRowsPerLeaf = 3, .numBuckets = 8});
 
   state.addInput(makeCudfVector({0, 1}));
   // Splits into the buckets [0, 4) and [4, 8).
@@ -371,7 +354,8 @@ TEST_F(PartitionedBufferedStateTest, topLevelSplitKeepsRoutingStable) {
 TEST_F(PartitionedBufferedStateTest, overflowingChildSplitsAgain) {
   auto ops =
       makeHostOps([](int64_t key) { return static_cast<uint32_t>(key); });
-  PartitionedBufferedState state(std::move(ops), 2, 8);
+  PartitionedBufferedState state(
+      std::move(ops), {.maxRowsPerLeaf = 2, .numBuckets = 8});
 
   state.addInput(makeCudfVector({0, 2}));
   // Splits into [0, 4) and [4, 8). The first child then holds {0, 2} and gets
@@ -393,7 +377,8 @@ TEST_F(PartitionedBufferedStateTest, overflowingChildSplitsAgain) {
 TEST_F(PartitionedBufferedStateTest, splitThatSeparatesNothingGoesOn) {
   auto ops =
       makeHostOps([](int64_t key) { return static_cast<uint32_t>(key); });
-  PartitionedBufferedState state(std::move(ops), 2, 8);
+  PartitionedBufferedState state(
+      std::move(ops), {.maxRowsPerLeaf = 2, .numBuckets = 8});
 
   // All three rows are in the first half of the buckets, so the first split
   // leaves them together and the half is split again.
@@ -409,28 +394,36 @@ TEST_F(PartitionedBufferedStateTest, splitThatSeparatesNothingGoesOn) {
   EXPECT_TRUE(state.empty());
 }
 
-TEST_F(PartitionedBufferedStateTest, singleBucketCannotSplit) {
+TEST_F(PartitionedBufferedStateTest, singleBucketGrowsUpToHardLimit) {
   // Every key is in bucket 0.
   auto ops = makeHostOps([](int64_t /*key*/) { return 0U; });
-  PartitionedBufferedState state(std::move(ops), 2, 8);
+  PartitionedBufferedState state(
+      std::move(ops),
+      {.maxRowsPerLeaf = 2, .hardMaxRowsPerLeaf = 4, .numBuckets = 8});
 
   state.addInput(makeCudfVector({1}));
   state.addInput(makeCudfVector({2}));
   EXPECT_EQ(state.numLeaves(), 1);
 
   // The third row does not fit. The leaf is split down to bucket 0 alone,
-  // which still holds all three rows.
+  // which cannot be split and takes the row.
+  state.addInput(makeCudfVector({3}));
+  EXPECT_EQ(state.numLeaves(), 4);
+  state.addInput(makeCudfVector({4}));
+
   VELOX_ASSERT_THROW(
-      state.addInput(makeCudfVector({3})),
+      state.addInput(makeCudfVector({5})),
       "Cannot partition buffered state any further");
   EXPECT_EQ(state.numLeaves(), 4);
+  EXPECT_EQ(drainAll(state), (std::vector<std::vector<int64_t>>{{1, 2, 3, 4}}));
 }
 
 TEST_F(PartitionedBufferedStateTest, splitLeavesAreRoutedOnce) {
   auto ops =
       makeHostOps([](int64_t key) { return static_cast<uint32_t>(key); });
   auto* opsPtr = ops.get();
-  PartitionedBufferedState state(std::move(ops), 2, 8);
+  PartitionedBufferedState state(
+      std::move(ops), {.maxRowsPerLeaf = 2, .numBuckets = 8});
 
   // Eight rows need four leaves of two rows, so the first split divides the
   // buckets in four.
@@ -534,7 +527,8 @@ TEST_F(PartitionedBufferedStateTest, deviceRoutingKeepsKeysTogether) {
   constexpr size_t kMaxRowsPerLeaf = 64;
   auto ops = std::make_unique<IdentityBufferedStateOps>(pool_.get(), rowType_);
   auto* opsPtr = ops.get();
-  PartitionedBufferedState state(std::move(ops), kMaxRowsPerLeaf);
+  PartitionedBufferedState state(
+      std::move(ops), {.maxRowsPerLeaf = kMaxRowsPerLeaf});
 
   // 300 distinct keys, each seen three or four times across the batches.
   size_t numRows = 0;

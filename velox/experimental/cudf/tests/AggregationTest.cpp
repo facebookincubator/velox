@@ -281,6 +281,7 @@ class StreamingGroupbyAggregationTest : public AggregationTest {
     auto& config = cudf_velox::CudfConfig::getInstance();
     savedOutputMemoryResource_ = config.outputMemoryResource;
     savedCapacityMultiplier_ = config.streamingGroupbyCapacityMultiplier;
+    savedMaxPartitionKeys_ = config.streamingGroupbyMaxPartitionKeys;
     config.streamingGroupbyEnabled = true;
   }
 
@@ -289,6 +290,8 @@ class StreamingGroupbyAggregationTest : public AggregationTest {
         savedOutputMemoryResource_;
     cudf_velox::CudfConfig::getInstance().streamingGroupbyCapacityMultiplier =
         savedCapacityMultiplier_;
+    cudf_velox::CudfConfig::getInstance().streamingGroupbyMaxPartitionKeys =
+        savedMaxPartitionKeys_;
     AggregationTest::TearDown();
   }
 
@@ -311,6 +314,7 @@ class StreamingGroupbyAggregationTest : public AggregationTest {
  private:
   std::string savedOutputMemoryResource_;
   double savedCapacityMultiplier_{2.0};
+  std::optional<int32_t> savedMaxPartitionKeys_;
 };
 
 bool hasStreamingGroupbyStat(
@@ -1608,6 +1612,153 @@ TEST_F(
       streamingGroupbyStatSum(
           task, finalAggId, cudf_velox::kStreamingGroupbyRebuildsStat),
       1);
+}
+
+TEST_F(StreamingGroupbyAggregationTest, splitsTableAtKeyLimit) {
+  constexpr int32_t kBatchRows = 8;
+  constexpr int32_t kNumBatches = 16;
+  auto vectors = makeHighCardinalityBatches(kBatchRows, kNumBatches);
+  createDuckDbTable(vectors);
+  // 128 keys need at least eight tables.
+  cudf_velox::CudfConfig::getInstance().streamingGroupbyMaxPartitionKeys = 16;
+
+  core::PlanNodeId finalAggId;
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, kBatchRows)
+          .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+          .plan(
+              PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"c0"}, {"sum(c1)"})
+                  .finalAggregation()
+                  .capturePlanNodeId(finalAggId)
+                  .planNode())
+          .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
+
+  EXPECT_TRUE(hasStreamingGroupbyStat(
+      task, finalAggId, cudf_velox::kStreamingGroupbyUsedStat));
+  EXPECT_GE(
+      streamingGroupbyStatSum(
+          task, finalAggId, cudf_velox::kStreamingGroupbySplitsStat),
+      3);
+}
+
+TEST_F(StreamingGroupbyAggregationTest, noSplitBelowKeyLimit) {
+  constexpr int32_t kBatchRows = 8;
+  constexpr int32_t kNumBatches = 16;
+  auto vectors = makeHighCardinalityBatches(kBatchRows, kNumBatches);
+  createDuckDbTable(vectors);
+  cudf_velox::CudfConfig::getInstance().streamingGroupbyMaxPartitionKeys = 128;
+
+  core::PlanNodeId finalAggId;
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, kBatchRows)
+          .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+          .plan(
+              PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"c0"}, {"sum(c1)"})
+                  .finalAggregation()
+                  .capturePlanNodeId(finalAggId)
+                  .planNode())
+          .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
+
+  EXPECT_TRUE(hasStreamingGroupbyStat(
+      task, finalAggId, cudf_velox::kStreamingGroupbyUsedStat));
+  EXPECT_FALSE(hasStreamingGroupbyStat(
+      task, finalAggId, cudf_velox::kStreamingGroupbySplitsStat));
+}
+
+// Keys come back in later batches, after the table that holds them has been
+// split, with every aggregate that the streaming path supports.
+TEST_F(StreamingGroupbyAggregationTest, splitTablesMergeRepeatedKeys) {
+  constexpr int32_t kBatchRows = 32;
+  std::vector<RowVectorPtr> vectors;
+  for (int32_t batch = 0; batch < 20; ++batch) {
+    vectors.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            kBatchRows, [&](auto row) { return (batch * 13 + row * 7) % 200; }),
+        makeFlatVector<int64_t>(
+            kBatchRows, [&](auto row) { return batch + row; }, nullEvery(11)),
+        makeFlatVector<double>(
+            kBatchRows, [&](auto row) { return (batch + row) * 0.5; }),
+    }));
+  }
+  createDuckDbTable(vectors);
+  cudf_velox::CudfConfig::getInstance().streamingGroupbyMaxPartitionKeys = 16;
+
+  core::PlanNodeId finalAggId;
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, kBatchRows)
+          .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+          .plan(
+              PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation(
+                      {"c0"},
+                      {"sum(c1)", "count(c1)", "min(c1)", "max(c2)", "avg(c2)"})
+                  .finalAggregation()
+                  .capturePlanNodeId(finalAggId)
+                  .planNode())
+          .assertResults(
+              "SELECT c0, sum(c1), count(c1), min(c1), max(c2), avg(c2) "
+              "FROM tmp GROUP BY c0");
+
+  EXPECT_TRUE(hasStreamingGroupbyStat(
+      task, finalAggId, cudf_velox::kStreamingGroupbyUsedStat));
+  EXPECT_GE(
+      streamingGroupbyStatSum(
+          task, finalAggId, cudf_velox::kStreamingGroupbySplitsStat),
+      3);
+}
+
+// With null keys ignored, a table can hold no groups at all.
+TEST_F(StreamingGroupbyAggregationTest, ignoreNullKeysWithSplitTables) {
+  constexpr int32_t kBatchRows = 8;
+  std::vector<RowVectorPtr> vectors;
+  for (int32_t batch = 0; batch < 12; ++batch) {
+    vectors.push_back(makeRowVector({
+        makeFlatVector<int32_t>(
+            kBatchRows,
+            [&](auto row) { return (batch * 5 + row) % 40; },
+            // The first batches have null keys only.
+            [&](auto row) { return batch < 2 || row % 3 == 0; }),
+        makeFlatVector<int32_t>(
+            kBatchRows, [&](auto row) { return batch - row; }),
+    }));
+  }
+  createDuckDbTable(vectors);
+  cudf_velox::CudfConfig::getInstance().streamingGroupbyMaxPartitionKeys = 4;
+
+  core::PlanNodeId finalAggId;
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, kBatchRows)
+          .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+          .plan(
+              PlanBuilder()
+                  .values(vectors)
+                  .aggregation(
+                      {"c0"},
+                      {"sum(c1)"},
+                      {},
+                      core::AggregationNode::Step::kPartial,
+                      true)
+                  .finalAggregation()
+                  .capturePlanNodeId(finalAggId)
+                  .planNode())
+          .assertResults(
+              "SELECT c0, sum(c1) FROM tmp WHERE c0 IS NOT NULL GROUP BY c0");
+
+  EXPECT_TRUE(hasStreamingGroupbyStat(
+      task, finalAggId, cudf_velox::kStreamingGroupbyUsedStat));
+  EXPECT_GE(
+      streamingGroupbyStatSum(
+          task, finalAggId, cudf_velox::kStreamingGroupbySplitsStat),
+      3);
 }
 
 TEST_F(
