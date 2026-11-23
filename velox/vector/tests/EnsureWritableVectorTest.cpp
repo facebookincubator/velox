@@ -18,8 +18,7 @@
 #include "velox/vector/tests/VectorTestUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
-using namespace facebook::velox;
-using namespace facebook::velox::test;
+namespace facebook::velox::test {
 
 class EnsureWritableVectorTest : public testing::Test, public VectorTestBase {
  protected:
@@ -844,8 +843,7 @@ TEST_F(EnsureWritableVectorTest, flatMap) {
   test::assertEqualVectors(shallowCopy, flatMap);
 
   auto oddRows = selectOddRows(size);
-  SelectivityVector evenRows(size);
-  evenRows.deselect(oddRows);
+  auto evenRows = oddRows.complement();
 
   // Copy the odd rows from otherFlatMap into shallowCopy. We want to make sure
   // ensure writable will detect and copy on write the buffers as expected.
@@ -1078,3 +1076,5 @@ TEST_F(EnsureWritableVectorTest, lazyMap) {
     EXPECT_EQ(size, lazy->size());
   }
 }
+
+} // namespace facebook::velox::test

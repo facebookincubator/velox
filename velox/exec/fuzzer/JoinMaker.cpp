@@ -40,8 +40,8 @@ const std::vector<RowVectorPtr>& getBatches(
 test::PlanBuilder makeJoinSourcePlan(
     const std::shared_ptr<JoinSource>& joinSource,
     const JoinMaker::InputType inputType,
-    const std::shared_ptr<core::PlanNodeIdGenerator>& planNodeIdGenerator) {
-  return test::PlanBuilder(planNodeIdGenerator)
+    const test::PlanBuilder& builder) {
+  return builder.newPlan()
       .values(getBatches(joinSource, inputType))
       .projectExpressions(joinSource->projections());
 }
@@ -52,7 +52,7 @@ test::PlanBuilder makeJoinSourcePlan(
 std::vector<core::PlanNodePtr> makeSourcesForPartitionedJoinPlan(
     const std::shared_ptr<JoinSource> joinSource,
     const JoinMaker::InputType inputType,
-    const std::shared_ptr<core::PlanNodeIdGenerator>& planNodeIdGenerator) {
+    const test::PlanBuilder& builder) {
   const auto& batches = getBatches(joinSource, inputType);
   auto numSources = std::min<size_t>(4, batches.size());
   std::vector<std::vector<RowVectorPtr>> sourceInputs(numSources);
@@ -62,11 +62,10 @@ std::vector<core::PlanNodePtr> makeSourcesForPartitionedJoinPlan(
 
   std::vector<core::PlanNodePtr> sourceNodes;
   for (const auto& sourceInput : sourceInputs) {
-    sourceNodes.push_back(
-        test::PlanBuilder(planNodeIdGenerator)
-            .values(sourceInput)
-            .projectExpressions(joinSource->projections())
-            .planNode());
+    sourceNodes.push_back(builder.newPlan()
+                              .values(sourceInput)
+                              .projectExpressions(joinSource->projections())
+                              .planNode());
   }
 
   return sourceNodes;
@@ -78,21 +77,18 @@ test::PlanBuilder makePartitionedJoinSourcePlan(
     const JoinMaker::PartitionStrategy partitionStrategy,
     const std::shared_ptr<JoinSource>& joinSource,
     const JoinMaker::InputType inputType,
-    const std::shared_ptr<core::PlanNodeIdGenerator>& planNodeIdGenerator) {
+    const test::PlanBuilder& builder) {
   switch (partitionStrategy) {
     case JoinMaker::PartitionStrategy::NONE:
       VELOX_FAIL(
           "makePartitionedJoinSource called with a partitionStrategy of NONE.");
     case JoinMaker::PartitionStrategy::HASH:
-      return test::PlanBuilder(planNodeIdGenerator)
-          .localPartition(
-              joinSource->keys(),
-              makeSourcesForPartitionedJoinPlan(
-                  joinSource, inputType, planNodeIdGenerator));
+      return builder.newPlan().localPartition(
+          joinSource->keys(),
+          makeSourcesForPartitionedJoinPlan(joinSource, inputType, builder));
     case JoinMaker::PartitionStrategy::ROUND_ROBIN:
-      return test::PlanBuilder(planNodeIdGenerator)
-          .localPartitionRoundRobin(makeSourcesForPartitionedJoinPlan(
-              joinSource, inputType, planNodeIdGenerator));
+      return builder.newPlan().localPartitionRoundRobin(
+          makeSourcesForPartitionedJoinPlan(joinSource, inputType, builder));
     default:
       VELOX_UNREACHABLE();
   }
@@ -104,9 +100,9 @@ test::PlanBuilder makePartitionedJoinSourcePlan(
 // `tableScanId` is populated with the PlanNodeId for the TableScan.
 test::PlanBuilder makeTableScanJoinSourcePlan(
     const std::shared_ptr<JoinSource>& joinSource,
-    const std::shared_ptr<core::PlanNodeIdGenerator>& planNodeIdGenerator,
+    const test::PlanBuilder& builder,
     core::PlanNodeId& tableScanId) {
-  return test::PlanBuilder(planNodeIdGenerator)
+  return builder.newPlan()
       .tableScan(joinSource->outputType())
       .capturePlanNodeId(tableScanId)
       .projectExpressions(joinSource->projections());
@@ -187,14 +183,20 @@ const std::vector<Split>& JoinSource::groupedSplits(
 
   std::vector<exec::Split> splitsWithGroup;
   for (int32_t groupId = 0; groupId < numGroups; ++groupId) {
-    for (auto i = 0; i < inputVectorsByGroup[groupId].size(); ++i) {
+    // Grouped execution hangs when a split group receives no splits from one
+    // of its grouped sources. Give an empty group one zero-row split.
+    std::vector<RowVectorPtr> groupInput = inputVectorsByGroup[groupId];
+    if (groupInput.empty()) {
+      groupInput.push_back(
+          BaseVector::create<RowVector>(
+              outputType_, 0, batches_.front()->pool()));
+    }
+    for (auto i = 0; i < groupInput.size(); ++i) {
       const std::string filePath = fmt::format(
           "{}/grouped[{}].{}.{}", splitsDir_, groupId, numGroups, i);
-      test::writeToFile(
-          filePath, inputVectorsByGroup[groupId][i], writerPool_.get());
+      test::writeToFile(filePath, groupInput[i], writerPool_.get());
       splitsWithGroup.emplace_back(test::makeConnectorSplit(filePath), groupId);
     }
-    splitsWithGroup.emplace_back(nullptr, groupId);
   }
 
   return groupedSplits_.insert(std::make_pair(numGroups, splitsWithGroup))
@@ -374,7 +376,7 @@ JoinMaker::PlanWithSplits JoinMaker::makeHashJoin(
     const InputType inputType,
     const PartitionStrategy partitionStrategy,
     const JoinOrder joinOrder) const {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  test::PlanBuilder builder;
 
   auto joinSources = getJoinSources(joinOrder);
 
@@ -385,15 +387,13 @@ JoinMaker::PlanWithSplits JoinMaker::makeHashJoin(
   test::PlanBuilder buildSourcePlan;
 
   if (partitionStrategy == PartitionStrategy::NONE) {
-    probeSourcePlan =
-        makeJoinSourcePlan(probeSource, inputType, planNodeIdGenerator);
-    buildSourcePlan =
-        makeJoinSourcePlan(buildSource, inputType, planNodeIdGenerator);
+    probeSourcePlan = makeJoinSourcePlan(probeSource, inputType, builder);
+    buildSourcePlan = makeJoinSourcePlan(buildSource, inputType, builder);
   } else {
     probeSourcePlan = makePartitionedJoinSourcePlan(
-        partitionStrategy, probeSource, inputType, planNodeIdGenerator);
+        partitionStrategy, probeSource, inputType, builder);
     buildSourcePlan = makePartitionedJoinSourcePlan(
-        partitionStrategy, buildSource, inputType, planNodeIdGenerator);
+        partitionStrategy, buildSource, inputType, builder);
   }
 
   return PlanWithSplits(makeHashJoinPlan(
@@ -408,7 +408,7 @@ JoinMaker::PlanWithSplits JoinMaker::makeHashJoinWithTableScan(
     std::optional<int32_t> numGroups,
     bool mixedGroupedExecution,
     JoinOrder joinOrder) const {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  test::PlanBuilder builder;
 
   auto joinSources = getJoinSources(joinOrder);
 
@@ -418,10 +418,10 @@ JoinMaker::PlanWithSplits JoinMaker::makeHashJoinWithTableScan(
   core::PlanNodeId probeTableScanId;
   core::PlanNodeId buildTableScanId;
 
-  test::PlanBuilder probeSourcePlan = makeTableScanJoinSourcePlan(
-      probeSource, planNodeIdGenerator, probeTableScanId);
-  test::PlanBuilder buildSourcePlan = makeTableScanJoinSourcePlan(
-      buildSource, planNodeIdGenerator, buildTableScanId);
+  test::PlanBuilder probeSourcePlan =
+      makeTableScanJoinSourcePlan(probeSource, builder, probeTableScanId);
+  test::PlanBuilder buildSourcePlan =
+      makeTableScanJoinSourcePlan(buildSource, builder, buildTableScanId);
 
   const auto plan = makeHashJoinPlan(
       probeSourcePlan,
@@ -464,17 +464,15 @@ JoinMaker::PlanWithSplits JoinMaker::makeHashJoinWithTableScan(
 JoinMaker::PlanWithSplits JoinMaker::makeMergeJoin(
     const InputType inputType,
     const JoinOrder joinOrder) const {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  test::PlanBuilder builder;
 
   auto joinSources = getJoinSources(joinOrder);
 
   const auto& probeSource = joinSources[0];
   const auto& buildSource = joinSources[1];
 
-  auto probeSourcePlan =
-      makeJoinSourcePlan(probeSource, inputType, planNodeIdGenerator);
-  auto buildSourcePlan =
-      makeJoinSourcePlan(buildSource, inputType, planNodeIdGenerator);
+  auto probeSourcePlan = makeJoinSourcePlan(probeSource, inputType, builder);
+  auto buildSourcePlan = makeJoinSourcePlan(buildSource, inputType, builder);
 
   return PlanWithSplits(makeMergeJoinPlan(
       probeSourcePlan,
@@ -486,7 +484,7 @@ JoinMaker::PlanWithSplits JoinMaker::makeMergeJoin(
 
 JoinMaker::PlanWithSplits JoinMaker::makeMergeJoinWithTableScan(
     const JoinOrder joinOrder) const {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  test::PlanBuilder builder;
 
   auto joinSources = getJoinSources(joinOrder);
 
@@ -496,10 +494,10 @@ JoinMaker::PlanWithSplits JoinMaker::makeMergeJoinWithTableScan(
   core::PlanNodeId probeTableScanId;
   core::PlanNodeId buildTableScanId;
 
-  test::PlanBuilder probeSourcePlan = makeTableScanJoinSourcePlan(
-      probeSource, planNodeIdGenerator, probeTableScanId);
-  test::PlanBuilder buildSourcePlan = makeTableScanJoinSourcePlan(
-      buildSource, planNodeIdGenerator, buildTableScanId);
+  test::PlanBuilder probeSourcePlan =
+      makeTableScanJoinSourcePlan(probeSource, builder, probeTableScanId);
+  test::PlanBuilder buildSourcePlan =
+      makeTableScanJoinSourcePlan(buildSource, builder, buildTableScanId);
 
   const auto plan = makeMergeJoinPlan(
       probeSourcePlan,
@@ -519,17 +517,15 @@ JoinMaker::PlanWithSplits JoinMaker::makeMergeJoinWithTableScan(
 JoinMaker::PlanWithSplits JoinMaker::makeNestedLoopJoin(
     const InputType inputType,
     const JoinOrder joinOrder) const {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  test::PlanBuilder builder;
 
   auto joinSources = getJoinSources(joinOrder);
 
   const auto& probeSource = joinSources[0];
   const auto& buildSource = joinSources[1];
 
-  auto probeSourcePlan =
-      makeJoinSourcePlan(probeSource, inputType, planNodeIdGenerator);
-  auto buildSourcePlan =
-      makeJoinSourcePlan(buildSource, inputType, planNodeIdGenerator);
+  auto probeSourcePlan = makeJoinSourcePlan(probeSource, inputType, builder);
+  auto buildSourcePlan = makeJoinSourcePlan(buildSource, inputType, builder);
 
   return PlanWithSplits(makeNestedLoopJoinPlan(
       probeSourcePlan,
@@ -541,7 +537,7 @@ JoinMaker::PlanWithSplits JoinMaker::makeNestedLoopJoin(
 
 JoinMaker::PlanWithSplits JoinMaker::makeNestedLoopJoinWithTableScan(
     const JoinOrder joinOrder) const {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  test::PlanBuilder builder;
 
   auto joinSources = getJoinSources(joinOrder);
 
@@ -551,10 +547,10 @@ JoinMaker::PlanWithSplits JoinMaker::makeNestedLoopJoinWithTableScan(
   core::PlanNodeId probeTableScanId;
   core::PlanNodeId buildTableScanId;
 
-  test::PlanBuilder probeSourcePlan = makeTableScanJoinSourcePlan(
-      probeSource, planNodeIdGenerator, probeTableScanId);
-  test::PlanBuilder buildSourcePlan = makeTableScanJoinSourcePlan(
-      buildSource, planNodeIdGenerator, buildTableScanId);
+  test::PlanBuilder probeSourcePlan =
+      makeTableScanJoinSourcePlan(probeSource, builder, probeTableScanId);
+  test::PlanBuilder buildSourcePlan =
+      makeTableScanJoinSourcePlan(buildSource, builder, buildTableScanId);
 
   const auto plan = makeNestedLoopJoinPlan(
       probeSourcePlan,

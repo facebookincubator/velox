@@ -81,9 +81,10 @@ class NoopArbitrator : public MemoryArbitrator {
   explicit NoopArbitrator(const Config& config) : MemoryArbitrator(config) {
     VELOX_CHECK(config.kind.empty());
     if (config_.capacity != kMaxMemory) {
-      LOG(WARNING) << "Query memory capacity["
-                   << succinctBytes(config_.capacity) << "] is set for "
-                   << kind() << " arbitrator which has no capacity enforcement";
+      VELOX_MEM_LOG(WARNING)
+          << "Query memory capacity[" << succinctBytes(config_.capacity)
+          << "] is set for " << kind()
+          << " arbitrator which has no capacity enforcement";
     }
   }
 
@@ -346,6 +347,7 @@ MemoryArbitrator::Stats::Stats(
     uint64_t _maxCapacityBytes,
     uint64_t _freeCapacityBytes,
     uint64_t _freeReservedCapacityBytes,
+    uint64_t _reservedCapacityBytes,
     uint64_t _numNonReclaimableAttempts)
     : numRequests(_numRequests),
       numRunning(_numRunning),
@@ -357,11 +359,12 @@ MemoryArbitrator::Stats::Stats(
       maxCapacityBytes(_maxCapacityBytes),
       freeCapacityBytes(_freeCapacityBytes),
       freeReservedCapacityBytes(_freeReservedCapacityBytes),
+      reservedCapacityBytes(_reservedCapacityBytes),
       numNonReclaimableAttempts(_numNonReclaimableAttempts) {}
 
 std::string MemoryArbitrator::Stats::toString() const {
   return fmt::format(
-      "numRequests {} numRunning {} numSucceded {} numAborted {} numFailures {} numNonReclaimableAttempts {} reclaimedFreeCapacity {} reclaimedUsedCapacity {} maxCapacity {} freeCapacity {} freeReservedCapacity {}",
+      "numRequests {} numRunning {} numSucceded {} numAborted {} numFailures {} numNonReclaimableAttempts {} reclaimedFreeCapacity {} reclaimedUsedCapacity {} maxCapacity {} freeCapacity {} freeReservedCapacity {} reservedCapacity {}",
       numRequests,
       numRunning,
       numSucceeded,
@@ -372,7 +375,8 @@ std::string MemoryArbitrator::Stats::toString() const {
       succinctBytes(reclaimedUsedBytes),
       succinctBytes(maxCapacityBytes),
       succinctBytes(freeCapacityBytes),
-      succinctBytes(freeReservedCapacityBytes));
+      succinctBytes(freeReservedCapacityBytes),
+      succinctBytes(reservedCapacityBytes));
 }
 
 MemoryArbitrator::Stats MemoryArbitrator::Stats::operator-(
@@ -387,6 +391,7 @@ MemoryArbitrator::Stats MemoryArbitrator::Stats::operator-(
   result.maxCapacityBytes = maxCapacityBytes;
   result.freeCapacityBytes = freeCapacityBytes;
   result.freeReservedCapacityBytes = freeReservedCapacityBytes;
+  result.reservedCapacityBytes = reservedCapacityBytes;
   result.numNonReclaimableAttempts =
       numNonReclaimableAttempts - other.numNonReclaimableAttempts;
   return result;
@@ -403,6 +408,7 @@ bool MemoryArbitrator::Stats::operator==(const Stats& other) const {
              maxCapacityBytes,
              freeCapacityBytes,
              freeReservedCapacityBytes,
+             reservedCapacityBytes,
              numNonReclaimableAttempts) ==
       std::tie(
              other.numRequests,
@@ -414,6 +420,7 @@ bool MemoryArbitrator::Stats::operator==(const Stats& other) const {
              other.maxCapacityBytes,
              other.freeCapacityBytes,
              other.freeReservedCapacityBytes,
+             other.reservedCapacityBytes,
              other.numNonReclaimableAttempts);
 }
 
@@ -543,15 +550,17 @@ ScopedReclaimedBytesRecorder::~ScopedReclaimedBytesRecorder() {
   }
   const int64_t reservedBytesAfterReclaim = pool_->reservedBytes();
   if (reservedBytesAfterReclaim > reservedBytesBeforeReclaim_) {
-    LOG(ERROR) << "Unexpected reserved bytes growth from " << pool_->name()
-               << ", root pool: " << pool_->root()->name()
-               << " after memory reclaim from "
-               << succinctBytes(reservedBytesBeforeReclaim_) << " to "
-               << succinctBytes(reservedBytesAfterReclaim)
-               << ", used: " << succinctBytes(pool_->usedBytes())
-               << ", reservation: " << succinctBytes(pool_->reservedBytes())
-               << ", root pool reservation: "
-               << succinctBytes(pool_->root()->reservedBytes());
+    VELOX_MEM_LOG(ERROR) << "Unexpected reserved bytes growth from "
+                         << pool_->name()
+                         << ", root pool: " << pool_->root()->name()
+                         << " after memory reclaim from "
+                         << succinctBytes(reservedBytesBeforeReclaim_) << " to "
+                         << succinctBytes(reservedBytesAfterReclaim)
+                         << ", used: " << succinctBytes(pool_->usedBytes())
+                         << ", reservation: "
+                         << succinctBytes(pool_->reservedBytes())
+                         << ", root pool reservation: "
+                         << succinctBytes(pool_->root()->reservedBytes());
   }
   *reclaimedBytes_ = reservedBytesBeforeReclaim_ - reservedBytesAfterReclaim;
 }

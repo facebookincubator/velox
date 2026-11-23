@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <functional>
 #include <map>
 
 #include <fmt/format.h>
@@ -571,6 +572,9 @@ class Variant {
   template <TypeKind KIND>
   uint64_t hash() const;
 
+  template <TypeKind KIND>
+  uint64_t estimateValueSize() const;
+
   template <bool usesCustomComparison, TypeKind KIND>
   void typedDestroy() {
     delete static_cast<const typename detail::VariantTypeTraits<
@@ -744,6 +748,10 @@ class Variant {
   }
 
   uint64_t hash() const;
+
+  /// Estimates the value size in bytes, excluding container overhead. Null and
+  /// opaque values contribute zero, including when nested.
+  uint64_t estimateValueSize() const;
 
   template <TypeKind KIND>
   const auto* valuePointer() const {
@@ -994,7 +1002,7 @@ struct VariantConverter {
 
     const auto converted =
         util::Converter<ToKind>::tryCast(value.value<FromKind>())
-            .thenOrThrow(folly::identity, [&](const Status& status) {
+            .thenOrThrow(std::identity{}, [&](const Status& status) {
               VELOX_USER_FAIL("{}", status.message());
             });
     return {converted};

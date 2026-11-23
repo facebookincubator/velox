@@ -20,7 +20,7 @@
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3FileSystem.h"
 #include "velox/connectors/hive/storage_adapters/s3fs/S3Util.h"
-#include "velox/connectors/hive/storage_adapters/s3fs/tests/MinioServer.h"
+#include "velox/connectors/hive/storage_adapters/s3fs/tests/SiloServer.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
 #include "gtest/gtest.h"
@@ -35,21 +35,21 @@ static constexpr std::string_view kDummyPath = "s3://dummy/foo.txt";
 class S3Test : public testing::Test {
  protected:
   void SetUp() override {
-    minioServer_ = std::make_unique<MinioServer>();
-    minioServer_->start();
+    siloServer_ = std::make_unique<SiloServer>();
+    siloServer_->start();
     ioExecutor_ = std::make_unique<folly::IOThreadPoolExecutor>(3);
   }
 
   void TearDown() override {
-    minioServer_->stop();
+    siloServer_->stop();
   }
 
   void addBucket(const char* bucket) {
-    minioServer_->addBucket(bucket);
+    siloServer_->addBucket(bucket);
   }
 
   std::string localPath(const char* directory) {
-    return minioServer_->path() + "/" + directory;
+    return siloServer_->path() + "/" + directory;
   }
 
   void writeData(WriteFile* writeFile) {
@@ -97,6 +97,6 @@ class S3Test : public testing::Test {
     ASSERT_EQ(std::string_view(tail, sizeof(tail)), "ccddddd");
   }
 
-  std::unique_ptr<MinioServer> minioServer_;
+  std::unique_ptr<SiloServer> siloServer_;
   std::unique_ptr<folly::IOThreadPoolExecutor> ioExecutor_;
 };

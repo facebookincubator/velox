@@ -13,14 +13,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+
+#include <cudf/partitioning.hpp>
+#include <cudf/utilities/memory_resource.hpp>
+
+#include <folly/ScopeGuard.h>
 
 namespace facebook::velox::exec::test {
 using namespace facebook::velox::common::testutil;
@@ -30,7 +38,13 @@ class LocalPartitionTest : public HiveConnectorTestBase {
  protected:
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
+  }
+
+  void TearDown() override {
+    cudf_velox::unregisterCudf();
+    HiveConnectorTestBase::TearDown();
   }
 
   template <typename T>
@@ -61,13 +75,13 @@ TEST_F(LocalPartitionTest, gather) {
       makeRowVector({makeFlatSequence<int32_t>(-71, 100)}),
   };
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
   auto valuesNode = [&](int index) {
-    return PlanBuilder(planNodeIdGenerator).values({vectors[index]}).planNode();
+    return builder.newPlan().values({vectors[index]}).planNode();
   };
 
-  auto op = PlanBuilder(planNodeIdGenerator)
+  auto op = builder.newPlan()
                 .localPartition(
                     {},
                     {
@@ -82,17 +96,17 @@ TEST_F(LocalPartitionTest, gather) {
 
   auto filePaths = writeToFiles(vectors);
 
-  auto rowType = asRowType(vectors[0]->type());
+  auto rowType = vectors[0]->rowType();
 
   std::vector<core::PlanNodeId> scanNodeIds;
 
   auto tableScanNode = [&]() {
-    auto node = PlanBuilder(planNodeIdGenerator).tableScan(rowType).planNode();
+    auto node = builder.newPlan().tableScan(rowType).planNode();
     scanNodeIds.push_back(node->id());
     return node;
   };
 
-  op = PlanBuilder(planNodeIdGenerator)
+  op = builder.newPlan()
            .localPartition(
                {},
                {
@@ -103,13 +117,13 @@ TEST_F(LocalPartitionTest, gather) {
            .singleAggregation({}, {"min(c0)", "max(c0)"})
            .planNode();
 
-  AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
+  AssertQueryBuilder queryBuilder(op);
   for (auto i = 0; i < filePaths.size(); ++i) {
     queryBuilder.split(
         scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->getPath()));
   }
 
-  task = queryBuilder.assertResults("SELECT -71, 152");
+  task = queryBuilder.assertResults({Variant(-71), Variant(152)});
 }
 
 TEST_F(LocalPartitionTest, partition) {
@@ -121,20 +135,20 @@ TEST_F(LocalPartitionTest, partition) {
 
   auto filePaths = writeToFiles(vectors);
 
-  auto rowType = asRowType(vectors[0]->type());
+  auto rowType = vectors[0]->rowType();
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
   std::vector<core::PlanNodeId> scanNodeIds;
 
   auto scanAggNode = [&]() {
-    auto builder = PlanBuilder(planNodeIdGenerator);
-    auto scanNode = builder.tableScan(rowType).planNode();
+    auto scanBuilder = builder.newPlan();
+    auto scanNode = scanBuilder.tableScan(rowType).planNode();
     scanNodeIds.push_back(scanNode->id());
-    return builder.partialAggregation({"c0"}, {"max(c0)"}).planNode();
+    return scanBuilder.partialAggregation({"c0"}, {"max(c0)"}).planNode();
   };
 
-  auto op = PlanBuilder(planNodeIdGenerator)
+  auto op = builder.newPlan()
                 .localPartition(
                     {"c0"},
                     {
@@ -160,23 +174,147 @@ TEST_F(LocalPartitionTest, partition) {
       queryBuilder.assertResults("SELECT c0, max(c0) FROM tmp GROUP BY 1");
 }
 
+TEST_F(LocalPartitionTest, hashAfterRemoteHashUsesAllLocalDrivers) {
+  // Model remote cuDF partitioning before the local exchange. Repeated keys
+  // also verify that local routing preserves grouping correctness.
+  constexpr vector_size_t kRows = 16384;
+  auto input = makeRowVector({makeFlatSequence<int64_t>(0, kRows / 2, kRows)});
+  auto stream = cudf_velox::cudfGlobalStreamPool().get_stream();
+  auto table = cudf_velox::with_arrow::toCudfTable(
+      input, pool(), stream, cudf::get_current_device_resource_ref());
+  for (const auto& [remoteCount, localCount] :
+       {std::pair{4, 2}, std::pair{8, 2}, std::pair{4, 4}}) {
+    auto [partitioned, offsets] = cudf::hash_partition(
+        table->view(),
+        {0},
+        remoteCount,
+        cudf::hash_id::HASH_MURMUR3,
+        cudf::DEFAULT_HASH_SEED,
+        stream,
+        cudf::get_current_device_resource_ref());
+    std::vector<int64_t> keys(kRows);
+    ASSERT_EQ(
+        cudaMemcpyAsync(
+            keys.data(),
+            partitioned->view().column(0).data<int64_t>(),
+            keys.size() * sizeof(int64_t),
+            cudaMemcpyDeviceToHost,
+            stream.get()),
+        cudaSuccess);
+    stream.sync();
+    for (int remote = 0; remote < remoteCount; ++remote) {
+      SCOPED_TRACE(
+          fmt::format(
+              "remoteCount={}, localCount={}, remote={}",
+              remoteCount,
+              localCount,
+              remote));
+      std::vector<int64_t> partitionKeys(
+          keys.begin() + offsets[remote], keys.begin() + offsets[remote + 1]);
+      ASSERT_GT(partitionKeys.size(), 256);
+      auto partitionInput =
+          makeRowVector({makeFlatVector<int64_t>(partitionKeys)});
+      createDuckDbTable({partitionInput});
+      core::PlanNodeId localId;
+      core::PlanNodeId aggId;
+      auto plan = PlanBuilder()
+                      .values(partitionInput)
+                      .localPartition({"c0"})
+                      .capturePlanNodeId(localId)
+                      .singleAggregation({"c0"}, {"count(1)"})
+                      .capturePlanNodeId(aggId)
+                      .planNode();
+      auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                      .maxDrivers(localCount)
+                      .config(
+                          core::QueryConfig::kMaxLocalExchangePartitionCount,
+                          std::to_string(localCount))
+                      .config(
+                          cudf_velox::CudfFromVelox::kGpuBatchSizeRows,
+                          std::to_string(kRows))
+                      .assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
+
+      bool sawLocalPartition = false;
+      bool sawAggregation = false;
+      for (const auto& pipeline : task->taskStats().pipelineStats) {
+        for (const auto& op : pipeline.operatorStats) {
+          if (op.planNodeId == localId &&
+              op.operatorType == "CudfLocalPartition") {
+            sawLocalPartition = true;
+            EXPECT_EQ(op.numDrivers, 1);
+            EXPECT_EQ(op.inputVectors, 1);
+            EXPECT_EQ(op.inputPositions, partitionKeys.size());
+          }
+          if (op.planNodeId == aggId &&
+              op.operatorType == "CudfGroupbySINGLE") {
+            sawAggregation = true;
+            EXPECT_EQ(op.numDrivers, localCount);
+            EXPECT_EQ(op.inputPositions, partitionKeys.size());
+            // One producer batch produces at most one batch per local queue.
+            // Thus all drivers must be fed to observe localCount input batches.
+            EXPECT_EQ(op.inputVectors, localCount);
+          }
+        }
+      }
+      EXPECT_TRUE(sawLocalPartition);
+      EXPECT_TRUE(sawAggregation);
+    }
+  }
+}
+
+// The hive partition function spec is not one that
+// CudfLocalPartition::shouldReplace accepts, so the LocalPartition stays on
+// CPU and enqueues host RowVectors. The consuming LocalExchange must report
+// host output so that CudfFromVelox is inserted ahead of the GPU TopN.
+// Otherwise CudfTopN::doAddInput receives a host RowVector and fails the
+// CudfVector cast with INVALID_STATE. This is the mixed GPU/CPU pipeline
+// failure seen with Spark/Gluten on TPC-H q18 and q22.
+TEST_F(LocalPartitionTest, unsupportedPartitionSpecIntoTopN) {
+  cudf_velox::unregisterCudf();
+  cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
+  cudf_velox::registerCudf();
+  SCOPE_EXIT {
+    cudf_velox::unregisterCudf();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
+    cudf_velox::registerCudf();
+  };
+
+  std::vector<RowVectorPtr> vectors = {
+      makeRowVector({makeFlatSequence<int32_t>(0, 100)}),
+      makeRowVector({makeFlatSequence<int32_t>(53, 100)}),
+      makeRowVector({makeFlatSequence<int32_t>(-71, 100)}),
+  };
+
+  createDuckDbTable(vectors);
+
+  auto op = PlanBuilder()
+                .values(vectors)
+                .localPartition(4, {0}, {})
+                .topN({"c0 DESC NULLS LAST"}, 10, false)
+                .planNode();
+
+  AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
+  queryBuilder.maxDrivers(2);
+  queryBuilder.assertResults("SELECT c0 FROM tmp ORDER BY c0 DESC LIMIT 10");
+}
+
 TEST_F(LocalPartitionTest, unionAllLocalExchange) {
-  auto data1 = makeRowVector({"d0"}, {makeFlatVector<StringView>({"x"})});
-  auto data2 = makeRowVector({"e0"}, {makeFlatVector<StringView>({"y"})});
+  auto data1 = makeNamedRowVector("d0", makeFlatVector<StringView>({"x"}));
+  auto data2 = makeNamedRowVector("e0", makeFlatVector<StringView>({"y"}));
   for (bool serialExecutionMode : {false, true}) {
     SCOPED_TRACE(fmt::format("serialExecutionMode {}", serialExecutionMode));
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     AssertQueryBuilder queryBuilder(duckDbQueryRunner_);
     // applyTestParameters(queryBuilder);
     queryBuilder.serialExecution(serialExecutionMode)
-        .plan(PlanBuilder(planNodeIdGenerator)
+        .plan(builder.newPlan()
                   .localPartitionRoundRobin(
-                      {PlanBuilder(planNodeIdGenerator)
-                           .values({data1})
+                      {builder.newPlan()
+                           .values(data1)
                            .project({"d0 as c0"})
                            .planNode(),
-                       PlanBuilder(planNodeIdGenerator)
-                           .values({data2})
+                       builder.newPlan()
+                           .values(data2)
                            .project({"e0 as c0"})
                            .planNode()})
                   .project({"length(c0)"})
@@ -197,14 +335,13 @@ TEST_F(LocalPartitionTest, roundRobinMultipleBatches) {
       makeRowVector({makeFlatSequence<int32_t>(10, 5)}), // Batch 3: 5 rows
   };
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
-  auto op =
-      PlanBuilder(planNodeIdGenerator)
-          .localPartitionRoundRobin(
-              {PlanBuilder(planNodeIdGenerator).values(vectors).planNode()})
-          .singleAggregation({}, {"count(1)", "min(c0)", "max(c0)"})
-          .planNode();
+  auto op = builder.newPlan()
+                .localPartitionRoundRobin(
+                    {builder.newPlan().values(vectors).planNode()})
+                .singleAggregation({}, {"count(1)", "min(c0)", "max(c0)"})
+                .planNode();
 
   // Total 15 rows, 3 partitions: each gets 5 rows
   auto task = assertQuery(op, "SELECT 15, 0, 14");
@@ -219,14 +356,13 @@ TEST_F(LocalPartitionTest, roundRobinEmptyInput) {
       makeRowVector({makeFlatVector<int32_t>({})}), // Empty vector
   };
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
-  auto op =
-      PlanBuilder(planNodeIdGenerator)
-          .localPartitionRoundRobin(
-              {PlanBuilder(planNodeIdGenerator).values(vectors).planNode()})
-          .singleAggregation({}, {"count(1)"})
-          .planNode();
+  auto op = builder.newPlan()
+                .localPartitionRoundRobin(
+                    {builder.newPlan().values(vectors).planNode()})
+                .singleAggregation({}, {"count(1)"})
+                .planNode();
 
   // Should handle empty input gracefully
   auto task = assertQuery(op, "SELECT 0");
@@ -245,16 +381,15 @@ TEST_F(LocalPartitionTest, roundRobinMultipleSources) {
       makeRowVector({makeFlatSequence<int32_t>(5, 5)}),
   };
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
-  auto op =
-      PlanBuilder(planNodeIdGenerator)
-          .localPartitionRoundRobin({
-              PlanBuilder(planNodeIdGenerator).values(vectors1).planNode(),
-              PlanBuilder(planNodeIdGenerator).values(vectors2).planNode(),
-          })
-          .singleAggregation({}, {"count(1)", "min(c0)", "max(c0)"})
-          .planNode();
+  auto op = builder.newPlan()
+                .localPartitionRoundRobin({
+                    builder.newPlan().values(vectors1).planNode(),
+                    builder.newPlan().values(vectors2).planNode(),
+                })
+                .singleAggregation({}, {"count(1)", "min(c0)", "max(c0)"})
+                .planNode();
 
   // Total 10 rows from 2 sources, 3 partitions
   auto task = assertQuery(op, "SELECT 10, 0, 9");
@@ -272,14 +407,13 @@ TEST_F(LocalPartitionTest, roundRobinWithAggregation) {
       }),
   };
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
-  auto op =
-      PlanBuilder(planNodeIdGenerator)
-          .localPartitionRoundRobin(
-              {PlanBuilder(planNodeIdGenerator).values(vectors).planNode()})
-          .singleAggregation({}, {"count(1)", "sum(c0)"})
-          .planNode();
+  auto op = builder.newPlan()
+                .localPartitionRoundRobin(
+                    {builder.newPlan().values(vectors).planNode()})
+                .singleAggregation({}, {"count(1)", "sum(c0)"})
+                .planNode();
 
   auto task = assertQuery(op, "SELECT 20, 190");
 
@@ -295,18 +429,18 @@ TEST_F(LocalPartitionTest, roundRobinWithTableScan) {
   };
 
   auto filePaths = writeToFiles(vectors);
-  auto rowType = asRowType(vectors[0]->type());
+  auto rowType = vectors[0]->rowType();
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   std::vector<core::PlanNodeId> scanNodeIds;
 
   auto tableScanNode = [&]() {
-    auto node = PlanBuilder(planNodeIdGenerator).tableScan(rowType).planNode();
+    auto node = builder.newPlan().tableScan(rowType).planNode();
     scanNodeIds.push_back(node->id());
     return node;
   };
 
-  auto op = PlanBuilder(planNodeIdGenerator)
+  auto op = builder.newPlan()
                 .localPartitionRoundRobin({
                     tableScanNode(),
                     tableScanNode(),
@@ -370,7 +504,7 @@ TEST_F(LocalPartitionTest, roundRobinAllCombinations) {
       expected_partition_counts[i % num_partitions] += 1;
     }
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
 
     auto make_op = [&](int num_sources) {
       std::vector<core::PlanNodePtr> sources;
@@ -384,12 +518,9 @@ TEST_F(LocalPartitionTest, roundRobinAllCombinations) {
           source_vectors.push_back(
               makeRowVector({makeFlatSequence<int32_t>(0, 0)}));
         }
-        sources.push_back(
-            PlanBuilder(planNodeIdGenerator).values(source_vectors).planNode());
+        sources.push_back(builder.newPlan().values(source_vectors).planNode());
       }
-      return PlanBuilder(planNodeIdGenerator)
-          .localPartitionRoundRobin(sources)
-          .planNode();
+      return builder.newPlan().localPartitionRoundRobin(sources).planNode();
     };
 
     auto op = make_op(num_sources);
@@ -438,13 +569,12 @@ TEST_F(LocalPartitionTest, roundRobinDistributionVerification) {
       makeRowVector({makeFlatSequence<int32_t>(0, 40)}), // 40 rows
   };
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
-  auto op =
-      PlanBuilder(planNodeIdGenerator)
-          .localPartitionRoundRobin(
-              {PlanBuilder(planNodeIdGenerator).values(vectors).planNode()})
-          .planNode();
+  auto op = builder.newPlan()
+                .localPartitionRoundRobin(
+                    {builder.newPlan().values(vectors).planNode()})
+                .planNode();
 
   // Use cursor to examine actual distribution
   CursorParameters params;
@@ -474,6 +604,40 @@ TEST_F(LocalPartitionTest, roundRobinDistributionVerification) {
   ASSERT_EQ(partitionCounts[0], 1);
   ASSERT_EQ(partitionCounts[1], 1);
   ASSERT_EQ(partitionCounts[2], 1);
+}
+
+TEST_F(LocalPartitionTest, gpuBytesTriggerBackpressure) {
+  std::vector<RowVectorPtr> vectors = {makeRowVector(
+      {makeFlatSequence<int64_t>(0, 1'024),
+       makeFlatSequence<int64_t>(0, 1'024)})};
+  createDuckDbTable(vectors);
+
+  for (const int32_t numDrivers : {1, 2}) {
+    SCOPED_TRACE(fmt::format("numDrivers: {}", numDrivers));
+    core::PlanNodeId localPartitionId;
+    auto plan = PlanBuilder()
+                    .values(vectors)
+                    .partialAggregation({"c0"}, {"max(c1)"})
+                    .localPartition({"c0"})
+                    .capturePlanNodeId(localPartitionId)
+                    .finalAggregation()
+                    .planNode();
+
+    auto task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .maxDrivers(numDrivers)
+            .config(
+                core::QueryConfig::kMaxLocalExchangePartitionCount, numDrivers)
+            .config(core::QueryConfig::kMaxLocalExchangeBufferSize, 4'096)
+            .assertResults("SELECT c0, max(c1) FROM tmp GROUP BY c0");
+
+    const auto stats = exec::toPlanStats(task->taskStats());
+    ASSERT_GT(
+        stats.at(localPartitionId)
+            .customStats.at("blockedWaitForConsumerTimes")
+            .sum,
+        0);
+  }
 }
 
 } // namespace

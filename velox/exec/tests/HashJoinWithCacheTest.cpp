@@ -35,6 +35,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 
 namespace facebook::velox::exec::test {
@@ -74,33 +75,36 @@ TEST_F(HashJoinWithCacheTest, sequential) {
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
   // Build the plan using HashJoinNode::Builder to set useHashTableCache.
-  auto buildPlanNode =
-      PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode();
+  auto buildPlanNode = builder.newPlan().values(buildVectors).planNode();
 
-  auto probePlanNode =
-      PlanBuilder(planNodeIdGenerator).values(probeVectors).planNode();
+  auto probePlanNode = builder.newPlan().values(probeVectors).planNode();
 
   // Create HashJoinNode with useHashTableCache = true.
   auto outputType = ROW(
       {"t_k", "t_v", "u_k", "u_v"}, {INTEGER(), BIGINT(), INTEGER(), BIGINT()});
 
   auto joinNode =
-      core::HashJoinNode::Builder()
-          .id(planNodeIdGenerator->next())
-          .joinType(core::JoinType::kInner)
-          .nullAware(false)
-          .leftKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "t_k")})
-          .rightKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "u_k")})
-          .left(probePlanNode)
-          .right(buildPlanNode)
-          .outputType(outputType)
-          .useHashTableCache(true)
-          .build();
+      builder.newPlan()
+          .addNode([&](const core::PlanNodeId& id,
+                       const core::PlanNodePtr& /*source*/) {
+            return core::HashJoinNode::Builder()
+                .id(id)
+                .joinType(core::JoinType::kInner)
+                .nullAware(false)
+                .leftKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "t_k")})
+                .rightKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "u_k")})
+                .left(probePlanNode)
+                .right(buildPlanNode)
+                .outputType(outputType)
+                .useHashTableCache(true)
+                .build();
+          })
+          .planNode();
   const auto joinNodeId = joinNode->id();
 
   const int numDrivers = 3;
@@ -129,52 +133,35 @@ TEST_F(HashJoinWithCacheTest, sequential) {
   auto task1 = runTask();
 
   // Get stats from first task - expect cache miss.
-  auto opStats1 = toOperatorStats(task1->taskStats());
-  ASSERT_EQ(opStats1.count("HashBuild"), 1);
-  auto& hashBuildStats1 = opStats1.at("HashBuild");
+  const auto joinStats1 =
+      PlanNodeStats::extract(task1->taskStats(), joinNode->id());
+  const auto& hashBuildStats1 = joinStats1.operatorStatsFor("HashBuild");
 
   // The last driver that finishes building reports the cache miss stat.
-  ASSERT_EQ(
-      hashBuildStats1.runtimeStats.count(
-          std::string(BaseHashTable::kHashTableCacheMiss)),
-      1)
+  ASSERT_TRUE(hashBuildStats1.hasCustomStat(BaseHashTable::kHashTableCacheMiss))
       << "First task should report cache miss";
   EXPECT_EQ(
-      hashBuildStats1.runtimeStats
-          .at(std::string(BaseHashTable::kHashTableCacheMiss))
-          .count,
-      1)
+      hashBuildStats1.customStat(BaseHashTable::kHashTableCacheMiss).count, 1)
       << "Exactly one driver should report cache miss (the one that builds)";
-  EXPECT_EQ(
-      hashBuildStats1.runtimeStats.count(
-          std::string(BaseHashTable::kHashTableCacheHit)),
-      0)
+  EXPECT_FALSE(hashBuildStats1.hasCustomStat(BaseHashTable::kHashTableCacheHit))
       << "First task should not have any cache hits";
 
   // Second task - should reuse the cached table (cache hit).
   auto task2 = runTask();
 
   // Get stats from second task - expect cache hit.
-  auto opStats2 = toOperatorStats(task2->taskStats());
-  ASSERT_EQ(opStats2.count("HashBuild"), 1);
-  auto& hashBuildStats2 = opStats2.at("HashBuild");
+  const auto joinStats2 =
+      PlanNodeStats::extract(task2->taskStats(), joinNode->id());
+  const auto& hashBuildStats2 = joinStats2.operatorStatsFor("HashBuild");
 
   // The last driver that finishes reports the cache hit stat.
-  ASSERT_EQ(
-      hashBuildStats2.runtimeStats.count(
-          std::string(BaseHashTable::kHashTableCacheHit)),
-      1)
+  ASSERT_TRUE(hashBuildStats2.hasCustomStat(BaseHashTable::kHashTableCacheHit))
       << "Second task should report cache hit";
   EXPECT_EQ(
-      hashBuildStats2.runtimeStats
-          .at(std::string(BaseHashTable::kHashTableCacheHit))
-          .count,
-      1)
+      hashBuildStats2.customStat(BaseHashTable::kHashTableCacheHit).count, 1)
       << "Exactly one driver should report cache hit (the one after barrier)";
-  EXPECT_EQ(
-      hashBuildStats2.runtimeStats.count(
-          std::string(BaseHashTable::kHashTableCacheMiss)),
-      0)
+  EXPECT_FALSE(
+      hashBuildStats2.hasCustomStat(BaseHashTable::kHashTableCacheMiss))
       << "Second task should not have any cache misses";
 
   // Clean up cache entry before tasks are destroyed.
@@ -216,33 +203,36 @@ TEST_F(HashJoinWithCacheTest, concurrent) {
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
   // Build the plan using HashJoinNode::Builder to set useHashTableCache.
-  auto buildPlanNode =
-      PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode();
+  auto buildPlanNode = builder.newPlan().values(buildVectors).planNode();
 
-  auto probePlanNode =
-      PlanBuilder(planNodeIdGenerator).values(probeVectors).planNode();
+  auto probePlanNode = builder.newPlan().values(probeVectors).planNode();
 
   // Create HashJoinNode with useHashTableCache = true.
   auto outputType = ROW(
       {"t_k", "t_v", "u_k", "u_v"}, {INTEGER(), BIGINT(), INTEGER(), BIGINT()});
 
   auto joinNode =
-      core::HashJoinNode::Builder()
-          .id(planNodeIdGenerator->next())
-          .joinType(core::JoinType::kInner)
-          .nullAware(false)
-          .leftKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "t_k")})
-          .rightKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "u_k")})
-          .left(probePlanNode)
-          .right(buildPlanNode)
-          .outputType(outputType)
-          .useHashTableCache(true)
-          .build();
+      builder.newPlan()
+          .addNode([&](const core::PlanNodeId& id,
+                       const core::PlanNodePtr& /*source*/) {
+            return core::HashJoinNode::Builder()
+                .id(id)
+                .joinType(core::JoinType::kInner)
+                .nullAware(false)
+                .leftKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "t_k")})
+                .rightKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "u_k")})
+                .left(probePlanNode)
+                .right(buildPlanNode)
+                .outputType(outputType)
+                .useHashTableCache(true)
+                .build();
+          })
+          .planNode();
   const auto joinNodeId = joinNode->id();
 
   const int numDrivers = 3;
@@ -309,22 +299,17 @@ TEST_F(HashJoinWithCacheTest, concurrent) {
   int totalCacheHits = 0;
 
   for (const auto& task : allTasks) {
-    auto opStats = toOperatorStats(task->taskStats());
-    ASSERT_EQ(opStats.count("HashBuild"), 1);
-    auto& hashBuildStats = opStats.at("HashBuild");
+    const auto joinStats =
+        PlanNodeStats::extract(task->taskStats(), joinNode->id());
+    const auto& hashBuildStats = joinStats.operatorStatsFor("HashBuild");
 
-    if (hashBuildStats.runtimeStats.count(
-            std::string(BaseHashTable::kHashTableCacheMiss))) {
+    if (hashBuildStats.hasCustomStat(BaseHashTable::kHashTableCacheMiss)) {
       totalCacheMisses +=
-          hashBuildStats.runtimeStats
-              .at(std::string(BaseHashTable::kHashTableCacheMiss))
-              .count;
+          hashBuildStats.customStat(BaseHashTable::kHashTableCacheMiss).count;
     }
-    if (hashBuildStats.runtimeStats.count(
-            std::string(BaseHashTable::kHashTableCacheHit))) {
-      totalCacheHits += hashBuildStats.runtimeStats
-                            .at(std::string(BaseHashTable::kHashTableCacheHit))
-                            .count;
+    if (hashBuildStats.hasCustomStat(BaseHashTable::kHashTableCacheHit)) {
+      totalCacheHits +=
+          hashBuildStats.customStat(BaseHashTable::kHashTableCacheHit).count;
     }
   }
 
@@ -372,29 +357,32 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, probeCannotSpillWithCachedTable) {
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto buildPlanNode =
-      PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode();
-  auto probePlanNode =
-      PlanBuilder(planNodeIdGenerator).values(probeVectors).planNode();
+  PlanBuilder builder;
+  auto buildPlanNode = builder.newPlan().values(buildVectors).planNode();
+  auto probePlanNode = builder.newPlan().values(probeVectors).planNode();
 
   auto outputType = ROW(
       {"t_k", "t_v", "u_k", "u_v"}, {INTEGER(), BIGINT(), INTEGER(), BIGINT()});
 
   auto joinNode =
-      core::HashJoinNode::Builder()
-          .id(planNodeIdGenerator->next())
-          .joinType(core::JoinType::kInner)
-          .nullAware(false)
-          .leftKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "t_k")})
-          .rightKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "u_k")})
-          .left(probePlanNode)
-          .right(buildPlanNode)
-          .outputType(outputType)
-          .useHashTableCache(true)
-          .build();
+      builder.newPlan()
+          .addNode([&](const core::PlanNodeId& id,
+                       const core::PlanNodePtr& /*source*/) {
+            return core::HashJoinNode::Builder()
+                .id(id)
+                .joinType(core::JoinType::kInner)
+                .nullAware(false)
+                .leftKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "t_k")})
+                .rightKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "u_k")})
+                .left(probePlanNode)
+                .right(buildPlanNode)
+                .outputType(outputType)
+                .useHashTableCache(true)
+                .build();
+          })
+          .planNode();
   const auto joinNodeId = joinNode->id();
 
   auto queryCtx = core::QueryCtx::create(
@@ -429,7 +417,7 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, probeCannotSpillWithCachedTable) {
         if (hashProbeChecked.exchange(true)) {
           return;
         }
-        auto* probe = dynamic_cast<HashProbe*>(op);
+        auto* probe = op->as<HashProbe>();
         ASSERT_NE(probe, nullptr);
         ASSERT_FALSE(probe->canReclaim())
             << "HashProbe should not be reclaimable with cached hash table";
@@ -448,9 +436,9 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, probeCannotSpillWithCachedTable) {
   ASSERT_TRUE(hashProbeChecked) << "HashProbe canReclaim check was not reached";
 
   // Verify that HashProbe operator stats show no spilling.
-  auto opStats = toOperatorStats(task->taskStats());
-  ASSERT_EQ(opStats.count("HashProbe"), 1);
-  auto& probeStats = opStats.at("HashProbe");
+  const auto joinStats =
+      PlanNodeStats::extract(task->taskStats(), joinNode->id());
+  const auto& probeStats = joinStats.operatorStatsFor("HashProbe");
 
   EXPECT_EQ(probeStats.spilledInputBytes, 0)
       << "HashProbe should not spill when using cached hash table";
@@ -498,29 +486,32 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, probeOOMWithCachedTable) {
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto buildPlanNode =
-      PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode();
-  auto probePlanNode =
-      PlanBuilder(planNodeIdGenerator).values(probeVectors).planNode();
+  PlanBuilder builder;
+  auto buildPlanNode = builder.newPlan().values(buildVectors).planNode();
+  auto probePlanNode = builder.newPlan().values(probeVectors).planNode();
 
   auto outputType = ROW(
       {"t_k", "t_v", "u_k", "u_v"}, {INTEGER(), BIGINT(), INTEGER(), BIGINT()});
 
   auto joinNode =
-      core::HashJoinNode::Builder()
-          .id(planNodeIdGenerator->next())
-          .joinType(core::JoinType::kInner)
-          .nullAware(false)
-          .leftKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "t_k")})
-          .rightKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "u_k")})
-          .left(probePlanNode)
-          .right(buildPlanNode)
-          .outputType(outputType)
-          .useHashTableCache(true)
-          .build();
+      builder.newPlan()
+          .addNode([&](const core::PlanNodeId& id,
+                       const core::PlanNodePtr& /*source*/) {
+            return core::HashJoinNode::Builder()
+                .id(id)
+                .joinType(core::JoinType::kInner)
+                .nullAware(false)
+                .leftKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "t_k")})
+                .rightKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "u_k")})
+                .left(probePlanNode)
+                .right(buildPlanNode)
+                .outputType(outputType)
+                .useHashTableCache(true)
+                .build();
+          })
+          .planNode();
 
   // Create QueryCtx with sufficient memory for build but we'll exhaust it
   // during probe via TestValue injection.
@@ -556,7 +547,7 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, probeOOMWithCachedTable) {
           return;
         }
 
-        auto* probe = dynamic_cast<HashProbe*>(op);
+        auto* probe = op->as<HashProbe>();
         ASSERT_NE(probe, nullptr);
 
         // Verify that HashProbe cannot reclaim when using cached hash table.
@@ -581,7 +572,7 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, probeOOMWithCachedTable) {
           .copyResults(pool()),
       "Exceeded memory pool capacity");
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   queryCtx.reset();
   // Cache should be cleaned up by QueryCtx destructor via release callback.
 }
@@ -618,29 +609,32 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, cachePoolArbitration) {
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto buildPlanNode =
-      PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode();
-  auto probePlanNode =
-      PlanBuilder(planNodeIdGenerator).values(probeVectors).planNode();
+  PlanBuilder builder;
+  auto buildPlanNode = builder.newPlan().values(buildVectors).planNode();
+  auto probePlanNode = builder.newPlan().values(probeVectors).planNode();
 
   auto outputType = ROW(
       {"t_k", "t_v", "u_k", "u_v"}, {INTEGER(), BIGINT(), INTEGER(), BIGINT()});
 
   auto joinNode =
-      core::HashJoinNode::Builder()
-          .id(planNodeIdGenerator->next())
-          .joinType(core::JoinType::kInner)
-          .nullAware(false)
-          .leftKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "t_k")})
-          .rightKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "u_k")})
-          .left(probePlanNode)
-          .right(buildPlanNode)
-          .outputType(outputType)
-          .useHashTableCache(true)
-          .build();
+      builder.newPlan()
+          .addNode([&](const core::PlanNodeId& id,
+                       const core::PlanNodePtr& /*source*/) {
+            return core::HashJoinNode::Builder()
+                .id(id)
+                .joinType(core::JoinType::kInner)
+                .nullAware(false)
+                .leftKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "t_k")})
+                .rightKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "u_k")})
+                .left(probePlanNode)
+                .right(buildPlanNode)
+                .outputType(outputType)
+                .useHashTableCache(true)
+                .build();
+          })
+          .planNode();
   const auto joinNodeId = joinNode->id();
 
   auto queryCtx = core::QueryCtx::create(
@@ -697,7 +691,7 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, cachePoolArbitration) {
 
   ASSERT_TRUE(injected) << "TestValue injection was not triggered";
 
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
   queryCtx.reset();
 }
 
@@ -706,7 +700,7 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, cachePoolArbitration) {
 // Reproduces a spin-loop bug where non-last drivers of the HashBuild pipeline
 // never reach kFinish when hash table caching is enabled.
 //
-// Root cause: after allPeersFinished() returns false, non-last drivers were
+// Root cause: after allPeersArrived() returns false, non-last drivers were
 // placed in kWaitForBuild state. When they wake from the peers-finished future,
 // isBlocked() enters the kWaitForBuild case and calls
 // receivedCachedHashTable(), which does setRunning() + noMoreInput().
@@ -715,7 +709,7 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, cachePoolArbitration) {
 // calling isBlocked/getOutput/isFinished in a tight loop, burning CPU until the
 // task is terminated by the probe pipeline completing.
 //
-// Fix (D100200527): in finishHashBuild(), when allPeersFinished() returns false
+// Fix (D100200527): in finishHashBuild(), when allPeersArrived() returns false
 // and hash table caching is enabled, set kWaitForProbe instead of
 // kWaitForBuild. This skips receivedCachedHashTable() and goes directly to
 // postHashBuildProcess() -> kFinish.
@@ -748,32 +742,36 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, nonLastDriverSpinLoop) {
         });
   });
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   // The build ValuesNode must be parallelizable so the build pipeline gets
   // multiple drivers.
-  auto buildPlanNode = PlanBuilder(planNodeIdGenerator)
+  auto buildPlanNode = builder.newPlan()
                            .values(buildVectors, /*parallelizable=*/true)
                            .planNode();
-  auto probePlanNode =
-      PlanBuilder(planNodeIdGenerator).values(probeVectors).planNode();
+  auto probePlanNode = builder.newPlan().values(probeVectors).planNode();
 
   auto outputType = ROW(
       {"t_k", "t_v", "u_k", "u_v"}, {INTEGER(), BIGINT(), INTEGER(), BIGINT()});
 
   auto joinNode =
-      core::HashJoinNode::Builder()
-          .id(planNodeIdGenerator->next())
-          .joinType(core::JoinType::kInner)
-          .nullAware(false)
-          .leftKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "t_k")})
-          .rightKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "u_k")})
-          .left(probePlanNode)
-          .right(buildPlanNode)
-          .outputType(outputType)
-          .useHashTableCache(true)
-          .build();
+      builder.newPlan()
+          .addNode([&](const core::PlanNodeId& id,
+                       const core::PlanNodePtr& /*source*/) {
+            return core::HashJoinNode::Builder()
+                .id(id)
+                .joinType(core::JoinType::kInner)
+                .nullAware(false)
+                .leftKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "t_k")})
+                .rightKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "u_k")})
+                .left(probePlanNode)
+                .right(buildPlanNode)
+                .outputType(outputType)
+                .useHashTableCache(true)
+                .build();
+          })
+          .planNode();
   const auto joinNodeId = joinNode->id();
 
   const int numDrivers = 4;
@@ -789,7 +787,7 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, nonLastDriverSpinLoop) {
 
   // Track non-last drivers via the finishHashBuild TestValue. This fires
   // right after setState(kWaitForBuild) for each non-last driver. We verify
-  // the allPeersFinished coordination works (expected count = numDrivers - 1).
+  // the allPeersArrived coordination works (expected count = numDrivers - 1).
   //
   // The spin loop bug was in receivedCachedHashTable(): when non-last drivers
   // woke from the peers-finished future and re-entered isBlocked(), the

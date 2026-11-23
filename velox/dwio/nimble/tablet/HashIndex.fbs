@@ -1,0 +1,99 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+include "BloomFilter.fbs";
+include "Footer.fbs";
+
+namespace facebook.nimble.serialization;
+
+/// A single hash index on a set of composite key columns.
+/// Uses a two-level hash table: bucket directory + key arrays.
+///
+/// Lookup flow:
+///   1. Optional bloom filter check for fast negative result
+///   2. Hash(encodedKey) mod num_buckets → bucket
+///   3. Scan keys in bucket by exact key match
+///   4. Return matching row numbers
+table HashIndex {
+  /// Total number of rows indexed.
+  row_count:uint64;
+
+  /// Number of buckets in the hash table (always power of 2).
+  num_buckets:uint32;
+  /// Total number of keys in the index. Diagnostic only; not used on the
+  /// read path. Equal to row_count when there is no deduplication.
+  num_keys:uint64;
+  /// Load factor used during construction (for diagnostics).
+  load_factor:float;
+
+  /// Optional bloom filter for fast negative lookups.
+  bloom_filter:BloomFilter;
+
+  /// Minimum encoded key across all entries.
+  min_key:string;
+  /// Maximum encoded key across all entries.
+  max_key:string;
+
+  /// Partitions. The hash table is always split into one or more partitions,
+  /// each stored as a separate HashIndexPartition section. Small indices
+  /// use a single partition; large indices are split by maxPartitionSizeBytes.
+  /// Starting bucket index in the global bucket space (inclusive).
+  /// Size = partition_count. Bucket count for partition i is derived from
+  /// partition_start_buckets[i+1] - partition_start_buckets[i], or
+  /// num_buckets - partition_start_buckets[i] for the last partition.
+  partition_start_buckets:[uint32];
+  /// References to the serialized HashIndexPartition for each partition.
+  /// Size = partition_count.
+  partition_sections:[MetadataSection];
+}
+
+/// Data for a single partition of a hash index.
+/// Stored as a separate section, loaded on-demand during lookup.
+table HashIndexPartition {
+  /// Bucket directory for this partition. Size = bucketCount + 1.
+  /// bucket_offsets[i] is the start index and bucket_offsets[i+1] is the
+  /// end index (exclusive) in encoded_keys/row_numbers for bucket i.
+  /// The last element is the total number of entries.
+  bucket_offsets:[uint32];
+  /// Binary-encoded composite keys for this partition. Aligned with
+  /// row_numbers: encoded_keys[i] corresponds to row_numbers[i].
+  encoded_keys:[string];
+  /// File row numbers for this partition. Aligned with encoded_keys.
+  row_numbers:[uint32];
+}
+
+/// Lightweight descriptor for a hash index.
+/// Stores the index columns for lookup dispatch and a MetadataSection
+/// pointing to the serialized HashIndex data.
+table HashIndexSection {
+  /// Names of columns forming the composite key.
+  /// Duplicated here so the reader can find the right index
+  /// without loading the full HashIndex data.
+  index_columns:[string];
+  /// Reference to the serialized HashIndex stored as a
+  /// separate section in the file.
+  section:MetadataSection;
+}
+
+/// Root table for the hash index payload referenced by the index manifest.
+/// Supports multiple independent hash indices per file,
+/// each on a different set of composite key columns.
+table HashIndexDirectory {
+  /// One descriptor per hash index defined on the file.
+  indices:[HashIndexSection];
+}
+
+root_type HashIndexDirectory;

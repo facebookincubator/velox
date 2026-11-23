@@ -144,12 +144,15 @@ function get_cxx_flags {
     # https://developer.arm.com/documentation/100616/0301/register-descriptions/aarch64-system-registers/midr-el1--main-id-register--el1
     ARM_CPU_FILE="/sys/devices/system/cpu/cpu0/regs/identification/midr_el1"
 
-    # https://gitlab.arm.com/telemetry-solution/telemetry-solution/-/blob/main/data/pmu/cpu/neoverse/neoverse-n1.json#L13
-    # N1:d0c; N2:d49; V1:d40; V2:d4f;
+    # https://gitlab.arm.com/telemetry-solution/telemetry-solution/-/blob/main/data/pmu/cpu/specifications/neoverse/neoverse_n1_r4p1_pmu.json#L14
+    # N1:d0c; N2:d49; N3:d8e; V1:d40; V2:d4f; V3:d84; V3AE:d83
     Neoverse_N1="d0c"
     Neoverse_N2="d49"
+    Neoverse_N3="d8e"
     Neoverse_V1="d40"
     Neoverse_V2="d4f"
+    Neoverse_V3="d84"
+    Neoverse_V3AE="d83"
     Nvidia_Implementer="4e"
     Nvidia_Olympus="010"
     if [ -f "$ARM_CPU_FILE" ] && [ "$ARM_BUILD_TARGET" = "local" ]; then
@@ -165,6 +168,8 @@ function get_cxx_flags {
         echo -n "-mcpu=neoverse-n1 "
       elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_N2" ]; then
         echo -n "-mcpu=neoverse-n2 "
+      elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_N3" ]; then
+        echo -n "-mcpu=neoverse-n3 "
       elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V1" ]; then
         echo -n "-mcpu=neoverse-v1 "
       elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V2" ]; then
@@ -178,6 +183,10 @@ function get_cxx_flags {
         else
           echo -n "-mcpu=neoverse-v2 "
         fi
+      elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V3" ]; then
+        echo -n "-mcpu=neoverse-v3 "
+      elif [ "$ARM_CPU_PRODUCT" = "$Neoverse_V3AE" ]; then
+        echo -n "-mcpu=neoverse-v3ae "
       else
         echo -n "-march=armv8-a+crc+crypto "
       fi
@@ -276,12 +285,18 @@ function cmake_install {
     CCACHE=ccache
   fi
   # CMAKE_POSITION_INDEPENDENT_CODE is required so that Velox can be built into dynamic libraries \
+  # OPENSSL_ROOT_DIR, when set (setup-macos.sh pins Homebrew's OpenSSL 3), is
+  # passed as a cache variable too: fbthrift ships its own FindOpenSSL wrapper
+  # that ignores the environment and otherwise asks Homebrew for its default
+  # openssl, which is OpenSSL 4 now.
   cmake -Wno-dev "${CMAKE_OPTIONS}" -B"${BINARY_DIR}" \
     -GNinja \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     "${INSTALL_PREFIX+-DCMAKE_PREFIX_PATH=}${INSTALL_PREFIX-}" \
     "${INSTALL_PREFIX+-DCMAKE_INSTALL_PREFIX=}${INSTALL_PREFIX-}" \
+    ${OPENSSL_ROOT_DIR:+"-DOPENSSL_ROOT_DIR=${OPENSSL_ROOT_DIR}"} \
+    -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}" \
     -DCMAKE_CXX_FLAGS="$COMPILER_FLAGS" \
     -DCMAKE_C_COMPILER_LAUNCHER=${CCACHE} \
     -DCMAKE_CXX_COMPILER_LAUNCHER=${CCACHE} \

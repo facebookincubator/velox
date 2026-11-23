@@ -46,11 +46,13 @@ class CudfDistinct : public CudfOperatorBase {
 
   void doNoMoreInput() override;
 
+  void doClose() override;
+
  private:
   CudfVectorPtr getDistinctKeys(
       cudf::table_view tableView,
       std::vector<column_index_t> const& groupByKeys,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
   CudfVectorPtr releaseAndResetBufferedResult();
 

@@ -14,13 +14,20 @@
  * limitations under the License.
  */
 
-#include "dwio/nimble/velox/reader/fb/NimbleReader.h"
-#include "dwio/nimble/velox/writer/fb/NimbleWriter.h"
+// This end-to-end test exercises the batch NimbleReader/NimbleWriter factories,
+// both now under velox/dwio/nimble/ and neither behind an fb/ segment: both are
+// OSS-exportable. Guard the whole test so the OSS build (VELOX_ENABLE_NIMBLE
+// off) does not try to build the batch reader, which stays internal-only.
+// Mirrors WriterOptionsAdapterTest.cpp.
+#ifdef VELOX_ENABLE_NIMBLE
+
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+#include "velox/connectors/hive/iceberg/tests/utils/IcebergPlanBuilder.h"
+#include "velox/dwio/nimble/reader/NimbleReaderFactory.h"
+#include "velox/dwio/nimble/writer/WriterFactory.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 
 using namespace facebook::velox::common::testutil;
 
@@ -68,9 +75,8 @@ class IcebergNimbleInsertTest : public test::IcebergTestBase {
 
     auto splits = createSplitsForDirectory(dataPath);
     ASSERT_EQ(splits.size(), commitTasks.size());
-    auto plan = exec::test::PlanBuilder()
+    auto plan = test::IcebergPlanBuilder()
                     .startTableScan()
-                    .connectorId(test::kIcebergConnectorId)
                     .outputType(rowType)
                     .endTableScan()
                     .planNode();
@@ -94,6 +100,24 @@ TEST_F(IcebergNimbleInsertTest, roundTrip) {
   test(rowType, 0.2);
 }
 
+// The Java coordinator stamps the commit message's fileFormat onto the Iceberg
+// DataFile via FileFormat.toIceberg(), which has a first-class NIMBLE value.
+// Reporting "ORC" would record NIMBLE files as ORC in the manifest.
+TEST_F(IcebergNimbleInsertTest, commitMessageFormat) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto vectors =
+      createTestData(ROW({"c1", "c2"}, {BIGINT(), VARCHAR()}), 2, 100);
+  const auto commitTasks =
+      createDataSinkAndAppendData(vectors, outputDirectory->getPath())->close();
+
+  ASSERT_FALSE(commitTasks.empty());
+  for (const auto& task : commitTasks) {
+    const auto taskJson = folly::parseJson(task);
+    ASSERT_TRUE(taskJson.count("fileFormat"));
+    EXPECT_EQ(taskJson["fileFormat"].asString(), "NIMBLE");
+  }
+}
+
 // Builds an Iceberg column handle with an explicit field-id tree, used to drive
 // reads whose requested schema differs from the written schema.
 std::shared_ptr<const connector::ColumnHandle> makeIcebergColumnHandle(
@@ -101,7 +125,7 @@ std::shared_ptr<const connector::ColumnHandle> makeIcebergColumnHandle(
     const TypePtr& type,
     const parquet::ParquetFieldId& field) {
   return std::make_shared<const IcebergColumnHandle>(
-      name, FileColumnHandle::ColumnType::kRegular, type, field);
+      name, connector::FileColumnHandle::ColumnType::kRegular, type, field);
 }
 
 // Schema evolution: a top-level column is renamed (c -> c2, id 3) and
@@ -129,9 +153,8 @@ TEST_F(IcebergNimbleInsertTest, fieldIdRenameReorderDropAdd) {
               {"a", makeIcebergColumnHandle("a", BIGINT(), {1, {}})},
               {"d", makeIcebergColumnHandle("d", INTEGER(), {9, {}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
@@ -156,7 +179,8 @@ TEST_F(IcebergNimbleInsertTest, fieldIdRenameReorderDropAdd) {
 // file column to a non-colliding sentinel so the connector's by-name null-fill
 // correctly null-fills the re-added column instead of binding to stale data.
 TEST_F(IcebergNimbleInsertTest, fieldIdDropReaddSameName) {
-  auto writeVector = makeRowVector({"c"}, {makeFlatVector<int32_t>({1, 2, 3})});
+  auto writeVector =
+      makeNamedRowVector("c", makeFlatVector<int32_t>({1, 2, 3}));
 
   const auto dir = TempDirectoryPath::create();
   const auto path = dir->getPath();
@@ -169,9 +193,8 @@ TEST_F(IcebergNimbleInsertTest, fieldIdDropReaddSameName) {
       unordered_map<std::string, std::shared_ptr<const connector::ColumnHandle>>
           assignments{{"c", makeIcebergColumnHandle("c", INTEGER(), {9, {}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
@@ -179,7 +202,7 @@ TEST_F(IcebergNimbleInsertTest, fieldIdDropReaddSameName) {
                   .planNode();
 
   auto expected =
-      makeRowVector({"c"}, {makeNullConstant(TypeKind::INTEGER, 3)});
+      makeNamedRowVector("c", makeNullConstant(TypeKind::INTEGER, 3));
   exec::test::AssertQueryBuilder(plan)
       .connectorSessionProperty(
           test::kIcebergConnectorId, kSelectiveNimbleReaderEnabled, "false")
@@ -194,13 +217,13 @@ TEST_F(IcebergNimbleInsertTest, fieldIdDropReaddSameName) {
 // projectStructToSpec in NimbleReader.cpp), so the struct comes back as the
 // requested ROW<z,x> rather than the file-order ROW<x,y,z>.
 TEST_F(IcebergNimbleInsertTest, fieldIdNestedStructReorderDrop) {
-  auto writeVector = makeRowVector(
-      {"s"},
-      {makeRowVector(
+  auto writeVector = makeNamedRowVector(
+      "s",
+      makeRowVector(
           {"x", "y", "z"},
           {makeFlatVector<int32_t>({1, 2, 3}),
            makeFlatVector<int32_t>({4, 5, 6}),
-           makeFlatVector<int32_t>({7, 8, 9})})});
+           makeFlatVector<int32_t>({7, 8, 9})}));
 
   const auto dir = TempDirectoryPath::create();
   const auto path = dir->getPath();
@@ -218,21 +241,89 @@ TEST_F(IcebergNimbleInsertTest, fieldIdNestedStructReorderDrop) {
                    ROW({"z", "x"}, {INTEGER(), INTEGER()}),
                    {1, {{4, {}}, {2, {}}}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
                   .endTableScan()
                   .planNode();
 
-  auto expected = makeRowVector(
-      {"s"},
-      {makeRowVector(
+  auto expected = makeNamedRowVector(
+      "s",
+      makeRowVector(
           {"z", "x"},
           {makeFlatVector<int32_t>({7, 8, 9}),
-           makeFlatVector<int32_t>({1, 2, 3})})});
+           makeFlatVector<int32_t>({1, 2, 3})}));
+  exec::test::AssertQueryBuilder(plan)
+      .connectorSessionProperty(
+          test::kIcebergConnectorId, kSelectiveNimbleReaderEnabled, "false")
+      .splits(splits)
+      .assertResults({expected});
+}
+
+// No schema evolution, complex types: array, map, struct, and array-of-struct
+// columns written and read back unchanged. Exercises the collection write+read
+// path and confirms iceberg.id stamping on collection nodes does not perturb
+// the round trip.
+TEST_F(IcebergNimbleInsertTest, roundTripComplexTypes) {
+  auto rowType =
+      ROW({"c1", "arr", "kv", "s", "arrStruct"},
+          {BIGINT(),
+           ARRAY(INTEGER()),
+           MAP(INTEGER(), VARCHAR()),
+           ROW({"x", "y"}, {INTEGER(), VARCHAR()}),
+           ARRAY(ROW({"a", "b"}, {INTEGER(), VARCHAR()}))});
+  test(rowType, 0.2);
+}
+
+// Schema evolution nested under a LIST: the element struct's fields are renamed
+// (name -> label, age -> years) while keeping their Iceberg field-ids. This
+// only resolves because the writer now stamps iceberg.id on the list element's
+// struct children; without it the FieldIdResolver would fall back to name and
+// the renamed fields would read as null. Golden coverage for the
+// collection-nested field-id write path.
+TEST_F(IcebergNimbleInsertTest, fieldIdRenameInsideArrayStruct) {
+  // items: array<struct<name VARCHAR, age INTEGER>>, two array rows.
+  auto elements = makeRowVector(
+      {"name", "age"},
+      {makeFlatVector<std::string>({"a", "b", "c"}),
+       makeFlatVector<int32_t>({1, 2, 3})});
+  auto items = makeArrayVector({0, 2}, elements);
+  auto writeVector = makeNamedRowVector("items", items);
+
+  const auto dir = TempDirectoryPath::create();
+  const auto path = dir->getPath();
+  createDataSinkAndAppendData({writeVector}, path)->close();
+  auto splits = createSplitsForDirectory(path);
+
+  // Written field ids (depth-first pre-order): items=1, element struct=2,
+  // name=3, age=4. The read schema renames name->label and age->years but keeps
+  // the ids, so resolution must match by id through the list element.
+  auto readElementType = ROW({"label", "years"}, {VARCHAR(), INTEGER()});
+  auto readItemsType = ARRAY(readElementType);
+  auto readSchema = ROW({"items"}, {readItemsType});
+  std::
+      unordered_map<std::string, std::shared_ptr<const connector::ColumnHandle>>
+          assignments{
+              {"items",
+               makeIcebergColumnHandle(
+                   "items", readItemsType, {1, {{2, {{3, {}}, {4, {}}}}}})}};
+
+  auto plan = test::IcebergPlanBuilder()
+                  .startTableScan()
+                  .outputType(readSchema)
+                  .dataColumns(readSchema)
+                  .assignments(assignments)
+                  .endTableScan()
+                  .planNode();
+
+  auto expectedElements = makeRowVector(
+      {"label", "years"},
+      {makeFlatVector<std::string>({"a", "b", "c"}),
+       makeFlatVector<int32_t>({1, 2, 3})});
+  auto expected =
+      makeNamedRowVector("items", makeArrayVector({0, 2}, expectedElements));
   exec::test::AssertQueryBuilder(plan)
       .connectorSessionProperty(
           test::kIcebergConnectorId, kSelectiveNimbleReaderEnabled, "false")
@@ -242,3 +333,5 @@ TEST_F(IcebergNimbleInsertTest, fieldIdNestedStructReorderDrop) {
 
 } // namespace
 } // namespace facebook::velox::connector::hive::iceberg
+
+#endif // VELOX_ENABLE_NIMBLE

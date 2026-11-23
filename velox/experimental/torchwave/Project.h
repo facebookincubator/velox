@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -93,6 +94,33 @@ class ProjectNode {
     }
     return false;
   }
+
+  /// For each top-level expr (parallel to nodes()), the values produced and
+  /// consumed entirely within that expr: the producer is inside the expr
+  /// subgraph and every user -- directly or through any storage alias -- is
+  /// too, so the value never escapes to a sibling expr, a later layer, or a
+  /// graph output. Such a temporary owns its storage and may be overwritten in
+  /// place. Populated by ParallelNodes::computeLastUse.
+  std::vector<std::vector<ValueCP>> overwritableTemps_;
+
+  /// True if 'value' is an expr-local overwritable temp of any expr in this
+  /// node.
+  bool isOverwritableTemp(ValueCP value) const {
+    for (const auto& perExpr : overwritableTemps_) {
+      if (std::find(perExpr.begin(), perExpr.end(), value) != perExpr.end()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Number of clones elided in this node, keyed by the Value::id() of the
+  /// elided clone's input. The clone's own output is dead after the rewrite,
+  /// so the input identifies the buffer that was not copied; the count is the
+  /// number of copies of that buffer saved. Populated by
+  /// ParallelNodes::rewriteInPlace, and used at runtime to report the copying
+  /// the pass avoided. Ordered so listings are deterministic.
+  std::map<int32_t, int32_t> elidedCloneCounts;
 
  private:
   std::vector<NodeCP> nodes_;

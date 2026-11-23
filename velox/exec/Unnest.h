@@ -148,6 +148,17 @@ class Unnest : public Operator {
 
   std::vector<column_index_t> unnestChannels_;
 
+  // The unnest output columns to emit, in output order; pruned columns are
+  // absent. Each points at a source sub-vector of an unnest channel:
+  //   ARRAY -> sourceChildIndex 0 (element)
+  //   MAP   -> sourceChildIndex 0 (key), 1 (value)
+  // Analogous to identityProjections_ for the replicated columns.
+  struct UnnestOutputColumn {
+    column_index_t channel;
+    uint32_t sourceChildIndex;
+  };
+  std::vector<UnnestOutputColumn> unnestOutputColumns_;
+
   std::vector<DecodedVector> unnestDecoded_;
 
   BufferPtr maxSizes_;

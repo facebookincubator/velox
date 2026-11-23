@@ -20,6 +20,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/lib/window/tests/WindowTestBase.h"
 
@@ -31,30 +32,6 @@ using namespace facebook::velox::window::test;
 namespace facebook::velox::aggregate::test {
 
 namespace {
-
-// Return the argument types of an aggregation when the aggregation is
-// constructed by `functionCall` with the given dataType, weighted, accuracy,
-// and percentileCount.
-std::vector<TypePtr> getArgTypes(
-    const TypePtr& dataType,
-    bool weighted,
-    double accuracy,
-    int percentileCount) {
-  std::vector<TypePtr> argTypes;
-  argTypes.push_back(dataType);
-  if (weighted) {
-    argTypes.push_back(BIGINT());
-  }
-  if (percentileCount == -1) {
-    argTypes.push_back(DOUBLE());
-  } else {
-    argTypes.push_back(ARRAY(DOUBLE()));
-  }
-  if (accuracy > 0) {
-    argTypes.push_back(DOUBLE());
-  }
-  return argTypes;
-}
 
 std::string functionCall(
     bool keyed,
@@ -90,9 +67,6 @@ class ApproxPercentileTest : public AggregationTestBase {
   void SetUp() override {
     AggregationTestBase::SetUp();
     random::setSeed(0);
-    queryConfig_
-        [core::QueryConfig::kDebugAggregationApproxPercentileFixedRandomSeed] =
-            "0";
   }
 
   template <typename T>
@@ -141,41 +115,24 @@ class ApproxPercentileTest : public AggregationTestBase {
           fmt::format("SELECT ARRAY[{0},{0},{0}]", expectedResult.value());
     }
 
-    enableTestStreaming();
-    testAggregations(
-        {rows},
-        {},
-        {functionCall(false, weights.get(), percentile, accuracy, -1)},
-        expected,
-        queryConfig_);
-    testAggregations(
-        {rows},
-        {},
-        {functionCall(false, weights.get(), percentile, accuracy, 3)},
-        expectedArray,
-        queryConfig_);
-
-    // Companion functions of approx_percentile do not support test streaming
-    // because intermediate results are KLL that has non-deterministic shape.
-    disableTestStreaming();
-    testAggregationsWithCompanion(
-        {rows},
-        [](auto& /*builder*/) {},
-        {},
-        {functionCall(false, weights.get(), percentile, accuracy, -1)},
-        {getArgTypes(values->type(), weights.get(), accuracy, -1)},
-        {},
-        expected,
-        queryConfig_);
-    testAggregationsWithCompanion(
-        {rows},
-        [](auto& /*builder*/) {},
-        {},
-        {functionCall(false, weights.get(), percentile, accuracy, 3)},
-        {getArgTypes(values->type(), weights.get(), accuracy, 3)},
-        {},
-        expectedArray,
-        queryConfig_);
+    AggregationTester(*this)
+        .inputs(rows)
+        .aggregates(
+            {functionCall(false, weights.get(), percentile, accuracy, -1)})
+        .config(
+            core::QueryConfig::kDebugAggregationApproxPercentileFixedRandomSeed,
+            "0")
+        .withCompanion()
+        .assertResults(expected);
+    AggregationTester(*this)
+        .inputs(rows)
+        .aggregates(
+            {functionCall(false, weights.get(), percentile, accuracy, 3)})
+        .config(
+            core::QueryConfig::kDebugAggregationApproxPercentileFixedRandomSeed,
+            "0")
+        .withCompanion()
+        .assertResults(expectedArray);
   }
 
   template <typename T>
@@ -211,26 +168,16 @@ class ApproxPercentileTest : public AggregationTestBase {
       const RowVectorPtr& expectedResult) {
     auto rows = weights ? makeRowVector({keys, values, weights})
                         : makeRowVector({keys, values});
-    enableTestStreaming();
-    testAggregations(
-        {rows},
-        {"c0"},
-        {functionCall(true, weights.get(), percentile, accuracy, -1)},
-        {expectedResult},
-        queryConfig_);
-
-    // Companion functions of approx_percentile do not support test streaming
-    // because intermediate results are KLL that has non-deterministic shape.
-    disableTestStreaming();
-    testAggregationsWithCompanion(
-        {rows},
-        [](auto& /*builder*/) {},
-        {"c0"},
-        {functionCall(true, weights.get(), percentile, accuracy, -1)},
-        {getArgTypes(values->type(), weights.get(), accuracy, -1)},
-        {},
-        {expectedResult},
-        queryConfig_);
+    AggregationTester(*this)
+        .inputs(rows)
+        .groupBy({"c0"})
+        .aggregates(
+            {functionCall(true, weights.get(), percentile, accuracy, -1)})
+        .config(
+            core::QueryConfig::kDebugAggregationApproxPercentileFixedRandomSeed,
+            "0")
+        .withCompanion()
+        .assertResults(expectedResult);
 
     {
       SCOPED_TRACE("Percentile array");
@@ -269,31 +216,19 @@ class ApproxPercentileTest : public AggregationTestBase {
                  elements)});
       }
 
-      enableTestStreaming();
-      testAggregations(
-          {rows},
-          {"c0"},
-          {functionCall(true, weights.get(), percentile, accuracy, 3)},
-          {expected},
-          queryConfig_);
-
-      // Companion functions of approx_percentile do not support test streaming
-      // because intermediate results are KLL that has non-deterministic shape.
-      disableTestStreaming();
-      testAggregationsWithCompanion(
-          {rows},
-          [](auto& /*builder*/) {},
-          {"c0"},
-          {functionCall(true, weights.get(), percentile, accuracy, 3)},
-          {getArgTypes(values->type(), weights.get(), accuracy, 3)},
-          {},
-          {expected},
-          queryConfig_);
+      AggregationTester(*this)
+          .inputs(rows)
+          .groupBy({"c0"})
+          .aggregates(
+              {functionCall(true, weights.get(), percentile, accuracy, 3)})
+          .config(
+              core::QueryConfig::
+                  kDebugAggregationApproxPercentileFixedRandomSeed,
+              "0")
+          .withCompanion()
+          .assertResults(expected);
     }
   }
-
- private:
-  std::unordered_map<std::string, std::string> queryConfig_;
 };
 
 TEST_F(ApproxPercentileTest, globalAgg) {
@@ -409,13 +344,6 @@ TEST_F(ApproxPercentileTest, largeWeightsGroupBy) {
 /// EvalCtx::moveOrCopyResult needlessly flattening constant vector result of a
 /// constant expression.
 TEST_F(ApproxPercentileTest, partialFull) {
-  // Make sure partial aggregation runs out of memory after first batch.
-  CursorParameters params;
-  params.queryCtx = velox::core::QueryCtx::create(executor_.get());
-  params.queryCtx->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kMaxPartialAggregationMemory, "300000"},
-  });
-
   auto data = {
       makeRowVector({
           makeFlatVector<int32_t>(1'024, [](auto row) { return row % 117; }),
@@ -431,7 +359,7 @@ TEST_F(ApproxPercentileTest, partialFull) {
       }),
   };
 
-  params.planNode =
+  auto plan =
       PlanBuilder()
           .values(data)
           .project({"c0", "c1", "1", "0.9995", "0.001"})
@@ -443,27 +371,44 @@ TEST_F(ApproxPercentileTest, partialFull) {
       makeFlatVector<int32_t>(117, [](auto row) { return row; }),
       makeFlatVector<int32_t>(117, [](auto row) { return row < 7 ? 20 : 10; }),
   });
-  exec::test::assertQuery(params, {expected});
-  waitForAllTasksToBeDeleted();
+  // Make sure partial aggregation runs out of memory after first batch.
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kMaxPartialAggregationMemory, "300000")
+      .assertResults(expected);
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(ApproxPercentileTest, finalAggregateAccuracy) {
   auto batch = makeRowVector(
       {makeFlatVector<int32_t>(1000, [](auto row) { return row; })});
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   std::vector<std::shared_ptr<const core::PlanNode>> sources;
   for (int i = 0; i < 10; ++i) {
     sources.push_back(
-        PlanBuilder(planNodeIdGenerator)
-            .values({batch})
+        builder.newPlan()
+            .values(batch)
             .partialAggregation({}, {"approx_percentile(c0, 0.005, 0.0001)"})
             .planNode());
   }
-  auto op = PlanBuilder(planNodeIdGenerator)
+  auto op = builder.newPlan()
                 .localPartitionRoundRobin(sources)
                 .finalAggregation()
                 .planNode();
   assertQuery(op, "SELECT 5");
+}
+
+TEST_F(ApproxPercentileTest, tinyAccuracy) {
+  auto rows = makeRowVector(
+      {makeFlatVector<int32_t>({1, 2, 3}), makeConstant<double>(1e-9, 3)});
+  auto plan = PlanBuilder()
+                  .values(rows)
+                  .singleAggregation({}, {"approx_percentile(c0, 0.5, c1)"})
+                  .planNode();
+
+  AssertQueryBuilder query(plan);
+  VELOX_ASSERT_THROW(
+      query.copyResults(pool()),
+      "Accuracy is too small: 1e-09 produces K 4243845673, but maximum K is 1073741824");
 }
 
 TEST_F(ApproxPercentileTest, nonFlatPercentileArray) {
@@ -480,11 +425,11 @@ TEST_F(ApproxPercentileTest, nonFlatPercentileArray) {
       BaseVector::wrapInDictionary(
           nullptr, indices, 3, makeFlatVector<double>({0, 0.5, 1})));
   auto rows = makeRowVector({
-      makeFlatVector<int32_t>(10, folly::identity),
+      makeFlatIdentityVector<int32_t>(10),
       BaseVector::wrapInConstant(1, 0, percentiles),
   });
   auto plan = PlanBuilder()
-                  .values({rows})
+                  .values(rows)
                   .singleAggregation({}, {"approx_percentile(c0, c1)"})
                   .planNode();
   auto expected = makeRowVector({makeArrayVector<int32_t>({{0, 5, 9}})});
@@ -504,7 +449,7 @@ TEST_F(ApproxPercentileTest, invalidWeight) {
       groupingKeys.push_back("c2");
     }
     return PlanBuilder()
-        .values({rows})
+        .values(rows)
         .singleAggregation(groupingKeys, {"approx_percentile(c0, c1, 0.5)"})
         .planNode();
   };
@@ -611,10 +556,10 @@ TEST_F(ApproxPercentileTest, nullPercentile) {
   auto rows = makeRowVector({values, percentileOfDouble});
 
   // Test null percentile for approx_percentile(value, percentile).
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          {rows}, {}, {"approx_percentile(c0, c1)"}, "SELECT NULL"),
-      "Percentile cannot be null");
+  AggregationTester(*this)
+      .inputs(rows)
+      .aggregates({"approx_percentile(c0, c1)"})
+      .assertError("Percentile cannot be null");
 
   auto percentileOfArrayOfDouble = BaseVector::wrapInConstant(
       4,
@@ -625,10 +570,10 @@ TEST_F(ApproxPercentileTest, nullPercentile) {
   rows = makeRowVector({values, percentileOfArrayOfDouble});
 
   // Test null percentile for approx_percentile(value, percentiles).
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          {rows}, {}, {"approx_percentile(c0, c1)"}, "SELECT NULL"),
-      "Percentile cannot be null");
+  AggregationTester(*this)
+      .inputs(rows)
+      .aggregates({"approx_percentile(c0, c1)"})
+      .assertError("Percentile cannot be null");
 }
 
 TEST_F(ApproxPercentileTest, nanPercentile) {

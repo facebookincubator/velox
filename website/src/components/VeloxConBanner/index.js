@@ -7,17 +7,17 @@ export default function VeloxConBanner() {
     <section className={styles.banner} role="region" aria-label="VeloxCon announcement">
       <div className={styles.container}>
         <div className={styles.text}>
-          <h2 className={styles.title}>VeloxCon 2026 Recordings Are Now Available</h2>
-          <p className={styles.subtitle}>Watch all sessions on-demand on our YouTube channel</p>
+          <h2 className={styles.title}>VeloxCon China 2026 — December 5, Shanghai</h2>
+          <p className={styles.subtitle}>Alibaba Xuhui Riverside Park, Xuhui District. Join the Velox community in Shanghai.</p>
         </div>
 
         <Link
           className={styles.button}
-          to="https://www.youtube.com/playlist?list=PLJvBe8nQAEsE6CVJCCx7yMENUS7Id7Ptt"
+          to="https://www.bagevent.com/event/9240454"
           target="_blank"
           rel="noopener noreferrer"
         >
-          Watch Now →
+          Learn More →
         </Link>
       </div>
     </section>

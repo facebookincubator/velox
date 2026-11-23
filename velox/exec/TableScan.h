@@ -17,6 +17,8 @@
 
 #include <string_view>
 
+#include <folly/stop_watch.h>
+
 #include "velox/core/PlanNode.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/ScaledScanController.h"
@@ -58,40 +60,6 @@ class TableScan : public SourceOperator {
       const core::PlanNodeId& producer,
       const PushdownFilters& filters) override;
 
-  /// The name of runtime stats specific to table scan.
-  /// The number of running table scan drivers.
-  ///
-  /// NOTE: we only report the number of running scan drivers at the point that
-  /// all the splits have been dispatched.
-  static constexpr std::string_view kNumRunningScaleThreads =
-      "numRunningScaleThreads";
-
-  /// Time spent reading from the data source.
-  static constexpr std::string_view kDataSourceReadWallNanos =
-      "dataSourceReadWallNanos";
-
-  /// Number of splits that started background preload.
-  static constexpr std::string_view kPreloadedSplits = "preloadedSplits";
-
-  /// Number of preloaded splits that finished before being read.
-  static constexpr std::string_view kReadyPreloadedSplits =
-      "readyPreloadedSplits";
-
-  /// Size of the connector split.
-  static constexpr std::string_view kConnectorSplitSize = "connectorSplitSize";
-
-  /// Time waiting for a preloaded split to become available.
-  static constexpr std::string_view kWaitForPreloadSplitNanos =
-      "waitForPreloadSplitNanos";
-
-  /// Time for preload split preparation.
-  static constexpr std::string_view kPreloadSplitPrepareTimeNanos =
-      "preloadSplitPrepareTimeNanos";
-
-  /// Time spent adding a split to the data source.
-  static constexpr std::string_view kDataSourceAddSplitWallNanos =
-      "dataSourceAddSplitWallNanos";
-
   std::shared_ptr<ScaledScanController> testingScaledController() const {
     return scaledController_;
   }
@@ -104,7 +72,9 @@ class TableScan : public SourceOperator {
  private:
   // Checks if this table scan operator needs to yield before processing the
   // next split.
-  bool shouldYield(StopReason taskStopReason, size_t startTimeMs) const;
+  bool shouldYield(
+      StopReason taskStopReason,
+      const folly::stop_watch<std::chrono::milliseconds>& getOutputWatch) const;
 
   // Checks if this table scan operator needs to stop because the task has been
   // terminated.
@@ -147,7 +117,7 @@ class TableScan : public SourceOperator {
   // limit'.
   const size_t getOutputTimeLimitMs_{0};
 
-  const uint32_t outputBatchRowsOverride_;
+  const vector_size_t outputBatchRowsOverride_;
 
   // If set, used for scan scale processing. It is shared by all the scan
   // operators instantiated from the same table scan node.
@@ -157,7 +127,6 @@ class TableScan : public SourceOperator {
 
   ContinueFuture blockingFuture_{ContinueFuture::makeEmpty()};
   BlockingReason blockingReason_{BlockingReason::kNotBlocked};
-  int64_t currentSplitWeight_{0};
   bool needNewSplit_ = true;
   std::shared_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_;
   std::unique_ptr<connector::DataSource> dataSource_;

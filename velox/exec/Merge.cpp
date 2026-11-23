@@ -68,8 +68,7 @@ Merge::Merge(
 
 void Merge::initialize() {
   Operator::initialize();
-  VELOX_CHECK_EQ(mergeStats_.streamingSourceReadStartTimeUs, 0);
-  mergeStats_.streamingSourceReadStartTimeUs = getCurrentTimeMicro();
+  mergeStats_.readWatch.reset();
 }
 
 BlockingReason Merge::isBlocked(ContinueFuture* future) {
@@ -165,6 +164,7 @@ void Merge::setupSpillMerger() {
               spillFile,
               spillConfig_->readBufferSize,
               pool(),
+              spillConfig_->executor,
               spillStats_.get()));
     }
     spillReadFilesGroups.push_back(std::move(spillReadFiles));
@@ -231,8 +231,8 @@ RowVectorPtr Merge::getOutputFromSpill() {
       return;
     }
     finished_ = true;
-    VELOX_CHECK_EQ(mergeStats_.spilledSourceReadEndTimeUs, 0);
-    mergeStats_.spilledSourceReadEndTimeUs = getCurrentTimeMicro();
+    VELOX_CHECK(!mergeStats_.spilledSourceReadNanos.has_value());
+    mergeStats_.spilledSourceReadNanos = mergeStats_.readWatch.lap().count();
   };
   return std::move(output_);
 }
@@ -241,6 +241,12 @@ RowVectorPtr Merge::getOutputFromSource() {
   VELOX_CHECK_NULL(spillMerger_);
   bool atEnd = false;
   output_ = sourceMerger_->getOutput(sourceBlockingFutures_, atEnd);
+  // The spill path re-reads rows already counted here, so record only on the
+  // streaming path.
+  if (output_ != nullptr && recordsSourceInput()) {
+    stats_.wlock()->addInputVector(
+        output_->estimateFlatSize(), output_->size());
+  }
   if (needSpill()) {
     spill();
     VELOX_CHECK_NULL(output_);
@@ -256,8 +262,8 @@ RowVectorPtr Merge::getOutputFromSource() {
     return nullptr;
   }
 
-  VELOX_CHECK_EQ(mergeStats_.streamingSourceReadEndTimeUs, 0);
-  mergeStats_.streamingSourceReadEndTimeUs = getCurrentTimeMicro();
+  VELOX_CHECK(!mergeStats_.streamingSourceReadNanos.has_value());
+  mergeStats_.streamingSourceReadNanos = mergeStats_.readWatch.lap().count();
 
   if (numSpilledRows_ > 0) {
     setupSpillMerger();
@@ -292,32 +298,20 @@ void Merge::close() {
 
 void Merge::recordMergeStats() {
   auto lockedStats = stats_.wlock();
-  if (mergeStats_.streamingSourceReadEndTimeUs > 0) {
-    VELOX_CHECK_GT(mergeStats_.streamingSourceReadStartTimeUs, 0);
-    VELOX_CHECK_GE(
-        mergeStats_.streamingSourceReadEndTimeUs,
-        mergeStats_.streamingSourceReadStartTimeUs);
+  if (mergeStats_.streamingSourceReadNanos.has_value()) {
     lockedStats->addRuntimeStat(
         kStreamingSourceReadWallNanos,
         RuntimeCounter(
-            (mergeStats_.streamingSourceReadEndTimeUs -
-             mergeStats_.streamingSourceReadStartTimeUs) *
-                1'000,
+            *mergeStats_.streamingSourceReadNanos,
             RuntimeCounter::Unit::kNanos));
   }
-  if (mergeStats_.spilledSourceReadEndTimeUs > 0) {
-    VELOX_CHECK_GT(mergeStats_.streamingSourceReadEndTimeUs, 0);
-    VELOX_CHECK_GE(
-        mergeStats_.spilledSourceReadEndTimeUs,
-        mergeStats_.streamingSourceReadEndTimeUs);
+  if (mergeStats_.spilledSourceReadNanos.has_value()) {
+    VELOX_CHECK(mergeStats_.streamingSourceReadNanos.has_value());
     VELOX_CHECK_GT(numSpilledRows_, 0);
     lockedStats->addRuntimeStat(
         kSpilledSourceReadWallNanos,
         RuntimeCounter(
-            (mergeStats_.spilledSourceReadEndTimeUs -
-             mergeStats_.streamingSourceReadEndTimeUs) *
-                1'000,
-            RuntimeCounter::Unit::kNanos));
+            *mergeStats_.spilledSourceReadNanos, RuntimeCounter::Unit::kNanos));
   }
 }
 
@@ -848,8 +842,8 @@ BlockingReason MergeExchange::addMergeSources(ContinueFuture* future) {
       }
     }
     // TODO Delay this call until all input data has been processed.
-    operatorCtx_->task()->multipleSplitsFinished(
-        false, remoteSourceTaskIds_.size(), 0);
+    operatorCtx_->task()->splitsFinished(
+        planNodeId(), *operatorCtx_->driverCtx());
     return BlockingReason::kNotBlocked;
   }
 }

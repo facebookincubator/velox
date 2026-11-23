@@ -30,7 +30,7 @@ class Multimap(dict):
             self[key].append(value)
 
 
-def git_changed_lines(commit):
+def git_changed_lines(commit, exclude_dirs=None):
     file = ""
     changed_lines = Multimap()
 
@@ -49,11 +49,16 @@ def git_changed_lines(commit):
             # as clang-tidy doesn't support CUDA compiler flags and CUDA
             # headers. Exclude *-inl.h files: they are designed to be
             # included from their corresponding header and cannot be
-            # compiled as standalone translation units.
+            # compiled as standalone translation units. Nimble is not enabled
+            # in the adapters build that produces the compilation database.
             if (
                 "cudf/" not in matched_file
                 and "wave/" not in matched_file
                 and "ucx-exchange/" not in matched_file
+                and "velox/dwio/nimble/" not in matched_file
+                and not any(
+                    exclude_dir in matched_file for exclude_dir in (exclude_dirs or [])
+                )
                 and not matched_file.endswith("-inl.h")
             ):
                 file = matched_file
@@ -74,12 +79,38 @@ def git_changed_lines(commit):
     return changed_lines
 
 
-def check_output(output):
-    return re.match(r"(^/.* warning: |^$)", output)
+# One clang-tidy diagnostic: file, line, column, severity, message, rules.
+DIAGNOSTIC_PATTERN = re.compile(
+    r"^(.*):(\d+):(\d+):\s+(error|warning):\s+(.*) \[([a-z0-9,\-]+)\]\s*$"
+)
+
+
+def is_compiler_diagnostic(rules):
+    # clang-diagnostic-* comes from compiling the file with the GCC flags, not
+    # from a check. The GCC build already compiles the code, so these say
+    # nothing about the change.
+    return all(rule.startswith("clang-diagnostic-") for rule in rules.split(","))
+
+
+def check_errors(diagnostics):
+    # Returns the errors that come from checks.
+    return [
+        d for d in diagnostics if d[3] == "error" and not is_compiler_diagnostic(d[5])
+    ]
+
+
+def unanalyzed_files(output):
+    # clang-tidy reports each file it could not compile.
+    return re.findall(r"^Error while processing (.*)\.$", output, re.MULTILINE)
 
 
 def tidy(args):
     files = util.input_files(args.files)
+    files = [
+        file
+        for file in files
+        if not any(exclude_dir in file for exclude_dir in args.exclude_dirs)
+    ]
     files = [file for file in files if re.match(r".*(\.cpp|\.h|\.hpp)$", file)]
 
     # Exclude files in cudf, wave, and torchwave directories
@@ -96,7 +127,7 @@ def tidy(args):
     files = [file for file in files if not file.endswith("-inl.h")]
 
     in_gha = os.environ.get("GITHUB_ACTIONS") is not None
-    changed_lines = git_changed_lines(args.commit)
+    changed_lines = git_changed_lines(args.commit, args.exclude_dirs)
 
     line_filter = json.dumps(
         [{"name": key, "lines": value} for key, value in changed_lines.items()]
@@ -108,7 +139,17 @@ def tidy(args):
     fix = "--fix" if args.fix == "fix" else ""
     lines = f"'--line-filter={line_filter}'" if args.commit is not None else ""
 
-    ok = True
+    # clang-tidy parses the GCC compile commands with its Clang frontend, which
+    # emits -Wnullability-completeness on core headers (e.g. StringView.h) when
+    # nullability qualifiers leak into a translation unit. The GCC compile
+    # commands lack the -Wno-nullability-completeness that CMakeLists.txt sets
+    # only for Clang builds, so under -Werror the warning escalates to an error.
+    # Pass the suppression as a real compiler flag. It must go through
+    # --extra-arg (appended after the command's -W flags) rather than the
+    # .clang-tidy ExtraArgs option, which clang-tidy 18.1.8 mis-parses as an
+    # input file.
+    extra_args = "--extra-arg=-Wno-nullability-completeness"
+
     build_path = args.p or os.getenv("BUILD_PATH")
     build_path_str = f"-p {build_path}" if build_path else ""
 
@@ -119,29 +160,38 @@ def tidy(args):
         return 0
 
     status, stdout, stderr = util.run(
-        f"xargs clang-tidy --format-style=file -header-filter='.*' --quiet {build_path_str} {fix} {lines}",
+        f"xargs clang-tidy --format-style=file -header-filter='.*' --quiet {extra_args} {build_path_str} {fix} {lines}",
         input=filtered_files,
     )
 
+    diagnostics = [
+        m.groups()
+        for m in map(DIAGNOSTIC_PATTERN.match, stdout.splitlines())
+        if m is not None
+    ]
+
     if in_gha:
-        clang_tidy_pattern = (
-            r"^(.*):(\d+):(\d+):\s+(error|warning):\s+(.*) \[([a-z0-9,\-]+)\]\s*$"
+        for file, line, col, severity, message, rule in diagnostics:
+            if severity == "error" and is_compiler_diagnostic(rule):
+                severity = "warning"
+            file = file.removeprefix("/__w/velox/velox/")
+            print(
+                f"::{severity} file={file},line={line},col={col},title={rule}::{message}"
+            )
+
+    unanalyzed = unanalyzed_files(stdout + "\n" + stderr)
+    if unanalyzed:
+        message = (
+            "Clang could not compile these files, so they were not analyzed: "
+            + ", ".join(file.removeprefix("/__w/velox/velox/") for file in unanalyzed)
         )
+        print(f"::warning title=clang-tidy::{message}" if in_gha else message)
 
-        for stdout_line in stdout.split("\n"):
-            m = re.match(clang_tidy_pattern, stdout_line)
-            if m is not None:
-                file, line, col, severity, message, rule = m.groups()
-                file = file.removeprefix("/__w/velox/velox/")
-                print(
-                    f"::{severity} file={file},line={line},col={col},title={rule}::{message}"
-                )
-
-    ok = check_output(stdout)
-    if not ok:
+    if check_errors(diagnostics):
         print(stdout)
+        return 1
 
-    return 0 if ok else 1
+    return 0
 
 
 def parse_args():
@@ -151,6 +201,13 @@ def parse_args():
     parser.add_argument("--fix")
     parser.add_argument("-p", help="Path containing 'compile_commands.json'")
 
+    parser.add_argument(
+        "--exclude-dir",
+        action="append",
+        default=[],
+        dest="exclude_dirs",
+        help="Additional path substring to exclude from clang-tidy.",
+    )
     parser.add_argument("files", metavar="FILES", nargs="+", help="files to process")
 
     return parser.parse_args()

@@ -73,9 +73,9 @@ class SpillMergeStream : public MergeStream {
 
   void pop();
 
-  const RowVector& current() const {
+  const RowVectorPtr& current() const {
     VELOX_CHECK(!closed_);
-    return *rowVector_;
+    return rowVector_;
   }
 
   /// Invoked to get the current row index in 'rowVector_'. If 'isLastRow' is
@@ -528,6 +528,7 @@ class SpillPartition {
   std::unique_ptr<TreeOfLosers<SpillMergeStream>> createOrderedReaderInternal(
       uint64_t bufferSize,
       memory::MemoryPool* pool,
+      folly::Executor* readAheadExecutor,
       exec::SpillStats* spillStats);
 
   SpillPartitionId id_;
@@ -638,7 +639,9 @@ class SpillState {
   /// Appends data to partition with 'id'. The rows given by 'indices' must be
   /// sorted for a sorted spill and must hash to 'partition'. It is safe to call
   /// this on multiple threads if all threads specify a different partition.
-  /// Returns the size to append to partition.
+  /// The writer splits the rows into pages by their serialized size estimates.
+  /// If it can't, the rows must be estimated under 2GB. Returns the size to
+  /// append to partition.
   uint64_t appendToPartition(
       const SpillPartitionId& id,
       const RowVectorPtr& rows);

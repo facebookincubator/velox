@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <functional>
 #include <optional>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -79,7 +80,7 @@ class ArrayContainsTest : public FunctionBaseTest {
       // Test fast path for flat.
       testContains(arrayVector, kNaN, {false, true, true});
       // Test code path for generic encoded vectors.
-      auto indices = makeIndices(arrayVector->size(), folly::identity);
+      auto indices = makeIndices(arrayVector->size(), std::identity{});
       auto dictOverArray = wrapInDictionary(indices, arrayVector);
       testContainsGeneric(
           dictOverArray,
@@ -573,5 +574,22 @@ TEST_F(ArrayContainsTest, timestampWithTimeZone) {
   testContainsRow(pack(5, 1), {false, true, false, true, false, false});
   testContainsRow(pack(7, 2), {false, false, false, true, true, true});
   testContainsRow(pack(-2, 1), {false, false, false, false, false, false});
+}
+
+TEST_F(ArrayContainsTest, unknownType) {
+  auto emptyArray = makeArrayVector<UnknownValue>({{}});
+  auto nullArray = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{
+          {std::nullopt, std::nullopt}});
+
+  auto searchValue = makeNullConstant(TypeKind::UNKNOWN, 1);
+
+  auto result1 =
+      evaluate("contains(c0, c1)", makeRowVector({emptyArray, searchValue}));
+  assertEqualVectors(makeNullableFlatVector<bool>({std::nullopt}), result1);
+
+  auto result2 =
+      evaluate("contains(c0, c1)", makeRowVector({nullArray, searchValue}));
+  assertEqualVectors(makeNullableFlatVector<bool>({std::nullopt}), result2);
 }
 } // namespace

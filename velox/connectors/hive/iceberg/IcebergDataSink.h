@@ -41,11 +41,9 @@ namespace facebook::velox::connector::hive::iceberg {
 
 class IcebergFileNameGenerator : public FileNameGenerator {
  public:
-  IcebergFileNameGenerator() {}
-
   std::pair<std::string, std::string> gen(
       std::optional<uint32_t> bucketId,
-      const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+      const HiveInsertTableHandlePtr& insertTableHandle,
       const ConnectorQueryCtx& connectorQueryCtx,
       uint32_t maxNumBuckets,
       bool commitRequired) const override;
@@ -132,6 +130,9 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
   /// INSERT and for first-time mutations; populated by the coordinator for a
   /// V3 repeated mutation so the deletion-vector sink seeds the new DV with
   /// the prior DV's positions.
+  /// @param includePartitionPaths When false, writes data and deletion-vector
+  /// files directly in the location handle's directory, without partition
+  /// subdirectories. Partition values still go to the commit message.
   IcebergInsertTableHandle(
       std::vector<IcebergColumnHandlePtr> inputColumns,
       LocationHandlePtr locationHandle,
@@ -142,8 +143,10 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
       WriteKind writeKind = WriteKind::kData,
       std::unordered_map<std::string, ExistingDeletionVector>
           existingDeletionVectors = {},
-      std::shared_ptr<const FileNameGenerator> fileNameGenerator =
-          std::make_shared<const IcebergFileNameGenerator>());
+      FileNameGeneratorPtr fileNameGenerator =
+          std::make_shared<const IcebergFileNameGenerator>(),
+      std::vector<std::string> insertedColumns = {},
+      bool includePartitionPaths = true);
 
   /// Returns the Iceberg partition specification that defines how the table
   /// is partitioned.
@@ -165,11 +168,27 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
     return existingDeletionVectors_;
   }
 
+  /// Returns the target column names of the INSERT statement. Fully populated
+  /// on the INSERT path: the columns the user listed, or all table columns
+  /// when no list was given. Empty on paths that carry no statement columns
+  /// (CTAS, MERGE, DELETE, procedures), where no write-default is substituted.
+  /// A column absent from a non-empty list receives its write-default; one
+  /// present keeps the supplied value, including an explicit NULL.
+  const std::vector<std::string>& insertedColumns() const {
+    return insertedColumns_;
+  }
+
+  bool includePartitionPaths() const {
+    return includePartitionPaths_;
+  }
+
  private:
   const IcebergPartitionSpecPtr partitionSpec_;
   const WriteKind writeKind_;
   const std::unordered_map<std::string, ExistingDeletionVector>
       existingDeletionVectors_;
+  const std::vector<std::string> insertedColumns_;
+  const bool includePartitionPaths_;
 };
 
 using IcebergInsertTableHandlePtr =
@@ -185,6 +204,14 @@ class IcebergDataSink : public HiveDataSink {
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       const IcebergConfigPtr& icebergConfig);
 
+  /// Applies write-default values for columns omitted from the INSERT
+  /// statement, then delegates to HiveDataSink::appendData. Omission is
+  /// determined at plan time from insertedColumns; every row in the batch
+  /// is substituted. Explicitly-inserted NULLs (columns present in
+  /// insertedColumns) are not touched. Throws if an omitted column carries a
+  /// non-null value, which would mean the substitution discards user data.
+  void appendData(RowVectorPtr input) override;
+
   /// Generates Iceberg-specific commit messages for all writers containing
   /// metadata about written files. Creates a JSON object for each writer
   /// in the format expected by Presto and Spark for Iceberg tables.
@@ -194,7 +221,7 @@ class IcebergDataSink : public HiveDataSink {
   /// - fileSizeInBytes: raw bytes written to disk.
   /// - metrics: object with recordCount (number of rows written).
   /// - partitionSpecJson: partition specification.
-  /// - fileFormat: storage format. Either "PARQUET" or "ORC". DWRF files
+  /// - fileFormat: storage format: "PARQUET", "ORC" or "NIMBLE". DWRF files
   ///   are reported as "ORC" because Iceberg's file-format vocabulary has
   ///   no DWRF enum.
   /// - content: file content type ("DATA" for data files).
@@ -210,6 +237,16 @@ class IcebergDataSink : public HiveDataSink {
   std::vector<std::string> commitMessage() const override;
 
  private:
+  // Descriptor of a column whose write-default must be materialized on every
+  // appendData call. Pre-computed once in the constructor.
+  struct WriteDefaultColumn {
+    // Index of this column within the input RowVector.
+    column_index_t index;
+    // Size-1 constant vector holding the default value, wrapped to the batch
+    // size via BaseVector::wrapInConstant in appendData.
+    VectorPtr constantVector;
+  };
+
   IcebergDataSink(
       RowTypePtr inputType,
       IcebergInsertTableHandlePtr insertTableHandle,
@@ -247,6 +284,14 @@ class IcebergDataSink : public HiveDataSink {
   // into an Iceberg compliant directory path
   // (e.g., "date_year=2023/id_bucket=5").
   std::string getPartitionName(uint32_t partitionId) const override;
+
+  // Same as the Hive writer parameters, except that when
+  // includePartitionPaths() is false the target and write directories are the
+  // location handle's, without the partition subdirectory, so every file of
+  // the write lands in the directory the caller registered.
+  WriterParameters getWriterParameters(
+      const std::optional<std::string>& partition,
+      std::optional<uint32_t> bucketId) const override;
 
   // Ensures a writer exists for the given writer ID and returns its index.
   // If the writer doesn't exist, creates it by calling appendWriter().
@@ -360,6 +405,10 @@ class IcebergDataSink : public HiveDataSink {
   std::vector<int64_t> reportedRowsPerWriter_;
 
   const IcebergInsertTableHandlePtr icebergInsertTableHandle_;
+
+  // Columns that need write-defaults materialized on every appendData call,
+  // pre-computed once in the constructor.
+  std::vector<WriteDefaultColumn> writeDefaultColumns_;
 
   // Collects per-file Iceberg column statistics and wires Iceberg field ids
   // into the writer options. Polymorphic over the table's file format; created

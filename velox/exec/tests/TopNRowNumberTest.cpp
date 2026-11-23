@@ -13,13 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/TopNRowNumber.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/TopNRowNumberStatNames.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
 using namespace facebook::velox::exec::test;
 
@@ -31,11 +34,13 @@ namespace {
 class TopNRowNumberTest : public OperatorTestBase {
  protected:
   explicit TopNRowNumberTest(core::TopNRowNumberNode::RankFunction function)
-      : functionName_(core::TopNRowNumberNode::rankFunctionName(function)) {}
+      : functionName_(core::TopNRowNumberNode::toName(function)) {}
 
   void SetUp() override {
     exec::test::OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
+    velox::window::prestosql::registerAllWindowFunctions();
+    common::testutil::TestValue::enable();
   }
 
   const std::string functionName_;
@@ -168,6 +173,125 @@ TEST_P(MultiTopNRowNumberTest, basicWithPeers) {
   testLimit(5);
 }
 
+TEST_P(MultiTopNRowNumberTest, peersAtRankLimit) {
+  // The partitions contain tied peers, mixed peer groups, and a boundary row
+  // displaced by a later peer, respectively.
+  auto data = makeRowVector({
+      // Partitioning key.
+      makeFlatVector<int64_t>({0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 2}),
+      // Sorting key.
+      makeFlatVector<int64_t>(
+          {100, 100, 100, 90, 110, 100, 100, 90, 100, 100, 100, 90, 100}),
+  });
+  createDuckDbTable({data});
+
+  auto testLimit = [&](auto limit) {
+    SCOPED_TRACE(fmt::format("Limit: {}", limit));
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .topNRank(functionName_, {"c0"}, {"c1 DESC"}, limit, true)
+                    .planNode();
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT * FROM (SELECT *, {}() over (partition by c0 order by "
+            "c1 DESC) as rn FROM tmp) WHERE rn <= {}",
+            functionName_,
+            limit));
+  };
+
+  testLimit(2);
+  testLimit(3);
+  testLimit(4);
+}
+
+TEST_P(MultiTopNRowNumberTest, nonRootPeers) {
+  // Fill the heap with distinct keys, then repeat every key across batches.
+  // Dense rank must retain both rows of all seven peer groups.
+  auto data = makeRowVector({makeFlatVector<int64_t>(
+      {10, 20, 30, 40, 50, 60, 70, 20, 30, 40, 50, 60, 70, 10})});
+  createDuckDbTable({data});
+
+  for (const auto& order : {"ASC", "DESC"}) {
+    SCOPED_TRACE(fmt::format("Order: {}", order));
+    auto plan =
+        PlanBuilder()
+            .values(split(data, 2))
+            .topNRank(functionName_, {}, {fmt::format("c0 {}", order)}, 7, true)
+            .planNode();
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT * FROM (SELECT *, {}() over (order by c0 {}) as rn "
+            "FROM tmp) WHERE rn <= 7",
+            functionName_,
+            order));
+  }
+}
+
+TEST_P(MultiTopNRowNumberTest, newRowAfterPeersReplacesTopRank) {
+  // Each partition receives 1, 2, 2, 9, 5 in that order (partition 2 is offset
+  // by 10). 9 fills the partition past the limit, then 5 replaces it and ranks
+  // after the two peers at 2.
+  auto data = makeRowVector({
+      // Partitioning key.
+      makeFlatVector<int64_t>({1, 2, 1, 2, 1, 2, 1, 2, 1, 2}),
+      // Sorting key.
+      makeFlatVector<int64_t>({1, 11, 2, 12, 2, 12, 9, 19, 5, 15}),
+      // Data. Mapping data to matching sorting keys to avoid ordering issues.
+      makeFlatVector<int64_t>({10, 110, 20, 120, 20, 120, 90, 190, 50, 150}),
+  });
+
+  createDuckDbTable({data});
+
+  auto testLimit = [&](auto limit) {
+    // Emit row numbers.
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .topNRank(functionName_, {"c0"}, {"c1"}, limit, true)
+                    .planNode();
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT * FROM (SELECT *, {}() over (partition by c0 order by c1) as rn FROM tmp) "
+            " WHERE rn <= {}",
+            functionName_,
+            limit));
+
+    // Do not emit row numbers.
+    plan = PlanBuilder()
+               .values({data})
+               .topNRank(functionName_, {"c0"}, {"c1"}, limit, false)
+               .planNode();
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT c0, c1, c2 FROM (SELECT *, {}() over (partition by c0 order by c1) as rn FROM tmp) "
+            " WHERE rn <= {}",
+            functionName_,
+            limit));
+
+    // No partitioning keys.
+    plan = PlanBuilder()
+               .values({data})
+               .topNRank(functionName_, {}, {"c1"}, limit, true)
+               .planNode();
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT * FROM (SELECT *, {}() over (order by c1) as rn FROM tmp) "
+            " WHERE rn <= {}",
+            functionName_,
+            limit));
+  };
+
+  testLimit(1);
+  testLimit(2);
+  testLimit(3);
+  testLimit(4);
+  testLimit(5);
+}
+
 TEST_P(MultiTopNRowNumberTest, largeOutput) {
   // Make 10 vectors. Use different types for partitioning key, sorting key and
   // data. Use order of columns different from partitioning keys, followed by
@@ -206,7 +330,7 @@ TEST_P(MultiTopNRowNumberTest, largeOutput) {
         functionName_,
         limit);
     AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
         .assertResults(sql);
 
     // Spilling.
@@ -214,14 +338,14 @@ TEST_P(MultiTopNRowNumberTest, largeOutput) {
       TestScopedSpillInjection scopedSpillInjection(100);
       auto task =
           AssertQueryBuilder(plan, duckDbQueryRunner_)
-              .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
-              .config(core::QueryConfig::kSpillEnabled, "true")
-              .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+              .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
+              .config(core::QueryConfig::kSpillEnabled, true)
+              .config(core::QueryConfig::kTopNRowNumberSpillEnabled, true)
               .spillDirectory(spillDirectory->getPath())
               .assertResults(sql);
 
-      auto taskStats = exec::toPlanStats(task->taskStats());
-      const auto& stats = taskStats.at(topNRowNumberId);
+      const auto stats =
+          exec::PlanNodeStats::extract(task->taskStats(), topNRowNumberId);
 
       ASSERT_GT(stats.spilledBytes, 0);
       ASSERT_GT(stats.spilledRows, 0);
@@ -236,7 +360,7 @@ TEST_P(MultiTopNRowNumberTest, largeOutput) {
                .planNode();
 
     AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .config(core::QueryConfig::kPreferredOutputBatchBytes, "1024")
+        .config(core::QueryConfig::kPreferredOutputBatchBytes, 1'024)
         .assertResults(
             fmt::format(
                 "SELECT * FROM (SELECT *, {}() over (order by s) as rn FROM tmp) "
@@ -301,14 +425,14 @@ TEST_P(MultiTopNRowNumberTest, manyPartitions) {
           AssertQueryBuilder(plan, duckDbQueryRunner_)
               .config(
                   core::QueryConfig::kPreferredOutputBatchBytes,
-                  fmt::format("{}", outputBatchBytes))
-              .config(core::QueryConfig::kSpillEnabled, "true")
-              .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+                  outputBatchBytes)
+              .config(core::QueryConfig::kSpillEnabled, true)
+              .config(core::QueryConfig::kTopNRowNumberSpillEnabled, true)
               .spillDirectory(spillDirectory->getPath())
               .assertResults(sql);
 
-      auto taskStats = exec::toPlanStats(task->taskStats());
-      const auto& stats = taskStats.at(topNRowNumberId);
+      const auto stats =
+          exec::PlanNodeStats::extract(task->taskStats(), topNRowNumberId);
 
       ASSERT_GT(stats.spilledBytes, 0);
       ASSERT_GT(stats.spilledRows, 0);
@@ -373,14 +497,14 @@ TEST_P(MultiTopNRowNumberTest, fewPartitions) {
           AssertQueryBuilder(plan, duckDbQueryRunner_)
               .config(
                   core::QueryConfig::kPreferredOutputBatchBytes,
-                  fmt::format("{}", outputBatchBytes))
-              .config(core::QueryConfig::kSpillEnabled, "true")
-              .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+                  outputBatchBytes)
+              .config(core::QueryConfig::kSpillEnabled, true)
+              .config(core::QueryConfig::kTopNRowNumberSpillEnabled, true)
               .spillDirectory(spillDirectory->getPath())
               .assertResults(sql);
 
-      auto taskStats = exec::toPlanStats(task->taskStats());
-      const auto& stats = taskStats.at(topNRowNumberId);
+      const auto stats =
+          exec::PlanNodeStats::extract(task->taskStats(), topNRowNumberId);
 
       ASSERT_GT(stats.spilledBytes, 0);
       ASSERT_GT(stats.spilledRows, 0);
@@ -394,67 +518,109 @@ TEST_P(MultiTopNRowNumberTest, fewPartitions) {
   testLimit(100);
 }
 
-TEST_P(MultiTopNRowNumberTest, abandonPartialEarly) {
+TEST_P(MultiTopNRowNumberTest, abandonPartial) {
   auto data = makeRowVector(
       {"p", "s"},
       {
           makeFlatVector<int64_t>(1'000, [](auto row) { return row % 10; }),
-          makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+          makeFlatIdentityVector<int64_t>(1'000),
       });
 
   createDuckDbTable({data});
 
-  core::PlanNodeId topNRowNumberId;
-  auto runPlan = [&](int32_t minRows) {
+  // Runs a partial and a final TopNRowNumber over 'data' split into 10 batches
+  // and verifies whether the partial was abandoned and how many rows it
+  // produced.
+  auto testAbandon = [&](const std::vector<std::string>& partitionKeys,
+                         int32_t minRows,
+                         bool expectAbandoned,
+                         int64_t expectedOutputRows) {
+    SCOPED_TRACE(
+        fmt::format(
+            "Partition keys: [{}], minRows: {}",
+            folly::join(", ", partitionKeys),
+            minRows));
+
+    core::PlanNodeId topNRowNumberId;
     auto plan = PlanBuilder()
                     .values(split(data, 10))
-                    .topNRank(functionName_, {"p"}, {"s"}, 99, false)
+                    .topNRankPartial(functionName_, partitionKeys, {"s"}, 99)
                     .capturePlanNodeId(topNRowNumberId)
-                    .topNRank(functionName_, {"p"}, {"s"}, 99, true)
+                    .topNRank(functionName_, partitionKeys, {"s"}, 99, true)
                     .planNode();
+
+    const auto partitionBy = partitionKeys.empty()
+        ? std::string()
+        : fmt::format("partition by {} ", folly::join(", ", partitionKeys));
     auto task =
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .config(
-                core::QueryConfig::kAbandonPartialTopNRowNumberMinRows,
-                fmt::format("{}", minRows))
-            .config(core::QueryConfig::kAbandonPartialTopNRowNumberMinPct, "80")
+                core::QueryConfig::kAbandonPartialTopNRowNumberMinRows, minRows)
+            .config(core::QueryConfig::kAbandonPartialTopNRowNumberMinPct, 80)
             .assertResults(
                 fmt::format(
-                    "SELECT * FROM (SELECT *, {}() over (partition by p order by s) as rn FROM tmp) "
+                    "SELECT * FROM (SELECT *, {}() over ({}order by s) as rn FROM tmp) "
                     "WHERE rn <= 99",
-                    functionName_));
+                    functionName_,
+                    partitionBy));
 
-    return exec::toPlanStats(task->taskStats());
+    const auto stats =
+        exec::PlanNodeStats::extract(task->taskStats(), topNRowNumberId);
+    ASSERT_EQ(stats.outputRows, expectedOutputRows);
+    if (expectAbandoned) {
+      ASSERT_EQ(stats.customSum(TopNRowNumberStatNames::kAbandonedPartial), 1);
+    } else {
+      ASSERT_FALSE(
+          stats.hasCustomStat(TopNRowNumberStatNames::kAbandonedPartial));
+    }
   };
 
   // Partial operator is abandoned after 2 input batches.
-  {
-    auto taskStats = runPlan(100);
-    const auto& stats = taskStats.at(topNRowNumberId);
-    ASSERT_EQ(stats.outputRows, 1'000);
-    ASSERT_EQ(stats.customStats.at("abandonedPartial").sum, 1);
-  }
+  testAbandon({"p"}, 100, true, 1'000);
 
   // Partial operator continues for all of input.
+  testAbandon({"p"}, 100'000, false, 990);
+
+  // With no partition keys, the limit is close to the input batch size, so the
+  // partial retains 99 of the first 100 rows and is abandoned. The 99
+  // accumulated rows are flushed, then the remaining 900 input rows pass
+  // through.
+  testAbandon({}, 100, true, 999);
+
+  // Partial operator with no partition keys continues for all of input.
+  testAbandon({}, 100'000, false, 99);
+
+  // A step that is not partial applies the limit, also without the rank
+  // column.
   {
-    auto taskStats = runPlan(100'000);
-    const auto& stats = taskStats.at(topNRowNumberId);
-    ASSERT_EQ(stats.outputRows, 990);
-    ASSERT_EQ(stats.customStats.count("abandonedPartial"), 0);
+    core::PlanNodeId topNRowNumberId;
+    const auto plan = PlanBuilder()
+                          .values(split(data, 10))
+                          .topNRank(
+                              functionName_,
+                              {"p"},
+                              {"s"},
+                              99,
+                              /*generateRowNumber=*/false)
+                          .capturePlanNodeId(topNRowNumberId)
+                          .planNode();
+    auto task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .config(core::QueryConfig::kAbandonPartialTopNRowNumberMinRows, 100)
+            .config(core::QueryConfig::kAbandonPartialTopNRowNumberMinPct, 80)
+            .assertResults(
+                fmt::format(
+                    "SELECT p, s FROM (SELECT *, {}() over (partition by p order by s) as rn FROM tmp) "
+                    "WHERE rn <= 99",
+                    functionName_));
+    ASSERT_FALSE(
+        exec::PlanNodeStats::extract(task->taskStats(), topNRowNumberId)
+            .hasCustomStat(TopNRowNumberStatNames::kAbandonedPartial));
   }
 }
 
 TEST_P(MultiTopNRowNumberTest, planNodeValidation) {
-  auto data = makeRowVector(
-      ROW({"a", "b", "c", "d", "e"},
-          {
-              BIGINT(),
-              BIGINT(),
-              BIGINT(),
-              BIGINT(),
-              BIGINT(),
-          }),
-      10);
+  auto data = makeRowVector(ROW({"a", "b", "c", "d", "e"}, BIGINT()), 10);
 
   auto plan = [&](const std::vector<std::string>& partitionKeys,
                   const std::vector<std::string>& sortingKeys,
@@ -485,14 +651,27 @@ TEST_P(MultiTopNRowNumberTest, planNodeValidation) {
 
   VELOX_ASSERT_THROW(
       plan({"a", "b"}, {"c"}, 0), "Limit must be greater than zero");
+
+  const auto source = PlanBuilder().values({data}).planNode();
+  VELOX_ASSERT_THROW(
+      core::TopNRowNumberNode(
+          "1",
+          core::TopNRowNumberNode::toRankFunction(functionName_),
+          {std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "a")},
+          {std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "b")},
+          {core::kAscNullsLast},
+          "row_number",
+          10,
+          /*partial=*/true,
+          source),
+      "Partial TopNRowNumber must not have a row number column: row_number");
 }
 
 TEST_P(MultiTopNRowNumberTest, maxSpillBytes) {
   const auto rowType =
       ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
   const auto vectors = createVectors(rowType, 1024, 15 << 20);
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator)
+  auto plan = PlanBuilder()
                   .values(vectors)
                   .topNRank(functionName_, {"c0"}, {"c1"}, 100, true)
                   .planNode();
@@ -515,11 +694,9 @@ TEST_P(MultiTopNRowNumberTest, maxSpillBytes) {
       AssertQueryBuilder(plan)
           .spillDirectory(spillDirectory->getPath())
           .queryCtx(queryCtx)
-          .config(core::QueryConfig::kSpillEnabled, "true")
-          .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
-          .config(
-              core::QueryConfig::kMaxSpillBytes,
-              std::to_string(testData.maxSpilledBytes))
+          .config(core::QueryConfig::kSpillEnabled, true)
+          .config(core::QueryConfig::kTopNRowNumberSpillEnabled, true)
+          .config(core::QueryConfig::kMaxSpillBytes, testData.maxSpilledBytes)
           .copyResults(pool_.get());
       ASSERT_FALSE(testData.expectedExceedLimit);
     } catch (const VeloxRuntimeError& e) {
@@ -590,13 +767,13 @@ DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, memoryUsageCheckAfterReclaim) {
       " WHERE rn <= 1000",
       functionName_);
   auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
-                  .config(core::QueryConfig::kSpillEnabled, "true")
-                  .config(core::QueryConfig::kTopNRowNumberSpillEnabled, "true")
+                  .config(core::QueryConfig::kSpillEnabled, true)
+                  .config(core::QueryConfig::kTopNRowNumberSpillEnabled, true)
                   .spillDirectory(spillDirectory->getPath())
                   .assertResults(sql);
 
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  const auto& stats = taskStats.at(topNRowNumberId);
+  const auto stats =
+      exec::PlanNodeStats::extract(task->taskStats(), topNRowNumberId);
 
   ASSERT_GT(stats.spilledBytes, 0);
   ASSERT_GT(stats.spilledRows, 0);
@@ -654,6 +831,57 @@ DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, doubleClose) {
   VELOX_ASSERT_THROW(assertQuery(plan, sql), errorMessage);
 }
 
+// Reclaim can arrive after close(): the memory pool outlives the operator, and
+// ParallelMemoryReclaimer issues arbitration reclaims asynchronously.
+DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, reclaimAfterClose) {
+  const std::string errorMessage("reclaimAfterClose");
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::noMoreInput",
+      std::function<void(Operator*)>(([&](Operator* op) {
+        if (op->operatorType() != "TopNRowNumber") {
+          return;
+        }
+        // Reclaim after close(), as a late arbitration would.
+        op->close();
+        memory::MemoryReclaimer::Stats reclaimerStats;
+        op->reclaim(0, reclaimerStats);
+        VELOX_FAIL(errorMessage);
+      })));
+
+  const vector_size_t size = 10'000;
+  auto data = split(
+      makeRowVector(
+          {"d", "s", "p"},
+          {
+              // Data.
+              makeFlatVector<int64_t>(
+                  size, [](auto row) { return row; }, nullEvery(11)),
+              // Sorting key.
+              makeFlatVector<int64_t>(
+                  size,
+                  [](auto row) { return (size - row) * 10; },
+                  [](auto row) { return row == 123; }),
+              // Partitioning key.
+              makeFlatVector<int64_t>(
+                  size, [](auto row) { return row % 5'000; }, nullEvery(7)),
+          }),
+      10);
+
+  auto spillDirectory = TempDirectoryPath::create();
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .topNRank(functionName_, {"p"}, {"s"}, 1'000, true)
+                  .planNode();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kSpillEnabled, true)
+          .config(core::QueryConfig::kTopNRowNumberSpillEnabled, true)
+          .spillDirectory(spillDirectory->getPath())
+          .copyResults(pool_.get()),
+      errorMessage);
+}
+
 // This test verifies that TopNRowNumber operator handles OOM that occurs in the
 // middle of groupProbe, after inserting some new rows into the row container.
 DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, oomInGroupProbe) {
@@ -699,6 +927,81 @@ DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, oomInGroupProbe) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool_.get()), errorMessage);
+}
+
+TEST_P(MultiTopNRowNumberTest, windowVsTopNRowNumber) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({5, 3, 1, 4, 2}),
+  });
+
+  auto topNPlan = PlanBuilder()
+                      .values({data})
+                      .topNRank(functionName_, {}, {"c0"}, 5, true)
+                      .planNode();
+  auto windowPlan =
+      PlanBuilder()
+          .values({data})
+          .window({fmt::format("{}() over (order by c0) as rn", functionName_)})
+          .planNode();
+
+  auto topNResult =
+      AssertQueryBuilder(topNPlan).maxDrivers(1).copyResults(pool_.get());
+  auto windowResult =
+      AssertQueryBuilder(windowPlan).maxDrivers(1).copyResults(pool_.get());
+
+  assertEqualResults({windowResult}, {topNResult});
+}
+
+DEBUG_ONLY_TEST_P(MultiTopNRowNumberTest, inMemoryVsSpilled) {
+  const vector_size_t size = 10'000;
+  auto data = split(
+      makeRowVector(
+          {"s", "p"},
+          {
+              makeFlatVector<int64_t>(
+                  size, [](auto row) { return (size - row) * 10; }),
+              makeFlatVector<int64_t>(
+                  size, [](auto row) { return row % 5000; }),
+          }),
+      10);
+
+  core::PlanNodeId topNId;
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .topNRank(functionName_, {"p"}, {"s"}, 1000, true)
+                  .capturePlanNodeId(topNId)
+                  .planNode();
+
+  auto inMemoryResult =
+      AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool_.get());
+
+  auto spillDirectory = TempDirectoryPath::create();
+  std::atomic_int inputCount{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::addInput",
+      std::function<void(exec::Operator*)>(([&](exec::Operator* op) {
+        if (op->operatorCtx()->operatorType() != "TopNRowNumber") {
+          return;
+        }
+        if (++inputCount == 3) {
+          testingRunArbitration(op->pool());
+        }
+      })));
+
+  std::shared_ptr<Task> task;
+  auto spilledResult =
+      AssertQueryBuilder(plan)
+          .maxDrivers(1)
+          .spillDirectory(spillDirectory->getPath())
+          .config(core::QueryConfig::kSpillEnabled, true)
+          .config(core::QueryConfig::kTopNRowNumberSpillEnabled, true)
+          .copyResults(pool_.get(), task);
+
+  const auto planStats =
+      exec::PlanNodeStats::extract(task->taskStats(), topNId);
+  ASSERT_GT(planStats.spilledRows, 0);
+
+  assertEqualResults({inMemoryResult}, {spilledResult});
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

@@ -20,6 +20,7 @@
 
 #include <glog/logging.h>
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
@@ -43,6 +44,7 @@
 #include "arrow/util/ubsan.h"
 #include "arrow/visit_data_inline.h"
 
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/dwio/parquet/common/RleEncodingInternal.h"
 #include "velox/dwio/parquet/writer/arrow/Exception.h"
@@ -51,17 +53,13 @@
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/dwio/parquet/writer/arrow/util/ByteStreamSplitInternal.h"
 #include "velox/dwio/parquet/writer/arrow/util/Hashing.h"
-#include "velox/dwio/parquet/writer/arrow/util/OverflowUtilInternal.h"
 
 using ::arrow::Buffer;
 using ::arrow::MemoryPool;
 using ::arrow::ResizableBuffer;
 using arrow::Status;
 using arrow::VisitNullBitmapInline;
-using arrow::internal::addWithOverflow;
 using arrow::internal::checked_cast;
-using arrow::internal::multiplyWithOverflow;
-using arrow::internal::SubtractWithOverflow;
 using std::string_view;
 
 template <typename T>
@@ -117,6 +115,16 @@ class EncoderImpl : virtual public Encoder {
     return pool_;
   }
 
+  int64_t reportUnencodedDataBytes() override {
+    if (descr_->physicalType() != Type::kByteArray) {
+      throw ParquetException(
+          "reportUnencodedDataBytes is only supported for BYTE_ARRAY");
+    }
+    const auto bytes = unencodedByteArrayDataBytes_;
+    unencodedByteArrayDataBytes_ = 0;
+    return bytes;
+  }
+
  protected:
   // For accessing type-specific metadata, like FIXED_LEN_BYTE_ARRAY.
   const ColumnDescriptor* descr_;
@@ -125,6 +133,9 @@ class EncoderImpl : virtual public Encoder {
 
   /// Type length from descr.
   int typeLength_;
+  /// Number of unencoded bytes written to the encoder. Used for ByteArray type
+  /// only.
+  int64_t unencodedByteArrayDataBytes_{0};
 };
 
 // ----------------------------------------------------------------------.
@@ -162,7 +173,7 @@ class PlainEncoder : public EncoderImpl, virtual public TypedEncoder<DType> {
     if (validBits != NULLPTR) {
       auto buffer = allocateBuffer(this->memoryPool(), numValues * sizeof(T));
       T* data = reinterpret_cast<T*>(buffer->mutable_data());
-      int numValidValues = ::arrow::util::internal::SpacedCompress<T>(
+      int numValidValues = util::internal::spacedCompress<T>(
           src, numValues, validBits, validBitsOffset, data);
       put(data, numValidValues);
     } else {
@@ -174,6 +185,7 @@ class PlainEncoder : public EncoderImpl, virtual public TypedEncoder<DType> {
     VELOX_DCHECK(length == 0 || data != nullptr, "Value ptr cannot be NULL");
     sink_.UnsafeAppend(&length, sizeof(uint32_t));
     sink_.UnsafeAppend(data, static_cast<int64_t>(length));
+    unencodedByteArrayDataBytes_ += length;
   }
 
   void put(const ByteArray& val) {
@@ -375,7 +387,7 @@ class PlainEncoder<BooleanType> : public EncoderImpl,
     if (validBits != NULLPTR) {
       auto buffer = allocateBuffer(this->memoryPool(), numValues * sizeof(T));
       T* data = reinterpret_cast<T*>(buffer->mutable_data());
-      int numValidValues = ::arrow::util::internal::SpacedCompress<T>(
+      int numValidValues = util::internal::spacedCompress<T>(
           src, numValues, validBits, validBitsOffset, data);
       put(data, numValidValues);
     } else {
@@ -524,10 +536,6 @@ class DictEncoderImpl : public EncoderImpl, virtual public DictEncoder<DType> {
     return kDataPageBitWidthBytes + encoder.len();
   }
 
-  void setTypeLength(int typeLength) {
-    this->typeLength_ = typeLength;
-  }
-
   /// Returns a conservative estimate of the number of bytes needed to encode
   /// the buffered indices. Used to size the buffer passed to WriteIndices().
   int64_t estimatedDataEncodedSize() override {
@@ -596,6 +604,20 @@ class DictEncoderImpl : public EncoderImpl, virtual public DictEncoder<DType> {
                 static_cast<int32_t>(values[i + position]);
           }
         });
+
+    // Track unencoded bytes based on dictionary value type.
+    if constexpr (std::is_same_v<DType, ByteArrayType>) {
+      // For ByteArray, need to look up actual lengths from dictionary
+      for (size_t idx = bufferPosition -
+               static_cast<size_t>(data.length() - data.null_count());
+           idx < bufferPosition;
+           ++idx) {
+        memoTable_.visitValue(
+            bufferedIndices_[idx], [&](std::string_view value) {
+              unencodedByteArrayDataBytes_ += value.length();
+            });
+      }
+    }
   }
 
   void putIndices(const ::arrow::Array& data) override {
@@ -663,16 +685,30 @@ class DictEncoderImpl : public EncoderImpl, virtual public DictEncoder<DType> {
   template <typename ArrayType>
   void putBinaryDictionaryArray(const ArrayType& array) {
     VELOX_DCHECK_EQ(array.null_count(), 0);
+    auto onFound = [](int32_t memoIndex) {};
     for (int64_t i = 0; i < array.length(); i++) {
       auto v = array.GetView(i);
       if (ARROW_PREDICT_FALSE(v.size() > kMaxByteArraySize)) {
         throw ParquetException(
             "Parquet cannot store strings with size 2GB or more");
       }
-      dictEncodedSize_ += static_cast<int>(v.size() + sizeof(uint32_t));
+      // Only charge the dictionary size for distinct values. The dictionary
+      // alphabet may contain duplicates; charging every element (rather than
+      // only newly inserted ones) over-counts dictEncodedSize_ relative to the
+      // de-duplicated entries actually serialized by writeDict(). That mismatch
+      // sizes the flushed dictionary page from the inflated count, leaving
+      // trailing uninitialized bytes and tripping the reader's
+      // exact-consumption check in PageReader::prepareDictionary.
+      auto onNotFound = [this, &v](int32_t memoIndex) {
+        dictEncodedSize_ += static_cast<int>(v.size() + sizeof(uint32_t));
+      };
       int32_t unusedMemoIndex;
       PARQUET_THROW_NOT_OK(memoTable_.getOrInsert(
-          v.data(), static_cast<int32_t>(v.size()), &unusedMemoIndex));
+          v.data(),
+          static_cast<int32_t>(v.size()),
+          onFound,
+          onNotFound,
+          &unusedMemoIndex));
     }
   }
 
@@ -749,6 +785,7 @@ inline void DictEncoderImpl<ByteArrayType>::putByteArray(
   PARQUET_THROW_NOT_OK(
       memoTable_.getOrInsert(ptr, length, onFound, onNotFound, &memoIndex));
   bufferedIndices_.push_back(memoIndex);
+  unencodedByteArrayDataBytes_ += length;
 }
 
 template <>
@@ -990,7 +1027,7 @@ void ByteStreamSplitEncoder<DType>::putSpaced(
   if (validBits != NULLPTR) {
     auto buffer = allocateBuffer(this->memoryPool(), numValues * sizeof(T));
     T* data = reinterpret_cast<T*>(buffer->mutable_data());
-    int numValidValues = ::arrow::util::internal::SpacedCompress<T>(
+    int numValidValues = util::internal::spacedCompress<T>(
         src, numValues, validBits, validBitsOffset, data);
     put(data, numValidValues);
   } else {
@@ -2584,8 +2621,7 @@ void DeltaBitPackEncoder<DType>::flushBlock() {
 
     // The minimum number of bits required to write any of values in deltas_.
     // Vector. See overflow comment above.
-    const auto bitWidth = bitWidthData[i] =
-        ::arrow::bit_util::NumRequiredBits(maxDelta - minDelta);
+    const auto bitWidth = bitWidthData[i] = std::bit_width(maxDelta - minDelta);
 
     for (uint32_t j = start; j < start + valuesCurrentMiniBlock; j++) {
       // See overflow comment above.
@@ -2707,7 +2743,7 @@ void DeltaBitPackEncoder<DType>::putSpaced(
   if (validBits != NULLPTR) {
     auto buffer = allocateBuffer(this->memoryPool(), numValues * sizeof(T));
     T* data = reinterpret_cast<T*>(buffer->mutable_data());
-    int numValidValues = ::arrow::util::internal::SpacedCompress<T>(
+    int numValidValues = util::internal::spacedCompress<T>(
         src, numValues, validBits, validBitsOffset, data);
     put(data, numValidValues);
   } else {
@@ -3017,6 +3053,7 @@ class DeltaLengthByteArrayEncoder : public EncoderImpl,
               }
               lengthEncoder_.put({static_cast<int32_t>(view.length())}, 1);
               PARQUET_THROW_NOT_OK(sink_.Append(view.data(), view.length()));
+              unencodedByteArrayDataBytes_ += view.size();
               return Status::OK();
             },
             []() { return Status::OK(); }));
@@ -3049,11 +3086,11 @@ void DeltaLengthByteArrayEncoder<DType>::put(const T* src, int numValues) {
   for (int idx = 0; idx < numValues; idx += kBatchSize) {
     const int batchSize = std::min(kBatchSize, numValues - idx);
     for (int j = 0; j < batchSize; ++j) {
-      const int32_t len = src[idx + j].len;
+      const uint32_t len = src[idx + j].len;
       if (addWithOverflow(totalIncrementSize, len, &totalIncrementSize)) {
         throw ParquetException("excess expansion in DELTA_LENGTH_BYTE_ARRAY");
       }
-      lengths[j] = len;
+      lengths[j] = static_cast<int32_t>(len);
     }
     lengthEncoder_.put(lengths.data(), batchSize);
   }
@@ -3065,6 +3102,7 @@ void DeltaLengthByteArrayEncoder<DType>::put(const T* src, int numValues) {
   for (int idx = 0; idx < numValues; idx++) {
     sink_.UnsafeAppend(src[idx].ptr, src[idx].len);
   }
+  unencodedByteArrayDataBytes_ += totalIncrementSize;
 }
 
 template <typename DType>
@@ -3076,7 +3114,7 @@ void DeltaLengthByteArrayEncoder<DType>::putSpaced(
   if (validBits != NULLPTR) {
     auto buffer = allocateBuffer(this->memoryPool(), numValues * sizeof(T));
     T* data = reinterpret_cast<T*>(buffer->mutable_data());
-    int numValidValues = ::arrow::util::internal::SpacedCompress<T>(
+    int numValidValues = util::internal::spacedCompress<T>(
         src, numValues, validBits, validBitsOffset, data);
     put(data, numValidValues);
   } else {
@@ -3308,7 +3346,7 @@ class RleBooleanEncoder final : public EncoderImpl,
     if (validBits != NULLPTR) {
       auto buffer = allocateBuffer(this->memoryPool(), numValues * sizeof(T));
       T* data = reinterpret_cast<T*>(buffer->mutable_data());
-      int numValidValues = ::arrow::util::internal::SpacedCompress<T>(
+      int numValidValues = util::internal::spacedCompress<T>(
           src, numValues, validBits, validBitsOffset, data);
       put(data, numValidValues);
     } else {
@@ -3520,7 +3558,7 @@ class DeltaByteArrayEncoder : public EncoderImpl,
         PARQUET_THROW_NOT_OK(buffer_->Resize(numValues * sizeof(T), false));
       }
       T* data = reinterpret_cast<T*>(buffer_->mutable_data());
-      int numValidValues = ::arrow::util::internal::SpacedCompress<T>(
+      int numValidValues = util::internal::spacedCompress<T>(
           src, numValues, validBits, validBitsOffset, data);
       put(data, numValidValues);
     } else {
@@ -3566,6 +3604,7 @@ class DeltaByteArrayEncoder : public EncoderImpl,
         // Convert to ByteArray, so it can be passed to the suffix_encoder_.
         const ByteArray suffix(suffixLength, suffixPtr);
         suffixes[j] = suffix;
+        unencodedByteArrayDataBytes_ += len;
       }
       suffixEncoder_.put(suffixes.data(), batchSize);
       prefixLengthEncoder_.put(prefixLengths.data(), batchSize);
@@ -3604,6 +3643,7 @@ class DeltaByteArrayEncoder : public EncoderImpl,
                   {static_cast<int32_t>(commonPrefixLength)}, 1);
 
               lastValueView = std::string_view(view.data(), view.size());
+              unencodedByteArrayDataBytes_ += len;
               const auto suffixLength =
                   static_cast<uint32_t>(len - commonPrefixLength);
               if (suffixLength == 0) {

@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
@@ -34,6 +35,7 @@ class AssignUniqueIdTest : public HiveConnectorTestBase {
  protected:
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
   }
 
@@ -45,15 +47,12 @@ class AssignUniqueIdTest : public HiveConnectorTestBase {
   void verifyUniqueId(
       const std::shared_ptr<const core::PlanNode>& plan,
       const std::vector<RowVectorPtr>& input) {
-    CursorParameters params;
-    params.planNode = plan;
-    params.queryConfigs.insert(
-        {cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1"});
-    auto result = readCursor(params);
-    ASSERT_EQ(result.second[0]->childrenSize(), input[0]->childrenSize() + 1);
-    verifyUniqueId(input, result.second);
+    TaskPtr task;
+    auto result = AssertQueryBuilder(plan)
+                      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1")
+                      .copyResults(pool(), task);
+    verifyUniqueId(input, result);
 
-    auto task = result.first->task();
     // Verify number of memory allocations. As no memory is allocated for the
     // unique ID vector generation in GPU, the number of memory allocations
     // should be 0. cudf can generate new columns, and cannot reuse the memory.
@@ -64,34 +63,29 @@ class AssignUniqueIdTest : public HiveConnectorTestBase {
         1, stats.at(uniqueNodeId_).operatorStats.count("CudfAssignUniqueId"));
   }
 
+  // Verifies that 'result' has the rows of 'input' in order, with a column of
+  // unique ids added last.
   void verifyUniqueId(
       const std::vector<RowVectorPtr>& input,
-      const std::vector<facebook::velox::RowVectorPtr>& vectors) {
-    auto numColumns = vectors[0]->childrenSize();
-    ASSERT_EQ(numColumns, input[0]->childrenSize() + 1);
+      const RowVectorPtr& result) {
+    const auto numColumns = input[0]->childrenSize();
+    ASSERT_EQ(result->childrenSize(), numColumns + 1);
 
-    std::set<int64_t> ids;
-    for (int i = 0; i < numColumns; i++) {
-      for (auto batch = 0; batch < vectors.size(); ++batch) {
-        auto column = vectors[batch]->childAt(i);
-        if (i < numColumns - 1) {
-          assertEqualVectors(input[batch]->childAt(i), column);
-        } else {
-          auto idValues = column->asFlatVector<int64_t>()->rawValues();
-          std::copy(
-              idValues,
-              idValues + column->size(),
-              std::inserter(ids, ids.end()));
-        }
+    vector_size_t offset = 0;
+    for (const auto& batch : input) {
+      for (auto i = 0; i < numColumns; ++i) {
+        assertEqualVectors(
+            batch->childAt(i),
+            result->childAt(i)->slice(offset, batch->size()));
       }
+      offset += batch->size();
     }
+    ASSERT_EQ(result->size(), offset);
 
-    vector_size_t totalInputSize = 0;
-    for (const auto& vector : input) {
-      totalInputSize += vector->size();
-    }
-
-    ASSERT_EQ(totalInputSize, ids.size());
+    const auto* ids =
+        result->childAt(numColumns)->asFlatVector<int64_t>()->rawValues();
+    ASSERT_EQ(
+        std::set<int64_t>(ids, ids + result->size()).size(), result->size());
   }
 
   core::PlanNodeId uniqueNodeId_;
@@ -103,7 +97,7 @@ TEST_F(AssignUniqueIdTest, multiBatch) {
   input.reserve(3);
   for (int i = 0; i < 3; ++i) {
     input.push_back(
-        makeRowVector({makeFlatVector<int32_t>(batchSize, folly::identity)}));
+        makeRowVector({makeFlatIdentityVector<int32_t>(batchSize)}));
   }
 
   auto plan = PlanBuilder()
@@ -118,10 +112,9 @@ TEST_F(AssignUniqueIdTest, multiBatch) {
 TEST_F(AssignUniqueIdTest, exceedRequestLimit) {
   vector_size_t requestLimit = 1 << 20L;
   auto input = {
-      makeRowVector(
-          {makeFlatVector<int32_t>(requestLimit - 10, folly::identity)}),
-      makeRowVector({makeFlatVector<int32_t>(100, folly::identity)}),
-      makeRowVector({makeFlatVector<int32_t>(100, folly::identity)}),
+      makeRowVector({makeFlatIdentityVector<int32_t>(requestLimit - 10)}),
+      makeRowVector({makeFlatIdentityVector<int32_t>(100)}),
+      makeRowVector({makeFlatIdentityVector<int32_t>(100)}),
   };
 
   auto plan = PlanBuilder()
@@ -136,15 +129,14 @@ TEST_F(AssignUniqueIdTest, exceedRequestLimit) {
 TEST_F(AssignUniqueIdTest, multiThread) {
   for (int i = 0; i < 3; i++) {
     vector_size_t batchSize = 1000;
-    auto input = {
-        makeRowVector({makeFlatVector<int32_t>(batchSize, folly::identity)})};
+    auto input = {makeRowVector({makeFlatIdentityVector<int32_t>(batchSize)})};
     auto plan = PlanBuilder()
                     .values(input, true)
                     .assignUniqueId()
                     .capturePlanNodeId(uniqueNodeId_)
                     .planNode();
 
-    std::shared_ptr<exec::Task> task;
+    exec::TaskPtr task;
     auto result = AssertQueryBuilder(plan)
                       .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1")
                       .maxDrivers(8)
@@ -162,8 +154,9 @@ TEST_F(AssignUniqueIdTest, multiThread) {
     // Verify number of memory allocations. As no memory is allocated for the
     // unique ID vector generation in GPU, the number of memory allocations
     // should be 0. cudf can generate new columns, and cannot reuse the memory.
-    auto stats = toPlanStats(task->taskStats());
-    ASSERT_EQ(0, stats.at(uniqueNodeId_).numMemoryAllocations);
+    const auto uniqueIdStats =
+        PlanNodeStats::extract(task->taskStats(), uniqueNodeId_);
+    ASSERT_EQ(0, uniqueIdStats.numMemoryAllocations);
   }
 }
 

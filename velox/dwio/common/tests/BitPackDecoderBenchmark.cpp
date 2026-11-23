@@ -305,7 +305,7 @@ void lemirebmi2(uint8_t bitWidth, uint32_t* result) {
 }
 
 template <typename T>
-void arrowBitUnpack(uint8_t bitWidth, T* result) {
+void parquetBitReaderUnpack(uint8_t bitWidth, T* result) {
   facebook::velox::parquet::BitReader bitReader(
       reinterpret_cast<const uint8_t*>(bitPackedData[bitWidth].data()),
       BYTES(kNumValues, bitWidth));
@@ -335,8 +335,8 @@ void duckdbBitUnpack(uint8_t bitWidth, T* result) {
   BENCHMARK_RELATIVE(fastpforlibBenchmark_unpack_fullrows_##width##_8) { \
     fastpforlibBenchmark<uint8_t>(width, result8.data());                \
   }                                                                      \
-  BENCHMARK_RELATIVE(arrow_unpack_fullrows_##width##_8) {                \
-    arrowBitUnpack<uint8_t>(width, result8.data());                      \
+  BENCHMARK_RELATIVE(parquet_bit_reader_unpack_fullrows_##width##_8) {   \
+    parquetBitReaderUnpack<uint8_t>(width, result8.data());              \
   }                                                                      \
   BENCHMARK_RELATIVE(duckdb_unpack_fullrows_##width##_8) {               \
     duckdbBitUnpack<uint8_t>(width, result8.data());                     \
@@ -356,8 +356,8 @@ void duckdbBitUnpack(uint8_t bitWidth, T* result) {
   BENCHMARK_RELATIVE(fastpforlibBenchmark_unpack_fullrows_##width##_16) { \
     fastpforlibBenchmark<uint16_t>(width, result16.data());               \
   }                                                                       \
-  BENCHMARK_RELATIVE(arrow_unpack_fullrows_##width##_16) {                \
-    arrowBitUnpack<uint16_t>(width, result16.data());                     \
+  BENCHMARK_RELATIVE(parquet_bit_reader_unpack_fullrows_##width##_16) {   \
+    parquetBitReaderUnpack<uint16_t>(width, result16.data());             \
   }                                                                       \
   BENCHMARK_RELATIVE(duckdb_unpack_fullrows_##width##_16) {               \
     duckdbBitUnpack<uint16_t>(width, result16.data());                    \
@@ -380,8 +380,8 @@ void duckdbBitUnpack(uint8_t bitWidth, T* result) {
   BENCHMARK_RELATIVE(fastpforlibBenchmark_unpack_fullrows_##width##_32) { \
     fastpforlibBenchmark<uint32_t>(width, result32.data());               \
   }                                                                       \
-  BENCHMARK_RELATIVE(arrow_unpack_fullrows_##width##_32) {                \
-    arrowBitUnpack<uint32_t>(width, result32.data());                     \
+  BENCHMARK_RELATIVE(parquet_bit_reader_unpack_fullrows_##width##_32) {   \
+    parquetBitReaderUnpack<uint32_t>(width, result32.data());             \
   }                                                                       \
   BENCHMARK_RELATIVE(duckdb_unpack_fullrows_##width##_32) {               \
     duckdbBitUnpack<uint32_t>(width, result32.data());                    \

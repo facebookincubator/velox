@@ -1,0 +1,168 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
+
+#include <functional>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "velox/buffer/Buffer.h"
+#include "velox/dwio/nimble/common/Types.h"
+
+namespace facebook::nimble {
+
+namespace test {
+class MetadataBufferTestHelper;
+} // namespace test
+
+/// Read-only bytes kept valid by a shared holder, such as a buffer or a cache
+/// pin. Lets MetadataBuffer hold bytes from any source without knowing its
+/// type.
+struct PinnedBuffer {
+  /// Keeps 'buffer' valid while any copy of it is alive.
+  std::shared_ptr<const void> bufferHolder;
+
+  /// The bytes kept valid by 'bufferHolder'.
+  std::string_view buffer;
+};
+
+/// Returns the bytes of 'buffer'. The bufferHolder holds 'buffer', so the bytes
+/// stay valid while any copy of them is alive.
+PinnedBuffer toPinnedBuffer(velox::BufferPtr buffer);
+
+class MetadataBuffer {
+ public:
+  /// Creates from decompressed bytes kept valid by 'pin.bufferHolder'.
+  explicit MetadataBuffer(PinnedBuffer pin);
+
+  ~MetadataBuffer();
+  MetadataBuffer(const MetadataBuffer&) = delete;
+  MetadataBuffer& operator=(const MetadataBuffer&) = delete;
+  MetadataBuffer(MetadataBuffer&&) noexcept;
+  MetadataBuffer& operator=(MetadataBuffer&&) noexcept;
+
+  /// Creates a shallow copy sharing the same underlying bytes.
+  MetadataBuffer clone() const;
+
+  /// Creates a zero-copy MetadataBuffer viewing a sub-range of this buffer's
+  /// content. Shares the underlying bytes.
+  std::unique_ptr<MetadataBuffer> slice(uint64_t offset, uint64_t size) const;
+
+  std::string_view content() const {
+    return pin_.buffer.substr(offset_, size_);
+  }
+
+  /// Decompresses metadata from a pool-tracked buffer. Returns the buffer
+  /// directly for uncompressed data (zero copy), or decompresses for Zstd.
+  static velox::BufferPtr decompress(
+      velox::BufferPtr data,
+      CompressionType type,
+      velox::memory::MemoryPool* pool);
+
+  /// Decompresses metadata from a string_view and returns a BufferPtr.
+  static velox::BufferPtr decompress(
+      std::string_view data,
+      CompressionType type,
+      velox::memory::MemoryPool* pool);
+
+ private:
+  MetadataBuffer(PinnedBuffer pin, uint64_t offset, uint64_t size);
+
+  // Decompressed bytes, kept valid while this buffer is alive.
+  PinnedBuffer pin_;
+  // Sub-range within the underlying storage. Default (0, full size) covers
+  // the entire content. Set by slice() for sub-range views.
+  uint64_t offset_{0};
+  uint64_t size_{0};
+
+  friend class test::MetadataBufferTestHelper;
+};
+
+class Section {
+ public:
+  explicit Section(MetadataBuffer&& buffer) : buffer_{std::move(buffer)} {}
+
+  std::string_view content() const {
+    return buffer_.content();
+  }
+  explicit operator std::string_view() const {
+    return content();
+  }
+
+  /// Returns a reference to the underlying MetadataBuffer.
+  const MetadataBuffer& buffer() const {
+    return buffer_;
+  }
+
+ private:
+  MetadataBuffer buffer_;
+};
+
+class MetadataSection {
+ public:
+  /// 'uncompressedSize' is nullopt for files written before the
+  /// uncompressed_size field was added to the FlatBuffers footer.
+  /// When nullopt, readers must determine the size from the compressed
+  /// data (e.g., reading the 4-byte Zstd size prefix).
+  MetadataSection(
+      uint64_t offset,
+      uint32_t size,
+      CompressionType compressionType,
+      std::optional<uint32_t> uncompressedSize = std::nullopt);
+
+  MetadataSection()
+      : offset_{0}, size_{0}, compressionType_{CompressionType::Uncompressed} {}
+
+  uint64_t offset() const {
+    return offset_;
+  }
+
+  uint32_t size() const {
+    return size_;
+  }
+
+  CompressionType compressionType() const {
+    return compressionType_;
+  }
+
+  std::optional<uint32_t> uncompressedSize() const {
+    return uncompressedSize_;
+  }
+
+ private:
+  uint64_t offset_;
+  uint32_t size_;
+  CompressionType compressionType_;
+  std::optional<uint32_t> uncompressedSize_;
+};
+
+/// Callback type for creating metadata sections in the file.
+using CreateMetadataSectionFn =
+    std::function<MetadataSection(std::string_view)>;
+
+/// Callback type for writing raw data segments to the file.
+/// Writes all segments contiguously and returns the (offset, totalSize).
+using WriteDataFn = std::function<std::pair<uint64_t, uint32_t>(
+    const std::vector<std::string_view>&)>;
+
+/// Callback type for writing optional sections.
+using WriteOptionalSectionFn =
+    std::function<void(std::string, std::string_view)>;
+
+} // namespace facebook::nimble

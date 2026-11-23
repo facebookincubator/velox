@@ -180,6 +180,27 @@ annotation, definition level, repetition level, and compression when useful.
 - Purpose: Tests reading FIXED_LEN_BYTE_ARRAY as VARBINARY and validates mixed
   primitive physical type handling.
 
+### `flba_skip.parquet`
+
+- Metadata: `created_by=parquet-cpp-arrow version 24.0.0`, 40 rows, 1 row group,
+  columns `key: INT32` and `value: FIXED_LEN_BYTE_ARRAY` (4-byte width), both
+  optional, uncompressed. `value` equals the row index encoded big-endian.
+- Purpose: Regression fixture for skipping FIXED_LEN_BYTE_ARRAY values. Filtering
+  `key` to the even rows forces the FLBA decoder to skip the odd rows, which must
+  advance by a constant multiple of the fixed width. A skip that instead read the
+  value bytes as a 4-byte length prefix would misalign or read out of bounds.
+
+### `flba_dictionary_string_binary.parquet`
+
+- Metadata: `created_by=parquet-cpp-arrow version 25.0.1`, 8 rows, 1 row group,
+  optional column `value: FIXED_LEN_BYTE_ARRAY` (5-byte width) with no logical
+  annotation, dictionary-encoded (`RLE_DICTIONARY`), Snappy. Values are
+  `apple, null, b\0rry, cider, apple, null, cider, b\0rry`, where `\0` is a NUL
+  byte, so the dictionary page holds 3 distinct values.
+- Purpose: Tests dictionary-encoded FIXED_LEN_BYTE_ARRAY pages read as Velox
+  VARBINARY, as VARCHAR through the requested file schema, and with a filter on
+  the dictionary values.
+
 ### `uuid.parquet`
 
 - Metadata: `created_by=parquet-mr version 1.12.2`, 3 rows, 1 row group,
@@ -333,6 +354,33 @@ annotation, definition level, repetition level, and compression when useful.
   ```
 
 - Purpose: Protobuf-style repeated string field read as an array of strings.
+
+### `legacy_array_of_struct_of_array.parquet`
+
+- Metadata: `created_by=parquet-mr version 1.13.1`, 1 row, 1 row group, and
+  four uncompressed INT64 leaves: `ads_id` and `shop_id` (definition level 1,
+  repetition level 1), plus `streamer_cat_ids` and `items` (definition level
+  2, repetition level 2). The Protobuf writer metadata identifies
+  `com.test.parquet.proto.AdsProto$AdRecord` and sets
+  `parquet.proto.writeSpecsCompliant=false`.
+- Parquet schema:
+
+  ```text
+  message com.test.parquet.proto.AdRecord {
+    repeated group ads {
+      required int64 ads_id;
+      required int64 shop_id;
+      repeated int64 streamer_cat_ids;
+      repeated int64 items;
+    }
+  }
+  ```
+
+- Purpose: Regression fixture for the legacy Protobuf encoding of
+  `ARRAY<ROW<ads_id: BIGINT, shop_id: BIGINT, streamer_cat_ids: ARRAY(BIGINT),
+  items: ARRAY(BIGINT)>>`. It verifies that Velox computes definition and
+  repetition levels correctly for arrays nested inside repeated struct elements,
+  including an empty `streamer_cat_ids` array.
 
 ### `nested_array_struct.parquet`
 
@@ -538,6 +586,38 @@ annotation, definition level, repetition level, and compression when useful.
 - Purpose: Legacy LIST fixture whose repeated `array` node has more than one
   child. Velox must interpret array elements as rows.
 
+### `parquet-thrift-compat.parquet`
+
+- Metadata: `created_by=parquet-mr (build
+  32c46643845ea8a705c35d4ec8fc654cc8ff816d)`, 10 rows, 1 row group, 25 leaf
+  columns, Snappy, format version 1.0. Besides `complexColumn`, it has 18
+  required and optional scalar columns, the legacy `_tuple` LISTs
+  `stringsColumn` and `intSetColumn`, and the map `intToStringColumn`.
+- Parquet schema of `complexColumn`:
+
+  ```text
+  required group complexColumn (MAP) {
+    repeated group map (MAP_KEY_VALUE) {
+      required int32 key;
+      optional group value (LIST) {
+        repeated group value_tuple {
+          required group nestedIntsColumn (LIST) {
+            repeated int32 nestedIntsColumn_tuple;
+          }
+          required binary nestedStringColumn (STRING);
+        }
+      }
+    }
+  }
+  ```
+
+- Purpose: Copied from Apache Spark's
+  `sql/core/src/test/resources/test-data/parquet-thrift-compat.snappy.parquet`.
+  Legacy two-level LIST of rows written by parquet-thrift. The two-field
+  repeated group `value_tuple` is the list element, not a wrapper, so
+  `complexColumn` must be read as
+  `MAP<INTEGER, ARRAY<ROW<nestedIntsColumn, nestedStringColumn>>>`.
+
 ### `parse_empty_nested_list.parquet`
 
 - Metadata: `created_by=parquet-cpp-arrow version 19.0.1`, 1000 rows, 1 row
@@ -712,6 +792,15 @@ annotation, definition level, repetition level, and compression when useful.
   required `a: BYTE_ARRAY String`, uncompressed.
 - Purpose: Tests DELTA_BYTE_ARRAY decoding. Expected strings are
   `axis, axle, babble, babyhood`.
+
+### `bss_float.parquet`
+
+- Metadata: `created_by=parquet-cpp-arrow`, 100 rows, 1 row group, required
+  column `float_val: FLOAT` encoded with BYTE_STREAM_SPLIT (encoding id 9),
+  data page v1, uncompressed.
+- Purpose: Tests BYTE_STREAM_SPLIT decoding for FLOAT columns. Values were
+  generated with numpy (seed 42) and stored as float32; the reader test spot
+  checks decoded values such as `float_val[0] = 0.49671414`.
 
 ### `parquet-251.parquet`
 

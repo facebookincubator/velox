@@ -60,6 +60,19 @@ FOLLY_ALWAYS_INLINE char hexDigit(uint8_t c) {
   VELOX_DCHECK_LT(c, 16);
   return c < 10 ? c + '0' : c - 10 + 'A';
 }
+
+int hexDigitValue(char character) {
+  if (character >= '0' && character <= '9') {
+    return character - '0';
+  }
+  if (character >= 'a' && character <= 'f') {
+    return character - 'a' + 10;
+  }
+  if (character >= 'A' && character <= 'F') {
+    return character - 'A' + 10;
+  }
+  return -1;
+}
 } // namespace
 
 void writeUtf16Escape(char16_t value, char*& out) {
@@ -82,6 +95,26 @@ void encodeUtf16Hex(char32_t codePoint, char*& out) {
     return;
   }
   writeUtf16Escape(static_cast<char16_t>(codePoint), out);
+}
+
+bool parseUnicodeEscape(
+    std::string_view input,
+    size_t position,
+    uint16_t& codeUnit) {
+  if (position + 6 > input.size() || input[position] != '\\' ||
+      input[position + 1] != 'u') {
+    return false;
+  }
+
+  codeUnit = 0;
+  for (size_t i = position + 2; i < position + 6; ++i) {
+    const auto digit = hexDigitValue(input[i]);
+    if (digit < 0) {
+      return false;
+    }
+    codeUnit = static_cast<uint16_t>((codeUnit << 4) | digit);
+  }
+  return true;
 }
 
 int32_t
@@ -200,6 +233,23 @@ tryGetUtf8CharLength(const char* input, int64_t size, int32_t& codePoint) {
   }
   // for longer sequence, which can't happen.
   return -1;
+}
+
+int32_t decodeUtf8CodePointOrReplacement(
+    const char* input,
+    int64_t size,
+    int32_t& codePoint) {
+  const auto charLength = tryGetUtf8CharLength(input, size, codePoint);
+  if (charLength > 0) {
+    return charLength;
+  }
+
+  codePoint = 0xFFFD;
+  const auto invalidLength = -charLength;
+  if (invalidLength >= 2 && isMultipleInvalidSequences(input, 0)) {
+    return 1;
+  }
+  return invalidLength;
 }
 
 size_t replaceInvalidUTF8Characters(

@@ -55,8 +55,11 @@ class ChecksumAggregateTest : public AggregationTestBase {
     const auto expectedDuckDbSql =
         fmt::format("VALUES (CAST(\'{}\' AS VARCHAR))", expectedChecksum);
 
-    testAggregations(
-        rowVectors, {}, {"checksum(c0)"}, {"to_base64(a0)"}, expectedDuckDbSql);
+    AggregationTester(*this)
+        .inputs(rowVectors)
+        .aggregates({"checksum(c0)"})
+        .project({"to_base64(a0)"})
+        .assertResults(expectedDuckDbSql);
   }
 
   template <typename G, typename T>
@@ -77,12 +80,12 @@ class ChecksumAggregateTest : public AggregationTestBase {
     const auto expectedDuckDbSql =
         "VALUES " + boost::algorithm::join(expectedResults, ",");
 
-    testAggregations(
-        rowVectors,
-        {"c0"},
-        {"checksum(c1)"},
-        {"to_base64(a0)"},
-        expectedDuckDbSql);
+    AggregationTester(*this)
+        .inputs(rowVectors)
+        .groupBy({"c0"})
+        .aggregates({"checksum(c1)"})
+        .project({"to_base64(a0)"})
+        .assertResults(expectedDuckDbSql);
   }
 
   template <typename T>

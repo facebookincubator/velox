@@ -19,11 +19,12 @@
 #include "velox/experimental/cudf/exec/CudfOperator.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
-#include "velox/core/Expressions.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"
+
+#include <cudf/scalar/scalar.hpp>
 
 namespace facebook::velox::cudf_velox {
 
@@ -44,11 +45,15 @@ class CudfFilterProject : public CudfOperatorBase {
 
   void filter(
       std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
+  /// Evaluates the projections over 'inputTableColumns'. 'numRows' is the
+  /// row count of the batch, which sizes the constant projections of a
+  /// zero-column input.
   std::vector<std::unique_ptr<cudf::column>> project(
       std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
-      rmm::cuda_stream_view stream);
+      cudf::size_type numRows,
+      cuda::stream_ref stream);
 
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
@@ -63,6 +68,7 @@ class CudfFilterProject : public CudfOperatorBase {
   void doClose() override {
     Operator::close();
     projectEvaluators_.clear();
+    constantProjections_.clear();
     filterEvaluator_.reset();
   }
 
@@ -78,14 +84,22 @@ class CudfFilterProject : public CudfOperatorBase {
   std::shared_ptr<const core::FilterNode> filter_;
 
   std::vector<CudfExpressionPtr> projectEvaluators_;
+  // Constant projections of a zero-column input, as (output channel, scalar)
+  // with the scalar in the type the pipeline carries. project() fills each to
+  // the row count of the batch.
+  std::vector<std::pair<column_index_t, std::unique_ptr<cudf::scalar>>>
+      constantProjections_;
   CudfExpressionPtr filterEvaluator_;
 
-  std::vector<velox::exec::IdentityProjection> resultProjections_;
-  std::vector<velox::exec::IdentityProjection> identityProjections_;
+  std::vector<IdentityProjection> resultProjections_;
+  std::vector<IdentityProjection> identityProjections_;
 };
 
-bool canBeEvaluatedByCudf(
-    const std::vector<core::TypedExprPtr>& exprs,
-    core::QueryCtx* queryCtx);
+/// True when 'projection' is a plan constant over a zero-column 'inputType'.
+/// Shared by FilterProjectAdapter::canRunOnGPU and
+/// CudfFilterProject::initialize() so the two checks cannot drift.
+bool isConstantProjectionOverZeroColumns(
+    const RowTypePtr& inputType,
+    const core::TypedExprPtr& projection);
 
 } // namespace facebook::velox::cudf_velox

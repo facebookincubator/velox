@@ -22,8 +22,10 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryArbitrator.h"
+#include "velox/connectors/Connector.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
+#include "velox/exec/Operator.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -134,6 +136,43 @@ class CustomMemoryHierarchyTest : public testing::Test {
   // Task<->Driver cycle and release their pools.
   std::vector<std::shared_ptr<exec::Task>> tasks_;
 };
+
+TEST_F(CustomMemoryHierarchyTest, connectorContextUsesOperatorCustomPools) {
+  for (const auto& tags :
+       std::vector<std::vector<std::string>>{{}, {"cxl"}, {"gpu", "cxl"}}) {
+    auto queryCtx =
+        buildQueryCtx(tags, fmt::format("connector-{}", tags.size()));
+    auto task =
+        makeTask(fmt::format("connector-task-{}", tags.size()), queryCtx);
+    exec::DriverCtx driverCtx(task, 3, 0, exec::kUngroupedGroupId, 0);
+    exec::OperatorCtx first(&driverCtx, "scan0", 0, "TableScan");
+    exec::OperatorCtx second(&driverCtx, "scan1", 1, "TableScan");
+    auto firstConnector =
+        first.createConnectorQueryCtx("test", "scan0", nullptr);
+    auto secondConnector =
+        second.createConnectorQueryCtx("test", "scan1", nullptr);
+
+    EXPECT_EQ(firstConnector->memoryPool(), first.pool());
+    EXPECT_EQ(secondConnector->memoryPool(), second.pool());
+    EXPECT_EQ(firstConnector->customMemoryPool("missing"), nullptr);
+    if (tags.empty()) {
+      EXPECT_EQ(firstConnector->customMemoryPool("gpu"), nullptr);
+      EXPECT_EQ(firstConnector->customMemoryPool("cxl"), nullptr);
+    }
+    for (const auto& tag : tags) {
+      auto* firstPool = firstConnector->customMemoryPool(tag);
+      auto* secondPool = secondConnector->customMemoryPool(tag);
+      ASSERT_NE(firstPool, nullptr);
+      ASSERT_NE(secondPool, nullptr);
+      EXPECT_EQ(firstPool, first.customPool(tag));
+      EXPECT_EQ(secondPool, second.customPool(tag));
+      EXPECT_NE(firstPool, secondPool);
+      EXPECT_EQ(firstPool->kind(), MemoryPool::Kind::kLeaf);
+      EXPECT_EQ(firstPool->root(), queryCtx->customPool(tag).get());
+      EXPECT_EQ(secondPool->root(), queryCtx->customPool(tag).get());
+    }
+  }
+}
 
 // Task construction creates 'task.<id>.<tag>' aggregate under each
 // registered custom root.

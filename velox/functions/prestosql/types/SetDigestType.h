@@ -24,6 +24,8 @@ class SetDigestType final : public VarbinaryType {
   SetDigestType() = default;
 
  public:
+  static std::shared_ptr<const SetDigestType> create() = delete;
+
   static std::shared_ptr<const SetDigestType> get() {
     VELOX_CONSTEXPR_SINGLETON SetDigestType kInstance;
     return {std::shared_ptr<const SetDigestType>{}, &kInstance};
@@ -57,6 +59,10 @@ class SetDigestType final : public VarbinaryType {
 inline bool isSetDigestType(const TypePtr& type) {
   // Pointer comparison works since this type is a singleton.
   return SetDigestType::get() == type;
+}
+
+inline bool isSetDigestType(const Type& type) {
+  return SetDigestType::get().get() == &type;
 }
 
 inline std::shared_ptr<const SetDigestType> SETDIGEST() {

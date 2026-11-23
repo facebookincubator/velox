@@ -148,8 +148,11 @@ VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<ArrayConstructor>());
 
-void registerArrayConstructor(const std::string& name) {
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_constructor, name);
+void registerArrayConstructor(
+    const std::string& name,
+    std::string_view defaultOwner) {
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_array_constructor, name, defaultOwner);
 }
 
 } // namespace facebook::velox::functions

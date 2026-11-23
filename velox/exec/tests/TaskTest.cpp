@@ -15,7 +15,13 @@
  */
 
 #include "velox/exec/Task.h"
+
+#include <functional>
+
+#include <gmock/gmock.h>
+
 #include "folly/OperationCancelled.h"
+#include "folly/synchronization/Baton.h"
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
@@ -28,13 +34,20 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/DefaultOutputBufferManager.h"
+#include "velox/exec/Exchange.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Spill.h"
+#include "velox/exec/Spiller.h"
 #include "velox/exec/Values.h"
+#include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common::testutil;
@@ -147,14 +160,13 @@ class TestSkewedJoinBuild : public exec::Operator {
   void noMoreInput() override {
     Operator::noMoreInput();
     std::vector<ContinuePromise> promises;
-    std::vector<std::shared_ptr<exec::Driver>> peers;
+    std::vector<std::shared_ptr<exec::Operator>> peerOperators;
     // The last Driver to hit CustomJoinBuild::finish gathers the data from
     // all build Drivers and hands it over to the probe side. At this
     // point all build Drivers are continued and will free their
-    // state. allPeersFinished is true only for the last Driver of the
+    // state. allPeersArrived is true only for the last Driver of the
     // build pipeline.
-    if (!operatorCtx_->task()->allPeersFinished(
-            planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+    if (!operatorCtx_->allPeersArrived(&future_, promises, peerOperators)) {
       return;
     }
     VELOX_FAIL("Last driver should not finish successfully.");
@@ -290,16 +302,19 @@ class ExternalBlocker {
 // A test node that normally just re-project/passthrough the output from input
 // When the node is blocked by external event (via externalBlocker), the
 // operator will signal kBlocked. The pipeline can ONLY proceed again when it is
-// unblocked externally.
+// unblocked externally. The operator calls 'closeCallback', if set, when it
+// closes.
 class TestExternalBlockableNode : public core::PlanNode {
  public:
   TestExternalBlockableNode(
       const core::PlanNodeId& id,
       core::PlanNodePtr source,
-      std::shared_ptr<ExternalBlocker> externalBlocker)
+      std::shared_ptr<ExternalBlocker> externalBlocker,
+      std::function<void()> closeCallback = nullptr)
       : PlanNode(id),
         sources_{std::move(source)},
-        externalBlocker_(std::move(externalBlocker)) {}
+        externalBlocker_(std::move(externalBlocker)),
+        closeCallback_(std::move(closeCallback)) {}
 
   const RowTypePtr& outputType() const override {
     return sources_[0]->outputType();
@@ -317,11 +332,16 @@ class TestExternalBlockableNode : public core::PlanNode {
     return externalBlocker_.get();
   }
 
+  const std::function<void()>& closeCallback() const {
+    return closeCallback_;
+  }
+
  private:
   void addDetails(std::stringstream& /* stream */) const override {}
 
   std::vector<core::PlanNodePtr> sources_;
   std::shared_ptr<ExternalBlocker> externalBlocker_;
+  std::function<void()> closeCallback_;
 };
 
 class TestExternalBlockableOperator : public exec::Operator {
@@ -336,7 +356,8 @@ class TestExternalBlockableOperator : public exec::Operator {
             operatorId,
             node->id(),
             "ExternalBlockable"),
-        externalBlocker_(node->externalBlocker()) {}
+        externalBlocker_(node->externalBlocker()),
+        closeCallback_(node->closeCallback()) {}
 
   bool needsInput() const override {
     return !noMoreInput_;
@@ -369,9 +390,17 @@ class TestExternalBlockableOperator : public exec::Operator {
     return noMoreInput_;
   }
 
+  void close() override {
+    Operator::close();
+    if (closeCallback_) {
+      closeCallback_();
+    }
+  }
+
  private:
   RowVectorPtr input_;
   ExternalBlocker* externalBlocker_;
+  const std::function<void()> closeCallback_;
   ContinueFuture continueFuture_{ContinueFuture::makeEmpty()};
 };
 
@@ -514,10 +543,127 @@ class TestShouldYieldOperator : public exec::Operator {
   bool shouldYieldResult_{false};
 };
 
+// Hooks invoked by TestExchangeClient's control-plane methods.
+struct TestExchangeClientCallbacks {
+  std::function<void(std::string_view remoteTaskId)> onAddRemoteTaskId{};
+  std::function<void()> onNoMoreRemoteTasks{};
+  std::function<void()> onClose{};
+};
+
+class TestExchangeClient : public ExchangeClient {
+ public:
+  explicit TestExchangeClient(TestExchangeClientCallbacks callbacks = {})
+      : callbacks_{std::move(callbacks)} {}
+
+  void addRemoteTaskId(std::string_view remoteTaskId) override {
+    if (callbacks_.onAddRemoteTaskId != nullptr) {
+      callbacks_.onAddRemoteTaskId(remoteTaskId);
+    }
+  }
+
+  void noMoreRemoteTasks() override {
+    if (callbacks_.onNoMoreRemoteTasks != nullptr) {
+      callbacks_.onNoMoreRemoteTasks();
+    }
+  }
+
+  void close() override {
+    if (callbacks_.onClose != nullptr) {
+      callbacks_.onClose();
+    }
+  }
+
+  folly::F14FastMap<std::string, RuntimeMetric> stats() const override {
+    return {};
+  }
+
+  std::string toString() const override {
+    return "test";
+  }
+
+  folly::dynamic toJson() const override {
+    return folly::dynamic::object;
+  }
+
+ private:
+  TestExchangeClientCallbacks callbacks_;
+};
+
+class TestExchangeOperator : public SourceOperator {
+ public:
+  TestExchangeOperator(
+      int32_t operatorId,
+      DriverCtx* driverCtx,
+      const std::shared_ptr<const core::ExchangeNode>& node)
+      : SourceOperator(
+            driverCtx,
+            node->outputType(),
+            operatorId,
+            node->id(),
+            "TestExchange") {}
+
+  RowVectorPtr getOutput() override {
+    return nullptr;
+  }
+
+  BlockingReason isBlocked(ContinueFuture* future) override {
+    if (!future_.valid()) {
+      return BlockingReason::kNotBlocked;
+    }
+    *future = std::move(future_);
+    return BlockingReason::kWaitForProducer;
+  }
+
+  bool isFinished() override {
+    return false;
+  }
+
+  void close() override {
+    if (!promise_.isFulfilled()) {
+      promise_.setValue();
+    }
+    SourceOperator::close();
+  }
+
+ private:
+  ContinuePromise promise_{"TestExchangeOperator"};
+  ContinueFuture future_{promise_.getSemiFuture()};
+};
+
+struct TestExchangeTransportState {
+  std::weak_ptr<Task> task;
+  bool clientFactoryCalledWithTaskMutex{false};
+  TestExchangeClient* clientFromFactory{nullptr};
+  TestExchangeClient* clientInOperator{nullptr};
+};
+
 } // namespace
 
 class TaskTest : public HiveConnectorTestBase {
  protected:
+  std::shared_ptr<Task> createTaskWithSpillDirectory(
+      const std::string& spillDirectory) {
+    auto data = makeRowVector({makeFlatVector<int32_t>({1})});
+    return Task::create(
+        "spill-directory-lifecycle",
+        PlanBuilder().values(data).planFragment(),
+        0,
+        core::QueryCtx::create(driverExecutor_.get()),
+        Task::ExecutionMode::kParallel,
+        [](RowVectorPtr, bool, ContinueFuture*) {
+          return BlockingReason::kNotBlocked;
+        },
+        0,
+        common::SpillDiskOptions{
+            .spillDirPath = spillDirectory,
+            .spillDirCreated = false,
+            .spillDirCreateCb = [spillDirectory]() {
+              auto fs = filesystems::getFileSystem(spillDirectory, nullptr);
+              fs->mkdir(spillDirectory);
+              return spillDirectory;
+            }});
+  }
+
   static std::pair<std::shared_ptr<exec::Task>, std::vector<RowVectorPtr>>
   executeSerial(
       core::PlanFragment plan,
@@ -556,13 +702,12 @@ class TaskTest : public HiveConnectorTestBase {
       numRows += result->size();
     }
 
-    VELOX_CHECK(waitForTaskCompletion(task.get()));
+    VELOX_CHECK(TaskMonitor::waitForCompletion(*task));
 
-    auto planNodeStats = toPlanStats(task->taskStats());
-    VELOX_CHECK(planNodeStats.count(plan.planNode->id()));
-    VELOX_CHECK_EQ(numRows, planNodeStats.at(plan.planNode->id()).outputRows);
-    VELOX_CHECK_EQ(
-        results.size(), planNodeStats.at(plan.planNode->id()).outputVectors);
+    const auto stats =
+        PlanNodeStats::extract(task->taskStats(), plan.planNode->id());
+    VELOX_CHECK_EQ(numRows, stats.outputRows);
+    VELOX_CHECK_EQ(results.size(), stats.outputVectors);
 
     return {task, results};
   }
@@ -591,7 +736,7 @@ TEST_F(TaskTest, toJson) {
       "\n}");
   ASSERT_EQ(
       folly::toPrettyJson(task->toJson()),
-      "{\n  \"concurrentSplitGroups\": 1,\n  \"drivers\": {},\n  \"exchangeClientByPlanNode\": {},\n  \"groupedPartitionedOutput\": false,\n  \"id\": \"task-1\",\n  \"noMoreOutputBuffers\": false,\n  \"numDriversPerSplitGroup\": 0,\n  \"numDriversUngrouped\": 0,\n  \"numFinishedDrivers\": 0,\n  \"numRunningDrivers\": 0,\n  \"numRunningSplitGroups\": 0,\n  \"numThreads\": 0,\n  \"numTotalDrivers\": 0,\n  \"onThreadSince\": \"0\",\n  \"partitionedOutputConsumed\": false,\n  \"pauseRequested\": false,\n  \"plan\": \"-- Project[1][expressions: (p0:INTEGER, multiply(ROW[\\\"a\\\"],ROW[\\\"a\\\"])), (p1:DOUBLE, plus(ROW[\\\"b\\\"],ROW[\\\"b\\\"]))] -> p0:INTEGER, p1:DOUBLE\\n  -- TableScan[0][table: hive_table] -> a:INTEGER, b:DOUBLE\\n\",\n  \"shortId\": \"task-1\",\n  \"state\": \"Running\",\n  \"terminateRequested\": false\n}");
+      "{\n  \"concurrentSplitGroups\": 1,\n  \"drivers\": {},\n  \"exchangeClientByPlanNode\": {},\n  \"groupedPartitionedOutput\": false,\n  \"id\": \"task-1\",\n  \"noMoreOutputBuffers\": false,\n  \"numDriversPerSplitGroup\": 0,\n  \"numDriversUngrouped\": 0,\n  \"numFinishedDrivers\": 0,\n  \"numRunningDrivers\": 0,\n  \"numRunningSplitGroups\": 0,\n  \"numThreads\": 0,\n  \"numTotalDrivers\": 0,\n  \"onThreadUs\": 0,\n  \"partitionedOutputConsumed\": false,\n  \"pauseRequested\": false,\n  \"plan\": \"-- Project[1][expressions: (p0:INTEGER, multiply(ROW[\\\"a\\\"],ROW[\\\"a\\\"])), (p1:DOUBLE, plus(ROW[\\\"b\\\"],ROW[\\\"b\\\"]))] -> p0:INTEGER, p1:DOUBLE\\n  -- TableScan[0][table: hive_table] -> a:INTEGER, b:DOUBLE\\n\",\n  \"shortId\": \"task-1\",\n  \"state\": \"Running\",\n  \"terminateRequested\": false\n}");
   ASSERT_EQ(
       folly::toPrettyJson(task->toShortJson()),
       "{\n  \"id\": \"task-1\",\n  \"numFinishedDrivers\": 0,\n  \"numRunningDrivers\": 0,\n  \"numThreads\": 0,\n  \"numTotalDrivers\": 0,\n  \"pauseRequested\": false,\n  \"shortId\": \"task-1\",\n  \"state\": \"Running\",\n  \"terminateRequested\": false\n}");
@@ -602,7 +747,7 @@ TEST_F(TaskTest, toJson) {
   ASSERT_NO_THROW(task->toShortJson());
 
   task->noMoreSplits("0");
-  waitForTaskCompletion(task.get());
+  TaskMonitor::waitForCompletion(*task);
 
   ASSERT_NO_THROW(task->toJson());
   ASSERT_NO_THROW(task->toShortJson());
@@ -623,7 +768,7 @@ TEST_F(TaskTest, createdCount) {
       Task::ExecutionMode::kParallel);
   task->start(2);
   task->noMoreSplits("0");
-  waitForTaskCompletion(task.get());
+  TaskMonitor::waitForCompletion(*task);
   ASSERT_EQ(Task::numCreatedTasks(), createdCount + 1);
 }
 
@@ -633,11 +778,10 @@ TEST_F(TaskTest, stateChangeFutureOnSplitQueueDrain) {
   // before the task starves. Serial next() requires noMoreSplits up front,
   // which would gate the notification, so exercise the consume path directly.
   auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  auto filePath = writeToFile(data);
   auto task = Task::create(
       "task-1",
-      PlanBuilder().tableScan(asRowType(data->type())).planFragment(),
+      PlanBuilder().tableScan(data->rowType()).planFragment(),
       0,
       core::QueryCtx::create(),
       Task::ExecutionMode::kSerial,
@@ -671,11 +815,10 @@ TEST_F(TaskTest, stateChangeFutureNotFiredWhenNoMoreSplits) {
   // split queue carries no actionable signal and does not resolve
   // stateChangeFuture.
   auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  auto filePath = writeToFile(data);
   auto task = Task::create(
       "task-1",
-      PlanBuilder().tableScan(asRowType(data->type())).planFragment(),
+      PlanBuilder().tableScan(data->rowType()).planFragment(),
       0,
       core::QueryCtx::create(),
       Task::ExecutionMode::kSerial,
@@ -729,8 +872,17 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
   // Add split for the source node.
   task->addSplit("0", exec::Split(folly::copy(connectorSplit)));
 
-  // Add an empty split.
-  task->addSplit("0", exec::Split());
+  VELOX_ASSERT_THROW(
+      task->addSplit("0", exec::Split{}), "Cannot add an empty split");
+  VELOX_ASSERT_THROW(
+      task->addSplitWithSequence("0", exec::Split{}, 3),
+      "Cannot add an empty split");
+  const auto stats = task->taskStats();
+  EXPECT_EQ(stats.numTotalSplits, 1);
+  EXPECT_EQ(stats.numQueuedSplits, 1);
+  EXPECT_EQ(stats.numQueuedTableScanSplits, 1);
+  EXPECT_EQ(stats.numRunningSplits, 0);
+  EXPECT_EQ(stats.numAbandonedSplits, 0);
 
   // Try to add split for a non-source node.
   auto errorMessage =
@@ -768,6 +920,8 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
 
   VELOX_ASSERT_THROW(task->noMoreSplitsForGroup("12", 5), errorMessage)
 
+  EXPECT_NO_THROW(task->addSplit("0", exec::Split::createBarrier()));
+
   // Try to add split for a Values source node.
   plan =
       PlanBuilder()
@@ -787,6 +941,583 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
   VELOX_ASSERT_THROW(
       valuesTask->addSplit("0", exec::Split(folly::copy(connectorSplit))),
       errorMessage)
+}
+
+TEST_F(TaskTest, errorsOnUnregisteredExchangeTransport) {
+  // Do not silently fall back when the requested transport is unavailable.
+  const std::string transportKind{"ucx-unregistered"};
+  ASSERT_EQ(ExchangeTransportRegistry::tryGet(transportKind), nullptr);
+
+  auto plan = PlanBuilder()
+                  .exchange(ROW("a", BIGINT()), "Presto", transportKind)
+                  .planFragment();
+
+  auto task = Task::create(
+      "task-exchange-transport-unregistered",
+      std::move(plan),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  VELOX_ASSERT_USER_THROW(
+      task->start(1, 1),
+      "No exchange client registered for transport 'ucx-unregistered'");
+  // Count planned drivers as finished when startup fails before creating any.
+  ASSERT_GT(task->numTotalDrivers(), 0);
+  EXPECT_EQ(task->numFinishedDrivers(), task->numTotalDrivers());
+}
+
+TEST_F(TaskTest, customExchangeTransportLifecycle) {
+  const std::string transportKind{"test-exchange"};
+  auto queryRegistry = ExchangeTransportRegistry::create();
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  queryCtx->setRegistry(ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+
+  auto transportState = std::make_shared<TestExchangeTransportState>();
+  std::weak_ptr<TestExchangeTransportState> transportStateReference =
+      transportState;
+  bool transportStateAvailableOnNoMoreRemoteTasks{false};
+  bool transportStateAvailableOnLateSplit{false};
+  auto entry = ExchangeTransportEntry::make<TestExchangeClient>(
+      [transportState,
+       transportStateReference,
+       &transportStateAvailableOnNoMoreRemoteTasks,
+       &transportStateAvailableOnLateSplit](const ExchangeClientContext&) {
+        auto task = transportState->task.lock();
+        if (task != nullptr) {
+          std::thread mutexProbe([&] {
+            if (task->mutex().try_lock()) {
+              task->mutex().unlock();
+            } else {
+              transportState->clientFactoryCalledWithTaskMutex = true;
+            }
+          });
+          mutexProbe.join();
+        }
+        auto client =
+            std::make_shared<TestExchangeClient>(TestExchangeClientCallbacks{
+                .onAddRemoteTaskId =
+                    [transportStateReference,
+                     &transportStateAvailableOnLateSplit](
+                        std::string_view remoteTaskId) {
+                      if (remoteTaskId == "late-remote-task") {
+                        transportStateAvailableOnLateSplit =
+                            !transportStateReference.expired();
+                      }
+                    },
+                .onNoMoreRemoteTasks =
+                    [transportStateReference,
+                     &transportStateAvailableOnNoMoreRemoteTasks] {
+                      transportStateAvailableOnNoMoreRemoteTasks =
+                          !transportStateReference.expired();
+                    },
+            });
+        transportState->clientFromFactory = client.get();
+        return client;
+      },
+      [transportState](
+          int32_t operatorId,
+          DriverCtx* ctx,
+          const std::shared_ptr<const core::ExchangeNode>& node,
+          const std::shared_ptr<TestExchangeClient>& client)
+          -> std::unique_ptr<Operator> {
+        transportState->clientInOperator = client.get();
+        return std::make_unique<TestExchangeOperator>(operatorId, ctx, node);
+      });
+  queryRegistry->insert(transportKind, entry);
+
+  auto plan = PlanBuilder()
+                  .exchange(ROW("a", BIGINT()), "Presto", transportKind)
+                  .planFragment();
+  const auto exchangeNodeId = plan.planNode->id();
+  auto task = Task::create(
+      "task-custom-exchange-transport",
+      std::move(plan),
+      0,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+  transportState->task = task;
+
+  task->start(1, 1);
+  task->addSplit(
+      exchangeNodeId,
+      exec::Split(std::make_shared<RemoteConnectorSplit>("remote-task")));
+  task->noMoreSplits(exchangeNodeId);
+
+  EXPECT_TRUE(transportState->clientFactoryCalledWithTaskMutex);
+  ASSERT_NE(transportState->clientFromFactory, nullptr);
+  EXPECT_EQ(
+      transportState->clientInOperator, transportState->clientFromFactory);
+
+  ASSERT_TRUE(queryRegistry->erase(transportKind));
+  entry.reset();
+  transportState.reset();
+  EXPECT_FALSE(transportStateReference.expired());
+
+  task->requestAbort().wait();
+  EXPECT_TRUE(transportStateAvailableOnNoMoreRemoteTasks);
+
+  // Retain the transport entry after termination so late splits can still use
+  // entry-owned state.
+  EXPECT_FALSE(transportStateReference.expired());
+  task->addSplit(
+      exchangeNodeId,
+      exec::Split(std::make_shared<RemoteConnectorSplit>("late-remote-task")));
+  EXPECT_TRUE(transportStateAvailableOnLateSplit);
+
+  task.reset();
+  TaskMonitor::waitForAllTasksDeleted();
+  EXPECT_TRUE(transportStateReference.expired());
+}
+
+TEST_F(TaskTest, customExchangeTransportMergeUsesTaskClient) {
+  // Give the merge builder its transport's Task-level client and retain that
+  // client for late splits.
+  const std::string transportKind{"test-merge-exchange"};
+  auto queryRegistry = ExchangeTransportRegistry::create();
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  queryCtx->setRegistry(ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+  TestExchangeClient* clientFromFactory{nullptr};
+  TestExchangeClient* clientInMergeBuilder{nullptr};
+  std::vector<std::string> remoteTaskIds;
+  queryRegistry->insert(
+      transportKind,
+      ExchangeTransportEntry::make<TestExchangeClient>(
+          [&](const ExchangeClientContext&) {
+            auto client = std::make_shared<TestExchangeClient>(
+                TestExchangeClientCallbacks{
+                    .onAddRemoteTaskId =
+                        [&remoteTaskIds](std::string_view remoteTaskId) {
+                          remoteTaskIds.emplace_back(remoteTaskId);
+                        },
+                });
+            clientFromFactory = client.get();
+            return client;
+          },
+          [](int32_t operatorId,
+             DriverCtx* ctx,
+             const std::shared_ptr<const core::ExchangeNode>& node,
+             const std::shared_ptr<TestExchangeClient>&)
+              -> std::unique_ptr<Operator> {
+            return std::make_unique<TestExchangeOperator>(
+                operatorId, ctx, node);
+          },
+          [&clientInMergeBuilder](
+              int32_t operatorId,
+              DriverCtx* ctx,
+              const std::shared_ptr<const core::ExchangeNode>& node,
+              const std::shared_ptr<TestExchangeClient>& client)
+              -> std::unique_ptr<Operator> {
+            clientInMergeBuilder = client.get();
+            return std::make_unique<TestExchangeOperator>(
+                operatorId, ctx, node);
+          }));
+
+  auto plan =
+      PlanBuilder()
+          .mergeExchange(ROW("a", BIGINT()), {"a"}, "Presto", transportKind)
+          .planFragment();
+  const auto mergeNodeId = plan.planNode->id();
+  auto task = Task::create(
+      "task-custom-merge-exchange",
+      std::move(plan),
+      0,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  task->start(1, 1);
+  ASSERT_NE(clientFromFactory, nullptr);
+  EXPECT_EQ(clientInMergeBuilder, clientFromFactory);
+
+  task->requestAbort().wait();
+  task->addSplit(
+      mergeNodeId,
+      exec::Split(std::make_shared<RemoteConnectorSplit>("late-remote-task")));
+  EXPECT_THAT(remoteTaskIds, ::testing::ElementsAre("late-remote-task"));
+}
+
+TEST_F(TaskTest, customExchangeTransportContext) {
+  // Task creates one client per pipeline, sized from the session config, and
+  // shares it among the pipeline's drivers.
+  const std::string transportKind{"test-exchange-context"};
+  auto queryRegistry = ExchangeTransportRegistry::create();
+  auto queryCtx = core::QueryCtx::create(
+      driverExecutor_.get(),
+      core::QueryConfig({
+          {core::QueryConfig::kMaxExchangeBufferSize, "12345678"},
+          {core::QueryConfig::kMinExchangeOutputBatchBytes, "4321"},
+      }));
+  queryCtx->setRegistry(ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+
+  // Copy observed fields because the context is valid only during the call.
+  struct ObservedContext {
+    std::string taskId;
+    int destination{-1};
+    int32_t numberOfConsumers{0};
+    uint64_t maxExchangeBufferSize{0};
+    uint64_t minExchangeOutputBatchBytes{0};
+    memory::MemoryPool* pool{nullptr};
+    folly::Executor* executor{nullptr};
+  };
+  ObservedContext observed;
+  int32_t numClientsCreated{0};
+  TestExchangeClient* clientFromFactory{nullptr};
+  std::vector<TestExchangeClient*> clientsInOperators;
+  queryRegistry->insert(
+      transportKind,
+      ExchangeTransportEntry::make<TestExchangeClient>(
+          [&](const ExchangeClientContext& context) {
+            ++numClientsCreated;
+            observed = {
+                .taskId = context.taskId,
+                .destination = context.destination,
+                .numberOfConsumers = context.numberOfConsumers,
+                .maxExchangeBufferSize = context.maxExchangeBufferSize,
+                .minExchangeOutputBatchBytes =
+                    context.minExchangeOutputBatchBytes,
+                .pool = context.pool,
+                .executor = context.executor,
+            };
+            auto client = std::make_shared<TestExchangeClient>();
+            clientFromFactory = client.get();
+            return client;
+          },
+          [&clientsInOperators](
+              int32_t operatorId,
+              DriverCtx* ctx,
+              const std::shared_ptr<const core::ExchangeNode>& node,
+              const std::shared_ptr<TestExchangeClient>& client)
+              -> std::unique_ptr<Operator> {
+            clientsInOperators.push_back(client.get());
+            return std::make_unique<TestExchangeOperator>(
+                operatorId, ctx, node);
+          }));
+
+  auto task = Task::create(
+      "task-exchange-context",
+      PlanBuilder()
+          .exchange(ROW("a", BIGINT()), "Presto", transportKind)
+          .planFragment(),
+      /*destination=*/2,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  task->start(3, 1);
+  EXPECT_EQ(numClientsCreated, 1);
+  EXPECT_THAT(
+      clientsInOperators,
+      ::testing::ElementsAre(
+          clientFromFactory, clientFromFactory, clientFromFactory));
+  EXPECT_EQ(observed.taskId, "task-exchange-context");
+  EXPECT_EQ(observed.destination, 2);
+  EXPECT_EQ(observed.numberOfConsumers, 3);
+  EXPECT_EQ(observed.maxExchangeBufferSize, 12'345'678);
+  EXPECT_EQ(observed.minExchangeOutputBatchBytes, 4'321);
+  EXPECT_NE(observed.pool, nullptr);
+  EXPECT_EQ(observed.executor, driverExecutor_.get());
+  task->requestAbort().wait();
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, abortDuringTaskStartupFinishesPlannedDrivers) {
+  // Aborting at either unlocked startup step must finish every planned driver
+  // and let start() return.
+  for (const std::string_view startupStep :
+       {"facebook::velox::exec::Task::initializePartitionOutput",
+        "facebook::velox::exec::Task::createAndStartDrivers"}) {
+    SCOPED_TRACE(startupStep);
+    auto task = Task::create(
+        "task-aborted-during-startup",
+        PlanBuilder().tableScan(ROW("c0", BIGINT())).planFragment(),
+        0,
+        core::QueryCtx::create(driverExecutor_.get()),
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
+
+    folly::Baton<> stepStarted;
+    folly::Baton<> continueStep;
+    Task* startingTask{nullptr};
+    SCOPED_TESTVALUE_SET(
+        std::string(startupStep), std::function<void(Task*)>([&](Task* task) {
+          startingTask = task;
+          stepStarted.post();
+          continueStep.wait();
+        }));
+
+    std::exception_ptr startError;
+    std::thread startThread([&] {
+      try {
+        task->start(4, 1);
+      } catch (...) {
+        startError = std::current_exception();
+      }
+    });
+    bool stepReleased{false};
+    SCOPE_EXIT {
+      if (!stepReleased) {
+        continueStep.post();
+      }
+      if (startThread.joinable()) {
+        startThread.join();
+      }
+    };
+
+    ASSERT_TRUE(stepStarted.try_wait_for(std::chrono::seconds(5)));
+    task->requestAbort().wait();
+    stepReleased = true;
+    continueStep.post();
+    startThread.join();
+
+    EXPECT_EQ(startingTask, task.get());
+    EXPECT_EQ(startError, nullptr);
+    EXPECT_EQ(task->numRunningDrivers(), 0);
+    ASSERT_GT(task->numTotalDrivers(), 0);
+    EXPECT_EQ(task->numFinishedDrivers(), task->numTotalDrivers());
+  }
+}
+
+DEBUG_ONLY_TEST_F(
+    TaskTest,
+    driverBuildFailureAfterEnqueueFinishesPlannedDrivers) {
+  // A driver build fails after other drivers were enqueued, optionally while
+  // another thread's error has not terminated the task yet. The finished count
+  // must reach the total once every driver has left.
+  for (const bool pendingError : {false, true}) {
+    SCOPED_TRACE(fmt::format("pendingError: {}", pendingError));
+    const std::string transportKind{"test-grouped-exchange"};
+    auto queryRegistry = ExchangeTransportRegistry::create();
+    auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+    queryCtx->setRegistry(
+        ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+    queryRegistry->insert(
+        transportKind,
+        ExchangeTransportEntry::make<TestExchangeClient>(
+            [](const ExchangeClientContext&) {
+              return std::make_shared<TestExchangeClient>();
+            },
+            [](int32_t operatorId,
+               DriverCtx* ctx,
+               const std::shared_ptr<const core::ExchangeNode>& node,
+               const std::shared_ptr<TestExchangeClient>&)
+                -> std::unique_ptr<Operator> {
+              return std::make_unique<TestExchangeOperator>(
+                  operatorId, ctx, node);
+            }));
+
+    // Grouped probe, ungrouped build. Split group 2 is planned but never seen,
+    // so the planned total (4) exceeds the one termination recomputes (3).
+    PlanBuilder builder;
+    core::PlanNodeId exchangeNodeId;
+    auto plan = builder.newPlan()
+                    .exchange(ROW("a", BIGINT()), "Presto", transportKind)
+                    .capturePlanNodeId(exchangeNodeId)
+                    .hashJoin(
+                        {"a"},
+                        {"b"},
+                        builder.newPlan()
+                            .values({makeNamedRowVector(
+                                "b", makeFlatVector<int64_t>({1}))})
+                            .planNode(),
+                        "",
+                        {"a"})
+                    .planFragment();
+    plan.executionStrategy = core::ExecutionStrategy::kGrouped;
+    plan.groupedExecutionLeafNodeIds.emplace(exchangeNodeId);
+    plan.numSplitGroups = 3;
+    auto task = Task::create(
+        "task-driver-build-failure-after-enqueue",
+        std::move(plan),
+        0,
+        queryCtx,
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
+    for (int32_t groupId = 0; groupId < 2; ++groupId) {
+      task->addSplit(
+          exchangeNodeId,
+          exec::Split(
+              std::make_shared<RemoteConnectorSplit>(
+                  "remote-task-" + std::to_string(groupId)),
+              groupId));
+    }
+
+    // Holds the other thread after it set its error and before it terminates
+    // the task.
+    const auto startThreadId = std::this_thread::get_id();
+    folly::Baton<> errorSet;
+    folly::Baton<> releaseError;
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Task::setError::terminate",
+        std::function<void(Task*)>([&](Task*) {
+          if (std::this_thread::get_id() != startThreadId) {
+            errorSet.post();
+            releaseError.wait();
+          }
+        }));
+    std::thread errorThread;
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Task::createAndStartDrivers",
+        std::function<void(Task*)>([&](Task* startingTask) {
+          if (pendingError) {
+            errorThread = std::thread([startingTask] {
+              startingTask->setError(
+                  std::make_exception_ptr(
+                      std::runtime_error("Concurrent error")));
+            });
+            errorSet.wait();
+          }
+        }));
+    // Builds run in order: ungrouped, split group 0, split group 1.
+    std::atomic_int32_t numDriverBuilds{0};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Task::createDriversLocked",
+        std::function<void(Task*)>([&](Task*) {
+          if (++numDriverBuilds == 3) {
+            VELOX_FAIL("Driver construction failed");
+          }
+        }));
+
+    VELOX_ASSERT_THROW(task->start(1, 2), "Driver construction failed");
+    releaseError.post();
+    if (errorThread.joinable()) {
+      errorThread.join();
+    }
+    // Completes once every driver has left its thread and been accounted.
+    task->requestAbort().wait();
+    EXPECT_EQ(numDriverBuilds, 3);
+    EXPECT_EQ(task->state(), TaskState::kFailed);
+    ASSERT_EQ(task->numTotalDrivers(), 3);
+    EXPECT_EQ(task->numFinishedDrivers(), task->numTotalDrivers());
+  }
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, groupedSplitDuringStartupWaitsForDrivers) {
+  // A grouped split received before driver-slot creation must wait and run
+  // afterward.
+  const std::string transportKind{"test-grouped-exchange"};
+  auto queryRegistry = ExchangeTransportRegistry::create();
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  queryCtx->setRegistry(ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+  std::atomic_int32_t numOperatorsBuilt{0};
+  queryRegistry->insert(
+      transportKind,
+      ExchangeTransportEntry::make<TestExchangeClient>(
+          [](const ExchangeClientContext&) {
+            return std::make_shared<TestExchangeClient>();
+          },
+          [&numOperatorsBuilt](
+              int32_t operatorId,
+              DriverCtx* ctx,
+              const std::shared_ptr<const core::ExchangeNode>& node,
+              const std::shared_ptr<TestExchangeClient>&)
+              -> std::unique_ptr<Operator> {
+            ++numOperatorsBuilt;
+            return std::make_unique<TestExchangeOperator>(
+                operatorId, ctx, node);
+          }));
+
+  auto plan = PlanBuilder()
+                  .exchange(ROW("a", BIGINT()), "Presto", transportKind)
+                  .planFragment();
+  const auto exchangeNodeId = plan.planNode->id();
+  plan.executionStrategy = core::ExecutionStrategy::kGrouped;
+  plan.groupedExecutionLeafNodeIds.emplace(exchangeNodeId);
+  plan.numSplitGroups = 1;
+  auto task = Task::create(
+      "task-grouped-split-during-startup",
+      std::move(plan),
+      0,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::initializePartitionOutput",
+      std::function<void(Task*)>([&](Task* startingTask) {
+        startingTask->addSplit(
+            exchangeNodeId,
+            exec::Split(
+                std::make_shared<RemoteConnectorSplit>("remote-task"),
+                /*groupId=*/0));
+      }));
+
+  task->start(1, 1);
+  EXPECT_EQ(numOperatorsBuilt, 1);
+  EXPECT_EQ(task->numRunningDrivers(), 1);
+  task->requestAbort().wait();
+}
+
+TEST_F(TaskTest, errorsOnNullExchangeOperator) {
+  const std::string transportKind{"null-operator-transport"};
+  auto queryRegistry = ExchangeTransportRegistry::create();
+  auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
+  queryCtx->setRegistry(ExchangeTransportRegistry::kRegistryKey, queryRegistry);
+  queryRegistry->insert(
+      transportKind,
+      ExchangeTransportEntry::make<TestExchangeClient>(
+          [](const ExchangeClientContext&) {
+            return std::make_shared<TestExchangeClient>();
+          },
+          [](int32_t,
+             DriverCtx*,
+             const std::shared_ptr<const core::ExchangeNode>&,
+             const std::shared_ptr<TestExchangeClient>&)
+              -> std::unique_ptr<Operator> { return nullptr; }));
+
+  auto task = Task::create(
+      "task-null-exchange-operator",
+      PlanBuilder()
+          .exchange(ROW("a", BIGINT()), "Presto", transportKind)
+          .planFragment(),
+      0,
+      queryCtx,
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  VELOX_ASSERT_THROW(
+      task->start(1, 1), "Exchange transport built no operator for plan node");
+}
+
+TEST_F(TaskTest, errorsOnExchangeTransportWithoutMergeSupport) {
+  // Missing merge support must not fall back to another transport.
+  const std::string transportKind{"no-merge-transport"};
+  ExchangeTransportRegistry::global().insert(
+      transportKind,
+      ExchangeTransportEntry::make<TestExchangeClient>(
+          [](const ExchangeClientContext&) {
+            return std::make_shared<TestExchangeClient>();
+          },
+          [](int32_t operatorId,
+             DriverCtx* ctx,
+             const std::shared_ptr<const core::ExchangeNode>& node,
+             const std::shared_ptr<TestExchangeClient>&)
+              -> std::unique_ptr<Operator> {
+            return std::make_unique<TestExchangeOperator>(
+                operatorId, ctx, node);
+          }),
+      /*overwrite=*/true);
+  SCOPE_EXIT {
+    ExchangeTransportRegistry::global().erase(transportKind);
+  };
+
+  auto plan =
+      PlanBuilder()
+          .mergeExchange(ROW("a", BIGINT()), {"a"}, "Presto", transportKind)
+          .planFragment();
+
+  auto task = Task::create(
+      "task-exchange-transport-without-merge",
+      std::move(plan),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel,
+      exec::Consumer{});
+
+  VELOX_ASSERT_USER_THROW(
+      task->start(1, 1),
+      "Exchange transport does not support merge exchange: no-merge-transport");
 }
 
 TEST_F(TaskTest, duplicatePlanNodeIds) {
@@ -831,41 +1562,36 @@ TEST_F(TaskTest, concurrentSplitGroups) {
     ASSERT_EQ(task->concurrentSplitGroups(), expectedGroups);
 
     task->requestCancel();
-    waitForTaskCompletion(task.get());
+    TaskMonitor::waitForCompletion(*task);
   }
 }
 
 TEST_F(TaskTest, allSplitsConsumedMultipleSources) {
   // Create data for all sources
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(100, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(100)});
 
   // Create temp files for each data source
-  auto filePath1 = TempFilePath::create();
-  auto filePath2 = TempFilePath::create();
-  auto filePath3 = TempFilePath::create();
 
-  writeToFile(filePath1->getPath(), {data});
-  writeToFile(filePath2->getPath(), {data});
-  writeToFile(filePath3->getPath(), {data});
+  auto filePath1 = writeToFile(data);
+  auto filePath2 = writeToFile(data);
+  auto filePath3 = writeToFile(data);
 
   // Create a plan with two joins and three source nodes
   core::PlanNodeId scanNodeId1;
   core::PlanNodeId scanNodeId2;
   core::PlanNodeId scanNodeId3;
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(asRowType(data->type()))
+  auto plan = builder.newPlan()
+                  .tableScan(data->rowType())
                   .capturePlanNodeId(scanNodeId1)
                   .project({"c0 as t0"})
                   .hashJoin(
                       {"t0"},
                       {"c0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .tableScan(asRowType(data->type()))
+                      builder.newPlan()
+                          .tableScan(data->rowType())
                           .capturePlanNodeId(scanNodeId2)
                           .planNode(),
                       "",
@@ -874,8 +1600,8 @@ TEST_F(TaskTest, allSplitsConsumedMultipleSources) {
                   .hashJoin(
                       {"u0"},
                       {"c0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .tableScan(asRowType(data->type()))
+                      builder.newPlan()
+                          .tableScan(data->rowType())
                           .capturePlanNodeId(scanNodeId3)
                           .planNode(),
                       "",
@@ -920,7 +1646,7 @@ TEST_F(TaskTest, allSplitsConsumedMultipleSources) {
   ASSERT_FALSE(task->allSplitsConsumed(task->planFragment().planNode.get()));
 
   task->noMoreSplits(scanNodeId3);
-  waitForTaskCompletion(task.get());
+  TaskMonitor::waitForCompletion(*task);
 
   ASSERT_TRUE(task->allSplitsConsumed(task->planFragment().planNode.get()));
 
@@ -930,11 +1656,9 @@ TEST_F(TaskTest, allSplitsConsumedMultipleSources) {
 
 TEST_F(TaskTest, hasMixedExecutionGroupJoin) {
   // Create data for all sources
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(100, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(100)});
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
   // Create a plan with two joins and three source nodes. One mixed grouped mode
   // join and one non mixed grouped mode join.
@@ -944,15 +1668,15 @@ TEST_F(TaskTest, hasMixedExecutionGroupJoin) {
   core::PlanNodePtr mixedGroupedModeJoinNode;
   core::PlanNodePtr nonMixedGroupedModeJoinNode;
 
-  auto planFragment = PlanBuilder(planNodeIdGenerator)
-                          .tableScan(asRowType(data->type()))
+  auto planFragment = builder.newPlan()
+                          .tableScan(data->rowType())
                           .capturePlanNodeId(groupedScanNodeId1)
                           .project({"c0 as t0"})
                           .hashJoin(
                               {"t0"},
                               {"c0"},
-                              PlanBuilder(planNodeIdGenerator)
-                                  .tableScan(asRowType(data->type()))
+                              builder.newPlan()
+                                  .tableScan(data->rowType())
                                   .capturePlanNodeId(groupedScanNodeId2)
                                   .planNode(),
                               "",
@@ -962,8 +1686,8 @@ TEST_F(TaskTest, hasMixedExecutionGroupJoin) {
                           .hashJoin(
                               {"u0"},
                               {"c0"},
-                              PlanBuilder(planNodeIdGenerator)
-                                  .tableScan(asRowType(data->type()))
+                              builder.newPlan()
+                                  .tableScan(data->rowType())
                                   .capturePlanNodeId(ungroupedScanNodeId1)
                                   .planNode(),
                               "",
@@ -1015,21 +1739,17 @@ TEST_F(TaskTest, testTerminateDeadlock) {
   exec::Operator::registerOperator(
       std::make_unique<TestSkewedJoinBridgeTranslator>());
 
-  auto leftBatch = makeRowVector(
-      {makeFlatVector<int32_t>(100, [](auto row) { return row; })});
-  auto rightBatch = makeRowVector(
-      {makeFlatVector<int32_t>(10, [](auto row) { return row; })});
+  auto leftBatch = makeRowVector({makeFlatIdentityVector<int32_t>(100)});
+  auto rightBatch = makeRowVector({makeFlatIdentityVector<int32_t>(10)});
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto leftNode =
-      PlanBuilder(planNodeIdGenerator).values({leftBatch}, true).planNode();
-  auto rightNode =
-      PlanBuilder(planNodeIdGenerator).values({rightBatch}, true).planNode();
+  PlanBuilder builder;
+  auto leftNode = builder.newPlan().values({leftBatch}, true).planNode();
+  auto rightNode = builder.newPlan().values({rightBatch}, true).planNode();
 
   CursorParameters params;
   params.maxDrivers = 2;
   params.planNode =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .addNode([&leftNode, &rightNode, &kSlowJoinBuildDelaySeconds](
                        std::string id, core::PlanNodePtr /* input */) {
             return std::make_shared<TestSkewedJoinNode>(
@@ -1069,9 +1789,7 @@ TEST_F(TaskTest, testTerminateDeadlock) {
 }
 
 TEST_F(TaskTest, serialExecution) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
 
   // Filter + Project.
   auto plan = PlanBuilder()
@@ -1119,12 +1837,11 @@ TEST_F(TaskTest, serialExecution) {
   }
 
   // Project + Aggregation over TableScan.
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data, data});
+  auto filePath = writeToFile(std::vector{data, data});
 
   core::PlanNodeId scanId;
   plan = PlanBuilder()
-             .tableScan(asRowType(data->type()))
+             .tableScan(data->rowType())
              .capturePlanNodeId(scanId)
              .project({"c0 % 5 as k", "c0"})
              .singleAggregation({"k"}, {"sum(c0)", "avg(c0)"})
@@ -1142,9 +1859,7 @@ TEST_F(TaskTest, serialExecution) {
 }
 
 TEST_F(TaskTest, serialExecutionOutputPool) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(10, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(10)});
 
   auto outputPool =
       memory::memoryManager()->addLeafPool("serialExecutionOutputPool");
@@ -1152,7 +1867,7 @@ TEST_F(TaskTest, serialExecutionOutputPool) {
   CursorParameters params;
   params.serialExecution = true;
   params.outputPool = outputPool;
-  params.planNode = PlanBuilder().values({data}).planNode();
+  params.planNode = PlanBuilder().values(data).planNode();
 
   auto cursor = TaskCursor::create(params);
   ASSERT_TRUE(cursor->moveNext());
@@ -1160,9 +1875,7 @@ TEST_F(TaskTest, serialExecutionOutputPool) {
 }
 
 TEST_F(TaskTest, serialExecutionOutputPoolZeroCopy) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(10, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(10)});
 
   auto outputPool =
       memory::memoryManager()->addLeafPool("serialExecutionOutputPoolZeroCopy");
@@ -1171,7 +1884,7 @@ TEST_F(TaskTest, serialExecutionOutputPoolZeroCopy) {
   params.serialExecution = true;
   params.outputPool = outputPool;
   params.copyResult = false;
-  params.planNode = PlanBuilder().values({data}).planNode();
+  params.planNode = PlanBuilder().values(data).planNode();
 
   auto cursor = TaskCursor::create(params);
   ASSERT_TRUE(cursor->moveNext());
@@ -1180,9 +1893,7 @@ TEST_F(TaskTest, serialExecutionOutputPoolZeroCopy) {
 
 // The purpose of the test is to check the running task list APIs.
 TEST_F(TaskTest, runningTaskList) {
-  const auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  const auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
 
   ASSERT_EQ(Task::numRunningTasks(), 0);
   ASSERT_TRUE(Task::getRunningTasks().empty());
@@ -1244,28 +1955,26 @@ TEST_F(TaskTest, serialHashJoin) {
           makeFlatVector<int64_t>({1, 2, 3, 4}),
           makeFlatVector<int64_t>({10, 20, 30, 40}),
       });
-  auto leftPath = TempFilePath::create();
-  writeToFile(leftPath->getPath(), {left});
+  auto leftPath = writeToFile(left);
 
   auto right = makeRowVector(
       {"u_c0"},
       {
           makeFlatVector<int64_t>({0, 1, 3, 5}),
       });
-  auto rightPath = TempFilePath::create();
-  writeToFile(rightPath->getPath(), {right});
+  auto rightPath = writeToFile(right);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId leftScanId;
   core::PlanNodeId rightScanId;
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(asRowType(left->type()))
+  auto plan = builder.newPlan()
+                  .tableScan(left->rowType())
                   .capturePlanNodeId(leftScanId)
                   .hashJoin(
                       {"t_c0"},
                       {"u_c0"},
-                      PlanBuilder(planNodeIdGenerator)
-                          .tableScan(asRowType(right->type()))
+                      builder.newPlan()
+                          .tableScan(right->rowType())
                           .capturePlanNodeId(rightScanId)
                           .planNode(),
                       "",
@@ -1288,23 +1997,21 @@ TEST_F(TaskTest, serialHashJoin) {
 }
 
 TEST_F(TaskTest, serialCrossJoin) {
-  auto left = makeRowVector({"t_c0"}, {makeFlatVector<int64_t>({1, 2, 3})});
-  auto leftPath = TempFilePath::create();
-  writeToFile(leftPath->getPath(), {left});
+  auto left = makeNamedRowVector("t_c0", makeFlatVector<int64_t>({1, 2, 3}));
+  auto leftPath = writeToFile(left);
 
-  auto right = makeRowVector({"u_c0"}, {makeFlatVector<int64_t>({10, 20})});
-  auto rightPath = TempFilePath::create();
-  writeToFile(rightPath->getPath(), {right});
+  auto right = makeNamedRowVector("u_c0", makeFlatVector<int64_t>({10, 20}));
+  auto rightPath = writeToFile(right);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId leftScanId;
   core::PlanNodeId rightScanId;
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .tableScan(asRowType(left->type()))
+  auto plan = builder.newPlan()
+                  .tableScan(left->rowType())
                   .capturePlanNodeId(leftScanId)
                   .nestedLoopJoin(
-                      PlanBuilder(planNodeIdGenerator)
-                          .tableScan(asRowType(right->type()))
+                      builder.newPlan()
+                          .tableScan(right->rowType())
                           .capturePlanNodeId(rightScanId)
                           .planNode(),
                       {"t_c0", "u_c0"})
@@ -1328,9 +2035,7 @@ TEST_F(TaskTest, serialCrossJoin) {
 TEST_F(TaskTest, serialExecutionExternalBlockable) {
   exec::Operator::registerOperator(
       std::make_unique<TestExternalBlockableTranslator>());
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
   auto blocker = std::make_shared<ExternalBlocker>();
   core::PlanNodeId blockerNodeId;
   // Filter + Project.
@@ -1366,8 +2071,8 @@ TEST_F(TaskTest, serialExecutionExternalBlockable) {
   }
   EXPECT_EQ(3, results.size());
   {
-    auto planStats = toPlanStats(nonBlockingTask->taskStats());
-    auto& blockerNodeStats = planStats.at(blockerNodeId);
+    const auto blockerNodeStats =
+        PlanNodeStats::extract(nonBlockingTask->taskStats(), blockerNodeId);
     ASSERT_EQ(blockerNodeStats.blockedWallNanos, 0);
   }
   return;
@@ -1406,8 +2111,8 @@ TEST_F(TaskTest, serialExecutionExternalBlockable) {
   }
   EXPECT_EQ(3, results.size());
   {
-    auto planStats = toPlanStats(blockingTask->taskStats());
-    auto& blockerNodeStats = planStats.at(blockerNodeId);
+    const auto blockerNodeStats =
+        PlanNodeStats::extract(blockingTask->taskStats(), blockerNodeId);
     ASSERT_GT(blockerNodeStats.blockedWallNanos, 0);
   }
 }
@@ -1479,6 +2184,48 @@ TEST_F(TaskTest, updateBroadCastOutputBuffers) {
   }
 }
 
+TEST_F(TaskTest, executionEndsBeforeOutputIsConsumed) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({0, 1, 10})});
+  CursorParameters params;
+  params.planNode =
+      PlanBuilder().values(data).partitionedOutput({}, 1).planNode();
+  params.queryCtx = core::QueryCtx::create(executor_.get());
+  auto cursor = TaskCursor::create(params);
+  auto task = cursor->task();
+  // Drive execution to completion without fetching the partitioned output.
+  while (cursor->moveNext()) {
+  }
+
+  // The cursor queue can close before the producing driver unregisters.
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds{5};
+  while (task->taskStats().numCompletedDrivers == 0 &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds{1});
+  }
+  const auto produced = task->taskStats();
+  EXPECT_EQ(produced.numCompletedDrivers, produced.numTotalDrivers);
+  EXPECT_GT(produced.executionEndTimeMs, 0);
+  EXPECT_EQ(produced.endTimeMs, 0);
+  EXPECT_EQ(produced.terminationTimeMs, 0);
+  EXPECT_TRUE(task->isRunning());
+  EXPECT_TRUE(produced.outputBufferStats.has_value());
+  if (produced.outputBufferStats) {
+    EXPECT_GT(produced.outputBufferStats->bufferedBytes, 0);
+  }
+
+  // Delay the consumer after production, then release the destination as the
+  // exchange client does when it finishes consuming results.
+  std::this_thread::sleep_for(std::chrono::milliseconds{20});
+  DefaultOutputBufferManager::getInstanceRef()->deleteResults(
+      task->taskId(), 0);
+  EXPECT_TRUE(TaskMonitor::waitForCompletion(*task));
+  const auto consumed = task->taskStats();
+  EXPECT_EQ(consumed.executionEndTimeMs, produced.executionEndTimeMs);
+  EXPECT_GE(consumed.endTimeMs, produced.executionEndTimeMs + 20);
+  EXPECT_GE(consumed.terminationTimeMs, consumed.endTimeMs);
+}
+
 TEST_F(TaskTest, taskStatsPreserveFinalOutputBufferStats) {
   constexpr int32_t numBatches = 10;
   std::vector<RowVectorPtr> dataBatches;
@@ -1500,7 +2247,7 @@ TEST_F(TaskTest, taskStatsPreserveFinalOutputBufferStats) {
   }
 
   task->requestCancel();
-  waitForTaskCompletion(task);
+  TaskMonitor::waitForCompletion(*task);
 
   const auto taskStats = task->taskStats();
   ASSERT_TRUE(taskStats.outputBufferStats.has_value());
@@ -1522,12 +2269,11 @@ DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
 
   // Create a query plan fragment with one input pipeline and one output
   // pipeline and both have only one driver.
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto plan =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .localMerge(
-              {"c0"},
-              {PlanBuilder(planNodeIdGenerator).values(dataBatches).planNode()})
+              {"c0"}, {builder.newPlan().values(dataBatches).planNode()})
           .limit(0, 1, false)
           .planNode();
 
@@ -1583,12 +2329,13 @@ DEBUG_ONLY_TEST_F(TaskTest, outputDriverFinishEarly) {
     while (cursor->moveNext()) {
       result.push_back(cursor->current());
     }
-    assertResults(
-        result,
+    velox::test::VectorAssertions::equalMultisets(
+        duckDbQueryRunner_.execute("VALUES (0)", params.planNode->outputType()),
         params.planNode->outputType(),
-        "VALUES (0)",
-        duckDbQueryRunner_);
-    ASSERT_TRUE(waitForTaskStateChange(task, TaskState::kFinished, 3'000'000));
+        result);
+    ASSERT_TRUE(
+        TaskMonitor::waitForStateChange(
+            *task, TaskState::kFinished, 3'000'000));
     ASSERT_FALSE(task->getCancellationToken().isCancellationRequested());
   }
   valuePromise.setValue();
@@ -1605,8 +2352,7 @@ DEBUG_ONLY_TEST_F(TaskTest, liveStats) {
     dataBatches.push_back(makeRowVector({makeFlatVector<int64_t>({0, 1, 10})}));
   }
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator).values(dataBatches).planNode();
+  auto plan = PlanBuilder().values(dataBatches).planNode();
 
   Task* task = nullptr;
   std::array<TaskStats, numBatches + 1> liveStats; // [0, 10].
@@ -1629,7 +2375,7 @@ DEBUG_ONLY_TEST_F(TaskTest, liveStats) {
   while (cursor->moveNext()) {
     result.push_back(cursor->current());
   }
-  EXPECT_TRUE(waitForTaskCompletion(task)) << task->taskId();
+  EXPECT_TRUE(TaskMonitor::waitForCompletion(*task)) << task->taskId();
 
   TaskStats finishStats = task->taskStats();
 
@@ -1702,11 +2448,8 @@ TEST_F(TaskTest, outputBufferSize) {
     dataBatches.push_back(makeRowVector({makeFlatVector<int64_t>({0, 1, 10})}));
   }
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator)
-                  .values(dataBatches)
-                  .partitionedOutput({}, 1)
-                  .planNode();
+  auto plan =
+      PlanBuilder().values(dataBatches).partitionedOutput({}, 1).planNode();
 
   CursorParameters params;
   params.planNode = plan;
@@ -1752,9 +2495,7 @@ DEBUG_ONLY_TEST_F(TaskTest, inconsistentExecutionMode) {
         std::function<void(Values*)>([&](Values* /*unused*/) {
           getOutputWait.await([&]() { return getOutputWaitFlag.load(); });
         }));
-    auto data = makeRowVector({
-        makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-    });
+    auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
 
     CursorParameters params;
     params.planNode =
@@ -1771,16 +2512,14 @@ DEBUG_ONLY_TEST_F(TaskTest, inconsistentExecutionMode) {
     getOutputWait.notify();
     while (cursor->moveNext()) {
     }
-    waitForTaskCompletion(task);
+    TaskMonitor::waitForCompletion(*task);
   }
 
   {
     // Scenario 2: Serial execution starts first then kicks in Parallel
     // execution mode.
 
-    auto data = makeRowVector({
-        makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-    });
+    auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
     auto plan =
         PlanBuilder().values({data, data, data}).project({"c0"}).planFragment();
     auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
@@ -1816,19 +2555,18 @@ DEBUG_ONLY_TEST_F(TaskTest, findPeerOperators) {
   const std::vector<int> numDrivers = {1, 4};
   for (int numDriver : numDrivers) {
     SCOPED_TRACE(fmt::format("numDriver {}", numDriver));
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    PlanBuilder builder;
     CursorParameters params;
-    params.planNode = PlanBuilder(planNodeIdGenerator)
-                          .values(probeVectors, true)
-                          .hashJoin(
-                              {"t_c0"},
-                              {"u_c0"},
-                              PlanBuilder(planNodeIdGenerator)
-                                  .values(buildVectors, true)
-                                  .planNode(),
-                              "",
-                              {"t_c0", "t_c1", "u_c0"})
-                          .planNode();
+    params.planNode =
+        builder.newPlan()
+            .values(probeVectors, true)
+            .hashJoin(
+                {"t_c0"},
+                {"u_c0"},
+                builder.newPlan().values(buildVectors, true).planNode(),
+                "",
+                {"t_c0", "t_c1", "u_c0"})
+            .planNode();
     params.queryCtx = core::QueryCtx::create(driverExecutor_.get());
     params.maxDrivers = numDriver;
 
@@ -1863,7 +2601,7 @@ DEBUG_ONLY_TEST_F(TaskTest, findPeerOperators) {
 
     while (cursor->moveNext()) {
     }
-    ASSERT_TRUE(waitForTaskCompletion(task, 5'000'000));
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*task, 5'000'000));
   }
 }
 
@@ -1877,10 +2615,8 @@ class TaskPauseTest : public TaskTest {
             makeFlatVector<int64_t>({10, 20, 30, 40}),
         })};
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     CursorParameters params;
-    params.planNode =
-        PlanBuilder(planNodeIdGenerator).values(values, true).planNode();
+    params.planNode = PlanBuilder().values(values, true).planNode();
     params.queryCtx = core::QueryCtx::create(driverExecutor_.get());
     params.maxDrivers = 1;
 
@@ -1951,12 +2687,16 @@ DEBUG_ONLY_TEST_F(TaskPauseTest, raceBetweenTaskPauseAndTerminate) {
   ASSERT_EQ(task_->numTotalDrivers(), 1);
   ASSERT_EQ(task_->numFinishedDrivers(), 0);
   ASSERT_EQ(task_->numRunningDrivers(), 0);
+  // The paused driver is off thread, so terminate() leaves it to resume().
+  auto allDriversClosed = task_->allDriversClosedFuture();
+  ASSERT_FALSE(allDriversClosed.isReady());
 
   Task::resume(task_->shared_from_this());
 
   ASSERT_EQ(task_->numTotalDrivers(), 1);
   ASSERT_EQ(task_->numFinishedDrivers(), 1);
   ASSERT_EQ(task_->numRunningDrivers(), 0);
+  ASSERT_TRUE(allDriversClosed.isReady());
 
   taskThread_.join();
 }
@@ -1984,9 +2724,8 @@ DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFuture) {
   observeThread.join();
 
   ASSERT_EQ(task_->numTotalDrivers(), 1);
-  while (task_->numFinishedDrivers() != 1) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
-  }
+  ASSERT_TRUE(task_->allDriversClosedFuture().wait(std::chrono::seconds(10)));
+  ASSERT_EQ(task_->numFinishedDrivers(), 1);
   ASSERT_EQ(task_->numRunningDrivers(), 0);
 }
 
@@ -2012,15 +2751,12 @@ DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFutureAfterTaskTerminated) {
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, driverCounters) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data, data});
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
+  auto filePath = writeToFile(std::vector{data, data});
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
-                  .tableScan(asRowType(data->type()))
+                  .tableScan(data->rowType())
                   .capturePlanNodeId(scanNodeId)
                   .project({"c0 % 5 as k", "c0"})
                   .planFragment();
@@ -2116,12 +2852,10 @@ DEBUG_ONLY_TEST_F(TaskTest, driverCounters) {
 
 TEST_F(TaskTest, driverCreationMemoryAllocationCheck) {
   exec::Operator::registerOperator(std::make_unique<TestBadMemoryTranslator>());
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
   auto plan =
       PlanBuilder()
-          .values({data})
+          .values(data)
           .addNode([&](std::string id, core::PlanNodePtr input) mutable {
             return std::make_shared<TestBadMemoryNode>(id, input);
           })
@@ -2157,11 +2891,11 @@ TEST_F(TaskTest, spillDirectoryCallback) {
   // handles creating it on first use and eventually deleting it on destruction.
   auto data = makeRowVector({
       makeFlatVector<int64_t>(1'000, [](auto row) { return row % 300; }),
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+      makeFlatIdentityVector<int64_t>(1'000),
   });
   core::PlanNodeId aggrNodeId;
   const auto plan = PlanBuilder()
-                        .values({data})
+                        .values(data)
                         .singleAggregation({"c0"}, {"sum(c1)"}, {})
                         .capturePlanNodeId(aggrNodeId)
                         .planNode();
@@ -2236,28 +2970,28 @@ TEST_F(TaskTest, spillDirectoryCallback) {
   while (cursor->moveNext()) {
   }
 
-  waitForTaskCompletion(task.get(), 5'000'000);
+  TaskMonitor::waitForCompletion(*task, 5'000'000);
 
   EXPECT_TRUE(parentDirectoryCreated);
   EXPECT_TRUE(spillDirectoryCreated);
   EXPECT_EQ(exec::TaskState::kFinished, task->state());
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  auto& stats = taskStats.at(aggrNodeId);
+  const auto stats =
+      exec::PlanNodeStats::extract(task->taskStats(), aggrNodeId);
   ASSERT_GT(stats.spilledRows, 0);
   cursor.reset(); // ensure 'task' has no other shared pointer.
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
-TEST_F(TaskTest, spillDirectoryLifecycleManagement) {
-  // Marks the spill directory as not already created and ensures that the Task
-  // handles creating it on first use and eventually deleting it on destruction.
+DEBUG_ONLY_TEST_F(TaskTest, spillDirectoryLifecycleManagement) {
+  // Verifies that the Task creates the spill directory on first use and
+  // removes it after successful completion once all drivers close.
   auto data = makeRowVector({
       makeFlatVector<int64_t>(1'000, [](auto row) { return row % 300; }),
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+      makeFlatIdentityVector<int64_t>(1'000),
   });
   core::PlanNodeId aggrNodeId;
   const auto plan = PlanBuilder()
-                        .values({data})
+                        .values(data)
                         .singleAggregation({"c0"}, {"sum(c1)"}, {})
                         .capturePlanNodeId(aggrNodeId)
                         .planNode();
@@ -2275,17 +3009,40 @@ TEST_F(TaskTest, spillDirectoryLifecycleManagement) {
 
   auto cursor = TaskCursor::create(params);
   std::shared_ptr<Task> task = cursor->task();
+  folly::Baton<> spillDirectoryRemoved;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::removeSpillDirectoryIfExists",
+      std::function<void(Task*)>(
+          [&](Task* /* unused */) { spillDirectoryRemoved.post(); }));
 
   TestScopedSpillInjection scopedSpillInjection(100);
   while (cursor->moveNext()) {
   }
-  ASSERT_TRUE(waitForTaskCompletion(task.get(), 5'000'000));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*task, 5'000'000));
   EXPECT_EQ(exec::TaskState::kFinished, task->state());
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  auto& stats = taskStats.at(aggrNodeId);
+  const auto stats =
+      exec::PlanNodeStats::extract(task->taskStats(), aggrNodeId);
   ASSERT_GT(stats.spilledRows, 0);
+  const auto spillDirectory = task->spillDirectory();
+  auto fs = filesystems::getFileSystem(spillDirectory, nullptr);
+  ASSERT_TRUE(spillDirectoryRemoved.try_wait_for(std::chrono::seconds(5)));
+  EXPECT_FALSE(fs->exists(spillDirectory));
   cursor.reset(); // ensure 'task' has no other shared pointer.
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+}
+
+TEST_F(TaskTest, spillDirectoryCleanupOnTaskDestruction) {
+  const auto rootTempDir = TempDirectoryPath::create();
+  const auto spillDirectory = rootTempDir->getPath() + "/spill";
+  auto task = createTaskWithSpillDirectory(spillDirectory);
+  ASSERT_EQ(task->getOrCreateSpillDirectory(), spillDirectory);
+
+  task->requestCancel().wait();
+
+  auto fs = filesystems::getFileSystem(spillDirectory, nullptr);
+  EXPECT_TRUE(fs->exists(spillDirectory));
+  task.reset();
+  EXPECT_FALSE(fs->exists(spillDirectory));
 }
 
 TEST_F(TaskTest, spillDirNotCreated) {
@@ -2304,22 +3061,21 @@ TEST_F(TaskTest, spillDirNotCreated) {
       })};
 
   core::PlanNodeId hashJoinNodeId;
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   CursorParameters params;
   // We use a hash join here as a Spiller object is created upfront which helps
   // us ensure that the directory creation is delayed till spilling is executed.
-  params.planNode = PlanBuilder(planNodeIdGenerator)
-                        .values(probeVectors, true)
-                        .hashJoin(
-                            {"t_c0"},
-                            {"u_c0"},
-                            PlanBuilder(planNodeIdGenerator)
-                                .values(buildVectors, true)
-                                .planNode(),
-                            "",
-                            {"t_c0", "t_c1", "u_c0"})
-                        .capturePlanNodeId(hashJoinNodeId)
-                        .planNode();
+  params.planNode =
+      builder.newPlan()
+          .values(probeVectors, true)
+          .hashJoin(
+              {"t_c0"},
+              {"u_c0"},
+              builder.newPlan().values(buildVectors, true).planNode(),
+              "",
+              {"t_c0", "t_c1", "u_c0"})
+          .capturePlanNodeId(hashJoinNodeId)
+          .planNode();
   params.queryCtx = core::QueryCtx::create(driverExecutor_.get());
   params.queryCtx->testingOverrideConfigUnsafe(
       {{core::QueryConfig::kSpillEnabled, "true"},
@@ -2333,10 +3089,10 @@ TEST_F(TaskTest, spillDirNotCreated) {
 
   while (cursor->moveNext()) {
   }
-  ASSERT_TRUE(waitForTaskCompletion(task, 5'000'000));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*task, 5'000'000));
   ASSERT_EQ(exec::TaskState::kFinished, task->state());
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  auto& stats = taskStats.at(hashJoinNodeId);
+  const auto stats =
+      exec::PlanNodeStats::extract(task->taskStats(), hashJoinNodeId);
   ASSERT_EQ(stats.spilledRows, 0);
   // Check for spill folder without destroying the Task object to ensure its
   // destructor has not removed the directory if it was created earlier.
@@ -2345,21 +3101,20 @@ TEST_F(TaskTest, spillDirNotCreated) {
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, resumeAfterTaskFinish) {
-  auto probeVector = makeRowVector(
-      {"t_c0"}, {makeFlatVector<int32_t>(10, [](auto row) { return row; })});
-  auto buildVector = makeRowVector(
-      {"u_c0"}, {makeFlatVector<int32_t>(10, [](auto row) { return row; })});
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({probeVector})
-          .hashJoin(
-              {"t_c0"},
-              {"u_c0"},
-              PlanBuilder(planNodeIdGenerator).values({buildVector}).planNode(),
-              "",
-              {"t_c0", "u_c0"})
-          .planFragment();
+  auto probeVector =
+      makeNamedRowVector("t_c0", makeFlatIdentityVector<int32_t>(10));
+  auto buildVector =
+      makeNamedRowVector("u_c0", makeFlatIdentityVector<int32_t>(10));
+  PlanBuilder builder;
+  auto plan = builder.newPlan()
+                  .values(probeVector)
+                  .hashJoin(
+                      {"t_c0"},
+                      {"u_c0"},
+                      builder.newPlan().values(buildVector).planNode(),
+                      "",
+                      {"t_c0", "u_c0"})
+                  .planFragment();
 
   std::atomic<bool> valuesWaitFlag{true};
   folly::EventCount valuesWait;
@@ -2390,15 +3145,13 @@ DEBUG_ONLY_TEST_F(TaskTest, resumeAfterTaskFinish) {
   task->testingFinish();
   // Resume the task and expect all drivers to close.
   Task::resume(task);
-  ASSERT_TRUE(waitForTaskCompletion(task.get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*task));
   task.reset();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, serialLongRunningOperatorInTaskReclaimerAbort) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
 
   // Filter + Project.
   auto plan =
@@ -2443,7 +3196,7 @@ DEBUG_ONLY_TEST_F(TaskTest, serialLongRunningOperatorInTaskReclaimerAbort) {
     blockingTask->pool()->abort(std::current_exception());
   }
 
-  waitForTaskCompletion(blockingTask.get(), 5'000'000);
+  TaskMonitor::waitForCompletion(*blockingTask, 5'000'000);
 
   // We expect that abort does not trigger the operator abort by checking if the
   // memory pool memory has been released or not.
@@ -2469,9 +3222,7 @@ DEBUG_ONLY_TEST_F(TaskTest, serialLongRunningOperatorInTaskReclaimerAbort) {
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, longRunningOperatorInTaskReclaimerAbort) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
   folly::EventCount getOutputWait;
   std::atomic_bool getOutputWaitFlag{false};
   SCOPED_TESTVALUE_SET(
@@ -2501,7 +3252,7 @@ DEBUG_ONLY_TEST_F(TaskTest, longRunningOperatorInTaskReclaimerAbort) {
   } catch (VeloxException&) {
     blockingTask->pool()->abort(std::current_exception());
   }
-  waitForTaskCompletion(blockingTask.get());
+  TaskMonitor::waitForCompletion(*blockingTask);
 
   // We expect that arbitration does not trigger release of the operator pools.
   blockingTask->pool()->visitChildren([](auto* child) {
@@ -2528,12 +3279,12 @@ DEBUG_ONLY_TEST_F(TaskTest, longRunningOperatorInTaskReclaimerAbort) {
 
 DEBUG_ONLY_TEST_F(TaskTest, taskReclaimStats) {
   const auto data = makeRowVector({
-      makeFlatVector<int64_t>(50, folly::identity),
-      makeFlatVector<int64_t>(50, folly::identity),
+      makeFlatIdentityVector<int64_t>(50),
+      makeFlatIdentityVector<int64_t>(50),
   });
   const auto plan =
       PlanBuilder()
-          .values({data})
+          .values(data)
           .partitionedOutput({}, 1, std::vector<std::string>{"c0"})
           .planFragment();
 
@@ -2584,11 +3335,11 @@ DEBUG_ONLY_TEST_F(TaskTest, taskReclaimStats) {
 
   // Fail the task to finish test.
   task->requestAbort();
-  ASSERT_TRUE(waitForTaskAborted(task.get()));
+  ASSERT_TRUE(TaskMonitor::waitForAbort(*task));
   ASSERT_EQ(
       task->planFragment().planNode->toString(), plan.planNode->toString());
   task.reset();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, taskPauseTime) {
@@ -2652,7 +3403,7 @@ DEBUG_ONLY_TEST_F(TaskTest, taskPauseTime) {
   std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
   // Fail the task to finish test.
   task->requestAbort();
-  ASSERT_TRUE(waitForTaskAborted(task.get()));
+  ASSERT_TRUE(TaskMonitor::waitForAbort(*task));
 
   auto taskStats = task->taskStats();
   ASSERT_EQ(taskStats.pipelineStats.size(), 1);
@@ -2668,17 +3419,17 @@ DEBUG_ONLY_TEST_F(TaskTest, taskPauseTime) {
   ASSERT_GE(totalOffThreadTime.sum, 0);
 
   task.reset();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(TaskTest, updateStatsWhileCloseOffThreadDriver) {
   const auto data = makeRowVector({
-      makeFlatVector<int64_t>(50, folly::identity),
-      makeFlatVector<int64_t>(50, folly::identity),
+      makeFlatIdentityVector<int64_t>(50),
+      makeFlatIdentityVector<int64_t>(50),
   });
   const auto plan =
       PlanBuilder()
-          .tableScan(asRowType(data->type()))
+          .tableScan(data->rowType())
           .partitionedOutput({}, 1, std::vector<std::string>{"c0"})
           .planFragment();
   auto task = Task::create(
@@ -2695,7 +3446,7 @@ TEST_F(TaskTest, updateStatsWhileCloseOffThreadDriver) {
   // Sleep a bit to make sure off thread time is not zero.
   std::this_thread::sleep_for(std::chrono::milliseconds{2});
   task->requestAbort();
-  ASSERT_TRUE(waitForTaskAborted(task.get()));
+  ASSERT_TRUE(TaskMonitor::waitForAbort(*task));
   auto taskStats = task->taskStats();
   ASSERT_EQ(taskStats.pipelineStats.size(), 1);
   ASSERT_EQ(taskStats.pipelineStats[0].driverStats.size(), 4);
@@ -2715,33 +3466,32 @@ TEST_F(TaskTest, updateStatsWhileCloseOffThreadDriver) {
 TEST_F(TaskTest, driverLifecycleTimingStats) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>(1'000, [](auto row) { return row % 10; }),
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+      makeFlatIdentityVector<int64_t>(1'000),
   });
 
   auto buildData = makeRowVector(
       {"u0", "u1"},
       {
           makeFlatVector<int64_t>(100, [](auto row) { return row % 10; }),
-          makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+          makeFlatIdentityVector<int64_t>(100),
       });
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
   // Build a hash join plan to get multiple pipelines:
   // Pipeline 0 (probe): Values -> HashProbe -> sink
   // Pipeline 1 (build): Values -> HashBuild
   core::PlanNodeId probeScanId;
-  auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({data})
-          .capturePlanNodeId(probeScanId)
-          .hashJoin(
-              {"c0"},
-              {"u0"},
-              PlanBuilder(planNodeIdGenerator).values({buildData}).planNode(),
-              "",
-              {"c0", "c1"})
-          .planNode();
+  auto plan = builder.newPlan()
+                  .values(data)
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin(
+                      {"c0"},
+                      {"u0"},
+                      builder.newPlan().values(buildData).planNode(),
+                      "",
+                      {"c0", "c1"})
+                  .planNode();
 
   auto result = AssertQueryBuilder(plan).copyResults(pool_.get());
   ASSERT_GT(result->size(), 0);
@@ -2760,7 +3510,7 @@ TEST_F(TaskTest, driverLifecycleTimingStats) {
   while (cursor->moveNext()) {
   }
   auto task = cursor->task();
-  ASSERT_TRUE(waitForTaskCompletion(task.get()));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*task));
 
   auto taskStats = task->taskStats();
   // We should have at least 2 pipelines (probe and build).
@@ -2815,12 +3565,11 @@ TEST_F(TaskTest, driverLifecycleTimingStats) {
 
 DEBUG_ONLY_TEST_F(TaskTest, driverEnqueAfterFailedAndPausedTask) {
   const auto data = makeRowVector({
-      makeFlatVector<int64_t>(50, [](auto row) { return row; }),
-      makeFlatVector<int64_t>(50, [](auto row) { return row; }),
+      makeFlatIdentityVector<int64_t>(50),
+      makeFlatIdentityVector<int64_t>(50),
   });
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  const auto plan = PlanBuilder(planNodeIdGenerator)
-                        .values({data})
+  const auto plan = PlanBuilder()
+                        .values(data)
                         .singleAggregation({"c0"}, {"sum(c1)"}, {})
                         .planFragment();
 
@@ -2857,9 +3606,9 @@ DEBUG_ONLY_TEST_F(TaskTest, driverEnqueAfterFailedAndPausedTask) {
 
   // Resume the task and expect all drivers to close.
   Task::resume(task);
-  ASSERT_TRUE(waitForTaskAborted(task.get()));
+  ASSERT_TRUE(TaskMonitor::waitForAbort(*task));
   task.reset();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, taskReclaimFailure) {
@@ -2936,14 +3685,215 @@ DEBUG_ONLY_TEST_F(TaskTest, taskDeletionPromise) {
   queryThread.join();
 }
 
+TEST_F(TaskTest, allDriversClosedFutureOnStoppedTask) {
+  const auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  const auto plan = PlanBuilder().values(data).planFragment();
+
+  {
+    auto task = Task::create(
+        "never-started",
+        plan,
+        0,
+        core::QueryCtx::create(driverExecutor_.get()),
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
+    auto allDriversClosed = task->allDriversClosedFuture();
+    ASSERT_FALSE(allDriversClosed.isReady());
+
+    task->requestCancel().wait();
+    ASSERT_TRUE(allDriversClosed.isReady());
+    ASSERT_TRUE(task->allDriversClosedFuture().isReady());
+  }
+
+  {
+    // assertResults() waits for the drivers to close.
+    auto task = AssertQueryBuilder(plan.planNode).assertResults(data);
+    ASSERT_TRUE(task->allDriversClosedFuture().isReady());
+  }
+}
+
+TEST_F(TaskTest, allDriversClosedFutureWaitsForOffThreadClose) {
+  exec::Operator::registerOperator(
+      std::make_unique<TestExternalBlockableTranslator>());
+  auto blocker = std::make_shared<ExternalBlocker>();
+  folly::Baton<> closeStarted;
+  std::atomic_bool closeAllowed{false};
+  folly::EventCount closeAllowedWait;
+  // The local exchange splits the plan into the output pipeline and a producer
+  // pipeline that holds the blockable operator, with one driver each.
+  const auto plan =
+      PlanBuilder()
+          .values({makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})})
+          .addNode([&](const std::string& id, core::PlanNodePtr input) {
+            return std::make_shared<TestExternalBlockableNode>(
+                id, std::move(input), blocker, [&]() {
+                  closeStarted.post();
+                  closeAllowedWait.await([&]() { return closeAllowed.load(); });
+                });
+          })
+          .localPartition({})
+          .planFragment();
+  auto task = Task::create(
+      "task",
+      plan,
+      0,
+      core::QueryCtx::create(),
+      Task::ExecutionMode::kSerial,
+      exec::Consumer{});
+
+  // The blocked operator takes the producer off thread, and the output driver
+  // waits off thread for the producer.
+  blocker->block();
+  ContinueFuture blockedFuture = ContinueFuture::makeEmpty();
+  ASSERT_EQ(task->next(&blockedFuture), nullptr);
+  ASSERT_TRUE(blockedFuture.valid());
+  // The callback on the blocked future holds the driver until this unblocks.
+  SCOPE_EXIT {
+    blocker->unblock();
+  };
+
+  // terminate() closes the off-thread drivers in pipeline order on the thread
+  // that calls it, so the output driver has closed when the producer starts to.
+  std::thread cancelThread([&]() { task->requestCancel(); });
+  SCOPE_EXIT {
+    closeAllowed = true;
+    closeAllowedWait.notifyAll();
+    cancelThread.join();
+  };
+  ASSERT_TRUE(closeStarted.try_wait_for(std::chrono::seconds(10)));
+  auto allDriversClosed = task->allDriversClosedFuture();
+  ASSERT_TRUE(task->taskCompletionFuture().isReady());
+  ASSERT_FALSE(allDriversClosed.isReady());
+  ASSERT_EQ(task->numFinishedDrivers(), 1);
+  {
+    const auto stats = task->taskStats();
+    ASSERT_EQ(stats.numCompletedDrivers, 1);
+    ASSERT_EQ(stats.numRunningDrivers, 1);
+    EXPECT_THAT(
+        stats.pipelineStats[1].operatorStats,
+        testing::Each(testing::Field(&OperatorStats::numDrivers, 0)));
+  }
+
+  closeAllowed = true;
+  closeAllowedWait.notifyAll();
+  ASSERT_TRUE(std::move(allDriversClosed).wait(std::chrono::seconds(10)));
+  ASSERT_EQ(task->numFinishedDrivers(), task->numTotalDrivers());
+  for (const auto& pipelineStats : task->taskStats().pipelineStats) {
+    EXPECT_THAT(
+        pipelineStats.operatorStats,
+        testing::Each(testing::Field(&OperatorStats::numDrivers, 1)));
+  }
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, allDriversClosedFutureAfterOutputPipelineFinishes) {
+  const auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  // The output pipeline finishes after one row, while the producer pipeline
+  // has more to produce.
+  const auto plan = PlanBuilder()
+                        .values({data}, false, 1'000)
+                        .localPartition({})
+                        .limit(0, 1, false)
+                        .planFragment();
+
+  // Holds the producer in its second getOutput() call. The suspended section
+  // keeps it out of the task's thread count, like a driver waiting for memory
+  // arbitration.
+  std::atomic_int32_t numValuesCalls{0};
+  folly::Baton<> producerHeld;
+  std::atomic_bool producerReleased{false};
+  folly::EventCount producerReleasedWait;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Values::getOutput",
+      std::function<void(const exec::Values*)>([&](const exec::Values* values) {
+        if (++numValuesCalls != 2) {
+          return;
+        }
+        TestSuspendedSection suspendedSection(values->operatorCtx()->driver());
+        producerHeld.post();
+        producerReleasedWait.await([&]() { return producerReleased.load(); });
+      }));
+  // Lets the output pipeline finish only once the producer is held.
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::noMoreInput",
+      std::function<void(Operator*)>([&](Operator* op) {
+        if (op->operatorType() == "CallbackSink") {
+          producerHeld.wait();
+        }
+      }));
+
+  auto task = Task::create(
+      "task",
+      plan,
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel,
+      [](RowVectorPtr /*vector*/,
+         bool /*drained*/,
+         ContinueFuture* /*future*/) { return BlockingReason::kNotBlocked; });
+  task->start(1);
+  SCOPE_EXIT {
+    producerReleased = true;
+    producerReleasedWait.notifyAll();
+  };
+
+  ASSERT_TRUE(
+      TaskMonitor::waitForStateChange(*task, TaskState::kFinished, 10'000'000));
+  // requestAbort() on the finished task waits for the threads the task counts,
+  // which leave out the suspended producer.
+  ASSERT_TRUE(task->requestAbort().wait(std::chrono::seconds(10)));
+  auto allDriversClosed = task->allDriversClosedFuture();
+  ASSERT_FALSE(allDriversClosed.isReady());
+
+  producerReleased = true;
+  producerReleasedWait.notifyAll();
+  ASSERT_TRUE(std::move(allDriversClosed).wait(std::chrono::seconds(10)));
+  for (const auto& pipelineStats : task->taskStats().pipelineStats) {
+    EXPECT_THAT(
+        pipelineStats.operatorStats,
+        testing::Each(testing::Field(&OperatorStats::numDrivers, 1)));
+  }
+}
+
+TEST_F(TaskTest, allDriversClosedFutureWithQueuedSplitGroup) {
+  const auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  const auto filePath = writeToFile(data);
+  auto plan = PlanBuilder().tableScan(data->rowType()).planFragment();
+  const auto scanNodeId = plan.planNode->id();
+  plan.executionStrategy = core::ExecutionStrategy::kGrouped;
+  plan.groupedExecutionLeafNodeIds.emplace(scanNodeId);
+  plan.numSplitGroups = 2;
+  auto task = Task::create(
+      "task",
+      std::move(plan),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel,
+      [](RowVectorPtr /*vector*/,
+         bool /*drained*/,
+         ContinueFuture* /*future*/) { return BlockingReason::kNotBlocked; });
+  // With one split group at a time, group 1 stays queued while group 0 waits
+  // for more splits.
+  task->start(1, 1);
+  for (int32_t groupId = 0; groupId < 2; ++groupId) {
+    task->addSplit(
+        scanNodeId,
+        exec::Split(makeHiveConnectorSplit(filePath->getPath()), groupId));
+  }
+
+  task->requestCancel().wait();
+  ASSERT_TRUE(waitForTaskDriversToFinish(task.get()));
+  // The total counts the drivers of group 1, which the task never creates.
+  ASSERT_EQ(task->numTotalDrivers(), 2);
+  ASSERT_EQ(task->numFinishedDrivers(), 1);
+}
+
 DEBUG_ONLY_TEST_F(TaskTest, taskCancellation) {
   const auto data = makeRowVector({
-      makeFlatVector<int64_t>(50, [](auto row) { return row; }),
-      makeFlatVector<int64_t>(50, [](auto row) { return row; }),
+      makeFlatIdentityVector<int64_t>(50),
+      makeFlatIdentityVector<int64_t>(50),
   });
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  const auto plan = PlanBuilder(planNodeIdGenerator)
-                        .values({data})
+  const auto plan = PlanBuilder()
+                        .values(data)
                         .singleAggregation({"c0"}, {"sum(c1)"}, {})
                         .planFragment();
 
@@ -2983,17 +3933,15 @@ DEBUG_ONLY_TEST_F(TaskTest, taskCancellation) {
 
   // Resume the task and expect all drivers to close.
   Task::resume(task);
-  ASSERT_TRUE(waitForTaskAborted(task.get()));
+  ASSERT_TRUE(TaskMonitor::waitForAbort(*task));
   ASSERT_TRUE(cancellationToken.isCancellationRequested());
 
   task.reset();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(TaskTest, finishTiming) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
   core::PlanNodeId projectId;
   core::PlanNodeId orderById;
   auto plan = PlanBuilder()
@@ -3016,9 +3964,7 @@ TEST_F(TaskTest, finishTiming) {
 }
 
 TEST_F(TaskTest, invalidPlanNodeForBarrier) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
 
   const auto plan = PlanBuilder()
                         .values({data, data})
@@ -3065,16 +4011,13 @@ TEST_F(TaskTest, invalidPlanNodeForBarrier) {
 }
 
 TEST_F(TaskTest, barrierAfterNoMoreSplits) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
 
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data, data});
+  auto filePath = writeToFile(std::vector{data, data});
 
   core::PlanNodeId scanId;
   const auto plan = PlanBuilder()
-                        .tableScan(asRowType(data->type()))
+                        .tableScan(data->rowType())
                         .capturePlanNodeId(scanId)
                         .filter("c0 < 100")
                         .project({"c0 + 5"})
@@ -3126,20 +4069,17 @@ TEST_F(TaskTest, barrierAfterNoMoreSplits) {
     task->requestAbort().wait();
     ASSERT_TRUE(!task->isRunning());
   }
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(TaskTest, addSplitAfterBarrier) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
 
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data, data});
+  auto filePath = writeToFile(std::vector{data, data});
 
   core::PlanNodeId scanId;
   const auto plan = PlanBuilder()
-                        .tableScan(asRowType(data->type()))
+                        .tableScan(data->rowType())
                         .capturePlanNodeId(scanId)
                         .filter("c0 < 100")
                         .project({"c0 + 5"})
@@ -3193,20 +4133,17 @@ TEST_F(TaskTest, addSplitAfterBarrier) {
     task->requestAbort().wait();
     ASSERT_TRUE(!task->isRunning());
   }
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(TaskTest, testTerminateDuringBarrier) {
   const int numRows{100};
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
-  });
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(numRows)});
+  auto filePath = writeToFile(data);
 
   core::PlanNodeId scanId;
   auto plan = PlanBuilder()
-                  .tableScan(asRowType(data->type()))
+                  .tableScan(data->rowType())
                   .capturePlanNodeId(scanId)
                   .project({"c0"})
                   .planFragment();
@@ -3267,15 +4204,12 @@ TEST_F(TaskTest, testTerminateDuringBarrier) {
 }
 
 TEST_F(TaskTest, testBarrierClearedOnTerminate) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(100, [](auto row) { return row; }),
-  });
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(100)});
+  auto filePath = writeToFile(data);
 
   core::PlanNodeId scanId;
   auto plan = PlanBuilder()
-                  .tableScan(asRowType(data->type()))
+                  .tableScan(data->rowType())
                   .capturePlanNodeId(scanId)
                   .project({"c0"})
                   .planFragment();
@@ -3322,7 +4256,7 @@ TEST_F(TaskTest, testBarrierClearedOnTerminate) {
     ASSERT_FALSE(task->underBarrier());
     ASSERT_TRUE(barrierFuture.isReady());
   }
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 namespace {
@@ -3456,11 +4390,8 @@ TEST_F(TaskTest, operatorErrorDuringBarrier) {
   exec::Operator::registerOperator(
       std::make_unique<TestBarrierOperatorTranslator>());
   const int numRows{10};
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
-  });
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(numRows)});
+  auto filePath = writeToFile(data);
 
   std::string errMsg{"injectedError"};
   auto injectionCallback =
@@ -3475,7 +4406,7 @@ TEST_F(TaskTest, operatorErrorDuringBarrier) {
 
   core::PlanNodeId scanId;
   auto plan = PlanBuilder()
-                  .tableScan(asRowType(data->type()))
+                  .tableScan(data->rowType())
                   .capturePlanNodeId(scanId)
                   .addNode([&](std::string id, core::PlanNodePtr source) {
                     return std::make_shared<TestBarrierNode>(
@@ -3515,11 +4446,8 @@ TEST_F(TaskTest, dropOutputDuringBarrier) {
   exec::Operator::registerOperator(
       std::make_unique<TestBarrierOperatorTranslator>());
   const int numRows{10};
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
-  });
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(numRows)});
+  auto filePath = writeToFile(data);
 
   auto injectionCallback = [&](size_t numInputs, bool draining, Operator* op) {
     if (!draining) {
@@ -3532,7 +4460,7 @@ TEST_F(TaskTest, dropOutputDuringBarrier) {
 
   core::PlanNodeId scanId;
   auto plan = PlanBuilder()
-                  .tableScan(asRowType(data->type()))
+                  .tableScan(data->rowType())
                   .capturePlanNodeId(scanId)
                   .addNode([&](std::string id, core::PlanNodePtr source) {
                     return std::make_shared<TestBarrierNode>(
@@ -3581,21 +4509,18 @@ TEST_F(TaskTest, dropOutputDuringBarrier) {
 TEST_F(TaskTest, testTerminateDuringBarrierWithUnion) {
   const auto rowType = ROW({"c0"}, {BIGINT()});
   const int numRows{10};
-  auto vector = makeRowVector({
-      makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
-  });
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {vector});
+  auto vector = makeRowVector({makeFlatIdentityVector<int64_t>(numRows)});
+  auto filePath = writeToFile(vector);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   std::vector<core::PlanNodeId> scanNodeIds;
   auto tableScanNode = [&]() {
-    auto node = PlanBuilder(planNodeIdGenerator).tableScan(rowType).planNode();
+    auto node = builder.newPlan().tableScan(rowType).planNode();
     scanNodeIds.push_back(node->id());
     return node;
   };
 
-  auto plan = PlanBuilder(planNodeIdGenerator)
+  auto plan = builder.newPlan()
                   .localPartition(
                       {},
                       {
@@ -3644,16 +4569,13 @@ TEST_F(TaskTest, expressionStatsInBetweenBarriers) {
   // form (coalesce) are also included.
   const std::string projection = "coalesce(c0 + 1, 0)";
   const int numRows{10};
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
-  });
-  auto filePath = TempFilePath::create();
-  writeToFile(filePath->getPath(), {data});
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(numRows)});
+  auto filePath = writeToFile(data);
 
   core::PlanNodeId scanId;
   core::PlanNodeId projectNodeId;
   auto plan = PlanBuilder()
-                  .tableScan(asRowType(data->type()))
+                  .tableScan(data->rowType())
                   .capturePlanNodeId(scanId)
                   .project({projection})
                   .capturePlanNodeId(projectNodeId)
@@ -3706,25 +4628,25 @@ TEST_F(TaskTest, expressionStatsInBetweenBarriers) {
   do {
     result = task->next();
   } while (result != nullptr);
-  VELOX_CHECK(waitForTaskCompletion(task.get()));
+  VELOX_CHECK(TaskMonitor::waitForCompletion(*task));
   taskStats = task->taskStats();
   ASSERT_EQ(taskStats.numFinishedSplits, 2);
   verifyExpressionStats(taskStats, 20);
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, taskExecutionEndTime) {
-  std::vector<RowVectorPtr> vectors;
-  std::vector<std::shared_ptr<TempFilePath>> tempFiles;
   const int numSplits{5};
   const int numRowsPerSplit{1'000};
+
+  std::vector<RowVectorPtr> vectors;
+  vectors.reserve(numSplits);
   for (int32_t i = 0; i < numSplits; ++i) {
     vectors.push_back(makeRowVector(
-        {makeFlatVector<int32_t>(numRowsPerSplit, [](auto row) { return row; }),
+        {makeFlatIdentityVector<int32_t>(numRowsPerSplit),
          makeFlatVector<int32_t>(
              numRowsPerSplit, [](auto row) { return row * 2; })}));
-    tempFiles.push_back(TempFilePath::create());
   }
-  writeToFiles(toFilePaths(tempFiles), vectors);
+  auto tempFiles = writeToFiles(vectors);
   createDuckDbTable(vectors);
 
   const int injectedDelaySecs{2};
@@ -3763,10 +4685,7 @@ DEBUG_ONLY_TEST_F(TaskTest, taskExecutionEndTime) {
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, operatorShouldYieldMethod) {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  const auto data = makeRowVector({
-      makeFlatVector<int64_t>(3, [](auto row) { return row; }),
-  });
+  const auto data = makeRowVector({makeFlatIdentityVector<int64_t>(3)});
   const uint64_t kDriverCpuTimeSliceLimitMs = 100;
 
   struct {
@@ -3776,6 +4695,9 @@ DEBUG_ONLY_TEST_F(TaskTest, operatorShouldYieldMethod) {
     }
   } testSetting[]{{true}, {false}};
 
+  // Each Values::getOutput call creates a test operator, which needs a unique
+  // node id for its memory pool.
+  std::atomic<int32_t> numOperators{0};
   for (const auto& testData : testSetting) {
     SCOPED_TRACE(testData.debugString());
     std::atomic<bool> shouldYieldResult{false};
@@ -3789,7 +4711,7 @@ DEBUG_ONLY_TEST_F(TaskTest, operatorShouldYieldMethod) {
                       0,
                       values->operatorCtx()->driverCtx(),
                       ROW({"c0"}, {BIGINT()}),
-                      planNodeIdGenerator->next());
+                      fmt::format("testShouldYield{}", numOperators++));
 
               testShouldYieldOp->addInput(
                   makeRowVector({makeFlatVector<int64_t>({1})}));
@@ -3810,7 +4732,7 @@ DEBUG_ONLY_TEST_F(TaskTest, operatorShouldYieldMethod) {
              folly::to<std::string>(kDriverCpuTimeSliceLimitMs)},
         }));
 
-    auto plan = PlanBuilder(planNodeIdGenerator).values({data}).planNode();
+    auto plan = PlanBuilder().values(data).planNode();
     AssertQueryBuilder(plan).queryCtx(queryCtx).copyResults(pool());
 
     ASSERT_EQ(testData.hasDelay, shouldYieldResult.load());
@@ -3865,7 +4787,7 @@ DEBUG_ONLY_TEST_F(TaskTest, blockedWaitTimeOnAbort) {
   task->requestAbort().wait();
 
   // Wait for the task to be fully aborted.
-  ASSERT_TRUE(waitForTaskAborted(task.get()));
+  ASSERT_TRUE(TaskMonitor::waitForAbort(*task));
 
   // Verify that blocked wait time was recorded despite the abort.
   const auto stats = task->taskStats().pipelineStats;

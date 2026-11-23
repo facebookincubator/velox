@@ -18,17 +18,17 @@
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/io/types.hpp>
 #include <cudf/table/table.hpp>
-#include <rmm/cuda_stream_view.hpp>
 #include <rmm/exec_policy.hpp>
 #include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
 
 namespace facebook::velox::ucx_exchange {
 
 /* static */
-std::shared_ptr<UcxOutputQueueManager> UcxOutputQueueManager::getInstanceRef() {
+const std::shared_ptr<UcxOutputQueueManager>&
+UcxOutputQueueManager::getInstanceRef() {
   // In C++11, the static local variable is guaranteed to only be initialized
   // once even in a multi-threaded context.
-  static std::shared_ptr<UcxOutputQueueManager> instance =
+  static const std::shared_ptr<UcxOutputQueueManager> instance =
       std::make_shared<UcxOutputQueueManager>();
   return instance;
 }
@@ -37,15 +37,18 @@ void UcxOutputQueueManager::initializeTask(
     std::shared_ptr<exec::Task> task,
     core::PartitionedOutputNode::Kind kind,
     int numDestinations,
-    int numDrivers) {
+    int numDrivers,
+    const std::string& /*transportOptions*/) {
   const auto& taskId = task->taskId();
+  std::vector<UcxDataAvailable> notifications;
   queues_.withLock([&](auto& queues) {
     auto it = queues.find(taskId);
     if (it == queues.end()) {
       queues[taskId] = std::make_shared<UcxOutputQueue>(
           std::move(task), numDestinations, numDrivers, kind);
     } else {
-      if (!it->second->initialize(task, numDestinations, numDrivers, kind)) {
+      if (!it->second->initialize(
+              task, numDestinations, numDrivers, kind, notifications)) {
         VELOX_FAIL(
             "Registering a cudf output queue for pre-existing taskId {}",
             taskId);
@@ -58,20 +61,32 @@ void UcxOutputQueueManager::initializeTask(
   // Clear any stale "cancelled" state in the intra-node registry so
   // that the cancelledTasks_ set doesn't grow unboundedly across queries.
   IntraNodeTransferRegistry::getInstance()->clearCancelledTask(taskId);
+  if (kind == core::PartitionedOutputNode::Kind::kPartitioned &&
+      !notifications.empty()) {
+    VLOG(1) << "UCX reader requests outside partitioned destinations: task="
+            << taskId << " rejected=" << notifications.size();
+  }
+  for (auto& notification : notifications) {
+    notification.notify();
+  }
 }
 
-void UcxOutputQueueManager::updateOutputBuffers(
-    std::string_view taskId,
+bool UcxOutputQueueManager::updateOutputBuffers(
+    const std::string& taskId,
     int numBuffers,
     bool noMoreBuffers) {
-  getQueue(taskId)->updateOutputBuffers(numBuffers, noMoreBuffers);
+  if (auto queue = getQueueIfExists(taskId)) {
+    queue->updateOutputBuffers(numBuffers, noMoreBuffers);
+    return true;
+  }
+  return false;
 }
 
 void UcxOutputQueueManager::enqueue(
     std::string_view taskId,
     int destination,
     std::unique_ptr<cudf::packed_columns> txData,
-    int numRows) {
+    vector_size_t numRows) {
   getQueue(taskId)->enqueue(destination, std::move(txData), numRows);
 }
 
@@ -107,10 +122,8 @@ void UcxOutputQueueManager::getData(
   queues_.withLock([&](auto& queues) {
     auto it = queues.find(taskIdStr);
     if (it == queues.end()) {
-      // Check if the task was already removed. If so, don't re-create a
-      // placeholder — the task is dead and any server calling getData() is a
-      // stale leftover. Re-creating would produce an undersized queue that
-      // crashes when deleteResults() is called for other destinations.
+      // Late readers of removed tasks must receive EOS rather than wait on
+      // a new placeholder.
       if (removedTasks_.withLock(
               [&](auto& removed) { return removed.count(taskIdStr) > 0; })) {
         VLOG(2) << "[QUEUE-MGR] task=" << taskId << " dest=" << destination
@@ -123,7 +136,7 @@ void UcxOutputQueueManager::getData(
       VLOG(2)
           << "[QUEUE-MGR] task=" << taskId << " dest=" << destination
           << " creating placeholder queue (server arrived before task init)";
-      outputQueue = std::make_shared<UcxOutputQueue>(nullptr, destination, 0);
+      outputQueue = std::make_shared<UcxOutputQueue>(nullptr, 0, 0);
       queues[taskIdStr] = outputQueue;
     } else {
       // queue exists.
@@ -132,7 +145,7 @@ void UcxOutputQueueManager::getData(
   });
   if (taskRemoved) {
     // Fire callback immediately with nullptr to signal end-of-stream.
-    notify(nullptr, {});
+    notify(nullptr, /*numRows=*/0, {});
     return;
   }
   // outside of lock. Queue must exist.
@@ -146,7 +159,7 @@ bool UcxOutputQueueManager::canUseIntraNode(std::string_view taskId) {
       queue->kind() != core::PartitionedOutputNode::Kind::kBroadcast;
 }
 
-void UcxOutputQueueManager::removeTask(std::string_view taskId) {
+void UcxOutputQueueManager::removeTask(const std::string& taskId) {
   std::string taskIdStr{taskId};
   auto queue =
       queues_.withLock([&](auto& queues) -> std::shared_ptr<UcxOutputQueue> {
@@ -198,12 +211,48 @@ std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueue(
 }
 
 std::optional<exec::OutputBuffer::Stats> UcxOutputQueueManager::stats(
-    std::string_view taskId) {
+    const std::string& taskId) {
   auto queue = getQueueIfExists(taskId);
   if (queue != nullptr) {
     return queue->stats();
   }
   return std::nullopt;
+}
+
+bool UcxOutputQueueManager::updateNumDrivers(
+    const std::string& taskId,
+    uint32_t newNumDrivers) {
+  if (auto queue = getQueueIfExists(taskId)) {
+    queue->updateNumDrivers(newNumDrivers);
+    return true;
+  }
+  return false;
+}
+
+std::optional<double> UcxOutputQueueManager::getUtilization(
+    const std::string& taskId) {
+  auto queue = getQueueIfExists(taskId);
+  if (queue == nullptr) {
+    return std::nullopt;
+  }
+  return queue->getUtilization();
+}
+
+std::optional<bool> UcxOutputQueueManager::isOverutilized(
+    const std::string& taskId) {
+  auto queue = getQueueIfExists(taskId);
+  if (queue == nullptr) {
+    return std::nullopt;
+  }
+  return queue->isOverutilized();
+}
+
+std::string UcxOutputQueueManager::toString(const std::string& taskId) {
+  auto queue = getQueueIfExists(taskId);
+  if (queue != nullptr) {
+    return "UcxOutputQueue[" + taskId + "]";
+  }
+  return "UcxOutputQueue[" + taskId + " not found]";
 }
 
 } // namespace facebook::velox::ucx_exchange

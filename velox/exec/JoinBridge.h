@@ -15,6 +15,9 @@
  */
 #pragma once
 
+#include <optional>
+
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/future/VeloxPromise.h"
 
 namespace facebook::velox::exec {
@@ -38,5 +41,39 @@ class JoinBridge {
   bool started_{false};
   std::vector<ContinuePromise> promises_;
   bool cancelled_{false};
+};
+
+/// Hands the build side of a join, built once by the last build driver, to the
+/// probe drivers.
+template <typename T>
+class BuildResultBridge : public JoinBridge {
+ public:
+  /// Called once; wakes up the waiting probe drivers.
+  void setData(T data) {
+    std::vector<ContinuePromise> promises;
+    {
+      std::lock_guard<std::mutex> l(mutex_);
+      VELOX_CHECK(!data_.has_value(), "setData must be called only once");
+      data_ = std::move(data);
+      promises = std::move(promises_);
+    }
+    notify(std::move(promises));
+  }
+
+  /// Returns the build side, or std::nullopt and sets 'future' if it is not
+  /// built yet.
+  std::optional<T> dataOrFuture(ContinueFuture* future) {
+    std::lock_guard<std::mutex> l(mutex_);
+    VELOX_CHECK(!cancelled_, "Getting data after the build side is aborted");
+    if (data_.has_value()) {
+      return data_;
+    }
+    promises_.emplace_back("BuildResultBridge::dataOrFuture");
+    *future = promises_.back().getSemiFuture();
+    return std::nullopt;
+  }
+
+ private:
+  std::optional<T> data_;
 };
 } // namespace facebook::velox::exec

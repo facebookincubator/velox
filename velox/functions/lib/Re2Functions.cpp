@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <functional>
+
 #include "velox/functions/lib/Re2Functions.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/vector/FunctionVector.h"
@@ -62,7 +64,7 @@ Expected<RE2*> ReCache::tryFindOrCompile(const StringView& pattern) {
 
 RE2* ReCache::findOrCompile(const StringView& pattern) {
   return tryFindOrCompile(pattern).thenOrThrow(
-      folly::identity,
+      std::identity{},
       [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
 }
 
@@ -522,7 +524,7 @@ bool matchExactPattern(
     StringView input,
     const std::string& pattern,
     size_t length) {
-  if (FOLLY_LIKELY(pattern.size() > 0)) {
+  if (pattern.size() > 0) [[likely]] {
     return input.size() == pattern.size() &&
         std::memcmp(input.data(), pattern.data(), length) == 0;
   }
@@ -1870,7 +1872,7 @@ std::vector<std::string> PatternMetadata::parseSubstrings(
   if (RE2::FullMatch(full, fullPattern)) {
     while (RE2::PartialMatch(full, subPattern, &cur)) {
       substrings.push_back(std::string(cur));
-      full = re2::StringPiece(cur.end(), full.end() - cur.end());
+      full = re2::StringPiece(cur.data() + cur.size(), full.end() - cur.end());
     }
   }
   return substrings;
@@ -1900,7 +1902,7 @@ class PatternStringIterator {
   // Return true if the cursor is advanced successfully, false otherwise(reached
   // the end of the pattern string).
   bool next() {
-    if (nextStart_ == pattern_.size()) {
+    if (nextStart_ >= pattern_.size()) {
       return false;
     }
 
@@ -1938,9 +1940,18 @@ class PatternStringIterator {
       } else {
         charKind_ = CharKind::kNormal;
 
-        // Unicode.
+        // Unicode. Advance a single byte when the sequence is invalid or
+        // truncated: it must not run past the end of the pattern, and the
+        // bytes that follow can still be pattern syntax, for example the '%'
+        // at the end of '%abc\xf0%'.
         if (currentChar & 0x80) {
-          auto numBytes = unicodeCharLength(pattern_.data() + currentStart_);
+          int numBytes = 1;
+          if (utf8proc_codepoint(
+                  pattern_.data() + currentStart_,
+                  pattern_.data() + pattern_.size(),
+                  numBytes) < 0) {
+            numBytes = 1;
+          }
           nextStart_ = currentStart_ + numBytes;
         } else {
           nextStart_ = currentStart_ + 1;
@@ -2064,7 +2075,7 @@ std::optional<std::string> parsePattern(
 
     // Set the 'previousKind' to currentKind if it has not been set yet, which
     // only occur once(the first char) during parsing.
-    if (FOLLY_UNLIKELY(!previousKind.has_value())) {
+    if (!previousKind.has_value()) [[unlikely]] {
       previousKind = currentKind;
     }
 
@@ -2099,7 +2110,7 @@ std::optional<std::string> parsePattern(
 PatternMetadata determinePatternKind(
     std::string_view pattern,
     std::optional<char> escapeChar) {
-  if (FOLLY_UNLIKELY(pattern.empty())) {
+  if (pattern.empty()) [[unlikely]] {
     return PatternMetadata::fixed("");
   }
 

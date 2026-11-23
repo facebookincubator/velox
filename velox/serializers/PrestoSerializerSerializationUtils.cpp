@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <functional>
+
 #include "velox/serializers/PrestoSerializerSerializationUtils.h"
 
 #include "velox/vector/BiasVector.h"
@@ -561,7 +563,7 @@ void serializeIPPrefix(
   }
 }
 
-template <typename T, typename Conv = folly::Identity>
+template <typename T, typename Conv = std::identity>
 void copyWords(
     uint8_t* destination,
     const int32_t* indices,
@@ -574,7 +576,7 @@ void copyWords(
   }
 }
 
-template <typename T, typename Conv = folly::Identity>
+template <typename T, typename Conv = std::identity>
 void copyWordsWithRows(
     uint8_t* destination,
     const int32_t* rows,
@@ -1095,6 +1097,8 @@ void serializeColumn(
     case VectorEncoding::Simple::MAP:
       serializeMapVectorRanges(vector, ranges, stream, scratch);
       break;
+    case VectorEncoding::Simple::FLAT_MAP:
+      VELOX_NYI("PrestoVectorSerde does not support flat map vectors");
     case VectorEncoding::Simple::LAZY:
       serializeColumn(
           BaseVector::loadedVectorShared(vector), ranges, stream, scratch);
@@ -1139,6 +1143,8 @@ void serializeColumn(
     case VectorEncoding::Simple::MAP:
       serializeMapVector(vector, rows, stream, scratch);
       break;
+    case VectorEncoding::Simple::FLAT_MAP:
+      VELOX_NYI("PrestoVectorSerde does not support flat map vectors");
     case VectorEncoding::Simple::LAZY:
       serializeColumn(
           BaseVector::loadedVectorShared(vector), rows, stream, scratch);

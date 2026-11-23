@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/ucx-exchange/UcxExchange.h"
+#include "velox/common/Casts.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 using facebook::velox::exec::Operator;
@@ -44,36 +45,23 @@ UcxExchange::UcxExchange(
           fmt::format("[{}]", planNode->id())),
       preferredOutputBatchBytes_{
           driverCtx->queryConfig().preferredOutputBatchBytes()},
-      closeExchangeClientOnClose_{ucxExchangeClient == nullptr},
       processSplits_{driverCtx->driverId == 0},
       pipelineId_{driverCtx->pipelineId},
-      driverId_{driverCtx->driverId} {
-  if (ucxExchangeClient) {
-    // UcxExchangeClient is provided externally when this is a "plain"
-    // UcxExchange.
-    exchangeClient_ = std::move(ucxExchangeClient);
-  } else {
-    // UcxExchangeClient is nullptr when this UcxExchange is used to
-    // implement a MergeExchange. Create a new UCX exchange client.
-    auto task = operatorCtx_->task();
-    exchangeClient_ = std::make_shared<UcxExchangeClient>(
-        task->taskId(),
-        task->destination(),
-        1 // number of consumers, is always 1.
-    );
-  }
+      driverId_{driverCtx->driverId},
+      planNodeBoundary_{
+          planNode->is<core::MergeExchangeNode>()
+              ? core::PlanNode::Boundary::kInput
+              : core::PlanNode::Boundary::kBoth},
+      forwardsSplits_{planNode->is<core::MergeExchangeNode>()} {
+  VELOX_CHECK_NOT_NULL(
+      ucxExchangeClient,
+      "UCX exchange client is null, plan node: {}",
+      planNode->id());
+  exchangeClient_ = std::move(ucxExchangeClient);
 }
 
 UcxExchange::~UcxExchange() {
   close();
-}
-
-void UcxExchange::addRemoteTaskIds(std::vector<std::string>& remoteTaskIds) {
-  std::shuffle(std::begin(remoteTaskIds), std::end(remoteTaskIds), rng_);
-  for (const std::string& remoteTaskId : remoteTaskIds) {
-    exchangeClient_->addRemoteTaskId(remoteTaskId);
-  }
-  stats_.wlock()->numSplits += remoteTaskIds.size();
 }
 
 void UcxExchange::getSplits(ContinueFuture* future) {
@@ -90,7 +78,6 @@ void UcxExchange::getSplits(ContinueFuture* future) {
             << " getSplits: No more splits for task: " << taskId();
     return;
   }
-  std::vector<std::string> remoteTaskIds;
   // loop until we get an end marker.
   for (;;) {
     exec::Split split;
@@ -103,30 +90,26 @@ void UcxExchange::getSplits(ContinueFuture* future) {
         split,
         *future);
     if (reason != BlockingReason::kNotBlocked) {
-      // we are blocked. Add the splits collected so far (if any) and return.
-      addRemoteTaskIds(remoteTaskIds);
       return;
     }
 
     if (split.hasConnectorSplit()) {
-      auto remoteSplit =
-          std::dynamic_pointer_cast<RemoteConnectorSplit>(split.connectorSplit);
-      VELOX_CHECK_NOT_NULL(remoteSplit, "Wrong type of split");
-      remoteTaskIds.push_back(remoteSplit->taskId);
+      if (forwardsSplits_) {
+        exchangeClient_->addRemoteTaskId(
+            checkedPointerCast<RemoteConnectorSplit>(split.connectorSplit)
+                ->taskId);
+      }
+      ++stats_.wlock()->numSplits;
       // check for more splits.
       continue;
     }
 
     // not blocked but also no connector split.
     // we've reached the end.
-    addRemoteTaskIds(remoteTaskIds);
-    exchangeClient_->noMoreRemoteTasks();
-    noMoreSplits_ = true;
-    if (atEnd_) {
-      operatorCtx_->task()->multipleSplitsFinished(
-          false, stats_.rlock()->numSplits, 0);
-      recordExchangeClientStats();
+    if (forwardsSplits_) {
+      exchangeClient_->noMoreRemoteTasks();
     }
+    noMoreSplits_ = true;
     return;
   }
 }
@@ -146,9 +129,16 @@ BlockingReason UcxExchange::isBlocked(ContinueFuture* future) {
   currentData_ = exchangeClient_->next(driverId_, &atEnd_, &dataFuture);
   if (currentData_ || atEnd_) {
     // got some data or reached the end.
+    if (atEnd_ && !noMoreSplits_) {
+      // The task stores 'no more splits' before it tells the client, so the
+      // remaining splits are in the store. When the task terminates, the client
+      // can report the end first; the splits are then not reported finished.
+      splitFuture_ = ContinueFuture::makeEmpty();
+      getSplits(&splitFuture_);
+    }
     if (atEnd_ && noMoreSplits_) {
-      const auto numSplits = stats_.rlock()->numSplits;
-      operatorCtx_->task()->multipleSplitsFinished(false, numSplits, 0);
+      operatorCtx_->task()->splitsFinished(
+          planNodeId(), *operatorCtx_->driverCtx());
     }
     recordExchangeClientStats();
     return BlockingReason::kNotBlocked;
@@ -180,8 +170,26 @@ RowVectorPtr UcxExchange::getOutputFromPackedTable() {
 
   // Get the packed_table and stream from the PackedTableWithStream
   PackedTableWithStream& data = *currentData_;
-  auto numRows = data.packedTable->table.num_rows();
+  // The producer's count, not table.num_rows(): a packed table with no columns
+  // reports zero rows however many it holds, which is what an exchange
+  // fragment with an empty output layout sends.
+  const auto numRows = data.numRows;
+  const auto& tableView = data.packedTable->table;
+  VELOX_CHECK(
+      tableView.num_columns() == 0 || tableView.num_rows() == numRows,
+      "Row count from the exchange disagrees with the received table: {} vs. {}",
+      numRows,
+      tableView.num_rows());
   auto gpuDataSize = data.gpuDataSize();
+
+  if (numRows == 0) {
+    // An empty page carries no rows to hand on, and Operator::getOutput() must
+    // never return an empty vector. Drop it and let the next isBlocked() fetch
+    // the following page or reach the end of the stream. Producers do not
+    // enqueue empty pages, so this is a defence rather than a live path.
+    currentData_.reset();
+    return nullptr;
+  }
 
   // Use the stream that was allocated in UcxExchangeSource::onMetadata
   // and the packed_table constructor of CudfVector to avoid copying data.
@@ -218,10 +226,9 @@ void UcxExchange::close() {
   currentData_.reset();
   if (exchangeClient_) {
     recordExchangeClientStats();
-    if (closeExchangeClientOnClose_) {
-      exchangeClient_->close();
-    }
   }
+  // The client is shared by all consumers of this pipeline and owned by the
+  // Task, which closes it on termination. Only drop this operator's reference.
   exchangeClient_ = nullptr;
 }
 

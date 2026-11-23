@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/expression/NullMask.h"
 
 #include "velox/common/base/Exceptions.h"
@@ -28,7 +29,7 @@ namespace facebook::velox::cudf_velox {
 void mergeNullSourceNullsIntoResult(
     cudf::column& result,
     cudf::column_view nullSourceColumn,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   mergeNullSourceNullsIntoResult(
       result, std::vector<cudf::column_view>{nullSourceColumn}, stream, mr);
@@ -37,7 +38,7 @@ void mergeNullSourceNullsIntoResult(
 void mergeNullSourceNullsIntoResult(
     cudf::column& result,
     const std::vector<cudf::column_view>& nullSourceColumns,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   std::vector<cudf::column_view> nullableSourceColumns;
   nullableSourceColumns.reserve(nullSourceColumns.size());
@@ -54,7 +55,10 @@ void mergeNullSourceNullsIntoResult(
   if (!result.nullable() && nullableSourceColumns.size() == 1) {
     auto nullSourceColumn = nullableSourceColumns.front();
     result.set_null_mask(
-        cudf::copy_bitmask(nullSourceColumn, stream, mr),
+        cudf::copy_bitmask(
+            nullSourceColumn,
+            stream,
+            cudf::memory_resources{mr, get_temp_mr()}),
         nullSourceColumn.null_count());
     return;
   }
@@ -71,8 +75,12 @@ void mergeNullSourceNullsIntoResult(
     masks.push_back(nullSourceColumn.null_mask());
     beginBits.push_back(nullSourceColumn.offset());
   }
-  auto [nullMask, nullCount] =
-      cudf::bitmask_and(masks, beginBits, result.size(), stream, mr);
+  auto [nullMask, nullCount] = cudf::bitmask_and(
+      masks,
+      beginBits,
+      result.size(),
+      stream,
+      cudf::memory_resources{mr, get_temp_mr()});
   result.set_null_mask(std::move(nullMask), nullCount);
 }
 

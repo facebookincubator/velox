@@ -16,57 +16,54 @@
 
 #include "velox/common/time/Timer.h"
 
+#include <sys/resource.h>
+
 #include "velox/common/testutil/ScopedTestTime.h"
+#include "velox/common/time/CpuWallTimer.h"
 
 namespace facebook::velox {
 
 using namespace std::chrono;
 using common::testutil::ScopedTestTime;
 
-#ifndef NDEBUG
-
-uint64_t getCurrentTimeSec() {
-  return ScopedTestTime::getCurrentTestTimeSec().value_or(
-      duration_cast<seconds>(system_clock::now().time_since_epoch()).count());
+ProcessCpuWallTimer::ProcessCpuWallTimer(CpuWallTiming& timing)
+    : wallTimeStart_{steady_clock::now()},
+      cpuTimeStart_{processCpuNanos()},
+      timing_{timing} {
+  ++timing_.count;
 }
 
-uint64_t getCurrentTimeMs() {
-  return ScopedTestTime::getCurrentTestTimeMs().value_or(
-      duration_cast<milliseconds>(system_clock::now().time_since_epoch())
-          .count());
+ProcessCpuWallTimer::~ProcessCpuWallTimer() {
+  const auto cpuTimeEnd = processCpuNanos();
+  if (cpuTimeStart_ != kUnavailableCpuTime &&
+      cpuTimeEnd != kUnavailableCpuTime) {
+    timing_.cpuNanos += cpuTimeEnd - cpuTimeStart_;
+  }
+  timing_.wallNanos +=
+      duration_cast<nanoseconds>(steady_clock::now() - wallTimeStart_).count();
 }
 
-uint64_t getCurrentTimeMicro() {
-  return ScopedTestTime::getCurrentTestTimeMicro().value_or(
-      duration_cast<microseconds>(system_clock::now().time_since_epoch())
-          .count());
+uint64_t ProcessCpuWallTimer::processCpuNanos() noexcept {
+  rusage usage{};
+  if (getrusage(RUSAGE_SELF, &usage) != 0) {
+    return kUnavailableCpuTime;
+  }
+  const auto toNanos = [](const timeval& value) {
+    return static_cast<uint64_t>(value.tv_sec) * 1'000'000'000 +
+        static_cast<uint64_t>(value.tv_usec) * 1'000;
+  };
+  return toNanos(usage.ru_utime) + toNanos(usage.ru_stime);
 }
 
-uint64_t getCurrentTimeNano() {
-  return ScopedTestTime::getCurrentTestTimeNano().value_or(
+uint64_t EpochTime::nowNanos() {
+  const auto systemNanos =
       duration_cast<nanoseconds>(system_clock::now().time_since_epoch())
-          .count());
-}
+          .count();
+#ifndef NDEBUG
+  return ScopedTestTime::getCurrentTestTimeNano().value_or(systemNanos);
 #else
-
-uint64_t getCurrentTimeSec() {
-  return duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
-}
-
-uint64_t getCurrentTimeMs() {
-  return duration_cast<milliseconds>(system_clock::now().time_since_epoch())
-      .count();
-}
-
-uint64_t getCurrentTimeMicro() {
-  return duration_cast<microseconds>(system_clock::now().time_since_epoch())
-      .count();
-}
-
-uint64_t getCurrentTimeNano() {
-  return duration_cast<nanoseconds>(system_clock::now().time_since_epoch())
-      .count();
-}
+  return systemNanos;
 #endif
+}
 
 } // namespace facebook::velox

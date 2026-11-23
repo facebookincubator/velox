@@ -29,11 +29,89 @@ namespace torch::wave {
 
 /// Functions for splitting a graph into consecutive layers where each layer
 /// consists of independent computations.
+/// Elides clones whose users only read them, across the whole graph. Call
+/// before partitioning: ParallelNodes::rewriteInPlace walks one ProjectNode
+/// layer at a time and cannot see a source whose clones land in different
+/// layers. Returns the number elided.
+/// Drops clones nobody writes, whose source is never mutated and which do not
+/// escape as graph outputs, then merges the identical ones that remain.
+int64_t elideReadOnlyClones(nativert::Graph& graph, const ValueTypes& types);
+
+/// Merges copy_(select(T, dim, i), src_i) for each run of consecutive columns
+/// i = s..s+k-1 into one copy_(slice(T, dim, s, s+k), stack([src_s ..
+/// src_s+k-1], dim)). Each copy
+/// mutates T, so the slice of T feeding the next one is ordered after it, and k
+/// copies become a chain of 3k partition layers; the columns are disjoint, so
+/// the one merged copy writes the same values. Applies when the sources are
+/// expands to the same sizes and nothing between the first and last copy reads
+/// or writes T or writes a source. Call before normalizeAndAnnotateGraph, so
+/// the new nodes get their defaults like any other. Gated on
+/// WaveConfig::recognizeDisjointCopies by the caller. Returns the number of
+/// copies merged away.
+int64_t rewriteDisjointCopies(nativert::Graph& graph, WaveGraph& waveGraph);
+
+/// Writes functional scatter chains in place. A chain is a run of scatters,
+/// each writing the previous one's result, starting from a root tensor. A link
+/// is a select_scatter / slice_scatter of a constant region, or an
+/// index-tensor write (index_put, scatter_add). Functionalization emits a chain
+/// for every "x[:, i].copy_(v)" loop, together with a full-range slice_scatter
+/// per enclosing view and a copy that only converts v, and a one-link chain for
+/// every in-place update of a slice, "x[:, :k] += y". When the root is a tensor
+/// of its own or a view of one, nothing outside the chain touches that tensor
+/// from the chain's start on, and every intermediate result is used only by
+/// the next link, each region link becomes copy_(select or slice of the root,
+/// v), each index-tensor link becomes its in-place form on the root, and the
+/// chain's result is the root. The chain is then the in-place graph
+/// rewriteDisjointCopies and the disjoint-write ordering handle, and no scatter
+/// copies the whole root first. Call before rewriteDisjointCopies. Gated on
+/// WaveConfig::reinplaceScatters by the caller. Returns the number of scatters
+/// written in place.
+int64_t reinplaceScatterChains(nativert::Graph& graph, WaveGraph& waveGraph);
+
+/// Merges nodes that compute the same value from the same operands, to a
+/// fixpoint: merging two nodes can make their consumers congruent in turn. Only
+/// pure nodes participate -- nothing that writes, reads a buffer written
+/// elsewhere in the graph, or escapes as a graph output. Gated per category by
+/// WaveConfig::cseCompute and cseViews; a no-op when both are off.
+/// Call before partitioning, after the rewrites that create the duplicates, and
+/// before duplicateMetadataOps, whose duplicates this would otherwise undo.
+/// Returns the number of nodes merged away.
+int64_t commonSubexpressions(nativert::Graph& graph, const ValueTypes& types);
+
+/// Rewrites ops that produce a TensorList into per-tensor form, by calling each
+/// op's own Metadata::decompose rule. One traversal serves every op, so a new
+/// decomposition is a rule on the op rather than another pass over the graph.
+/// Call after commonSubexpressions -- decomposition multiplies the node count,
+/// and CSE is cheaper on the bundled form -- and before partitioning, which is
+/// what the per-tensor nodes exist to inform. Returns the number rewritten.
+int64_t decomposeListOps(nativert::Graph& graph, WaveGraph& waveGraph);
+
+/// Rematerializes each multiply-used metadata getter (sym_size / sym_numel) at
+/// its use sites, so it stops being a shared value the partitioner has to
+/// materialize as a top-level output. Only duplicates a getter whose operand is
+/// already live at every use site, so no new border appears in its place.
+/// Call before partitioning and after any pass that merges equal values, which
+/// would undo it. Returns the number of nodes duplicated.
+int64_t duplicateMetadataOps(
+    nativert::Graph& graph,
+    ValueTypes& types,
+    WaveGraph& waveGraph);
+
 class ParallelNodes {
  public:
   /// Divides 'graph' into consecutive layers where each layer's expressions
   /// are known to be independent. A ProjectNode represents each layer.
   ProjectNode* makeParallelNodes(const nativert::Graph& graph);
+
+  /// After the layers and last-use sets are built, elides redundant clones
+  /// within each top-level expr so an in-place writer (e.g. index_put_) writes
+  /// its original buffer instead of a defensive copy, per the in-place rewrite
+  /// checklist. Localized to a single top-level expr: no op moves between
+  /// ProjectNodes. Runs only when WaveConfig::enableReuse is set. 'types'
+  /// supplies per-value layout and ownership constraints; graph nodes are
+  /// mutated in place. Re-runs the last-use analysis afterward since the
+  /// rewrites (clone elision) change value lifetimes.
+  void rewriteInPlace(nativert::Graph& graph, const ValueTypes& types);
 
  private:
   ProjectNode* makeParallelProject(
@@ -45,6 +123,14 @@ class ParallelNodes {
   /// (alias-corrected) and reusableValues_ sets by scanning every layer's
   /// boundary-value accesses and view/list aliases in execution order.
   void computeLastUse(const nativert::Graph& graph);
+
+  /// Fills each ProjectNode's reusableValues_ and overwritableTemps_ from the
+  /// finalized lastUse sets: boundary last-use values whose storage has a
+  /// single in-layer consumer (reusable inputs), and expr-local values that
+  /// never escape their subgraph (overwritable temps). Split out of
+  /// computeLastUse so the core lifetime computation stays separate from
+  /// reuse-eligibility.
+  void computeReuseEligibility(const std::unordered_set<ValueCP>& graphOutputs);
 
   std::vector<std::unique_ptr<ProjectNode>> projectNodes_;
   int32_t nextId_{0};

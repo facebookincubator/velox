@@ -101,8 +101,7 @@ ArbitrationParticipant::ArbitrationParticipant(
       poolWeakPtr_(pool),
       pool_(pool.get()),
       config_(config),
-      maxCapacity_(pool_->maxCapacity()),
-      createTimeNs_(getCurrentTimeNano()) {
+      maxCapacity_(pool_->maxCapacity()) {
   VELOX_CHECK_LE(
       config_->minCapacity,
       maxCapacity_,
@@ -231,10 +230,6 @@ void ArbitrationParticipant::startArbitration(ArbitrationOperation* op) {
       runningOp_ = op;
     }
   }
-
-  TestValue::adjust(
-      "facebook::velox::memory::ArbitrationParticipant::startArbitration",
-      this);
 
   if (waitPromise.valid()) {
     waitPromise.wait();
@@ -399,11 +394,10 @@ std::string ArbitrationParticipant::Stats::toString() const {
 }
 
 ScopedArbitrationParticipant::ScopedArbitrationParticipant(
-    std::shared_ptr<ArbitrationParticipant> ArbitrationParticipant,
+    std::shared_ptr<ArbitrationParticipant> participant,
     std::shared_ptr<MemoryPool> pool)
-    : ArbitrationParticipant_(std::move(ArbitrationParticipant)),
-      pool_(std::move(pool)) {
-  VELOX_CHECK_NOT_NULL(ArbitrationParticipant_);
+    : participant_(std::move(participant)), pool_(std::move(pool)) {
+  VELOX_CHECK_NOT_NULL(participant_);
   VELOX_CHECK_NOT_NULL(pool_);
 }
 

@@ -74,6 +74,36 @@ static inline SchemaElement newGroup(
   return result;
 }
 
+static std::shared_ptr<PrimitiveNode> makePrimitiveNode(
+    const std::string& name,
+    Repetition::type repetition,
+    Type::type type,
+    ConvertedType::type convertedType = ConvertedType::kNone,
+    int length = -1,
+    int precision = -1,
+    int scale = -1,
+    int fieldId = -1) {
+  return std::static_pointer_cast<PrimitiveNode>(PrimitiveNode::make(
+      name,
+      repetition,
+      type,
+      convertedType,
+      length,
+      precision,
+      scale,
+      fieldId));
+}
+
+static std::shared_ptr<GroupNode> makeGroupNode(
+    const std::string& name,
+    Repetition::type repetition,
+    const NodeVector& fields,
+    ConvertedType::type convertedType = ConvertedType::kNone,
+    int fieldId = -1) {
+  return std::static_pointer_cast<GroupNode>(
+      GroupNode::make(name, repetition, fields, convertedType, fieldId));
+}
+
 template <typename NodeType>
 static void checkNodeRoundtrip(const Node& node) {
   facebook::velox::parquet::thrift::SchemaElement serialized;
@@ -112,7 +142,7 @@ static void confirmGroupNodeRoundtrip(
 // ----------------------------------------------------------------------.
 // ColumnPath.
 
-TEST(TestColumnPath, TestAttrs) {
+TEST(TestColumnPath, testAttrs) {
   ColumnPath path(std::vector<std::string>({"toplevel", "leaf"}));
 
   ASSERT_EQ(path.toDotString(), "toplevel.leaf");
@@ -149,41 +179,40 @@ class TestPrimitiveNode : public ::testing::Test {
   std::unique_ptr<Node> node_;
 };
 
-TEST_F(TestPrimitiveNode, Attrs) {
-  PrimitiveNode node1("foo", Repetition::kRepeated, Type::kInt32);
-
-  PrimitiveNode node2(
+TEST_F(TestPrimitiveNode, attrs) {
+  auto node1 = makePrimitiveNode("foo", Repetition::kRepeated, Type::kInt32);
+  auto node2 = makePrimitiveNode(
       "bar", Repetition::kOptional, Type::kByteArray, ConvertedType::kUtf8);
 
-  ASSERT_EQ("foo", node1.name());
+  ASSERT_EQ("foo", node1->name());
 
-  ASSERT_TRUE(node1.isPrimitive());
-  ASSERT_FALSE(node1.isGroup());
+  ASSERT_TRUE(node1->isPrimitive());
+  ASSERT_FALSE(node1->isGroup());
 
-  ASSERT_EQ(Repetition::kRepeated, node1.repetition());
-  ASSERT_EQ(Repetition::kOptional, node2.repetition());
+  ASSERT_EQ(Repetition::kRepeated, node1->repetition());
+  ASSERT_EQ(Repetition::kOptional, node2->repetition());
 
-  ASSERT_EQ(Node::kPrimitive, node1.nodeType());
+  ASSERT_EQ(Node::kPrimitive, node1->nodeType());
 
-  ASSERT_EQ(Type::kInt32, node1.physicalType());
-  ASSERT_EQ(Type::kByteArray, node2.physicalType());
+  ASSERT_EQ(Type::kInt32, node1->physicalType());
+  ASSERT_EQ(Type::kByteArray, node2->physicalType());
 
   // Logical types.
-  ASSERT_EQ(ConvertedType::kNone, node1.convertedType());
-  ASSERT_EQ(ConvertedType::kUtf8, node2.convertedType());
+  ASSERT_EQ(ConvertedType::kNone, node1->convertedType());
+  ASSERT_EQ(ConvertedType::kUtf8, node2->convertedType());
 
   // Repetition.
-  PrimitiveNode node3("foo", Repetition::kRepeated, Type::kInt32);
-  PrimitiveNode node4("foo", Repetition::kRequired, Type::kInt32);
-  PrimitiveNode node5("foo", Repetition::kOptional, Type::kInt32);
+  auto node3 = makePrimitiveNode("foo", Repetition::kRepeated, Type::kInt32);
+  auto node4 = makePrimitiveNode("foo", Repetition::kRequired, Type::kInt32);
+  auto node5 = makePrimitiveNode("foo", Repetition::kOptional, Type::kInt32);
 
-  ASSERT_TRUE(node3.isRepeated());
-  ASSERT_FALSE(node3.isOptional());
+  ASSERT_TRUE(node3->isRepeated());
+  ASSERT_FALSE(node3->isOptional());
 
-  ASSERT_TRUE(node4.isRequired());
+  ASSERT_TRUE(node4->isRequired());
 
-  ASSERT_TRUE(node5.isOptional());
-  ASSERT_FALSE(node5.isRequired());
+  ASSERT_TRUE(node5->isOptional());
+  ASSERT_FALSE(node5->isRequired());
 }
 
 TEST_F(TestPrimitiveNode, fromParquet) {
@@ -236,19 +265,19 @@ TEST_F(TestPrimitiveNode, fromParquet) {
 }
 
 TEST_F(TestPrimitiveNode, equals) {
-  PrimitiveNode node1("foo", Repetition::kRequired, Type::kInt32);
-  PrimitiveNode node2("foo", Repetition::kRequired, Type::kInt64);
-  PrimitiveNode node3("bar", Repetition::kRequired, Type::kInt32);
-  PrimitiveNode node4("foo", Repetition::kOptional, Type::kInt32);
-  PrimitiveNode node5("foo", Repetition::kRequired, Type::kInt32);
+  auto node1 = makePrimitiveNode("foo", Repetition::kRequired, Type::kInt32);
+  auto node2 = makePrimitiveNode("foo", Repetition::kRequired, Type::kInt64);
+  auto node3 = makePrimitiveNode("bar", Repetition::kRequired, Type::kInt32);
+  auto node4 = makePrimitiveNode("foo", Repetition::kOptional, Type::kInt32);
+  auto node5 = makePrimitiveNode("foo", Repetition::kRequired, Type::kInt32);
 
-  ASSERT_TRUE(node1.equals(&node1));
-  ASSERT_FALSE(node1.equals(&node2));
-  ASSERT_FALSE(node1.equals(&node3));
-  ASSERT_FALSE(node1.equals(&node4));
-  ASSERT_TRUE(node1.equals(&node5));
+  ASSERT_TRUE(node1->equals(node1.get()));
+  ASSERT_FALSE(node1->equals(node2.get()));
+  ASSERT_FALSE(node1->equals(node3.get()));
+  ASSERT_FALSE(node1->equals(node4.get()));
+  ASSERT_TRUE(node1->equals(node5.get()));
 
-  PrimitiveNode flba1(
+  auto flba1 = makePrimitiveNode(
       "foo",
       Repetition::kRequired,
       Type::kFixedLenByteArray,
@@ -257,27 +286,23 @@ TEST_F(TestPrimitiveNode, equals) {
       4,
       2);
 
-  PrimitiveNode flba2(
+  auto flba2 = makePrimitiveNode(
       "foo",
       Repetition::kRequired,
       Type::kFixedLenByteArray,
       ConvertedType::kDecimal,
-      1,
+      12,
       4,
       2);
-  flba2.setTypeLength(12);
-
-  PrimitiveNode flba3(
+  auto flba3 = makePrimitiveNode(
       "foo",
       Repetition::kRequired,
       Type::kFixedLenByteArray,
       ConvertedType::kDecimal,
-      1,
+      16,
       4,
       2);
-  flba3.setTypeLength(16);
-
-  PrimitiveNode flba4(
+  auto flba4 = makePrimitiveNode(
       "foo",
       Repetition::kRequired,
       Type::kFixedLenByteArray,
@@ -286,7 +311,7 @@ TEST_F(TestPrimitiveNode, equals) {
       4,
       0);
 
-  PrimitiveNode flba5(
+  auto flba5 = makePrimitiveNode(
       "foo",
       Repetition::kRequired,
       Type::kFixedLenByteArray,
@@ -295,13 +320,13 @@ TEST_F(TestPrimitiveNode, equals) {
       4,
       0);
 
-  ASSERT_TRUE(flba1.equals(&flba2));
-  ASSERT_FALSE(flba1.equals(&flba3));
-  ASSERT_FALSE(flba1.equals(&flba4));
-  ASSERT_FALSE(flba1.equals(&flba5));
+  ASSERT_TRUE(flba1->equals(flba2.get()));
+  ASSERT_FALSE(flba1->equals(flba3.get()));
+  ASSERT_FALSE(flba1->equals(flba4.get()));
+  ASSERT_FALSE(flba1->equals(flba5.get()));
 }
 
-TEST_F(TestPrimitiveNode, PhysicalLogicalMapping) {
+TEST_F(TestPrimitiveNode, physicalLogicalMapping) {
   ASSERT_NO_THROW(
       PrimitiveNode::make(
           "foo", Repetition::kRequired, Type::kInt32, ConvertedType::kInt32));
@@ -462,74 +487,75 @@ class TestGroupNode : public ::testing::Test {
   }
 };
 
-TEST_F(TestGroupNode, Attrs) {
+TEST_F(TestGroupNode, attrs) {
   NodeVector fields = fields1();
 
-  GroupNode node1("foo", Repetition::kRepeated, fields);
-  GroupNode node2("bar", Repetition::kOptional, fields, ConvertedType::kList);
+  auto node1 = makeGroupNode("foo", Repetition::kRepeated, fields);
+  auto node2 =
+      makeGroupNode("bar", Repetition::kOptional, fields, ConvertedType::kList);
 
-  ASSERT_EQ("foo", node1.name());
+  ASSERT_EQ("foo", node1->name());
 
-  ASSERT_TRUE(node1.isGroup());
-  ASSERT_FALSE(node1.isPrimitive());
+  ASSERT_TRUE(node1->isGroup());
+  ASSERT_FALSE(node1->isPrimitive());
 
-  ASSERT_EQ(fields.size(), node1.fieldCount());
+  ASSERT_EQ(fields.size(), node1->fieldCount());
 
-  ASSERT_TRUE(node1.isRepeated());
-  ASSERT_TRUE(node2.isOptional());
+  ASSERT_TRUE(node1->isRepeated());
+  ASSERT_TRUE(node2->isOptional());
 
-  ASSERT_EQ(Repetition::kRepeated, node1.repetition());
-  ASSERT_EQ(Repetition::kOptional, node2.repetition());
+  ASSERT_EQ(Repetition::kRepeated, node1->repetition());
+  ASSERT_EQ(Repetition::kOptional, node2->repetition());
 
-  ASSERT_EQ(Node::kGroup, node1.nodeType());
+  ASSERT_EQ(Node::kGroup, node1->nodeType());
 
   // Logical types.
-  ASSERT_EQ(ConvertedType::kNone, node1.convertedType());
-  ASSERT_EQ(ConvertedType::kList, node2.convertedType());
+  ASSERT_EQ(ConvertedType::kNone, node1->convertedType());
+  ASSERT_EQ(ConvertedType::kList, node2->convertedType());
 }
 
 TEST_F(TestGroupNode, equals) {
   NodeVector f1 = fields1();
   NodeVector f2 = fields1();
 
-  GroupNode group1("group", Repetition::kRepeated, f1);
-  GroupNode group2("group", Repetition::kRepeated, f2);
-  GroupNode group3("group2", Repetition::kRepeated, f2);
+  auto group1 = makeGroupNode("group", Repetition::kRepeated, f1);
+  auto group2 = makeGroupNode("group", Repetition::kRepeated, f2);
+  auto group3 = makeGroupNode("group2", Repetition::kRepeated, f2);
 
   // This is copied in the GroupNode ctor, so this is okay.
   f2.push_back(floatType("four", Repetition::kOptional));
-  GroupNode group4("group", Repetition::kRepeated, f2);
-  GroupNode group5("group", Repetition::kRepeated, fields1());
+  auto group4 = makeGroupNode("group", Repetition::kRepeated, f2);
+  auto group5 = makeGroupNode("group", Repetition::kRepeated, fields1());
 
-  ASSERT_TRUE(group1.equals(&group1));
-  ASSERT_TRUE(group1.equals(&group2));
-  ASSERT_FALSE(group1.equals(&group3));
+  ASSERT_TRUE(group1->equals(group1.get()));
+  ASSERT_TRUE(group1->equals(group2.get()));
+  ASSERT_FALSE(group1->equals(group3.get()));
 
-  ASSERT_FALSE(group1.equals(&group4));
-  ASSERT_FALSE(group5.equals(&group4));
+  ASSERT_FALSE(group1->equals(group4.get()));
+  ASSERT_FALSE(group5->equals(group4.get()));
 }
 
 TEST_F(TestGroupNode, fieldIndex) {
   NodeVector fields = fields1();
-  GroupNode group("group", Repetition::kRequired, fields);
+  auto group = makeGroupNode("group", Repetition::kRequired, fields);
   for (size_t i = 0; i < fields.size(); i++) {
-    auto field = group.field(static_cast<int>(i));
-    ASSERT_EQ(i, group.fieldIndex(*field));
+    auto field = group->field(static_cast<int>(i));
+    ASSERT_EQ(i, group->fieldIndex(*field));
   }
 
   // Test a non field node.
   auto nonFieldAlien = int32("alien", Repetition::kRequired); // other name
   auto nonFieldFamiliar = int32("one", Repetition::kRepeated); // other node
-  ASSERT_LT(group.fieldIndex(*nonFieldAlien), 0);
-  ASSERT_LT(group.fieldIndex(*nonFieldFamiliar), 0);
+  ASSERT_LT(group->fieldIndex(*nonFieldAlien), 0);
+  ASSERT_LT(group->fieldIndex(*nonFieldFamiliar), 0);
 }
 
-TEST_F(TestGroupNode, FieldIndexDuplicateName) {
+TEST_F(TestGroupNode, fieldIndexDuplicateName) {
   NodeVector fields = fields2();
-  GroupNode group("group", Repetition::kRequired, fields);
+  auto group = makeGroupNode("group", Repetition::kRequired, fields);
   for (size_t i = 0; i < fields.size(); i++) {
-    auto field = group.field(static_cast<int>(i));
-    ASSERT_EQ(i, group.fieldIndex(*field));
+    auto field = group->field(static_cast<int>(i));
+    ASSERT_EQ(i, group->fieldIndex(*field));
   }
 }
 
@@ -573,7 +599,7 @@ bool checkForParentConsistency(const GroupNode* Node) {
   return true;
 }
 
-TEST_F(TestSchemaConverter, NestedExample) {
+TEST_F(TestSchemaConverter, nestedExample) {
   SchemaElement elt;
   std::vector<SchemaElement> elements;
   elements.push_back(newGroup(name_, FieldRepetitionType::REPEATED, 2, 0));
@@ -618,14 +644,14 @@ TEST_F(TestSchemaConverter, NestedExample) {
   ASSERT_TRUE(checkForParentConsistency(group_));
 }
 
-TEST_F(TestSchemaConverter, ZeroColumns) {
+TEST_F(TestSchemaConverter, zeroColumns) {
   // ARROW-3843.
   SchemaElement elements[1];
   elements[0] = newGroup("schema", FieldRepetitionType::REPEATED, 0, 0);
   ASSERT_NO_THROW(convert(elements, 1));
 }
 
-TEST_F(TestSchemaConverter, InvalidRoot) {
+TEST_F(TestSchemaConverter, invalidRoot) {
   // According to the Parquet specification, the first element in the.
   // list<SchemaElement> is a group whose children (and their descendants)
   // Contain all of the rest of the flattened schema elements. If the first.
@@ -649,7 +675,7 @@ TEST_F(TestSchemaConverter, InvalidRoot) {
   ASSERT_NO_FATAL_FAILURE(convert(elements, 2));
 }
 
-TEST_F(TestSchemaConverter, NotEnoughChildren) {
+TEST_F(TestSchemaConverter, notEnoughChildren) {
   // Throw a ParquetException, but don't core dump or anything.
   SchemaElement elt;
   std::vector<SchemaElement> elements;
@@ -675,7 +701,7 @@ class TestSchemaFlatten : public ::testing::Test {
   std::vector<facebook::velox::parquet::thrift::SchemaElement> elements_;
 };
 
-TEST_F(TestSchemaFlatten, DecimalMetadata) {
+TEST_F(TestSchemaFlatten, decimalMetadata) {
   // Checks that DecimalMetadata is only set for DecimalTypes.
   NodePtr Node = PrimitiveNode::make(
       "decimal",
@@ -717,7 +743,7 @@ TEST_F(TestSchemaFlatten, DecimalMetadata) {
   ASSERT_FALSE(elements_[0].scale().has_value());
 }
 
-TEST_F(TestSchemaFlatten, NestedExample) {
+TEST_F(TestSchemaFlatten, nestedExample) {
   SchemaElement elt;
   std::vector<SchemaElement> elements;
   elements.push_back(newGroup(name_, FieldRepetitionType::REPEATED, 2, 0));
@@ -763,7 +789,7 @@ TEST_F(TestSchemaFlatten, NestedExample) {
   }
 }
 
-TEST(TestColumnDescriptor, TestAttrs) {
+TEST(TestColumnDescriptor, testAttrs) {
   NodePtr Node = PrimitiveNode::make(
       "name", Repetition::kOptional, Type::kByteArray, ConvertedType::kUtf8);
   ColumnDescriptor descr(Node, 4, 1);
@@ -823,7 +849,7 @@ class TestSchemaDescriptor : public ::testing::Test {
   SchemaDescriptor descr_;
 };
 
-TEST_F(TestSchemaDescriptor, InitNonGroup) {
+TEST_F(TestSchemaDescriptor, initNonGroup) {
   NodePtr Node =
       PrimitiveNode::make("field", Repetition::kOptional, Type::kInt32);
 
@@ -1026,7 +1052,7 @@ static std::string print(const NodePtr& Node) {
   return ss.str();
 }
 
-TEST(TestSchemaPrinter, Examples) {
+TEST(TestSchemaPrinter, examples) {
   // Test schema 1.
   NodeVector fields;
   fields.push_back(int32("a", Repetition::kRequired, 1));
@@ -1102,7 +1128,7 @@ static void confirmFactoryEquivalence(
   return;
 }
 
-TEST(TestLogicalTypeConstruction, FactoryEquivalence) {
+TEST(TestLogicalTypeConstruction, factoryEquivalence) {
   // For each legacy converted type, ensure that the equivalent logical type.
   // object can be obtained from either the base class's FromConvertedType()
   // Factory method or the logical type type class's Make() method (accessed
@@ -1245,7 +1271,7 @@ static void confirmConvertedTypeCompatibility(
   return;
 }
 
-TEST(TestLogicalTypeConstruction, ConvertedTypeCompatibility) {
+TEST(TestLogicalTypeConstruction, convertedTypeCompatibility) {
   // For each legacy converted type, ensure that the equivalent logical type.
   // Emits correct, compatible converted type information and that the emitted.
   // Information can be used to reconstruct another equivalent logical type.
@@ -1345,7 +1371,7 @@ static void confirmNewTypeIncompatibility(
   return;
 }
 
-TEST(TestLogicalTypeConstruction, NewTypeIncompatibility) {
+TEST(TestLogicalTypeConstruction, newTypeIncompatibility) {
   // For each new logical type, ensure that the type.
   // Correctly reports that it has no legacy equivalent.
 
@@ -1386,7 +1412,7 @@ TEST(TestLogicalTypeConstruction, NewTypeIncompatibility) {
   }
 }
 
-TEST(TestLogicalTypeConstruction, FactoryExceptions) {
+TEST(TestLogicalTypeConstruction, factoryExceptions) {
   // Ensure that logical type construction catches invalid arguments.
 
   std::vector<std::function<void()>> cases = {
@@ -1435,7 +1461,7 @@ static void confirmLogicalTypeProperties(
   return;
 }
 
-TEST(TestLogicalTypeOperation, LogicalTypeProperties) {
+TEST(TestLogicalTypeOperation, logicalTypeProperties) {
   // For each logical type, ensure that the correct general properties are.
   // Reported.
 
@@ -1530,7 +1556,7 @@ static void confirmNoPrimitiveTypeApplicability(
   return;
 }
 
-TEST(TestLogicalTypeOperation, LogicalTypeApplicability) {
+TEST(TestLogicalTypeOperation, logicalTypeApplicability) {
   // Check that each logical type correctly reports which.
   // Underlying primitive type(s) it can be applied to.
 
@@ -1616,7 +1642,7 @@ TEST(TestLogicalTypeOperation, LogicalTypeApplicability) {
   }
 }
 
-TEST(TestLogicalTypeOperation, DecimalLogicalTypeApplicability) {
+TEST(TestLogicalTypeOperation, decimalLogicalTypeApplicability) {
   // Check that the decimal logical type correctly reports which.
   // Underlying primitive type(s) it can be applied to.
 
@@ -1691,7 +1717,7 @@ TEST(TestLogicalTypeOperation, DecimalLogicalTypeApplicability) {
   ASSERT_FALSE((DecimalLogicalType::make(16, 6))->isApplicable(Type::kDouble));
 }
 
-TEST(TestLogicalTypeOperation, LogicalTypeRepresentation) {
+TEST(TestLogicalTypeOperation, logicalTypeRepresentation) {
   // Ensure that each logical type prints a correct string and.
   // JSON representation.
 
@@ -1801,7 +1827,7 @@ TEST(TestLogicalTypeOperation, LogicalTypeRepresentation) {
   }
 }
 
-TEST(TestLogicalTypeOperation, LogicalTypeSortOrder) {
+TEST(TestLogicalTypeOperation, logicalTypeSortOrder) {
   // Ensure that each logical type reports the correct sort order.
 
   struct ExpectedSortOrder {
@@ -1906,7 +1932,7 @@ static void confirmGroupNodeFactoryEquivalence(
   return;
 }
 
-TEST(TestSchemaNodeCreation, FactoryEquivalence) {
+TEST(TestSchemaNodeCreation, factoryEquivalence) {
   // Ensure that the Node factory methods produce equivalent results regardless.
   // Of whether they are given a converted type or a logical type.
 
@@ -2040,7 +2066,7 @@ TEST(TestSchemaNodeCreation, FactoryEquivalence) {
       "list", LogicalType::list(), ConvertedType::kList);
 }
 
-TEST(TestSchemaNodeCreation, FactoryExceptions) {
+TEST(TestSchemaNodeCreation, factoryExceptions) {
   // Ensure that the Node factory method that accepts a logical type refuses to.
   // Create an object if compatibility conditions are not met.
 
@@ -2295,7 +2321,7 @@ class TestSchemaElementConstruction : public ::testing::Test {
  * serialization of an annotated schema node are correctly populated.
  */
 
-TEST_F(TestSchemaElementConstruction, SimpleCases) {
+TEST_F(TestSchemaElementConstruction, simpleCases) {
   auto checkNothing = []() {
     return true;
   }; // used for logical types that don't expect a logicalType to be set
@@ -2448,7 +2474,7 @@ class TestDecimalSchemaElementConstruction
   int32_t scale_;
 };
 
-TEST_F(TestDecimalSchemaElementConstruction, DecimalCases) {
+TEST_F(TestDecimalSchemaElementConstruction, decimalCases) {
   auto checkDecimal = [this]() {
     return element_->logicalType()->getType() ==
         facebook::velox::parquet::thrift::LogicalType::Type::DECIMAL;
@@ -2617,7 +2643,7 @@ void TestTemporalSchemaElementConstruction::inspect<
   return;
 }
 
-TEST_F(TestTemporalSchemaElementConstruction, TemporalCases) {
+TEST_F(TestTemporalSchemaElementConstruction, temporalCases) {
   auto checkTime = [this]() {
     return element_->logicalType()->getType() ==
         facebook::velox::parquet::thrift::LogicalType::Type::TIME;
@@ -2784,7 +2810,7 @@ class TestIntegerSchemaElementConstruction
   bool signed_;
 };
 
-TEST_F(TestIntegerSchemaElementConstruction, IntegerCases) {
+TEST_F(TestIntegerSchemaElementConstruction, integerCases) {
   auto checkInteger = [this]() {
     return element_->logicalType()->getType() ==
         facebook::velox::parquet::thrift::LogicalType::Type::INTEGER;
@@ -2862,7 +2888,7 @@ TEST_F(TestIntegerSchemaElementConstruction, IntegerCases) {
   }
 }
 
-TEST(TestLogicalTypeSerialization, SchemaElementNestedCases) {
+TEST(TestLogicalTypeSerialization, schemaElementNestedCases) {
   // Confirm that the intermediate Thrift objects created during node.
   // Serialization contain correct ConvertedType and ConvertedType information.
 
@@ -2943,7 +2969,7 @@ TEST(TestLogicalTypeSerialization, SchemaElementNestedCases) {
   ASSERT_TRUE(mapElements[0].logicalType()->getType() == LogicalTypeType::MAP);
 }
 
-TEST(TestLogicalTypeSerialization, Roundtrips) {
+TEST(TestLogicalTypeSerialization, roundtrips) {
   // Confirm that Thrift serialization-deserialization of nodes with logical.
   // Types produces equivalent reconstituted nodes.
 

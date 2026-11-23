@@ -22,11 +22,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <random>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -576,12 +578,15 @@ class LocalFileIoUringTest : public ::testing::Test {
   }
 
   void SetUp() override {
+    if (!IoUringReader::available()) {
+      GTEST_SKIP() << "io_uring is unavailable";
+    }
+
     ThreadLocalIoUringReader::testingClear();
 
     IoUringReader::Options options;
     options.submissionQueueDepth = 8;
     options.completionQueueDepth = 8;
-    options.registeredFileSlots = 8;
     IoUringReader::setOptions(options);
 
     tempFile_ = TempFilePath::create();
@@ -649,7 +654,48 @@ void expectPageContent(const char* data, size_t pageIndex) {
   VELOX_CHECK_EQ(std::memcmp(data, expected.data(), kPageSize), 0);
 }
 
-void runConcurrentPreadvTest(
+bool isIoUringUnavailableError(std::string_view errorMessage) {
+  constexpr std::string_view kQueueInitializationOutOfMemory =
+      "io_uring_queue_init failed: Cannot allocate memory";
+  constexpr std::string_view kFileRegistrationOutOfMemory =
+      "io_uring_register_files failed: Cannot allocate memory";
+  constexpr std::string_view kBatchReadsUnavailable =
+      "io_uring batch reads requested but io_uring is unavailable";
+  constexpr std::string_view kLocalReadFileUnavailable =
+      "LocalReadFile useIoUring requested but io_uring is unavailable";
+
+  return errorMessage.find(kQueueInitializationOutOfMemory) !=
+      std::string_view::npos ||
+      errorMessage.find(kFileRegistrationOutOfMemory) !=
+      std::string_view::npos ||
+      errorMessage.find(kBatchReadsUnavailable) != std::string_view::npos ||
+      errorMessage.find(kLocalReadFileUnavailable) != std::string_view::npos;
+}
+
+TEST(LocalFileIoUringErrorTest, recognizesUnavailableIoUringErrors) {
+  EXPECT_TRUE(isIoUringUnavailableError(
+      "io_uring_queue_init failed: Cannot allocate memory"));
+  EXPECT_TRUE(isIoUringUnavailableError(
+      "io_uring_register_files failed: Cannot allocate memory"));
+  EXPECT_TRUE(isIoUringUnavailableError(
+      "io_uring batch reads requested but io_uring is unavailable"));
+  EXPECT_TRUE(isIoUringUnavailableError(
+      "LocalReadFile useIoUring requested but io_uring is unavailable"));
+  EXPECT_FALSE(isIoUringUnavailableError(
+      "io_uring_queue_init failed: Invalid argument"));
+  EXPECT_FALSE(isIoUringUnavailableError(
+      "io_uring_register_files failed: Invalid argument"));
+  EXPECT_FALSE(isIoUringUnavailableError(
+      "io_uring batch pread failed: Cannot allocate memory"));
+}
+
+enum class ConcurrentPreadvTestResult {
+  kPassed,
+  kIoUringUnavailable,
+  kFailed,
+};
+
+ConcurrentPreadvTestResult runConcurrentPreadvTest(
     const std::vector<ConcurrentFile>& files,
     size_t numReaders) {
   constexpr size_t kPageSize = memory::AllocationTraits::kPageSize;
@@ -808,8 +854,13 @@ void runConcurrentPreadvTest(
   }
   EXPECT_EQ(ioUringReaderStats().numReaders, 0);
   if (!errorMessage.empty()) {
-    FAIL() << "Concurrent preadv reader failed: " << errorMessage;
+    if (isIoUringUnavailableError(errorMessage)) {
+      return ConcurrentPreadvTestResult::kIoUringUnavailable;
+    }
+    ADD_FAILURE() << "Concurrent preadv reader failed: " << errorMessage;
+    return ConcurrentPreadvTestResult::kFailed;
   }
+  return ConcurrentPreadvTestResult::kPassed;
 }
 
 TEST_F(LocalFileIoUringTest, preadv) {
@@ -905,6 +956,118 @@ TEST_F(LocalFileIoUringTest, preadv) {
   }
 }
 
+TEST_F(LocalFileIoUringTest, readPastEndOfFile) {
+  // The file ends 100 bytes into its third page, so a direct-I/O read of that
+  // page runs past the end of the file.
+  constexpr size_t kPageSize = memory::AllocationTraits::kPageSize;
+  const auto data = makeTestData(3).substr(0, 2 * kPageSize + 100);
+  const auto tempFile = TempFilePath::create();
+  writeTestData(tempFile->getPath(), data);
+
+  struct {
+    const char* name;
+    bool useIoUring;
+    uint64_t expectedReadCalls;
+    uint64_t expectedRegions;
+    uint64_t expectedBatches;
+    uint64_t expectedNumReaders;
+  } testCases[] = {
+      {
+          "directIoWithIoUring",
+          /*useIoUring=*/true,
+          /*expectedReadCalls=*/1,
+          /*expectedRegions=*/2,
+          /*expectedBatches=*/1,
+          /*expectedNumReaders=*/1,
+      },
+      {
+          "directIoWithoutIoUring",
+          /*useIoUring=*/false,
+          /*expectedReadCalls=*/0,
+          /*expectedRegions=*/0,
+          /*expectedBatches=*/0,
+          /*expectedNumReaders=*/0,
+      },
+  };
+
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.name);
+    ThreadLocalIoUringReader::testingClear();
+
+    LocalReadFile file(
+        tempFile->getPath(),
+        /*executor=*/nullptr,
+        /*bufferIo=*/false,
+        testCase.useIoUring);
+    const auto statsBefore = ioUringReaderStats();
+
+    {
+      PageAlignedBuffer buffer(kPageSize);
+      EXPECT_EQ(
+          file.pread(2 * kPageSize, kPageSize, buffer.data()).substr(0, 100),
+          data.substr(2 * kPageSize));
+    }
+
+    {
+      // The region that runs past the end of the file comes first.
+      PageAlignedBuffer first(2 * kPageSize);
+      PageAlignedBuffer second(kPageSize);
+      const std::vector<common::Region> regions = {
+          common::Region(kPageSize, 2 * kPageSize),
+          common::Region(0, kPageSize),
+      };
+      const std::vector<folly::Range<char*>> buffers = {
+          folly::Range<char*>(first.data(), 2 * kPageSize),
+          folly::Range<char*>(second.data(), kPageSize),
+      };
+      EXPECT_GE(
+          file.preadv(
+              folly::Range<const common::Region*>(
+                  regions.data(), regions.size()),
+              asConstRange(buffers)),
+          data.size());
+      EXPECT_EQ(
+          std::string_view(first.data(), kPageSize + 100),
+          data.substr(kPageSize));
+      EXPECT_EQ(
+          std::string_view(second.data(), kPageSize),
+          data.substr(0, kPageSize));
+    }
+
+    expectIoUringReaderStatsDelta(
+        statsBefore,
+        testCase.expectedReadCalls,
+        testCase.expectedRegions,
+        testCase.expectedBatches,
+        testCase.expectedNumReaders);
+  }
+
+  // A buffered read is not widened, so it must not run past the end of the
+  // file.
+  LocalReadFile file(
+      tempFile->getPath(), /*executor=*/nullptr, /*bufferIo=*/true);
+  std::string buffer(kPageSize, '\0');
+  VELOX_ASSERT_THROW(
+      file.pread(2 * kPageSize, kPageSize, buffer.data()),
+      "fread failure in LocalReadFile::PReadInternal");
+}
+
+TEST_F(LocalFileIoUringTest, shortReadBeforeEndOfFile) {
+  // The file shrinks to one page after it is opened, so a read of its second
+  // page returns nothing before the end of the file at open.
+  constexpr size_t kPageSize = memory::AllocationTraits::kPageSize;
+  const auto tempFile = TempFilePath::create();
+  writeTestData(tempFile->getPath(), makeTestData(3));
+  LocalReadFile file(
+      tempFile->getPath(), /*executor=*/nullptr, /*bufferIo=*/false);
+  std::filesystem::resize_file(tempFile->getPath(), kPageSize);
+
+  PageAlignedBuffer buffer(kPageSize);
+  VELOX_ASSERT_THROW(
+      file.pread(kPageSize, kPageSize, buffer.data()),
+      "fread failure in LocalReadFile::PReadInternal");
+}
+
 TEST_F(LocalFileIoUringTest, concurrentPreadv) {
   constexpr size_t kNumReaders = 8;
 
@@ -941,7 +1104,14 @@ TEST_F(LocalFileIoUringTest, concurrentPreadv) {
       }
     }
 
-    runConcurrentPreadvTest(files, kNumReaders);
+    const auto result = runConcurrentPreadvTest(files, kNumReaders);
+    if (result == ConcurrentPreadvTestResult::kIoUringUnavailable) {
+      GTEST_SKIP()
+          << "io_uring became unavailable during concurrent reader setup";
+    }
+    if (result == ConcurrentPreadvTestResult::kFailed) {
+      return;
+    }
   }
 }
 

@@ -19,20 +19,22 @@
 
 namespace facebook::velox::functions {
 
-void registerHyperLogFunctions(const std::string& prefix) {
+void registerHyperLogFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerHyperLogLogType();
 
   registerFunction<CardinalityFunction, int64_t, HyperLogLog>(
-      {prefix + "cardinality"});
+      {prefix + "cardinality"}, {}, true, defaultOwner);
 
   registerFunction<
       EmptyApproxSetWithMaxErrorFunction,
       HyperLogLog,
-      Constant<double>>({prefix + "empty_approx_set"});
+      Constant<double>>({prefix + "empty_approx_set"}, {}, true, defaultOwner);
   registerFunction<EmptyApproxSetFunction, HyperLogLog>(
-      {prefix + "empty_approx_set"});
+      {prefix + "empty_approx_set"}, {}, true, defaultOwner);
 
   registerFunction<MergeHllFunction, HyperLogLog, Array<HyperLogLog>>(
-      {prefix + "merge_hll"});
+      {prefix + "merge_hll"}, {}, true, defaultOwner);
 }
 } // namespace facebook::velox::functions

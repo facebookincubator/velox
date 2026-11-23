@@ -1,0 +1,434 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
+
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <fmt/format.h>
+#include <folly/Range.h>
+#include <folly/container/F14Map.h>
+
+#include "velox/common/Casts.h"
+#include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/caching/FileHandle.h"
+#include "velox/common/file/File.h"
+#include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/RowRange.h"
+#include "velox/dwio/nimble/index/IndexTypes.h"
+#include "velox/dwio/nimble/index/KeyComparator.h"
+#include "velox/dwio/nimble/index/KeyCursor.h"
+#include "velox/dwio/nimble/tablet/StripeMetadata.h"
+#include "velox/serializers/KeyEncoder.h"
+
+namespace facebook::nimble {
+class BlockCache;
+class DataInput;
+class MetadataInput;
+} // namespace facebook::nimble
+
+namespace facebook::velox {
+namespace io {
+class ReaderOptions;
+} // namespace io
+} // namespace facebook::velox
+
+namespace facebook::nimble::index {
+
+/// Type of index.
+enum class IndexType {
+  /// Range-based index on sorted data. Supports range scans and point lookups
+  /// using key boundaries per stripe/chunk.
+  Cluster,
+  /// Hash-based index for point lookups on unsorted data. Maps composite key
+  /// columns to exact row numbers.
+  Hash,
+  /// Sorted key stream index for point lookups and range scans on unsorted
+  /// data. Stores sorted encoded_key || row_id entries.
+  Sorted,
+};
+
+std::string toString(IndexType indexType);
+std::ostream& operator<<(std::ostream& out, IndexType indexType);
+
+/// Provides a common lookup interface for cluster, hash, and sorted indexes.
+///
+/// Abstracts index metadata and lookup capabilities, enabling the reader to
+/// select an index for a query without knowing its concrete type.
+///
+/// Two lookup modes:
+/// - Point lookup: find rows matching exact keys. Supported by all three types.
+/// - Range scan: find rows in [lower, upper) ranges with exclusive upper
+///   bound. Supported by cluster and sorted indexes.
+class IndexLookup {
+ public:
+  /// Returns the metadata of each stripe of stripe group 'stripeGroup', in
+  /// stripe order, with the location of each of 'keyStreamIds' in the
+  /// stripe, in the order of 'keyStreamIds'. Reads the metadata of the stripe
+  /// group.
+  using KeyStreamLocator = std::function<std::vector<StripeMetadata>(
+      uint32_t stripeGroup,
+      std::span<const uint32_t> keyStreamIds)>;
+
+  /// IO options for index lookup creation. With blockCache, the index caches
+  /// its metadata and data there. Without it, the index reads them directly.
+  struct Options {
+    /// File to read index metadata and key stream data from.
+    std::shared_ptr<velox::ReadFile> file;
+
+    /// IO settings: coalescing, executor, and index IO stats.
+    const velox::io::ReaderOptions* ioOptions{nullptr};
+
+    /// Maximum decompressed index metadata size admitted to blockCache.
+    std::optional<uint32_t> maxCacheEntrySize{std::nullopt};
+
+    /// Block cache for decompressed index metadata and for index data as
+    /// stored in the file. Cluster and sorted indexes cache each key chunk as
+    /// one entry. Keyed by fileHandle->uuid, so it requires fileHandle. Must
+    /// outlive the index. See MetadataInput::Options::blockCache.
+    BlockCache* blockCache{nullptr};
+
+    /// Identity of the file in blockCache keys: fileHandle->uuid. Must name
+    /// 'file'. A copy, so the caller's handle need not outlive these options.
+    std::optional<velox::FileHandle> fileHandle{std::nullopt};
+
+    /// If true, pins parsed index objects in the index cache with strong
+    /// references so they are never evicted.
+    bool pinIndex{false};
+
+    /// If true, eagerly loads all per-partition metadata and decodes all
+    /// per-partition key streams when the index is constructed. Requires
+    /// pinIndex=true; otherwise preloaded chunks would be evicted on the
+    /// first lookup.
+    bool preloadIndex{false};
+
+    /// If true, key chunk readers build their encoding views with
+    /// Encoding::Options::cacheEncodingView, trading memory for faster repeated
+    /// seeks into chunks that stay resident. Only trie key chunks read
+    /// through encoding views.
+    bool cacheKeyEncodingViews{false};
+
+    /// Order of the encoded keys of a cluster index, or null for bytewise
+    /// order. The cluster index factory sets it from
+    /// ClusterIndexFactory::keyComparator(), which owns the comparator.
+    const KeyComparator* keyComparator{nullptr};
+
+    /// The stats and pool inside this context must outlive this index.
+    velox::FileIoContext fileIoContext{};
+
+    /// Locates the key streams of the file's stripes. A cluster index whose key
+    /// chunks are in a stream of each stripe needs it. TabletReader sets it.
+    KeyStreamLocator keyStreamLocator{};
+
+    /// Validates options consistency.
+    void validate() const;
+  };
+
+  /// Batch lookup request. Contains encoded keys or key bounds and options.
+  /// A derived request can add parameters for each lookup position.
+  class LookupRequest {
+   public:
+    /// Lookup mode determines how key bounds are interpreted.
+    enum class Mode {
+      /// Point lookup: find all rows where key == encodedKey.
+      PointLookup,
+      /// Range scan: find rows where key in [lower, upper).
+      /// Upper bound is exclusive.
+      RangeScan,
+    };
+
+    /// Shares call-level settings across the keys in a request.
+    ///
+    /// Per-key index-specific parameters belong in a derived LookupRequest,
+    /// next to the keys they constrain, rather than here.
+    /// A derived request must validate its additional requirements in
+    /// validateFor(), so unsupported parameters surface as an error rather
+    /// than an unfiltered result.
+    struct Options final {
+      Options() = default;
+      explicit Options(RowRange rowRange) : rowRange{rowRange} {}
+
+      /// Limits results to this file-level row range, independently of the
+      /// keys. Rows outside it are excluded from the result. When unset, no
+      /// additional row window is applied. Implementations may resolve keys
+      /// before intersecting their results with this window.
+      std::optional<RowRange> rowRange;
+    };
+
+    /// Shared no-op options, used when a request carries none. Returning a
+    /// reference to this keeps options() total, so callers never null check.
+    static const std::shared_ptr<const Options>& defaultOptions();
+
+    /// Creates a point lookup request for exact key matching.
+    static std::unique_ptr<const LookupRequest> pointLookup(
+        std::vector<std::string> encodedKeys,
+        std::shared_ptr<const Options> options = nullptr) {
+      return std::unique_ptr<const LookupRequest>(
+          new LookupRequest(std::move(encodedKeys), std::move(options)));
+    }
+
+    /// Creates a range scan request with exclusive upper bounds.
+    static std::unique_ptr<const LookupRequest> rangeScan(
+        std::vector<velox::serializer::EncodedKeyBounds> keyBounds,
+        std::shared_ptr<const Options> options = nullptr) {
+      return std::unique_ptr<const LookupRequest>(
+          new LookupRequest(std::move(keyBounds), std::move(options)));
+    }
+
+    virtual ~LookupRequest() = default;
+
+    /// Validates that the index can honor this request's additional parameters.
+    /// Base requests have no additional requirements. Derived requests that
+    /// add constraints must override this and throw NimbleUserError if the
+    /// index cannot honor them.
+    virtual void validateFor(const IndexLookup& /*index*/) const {}
+
+    Mode mode() const {
+      return mode_;
+    }
+
+    size_t size() const {
+      return mode_ == Mode::PointLookup ? pointKeys_.size()
+                                        : rangeBounds_.size();
+    }
+
+    /// Returns the encoded key at the given index (point lookup only).
+    std::string_view pointKey(uint32_t idx) const {
+      NIMBLE_CHECK_EQ(mode_, Mode::PointLookup);
+      NIMBLE_CHECK_LT(idx, pointKeys_.size());
+      return pointKeys_[idx];
+    }
+
+    /// Returns the key bounds at the given index (range scan only).
+    const velox::serializer::EncodedKeyBounds& rangeBound(uint32_t idx) const {
+      NIMBLE_CHECK_EQ(mode_, Mode::RangeScan);
+      NIMBLE_CHECK_LT(idx, rangeBounds_.size());
+      return rangeBounds_[idx];
+    }
+
+    const Options& options() const {
+      return options_ != nullptr ? *options_ : *defaultOptions();
+    }
+
+   protected:
+    // Point lookup constructor.
+    LookupRequest(
+        std::vector<std::string> keys,
+        std::shared_ptr<const Options> options)
+        : mode_{Mode::PointLookup},
+          pointKeys_{std::move(keys)},
+          options_{std::move(options)} {
+      NIMBLE_CHECK(!pointKeys_.empty());
+    }
+
+    // Range scan constructor.
+    LookupRequest(
+        std::vector<velox::serializer::EncodedKeyBounds> keyBounds,
+        std::shared_ptr<const Options> options)
+        : mode_{Mode::RangeScan},
+          rangeBounds_{std::move(keyBounds)},
+          options_{std::move(options)} {
+      NIMBLE_CHECK(!rangeBounds_.empty());
+    }
+
+   private:
+    const Mode mode_;
+    // Point lookup: single encoded keys.
+    const std::vector<std::string> pointKeys_;
+    // Range scan: key bounds with lower/upper.
+    const std::vector<velox::serializer::EncodedKeyBounds> rangeBounds_;
+    const std::shared_ptr<const Options> options_;
+  };
+
+  using LookupOptions = LookupRequest::Options;
+
+  /// Batch lookup result. Stores a flat array of RowRanges with
+  /// per-key offsets for O(1) access via operator[].
+  class LookupResult {
+   public:
+    LookupResult(
+        std::vector<RowRange> rowRanges,
+        std::vector<uint32_t> resultOffsets)
+        : rowRanges_{std::move(rowRanges)},
+          resultOffsets_{std::move(resultOffsets)} {
+      NIMBLE_CHECK_GT(resultOffsets_.size(), 1);
+      NIMBLE_CHECK_GE(
+          rowRanges_.size(),
+          resultOffsets_.back(),
+          "Result offsets reference beyond rowRanges");
+    }
+
+    size_t size() const {
+      return resultOffsets_.size() - 1;
+    }
+
+    folly::Range<const RowRange*> operator[](uint32_t idx) const {
+      NIMBLE_CHECK_LT(idx, size());
+      NIMBLE_CHECK_LE(resultOffsets_[idx], resultOffsets_[idx + 1]);
+      NIMBLE_CHECK_LE(resultOffsets_[idx + 1], rowRanges_.size());
+      return {
+          rowRanges_.data() + resultOffsets_[idx],
+          rowRanges_.data() + resultOffsets_[idx + 1]};
+    }
+
+   private:
+    const std::vector<RowRange> rowRanges_;
+    const std::vector<uint32_t> resultOffsets_;
+  };
+
+  /// The key chunk of a stripe of an index whose keyStreamLayout() is kStripe,
+  /// which a caller has read itself.
+  struct KeyChunk {
+    /// Stripe of the file whose key stream holds the chunk.
+    uint32_t stripe{0};
+    /// The key stream of the stripe without its stream trailer, which is the
+    /// whole chunk.
+    std::string_view data;
+    /// Owns the bytes of 'data', such as the handle of the read that loaded
+    /// them. A key cursor requires it and holds it, so the caller can drop
+    /// the chunk once the cursor has it. A call that keeps nothing of the
+    /// chunk past its return takes it without one, and then 'data' must
+    /// outlive the call.
+    std::shared_ptr<void> dataHandle{nullptr};
+  };
+
+  virtual ~IndexLookup() = default;
+
+  /// Returns the type of this index.
+  IndexType type() const {
+    return type_;
+  }
+
+  /// Returns the column names this index covers, in index definition order.
+  virtual const std::vector<std::string>& indexColumns() const = 0;
+
+  /// Batch lookup of row locations matching the encoded key bounds.
+  ///
+  /// For cluster index: supports both point lookups and range lookups.
+  ///   Returns file-level RowRanges spanning matching rows.
+  /// For hash index: only supports point lookups. Returns file-level
+  ///   RowRanges for exact single rows (may return multiple per key).
+  ///
+  /// Results are indexed by input key position: result[i] returns the
+  /// RowRanges for the key or bounds at request position i.
+  ///
+  /// An implementation calls validateLookupRequest() before reading any keys,
+  /// so that the request validates its additional requirements against it.
+  virtual LookupResult lookup(const LookupRequest& request) const = 0;
+
+  /// Returns the minimum key in this index.
+  virtual std::string_view minKey() const = 0;
+
+  /// Returns the maximum key in this index.
+  virtual std::string_view maxKey() const = 0;
+
+  /// Returns the encoded key at the given file-level row position.
+  /// Not all index types support this — the default throws.
+  virtual std::string keyAtRow(uint32_t /*row*/) const {
+    NIMBLE_NOT_IMPLEMENTED("keyAtRow is not supported by this index type");
+  }
+
+  /// Returns a cursor over the encoded keys of the rows in 'rows', which
+  /// must be within the index. Scanning callers should prefer this to a
+  /// keyAtRow() loop. With 'keyChunk', 'rows' must lie in the stripe of the
+  /// chunk, and an index whose keyStreamLayout() is kStripe decodes their keys
+  /// from it, in place, instead of reading them.
+  virtual std::unique_ptr<KeyCursor> keyCursor(
+      RowRange /*rows*/,
+      const std::optional<KeyChunk>& /*keyChunk*/ = std::nullopt) const {
+    NIMBLE_NOT_IMPLEMENTED(
+        "keyCursor is not supported by index type {}", type_);
+  }
+
+  /// Returns where the index keeps its key chunks. kStripe tells a reader that
+  /// each stripe holds the key chunk of its rows, which it can read together
+  /// with the stripe's data. An index without key chunks in stripes returns
+  /// kPartition.
+  virtual KeyStreamLayout keyStreamLayout() const {
+    return KeyStreamLayout::kPartition;
+  }
+
+  /// Returns runtime statistics accumulated during lookups.
+  virtual folly::F14FastMap<std::string, velox::RuntimeMetric> stats() const {
+    return {};
+  }
+
+ protected:
+  explicit IndexLookup(IndexType type) : type_{type} {}
+
+  // Delegates compatibility validation to the request before partition
+  // metadata or key data is read. Each request extension validates the
+  // additional parameters it carries.
+  void validateLookupRequest(const LookupRequest& request) const;
+
+ private:
+  const IndexType type_;
+};
+
+/// Creates a MetadataInput (cached or direct) from index options.
+std::shared_ptr<MetadataInput> createIndexMetadataInput(
+    const IndexLookup::Options& options);
+
+/// Creates a DataInput for index data from index options. With blockCache,
+/// caches the data in it. Otherwise reads it directly.
+std::shared_ptr<DataInput> createIndexDataInput(
+    const IndexLookup::Options& options);
+
+inline std::string toString(IndexLookup::LookupRequest::Mode mode) {
+  switch (mode) {
+    case IndexLookup::LookupRequest::Mode::PointLookup:
+      return "PointLookup";
+    case IndexLookup::LookupRequest::Mode::RangeScan:
+      return "RangeScan";
+    default:
+      NIMBLE_UNREACHABLE("Unknown Mode: {}", static_cast<int>(mode));
+  }
+}
+
+inline std::ostream& operator<<(
+    std::ostream& out,
+    IndexLookup::LookupRequest::Mode mode) {
+  return out << toString(mode);
+}
+
+} // namespace facebook::nimble::index
+
+template <>
+struct fmt::formatter<facebook::nimble::index::IndexType>
+    : formatter<std::string> {
+  auto format(facebook::nimble::index::IndexType s, format_context& ctx) const {
+    return formatter<std::string>::format(
+        facebook::nimble::index::toString(s), ctx);
+  }
+};
+
+template <>
+struct fmt::formatter<facebook::nimble::index::IndexLookup::LookupRequest::Mode>
+    : formatter<std::string> {
+  auto format(
+      facebook::nimble::index::IndexLookup::LookupRequest::Mode mode,
+      format_context& ctx) const {
+    return formatter<std::string>::format(
+        facebook::nimble::index::toString(mode), ctx);
+  }
+};

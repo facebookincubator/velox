@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <deque>
 #include "velox/dwio/dwrf/writer/ColumnWriter.h"
 
 namespace facebook::velox::dwrf {
@@ -342,8 +343,12 @@ class FlatMapColumnWriter : public BaseColumnWriter {
   std::unique_ptr<const ValueStatisticsBuilder> valueFileStatsBuilder_;
   const uint32_t maxKeyCount_;
 
-  // Stores column keys as string in case of StringView pointers
-  std::vector<std::string> stringKeys_;
+  // Stores column keys as string in case of StringView pointers. Uses a deque
+  // (not a vector) so that appending a newly-seen key never relocates the
+  // already-stored strings: structKeys_ and the F14 valueWriters_ keys hold
+  // StringViews pointing into these elements, and a reallocation would dangle
+  // them (e.g. SSO-backed 13-15 char keys).
+  std::deque<std::string> stringKeys_;
 
   // Stores column keys if writing with RowVector input
   std::vector<KeyType> structKeys_;

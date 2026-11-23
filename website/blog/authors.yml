@@ -72,11 +72,33 @@ xiaoxmeng:
   url: https://github.com/xiaoxmeng
   image_url: https://github.com/xiaoxmeng.png
 
+shrinidhijoshi:
+  name: Shrinidhi Joshi
+  title: Software Engineer @ Meta
+  url: https://github.com/shrinidhijoshi
+  image_url: https://github.com/shrinidhijoshi.png
+
+JkSelf:
+  name: Ke Jia
+  title: Software Engineer @ IBM
+  url: https://github.com/JkSelf
+  image_url: https://github.com/JkSelf.png
+
 tanjialiang:
   name: Jialiang Tan
   title: Software Engineer @ Meta
   url: https://github.com/tanjialiang
   image_url: https://github.com/tanjialiang.png
+
+duxiao:
+  name: Xiao Du
+  title: Software Engineer @ Meta
+
+pgolash:
+  name: Prashant Golash
+  title: Software Engineer @ Meta
+  url: https://github.com/prashantgolash
+  image_url: https://github.com/prashantgolash.png
 
 oerling:
   name: Orri Erling
@@ -179,3 +201,49 @@ srsuryadev:
   title: Software Engineer @ Meta
   url: https://github.com/srsuryadev
   image_url: https://github.com/srsuryadev.png
+
+zhztheplayer:
+  name: Hongze Zhang
+  title: Software Engineer @ IBM
+  url: https://github.com/zhztheplayer
+  image_url: https://github.com/zhztheplayer.png
+
+shanhao:
+  name: Shan Hao
+  title: Software Engineer @ Meta
+
+huamengjiang:
+  name: Huameng (Michael) Jiang
+  title: Software Engineer @ Meta
+  url: https://github.com/HuamengJiang
+  image_url: https://github.com/HuamengJiang.png
+
+apurvak:
+  name: Apurva Kumar
+  title: Software Engineer @ Meta
+  url: https://github.com/apurva-meta
+  image_url: https://github.com/apurva-meta.png
+
+nmahadevuni:
+  name: Naveen Kumar Mahadevuni
+  title: Software Engineer @ IBM
+  url: https://github.com/nmahadevuni
+  image_url: https://github.com/nmahadevuni.png
+
+Joe-Abraham:
+  name: Joe Abraham
+  title: Software Engineer @ IBM
+  url: https://github.com/Joe-Abraham
+  image_url: https://github.com/Joe-Abraham.png
+
+agrawalreetika:
+  name: Reetika Agrawal
+  title: Software Engineer @ IBM
+  url: https://github.com/agrawalreetika
+  image_url: https://github.com/agrawalreetika.png
+
+KcGo007:
+  name: Kevin Gu
+  title: Software Engineer @ IBM
+  url: https://github.com/KcGo007
+  image_url: https://github.com/KcGo007.png

@@ -38,12 +38,26 @@ PYTHON_VENV=${PYTHON_VENV:-"${SCRIPT_DIR}/../.venv"}
 # This is used during package builds.
 OS_CXXFLAGS=" -isystem $(brew --prefix)/include "
 export OS_CXXFLAGS
+# Homebrew's unversioned openssl formula is OpenSSL 4 since 2026-09-25, and it
+# is no longer keg-only, so its headers and libraries are linked under
+# $(brew --prefix). Folly at FB_OS_VERSION and the gRPC Velox bundles do not
+# compile against OpenSSL 4, so point every CMake build here, and the Velox
+# configure that follows, at Homebrew's OpenSSL 3 instead. cmake_install also
+# passes it as a cache variable, which fbthrift's own FindOpenSSL needs. A
+# caller that has already chosen an OpenSSL root keeps it.
+OPENSSL_ROOT_DIR=${OPENSSL_ROOT_DIR:-"$(brew --prefix openssl@3)"}
+export OPENSSL_ROOT_DIR
 export CMAKE_POLICY_VERSION_MINIMUM="3.5"
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 # gflags and glog are installed from source to ensure version compatibility.
 # Homebrew's glog 0.7.x has breaking API changes that are incompatible with folly.
-MACOS_VELOX_DEPS="bison double-conversion fast_float flex googletest icu4c libevent libsodium lz4 openssl simdjson snappy xz xxhash zstd"
+# googletest is left out because CMake always builds VELOX_GTEST_VERSION from
+# source. Homebrew's copy is never used, and its headers in
+# /opt/homebrew/include shadow the built-in gmock in targets that reach
+# /opt/homebrew/include before the bundled googlemock, mixing two googletest
+# versions in one translation unit.
+MACOS_VELOX_DEPS="bison double-conversion fast_float flex icu4c libevent libsodium lz4 openssl@3 simdjson snappy xz xxhash zstd"
 MACOS_BUILD_DEPS="ninja cmake"
 
 SUDO="${SUDO:-""}"
@@ -106,14 +120,15 @@ function install_velox_deps_from_brew {
 
 function install_gflags {
   wget_and_untar https://github.com/gflags/gflags/archive/"${GFLAGS_VERSION}".tar.gz gflags
-  cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON
+  # Always Release; see the note in setup-centos9.sh.
+  cmake_install_dir gflags -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=ON -DBUILD_gflags_LIB=ON -DCMAKE_BUILD_TYPE=Release
 }
 
 function install_s3 {
   install_aws_deps
 
-  local MINIO_OS="darwin"
-  install_minio ${MINIO_OS}
+  local SILO_OS="darwin"
+  install_silo ${SILO_OS}
 }
 
 function install_gcs {
@@ -179,7 +194,6 @@ function install_faiss {
 
 function install_velox_deps {
   run_and_time install_velox_deps_from_brew
-  run_and_time install_ranges_v3
   run_and_time install_double_conversion
   run_and_time install_re2
   run_and_time install_gflags
@@ -188,6 +202,8 @@ function install_velox_deps {
   run_and_time install_protobuf
   run_and_time install_fmt
   run_and_time install_fast_float
+  run_and_time install_flatbuffers
+  run_and_time install_openzl
   run_and_time install_folly
   run_and_time install_fizz
   run_and_time install_wangle

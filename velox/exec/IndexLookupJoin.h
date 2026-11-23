@@ -15,6 +15,9 @@
  */
 #pragma once
 
+#include <folly/stop_watch.h>
+
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/exec/IndexLookupJoinBridge.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/VectorHasher.h"
@@ -46,74 +49,12 @@ class IndexLookupJoin : public Operator {
 
   void close() override;
 
-  /// Defines lookup runtime stats.
-  /// The end-to-end walltime in nanoseconds that the index connector do the
-  /// lookup.
-  static constexpr std::string_view kConnectorLookupWallTime{
-      "connectorLookupWallNanos"};
-  /// The cpu time in nanoseconds that the index connector process response from
-  /// storage client for followup processing by index join operator.
-  static constexpr std::string_view kConnectorResultPrepareTime{
-      "connectorResultPrepareCpuNanos"};
-  /// The cpu time in nanoseconds that the storage client process request for
-  /// remote storage lookup such as encoding the lookup input data into remotr
-  /// storage request.
-  static constexpr std::string_view kClientRequestProcessTime{
-      "clientRequestProcessCpuNanos"};
-  /// The walltime in nanoseconds that the storage client wait for the lookup
-  /// from remote storage.
-  static constexpr std::string_view kClientLookupWaitWallTime{
-      "clientlookupWaitWallNanos"};
-  /// The number of split requests sent to remote storage for a client lookup
-  /// request.
-  static constexpr std::string_view kClientNumStorageRequests{
-      "clientNumStorageRequests"};
-  /// The cpu time in nanoseconds that the storage client process response from
-  /// remote storage lookup such as decoding the response data into velox
-  /// vectors.
-  static constexpr std::string_view kClientResultProcessTime{
-      "clientResultProcessCpuNanos"};
-  /// The byte size of the raw result received from the remote storage lookup.
-  static constexpr std::string_view kClientLookupResultRawSize{
-      "clientLookupResultRawSize"};
-  /// The byte size of the result data in velox vectors that are decoded from
-  /// the raw data received from the remote storage lookup.
-  static constexpr std::string_view kClientLookupResultSize{
-      "clientLookupResultSize"};
-  /// The number of lookup results received from remote storage with error.
-  static constexpr std::string_view kClientNumErrorResults{
-      "clientNumErrorResults"};
-  /// The number of index splits provided for index lookup.
-  static constexpr std::string_view kNumIndexSplits{"numIndexSplits"};
-
  private:
-  // Intercepts runtime stats emitted during index-side operations (getOutput /
-  // startLookup) and accumulates them into a local map, separating them from
-  // probe-side stats so Driver::processLazyIoStats() correctly attributes
-  // only probe-side stats to the scan operator. Held via shared_ptr so the
-  // stat splitter lambda can outlive the operator and read the final stats.
-  class IndexStatWriter : public BaseRuntimeStatWriter {
-   public:
-    void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
-        override;
-
-    // Sets a runtime metric in the index source stats map. Thread-safe.
-    void setRuntimeStat(std::string_view name, const RuntimeMetric& metric)
-        override;
-
-    // Returns a snapshot of the accumulated index source runtime stats.
-    std::unordered_map<std::string, RuntimeMetric> runtimeStats() const;
-
-   private:
-    folly::Synchronized<std::unordered_map<std::string, RuntimeMetric>>
-        runtimeStats_;
-  };
-
   // Produces separate OperatorStats for IndexLookupJoin and IndexSource nodes.
   static std::vector<OperatorStats> splitStats(
       const OperatorStats& combinedStats,
       const core::PlanNodeId& indexSourceNodeId,
-      const IndexStatWriter& indexSourceStatWriter);
+      const ConcurrentRuntimeStatWriter& indexSourceStatWriter);
 
   using ResultIterator = connector::IndexSource::ResultIterator;
   using Result = connector::IndexSource::Result;
@@ -185,6 +126,9 @@ class IndexLookupJoin : public Operator {
   void initLookupInput();
   void initLookupOutput();
   void initOutputProjections();
+  // Compiles the join filter and maps the columns it reads to the probe input
+  // and the lookup output. Appends the lookup columns only the filter reads to
+  // 'lookupOutputType_'.
   void initFilter();
 
   // Collects splits for the index source until no more splits signal is
@@ -388,7 +332,8 @@ class IndexLookupJoin : public Operator {
   uint64_t startBatchIndex_{0};
   uint64_t endBatchIndex_{0};
 
-  // The data type of the lookup output from the lookup source.
+  // The data type of the lookup output from the lookup source: the lookup
+  // columns of the join output, followed by the ones only the filter reads.
   RowTypePtr lookupOutputType_;
 
   // Used to project output columns from the probe input and lookup output.
@@ -442,9 +387,9 @@ class IndexLookupJoin : public Operator {
   FlatVectorPtr<bool> matchColumn_{nullptr};
   uint64_t* rawMatchValues_{nullptr};
 
-  // The start time of the current lookup driver block wait, and reset after the
-  // driver wait completes.
-  std::optional<size_t> blockWaitStartNs_;
+  // Started when the driver starts a lookup block wait, and reset after the
+  // wait completes.
+  std::optional<folly::stop_watch<std::chrono::milliseconds>> blockWaitWatch_;
 
   // The bridge for sharing index splits across operators in the same pipeline.
   // Null if the index source does not need splits.
@@ -479,6 +424,6 @@ class IndexLookupJoin : public Operator {
   // Intercepts and accumulates index source runtime stats. Held via
   // shared_ptr so the stat splitter lambda can read the final stats after the
   // operator is destroyed.
-  std::shared_ptr<IndexStatWriter> indexStatWriter_;
+  std::shared_ptr<ConcurrentRuntimeStatWriter> indexStatWriter_;
 };
 } // namespace facebook::velox::exec

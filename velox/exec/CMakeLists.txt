@@ -30,12 +30,25 @@ velox_add_library(
   Driver.cpp
   EnforceSingleRow.cpp
   Exchange.cpp
-  ExchangeClient.cpp
+  InMemoryExchangeClient.cpp
   ExchangeQueue.cpp
+  ExchangeSink.cpp
   ExchangeSource.cpp
+  ExchangeTransportRegistry.cpp
+  ExchangeWiring.cpp
+  FileExchangeFormat.cpp
+  FileExchangeSink.cpp
+  FileExchangeSource.cpp
+  MaterializedOutputBuffer.cpp
+  MaterializedOutputBufferManager.cpp
+  MaterializedPartitionedOutput.cpp
   SerializedPage.cpp
   Expand.cpp
   FilterProject.cpp
+  FixedPointLoop.cpp
+  FixedPointOperators.cpp
+  FixedPointSplit.cpp
+  FixedPointVerdicts.cpp
   GroupId.cpp
   GroupingSet.cpp
   HashAggregation.cpp
@@ -77,6 +90,7 @@ velox_add_library(
   ParallelProject.cpp
   PartitionFunction.cpp
   PartitionedOutput.cpp
+  PersistentState.cpp
   PlanNodeStats.cpp
   PrefixSort.cpp
   ProbeOperatorState.cpp
@@ -98,6 +112,7 @@ velox_add_library(
   TableWriteMerge.cpp
   TableWriter.cpp
   Task.cpp
+  TaskStats.cpp
   TaskStructs.cpp
   TaskTraceReader.cpp
   TaskTraceWriter.cpp
@@ -132,22 +147,39 @@ velox_add_library(
   EnforceSingleRow.h
   Exchange.h
   ExchangeClient.h
+  InMemoryExchangeClient.h
+  ExchangeFactory.h
   ExchangeQueue.h
+  ExchangeSink.h
   ExchangeSource.h
+  ExchangeTransportRegistry.h
+  ExchangeWiring.h
   Expand.h
+  FileExchangeFormat.h
+  FileExchangeSink.h
+  FileExchangeSource.h
   FilterProject.h
+  FixedPointLoop.h
+  FixedPointOperators.h
+  FixedPointSplit.h
+  FixedPointOptions.h
+  FixedPointVerdicts.h
   GroupId.h
   GroupingSet.h
   HashAggregation.h
+  HashAggregationStatNames.h
   HashBitRange.h
   HashBuild.h
+  HashBuildStatNames.h
   HashJoinBridge.h
   HashPartitionFunction.h
   HashProbe.h
+  HashProbeStatNames.h
   HashTable.h
   HashTableCache.h
   HilbertIndex.h
   IndexLookupJoin.h
+  IndexLookupJoinStatNames.h
   IndexLookupJoinBridge.h
   JoinBridge.h
   Limit.h
@@ -155,9 +187,13 @@ velox_add_library(
   LocalPlanner.h
   MarkDistinct.h
   MarkSorted.h
+  MaterializedOutputBuffer.h
+  MaterializedOutputBufferManager.h
+  MaterializedPartitionedOutput.h
   MemoryReclaimer.h
   Merge.h
   MergeJoin.h
+  MergeJoinStatNames.h
   MergeSource.h
   MixedUnion.h
   NestedLoopJoinBuild.h
@@ -181,6 +217,7 @@ velox_add_library(
   PartitionFunction.h
   PartitionedOutput.h
   PartitionedOutputFactory.h
+  PersistentState.h
   PlanNodeStats.h
   PrefixSort.h
   ProbeOperatorState.h
@@ -205,8 +242,10 @@ velox_add_library(
   StreamingEnforceDistinct.h
   Strings.h
   TableScan.h
+  TableScanStatNames.h
   TableWriteMerge.h
   TableWriter.h
+  TableWriterStatNames.h
   Task.h
   TaskStats.h
   TaskStructs.h
@@ -214,13 +253,20 @@ velox_add_library(
   TaskTraceWriter.h
   TopN.h
   TopNRowNumber.h
+  TopNRowNumberStatNames.h
   TraceUtil.h
   Unnest.h
   UnorderedStreamReader.h
   Values.h
   VectorHasher-inl.h
   VectorHasher.h
+  VectorSearchJoinBridge.h
+  VectorSearchJoinBuild.h
+  VectorSearchJoinProbe.h
+  VectorSearchJoinEmbeddings.h
+  VectorSearchJoinTable.h
   Window.h
+  WindowStatNames.h
   WindowFunction.h
   WindowPartition.h
 )
@@ -248,6 +294,19 @@ velox_link_libraries(
   velox_vector
 )
 
+if(VELOX_ENABLE_FAISS)
+  velox_sources(
+    velox_exec
+    PRIVATE
+      VectorSearchJoinBuild.cpp
+      VectorSearchJoinProbe.cpp
+      VectorSearchJoinEmbeddings.cpp
+      VectorSearchJoinTable.cpp
+  )
+  velox_compile_definitions(velox_exec PRIVATE VELOX_ENABLE_FAISS)
+  velox_link_libraries(velox_exec velox_vector_index)
+endif()
+
 if(VELOX_ENABLE_GEO)
   velox_compile_definitions(velox_exec PRIVATE VELOX_ENABLE_GEO)
   velox_link_libraries(velox_exec velox_common_geospatial_serde)
@@ -255,7 +314,7 @@ endif()
 
 velox_add_library(velox_cursor Cursor.cpp HEADERS Cursor.h)
 
-velox_link_libraries(velox_cursor velox_core velox_exception velox_expression)
+velox_link_libraries(velox_cursor velox_core velox_exception velox_expression Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(fuzzer)

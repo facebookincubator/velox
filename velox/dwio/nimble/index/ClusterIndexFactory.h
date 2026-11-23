@@ -1,0 +1,99 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
+
+#include <cstdint>
+#include <memory>
+#include <string_view>
+#include <vector>
+
+#include "velox/common/memory/Memory.h"
+#include "velox/dwio/nimble/index/IndexConfig.h"
+#include "velox/dwio/nimble/index/IndexKeyEncoder.h"
+#include "velox/dwio/nimble/index/IndexLookup.h"
+#include "velox/dwio/nimble/index/IndexTypes.h"
+#include "velox/dwio/nimble/index/IndexWriter.h"
+#include "velox/dwio/nimble/index/KeyComparator.h"
+#include "velox/dwio/nimble/tablet/MetadataBuffer.h"
+#include "velox/type/Type.h"
+
+namespace facebook::nimble::index {
+
+class ClusterIndexBase;
+
+class ClusterIndexFactory {
+ public:
+  /// Options of the writers that createWriter() creates.
+  struct Options {
+    /// Where the index stores its key chunks.
+    KeyStreamLayout keyStreamLayout{KeyStreamLayout::kPartition};
+    /// In the Stripe layout, the index streams of every stripe: the streams of
+    /// the stripe that hold its index data, numIndexStreams() of them, the key
+    /// stream first. Empty in the Partition layout.
+    std::vector<uint32_t> indexStreamIds{};
+  };
+
+  virtual ~ClusterIndexFactory() = default;
+
+  virtual std::string_view name() const = 0;
+
+  /// Returns how many index streams every stripe has with 'keyStreamLayout':
+  /// the key stream in the Stripe layout, and none in the Partition layout.
+  /// The Writer allocates them before the streams of the schema, and passes
+  /// their ids to createWriter() in Options::indexStreamIds.
+  virtual uint32_t numIndexStreams(KeyStreamLayout keyStreamLayout) const {
+    return keyStreamLayout == KeyStreamLayout::kStripe ? 1 : 0;
+  }
+
+  /// Creates a writer of the index with 'options'. An index that cannot store
+  /// its keys in stripes rejects the Stripe layout.
+  virtual std::unique_ptr<IndexWriter> createWriter(
+      const IndexConfig& config,
+      const velox::TypePtr& inputType,
+      velox::memory::MemoryPool* pool,
+      const Options& options) const = 0;
+
+  virtual std::unique_ptr<IndexKeyEncoder> createKeyEncoder(
+      const std::vector<std::string>& columns,
+      const velox::RowTypePtr& inputType,
+      const std::vector<SortOrder>& sortOrders,
+      velox::memory::MemoryPool* pool) const = 0;
+
+  virtual std::unique_ptr<ClusterIndexBase> createReader(
+      Section rootSection,
+      velox::memory::MemoryPool* pool,
+      const IndexLookup::Options& options) const = 0;
+
+  /// Returns the order of the keys this factory's key encoder writes, or null
+  /// when they sort bytewise. The cluster index writer validates key order
+  /// with it, and createReader() passes it to the reader through
+  /// IndexLookup::Options::keyComparator. The comparator lives as long as the
+  /// factory.
+  virtual const KeyComparator* keyComparator() const {
+    return nullptr;
+  }
+};
+
+/// Registers a process-wide factory. Call during process initialization,
+/// before concurrent factory lookups begin.
+void registerClusterIndexFactory(
+    std::shared_ptr<const ClusterIndexFactory> factory);
+
+/// Returns a process-lifetime reference. Concurrent access after registration
+/// is supported.
+const ClusterIndexFactory& clusterIndexFactory(std::string_view name);
+
+} // namespace facebook::nimble::index

@@ -15,7 +15,6 @@
  */
 #pragma once
 
-#include <random>
 #include "velox/exec/Operator.h"
 #include "velox/exec/Task.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
@@ -29,11 +28,15 @@ using exec::DriverCtx;
 using exec::SourceOperator;
 
 /// @brief The UCX exchange operator receives data from upstream tasks via
-/// UcxExchangeClient. It is used as a replacement for the Velox Exchange
-/// operator when the plan node's transport type is UCX. The operator receives
+/// UcxExchangeClient. exec::ExchangeTransportRegistry builds it for plan nodes
+/// whose transportKind is core::TransportKind::kUcx. The operator receives
 /// cudf::packed_columns from remote tasks and wraps them as CudfVectors.
 class UcxExchange : public SourceOperator, public cudf_velox::NvtxHelper {
  public:
+  /// @param ucxExchangeClient Client this operator reads from. Must not be
+  /// null: it is created by the same exec::ExchangeTransportEntry that builds
+  /// this operator and is shared by all consumers of the pipeline, so the Task
+  /// that owns it -- not this operator -- closes it.
   UcxExchange(
       int32_t operatorId,
       DriverCtx* driverCtx,
@@ -51,18 +54,20 @@ class UcxExchange : public SourceOperator, public cudf_velox::NvtxHelper {
 
   void close() override;
 
- private:
-  // Invoked to create exchange client for remote tasks. The function shuffles
-  // the source task ids first to randomize the source tasks we fetch data from.
-  // This helps to avoid different tasks fetching from the same source task in a
-  // distributed system.
-  void addRemoteTaskIds(std::vector<std::string>& remoteTaskIds);
+  /// Returns kInput for a MergeExchangeNode, whose output the CudfOrderBy
+  /// spliced in behind this operator reports, and kBoth otherwise.
+  core::PlanNode::Boundary planNodeBoundary() const override {
+    return planNodeBoundary_;
+  }
 
+ private:
   // This is a no-op except when called from driver 0.
   // Fetches splits from the task until there are no more splits or task returns
-  // a future that will be complete when more splits arrive. Adds splits to
-  // exchangeClient_. Sets "noMoreSplits_" if the task returns not blocked
-  // without a split, this is the end-of-splits signal.
+  // a future that will be complete when more splits arrive. Records split
+  // stats, and for a merge exchange also passes the splits and the end of
+  // splits to exchangeClient_ (see forwardsSplits_). Sets "noMoreSplits_" if
+  // the task returns not blocked without a split, this is the end-of-splits
+  // signal.
   void getSplits(ContinueFuture* future);
 
   // Converts the cudf packed table into a CudfVector.
@@ -77,16 +82,24 @@ class UcxExchange : public SourceOperator, public cudf_velox::NvtxHelper {
   std::shared_ptr<UcxExchangeClient> exchangeClient_;
 
   const uint64_t preferredOutputBatchBytes_;
-  // True only when this operator created the client itself. An externally
-  // shared client is left for its owner or final shared_ptr release to close.
-  const bool closeExchangeClientOnClose_;
 
-  /// True if this operator is responsible for fetching splits from the Task
-  /// and passing these to ExchangeClient. When running with multile drivers,
-  /// this is done by the exchange running on driver 0.
+  // True if this operator takes splits from the Task, records split and
+  // exchange client stats, and reports the splits finished. When running with
+  // multiple drivers, this is done by the exchange running on driver 0.
   const bool processSplits_;
   const int pipelineId_;
   const int driverId_;
+
+  // See planNodeBoundary().
+  const core::PlanNode::Boundary planNodeBoundary_;
+
+  // True for a MergeExchangeNode. The Task passes remote splits to the
+  // exchange client of every other exchange node, but not of a merge exchange,
+  // whose CPU operator fetches through clients of its own. This operator reads
+  // the Task's client, so for a merge exchange it passes them on itself. A
+  // merge exchange runs single-threaded, so driver 0 is the only reader.
+  const bool forwardsSplits_;
+
   bool noMoreSplits_ = false;
 
   // A future received from Task::getSplitOrFuture(). It will be complete when
@@ -101,7 +114,6 @@ class UcxExchange : public SourceOperator, public cudf_velox::NvtxHelper {
 
   bool atEnd_{false};
   bool closed_{false};
-  std::default_random_engine rng_{std::random_device{}()};
 };
 
 } // namespace facebook::velox::ucx_exchange

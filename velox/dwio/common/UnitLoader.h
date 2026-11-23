@@ -33,7 +33,8 @@ class LoadUnit {
   /// Perform the IO (read)
   virtual void load() = 0;
 
-  /// Unload the unit to free memory
+  /// Releases resources acquired by getIoSize() or load(), including partially
+  /// completed calls. Must be safe when those calls acquired no resources.
   virtual void unload() = 0;
 
   /// Number of rows in the unit
@@ -45,9 +46,17 @@ class LoadUnit {
 
 class UnitLoaderStats {
  public:
+  /// Number of load units processed.
+  static constexpr std::string_view kProcessedUnits{"processedUnits"};
+  /// Time spent loading units on the reader thread.
+  static constexpr std::string_view kUnitLoadNanos{"unitLoadNanos"};
+  /// Time the reader thread waited for units loaded in the background.
+  static constexpr std::string_view kWaitForUnitReadyNanos{
+      "waitForUnitReadyNanos"};
+
   UnitLoaderStats() = default;
 
-  void addCounter(const std::string& name, RuntimeCounter counter) {
+  void addCounter(std::string_view name, RuntimeCounter counter) {
     auto locked = stats_.wlock();
     auto it = locked->find(name);
     if (it == locked->end()) {
@@ -83,6 +92,26 @@ class UnitLoaderStats {
 
 class UnitLoader {
  public:
+  /// Identifies load activity reported to the reader's metrics callback.
+  enum class Event {
+    kPrefetchScheduled,
+    kPrefetchReady,
+    kPrefetchNotReady,
+    /// Reports each rejected budget admission attempt, including retries.
+    kPrefetchRejected,
+    /// Reports each failed executor submission attempt, including retries.
+    kPrefetchError,
+    kLoadStarted,
+    kLoadFinished,
+    kLoadFailed,
+    kForegroundLoad,
+    /// Reports the wait for a foreground or prefetched unit, in nanoseconds.
+    kWaitNanos,
+    kLoadWallNanos,
+    kBytesReserved,
+    kBytesReleased,
+  };
+
   virtual ~UnitLoader() = default;
 
   /// Must block until the unit is loaded. This call could unload other units.

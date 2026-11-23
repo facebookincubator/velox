@@ -366,18 +366,19 @@ void UcxExchangeSource::sendHandshake() {
   // Pass handshakeReq as the callback arg to keep the send buffer alive until
   // the async amSend completes. UCXX stores it as shared_ptr<void> but the
   // type-erased deleter still calls ~HandshakeMsg correctly.
-  request_ = endpointRef_->endpoint_->amSend(
-      handshakeReq.get(),
-      sizeof(*handshakeReq),
-      UCS_MEMORY_TYPE_HOST,
-      info,
-      false,
-      [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-        if (auto self = weak.lock()) {
-          self->onHandshake(status, arg);
-        }
-      },
-      handshakeReq);
+  request_ =
+      endpointRef_->endpoint_
+          ->amSendBuilder(
+              handshakeReq.get(), sizeof(*handshakeReq), UCS_MEMORY_TYPE_HOST)
+          .receiverCallbackInfo(info)
+          .callbackFunction(
+              [weak](ucs_status_t status, std::shared_ptr<void> arg) {
+                if (auto self = weak.lock()) {
+                  self->onHandshake(status, arg);
+                }
+              })
+          .callbackData(handshakeReq)
+          .build();
 }
 
 void UcxExchangeSource::onHandshake(
@@ -437,18 +438,20 @@ void UcxExchangeSource::getMetadata() {
   if (request_) {
     completedRequests_.push_back(std::move(request_));
   }
-  request_ = endpointRef_->endpoint_->tagRecv(
-      reinterpret_cast<void*>(metadataReq->data()),
-      kMaxMetaBufSize,
-      ucxx::Tag{metadataTag},
-      ucxx::TagMaskFull,
-      false,
-      [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-        if (auto self = weak.lock()) {
-          self->onMetadata(status, arg);
-        }
-      },
-      metadataReq);
+  request_ = endpointRef_->endpoint_
+                 ->tagRecvBuilder(
+                     reinterpret_cast<void*>(metadataReq->data()),
+                     kMaxMetaBufSize,
+                     ucxx::Tag{metadataTag},
+                     ucxx::TagMaskFull)
+                 .callbackFunction(
+                     [weak](ucs_status_t status, std::shared_ptr<void> arg) {
+                       if (auto self = weak.lock()) {
+                         self->onMetadata(status, arg);
+                       }
+                     })
+                 .callbackData(metadataReq)
+                 .build();
 }
 
 void UcxExchangeSource::onMetadata(
@@ -530,7 +533,7 @@ void UcxExchangeSource::onMetadata(
     }
 
     // sync after allocating.
-    stream.synchronize();
+    stream.sync();
 
     VLOG(3) << toString() << " Allocated " << ptr->metadata.dataSizeBytes
             << " bytes of device memory";
@@ -551,19 +554,20 @@ void UcxExchangeSource::onMetadata(
     if (request_) {
       completedRequests_.push_back(std::move(request_));
     }
-    request_ = endpointRef_->endpoint_->tagRecv(
-        ptr->dataBuf->data(),
-        ptr->metadata.dataSizeBytes,
-        ucxx::Tag{dataTag},
-        ucxx::TagMaskFull,
-        false,
-        [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-          if (auto self = weak.lock()) {
-            self->onData(status, arg);
-          }
-        },
-        ptr // DataAndMetadata
-    );
+    request_ = endpointRef_->endpoint_
+                   ->tagRecvBuilder(
+                       ptr->dataBuf->data(),
+                       ptr->metadata.dataSizeBytes,
+                       ucxx::Tag{dataTag},
+                       ucxx::TagMaskFull)
+                   .callbackFunction(
+                       [weak](ucs_status_t status, std::shared_ptr<void> arg) {
+                         if (auto self = weak.lock()) {
+                           self->onData(status, arg);
+                         }
+                       })
+                   .callbackData(ptr)
+                   .build();
   }
 }
 
@@ -615,8 +619,10 @@ void UcxExchangeSource::onData(ucs_status_t status, std::shared_ptr<void> arg) {
         cudf::packed_table{tableView, std::move(packedCols)});
 
     // Bundle the packed_table with the stream that was used for allocation
+    // and the producer's row count, which the packed table cannot report for
+    // itself when it has no columns.
     auto data = std::make_unique<PackedTableWithStream>(
-        std::move(packedTable), ptr->stream);
+        std::move(packedTable), ptr->stream, ptr->metadata.numRows);
 
     enqueue(std::move(data));
     setStateIf(ReceiverState::WaitingForData, ReceiverState::ReadyToReceive);
@@ -637,18 +643,20 @@ void UcxExchangeSource::receiveHandshakeResponse() {
   if (request_) {
     completedRequests_.push_back(std::move(request_));
   }
-  request_ = endpointRef_->endpoint_->tagRecv(
-      responseBuffer.get(),
-      sizeof(*responseBuffer),
-      ucxx::Tag{responseTag},
-      ucxx::TagMaskFull,
-      false,
-      [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-        if (auto self = weak.lock()) {
-          self->onHandshakeResponse(status, arg);
-        }
-      },
-      responseBuffer);
+  request_ = endpointRef_->endpoint_
+                 ->tagRecvBuilder(
+                     responseBuffer.get(),
+                     sizeof(*responseBuffer),
+                     ucxx::Tag{responseTag},
+                     ucxx::TagMaskFull)
+                 .callbackFunction(
+                     [weak](ucs_status_t status, std::shared_ptr<void> arg) {
+                       if (auto self = weak.lock()) {
+                         self->onHandshakeResponse(status, arg);
+                       }
+                     })
+                 .callbackData(responseBuffer)
+                 .build();
 }
 
 void UcxExchangeSource::onHandshakeResponse(
@@ -723,11 +731,12 @@ void UcxExchangeSource::waitForIntraNodeData() {
   }
 
   intraNodePollCount_ = 0;
-  onIntraNodeData(std::move(result->data), result->atEnd);
+  onIntraNodeData(std::move(result->data), result->numRows, result->atEnd);
 }
 
 void UcxExchangeSource::onIntraNodeData(
     std::shared_ptr<cudf::packed_columns> data,
+    vector_size_t numRows,
     bool atEnd) {
   // Check if close() was called
   if (closed_.load(std::memory_order_acquire)) {
@@ -785,8 +794,8 @@ void UcxExchangeSource::onIntraNodeData(
   // the inter-node (UCX) receive path which also allocates a pool stream.
   auto stream =
       facebook::velox::cudf_velox::cudfGlobalStreamPool().get_stream();
-  auto tableWithStream =
-      std::make_unique<PackedTableWithStream>(std::move(packedTable), stream);
+  auto tableWithStream = std::make_unique<PackedTableWithStream>(
+      std::move(packedTable), stream, numRows);
 
   enqueue(std::move(tableWithStream));
 

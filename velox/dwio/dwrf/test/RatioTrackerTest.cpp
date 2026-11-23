@@ -23,7 +23,7 @@ using namespace ::testing;
 
 namespace facebook::velox::dwrf {
 
-TEST(RatioTrackerTest, BasicTests) {
+TEST(RatioTrackerTest, basicTests) {
   struct TestCase {
     explicit TestCase(
         std::shared_ptr<RatioTracker> tracker,
@@ -70,7 +70,7 @@ TEST(RatioTrackerTest, BasicTests) {
   }
 }
 
-TEST(RatioTrackerTest, EmptyInputTests) {
+TEST(RatioTrackerTest, emptyInputTests) {
   struct TestCase {
     explicit TestCase(
         std::shared_ptr<RatioTracker> tracker,

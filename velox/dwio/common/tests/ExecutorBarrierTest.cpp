@@ -22,7 +22,7 @@
 using namespace ::testing;
 using namespace ::facebook::velox::dwio::common;
 
-TEST(ExecutorBarrierTest, GetNumPriorities) {
+TEST(ExecutorBarrierTest, getNumPriorities) {
   const uint8_t kNumPriorities = 5;
   auto executor =
       std::make_shared<folly::CPUThreadPoolExecutor>(10, kNumPriorities);
@@ -30,7 +30,7 @@ TEST(ExecutorBarrierTest, GetNumPriorities) {
   EXPECT_EQ(barrier->getNumPriorities(), kNumPriorities);
 }
 
-TEST(ExecutorBarrierTest, CanOwn) {
+TEST(ExecutorBarrierTest, canOwn) {
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(10);
   {
     auto barrier = std::make_shared<ExecutorBarrier>(executor);
@@ -39,7 +39,7 @@ TEST(ExecutorBarrierTest, CanOwn) {
   EXPECT_EQ(executor.use_count(), 1);
 }
 
-TEST(ExecutorBarrierTest, CanAwaitMultipleTimes) {
+TEST(ExecutorBarrierTest, canAwaitMultipleTimes) {
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(10);
   auto barrier = std::make_shared<ExecutorBarrier>(executor);
   for (int time = 0, multipleTimes = 10; time < multipleTimes; ++time) {
@@ -47,7 +47,7 @@ TEST(ExecutorBarrierTest, CanAwaitMultipleTimes) {
   }
 }
 
-TEST(ExecutorBarrierTest, AddCanBeReused) {
+TEST(ExecutorBarrierTest, addCanBeReused) {
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(10);
   auto barrier = std::make_shared<ExecutorBarrier>(executor);
 
@@ -66,7 +66,7 @@ TEST(ExecutorBarrierTest, AddCanBeReused) {
   EXPECT_EQ(count, (2 * kCalls));
 }
 
-TEST(ExecutorBarrierTest, AddWithPriorityCanBeReused) {
+TEST(ExecutorBarrierTest, addWithPriorityCanBeReused) {
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(10);
   auto barrier = std::make_shared<ExecutorBarrier>(executor);
 
@@ -86,7 +86,7 @@ TEST(ExecutorBarrierTest, AddWithPriorityCanBeReused) {
   EXPECT_EQ(count, (2 * kCalls));
 }
 
-TEST(ExecutorBarrierTest, AddCanBeReusedAfterException) {
+TEST(ExecutorBarrierTest, addCanBeReusedAfterException) {
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(10);
   auto barrier = std::make_shared<ExecutorBarrier>(executor);
 
@@ -108,7 +108,7 @@ TEST(ExecutorBarrierTest, AddCanBeReusedAfterException) {
   EXPECT_EQ(count, (2 * kCalls));
 }
 
-TEST(ExecutorBarrierTest, AddWithPriorityCanBeReusedAfterException) {
+TEST(ExecutorBarrierTest, addWithPriorityCanBeReusedAfterException) {
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(10);
   auto barrier = std::make_shared<ExecutorBarrier>(executor);
 
@@ -133,7 +133,7 @@ TEST(ExecutorBarrierTest, AddWithPriorityCanBeReusedAfterException) {
   EXPECT_EQ(count, (2 * kCalls));
 }
 
-TEST(ExecutorBarrierTest, Add) {
+TEST(ExecutorBarrierTest, add) {
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(10);
   auto barrier = std::make_shared<ExecutorBarrier>(executor);
 
@@ -146,7 +146,7 @@ TEST(ExecutorBarrierTest, Add) {
   EXPECT_EQ(count, kCalls);
 }
 
-TEST(ExecutorBarrierTest, AddWithPriority) {
+TEST(ExecutorBarrierTest, addWithPriority) {
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(10);
   auto barrier = std::make_shared<ExecutorBarrier>(executor);
 
@@ -160,7 +160,7 @@ TEST(ExecutorBarrierTest, AddWithPriority) {
   EXPECT_EQ(count, kCalls);
 }
 
-TEST(ExecutorBarrierTest, AddCanIgnore) {
+TEST(ExecutorBarrierTest, addCanIgnore) {
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(10);
   auto barrier = std::make_shared<ExecutorBarrier>(executor);
 
@@ -171,7 +171,7 @@ TEST(ExecutorBarrierTest, AddCanIgnore) {
   // Discard: barrier->waitAll();
 }
 
-TEST(ExecutorBarrierTest, AddWithPriorityCanIgnore) {
+TEST(ExecutorBarrierTest, addWithPriorityCanIgnore) {
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(10);
   auto barrier = std::make_shared<ExecutorBarrier>(executor);
 
@@ -182,7 +182,7 @@ TEST(ExecutorBarrierTest, AddWithPriorityCanIgnore) {
   // Discard: barrier->waitAll();
 }
 
-TEST(ExecutorBarrierTest, DestructorDoesntThrow) {
+TEST(ExecutorBarrierTest, destructorDoesntThrow) {
   const int kCalls = 30;
   std::atomic<int> count{0};
   {
@@ -201,7 +201,7 @@ TEST(ExecutorBarrierTest, DestructorDoesntThrow) {
   EXPECT_EQ(count, kCalls);
 }
 
-TEST(ExecutorBarrierTest, AddException) {
+TEST(ExecutorBarrierTest, addException) {
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(10);
   auto barrier = std::make_shared<ExecutorBarrier>(executor);
 
@@ -219,7 +219,7 @@ TEST(ExecutorBarrierTest, AddException) {
   EXPECT_EQ(count, kCalls);
 }
 
-TEST(ExecutorBarrierTest, AddWithPriorityException) {
+TEST(ExecutorBarrierTest, addWithPriorityException) {
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(10);
   auto barrier = std::make_shared<ExecutorBarrier>(executor);
 
@@ -240,7 +240,7 @@ TEST(ExecutorBarrierTest, AddWithPriorityException) {
   EXPECT_EQ(count, kCalls);
 }
 
-TEST(ExecutorBarrierTest, AddNonStdException) {
+TEST(ExecutorBarrierTest, addNonStdException) {
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(10);
   auto barrier = std::make_shared<ExecutorBarrier>(executor);
 
@@ -259,7 +259,7 @@ TEST(ExecutorBarrierTest, AddNonStdException) {
   EXPECT_EQ(count, kCalls);
 }
 
-TEST(ExecutorBarrierTest, AddWithPriorityNonStdException) {
+TEST(ExecutorBarrierTest, addWithPriorityNonStdException) {
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(10);
   auto barrier = std::make_shared<ExecutorBarrier>(executor);
 
@@ -281,7 +281,7 @@ TEST(ExecutorBarrierTest, AddWithPriorityNonStdException) {
   EXPECT_EQ(count, kCalls);
 }
 
-TEST(ExecutorBarrierTest, AddExceptions) {
+TEST(ExecutorBarrierTest, addExceptions) {
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(10);
   auto barrier = std::make_shared<ExecutorBarrier>(executor);
 
@@ -297,7 +297,7 @@ TEST(ExecutorBarrierTest, AddExceptions) {
   EXPECT_EQ(count, kCalls);
 }
 
-TEST(ExecutorBarrierTest, AddWithPriorityExceptions) {
+TEST(ExecutorBarrierTest, addWithPriorityExceptions) {
   auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(10);
   auto barrier = std::make_shared<ExecutorBarrier>(executor);
 

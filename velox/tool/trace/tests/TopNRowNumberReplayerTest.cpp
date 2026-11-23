@@ -96,11 +96,10 @@ class TopNRowNumberReplayerTest : public HiveConnectorTestBase {
       bool generateRowNumber = true,
       const std::vector<std::string>& partitionKeys = {"c0"},
       const std::vector<std::string>& sortingKeys = {"c1"}) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId scanId;
 
     auto builder =
-        PlanBuilder(planNodeIdGenerator)
+        PlanBuilder()
             .tableScan(inputType_)
             .capturePlanNodeId(scanId)
             .topNRowNumber(
@@ -119,11 +118,10 @@ class TopNRowNumberReplayerTest : public HiveConnectorTestBase {
       bool generateRowNumber = true,
       const std::vector<std::string>& partitionKeys = {"c0"},
       const std::vector<std::string>& sortingKeys = {"c1"}) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId scanId;
 
     auto builder =
-        PlanBuilder(planNodeIdGenerator)
+        PlanBuilder()
             .tableScan(inputType_)
             .capturePlanNodeId(scanId)
             .topNRank(

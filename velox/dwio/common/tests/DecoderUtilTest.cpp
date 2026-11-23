@@ -17,6 +17,8 @@
 #include "velox/dwio/common/DecoderUtil.h"
 #include <folly/Random.h>
 #include "velox/common/base/Nulls.h"
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/dwio/common/ColumnVisitors.h"
 #include "velox/dwio/common/SelectiveColumnReader.h"
 #include "velox/type/Filter.h"
 
@@ -225,6 +227,182 @@ TEST_F(DecoderUtilTest, processFixedWithRun) {
       EXPECT_EQ(i * 2, hits[passedCount]);
       ++passedCount;
     }
+  }
+}
+
+TEST_F(DecoderUtilTest, columnVisitorSmallintRowIndices) {
+  // One SMALLINT SIMD batch needs two int32 row-index batches. Check that
+  // the second batch contains the next rows rather than repeating the first.
+  constexpr int32_t kWidth = xsimd::batch<int16_t>::size;
+  raw_vector<int32_t> rows(kWidth);
+  raw_vector<int16_t> values(kWidth);
+  raw_vector<int32_t> hits(kWidth);
+  std::iota(rows.begin(), rows.end(), 0);
+  std::iota(values.begin(), values.end(), 1);
+  std::fill(hits.begin(), hits.end(), -1);
+  // Keep filtering enabled while all values pass, so processFixedFilter
+  // loads both row-index batches.
+  common::IsNotNull filter;
+
+  // The dense bulk path writes to the supplied buffers and needs no reader.
+  ColumnVisitor<int16_t, common::IsNotNull, ExtractToReader, true> visitor(
+      filter, nullptr, rows, ExtractToReader(nullptr));
+  int32_t numValues = 0;
+  visitor.processRun<true, false, false>(
+      values.data(), kWidth, nullptr, hits.data(), values.data(), numValues);
+  EXPECT_EQ(visitor.rowIndex(), kWidth);
+  ASSERT_EQ(numValues, kWidth);
+  for (int32_t i = 0; i < kWidth; ++i) {
+    EXPECT_EQ(hits[i], i) << "lane " << i;
+    EXPECT_EQ(values[i], i + 1) << "lane " << i;
+  }
+}
+
+TEST_F(DecoderUtilTest, columnVisitorSparseRunUnsupported) {
+  raw_vector<int32_t> rows(1);
+  rows[0] = 1;
+  const common::AlwaysTrue filter;
+  ColumnVisitor<int32_t, common::AlwaysTrue, DropValues, false> visitor(
+      filter, nullptr, rows, DropValues{});
+  int32_t value = 42;
+  int32_t numValues = 0;
+  VELOX_ASSERT_THROW(
+      (visitor.processRun<false, false, false>(
+          &value, 1, nullptr, nullptr, &value, numValues)),
+      "Unsupported ColumnVisitor::processRun configuration");
+  EXPECT_EQ(visitor.rowIndex(), 0);
+  EXPECT_EQ(numValues, 0);
+}
+
+TEST_F(DecoderUtilTest, columnVisitorInt128Run) {
+  constexpr int32_t kNumRows = 2'049;
+  constexpr int32_t kBatchSize = 128;
+  const int128_t base = int128_t{1} << 80;
+  const common::HugeintRange filter(base + 10, base + 1'040, false);
+  raw_vector<int32_t> rows(kNumRows);
+  std::iota(rows.begin(), rows.end(), 0);
+  std::vector<int32_t> expectedRows{-1};
+  std::vector<int128_t> expectedValues{-1};
+  for (auto row = 10; row <= 1'040; ++row) {
+    expectedRows.push_back(row);
+    expectedValues.push_back(base + row);
+  }
+
+  const auto test = [&](auto extractValues) {
+    std::vector<int128_t> values(kNumRows + 1);
+    std::vector<int32_t> hits(kNumRows + 1);
+    values[0] = -1;
+    hits[0] = -1;
+    int32_t numValues = 1;
+    // Dense runs append to the supplied buffers without accessing the reader.
+    ColumnVisitor<int128_t, common::HugeintRange, decltype(extractValues), true>
+        visitor(filter, nullptr, rows, extractValues);
+    for (auto row = 0; row < kNumRows; row += kBatchSize) {
+      const auto numInput = std::min(kBatchSize, kNumRows - row);
+      for (auto i = 0; i < numInput; ++i) {
+        values[numValues + i] = base + row + i;
+      }
+      visitor.template processRun<true, false, false>(
+          values.data() + numValues,
+          numInput,
+          nullptr,
+          hits.data(),
+          values.data(),
+          numValues);
+      EXPECT_EQ(visitor.rowIndex(), row + numInput);
+    }
+    values.resize(numValues);
+    hits.resize(numValues);
+    EXPECT_THAT(hits, testing::ElementsAreArray(expectedRows));
+    if constexpr (!std::is_same_v<decltype(extractValues), DropValues>) {
+      EXPECT_THAT(values, testing::ElementsAreArray(expectedValues));
+    }
+  };
+  test(ExtractToReader(nullptr));
+  test(DropValues{});
+}
+
+TEST_F(DecoderUtilTest, processFixedWidthRunSmallintRowIndices) {
+  // Verify that the second row-index batch advances by the int32 SIMD lane
+  // count when processing one full SMALLINT batch.
+  constexpr int32_t kWidth = xsimd::batch<int16_t>::size;
+  // Initialize extra rows to test that underlying logic doesn't use hardcoded
+  // strides. (e.g. avx VL256 vs sve VL128 vs sve VL256). Only kWidth values
+  // are processed.
+  raw_vector<int32_t> rows(2 * kWidth);
+  raw_vector<int16_t> values(kWidth);
+  raw_vector<int32_t> hits(kWidth);
+  std::iota(rows.begin(), rows.end(), 0);
+  std::iota(values.begin(), values.end(), 1);
+  std::fill(hits.begin(), hits.end(), -1);
+  // Keep filtering enabled while all values pass, so processFixedFilter
+  // loads both row-index batches.
+  common::IsNotNull filter;
+  NoHook noHook;
+  int32_t numValues = 0;
+
+  processFixedWidthRun<int16_t, false, false, true>(
+      rows,
+      0,
+      kWidth,
+      nullptr,
+      values.data(),
+      hits.data(),
+      numValues,
+      filter,
+      noHook);
+
+  ASSERT_EQ(numValues, kWidth);
+  for (int32_t i = 0; i < kWidth; ++i) {
+    EXPECT_EQ(hits[i], i) << "lane " << i;
+    EXPECT_EQ(values[i], i + 1) << "lane " << i;
+  }
+}
+
+TEST_F(DecoderUtilTest, fixedWidthScanSmallintRowIndices) {
+  // Verify that a sparse SMALLINT scan preserves row indices and values
+  // across both row-index SIMD batches.
+  constexpr int32_t kWidth = xsimd::batch<int16_t>::size;
+  raw_vector<int32_t> rows(2 * kWidth);
+  for (int32_t i = 0; i < rows.size(); ++i) {
+    rows[i] = 2 * i;
+  }
+  raw_vector<int16_t> data(4 * kWidth);
+  std::iota(data.begin(), data.end(), 1);
+  raw_vector<int16_t> values(kWidth);
+  raw_vector<int32_t> hits(kWidth);
+  std::fill(values.begin(), values.end(), 0);
+  std::fill(hits.begin(), hits.end(), -1);
+
+  SeekableArrayInputStream input(
+      reinterpret_cast<const uint8_t*>(data.data()),
+      data.size() * sizeof(int16_t));
+  // Preload the buffer so the full batch enters the SIMD scan.
+  const void* buffer = nullptr;
+  int32_t bufferSize = 0;
+  ASSERT_TRUE(input.Next(&buffer, &bufferSize));
+  const char* bufferStart = static_cast<const char*>(buffer);
+  const char* bufferEnd = bufferStart + bufferSize;
+  // Keep all values passing through the filter to load both index batches.
+  common::IsNotNull filter;
+  NoHook noHook;
+  int32_t numValues = 0;
+  fixedWidthScan<int16_t, false, false>(
+      {rows.data(), kWidth},
+      nullptr,
+      values.data(),
+      hits.data(),
+      numValues,
+      input,
+      bufferStart,
+      bufferEnd,
+      filter,
+      noHook);
+
+  ASSERT_EQ(numValues, kWidth);
+  for (int32_t i = 0; i < kWidth; ++i) {
+    EXPECT_EQ(hits[i], 2 * i) << "lane " << i;
+    EXPECT_EQ(values[i], 2 * i + 1) << "lane " << i;
   }
 }
 

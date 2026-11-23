@@ -276,6 +276,17 @@ TEST_F(BingTileFunctionsTest, bingTileCoordinates) {
   testBingTileCoordinates(1, 1, std::nullopt);
 }
 
+TEST_F(BingTileFunctionsTest, bingTileCoordinatesFieldNames) {
+  auto input = makeSingleXYZoomRow(127, 11, 8);
+
+  assertEqualVectors(
+      makeFlatVector<int32_t>({127}),
+      evaluate("bing_tile_coordinates(bing_tile(c0, c1, c2)).x", input));
+  assertEqualVectors(
+      makeFlatVector<int32_t>({11}),
+      evaluate("bing_tile_coordinates(bing_tile(c0, c1, c2)).y", input));
+}
+
 TEST_F(BingTileFunctionsTest, bingTileParentNoZoom) {
   const auto testBingTileParent = [&](std::optional<int32_t> x,
                                       std::optional<int32_t> y,

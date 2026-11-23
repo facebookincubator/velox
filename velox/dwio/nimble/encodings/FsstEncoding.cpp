@@ -1,0 +1,1034 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#include "velox/dwio/nimble/encodings/FsstEncoding.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <numeric>
+
+#include "folly/ScopeGuard.h"
+#include "folly/container/HeterogeneousAccess.h"
+#include "velox/common/Casts.h"
+#include "velox/common/base/BitUtil.h"
+#include "velox/dwio/nimble/common/Varint.h"
+#include "velox/dwio/nimble/compression/Compression.h"
+#include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
+#include "velox/dwio/nimble/encodings/TrivialEncoding.h"
+#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+
+namespace facebook::nimble {
+
+namespace {
+
+// Hashes all compressed bytes, including embedded nulls, for sampling and
+// full-cache lookups. Exact payload comparison confirms hash matches.
+uint64_t hashCompressedPayload(std::string_view compressed) {
+  return folly::HeterogeneousAccessHash<std::string_view>{}(compressed);
+}
+
+constexpr size_t kCompressionTypeSize = sizeof(uint8_t);
+
+// Forwards compression decisions to the shared parent policy.
+class DelegatingCompressionPolicy final : public CompressionPolicy {
+ public:
+  explicit DelegatingCompressionPolicy(
+      std::shared_ptr<CompressionPolicy> policy)
+      : policy_{std::move(policy)} {}
+
+  CompressionConfig config() const override {
+    return policy_->config();
+  }
+
+  bool shouldAccept(
+      CompressionType compressionType,
+      uint64_t uncompressedSize,
+      uint64_t compressedSize) const override {
+    return policy_->shouldAccept(
+        compressionType, uncompressedSize, compressedSize);
+  }
+
+ private:
+  std::shared_ptr<CompressionPolicy> policy_;
+};
+
+class TrivialFallbackSelectionPolicy final
+    : public EncodingSelectionPolicy<std::string_view> {
+ public:
+  TrivialFallbackSelectionPolicy(
+      EncodingSelection<std::string_view>& parentSelection,
+      std::shared_ptr<CompressionPolicy> compressionPolicy)
+      : parentSelection_{parentSelection},
+        compressionPolicy_{std::move(compressionPolicy)} {}
+
+  EncodingSelectionResult select(
+      std::span<const std::string_view> /* values */,
+      const Statistics<std::string_view>& /* statistics */,
+      const Encoding::Options& /* options */) override {
+    return trivialSelectionResult();
+  }
+
+  EncodingSelectionResult selectNullable(
+      std::span<const std::string_view> /* values */,
+      std::span<const bool> /* nulls */,
+      const Statistics<std::string_view>& /* statistics */,
+      const Encoding::Options& /* options */) override {
+    NIMBLE_UNSUPPORTED("Nullable FSST fallback is not supported.");
+  }
+
+ private:
+  EncodingSelectionResult trivialSelectionResult() const {
+    return {
+        .encodingType = EncodingType::Trivial,
+        .compressionPolicyFactory = [compressionPolicy = compressionPolicy_]() {
+          return std::make_unique<DelegatingCompressionPolicy>(
+              compressionPolicy);
+        }};
+  }
+
+  std::unique_ptr<EncodingSelectionPolicyBase> createImpl(
+      EncodingType parentEncodingType,
+      NestedEncodingIdentifier nestedEncodingIdentifier,
+      DataType nestedDataType) override {
+    NIMBLE_CHECK_EQ(
+        parentEncodingType,
+        EncodingType::Trivial,
+        "FSST fallback only supports Trivial nested encodings.");
+    NIMBLE_CHECK_EQ(
+        nestedDataType,
+        DataType::Uint32,
+        "Trivial string fallback only supports uint32 length encodings.");
+    return parentSelection_.template createNestedPolicy<uint32_t>(
+        EncodingType::Trivial, nestedEncodingIdentifier);
+  }
+
+  EncodingSelection<std::string_view>& parentSelection_;
+  std::shared_ptr<CompressionPolicy> compressionPolicy_;
+};
+
+size_t sumLengths(std::span<const size_t> lengths) {
+  return std::accumulate(lengths.begin(), lengths.end(), size_t{0});
+}
+
+CompressionType readFsstCompressionType(
+    std::string_view encoding,
+    size_t& offset) {
+  NIMBLE_CHECK_LT(offset, encoding.size(), "Truncated FSST compression type.");
+  const auto value = static_cast<uint8_t>(encoding[offset++]);
+  const auto compressionType = static_cast<CompressionType>(value);
+  switch (compressionType) {
+    case CompressionType::Uncompressed:
+    case CompressionType::Zstd:
+    case CompressionType::MetaInternal:
+    case CompressionType::Lz4:
+    case CompressionType::OpenZL:
+      return compressionType;
+  }
+  NIMBLE_FAIL("Unsupported FSST compression type: {}.", value);
+}
+
+uint32_t readFsstHeaderVarint(std::string_view encoding, size_t& offset) {
+  uint32_t value{0};
+  for (uint32_t byteIndex = 0; byteIndex < 5; ++byteIndex) {
+    NIMBLE_CHECK_LT(offset, encoding.size(), "Truncated FSST header varint.");
+    const auto byte = static_cast<uint8_t>(encoding[offset++]);
+    if (byteIndex == 4) {
+      NIMBLE_CHECK_EQ(byte & 0xf0, 0, "Overlong FSST header varint.");
+    }
+    value |= static_cast<uint32_t>(byte & 0x7f) << (byteIndex * 7);
+    if ((byte & 0x80) == 0) {
+      NIMBLE_CHECK_EQ(
+          byteIndex + 1,
+          varint::varintSize(value),
+          "Overlong FSST header varint.");
+      return value;
+    }
+  }
+  NIMBLE_FAIL("Overlong FSST header varint.");
+}
+
+// Decompresses 'compressed' into 'output', which has room for 'capacity' bytes,
+// and returns the decompressed size. Inlines FSST's decoder and starts at a
+// cache line, so that the speed of the decode loop, which depends on its
+// alignment, does not depend on where the linker puts the decoder's
+// out-of-line copy.
+[[gnu::flatten]] [[gnu::aligned(64)]] FOLLY_NOINLINE size_t decompressValue(
+    const fsst_decoder_t& decoder,
+    std::string_view compressed,
+    size_t capacity,
+    char* output) {
+  return nimble_fsst_decompress(
+      &decoder,
+      compressed.size(),
+      reinterpret_cast<const unsigned char*>(compressed.data()),
+      capacity,
+      reinterpret_cast<unsigned char*>(output));
+}
+
+} // namespace
+
+FsstEncoding::CompressedValues::CompressedValues(
+    velox::memory::MemoryPool* pool)
+    : compressedBuffer{pool}, compressedLengths{pool}, compressedPtrs{pool} {}
+
+FsstEncoding::Header FsstEncoding::parseHeader(
+    std::string_view encoding,
+    size_t offset) {
+  NIMBLE_CHECK_LE(
+      offset, encoding.size(), "FSST header offset exceeds encoding bounds.");
+
+  Header header{};
+  header.compressionType = readFsstCompressionType(encoding, offset);
+  const auto symbolTableSize = readFsstHeaderVarint(encoding, offset);
+  NIMBLE_CHECK_GT(
+      symbolTableSize, 0, "FSST symbol table size must be positive.");
+  NIMBLE_CHECK_LE(
+      symbolTableSize,
+      static_cast<uint32_t>(FSST_MAXHEADER),
+      "FSST symbol table size exceeds FSST_MAXHEADER.");
+  NIMBLE_CHECK_LE(
+      static_cast<size_t>(symbolTableSize),
+      encoding.size() - offset,
+      "FSST symbol table exceeds encoding bounds.");
+  header.symbolTable = encoding.substr(offset, symbolTableSize);
+  offset += symbolTableSize;
+
+  const auto lengthsSize = readFsstHeaderVarint(encoding, offset);
+  NIMBLE_CHECK_GT(
+      lengthsSize, 0, "FSST lengths encoding size must be positive.");
+  NIMBLE_CHECK_LE(
+      static_cast<size_t>(lengthsSize),
+      encoding.size() - offset,
+      "FSST lengths encoding exceeds encoding bounds.");
+  header.lengths = encoding.substr(offset, lengthsSize);
+  offset += lengthsSize;
+  header.blob = encoding.substr(offset);
+  return header;
+}
+
+std::string_view FsstEncoding::validateEncodedPrefix(
+    std::string_view encoding,
+    const Encoding::Options& options) {
+  NIMBLE_CHECK_FILE_GE(
+      encoding.size(),
+      EncodingPrefix::kRowCountOffset,
+      "Truncated FSST encoding prefix.");
+  NIMBLE_CHECK_FILE_EQ(
+      EncodingPrefix::encodingType(encoding),
+      EncodingType::Fsst,
+      "Expected FSST encoding.");
+  NIMBLE_CHECK_FILE_EQ(
+      EncodingPrefix::dataType(encoding),
+      DataType::String,
+      "FSST encoding must contain string data.");
+
+  if (options.useVarintRowCount) {
+    size_t offset = EncodingPrefix::kRowCountOffset;
+    readFsstHeaderVarint(encoding, offset);
+  } else {
+    NIMBLE_CHECK_FILE_GE(
+        encoding.size(),
+        EncodingPrefix::kFixedPrefixSize,
+        "Truncated FSST encoding prefix.");
+  }
+  return encoding;
+}
+
+void FsstEncoding::validateSymbolTable(std::string_view symbolTable) {
+  constexpr size_t kSerializedHeaderSize = 17;
+  NIMBLE_CHECK_FILE_GE(
+      symbolTable.size(),
+      kSerializedHeaderSize,
+      "Truncated FSST symbol table.");
+
+  const auto zeroTerminated = static_cast<uint8_t>(symbolTable[8]);
+  NIMBLE_CHECK_FILE_LE(zeroTerminated, 1, "Invalid FSST zero-terminated flag.");
+
+  uint32_t symbolCount{0};
+  uint64_t serializedSize = kSerializedHeaderSize;
+  for (uint32_t symbolLength = 1; symbolLength <= 8; ++symbolLength) {
+    const auto count = static_cast<uint8_t>(symbolTable[9 + symbolLength - 1]);
+    symbolCount += count;
+    serializedSize += static_cast<uint64_t>(count) * symbolLength;
+  }
+
+  NIMBLE_CHECK_FILE_LE(
+      symbolCount, 255, "FSST symbol table contains too many symbols.");
+  if (zeroTerminated != 0) {
+    const auto oneByteSymbolCount = static_cast<uint8_t>(symbolTable[9]);
+    NIMBLE_CHECK_FILE_GT(
+        oneByteSymbolCount,
+        0,
+        "FSST zero-terminated table has no terminator symbol.");
+    --serializedSize;
+  }
+  NIMBLE_CHECK_FILE_EQ(
+      serializedSize,
+      symbolTable.size(),
+      "FSST symbol table histogram does not match its serialized size.");
+}
+
+size_t FsstEncoding::validateCompressedLengths(
+    std::span<const uint32_t> lengths,
+    std::string_view blob,
+    size_t blobOffset) {
+  NIMBLE_CHECK_FILE_LE(
+      blobOffset, blob.size(), "FSST blob position exceeds its bounds.");
+
+  size_t compressedBytes{0};
+  for (const auto compressedLength : lengths) {
+    const auto currentOffset = blobOffset + compressedBytes;
+    NIMBLE_CHECK_FILE_LE(
+        static_cast<size_t>(compressedLength),
+        blob.size() - currentOffset,
+        "FSST compressed length exceeds the remaining blob.");
+    // Row ranges are disjoint, so even all-escape input makes these trailing
+    // scans linear in the number of compressed bytes covered by lengths.
+    size_t trailingEscapes{0};
+    for (auto position = currentOffset + compressedLength;
+         position > currentOffset &&
+         static_cast<uint8_t>(blob[position - 1]) == FSST_ESC;
+         --position) {
+      ++trailingEscapes;
+    }
+    NIMBLE_CHECK_FILE_EQ(
+        trailingEscapes % 2,
+        0,
+        "FSST compressed string ends with an incomplete escape code.");
+    compressedBytes += compressedLength;
+  }
+  return compressedBytes;
+}
+
+FsstEncoding::CompressedValues FsstEncoding::compressValues(
+    std::span<const physicalType> values,
+    velox::memory::MemoryPool* pool) {
+  NIMBLE_CHECK_NOT_NULL(pool, "Memory pool cannot be null.");
+  const auto valueCount = static_cast<uint32_t>(values.size());
+  CompressedValues result{pool};
+
+  Vector<size_t> inputLengths{pool, valueCount};
+  Vector<const unsigned char*> inputPtrs{pool, valueCount};
+  for (uint32_t i = 0; i < valueCount; ++i) {
+    inputLengths[i] = values[i].size();
+    inputPtrs[i] = reinterpret_cast<const unsigned char*>(values[i].data());
+  }
+  result.totalInputSize =
+      sumLengths({inputLengths.data(), inputLengths.size()});
+
+  auto* encoder = nimble_fsst_create(
+      valueCount,
+      inputLengths.data(),
+      inputPtrs.data(),
+      /*zeroTerminated=*/0);
+  NIMBLE_CHECK_NOT_NULL(encoder, "FSST encoder creation failed.");
+  SCOPE_EXIT {
+    nimble_fsst_destroy(encoder);
+  };
+
+  // fsst_export only takes a raw pointer, so the caller must provide the
+  // library-defined maximum header capacity.
+  result.symbolTableBuffer =
+      velox::AlignedBuffer::allocate<unsigned char>(FSST_MAXHEADER, pool);
+  result.symbolTableData = result.symbolTableBuffer->asMutable<unsigned char>();
+  result.symbolTableSize = nimble_fsst_export(encoder, result.symbolTableData);
+  NIMBLE_CHECK_LE(
+      result.symbolTableSize,
+      static_cast<size_t>(FSST_MAXHEADER),
+      "FSST exported symbol table exceeded FSST_MAXHEADER.");
+
+  // FSST's documented conservative compression output bound.
+  const size_t outputBufSize = 7 + 2 * result.totalInputSize;
+  result.compressedBuffer.resize(outputBufSize);
+  result.compressedLengths.resize(valueCount);
+  result.compressedPtrs.resize(valueCount);
+
+  const auto numCompressed = nimble_fsst_compress(
+      encoder,
+      valueCount,
+      inputLengths.data(),
+      inputPtrs.data(),
+      outputBufSize,
+      result.compressedBuffer.data(),
+      result.compressedLengths.data(),
+      result.compressedPtrs.data());
+  NIMBLE_CHECK_EQ(
+      static_cast<uint32_t>(numCompressed),
+      valueCount,
+      "FSST compression did not compress all strings.");
+
+  result.totalCompressedSize = sumLengths(
+      {result.compressedLengths.data(), result.compressedLengths.size()});
+  return result;
+}
+
+bool FsstEncoding::meetsCompressionTarget(
+    uint64_t uncompressedSize,
+    uint64_t encodedSize,
+    double compressionTargetRatio) {
+  return encodedSize <= uncompressedSize * compressionTargetRatio;
+}
+
+std::string_view FsstEncoding::encodeCompressedLengths(
+    EncodingSelection<physicalType>& selection,
+    std::span<const size_t> compressedLengths,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  Vector<uint32_t> lengths{&buffer.getMemoryPool(), compressedLengths.size()};
+  for (size_t i = 0; i < compressedLengths.size(); ++i) {
+    lengths[i] = static_cast<uint32_t>(compressedLengths[i]);
+  }
+
+  return selection.template encodeNested<uint32_t>(
+      EncodingIdentifiers::Fsst::Lengths, {lengths}, buffer, options);
+}
+
+std::string_view FsstEncoding::encodeTrivialFallback(
+    EncodingSelection<physicalType>& selection,
+    std::span<const physicalType> values,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  auto compressionPolicy = std::shared_ptr<CompressionPolicy>(
+      selection.compressionPolicy().release());
+
+  auto fallbackPolicy = std::make_unique<TrivialFallbackSelectionPolicy>(
+      selection, compressionPolicy);
+  EncodingSelection<std::string_view> fallbackSelection{
+      fallbackPolicy->select(values, selection.statistics(), options),
+      Statistics<std::string_view>{selection.statistics()},
+      std::move(fallbackPolicy)};
+  return TrivialEncoding<std::string_view>::encode(
+      fallbackSelection, values, buffer, options);
+}
+
+FsstEncoding::FsstEncoding(
+    velox::memory::MemoryPool& pool,
+    std::string_view data,
+    std::function<void*(uint32_t)> stringBufferFactory,
+    const Encoding::Options& options)
+    : TypedEncoding<
+          std::string_view,
+          std::
+              string_view>{pool, validateEncodedPrefix(data, options), options},
+      lengthBuffer_{&pool},
+      stringPages_{&pool, stringBufferFactory, kStringPageSize},
+      decodeCacheEntries_{&pool},
+      decodeCacheBuckets_{&pool},
+      decodeCacheHashFilter_{&pool} {
+  const auto header = parseHeader(data, this->dataOffset());
+  validateSymbolTable(header.symbolTable);
+  const auto bytesConsumed = nimble_fsst_import(
+      &decoder_,
+      const_cast<unsigned char*>(
+          reinterpret_cast<const unsigned char*>(header.symbolTable.data())));
+  NIMBLE_CHECK_FILE_EQ(
+      static_cast<size_t>(bytesConsumed),
+      header.symbolTable.size(),
+      "FSST symbol table import size mismatch.");
+
+  lengths_ = EncodingFactory().create(
+      pool, header.lengths, std::move(stringBufferFactory), options);
+  const auto* lengths = velox::checkedNotNull(lengths_.get());
+  NIMBLE_CHECK_FILE_EQ(
+      lengths->dataType(),
+      DataType::Uint32,
+      "FSST lengths encoding must contain Uint32 values.");
+  NIMBLE_CHECK_FILE(
+      !lengths->isNullable(), "FSST lengths encoding must not be nullable.");
+  NIMBLE_CHECK_FILE_EQ(
+      lengths->rowCount(),
+      this->rowCount(),
+      "FSST lengths row count does not match the parent encoding.");
+  if (header.compressionType == CompressionType::Uncompressed) {
+    blob_ = header.blob;
+  } else {
+    uncompressedBlob_ = Compression::uncompress(
+        pool,
+        header.compressionType,
+        DataType::String,
+        header.blob,
+        options.decompressCounter(),
+        options.bufferPool);
+    blob_ = {uncompressedBlob_->as<char>(), uncompressedBlob_->size()};
+  }
+}
+
+std::string_view FsstEncoding::lengthsEncoding(
+    std::string_view encoding,
+    const Encoding::Options& options) {
+  validateEncodedPrefix(encoding, options);
+  const auto prefixSize =
+      EncodingPrefix::prefixSize(encoding, options.useVarintRowCount);
+  const auto header = parseHeader(encoding, prefixSize);
+  return header.lengths;
+}
+
+void FsstEncoding::captureNestedEncoding(
+    std::string_view encoding,
+    std::vector<std::optional<const EncodingLayout>>& children,
+    const Encoding::Options& options) {
+  children.reserve(1);
+  children.emplace_back(
+      EncodingLayoutCapture::capture(
+          lengthsEncoding(encoding, options), options));
+}
+
+void FsstEncoding::reset() {
+  row_ = 0;
+  blobOffset_ = 0;
+  lengths_->reset();
+  stringPages_.reset();
+}
+
+void FsstEncoding::checkReadRange(uint32_t rowCount, const char* operation)
+    const {
+  NIMBLE_CHECK_LE(row_, this->rowCount(), "Invalid FSST encoding position.");
+  NIMBLE_CHECK(rowCount <= this->rowCount() - row_, operation);
+}
+
+void FsstEncoding::checkFinalBlobPosition() const {
+  if (row_ == this->rowCount()) {
+    NIMBLE_CHECK_FILE_EQ(
+        blobOffset_,
+        blob_.size(),
+        "FSST compressed lengths do not match the blob size.");
+  }
+}
+
+void FsstEncoding::skip(uint32_t rowCount) {
+  checkReadRange(rowCount, "Skipping past end of FSST encoding.");
+  lengthBuffer_.resize(rowCount);
+  lengths_->materialize(rowCount, lengthBuffer_.data());
+  const auto compressedBytes = validateCompressedLengths(
+      {lengthBuffer_.data(), lengthBuffer_.size()}, blob_, blobOffset_);
+  row_ += rowCount;
+  blobOffset_ += compressedBytes;
+  checkFinalBlobPosition();
+}
+
+void FsstEncoding::materialize(uint32_t rowCount, void* buffer) {
+  checkReadRange(rowCount, "Reading past end of FSST encoding.");
+  if (rowCount == 0) {
+    checkFinalBlobPosition();
+    return;
+  }
+  lengthBuffer_.resize(rowCount);
+  lengths_->materialize(rowCount, lengthBuffer_.data());
+  validateCompressedLengths(
+      {lengthBuffer_.data(), lengthBuffer_.size()}, blob_, blobOffset_);
+
+  const std::span<std::string_view> output{
+      velox::checkedNotNull(static_cast<std::string_view*>(buffer)), rowCount};
+  if (!options_.fsstDecodeCacheEnabled()) {
+    for (uint32_t i = 0; i < rowCount; ++i) {
+      const auto compressedLen = lengthBuffer_[i];
+      output[i] =
+          decompressToStringBuffer(blob_.substr(blobOffset_, compressedLen));
+      blobOffset_ += compressedLen;
+    }
+  } else {
+    materializeWithDecodeCache(rowCount, output);
+  }
+  row_ += rowCount;
+  checkFinalBlobPosition();
+}
+
+FOLLY_NOINLINE void FsstEncoding::materializeWithDecodeCache(
+    uint32_t numRows,
+    std::span<std::string_view> output) {
+  DecodeCache decodeCache{*this, numRows};
+  for (uint32_t i = 0; i < numRows; ++i) {
+    const auto compressedLength = lengthBuffer_[i];
+    const auto compressed = blob_.substr(blobOffset_, compressedLength);
+    output[i] = decodeCache.enabled() ? decodeCache.decode(compressed)
+                                      : decompressToStringBuffer(compressed);
+    blobOffset_ += compressedLength;
+  }
+}
+
+FsstEncoding::DecodeCache::DecodeCache(
+    FsstEncoding& encoding,
+    uint32_t numCandidates)
+    : encoding_{encoding},
+      entries_{encoding.decodeCacheEntries_},
+      buckets_{encoding.decodeCacheBuckets_},
+      hashFilter_{encoding.decodeCacheHashFilter_} {
+  VELOX_DCHECK(entries_.empty());
+  VELOX_DCHECK(buckets_.empty());
+  VELOX_DCHECK(hashFilter_.empty());
+  const auto& options = encoding.options_;
+  // Bucket indices are signed so -1 can mark an unused bucket.
+  maxEntries_ = std::min<size_t>({
+      numCandidates,
+      options.fsstMaxDecodeCacheEntries,
+      std::numeric_limits<int32_t>::max(),
+  });
+  VELOX_DCHECK(options.fsstDecodeCacheEnabled());
+  if (numCandidates < 2) {
+    return;
+  }
+  probeBuckets_.fill(0);
+  enabled_ = true;
+}
+
+FsstEncoding::DecodeCache::~DecodeCache() {
+  entries_.resize(0);
+  buckets_.resize(0);
+  hashFilter_.resize(0);
+}
+
+FOLLY_NOINLINE std::string_view FsstEncoding::DecodeCache::decodeAndCache(
+    std::string_view compressed) {
+  const auto hash = hashCompressedPayload(compressed);
+  auto& bucket = findBucket(compressed, hash);
+  if (bucket.entryIndex >= 0) {
+    return entries_[bucket.entryIndex].decoded;
+  }
+  return decodeWithCacheMiss(compressed, hash, bucket);
+}
+
+FOLLY_NOINLINE std::string_view FsstEncoding::DecodeCache::decodeAtCapacity(
+    std::string_view compressed) {
+  const auto hash = hashCompressedPayload(compressed);
+  const auto& bucket = findBucket(compressed, hash);
+  if (bucket.entryIndex >= 0) {
+    return entries_[bucket.entryIndex].decoded;
+  }
+  return encoding_.decompressToStringBuffer(compressed);
+}
+
+std::string_view FsstEncoding::DecodeCache::decodeWhileSampling(
+    std::string_view compressed) {
+  const auto hash = hashCompressedPayload(compressed);
+  size_t slot = hash % probeBuckets_.size();
+  while (probeBuckets_[slot] != 0) {
+    const auto& entry = probeEntries_[probeBuckets_[slot] - 1];
+    const std::string_view cachedCompressed{
+        entry.compressedData, entry.compressedSize};
+    if (entry.hash == hash && cachedCompressed == compressed) {
+      const std::string_view decoded{entry.decodedData, entry.decodedSize};
+      initializeCache();
+      return decoded;
+    }
+    slot = (slot + 1) % probeBuckets_.size();
+  }
+
+  auto decoded = encoding_.decompressToStringBuffer(compressed);
+  if (numProbeEntries_ == kProbeEntryLimit || numEntries_ == maxEntries_) {
+    // Stop sampling after a unique prefix or at the entry limit.
+    enabled_ = false;
+    return decoded;
+  }
+  probeEntries_[numProbeEntries_] = {
+      .compressedData = compressed.data(),
+      .compressedSize = compressed.size(),
+      .decodedData = decoded.data(),
+      .decodedSize = decoded.size(),
+      .hash = hash,
+  };
+  probeBuckets_[slot] = static_cast<uint16_t>(numProbeEntries_ + 1);
+  ++numProbeEntries_;
+  ++numEntries_;
+  return decoded;
+}
+
+FsstEncoding::DecodeCacheBucket& FsstEncoding::DecodeCache::findBucket(
+    std::string_view compressed,
+    uint64_t hash) {
+  const auto hashFingerprint = static_cast<uint32_t>(hash ^ (hash >> 32));
+  const auto bucketMask = buckets_.size() - 1;
+  size_t slot = hash & bucketMask;
+  for ([[maybe_unused]] size_t numProbes{0};; ++numProbes) {
+    VELOX_DCHECK_LT(numProbes, buckets_.size());
+    const auto& bucket = buckets_[slot];
+    if (bucket.entryIndex == -1) {
+      // An unused bucket ends the search and provides an insertion slot.
+      return buckets_[slot];
+    }
+    if (bucket.hashFingerprint == hashFingerprint) {
+      const auto& entry = entries_[bucket.entryIndex];
+      if (entry.hash == hash && entry.compressed == compressed) {
+        return buckets_[slot];
+      }
+    }
+    slot = (slot + 1) & bucketMask;
+  }
+}
+
+std::string_view FsstEncoding::DecodeCache::decodeWithCacheMiss(
+    std::string_view compressed,
+    uint64_t hash,
+    DecodeCacheBucket& bucket) {
+  auto decoded = encoding_.decompressToStringBuffer(compressed);
+  entries_[numEntries_] = {
+      .compressed = compressed,
+      .decoded = decoded,
+      .hash = hash,
+  };
+  bucket = {
+      .entryIndex = static_cast<int32_t>(numEntries_),
+      .hashFingerprint = static_cast<uint32_t>(hash ^ (hash >> 32)),
+  };
+  velox::bits::setBit(hashFilter_.data(), hashFilterIndex(compressed));
+  ++numEntries_;
+  return decoded;
+}
+
+void FsstEncoding::DecodeCache::initializeCache() {
+  entries_.resize(maxEntries_);
+  // Keep the table at most half full and use a mask for probing.
+  buckets_.resize(
+      velox::bits::nextPowerOfTwo(2 * maxEntries_), DecodeCacheBucket{});
+  hashFilter_.resize(velox::bits::nextPowerOfTwo(maxEntries_), uint64_t{0});
+  const auto hashFilterBits = static_cast<uint64_t>(hashFilter_.size()) * 64;
+  hashFilterShift_ = velox::bits::countLeadingZeros(hashFilterBits - 1);
+  const auto bucketMask = buckets_.size() - 1;
+  for (size_t i = 0; i < numProbeEntries_; ++i) {
+    const auto& entry = probeEntries_[i];
+    size_t slot = entry.hash & bucketMask;
+    while (buckets_[slot].entryIndex >= 0) {
+      slot = (slot + 1) & bucketMask;
+    }
+    entries_[i] = {
+        .compressed = {entry.compressedData, entry.compressedSize},
+        .decoded = {entry.decodedData, entry.decodedSize},
+        .hash = entry.hash,
+    };
+    buckets_[slot] = {
+        .entryIndex = static_cast<int32_t>(i),
+        .hashFingerprint =
+            static_cast<uint32_t>(entry.hash ^ (entry.hash >> 32)),
+    };
+    velox::bits::setBit(
+        hashFilter_.data(),
+        hashFilterIndex({entry.compressedData, entry.compressedSize}));
+  }
+  sampling_ = false;
+}
+
+std::string_view FsstEncoding::decompressToStringBuffer(
+    std::string_view compressed) {
+  if (compressed.empty()) {
+    return {};
+  }
+
+  // Bound the conservative expansion calculation and the uint32-sized page
+  // allocation requested from the string buffer factory.
+  NIMBLE_CHECK_FILE_LE(
+      compressed.size(),
+      std::numeric_limits<uint32_t>::max() / kMaxSymbolLength,
+      "FSST compressed string exceeds the supported size.");
+  const size_t maxDecompressedSize = compressed.size() * kMaxSymbolLength;
+  // FSST replaces output[size - 1] with a terminator when a zero-terminated
+  // symbol table exactly fills the declared output size. Giving it one extra
+  // byte preserves that final payload byte while retaining the conservative
+  // maximum-expansion bound below.
+  const size_t requiredDecompressionCapacity = maxDecompressedSize + 1;
+
+  // The arena decodes the first small value into a new page directly, and a
+  // large value into scratch rather than allocating the conservative maximum
+  // expansion. FSST does not reliably report the required size after decoding
+  // into an undersized buffer, so scratch gets the conservative capacity too.
+  // Decoding first preserves a partially filled page when the actual output
+  // fits its tail, and cache entries and returned views reference stable
+  // output pages, never scratch.
+  return stringPages_.write(requiredDecompressionCapacity, [&](char* output) {
+    const auto decompressedSize = decompressValue(
+        decoder_, compressed, requiredDecompressionCapacity, output);
+    NIMBLE_CHECK_GT(
+        decompressedSize,
+        0,
+        "FSST decompression failed for non-empty compressed string.");
+    NIMBLE_CHECK_FILE_LE(
+        decompressedSize,
+        maxDecompressedSize,
+        "FSST decompressed string exceeds the maximum expansion bound.");
+    return decompressedSize;
+  });
+}
+
+bool FsstEncoding::testCompressedRange(
+    std::string_view compressed,
+    const velox::common::BytesRange& filter) const {
+  const auto compareToBound = [&](std::string_view bound) {
+    size_t boundOffset{0};
+    for (size_t compressedOffset = 0; compressedOffset < compressed.size();
+         ++compressedOffset) {
+      const auto symbolCode =
+          static_cast<uint8_t>(compressed[compressedOffset]);
+      const char* symbolBytes;
+      size_t symbolLength{0};
+      if (symbolCode == FSST_ESC) {
+        // An escape introduces one literal byte instead of a symbol-table
+        // code. Consume that byte before comparing it with the range bound.
+        ++compressedOffset;
+        NIMBLE_CHECK_FILE_LT(
+            compressedOffset,
+            compressed.size(),
+            "FSST compressed string ends with an incomplete escape code.");
+        symbolBytes =
+            velox::checkedNotNull(compressed.data()) + compressedOffset;
+        symbolLength = 1;
+      } else {
+        // fsst_decoder_t stores each symbol's bytes in little-endian order;
+        // Velox's supported little-endian hosts therefore expose the original
+        // byte sequence here, in lexicographic comparison order.
+        symbolBytes =
+            reinterpret_cast<const char*>(&decoder_.symbol[symbolCode]);
+        symbolLength = decoder_.len[symbolCode];
+      }
+      const auto remainingBoundBytes = bound.size() - boundOffset;
+      const auto bytesToCompare = std::min(symbolLength, remainingBoundBytes);
+      if (bytesToCompare != 0) {
+        const auto comparisonResult = std::memcmp(
+            symbolBytes, bound.data() + boundOffset, bytesToCompare);
+        if (comparisonResult != 0) {
+          return comparisonResult;
+        }
+      }
+      if (symbolLength > remainingBoundBytes) {
+        return 1;
+      }
+      boundOffset += bytesToCompare;
+    }
+    return boundOffset < bound.size() ? -1 : 0;
+  };
+  if (filter.isSingleValue()) {
+    return compareToBound(filter.lower()) == 0;
+  }
+  if (!filter.isLowerUnbounded()) {
+    const auto lowerBoundComparison = compareToBound(filter.lower());
+    const bool rejectEqualToLowerBound =
+        lowerBoundComparison == 0 && filter.isLowerExclusive();
+    if (lowerBoundComparison < 0 || rejectEqualToLowerBound) {
+      return false;
+    }
+  }
+  if (!filter.isUpperUnbounded()) {
+    const auto upperBoundComparison = compareToBound(filter.upper());
+    const bool rejectEqualToUpperBound =
+        upperBoundComparison == 0 && filter.isUpperExclusive();
+    if (upperBoundComparison > 0 || rejectEqualToUpperBound) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::string_view FsstEncoding::encode(
+    EncodingSelection<physicalType>& selection,
+    std::span<const physicalType> values,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  if (values.empty()) {
+    return encodeTrivialFallback(selection, values, buffer, options);
+  }
+
+  {
+    auto compressedValues = compressValues(values, &buffer.getMemoryPool());
+
+    ScopedEncodingBuffer lengthsBuffer{
+        &buffer.getMemoryPool(), options.encodingBufferPool};
+    const std::string_view serializedLengths = encodeCompressedLengths(
+        selection,
+        {compressedValues.compressedLengths.data(),
+         compressedValues.compressedLengths.size()},
+        lengthsBuffer.get(),
+        options);
+
+    const bool useVarint = options.useVarintRowCount;
+    const auto valueCount = static_cast<uint32_t>(values.size());
+    size_t encodingSize = Encoding::serializePrefixSize(valueCount, useVarint) +
+        kCompressionTypeSize +
+        varint::varintSize(compressedValues.symbolTableSize) +
+        compressedValues.symbolTableSize +
+        varint::varintSize(serializedLengths.size()) +
+        serializedLengths.size() + compressedValues.totalCompressedSize;
+
+    auto compressionPolicy = selection.compressionPolicy();
+    const auto* checkedCompressionPolicy =
+        velox::checkedNotNull(compressionPolicy.get());
+    CompressionEncoder<std::string_view> compressionEncoder{
+        buffer.getMemoryPool(),
+        *checkedCompressionPolicy,
+        DataType::String,
+        {reinterpret_cast<const char*>(
+             compressedValues.compressedBuffer.data()),
+         compressedValues.totalCompressedSize}};
+    encodingSize = encodingSize - compressedValues.totalCompressedSize +
+        compressionEncoder.getSize();
+    if (meetsCompressionTarget(
+            compressedValues.totalInputSize,
+            encodingSize,
+            options.fsstCompressionTargetRatio)) {
+      char* reserved = buffer.reserve(encodingSize);
+      char* pos = reserved;
+      Encoding::serializePrefix(
+          EncodingType::Fsst, DataType::String, valueCount, useVarint, pos);
+      encoding::writeChar(
+          static_cast<char>(compressionEncoder.compressionType()), pos);
+      encoding::writeVarintString(
+          {reinterpret_cast<const char*>(compressedValues.symbolTableData),
+           compressedValues.symbolTableSize},
+          pos);
+      encoding::writeVarintString(serializedLengths, pos);
+      compressionEncoder.write(pos);
+
+      NIMBLE_CHECK_EQ(pos - reserved, encodingSize, "Encoding size mismatch.");
+      return {reserved, encodingSize};
+    }
+  }
+
+  return encodeTrivialFallback(selection, values, buffer, options);
+}
+
+std::string_view FsstEncoding::slice(
+    std::string_view encoded,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  validateEncodedPrefix(encoded, options);
+  const uint32_t sourceRowCount =
+      EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
+  EncodingPrefix::checkSliceRange(sourceRowCount, offset, length);
+
+  const auto header = parseHeader(
+      encoded, EncodingPrefix::prefixSize(encoded, options.useVarintRowCount));
+  validateSymbolTable(header.symbolTable);
+
+  velox::BufferPtr uncompressedBlob;
+  auto blob = header.blob;
+  if (header.compressionType != CompressionType::Uncompressed) {
+    uncompressedBlob = Compression::uncompress(
+        buffer.getMemoryPool(),
+        header.compressionType,
+        DataType::String,
+        header.blob,
+        options.decompressCounter(),
+        options.bufferPool);
+    blob = {uncompressedBlob->as<char>(), uncompressedBlob->size()};
+  }
+
+  const auto rowEnd = offset + length;
+  Vector<uint32_t> materializedLengths{&buffer.getMemoryPool(), rowEnd};
+  auto lengthsEncoding = EncodingFactory{}.create(
+      buffer.getMemoryPool(),
+      header.lengths,
+      [](uint32_t /*totalLength*/) -> void* { return nullptr; },
+      options);
+  auto* lengths = velox::checkedNotNull(lengthsEncoding.get());
+  NIMBLE_CHECK_FILE_EQ(
+      lengths->dataType(),
+      DataType::Uint32,
+      "FSST lengths encoding must contain Uint32 values.");
+  NIMBLE_CHECK_FILE(
+      !lengths->isNullable(), "FSST lengths encoding must not be nullable.");
+  NIMBLE_CHECK_FILE_EQ(
+      lengths->rowCount(),
+      sourceRowCount,
+      "FSST lengths row count does not match the parent encoding.");
+  lengths->materialize(rowEnd, materializedLengths.data());
+
+  const auto blobOffset = std::accumulate(
+      materializedLengths.begin(),
+      materializedLengths.begin() + offset,
+      size_t{0});
+  const auto blobBytes = std::accumulate(
+      materializedLengths.begin() + offset,
+      materializedLengths.end(),
+      size_t{0});
+  validateCompressedLengths(
+      {materializedLengths.data(), materializedLengths.size()}, blob, 0);
+  if (rowEnd == sourceRowCount) {
+    NIMBLE_CHECK_FILE_EQ(
+        blobOffset + blobBytes,
+        blob.size(),
+        "FSST compressed lengths do not match the blob size.");
+  }
+
+  auto* pool = &buffer.getMemoryPool();
+  ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
+  const auto slicedLengths = EncodingFactory::slice(
+      header.lengths, offset, length, scopedBuffer.get(), options);
+
+  NIMBLE_CHECK_FILE_LE(
+      slicedLengths.size(),
+      std::numeric_limits<uint32_t>::max(),
+      "Sliced FSST lengths encoding exceeds the supported size.");
+  const uint64_t fixedEncodingSize =
+      EncodingPrefix::serializedSize(length, options.useVarintRowCount) +
+      kCompressionTypeSize + varint::varintSize(header.symbolTable.size()) +
+      header.symbolTable.size() + varint::varintSize(slicedLengths.size()) +
+      slicedLengths.size();
+  constexpr auto kMaxEncodingSize =
+      static_cast<uint64_t>(std::numeric_limits<uint32_t>::max());
+  NIMBLE_CHECK_FILE_LE(
+      fixedEncodingSize,
+      kMaxEncodingSize,
+      "Sliced FSST encoding exceeds the supported size.");
+  NIMBLE_CHECK_FILE_LE(
+      blobBytes,
+      kMaxEncodingSize - fixedEncodingSize,
+      "Sliced FSST encoding exceeds the supported size.");
+  const auto encodingSize =
+      static_cast<uint32_t>(fixedEncodingSize + blobBytes);
+  char* reserved = velox::checkedNotNull(buffer.reserve(encodingSize));
+  char* pos = reserved;
+  EncodingPrefix::serialize(
+      EncodingType::Fsst,
+      DataType::String,
+      length,
+      options.useVarintRowCount,
+      pos);
+  encoding::writeChar(static_cast<char>(CompressionType::Uncompressed), pos);
+  encoding::writeVarintString(header.symbolTable, pos);
+  encoding::writeVarintString(slicedLengths, pos);
+  encoding::writeBytes(blob.substr(blobOffset, blobBytes), pos);
+  NIMBLE_CHECK_EQ(
+      static_cast<uint64_t>(pos - reserved),
+      encodingSize,
+      "Encoding size mismatch.");
+  return {reserved, encodingSize};
+}
+
+uint64_t FsstEncoding::estimateSize(
+    uint64_t rowCount,
+    const Statistics<std::string_view>& statistics,
+    const Encoding::Options& options) {
+  const uint64_t estimatedBlobSize = static_cast<uint64_t>(
+      statistics.totalStringsLength() * options.fsstCompressionTargetRatio);
+  const uint64_t estimatedMaxCompressedLength = static_cast<uint64_t>(
+      std::ceil(statistics.max().size() * options.fsstCompressionTargetRatio));
+  const uint64_t estimatedLengthsSize =
+      FixedBitWidthEncoding<uint32_t>::estimateSize(
+          rowCount, 0, estimatedMaxCompressedLength, options);
+  return Encoding::serializePrefixSize(rowCount, options.useVarintRowCount) +
+      kCompressionTypeSize + varint::varintSize(kSymbolTableOverhead) +
+      kSymbolTableOverhead + varint::varintSize(estimatedLengthsSize) +
+      estimatedLengthsSize + estimatedBlobSize;
+}
+
+std::string FsstEncoding::debugString(int offset) const {
+  return fmt::format(
+      "{}FsstEncoding: {} rows", std::string(offset, ' '), rowCount());
+}
+
+} // namespace facebook::nimble

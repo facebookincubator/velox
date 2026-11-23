@@ -14,20 +14,28 @@
  * limitations under the License.
  */
 
+#include <algorithm>
 #include <cmath>
+#include <exception>
+#include <string_view>
 
 #include <fast_float/fast_float.h>
 #include <folly/Expected.h>
+#include <folly/Range.h>
 
+#include "velox/common/base/VeloxException.h"
 #include "velox/expression/PrestoCastHooks.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/type/TimestampConversion.h"
+#include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::exec {
 
 PrestoCastHooks::PrestoCastHooks(const core::QueryConfig& config)
-    : CastHooks(), legacyCast_(config.isLegacyCast()) {
+    : CastHooks(),
+      legacyCast_(config.isLegacyCast()),
+      lenientInfNan_(config.isCastStringToFloatingPointLenientInfNan()) {
   if (!legacyCast_) {
     options_.zeroPaddingYear = true;
     options_.dateTimeSeparator = ' ';
@@ -79,6 +87,19 @@ Expected<int32_t> PrestoCastHooks::castStringToDate(
   return util::fromDateString(dateString, util::ParseMode::kPrestoCast);
 }
 
+Expected<int64_t> PrestoCastHooks::castStringToTime(
+    StringView timeString,
+    const tz::TimeZone* timeZone,
+    int64_t sessionStartTimeMs) const {
+  try {
+    return TIME()->valueToTime(timeString, timeZone, sessionStartTimeMs);
+  } catch (const VeloxException& e) {
+    return folly::makeUnexpected(Status::UserError(e.message()));
+  } catch (const std::exception& e) {
+    return folly::makeUnexpected(Status::UserError(e.what()));
+  }
+}
+
 Expected<Timestamp> PrestoCastHooks::castBooleanToTimestamp(
     bool /*seconds*/) const {
   return folly::makeUnexpected(
@@ -87,8 +108,36 @@ Expected<Timestamp> PrestoCastHooks::castBooleanToTimestamp(
 
 namespace {
 
+// Returns true if 'text' equals 'expected' ignoring ASCII letter case.
+bool equalsIgnoreAsciiCase(std::string_view text, std::string_view expected) {
+  return text.size() == expected.size() &&
+      std::equal(
+             text.begin(),
+             text.end(),
+             expected.begin(),
+             folly::AsciiCaseInsensitive{});
+}
+
+// Returns true if 'literal', the text fast_float consumed for an infinity or a
+// NaN with the sign removed, is an accepted spelling. The nan(n-char-sequence)
+// form that fast_float also parses is rejected in both modes.
+bool isAcceptedInfNanLiteral(
+    std::string_view literal,
+    bool isNan,
+    bool lenientInfNan) {
+  if (isNan) {
+    return lenientInfNan ? equalsIgnoreAsciiCase(literal, "nan")
+                         : literal == "NaN";
+  }
+  if (lenientInfNan) {
+    return equalsIgnoreAsciiCase(literal, "inf") ||
+        equalsIgnoreAsciiCase(literal, "infinity");
+  }
+  return literal == "Infinity";
+}
+
 template <typename T>
-Expected<T> doCastToFloatingPoint(const StringView& data) {
+Expected<T> doCastToFloatingPoint(const StringView& data, bool lenientInfNan) {
   const char* begin = std::find_if_not(data.begin(), data.end(), [](char c) {
     return functions::stringImpl::isAsciiWhiteSpace(c);
   });
@@ -116,23 +165,19 @@ Expected<T> doCastToFloatingPoint(const StringView& data) {
     return folly::makeUnexpected(Status::UserError());
   }
   // fast_float parses NaN/Infinity case-insensitively, but Presto accepts only
-  // exact case: "NaN" and "Infinity" (with an optional leading +/-).
+  // exact case: "NaN" and "Infinity" (with an optional leading +/-), unless
+  // 'lenientInfNan' asks for the C-style spellings as well.
   // Overflow paths (ec == result_out_of_range) don't need this check.
   if (ec == std::errc{} && (std::isinf(result) || std::isnan(result))) {
     const char* literalStart = begin;
     if (literalStart < ptr && (*literalStart == '+' || *literalStart == '-')) {
       ++literalStart;
     }
-    auto literalLength = static_cast<size_t>(ptr - literalStart);
-    bool valid = std::isnan(result)
-        ? (literalLength == 3 && literalStart[0] == 'N' &&
-           literalStart[1] == 'a' && literalStart[2] == 'N')
-        : (literalLength == 8 && literalStart[0] == 'I' &&
-           literalStart[1] == 'n' && literalStart[2] == 'f' &&
-           literalStart[3] == 'i' && literalStart[4] == 'n' &&
-           literalStart[5] == 'i' && literalStart[6] == 't' &&
-           literalStart[7] == 'y');
-    if (!valid) {
+    if (!isAcceptedInfNanLiteral(
+            std::string_view(
+                literalStart, static_cast<size_t>(ptr - literalStart)),
+            std::isnan(result),
+            lenientInfNan)) {
       return folly::makeUnexpected(Status::UserError());
     }
   }
@@ -143,12 +188,12 @@ Expected<T> doCastToFloatingPoint(const StringView& data) {
 
 Expected<float> PrestoCastHooks::castStringToReal(
     const StringView& data) const {
-  return doCastToFloatingPoint<float>(data);
+  return doCastToFloatingPoint<float>(data, lenientInfNan_);
 }
 
 Expected<double> PrestoCastHooks::castStringToDouble(
     const StringView& data) const {
-  return doCastToFloatingPoint<double>(data);
+  return doCastToFloatingPoint<double>(data, lenientInfNan_);
 }
 
 StringView PrestoCastHooks::removeWhiteSpaces(const StringView& view) const {

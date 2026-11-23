@@ -16,18 +16,26 @@
 
 #include "velox/experimental/torchwave/Executor.h"
 
+#include "velox/experimental/torchwave/AllocGroup.h"
+#include "velox/experimental/torchwave/DeviceSymbols.h"
+#include "velox/experimental/torchwave/GroupAlloc.h"
+#include "velox/experimental/torchwave/StepProgram.h"
+#include "velox/experimental/torchwave/StepSupport.h"
+
 #include <ATen/ATen.h>
 #include <c10/core/CachingDeviceAllocator.h>
+#include <folly/CppAttributes.h>
 #include <folly/ScopeGuard.h>
 #include <folly/chrono/Hardware.h>
 #include <gflags/gflags.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
-#include <unordered_set>
+#include <limits>
 #include "velox/common/base/SuccinctPrinter.h"
 #include "velox/experimental/torchwave/NodePrinter.h"
 #include "velox/experimental/torchwave/Registry.h"
@@ -41,7 +49,10 @@
 #include "velox/experimental/wave/common/Cuda.h"
 #include "velox/experimental/wave/common/GpuArena.h"
 
-// Forward declaration of the CUDA runtime call used to synchronize the default
+// Owned by velox/experimental/wave/common/Compile.cu; see initialize().
+DECLARE_bool(cuda_lineinfo);
+
+// Forward declaration of the CUDA runtime call used to synchronize the torch
 // stream. This translation unit is built in a CPU-configured target without the
 // CUDA headers; the symbol resolves from the CUDA runtime linked into the final
 // binary. PyTorch dispatches eager standalone ops to the default stream.
@@ -79,10 +90,17 @@ bool isSymFloatOp(std::string_view target) {
 
 thread_local WaveThreadInfo threadInfo;
 
-// Synchronizes the CUDA default stream (stream 0), where eager ATen standalone
-// ops are dispatched, so they are complete before executeWave returns.
+// The calling thread's torch stream (setTorchStream), a cudaStream_t; nullptr
+// is the legacy default stream. tlsTorchStreamWrapper wraps it when it is not
+// nullptr.
+thread_local void* tlsTorchStream{nullptr};
+thread_local std::unique_ptr<facebook::velox::wave::Stream>
+    tlsTorchStreamWrapper;
+
+// Synchronizes the torch stream, where eager ATen standalone ops are
+// dispatched, so they are complete before executeWave returns.
 void syncTorchDefaultStream() {
-  cudaStreamSynchronize(nullptr);
+  syncTorchStream();
 }
 
 // Resets the torch CUDA caching allocator's peak stats on the active device so
@@ -104,25 +122,15 @@ int64_t peakAllocatedBytes() {
       .peak;
 }
 
-// TSC ticks per microsecond, calibrated once. folly::hardware_timestamp()
-// (rdtsc) costs ~ns, whereas std::chrono here is backed by kvm-clock at ~tens
-// of us/call -- too expensive for per-standalone timing of many cheap ops.
-double tscTicksPerMicro() {
-  static const double ticksPerMicro = [] {
-    auto t0 = std::chrono::steady_clock::now();
-    auto c0 = folly::hardware_timestamp();
-    while (std::chrono::duration_cast<std::chrono::microseconds>(
-               std::chrono::steady_clock::now() - t0)
-               .count() < 2000) {
-    }
-    auto c1 = folly::hardware_timestamp();
-    auto us = std::chrono::duration_cast<std::chrono::microseconds>(
-                  std::chrono::steady_clock::now() - t0)
-                  .count();
-    return static_cast<double>(c1 - c0) /
-        static_cast<double>(std::max<int64_t>(1, us));
-  }();
-  return ticksPerMicro;
+// Bytes the torch CUDA caching allocator has allocated now, on the active
+// device.
+int64_t currentAllocatedBytes() {
+  auto* allocator = c10::getDeviceAllocator(c10::DeviceType::CUDA);
+  auto stats = allocator->getDeviceStats(c10::cuda::current_device());
+  return stats
+      .allocated_bytes[static_cast<size_t>(
+          c10::CachingAllocator::StatType::AGGREGATE)]
+      .current;
 }
 
 struct GlobalResources {
@@ -130,7 +138,15 @@ struct GlobalResources {
   std::unique_ptr<facebook::velox::wave::GpuArena> pinnedArena;
   std::unique_ptr<facebook::velox::wave::GpuArena> managedArena;
   std::unique_ptr<StreamPool> streamPool;
+  /// Ordering-only events (cudaEventDisableTiming), used on every run.
   std::unique_ptr<EventPool> eventPool;
+  /// Timing-enabled events, used only under the kTiming trace bit. Kept
+  /// separate because elapsedTime() throws on a disable-timing event, so the
+  /// two kinds must never be mixed.
+  std::unique_ptr<EventPool> timingEventPool;
+  /// Non-owning wrapper on the CUDA stream eager standalones run on, so events
+  /// can be recorded on it from this CPU-configured translation unit.
+  std::unique_ptr<facebook::velox::wave::Stream> torchStreamWrapper;
 };
 
 GlobalResources* globals() {
@@ -158,6 +174,153 @@ int64_t storageExtentBytes(const at::Tensor& t) {
 
 } // namespace
 
+// TSC ticks per microsecond, calibrated once. folly::hardware_timestamp()
+// (rdtsc) costs ~ns, whereas std::chrono here is backed by kvm-clock at ~tens
+// of us/call -- too expensive for per-standalone timing of many cheap ops.
+double tscTicksPerMicro() {
+  static const double ticksPerMicro = [] {
+    auto t0 = std::chrono::steady_clock::now();
+    auto c0 = folly::hardware_timestamp();
+    while (std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now() - t0)
+               .count() < 2000) {
+    }
+    auto c1 = folly::hardware_timestamp();
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                  std::chrono::steady_clock::now() - t0)
+                  .count();
+    return static_cast<double>(c1 - c0) /
+        static_cast<double>(std::max<int64_t>(1, us));
+  }();
+  return ticksPerMicro;
+}
+
+namespace {
+// Ticks, not microseconds: most allocator calls take under a microsecond, and
+// rounding each one down undercounted them.
+// NOLINTNEXTLINE(facebook-avoid-non-const-global-variables)
+thread_local int64_t tAllocCallTicks = 0;
+// NOLINTNEXTLINE(facebook-avoid-non-const-global-variables)
+thread_local SetupCounters tSetupCounters;
+// Which setup phases are open on this thread, one bit per SetupPhase, so a
+// nested phase of the same kind does not count its time twice.
+// NOLINTNEXTLINE(facebook-avoid-non-const-global-variables)
+thread_local uint32_t tOpenPhases = 0;
+// Allocator calls made under ScopedAllocCall, counted with the timing.
+// NOLINTNEXTLINE(facebook-avoid-non-const-global-variables)
+thread_local int64_t tAllocCalls = 0;
+
+bool setupTiming() {
+  return WaveConfig::get().printTiming ||
+      (WaveConfig::get().trace & WaveConfig::kTiming);
+}
+} // namespace
+
+int64_t threadAllocCallUs() {
+  return static_cast<int64_t>(
+      static_cast<double>(tAllocCallTicks) / tscTicksPerMicro());
+}
+
+int64_t threadAllocCalls() {
+  return tAllocCalls;
+}
+
+ScopedAllocCall::ScopedAllocCall()
+    : timing_(setupTiming()),
+      start_(timing_ ? folly::hardware_timestamp() : 0) {
+  if (timing_) {
+    ++tAllocCalls;
+  }
+}
+
+ScopedAllocCall::~ScopedAllocCall() {
+  if (timing_) {
+    tAllocCallTicks +=
+        static_cast<int64_t>(folly::hardware_timestamp() - start_);
+  }
+}
+
+SetupCounters SetupCounters::operator-(const SetupCounters& other) const {
+  SetupCounters d;
+  d.reserveTicks = reserveTicks - other.reserveTicks;
+  d.reserveCalls = reserveCalls - other.reserveCalls;
+  d.sizeExprTicks = sizeExprTicks - other.sizeExprTicks;
+  d.sizeExprCalls = sizeExprCalls - other.sizeExprCalls;
+  d.tensorTicks = tensorTicks - other.tensorTicks;
+  d.tensorCalls = tensorCalls - other.tensorCalls;
+  d.viewTicks = viewTicks - other.viewTicks;
+  d.viewCalls = viewCalls - other.viewCalls;
+  d.carveTicks = carveTicks - other.carveTicks;
+  d.carveCalls = carveCalls - other.carveCalls;
+  d.frameWrites = frameWrites - other.frameWrites;
+  d.fills = fills - other.fills;
+  return d;
+}
+
+SetupCounters& SetupCounters::operator+=(const SetupCounters& other) {
+  reserveTicks += other.reserveTicks;
+  reserveCalls += other.reserveCalls;
+  sizeExprTicks += other.sizeExprTicks;
+  sizeExprCalls += other.sizeExprCalls;
+  tensorTicks += other.tensorTicks;
+  tensorCalls += other.tensorCalls;
+  viewTicks += other.viewTicks;
+  viewCalls += other.viewCalls;
+  carveTicks += other.carveTicks;
+  carveCalls += other.carveCalls;
+  frameWrites += other.frameWrites;
+  fills += other.fills;
+  return *this;
+}
+
+SetupCounters& threadSetupCounters() {
+  return tSetupCounters;
+}
+
+namespace {
+std::pair<int64_t SetupCounters::*, int64_t SetupCounters::*> phaseFields(
+    SetupPhase phase) {
+  switch (phase) {
+    case SetupPhase::kReserve:
+      return {&SetupCounters::reserveTicks, &SetupCounters::reserveCalls};
+    case SetupPhase::kSizeExpr:
+      return {&SetupCounters::sizeExprTicks, &SetupCounters::sizeExprCalls};
+    case SetupPhase::kTensor:
+      return {&SetupCounters::tensorTicks, &SetupCounters::tensorCalls};
+    case SetupPhase::kView:
+      return {&SetupCounters::viewTicks, &SetupCounters::viewCalls};
+    case SetupPhase::kCarve:
+      return {&SetupCounters::carveTicks, &SetupCounters::carveCalls};
+  }
+  return {&SetupCounters::viewTicks, &SetupCounters::viewCalls};
+}
+} // namespace
+
+ScopedSetupPhase::ScopedSetupPhase(SetupPhase phase) : phase_(phase) {
+  ++(tSetupCounters.*(phaseFields(phase).second));
+  const uint32_t bit = 1u << static_cast<uint32_t>(phase);
+  outermost_ = (tOpenPhases & bit) == 0;
+  if (outermost_) {
+    tOpenPhases |= bit;
+    if (setupTiming()) {
+      start_ = folly::hardware_timestamp();
+      allocTicksBefore_ = tAllocCallTicks;
+    }
+  }
+}
+
+ScopedSetupPhase::~ScopedSetupPhase() {
+  if (!outermost_) {
+    return;
+  }
+  tOpenPhases &= ~(1u << static_cast<uint32_t>(phase_));
+  if (start_ != 0) {
+    tSetupCounters.*(phaseFields(phase_).first) +=
+        static_cast<int64_t>(folly::hardware_timestamp() - start_) -
+        (tAllocCallTicks - allocTicksBefore_);
+  }
+}
+
 void initialize() {
   if (initialized().exchange(true)) {
     return;
@@ -173,6 +336,13 @@ void initialize() {
     return;
   }
   facebook::velox::wave::setDevice(device);
+  // Wave takes its NVRTC options from gflags, not from an API, and freezes
+  // them in ensureInit() on the first compile. So a WaveConfig knob that
+  // affects codegen has to be pushed into the gflag before that point, which
+  // is here -- CompiledKernel::initialize() below is what triggers ensureInit.
+  if (WaveConfig::get().kernelLineInfo) {
+    FLAGS_cuda_lineinfo = true;
+  }
   // Run the one-time NVRTC/system-header initialization here, on the
   // (main) thread that sets up the executor, unless it was already done
   // elsewhere. ensureInit() touches the filesystem and publishes the shared
@@ -192,16 +362,176 @@ void initialize() {
       10'000'000, facebook::velox::wave::getHostAllocator(device));
   g->managedArena = std::make_unique<facebook::velox::wave::GpuArena>(
       100'000'000, facebook::velox::wave::getAllocator(device));
-  g->streamPool = std::make_unique<StreamPool>(
-      []() { return std::make_unique<facebook::velox::wave::Stream>(); });
-  g->eventPool = std::make_unique<EventPool>(
-      []() { return std::make_unique<facebook::velox::wave::Event>(); });
+  // Non-blocking: wave kernels and the eager standalones on the torch stream
+  // are ordered explicitly with events (see newStepEvents and its callers), so
+  // the driver's implicit legacy-default-stream serialization is not wanted --
+  // it is exactly what prevents the two from overlapping. The step chain only
+  // covers what happens inside a run; waitForTorchStream covers entering one.
+  g->streamPool = std::make_unique<StreamPool>([]() {
+    return std::make_unique<facebook::velox::wave::Stream>(
+        /*nonBlocking=*/true);
+  });
+  g->eventPool = std::make_unique<EventPool>([]() {
+    return std::make_unique<facebook::velox::wave::Event>(/*withTime=*/false);
+  });
+  g->timingEventPool = std::make_unique<EventPool>([]() {
+    return std::make_unique<facebook::velox::wave::Event>(/*withTime=*/true);
+  });
+  // TODO: eager standalones are dispatched to the legacy default stream, which
+  // is what every sync in this file already assumes (see
+  // syncTorchDefaultStream). If PyTorch is ever built with per-thread default
+  // streams, or standalones move onto a pool stream, this has to become a real
+  // c10::cuda::getCurrentCUDAStream().stream() query, which needs a small
+  // CUDA-configured shim because torch_wave cannot include CUDAStream.h.
+  g->torchStreamWrapper = facebook::velox::wave::Stream::external(nullptr);
+}
+
+facebook::velox::wave::Stream& torchStream() {
+  if (tlsTorchStream == nullptr) {
+    return *globals()->torchStreamWrapper;
+  }
+  return *tlsTorchStreamWrapper;
+}
+
+void setTorchStream(void* stream) {
+  if (stream == tlsTorchStream) {
+    return;
+  }
+  tlsTorchStream = stream;
+  tlsTorchStreamWrapper = stream == nullptr
+      ? nullptr
+      : facebook::velox::wave::Stream::external(stream);
+}
+
+void* torchStreamHandle() {
+  return tlsTorchStream;
+}
+
+void syncTorchStream() {
+  cudaStreamSynchronize(tlsTorchStream);
+}
+
+void waitForTorchStream(facebook::velox::wave::Stream& stream) {
+  auto* g = globals();
+  // initialize() bails before creating either when there is no device.
+  if (g->eventPool == nullptr || g->torchStreamWrapper == nullptr) {
+    return;
+  }
+  auto event = g->eventPool->get();
+  event->record(torchStream());
+  event->wait(stream);
+  // Safe to recycle right away: cudaStreamWaitEvent captured the event's state
+  // at the call above, so a later re-record cannot undo the edge just made.
+  event->reset();
+  g->eventPool->put(std::move(event));
+}
+
+StepEvents& newStepEvents(ExecutionState& state, int32_t seq, int32_t stepIdx) {
+  const bool doEventTiming =
+      (WaveConfig::get().trace & WaveConfig::kTiming) != 0;
+  auto* pool = doEventTiming ? globals()->timingEventPool.get()
+                             : globals()->eventPool.get();
+  StepEvents events;
+  events.sequenceNumber = seq;
+  events.stepIdx = stepIdx;
+  if (WaveConfig::get().completionCounters) {
+    if (state.completionHost == nullptr) {
+      void* device = nullptr;
+      auto* host = static_cast<volatile int64_t*>(
+          facebook::velox::wave::allocateHostMapped(
+              2 * sizeof(int64_t), &device));
+      state.completionHost.reset(host, [](volatile int64_t* p) {
+        facebook::velox::wave::freeHostMapped(const_cast<int64_t*>(p));
+      });
+      state.completionDevice = device;
+    }
+    events.ticket = ++state.lastTicket;
+    events.counters = state.completionDevice;
+  }
+  events.waveDone = pool->get();
+  events.standaloneDone = pool->get();
+  if (doEventTiming) {
+    events.waveBegin = pool->get();
+    events.standaloneBegin = pool->get();
+  }
+  state.stepEvents.push_back(std::move(events));
+  return state.stepEvents.back();
+}
+
+void recordStepDone(
+    StepEvents& events,
+    facebook::velox::wave::Stream& stream,
+    bool wave) {
+  (wave ? events.waveDone : events.standaloneDone)->record(stream);
+  (wave ? events.usesWave : events.usesTorch) = true;
+  if (events.counters != nullptr) {
+    stream.writeValue64(
+        static_cast<int64_t*>(events.counters) + (wave ? 0 : 1),
+        static_cast<uint64_t>(events.ticket));
+  }
+}
+
+bool stepDone(const ExecutionState& state, const StepEvents& events) {
+  if (events.counters != nullptr) {
+    const auto* counters = state.completionHost.get();
+    return (!events.usesWave ||
+            __atomic_load_n(&counters[0], __ATOMIC_ACQUIRE) >= events.ticket) &&
+        (!events.usesTorch ||
+         __atomic_load_n(&counters[1], __ATOMIC_ACQUIRE) >= events.ticket);
+  }
+  auto pending = [](const EventP& event) {
+    return event && event->recorded() && !event->query();
+  };
+  return !pending(events.waveDone) && !pending(events.standaloneDone);
+}
+
+void waitOnce(
+    facebook::velox::wave::Event* event,
+    facebook::velox::wave::Stream& stream,
+    facebook::velox::wave::Event*& waitedFor) {
+  if (WaveConfig::get().skipRepeatedWaits && event == waitedFor) {
+    return;
+  }
+  event->wait(stream);
+  waitedFor = event;
+}
+
+void releaseStepEvents(ExecutionState& state) {
+  const bool doEventTiming =
+      (WaveConfig::get().trace & WaveConfig::kTiming) != 0;
+  auto* pool = doEventTiming ? globals()->timingEventPool.get()
+                             : globals()->eventPool.get();
+  auto give = [&](EventP& event) {
+    if (event) {
+      event->reset();
+      pool->put(std::move(event));
+    }
+  };
+  for (auto& events : state.stepEvents) {
+    give(events.waveBegin);
+    give(events.waveDone);
+    give(events.standaloneBegin);
+    give(events.standaloneDone);
+  }
+  state.stepEvents.clear();
+  give(state.timelineBase);
+  state.lastWaveDone = nullptr;
+  state.lastStandaloneDone = nullptr;
+  state.torchWaitedFor = nullptr;
+  state.waveWaitedFor = nullptr;
+  state.syncedCursor = 0;
+  state.clearReturned();
+  state.executedSteps = 0;
 }
 
 void tensorsToDevice(
     const std::vector<at::Tensor>& in,
     std::vector<at::Tensor>& out,
     facebook::velox::wave::Stream& stream) {
+  // The device tensors below come from the caching allocator, which can hand
+  // back a block an eager op on the torch stream is still reading; the copies
+  // go out on a non-blocking stream that no longer waits for it implicitly.
+  waitForTorchStream(stream);
   auto deviceId = facebook::velox::wave::currentDevice()->deviceId;
   auto device =
       c10::Device(c10::kCUDA, static_cast<c10::DeviceIndex>(deviceId));
@@ -248,6 +578,8 @@ void tensorsToHost(
     const std::vector<at::Tensor>& in,
     std::vector<at::Tensor>& out,
     facebook::velox::wave::Stream& stream) {
+  // 'in' can hold tensors an eager op on the torch stream is still writing.
+  waitForTorchStream(stream);
   int64_t totalBytes = 0;
   std::vector<int64_t> sizes(in.size());
   for (size_t i = 0; i < in.size(); ++i) {
@@ -381,6 +713,12 @@ void executeNode(
     LOG(ERROR) << "Error in node: " << standaloneToString(node);
     throw;
   }
+  // The kernel wrote its outputs into the frame itself.
+  for (auto* output : node->outputs()) {
+    if (output != nullptr) {
+      publishFromFrame(frame, output->id());
+    }
+  }
   // Trace requested output (produced) values after the op runs.
   if (traceState != nullptr && !traceState->empty()) {
     std::vector<nativert::ValueId> ids;
@@ -471,13 +809,22 @@ void runStandalones(
       executeNode(
           actualNode, kernelIt->second, *state.frame, &state.traceState);
     }
+    if (!metadataOnly && WaveConfig::get().serializeStandalones) {
+      syncTorchDefaultStream();
+    }
     if (timing) {
+      // Per-op GPU attribution needs a sync after each op, which serializes the
+      // standalones against each other and against the wave stream. That is the
+      // largest single perturbation in the measurement, so it is opt-in; the
+      // per-step standaloneBegin/standaloneDone pair measures the same device
+      // time without it. Without the knob the recorded number is host dispatch
+      // time only.
+      //
       // A metadata-only op only manipulates host-side tensor metadata and
-      // enqueues nothing on the device, so it needs no sync. Syncing here
-      // would, via the legacy default stream, drain the wave stream and
-      // massively over-attribute its time. Only real eager ops need a sync to
-      // capture their GPU time.
-      if (!metadataOnly) {
+      // enqueues nothing on the device, so it never needs the sync. Syncing
+      // there would, via the legacy default stream, drain the wave stream and
+      // massively over-attribute its time.
+      if (!metadataOnly && WaveConfig::get().perOpStandaloneTiming) {
         syncTorchDefaultStream();
       }
       auto us = static_cast<int64_t>(
@@ -555,7 +902,7 @@ WaveGraphExecutor::WaveGraphExecutor(std::unique_ptr<ModelContext> modelContext)
     std::unique_ptr<nativert::OpKernel> kernel;
     if (nativert::PrimKernelRegistry()->Has(target)) {
       kernel = nativert::PrimKernelRegistry()->Create(target, node);
-    } else if (c10::starts_with(target, "torch.ops")) {
+    } else if (target.starts_with("torch.ops")) {
       kernel = std::make_unique<nativert::C10Kernel>(node);
     } else if (isScalarBinaryOp(target)) {
       kernel = std::make_unique<nativert::ScalarBinaryOpKernel>(node);
@@ -629,21 +976,80 @@ std::unique_ptr<nativert::ExecutionFrame> WaveGraphExecutor::getFrame() {
   return framePool_->get();
 }
 
+void WaveGraphExecutor::resetFrame(nativert::ExecutionFrame& frame) {
+  frame.clearNonPersistentValues();
+  ++frameGeneration_;
+}
+
 void WaveGraphExecutor::returnFrame(
     std::unique_ptr<nativert::ExecutionFrame> frame) {
-  frame->clearNonPersistentValues();
-  ++frameGeneration_;
+  resetFrame(*frame);
   framePool_->put(std::move(frame));
 }
 
 std::vector<c10::IValue> WaveGraphExecutor::execute(
     nativert::ExecutionFrame& /*frame*/,
     std::vector<c10::IValue> inputs) {
+  return runInputs(std::move(inputs));
+}
+
+std::vector<c10::IValue> WaveGraphExecutor::runInputs(
+    std::vector<c10::IValue> inputs) {
   auto pooledFrame = getFrame();
+  // Returned on the throwing paths too: a frame that never comes back is gone
+  // from the pool for the process's life, so a caller that retries after an
+  // error drains it one frame per attempt.
+  SCOPE_EXIT {
+    returnFrame(std::move(pooledFrame));
+  };
   fillUserInputs(*pooledFrame, std::move(inputs));
-  auto outputs = executeWithPrefilledFrame(*pooledFrame);
-  returnFrame(std::move(pooledFrame));
-  return outputs;
+  return executeWithPrefilledFrame(*pooledFrame);
+}
+
+std::vector<c10::IValue> WaveGraphExecutor::runInputsReuse(
+    std::vector<c10::IValue> inputs) {
+  std::lock_guard<std::mutex> reuseLock(reuseMutex_);
+  // Create the held frame on first use (makeDeviceFrame copies weights and
+  // constants to device once); subsequent calls keep it resident so the
+  // weights/constants are not re-copied and no pooled frame is
+  // fetched/returned. The prior run's non-persistent (intermediate/output)
+  // values must still be cleared each call: successive batches have different
+  // data-dependent shapes, so a stale-sized intermediate would otherwise be
+  // reused (e.g. a view onto a buffer sized for a previous batch).
+  // Weights/constants are persistent and survive the clear.
+  const bool timeIt = std::getenv("TW_TIME_EXEC") != nullptr;
+  using Clock = std::chrono::high_resolution_clock;
+  auto ms = [](Clock::time_point a, Clock::time_point b) {
+    return static_cast<double>(
+               std::chrono::duration_cast<std::chrono::microseconds>(b - a)
+                   .count()) /
+        1000.0;
+  };
+  auto t0 = Clock::now();
+  // A cleared reuse frame (freed intermediate buffers) -- or a freshly obtained
+  // one -- invalidates the launch cache's resolved value pointers/offsets, just
+  // as returnFrame's clear does on the pooled path. Bump the generation so
+  // executeWithPrefilledFrame rebuilds that cache; otherwise the reuse path
+  // launches kernels against stale/freed buffers -> illegal memory access on
+  // the second reuse call.
+  if (!reuseFrame_) {
+    reuseFrame_ = getFrame();
+    ++frameGeneration_;
+  } else {
+    resetFrame(*reuseFrame_);
+  }
+  auto t1 = Clock::now();
+  fillUserInputs(*reuseFrame_, std::move(inputs));
+  auto t2 = Clock::now();
+  auto out = executeWithPrefilledFrame(*reuseFrame_);
+  if (timeIt) {
+    syncTorchDefaultStream();
+    auto t3 = Clock::now();
+    LOG(ERROR) << "runInputsReuse ms: clear/getFrame=" << ms(t0, t1)
+               << " fillUserInputs=" << ms(t1, t2)
+               << " exec+sync=" << ms(t2, t3);
+  }
+  return out;
 }
 
 std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
@@ -678,7 +1084,19 @@ std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
     }
   }
 
-  executeWave(frame, *waveGraph_);
+  // A value above its capacity leaves the run's results invalid; the
+  // capacities have grown to what was seen, so the rerun binds a state sized
+  // for it. A value computed from a skipped op can itself come out short, so
+  // a few rounds may be needed.
+  constexpr int32_t kMaxSymbolReruns = 4;
+  for (int32_t attempt = 0; !executeWave(frame, *waveGraph_); ++attempt) {
+    TORCH_CHECK(
+        attempt < kMaxSymbolReruns,
+        "Device symbols: capacities still exceeded after ",
+        kMaxSymbolReruns,
+        " reruns");
+    ++numSymbolReruns_;
+  }
   if (WaveConfig::get().trace & WaveConfig::kTensors) {
     for (auto* value : graph_.outputs()) {
       const auto& iv = frame.getIValue(value->id());
@@ -699,13 +1117,22 @@ std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
   // move outputs whose graph-level default is Constant(None) -- in that case
   // the result slot stays None even though the frame has a computed tensor
   // (e.g. dynamic-shape outputs computed on device). The loop below copies
-  // these non-moved outputs from the frame into the results.
+  // these non-moved outputs from the frame into the results. The results are
+  // indexed like userOutputs(), which also holds the graph's constant outputs;
+  // the output node lists only the values, so the k-th value of userOutputs()
+  // is outputValues[k].
   auto results = frame.tryMoveUserOutputs();
   auto outputValues = graph_.outputs();
-  for (size_t i = 0; i < results.size() && i < outputValues.size(); ++i) {
-    TORCH_CHECK(i < results.size() && i < outputValues.size());
+  const auto& userOutputs = graph_.userOutputs();
+  for (size_t i = 0, k = 0;
+       i < results.size() && i < userOutputs.size() && k < outputValues.size();
+       ++i) {
+    if (!std::holds_alternative<nativert::Value*>(userOutputs[i])) {
+      continue;
+    }
+    const auto* output = outputValues.at(k++);
     if (results.at(i).isNone()) {
-      const auto& iv = frame.getIValue(outputValues.at(i)->id());
+      const auto& iv = frame.getIValue(output->id());
       if (!iv.isNone()) {
         results.at(i) = iv;
       }
@@ -716,11 +1143,8 @@ std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
   // metadata-only view (e.g. view(x, [-1]) of an already-contiguous tensor):
   // wave aliases such a view to its input and never writes the view's own
   // value, so a graph-output view stays None even though its input tensor is
-  // present. The loop above cannot reach these when userOutputs() is longer
-  // than the output-node operand list (graph_.outputs()), so recover them here
-  // directly from the flattened user-output list, materializing the view from
-  // its input.
-  const auto& userOutputs = graph_.userOutputs();
+  // present. Recover them from the flattened user-output list, materializing
+  // the view from its input.
   for (size_t i = 0; i < results.size() && i < userOutputs.size(); ++i) {
     if (!results.at(i).isNone()) {
       continue;
@@ -771,7 +1195,33 @@ std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
 void freeFrameValue(
     nativert::ExecutionFrame& frame,
     nativert::ValueId id,
-    facebook::velox::wave::Stream* stream) {
+    facebook::velox::wave::Stream* stream,
+    ExecutionState* state) {
+  unpublish(id);
+  if (state != nullptr && state->tableOnlyActive) {
+    releaseOwner(*state, id);
+  }
+  // A released value leaves an empty frame slot, which is indistinguishable
+  // from one that was never produced. Record it so the coverage report can
+  // tell the two apart.
+  if (state != nullptr && WaveConfig::get().trace != 0) {
+    state->freedValueIds.insert(id);
+  }
+  if (allocTraceEnabled()) {
+    const auto& iv = frame.getIValue(id);
+    // Only a solely-owned CUDA storage becomes free here: another frame slot or
+    // a view holding the same storage keeps the buffer alive. Same ownership
+    // test the debugSingleOps poison uses below.
+    if (iv.isTensor()) {
+      const at::Tensor& t = iv.toTensor();
+      if (t.defined() && t.has_storage() && t.is_cuda() && t.use_count() == 1 &&
+          t.storage().use_count() == 1) {
+        std::cout << "ALLOCEV free " << id << ' '
+                  << static_cast<int64_t>(t.storage().nbytes()) << ' '
+                  << recordedSizeKey(id) << '\n';
+      }
+    }
+  }
   if (WaveConfig::get().debugSingleOps) {
     const auto& iv = frame.getIValue(id);
     if (iv.isTensor()) {
@@ -812,16 +1262,23 @@ void freeFrameValue(
 // bad and at which free point, to compare against its intended last use.
 void checkValueBeforeFree(
     nativert::ExecutionFrame& frame,
-    nativert::ValueId id) {
+    nativert::ValueId id,
+    const WaveGraph* waveGraph) {
   auto* ref = WaveConfig::get().referenceFrame;
   if (ref == nullptr) {
+    return;
+  }
+  // The input of an elided clone is overwritten in place on purpose, so it no
+  // longer holds what the reference recorded; comparing it reports a bug that
+  // is not there.
+  if (waveGraph != nullptr && waveGraph->isElidedCloneInput(id)) {
     return;
   }
   auto it = ref->find(id);
   if (it == ref->end() || !it->second.isTensor()) {
     return;
   }
-  const auto& iv = frame.getIValue(id);
+  const auto iv = debugValue(frame, id);
   std::optional<at::Tensor> actual = iv.isTensor()
       ? std::optional<at::Tensor>(iv.toTensor())
       : scalarLikeToTensor(iv);
@@ -840,6 +1297,256 @@ void checkValueBeforeFree(
                << "\n  actual:   " << tensorDebugString(*actual, limit);
   }
 }
+
+void resolvePendingReturns(ExecutionState& state, int32_t throughStep) {
+  while (!state.pendingReturns.empty() &&
+         state.pendingReturns.front().executedStep <= throughStep) {
+    const auto pending = state.pendingReturns.front();
+    state.pendingReturns.pop_front();
+    if (pending.waveDone != nullptr) {
+      pending.waveDone->wait();
+    }
+    auto& buffer =
+        state.pinnedBuffers.at(pending.sequenceNumber).at(pending.stepIdx);
+    TORCH_CHECK(
+        buffer != nullptr,
+        "The pinned buffer of node ",
+        pending.sequenceNumber,
+        " step ",
+        pending.stepIdx,
+        " was released before its deferred return data was read");
+    processReturnData(
+        state.stepVectors.at(pending.sequenceNumber).at(pending.stepIdx),
+        *state.frame,
+        buffer->as<uint8_t>());
+    ++state.numDeferredReturns;
+    state.deferredStepSpan += state.executedSteps - pending.executedStep;
+  }
+}
+
+void resolveAllPendingReturns(ExecutionState& state) {
+  resolvePendingReturns(state, std::numeric_limits<int32_t>::max());
+}
+
+namespace {
+
+// Bytes a frame value would give back, from the view's own extent rather than
+// its whole storage: a view and its base are separate ids over one buffer, so
+// charging each the full storage over-states the total by more than an order of
+// magnitude. numel/element_size are inline accessors -- no storage access, no
+// hash lookup.
+int64_t frameValueBytes(nativert::ExecutionFrame& frame, nativert::ValueId id) {
+  const auto& ivalue = frame.getIValue(id);
+  if (!ivalue.isTensor()) {
+    return 0;
+  }
+  const auto& tensor = ivalue.toTensor();
+  return tensor.defined() ? tensor.numel() * tensor.element_size() : 0;
+}
+
+// Takes a swept step's stamped bytes back off the running total. A plain
+// subtraction of what the step accumulated -- the per-id sizes are already
+// summed, so nothing is looked up again.
+void releaseDelayedFreeBytes(ExecutionState& state, StepVectors& sv) {
+  state.delayedFreeBytes -= sv.lastUseBytes;
+  sv.lastUseBytes = 0;
+  if (state.delayedFreeBytes < 0) {
+    state.delayedFreeBytes = 0;
+  }
+}
+
+} // namespace
+
+// Charges the enclosing scope to ExecutionState::freeUs. Releasing a frame
+// value can hand memory back to the caching allocator, which is the same kind
+// of cost as allocating it, so the report keeps the two together. On the TSC:
+// this fires once per swept step, and chrono here is kvm-clock at tens of
+// microseconds a call.
+namespace {
+class ScopedFreeTimer {
+ public:
+  explicit ScopedFreeTimer(ExecutionState& state)
+      : state_(state),
+        timing_(
+            WaveConfig::get().printTiming ||
+            (WaveConfig::get().trace & WaveConfig::kTiming)),
+        start_(timing_ ? folly::hardware_timestamp() : 0) {}
+
+  // Scope guard: the reference and const members already make it
+  // non-assignable, so say so rather than leave it to the reader.
+  ScopedFreeTimer(const ScopedFreeTimer&) = delete;
+  ScopedFreeTimer(ScopedFreeTimer&&) = delete;
+  ScopedFreeTimer& operator=(const ScopedFreeTimer&) = delete;
+  ScopedFreeTimer& operator=(ScopedFreeTimer&&) = delete;
+
+  ~ScopedFreeTimer() {
+    if (timing_) {
+      state_.freeUs += static_cast<int64_t>(
+          static_cast<double>(folly::hardware_timestamp() - start_) /
+          tscTicksPerMicro());
+    }
+  }
+
+ private:
+  ExecutionState& state_;
+  const bool timing_;
+  const uint64_t start_;
+};
+
+// Returns the step's vectors, or nullptr if either index is out of range.
+// Launch metadata carries indices that can outlive the vectors they refer to,
+// so every reader has to bounds-check; doing it here also covers a negative
+// index, which the open-coded checks did not.
+StepVectors* FOLLY_NULLABLE
+findStepVectors(ExecutionState& state, int32_t seq, int32_t step) {
+  if (seq < 0 || seq >= static_cast<int32_t>(state.stepVectors.size())) {
+    return nullptr;
+  }
+  auto& steps = state.stepVectors[seq];
+  if (step < 0 || step >= static_cast<int32_t>(steps.size())) {
+    return nullptr;
+  }
+  return &steps[step];
+}
+} // namespace
+
+void addLastUseId(
+    ExecutionState& state,
+    StepVectors& sv,
+    nativert::ValueId id) {
+  sv.lastUseIds.push_back(id);
+  if (WaveConfig::get().maxDelayedFree <= 0) {
+    return;
+  }
+  const auto bytes = frameValueBytes(*state.frame, id);
+  sv.lastUseBytes += bytes;
+  state.delayedFreeBytes += bytes;
+  if (state.delayedFreeBytes > state.maxDelayedFreeSeen) {
+    state.maxDelayedFreeSeen = state.delayedFreeBytes;
+  }
+}
+
+bool enforceDelayedFreeLimit(ExecutionState& state) {
+  const auto limit = WaveConfig::get().maxDelayedFree;
+  if (limit <= 0 || state.delayedFreeBytes <= limit) {
+    return false;
+  }
+  syncTorchDefaultStream();
+  syncWaveStream(state);
+  ++state.numMemoryStalls;
+  return true;
+}
+
+namespace {
+
+// Replaces the clock buffer with one of at least 'needed' words, twice the old
+// size and a full wave for every step, so that it rarely grows again. The words
+// of the old buffer, the error count with them, move to the start of the new
+// one once the launches that write them are done.
+void growBlockClocks(ExecutionState& state, int64_t needed) {
+  auto& buffer = state.blockClocks;
+  int64_t wavePerStep = kBlockClockHeaderWords;
+  for (const auto& steps : state.stepVectors) {
+    for (const auto& sv : steps) {
+      wavePerStep += 2 * static_cast<int64_t>(sv.blockCapacity);
+    }
+  }
+  const int64_t capacity = std::max({needed, 2 * buffer.capacity, wavePerStep});
+  constexpr auto kWordBytes = static_cast<int64_t>(sizeof(int64_t));
+  auto device = state.deviceArena->allocateBytes(capacity * kWordBytes);
+  auto pinned = state.pinnedArena->allocateBytes(capacity * kWordBytes);
+  auto& stream = *state.stream;
+  if (buffer.capacity > 0) {
+    // Only wave kernels write the buffer, and they all run on state.stream, so
+    // waiting for it finishes every write before the old buffer goes.
+    stream.wait();
+    stream.deviceToHostAsync(
+        pinned->as<int64_t>(),
+        buffer.device->as<int64_t>(),
+        buffer.capacity * kWordBytes);
+    stream.wait();
+    stream.hostToDeviceAsync(
+        device->as<int64_t>(),
+        pinned->as<int64_t>(),
+        buffer.capacity * kWordBytes);
+  }
+  stream.memset(
+      device->as<int64_t>() + buffer.capacity,
+      0,
+      (capacity - buffer.capacity) * kWordBytes);
+  stream.wait();
+  buffer.device = std::move(device);
+  buffer.pinned = std::move(pinned);
+  buffer.capacity = capacity;
+}
+
+} // namespace
+
+int64_t reserveLaunchClocks(ExecutionState& state, int32_t numBlocks) {
+  auto& buffer = state.blockClocks;
+  const int64_t offset = buffer.fill;
+  const int64_t end = offset + 2 * static_cast<int64_t>(numBlocks);
+  if (end > buffer.capacity) {
+    growBlockClocks(state, end);
+  }
+  buffer.fill = end;
+  return offset;
+}
+
+void sampleRunAhead(ExecutionState& state) {
+  if (!(WaveConfig::get().trace & WaveConfig::kTiming)) {
+    return;
+  }
+  // Walk back from the newest step and stop at the first one the device has
+  // finished: steps complete in order, so the run of incomplete ones at the end
+  // is the depth. query() does not block.
+  int32_t depth = 0;
+  for (auto it = state.stepEvents.rbegin(); it != state.stepEvents.rend();
+       ++it) {
+    if (stepDone(state, *it)) {
+      break;
+    }
+    ++depth;
+  }
+  state.runAheadSum += depth;
+  ++state.runAheadSamples;
+  state.runAheadMax = std::max(state.runAheadMax, depth);
+  if (depth == 0) {
+    ++state.numDrainedStarts;
+  }
+}
+
+namespace {
+
+// True if a still-pending transfer produced at or before 'throughStep' brings
+// back a value in 'ids'. Those are the only ones a sweep about to free 'ids'
+// has to resolve first: parsing into a frame slot that has already been cleared
+// reads a None. Every other transfer can stay in flight past the sweep, which
+// is the point -- the sweep runs after every launch, so resolving
+// unconditionally would end the deferral about two steps after it started
+// however far away the real consumer is.
+bool pendingReturnFreedBy(
+    const ExecutionState& state,
+    int32_t throughStep,
+    const std::vector<nativert::ValueId>& ids) {
+  for (const auto& pending : state.pendingReturns) {
+    if (pending.executedStep > throughStep) {
+      return false;
+    }
+    const auto& producer =
+        state.stepVectors.at(pending.sequenceNumber).at(pending.stepIdx);
+    for (const auto& data : producer.kernels) {
+      for (auto id : data.returnValues) {
+        if (std::find(ids.begin(), ids.end(), id) != ids.end()) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+} // namespace
 
 void advanceSyncedStages(ExecutionState& state) {
   // Stage tracking exists only to bundle intermediate freeing with syncs, so
@@ -860,7 +1567,7 @@ void advanceSyncedStages(ExecutionState& state) {
     if (state.stream != nullptr) {
       state.stream->wait();
     }
-    cudaStreamSynchronize(nullptr);
+    syncTorchStream();
   }
 
   // kFrame trace: collect the graph-output value ids (outputNode's inputs), so
@@ -888,7 +1595,7 @@ void advanceSyncedStages(ExecutionState& state) {
         if (iv.isTensor() && iv.toTensor().defined() &&
             iv.toTensor().has_storage()) {
           const auto& st = iv.toTensor().storage();
-          useCount = st.use_count();
+          useCount = static_cast<int64_t>(st.use_count());
           storagePtr = reinterpret_cast<uintptr_t>(st.data());
           storageBytes = static_cast<int64_t>(st.nbytes());
         }
@@ -909,12 +1616,21 @@ void advanceSyncedStages(ExecutionState& state) {
       // The wave stream was just waited on, so this step's kernels are done and
       // its freeable buffers can be released.
       sv.executionStage = ExecutionStage::kSynced;
+      // A value this step sent back can also be one it last-uses, and parsing
+      // the pinned buffer into a frame slot that has just been cleared would
+      // read a None. The wave stream was waited on above, so the transfer has
+      // landed and this only does the copy.
+      if (pendingReturnFreedBy(state, sv.executedStep, sv.lastUseIds)) {
+        resolvePendingReturns(state, sv.executedStep);
+      }
+      releaseDelayedFreeBytes(state, sv);
       // The node's last-use tensors were stamped onto its last step; they go
       // free in this same sync (no dedicated sync of their own).
+      ScopedFreeTimer freeTimer(state);
       for (auto id : sv.lastUseIds) {
         traceFree(id, "lastUse", seq, step);
-        checkValueBeforeFree(frame, id);
-        freeFrameValue(frame, id, state.stream.get());
+        checkValueBeforeFree(frame, id, state.waveGraph);
+        freeFrameValue(frame, id, state.stream.get(), &state);
       }
     }
   }
@@ -925,7 +1641,193 @@ void syncWaveStream(ExecutionState& state) {
   advanceSyncedStages(state);
 }
 
-void WaveGraphExecutor::executeWave(
+void freeLastUseNow(
+    ExecutionState& state,
+    const std::vector<nativert::ValueId>& ids) {
+  auto& frame = *state.frame;
+  ScopedFreeTimer freeTimer(state);
+  for (auto id : ids) {
+    checkValueBeforeFree(frame, id, state.waveGraph);
+    freeFrameValue(frame, id, state.stream.get(), &state);
+  }
+}
+
+void advanceCompletedStages(ExecutionState& state) {
+  if (!WaveConfig::get().freeIntermediates) {
+    return;
+  }
+  // The debug paths in advanceSyncedStages force full syncs on both streams
+  // before freeing; keep using that stricter version there rather than the
+  // query sweep, so debug modes stay maximally serialized.
+  if (WaveConfig::get().debugSingleOps ||
+      WaveConfig::get().referenceFrame != nullptr) {
+    return;
+  }
+  // A step can be declared synced only once the host knows its work is done.
+  // The event edges give the GPU its ordering but tell the host nothing, so ask
+  // the step's own events; query() does not block.
+  //
+  // Resume at the oldest step not yet synced and stop at the first that is not
+  // done. Steps complete in order: each stream records its events in step
+  // order, and the cross-stream edges make a step's work wait on the previous
+  // step's work on the other stream, so the later of a step's two completion
+  // events is monotone in the step index. Without the early exit this rescans
+  // every step of the run on every launch, which is quadratic in the step
+  // count -- a few thousand cudaEventQuery calls per run on the ROO graph.
+  auto& frame = *state.frame;
+  while (state.syncedCursor < state.stepEvents.size()) {
+    // The loop condition above bounds syncedCursor.
+    // NOLINTNEXTLINE(facebook-hte-ParameterUncheckedArrayBounds)
+    const auto& events = state.stepEvents[state.syncedCursor];
+    if (!stepDone(state, events)) {
+      return;
+    }
+    auto* svPtr = findStepVectors(state, events.sequenceNumber, events.stepIdx);
+    if (svPtr == nullptr) {
+      ++state.syncedCursor;
+      continue;
+    }
+    auto& sv = *svPtr;
+    // A blocking sync (syncWaveStream, and so every syncEachStep step) already
+    // ran advanceSyncedStages over this step. Nothing is left to free, so skip
+    // it rather than parking the cursor on it for the rest of the run.
+    if (sv.executionStage == ExecutionStage::kSynced) {
+      ++state.syncedCursor;
+      continue;
+    }
+    // The step being issued right now already has its events but is not marked
+    // kAllocated until its outputs exist. Stop rather than step over it, or its
+    // lastUseIds would never be freed.
+    if (sv.executionStage != ExecutionStage::kAllocated) {
+      return;
+    }
+    ++state.syncedCursor;
+    sv.executionStage = ExecutionStage::kSynced;
+    // Same reason as in advanceSyncedStages: parse before freeing. This step's
+    // events have just been observed complete, so its transfer has landed and
+    // resolving up to it does not block.
+    if (pendingReturnFreedBy(state, sv.executedStep, sv.lastUseIds)) {
+      resolvePendingReturns(state, sv.executedStep);
+    }
+    releaseDelayedFreeBytes(state, sv);
+    {
+      ScopedFreeTimer freeTimer(state);
+      for (auto id : sv.lastUseIds) {
+        checkValueBeforeFree(frame, id, state.waveGraph);
+        freeFrameValue(frame, id, state.stream.get(), &state);
+      }
+    }
+  }
+}
+
+namespace {
+
+// Builds every node's step programs for 'state': the launches of all nodes
+// first, so the second pass knows every value a transfer can bring back.
+void bindGraph(ExecutionState& state, WaveGraph& waveGraph) {
+  if (allocGroupEnabled()) {
+    waveGraph.ensureAllocGroupPlans(
+        [&] { installGraphAllocGroupPlans(waveGraph, *state.valueTypes); });
+  }
+  folly::F14FastSet<int32_t> returned;
+  for (const auto& node : waveGraph.nodes()) {
+    if (auto* invocation = node->kernels()) {
+      invocation->bindLaunches(state, returned);
+    }
+  }
+  auto* deviceSymbols =
+      state.deviceSymbolsMode ? waveGraph.deviceSymbols() : nullptr;
+  // The values some sizing reads the elements of get a host copy in the step
+  // that produces them, and count as returned there.
+  folly::F14FastSet<int32_t> hostIds;
+  for (const auto& steps : state.stepVectors) {
+    for (const auto& sv : steps) {
+      for (const auto& data : sv.kernels) {
+        for (const auto& desc : data.actualOutputDescs) {
+          for (auto id : hostTensorIds(desc, data.invocation->bindings())) {
+            hostIds.insert(id);
+          }
+        }
+      }
+    }
+  }
+  for (auto& steps : state.stepVectors) {
+    for (auto& sv : steps) {
+      sv.hostCopies.clear();
+      for (const auto& data : sv.kernels) {
+        for (auto id : data.actualOutputs) {
+          if (hostIds.erase(id) != 0) {
+            sv.hostCopies.push_back({.id = id});
+            returned.insert(id);
+          }
+        }
+      }
+    }
+  }
+  TORCH_CHECK(
+      hostIds.empty(),
+      "A value sizing reads the elements of has no producing kernel launch");
+  if (deviceSymbols != nullptr) {
+    deviceSymbols->selectSubstitutions(state, returned);
+  }
+  for (const auto& node : waveGraph.nodes()) {
+    if (auto* invocation = node->kernels()) {
+      invocation->bindPrograms(state, returned);
+    }
+  }
+  bindTableOnly(state, waveGraph);
+  folly::F14FastMap<int32_t, std::vector<int64_t>> producersOf;
+  for (size_t node = 0; node < state.stepVectors.size(); ++node) {
+    const auto& steps = state.stepVectors[node];
+    for (size_t step = 0; step < steps.size(); ++step) {
+      const auto key =
+          stepKey(static_cast<int32_t>(node), static_cast<int32_t>(step));
+      for (const auto& data : steps[step].kernels) {
+        for (auto id : data.returnValues) {
+          // A value device symbols runs on its capacity is not waited for.
+          if (deviceSymbols == nullptr || returned.count(id) != 0) {
+            producersOf[id].push_back(key);
+          }
+        }
+      }
+      for (const auto& copy : steps[step].hostCopies) {
+        producersOf[copy.id].push_back(key);
+      }
+    }
+  }
+  if (deviceSymbols != nullptr) {
+    deviceSymbols->resolveSources(state);
+    if (WaveConfig::get().checkSizeExprs) {
+      LOG(INFO) << "Size expressions: "
+                << deviceSymbols->inferReserveShapes(state)
+                << " shapes from symbolic reserves";
+    }
+  }
+  for (auto& steps : state.stepVectors) {
+    for (auto& sv : steps) {
+      if (sv.program != nullptr) {
+        packStepCode(
+            *sv.program,
+            state.tableOnly,
+            *state.valueTypes,
+            producersOf,
+            sv.readIds);
+        if (deviceSymbols != nullptr) {
+          deviceSymbols->bindFixups(state, *sv.program);
+        }
+      }
+    }
+  }
+  if (deviceSymbols != nullptr &&
+      std::getenv("TW_DEVICE_SYMBOLS_TRACE") != nullptr) {
+    deviceSymbols->traceWaits(state, returned);
+  }
+  state.bound = true;
+}
+
+} // namespace
+
+bool WaveGraphExecutor::executeWave(
     nativert::ExecutionFrame& frame,
     WaveGraph& waveGraph) {
   // Ensure the thread's CUDA device is set for tensor allocation.
@@ -948,16 +1850,53 @@ void WaveGraphExecutor::executeWave(
     threadConfigOverride = prevConfigOverride;
   };
 
+  // When the caller asserts all model inputs, weights, and constants are
+  // contiguous (WaveConfig::inputContiguous), the optimizer marked those
+  // producer-less values contiguous and downstream passes may rely on it.
+  // Verify the assumption here and fail loudly rather than produce silently
+  // wrong results.
+  if (WaveConfig::get().inputContiguous) {
+    folly::call_once(producerlessOnce_, [&] {
+      for (const auto* value : graph_.values()) {
+        if (value != nullptr && value->producer() == nullptr) {
+          producerlessValues_.push_back(value);
+        }
+      }
+    });
+    for (const auto* value : producerlessValues_) {
+      const auto& iv = frame.getIValue(value->id());
+      if (iv.isTensor()) {
+        const auto& tensor = iv.toTensor();
+        TORCH_CHECK(
+            tensor.is_contiguous(),
+            "input_contiguous is set but producer-less value %",
+            value->id(),
+            " (",
+            value->name(),
+            ") is not contiguous");
+      }
+    }
+  }
+
   Timer w("top exec", WaveConfig::get().printTiming);
   auto* g = globals();
 
   // Get a reusable ExecutionState from the pool.
-  auto statePtr = waveGraph.getState();
+  auto* deviceSymbols =
+      WaveConfig::get().deviceSymbols ? waveGraph.deviceSymbols() : nullptr;
+  auto statePtr = waveGraph.getState(
+      deviceSymbols != nullptr && deviceSymbols->ready() &&
+          !WaveConfig::get().debugSingleOps,
+      deviceSymbols != nullptr ? deviceSymbols->generation() : 0);
   auto& state = *statePtr;
   state.launchDebugInfos.clear();
+  state.blockClocks.fill = kBlockClockHeaderWords;
   SCOPE_EXIT {
     if (statePtr->stream) {
       statePtr->streamPool->put(std::move(statePtr->stream));
+    }
+    if (statePtr->setupStream) {
+      statePtr->streamPool->put(std::move(statePtr->setupStream));
     }
     waveGraph.returnState(std::move(statePtr));
   };
@@ -968,7 +1907,6 @@ void WaveGraphExecutor::executeWave(
   if (state.lastFrameGeneration != frameGeneration_) {
     for (auto& steps : state.stepVectors) {
       for (auto& sv : steps) {
-        sv.hasLaunchCache = false;
         for (auto& data : sv.kernels) {
           data.tensorsInFrame.clear();
           data.tensorOffsets.clear();
@@ -993,6 +1931,12 @@ void WaveGraphExecutor::executeWave(
   state.pinnedArena = g->pinnedArena.get();
   state.streamPool = g->streamPool.get();
   state.stream = g->streamPool->get();
+  // The per-step event chain below starts empty, so nothing orders this run
+  // against what the caller left on the torch stream: the eager ops that
+  // produced the inputs, and the buffers they still hold, which the caching
+  // allocator is free to hand this run's first outputs. A blocking wave stream
+  // used to cover both implicitly.
+  waitForTorchStream(*state.stream);
   state.kernelMap = &kernelMap_;
   state.waveGraph = &waveGraph;
   state.standaloneIndices = &waveGraph.standaloneIndices();
@@ -1006,6 +1950,85 @@ void WaveGraphExecutor::executeWave(
   state.traceState.traced.clear();
   state.verifiedIds.clear();
 
+  // The tensor table starts each execution empty, then takes the graph inputs
+  // and weights, which enter the frame before the interpreter runs.
+  setCurrentExecutionState(&state);
+  state.tableActive = true;
+  ++state.tableGeneration;
+  ensureTableSize(state, waveGraph.graph()->numValues());
+  state.valueTable.generation = state.tableGeneration;
+  if (state.tableRoots.empty()) {
+    for (const auto& [id, value] : waveGraph.idToValue()) {
+      auto* producer = value->producer();
+      if (producer == nullptr || producer == waveGraph.graph()->inputNode()) {
+        state.tableRoots.push_back(id);
+      }
+    }
+  }
+  for (auto id : state.tableRoots) {
+    publishFromFrame(frame, id);
+  }
+  if (WaveConfig::get().checkSizeExprs &&
+      waveGraph.deviceSymbols() != nullptr) {
+    waveGraph.deviceSymbols()->reportSizeExprs(state.sizeExprSymbols);
+  }
+  if (!state.bound) {
+    bindGraph(state, waveGraph);
+  }
+  state.tableOnlyActive = !WaveConfig::get().debugSingleOps;
+  if (state.deviceSymbolsMode) {
+    deviceSymbols->beginExecution(state);
+  }
+  state.sizeExprSymbols.clear();
+  beginGroupArena(state);
+  SCOPE_EXIT {
+    // Values never released -- nothing read them last in a node -- still hold
+    // their allocations. Every stream has been drained by now on the normal
+    // path.
+    releaseAllAllocations(state);
+    endGroupArena(state);
+    state.tableOnlyActive = false;
+    state.tableActive = false;
+    setCurrentExecutionState(nullptr);
+  };
+
+  // Per-step GPU timeline events. releaseStepEvents pools them on the normal
+  // path, after the final stream syncs, so none is recycled while still
+  // pending. This guard is the exception path: those syncs may not have run, so
+  // just destroy the events -- cudaEventDestroy on a pending event is defined
+  // (the resources are freed once the device reaches it), only re-recording one
+  // would be wrong.
+  state.stepEvents.clear();
+  state.timelineBase.reset();
+  state.lastWaveDone = nullptr;
+  state.lastStandaloneDone = nullptr;
+  state.torchWaitedFor = nullptr;
+  state.waveWaitedFor = nullptr;
+  state.syncedCursor = 0;
+  state.clearReturned();
+  state.executedSteps = 0;
+  state.pendingReturns.clear();
+  SCOPE_EXIT {
+    state.stepEvents.clear();
+    state.timelineBase.reset();
+    state.lastWaveDone = nullptr;
+    state.lastStandaloneDone = nullptr;
+    state.torchWaitedFor = nullptr;
+    state.waveWaitedFor = nullptr;
+    state.syncedCursor = 0;
+    state.clearReturned();
+    state.executedSteps = 0;
+    // Exception path only: on the normal path everything has been parsed
+    // below. Dropping an entry here is safe -- the frame is abandoned with the
+    // exception -- whereas parsing one whose transfer may still be in flight
+    // is not.
+    state.pendingReturns.clear();
+  };
+  if (WaveConfig::get().trace & WaveConfig::kTiming) {
+    state.timelineBase = globals()->timingEventPool->get();
+    state.timelineBase->record(*state.stream);
+  }
+
   auto wallStart = std::chrono::high_resolution_clock::now();
 
   std::vector<NodeCP> deferredStandalones;
@@ -1017,20 +2040,47 @@ void WaveGraphExecutor::executeWave(
   // only this run's transient high-water mark.
   if (WaveConfig::get().trace & WaveConfig::kTiming) {
     resetPeakAllocatedBytes();
+    state.startAllocatedBytes = currentAllocatedBytes();
+    state.allocCallsAtStart = threadAllocCalls();
   }
 
   // Reset per-step lifecycle stages (step vectors are pooled across runs) so
   // freeIntermediates freeing only ever fires for this run's steps.
+  state.numLastUseEarly = 0;
+  state.numLastUseAtNodeEnd = 0;
+  state.numDeferredReturns = 0;
+  state.numReturnWaits = 0;
+  state.returnWaitUs = 0;
+  state.deferredStepSpan = 0;
+  state.runAheadSum = 0;
+  state.runAheadSamples = 0;
+  state.runAheadMax = 0;
+  state.numDrainedStarts = 0;
+  state.delayedFreeBytes = 0;
+  state.numMemoryStalls = 0;
+  state.maxDelayedFreeSeen = 0;
+  state.freeUs = 0;
+  state.freedValueIds.clear();
+  state.releasedAtStep.clear();
   if (WaveConfig::get().freeIntermediates) {
     for (auto& steps : state.stepVectors) {
       for (auto& sv : steps) {
         sv.executionStage = ExecutionStage::kNotStarted;
         sv.lastUseIds.clear();
+        sv.lastUseBytes = 0;
       }
     }
   }
   for (const auto& node : waveGraph.nodes()) {
     node->execute(state);
+  }
+
+  // The last steps' transfers may still be outstanding under
+  // WaveConfig::deferD2h. Everything below reads the frame, so parse them now.
+  resolveAllPendingReturns(state);
+  bool symbolsFit = true;
+  if (deviceSymbols != nullptr) {
+    symbolsFit = deviceSymbols->endExecution(state);
   }
 
   // Sanity check (replaces the former deferred-standalone retry pass): every
@@ -1061,16 +2111,35 @@ void WaveGraphExecutor::executeWave(
   if (WaveConfig::get().trace != 0) {
     static std::atomic<bool> fusionLogged{false};
     if (!fusionLogged.exchange(true)) {
+      // Coverage is counted from the compiled structure, not from what is
+      // left in the frame. An empty frame slot proves nothing: an op fused
+      // into a kernel produces an internal intermediate that never gets a
+      // frame value at all, and freeIntermediates reclaims most of the ones
+      // that do. Inferring coverage from isNone() reported 3720 of 4697 ROO
+      // nodes as uncovered when nearly all of them had run.
       auto& graph = *waveGraph.graph();
-      int64_t uncovered = 0;
-      for (auto& gnode : graph.nodes()) {
-        if (gnode.target() == "prim.Input" || gnode.target() == "prim.Output") {
-          continue;
-        }
-        for (auto* output : gnode.outputs()) {
-          if (frame.getIValue(output->id()).isNone()) {
-            ++uncovered;
-            break;
+      folly::F14FastSet<NodeCP> fused;
+      for (const auto& composite : waveGraph.nodes()) {
+        for (const auto& op : composite->kernels()->ops()) {
+          const auto& nodeMap = op.nodeMap();
+          // Union over the grid variants: which one runs is a runtime choice,
+          // but every variant covers the same nodes.
+          auto* projectOp = op.projectOp();
+          for (auto* grid :
+               {&projectOp->grid(),
+                &projectOp->singleBlockGrid(),
+                &projectOp->cgGrid()}) {
+            for (const auto& step : *grid) {
+              for (const auto& launch : step) {
+                if (launch.op == nullptr) {
+                  continue;
+                }
+                for (auto* formal : launch.op->allNodes()) {
+                  auto it = nodeMap.find(formal);
+                  fused.insert(it != nodeMap.end() ? it->second : formal);
+                }
+              }
+            }
           }
         }
       }
@@ -1078,26 +2147,41 @@ void WaveGraphExecutor::executeWave(
       auto numComposites = waveGraph.nodes().size();
       int64_t numStandalones = state.numStandalonesRun;
       int64_t numShortcuts = state.numShortcutsRun;
-      int64_t fusedNodes =
-          totalNodes - uncovered - numStandalones - numShortcuts;
+      auto fusedNodes = static_cast<int64_t>(fused.size());
+      // prim.Input / prim.Output are graph plumbing, not work to cover.
+      int64_t plumbing = 0;
+      for (auto& gnode : graph.nodes()) {
+        if (gnode.target() == "prim.Input" || gnode.target() == "prim.Output") {
+          ++plumbing;
+        }
+      }
+      const int64_t coverable = totalNodes - plumbing;
+      int64_t uncovered =
+          coverable - fusedNodes - numStandalones - numShortcuts;
       std::cout << "FUSION: nativert_graph_nodes=" << totalNodes
+                << " coverable=" << coverable
                 << " wave_composite_kernels=" << numComposites
                 << " fused_nodes=" << fusedNodes
                 << " standalone_ops=" << numStandalones
                 << " shortcut_ops=" << numShortcuts
                 << " uncovered_ops=" << uncovered << " (~"
-                << (100.0 * fusedNodes / totalNodes) << "% fused, ~"
-                << (100.0 * uncovered / totalNodes) << "% uncovered)"
-                << std::endl;
+                << (100.0 * static_cast<double>(fusedNodes) /
+                    static_cast<double>(coverable))
+                << "% fused, ~"
+                << (100.0 * static_cast<double>(uncovered) /
+                    static_cast<double>(coverable))
+                << "% uncovered)" << std::endl;
     }
   }
   // Sync the wave stream and the PyTorch default stream: eager standalone ops
   // run on the default stream while fused kernels run on the wave stream, and
   // the two are otherwise unordered. Both must complete before executeWave
   // returns so all results this invocation produced are visible to the
-  // caller.
-  syncWaveStream(state);
+  // caller. Default stream first: syncWaveStream releases frame values off a
+  // wave-stream wait alone, and an eager standalone still in flight can be
+  // reading one of them (same order as enforceDelayedFreeLimit).
   syncTorchDefaultStream();
+  syncWaveStream(state);
   auto wallUs = std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::high_resolution_clock::now() - wallStart)
                     .count();
@@ -1112,58 +2196,443 @@ void WaveGraphExecutor::executeWave(
       // high-water mark (reset at the start of the run above), so it captures
       // transient intra-step peaks rather than just the per-step samples.
       threadInfo.peakBytes = peakAllocatedBytes();
+      threadInfo.startBytes = state.startAllocatedBytes;
+      threadInfo.allocCalls = threadAllocCalls() - state.allocCallsAtStart;
       threadInfo.perfReport = makePerfReport(state, wallUs);
+    }
+    // Print the report on the same thread that produced it (avoids relying on a
+    // cross-thread thread_local read). Env-guarded so it does not perturb
+    // executor_test, which retrieves waveThreadInfo().perfReport itself.
+    if (std::getenv("TW_PRINT_PERF")) {
+      // The counters, not the whole report: it is tens of kilobytes and every
+      // execution produces one, so logging them all would cost more than the
+      // run being measured.
+      LOG(ERROR) << "[TW_PRINT_PERF] trace=" << WaveConfig::get().trace
+                 << " override="
+                 << (torch::wave::waveConfigOverride() != nullptr)
+                 << " perfReport.size=" << threadInfo.perfReport.size()
+                 << " runAheadMean="
+                 << (threadInfo.runAheadSamples > 0
+                         ? static_cast<double>(threadInfo.runAheadSum) /
+                             threadInfo.runAheadSamples
+                         : 0.0)
+                 << " runAheadMax=" << threadInfo.runAheadMax
+                 << " drainedStarts=" << threadInfo.numDrainedStarts << "/"
+                 << threadInfo.runAheadSamples
+                 << " peakBytes=" << threadInfo.peakBytes;
     }
     if (WaveConfig::get().throwOnError && !threadInfo.errors.empty()) {
       TORCH_CHECK(false, "Wave kernel error:\n", threadInfo.errors);
     }
   }
+  // Both streams have been waited on and collectDebugInfo has read the elapsed
+  // times, so the events can go back to their pools for the next run.
+  releaseStepEvents(state);
+  return symbolsFit;
 }
 
 const WaveThreadInfo& waveThreadInfo() {
   return threadInfo;
 }
 
-void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
-  auto& infos = state.launchDebugInfos;
-  threadInfo.debugInfo.clear();
-  threadInfo.launchMeta.clear();
-  if (infos.empty()) {
+const int64_t* launchClocks(const WaveThreadInfo& info, size_t launch) {
+  const auto& data = info.launches.at(launch);
+  return info.clocks != nullptr && data.clockOffset >= 0
+      ? info.clocks + data.clockOffset
+      : nullptr;
+}
+
+std::vector<std::vector<BlockDebugInfo>> blockDebugInfos() {
+  std::vector<std::vector<BlockDebugInfo>> result(threadInfo.launches.size());
+  for (size_t i = 0; i < threadInfo.launches.size(); ++i) {
+    const auto& launch = threadInfo.launches[i];
+    auto& blocks = result[i];
+    blocks.resize(std::max(launch.numBlocks, 0));
+    const auto* clocks = launchClocks(threadInfo, i);
+    for (int32_t b = 0; b < launch.numBlocks; ++b) {
+      auto& block = blocks[b];
+      if (clocks != nullptr) {
+        block.clocks = clocks[b];
+        block.barrierClocks = clocks[launch.numBlocks + b];
+      }
+      if (threadInfo.errorCount != 0 && launch.pinnedInfo != nullptr) {
+        block.info = launch.pinnedInfo[b];
+      } else if (launch.pinnedBlocks != nullptr) {
+        block.info.op = launch.pinnedBlocks[b].op;
+      }
+    }
+  }
+  return result;
+}
+
+bool allocTraceEnabled() {
+  static const bool enabled = std::getenv("TW_ALLOC_TRACE") != nullptr;
+  return enabled;
+}
+
+void logAllocEvent(const char* kind, int32_t valueId, int64_t bytes) {
+  std::cout << "ALLOCEV " << kind << ' ' << valueId << ' ' << bytes << " ?\n";
+}
+
+namespace {
+folly::F14FastMap<int32_t, std::string>& sizeKeys() {
+  static thread_local folly::F14FastMap<int32_t, std::string> keys;
+  return keys;
+}
+} // namespace
+
+void logKeyedAllocEvent(
+    const char* kind,
+    int32_t valueId,
+    int64_t bytes,
+    const std::string& sizeKey) {
+  sizeKeys()[valueId] = sizeKey;
+  std::cout << "ALLOCEV " << kind << ' ' << valueId << ' ' << bytes << ' '
+            << sizeKey << '\n';
+}
+
+const std::string& recordedSizeKey(int32_t valueId) {
+  static const std::string kUnknown = "?";
+  auto it = sizeKeys().find(valueId);
+  return it != sizeKeys().end() ? it->second : kUnknown;
+}
+
+namespace {
+
+// Walks the run's step events in execution order and fills each step's
+// device-measured spans and the idle that preceded it. All timestamps are read
+// as offsets from state.timelineBase, which puts the wave stream and the torch
+// stream on one comparable timeline (cudaEventElapsedTime across streams is
+// valid -- the timestamps are device-global).
+void computeGpuTimeline(ExecutionState& state) {
+  if (!state.timelineBase || !state.timelineBase->recorded()) {
+    return;
+  }
+  auto us = [&](const EventP& event) -> std::optional<double> {
+    if (!event || !event->recorded()) {
+      return std::nullopt;
+    }
+    return event->elapsedTime(*state.timelineBase) * 1000.0;
+  };
+  // End of the previous step's GPU work. A step with no device work at all
+  // (shortcut-only) has neither bound, so it is skipped and this carries
+  // forward rather than resetting.
+  std::optional<double> prevEnd;
+  for (const auto& events : state.stepEvents) {
+    auto waveBegin = us(events.waveBegin);
+    auto waveDone = us(events.waveDone);
+    auto standaloneBegin = us(events.standaloneBegin);
+    auto standaloneDone = us(events.standaloneDone);
+
+    std::optional<double> start;
+    std::optional<double> end;
+    for (const auto& candidate : {waveBegin, standaloneBegin}) {
+      if (candidate && (!start || *candidate < *start)) {
+        start = candidate;
+      }
+    }
+    for (const auto& candidate : {waveDone, standaloneDone}) {
+      if (candidate && (!end || *candidate > *end)) {
+        end = candidate;
+      }
+    }
+    if (!start || !end) {
+      continue;
+    }
+    auto* svPtr = findStepVectors(state, events.sequenceNumber, events.stepIdx);
+    if (svPtr == nullptr) {
+      continue;
+    }
+    auto& sv = *svPtr;
+    if (waveBegin && waveDone) {
+      sv.kernelGpuUs = static_cast<int64_t>(*waveDone - *waveBegin);
+    }
+    if (standaloneBegin && standaloneDone) {
+      sv.standaloneGpuUs =
+          static_cast<int64_t>(*standaloneDone - *standaloneBegin);
+    }
+    sv.gpuIdleUs =
+        prevEnd ? static_cast<int64_t>(std::max(0.0, *start - *prevEnd)) : 0;
+    prevEnd = end;
+  }
+}
+
+} // namespace
+
+namespace {
+
+// Copies the execution's clock buffer to its pinned copy in one transfer, and
+// the DebugInfos of every launch only when a block recorded an error, after
+// which the error count starts again from 0. Synchronous: the streams the
+// kernels ran on have been waited for, and the next execution overwrites both.
+void readBackBlockClocks(ExecutionState& state) {
+  auto& buffer = state.blockClocks;
+  if (buffer.device == nullptr) {
     return;
   }
   auto stream = state.streamPool->get();
-  for (auto& info : infos) {
-    if (info.pinnedInfo && info.numBlocks > 0) {
-      stream->deviceToHostAsync(
-          info.pinnedInfo, info.deviceInfo, info.numBlocks * sizeof(DebugInfo));
+  stream->deviceToHostAsync(
+      buffer.pinned->as<int64_t>(),
+      buffer.device->as<int64_t>(),
+      buffer.fill * static_cast<int64_t>(sizeof(int64_t)));
+  stream->wait();
+  if (buffer.pinned->as<int64_t>()[0] != 0) {
+    for (const auto& info : state.launchDebugInfos) {
+      if (info.pinnedInfo != nullptr && info.numBlocks > 0) {
+        stream->deviceToHostAsync(
+            info.pinnedInfo,
+            info.deviceInfo,
+            info.numBlocks * sizeof(DebugInfo));
+      }
+    }
+    stream->memset(buffer.device->as<int64_t>(), 0, sizeof(int64_t));
+    stream->wait();
+  }
+  state.streamPool->put(std::move(stream));
+}
+
+// Records how many thread-block clocks one unit of the step's modelled cost
+// bought, so the next execution of the same step can express a minimum block
+// size in microseconds rather than in cost units. Total block time over total
+// modelled work: both scale with the step's size, so the ratio survives a
+// change of batch.
+void recordStepClockRate(
+    ExecutionState& state,
+    const LaunchDebugInfo& info,
+    const int64_t* blockClocks) {
+  if (blockClocks == nullptr || info.numBlocks <= 0 ||
+      info.sequenceNumber < 0 ||
+      info.sequenceNumber >= static_cast<int32_t>(state.stepVectors.size())) {
+    return;
+  }
+  auto& steps = state.stepVectors.at(info.sequenceNumber);
+  if (info.stepIdx < 0 || info.stepIdx >= static_cast<int32_t>(steps.size())) {
+    return;
+  }
+  auto& sv = steps.at(info.stepIdx);
+  double totalCost = 0;
+  for (auto cost : sv.costs) {
+    totalCost += cost;
+  }
+  if (totalCost <= 0) {
+    return;
+  }
+  int64_t totalClocks = 0;
+  int64_t maxClocks = 0;
+  for (int32_t block = 0; block < info.numBlocks; ++block) {
+    const auto clocks = blockClocks[block];
+    totalClocks += clocks;
+    maxClocks = std::max(maxClocks, clocks);
+  }
+  if (totalClocks > 0) {
+    sv.clocksPerCost = static_cast<double>(totalClocks) / totalCost;
+  }
+  // Same figure the balance line prints: mean block clocks over the slowest.
+  if (maxClocks > 0) {
+    sv.measuredUtil = static_cast<double>(totalClocks) /
+        (static_cast<double>(maxClocks) * info.numBlocks);
+    sv.measuredBlocks = info.numBlocks;
+    sv.measuredMaxClocks = maxClocks;
+  }
+  // A split step runs its launches one after another, so its makespan is the
+  // sum of each launch's slowest block.
+  int64_t makespan = 0;
+  int32_t covered = 0;
+  for (const auto& segment : sv.segments) {
+    int64_t segmentMax = 0;
+    for (int32_t b = segment.firstBlock;
+         b < segment.firstBlock + segment.numBlocks && b < info.numBlocks;
+         ++b) {
+      segmentMax = std::max(segmentMax, blockClocks[b]);
+    }
+    makespan += segmentMax;
+    covered += segment.numBlocks;
+  }
+  if (sv.segments.size() <= 1 || covered != info.numBlocks) {
+    sv.unsplitMakespanClocks = maxClocks;
+    sv.measureUnsplit = false;
+  } else if (sv.unsplitMakespanClocks == 0) {
+    sv.measureUnsplit = true;
+  } else {
+    const double savedUs =
+        static_cast<double>(sv.unsplitMakespanClocks - makespan) *
+        kNsPerBlockClock / 1000.0;
+    if (savedUs < WaveConfig::get().launchSplitMinUs) {
+      sv.splitRejected = true;
     }
   }
-  stream->wait();
-  state.streamPool->put(std::move(stream));
+}
 
-  threadInfo.debugInfo.reserve(infos.size());
+} // namespace
+
+void setWaveTrace(int32_t trace) {
+  WaveConfig::get().trace = trace;
+}
+
+int32_t getWaveTrace() {
+  return WaveConfig::get().trace;
+}
+
+void setFreeIntermediates(bool on) {
+  WaveConfig::get().freeIntermediates = on;
+}
+
+void setAutoAdjustCost(bool on) {
+  WaveConfig::get().autoAdjustCost = on;
+}
+
+void setIsCg(bool on) {
+  WaveConfig::get().isCg = on;
+}
+
+void setTwMad(bool on) {
+  WaveConfig::get().twMad = on;
+}
+
+void setPackInputs(bool on) {
+  WaveConfig::get().packInputs = on;
+}
+
+void setTwFusedMad(bool on) {
+  WaveConfig::get().twFusedMad = on;
+}
+
+void setMadChains(bool on) {
+  WaveConfig::get().madChains = on;
+}
+
+void setSinglePassSelect(bool on) {
+  WaveConfig::get().singlePassSelect = on;
+}
+
+void setFoldSharedChains(bool on) {
+  WaveConfig::get().foldSharedChains = on;
+}
+
+void setOrderBlocksByCost(bool on) {
+  WaveConfig::get().orderBlocksByCost = on;
+}
+
+void setPartitionLaunches(bool on) {
+  WaveConfig::get().partitionLaunches = on;
+}
+
+void setMaxLaunchWaves(int32_t waves) {
+  WaveConfig::get().maxLaunchWaves = waves;
+}
+
+void setLaunchSkewThreshold(double skew) {
+  WaveConfig::get().launchSkewThreshold = static_cast<float>(skew);
+}
+
+void setMinBlockUs(double us) {
+  WaveConfig::get().minBlockUs = static_cast<float>(us);
+}
+
+void setKernelCacheDir(const std::string& dir) {
+  WaveConfig::get().kernelCacheDir = dir;
+}
+
+void setAllStandalone(bool on) {
+  WaveConfig::get().allStandalone = on;
+}
+
+void setBlockSize(int32_t blockSize) {
+  WaveConfig::get().blockSize = blockSize;
+}
+
+void setNumSms(int32_t numSms) {
+  WaveConfig::get().numSms = numSms;
+}
+
+void setEnableReuse(bool on) {
+  WaveConfig::get().enableReuse = on;
+}
+
+void setElideClones(bool on) {
+  WaveConfig::get().elideClones = on;
+}
+
+void setStepLastUse(bool on) {
+  WaveConfig::get().stepLastUse = on;
+}
+
+void setSyncEachStep(bool on) {
+  WaveConfig::get().syncEachStep = on;
+}
+
+void setDeferD2h(bool on) {
+  WaveConfig::get().deferD2h = on;
+}
+
+void setRunAhead(bool on) {
+  WaveConfig::get().runAhead = on;
+}
+
+void setMaxDelayedFree(int64_t bytes) {
+  WaveConfig::get().maxDelayedFree = bytes;
+}
+
+void setDuplicateMetadata(bool on) {
+  WaveConfig::get().duplicateMetadata = on;
+}
+
+void setPerOpStandaloneTiming(bool on) {
+  WaveConfig::get().perOpStandaloneTiming = on;
+}
+
+void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
+  auto& infos = state.launchDebugInfos;
+  threadInfo.launches = infos;
+  threadInfo.clocks = nullptr;
+  threadInfo.errorCount = 0;
+  threadInfo.launchMeta.clear();
+  threadInfo.gpuIdleUs = 0;
+  threadInfo.numLastUseEarly = state.numLastUseEarly;
+  threadInfo.numLastUseAtNodeEnd = state.numLastUseAtNodeEnd;
+  threadInfo.numDeferredReturns = state.numDeferredReturns;
+  threadInfo.numReturnWaits = state.numReturnWaits;
+  threadInfo.returnWaitUs = state.returnWaitUs;
+  threadInfo.deferredStepSpan = state.deferredStepSpan;
+  threadInfo.runAheadSum = state.runAheadSum;
+  threadInfo.runAheadSamples = state.runAheadSamples;
+  threadInfo.runAheadMax = state.runAheadMax;
+  threadInfo.numDrainedStarts = state.numDrainedStarts;
+  threadInfo.numMemoryStalls = state.numMemoryStalls;
+  threadInfo.maxDelayedFreeSeen = state.maxDelayedFreeSeen;
+  threadInfo.freeUs = state.freeUs;
+  if (WaveConfig::get().trace & WaveConfig::kTiming) {
+    computeGpuTimeline(state);
+  }
+  if (infos.empty()) {
+    return;
+  }
+  readBackBlockClocks(state);
+  threadInfo.clocks = state.blockClocks.pinned != nullptr
+      ? state.blockClocks.pinned->as<int64_t>()
+      : nullptr;
+  threadInfo.errorCount =
+      threadInfo.clocks != nullptr ? threadInfo.clocks[0] : 0;
+
   threadInfo.launchMeta.reserve(infos.size());
-  for (auto& info : infos) {
-    if (info.pinnedInfo && info.numBlocks > 0) {
-      threadInfo.debugInfo.emplace_back(
-          info.pinnedInfo, info.pinnedInfo + info.numBlocks);
-    } else {
-      threadInfo.debugInfo.emplace_back();
-    }
+  for (size_t i = 0; i < infos.size(); ++i) {
+    const auto& info = infos[i];
+    recordStepClockRate(state, info, launchClocks(threadInfo, i));
     LaunchMeta meta;
     meta.sequenceNumber = info.sequenceNumber;
     meta.stepIdx = info.stepIdx;
     meta.numBlocks = info.numBlocks;
     if (WaveConfig::get().trace & WaveConfig::kTiming) {
-      auto seq = info.sequenceNumber;
-      auto step = info.stepIdx;
-      if (seq < static_cast<int32_t>(state.stepVectors.size()) &&
-          step < static_cast<int32_t>(state.stepVectors[seq].size())) {
-        auto& sv = state.stepVectors[seq][step];
+      auto* svPtr = findStepVectors(state, info.sequenceNumber, info.stepIdx);
+      if (svPtr != nullptr) {
+        auto& sv = *svPtr;
         meta.gatherUs = sv.gatherUs;
         meta.gridUs = sv.gridUs;
         meta.allocUs = sv.allocUs;
+        meta.allocCallUs = sv.allocCallUs;
+        meta.setup = sv.setup;
         meta.fillUs = sv.fillUs;
+        meta.blockInfoUs = sv.blockInfoUs;
         meta.kernelUs = sv.kernelUs;
         meta.standaloneUs = sv.standaloneUs;
         meta.shortcutUs = sv.shortcutUs;
@@ -1173,6 +2642,24 @@ void WaveGraphExecutor::collectDebugInfo(ExecutionState& state) {
         meta.outputBytes = sv.outputBytes;
         meta.currentBytes = sv.currentBytes;
         meta.refCheckUs = sv.refCheckUs;
+        meta.elidedCloneBytes = sv.elidedCloneBytes;
+        meta.allocGroups = sv.allocGroups;
+        meta.allocGroupTensors = sv.allocGroupTensors;
+        meta.kernelGpuUs = sv.kernelGpuUs;
+        meta.standaloneGpuUs = sv.standaloneGpuUs;
+        meta.gpuIdleUs = sv.gpuIdleUs;
+        threadInfo.gpuIdleUs += sv.gpuIdleUs;
+        meta.d2hDepFused = sv.d2hDepFused;
+        meta.d2hDepStandalone = sv.d2hDepStandalone;
+        meta.d2hDepShortcut = sv.d2hDepShortcut;
+        meta.d2hDepOnPrevStep = sv.d2hDepOnPrevStep;
+        meta.d2hNearestProducer = sv.d2hNearestProducer;
+        meta.viewNodeDescs = sv.viewNodeDescs;
+        meta.numFused = static_cast<int32_t>(sv.kernels.size());
+        meta.numStandalone = static_cast<int32_t>(sv.standalones.size());
+        meta.numShortcut = static_cast<int32_t>(sv.shortcutStandalones.size());
+        meta.gridStats = sv.gridStats;
+        meta.segments = sv.segments;
       }
     }
     threadInfo.launchMeta.push_back(std::move(meta));
@@ -1229,30 +2716,35 @@ void WaveGraphExecutor::adjustCosts(ExecutionState& state) {
       continue;
     }
     auto& sv = state.stepVectors[seq][step];
-    if (sv.kernels.empty() || mi >= info.debugInfo.size() ||
-        info.debugInfo[mi].empty()) {
+    // The device updates its own multipliers.
+    if (sv.onDeviceGrid || sv.kernels.empty() || mi >= info.launches.size() ||
+        info.launches[mi].numBlocks <= 0) {
       continue;
     }
-    const auto& debugBlocks = info.debugInfo[mi];
+    const auto* blockClocks = launchClocks(info, mi);
+    if (blockClocks == nullptr) {
+      continue;
+    }
+    const auto numBlocks = static_cast<size_t>(info.launches[mi].numBlocks);
 
-    // Sum clocks per launch using block position, not opcode matching.
-    // Block 0..numBlocksPerLaunch[0]-1 belong to launch 0, etc.
-    std::vector<int64_t> launchClocks(sv.kernels.size(), 0);
-    int32_t blockStart = 0;
-    for (size_t li = 0; li < sv.kernels.size(); ++li) {
-      int32_t nBlocks =
-          li < sv.numBlocksPerLaunch.size() ? sv.numBlocksPerLaunch[li] : 0;
-      for (int32_t b = 0; b < nBlocks; ++b) {
-        auto idx = blockStart + b;
-        if (idx < static_cast<int32_t>(debugBlocks.size())) {
-          launchClocks[li] += debugBlocks[idx].clocks;
-        }
+    // Sum clocks per launch through launchIndices rather than opcode matching.
+    // The blocks of one launch are not necessarily a contiguous run: the emit
+    // order follows projected latency, and a partitioned step splits an op
+    // across launches.
+    const bool countWait = WaveConfig::get().costCountsBarrierWait;
+    std::vector<int64_t> clocksPerLaunch(sv.kernels.size(), 0);
+    for (size_t b = 0; b < numBlocks && b < sv.launchIndices.size(); ++b) {
+      const auto launchIdx = sv.launchIndices[b];
+      if (launchIdx >= 0 &&
+          launchIdx < static_cast<int32_t>(clocksPerLaunch.size())) {
+        clocksPerLaunch[launchIdx] += countWait
+            ? blockClocks[b]
+            : blockClocks[b] - blockClocks[numBlocks + b];
       }
-      blockStart += nBlocks;
     }
 
     int64_t totalActualClocks = 0;
-    for (auto c : launchClocks) {
+    for (auto c : clocksPerLaunch) {
       totalActualClocks += c;
     }
     if (totalActualClocks == 0) {
@@ -1271,7 +2763,7 @@ void WaveGraphExecutor::adjustCosts(ExecutionState& state) {
 
     bool redoGrid = false;
     for (size_t i = 0; i < sv.kernels.size(); ++i) {
-      float actualFraction = static_cast<float>(launchClocks[i]) /
+      float actualFraction = static_cast<float>(clocksPerLaunch[i]) /
           static_cast<float>(totalActualClocks);
       float expectedFraction =
           i < sv.costs.size() ? sv.costs[i] / totalExpectedCost : 0;
@@ -1327,6 +2819,7 @@ std::string WaveGraphExecutor::makePerfReport(
     ExecutionState& state,
     int64_t wallUs) const {
   const auto& info = waveThreadInfo();
+  const auto launchBlocks = blockDebugInfos();
   std::stringstream ss;
 
   // Compute total input size from user inputs.
@@ -1372,40 +2865,147 @@ std::string WaveGraphExecutor::makePerfReport(
   }
   ss << fmt::format("E2E wall time: {} us ({:.3f} s)\n", wallUs, wallSec);
   if (wallUs > 0 && totalInputBytes > 0) {
-    double inputGBs = totalInputBytes / (wallSec * 1e9);
+    double inputGBs = static_cast<double>(totalInputBytes) / (wallSec * 1e9);
     ss << fmt::format(
         "Input throughput: {:.2f} GB/s ({:.1f} MB input)\n",
         inputGBs,
-        totalInputBytes / 1e6);
+        static_cast<double>(totalInputBytes) / 1e6);
   }
   if (wallUs > 0 && totalDataBytes > 0) {
-    double dataGBs = totalDataBytes / (wallSec * 1e9);
+    double dataGBs = static_cast<double>(totalDataBytes) / (wallSec * 1e9);
     ss << fmt::format(
         "Internal throughput: {:.2f} GB/s ({:.1f} MB total data)\n",
         dataGBs,
-        totalDataBytes / 1e6);
+        static_cast<double>(totalDataBytes) / 1e6);
   }
   ss << fmt::format(
-      "Peak GPU RAM: {}\n", facebook::velox::succinctBytes(info.peakBytes));
+      "Peak GPU RAM: {} ({} over the {} allocated at the run's start)\n",
+      facebook::velox::succinctBytes(info.peakBytes),
+      facebook::velox::succinctBytes(
+          std::max<int64_t>(0, info.peakBytes - info.startBytes)),
+      facebook::velox::succinctBytes(info.startBytes));
+  if (WaveConfig::get().freeIntermediates) {
+    ss << fmt::format(
+        "Last-use release: {} values, {} before their node's last step\n",
+        info.numLastUseEarly + info.numLastUseAtNodeEnd,
+        info.numLastUseEarly);
+  }
+  if (info.runAheadSamples > 0) {
+    // Steps that start with the queue already drained have their whole
+    // interpretation exposed as idle, so this is the direct measure of how much
+    // room deeper run-ahead has.
+    ss << fmt::format(
+        "Host run-ahead: mean {:.2f} steps in flight, max {}, {} of {} steps "
+        "started with the queue drained\n",
+        static_cast<double>(info.runAheadSum) / info.runAheadSamples,
+        info.runAheadMax,
+        info.numDrainedStarts,
+        info.runAheadSamples);
+  }
+  {
+    // What the grouping actually bought: every group is one allocator call in
+    // place of one per tensor it covers, so the saving is the difference.
+    int64_t groups = 0;
+    int64_t tensors = 0;
+    for (const auto& m : info.launchMeta) {
+      groups += m.allocGroups;
+      tensors += m.allocGroupTensors;
+    }
+    if (groups > 0) {
+      ss << fmt::format(
+          "Alloc groups: {} groups over {} tensors, {} fewer allocator calls\n",
+          groups,
+          tensors,
+          tensors - groups);
+    }
+    // The saving above is over the grouped tensors only; this is every call
+    // the step path made, singles included.
+    ss << fmt::format(
+        "Allocator calls on the step path: {} (eager standalone ops not "
+        "counted)\n",
+        info.allocCalls);
+    if (state.deviceSymbolsMode && waveGraph_ != nullptr &&
+        waveGraph_->deviceSymbols() != nullptr) {
+      ss << waveGraph_->deviceSymbols()->report(state);
+    }
+    if (const auto* arena = state.groupArena.get()) {
+      ss << fmt::format(
+          "Group arena: {} carves from its slots, {} by the allocator, {} "
+          "buffer\n",
+          arena->hits,
+          arena->misses,
+          facebook::velox::succinctBytes(
+              arena->buffer.defined() ? arena->buffer.numel() : int64_t{0}));
+    }
+  }
+  if (info.maxDelayedFreeSeen > 0) {
+    // The high-water mark is what the run-ahead adds to the peak; the stall
+    // count is how often the ceiling had to claw it back.
+    ss << fmt::format(
+        "Delayed frees: peak {} held by in-flight steps, {} drains forced by "
+        "the {} ceiling\n",
+        facebook::velox::succinctBytes(info.maxDelayedFreeSeen),
+        info.numMemoryStalls,
+        facebook::velox::succinctBytes(WaveConfig::get().maxDelayedFree));
+  }
+  ss << fmt::format(
+      "Host waits on returned values: {} steps, {} us\n",
+      info.numReturnWaits,
+      info.returnWaitUs);
+  if (info.numDeferredReturns > 0) {
+    // A span of 1 is a transfer the very next step consumed, which is what
+    // waiting at the producer already gave; the excess over 1 is the run-ahead
+    // WaveConfig::deferD2h actually bought.
+    ss << fmt::format(
+        "Deferred D2H: {} transfers, {:.1f} steps in flight on average\n",
+        info.numDeferredReturns,
+        static_cast<double>(info.deferredStepSpan) / info.numDeferredReturns);
+  }
 
-  // Time split across all steps: kernel (GPU), standalone (eager ATen on the
-  // default stream), and interpretation (gather + grid + alloc + fill = the
-  // host-side scheduling overhead). For a standalone-bound step the measured
-  // kernelUs reflects waiting on the standalone work rather than the GPU
-  // kernel, so estimate the kernel time from that step's max thread-block
-  // clocks (1 clock ~= 0.7 ns).
+  // Time split across all steps. Kernel and standalone are device-measured from
+  // each step's event pair; GPU idle is the summed gap between one step's GPU
+  // work ending and the next step's starting, i.e. time the device had nothing
+  // to do because the host was still interpreting. Interpretation is the host
+  // side of that (gather + grid + alloc + fill).
+  //
+  // A step with no events falls back to the old estimate: for a standalone-
+  // bound step the host-measured kernelUs reflects waiting on the standalone
+  // work rather than on the GPU, so approximate from the step's max
+  // thread-block clocks (1 clock ~= 0.7 ns).
   {
     double kernelUs = 0.0;
     int64_t standaloneUs = 0;
     int64_t interpUs = 0;
+    int64_t gatherUs = 0;
+    int64_t gridUs = 0;
+    int64_t fillUs = 0;
+    int64_t blockInfoUs = 0;
+    int64_t allocUs = 0;
+    int64_t allocCallUs = 0;
+    int64_t gpuIdleUs = 0;
+    SetupCounters setup;
     for (size_t i = 0; i < info.launchMeta.size(); ++i) {
       const auto& m = info.launchMeta[i];
       interpUs += m.gatherUs + m.gridUs + m.allocUs + m.fillUs;
-      standaloneUs += m.standaloneUs + m.shortcutUs;
-      if (m.standaloneBound) {
+      gatherUs += m.gatherUs;
+      gridUs += m.gridUs;
+      fillUs += m.fillUs;
+      blockInfoUs += m.blockInfoUs;
+      allocUs += m.allocUs;
+      allocCallUs += m.allocCallUs;
+      setup += m.setup;
+      gpuIdleUs += m.gpuIdleUs;
+      if (m.standaloneGpuUs > 0) {
+        standaloneUs += m.standaloneGpuUs;
+      } else {
+        standaloneUs += m.standaloneUs + m.shortcutUs;
+      }
+      if (m.kernelGpuUs > 0) {
+        kernelUs += static_cast<double>(m.kernelGpuUs);
+      } else if (m.standaloneBound) {
         int64_t maxClocks = 0;
-        if (i < info.debugInfo.size()) {
-          for (const auto& b : info.debugInfo[i]) {
+        if (i < launchBlocks.size()) {
+          for (const auto& b : launchBlocks[i]) {
             maxClocks = std::max(maxClocks, b.clocks);
           }
         }
@@ -1415,11 +3015,164 @@ std::string WaveGraphExecutor::makePerfReport(
       }
     }
     ss << fmt::format(
-        "Kernel time: {:.0f} us  Standalone time: {} us  Interpretation time: {} us\n",
+        "Kernel time: {:.0f} us  Standalone time: {} us  GPU idle: {} us  Interpretation time: {} us  Free time: {} us\n",
         kernelUs,
         standaloneUs,
-        interpUs);
+        gpuIdleUs,
+        interpUs,
+        info.freeUs);
+    ss << fmt::format(
+        "  interpretation by phase: gather {} us, grid {} us, allocation {} us, fill {} us (BlockInfo {} us)\n",
+        gatherUs,
+        gridUs,
+        allocUs,
+        fillUs,
+        blockInfoUs);
+    // The allocation phase split in two, because the halves are fixed by
+    // different things: the calls by allocating fewer and larger buffers (or a
+    // bigger arena), the setup by cheaper shape arithmetic and view building.
+    ss << fmt::format(
+        "  of which allocation: {} us total = {} us in allocator calls + {} us computing sizes and building views\n",
+        allocUs,
+        allocCallUs,
+        allocUs - allocCallUs);
+    // What a pre-resolved tensor table would replace, by kind. Times exclude
+    // the allocator calls made inside them; sizing also runs outside the
+    // allocation phase (gather), so these do not add up to the line above.
+    const auto setupUs = [](int64_t ticks) {
+      return static_cast<int64_t>(
+          static_cast<double>(ticks) / tscTicksPerMicro());
+    };
+    ss << fmt::format(
+        "  setup by kind: reserve {} us ({} calls), size exprs {} us ({}), "
+        "tensors {} us ({}), host views {} us ({}), group carving {} us "
+        "({}); {} frame writes, {} tensor fills\n",
+        setupUs(setup.reserveTicks),
+        setup.reserveCalls,
+        setupUs(setup.sizeExprTicks),
+        setup.sizeExprCalls,
+        setupUs(setup.tensorTicks),
+        setup.tensorCalls,
+        setupUs(setup.viewTicks),
+        setup.viewCalls,
+        setupUs(setup.carveTicks),
+        setup.carveCalls,
+        setup.frameWrites,
+        setup.fills);
+    if (WaveConfig::get().perOpStandaloneTiming) {
+      ss << "WARNING per-op standalone timing is on: it syncs after every eager "
+            "op, which serializes the streams and inflates idle.\n";
+    }
   }
+
+  // How much of each step is genuinely blocked on an earlier step's D2H. The
+  // producing step waits for the transfer today; these counts say how much of
+  // the work that follows would really have had to wait for it.
+  {
+    int32_t stepsWithDep = 0;
+    int32_t stepsDepOnPrev = 0;
+    int32_t depFused = 0, depStandalone = 0, depShortcut = 0;
+    int32_t totFused = 0, totStandalone = 0, totShortcut = 0;
+    for (const auto& m : info.launchMeta) {
+      totFused += m.numFused;
+      totStandalone += m.numStandalone;
+      totShortcut += m.numShortcut;
+      depFused += m.d2hDepFused;
+      depStandalone += m.d2hDepStandalone;
+      depShortcut += m.d2hDepShortcut;
+      if (m.d2hDepFused + m.d2hDepStandalone + m.d2hDepShortcut > 0) {
+        ++stepsWithDep;
+        if (m.d2hDepOnPrevStep > 0) {
+          ++stepsDepOnPrev;
+        }
+      }
+    }
+    ss << fmt::format(
+        "D2H dependencies: {} of {} steps read a value an earlier step "
+        "returned; {} of those from the immediately preceding step\n",
+        stepsWithDep,
+        info.launchMeta.size(),
+        stepsDepOnPrev);
+    ss << fmt::format(
+        "  dependent ops: fused {}/{}  standalone {}/{}  shortcut {}/{}\n",
+        depFused,
+        totFused,
+        depStandalone,
+        totStandalone,
+        depShortcut,
+        totShortcut);
+    int32_t viewDescs = 0;
+    for (const auto& m : info.launchMeta) {
+      viewDescs += m.viewNodeDescs;
+    }
+    ss << fmt::format(
+        "  fused outputs built by a host-side view: {}\n", viewDescs);
+  }
+  // How far each step's grid is from a balanced, fully occupied wave, and
+  // which of the two pathologies it suffers from. They need different fixes:
+  // starvation is ops stuck on one block once a step has as many ops as the
+  // wave has blocks, poisoning is one shared-memory-hungry op cutting the
+  // occupancy of a step whose work sits elsewhere.
+  {
+    const std::array<float, 4> kSkewBuckets{1.1f, 1.5f, 2.0f, 4.0f};
+    std::array<int32_t, 5> skewHistogram{};
+    int32_t measuredSteps = 0;
+    int32_t starvedSteps = 0;
+    int64_t starvedOps = 0;
+    int32_t poisonedSteps = 0;
+    int32_t splitSteps = 0;
+    float worstSkew = 0;
+    int32_t worstSeq = -1;
+    int32_t worstStep = -1;
+    for (const auto& m : info.launchMeta) {
+      const auto& stats = m.gridStats;
+      if (stats.numOps == 0) {
+        continue;
+      }
+      ++measuredSteps;
+      size_t bucket = 0;
+      while (bucket < kSkewBuckets.size() &&
+             stats.skew >= kSkewBuckets[bucket]) {
+        ++bucket;
+      }
+      ++skewHistogram[bucket];
+      if (stats.numStarved > 0) {
+        ++starvedSteps;
+        starvedOps += stats.numStarved;
+      }
+      if (stats.occupancy < stats.bestOccupancy) {
+        ++poisonedSteps;
+      }
+      if (stats.numSegments > 1) {
+        ++splitSteps;
+      }
+      if (stats.skew > worstSkew) {
+        worstSkew = stats.skew;
+        worstSeq = m.sequenceNumber;
+        worstStep = m.stepIdx;
+      }
+    }
+    if (measuredSteps > 0) {
+      ss << fmt::format(
+          "Grid balance: {} steps; skew <1.1 {}, <1.5 {}, <2 {}, <4 {}, >=4 {}; worst {:.1f} at node {} step {}\n",
+          measuredSteps,
+          skewHistogram[0],
+          skewHistogram[1],
+          skewHistogram[2],
+          skewHistogram[3],
+          skewHistogram[4],
+          worstSkew,
+          worstSeq,
+          worstStep);
+      ss << fmt::format(
+          "  block starvation: {} steps, {} ops left on one block that could use more; shared-memory poisoning: {} steps; split into several launches: {}\n",
+          starvedSteps,
+          starvedOps,
+          poisonedSteps,
+          splitSteps);
+    }
+  }
+  ss << "WaveConfig: " << WaveConfig::get().toString() << "\n";
 
   // Per-node, per-step report.
   // Group launches by sequenceNumber.
@@ -1440,8 +3193,15 @@ std::string WaveGraphExecutor::makePerfReport(
     for (auto idx : indices) {
       const auto& m = info.launchMeta[idx];
       int64_t interp = m.gatherUs + m.gridUs + m.allocUs + m.fillUs;
-      int64_t hostStandalone = m.standaloneUs + m.shortcutUs;
-      nodeUs += interp + std::max(m.kernelUs, hostStandalone);
+      if (m.kernelGpuUs > 0 || m.standaloneGpuUs > 0) {
+        // Device-measured: the step's wall is the host interpretation plus the
+        // longer of the two device spans plus the idle that preceded it.
+        nodeUs +=
+            interp + std::max(m.kernelGpuUs, m.standaloneGpuUs) + m.gpuIdleUs;
+      } else {
+        int64_t hostStandalone = m.standaloneUs + m.shortcutUs;
+        nodeUs += interp + std::max(m.kernelUs, hostStandalone);
+      }
     }
     nodeWallTimes.emplace_back(seq, nodeUs);
   }
@@ -1500,13 +3260,11 @@ std::string WaveGraphExecutor::makePerfReport(
       if (m.numBlocks == 0) {
         // Standalone-only step.
         int32_t numStandalones = 0;
-        auto seq = m.sequenceNumber;
-        auto step = m.stepIdx;
-        if (seq < static_cast<int32_t>(state.stepVectors.size()) &&
-            step < static_cast<int32_t>(state.stepVectors[seq].size())) {
+        if (const auto* stepVectors =
+                findStepVectors(state, m.sequenceNumber, m.stepIdx)) {
           numStandalones = static_cast<int32_t>(
-              state.stepVectors[seq][step].standalones.size() +
-              state.stepVectors[seq][step].shortcutStandalones.size());
+              stepVectors->standalones.size() +
+              stepVectors->shortcutStandalones.size());
         }
         ss << fmt::format(
             "  step {}: {} standalones  GPU RAM={}  {} us",
@@ -1514,12 +3272,36 @@ std::string WaveGraphExecutor::makePerfReport(
             numStandalones,
             facebook::velox::succinctBytes(m.currentBytes),
             m.standaloneUs);
+        // Standalone-only steps are exactly where the device tends to go idle.
+        if (m.standaloneGpuUs > 0 || m.gpuIdleUs > 0) {
+          ss << fmt::format(" gpu={} idle={}", m.standaloneGpuUs, m.gpuIdleUs);
+        }
+        if (m.d2hDepStandalone + m.d2hDepShortcut > 0) {
+          ss << fmt::format(
+              " d2hDep=[standalone {}/{} shortcut {}/{} back={}]",
+              m.d2hDepStandalone,
+              m.numStandalone,
+              m.d2hDepShortcut,
+              m.numShortcut,
+              m.d2hNearestProducer);
+        }
+        if (m.elidedCloneBytes > 0) {
+          ss << fmt::format(
+              "  elided copies={}",
+              facebook::velox::succinctBytes(m.elidedCloneBytes));
+        }
+        if (m.allocGroups > 0) {
+          ss << fmt::format(
+              "  allocGroups={}/{}", m.allocGroups, m.allocGroupTensors);
+        }
         ss << standaloneBreakdown(m.sequenceNumber, m.stepIdx) << "\n";
         continue;
       }
       auto stepUs = m.gatherUs + m.gridUs + m.allocUs + m.fillUs + m.kernelUs;
-      double bytesTotal = m.inputBytes + m.outputBytes;
-      double gbps = m.kernelUs > 0 ? bytesTotal / (m.kernelUs * 1e3) : 0.0;
+      double bytesTotal = static_cast<double>(m.inputBytes + m.outputBytes);
+      double gbps = m.kernelUs > 0
+          ? bytesTotal / (static_cast<double>(m.kernelUs) * 1e3)
+          : 0.0;
       ss << fmt::format(
           "  step {}: {} us  blocks={}  GPU RAM={}  in={:.1f}KB out={:.1f}KB  {:.1f} GB/s",
           m.stepIdx,
@@ -1529,19 +3311,54 @@ std::string WaveGraphExecutor::makePerfReport(
           m.inputBytes / 1024.0,
           m.outputBytes / 1024.0,
           gbps);
+      if (m.elidedCloneBytes > 0) {
+        ss << fmt::format(
+            "  elided copies={}",
+            facebook::velox::succinctBytes(m.elidedCloneBytes));
+      }
+      // groups/tensors: the allocator calls this step made for its grouped
+      // outputs, over the calls it would have made without the grouping.
+      if (m.allocGroups > 0) {
+        ss << fmt::format(
+            "  allocGroups={}/{}", m.allocGroups, m.allocGroupTensors);
+      }
+      // kernel= is the host cost of issuing the step, gpu= what the device
+      // actually spent on it. They diverge once the two streams overlap, and
+      // that divergence is the interesting signal.
       ss << fmt::format(
-          "  [gather={} grid={} alloc={} fill={} kernel={}]",
+          "  [gather={} grid={} alloc={}(call={} setup={}) fill={} kernel={} "
+          "gpu={} idle={}]",
           m.gatherUs,
           m.gridUs,
           m.allocUs,
+          m.allocCallUs,
+          m.allocUs - m.allocCallUs,
           m.fillUs,
-          m.kernelUs);
+          m.kernelUs,
+          m.kernelGpuUs,
+          m.gpuIdleUs);
       if (m.shortcutUs > 0) {
         ss << fmt::format(" shortcut={}", m.shortcutUs);
       }
       if (m.standaloneUs > 0) {
         ss << fmt::format(
             " standalone={}{}", m.standaloneUs, m.standaloneBound ? "*" : "");
+      }
+      if (m.standaloneGpuUs > 0) {
+        ss << fmt::format(" standaloneGpu={}", m.standaloneGpuUs);
+      }
+      // Ops here that must wait for an earlier step's transfer, and how far
+      // back the nearest producing step is (1 = the step just before).
+      if (m.d2hDepFused + m.d2hDepStandalone + m.d2hDepShortcut > 0) {
+        ss << fmt::format(
+            " d2hDep=[fused {}/{} standalone {}/{} shortcut {}/{} back={}]",
+            m.d2hDepFused,
+            m.numFused,
+            m.d2hDepStandalone,
+            m.numStandalone,
+            m.d2hDepShortcut,
+            m.numShortcut,
+            m.d2hNearestProducer);
       }
       // Op-target breakdown covers both standalone and shortcut lists; print
       // it whenever either ran.
@@ -1557,8 +3374,9 @@ std::string WaveGraphExecutor::makePerfReport(
       ss << "\n";
 
       // Thread block balance for this step.
-      if (idx < info.debugInfo.size() && !info.debugInfo[idx].empty()) {
-        const auto& blocks = info.debugInfo[idx];
+      if (idx < launchBlocks.size() && !launchBlocks[idx].empty()) {
+        const auto& blocks = launchBlocks[idx];
+        const auto numBlocks = static_cast<int32_t>(blocks.size());
         int64_t maxClocks = 0;
         int64_t totalClocks = 0;
         int64_t totalBarrier = 0;
@@ -1567,17 +3385,93 @@ std::string WaveGraphExecutor::makePerfReport(
           totalClocks += b.clocks;
           totalBarrier += b.barrierClocks;
         }
-        double util = maxClocks > 0 ? 100.0 * totalClocks /
-                (maxClocks * static_cast<int64_t>(blocks.size()))
-                                    : 0.0;
         double syncPct =
             totalClocks > 0 ? 100.0 * totalBarrier / totalClocks : 0.0;
-        ss << fmt::format(
-            "    balance: util={:.1f}% sync={:.1f}% maxClk={} blocks={}\n",
-            util,
-            syncPct,
-            maxClocks,
-            blocks.size());
+
+        // The launches of a split step run back to back on one stream, so the
+        // step's makespan is the sum of their maxima rather than the largest
+        // block anywhere in it, and a block is only idle relative to the
+        // launch it actually ran in. Scoring the whole step against one global
+        // max reads a short launch queued behind a long one as imbalance: on
+        // the ROO graph node 36 step 3 reported 70% while both of its launches
+        // were above 75%. Each launch owns a contiguous range of this block
+        // array, so score them one at a time and add the rectangles up.
+        struct Span {
+          int32_t first;
+          int32_t count;
+          int64_t max{0};
+          int64_t sum{0};
+        };
+        std::vector<Span> spans;
+        for (const auto& s : m.segments) {
+          if (s.firstBlock >= 0 && s.numBlocks > 0 &&
+              s.firstBlock + s.numBlocks <= numBlocks) {
+            spans.push_back({s.firstBlock, s.numBlocks});
+          }
+        }
+        // A step the packer left whole, or one whose segments do not describe
+        // this array, is one launch over all of it -- which makes the numbers
+        // below identical to scoring the step as a single rectangle.
+        int32_t covered = 0;
+        for (const auto& s : spans) {
+          covered += s.count;
+        }
+        if (spans.empty() || covered != numBlocks) {
+          spans.assign(1, Span{0, numBlocks});
+        }
+        int64_t makespan = 0;
+        int64_t rectangles = 0;
+        for (auto& s : spans) {
+          for (int32_t b = s.first; b < s.first + s.count; ++b) {
+            s.max = std::max(s.max, blocks[b].clocks);
+            s.sum += blocks[b].clocks;
+          }
+          makespan += s.max;
+          rectangles += s.max * s.count;
+        }
+        double util = rectangles > 0
+            ? 100.0 * static_cast<double>(totalClocks) /
+                static_cast<double>(rectangles)
+            : 0.0;
+
+        if (spans.size() == 1) {
+          ss << fmt::format(
+              "    balance: util={:.1f}% sync={:.1f}% maxClk={} blocks={}\n",
+              util,
+              syncPct,
+              maxClocks,
+              numBlocks);
+        } else {
+          ss << fmt::format(
+              "    balance: util={:.1f}% sync={:.1f}% makespan={} maxClk={} "
+              "blocks={} launches={}\n",
+              util,
+              syncPct,
+              makespan,
+              maxClocks,
+              numBlocks,
+              spans.size());
+          // targetBlocks is one wave at the occupancy the step launches with,
+          // so this says whether a launch is also several hardware waves --
+          // the same effect one level down, and invisible in the block count.
+          const int32_t wave = m.gridStats.targetBlocks;
+          for (size_t li = 0; li < spans.size(); ++li) {
+            const auto& s = spans[li];
+            ss << fmt::format(
+                "      launch {}: util={:.1f}% max={} blocks={} first={}",
+                li,
+                s.max > 0 ? 100.0 * static_cast<double>(s.sum) /
+                        static_cast<double>(s.max * s.count)
+                          : 0.0,
+                s.max,
+                s.count,
+                s.first);
+            if (wave > 0) {
+              ss << fmt::format(" waves={}", (s.count + wave - 1) / wave);
+            }
+            ss << "\n";
+          }
+        }
 
         // Per-op breakdown sorted by max clocks descending.
         struct OpStats {
@@ -1588,25 +3482,39 @@ std::string WaveGraphExecutor::makePerfReport(
           int64_t opBarrier{0};
           int64_t count{0};
           int64_t numElements{0};
+          /// Blocks this op contributed to each launch, parallel to 'spans'.
+          /// Which launch an op landed in is the thing that decides whether it
+          /// is holding one up: an op is only measured against the others it
+          /// actually ran beside.
+          std::vector<int32_t> perLaunch;
         };
+        // Block index -> launch, from the contiguous ranges above.
+        std::vector<int32_t> blockLaunch(numBlocks, 0);
+        for (size_t li = 0; li < spans.size(); ++li) {
+          for (int32_t b = spans[li].first;
+               b < spans[li].first + spans[li].count;
+               ++b) {
+            blockLaunch[b] = static_cast<int32_t>(li);
+          }
+        }
         std::map<int32_t, OpStats> opMap;
-        for (const auto& b : blocks) {
-          auto& s = opMap[b.op];
-          s.op = b.op;
+        for (int32_t i = 0; i < numBlocks; ++i) {
+          const auto& b = blocks[i];
+          auto& s = opMap[b.info.op];
+          s.op = b.info.op;
           s.opMin = std::min(s.opMin, b.clocks);
           s.opMax = std::max(s.opMax, b.clocks);
           s.opSum += b.clocks;
           s.opBarrier += b.barrierClocks;
           s.count++;
-          referencedOps.insert(b.op);
-          opTotalClocks[b.op] += b.clocks;
+          s.perLaunch.resize(spans.size(), 0);
+          ++s.perLaunch[blockLaunch[i]];
+          referencedOps.insert(b.info.op);
+          opTotalClocks[b.info.op] += b.clocks;
         }
         // Get per-op element counts from step vectors.
-        auto seq = m.sequenceNumber;
-        auto step = m.stepIdx;
-        if (seq < static_cast<int32_t>(state.stepVectors.size()) &&
-            step < static_cast<int32_t>(state.stepVectors[seq].size())) {
-          for (const auto& kern : state.stepVectors[seq][step].kernels) {
+        if (auto* sv = findStepVectors(state, m.sequenceNumber, m.stepIdx)) {
+          for (const auto& kern : sv->kernels) {
             if (kern.launch && kern.launch->op) {
               auto opCode = kern.launch->op->opCode();
               auto it = opMap.find(opCode);
@@ -1636,7 +3544,7 @@ std::string WaveGraphExecutor::makePerfReport(
         for (auto& s : sortedOps) {
           auto opAvg = s.opSum / s.count;
           ss << fmt::format(
-              "      op {} ({} blocks, {}): clk max/avg/min={}/{}/{} barrier={}\n",
+              "      op {} ({} blocks, {}): clk max/avg/min={}/{}/{} barrier={}",
               s.op,
               s.count,
               fmtSize(s.numElements),
@@ -1644,6 +3552,15 @@ std::string WaveGraphExecutor::makePerfReport(
               opAvg,
               s.opMin,
               s.opBarrier);
+          if (spans.size() > 1) {
+            ss << " in";
+            for (size_t li = 0; li < s.perLaunch.size(); ++li) {
+              if (s.perLaunch[li] > 0) {
+                ss << fmt::format(" L{}={}", li, s.perLaunch[li]);
+              }
+            }
+          }
+          ss << "\n";
         }
       }
     }
@@ -1761,9 +3678,10 @@ std::string WaveGraphExecutor::makePerfReport(
 
 std::string WaveGraphExecutor::errorString() const {
   const auto& info = waveThreadInfo();
-  if (info.debugInfo.empty()) {
+  if (info.errorCount == 0) {
     return {};
   }
+  const auto launchBlocks = blockDebugInfos();
 
   struct ErrorEntry {
     int32_t sequenceNumber{0};
@@ -1771,8 +3689,7 @@ std::string WaveGraphExecutor::errorString() const {
     int32_t blockIdx{0};
     int32_t opCode{0};
     int32_t line{0};
-    int64_t extra0{0};
-    int64_t extra1{0};
+    std::array<int64_t, 6> extra{};
     std::string message;
   };
 
@@ -1780,20 +3697,24 @@ std::string WaveGraphExecutor::errorString() const {
   using Key = std::pair<int32_t, int32_t>;
   std::map<Key, std::vector<ErrorEntry>> errorsByOp;
 
-  for (size_t li = 0; li < info.debugInfo.size(); ++li) {
+  for (size_t li = 0; li < launchBlocks.size(); ++li) {
     const auto& meta = info.launchMeta[li];
-    const auto& blocks = info.debugInfo[li];
+    const auto& blocks = launchBlocks[li];
     for (size_t bi = 0; bi < blocks.size(); ++bi) {
-      const auto& dbg = blocks[bi];
-      if (dbg.line != 0) {
+      const auto& dbg = blocks[bi].info;
+      // The test LEAVE counts errors by: a site may set only a message, and
+      // LEAVE reads its first 8 bytes as one word.
+      int64_t messageWord{0};
+      std::memcpy(&messageWord, dbg.message, sizeof(messageWord));
+      if (dbg.line != 0 || messageWord != 0) {
         ErrorEntry entry;
         entry.sequenceNumber = meta.sequenceNumber;
         entry.stepIdx = meta.stepIdx;
         entry.blockIdx = static_cast<int32_t>(bi);
         entry.opCode = dbg.op;
         entry.line = dbg.line;
-        entry.extra0 = dbg.extra[0];
-        entry.extra1 = dbg.extra[1];
+        std::copy(
+            std::begin(dbg.extra), std::end(dbg.extra), entry.extra.begin());
         entry.message =
             std::string(dbg.message, strnlen(dbg.message, sizeof(dbg.message)));
         errorsByOp[{meta.sequenceNumber, dbg.op}].push_back(entry);
@@ -1850,8 +3771,16 @@ std::string WaveGraphExecutor::errorString() const {
     }
     for (const auto& entry : entries) {
       ss << "  Seq " << entry.sequenceNumber << " step " << entry.stepIdx
-         << " TB " << entry.blockIdx << " L " << entry.line << " "
-         << entry.extra0 << " " << entry.extra1;
+         << " TB " << entry.blockIdx << " L " << entry.line;
+      // Trailing zeroes are unset fields, not measurements: a site that reports
+      // two values would otherwise read as one reporting six.
+      size_t numExtra = entry.extra.size();
+      while (numExtra > 2 && entry.extra[numExtra - 1] == 0) {
+        --numExtra;
+      }
+      for (size_t i = 0; i < numExtra; ++i) {
+        ss << " " << entry.extra[i];
+      }
       if (!entry.message.empty()) {
         ss << " " << entry.message;
       }

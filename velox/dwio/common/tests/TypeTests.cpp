@@ -17,6 +17,7 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 #include "velox/common/base/VeloxException.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
@@ -244,6 +245,29 @@ TEST(TestType, typeCompatibility) {
   from = ROW({MAP(VARCHAR(), INTEGER())});
   to = ROW({MAP(VARCHAR(), DOUBLE())});
   EXPECT_THROW(checkTypeCompatibility(*from, *to, true), VeloxUserError);
+}
+
+TEST(TestType, typeCompatibilityWithPartitionKeys) {
+  const auto contentSchema = ROW("data", BIGINT());
+  const auto requestedSchema = ROW({
+      {"data", BIGINT()},
+      {"ds", VARCHAR()},
+      {"pipeline", VARCHAR()},
+      {"ts", VARCHAR()},
+  });
+  const auto fileSchema = ROW({
+      {"data", BIGINT()},
+      {"$row_group_id", VARCHAR()},
+      {"$row_number", BIGINT()},
+  });
+  const auto selector =
+      std::make_shared<ColumnSelector>(requestedSchema, contentSchema);
+  const auto appliedSelector = ColumnSelector::apply(selector, fileSchema);
+
+  EXPECT_NO_THROW(checkTypeCompatibility(*fileSchema, appliedSelector));
+  VELOX_ASSERT_THROW(
+      checkTypeCompatibility(*ROW("data", VARCHAR()), appliedSelector),
+      "Schema mismatch, From Kind: VARCHAR, To Kind: BIGINT");
 }
 
 TEST(TestType, typeCompatibilityWithErrorMessage) {

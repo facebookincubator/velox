@@ -20,24 +20,26 @@
 
 namespace facebook::velox::functions {
 
-void registerURLFunctions(const std::string& prefix) {
+void registerURLFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerFunction<UrlExtractHostFunction, Varchar, Varchar>(
-      {prefix + "url_extract_host"});
+      {prefix + "url_extract_host"}, {}, true, defaultOwner);
   registerFunction<UrlExtractFragmentFunction, Varchar, Varchar>(
-      {prefix + "url_extract_fragment"});
+      {prefix + "url_extract_fragment"}, {}, true, defaultOwner);
   registerFunction<UrlExtractPathFunction, Varchar, Varchar>(
-      {prefix + "url_extract_path"});
+      {prefix + "url_extract_path"}, {}, true, defaultOwner);
   registerFunction<UrlExtractParameterFunction, Varchar, Varchar, Varchar>(
-      {prefix + "url_extract_parameter"});
+      {prefix + "url_extract_parameter"}, {}, true, defaultOwner);
   registerFunction<UrlExtractProtocolFunction, Varchar, Varchar>(
-      {prefix + "url_extract_protocol"});
+      {prefix + "url_extract_protocol"}, {}, true, defaultOwner);
   registerFunction<UrlExtractPortFunction, int64_t, Varchar>(
-      {prefix + "url_extract_port"});
+      {prefix + "url_extract_port"}, {}, true, defaultOwner);
   registerFunction<UrlExtractQueryFunction, Varchar, Varchar>(
-      {prefix + "url_extract_query"});
+      {prefix + "url_extract_query"}, {}, true, defaultOwner);
   registerFunction<UrlEncodeFunction, Varchar, Varchar>(
-      {prefix + "url_encode"});
+      {prefix + "url_encode"}, {}, true, defaultOwner);
   registerFunction<UrlDecodeFunction, Varchar, Varchar>(
-      {prefix + "url_decode"});
+      {prefix + "url_decode"}, {}, true, defaultOwner);
 }
 } // namespace facebook::velox::functions

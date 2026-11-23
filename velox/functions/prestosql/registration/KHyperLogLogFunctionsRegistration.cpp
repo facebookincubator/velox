@@ -20,45 +20,49 @@
 
 namespace facebook::velox::functions {
 
-void registerKHyperLogLogFunctions(const std::string& prefix) {
+void registerKHyperLogLogFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerKHyperLogLogType();
 
   registerFunction<KHyperLogLogCardinalityFunction, int64_t, KHyperLogLog>(
-      {prefix + "cardinality"});
+      {prefix + "cardinality"}, {}, true, defaultOwner);
 
   registerFunction<
       KHyperLogLogIntersectionCardinalityFunction,
       int64_t,
       KHyperLogLog,
-      KHyperLogLog>({prefix + "intersection_cardinality"});
+      KHyperLogLog>(
+      {prefix + "intersection_cardinality"}, {}, true, defaultOwner);
 
   registerFunction<
       KHyperLogLogJaccardIndexFunction,
       double,
       KHyperLogLog,
-      KHyperLogLog>({prefix + "jaccard_index"});
+      KHyperLogLog>({prefix + "jaccard_index"}, {}, true, defaultOwner);
 
   registerFunction<
       KHyperLogLogReidentificationPotentialFunction,
       double,
       KHyperLogLog,
-      int64_t>({prefix + "reidentification_potential"});
+      int64_t>({prefix + "reidentification_potential"}, {}, true, defaultOwner);
 
   registerFunction<
       KHyperLogLogUniquenessDistributionFunction,
       Map<int64_t, double>,
-      KHyperLogLog>({prefix + "uniqueness_distribution"});
+      KHyperLogLog>(
+      {prefix + "uniqueness_distribution"}, {}, true, defaultOwner);
 
   registerFunction<
       KHyperLogLogUniquenessDistributionFunction,
       Map<int64_t, double>,
       KHyperLogLog,
-      int64_t>({prefix + "uniqueness_distribution"});
+      int64_t>({prefix + "uniqueness_distribution"}, {}, true, defaultOwner);
 
   registerFunction<
       MergeKHyperLogLogFunction,
       KHyperLogLog,
-      Array<KHyperLogLog>>({prefix + "merge_khll"});
+      Array<KHyperLogLog>>({prefix + "merge_khll"}, {}, true, defaultOwner);
 }
 
 } // namespace facebook::velox::functions

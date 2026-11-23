@@ -20,6 +20,7 @@
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/InputGenerator.h"
@@ -207,10 +208,16 @@ class AggregationFuzzerBase {
 
   std::pair<CallableSignature, SignatureStats&> pickSignature();
 
+  // Generates 'FLAGS_num_batches' batches of input. Columns named in
+  // 'groupingKeys' are, for a fraction of calls, drawn from one pool of values
+  // shared by every batch, with a cardinality bounded by the total row count
+  // and maximum vector size, so that a key repeats both within and across
+  // batches. Every other column is fuzzed independently per batch.
   std::vector<RowVectorPtr> generateInputData(
       std::vector<std::string> names,
       std::vector<TypePtr> types,
-      const std::optional<CallableSignature>& signature);
+      const std::optional<CallableSignature>& signature,
+      const std::vector<std::string>& groupingKeys);
 
   /// Generate a RowVector of the given types of children with an additional
   /// child named "row_number" of INTEGER row numbers that differentiates every
@@ -286,11 +293,21 @@ class AggregationFuzzerBase {
   FuzzerGenerator rng_;
   size_t currentSeed_{0};
 
+  // Driver threads allocate lazily from the input vectors' pool, e.g. when
+  // peeling dictionaries. Arbitration triggered by such an allocation must
+  // suspend the driver, which exec::MemoryReclaimer does.
   std::shared_ptr<memory::MemoryPool> rootPool_{
-      memory::memoryManager()->addRootPool()};
-  std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("leaf")};
-  std::shared_ptr<memory::MemoryPool> writerPool_{
-      rootPool_->addAggregateChild("aggregationFuzzerWriter")};
+      memory::memoryManager()->addRootPool(
+          "aggregationFuzzer",
+          memory::kMaxMemory,
+          exec::MemoryReclaimer::create())};
+  std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild(
+      "aggregationFuzzerLeaf",
+      true,
+      exec::MemoryReclaimer::create())};
+  std::shared_ptr<memory::MemoryPool> writerPool_{rootPool_->addAggregateChild(
+      "aggregationFuzzerWriter",
+      exec::MemoryReclaimer::create())};
   VectorFuzzer vectorFuzzer_;
   std::vector<TypePtr> supportedKeyTypes_;
 };

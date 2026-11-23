@@ -91,6 +91,12 @@ class RuntimeStatsInjectingWriterFactory : public WriterFactory {
     return delegate_->createWriterOptions();
   }
 
+  std::shared_ptr<FormatSpecificOptions> createFormatOptions(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) const override {
+    return delegate_->createFormatOptions(connectorConfig, session);
+  }
+
  private:
   std::shared_ptr<WriterFactory> delegate_;
   const folly::F14FastMap<std::string, RuntimeMetric> injectedStats_;

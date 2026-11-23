@@ -31,12 +31,17 @@ head --lines 16 velox/experimental/wave/common/Cuda.h >$TORCHWAVE/Headers.h
 
   echo "bool registerHeader(const char* text);"
 
+  echo "// NOLINTBEGIN(facebook-avoid-non-const-global-variables)"
+
   $STRINGIFY "velox/experimental/torchwave/KernelParams.h"
   $STRINGIFY "velox/experimental/torchwave/Core.cuh"
   $STRINGIFY "velox/experimental/torchwave/Elementwise.cuh"
   $STRINGIFY "velox/experimental/torchwave/Scan.cuh"
   $STRINGIFY "velox/experimental/torchwave/Views.cuh"
   $STRINGIFY "velox/experimental/torchwave/Hash.cuh"
+  $STRINGIFY "velox/experimental/torchwave/PackFormat.h"
+  $STRINGIFY "velox/experimental/torchwave/Unpack.cuh"
+  echo "// NOLINTEND(facebook-avoid-non-const-global-variables)"
 
   echo "}"
 } >>$TORCHWAVE/Headers.h

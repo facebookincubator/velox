@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <memory>
+
 #include "velox/common/base/Exceptions.h"
 
 #include <folly/Demangle.h>
@@ -74,6 +76,29 @@ To* checkedPointerCast(From* input) {
   auto* casted = dynamic_cast<To*>(input);
   detail::ensureCastSucceeded(casted, input);
   return casted;
+}
+
+/// Checks that pointer is not null and returns it for expression contexts such
+/// as constructor initializer lists.
+template <typename T>
+T* checkedNotNull(T* pointer) {
+  VELOX_CHECK_NOT_NULL(pointer);
+  return pointer;
+}
+
+/// Checks that a unique pointer is not null and returns it.
+template <typename T, typename Deleter>
+std::unique_ptr<T, Deleter> checkedNotNull(
+    std::unique_ptr<T, Deleter> pointer) {
+  VELOX_CHECK_NOT_NULL(pointer.get());
+  return pointer;
+}
+
+/// Checks that a shared pointer is not null and returns it.
+template <typename T>
+std::shared_ptr<T> checkedNotNull(std::shared_ptr<T> pointer) {
+  VELOX_CHECK_NOT_NULL(pointer.get());
+  return pointer;
 }
 
 template <typename To, typename From>

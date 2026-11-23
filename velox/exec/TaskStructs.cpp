@@ -49,9 +49,69 @@ ContinueFuture SplitsStore::makeFuture() {
   return std::move(future);
 }
 
+std::deque<Split> SplitsStore::finishConsumer(
+    uint32_t driverId,
+    uint32_t numConsumers,
+    std::vector<ContinuePromise>& promises) {
+  VELOX_CHECK(finishedConsumers_.insert(driverId).second);
+  VELOX_CHECK_LE(finishedConsumers_.size(), numConsumers);
+  taskStats_->numAbandonedSplits += releaseRunningSplits(driverId);
+  if (finishedConsumers_.size() != numConsumers) {
+    return {};
+  }
+  allConsumersFinished_ = true;
+  return discardQueuedSplits(promises);
+}
+
+void SplitsStore::finishSplits(uint32_t driverId) {
+  taskStats_->numFinishedSplits += releaseRunningSplits(driverId);
+}
+
+int32_t SplitsStore::releaseRunningSplits(uint32_t driverId) {
+  const auto it = runningSplits_.find(driverId);
+  if (it == runningSplits_.end()) {
+    return 0;
+  }
+  const auto& running = it->second;
+  const auto numSplits = running.numSplits;
+  taskStats_->numRunningSplits -= running.numSplits;
+  if (!remoteSplit_) {
+    taskStats_->numRunningTableScanSplits -= running.numSplits;
+    taskStats_->runningTableScanSplitWeights -= running.weight;
+  }
+  runningSplits_.erase(it);
+  return numSplits;
+}
+
+std::deque<Split> SplitsStore::discardQueuedSplits(
+    std::vector<ContinuePromise>& promises) {
+  auto waiters = noMoreSplits();
+  std::move(waiters.begin(), waiters.end(), std::back_inserter(promises));
+  barrierSplits_.clear();
+
+  std::deque<Split> abandoned;
+  abandoned.swap(splits_);
+  for (const auto& split : abandoned) {
+    ++taskStats_->numAbandonedSplits;
+    removeQueuedSplitStats(split);
+  }
+  return abandoned;
+}
+
+void SplitsStore::removeQueuedSplitStats(const Split& split) {
+  --taskStats_->numQueuedSplits;
+  if (!remoteSplit_ && split.hasConnectorSplit()) {
+    --taskStats_->numQueuedTableScanSplits;
+    taskStats_->queuedTableScanSplitWeights -=
+        split.connectorSplit->splitWeight;
+  }
+}
+
 Split SplitsStore::getSplit(
+    uint32_t driverId,
     int maxPreloadSplits,
     const ConnectorSplitPreloadFunc& preload) {
+  VELOX_CHECK_EQ(finishedConsumers_.count(driverId), 0);
   int readySplitIndex = -1;
   if (maxPreloadSplits > 0) {
     for (int i = 0, end = std::min<size_t>(maxPreloadSplits, splits_.size());
@@ -79,32 +139,27 @@ Split SplitsStore::getSplit(
   VELOX_CHECK(!splits_.empty());
   auto split = std::move(splits_[readySplitIndex]);
   splits_.erase(splits_.begin() + readySplitIndex);
-  --taskStats_->numQueuedSplits;
+  removeQueuedSplitStats(split);
   ++taskStats_->numRunningSplits;
+  auto& running = runningSplits_[driverId];
+  ++running.numSplits;
   if (!remoteSplit_ && split.connectorSplit) {
-    --taskStats_->numQueuedTableScanSplits;
+    running.weight += split.connectorSplit->splitWeight;
     ++taskStats_->numRunningTableScanSplits;
-    taskStats_->queuedTableScanSplitWeights -=
-        split.connectorSplit->splitWeight;
     taskStats_->runningTableScanSplitWeights +=
         split.connectorSplit->splitWeight;
   }
-  taskStats_->lastSplitStartTimeMs = getCurrentTimeMs();
+  taskStats_->lastSplitStartTimeMs =
+      EpochTime::now<std::chrono::milliseconds>();
   if (taskStats_->firstSplitStartTimeMs == 0) {
     taskStats_->firstSplitStartTimeMs = taskStats_->lastSplitStartTimeMs;
   }
   return split;
 }
 
-bool SplitsStore::tryGetBarrier(
-    std::optional<uint32_t> driverId,
-    Split& split) {
-  if (!driverId.has_value()) {
-    barrierSplits_.clear();
-    return false;
-  }
+bool SplitsStore::tryGetBarrier(uint32_t driverId, Split& split) {
   // Delivers a barrier exactly once for each driver from the same plan node.
-  auto it = barrierSplits_.find(*driverId);
+  auto it = barrierSplits_.find(driverId);
   if (it == barrierSplits_.end()) {
     return false;
   }

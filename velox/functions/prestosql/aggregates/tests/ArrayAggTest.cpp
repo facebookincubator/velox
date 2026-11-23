@@ -45,13 +45,6 @@ class ArrayAggTest : public AggregationTestBase {
   }
 };
 
-std::unordered_map<std::string, std::string> makeConfig(bool ignoreNulls) {
-  if (ignoreNulls) {
-    return {{"presto.array_agg.ignore_nulls", "true"}};
-  }
-  return {};
-}
-
 TEST_F(ArrayAggTest, groupBy) {
   auto testFunction = [this](
                           const std::string& functionName,
@@ -87,41 +80,34 @@ TEST_F(ArrayAggTest, groupBy) {
 
     createDuckDbTable(batches);
     auto filter = ignoreNulls ? "filter (where a is not null)" : "";
-    testAggregations(
-        batches,
-        {"c0"},
-        {fmt::format("{}(a)", functionName)},
-        {"c0", "array_sort(a0)"},
+    AggregationTester tester(*this);
+    tester.inputs(batches)
+        .groupBy({"c0"})
+        .aggregates({fmt::format("{}(a)", functionName)})
+        .project({"c0", "array_sort(a0)"})
+        .config(
+            "presto.array_agg.ignore_nulls", ignoreNulls ? "true" : "false");
+    if (testCompanionFunctions) {
+      tester.withCompanion();
+    }
+    tester.assertResults(
         fmt::format(
             "SELECT c0, array_sort(array_agg(a) {}) FROM tmp GROUP BY c0",
-            filter),
-        makeConfig(ignoreNulls));
-    if (testCompanionFunctions) {
-      testAggregationsWithCompanion(
-          batches,
-          [](auto& /*builder*/) {},
-          {"c0"},
-          {fmt::format("{}(a)", functionName)},
-          {{ARRAY(VARCHAR())}},
-          {"c0", "array_sort(a0)"},
-          fmt::format(
-              "SELECT c0, array_sort(array_agg(a) {}) FROM tmp GROUP BY c0",
-              filter),
-          makeConfig(ignoreNulls));
-    }
+            filter));
 
     // Having one function supporting toIntermediate and one does not, make sure
     // the row container is recreated with only the function without
     // toIntermediate support.
-    testAggregations(
-        batches,
-        {"c0"},
-        {fmt::format("{}(a)", functionName), "max(c0)"},
-        {"c0", "array_sort(a0)", "a1"},
-        fmt::format(
-            "SELECT c0, array_sort(array_agg(a) {}), max(c0) FROM tmp GROUP BY c0",
-            filter),
-        makeConfig(ignoreNulls));
+    AggregationTester(*this)
+        .inputs(batches)
+        .groupBy({"c0"})
+        .aggregates({fmt::format("{}(a)", functionName), "max(c0)"})
+        .project({"c0", "array_sort(a0)", "a1"})
+        .config("presto.array_agg.ignore_nulls", ignoreNulls ? "true" : "false")
+        .assertResults(
+            fmt::format(
+                "SELECT c0, array_sort(array_agg(a) {}), max(c0) FROM tmp GROUP BY c0",
+                filter));
   };
 
   testFunction("array_agg", true);
@@ -294,24 +280,17 @@ TEST_F(ArrayAggTest, global) {
 
     createDuckDbTable(vectors);
     auto filter = ignoreNulls ? "filter (where c0 is not null)" : "";
-    testAggregations(
-        vectors,
-        {},
-        {fmt::format("{}(c0)", functionName)},
-        {"array_sort(a0)"},
-        fmt::format("SELECT array_sort(array_agg(c0) {}) FROM tmp", filter),
-        makeConfig(ignoreNulls));
+    AggregationTester tester(*this);
+    tester.inputs(vectors)
+        .aggregates({fmt::format("{}(c0)", functionName)})
+        .project({"array_sort(a0)"})
+        .config(
+            "presto.array_agg.ignore_nulls", ignoreNulls ? "true" : "false");
     if (testCompanionFunctions) {
-      testAggregationsWithCompanion(
-          vectors,
-          [](auto& /*builder*/) {},
-          {},
-          {fmt::format("{}(c0)", functionName)},
-          {{INTEGER()}},
-          {"array_sort(a0)"},
-          fmt::format("SELECT array_sort(array_agg(c0) {}) FROM tmp", filter),
-          makeConfig(ignoreNulls));
+      tester.withCompanion();
     }
+    tester.assertResults(
+        fmt::format("SELECT array_sort(array_agg(c0) {}) FROM tmp", filter));
   };
 
   testFunction("array_agg", true);
@@ -326,8 +305,10 @@ TEST_F(ArrayAggTest, globalNoData) {
                           bool ignoreNulls,
                           bool testCompanionFunctions = true) {
     auto data = makeRowVector(ROW({"c0"}, {INTEGER()}), 0);
-    testAggregations(
-        {data}, {}, {fmt::format("{}(c0)", functionName)}, "SELECT null");
+    AggregationTester(*this)
+        .inputs(data)
+        .aggregates({fmt::format("{}(c0)", functionName)})
+        .assertResults("SELECT null");
 
     std::vector<RowVectorPtr> allNulls = {
         makeRowVector({makeFlatVector<int32_t>(
@@ -335,22 +316,22 @@ TEST_F(ArrayAggTest, globalNoData) {
     auto filter = ignoreNulls ? "filter (where c0 is not null)" : "";
 
     createDuckDbTable(allNulls);
-    testAggregations(
-        allNulls,
-        {},
-        {fmt::format("{}(c0)", functionName)},
-        fmt::format("SELECT array_agg(c0) {} FROM tmp", filter),
-        makeConfig(ignoreNulls));
+    AggregationTester(*this)
+        .inputs(allNulls)
+        .aggregates({fmt::format("{}(c0)", functionName)})
+        .config("presto.array_agg.ignore_nulls", ignoreNulls ? "true" : "false")
+        .assertResults(fmt::format("SELECT array_agg(c0) {} FROM tmp", filter));
     if (testCompanionFunctions) {
-      testAggregationsWithCompanion(
-          allNulls,
-          [](auto& /*builder*/) {},
-          {},
-          {fmt::format("{}(c0)", functionName)},
-          {{INTEGER()}},
-          {"array_sort(a0)"},
-          fmt::format("SELECT array_sort(array_agg(c0) {}) FROM tmp", filter),
-          makeConfig(ignoreNulls));
+      AggregationTester(*this)
+          .inputs(allNulls)
+          .aggregates({fmt::format("{}(c0)", functionName)})
+          .project({"array_sort(a0)"})
+          .config(
+              "presto.array_agg.ignore_nulls", ignoreNulls ? "true" : "false")
+          .withCompanion()
+          .assertResults(
+              fmt::format(
+                  "SELECT array_sort(array_agg(c0) {}) FROM tmp", filter));
     }
   };
 
@@ -504,13 +485,12 @@ TEST_F(ArrayAggTest, mask) {
         makeConstant(false, 5),
     });
 
-    // TODO: Add support for FILTER in testAggregationsWithCompanion() and test
-    // queries with companion functions.
-    testAggregations(
-        split(data),
-        {},
-        {fmt::format("{}(c0) FILTER (WHERE c1)", functionName)},
-        "SELECT null");
+    // TODO: Add support for FILTER in AggregationTester::withCompanion() and
+    // test queries with companion functions.
+    AggregationTester(*this)
+        .inputs(split(data))
+        .aggregates({fmt::format("{}(c0) FILTER (WHERE c1)", functionName)})
+        .assertResults("SELECT null");
 
     // Global aggregation with a non-constant mask.
     data = makeRowVector({
@@ -518,12 +498,11 @@ TEST_F(ArrayAggTest, mask) {
         makeFlatVector<bool>({true, false, true, false, true}),
     });
 
-    testAggregations(
-        split(data),
-        {},
-        {fmt::format("{}(c0) FILTER (WHERE c1)", functionName)},
-        {"array_sort(a0)"},
-        "SELECT [1, 3, 5]");
+    AggregationTester(*this)
+        .inputs(split(data))
+        .aggregates({fmt::format("{}(c0) FILTER (WHERE c1)", functionName)})
+        .project({"array_sort(a0)"})
+        .assertResults("SELECT [1, 3, 5]");
 
     // Group-by with all-false mask.
     data = makeRowVector({
@@ -532,11 +511,11 @@ TEST_F(ArrayAggTest, mask) {
         makeConstant(false, 5),
     });
 
-    testAggregations(
-        split(data),
-        {"c0"},
-        {fmt::format("{}(c1) FILTER (WHERE c2)", functionName)},
-        "VALUES (10, null), (20, null)");
+    AggregationTester(*this)
+        .inputs(split(data))
+        .groupBy({"c0"})
+        .aggregates({fmt::format("{}(c1) FILTER (WHERE c2)", functionName)})
+        .assertResults("VALUES (10, null), (20, null)");
 
     // Group-by with a non-constant mask.
     data = makeRowVector({
@@ -545,12 +524,12 @@ TEST_F(ArrayAggTest, mask) {
         makeFlatVector<bool>({true, false, true, false, true}),
     });
 
-    testAggregations(
-        split(data),
-        {"c0"},
-        {fmt::format("{}(c1) FILTER (WHERE c2)", functionName)},
-        {"c0", "array_sort(a0)"},
-        "VALUES (10, [1, 3]), (20, [5])");
+    AggregationTester(*this)
+        .inputs(split(data))
+        .groupBy({"c0"})
+        .aggregates({fmt::format("{}(c1) FILTER (WHERE c2)", functionName)})
+        .project({"c0", "array_sort(a0)"})
+        .assertResults("VALUES (10, [1, 3]), (20, [5])");
   };
 
   testFunction("array_agg");
@@ -573,15 +552,32 @@ TEST_F(ArrayAggTest, clusteredInput) {
       }));
     }
     createDuckDbTable(data);
+    // A single batch cannot have a group spanning batches, so the
+    // clustered-input fast path is available and gets covered. With 13-row
+    // batches the 17-row groups straddle batch boundaries, so it must stay off
+    // and the copying fallback is covered instead.
+    const bool noGroupsSpanBatches = batchRows >= kSize;
     for (bool mask : {false, true}) {
       auto builder = PlanBuilder().values(data);
       std::string expected;
       if (mask) {
-        builder.partialStreamingAggregation({"c0"}, {"array_agg(c1)"}, {"c2"});
+        builder.streamingAggregation(
+            {"c0"},
+            {"array_agg(c1)"},
+            {"c2"},
+            core::AggregationNode::Step::kPartial,
+            /*ignoreNullKeys=*/false,
+            noGroupsSpanBatches);
         expected =
             "select c0, array_agg(c1) filter (where c2) from tmp group by 1";
       } else {
-        builder.partialStreamingAggregation({"c0"}, {"array_agg(c1)"});
+        builder.streamingAggregation(
+            {"c0"},
+            {"array_agg(c1)"},
+            {},
+            core::AggregationNode::Step::kPartial,
+            /*ignoreNullKeys=*/false,
+            noGroupsSpanBatches);
         expected = "select c0, array_agg(c1) from tmp group by 1";
       }
       auto plan = builder.finalAggregation().planNode();
@@ -601,6 +597,181 @@ TEST_F(ArrayAggTest, clusteredInput) {
       }
     }
   }
+}
+
+// The clustered-input fast path stores a reference to the whole argument
+// vector rather than copying the selected values out of it, so a group pins
+// every batch it drew from until extractValues runs. That is only bounded when
+// a group cannot span batches, because the reference is dropped once the
+// group's output is produced.
+//
+// The mask is what makes the two paths distinguishable. Without it array_agg
+// keeps every value anyway, so copying costs as much as retaining. Selecting
+// one row per batch leaves the copying accumulator holding kNumBatches
+// payloads while retention would pin all of them in full.
+//
+// The projection matters: it materializes each batch inside the query's pool,
+// so retained batches show up in peakBytes. Reading straight from values()
+// would allocate them in the test's pool and hide the retention.
+TEST_F(ArrayAggTest, clusteredInputNotRetainedWhenGroupsSpanBatches) {
+  constexpr int kNumBatches = 100;
+  constexpr int kBatchRows = 64;
+  constexpr int kPayloadBytes = 4'096;
+  // Coprime with kBatchRows so groups straddle batch boundaries.
+  constexpr int kGroupRows = 17;
+
+  std::vector<RowVectorPtr> data;
+  data.reserve(kNumBatches);
+  for (int batch = 0; batch < kNumBatches; ++batch) {
+    data.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            kBatchRows,
+            [&](auto row) { return (batch * kBatchRows + row) / kGroupRows; }),
+        makeFlatVector<std::string>(
+            kBatchRows,
+            [&](auto /*row*/) { return std::string(kPayloadBytes, 'x'); }),
+        makeFlatVector<bool>(kBatchRows, [&](auto row) { return row == 0; }),
+    }));
+  }
+
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .project({"c0", "concat(c1, '') as c1", "c2"})
+                  .streamingAggregation(
+                      {"c0"},
+                      {"array_agg(c1)"},
+                      {"c2"},
+                      core::AggregationNode::Step::kSingle,
+                      /*ignoreNullKeys=*/false,
+                      /*noGroupsSpanBatches=*/false)
+                  .planNode();
+
+  auto queryPool = memory::memoryManager()->addRootPool(
+      "clusteredInputNotRetainedWhenGroupsSpanBatches",
+      memory::kMaxMemory,
+      exec::MemoryReclaimer::create());
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(), core::QueryConfig{{}}, {}, {}, std::move(queryPool));
+  auto result = AssertQueryBuilder(plan).queryCtx(queryCtx).copyResults(pool());
+  ASSERT_EQ(
+      result->size(), (kNumBatches * kBatchRows + kGroupRows - 1) / kGroupRows);
+
+  // Retaining every batch would keep roughly the whole input resident. The
+  // copying accumulator holds only the masked rows, which is far smaller.
+  constexpr int64_t kInputBytes =
+      static_cast<int64_t>(kNumBatches) * kBatchRows * kPayloadBytes;
+  EXPECT_LT(queryCtx->pool()->peakBytes(), kInputBytes / 4)
+      << "peak " << queryCtx->pool()->peakBytes() << " of input " << kInputBytes
+      << " suggests input batches are being pinned by the accumulators";
+}
+
+// mayRetainInput=true opts a plan back into retention when groups span batches.
+// Mirror of the test above with the flag on, so the assertion is the inverse:
+// the accumulators pin the batches they read and peak memory tracks the input.
+TEST_F(ArrayAggTest, clusteredInputRetainedWhenAllowed) {
+  constexpr int kNumBatches = 100;
+  constexpr int kBatchRows = 64;
+  constexpr int kPayloadBytes = 4'096;
+  // Coprime with kBatchRows so groups straddle batch boundaries.
+  constexpr int kGroupRows = 17;
+
+  std::vector<RowVectorPtr> data;
+  data.reserve(kNumBatches);
+  for (int batch = 0; batch < kNumBatches; ++batch) {
+    data.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            kBatchRows,
+            [&](auto row) { return (batch * kBatchRows + row) / kGroupRows; }),
+        makeFlatVector<std::string>(
+            kBatchRows,
+            [&](auto /*row*/) { return std::string(kPayloadBytes, 'x'); }),
+        makeFlatVector<bool>(kBatchRows, [&](auto row) { return row == 0; }),
+    }));
+  }
+
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .project({"c0", "concat(c1, '') as c1", "c2"})
+                  .streamingAggregation(
+                      {"c0"},
+                      {"array_agg(c1)"},
+                      {"c2"},
+                      core::AggregationNode::Step::kSingle,
+                      /*ignoreNullKeys=*/false,
+                      /*noGroupsSpanBatches=*/false,
+                      /*mayRetainInput=*/true)
+                  .planNode();
+
+  auto queryPool = memory::memoryManager()->addRootPool(
+      "arrayAggClusteredInputRetainedWhenAllowed",
+      memory::kMaxMemory,
+      exec::MemoryReclaimer::create());
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(), core::QueryConfig{{}}, {}, {}, std::move(queryPool));
+  auto result = AssertQueryBuilder(plan).queryCtx(queryCtx).copyResults(pool());
+  ASSERT_EQ(
+      result->size(), (kNumBatches * kBatchRows + kGroupRows - 1) / kGroupRows);
+
+  constexpr int64_t kInputBytes =
+      static_cast<int64_t>(kNumBatches) * kBatchRows * kPayloadBytes;
+  EXPECT_GT(queryCtx->pool()->peakBytes(), kInputBytes / 4)
+      << "peak " << queryCtx->pool()->peakBytes() << " of input " << kInputBytes
+      << " suggests mayRetainInput did not re-enable retention";
+}
+
+// An explicit false must disable retention even where noGroupsSpanBatches would
+// have enabled it. Both runs produce the same results, so the observable is
+// memory: the copying accumulator serializes one payload per group into the
+// HashStringAllocator, which the retaining accumulator does not do.
+TEST_F(ArrayAggTest, clusteredInputDisabledWhenMayRetainInputFalse) {
+  constexpr int kNumBatches = 20;
+  constexpr int kBatchRows = 128;
+  constexpr int kPayloadBytes = 8'192;
+
+  std::vector<RowVectorPtr> data;
+  data.reserve(kNumBatches);
+  for (int batch = 0; batch < kNumBatches; ++batch) {
+    data.push_back(makeRowVector({
+        // One group per row, so no group spans a batch and
+        // noGroupsSpanBatches=true is a true statement about this input.
+        makeFlatVector<int64_t>(
+            kBatchRows, [&](auto row) { return batch * kBatchRows + row; }),
+        makeFlatVector<std::string>(
+            kBatchRows,
+            [&](auto /*row*/) { return std::string(kPayloadBytes, 'x'); }),
+    }));
+  }
+
+  const auto peakBytesWith = [&](std::optional<bool> mayRetainInput,
+                                 const std::string& poolName) {
+    auto plan = PlanBuilder()
+                    .values(data)
+                    .project({"c0", "concat(c1, '') as c1"})
+                    .streamingAggregation(
+                        {"c0"},
+                        {"array_agg(c1)"},
+                        {},
+                        core::AggregationNode::Step::kSingle,
+                        /*ignoreNullKeys=*/false,
+                        /*noGroupsSpanBatches=*/true,
+                        mayRetainInput)
+                    .planNode();
+    auto queryPool = memory::memoryManager()->addRootPool(
+        poolName, memory::kMaxMemory, exec::MemoryReclaimer::create());
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(), core::QueryConfig{{}}, {}, {}, std::move(queryPool));
+    auto result =
+        AssertQueryBuilder(plan).queryCtx(queryCtx).copyResults(pool());
+    EXPECT_EQ(result->size(), kNumBatches * kBatchRows);
+    return queryCtx->pool()->peakBytes();
+  };
+
+  const auto retained = peakBytesWith(std::nullopt, "arrayAggRetained");
+  const auto copied = peakBytesWith(false, "arrayAggCopied");
+
+  EXPECT_GT(copied, retained)
+      << "peak with mayRetainInput=false " << copied << " vs unset " << retained
+      << " suggests the explicit false did not disable retention";
 }
 
 TEST_F(ArrayAggTest, maskedRows) {

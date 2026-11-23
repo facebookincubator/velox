@@ -75,7 +75,7 @@ class VectorWindowPartition : public WindowPartition {
       const VectorPtr& result) const override;
 
   /// Extracts null positions from a retained input vector column.
-  void extractNulls(
+  vector_size_t extractNulls(
       int32_t columnIndex,
       vector_size_t partitionOffset,
       vector_size_t numRows,
@@ -102,6 +102,13 @@ class VectorWindowPartition : public WindowPartition {
       const vector_size_t* rawPeerStarts,
       vector_size_t* rawFrameBounds,
       SelectivityVector& validFrames) const override;
+
+  /// Returns the number of retained input vector ranges. Row lookup and
+  /// 'removeProcessedRows()' both walk these, so a caller that adds rows in
+  /// many small ranges pays for it on every access.
+  size_t testingNumRanges() const {
+    return ranges_.size();
+  }
 
  private:
   class VectorAccessor;

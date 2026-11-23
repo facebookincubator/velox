@@ -27,23 +27,26 @@
 #include "velox/core/PlanNode.h"
 
 #include <gtest/gtest.h>
+#include <utility>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
-#include "velox/common/rpc/clients/MockRPCClient.h"
+#include "velox/exec/rpc/tests/ResponseSimulator.h"
+#include "velox/exec/rpc/tests/TextOutput.h"
 #include "velox/expression/rpc/AsyncRPCFunction.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::exec::rpc {
 
-using velox::rpc::MockRPCClient;
+using exec::rpc::test::ResponseSimulator;
 
 namespace {
 
 /// Mock implementation of AsyncRPCFunction for testing.
 class MockAsyncRPCFunction : public AsyncRPCFunction {
  public:
-  explicit MockAsyncRPCFunction(std::shared_ptr<MockRPCClient> client)
-      : client_(std::move(client)) {}
+  explicit MockAsyncRPCFunction(std::shared_ptr<ResponseSimulator> simulator)
+      : simulator_(std::move(simulator)) {}
 
   std::string name() const override {
     return "mock_rpc_function";
@@ -73,39 +76,72 @@ class MockAsyncRPCFunction : public AsyncRPCFunction {
       if (promptVector->isNullAt(row)) {
         results.emplace_back(
             row,
-            folly::makeSemiFuture<RPCResponse>(RPCResponse{
-                .rowId = static_cast<int64_t>(row),
-                .result = "",
-                .metadata = {},
-                .error = "null_input"}));
+            folly::makeSemiFuture<RPCResponse>(RPCResponse::failed(
+                static_cast<int64_t>(row),
+                velox::rpc::RPCErrorKind::kNullInput,
+                "null_input")));
         return;
       }
-      RPCRequest request;
-      request.payload = promptVector->valueAt(row).str();
-      results.emplace_back(row, client_->call(request));
+      std::string prompt = promptVector->valueAt(row).str();
+      results.emplace_back(
+          row,
+          simulator_->nextCall().deferValue(
+              [prompt = std::move(prompt)](velox::rpc::RPCErrorKind kind) {
+                RPCResponse response;
+                if (kind != velox::rpc::RPCErrorKind::kNone) {
+                  response.setError(kind, "simulated failure");
+                  return response;
+                }
+                response.setPayload(makeTextPayload("mock: " + prompt));
+                return response;
+              }));
     });
 
     return results;
   }
 
+  VectorPtr buildOutput(
+      const std::vector<RPCResponse>& responses,
+      memory::MemoryPool* pool) const override {
+    return buildTextOutput(responses, pool);
+  }
+
  private:
-  std::shared_ptr<MockRPCClient> client_;
+  std::shared_ptr<ResponseSimulator> simulator_;
 };
 
 class RPCNodeTest : public testing::Test {
  protected:
   static void SetUpTestSuite() {
     memory::MemoryManager::testingSetInstance({});
+    Type::registerSerDe();
+    core::ITypedExpr::registerSerDe();
+    core::PlanNode::registerSerDe();
   }
 
   void SetUp() override {
-    client_ =
-        std::make_shared<MockRPCClient>(std::chrono::milliseconds(10), 0.0);
-    function_ = std::make_shared<MockAsyncRPCFunction>(client_);
+    simulator_ =
+        std::make_shared<ResponseSimulator>(std::chrono::milliseconds(10));
+    function_ = std::make_shared<MockAsyncRPCFunction>(simulator_);
     pool_ = memory::memoryManager()->addLeafPool();
   }
 
-  std::shared_ptr<MockRPCClient> client_;
+  // Supplies a non-null source so serde also exercises its registry entry.
+  core::RPCNodePtr makeRPCNode(std::string executionPhase) {
+    auto source = std::make_shared<core::ValuesNode>(
+        "values", std::vector<RowVectorPtr>{});
+    return std::make_shared<core::RPCNode>(
+        "rpc-serde",
+        std::move(source),
+        std::make_shared<core::CallTypedExpr>(VARCHAR(), "mock_rpc_function"),
+        "response",
+        ROW("response", VARCHAR()),
+        rpc::RPCStreamingMode::kBatch,
+        32,
+        std::move(executionPhase));
+  }
+
+  std::shared_ptr<ResponseSimulator> simulator_;
   std::shared_ptr<MockAsyncRPCFunction> function_;
   std::shared_ptr<memory::MemoryPool> pool_;
 };
@@ -114,13 +150,9 @@ TEST_F(RPCNodeTest, rpcNodeCreation) {
   auto rpcNode = std::make_shared<core::RPCNode>(
       "rpc-1",
       nullptr,
-      "mock_rpc_function",
-      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(VARCHAR(), "mock_rpc_function"),
       "response",
-      ROW({"response"}, {VARCHAR()}),
-      std::vector<std::string>{},
-      std::vector<TypePtr>{},
-      std::vector<VectorPtr>{});
+      ROW({"response"}, {VARCHAR()}));
 
   EXPECT_EQ(rpcNode->id(), "rpc-1");
   EXPECT_EQ(rpcNode->name(), "RPC");
@@ -134,18 +166,67 @@ TEST_F(RPCNodeTest, rpcNodeWithBatchMode) {
   auto rpcNode = std::make_shared<core::RPCNode>(
       "rpc-2",
       nullptr,
-      "mock_rpc_function",
-      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(VARCHAR(), "mock_rpc_function"),
       "result",
       ROW({"result"}, {VARCHAR()}),
-      std::vector<std::string>{},
-      std::vector<TypePtr>{},
-      std::vector<VectorPtr>{},
       rpc::RPCStreamingMode::kBatch,
       100);
 
   EXPECT_EQ(rpcNode->streamingMode(), rpc::RPCStreamingMode::kBatch);
   EXPECT_EQ(rpcNode->dispatchBatchSize(), 100);
+}
+
+TEST_F(RPCNodeTest, deferredPhaseSerialization) {
+  for (const auto& [phase, name] :
+       {std::pair{"SUBMIT", "RpcSubmit"},
+        std::pair{"POLL", "RpcPoll"},
+        std::pair{"COLLECT", "RpcCollect"}}) {
+    SCOPED_TRACE(phase);
+    auto rpcNode = makeRPCNode(phase);
+    const auto serialized = rpcNode->serialize();
+    EXPECT_EQ(serialized["name"].asString(), std::string(name) + "Node");
+    auto restored = std::dynamic_pointer_cast<const core::RPCNode>(
+        ISerializable::deserialize<core::PlanNode>(serialized, pool_.get()));
+    ASSERT_NE(restored, nullptr);
+    EXPECT_EQ(restored->executionPhase(), phase);
+    EXPECT_EQ(restored->name(), name);
+    EXPECT_EQ(restored->id(), rpcNode->id());
+    EXPECT_EQ(restored->functionName(), rpcNode->functionName());
+    EXPECT_EQ(restored->outputColumn(), rpcNode->outputColumn());
+    EXPECT_EQ(*restored->outputType(), *rpcNode->outputType());
+    EXPECT_EQ(restored->source()->id(), rpcNode->source()->id());
+    EXPECT_EQ(restored->streamingMode(), rpc::RPCStreamingMode::kBatch);
+    EXPECT_EQ(restored->dispatchBatchSize(), 32);
+  }
+}
+
+TEST_F(RPCNodeTest, legacySerializationDefaultsToInline) {
+  auto serialized = makeRPCNode("INLINE")->serialize();
+  serialized.erase("executionPhase");
+  auto restored = std::dynamic_pointer_cast<const core::RPCNode>(
+      ISerializable::deserialize<core::PlanNode>(serialized, pool_.get()));
+  ASSERT_NE(restored, nullptr);
+  EXPECT_EQ(restored->executionPhase(), "INLINE");
+  EXPECT_EQ(restored->name(), "RPC");
+}
+
+TEST_F(RPCNodeTest, serializationRejectsInvalidExecutionPhase) {
+  auto serialized = makeRPCNode("INLINE")->serialize();
+  serialized["executionPhase"] = "INVALID";
+  VELOX_ASSERT_THROW(
+      ISerializable::deserialize<core::PlanNode>(serialized, pool_.get()),
+      "Unknown RPC execution phase");
+}
+
+TEST_F(RPCNodeTest, serializationRejectsDeferredPerRow) {
+  for (const auto* phase : {"SUBMIT", "POLL", "COLLECT"}) {
+    SCOPED_TRACE(phase);
+    auto serialized = makeRPCNode(phase)->serialize();
+    serialized["streamingMode"] = "PER_ROW";
+    VELOX_ASSERT_THROW(
+        ISerializable::deserialize<core::PlanNode>(serialized, pool_.get()),
+        "Deferred RPC requires BATCH dispatch");
+  }
 }
 
 TEST_F(RPCNodeTest, functionDispatchPerRow) {
@@ -181,7 +262,7 @@ TEST_F(RPCNodeTest, functionDispatchPerRow) {
   for (auto& [rowIdx, future] : futures) {
     auto response = std::move(future).get();
     EXPECT_FALSE(response.hasError());
-    EXPECT_FALSE(response.result.empty());
+    EXPECT_FALSE(responseAs<TextPayload>(response).text.empty());
   }
 }
 
@@ -190,7 +271,8 @@ TEST_F(RPCNodeTest, functionBuildOutput) {
   for (int i = 0; i < 3; ++i) {
     RPCResponse resp;
     resp.rowId = i;
-    resp.result = "Response for prompt " + std::to_string(i);
+    resp.setPayload(
+        makeTextPayload("Response for prompt " + std::to_string(i)));
     responses.push_back(std::move(resp));
   }
 
@@ -209,13 +291,9 @@ TEST_F(RPCNodeTest, planNodeToString) {
   auto rpcNode = std::make_shared<core::RPCNode>(
       "rpc-1",
       nullptr,
-      "mock_rpc_function",
-      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(VARCHAR(), "mock_rpc_function"),
       "response",
-      ROW({"response"}, {VARCHAR()}),
-      std::vector<std::string>{},
-      std::vector<TypePtr>{},
-      std::vector<VectorPtr>{});
+      ROW({"response"}, {VARCHAR()}));
 
   std::string str = rpcNode->toString(/*detailed=*/true);
 
@@ -227,13 +305,9 @@ TEST_F(RPCNodeTest, planNodeSingleSource) {
   auto rpcNode = std::make_shared<core::RPCNode>(
       "rpc-1",
       nullptr,
-      "mock_rpc_function",
-      VARCHAR(),
+      std::make_shared<core::CallTypedExpr>(VARCHAR(), "mock_rpc_function"),
       "response",
-      ROW({"response"}, {VARCHAR()}),
-      std::vector<std::string>{},
-      std::vector<TypePtr>{},
-      std::vector<VectorPtr>{});
+      ROW({"response"}, {VARCHAR()}));
 
   ASSERT_EQ(rpcNode->sources().size(), 1);
   EXPECT_EQ(rpcNode->source().get(), nullptr);

@@ -21,6 +21,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace facebook::velox::cudf_velox {
@@ -36,6 +37,15 @@ using StepAwareAggregationRegistry = std::unordered_map<
 /// Runtime aggregation registries keyed by physical execution kind.
 StepAwareAggregationRegistry& getGroupbyAggregationRegistry();
 StepAwareAggregationRegistry& getReduceAggregationRegistry();
+
+/// Names (already prefixed) of the aggregation functions of 'registry' whose
+/// cuDF aggregator honors a FILTER mask. 'registry' is
+/// getGroupbyAggregationRegistry() or getReduceAggregationRegistry(); any
+/// other registry fails. Populated at registration time next to the functions
+/// themselves, per physical registry: an aggregator that honors a mask on one
+/// path says nothing about an aggregator for the same function on the other.
+std::unordered_set<std::string>& maskSupportedAggregations(
+    const StepAwareAggregationRegistry& registry);
 
 /// Shared registration helpers used to populate a target physical registry.
 bool registerAggregationFunctionForStep(

@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/exec/VectorHasher.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox::connector::hive {
 /// Generate sequential integer IDs for distinct partition values, which could

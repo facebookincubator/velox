@@ -38,6 +38,7 @@ add_library(
   ExpressionFuzzer.cpp
   ExpressionFuzzerVerifier.cpp
   FuzzerRunner.cpp
+  PrestoSkippedFunctions.cpp
   SpecialFormSignatureGenerator.cpp
 )
 velox_add_test_headers(
@@ -46,6 +47,7 @@ velox_add_test_headers(
   ExpressionFuzzer.h
   ExpressionFuzzerVerifier.h
   FuzzerRunner.h
+  PrestoSkippedFunctions.h
   SpecialFormSignatureGenerator.h
 )
 
@@ -76,6 +78,15 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
 )
+
+# The S2 cell argument generators reference S2CellOp, which is only built in a
+# geospatial-enabled build, so their sources are guarded by VELOX_ENABLE_GEO.
+# Mirror the flag as a compile definition to keep the guarded code compiled
+# when geospatial support is enabled.
+if(VELOX_ENABLE_GEO)
+  target_compile_definitions(velox_expression_fuzzer PRIVATE VELOX_ENABLE_GEO)
+  target_compile_definitions(velox_expression_fuzzer_test PRIVATE VELOX_ENABLE_GEO)
+endif()
 
 add_executable(
   spark_expression_fuzzer_test

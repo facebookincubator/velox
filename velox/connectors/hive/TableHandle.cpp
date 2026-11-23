@@ -18,133 +18,37 @@
 
 namespace facebook::velox::connector::hive {
 
-namespace {
-
-folly::dynamic serializeExtractionPathElement(
-    const ExtractionPathElement& element) {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["step"] = extractionStepName(element.step());
-  if (element.step() == ExtractionStep::kStructField) {
-    obj["fieldName"] =
-        static_cast<const StructFieldExtractionPathElement&>(element)
-            .fieldName();
-  }
-  if (element.step() == ExtractionStep::kMapKeyFilter) {
-    if (auto* stringFilter =
-            dynamic_cast<const StringMapKeyFilterExtractionPathElement*>(
-                &element)) {
-      folly::dynamic keys = folly::dynamic::array;
-      for (const auto& key : stringFilter->filterKeys()) {
-        keys.push_back(key);
-      }
-      obj["stringFilterKeys"] = keys;
-    } else if (
-        auto* intFilter =
-            dynamic_cast<const IntMapKeyFilterExtractionPathElement*>(
-                &element)) {
-      folly::dynamic keys = folly::dynamic::array;
-      for (const auto& key : intFilter->filterKeys()) {
-        keys.push_back(key);
-      }
-      obj["intFilterKeys"] = keys;
-    }
-  }
-  return obj;
-}
-
-ExtractionPathElementPtr deserializeExtractionPathElement(
-    const folly::dynamic& obj) {
-  auto step = extractionStepFromName(obj["step"].asString());
-  switch (step) {
-    case ExtractionStep::kStructField:
-      return ExtractionPathElement::structField(obj["fieldName"].asString());
-    case ExtractionStep::kMapKeyFilter: {
-      std::vector<std::string> stringKeys;
-      std::vector<int64_t> intKeys;
-      if (auto it = obj.find("stringFilterKeys"); it != obj.items().end()) {
-        for (const auto& key : it->second) {
-          stringKeys.push_back(key.asString());
-        }
-      }
-      if (auto it = obj.find("intFilterKeys"); it != obj.items().end()) {
-        for (const auto& key : it->second) {
-          intKeys.push_back(key.asInt());
-        }
-      }
-      if (!stringKeys.empty()) {
-        return ExtractionPathElement::mapKeyFilter(std::move(stringKeys));
-      }
-      return ExtractionPathElement::mapKeyFilter(std::move(intKeys));
-    }
-    case ExtractionStep::kMapKeys:
-    case ExtractionStep::kMapValues:
-    case ExtractionStep::kArrayElements:
-    case ExtractionStep::kSize:
-      return ExtractionPathElement::simple(step);
-  }
-  VELOX_UNREACHABLE();
-}
-
-folly::dynamic serializeNamedExtraction(const NamedExtraction& extraction) {
-  folly::dynamic obj = folly::dynamic::object;
-  obj["outputName"] = extraction.outputName;
-  obj["dataType"] = extraction.dataType->serialize();
-  folly::dynamic chain = folly::dynamic::array;
-  for (const auto& element : extraction.chain) {
-    chain.push_back(serializeExtractionPathElement(*element));
-  }
-  obj["chain"] = chain;
-  return obj;
-}
-
-NamedExtraction deserializeNamedExtraction(const folly::dynamic& obj) {
-  NamedExtraction extraction;
-  extraction.outputName = obj["outputName"].asString();
-  extraction.dataType = ISerializable::deserialize<Type>(obj["dataType"]);
-  const auto& chainArr = obj["chain"];
-  extraction.chain.reserve(chainArr.size());
-  for (const auto& element : chainArr) {
-    extraction.chain.push_back(deserializeExtractionPathElement(element));
-  }
-  return extraction;
-}
-
-} // namespace
-
 HiveColumnHandle::HiveColumnHandle(
     const std::string& name,
     ColumnType columnType,
     TypePtr dataType,
     TypePtr hiveType,
     std::vector<common::Subfield> requiredSubfields,
-    std::vector<NamedExtraction> extractions,
+    std::vector<connector::NamedExtraction> extractions,
     ColumnParseParameters columnParseParameters,
     std::function<void(VectorPtr&)> postProcessor)
-    : name_(name),
-      columnType_(columnType),
-      dataType_(std::move(dataType)),
-      hiveType_(std::move(hiveType)),
-      requiredSubfields_(std::move(requiredSubfields)),
-      extractions_(std::move(extractions)),
-      columnParseParameters_(columnParseParameters),
-      postProcessor_(std::move(postProcessor)) {
-  VELOX_USER_CHECK(
-      extractions_.empty() || requiredSubfields_.empty(),
-      "Extractions and requiredSubfields are mutually exclusive on column: {}",
-      name_);
-
-  if (extractions_.empty()) {
+    : connector::FileColumnHandle(
+          name,
+          columnType,
+          std::move(dataType),
+          std::move(hiveType),
+          std::move(requiredSubfields),
+          std::move(extractions),
+          columnParseParameters.partitionDateValueFormat ==
+              ColumnParseParameters::kDaysSinceEpoch,
+          std::move(postProcessor)) {
+  if (this->extractions().empty()) {
     // No extractions: dataType and hiveType must match (existing behavior).
     VELOX_USER_CHECK(
-        dataType_->equivalent(*hiveType_),
+        this->dataType()->equivalent(*this->hiveType()),
         "data type {} and hive type {} do not match",
-        dataType_->toString(),
-        hiveType_->toString());
+        this->dataType()->toString(),
+        this->hiveType()->toString());
   } else {
     // Validate each extraction chain against hiveType and verify output types.
-    for (const auto& extraction : extractions_) {
-      auto derivedType =
-          deriveExtractionOutputType(hiveType_, extraction.chain);
+    for (const auto& extraction : this->extractions()) {
+      auto derivedType = connector::deriveExtractionOutputType(
+          this->hiveType(), extraction.chain);
       VELOX_USER_CHECK(
           derivedType->equivalent(*extraction.dataType),
           "Extraction '{}' declared output type {} does not match "
@@ -157,63 +61,50 @@ HiveColumnHandle::HiveColumnHandle(
 }
 
 folly::dynamic HiveColumnHandle::serialize() const {
-  folly::dynamic obj = ColumnHandle::serializeBase("HiveColumnHandle");
-  obj["hiveColumnHandleName"] = name_;
-  obj["columnType"] = columnTypeName(columnType_);
-  obj["dataType"] = dataType_->serialize();
-  obj["hiveType"] = hiveType_->serialize();
-  folly::dynamic requiredSubfields = folly::dynamic::array;
-  for (const auto& subfield : requiredSubfields_) {
-    requiredSubfields.push_back(subfield.toString());
-  }
-  obj["requiredSubfields"] = requiredSubfields;
-  if (!extractions_.empty()) {
-    folly::dynamic extractions = folly::dynamic::array;
-    for (const auto& extraction : extractions_) {
-      extractions.push_back(serializeNamedExtraction(extraction));
-    }
-    obj["extractions"] = extractions;
-  }
+  folly::dynamic obj = serializeFileFields("HiveColumnHandle");
+  obj["hiveColumnHandleName"] = name();
+  obj["dataType"] = dataType()->serialize();
+  obj["hiveType"] = hiveType()->serialize();
   return obj;
 }
 
-std::string HiveColumnHandle::toString() const {
+std::string HiveColumnHandle::toStringFields() const {
   std::ostringstream out;
   out << fmt::format(
-      "HiveColumnHandle [name: {}, columnType: {}, dataType: {},",
-      name_,
-      columnTypeName(columnType_),
-      dataType_->toString());
+      "columnType: {}, dataType: {},",
+      columnTypeName(columnType()),
+      dataType()->toString());
   out << " requiredSubfields: [";
-  for (const auto& subfield : requiredSubfields_) {
+  for (const auto& subfield : requiredSubfields()) {
     out << " " << subfield.toString();
   }
   out << " ]";
-  if (!extractions_.empty()) {
+  if (!extractions().empty()) {
     out << ", extractions: [";
-    for (size_t i = 0; i < extractions_.size(); ++i) {
+    for (size_t i = 0; i < extractions().size(); ++i) {
       if (i > 0) {
         out << ", ";
       }
-      const auto& extraction = extractions_[i];
+      const auto& extraction = extractions()[i];
       out << "{outputName: " << extraction.outputName << ", chain: [";
       for (size_t j = 0; j < extraction.chain.size(); ++j) {
         if (j > 0) {
           out << ", ";
         }
         const auto& elem = *extraction.chain[j];
-        out << extractionStepName(elem.step());
-        if (elem.step() == ExtractionStep::kStructField) {
+        out << connector::extractionStepName(elem.step());
+        if (elem.step() == connector::ExtractionStep::kStructField) {
           out << "("
-              << static_cast<const StructFieldExtractionPathElement&>(elem)
+              << static_cast<
+                     const connector::StructFieldExtractionPathElement&>(elem)
                      .fieldName()
               << ")";
         }
-        if (elem.step() == ExtractionStep::kMapKeyFilter) {
+        if (elem.step() == connector::ExtractionStep::kMapKeyFilter) {
           out << "(";
-          if (auto* strFilter =
-                  dynamic_cast<const StringMapKeyFilterExtractionPathElement*>(
-                      &elem)) {
+          if (auto* strFilter = dynamic_cast<
+                  const connector::StringMapKeyFilterExtractionPathElement*>(
+                  &elem)) {
             for (size_t k = 0; k < strFilter->filterKeys().size(); ++k) {
               if (k > 0) {
                 out << ", ";
@@ -221,9 +112,9 @@ std::string HiveColumnHandle::toString() const {
               out << "\"" << strFilter->filterKeys()[k] << "\"";
             }
           } else if (
-              auto* intFilter =
-                  dynamic_cast<const IntMapKeyFilterExtractionPathElement*>(
-                      &elem)) {
+              auto* intFilter = dynamic_cast<
+                  const connector::IntMapKeyFilterExtractionPathElement*>(
+                  &elem)) {
             for (size_t k = 0; k < intFilter->filterKeys().size(); ++k) {
               if (k > 0) {
                 out << ", ";
@@ -238,29 +129,22 @@ std::string HiveColumnHandle::toString() const {
     }
     out << "]";
   }
-  out << "]";
   return out.str();
+}
+
+std::string HiveColumnHandle::toString() const {
+  return fmt::format(
+      "HiveColumnHandle [name: {}, {}]", name(), toStringFields());
 }
 
 ColumnHandlePtr HiveColumnHandle::create(const folly::dynamic& obj) {
   auto name = obj["hiveColumnHandleName"].asString();
-  auto columnType = columnTypeFromName(obj["columnType"].asString());
   auto dataType = ISerializable::deserialize<Type>(obj["dataType"]);
   auto hiveType = ISerializable::deserialize<Type>(obj["hiveType"]);
-
-  const auto& arr = obj["requiredSubfields"];
+  ColumnType columnType;
   std::vector<common::Subfield> requiredSubfields;
-  requiredSubfields.reserve(arr.size());
-  for (auto& s : arr) {
-    requiredSubfields.emplace_back(s.asString());
-  }
-
-  std::vector<NamedExtraction> extractions;
-  if (auto it = obj.find("extractions"); it != obj.items().end()) {
-    for (const auto& extraction : it->second) {
-      extractions.push_back(deserializeNamedExtraction(extraction));
-    }
-  }
+  std::vector<connector::NamedExtraction> extractions;
+  deserializeFileFields(obj, columnType, requiredSubfields, extractions);
 
   return std::make_shared<HiveColumnHandle>(
       name,
@@ -286,19 +170,29 @@ HiveTableHandle::HiveTableHandle(
     const std::unordered_map<std::string, std::string>& tableParameters,
     std::vector<HiveColumnHandlePtr> filterColumnHandles,
     double sampleRate,
-    std::string dbName)
-    : FileTableHandle(std::move(connectorId)),
-      tableName_(tableName),
-      subfieldFilters_(std::move(subfieldFilters)),
-      remainingFilter_(remainingFilter),
-      sampleRate_(sampleRate),
-      dataColumns_(dataColumns),
+    std::string dbName,
+    std::vector<int32_t> dataColumnFieldIds,
+    HiveBucketPropertyPtr bucketProperty)
+    : connector::FileTableHandle(
+          std::move(connectorId),
+          tableName,
+          std::move(subfieldFilters),
+          remainingFilter,
+          dataColumns,
+          tableParameters,
+          sampleRate,
+          std::move(dbName)),
+      dataColumnFieldIds_(std::move(dataColumnFieldIds)),
       indexColumns_(std::move(indexColumns)),
-      tableParameters_(tableParameters),
       filterColumnHandles_(std::move(filterColumnHandles)),
-      dbName_(std::move(dbName)) {
-  VELOX_CHECK_GT(sampleRate_, 0.0, "Sample rate must be positive");
-  VELOX_CHECK_LE(sampleRate_, 1.0, "Sample rate must not exceed 1.0");
+      bucketProperty_(std::move(bucketProperty)) {
+  VELOX_CHECK_GT(sampleRate, 0.0, "Sample rate must be positive");
+  VELOX_CHECK_LE(sampleRate, 1.0, "Sample rate must not exceed 1.0");
+  VELOX_CHECK(
+      dataColumnFieldIds_.empty() ||
+          (dataColumns != nullptr &&
+           dataColumnFieldIds_.size() == dataColumns->size()),
+      "Data column field IDs must be empty or aligned to data columns");
 }
 
 HiveTableHandle::HiveTableHandle(
@@ -323,11 +217,11 @@ HiveTableHandle::HiveTableHandle(
 
 std::string HiveTableHandle::toString() const {
   std::stringstream out;
-  out << "table: " << tableName_;
-  if (!subfieldFilters_.empty()) {
+  out << "table: " << tableName();
+  if (!subfieldFilters().empty()) {
     // Sort filters by subfield for deterministic output.
     std::map<std::string, common::Filter*> orderedFilters;
-    for (const auto& [field, filter] : subfieldFilters_) {
+    for (const auto& [field, filter] : subfieldFilters()) {
       orderedFilters[field.toString()] = filter.get();
     }
     out << ", range filters: [";
@@ -341,18 +235,18 @@ std::string HiveTableHandle::toString() const {
     }
     out << "]";
   }
-  if (sampleRate_ < 1.0) {
-    out << ", sample rate: " << sampleRate_;
+  if (sampleRate() < 1.0) {
+    out << ", sample rate: " << sampleRate();
   }
-  if (remainingFilter_) {
-    out << ", remaining filter: (" << remainingFilter_->toString() << ")";
+  if (remainingFilter()) {
+    out << ", remaining filter: (" << remainingFilter()->toString() << ")";
   }
-  if (dataColumns_) {
-    out << ", data columns: " << dataColumns_->toString();
+  if (dataColumns()) {
+    out << ", data columns: " << dataColumns()->toString();
   }
-  if (!tableParameters_.empty()) {
+  if (!tableParameters().empty()) {
     std::map<std::string, std::string> orderedTableParameters{
-        tableParameters_.begin(), tableParameters_.end()};
+        tableParameters().begin(), tableParameters().end()};
     out << ", table parameters: [";
     bool firstParam = true;
     for (const auto& param : orderedTableParameters) {
@@ -377,45 +271,34 @@ std::string HiveTableHandle::toString() const {
     }
     out << "]";
   }
+  if (bucketProperty_) {
+    out << ", bucket property: " << bucketProperty_->toString();
+  }
   return out.str();
 }
 
-folly::dynamic HiveTableHandle::serialize() const {
-  folly::dynamic obj = ConnectorTableHandle::serializeBase("HiveTableHandle");
-  obj["tableName"] = tableName_;
+folly::dynamic HiveTableHandle::serializeHiveFields(
+    std::string_view typeName) const {
+  folly::dynamic obj = serializeFileFields(typeName);
 
-  folly::dynamic subfieldFilters = folly::dynamic::array;
-  for (const auto& [subfield, filter] : subfieldFilters_) {
-    folly::dynamic pair = folly::dynamic::object;
-    pair["subfield"] = subfield.toString();
-    pair["filter"] = filter->serialize();
-    subfieldFilters.push_back(pair);
+  if (dataColumns()) {
+    obj["dataColumns"] = dataColumns()->serialize();
   }
 
-  obj["subfieldFilters"] = subfieldFilters;
-  if (remainingFilter_) {
-    obj["remainingFilter"] = remainingFilter_->serialize();
+  if (!dataColumnFieldIds_.empty()) {
+    folly::dynamic dataColumnFieldIds = folly::dynamic::array;
+    for (const auto fieldId : dataColumnFieldIds_) {
+      dataColumnFieldIds.push_back(fieldId);
+    }
+    obj["dataColumnFieldIds"] = std::move(dataColumnFieldIds);
   }
 
-  if (sampleRate_ < 1.0) {
-    obj["sampleRate"] = sampleRate_;
-  }
-
-  if (dataColumns_) {
-    obj["dataColumns"] = dataColumns_->serialize();
-  }
   folly::dynamic tableParameters = folly::dynamic::object;
-  for (const auto& param : tableParameters_) {
+  for (const auto& param : this->tableParameters()) {
     tableParameters[param.first] = param.second;
   }
   obj["tableParameters"] = tableParameters;
-  if (!filterColumnHandles_.empty()) {
-    folly::dynamic filterColumnHandles = folly::dynamic::array;
-    for (const auto& handle : filterColumnHandles_) {
-      filterColumnHandles.push_back(handle->serialize());
-    }
-    obj["filterColumnHandles"] = filterColumnHandles;
-  }
+
   if (!indexColumns_.empty()) {
     folly::dynamic indexColumns = folly::dynamic::array;
     for (const auto& column : indexColumns_) {
@@ -424,74 +307,115 @@ folly::dynamic HiveTableHandle::serialize() const {
     obj["indexColumns"] = indexColumns;
   }
 
-  if (!dbName_.empty()) {
-    obj["dbName"] = dbName_;
+  return obj;
+}
+
+folly::dynamic HiveTableHandle::serialize() const {
+  auto obj = serializeHiveFields("HiveTableHandle");
+  if (bucketProperty_) {
+    obj["bucketProperty"] = bucketProperty_->serialize();
+  }
+  return obj;
+}
+
+// static
+void HiveTableHandle::deserializeHiveFields(
+    const folly::dynamic& obj,
+    void* context,
+    std::string& connectorId,
+    std::string& tableName,
+    common::SubfieldFilters& subfieldFilters,
+    core::TypedExprPtr& remainingFilter,
+    double& sampleRate,
+    RowTypePtr& dataColumns,
+    std::unordered_map<std::string, std::string>& tableParameters,
+    std::vector<HiveColumnHandlePtr>& filterColumnHandles,
+    std::vector<std::string>& indexColumns,
+    std::string& dbName,
+    std::vector<int32_t>& dataColumnFieldIds) {
+  // Hive represents an absent remaining filter by omitting the field.
+  if (auto it = obj.find("remainingFilter"); it != obj.items().end()) {
+    VELOX_USER_CHECK(
+        !it->second.isNull(),
+        "Hive remaining filter must not be null when present");
   }
 
-  return obj;
+  std::vector<connector::FileColumnHandlePtr> fileFilterColumns;
+  deserializeFileFields(
+      obj,
+      context,
+      connectorId,
+      tableName,
+      subfieldFilters,
+      remainingFilter,
+      fileFilterColumns,
+      sampleRate,
+      dbName);
+  for (const auto& handle : fileFilterColumns) {
+    filterColumnHandles.push_back(
+        std::dynamic_pointer_cast<const HiveColumnHandle>(handle));
+  }
+
+  if (auto it = obj.find("dataColumns"); it != obj.items().end()) {
+    dataColumns = ISerializable::deserialize<RowType>(it->second, context);
+  }
+
+  if (auto it = obj.find("dataColumnFieldIds"); it != obj.items().end()) {
+    dataColumnFieldIds.reserve(it->second.size());
+    for (const auto& fieldId : it->second) {
+      dataColumnFieldIds.push_back(fieldId.asInt());
+    }
+  }
+
+  const auto& tableParametersObj = obj["tableParameters"];
+  for (const auto& key : tableParametersObj.keys()) {
+    tableParameters.emplace(key.asString(), tableParametersObj[key].asString());
+  }
+
+  if (auto it = obj.find("indexColumns"); it != obj.items().end()) {
+    for (const auto& col : it->second) {
+      indexColumns.push_back(col.asString());
+    }
+  }
 }
 
 ConnectorTableHandlePtr HiveTableHandle::create(
     const folly::dynamic& obj,
     void* context) {
-  auto connectorId = obj["connectorId"].asString();
-  auto tableName = obj["tableName"].asString();
-
-  core::TypedExprPtr remainingFilter;
-  if (auto it = obj.find("remainingFilter"); it != obj.items().end()) {
-    remainingFilter =
-        ISerializable::deserialize<core::ITypedExpr>(it->second, context);
-  }
-
-  common::SubfieldFilters subfieldFilters;
-  folly::dynamic subfieldFiltersObj = obj["subfieldFilters"];
-  for (const auto& subfieldFilter : subfieldFiltersObj) {
-    common::Subfield subfield(subfieldFilter["subfield"].asString());
-    auto filter =
-        ISerializable::deserialize<common::Filter>(subfieldFilter["filter"]);
-    subfieldFilters[common::Subfield(std::move(subfield.path()))] =
-        filter->clone();
-  }
-
-  double sampleRate = 1.0;
-  if (obj.count("sampleRate")) {
-    sampleRate = obj["sampleRate"].asDouble();
-  }
-
-  RowTypePtr dataColumns;
-  if (auto it = obj.find("dataColumns"); it != obj.items().end()) {
-    dataColumns = ISerializable::deserialize<RowType>(it->second, context);
-  }
-
-  std::unordered_map<std::string, std::string> tableParameters{};
-  const auto& tableParametersObj = obj["tableParameters"];
-  for (const auto& key : tableParametersObj.keys()) {
-    const auto& value = tableParametersObj[key];
-    tableParameters.emplace(key.asString(), value.asString());
-  }
-
-  std::vector<HiveColumnHandlePtr> filterColumnHandles;
-  if (auto it = obj.find("filterColumnHandles"); it != obj.items().end()) {
-    for (const auto& handle : it->second) {
-      filterColumnHandles.push_back(
-          ISerializable::deserialize<HiveColumnHandle>(handle, context));
-    }
-  }
-
-  std::vector<std::string> indexColumns;
-  if (auto it = obj.find("indexColumns"); it != obj.items().end()) {
-    for (const auto& column : it->second) {
-      indexColumns.push_back(column.asString());
-    }
-  }
-
+  std::string connectorId;
+  std::string tableName;
   std::string dbName;
-  if (auto it = obj.find("dbName"); it != obj.items().end()) {
-    dbName = it->second.asString();
+  common::SubfieldFilters subfieldFilters;
+  core::TypedExprPtr remainingFilter;
+  double sampleRate{1.0};
+  RowTypePtr dataColumns;
+  std::unordered_map<std::string, std::string> tableParameters;
+  std::vector<HiveColumnHandlePtr> filterColumnHandles;
+  std::vector<std::string> indexColumns;
+  std::vector<int32_t> dataColumnFieldIds;
+
+  deserializeHiveFields(
+      obj,
+      context,
+      connectorId,
+      tableName,
+      subfieldFilters,
+      remainingFilter,
+      sampleRate,
+      dataColumns,
+      tableParameters,
+      filterColumnHandles,
+      indexColumns,
+      dbName,
+      dataColumnFieldIds);
+
+  HiveBucketPropertyPtr bucketProperty;
+  if (auto it = obj.find("bucketProperty"); it != obj.items().end()) {
+    bucketProperty = HiveBucketProperty::deserialize(it->second, context);
   }
 
   return std::make_shared<const HiveTableHandle>(
-      connectorId,
+      std::move(connectorId),
       tableName,
       std::move(subfieldFilters),
       remainingFilter,
@@ -500,7 +424,9 @@ ConnectorTableHandlePtr HiveTableHandle::create(
       tableParameters,
       std::move(filterColumnHandles),
       sampleRate,
-      std::move(dbName));
+      std::move(dbName),
+      std::move(dataColumnFieldIds),
+      std::move(bucketProperty));
 }
 
 void HiveTableHandle::registerSerDe() {

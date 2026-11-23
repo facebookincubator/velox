@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/FileConnectorUtil.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
 
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/io/IoStatistics.h"
-#include "velox/connectors/hive/FileConfig.h"
-#include "velox/connectors/hive/FileConnectorSplit.h"
+#include "velox/connectors/common/FileConfig.h"
+#include "velox/connectors/common/FileConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/orc/reader/OrcReader.h"
@@ -52,40 +52,40 @@ class FileConnectorUtilTest : public exec::test::HiveConnectorTestBase {
     QueryCtxHolder holder;
     holder.sessionProperties =
         std::make_shared<config::ConfigBase>(std::move(sessionProps));
-    holder.ctx = std::make_unique<ConnectorQueryCtx>(
-        pool_.get(),
-        pool_.get(),
-        holder.sessionProperties.get(),
-        nullptr,
-        common::PrefixSortConfig(),
-        nullptr,
-        nullptr,
-        "query.FileConnectorUtilTest",
-        "task.FileConnectorUtilTest",
-        "planNodeId.FileConnectorUtilTest",
-        0,
-        "");
+    holder.ctx = ConnectorQueryCtx::Builder()
+                     .operatorPool(pool_.get())
+                     .connectorPool(pool_.get())
+                     .sessionProperties(holder.sessionProperties.get())
+                     .queryId("query.FileConnectorUtilTest")
+                     .taskId("task.FileConnectorUtilTest")
+                     .planNodeId("planNodeId.FileConnectorUtilTest")
+                     .build();
     return holder;
   }
 
-  std::shared_ptr<const hive::FileConfig> makeFileConfig(
+  std::shared_ptr<const connector::FileConfig> makeFileConfig(
       std::unordered_map<std::string, std::string> props = {}) {
-    return std::make_shared<hive::FileConfig>(
+    return std::make_shared<connector::FileConfig>(
         std::make_shared<config::ConfigBase>(std::move(props)), "hive.");
   }
 
-  std::shared_ptr<const hive::FileConnectorSplit> makeSplit(
+  std::shared_ptr<const connector::FileConnectorSplit> makeSplit(
       dwio::common::FileFormat format = dwio::common::FileFormat::DWRF,
       const std::string& path = "/tmp/testfile",
-      bool cacheable = true) {
-    return std::make_shared<hive::FileConnectorSplit>(
+      bool cacheable = true,
+      std::optional<dwio::common::ColumnMappingMode> columnMappingMode =
+          std::nullopt) {
+    return std::make_shared<connector::FileConnectorSplit>(
         "testConnectorId",
         path,
         format,
         /*_start=*/0,
         /*_length=*/std::numeric_limits<uint64_t>::max(),
         /*splitWeight=*/0,
-        cacheable);
+        cacheable,
+        std::nullopt,
+        std::unordered_map<std::string, std::optional<std::string>>{},
+        columnMappingMode);
   }
 
   std::string writeDataFile(const RowVectorPtr& data) {
@@ -126,7 +126,7 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
-    hive::configureReaderOptions(
+    connector::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
         /*fileSchema=*/nullptr,
@@ -136,20 +136,19 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
 
     EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::DWRF);
     EXPECT_FALSE(readerOptions.fileColumnNamesReadAsLowerCase());
-    EXPECT_EQ(
-        readerOptions.columnMappingMode(),
-        dwio::common::ColumnMappingMode::kPosition);
   }
 
-  // Test with ORC format and useColumnNames enabled via session.
+  // Test with ORC format and reader-specific options enabled via session.
   {
     auto holder = makeConnectorQueryCtx(
-        {{hive::FileConfig::kOrcUseColumnNamesSession, "true"}});
+        {{connector::FileConfig::kUseColumnNamesSession, "true"},
+         {"orc_footer_speculative_io_size", std::to_string(128UL << 10)},
+         {connector::FileConfig::kMaxCoalescedDistanceSession, "3MB"}});
     auto split = makeSplit(dwio::common::FileFormat::ORC);
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
-    hive::configureReaderOptions(
+    connector::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
         /*fileSchema=*/nullptr,
@@ -161,6 +160,55 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
     EXPECT_EQ(
         readerOptions.columnMappingMode(),
         dwio::common::ColumnMappingMode::kName);
+    EXPECT_EQ(readerOptions.maxCoalesceDistance(), 3 << 20);
+    EXPECT_EQ(readerOptions.footerSpeculativeIoSize(), 128UL << 10);
+  }
+
+  // Split-level column mapping mode overrides the shared session property.
+  {
+    auto holder = makeConnectorQueryCtx(
+        {{connector::FileConfig::kUseColumnNamesSession, "true"}});
+    auto split = makeSplit(
+        dwio::common::FileFormat::ORC,
+        "/tmp/testfile",
+        true,
+        dwio::common::ColumnMappingMode::kPosition);
+    dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    connector::configureReaderOptions(
+        fileConfig,
+        holder.ctx.get(),
+        /*fileSchema=*/nullptr,
+        split,
+        /*tableParameters=*/{},
+        readerOptions);
+
+    EXPECT_EQ(
+        readerOptions.columnMappingMode(),
+        dwio::common::ColumnMappingMode::kPosition);
+  }
+
+  // Parquet field-id matching is only valid for Parquet files.
+  {
+    auto holder = makeConnectorQueryCtx();
+    auto split = makeSplit(
+        dwio::common::FileFormat::ORC,
+        "/tmp/testfile",
+        true,
+        dwio::common::ColumnMappingMode::kParquetFieldId);
+    dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    VELOX_ASSERT_THROW(
+        connector::configureReaderOptions(
+            fileConfig,
+            holder.ctx.get(),
+            /*fileSchema=*/nullptr,
+            split,
+            /*tableParameters=*/{},
+            readerOptions),
+        "not supported for file format orc");
   }
 
   // Test format mismatch throws.
@@ -172,7 +220,7 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
     readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setFileFormat(dwio::common::FileFormat::PARQUET);
     VELOX_ASSERT_THROW(
-        hive::configureReaderOptions(
+        connector::configureReaderOptions(
             fileConfig,
             holder.ctx.get(),
             /*fileSchema=*/nullptr,
@@ -193,14 +241,14 @@ TEST_F(FileConnectorUtilTest, cacheMetadataRequiresCacheableSplit) {
   // cache_metadata=true, cacheable split => cacheMetadata=true.
   {
     auto holder = makeConnectorQueryCtx(
-        {{hive::FileConfig::kCacheMetadataSession, "true"},
-         {hive::FileConfig::kCacheIndexSession, "true"}});
+        {{connector::FileConfig::kCacheMetadataSession, "true"},
+         {connector::FileConfig::kCacheIndexSession, "true"}});
     auto split = makeSplit(
         dwio::common::FileFormat::NIMBLE, "/tmp/test", /*cacheable=*/true);
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
-    hive::configureReaderOptions(
+    connector::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
         /*fileSchema=*/nullptr,
@@ -214,14 +262,14 @@ TEST_F(FileConnectorUtilTest, cacheMetadataRequiresCacheableSplit) {
   // cache_metadata=true, non-cacheable split => cacheMetadata=false.
   {
     auto holder = makeConnectorQueryCtx(
-        {{hive::FileConfig::kCacheMetadataSession, "true"},
-         {hive::FileConfig::kCacheIndexSession, "true"}});
+        {{connector::FileConfig::kCacheMetadataSession, "true"},
+         {connector::FileConfig::kCacheIndexSession, "true"}});
     auto split = makeSplit(
         dwio::common::FileFormat::NIMBLE, "/tmp/test", /*cacheable=*/false);
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
-    hive::configureReaderOptions(
+    connector::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
         /*fileSchema=*/nullptr,
@@ -240,7 +288,7 @@ TEST_F(FileConnectorUtilTest, cacheMetadataRequiresCacheableSplit) {
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
-    hive::configureReaderOptions(
+    connector::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
         /*fileSchema=*/nullptr,
@@ -255,14 +303,14 @@ TEST_F(FileConnectorUtilTest, cacheMetadataRequiresCacheableSplit) {
   // in-process cache, not AsyncDataCache.
   {
     auto holder = makeConnectorQueryCtx(
-        {{hive::FileConfig::kPinMetadataSession, "true"},
-         {hive::FileConfig::kPinIndexSession, "true"}});
+        {{connector::FileConfig::kPinMetadataSession, "true"},
+         {connector::FileConfig::kPinIndexSession, "true"}});
     auto split = makeSplit(
         dwio::common::FileFormat::NIMBLE, "/tmp/test", /*cacheable=*/false);
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
-    hive::configureReaderOptions(
+    connector::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
         /*fileSchema=*/nullptr,
@@ -282,7 +330,7 @@ TEST_F(FileConnectorUtilTest, configureReaderOptionsWithoutReaderFactory) {
   readerOptions.setDataIoStats(dataIoStats_);
   readerOptions.setMetadataIoStats(metadataIoStats_);
 
-  hive::configureReaderOptions(
+  connector::configureReaderOptions(
       fileConfig,
       holder.ctx.get(),
       /*fileSchema=*/nullptr,
@@ -294,6 +342,46 @@ TEST_F(FileConnectorUtilTest, configureReaderOptionsWithoutReaderFactory) {
   EXPECT_EQ(readerOptions.formatSpecificOptions(), nullptr);
 }
 
+TEST_F(FileConnectorUtilTest, configureReaderOptionsNimbleLazyFileStats) {
+  auto fileConfig = makeFileConfig();
+  auto split = makeSplit(dwio::common::FileFormat::NIMBLE);
+
+  // Set in the session.
+  {
+    auto holder = makeConnectorQueryCtx(
+        {{connector::FileConfig::kNimbleLazyFileStatsSession, "true"}});
+    dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    connector::configureReaderOptions(
+        fileConfig,
+        holder.ctx.get(),
+        /*fileSchema=*/nullptr,
+        split,
+        /*tableParameters=*/{},
+        readerOptions);
+
+    EXPECT_TRUE(readerOptions.nimbleLazyFileStats());
+  }
+
+  // Absent: defaults to false.
+  {
+    auto holder = makeConnectorQueryCtx();
+    dwio::common::ReaderOptions readerOptions(pool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    connector::configureReaderOptions(
+        fileConfig,
+        holder.ctx.get(),
+        /*fileSchema=*/nullptr,
+        split,
+        /*tableParameters=*/{},
+        readerOptions);
+
+    EXPECT_FALSE(readerOptions.nimbleLazyFileStats());
+  }
+}
+
 TEST_F(FileConnectorUtilTest, configureRowReaderOptions) {
   auto holder = makeConnectorQueryCtx();
   auto fileConfig = makeFileConfig();
@@ -302,7 +390,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptions) {
   auto rowType = ROW({"c0"}, {BIGINT()});
 
   dwio::common::RowReaderOptions rowReaderOptions;
-  hive::configureRowReaderOptions(
+  connector::configureRowReaderOptions(
       /*tableParameters=*/{},
       scanSpec,
       /*metadataFilter=*/nullptr,
@@ -318,19 +406,22 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptions) {
   EXPECT_EQ(rowReaderOptions.length(), std::numeric_limits<uint64_t>::max());
 }
 
-TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleDictVectorFlags) {
+TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
   auto fileConfig = makeFileConfig();
   auto split = makeSplit(dwio::common::FileFormat::NIMBLE);
   auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
   auto rowType = ROW({"c0"}, {BIGINT()});
 
-  // Both session flags enabled => both RowReaderOptions flags true.
+  // Session flags enabled => RowReaderOptions flags true.
   {
     auto holder = makeConnectorQueryCtx(
-        {{hive::FileConfig::kNimbleStringDecoderZeroCopySession, "true"},
-         {hive::FileConfig::kNimblePreserveDictionaryEncodingSession, "true"}});
+        {{connector::FileConfig::kNimbleFsstDecodeRepeatedPayloadsSession,
+          "true"},
+         {connector::FileConfig::kNimblePreserveDictionaryEncodingSession,
+          "true"},
+         {connector::FileConfig::kNimbleDictionaryAwareReadsSession, "true"}});
     dwio::common::RowReaderOptions rowReaderOptions;
-    hive::configureRowReaderOptions(
+    connector::configureRowReaderOptions(
         /*tableParameters=*/{},
         scanSpec,
         /*metadataFilter=*/nullptr,
@@ -341,15 +432,17 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleDictVectorFlags) {
         /*ioExecutor=*/nullptr,
         rowReaderOptions);
 
-    EXPECT_TRUE(rowReaderOptions.stringDecoderZeroCopy());
+    EXPECT_TRUE(rowReaderOptions.nimbleFsstDecodeRepeatedPayloads());
+    EXPECT_FALSE(rowReaderOptions.nimbleScanFastPath());
     EXPECT_TRUE(rowReaderOptions.nimblePreserveDictionaryEncoding());
+    EXPECT_TRUE(rowReaderOptions.nimbleDictionaryAwareReads());
   }
 
-  // Keys absent => both flags fall back to their default (false).
+  // Keys absent => flags fall back to their default (false).
   {
     auto holder = makeConnectorQueryCtx();
     dwio::common::RowReaderOptions rowReaderOptions;
-    hive::configureRowReaderOptions(
+    connector::configureRowReaderOptions(
         /*tableParameters=*/{},
         scanSpec,
         /*metadataFilter=*/nullptr,
@@ -360,8 +453,9 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleDictVectorFlags) {
         /*ioExecutor=*/nullptr,
         rowReaderOptions);
 
-    EXPECT_FALSE(rowReaderOptions.stringDecoderZeroCopy());
+    EXPECT_FALSE(rowReaderOptions.nimbleFsstDecodeRepeatedPayloads());
     EXPECT_FALSE(rowReaderOptions.nimblePreserveDictionaryEncoding());
+    EXPECT_FALSE(rowReaderOptions.nimbleDictionaryAwareReads());
   }
 }
 
@@ -377,7 +471,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSkipRows) {
   };
 
   dwio::common::RowReaderOptions rowReaderOptions;
-  hive::configureRowReaderOptions(
+  connector::configureRowReaderOptions(
       tableParameters,
       scanSpec,
       /*metadataFilter=*/nullptr,
@@ -394,7 +488,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSkipRows) {
 TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSplitRange) {
   auto holder = makeConnectorQueryCtx();
   auto fileConfig = makeFileConfig();
-  auto split = std::make_shared<hive::FileConnectorSplit>(
+  auto split = std::make_shared<connector::FileConnectorSplit>(
       "testConnectorId",
       "/tmp/testfile",
       dwio::common::FileFormat::DWRF,
@@ -404,7 +498,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSplitRange) {
   auto rowType = ROW({"c0"}, {BIGINT()});
 
   dwio::common::RowReaderOptions rowReaderOptions;
-  hive::configureRowReaderOptions(
+  connector::configureRowReaderOptions(
       /*tableParameters=*/{},
       scanSpec,
       /*metadataFilter=*/nullptr,
@@ -417,12 +511,55 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSplitRange) {
 
   EXPECT_EQ(rowReaderOptions.offset(), 100);
   EXPECT_EQ(rowReaderOptions.length(), 5000);
+  EXPECT_FALSE(rowReaderOptions.splitRowRange().has_value());
+}
+
+TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSplitRowRange) {
+  auto holder = makeConnectorQueryCtx();
+  auto fileConfig = makeFileConfig();
+  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+  auto rowType = ROW({"c0"}, {BIGINT()});
+  const dwio::common::SplitRowRange splitRowRange{
+      .firstRow = 8'000, .numRows = 8'000};
+
+  auto configure = [&](dwio::common::FileFormat fileFormat) {
+    auto split = std::make_shared<connector::FileConnectorSplit>(
+        "testConnectorId", "/tmp/testfile", fileFormat);
+    split->splitRowRange = splitRowRange;
+    dwio::common::RowReaderOptions rowReaderOptions;
+    connector::configureRowReaderOptions(
+        /*tableParameters=*/{},
+        scanSpec,
+        /*metadataFilter=*/nullptr,
+        rowType,
+        split,
+        fileConfig,
+        holder.ctx->sessionProperties(),
+        /*ioExecutor=*/nullptr,
+        rowReaderOptions);
+    return rowReaderOptions;
+  };
+
+  EXPECT_EQ(
+      configure(dwio::common::FileFormat::NIMBLE).splitRowRange(),
+      splitRowRange);
+  EXPECT_EQ(
+      configure(dwio::common::FileFormat::DWRF).splitRowRange(), splitRowRange);
+  EXPECT_EQ(
+      configure(dwio::common::FileFormat::ORC).splitRowRange(), splitRowRange);
+  EXPECT_EQ(
+      configure(dwio::common::FileFormat::PARQUET).splitRowRange(),
+      splitRowRange);
+  EXPECT_EQ(
+      configure(dwio::common::FileFormat::TEXT).splitRowRange(), splitRowRange);
+  VELOX_ASSERT_THROW(
+      configure(dwio::common::FileFormat::JSON),
+      "Split row ranges are only supported for Nimble, DWRF, ORC, Parquet and text files");
 }
 
 TEST_F(FileConnectorUtilTest, testFiltersNoFilters) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(100));
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 
@@ -430,7 +567,7 @@ TEST_F(FileConnectorUtilTest, testFiltersNoFilters) {
   scanSpec->addField("c0", 0);
 
   EXPECT_TRUE(
-      hive::testFilters(
+      connector::testFilters(
           scanSpec.get(),
           reader.get(),
           filePath,
@@ -441,8 +578,7 @@ TEST_F(FileConnectorUtilTest, testFiltersNoFilters) {
 
 TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyPasses) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(100));
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 
@@ -462,13 +598,13 @@ TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyPasses) {
       hive::HiveColumnHandle::ColumnType::kPartitionKey,
       VARCHAR(),
       VARCHAR());
-  std::unordered_map<std::string, hive::FileColumnHandlePtr>
+  std::unordered_map<std::string, connector::FileColumnHandlePtr>
       partitionKeysHandle = {
           {"ds", dsHandle},
       };
 
   EXPECT_TRUE(
-      hive::testFilters(
+      connector::testFilters(
           scanSpec.get(),
           reader.get(),
           filePath,
@@ -479,8 +615,7 @@ TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyPasses) {
 
 TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyFails) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(100));
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 
@@ -500,13 +635,107 @@ TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyFails) {
       hive::HiveColumnHandle::ColumnType::kPartitionKey,
       VARCHAR(),
       VARCHAR());
-  std::unordered_map<std::string, hive::FileColumnHandlePtr>
+  std::unordered_map<std::string, connector::FileColumnHandlePtr>
       partitionKeysHandle = {
           {"ds", dsHandle},
       };
 
   EXPECT_FALSE(
-      hive::testFilters(
+      connector::testFilters(
+          scanSpec.get(),
+          reader.get(),
+          filePath,
+          partitionKeys,
+          partitionKeysHandle,
+          /*asLocalTime=*/false));
+}
+
+// A constant decides the filter even when the data file carries the column.
+// The reader built from the scan spec has no 'typeWithId()' subtree for it, so
+// reading its statistics dereferences null.
+TEST_F(FileConnectorUtilTest, testFiltersConstantOverridingFileColumn) {
+  auto batch = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(100));
+  auto filePath = writeDataFile(batch);
+
+  // Tests 'filter' on a scan that returns 'constant' for 'c0'.
+  auto keepsSplit = [&](const VectorPtr& constant,
+                        std::shared_ptr<common::Filter> filter) {
+    auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+    auto* child = scanSpec->addField("c0", 0);
+    child->setConstantValue(constant);
+    child->setFilter(std::move(filter));
+
+    dwio::common::ReaderOptions readerOpts(pool_.get());
+    readerOpts.setFileFormat(dwio::common::FileFormat::DWRF);
+    readerOpts.setScanSpec(scanSpec);
+    auto reader = dwrf::DwrfReader::create(
+        std::make_unique<dwio::common::BufferedInput>(
+            std::make_shared<LocalReadFile>(filePath), readerOpts.memoryPool()),
+        readerOpts);
+
+    return connector::testFilters(
+        scanSpec.get(),
+        reader.get(),
+        filePath,
+        /*partitionKeys=*/{},
+        /*partitionKeysHandle=*/{},
+        /*asLocalTime=*/false);
+  };
+
+  // The file holds 0 through 99: statistics would keep the split for both.
+  auto constant = makeConstant<int64_t>(1'000, 1);
+  EXPECT_FALSE(keepsSplit(
+      constant, std::make_shared<common::BigintRange>(0, 99, false)));
+  EXPECT_TRUE(keepsSplit(
+      constant, std::make_shared<common::BigintRange>(1'000, 1'000, false)));
+
+  // A null constant decides from testNull() alone. The file holds no null, so
+  // statistics would answer the other way for both.
+  auto nullConstant = BaseVector::createNullConstant(BIGINT(), 1, pool_.get());
+  EXPECT_FALSE(keepsSplit(nullConstant, std::make_shared<common::IsNotNull>()));
+  EXPECT_TRUE(keepsSplit(nullConstant, std::make_shared<common::IsNull>()));
+}
+
+// Every filtered partition key has to be tested, not just the first. Nothing
+// downstream re-checks them: testFilterOnConstant() accepts any non-null
+// constant.
+TEST_F(FileConnectorUtilTest, testFiltersSecondPartitionKeyFails) {
+  auto batch = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(100));
+  auto filePath = writeDataFile(batch);
+  auto reader = makeReader(filePath);
+
+  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+  scanSpec->addField("c0", 0);
+  // 'ds' comes first and passes, so stopping at the first key misses 'hour'.
+  scanSpec->addField("ds", 1)->setFilter(
+      std::make_unique<common::BytesValues>(
+          std::vector<std::string>{"2024-01-01"}, false));
+  scanSpec->addField("hour", 2)->setFilter(
+      std::make_unique<common::BigintRange>(0, 11, false));
+
+  const std::unordered_map<std::string, std::optional<std::string>>
+      partitionKeys = {
+          {"ds", "2024-01-01"},
+          {"hour", "23"},
+      };
+  const std::unordered_map<std::string, connector::FileColumnHandlePtr>
+      partitionKeysHandle = {
+          {"ds",
+           std::make_shared<hive::HiveColumnHandle>(
+               "ds",
+               hive::HiveColumnHandle::ColumnType::kPartitionKey,
+               VARCHAR(),
+               VARCHAR())},
+          {"hour",
+           std::make_shared<hive::HiveColumnHandle>(
+               "hour",
+               hive::HiveColumnHandle::ColumnType::kPartitionKey,
+               BIGINT(),
+               BIGINT())},
+      };
+
+  EXPECT_FALSE(
+      connector::testFilters(
           scanSpec.get(),
           reader.get(),
           filePath,
@@ -517,8 +746,7 @@ TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyFails) {
 
 TEST_F(FileConnectorUtilTest, testFiltersNullPartitionKeyRejectsNotNull) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(100));
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 
@@ -538,13 +766,13 @@ TEST_F(FileConnectorUtilTest, testFiltersNullPartitionKeyRejectsNotNull) {
       hive::HiveColumnHandle::ColumnType::kPartitionKey,
       VARCHAR(),
       VARCHAR());
-  std::unordered_map<std::string, hive::FileColumnHandlePtr>
+  std::unordered_map<std::string, connector::FileColumnHandlePtr>
       partitionKeysHandle = {
           {"ds", dsHandle},
       };
 
   EXPECT_FALSE(
-      hive::testFilters(
+      connector::testFilters(
           scanSpec.get(),
           reader.get(),
           filePath,
@@ -555,8 +783,7 @@ TEST_F(FileConnectorUtilTest, testFiltersNullPartitionKeyRejectsNotNull) {
 
 TEST_F(FileConnectorUtilTest, testFiltersIntegerPartitionKey) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(100));
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 
@@ -574,11 +801,11 @@ TEST_F(FileConnectorUtilTest, testFiltersIntegerPartitionKey) {
         hive::HiveColumnHandle::ColumnType::kPartitionKey,
         BIGINT(),
         BIGINT());
-    std::unordered_map<std::string, hive::FileColumnHandlePtr>
+    std::unordered_map<std::string, connector::FileColumnHandlePtr>
         partitionKeysHandle = {{"year", yearHandle}};
 
     EXPECT_TRUE(
-        hive::testFilters(
+        connector::testFilters(
             scanSpec.get(),
             reader.get(),
             filePath,
@@ -596,11 +823,11 @@ TEST_F(FileConnectorUtilTest, testFiltersIntegerPartitionKey) {
         hive::HiveColumnHandle::ColumnType::kPartitionKey,
         BIGINT(),
         BIGINT());
-    std::unordered_map<std::string, hive::FileColumnHandlePtr>
+    std::unordered_map<std::string, connector::FileColumnHandlePtr>
         partitionKeysHandle = {{"year", yearHandle}};
 
     EXPECT_FALSE(
-        hive::testFilters(
+        connector::testFilters(
             scanSpec.get(),
             reader.get(),
             filePath,
@@ -612,8 +839,7 @@ TEST_F(FileConnectorUtilTest, testFiltersIntegerPartitionKey) {
 
 TEST_F(FileConnectorUtilTest, testFiltersMissingColumn) {
   auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(100, folly::identity)});
+  auto batch = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(100));
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
 
@@ -629,7 +855,7 @@ TEST_F(FileConnectorUtilTest, testFiltersMissingColumn) {
           std::vector<std::string>{"someValue"}, false));
 
   EXPECT_FALSE(
-      hive::testFilters(
+      connector::testFilters(
           scanSpec.get(),
           reader.get(),
           filePath,

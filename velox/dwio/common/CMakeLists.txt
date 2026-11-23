@@ -52,6 +52,7 @@ velox_add_library(
   Range.cpp
   Reader.cpp
   ReaderFactory.cpp
+  RoaringBitmapView.cpp
   ScanSpec.cpp
   SeekableInputStream.cpp
   SelectiveByteRleColumnReader.cpp
@@ -59,7 +60,6 @@ velox_add_library(
   SelectiveFlatMapColumnReader.cpp
   SelectiveRepeatedColumnReader.cpp
   SelectiveStructColumnReader.cpp
-  SortingWriter.cpp
   Statistics.cpp
   StatisticsBuilder.cpp
   Throttler.cpp
@@ -94,6 +94,7 @@ velox_add_library(
   FilterNode.h
   FlatMapHelper.h
   FlushPolicy.h
+  FormatConfig.h
   FormatData.h
   InputStream.h
   IntCodecCommon.h
@@ -114,6 +115,7 @@ velox_add_library(
   Reader.h
   ReaderFactory.h
   Retry.h
+  RoaringBitmapView.h
   ScanSpec.h
   SeekableInputStream.h
   SelectiveByteRleColumnReader.h
@@ -124,7 +126,6 @@ velox_add_library(
   SelectiveIntegerColumnReader.h
   SelectiveRepeatedColumnReader.h
   SelectiveStructColumnReader.h
-  SortingWriter.h
   Statistics.h
   StatisticsBuilder.h
   StreamIdentifier.h

@@ -33,7 +33,10 @@ TEST_F(ClassificationAggregationTest, basic) {
   auto runTest = [&](const std::string& expression,
                      RowVectorPtr input,
                      RowVectorPtr expected) {
-    testAggregations({input}, {}, {expression}, {expected});
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates({expression})
+        .assertResults(expected);
   };
 
   /// Test without any nulls.
@@ -184,7 +187,10 @@ TEST_F(ClassificationAggregationTest, weights) {
   auto runTest = [&](const std::string& expression,
                      RowVectorPtr input,
                      RowVectorPtr expected) {
-    testAggregations({input}, {}, {expression}, {expected});
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates({expression})
+        .assertResults(expected);
   };
 
   /// This test detects memory access bugs in Accumulator::extractValues, where
@@ -242,7 +248,11 @@ TEST_F(ClassificationAggregationTest, groupBy) {
                      const std::string& expression,
                      RowVectorPtr input,
                      RowVectorPtr expected) {
-    testAggregations({input}, {"c0"}, {expression}, {expected});
+    AggregationTester(*this)
+        .inputs(input)
+        .groupBy({"c0"})
+        .aggregates({expression})
+        .assertResults(expected);
   };
   auto keys = makeFlatVector<int32_t>({0, 1, 2, 3});
   runTest(

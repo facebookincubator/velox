@@ -43,6 +43,8 @@ jobs:
     steps:
 
       - name: Restore ccache
+        continue-on-error: true
+        timeout-minutes: 30
         if: false
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         id: restore-cache
@@ -51,7 +53,7 @@ jobs:
           key: ccache-docs-16-core-ubuntu
 
       - name: Checkout
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: true
@@ -118,7 +120,9 @@ jobs:
         run: ccache -s
 
       - name: Save ccache
-        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        continue-on-error: true
+        timeout-minutes: 20
+        uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-docs-16-core-ubuntu
@@ -154,7 +158,7 @@ jobs:
 
       - name: Upload Documentation
         if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           path: velox/docs/_build/html
           retention-days: 3

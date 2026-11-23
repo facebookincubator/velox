@@ -35,8 +35,7 @@ FOLLY_ALWAYS_INLINE void encodeRowColumn(
     char* prefixBuffer) {
   std::optional<T> value;
   if (!prefixSortLayout.normalizedKeyHasNullByte[index] ||
-      !RowContainer::isNullAt(
-          row, rowColumn.nullByte(), rowColumn.nullMask())) {
+      !RowContainer::isNullAt(row, rowColumn)) {
     value = *(reinterpret_cast<T*>(row + rowColumn.offset()));
   } else {
     value = std::nullopt;

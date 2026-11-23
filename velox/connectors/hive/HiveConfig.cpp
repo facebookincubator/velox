@@ -17,82 +17,74 @@
 #include "velox/connectors/hive/HiveConfig.h"
 
 #include <boost/algorithm/string.hpp>
+#include "velox/common/EnumDefine.h"
 #include "velox/common/config/Config.h"
 #include "velox/dwio/common/Options.h"
-#include "velox/dwio/parquet/common/ParquetConfig.h"
 
 namespace facebook::velox::connector::hive {
 
 namespace {
-
-HiveConfig::InsertExistingPartitionsBehavior
-stringToInsertExistingPartitionsBehavior(const std::string& strValue) {
-  auto upperValue = boost::algorithm::to_upper_copy(strValue);
-  if (upperValue == "ERROR") {
-    return HiveConfig::InsertExistingPartitionsBehavior::kError;
-  }
-  if (upperValue == "OVERWRITE") {
-    return HiveConfig::InsertExistingPartitionsBehavior::kOverwrite;
-  }
-  VELOX_UNSUPPORTED(
-      "Unsupported insert existing partitions behavior: {}.", strValue);
+const auto& insertExistingPartitionsBehaviorNames() {
+  static const folly::
+      F14FastMap<HiveConfig::InsertExistingPartitionsBehavior, std::string_view>
+          kNames = {
+              {HiveConfig::InsertExistingPartitionsBehavior::kError, "ERROR"},
+              {HiveConfig::InsertExistingPartitionsBehavior::kOverwrite,
+               "OVERWRITE"},
+          };
+  return kNames;
 }
-
 } // namespace
+
+VELOX_DEFINE_EMBEDDED_ENUM_NAME(
+    HiveConfig,
+    InsertExistingPartitionsBehavior,
+    insertExistingPartitionsBehaviorNames)
 
 const std::vector<config::ConfigProperty>& HiveConfig::registeredProperties() {
   static const std::vector<config::ConfigProperty> kProperties = [] {
     // Start with FileConfig properties.
-    auto properties = FileConfig::registeredProperties();
-#define VELOX_HIVE_CONFIG_REGISTER(constName) \
+    auto properties = connector::FileConfig::registeredProperties();
+#define VELOX_FILE_CONFIG_REGISTER(constName) \
   config::registerConfigProperty<HiveConfig::constName##Property>(properties)
 
-    VELOX_HIVE_CONFIG_REGISTER(kInsertExistingPartitionsBehaviorSession);
-    VELOX_HIVE_CONFIG_REGISTER(kSortWriterMaxOutputBytesSession);
-    VELOX_HIVE_CONFIG_REGISTER(kParquetMaxTargetFileSizeSession);
-    VELOX_HIVE_CONFIG_REGISTER(kOrcMaxTargetFileSizeSession);
-    VELOX_HIVE_CONFIG_REGISTER(kNimbleMaxTargetFileSizeSession);
-    VELOX_HIVE_CONFIG_REGISTER(kMaxPartitionsPerWritersSession);
-    VELOX_HIVE_CONFIG_REGISTER(kAllowNullPartitionKeysSession);
-    VELOX_HIVE_CONFIG_REGISTER(kPartitionPathAsLowerCaseSession);
-    VELOX_HIVE_CONFIG_REGISTER(kSortWriterMaxOutputRowsSession);
-    VELOX_HIVE_CONFIG_REGISTER(kSortWriterFinishTimeSliceLimitMsSession);
-    VELOX_HIVE_CONFIG_REGISTER(kUser);
-    VELOX_HIVE_CONFIG_REGISTER(kSource);
-    VELOX_HIVE_CONFIG_REGISTER(kSchema);
-    VELOX_HIVE_CONFIG_REGISTER(kMaxBucketCountSession);
-    VELOX_HIVE_CONFIG_REGISTER(kMaxRowsPerIndexRequestSession);
+    VELOX_FILE_CONFIG_REGISTER(kInsertExistingPartitionsBehaviorSession);
+    VELOX_FILE_CONFIG_REGISTER(kSortWriterMaxOutputBytesSession);
+    VELOX_FILE_CONFIG_REGISTER(kParquetMaxTargetFileSizeSession);
+    VELOX_FILE_CONFIG_REGISTER(kOrcMaxTargetFileSizeSession);
+    VELOX_FILE_CONFIG_REGISTER(kNimbleMaxTargetFileSizeSession);
+    VELOX_FILE_CONFIG_REGISTER(kMaxPartitionsPerWritersSession);
+    VELOX_FILE_CONFIG_REGISTER(kAllowNullPartitionKeysSession);
+    VELOX_FILE_CONFIG_REGISTER(kPartitionPathAsLowerCaseSession);
+    VELOX_FILE_CONFIG_REGISTER(kSortWriterMaxOutputRowsSession);
+    VELOX_FILE_CONFIG_REGISTER(kSortWriterFinishTimeSliceLimitMsSession);
+    VELOX_FILE_CONFIG_REGISTER(kUser);
+    VELOX_FILE_CONFIG_REGISTER(kSource);
+    VELOX_FILE_CONFIG_REGISTER(kSchema);
+    VELOX_FILE_CONFIG_REGISTER(kMaxBucketCountSession);
+    VELOX_FILE_CONFIG_REGISTER(kMaxRowsPerIndexRequestSession);
 
-#undef VELOX_HIVE_CONFIG_REGISTER
+#undef VELOX_FILE_CONFIG_REGISTER
 
-    parquet::ParquetConfig::registerProperties(
-        properties,
-        dwio::common::formatConfigPrefix(
-            dwio::common::FileFormat::PARQUET, "_"));
+    registerFormatProperties(properties);
     return properties;
   }();
   return kProperties;
 }
 
-// static
-std::string HiveConfig::insertExistingPartitionsBehaviorString(
-    InsertExistingPartitionsBehavior behavior) {
-  switch (behavior) {
-    case InsertExistingPartitionsBehavior::kError:
-      return "ERROR";
-    case InsertExistingPartitionsBehavior::kOverwrite:
-      return "OVERWRITE";
-    default:
-      return fmt::format("UNKNOWN BEHAVIOR {}", static_cast<int>(behavior));
-  }
-}
-
 HiveConfig::InsertExistingPartitionsBehavior
 HiveConfig::insertExistingPartitionsBehavior(
     const config::ConfigBase* session) const {
-  return stringToInsertExistingPartitionsBehavior(session->get<std::string>(
+  const auto value = session->get<std::string>(
       kInsertExistingPartitionsBehaviorSession,
-      config_->get<std::string>(kInsertExistingPartitionsBehavior, "ERROR")));
+      config_->get<std::string>(kInsertExistingPartitionsBehavior, "ERROR"));
+  const auto behavior = tryToInsertExistingPartitionsBehavior(
+      boost::algorithm::to_upper_copy(value));
+  VELOX_USER_CHECK(
+      behavior.has_value(),
+      "Unsupported insert existing partitions behavior: {}",
+      value);
+  return behavior.value();
 }
 
 bool HiveConfig::immutablePartitions() const {
@@ -128,18 +120,6 @@ std::optional<std::string> HiveConfig::gcsAuthAccessTokenProvider() const {
   }
   return config_->get<std::string>(
       std::string(kLegacyPrefix) + kGcsAuthAccessTokenProvider);
-}
-
-int32_t HiveConfig::numCacheFileHandles() const {
-  return config_->get<int32_t>(kNumCacheFileHandles, 20'000);
-}
-
-uint64_t HiveConfig::fileHandleExpirationDurationMs() const {
-  return config_->get<uint64_t>(kFileHandleExpirationDurationMs, 0);
-}
-
-bool HiveConfig::isFileHandleCacheEnabled() const {
-  return config_->get<bool>(kEnableFileHandleCache, true);
 }
 
 std::string HiveConfig::writeFileCreateConfig() const {

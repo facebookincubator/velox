@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/exec/Exchange.h"
-#include "velox/common/Casts.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
@@ -62,7 +61,7 @@ Exchange::Exchange(
     int32_t operatorId,
     DriverCtx* driverCtx,
     const std::shared_ptr<const core::ExchangeNode>& exchangeNode,
-    std::shared_ptr<ExchangeClient> exchangeClient,
+    std::shared_ptr<InMemoryExchangeClient> exchangeClient,
     std::string_view operatorType)
     : SourceOperator(
           driverCtx,
@@ -72,6 +71,7 @@ Exchange::Exchange(
           operatorType),
       preferredOutputBatchBytes_{
           driverCtx->queryConfig().preferredOutputBatchBytes()},
+      outputBatchRows_{driverCtx->queryConfig().exchangeOutputBatchRows()},
       serdeKind_{exchangeNode->serdeKind()},
       serdeOptions_{getVectorSerdeOptions(
           common::stringToCompressionKind(operatorCtx_->driverCtx()
@@ -86,14 +86,6 @@ Exchange::Exchange(
       driverId_{driverCtx->driverId},
       exchangeClient_{std::move(exchangeClient)} {}
 
-void Exchange::addRemoteTaskIds(std::vector<std::string>& remoteTaskIds) {
-  std::shuffle(std::begin(remoteTaskIds), std::end(remoteTaskIds), rng_);
-  for (const std::string& taskId : remoteTaskIds) {
-    exchangeClient_->addRemoteTaskId(taskId);
-  }
-  stats_.wlock()->numSplits += remoteTaskIds.size();
-}
-
 void Exchange::getSplits(ContinueFuture* future) {
   if (!processSplits_) {
     return;
@@ -101,7 +93,6 @@ void Exchange::getSplits(ContinueFuture* future) {
   if (noMoreSplits_) {
     return;
   }
-  std::vector<std::string> remoteTaskIds;
   for (;;) {
     exec::Split split;
     const auto reason = operatorCtx_->task()->getSplitOrFuture(
@@ -113,28 +104,18 @@ void Exchange::getSplits(ContinueFuture* future) {
         split,
         *future);
     if (reason != BlockingReason::kNotBlocked) {
-      addRemoteTaskIds(remoteTaskIds);
       return;
     }
 
     if (split.hasConnectorSplit()) {
-      auto remoteSplit =
-          checkedPointerCast<RemoteConnectorSplit>(split.connectorSplit);
-      if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
+      if (splitTracer_ != nullptr) [[unlikely]] {
         splitTracer_->write(split);
       }
-      remoteTaskIds.push_back(remoteSplit->taskId);
+      ++stats_.wlock()->numSplits;
       continue;
     }
 
-    addRemoteTaskIds(remoteTaskIds);
-    exchangeClient_->noMoreRemoteTasks();
     noMoreSplits_ = true;
-    if (atEnd_) {
-      operatorCtx_->task()->multipleSplitsFinished(
-          false, stats_.rlock()->numSplits, 0);
-      recordExchangeClientStats();
-    }
     return;
   }
 }
@@ -153,9 +134,16 @@ BlockingReason Exchange::isBlocked(ContinueFuture* future) {
   currentPages_ = exchangeClient_->next(
       driverId_, preferredOutputBatchBytes_, &atEnd_, &dataFuture);
   if (!currentPages_.empty() || atEnd_) {
+    if (atEnd_ && !noMoreSplits_) {
+      // The task stores 'no more splits' before it tells the client, so the
+      // remaining splits are in the store. When the task terminates, the client
+      // can report the end first; the splits are then not reported finished.
+      splitFuture_ = ContinueFuture::makeEmpty();
+      getSplits(&splitFuture_);
+    }
     if (atEnd_ && noMoreSplits_) {
-      const auto numSplits = stats_.rlock()->numSplits;
-      operatorCtx_->task()->multipleSplitsFinished(false, numSplits, 0);
+      operatorCtx_->task()->splitsFinished(
+          planNodeId(), *operatorCtx_->driverCtx());
     }
     recordExchangeClientStats();
     return BlockingReason::kNotBlocked;
@@ -190,19 +178,25 @@ RowVectorPtr Exchange::getOutput() {
   return getOutputFromRowPages(serde);
 }
 
+uint64_t Exchange::targetNumRows() const {
+  if (outputBatchRows_ > 0) {
+    return outputBatchRows_;
+  }
+  // Start conservatively, then use the estimate.
+  if (!estimatedRowSize_.has_value()) {
+    return kInitialOutputRows;
+  }
+  return std::max(
+      preferredOutputBatchBytes_ / estimatedRowSize_.value(),
+      kInitialOutputRows);
+}
+
 RowVectorPtr Exchange::getOutputFromColumnarPages(VectorSerde* serde) {
   if (currentPages_.empty()) {
     return nullptr;
   }
 
-  // Calculate target row count based on estimated row size, similar to
-  // getOutputFromRowPages.
-  // Start conservatively, then use estimates.
-  const auto numRows = estimatedRowSize_.has_value()
-      ? std::max(
-            (preferredOutputBatchBytes_ / estimatedRowSize_.value()),
-            kInitialOutputRows)
-      : kInitialOutputRows;
+  const auto numRows = targetNumRows();
 
   // Process pages one-by-one from currentPages_ pointed by columnarPageIdx_.
   // Within each page, deserialize vectors incrementally until we hit the target
@@ -288,12 +282,7 @@ RowVectorPtr Exchange::getOutputFromRowPages(VectorSerde* serde) {
     inputStream_ = mergedRowPage_->prepareStreamForDeserialize();
   }
 
-  auto numRows = kInitialOutputRows;
-  if (estimatedRowSize_.has_value()) {
-    numRows = std::max(
-        (preferredOutputBatchBytes_ / estimatedRowSize_.value()),
-        kInitialOutputRows);
-  }
+  const auto numRows = targetNumRows();
 
   // Check if the serde supports batched deserialization
   serde->deserialize(
@@ -345,7 +334,7 @@ void Exchange::close() {
 
   if (exchangeClient_) {
     // Close the client before recording stats so that stats are captured
-    // from the final state. ExchangeClient::close() caches final stats
+    // from the final state. InMemoryExchangeClient::close() caches final stats
     // before clearing sources.
     exchangeClient_->close();
     recordExchangeClientStats();

@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/common/FileConfig.h"
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/config/Config.h"
 
 using namespace facebook::velox;
-using namespace facebook::velox::connector::hive;
+using namespace facebook::velox::connector;
 
 TEST(FileConfigTest, defaultConfig) {
   FileConfig config(
@@ -31,7 +31,6 @@ TEST(FileConfigTest, defaultConfig) {
   const auto emptySession = std::make_unique<config::ConfigBase>(
       std::unordered_map<std::string, std::string>());
 
-  EXPECT_FALSE(config.isOrcUseColumnNames(emptySession.get()));
   EXPECT_FALSE(config.isFileColumnNamesReadAsLowerCase(emptySession.get()));
   EXPECT_FALSE(config.ignoreMissingFiles(emptySession.get()));
   EXPECT_EQ(config.maxCoalescedBytes(emptySession.get()), 128 << 20);
@@ -51,17 +50,19 @@ TEST(FileConfigTest, defaultConfig) {
   EXPECT_FALSE(config.pinMetadata(emptySession.get()));
   EXPECT_FALSE(config.cacheIndex(emptySession.get()));
   EXPECT_FALSE(config.pinIndex(emptySession.get()));
-  EXPECT_EQ(config.orcFooterSpeculativeIoSize(emptySession.get()), 256UL << 10);
+  EXPECT_FALSE(config.useColumnNames(emptySession.get()));
   EXPECT_EQ(
       config.nimbleFooterSpeculativeIoSize(emptySession.get()), 8UL << 20);
-  EXPECT_FALSE(config.nimbleStringDecoderZeroCopy(emptySession.get()));
+  EXPECT_FALSE(config.nimbleFsstDecodeRepeatedPayloads(emptySession.get()));
   EXPECT_FALSE(config.nimblePreserveDictionaryEncoding(emptySession.get()));
+  EXPECT_FALSE(config.nimbleDictionaryAwareReads(emptySession.get()));
+  EXPECT_FALSE(config.nimbleScanFastPath(emptySession.get()));
   EXPECT_FALSE(config.nimbleLazyColumnIo(emptySession.get()));
+  EXPECT_FALSE(config.nimbleLazyFileStats(emptySession.get()));
 }
 
 TEST(FileConfigTest, overrideConfig) {
   std::unordered_map<std::string, std::string> configFromFile = {
-      {FileConfig::kOrcUseColumnNames, "true"},
       {FileConfig::kFileColumnNamesReadAsLowerCase, "true"},
       {FileConfig::kMaxCoalescedBytes, "100"},
       {FileConfig::kMaxCoalescedDistance, "100kB"},
@@ -76,18 +77,20 @@ TEST(FileConfigTest, overrideConfig) {
       {FileConfig::kPinMetadata, "true"},
       {FileConfig::kCacheIndex, "true"},
       {FileConfig::kPinIndex, "true"},
-      {FileConfig::kOrcFooterSpeculativeIoSize, std::to_string(512UL << 10)},
+      {"hive.use-column-names", "true"},
       {FileConfig::kNimbleFooterSpeculativeIoSize, std::to_string(4UL << 20)},
-      {FileConfig::kNimbleStringDecoderZeroCopy, "true"},
+      {FileConfig::kNimbleFsstDecodeRepeatedPayloads, "true"},
       {FileConfig::kNimblePreserveDictionaryEncoding, "true"},
+      {FileConfig::kNimbleDictionaryAwareReads, "true"},
+      {FileConfig::kNimbleScanFastPath, "true"},
       {FileConfig::kNimbleLazyColumnIo, "true"},
+      {FileConfig::kNimbleLazyFileStats, "true"},
   };
   FileConfig config(
       std::make_shared<config::ConfigBase>(std::move(configFromFile)), "hive.");
   const auto emptySession = std::make_unique<config::ConfigBase>(
       std::unordered_map<std::string, std::string>());
 
-  EXPECT_TRUE(config.isOrcUseColumnNames(emptySession.get()));
   EXPECT_TRUE(config.isFileColumnNamesReadAsLowerCase(emptySession.get()));
   EXPECT_EQ(config.maxCoalescedBytes(emptySession.get()), 100);
   EXPECT_EQ(config.maxCoalescedDistanceBytes(emptySession.get()), 100 << 10);
@@ -102,12 +105,28 @@ TEST(FileConfigTest, overrideConfig) {
   EXPECT_TRUE(config.pinMetadata(emptySession.get()));
   EXPECT_TRUE(config.cacheIndex(emptySession.get()));
   EXPECT_TRUE(config.pinIndex(emptySession.get()));
-  EXPECT_EQ(config.orcFooterSpeculativeIoSize(emptySession.get()), 512UL << 10);
+  EXPECT_TRUE(config.useColumnNames(emptySession.get()));
   EXPECT_EQ(
       config.nimbleFooterSpeculativeIoSize(emptySession.get()), 4UL << 20);
-  EXPECT_TRUE(config.nimbleStringDecoderZeroCopy(emptySession.get()));
+  EXPECT_TRUE(config.nimbleFsstDecodeRepeatedPayloads(emptySession.get()));
   EXPECT_TRUE(config.nimblePreserveDictionaryEncoding(emptySession.get()));
+  EXPECT_TRUE(config.nimbleDictionaryAwareReads(emptySession.get()));
+  EXPECT_TRUE(config.nimbleScanFastPath(emptySession.get()));
   EXPECT_TRUE(config.nimbleLazyColumnIo(emptySession.get()));
+  EXPECT_TRUE(config.nimbleLazyFileStats(emptySession.get()));
+}
+
+TEST(FileConfigTest, connectorScopedReaderOptions) {
+  const auto emptySession = std::make_unique<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>());
+  FileConfig config(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {"iceberg.use-column-names", "true"},
+          }),
+      "iceberg.");
+
+  EXPECT_TRUE(config.useColumnNames(emptySession.get()));
 }
 
 TEST(FileConfigTest, overrideSession) {
@@ -116,7 +135,6 @@ TEST(FileConfigTest, overrideSession) {
           std::unordered_map<std::string, std::string>()),
       "hive.");
   std::unordered_map<std::string, std::string> sessionOverride = {
-      {FileConfig::kOrcUseColumnNamesSession, "true"},
       {FileConfig::kFileColumnNamesReadAsLowerCaseSession, "true"},
       {FileConfig::kIgnoreMissingFilesSession, "true"},
       {FileConfig::kMaxCoalescedDistanceSession, "3MB"},
@@ -129,18 +147,19 @@ TEST(FileConfigTest, overrideSession) {
       {FileConfig::kPinMetadataSession, "true"},
       {FileConfig::kCacheIndexSession, "true"},
       {FileConfig::kPinIndexSession, "true"},
-      {FileConfig::kOrcFooterSpeculativeIoSizeSession,
-       std::to_string(128UL << 10)},
+      {FileConfig::kUseColumnNamesSession, "true"},
       {FileConfig::kNimbleFooterSpeculativeIoSizeSession,
        std::to_string(2UL << 20)},
-      {FileConfig::kNimbleStringDecoderZeroCopySession, "true"},
+      {FileConfig::kNimbleFsstDecodeRepeatedPayloadsSession, "true"},
       {FileConfig::kNimblePreserveDictionaryEncodingSession, "true"},
+      {FileConfig::kNimbleDictionaryAwareReadsSession, "true"},
+      {FileConfig::kNimbleScanFastPathSession, "true"},
       {FileConfig::kNimbleLazyColumnIoSession, "true"},
+      {FileConfig::kNimbleLazyFileStatsSession, "true"},
   };
   const auto session =
       std::make_unique<config::ConfigBase>(std::move(sessionOverride));
 
-  EXPECT_TRUE(config.isOrcUseColumnNames(session.get()));
   EXPECT_TRUE(config.isFileColumnNamesReadAsLowerCase(session.get()));
   EXPECT_TRUE(config.ignoreMissingFiles(session.get()));
   EXPECT_EQ(config.maxCoalescedDistanceBytes(session.get()), 3 << 20);
@@ -153,11 +172,95 @@ TEST(FileConfigTest, overrideSession) {
   EXPECT_TRUE(config.pinMetadata(session.get()));
   EXPECT_TRUE(config.cacheIndex(session.get()));
   EXPECT_TRUE(config.pinIndex(session.get()));
-  EXPECT_EQ(config.orcFooterSpeculativeIoSize(session.get()), 128UL << 10);
+  EXPECT_TRUE(config.useColumnNames(session.get()));
   EXPECT_EQ(config.nimbleFooterSpeculativeIoSize(session.get()), 2UL << 20);
-  EXPECT_TRUE(config.nimbleStringDecoderZeroCopy(session.get()));
+  EXPECT_TRUE(config.nimbleFsstDecodeRepeatedPayloads(session.get()));
   EXPECT_TRUE(config.nimblePreserveDictionaryEncoding(session.get()));
+  EXPECT_TRUE(config.nimbleDictionaryAwareReads(session.get()));
+  EXPECT_TRUE(config.nimbleScanFastPath(session.get()));
   EXPECT_TRUE(config.nimbleLazyColumnIo(session.get()));
+  EXPECT_TRUE(config.nimbleLazyFileStats(session.get()));
+}
+
+TEST(FileConfigTest, nimbleFsstDecodeRepeatedPayloadsSessionOverridesCatalog) {
+  const auto verifyOverride = [](bool catalogValue, bool sessionValue) {
+    FileConfig config(
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>{
+                {FileConfig::kNimbleFsstDecodeRepeatedPayloads,
+                 catalogValue ? "true" : "false"}}),
+        "hive.");
+    const auto session = std::make_unique<config::ConfigBase>(
+        std::unordered_map<std::string, std::string>{
+            {FileConfig::kNimbleFsstDecodeRepeatedPayloadsSession,
+             sessionValue ? "true" : "false"}});
+
+    EXPECT_EQ(
+        config.nimbleFsstDecodeRepeatedPayloads(session.get()), sessionValue);
+  };
+
+  verifyOverride(/*catalogValue=*/true, /*sessionValue=*/false);
+  verifyOverride(/*catalogValue=*/false, /*sessionValue=*/true);
+}
+
+TEST(FileConfigTest, nimbleScanFastPathSessionOverridesCatalog) {
+  const auto verifyOverride = [](bool catalogValue, bool sessionValue) {
+    FileConfig config(
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>{
+                {FileConfig::kNimbleScanFastPath,
+                 catalogValue ? "true" : "false"}}),
+        "hive.");
+    const auto session = std::make_unique<config::ConfigBase>(
+        std::unordered_map<std::string, std::string>{
+            {FileConfig::kNimbleScanFastPathSession,
+             sessionValue ? "true" : "false"}});
+
+    EXPECT_EQ(config.nimbleScanFastPath(session.get()), sessionValue);
+  };
+
+  verifyOverride(/*catalogValue=*/true, /*sessionValue=*/false);
+  verifyOverride(/*catalogValue=*/false, /*sessionValue=*/true);
+}
+
+TEST(FileConfigTest, nimbleDictionaryAwareReadsSessionOverridesCatalog) {
+  const auto verifyOverride = [](bool catalogValue, bool sessionValue) {
+    FileConfig config(
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>{
+                {FileConfig::kNimbleDictionaryAwareReads,
+                 catalogValue ? "true" : "false"}}),
+        "hive.");
+    const auto session = std::make_unique<config::ConfigBase>(
+        std::unordered_map<std::string, std::string>{
+            {FileConfig::kNimbleDictionaryAwareReadsSession,
+             sessionValue ? "true" : "false"}});
+
+    EXPECT_EQ(config.nimbleDictionaryAwareReads(session.get()), sessionValue);
+  };
+
+  verifyOverride(/*catalogValue=*/true, /*sessionValue=*/false);
+  verifyOverride(/*catalogValue=*/false, /*sessionValue=*/true);
+}
+
+TEST(FileConfigTest, nimbleLazyFileStatsSessionOverridesCatalog) {
+  const auto verifyOverride = [](bool catalogValue, bool sessionValue) {
+    FileConfig config(
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>{
+                {FileConfig::kNimbleLazyFileStats,
+                 catalogValue ? "true" : "false"}}),
+        "hive.");
+    const auto session = std::make_unique<config::ConfigBase>(
+        std::unordered_map<std::string, std::string>{
+            {FileConfig::kNimbleLazyFileStatsSession,
+             sessionValue ? "true" : "false"}});
+
+    EXPECT_EQ(config.nimbleLazyFileStats(session.get()), sessionValue);
+  };
+
+  verifyOverride(/*catalogValue=*/true, /*sessionValue=*/false);
+  verifyOverride(/*catalogValue=*/false, /*sessionValue=*/true);
 }
 
 TEST(FileConfigTest, nullConfig) {

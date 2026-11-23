@@ -22,6 +22,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
+#include "velox/common/testutil/TestValue.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
@@ -99,6 +100,16 @@ CudfFromVelox::CudfFromVelox(
 }
 
 void CudfFromVelox::doAddInput(RowVectorPtr input) {
+  // compile() places CudfFromVelox only after operators classified as
+  // producing CPU output, so device-resident input means the upstream operator
+  // is misclassified.
+  VELOX_CHECK_NULL(
+      dynamic_cast<const CudfVector*>(input.get()),
+      "CudfFromVelox received a device-resident CudfVector. The upstream "
+      "operator produces GPU output but is classified as a CPU operator. "
+      "Make it emit host vectors, or fix its operator adapter so that no "
+      "CudfFromVelox is placed after it.");
+
   if (input->size() > 0) {
     // Materialize lazy vectors
     for (auto& child : input->children()) {
@@ -157,34 +168,38 @@ RowVectorPtr CudfFromVelox::doGetOutput() {
   // create a CudfVector directly with an empty table, preserving the
   // logical row count. This mirrors the zero-column handling in
   // CudfToVelox::doGetOutput().
+  RowVectorPtr output;
   if (input->childrenSize() == 0) {
     auto emptyTable = std::make_unique<cudf::table>();
-    return std::make_shared<CudfVector>(
+    output = std::make_shared<CudfVector>(
         input->pool(),
         outputType_,
         input->size(),
         std::move(emptyTable),
         stream);
+  } else {
+    // Convert RowVector to cudf table.  toCudfTable synchronizes the stream
+    // internally before releasing Arrow host buffers, so no additional sync
+    // is needed here.
+    auto tbl = with_arrow::toCudfTable(
+        input, input->pool(), stream, get_output_mr(), timestampTimeZone_);
+
+    VELOX_CHECK_NOT_NULL(tbl);
+
+    // Return a CudfVector that owns the cudf table
+    const auto size = tbl->num_rows();
+
+    output = std::make_shared<CudfVector>(
+        input->pool(), outputType_, size, std::move(tbl), stream);
   }
-
-  // Convert RowVector to cudf table.  toCudfTable synchronizes the stream
-  // internally before releasing Arrow host buffers, so no additional sync
-  // is needed here.
-  auto tbl = with_arrow::toCudfTable(
-      input, input->pool(), stream, get_output_mr(), timestampTimeZone_);
-
-  VELOX_CHECK_NOT_NULL(tbl);
-
-  // Return a CudfVector that owns the cudf table
-  const auto size = tbl->num_rows();
-
-  return std::make_shared<CudfVector>(
-      input->pool(), outputType_, size, std::move(tbl), stream);
+  common::testutil::TestValue::adjust(
+      "facebook::velox::cudf_velox::CudfFromVelox::doGetOutput", &output);
+  return output;
 }
 
 void CudfFromVelox::doClose() {
   // TODO(kn): Remove default stream after redesign of CudfFromVelox
-  cudf::get_default_stream(cudf::allow_default_stream).synchronize();
+  cudf::get_default_stream(cudf::allow_default_stream).sync();
   Operator::close();
   inputs_.clear();
 }
@@ -247,7 +262,7 @@ RowVectorPtr CudfToVelox::convertFrontToVelox() {
   auto tableView = cudfVector->getTableView();
   auto output = with_arrow::toVeloxColumn(
       tableView, pool(), outputType_, "", stream, get_temp_mr());
-  stream.synchronize();
+  stream.sync();
   output->setType(outputType_);
   return output;
 }
@@ -274,7 +289,7 @@ RowVectorPtr CudfToVelox::convertFrontToVelox() {
 //      result to Velox in one shot.  This preserves the GPU-side merge
 //      that avoids emitting many undersized Velox batches downstream.
 //
-// In both cases exactly one toVeloxColumn + stream.synchronize() is issued
+// In both cases exactly one toVeloxColumn + stream.sync() is issued
 // per output batch, regardless of how many GPU inputs were consumed.
 RowVectorPtr CudfToVelox::doGetOutput() {
   if (finished_) {
@@ -345,7 +360,7 @@ RowVectorPtr CudfToVelox::doGetOutput() {
       auto tableView = concatTable->view();
       veloxBuffer_ = with_arrow::toVeloxColumn(
           tableView, pool(), outputType_, "", stream, get_temp_mr());
-      stream.synchronize();
+      stream.sync();
       veloxBuffer_->setType(outputType_);
       veloxOffset_ = 0;
       averageRowSize_ = std::nullopt;

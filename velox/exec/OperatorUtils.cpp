@@ -45,7 +45,7 @@ void scalarGatherCopy(
       if (sources[i]
               ->childAt(sourceColumnChannel)
               ->isNullAt(sourceIndices[i])) {
-        if (FOLLY_UNLIKELY(rawNulls == nullptr)) {
+        if (rawNulls == nullptr) [[unlikely]] {
           rawNulls = target->mutableRawNulls();
         }
         bits::setNull(rawNulls, targetIndex + i, true);
@@ -64,7 +64,7 @@ void scalarGatherCopy(
       if (sources[i]
               ->childAt(sourceColumnChannel)
               ->isNullAt(sourceIndices[i])) {
-        if (FOLLY_UNLIKELY(rawNulls == nullptr)) {
+        if (rawNulls == nullptr) [[unlikely]] {
           rawNulls = target->mutableRawNulls();
         }
         bits::setNull(rawNulls, targetIndex + i, true);
@@ -138,7 +138,6 @@ bool shouldAggregateRuntimeMetric(const std::string& name) {
       "driverCpuTimeNanos",
       "flushTimes",
       "ioWaitWallNanos",
-      "pageLoadTimeNanos",
       "prefetchBytes",
       "preloadSplitPrepareTimeNanos",
       "preloadedSplits",
@@ -155,6 +154,7 @@ bool shouldAggregateRuntimeMetric(const std::string& name) {
       "storageReadBytes",
       "ssdCacheReadWallNanos",
       "waitForPreloadSplitNanos",
+      "parquet.pageLoadTimeNanos",
   };
   if (metricNames.contains(name)) {
     return true;
@@ -449,7 +449,7 @@ void gatherCopy(
     const std::vector<vector_size_t>& sourceIndices,
     const std::vector<IdentityProjection>& columnMap) {
   VELOX_DCHECK_GE(count, 0);
-  if (FOLLY_UNLIKELY(count <= 0)) {
+  if (count <= 0) [[unlikely]] {
     return;
   }
   VELOX_CHECK_LE(count, sources.size());
@@ -500,12 +500,8 @@ void addOperatorRuntimeStats(
     std::string_view name,
     const RuntimeCounter& value,
     std::unordered_map<std::string, RuntimeMetric>& stats) {
-  auto [statIt, inserted] =
-      stats.emplace(std::string(name), RuntimeMetric(value.unit));
-  if (!inserted) {
-    VELOX_CHECK_EQ(statIt->second.unit, value.unit);
-  }
-  statIt->second.addValue(value.value);
+  auto [statIt, unused] = stats.try_emplace(std::string(name), value.unit);
+  statIt->second.merge(value);
 }
 
 void setOperatorRuntimeStats(

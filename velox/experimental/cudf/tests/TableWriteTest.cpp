@@ -204,8 +204,8 @@ class TableWriteTest : public CudfHiveConnectorTestBase {
           .config(
               QueryConfig::kTaskWriterCount,
               std::to_string(numTableWriterCount_))
-          .config(core::QueryConfig::kSpillEnabled, "true")
-          .config(QueryConfig::kWriterSpillEnabled, "true")
+          .config(core::QueryConfig::kSpillEnabled, true)
+          .config(QueryConfig::kWriterSpillEnabled, true)
           // Scale writer settings to trigger partition rebalancing.
           .config(QueryConfig::kScaleWriterRebalanceMaxMemoryUsageRatio, "1.0")
           .config(
@@ -373,7 +373,8 @@ class TableWriteTest : public CudfHiveConnectorTestBase {
             outputRowType->names(),
             outputRowType->children(),
             makeLocationHandle(outputDirectoryPath, outputTableType),
-            compressionKind));
+            compressionKind),
+        /*notNullColumns=*/folly::F14FastSet<std::string>{});
   }
 
   // Returns a table insert plan node.
@@ -664,7 +665,7 @@ TEST_F(BasicTableWriteTest, roundTrip) {
 
 TEST_F(BasicTableWriteTest, targetFileName) {
   constexpr const char* kFileName = "test.parquet";
-  auto data = makeRowVector({makeFlatVector<int64_t>(10, folly::identity)});
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(10)});
   auto directory = TempDirectoryPath::create();
   auto plan = PlanBuilder()
                   .values({data})

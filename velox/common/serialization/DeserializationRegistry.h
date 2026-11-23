@@ -69,10 +69,10 @@ template <class T>
 void registerDeserializer() {
   if constexpr (detail::is_templated_create<T>::value) {
     DeserializationRegistryForSharedPtr().Register(
-        T::getClassName(), T::template create<T>);
+        std::string{T::getClassName()}, T::template create<T>);
   } else {
     DeserializationRegistryForSharedPtr().Register(
-        T::getClassName(), T::create);
+        std::string{T::getClassName()}, T::create);
   }
 }
 
@@ -80,10 +80,10 @@ template <class T>
 void registerDeserializerWithContext() {
   if constexpr (detail::is_templated_create_with_context<T>::value) {
     DeserializationWithContextRegistryForSharedPtr().Register(
-        T::getClassName(), T::template create<T>);
+        std::string{T::getClassName()}, T::template create<T>);
   } else {
     DeserializationWithContextRegistryForSharedPtr().Register(
-        T::getClassName(), T::create);
+        std::string{T::getClassName()}, T::create);
   }
 }
 

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -21,6 +22,7 @@
 #include <optional>
 
 #include <velox/type/DecimalUtil.h>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/type/Filter.h"
 
@@ -75,6 +77,35 @@ TEST(FilterTest, isNotNull) {
   EXPECT_TRUE(notNull.testInt128Range(0, 0, true));
 
   EXPECT_FALSE(notNull.testNull());
+}
+
+TEST(FilterTest, isNotNullTestValues) {
+  IsNotNull notNull;
+  // Also call through the base class interface.
+  const Filter* filter = &notNull;
+
+  // Every non-null value passes, whatever the lane values are.
+  const auto check = [&](auto first, auto second) {
+    using T = decltype(first);
+    std::array<T, xsimd::batch<T>::size> values;
+    for (size_t i = 0; i < values.size(); ++i) {
+      values[i] = (i & 1) ? first : second;
+    }
+
+    const auto batch = xsimd::load_unaligned(values.data());
+    const auto expected = simd::allSetBitMask<T>();
+
+    EXPECT_EQ(expected, simd::toBitMask(notNull.testValues(batch)));
+    EXPECT_EQ(expected, simd::toBitMask(filter->testValues(batch)));
+  };
+
+  check(int64_t{0}, std::numeric_limits<int64_t>::min());
+  check(int32_t{-1}, std::numeric_limits<int32_t>::max());
+  check(int16_t{0}, std::numeric_limits<int16_t>::min());
+  check(
+      std::numeric_limits<double>::quiet_NaN(),
+      std::numeric_limits<double>::infinity());
+  check(std::numeric_limits<float>::quiet_NaN(), -0.0f);
 }
 
 TEST(FilterTest, isNull) {
@@ -256,6 +287,102 @@ TEST(FilterTest, hugeintRangeBoundaryOverflow) {
   EXPECT_EQ(filter->kind(), common::FilterKind::kAlwaysFalse);
   EXPECT_FALSE(filter->testInt128(std::numeric_limits<int128_t>::min()));
   EXPECT_FALSE(filter->testInt128(0));
+}
+
+TEST(FilterTest, hugeintRangeNarrowerIntegralValues) {
+  // A narrower integral column read as a long decimal decodes to int64 while
+  // its filter is built over int128, so the int64 forms must answer too.
+  const HugeintRange filter(10, 20, /*nullAllowed=*/false);
+
+  EXPECT_TRUE(filter.testInt64(10));
+  EXPECT_TRUE(filter.testInt64(15));
+  EXPECT_TRUE(filter.testInt64(20));
+  EXPECT_FALSE(filter.testInt64(9));
+  EXPECT_FALSE(filter.testInt64(21));
+  EXPECT_FALSE(filter.testInt64(std::numeric_limits<int64_t>::min()));
+  EXPECT_FALSE(filter.testInt64(std::numeric_limits<int64_t>::max()));
+
+  EXPECT_TRUE(filter.testInt64Range(0, 10, /*hasNull=*/false));
+  EXPECT_TRUE(filter.testInt64Range(12, 18, /*hasNull=*/false));
+  EXPECT_TRUE(filter.testInt64Range(20, 100, /*hasNull=*/false));
+  EXPECT_FALSE(filter.testInt64Range(0, 9, /*hasNull=*/false));
+  EXPECT_FALSE(filter.testInt64Range(21, 100, /*hasNull=*/false));
+
+  // Nulls only rescue a non-overlapping range when the filter admits them.
+  EXPECT_FALSE(filter.testInt64Range(21, 100, /*hasNull=*/true));
+  const HugeintRange nullable(10, 20, /*nullAllowed=*/true);
+  EXPECT_TRUE(nullable.testInt64Range(21, 100, /*hasNull=*/true));
+}
+
+TEST(FilterTest, createHugeintValuesEmpty) {
+  auto filter = createHugeintValues({}, false);
+  EXPECT_EQ(filter->kind(), common::FilterKind::kAlwaysFalse);
+  EXPECT_FALSE(filter->testNull());
+  EXPECT_FALSE(filter->testInt128(0));
+
+  filter = createHugeintValues({}, true);
+  EXPECT_EQ(filter->kind(), common::FilterKind::kIsNull);
+  EXPECT_TRUE(filter->testNull());
+  EXPECT_FALSE(filter->testInt128(0));
+}
+
+TEST(FilterTest, mergeWithHugeintValuesUsingHashTable) {
+  auto valueAt = [](uint64_t highBits) {
+    return HugeInt::build(highBits, /*lowBits=*/42);
+  };
+
+  const auto value1 = valueAt(1);
+  const auto value2 = valueAt(2);
+  const auto value3 = valueAt(3);
+  const auto value4 = valueAt(4);
+
+  auto test =
+      [](const Filter& left, const Filter& right, const Filter& expected) {
+        auto merged = left.mergeWith(&right);
+        ASSERT_TRUE(merged->testingEquals(expected));
+        auto reverseMerged = right.mergeWith(&left);
+        ASSERT_TRUE(reverseMerged->testingEquals(expected));
+      };
+
+  {
+    SCOPED_TRACE("HugeintValuesUsingHashTable");
+    auto left = createHugeintValues({value1, value2, value3}, true);
+    auto right = createHugeintValues({value2, value4}, false);
+    auto expected = createHugeintValues({value2}, false);
+    test(*left, *right, *expected);
+  }
+
+  {
+    SCOPED_TRACE("HugeintRange");
+    auto values = createHugeintValues({value1, value2, value3}, true);
+    auto range = betweenHugeint(value2, value4, true);
+    auto expected = createHugeintValues({value2, value3}, true);
+    test(*values, *range, *expected);
+  }
+
+  {
+    SCOPED_TRACE("HugeintRange intersection");
+    auto left = betweenHugeint(value1, value3, true);
+    auto right = betweenHugeint(value2, value4, false);
+    auto expected = betweenHugeint(value2, value3, false);
+    test(*left, *right, *expected);
+  }
+
+  {
+    SCOPED_TRACE("Disjoint ranges with nulls");
+    auto left = betweenHugeint(value1, value1, true);
+    auto right = betweenHugeint(value2, value4, true);
+    IsNull expected;
+    test(*left, *right, expected);
+  }
+
+  {
+    SCOPED_TRACE("Disjoint values with nulls");
+    auto left = createHugeintValues({value1}, true);
+    auto right = createHugeintValues({value2}, true);
+    IsNull expected;
+    test(*left, *right, expected);
+  }
 }
 
 TEST(FilterTest, negatedBigintRange) {
@@ -603,6 +730,27 @@ TEST(FilterTest, negatedBigintValuesUsingBitmask) {
   EXPECT_FALSE(filter_no_more_null->testNull());
 }
 
+TEST(FilterTest, negatedFilterCloneWithNullAllowed) {
+  auto test = [](const Filter& notNullAllowed, const Filter& nullAllowed) {
+    SCOPED_TRACE(notNullAllowed.toString());
+    EXPECT_TRUE(notNullAllowed.clone(true)->testingEquals(nullAllowed));
+    EXPECT_TRUE(nullAllowed.clone(false)->testingEquals(notNullAllowed));
+  };
+
+  test(
+      *createNegatedBigintValues({0, 1'000'000}, /*nullAllowed=*/false),
+      *createNegatedBigintValues({0, 1'000'000}, /*nullAllowed=*/true));
+  test(
+      *createNegatedBigintValues({0, 10}, /*nullAllowed=*/false),
+      *createNegatedBigintValues({0, 10}, /*nullAllowed=*/true));
+  test(
+      NegatedBytesRange("a", false, false, "c", false, false, false),
+      NegatedBytesRange("a", false, false, "c", false, false, true));
+  test(
+      NegatedBytesValues({"a", "b"}, /*nullAllowed=*/false),
+      NegatedBytesValues({"a", "b"}, /*nullAllowed=*/true));
+}
+
 TEST(FilterTest, negatedBigintValuesEdgeCases) {
   // cases that should be represented by a non-integer filter
   auto always_true = createNegatedBigintValues({}, true);
@@ -705,11 +853,6 @@ TEST(FilterTest, bigintValuesUsingBloomFilterMergeWith) {
     test(BigintRange(2, 5, true), *createBigintValues({2, 3, 5}, false));
   }
   {
-    SCOPED_TRACE("Huge BigintRange");
-    BigintRange other(-1, INT64_MAX, true);
-    test(other, other);
-  }
-  {
     SCOPED_TRACE("BigintValuesUsingHashTable");
     std::vector<int64_t> otherValues = {INT64_MIN, 0, 3, 6, 9, INT64_MAX};
     BigintValuesUsingHashTable other(
@@ -722,6 +865,102 @@ TEST(FilterTest, bigintValuesUsingBloomFilterMergeWith) {
     BigintValuesUsingBitmask other(
         otherValues.front(), otherValues.back(), otherValues, true);
     test(other, *createBigintValues({3}, false));
+  }
+}
+
+TEST(FilterTest, bloomMergeKeepsBothFilters) {
+  BigintValuesUsingBloomFilter bloom(4, /*nullAllowed=*/false);
+  for (int64_t x : {0, 2, 3, 5, 7}) {
+    bloom.insert(x);
+  }
+
+  // Each filter rejects 0 and accepts 1 to 7. The bloom filter rejects 1.
+  auto test = [&](const Filter& other) {
+    SCOPED_TRACE(other.toString());
+    const std::array<std::unique_ptr<Filter>, 2> mergedFilters{
+        bloom.mergeWith(&other), other.mergeWith(&bloom)};
+    for (const auto& merged : mergedFilters) {
+      EXPECT_FALSE(merged->testInt64(0));
+      EXPECT_FALSE(merged->testInt64(1));
+      EXPECT_TRUE(merged->testInt64(3));
+      EXPECT_TRUE(merged->testInt64(7));
+      EXPECT_FALSE(merged->testInt64Range(0, 0, /*hasNull=*/false));
+      EXPECT_FALSE(merged->testNull());
+    }
+  };
+
+  test(NegatedBigintRange(0, 0, /*nullAllowed=*/true));
+  test(*createNegatedBigintValues({0, 1'000'000}, /*nullAllowed=*/true));
+  test(*bigintOr(between(1, 100), greaterThan(1'000'000)));
+  test(BigintRange(1, INT64_MAX, /*nullAllowed=*/true));
+
+  {
+    SCOPED_TRACE("Bloom filter merged twice");
+    NegatedBigintRange notZero(0, 0, /*nullAllowed=*/false);
+    auto merged = bloom.mergeWith(&notZero);
+    auto notTen =
+        createNegatedBigintValues({10, 1'000'000}, /*nullAllowed=*/false);
+    test(*merged->mergeWith(notTen.get()));
+    EXPECT_FALSE(merged->mergeWith(notTen.get())->testInt64(10));
+  }
+
+  {
+    SCOPED_TRACE("Two bloom filters");
+    NegatedBigintRange notZero(0, 0, /*nullAllowed=*/false);
+    BigintValuesUsingBloomFilter other(4, /*nullAllowed=*/false);
+    other.insert(0);
+    other.insert(3);
+    auto otherNotZero = other.mergeWith(&notZero);
+    const std::array<std::unique_ptr<Filter>, 2> mergedFilters{
+        bloom.mergeWith(otherNotZero.get()), otherNotZero->mergeWith(&bloom)};
+    for (const auto& merged : mergedFilters) {
+      EXPECT_FALSE(merged->testInt64(0));
+      EXPECT_TRUE(merged->testInt64(3));
+    }
+  }
+}
+
+TEST(FilterTest, bloomMergeAtInt64Max) {
+  const auto max = std::numeric_limits<int64_t>::max();
+  BigintValuesUsingBloomFilter bloom(4, true);
+  bloom.insert(max);
+
+  {
+    BigintRange range(max - 2, max, false);
+    auto merged = bloom.mergeWith(&range);
+    ASSERT_TRUE(merged->testInt64(max));
+    EXPECT_FALSE(merged->testNull());
+  }
+
+  {
+    BigintRange range(max, max, true);
+    auto merged = bloom.mergeWith(&range);
+    ASSERT_TRUE(merged->testInt64(max));
+    EXPECT_TRUE(merged->testNull());
+  }
+
+  {
+    const std::vector<int64_t> values{max - 2, max};
+    BigintValuesUsingBitmask bitmask(
+        values.front(), values.back(), values, false);
+    auto merged = bloom.mergeWith(&bitmask);
+    ASSERT_TRUE(merged->testInt64(max));
+    EXPECT_FALSE(merged->testNull());
+  }
+}
+
+TEST(FilterTest, bloomMergeEmptyRange) {
+  for (bool nullAllowed : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "nullAllowed=" << nullAllowed);
+    BigintValuesUsingBloomFilter bloom(4, nullAllowed);
+    bloom.insert(10);
+    BigintRange range(10, 5, nullAllowed);
+    auto merged = bloom.mergeWith(&range);
+    const auto expectedKind =
+        nullAllowed ? FilterKind::kIsNull : FilterKind::kAlwaysFalse;
+    EXPECT_EQ(merged->kind(), expectedKind);
+    EXPECT_EQ(merged->testNull(), nullAllowed);
+    EXPECT_FALSE(merged->testInt64(10));
   }
 }
 
@@ -1948,6 +2187,28 @@ TEST(FilterTest, mergeWithBigintMultiRange) {
   }
 }
 
+TEST(FilterTest, bitmaskMergeAtInt64Max) {
+  const auto max = std::numeric_limits<int64_t>::max();
+  auto bitmask = createBigintValues({max - 2, max}, true);
+
+  {
+    std::vector<std::unique_ptr<BigintRange>> subRanges;
+    subRanges.push_back(std::make_unique<BigintRange>(0, 5, false));
+    subRanges.push_back(std::make_unique<BigintRange>(max - 2, max, false));
+    BigintMultiRange multiRange(std::move(subRanges), false);
+    auto merged = bitmask->mergeWith(&multiRange);
+    ASSERT_TRUE(merged->testInt64(max));
+    EXPECT_FALSE(merged->testNull());
+  }
+
+  {
+    NegatedBigintRange negated(15, 25, true);
+    auto merged = bitmask->mergeWith(&negated);
+    ASSERT_TRUE(merged->testInt64(max));
+    EXPECT_TRUE(merged->testInt64(max - 2));
+  }
+}
+
 TEST(FilterTest, mergeMultiRange) {
   std::vector<std::unique_ptr<Filter>> filters;
   addUntypedFilters(filters);
@@ -2002,6 +2263,27 @@ TEST(FilterTest, clone) {
   auto filter10 =
       createBigintValues({1, 10, 100, 10'000}, /*nullAllowed=*/false);
   EXPECT_TRUE(filter10->clone(/*nullAllowed*/ true)->testNull());
+
+  // A clone must work after the original is destroyed. The bounds are over 12
+  // bytes so that StringView does not inline them.
+  {
+    auto filter = between("2026-09-15 07:00:00", "2026-10-02 15:00:00");
+    auto copy = filter->clone();
+    filter.reset();
+    EXPECT_TRUE(testBytes(*copy, "2026-09-15 07:00:00"));
+    EXPECT_TRUE(testBytes(*copy, "2026-10-02 15:00:00"));
+    EXPECT_FALSE(testBytes(*copy, "2026-09-15 06:59:59"));
+    EXPECT_FALSE(testBytes(*copy, "2026-10-02 15:00:01"));
+  }
+  {
+    auto filter = notBetween("2026-09-15 07:00:00", "2026-10-02 15:00:00");
+    auto copy = filter->clone();
+    filter.reset();
+    EXPECT_TRUE(testBytes(*copy, "2026-09-15 06:59:59"));
+    EXPECT_TRUE(testBytes(*copy, "2026-10-02 15:00:01"));
+    EXPECT_FALSE(testBytes(*copy, "2026-09-15 07:00:00"));
+    EXPECT_FALSE(testBytes(*copy, "2026-10-02 15:00:00"));
+  }
 }
 
 TEST(FilterTest, mergeWithBytesValues) {
@@ -2230,6 +2512,47 @@ TEST(FilterTest, dateRange) {
       between(DATE()->toDays("1970-01-01"), DATE()->toDays("1980-01-01"));
   EXPECT_TRUE(applyFilter(*filter, DATE()->toDays("1970-06-01")));
   EXPECT_FALSE(applyFilter(*filter, DATE()->toDays("1980-06-01")));
+}
+
+TEST(FilterTest, applyFilterToVariant) {
+  const BigintRange bigintFilter(10, 20, /*nullAllowed=*/false);
+  EXPECT_TRUE(applyFilter(bigintFilter, Variant(int64_t{15})));
+  EXPECT_FALSE(applyFilter(bigintFilter, Variant(int64_t{25})));
+
+  // Every integer width reaches testInt64.
+  EXPECT_TRUE(applyFilter(bigintFilter, Variant(int32_t{15})));
+  EXPECT_TRUE(applyFilter(bigintFilter, Variant(int16_t{15})));
+
+  const auto huge = HugeInt::parse("1234567890123456789012");
+  const HugeintRange hugeintFilter(huge, huge, /*nullAllowed=*/false);
+  EXPECT_TRUE(applyFilter(hugeintFilter, Variant(huge)));
+
+  const BoolValue boolFilter(true, /*nullAllowed=*/false);
+  EXPECT_TRUE(applyFilter(boolFilter, Variant(true)));
+  EXPECT_FALSE(applyFilter(boolFilter, Variant(false)));
+
+  const FloatRange floatFilter(
+      1.0f,
+      /*lowerUnbounded=*/false,
+      /*lowerExclusive=*/false,
+      2.0f,
+      /*upperUnbounded=*/false,
+      /*upperExclusive=*/false,
+      /*nullAllowed=*/false);
+  EXPECT_TRUE(applyFilter(floatFilter, Variant(1.25f)));
+  EXPECT_FALSE(applyFilter(floatFilter, Variant(2.5f)));
+
+  const Timestamp ts(10, 123000000);
+  const TimestampRange timestampFilter(ts, ts, /*nullAllowed=*/false);
+  EXPECT_TRUE(applyFilter(timestampFilter, Variant(ts)));
+
+  const auto bytesFilter = equal("abc");
+  EXPECT_TRUE(applyFilter(*bytesFilter, Variant(std::string("abc"))));
+  EXPECT_FALSE(applyFilter(*bytesFilter, Variant(std::string("abd"))));
+
+  VELOX_ASSERT_USER_THROW(
+      applyFilter(bigintFilter, Variant::null(TypeKind::BIGINT)),
+      "Filter cannot be applied to a null value");
 }
 
 TEST(FilterTest, timestampRange) {

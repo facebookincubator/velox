@@ -19,7 +19,7 @@
 #include <cudf/column/column_view.hpp>
 #include <cudf/types.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
+#include <cuda/stream>
 
 #include <vector>
 
@@ -29,7 +29,7 @@ namespace facebook::velox::cudf_velox {
 void mergeNullSourceNullsIntoResult(
     cudf::column& result,
     cudf::column_view nullSourceColumn,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /// Merges nulls from multiple secondary inputs into an already materialized
@@ -37,7 +37,7 @@ void mergeNullSourceNullsIntoResult(
 void mergeNullSourceNullsIntoResult(
     cudf::column& result,
     const std::vector<cudf::column_view>& nullSourceColumns,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 } // namespace facebook::velox::cudf_velox

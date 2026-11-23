@@ -20,15 +20,27 @@
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveGraph.h"
 
+#include <folly/container/F14Set.h>
 #include <algorithm>
+#include <cmath>
 #include <sstream>
 
 namespace torch::wave {
+
+void KernelOperation::addStaticShape(
+    int32_t offset,
+    std::vector<int64_t> dims,
+    bool contiguous) {
+  auto [it, inserted] =
+      staticShapes_.emplace(offset, StaticShape{std::move(dims), contiguous});
+  it->second.contiguous |= contiguous;
+}
 
 // --- SizeExpr ---
 
 int64_t SizeExpr::numElements(FrameP frame, nativert::ValueId* largestOut)
     const {
+  ScopedSetupPhase phase(SetupPhase::kSizeExpr);
   // A pure factory expression (e.g. zeros(size=[1000])) has no tensor leaves to
   // size from -- its extent lives entirely in constShapes.  Fall through to the
   // constShapes path below rather than returning the scalar default.
@@ -91,6 +103,7 @@ int64_t SizeExpr::numElements(FrameP frame, nativert::ValueId* largestOut)
 }
 
 std::vector<Dim> SizeExpr::dims(FrameP frame) const {
+  ScopedSetupPhase phase(SetupPhase::kSizeExpr);
   TORCH_CHECK(
       op == SizeShortcut::kMax,
       "SizeExpr::dims only supported for kMax, got ",
@@ -166,6 +179,135 @@ std::vector<Dim> SizeExpr::dims(FrameP frame) const {
     }
   }
   return bestDims;
+}
+
+int64_t SizeExpr::numElements(
+    const ValueTable& table,
+    nativert::ValueId* largestOut) const {
+  ScopedSetupPhase phase(SetupPhase::kSizeExpr);
+  if (values.empty() && args.empty() && constShapes.empty()) {
+    return 1;
+  }
+  if (broadcast || !constShapes.empty()) {
+    std::vector<Dim> shape;
+    dims(table, shape);
+    int64_t n = 1;
+    for (auto dim : shape) {
+      n *= dim;
+    }
+    return n;
+  }
+  int64_t result = 0;
+  for (auto valueId : values) {
+    if (!table.valid(valueId)) {
+      continue;
+    }
+    int64_t n;
+    if (table.isTensor(valueId)) {
+      n = table.tensor(valueId).numEl;
+    } else if (table.isInt(valueId)) {
+      n = table.scalar(valueId);
+    } else {
+      continue;
+    }
+    if (op == SizeShortcut::kMax) {
+      if (n > result) {
+        result = n;
+        if (largestOut && table.isTensor(valueId)) {
+          *largestOut = valueId;
+        }
+      }
+    } else {
+      result += n;
+    }
+  }
+  for (auto& child : args) {
+    int64_t n = child.numElements(table, largestOut);
+    if (op == SizeShortcut::kMax) {
+      if (n > result) {
+        result = n;
+      }
+    } else {
+      result += n;
+    }
+  }
+  return result;
+}
+
+void SizeExpr::dims(const ValueTable& table, std::vector<Dim>& result) const {
+  ScopedSetupPhase phase(SetupPhase::kSizeExpr);
+  TORCH_CHECK(
+      op == SizeShortcut::kMax,
+      "SizeExpr::dims only supported for kMax, got ",
+      static_cast<int>(op));
+  result.clear();
+  if (values.empty() && args.empty() && constShapes.empty()) {
+    result.push_back(1);
+    return;
+  }
+  auto isTensor = [&](nativert::ValueId id) {
+    return table.valid(id) && table.isTensor(id);
+  };
+  if (broadcast || !constShapes.empty()) {
+    auto combine = [&result](const Dim* shape, size_t rank) {
+      if (rank > result.size()) {
+        result.insert(result.begin(), rank - result.size(), 1);
+      }
+      for (size_t i = 0; i < rank; ++i) {
+        auto& resultDim = result[result.size() - rank + i];
+        if (resultDim == 1) {
+          resultDim = shape[i];
+        } else if (shape[i] != 1) {
+          resultDim = std::max<Dim>(resultDim, shape[i]);
+        }
+      }
+    };
+    Dim shape[kMaxDims];
+    for (auto valueId : values) {
+      if (isTensor(valueId)) {
+        const auto& t = table.tensor(valueId);
+        for (int32_t i = 0; i < t.rank; ++i) {
+          shape[i] = static_cast<Dim>(t.dims[i]);
+        }
+        combine(shape, t.rank);
+      }
+    }
+    std::vector<Dim> childDims;
+    for (auto& child : args) {
+      child.dims(table, childDims);
+      combine(childDims.data(), childDims.size());
+    }
+    for (const auto& constShape : constShapes) {
+      combine(constShape.data(), constShape.size());
+    }
+    if (result.empty()) {
+      result.push_back(1);
+    }
+    return;
+  }
+  int64_t bestNumel = -1;
+  for (auto valueId : values) {
+    if (!isTensor(valueId)) {
+      continue;
+    }
+    const auto& t = table.tensor(valueId);
+    if (static_cast<int64_t>(t.numEl) > bestNumel) {
+      bestNumel = t.numEl;
+      result.assign(t.dims, t.dims + t.rank);
+    }
+  }
+  std::vector<Dim> childDims;
+  for (auto& child : args) {
+    child.dims(table, childDims);
+    int64_t numel = 1;
+    for (auto dim : childDims) {
+      numel *= dim;
+    }
+    if (numel > bestNumel) {
+      bestNumel = numel;
+      result = childDims;
+    }
+  }
 }
 
 SizeExpr SizeExpr::toActual(
@@ -290,6 +432,36 @@ bool isAllElementwise(
   return true;
 }
 
+// True if any producer in the subgraph materializes its result in memory
+// (Metadata::isElementwiseBorder), which makes the subgraph a set of separate
+// expressions rather than one.
+bool hasElementwiseBorder(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    folly::F14FastSet<NodeCP>& visited) {
+  if (!visited.insert(node).second) {
+    return false;
+  }
+  for (auto& input : node->inputs()) {
+    auto* value = input.value;
+    if (subgraphInputs.count(value)) {
+      continue;
+    }
+    auto* producer = value->producer();
+    if (!producer) {
+      continue;
+    }
+    const auto* meta = Registry::metadata(producer->target());
+    if (meta && meta->isElementwiseBorder()) {
+      return true;
+    }
+    if (hasElementwiseBorder(producer, subgraphInputs, visited)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void collectAttrOffsets(
     NodeCP node,
     const std::unordered_set<ValueCP>& inputs,
@@ -327,6 +499,82 @@ bool hasAlwaysSingleBlock(
     }
   }
   return false;
+}
+
+int64_t maxDynamicSharedMemory(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& inputs,
+    int32_t blockSize,
+    std::unordered_set<NodeCP>& visited) {
+  if (!visited.insert(node).second) {
+    return 0;
+  }
+  int64_t bytes = 0;
+  auto* meta = Registry::metadata(node->target());
+  if (meta && meta->dynamicSharedMemory) {
+    bytes = meta->dynamicSharedMemory(node, blockSize);
+  }
+  for (const auto& input : node->inputs()) {
+    if (inputs.count(input.value)) {
+      continue;
+    }
+    auto* producer = input.value->producer();
+    if (producer) {
+      bytes = std::max(
+          bytes, maxDynamicSharedMemory(producer, inputs, blockSize, visited));
+    }
+  }
+  return bytes;
+}
+
+int32_t maxMinBlocksPerSm(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& inputs,
+    std::unordered_set<NodeCP>& visited) {
+  if (!visited.insert(node).second) {
+    return 0;
+  }
+  auto* meta = Registry::metadata(node->target());
+  int32_t blocks = meta ? meta->minBlocksPerSm : 0;
+  for (const auto& input : node->inputs()) {
+    if (inputs.count(input.value)) {
+      continue;
+    }
+    auto* producer = input.value->producer();
+    if (producer) {
+      blocks = std::max(blocks, maxMinBlocksPerSm(producer, inputs, visited));
+    }
+  }
+  return blocks;
+}
+
+int32_t maxBlockSizePreference(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& inputs,
+    std::unordered_set<NodeCP>& visited) {
+  if (!visited.insert(node).second) {
+    return 0;
+  }
+  auto* meta = Registry::metadata(node->target());
+  int32_t threads = 0;
+  if (meta != nullptr && meta->blockSize) {
+    threads = meta->blockSize(node);
+    TORCH_CHECK(
+        threads >= 0 && threads <= 1024 && (threads & (threads - 1)) == 0,
+        node->target(),
+        ": block size must be a power of two up to 1024, got ",
+        threads);
+  }
+  for (const auto& input : node->inputs()) {
+    if (inputs.count(input.value)) {
+      continue;
+    }
+    if (auto* producer = input.value->producer()) {
+      threads =
+          std::max(threads, maxBlockSizePreference(producer, inputs, visited));
+    }
+  }
+  return threads;
 }
 
 float sumNodeCosts(
@@ -544,6 +792,21 @@ KernelOperation::KernelOperation(
   std::unordered_set<NodeCP> asbVisited;
   alwaysSingleBlock_ = hasAlwaysSingleBlock(sg.root, inputs_, asbVisited);
 
+  for (int32_t threads = WaveConfig::get().blockSize; threads <= 1024;
+       threads *= 2) {
+    std::unordered_set<NodeCP> dynSharedVisited;
+    dynamicSharedBytes_.emplace_back(
+        threads,
+        maxDynamicSharedMemory(sg.root, inputs_, threads, dynSharedVisited));
+  }
+
+  std::unordered_set<NodeCP> blockSizeVisited;
+  blockSizePreference_ =
+      maxBlockSizePreference(sg.root, inputs_, blockSizeVisited);
+
+  std::unordered_set<NodeCP> minBlocksVisited;
+  minBlocksPerSm_ = maxMinBlocksPerSm(sg.root, inputs_, minBlocksVisited);
+
   for (size_t oi = 0; oi < outputValues.size(); ++oi) {
     auto* value = outputValues[oi];
     if (paramOffsets_.find(value) != paramOffsets_.end()) {
@@ -552,7 +815,7 @@ KernelOperation::KernelOperation(
       // prim.ListPack), the kernel emits no device code to compute it, so it
       // must be materialized on the host before the kernel reads it. Keep the
       // output desc, set its viewNode, and reuse the existing input offset (do
-      // not re-assign) so allocateLaunchOutputs executes the view before
+      // not re-assign) so the step program executes the view before
       // launch. Without this the value stays None in the frame.
       auto* producer = value->producer();
       auto* producerMeta =
@@ -587,19 +850,25 @@ KernelOperation::KernelOperation(
   // operand's producer, so it may have more than one memory-backed output; each
   // is then sized from its own shape expression rather than byLargestInput, and
   // callNeedsBarrier orders the producer before the random-access read.
+  // An op holding an elementwise border holds more than one expression, and
+  // they need not have the same extent. Its op-wide largest input then belongs
+  // to whichever expression is biggest, not to every output, so leave each
+  // output to its own size expression.
+  folly::F14FastSet<NodeCP> borderVisited;
   std::unordered_set<NodeCP> ewVisited;
-  if (!outputValues.empty() && isAllElementwise(sg.root, inputs_, ewVisited)) {
+  if (!outputValues.empty() && isAllElementwise(sg.root, inputs_, ewVisited) &&
+      !hasElementwiseBorder(sg.root, inputs_, borderVisited)) {
     // Size each memory-backed output by its largest input, unless the output
-    // declares its own shape expression (reserveShape, e.g. index_select,
+    // declares its own reserve (e.g. index_select,
     // slice_scatter, the factory ops), in which case that shape wins.
     // collectElementwiseLeaves already drops wholeTensor operands from the size
-    // leaves, so an op that reads a wholeTensor but has no reserveShape -- e.g.
+    // leaves, so an op that reads a wholeTensor but has no reserve -- e.g.
     // searchsorted / bucketize / isin, whose output has the query's shape while
     // the searched array is the wholeTensor -- is still sized correctly from
     // its remaining inputs, even when the query is a fused register that a
-    // reserveShape could not read.
+    // reserve could not read.
     for (size_t i = 0; i < outputDescs_.size(); ++i) {
-      if (!outputDescs_[i].shapeOnly && !outputDescs_[i].reserveShape) {
+      if (!outputDescs_[i].shapeOnly && !outputDescs_[i].sizedByReserve()) {
         outputDescs_[i].byLargestInput = true;
       }
     }
@@ -751,11 +1020,11 @@ void KernelOperation::setCode(std::stringstream& code) {
 
   // The loop above collects ordering inputs from this op's (possibly lowered)
   // variant nodes.  When an op is lowered to tw.* helpers, a boundary tensor
-  // input can be read only via reserveShape / sizeExpr at gatherLaunches time
+  // input can be read only via its reserve / sizeExpr at sizing time
   // rather than as a tracked variant node input, so its id is missing here.
   // Add the op's actual boundary inputs (orderedInputs_) so placeKernelLaunch
   // orders this op after their producers -- otherwise a standalone producer can
-  // be co-scheduled in the same step and its output read during gatherLaunches
+  // be co-scheduled in the same step and its output read during sizing
   // before the standalone has run.
   for (int32_t i = 0; i < numInputs_; ++i) {
     orderingInputs_.insert(orderedInputs_[i]->id());
@@ -781,17 +1050,29 @@ namespace {
 // Recurses through elementwise producers, collecting leaf inputs (kernel op
 // inputs or non-elementwise producers) into 'leafIds'. Skips inputs whose
 // argumentMeta has wholeTensor set.
+//
+// 'stopAtBorder' selects what an isElementwiseBorder() producer contributes. A
+// kernel op can hold several expressions -- a border producer is emitted as its
+// own loop and the consuming expression reads its materialized output -- and
+// the two sizes serve different purposes: the op's grid must cover the largest
+// expression in it (stopAtBorder false, walk everything), while each output is
+// sized by its own expression alone (stopAtBorder true, stop at the border and
+// size from the materialized value). Walking everything for a per-output size
+// gives the consumer its producer's extent, e.g. a scatter_add of a [3942617]
+// src into a [256] self sizes the consumer's output [3942617], whose element
+// count then drives the device loop past the end of every [256] operand.
 void collectElementwiseLeaves(
     NodeCP node,
     const std::unordered_set<ValueCP>& subgraphInputs,
     std::unordered_set<ValueCP>& seen,
-    std::vector<nativert::ValueId>& leafIds) {
+    std::vector<nativert::ValueId>& leafIds,
+    bool stopAtBorder) {
   auto* meta = Registry::metadata(node->target());
   const auto& inputs = node->inputs();
   for (size_t i = 0; i < inputs.size(); ++i) {
     auto* value = inputs[i].value;
-    if (meta && i < meta->argumentMeta.size() &&
-        meta->argumentMeta[i].wholeTensor) {
+    const auto* argMeta = argMetaForInput(meta, node, i);
+    if (argMeta && argMeta->wholeTensor) {
       continue;
     }
     if (!seen.insert(value).second) {
@@ -799,8 +1080,7 @@ void collectElementwiseLeaves(
     }
     auto* producer = value->producer();
     if (producer && producer->target() == "prim.ListPack") {
-      bool isRegister = meta && i < meta->argumentMeta.size() &&
-          meta->argumentMeta[i].isRegister;
+      bool isRegister = argMeta && argMeta->isRegister;
       if (isRegister) {
         for (const auto& listInput : producer->inputs()) {
           auto* lv = listInput.value;
@@ -812,8 +1092,10 @@ void collectElementwiseLeaves(
           } else {
             auto* lp = lv->producer();
             auto* lpMeta = Registry::metadata(lp->target());
-            if (lpMeta && lpMeta->elementwise) {
-              collectElementwiseLeaves(lp, subgraphInputs, seen, leafIds);
+            if (lpMeta && lpMeta->elementwise &&
+                !(stopAtBorder && lpMeta->isElementwiseBorder())) {
+              collectElementwiseLeaves(
+                  lp, subgraphInputs, seen, leafIds, stopAtBorder);
             } else {
               leafIds.push_back(lv->id());
             }
@@ -834,8 +1116,25 @@ void collectElementwiseLeaves(
       // shape-only tensor available at launch, so use it as the size leaf.
       if (producerMeta->sizeFromOutput) {
         leafIds.push_back(value->id());
+      } else if (stopAtBorder && producerMeta->isElementwiseBorder()) {
+        // The materialized output is what this expression reads. Its shape is
+        // the mutated self's, so add self too: self is typically an input of
+        // the enclosing kernel op and therefore already in the frame when the
+        // size is evaluated, while the output is only reserved afterwards.
+        leafIds.push_back(value->id());
+        if (producerMeta->mutatesArg.has_value()) {
+          auto ordinal = *producerMeta->mutatesArg;
+          if (ordinal >= 0 &&
+              static_cast<size_t>(ordinal) < producer->inputs().size()) {
+            auto* self = producer->inputs()[ordinal].value;
+            if (self != nullptr && seen.insert(self).second) {
+              leafIds.push_back(self->id());
+            }
+          }
+        }
       } else {
-        collectElementwiseLeaves(producer, subgraphInputs, seen, leafIds);
+        collectElementwiseLeaves(
+            producer, subgraphInputs, seen, leafIds, stopAtBorder);
       }
     } else {
       leafIds.push_back(value->id());
@@ -848,6 +1147,39 @@ void collectElementwiseLeaves(
 // tensor inputs, so collectElementwiseLeaves finds no leaf to size the fused
 // subtree from; their extent lives in the `size` attribute instead and must be
 // broadcast into the output shape.
+// The length of an aten.arange whose bounds are all attributes. Its size has
+// no `size` attribute, so a fused consumer learns it only from here.
+std::optional<int64_t> constantArangeExtent(NodeCP node) {
+  const auto& target = node->target();
+  const bool hasStart = target == "torch.ops.aten.arange.start" ||
+      target == "torch.ops.aten.arange.start_step";
+  if (!hasStart && target != "torch.ops.aten.arange.default") {
+    return std::nullopt;
+  }
+  auto intAttr = [&](const char* name,
+                     int64_t missing) -> std::optional<int64_t> {
+    const auto* attr = node->tryGetAttribute(name);
+    if (attr == nullptr) {
+      return node->tryGetInput(name) ? std::nullopt
+                                     : std::optional<int64_t>(missing);
+    }
+    if (const auto* value = std::get_if<int64_t>(&attr->value)) {
+      return *value;
+    }
+    return std::nullopt;
+  };
+  const auto start = hasStart ? intAttr("start", 0) : std::optional<int64_t>(0);
+  const auto end = intAttr("end", 0);
+  const auto step = intAttr("step", 1);
+  if (!start || !end || !step || *step == 0) {
+    return std::nullopt;
+  }
+  const auto span = *end - *start;
+  const auto size =
+      *step > 0 ? (span + *step - 1) / *step : (span + *step + 1) / *step;
+  return std::max<int64_t>(size, 0);
+}
+
 void collectFactorySizes(
     NodeCP node,
     const std::unordered_set<ValueCP>& subgraphInputs,
@@ -856,10 +1188,33 @@ void collectFactorySizes(
   if (!visited.insert(node).second) {
     return;
   }
-  if (const auto* sizeAttr = node->tryGetAttribute("size")) {
-    if (std::holds_alternative<std::vector<int64_t>>(sizeAttr->value)) {
-      const auto& sz = std::get<std::vector<int64_t>>(sizeAttr->value);
-      constShapes.emplace_back(sz.begin(), sz.end());
+  // A factory op is one with no tensor input -- that is what makes its `size`
+  // the only description of its extent. Other ops carry a `size` attribute
+  // that means something else entirely: aten.expand's size=[-1, 2] says "keep
+  // dimension 0, broadcast dimension 1 to 2", and aten.view's size=[-1] says
+  // "infer this dimension". Those -1 placeholders are not extents. Taking them
+  // as extents narrows -1 to 4294967295 in Dim (uint32_t) and that value then
+  // wins the per-dimension max below, so the fused output reserves a buffer of
+  // 4294967295 rows.
+  const bool isFactory = std::none_of(
+      node->inputs().begin(), node->inputs().end(), [](const auto& input) {
+        return input.value != nullptr &&
+            input.value->type().kind() == nativert::Type::Kind::Tensor;
+      });
+  if (isFactory) {
+    if (auto extent = constantArangeExtent(node)) {
+      constShapes.push_back({static_cast<Dim>(*extent)});
+    }
+    if (const auto* sizeAttr = node->tryGetAttribute("size")) {
+      if (std::holds_alternative<std::vector<int64_t>>(sizeAttr->value)) {
+        const auto& sz = std::get<std::vector<int64_t>>(sizeAttr->value);
+        // A factory's own size should never carry a placeholder, but a
+        // negative extent must not reach Dim under any circumstances.
+        if (std::none_of(
+                sz.begin(), sz.end(), [](int64_t d) { return d < 0; })) {
+          constShapes.emplace_back(sz.begin(), sz.end());
+        }
+      }
     }
   }
   for (const auto& input : node->inputs()) {
@@ -888,7 +1243,8 @@ SizeExpr KernelOperation::makeSizeExpr(
   if (meta && meta->elementwise) {
     std::unordered_set<ValueCP> seen;
     std::vector<nativert::ValueId> leafIds;
-    collectElementwiseLeaves(node, subgraphInputs, seen, leafIds);
+    collectElementwiseLeaves(
+        node, subgraphInputs, seen, leafIds, /*stopAtBorder=*/true);
     std::unordered_set<NodeCP> factoryVisited;
     std::vector<std::vector<Dim>> constShapes;
     collectFactorySizes(node, subgraphInputs, factoryVisited, constShapes);
@@ -938,18 +1294,155 @@ SizeExpr KernelOperation::makeSizeExpr(
   return result;
 }
 
+namespace {
+
+// A view whose output has its operand's element count, so a launch that covers
+// one covers the other.
+bool keepsElementCount(NodeCP node) {
+  static const folly::F14FastSet<std::string_view> kTargets{
+      "torch.ops.aten.view.default",
+      "torch.ops.aten._unsafe_view.default",
+      "torch.ops.aten.reshape.default",
+      "torch.ops.aten.alias.default",
+      "torch.ops.aten.unsqueeze.default",
+      "torch.ops.aten.squeeze.default",
+      "torch.ops.aten.squeeze.dim",
+      "torch.ops.aten.squeeze.dims",
+      "torch.ops.aten.flatten.using_ints",
+      "torch.ops.aten.unflatten.int",
+      "torch.ops.aten.permute.default",
+      "torch.ops.aten.transpose.int",
+      "torch.ops.aten.t.default"};
+  const auto* meta = Registry::metadata(node->target());
+  return meta != nullptr && meta->viewOfArg.has_value() &&
+      kTargets.count(node->target()) > 0;
+}
+
+// True when the expression rooted at 'node' is elementwise apart from
+// element-count-preserving views and tensor lists between its parts, so its
+// launch covers the broadcast of its leaves.
+bool isElementwiseThroughViews(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<NodeCP>& visited) {
+  if (!visited.insert(node).second) {
+    return true;
+  }
+  const bool isList = node->target() == "prim.ListPack";
+  const bool isView = keepsElementCount(node);
+  const auto* meta = Registry::metadata(node->target());
+  if (!isList && !isView && (meta == nullptr || !meta->elementwise)) {
+    return false;
+  }
+  const auto& inputs = node->inputs();
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    if (isView && static_cast<int32_t>(i) != *meta->viewOfArg) {
+      continue;
+    }
+    auto* value = inputs[i].value;
+    auto* producer = value->producer();
+    if (subgraphInputs.count(value) || producer == nullptr) {
+      continue;
+    }
+    if (!isElementwiseThroughViews(producer, subgraphInputs, visited)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void collectCountLeavesOfValue(
+    ValueCP value,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<ValueCP>& seen,
+    std::vector<nativert::ValueId>& leafIds);
+
+// The leaves whose broadcast is the element count of the expression rooted at
+// 'node', walking through the views and lists isElementwiseThroughViews admits.
+// Whole-tensor operands, read at computed offsets, do not size the launch.
+void collectCountLeaves(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<ValueCP>& seen,
+    std::vector<nativert::ValueId>& leafIds) {
+  const auto* meta = Registry::metadata(node->target());
+  const bool isView = keepsElementCount(node);
+  const auto& inputs = node->inputs();
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    if (isView && static_cast<int32_t>(i) != *meta->viewOfArg) {
+      continue;
+    }
+    const auto* argMeta = argMetaForInput(meta, node, i);
+    if (argMeta != nullptr && argMeta->wholeTensor) {
+      continue;
+    }
+    collectCountLeavesOfValue(inputs[i].value, subgraphInputs, seen, leafIds);
+  }
+}
+
+void collectCountLeavesOfValue(
+    ValueCP value,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<ValueCP>& seen,
+    std::vector<nativert::ValueId>& leafIds) {
+  if (!seen.insert(value).second) {
+    return;
+  }
+  auto* producer = value->producer();
+  if (subgraphInputs.count(value) || producer == nullptr) {
+    leafIds.push_back(value->id());
+    return;
+  }
+  const auto* meta = Registry::metadata(producer->target());
+  if (producer->target() == "prim.ListPack" || keepsElementCount(producer) ||
+      (meta != nullptr && meta->elementwise && !meta->sizeFromOutput)) {
+    collectCountLeaves(producer, subgraphInputs, seen, leafIds);
+    return;
+  }
+  leafIds.push_back(value->id());
+}
+
+} // namespace
+
 SizeExpr KernelOperation::makeDeepSizeExpr() {
   if (expr_) {
     std::unordered_set<NodeCP> ewVisited;
     if (isAllElementwise(expr_, inputs_, ewVisited)) {
       std::unordered_set<ValueCP> seen;
       std::vector<nativert::ValueId> leafIds;
-      collectElementwiseLeaves(expr_, inputs_, seen, leafIds);
+      // The grid must cover every expression in this op, including the ones
+      // emitted at an elementwise border, so walk through borders here.
+      collectElementwiseLeaves(
+          expr_, inputs_, seen, leafIds, /*stopAtBorder=*/false);
+      // A root sized from its own output (e.g. index_select) has only whole
+      // tensor operands, so its output is the leaf.
+      if (const auto* rootMeta = Registry::metadata(expr_->target());
+          rootMeta != nullptr && rootMeta->sizeFromOutput &&
+          !expr_->outputs().empty()) {
+        leafIds.push_back(expr_->outputs()[0]->id());
+      }
       std::unordered_set<NodeCP> factoryVisited;
       std::vector<std::vector<Dim>> constShapes;
       collectFactorySizes(expr_, inputs_, factoryVisited, constShapes);
       // Multiple operands broadcast against each other; size by the broadcast
       // shape (see makeSizeExpr).
+      SizeExpr expr{SizeShortcut::kMax, std::move(leafIds), {}};
+      expr.broadcast = expr.values.size() > 1;
+      expr.constShapes = std::move(constShapes);
+      return expr;
+    }
+    // Elementwise but for reshaping views and tensor lists between its parts,
+    // e.g. clamp(add(unsqueeze(a), unsqueeze(b))) viewed flat as the index list
+    // of a gather. Sizing such an op by its largest input covers the [R,C,1]
+    // operand of an [R,C,C] broadcast, not the broadcast.
+    std::unordered_set<NodeCP> viewVisited;
+    if (isElementwiseThroughViews(expr_, inputs_, viewVisited)) {
+      std::unordered_set<ValueCP> seen;
+      std::vector<nativert::ValueId> leafIds;
+      collectCountLeaves(expr_, inputs_, seen, leafIds);
+      std::unordered_set<NodeCP> factoryVisited;
+      std::vector<std::vector<Dim>> constShapes;
+      collectFactorySizes(expr_, inputs_, factoryVisited, constShapes);
       SizeExpr expr{SizeShortcut::kMax, std::move(leafIds), {}};
       expr.broadcast = expr.values.size() > 1;
       expr.constShapes = std::move(constShapes);
@@ -976,12 +1469,22 @@ SizeExpr KernelOperation::makeDeepSizeExpr() {
       leafIds.push_back(value->id());
     }
   }
-  return SizeExpr{SizeShortcut::kMax, std::move(leafIds), {}};
+  // An op whose work spans a whole tensor list is sized by the total, not the
+  // largest member; kMax would size its grid off one list element and starve
+  // it of blocks. See Metadata::gridSizeSumsInputs.
+  const auto* meta = expr_ ? Registry::metadata(expr_->target()) : nullptr;
+  auto shortcut = (meta != nullptr && meta->gridSizeSumsInputs)
+      ? SizeShortcut::kSum
+      : SizeShortcut::kMax;
+  return SizeExpr{shortcut, std::move(leafIds), {}};
 }
 
 void mergeOutputDesc(OutputDesc& dst, OutputDesc&& src) {
-  if (src.reserveShape) {
-    dst.reserveShape = std::move(src.reserveShape);
+  if (src.reserveFn) {
+    dst.reserveFn = src.reserveFn;
+    dst.reserveInputs = std::move(src.reserveInputs);
+    dst.reserveNode = src.reserveNode;
+    dst.reserveAttrNode = src.reserveAttrNode;
   }
   if (src.sizeExpr.op != SizeShortcut::kNone) {
     dst.sizeExpr = std::move(src.sizeExpr);
@@ -1006,6 +1509,9 @@ void mergeOutputDesc(OutputDesc& dst, OutputDesc&& src) {
   }
   if (src.viewNode) {
     dst.viewNode = src.viewNode;
+  }
+  if (src.concatLayout) {
+    dst.concatLayout = std::move(src.concatLayout);
   }
 }
 
@@ -1059,9 +1565,9 @@ OutputDesc KernelOperation::makeOutputDesc(
   desc.sizeExpr.op = returnMeta.sizeShortcut;
 
   // Expand sizeArgs ordinals to ValueIds from the node's inputs.
-  // Skip when reserveShape is set — it handles sizing independently.
+  // Skip when a reserve is set: it handles sizing independently.
   if (returnMeta.sizeShortcut != SizeShortcut::kNone &&
-      !returnMeta.reserveShape) {
+      returnMeta.reserve == nullptr) {
     const auto& sizeArgs = returnMeta.sizeArgs;
     for (size_t j = 0; j < sizeArgs.ordinal.size(); ++j) {
       auto ordinal = sizeArgs.ordinal[j];
@@ -1079,18 +1585,28 @@ OutputDesc KernelOperation::makeOutputDesc(
     }
   }
 
-  if (returnMeta.reserveShape) {
-    auto reserveShape = returnMeta.reserveShape;
-    auto* originalNode = compileCtx_.originalFromVariant(node);
-    desc.reserveShape = [node, originalNode, reserveShape](
-                            nativert::ExecutionFrame& frame,
-                            const FormalToActual& map,
-                            const NodeMap& nodeMap) {
-      return reserveShape(node, frame, map, originalNode, nodeMap);
-    };
+  if (returnMeta.reserve != nullptr) {
+    desc.reserveNode = node;
+    desc.reserveAttrNode = compileCtx_.originalFromVariant(node);
+    desc.reserveFn = returnMeta.reserve;
+    desc.reserveInputs =
+        std::make_shared<const ReserveInputs>(returnMeta.reserveInputs);
   }
 
   return desc;
+}
+
+int64_t KernelOperation::dynamicSharedBytes(int32_t blockSize) const {
+  for (const auto& [threads, bytes] : dynamicSharedBytes_) {
+    if (threads == blockSize) {
+      return bytes;
+    }
+  }
+  TORCH_CHECK(
+      dynamicSharedBytes_.empty(),
+      "no dynamic shared memory size for block size ",
+      blockSize);
+  return 0;
 }
 
 bool KernelOperation::isMultiUseInput(nativert::ValueId id) const {
@@ -1124,8 +1640,12 @@ void KernelOperation::setOutputs(
     }
     auto* producer = value->producer();
     if (producer) {
-      bool inputInMemory = meta && i < meta->argumentMeta.size() &&
-          !meta->argumentMeta[i].isRegister;
+      const auto* am = argMetaForInput(meta, node, i);
+      // The producer of a view the expression computes through is never
+      // written, but its shape is: leaves below the view index against it.
+      bool inputInMemory = am && !am->isRegister &&
+          !compileCtx_.fusesThroughView(node) &&
+          !compileCtx_.fusesRowReduction(node);
       setOutputs(
           producer,
           subgraphInputs,
@@ -1219,28 +1739,47 @@ void KernelOperation::setOutputs(
     if (!meta->returnMeta[i].isRegister || inMemory || needsShapeOnly) {
       OutputDesc desc;
       if (needsShapeOnly && meta->returnMeta[i].isRegister) {
-        if (meta->returnMeta[i].reserveShape) {
+        if (meta->returnMeta[i].reserve != nullptr) {
           desc = makeOutputDesc(meta->returnMeta[i], node, subgraphInputs);
         } else {
           desc.sizeExpr =
               makeSizeExpr(node, subgraphInputs, static_cast<int32_t>(i));
         }
         desc.shapeOnly = true;
-      } else if (meta->returnMeta[i].reserveShape) {
+      } else if (meta->returnMeta[i].reserve != nullptr) {
         desc = makeOutputDesc(meta->returnMeta[i], node, subgraphInputs);
+        // An op that mutates its self argument in place returns self: the
+        // output aliases it rather than taking a buffer of its own.
+        if (i == 0 && meta->mutatesArg.has_value()) {
+          auto ord = *meta->mutatesArg;
+          if (ord >= 0 && static_cast<size_t>(ord) < node->inputs().size() &&
+              node->inputs()[ord].value != nullptr) {
+            desc.aliasSelfId = node->inputs()[ord].value->id();
+          }
+        }
       } else {
         desc.shapeSetOnDevice = meta->returnMeta[i].shapeSetOnDevice;
         desc.neededOnHost = meta->returnMeta[i].neededOnHost;
         desc.sizeExpr =
             makeSizeExpr(node, subgraphInputs, static_cast<int32_t>(i));
-        // In-place elementwise (Tensor(a!)): the materialized output aliases
+        // In-place elementwise (Tensor(a!)) or a device function that writes
+        // its self in place (tw.scatter_add): the materialized output aliases
         // the mutated self argument, so reserve it as a view of self instead of
         // a fresh buffer (see reserveOutputs). This makes the returned tensor
         // reflect self, including later in-place mutations of self.
-        if (meta->elementwise && i == 0) {
+        if ((meta->elementwise || meta->mutatesArg.has_value()) && i == 0) {
           auto mutated = dataMutatedInputs(node);
           if (!mutated.empty()) {
             desc.aliasSelfId = mutated[0]->id();
+          } else if (meta->mutatesArg.has_value()) {
+            // Writers that carry mutatesArg metadata but no schema alias
+            // annotation (e.g. tw.slice_scatter / tw.select_scatter) still
+            // alias their self argument in place; bind the output to it.
+            auto ord = *meta->mutatesArg;
+            if (ord >= 0 && static_cast<size_t>(ord) < node->inputs().size() &&
+                node->inputs()[ord].value != nullptr) {
+              desc.aliasSelfId = node->inputs()[ord].value->id();
+            }
           }
         }
       }

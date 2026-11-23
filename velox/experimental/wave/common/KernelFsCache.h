@@ -18,6 +18,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 #include "velox/experimental/wave/common/Cuda.h"
@@ -28,6 +29,18 @@ namespace facebook::velox::wave {
 /// Stores .cu source, .cubin binaries, and .names (mangled entry points)
 /// in a directory. On lookup, hashes the source text and compares against
 /// cached entries to avoid recompilation across runs.
+///
+/// Safe to share one directory between concurrent processes. Two properties
+/// carry that: an entry's file name is derived from its own source text, so
+/// two processes compiling the same kernel converge on the same name instead
+/// of racing for a counter; and every file is published by renaming a
+/// process-private temporary into place, so a reader sees a whole file or no
+/// file. Neither process needs a lock, and a duplicate compile wastes work
+/// without corrupting anything.
+///
+/// Directories written by earlier versions, whose entries are named by an
+/// ordinal rather than by content, are still read: a cached entry is found by
+/// the text of its .cu, and the file name is not otherwise interpreted.
 class KernelFsCache {
  public:
   explicit KernelFsCache(const std::string& cacheDir);
@@ -56,32 +69,44 @@ class KernelFsCache {
 
  private:
   struct CacheEntry {
-    int32_t ordinal;
+    // File name of the entry without its extension. For an entry this version
+    // wrote it is the content digest; for one an earlier version wrote it is
+    // the ordinal it was allocated. Never parsed, only pasted into a path.
+    std::string stem;
   };
 
   /// Scans the cache directory and populates hashToEntries_ on first call.
   void init();
 
-  /// Returns the path for the .cu source file at the given cache ordinal.
-  std::string cuPath(int32_t ordinal) const;
-  /// Returns the path for the .cubin binary at the given cache ordinal.
-  std::string cubinPath(int32_t ordinal) const;
-  /// Returns the path for the .cubin.names sidecar at the given cache ordinal.
-  std::string namesPath(int32_t ordinal) const;
+  /// Returns the path for the .cu source file of the given entry.
+  std::string cuPath(std::string_view stem) const;
+  /// Returns the path for the .cubin binary of the given entry.
+  std::string cubinPath(std::string_view stem) const;
+  /// Returns the path for the .cubin.names sidecar of the given entry.
+  std::string namesPath(std::string_view stem) const;
+
+  // Stem of a temporary this process alone writes, unique across processes
+  // sharing the directory. The compiler writes the cubin and names here and
+  // they are renamed into place once whole.
+  std::string tempStem();
+
+  // True when all three files of 'stem' are present and neither the source nor
+  // the cubin is empty, i.e. the entry was fully published. A partially visible
+  // entry is reported as absent so the caller recompiles rather than loading a
+  // torn cubin.
+  bool entryComplete(std::string_view stem) const;
 
   // Directory holding the cached .cu, .cubin, and .cubin.names files.
   std::string cacheDir_;
   // True after the first call to init().
   bool initialized_{false};
-  // Protects hashToEntries_, nextOrdinal_, and initialized_.
+  // Protects hashToEntries_ and initialized_.
   std::mutex mutex_;
   // Maps source-text hash to cache entries sharing that hash.
   // Using unordered_map because adding folly::F14FastMap as a dependency
   // causes dependency count regressions across all downstream wave targets.
   std::unordered_map<size_t, std::vector<CacheEntry>> hashToEntries_;
-  // Next ordinal for new cache files.
-  std::atomic<int32_t> nextOrdinal_{0};
-  // Serial number for compile operations.
+  // Serial number for compile operations, part of the temporary file name.
   std::atomic<int32_t> compileSerial_{0};
   // Number of distinct cached entries.
   std::atomic<int32_t> numEntries_{0};

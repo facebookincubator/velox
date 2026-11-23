@@ -13,8 +13,13 @@
 # limitations under the License.
 
 # Tests the BUNDLED dependency resolution path on a plain Ubuntu runner
-# (no container). Triggered on PRs that change dependency scripts or
-# CMake modules, and on a nightly schedule.
+# (no container). Triggered on PRs that change dependency scripts, CMake
+# modules or Nimble, and on a nightly schedule.
+#
+# This is the only job that sets VELOX_ENABLE_NIMBLE=ON, so it is also the
+# only place Nimble is compiled at all. velox/dwio/nimble is listed below
+# because without it a pull request touching only Nimble reports a fully
+# green board without a single line of it having been built.
 
 name: Ubuntu Bundled Dependencies
 
@@ -30,6 +35,7 @@ on:
       - scripts/setup-helper-functions.sh
       - CMake/**
       - CMakeLists.txt
+      - velox/dwio/nimble/**
       - .github/workflows/ubuntu-bundled-deps.yml
 
 permissions:
@@ -53,6 +59,8 @@ jobs:
     steps:
 
       - name: Get Ccache Stash
+        continue-on-error: true
+        timeout-minutes: 30
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: ${{ env.CCACHE_DIR }}
@@ -63,7 +71,7 @@ jobs:
         run: |
           mkdir -p "$CCACHE_DIR"
 
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: velox
           persist-credentials: false
@@ -108,7 +116,9 @@ jobs:
         run: |
           ccache -vs
 
-      - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+      - uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
+        continue-on-error: true
+        timeout-minutes: 20
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-ubuntu-debug-bundled-deps

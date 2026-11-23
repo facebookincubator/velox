@@ -36,13 +36,13 @@ class DateAddFunction : public CudfFunction {
   /// Returns true if expr matches the supported date_add shape: 3 inputs,
   /// DATE return type, DATE third argument, a constant unit string in the
   /// supported set, and not both value and date as constants.
-  static bool canEvaluate(const std::shared_ptr<velox::exec::Expr>& expr);
+  static bool canEvaluate(const core::TypedExprPtr& expr);
 
-  explicit DateAddFunction(const std::shared_ptr<velox::exec::Expr>& expr);
+  DateAddFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool);
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override;
 
  private:
@@ -51,7 +51,7 @@ class DateAddFunction : public CudfFunction {
   ColumnOrView evalDayBased(
       cudf::column_view dateCol,
       std::optional<cudf::column_view> valueCol,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const;
 
   /// Adds value*scale months (where scale comes from unit_) to dateCol. When
@@ -59,7 +59,7 @@ class DateAddFunction : public CudfFunction {
   ColumnOrView evalMonthBased(
       cudf::column_view dateCol,
       std::optional<cudf::column_view> valueCol,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const;
 
   // Unit of the increment; one of {kDay, kWeek, kMonth, kQuarter, kYear}.

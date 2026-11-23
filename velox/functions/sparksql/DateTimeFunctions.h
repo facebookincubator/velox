@@ -20,6 +20,7 @@
 
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/TimeUtils.h"
+#include "velox/functions/sparksql/AnsiMode.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/TimestampUtils.h"
 #include "velox/type/TimestampConversion.h"
@@ -163,14 +164,15 @@ struct UnixTimestampParseFunction {
     VELOX_CHECK(!formatter.hasError(), "Default format should always be valid");
     format_ = formatter.value();
     setTimezone(config);
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
   }
 
   FOLLY_ALWAYS_INLINE bool call(
       int64_t& result,
       const arg_type<Varchar>& input) {
     auto dateTimeResult = format_->parse(std::string_view(input));
-    // Return null if could not parse.
     if (dateTimeResult.hasError()) {
+      ansiUserFail(ansiEnabled_, "{}", dateTimeResult.error().message());
       return false;
     }
     toGMTWithGapCorrection(
@@ -196,6 +198,7 @@ struct UnixTimestampParseFunction {
   constexpr static std::string_view kDefaultFormat_{"yyyy-MM-dd HH:mm:ss"};
   std::shared_ptr<DateTimeFormatter> format_;
   const tz::TimeZone* sessionTimeZone_{tz::locateZone(0)}; // fallback to GMT.
+  bool ansiEnabled_{false};
 };
 
 template <typename T>
@@ -212,18 +215,17 @@ struct UnixTimestampParseWithFormatFunction
       const arg_type<Varchar>* format) {
     legacyFormatter_ = SparkQueryConfig{config}.legacyDateFormatter();
     if (format != nullptr) {
-      auto formatter = detail::getDateTimeFormatter(
-          std::string_view(format->data(), format->size()),
-          legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
-                           : DateTimeFormatterType::JODA);
-      if (formatter.hasError()) {
-        invalidFormat_ = true;
+      auto formatter = detail::initializeFormatter(
+          std::string_view(format->data(), format->size()), legacyFormatter_);
+      if (formatter) {
+        this->format_ = formatter;
       } else {
-        this->format_ = formatter.value();
+        invalidFormat_ = true;
       }
       isConstFormat_ = true;
     }
     this->setTimezone(config);
+    this->ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
   }
 
   FOLLY_ALWAYS_INLINE void initialize(
@@ -237,37 +239,31 @@ struct UnixTimestampParseWithFormatFunction
       int64_t& result,
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& format) {
+    // Legacy vs. Joda formatter selection is independent of ANSI mode;
+    // initializeFormatter() already returns nullptr vs. throws accordingly.
     if (invalidFormat_) {
       return false;
     }
 
-    // Format error returns null.
     if (!isConstFormat_) {
-      auto formatter = detail::getDateTimeFormatter(
-          std::string_view(format.data(), format.size()),
-          legacyFormatter_ ? DateTimeFormatterType::STRICT_SIMPLE
-                           : DateTimeFormatterType::JODA);
-      if (formatter.hasError()) {
+      auto formatter = detail::initializeFormatter(
+          std::string_view(format.data(), format.size()), legacyFormatter_);
+      if (formatter) {
+        this->format_ = formatter;
+      } else {
         return false;
       }
-      this->format_ = formatter.value();
     }
     auto dateTimeResult =
         this->format_->parse(std::string_view(input.data(), input.size()));
-    // parsing error returns null
     if (dateTimeResult.hasError()) {
+      ansiUserFail(this->ansiEnabled_, "{}", dateTimeResult.error().message());
       return false;
     }
     toGMTWithGapCorrection(
         (*dateTimeResult).timestamp, *this->getTimeZone(*dateTimeResult));
     result = (*dateTimeResult).timestamp.getSeconds();
     return true;
-  }
-
-  FOLLY_ALWAYS_INLINE void call(
-      int64_t& result,
-      const arg_type<Timestamp>& input) {
-    result = input.getSeconds();
   }
 
   FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& input) {
@@ -291,6 +287,21 @@ struct UnixTimestampParseWithFormatFunction
   bool isConstFormat_{false};
   bool invalidFormat_{false};
   bool legacyFormatter_{false};
+};
+
+// Returns the UNIX timestamp in seconds for a Timestamp or TimestampUtc
+// input, truncating toward zero like Spark.
+template <typename T, typename TTimestamp>
+struct UnixTimestampFromTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TTimestamp>& input) {
+    auto seconds = input.getSeconds();
+    // Spark truncates toward zero; getSeconds() floors for negative timestamps.
+    result = (seconds < 0 && input.getNanos() > 0) ? seconds + 1 : seconds;
+  }
 };
 
 // Parses unix time in seconds to a formatted string.
@@ -414,7 +425,7 @@ struct FromUtcTimestampFunction {
   const tz::TimeZone* timeZone_{nullptr};
 };
 
-/// Converts date string to Timestmap type.
+/// Converts date string to Timestamp type.
 template <typename T>
 struct GetTimestampFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -554,6 +565,8 @@ struct DateFromUnixDateFunction {
 
 /// Truncates a timestamp to a specified time unit. Return NULL if the format is
 /// invalid. Format as abbreviated unit string and "microseconds" are allowed.
+/// Throws if the result is outside the range of int64 microseconds since the
+/// epoch.
 template <typename T>
 struct DateTruncFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -580,6 +593,11 @@ struct DateTruncFunction {
       return false;
     }
     result = truncateTimestamp(timestamp, unitOption.value(), timeZone_);
+    // Spark timestamps are int64 microseconds since the epoch, so truncating
+    // the minimum timestamp to a coarser unit cannot be represented.
+    if (result < Timestamp::minMicros() || result > Timestamp::maxMicros()) {
+      VELOX_ARITHMETIC_ERROR("long overflow");
+    }
     return true;
   }
 
@@ -1039,7 +1057,7 @@ struct SecondsToTimestampFunction {
       result = Timestamp(static_cast<int64_t>(seconds), 0);
       return true;
     } else {
-      if (FOLLY_UNLIKELY(!std::isfinite(seconds))) {
+      if (!std::isfinite(seconds)) [[unlikely]] {
         return false;
       }
 
@@ -1047,9 +1065,9 @@ struct SecondsToTimestampFunction {
       const double secondsD = static_cast<double>(seconds);
 
       if (secondsD >= kMaxSecondsD) {
-        result = Timestamp(kMaxSeconds, kMaxNanoseconds);
+        result = Timestamp::maxMicros();
       } else if (secondsD <= kMinSecondsD) {
-        result = Timestamp(kMinSeconds, kMinNanoseconds);
+        result = Timestamp::minMicros();
       } else {
         // Scale to microseconds and truncate toward zero.
         const double microsD = secondsD * Timestamp::kMicrosecondsInSecond;
@@ -1080,12 +1098,6 @@ struct SecondsToTimestampFunction {
       kMaxMicrosD / Timestamp::kMicrosecondsInSecond;
   static constexpr double kMinSecondsD =
       kMinMicrosD / Timestamp::kMicrosecondsInSecond;
-
-  // Cutoff values are based on Java's Long.MAX_VALUE and Long.MIN_VALUE.
-  static constexpr int64_t kMaxSeconds = 9223372036854LL;
-  static constexpr int64_t kMaxNanoseconds = 775807000LL;
-  static constexpr int64_t kMinSeconds = -9223372036855LL;
-  static constexpr int64_t kMinNanoseconds = 224192000LL;
 };
 
 template <typename T>

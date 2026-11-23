@@ -1,0 +1,980 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#include "velox/core/FixedPointPlanNodes.h"
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/Expressions.h"
+#include "velox/core/PlanNode.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
+
+using namespace ::facebook::velox;
+using namespace ::facebook::velox::core;
+
+namespace {
+class FixedPointPlanNodesTest : public testing::Test,
+                                public test::VectorTestBase {
+ protected:
+  static void SetUpTestCase() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
+  // Nodes are built by hand rather than through PlanBuilder because most of
+  // these plans are deliberately malformed -- a fragment with two incoming
+  // shuffles, schemas that disagree across one, stages of differing width.
+  // PlanBuilder composes a well-formed plan from a source outwards and has no
+  // way to express those.
+  const RowTypePtr schema_{ROW("x", BIGINT())};
+
+  StateDeclarationPtr declaration(const std::string& name = "n") const {
+    return std::make_shared<VectorStateDeclaration>(
+        name, schema_, /*initialPlan=*/nullptr, /*append=*/true);
+  }
+
+  PlanNodePtr stateSource(
+      const std::string& id = "b",
+      const std::string& entry = "n") const {
+    return std::make_shared<StateSourceNode>(
+        id, entry, schema_, /*delta=*/true);
+  }
+
+  PlanNodePtr exchange(const std::string& id, const RowTypePtr& type) const {
+    return std::make_shared<ExchangeNode>(id, type, "Presto");
+  }
+
+  PlanNodePtr exchange(const std::string& id) const {
+    return exchange(id, schema_);
+  }
+
+  PlanNodePtr shuffleOut(
+      const std::string& id,
+      const PlanNodePtr& source,
+      int32_t numPartitions,
+      const RowTypePtr& type) const {
+    return std::make_shared<PartitionedOutputNode>(
+        id,
+        PartitionedOutputNode::Kind::kPartitioned,
+        std::vector<TypedExprPtr>{
+            std::make_shared<FieldAccessTypedExpr>(BIGINT(), "x")},
+        numPartitions,
+        /*replicateNullsAndAny=*/false,
+        std::make_shared<GatherPartitionFunctionSpec>(),
+        type,
+        "Presto",
+        std::string(TransportKind::kInMemory),
+        source);
+  }
+
+  PlanNodePtr shuffleOut(
+      const std::string& id,
+      const PlanNodePtr& source,
+      int32_t numPartitions) const {
+    return shuffleOut(id, source, numPartitions, schema_);
+  }
+
+  static ConvergenceConfig noConvergence() {
+    return ConvergenceConfig{
+        .maxIterations = 5, .errorWhenMaxIterationReached = false};
+  }
+
+  // A fixed point over a single "n" state entry.
+  FixedPointNodePtr fixedPoint(
+      std::vector<PlanNodePtr> plans,
+      ConvergenceConfig convergence) const {
+    return std::make_shared<FixedPointNode>(
+        "fp",
+        std::vector<StateDeclarationPtr>{declaration()},
+        std::move(plans),
+        std::move(convergence),
+        "n");
+  }
+
+  // A fixed point over its own "m" entry whose body shuffles 'numPartitions'
+  // ways -- what an enclosing loop must notice.
+  PlanNodePtr shufflingFixedPoint(const std::string& id, int32_t numPartitions)
+      const {
+    return std::make_shared<FixedPointNode>(
+        id,
+        std::vector<StateDeclarationPtr>{declaration("m")},
+        std::vector<PlanNodePtr>{
+            shuffleOut(id + "p", stateSource(id + "s", "m"), numPartitions),
+            exchange(id + "e")},
+        noConvergence(),
+        "m");
+  }
+
+  // Puts 'nested' beside the primary input so the plan still starts with a
+  // StateSourceNode; only the recursive walk finds it.
+  PlanNodePtr beside(
+      const std::string& id,
+      const PlanNodePtr& primary,
+      const PlanNodePtr& nested) const {
+    return std::make_shared<LocalPartitionNode>(
+        id,
+        LocalPartitionNode::Type::kGather,
+        /*scaleWriter=*/false,
+        std::make_shared<GatherPartitionFunctionSpec>(),
+        std::vector<PlanNodePtr>{primary, nested});
+  }
+};
+
+// The FixedPointNode constructor and the state declarations validate their
+// inputs up front, so a malformed plan fails at construction rather than at
+// execution.
+TEST_F(FixedPointPlanNodesTest, validation) {
+  auto vecSchema = ROW("x", BIGINT());
+  auto htSchema = ROW({"k", "v"}, BIGINT());
+
+  // A single body that reads the output entry -- the minimal valid body, reused
+  // as the valid baseline that each case mutates one field of.
+  auto body =
+      std::make_shared<StateSourceNode>("b", "n", vecSchema, /*delta=*/true);
+  auto vectorN = [&] {
+    return std::make_shared<VectorStateDeclaration>(
+        "n", vecSchema, /*initialPlan=*/nullptr, /*append=*/true);
+  };
+
+  // maxIterations must be positive.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{vectorN()},
+          std::vector<PlanNodePtr>{body},
+          ConvergenceConfig{
+              .maxIterations = 0, .errorWhenMaxIterationReached = false},
+          "n"),
+      "maxIterations must be positive");
+
+  // A hash table needs at least one key column, and every key must be in the
+  // schema -- checked when the declaration is built.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<HashTableStateDeclaration>(
+          "h", htSchema, std::vector<std::string>{}),
+      "at least one key column");
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<HashTableStateDeclaration>(
+          "h", htSchema, std::vector<std::string>{"missing"}),
+      "key column is not in the schema");
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<HashTableStateDeclaration>(
+          "h", htSchema, std::vector<std::string>{"k", "k"}),
+      "key columns must be unique");
+
+  // StateHashJoin needs a non-null probe source and at least one probe key.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<StateHashJoinNode>(
+          "j", "h", std::vector<std::string>{"k"}, htSchema, nullptr),
+      "non-null probe source");
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<StateHashJoinNode>(
+          "j", "h", std::vector<std::string>{}, htSchema, body),
+      "at least one probe key");
+
+  // State declaration names must be unique across all kinds.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{
+              vectorN(),
+              std::make_shared<VectorStateDeclaration>("n", vecSchema)},
+          std::vector<PlanNodePtr>{body},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = false},
+          "n"),
+      "duplicate state declaration name");
+
+  // A StateSource must reference a declared vector entry.
+  auto typoBody =
+      std::make_shared<StateSourceNode>("b", "typo", vecSchema, /*delta=*/true);
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{vectorN()},
+          std::vector<PlanNodePtr>{typoBody},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = false},
+          "n"),
+      "StateSource references no declared vector state entry");
+
+  // errorWhenMaxIterationReached requires a convergence plan (a null plan never
+  // converges, so it would always fail).
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{vectorN()},
+          std::vector<PlanNodePtr>{body},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = true},
+          "n"),
+      "errorWhenMaxIterationReached requires a convergence criterion");
+
+  // A convergence plan must emit exactly one BOOLEAN column.
+  auto nonBoolConvergence =
+      std::make_shared<StateSourceNode>("c", "n", vecSchema, /*delta=*/false);
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{vectorN()},
+          std::vector<PlanNodePtr>{body},
+          ConvergenceConfig::converging(nonBoolConvergence, 5),
+          "n"),
+      "convergence plan output column must be BOOLEAN");
+
+  auto twoColSchema = ROW({"a", "b"}, BOOLEAN());
+  auto twoColConvergence = std::make_shared<StateSourceNode>(
+      "c", "flags", twoColSchema, /*delta=*/false);
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{
+              vectorN(),
+              std::make_shared<VectorStateDeclaration>("flags", twoColSchema)},
+          std::vector<PlanNodePtr>{body},
+          ConvergenceConfig::converging(twoColConvergence, 5),
+          "n"),
+      "exactly one output column");
+
+  // A StateHashJoin output arity must equal probe columns plus the hash table's
+  // payload columns.
+  auto badArityJoin = std::make_shared<StateHashJoinNode>(
+      "j",
+      "h",
+      std::vector<std::string>{"x"},
+      vecSchema,
+      std::make_shared<StateSourceNode>("b", "n", vecSchema, /*delta=*/true));
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{
+              vectorN(),
+              std::make_shared<HashTableStateDeclaration>(
+                  "h", htSchema, std::vector<std::string>{"k"})},
+          std::vector<PlanNodePtr>{badArityJoin},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = false},
+          "n"),
+      "output arity must equal probe columns plus hash table payload columns");
+
+  // A StateHashJoin's probe key types must match the hash table's build key
+  // types.
+  auto varcharProbe = ROW("k", VARCHAR());
+  auto badKeyTypeJoin = std::make_shared<StateHashJoinNode>(
+      "j",
+      "h",
+      std::vector<std::string>{"k"},
+      ROW({"k", "v"}, {VARCHAR(), BIGINT()}),
+      std::make_shared<StateSourceNode>(
+          "s", "probe", varcharProbe, /*delta=*/true));
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{
+              std::make_shared<VectorStateDeclaration>("probe", varcharProbe),
+              std::make_shared<HashTableStateDeclaration>(
+                  "h", htSchema, std::vector<std::string>{"k"})},
+          std::vector<PlanNodePtr>{badKeyTypeJoin},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = false},
+          "probe"),
+      "probe key type must match the hash table build key type: k");
+
+  // Probe keys are resolved by name, so a probe key that is not the leading
+  // probe column is accepted, and a missing one is rejected.
+  auto trailingKeyProbe = ROW({{"p", VARCHAR()}, {"k", BIGINT()}});
+  auto makeTrailingKeyNode = [&](const std::string& probeKey) {
+    auto join = std::make_shared<StateHashJoinNode>(
+        "j",
+        "h",
+        std::vector<std::string>{probeKey},
+        ROW({{"p", VARCHAR()}, {"k", BIGINT()}, {"v", BIGINT()}}),
+        std::make_shared<StateSourceNode>(
+            "s", "probe", trailingKeyProbe, /*delta=*/true));
+    return std::make_shared<FixedPointNode>(
+        "fp",
+        std::vector<StateDeclarationPtr>{
+            std::make_shared<VectorStateDeclaration>("probe", trailingKeyProbe),
+            std::make_shared<VectorStateDeclaration>(
+                "out",
+                ROW({{"p", VARCHAR()}, {"k", BIGINT()}, {"v", BIGINT()}})),
+            std::make_shared<HashTableStateDeclaration>(
+                "h", htSchema, std::vector<std::string>{"k"})},
+        std::vector<PlanNodePtr>{join},
+        ConvergenceConfig{
+            .maxIterations = 5, .errorWhenMaxIterationReached = false},
+        "out");
+  };
+  EXPECT_NO_THROW(makeTrailingKeyNode("k"));
+  VELOX_ASSERT_USER_THROW(
+      makeTrailingKeyNode("missing"),
+      "probe key is not a probe input column: missing");
+
+  // A null body plan is rejected with a clean error rather than crashing.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{vectorN()},
+          std::vector<PlanNodePtr>{nullptr},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = false},
+          "n"),
+      "plan 0 must not be null");
+
+  // Hash table key columns must be the leading schema columns (keys-first).
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<HashTableStateDeclaration>(
+          "h", ROW({"v", "k"}, BIGINT()), std::vector<std::string>{"k"}),
+      "leading schema columns in order");
+
+  // An initial plan must not read state -- it runs in Phase 1 before state
+  // exists.
+  auto stateReadingInitial =
+      std::make_shared<StateSourceNode>("s", "n", vecSchema, /*delta=*/true);
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{
+              std::make_shared<VectorStateDeclaration>(
+                  "n", vecSchema, stateReadingInitial, /*append=*/true)},
+          std::vector<PlanNodePtr>{body},
+          ConvergenceConfig{
+              .maxIterations = 5, .errorWhenMaxIterationReached = false},
+          "n"),
+      "initial plan must not read state");
+}
+
+// The body and the convergence are each one logical plan cut at its shuffles.
+// These are the ways a caller can hand over something that is not that, each
+// of which would otherwise wire exchanges to peers that do not match, or run a
+// fragment on workers that hold the wrong part of the state.
+TEST_F(FixedPointPlanNodesTest, fragmentValidation) {
+  auto schema = schema_;
+  auto verdict = [&](const std::string& id, const PlanNodePtr& source) {
+    return std::make_shared<ProjectNode>(
+        id,
+        std::vector<std::string>{"c"},
+        std::vector<TypedExprPtr>{
+            std::make_shared<ConstantTypedExpr>(BOOLEAN(), Variant(true))},
+        source);
+  };
+  auto broadcastOut = [&](const std::string& id, const PlanNodePtr& source) {
+    return PartitionedOutputNode::broadcast(id, 1, schema, "Presto", source);
+  };
+
+  // A two-plan chain shuffling across two workers is the valid baseline each
+  // case below mutates, and it is what numWorkers()/requiresSplits() report.
+  {
+    auto node = fixedPoint(
+        {shuffleOut("p", stateSource(), 2, schema), exchange("e", schema)},
+        noConvergence());
+    EXPECT_EQ(node->numWorkers(), 2);
+    EXPECT_TRUE(node->requiresSplits());
+    EXPECT_FALSE(node->requiresSingleWorker());
+  }
+
+  // A non-shuffling body is one worker and needs no peer splits.
+  {
+    auto node = fixedPoint({stateSource()}, noConvergence());
+    EXPECT_EQ(node->numWorkers(), 1);
+    EXPECT_FALSE(node->requiresSplits());
+    EXPECT_FALSE(node->requiresSingleWorker());
+  }
+
+  // A chain that gathers before its last plan runs that plan on worker 0 alone,
+  // which writes every worker's state only when there is one.
+  {
+    auto gather = [&](const std::string& id, const PlanNodePtr& source) {
+      return PartitionedOutputNode::single(id, schema, "Presto", source);
+    };
+    auto node = fixedPoint(
+        {gather("p", stateSource()), exchange("e")}, noConvergence());
+    EXPECT_EQ(node->numWorkers(), 1);
+    EXPECT_TRUE(node->requiresSingleWorker());
+
+    VELOX_ASSERT_USER_THROW(
+        fixedPoint(
+            {shuffleOut("p0", stateSource(), 2),
+             gather("p1", exchange("e0")),
+             exchange("e1")},
+            noConvergence()),
+        "the root plan writes each worker's state, so it must run on every "
+        "worker: kSource, or kFixed across all 2 workers");
+  }
+
+  // Each plan of a chain reads its predecessor through its only Exchange.
+  {
+    auto branching = std::make_shared<LocalPartitionNode>(
+        "lp",
+        LocalPartitionNode::Type::kGather,
+        /*scaleWriter=*/false,
+        std::make_shared<GatherPartitionFunctionSpec>(),
+        std::vector<PlanNodePtr>{
+            exchange("e0", schema), exchange("e1", schema)});
+    VELOX_ASSERT_USER_THROW(
+        fixedPoint(
+            {shuffleOut("p", stateSource(), 2, schema), branching},
+            noConvergence()),
+        "must read exactly one shuffle");
+  }
+
+  // Each reader of a hash shuffle runs one task per partition, so shuffles of
+  // different widths can follow each other.  The widest gives the loop its
+  // workers.
+  {
+    auto node = fixedPoint(
+        {shuffleOut("p0", stateSource(), 2, schema),
+         shuffleOut("p1", exchange("e0", schema), 3, schema),
+         exchange("e1", schema)},
+        noConvergence());
+    EXPECT_EQ(node->numWorkers(), 3);
+  }
+
+  // A reader whose task count differs from the partition count would leave
+  // partitions unread.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{declaration()},
+          MultiStagePlan({
+              {.id = 1, .plan = (shuffleOut("p", stateSource(), 2))},
+              {.id = 2,
+               .type = StageType::kFixed,
+               .numRemotePartitions = 3,
+               .plan = (exchange("e")),
+               .inputs = {{"e", 1}}},
+          }),
+          noConvergence(),
+          "n"),
+      "Partition count mismatch between producer 1 and consumer 2");
+
+  // A fragment's type has to be one a loop can place on its workers.
+  {
+    auto body = [&](StageType type, std::optional<int32_t> numPartitions) {
+      return std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{declaration()},
+          MultiStagePlan({
+              {.id = 1,
+               .type = type,
+               .numRemotePartitions = numPartitions,
+               .plan = (stateSource())},
+          }),
+          noConvergence(),
+          "n");
+    };
+    VELOX_ASSERT_USER_THROW(
+        body(StageType::kCoordinator, std::nullopt),
+        "a fixed point runs on its workers, not on the coordinator");
+    VELOX_ASSERT_USER_THROW(
+        body(StageType::kSource, 2),
+        "a kSource plan runs on every worker, so it takes no "
+        "numRemotePartitions");
+    VELOX_ASSERT_USER_THROW(
+        body(StageType::kFixed, 1),
+        "a kFixed plan must run more than one task; one task is kSingle");
+    VELOX_ASSERT_USER_THROW(
+        body(StageType::kFixed, std::nullopt),
+        "kFixed stage must have numRemotePartitions set");
+  }
+
+  // A fragment that runs on every worker cannot read a hash shuffle, which
+  // hands each partition to one task.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{declaration()},
+          MultiStagePlan({
+              {.id = 1, .plan = (shuffleOut("p", stateSource(), 2))},
+              {.id = 2, .plan = (exchange("e")), .inputs = {{"e", 1}}},
+          }),
+          noConvergence(),
+          "n"),
+      "a plan that reads a partitioned shuffle must run one task per "
+      "partition");
+
+  // The loop does not feed a nested fixed point's initial plans.
+  {
+    auto nested = std::make_shared<FixedPointNode>(
+        "in",
+        std::vector<StateDeclarationPtr>{
+            std::make_shared<VectorStateDeclaration>(
+                "m", schema, exchange("ie"), /*append=*/true)},
+        std::vector<PlanNodePtr>{stateSource("is", "m")},
+        noConvergence(),
+        "m");
+    VELOX_ASSERT_USER_THROW(
+        std::make_shared<FixedPointNode>(
+            "fp",
+            std::vector<StateDeclarationPtr>{declaration()},
+            MultiStagePlan({
+                {.id = 1,
+                 .plan = PartitionedOutputNode::single(
+                     "g1", schema, "Presto", stateSource("b1"))},
+                {.id = 2,
+                 .type = StageType::kSingle,
+                 .plan = (beside("lp", stateSource(), nested)),
+                 .inputs = {{"ie", 1}}},
+            }),
+            noConvergence(),
+            "n"),
+        "a plan must not feed an Exchange in a nested fixed point's initial "
+        "plan. Plan: 1, Exchange: ie");
+  }
+
+  // Each worker holds part of the state, so a fragment on fewer workers reads
+  // its rows through a shuffle rather than from state.  Here worker 0 alone
+  // reads state beside the gathered rows, which holds all of it only when the
+  // loop runs as one worker.
+  {
+    auto readsStateOnWorkerZero = [&](StageType rootType,
+                                      std::optional<int32_t> numPartitions) {
+      return std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{declaration()},
+          MultiStagePlan({
+              {.id = 1,
+               .plan = (PartitionedOutputNode::single(
+                   "g", schema, "Presto", stateSource("b0")))},
+              {.id = 2,
+               .type = StageType::kSingle,
+               .plan = (broadcastOut(
+                   "bo", beside("bs", exchange("ge"), stateSource("b1")))),
+               .inputs = {{"ge", 1}}},
+              {.id = 3,
+               .type = rootType,
+               .numRemotePartitions = numPartitions,
+               .plan = (exchange("be")),
+               .inputs = {{"be", 2}}},
+          }),
+          noConvergence(),
+          "n");
+    };
+    VELOX_ASSERT_USER_THROW(
+        readsStateOnWorkerZero(StageType::kFixed, 2),
+        "a plan that reads state must run on every worker");
+
+    auto node = readsStateOnWorkerZero(StageType::kSource, std::nullopt);
+    EXPECT_EQ(node->numWorkers(), 1);
+    EXPECT_TRUE(node->requiresSingleWorker());
+  }
+
+  // The general form of a global value in a step: every worker reduces its
+  // part, worker 0 combines the parts, and broadcasts the result to a root
+  // that runs on every worker, as PageRank does with its dangling total.
+  {
+    auto node = std::make_shared<FixedPointNode>(
+        "fp",
+        std::vector<StateDeclarationPtr>{declaration()},
+        MultiStagePlan({
+            {.id = 1,
+             .plan = (PartitionedOutputNode::single(
+                 "g", schema, "Presto", stateSource("b0")))},
+            {.id = 2,
+             .type = StageType::kSingle,
+             .plan = (broadcastOut("bo", exchange("ge"))),
+             .inputs = {{"ge", 1}}},
+            {.id = 3, .plan = (exchange("be")), .inputs = {{"be", 2}}},
+        }),
+        noConvergence(),
+        "n");
+    EXPECT_EQ(node->numWorkers(), 1);
+    EXPECT_TRUE(node->readsPeers());
+    EXPECT_FALSE(node->requiresSingleWorker());
+  }
+
+  // A convergence shuffle wider than the body leaves the body's root on fewer
+  // workers than the loop runs on.
+  {
+    auto convergenceSchema = ROW("c", BOOLEAN());
+    auto convergence = ConvergenceConfig::globalVerdict(
+        {shuffleOut(
+             "cp",
+             std::make_shared<StateSourceNode>(
+                 "cs", "n", schema, /*delta=*/false),
+             3,
+             schema),
+         PartitionedOutputNode::single(
+             "cg", schema, "Presto", exchange("ce", schema))},
+        verdict("cv", exchange("cx", schema)),
+        5);
+    VELOX_ASSERT_USER_THROW(
+        fixedPoint(
+            {shuffleOut("p", stateSource(), 2, schema), exchange("e", schema)},
+            std::move(convergence)),
+        "the root plan writes each worker's state, so it must run on every "
+        "worker: kSource, or kFixed across all 3 workers");
+  }
+
+  // Workers that each decide after a convergence shuffle could disagree, so
+  // the verdict runs on every worker over its own state, or on worker 0 alone.
+  {
+    auto convergenceSource =
+        std::make_shared<StateSourceNode>("cs", "n", schema, /*delta=*/false);
+    auto decideOnEach = [&](const PlanNodePtr& producer,
+                            StageType rootType,
+                            std::optional<int32_t> numPartitions) {
+      return fixedPoint(
+          {stateSource()},
+          ConvergenceConfig::converging(
+              MultiStagePlan({
+                  {.id = 1, .plan = (producer)},
+                  {.id = 2,
+                   .type = rootType,
+                   .numRemotePartitions = numPartitions,
+                   .plan = (verdict("cv", exchange("ce"))),
+                   .inputs = {{"ce", 1}}},
+              }),
+              5));
+    };
+    VELOX_ASSERT_USER_THROW(
+        decideOnEach(
+            shuffleOut("cp", convergenceSource, 2), StageType::kFixed, 2),
+        "the root convergence plan must run on every worker (kSource) or on "
+        "worker 0, which shares its verdict (kSingle), but it is FIXED");
+    VELOX_ASSERT_USER_THROW(
+        decideOnEach(
+            broadcastOut("cp", convergenceSource),
+            StageType::kSource,
+            std::nullopt),
+        "a convergence root that runs on every worker must read no stage");
+  }
+
+  // A verdict after partials reads every worker's rows, so they must gather
+  // them to the one worker that runs it.  Without partials, it reads worker
+  // 0's own state, starting with a StateSourceNode, and the body must shuffle,
+  // which keeps the workers in step.
+  {
+    auto convergenceSource =
+        std::make_shared<StateSourceNode>("cs", "n", schema, /*delta=*/false);
+    VELOX_ASSERT_USER_THROW(
+        fixedPoint(
+            {stateSource()},
+            ConvergenceConfig::globalVerdict(
+                {shuffleOut("cp", convergenceSource, 2, schema)},
+                verdict("cv", exchange("ce", schema)),
+                5)),
+        "Partition count mismatch between producer 1 and consumer 2");
+    VELOX_ASSERT_USER_THROW(
+        fixedPoint(
+            {stateSource()},
+            ConvergenceConfig::workerZeroVerdict(
+                verdict(
+                    "cv",
+                    std::make_shared<ValuesNode>(
+                        "cvals",
+                        std::vector<RowVectorPtr>{makeNamedRowVector(
+                            "x", makeFlatVector<int64_t>({1}))})),
+                5)),
+        "a convergence plan that reads no shuffle must start with a "
+        "StateSourceNode");
+
+    // A gathered verdict reads no state: worker 0 holds only its own part.
+    VELOX_ASSERT_USER_THROW(
+        fixedPoint(
+            {shuffleOut("p", stateSource(), 2, schema), exchange("e", schema)},
+            ConvergenceConfig::globalVerdict(
+                {PartitionedOutputNode::single(
+                    "cg", schema, "Presto", convergenceSource)},
+                verdict(
+                    "cv",
+                    beside(
+                        "cb",
+                        exchange("ce", schema),
+                        std::make_shared<StateSourceNode>(
+                            "cs2", "n", schema, /*delta=*/false))),
+                5)),
+        "a convergence plan that reads state must run on every worker");
+
+    auto ownVerdict = [&] {
+      return ConvergenceConfig::workerZeroVerdict(
+          verdict("cv", convergenceSource), 5);
+    };
+    VELOX_ASSERT_USER_THROW(
+        fixedPoint({stateSource()}, ownVerdict()),
+        "FixedPointNode: a verdict plan without convergence plans requires a "
+        "body that shuffles");
+
+    // Worker 0 reads its own state for workerZeroVerdict, the one plan on
+    // fewer workers that may.
+    auto node = fixedPoint(
+        {shuffleOut("p", stateSource(), 2, schema), exchange("e", schema)},
+        ownVerdict());
+    EXPECT_EQ(node->numWorkers(), 2);
+    EXPECT_TRUE(node->readsPeers());
+    EXPECT_TRUE(node->convergenceConfig().verdictOnWorkerZero());
+    EXPECT_FALSE(node->requiresSingleWorker());
+  }
+}
+
+// A stage that reads a partitioned shuffle runs one task per partition, so
+// resizing the shuffle resizes the stages that read it.  A stage that reads
+// no shuffle, or a broadcast, keeps its type.
+TEST_F(FixedPointPlanNodesTest, sizeStagesToShuffles) {
+  using Sizes = std::vector<std::pair<StageType, std::optional<int32_t>>>;
+  auto reader = [&](int32_t id, const std::string& exchangeId, int32_t from) {
+    Stage stage{
+        .id = id,
+        .type = StageType::kFixed,
+        .numRemotePartitions = 2,
+        .plan = exchange(exchangeId),
+    };
+    stage.inputs.push_back({exchangeId, from});
+    return stage;
+  };
+  auto sized = [](const std::vector<Stage>& stages) {
+    Sizes sizes;
+    for (const auto& stage : stages) {
+      sizes.emplace_back(stage.type, stage.numRemotePartitions);
+    }
+    return sizes;
+  };
+
+  {
+    const auto stages = FixedPointNode::sizeStagesToShuffles({
+        {.id = 1, .plan = shuffleOut("p", stateSource(), 3)},
+        reader(2, "e", 1),
+    });
+    EXPECT_EQ(
+        sized(stages),
+        (Sizes{{StageType::kSource, std::nullopt}, {StageType::kFixed, 3}}));
+  }
+
+  {
+    const auto stages = FixedPointNode::sizeStagesToShuffles({
+        {.id = 1,
+         .plan = PartitionedOutputNode::single(
+             "p", schema_, "Presto", stateSource())},
+        reader(2, "e", 1),
+    });
+    EXPECT_EQ(
+        sized(stages),
+        (Sizes{
+            {StageType::kSource, std::nullopt},
+            {StageType::kSingle, std::nullopt},
+        }));
+  }
+
+  {
+    const auto stages = FixedPointNode::sizeStagesToShuffles({
+        {.id = 1,
+         .plan = PartitionedOutputNode::broadcast(
+             "p", 1, schema_, "Presto", stateSource())},
+        reader(2, "e", 1),
+    });
+    EXPECT_EQ(
+        sized(stages),
+        (Sizes{{StageType::kSource, std::nullopt}, {StageType::kFixed, 2}}));
+  }
+}
+
+// stopWhenDeltaEmpty reads a row count local to one worker, so it is only a
+// sound verdict when nothing in the loop shuffles -- and it cannot be combined
+// with a convergence sequence, which would be a second, disagreeing verdict.
+TEST_F(FixedPointPlanNodesTest, deltaEmptyValidation) {
+  auto schema = schema_;
+  auto shuffleOut = [&](const std::string& id, const PlanNodePtr& source) {
+    return this->shuffleOut(id, source, /*numPartitions=*/2);
+  };
+
+  // A purely local loop is the case it is for.
+  EXPECT_NO_THROW(
+      fixedPoint({stateSource("b")}, ConvergenceConfig::whenDeltaEmpty(10)));
+
+  // The row count is already the verdict; a convergence sequence would be a
+  // second one.
+  auto withPlans = ConvergenceConfig::whenDeltaEmpty(10);
+  withPlans.plan = ConvergenceConfig::converging(stateSource("c"), 10).plan;
+  VELOX_ASSERT_USER_THROW(
+      fixedPoint({stateSource("b")}, std::move(withPlans)),
+      "mutually exclusive");
+
+  // A shuffling body means peers, and one worker's frontier can empty while
+  // theirs has not.
+  VELOX_ASSERT_USER_THROW(
+      fixedPoint(
+          {shuffleOut("p", stateSource("b")),
+           std::make_shared<ExchangeNode>("e", schema, "Presto")},
+          ConvergenceConfig::whenDeltaEmpty(10)),
+      "non-shuffling fixed point");
+
+  // numWorkers() sees through to the nested loop's width, so a shuffling
+  // nested loop is rejected by the same check as a shuffling body.
+  auto nested = std::make_shared<FixedPointNode>(
+      "inner",
+      std::vector<StateDeclarationPtr>{std::make_shared<VectorStateDeclaration>(
+          "m", schema, /*initialPlan=*/nullptr, /*append=*/true)},
+      std::vector<PlanNodePtr>{
+          shuffleOut(
+              "ip",
+              std::make_shared<StateSourceNode>(
+                  "is", "m", schema, /*delta=*/true)),
+          std::make_shared<ExchangeNode>("ie", schema, "Presto")},
+      ConvergenceConfig{
+          .maxIterations = 5, .errorWhenMaxIterationReached = false},
+      "m");
+  auto beside = std::make_shared<LocalPartitionNode>(
+      "g",
+      LocalPartitionNode::Type::kGather,
+      /*scaleWriter=*/false,
+      std::make_shared<GatherPartitionFunctionSpec>(),
+      std::vector<PlanNodePtr>{stateSource("b"), nested});
+  VELOX_ASSERT_USER_THROW(
+      fixedPoint({beside}, ConvergenceConfig::whenDeltaEmpty(10)),
+      "non-shuffling fixed point");
+}
+
+// A nested fixed point runs on the peers the enclosing loop was assigned, so
+// the enclosing loop has to know it shuffles: it must report the same width and
+// ask the coordinator for splits, or the nested exchanges wait on peers nobody
+// named.
+TEST_F(FixedPointPlanNodesTest, nestedWorkerPropagation) {
+  auto schema = schema_;
+
+  // The enclosing loop does not shuffle itself, but adopts the nested width and
+  // the nested split requirement.
+  {
+    auto outer = std::make_shared<FixedPointNode>(
+        "fp",
+        std::vector<StateDeclarationPtr>{declaration("n")},
+        std::vector<PlanNodePtr>{
+            beside("g", stateSource("b", "n"), shufflingFixedPoint("in", 2))},
+        noConvergence(),
+        "n");
+    EXPECT_EQ(outer->numWorkers(), 2);
+    EXPECT_TRUE(outer->requiresSplits());
+  }
+
+  // A nested loop runs on the workers that run the plan hosting it, so it
+  // cannot shuffle across more of them.
+  VELOX_ASSERT_USER_THROW(
+      std::make_shared<FixedPointNode>(
+          "fp",
+          std::vector<StateDeclarationPtr>{declaration("n")},
+          std::vector<PlanNodePtr>{
+              shuffleOut("p", stateSource("b", "n"), 2),
+              beside(
+                  "g",
+                  std::make_shared<ExchangeNode>("e", schema, "Presto"),
+                  shufflingFixedPoint("in", 3))},
+          noConvergence(),
+          "n"),
+      "a fixed point nested in plan 1 runs on the 2 worker(s) that run it, so "
+      "it cannot shuffle across 3");
+}
+
+// A nested loop in the convergence widens the enclosing loop exactly as one in
+// the body does: the convergence runs on the same workers.
+TEST_F(FixedPointPlanNodesTest, nestedInConvergence) {
+  auto verdictSchema = ROW("converged", BOOLEAN());
+  auto verdictSource = [&](const std::string& id, const std::string& entry) {
+    return std::make_shared<StateSourceNode>(
+        id, entry, verdictSchema, /*delta=*/false);
+  };
+  // A loop over its own BOOLEAN entry, shuffling 'numPartitions' ways, so it
+  // can sit in a convergence chain whose last plan must emit one BOOLEAN.
+  auto shufflingVerdictLoop = [&](const std::string& id,
+                                  int32_t numPartitions) {
+    auto out = std::make_shared<PartitionedOutputNode>(
+        id + "p",
+        PartitionedOutputNode::Kind::kPartitioned,
+        std::vector<TypedExprPtr>{
+            std::make_shared<FieldAccessTypedExpr>(BOOLEAN(), "converged")},
+        numPartitions,
+        /*replicateNullsAndAny=*/false,
+        std::make_shared<GatherPartitionFunctionSpec>(),
+        verdictSchema,
+        "Presto",
+        std::string(TransportKind::kInMemory),
+        verdictSource(id + "s", "v"));
+    return std::make_shared<FixedPointNode>(
+        id,
+        std::vector<StateDeclarationPtr>{
+            std::make_shared<VectorStateDeclaration>(
+                "v", verdictSchema, /*initialPlan=*/nullptr, /*append=*/true)},
+        std::vector<PlanNodePtr>{
+            out,
+            std::make_shared<ExchangeNode>(id + "e", verdictSchema, "Presto")},
+        noConvergence(),
+        "v");
+  };
+  auto convergenceHosting = [&](const PlanNodePtr& nested) {
+    return beside("cg", verdictSource("cs", "w"), nested);
+  };
+  auto withVerdictState = [&](std::vector<PlanNodePtr> plans,
+                              ConvergenceConfig convergence) {
+    return std::make_shared<FixedPointNode>(
+        "fp",
+        std::vector<StateDeclarationPtr>{
+            declaration(),
+            std::make_shared<VectorStateDeclaration>(
+                "w", verdictSchema, /*initialPlan=*/nullptr, /*append=*/true)},
+        std::move(plans),
+        std::move(convergence),
+        "n");
+  };
+
+  // The enclosing loop adopts the nested width from the convergence chain.
+  {
+    auto convergence = ConvergenceConfig::converging(
+        convergenceHosting(shufflingVerdictLoop("cin", 2)), 10);
+    auto outer = withVerdictState({stateSource()}, std::move(convergence));
+    EXPECT_EQ(outer->numWorkers(), 2);
+    EXPECT_TRUE(outer->requiresSplits());
+  }
+
+  // A nested loop wider than the body leaves the body's root on fewer workers
+  // than the loop runs on.
+  {
+    auto convergence = ConvergenceConfig::converging(
+        convergenceHosting(shufflingVerdictLoop("cin", 3)), 10);
+    VELOX_ASSERT_USER_THROW(
+        withVerdictState(
+            {shuffleOut("p", stateSource(), 2), exchange("e")},
+            std::move(convergence)),
+        "kFixed across all 3 workers, the most any stage or nested fixed "
+        "point runs on, but it is FIXED");
+  }
+}
+
+// A declaration without an initial plan adds no plan.
+TEST_F(FixedPointPlanNodesTest, nestedPlans) {
+  auto initial = std::make_shared<ValuesNode>(
+      "i",
+      std::vector<RowVectorPtr>{
+          makeNamedRowVector("x", makeFlatVector<int64_t>({1}))});
+  auto body = stateSource("b", "n");
+  auto convergence = std::make_shared<ProjectNode>(
+      "c",
+      std::vector<std::string>{"converged"},
+      std::vector<TypedExprPtr>{
+          std::make_shared<ConstantTypedExpr>(BOOLEAN(), Variant(true))},
+      stateSource("cs", "n"));
+  FixedPointNode node(
+      "fp",
+      std::vector<StateDeclarationPtr>{
+          std::make_shared<VectorStateDeclaration>(
+              "n", schema_, initial, /*append=*/true),
+          std::make_shared<VectorStateDeclaration>(
+              "m", schema_, /*initialPlan=*/nullptr, /*append=*/true)},
+      {body},
+      ConvergenceConfig::converging(convergence, /*maxIterations=*/5),
+      "n");
+
+  EXPECT_THAT(
+      node.nestedPlans(),
+      testing::UnorderedElementsAre(initial, body, convergence));
+}
+
+} // namespace

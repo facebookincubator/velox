@@ -19,7 +19,6 @@
 #include <folly/container/F14Set.h>
 #include <folly/hash/Checksum.h>
 
-#include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/common/DataBuffer.h"
 
 namespace facebook::velox::dwrf {
@@ -172,21 +171,6 @@ class StringDictionaryEncoder {
   }
 
  private:
-  VELOX_FRIEND_TEST(TestStringDictionaryEncoder, GetCount);
-  VELOX_FRIEND_TEST(TestStringDictionaryEncoder, GetIndex);
-  VELOX_FRIEND_TEST(TestStringDictionaryEncoder, GetStride);
-  VELOX_FRIEND_TEST(TestStringDictionaryEncoder, Clear);
-
-  // Intended for testing only.
-  uint32_t getIndex(std::string_view sv) {
-    detail::StringLookupKey key{sv, 0};
-    auto result = keyIndex_.find(key);
-    if (result != keyIndex_.end()) {
-      return result->getIndex();
-    }
-    return size();
-  }
-
   // All keys are written in this single array.
   dwio::common::DataBuffer<char> keyBytes_;
 

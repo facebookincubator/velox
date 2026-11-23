@@ -35,9 +35,9 @@ void ensureRegexIsConstant(
 // REGEXP_REPLACE(string, pattern, overwrite, position) → string
 //
 // If a string has a substring that matches the given pattern, replace
-// the match in the string wither overwrite and return the string. If
+// the match in the string with overwrite and return the string. If
 // optional parameter position is provided, only make replacements
-// after that positon in the string (1 indexed).
+// after that position in the string (1 indexed).
 //
 // If position <= 0, throw error.
 // If position > length string, return string.

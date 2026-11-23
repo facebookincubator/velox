@@ -44,6 +44,9 @@ class TestBufferPool : public CompressionBufferPool {
   TestBufferPool(MemoryPool& pool, uint64_t blockSize)
       : buffer_{std::make_unique<DataBuffer<char>>(
             pool,
+            blockSize + PAGE_HEADER_SIZE)},
+        decompressionBuffer_{std::make_unique<DataBuffer<char>>(
+            pool,
             blockSize + PAGE_HEADER_SIZE)} {}
 
   std::unique_ptr<DataBuffer<char>> getBuffer(uint64_t /* unused */) override {
@@ -57,8 +60,37 @@ class TestBufferPool : public CompressionBufferPool {
     buffer_ = std::move(buffer);
   }
 
+  std::unique_ptr<DataBuffer<char>> getDecompressionBuffer(
+      uint64_t /* unused */) override {
+    VELOX_CHECK_NOT_NULL(decompressionBuffer_);
+    return std::move(decompressionBuffer_);
+  }
+
+  void returnDecompressionBuffer(
+      std::unique_ptr<DataBuffer<char>> buffer) override {
+    VELOX_CHECK_NULL(decompressionBuffer_);
+    VELOX_CHECK_NOT_NULL(buffer);
+    decompressionBuffer_ = std::move(buffer);
+  }
+
  private:
   std::unique_ptr<DataBuffer<char>> buffer_;
+  std::unique_ptr<DataBuffer<char>> decompressionBuffer_;
+};
+
+// Test-only compressor that emits bytes shorter than its input (forcing the
+// compressed-page branch) that are not a valid frame for any real codec, so a
+// round-trip decompress must fail.
+class CorruptingCompressor : public Compressor {
+ public:
+  CorruptingCompressor() : Compressor{1} {}
+
+  uint64_t compress(const void* /* src */, void* dest, uint64_t length)
+      override {
+    const uint64_t fakeSize = std::min<uint64_t>(length, 8);
+    ::memset(dest, 0, fakeSize);
+    return fakeSize;
+  }
 };
 
 void generateRandomData(char* data, size_t size, bool letter) {
@@ -479,4 +511,81 @@ TEST(CompressionOptionsTest, testCompressionOptions) {
 
   EXPECT_EQ(options.format.zstd.compressionLevel, 7);
   EXPECT_EQ(options.compressionThreshold, 256);
+}
+
+class WriteVerificationTest : public testing::Test {
+ public:
+  static void SetUpTestCase() {
+    MemoryManager::testingSetInstance(MemoryManager::Options{});
+  }
+
+ protected:
+  std::shared_ptr<MemoryPool> pool_ = memoryManager()->addLeafPool();
+};
+
+// With write-side verification enabled, a page whose compressed bytes do not
+// decode back to the source must abort the write via a throw.
+TEST_F(WriteVerificationTest, throwsOnCorruptCompressedPage) {
+  constexpr uint64_t block = 1024;
+  MemorySink memSink(DEFAULT_MEM_STREAM_SIZE, {.pool = pool_.get()});
+  TestBufferPool bufferPool(*pool_, block);
+  DataBufferHolder holder{
+      *pool_, block, 0, DEFAULT_PAGE_GROW_RATIO, std::addressof(memSink)};
+
+  CompressionOptions options{};
+  options.format.zstd.compressionLevel = 1;
+  auto verifyDecompressor = createBlockDecompressor(
+      CompressionKind_ZSTD, block, options, "corrupt-stream");
+
+  PagedOutputStream stream(
+      bufferPool,
+      holder,
+      /*compressionThreshold=*/1,
+      PAGE_HEADER_SIZE,
+      std::make_unique<CorruptingCompressor>(),
+      /*encryptor=*/nullptr,
+      std::move(verifyDecompressor));
+
+  char data[512];
+  std::memset(data, 'a', sizeof(data));
+  void* buffer;
+  int32_t bufferSize = 0;
+  ASSERT_TRUE(stream.Next(&buffer, &bufferSize, sizeof(data)));
+  std::memcpy(buffer, data, sizeof(data));
+  stream.BackUp(bufferSize - static_cast<int32_t>(sizeof(data)));
+
+  VELOX_ASSERT_THROW(stream.flush(), "compression verification failed");
+}
+
+// A well-formed ZSTD page must pass verification and still round-trip on read.
+TEST_F(WriteVerificationTest, verifiesGoodZstdPageThroughWriterOption) {
+  constexpr uint64_t block = 1024;
+  MemorySink memSink(DEFAULT_MEM_STREAM_SIZE, {.pool = pool_.get()});
+  TestBufferPool bufferPool(*pool_, block);
+  DataBufferHolder holder{
+      *pool_, block, 0, DEFAULT_PAGE_GROW_RATIO, std::addressof(memSink)};
+
+  Config config;
+  config.set<bool>(Config::VERIFY_COMPRESSION, true);
+  config.set<uint32_t>(Config::COMPRESSION_THRESHOLD, 32);
+  auto stream = createCompressor(
+      CompressionKind_ZSTD, bufferPool, holder, config, nullptr, "good-stream");
+
+  char data[512];
+  std::memset(data, 'a', sizeof(data));
+  void* buffer;
+  int32_t bufferSize = 0;
+  ASSERT_TRUE(stream->Next(&buffer, &bufferSize, sizeof(data)));
+  std::memcpy(buffer, data, sizeof(data));
+  stream->BackUp(bufferSize - static_cast<int32_t>(sizeof(data)));
+  stream->flush();
+
+  decompressAndVerify(
+      memSink,
+      CompressionKind_ZSTD,
+      block,
+      data,
+      sizeof(data),
+      *pool_,
+      nullptr);
 }

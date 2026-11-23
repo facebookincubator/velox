@@ -1221,4 +1221,31 @@ TEST_F(ArrayPositionTest, timestampWithTimeZoneWithInstance) {
   testPositionOfRowWithInstance(pack(2, 2), -1, {2, 0, 0, 0, 4, 0, 0});
 }
 
+TEST_F(ArrayPositionTest, unknownType) {
+  auto expected = makeNullConstant(TypeKind::BIGINT, 1);
+  auto searchValue = makeNullableFlatVector<UnknownValue>({std::nullopt});
+
+  auto emptyArrayVector = makeArrayVector<UnknownValue>({{}});
+  auto result = evaluate(
+      "array_position(c0, c1)", makeRowVector({emptyArrayVector, searchValue}));
+  assertEqualVectors(expected, result);
+
+  auto nullArrayVector = makeArrayVector(
+      {0}, makeNullableFlatVector<UnknownValue>({std::nullopt, std::nullopt}));
+  result = evaluate(
+      "array_position(c0, c1)", makeRowVector({nullArrayVector, searchValue}));
+  assertEqualVectors(expected, result);
+
+  auto instanceVector = makeFlatVector<int64_t>({2});
+  result = evaluate(
+      "array_position(c0, c1, c2)",
+      makeRowVector({nullArrayVector, searchValue, instanceVector}));
+  assertEqualVectors(expected, result);
+
+  instanceVector = makeFlatVector<int64_t>({3});
+  result = evaluate(
+      "array_position(c0, c1, c2)",
+      makeRowVector({nullArrayVector, searchValue, instanceVector}));
+  assertEqualVectors(expected, result);
+}
 } // namespace

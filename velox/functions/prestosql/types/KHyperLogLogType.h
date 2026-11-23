@@ -24,6 +24,8 @@ class KHyperLogLogType final : public VarbinaryType {
   KHyperLogLogType() = default;
 
  public:
+  static std::shared_ptr<const KHyperLogLogType> create() = delete;
+
   static std::shared_ptr<const KHyperLogLogType> get() {
     VELOX_CONSTEXPR_SINGLETON KHyperLogLogType kInstance;
     return {std::shared_ptr<const KHyperLogLogType>{}, &kInstance};
@@ -57,6 +59,10 @@ class KHyperLogLogType final : public VarbinaryType {
 inline bool isKHyperLogLogType(const TypePtr& type) {
   // Pointer comparison works since this type is a singleton.
   return KHyperLogLogType::get() == type;
+}
+
+inline bool isKHyperLogLogType(const Type& type) {
+  return KHyperLogLogType::get().get() == &type;
 }
 
 inline std::shared_ptr<const KHyperLogLogType> KHYPERLOGLOG() {

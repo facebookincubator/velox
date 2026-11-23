@@ -48,12 +48,7 @@ std::vector<exec::AggregateRegistrationResult> registerSum(
           .build(),
   };
 
-  for (const auto& inputType :
-       {"tinyint",
-        "smallint",
-        "integer",
-        "bigint",
-        INTERVAL_DAY_TIME()->name()}) {
+  for (const auto& inputType : {"tinyint", "smallint", "integer", "bigint"}) {
     signatures.push_back(
         exec::AggregateFunctionSignatureBuilder()
             .returnType("bigint")
@@ -61,6 +56,12 @@ std::vector<exec::AggregateRegistrationResult> registerSum(
             .argumentType(inputType)
             .build());
   }
+  signatures.push_back(
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("interval day to second")
+          .intermediateType("bigint")
+          .argumentType("interval day to second")
+          .build());
 
   return exec::registerAggregateFunction(
       names,
@@ -85,7 +86,7 @@ std::vector<exec::AggregateRegistrationResult> registerSum(
             if (inputType->isShortDecimal()) {
               return std::make_unique<DecimalSumAggregate<int64_t>>(resultType);
             }
-            return std::make_unique<T<int64_t, int64_t, int64_t>>(BIGINT());
+            return std::make_unique<T<int64_t, int64_t, int64_t>>(resultType);
           }
           case TypeKind::HUGEINT: {
             if (inputType->isLongDecimal()) {
@@ -116,7 +117,7 @@ std::vector<exec::AggregateRegistrationResult> registerSum(
                 inputType->kindName());
         }
       },
-      {.orderSensitive = false},
+      {.orderSensitive = false, .ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

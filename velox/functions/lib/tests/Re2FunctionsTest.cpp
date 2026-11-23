@@ -15,6 +15,7 @@
  */
 #include "velox/functions/lib/Re2Functions.h"
 
+#include <folly/CPortability.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <sys/mman.h>
@@ -35,23 +36,7 @@
 #include "velox/vector/FlatVector.h"
 
 // Detect sanitizer builds for guarding death tests.
-#ifdef __has_feature
-#define RE2_BUILDING_WITH_ASAN() __has_feature(address_sanitizer)
-#define RE2_BUILDING_WITH_TSAN() __has_feature(thread_sanitizer)
-#else
-#if defined(__SANITIZE_ADDRESS__) && __SANITIZE_ADDRESS__
-#define RE2_BUILDING_WITH_ASAN() 1
-#else
-#define RE2_BUILDING_WITH_ASAN() 0
-#endif
-#if defined(__SANITIZE_THREAD__) && __SANITIZE_THREAD__
-#define RE2_BUILDING_WITH_TSAN() 1
-#else
-#define RE2_BUILDING_WITH_TSAN() 0
-#endif
-#endif
-
-#if RE2_BUILDING_WITH_TSAN() || RE2_BUILDING_WITH_ASAN()
+#if defined(FOLLY_SANITIZE_ADDRESS) || defined(FOLLY_SANITIZE_THREAD)
 #define RE2_BUILDING_WITH_SAN
 #endif
 
@@ -734,6 +719,40 @@ TEST_F(Re2FunctionsTest, likeDeterminePatternKindUnicode) {
   testPattern("%%你好", PatternKind::kSuffix, "你好");
   testPattern("%%你好%", PatternKind::kSubstring, "你好");
   testPattern("%%你好%世界", PatternKind::kGeneric, "");
+}
+
+// A pattern built per row, such as '%' || lower(name) || '%', is not constant,
+// so it is parsed by LikeGeneric on every row.
+TEST_F(Re2FunctionsTest, likeTruncatedUnicodePattern) {
+  auto input =
+      makeFlatVector<std::string>({"abc\xc3", "abc", "xxabc\xf0yy", "abcyy"});
+  auto pattern = makeFlatVector<std::string>(
+      {"abc\xc3", "abc\xc3", "%abc\xf0%", "%abc\xf0%"});
+  auto result = evaluate("like(c0, c1)", makeRowVector({input, pattern}));
+  // Rows 1 and 2 differ only in whether the input carries the truncated byte;
+  // likewise rows 3 and 4.
+  assertEqualVectors(makeFlatVector<bool>({true, false, true, false}), result);
+}
+
+TEST_F(Re2FunctionsTest, likeDeterminePatternKindTruncatedUnicode) {
+  auto testPattern = [&](std::string_view pattern,
+                         PatternKind patternKind,
+                         std::string_view fixedPattern) {
+    // Heap-allocate the pattern so ASAN traps a read past its last byte.
+    const std::vector<char> buffer(pattern.begin(), pattern.end());
+    PatternMetadata patternMetadata = determinePatternKind(
+        std::string_view(buffer.data(), buffer.size()), std::nullopt);
+    EXPECT_EQ(patternMetadata.patternKind(), patternKind);
+    EXPECT_EQ(patternMetadata.fixedPattern(), fixedPattern);
+  };
+
+  // Lead byte announces 2 bytes, only 1 byte remains.
+  testPattern("abc\xc3", PatternKind::kFixed, "abc\xc3");
+  // Lead byte announces 3 bytes, only 2 bytes remain.
+  testPattern("abc\xe4\xbd", PatternKind::kFixed, "abc\xe4\xbd");
+  // The trailing '%' stays a wildcard: the truncated sequence consumes a
+  // single byte rather than swallowing what follows it.
+  testPattern("%abc\xf0%", PatternKind::kSubstring, "abc\xf0");
 }
 
 TEST_F(Re2FunctionsTest, likeDeterminePatternKindWithEscapeChar) {

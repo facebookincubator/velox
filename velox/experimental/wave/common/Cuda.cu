@@ -24,6 +24,7 @@
 
 #include <assert.h>
 #include <atomic>
+#include <cstring>
 #include <mutex>
 #include <sstream>
 
@@ -113,7 +114,11 @@ Device* setDriverDevice(int32_t deviceId) {
   device->sharedMemPerSM = prop.sharedMemPerMultiprocessor;
   device->L2Size = prop.l2CacheSize;
   device->persistingL2MaxSize = prop.persistingL2CacheMaxSize;
+#if CUDART_VERSION < 13000
+  // singleToDoublePrecisionPerfRatio is gone from cudaDeviceProp in CUDA 13, so
+  // float32To64Ratio keeps its default of 1 there.
   device->float32To64Ratio = prop.singleToDoublePrecisionPerfRatio;
+#endif
   CU_CHECK(cuCtxSetCurrent(contexts[deviceId]));
   return devices[deviceId].get();
 }
@@ -198,6 +203,18 @@ class CudaHostAllocator : public GpuAllocator {
   }
 };
 
+#if CUDART_VERSION >= 13000
+// CUDA 13 replaced the device ordinal argument of the unified memory APIs with
+// a cudaMemLocation.
+cudaMemLocation memLocation(int32_t deviceId) {
+  cudaMemLocation location;
+  location.type = deviceId == cudaCpuDeviceId ? cudaMemLocationTypeHost
+                                              : cudaMemLocationTypeDevice;
+  location.id = deviceId;
+  return location;
+}
+#endif
+
 } // namespace
 
 GpuAllocator* getAllocator(Device* /*device*/) {
@@ -221,10 +238,25 @@ Stream::Stream() {
   CUDA_CHECK(cudaStreamCreate(&stream_->stream));
 }
 
+Stream::Stream(bool nonBlocking) {
+  stream_ = std::make_unique<StreamImpl>();
+  CUDA_CHECK(cudaStreamCreateWithFlags(
+      &stream_->stream,
+      nonBlocking ? cudaStreamNonBlocking : cudaStreamDefault));
+}
+
 Stream::~Stream() {
-  if (stream_->stream) {
+  if (stream_->stream && owned_) {
     cudaStreamDestroy(stream_->stream);
   }
+}
+
+std::unique_ptr<Stream> Stream::external(void* handle) {
+  auto impl = std::make_unique<StreamImpl>();
+  impl->stream = static_cast<cudaStream_t>(handle);
+  auto stream = std::make_unique<Stream>(std::move(impl));
+  stream->owned_ = false;
+  return stream;
 }
 
 void Stream::wait() {
@@ -232,12 +264,40 @@ void Stream::wait() {
 }
 
 void Stream::prefetch(Device* device, void* ptr, size_t size) {
+  const int32_t deviceId = device ? device->deviceId : cudaCpuDeviceId;
+#if CUDART_VERSION >= 13000
   CUDA_CHECK(cudaMemPrefetchAsync(
-      ptr, size, device ? device->deviceId : cudaCpuDeviceId, stream_->stream));
+      ptr, size, memLocation(deviceId), /*flags=*/0, stream_->stream));
+#else
+  CUDA_CHECK(cudaMemPrefetchAsync(ptr, size, deviceId, stream_->stream));
+#endif
 }
 
 void Stream::memset(void* ptr, int32_t value, size_t size) {
   CUDA_CHECK(cudaMemsetAsync(ptr, value, size, stream_->stream));
+}
+
+void Stream::writeValue64(void* deviceAddress, uint64_t value) {
+  CU_CHECK(cuStreamWriteValue64(
+      reinterpret_cast<CUstream>(stream_->stream),
+      reinterpret_cast<CUdeviceptr>(deviceAddress),
+      value,
+      CU_STREAM_WRITE_VALUE_DEFAULT));
+}
+
+void* allocateHostMapped(size_t size, void** deviceAddress) {
+  void* host = nullptr;
+  CU_CHECK(cuMemHostAlloc(
+      &host, size, CU_MEMHOSTALLOC_DEVICEMAP | CU_MEMHOSTALLOC_PORTABLE));
+  std::memset(host, 0, size);
+  CUdeviceptr device = 0;
+  CU_CHECK(cuMemHostGetDevicePointer(&device, host, 0));
+  *deviceAddress = reinterpret_cast<void*>(device);
+  return host;
+}
+
+void freeHostMapped(void* hostAddress) {
+  cuMemFreeHost(hostAddress);
 }
 
 void Stream::hostToDeviceAsync(

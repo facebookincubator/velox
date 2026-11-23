@@ -328,7 +328,7 @@ TEST_F(ByteStreamTest, bits) {
       // Every second uses the fast path for aligned source and append only.
       auto numBits = std::min<int32_t>(
           totalBits - offset, bitSizes[counter % bitSizes.size()]);
-      if (counter % 1 == 0) {
+      if (counter % 2 == 0) {
         bitStream.appendBits(bits.data(), offset, offset + numBits);
       } else {
         uint64_t aligned[10];

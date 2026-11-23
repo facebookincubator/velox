@@ -17,12 +17,12 @@ include_guard(GLOBAL)
 # 4.0 is the minimum version required by cudf
 cmake_minimum_required(VERSION 4.0)
 
-# rapids_cmake commit 323d37b from 2026-06-23
-set(VELOX_rapids_cmake_VERSION 26.08)
-set(VELOX_rapids_cmake_COMMIT 323d37beeb2030cd5c9e7e981810915d59ecda09)
+# rapids_cmake commit 037d4c5 from 2026-10-09 (main branch)
+set(VELOX_rapids_cmake_VERSION 26.12)
+set(VELOX_rapids_cmake_COMMIT 037d4c5489cc13f5b378b54197238a6e2cdbff17)
 set(
   VELOX_rapids_cmake_BUILD_SHA256_CHECKSUM
-  bacf4aa0b253ddbc7b103793815909b5d61cee5604b2be14d715351b675e9de5
+  946ebc43d81dc7359e973df54bc0749f281a0b65b32a299b00ee6a66507b0a04
 )
 set(
   VELOX_rapids_cmake_SOURCE_URL
@@ -30,22 +30,22 @@ set(
 )
 velox_resolve_dependency_url(rapids_cmake)
 
-# rmm commit a4ab399 from 2026-06-17
-set(VELOX_rmm_VERSION 26.08)
-set(VELOX_rmm_COMMIT a4ab39907900d45f220ea7c2d3ecff1b56d39909)
+# rmm commit 7e29fc0 from 2026-10-15 (main branch)
+set(VELOX_rmm_VERSION 26.12)
+set(VELOX_rmm_COMMIT 7e29fc098edc5d4d8f186c0da2be277410839a05)
 set(
   VELOX_rmm_BUILD_SHA256_CHECKSUM
-  92a3280264ffa6225124452c1c10b38f047ae4a04b9c38052aa483e9b42f04cd
+  e1cb8d9f3483bebaea805817182da1b9a2c315a2cd71dd6496d0577381fec5b8
 )
 set(VELOX_rmm_SOURCE_URL "https://github.com/rapidsai/rmm/archive/${VELOX_rmm_COMMIT}.tar.gz")
 velox_resolve_dependency_url(rmm)
 
-# kvikio commit bdb788f from 2026-06-16
-set(VELOX_kvikio_VERSION 26.08)
-set(VELOX_kvikio_COMMIT bdb788f45ef191384a294ecef3312ea2db35a2c7)
+# kvikio commit 90b116c from 2026-10-13 (main branch)
+set(VELOX_kvikio_VERSION 26.12)
+set(VELOX_kvikio_COMMIT 90b116c67316eedd6b561c0ac7bcdfd09e536be9)
 set(
   VELOX_kvikio_BUILD_SHA256_CHECKSUM
-  c8db1083756337a3b0dc1616f3960f53fea891763fd9e1645cd38d7e218c7a47
+  df6e4ad41b956a6fa9378aed901f85daafac7c521d913661da8d7fc477d9e0aa
 )
 set(
   VELOX_kvikio_SOURCE_URL
@@ -53,38 +53,72 @@ set(
 )
 velox_resolve_dependency_url(kvikio)
 
-# cudf commit 4302ee8 from 2026-06-24
-set(VELOX_cudf_VERSION 26.08 CACHE STRING "cudf version")
-set(VELOX_cudf_COMMIT 4302ee801ecb2ce9edce9c75f8a5ee9efa0bceb9)
+# cudf commit c9086e0 from 2026-10-15 (main branch)
+set(VELOX_cudf_VERSION 26.12 CACHE STRING "cudf version")
+set(VELOX_cudf_COMMIT c9086e0afbf0cb11194a12bb2233b80139eabd09)
 set(
   VELOX_cudf_BUILD_SHA256_CHECKSUM
-  d66e580e12a5265ef2e96768678de22862471023a50fca0c68ea5daaa684e0e1
+  65c4df018b62ced84ebd74235f70abd053fbcae342e2eb720bc0571023dba72f
 )
 set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
 velox_resolve_dependency_url(cudf)
 
-# Probe for a system UCX install. The variables are used only to gate ucxx
-# fetching below; nothing in Velox links against UCX directly yet.
-find_library(UCX_LIBRARY NAMES ucp)
-find_path(UCX_INCLUDE_DIR NAMES ucp/api/ucp.h)
-if(UCX_LIBRARY AND UCX_INCLUDE_DIR)
+# Probe for a system UCX, to pick the default for VELOX_ENABLE_UCX_EXCHANGE
+# below and to fail the configure before cuDF is fetched when the option is on
+# without UCX. It is the lookup ucxx and velox_ucx_exchange make later, for
+# UCX's CMake package, so the probe succeeds exactly when they will. GLOBAL
+# creates ucx::ucp as a global target here: ucxx reuses that target and would
+# otherwise try to make it global from its own directory, which CMake rejects.
+find_package(ucx QUIET GLOBAL)
+if(ucx_FOUND)
   set(UCX_FOUND TRUE)
 else()
   set(UCX_FOUND FALSE)
 endif()
-if(UCX_FOUND)
-  message(STATUS "Found UCX: ${UCX_LIBRARY} (headers: ${UCX_INCLUDE_DIR}) -- ucxx will be fetched")
-  # ucxx commit fe38756 from 2026-06-22 (release/0.50 branch)
-  set(VELOX_ucxx_VERSION 0.51)
-  set(VELOX_ucxx_COMMIT fe38756e340b6c4f5737f65f942f684197a32d12)
+
+# Whether to build the experimental UCX GPU exchange transport
+# (velox/experimental/ucx-exchange) and the cuDF-side registration that selects
+# it. Defaults, on the first configure of a build directory, to whether a system
+# UCX was found; the value is cached after that, so a UCX installed later needs
+# -DVELOX_ENABLE_UCX_EXCHANGE=ON, and -DVELOX_ENABLE_UCX_EXCHANGE=OFF builds
+# without it on a host that has UCX. Declared here, next to the ucxx fetch it
+# controls, rather than with the other options. This file only runs for a
+# bundled cuDF, so the option exists only then; cache variables are global, so
+# every subdirectory sees it.
+option(
+  VELOX_ENABLE_UCX_EXCHANGE
+  "Build the experimental UCX GPU exchange transport. Requires a system UCX with its CMake package."
+  ${UCX_FOUND}
+)
+
+if(VELOX_ENABLE_UCX_EXCHANGE)
+  if(NOT UCX_FOUND)
+    message(
+      FATAL_ERROR
+      "VELOX_ENABLE_UCX_EXCHANGE=ON but no system UCX was found (need UCX's CMake package, ucx-config.cmake; set ucx_DIR to its directory if it is not on the search path). Install UCX or pass -DVELOX_ENABLE_UCX_EXCHANGE=OFF."
+    )
+  endif()
+  message(
+    STATUS
+    "UCX exchange enabled with UCX ${ucx_VERSION} from ${ucx_DIR} -- ucxx will be fetched"
+  )
+  # ucxx commit f3e85e5 from 2026-10-14 (main branch)
+  set(VELOX_ucxx_VERSION 0.53)
+  set(VELOX_ucxx_COMMIT f3e85e580fb4349240917f85f5a6260c7f3b94f6)
   set(
     VELOX_ucxx_BUILD_SHA256_CHECKSUM
-    74ac37c3f0ae4c531966a0cfd138edb5eac2f80854fa5ee299aa05c5073d45f9
+    63c5f8a9e7a84bab932b52d1dad82619c684a0383b3318914eba029d9b2fa9cd
   )
   set(VELOX_ucxx_SOURCE_URL "https://github.com/rapidsai/ucxx/archive/${VELOX_ucxx_COMMIT}.tar.gz")
   velox_resolve_dependency_url(ucxx)
 else()
-  message(STATUS "UCX not found -- ucxx will not be fetched")
+  if(UCX_FOUND)
+    message(
+      STATUS
+      "UCX found, but VELOX_ENABLE_UCX_EXCHANGE is OFF -- pass -DVELOX_ENABLE_UCX_EXCHANGE=ON to build the UCX exchange"
+    )
+  endif()
+  message(STATUS "UCX exchange disabled -- ucxx will not be fetched")
 endif()
 
 # Use block so we don't leak variables
@@ -93,17 +127,10 @@ block(SCOPE_FOR VARIABLES)
   set(BUILD_TESTS OFF)
   set(CUDF_BUILD_TESTUTIL OFF)
   set(CUDF_BUILD_STREAMS_TEST_UTIL OFF)
+  # Keep spdlog/nvcomp shared to avoid multiple copies of spdlog in the final binary.
+  set(CUDF_BUILD_STATIC_DEPS OFF)
   set(BUILD_SHARED_LIBS ON)
-
-  # TODO(mh,bd): Remove this once we have a permanent solution for the spdlog/fmt
-  # incompatibility.
-
-  # cuDF (via rapids_logger) pins spdlog 1.14.1, which is incompatible with
-  # the fmt 11.2.0 that Velox builds. Override the rapids-cmake/CPM spdlog
-  # version to 1.15.3, which is fmt 11.2 compatible.
-  # RAPIDS_CMAKE_CPM_OVERRIDE_VERSION_FILE is honored by every rapids_cpm_init,
-  # so the override applies before rapids_logger fetches spdlog.
-  set(RAPIDS_CMAKE_CPM_OVERRIDE_VERSION_FILE "${CMAKE_CURRENT_LIST_DIR}/cudf-cpm-overrides.json")
+  set(KvikIO_BUILD_NSYS_PLUGIN OFF)
 
   FetchContent_Declare(
     rapids-cmake
@@ -139,7 +166,11 @@ block(SCOPE_FOR VARIABLES)
     UPDATE_DISCONNECTED 1
   )
 
-  if(UCX_FOUND)
+  FetchContent_MakeAvailable(cudf)
+
+  # cuDF does not use ucxx, and ucxx takes rapids-cmake from the declaration
+  # above, so ucxx is resolved on its own after cuDF.
+  if(VELOX_ENABLE_UCX_EXCHANGE)
     FetchContent_Declare(
       ucxx
       URL ${VELOX_ucxx_SOURCE_URL}
@@ -148,11 +179,6 @@ block(SCOPE_FOR VARIABLES)
       cpp
       UPDATE_DISCONNECTED 1
     )
-  endif()
-
-  FetchContent_MakeAvailable(cudf)
-
-  if(UCX_FOUND)
     FetchContent_MakeAvailable(ucxx)
   endif()
 
@@ -163,7 +189,6 @@ block(SCOPE_FOR VARIABLES)
     cudf
     PRIVATE -Wno-non-virtual-dtor -Wno-missing-field-initializers -Wno-deprecated-copy -Wno-restrict
   )
-
   unset(BUILD_SHARED_LIBS)
   unset(BUILD_TESTING CACHE)
 endblock()

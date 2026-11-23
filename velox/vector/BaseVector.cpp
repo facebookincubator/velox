@@ -182,6 +182,7 @@ BaseVector::BaseVector(
       "Length must be smaller or equal to max(vector_size_t).");
 
   if (nulls_) {
+    VELOX_DCHECK_BUFFER_ALIGNED(nulls_, bool);
     int32_t bytes = byteSize<bool>(length_);
     VELOX_CHECK_GE(nulls_->capacity(), bytes);
     if (nulls_->size() < bytes) {
@@ -651,6 +652,7 @@ void BaseVector::clearNulls(vector_size_t begin, vector_size_t end) {
 void BaseVector::setNulls(const BufferPtr& nulls) {
   if (nulls) {
     VELOX_DCHECK_GE(nulls->size(), bits::nbytes(length_));
+    VELOX_DCHECK_BUFFER_ALIGNED(nulls, bool);
     nulls_ = nulls;
     rawNulls_ = nulls->as<uint64_t>();
     nullCount_ = std::nullopt;
@@ -829,8 +831,7 @@ void BaseVector::ensureWritable(
         BaseVector::create(isUnknownType ? type : resultType, targetSize, pool);
   }
 
-  SelectivityVector copyRows(result->size());
-  copyRows.deselect(rows);
+  auto copyRows = rows.complement(result->size());
 
   if (copyRows.hasSelections()) {
     copy->copy(result.get(), copyRows, nullptr);
@@ -1109,7 +1110,7 @@ VectorPtr BaseVector::createConstant(
 }
 
 // static
-VectorPtr BaseVector::createFromVariants(
+VectorPtr BaseVector::createFromVariantsInternal(
     const TypePtr& type,
     const std::vector<Variant>& values,
     velox::memory::MemoryPool* pool) {
@@ -1231,7 +1232,7 @@ const VectorPtr& BaseVector::wrappedVectorShared(const VectorPtr& vector) {
   }
 }
 
-bool isLazyNotLoaded(const BaseVector& vector) {
+bool detail::isLazyNotLoadedImpl(const BaseVector& vector) {
   switch (vector.encoding()) {
     case VectorEncoding::Simple::LAZY:
       if (!vector.asUnchecked<LazyVector>()->isLoaded()) {

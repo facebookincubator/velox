@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 #include "velox/exec/JoinBridge.h"
-#include "velox/exec/tests/utils/OperatorTestBase.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 using namespace facebook::velox;
@@ -106,27 +107,25 @@ class CustomJoinBuild : public Operator {
   void noMoreInput() override {
     Operator::noMoreInput();
     std::vector<ContinuePromise> promises;
-    std::vector<std::shared_ptr<Driver>> peers;
+    std::vector<std::shared_ptr<Operator>> peerOperators;
     // The last Driver to hit CustomJoinBuild::finish gathers the data from
     // all build Drivers and hands it over to the probe side. At this
     // point all build Drivers are continued and will free their
-    // state. allPeersFinished is true only for the last Driver of the
+    // state. allPeersArrived is true only for the last Driver of the
     // build pipeline.
-    if (!operatorCtx_->task()->allPeersFinished(
-            planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+    if (!operatorCtx_->allPeersArrived(&future_, promises, peerOperators)) {
       return;
     }
 
-    for (auto& peer : peers) {
-      auto op = peer->findOperator(planNodeId());
-      auto* build = dynamic_cast<CustomJoinBuild*>(op);
+    for (const auto& peer : peerOperators) {
+      auto* build = peer->as<CustomJoinBuild>();
       VELOX_CHECK(build);
       numRows_ += build->numRows_;
     }
 
     // Realize the promises so that the other Drivers (which were not
     // the last to finish) can continue from the barrier and finish.
-    peers.clear();
+    peerOperators.clear();
     for (auto& promise : promises) {
       promise.setValue();
     }
@@ -271,10 +270,10 @@ class CustomJoinBridgeTranslator : public Operator::PlanNodeTranslator {
 /// This test will show the CustomJoinBuild passing count of input rows to
 /// CustomJoinProbe via CustomJoinBridge, then probe will emit corresponding
 /// number of rows, like a Limit operator.
-class CustomJoinTest : public OperatorTestBase {
+class CustomJoinTest : public HiveConnectorTestBase {
  protected:
   void SetUp() override {
-    OperatorTestBase::SetUp();
+    HiveConnectorTestBase::SetUp();
     Operator::registerOperator(std::make_unique<CustomJoinBridgeTranslator>());
   }
 
@@ -290,16 +289,12 @@ class CustomJoinTest : public OperatorTestBase {
       const std::string& referenceQuery) {
     createDuckDbTable("t", {leftBatch});
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto leftNode =
-        PlanBuilder(planNodeIdGenerator).values({leftBatch}, true).planNode();
-    auto rightNode =
-        PlanBuilder(planNodeIdGenerator).values({rightBatch}, true).planNode();
+    PlanBuilder builder;
+    auto leftNode = builder.newPlan().values({leftBatch}, true).planNode();
+    auto rightNode = builder.newPlan().values({rightBatch}, true).planNode();
 
-    CursorParameters params;
-    params.maxDrivers = numThreads;
-    params.planNode =
-        PlanBuilder(planNodeIdGenerator)
+    auto plan =
+        builder.newPlan()
             .values({leftBatch}, true)
             .addNode([&leftNode, &rightNode](
                          std::string id, core::PlanNodePtr /* input */) {
@@ -309,7 +304,9 @@ class CustomJoinTest : public OperatorTestBase {
             .project({"c0"})
             .planNode();
 
-    OperatorTestBase::assertQuery(params, referenceQuery);
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .maxDrivers(numThreads)
+        .assertResults(referenceQuery);
   }
 };
 
@@ -340,4 +337,54 @@ TEST_F(CustomJoinTest, parallelism) {
       "(SELECT c0 FROM t LIMIT 90) "
       "UNION ALL (SELECT c0 FROM t LIMIT 90) "
       "UNION ALL (SELECT c0 FROM t LIMIT 90)");
+}
+
+/// Tests that custom join bridges work correctly with mixed grouped execution,
+/// where the build pipeline runs ungrouped and the probe pipeline runs in
+/// grouped split groups.
+TEST_F(CustomJoinTest, mixedGroupedExecution) {
+  auto rowType = ROW({"c0"}, {INTEGER()});
+  auto vectors = makeVectors(rowType, 4, 20);
+  auto filePath = writeToFile(vectors);
+
+  PlanBuilder builder(pool_.get());
+  core::PlanNodeId probeScanNodeId;
+  core::PlanNodeId buildScanNodeId;
+
+  auto buildNode = builder.newPlan()
+                       .tableScan(rowType)
+                       .capturePlanNodeId(buildScanNodeId)
+                       .planNode();
+  auto plan =
+      builder.newPlan()
+          .tableScan(rowType)
+          .capturePlanNodeId(probeScanNodeId)
+          .addNode([&](const std::string& id, core::PlanNodePtr probeNode) {
+            return std::make_shared<CustomJoinNode>(
+                id, std::move(probeNode), std::move(buildNode));
+          })
+          .planNode();
+
+  // The build side reads 80 rows and posts that count to the bridge.
+  // Each split group's probe reads 80 rows and emits at most 80 (the build
+  // count).  With 2 split groups we expect 160 rows total.
+  constexpr int32_t numSplitGroups = 2;
+  std::vector<Split> probeSplits;
+  probeSplits.reserve(numSplitGroups);
+  for (int32_t i = 0; i < numSplitGroups; ++i) {
+    probeSplits.emplace_back(makeHiveConnectorSplit(filePath->getPath()), i);
+  }
+
+  auto numRows =
+      AssertQueryBuilder(plan)
+          .splits(probeScanNodeId, std::move(probeSplits))
+          .splits(
+              buildScanNodeId, {makeHiveConnectorSplit(filePath->getPath())})
+          .executionStrategy(core::ExecutionStrategy::kGrouped)
+          .groupedExecutionLeafNodeIds({probeScanNodeId})
+          .numSplitGroups(numSplitGroups)
+          .numConcurrentSplitGroups(1)
+          .countResults();
+
+  ASSERT_EQ(numRows, 160);
 }

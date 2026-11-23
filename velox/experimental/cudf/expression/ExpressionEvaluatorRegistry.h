@@ -1,0 +1,78 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include "velox/core/Expressions.h"
+#include "velox/type/Type.h"
+
+#include <functional>
+#include <memory>
+#include <string>
+#include <unordered_map>
+
+namespace facebook::velox::core {
+// Named only by reference in the callback signatures below, so a declaration is
+// enough and QueryConfig.h stays out of every evaluator's include graph.
+class QueryConfig;
+} // namespace facebook::velox::core
+
+namespace facebook::velox::cudf_velox {
+
+class CudfExpression;
+
+/// Returns whether an evaluator can handle `expr` under the session `config`.
+/// The function evaluator consults each function's eligibility predicate, which
+/// can reject a session setting the function does not implement, so plan-time
+/// checks and runtime evaluator selection pass the same config. `config` is
+/// valid only for the duration of the call.
+using CudfExpressionEvaluatorCanEvaluate = std::function<
+    bool(const core::TypedExprPtr& expr, const core::QueryConfig& config)>;
+/// Builds an evaluator for `expr` over `inputRowSchema`. `config` is the
+/// session config an evaluator reads while it builds the expression, as a
+/// simple function's initialize() does; it is valid for the duration of the
+/// call, and an evaluator that needs it afterwards copies it.
+using CudfExpressionEvaluatorCreate =
+    std::function<std::shared_ptr<CudfExpression>(
+        const core::TypedExprPtr& expr,
+        const RowTypePtr& inputRowSchema,
+        memory::MemoryPool* pool,
+        const core::QueryConfig& config)>;
+
+/// An evaluator's priority, eligibility predicate, and creation callback.
+struct CudfExpressionEvaluatorEntry {
+  int priority;
+  CudfExpressionEvaluatorCanEvaluate canEvaluate;
+  CudfExpressionEvaluatorCreate create;
+};
+
+/// Ensure that built-in expression evaluators are registered.
+void ensureBuiltinExpressionEvaluatorsRegistered();
+
+/// Get the registry of expression evaluators.
+std::unordered_map<std::string, CudfExpressionEvaluatorEntry>&
+getCudfExpressionEvaluatorRegistry();
+
+/// Register a CudfExpression evaluator.
+/// Internal API used by expression evaluators to self-register.
+bool registerCudfExpressionEvaluator(
+    const std::string& name,
+    int priority,
+    CudfExpressionEvaluatorCanEvaluate canEvaluate,
+    CudfExpressionEvaluatorCreate create,
+    bool overwrite = true);
+
+} // namespace facebook::velox::cudf_velox

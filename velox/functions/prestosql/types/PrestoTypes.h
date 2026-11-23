@@ -34,7 +34,23 @@ namespace facebook::velox {
 class PrestoTypes {
  public:
   /// Returns the Presto SQL string representation of the given type.
+  ///
+  /// DEPRECATED: prefer 'displayName', which spells types the way Presto
+  /// itself does. This spells them in upper case and quotes a row's field
+  /// names only when they need it, matching no Presto output; it also names
+  /// HYPERLOGLOG where Presto writes HyperLogLog. A caller that only needs
+  /// SQL text Presto can parse gets that from 'displayName' too, as SQL type
+  /// names are case-insensitive.
   static std::string toSql(const TypePtr& type);
+
+  /// Returns the type as Presto displays it, the string 'typeof' and
+  /// information_schema.columns.data_type return: 'bigint', 'array(real)',
+  /// 'map(varchar, bigint)', 'row("x" bigint)', 'decimal(10,2)',
+  /// 'HyperLogLog'. Mirrors Presto's Type.getDisplayName(), whose spacing
+  /// differs between MAP and ROW, which separate with ', ', and the other
+  /// parameterized types, which separate with ','.
+  /// @throws for OPAQUE, FUNCTION and INVALID, which Presto cannot spell.
+  static std::string displayName(const Type& type);
 
   /// Formats a scalar value as a human-readable string using Presto type
   /// conventions. Handles Presto custom types (IPADDRESS, UUID,

@@ -20,6 +20,8 @@
 #include <string>
 #include <vector>
 
+#include "velox/connectors/hive/iceberg/DeletionVectorFormat.h"
+
 namespace facebook::velox::memory {
 class MemoryPool;
 } // namespace facebook::velox::memory
@@ -52,16 +54,33 @@ namespace facebook::velox::connector::hive::iceberg {
 ///   std::string blob = writer.serialize();
 class DeletionVectorWriter {
  public:
+  /// Largest position the Iceberg deletion-vector format can represent.
+  ///
+  /// Iceberg's RoaringPositionBitmap derives this as
+  /// `toPosition(MAX_KEY, Integer.MIN_VALUE)`, i.e.
+  /// `(key << 32) | (pos32 & 0xFFFFFFFF)` with `key = 2147483646`, and rejects
+  /// anything above it. The binding constraint is the Roaring64 group key: it
+  /// is read back as a signed 32-bit int, so a key at or above 2^31 would
+  /// deserialize as negative and be rejected by spec-compliant readers.
+  /// Matching the bound here means we never write a blob Iceberg cannot read.
+  static constexpr int64_t kMaxPosition = 9'223'372'030'412'324'864LL;
+
+  static_assert(
+      (kMaxPosition >> 32) == kMaxRoaring64GroupKey,
+      "Writer position bound and reader group-key bound must agree.");
+
   DeletionVectorWriter() = default;
 
-  /// Adds a deleted row position (0-based file row offset).
+  /// Adds a deleted row position (0-based file row offset). The position must
+  /// be in [0, kMaxPosition].
   void addDeletedPosition(int64_t position);
 
   /// Adds multiple deleted row positions.
   void addDeletedPositions(const std::vector<int64_t>& positions);
 
-  /// Returns the number of deleted positions collected so far, including any
-  /// duplicates. Prefer numDistinctPositions() for the DV blob cardinality.
+  /// Returns the number of deleted positions collected so far. Duplicates are
+  /// counted until serialize() or numDistinctPositions() removes them. Prefer
+  /// numDistinctPositions() for the DV blob cardinality.
   size_t numPositions() const {
     return positions_.size();
   }
@@ -71,7 +90,7 @@ class DeletionVectorWriter {
   /// this for the Iceberg deletion-vector-v1 'cardinality' property and the
   /// commit-message record count, since seeding an existing DV and then adding
   /// overlapping new deletes can make positions_ contain duplicates.
-  size_t numDistinctPositions() const;
+  size_t numDistinctPositions();
 
   /// Serializes collected positions into a 64-bit roaring bitmap.
   ///
@@ -84,18 +103,25 @@ class DeletionVectorWriter {
   /// Each 32-bit RoaringBitmap uses SERIAL_COOKIE_NO_RUNCONTAINER (12346)
   /// with array containers (cardinality <= 4096) or bitmap containers.
   ///
+  /// Sorts and de-duplicates the collected positions in place first.
+  ///
   /// @return Binary string containing the serialized 64-bit roaring bitmap.
-  std::string serialize() const;
+  std::string serialize();
 
   /// Clears all collected positions.
   void clear();
 
  private:
-  /// Serializes a single 32-bit roaring bitmap from sorted, deduplicated
-  /// values in the range [0, 2^32).
-  std::string serialize32(const std::vector<uint32_t>& sorted) const;
+  // Sorts and de-duplicates positions_ in place.
+  void normalize();
 
   std::vector<int64_t> positions_;
+
+  // positions_[0, sortedPrefix_) is strictly increasing. A fresh scan keeps
+  // it covering everything. When the sink seeds an existing DV and then adds
+  // new deletes, the prefix is the seed, and normalize() sorts only the new
+  // tail (usually already in order) and merges it in.
+  size_t sortedPrefix_{0};
 };
 
 /// Writes a Puffin file containing a single deletion vector blob to the

@@ -19,6 +19,7 @@
 // type of file can be constructed based on a filename. See the
 // (register|generate)ReadFile and (register|generate)WriteFile functions.
 
+#include "folly/Conv.h"
 #include "folly/IPAddress.h"
 #include "re2/re2.h"
 
@@ -41,7 +42,27 @@ std::string getErrorStringFromS3Error(
       return "Service unavailable";
     case Aws::S3::S3Errors::NETWORK_CONNECTION:
       return "Network connection";
+    case Aws::S3::S3Errors::INTERNAL_FAILURE:
+      return "Internal failure";
+    case Aws::S3::S3Errors::THROTTLING:
+      return "Throttling";
+    case Aws::S3::S3Errors::SLOW_DOWN:
+      return "Slow down";
+    case Aws::S3::S3Errors::REQUEST_TIMEOUT:
+      return "Request timeout";
+    case Aws::S3::S3Errors::REQUEST_EXPIRED:
+      return "Request expired";
+    case Aws::S3::S3Errors::REQUEST_TIME_TOO_SKEWED:
+      return "Request time too skewed";
+    case Aws::S3::S3Errors::INVALID_ACCESS_KEY_ID:
+      return "Invalid access key ID";
+    case Aws::S3::S3Errors::INVALID_OBJECT_STATE:
+      return "Invalid object state";
     default:
+      const auto& exceptionName = error.GetExceptionName();
+      if (!exceptionName.empty()) {
+        return std::string(exceptionName.c_str());
+      }
       return "Unknown error";
   }
 }
@@ -136,7 +157,7 @@ std::optional<folly::Uri> S3ProxyConfigurationBuilder::build() {
   /// 2 parts separated by a colon.
   std::vector<std::string> endpointElements{};
   folly::split(':', s3Endpoint_, endpointElements);
-  if (FOLLY_UNLIKELY(endpointElements.size() > 2)) {
+  if (endpointElements.size() > 2) [[unlikely]] {
     LOG(ERROR) << fmt::format(
         "Too many parts in S3 endpoint URI {} ", s3Endpoint_);
     return std::nullopt;
@@ -180,6 +201,21 @@ std::optional<std::string> parseAWSStandardRegionName(
 
   // Use default region set by the SDK.
   return std::nullopt;
+}
+
+bool useFipsEndpoint(const S3Config& s3Config) {
+  const auto useFips = s3Config.useFips();
+  if (useFips.has_value()) {
+    return useFips.value();
+  }
+  const char* value = std::getenv("AWS_USE_FIPS_ENDPOINT");
+  if (value == nullptr || *value == '\0') {
+    return false;
+  }
+  const auto result = folly::tryTo<bool>(value);
+  VELOX_USER_CHECK(
+      result.hasValue(), "Invalid AWS_USE_FIPS_ENDPOINT value: {}", value);
+  return result.value();
 }
 
 } // namespace facebook::velox::filesystems

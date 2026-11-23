@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+add_subdirectory(utils)
+
 add_library(velox_dwio_iceberg_reader_benchmark_lib IcebergSplitReaderBenchmark.cpp)
 velox_add_test_headers(velox_dwio_iceberg_reader_benchmark_lib IcebergSplitReaderBenchmark.h)
 target_link_libraries(
@@ -39,17 +41,31 @@ if(VELOX_ENABLE_BENCHMARKS)
 endif()
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
+  # IcebergGeometryBuildGateTest.cpp lives here rather than in a target of its own: it pins the
+  # runtime behavior of a geometry read as a function of VELOX_ENABLE_GEO, and this target is
+  # already built in both GEO configurations and already links the libraries it needs. Its body is
+  # guarded by VELOX_ENABLE_PARQUET, so a Parquet-free build compiles it away.
   add_executable(
     velox_hive_iceberg_test
+    IcebergGeometryBuildGateTest.cpp
     IcebergPositionalDeleteTest.cpp
     IcebergReadTest.cpp
     IcebergSplitReaderBenchmarkTest.cpp
+    IcebergTableHandleTest.cpp
     IcebergTestBase.cpp
   )
   add_test(velox_hive_iceberg_test velox_hive_iceberg_test)
 
+  # The gate test selects its expectation on this definition; without it a GEO=ON build would
+  # assert the geospatial-free behavior. No other source in this target reads the flag. GEOS itself
+  # is not linked here, so a GEO=OFF build stays free of any geospatial dependency.
+  if(VELOX_ENABLE_GEO)
+    target_compile_definitions(velox_hive_iceberg_test PRIVATE VELOX_ENABLE_GEO)
+  endif()
+
   target_link_libraries(
     velox_hive_iceberg_test
+    velox_hive_iceberg_test_lib
     velox_dwio_iceberg_reader_benchmark_lib
     velox_hive_connector
     velox_hive_iceberg_splitreader
@@ -60,7 +76,6 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_exec
     velox_exec_test_lib
     Folly::folly
-    Folly::follybenchmark
     GTest::gtest
     GTest::gtest_main
   )
@@ -69,7 +84,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_iceberg_insert_test
     IcebergConnectorTest.cpp
     IcebergInsertTest.cpp
-    IcebergParquetStatsTest.cpp
+    IcebergSessionCredentialsE2ETest.cpp
     IcebergTestBase.cpp
     Main.cpp
     PartitionNameTest.cpp
@@ -84,13 +99,46 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
 
   target_link_libraries(
     velox_hive_iceberg_insert_test
+    velox_hive_iceberg_test_lib
     velox_exec_test_lib
     velox_hive_connector
     velox_hive_iceberg_splitreader
     velox_vector_fuzzer
+    GTest::gmock
     GTest::gtest
     GTest::gtest_main
   )
+
+  # Iceberg geometry reads exist only in a geospatial-enabled build, so the test target follows the
+  # same flag. This keeps a VELOX_ENABLE_GEO=OFF build free of any reference to GEOS targets.
+  if(VELOX_ENABLE_GEO AND VELOX_ENABLE_PARQUET)
+    add_executable(
+      velox_hive_iceberg_geospatial_test
+      IcebergGeometryCrossRuntimeEncodingTest.cpp
+      IcebergGeospatialReadTest.cpp
+      IcebergTestBase.cpp
+      Main.cpp
+    )
+    velox_add_test_headers(velox_hive_iceberg_geospatial_test IcebergTestBase.h)
+    add_test(velox_hive_iceberg_geospatial_test velox_hive_iceberg_geospatial_test)
+
+    target_link_libraries(
+      velox_hive_iceberg_geospatial_test
+      velox_hive_iceberg_test_lib
+      velox_exec_test_lib
+      velox_hive_connector
+      velox_hive_iceberg_splitreader
+      velox_common_geospatial_serde
+      velox_presto_types
+      velox_vector_test_lib
+      velox_vector_fuzzer
+      velox_dwio_parquet_reader
+      velox_dwio_parquet_writer
+      GEOS::geos
+      GTest::gtest
+      OpenSSL::Crypto
+    )
+  endif()
 
   add_executable(velox_hive_iceberg_deletion_vector_test DeletionVectorReaderTest.cpp)
   add_test(velox_hive_iceberg_deletion_vector_test velox_hive_iceberg_deletion_vector_test)
@@ -101,6 +149,19 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_iceberg_splitreader
     velox_exec_test_lib
     velox_dwio_common_test_utils
+    GTest::gmock
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  add_executable(velox_hive_iceberg_session_credentials_test IcebergSessionCredentialsTest.cpp)
+  add_test(velox_hive_iceberg_session_credentials_test velox_hive_iceberg_session_credentials_test)
+
+  target_link_libraries(
+    velox_hive_iceberg_session_credentials_test
+    velox_hive_iceberg_splitreader
+    velox_common_config
+    GTest::gmock
     GTest::gtest
     GTest::gtest_main
   )
@@ -128,6 +189,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
 
   target_link_libraries(
     velox_hive_iceberg_merge_sink_test
+    velox_hive_iceberg_test_lib
     velox_exec_test_lib
     velox_hive_connector
     velox_hive_iceberg_splitreader
@@ -143,9 +205,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
       velox_dwio_parquet_reader
       velox_dwio_parquet_writer
     )
-  endif()
 
-  if(VELOX_ENABLE_PARQUET)
     target_link_libraries(
       velox_hive_iceberg_test
       velox_dwio_parquet_reader
@@ -159,19 +219,38 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
       velox_dwio_parquet_reader
       velox_dwio_parquet_writer
     )
+
+    target_sources(velox_hive_iceberg_insert_test PRIVATE IcebergParquetStatsTest.cpp)
   endif()
 
-  add_executable(velox_hive_iceberg_equality_delete_test EqualityDeleteFileReaderTest.cpp Main.cpp)
+  add_executable(
+    velox_hive_iceberg_equality_delete_test
+    EqualityDeleteFileReaderTest.cpp
+    IcebergTestBase.cpp
+    Main.cpp
+  )
+  velox_add_test_headers(velox_hive_iceberg_equality_delete_test IcebergTestBase.h)
   add_test(velox_hive_iceberg_equality_delete_test velox_hive_iceberg_equality_delete_test)
 
   target_link_libraries(
     velox_hive_iceberg_equality_delete_test
+    velox_hive_iceberg_test_lib
     velox_hive_connector
     velox_hive_iceberg_splitreader
     velox_exec_test_lib
     velox_dwio_common_test_utils
+    velox_vector_fuzzer
     GTest::gtest
+    GTest::gtest_main
   )
+
+  if(VELOX_ENABLE_PARQUET)
+    target_link_libraries(
+      velox_hive_iceberg_equality_delete_test
+      velox_dwio_parquet_reader
+      velox_dwio_parquet_writer
+    )
+  endif()
 
   add_executable(velox_hive_iceberg_deletion_vector_writer_test DeletionVectorWriterTest.cpp)
   add_test(
@@ -197,6 +276,174 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_connector
     velox_hive_iceberg_splitreader
     velox_dwio_common_exception
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  add_executable(
+    velox_hive_iceberg_deletion_vector_read_test
+    IcebergDeletionVectorReadTest.cpp
+    IcebergTestBase.cpp
+    Main.cpp
+  )
+  velox_add_test_headers(velox_hive_iceberg_deletion_vector_read_test IcebergTestBase.h)
+  add_test(
+    velox_hive_iceberg_deletion_vector_read_test
+    velox_hive_iceberg_deletion_vector_read_test
+  )
+
+  target_link_libraries(
+    velox_hive_iceberg_deletion_vector_read_test
+    velox_exec_test_lib
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_hive_iceberg_test_lib
+    velox_vector_test_lib
+    velox_vector_fuzzer
+    velox_dwio_common
+    velox_dwio_common_exception
+    velox_dwio_common_test_utils
+    velox_dwio_dwrf_reader
+    velox_dwio_dwrf_writer
+    velox_file
+    velox_process
+    velox_test_util
+    Folly::folly
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  if(VELOX_ENABLE_PARQUET)
+    target_link_libraries(
+      velox_hive_iceberg_deletion_vector_read_test
+      velox_dwio_parquet_reader
+      velox_dwio_parquet_writer
+    )
+  endif()
+
+  add_executable(velox_hive_iceberg_deletion_vector_sink_test IcebergDeletionVectorSinkTest.cpp)
+  add_test(
+    velox_hive_iceberg_deletion_vector_sink_test
+    velox_hive_iceberg_deletion_vector_sink_test
+  )
+
+  target_link_libraries(
+    velox_hive_iceberg_deletion_vector_sink_test
+    velox_exec_test_lib
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_vector_test_lib
+    velox_common_base
+    velox_core
+    velox_dwio_common
+    velox_dwio_common_exception
+    velox_dwio_dwrf_reader
+    velox_dwio_dwrf_writer
+    velox_file
+    velox_memory
+    velox_process
+    velox_test_util
+    velox_type
+    Folly::folly
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  add_executable(
+    velox_hive_iceberg_dwrf_insert_test
+    IcebergDwrfInsertTest.cpp
+    IcebergTestBase.cpp
+    Main.cpp
+  )
+  velox_add_test_headers(velox_hive_iceberg_dwrf_insert_test IcebergTestBase.h)
+  add_test(velox_hive_iceberg_dwrf_insert_test velox_hive_iceberg_dwrf_insert_test)
+  if(VELOX_ENABLE_PARQUET)
+    target_link_libraries(
+      velox_hive_iceberg_dwrf_insert_test
+      velox_dwio_parquet_reader
+      velox_dwio_parquet_writer
+    )
+  endif()
+
+  target_link_libraries(
+    velox_hive_iceberg_dwrf_insert_test
+    velox_exec_test_lib
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_hive_iceberg_test_lib
+    velox_vector_test_lib
+    velox_vector_fuzzer
+    velox_common_base
+    velox_dwio_common
+    velox_dwio_common_test_utils
+    velox_dwio_dwrf_reader
+    velox_dwio_dwrf_writer
+    velox_encode
+    velox_file
+    velox_process
+    velox_test_util
+    Folly::folly
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  add_executable(
+    velox_hive_iceberg_dwrf_stats_test
+    IcebergDwrfStatsTest.cpp
+    IcebergTestBase.cpp
+    Main.cpp
+  )
+  velox_add_test_headers(velox_hive_iceberg_dwrf_stats_test IcebergTestBase.h)
+  add_test(velox_hive_iceberg_dwrf_stats_test velox_hive_iceberg_dwrf_stats_test)
+  if(VELOX_ENABLE_PARQUET)
+    target_link_libraries(
+      velox_hive_iceberg_dwrf_stats_test
+      velox_dwio_parquet_reader
+      velox_dwio_parquet_writer
+    )
+  endif()
+
+  target_link_libraries(
+    velox_hive_iceberg_dwrf_stats_test
+    velox_exec_test_lib
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_hive_iceberg_test_lib
+    velox_vector_test_lib
+    velox_vector_fuzzer
+    velox_common_base
+    velox_dwio_common
+    velox_dwio_common_test_utils
+    velox_dwio_dwrf_reader
+    velox_dwio_dwrf_writer
+    velox_encode
+    velox_file
+    velox_process
+    velox_test_util
+    Folly::folly
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  add_executable(
+    velox_hive_iceberg_changelog_test
+    IcebergChangelogE2ETest.cpp
+    IcebergChangelogSplitReaderTest.cpp
+    IcebergTestBase.cpp
+    Main.cpp
+  )
+  velox_add_test_headers(velox_hive_iceberg_changelog_test IcebergTestBase.h)
+  add_test(velox_hive_iceberg_changelog_test velox_hive_iceberg_changelog_test)
+
+  target_link_libraries(
+    velox_hive_iceberg_changelog_test
+    velox_hive_iceberg_test_lib
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_exec_test_lib
+    velox_vector_test_lib
+    velox_dwio_parquet_reader
+    velox_dwio_parquet_writer
     GTest::gtest
     GTest::gtest_main
   )

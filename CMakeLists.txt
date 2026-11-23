@@ -66,6 +66,7 @@ list(
 include(ResolveDependency)
 include(VeloxUtils)
 include(CMakeDependentOption)
+include(CheckIPOSupported)
 
 velox_set_with_default(VELOX_DEPENDENCY_SOURCE_DEFAULT VELOX_DEPENDENCY_SOURCE AUTO)
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
@@ -91,6 +92,7 @@ option(VELOX_MONO_LIBRARY "Build single unified library." ON)
 option(ENABLE_ALL_WARNINGS "Enable -Wall and -Wextra compiler warnings." ON)
 option(VELOX_BUILD_SHARED "Build Velox as shared libraries." OFF)
 option(VELOX_BUILD_CMAKE_PACKAGE "Build CMake package for Velox." OFF)
+option(VELOX_ENABLE_LTO "Enable link-time optimization (IPO/LTO)." OFF)
 option(VELOX_SKIP_WAVE_BRANCH_KERNEL_TEST "Disable Wave branch kernel test." OFF)
 # While it's possible to build both in one go we currently want to build either
 # static or shared.
@@ -114,6 +116,18 @@ if(VELOX_BUILD_SHARED)
     "When building Velox as a shared library it's recommended to build against a shared build of folly to avoid issues with linking of gflags. "
     "This is currently NOT being enforced so user discretion is advised."
   )
+endif()
+
+if(VELOX_ENABLE_LTO)
+  check_ipo_supported(RESULT VELOX_IPO_SUPPORTED OUTPUT VELOX_IPO_ERROR LANGUAGES CXX)
+  if(NOT VELOX_IPO_SUPPORTED)
+    message(
+      FATAL_ERROR
+      "VELOX_ENABLE_LTO requested, but IPO/LTO is not supported: ${VELOX_IPO_ERROR}"
+    )
+  endif()
+  set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+  message(STATUS "VELOX_ENABLE_LTO enabled")
 endif()
 
 # option() always creates a BOOL variable so we have to use a normal cache
@@ -155,9 +169,15 @@ option(VELOX_ENABLE_GCS "Build GCS Connector" OFF)
 option(VELOX_ENABLE_ABFS "Build Abfs Connector" OFF)
 option(VELOX_ENABLE_HDFS "Build Hdfs Connector" OFF)
 option(VELOX_ENABLE_PARQUET "Enable Parquet support" ON)
+option(VELOX_ENABLE_NIMBLE "Enable Nimble support" OFF)
 option(VELOX_ENABLE_ARROW "Enable Arrow support" OFF)
 option(VELOX_ENABLE_GEO "Enable Geospatial support" ON)
 option(VELOX_ENABLE_REMOTE_FUNCTIONS "Enable remote function support" OFF)
+option(
+  VELOX_ENABLE_LOCAL_RUNNER_SERVICE
+  "Enable LocalRunnerService and VeloxQueryRunner for expression fuzzer regression testing"
+  OFF
+)
 option(VELOX_ENABLE_CCACHE "Use ccache if installed." ON)
 option(VELOX_ENABLE_COMPRESSION_LZ4 "Enable Lz4 compression support." OFF)
 
@@ -280,9 +300,29 @@ if(${VELOX_ENABLE_DUCKDB})
   velox_resolve_dependency(DuckDB)
 endif()
 
-if(VELOX_ENABLE_FAISS)
+if(VELOX_ENABLE_FAISS OR VELOX_ENABLE_NIMBLE)
+  # On macOS, OpenMP and BLAS for FAISS come from Homebrew, which installs
+  # them outside the default search paths.
+  if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
+    foreach(formula libomp openblas)
+      execute_process(
+        COMMAND brew --prefix ${formula}
+        RESULT_VARIABLE BREW_RESULT
+        OUTPUT_VARIABLE BREW_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+      )
+      if(BREW_RESULT EQUAL 0 AND EXISTS "${BREW_PREFIX}")
+        list(APPEND CMAKE_PREFIX_PATH "${BREW_PREFIX}")
+      endif()
+    endforeach()
+  endif()
+  # The installed FAISS package links OpenMP::OpenMP_CXX without defining it,
+  # so the target must exist in this scope before FAISS is resolved.
+  find_package(OpenMP REQUIRED)
   velox_set_source(faiss)
-  velox_resolve_dependency(faiss)
+  # FAISS 1.11.0 does not install faiss/impl/zerocopy_io.h, which the vector
+  # index includes.
+  velox_resolve_dependency(faiss 1.12.0)
   if(NOT TARGET FAISS::faiss)
     add_library(FAISS::faiss ALIAS faiss)
   endif()
@@ -295,9 +335,43 @@ if(DEFINED ENV{INSTALL_PREFIX})
   include_directories(BEFORE "$ENV{INSTALL_PREFIX}/include")
 endif()
 
+# Homebrew's unversioned openssl formula is OpenSSL 4, which Folly at
+# FB_OS_VERSION and the bundled gRPC do not build against. On macOS, default to
+# Homebrew's OpenSSL 3 unless the caller already chose an OpenSSL root, as a
+# CMake variable or in the environment.
+if(APPLE AND NOT OPENSSL_ROOT_DIR AND "$ENV{OPENSSL_ROOT_DIR}" STREQUAL "")
+  find_program(VELOX_BREW_EXECUTABLE brew)
+  if(VELOX_BREW_EXECUTABLE)
+    execute_process(
+      COMMAND ${VELOX_BREW_EXECUTABLE} --prefix openssl@3
+      RESULT_VARIABLE VELOX_BREW_OPENSSL3_RESULT
+      OUTPUT_VARIABLE VELOX_BREW_OPENSSL3_PREFIX
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET
+    )
+    if(VELOX_BREW_OPENSSL3_RESULT EQUAL 0 AND IS_DIRECTORY "${VELOX_BREW_OPENSSL3_PREFIX}")
+      message(STATUS "Using Homebrew OpenSSL 3 from ${VELOX_BREW_OPENSSL3_PREFIX}")
+      set(OPENSSL_ROOT_DIR "${VELOX_BREW_OPENSSL3_PREFIX}")
+    else()
+      message(
+        WARNING
+        "Homebrew openssl@3 was not found. Folly at FB_OS_VERSION and the bundled gRPC do not build against OpenSSL 4; run scripts/setup-macos.sh or set OPENSSL_ROOT_DIR."
+      )
+    endif()
+  endif()
+endif()
+
 # We look for OpenSSL here to cache the result enforce the version across our
 # dependencies.
 find_package(OpenSSL REQUIRED)
+
+if(APPLE)
+  # Folly::folly_deps exports $(brew --prefix)/include (for libevent) ahead of
+  # the OpenSSL include directory. With Homebrew's OpenSSL 4 linked there, Velox
+  # sources that include <openssl/*.h> would compile against OpenSSL 4 headers
+  # while linking the OpenSSL found above, so put its headers first.
+  include_directories(SYSTEM ${OPENSSL_INCLUDE_DIR})
+endif()
 
 if(
   VELOX_ENABLE_CCACHE
@@ -333,7 +407,7 @@ if(VELOX_ENABLE_S3)
   if(AWSSDK_ROOT_DIR)
     list(APPEND CMAKE_PREFIX_PATH ${AWSSDK_ROOT_DIR})
   endif()
-  find_package(AWSSDK 1.11.654 REQUIRED COMPONENTS s3;identity-management)
+  find_package(AWSSDK 1.11.806 REQUIRED COMPONENTS s3;identity-management)
   add_definitions(-DVELOX_ENABLE_S3)
 endif()
 
@@ -437,6 +511,16 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAS_UNCAUGHT_EXCEPTIONS")
 if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char")
 endif()
+
+# C++14 sized deallocation is on by default in GCC but not in Clang before 19.
+# Headers such as s2geometry's port.h call ::operator delete(ptr, size).
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsized-deallocation")
+endif()
+
+# Folly's exception tracer records the stack of a throw inside a coroutine by
+# walking frame pointers, and crashes if a frame on the way omits them.
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-omit-frame-pointer")
 
 # Under Ninja, we are able to designate certain targets large enough to require
 # restricted parallelism.
@@ -660,8 +744,13 @@ if(${VELOX_BUILD_PYTHON_PACKAGE})
   velox_resolve_dependency(pybind11 2.10.0)
 endif()
 
-# DWIO (ORC/DWRF) depends on protobuf.
-if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR} OR VELOX_ENABLE_GCS)
+# DWIO (ORC/DWRF) depends on protobuf. Nimble's serializer does too.
+if(
+  ${VELOX_BUILD_MINIMAL_WITH_DWIO}
+  OR ${VELOX_ENABLE_HIVE_CONNECTOR}
+  OR VELOX_ENABLE_GCS
+  OR VELOX_ENABLE_NIMBLE
+)
   # Locate or build protobuf.
   velox_set_source(Protobuf)
   velox_resolve_dependency(Protobuf 3.21.7 REQUIRED)
@@ -669,7 +758,14 @@ if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR} OR VELOX_E
 endif()
 
 velox_set_source(simdjson)
-velox_resolve_dependency(simdjson 4.1.0)
+velox_resolve_dependency(simdjson 4.3.0)
+
+# libxml2 backs the Spark XPath functions and is only needed when Spark
+# functions are enabled.
+if(VELOX_ENABLE_SPARK_FUNCTIONS)
+  velox_set_source(LibXml2)
+  velox_resolve_dependency(LibXml2)
+endif()
 
 velox_set_source(FastFloat)
 velox_resolve_dependency(FastFloat)
@@ -691,9 +787,14 @@ if(${VELOX_BUILD_TESTING})
   velox_resolve_dependency(gRPC)
 endif()
 
-if(VELOX_ENABLE_REMOTE_FUNCTIONS OR VELOX_ENABLE_PARQUET)
-  # TODO: Move this to use resolve_dependency(). For some reason, FBThrift
-  # requires clients to explicitly install fizz and wangle.
+# FBThrift is required by remote functions and LocalRunnerService.
+if(VELOX_ENABLE_REMOTE_FUNCTIONS OR VELOX_ENABLE_PARQUET OR VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
+  set(VELOX_NEEDS_FBTHRIFT ON)
+endif()
+
+# TODO: Move this to use resolve_dependency(). For some reason, FBThrift
+# requires clients to explicitly install fizz and wangle.
+if(VELOX_NEEDS_FBTHRIFT)
   find_package(fizz CONFIG REQUIRED)
   find_package(wangle CONFIG REQUIRED)
   find_package(FBThrift CONFIG REQUIRED)
@@ -826,7 +927,7 @@ if(
 )
   set(
     CMAKE_CXX_FLAGS
-    "${CMAKE_CXX_FLAGS} -O1 -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -DVELOX_ENABLE_ASAN_UBSAN_SANITIZERS"
+    "${CMAKE_CXX_FLAGS} -O1 -fsanitize=address -fsanitize=undefined -DVELOX_ENABLE_ASAN_UBSAN_SANITIZERS"
   )
   # Skip alignment errors and member access check for now.
   # https://github.com/facebookincubator/velox/issues/15811
@@ -854,6 +955,54 @@ if(VELOX_ENABLE_GEO)
   list(PREPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/CMake/resolve_dependency_modules/s2geometry)
   velox_set_source(s2geometry)
   velox_resolve_dependency(s2geometry)
+endif()
+
+# Resolved last, after every other dependency. OpenZL vendors its own copy of
+# zstd, whose CMake defines an `uninstall` target. GEOS defines one too, but
+# without the `if(NOT TARGET uninstall)` guard that zstd has, so GEOS fails
+# outright if anything claimed the name first. Ordering Nimble after GEOS lets
+# GEOS win the race and zstd skip, which is the only arrangement in which a
+# BUNDLED build of both succeeds. Nothing between here and add_subdirectory()
+# needs these targets.
+if(VELOX_ENABLE_NIMBLE)
+  # Nimble is the only consumer of both, so they are resolved here rather than
+  # unconditionally. FlatBuffers supplies both the runtime library and the flatc
+  # code generator that turns Nimble's .fbs schemas into C++ headers. Nimble's
+  # third dependency, FSST, is vendored under velox/external/fsst instead.
+  velox_set_source(flatbuffers)
+  velox_resolve_dependency(flatbuffers)
+  # build_flatbuffers() only ships with FlatBuffers 22.9.4 and later, and a
+  # bundled build does not put the package's own modules on CMAKE_MODULE_PATH at
+  # all, so CMake/third-party/BuildFlatBuffers.cmake is used unconditionally to
+  # keep a single code path. It resolves flatc from FLATBUFFERS_FLATC_EXECUTABLE,
+  # the flatbuffers::flatc target or the flatc target, whichever the resolved
+  # package provides.
+  include(BuildFlatBuffers)
+
+  velox_set_source(openzl)
+  velox_resolve_dependency(openzl)
+  # A bundled build exposes the bare target names while find_package() exposes
+  # namespaced ones. Aliasing between them is not safe: a find_package() that
+  # reports the package as not found still leaves its imported OpenZL:: targets
+  # behind, so `if(NOT TARGET OpenZL::openzl_cpp)` would skip the alias and
+  # consumers would link the rejected system package. Select on the resolution
+  # mode instead, which is unambiguous.
+  if(openzl_SOURCE STREQUAL "SYSTEM")
+    set(VELOX_OPENZL_LIBRARIES OpenZL::openzl OpenZL::openzl_cpp)
+  else()
+    set(VELOX_OPENZL_LIBRARIES openzl openzl_cpp)
+  endif()
+endif()
+
+# Warnings that Velox holds its own code to but not its dependencies. Compile
+# options added here reach only targets defined from this point on, so they
+# skip every dependency resolved above. They come after CMAKE_CXX_FLAGS on the
+# command line, so they override the GCC suppression of implicit-fallthrough.
+if(ENABLE_ALL_WARNINGS)
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wimplicit-fallthrough>)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wunreachable-code-break>)
+  endif()
 endif()
 
 add_subdirectory(velox)

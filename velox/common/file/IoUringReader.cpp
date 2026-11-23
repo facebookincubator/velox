@@ -25,13 +25,11 @@
 #include <string>
 
 #include <folly/Conv.h>
+#include <folly/ScopeGuard.h>
 
 #if FOLLY_HAS_LIBURING
 
-#include <fcntl.h>
-#include <sys/stat.h>
 #include <cerrno>
-#include <vector>
 
 #include <glog/logging.h>
 
@@ -52,10 +50,6 @@ void validateOptions(const IoUringReader::Options& options) {
       options.completionQueueDepth,
       0,
       "io_uring completionQueueDepth must be positive");
-  VELOX_CHECK_GT(
-      options.registeredFileSlots,
-      0,
-      "io_uring registeredFileSlots must be positive");
   VELOX_CHECK(
       options.singleIssuer || !options.deferTaskRun,
       "io_uring deferTaskRun option requires singleIssuer option");
@@ -157,35 +151,12 @@ std::string ioUringSetupFlagsToString(uint32_t flags) {
 }
 
 #ifdef IOSQE_FIXED_FILE
-struct FileIdentity {
-  uint64_t device{0};
-  uint64_t inode{0};
-  int statusFlags{0};
-};
+// The registered-file table belongs to the ring, so every reader has its own
+// table. read() registers one file at a time, so the table has one slot.
+constexpr int kRegisteredFileSlot{0};
 
-FileIdentity getFileIdentity(int fd) {
-  VELOX_CHECK_GE(fd, 0, "io_uring read fd must be non-negative: {}", fd);
-
-  FileIdentity identity;
-  identity.statusFlags = ::fcntl(fd, F_GETFL);
-  VELOX_CHECK_GE(
-      identity.statusFlags,
-      0,
-      "fcntl(F_GETFL) failed for io_uring read fd {}: {}",
-      fd,
-      folly::errnoStr(errno));
-
-  struct stat fileStat{};
-  VELOX_CHECK_EQ(
-      ::fstat(fd, &fileStat),
-      0,
-      "fstat failed for io_uring read fd {}: {}",
-      fd,
-      folly::errnoStr(errno));
-  identity.device = static_cast<uint64_t>(fileStat.st_dev);
-  identity.inode = static_cast<uint64_t>(fileStat.st_ino);
-  return identity;
-}
+// Fd value that leaves a registered-file slot empty.
+constexpr int kEmptyFd{-1};
 #endif
 
 #endif
@@ -275,7 +246,17 @@ IoUringReader::Stats getIoUringReaderStats(uint64_t& numReaders) {
 #if FOLLY_HAS_LIBURING
 
 bool IoUringReader::available() {
-  return folly::IoUringBackend::isAvailable();
+  // folly::IoUringBackend::isAvailable() reports unavailability by returning
+  // false, except when ring setup fails with ENOMEM: that path throws
+  // std::runtime_error instead. ENOMEM here usually means the host ran out of
+  // RLIMIT_MEMLOCK rather than out of memory, which is a transient, host-wide
+  // condition. Report it as unavailable so callers can fall back.
+  try {
+    return folly::IoUringBackend::isAvailable();
+  } catch (const std::exception& e) {
+    LOG(WARNING) << "io_uring availability probe failed: " << e.what();
+    return false;
+  }
 }
 
 #else
@@ -296,7 +277,6 @@ void IoUringReader::setOptions(const Options& options) {
   LOG(INFO) << "IoUringReader options set: submissionQueueDepth="
             << options.submissionQueueDepth
             << ", completionQueueDepth=" << options.completionQueueDepth
-            << ", registeredFileSlots=" << options.registeredFileSlots
             << ", setupFlags="
             << ioUringSetupFlagsToString(ioUringSetupFlagsFromOptions(options));
 #endif
@@ -334,6 +314,14 @@ uint64_t IoUringReader::read(
   recordRead(regions.size());
   const auto registeredFileSlot = registerFileForRead(fd);
 
+  // A registered file stays open in the kernel. Clear the slot on return, so a
+  // deleted file frees its disk space once the caller closes its fd.
+  SCOPE_EXIT {
+    if (registeredFileSlot.has_value()) {
+      unregisterFileForRead();
+    }
+  };
+
   uint64_t totalBytes{0};
   size_t next{0};
   while (next < regions.size()) {
@@ -354,10 +342,6 @@ uint64_t IoUringReader::read(
 #if FOLLY_HAS_LIBURING
 
 void IoUringReader::initializeRing() {
-  registeredFiles_.resize(static_cast<size_t>(options_.registeredFileSlots));
-  fdToRegisteredFileSlot_.reserve(
-      static_cast<size_t>(options_.registeredFileSlots));
-
   io_uring_params params{};
   params.flags = ioUringSetupFlagsFromOptions(options_);
 #ifdef IORING_SETUP_CQSIZE
@@ -385,9 +369,7 @@ void IoUringReader::initializeRing() {
   }
 
 #ifdef IOSQE_FIXED_FILE
-  std::vector<int> files(registeredFiles_.size(), -1);
-  const int registerRet = ::io_uring_register_files(
-      &ring_, files.data(), static_cast<unsigned int>(files.size()));
+  const int registerRet = ::io_uring_register_files(&ring_, &kEmptyFd, 1);
   if (registerRet < 0) {
     ::io_uring_queue_exit(&ring_);
     VELOX_FAIL(
@@ -399,7 +381,6 @@ void IoUringReader::initializeRing() {
   LOG(INFO) << "IoUringReader initialized: submissionQueueDepth="
             << submissionQueueDepth_
             << ", completionQueueDepth=" << completionQueueDepth_
-            << ", registeredFileSlots=" << registeredFiles_.size()
             << ", setupFlags=" << ioUringSetupFlagsToString(setupFlags_);
 }
 
@@ -410,60 +391,41 @@ std::optional<int> IoUringReader::registerFileForRead(int fd) {
       fileTableInitialized_,
       "io_uring registered-file table is not initialized");
 
-  const auto identity = getFileIdentity(fd);
-
-  size_t slot;
-  auto it = fdToRegisteredFileSlot_.find(fd);
-  if (it != fdToRegisteredFileSlot_.end()) {
-    slot = it->second;
-    const auto& registeredFile = registeredFiles_[slot];
-    if (registeredFile.fd == fd && registeredFile.device == identity.device &&
-        registeredFile.inode == identity.inode &&
-        registeredFile.statusFlags == identity.statusFlags) {
-      return static_cast<int>(slot);
-    }
-    fdToRegisteredFileSlot_.erase(it);
-  } else {
-    slot = nextRegisteredFileSlot_;
-  }
-
-  // The selected slot may still have a reverse lookup for the fd it is about
-  // to evict. Remove that stale mapping before storing the new fd in the slot.
-  if (registeredFiles_[slot].fd >= 0) {
-    auto oldIt = fdToRegisteredFileSlot_.find(registeredFiles_[slot].fd);
-    if (oldIt != fdToRegisteredFileSlot_.end() && oldIt->second == slot) {
-      fdToRegisteredFileSlot_.erase(oldIt);
-    }
-  }
-
   const int ret = ::io_uring_register_files_update(
-      &ring_, static_cast<unsigned int>(slot), &fd, 1);
+      &ring_, static_cast<unsigned int>(kRegisteredFileSlot), &fd, 1);
   if (ret != 1) {
     if (ret < 0) {
       VELOX_FAIL(
           "io_uring_register_files_update failed for fd {} slot {}: {}",
           fd,
-          slot,
+          kRegisteredFileSlot,
           folly::errnoStr(-ret));
     }
     VELOX_FAIL(
         "io_uring_register_files_update unexpectedly updated {} entries for fd {} slot {}",
         ret,
         fd,
-        slot);
+        kRegisteredFileSlot);
   }
 
-  registeredFiles_[slot].fd = fd;
-  registeredFiles_[slot].device = identity.device;
-  registeredFiles_[slot].inode = identity.inode;
-  registeredFiles_[slot].statusFlags = identity.statusFlags;
-  fdToRegisteredFileSlot_[fd] = slot;
-  // Wrap around and evict slots in round-robin order once the table is full.
-  nextRegisteredFileSlot_ = (slot + 1) % registeredFiles_.size();
   ++stats_.registeredFileUpdates;
-  return static_cast<int>(slot);
+  return kRegisteredFileSlot;
 #else
   return std::nullopt;
+#endif
+}
+
+void IoUringReader::unregisterFileForRead() noexcept {
+#ifdef IOSQE_FIXED_FILE
+  // Older liburing versions declare the fd array non-const.
+  int emptyFd{kEmptyFd};
+  const int ret = ::io_uring_register_files_update(
+      &ring_, static_cast<unsigned int>(kRegisteredFileSlot), &emptyFd, 1);
+  if (ret != 1) {
+    // The slot keeps the file open until the next read() replaces it.
+    LOG(ERROR) << "io_uring_register_files_update failed to clear slot "
+               << kRegisteredFileSlot << ": " << folly::errnoStr(-ret);
+  }
 #endif
 }
 

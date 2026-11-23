@@ -46,6 +46,12 @@ uint64_t threadCpuNanos();
 /// by flag.
 bool hasAvx2();
 
+/// True if the platform has SIMD instructions suitable for the bulk reader
+/// path (xsimd-based, no raw intrinsics). On x86 this requires AVX2 and
+/// is gated by --avx2; on aarch64, NEON is always available and the bulk
+/// path is unconditionally enabled.
+bool hasSimd();
+
 /// True if the machine has Intel BMI2 instructions and these are not disabled
 /// by flag.
 bool hasBmi2();

@@ -33,10 +33,9 @@ class WriterOptionsAdapter {
  public:
   virtual ~WriterOptionsAdapter() = default;
 
-  /// Identifier reported in Iceberg manifest commit messages. Iceberg's
-  /// file-format vocabulary has no DWRF enum; per the Iceberg SDK
-  /// convention, DWRF files are reported as "ORC" so downstream consumers
-  /// (Presto coordinator, catalog) can interpret the commit message.
+  /// Identifier reported in Iceberg manifest commit messages. Must match the
+  /// Java coordinator's FileFormat.toIceberg(): DWRF reports "ORC" because
+  /// Iceberg has no DWRF enum; PARQUET and NIMBLE report their own enums.
   virtual std::string manifestFormatString() const = 0;
 
   /// Hook applied before format-specific writers consume the common writer
@@ -58,7 +57,7 @@ class WriterOptionsAdapter {
 /// `icebergFieldIds` carries the per-input-column Iceberg field-id tree.
 /// Honored only by the NIMBLE adapter, which uses it to stamp
 /// `iceberg.id` (and other Iceberg V3 keys) onto each NIMBLE schema node
-/// via `VeloxWriterOptions::attributesByColumn`. Pass an empty
+/// via `WriterOptions::schemaAttributes`. Pass an empty
 /// `IcebergFieldId{}` for formats / call sites that have no field-id tree
 /// available (the NIMBLE adapter then produces files without
 /// `iceberg.id` attributes, the same wire shape as a pre-attributes

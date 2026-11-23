@@ -29,6 +29,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/functions/Udf.h"
 
 using namespace facebook::velox;
@@ -98,13 +99,13 @@ class DriverTest : public OperatorTestBase {
   void TearDown() override {
     for (auto& task : tasks_) {
       if (task != nullptr) {
-        waitForTaskCompletion(task.get(), 1'000'000);
+        TaskMonitor::waitForCompletion(*task, 1'000'000);
       }
     }
     // NOTE: destroy the tasks first to release all the allocated memory held
     // by the plan nodes (Values) in tasks.
     tasks_.clear();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
 
     if (wakeupInitialized_) {
       wakeupCancelled_ = true;
@@ -216,7 +217,7 @@ class DriverTest : public OperatorTestBase {
           cancelFuture_ = cursor->task()->requestAbort();
         } else if (operation == ResultOperation::kYield) {
           if (*counter % 2 == 0) {
-            auto time = getCurrentTimeMicro();
+            auto time = EpochTime::now<std::chrono::microseconds>();
             cursor->task()->yieldIfDue(time - 10);
           } else {
             cursor->task()->requestYield();
@@ -262,11 +263,9 @@ class DriverTest : public OperatorTestBase {
     std::vector<RowVectorPtr> batches;
     for (int i = 0; i < 4; ++i) {
       batches.push_back(
-          makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3})}));
+          makeNamedRowVector("c0", makeFlatVector<int32_t>({1, 2, 3})));
     }
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan =
-        PlanBuilder(planNodeIdGenerator).values(batches, true).planFragment();
+    auto plan = PlanBuilder().values(batches, true).planFragment();
     auto task = Task::create(
         "t0",
         plan,
@@ -354,11 +353,11 @@ class DriverTest : public OperatorTestBase {
     leaveSuspensionNotify.await(
         [&]() { return !leaveSuspensionNotifyFlag.load(); });
     if (expectedTaskState == TaskState::kFinished) {
-      ASSERT_TRUE(waitForTaskCompletion(task.get(), 1000'000'000));
+      ASSERT_TRUE(TaskMonitor::waitForCompletion(*task, 1000'000'000));
     } else if (expectedTaskState == TaskState::kCanceled) {
-      ASSERT_TRUE(waitForTaskCancelled(task.get(), 1000'000'000));
+      ASSERT_TRUE(TaskMonitor::waitForCancel(*task, 1000'000'000));
     } else {
-      ASSERT_TRUE(waitForTaskAborted(task.get(), 1000'000'000));
+      ASSERT_TRUE(TaskMonitor::waitForAbort(*task, 1000'000'000));
     }
   }
 
@@ -855,6 +854,7 @@ class ThrowNode : public core::PlanNode {
     kAddInput,
     kNoMoreInput,
     kGetOutput,
+    kClose,
   };
 
   ThrowNode(
@@ -961,6 +961,18 @@ class ThrowOperator : public Operator {
   bool isFinished() override {
     return noMoreInput_ && input_ == nullptr;
   }
+
+  void close() override {
+    ++numCloseCalls;
+    if (throwingMethod_ == ThrowNode::OperatorMethod::kClose) {
+      // Trigger a std::bad_function_call exception.
+      std::function<void()> nullFunction = nullptr;
+      nullFunction();
+    }
+    Operator::close();
+  }
+
+  static inline std::atomic_int32_t numCloseCalls{0};
 
  private:
   const ThrowNode::OperatorMethod throwingMethod_;
@@ -1148,6 +1160,34 @@ TEST_F(DriverTest, nonVeloxOperatorException) {
       AssertQueryBuilder(makePlan(ThrowNode::OperatorMethod::kGetOutput))
           .copyResults(pool()),
       "Operator::getOutput failed for [operator: Throw, plan node ID: 1]");
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(makePlan(ThrowNode::OperatorMethod::kClose))
+          .copyResults(pool()),
+      "Operator::close failed for [operator: Throw, plan node ID: 1]");
+}
+
+TEST_F(DriverTest, closeThrowsInMultipleOperators) {
+  Operator::registerOperator(
+      std::make_unique<ThrowNodeFactory>(std::numeric_limits<uint32_t>::max()));
+
+  auto rows = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
+  auto addThrowNode = [](std::string id, core::PlanNodePtr input) {
+    return std::make_shared<ThrowNode>(
+        id, ThrowNode::OperatorMethod::kClose, input);
+  };
+  auto plan = PlanBuilder()
+                  .values(rows)
+                  .addNode(addThrowNode)
+                  .addNode(addThrowNode)
+                  .planNode();
+
+  // Every operator is closed exactly once and the first failure is reported.
+  ThrowOperator::numCloseCalls = 0;
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Operator::close failed for [operator: Throw, plan node ID: 1]");
+  ASSERT_EQ(2, ThrowOperator::numCloseCalls);
 }
 
 TEST_F(DriverTest, enableOperatorBatchSizeStatsConfig) {
@@ -1452,7 +1492,7 @@ DEBUG_ONLY_TEST_F(DriverTest, driverSuspensionCalledFromOffThread) {
 
   auto task = createAndStartTaskToReadValues(1);
 
-  ASSERT_TRUE(waitForTaskCompletion(task.get(), 100'000'000));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*task, 100'000'000));
   while (driver->isOnThread()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
@@ -1500,7 +1540,7 @@ DEBUG_ONLY_TEST_F(DriverTest, driverSuspendedAfterTaskTerminateBeforeResume) {
   // 1 second to avoid timing flakiness.
   ASSERT_TRUE(driverLeaveSuspended);
 
-  ASSERT_TRUE(waitForTaskCancelled(task.get(), 100'000'000));
+  ASSERT_TRUE(TaskMonitor::waitForCancel(*task, 100'000'000));
 }
 
 DEBUG_ONLY_TEST_F(DriverTest, driverThreadContext) {
@@ -1519,7 +1559,7 @@ DEBUG_ONLY_TEST_F(DriverTest, driverThreadContext) {
   std::vector<RowVectorPtr> batches;
   for (int i = 0; i < 4; ++i) {
     batches.push_back(
-        makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3})}));
+        makeNamedRowVector("c0", makeFlatVector<int32_t>({1, 2, 3})));
   }
   createDuckDbTable(batches);
 
@@ -1558,7 +1598,7 @@ DEBUG_ONLY_TEST_F(DriverTest, driverCpuTimeSlicingCheck) {
   std::vector<RowVectorPtr> batches;
   for (int i = 0; i < numBatches; ++i) {
     batches.push_back(
-        makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3})}));
+        makeNamedRowVector("c0", makeFlatVector<int32_t>({1, 2, 3})));
   }
 
   struct TestParam {
@@ -1579,18 +1619,18 @@ DEBUG_ONLY_TEST_F(DriverTest, driverCpuTimeSlicingCheck) {
         std::function<void(const exec::Values*)>(
             [&](const exec::Values* values) {
               // Verify that no matter driver cpu time slicing is enforced or
-              // not, the driver start execution time is set properly.
-              ASSERT_NE(
-                  values->operatorCtx()->driver()->state().startExecTimeMs, 0);
+              // not, the driver's on-thread watch is started.
+              ASSERT_TRUE(values->operatorCtx()
+                              ->driver()
+                              ->state()
+                              .onThreadWatch.has_value());
               if (testParam.hasCpuTimeSliceLimit) {
                 std::this_thread::sleep_for(std::chrono::seconds(1)); // NOLINT
                 ASSERT_GT(
                     values->operatorCtx()->driver()->state().execTimeMs(), 0);
               }
             }));
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto fragment =
-        PlanBuilder(planNodeIdGenerator).values(batches).planFragment();
+    auto fragment = PlanBuilder().values(batches).planFragment();
     std::unordered_map<std::string, std::string> queryConfig;
     if (testParam.hasCpuTimeSliceLimit) {
       queryConfig.emplace(core::QueryConfig::kDriverCpuTimeSliceLimitMs, "500");
@@ -1626,7 +1666,7 @@ DEBUG_ONLY_TEST_F(DriverTest, driverCpuTimeSlicingCheck) {
       }
     }
 
-    ASSERT_TRUE(waitForTaskCompletion(task.get(), 600'000'000));
+    ASSERT_TRUE(TaskMonitor::waitForCompletion(*task, 600'000'000));
     if (testParam.hasCpuTimeSliceLimit &&
         testParam.executionMode == Task::ExecutionMode::kParallel) {
       // NOTE: there is one additional yield for the empty output.
@@ -1657,7 +1697,7 @@ TEST_F(DriverTest, additionalContextInRuntimeException) {
   registerFunction<ThrowRuntimeExceptionFunction, int64_t, int64_t>(
       {"throwException"});
   auto op = PlanBuilder(std::make_shared<core::PlanNodeIdGenerator>(13))
-                .values({vector})
+                .values(vector)
                 .project({"c0 + throwException(c0)"})
                 .planNode();
   try {
@@ -1680,7 +1720,7 @@ class OpCallStatusTest : public OperatorTestBase {};
 // expected.
 TEST_F(OpCallStatusTest, basic) {
   std::vector<RowVectorPtr> data{
-      makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3})})};
+      makeNamedRowVector("c0", makeFlatVector<int32_t>({1, 2, 3}))};
 
   const int firstNodeId{17};
   auto planNodeIdGenerator =
@@ -1736,9 +1776,9 @@ TEST_F(OpCallStatusTest, basic) {
       }));
 
   task->start(1, 1);
-  ASSERT_TRUE(waitForTaskCompletion(task.get(), 600'000'000));
+  ASSERT_TRUE(TaskMonitor::waitForCompletion(*task, 600'000'000));
   task.reset();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 };
 
 // This test verifies that TestSuspendedSection dtor won't throw with a
@@ -1760,7 +1800,7 @@ DEBUG_ONLY_TEST_F(DriverTest, suspendedSectionLeaveWithTerminatedTask) {
 
   auto task = createAndStartTaskToReadValues(1);
   task.reset();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(DriverTest, recursiveSuspensionCheck) {
@@ -1786,7 +1826,7 @@ DEBUG_ONLY_TEST_F(DriverTest, recursiveSuspensionCheck) {
       }));
 
   createAndStartTaskToReadValues(1);
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(DriverTest, recursiveSuspensionThrow) {
@@ -1811,5 +1851,5 @@ DEBUG_ONLY_TEST_F(DriverTest, recursiveSuspensionThrow) {
       }));
 
   createAndStartTaskToReadValues(1);
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }

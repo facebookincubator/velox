@@ -17,6 +17,7 @@
 #include "velox/exec/SortBuffer.h"
 #include <folly/system/HardwareConcurrency.h>
 #include <gtest/gtest.h>
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
@@ -24,7 +25,7 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/type/Type.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
-#include "velox/vector/tests/utils/VectorTestBase.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 
 using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
@@ -33,23 +34,6 @@ using namespace facebook::velox::memory;
 
 namespace facebook::velox::functions::test {
 using namespace facebook::velox::common::testutil;
-namespace {
-// Class to write runtime stats in the tests to the stats container.
-class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
- public:
-  explicit TestRuntimeStatWriter(
-      std::unordered_map<std::string, RuntimeMetric>& stats)
-      : stats_{stats} {}
-
-  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
-      override {
-    addOperatorRuntimeStats(name, value, stats_);
-  }
-
- private:
-  std::unordered_map<std::string, RuntimeMetric>& stats_;
-};
-} // namespace
 
 class SortBufferTest : public OperatorTestBase,
                        public testing::WithParamInterface<bool> {
@@ -58,8 +42,7 @@ class SortBufferTest : public OperatorTestBase,
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
     rng_.seed(123);
-    statWriter_ = std::make_unique<TestRuntimeStatWriter>(stats_);
-    setThreadLocalRunTimeStatWriter(statWriter_.get());
+    setThreadLocalRunTimeStatWriter(&statWriter_);
   }
 
   void TearDown() override {
@@ -128,8 +111,7 @@ class SortBufferTest : public OperatorTestBase,
 
   tsan_atomic<bool> nonReclaimableSection_{false};
   folly::Random::DefaultGenerator rng_;
-  std::unordered_map<std::string, RuntimeMetric> stats_;
-  std::unique_ptr<TestRuntimeStatWriter> statWriter_;
+  ConcurrentRuntimeStatWriter statWriter_;
 };
 
 TEST_P(SortBufferTest, singleKey) {
@@ -203,20 +185,21 @@ TEST_P(SortBufferTest, singleKey) {
           output->childAt(1)->asFlatVector<int32_t>()->valueAt(resultIndex++),
           expectedValue);
     }
+    const auto stats = statWriter_.runtimeStats();
     if (GetParam()) {
       ASSERT_EQ(
-          stats_.at(std::string(PrefixSort::kNumPrefixSortKeys)).sum,
+          stats.at(std::string(PrefixSort::kNumPrefixSortKeys)).sum,
           sortColumnIndices_.size());
       ASSERT_EQ(
-          stats_.at(std::string(PrefixSort::kNumPrefixSortKeys)).max,
+          stats.at(std::string(PrefixSort::kNumPrefixSortKeys)).max,
           sortColumnIndices_.size());
       ASSERT_EQ(
-          stats_.at(std::string(PrefixSort::kNumPrefixSortKeys)).min,
+          stats.at(std::string(PrefixSort::kNumPrefixSortKeys)).min,
           sortColumnIndices_.size());
     } else {
-      ASSERT_EQ(stats_.count(std::string(PrefixSort::kNumPrefixSortKeys)), 0);
+      ASSERT_EQ(stats.count(std::string(PrefixSort::kNumPrefixSortKeys)), 0);
     }
-    stats_.clear();
+    statWriter_.clear();
   }
 }
 
@@ -265,25 +248,24 @@ TEST_P(SortBufferTest, multipleKeys) {
   ASSERT_EQ(output->childAt(1)->asFlatVector<int32_t>()->valueAt(7), 1);
   ASSERT_EQ(output->childAt(1)->asFlatVector<int32_t>()->valueAt(8), 3);
   ASSERT_EQ(output->childAt(1)->asFlatVector<int32_t>()->valueAt(9), 5);
+  const auto stats = statWriter_.runtimeStats();
   if (GetParam()) {
     ASSERT_EQ(
-        stats_.at(std::string(PrefixSort::kNumPrefixSortKeys)).sum,
+        stats.at(std::string(PrefixSort::kNumPrefixSortKeys)).sum,
         sortColumnIndices_.size());
     ASSERT_EQ(
-        stats_.at(std::string(PrefixSort::kNumPrefixSortKeys)).max,
+        stats.at(std::string(PrefixSort::kNumPrefixSortKeys)).max,
         sortColumnIndices_.size());
     ASSERT_EQ(
-        stats_.at(std::string(PrefixSort::kNumPrefixSortKeys)).min,
+        stats.at(std::string(PrefixSort::kNumPrefixSortKeys)).min,
         sortColumnIndices_.size());
   } else {
-    ASSERT_EQ(stats_.count(std::string(PrefixSort::kNumPrefixSortKeys)), 0);
+    ASSERT_EQ(stats.count(std::string(PrefixSort::kNumPrefixSortKeys)), 0);
   }
 }
 
-// TODO: enable it later with test utility to compare the sorted result.
-TEST_P(SortBufferTest, DISABLED_randomData) {
+TEST_P(SortBufferTest, randomData) {
   struct {
-    RowTypePtr inputType;
     std::vector<column_index_t> sortColumnIndices;
     std::vector<CompareFlags> sortCompareFlags;
 
@@ -295,46 +277,24 @@ TEST_P(SortBufferTest, DISABLED_randomData) {
         sortCompareFlagsStr << sortCompareFlag.toString() << ";";
       }
       return fmt::format(
-          "inputType:{}, sortColumnIndices:{}, sortCompareFlags:{}",
-          inputType,
+          "sortColumnIndices:{}, sortCompareFlags:{}",
           sortColumnIndicesStr,
           sortCompareFlagsStr.str());
     }
   } testSettings[] = {
-      {ROW(
-           {{"c0", BIGINT()},
-            {"c1", INTEGER()},
-            {"c2", SMALLINT()},
-            {"c3", REAL()},
-            {"c4", DOUBLE()},
-            {"c5", VARCHAR()}}),
-       {2},
+      {{2},
        {{true, true, false, CompareFlags::NullHandlingMode::kNullAsValue}}},
-      {ROW(
-           {{"c0", BIGINT()},
-            {"c1", INTEGER()},
-            {"c2", SMALLINT()},
-            {"c3", REAL()},
-            {"c4", DOUBLE()},
-            {"c5", VARCHAR()}}),
-       {4, 1},
+      {{4, 1},
        {{true, true, false, CompareFlags::NullHandlingMode::kNullAsValue},
         {true, true, false, CompareFlags::NullHandlingMode::kNullAsValue}}},
-      {ROW(
-           {{"c0", BIGINT()},
-            {"c1", INTEGER()},
-            {"c2", SMALLINT()},
-            {"c3", REAL()},
-            {"c4", DOUBLE()},
-            {"c5", VARCHAR()}}),
-       {4, 1},
+      {{4, 1},
        {{true, true, false, CompareFlags::NullHandlingMode::kNullAsValue},
         {false, false, false, CompareFlags::NullHandlingMode::kNullAsValue}}}};
 
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     auto sortBuffer = std::make_unique<SortBuffer>(
-        testData.inputType,
+        inputType_,
         testData.sortColumnIndices,
         testData.sortCompareFlags,
         pool_.get(),
@@ -350,9 +310,32 @@ TEST_P(SortBufferTest, DISABLED_randomData) {
       inputVectors.push_back(input);
     }
     sortBuffer->noMoreInput();
-    stats_.clear();
-    // todo: have a utility function buildExpectedSortResult and verify the
-    // sorting result for random data.
+
+    std::vector<RowVectorPtr> outputs;
+    while (auto output = sortBuffer->getOutput(1'000)) {
+      outputs.push_back(output);
+    }
+
+    std::vector<std::string> orderBy;
+    for (size_t i = 0; i < testData.sortColumnIndices.size(); ++i) {
+      const auto& flags = testData.sortCompareFlags[i];
+      orderBy.push_back(
+          fmt::format(
+              "{} {} {}",
+              inputType_->nameOf(testData.sortColumnIndices[i]),
+              flags.ascending ? "ASC" : "DESC",
+              flags.nullsFirst ? "NULLS FIRST" : "NULLS LAST"));
+    }
+    createDuckDbTable(inputVectors);
+    velox::test::VectorAssertions::equalOrderedBy(
+        duckDbQueryRunner_.executeOrdered(
+            fmt::format(
+                "SELECT * FROM tmp ORDER BY {}", folly::join(", ", orderBy)),
+            inputType_),
+        inputType_,
+        outputs,
+        testData.sortColumnIndices);
+    statWriter_.clear();
   }
 }
 
@@ -448,6 +431,96 @@ TEST_P(SortBufferTest, batchOutput) {
       ASSERT_GT(spillStats.spilledFiles, 0);
     }
   }
+}
+
+namespace {
+// Covers the variable-width and complex extraction paths as well as the fixed
+// width one, so that releasing the accumulated rows is exercised against every
+// way a column can be materialized into the output.
+const RowTypePtr& releaseTestInputType() {
+  static const RowTypePtr type = ROW(
+      {{"c0", BIGINT()},
+       {"c1", INTEGER()},
+       {"c2", VARCHAR()},
+       {"c3", ARRAY(BIGINT())},
+       {"c4", MAP(INTEGER(), REAL())}});
+  return type;
+}
+
+const std::vector<column_index_t> kReleaseTestSortColumnIndices{1};
+const std::vector<CompareFlags> kReleaseTestSortCompareFlags{
+    {true, true, false, CompareFlags::NullHandlingMode::kNullAsValue}};
+} // namespace
+
+TEST_P(SortBufferTest, releaseAfterOutput) {
+  exec::SpillStats spillStats;
+  auto sortBuffer = std::make_unique<SortBuffer>(
+      releaseTestInputType(),
+      kReleaseTestSortColumnIndices,
+      kReleaseTestSortCompareFlags,
+      pool_.get(),
+      &nonReclaimableSection_,
+      prefixSortConfig_,
+      nullptr,
+      &spillStats);
+
+  VectorFuzzer fuzzer({.vectorSize = 1'024}, fuzzerPool_.get());
+  for (int i = 0; i < 64; ++i) {
+    sortBuffer->addInput(fuzzer.fuzzRow(releaseTestInputType()));
+  }
+  sortBuffer->noMoreInput();
+
+  const uint64_t usedBytesAfterInput = pool_->usedBytes();
+  ASSERT_GT(usedBytesAfterInput, 0);
+
+  while (sortBuffer->getOutput(1'024) != nullptr) {
+  }
+
+  // A driver only closes its operators once the last one finishes, so in a
+  // pipeline that fuses several sorts the accumulated rows have to be freed as
+  // soon as the last output batch is produced. Otherwise every upstream sort
+  // keeps its rows resident for the lifetime of the task.
+  ASSERT_LT(pool_->usedBytes(), usedBytesAfterInput / 10);
+}
+
+TEST_P(SortBufferTest, releaseAfterOutputKeepsOutputReadable) {
+  exec::SpillStats spillStats;
+  auto sortBuffer = std::make_unique<SortBuffer>(
+      releaseTestInputType(),
+      kReleaseTestSortColumnIndices,
+      kReleaseTestSortCompareFlags,
+      pool_.get(),
+      &nonReclaimableSection_,
+      prefixSortConfig_,
+      nullptr,
+      &spillStats);
+
+  VectorFuzzer fuzzer({.vectorSize = 256}, fuzzerPool_.get());
+  constexpr int32_t kNumInputVectors = 4;
+  for (int i = 0; i < kNumInputVectors; ++i) {
+    sortBuffer->addInput(fuzzer.fuzzRow(releaseTestInputType()));
+  }
+  sortBuffer->noMoreInput();
+
+  // A streaming window keeps the batches it was fed by reference long after the
+  // sort has handed out its last row, so releasing the rows must not invalidate
+  // anything reachable from the output.
+  std::vector<RowVectorPtr> outputs;
+  while (auto output = sortBuffer->getOutput(128)) {
+    outputs.push_back(std::move(output));
+  }
+
+  vector_size_t numOutputRows = 0;
+  for (const auto& output : outputs) {
+    output->validate({});
+    numOutputRows += output->size();
+    // Reading every value dereferences the string and complex payloads, so a
+    // stale reference into the freed row container is caught under ASAN.
+    for (vector_size_t row = 0; row < output->size(); ++row) {
+      output->toString(row);
+    }
+  }
+  ASSERT_EQ(numOutputRows, kNumInputVectors * 256);
 }
 
 TEST_P(SortBufferTest, spill) {
@@ -549,20 +622,21 @@ TEST_P(SortBufferTest, spill) {
             memory::spillMemoryPool()->stats().peakBytes, peakSpillMemoryUsage);
       }
     }
+    const auto stats = statWriter_.runtimeStats();
     if (GetParam()) {
       ASSERT_GE(
-          stats_.at(std::string(PrefixSort::kNumPrefixSortKeys)).sum,
+          stats.at(std::string(PrefixSort::kNumPrefixSortKeys)).sum,
           sortColumnIndices_.size());
       ASSERT_EQ(
-          stats_.at(std::string(PrefixSort::kNumPrefixSortKeys)).max,
+          stats.at(std::string(PrefixSort::kNumPrefixSortKeys)).max,
           sortColumnIndices_.size());
       ASSERT_EQ(
-          stats_.at(std::string(PrefixSort::kNumPrefixSortKeys)).min,
+          stats.at(std::string(PrefixSort::kNumPrefixSortKeys)).min,
           sortColumnIndices_.size());
     } else {
-      ASSERT_EQ(stats_.count(std::string(PrefixSort::kNumPrefixSortKeys)), 0);
+      ASSERT_EQ(stats.count(std::string(PrefixSort::kNumPrefixSortKeys)), 0);
     }
-    stats_.clear();
+    statWriter_.clear();
   }
 }
 

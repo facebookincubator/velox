@@ -563,7 +563,7 @@ TEST_F(PeriodicStatsReporterTest, basic) {
        .ssdStats = newSsdStats});
   arbitrator.updateStats(
       memory::MemoryArbitrator::Stats(
-          10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10));
+          10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10));
   std::this_thread::sleep_for(std::chrono::milliseconds(4'000));
 
   // Stop right after sufficient wait to ensure the following reads from main
@@ -791,7 +791,7 @@ class DynamicQuantilePatternTest
     : public StatsReporterTest,
       public testing::WithParamInterface<DynamicQuantilePatternTestCase> {};
 
-TEST_P(DynamicQuantilePatternTest, PatternScenarios) {
+TEST_P(DynamicQuantilePatternTest, patternScenarios) {
   const auto& testCase = GetParam();
   testCase.testFunc(this);
 }

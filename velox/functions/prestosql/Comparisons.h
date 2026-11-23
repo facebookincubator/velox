@@ -15,7 +15,10 @@
  */
 #pragma once
 
+#include <folly/CPortability.h>
+
 #include "velox/common/base/CompareFlags.h"
+#include "velox/common/base/Macros.h"
 #include "velox/functions/Macros.h"
 #include "velox/type/FloatingPointUtil.h"
 
@@ -26,7 +29,7 @@ namespace facebook::velox::functions {
   struct Name {                                                \
     VELOX_DEFINE_FUNCTION_TYPES(T);                            \
     template <typename TInput>                                 \
-    FOLLY_ALWAYS_INLINE void                                   \
+    VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void              \
     call(bool& result, const TInput& lhs, const TInput& rhs) { \
       if constexpr (std::is_floating_point_v<TInput>) {        \
         result = (ExprForFloats);                              \
@@ -85,7 +88,8 @@ struct EqFunction {
 
   // Used for primitive inputs.
   template <typename TInput>
-  void call(bool& out, const TInput& lhs, const TInput& rhs) {
+  VELOX_GPU_COMPATIBLE void
+  call(bool& out, const TInput& lhs, const TInput& rhs) {
     if constexpr (std::is_floating_point_v<TInput>) {
       out = util::floating_point::NaNAwareEquals<TInput>{}(lhs, rhs);
       return;
@@ -116,7 +120,8 @@ struct NeqFunction {
 
   // Used for primitive inputs.
   template <typename TInput>
-  void call(bool& out, const TInput& lhs, const TInput& rhs) {
+  VELOX_GPU_COMPATIBLE void
+  call(bool& out, const TInput& lhs, const TInput& rhs) {
     if constexpr (std::is_floating_point_v<TInput>) {
       out = !util::floating_point::NaNAwareEquals<TInput>{}(lhs, rhs);
       return;
@@ -141,7 +146,7 @@ struct NeqFunction {
 template <typename TExec>
 struct BetweenFunction {
   template <typename T>
-  FOLLY_ALWAYS_INLINE void
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
   call(bool& result, const T& value, const T& low, const T& high) {
     if constexpr (std::is_floating_point_v<T>) {
       result =

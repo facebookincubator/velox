@@ -27,29 +27,6 @@ namespace facebook::velox::exec {
 
 using velox::common::geospatial::GeometrySerializationType;
 
-void SpatialJoinBridge::setData(SpatialBuildResult buildResult) {
-  std::vector<ContinuePromise> promises;
-  {
-    std::lock_guard<std::mutex> l(mutex_);
-    VELOX_CHECK(!buildResult_.has_value(), "setData must be called only once");
-    buildResult_ = std::move(buildResult);
-    promises = std::move(promises_);
-  }
-  notify(std::move(promises));
-}
-
-std::optional<SpatialBuildResult> SpatialJoinBridge::dataOrFuture(
-    ContinueFuture* future) {
-  std::lock_guard<std::mutex> l(mutex_);
-  VELOX_CHECK(!cancelled_, "Getting data after the build side is aborted");
-  if (buildResult_.has_value()) {
-    return buildResult_.value();
-  }
-  promises_.emplace_back("SpatialJoinBridge::dataOrFuture");
-  *future = promises_.back().getSemiFuture();
-  return std::nullopt;
-}
-
 SpatialJoinBuild::SpatialJoinBuild(
     int32_t operatorId,
     DriverCtx* driverCtx,
@@ -198,7 +175,7 @@ SpatialIndex SpatialJoinBuild::buildSpatialIndex(
       double radius = radiusCol.valueAt<double>(i);
       const StringView geometryBytes = geometryCol.valueAt<StringView>(i);
       Envelope envelope = SpatialJoinBuild::readEnvelope(geometryBytes, radius);
-      if (FOLLY_UNLIKELY(envelope.isEmpty())) {
+      if (envelope.isEmpty()) [[unlikely]] {
         continue;
       }
       envelope.rowIndex = offset + geometryCol.index(i);
@@ -213,30 +190,28 @@ SpatialIndex SpatialJoinBuild::buildSpatialIndex(
 void SpatialJoinBuild::noMoreInput() {
   Operator::noMoreInput();
   std::vector<ContinuePromise> promises;
-  std::vector<std::shared_ptr<Driver>> peers;
+  std::vector<std::shared_ptr<Operator>> peerOperators;
   // The last Driver to hit SpatialJoinBuild::finish gathers the data from
   // all build Drivers and hands it over to the probe side. At this
   // point all build Drivers are continued and will free their
-  // state. allPeersFinished is true only for the last Driver of the
+  // state. allPeersArrived is true only for the last Driver of the
   // build pipeline.
-  if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+  if (!operatorCtx_->allPeersArrived(&future_, promises, peerOperators)) {
     return;
   }
 
   {
-    auto promisesGuard = folly::makeGuard([&]() {
+    SCOPE_EXIT {
       // Realize the promises so that the other Drivers (which were not
       // the last to finish) can continue from the barrier and finish.
-      peers.clear();
+      peerOperators.clear();
       for (auto& promise : promises) {
         promise.setValue();
       }
-    });
+    };
 
-    for (auto& peer : peers) {
-      auto op = peer->findOperator(planNodeId());
-      auto* build = dynamic_cast<SpatialJoinBuild*>(op);
+    for (const auto& peer : peerOperators) {
+      auto* build = peer->as<SpatialJoinBuild>();
       VELOX_CHECK_NOT_NULL(build);
       dataVectors_.insert(
           dataVectors_.end(),

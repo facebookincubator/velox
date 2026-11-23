@@ -15,13 +15,26 @@
  */
 
 #include "velox/exec/VectorHasher.h"
+
+#include <cstring>
+
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/memory/HashStringAllocator.h"
+#include "velox/exec/Operator.h"
 #include "velox/type/FloatingPointUtil.h"
+#include "velox/vector/FlatVector.h"
+#include "velox/vector/VectorTypeUtils.h"
 
 namespace facebook::velox::exec {
+
+template <typename T>
+inline T VectorHasher::valueAt(const char* group, int32_t offset) {
+  T value;
+  std::memcpy(&value, group + offset, sizeof(T));
+  return value;
+}
 
 #define VALUE_ID_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...)                \
   [&]() {                                                                   \
@@ -40,6 +53,9 @@ namespace facebook::velox::exec {
       }                                                                     \
       case TypeKind::BIGINT: {                                              \
         return TEMPLATE_FUNC<TypeKind::BIGINT>(__VA_ARGS__);                \
+      }                                                                     \
+      case TypeKind::HUGEINT: {                                             \
+        return TEMPLATE_FUNC<TypeKind::HUGEINT>(__VA_ARGS__);               \
       }                                                                     \
       case TypeKind::VARCHAR:                                               \
       case TypeKind::VARBINARY: {                                           \
@@ -357,7 +373,7 @@ bool VectorHasher::computeValueIds(
 }
 
 bool VectorHasher::computeValueIdsForRows(
-    char** groups,
+    char* const* groups,
     int32_t numGroups,
     int32_t offset,
     int32_t nullByte,
@@ -378,7 +394,7 @@ bool VectorHasher::computeValueIdsForRows(
 
 template <>
 bool VectorHasher::makeValueIdsForRows<TypeKind::VARCHAR>(
-    char** groups,
+    char* const* groups,
     int32_t numGroups,
     int32_t offset,
     int32_t nullByte,
@@ -620,6 +636,47 @@ void VectorHasher::analyze(
       analyzeTyped, typeKind_, groups, numGroups, offset, nullByte, nullMask);
 }
 
+uint64_t VectorHasher::valueId(int128_t value) {
+  if (isRange_) {
+    return kUnmappable;
+  }
+
+  auto nextId = uniqueHugeintValues_.size() + 1;
+  auto [iterator, inserted] = uniqueHugeintValues_.emplace(value, nextId);
+  if (!inserted) {
+    return iterator->second;
+  }
+
+  hasHugeintValue_ = true;
+  if (uniqueHugeintValues_.size() >= rangeSize_) {
+    return kUnmappable;
+  }
+  return iterator->second;
+}
+
+uint64_t VectorHasher::lookupValueId(int128_t value) const {
+  if (isRange_) {
+    return kUnmappable;
+  }
+
+  auto iterator = uniqueHugeintValues_.find(value);
+  if (iterator != uniqueHugeintValues_.end()) {
+    return iterator->second;
+  }
+  return kUnmappable;
+}
+
+void VectorHasher::analyzeValue(int128_t value) {
+  hasHugeintValue_ = true;
+  if (!distinctOverflow_) {
+    auto nextId = uniqueHugeintValues_.size() + 1;
+    if (uniqueHugeintValues_.emplace(value, nextId).second &&
+        uniqueHugeintValues_.size() > kMaxDistinct) {
+      setDistinctOverflow();
+    }
+  }
+}
+
 template <>
 void VectorHasher::analyzeValue(StringView value) {
   int size = value.size();
@@ -676,9 +733,7 @@ void VectorHasher::copyStringToLocal(const UniqueValue* unique) {
 
 void VectorHasher::setDistinctOverflow() {
   distinctOverflow_ = true;
-  uniqueValues_.clear();
-  uniqueValuesStorage_.clear();
-  distinctStringsBytes_ = 0;
+  clearDistinctValues();
 }
 
 void VectorHasher::setRangeOverflow() {
@@ -702,7 +757,7 @@ std::unique_ptr<common::Filter> VectorHasher::getFilter(
     case TypeKind::BIGINT:
       if (!distinctOverflow_) {
         std::vector<int64_t> values;
-        values.reserve(uniqueValues_.size());
+        values.reserve(numDistinct());
         for (const auto& value : uniqueValues_) {
           values.emplace_back(value.data());
         }
@@ -710,12 +765,22 @@ std::unique_ptr<common::Filter> VectorHasher::getFilter(
         return common::createBigintValues(values, nullAllowed);
       }
       [[fallthrough]];
+    case TypeKind::HUGEINT:
+      if (!distinctOverflow_) {
+        std::vector<int128_t> values;
+        values.reserve(numDistinct());
+        for (const auto& entry : uniqueHugeintValues_) {
+          values.emplace_back(entry.first);
+        }
+        return common::createHugeintValues(values, nullAllowed);
+      }
+      [[fallthrough]];
     case TypeKind::VARCHAR:
       [[fallthrough]];
     case TypeKind::VARBINARY:
       if (!distinctOverflow_) {
         std::vector<std::string> values;
-        values.reserve(uniqueValues_.size());
+        values.reserve(numDistinct());
         for (const auto& value : uniqueValues_) {
           values.emplace_back(value.asString());
         }
@@ -814,6 +879,13 @@ void VectorHasher::cardinality(
     asDistincts = 3;
     return;
   }
+  if (typeKind_ == TypeKind::HUGEINT) {
+    asRange = kRangeTooLarge;
+    asDistincts = distinctOverflow_
+        ? kRangeTooLarge
+        : addIdReserve(numDistinct(), reservePct) + 1;
+    return;
+  }
   int64_t signedRange;
   if (!hasRange_ || rangeOverflow_) {
     asRange = kRangeTooLarge;
@@ -841,7 +913,7 @@ void VectorHasher::cardinality(
     return;
   }
   // Padded count of values + 1 for null.
-  asDistincts = addIdReserve(uniqueValues_.size(), reservePct) + 1;
+  asDistincts = addIdReserve(numDistinct(), reservePct) + 1;
 }
 
 uint64_t VectorHasher::enableValueIds(uint64_t multiplier, int32_t reservePct) {
@@ -852,7 +924,7 @@ uint64_t VectorHasher::enableValueIds(uint64_t multiplier, int32_t reservePct) {
   checkTypeSupportsValueIds();
 
   multiplier_ = multiplier;
-  rangeSize_ = addIdReserve(uniqueValues_.size(), reservePct) + 1;
+  rangeSize_ = addIdReserve(numDistinct(), reservePct) + 1;
   isRange_ = false;
   uint64_t result;
   if (__builtin_mul_overflow(multiplier_, rangeSize_, &result)) {
@@ -886,12 +958,14 @@ uint64_t VectorHasher::enableValueRange(
 
 void VectorHasher::copyStatsFrom(const VectorHasher& other) {
   hasRange_ = other.hasRange_;
+  hasHugeintValue_ = other.hasHugeintValue_;
   rangeOverflow_ = other.rangeOverflow_;
   distinctOverflow_ = other.distinctOverflow_;
 
   min_ = other.min_;
   max_ = other.max_;
   uniqueValues_ = other.uniqueValues_;
+  uniqueHugeintValues_ = other.uniqueHugeintValues_;
 }
 
 void VectorHasher::merge(const VectorHasher& other, size_t maxNumDistinct) {
@@ -919,6 +993,19 @@ void VectorHasher::merge(const VectorHasher& other, size_t maxNumDistinct) {
     setDistinctOverflow();
     return;
   }
+  if (typeKind_ == TypeKind::HUGEINT) {
+    hasHugeintValue_ |= other.hasHugeintValue_;
+
+    for (const auto& entry : other.uniqueHugeintValues_) {
+      auto nextId = uniqueHugeintValues_.size() + 1;
+      if (uniqueHugeintValues_.emplace(entry.first, nextId).second &&
+          uniqueHugeintValues_.size() > maxNumDistinct) {
+        setDistinctOverflow();
+        break;
+      }
+    }
+    return;
+  }
   // Unique values can be merged without dispatch on type. All the
   // merged hashers must stay live for string type columns.
   for (UniqueValue value : other.uniqueValues_) {
@@ -942,12 +1029,13 @@ std::string VectorHasher::toString() const {
     out << " range size " << rangeSize_ << ": [" << min_ << ", " << max_ << "]";
   }
   if (!distinctOverflow_) {
-    out << " numDistinct: " << uniqueValues_.size();
+    out << " numDistinct: " << numDistinct();
   }
   return out.str();
 }
 
-std::vector<std::unique_ptr<VectorHasher>> createVectorHashers(
+// static
+std::vector<std::unique_ptr<VectorHasher>> VectorHasher::createForKeys(
     const RowTypePtr& rowType,
     const std::vector<core::FieldAccessTypedExprPtr>& keys) {
   const auto numKeys = keys.size();
@@ -957,10 +1045,11 @@ std::vector<std::unique_ptr<VectorHasher>> createVectorHashers(
     const auto channel = exprToChannel(key.get(), rowType);
     keyChannels.push_back(channel);
   }
-  return createVectorHashers(rowType, keyChannels);
+  return createForKeys(rowType, keyChannels);
 }
 
-std::vector<std::unique_ptr<VectorHasher>> createVectorHashers(
+// static
+std::vector<std::unique_ptr<VectorHasher>> VectorHasher::createForKeys(
     const RowTypePtr& rowType,
     const std::vector<column_index_t>& keyChannels) {
   const auto numKeys = keyChannels.size();

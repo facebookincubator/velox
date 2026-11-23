@@ -14,29 +14,35 @@
  * limitations under the License.
  */
 #include "velox/exec/VectorHasher.h"
+
 #include <gtest/gtest.h>
+#include <array>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
-using namespace facebook;
-using namespace facebook::velox;
-using namespace facebook::velox::exec;
-using namespace facebook::velox::test;
+namespace facebook::velox::exec {
+namespace {
 
-class VectorHasherTest : public testing::Test, public VectorTestBase {
+using velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON;
+
+class VectorHasherTest : public testing::Test,
+                         public velox::test::VectorTestBase {
  protected:
-  static void SetUpTestCase() {
-    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  static void SetUpTestSuite() {
+    memory::MemoryManager::testingSetInstance({});
   }
 
-  void SetUp() override {
-    allRows_ = SelectivityVector(100);
-
-    oddRows_ = VectorHasherTest::makeOddRows(100);
+  // Returns 'size' hashes, all 0.
+  static raw_vector<uint64_t> makeZeroHashes(vector_size_t size) {
+    raw_vector<uint64_t> hashes(size);
+    std::fill(hashes.begin(), hashes.end(), 0);
+    return hashes;
   }
 
+  // Returns 'size' rows with the odd ones selected.
   static SelectivityVector makeOddRows(vector_size_t size) {
     SelectivityVector oddRows(size);
     for (int32_t i = 0; i < size; i += 2) {
@@ -52,7 +58,7 @@ class VectorHasherTest : public testing::Test, public VectorTestBase {
     auto isNullAt =
         withNulls ? velox::test::VectorMaker::nullEvery(5) : nullptr;
 
-    // values in the middle of the range
+    // Values in the middle of the range.
     auto vector = makeFlatVector<T>(
         size, [](vector_size_t row) { return row % 17; }, isNullAt);
     auto outOfRangeVector = makeFlatVector<T>(
@@ -60,7 +66,7 @@ class VectorHasherTest : public testing::Test, public VectorTestBase {
     testComputeValueIds(vector, outOfRangeVector);
     testComputeValueIds(vector, outOfRangeVector, 27);
 
-    // values at the lower end of the range
+    // Values at the lower end of the range.
     vector = makeFlatVector<T>(
         size,
         [](vector_size_t row) {
@@ -69,7 +75,7 @@ class VectorHasherTest : public testing::Test, public VectorTestBase {
         isNullAt);
     testComputeValueIds(vector);
 
-    // values at the upper end of the range
+    // Values at the upper end of the range.
     vector = makeFlatVector<T>(
         size,
         [](vector_size_t row) {
@@ -86,9 +92,8 @@ class VectorHasherTest : public testing::Test, public VectorTestBase {
     auto size = vector->size();
 
     SelectivityVector allRows(size);
-    auto hasher = exec::VectorHasher::create(vector->type(), 0);
-    raw_vector<uint64_t> result(size);
-    std::fill(result.begin(), result.end(), 0);
+    auto hasher = VectorHasher::create(vector->type(), 0);
+    auto result = makeZeroHashes(size);
     hasher->decode(*vector, allRows);
     auto ok = hasher->computeValueIds(allRows, result);
     ASSERT_FALSE(ok);
@@ -114,7 +119,7 @@ class VectorHasherTest : public testing::Test, public VectorTestBase {
     }
 
     auto oddRows = makeOddRows(size);
-    memset(result.data(), 0, sizeof(uint64_t) * size);
+    result = makeZeroHashes(size);
     hasher->decode(*vector, oddRows);
     ok = hasher->computeValueIds(oddRows, result);
     ASSERT_TRUE(ok);
@@ -137,65 +142,66 @@ class VectorHasherTest : public testing::Test, public VectorTestBase {
     }
   }
 
-  BufferPtr makeIndices(
-      vector_size_t size,
-      std::function<vector_size_t(vector_size_t)> indexAt) {
-    BufferPtr indices = AlignedBuffer::allocate<vector_size_t>(size, pool());
-    auto rawIndices = indices->asMutable<vector_size_t>();
-    for (auto i = 0; i < size; i++) {
-      rawIndices[i] = indexAt(i);
+  // Checks that 'actual' and 'expected' hash the same, row by row.
+  static void testCustomComparison(
+      const VectorPtr& actual,
+      const VectorPtr& expected) {
+    // Vector hasher should hash the values in actual to the same hashes as it
+    // does when hashing the values in expected.
+    ASSERT_EQ(actual->size(), expected->size());
+
+    auto vectorHasher = VectorHasher::create(actual->type(), 1);
+    ASSERT_EQ(vectorHasher->channel(), 1);
+
+    SelectivityVector allRows(actual->size());
+
+    auto actualHashes = makeZeroHashes(actual->size());
+    vectorHasher->decode(*actual, allRows);
+    vectorHasher->hash(allRows, false, actualHashes);
+
+    auto expectedHashes = makeZeroHashes(expected->size());
+    vectorHasher->decode(*expected, allRows);
+    vectorHasher->hash(allRows, false, expectedHashes);
+
+    for (int32_t i = 0; i < actual->size(); i++) {
+      EXPECT_EQ(actualHashes[i], expectedHashes[i])
+          << "at " << i << " values: " << actual->toString(i) << " "
+          << expected->toString(i);
     }
-    return indices;
   }
-
-  VectorPtr makeDictionary(vector_size_t size, const VectorPtr& base) {
-    auto baseSize = base->size();
-    return BaseVector::wrapInDictionary(
-        BufferPtr(nullptr),
-        makeIndices(
-            size, [baseSize](vector_size_t row) { return row % baseSize; }),
-        size,
-        base);
-  }
-
-  SelectivityVector allRows_;
-  SelectivityVector oddRows_;
 };
 
 TEST_F(VectorHasherTest, flat) {
-  auto hasher = exec::VectorHasher::create(BIGINT(), 1);
+  auto hasher = VectorHasher::create(BIGINT(), 1);
   ASSERT_EQ(hasher->channel(), 1);
   ASSERT_EQ(hasher->typeKind(), TypeKind::BIGINT);
 
-  auto vector = BaseVector::create(BIGINT(), 100, pool());
-  auto flatVector = vector->asFlatVector<int64_t>();
-  for (int32_t i = 0; i < 100; i++) {
-    if (i % 5 == 0) {
-      flatVector->setNull(i, true);
-    } else {
-      flatVector->set(i, i);
-    }
-  }
+  constexpr vector_size_t kSize = 100;
+  auto vector = makeFlatVector<int64_t>(
+      kSize,
+      [](auto row) { return row; },
+      velox::test::VectorMaker::nullEvery(5));
+  const SelectivityVector allRows(kSize);
+  const auto oddRows = makeOddRows(kSize);
 
-  raw_vector<uint64_t> hashes(100);
-  std::fill(hashes.begin(), hashes.end(), 0);
-  hasher->decode(*vector, oddRows_);
-  hasher->hash(oddRows_, false, hashes);
-  for (int32_t i = 0; i < 100; i++) {
+  auto hashes = makeZeroHashes(kSize);
+  hasher->decode(*vector, oddRows);
+  hasher->hash(oddRows, false, hashes);
+  for (int32_t i = 0; i < kSize; i++) {
     if (i % 2 == 0) {
       EXPECT_EQ(hashes[i], 0);
     } else if (i % 5 == 0) {
-      EXPECT_EQ(hashes[i], exec::VectorHasher::kNullHash) << "at " << i;
+      EXPECT_EQ(hashes[i], VectorHasher::kNullHash) << "at " << i;
     } else {
       EXPECT_EQ(hashes[i], folly::hasher<int64_t>()(i)) << "at " << i;
     }
   }
 
-  hasher->decode(*vector, allRows_);
-  hasher->hash(allRows_, false, hashes);
-  for (int32_t i = 0; i < 100; i++) {
+  hasher->decode(*vector, allRows);
+  hasher->hash(allRows, false, hashes);
+  for (int32_t i = 0; i < kSize; i++) {
     if (i % 5 == 0) {
-      EXPECT_EQ(hashes[i], exec::VectorHasher::kNullHash) << "at " << i;
+      EXPECT_EQ(hashes[i], VectorHasher::kNullHash) << "at " << i;
     } else {
       EXPECT_EQ(hashes[i], folly::hasher<int64_t>()(i)) << "at " << i;
     }
@@ -203,26 +209,26 @@ TEST_F(VectorHasherTest, flat) {
 
   // Test precompute methods for single null value.
   hasher->precompute(*vector);
-  hasher->hashPrecomputed(allRows_, false, hashes);
-  for (int32_t i = 0; i < 100; i++) {
-    EXPECT_EQ(exec::VectorHasher::kNullHash, hashes[i]);
+  hasher->hashPrecomputed(allRows, false, hashes);
+  for (int32_t i = 0; i < kSize; i++) {
+    EXPECT_EQ(VectorHasher::kNullHash, hashes[i]);
   }
 
   // Test precompute methods for single value '7'.
-  flatVector->set(0, 7);
+  vector->set(0, 7);
   hasher->precompute(*vector);
-  hasher->hashPrecomputed(allRows_, false, hashes);
+  hasher->hashPrecomputed(allRows, false, hashes);
   auto expected = folly::hasher<int64_t>()(7);
-  for (int32_t i = 0; i < 100; i++) {
+  for (int32_t i = 0; i < kSize; i++) {
     EXPECT_EQ(expected, hashes[i]);
   }
 
   // Test precompute methods for mixed value '7' with value '55'.
-  flatVector->set(0, 55);
+  vector->set(0, 55);
   hasher->precompute(*vector);
-  hasher->hashPrecomputed(allRows_, true, hashes);
+  hasher->hashPrecomputed(allRows, true, hashes);
   expected = bits::hashMix(expected, folly::hasher<int64_t>()(55));
-  for (int32_t i = 0; i < 100; i++) {
+  for (int32_t i = 0; i < kSize; i++) {
     EXPECT_EQ(expected, hashes[i]);
   }
 }
@@ -234,22 +240,16 @@ TEST_F(VectorHasherTest, nans) {
   static const auto kSNaN = std::numeric_limits<double>::signaling_NaN();
   folly::hasher<double> hasher;
   static const auto kNaNHash = hasher(kNaN);
-  auto vectorHasher = exec::VectorHasher::create(DOUBLE(), 1);
+  auto vectorHasher = VectorHasher::create(DOUBLE(), 1);
   ASSERT_EQ(vectorHasher->channel(), 1);
   ASSERT_EQ(vectorHasher->typeKind(), TypeKind::DOUBLE);
 
   // Using two different binary representations of NaN.
   std::vector<double> inputValues = {1.0, -1.0, kNaN, kSNaN, 0.0, -0.0};
+  auto vector = makeFlatVector<double>(inputValues);
 
-  auto vector = BaseVector::create(DOUBLE(), inputValues.size(), pool());
-  auto flatVector = vector->asFlatVector<double>();
-  for (int32_t i = 0; i < inputValues.size(); i++) {
-    flatVector->set(i, inputValues[i]);
-  }
-
-  raw_vector<uint64_t> hashes(inputValues.size());
-  std::fill(hashes.begin(), hashes.end(), 0);
-  SelectivityVector allRows = SelectivityVector(inputValues.size());
+  auto hashes = makeZeroHashes(inputValues.size());
+  SelectivityVector allRows(inputValues.size());
   vectorHasher->decode(*vector, allRows);
   vectorHasher->hash(allRows, false, hashes);
   std::vector<uint64_t> expected = {
@@ -260,98 +260,92 @@ TEST_F(VectorHasherTest, nans) {
 }
 
 TEST_F(VectorHasherTest, nonNullConstant) {
-  auto hasher = exec::VectorHasher::create(INTEGER(), 1);
-  auto vector = BaseVector::createConstant(INTEGER(), 123, 100, pool());
+  auto hasher = VectorHasher::create(INTEGER(), 1);
+  auto vector = makeConstant<int32_t>(123, 100);
+  const SelectivityVector allRows(vector->size());
+  const auto oddRows = makeOddRows(vector->size());
 
   auto hash = folly::hasher<int32_t>()(123);
 
-  raw_vector<uint64_t> hashes(100);
-  std::fill(hashes.begin(), hashes.end(), 0);
-  hasher->decode(*vector, oddRows_);
-  hasher->hash(oddRows_, false, hashes);
+  auto hashes = makeZeroHashes(100);
+  hasher->decode(*vector, oddRows);
+  hasher->hash(oddRows, false, hashes);
   for (int32_t i = 0; i < 100; i++) {
     EXPECT_EQ(hashes[i], (i % 2 == 0) ? 0 : hash) << "at " << i;
   }
 
-  hasher->decode(*vector, allRows_);
-  hasher->hash(allRows_, false, hashes);
+  hasher->decode(*vector, allRows);
+  hasher->hash(allRows, false, hashes);
   for (int32_t i = 0; i < 100; i++) {
     EXPECT_EQ(hashes[i], hash) << "at " << i;
   }
 }
 
 TEST_F(VectorHasherTest, nullConstant) {
-  auto hasher = exec::VectorHasher::create(INTEGER(), 1);
-  auto vector = BaseVector::createNullConstant(INTEGER(), 100, pool());
+  auto hasher = VectorHasher::create(INTEGER(), 1);
+  auto vector = makeNullConstant(TypeKind::INTEGER, 100);
+  const SelectivityVector allRows(vector->size());
+  const auto oddRows = makeOddRows(vector->size());
 
-  raw_vector<uint64_t> hashes(100);
-  std::fill(hashes.begin(), hashes.end(), 0);
-  hasher->decode(*vector, oddRows_);
-  hasher->hash(oddRows_, false, hashes);
+  auto hashes = makeZeroHashes(100);
+  hasher->decode(*vector, oddRows);
+  hasher->hash(oddRows, false, hashes);
   for (int32_t i = 0; i < 100; i++) {
-    EXPECT_EQ(hashes[i], (i % 2 == 0) ? 0 : exec::VectorHasher::kNullHash)
+    EXPECT_EQ(hashes[i], (i % 2 == 0) ? 0 : VectorHasher::kNullHash)
         << "at " << i;
   }
 
-  hasher->decode(*vector, allRows_);
-  hasher->hash(allRows_, false, hashes);
+  hasher->decode(*vector, allRows);
+  hasher->hash(allRows, false, hashes);
   for (int32_t i = 0; i < 100; i++) {
-    EXPECT_EQ(hashes[i], exec::VectorHasher::kNullHash) << "at " << i;
+    EXPECT_EQ(hashes[i], VectorHasher::kNullHash) << "at " << i;
   }
 }
 
 TEST_F(VectorHasherTest, unknown) {
-  auto hasher = exec::VectorHasher::create(UNKNOWN(), 1);
+  auto hasher = VectorHasher::create(UNKNOWN(), 1);
   auto vector = makeAllNullFlatVector<UnknownValue>(100);
+  const SelectivityVector allRows(vector->size());
+  const auto oddRows = makeOddRows(vector->size());
 
   // Test hashing without mixing.
-  raw_vector<uint64_t> hashes(100);
-  std::fill(hashes.begin(), hashes.end(), 0);
-  hasher->decode(*vector, oddRows_);
-  hasher->hash(oddRows_, false, hashes);
+  auto hashes = makeZeroHashes(100);
+  hasher->decode(*vector, oddRows);
+  hasher->hash(oddRows, false, hashes);
   for (int32_t i = 0; i < 100; i++) {
-    EXPECT_EQ(hashes[i], (i % 2 == 0) ? 0 : exec::VectorHasher::kNullHash)
+    EXPECT_EQ(hashes[i], (i % 2 == 0) ? 0 : VectorHasher::kNullHash)
         << "at " << i;
   }
 
-  hasher->decode(*vector, allRows_);
-  hasher->hash(allRows_, false, hashes);
+  hasher->decode(*vector, allRows);
+  hasher->hash(allRows, false, hashes);
   for (int32_t i = 0; i < 100; i++) {
-    EXPECT_EQ(hashes[i], exec::VectorHasher::kNullHash) << "at " << i;
+    EXPECT_EQ(hashes[i], VectorHasher::kNullHash) << "at " << i;
   }
 
   // Test mixing.
   std::iota(hashes.begin(), hashes.end(), 0);
-  hasher->hash(allRows_, true, hashes);
+  hasher->hash(allRows, true, hashes);
   for (int32_t i = 0; i < 100; i++) {
-    auto expected = bits::hashMix(i, exec::VectorHasher::kNullHash);
+    auto expected = bits::hashMix(i, VectorHasher::kNullHash);
     EXPECT_EQ(hashes[i], expected) << "at " << i;
   }
 }
 
 TEST_F(VectorHasherTest, dictionary) {
-  auto hasher = exec::VectorHasher::create(BIGINT(), 1);
+  auto hasher = VectorHasher::create(BIGINT(), 1);
 
-  // 10 consecutive values: 3, 4, 5..12
-  auto vector = BaseVector::create(BIGINT(), 100, pool());
-  auto flatVector = vector->asFlatVector<int64_t>();
-  for (int32_t i = 0; i < 10; i++) {
-    flatVector->set(i, i + 3);
-  }
+  // The values 3 to 12, repeated 10 times.
+  auto dictionaryVector = wrapInDictionary(
+      makeIndices(100, [](auto row) { return row % 10; }),
+      100,
+      makeFlatVector<int64_t>(10, [](auto row) { return row + 3; }));
+  const SelectivityVector allRows(dictionaryVector->size());
+  const auto oddRows = makeOddRows(dictionaryVector->size());
 
-  // above sequence repeated 10 times: 3, 4, 5..12, 3, 4, 5..12,..
-  BufferPtr indices = AlignedBuffer::allocate<vector_size_t>(100, pool());
-  auto indicesPtr = indices->asMutable<vector_size_t>();
-  for (int32_t i = 0; i < 100; i++) {
-    indicesPtr[i] = i % 10;
-  }
-  auto dictionaryVector =
-      BaseVector::wrapInDictionary(BufferPtr(nullptr), indices, 100, vector);
-
-  raw_vector<uint64_t> hashes(100);
-  std::fill(hashes.begin(), hashes.end(), 0);
-  hasher->decode(*dictionaryVector, oddRows_);
-  hasher->hash(oddRows_, false, hashes);
+  auto hashes = makeZeroHashes(100);
+  hasher->decode(*dictionaryVector, oddRows);
+  hasher->hash(oddRows, false, hashes);
   for (int32_t i = 0; i < 100; i++) {
     if (i % 2 == 0) {
       EXPECT_EQ(hashes[i], 0) << "at " << i;
@@ -360,8 +354,8 @@ TEST_F(VectorHasherTest, dictionary) {
     }
   }
 
-  hasher->decode(*dictionaryVector, allRows_);
-  hasher->hash(allRows_, false, hashes);
+  hasher->decode(*dictionaryVector, allRows);
+  hasher->hash(allRows, false, hashes);
   for (int32_t i = 0; i < 100; i++) {
     EXPECT_EQ(hashes[i], folly::hasher<int64_t>()(i % 10 + 3)) << "at " << i;
   }
@@ -370,27 +364,23 @@ TEST_F(VectorHasherTest, dictionary) {
 // Tests how strings are mapped to uint64_t (if they fit) and to
 // consecutive ids of distinct values for the general case.
 TEST_F(VectorHasherTest, stringIds) {
-  auto hasher = exec::VectorHasher::create(VARCHAR(), 1);
-  auto vector = BaseVector::create(VARCHAR(), 100, pool());
-  auto flatVector = vector->asFlatVector<StringView>();
-  char zeros[9] = {};
-  char digits[10] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
-  SelectivityVector rows(sizeof(zeros) + sizeof(digits));
-  flatVector->resize(sizeof(zeros) + sizeof(digits));
-  raw_vector<uint64_t> hashes(flatVector->size());
-  for (int i = 0; i < sizeof(zeros); ++i) {
-    flatVector->set(i, StringView(zeros, i));
-    if (i > 7) {
-      rows.setValid(i, false);
-    }
-  }
-  for (int i = 0; i < sizeof(digits); ++i) {
-    flatVector->set(i + sizeof(zeros), StringView(digits, i));
-    if (i > 7) {
-      rows.setValid(i + sizeof(zeros), false);
+  auto hasher = VectorHasher::create(VARCHAR(), 1);
+  const char zeros[9] = {};
+  const char digits[10] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
+  constexpr vector_size_t kNumZeros = sizeof(zeros);
+  auto vector = makeFlatVector<StringView>(
+      kNumZeros + sizeof(digits), [&](vector_size_t row) {
+        return row < kNumZeros ? StringView(zeros, row)
+                               : StringView(digits, row - kNumZeros);
+      });
+  SelectivityVector rows(vector->size());
+  for (vector_size_t row = 0; row < vector->size(); ++row) {
+    if (vector->valueAt(row).size() > 7) {
+      rows.setValid(row, false);
     }
   }
   rows.updateBounds();
+  raw_vector<uint64_t> hashes(vector->size());
   // The test data has strings of 0 - 9 zeros followed by strings of
   // 0-10 digits. The elements where size <= 7 are in 'rows'. These
   // values have an integer range mapping.  We run these elements
@@ -402,7 +392,7 @@ TEST_F(VectorHasherTest, stringIds) {
   // Get the range of ids as min-max range and as count of distincts.
   hasher->cardinality(0, asRange, asDistincts);
   // All fit in range representation since no longer than 7 bytes.
-  EXPECT_NE(asRange, exec::VectorHasher::kRangeTooLarge);
+  EXPECT_NE(asRange, VectorHasher::kRangeTooLarge);
   // 15 values + 1 for null. The 0-length string is in common between zeros and
   // digits.
   EXPECT_EQ(asDistincts, 16);
@@ -425,8 +415,8 @@ TEST_F(VectorHasherTest, stringIds) {
   // Now we process values that do not fit.
   rows.clearAll();
   auto numInRange = 0;
-  for (int i = 0; i < flatVector->size(); ++i) {
-    if (flatVector->valueAt(i).size() > 7) {
+  for (int i = 0; i < vector->size(); ++i) {
+    if (vector->valueAt(i).size() > 7) {
       rows.setValid(i, true);
     } else {
       ++numInRange;
@@ -448,9 +438,9 @@ TEST_F(VectorHasherTest, stringIds) {
   EXPECT_EQ(numInRange, rows.countSelected());
 }
 
-// Tests distinct overflow, but starting with a small string
+// Tests distinct overflow, starting with a small string.
 TEST_F(VectorHasherTest, stringDistinctOverflow) {
-  auto hasher = exec::VectorHasher::create(VARCHAR(), 1);
+  auto hasher = VectorHasher::create(VARCHAR(), 1);
 
   constexpr uint32_t numRows{10000};
 
@@ -491,22 +481,22 @@ TEST_F(VectorHasherTest, stringDistinctOverflow) {
 }
 
 TEST_F(VectorHasherTest, integerIds) {
-  auto vector = BaseVector::create(BIGINT(), 100, pool());
-  auto ints = vector->as<FlatVector<int64_t>>();
   static constexpr int64_t kMin = std::numeric_limits<int64_t>::min();
-  ints->setNull(0, true);
-  for (int64_t i = 0; i < 99; ++i) {
-    ints->set(i + 1, kMin + i * 10);
-  }
-  auto hasher = exec::VectorHasher::create(BIGINT(), 1);
+  // A null, then kMin, kMin + 10, kMin + 20 and so on.
+  auto ints = makeFlatVector<int64_t>(
+      100,
+      [](auto row) { return row == 0 ? 0 : kMin + (row - 1) * 10; },
+      [](auto row) { return row == 0; });
+  auto hasher = VectorHasher::create(BIGINT(), 1);
   raw_vector<uint64_t> hashes(ints->size());
   SelectivityVector rows(ints->size());
-  hasher->decode(*vector, rows);
+  hasher->decode(*ints, rows);
   EXPECT_FALSE(hasher->computeValueIds(rows, hashes));
+  EXPECT_EQ(hasher->numUniqueValues(), 99);
   hasher->enableValueRange(1, 50);
-  hasher->decode(*vector, rows);
+  hasher->decode(*ints, rows);
   EXPECT_TRUE(hasher->computeValueIds(rows, hashes));
-  // null is always 0
+  // Null is always 0.
   EXPECT_EQ(hashes[0], 0);
   // min int64_t should be 1.
   EXPECT_EQ(hashes[1], 1);
@@ -518,34 +508,36 @@ TEST_F(VectorHasherTest, integerIds) {
   EXPECT_GT(numRange, 1001);
   ints->set(10, 10000);
 
-  hasher->decode(*vector, rows);
+  hasher->decode(*ints, rows);
   EXPECT_FALSE(hasher->computeValueIds(rows, hashes));
   hasher->cardinality(0, numRange, numDistinct);
   EXPECT_EQ(numRange, VectorHasher::kRangeTooLarge);
 
   auto filter = hasher->getFilter(false);
-  ASSERT_TRUE(filter != nullptr);
-  auto bigintValues =
-      dynamic_cast<common::BigintValuesUsingHashTable*>(filter.get());
-  ASSERT_TRUE(bigintValues != nullptr);
-  ASSERT_FALSE(bigintValues->testNull());
-  ASSERT_TRUE(bigintValues->testInt64(kMin + 100));
-  ASSERT_FALSE(bigintValues->testInt64(kMin + 101));
-  ASSERT_FALSE(bigintValues->testInt64(0));
+  ASSERT_NE(filter, nullptr);
+  EXPECT_EQ(filter->kind(), common::FilterKind::kBigintValuesUsingHashTable);
+  ASSERT_FALSE(filter->testNull());
+  ASSERT_TRUE(filter->testInt64(kMin + 100));
+  ASSERT_FALSE(filter->testInt64(kMin + 101));
+  ASSERT_FALSE(filter->testInt64(0));
 
-  hasher = exec::VectorHasher::create(BIGINT(), 1);
+  hasher->resetStats();
+  EXPECT_TRUE(hasher->empty());
+  EXPECT_EQ(hasher->numUniqueValues(), 0);
+
+  hasher = VectorHasher::create(BIGINT(), 1);
   hasher->enableValueIds(1, VectorHasher::kNoLimit);
-  // We add values that are over 100K distinct and withmax - min > int64_t max.
-  hasher->decode(*vector, rows);
+  // We add values that are over 100K distinct and with max - min > int64_t max.
+  hasher->decode(*ints, rows);
   EXPECT_TRUE(hasher->computeValueIds(rows, hashes));
-  // null is still 0.
+  // Null is still 0.
   EXPECT_EQ(hashes[0], 0);
   for (int count = 0; count < 1000; ++count) {
     vector_size_t index = 0;
     for (int64_t value = count * 100; value < count * 100 + 100; ++value) {
       ints->set(index++, value);
     }
-    hasher->decode(*vector, rows);
+    hasher->decode(*ints, rows);
     hasher->computeValueIds(rows, hashes);
   }
 
@@ -555,20 +547,20 @@ TEST_F(VectorHasherTest, integerIds) {
 }
 
 TEST_F(VectorHasherTest, dateIds) {
-  auto vector = BaseVector::create(DATE(), 100, pool());
-  auto* dates = vector->as<FlatVector<int32_t>>();
   static constexpr int32_t kMin = std::numeric_limits<int32_t>::min();
-  dates->setNull(0, true);
-  for (auto i = 0; i < 99; ++i) {
-    dates->set(i + 1, kMin + i * 10);
-  }
-  auto hasher = exec::VectorHasher::create(DATE(), 1);
+  // A null, then kMin, kMin + 10, kMin + 20 and so on.
+  auto dates = makeFlatVector<int32_t>(
+      100,
+      [](auto row) { return row == 0 ? 0 : kMin + (row - 1) * 10; },
+      [](auto row) { return row == 0; },
+      DATE());
+  auto hasher = VectorHasher::create(DATE(), 1);
   raw_vector<uint64_t> hashes(dates->size());
   SelectivityVector rows(dates->size());
-  hasher->decode(*vector, rows);
+  hasher->decode(*dates, rows);
   EXPECT_FALSE(hasher->computeValueIds(rows, hashes));
   hasher->enableValueRange(1, 0);
-  hasher->decode(*vector, rows);
+  hasher->decode(*dates, rows);
   EXPECT_TRUE(hasher->computeValueIds(rows, hashes));
   // Hash of null is always 0.
   EXPECT_EQ(hashes[0], 0);
@@ -582,16 +574,16 @@ TEST_F(VectorHasherTest, dateIds) {
   EXPECT_GT(numRange, 100);
 
   dates->set(10, 10000);
-  hasher->decode(*vector, rows);
+  hasher->decode(*dates, rows);
   EXPECT_FALSE(hasher->computeValueIds(rows, hashes));
   hasher->cardinality(10, numRange, numDistinct);
   // The range is padded up by 10%.
   EXPECT_LE(2360000000, numRange);
 
-  hasher = exec::VectorHasher::create(DATE(), 1);
+  hasher = VectorHasher::create(DATE(), 1);
   hasher->enableValueIds(1, VectorHasher::kNoLimit);
   // We add values that are over 100K distinct and with max - min > int32_t max.
-  hasher->decode(*vector, rows);
+  hasher->decode(*dates, rows);
   EXPECT_TRUE(hasher->computeValueIds(rows, hashes));
   // Hash of null is still 0.
   EXPECT_EQ(hashes[0], 0);
@@ -600,7 +592,7 @@ TEST_F(VectorHasherTest, dateIds) {
     for (int64_t value = count * 100; value < count * 100 + 100; ++value) {
       dates->set(index++, value);
     }
-    hasher->decode(*vector, rows);
+    hasher->decode(*dates, rows);
     hasher->computeValueIds(rows, hashes);
   }
 
@@ -610,21 +602,15 @@ TEST_F(VectorHasherTest, dateIds) {
 }
 
 TEST_F(VectorHasherTest, boolNoNulls) {
-  auto vector = BaseVector::create(BOOLEAN(), 100, pool());
-  auto bools = vector->as<FlatVector<bool>>();
-  bools->resize(3);
-  bools->set(0, true);
-  bools->set(1, false);
-  bools->set(2, true);
-  raw_vector<uint64_t> hashes(bools->size());
-  std::fill(hashes.begin(), hashes.end(), 0);
+  auto bools = makeFlatVector<bool>({true, false, true});
+  auto hashes = makeZeroHashes(bools->size());
   SelectivityVector rows(bools->size());
-  auto hasher = exec::VectorHasher::create(BOOLEAN(), 1);
+  auto hasher = VectorHasher::create(BOOLEAN(), 1);
   hasher->enableValueRange(2, 2000);
-  hasher->decode(*vector, rows);
+  hasher->decode(*bools, rows);
   EXPECT_TRUE(hasher->computeValueIds(rows, hashes));
-  // We expect false is 1, true is 2 times 2 because of the
-  // multiplier passed to enableValueRange().
+  // We expect false is 1 and true is 2, times 2 because of the multiplier
+  // passed to enableValueRange().
   EXPECT_EQ(4, hashes[0]);
   EXPECT_EQ(2, hashes[1]);
   EXPECT_EQ(4, hashes[2]);
@@ -636,20 +622,14 @@ TEST_F(VectorHasherTest, boolNoNulls) {
 }
 
 TEST_F(VectorHasherTest, boolWithNulls) {
-  auto vector = BaseVector::create(BOOLEAN(), 100, pool());
-  auto bools = vector->as<FlatVector<bool>>();
-  bools->resize(3);
-  bools->setNull(0, true);
-  bools->set(1, false);
-  bools->set(2, true);
-  raw_vector<uint64_t> hashes(bools->size());
-  std::fill(hashes.begin(), hashes.end(), 0);
+  auto bools = makeNullableFlatVector<bool>({std::nullopt, false, true});
+  auto hashes = makeZeroHashes(bools->size());
   SelectivityVector rows(bools->size());
-  auto hasher = exec::VectorHasher::create(BOOLEAN(), 1);
+  auto hasher = VectorHasher::create(BOOLEAN(), 1);
   hasher->enableValueRange(2, 2000);
-  hasher->decode(*vector, rows);
+  hasher->decode(*bools, rows);
   EXPECT_TRUE(hasher->computeValueIds(rows, hashes));
-  // We expect null is 0, false is 2, true is 2 times 2 because of the
+  // We expect null is 0, false is 1 and true is 2, times 2 because of the
   // multiplier passed to enableValueRange().
   EXPECT_EQ(hashes[0], 0);
   EXPECT_EQ(hashes[1], 1 * 2);
@@ -677,7 +657,7 @@ TEST_F(VectorHasherTest, merge) {
   VectorHasher otherHasher(BIGINT(), 0);
   otherHasher.decode(*otherVector, rows);
   otherHasher.computeValueIds(rows, hashes);
-  // hasher has 0..99 and otherHasher has 0..49, 1050..1099.
+  // 'hasher' has 0..99 and 'otherHasher' has 0..49 and 1050..1099.
   VectorHasher emptyHasher(BIGINT(), 0);
   VectorHasher otherEmptyHasher(BIGINT(), 0);
   EXPECT_TRUE(emptyHasher.empty());
@@ -693,15 +673,13 @@ TEST_F(VectorHasherTest, merge) {
   EXPECT_EQ(numDistinct, 1 + kSize + (kSize / 2));
 
   auto filter = hasher.getFilter(false);
-  ASSERT_TRUE(filter != nullptr);
-  auto bigintValues =
-      dynamic_cast<common::BigintValuesUsingBitmask*>(filter.get());
-  ASSERT_TRUE(bigintValues != nullptr);
-  ASSERT_FALSE(bigintValues->testNull());
-  ASSERT_TRUE(bigintValues->testInt64(56));
-  ASSERT_TRUE(bigintValues->testInt64(1066));
-  ASSERT_FALSE(bigintValues->testInt64(304));
-  ASSERT_FALSE(bigintValues->testInt64(123));
+  ASSERT_NE(filter, nullptr);
+  EXPECT_EQ(filter->kind(), common::FilterKind::kBigintValuesUsingBitmask);
+  ASSERT_FALSE(filter->testNull());
+  ASSERT_TRUE(filter->testInt64(56));
+  ASSERT_TRUE(filter->testInt64(1066));
+  ASSERT_FALSE(filter->testInt64(304));
+  ASSERT_FALSE(filter->testInt64(123));
 
   std::unordered_set<uint64_t> ids;
   hasher.enableValueIds(1, 0);
@@ -760,9 +738,267 @@ TEST_F(VectorHasherTest, mergeMaxNumDistinct) {
   EXPECT_EQ(numDistinct, VectorHasher::kRangeTooLarge);
 }
 
+TEST_F(VectorHasherTest, mergeHugeint) {
+  constexpr vector_size_t kSize = 10;
+  const auto type = DECIMAL(38, 0);
+  auto makeValue = [](uint64_t highBits) {
+    return HugeInt::build(highBits, 42);
+  };
+  auto makeValues = [&](uint64_t firstHighBit) {
+    std::vector<int128_t> values;
+    values.reserve(kSize);
+    for (auto i = 0; i < kSize; ++i) {
+      values.push_back(makeValue(firstHighBit + i));
+    }
+    return values;
+  };
+
+  auto vector1 = makeFlatVector<int128_t>(makeValues(0), type);
+  auto vector2 = makeFlatVector<int128_t>(makeValues(5), type);
+
+  SelectivityVector rows(kSize);
+  raw_vector<uint64_t> hashes(kSize);
+
+  VectorHasher hasher1(type, 0);
+  hasher1.decode(*vector1, rows);
+  hasher1.computeValueIds(rows, hashes);
+
+  VectorHasher hasher2(type, 0);
+  hasher2.decode(*vector2, rows);
+  hasher2.computeValueIds(rows, hashes);
+
+  hasher1.merge(hasher2, kSize * 2);
+
+  uint64_t numRange;
+  uint64_t numDistinct;
+  hasher1.cardinality(0, numRange, numDistinct);
+  EXPECT_EQ(numRange, VectorHasher::kRangeTooLarge);
+  EXPECT_EQ(numDistinct, 16);
+  EXPECT_EQ(hasher1.numUniqueValues(), 15);
+
+  auto filter = hasher1.getFilter(false);
+  ASSERT_NE(filter, nullptr);
+  EXPECT_EQ(filter->kind(), common::FilterKind::kHugeintValuesUsingHashTable);
+  EXPECT_TRUE(filter->testInt128(makeValue(0)));
+  EXPECT_TRUE(filter->testInt128(makeValue(9)));
+  EXPECT_TRUE(filter->testInt128(makeValue(14)));
+  EXPECT_FALSE(filter->testInt128(makeValue(15)));
+
+  VectorHasher overflowHasher1(type, 0);
+  overflowHasher1.decode(*vector1, rows);
+  overflowHasher1.computeValueIds(rows, hashes);
+
+  auto vector3 = makeFlatVector<int128_t>(makeValues(100), type);
+  VectorHasher overflowHasher2(type, 0);
+  overflowHasher2.decode(*vector3, rows);
+  overflowHasher2.computeValueIds(rows, hashes);
+
+  overflowHasher1.merge(overflowHasher2, kSize + 5);
+  overflowHasher1.cardinality(0, numRange, numDistinct);
+  EXPECT_EQ(numRange, VectorHasher::kRangeTooLarge);
+  EXPECT_EQ(numDistinct, VectorHasher::kRangeTooLarge);
+  EXPECT_FALSE(overflowHasher1.empty());
+  EXPECT_EQ(overflowHasher1.numUniqueValues(), 0);
+  EXPECT_EQ(nullptr, overflowHasher1.getFilter(false));
+}
+
 TEST_F(VectorHasherTest, computeValueIdsBigint) {
   testComputeValueIds<int64_t>(false);
   testComputeValueIds<int64_t>(true);
+}
+
+TEST_F(VectorHasherTest, computeValueIdsHugeint) {
+  const auto valueWithLowBits = HugeInt::build(1, 42);
+  const auto anotherValueWithSameLowBits = HugeInt::build(2, 42);
+  const auto negativeValueWithSameLowBits =
+      HugeInt::build(std::numeric_limits<uint64_t>::max(), 42);
+  const auto newValue = HugeInt::build(3, 42);
+
+  auto vector = makeNullableFlatVector<int128_t>(
+      {std::nullopt,
+       valueWithLowBits,
+       anotherValueWithSameLowBits,
+       valueWithLowBits,
+       negativeValueWithSameLowBits,
+       anotherValueWithSameLowBits},
+      DECIMAL(38, 0));
+
+  auto hasher = VectorHasher::create(vector->type(), 0);
+  SelectivityVector rows(vector->size());
+  auto result = makeZeroHashes(vector->size());
+
+  hasher->decode(*vector, rows);
+  ASSERT_FALSE(hasher->computeValueIds(rows, result));
+
+  uint64_t rangeSize;
+  uint64_t distinctSize;
+  hasher->cardinality(0, rangeSize, distinctSize);
+  ASSERT_EQ(VectorHasher::kRangeTooLarge, rangeSize);
+  ASSERT_EQ(4, distinctSize);
+
+  ASSERT_EQ(4, hasher->enableValueIds(1, 0));
+
+  hasher->decode(*vector, rows);
+  ASSERT_TRUE(hasher->computeValueIds(rows, result));
+  EXPECT_EQ(0, result[0]);
+  EXPECT_EQ(result[1], result[3]);
+  EXPECT_EQ(result[2], result[5]);
+  EXPECT_NE(result[1], result[2]);
+  EXPECT_NE(result[1], result[4]);
+  EXPECT_NE(result[2], result[4]);
+
+  auto outOfRangeVector = makeFlatVector<int128_t>(
+      {valueWithLowBits,
+       anotherValueWithSameLowBits,
+       negativeValueWithSameLowBits,
+       newValue},
+      DECIMAL(38, 0));
+  SelectivityVector outOfRangeRows(outOfRangeVector->size());
+  result = makeZeroHashes(outOfRangeVector->size());
+  hasher->decode(*outOfRangeVector, outOfRangeRows);
+  ASSERT_FALSE(hasher->computeValueIds(outOfRangeRows, result));
+}
+
+TEST_F(VectorHasherTest, lookupValueIdsHugeint) {
+  const auto first = HugeInt::build(1, 42);
+  const auto second = HugeInt::build(2, 42);
+  const auto third = HugeInt::build(3, 42);
+  const auto missing = HugeInt::build(4, 42);
+  const auto type = DECIMAL(38, 0);
+
+  auto vector = makeFlatVector<int128_t>({first, second, third}, type);
+  auto hasher = VectorHasher::create(type, 0);
+  SelectivityVector rows(vector->size());
+  raw_vector<uint64_t> result(vector->size());
+
+  hasher->decode(*vector, rows);
+  hasher->computeValueIds(rows, result);
+  hasher->enableValueIds(1, 0);
+
+  auto probe = makeFlatVector<int128_t>({first, missing, second, third}, type);
+  SelectivityVector probeRows(probe->size());
+  result = makeZeroHashes(probe->size());
+
+  VectorHasher::ScratchMemory scratch;
+  hasher->lookupValueIds(*probe, probeRows, scratch, result);
+
+  EXPECT_TRUE(probeRows.isValid(0));
+  EXPECT_FALSE(probeRows.isValid(1));
+  EXPECT_TRUE(probeRows.isValid(2));
+  EXPECT_TRUE(probeRows.isValid(3));
+  EXPECT_EQ(probeRows.countSelected(), 3);
+  EXPECT_EQ(result[0], 1);
+  EXPECT_EQ(result[1], 0);
+  EXPECT_EQ(result[2], 2);
+  EXPECT_EQ(result[3], 3);
+}
+
+TEST_F(VectorHasherTest, hugeintFilter) {
+  const auto first = HugeInt::build(1, 42);
+  const auto second = HugeInt::build(2, 42);
+  const auto third = HugeInt::build(3, 42);
+  const auto missing = HugeInt::build(4, 42);
+
+  auto vector =
+      makeFlatVector<int128_t>({first, second, first, third}, DECIMAL(38, 0));
+
+  auto hasher = VectorHasher::create(vector->type(), 0);
+  SelectivityVector rows(vector->size());
+  raw_vector<uint64_t> hashes(vector->size());
+
+  hasher->decode(*vector, rows);
+  hasher->computeValueIds(rows, hashes);
+  EXPECT_EQ(hasher->numUniqueValues(), 3);
+
+  auto filter = hasher->getFilter(false);
+  ASSERT_NE(filter, nullptr);
+
+  EXPECT_EQ(filter->kind(), common::FilterKind::kHugeintValuesUsingHashTable);
+  ASSERT_FALSE(filter->testNull());
+  EXPECT_TRUE(filter->testInt128(first));
+  EXPECT_TRUE(filter->testInt128(second));
+  EXPECT_TRUE(filter->testInt128(third));
+  EXPECT_FALSE(filter->testInt128(missing));
+
+  auto filterWithNull = hasher->getFilter(true);
+  ASSERT_TRUE(filterWithNull->testNull());
+  EXPECT_TRUE(filterWithNull->testInt128(first));
+  EXPECT_FALSE(filterWithNull->testInt128(missing));
+
+  hasher->resetStats();
+  EXPECT_TRUE(hasher->empty());
+  EXPECT_EQ(hasher->numUniqueValues(), 0);
+}
+
+TEST_F(VectorHasherTest, int128BoundaryCollisions) {
+  vector_size_t size = 100;
+  auto vector = makeFlatVector<int128_t>(size, [](vector_size_t row) {
+    int64_t baseValue = row % 10;
+    int128_t highBits = static_cast<int128_t>(row / 10) << 64;
+    return highBits + baseValue;
+  });
+
+  auto hasher = VectorHasher::create(HUGEINT(), 0);
+  SelectivityVector allRows(size);
+  raw_vector<uint64_t> result(size);
+
+  // Verify decoded vector path keeps the high bits when collecting distincts.
+  hasher->decode(*vector, allRows);
+  hasher->computeValueIds(allRows, result);
+
+  uint64_t asRange;
+  uint64_t asDistinct;
+  hasher->cardinality(0, asRange, asDistinct);
+  ASSERT_EQ(size + 1, asDistinct)
+      << "Expected " << (size + 1)
+      << " distinct values (100 values + 1 for null), but got " << asDistinct
+      << ". This indicates hash collisions for int128_t values that differ "
+         "only in high bits.";
+}
+
+TEST_F(VectorHasherTest, int128BoundaryCollisionsForRows) {
+  constexpr int32_t kNumGroups = 100;
+  constexpr int32_t kNullByte = sizeof(int64_t) + sizeof(int128_t);
+  constexpr int32_t kRowSize = 32;
+  constexpr uint8_t kNullMask = 1;
+
+  // Keep row storage aligned to exercise both aligned and unaligned keys.
+  struct alignas(16) Row {
+    std::array<char, kRowSize> data;
+  };
+  for (const int32_t valueOffset : {0, 8}) {
+    SCOPED_TRACE(valueOffset);
+    std::vector<Row> rowData(kNumGroups);
+    std::vector<char*> groups(kNumGroups);
+    for (auto row = 0; row < kNumGroups; ++row) {
+      rowData[row].data.fill(0);
+      groups[row] = rowData[row].data.data();
+      ASSERT_EQ(
+          valueOffset,
+          reinterpret_cast<uintptr_t>(groups[row] + valueOffset) %
+              alignof(int128_t));
+
+      const int64_t baseValue = row % 10;
+      const int128_t highBits = static_cast<int128_t>(row / 10) << 64;
+      HugeInt::serialize(highBits + baseValue, groups[row] + valueOffset);
+    }
+
+    auto rowHasher = VectorHasher::create(HUGEINT(), 0);
+    raw_vector<uint64_t> rowResult(kNumGroups);
+    rowHasher->analyze(
+        groups.data(), kNumGroups, valueOffset, kNullByte, kNullMask);
+    rowHasher->enableValueIds(1, 0);
+    ASSERT_TRUE(rowHasher->computeValueIdsForRows(
+        groups.data(),
+        kNumGroups,
+        valueOffset,
+        kNullByte,
+        kNullMask,
+        rowResult));
+    for (auto row = 0; row < kNumGroups; ++row) {
+      EXPECT_EQ(row + 1, rowResult[row]);
+    }
+  }
 }
 
 TEST_F(VectorHasherTest, computeValueIdsInteger) {
@@ -782,18 +1018,19 @@ TEST_F(VectorHasherTest, computeValueIdsTinyint) {
 
 TEST_F(VectorHasherTest, computeValueIdsBoolDictionary) {
   vector_size_t size = 1'000;
-  auto vector = makeDictionary(
-      size, makeFlatVector<bool>(11, [](auto row) { return row % 2 == 0; }));
+  auto vector = wrapInDictionary(
+      makeIndices(size, [](auto row) { return row % 11; }),
+      size,
+      makeFlatVector<bool>(11, [](auto row) { return row % 2 == 0; }));
 
   SelectivityVector allRows(size);
-  auto hasher = exec::VectorHasher::create(BOOLEAN(), 0);
+  auto hasher = VectorHasher::create(BOOLEAN(), 0);
   uint64_t rangeSize;
   uint64_t distinctSize;
   hasher->cardinality(0, rangeSize, distinctSize);
   EXPECT_EQ(3, rangeSize);
   EXPECT_EQ(3, distinctSize);
-  raw_vector<uint64_t> result(size);
-  std::fill(result.begin(), result.end(), 0);
+  auto result = makeZeroHashes(size);
   hasher->decode(*vector, allRows);
   auto ok = hasher->computeValueIds(allRows, result);
   ASSERT_TRUE(ok);
@@ -816,14 +1053,18 @@ TEST_F(VectorHasherTest, computeValueIdsStrings) {
   dictionaryVectors.reserve(baseVectors.size());
 
   for (auto& baseVector : baseVectors) {
-    dictionaryVectors.emplace_back(makeDictionary(size, baseVector));
+    const auto baseSize = baseVector->size();
+    dictionaryVectors.emplace_back(wrapInDictionary(
+        makeIndices(size, [&](auto row) { return row % baseSize; }),
+        size,
+        baseVector));
   }
 
-  std::vector<std::unique_ptr<exec::VectorHasher>> hashers;
+  std::vector<std::unique_ptr<VectorHasher>> hashers;
   hashers.reserve(4);
   for (int i = 0; i < 4; i++) {
     hashers.emplace_back(
-        std::make_unique<exec::VectorHasher>(dictionaryVectors[i]->type(), i));
+        std::make_unique<VectorHasher>(dictionaryVectors[i]->type(), i));
   }
 
   SelectivityVector allRows(size);
@@ -890,27 +1131,24 @@ TEST_F(VectorHasherTest, computeValueIdsStrings) {
   }
 }
 
-namespace {
-
-// enum for marking special values to be tested in a type.
+// Special values to test in a type.
 enum class Value { kNull, kMin, kMax, kZero };
 
+// Returns 'id' as a value of T.
 template <typename T>
-// Appends a null for id 0, min of T for 1, max of T for 2 and 0 for 3.
-void append(FlatVectorPtr<T>& vector, Value id) {
-  auto size = vector->size();
-  vector->resize(size + 1);
-  if (id == Value::kNull) {
-    vector->setNull(size, true);
-  } else {
-    vector->set(
-        size,
-        id == Value::kMin       ? std::numeric_limits<T>::min()
-            : id == Value::kMax ? std::numeric_limits<T>::max()
-                                : 0);
+std::optional<T> specialValue(Value id) {
+  switch (id) {
+    case Value::kNull:
+      return std::nullopt;
+    case Value::kMin:
+      return std::numeric_limits<T>::min();
+    case Value::kMax:
+      return std::numeric_limits<T>::max();
+    case Value::kZero:
+      return 0;
   }
+  VELOX_UNREACHABLE();
 }
-} // namespace
 
 TEST_F(VectorHasherTest, endOfRange) {
   // We sample with large but not end-reaching ranges of different
@@ -928,8 +1166,6 @@ TEST_F(VectorHasherTest, endOfRange) {
   constexpr int64_t kTinyRange = std::numeric_limits<uint8_t>::max();
   constexpr int64_t kSmallRange = std::numeric_limits<uint16_t>::max();
   constexpr int64_t kIntRange = std::numeric_limits<uint32_t>::max();
-
-  using exec::VectorHasher;
 
   // Make samples of 8, 16 and 32 bit values such that when rounding, the
   // extended range will cover both ends of the type.
@@ -979,26 +1215,27 @@ TEST_F(VectorHasherTest, endOfRange) {
   EXPECT_EQ(
       (kTinyRange + 2) * (kSmallRange + 2) * (kIntRange + 2), multiplier3);
 
-  // Make test data. Each vector of 8, 16 and 32 bit values has the min, 0, max
-  // of its type and null.
-  auto tinyData = BaseVector::create<FlatVector<int8_t>>(TINYINT(), 0, pool());
-  auto smallData =
-      BaseVector::create<FlatVector<int16_t>>(SMALLINT(), 0, pool());
-  auto intData = BaseVector::create<FlatVector<int32_t>>(INTEGER(), 0, pool());
-  std::vector<Value> values = {
+  // Make test data: every combination of the min, 0, max and null of each of
+  // the 8, 16 and 32 bit types.
+  const std::vector<Value> values = {
       Value::kNull, Value::kMin, Value::kZero, Value::kMax};
-
+  std::vector<std::optional<int8_t>> tinyValues;
+  std::vector<std::optional<int16_t>> smallValues;
+  std::vector<std::optional<int32_t>> intValues;
   for (auto tinyId : values) {
     for (auto smallId : values) {
       for (auto intId : values) {
-        append<int8_t>(tinyData, tinyId);
-        append<int16_t>(smallData, smallId);
-        append<int32_t>(intData, intId);
+        tinyValues.push_back(specialValue<int8_t>(tinyId));
+        smallValues.push_back(specialValue<int16_t>(smallId));
+        intValues.push_back(specialValue<int32_t>(intId));
       }
     }
   }
+  auto tinyData = makeNullableFlatVector(tinyValues);
+  auto smallData = makeNullableFlatVector(smallValues);
+  auto intData = makeNullableFlatVector(intValues);
 
-  // make normalized keys from the 8, 16 and 32 bit key parts.
+  // Make normalized keys from the 8, 16 and 32 bit key parts.
   result.resize(tinyData->size());
   rows.resize(tinyData->size());
 
@@ -1030,11 +1267,9 @@ TEST_F(VectorHasherTest, hashCollision) {
 TEST_F(VectorHasherTest, simdRange) {
   // Tests the SIMD path for integer value ranges. We make hashers based on a
   // sample, then introduce out of range values and check that unmappable rows
-  // are detected and correctt normalized keys are produced for the rows with
+  // are detected and correct normalized keys are produced for the rows with
   // in-range values.
   constexpr int32_t kNumRows = 1001;
-  using exec::VectorHasher;
-
   auto smallValues =
       makeFlatVector<int16_t>(kNumRows, [](auto i) { return i; });
   auto intValues = makeFlatVector<int32_t>(kNumRows, [](auto i) { return i; });
@@ -1078,7 +1313,7 @@ TEST_F(VectorHasherTest, simdRange) {
       int64Values->set(i, 10000);
     }
   }
-  // make normalized keys.
+  // Make normalized keys.
   result.resize(kNumRows);
   rows.resize(kNumRows);
 
@@ -1105,20 +1340,15 @@ TEST_F(VectorHasherTest, lookupValueIdsDictionaryWithLargerBase) {
   auto base = makeNullableFlatVector<int32_t>({10, 11, 12, 13, 14, 15});
 
   auto hasher = VectorHasher::create(INTEGER(), 0);
-  raw_vector<uint64_t> result(8, pool());
-  std::fill(result.begin(), result.end(), 0);
+  auto result = makeZeroHashes(8);
   SelectivityVector allRows(base->size());
   hasher->decode(*base, allRows);
   hasher->computeValueIds(allRows, result);
 
   auto probeBase =
       makeNullableFlatVector<int32_t>({15, 100, 11, 14, std::nullopt, 10});
-  auto indices = makeIndices(8, [](vector_size_t row) {
-    static constexpr vector_size_t kIndices[] = {0, 1, 2, 3, 4, 5, 0, 2};
-    return kIndices[row];
-  });
   auto probe =
-      BaseVector::wrapInDictionary(BufferPtr(nullptr), indices, 8, probeBase);
+      wrapInDictionary(makeIndices({0, 1, 2, 3, 4, 5, 0, 2}), probeBase);
 
   SelectivityVector rows(8);
   rows.clearAll();
@@ -1128,7 +1358,7 @@ TEST_F(VectorHasherTest, lookupValueIdsDictionaryWithLargerBase) {
   rows.setValid(4, true);
   rows.setValid(6, true);
   rows.updateBounds();
-  std::fill(result.begin(), result.end(), 0);
+  result = makeZeroHashes(result.size());
 
   VectorHasher::ScratchMemory scratch;
   hasher->lookupValueIds(*probe, rows, scratch, result);
@@ -1150,40 +1380,10 @@ TEST_F(VectorHasherTest, lookupValueIdsDictionaryWithLargerBase) {
 TEST_F(VectorHasherTest, typeMismatch) {
   auto hasher = VectorHasher::create(BIGINT(), 0);
 
-  auto data = makeFlatVector<std::string>(
-      {"a",
-       "b"
-       "c"});
+  auto data = makeFlatVector<std::string>({"a", "b", "c"});
   SelectivityVector rows(data->size());
   VELOX_ASSERT_THROW(
       hasher->decode(*data, rows), "Type mismatch: BIGINT vs. VARCHAR");
-}
-
-void testCustomComparison(const VectorPtr& actual, const VectorPtr& expected) {
-  // Vector hasher should hash the values in actual to the same hashes as it
-  // does when hashing the values in expected.
-  ASSERT_EQ(actual->size(), expected->size());
-
-  auto vectorHasher = exec::VectorHasher::create(actual->type(), 1);
-  ASSERT_EQ(vectorHasher->channel(), 1);
-
-  SelectivityVector allRows = SelectivityVector(actual->size());
-
-  raw_vector<uint64_t> actualHashes(actual->size());
-  std::fill(actualHashes.begin(), actualHashes.end(), 0);
-  vectorHasher->decode(*actual, allRows);
-  vectorHasher->hash(allRows, false, actualHashes);
-
-  raw_vector<uint64_t> expectedHashes(expected->size());
-  std::fill(expectedHashes.begin(), expectedHashes.end(), 0);
-  vectorHasher->decode(*expected, allRows);
-  vectorHasher->hash(allRows, false, expectedHashes);
-
-  for (int32_t i = 0; i < actual->size(); i++) {
-    EXPECT_EQ(actualHashes[i], expectedHashes[i])
-        << "at " << i << " values: " << actual->toString(i) << " "
-        << expected->toString(i);
-  }
 }
 
 TEST_F(VectorHasherTest, customComparison) {
@@ -1211,7 +1411,7 @@ TEST_F(VectorHasherTest, customComparisonArray) {
            {259, 260, 261},
            {515, 516, 517},
            {std::nullopt}},
-          ARRAY(velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())),
+          ARRAY(BIGINT_TYPE_WITH_CUSTOM_COMPARISON())),
       // Different values that are equal mod 256 should hash to the same value.
       makeNullableArrayVector<int64_t>(
           {{0, 1, 2},
@@ -1221,7 +1421,7 @@ TEST_F(VectorHasherTest, customComparisonArray) {
            {3, 4, 5},
            {3, 4, 5},
            {std::nullopt}},
-          ARRAY(velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())));
+          ARRAY(BIGINT_TYPE_WITH_CUSTOM_COMPARISON())));
 }
 
 TEST_F(VectorHasherTest, customComparisonMap) {
@@ -1244,8 +1444,8 @@ TEST_F(VectorHasherTest, customComparisonMap) {
                {515, 615}, {516, 616}, {517, 617}},
            std::vector<std::pair<int64_t, std::optional<int64_t>>>{
                {0, std::nullopt}}},
-          MAP(velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON(),
-              velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())),
+          MAP(BIGINT_TYPE_WITH_CUSTOM_COMPARISON(),
+              BIGINT_TYPE_WITH_CUSTOM_COMPARISON())),
       // Different values that are equal mod 256 should hash to the same value.
       makeNullableMapVector<int64_t, int64_t>(
           {std::vector<std::pair<int64_t, std::optional<int64_t>>>{
@@ -1262,8 +1462,8 @@ TEST_F(VectorHasherTest, customComparisonMap) {
                {3, 103}, {4, 104}, {5, 105}},
            std::vector<std::pair<int64_t, std::optional<int64_t>>>{
                {0, std::nullopt}}},
-          MAP(velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON(),
-              velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())));
+          MAP(BIGINT_TYPE_WITH_CUSTOM_COMPARISON(),
+              BIGINT_TYPE_WITH_CUSTOM_COMPARISON())));
 }
 
 TEST_F(VectorHasherTest, customComparisonRow) {
@@ -1271,24 +1471,24 @@ TEST_F(VectorHasherTest, customComparisonRow) {
   // hash implementation they provide.
 
   testCustomComparison(
-      makeRowVector(
-          {"a"},
-          {makeNullableFlatVector<int64_t>(
+      makeNamedRowVector(
+          "a",
+          makeNullableFlatVector<int64_t>(
               {std::nullopt, 0, 1, 256, 257, 512, 513},
-              velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())}),
+              BIGINT_TYPE_WITH_CUSTOM_COMPARISON())),
       // Different values that are equal mod 256 should hash to the same value.
-      makeRowVector(
-          {"a"},
-          {makeNullableFlatVector<int64_t>(
+      makeNamedRowVector(
+          "a",
+          makeNullableFlatVector<int64_t>(
               {std::nullopt, 0, 1, 0, 1, 0, 1},
-              velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())}));
+              BIGINT_TYPE_WITH_CUSTOM_COMPARISON())));
 }
 
 TEST_F(VectorHasherTest, customComparisonValueIds) {
   // Test that VectorHasher created with custom comparison type
   // has value IDs disabled (distinctOverflow_ and rangeOverflow_ set).
-  auto vectorHasher = exec::VectorHasher::create(
-      velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON(), 1);
+  auto vectorHasher =
+      VectorHasher::create(BIGINT_TYPE_WITH_CUSTOM_COMPARISON(), 1);
 
   // Test that types with custom comparison do not support value IDs.
   EXPECT_FALSE(vectorHasher->typeSupportsValueIds());
@@ -1302,7 +1502,7 @@ TEST_F(VectorHasherTest, stringFilter) {
   auto vector = makeFlatVector<StringView>(
       {"apple", "banana", "cherry", "apple", "banana", "date"});
 
-  auto hasher = exec::VectorHasher::create(VARCHAR(), 0);
+  auto hasher = VectorHasher::create(VARCHAR(), 0);
   SelectivityVector rows(vector->size());
   raw_vector<uint64_t> hashes(vector->size());
 
@@ -1312,30 +1512,27 @@ TEST_F(VectorHasherTest, stringFilter) {
 
   // Test nullAllowed = false.
   auto filter = hasher->getFilter(false);
-  ASSERT_TRUE(filter != nullptr);
+  ASSERT_NE(filter, nullptr);
 
-  auto bytesValues = dynamic_cast<common::BytesValues*>(filter.get());
-  ASSERT_TRUE(bytesValues != nullptr);
-  ASSERT_FALSE(bytesValues->testNull());
+  EXPECT_EQ(filter->kind(), common::FilterKind::kBytesValues);
+  ASSERT_FALSE(filter->testNull());
 
-  ASSERT_TRUE(bytesValues->testBytes("apple", 5));
-  ASSERT_TRUE(bytesValues->testBytes("banana", 6));
-  ASSERT_TRUE(bytesValues->testBytes("cherry", 6));
-  ASSERT_TRUE(bytesValues->testBytes("date", 4));
-  ASSERT_FALSE(bytesValues->testBytes("elderberry", 10));
-  ASSERT_FALSE(bytesValues->testBytes("fig", 3));
-  ASSERT_FALSE(bytesValues->testBytes("grape", 5));
+  ASSERT_TRUE(filter->testBytes("apple", 5));
+  ASSERT_TRUE(filter->testBytes("banana", 6));
+  ASSERT_TRUE(filter->testBytes("cherry", 6));
+  ASSERT_TRUE(filter->testBytes("date", 4));
+  ASSERT_FALSE(filter->testBytes("elderberry", 10));
+  ASSERT_FALSE(filter->testBytes("fig", 3));
+  ASSERT_FALSE(filter->testBytes("grape", 5));
 
   // Test nullAllowed = true.
   auto filterWithNull = hasher->getFilter(true);
-  ASSERT_TRUE(filterWithNull != nullptr);
+  ASSERT_NE(filterWithNull, nullptr);
 
-  auto bytesValuesWithNull =
-      dynamic_cast<common::BytesValues*>(filterWithNull.get());
-  ASSERT_TRUE(bytesValuesWithNull != nullptr);
-  ASSERT_TRUE(bytesValuesWithNull->testNull());
-  ASSERT_TRUE(bytesValuesWithNull->testBytes("apple", 5));
-  ASSERT_FALSE(bytesValuesWithNull->testBytes("unknown", 7));
+  EXPECT_EQ(filterWithNull->kind(), common::FilterKind::kBytesValues);
+  ASSERT_TRUE(filterWithNull->testNull());
+  ASSERT_TRUE(filterWithNull->testBytes("apple", 5));
+  ASSERT_FALSE(filterWithNull->testBytes("unknown", 7));
 }
 
 TEST_F(VectorHasherTest, stringFilterWithLongStrings) {
@@ -1353,7 +1550,7 @@ TEST_F(VectorHasherTest, stringFilterWithLongStrings) {
       strings.size(),
       [&strings](vector_size_t row) { return StringView(strings[row]); });
 
-  auto hasher = exec::VectorHasher::create(VARCHAR(), 0);
+  auto hasher = VectorHasher::create(VARCHAR(), 0);
   SelectivityVector rows(vector->size());
   raw_vector<uint64_t> hashes(vector->size());
 
@@ -1363,25 +1560,28 @@ TEST_F(VectorHasherTest, stringFilterWithLongStrings) {
 
   // Get the filter.
   auto filter = hasher->getFilter(false);
-  ASSERT_TRUE(filter != nullptr);
+  ASSERT_NE(filter, nullptr);
 
-  auto bytesValues = dynamic_cast<common::BytesValues*>(filter.get());
-  ASSERT_TRUE(bytesValues != nullptr);
+  EXPECT_EQ(filter->kind(), common::FilterKind::kBytesValues);
 
   // Test that both short and long strings are handled correctly.
-  ASSERT_TRUE(bytesValues->testBytes(strings[0].data(), strings[0].size()));
-  ASSERT_TRUE(bytesValues->testBytes(strings[1].data(), strings[1].size()));
-  ASSERT_TRUE(bytesValues->testBytes(strings[2].data(), strings[2].size()));
-  ASSERT_TRUE(bytesValues->testBytes(strings[4].data(), strings[4].size()));
+  ASSERT_TRUE(filter->testBytes(strings[0].data(), strings[0].size()));
+  ASSERT_TRUE(filter->testBytes(strings[1].data(), strings[1].size()));
+  ASSERT_TRUE(filter->testBytes(strings[2].data(), strings[2].size()));
+  ASSERT_TRUE(filter->testBytes(strings[4].data(), strings[4].size()));
 
   // Test rejection of non-existent strings.
-  ASSERT_FALSE(bytesValues->testBytes("not in the set", 14));
-  ASSERT_FALSE(bytesValues->testBytes("different", 9));
+  ASSERT_FALSE(filter->testBytes("not in the set", 14));
+  ASSERT_FALSE(filter->testBytes("different", 9));
+
+  hasher->resetStats();
+  EXPECT_TRUE(hasher->empty());
+  EXPECT_EQ(hasher->numUniqueValues(), 0);
 }
 
 TEST_F(VectorHasherTest, stringFilterDistinctOverflow) {
   // Test that getFilter() returns nullptr when distinctOverflow_ is true.
-  auto hasher = exec::VectorHasher::create(VARCHAR(), 0);
+  auto hasher = VectorHasher::create(VARCHAR(), 0);
 
   constexpr uint32_t numRows = 10000;
   constexpr int numBatches = 15;
@@ -1410,21 +1610,18 @@ TEST_F(VectorHasherTest, stringFilterDistinctOverflow) {
 
   // After overflow, getFilter should return nullptr.
   auto filter = hasher->getFilter(false);
-  ASSERT_TRUE(filter == nullptr);
+  ASSERT_EQ(filter, nullptr);
 }
 
 DEBUG_ONLY_TEST_F(VectorHasherTest, customComparisonNoValueIds) {
   // Test that custom comparison types cannot use value IDs for optimization.
   auto data = makeRowVector({makeNullableFlatVector<int64_t>(
-      {0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
-      velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())});
+      {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, BIGINT_TYPE_WITH_CUSTOM_COMPARISON())});
 
-  auto hasher = exec::VectorHasher::create(
-      velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON(), 0);
+  auto hasher = VectorHasher::create(BIGINT_TYPE_WITH_CUSTOM_COMPARISON(), 0);
 
   SelectivityVector allRows(data->size());
-  raw_vector<uint64_t> result(data->size());
-  std::fill(result.begin(), result.end(), 0);
+  auto result = makeZeroHashes(data->size());
 
   hasher->decode(*data->childAt(0), allRows);
 
@@ -1437,15 +1634,13 @@ DEBUG_ONLY_TEST_F(VectorHasherTest, customComparisonNoValueIds) {
   EXPECT_EQ(nullptr, hasher->getFilter(true));
   VELOX_ASSERT_THROW(
       hasher->enableValueRange(1, 50), "Value IDs cannot be used");
-  VELOX_ASSERT_THROW(
-      hasher->enableValueRange(1, 50), "Value IDs cannot be used");
+  VELOX_ASSERT_THROW(hasher->enableValueIds(1, 50), "Value IDs cannot be used");
 }
 
 DEBUG_ONLY_TEST_F(VectorHasherTest, computeValueIdsForRowsCustomComparison) {
   // Test that computeValueIdsForRows throws an exception for types with custom
   // comparison.
-  auto hasher = exec::VectorHasher::create(
-      velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON(), 0);
+  auto hasher = VectorHasher::create(BIGINT_TYPE_WITH_CUSTOM_COMPARISON(), 0);
 
   constexpr int32_t kNumGroups = 5;
   constexpr int32_t kRowSize = 16;
@@ -1465,8 +1660,7 @@ DEBUG_ONLY_TEST_F(VectorHasherTest, computeValueIdsForRowsCustomComparison) {
     *reinterpret_cast<int64_t*>(groups[i] + kValueOffset) = i * 256;
   }
 
-  raw_vector<uint64_t> result(kNumGroups);
-  std::fill(result.begin(), result.end(), 0);
+  auto result = makeZeroHashes(kNumGroups);
 
   // computeValueIdsForRows should throw an exception for types with custom
   // comparison.
@@ -1480,3 +1674,6 @@ DEBUG_ONLY_TEST_F(VectorHasherTest, computeValueIdsForRowsCustomComparison) {
           result),
       "Value IDs cannot be used");
 }
+
+} // namespace
+} // namespace facebook::velox::exec

@@ -34,6 +34,9 @@ source "$SCRIPT_DIR"/setup-common.sh
 
 SUDO="${SUDO:-"sudo --preserve-env"}"
 USE_CLANG="${USE_CLANG:-false}"
+# The Clang that USE_CLANG builds with.
+CLANG_CC=/usr/bin/clang-15
+CLANG_CXX=/usr/bin/clang++-15
 export INSTALL_PREFIX=${INSTALL_PREFIX:-"/usr/local"}
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)/deps-download}
 VERSION=$(cat /etc/os-release | grep VERSION_ID)
@@ -197,8 +200,8 @@ function install_cuda {
 function install_s3 {
   install_aws_deps
 
-  local MINIO_OS="linux"
-  install_minio ${MINIO_OS}
+  local SILO_OS="linux"
+  install_silo ${SILO_OS}
 }
 
 function install_gcs {
@@ -226,7 +229,13 @@ function install_adapters {
 }
 
 function install_faiss_deps {
-  ${SUDO} apt-get install -y libopenblas-dev libomp-dev
+  # The OpenMP runtime must match Clang's version. libomp-dev is LLVM 14's on
+  # Ubuntu 22.04, and the versioned libomp packages conflict with each other.
+  local omp_package=libomp-dev
+  if [[ ${USE_CLANG} != "false" ]]; then
+    omp_package=libomp-15-dev
+  fi
+  ${SUDO} apt-get install -y libopenblas-dev "${omp_package}"
 }
 
 function install_cxl_deps {
@@ -240,6 +249,8 @@ function install_velox_deps {
   run_and_time install_grpc
   run_and_time install_boost
   run_and_time install_fast_float
+  run_and_time install_flatbuffers
+  run_and_time install_openzl
   run_and_time install_folly
   run_and_time install_fizz
   run_and_time install_wangle
@@ -265,8 +276,8 @@ function install_apt_deps {
 
 (
   if [[ ${USE_CLANG} != "false" ]]; then
-    export CC=/usr/bin/clang-15
-    export CXX=/usr/bin/clang++-15
+    export CC=${CLANG_CC}
+    export CXX=${CLANG_CXX}
   fi
   if [[ $# -ne 0 ]]; then
     for cmd in "$@"; do
@@ -284,8 +295,8 @@ function install_apt_deps {
     echo "All dependencies for Velox installed!"
     if [[ ${USE_CLANG} != "false" ]]; then
       echo "To use clang for the Velox build set the CC and CXX environment variables in your session."
-      echo "  export CC=/usr/bin/clang-15"
-      echo "  export CXX=/usr/bin/clang++-15"
+      echo "  export CC=${CLANG_CC}"
+      echo "  export CXX=${CLANG_CXX}"
     fi
     if [[ ${VERSION} =~ "20.04" && ${USE_CLANG} == "false" ]]; then
       echo "To build Velox gcc-11/g++11 is required. Set the CC and CXX environment variables in your session."

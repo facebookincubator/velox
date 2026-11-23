@@ -112,11 +112,11 @@ void Destination::createVectorStreamGroup(const RowVectorPtr& output) {
 }
 
 void Destination::clearVectorStreamGroup() {
-  current_->clear();
-  // Signal that createStreamTree() must be called before the next append
-  // to properly reinitialize the serializer with a fresh stream tree.
-  // This fixes a crash where the serializer was in an invalid state after
-  // clear() due to stale references to freed StreamArena memory.
+  // Free only the arena memory; the serializer's stream tree is rebuilt by
+  // createStreamTree() before the next append.
+  current_->StreamArena::clear();
+  // The serializer now holds stale references into the freed arena, so force
+  // createStreamTree() to run before the next append.
   needsStreamTreeRecreation_ = true;
 }
 

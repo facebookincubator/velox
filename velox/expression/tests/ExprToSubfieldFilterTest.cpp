@@ -114,6 +114,82 @@ TEST_F(ExprToSubfieldFilterTest, eqExpr) {
   VELOX_ASSERT_FILTER(equal(42), filter);
 }
 
+TEST_F(ExprToSubfieldFilterTest, wideningCast) {
+  auto verify = [&](const std::string& expression,
+                    const RowTypePtr& type,
+                    std::unique_ptr<common::Filter> expected,
+                    bool negated = false) {
+    SCOPED_TRACE(expression);
+    auto call = parseCallExpr(expression, type);
+    auto [subfield, filter] = leafCallToSubfieldFilter(call, negated);
+    ASSERT_TRUE(filter) << call->toString();
+    validateSubfield(subfield, {"a"});
+    VELOX_ASSERT_FILTER(expected, filter);
+  };
+
+  verify(
+      "cast(a as bigint) = cast('1695324055' as bigint)",
+      ROW("a", INTEGER()),
+      equal(1'695'324'055));
+  verify(
+      "cast(a as smallint) <> 42",
+      ROW("a", TINYINT()),
+      bigintOr(lessThan(42), greaterThan(42)));
+  verify("cast(a as integer) < 42", ROW("a", SMALLINT()), lessThan(42));
+  verify("cast(a as bigint) <= 42", ROW("a", INTEGER()), lessThanOrEqual(42));
+  verify("cast(a as bigint) > 42", ROW("a", INTEGER()), greaterThan(42));
+  verify(
+      "cast(a as bigint) >= 42", ROW("a", INTEGER()), greaterThanOrEqual(42));
+  verify("42 < cast(a as bigint)", ROW("a", INTEGER()), greaterThan(42));
+  verify(
+      "cast(a as bigint) = 42",
+      ROW("a", INTEGER()),
+      bigintOr(lessThan(42), greaterThan(42)),
+      /*negated=*/true);
+}
+
+TEST_F(ExprToSubfieldFilterTest, wideningCastOutOfRange) {
+  auto verify = [&](const std::string& expression,
+                    std::unique_ptr<common::Filter> expected) {
+    SCOPED_TRACE(expression);
+    auto [subfield, filter] = leafCallToSubfieldFilter(
+        parseCallExpr(expression, ROW("a", INTEGER())));
+    ASSERT_TRUE(filter);
+    validateSubfield(subfield, {"a"});
+    VELOX_ASSERT_FILTER(expected, filter);
+  };
+
+  verify(
+      "cast(a as bigint) = 2147483648",
+      std::make_unique<common::AlwaysFalse>());
+  verify("cast(a as bigint) <> 2147483648", isNotNull());
+  verify("cast(a as bigint) < 2147483648", isNotNull());
+  verify(
+      "cast(a as bigint) > 2147483648",
+      std::make_unique<common::AlwaysFalse>());
+  verify(
+      "cast(a as bigint) < -2147483649",
+      std::make_unique<common::AlwaysFalse>());
+  verify("cast(a as bigint) > -2147483649", isNotNull());
+}
+
+TEST_F(ExprToSubfieldFilterTest, unsupportedCast) {
+  for (const auto& [expression, type] :
+       std::vector<std::pair<std::string, RowTypePtr>>{
+           {"cast(a as integer) = 42", ROW("a", BIGINT())},
+           {"cast(a as double) = 42.0", ROW("a", INTEGER())},
+           {"cast(a as decimal(10, 2)) = cast(1 as decimal(10, 2))",
+            ROW("a", INTEGER())},
+           {"cast(a as bigint) = 42", ROW("a", DATE())},
+           {"try_cast(a as bigint) = 42", ROW("a", INTEGER())},
+       }) {
+    SCOPED_TRACE(expression);
+    auto [subfield, filter] =
+        leafCallToSubfieldFilter(parseCallExpr(expression, type));
+    EXPECT_FALSE(filter);
+  }
+}
+
 TEST_F(ExprToSubfieldFilterTest, eqSubfield) {
   auto call = parseCallExpr("a.b = 42", ROW("a", ROW("b", BIGINT())));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
@@ -131,8 +207,7 @@ TEST_F(ExprToSubfieldFilterTest, neq) {
   ASSERT_TRUE(filter);
   validateSubfield(subfield, {"a"});
 
-  // TODO Optimize to notEqual(42).
-  VELOX_ASSERT_FILTER(bigintOr(lessThan(42), greaterThan(42)), filter);
+  VELOX_ASSERT_FILTER(notEqual(42), filter);
 }
 
 TEST_F(ExprToSubfieldFilterTest, neqBoundary) {
@@ -413,6 +488,81 @@ TEST_F(ExprToSubfieldFilterTest, makeOrFilterBigint) {
     VELOX_ASSERT_FILTER(
         in({3, 5}), makeOr(equal(3), equal(5), equal(3), equal(5)));
   }
+
+  // a <> 1 or a = 1 ==> not null.
+  {
+    VELOX_ASSERT_FILTER(isNotNull(), makeOr(notEqual(1), equal(1)));
+  }
+
+  // IsNotNull subsumes filters that reject null.
+  {
+    VELOX_ASSERT_FILTER(isNotNull(), makeOr(isNotNull(), equal(1)));
+  }
+
+  // IsNotNull and a filter that accepts null cover all values.
+  {
+    VELOX_ASSERT_FILTER(
+        alwaysTrue(), makeOr(isNotNull(), notEqual(1, /*nullAllowed=*/true)));
+  }
+
+  // Simplify constant disjuncts before merging typed filters.
+  {
+    VELOX_ASSERT_FILTER(alwaysTrue(), makeOr(alwaysTrue(), equal(1)));
+    VELOX_ASSERT_FILTER(alwaysTrue(), makeOr(equal(1), alwaysTrue()));
+    VELOX_ASSERT_FILTER(
+        equal(1), makeOr(std::make_unique<common::AlwaysFalse>(), equal(1)));
+    VELOX_ASSERT_FILTER(
+        equal(1), makeOr(equal(1), std::make_unique<common::AlwaysFalse>()));
+    VELOX_ASSERT_FILTER(
+        std::make_unique<common::AlwaysFalse>(),
+        makeOr(
+            std::make_unique<common::AlwaysFalse>(),
+            std::make_unique<common::AlwaysFalse>()));
+  }
+
+  // Preserve nulls when merging filters with fixed null behavior.
+  {
+    VELOX_ASSERT_FILTER(
+        isNull(), makeOr(isNull(), std::make_unique<common::AlwaysFalse>()));
+    VELOX_ASSERT_FILTER(alwaysTrue(), makeOr(isNull(), isNotNull()));
+    VELOX_ASSERT_FILTER(
+        notEqual(1, /*nullAllowed=*/true), makeOr(isNull(), notEqual(1)));
+    auto filter = makeOr(isNull(), lessThan(1), greaterThan(3));
+    ASSERT_TRUE(filter);
+    EXPECT_TRUE(filter->testNull());
+    EXPECT_TRUE(filter->testInt64(0));
+    EXPECT_FALSE(filter->testInt64(2));
+    EXPECT_TRUE(filter->testInt64(4));
+    VELOX_ASSERT_FILTER(
+        lessThanOrEqual(20, /*nullAllowed=*/true),
+        makeOr(isNull(), lessThan(10), between(5, 20)));
+  }
+
+  // Merge complements that touch BIGINT boundaries.
+  {
+    const auto min = std::numeric_limits<int64_t>::min();
+    const auto max = std::numeric_limits<int64_t>::max();
+    VELOX_ASSERT_FILTER(
+        greaterThan(1),
+        makeOr(
+            std::make_unique<common::NegatedBigintRange>(min, 1, false),
+            equal(2)));
+    VELOX_ASSERT_FILTER(
+        lessThan(1),
+        makeOr(
+            std::make_unique<common::NegatedBigintRange>(1, max, false),
+            equal(0)));
+    VELOX_ASSERT_FILTER(
+        std::make_unique<common::AlwaysFalse>(),
+        makeOr(
+            std::make_unique<common::NegatedBigintRange>(min, max, false),
+            std::make_unique<common::NegatedBigintRange>(min, max, false)));
+    VELOX_ASSERT_FILTER(
+        isNull(),
+        makeOr(
+            std::make_unique<common::NegatedBigintRange>(min, max, true),
+            std::make_unique<common::NegatedBigintRange>(min, max, false)));
+  }
 }
 
 TEST_F(ExprToSubfieldFilterTest, makeOrFilterDouble) {
@@ -433,6 +583,13 @@ TEST_F(ExprToSubfieldFilterTest, makeOrFilterDouble) {
     VELOX_ASSERT_FILTER(
         expected,
         makeOr(
+            lessThanDouble(10.1),
+            betweenDouble(9.0, 12.0),
+            betweenDouble(11.0, 15.0)));
+    VELOX_ASSERT_FILTER(
+        lessThanOrEqualDouble(15.0, /*nullAllowed=*/true),
+        makeOr(
+            isNull(),
             lessThanDouble(10.1),
             betweenDouble(9.0, 12.0),
             betweenDouble(11.0, 15.0)));

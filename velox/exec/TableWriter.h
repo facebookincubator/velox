@@ -16,11 +16,15 @@
 
 #pragma once
 
+#include <folly/stop_watch.h>
+
 #include "velox/core/PlanNode.h"
 #include "velox/core/TableWriteTraits.h"
 #include "velox/exec/ColumnStatsCollector.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Operator.h"
+#include "velox/vector/DecodedVector.h"
+#include "velox/vector/SelectivityVector.h"
 
 namespace facebook::velox::exec {
 
@@ -65,7 +69,7 @@ class TableWriter : public Operator {
     // 'connectorPool_'.
     stats.memoryStats = MemoryStats::memStatsFromPool(connectorPool_);
 
-    if (FOLLY_LIKELY(dataSink_ != nullptr)) {
+    if (dataSink_ != nullptr) [[likely]] {
       const auto connectorStats = dataSink_->runtimeStats();
       for (const auto& [name, counter] : connectorStats) {
         stats.runtimeStats[name] = RuntimeMetric(counter.value, counter.unit);
@@ -74,19 +78,6 @@ class TableWriter : public Operator {
 
     return stats;
   }
-
-  /// The name of runtime stats specific to table writer.
-  /// The running wall time of a writer operator from creation to close.
-  static constexpr std::string_view kRunningWallNanos{"runningWallNanos"};
-  /// The number of files written by this writer operator.
-  static constexpr std::string_view kNumWrittenFiles{"numWrittenFiles"};
-  /// The file write IO walltime.
-  static constexpr std::string_view kWriteIOTime{"writeIOWallNanos"};
-  /// The walltime spend on file write data recoding.
-  static constexpr std::string_view kWriteRecodeTime{"writeRecodeWallNanos"};
-  /// The walltime spent on file write data compression.
-  static constexpr std::string_view kWriteCompressionTime{
-      "writeCompressionWallNanos"};
 
  private:
   // The memory reclaimer customized for connector which interface with the
@@ -151,6 +142,13 @@ class TableWriter : public Operator {
   // `mappedOutputType_`.
   void setTypeMappings(const core::TableWriteNodePtr& tableWriteNode);
 
+  // Fills 'notNullChannels_'. Must run after setTypeMappings(), which fills
+  // 'inputMapping_'.
+  void setNotNullChannels(const core::TableWriteNodePtr& tableWriteNode);
+
+  // Throws a user error if 'input' has a null in a NOT NULL column.
+  void checkNotNullConstraints(const RowVectorPtr& input);
+
   std::string createTableCommitContext(bool lastOutput);
 
   void setConnectorMemoryReclaimer();
@@ -159,10 +157,10 @@ class TableWriter : public Operator {
   memory::MemoryPool* const connectorPool_;
   const connector::ConnectorInsertTableHandlePtr insertTableHandle_;
   const connector::CommitStrategy commitStrategy_;
-  // Records the writer operator creation time in ns. This is used to record
-  // the running wall time of a writer operator. This can help to detect the
-  // slow scaled writer scheduling in Prestissimo.
-  const uint64_t createTimeNs_{0};
+  // Started at the writer operator creation. This is used to record the
+  // running wall time of a writer operator. This can help to detect the slow
+  // scaled writer scheduling in Prestissimo.
+  const folly::stop_watch<std::chrono::nanoseconds> creationWatch_;
 
   std::unique_ptr<ColumnStatsCollector> statsCollector_;
   std::shared_ptr<connector::Connector> connector_;
@@ -171,6 +169,14 @@ class TableWriter : public Operator {
 
   // Contains the mappings between input and output columns.
   std::vector<column_index_t> inputMapping_;
+
+  // Input channels of the NOT NULL columns, each with the target column name
+  // to report in the error.
+  std::vector<std::pair<column_index_t, std::string>> notNullChannels_;
+
+  // Reused across addInput() calls to avoid reallocating per batch.
+  SelectivityVector notNullRows_;
+  DecodedVector notNullDecodedVector_;
 
   // Stores the mapped input and output types. Note that input types must have
   // the same types as the types receing in addInput(), but they may be in a

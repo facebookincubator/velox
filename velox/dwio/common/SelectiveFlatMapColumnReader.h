@@ -40,11 +40,24 @@ class SelectiveFlatMapColumnReader : public SelectiveStructColumnReaderBase {
 
   void getValues(const RowSet& rows, VectorPtr* result) override;
 
+  void releaseReusableResult(VectorPtr& result) override;
+
   void seekTo(int64_t offset, bool /*readsNullsOnly*/) override {
     seekToPropagateNullsToChildren(offset);
   }
 
   virtual const BufferPtr& inMapBuffer(column_index_t childIndex) const = 0;
+
+  /// Sets 'selected' to the in-map bits of 'rows', copied from 'inMap', which
+  /// has a bit for every row read rather than every row selected. Sets it to
+  /// nullptr if 'inMap' is null. The copy also keeps the result from sharing a
+  /// buffer the reader reuses for the next batch. Writes into 'selected' when
+  /// nothing else holds it rather than allocating.
+  static void selectInMap(
+      const BufferPtr& inMap,
+      const RowSet& rows,
+      memory::MemoryPool* pool,
+      BufferPtr& selected);
 
   VectorPtr keysVector_;
 
@@ -52,7 +65,15 @@ class SelectiveFlatMapColumnReader : public SelectiveStructColumnReaderBase {
   FlatMapVector* prepareResult(
       VectorPtr& result,
       const VectorPtr& distinctKeys,
-      vector_size_t size) const;
+      vector_size_t size);
+
+  // Map values of the previous result that nothing else holds, by key, for
+  // the child readers to reuse.
+  std::vector<VectorPtr> reusableValues_;
+
+  // The all-null map values of the last read, shared by every key that has no
+  // value in the read.
+  VectorPtr nullValues_;
 };
 
 } // namespace facebook::velox::dwio::common

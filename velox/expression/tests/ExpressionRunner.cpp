@@ -19,16 +19,15 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/core/QueryCtx.h"
-#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/fuzzer/FuzzerToolkit.h"
 #include "velox/expression/tests/ExpressionRunner.h"
 #include "velox/expression/tests/ExpressionVerifier.h"
 #include "velox/parse/ExpressionsParser.h"
-#include "velox/parse/QueryPlanner.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 
 namespace facebook::velox::test {
 using namespace facebook::velox::common::testutil;
@@ -55,6 +54,21 @@ RowVectorPtr createRowVector(
       pool, ROW(std::move(names), std::move(types)), nullptr, size, vectors);
 }
 
+// Prints each row of 'result' on its own line, with its values as JSON
+// separated by " | ".
+void printResults(const RowVectorPtr& result, std::ostream& out) {
+  const auto& type = result->type();
+  for (const auto& row : velox::test::VectorAssertions::toVariantRows(result)) {
+    for (size_t i = 0; i < row.size(); ++i) {
+      if (i > 0) {
+        out << " | ";
+      }
+      out << row[i].toJson(type->childAt(i));
+    }
+    out << std::endl;
+  }
+}
+
 RowVectorPtr evaluateAndPrintResults(
     exec::ExprSet& exprSet,
     const RowVectorPtr& data,
@@ -68,7 +82,7 @@ RowVectorPtr evaluateAndPrintResults(
   // Print the results.
   auto rowResult = createRowVector(results, rows.size(), execCtx.pool());
   std::cout << "Result: " << rowResult->type()->toString() << std::endl;
-  exec::test::printResults(rowResult, std::cout);
+  printResults(rowResult, std::cout);
   return rowResult;
 }
 
@@ -246,31 +260,6 @@ void ExpressionRunner::run(
   auto inputRowType = inputTestCases[0].inputVector->type();
 
   parse::registerTypeResolver();
-
-  if (mode == "query") {
-    core::DuckDbQueryPlanner planner{pool.get()};
-    std::vector<RowVectorPtr> inputVectors;
-    for (auto& testCase : inputTestCases) {
-      inputVectors.push_back(testCase.inputVector);
-    }
-    if (inputRowType->size()) {
-      LOG(INFO) << "Registering input vector as table t: "
-                << inputRowType->toString();
-      planner.registerTable("t", inputVectors);
-    }
-
-    auto plan = planner.plan(sql);
-    auto results = exec::test::AssertQueryBuilder(plan).copyResults(pool.get());
-
-    // Print the results.
-    std::cout << "Result: " << results->type()->toString() << std::endl;
-    exec::test::printResults(results, std::cout);
-
-    if (!storeResultPath.empty()) {
-      saveResults(results, storeResultPath, "resultVector");
-    }
-    return;
-  }
 
   VectorPtr complexConstants{nullptr};
   if (!complexConstantsPath.empty()) {

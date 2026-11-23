@@ -58,6 +58,13 @@ class CompiledPlan {
     /// Number of intra-kernel ordering barriers in this kernel.
     int32_t numBarriers{0};
 
+    /// Generated device code of the kernel's case, empty for a standalone.
+    std::string code;
+
+    /// True when the launch count is the broadcast of its size leaves rather
+    /// than the largest of them.
+    bool broadcastCount{false};
+
     /// Returns true if the normalized 'op' is one of this kernel's targets.
     bool has(std::string_view op) const;
   };
@@ -65,6 +72,9 @@ class CompiledPlan {
   /// Holds the parallel launches at one step.
   struct StepView {
     std::vector<KernelView> kernels;
+
+    /// Threads per block the step's launch runs at.
+    int32_t blockSize{0};
   };
 
   /// Holds the step sequence of one CompiledNode. A kernel boundary sits
@@ -106,6 +116,30 @@ class CompiledPlan {
   ::testing::AssertionResult inLaterStep(
       std::string_view later,
       std::string_view earlier) const;
+
+  /// Passes if every launch of 'later' runs at a strictly greater (node, step)
+  /// than every launch of 'earlier'. Unlike inLaterStep this crosses node
+  /// boundaries, which is where an op ends up when its producer is the last
+  /// thing its own node does.
+  ::testing::AssertionResult runsAfter(
+      std::string_view later,
+      std::string_view earlier) const;
+
+  /// Passes if the plan holds exactly 'howMany' launches of 'op' and every one
+  /// of them shares its step with a launch of 'anchor'. Launches in one step
+  /// run side by side; the same launches in consecutive steps are a chain. This
+  /// is what separates a concat whose operand copies fill its bands in parallel
+  /// from one that walks them through a running offset.
+  ::testing::AssertionResult sideBySideWith(
+      std::string_view op,
+      std::string_view anchor,
+      int32_t howMany) const;
+
+  /// Passes if 'op' is fused into some kernel and every step running it
+  /// launches 'threads' per block.
+  ::testing::AssertionResult runsAtBlockSize(
+      std::string_view op,
+      int32_t threads) const;
 
   /// Returns a human-readable dump of the plan for failure messages.
   std::string describe() const;

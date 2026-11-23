@@ -65,7 +65,7 @@ T extract_bits(T value, int start_bit, int num_pass_bits) {
 
 TYPED_TEST_SUITE(AlgorithmTest, TestTypes);
 
-TYPED_TEST(AlgorithmTest, RadixSortHistogram) {
+TYPED_TEST(AlgorithmTest, radixSortHistogram) {
   constexpr int kBlockItems = kBlockThreads * kItemsPerThread;
   constexpr int kTileSize = 1;
   constexpr int kTileItems = kBlockItems * kTileSize;
@@ -98,7 +98,7 @@ TYPED_TEST(AlgorithmTest, RadixSortHistogram) {
   EXPECT_EQ(expected_result, out);
 }
 
-TYPED_TEST(AlgorithmTest, RadixSortHistogramLargeTiles) {
+TYPED_TEST(AlgorithmTest, radixSortHistogramLargeTiles) {
   constexpr int kBlockItems = kBlockThreads * kItemsPerThread;
   constexpr int kTileSize = 4;
   constexpr int kTileItems = kBlockItems * kTileSize;
@@ -131,7 +131,7 @@ TYPED_TEST(AlgorithmTest, RadixSortHistogramLargeTiles) {
   EXPECT_EQ(expected_result, out);
 }
 
-TYPED_TEST(AlgorithmTest, RadixSort) {
+TYPED_TEST(AlgorithmTest, radixSort) {
   constexpr int kBlockItems = kBlockThreads * kItemsPerThread;
   constexpr int kRadixBits = 6;
   constexpr int kStartBit = 0;
@@ -174,7 +174,7 @@ TYPED_TEST(AlgorithmTest, RadixSort) {
   EXPECT_EQ(expected_result, out);
 }
 
-TYPED_TEST(AlgorithmTest, RadixSortKeyValues) {
+TYPED_TEST(AlgorithmTest, radixSortKeyValues) {
   constexpr int kBlockItems = kBlockThreads * kItemsPerThread;
   constexpr int kRadixBits = 6;
   constexpr int kStartBit = 0;

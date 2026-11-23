@@ -37,20 +37,26 @@ velox_add_library(
   DecimalArithmetic.cpp
   DecimalCeil.cpp
   DecimalCompare.cpp
+  Elt.cpp
+  EncodeFunction.cpp
   FilterFunction.cpp
   FormatNumber.cpp
+  FormatString.cpp
   GetJsonObject.cpp
   Hash.cpp
   In.cpp
-  LeastGreatest.cpp  MakeInterval.cpp
-
-  MakeTimestamp.cpp
+  LastWin.cpp
+  LeastGreatest.cpp
+  MakeInterval.cpp
   Map.cpp
+  MapFromArrays.cpp
+  MapFromEntries.cpp
   RegexFunctions.cpp
   Size.cpp
   String.cpp
   TimestampUtils.cpp
   Transform.cpp
+  TransformKeys.cpp
   UnscaledValueFunction.cpp
   XxHash64.cpp
   HEADERS
@@ -64,6 +70,7 @@ velox_add_library(
   ArrayMinMaxFunction.h
   ArrayPrepend.h
   ArraySort.h
+  ArraysOverlap.h
   AssertNotNull.h
   Base64Function.h
   Bitwise.h
@@ -71,20 +78,32 @@ velox_add_library(
   CharVarcharUtils.h
   Comparisons.h
   ConcatWs.h
+  ConvertTimezone.h
   DateTimeFunctions.h
   DecimalArithmetic.h
   DecimalCeil.h
   DecimalUtil.h
+  detail/DecimalArithmeticFunctions.h
+  detail/DecimalCeilFunction.h
+  Elt.h
+  EncodeFunction.h
   Factorial.h
   FormatNumber.h
+  FormatString.h
   GetJsonObject.h
   Hash.h
   In.h
   InitcapFunction.h
+  JavaFloatingPoint.h
   JsonObjectKeys.h
   LambdaIndexUtil.h
+  LastWin.h
   LeastGreatest.h
   LuhnCheckFunction.h
+  MakeTimestamp.h
+  Map.h
+  MapFromArrays.h
+  MapFromEntries.h
   MaskFunction.h
   MightContain.h
   MonotonicallyIncreasingId.h
@@ -102,6 +121,7 @@ velox_add_library(
   TimestampUtils.h
   ToJson.h
   ToPrettyString.h
+  TransformKeys.h
   UnBase64Function.h
   UnscaledValueFunction.h
   Uuid.h

@@ -37,3 +37,7 @@ add_subdirectory(dwrf)
 add_subdirectory(orc)
 add_subdirectory(parquet)
 add_subdirectory(text)
+
+if(VELOX_ENABLE_NIMBLE)
+  add_subdirectory(nimble)
+endif()

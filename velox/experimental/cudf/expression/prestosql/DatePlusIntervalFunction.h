@@ -26,12 +26,13 @@ namespace facebook::velox::cudf_velox::prestosql {
 /// Handles both constant and column interval inputs.
 class DatePlusIntervalFunction : public CudfFunction {
  public:
-  explicit DatePlusIntervalFunction(
-      const std::shared_ptr<velox::exec::Expr>& expr);
+  DatePlusIntervalFunction(
+      const core::TypedExprPtr& expr,
+      memory::MemoryPool* pool);
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& inputColumns,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override;
 
  private:

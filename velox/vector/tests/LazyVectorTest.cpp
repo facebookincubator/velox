@@ -16,6 +16,8 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/RawVector.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -46,8 +48,7 @@ TEST_F(LazyVectorTest, lazyInDictionary) {
         for (auto row : rows) {
           loadedRows.push_back(row);
         }
-        return makeFlatVector<int32_t>(
-            rows.back() + 1, [](auto row) { return row; });
+        return makeFlatIdentityVector<int32_t>(rows.back() + 1);
       }));
   auto wrapped = BaseVector::wrapInDictionary(
       nullptr,
@@ -83,10 +84,8 @@ TEST_F(LazyVectorTest, compareLazies) {
         pool_.get(),
         INTEGER(),
         kInnerSize,
-        std::make_unique<test::SimpleVectorLoader>([&](auto) {
-          return makeFlatVector<int32_t>(
-              kInnerSize, [](auto row) { return row; });
-        }));
+        std::make_unique<test::SimpleVectorLoader>(
+            [&](auto) { return makeFlatIdentityVector<int32_t>(kInnerSize); }));
   };
 
   auto getDictionary = [&]() {
@@ -97,8 +96,7 @@ TEST_F(LazyVectorTest, compareLazies) {
         getLazy());
   };
 
-  auto expected =
-      makeFlatVector<int32_t>(kInnerSize, [](auto row) { return row; });
+  auto expected = makeFlatIdentityVector<int32_t>(kInnerSize);
 
   // First compare with lazies.
   auto lazy1 = getLazy();
@@ -446,12 +444,39 @@ TEST_F(LazyVectorTest, lazyRowVectorWithLazyChildrenPartiallyLoaded) {
   assertEqualVectors(child, lazyInnerRowVector);
 }
 
+TEST_F(LazyVectorTest, constantOverRowWithLazyChild) {
+  for (const vector_size_t index : {1, 2}) {
+    SCOPED_TRACE(index);
+    auto row = makeRowVector(
+        {makeLazyFlatVector<int64_t>(3, [](auto row) { return 100 + row; })});
+    row->setNull(1, true);
+    auto constant = BaseVector::wrapInConstant(8, index, row);
+    if (index == 2) {
+      EXPECT_TRUE(isLazyNotLoaded(*constant));
+    }
+    EXPECT_EQ(constant->loadedVector(), constant.get());
+    ASSERT_NO_THROW(constant->mayHaveNulls());
+    EXPECT_EQ(constant->mayHaveNulls(), index == 1);
+    EXPECT_EQ(constant->isNullAt(0), index == 1);
+    if (index == 2) {
+      EXPECT_EQ(constant->valueVector().get(), row.get());
+    }
+
+    auto expectedRow =
+        makeRowVector({makeFlatVector<int64_t>({100, 101, 102})});
+    expectedRow->setNull(1, true);
+    assertEqualVectors(
+        BaseVector::wrapInConstant(8, index, expectedRow), constant);
+    EXPECT_EQ(constant->loadedVector(), constant.get());
+  }
+}
+
 TEST_F(LazyVectorTest, lazyInConstant) {
   // Wrap Lazy vector in a Constant, load some indices and verify that the
   // results.
   static constexpr int32_t kInnerSize = 100;
   static constexpr int32_t kOuterSize = 1000;
-  auto base = makeFlatVector<int32_t>(kInnerSize, [](auto row) { return row; });
+  auto base = makeFlatIdentityVector<int32_t>(kInnerSize);
   std::vector<vector_size_t> loadedRows;
   auto lazy = std::make_shared<LazyVector>(
       pool_.get(),
@@ -500,7 +525,7 @@ TEST_F(LazyVectorTest, lazyInDoubleDictionary) {
         kOuterSize,
         std::make_unique<test::SimpleVectorLoader>([&](auto rows) {
           loadEnd = rows.back() + 1;
-          return makeFlatVector<int32_t>(loadEnd, [](auto row) { return row; });
+          return makeFlatIdentityVector<int32_t>(loadEnd);
         }));
 
     return BaseVector::wrapInDictionary(
@@ -521,8 +546,7 @@ TEST_F(LazyVectorTest, lazyInDoubleDictionary) {
 
     LazyVector::ensureLoadedRows(wrapped, rows);
     EXPECT_EQ(kInnerSize, loadEnd);
-    auto expected =
-        makeFlatVector<int32_t>(kInnerSize, [](auto row) { return row; });
+    auto expected = makeFlatIdentityVector<int32_t>(kInnerSize);
     assertEqualVectors(wrapped, expected);
   }
 
@@ -556,8 +580,7 @@ TEST_F(LazyVectorTest, lazySlice) {
       INTEGER(),
       100,
       std::make_unique<test::SimpleVectorLoader>([&](auto rows) {
-        return makeFlatVector<int32_t>(
-            rows.back() + 1, [](auto row) { return row; });
+        return makeFlatIdentityVector<int32_t>(rows.back() + 1);
       }));
   EXPECT_THROW(lazy->slice(0, 10), VeloxRuntimeError);
   lazy->loadedVector();
@@ -579,8 +602,7 @@ TEST_F(LazyVectorTest, lazyInMultipleDictionaryAllResultantNullRows) {
       INTEGER(),
       kVectorSize,
       std::make_unique<test::SimpleVectorLoader>([&](auto rows) {
-        return makeFlatVector<int32_t>(
-            rows.back() + 1, [](auto row) { return row; });
+        return makeFlatIdentityVector<int32_t>(rows.back() + 1);
       }));
   auto wrapped = BaseVector::wrapInDictionary(
       makeNulls(kVectorSize, [](vector_size_t /*row*/) { return true; }),
@@ -609,8 +631,7 @@ TEST_F(LazyVectorTest, lazyInDictionaryNoRowsToLoad) {
       INTEGER(),
       kVectorSize,
       std::make_unique<test::SimpleVectorLoader>([&](auto rows) {
-        return makeFlatVector<int32_t>(
-            rows.back() + 1, [](auto row) { return row; });
+        return makeFlatIdentityVector<int32_t>(rows.back() + 1);
       }));
   auto wrapped = BaseVector::wrapInDictionary(
       nullptr,
@@ -629,7 +650,7 @@ TEST_F(LazyVectorTest, lazyWithDictionaryInConstant) {
   // indices and verify that the results.
   static constexpr int32_t kInnerSize = 1000;
   static constexpr int32_t kOuterSize = 10;
-  auto base = makeFlatVector<int32_t>(kInnerSize, [](auto row) { return row; });
+  auto base = makeFlatIdentityVector<int32_t>(kInnerSize);
   auto innerLazy = std::make_shared<LazyVector>(
       pool_.get(),
       INTEGER(),
@@ -662,8 +683,7 @@ TEST_F(LazyVectorTest, lazyWithDictionaryInConstant) {
 TEST_F(LazyVectorTest, reset) {
   static constexpr int32_t kVectorSize = 10;
   auto loader = [&](RowSet rows) {
-    return makeFlatVector<int32_t>(
-        rows.back() + 1, [](auto row) { return row; });
+    return makeFlatIdentityVector<int32_t>(rows.back() + 1);
   };
   LazyVector lazy(
       pool_.get(),
@@ -676,27 +696,27 @@ TEST_F(LazyVectorTest, reset) {
 }
 
 TEST_F(LazyVectorTest, runtimeStats) {
-  TestRuntimeStatWriter writer;
+  ConcurrentRuntimeStatWriter writer;
   RuntimeStatWriterScopeGuard guard(&writer);
   auto lazy = std::make_shared<LazyVector>(
       pool_.get(),
       INTEGER(),
       10,
       std::make_unique<test::SimpleVectorLoader>([&](auto rows) {
-        return makeFlatVector<int32_t>(rows.back() + 1, folly::identity);
+        return makeFlatIdentityVector<int32_t>(rows.back() + 1);
       }));
   ASSERT_EQ(lazy->loadedVector()->size(), 10);
-  auto stats = writer.stats();
-  std::sort(stats.begin(), stats.end(), [](auto& x, auto& y) {
-    return x.first < y.first;
-  });
+  const auto stats = writer.runtimeStats();
   ASSERT_EQ(stats.size(), 3);
-  ASSERT_EQ(stats[0].first, LazyVector::kCpuNanos);
-  ASSERT_GE(stats[0].second.value, 0);
-  ASSERT_EQ(stats[1].first, LazyVector::kInputBytes);
-  ASSERT_GE(stats[1].second.value, 0);
-  ASSERT_EQ(stats[2].first, LazyVector::kWallNanos);
-  ASSERT_GE(stats[2].second.value, 0);
+  for (const auto& name :
+       {LazyVector::kCpuNanos,
+        LazyVector::kInputBytes,
+        LazyVector::kWallNanos}) {
+    SCOPED_TRACE(name);
+    const auto& metric = stats.at(std::string(name));
+    EXPECT_EQ(metric.count, 1);
+    EXPECT_GE(metric.sum, 0);
+  }
 }
 
 TEST_F(LazyVectorTest, chain) {
@@ -705,7 +725,7 @@ TEST_F(LazyVectorTest, chain) {
       INTEGER(),
       10,
       std::make_unique<test::SimpleVectorLoader>([&](auto rows) {
-        return makeFlatVector<int32_t>(rows.back() + 1, folly::identity);
+        return makeFlatIdentityVector<int32_t>(rows.back() + 1);
       }));
   lazy->chain([](auto& vector) {
     auto* values =
@@ -718,13 +738,34 @@ TEST_F(LazyVectorTest, chain) {
   assertEqualVectors(expected, lazy);
 }
 
+// mayContainLazy() is true for the encodings that can hold a lazy vector,
+// itself or underneath, and false for the others.
+TEST_F(LazyVectorTest, mayContainLazy) {
+  constexpr vector_size_t size = 10;
+  auto flat = makeFlatIdentityVector<int32_t>(size);
+
+  EXPECT_FALSE(flat->mayContainLazy());
+  EXPECT_FALSE(
+      makeArrayVectorFromJson<int32_t>({"[1, 2]", "[3]"})->mayContainLazy());
+  auto map = makeMapVectorFromJson<int32_t, int32_t>({"{1: 2}"});
+  EXPECT_FALSE(map->mayContainLazy());
+
+  EXPECT_TRUE(
+      vectorMaker_.lazyFlatVector<int32_t>(size, [](auto row) { return row; })
+          ->mayContainLazy());
+  EXPECT_TRUE(
+      wrapInDictionary(makeIndicesInReverse(size), flat)->mayContainLazy());
+  EXPECT_TRUE(BaseVector::wrapInConstant(size, 0, flat)->mayContainLazy());
+  EXPECT_TRUE(makeRowVector({flat})->mayContainLazy());
+}
+
 // Verify containsLazyNotLoaded is lazily evaluated and correctly recomputed
 // after invalidation for RowVectors.
 TEST_F(LazyVectorTest, containsLazyNotLoadedLazyEvaluation) {
   constexpr vector_size_t size = 100;
 
   // RowVector with no lazy children.
-  auto flat = makeFlatVector<int32_t>(size, folly::identity);
+  auto flat = makeFlatIdentityVector<int32_t>(size);
   auto rowVector = makeRowVector({flat});
   EXPECT_FALSE(rowVector->containsLazyNotLoaded());
 
@@ -746,6 +787,151 @@ TEST_F(LazyVectorTest, containsLazyNotLoadedLazyEvaluation) {
   rowWithLazy->childAt(1) = lazy2;
   rowWithLazy->invalidateContainsLazyNotLoaded();
   EXPECT_TRUE(rowWithLazy->containsLazyNotLoaded());
+}
+
+TEST_F(LazyVectorTest, arrayRejectsLazyElements) {
+  constexpr vector_size_t size = 10;
+
+  auto offsets = allocateOffsets(1, pool_.get());
+  auto sizes = allocateSizes(1, pool_.get());
+  sizes->asMutable<vector_size_t>()[0] = size;
+
+  // Lazy flat vector as elements.
+  auto lazyFlat = std::make_shared<LazyVector>(
+      pool_.get(),
+      INTEGER(),
+      size,
+      std::make_unique<SimpleVectorLoader>(
+          [&](RowSet) { return makeFlatIdentityVector<int32_t>(size); }));
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<ArrayVector>(
+          pool_.get(), ARRAY(INTEGER()), nullptr, 1, offsets, sizes, lazyFlat),
+      "Cannot construct ArrayVector with an unloaded lazy vector as elements.");
+
+  // A RowVector with a lazy child is also rejected, since isLazyNotLoaded()
+  // recurses into ROW.
+  auto rowType = ROW({INTEGER(), INTEGER()});
+  auto rowWithLazyChild = makeRowVector(
+      {makeFlatIdentityVector<int32_t>(size),
+       vectorMaker_.lazyFlatVector<int32_t>(
+           size, [](vector_size_t row) { return row; })});
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<ArrayVector>(
+          pool_.get(),
+          ARRAY(rowType),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          rowWithLazyChild),
+      "Cannot construct ArrayVector with an unloaded lazy vector as elements.");
+
+  // After loading, construction succeeds.
+  lazyFlat->loadedVector();
+  EXPECT_NO_THROW(
+      std::make_shared<ArrayVector>(
+          pool_.get(), ARRAY(INTEGER()), nullptr, 1, offsets, sizes, lazyFlat));
+
+  rowWithLazyChild->loadedVector();
+  EXPECT_NO_THROW(
+      std::make_shared<ArrayVector>(
+          pool_.get(),
+          ARRAY(rowType),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          rowWithLazyChild));
+}
+
+TEST_F(LazyVectorTest, mapRejectsLazyKeysOrValues) {
+  constexpr vector_size_t size = 10;
+
+  auto offsets = allocateOffsets(1, pool_.get());
+  auto sizes = allocateSizes(1, pool_.get());
+  sizes->asMutable<vector_size_t>()[0] = size;
+  auto flatIntegers = makeFlatIdentityVector<int32_t>(size);
+
+  auto makeLazyFlat = [&]() {
+    return std::make_shared<LazyVector>(
+        pool_.get(),
+        INTEGER(),
+        size,
+        std::make_unique<SimpleVectorLoader>(
+            [&](RowSet) { return makeFlatIdentityVector<int32_t>(size); }));
+  };
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<MapVector>(
+          pool_.get(),
+          MAP(INTEGER(), INTEGER()),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          makeLazyFlat(),
+          flatIntegers),
+      "Cannot construct MapVector with an unloaded lazy vector as keys.");
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<MapVector>(
+          pool_.get(),
+          MAP(INTEGER(), INTEGER()),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          flatIntegers,
+          makeLazyFlat()),
+      "Cannot construct MapVector with an unloaded lazy vector as values.");
+
+  // A RowVector with a lazy child is also rejected, since isLazyNotLoaded()
+  // recurses into ROW.
+  auto rowType = ROW({INTEGER(), INTEGER()});
+  auto rowWithLazyChild = makeRowVector(
+      {makeFlatIdentityVector<int32_t>(size),
+       vectorMaker_.lazyFlatVector<int32_t>(
+           size, [](vector_size_t row) { return row; })});
+
+  VELOX_ASSERT_THROW(
+      std::make_shared<MapVector>(
+          pool_.get(),
+          MAP(INTEGER(), rowType),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          flatIntegers,
+          rowWithLazyChild),
+      "Cannot construct MapVector with an unloaded lazy vector as values.");
+
+  // After loading, construction succeeds.
+  auto lazyFlat = makeLazyFlat();
+  lazyFlat->loadedVector();
+  EXPECT_NO_THROW(
+      std::make_shared<MapVector>(
+          pool_.get(),
+          MAP(INTEGER(), INTEGER()),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          flatIntegers,
+          lazyFlat));
+
+  rowWithLazyChild->loadedVector();
+  EXPECT_NO_THROW(
+      std::make_shared<MapVector>(
+          pool_.get(),
+          MAP(INTEGER(), rowType),
+          nullptr,
+          1,
+          offsets,
+          sizes,
+          flatIntegers,
+          rowWithLazyChild));
 }
 
 } // namespace

@@ -15,11 +15,14 @@
  */
 #include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 
+#include <cudf/utilities/error.hpp>
 #include <folly/Unit.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <rmm/mr/per_device_resource.hpp>
 
 DEFINE_int32(
     exchange_log_level,
@@ -32,7 +35,16 @@ int main(int argc, char** argv) {
   // Signal handler required for ThreadDebugInfoTest
   facebook::velox::process::addDefaultFatalSignalHandler();
   folly::Init init(&argc, &argv, false);
-  facebook::velox::cudf_velox::CudfConfig::getInstance().exchangeLogLevel =
-      FLAGS_exchange_log_level;
-  return RUN_ALL_TESTS();
+  auto& cudfConfig = facebook::velox::cudf_velox::CudfConfig::getInstance();
+  // Enable the UCX exchange so the Communicator initializes under test;
+  // production code enables it via the "cudf.exchange" session config.
+  cudfConfig.exchange = true;
+  cudfConfig.exchangeLogLevel = FLAGS_exchange_log_level;
+  // cuda::stream_ref::sync() requires a current CUDA context.
+  CUDF_CUDA_TRY(cudaFree(nullptr));
+  facebook::velox::cudf_velox::output_mr_.emplace(
+      rmm::mr::get_current_device_resource_ref());
+  const auto result = RUN_ALL_TESTS();
+  facebook::velox::cudf_velox::output_mr_.reset();
+  return result;
 }

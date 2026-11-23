@@ -80,10 +80,9 @@ struct Accumulator<StringView> {
       // 1. Total string storage exceeds compactionBytesThreshold, AND
       // 2. Evicted bytes exceed compactionUnusedMemoryRatio of the threshold.
       if (compactionBytesThreshold > 0) {
-        if (FOLLY_UNLIKELY(
-                (evictedBytes_ + activeBytes_ > compactionBytesThreshold) &&
-                (evictedBytes_ >
-                 compactionBytesThreshold * compactionUnusedMemoryRatio))) {
+        if ((evictedBytes_ + activeBytes_ > compactionBytesThreshold) &&
+            (evictedBytes_ > compactionBytesThreshold *
+                 compactionUnusedMemoryRatio)) [[unlikely]] {
           compact();
         }
       }
@@ -581,7 +580,7 @@ std::unique_ptr<exec::Aggregate> makeApproxMostFrequentAggregate(
   if constexpr (
       kKind == TypeKind::TINYINT || kKind == TypeKind::SMALLINT ||
       kKind == TypeKind::INTEGER || kKind == TypeKind::BIGINT ||
-      kKind == TypeKind::VARCHAR) {
+      kKind == TypeKind::VARCHAR || kKind == TypeKind::UNKNOWN) {
     return std::make_unique<
         ApproxMostFrequentAggregate<typename TypeTraits<kKind>::NativeType>>(
         resultType, compactionBytesThreshold, compactionUnusedMemoryRatio);
@@ -613,7 +612,8 @@ void registerApproxMostFrequentAggregate(
         "integer",
         "bigint",
         "varchar",
-        "json"}) {
+        "json",
+        "unknown"}) {
     signatures.push_back(
         exec::AggregateFunctionSignatureBuilder()
             .returnType(fmt::format("map({},bigint)", valueType))
@@ -636,7 +636,7 @@ void registerApproxMostFrequentAggregate(
         auto& valueType = exec::isPartialOutput(step)
             ? resultType->childAt(2)->childAt(0)
             : resultType->childAt(0);
-        return VELOX_DYNAMIC_TYPE_DISPATCH(
+        return VELOX_DYNAMIC_TYPE_DISPATCH_WITH_UNKNOWN(
             makeApproxMostFrequentAggregate,
             valueType->kind(),
             names.front(),

@@ -469,6 +469,10 @@ SelectiveMapColumnReader::SelectiveMapColumnReader(
     scanSpec_->getOrCreateChild(ScanSpec::kMapKeysFieldName);
     scanSpec_->getOrCreateChild(ScanSpec::kMapValuesFieldName);
   }
+  VELOX_CHECK_GE(
+      scanSpec_->children().size(),
+      2,
+      "Map column reader requires key and value scan spec children");
   scanSpec_->children()[0]->setProjectOut(true);
   scanSpec_->children()[1]->setProjectOut(true);
 }
@@ -625,7 +629,7 @@ void SelectiveMapAsStructColumnReader::getValues(
     // children with copyRanges() rather than recreating them per batch, so it
     // must ensure they exist. Create any missing child here (directly at the
     // final size); resize the rest, which prepareForReuse() shrank to 0.
-    if (FOLLY_UNLIKELY(!child)) {
+    if (!child) [[unlikely]] {
       child =
           BaseVector::create(resultRow->type()->childAt(i), rows.size(), pool_);
     } else {

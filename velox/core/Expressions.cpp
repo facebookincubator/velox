@@ -54,7 +54,7 @@ folly::dynamic ITypedExpr::serializeBase(std::string_view name) const {
       serializedInputs.push_back(input->serialize());
     }
 
-    obj["inputs"] = serializedInputs;
+    obj["inputs"] = std::move(serializedInputs);
   }
 
   return obj;
@@ -478,6 +478,18 @@ TypedExprPtr CallTypedExpr::create(const folly::dynamic& obj, void* context) {
 
   return std::make_shared<CallTypedExpr>(
       std::move(type), std::move(inputs), obj["functionName"].asString());
+}
+
+TypedExprPtr FieldAccessTypedExpr::withInputsImpl(
+    std::vector<TypedExprPtr> inputs) const {
+  // A column reference has no inputs.
+  if (inputs.empty()) {
+    return std::make_shared<FieldAccessTypedExpr>(*this);
+  }
+
+  // A field access by name on an input expression.
+  return std::make_shared<FieldAccessTypedExpr>(
+      type(), std::move(inputs[0]), name_);
 }
 
 TypedExprPtr FieldAccessTypedExpr::rewriteInputNames(

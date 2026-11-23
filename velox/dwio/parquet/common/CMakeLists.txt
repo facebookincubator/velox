@@ -26,6 +26,7 @@ velox_add_library(
   LevelConversion.h
   LevelConversionUtil.h
   ParquetConfig.h
+  ParquetRuntimeStats.h
   RleEncodingInternal.h
   XxHasher.h
 )
@@ -36,6 +37,7 @@ velox_link_libraries(
   velox_type
   velox_dwio_common
   velox_dwio_common_compression
+  velox_fastpforlib
   arrow
   fmt::fmt
   Folly::folly

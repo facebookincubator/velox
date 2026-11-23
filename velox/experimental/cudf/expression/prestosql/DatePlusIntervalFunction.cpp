@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/expression/prestosql/DatePlusIntervalFunction.h"
 
-#include "velox/expression/ConstantExpr.h"
+#include "velox/common/memory/Memory.h"
+#include "velox/core/Expressions.h"
 #include "velox/type/Time.h"
 #include "velox/vector/ConstantVector.h"
 
@@ -29,7 +31,8 @@ namespace facebook::velox::cudf_velox {
 namespace prestosql {
 
 DatePlusIntervalFunction::DatePlusIntervalFunction(
-    const std::shared_ptr<velox::exec::Expr>& expr) {
+    const core::TypedExprPtr& expr,
+    memory::MemoryPool* pool) {
   VELOX_CHECK_EQ(
       expr->inputs().size(),
       2,
@@ -41,16 +44,19 @@ DatePlusIntervalFunction::DatePlusIntervalFunction(
       expr->inputs()[1]->type()->isIntervalDayTime(),
       "Second argument to plus must be an interval day to second");
 
-  auto stream = cudf::get_default_stream(cudf::allow_default_stream);
+  auto stream = getDefaultStreamForCurrentThread();
   auto mr = get_temp_mr();
 
   // If the interval is a constant, extract it at construction time and
   // convert to a duration_days scalar. A constant-null interval leaves both
   // durationDaysLiteral_ and the column-path scalars unset; eval() short-
   // circuits to an all-null result.
-  if (auto constExpr = std::dynamic_pointer_cast<velox::exec::ConstantExpr>(
-          expr->inputs()[1])) {
-    auto constValue = constExpr->value();
+  if (expr->inputs()[1]->isConstantKind()) {
+    const auto* constExpr =
+        expr->inputs()[1]->asUnchecked<core::ConstantTypedExpr>();
+    const auto constValue = constExpr->hasValueVector()
+        ? constExpr->valueVector()
+        : constExpr->toConstantVector(pool);
     if (!constValue->isNullAt(0)) {
       auto millis = constValue->as<ConstantVector<int64_t>>()->value();
       VELOX_USER_CHECK_EQ(
@@ -70,12 +76,12 @@ DatePlusIntervalFunction::DatePlusIntervalFunction(
     zeroScalar_ = std::make_unique<cudf::numeric_scalar<int64_t>>(
         int64_t{0}, true, stream, mr);
   }
-  stream.synchronize();
+  stream.sync();
 }
 
 ColumnOrView DatePlusIntervalFunction::eval(
     std::vector<ColumnOrView>& inputColumns,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   auto dateCol = asView(inputColumns[0]);
 

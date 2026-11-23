@@ -21,6 +21,8 @@
 #include "velox/exec/Operator.h"
 #include "velox/expression/FunctionSignature.h"
 
+#include <cudf/copying.hpp>
+
 #include <optional>
 #include <string_view>
 
@@ -42,6 +44,36 @@ core::AggregationNode::Step getCompanionStep(
 
 std::string getOriginalName(const std::string& kind);
 
+/// Returns true if the cuDF aggregator of 'registry', the groupby or the
+/// reduce registry, for 'aggregateName' honors a FILTER mask. Eligibility is
+/// declared at registration (maskSupportedAggregations) rather than hardcoded
+/// here. An aggregator that opts in excludes masked rows via null-injection
+/// (or the validity column for count(*)/count(const)); one that ignores the
+/// mask would silently produce an unmasked result, so callers must fall back
+/// to CPU for it.
+bool aggregationSupportsMask(
+    const std::string& aggregateName,
+    const StepAwareAggregationRegistry& registry);
+
+/// Returns true if cuDF can honor 'aggregate's FILTER mask at 'step' on the
+/// path of 'registry' (no mask is trivially true). The mask must sit at a
+/// raw-input step, be a bare boolean field access, and target an aggregate in
+/// aggregationSupportsMask for that registry. Shared by groupby and reduce
+/// validation, so the two paths agree on the shape of a mask and differ only
+/// in the aggregates their registries declare.
+bool maskSupportedByCudf(
+    const core::AggregationNode::Aggregate& aggregate,
+    core::AggregationNode::Step step,
+    const StepAwareAggregationRegistry& registry);
+
+/// Returns true if cuDF can run 'aggregate' without the sort its ORDER BY asks
+/// for: it has no sorting keys, or its function is not order sensitive, which
+/// is when the CPU operator skips that sort as well. cuDF aggregates each group
+/// in input order, so an order-sensitive aggregate with ORDER BY stays on the
+/// CPU. Shared by groupby and reduce validation.
+bool sortingKeysSupportedByCudf(
+    const core::AggregationNode::Aggregate& aggregate);
+
 enum class CountInputKind {
   kColumn,
   kCountAll,
@@ -62,6 +94,9 @@ struct ResolvedAggregateInfo {
   VectorPtr constant;
   TypePtr resultType;
   std::optional<CountInputKind> countInputKind;
+  // Post-permutation index of this aggregate's boolean mask column. Set only
+  // for masked aggregates at raw-input steps; nullopt otherwise.
+  std::optional<uint32_t> maskIndex;
   // True if the aggregate was declared on a decimal raw input in the plan.
   // Routing keys off the function family, not the physical batch type (which is
   // VARBINARY/STRING on intermediate and final steps).
@@ -70,18 +105,57 @@ struct ResolvedAggregateInfo {
 
 // Parse aggregate inputs from the aggregation node and resolve companion steps,
 // original names, and result types. Returns one entry per aggregate.
+// 'maskChannels' carries the post-permutation mask column index per aggregate
+// (parallel to aggregationNode.aggregates()); resolved maskIndex is gated to
+// raw-input steps only.
 std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
     core::AggregationNode const& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
-    std::vector<VectorPtr> const& constants);
+    std::vector<VectorPtr> const& constants,
+    std::vector<std::optional<uint32_t>> const& maskChannels);
+
+// Returns a copy of 'values' where rows with a false or null 'mask' entry are
+// NULL (mask[i] ? values[i] : NULL). Both columns must have equal length.
+// Used by groupby and reduce to honor per-aggregate masks via null-exclusion.
+std::unique_ptr<cudf::column> applyMask(
+    cudf::column_view values,
+    cudf::column_view mask,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
+
+// Materializes the masked raw-input value column for an aggregate: when
+// 'maskIndex' is set, returns applyMask(values, mask); when it is unset,
+// returns nullptr (callers then use input.column(inputIndex) directly). Returns
+// the OWNING column so both callers manage its lifetime — groupby stores it in
+// a member, reduce keeps it as a local through the reduce call. Shared by
+// groupby and reduce so both materialize masked input the same way.
+std::unique_ptr<cudf::column> materializeMaskedColumn(
+    cudf::table_view const& input,
+    uint32_t inputIndex,
+    std::optional<uint32_t> maskIndex,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
+
+// Returns a BOOL8 column whose validity is exactly "mask is true": a true entry
+// is valid, a false or null entry is null. Counting valid entries (COUNT_VALID)
+// over the result yields the number of mask-true rows, used for masked
+// count(*)/count(const).
+std::unique_ptr<cudf::column> maskToValidityColumn(
+    cudf::column_view mask,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
 
 // Result of buildAggregationInputChannels: a channel permutation that places
 // grouping keys first, followed by aggregate input columns in aggregate order,
-// plus per-aggregate constants.
+// then one mask channel per masked raw-input aggregate; plus per-aggregate
+// constants and per-aggregate mask indices.
 struct AggregationInputChannels {
   std::vector<column_index_t> channels;
   std::vector<VectorPtr> constants;
+  // Per-aggregate post-permutation index of the mask column, or nullopt.
+  // Parallel to aggregationNode.aggregates().
+  std::vector<std::optional<uint32_t>> maskChannels;
 };
 
 // Build the input channel permutation for an aggregation node.  The returned
@@ -118,10 +192,12 @@ void setupGroupingKeyChannelProjections(
     std::vector<column_index_t>& groupingKeyOutputChannels);
 
 // Top-level validation: dispatches to groupby or reduce validation based on
-// whether the aggregation node is global.
+// whether the aggregation node is global. `pool` is used to optimize checked
+// expressions during eligibility, typically the operator's own pool.
 bool canBeEvaluatedByCudf(
     const core::AggregationNode& aggregationNode,
-    core::QueryCtx* queryCtx);
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool);
 
 // Utility functions shared by groupby and reduce validation.
 core::TypedExprPtr expandFieldReference(
@@ -131,7 +207,8 @@ core::TypedExprPtr expandFieldReference(
 bool canGroupingKeysBeEvaluatedByCudf(
     const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
     const core::PlanNode* sourceNode,
-    core::QueryCtx* queryCtx);
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool);
 
 bool matchTypedCallAgainstSignatures(
     const core::CallTypedExpr& call,

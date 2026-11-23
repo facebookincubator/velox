@@ -17,7 +17,6 @@
 #pragma once
 
 #include <folly/container/F14Map.h>
-#include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/Encryption.h"
 #include "velox/dwio/dwrf/common/wrap/dwrf-proto-wrapper.h"
@@ -63,8 +62,6 @@ class EncodingIter {
 
   void next();
 
-  VELOX_FRIEND_TEST(TestEncodingIter, Ctor);
-  VELOX_FRIEND_TEST(TestEncodingIter, EncodingIterBeginAndEnd);
   bool emptyEncryptionGroups() const;
 
   const proto::StripeFooter& footer_;
@@ -147,8 +144,6 @@ class LayoutPlanner {
       const folly::F14FastMap<uint32_t, uint32_t>& nodeToColumnMap);
 
   folly::F14FastMap<uint32_t, uint32_t> nodeToColumnMap_;
-
-  VELOX_FRIEND_TEST(LayoutPlannerTests, Basic);
 };
 
 } // namespace facebook::velox::dwrf

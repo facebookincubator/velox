@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/torchwave/Utils.h"
+#include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/NodePrinter.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
 
@@ -29,7 +30,6 @@
 #include <type_traits>
 #include <vector>
 
-#include <ATen/ATen.h>
 #include <ATen/Parallel.h>
 #include <ATen/core/dispatch/Dispatcher.h>
 #include <c10/util/StringUtil.h>
@@ -39,6 +39,27 @@
 #include <torch/nativert/executor/Placement.h>
 
 namespace torch::wave {
+
+at::Tensor aliasTensor(
+    const at::Tensor& base,
+    c10::IntArrayRef sizes,
+    c10::IntArrayRef strides,
+    int64_t storageOffset,
+    std::optional<c10::ScalarType> dtype) {
+  // Built from the TensorImpl directly rather than through narrow/select: a
+  // reservation rebuilds its views on every launch, and two dispatcher
+  // round-trips per view dominated that path. at::detail::make_tensor is
+  // private to its namespace, so the impl is constructed explicitly -- that is
+  // all make_tensor does -- and handed to Tensor's public constructor.
+  auto impl = c10::make_intrusive<at::TensorImpl>(
+      c10::TensorImpl::VIEW,
+      c10::Storage(base.storage()),
+      base.key_set(),
+      dtype.has_value() ? caffe2::TypeMeta::fromScalarType(*dtype)
+                        : base.dtype());
+  impl->set_sizes_and_strides(sizes, strides, storageOffset);
+  return at::Tensor(std::move(impl));
+}
 
 std::vector<ValueCP> inputValues(NodeCP node) {
   std::vector<ValueCP> result;
@@ -856,7 +877,7 @@ void saveReferenceFrame(
       continue;
     }
     auto id = value->id();
-    const auto& iv = frame.getIValue(id);
+    const auto iv = debugValue(frame, id);
     if (iv.isNone()) {
       continue;
     }
@@ -879,7 +900,7 @@ void saveReferenceFrame(
     const std::string& path) {
   std::vector<std::pair<int32_t, c10::IValue>> items;
   for (int32_t id = 0; id < numValues; ++id) {
-    const auto& iv = frame.getIValue(id);
+    const auto iv = debugValue(frame, id);
     if (iv.isNone()) {
       continue;
     }
@@ -916,7 +937,7 @@ void saveReferenceFrame(
       }
       continue;
     }
-    const auto& iv = frame.getIValue(value->id());
+    const auto iv = debugValue(frame, value->id());
     if (iv.isInt() || iv.isDouble() || iv.isBool() || iv.isIntList() ||
         iv.isDoubleList() || iv.isBoolList()) {
       items.emplace_back(static_cast<int32_t>(id), iv);
@@ -1087,8 +1108,7 @@ std::unordered_map<int32_t, c10::IValue> loadReferenceFrame(
 std::string frameString(
     const nativert::ExecutionFrame& frame,
     int32_t valueId) {
-  const auto& iv = frame.getIValue(valueId);
-  return traceIValue(iv);
+  return traceIValue(debugValue(frame, valueId));
 }
 
 std::string refFrameString(int32_t valueId) {
@@ -1316,7 +1336,7 @@ void traceFrameValues(
     if (!traceState.shouldTrace(id)) {
       continue;
     }
-    const auto& iv = frame.getIValue(id);
+    const auto iv = debugValue(frame, id);
     traceState.markTraced(id);
     if (iv.isNone()) {
       // Print a marker rather than skipping: an unset/freed value is exactly

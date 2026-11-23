@@ -16,15 +16,18 @@
 
 #include <boost/random/uniform_int_distribution.hpp>
 #include <folly/init/Init.h>
+#include <folly/stop_watch.h>
 
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MmapAllocator.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/Exchange.h"
+#include "velox/exec/fuzzer/ScopedOOMInjector.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
@@ -245,7 +248,7 @@ class ExchangeFuzzer : public VectorTestBase {
         }
 
         for (const auto& task : tasks) {
-          if (!waitForTaskCompletion(task.get(), 1'000'000)) {
+          if (!TaskMonitor::waitForCompletion(*task, 1'000'000)) {
             if (task->state() == TaskState::kFailed) {
               try {
                 std::rethrow_exception(task->error());
@@ -288,7 +291,7 @@ class ExchangeFuzzer : public VectorTestBase {
     }
 
     for (const auto& task : tasks) {
-      if (!waitForTaskCompletion(task.get(), 1'000'000)) {
+      if (!TaskMonitor::waitForCompletion(*task, 1'000'000)) {
         if (task->state() == TaskState::kFailed) {
           try {
             std::rethrow_exception(task->error());
@@ -328,7 +331,7 @@ class ExchangeFuzzer : public VectorTestBase {
   /// Runs multiple test cases up to first failure. Duration is either in
   /// --duratin_sec or --steps.
   void run() {
-    auto start = getCurrentTimeMicro();
+    const folly::stop_watch<std::chrono::seconds> watch;
     for (auto counter = 0;; ++counter) {
       auto type = fuzzer_.randRowType();
       // Add a bigint c0 partition key column in front
@@ -418,8 +421,7 @@ class ExchangeFuzzer : public VectorTestBase {
           counter + 1 >= FLAGS_steps) {
         break;
       }
-      if (FLAGS_duration_sec &&
-          (getCurrentTimeMicro() - start) / 1000000 > FLAGS_duration_sec) {
+      if (FLAGS_duration_sec && watch.elapsed().count() > FLAGS_duration_sec) {
         break;
       }
       size_t newSeed = randInt(0, 2000000000);
@@ -427,7 +429,7 @@ class ExchangeFuzzer : public VectorTestBase {
       seed(newSeed);
     }
     LOG(INFO) << "Finishing after " << iteration_ << " cases, "
-              << (getCurrentTimeMicro() - start) / 1000000 << "s";
+              << watch.elapsed().count() << "s";
   }
 
   bool replay() {
@@ -593,7 +595,7 @@ int main(int argc, char** argv) {
     LOG(INFO) << "Starting  from user supplied seed " << FLAGS_seed;
     fuzzer.seed(FLAGS_seed);
   } else {
-    size_t seed = getCurrentTimeMicro();
+    size_t seed = EpochTime::now<std::chrono::microseconds>();
     LOG(INFO) << "Generating initial seed " << seed;
     fuzzer.seed(seed);
   }

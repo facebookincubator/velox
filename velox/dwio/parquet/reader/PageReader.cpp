@@ -16,6 +16,8 @@
 
 #include "velox/dwio/parquet/reader/PageReader.h"
 
+#include <bit>
+
 #include <snappy.h>
 #include <thrift/lib/cpp2/FieldRef.h>
 #include <zlib.h>
@@ -24,11 +26,13 @@
 #include <folly/ScopeGuard.h>
 #include <folly/lang/Bits.h>
 
+#include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/common/ColumnVisitors.h"
 #include "velox/dwio/parquet/common/LevelConversion.h"
+#include "velox/dwio/parquet/common/ParquetRuntimeStats.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 #include "velox/vector/FlatVector.h"
 
@@ -49,6 +53,7 @@ struct __attribute__((__packed__)) Int96Timestamp {
 };
 
 namespace {
+
 // Validates a signed 32-bit Parquet PageHeader size field and narrows it to
 // uint32_t. These sizes are attacker-controlled; a negative value would promote
 // to a huge unsigned value in the page-size arithmetic and drive an
@@ -57,6 +62,28 @@ namespace {
 uint32_t checkedPageSize(int32_t size, const char* name) {
   VELOX_CHECK_GE(size, 0, "Negative {}: {}", name, size);
   return static_cast<uint32_t>(size);
+}
+
+// Returns the byte size of 'numValues' fixed-width dictionary entries of
+// 'valueSize' bytes each. 'num_values' comes from the file, so the size must
+// match the page: a larger size would read past the decompressed page, and on
+// an uncompressed page any mismatch leaves the stream off the next page header.
+int32_t
+dictionaryByteSize(int32_t numValues, int32_t valueSize, uint32_t pageSize) {
+  const auto numBytes =
+      checkedMultiply<int32_t>(numValues, valueSize, "Dictionary byte size");
+  VELOX_CHECK_EQ(
+      numBytes,
+      static_cast<int32_t>(pageSize),
+      "Dictionary byte size does not match the uncompressed page size: num_values {}, value size {}",
+      numValues,
+      valueSize);
+  return numBytes;
+}
+
+// Returns the number of bits needed to encode levels up to 'maxLevel'.
+int levelBitWidth(int32_t maxLevel) {
+  return static_cast<int>(std::bit_width(static_cast<uint64_t>(maxLevel)));
 }
 } // namespace
 
@@ -126,7 +153,8 @@ PageHeader PageReader::readPageHeader() {
 
   updateBufferPointersAfterDeserialization(result);
 
-  stats_.pageLoadTimeNs.increment(result.readUs * 1'000);
+  stats_.accumulateStat(
+      ParquetRuntimeStats::kPageLoadTimeNsMetric, result.readNs);
   return pageHeader;
 }
 
@@ -145,9 +173,9 @@ const char* PageReader::readBytes(int32_t size, BufferPtr& copy) {
   if (bufferEnd_ == bufferStart_) {
     // Refilling from the stream can perform real reads/load-position work, so
     // time it and count it towards page-load time.
-    uint64_t readUs{0};
+    uint64_t readNs{0};
     {
-      const MicrosecondWallTimer timer(&readUs);
+      const NanosecondWallTimer timer(&readNs);
       const void* buffer = nullptr;
       int32_t bufferSize = 0;
       if (!inputStream_->Next(&buffer, &bufferSize)) {
@@ -156,7 +184,7 @@ const char* PageReader::readBytes(int32_t size, BufferPtr& copy) {
       bufferStart_ = reinterpret_cast<const char*>(buffer);
       bufferEnd_ = bufferStart_ + bufferSize;
     }
-    stats_.pageLoadTimeNs.increment(readUs * 1'000);
+    stats_.accumulateStat(ParquetRuntimeStats::kPageLoadTimeNsMetric, readNs);
   }
   // Zero-copy fast path: return directly from the stream buffer when it has
   // enough data plus SIMD padding. This path performs no I/O, so it stays off
@@ -177,7 +205,6 @@ const char* PageReader::readBytes(int32_t size, BufferPtr& copy) {
         bufferStart_,
         bufferEnd_);
   }
-  stats_.pageLoadTimeNs.increment(readUs * 1'000);
   return copy->as<char>();
 }
 
@@ -361,7 +388,7 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
     repeatDecoder_ = std::make_unique<RleDecoder>(
         reinterpret_cast<const uint8_t*>(pageData_),
         repeatLength,
-        ::arrow::bit_util::NumRequiredBits(maxRepeat_));
+        levelBitWidth(maxRepeat_));
 
     pageData_ += repeatLength;
     remainingBytes -= repeatLength;
@@ -382,14 +409,12 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
         remainingBytes);
     if (maxDefine_ == 1) {
       defineDecoder_ = std::make_unique<RleBpDecoder>(
-          pageData_,
-          pageData_ + defineLength,
-          ::arrow::bit_util::NumRequiredBits(maxDefine_));
+          pageData_, pageData_ + defineLength, levelBitWidth(maxDefine_));
     }
     wideDefineDecoder_ = std::make_unique<RleDecoder>(
         reinterpret_cast<const uint8_t*>(pageData_),
         defineLength,
-        ::arrow::bit_util::NumRequiredBits(maxDefine_));
+        levelBitWidth(maxDefine_));
     pageData_ += defineLength;
   }
   encodedDataSize_ = pageEnd - pageData_;
@@ -448,7 +473,7 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
     repeatDecoder_ = std::make_unique<RleDecoder>(
         reinterpret_cast<const uint8_t*>(pageData_),
         repeatLength,
-        ::arrow::bit_util::NumRequiredBits(maxRepeat_));
+        levelBitWidth(maxRepeat_));
   }
 
   if (maxDefine_ > 0) {
@@ -456,12 +481,12 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
       defineDecoder_ = std::make_unique<RleBpDecoder>(
           pageData_ + repeatLength,
           pageData_ + levelsSize,
-          ::arrow::bit_util::NumRequiredBits(maxDefine_));
+          levelBitWidth(maxDefine_));
     }
     wideDefineDecoder_ = std::make_unique<RleDecoder>(
         reinterpret_cast<const uint8_t*>(pageData_ + repeatLength),
         defineLength,
-        ::arrow::bit_util::NumRequiredBits(maxDefine_));
+        levelBitWidth(maxDefine_));
   }
   pageData_ += levelsSize;
   // parquet.thrift uses "7: optional bool is_compressed = true;" but
@@ -493,8 +518,27 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
   }
 }
 
+void PageReader::readDictionaryBytes(char* dest, int32_t numBytes) {
+  if (pageData_) {
+    memcpy(dest, pageData_, numBytes);
+    return;
+  }
+  uint64_t readNs{0};
+  {
+    NanosecondWallTimer timer(&readNs);
+    dwio::common::readBytes(
+        numBytes, inputStream_.get(), dest, bufferStart_, bufferEnd_);
+  }
+  stats_.accumulateStat(ParquetRuntimeStats::kPageLoadTimeNsMetric, readNs);
+}
+
 void PageReader::prepareDictionary(const PageHeader& pageHeader) {
   dictionary_.numValues = *pageHeader.dictionary_page_header()->num_values();
+  VELOX_CHECK_GE(
+      dictionary_.numValues,
+      0,
+      "Negative dictionary value count: {}",
+      dictionary_.numValues);
   dictionaryEncoding_ = *pageHeader.dictionary_page_header()->encoding();
   dictionary_.sorted =
       pageHeader.dictionary_page_header()->is_sorted().value_or(false);
@@ -523,7 +567,8 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
                           parquetType == thrift::Type::FLOAT)
           ? sizeof(float)
           : sizeof(double);
-      auto numBytes = dictionary_.numValues * typeSize;
+      const auto numBytes = dictionaryByteSize(
+          dictionary_.numValues, typeSize, uncompressedPageSize);
       if (type_->type()->isShortDecimal() &&
           parquetType == thrift::Type::INT32) {
         auto veloxTypeLength = type_->type()->cppSizeInBytes();
@@ -537,21 +582,7 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
       } else {
         dictionary_.values = AlignedBuffer::allocate<char>(numBytes, &pool_);
       }
-      if (pageData_) {
-        memcpy(dictionary_.values->asMutable<char>(), pageData_, numBytes);
-      } else {
-        uint64_t readUs{0};
-        {
-          MicrosecondWallTimer timer(&readUs);
-          dwio::common::readBytes(
-              numBytes,
-              inputStream_.get(),
-              dictionary_.values->asMutable<char>(),
-              bufferStart_,
-              bufferEnd_);
-        }
-        stats_.pageLoadTimeNs.increment(readUs * 1'000);
-      }
+      readDictionaryBytes(dictionary_.values->asMutable<char>(), numBytes);
       if (type_->type()->isShortDecimal() &&
           parquetType == thrift::Type::INT32) {
         auto values = dictionary_.values->asMutable<int64_t>();
@@ -562,36 +593,30 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
           values[i] = parquetValues[i];
         }
       } else if (type_->type()->isTimestamp()) {
-        VELOX_DCHECK_EQ(parquetType, thrift::Type::INT64);
+        VELOX_DCHECK(
+            parquetType == thrift::Type::INT32 ||
+            parquetType == thrift::Type::INT64);
         auto values = dictionary_.values->asMutable<int128_t>();
-        auto parquetValues = dictionary_.values->asMutable<int64_t>();
+        const auto* parquetValues = dictionary_.values->as<char>();
         for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
           // Expand the Parquet type length values to Velox type length.
           // We start from the end to allow in-place expansion.
-          values[i] = parquetValues[i];
+          const auto* value = parquetValues + i * typeSize;
+          values[i] = parquetType == thrift::Type::INT32
+              ? folly::loadUnaligned<int32_t>(value)
+              : folly::loadUnaligned<int64_t>(value);
         }
       }
       break;
     }
     case thrift::Type::INT96: {
+      const auto numBytes = dictionaryByteSize(
+          dictionary_.numValues,
+          static_cast<int32_t>(sizeof(Int96Timestamp)),
+          uncompressedPageSize);
       auto numVeloxBytes = dictionary_.numValues * sizeof(int128_t);
       dictionary_.values = AlignedBuffer::allocate<char>(numVeloxBytes, &pool_);
-      auto numBytes = dictionary_.numValues * sizeof(Int96Timestamp);
-      if (pageData_) {
-        memcpy(dictionary_.values->asMutable<char>(), pageData_, numBytes);
-      } else {
-        uint64_t readUs{0};
-        {
-          MicrosecondWallTimer timer(&readUs);
-          dwio::common::readBytes(
-              numBytes,
-              inputStream_.get(),
-              dictionary_.values->asMutable<char>(),
-              bufferStart_,
-              bufferEnd_);
-        }
-        stats_.pageLoadTimeNs.increment(readUs * 1'000);
-      }
+      readDictionaryBytes(dictionary_.values->asMutable<char>(), numBytes);
       // Expand the Parquet type length values to Velox type length.
       // We start from the end to allow in-place expansion.
       auto values = dictionary_.values->asMutable<int128_t>();
@@ -610,24 +635,14 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
     case thrift::Type::BYTE_ARRAY: {
       dictionary_.values =
           AlignedBuffer::allocate<StringView>(dictionary_.numValues, &pool_);
-      auto numBytes = uncompressedPageSize;
+      auto numBytes = static_cast<int32_t>(uncompressedPageSize);
       auto values = dictionary_.values->asMutable<StringView>();
       dictionary_.strings = AlignedBuffer::allocate<char>(numBytes, &pool_);
       auto strings = dictionary_.strings->asMutable<char>();
-      if (pageData_) {
-        memcpy(strings, pageData_, numBytes);
-      } else {
-        uint64_t readUs{0};
-        {
-          MicrosecondWallTimer timer(&readUs);
-          dwio::common::readBytes(
-              numBytes, inputStream_.get(), strings, bufferStart_, bufferEnd_);
-        }
-        stats_.pageLoadTimeNs.increment(readUs * 1'000);
-      }
+      readDictionaryBytes(strings, numBytes);
       auto header = strings;
       for (auto i = 0; i < dictionary_.numValues; ++i) {
-        auto length = *reinterpret_cast<const int32_t*>(header);
+        auto length = folly::loadUnaligned<int32_t>(header);
         values[i] = StringView(header + sizeof(int32_t), length);
         header += length + sizeof(int32_t);
       }
@@ -636,28 +651,32 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
     }
     case thrift::Type::FIXED_LEN_BYTE_ARRAY: {
       auto parquetTypeLength = type_->typeLength_;
-      auto numParquetBytes = dictionary_.numValues * parquetTypeLength;
-      auto veloxTypeLength = type_->type()->cppSizeInBytes();
-      auto numVeloxBytes = dictionary_.numValues * veloxTypeLength;
+      const auto numParquetBytes = dictionaryByteSize(
+          dictionary_.numValues, parquetTypeLength, uncompressedPageSize);
+      if (type_->type()->isVarbinary() || type_->type()->isVarchar()) {
+        dictionary_.values =
+            AlignedBuffer::allocate<StringView>(dictionary_.numValues, &pool_);
+        dictionary_.strings =
+            AlignedBuffer::allocate<char>(numParquetBytes, &pool_);
+        auto values = dictionary_.values->asMutable<StringView>();
+        auto strings = dictionary_.strings->asMutable<char>();
+        readDictionaryBytes(strings, numParquetBytes);
+        for (auto i = 0; i < dictionary_.numValues; ++i) {
+          values[i] =
+              StringView(strings + (i * parquetTypeLength), parquetTypeLength);
+        }
+        break;
+      }
+      auto veloxTypeLength =
+          static_cast<int32_t>(type_->type()->cppSizeInBytes());
+      auto numVeloxBytes = checkedMultiply<int32_t>(
+          dictionary_.numValues,
+          veloxTypeLength,
+          "FIXED_LEN_BYTE_ARRAY dictionary Velox byte size");
       VELOX_CHECK_LE(numParquetBytes, numVeloxBytes);
       dictionary_.values = AlignedBuffer::allocate<char>(numVeloxBytes, &pool_);
       auto data = dictionary_.values->asMutable<char>();
-      // Read the data bytes.
-      if (pageData_) {
-        memcpy(data, pageData_, numParquetBytes);
-      } else {
-        uint64_t readUs{0};
-        {
-          MicrosecondWallTimer timer(&readUs);
-          dwio::common::readBytes(
-              numParquetBytes,
-              inputStream_.get(),
-              data,
-              bufferStart_,
-              bufferEnd_);
-        }
-        stats_.pageLoadTimeNs.increment(readUs * 1'000);
-      }
+      readDictionaryBytes(data, numParquetBytes);
       if (type_->type()->isShortDecimal()) {
         // Parquet decimal values have a fixed typeLength_ and are in big-endian
         // layout.
@@ -965,6 +984,42 @@ void PageReader::makeDecoder() {
         break;
       }
       [[fallthrough]];
+    case Encoding::BYTE_STREAM_SPLIT: {
+      // Decode the split byte streams into a flat buffer, then use
+      // DirectDecoder to serve values through the standard visitor path.
+      // Use a separate buffer since pageData_ may point into
+      // decompressedData_ (for compressed pages).
+      const auto typeBytes = parquetTypeBytes(parquetType);
+      VELOX_CHECK_EQ(
+          encodedDataSize_ % typeBytes,
+          0,
+          "BYTE_STREAM_SPLIT page size {} is not a multiple of the type size {}",
+          encodedDataSize_,
+          typeBytes);
+      auto numValues = encodedDataSize_ / typeBytes;
+      dwio::common::ensureCapacity<char>(
+          bssDecodedData_, encodedDataSize_, &pool_);
+      auto* dest =
+          reinterpret_cast<uint8_t*>(bssDecodedData_->asMutable<char>());
+      auto* src = reinterpret_cast<const uint8_t*>(pageData_);
+      switch (parquetType) {
+        case thrift::Type::FLOAT:
+          decodeByteStreamSplit<4>(src, numValues, dest);
+          break;
+        case thrift::Type::DOUBLE:
+          decodeByteStreamSplit<8>(src, numValues, dest);
+          break;
+        default:
+          VELOX_UNSUPPORTED(
+              "BYTE_STREAM_SPLIT encoding only supports FLOAT and DOUBLE");
+      }
+      directDecoder_ = std::make_unique<dwio::common::DirectDecoder<true>>(
+          std::make_unique<dwio::common::SeekableArrayInputStream>(
+              bssDecodedData_->as<char>(), encodedDataSize_),
+          false,
+          typeBytes);
+      break;
+    }
     case Encoding::DELTA_LENGTH_BYTE_ARRAY:
       if (parquetType == thrift::Type::BYTE_ARRAY) {
         if (!deltaLengthByteArrDecoder_) {

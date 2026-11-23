@@ -22,11 +22,15 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string_view>
 
 namespace facebook::velox {
 namespace config {
 class ConfigBase;
+}
+namespace io {
+class IoStatistics;
 }
 class IoStats;
 class ReadFile;
@@ -77,6 +81,12 @@ struct FileOptions {
       std::nullopt};
 
   IoStats* stats{nullptr};
+
+  /// Per-operation counters, keyed by operation name, unlike 'stats' above
+  /// which has no operation dimension. Non-owning: a file system may retain
+  /// this and record into it on every read, so it must outlive any file opened
+  /// with these options.
+  io::IoStatistics* ioStatistics{nullptr};
 
   /// A raw string that client can encode as anything they want to describe the
   /// file. For example, extraFileInfo can contain serialized file descriptors
@@ -136,6 +146,14 @@ class FileSystem {
   virtual std::unique_ptr<ReadFile> openFileForRead(
       std::string_view path,
       const FileOptions& options = {}) = 0;
+
+  /// Opaque blob for 'path', returned to openFileForRead() via
+  /// FileOptions::extraFileInfo. nullopt if unsupported; stale blobs throw.
+  virtual std::optional<std::string> serializeExtraFileInfo(
+      std::string_view /*path*/,
+      const FileOptions& /*options*/ = {}) {
+    return std::nullopt;
+  }
 
   /// Returns a WriteFile handle for a given file path
   virtual std::unique_ptr<WriteFile> openFileForWrite(

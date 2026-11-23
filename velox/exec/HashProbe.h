@@ -28,13 +28,6 @@ namespace facebook::velox::exec {
 // Probes a hash table made by HashBuild.
 class HashProbe : public Operator {
  public:
-  /// Runtime stat keys for hash probe.
-  /// Size of the bloom filter in bytes.
-  static constexpr std::string_view kBloomFilterSize = "bloomFilterSize";
-  /// Number of rows bypassed via dynamic filter replacement.
-  static constexpr std::string_view kReplacedWithDynamicFilterRows =
-      "replacedWithDynamicFilterRows";
-
   HashProbe(
       int32_t operatorId,
       DriverCtx* driverCtx,
@@ -139,6 +132,10 @@ class HashProbe : public Operator {
 
   void pushdownDynamicFilters();
 
+  // Uses build-side Bloom filters to remove rows from activeRows_ when a
+  // miss can be handled by the join's existing unmatched-row path.
+  void applyBloomFilterForJoinProbe();
+
   // Invoked to wait for the hash table to be built by the hash build operators
   // asynchronously. The function also sets up the internal state for
   // potentially spilling input or reading spilled input or recursively spill
@@ -213,12 +210,6 @@ class HashProbe : public Operator {
   SelectivityVector evalFilterForNullAwareJoin(
       vector_size_t numRows,
       bool filterPropagateNulls);
-
-  // Prepares the hashers for probing with null keys.
-  // Initializes `nullKeyProbeHashers_` if empty, ensuring it has exactly one
-  // hasher. If the table's hash mode is `kHash`, creates and decodes a null
-  // input vector.
-  void prepareNullKeyProbeHashers();
 
   // Combine the selected probe-side rows with all or null-join-key (depending
   // on the iterator) build side rows and evaluate the filter.  Mark probe rows
@@ -385,16 +376,11 @@ class HashProbe : public Operator {
       const std::vector<vector_size_t>& varColumnsStats,
       uint64_t totalFixedColumnsBytes);
 
-  // Returns the aggregated column stats at 'columnIndex' of 'table_'. Returns
-  // nullopt if the column stats is not available.
-  //
-  // NOTE: The column stats is collected by default for hash join table but it
-  // could be invalidated in case of spilling. But we should never expect usage
-  // of an invalidated table as we always spill the entire table.
-  std::optional<RowColumn::Stats> columnStats(int32_t columnIndex) const;
-
   // TODO: Define batch size as bytes based on RowContainer row sizes.
   const vector_size_t outputBatchSize_;
+
+  // QueryConfig is fixed for the life of the query.
+  const uint64_t preferredOutputBatchBytes_;
 
   const std::shared_ptr<const core::HashJoinNode> joinNode_;
 
@@ -448,7 +434,12 @@ class HashProbe : public Operator {
   // Channel of probe keys in 'input_'.
   std::vector<column_index_t> keyChannels_;
 
-  folly::F14FastSet<column_index_t> dynamicFiltersProducedOnChannels_;
+  // Build-side Bloom filter bypass configuration, state, and metrics.
+  const int32_t bypassBloomFilterMinRows_;
+  const int32_t bypassBloomFilterMinPct_;
+  bool bypassBloomFilter_;
+  uint64_t bloomFilterSampledRows_{0};
+  uint64_t bloomFilterSampleAcceptedRows_{0};
 
   // True if the join can become a no-op starting with the next batch of input.
   bool canReplaceWithDynamicFilter_{false};
@@ -763,12 +754,6 @@ class HashProbe : public Operator {
 
   // The spilled probe partitions remaining to restore.
   SpillPartitionSet inputSpillPartitionSet_;
-
-  // VectorHashers used for listing rows with null keys.
-  std::vector<std::unique_ptr<VectorHasher>> nullKeyProbeHashers_;
-
-  // Input vector used for listing rows with null keys.
-  VectorPtr nullKeyProbeInput_;
 
   // The index of the row container in the current hash table that this hash
   // probe oprator is processing to output build-side rows.

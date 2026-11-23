@@ -30,13 +30,13 @@ by Velox. See details on bundling below.
 | xsimd             | 10.0.0          | Yes      ||
 | re2               | 2024-07-02      | Yes      ||
 | fmt               | 11.2.0          | Yes      | Used API must be fmt 9 compatible |
-| simdjson          | 4.1.0           | Yes      ||
-| faiss             | 1.11.0          | Yes      ||
-| folly             | v2026.01.05.00  | Yes      ||
-| fizz              | v2026.01.05.00  | No       ||
-| wangle            | v2026.01.05.00  | No       ||
-| mvfst             | v2026.01.05.00  | No       ||
-| fbthrift          | v2026.01.05.00  | No       ||
+| simdjson          | 4.3.0           | Yes      ||
+| faiss             | 1.12.0          | Yes      ||
+| folly             | v2026.09.07.00  | Yes      ||
+| fizz              | v2026.09.07.00  | No       ||
+| wangle            | v2026.09.07.00  | No       ||
+| mvfst             | v2026.09.07.00  | No       ||
+| fbthrift          | v2026.09.07.00  | No       ||
 | libstemmer        | 2.2.0           | Yes      ||
 | DuckDB (testing)  | 0.8.1           | Yes      ||
 | arrow             | 15.0.0          | Yes      ||
@@ -44,6 +44,9 @@ by Velox. See details on bundling below.
 | s2geometry        | 0.12.0          | Yes      ||
 | fast_float        | v8.0.2          | Yes      ||
 | xxhash            | default         | No       ||
+| libxml2           | 2.13.5          | Yes      | Enabled for Spark |
+| flatbuffers       | 24.3.25         | Yes      | Only with `VELOX_ENABLE_NIMBLE=ON`. `flatc` is required, not just the runtime. Held at the version cuDF expects |
+| openzl            | 6b48fa48        | Yes      | Only with `VELOX_ENABLE_NIMBLE=ON`. Pinned to a commit; no suitable release tag |
 
 # Bundled Dependency Management
 This module provides a dependency management system that allows us to automatically fetch and build dependencies from source if needed.
@@ -76,6 +79,38 @@ Ideally all patches should be upstream when possible and removed once merged.
 - Update the template with the correct package name and download url/repo etc., set any necessary package options
 - Try to build and make necessary changes
   - Repeat until success :D (Feel free to raise and issue for review & support)
+
+## Updating the version of a dependency
+
+Change all of these in the same PR:
+
+- The version and the SHA-256 checksum in `<package>.cmake`.
+- The minimum version in `velox_resolve_dependency(<package> <version>)` in `CMakeLists.txt`.
+- The version in `scripts/setup-versions.sh`, which the setup scripts and the CI images use.
+- The minimum version in the table above.
+- Any patches for the dependency (see Patches above).
+
+CI builds use the dependencies installed in the CI images
+(`VELOX_DEPENDENCY_SOURCE=SYSTEM`). Raising a minimum version above what the
+images have makes every PR fail at CMake configure until the images are rebuilt
+with the new version and published. A change to `scripts/setup-versions.sh`
+rebuilds the images only after it merges, and a multi-architecture image is
+published only when all its architectures build. So either:
+
+- Update `scripts/setup-versions.sh` in one PR, and raise the minimum version in
+  a follow-up PR after the new images are published.
+- Or, in the same PR, set `<package>_SOURCE: BUNDLED` for the CI builds that use
+  the images, and remove it in a follow-up PR after the new images are
+  published.
+
+Raising a minimum version also affects builds that use dependencies installed
+by other means, such as Homebrew on macOS or downstream projects. With
+`<package>_SOURCE=AUTO`, an older installed version makes Velox build the
+dependency from source; with `SYSTEM`, the build fails. Describe the effect in
+the PR.
+
+Name both versions in the PR title, for example `build: Update simdjson to
+4.3.0 (from 4.1.0)`, and explain in the description why the update is needed.
 
 ## Specify a custom url/file path for an offline build
 

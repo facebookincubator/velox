@@ -20,6 +20,7 @@
 
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/HashAggregation.h"
+#include "velox/exec/HashAggregationStatNames.h"
 
 #include <cudf/concatenate.hpp>
 #include <cudf/detail/utilities/stream_pool.hpp>
@@ -77,14 +78,12 @@ void CudfDistinct::computePartialDistinctStreaming(CudfVectorPtr tbl) {
     // We need to join the input table stream on the partial output stream to
     // make sure the input table is available when we do the concat.
     cudf::detail::join_streams(
-        std::vector<rmm::cuda_stream_view>{inputTableStream},
-        partialOutputStream);
+        std::vector<cuda::stream_ref>{inputTableStream}, partialOutputStream);
 
     auto concatenatedTable =
         cudf::concatenate(tablesToConcat, partialOutputStream, get_output_mr());
     cudf::detail::join_streams(
-        std::vector<rmm::cuda_stream_view>{partialOutputStream},
-        inputTableStream);
+        std::vector<cuda::stream_ref>{partialOutputStream}, inputTableStream);
 
     // Do a distinct on the concatenated results.
     // Keep concatenatedTable alive while we use its view.
@@ -122,7 +121,7 @@ void CudfDistinct::doAddInput(RowVectorPtr input) {
 CudfVectorPtr CudfDistinct::getDistinctKeys(
     cudf::table_view tableView,
     std::vector<column_index_t> const& groupByKeys,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   auto result = cudf::distinct(
       tableView.select(groupByKeys.begin(), groupByKeys.end()),
       {groupingKeyOutputChannels_.begin(), groupingKeyOutputChannels_.end()},
@@ -150,12 +149,13 @@ CudfVectorPtr CudfDistinct::releaseAndResetBufferedResult() {
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
-        std::string(exec::HashAggregation::kFlushRowCount),
+        std::string(exec::HashAggregationStatNames::kFlushRowCount),
         RuntimeCounter(numOutputRows));
     lockedStats->addRuntimeStat(
-        std::string(exec::HashAggregation::kFlushTimes), RuntimeCounter(1));
+        std::string(exec::HashAggregationStatNames::kFlushTimes),
+        RuntimeCounter(1));
     lockedStats->addRuntimeStat(
-        std::string(exec::HashAggregation::kPartialAggregationPct),
+        std::string(exec::HashAggregationStatNames::kPartialAggregationPct),
         RuntimeCounter(aggregationPct));
   }
 
@@ -203,7 +203,7 @@ RowVectorPtr CudfDistinct::doGetOutput() {
       std::exchange(inputs_, {}), inputType_, stream, get_output_mr());
 
   // Release input data after synchronizing.
-  stream.synchronize();
+  stream.sync();
   inputs_.clear();
 
   if (noMoreInput_) {
@@ -220,6 +220,12 @@ void CudfDistinct::doNoMoreInput() {
   if (isPartialOutput_ && inputs_.empty()) {
     finished_ = true;
   }
+}
+
+void CudfDistinct::doClose() {
+  inputs_.clear();
+  bufferedResult_.reset();
+  Operator::close();
 }
 
 bool CudfDistinct::isFinished() {

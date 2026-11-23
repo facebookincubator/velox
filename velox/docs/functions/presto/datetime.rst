@@ -39,6 +39,9 @@ Date and Time Operators
    * - ``/``
      - ``interval '15' second / 1.5``
      - ``0 00:00:10.000``
+   * - ``-``
+     - ``- interval '1' day``
+     - ``-1 00:00:00.000``
 
 .. function:: plus(x, y) -> [same as x]
    :noindex:
@@ -84,8 +87,93 @@ Date and Time Operators
     ``interval day to second`` is not ``0``, or when the division overflows in
     negiative.
 
+.. function:: negate(x) -> [same as x]
+   :noindex:
+
+    Returns the negation of ``x``, an ``interval day to second`` or an
+    ``interval year to month``. Fails when ``x`` is
+    ``-106751991167 07:12:55.808`` for ``interval day to second`` or
+    ``-178956970-8`` for ``interval year to month``, which have no positive
+    counterparts.
+
 Date and Time Functions
 -----------------------
+
+Timestamp With Time Zone Semantics
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Use session-zone semantics for ``TIMESTAMP WITH TIME ZONE``. Equal values
+represent the same instant. Rendering them in the session time zone makes
+deterministic functions return equal results::
+
+    SELECT TIMESTAMP '2024-01-01 00:00 UTC' =
+        TIMESTAMP '2023-12-31 16:00 America/Los_Angeles';  -- true
+    SELECT hour(TIMESTAMP '2024-01-01 00:00 UTC');                  -- legacy: 0
+    SELECT hour(TIMESTAMP '2023-12-31 16:00 America/Los_Angeles');  -- legacy: 16
+
+With session-zone semantics, both ``hour`` calls return the hour in
+:doc:`session_timezone <../../configs>`.
+
+Enable session-zone semantics with
+:doc:`ignore_time_zone_label <../../configs>` and
+register date-time functions with ``ignoreTimeZoneLabel`` set to true. The
+two settings apply the same semantic choice at different stages. The query
+configuration controls how deterministic functions render zoned timestamps.
+The registration argument selects the ``at_timezone`` overloads that return
+``TIMESTAMP``. Functions that inspect the stored zone label, such as
+``timezone_hour`` and ``timezone_minute``, are exceptions.
+
+Use the false settings only to preserve existing behavior. Functions then
+render each value using its stored zone label, and ``at_timezone`` returns
+``TIMESTAMP WITH TIME ZONE``.
+
+For values exactly representable in both types, implicit coercion must
+preserve a function's result. If a value of type ``T`` coerces to type ``U``,
+calling a ``T`` overload produces the same value as casting to ``U`` and
+calling the ``U`` overload. ``TIMESTAMP WITH TIME ZONE`` has millisecond
+precision, so coercing a higher-precision ``TIMESTAMP`` loses sub-millisecond
+precision.
+
+When :doc:`adjust_timestamp_to_session_timezone <../../configs>` is false,
+``TIMESTAMP`` stores a wall clock. Existing ``to_unixtime`` and field
+extraction functions can violate the coercion invariant for these values,
+including wall clocks skipped by daylight-saving transitions.
+
+.. function:: at_timezone(value, zone)
+
+    Renders ``value`` in ``zone``. Date-time function registration selects the
+    result type for timestamp operands:
+
+    .. list-table::
+       :header-rows: 1
+       :widths: 34 33 33
+
+       * - Operand
+         - ``ignoreTimeZoneLabel = false``
+         - ``ignoreTimeZoneLabel = true``
+       * - ``TIMESTAMP WITH TIME ZONE``
+         - ``TIMESTAMP WITH TIME ZONE`` with the target-zone label
+         - ``TIMESTAMP`` containing the target-zone wall clock
+       * - ``TIMESTAMP``
+         - ``TIMESTAMP WITH TIME ZONE`` with the target-zone label
+         - ``TIMESTAMP`` containing the target-zone wall clock
+       * - ``TIME WITH TIME ZONE``
+         - ``TIME WITH TIME ZONE`` with the target offset
+         - ``TIME WITH TIME ZONE`` with the target offset
+
+    For ``TIMESTAMP WITH TIME ZONE``, only the instant is used; the stored zone
+    label is ignored. With :doc:`adjust_timestamp_to_session_timezone
+    <../../configs>` enabled, ``TIMESTAMP`` already represents a UTC instant.
+    Otherwise, ``TIMESTAMP`` is interpreted as a wall clock in
+    :doc:`session_timezone <../../configs>`.
+
+    When the result is ``TIMESTAMP`` and
+    ``adjust_timestamp_to_session_timezone`` is enabled, it is encoded to read
+    as the target-zone wall clock in the session zone. Times skipped by a
+    daylight-saving transition move forward, and repeated times use the earlier
+    instant.
+
+    For ``TIME WITH TIME ZONE``, ``zone`` must be a ``+HH:mm`` offset.
 
 .. function:: current_date() -> date
 
@@ -150,7 +238,9 @@ Date and Time Functions
     Returns the UNIX timestamp ``unixtime`` as a timestamp.  If the
     :doc:`adjust_timestamp_to_session_timezone <../../configs>` property is set
     to true, then the timestamp is adjusted to the time zone specified in
-    :doc:`session_timezone <../../configs>`.
+    :doc:`session_timezone <../../configs>`. Values above or below the range
+    representable by a timestamp are clamped to the maximum or minimum
+    timestamp, respectively.
 
 .. function:: from_unixtime(unixtime, string) -> timestamp with time zone
     :noindex:
@@ -528,10 +618,12 @@ picked to be consistent with Presto.
 list of supported timezones follow the definition `here
 <https://en.wikipedia.org/wiki/List_of_tz_database_time_zones>`_.
 
-**Timezone Conversion**: The ``AT TIME ZONE`` operator sets the time zone of a timestamp: ::
+**Timezone Conversion**: The ``AT TIME ZONE`` operator renders an instant in a
+target time zone. Under session-zone semantics: ::
 
         SELECT timestamp '2012-10-31 01:00 UTC';
         -- 2012-10-31 01:00:00.000 UTC
 
-        SELECT timestamp '2012-10-31 01:00 UTC' AT TIME ZONE 'America/Los_Angeles';
-        -- 2012-10-30 18:00:00.000 America/Los_Angeles
+        SELECT timestamp '2012-10-31 01:00 UTC'
+            AT TIME ZONE 'America/Los_Angeles';
+        -- 2012-10-30 18:00:00.000

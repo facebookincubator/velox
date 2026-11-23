@@ -1,0 +1,342 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include <folly/Benchmark.h>
+#include <folly/Random.h>
+#include <folly/init/Init.h>
+
+#include <cstring>
+
+#include "velox/exec/HashTable.h"
+#include "velox/exec/VectorHasher.h"
+#include "velox/vector/FlatVector.h"
+
+DEFINE_int32(batch_size, 1'024, "Number of rows per input batch");
+
+using namespace facebook::velox;
+using namespace facebook::velox::exec;
+
+namespace {
+
+// Key layouts that steer the adaptive hash table into a specific hash mode.
+enum class KeyShape {
+  // Two BIGINT keys with small ranges. Resolves to kNormalizedKey.
+  kTwoBigints,
+  // One BIGINT key with random 64-bit values. Resolves to kHash.
+  kRandomBigint,
+  // One BIGINT key and one 16-character VARCHAR key with at most 32K distinct
+  // strings. Both keys fit VectorHasher's value ID limits, so this resolves to
+  // kNormalizedKey.
+  kBigintVarcharValueIds,
+  // One BIGINT key and one unique 16-character VARCHAR key. The distinct
+  // strings overflow VectorHasher's value ID limits, so this resolves to kHash
+  // and probes compare non-inlined strings.
+  kBigintVarchar,
+  // Eight BIGINT keys with at most 20K distinct values each. The value ranges
+  // multiply past 64 bits, so this resolves to kHash even for a table of a few
+  // thousand groups, which a single BIGINT key never does.
+  kEightBigints,
+};
+
+// Measures HashTable::groupProbe() with group-by tables from a few thousand
+// groups, which fit in the core's L2, to tables larger than the CPU cache. The
+// build case inserts every group once in random order, so nearly every probe
+// row creates a new group. The probe case re-probes a built table in a
+// different random order, so every probe row hits an existing group. With
+// accumulators, every probe row also updates its group's accumulator after the
+// probe, as an aggregate function does, so the group row is read past the key.
+class GroupProbeBenchmark {
+ public:
+  // 'accumulatorBytes' is the width of the one fixed-size accumulator in a
+  // group row, 0 for a table without accumulators.
+  GroupProbeBenchmark(
+      KeyShape shape,
+      int64_t numGroups,
+      int32_t accumulatorBytes)
+      : shape_(shape),
+        numGroups_(numGroups),
+        accumulatorBytes_(accumulatorBytes),
+        pool_(memory::memoryManager()->addLeafPool()) {}
+
+  // Returns the number of probed rows.
+  uint64_t runBuild() {
+    folly::BenchmarkSuspender suspender;
+    auto buildBatches = makeBatches(1);
+    auto table = makeTable();
+    HashLookup lookup(table->hashers(), pool_.get());
+    suspender.dismiss();
+    probe(*table, lookup, buildBatches);
+    suspender.rehire();
+    checkNumDistinct(*table);
+    return numGroups_;
+  }
+
+  // Returns the number of probed rows.
+  uint64_t runProbe() {
+    folly::BenchmarkSuspender suspender;
+    auto buildBatches = makeBatches(1);
+    auto probeBatches = makeBatches(2);
+    auto table = makeTable();
+    HashLookup lookup(table->hashers(), pool_.get());
+    probe(*table, lookup, buildBatches);
+    suspender.dismiss();
+    probe(*table, lookup, probeBatches);
+    suspender.rehire();
+    checkNumDistinct(*table);
+    return numGroups_;
+  }
+
+ private:
+  std::vector<TypePtr> keyTypes() const {
+    switch (shape_) {
+      case KeyShape::kTwoBigints:
+        return {BIGINT(), BIGINT()};
+      case KeyShape::kRandomBigint:
+        return {BIGINT()};
+      case KeyShape::kBigintVarcharValueIds:
+      case KeyShape::kBigintVarchar:
+        return {BIGINT(), VARCHAR()};
+      case KeyShape::kEightBigints:
+        return std::vector<TypePtr>(8, BIGINT());
+    }
+    VELOX_UNREACHABLE();
+  }
+
+  std::unique_ptr<BaseHashTable> makeTable() {
+    std::vector<std::unique_ptr<VectorHasher>> hashers;
+    const auto types = keyTypes();
+    for (auto channel = 0; channel < types.size(); ++channel) {
+      hashers.push_back(
+          std::make_unique<VectorHasher>(types[channel], channel));
+    }
+    std::vector<Accumulator> accumulators;
+    if (accumulatorBytes_ > 0) {
+      accumulators.emplace_back(
+          true, accumulatorBytes_, false, 8, VARBINARY(), nullptr, nullptr);
+    }
+    return HashTable<false>::createForAggregation(
+        std::move(hashers), accumulators, pool_.get());
+  }
+
+  // Makes batches holding each of the 'numGroups_' keys once, in an order
+  // determined by 'seed'.
+  std::vector<RowVectorPtr> makeBatches(uint32_t seed) {
+    std::vector<int64_t> groupIds(numGroups_);
+    std::iota(groupIds.begin(), groupIds.end(), 0);
+    folly::Random::DefaultGenerator rng(seed);
+    std::shuffle(groupIds.begin(), groupIds.end(), rng);
+
+    const auto types = keyTypes();
+    const auto rowType = ROW(std::vector<TypePtr>(types));
+    std::vector<RowVectorPtr> batches;
+    for (int64_t start = 0; start < numGroups_; start += FLAGS_batch_size) {
+      const auto numRows =
+          std::min<int64_t>(FLAGS_batch_size, numGroups_ - start);
+      std::vector<VectorPtr> children;
+      for (const auto& type : types) {
+        children.push_back(BaseVector::create(type, numRows, pool_.get()));
+      }
+      for (auto row = 0; row < numRows; ++row) {
+        setKey(children, row, groupIds[start + row]);
+      }
+      batches.push_back(
+          std::make_shared<RowVector>(
+              pool_.get(), rowType, nullptr, numRows, std::move(children)));
+    }
+    return batches;
+  }
+
+  void setKey(std::vector<VectorPtr>& children, vector_size_t row, int64_t id) {
+    auto* first = children[0]->asFlatVector<int64_t>();
+    switch (shape_) {
+      case KeyShape::kTwoBigints:
+        first->set(row, id / 1'000);
+        children[1]->asFlatVector<int64_t>()->set(row, id % 1'000);
+        return;
+      case KeyShape::kRandomBigint:
+        // A bijective mix spreads keys over the full 64-bit range.
+        first->set(row, static_cast<int64_t>(folly::hash::twang_mix64(id)));
+        return;
+      case KeyShape::kBigintVarcharValueIds: {
+        first->set(row, id % 1'000);
+        const auto name = fmt::format("item{:012d}", id / 1'000);
+        children[1]->asFlatVector<StringView>()->set(row, StringView(name));
+        return;
+      }
+      case KeyShape::kBigintVarchar: {
+        first->set(row, id % 1'000);
+        const auto name = fmt::format("item{:012d}", id);
+        children[1]->asFlatVector<StringView>()->set(row, StringView(name));
+        return;
+      }
+      case KeyShape::kEightBigints:
+        for (auto channel = 0; channel < children.size(); ++channel) {
+          children[channel]->asFlatVector<int64_t>()->set(
+              row,
+              folly::hash::twang_mix64(id * children.size() + channel) %
+                  20'000);
+        }
+        return;
+    }
+  }
+
+  void probe(
+      BaseHashTable& table,
+      HashLookup& lookup,
+      const std::vector<RowVectorPtr>& batches) {
+    SelectivityVector rows;
+    const auto accumulatorOffset = accumulatorBytes_ > 0
+        ? table.rows()->columnAt(keyTypes().size()).offset()
+        : 0;
+    for (const auto& batch : batches) {
+      rows.resize(batch->size());
+      rows.setAll();
+      table.prepareForGroupProbe(
+          lookup, batch, rows, BaseHashTable::kNoSpillInputStartPartitionBit);
+      table.groupProbe(lookup, BaseHashTable::kNoSpillInputStartPartitionBit);
+      if (accumulatorBytes_ > 0) {
+        accumulate(lookup, accumulatorOffset);
+      }
+    }
+  }
+
+  void accumulate(const HashLookup& lookup, int32_t accumulatorOffset) const {
+    // RowContainer leaves the accumulator of a new group uninitialized, as
+    // Aggregate::initializeNewGroups() would set it.
+    for (const auto row : lookup.newGroups) {
+      ::memset(lookup.hits[row] + accumulatorOffset, 0, accumulatorBytes_);
+    }
+    const auto lastByte = accumulatorBytes_ - 1;
+    for (const auto row : lookup.rows) {
+      char* accumulator = lookup.hits[row] + accumulatorOffset;
+      // Touch the accumulator's tail to model an aggregate accessing state
+      // beyond the key's cache line.
+      folly::doNotOptimizeAway(accumulator[lastByte]);
+      *reinterpret_cast<uint64_t*>(accumulator) += work(row);
+      accumulator[lastByte] = 1;
+    }
+  }
+
+  // Stands in for the out-of-line aggregate function call between the probe and
+  // the accumulator update.
+  FOLLY_NOINLINE static uint64_t work(uint64_t seed) {
+    uint64_t a = seed;
+    uint64_t b = seed ^ 0x9e3779b97f4a7c15ull;
+    for (auto i = 0; i < 16; ++i) {
+      a += b;
+      b ^= a >> 3;
+    }
+    uint64_t c = seed | 1;
+    for (auto i = 0; i < 4; ++i) {
+      c *= c;
+    }
+    return a ^ b ^ c;
+  }
+
+  BaseHashTable::HashMode expectedHashMode() const {
+    switch (shape_) {
+      case KeyShape::kTwoBigints:
+      case KeyShape::kBigintVarcharValueIds:
+        return BaseHashTable::HashMode::kNormalizedKey;
+      case KeyShape::kRandomBigint:
+      case KeyShape::kBigintVarchar:
+      case KeyShape::kEightBigints:
+        return BaseHashTable::HashMode::kHash;
+    }
+    VELOX_UNREACHABLE();
+  }
+
+  void checkNumDistinct(BaseHashTable& table) const {
+    VELOX_CHECK_EQ(table.numDistinct(), numGroups_, "{}", table.toString());
+    VELOX_CHECK_EQ(
+        BaseHashTable::modeString(table.hashMode()),
+        BaseHashTable::modeString(expectedHashMode()));
+  }
+
+  const KeyShape shape_;
+  const int64_t numGroups_;
+  const int32_t accumulatorBytes_;
+  const std::shared_ptr<memory::MemoryPool> pool_;
+};
+
+// 'numGroupsList' lists the table sizes to run. 'accumulatorBytes' lists the
+// accumulator widths to run, 0 meaning no accumulator.
+void addBenchmarks(
+    std::string_view name,
+    KeyShape shape,
+    const std::vector<int64_t>& numGroupsList,
+    const std::vector<int32_t>& accumulatorBytes) {
+  for (const auto width : accumulatorBytes) {
+    for (const auto numGroups : numGroupsList) {
+      // Sizes of a million groups and more keep the 'M' suffix of the first
+      // cases.
+      auto suffix = numGroups % 1'000'000 == 0
+          ? fmt::format("{}_{}M", name, numGroups / 1'000'000)
+          : fmt::format("{}_{}K", name, numGroups / 1'000);
+      if (width > 0) {
+        suffix += fmt::format("_acc{}", width);
+      }
+      folly::addBenchmark(
+          __FILE__, "build_" + suffix, [shape, numGroups, width]() {
+            return GroupProbeBenchmark(shape, numGroups, width).runBuild();
+          });
+      folly::addBenchmark(
+          __FILE__, "probe_" + suffix, [shape, numGroups, width]() {
+            return GroupProbeBenchmark(shape, numGroups, width).runProbe();
+          });
+    }
+  }
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+  folly::Init init{&argc, &argv};
+  memory::MemoryManager::initialize(memory::MemoryManager::Options{});
+  // The prefetch of the accumulators applies to rows of 64 bytes or more.
+  // Accumulators of 8, 48, 56, 64, 120 and 248 bytes make rows of 24, 64, 72,
+  // 80, 136 and 264 bytes with one BIGINT key, and 32, 72, 80, 88, 144 and 272
+  // bytes with two. Eight BIGINT keys take 64 bytes, so those rows start at
+  // 80 bytes.
+  const std::vector<int32_t> accumulatorBytes{0, 8, 48, 56, 64, 120, 248};
+  addBenchmarks(
+      "normalizedKey",
+      KeyShape::kTwoBigints,
+      {1'000'000, 8'000'000, 32'000'000},
+      accumulatorBytes);
+  addBenchmarks(
+      "hashBigint",
+      KeyShape::kRandomBigint,
+      {200'000, 400'000, 1'000'000, 8'000'000, 32'000'000},
+      accumulatorBytes);
+  addBenchmarks(
+      "hashEightBigints",
+      KeyShape::kEightBigints,
+      {10'000, 100'000},
+      {8, 48, 64});
+  addBenchmarks(
+      "normalizedKeyBigintVarchar",
+      KeyShape::kBigintVarcharValueIds,
+      {1'000'000, 8'000'000, 32'000'000},
+      {0});
+  addBenchmarks(
+      "hashBigintVarchar",
+      KeyShape::kBigintVarchar,
+      {1'000'000, 8'000'000, 32'000'000},
+      {0});
+  folly::runBenchmarks();
+  return 0;
+}

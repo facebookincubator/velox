@@ -13,8 +13,8 @@
 # limitations under the License.
 
 # Generate Thrift library for LocalRunnerService early since velox_fuzzer_util
-# depends on it when VELOX_ENABLE_REMOTE_FUNCTIONS is enabled.
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+# depends on it when VELOX_ENABLE_LOCAL_RUNNER_SERVICE is enabled.
+if(VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
   include(FBThriftCppLibrary)
   add_fbthrift_cpp_library(
     local_runner_service_thrift
@@ -38,6 +38,7 @@ add_library(
   PrestoQueryRunnerToSqlPlanNodeVisitor.cpp
   FuzzerUtil.cpp
   PrestoSql.cpp
+  ScopedOOMInjector.cpp
 )
 velox_add_test_headers(
   velox_fuzzer_util
@@ -52,16 +53,16 @@ velox_add_test_headers(
   PrestoQueryRunnerToSqlPlanNodeVisitor.h
   PrestoSql.h
   ReferenceQueryRunner.h
+  ScopedOOMInjector.h
   VeloxQueryRunner.h
 )
 
-# TODO Add VeloxQueryRunner to velox_fuzzer_util to support in
-# ExpressionFuzzerTest. More information can be found here:
-# https://github.com/facebookincubator/velox/issues/15414
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+# VeloxQueryRunner requires LocalRunnerService thrift library
+if(VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
   target_sources(velox_fuzzer_util PRIVATE VeloxQueryRunner.cpp)
   target_link_libraries(velox_fuzzer_util local_runner_service_thrift)
   target_include_directories(velox_fuzzer_util PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+  target_compile_definitions(velox_fuzzer_util PUBLIC VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
 endif()
 
 target_link_libraries(
@@ -279,13 +280,14 @@ add_executable(velox_exchange_fuzzer ExchangeFuzzer.cpp)
 target_link_libraries(
   velox_exchange_fuzzer
   velox_exec_test_lib
+  velox_fuzzer_util
   velox_aggregates
   velox_vector_test_lib
   velox_vector_fuzzer
 )
 
 # LocalRunnerService Library
-if(VELOX_ENABLE_REMOTE_FUNCTIONS)
+if(VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
   add_library(velox_local_runner_service_lib LocalRunnerService.cpp)
   velox_add_test_headers(velox_local_runner_service_lib LocalRunnerService.h)
 

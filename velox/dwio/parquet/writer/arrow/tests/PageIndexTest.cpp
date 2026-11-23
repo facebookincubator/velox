@@ -153,7 +153,7 @@ TEST(PageIndex, determinePageIndexRangesInRowGroup) {
 /// Offsets in them. Then it validates if.
 /// PageIndexReader::DeterminePageIndexRangesInRowGroup() properly computes the.
 /// File range that contains the page index of selected columns.
-TEST(PageIndex, DeterminePageIndexRangesInRowGroupWithPartialColumnsSelected) {
+TEST(PageIndex, determinePageIndexRangesInRowGroupWithPartialColumnsSelected) {
   // No page index at all.
   validatePageIndexRange({{-1, -1, -1, -1}}, {0}, false, false, -1, -1, -1, -1);
   // Page index for single column chunk.
@@ -234,7 +234,7 @@ TEST(PageIndex, DeterminePageIndexRangesInRowGroupWithPartialColumnsSelected) {
 /// Offsets in them. Then it validates if.
 /// PageIndexReader::DeterminePageIndexRangesInRowGroup() properly detects if.
 /// Column index or offset index is missing.
-TEST(PageIndex, DeterminePageIndexRangesInRowGroupWithMissingPageIndex) {
+TEST(PageIndex, determinePageIndexRangesInRowGroupWithMissingPageIndex) {
   // No column index at all.
   validatePageIndexRange({{-1, -1, 15, 5}}, {}, false, true, -1, -1, 15, 5);
   // No offset index at all.
@@ -247,15 +247,21 @@ TEST(PageIndex, DeterminePageIndexRangesInRowGroupWithMissingPageIndex) {
       {{10, 5, -1, -1}, {15, 15, -1, -1}}, {}, true, false, 10, 20, -1, -1);
 }
 
-TEST(PageIndex, WriteOffsetIndex) {
+void testWriteOffsetIndex(bool writeSizeStats) {
   /// Create offset index via the OffsetIndexBuilder interface.
   auto Builder = OffsetIndexBuilder::make();
   const size_t numPages = 5;
   const std::vector<int64_t> offsets = {100, 200, 300, 400, 500};
   const std::vector<int32_t> pageSizes = {1024, 2048, 3072, 4096, 8192};
   const std::vector<int64_t> firstRowIndices = {0, 10000, 20000, 30000, 40000};
+  const std::vector<int64_t> unencodedByteArrayLengths = {
+      1111, 2222, 0, 3333, 4444};
   for (size_t i = 0; i < numPages; ++i) {
-    Builder->addPage(offsets[i], pageSizes[i], firstRowIndices[i]);
+    const auto unencodedByteArrayLength = writeSizeStats
+        ? std::make_optional(unencodedByteArrayLengths[i])
+        : std::nullopt;
+    Builder->addPage(
+        offsets[i], pageSizes[i], firstRowIndices[i], unencodedByteArrayLength);
   }
   const int64_t finalPosition = 4096;
   Builder->finish(finalPosition);
@@ -277,12 +283,55 @@ TEST(PageIndex, WriteOffsetIndex) {
   /// Verify the data of the offset index.
   for (const auto& offsetIndex : offsetIndexes) {
     ASSERT_EQ(numPages, offsetIndex->pageLocations().size());
+    if (writeSizeStats) {
+      ASSERT_EQ(numPages, offsetIndex->unencodedByteArrayDataBytes().size());
+    } else {
+      ASSERT_TRUE(offsetIndex->unencodedByteArrayDataBytes().empty());
+    }
     for (size_t i = 0; i < numPages; ++i) {
       const auto& pageLocation = offsetIndex->pageLocations().at(i);
       ASSERT_EQ(offsets[i] + finalPosition, pageLocation.offset);
       ASSERT_EQ(pageSizes[i], pageLocation.compressedPageSize);
       ASSERT_EQ(firstRowIndices[i], pageLocation.firstRowIndex);
+      if (writeSizeStats) {
+        ASSERT_EQ(
+            unencodedByteArrayLengths[i],
+            offsetIndex->unencodedByteArrayDataBytes()[i]);
+      }
     }
+  }
+}
+
+TEST(PageIndex, writeOffsetIndexWithoutSizeStats) {
+  testWriteOffsetIndex(/*writeSizeStats=*/false);
+}
+
+TEST(PageIndex, writeOffsetIndexWithSizeStats) {
+  testWriteOffsetIndex(/*writeSizeStats=*/true);
+}
+
+struct PageLevelHistogram {
+  std::vector<int64_t> defLevels;
+  std::vector<int64_t> repLevels;
+};
+
+std::unique_ptr<SizeStatistics> constructFakeSizeStatistics(
+    const ColumnDescriptor* descriptor,
+    const PageLevelHistogram& pageLevelHistogram) {
+  auto stats = SizeStatistics::make(descriptor);
+  stats->definitionLevelHistogram = pageLevelHistogram.defLevels;
+  stats->repetitionLevelHistogram = pageLevelHistogram.repLevels;
+  return stats;
+}
+
+void verifyPageLevelHistogram(
+    size_t pageId,
+    const std::vector<int64_t>& expectedPageLevels,
+    const std::vector<int64_t>& allPageLevels) {
+  const size_t maxLevel = expectedPageLevels.size() - 1;
+  const size_t offset = pageId * (maxLevel + 1);
+  for (size_t level = 0; level <= maxLevel; ++level) {
+    ASSERT_EQ(expectedPageLevels[level], allPageLevels[offset + level]);
   }
 }
 
@@ -290,12 +339,23 @@ void testWriteTypedColumnIndex(
     schema::NodePtr Node,
     const std::vector<EncodedStatistics>& pageStats,
     BoundaryOrder::type boundaryOrder,
-    bool hasNullCounts) {
-  auto descr = std::make_unique<ColumnDescriptor>(Node, 1, 0);
+    bool hasNullCounts,
+    int16_t maxDefinitionLevel = 1,
+    int16_t maxRepetitionLevel = 0,
+    const std::vector<PageLevelHistogram>& pageLevels = {}) {
+  const bool buildSizeStats = !pageLevels.empty();
+  if (buildSizeStats) {
+    ASSERT_EQ(pageLevels.size(), pageStats.size());
+  }
+  auto descr = std::make_unique<ColumnDescriptor>(
+      Node, maxDefinitionLevel, maxRepetitionLevel);
 
   auto Builder = ColumnIndexBuilder::make(descr.get());
-  for (const auto& stats : pageStats) {
-    Builder->addPage(stats);
+  for (size_t i = 0; i < pageStats.size(); ++i) {
+    auto sizeStats = buildSizeStats
+        ? constructFakeSizeStatistics(descr.get(), pageLevels[i])
+        : std::make_unique<SizeStatistics>();
+    Builder->addPage(pageStats[i], *sizeStats);
   }
   ASSERT_NO_THROW(Builder->finish());
 
@@ -319,6 +379,16 @@ void testWriteTypedColumnIndex(
     ASSERT_EQ(boundaryOrder, columnIndex->boundaryOrder());
     ASSERT_EQ(hasNullCounts, columnIndex->hasNullCounts());
     const size_t numPages = columnIndex->nullPages().size();
+    if (buildSizeStats) {
+      ASSERT_TRUE(columnIndex->hasDefinitionLevelHistograms());
+      ASSERT_TRUE(columnIndex->hasRepetitionLevelHistograms());
+      ASSERT_EQ(
+          numPages * (maxDefinitionLevel + 1),
+          columnIndex->definitionLevelHistograms().size());
+      ASSERT_EQ(
+          numPages * (maxRepetitionLevel + 1),
+          columnIndex->repetitionLevelHistograms().size());
+    }
     for (size_t i = 0; i < numPages; ++i) {
       ASSERT_EQ(pageStats[i].allNullValue, columnIndex->nullPages()[i]);
       ASSERT_EQ(pageStats[i].min(), columnIndex->encodedMinValues()[i]);
@@ -326,11 +396,21 @@ void testWriteTypedColumnIndex(
       if (hasNullCounts) {
         ASSERT_EQ(pageStats[i].nullCount, columnIndex->nullCounts()[i]);
       }
+      if (buildSizeStats) {
+        ASSERT_NO_FATAL_FAILURE(verifyPageLevelHistogram(
+            i,
+            pageLevels[i].defLevels,
+            columnIndex->definitionLevelHistograms()));
+        ASSERT_NO_FATAL_FAILURE(verifyPageLevelHistogram(
+            i,
+            pageLevels[i].repLevels,
+            columnIndex->repetitionLevelHistograms()));
+      }
     }
   }
 }
 
-TEST(PageIndex, WriteInt32ColumnIndex) {
+TEST(PageIndex, writeInt32ColumnIndex) {
   auto encode = [=](int32_t value) {
     return std::string(reinterpret_cast<const char*>(&value), sizeof(int32_t));
   };
@@ -345,7 +425,7 @@ TEST(PageIndex, WriteInt32ColumnIndex) {
       schema::int32("c1"), pageStats, BoundaryOrder::kAscending, true);
 }
 
-TEST(PageIndex, WriteInt64ColumnIndex) {
+TEST(PageIndex, writeInt64ColumnIndex) {
   auto encode = [=](int64_t value) {
     return std::string(reinterpret_cast<const char*>(&value), sizeof(int64_t));
   };
@@ -360,7 +440,34 @@ TEST(PageIndex, WriteInt64ColumnIndex) {
       schema::int64("c1"), pageStats, BoundaryOrder::kDescending, true);
 }
 
-TEST(PageIndex, WriteFloatColumnIndex) {
+TEST(PageIndex, writeInt64ColumnIndexWithSizeStats) {
+  auto encode = [=](int64_t value) {
+    return std::string(reinterpret_cast<const char*>(&value), sizeof(int64_t));
+  };
+
+  // Integer values in the descending order.
+  std::vector<EncodedStatistics> pageStats(3);
+  pageStats.at(0).setNullCount(4).setMin(encode(-1)).setMax(encode(-2));
+  pageStats.at(1).setNullCount(0).setMin(encode(-2)).setMax(encode(-3));
+  pageStats.at(2).setNullCount(4).setMin(encode(-3)).setMax(encode(-4));
+
+  // Page level histograms.
+  const std::vector<PageLevelHistogram> pageLevels = {
+      {{2, 4, 6, 8}, {10, 5, 5}},
+      {{1, 3, 5, 7}, {4, 8, 4}},
+      {{0, 2, 4, 6}, {3, 4, 5}},
+  };
+  testWriteTypedColumnIndex(
+      schema::int64("c1"),
+      pageStats,
+      BoundaryOrder::kDescending,
+      /*hasNullCounts=*/true,
+      /*maxDefinitionLevel=*/3,
+      /*maxRepetitionLevel=*/2,
+      pageLevels);
+}
+
+TEST(PageIndex, writeFloatColumnIndex) {
   auto encode = [=](float value) {
     return std::string(reinterpret_cast<const char*>(&value), sizeof(float));
   };
@@ -375,7 +482,7 @@ TEST(PageIndex, WriteFloatColumnIndex) {
       schema::floatType("c1"), pageStats, BoundaryOrder::kUnordered, true);
 }
 
-TEST(PageIndex, WriteDoubleColumnIndex) {
+TEST(PageIndex, writeDoubleColumnIndex) {
   auto encode = [=](double value) {
     return std::string(reinterpret_cast<const char*>(&value), sizeof(double));
   };
@@ -390,7 +497,7 @@ TEST(PageIndex, WriteDoubleColumnIndex) {
       schema::doubleType("c1"), pageStats, BoundaryOrder::kUnordered, false);
 }
 
-TEST(PageIndex, WriteByteArrayColumnIndex) {
+TEST(PageIndex, writeByteArrayColumnIndex) {
   // Byte array values with identical min/max.
   std::vector<EncodedStatistics> pageStats(3);
   pageStats.at(0).setMin("bar").setMax("foo");
@@ -401,7 +508,7 @@ TEST(PageIndex, WriteByteArrayColumnIndex) {
       schema::byteArray("c1"), pageStats, BoundaryOrder::kAscending, false);
 }
 
-TEST(PageIndex, WriteFLBAColumnIndex) {
+TEST(PageIndex, writeFLBAColumnIndex) {
   // FLBA values in the ascending order with some null pages.
   std::vector<EncodedStatistics> pageStats(5);
   pageStats.at(0).setMin("abc").setMax("ABC");
@@ -420,7 +527,7 @@ TEST(PageIndex, WriteFLBAColumnIndex) {
       std::move(Node), pageStats, BoundaryOrder::kAscending, false);
 }
 
-TEST(PageIndex, WriteColumnIndexWithAllNullPages) {
+TEST(PageIndex, writeColumnIndexWithAllNullPages) {
   // All values are null.
   std::vector<EncodedStatistics> pageStats(3);
   pageStats.at(0).setNullCount(100).allNullValue = true;
@@ -431,7 +538,7 @@ TEST(PageIndex, WriteColumnIndexWithAllNullPages) {
       schema::int32("c1"), pageStats, BoundaryOrder::kUnordered, true);
 }
 
-TEST(PageIndex, WriteColumnIndexWithInvalidNullCounts) {
+TEST(PageIndex, writeColumnIndexWithInvalidNullCounts) {
   auto encode = [=](int32_t value) {
     return std::string(reinterpret_cast<const char*>(&value), sizeof(int32_t));
   };
@@ -446,7 +553,7 @@ TEST(PageIndex, WriteColumnIndexWithInvalidNullCounts) {
       schema::int32("c1"), pageStats, BoundaryOrder::kAscending, false);
 }
 
-TEST(PageIndex, WriteColumnIndexWithCorruptedStats) {
+TEST(PageIndex, writeColumnIndexWithCorruptedStats) {
   auto encode = [=](int32_t value) {
     return std::string(reinterpret_cast<const char*>(&value), sizeof(int32_t));
   };
@@ -459,7 +566,7 @@ TEST(PageIndex, WriteColumnIndexWithCorruptedStats) {
   ColumnDescriptor descr(schema::int32("c1"), 1, 0);
   auto Builder = ColumnIndexBuilder::make(&descr);
   for (const auto& stats : pageStats) {
-    Builder->addPage(stats);
+    Builder->addPage(stats, {});
   }
   ASSERT_NO_THROW(Builder->finish());
   ASSERT_EQ(nullptr, Builder->build());
@@ -470,7 +577,7 @@ TEST(PageIndex, WriteColumnIndexWithCorruptedStats) {
   EXPECT_EQ(0, buffer->size());
 }
 
-TEST(PageIndex, TestPageIndexBuilderWithZeroRowGroup) {
+TEST(PageIndex, testPageIndexBuilderWithZeroRowGroup) {
   schema::NodeVector fields = {schema::int32("c1"), schema::byteArray("c2")};
   schema::NodePtr root =
       schema::GroupNode::make("schema", Repetition::kRepeated, fields);
@@ -512,14 +619,14 @@ class PageIndexBuilderTest : public ::testing::Test {
         if (static_cast<size_t>(column) < pageStats[rowGroup].size()) {
           auto ColumnIndexBuilder = Builder->getColumnIndexBuilder(column);
           ASSERT_NO_THROW(
-              ColumnIndexBuilder->addPage(pageStats[rowGroup][column]));
+              ColumnIndexBuilder->addPage(pageStats[rowGroup][column], {}));
           ASSERT_NO_THROW(ColumnIndexBuilder->finish());
         }
 
         if (static_cast<size_t>(column) < pageLocations[rowGroup].size()) {
           auto OffsetIndexBuilder = Builder->getOffsetIndexBuilder(column);
           ASSERT_NO_THROW(
-              OffsetIndexBuilder->addPage(pageLocations[rowGroup][column]));
+              OffsetIndexBuilder->addPage(pageLocations[rowGroup][column], {}));
           ASSERT_NO_THROW(OffsetIndexBuilder->finish(finalPosition));
         }
       }
@@ -605,7 +712,7 @@ class PageIndexBuilderTest : public ::testing::Test {
   PageIndexLocation pageIndexLocation_;
 };
 
-TEST_F(PageIndexBuilderTest, SingleRowGroup) {
+TEST_F(PageIndexBuilderTest, singleRowGroup) {
   schema::NodePtr root = schema::GroupNode::make(
       "schema",
       Repetition::kRepeated,
@@ -646,7 +753,7 @@ TEST_F(PageIndexBuilderTest, SingleRowGroup) {
   ASSERT_EQ(nullptr, readOffsetIndex(0, 2));
 }
 
-TEST_F(PageIndexBuilderTest, TwoRowGroups) {
+TEST_F(PageIndexBuilderTest, twoRowGroups) {
   schema::NodePtr root = schema::GroupNode::make(
       "schema",
       Repetition::kRepeated,

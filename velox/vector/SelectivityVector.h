@@ -196,6 +196,19 @@ class SelectivityVector {
     updateBounds();
   }
 
+  /// Returns the unselected rows within this vector's size.
+  SelectivityVector complement() const {
+    return complement(size_);
+  }
+
+  /// Returns the unselected rows within 'size'. Rows beyond this vector's size
+  /// are selected; rows beyond 'size' are excluded.
+  SelectivityVector complement(vector_size_t size) const {
+    SelectivityVector result(size);
+    result.deselect(*this);
+    return result;
+  }
+
   /**
    * Merges the valid vector of another SelectivityVector by !AND'ing them
    * together. This is used to support logical deletes where
@@ -299,6 +312,15 @@ class SelectivityVector {
       return;
     }
     end_ = bits::findLastBit(bits_.data(), begin_, size_) + 1;
+    allSelected_.reset();
+  }
+
+  /// Sets the active bounds [begin, end) directly instead of computing them
+  /// from the bitmap like updateBounds() does. The caller must guarantee that
+  /// all selected bits lie within [begin, end).
+  void setActiveBounds(vector_size_t begin, vector_size_t end) {
+    begin_ = begin;
+    end_ = end;
     allSelected_.reset();
   }
 

@@ -37,6 +37,12 @@ namespace facebook::velox::exec::test {
 /// LazyVector, can strand that lazy. Without such back-pressure the test cursor
 /// consumes every chunk instantly and the pipeline runs lock-step, so the
 /// reader never advances mid-drain and the bug is masked.
+///
+/// Also serves as a generic back-pressuring downstream: while holding a batch
+/// it refuses input, so the upstream operator sits behind a refusal window for
+/// 'delayCycles' driver passes. The no-row-loss tests in AggregationTest,
+/// RowNumberTest and StreamingAggregationTest use it to pin the end-to-end
+/// property that every input batch survives such a window.
 class BackpressureNode : public core::PlanNode {
  public:
   BackpressureNode(

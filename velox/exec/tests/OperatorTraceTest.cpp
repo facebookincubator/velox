@@ -14,14 +14,17 @@
  * limitations under the License.
  */
 
+#include <folly/ScopeGuard.h>
 #include <folly/init/Init.h>
 #include <folly/io/Cursor.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <memory>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/exec/OperatorTraceReader.h"
 #include "velox/exec/PartitionFunction.h"
@@ -130,7 +133,7 @@ TEST_F(OperatorTraceTest, emptyTrace) {
   std::string planNodeId;
   auto traceDirPath = TempDirectoryPath::create();
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .filter("a > 0")
                   .singleAggregation({"a"}, {"count(1)"})
                   .capturePlanNodeId(planNodeId)
@@ -275,16 +278,16 @@ TEST_F(OperatorTraceTest, traceMetadata) {
   }
 
   const auto outputDir = TempDirectoryPath::create();
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId traceNodeId;
   const auto planNode =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .values(rows, false)
           .project({"c0", "c1", "c2"})
           .hashJoin(
               {"c0"},
               {"u0"},
-              PlanBuilder(planNodeIdGenerator)
+              builder.newPlan()
                   .values(rows, true)
                   .singleAggregation({"c0", "c1"}, {"min(c2)"})
                   .project({"c0 AS u0", "c1 AS u1", "a0 AS u2"})
@@ -338,6 +341,336 @@ TEST_F(OperatorTraceTest, traceMetadata) {
   }
 }
 
+TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
+  const auto rowType = ROW({"c0", "c1"}, BIGINT());
+  const std::vector<RowVectorPtr> rows{vectorFuzzer_.fuzzRow(rowType, 2)};
+
+  const auto outputDir = TempDirectoryPath::create();
+  PlanBuilder builder;
+  core::PlanNodeId traceNodeId;
+  const auto planNode = builder.newPlan()
+                            .values(rows, false)
+                            .hashJoin(
+                                {"c0"},
+                                {"u0"},
+                                builder.newPlan()
+                                    .values(rows, true)
+                                    .project({"c0 AS u0", "c1 AS u1"})
+                                    .planNode(),
+                                "",
+                                {"c0", "c1"},
+                                core::JoinType::kInner)
+                            .capturePlanNodeId(traceNodeId)
+                            .planNode();
+
+  // A value distinctive enough that a substring search over the trace file
+  // cannot match it by accident.
+  const std::string secret{"mg-api-key-do-not-leak-3f8a1c"};
+  const std::string credentialKey{"test_credential_token"};
+  core::CredentialKeys keys;
+  std::unordered_map<std::string, std::string> queryConfigMap{
+      // Named by isCredentialConfigKey() rather than recorded by a write.
+      // Every name on that list is covered, so dropping one from it fails
+      // here.
+      {"cat_token", secret},
+      {"metagen_key", secret},
+      {"model_api_key", secret},
+      {"crypto_auth_tokens_metagen", secret},
+      {core::QueryConfig::kSpillEnabled, "true"},
+      {core::QueryConfig::kSpillNumPartitionBits, "17"},
+  };
+  keys.write(
+      queryConfigMap,
+      "",
+      credentialKey,
+      secret,
+      core::CredentialKeys::OnConflict::kReplace);
+
+  std::unordered_map<std::string, std::string> connectorConfigMap{
+      {"metagen_key", secret},
+      {"cKey1", "cVal1"},
+  };
+  keys.write(
+      connectorConfigMap,
+      "test_trace",
+      credentialKey,
+      secret,
+      core::CredentialKeys::OnConflict::kReplace);
+
+  const auto queryCtx = core::QueryCtx::Builder()
+                            .executor(executor_.get())
+                            .queryConfig(core::QueryConfig(queryConfigMap))
+                            .connectorConfigs(
+                                std::unordered_map<
+                                    std::string,
+                                    std::shared_ptr<config::ConfigBase>>{
+                                    {"test_trace",
+                                     std::make_shared<config::ConfigBase>(
+                                         std::move(connectorConfigMap))}})
+                            .credentialKeys(std::move(keys))
+                            .build();
+
+  trace::TaskTraceMetadataWriter(outputDir->getPath(), traceNodeId, pool())
+      .write(*queryCtx, *planNode);
+
+  const auto metaFilePath = getTaskTraceMetaFilePath(outputDir->getPath());
+  const auto fileSystem = filesystems::getFileSystem(metaFilePath, nullptr);
+  const auto metaFile = fileSystem->openFileForRead(metaFilePath);
+  const auto rawMetadata = metaFile->pread(0, metaFile->size());
+  EXPECT_THAT(rawMetadata, testing::Not(testing::HasSubstr(secret)));
+
+  const auto reader =
+      trace::TaskTraceMetadataReader(outputDir->getPath(), pool());
+  EXPECT_THAT(
+      reader.queryConfigs(),
+      testing::UnorderedElementsAre(
+          std::pair<const std::string, std::string>{
+              credentialKey, std::string(kRedactedConfigValue)},
+          std::pair<const std::string, std::string>{
+              "cat_token", std::string(kRedactedConfigValue)},
+          std::pair<const std::string, std::string>{
+              "metagen_key", std::string(kRedactedConfigValue)},
+          std::pair<const std::string, std::string>{
+              "model_api_key", std::string(kRedactedConfigValue)},
+          std::pair<const std::string, std::string>{
+              "crypto_auth_tokens_metagen", std::string(kRedactedConfigValue)},
+          // Non-credential entries stay verbatim; replay reparses these as a
+          // bool and an integer, which a placeholder would fail.
+          std::pair<const std::string, std::string>{
+              core::QueryConfig::kSpillEnabled, "true"},
+          std::pair<const std::string, std::string>{
+              core::QueryConfig::kSpillNumPartitionBits, "17"}));
+
+  EXPECT_THAT(
+      reader.connectorProperties().at("test_trace"),
+      testing::UnorderedElementsAre(
+          std::pair<const std::string, std::string>{
+              credentialKey, std::string(kRedactedConfigValue)},
+          std::pair<const std::string, std::string>{
+              "metagen_key", std::string(kRedactedConfigValue)},
+          std::pair<const std::string, std::string>{"cKey1", "cVal1"}));
+}
+
+TEST_F(OperatorTraceTest, traceMetadataRedactsWhereTheCredentialLanded) {
+  // One name, three destinations, built by the write() calls that produce it.
+  // It is the stored value in the query config and in one connector; the other
+  // connector kept a property of the same name, and redacting that would
+  // destroy a value replay still has to read back.
+  const auto rowType = ROW({"c0", "c1"}, BIGINT());
+  const std::vector<RowVectorPtr> rows{vectorFuzzer_.fuzzRow(rowType, 2)};
+  const auto outputDir = TempDirectoryPath::create();
+  core::PlanNodeId traceNodeId;
+  const auto planNode = PlanBuilder()
+                            .values(rows, false)
+                            .project({"c0", "c1"})
+                            .capturePlanNodeId(traceNodeId)
+                            .planNode();
+
+  const std::string secret{"written-through-write-do-not-leak-7b1d4f"};
+  const std::string catalogValue{"an-ordinary-catalog-property"};
+  const std::string sharedKey{"test_credential_token"};
+  const std::string credentialConnectorId{"test_trace_credential"};
+  const std::string keptConnectorId{"test_trace_kept"};
+
+  core::CredentialKeys keys;
+  std::unordered_map<std::string, std::string> queryConfigMap{
+      {core::QueryConfig::kSpillNumPartitionBits, "17"}};
+  keys.write(
+      queryConfigMap,
+      "",
+      sharedKey,
+      secret,
+      core::CredentialKeys::OnConflict::kReplace);
+
+  std::unordered_map<std::string, std::string> credentialConnectorMap{
+      {"cKey1", "cVal1"}};
+  keys.write(
+      credentialConnectorMap,
+      credentialConnectorId,
+      sharedKey,
+      secret,
+      core::CredentialKeys::OnConflict::kReplace);
+
+  // Rejected: the property already there wins, so this connector is left
+  // unrecorded and its value must survive the trace verbatim.
+  std::unordered_map<std::string, std::string> keptConnectorMap{
+      {sharedKey, catalogValue}};
+  keys.write(
+      keptConnectorMap,
+      keptConnectorId,
+      sharedKey,
+      secret,
+      core::CredentialKeys::OnConflict::kKeep);
+  ASSERT_EQ(keptConnectorMap.at(sharedKey), catalogValue);
+
+  const auto queryCtx = core::QueryCtx::Builder()
+                            .executor(executor_.get())
+                            .queryConfig(core::QueryConfig(queryConfigMap))
+                            .connectorConfigs(
+                                std::unordered_map<
+                                    std::string,
+                                    std::shared_ptr<config::ConfigBase>>{
+                                    {credentialConnectorId,
+                                     std::make_shared<config::ConfigBase>(
+                                         std::move(credentialConnectorMap))},
+                                    {keptConnectorId,
+                                     std::make_shared<config::ConfigBase>(
+                                         std::move(keptConnectorMap))}})
+                            .credentialKeys(std::move(keys))
+                            .build();
+
+  trace::TaskTraceMetadataWriter(outputDir->getPath(), traceNodeId, pool())
+      .write(*queryCtx, *planNode);
+
+  const auto metaFilePath = getTaskTraceMetaFilePath(outputDir->getPath());
+  const auto fileSystem = filesystems::getFileSystem(metaFilePath, nullptr);
+  const auto metaFile = fileSystem->openFileForRead(metaFilePath);
+  EXPECT_THAT(
+      metaFile->pread(0, metaFile->size()),
+      testing::Not(testing::HasSubstr(secret)));
+
+  const auto reader =
+      trace::TaskTraceMetadataReader(outputDir->getPath(), pool());
+  EXPECT_THAT(
+      reader.queryConfigs(),
+      testing::UnorderedElementsAre(
+          std::pair<const std::string, std::string>{
+              sharedKey, std::string(kRedactedConfigValue)},
+          // Replay reparses this one as an integer, which a placeholder would
+          // fail.
+          std::pair<const std::string, std::string>{
+              core::QueryConfig::kSpillNumPartitionBits, "17"}));
+  EXPECT_THAT(
+      reader.connectorProperties().at(credentialConnectorId),
+      testing::UnorderedElementsAre(
+          std::pair<const std::string, std::string>{
+              sharedKey, std::string(kRedactedConfigValue)},
+          std::pair<const std::string, std::string>{"cKey1", "cVal1"}));
+  // Redacting by name alone, or by the union of every connector's names,
+  // would redact this too.
+  EXPECT_THAT(
+      reader.connectorProperties().at(keptConnectorId),
+      testing::UnorderedElementsAre(
+          std::pair<const std::string, std::string>{sharedKey, catalogValue}));
+}
+
+TEST_F(OperatorTraceTest, traceMetadataRedactsDelegatedCredentials) {
+  // The session-property name holding a delegated credential is
+  // deployment-specific -- the connector names it in its own build-time
+  // config -- so it cannot be on any fixed list the writer carries. The config
+  // property is defined by
+  // velox/connectors/hive/iceberg/IcebergSessionCredentials.h.
+  const std::string sessionCredentialKeysConfig{"hive.session-credential-keys"};
+  const std::string credentialKey{"fs.delegated-token"};
+  const std::string secret{"delegated-token-do-not-leak-7b2e9d"};
+  const std::string connectorId{"test-delegated-credentials"};
+
+  connector::hive::HiveConnectorFactory factory;
+  const auto testConnector = factory.newConnector(
+      connectorId,
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {sessionCredentialKeysConfig, credentialKey},
+          }),
+      ioExecutor_.get());
+  connector::ConnectorRegistry::global().insert(connectorId, testConnector);
+  const auto unregister = folly::makeGuard(
+      [&] { connector::ConnectorRegistry::global().erase(connectorId); });
+
+  const auto rowType = ROW({"c0", "c1"}, BIGINT());
+  const std::vector<RowVectorPtr> rows{vectorFuzzer_.fuzzRow(rowType, 2)};
+  const auto outputDir = TempDirectoryPath::create();
+  core::PlanNodeId traceNodeId;
+  const auto planNode = PlanBuilder()
+                            .values(rows, false)
+                            .project({"c0", "c1"})
+                            .capturePlanNodeId(traceNodeId)
+                            .planNode();
+
+  const auto queryCtx = core::QueryCtx::create(
+      executor_.get(),
+      core::QueryConfig(std::unordered_map<std::string, std::string>{}),
+      std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{
+          {connectorId,
+           std::make_shared<config::ConfigBase>(
+               std::unordered_map<std::string, std::string>{
+                   {credentialKey, secret},
+                   {"cKey1", "cVal1"},
+               })}});
+
+  trace::TaskTraceMetadataWriter(outputDir->getPath(), traceNodeId, pool())
+      .write(*queryCtx, *planNode);
+
+  const auto metaFilePath = getTaskTraceMetaFilePath(outputDir->getPath());
+  const auto fileSystem = filesystems::getFileSystem(metaFilePath, nullptr);
+  const auto metaFile = fileSystem->openFileForRead(metaFilePath);
+  const auto rawMetadata = metaFile->pread(0, metaFile->size());
+  EXPECT_THAT(rawMetadata, testing::Not(testing::HasSubstr(secret)));
+
+  const auto reader =
+      trace::TaskTraceMetadataReader(outputDir->getPath(), pool());
+  EXPECT_THAT(
+      reader.connectorProperties().at(connectorId),
+      testing::UnorderedElementsAre(
+          std::pair<const std::string, std::string>{
+              credentialKey, std::string(kRedactedConfigValue)},
+          // A property the connector does not name stays verbatim.
+          std::pair<const std::string, std::string>{"cKey1", "cVal1"}));
+}
+
+TEST_F(OperatorTraceTest, traceMetadataRedactsPlanNodeCredentials) {
+  // The AI function rewriter passes LLM options as one JSON object in a
+  // constant expression, so a key given in SQL reaches the trace file inside
+  // the serialized plan rather than as a config entry.
+  const std::string secret{"sql-options-key-do-not-leak-4c7f1a"};
+  const std::string catSecret{"sql-options-cat-do-not-leak-9b2e5d"};
+  const auto optionsJson = fmt::format(
+      R"({{"metagen_key":"{}","cat_token":"{}","inference_backend":"metagen","max_tokens":64}})",
+      secret,
+      catSecret);
+
+  const auto rowType = ROW({"c0", "c1"}, BIGINT());
+  const std::vector<RowVectorPtr> rows{vectorFuzzer_.fuzzRow(rowType, 2)};
+  const auto outputDir = TempDirectoryPath::create();
+  core::PlanNodeId traceNodeId;
+  const auto planNode =
+      PlanBuilder()
+          .values(rows, false)
+          .project({fmt::format("'{}' AS options", optionsJson)})
+          .capturePlanNodeId(traceNodeId)
+          .planNode();
+
+  const auto queryCtx = core::QueryCtx::create(
+      executor_.get(),
+      core::QueryConfig(std::unordered_map<std::string, std::string>{}));
+
+  trace::TaskTraceMetadataWriter(outputDir->getPath(), traceNodeId, pool())
+      .write(*queryCtx, *planNode);
+
+  const auto metaFilePath = getTaskTraceMetaFilePath(outputDir->getPath());
+  const auto fileSystem = filesystems::getFileSystem(metaFilePath, nullptr);
+  const auto metaFile = fileSystem->openFileForRead(metaFilePath);
+  const auto rawMetadata = metaFile->pread(0, metaFile->size());
+  EXPECT_THAT(rawMetadata, testing::Not(testing::HasSubstr(secret)));
+  EXPECT_THAT(rawMetadata, testing::Not(testing::HasSubstr(catSecret)));
+  EXPECT_THAT(
+      rawMetadata, testing::HasSubstr(std::string(kRedactedConfigValue)));
+  // Non-credential options survive; only the credentials are replaced.
+  EXPECT_THAT(rawMetadata, testing::HasSubstr("inference_backend"));
+
+  // Replay reads the plan block back. Constructing the reader deserializes it,
+  // so this throws if the placeholder left the plan unparseable.
+  const auto reader =
+      trace::TaskTraceMetadataReader(outputDir->getPath(), pool());
+  const auto replayedPlan = reader.queryPlan();
+  ASSERT_NE(replayedPlan, nullptr);
+  EXPECT_EQ(replayedPlan->id(), traceNodeId);
+  // The secrets do not come back on a round trip either.
+  const auto replayedJson = folly::toJson(replayedPlan->serialize());
+  EXPECT_THAT(replayedJson, testing::Not(testing::HasSubstr(secret)));
+  EXPECT_THAT(replayedJson, testing::Not(testing::HasSubstr(catSecret)));
+}
+
 TEST_F(OperatorTraceTest, task) {
   const auto rowType =
       ROW({"c0", "c1", "c2", "c3", "c4", "c5"},
@@ -349,16 +682,16 @@ TEST_F(OperatorTraceTest, task) {
     rows.push_back(vectorFuzzer_.fuzzRow(rowType, 2));
   }
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId hashJoinNodeId;
   const auto planNode =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .values(rows, false)
           .project({"c0", "c1", "c2"})
           .hashJoin(
               {"c0"},
               {"u0"},
-              PlanBuilder(planNodeIdGenerator)
+              builder.newPlan()
                   .values(rows, true)
                   .singleAggregation({"c0", "c1"}, {"min(c2)"})
                   .project({"c0 AS u0", "c1 AS u1", "a0 AS u2"})
@@ -742,8 +1075,7 @@ TEST_F(OperatorTraceTest, traceSplitRoundTrip) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
   auto splits = makeHiveConnectorSplits(splitFiles);
@@ -809,8 +1141,7 @@ TEST_F(OperatorTraceTest, traceSplitPartial) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
   auto splits = makeHiveConnectorSplits(splitFiles);
@@ -898,8 +1229,7 @@ TEST_F(OperatorTraceTest, traceSplitCorrupted) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
   auto splits = makeHiveConnectorSplits(splitFiles);
@@ -1022,22 +1352,20 @@ TEST_F(OperatorTraceTest, hashJoin) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     const auto outputDir = TempDirectoryPath::create();
-    const auto planNodeIdGenerator{
-        std::make_shared<core::PlanNodeIdGenerator>()};
+    PlanBuilder builder;
     core::PlanNodeId hashJoinNodeId;
-    const auto planNode = PlanBuilder(planNodeIdGenerator)
-                              .values(probeInput, false)
-                              .hashJoin(
-                                  {"c0"},
-                                  {"u0"},
-                                  PlanBuilder(planNodeIdGenerator)
-                                      .values(buildInput, true)
-                                      .planNode(),
-                                  "c0 < 135",
-                                  {"c0", "c1", "c2"},
-                                  core::JoinType::kInner)
-                              .capturePlanNodeId(hashJoinNodeId)
-                              .planNode();
+    const auto planNode =
+        builder.newPlan()
+            .values(probeInput, false)
+            .hashJoin(
+                {"c0"},
+                {"u0"},
+                builder.newPlan().values(buildInput, true).planNode(),
+                "c0 < 135",
+                {"c0", "c1", "c2"},
+                core::JoinType::kInner)
+            .capturePlanNodeId(hashJoinNodeId)
+            .planNode();
     const auto testDir = TempDirectoryPath::create();
     const auto traceRoot =
         fmt::format("{}/{}", testDir->getPath(), "traceRoot");
@@ -1159,8 +1487,7 @@ TEST_F(OperatorTraceTest, hiveConnectorId) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
   auto splits = makeHiveConnectorSplits(splitFiles);

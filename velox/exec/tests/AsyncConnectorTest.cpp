@@ -213,8 +213,7 @@ TEST_F(AsyncConnectorTest, basic) {
   // Run without a delay and verify blocked time for table scan is zero.
   {
     auto task = assertQuery(plan, {std::make_shared<TestSplit>(0)}, "SELECT 0");
-    auto stats = toPlanStats(task->taskStats());
-    const auto& scanStats = stats.at(scanId);
+    const auto scanStats = PlanNodeStats::extract(task->taskStats(), scanId);
     ASSERT_EQ(scanStats.blockedWallNanos, 0);
   }
 
@@ -222,8 +221,7 @@ TEST_F(AsyncConnectorTest, basic) {
   {
     auto task =
         assertQuery(plan, {std::make_shared<TestSplit>(100)}, "SELECT 0");
-    auto stats = toPlanStats(task->taskStats());
-    const auto& scanStats = stats.at(scanId);
+    const auto scanStats = PlanNodeStats::extract(task->taskStats(), scanId);
     ASSERT_GT(scanStats.blockedWallNanos, 0);
   }
 }

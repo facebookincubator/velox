@@ -24,6 +24,8 @@ class P4HyperLogLogType final : public VarbinaryType {
   P4HyperLogLogType() = default;
 
  public:
+  static std::shared_ptr<const P4HyperLogLogType> create() = delete;
+
   static std::shared_ptr<const P4HyperLogLogType> get() {
     VELOX_CONSTEXPR_SINGLETON P4HyperLogLogType kInstance;
     return {std::shared_ptr<const P4HyperLogLogType>{}, &kInstance};
@@ -57,6 +59,10 @@ class P4HyperLogLogType final : public VarbinaryType {
 inline bool isP4HyperLogLogType(const TypePtr& type) {
   // Pointer comparison works since this type is a singleton.
   return P4HyperLogLogType::get() == type;
+}
+
+inline bool isP4HyperLogLogType(const Type& type) {
+  return P4HyperLogLogType::get().get() == &type;
 }
 
 inline std::shared_ptr<const P4HyperLogLogType> P4HYPERLOGLOG() {

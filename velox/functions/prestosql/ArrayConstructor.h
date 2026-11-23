@@ -18,6 +18,8 @@
 
 namespace facebook::velox::functions {
 
-void registerArrayConstructor(const std::string& name);
+void registerArrayConstructor(
+    const std::string& name,
+    std::string_view defaultOwner = {});
 
 } // namespace facebook::velox::functions

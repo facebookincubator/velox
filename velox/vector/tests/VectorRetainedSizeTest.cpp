@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <functional>
+
 #include <gtest/gtest.h>
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -37,7 +39,7 @@ class VectorRetainedSizeTest : public testing::Test,
 } // namespace
 
 TEST_F(VectorRetainedSizeTest, flatNoStrings) {
-  auto vector = makeFlatVector<int32_t>(1'000, folly::identity);
+  auto vector = makeFlatIdentityVector<int32_t>(1'000);
   uint64_t totalStringBufferSize = 0;
   auto retainedSize = vector->retainedSize(totalStringBufferSize);
 
@@ -123,7 +125,7 @@ TEST_F(VectorRetainedSizeTest, constantWithValueVector) {
 TEST_F(VectorRetainedSizeTest, dictionaryWithStrings) {
   auto baseVector = makeFlatVector<std::string>(
       1'000, [&](auto /*row*/) { return std::string(100, 'a'); });
-  auto indices = makeIndices(100, folly::identity);
+  auto indices = makeIndices(100, std::identity{});
   auto dictVector = wrapInDictionary(indices, 100, baseVector);
 
   uint64_t totalStringBufferSize = 0;
@@ -136,8 +138,8 @@ TEST_F(VectorRetainedSizeTest, dictionaryWithStrings) {
 }
 
 TEST_F(VectorRetainedSizeTest, dictionaryNoStrings) {
-  auto baseVector = makeFlatVector<int32_t>(1'000, folly::identity);
-  auto indices = makeIndices(100, folly::identity);
+  auto baseVector = makeFlatIdentityVector<int32_t>(1'000);
+  auto indices = makeIndices(100, std::identity{});
   auto dictVector = wrapInDictionary(indices, 100, baseVector);
 
   uint64_t totalStringBufferSize = 0;
@@ -152,7 +154,7 @@ TEST_F(VectorRetainedSizeTest, rowVectorMultipleStringChildren) {
 
   auto rowVector = makeRowVector({
       makeFlatVector<std::string>(1'000, longStringAt),
-      makeFlatVector<int32_t>(1'000, folly::identity),
+      makeFlatIdentityVector<int32_t>(1'000),
       makeFlatVector<std::string>(1'000, longStringAt),
   });
 
@@ -269,7 +271,7 @@ TEST_F(VectorRetainedSizeTest, sharedStringBuffers) {
   auto baseVector = makeFlatVector<std::string>(
       1'000, [&](auto /*row*/) { return std::string(100, 'a'); });
 
-  auto indices = makeIndices(100, folly::identity);
+  auto indices = makeIndices(100, std::identity{});
   std::vector<VectorPtr> dictionaries;
   dictionaries.emplace_back(wrapInDictionary(indices, 100, baseVector));
   dictionaries.emplace_back(wrapInDictionary(indices, 100, baseVector));
