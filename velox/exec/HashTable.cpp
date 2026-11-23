@@ -662,6 +662,61 @@ void populateNormalizedKeys(HashLookup& lookup, int8_t sizeBits) {
     hashes[row] = mixNormalizedKey(hash, sizeBits);
   }
 }
+
+// Returns the stored position of every string key that takes the fast
+// comparison path.
+std::vector<RowColumn> stringKeyColumns(const HashLookup& lookup) {
+  std::vector<RowColumn> columns;
+  for (const auto& plan : lookup.keyComparePlans) {
+    if (plan.fastPath &&
+        (plan.kind == TypeKind::VARCHAR || plan.kind == TypeKind::VARBINARY)) {
+      columns.push_back(plan.column);
+    }
+  }
+  return columns;
+}
+
+// Prefetches the bytes of the out-of-line string keys of the rows that
+// firstProbe() matched a tag against, so that fullProbe() of the same window
+// finds them in cache. The prefetch is speculative: it works from the stored
+// row alone, and does not decode or compare the probed values.
+template <bool ignoreNullKeys>
+void prefetchStringKeys(
+    const std::vector<RowColumn>& columns,
+    const ProbeState* states,
+    int32_t numStates) {
+  for (auto i = 0; i < numStates; ++i) {
+    const char* group = states[i].group();
+    if (group == nullptr) {
+      continue;
+    }
+    for (const auto& column : columns) {
+      if constexpr (!ignoreNullKeys) {
+        if (RowContainer::isNullAt(group, column)) {
+          continue;
+        }
+      }
+      const auto& stored =
+          *reinterpret_cast<const StringView*>(group + column.offset());
+      if (stored.isInline()) {
+        continue;
+      }
+      // contiguousString() reads the allocator header below the bytes, and the
+      // compare reads the rest up to the last byte. The header is not read
+      // here because that would wait for the very line being prefetched. The
+      // last byte is prefetched without checking whether it shares a line with
+      // the header, because that branch is data dependent and costs more than
+      // the prefetch. A string split over several blocks has no last byte at
+      // this address, so the address is computed as an integer to stay clear
+      // of pointer arithmetic past the first block, and the prefetch is then
+      // only wasted.
+      const auto last =
+          reinterpret_cast<uintptr_t>(stored.data()) + stored.size() - 1;
+      __builtin_prefetch(HashStringAllocator::headerOf(stored.data()));
+      __builtin_prefetch(reinterpret_cast<const void*>(last));
+    }
+  }
+}
 } // namespace
 
 template <bool ignoreNullKeys>
@@ -700,6 +755,10 @@ void HashTable<ignoreNullKeys>::groupProbeWithPrefetch(HashLookup& lookup) {
   // Skip rows narrower than 64 bytes, where the microbenchmarks show no gain.
   const int32_t rowSize = rows_->fixedRowSize();
   const bool prefetchRowEnd = rowSize >= 64;
+  std::vector<RowColumn> stringKeys;
+  if constexpr (!isNormalizedKey) {
+    stringKeys = stringKeyColumns(lookup);
+  }
   for (int32_t probeIndex = 0; probeIndex < numProbes;
        probeIndex += kPrefetchSize) {
     const int32_t numStates = std::min(kPrefetchSize, numProbes - probeIndex);
@@ -714,6 +773,11 @@ void HashTable<ignoreNullKeys>::groupProbeWithPrefetch(HashLookup& lookup) {
           __builtin_prefetch(group + rowSize - 1);
         }
       }
+    }
+    // firstProbe() prefetched the matched rows, so their string keys can be
+    // read now and their bytes prefetched before fullProbe() compares them.
+    if (!stringKeys.empty()) {
+      prefetchStringKeys<ignoreNullKeys>(stringKeys, states, numStates);
     }
     // Tags loaded by firstProbe() go stale once an earlier state in this
     // window inserts a new group, possibly with the same key.
