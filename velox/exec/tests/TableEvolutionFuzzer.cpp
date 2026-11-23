@@ -40,7 +40,10 @@
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
+#include <limits>
+#include <optional>
 #include <set>
 
 #include <re2/re2.h>
@@ -348,27 +351,31 @@ constexpr int kProbeRows = 64;
 constexpr int kQueryShapesPerFile = 20;
 
 using DataBatchMutator =
-    std::function<void(const RowVectorPtr&, uint64_t, uint64_t)>;
+    std::function<void(const RowVectorPtr&, uint64_t, int, uint64_t)>;
 
 void prepareDataBatch(
     const RowVectorPtr& data,
     const DataBatchMutator& dataBatchMutator,
     uint64_t seed,
+    int evolutionStep,
     uint64_t rowOffset) {
   for (auto& child : data->children()) {
     BaseVector::flattenVector(child);
   }
   if (dataBatchMutator) {
-    dataBatchMutator(data, seed, rowOffset);
+    dataBatchMutator(data, seed, evolutionStep, rowOffset);
   }
 }
 
-VectorFuzzer::Options makeVectorFuzzerOptions(double nullRatio = 0) {
+VectorFuzzer::Options makeVectorFuzzerOptions(
+    double nullRatio,
+    const fuzzer::DataSpec& dataSpec) {
   VectorFuzzer::Options options;
   options.vectorSize = kDefaultVectorSize;
   options.allowSlice = false;
   options.nullRatio = nullRatio;
   options.containerHasNulls = nullRatio > 0;
+  options.dataSpec = dataSpec;
   // Table scans expose timestamps at millisecond precision by default. Keep
   // generated source rows at that precision so the Values oracle represents
   // the logical values that all configured file formats can round-trip.
@@ -383,13 +390,15 @@ int computeAdaptiveVectorSize(
     VectorFuzzer& vectorFuzzer,
     const RowTypePtr& schema,
     const DataBatchMutator& dataBatchMutator,
-    uint64_t seed) {
+    uint64_t seed,
+    int evolutionStep) {
   auto probe = vectorFuzzer.fuzzRow(schema, kProbeRows, false);
   // Measure the same representation that is written. Format-specific
   // mutations can substantially change value sizes (e.g. short VARCHARs to
   // capping JSON), so measuring the unmodified probe would overshoot the byte
   // target for every generated batch.
-  prepareDataBatch(probe, dataBatchMutator, seed, /*rowOffset=*/0);
+  prepareDataBatch(
+      probe, dataBatchMutator, seed, evolutionStep, /*rowOffset=*/0);
   const uint64_t probeRawSize = probe->estimateFlatSize();
   return TableEvolutionFuzzer::adaptiveVectorSizeForBytesPerRow(
       static_cast<double>(probeRawSize) / kProbeRows, FLAGS_batch_target_bytes);
@@ -653,7 +662,9 @@ int TableEvolutionFuzzer::adaptiveVectorSizeForBytesPerRow(
 
 TableEvolutionFuzzer::TableEvolutionFuzzer(const Config& config)
     : config_(config),
-      vectorFuzzer_(makeVectorFuzzerOptions(config.nullRatio), config.pool) {
+      vectorFuzzer_(
+          makeVectorFuzzerOptions(config.nullRatio, config.dataSpec),
+          config.pool) {
   VELOX_CHECK_GT(config_.columnCount, 0);
   VELOX_CHECK_GT(config_.evolutionCount, 0);
   VELOX_CHECK_GT(FLAGS_batches_per_file, 0);
@@ -841,14 +852,17 @@ void checkResultsEqual(
   VELOX_CHECK_EQ(expectedVectorIndex, expected.size());
 }
 
+// Draws the filters from 'seed', so that each query shape gets its own
+// filters and a run stays reproducible from the fuzzer seed.
 common::SubfieldFilters generateSubfieldFilters(
     RowTypePtr& rowType,
-    const RowVectorPtr& finalExpectedData) {
+    const RowVectorPtr& finalExpectedData,
+    uint32_t seed) {
   dwio::common::MutationSpec mutations;
   std::vector<uint64_t> hitRows;
 
   std::unique_ptr<velox::dwio::common::FilterGenerator> filterGenerator =
-      std::make_unique<velox::dwio::common::FilterGenerator>(rowType, 0);
+      std::make_unique<velox::dwio::common::FilterGenerator>(rowType, seed);
 
   auto subfieldsVector = filterGenerator->makeFilterables(rowType->size(), 100);
 
@@ -857,6 +871,135 @@ common::SubfieldFilters generateSubfieldFilters(
 
   return filterGenerator->makeSubfieldFilters(
       filterSpecs, {finalExpectedData}, &mutations, hitRows);
+}
+
+// Returns 'range' with each bounded end exclusive half of the time, so that
+// 'x > c' and 'x < c' are drawn as well as 'x >= c' and 'x <= c'. Returns null
+// for a range whose ends are equal, which stays inclusive so that it is not
+// empty by construction.
+template <typename T>
+std::unique_ptr<common::Filter> withRandomExclusiveBounds(
+    const common::FloatingPointRange<T>& range,
+    FuzzerGenerator& rng) {
+  if (!range.lowerUnbounded() && !range.upperUnbounded() &&
+      range.lower() == range.upper()) {
+    return nullptr;
+  }
+  return std::make_unique<common::FloatingPointRange<T>>(
+      static_cast<T>(range.lower()),
+      range.lowerUnbounded(),
+      /*lowerExclusive=*/!range.lowerUnbounded() &&
+          folly::Random::oneIn(2, rng),
+      static_cast<T>(range.upper()),
+      range.upperUnbounded(),
+      /*upperExclusive=*/!range.upperUnbounded() &&
+          folly::Random::oneIn(2, rng),
+      range.testNull());
+}
+
+// Gives the REAL and DOUBLE range filters in 'filters' random exclusive bounds.
+// See withRandomExclusiveBounds().
+void randomizeFloatingPointExclusiveBounds(
+    common::SubfieldFilters& filters,
+    FuzzerGenerator& rng) {
+  for (auto& [subfield, filter] : filters) {
+    std::unique_ptr<common::Filter> replacement;
+    if (const auto* doubleRange =
+            dynamic_cast<const common::FloatingPointRange<double>*>(
+                filter.get());
+        doubleRange != nullptr) {
+      replacement = withRandomExclusiveBounds(*doubleRange, rng);
+    } else if (const auto* floatRange =
+                   dynamic_cast<const common::FloatingPointRange<float>*>(
+                       filter.get());
+               floatRange != nullptr) {
+      replacement = withRandomExclusiveBounds(*floatRange, rng);
+    }
+    if (replacement != nullptr) {
+      filter = std::move(replacement);
+    }
+  }
+}
+
+// Returns the largest value of top-level column 'column' in 'batches' that is
+// neither null nor NaN, or nothing when there is none.
+template <typename T>
+std::optional<T> maxNumber(
+    const std::vector<RowVectorPtr>& batches,
+    column_index_t column) {
+  std::optional<T> max;
+  for (const auto& batch : batches) {
+    const auto* values = batch->childAt(column)->as<SimpleVector<T>>();
+    VELOX_CHECK_NOT_NULL(values);
+    for (vector_size_t row = 0; row < values->size(); ++row) {
+      if (values->isNullAt(row)) {
+        continue;
+      }
+      const T value = values->valueAt(row);
+      if (!std::isnan(value) && (!max.has_value() || value > *max)) {
+        max = value;
+      }
+    }
+  }
+  return max;
+}
+
+// Returns a filter that accepts only values above 'max', the largest number in
+// the column, so only NaN rows pass: Velox orders NaN above every other value.
+// The bound is the next larger value, inclusive, because
+// FloatingPointRange::testDoubleRange ignores whether a bound is exclusive:
+// statistics with maximum 'max' would never rule out 'x > max'. Above +inf the
+// bound stays exclusive.
+template <typename T>
+std::unique_ptr<common::Filter> makeAboveMaxFilter(T max) {
+  const T lower = std::nextafter(max, std::numeric_limits<T>::infinity());
+  return std::make_unique<common::FloatingPointRange<T>>(
+      lower,
+      /*lowerUnbounded=*/false,
+      /*lowerExclusive=*/lower == max,
+      lower,
+      /*upperUnbounded=*/true,
+      /*upperExclusive=*/false,
+      /*nullAllowed=*/false);
+}
+
+// A quarter of the time, sets the filter of a random top-level REAL or DOUBLE
+// column to accept only values above the column's largest number in
+// 'batches', so only NaN rows pass. Statistics may then rule out a file or a
+// chunk only when it holds no NaN, and bounds that leave a NaN out lose its
+// row. Leaves 'filters' unchanged when no such column holds a number.
+void maybeAddAboveMaxFilter(
+    const RowTypePtr& rowType,
+    const std::vector<RowVectorPtr>& batches,
+    common::SubfieldFilters& filters,
+    FuzzerGenerator& rng) {
+  if (batches.empty() || !folly::Random::oneIn(4, rng)) {
+    return;
+  }
+  std::vector<column_index_t> columns;
+  for (column_index_t column = 0; column < rowType->size(); ++column) {
+    const auto kind = rowType->childAt(column)->kind();
+    if (kind == TypeKind::REAL || kind == TypeKind::DOUBLE) {
+      columns.push_back(column);
+    }
+  }
+  if (columns.empty()) {
+    return;
+  }
+  const auto column = columns[folly::Random::rand32(
+      static_cast<uint32_t>(columns.size()), rng)];
+  std::unique_ptr<common::Filter> filter;
+  if (rowType->childAt(column)->kind() == TypeKind::REAL) {
+    if (const auto max = maxNumber<float>(batches, column)) {
+      filter = makeAboveMaxFilter(*max);
+    }
+  } else if (const auto max = maxNumber<double>(batches, column)) {
+    filter = makeAboveMaxFilter(*max);
+  }
+  if (filter != nullptr) {
+    filters.insert_or_assign(
+        common::Subfield(rowType->nameOf(column)), std::move(filter));
+  }
 }
 
 fuzzer::ExpressionFuzzer::FuzzedExpressionData generateRemainingFilters(
@@ -1860,7 +2003,21 @@ void TableEvolutionFuzzer::runQueryShape(
 
   // Generate subfield filters first
   pushdownConfig.subfieldFiltersMap =
-      generateSubfieldFilters(rowType, finalExpectedData);
+      generateSubfieldFilters(rowType, finalExpectedData, rng_());
+
+  // Draws the shapes FilterGenerator does not make from a generator of their
+  // own, so that they leave its draws unchanged.
+  FuzzerGenerator filterShapeRng(rng_());
+  randomizeFloatingPointExclusiveBounds(
+      pushdownConfig.subfieldFiltersMap, filterShapeRng);
+  if (config_.dataSpec.includeNaN) {
+    const std::vector<RowVectorPtr> finalBatches{finalExpectedData};
+    maybeAddAboveMaxFilter(
+        rowType,
+        originalBatches.empty() ? finalBatches : originalBatches,
+        pushdownConfig.subfieldFiltersMap,
+        filterShapeRng);
+  }
 
   // Extract field names used by subfield filters to avoid conflicts
   std::unordered_set<std::string> subfieldFilteredFields;
@@ -3024,7 +3181,8 @@ void TableEvolutionFuzzer::createWriteTasks(
               vectorFuzzer_,
               testSetups[i].schema,
               config_.dataBatchMutator,
-              currentSeed_)
+              currentSeed_,
+              i)
         : kDefaultVectorSize;
     std::vector<RowVectorPtr> dataBatches;
     dataBatches.reserve(numBatches);
@@ -3032,7 +3190,8 @@ void TableEvolutionFuzzer::createWriteTasks(
     for (int batch = 0; batch < numBatches; ++batch) {
       auto data =
           vectorFuzzer_.fuzzRow(testSetups[i].schema, vectorSize, false);
-      prepareDataBatch(data, config_.dataBatchMutator, currentSeed_, rowOffset);
+      prepareDataBatch(
+          data, config_.dataBatchMutator, currentSeed_, i, rowOffset);
       rowOffset += data->size();
       dataBatches.push_back(std::move(data));
     }
