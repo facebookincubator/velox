@@ -251,7 +251,7 @@ TEST_F(IndexLookupTest, optionsValidateFileHandle) {
     velox::FileHandle fileHandle;
     fileHandle.file = file;
     IndexLookup::Options options{
-        .file = file, .ioOptions = &ioOptions, .fileHandle = &fileHandle};
+        .file = file, .ioOptions = &ioOptions, .fileHandle = fileHandle};
     EXPECT_NO_THROW(options.validate());
   }
   {
@@ -259,7 +259,7 @@ TEST_F(IndexLookupTest, optionsValidateFileHandle) {
     velox::FileHandle fileHandle;
     fileHandle.file = std::make_shared<velox::InMemoryReadFile>(std::string{});
     IndexLookup::Options options{
-        .file = file, .ioOptions = &ioOptions, .fileHandle = &fileHandle};
+        .file = file, .ioOptions = &ioOptions, .fileHandle = fileHandle};
     NIMBLE_ASSERT_THROW(
         options.validate(),
         "file and fileHandle->file must point to the same file");
@@ -291,7 +291,7 @@ TEST_F(IndexLookupTest, createIndexMetadataInput) {
         .file = file,
         .ioOptions = &ioOptions,
         .blockCache = getBlockCache(cache.get()),
-        .fileHandle = &fileHandle};
+        .fileHandle = fileHandle};
     auto metadataInput = createIndexMetadataInput(options);
     EXPECT_NE(dynamic_cast<CachedMetadataInput*>(metadataInput.get()), nullptr);
   }
@@ -325,7 +325,7 @@ TEST_F(IndexLookupTest, createIndexDataInput) {
         .file = file,
         .ioOptions = &ioOptions,
         .blockCache = blockCache ? getBlockCache(cache.get()) : nullptr,
-        .fileHandle = &fileHandle};
+        .fileHandle = fileHandle};
 
     // Two inputs read the same region. A cached input finds the bytes the
     // first one read in the cache.
@@ -357,7 +357,7 @@ TEST_F(IndexLookupTest, createIndexDataInput) {
 
     velox::FileHandle fileHandleWithoutId;
     fileHandleWithoutId.file = file;
-    options.fileHandle = &fileHandleWithoutId;
+    options.fileHandle = fileHandleWithoutId;
     NIMBLE_ASSERT_USER_THROW(
         createIndexDataInput(options), "blockCache requires fileHandle->uuid");
   }
@@ -390,7 +390,7 @@ TEST_F(IndexLookupTest, createIndexDataInputOwnsFile) {
         .file = std::make_shared<velox::InMemoryReadFile>(data),
         .ioOptions = &ioOptions,
         .blockCache = blockCache ? getBlockCache(cache.get()) : nullptr,
-        .fileHandle = &fileHandle};
+        .fileHandle = fileHandle};
     const std::weak_ptr<velox::ReadFile> file{options.file};
     auto input = createIndexDataInput(options);
 
@@ -438,7 +438,7 @@ TEST_F(IndexLookupTest, createIndexDataInputPassesFileIoContext) {
         .file = file,
         .ioOptions = &ioOptions,
         .blockCache = blockCache ? getBlockCache(cache.get()) : nullptr,
-        .fileHandle = &fileHandle};
+        .fileHandle = fileHandle};
     options.fileIoContext.fileOpts = fileOpts;
 
     const auto input = createIndexDataInput(options);
@@ -449,6 +449,44 @@ TEST_F(IndexLookupTest, createIndexDataInputPassesFileIoContext) {
     };
     EXPECT_EQ(file->fileOpts(), expected);
   }
+
+  testingResetBlockCache();
+  cache->shutdown();
+}
+
+TEST_F(IndexLookupTest, optionsOutliveFileHandle) {
+  const std::string data(1'000, 'x');
+  auto file = std::make_shared<velox::InMemoryReadFile>(data);
+  auto pool = velox::memory::memoryManager()->addLeafPool();
+  auto allocator = std::make_shared<velox::memory::MallocAllocator>(
+      velox::memory::MemoryAllocator::Options{.capacity = 1UL << 30});
+  auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
+  velox::io::ReaderOptions ioOptions(pool.get());
+  auto ioStats = std::make_shared<velox::io::IoStatistics>();
+  ioOptions.setIndexIoStats(ioStats);
+  IndexLookup::Options options{
+      .file = file,
+      .ioOptions = &ioOptions,
+      .blockCache = getBlockCache(cache.get())};
+  {
+    // The only lease on its id, so after this scope only the options can keep
+    // the id registered, which creating cache entries needs.
+    velox::FileHandle fileHandle;
+    fileHandle.file = file;
+    fileHandle.uuid = velox::StringIdLease(
+        velox::fileIds(), "IndexLookupTest.optionsOutliveFileHandle");
+    options.fileHandle = fileHandle;
+  }
+
+  // The first input fills the cache, and the second hits it.
+  const DataInput::Region region{100, 200};
+  for (int i = 0; i < 2; ++i) {
+    const auto input = createIndexDataInput(options);
+    const auto [bytes, handle] = input->read(region);
+    EXPECT_EQ(bytes, data.substr(region.offset, region.length));
+  }
+  EXPECT_EQ(ioStats->ramHit().count(), 1);
 
   testingResetBlockCache();
   cache->shutdown();

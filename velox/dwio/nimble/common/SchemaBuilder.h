@@ -61,6 +61,7 @@ class FlatMapTypeBuilder;
 class HybridFlatMapTypeBuilder;
 class ArrayWithOffsetsTypeBuilder;
 class SlidingWindowMapTypeBuilder;
+class SlidingWindowArrayTypeBuilder;
 
 class StreamContext {
  public:
@@ -148,6 +149,7 @@ class TypeBuilder {
   FlatMapTypeBuilder& asFlatMap();
   HybridFlatMapTypeBuilder& asHybridFlatMap();
   ArrayWithOffsetsTypeBuilder& asArrayWithOffsets();
+  SlidingWindowArrayTypeBuilder& asSlidingWindowArray();
   const ScalarTypeBuilder& asScalar() const;
   const TimestampMicroNanoTypeBuilder& asTimestampMicroNano() const;
   const ArrayTypeBuilder& asArray() const;
@@ -157,6 +159,7 @@ class TypeBuilder {
   const FlatMapTypeBuilder& asFlatMap() const;
   const HybridFlatMapTypeBuilder& asHybridFlatMap() const;
   const ArrayWithOffsetsTypeBuilder& asArrayWithOffsets() const;
+  const SlidingWindowArrayTypeBuilder& asSlidingWindowArray() const;
 
  protected:
   TypeBuilder(SchemaBuilder& schemaBuilder, Kind kind);
@@ -458,6 +461,34 @@ class ArrayWithOffsetsTypeBuilder : public TypeBuilder {
   friend class SchemaBuilder;
 };
 
+/// Builds an array whose rows are windows over one shared elements stream.
+/// Row i holds elements [offset(i), offset(i) + length(i)). Windows of
+/// consecutive rows may overlap, so a row that slides the previous row by k
+/// values stores only its new values. For example, rows [1, 2, 3], [2, 3, 4]
+/// and [2, 3, 4] store elements [1, 2, 3, 4], offsets [0, 1, 1] and lengths
+/// [3, 3, 3].
+class SlidingWindowArrayTypeBuilder : public TypeBuilder {
+ public:
+  /// Holds the window start of each row, with nulls.
+  const StreamDescriptorBuilder& offsetsDescriptor() const;
+
+  /// Holds the window length of each non-null row.
+  const StreamDescriptorBuilder& lengthsDescriptor() const;
+
+  const TypeBuilder& elements() const;
+
+  void setChildren(std::shared_ptr<TypeBuilder> elements);
+
+ private:
+  explicit SlidingWindowArrayTypeBuilder(SchemaBuilder& schemaBuilder);
+
+  StreamDescriptorBuilder offsetsDescriptor_;
+  StreamDescriptorBuilder lengthsDescriptor_;
+  std::shared_ptr<const TypeBuilder> elements_;
+
+  friend class SchemaBuilder;
+};
+
 class SchemaBuilder {
  public:
   /// Builds schemas whose Hybrid FlatMap nodes serialize their groups with
@@ -494,6 +525,10 @@ class SchemaBuilder {
   // Create a slidingwindowmap builder.
   std::shared_ptr<SlidingWindowMapTypeBuilder>
   createSlidingWindowMapTypeBuilder();
+
+  /// Creates a sliding window array builder.
+  std::shared_ptr<SlidingWindowArrayTypeBuilder>
+  createSlidingWindowArrayTypeBuilder();
 
   // Create a flat map builder. |keyScalarKind| captures the type of the map
   // key.
@@ -536,15 +571,16 @@ class SchemaBuilder {
   std::optional<offset_size> sharedDictionaryStreamOffset(
       offset_size valueStreamOffset) const;
 
-  /// Allocates the stream that holds the cluster index key chunk of each
-  /// stripe. No schema node references it. Must be the first allocation, so
-  /// the stream is id 0 whatever streams the schema adds later.
-  offset_size createClusterIndexKeyStream();
+  /// Allocates 'count' streams that hold index data of each stripe, such as
+  /// the cluster index key chunk of the stripe, and returns their ids. No
+  /// schema node references them. Must be the first allocation, so the streams
+  /// are ids [0, count) whatever streams the schema adds later.
+  std::vector<offset_size> createStripeIndexStreams(uint32_t count);
 
-  /// Returns the stream allocated by createClusterIndexKeyStream(), or nullopt
-  /// when there is none.
-  std::optional<offset_size> clusterIndexKeyStreamOffset() const {
-    return clusterIndexKeyStreamOffset_;
+  /// Returns the number of streams that createStripeIndexStreams() allocated,
+  /// ids [0, count), or 0 when there are none.
+  uint32_t stripeIndexStreamCount() const {
+    return stripeIndexStreamCount_;
   }
 
   const std::shared_ptr<const TypeBuilder>& root() const;
@@ -570,9 +606,9 @@ class SchemaBuilder {
   // Used by the physical layout planner to colocate stripe dictionaries with
   // their value streams. File and external dictionaries have no stream here.
   folly::F14FastMap<offset_size, offset_size> sharedDictionaryStreamOffsets_;
-  // Used by the physical layout planner to put the cluster index key stream
-  // first in each stripe.
-  std::optional<offset_size> clusterIndexKeyStreamOffset_;
+  // Used by the physical layout planner to put the stripe index streams first
+  // in each stripe.
+  uint32_t stripeIndexStreamCount_{0};
   offset_size currentOffset_{0};
 
   friend class ScalarTypeBuilder;
@@ -585,6 +621,7 @@ class SchemaBuilder {
   friend class FlatMapTypeBuilder;
   friend class HybridFlatMapTypeBuilder;
   friend class SlidingWindowMapTypeBuilder;
+  friend class SlidingWindowArrayTypeBuilder;
   friend std::ostream& operator<<(
       std::ostream& out,
       const SchemaBuilder& schema);

@@ -322,6 +322,7 @@ TEST_P(SerializedPageFileTest, serializedPageRoundTripBasic) {
       serde_,
       createSerdeOptions(),
       pool(),
+      /*readAheadExecutor=*/nullptr,
       /*ioStats=*/nullptr);
 
   // Read all data split due to the small write buffer size.
@@ -409,6 +410,7 @@ TEST_P(SerializedPageFileTest, writeWithoutRowSizeEstimates) {
       serde,
       makeOptions(),
       pool(),
+      /*readAheadExecutor=*/nullptr,
       /*ioStats=*/nullptr);
   std::vector<RowVectorPtr> readVectors;
   RowVectorPtr readVector;
@@ -459,6 +461,7 @@ TEST_P(SerializedPageFileTest, serializedPageRoundTripMultipleBatches) {
         serde_,
         createSerdeOptions(),
         pool(),
+        /*readAheadExecutor=*/nullptr,
         /*ioStats=*/nullptr);
 
     RowVectorPtr readVector;
@@ -528,6 +531,7 @@ TEST_P(SerializedPageFileTest, roundTripWithComplexTypes) {
         serde_,
         createSerdeOptions(),
         pool(),
+        /*readAheadExecutor=*/nullptr,
         /*ioStats=*/nullptr);
 
     RowVectorPtr readVector;

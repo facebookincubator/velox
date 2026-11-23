@@ -113,6 +113,29 @@ class NimbleIndexProjector {
   /// `CachedDataInput` against the caller-owned cache; otherwise reads use
   /// `DirectDataInput` with no caching. The cache must outlive the projector.
   ///
+  /// When ReaderOptions::coLoadKeyStreams() is set and the file's cluster index
+  /// stores key chunks in stripes (KeyStreamLayout::kStripe), the projector
+  /// co-loads key streams: it reads the stripes that a projection can select
+  /// rows of in one load, each with its key stream, which holds the stripe's
+  /// keys, and resolves the bounds from those key streams. loadStripeStreams()
+  /// reads the key stream of each stripe too. Stream checksums verify the key
+  /// streams like the projected streams. A co-load saves the read that waits
+  /// for the key chunks, but reads the stripe streams even when a key is
+  /// missing. Under Options::maxRows, Options::maxBytes or
+  /// Options::maxRowsPerRequest, a projection picks the stripes to read from
+  /// stripe metadata before the lookup, which does not tell how many rows of
+  /// its stripe a bound selects, so it can read stripes past where the limits
+  /// stop the projection. It also reads the stripe right after where the limits
+  /// or a request's maxRowsPerRequest stop the projection, for its key stream,
+  /// which holds the first key that a request continuing there resumes at, and
+  /// it reads nothing past that stripe. It takes resume keys from the key
+  /// streams it read, and resolves only the bounds in those streams: a request
+  /// that the limits keep the projection from reaching gets its lowerKey back
+  /// as its resume key, even when it matches no row. Without a co-load, the
+  /// projector reads the key chunks before the stripe streams. Row windows and
+  /// derived lookup requests use the index lookup before loading stripes, so
+  /// their constraints are applied before stripe planning.
+  ///
   // TODO: projectedSubfields currently must match file schema column names.
   // Add table-to-file column name mapping for schema evolution support.
   static std::unique_ptr<NimbleIndexProjector> create(
@@ -127,6 +150,8 @@ class NimbleIndexProjector {
   /// When `blockCache` is non-null, stripe data reads route through
   /// `CachedDataInput` against the caller-owned cache; otherwise reads use
   /// `DirectDataInput` with no caching. The cache must outlive the projector.
+  /// ReaderOptions::coLoadKeyStreams() selects the co-load as create() above
+  /// describes.
   static std::unique_ptr<NimbleIndexProjector> create(
       std::shared_ptr<TabletReader> tablet,
       const velox::FileHandle& fileHandle,
@@ -182,8 +207,8 @@ class NimbleIndexProjector {
     /// read error in any of them fails the projection. Pinned metadata keeps
     /// them in memory for the reader's lifetime.
     ///
-    /// A co-load (see coLoadKeyStreams) loads stripe groups the same way while
-    /// it picks its stripes before the key lookups, and keeps the stream
+    /// A co-load (see create()) loads stripe groups the same way while it
+    /// picks its stripes before the key lookups, and keeps the stream
     /// locations of the stripes it reads. Planning then takes the stream
     /// locations from the co-load and loads no group.
     uint64_t maxStripeGroupMetadataBytesPerLoad{0};
@@ -194,28 +219,6 @@ class NimbleIndexProjector {
     /// Changing it between calls rebuilds the projector's StreamReader. See
     /// Encoding::Options::cacheEncodingView.
     bool cacheEncodingView{false};
-    /// When the file's cluster index stores key chunks in stripes
-    /// (KeyStreamLayout::kStripe), reads the stripes that the requests can
-    /// select rows of in one load, each with its key stream, which holds the
-    /// stripe's keys, and resolves the bounds from those key streams. Stream
-    /// checksums verify the key streams like the projected streams. A co-load
-    /// saves the read that waits for the key chunks, but reads the stripe
-    /// streams even when a key is missing. Under maxRows, maxBytes or
-    /// maxRowsPerRequest, it picks the stripes to read from stripe metadata
-    /// before the lookup, which does not tell how many rows of its stripe a
-    /// bound selects, so it can read stripes past where the limits stop the
-    /// projection. It also reads the stripe right after where the limits or a
-    /// request's maxRowsPerRequest stop the projection, for its key stream,
-    /// which holds the first key that a request continuing there resumes at,
-    /// and it reads nothing past that stripe. It takes resume keys from the key
-    /// streams it read, and resolves only the bounds in those streams: a
-    /// request that the limits keep the projection from reaching gets its
-    /// lowerKey back as its resume key, even when it matches no row. Without a
-    /// co-load, the projection reads the key chunks before the stripe streams.
-    /// Row windows and derived lookup requests use the index lookup before
-    /// loading stripes, so their constraints are applied before stripe
-    /// planning.
-    bool coLoadKeyStreams{true};
   };
 
   /// Serialized output for a single request.
@@ -237,10 +240,10 @@ class NimbleIndexProjector {
     /// short by a limit (maxRows, maxBytes, or maxRowsPerRequest), the encoded
     /// resume key for continuation. The caller constructs new key bounds using
     /// this as lowerKey with their original upperKey. nullopt if complete, a
-    /// miss, or needResumeKey was not set. A co-load (see
-    /// Options::coLoadKeyStreams) does not look up a request that the limits
-    /// keep the projection from reaching, so it returns the lowerKey of such a
-    /// request even when the request is a miss.
+    /// miss, or needResumeKey was not set. A co-load (see create()) does not
+    /// look up a request that the limits keep the projection from reaching, so
+    /// it returns the lowerKey of such a request even when the request is a
+    /// miss.
     ///
     /// Also embedded in the last slice's per-slice header so consumers that
     /// hold an IOBuf can recover the key without keeping the
@@ -288,6 +291,10 @@ class NimbleIndexProjector {
       const index::IndexLookup::LookupRequest& request,
       const Options& options);
 
+  /// Resolves a file-level row range into stripe selections.
+  /// Returns an empty vector for an empty range.
+  std::vector<StripeSelection> lookup(const RowRange& rowRange);
+
   /// Resolves key bounds into stripe selections, in stripe order.
   /// Returns an empty vector for a miss. The caller owns scan progress.
   std::vector<StripeSelection> lookup(
@@ -295,34 +302,39 @@ class NimbleIndexProjector {
 
   /// Resolves key bounds as lookup(bounds) does, and sets 'keyCursor' to a
   /// cursor over the keys of the selected rows, or to null on a miss, as
-  /// ClusterIndexBase::seek() returns.
+  /// ClusterIndexBase::seek() returns them. Decodes the keys of the stripe of
+  /// 'keyChunk' from it, in place, instead of reading its key chunk, and reads
+  /// the key chunks of other stripes through the cluster index: a caller that
+  /// loaded the stripe of the lower bound with its key stream, or holds it,
+  /// passes that key chunk.
   std::vector<StripeSelection> lookup(
       const velox::serializer::EncodedKeyBounds& bounds,
+      const std::optional<index::ClusterIndexBase::KeyChunk>& keyChunk,
       std::unique_ptr<index::KeyCursor>& keyCursor);
 
-  /// Resolves the rows whose key equals the encoded key into stripe selections,
-  /// in stripe order. Returns an empty vector for a miss. The rows of a key can
-  /// span chunks and stripes, so this looks up the range from the key to its
-  /// successor, the key followed by a zero byte. The caller owns scan progress.
-  std::vector<StripeSelection> lookup(std::string encodedKey);
-
-  /// Resolves the rows of the encoded key as lookup(encodedKey) does, and sets
-  /// 'keyCursor' as lookup(bounds, keyCursor) does.
-  std::vector<StripeSelection> lookup(
-      std::string encodedKey,
-      std::unique_ptr<index::KeyCursor>& keyCursor);
-
-  /// Resolves a file-level row range into stripe selections.
-  /// Returns an empty vector for an empty range.
-  std::vector<StripeSelection> lookup(const RowRange& rowRange);
+  /// Returns the stripes whose rows a lookup of 'bounds' may select, from the
+  /// stripe of the lower bound to the stripe of the upper bound, as
+  /// ClusterIndexBase::lookupStripes() returns them. Reads index metadata but
+  /// no key chunk. Only a Stripe layout cluster index supports this.
+  nimble::StripeRange lookupStripes(
+      const velox::serializer::EncodedKeyBounds& bounds);
 
   /// Loads projected streams for contiguous full stripes in one I/O batch.
   /// Returns one entry per stripe, in stripe order, including stripes whose
   /// projected streams are all absent. The caller applies row selections.
-  /// Requires a non-zero stripe count.
+  /// Requires a non-zero stripe count. When the projector co-loads key streams
+  /// (see create()), the batch also reads the key stream of each stripe, which
+  /// ProjectedStripe::keyChunk then holds.
   std::vector<facebook::nimble::ProjectedStripe> loadStripeStreams(
       uint32_t stripeOffset,
       uint32_t numStripes);
+
+  /// Returns whether the projector co-loads key streams (see create()):
+  /// ReaderOptions::coLoadKeyStreams() is set, and the cluster index stores key
+  /// chunks in stripes.
+  bool coLoadKeyStreams() const {
+    return coLoadKeyStreams_;
+  }
 
   /// Returns the projected nimble schema. Preserves encoding-specific types
   /// (ArrayWithOffsets, SlidingWindowMap, FlatMap) from the file schema.
@@ -377,7 +389,7 @@ class NimbleIndexProjector {
     /// Number of projections that stopped with stripes left to read because
     /// numPlannedBytes reached Options::maxBytes.
     uint32_t numMaxBytesTruncations{0};
-    /// Number of projections that read key streams in the same load as their
+    /// Number of loads that read cluster index key streams in the same load as
     /// stripe streams.
     uint32_t numKeyStreamCoLoads{0};
 
@@ -427,7 +439,8 @@ class NimbleIndexProjector {
       std::shared_ptr<const NimbleTypeProjection> projection,
       velox::memory::MemoryPool* pool,
       std::shared_ptr<velox::io::IoStatistics> ioStats,
-      bool verifyStreamChecksums);
+      bool verifyStreamChecksums,
+      bool coLoadKeyStreams);
 
   // A request index paired with its stripe-relative row range.
   struct StripeRange {
@@ -554,8 +567,18 @@ class NimbleIndexProjector {
   std::vector<ClusterIndexBase::KeyChunk> loadCoLoadedStreams();
 
   // Returns the key chunk of each of ctx_.coLoadedStripes from the key streams
-  // that loadCoLoadedStreams() loaded, without their stream trailers.
+  // that loadCoLoadedStreams() loaded, without their stream trailers. Each
+  // holds the handle of the load, ctx_.dataHandle.
   std::vector<ClusterIndexBase::KeyChunk> coLoadedKeyChunks() const;
+
+  // Adds each of 'stripes', which ascend, to the co-load: records it in
+  // ctx_.coLoadedStripes for loadCoLoadedStreams() to read with its projected
+  // streams and its key stream, as selectStripesToCoLoad() does for the
+  // stripes that it picks for a projection. 'stripeIdentifiers' identifies
+  // each of 'stripes'.
+  void addStripesToCoLoad(
+      std::span<const uint32_t> stripes,
+      std::span<const StripeIdentifier> stripeIdentifiers);
 
   // Points ctx_.dataInputIndices of each planned stripe at the streams that
   // loadCoLoadedStreams() loaded for it, which must have loaded every planned
@@ -816,9 +839,10 @@ class NimbleIndexProjector {
   velox::memory::MemoryPool* const pool_;
   const ClusterIndexBase* const clusterIndex_;
   const uint32_t numStripes_{0};
-  // Whether the cluster index stores its key chunks in stripes, as key streams
-  // that a projection can read in the same load as its stripe streams.
-  const bool stripeKeyLayout_{false};
+  // Whether the projector co-loads key streams: the creator asked for it, and
+  // the cluster index stores its key chunks in stripes, as key streams that a
+  // load can read with its stripe streams.
+  const bool coLoadKeyStreams_{false};
 
   const std::shared_ptr<const NimbleTypeProjection> projection_;
   // True when every emitted slice must preserve a native HFM batch boundary,

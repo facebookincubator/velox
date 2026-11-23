@@ -955,6 +955,13 @@ void collectStreamOffsets(
       collectStreamOffsets(*arr.elements(), offsets);
       break;
     }
+    case nimble::Kind::SlidingWindowArray: {
+      const auto& arr = type.asSlidingWindowArray();
+      offsets.insert(arr.offsetsDescriptor().offset());
+      offsets.insert(arr.lengthsDescriptor().offset());
+      collectStreamOffsets(*arr.elements(), offsets);
+      break;
+    }
     case nimble::Kind::Map: {
       const auto& map = type.asMap();
       offsets.insert(map.lengthsDescriptor().offset());

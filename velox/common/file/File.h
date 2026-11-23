@@ -44,6 +44,7 @@
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/file/FileIoContext.h"
 #include "velox/common/file/FileIoTracer.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/Region.h"
@@ -66,42 +67,6 @@ class IoStats {
 
  private:
   folly::Synchronized<folly::F14FastMap<std::string, RuntimeMetric>> stats_;
-};
-
-struct FileIoContext {
-  /// Stats for IO operations.
-  IoStats* ioStats{nullptr};
-
-  /// Options for file read operations.
-  folly::F14FastMap<std::string, std::string> fileOpts;
-
-  /// Tracer for IO operations, providing call stack context.
-  std::shared_ptr<FileIoTracer> ioTracer;
-
-  /// When false, hints to the storage layer that this read should not be cached
-  /// or should be evicted soon after reading. This is useful for one-time reads
-  /// where caching would waste resources.
-  bool cacheable{false};
-
-  /// Pool for scratch memory a read needs only until it returns, such as a
-  /// staging buffer. Supplied per call because one ReadFile can serve many
-  /// queries, and the memory belongs to the query doing the read. Null means
-  /// the file allocates outside any pool.
-  memory::MemoryPool* pool{nullptr};
-
-  FileIoContext() = default;
-
-  explicit FileIoContext(
-      IoStats* stats,
-      folly::F14FastMap<std::string, std::string> fileOpts = {},
-      std::shared_ptr<FileIoTracer> tracer = nullptr,
-      bool cacheable = false,
-      memory::MemoryPool* pool = nullptr)
-      : ioStats(stats),
-        fileOpts(std::move(fileOpts)),
-        ioTracer(std::move(tracer)),
-        cacheable(cacheable),
-        pool(pool) {}
 };
 
 // A read-only file.  All methods in this object should be thread safe.

@@ -21,10 +21,10 @@
 
 namespace facebook::nimble::index {
 
-/// Defines the serialized format shared by the hierarchical key writer and
+/// Defines the serialized format shared by the trie key writer and
 /// reader.
 ///
-/// The cluster-index descriptor selects the hierarchical reader, so the chunk
+/// The cluster-index descriptor selects the trie reader, so the chunk
 /// does not need a separate type marker.
 ///
 /// ```
@@ -67,11 +67,11 @@ namespace facebook::nimble::index {
 /// values[N] concatenates every run of level N, so a level takes one encoding
 /// header however many runs it has. Readers validate the child offsets but
 /// trust each run of values to ascend, as the writer enforces key order.
-class HierarchicalKeyFormat final {
+class TrieKeyFormat final {
  public:
-  HierarchicalKeyFormat() = delete;
+  TrieKeyFormat() = delete;
 
-  /// Identifies the serialized format version within a hierarchical chunk.
+  /// Identifies the serialized format version within a trie chunk.
   static constexpr uint8_t kVersion{1};
   /// Locates rowCount after the version and level-count fields.
   static constexpr uint32_t kRowCountOffset{2 * sizeof(uint8_t)};

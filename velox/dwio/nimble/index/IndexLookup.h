@@ -31,6 +31,7 @@
 
 #include "velox/common/Casts.h"
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/caching/FileHandle.h"
 #include "velox/common/file/File.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/RowRange.h"
@@ -47,7 +48,6 @@ class MetadataInput;
 } // namespace facebook::nimble
 
 namespace facebook::velox {
-struct FileHandle;
 namespace io {
 class ReaderOptions;
 } // namespace io
@@ -109,8 +109,8 @@ class IndexLookup {
     BlockCache* blockCache{nullptr};
 
     /// Identity of the file in blockCache keys: fileHandle->uuid. Must name
-    /// 'file'.
-    const velox::FileHandle* fileHandle{nullptr};
+    /// 'file'. A copy, so the caller's handle need not outlive these options.
+    std::optional<velox::FileHandle> fileHandle{std::nullopt};
 
     /// If true, pins parsed index objects in the index cache with strong
     /// references so they are never evicted.
@@ -124,7 +124,7 @@ class IndexLookup {
 
     /// If true, key chunk readers build their encoding views with
     /// Encoding::Options::cacheEncodingView, trading memory for faster repeated
-    /// seeks into chunks that stay resident. Only hierarchical key chunks read
+    /// seeks into chunks that stay resident. Only trie key chunks read
     /// through encoding views.
     bool cacheKeyEncodingViews{false};
 
@@ -296,6 +296,22 @@ class IndexLookup {
     const std::vector<uint32_t> resultOffsets_;
   };
 
+  /// The key chunk of a stripe of an index whose keyStreamLayout() is kStripe,
+  /// which a caller has read itself.
+  struct KeyChunk {
+    /// Stripe of the file whose key stream holds the chunk.
+    uint32_t stripe{0};
+    /// The key stream of the stripe without its stream trailer, which is the
+    /// whole chunk.
+    std::string_view data;
+    /// Owns the bytes of 'data', such as the handle of the read that loaded
+    /// them. A key cursor requires it and holds it, so the caller can drop
+    /// the chunk once the cursor has it. A call that keeps nothing of the
+    /// chunk past its return takes it without one, and then 'data' must
+    /// outlive the call.
+    std::shared_ptr<void> dataHandle{nullptr};
+  };
+
   virtual ~IndexLookup() = default;
 
   /// Returns the type of this index.
@@ -334,10 +350,14 @@ class IndexLookup {
 
   /// Returns a cursor over the encoded keys of the rows in 'rows', which
   /// must be within the index. Scanning callers should prefer this to a
-  /// keyAtRow() loop.
-  virtual std::unique_ptr<KeyCursor> keyCursor(RowRange /*rows*/) const {
+  /// keyAtRow() loop. With 'keyChunk', 'rows' must lie in the stripe of the
+  /// chunk, and an index whose keyStreamLayout() is kStripe decodes their keys
+  /// from it, in place, instead of reading them.
+  virtual std::unique_ptr<KeyCursor> keyCursor(
+      RowRange /*rows*/,
+      const std::optional<KeyChunk>& /*keyChunk*/ = std::nullopt) const {
     NIMBLE_NOT_IMPLEMENTED(
-        "keyCursor is not supported by index type {}", toString(type_));
+        "keyCursor is not supported by index type {}", type_);
   }
 
   /// Returns where the index keeps its key chunks. kStripe tells a reader that

@@ -233,9 +233,7 @@ class TabletReader {
     /// File handle for blockCache, whose entries are keyed by fileHandle->uuid.
     /// Whenever blockCache is set, fileHandle->file must be the reader's file.
     /// The reader reads the handle only during construction, so the handle
-    /// need not outlive create(). The exception is cacheIndex with blockCache:
-    /// a vector index reads the handle when it first loads, so the handle must
-    /// then outlive the reader and the vector indexes obtained from it.
+    /// need not outlive create().
     ///
     /// FileHandle contains:
     ///   - file: shared_ptr<ReadFile> for IO

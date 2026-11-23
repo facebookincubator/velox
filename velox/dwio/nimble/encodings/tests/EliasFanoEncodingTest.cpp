@@ -19,7 +19,9 @@
 #include <algorithm>
 #include <limits>
 #include <optional>
+#include <random>
 #include <span>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -171,6 +173,59 @@ TEST_F(EliasFanoEncodingTest, resetSkipAndMaterialize) {
   output.resize(input.size());
   encoding->materialize(static_cast<uint32_t>(output.size()), output.data());
   EXPECT_EQ(output, input);
+
+  // Folly leaves the cursor in place for skip(0), even at the end.
+  encoding->skip(0);
+  encoding->materialize(/*rowCount=*/0, nullptr);
+  encoding->reset();
+  encoding->skip(0);
+  output.resize(1);
+  encoding->materialize(/*rowCount=*/1, output.data());
+  EXPECT_EQ(output, (std::vector<uint32_t>{0}));
+}
+
+TEST_F(EliasFanoEncodingTest, interleavesSkipAndMaterialize) {
+  // Dense values leave no lower bits; sparse ones leave several. Both streams
+  // span many skip and forward pointer quanta. Skips and materializes advance
+  // the same cursor.
+  std::mt19937 random{7};
+  const auto check = [&](const auto& input) {
+    using T = typename std::decay_t<decltype(input)>::value_type;
+    auto encoding = createEncoding(input);
+    // The second pass checks that reset() rewinds the shared cursor.
+    for (int pass = 0; pass < 2; ++pass) {
+      encoding->reset();
+      uint32_t row{0};
+      while (row < input.size()) {
+        const auto length = std::min<uint32_t>(
+            1 + random() % 300, static_cast<uint32_t>(input.size()) - row);
+        if (random() % 3 == 0) {
+          encoding->skip(length);
+        } else {
+          std::vector<T> output(length);
+          encoding->materialize(length, output.data());
+          ASSERT_EQ(
+              output,
+              std::vector<T>(input.begin() + row, input.begin() + row + length))
+              << "at row " << row;
+        }
+        row += length;
+      }
+    }
+  };
+  for (const uint32_t maxGap : {1u, 5'000u}) {
+    SCOPED_TRACE(maxGap);
+    std::vector<uint32_t> unsignedInput(5'000);
+    std::vector<int64_t> signedInput(5'000);
+    uint32_t value{0};
+    for (size_t row = 0; row < unsignedInput.size(); ++row) {
+      value += random() % (maxGap + 1);
+      unsignedInput[row] = value;
+      signedInput[row] = int64_t{value} - 10'000'000;
+    }
+    check(unsignedInput);
+    check(signedInput);
+  }
 }
 
 TEST_F(EliasFanoEncodingTest, supportsRandomAccessAndValueLowerBound) {
@@ -301,6 +356,47 @@ TEST_F(EliasFanoEncodingTest, listChecksMaterializeRange) {
   NIMBLE_ASSERT_THROW(
       list.materializeAt(/*offset=*/1, /*rowCount=*/2, output.data()),
       "Reading past end of encoding");
+}
+
+TEST_F(EliasFanoEncodingTest, listReadsAtPointerQuantumBoundaries) {
+  // materializeAt() skips to its offset, and a skip of more than 256 rows
+  // starts at a forward pointer. Random reads jump back as well as forward.
+  std::vector<uint64_t> input(600);
+  for (size_t row = 0; row < input.size(); ++row) {
+    input[row] = row / 2;
+  }
+  const auto encoding = createEncoding(input);
+  const auto& eliasFano =
+      dynamic_cast<const nimble::EliasFanoEncoding<uint64_t>&>(*encoding);
+  const auto numRows = static_cast<uint32_t>(input.size());
+  for (const uint32_t offset :
+       {0u, 1u, 127u, 128u, 255u, 256u, 257u, 511u, 512u, 513u, 599u}) {
+    for (const uint32_t length : {1u, 2u, 300u}) {
+      const auto rowCount = std::min(length, numRows - offset);
+      std::vector<uint64_t> output(rowCount);
+      eliasFano.list().materializeAt(offset, rowCount, output.data());
+      ASSERT_EQ(
+          output,
+          std::vector<uint64_t>(
+              input.begin() + offset, input.begin() + offset + rowCount))
+          << "offset=" << offset << ", length=" << rowCount;
+    }
+  }
+  for (const uint32_t row : {599u, 512u, 511u, 256u, 255u, 0u, 300u}) {
+    EXPECT_EQ(eliasFano.valueAt(row), input[row]) << "row=" << row;
+  }
+}
+
+TEST_F(EliasFanoEncodingTest, listChecksValueAtRow) {
+  // The unchecked reader can't detect a row past the end, so valueAt() checks
+  // the row before the seek.
+  const std::vector<uint64_t> input{10, 20};
+  const auto encoding = createEncoding(input);
+  const auto& list =
+      dynamic_cast<const nimble::EliasFanoEncoding<uint64_t>&>(*encoding)
+          .list();
+  EXPECT_EQ(list.valueAt(1), 20);
+  NIMBLE_ASSERT_THROW(list.valueAt(2), "Reading past end of encoding");
 }
 
 TEST_F(EliasFanoEncodingTest, absoluteReadsPreserveSequentialPosition) {

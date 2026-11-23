@@ -19,19 +19,10 @@
 #include <folly/container/F14Map.h>
 #include <memory>
 #include <string>
-#include <string_view>
 #include <vector>
 
+#include "velox/connectors/common/DeletionVectorReader.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
-#include "velox/dwio/common/RoaringBitmapView.h"
-
-namespace facebook::velox::config {
-class ConfigBase;
-}
-
-namespace facebook::velox::filesystems {
-class TokenProvider;
-}
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -51,13 +42,13 @@ namespace facebook::velox::connector::hive::iceberg {
 /// keeps each container in its serialized form instead of expanding every
 /// deleted row. Each batch's delete bitmap is then filled straight from the
 /// containers it overlaps.
-class DeletionVectorReader {
+class DeletionVectorReader : public connector::DeletionVectorReader {
  public:
   /// @param dvFile Iceberg delete file metadata containing the Puffin file
   /// path,
   ///        blob offset, and blob length.
   /// @param splitOffset File position of the first row in the split.
-  /// @param pool Memory pool for internal allocations.
+  /// @param pool Memory pool for the bytes of the deletion vector.
   /// @param connectorConfig Connector configuration used to resolve the
   ///        filesystem for the Puffin file (e.g. Manifold client credentials).
   ///        Passing nullptr leaves config-requiring filesystems unconfigured.
@@ -72,17 +63,6 @@ class DeletionVectorReader {
       folly::F14FastMap<std::string, std::string> fileReadOps = {},
       std::shared_ptr<filesystems::TokenProvider> tokenProvider = nullptr);
 
-  /// Reads deleted positions from the DV and sets corresponding bits in the
-  /// deleteBitmap for the current batch range. Batches must be read in
-  /// increasing row order.
-  void readDeletePositions(
-      uint64_t baseReadOffset,
-      uint64_t size,
-      BufferPtr deleteBitmap);
-
-  /// Returns true when there is no more data.
-  bool noMoreData() const;
-
   /// Loads the deletion vector (if not already loaded) and returns the sorted,
   /// absolute file-level deleted positions. Used to seed a DeletionVectorWriter
   /// when replacing an existing DV with the union of old and new positions.
@@ -93,50 +73,17 @@ class DeletionVectorReader {
   static constexpr int32_t kDvLengthFieldId = 101;
 
  private:
-  void loadBitmap();
-
-  // Detects whether the bitmap is a 64-bit or legacy 32-bit roaring bitmap and
-  // parses it into bitmap_.
-  void parseRoaringBitmap();
-
-  const uint8_t* bitmapData() const {
-    return reinterpret_cast<const uint8_t*>(blob_.data()) + bitmapOffset_;
-  }
+  // Locates the blob from the delete file metadata or the Puffin footer,
+  // reads it, removes its deletion-vector-v1 frame and parses the bitmap
+  // inside.
+  Bitmap readBitmap(ReadFile& file, const FileIoContext& ioContext) override;
 
   // The deletion vector file metadata from the Iceberg manifest.
   const IcebergDeleteFile dvFile_;
 
-  // Base offset of the split within the data file (for position mapping).
-  const uint64_t splitOffset_;
-
-  // Connector configuration for resolving the Puffin file's filesystem.
-  const std::shared_ptr<const config::ConfigBase> connectorConfig_;
-
-  // The blob read from the file. Containers point into it by offset, so it
-  // must not change after loading.
-  std::string blob_;
-
-  // Options for the Puffin file's open and reads. Kept because the file is
-  // opened lazily in loadBitmap(), after the split reader has returned.
-  const folly::F14FastMap<std::string, std::string> fileReadOps_;
-
-  // Query credentials retained until the lazy Puffin open completes.
-  const std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
-
-  // Position and size of the roaring bitmap within 'blob_', after removing the
-  // deletion-vector-v1 frame.
-  size_t bitmapOffset_{0};
-  size_t bitmapSize_{0};
-
-  // The roaring bitmap inside 'blob_'.
-  dwio::common::RoaringBitmapView bitmap_;
-
   // Expanded positions, built only by deletedPositions().
   std::vector<int64_t> deletedPositions_;
   bool positionsExpanded_{false};
-
-  // Whether the bitmap has been loaded from the DV file.
-  bool loaded_{false};
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

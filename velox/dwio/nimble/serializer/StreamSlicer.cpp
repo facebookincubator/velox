@@ -176,6 +176,11 @@ uint32_t maxStreamOffset(const Type& type) {
           {maxStreamOffset(type.asArrayWithOffsets().offsetsDescriptor()),
            maxStreamOffset(type.asArrayWithOffsets().lengthsDescriptor()),
            maxStreamOffset(*type.asArrayWithOffsets().elements())});
+    case Kind::SlidingWindowArray:
+      return std::max(
+          {maxStreamOffset(type.asSlidingWindowArray().offsetsDescriptor()),
+           maxStreamOffset(type.asSlidingWindowArray().lengthsDescriptor()),
+           maxStreamOffset(*type.asSlidingWindowArray().elements())});
     case Kind::SlidingWindowMap:
       return std::max(
           {maxStreamOffset(type.asSlidingWindowMap().offsetsDescriptor()),
