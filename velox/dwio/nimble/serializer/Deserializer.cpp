@@ -54,6 +54,8 @@ const StreamDescriptor& getMainDescriptor(const Type& type) {
       return type.asHybridFlatMap().nullsDescriptor();
     case Kind::ArrayWithOffsets:
       return type.asArrayWithOffsets().offsetsDescriptor();
+    case Kind::SlidingWindowArray:
+      return type.asSlidingWindowArray().offsetsDescriptor();
     case Kind::SlidingWindowMap:
       return type.asSlidingWindowMap().offsetsDescriptor();
     default:
@@ -61,16 +63,19 @@ const StreamDescriptor& getMainDescriptor(const Type& type) {
   }
 }
 
-// Returns the offset of the stream of the dedup kinds, ArrayWithOffsets and
-// SlidingWindowMap, that holds the lengths of their distinct arrays or maps,
-// next to the per-row offsets of their main stream. Returns std::nullopt for
-// other types.
+// Returns the offset of the stream of the dedup kinds, ArrayWithOffsets,
+// SlidingWindowMap and SlidingWindowArray, that holds the lengths of their
+// distinct arrays, maps or windows, next to the per-row offsets of their main
+// stream. Returns std::nullopt for other types.
 std::optional<offset_size> getDedupLengthsOffset(const Type& type) {
   if (type.isArrayWithOffsets()) {
     return type.asArrayWithOffsets().lengthsDescriptor().offset();
   }
   if (type.isSlidingWindowMap()) {
     return type.asSlidingWindowMap().lengthsDescriptor().offset();
+  }
+  if (type.isSlidingWindowArray()) {
+    return type.asSlidingWindowArray().lengthsDescriptor().offset();
   }
   return std::nullopt;
 }

@@ -35,6 +35,7 @@ enum Kind:uint8 {
   Map,
   ArrayWithOffsets,
   SlidingWindowMap,
+  SlidingWindowArray = 55,
   FlatMapInt8 = 100,
   FlatMapUInt8,
   FlatMapInt16,

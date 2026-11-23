@@ -741,6 +741,12 @@ void populateSchemaInfo(
             nimbleType->asArrayWithOffsets().elements(),
             nodeId,
             schemaInfo);
+      } else if (nimbleType->isSlidingWindowArray()) {
+        populateSchemaInfo(
+            schema->childAt(0),
+            nimbleType->asSlidingWindowArray().elements(),
+            nodeId,
+            schemaInfo);
       } else {
         populateSchemaInfo(
             schema->childAt(0),

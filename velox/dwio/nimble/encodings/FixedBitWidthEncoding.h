@@ -92,8 +92,11 @@ struct FixedBitWidthTypedLanes {
 //   the type width: a bit width of 16 (values of up to 16 bits) or 32, the
 //   minimum as baseline, compressed as Uint16 or Uint32.
 // - Full-width lanes, for every other eligible chunk (including every eligible
-//   16-bit chunk): the type's bit width and the minimum as baseline,
-//   compressed as the stream's DataType, the label TrivialEncoding uses.
+//   16-bit chunk): the type's bit width and a baseline of 0, so the payload is
+//   the raw values followed by 8 zero bytes, compressed as the stream's
+//   DataType, as TrivialEncoding compresses its values.
+// Lanes are decided at the byte-rounded width, so fixedBitWidthUseExactBits
+// applies only to chunks bit-packed without lanes.
 // The padding keeps typed compressors on whole lanes: Managed Compression's
 // typed graphs take only whole lanes, and in OpenZL's permissive mode, its
 // default, a rejected size is stored as zstd without an error. It also covers
@@ -170,8 +173,18 @@ class FixedBitWidthEncoding final
       const Encoding::Options& options) {
     const uint64_t outerEncodingSize =
         EncodingPrefix::kFixedPrefixSize + kPrefixSize;
-    const uint64_t payloadSize = bitPackedBytes(
-        minValue, maxValue, rowCount, options.fixedBitWidthUseExactBits);
+    // A chunk that takes typed lanes is priced at the byte-rounded width, as
+    // without exact bits; every other chunk at the width the options ask for.
+    // No compressor is known here, so a chunk counts as taking lanes when a
+    // compressor that reads the data type would give it lanes.
+    const int roundedBits =
+        velox::bits::roundUp(velox::bits::bitsRequired(maxValue - minValue), 8);
+    const bool useExactBitWidth =
+        options.fixedBitWidthUseExactBits &&
+        !takesTypedLanes(
+            rowCount, roundedBits, /*compressionType=*/std::nullopt, options);
+    const uint64_t payloadSize =
+        bitPackedBytes(minValue, maxValue, rowCount, useExactBitWidth);
     return outerEncodingSize + payloadSize;
   }
 
@@ -221,8 +234,8 @@ class FixedBitWidthEncoding final
   }
 
   // Returns the lane width for a chunk of 'rowCount' values needing
-  // 'exactBits' bits and stored in 'storedBits', compressed with 'policy', or
-  // 0 when the chunk is bit-packed (see the data layout).
+  // 'exactBits' bits, whose byte-rounded width is 'storedBits', compressed
+  // with 'policy', or 0 when the chunk is bit-packed (see the data layout).
   static int typedLaneBits(
       uint32_t rowCount,
       int exactBits,
@@ -424,15 +437,17 @@ std::string_view FixedBitWidthEncoding<T>::encode(
   const uint32_t rowCount = values.size();
   const int exactBitsRequired = velox::bits::bitsRequired(
       selection.statistics().max() - selection.statistics().min());
+  const int roundedBitsRequired = velox::bits::roundUp(exactBitsRequired, 8);
+  // Exact bit widths apply only to chunks bit-packed without lanes.
   const int storedBitsRequired = options.fixedBitWidthUseExactBits
       ? exactBitsRequired
-      : velox::bits::roundUp(exactBitsRequired, 8);
+      : roundedBitsRequired;
 
   auto dataCompressionPolicy = selection.compressionPolicy();
   const int laneBits = typedLaneBits(
       rowCount,
       exactBitsRequired,
-      storedBitsRequired,
+      roundedBitsRequired,
       *dataCompressionPolicy,
       options);
   const bool fullWidthLanes =
@@ -445,7 +460,15 @@ std::string_view FixedBitWidthEncoding<T>::encode(
       "Unexpected typed lane width: {}",
       laneBits);
   const int bitsRequired = laneBits > 0 ? laneBits : storedBitsRequired;
-  const physicalType baseline = selection.statistics().min();
+
+  // Only full-width typed lanes store raw values (baseline 0): rebasing can't
+  // narrow them. laneBits is 0 unless the chunk takes typed lanes, which needs
+  // fixedBitWidthTypedLanes, so with the option off every chunk is rebased on
+  // its minimum, as before.
+  // TODO: Skip the rebase for other chunks too where it can't narrow the bit
+  // width. That's a separate optimization, behind its own option.
+  const physicalType baseline =
+      fullWidthLanes ? physicalType{0} : selection.statistics().min();
   const uint32_t fixedBitArraySize = laneBits > 0
       ? FixedBitWidthTypedLanes::payloadSize(rowCount, laneBits)
       : FixedBitArray::bufferSize(values.size(), bitsRequired);
@@ -480,7 +503,9 @@ std::string_view FixedBitWidthEncoding<T>::encode(
         fba.bulkSetWithBaseline(0, rowCount, values.data(), baseline);
         pos += fixedBitArraySize;
         return pos;
-      }};
+      },
+      // Only typed-lane payloads are typed, so only they take the level.
+      options.fixedBitWidthTypedLanesOpenzlLevel};
 
   const uint32_t encodingSize =
       Encoding::serializePrefixSize(rowCount, useVarint) +

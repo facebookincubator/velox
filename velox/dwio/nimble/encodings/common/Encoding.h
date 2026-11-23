@@ -28,6 +28,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <type_traits>
 #include <vector>
@@ -158,6 +159,8 @@ class Encoding {
 
     /// When true, FOR-family payloads use the exact required bit width. When
     /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
+    /// FixedBitWidth chunks that take typed lanes (see fixedBitWidthTypedLanes)
+    /// use the byte-rounded width either way.
     bool fixedBitWidthUseExactBits{false};
 
     /// When true, DictionaryEncoding orders an integer alphabet by physical
@@ -172,8 +175,9 @@ class Encoding {
     /// typed lanes: values in whole 16-, 32- or type-width lanes, handed to
     /// compression with a typed DataType instead of Undefined, so typed
     /// compressors see integers rather than a bit-packed blob. A chunk is
-    /// eligible when it is encoded with an integer type, its stored bit width
-    /// (see fixedBitWidthUseExactBits) is at least 16, it has at least
+    /// eligible when it is encoded with an integer type, its bit width rounded
+    /// up to whole bytes is at least 16 (fixedBitWidthUseExactBits does not
+    /// apply to lanes), it has at least
     /// fixedBitWidthTypedLanesMinValues values and its compression policy's
     /// compressor reads the payload's DataType (Managed Compression or OpenZL,
     /// see FixedBitWidthTypedLanes::compressorDataTypeAware()). Readers need no
@@ -184,6 +188,12 @@ class Encoding {
     // TODO: Replace this value-count floor with a stream-size threshold in
     // bytes, so the floor tracks payload size rather than row count.
     uint64_t fixedBitWidthTypedLanesMinValues{256};
+
+    /// MetaInternal compression level for FixedBitWidth chunks that take typed
+    /// lanes, in place of the compression policy's level. Bit-packed chunks,
+    /// other encodings and other compressors are unaffected. Unset (the
+    /// default) changes nothing. Levels must be in [1, 9]; the writer checks.
+    std::optional<int32_t> fixedBitWidthTypedLanesOpenzlLevel{};
 
     /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
     /// splitting it into bit ranges, keeping whichever form encodes smaller.

@@ -466,6 +466,15 @@ void collectPhysicalStreamRoles(const Type& type, PhysicalStreamRoles& roles) {
       collectPhysicalStreamRoles(*array.elements(), roles);
       return;
     }
+    case Kind::SlidingWindowArray: {
+      const auto& array = type.asSlidingWindowArray();
+      roles.kinds.emplace(
+          array.offsetsDescriptor().offset(), "SlidingWindowArray.offsets");
+      roles.kinds.emplace(
+          array.lengthsDescriptor().offset(), "SlidingWindowArray.lengths");
+      collectPhysicalStreamRoles(*array.elements(), roles);
+      return;
+    }
     case Kind::Map: {
       const auto& map = type.asMap();
       roles.kinds.emplace(map.lengthsDescriptor().offset(), "Map.lengths");

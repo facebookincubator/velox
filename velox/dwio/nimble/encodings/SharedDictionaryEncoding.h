@@ -246,8 +246,9 @@ class SharedDictionaryAlphabet {
   /// Serializes alphabet entries into the form the constructor accepts.
   ///
   /// candidateEncodings restricts the alphabet's own encoding; nested streams
-  /// always choose from the default candidates. An empty list falls back to the
-  /// default encoding selection policy.
+  /// always choose from the default candidates. An empty list uses the
+  /// default candidates except Dictionary, MainlyConstant and RLE, which
+  /// cannot win on distinct entries.
   template <typename T>
   static std::string_view encode(
       std::span<const T> values,
@@ -420,7 +421,17 @@ class SharedDictionaryAlphabet {
   static std::vector<std::pair<EncodingType, float>> encodingReadFactors(
       std::span<const EncodingType> candidateEncodings) {
     if (candidateEncodings.empty()) {
-      return ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors();
+      // Alphabet entries are distinct, so encodings that pay off only on
+      // repeated values cannot win. Skipping them also skips the unique-value
+      // statistics Dictionary and MainlyConstant would compute.
+      auto readFactors =
+          ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors();
+      std::erase_if(readFactors, [](const auto& entry) {
+        return entry.first == EncodingType::Dictionary ||
+            entry.first == EncodingType::MainlyConstant ||
+            entry.first == EncodingType::RLE;
+      });
+      return readFactors;
     }
     std::vector<std::pair<EncodingType, float>> readFactors;
     readFactors.reserve(candidateEncodings.size());

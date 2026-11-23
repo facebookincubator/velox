@@ -32,7 +32,8 @@ The following table shows the list of already supported encodings.
 `WriterOptions::fixedBitWidthTypedLanes` (off by default) makes FixedBitWidth
 store eligible chunks as typed lanes instead of a bit-packed payload, so a typed
 compressor sees whole integers. A chunk is eligible when it is encoded with an
-integer type, its stored bit width is at least 16, it has at least
+integer type, its bit width rounded up to whole bytes is at least 16
+(`fixedBitWidthUseExactBits` does not apply to lanes), it has at least
 `fixedBitWidthTypedLanesMinValues` values (default 256) and its compression
 policy uses a compressor that reads the payload's data type: Managed
 Compression (`MetaInternal`) or OpenZL. Zstd and Lz4 compress bytes, so lanes
@@ -47,16 +48,19 @@ MainlyConstant of the floating-point type.
 - **Narrow lanes:** 32- and 64-bit types whose stored width is at most half the
   type width use 16-bit lanes (values of up to 16 bits) or 32-bit lanes, with
   the minimum as baseline, compressed as `Uint16` or `Uint32`.
-- **Full-width lanes:** every other eligible chunk uses the type's width, with
-  the minimum as baseline, compressed as the stream's data type.
+- **Full-width lanes:** every other eligible chunk uses the type's width and a
+  baseline of 0, so the payload is the raw values, compressed as the stream's
+  data type.
 
 Both payloads are `rowCount * width / 8 + 8` bytes: whole lanes plus 8 zero
 bytes. The encoding header and the reader are unchanged, so every reader decodes
 typed lanes without an option. Selection is unchanged too: FixedBitWidth is
 chosen by its bit-packed size estimate, and lanes only change how it is stored.
 FixedBitWidth chunks stored with a floating-point type never take lanes, so
-they are estimated and stored as without the option, at the exact width when
-`fixedBitWidthUseExactBits` is set.
+they are stored as without the option, at the exact width when
+`fixedBitWidthUseExactBits` is set. With `fixedBitWidthUseExactBits` on, a chunk
+that takes lanes is estimated and stored at the byte-rounded width; chunks
+bit-packed without lanes keep the exact width.
 
 ## Cascading (Recursive) Encoding
 

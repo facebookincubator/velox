@@ -45,6 +45,10 @@ std::shared_ptr<nimble::ArrayWithOffsetsTypeBuilder> arrayWithOffsets(
     nimble::SchemaBuilder& builder,
     std::shared_ptr<nimble::TypeBuilder> elements);
 
+std::shared_ptr<nimble::SlidingWindowArrayTypeBuilder> slidingWindowArray(
+    nimble::SchemaBuilder& builder,
+    std::shared_ptr<nimble::TypeBuilder> elements);
+
 std::shared_ptr<nimble::MapTypeBuilder> map(
     nimble::SchemaBuilder& builder,
     std::shared_ptr<nimble::TypeBuilder> keys,
@@ -124,6 +128,8 @@ void schema(
 #define NIMBLE_ARRAY(elements) facebook::nimble::test::array(builder, elements)
 #define NIMBLE_OFFSETARRAY(elements) \
   facebook::nimble::test::arrayWithOffsets(builder, elements)
+#define NIMBLE_SLIDINGWINDOWARRAY(elements) \
+  facebook::nimble::test::slidingWindowArray(builder, elements)
 // Both operands allocate schema nodes, and the order in which a function's
 // arguments are evaluated is unspecified in C++ (GCC evaluates right to left,
 // Clang left to right). Passing them directly would therefore hand out schema

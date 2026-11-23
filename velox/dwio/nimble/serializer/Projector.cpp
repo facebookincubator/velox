@@ -164,7 +164,7 @@ std::shared_ptr<const Type> updateRowColumnNames(
 }
 
 // Updates column names within array elements.
-// Handles both Array and ArrayWithOffsets nimble types.
+// Handles Array, ArrayWithOffsets and SlidingWindowArray nimble types.
 std::shared_ptr<const Type> updateArrayColumnNames(
     const std::shared_ptr<const Type>& inputType,
     const velox::ArrayType& veloxArray) {
@@ -176,6 +176,25 @@ std::shared_ptr<const Type> updateArrayColumnNames(
       return inputType;
     }
     return std::make_shared<ArrayWithOffsetsType>(
+        array.offsetsDescriptor(),
+        array.lengthsDescriptor(),
+        std::move(newElements),
+        array.attributes());
+  }
+
+  // The renaming walks every column, projected or not, and asArray() below
+  // rejects a sliding window array. Rebuilds the array around the renamed
+  // elements and keeps its offsets and lengths streams, so a schema with a
+  // SlidingWindowArray column can still project its other columns. Projecting
+  // the column itself fails in buildProjectedNimbleType().
+  if (inputType->kind() == Kind::SlidingWindowArray) {
+    const auto& array = inputType->asSlidingWindowArray();
+    auto newElements =
+        updateColumnNames(array.elements(), *veloxArray.elementType());
+    if (newElements == array.elements()) {
+      return inputType;
+    }
+    return std::make_shared<SlidingWindowArrayType>(
         array.offsetsDescriptor(),
         array.lengthsDescriptor(),
         std::move(newElements),
