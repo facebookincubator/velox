@@ -1601,7 +1601,7 @@ struct GroupbyLeafState final : public BufferedState {
 
 } // namespace
 
-class GroupbyBufferedStateOps final : public BufferedStateOps {
+class CudfGroupby::GroupbyBufferedStateOps final : public BufferedStateOps {
  public:
   explicit GroupbyBufferedStateOps(CudfGroupby& owner) : owner_(owner) {
     keyIndices_.reserve(owner_.groupingKeyOutputChannels_.size());
@@ -1868,7 +1868,8 @@ struct StreamingGroupbyLeafState final : public BufferedState {
 // Keeps the buffered state of a streaming final aggregation in
 // streaming_groupby tables. A chunk is a prepared input: the grouping keys,
 // then the columns that the streaming requests read.
-class StreamingGroupbyBufferedStateOps final : public BufferedStateOps {
+class CudfGroupby::StreamingGroupbyBufferedStateOps final
+    : public BufferedStateOps {
  public:
   StreamingGroupbyBufferedStateOps(CudfGroupby& owner, uint64_t maxBytesPerLeaf)
       : owner_(owner), maxBytesPerLeaf_(maxBytesPerLeaf) {

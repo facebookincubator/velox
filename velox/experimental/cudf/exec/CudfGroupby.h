@@ -32,8 +32,6 @@ class QueryConfig;
 namespace facebook::velox::cudf_velox {
 
 class CudaEvent;
-class GroupbyBufferedStateOps;
-class StreamingGroupbyBufferedStateOps;
 
 inline constexpr std::string_view kStreamingGroupbyUsedStat{
     "streamingGroupbyUsed"};
@@ -222,8 +220,11 @@ class CudfGroupby : public CudfOperatorBase {
   void doClose() override;
 
  private:
-  friend class GroupbyBufferedStateOps;
-  friend class StreamingGroupbyBufferedStateOps;
+  // Keep the buffered state of this operator: in cuDF tables, and in
+  // streaming_groupby tables for a streaming final aggregation. Defined in
+  // CudfGroupby.cpp.
+  class GroupbyBufferedStateOps;
+  class StreamingGroupbyBufferedStateOps;
 
   CudfVectorPtr doGroupByAggregation(
       cudf::table_view tableView,
