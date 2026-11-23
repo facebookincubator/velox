@@ -23,7 +23,7 @@
 #include "velox/common/base/Nulls.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
-#include "velox/type/CalendarInterval.h"
+#include "velox/functions/sparksql/types/CalendarInterval.h"
 #include "velox/vector/arrow/Bridge.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -2402,7 +2402,7 @@ TEST_F(ArrowBridgeArrayExportTest, calendarIntervalRoundTrip) {
   auto result = importFromArrowAsOwner(schema, data, pool_.get());
   ASSERT_NE(result, nullptr);
   ASSERT_EQ(result->size(), 5);
-  EXPECT_TRUE(result->type()->isCalendarInterval());
+  EXPECT_TRUE(isCalendarIntervalType(result->type()));
 
   auto* flat = result->as<FlatVector<int128_t>>();
 

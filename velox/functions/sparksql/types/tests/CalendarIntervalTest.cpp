@@ -16,7 +16,7 @@
 
 #include <gtest/gtest.h>
 
-#include "velox/type/CalendarInterval.h"
+#include "velox/functions/sparksql/types/CalendarInterval.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -145,7 +145,11 @@ TEST_F(CalendarIntervalTest, typeIdentity) {
   EXPECT_EQ(type->name(), std::string("INTERVAL"));
   EXPECT_EQ(type->toString(), std::string("INTERVAL"));
   EXPECT_EQ(type->kind(), TypeKind::HUGEINT);
-  EXPECT_TRUE(type->isCalendarInterval());
+  EXPECT_TRUE(isCalendarIntervalType(type));
+  EXPECT_FALSE(isCalendarIntervalType(HUGEINT()));
+  EXPECT_FALSE(isCalendarIntervalType(DECIMAL(38, 6)));
+  EXPECT_FALSE(isCalendarIntervalType(INTERVAL_DAY_TIME()));
+  EXPECT_FALSE(isCalendarIntervalType(nullptr));
   EXPECT_FALSE(type->isLongDecimal());
   EXPECT_FALSE(type->isIntervalDayTime());
   // CalendarInterval is comparable (for grouping) but not orderable.
@@ -176,7 +180,7 @@ TEST_F(CalendarIntervalTest, typeSerde) {
   auto type = CALENDAR_INTERVAL();
   auto serialized = type->serialize();
   EXPECT_EQ(serialized["name"], "CalendarIntervalType");
-  auto deserialized = CalendarIntervalType::deserialize(serialized);
+  auto deserialized = ISerializable::deserialize<Type>(serialized);
   EXPECT_TRUE(type->equivalent(*deserialized));
 }
 
@@ -191,7 +195,7 @@ TEST_F(CalendarIntervalTest, valueToString) {
 TEST_F(CalendarIntervalTest, singletonBuiltInTypeLookup) {
   auto type = getType("INTERVAL", {});
   ASSERT_NE(type, nullptr);
-  EXPECT_TRUE(type->isCalendarInterval());
+  EXPECT_TRUE(isCalendarIntervalType(type));
 }
 
 } // namespace facebook::velox

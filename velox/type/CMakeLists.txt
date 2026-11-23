@@ -20,7 +20,6 @@ add_subdirectory(fbhive)
 
 velox_add_library(
   velox_type
-  CalendarInterval.cpp
   CastRegistry.cpp
   Conversions.cpp
   DecimalUtil.cpp
@@ -69,6 +68,7 @@ velox_add_library(
 
 velox_link_libraries(
   velox_type
+  velox_spark_types
   velox_type_tz
   velox_common_base
   velox_encode

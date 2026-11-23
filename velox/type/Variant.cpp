@@ -19,7 +19,7 @@
 #include "folly/json.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/encode/Base64.h"
-#include "velox/type/CalendarInterval.h"
+#include "velox/functions/sparksql/types/CalendarInterval.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/FloatingPointUtil.h"
 
@@ -271,7 +271,7 @@ std::string Variant::toString(const TypePtr& type) const {
       return str;
     }
     case TypeKind::HUGEINT: {
-      if (type->isCalendarInterval()) {
+      if (isCalendarIntervalType(type)) {
         return CalendarInterval::unpack(value<TypeKind::HUGEINT>()).toString();
       }
       if (type->isLongDecimal()) {
@@ -490,7 +490,7 @@ std::string Variant::toJson(const Type& type) const {
       return target;
     }
     case TypeKind::HUGEINT: {
-      if (type.isCalendarInterval()) {
+      if (CALENDAR_INTERVAL()->equivalent(type)) {
         std::string target;
         folly::json::escapeString(
             CalendarInterval::unpack(value<TypeKind::HUGEINT>()).toString(),
@@ -627,7 +627,7 @@ std::string Variant::toJsonUnsafe(const TypePtr& type) const {
       return target;
     }
     case TypeKind::HUGEINT: {
-      if (type && type->isCalendarInterval()) {
+      if (type && isCalendarIntervalType(type)) {
         std::string target;
         folly::json::escapeString(
             CalendarInterval::unpack(value<TypeKind::HUGEINT>()).toString(),

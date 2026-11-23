@@ -101,4 +101,55 @@ struct CalendarInterval {
   std::string toString() const;
 };
 
+/// Represents Spark's calendar interval using HUGEINT storage.
+class CalendarIntervalType final : public HugeintType {
+  CalendarIntervalType() = default;
+
+ public:
+  static std::shared_ptr<const CalendarIntervalType> get() {
+    VELOX_CONSTEXPR_SINGLETON CalendarIntervalType kInstance;
+    return {std::shared_ptr<const CalendarIntervalType>{}, &kInstance};
+  }
+
+  const char* name() const override {
+    return "INTERVAL";
+  }
+
+  /// Calendar units have no fixed duration and cannot be ordered.
+  bool isOrderable() const override {
+    return false;
+  }
+
+  bool equivalent(const Type& other) const override {
+    return this == &other;
+  }
+
+  std::string toString() const override {
+    return name();
+  }
+
+  /// Formats a packed interval using Spark's interval representation.
+  std::string valueToString(int128_t value) const;
+
+  folly::dynamic serialize() const override {
+    folly::dynamic obj = folly::dynamic::object;
+    obj["name"] = "CalendarIntervalType";
+    obj["type"] = name();
+    return obj;
+  }
+
+  static TypePtr deserialize(const folly::dynamic& /*obj*/) {
+    return CalendarIntervalType::get();
+  }
+};
+
+FOLLY_ALWAYS_INLINE std::shared_ptr<const CalendarIntervalType>
+CALENDAR_INTERVAL() {
+  return CalendarIntervalType::get();
+}
+
+FOLLY_ALWAYS_INLINE bool isCalendarIntervalType(const TypePtr& type) {
+  return type == CALENDAR_INTERVAL();
+}
+
 } // namespace facebook::velox

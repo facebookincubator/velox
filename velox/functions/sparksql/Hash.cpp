@@ -20,7 +20,7 @@
 #include "velox/expression/DecodedArgs.h"
 #include "velox/functions/lib/Murmur3Hash32Base.h"
 #include "velox/functions/sparksql/XxHash64.h"
-#include "velox/type/CalendarInterval.h"
+#include "velox/functions/sparksql/types/CalendarInterval.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/vector/FlatVector.h"
 
@@ -150,7 +150,7 @@ std::shared_ptr<SparkVectorHasher<HashClass>> createVectorHasher(
     case TypeKind::UNKNOWN:
       return std::make_shared<UnknowTypeVectorHasher<HashClass>>(decoded);
     case TypeKind::HUGEINT:
-      if (decoded.base()->type()->isCalendarInterval()) {
+      if (isCalendarIntervalType(decoded.base()->type())) {
         return std::make_shared<CalendarIntervalVectorHasher<HashClass>>(
             decoded);
       }
@@ -406,7 +406,7 @@ void applyWithType(
 
     auto kind = args[i]->typeKind();
     bool isCalendarInterval =
-        kind == TypeKind::HUGEINT && args[i]->type()->isCalendarInterval();
+        kind == TypeKind::HUGEINT && isCalendarIntervalType(args[i]->type());
     if ((kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
          kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
          kind == TypeKind::REAL || kind == TypeKind::DOUBLE ||

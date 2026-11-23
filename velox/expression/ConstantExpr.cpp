@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/expression/ConstantExpr.h"
+#include "velox/functions/sparksql/types/CalendarInterval.h"
 
 namespace facebook::velox::exec {
 
@@ -171,7 +172,7 @@ void appendSqlLiteral(
       [[fallthrough]];
     }
     case TypeKind::HUGEINT: {
-      if (vector.type()->isCalendarInterval()) {
+      if (isCalendarIntervalType(vector.type())) {
         out << "INTERVAL '"
             << vector.wrappedVector()->toString(vector.wrappedIndex(row))
             << "'";

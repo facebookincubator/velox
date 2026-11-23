@@ -16,7 +16,7 @@
 
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
-#include "velox/type/CalendarInterval.h"
+#include "velox/functions/sparksql/types/CalendarInterval.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ConstantVector.h"

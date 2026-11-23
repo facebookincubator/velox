@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "velox/row/UnsafeRowFast.h"
-#include "velox/type/CalendarInterval.h"
+#include "velox/functions/sparksql/types/CalendarInterval.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::row {
@@ -33,7 +33,7 @@ int32_t alignBytes(int32_t numBytes) {
 
 bool isFixedWidth(const TypePtr& type) {
   return type->isFixedWidth() && !type->isLongDecimal() &&
-      !type->isCalendarInterval();
+      !isCalendarIntervalType(type);
 }
 } // namespace
 
@@ -114,7 +114,7 @@ void UnsafeRowFast::initialize(const TypePtr& type) {
       fixedWidthTypeKind_ = true;
       break;
     case TypeKind::HUGEINT:
-      isCalendarInterval_ = type->isCalendarInterval();
+      isCalendarInterval_ = isCalendarIntervalType(type);
       break;
     case TypeKind::VARCHAR:
       [[fallthrough]];
@@ -1072,7 +1072,7 @@ VectorPtr deserialize(
 
   switch (typeKind) {
     case TypeKind::HUGEINT:
-      if (type->isCalendarInterval()) {
+      if (isCalendarIntervalType(type)) {
         return deserializeCalendarInterval(type, data, nulls, offsets, pool);
       }
       return deserializeLongDecimal(type, data, nulls, offsets, pool);

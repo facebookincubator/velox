@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/type/CalendarInterval.h"
+#include "velox/functions/sparksql/types/CalendarInterval.h"
 
 #include <fmt/format.h>
 #include <cmath>
@@ -93,6 +93,10 @@ std::string CalendarInterval::toString() const {
   }
 
   return ss.str();
+}
+
+std::string CalendarIntervalType::valueToString(int128_t value) const {
+  return CalendarInterval::unpack(value).toString();
 }
 
 } // namespace facebook::velox

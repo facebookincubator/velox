@@ -27,7 +27,7 @@
 #include "velox/expression/ScopedVarSetter.h"
 #include "velox/external/tzdb/time_zone.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
-#include "velox/type/CalendarInterval.h"
+#include "velox/functions/sparksql/types/CalendarInterval.h"
 #include "velox/type/CastRegistry.h"
 #include "velox/type/CppToType.h"
 #include "velox/type/Type.h"
@@ -937,8 +937,10 @@ void CastExpr::applyPeeled(
         "Cast from {} to {} is not supported",
         fromType->toString(),
         toType->toString());
-  } else if (fromType->isCalendarInterval() || toType->isCalendarInterval()) {
-    if (fromType->isCalendarInterval() && toType->kind() == TypeKind::VARCHAR) {
+  } else if (
+      isCalendarIntervalType(fromType) || isCalendarIntervalType(toType)) {
+    if (isCalendarIntervalType(fromType) &&
+        toType->kind() == TypeKind::VARCHAR) {
       // CalendarInterval -> VARCHAR: use valueToString.
       context.ensureWritable(rows, toType, result);
       auto* flatResult = result->as<FlatVector<StringView>>();

@@ -22,7 +22,7 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/Exceptions.h"
-#include "velox/type/CalendarInterval.h"
+#include "velox/functions/sparksql/types/CalendarInterval.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DictionaryVector.h"
 #include "velox/vector/FlatVector.h"
@@ -421,7 +421,7 @@ const char* exportArrowFormatStr(
     case TypeKind::HUGEINT:
       // Decimal is handled by the isDecimal() check above; only
       // CalendarInterval reaches here.
-      if (type->isCalendarInterval()) {
+      if (isCalendarIntervalType(type)) {
         return "tin"; // Arrow month-day-nano interval
       }
       SAFE_VELOX_NYI(
@@ -853,7 +853,7 @@ bool isFlatScalarZeroCopy(const TypePtr& type, const ArrowOptions& options) {
   // CalendarInterval stores microseconds but Arrow MonthDayNano uses
   // nanoseconds in the third field.
   return !type->isShortDecimal() && !type->isTimestamp() &&
-      !needsTimeConversion && !type->isCalendarInterval();
+      !needsTimeConversion && !isCalendarIntervalType(type);
 }
 
 // Returns the size of a single element of a given `type` in the target arrow
@@ -906,7 +906,7 @@ void exportValues(
       type->kind() == TypeKind::BIGINT && type->isTime() &&
       type->equivalent(*TIME())) {
     gatherFromTimeBuffer(vec, rows, *values);
-  } else if (type->isCalendarInterval()) {
+  } else if (isCalendarIntervalType(type)) {
     // Arrow MonthDayNano layout: months(int32), days(int32), nanos(int64).
     // Velox CalendarInterval: months(int32), days(int32), microseconds(int64).
     // Convert microseconds -> nanoseconds (x1000).
@@ -2493,7 +2493,7 @@ VectorPtr importFromArrowImpl(
         arrowArray.length,
         arrowArray.null_count,
         wrapInBufferView);
-  } else if (type->isCalendarInterval()) {
+  } else if (isCalendarIntervalType(type)) {
     // Arrow MonthDayNano stores nanoseconds; Velox stores microseconds.
     // Convert nanos → micros (÷1000).
     VELOX_USER_CHECK_EQ(

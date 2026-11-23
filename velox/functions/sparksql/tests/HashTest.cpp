@@ -16,7 +16,7 @@
 
 #include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
-#include "velox/type/CalendarInterval.h"
+#include "velox/functions/sparksql/types/CalendarInterval.h"
 
 #include <stdint.h>
 

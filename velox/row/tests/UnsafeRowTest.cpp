@@ -19,8 +19,8 @@
 #include <folly/Random.h>
 #include <folly/init/Init.h>
 
+#include "velox/functions/sparksql/types/CalendarInterval.h"
 #include "velox/row/UnsafeRowFast.h"
-#include "velox/type/CalendarInterval.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
