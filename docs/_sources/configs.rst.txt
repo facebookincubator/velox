@@ -964,12 +964,6 @@ Common Options
      - integer
      - 5000
      - Time slice limit in milliseconds for sort writer finish. 0 means no limit. Session: ``sort_writer_finish_time_slice_limit_ms``.
-   * - ``sort-writer-dedupe-enabled``
-     - bool
-     - true
-     - When a sorted bucketed table declares a unique key (the first N sort columns), the sort writer keeps the first row
-       of each run of equal key values in a bucket file and drops the rest. False keeps every row.
-       Session: ``sort_writer_dedupe_enabled``.
    * - ``file-preload-threshold``
      - integer
      - 8MB

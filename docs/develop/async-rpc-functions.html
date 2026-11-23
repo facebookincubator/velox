@@ -409,6 +409,14 @@ divide: pacing time over attached time is the share of attached time spent
 pacing, and the window integral over attached seconds is the average committed
 window in thousandths of a unit; recovery growth counts once the limiter commits
 it to the window. Prestissimo publishes them as <code class="docutils literal notranslate"><span class="pre">RPC.&lt;planNodeId&gt;.&lt;name&gt;</span></code>.</p>
+<p>To see whether a query’s session limits replaced its function’s bounds, compare
+<code class="docutils literal notranslate"><span class="pre">rpcFunctionCeiling</span></code> with <code class="docutils literal notranslate"><span class="pre">rpcRateLimiterHardLimit</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">rpcFunctionFloorMilli</span></code> with <code class="docutils literal notranslate"><span class="pre">rpcRateLimiterFloorMilli</span></code>. The function’s
+stats appear only when it declares that bound. <code class="docutils literal notranslate"><span class="pre">rpcRateLimiterFloorMilli</span></code> is
+the floor the limiter enforces, raised to the probe floor, and appears only
+when the limiter adapts and that floor is below its ceiling. Floors are in
+thousandths of an admission unit. Every driver reports the same values, so
+compare the maximum per plan node; the sum grows with the number of drivers.</p>
 <p><code class="docutils literal notranslate"><span class="pre">evaluateCongestion()</span></code> returns one of five verdicts. Canonical typed overload
 backs off shared admission at completion time before its lease is released; the
 driver later consumes the recorded marker to back off its local window without
