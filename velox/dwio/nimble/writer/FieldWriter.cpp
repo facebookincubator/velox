@@ -1352,6 +1352,7 @@ class FlatMapValueFieldWriter {
 
   void reset() {
     inMapStream_.reset();
+    ranges_.clear();
     // File stats collection is done sequentially onto
     // the same underlying object.
     // We will allocate additional stat builders per value writer
