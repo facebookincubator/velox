@@ -249,6 +249,9 @@ Requires `#include <gmock/gmock.h>`.
   cases, wrap each in braces and reuse one name. `rowType1`, `rowType2` and
   `expected1` make the reader track which one is live, and keep dead values in
   scope.
+- No `DISABLED_` tests. A disabled test must still compile, so it costs
+  maintenance, yet it never runs, so it protects nothing and rots. Fix the
+  test or delete it.
 
 ## Common Mistakes
 
