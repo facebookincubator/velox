@@ -190,7 +190,8 @@ struct CudfConfig {
 
   /// Target size in bytes of one hash partition of the state that a final or
   /// single grouped aggregation buffers: one table of merged groups on the
-  /// regular groupby path, one streaming_groupby table on the streaming path.
+  /// regular groupby path, one streaming_groupby table on the streaming path,
+  /// one table of keys for a distinct.
   /// A partition that would grow beyond it is split into partitions for parts
   /// of its keys, chosen by a hash of the keys.
   ///

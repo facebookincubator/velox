@@ -23,10 +23,16 @@
 #include <deque>
 #include <limits>
 #include <memory>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace facebook::velox::cudf_velox {
+
+// Number of hash partitions that the buffered state of a final or single
+// grouped aggregation had when its input ended.
+inline constexpr std::string_view kGroupbyStatePartitionsStat{
+    "groupbyStatePartitions"};
 
 // Describes how rows are routed to targets. A hash of the keys puts every row
 // in one of 'numBuckets' buckets, the way cudf::hash_partition() assigns rows
@@ -109,6 +115,23 @@ struct InputChunk {
     const HashRouting& routing,
     rmm::device_async_resource_ref mr);
 
+// Returns a chunk of all rows of 'table', which the chunk keeps alive.
+[[nodiscard]] InputChunk makeOwnedChunk(
+    CudfVectorPtr table,
+    const TypePtr& type);
+
+// Returns a chunk of 'view', which selects columns of 'owner'. The chunk keeps
+// 'owner' alive.
+[[nodiscard]] InputChunk makeBorrowedChunk(
+    CudfVectorPtr owner,
+    const TypePtr& type,
+    cudf::table_view view);
+
+// Returns the rows of 'chunk' as a vector of their own: the table that the
+// chunk owns, or a copy of its rows when it is a slice of a table that it
+// shares with other chunks. The chunk must not be a borrowed one.
+[[nodiscard]] CudfVectorPtr releaseChunk(InputChunk chunk);
+
 // Serve as the opaque base type for strategy-owned leaf state.
 class BufferedState {
  public:
@@ -139,6 +162,14 @@ class BufferedStateOps {
 
   // Absorb one prepared chunk into an existing leaf.
   virtual void addInputToLeaf(BufferedState& leaf, InputChunk input) = 0;
+
+  // Merge the rows that `leaf` only buffers, for a strategy that takes input
+  // into a leaf without merging it. Return true if that changed the leaf. PBS
+  // calls this for a leaf that would pass a limit, and splits the leaf only if
+  // merging does not make enough room.
+  virtual bool compactLeaf(BufferedState& /*leaf*/) {
+    return false;
+  }
 
   // Report the logical row count PBS should track for this leaf.
   virtual size_t leafRowCount(const BufferedState& leaf) const = 0;
@@ -197,6 +228,11 @@ class BufferedStateOps {
 // bucket cannot be split. Such a leaf keeps growing past both limits, up to
 // the hard row limit. The byte limit is a target only: sizes are estimates,
 // and passing it never fails.
+//
+// A strategy may take input into a leaf without merging it. Before such a leaf
+// is split it is asked to merge what it buffers. It is kept if the input then
+// fits in half of each limit, so that the cost of merging is spread over at
+// least that much input, and split otherwise.
 //
 // Typical usage:
 // 1. Define a `BufferedStateOps` implementation for the operator.
@@ -266,6 +302,16 @@ class PartitionedBufferedState {
   bool hasByteLimit() const {
     return options_.maxBytesPerLeaf != kNoByteLimit;
   }
+
+  // True if the leaf would pass 1 / 'divisor' of the row limit or of the byte
+  // limit with 'input' added.
+  bool wouldPassLimits(
+      size_t leafIndex,
+      const InputChunk& input,
+      size_t divisor) const;
+
+  // True if the leaf is past the row limit or the byte limit.
+  bool pastLimits(size_t leafIndex) const;
 
   // Rebuilds the bucket bounds of the leaves after a split.
   void updateRouting();

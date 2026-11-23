@@ -47,6 +47,8 @@ struct TableLeafState final : public BufferedState {
   explicit TableLeafState(InputChunk chunk) : chunk(std::move(chunk)) {}
 
   InputChunk chunk;
+  // True if rows were added since compactLeaf() last ran.
+  bool dirty{true};
 };
 
 class IdentityBufferedStateOps final : public BufferedStateOps {
@@ -81,6 +83,23 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   void addInputToLeaf(BufferedState& leaf, InputChunk input) override {
     auto& tableLeaf = asLeaf(leaf);
     tableLeaf.chunk = mergeChunks(std::move(tableLeaf.chunk), std::move(input));
+    tableLeaf.dirty = true;
+  }
+
+  // Removes the duplicate keys of a leaf if setCompactsLeaves() was called,
+  // like a strategy that takes input into a leaf without merging it.
+  bool compactLeaf(BufferedState& leaf) override {
+    auto& tableLeaf = asLeaf(leaf);
+    if (!compactsLeaves_ || !tableLeaf.dirty) {
+      return false;
+    }
+    auto keys = extractKeys(tableLeaf.chunk);
+    std::sort(keys.begin(), keys.end());
+    keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+    tableLeaf.chunk = makeChunk_(keys);
+    tableLeaf.dirty = false;
+    ++numCompactions_;
+    return true;
   }
 
   size_t leafRowCount(const BufferedState& leaf) const override {
@@ -128,13 +147,16 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   std::vector<std::unique_ptr<BufferedState>> repartitionLeaf(
       std::unique_ptr<BufferedState> leaf,
       const HashRouting& routing) override {
+    const bool dirty = asLeaf(*leaf).dirty;
     auto partitions = routeInput(asLeaf(*leaf).chunk, routing);
     leaf.reset();
 
     std::vector<std::unique_ptr<BufferedState>> leaves(routing.numTargets());
     for (int32_t i = 0; i < routing.numTargets(); ++i) {
       if (!partitions[i].empty()) {
-        leaves[i] = std::make_unique<TableLeafState>(std::move(partitions[i]));
+        auto child = std::make_unique<TableLeafState>(std::move(partitions[i]));
+        child->dirty = dirty;
+        leaves[i] = std::move(child);
       }
     }
     return leaves;
@@ -166,6 +188,15 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
     hashFn_ = std::move(hashFn);
   }
 
+  // Needs setPartitioning().
+  void setCompactsLeaves() {
+    compactsLeaves_ = true;
+  }
+
+  size_t numCompactions() const {
+    return numCompactions_;
+  }
+
   size_t numRouteCalls() const {
     return numRouteCalls_;
   }
@@ -189,6 +220,8 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
   std::function<uint32_t(int64_t)> hashFn_;
   size_t numRouteCalls_{0};
   size_t numRoutedRows_{0};
+  bool compactsLeaves_{false};
+  size_t numCompactions_{0};
 
   TableLeafState& asLeaf(BufferedState& leaf) const {
     return static_cast<TableLeafState&>(leaf);
@@ -425,6 +458,64 @@ TEST_F(PartitionedBufferedStateTest, singleBucketGrowsUpToHardLimit) {
       "Cannot partition buffered state any further");
   EXPECT_EQ(state.numLeaves(), 4);
   EXPECT_EQ(drainAll(state), (std::vector<std::vector<int64_t>>{{1, 2, 3, 4}}));
+}
+
+// A leaf that only buffers its input is asked to merge it before it is split.
+TEST_F(PartitionedBufferedStateTest, mergingBufferedRowsAvoidsSplit) {
+  auto ops =
+      makeHostOps([](int64_t key) { return static_cast<uint32_t>(key); });
+  ops->setCompactsLeaves();
+  auto* opsPtr = ops.get();
+  PartitionedBufferedState state(
+      std::move(ops), {.maxRowsPerLeaf = 8, .numBuckets = 8});
+
+  for (int32_t i = 0; i < 4; ++i) {
+    state.addInput(makeCudfVector({1, 2}));
+  }
+  // The leaf is full and nothing has been merged.
+  EXPECT_EQ(opsPtr->numCompactions(), 0);
+
+  // Two more rows do not fit. Merging leaves the keys 1 and 2, and the input
+  // then fits in half of the limit.
+  state.addInput(makeCudfVector({1, 3}));
+  EXPECT_EQ(opsPtr->numCompactions(), 1);
+  EXPECT_EQ(state.numLeaves(), 1);
+  EXPECT_EQ(drainAll(state), (std::vector<std::vector<int64_t>>{{1, 1, 2, 3}}));
+}
+
+TEST_F(PartitionedBufferedStateTest, splitsWhenMergingFreesTooLittle) {
+  auto ops =
+      makeHostOps([](int64_t key) { return static_cast<uint32_t>(key); });
+  ops->setCompactsLeaves();
+  auto* opsPtr = ops.get();
+  PartitionedBufferedState state(
+      std::move(ops), {.maxRowsPerLeaf = 8, .numBuckets = 8});
+
+  state.addInput(makeCudfVector({0, 1, 2, 3}));
+  state.addInput(makeCudfVector({4, 5, 0, 1}));
+  // Merging leaves six keys. With one more row that is over half of the
+  // limit, so the leaf is split into the buckets [0, 4) and [4, 8).
+  state.addInput(makeCudfVector({6}));
+  EXPECT_EQ(opsPtr->numCompactions(), 1);
+  EXPECT_EQ(state.numLeaves(), 2);
+  EXPECT_EQ(
+      drainAll(state),
+      (std::vector<std::vector<int64_t>>{{0, 1, 2, 3}, {4, 5, 6}}));
+}
+
+TEST_F(PartitionedBufferedStateTest, mergesOversizedFirstBatch) {
+  auto ops =
+      makeHostOps([](int64_t key) { return static_cast<uint32_t>(key); });
+  ops->setCompactsLeaves();
+  auto* opsPtr = ops.get();
+  PartitionedBufferedState state(
+      std::move(ops), {.maxRowsPerLeaf = 3, .numBuckets = 8});
+
+  // Four rows are over the limit, the two keys they hold are not.
+  state.addInput(makeCudfVector({1, 1, 2, 2}));
+  EXPECT_EQ(opsPtr->numCompactions(), 1);
+  EXPECT_EQ(state.numLeaves(), 1);
+  EXPECT_EQ(drainAll(state), (std::vector<std::vector<int64_t>>{{1, 2}}));
 }
 
 TEST_F(PartitionedBufferedStateTest, byteLimitSplitsLeaf) {

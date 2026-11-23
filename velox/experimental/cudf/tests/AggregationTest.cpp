@@ -1492,6 +1492,109 @@ TEST_F(AggregationTest, partitionedBufferedStateByteLimit) {
   }
 }
 
+// Many more distinct keys than fit in one leaf of the buffered state, so the
+// leaves are split several times and later batches are routed to the split
+// leaves.
+TEST_F(AggregationTest, partitionedDistinctDeepSplits) {
+  struct {
+    int32_t maxRowsPerLeaf;
+    int32_t numBatches;
+    int32_t batchSize;
+    int32_t numKeys;
+  } settings[] = {{16, 20, 50, 400}, {4, 40, 4, 100}};
+
+  for (const auto& setting : settings) {
+    SCOPED_TRACE(
+        fmt::format(
+            "maxRowsPerLeaf {} batchSize {}",
+            setting.maxRowsPerLeaf,
+            setting.batchSize));
+    setBatchSizeMaxThreshold(setting.maxRowsPerLeaf);
+    std::vector<RowVectorPtr> vectors;
+    for (int32_t batch = 0; batch < setting.numBatches; ++batch) {
+      vectors.push_back(makeRowVector({
+          makeFlatVector<int64_t>(
+              setting.batchSize,
+              [&](auto row) {
+                return (batch * 31 + row * 7) % setting.numKeys;
+              },
+              [&](auto row) { return (batch + row) % 23 == 0; }),
+          makeFlatVector<int32_t>(
+              setting.batchSize, [&](auto row) { return (batch + row) % 3; }),
+      }));
+    }
+    createDuckDbTable(vectors);
+
+    const std::string sql = "SELECT DISTINCT c0, c1 FROM tmp";
+
+    AssertQueryBuilder(duckDbQueryRunner_)
+        .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+        .plan(
+            PlanBuilder()
+                .values(vectors)
+                .partialAggregation({"c0", "c1"}, {})
+                .finalAggregation()
+                .planNode())
+        .assertResults(sql);
+
+    AssertQueryBuilder(duckDbQueryRunner_)
+        .plan(
+            PlanBuilder()
+                .values(vectors)
+                .singleAggregation({"c0", "c1"}, {})
+                .planNode())
+        .assertResults(sql);
+  }
+}
+
+// The keys of a distinct are split by their size in bytes while they are far
+// below any row limit.
+TEST_F(AggregationTest, partitionedDistinctByteLimit) {
+  constexpr int32_t kBatchRows = 50;
+  std::vector<RowVectorPtr> vectors;
+  for (int32_t batch = 0; batch < 20; ++batch) {
+    vectors.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            kBatchRows, [&](auto row) { return (batch * 31 + row * 7) % 400; }),
+    }));
+  }
+  createDuckDbTable(vectors);
+
+  const std::string sql = "SELECT DISTINCT c0 FROM tmp";
+
+  // Returns the number of partitions that the keys of the last distinct of
+  // the plan had.
+  auto runAndCountPartitions = [&](bool single) {
+    core::PlanNodeId aggregationId;
+    auto builder = PlanBuilder().values(vectors);
+    if (single) {
+      builder.singleAggregation({"c0"}, {});
+    } else {
+      builder.partialAggregation({"c0"}, {}).finalAggregation();
+    }
+    auto task =
+        AssertQueryBuilder(duckDbQueryRunner_)
+            .maxDrivers(1)
+            .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, kBatchRows)
+            .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+            .plan(builder.capturePlanNodeId(aggregationId).planNode())
+            .assertResults(sql);
+    return streamingGroupbyStatSum(
+        task, aggregationId, cudf_velox::kGroupbyStatePartitionsStat);
+  };
+
+  for (bool single : {false, true}) {
+    SCOPED_TRACE(single);
+    cudf_velox::CudfConfig::getInstance().groupbyMaxPartitionBytes =
+        std::nullopt;
+    EXPECT_EQ(runAndCountPartitions(single), 1);
+
+    // 400 keys of 8 bytes each.
+    cudf_velox::CudfConfig::getInstance().groupbyMaxPartitionBytes = 512;
+    EXPECT_GE(runAndCountPartitions(single), 4);
+  }
+}
+
 TEST_F(AggregationTest, companionAggregatesStayOnNonStreamingPathWithRowCap) {
   setBatchSizeMaxThreshold(1);
 

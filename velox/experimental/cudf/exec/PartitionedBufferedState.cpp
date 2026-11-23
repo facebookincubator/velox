@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/PartitionedBufferedState.h"
 
 #include <cudf/copying.hpp>
@@ -96,6 +97,48 @@ std::vector<InputChunk> routeChunkByHash(
     }
   }
   return chunks;
+}
+
+InputChunk makeOwnedChunk(CudfVectorPtr table, const TypePtr& type) {
+  const auto flatSize = table->estimateFlatSize();
+  return InputChunk{
+      table->pool(),
+      type,
+      table->getTableView(),
+      table->stream(),
+      std::move(table),
+      nullptr,
+      flatSize};
+}
+
+InputChunk makeBorrowedChunk(
+    CudfVectorPtr owner,
+    const TypePtr& type,
+    cudf::table_view view) {
+  const auto flatSize = owner->estimateFlatSize();
+  return InputChunk{
+      owner->pool(),
+      type,
+      view,
+      owner->stream(),
+      std::move(owner),
+      nullptr,
+      flatSize};
+}
+
+CudfVectorPtr releaseChunk(InputChunk chunk) {
+  auto table = std::move(chunk.owner);
+  if (!table) {
+    // Copy the slice out, so that the table it shares with other chunks can
+    // be released.
+    auto copy = std::make_unique<cudf::table>(
+        chunk.view, chunk.stream, get_output_mr());
+    const auto numRows = copy->num_rows();
+    table = std::make_shared<CudfVector>(
+        chunk.pool, chunk.type, numRows, std::move(copy), chunk.stream);
+  }
+  VELOX_CHECK_EQ(table->size(), chunk.size());
+  return table;
 }
 
 PartitionedBufferedState::PartitionedBufferedState(
@@ -190,15 +233,20 @@ void PartitionedBufferedState::insert(
 
   // If the leaf is not empty, check if the input can be added to it. If not,
   // split the leaf and the input together.
-  const auto projectedRows = ops_->estimatedMergedRowUpperBound(
-      *leaves_[leafIndex].state, bufferedInput);
-  if (projectedRows > options_.maxRowsPerLeaf ||
-      (hasByteLimit() &&
-       ops_->estimatedMergedBytesUpperBound(
-           *leaves_[leafIndex].state, bufferedInput) >
-           options_.maxBytesPerLeaf)) {
-    splitLeafAndAddInput(leafIndex, std::move(bufferedInput));
-    return;
+  if (wouldPassLimits(leafIndex, bufferedInput, 1)) {
+    // Merging the rows that the leaf only buffers may make room for the
+    // input. The leaf is kept only if the input then fits in half of each
+    // limit, so that the cost of merging is spread over at least that much
+    // input.
+    auto& leaf = leaves_[leafIndex];
+    const bool compacted = ops_->compactLeaf(*leaf.state);
+    if (compacted) {
+      leaf.rows = ops_->leafRowCount(*leaf.state);
+    }
+    if (!compacted || wouldPassLimits(leafIndex, bufferedInput, 2)) {
+      splitLeafAndAddInput(leafIndex, std::move(bufferedInput));
+      return;
+    }
   }
 
   auto& leaf = leaves_[leafIndex];
@@ -308,15 +356,38 @@ void PartitionedBufferedState::splitLeafAndAddInput(
 }
 
 void PartitionedBufferedState::ensureLeafWithinLimit(size_t leafIndex) {
-  const auto& leaf = leaves_[leafIndex];
-  if (!leaf.state) {
+  auto& leaf = leaves_[leafIndex];
+  if (!leaf.state || !pastLimits(leafIndex)) {
     return;
   }
-  if (leaf.rows > options_.maxRowsPerLeaf ||
-      (hasByteLimit() &&
-       ops_->leafFlatSize(*leaf.state) > options_.maxBytesPerLeaf)) {
-    splitLeafAndAddInput(leafIndex, InputChunk{});
+  if (ops_->compactLeaf(*leaf.state)) {
+    leaf.rows = ops_->leafRowCount(*leaf.state);
+    if (!pastLimits(leafIndex)) {
+      return;
+    }
   }
+  splitLeafAndAddInput(leafIndex, InputChunk{});
+}
+
+bool PartitionedBufferedState::wouldPassLimits(
+    size_t leafIndex,
+    const InputChunk& input,
+    size_t divisor) const {
+  const auto& state = *leaves_[leafIndex].state;
+  if (ops_->estimatedMergedRowUpperBound(state, input) >
+      options_.maxRowsPerLeaf / divisor) {
+    return true;
+  }
+  return hasByteLimit() &&
+      ops_->estimatedMergedBytesUpperBound(state, input) >
+      options_.maxBytesPerLeaf / divisor;
+}
+
+bool PartitionedBufferedState::pastLimits(size_t leafIndex) const {
+  const auto& leaf = leaves_[leafIndex];
+  return leaf.rows > options_.maxRowsPerLeaf ||
+      (hasByteLimit() &&
+       ops_->leafFlatSize(*leaf.state) > options_.maxBytesPerLeaf);
 }
 
 void PartitionedBufferedState::updateRouting() {

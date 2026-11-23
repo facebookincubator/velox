@@ -1736,19 +1736,9 @@ class CudfGroupby::GroupbyBufferedStateOps final : public BufferedStateOps {
   CudfVectorPtr finalizeLeaf(std::unique_ptr<BufferedState> leaf) override {
     auto chunk = std::move(asLeafState(*leaf).chunk);
     leaf.reset();
-
-    auto state = std::move(chunk.owner);
-    if (!state) {
-      // The leaf is a slice of a table it shares with the other partitions of
-      // a split. Copy it out so that the columns can be released one by one.
-      auto table = std::make_unique<cudf::table>(
-          chunk.view, chunk.stream, get_output_mr());
-      const auto numRows = table->num_rows();
-      state = std::make_shared<CudfVector>(
-          chunk.pool, chunk.type, numRows, std::move(table), chunk.stream);
-    }
-    VELOX_CHECK_EQ(state->size(), chunk.size());
-    chunk = InputChunk{};
+    // A leaf that is a slice of a table it shares with the other partitions of
+    // a split is copied out, so that the columns can be released one by one.
+    auto state = releaseChunk(std::move(chunk));
 
     if (owner_.isPartialOutput_) {
       return state;
@@ -1776,33 +1766,6 @@ class CudfGroupby::GroupbyBufferedStateOps final : public BufferedStateOps {
 
   const GroupbyLeafState& asLeafState(const BufferedState& leaf) const {
     return static_cast<const GroupbyLeafState&>(leaf);
-  }
-
-  InputChunk makeOwnedChunk(CudfVectorPtr owner, const TypePtr& type) const {
-    const auto flatSize = owner->estimateFlatSize();
-    return InputChunk{
-        owner->pool(),
-        type,
-        owner->getTableView(),
-        owner->stream(),
-        std::move(owner),
-        nullptr,
-        flatSize};
-  }
-
-  InputChunk makeBorrowedChunk(
-      CudfVectorPtr owner,
-      const TypePtr& type,
-      cudf::table_view view) const {
-    const auto flatSize = owner->estimateFlatSize();
-    return InputChunk{
-        owner->pool(),
-        type,
-        view,
-        owner->stream(),
-        std::move(owner),
-        nullptr,
-        flatSize};
   }
 
   // Merges the incoming chunk 'right' into the leaf chunk 'left' with one

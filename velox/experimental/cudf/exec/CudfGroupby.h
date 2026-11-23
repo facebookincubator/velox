@@ -41,10 +41,6 @@ inline constexpr std::string_view kStreamingGroupbyRebuildsStat{
 // into tables for parts of its hash buckets.
 inline constexpr std::string_view kStreamingGroupbySplitsStat{
     "streamingGroupbySplits"};
-// Number of hash partitions that the buffered state of a final or single
-// grouped aggregation had when its input ended.
-inline constexpr std::string_view kGroupbyStatePartitionsStat{
-    "groupbyStatePartitions"};
 
 // Type-specific adapter between Velox final-aggregation state and libcudf's
 // flattened streaming_groupby request/result interface. prepareInput() must be
