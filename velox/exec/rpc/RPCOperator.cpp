@@ -295,6 +295,8 @@ void RPCOperator::initializeRateLimiter() {
   auto sources = liveStatsSources_.wlock();
   sources->limiter = limiter_;
   sources->policyScoped = lookup.policyScoped;
+  sources->functionCeiling = functionLimit;
+  sources->functionFloor = functionFloor;
 }
 
 std::vector<RPCRateLimiter::Token> RPCOperator::tryAcquireAdmission(
@@ -1546,6 +1548,20 @@ void RPCOperator::addLiveProgressStats(
     stats.runtimeStats
         [RPCOperatorStatNames::kRpcRateLimiterServiceHorizonNanos] =
         RuntimeMetric(limiterStats.serviceHorizonNanos);
+    if (limiterStats.floorMilli > 0) {
+      stats.runtimeStats[RPCOperatorStatNames::kRpcRateLimiterFloorMilli] =
+          RuntimeMetric(limiterStats.floorMilli);
+    }
+    if (sources->functionCeiling > 0) {
+      stats.runtimeStats[RPCOperatorStatNames::kRpcFunctionCeiling] =
+          RuntimeMetric(sources->functionCeiling);
+    }
+    if (sources->functionFloor > 0) {
+      stats.runtimeStats[RPCOperatorStatNames::kRpcFunctionFloorMilli] =
+          RuntimeMetric(
+              static_cast<int64_t>(
+                  std::llround(sources->functionFloor * 1'000)));
+    }
     if (sources->policyScoped) {
       stats.runtimeStats[RPCOperatorStatNames::kRpcRateLimiterPolicyScoped] =
           RuntimeMetric(1);

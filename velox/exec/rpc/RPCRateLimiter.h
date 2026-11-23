@@ -134,6 +134,12 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// Hard upper bound on the adaptive congestion window.
     int64_t hardLimit{0};
 
+    /// Floor the adaptive window cannot back off below, in thousandths of an
+    /// admission unit: the configured floor, raised to the probe floor and
+    /// capped at the ceiling. Zero when no floor applies: the limiter does not
+    /// adapt, or its floor reaches the ceiling and holds the window there.
+    int64_t floorMilli{0};
+
     /// In-flight requests right now.
     int64_t pending{0};
 

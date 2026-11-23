@@ -1101,9 +1101,14 @@ RPCRateLimiter::Stats RPCRateLimiter::stats() const {
       lowWaterLimit_ > 0.0 ? lowWaterLimit_ : currentLimit;
   const auto pacingTime =
       isPacingLocked() ? pacingTime_ + sinceAccrual : pacingTime_;
+  const auto ceiling = ceilingLocked();
+  const double floor = floorLocked(static_cast<double>(ceiling));
   return Stats{
       .capacity = capacityLocked(),
-      .hardLimit = ceilingLocked(),
+      .hardLimit = ceiling,
+      .floorMilli = config_.adaptive && floor < static_cast<double>(ceiling)
+          ? static_cast<int64_t>(std::llround(floor * 1'000))
+          : 0,
       .pending = pending_.load(),
       .waiting = static_cast<int64_t>(waiters_.size()),
       .peakPending = peakPending_.load(),

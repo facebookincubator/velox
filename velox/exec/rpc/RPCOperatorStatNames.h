@@ -124,6 +124,22 @@ struct RPCOperatorStatNames {
   static inline const std::string kRpcRateLimiterServiceHorizonNanos{
       "rpcRateLimiterServiceHorizonNanos"};
 
+  /// The floor the limiter enforces, in thousandths of an admission unit,
+  /// present only when the limiter adapts and its floor is below its ceiling.
+  static inline const std::string kRpcRateLimiterFloorMilli{
+      "rpcRateLimiterFloorMilli"};
+
+  /// The ceiling the function declares for its backend, present only when it
+  /// declares one. Beside kRpcRateLimiterHardLimit, it shows whether the
+  /// session's limits replaced the function's.
+  static inline const std::string kRpcFunctionCeiling{"rpcFunctionCeiling"};
+
+  /// The adaptive floor the function declares, in thousandths of an admission
+  /// unit, present only when it declares one. Compare with
+  /// kRpcRateLimiterFloorMilli.
+  static inline const std::string kRpcFunctionFloorMilli{
+      "rpcFunctionFloorMilli"};
+
   /// Present, with value one per driver, when the backend's shared limiter
   /// runs another policy and this operator runs under the limiter for its own.
   static inline const std::string kRpcRateLimiterPolicyScoped{
