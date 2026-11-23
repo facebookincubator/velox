@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/ucx-exchange/Acceptor.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/ucx-exchange/Communicator.h"
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
@@ -95,6 +96,10 @@ void Acceptor::cStyleAMCallback(
   // transfers.
   auto response = std::make_shared<HandshakeResponse>();
   response->isIntraNodeTransfer = exchangeServer->isIntraNodeTransfer();
+  response->acceptsClose = true;
+  common::testutil::TestValue::adjust(
+      "facebook::velox::ucx_exchange::Acceptor::handshakeResponse",
+      response.get());
 
   uint32_t keyHash = fnv1a_32(key.toString());
   uint64_t responseTag = getHandshakeResponseTag(keyHash);

@@ -95,7 +95,9 @@ struct CudfConfig {
   bool exchange{false};
 
   /// Whether UCXX endpoints report peer failures. Without it, a consumer
-  /// cannot tell that a producer's worker died, and its query hangs.
+  /// cannot tell that a producer's worker died, and its query hangs. A
+  /// producer cannot tell either that a consumer's worker died, so the
+  /// producer keeps that consumer's server and the results left for it.
   bool ucxxErrorHandling{true};
 
   /// Whether intra-node exchange optimization is enabled.

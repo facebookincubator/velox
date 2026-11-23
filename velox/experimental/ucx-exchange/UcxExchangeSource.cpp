@@ -19,6 +19,7 @@
 #include <cudf/contiguous_split.hpp>
 #include <folly/String.h>
 #include <folly/Uri.h>
+#include "velox/common/testutil/TestValue.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
@@ -212,6 +213,14 @@ void UcxExchangeSource::cleanUp() {
             << " In UcxExchangeSource::cleanUp state == " << value;
   }
 
+  bool tellServer = serverAcceptsClose_ && !streamEnded_ && !endpointClosed_ &&
+      endpointRef_ != nullptr;
+  common::testutil::TestValue::adjust(
+      "facebook::velox::ucx_exchange::UcxExchangeSource::cleanUp", &tellServer);
+  if (tellServer) {
+    sendCloseMessage();
+  }
+
   // Cancel any outstanding request. With weak_ptr callbacks, the callback
   // will safely no-op if we're destroyed before it completes.
   if (request_ && !request_->isCompleted()) {
@@ -265,7 +274,29 @@ void UcxExchangeSource::close() {
   communicator_->addToWorkQueue(getSelfPtr());
 }
 
+void UcxExchangeSource::sendCloseMessage() {
+  auto message = std::make_shared<uint8_t>(0);
+  auto request = endpointRef_->endpoint_
+                     ->tagSendBuilder(
+                         message.get(),
+                         sizeof(*message),
+                         ucxx::Tag{getCloseTag(partitionKeyHash_)})
+                     .callbackFunction([key = partitionKey_.toString()](
+                                           ucs_status_t status,
+                                           std::shared_ptr<void> /*arg*/) {
+                       if (status != UCS_OK) {
+                         VLOG(1) << "Failed to send close message for " << key
+                                 << ": " << ucs_status_string(status);
+                       }
+                     })
+                     .callbackData(message)
+                     .build();
+  // Keeps the request, and with it the message, until UCX is done with it.
+  communicator_->deferRequestCleanup(std::move(request));
+}
+
 void UcxExchangeSource::onEndpointClosed(std::string_view reason) {
+  endpointClosed_ = true;
   if (closed_.load(std::memory_order_acquire)) {
     return;
   }
@@ -542,6 +573,7 @@ void UcxExchangeSource::onMetadata(
     VLOG(3) << toString()
             << " Datasize bytes == " << ptr->metadata.dataSizeBytes;
 
+    streamEnded_ = ptr->metadata.atEnd;
     if (ptr->metadata.atEnd && ptr->metadata.producerError.has_value()) {
       failSource(
           fmt::format(
@@ -740,6 +772,7 @@ void UcxExchangeSource::onHandshakeResponse(
       std::static_pointer_cast<HandshakeResponse>(arg);
 
   isIntraNodeTransfer_ = response->isIntraNodeTransfer;
+  serverAcceptsClose_ = response->acceptsClose;
 
   VLOG(3) << toString() << " + onHandshakeResponse isIntraNodeTransfer="
           << isIntraNodeTransfer_;
@@ -795,6 +828,7 @@ void UcxExchangeSource::onIntraNodeData(
     return;
   }
 
+  streamEnded_ = atEnd;
   if (atEnd && producerError.has_value()) {
     failSource(
         fmt::format(

@@ -630,9 +630,9 @@ TEST_F(UcxOutputQueueManagerTest, releasingLastReaderDropsPlaceholder) {
   queueManager_->getData(taskId, 1, receive);
   ASSERT_TRUE(queueManager_->stats(taskId).has_value());
 
-  queueManager_->releaseReader(taskId, 0);
+  queueManager_->releaseReader(taskId, 0, /*consumerGone=*/false);
   EXPECT_TRUE(queueManager_->stats(taskId).has_value());
-  queueManager_->releaseReader(taskId, 1);
+  queueManager_->releaseReader(taskId, 1, /*consumerGone=*/false);
   EXPECT_FALSE(queueManager_->stats(taskId).has_value());
   EXPECT_FALSE(fired);
 
@@ -669,7 +669,7 @@ DEBUG_ONLY_TEST_F(
           [&](UcxOutputQueueManager* manager) {
             if (!released) {
               released = true;
-              manager->releaseReader(taskId, 0);
+              manager->releaseReader(taskId, 0, /*consumerGone=*/false);
             }
           }));
 
@@ -699,7 +699,7 @@ DEBUG_ONLY_TEST_F(UcxOutputQueueManagerTest, arrivingReaderKeepsPlaceholder) {
           [&](UcxOutputQueueManager* manager) {
             if (!released) {
               released = true;
-              manager->releaseReader(taskId, 1);
+              manager->releaseReader(taskId, 1, /*consumerGone=*/false);
             }
           }));
   bool receivedData{false};
@@ -713,6 +713,25 @@ DEBUG_ONLY_TEST_F(UcxOutputQueueManagerTest, arrivingReaderKeepsPlaceholder) {
   EXPECT_TRUE(receivedData);
   noMoreData(taskId);
   fetchEndMarker(taskId, 0);
+  queueManager_->removeTask(taskId);
+}
+
+// A server whose consumer closed, or whose connection failed, deletes its
+// destination's results, as an HTTP consumer that aborts them does. Otherwise
+// the producer would keep them, and could not finish, until it is aborted.
+TEST_F(UcxOutputQueueManagerTest, releasingGoneConsumerDeletesItsResults) {
+  const std::string taskId = "resultsOfGoneConsumer";
+  auto task = initializeTask(taskId, /*numDestinations=*/2, /*numDrivers=*/1);
+  enqueue(taskId, /*destination=*/0, /*size=*/10);
+  enqueue(taskId, /*destination=*/1, /*size=*/10);
+
+  queueManager_->releaseReader(taskId, 0, /*consumerGone=*/true);
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedPages, 1);
+
+  noMoreData(taskId);
+  fetch(taskId, 1);
+  fetchEndMarker(taskId, 1);
+  EXPECT_TRUE(queueManager_->isFinished(taskId));
   queueManager_->removeTask(taskId);
 }
 

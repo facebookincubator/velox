@@ -217,6 +217,11 @@ class UcxExchangeSource
   /// @param arg The HandshakeResponse data
   void onHandshakeResponse(ucs_status_t status, std::shared_ptr<void> arg);
 
+  /// @brief Tells the server that this source closed before its stream ended,
+  /// so that the server closes and the producer drops the results that are
+  /// left for it. Called from cleanUp() on the Communicator thread.
+  void sendCloseMessage();
+
   /// @brief For intra-node transfer: initiates waiting for data from registry.
   void waitForIntraNodeData();
 
@@ -300,6 +305,16 @@ class UcxExchangeSource
   /// HandshakeMsg) with its own Communicator's listener address.
   /// When true, intra-node transfer optimizations bypass UCXX transfers.
   bool isIntraNodeTransfer_{false};
+
+  /// Set from the acceptsClose flag in HandshakeResponse.
+  bool serverAcceptsClose_{false};
+
+  /// True once the server sent the end of the stream, cleanly or with the
+  /// producer's error; the server then closes by itself.
+  bool streamEnded_{false};
+
+  /// True once the endpoint to the server closed, which closes the server too.
+  bool endpointClosed_{false};
 
   // Backpressure: when queue exceeds kBackpressureHighWaterMark, the source
   // goes dormant. The consumer thread wakes it via resumeFromBackpressure()

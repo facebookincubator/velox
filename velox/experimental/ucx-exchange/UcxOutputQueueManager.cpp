@@ -224,17 +224,27 @@ void UcxOutputQueueManager::intraNodePageRetrieved(
 
 void UcxOutputQueueManager::releaseReader(
     std::string_view taskId,
-    int destination) {
+    int destination,
+    bool consumerGone) {
+  std::shared_ptr<UcxOutputQueue> initializedQueue;
   queues_.withLock([&](auto& queues) {
     auto it = queues.byTaskId.find(std::string{taskId});
-    if (it == queues.byTaskId.end() ||
-        !it->second->releaseReader(destination)) {
+    if (it == queues.byTaskId.end()) {
       return;
     }
-    if (!queues.numArrivingReaders.contains(it->second.get())) {
+    const bool unread = it->second->releaseReader(destination);
+    if (it->second->isInitialized()) {
+      initializedQueue = it->second;
+    } else if (
+        unread && !queues.numArrivingReaders.contains(it->second.get())) {
       queues.byTaskId.erase(it);
     }
   });
+  // A placeholder holds no results; deleting them would only leave a marker
+  // that keeps it.
+  if (consumerGone && initializedQueue != nullptr) {
+    initializedQueue->deleteResults(destination);
+  }
 }
 
 bool UcxOutputQueueManager::canUseIntraNode(std::string_view taskId) {

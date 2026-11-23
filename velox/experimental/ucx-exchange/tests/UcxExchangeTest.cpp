@@ -1135,6 +1135,20 @@ uint64_t drainToEnd(
   return numRows;
 }
 
+// Waits up to 30 seconds for 'done', so that a condition that never comes
+// true fails the case instead of hanging the binary.
+bool waitUntil(const std::function<bool()>& done) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (!done()) {
+    if (std::chrono::steady_clock::now() > deadline) {
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return true;
+}
+
 } // namespace
 
 // A producer whose connection closes before it sent all its output must fail
@@ -1246,19 +1260,8 @@ TEST_F(UcxExchangeFocusedTest, endpointFailureDropsPlaceholder) {
   exchange.isBlocked(&future);
 
   // The server asked for data and left a placeholder.
-  const auto waitFor = [](const std::function<bool()>& done) {
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(30);
-    while (!done()) {
-      if (std::chrono::steady_clock::now() > deadline) {
-        return false;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    return true;
-  };
-  ASSERT_TRUE(
-      waitFor([&]() { return queueManager()->stats(srcTaskId).has_value(); }));
+  ASSERT_TRUE(waitUntil(
+      [&]() { return queueManager()->stats(srcTaskId).has_value(); }));
 
   // Fail the connection the way a dead peer does.
   auto communicator = Communicator::getInstance();
@@ -1267,10 +1270,201 @@ TEST_F(UcxExchangeFocusedTest, endpointFailureDropsPlaceholder) {
   ASSERT_NE(endpoint, nullptr);
   communicator->deferEndpointCleanup(endpoint);
 
-  EXPECT_TRUE(waitFor([&]() {
+  EXPECT_TRUE(waitUntil([&]() {
     return !queueManager()->stats(srcTaskId).has_value();
   })) << "The placeholder outlived the server that waited on it";
   exchange.close();
+}
+
+// A consumer that closes before its stream ended tells its server, which then
+// closes too. For a producer that never arrives, the server's placeholder goes
+// with it.
+TEST_F(UcxExchangeFocusedTest, closedExchangeDropsPlaceholder) {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool previousIntraNode = config.intraNodeExchange;
+  config.intraNodeExchange = false;
+  auto restoreIntraNode =
+      folly::makeGuard([&]() { config.intraNodeExchange = previousIntraNode; });
+
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "closedConsumerSrc";
+  const int partitionId = 0;
+  auto rowType = UcxTestData::kTestRowType;
+
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask = createExchangeTask(
+      taskPrefix + "closedConsumerSink", rowType, partitionId, exchangeNodeId);
+  auto exchangeClient = std::make_shared<UcxExchangeClient>(
+      sinkTask->taskId(), sinkTask->destination(), /*numberOfConsumers=*/1);
+  auto split = remoteSplit(srcTaskId, partitionId);
+  exchangeClient->addRemoteTaskId(
+      std::dynamic_pointer_cast<exec::RemoteConnectorSplit>(
+          split.connectorSplit)
+          ->taskId);
+  exchangeClient->noMoreRemoteTasks();
+  auto driverCtx = std::make_shared<DriverCtx>(
+      sinkTask,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      kUngroupedGroupId,
+      /*partitionId=*/0);
+  UcxExchange exchange(
+      0, driverCtx.get(), sinkTask->planFragment().planNode, exchangeClient);
+  ContinueFuture future = ContinueFuture::makeEmpty();
+  exchange.isBlocked(&future);
+  ASSERT_TRUE(waitUntil(
+      [&]() { return queueManager()->stats(srcTaskId).has_value(); }));
+
+  // The consumer's Task closes the shared client when it terminates, which
+  // closes the sources.
+  exchange.close();
+  exchangeClient->close();
+
+  EXPECT_TRUE(waitUntil([&]() {
+    return !queueManager()->stats(srcTaskId).has_value();
+  })) << "The server of a closed consumer kept its placeholder";
+}
+
+// A server built before the close message answers the handshake with
+// acceptsClose unset. Its source must not send the message, which such a
+// server would never receive.
+DEBUG_ONLY_TEST_F(UcxExchangeFocusedTest, olderServerGetsNoCloseMessage) {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool previousIntraNode = config.intraNodeExchange;
+  config.intraNodeExchange = false;
+  auto restoreIntraNode =
+      folly::makeGuard([&]() { config.intraNodeExchange = previousIntraNode; });
+  common::testutil::TestValue::enable();
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::ucx_exchange::Acceptor::handshakeResponse",
+      std::function<void(HandshakeResponse*)>(
+          [](HandshakeResponse* response) { response->acceptsClose = false; }));
+  std::atomic<int> numCleanUps{0};
+  std::atomic<bool> toldServer{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::ucx_exchange::UcxExchangeSource::cleanUp",
+      std::function<void(bool*)>([&](bool* tellServer) {
+        toldServer = toldServer || *tellServer;
+        ++numCleanUps;
+      }));
+
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "olderServerSrc";
+  const int partitionId = 0;
+  auto rowType = UcxTestData::kTestRowType;
+  auto removeProducer =
+      folly::makeGuard([&]() { queueManager()->removeTask(srcTaskId); });
+
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask = createExchangeTask(
+      taskPrefix + "olderServerSink", rowType, partitionId, exchangeNodeId);
+  auto exchangeClient = std::make_shared<UcxExchangeClient>(
+      sinkTask->taskId(), sinkTask->destination(), /*numberOfConsumers=*/1);
+  auto split = remoteSplit(srcTaskId, partitionId);
+  exchangeClient->addRemoteTaskId(
+      std::dynamic_pointer_cast<exec::RemoteConnectorSplit>(
+          split.connectorSplit)
+          ->taskId);
+  exchangeClient->noMoreRemoteTasks();
+  auto driverCtx = std::make_shared<DriverCtx>(
+      sinkTask,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      kUngroupedGroupId,
+      /*partitionId=*/0);
+  UcxExchange exchange(
+      0, driverCtx.get(), sinkTask->planFragment().planNode, exchangeClient);
+  ContinueFuture future = ContinueFuture::makeEmpty();
+  exchange.isBlocked(&future);
+  ASSERT_TRUE(waitUntil(
+      [&]() { return queueManager()->stats(srcTaskId).has_value(); }));
+
+  exchange.close();
+  exchangeClient->close();
+  ASSERT_TRUE(waitUntil([&]() { return numCleanUps > 0; }));
+
+  EXPECT_FALSE(toldServer);
+  EXPECT_TRUE(queueManager()->stats(srcTaskId).has_value());
+}
+
+// An intra-node server hands each page over through IntraNodeTransferRegistry
+// and waits until its source reads it. A consumer that stops reading and
+// closes must release that server, which deletes its destination's results so
+// that the producer can finish.
+TEST_F(UcxExchangeFocusedTest, closedIntraNodeExchangeReleasesProducer) {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool previousIntraNode = config.intraNodeExchange;
+  config.intraNodeExchange = true;
+  auto restoreIntraNode =
+      folly::makeGuard([&]() { config.intraNodeExchange = previousIntraNode; });
+
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "closedIntraNodeSrc";
+  const int partitionId = 0;
+  // One page more than the consumer queues before it stops polling, so the
+  // server waits with the last one published but unread.
+  const int numPages = UcxExchangeSource::kBackpressureHighWaterMark + 2;
+  const vector_size_t numRowsPerPage = 100;
+
+  auto srcTask = createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
+  queueManager()->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+  auto removeProducer = folly::makeGuard([&]() {
+    srcTask->requestAbort().wait();
+    queueManager()->removeTask(srcTaskId);
+  });
+  for (int page = 0; page < numPages; ++page) {
+    queueManager()->enqueue(
+        srcTaskId,
+        partitionId,
+        makePackedColumns(numRowsPerPage),
+        numRowsPerPage);
+  }
+
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask = createExchangeTask(
+      taskPrefix + "closedIntraNodeSink",
+      UcxTestData::kTestRowType,
+      partitionId,
+      exchangeNodeId);
+  auto exchangeClient = std::make_shared<UcxExchangeClient>(
+      sinkTask->taskId(), sinkTask->destination(), /*numberOfConsumers=*/1);
+  auto split = remoteSplit(srcTaskId, partitionId);
+  exchangeClient->addRemoteTaskId(
+      std::dynamic_pointer_cast<exec::RemoteConnectorSplit>(
+          split.connectorSplit)
+          ->taskId);
+  exchangeClient->noMoreRemoteTasks();
+  auto driverCtx = std::make_shared<DriverCtx>(
+      sinkTask,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      kUngroupedGroupId,
+      /*partitionId=*/0);
+  UcxExchange exchange(
+      0, driverCtx.get(), sinkTask->planFragment().planNode, exchangeClient);
+  ContinueFuture future = ContinueFuture::makeEmpty();
+  exchange.isBlocked(&future);
+
+  // The server took every page; the consumer has not read the last one.
+  ASSERT_TRUE(waitUntil([&]() {
+    return exchangeClient->queue()->size() >=
+        UcxExchangeSource::kBackpressureHighWaterMark + 1 &&
+        queueManager()->stats(srcTaskId)->bufferedPages == 0;
+  }));
+
+  // The consumer's Task closes the shared client when it terminates, which
+  // closes the sources.
+  exchange.close();
+  exchangeClient->close();
+  queueManager()->noMoreData(srcTaskId);
+
+  EXPECT_TRUE(waitUntil([&]() {
+    return queueManager()->isFinished(srcTaskId);
+  })) << "The producer still waits for the closed consumer";
 }
 
 // A producer the consumer cannot connect to must fail the consumer, rather than

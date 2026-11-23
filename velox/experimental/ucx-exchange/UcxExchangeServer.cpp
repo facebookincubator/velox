@@ -111,8 +111,19 @@ void UcxExchangeServer::process() {
   if (closed_.load(std::memory_order_acquire)) {
     return;
   }
+  if (sourceClosed_.load(std::memory_order_acquire)) {
+    VLOG(1) << toString() << " source closed before its stream ended";
+    consumerGone_ = true;
+    close();
+    if (endpointRef_) {
+      endpointRef_->removeCommElem(getSelfPtr());
+      endpointRef_ = nullptr;
+    }
+    return;
+  }
   switch (state_) {
     case ServerState::Created:
+      receiveCloseMessage();
       setState(ServerState::ReadyToTransfer);
       communicator_->addToWorkQueue(getSelfPtr());
       break;
@@ -233,11 +244,18 @@ void UcxExchangeServer::close() {
     dataRequest_->cancel();
   }
 
+  if (closeRequest_ && !closeRequest_->isCompleted()) {
+    closeRequest_->cancel();
+  }
+
   // A server that waits for data leaves its callback in the producer's queue.
   // For a placeholder of a producer that never arrives, nothing else would
-  // remove it.
-  if (getState() == ServerState::WaitingForDataFromQueue) {
-    queueMgr_->releaseReader(partitionKey_.taskId, partitionKey_.destination);
+  // remove it. A consumer that is gone no longer reads the destination's
+  // results, so the producer must not keep them.
+  const bool deleteResults = consumerGone_ && !resultsDeleted_;
+  if (getState() == ServerState::WaitingForDataFromQueue || deleteResults) {
+    queueMgr_->releaseReader(
+        partitionKey_.taskId, partitionKey_.destination, deleteResults);
   }
 
   // Move all requests to the Communicator's deferred list so the GPU
@@ -250,6 +268,9 @@ void UcxExchangeServer::close() {
     if (dataRequest_) {
       communicator_->deferRequestCleanup(std::move(dataRequest_));
     }
+    if (closeRequest_) {
+      communicator_->deferRequestCleanup(std::move(closeRequest_));
+    }
     for (auto& req : completedRequests_) {
       communicator_->deferRequestCleanup(std::move(req));
     }
@@ -261,7 +282,33 @@ void UcxExchangeServer::close() {
 
 void UcxExchangeServer::onEndpointClosed(std::string_view reason) {
   VLOG(1) << toString() << " endpoint closed: " << reason;
+  consumerGone_ = true;
   close();
+}
+
+void UcxExchangeServer::receiveCloseMessage() {
+  auto message = std::make_shared<uint8_t>(0);
+  std::weak_ptr<UcxExchangeServer> weak = weak_from_this();
+  closeRequest_ =
+      endpointRef_->endpoint_
+          ->tagRecvBuilder(
+              message.get(),
+              sizeof(*message),
+              ucxx::Tag{getCloseTag(partitionKeyHash_)},
+              ucxx::TagMaskFull)
+          .callbackFunction(
+              [weak](ucs_status_t status, std::shared_ptr<void> /*arg*/) {
+                // Cancelled when the server closes for another reason.
+                if (status != UCS_OK) {
+                  return;
+                }
+                if (auto self = weak.lock()) {
+                  self->sourceClosed_.store(true, std::memory_order_release);
+                  self->communicator_->addToWorkQueue(self);
+                }
+              })
+          .callbackData(message)
+          .build();
 }
 
 std::string UcxExchangeServer::toString() {
@@ -345,6 +392,7 @@ void UcxExchangeServer::sendData() {
       intraNodeAtEndPublished_ = true;
 
       queueMgr_->deleteResults(partitionKey_.taskId, partitionKey_.destination);
+      resultsDeleted_ = true;
 
       // Wait for source to acknowledge atEnd before finishing
       setState(ServerState::WaitingForIntraNodeRetrieve);
@@ -496,6 +544,7 @@ void UcxExchangeServer::sendData() {
               << " Finished transferring partition for task "
               << partitionKey_.toString();
       queueMgr_->deleteResults(partitionKey_.taskId, partitionKey_.destination);
+      resultsDeleted_ = true;
       setState(ServerState::Done);
       communicator_->addToWorkQueue(getSelfPtr());
     }

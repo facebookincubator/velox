@@ -104,6 +104,10 @@ class UcxExchangeServer
   /// data.
   void onIntraNodeRetrieveComplete();
 
+  /// @brief Posts the receive for the message its source sends when it closes
+  /// before its stream ended.
+  void receiveCloseMessage();
+
   /// @brief Sets the new state of this exchange server using
   /// sequential consistency. Logs transitions at VLOG(2).
   /// @param newState the new state of the UcxExchangeServer.
@@ -137,6 +141,22 @@ class UcxExchangeServer
   /// sendComplete() callback on the same thread while the lock is still held.
   std::recursive_mutex dataMutex_;
   std::atomic<bool> closed_{false};
+
+  /// Set by the receive of the close message, which runs inside UCX progress
+  /// and so leaves closing to process().
+  std::atomic<bool> sourceClosed_{false};
+
+  /// True once the consumer closed or its connection failed, so that close()
+  /// deletes the destination's results the server has not deleted yet. Only
+  /// the Communicator thread reads and writes it.
+  bool consumerGone_{false};
+
+  /// True once the server deleted its destination's results after the end of
+  /// the stream. Only the Communicator thread reads and writes it.
+  bool resultsDeleted_{false};
+
+  /// The receive of the close message; see receiveCloseMessage().
+  std::shared_ptr<ucxx::Request> closeRequest_{nullptr};
 
   /// Future for intra-node transfer - signaled when source retrieves data.
   std::future<void> intraNodeRetrieveFuture_;

@@ -126,8 +126,12 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
 
   /// @brief Forgets the reader of 'destination' of a server that closed, so
   /// that the task's queue keeps no callback of a server that is gone. Drops a
-  /// placeholder queue once no reader waits on it.
-  void releaseReader(std::string_view taskId, int destination);
+  /// placeholder queue once no reader waits on it. With 'consumerGone', which
+  /// a server passes when its consumer closed or its connection failed, also
+  /// deletes the destination's results of an initialized queue, as an HTTP
+  /// consumer that aborts its results does.
+  void
+  releaseReader(std::string_view taskId, int destination, bool consumerGone);
 
   /// @brief Records that the consumer of 'destination' read a page it got
   /// through getIntraNodeData(). Called from IntraNodeTransferRegistry::poll()
