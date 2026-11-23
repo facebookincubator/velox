@@ -38,8 +38,10 @@ TEST_F(ApproxWinsorizedMeanAggregateTest, globalFullRange) {
        makeConstant<double>(0.0, 5),
        makeConstant<double>(1.0, 5)});
   auto expected = makeRowVector({makeFlatVector<double>({3.0})});
-  testAggregations(
-      {vectors}, {}, {"approx_winsorized_mean(c0, c1, c2)"}, {expected});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"approx_winsorized_mean(c0, c1, c2)"})
+      .assertResults(expected);
 }
 
 TEST_F(ApproxWinsorizedMeanAggregateTest, groupBy) {
@@ -52,8 +54,11 @@ TEST_F(ApproxWinsorizedMeanAggregateTest, groupBy) {
 
   auto expected = makeRowVector(
       {makeFlatVector<int32_t>({1, 2}), makeFlatVector<double>({22.0, 30.0})});
-  testAggregations(
-      {vectors}, {"c0"}, {"approx_winsorized_mean(c1, c2, c3)"}, {expected});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"approx_winsorized_mean(c1, c2, c3)"})
+      .assertResults(expected);
 }
 
 TEST_F(ApproxWinsorizedMeanAggregateTest, nullHandling) {
@@ -63,8 +68,10 @@ TEST_F(ApproxWinsorizedMeanAggregateTest, nullHandling) {
        makeConstant<double>(0.0, 5),
        makeConstant<double>(1.0, 5)});
   auto expected = makeRowVector({makeFlatVector<double>({3.0})});
-  testAggregations(
-      {vectors}, {}, {"approx_winsorized_mean(c0, c1, c2)"}, {expected});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"approx_winsorized_mean(c0, c1, c2)"})
+      .assertResults(expected);
 }
 
 TEST_F(ApproxWinsorizedMeanAggregateTest, allNulls) {
@@ -74,8 +81,10 @@ TEST_F(ApproxWinsorizedMeanAggregateTest, allNulls) {
        makeConstant<double>(1.0, 2)});
   auto expected =
       makeRowVector({makeNullableFlatVector<double>({std::nullopt})});
-  testAggregations(
-      {vectors}, {}, {"approx_winsorized_mean(c0, c1, c2)"}, {expected});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"approx_winsorized_mean(c0, c1, c2)"})
+      .assertResults(expected);
 }
 
 TEST_F(ApproxWinsorizedMeanAggregateTest, invalidBounds) {
@@ -83,10 +92,10 @@ TEST_F(ApproxWinsorizedMeanAggregateTest, invalidBounds) {
       {makeFlatVector<double>({1.0, 2.0, 3.0}),
        makeConstant<double>(-0.1, 3),
        makeConstant<double>(0.5, 3)});
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          {vectors}, {}, {"approx_winsorized_mean(c0, c1, c2)"}, {""}),
-      ">= 0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"approx_winsorized_mean(c0, c1, c2)"})
+      .assertError(">= 0");
 }
 
 TEST_F(ApproxWinsorizedMeanAggregateTest, boundsReversed) {
@@ -94,10 +103,10 @@ TEST_F(ApproxWinsorizedMeanAggregateTest, boundsReversed) {
       {makeFlatVector<double>({1.0, 2.0, 3.0}),
        makeConstant<double>(0.9, 3),
        makeConstant<double>(0.1, 3)});
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          {vectors}, {}, {"approx_winsorized_mean(c0, c1, c2)"}, {""}),
-      "less than or equal");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"approx_winsorized_mean(c0, c1, c2)"})
+      .assertError("less than or equal");
 }
 
 TEST_F(ApproxWinsorizedMeanAggregateTest, nanInput) {
@@ -105,10 +114,10 @@ TEST_F(ApproxWinsorizedMeanAggregateTest, nanInput) {
       {makeFlatVector<double>({1.0, std::numeric_limits<double>::quiet_NaN()}),
        makeConstant<double>(0.0, 2),
        makeConstant<double>(1.0, 2)});
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          {vectors}, {}, {"approx_winsorized_mean(c0, c1, c2)"}, {""}),
-      "Cannot add NaN");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"approx_winsorized_mean(c0, c1, c2)"})
+      .assertError("Cannot add NaN");
 }
 
 TEST_F(ApproxWinsorizedMeanAggregateTest, withCompression) {
@@ -122,8 +131,10 @@ TEST_F(ApproxWinsorizedMeanAggregateTest, withCompression) {
        makeConstant<double>(1.0, 1'000),
        makeConstant<double>(200.0, 1'000)});
   auto expected = makeRowVector({makeFlatVector<double>({499.5})});
-  testAggregations(
-      {vectors}, {}, {"approx_winsorized_mean(c0, c1, c2, c3)"}, {expected});
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"approx_winsorized_mean(c0, c1, c2, c3)"})
+      .assertResults(expected);
 }
 
 TEST_F(ApproxWinsorizedMeanAggregateTest, nonDefaultBoundsDistributed) {

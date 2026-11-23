@@ -15,6 +15,7 @@
 add_subdirectory(connectors)
 add_subdirectory(exec)
 add_subdirectory(expression)
+add_subdirectory(serializers)
 add_subdirectory(vector)
 
 if(VELOX_BUILD_TESTING)

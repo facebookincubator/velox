@@ -15,6 +15,13 @@
  */
 
 #include "velox/exec/Cursor.h"
+
+#include <folly/OperationCancelled.h>
+#include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/synchronization/Baton.h>
+#include <barrier>
+#include <thread>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -22,6 +29,27 @@
 using namespace facebook::velox;
 
 namespace facebook::velox::exec::test {
+
+// Runs functions on a CPU thread pool and synchronizes their start with the
+// caller.
+class EagerExecutor : public folly::Executor {
+ public:
+  explicit EagerExecutor(size_t numThreads) : executor_{numThreads} {}
+
+  // Returns after 'function' begins, without waiting for it to finish.
+  void add(folly::Func function) override {
+    auto started = std::make_shared<folly::Baton<>>();
+    executor_.add([started, function = std::move(function)]() mutable {
+      started->post();
+      function();
+    });
+    started->wait();
+  }
+
+ private:
+  // Runs scheduled functions on separate threads.
+  folly::CPUThreadPoolExecutor executor_;
+};
 
 class CursorTest : public OperatorTestBase {
  protected:
@@ -126,27 +154,78 @@ TEST_F(CursorTest, asyncDrainParallelMultipleProducers) {
   EXPECT_EQ(drainAsync(*cursor), kNumDrivers * kRowsPerDriver);
 }
 
-// After the task is cancelled, the parallel cursor surfaces the error from
-// moveNext() rather than returning data. requestCancel().wait() makes the
-// terminal state deterministic before we pull.
+TEST_F(CursorTest, producerCountInitialization) {
+  constexpr int32_t kNumDrivers = 32;
+  auto executor = std::make_shared<EagerExecutor>(kNumDrivers);
+  CursorParameters params;
+  params.planNode =
+      PlanBuilder()
+          .values(std::vector<RowVectorPtr>{}, /*parallelizable=*/true)
+          .planNode();
+  params.queryCtx = core::QueryCtx::create(executor.get());
+  params.maxDrivers = kNumDrivers;
+
+  auto cursor = TaskCursor::create(params);
+  EXPECT_EQ(drainAsync(*cursor), 0);
+}
+
+TEST_F(CursorTest, setErrorConcurrentWithMoveNext) {
+  constexpr std::string_view kErrorMessage{"injected cursor error"};
+
+  auto cursor = TaskCursor::create(makeParams(/*serialExecution=*/false));
+
+  const auto error = [&] {
+    try {
+      VELOX_FAIL("{}", kErrorMessage);
+    } catch (...) {
+      return std::current_exception();
+    }
+  }();
+  cursor->setError(error);
+  cursor->start();
+
+  std::barrier startBarrier{2};
+  std::thread errorThread([&] {
+    startBarrier.arrive_and_wait();
+    cursor->setError(error);
+  });
+
+  startBarrier.arrive_and_wait();
+  std::exception_ptr cursorError;
+  try {
+    cursor->moveNext();
+  } catch (...) {
+    cursorError = std::current_exception();
+  }
+  errorThread.join();
+
+  ASSERT_TRUE(cursorError);
+  VELOX_ASSERT_THROW(std::rethrow_exception(cursorError), kErrorMessage);
+}
+
+// After the task is cancelled, the parallel cursor surfaces cooperative
+// cancellation (folly::OperationCancelled) from moveNext() rather than
+// returning data. requestCancel().wait() makes the terminal state deterministic
+// before we pull.
 TEST_F(CursorTest, cancelSurfacesErrorParallel) {
   auto cursor = TaskCursor::create(makeParams(/*serialExecution=*/false));
   cursor->start();
   cursor->task()->requestCancel().wait();
 
   ContinueFuture future = ContinueFuture::makeEmpty();
-  VELOX_ASSERT_THROW(cursor->moveNext(&future), "Cancelled");
+  EXPECT_THROW(cursor->moveNext(&future), folly::OperationCancelled);
 }
 
-// The serial cursor surfaces the cancellation error too, rather than reporting
-// a terminated task as end-of-stream (false with an invalid future).
+// The serial cursor surfaces cancellation as folly::OperationCancelled too,
+// rather than reporting a terminated task as end-of-stream (false with an
+// invalid future).
 TEST_F(CursorTest, cancelSurfacesErrorSerial) {
   auto cursor = TaskCursor::create(makeParams(/*serialExecution=*/true));
   cursor->start();
   cursor->task()->requestCancel().wait();
 
   ContinueFuture future = ContinueFuture::makeEmpty();
-  VELOX_ASSERT_THROW(cursor->moveNext(&future), "Cancelled");
+  EXPECT_THROW(cursor->moveNext(&future), folly::OperationCancelled);
 }
 
 } // namespace facebook::velox::exec::test

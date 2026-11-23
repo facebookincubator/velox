@@ -257,10 +257,16 @@ class MapFromEntriesFunction : public exec::VectorFunction {
 };
 } // namespace
 
-void registerMapFromEntriesFunction(const std::string& name, bool throwOnNull) {
+void registerMapFromEntriesFunction(
+    const std::string& name,
+    bool throwOnNull,
+    std::string_view defaultOwner) {
   exec::registerVectorFunction(
       name,
       MapFromEntriesFunction::signatures(),
-      std::make_unique<MapFromEntriesFunction>(throwOnNull));
+      std::make_unique<MapFromEntriesFunction>(throwOnNull),
+      {},
+      /*overwrite=*/true,
+      defaultOwner);
 }
 } // namespace facebook::velox::functions

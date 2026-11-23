@@ -203,6 +203,16 @@ std::optional<Coercion> TypeCoercer::coerce(
   return std::nullopt;
 }
 
+std::optional<Coercion> TypeCoercer::coerce(
+    const TypePtr& fromType,
+    std::string_view toTypeName) const {
+  const auto it = rules_.find({fromType->name(), std::string(toTypeName)});
+  if (it == rules_.end()) {
+    return std::nullopt;
+  }
+  return it->second;
+}
+
 std::optional<Coercion> TypeCoercer::coerceTypeBase(
     const TypePtr& fromType,
     const TypePtr& toType) const {
@@ -308,6 +318,13 @@ TypePtr TypeCoercer::leastCommonSuperType(const TypePtr& a, const TypePtr& b)
 
   if (a->name() != b->name()) {
     return nullptr;
+  }
+
+  // Custom types do not participate in structural coercion: their
+  // size()/childAt() expose a physical backing, not type parameters, so they
+  // cannot be reconstructed via getType(name, params). Treat them as opaque.
+  if (customTypeExists(a->name())) {
+    return a->equivalent(*b) ? a : nullptr;
   }
 
   if (a->name() == TypeKindName::toName(TypeKind::ROW)) {

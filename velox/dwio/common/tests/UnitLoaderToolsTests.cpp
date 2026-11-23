@@ -24,7 +24,7 @@ using namespace ::testing;
 using namespace ::facebook::velox::dwio::common;
 using namespace ::facebook::velox::dwio::common::unit_loader_tools;
 
-TEST(UnitLoaderToolsTests, NoCallbacksCreated) {
+TEST(UnitLoaderToolsTests, noCallbacksCreated) {
   std::atomic_size_t callCount = 0;
   {
     CallbackOnLastSignal callback([&callCount]() { ++callCount; });
@@ -33,13 +33,13 @@ TEST(UnitLoaderToolsTests, NoCallbacksCreated) {
   EXPECT_EQ(callCount, 1);
 }
 
-TEST(UnitLoaderToolsTests, SupportsNullCallbacks) {
+TEST(UnitLoaderToolsTests, supportsNullCallbacks) {
   CallbackOnLastSignal callback(nullptr);
   auto cb = callback.getCallback();
   EXPECT_TRUE(cb == nullptr);
 }
 
-TEST(UnitLoaderToolsTests, NoExplicitCalls) {
+TEST(UnitLoaderToolsTests, noExplicitCalls) {
   std::atomic_size_t callCount = 0;
   {
     CallbackOnLastSignal callback([&callCount]() { ++callCount; });
@@ -62,7 +62,7 @@ TEST(UnitLoaderToolsTests, NoExplicitCalls) {
   EXPECT_EQ(callCount, 1);
 }
 
-TEST(UnitLoaderToolsTests, NoExplicitCallsFactoryDeletedFirst) {
+TEST(UnitLoaderToolsTests, noExplicitCallsFactoryDeletedFirst) {
   std::atomic_size_t callCount = 0;
   {
     std::function<void()> c1, c2;
@@ -79,7 +79,7 @@ TEST(UnitLoaderToolsTests, NoExplicitCallsFactoryDeletedFirst) {
   EXPECT_EQ(callCount, 1);
 }
 
-TEST(UnitLoaderToolsTests, ExplicitCalls) {
+TEST(UnitLoaderToolsTests, explicitCalls) {
   std::atomic_size_t callCount = 0;
   {
     CallbackOnLastSignal callback([&callCount]() { ++callCount; });
@@ -109,7 +109,7 @@ TEST(UnitLoaderToolsTests, ExplicitCalls) {
   EXPECT_EQ(callCount, 1);
 }
 
-TEST(UnitLoaderToolsTests, WillOnlyCallbackOnce) {
+TEST(UnitLoaderToolsTests, willOnlyCallbackOnce) {
   std::atomic_size_t callCount = 0;
   {
     CallbackOnLastSignal callback([&callCount]() { ++callCount; });
@@ -144,7 +144,7 @@ TEST(UnitLoaderToolsTests, WillOnlyCallbackOnce) {
   EXPECT_EQ(callCount, 1);
 }
 
-TEST(UnitLoaderToolsTests, HowMuchToSkip) {
+TEST(UnitLoaderToolsTests, howMuchToSkip) {
   // Helpers
   auto testSkip = [](uint64_t rowsToSkip, std::vector<uint64_t> rowCount) {
     return howMuchToSkip(rowsToSkip, rowCount.cbegin(), rowCount.cend());

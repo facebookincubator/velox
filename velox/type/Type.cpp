@@ -27,6 +27,7 @@
 #include <folly/hash/Hash.h>
 #include <re2/re2.h>
 
+#include <functional>
 #include <sstream>
 #include <typeindex>
 
@@ -339,7 +340,7 @@ TypePtr DateType::deserialize(const folly::dynamic& /*obj*/) {
 void Type::registerSerDe() {
   auto& registry = velox::DeserializationRegistryForSharedPtr();
   registry.Register(
-      Type::getClassName(),
+      std::string{Type::getClassName()},
       static_cast<TypePtr (*)(const folly::dynamic&)>(Type::create));
 
   registry.Register("IntervalDayTimeType", IntervalDayTimeType::deserialize);
@@ -347,6 +348,7 @@ void Type::registerSerDe() {
       "IntervalYearMonthType", IntervalYearMonthType::deserialize);
   registry.Register("DateType", DateType::deserialize);
   registry.Register("TimestampUtcType", TimestampUtcType::deserialize);
+  registry.Register("VectorIndexType", VectorIndexType::deserialize);
   registry.Register("TimeType", TimeTypeFactory::deserialize);
 }
 
@@ -391,7 +393,7 @@ folly::dynamic ArrayType::serialize() const {
 
   folly::dynamic children = folly::dynamic::array;
   children.push_back(child_->serialize());
-  obj["cTypes"] = children;
+  obj["cTypes"] = std::move(children);
 
   return obj;
 }
@@ -435,7 +437,7 @@ folly::dynamic MapType::serialize() const {
   folly::dynamic children = folly::dynamic::array;
   children.push_back(keyType()->serialize());
   children.push_back(valueType()->serialize());
-  obj["cTypes"] = children;
+  obj["cTypes"] = std::move(children);
 
   return obj;
 }
@@ -680,14 +682,74 @@ void RowType::printChildren(std::stringstream& ss, std::string_view delimiter)
   }
 }
 
-RowTypePtr RowType::unionWith(const RowTypePtr& other) const {
+namespace {
+// Returns 'row' followed by 'numFields' fields that 'addFields' appends to the
+// names and types vectors.
+template <typename AddFields>
+RowTypePtr concat(const RowType& row, size_t numFields, AddFields addFields) {
   std::vector<std::string> names;
+  names.reserve(row.size() + numFields);
+  names.insert(names.end(), row.names().begin(), row.names().end());
+
   std::vector<TypePtr> types;
-  copy(names_.begin(), names_.end(), back_inserter(names));
-  copy(other->names_.begin(), other->names_.end(), back_inserter(names));
-  copy(children_.begin(), children_.end(), back_inserter(types));
-  copy(other->children_.begin(), other->children_.end(), back_inserter(types));
+  types.reserve(row.size() + numFields);
+  types.insert(types.end(), row.children().begin(), row.children().end());
+
+  addFields(names, types);
   return ROW(std::move(names), std::move(types));
+}
+
+template <typename Names>
+RowTypePtr
+concatSameType(const RowType& row, const Names& names, const TypePtr& type) {
+  return concat(row, names.size(), [&](auto& newNames, auto& newTypes) {
+    newNames.insert(newNames.end(), names.begin(), names.end());
+    newTypes.insert(newTypes.end(), names.size(), type);
+  });
+}
+} // namespace
+
+RowTypePtr RowType::unionWith(const RowTypePtr& other) const {
+  return unionWith(other->names_, other->children_);
+}
+
+RowTypePtr RowType::unionWith(
+    const std::vector<std::string>& names,
+    const std::vector<TypePtr>& types) const {
+  return concat(*this, names.size(), [&](auto& newNames, auto& newTypes) {
+    newNames.insert(newNames.end(), names.begin(), names.end());
+    newTypes.insert(newTypes.end(), types.begin(), types.end());
+  });
+}
+
+RowTypePtr RowType::unionWith(
+    const std::vector<std::string>& names,
+    const TypePtr& type) const {
+  return concatSameType(*this, names, type);
+}
+
+RowTypePtr RowType::unionWith(
+    std::initializer_list<std::string_view> names,
+    const TypePtr& type) const {
+  return concatSameType(*this, names, type);
+}
+
+RowTypePtr RowType::unionWith(
+    std::initializer_list<std::pair<std::string_view, TypePtr>> pairs) const {
+  return concat(*this, pairs.size(), [&](auto& newNames, auto& newTypes) {
+    for (const auto& [name, type] : pairs) {
+      newNames.emplace_back(name);
+      newTypes.push_back(type);
+    }
+  });
+}
+
+RowTypePtr RowType::unionWith(std::string_view name, const TypePtr& type)
+    const {
+  return concat(*this, 1, [&](auto& newNames, auto& newTypes) {
+    newNames.emplace_back(name);
+    newTypes.push_back(type);
+  });
 }
 
 std::string RowType::toString() const {
@@ -1109,6 +1171,10 @@ TypePtr TIMESTAMP_UTC() {
   return TimestampUtcType::get();
 }
 
+TypePtr VECTOR_INDEX() {
+  return VectorIndexType::get();
+}
+
 TypePtr UNKNOWN() {
   return TypeFactory<TypeKind::UNKNOWN>::create();
 }
@@ -1425,7 +1491,7 @@ int32_t DateType::toDays(std::string_view in) const {
 
 int32_t DateType::toDays(const char* in, size_t len) const {
   return util::fromDateString(in, len, util::ParseMode::kPrestoCast)
-      .thenOrThrow(folly::identity, [&](const Status& status) {
+      .thenOrThrow(std::identity{}, [&](const Status& status) {
         VELOX_USER_FAIL("{}", status.message());
       });
 }
@@ -1453,6 +1519,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"TIME", TIME()},
       {"TIME MICRO UTC", TIME_MICRO_UTC()},
       {"UNKNOWN", UNKNOWN()},
+      {"VECTOR_INDEX", VECTOR_INDEX()},
   };
   return kTypes;
 }
@@ -1631,6 +1698,13 @@ const auto& typeParameterKindNames() {
 
 VELOX_DEFINE_ENUM_NAME(TypeParameterKind, typeParameterKindNames);
 
+folly::dynamic VectorIndexType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "VectorIndexType";
+  obj["type"] = name();
+  return obj;
+}
+
 folly::dynamic TimestampUtcType::serialize() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["name"] = "TimestampUtcType";
@@ -1660,7 +1734,7 @@ template class TimeType<TimePrecision::kMicroseconds, false>;
 
 // static
 TypePtr TimeTypeFactory::deserialize(const folly::dynamic& obj) {
-  // Default to millseconds and local time for backward compatibility.
+  // Default to milliseconds and local time for backward compatibility.
   auto precision = obj.get_ptr("precision")
       ? static_cast<TimePrecision>(obj["precision"].asInt())
       : TimePrecision::kMilliseconds;
@@ -1711,7 +1785,7 @@ StringView TimeMilliPrecisionType::valueToString(
 
 int64_t TimeMilliPrecisionType::valueToTime(const StringView& timeStr) const {
   return util::fromTimeString(timeStr).thenOrThrow(
-      folly::identity,
+      std::identity{},
       [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
 }
 
@@ -1723,7 +1797,7 @@ int64_t TimeMilliPrecisionType::valueToTime(
   int64_t parsedTimeMillis = valueToTime(timeStr);
 
   // Apply timezone conversion if provided
-  if (FOLLY_UNLIKELY(!timeZone)) {
+  if (!timeZone) [[unlikely]] {
     return parsedTimeMillis;
   }
 
@@ -1767,6 +1841,53 @@ int64_t TimeMilliPrecisionType::valueToTime(
   }
 
   return adjustedTime;
+}
+
+int64_t TimeMicroPrecisionUtcType::valueToTime(
+    StringView timeStr,
+    bool requireSeconds) const {
+  auto componentsResult = util::parseTimeComponents(
+      timeStr.data(),
+      timeStr.size(),
+      requireSeconds,
+      TimePrecision::kMicroseconds);
+  if (componentsResult.hasError()) {
+    VELOX_USER_FAIL("{}", componentsResult.error().message());
+  }
+
+  const auto components = componentsResult.value();
+  VELOX_USER_CHECK(
+      components.hour >= 0 && components.hour < util::kHoursPerDay,
+      "Invalid hour value: {}",
+      components.hour);
+  VELOX_USER_CHECK(
+      components.minute >= 0 && components.minute < util::kMinsPerHour,
+      "Invalid minute value: {}",
+      components.minute);
+  VELOX_USER_CHECK(
+      components.second >= 0 && components.second < util::kSecsPerMinute,
+      "Invalid second value: {}",
+      components.second);
+  VELOX_DCHECK(components.fractionalPrecision == TimePrecision::kMicroseconds);
+  const int32_t micros = components.fractionalSecond;
+  VELOX_USER_CHECK(
+      micros >= 0 && micros < util::kMicrosPerSec,
+      "Invalid microsecond value: {}",
+      micros);
+
+  constexpr int64_t kMicrosPerDay = util::kMicrosPerSec * util::kSecsPerDay;
+  const int64_t result =
+      static_cast<int64_t>(components.hour) * util::kMicrosPerHour +
+      static_cast<int64_t>(components.minute) * util::kMicrosPerMinute +
+      static_cast<int64_t>(components.second) * util::kMicrosPerSec +
+      static_cast<int64_t>(micros);
+
+  VELOX_USER_CHECK(
+      result >= 0 && result < kMicrosPerDay,
+      "Time value {} is out of range [0, {})",
+      result,
+      kMicrosPerDay);
+  return result;
 }
 
 // static

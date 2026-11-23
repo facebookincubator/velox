@@ -1,0 +1,379 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include <fmt/format.h>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <vector>
+
+#include "folly/Executor.h"
+#include "folly/container/F14Map.h"
+#include "folly/container/F14Set.h"
+#include "velox/buffer/BufferPool.h"
+#include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/HybridFlatMap.h"
+#include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
+
+#include <set>
+#include "velox/type/Type.h"
+
+namespace facebook::velox::memory {
+class MemoryPool;
+}
+
+namespace facebook::nimble {
+
+/// Serialization format version. Every version carries a leading version byte
+/// and encodes its streams with the nimble encoding framework.
+///
+/// - kLegacyCompact: READ-ONLY post the two-array sparse trailer change.
+///   Existing production blobs at this version are decoded via the frozen
+///   legacy reader (`nimble::serde::legacy::`), whose wire format is:
+///   Wire: [version:1B][rowCount:varint][stream_data_0]...[stream_data_N]
+///         [encodingByte:1B][denseSizes:u32[]|sparsePair]
+///         [trailer_size:u32]
+///   Serializer upgrades new kLegacyCompact writes to kSerialization.
+///
+/// - kLegacySerialization: READ-ONLY old encoded Serializer format. Uses the
+///   two-array sparse trailer and [version:1B][rowCount:varint], without a
+///   header flags byte. Serializer upgrades new writes to kSerialization.
+///
+/// - kSerialization / kProjection: Writer versions using the two-array sparse
+///   trailer. Wire body identical to kLegacySerialization; trailer is:
+///   [version:1B][rowCount:varint][flags:1B][stream_data...]
+///   [indicesEncType:1B][indicesPayload]
+///   [sizesEncType:1B][sizesPayload]
+///   [trailer_size:u32]
+///   trailer_size = 2 + len(indicesPayload) + len(sizesPayload).
+///   Indices and sizes axes independently choose from EncodingTypes
+///   {Trivial, Varint, Delta, FixedBitWidth}. See getTrailerEncodingType()
+///   for validation. kSerialization is the default Serializer writer version
+///   and kProjection is the Projector writer version. Both carry a
+///   compact-header flags byte after the row count.
+///   The flags byte also records whether stream encoding row counts are
+///   varint (default) or fixed u32. Fixed u32 is used when kProjection carries
+///   stream bodies sliced from kTablet payloads.
+///
+/// - kTablet: Tablet stream passthrough format. Like kSerialization but:
+///   (1) Chunk slice headers are:
+///       [version:1B][rowCount:varint][flags:1B][rowRange/resumeKey...]
+///   (2) Each stream's data includes tablet chunk headers:
+///       [chunkSize:u32][compressionType:1B][encoded_data...]
+///       which the Deserializer strips before decoding.
+///   (3) Encoding headers within streams use fixed u32 row counts
+///       (useVarintRowCount=false), matching the tablet's default format.
+///   Wire: same two-array sparse trailer layout as kSerialization.
+///
+/// - kBlob: Serializer writer version for low serde CPU when size
+///   matters less. Every stream is written with the Trivial encoding, inside a
+///   Nullable encoding when it has nulls, so writes skip the search for a
+///   smaller encoding. One general-purpose codec pass then compresses the
+///   whole body, which is a kSerialization body: the streams and the two-array
+///   sparse trailer.
+///   Wire: [version:1B][rowCount:varint][flags:1B][blobCompression:1B]
+///         [payload]
+///   The payload is the body compressed with blobCompression, or the body
+///   itself when blobCompression is Uncompressed. Zstd and Lz4 payloads start
+///   with the u32 size of the body. The body must be smaller than 4 GiB.
+///   The Deserializer and the Projector decompress the whole body, even when
+///   they read only selected subfields. The Projector writes the selected
+///   streams as kProjection. StreamSlicer and SerializationDump reject kBlob.
+enum class SerializationVersion : uint8_t {
+  // READ-ONLY post the two-array trailer change: production blobs with this
+  // version byte are still decoded via `nimble::serde::legacy::`. New
+  // Serializer writes are upgraded to kSerialization; Projector writers emit
+  // kProjection.
+  kLegacyCompact = 2,
+  // Source-level migration spelling for the old non-nullable encoded
+  // serializer wire format. Serializer upgrades new writes to kSerialization.
+  kLegacySerialization = 3,
+  // Default writer version for the Serializer: null-capable two-array sparse
+  // trailer with a compact-header flags byte.
+  kSerialization = 4,
+  // Default writer version for the Projector: two-array sparse trailer.
+  // Same wire format as kSerialization today; the distinct version byte lets
+  // the two writers' formats evolve independently in the future.
+  kProjection = 5,
+  kTablet = 6,
+  // Serializer writer version for low serde CPU: Trivial streams, and one
+  // general-purpose codec pass over the whole body.
+  kBlob = 7,
+};
+
+std::string toString(SerializationVersion version);
+
+/// Returns true if the version is the tablet passthrough format.
+inline bool isTabletVersion(SerializationVersion version) {
+  return version == SerializationVersion::kTablet;
+}
+
+/// Returns true if the version was written using the legacy kLegacyCompact
+/// trailer format (decoded via `nimble::serde::legacy::`). All other
+/// non-legacy formats (kLegacySerialization, kTablet, kSerialization,
+/// kProjection, kBlob) use the new two-array sparse trailer.
+///
+/// kLegacyCompact is the only frozen version here because it is the only one
+/// with existing production blobs that must keep using the legacy trailer
+/// reader.
+inline bool usesLegacyTrailer(SerializationVersion version) {
+  return version == SerializationVersion::kLegacyCompact;
+}
+
+/// Returns true if the version carries serialization header flags.
+inline bool hasSerializationHeaderFlags(SerializationVersion version) {
+  return version == SerializationVersion::kSerialization ||
+      version == SerializationVersion::kProjection ||
+      version == SerializationVersion::kTablet ||
+      version == SerializationVersion::kBlob;
+}
+
+/// Returns true if the version's compact header carries a flags byte after the
+/// row count. kTablet carries its flag in the tablet chunk header instead; the
+/// frozen kLegacyCompact and kLegacySerialization have no flags byte.
+/// kBlob also carries a blob compression byte after the flags byte.
+inline bool usesCompactHeaderFlags(SerializationVersion version) {
+  return version == SerializationVersion::kSerialization ||
+      version == SerializationVersion::kProjection ||
+      version == SerializationVersion::kBlob;
+}
+
+/// Returns true if kBlob can store its body with 'compressionType'. The body
+/// mixes data types, so MetaInternal and OpenZL compress it as untyped bytes.
+inline bool isSupportedBlobCompression(CompressionType compressionType) {
+  return compressionType == CompressionType::Lz4 ||
+      compressionType == CompressionType::Zstd ||
+      compressionType == CompressionType::MetaInternal ||
+      compressionType == CompressionType::OpenZL ||
+      compressionType == CompressionType::Uncompressed;
+}
+
+/// Validates and returns the EncodingType for a stream-sizes trailer section
+/// (used independently for both the indices and the sizes arrays).
+/// Supported: Trivial, Varint, Delta, FixedBitWidth.
+EncodingType getTrailerEncodingType(EncodingType encodingType);
+
+inline std::ostream& operator<<(
+    std::ostream& os,
+    SerializationVersion version) {
+  return os << toString(version);
+}
+
+/// Returns the default encoding selection policy creator. The underlying
+/// ManualEncodingSelectionPolicyFactory (and its default read-factor vector) is
+/// initialized once and shared across all returned creators.
+EncodingSelectionPolicyCreator defaultEncodingSelectionPolicyCreator();
+
+struct SerializerOptions {
+  /// Serialization format version.
+  /// - kSerialization: Encoded Serializer format (default).
+  /// - kLegacyCompact / kLegacySerialization: Legacy spellings for migration.
+  ///   Existing kLegacyCompact production blobs are decoded via
+  ///   `nimble::serde::legacy::`; new Serializer writes are upgraded to
+  ///   kSerialization while callers migrate.
+  /// - kProjection / kTablet are not valid Serializer writer versions
+  ///   (Projector + tablet pipelines write them, respectively).
+  /// - kBlob: Trivial streams, plus one codec pass over the whole
+  ///   body (see blobCompressionOptions). Readers that predate kBlob
+  ///   reject its blobs, so every reader must support it before a writer
+  ///   enables it.
+  SerializationVersion version{SerializationVersion::kSerialization};
+
+  /// Columns that should be encoded as flat maps. Maps column name to a set
+  /// of predefined key strings. When the set is empty, the column is
+  /// treated as a flat map with dynamic key discovery. When non-empty, keys
+  /// are predefined in sorted order to ensure all serializers produce
+  /// identical schemas regardless of data arrival order. Unknown keys not in
+  /// the set will cause an error during serialization.
+  folly::F14FastMap<std::string, std::set<std::string>> flatMapColumns{};
+
+  /// Opt-in Hybrid FlatMap grouping for MapVector-backed MAP input. Configured
+  /// group keys are stored in schema metadata, and every block marks the
+  /// present ones in a key-presence bitmap. Each column's HybridFlatMap is
+  /// built for the column's key type and shares its groups with its copies.
+  /// Build it once and copy it into every SerializerOptions, so that every
+  /// Serializer uses it without checking its keys again, and its schema reads
+  /// the grouped keys from it instead of copying them.
+  /// Each column's `HybridFlatMap::defaultGroupKeyPresenceMode` selects how its
+  /// blocks record Default keys: `kBitmap`, a bitmap over Default keys appended
+  /// to the schema in first-seen order, or `kKeyList`, a typed list of each
+  /// block's Default keys with no Default keys in the schema. Every group
+  /// carries key-major in-map bits and values in one complete value subtree.
+  /// Default is required and may be the only group, in which case it holds
+  /// every key.
+  folly::F14FastMap<std::string, HybridFlatMap> hybridFlatMapColumns{};
+
+  /// Encoding of the keys that the schema of every Hybrid FlatMap column
+  /// records, e.g. EliasFano, including a bitmap Default's keys in first-seen
+  /// order. Without one, the keys are written as strings. The layout must name
+  /// every nested encoding, and its compression is ignored, so readers need no
+  /// codec. It applies to the keys of every Hybrid FlatMap column, so it must
+  /// suit each of their key kinds: writing the schema throws when the layout
+  /// cannot encode a group's keys, e.g. EliasFano for String keys or for a
+  /// bitmap Default's keys out of order. Readers built before this option
+  /// reject the encoded keys, so set it only once every reader of the schema
+  /// is newer.
+  std::optional<EncodingLayout> hybridFlatMapGroupKeysLayout{};
+
+  /// Omits all-false Hybrid FlatMap in-map and key-presence streams from
+  /// serialized values. All-true in-map streams stay explicit so the reader
+  /// can derive each batch's row count. All-true key-presence streams stay
+  /// explicit so later Default-group keys do not appear in earlier batches.
+  /// This option never omits a Default key list; a block without Default keys
+  /// writes no list either way. Disabled by default for compatibility with
+  /// readers that require explicit metadata streams.
+  bool skipConstantHybridFlatMapMetadataStreams{false};
+
+  /// Factory for creating encoding selection policies.
+  /// Used by encoded serializer writes.
+  /// When encodingLayoutTree is specified, used as fallback for streams or
+  /// nested encodings not captured in the layout tree. When encodingLayoutTree
+  /// is not specified, used directly for all streams.
+  /// For kBlob, the Serializer ignores it and selects Trivial for
+  /// every stream.
+  EncodingSelectionPolicyCreator encodingSelectionPolicyCreator =
+      defaultEncodingSelectionPolicyCreator();
+
+  /// Optional captured encoding layout tree.
+  /// When specified, encodings are replayed from this tree instead of using
+  /// encodingSelectionPolicyCreator. This speeds up writes by skipping runtime
+  /// encoding selection and can provide better encodings based on historical
+  /// data. Falls back to encodingSelectionPolicyCreator for streams not in the
+  /// tree.
+  /// For kBlob, the Serializer rejects it, because replayed
+  /// encodings would replace Trivial.
+  std::optional<EncodingLayoutTree> encodingLayoutTree{};
+
+  /// Compression options used with encodingLayoutTree, and by the Serializer
+  /// for kBlob.
+  /// When encodingLayoutTree is specified, these options are passed to
+  /// ReplayedEncodingSelectionPolicy to control compression during encoding
+  /// replay. When nullopt (default), per-stream compression is disabled.
+  /// For kBlob, the Serializer uses them to compress the values of
+  /// each stream. Unlike blobCompressionOptions, they pass the data type to
+  /// the codec, because each stream holds one data type. Set
+  /// blobCompressionOptions to Uncompressed when setting them. A second pass
+  /// would mostly re-compress compressed bytes, and the accept ratio would
+  /// then discard its output.
+  std::optional<CompressionOptions> compressionOptions{};
+
+  /// Compression options for the whole kBlob body. compressionType
+  /// picks the codec: Lz4 (default, usually cheaper than Zstd), Zstd,
+  /// MetaInternal, OpenZL or Uncompressed. Set compressionType whenever
+  /// replacing these options, because CompressionOptions defaults it to
+  /// MetaInternal, or to Zstd in OSS builds. The body is stored uncompressed
+  /// when it is smaller than the codec's minimum size (lz4MinCompressionSize,
+  /// zstdMinCompressionSize, internalMinCompressionSize,
+  /// openzlMinCompressionSize). It is also stored uncompressed when compression
+  /// misses compressionAcceptRatio. Lz4 cannot compress bodies larger than
+  /// about 2 GiB, which are stored uncompressed too. On values that compress
+  /// well, a compressed body can cost more CPU to write and to read than
+  /// kSerialization. Other versions ignore these options.
+  CompressionOptions blobCompressionOptions{
+      .compressionType = CompressionType::Lz4};
+
+  /// Encoding type for the indices array of the sparse stream-sizes trailer.
+  /// Indices are the offsets of non-zero stream slots in scan order
+  /// (sorted ascending). Supported types: Trivial, Varint, Delta,
+  /// FixedBitWidth.
+  EncodingType streamIndicesEncodingType{EncodingType::FixedBitWidth};
+
+  /// Returns the default per-encoding options used by Serializer writes.
+  static Encoding::Options defaultEncodingOptions() {
+    Encoding::Options options;
+    options.useVarintRowCount = true;
+    return options;
+  }
+
+  /// Per-encoding options passed to EncodingFactory::encode(). Controls
+  /// format-level settings (varint row count) and per-encoding config
+  /// (e.g., BlockBitPacking block size).
+  Encoding::Options encodingOptions{defaultEncodingOptions()};
+
+  /// Maximum number of scratch buffers retained by the serializer-owned
+  /// nested encoding buffer pool. 0 disables nested encoding buffer caching.
+  /// Disabled by default; callers can set a non-zero value to opt in.
+  uint32_t maxCachedNestedEncodingBuffers{0};
+
+  /// Encoding type for the sizes array of the sparse stream-sizes trailer.
+  /// Sizes are the byte sizes of non-zero streams, parallel to the indices
+  /// array. Supported types: Trivial, Varint, Delta, FixedBitWidth.
+  EncodingType streamSizesEncodingType{EncodingType::FixedBitWidth};
+};
+
+struct DeserializerOptions {
+  /// Read-only compatibility knob for the removed legacy headerless format:
+  ///   [rowCount:u32][size_0:u32][stream_0]...[size_N:u32][stream_N]. Streams
+  ///   hold raw values, optionally compressed. Every other format starts with
+  ///   a version byte, so the caller must set this true only for blobs known
+  ///   to predate the header.
+  bool legacyHeaderless{false};
+
+  /// Output type for deserializing flatmap columns as struct (ROW).
+  /// When provided, each top-level flatmap column whose corresponding field in
+  /// outputType is ROW will be deserialized as a struct instead of a map. The
+  /// ROW field names specify which flatmap keys to select and their order.
+  /// Fields not present in the flatmap schema will be filled with nulls.
+  /// When nullopt (default), all flatmap columns are deserialized as maps.
+  velox::RowTypePtr outputType{};
+
+  /// Maximum number of scratch buffers each per-stream BufferPool retains
+  /// for reuse across encoding lifetimes. Higher values reduce MemoryPool
+  /// allocation churn at the cost of resident memory. 0 disables the pool
+  /// entirely (every encoding allocates and frees through MemoryPool).
+  size_t bufferPoolCapacity{velox::BufferPool::kDefaultCapacity};
+
+  /// Executor for parallel decoding of child fields.
+  /// When set, RowFieldReader and StructFlatMapFieldReader dispatch child reads
+  /// as coroutines to this executor, using co_await to yield threads back to
+  /// the pool. This prevents deadlock from nested parallelism.
+  /// When nullptr (default), child reads are performed sequentially.
+  folly::Executor* decodeExecutor{nullptr};
+
+  /// Maximum planned decode parallelism across the field reader tree. Nested
+  /// scalar stream counts determine how many child-field tasks to create. 0
+  /// disables parallel decoding.
+  uint32_t maxDecodeParallelism{0};
+
+  /// Minimum number of nested scalar streams per planned decode task. Ensures
+  /// each coroutine task has enough work to amortize threading overhead.
+  uint32_t minStreamsPerDecodeTask{1};
+
+  /// Optional leaf pools distributed round-robin among independently decoded
+  /// row children and FlatMap-as-struct values. When provided, the pool count
+  /// must match maxDecodeParallelism. The caller must keep the pools alive
+  /// while returned vectors exist.
+  std::vector<velox::memory::MemoryPool*> decodePools{};
+};
+
+} // namespace facebook::nimble
+
+template <>
+struct fmt::formatter<facebook::nimble::SerializationVersion>
+    : fmt::formatter<std::string> {
+  auto format(
+      facebook::nimble::SerializationVersion version,
+      format_context& ctx) const {
+    return fmt::formatter<std::string>::format(
+        facebook::nimble::toString(version), ctx);
+  }
+};

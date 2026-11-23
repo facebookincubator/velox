@@ -29,6 +29,13 @@
 #include "velox/external/jitify/jitify.hpp"
 DEFINE_bool(cuda_G, false, "Enable -G for NVRTC");
 
+DEFINE_bool(
+    cuda_lineinfo,
+    false,
+    "Enable -lineinfo for NVRTC so compute-sanitizer and the profiler can "
+    "attribute a fault to a source line. Unlike -G this keeps optimization on, "
+    "so it can be used with the default -O3 (ptxas rejects -G with -O>0).");
+
 DEFINE_int32(
     cuda_O,
 #ifndef NDEBUG
@@ -86,7 +93,16 @@ class CompiledModuleImpl : public CompiledModule {
 
   KernelInfo info(int32_t kernelIdx) override;
 
+  int32_t occupancy(
+      int32_t kernelIdx,
+      int32_t numThreads,
+      int32_t dynamicSharedBytes) override;
+
  private:
+  // Opts the kernel in to more than the default 48KB of dynamic shared memory.
+  // A launch asking for more than that fails without this.
+  void allowLargeDynamicShared(int32_t kernelIdx, int32_t shared);
+
   CUmodule module_;
   std::vector<CUfunction> kernels_;
   int64_t compileMs_;
@@ -205,7 +221,21 @@ void makeNTS(std::string& string) {
 void initializeWaveHeaders(
     const std::map<std::string, std::string>& headers,
     const std::string& except) {
-  for (auto& pair : headers) {
+  auto resolvedHeaders = headers;
+  const auto& jitSafeHeaders = jitify::detail::get_jitsafe_headers_map();
+  for (const auto& [name, text] : headers) {
+    const auto header = jitSafeHeaders.find(name);
+    if (header == jitSafeHeaders.end()) {
+      continue;
+    }
+    // Compare the built-ins: Jitify rewrites captured header contents.
+    for (const auto& [alias, source] : jitSafeHeaders) {
+      if (source == header->second) {
+        resolvedHeaders.emplace(alias, text);
+      }
+    }
+  }
+  for (auto& pair : resolvedHeaders) {
     if (pair.first == except) {
       continue;
     }
@@ -270,6 +300,10 @@ void ensureInit() {
   }
   if (FLAGS_cuda_G) {
     waveNvrtcFlags.push_back("-G");
+  } else if (FLAGS_cuda_lineinfo) {
+    // -G subsumes -lineinfo and the two are mutually exclusive; -G also
+    // requires -O0, so only reach for -lineinfo when -G is off.
+    waveNvrtcFlags.push_back("-lineinfo");
   }
   getNvrtcOptions(waveNvrtcFlags);
   auto device = currentDevice();
@@ -508,6 +542,19 @@ std::shared_ptr<CompiledModule> CompiledModule::fromCubin(
       module, std::move(funcs), elapsedMs);
 }
 
+void CompiledModuleImpl::allowLargeDynamicShared(
+    int32_t kernelIdx,
+    int32_t shared) {
+  constexpr int32_t kDefaultMaxDynamicShared = 48 * 1024;
+  if (shared <= kDefaultMaxDynamicShared) {
+    return;
+  }
+  CU_CHECK(cuFuncSetAttribute(
+      kernels_[kernelIdx],
+      CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+      shared));
+}
+
 void CompiledModuleImpl::launch(
     int32_t kernelIdx,
     int32_t numBlocks,
@@ -515,6 +562,7 @@ void CompiledModuleImpl::launch(
     int32_t shared,
     Stream* stream,
     void** args) {
+  allowLargeDynamicShared(kernelIdx, shared);
   auto result = cuLaunchKernel(
       kernels_[kernelIdx],
       numBlocks,
@@ -537,6 +585,7 @@ void CompiledModuleImpl::launchCooperative(
     int32_t shared,
     Stream* stream,
     void** args) {
+  allowLargeDynamicShared(kernelIdx, shared);
   auto result = cuLaunchCooperativeKernel(
       kernels_[kernelIdx],
       numBlocks,
@@ -567,6 +616,22 @@ KernelInfo CompiledModuleImpl::info(int32_t kernelIdx) {
   info.maxOccupancy32 = max;
   info.compileMs = compileMs_;
   return info;
+}
+
+int32_t CompiledModuleImpl::occupancy(
+    int32_t kernelIdx,
+    int32_t numThreads,
+    int32_t dynamicSharedBytes) {
+  // A launch asking for more than the default 48KB needs the opt-in before the
+  // driver will report an occupancy for it, and reports 0 otherwise.
+  allowLargeDynamicShared(kernelIdx, dynamicSharedBytes);
+  int32_t blocks = 0;
+  const auto result = cuOccupancyMaxActiveBlocksPerMultiprocessor(
+      &blocks, kernels_[kernelIdx], numThreads, dynamicSharedBytes);
+  if (result != CUDA_SUCCESS) {
+    return 0;
+  }
+  return blocks;
 }
 
 } // namespace facebook::velox::wave

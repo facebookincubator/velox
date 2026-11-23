@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/wave/exec/Wave.h"
+#include <folly/stop_watch.h>
 #include <iostream>
 #include "velox/experimental/wave/exec/Vectors.h"
 
@@ -45,11 +46,14 @@ namespace facebook::velox::wave {
 
 PrintTime::PrintTime(const char* title)
     : title_(title),
-      start_(FLAGS_wave_print_time ? getCurrentTimeMicro() : 0) {}
+      start_(
+          FLAGS_wave_print_time ? SteadyTime::now<std::chrono::microseconds>()
+                                : 0) {}
 
 PrintTime::~PrintTime() {
   if (FLAGS_wave_print_time) {
-    std::cout << title_ << "=" << getCurrentTimeMicro() - start_ << " "
+    std::cout << title_ << "="
+              << SteadyTime::now<std::chrono::microseconds>() - start_ << " "
               << comment_ << std::endl;
   }
 }
@@ -561,7 +565,7 @@ bool WaveStream::isArrived(
   if (sleepMicro == -1) {
     return false;
   }
-  auto start = getCurrentTimeMicro();
+  const folly::stop_watch<std::chrono::microseconds> watch;
   int64_t elapsed = 0;
   while (timeoutMicro == 0 || elapsed < timeoutMicro) {
     bool ready = true;
@@ -575,7 +579,7 @@ bool WaveStream::isArrived(
       return true;
     }
     std::this_thread::sleep_for(std::chrono::microseconds(sleepMicro));
-    elapsed = getCurrentTimeMicro() - start;
+    elapsed = watch.elapsed().count();
   }
   return false;
 }

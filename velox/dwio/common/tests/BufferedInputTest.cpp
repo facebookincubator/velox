@@ -24,7 +24,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/file/tests/TestUtils.h"
-#include "velox/connectors/hive/BufferedInputBuilder.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/dwrf/test/TestReadFile.h"
 
@@ -444,7 +444,7 @@ TEST_F(BufferedInputTest, readSorting) {
   }
 }
 
-TEST_F(BufferedInputTest, VreadSorting) {
+TEST_F(BufferedInputTest, vreadSorting) {
   std::string content = "aaabbbcccdddeeefffggghhhiiijjjkkklllmmmnnnooopppqqq";
   std::vector<Region> regions = {{6, 3}, {24, 3}, {3, 3}, {0, 3}, {29, 3}};
 
@@ -482,7 +482,7 @@ TEST_F(BufferedInputTest, VreadSorting) {
   }
 }
 
-TEST_F(BufferedInputTest, VreadSortingWithLabels) {
+TEST_F(BufferedInputTest, vreadSortingWithLabels) {
   std::string content = "aaabbbcccdddeeefffggghhhiiijjjkkklllmmmnnnooopppqqq";
   std::vector<std::string> l = {"a", "b", "c", "d", "e"};
   std::vector<Region> regions = {
@@ -736,7 +736,7 @@ class CustomDirectBufferedInput
 };
 
 class CustomBufferedInputBuilder
-    : public facebook::velox::connector::hive::BufferedInputBuilder {
+    : public facebook::velox::connector::BufferedInputBuilder {
  public:
   std::unique_ptr<facebook::velox::dwio::common::BufferedInput> create(
       const facebook::velox::FileHandle& fileHandle,
@@ -768,7 +768,7 @@ class CustomBufferedInputTest : public testing::Test {
  protected:
   static void SetUpTestCase() {
     MemoryManager::testingSetInstance(MemoryManager::Options{});
-    facebook::velox::connector::hive::BufferedInputBuilder::registerBuilder(
+    facebook::velox::connector::BufferedInputBuilder::registerBuilder(
         std::make_shared<CustomBufferedInputBuilder>());
   }
 
@@ -791,9 +791,8 @@ TEST_F(CustomBufferedInputTest, basic) {
   auto executor = std::make_unique<folly::IOThreadPoolExecutor>(10, 10);
 
   VELOX_ASSERT_THROW(
-      facebook::velox::connector::hive::BufferedInputBuilder::getInstance()
-          ->create(
-              fileHandle, readerOpts, nullptr, ioStatistics, ioStats, nullptr),
+      facebook::velox::connector::BufferedInputBuilder::getInstance()->create(
+          fileHandle, readerOpts, nullptr, ioStatistics, ioStats, nullptr),
       "Not implemented in CustomBufferedInputBuilder");
 }
 
@@ -841,4 +840,46 @@ TEST_F(BufferedInputTest, readGapTracking) {
     EXPECT_EQ(ioStats->readGap().min(), testCase.expectedGapMin);
     EXPECT_EQ(ioStats->readGap().max(), testCase.expectedGapMax);
   }
+}
+
+namespace {
+// Exposes BufferedInput's protected static adjustedReadPct() for testing
+// (no friend declaration needed).
+class AdjustedReadPctAccessor : public BufferedInput {
+ public:
+  using BufferedInput::adjustedReadPct;
+};
+} // namespace
+
+// A flat map's per-key value streams all share one trackingId, so reading a
+// single stripe records many references under that id. adjustedReadPct() must
+// exclude the whole current (not-yet-read) stripe -- not just the last
+// reference -- so a fully-read column scores ~100% (and is eligible for
+// prefetch) instead of roughly half.
+TEST(BufferedInputAdjustedReadPctTest, excludesWholeCurrentStripe) {
+  cache::ScanTracker tracker(
+      "test", /*unregisterer=*/nullptr, /*loadQuantum=*/1 << 20);
+  const cache::TrackingId id(1);
+  constexpr uint64_t kStreamBytes = 100;
+  constexpr int kKeysPerStripe = 5;
+
+  // Stripe 1: reference every per-key value stream under the shared id, then
+  // read all.
+  for (int i = 0; i < kKeysPerStripe; ++i) {
+    tracker.recordReference(id, kStreamBytes, /*fileId=*/0, /*groupId=*/0);
+  }
+  tracker.recordRead(
+      id, kStreamBytes * kKeysPerStripe, /*fileId=*/0, /*groupId=*/0);
+
+  // Stripe 2: reference every per-key value stream again (recorded, not yet
+  // read).
+  for (int i = 0; i < kKeysPerStripe; ++i) {
+    tracker.recordReference(id, kStreamBytes, /*fileId=*/0, /*groupId=*/0);
+  }
+
+  // referencedBytes = 1000, readBytes = 500, current-stripe references = 500.
+  //   Correct: 500 / (1000 - 500) = 100%.
+  //   Buggy (subtracts only the last reference): 500 / (1000 - 100) = 55%.
+  EXPECT_EQ(
+      AdjustedReadPctAccessor::adjustedReadPct(tracker.trackingData(id)), 100);
 }

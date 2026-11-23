@@ -25,16 +25,8 @@
 #include "velox/functions/lib/string/GreekFinalSigma.h"
 
 #if (ENABLE_VECTORIZATION > 0) && !defined(_DEBUG) && !defined(DEBUG)
-#if defined(__clang__) && (__clang_major__ > 7)
-#define IS_SANITIZER                          \
-  ((__has_feature(address_sanitizer) == 1) || \
-   (__has_feature(memory_sanitizer) == 1) ||  \
-   (__has_feature(thread_sanitizer) == 1) ||  \
-   (__has_feature(undefined_sanitizer) == 1))
-
-#if IS_SANITIZER == 0
+#if defined(__clang__) && (__clang_major__ > 7) && !defined(FOLLY_SANITIZE)
 #define VECTORIZE_LOOP_IF_POSSIBLE _Pragma("clang loop vectorize(enable)")
-#endif
 #endif
 #endif
 
@@ -502,7 +494,7 @@ inline int64_t findNthInstanceByteIndexFromEnd(
 /// replacement string if ignoreEmptyReplaced is false, otherwise the result is
 /// empty.
 ///
-/// Note: if replaceFirst=true, the only the first found occurence of replaced
+/// Note: if replaceFirst=true, the only the first found occurrence of replaced
 /// is replaced. If replaced is empty, then replacement is added before the
 /// inputString.
 ///
@@ -625,7 +617,7 @@ inline static size_t replace(
     auto unchangedSize = position - readPosition;
     writeUnchanged(unchangedSize);
     writeReplacement();
-    // If replaceFirst is true, we only replace the first occurence
+    // If replaceFirst is true, we only replace the first occurrence
     // of the found replaced
     if (replaceFirst) {
       break;

@@ -35,13 +35,13 @@ struct PartitionSpec {
 };
 
 struct InputChunk {
-  InputChunk() : stream(rmm::cuda_stream_default) {}
+  InputChunk() : stream(cudaStream_t{cudaStreamDefault}) {}
 
   InputChunk(
       memory::MemoryPool* pool,
       TypePtr type,
       cudf::table_view view,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       CudfVectorPtr owner,
       std::shared_ptr<cudf::table> tableOwner = nullptr)
       : pool(pool),
@@ -54,7 +54,7 @@ struct InputChunk {
   memory::MemoryPool* pool{nullptr};
   TypePtr type;
   cudf::table_view view;
-  rmm::cuda_stream_view stream;
+  cuda::stream_ref stream;
   CudfVectorPtr owner;
   std::shared_ptr<cudf::table> tableOwner;
 

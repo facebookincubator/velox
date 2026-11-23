@@ -18,7 +18,18 @@
 
 #include <fstream>
 
+#include <fmt/format.h>
+#include <folly/json.h>
+#include <folly/lang/Bits.h>
 #include <gtest/gtest.h>
+#include <zlib.h>
+
+#include <algorithm>
+#include <cstring>
+#include <limits>
+#include <map>
+#include <numeric>
+#include <random>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -47,6 +58,71 @@ std::vector<uint64_t> getSetBits(const BufferPtr& bitmap, uint64_t size) {
   return result;
 }
 
+template <typename T>
+void appendLittleEndian(std::string& out, T value) {
+  value = folly::Endian::little(value);
+  out.append(reinterpret_cast<const char*>(&value), sizeof(value));
+}
+
+/// The map-based serializer DeletionVectorWriter used before it switched to a
+/// single pass over sorted positions, kept verbatim as a byte-for-byte oracle.
+std::string mapBasedSerialize(const std::vector<int64_t>& positions) {
+  std::string data;
+  if (positions.empty()) {
+    appendLittleEndian(data, uint64_t{0});
+    return data;
+  }
+  std::vector<int64_t> sorted = positions;
+  std::sort(sorted.begin(), sorted.end());
+  sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+
+  std::map<uint32_t, std::vector<uint32_t>> groups;
+  for (auto pos : sorted) {
+    auto upos = static_cast<uint64_t>(pos);
+    groups[static_cast<uint32_t>(upos >> 32)].push_back(
+        static_cast<uint32_t>(upos & 0xFFFFFFFF));
+  }
+  appendLittleEndian(data, static_cast<uint64_t>(groups.size()));
+  for (auto& [highBits, lowValues] : groups) {
+    appendLittleEndian(data, highBits);
+    std::map<uint16_t, std::vector<uint16_t>> containerMap;
+    for (auto value : lowValues) {
+      containerMap[static_cast<uint16_t>(value >> 16)].push_back(
+          static_cast<uint16_t>(value & 0xFFFF));
+    }
+    const auto numContainers = static_cast<uint32_t>(containerMap.size());
+    appendLittleEndian(data, uint32_t{12'346});
+    appendLittleEndian(data, numContainers);
+    for (const auto& [key, values] : containerMap) {
+      appendLittleEndian(data, key);
+      appendLittleEndian(data, static_cast<uint16_t>(values.size() - 1));
+    }
+    uint32_t offset = 4 + 4 + numContainers * 4 + numContainers * 4;
+    for (const auto& [key, values] : containerMap) {
+      appendLittleEndian(data, offset);
+      offset += values.size() <= 4'096
+          ? static_cast<uint32_t>(values.size()) * 2
+          : 8'192;
+    }
+    for (const auto& [key, values] : containerMap) {
+      if (values.size() <= 4'096) {
+        for (auto value : values) {
+          appendLittleEndian(data, value);
+        }
+      } else {
+        std::vector<uint64_t> bitmap(1'024, 0);
+        for (auto value : values) {
+          bitmap[value / 64] |= 1ULL << (value % 64);
+        }
+        for (auto word : bitmap) {
+          appendLittleEndian(data, word);
+        }
+      }
+    }
+  }
+  return data;
+}
+
 } // namespace
 
 class DeletionVectorWriterTest : public ::testing::Test {
@@ -68,6 +144,50 @@ class DeletionVectorWriterTest : public ::testing::Test {
   BufferPtr allocateBitmap(uint64_t numBits) {
     auto numBytes = bits::nbytes(numBits);
     return AlignedBuffer::allocate<uint8_t>(numBytes, pool_.get(), 0);
+  }
+
+  /// Serializes 'positions', reads the blob back through
+  /// DeletionVectorReader, and returns every position the reader recovered.
+  ///
+  /// Prefer this over verifyRoundTrip for inputs spanning a wide range:
+  /// verifyRoundTrip walks the whole [0, maxPos] space one batch at a time,
+  /// which is impractical once positions reach into the 2^32 range.
+  std::vector<int64_t> roundTrip(const std::vector<int64_t>& positions) {
+    DeletionVectorWriter writer;
+    writer.addDeletedPositions(positions);
+    const auto blobData = writer.serialize();
+
+    auto tempFile = TempFilePath::create();
+    {
+      std::ofstream out(
+          tempFile->getPath(), std::ios::binary | std::ios::trunc);
+      out.write(blobData.data(), static_cast<std::streamsize>(blobData.size()));
+    }
+
+    IcebergDeleteFile dvFile(
+        FileContent::kDeletionVector,
+        tempFile->getPath(),
+        dwio::common::FileFormat::DWRF,
+        writer.numDistinctPositions(),
+        static_cast<uint64_t>(blobData.size()),
+        /*equalityFieldIds=*/{},
+        /*lowerBounds=*/{},
+        /*upperBounds=*/{},
+        /*dataSequenceNumber=*/0,
+        /*contentOffset=*/0,
+        /*contentLength=*/static_cast<int64_t>(blobData.size()));
+
+    DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+    return reader.deletedPositions();
+  }
+
+  /// Returns 'positions' sorted and de-duplicated — what a round trip through
+  /// a roaring bitmap is expected to yield, since the bitmap is a set.
+  static std::vector<int64_t> sortedUnique(std::vector<int64_t> positions) {
+    std::sort(positions.begin(), positions.end());
+    positions.erase(
+        std::unique(positions.begin(), positions.end()), positions.end());
+    return positions;
   }
 
   /// Writes serialized bitmap to a temp file, reads it back with
@@ -107,7 +227,7 @@ class DeletionVectorWriterTest : public ::testing::Test {
         lowerBounds,
         upperBounds);
 
-    DeletionVectorReader reader(dvFile, 0, pool_.get());
+    DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
 
     // Collect all set bits across batches.
     std::vector<uint64_t> allSetBits;
@@ -216,7 +336,7 @@ TEST_F(DeletionVectorWriterTest, duplicatePositions) {
       lowerBounds,
       upperBounds);
 
-  DeletionVectorReader reader(dvFile, 0, pool_.get());
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
 
   auto bitmap = allocateBitmap(20);
   reader.readDeletePositions(0, 20, bitmap);
@@ -254,6 +374,105 @@ TEST_F(DeletionVectorWriterTest, fourOrMoreContainersWithOffsets) {
   verifyRoundTrip(positions, 5 * 65536 + 100);
 }
 
+// Decodes the Puffin footer of a file written by writePuffinFile and returns
+// the parsed footer JSON. Layout per the Puffin spec:
+//   Magic Blob... Footer
+//   Footer := Magic FooterPayload FooterPayloadSize Flags Magic
+// with FooterPayloadSize and Flags each a 4-byte little-endian value. The
+// trailer is located from the end of the file so nothing here depends on the
+// writer's own offset arithmetic.
+namespace {
+folly::dynamic readPuffinFooter(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  const std::string bytes(
+      (std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+
+  constexpr size_t kMagicSize = 4;
+  constexpr size_t kTrailerSize = kMagicSize + 4 + 4;
+  EXPECT_GE(bytes.size(), kMagicSize + kTrailerSize);
+  EXPECT_EQ(bytes.substr(0, kMagicSize), "PFA1") << "missing leading magic";
+  EXPECT_EQ(bytes.substr(bytes.size() - kMagicSize), "PFA1")
+      << "missing trailing magic";
+
+  const auto readLittleEndian32 = [&](size_t offset) {
+    uint32_t value;
+    std::memcpy(&value, bytes.data() + offset, sizeof(value));
+    return folly::Endian::little(value);
+  };
+
+  const size_t flagsOffset = bytes.size() - kMagicSize - 4;
+  const size_t sizeOffset = flagsOffset - 4;
+  EXPECT_EQ(readLittleEndian32(flagsOffset), 0u)
+      << "flags must be 0: an uncompressed footer payload is bit 0";
+
+  const uint32_t payloadSize = readLittleEndian32(sizeOffset);
+  const size_t payloadOffset = sizeOffset - payloadSize;
+  EXPECT_EQ(bytes.substr(payloadOffset - kMagicSize, kMagicSize), "PFA1")
+      << "footer payload must be preceded by magic";
+
+  return folly::parseJson(bytes.substr(payloadOffset, payloadSize));
+}
+} // namespace
+
+TEST_F(DeletionVectorWriterTest, puffinFooterIsSpecCompliant) {
+  // Nothing in our own read path parses the Puffin footer --
+  // DeletionVectorReader locates the blob from the manifest's contentOffset --
+  // so the footer is written blind. Other Iceberg engines do parse it, and
+  // FileMetadataParser.blobMetadataFromJson treats type, fields, snapshot-id,
+  // sequence-number, offset and length as required, reading fields as a list
+  // of integers. A footer that omits or mistypes any of them makes the whole
+  // deletion vector unreadable outside Velox.
+  DeletionVectorWriter writer;
+  writer.addDeletedPositions({3, 7, 42, 100});
+  const auto blobData = writer.serialize();
+
+  auto tempDir = TempDirectoryPath::create();
+  const std::string puffinPath =
+      std::string(tempDir->getPath()) + "/footer.puffin";
+  auto sink = dwio::common::FileSink::create(
+      "file:" + puffinPath, {.pool = pool_.get()});
+  auto [blobOffset, blobLength] = writePuffinFile(
+      *sink,
+      *pool_,
+      blobData,
+      "/data/test-data-file.parquet",
+      /*cardinality=*/4);
+  sink->close();
+
+  const auto footer = readPuffinFooter(puffinPath);
+  ASSERT_TRUE(footer.isObject());
+  ASSERT_TRUE(footer["blobs"].isArray());
+  ASSERT_EQ(footer["blobs"].size(), 1);
+  const auto& blob = footer["blobs"][0];
+
+  EXPECT_EQ(blob["type"].asString(), "deletion-vector-v1");
+
+  // Iceberg's BaseDVFileWriter sets this to the single row-position metadata
+  // column ID, as a list of plain integers.
+  constexpr int64_t kRowPositionFieldId = 2'147'483'645;
+  ASSERT_TRUE(blob["fields"].isArray()) << "fields must be a list";
+  ASSERT_EQ(blob["fields"].size(), 1);
+  ASSERT_TRUE(blob["fields"][0].isInt())
+      << "fields entries must be integers, not objects";
+  EXPECT_EQ(blob["fields"][0].asInt(), kRowPositionFieldId);
+
+  // Required by the parser even though a freshly written DV has no snapshot
+  // assigned yet; Iceberg writes -1 for both.
+  ASSERT_TRUE(blob.count("snapshot-id")) << "snapshot-id is required";
+  ASSERT_TRUE(blob.count("sequence-number")) << "sequence-number is required";
+  EXPECT_EQ(blob["snapshot-id"].asInt(), -1);
+  EXPECT_EQ(blob["sequence-number"].asInt(), -1);
+
+  EXPECT_EQ(blob["offset"].asInt(), static_cast<int64_t>(blobOffset));
+  EXPECT_EQ(blob["length"].asInt(), static_cast<int64_t>(blobLength));
+
+  const auto& properties = blob["properties"];
+  EXPECT_EQ(
+      properties["referenced-data-file"].asString(),
+      "/data/test-data-file.parquet");
+  EXPECT_EQ(properties["cardinality"].asString(), "4");
+}
+
 TEST_F(DeletionVectorWriterTest, puffinFileRoundTrip) {
   DeletionVectorWriter writer;
   writer.addDeletedPositions({3, 7, 42, 100});
@@ -267,12 +486,18 @@ TEST_F(DeletionVectorWriterTest, puffinFileRoundTrip) {
   auto sink = dwio::common::FileSink::create(
       "file:" + puffinPath, {.pool = pool_.get()});
   VELOX_CHECK_NOT_NULL(sink);
-  auto [blobOffset, blobLength] =
-      writePuffinFile(*sink, *pool_, blobData, "/data/test-data-file.parquet");
+  auto [blobOffset, blobLength] = writePuffinFile(
+      *sink,
+      *pool_,
+      blobData,
+      "/data/test-data-file.parquet",
+      /*cardinality=*/4);
   sink->close();
 
-  EXPECT_EQ(blobOffset, 4); // After "PUF1" magic.
-  EXPECT_EQ(blobLength, blobData.size());
+  EXPECT_EQ(blobOffset, 4); // After "PFA1" magic.
+  // blobLength is the framed deletion-vector-v1 blob: 4B length + 4B magic +
+  // bitmap + 4B CRC-32.
+  EXPECT_EQ(blobLength, blobData.size() + 12);
 
   // Read the blob back from the Puffin file using DeletionVectorReader.
   std::unordered_map<int32_t, std::string> lowerBounds;
@@ -296,13 +521,122 @@ TEST_F(DeletionVectorWriterTest, puffinFileRoundTrip) {
       lowerBounds,
       upperBounds);
 
-  DeletionVectorReader reader(dvFile, 0, pool_.get());
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
 
   auto bitmap = allocateBitmap(200);
   reader.readDeletePositions(0, 200, bitmap);
 
   auto setBits = getSetBits(bitmap, 200);
   EXPECT_EQ(setBits, (std::vector<uint64_t>{3, 7, 42, 100}));
+}
+
+// Reads a writePuffinFile output back with NO bounds-map location, so the
+// reader must parse the Puffin footer (locateBlobFromPuffinFooter) to find the
+// blob. Unlike puffinFileRoundTrip -- which supplies explicit offset/length and
+// therefore skips the footer parser -- this exercises the writer's footer
+// layout against the reader's backwards footer parse, catching any drift in
+// trailer size, magic placement, or payload-size/flags encoding.
+TEST_F(DeletionVectorWriterTest, puffinFooterFallbackRoundTrip) {
+  DeletionVectorWriter writer;
+  writer.addDeletedPositions({3, 7, 42, 100});
+  auto blobData = writer.serialize();
+
+  auto tempDir = TempDirectoryPath::create();
+  const std::string puffinPath =
+      std::string(tempDir->getPath()) + "/test-dv-footer.puffin";
+  auto sink = dwio::common::FileSink::create(
+      "file:" + puffinPath, {.pool = pool_.get()});
+  VELOX_CHECK_NOT_NULL(sink);
+  writePuffinFile(
+      *sink,
+      *pool_,
+      blobData,
+      "/data/test-data-file.parquet",
+      /*cardinality=*/4);
+  sink->close();
+
+  std::ifstream in(puffinPath, std::ios::binary | std::ios::ate);
+  auto fileSize = static_cast<uint64_t>(in.tellg());
+
+  // Empty bounds maps: with no offset/length the reader falls through to
+  // Puffin-footer parsing and selects the single deletion-vector blob.
+  IcebergDeleteFile dvFile(
+      FileContent::kDeletionVector,
+      puffinPath,
+      dwio::common::FileFormat::DWRF,
+      4,
+      fileSize,
+      {},
+      {},
+      {});
+
+  DeletionVectorReader reader(dvFile, 0, pool_.get(), nullptr);
+
+  auto bitmap = allocateBitmap(200);
+  reader.readDeletePositions(0, 200, bitmap);
+
+  auto setBits = getSetBits(bitmap, 200);
+  EXPECT_EQ(setBits, (std::vector<uint64_t>{3, 7, 42, 100}));
+}
+
+// Verifies the on-disk deletion-vector-v1 blob matches the Iceberg V3 spec
+// frame: [length: 4B BE][magic D1 D3 39 64][bitmap][CRC-32: 4B BE], where the
+// length and CRC-32 cover the magic + bitmap. This is what makes the DV
+// interoperable with spec-compliant Iceberg engines.
+TEST_F(DeletionVectorWriterTest, deletionVectorV1FrameLayout) {
+  DeletionVectorWriter writer;
+  writer.addDeletedPositions({3, 7, 42, 100});
+  const auto bitmap = writer.serialize();
+
+  auto tempDir = TempDirectoryPath::create();
+  const std::string puffinPath =
+      std::string(tempDir->getPath()) + "/frame.puffin";
+  auto sink = dwio::common::FileSink::create(
+      "file:" + puffinPath, {.pool = pool_.get()});
+  const auto [blobOffset, blobLength] = writePuffinFile(
+      *sink, *pool_, bitmap, "/data/f.parquet", /*cardinality=*/4);
+  sink->close();
+
+  std::ifstream in(puffinPath, std::ios::binary);
+  const std::string bytes((std::istreambuf_iterator<char>(in)), {});
+
+  // File starts with the Puffin magic "PFA1".
+  EXPECT_EQ(bytes.substr(0, 4), std::string("PFA1"));
+
+  const std::string blob = bytes.substr(blobOffset, blobLength);
+  ASSERT_EQ(blob.size(), bitmap.size() + 12);
+
+  auto readBigEndian = [](const char* p) {
+    const auto* bytes = reinterpret_cast<const unsigned char*>(p);
+    return (static_cast<uint32_t>(bytes[0]) << 24) |
+        (static_cast<uint32_t>(bytes[1]) << 16) |
+        (static_cast<uint32_t>(bytes[2]) << 8) |
+        static_cast<uint32_t>(bytes[3]);
+  };
+
+  // [length: 4B BE] covers magic (4) + bitmap.
+  const uint32_t magicAndVectorLength = readBigEndian(blob.data());
+  EXPECT_EQ(magicAndVectorLength, bitmap.size() + 4);
+
+  // [magic: D1 D3 39 64].
+  const std::string magic = blob.substr(4, 4);
+  EXPECT_EQ(magic, std::string({'\xD1', '\xD3', '\x39', '\x64'}));
+
+  // [bitmap] matches the writer's serialize() output.
+  EXPECT_EQ(blob.substr(8, bitmap.size()), bitmap);
+
+  // [CRC-32: 4B BE] over magic + bitmap. Iceberg stores the standard CRC-32
+  // (java.util.zip.CRC32); zlib's crc32 is the reference implementation of that
+  // same IEEE 802.3 algorithm.
+  const uint32_t storedCrc =
+      readBigEndian(blob.data() + 4 + magicAndVectorLength);
+  uLong crcState = crc32(0L, Z_NULL, 0);
+  crcState = crc32(
+      crcState,
+      reinterpret_cast<const Bytef*>(blob.data() + 4),
+      static_cast<uInt>(magicAndVectorLength));
+  const auto expectedCrc = static_cast<uint32_t>(crcState);
+  EXPECT_EQ(storedCrc, expectedCrc);
 }
 
 /// Verifies 64-bit positions (>4 billion) serialize and deserialize correctly.
@@ -331,4 +665,216 @@ TEST_F(DeletionVectorWriterTest, mixed32And64BitPositions) {
       8'589'934'592LL,
   };
   verifyRoundTrip(positions, 2'048);
+}
+
+/// Verifies that duplicate positions collapse in the cardinality reported for
+/// the DV blob. Seeding a writer from an existing deletion vector and then
+/// adding overlapping new deletes makes 'positions_' hold duplicates, so
+/// 'numPositions' overcounts and only 'numDistinctPositions' matches the
+/// cardinality Iceberg expects in the blob metadata.
+TEST_F(DeletionVectorWriterTest, numDistinctPositionsIgnoresDuplicates) {
+  DeletionVectorWriter writer;
+  writer.addDeletedPositions({7, 3, 7, 1, 3, 3});
+
+  EXPECT_EQ(writer.numPositions(), 6);
+  EXPECT_EQ(writer.numDistinctPositions(), 3);
+}
+
+// Randomized round trips across sparse, dense, and mixed position sets.
+// Hand-built fixtures only exercise the container shapes we thought to write
+// down; random inputs cross the array/bitset thresholds and 64-bit group
+// boundaries in combinations we did not enumerate.
+//
+// Seeds are fixed so a failure is reproducible, and reported on failure so a
+// counterexample can be replayed directly.
+TEST_F(DeletionVectorWriterTest, randomSparsePositionsRoundTrip) {
+  // Few positions spread over a wide 64-bit range: many container keys across
+  // several Roaring64 groups, each holding a small array container.
+  constexpr uint64_t kSeed = 0x1234'5678'9ABC'DEF0ULL;
+  constexpr int kNumPositions = 2'000;
+  constexpr int64_t kRange = int64_t{1} << 34;
+
+  std::mt19937_64 rng(kSeed);
+  std::uniform_int_distribution<int64_t> positionDist(0, kRange - 1);
+
+  std::vector<int64_t> positions;
+  positions.reserve(kNumPositions);
+  for (int i = 0; i < kNumPositions; ++i) {
+    positions.push_back(positionDist(rng));
+  }
+
+  EXPECT_EQ(roundTrip(positions), sortedUnique(positions)) << "seed=" << kSeed;
+}
+
+TEST_F(DeletionVectorWriterTest, randomDensePositionsRoundTrip) {
+  // Enough positions inside one 64K block to exceed the 4096 array-container
+  // threshold, so the block serializes as a bitset. Deliberately includes
+  // duplicates: the bitmap is a set, so they must collapse.
+  constexpr uint64_t kSeed = 0x0FED'CBA9'8765'4321ULL;
+  constexpr int kNumDraws = 30'000;
+  constexpr int64_t kBlockBase = int64_t{7} << 16;
+
+  std::mt19937_64 rng(kSeed);
+  std::uniform_int_distribution<int64_t> offsetDist(0, 65'535);
+
+  std::vector<int64_t> positions;
+  positions.reserve(kNumDraws);
+  for (int i = 0; i < kNumDraws; ++i) {
+    positions.push_back(kBlockBase + offsetDist(rng));
+  }
+
+  const auto expected = sortedUnique(positions);
+  ASSERT_GT(expected.size(), 4'096)
+      << "draws should exceed the array-container threshold";
+  EXPECT_EQ(roundTrip(positions), expected) << "seed=" << kSeed;
+}
+
+TEST_F(DeletionVectorWriterTest, randomMixedPositionsRoundTrip) {
+  // Dense block, sparse scatter, and a contiguous run in one bitmap, split
+  // across two Roaring64 groups. This is the shape most likely to expose an
+  // offset or stride error, because the reader must step over containers of
+  // different encodings to find the next one.
+  constexpr uint64_t kSeed = 0x2468'ACE0'1357'9BDFULL;
+  constexpr int64_t kHighGroupBase = int64_t{1} << 32;
+
+  std::mt19937_64 rng(kSeed);
+  std::vector<int64_t> positions;
+
+  // Dense block in group 0.
+  std::uniform_int_distribution<int64_t> denseDist(0, 65'535);
+  for (int i = 0; i < 20'000; ++i) {
+    positions.push_back(denseDist(rng));
+  }
+  // Sparse scatter across group 0's upper blocks.
+  std::uniform_int_distribution<int64_t> sparseDist(65'536, (int64_t{1} << 31));
+  for (int i = 0; i < 500; ++i) {
+    positions.push_back(sparseDist(rng));
+  }
+  // Contiguous run in group 1.
+  for (int64_t i = 0; i < 3'000; ++i) {
+    positions.push_back(kHighGroupBase + 1'000 + i);
+  }
+  // Sparse scatter in group 1.
+  for (int i = 0; i < 200; ++i) {
+    positions.push_back(kHighGroupBase + sparseDist(rng));
+  }
+
+  EXPECT_EQ(roundTrip(positions), sortedUnique(positions)) << "seed=" << kSeed;
+}
+
+// The Roaring64 group key is read back as a signed 32-bit int, so a position
+// whose high word reaches 2^31 would deserialize as a negative key and be
+// rejected by spec-compliant readers. Failing at insert time keeps us from
+// writing a blob Iceberg cannot read.
+TEST_F(DeletionVectorWriterTest, rejectsPositionsOutsideRepresentableRange) {
+  DeletionVectorWriter writer;
+
+  VELOX_ASSERT_THROW(writer.addDeletedPosition(-1), "must be non-negative");
+  VELOX_ASSERT_THROW(
+      writer.addDeletedPosition(DeletionVectorWriter::kMaxPosition + 1),
+      "exceeds the maximum");
+  VELOX_ASSERT_THROW(
+      writer.addDeletedPosition(std::numeric_limits<int64_t>::max()),
+      "exceeds the maximum");
+
+  // None of the rejected positions were recorded.
+  EXPECT_EQ(writer.numPositions(), 0);
+
+  // The bound itself is representable and round-trips.
+  writer.addDeletedPosition(DeletionVectorWriter::kMaxPosition);
+  EXPECT_EQ(
+      roundTrip({DeletionVectorWriter::kMaxPosition}),
+      std::vector<int64_t>{DeletionVectorWriter::kMaxPosition});
+}
+
+/// The single-pass serializer must produce exactly the bytes the previous
+/// map-based one did, for sorted and unsorted input, duplicates, every
+/// container type and boundary, and multiple 2^32 groups.
+TEST_F(DeletionVectorWriterTest, serializeMatchesMapBasedReference) {
+  constexpr int64_t k2To32 = int64_t{1} << 32;
+  std::vector<std::pair<std::string, std::vector<int64_t>>> cases = {
+      {"empty", {}},
+      {"zero", {0}},
+      {"containerEdges", {65'535, 65'536, 131'071, 131'072}},
+      {"groupEdges", {k2To32 - 1, k2To32, k2To32 + 1, 3 * k2To32}},
+      {"maxPosition", {0, DeletionVectorWriter::kMaxPosition}},
+      {"unsortedWithDuplicates", {9, 3, 9, 70'000, 3, 0, 70'000, 1}},
+  };
+  for (int64_t count : {4'095, 4'096, 4'097, 65'536}) {
+    std::vector<int64_t> positions(count);
+    std::iota(positions.begin(), positions.end(), 7 * 65'536);
+    cases.emplace_back(fmt::format("dense{}", count), std::move(positions));
+  }
+  std::mt19937_64 rng(20'261'102);
+  for (int iteration = 0; iteration < 50; ++iteration) {
+    std::vector<int64_t> positions;
+    const auto numGroups = 1 + rng() % 3;
+    for (uint64_t group = 0; group < numGroups; ++group) {
+      const int64_t base = static_cast<int64_t>(rng() % 5) * k2To32;
+      const auto count = rng() % 20'000;
+      const auto span = 1 + rng() % (1 << 20);
+      for (uint64_t i = 0; i < count; ++i) {
+        positions.push_back(base + static_cast<int64_t>(rng() % span));
+      }
+    }
+    if (iteration % 2 == 0) {
+      std::sort(positions.begin(), positions.end());
+    }
+    cases.emplace_back(
+        fmt::format("random{}", iteration), std::move(positions));
+  }
+
+  for (const auto& [name, positions] : cases) {
+    SCOPED_TRACE(name);
+    DeletionVectorWriter writer;
+    writer.addDeletedPositions(positions);
+    const auto expected = mapBasedSerialize(positions);
+    ASSERT_EQ(writer.serialize(), expected);
+
+    std::vector<int64_t> distinct = positions;
+    std::sort(distinct.begin(), distinct.end());
+    distinct.erase(
+        std::unique(distinct.begin(), distinct.end()), distinct.end());
+    EXPECT_EQ(writer.numDistinctPositions(), distinct.size());
+
+    std::vector<int64_t> reversed(positions.rbegin(), positions.rend());
+    DeletionVectorWriter reversedWriter;
+    reversedWriter.addDeletedPositions(reversed);
+    EXPECT_EQ(reversedWriter.serialize(), expected);
+    EXPECT_EQ(reversedWriter.numDistinctPositions(), distinct.size());
+
+    // An existing DV (every other distinct position) seeded first, then the
+    // rest in sorted order, as IcebergDeletionVectorSink does on a merge.
+    std::vector<int64_t> seeded;
+    std::vector<int64_t> added;
+    for (size_t i = 0; i < distinct.size(); ++i) {
+      (i % 2 == 0 ? seeded : added).push_back(distinct[i]);
+    }
+    added.insert(
+        added.end(), seeded.begin(), seeded.begin() + seeded.size() / 3);
+    std::sort(added.begin(), added.end());
+    DeletionVectorWriter mergeWriter;
+    mergeWriter.addDeletedPositions(seeded);
+    mergeWriter.addDeletedPositions(added);
+    EXPECT_EQ(mergeWriter.numDistinctPositions(), distinct.size());
+    EXPECT_EQ(mergeWriter.serialize(), expected);
+    EXPECT_EQ(mergeWriter.serialize(), expected);
+  }
+}
+
+TEST_F(DeletionVectorWriterTest, addAfterSerialize) {
+  DeletionVectorWriter writer;
+  writer.addDeletedPositions({5, 1, 5, 70'000});
+  EXPECT_EQ(writer.serialize(), mapBasedSerialize({1, 5, 70'000}));
+  EXPECT_EQ(writer.numPositions(), 3);
+
+  writer.addDeletedPositions({3, 70'000, 1 + (int64_t{1} << 32)});
+  EXPECT_EQ(writer.numDistinctPositions(), 5);
+  EXPECT_EQ(
+      writer.serialize(),
+      mapBasedSerialize({1, 3, 5, 70'000, 1 + (int64_t{1} << 32)}));
+
+  writer.clear();
+  writer.addDeletedPositions({9, 2});
+  EXPECT_EQ(writer.serialize(), mapBasedSerialize({2, 9}));
 }

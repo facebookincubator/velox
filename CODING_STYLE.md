@@ -81,7 +81,7 @@ line width, indentation and ordering (for includes, using directives and etc). 
   As much as possible, refrain from adding test methods, and test objects using
   their public APIs. Only use test methods in rare edge cases where this is not
   possible. For example, MemoryAllocator::testingSetFailureInjection() is used
-  to to inject various memory allocation failures to test error handling paths.
+  to inject various memory allocation failures to test error handling paths.
 * Use the **debug** prefix for query configs that are intended for debugging
   purposes only. These configs may enable expensive checks or disable selective
   code paths, and are not recommended for use in production environments. For
@@ -213,6 +213,12 @@ About comment style:
 
 * **Avoid redundant comments** that simply repeat what the code already says.
   Comments should explain *why*, not *what*.
+  * "Why" means why the code is the way it is: the constraint, invariant or
+    tradeoff a reader must respect to change it safely. Not how it got that
+    way. What the code used to be, why that was wrong, and which alternative
+    was rejected describe the change, not the code, and belong in the commit
+    message, which `git blame` will find. A comment is read every time; a
+    commit message is read once, by whoever asks.
 
 ```cpp
 // ❌ Avoid - comment just repeats the code
@@ -230,6 +236,17 @@ return result;
 // ✅ Prefer - comment explains WHY, not WHAT
 // Use a larger buffer to avoid repeated reallocations for typical queries.
 buffer.reserve(1024);
+
+// ❌ Avoid - comment explains the change, not the code
+/// Was a std::string, which forced a JSON round-trip per row. Replaced with
+/// an opaque payload so the framework never parses it. Deriving a response
+/// type per function was rejected because it makes a missing response
+/// representable.
+std::shared_ptr<const Payload> payload;
+
+// ✅ Prefer - comment explains the constraint the reader must respect
+/// Opaque to the framework. Only the function that produced it may read it.
+std::shared_ptr<const Payload> payload;
 ```
 
 * **Do not reference other implementations** in comments ("like Java Presto",
@@ -257,6 +274,9 @@ buffer.reserve(1024);
   * `VELOX_CHECK(idx < children_.size());`
 * The former will evaluate and include both expressions values in the
   exception.
+* Use one check per condition. Split `VELOX_CHECK(a && b)` into
+  `VELOX_CHECK(a)` and `VELOX_CHECK(b)`: a failure then names the condition
+  that broke, and each check can use a two-argument form.
 * All macro also provide the following optional features:
   * Specifying error code (error code listed in
     `velox/common/base/VeloxException.h`): 
@@ -279,6 +299,22 @@ buffer.reserve(1024);
   | ❌ Avoid | ✅ Prefer |
   |----------|-----------|
   | `VELOX_USER_FAIL("Column '{}' is ambiguous", name);` | `VELOX_USER_FAIL("Column is ambiguous: {}", name);` |
+* **Error messages name the mistake.** Say what was wrong with the input, or
+  state the requirement it broke with "must". A sentence that only describes
+  the correct state reads as documentation and leaves the reader to work out
+  what they did.
+
+  | ❌ Avoid | ✅ Prefer |
+  |----------|-----------|
+  | `VELOX_USER_FAIL("A placeholder's type is declared with CAST, not TRY_CAST: {}", name);` | `VELOX_USER_FAIL("TRY_CAST of a placeholder is not supported: {}", name);` |
+  | `VELOX_USER_CHECK_GE(k, 1, "k is at least 1");` | `VELOX_USER_CHECK_GE(k, 1, "k must be at least 1");` |
+* Pass a value to a formatted message or `fmt::format` as is when its type has
+  an `fmt::formatter`, such as `TypeKind`. The formatter already produces the
+  text, so converting the value to a string first only repeats it.
+
+  | ❌ Avoid | ✅ Prefer |
+  |----------|-----------|
+  | `VELOX_FAIL("Unsupported type: {}", TypeKindName::toName(kind));` | `VELOX_FAIL("Unsupported type: {}", kind);` |
 
 ## Variables
 
@@ -300,9 +336,8 @@ buffer.reserve(1024);
   * `int* foo;` `const Bar& bar;` NOT `int *foo;` `const Bar &bar`;
   * Beware that `int* foo, bar;` will be parsed as declaring `foo` as an `int*`
     and `bar` as an `int`. Note that multiple declaration is discouraged.
-* Use trailing commas in multi-line initializer lists, enum definitions, and
-  function-call argument lists that span multiple lines. This produces cleaner
-  diffs when items are added or reordered.
+* Use trailing commas in multi-line initializer lists and enum definitions.
+  This produces cleaner diffs when items are added or reordered.
 * For member variables:
   * Group member variable and methods based on their visibility (public,
     protected and private)
@@ -461,7 +496,7 @@ build impact analysis and selective builds.
   call.  This is particularly a problem for longer signatures with repeated
   types or constant arguments. For example, `phrobinicate(/*elements=*/{1, 2},
   /*startOffset=*/0, /*length=*/2)`
-* Use the /*argName=*/value format (note the lack of spaces). Clang-tidy
+* Use the `/*argName=*/value` format (note the lack of spaces). Clang-tidy
   supports checking the given argument name against the declaration when this
   format is used.
 
@@ -515,6 +550,16 @@ myFunc();
     of namespaces is obliterated when the code starts doing this prolifically.
     Frequently, `using foo::bar::BazClass;` is better.
 
+## Types
+
+* **Use the short `ROW` forms** rather than spelling out parallel vectors.
+  * One field: `ROW("a", BIGINT())`, not `ROW({"a"}, {BIGINT()})`.
+  * Fields sharing a type: `ROW({"a", "b"}, BIGINT())`, not
+    `ROW({"a", "b"}, {BIGINT(), BIGINT()})`.
+  * Mixed types: `ROW({{"a", BIGINT()}, {"b", VARCHAR()}})`, not
+    `ROW({"a", "b"}, {BIGINT(), VARCHAR()})`, which leaves the reader pairing
+    up two lists by position.
+
 ## Type Aliases
 
 * For types widely used together with std::shared_ptr, consider introducing
@@ -555,6 +600,63 @@ using ContinuePromise = VeloxPromise<bool>;
   needs access to private members, redesign the API or test through public
   methods instead.
 
+### Breaking API changes and `VELOX_ENABLE_BACKWARD_COMPATIBILITY`
+
+Velox is synced into Meta's internal repository. Prestissimo's copy there is
+read-only — its source of truth is the Presto GitHub repo — so it cannot be
+updated in the same change as a breaking Velox API change. To let it keep
+compiling, Velox can carry the old signature behind the
+`VELOX_ENABLE_BACKWARD_COMPATIBILITY` macro. Only Prestissimo's internal build
+defines it; CMake and every open-source build see the new API alone.
+
+* **Additive only.** The old and new signatures must coexist in one binary.
+  Never select between them with `#ifdef`/`#else` — a change that alters a
+  return type or a virtual's signature gives different translation units
+  different vtable layouts, which is an ODR violation rather than a
+  compatibility shim. A change that cannot be made additive cannot use the
+  macro.
+* **Define the legacy form inline in the header,** delegating to the new one.
+  Prestissimo's build compiles the header, so an out-of-line definition would
+  not reach it.
+* **It is temporary.** Name the replacement on the legacy declaration and
+  delete the guarded block once Prestissimo has migrated. The macro is a
+  bridge, not a deprecation mechanism — do not reach for it to spare callers
+  you can update yourself, and never for callers that live in this repository.
+
+```cpp
+  // Current API.
+  ExchangeNode(const PlanNodeId& id, RowTypePtr type, std::string serdeKind);
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  /// Legacy constructor. Prefer the std::string overload above. Removed once
+  /// all callers have migrated.
+  ExchangeNode(const PlanNodeId& id, RowTypePtr type, VectorSerde::Kind kind)
+      : ExchangeNode(id, std::move(type), VectorSerde::kindName(kind)) {}
+#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
+```
+
+## Pitfalls Tests Rarely Catch
+
+These rules prevent failures that appear only under particular timing or load,
+so a passing test suite says little about them.
+
+* **Measure intervals with a steady clock.** Durations, timeouts and deadlines
+  use `std::chrono::steady_clock`. Measure an interval with
+  `folly::stop_watch`. `MicrosecondWallTimer` / `NanosecondWallTimer` in
+  `velox/common/time/Timer.h` add the duration of a scope to a counter. When
+  the start of an interval must be stored as a plain integer, such as in an
+  atomic, read it with `SteadyTime::now<Duration>()`. `system_clock` and
+  `EpochTime` follow the OS wall clock, which time synchronization can step
+  backward at any moment, so the difference of two readings can be negative.
+  Use them only for absolute timestamps, such as a task's start time.
+* **Convert epoch seconds to calendar time with
+  `Timestamp::epochToCalendarUtc()`.** `gmtime` returns a pointer to shared
+  static storage and is not thread-safe
+  ([#5029](https://github.com/facebookincubator/velox/issues/5029)). In glibc,
+  `gmtime_r` takes a global lock in `__tz_convert`, which serializes threads
+  under high concurrency
+  ([#6801](https://github.com/facebookincubator/velox/issues/6801)).
+
 ## Tests
 
 * **Each test file should have one test suite with a matching name.** E.g.,
@@ -588,6 +690,35 @@ using ContinuePromise = VeloxPromise<bool>;
   * `SizeIs(n)` - collection has n elements
 
   Requires `#include <gmock/gmock.h>`.
+* **Assert the error message, not just the type.** Use
+  `VELOX_ASSERT_THROW(expression, "message")` from
+  `velox/common/base/tests/GTestUtils.h`. Spelling the message out in the test
+  forces you to read it and judge whether it is informative and actionable. In
+  production that text is the whole diagnosis: for `VELOX_USER_*` it is what
+  the query author sees, for `VELOX_CHECK` it is where the on-call engineer
+  starts. `EXPECT_THROW(expression, VeloxRuntimeError)` checks the type and
+  leaves the message unread.
+* **Scope each case instead of numbering names.** When a test walks through
+  several cases, wrap each in braces and reuse one name. `rowType1`,
+  `rowType2` and `expected1` make the reader track which one is live, and keep
+  dead values in scope.
+
+  ```cpp
+  // ❌ Avoid
+  auto rowType1 = ROW("a", BIGINT());
+  ...
+  auto rowType2 = ROW("b", VARCHAR());
+
+  // ✅ Prefer
+  {
+    auto rowType = ROW("a", BIGINT());
+    ...
+  }
+  {
+    auto rowType = ROW("b", VARCHAR());
+    ...
+  }
+  ```
 
 ## Common Mistakes
 

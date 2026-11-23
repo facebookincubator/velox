@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/FixedPointPlanNodes.h"
 #include "velox/core/PlanConsistencyChecker.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 
@@ -261,6 +262,35 @@ TEST_F(PlanConsistencyCheckerTest, aggregation) {
   }
 }
 
+TEST_F(PlanConsistencyCheckerTest, sharedSubexpressionDag) {
+  auto valuesNode =
+      std::make_shared<ValuesNode>(nextId(), std::vector<RowVectorPtr>{});
+
+  auto sourceNode = std::make_shared<ProjectNode>(
+      nextId(),
+      std::vector<std::string>{"x"},
+      std::vector<TypedExprPtr>{Lit(int64_t{1})},
+      valuesNode);
+
+  // Each level squares the one below by referencing it twice, so the expression
+  // is a DAG whose expansion as a tree has 2^depth nodes. The checker must
+  // visit each node once; otherwise validating this is exponential.
+  constexpr int kDepth = 40;
+  TypedExprPtr expr = Col(BIGINT(), "x");
+  for (int i = 0; i < kDepth; ++i) {
+    expr = std::make_shared<CallTypedExpr>(
+        BIGINT(), std::vector<TypedExprPtr>{expr, expr}, "multiply");
+  }
+
+  auto projectNode = std::make_shared<ProjectNode>(
+      nextId(),
+      std::vector<std::string>{"y"},
+      std::vector<TypedExprPtr>{expr},
+      sourceNode);
+
+  ASSERT_NO_THROW(PlanConsistencyChecker::check(projectNode));
+}
+
 TEST_F(PlanConsistencyCheckerTest, hashJoin) {
   auto leftValuesNode =
       std::make_shared<ValuesNode>(nextId(), std::vector<RowVectorPtr>{});
@@ -318,6 +348,55 @@ TEST_F(PlanConsistencyCheckerTest, hashJoin) {
         PlanConsistencyChecker::check(joinNode),
         "Duplicate join condition: \"a\" = \"c\"");
   }
+}
+
+// The checker checks the plans a fixed point runs.
+TEST_F(PlanConsistencyCheckerTest, fixedPoint) {
+  const auto schema = ROW("x", BIGINT());
+  auto body = std::make_shared<FilterNode>(
+      nextId(),
+      Col(BOOLEAN(), "missing"),
+      std::make_shared<StateSourceNode>(
+          nextId(), "n", schema, /*delta=*/false));
+  auto fixedPoint = std::make_shared<FixedPointNode>(
+      nextId(),
+      std::vector<StateDeclarationPtr>{std::make_shared<VectorStateDeclaration>(
+          "n", schema, /*initialPlan=*/nullptr, /*append=*/false)},
+      std::vector<PlanNodePtr>{body},
+      ConvergenceConfig{
+          .maxIterations = 1, .errorWhenMaxIterationReached = false},
+      "n");
+
+  VELOX_ASSERT_THROW(
+      PlanConsistencyChecker::check(fixedPoint), "Field not found: missing");
+}
+
+// Plan node ids are unique across the whole plan, the plans a fixed point runs
+// included.
+TEST_F(PlanConsistencyCheckerTest, planNodeIds) {
+  auto values = std::make_shared<ValuesNode>("0", std::vector<RowVectorPtr>{});
+  VELOX_ASSERT_THROW(
+      PlanConsistencyChecker::check(
+          std::make_shared<LimitNode>("0", 0, 1, /*isPartial=*/false, values)),
+      "Duplicate plan node id: 0");
+
+  const auto schema = ROW("x", BIGINT());
+  auto makeFixedPoint = [&](const PlanNodeId& bodyId) {
+    return std::make_shared<FixedPointNode>(
+        "1",
+        std::vector<StateDeclarationPtr>{
+            std::make_shared<VectorStateDeclaration>(
+                "n", schema, /*initialPlan=*/nullptr, /*append=*/false)},
+        std::vector<PlanNodePtr>{std::make_shared<StateSourceNode>(
+            bodyId, "n", schema, /*delta=*/false)},
+        ConvergenceConfig{
+            .maxIterations = 1, .errorWhenMaxIterationReached = false},
+        "n");
+  };
+  ASSERT_NO_THROW(PlanConsistencyChecker::check(makeFixedPoint("2")));
+  VELOX_ASSERT_THROW(
+      PlanConsistencyChecker::check(makeFixedPoint("1")),
+      "Duplicate plan node id: 1");
 }
 
 TEST_F(PlanConsistencyCheckerTest, nestedLoopJoin) {

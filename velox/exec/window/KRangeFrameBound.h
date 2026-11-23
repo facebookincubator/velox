@@ -172,18 +172,23 @@ class KRangeFrameBound {
         }
       }
 
-      VELOX_DCHECK_EQ(
+      VELOX_USER_CHECK_EQ(
           rows.frameValueIsNull(currentRow, frameColumn),
-          rows.orderByValueIsNull(currentRow));
+          rows.orderByValueIsNull(currentRow),
+          "k RANGE frame bound must be null exactly when the ORDER BY key is null");
 
       const auto compareResult =
           rows.compareFrameValue(currentRow, currentRow, frameColumn, flags);
       if (compareResult.has_value() && compareResult.value() == 0) {
         rawFrameBounds[i] = rawPeerBounds[i];
       } else {
-        const auto searchStart = isPreceding ? rows.startRow() : currentRow;
+        // The bound value defines the frame wherever it falls, so search on
+        // the side of the current row the value is on.
+        const bool boundPrecedes =
+            compareResult.has_value() ? compareResult.value() > 0 : isPreceding;
+        const auto searchStart = boundPrecedes ? rows.startRow() : currentRow;
         const auto searchEnd =
-            isPreceding ? currentRow + 1 : rows.partitionEnd();
+            boundPrecedes ? currentRow + 1 : rows.partitionEnd();
         rawFrameBounds[i] = search(
             rows,
             isStartBound,

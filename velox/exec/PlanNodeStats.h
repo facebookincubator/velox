@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include <folly/dynamic.h>
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/exec/Operator.h"
@@ -119,6 +120,18 @@ struct PlanNodeStats {
   /// Operator-specific counters.
   std::unordered_map<std::string, RuntimeMetric> customStats;
 
+  /// Returns the operator-specific counter 'name'. Throws if there is none.
+  const RuntimeMetric& customStat(std::string_view name) const;
+
+  /// Returns the sum of the operator-specific counter 'name'. Throws if there
+  /// is none.
+  int64_t customSum(std::string_view name) const {
+    return customStat(name).sum;
+  }
+
+  /// Returns true if there is an operator-specific counter 'name'.
+  bool hasCustomStat(std::string_view name) const;
+
   /// Breakdown of stats by operator type.
   std::unordered_map<std::string, std::unique_ptr<PlanNodeStats>> operatorStats;
 
@@ -144,7 +157,7 @@ struct PlanNodeStats {
   uint32_t spilledFiles{0};
 
   /// A map of expression name to its respective stats.
-  std::unordered_map<std::string, ExprStats> expressionStats;
+  folly::F14FastMap<std::string, ExprStats> expressionStats;
 
   /// Add stats for a single operator instance.
   void add(const OperatorStats& stats);
@@ -162,8 +175,14 @@ struct PlanNodeStats {
   /// operator types, e.g. LocalPartition + LocalExchange).
   const PlanNodeStats& operatorStatsFor(std::string_view operatorType) const;
 
+  /// Extracts the stats of plan node 'planNodeId' from 'taskStats'. The node
+  /// must have stats.
+  static PlanNodeStats extract(
+      const TaskStats& taskStats,
+      const core::PlanNodeId& planNodeId);
+
  private:
-  void addTotals(const OperatorStats& stats);
+  void addTotals(const OperatorStats& stats, bool gateByBoundary);
 };
 
 std::unordered_map<core::PlanNodeId, PlanNodeStats> toPlanStats(

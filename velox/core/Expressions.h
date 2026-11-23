@@ -56,6 +56,12 @@ class InputTypedExpr : public ITypedExpr {
   folly::dynamic serialize() const override;
 
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  TypedExprPtr withInputsImpl(
+      std::vector<TypedExprPtr> /*inputs*/) const override {
+    return std::make_shared<InputTypedExpr>(*this);
+  }
 };
 
 class ConstantTypedExpr : public ITypedExpr {
@@ -158,6 +164,11 @@ class ConstantTypedExpr : public ITypedExpr {
   static TypedExprPtr makeNull(const TypePtr& type);
 
  private:
+  TypedExprPtr withInputsImpl(
+      std::vector<TypedExprPtr> /*inputs*/) const override {
+    return std::make_shared<ConstantTypedExpr>(*this);
+  }
+
   const Variant value_;
   const VectorPtr valueVector_;
 };
@@ -228,6 +239,9 @@ class CallTypedExpr : public ITypedExpr {
 
   std::string toString() const override;
 
+  void appendToString(std::string& out, ExprToStringContext& ctx)
+      const override;
+
   size_t localHash() const override {
     static const size_t kBaseHash =
         folly::hasher<std::string_view>()("CallTypedExpr");
@@ -266,6 +280,10 @@ class CallTypedExpr : public ITypedExpr {
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  TypedExprPtr withInputsImpl(std::vector<TypedExprPtr> inputs) const override {
+    return std::make_shared<CallTypedExpr>(type(), std::move(inputs), name_);
+  }
+
   const std::string name_;
 };
 
@@ -296,6 +314,9 @@ class FieldAccessTypedExpr : public ITypedExpr {
       const override;
 
   std::string toString() const override;
+
+  void appendToString(std::string& out, ExprToStringContext& ctx)
+      const override;
 
   size_t localHash() const override {
     static const size_t kBaseHash =
@@ -340,6 +361,8 @@ class FieldAccessTypedExpr : public ITypedExpr {
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  TypedExprPtr withInputsImpl(std::vector<TypedExprPtr> inputs) const override;
+
   const std::string name_;
   const bool isInputColumn_;
 };
@@ -377,11 +400,18 @@ class DereferenceTypedExpr : public ITypedExpr {
   }
 
   std::string toString() const override {
+    return toStringWithSharing();
+  }
+
+  void appendToString(std::string& out, ExprToStringContext& ctx)
+      const override {
+    inputs()[0]->appendWithSharing(out, ctx);
     const auto& fieldName = name();
     if (fieldName.empty()) {
-      return fmt::format("{}[{}]", inputs()[0]->toString(), index_);
+      out += fmt::format("[{}]", index_);
+    } else {
+      out += fmt::format("[{}]", fieldName);
     }
-    return fmt::format("{}[{}]", inputs()[0]->toString(), fieldName);
   }
 
   size_t localHash() const override {
@@ -419,6 +449,11 @@ class DereferenceTypedExpr : public ITypedExpr {
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  TypedExprPtr withInputsImpl(std::vector<TypedExprPtr> inputs) const override {
+    return std::make_shared<DereferenceTypedExpr>(
+        type(), std::move(inputs[0]), index_);
+  }
+
   const uint32_t index_;
 };
 
@@ -439,6 +474,9 @@ class ConcatTypedExpr : public ITypedExpr {
   }
 
   std::string toString() const override;
+
+  void appendToString(std::string& out, ExprToStringContext& ctx)
+      const override;
 
   size_t localHash() const override {
     static const size_t kBaseHash =
@@ -473,6 +511,12 @@ class ConcatTypedExpr : public ITypedExpr {
   folly::dynamic serialize() const override;
 
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  TypedExprPtr withInputsImpl(std::vector<TypedExprPtr> inputs) const override {
+    return std::make_shared<ConcatTypedExpr>(
+        type()->asRow().names(), std::move(inputs));
+  }
 };
 
 using ConcatTypedExprPtr = std::shared_ptr<const ConcatTypedExpr>;
@@ -501,8 +545,13 @@ class LambdaTypedExpr : public ITypedExpr {
       const override;
 
   std::string toString() const override {
-    return fmt::format(
-        "lambda {} -> {}", signature_->toString(), body_->toString());
+    return toStringWithSharing();
+  }
+
+  void appendToString(std::string& out, ExprToStringContext& ctx)
+      const override {
+    out += fmt::format("lambda {} -> ", signature_->toString());
+    body_->appendWithSharing(out, ctx);
   }
 
   size_t localHash() const override {
@@ -535,6 +584,12 @@ class LambdaTypedExpr : public ITypedExpr {
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  TypedExprPtr withInputsImpl(
+      std::vector<TypedExprPtr> /*inputs*/) const override {
+    // The body is not an input, so a lambda has no inputs to replace.
+    return std::make_shared<LambdaTypedExpr>(*this);
+  }
+
   const RowTypePtr signature_;
   const TypedExprPtr body_;
 };
@@ -570,6 +625,9 @@ class CastTypedExpr : public ITypedExpr {
 
   std::string toString() const override;
 
+  void appendToString(std::string& out, ExprToStringContext& ctx)
+      const override;
+
   size_t localHash() const override {
     static const size_t kBaseHash =
         folly::hasher<std::string_view>()("CastTypedExpr");
@@ -603,6 +661,11 @@ class CastTypedExpr : public ITypedExpr {
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  TypedExprPtr withInputsImpl(std::vector<TypedExprPtr> inputs) const override {
+    return std::make_shared<CastTypedExpr>(
+        type(), std::move(inputs), isTryCast_);
+  }
+
   // Whether this expression is used for `try_cast`. When true, Presto cast
   // suppresses exception and return null on failure to case.
   const bool isTryCast_;
@@ -637,6 +700,9 @@ class NullIfTypedExpr : public ITypedExpr {
 
   std::string toString() const override;
 
+  void appendToString(std::string& out, ExprToStringContext& ctx)
+      const override;
+
   size_t localHash() const override;
 
   void accept(
@@ -650,6 +716,11 @@ class NullIfTypedExpr : public ITypedExpr {
   static TypedExprPtr create(const folly::dynamic& obj, void* context);
 
  private:
+  TypedExprPtr withInputsImpl(std::vector<TypedExprPtr> inputs) const override {
+    return std::make_shared<NullIfTypedExpr>(
+        std::move(inputs[0]), std::move(inputs[1]), commonType_);
+  }
+
   // The common supertype used to cast both inputs for comparison.
   const TypePtr commonType_;
 };

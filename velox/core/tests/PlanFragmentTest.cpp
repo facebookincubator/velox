@@ -340,14 +340,14 @@ TEST_F(PlanFragmentTest, executionStrategyToString) {
 TEST_F(PlanFragmentTest, supportsBarrier) {
   // Plan fragment with plan node not supporting barrier.
   {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    const auto plan = PlanBuilder(planNodeIdGenerator)
+    PlanBuilder builder;
+    const auto plan = builder.newPlan()
                           .tableScan(rowType_)
                           .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
                           .hashJoin(
                               {"t0"},
                               {"u0"},
-                              PlanBuilder(planNodeIdGenerator)
+                              builder.newPlan()
                                   .tableScan(rowType_)
                                   .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
                                   .planNode(),
@@ -360,14 +360,14 @@ TEST_F(PlanFragmentTest, supportsBarrier) {
   }
   // Plan fragment with plan node supporting barrier.
   {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan = PlanBuilder(planNodeIdGenerator)
+    PlanBuilder builder;
+    auto plan = builder.newPlan()
                     .tableScan(rowType_)
                     .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
                     .mergeJoin(
                         {"t0"},
                         {"u0"},
-                        PlanBuilder(planNodeIdGenerator)
+                        builder.newPlan()
                             .tableScan(rowType_)
                             .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
                             .planNode(),
@@ -378,47 +378,4 @@ TEST_F(PlanFragmentTest, supportsBarrier) {
     const PlanFragment planFragment{plan};
     ASSERT_TRUE(planFragment.firstNodeNotSupportingBarrier() == nullptr);
   }
-}
-
-TEST_F(PlanFragmentTest, validateTransportTypes) {
-  // 'plan' is PartitionedOutput(MergeExchange): the root is the
-  // PartitionedOutput node and its only source is the MergeExchange node, which
-  // derives from ExchangeNode and is therefore a valid input node.
-  auto plan = PlanBuilder()
-                  .mergeExchange(rowType_, {"c0"}, "Presto")
-                  .partitionedOutput({"c0"}, 4)
-                  .planNode();
-  const auto& exchangeId = plan->sources().front()->id();
-  const auto& outputId = plan->id();
-  PlanFragment planFragment{plan};
-
-  // Input transport on the Exchange node and output transport on the
-  // PartitionedOutput node are both valid.
-  planFragment.inputTransportTypes[exchangeId] =
-      std::string{TransportKind::kUcx};
-  planFragment.outputTransportTypes[outputId] =
-      std::string{TransportKind::kUcx};
-  EXPECT_NO_THROW(planFragment.validateTransportTypes());
-
-  // An unknown node ID is rejected.
-  planFragment.inputTransportTypes["nonexistent"] =
-      std::string{TransportKind::kUcx};
-  VELOX_ASSERT_THROW(
-      planFragment.validateTransportTypes(),
-      "Input transport type set for unknown plan node ID: nonexistent");
-  planFragment.inputTransportTypes.erase("nonexistent");
-
-  // An input transport type on a non-Exchange node is rejected.
-  planFragment.inputTransportTypes[outputId] = std::string{TransportKind::kUcx};
-  VELOX_ASSERT_THROW(
-      planFragment.validateTransportTypes(),
-      "Input transport type can only be set on Exchange nodes");
-  planFragment.inputTransportTypes.erase(outputId);
-
-  // An output transport type on a non-PartitionedOutput node is rejected.
-  planFragment.outputTransportTypes[exchangeId] =
-      std::string{TransportKind::kUcx};
-  VELOX_ASSERT_THROW(
-      planFragment.validateTransportTypes(),
-      "Output transport type can only be set on PartitionedOutput nodes");
 }

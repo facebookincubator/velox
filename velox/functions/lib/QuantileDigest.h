@@ -511,7 +511,8 @@ int8_t QuantileDigest<T, Allocator>::calculateLevel(int8_t nodeStructure) {
   auto level =
       static_cast<int8_t>(static_cast<uint8_t>(nodeStructure) >> 2 & 63);
   if constexpr (std::is_same_v<U, int32_t>) {
-    level = (level == 64) ? 32 : level;
+    // Map the 64-bit wire sentinel 63 back to 31 for REAL full-range nodes.
+    level = static_cast<int8_t>((level == 63) ? 31 : level);
   }
   return level;
 }

@@ -36,6 +36,7 @@ UcxPartitionedOutputMock::UcxPartitionedOutputMock(
       tableGenerator_(tableGenerator) {}
 
 void UcxPartitionedOutputMock::run() {
+  stopRequested_ = false;
   threads_.clear();
   for (int32_t driver = 0; driver < numDrivers_; ++driver) {
     threads_.emplace_back(&UcxPartitionedOutputMock::publishDataChunks, this);
@@ -52,9 +53,12 @@ void UcxPartitionedOutputMock::joinThreads() {
 void UcxPartitionedOutputMock::publishDataChunks() {
   // create numPartitions_ x numDataChunks_ data chunks and
   // push it into the destination queues identified by the taskId.
-  auto stream = rmm::cuda_stream_default;
+  auto stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
   for (size_t partition = 0; partition < numPartitions_; ++partition) {
     for (uint32_t dataChunk = 0; dataChunk < numDataChunks_; ++dataChunk) {
+      if (stopRequested_) {
+        return;
+      }
       VLOG(3)
           << "In UcxPartitionedOutputMock::publishDataChunks writing to partition "
           << partition << " chunk " << dataChunk;
@@ -74,7 +78,7 @@ void UcxPartitionedOutputMock::publishDataChunks() {
       // efficient. A better approach is to create an event and pass it along
       // the data through the queue and synchronize on the event before calling
       // into UCXX.
-      stream.synchronize();
+      stream.sync();
       queueManager_->enqueue(
           taskId_, partition, std::move(packedCols), numRowsPerChunk_);
     }

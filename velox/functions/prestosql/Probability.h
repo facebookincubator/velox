@@ -28,12 +28,22 @@
 #include "boost/math/distributions/gamma.hpp"
 #include "boost/math/distributions/poisson.hpp"
 #include "boost/math/special_functions/erf.hpp"
+#include "boost/math/tools/toms748_solve.hpp"
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 
 namespace facebook::velox::functions {
 
 namespace {
+
+// Boost's default discrete-quantile policy is integer_round_outwards, which
+// rounds the inverse CDF down for p < 0.5 and up for p > 0.5. Presto (Apache
+// Commons Math) instead returns the smallest integer k with CDF(k) >= p, which
+// corresponds to Boost's integer_round_up policy. Using the default policy
+// biases inverse_poisson_cdf / inverse_binomial_cdf low for p < 0.5.
+using InverseDiscreteCdfPolicy =
+    boost::math::policies::policy<boost::math::policies::discrete_quantile<
+        boost::math::policies::integer_round_up>>;
 
 template <typename T>
 struct BetaCDFFunction {
@@ -174,6 +184,42 @@ struct LaplaceCDFFunction {
   }
 };
 
+constexpr std::uintmax_t kInverseBetaCdfMaxIterations =
+    std::numeric_limits<double>::digits -
+    std::numeric_limits<double>::min_exponent;
+
+// Uses a bracketed solver when Boost's faster quantile implementation fails
+// to converge.
+FOLLY_ALWAYS_INLINE double inverseBetaCdfByBracketing(
+    const boost::math::beta_distribution<>& distribution,
+    double probability,
+    std::uintmax_t maxIterations) {
+  if (probability == 0.0 || probability == 1.0) {
+    return probability;
+  }
+
+  const auto objective = [&](double value) {
+    return boost::math::cdf(distribution, value) - probability;
+  };
+  auto tolerance = boost::math::tools::eps_tolerance<double>();
+  std::pair<double, double> bounds;
+  try {
+    bounds = boost::math::tools::toms748_solve(
+        objective, 0.0, 1.0, tolerance, maxIterations);
+  } catch (const std::exception& error) {
+    VELOX_USER_FAIL(
+        "Failed to compute inverse beta CDF with fallback solver: {}",
+        error.what());
+  }
+  const auto [lowerBound, upperBound] = bounds;
+  VELOX_USER_CHECK(
+      tolerance(lowerBound, upperBound),
+      "Failed to compute inverse beta CDF: fallback solver did not converge "
+      "after {} iterations",
+      maxIterations);
+  return (lowerBound + upperBound) / 2;
+}
+
 template <typename T>
 struct InverseBetaCDFFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -187,8 +233,13 @@ struct InverseBetaCDFFunction {
     VELOX_USER_CHECK((a > 0) && (a != kInf), "a must be > 0");
     VELOX_USER_CHECK((b > 0) && (b != kInf), "b must be > 0");
 
-    boost::math::beta_distribution<> dist(a, b);
-    result = boost::math::quantile(dist, p);
+    const boost::math::beta_distribution<> dist(a, b);
+    try {
+      result = boost::math::quantile(dist, p);
+    } catch (const boost::math::evaluation_error&) {
+      result =
+          inverseBetaCdfByBracketing(dist, p, kInverseBetaCdfMaxIterations);
+    }
   }
 };
 
@@ -383,7 +434,7 @@ struct InverseBinomialCDFFunction {
         numberOfTrials > 0,
         "inverseBinomialCdf Function: numberOfTrials must be greater than 0");
 
-    boost::math::binomial_distribution<> dist(
+    boost::math::binomial_distribution<double, InverseDiscreteCdfPolicy> dist(
         numberOfTrials, successProbability);
     result = static_cast<int32_t>(boost::math::quantile(dist, p));
   }
@@ -403,7 +454,18 @@ struct InversePoissonCDFFunction {
         (lambda > 0) && (lambda != kInf),
         "inversePoissonCdf Function: lambda must be greater than 0");
 
-    boost::math::poisson_distribution<> dist(lambda);
+    // From this lambda on, the quantile exceeds INT32_MAX for every p > 0, so
+    // the result is clamped below anyway. Boost's discrete quantile steps one
+    // floating point value at a time and does not finish for some lambda above
+    // 2^53.
+    static constexpr double kLambdaWithMaxResult = 1e10;
+    if (p > 0 && lambda >= kLambdaWithMaxResult) {
+      result = std::numeric_limits<int32_t>::max();
+      return;
+    }
+
+    boost::math::poisson_distribution<double, InverseDiscreteCdfPolicy> dist(
+        lambda);
     double quantile = boost::math::quantile(dist, p);
     if (quantile > std::numeric_limits<int32_t>::max()) {
       result = std::numeric_limits<int32_t>::max();

@@ -56,6 +56,6 @@ int main(int argc, char** argv) {
   std::size_t file_size = file_read->size();
   std::cout << "File size = " << file_size << std::endl;
   std::string buffer(file_size + 1, '\0');
-  file_read->pread(0 /*offset*/, file_size /*lenght*/, buffer.data());
+  file_read->pread(0 /*offset*/, file_size /*length*/, buffer.data());
   std::cout << "File Content = " << buffer << std::endl;
 }

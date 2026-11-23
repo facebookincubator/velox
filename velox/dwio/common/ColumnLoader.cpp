@@ -52,6 +52,9 @@ RowSet read(
     effectiveRows = selectedRows;
   }
 
+  // Load any deferred input streams for this column before decoding. Done on
+  // the reader so it runs regardless of which loader subclass is used.
+  fieldReader->formatData().loadLazyInputStreams();
   structReader->advanceFieldReader(fieldReader, offset);
   fieldReader->scanSpec()->setValueHook(hook);
   fieldReader->readWithTiming(offset, effectiveRows, incomingNulls);
@@ -99,6 +102,17 @@ void ColumnLoader::loadInternal(
        },
        structReader_});
   raw_vector<vector_size_t> selectedRows(fieldReader_->memoryPool());
+  if (!hook) {
+    if (*result && result->use_count() == 1 &&
+        (*result)->encoding() == VectorEncoding::Simple::DICTIONARY) {
+      const auto innerEncoding = (*result)->valueVector()->encoding();
+      if (innerEncoding == VectorEncoding::Simple::FLAT_MAP ||
+          innerEncoding == VectorEncoding::Simple::DICTIONARY) {
+        *result = (*result)->valueVector();
+      }
+    }
+    fieldReader_->releaseReusableResult(*result);
+  }
   auto effectiveRows =
       read(structReader_, fieldReader_, version_, rows, selectedRows, hook);
   if (!hook) {

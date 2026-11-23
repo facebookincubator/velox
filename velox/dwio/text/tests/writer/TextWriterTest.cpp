@@ -25,6 +25,7 @@
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
+#include <string_view>
 
 /// TODO: Add fuzzer test.
 
@@ -59,8 +60,22 @@ class TextWriterTest : public testing::Test,
     options.setScanSpec(spec);
   }
 
-  memory::MemoryPool& poolRef() {
-    return *pool();
+  std::unique_ptr<dwio::common::Reader> createReader(
+      const RowTypePtr& schema,
+      std::string_view filePath,
+      const dwio::common::SerDeOptions& serDeOptions =
+          dwio::common::SerDeOptions()) {
+    auto factory =
+        dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+    auto readFile = std::make_shared<LocalReadFile>(filePath);
+    dwio::common::ReaderOptions readerOptions(pool());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    readerOptions.setFileSchema(schema);
+    readerOptions.setSerDeOptions(serDeOptions);
+    auto input =
+        std::make_unique<dwio::common::BufferedInput>(readFile, *pool());
+    return factory->createReader(std::move(input), readerOptions);
   }
 
   constexpr static float kInf = std::numeric_limits<float>::infinity();
@@ -181,6 +196,53 @@ TEST_F(TextWriterTest, write) {
   EXPECT_EQ(result[2][9], "Y3Bw");
 }
 
+// The writer factory must translate the Hive serde 'field.delim' parameter on
+// WriterOptions into the writer's field separator, rather than defaulting to
+// \001.
+TEST_F(TextWriterTest, fieldDelim) {
+  auto schema = ROW({"c0", "c1", "c2"}, {INTEGER(), VARCHAR(), INTEGER()});
+  auto data = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3}),
+      makeFlatVector<StringView>({"a", "b", "c"}, VARCHAR()),
+      makeFlatVector<int32_t>({4, 5, 6}),
+  });
+
+  WriterOptions writerOptions;
+  writerOptions.memoryPool = rootPool_.get();
+  writerOptions.schema = schema;
+  writerOptions.serdeParameters = {
+      {dwio::common::SerDeOptions::kFieldDelim, "|"}};
+
+  const auto tempPath = tempPath_->getPath();
+  const auto filename = "test_text_writer_serde.txt";
+  auto filePath = fs::path(fmt::format("{}/{}", tempPath, filename));
+  auto sink = std::make_unique<dwio::common::LocalFileSink>(
+      filePath, dwio::common::FileSink::Options{.pool = leafPool_.get()});
+
+  TextWriterFactory factory;
+  auto writer = factory.createWriter(
+      std::move(sink), std::make_shared<text::WriterOptions>(writerOptions));
+  writer->write(data);
+  writer->close();
+
+  const auto fileSystem = filesystems::getFileSystem(tempPath, nullptr);
+  const auto& file = fileSystem->openFileForRead(filePath.string());
+  BufferPtr charBuf = AlignedBuffer::allocate<char>(file->size(), pool());
+  auto rawCharBuf = charBuf->asMutable<char>();
+
+  // Parsing with '|' recovers the columns only if the file was written with it.
+  const auto serDeOptions = dwio::common::SerDeOptions('|');
+  auto result = parseTextFile(tempPath, filename, rawCharBuf, serDeOptions);
+
+  ASSERT_EQ(result.size(), 3);
+  ASSERT_EQ(result[0].size(), 3);
+  EXPECT_EQ(result[0][0], "1");
+  EXPECT_EQ(result[0][1], "a");
+  EXPECT_EQ(result[0][2], "4");
+  EXPECT_EQ(result[2][0], "3");
+  EXPECT_EQ(result[2][2], "6");
+}
+
 TEST_F(TextWriterTest, verifyWriteWithTextReader) {
   auto schema =
       ROW({"c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"},
@@ -228,17 +290,7 @@ TEST_F(TextWriterTest, verifyWriteWithTextReader) {
   writer->write(data);
   writer->close();
 
-  // Set up reader.
-  auto readerFactory =
-      dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto readFile = std::make_shared<LocalReadFile>(filePath.string());
-  dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  readerOptions.setFileSchema(schema);
-  auto input =
-      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
-  auto reader = readerFactory->createReader(std::move(input), readerOptions);
+  auto reader = createReader(schema, filePath.string());
   dwio::common::RowReaderOptions rowReaderOptions;
   setScanSpec(*schema, rowReaderOptions);
   auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -498,18 +550,7 @@ TEST_F(TextWriterTest, verifyMapAndArrayComplexTypesWithTextReader) {
   writer->write(data);
   writer->close();
 
-  // Set up reader.
-  auto readerFactory =
-      dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto readFile = std::make_shared<LocalReadFile>(filePath.string());
-  dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  readerOptions.setFileSchema(schema);
-  readerOptions.setSerDeOptions(serDeOptions);
-  auto input =
-      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
-  auto reader = readerFactory->createReader(std::move(input), readerOptions);
+  auto reader = createReader(schema, filePath.string(), serDeOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
   setScanSpec(*schema, rowReaderOptions);
   auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -691,19 +732,7 @@ TEST_F(TextWriterTest, verifyArrayTypesWithTextReader) {
   writer->write(data);
   writer->close();
 
-  // Set up reader.
-  auto readerFactory =
-      dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto readFile = std::make_shared<LocalReadFile>(filePath.string());
-  dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  readerOptions.setFileSchema(schema);
-  readerOptions.setSerDeOptions(serDeOptions);
-
-  auto input =
-      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
-  auto reader = readerFactory->createReader(std::move(input), readerOptions);
+  auto reader = createReader(schema, filePath.string(), serDeOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
   setScanSpec(*schema, rowReaderOptions);
 
@@ -931,19 +960,7 @@ TEST_F(TextWriterTest, verifyMapTypesWithTextReader) {
   writer->write(data);
   writer->close();
 
-  // Set up reader
-  auto readerFactory =
-      dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto readFile = std::make_shared<LocalReadFile>(filePath.string());
-  dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  readerOptions.setFileSchema(schema);
-  readerOptions.setSerDeOptions(serDeOptions);
-
-  auto input =
-      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
-  auto reader = readerFactory->createReader(std::move(input), readerOptions);
+  auto reader = createReader(schema, filePath.string(), serDeOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
   setScanSpec(*schema, rowReaderOptions);
 
@@ -1088,19 +1105,7 @@ TEST_F(TextWriterTest, verifyNestedRowTypesWithTextReader) {
   writer->write(data);
   writer->close();
 
-  // Set up reader
-  auto readerFactory =
-      dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto readFile = std::make_shared<LocalReadFile>(filePath.string());
-  dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  readerOptions.setFileSchema(schema);
-  readerOptions.setSerDeOptions(serDeOptions);
-
-  auto input =
-      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
-  auto reader = readerFactory->createReader(std::move(input), readerOptions);
+  auto reader = createReader(schema, filePath.string(), serDeOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
   setScanSpec(*schema, rowReaderOptions);
 
@@ -1478,19 +1483,7 @@ TEST_F(
   writer->write(data);
   writer->close();
 
-  // Set up reader.
-  auto readerFactory =
-      dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto readFile = std::make_shared<LocalReadFile>(filePath.string());
-  dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  readerOptions.setFileSchema(schema);
-  readerOptions.setSerDeOptions(serDeOptions);
-
-  auto input =
-      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
-  auto reader = readerFactory->createReader(std::move(input), readerOptions);
+  auto reader = createReader(schema, filePath.string(), serDeOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
   setScanSpec(*schema, rowReaderOptions);
   auto rowReader = reader->createRowReader(rowReaderOptions);
@@ -1609,19 +1602,7 @@ TEST_F(TextWriterTest, verifySimpleEscapeCharTestWithTextReader) {
   writer->write(data);
   writer->close();
 
-  // Set up reader
-  auto readerFactory =
-      dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto readFile = std::make_shared<LocalReadFile>(filePath.string());
-  dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  readerOptions.setFileSchema(schema);
-  readerOptions.setSerDeOptions(serDeOptions);
-
-  auto input =
-      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
-  auto reader = readerFactory->createReader(std::move(input), readerOptions);
+  auto reader = createReader(schema, filePath.string(), serDeOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
   setScanSpec(*schema, rowReaderOptions);
 
@@ -1743,19 +1724,7 @@ TEST_F(TextWriterTest, verifyCustomEscapeCharTestWithTextReader) {
   writer->write(data);
   writer->close();
 
-  // Set up reader
-  auto readerFactory =
-      dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto readFile = std::make_shared<LocalReadFile>(filePath.string());
-  dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  readerOptions.setFileSchema(schema);
-  readerOptions.setSerDeOptions(serDeOptions);
-
-  auto input =
-      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
-  auto reader = readerFactory->createReader(std::move(input), readerOptions);
+  auto reader = createReader(schema, filePath.string(), serDeOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
   setScanSpec(*schema, rowReaderOptions);
 
@@ -1867,19 +1836,7 @@ TEST_F(TextWriterTest, verifyHeaderTestWithTextReader) {
   writer->write(data);
   writer->close();
 
-  // Set up reader
-  auto readerFactory =
-      dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
-  auto readFile = std::make_shared<LocalReadFile>(filePath.string());
-  dwio::common::ReaderOptions readerOptions(pool());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  readerOptions.setFileSchema(schema);
-  readerOptions.setSerDeOptions(serDeOptions);
-
-  auto input =
-      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
-  auto reader = readerFactory->createReader(std::move(input), readerOptions);
+  auto reader = createReader(schema, filePath.string(), serDeOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setSkipRows(1);
   setScanSpec(*schema, rowReaderOptions);

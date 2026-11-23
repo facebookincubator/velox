@@ -24,4 +24,17 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
+add_executable(velox_make_row_from_map_benchmark MakeRowFromMapBenchmark.cpp)
+
+target_link_libraries(
+  velox_make_row_from_map_benchmark
+  velox_functions_lib
+  velox_expression
+  velox_vector_fuzzer
+  Folly::folly
+  Folly::follybenchmark
+  gflags::gflags
+  glog::glog
+)
+
 velox_add_library(velox_functions_benchmark_util INTERFACE HEADERS FunctionBenchmarkBase.h)

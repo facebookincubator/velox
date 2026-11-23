@@ -18,7 +18,7 @@
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_view.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
+#include <cuda/stream>
 
 #include <memory>
 
@@ -28,6 +28,13 @@ struct DecimalSumStateColumns {
   std::unique_ptr<cudf::column> sum;
   std::unique_ptr<cudf::column> count;
 };
+
+/** Directly reduces DECIMAL64 input into a sum at the specified scale. */
+DecimalSumStateColumns reduceDecimal64SumCount(
+    const cudf::column_view& input,
+    numeric::scale_type outputScale,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
 
 /**
  * Decodes intermediate decimal SUM aggregate state stored as a cuDF STRING
@@ -41,12 +48,14 @@ struct DecimalSumStateColumns {
  * @param scale decimal scale used to set the output sum column's scale to
  *        -scale.
  * @param stream CUDA stream for device work.
+ * @param mr memory resource for allocated columns.
  * @return decoded sum and count columns.
  */
 DecimalSumStateColumns deserializeDecimalSumState(
     const cudf::column_view& stateCol,
     int32_t scale,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
 
 /**
  * Encodes partial decimal SUM state (DECIMAL64 or DECIMAL128 sums plus INT64
@@ -65,7 +74,7 @@ DecimalSumStateColumns deserializeDecimalSumState(
 std::unique_ptr<cudf::column> serializeDecimalSumState(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /**
@@ -84,7 +93,7 @@ std::unique_ptr<cudf::column> serializeDecimalSumState(
 std::unique_ptr<cudf::column> computeDecimalAverage(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 } // namespace facebook::velox::cudf_velox

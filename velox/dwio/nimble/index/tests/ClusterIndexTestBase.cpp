@@ -1,0 +1,528 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#include "velox/dwio/nimble/index/tests/ClusterIndexTestBase.h"
+
+#include "folly/json/json.h"
+#include "velox/buffer/Buffer.h"
+#include "velox/common/io/Options.h"
+#include "velox/common/testutil/TestValue.h"
+#include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
+#include "velox/dwio/nimble/tablet/ChunkStatsGenerated.h"
+#include "velox/dwio/nimble/tablet/ClusterIndexGenerated.h"
+#include "velox/dwio/nimble/tablet/MetadataInput.h"
+
+namespace facebook::nimble::index::test {
+
+namespace {
+
+velox::BufferPtr toBufferPtr(
+    std::string_view data,
+    velox::memory::MemoryPool* pool) {
+  auto buffer = velox::AlignedBuffer::allocate<char>(data.size(), pool);
+  std::memcpy(buffer->asMutable<char>(), data.data(), data.size());
+  return buffer;
+}
+
+} // namespace
+
+void ClusterIndexTestBase::SetUpTestCase() {
+  velox::memory::MemoryManager::testingSetInstance({});
+  velox::common::testutil::TestValue::enable();
+}
+
+ClusterIndexTestBase::IndexBuffers ClusterIndexTestBase::createTestClusterIndex(
+    const std::vector<std::string>& indexColumns,
+    const std::vector<std::string>& sortOrders,
+    const std::string& minKey,
+    const std::vector<Stripe>& stripes,
+    const std::vector<int>& stripeGroups,
+    KeyStreamLayout keyStreamLayout) {
+  NIMBLE_CHECK_EQ(indexColumns.size(), sortOrders.size());
+
+  flatbuffers::FlatBufferBuilder builder;
+  IndexBuffers result;
+
+  // Build stripeGroupIndices from stripeGroups.
+  for (uint32_t groupIdx = 0; groupIdx < stripeGroups.size(); ++groupIdx) {
+    for (int i = 0; i < stripeGroups[groupIdx]; ++i) {
+      result.stripeGroupIndices.push_back(groupIdx);
+    }
+  }
+
+  std::vector<flatbuffers::Offset<serialization::MetadataSection>>
+      clusterIndexGroupMetadataOffsets;
+  clusterIndexGroupMetadataOffsets.reserve(stripeGroups.size());
+
+  uint32_t stripeIdx = 0;
+  for (const auto& groupStripeCount : stripeGroups) {
+    // Build ClusterIndexPartition with chunk and sub-partition data.
+    flatbuffers::FlatBufferBuilder groupBuilder;
+
+    std::vector<uint32_t> chunkRows;
+    std::vector<uint32_t> chunkOffsets;
+    std::vector<flatbuffers::Offset<flatbuffers::String>> chunkKeys;
+    // Stripe layout only: each stripe with its key stream, as the stripe group
+    // metadata gives them to the index.
+    auto& stripeKeyStreams = result.stripeKeyStreams.emplace_back();
+
+    // Build standalone ChunkStatsGroup for this group
+    flatbuffers::FlatBufferBuilder chunkBuilder;
+    std::vector<uint32_t> streamChunkCounts;
+    std::vector<uint32_t> streamChunkRows;
+    std::vector<uint32_t> streamChunkOffsets;
+
+    uint32_t accumulatedStreamChunkCount = 0;
+    uint32_t keyDataSize = 0;
+    // Base offset of this partition's key stream in the combined stream.
+    const uint32_t partitionKeyStreamOffset =
+        stripes[stripeIdx].keyStream.streamOffset;
+    // Accumulated rows across all stripes within this partition.
+    uint32_t accumulatedChunkRows = 0;
+    for (int i = 0; i < groupStripeCount; ++i, ++stripeIdx) {
+      NIMBLE_CHECK_LT(stripeIdx, stripes.size());
+      const auto& stripe = stripes[stripeIdx];
+
+      const auto& keyStream = stripe.keyStream;
+      NIMBLE_CHECK_EQ(
+          keyStream.stream.numChunks, keyStream.stream.chunkRows.size());
+      NIMBLE_CHECK_EQ(
+          keyStream.stream.numChunks, keyStream.stream.chunkOffsets.size());
+      NIMBLE_CHECK_EQ(keyStream.stream.numChunks, keyStream.chunkKeys.size());
+      if (keyStreamLayout == KeyStreamLayout::kStripe) {
+        NIMBLE_CHECK_EQ(
+            keyStream.stream.numChunks,
+            1,
+            "A Stripe layout stripe holds one key chunk");
+      }
+
+      // Accumulate chunk data per stripe. Chunk offsets are partition-relative.
+      uint32_t stripeRowCount = 0;
+      for (size_t c = 0; c < keyStream.stream.numChunks; ++c) {
+        accumulatedChunkRows += keyStream.stream.chunkRows[c];
+        chunkRows.push_back(accumulatedChunkRows);
+        chunkOffsets.push_back(
+            (keyStream.streamOffset - partitionKeyStreamOffset) +
+            keyStream.stream.chunkOffsets[c]);
+        chunkKeys.push_back(groupBuilder.CreateString(keyStream.chunkKeys[c]));
+        stripeRowCount += keyStream.stream.chunkRows[c];
+      }
+      result.stripeRowCounts.push_back(stripeRowCount);
+      keyDataSize += keyStream.streamSize;
+      // The key stream starts its stripe.
+      stripeKeyStreams.push_back(
+          {.stripe = stripeIdx,
+           .offset = keyStream.streamOffset,
+           .numRows = stripeRowCount,
+           .streams = {{.offset = 0, .size = keyStream.streamSize}}});
+
+      for (const auto& stream : stripe.streams) {
+        accumulatedStreamChunkCount += stream.numChunks;
+        streamChunkCounts.push_back(accumulatedStreamChunkCount);
+        NIMBLE_CHECK_EQ(stream.numChunks, stream.chunkRows.size());
+        uint32_t accumulatedRows = 0;
+        for (const auto& row : stream.chunkRows) {
+          accumulatedRows += row;
+          streamChunkRows.push_back(accumulatedRows);
+        }
+        NIMBLE_CHECK_EQ(stream.numChunks, stream.chunkOffsets.size());
+        for (const auto& offset : stream.chunkOffsets) {
+          streamChunkOffsets.push_back(offset);
+        }
+      }
+    }
+    if (keyStreamLayout == KeyStreamLayout::kPartition) {
+      auto chunkRowsVec = groupBuilder.CreateVector(chunkRows);
+      auto chunkOffsetsVec = groupBuilder.CreateVector(chunkOffsets);
+      auto chunkKeysVec = groupBuilder.CreateVector(chunkKeys);
+      groupBuilder.Finish(
+          serialization::CreateClusterIndexPartition(
+              groupBuilder,
+              partitionKeyStreamOffset,
+              keyDataSize,
+              chunkRowsVec,
+              chunkOffsetsVec,
+              chunkKeysVec));
+    } else {
+      // Each stripe holds one key chunk, so the chunk keys are the stripe keys.
+      auto stripeKeysVec = groupBuilder.CreateVector(chunkKeys);
+      groupBuilder.Finish(
+          serialization::CreateClusterIndexGroup(groupBuilder, stripeKeysVec));
+    }
+
+    uint64_t offset = result.indexPartitions.size();
+    uint32_t size = groupBuilder.GetSize();
+    result.indexPartitions.append(
+        reinterpret_cast<const char*>(groupBuilder.GetBufferPointer()), size);
+
+    auto metadataSection = serialization::CreateMetadataSection(
+        builder,
+        offset,
+        size,
+        serialization::CompressionType_Uncompressed,
+        size);
+    clusterIndexGroupMetadataOffsets.push_back(metadataSection);
+
+    const uint32_t numStreams = streamChunkCounts.size() / groupStripeCount;
+
+    // Build standalone StripeChunkStats flatbuffer
+    auto stripeChunkStats = serialization::CreateStripeChunkStats(
+        chunkBuilder,
+        numStreams,
+        chunkBuilder.CreateVector(streamChunkCounts),
+        chunkBuilder.CreateVector(streamChunkRows),
+        chunkBuilder.CreateVector(streamChunkOffsets));
+    chunkBuilder.Finish(stripeChunkStats);
+
+    result.chunkStatsGroupSizes.push_back(chunkBuilder.GetSize());
+    result.chunkStatsGroups.append(
+        reinterpret_cast<const char*>(chunkBuilder.GetBufferPointer()),
+        chunkBuilder.GetSize());
+  }
+
+  std::vector<flatbuffers::Offset<flatbuffers::String>> subPartitionKeyOffsets;
+  subPartitionKeyOffsets.reserve(stripeGroups.size() + 1);
+  subPartitionKeyOffsets.push_back(builder.CreateString(minKey));
+  uint32_t partitionStripeStart = 0;
+  for (const auto& groupStripeCount : stripeGroups) {
+    const auto& lastStripe =
+        stripes[partitionStripeStart + groupStripeCount - 1];
+    const auto& chunkKeys = lastStripe.keyStream.chunkKeys;
+    NIMBLE_CHECK(!chunkKeys.empty());
+    subPartitionKeyOffsets.push_back(builder.CreateString(chunkKeys.back()));
+    partitionStripeStart += groupStripeCount;
+  }
+
+  std::vector<flatbuffers::Offset<flatbuffers::String>> indexColumnOffsets;
+  indexColumnOffsets.reserve(indexColumns.size());
+  for (const auto& column : indexColumns) {
+    indexColumnOffsets.push_back(builder.CreateString(column));
+  }
+
+  std::vector<flatbuffers::Offset<flatbuffers::String>> sortOrderOffsets;
+  sortOrderOffsets.reserve(sortOrders.size());
+  for (const auto& sortOrder : sortOrders) {
+    sortOrderOffsets.push_back(builder.CreateString(sortOrder));
+  }
+
+  // Build partition row counts from per-stripe row counts.
+  std::vector<uint32_t> partitionRowCounts;
+  partitionRowCounts.reserve(stripeGroups.size());
+  uint32_t stripeStart = 0;
+  for (const auto& groupStripeCount : stripeGroups) {
+    uint32_t partitionRows = 0;
+    for (int i = 0; i < groupStripeCount; ++i) {
+      partitionRows += result.stripeRowCounts[stripeStart + i];
+    }
+    partitionRowCounts.push_back(partitionRows);
+    stripeStart += groupStripeCount;
+  }
+
+  auto indexColumnsVector = builder.CreateVector(indexColumnOffsets);
+  auto sortOrdersVector = builder.CreateVector(sortOrderOffsets);
+  auto indexPartitionsVector =
+      builder.CreateVector(clusterIndexGroupMetadataOffsets);
+  auto partitionKeysVector = builder.CreateVector(subPartitionKeyOffsets);
+  auto partitionRowCountsVector = builder.CreateVector(partitionRowCounts);
+
+  // A Stripe layout index locates its groups in index_groups instead.
+  const bool stripeLayout = keyStreamLayout == KeyStreamLayout::kStripe;
+  const decltype(indexPartitionsVector) noSections;
+  auto index = serialization::CreateClusterIndex(
+      builder,
+      indexColumnsVector,
+      sortOrdersVector,
+      stripeLayout ? noSections : indexPartitionsVector,
+      partitionKeysVector,
+      partitionRowCountsVector,
+      static_cast<uint8_t>(keyStreamLayout),
+      stripeLayout ? kKeyStreamId : 0,
+      stripeLayout ? indexPartitionsVector : noSections);
+
+  builder.Finish(index);
+
+  result.rootIndex = std::string(
+      reinterpret_cast<const char*>(builder.GetBufferPointer()),
+      builder.GetSize());
+
+  return result;
+}
+
+ClusterIndexTestBase::IndexBuffers ClusterIndexTestBase::createTestClusterIndex(
+    const std::vector<std::string>& indexColumns,
+    const std::string& minKey,
+    const std::vector<Stripe>& stripes,
+    const std::vector<int>& stripeGroups,
+    KeyStreamLayout keyStreamLayout) {
+  std::vector<std::string> defaultSortOrders;
+  defaultSortOrders.reserve(indexColumns.size());
+  for (size_t i = 0; i < indexColumns.size(); ++i) {
+    defaultSortOrders.push_back(
+        folly::toJson(velox::core::kAscNullsFirst.serialize()));
+  }
+  return createTestClusterIndex(
+      indexColumns,
+      defaultSortOrders,
+      minKey,
+      stripes,
+      stripeGroups,
+      keyStreamLayout);
+}
+
+ClusterIndexTestBase::IndexBuffers ClusterIndexTestBase::createStripeGroupIndex(
+    const StripeGroupIndex& index) {
+  flatbuffers::FlatBufferBuilder groupBuilder;
+  flatbuffers::Offset<
+      flatbuffers::Vector<flatbuffers::Offset<flatbuffers::String>>>
+      stripeKeys;
+  if (index.stripeKeys.has_value()) {
+    stripeKeys = groupBuilder.CreateVectorOfStrings(index.stripeKeys.value());
+  }
+  groupBuilder.Finish(
+      serialization::CreateClusterIndexGroup(groupBuilder, stripeKeys));
+
+  IndexBuffers result;
+  result.stripeKeyStreams.push_back(index.stripeKeyStreams);
+  const auto groupSize = groupBuilder.GetSize();
+  result.indexPartitions.assign(
+      reinterpret_cast<const char*>(groupBuilder.GetBufferPointer()),
+      groupSize);
+
+  flatbuffers::FlatBufferBuilder rootBuilder;
+  const auto indexColumns =
+      rootBuilder.CreateVectorOfStrings(std::vector<std::string>{"col1"});
+  const auto sortOrders = rootBuilder.CreateVectorOfStrings(
+      std::vector<std::string>{
+          folly::toJson(velox::core::kAscNullsFirst.serialize())});
+  const auto groupSection = serialization::CreateMetadataSection(
+      rootBuilder,
+      /*offset=*/0,
+      groupSize,
+      serialization::CompressionType_Uncompressed,
+      groupSize);
+  const auto groups = rootBuilder.CreateVector(
+      std::vector<flatbuffers::Offset<serialization::MetadataSection>>{
+          groupSection});
+  const auto partitionKeys =
+      rootBuilder.CreateVectorOfStrings(std::vector<std::string>{"b", "d"});
+  const auto partitionRowCounts =
+      rootBuilder.CreateVector(std::vector<uint32_t>{4});
+  rootBuilder.Finish(
+      serialization::CreateClusterIndex(
+          rootBuilder,
+          indexColumns,
+          sortOrders,
+          index.setIndexPartitions ? groups : decltype(groups){},
+          partitionKeys,
+          partitionRowCounts,
+          index.keyStreamLayout,
+          kKeyStreamId,
+          groups));
+  result.rootIndex.assign(
+      reinterpret_cast<const char*>(rootBuilder.GetBufferPointer()),
+      rootBuilder.GetSize());
+  return result;
+}
+
+ClusterIndexTestBase::IndexBuffers
+ClusterIndexTestBase::createChunkOnlyTestClusterIndex(
+    const std::vector<ChunkOnlyStripe>& stripes,
+    const std::vector<int>& stripeGroups) {
+  flatbuffers::FlatBufferBuilder builder;
+  IndexBuffers result;
+
+  // Build stripeGroupIndices from stripeGroups.
+  for (uint32_t groupIdx = 0; groupIdx < stripeGroups.size(); ++groupIdx) {
+    for (int i = 0; i < stripeGroups[groupIdx]; ++i) {
+      result.stripeGroupIndices.push_back(groupIdx);
+    }
+  }
+
+  std::vector<flatbuffers::Offset<serialization::MetadataSection>>
+      clusterIndexGroupMetadataOffsets;
+  clusterIndexGroupMetadataOffsets.reserve(stripeGroups.size());
+
+  uint32_t stripeIdx = 0;
+  for (const auto& groupStripeCount : stripeGroups) {
+    // Build standalone ChunkStatsGroup only (no StripeClusterIndex needed)
+    flatbuffers::FlatBufferBuilder chunkBuilder;
+
+    std::vector<uint32_t> streamChunkCounts;
+    std::vector<uint32_t> streamChunkRows;
+    std::vector<uint32_t> streamChunkOffsets;
+
+    uint32_t accumulatedStreamChunkCount = 0;
+    for (int i = 0; i < groupStripeCount; ++i, ++stripeIdx) {
+      NIMBLE_CHECK_LT(stripeIdx, stripes.size());
+      const auto& stripe = stripes[stripeIdx];
+
+      for (const auto& stream : stripe.streams) {
+        accumulatedStreamChunkCount += stream.numChunks;
+        streamChunkCounts.push_back(accumulatedStreamChunkCount);
+        NIMBLE_CHECK_EQ(stream.numChunks, stream.chunkRows.size());
+        uint32_t accumulatedRows = 0;
+        for (const auto& row : stream.chunkRows) {
+          accumulatedRows += row;
+          streamChunkRows.push_back(accumulatedRows);
+        }
+        NIMBLE_CHECK_EQ(stream.numChunks, stream.chunkOffsets.size());
+        for (const auto& offset : stream.chunkOffsets) {
+          streamChunkOffsets.push_back(offset);
+        }
+      }
+    }
+
+    const uint32_t numStreams = streamChunkCounts.size() / groupStripeCount;
+
+    auto stripeChunkStats = serialization::CreateStripeChunkStats(
+        chunkBuilder,
+        numStreams,
+        chunkBuilder.CreateVector(streamChunkCounts),
+        chunkBuilder.CreateVector(streamChunkRows),
+        chunkBuilder.CreateVector(streamChunkOffsets));
+    chunkBuilder.Finish(stripeChunkStats);
+
+    result.chunkStatsGroupSizes.push_back(chunkBuilder.GetSize());
+    result.chunkStatsGroups.append(
+        reinterpret_cast<const char*>(chunkBuilder.GetBufferPointer()),
+        chunkBuilder.GetSize());
+
+    // Build empty IndexPartition for root ClusterIndex to work.
+    flatbuffers::FlatBufferBuilder groupBuilder;
+    groupBuilder.Finish(
+        serialization::CreateClusterIndexPartition(groupBuilder));
+
+    uint64_t offset = result.indexPartitions.size();
+    uint32_t size = groupBuilder.GetSize();
+    result.indexPartitions.append(
+        reinterpret_cast<const char*>(groupBuilder.GetBufferPointer()), size);
+
+    auto metadataSection = serialization::CreateMetadataSection(
+        builder,
+        offset,
+        size,
+        serialization::CompressionType_Uncompressed,
+        size);
+    clusterIndexGroupMetadataOffsets.push_back(metadataSection);
+  }
+
+  auto indexPartitionsVector =
+      builder.CreateVector(clusterIndexGroupMetadataOffsets);
+
+  auto index = serialization::CreateClusterIndex(
+      builder,
+      0 /* index_columns = null */,
+      0 /* sort_orders = null */,
+      indexPartitionsVector);
+
+  builder.Finish(index);
+
+  result.rootIndex = std::string(
+      reinterpret_cast<const char*>(builder.GetBufferPointer()),
+      builder.GetSize());
+
+  return result;
+}
+
+std::unique_ptr<ClusterIndex> ClusterIndexTestBase::createClusterIndex(
+    const IndexBuffers& indexBuffers,
+    std::shared_ptr<velox::ReadFile> keyStreamFile,
+    bool pinIndex,
+    bool preloadIndex,
+    bool withKeyStreamLocator) {
+  Section indexSection{MetadataBuffer(toPinnedBuffer(
+      MetadataBuffer::decompress(
+          toBufferPtr(indexBuffers.rootIndex, pool_.get()),
+          CompressionType::Uncompressed,
+          pool_.get())))};
+
+  metadataFile_ =
+      std::make_shared<velox::InMemoryReadFile>(indexBuffers.indexPartitions);
+  ioStats_ = std::make_shared<velox::io::IoStatistics>();
+  auto metadataInput = MetadataInput::create(
+      metadataFile_.get(),
+      MetadataInput::Options{.pool = pool_.get(), .ioStats = ioStats_});
+
+  keyStreamIoStats_ = std::make_shared<velox::io::IoStatistics>();
+  auto dataInput = std::make_shared<DirectDataInput>(
+      keyStreamFile != nullptr ? std::move(keyStreamFile) : metadataFile_,
+      DirectDataInput::Options{
+          .pool = pool_.get(),
+          .ioStats = keyStreamIoStats_,
+      });
+
+  // Stands in for the stripe group metadata, which locates the key stream of
+  // each stripe in the Stripe layout.
+  IndexLookup::KeyStreamLocator keyStreamLocator;
+  if (withKeyStreamLocator) {
+    keyStreamLocator = [stripeKeyStreams = indexBuffers.stripeKeyStreams](
+                           uint32_t stripeGroup,
+                           std::span<const uint32_t> streamIds) {
+      NIMBLE_CHECK_EQ(streamIds.size(), 1);
+      NIMBLE_CHECK_EQ(streamIds[0], kKeyStreamId);
+      return stripeKeyStreams.at(stripeGroup);
+    };
+  }
+  return ClusterIndexTestHelper::create(
+      std::move(indexSection),
+      pool_.get(),
+      std::move(metadataInput),
+      std::move(dataInput),
+      pinIndex,
+      preloadIndex,
+      std::move(keyStreamLocator));
+}
+
+std::shared_ptr<ChunkStatsGroup> ClusterIndexTestBase::createChunkStats(
+    const IndexBuffers& indexBuffers,
+    uint32_t stripeGroupIndex) {
+  // Compute firstStripe and stripeCount from stripeGroupIndices.
+  uint32_t firstStripe = 0;
+  uint32_t stripeCount = 0;
+  for (uint32_t s = 0; s < indexBuffers.stripeGroupIndices.size(); ++s) {
+    if (indexBuffers.stripeGroupIndices[s] == stripeGroupIndex) {
+      if (stripeCount == 0) {
+        firstStripe = s;
+      }
+      ++stripeCount;
+    }
+  }
+
+  // Find the ChunkStatsGroup data for this group using recorded sizes.
+  NIMBLE_CHECK_LT(stripeGroupIndex, indexBuffers.chunkStatsGroupSizes.size());
+  size_t offset = 0;
+  for (uint32_t g = 0; g < stripeGroupIndex; ++g) {
+    offset += indexBuffers.chunkStatsGroupSizes[g];
+  }
+
+  auto chunkStatsBuffer = std::make_unique<MetadataBuffer>(toPinnedBuffer(
+      MetadataBuffer::decompress(
+          toBufferPtr(
+              std::string_view(
+                  indexBuffers.chunkStatsGroups.data() + offset,
+                  indexBuffers.chunkStatsGroupSizes[stripeGroupIndex]),
+              pool_.get()),
+          CompressionType::Uncompressed,
+          pool_.get())));
+
+  return ChunkStatsGroup::create(
+      ChunkStatsVersion::kV1,
+      firstStripe,
+      stripeCount,
+      std::move(chunkStatsBuffer),
+      *pool_);
+}
+
+} // namespace facebook::nimble::index::test

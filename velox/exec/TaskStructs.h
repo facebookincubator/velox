@@ -24,6 +24,7 @@
 #include "velox/exec/TaskStats.h"
 
 #include <folly/CPortability.h>
+#include <folly/container/F14Map.h>
 
 #include <limits>
 #include <memory>
@@ -35,6 +36,7 @@
 namespace facebook::velox::exec {
 
 class Driver;
+class ExchangeClient;
 class JoinBridge;
 class LocalExchangeMemoryManager;
 class MergeSource;
@@ -59,13 +61,18 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(
 }
 
 struct BarrierState {
-  int32_t numRequested;
+  /// Tracks the number of peers that have entered the current barrier round.
+  uint32_t numRequested{0};
+  /// Tracks the number of unfinished peers expected in the current round.
+  uint32_t numPeers{0};
+  /// Identifies the pipeline that owns this barrier.
+  std::optional<uint32_t> pipelineId;
+  /// Holds drivers waiting at the current barrier round.
   std::vector<std::shared_ptr<Driver>> drivers;
-  /// Promises given to non-last peer drivers that the last driver will collect
-  /// all hashtables from the peers and assembles them into one (HashBuilder
-  /// operator does that). After the last drier done its work, the promises are
-  /// fulfilled and the non-last drivers can continue.
-  std::vector<ContinuePromise> allPeersFinishedPromises;
+  /// Promises given to non-last peer drivers. After the last driver completes
+  /// the barrier's coordinated work, the promises are fulfilled and the
+  /// non-last drivers can continue.
+  std::vector<ContinuePromise> allPeersArrivedPromises;
 };
 
 using ConnectorSplitPreloadFunc =
@@ -94,10 +101,8 @@ class SplitsStore {
 
   /// Returns the next split to process.
   ///
-  /// @param driverId The driver id requesting the split. If set, a barrier
-  /// split will be delivered exactly once for each driver. If not set, all
-  /// barrier splits are cleared and no barrier split is returned. This is
-  /// used when cleaning up remaining remote splits during task termination.
+  /// @param driverId The driver id requesting the split. Barrier splits are
+  /// delivered exactly once for each driver.
   /// @param maxPreloadSplits Maximum number of splits to preload.
   /// @param preload Function to preload connector splits.
   /// @param split Output parameter for the next split.
@@ -106,7 +111,7 @@ class SplitsStore {
   /// @return true if a split is set or there are no more splits; false if the
   /// caller should retry when the future is fulfilled.
   virtual bool nextSplit(
-      std::optional<uint32_t> driverId,
+      uint32_t driverId,
       int maxPreloadSplits,
       const ConnectorSplitPreloadFunc& preload,
       Split& split,
@@ -124,6 +129,33 @@ class SplitsStore {
   /// `promises` should be set by caller (potentially outside a lock), to notify
   /// any waiters on the splits.
   void addSplit(Split split, std::vector<ContinuePromise>& promises);
+
+  /// Marks all splits acquired by the specified consumer as fully processed.
+  void finishSplits(uint32_t driverId);
+
+  /// Records one consumer closing and abandons its unfinished splits.
+  /// When all 'numConsumers' consumers have closed, abandons queued splits
+  /// and returns them for disposal outside the task lock. Appends outstanding
+  /// split waiters to 'promises'. Each consumer
+  /// must call this exactly once. Consumers that have not started still count.
+  std::deque<Split> finishConsumer(
+      uint32_t driverId,
+      uint32_t numConsumers,
+      std::vector<ContinuePromise>& promises);
+
+  /// Signals no more splits and abandons the queue. Returns queued splits for
+  /// disposal outside the task lock and appends split waiters to 'promises'.
+  /// Acquired splits remain owned by their consumers until completion or close.
+  std::deque<Split> discardQueuedSplits(std::vector<ContinuePromise>& promises);
+
+  bool allConsumersFinished() const {
+    return allConsumersFinished_;
+  }
+
+  /// Returns the splits added but not yet returned by nextSplit().
+  const std::deque<Split>& queuedSplits() const {
+    return splits_;
+  }
 
   /// Return the number of waiters waiting for new splits.
   int numWaiters() const {
@@ -147,29 +179,54 @@ class SplitsStore {
   }
 
  protected:
+  // Removes a queued split and records its count and weight for 'driverId'.
   Split getSplit(
+      uint32_t driverId,
       int maxPreloadSplits,
       const ConnectorSplitPreloadFunc& preload);
 
   ContinueFuture makeFuture();
 
-  bool tryGetBarrier(std::optional<uint32_t> driverId, Split& split);
+  bool tryGetBarrier(uint32_t driverId, Split& split);
+
+  // Arrived (added), but not distributed yet, splits.
+  std::deque<Split> splits_;
+  // Signal, that no more splits will arrive.
+  bool noMoreSplits_{false};
+
+ private:
+  // Removes a driver's acquired work from running counters and returns its
+  // split count.
+  int32_t releaseRunningSplits(uint32_t driverId);
+
+  // Removes one split's count and weight from the queued counters.
+  void removeQueuedSplitStats(const Split& split);
 
   const bool remoteSplit_;
   TaskStats* taskStats_{};
   folly::F14FastSet<std::shared_ptr<connector::ConnectorSplit>>*
       preloadingSplits_{};
 
-  // Arrived (added), but not distributed yet, splits.
-  std::deque<Split> splits_;
   // The map from driver id to barrier splits.
   std::unordered_map<uint32_t, Split> barrierSplits_;
 
-  // Signal, that no more splits will arrive.
-  bool noMoreSplits_{false};
-
   // Blocking promises given out when out of splits to distribute.
   std::vector<ContinuePromise> promises_;
+
+  // Work acquired by a consumer until it completes or the consumer closes.
+  struct RunningSplits {
+    int32_t numSplits{0};
+    // Excludes weights of remote and index splits.
+    int64_t weight{0};
+  };
+  // Prevents one consumer's closure from releasing another consumer's work.
+  folly::F14FastMap<uint32_t, RunningSplits> runningSplits_;
+
+  // Consumers that have closed for this source and split group.
+  std::unordered_set<uint32_t> finishedConsumers_;
+
+  // Prevents accepting more work after the last consumer closes.
+  bool allConsumersFinished_{false};
 };
 
 /// Structure contains the current info on splits for a particular plan node.
@@ -185,6 +242,12 @@ struct SplitsState {
 
   /// Map split group id -> split store.
   std::unordered_map<uint32_t, std::unique_ptr<SplitsStore>> groupSplitsStores;
+
+  /// Exchange client of a leaf node that requires one, other than a
+  /// MergeExchangeNode. Set when the task creates the client. The task
+  /// forwards remote splits and 'no more splits' to it as they arrive. Null
+  /// for other plan nodes.
+  std::shared_ptr<ExchangeClient> exchangeClient;
 
   /// We need these due to having promises in the structure.
   SplitsState() = default;
@@ -209,8 +272,18 @@ struct SplitGroupState {
   /// This map will contain all other custom bridges.
   std::unordered_map<core::PlanNodeId, std::shared_ptr<JoinBridge>>
       customBridges;
-  /// Holds states for Task::allPeersFinished.
+  /// Holds states for Task::allPeersArrived.
   std::unordered_map<core::PlanNodeId, BarrierState> barriers;
+  /// Tracks the number of operators that won't participate in future barriers,
+  /// keyed by plan node ID and pipeline ID.
+  ///
+  /// NOTE: 'pipelineId' is needed here even though build and probe barriers
+  /// alternate. Unlike the per-round barrier state, the finished count persists
+  /// across spill rounds. Both pipelines share the same 'planNodeId', so keying
+  /// only by 'planNodeId' would let a finished probe reduce the next build
+  /// barrier's expected peer count, causing it to complete too early.
+  std::unordered_map<core::PlanNodeId, std::unordered_map<uint32_t, uint32_t>>
+      finishedBarrierPeers;
 
   /// Map of merge sources keyed on LocalMergeNode plan node ID.
   std::
@@ -250,6 +323,7 @@ struct SplitGroupState {
       bridges.clear();
       customBridges.clear();
       barriers.clear();
+      finishedBarrierPeers.clear();
     }
     localMergeSources.clear();
     mergeJoinSources.clear();

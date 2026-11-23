@@ -20,10 +20,16 @@
 
 namespace facebook::velox::functions {
 
-void registerMapConcatFunction(const std::string& name);
+void registerMapConcatFunction(
+    const std::string& name,
+    std::string_view defaultOwner = {});
 
-void registerMapConcatAllowSingleArg(const std::string& name);
+void registerMapConcatAllowSingleArg(
+    const std::string& name,
+    std::string_view defaultOwner = {});
 
-void registerMapConcatEmptyNullsFunction(const std::string& name);
+void registerMapConcatEmptyNullsFunction(
+    const std::string& name,
+    std::string_view defaultOwner = {});
 
 } // namespace facebook::velox::functions

@@ -20,6 +20,7 @@
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
@@ -58,6 +59,91 @@ class CastExprTest : public functions::test::CastBaseTest {
   std::shared_ptr<core::ConstantTypedExpr> makeConstantNullExpr(TypeKind kind) {
     return std::make_shared<core::ConstantTypedExpr>(
         createType(kind, {}), variant(kind));
+  }
+
+  // Checks CAST and TRY_CAST from VARCHAR to 'typeName' (real or double) with
+  // cast_string_to_floating_point_lenient_inf_nan set: every C-style spelling
+  // of infinity and NaN is accepted, an overflowing number still gives
+  // infinity, and the inputs that fast_float would also parse but Presto
+  // rejects stay rejected.
+  template <typename T>
+  void testLenientInfNanCast(
+      const std::string& typeName,
+      const std::string& typeNameInErrors) {
+    const T kInfinity = std::numeric_limits<T>::infinity();
+    const T kNotANumber = std::numeric_limits<T>::quiet_NaN();
+
+    std::vector<std::optional<std::string>> inputs;
+    std::vector<std::optional<T>> expected;
+    for (const auto& text :
+         {"inf",
+          "Inf",
+          "INF",
+          "+inf",
+          "infinity",
+          "INFINITY",
+          "InfiNiTy",
+          "+infinity",
+          "Infinity",
+          "+Infinity",
+          " inf ",
+          "\tINFINITY\n",
+          "1e400"}) {
+      inputs.push_back(text);
+      expected.push_back(kInfinity);
+    }
+    for (const auto& text :
+         {"-inf",
+          "-INF",
+          "-infinity",
+          "-InfiNiTy",
+          "-Infinity",
+          "  -inf  ",
+          "-1e400"}) {
+      inputs.push_back(text);
+      expected.push_back(-kInfinity);
+    }
+    for (const auto& text :
+         {"nan", "NAN", "nAn", "NaN", "+nan", "-nan", "-NaN", " nan "}) {
+      inputs.push_back(text);
+      expected.push_back(kNotANumber);
+    }
+    testCast<std::string, T>(typeName, inputs, expected);
+    testTryCast<std::string, T>(typeName, inputs, expected);
+    // The same through constant and dictionary encodings.
+    testCast(
+        makeNullableFlatVector<std::string>(inputs),
+        makeNullableFlatVector<T>(expected));
+
+    // Partial words, trailing characters, a space between the sign and the
+    // word, and the nan(n-char-sequence) form are still rejected.
+    const std::vector<std::string> invalid = {
+        "in",
+        "infinit",
+        "infinityy",
+        "inf.",
+        "- inf",
+        "na",
+        "nan.",
+        "nan(1)",
+        "nan()",
+        "nan(ind)",
+        "1.2a",
+        "",
+        "   "};
+    std::vector<std::optional<std::string>> invalidInputs;
+    for (const auto& text : invalid) {
+      testInvalidCast<std::string>(
+          typeName,
+          {text},
+          fmt::format(
+              "Cannot cast VARCHAR '{}' to {}", text, typeNameInErrors));
+      invalidInputs.push_back(text);
+    }
+    testTryCast<std::string, T>(
+        typeName,
+        invalidInputs,
+        std::vector<std::optional<T>>(invalidInputs.size(), std::nullopt));
   }
 
   template <typename T>
@@ -478,7 +564,7 @@ TEST_F(CastExprTest, realAndDoubleToString) {
           -std::numeric_limits<double>::quiet_NaN(),
       },
       {
-          "12345678901234567000.0",
+          "1.2345678901234567e+19",
           "123456789.01234567",
           "10000000.0",
           "12345.0",
@@ -491,7 +577,7 @@ TEST_F(CastExprTest, realAndDoubleToString) {
           "-12345.0",
           "-10000000.0",
           "-123456789.01234567",
-          "-12345678901234567000.0",
+          "-1.2345678901234567e+19",
           "Infinity",
           "-Infinity",
           "NaN",
@@ -520,7 +606,7 @@ TEST_F(CastExprTest, realAndDoubleToString) {
           -std::numeric_limits<float>::quiet_NaN(),
       },
       {
-          "12345678295994466000.0",
+          "1.2345678295994466e+19",
           "123456784.0",
           "10000000.0",
           "12345.0",
@@ -533,7 +619,7 @@ TEST_F(CastExprTest, realAndDoubleToString) {
           "-12345.0",
           "-10000000.0",
           "-123456784.0",
-          "-12345678295994466000.0",
+          "-1.2345678295994466e+19",
           "Infinity",
           "-Infinity",
           "NaN",
@@ -1259,6 +1345,38 @@ TEST_F(CastExprTest, primitiveValidCornerCases) {
   }
 }
 
+TEST_F(CastExprTest, stringToFloatingPointLenientInfNan) {
+  // By default only the Presto spellings "Infinity" and "NaN" are accepted, in
+  // exactly that letter case (see primitiveInvalidCornerCases). The
+  // cast_string_to_floating_point_lenient_inf_nan query config also accepts
+  // the C-style spellings "inf", "infinity" and "nan" in any letter case.
+  setCastStringToFloatingPointLenientInfNan(true);
+  testLenientInfNanCast<float>("real", "REAL");
+  testLenientInfNanCast<double>("double", "DOUBLE");
+
+  // Casts to other types do not change.
+  testInvalidCast<std::string>("bigint", {"inf"}, "Invalid leading character");
+  testInvalidCast<std::string>("integer", {"nan"}, "Invalid leading character");
+  testInvalidCast<std::string>(
+      "boolean", {"nan"}, "Cannot cast VARCHAR 'nan' to BOOLEAN");
+
+  // Switching the config off restores the Presto spellings only.
+  setCastStringToFloatingPointLenientInfNan(false);
+  testInvalidCast<std::string>(
+      "real", {"inf"}, "Cannot cast VARCHAR 'inf' to REAL");
+  testInvalidCast<std::string>(
+      "double", {"nan"}, "Cannot cast VARCHAR 'nan' to DOUBLE");
+  testInvalidCast<std::string>(
+      "double", {"INFINITY"}, "Cannot cast VARCHAR 'INFINITY' to DOUBLE");
+  testTryCast<std::string, double>(
+      "double",
+      {"inf", "nan", "-Infinity", "NaN"},
+      {std::nullopt,
+       std::nullopt,
+       -std::numeric_limits<double>::infinity(),
+       std::numeric_limits<double>::quiet_NaN()});
+}
+
 TEST_F(CastExprTest, truncateVsRound) {
   // Testing round cast from double to int.
   testCast<double, int>(
@@ -1451,6 +1569,214 @@ TEST_F(CastExprTest, mapCast) {
     ASSERT_TRUE(result->isNullAt(0));
     ASSERT_TRUE(result->isNullAt(1));
   }
+}
+
+TEST_F(CastExprTest, flatMapCast) {
+  auto testFlatMapCast = [&](const VectorPtr& input,
+                             const std::string& expression,
+                             const std::optional<SelectivityVector>& rows =
+                                 std::nullopt) {
+    SCOPED_TRACE(expression);
+    auto expected =
+        evaluate(expression, makeRowVector({withMapBase(input)}), rows);
+    auto result = evaluate(expression, makeRowVector({input}), rows);
+    EXPECT_EQ(
+        result->wrappedVector()->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    result->validate();
+    assertEqualVectors(
+        expected,
+        withMapBase(result),
+        rows.value_or(SelectivityVector(input->size())));
+    return result;
+  };
+
+  auto intKeys = makeNullableFlatMapVector<int32_t, int64_t>({
+      {{{1, 10}, {2, 20}}},
+      std::nullopt,
+      {{{1, std::nullopt}, {3, 30}}},
+      common::testutil::optionalEmpty,
+      {{{2, 21}}},
+  });
+
+  {
+    auto result = testFlatMapCast(intKeys, "cast(c0 as map(bigint, bigint))");
+    const auto* flatMap = result->wrappedVector()->as<FlatMapVector>();
+    ASSERT_EQ(flatMap->numDistinctKeys(), 3);
+    ASSERT_EQ(flatMap->mapValuesAt(0), intKeys->mapValuesAt(0));
+    ASSERT_FALSE(flatMap->testingSharesKeyIndex(*intKeys));
+  }
+
+  {
+    auto result = testFlatMapCast(intKeys, "cast(c0 as map(integer, double))");
+    const auto* flatMap = result->wrappedVector()->as<FlatMapVector>();
+    ASSERT_EQ(flatMap->distinctKeys(), intKeys->distinctKeys());
+    ASSERT_TRUE(flatMap->testingSharesKeyIndex(*intKeys));
+  }
+
+  testFlatMapCast(intKeys, "cast(c0 as map(varchar, varchar))");
+
+  auto arrayValues = withFlatMapBase(makeMapVector(
+      {0, 2, 2, 4, 4},
+      makeFlatVector<int32_t>({1, 2, 1, 3, 2}),
+      makeNullableArrayVector<int32_t>({
+          {{1, 2}},
+          {{3, std::nullopt}},
+          std::nullopt,
+          {{4, 5, 6}},
+          {std::vector<std::optional<int32_t>>{}},
+      }),
+      {1}));
+
+  testFlatMapCast(arrayValues, "cast(c0 as map(bigint, bigint[]))");
+
+  {
+    SelectivityVector rows(5);
+    rows.setValid(1, false);
+    rows.setValid(3, false);
+    rows.updateBounds();
+    testFlatMapCast(arrayValues, "cast(c0 as map(bigint, bigint[]))", rows);
+  }
+
+  {
+    SelectivityVector rows(5);
+    rows.setValid(0, false);
+    rows.setValid(4, false);
+    rows.updateBounds();
+    testFlatMapCast(intKeys, "cast(c0 as map(bigint, double))", rows);
+  }
+
+  testFlatMapCast(
+      wrapInDictionary(makeIndicesInReverse(5), arrayValues),
+      "cast(c0 as map(bigint, bigint[]))");
+  testFlatMapCast(
+      BaseVector::wrapInDictionary(
+          makeNulls(5, nullEvery(2)), makeIndicesInReverse(5), 5, intKeys),
+      "cast(c0 as map(bigint, double))");
+  testFlatMapCast(
+      BaseVector::wrapInConstant(10, 2, intKeys),
+      "cast(c0 as map(bigint, double))");
+
+  testFlatMapCast(
+      makeFlatMapVector<int32_t, int64_t>({{}, {}, {}}),
+      "cast(c0 as map(bigint, double))");
+
+  auto doubleKeys = makeFlatMapVector<double, int64_t>({
+      {{1.2, 1}},
+      {{1.4, 2}, {2.0, 3}},
+      {},
+      {{2.0, 4}},
+  });
+
+  {
+    auto result =
+        testFlatMapCast(doubleKeys, "cast(c0 as map(bigint, bigint))");
+    ASSERT_EQ(
+        result->wrappedVector()->as<FlatMapVector>()->numDistinctKeys(), 2);
+  }
+
+  {
+    auto sameRowDuplicates = makeFlatMapVector<double, int64_t>({
+        {{1.2, 1}, {1.4, 2}},
+        {{1.4, 3}},
+        {{2.0, 4}},
+    });
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"}});
+    auto result = evaluate(
+        "cast(c0 as map(bigint, bigint))", makeRowVector({sameRowDuplicates}));
+    const auto* flatMap = result->wrappedVector()->as<FlatMapVector>();
+    ASSERT_NE(flatMap, nullptr);
+    ASSERT_EQ(flatMap->numDistinctKeys(), 2);
+    result->validate();
+    assertEqualVectors(
+        makeMapVector<int64_t, int64_t>({
+            {{1, 2}},
+            {{1, 3}},
+            {{2, 4}},
+        }),
+        withMapBase(result));
+
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "true"}});
+    VELOX_ASSERT_THROW(
+        evaluate(
+            "cast(c0 as map(bigint, bigint))",
+            makeRowVector({sameRowDuplicates})),
+        "Duplicate map key was found: 1");
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"}});
+  }
+
+  for (const bool nullFirst : {true, false}) {
+    SCOPED_TRACE(fmt::format("nullFirst: {}", nullFirst));
+    auto inMap = AlignedBuffer::allocate<bool>(3, pool(), false);
+    bits::setBit(inMap->asMutable<uint64_t>(), 0);
+    bits::setBit(inMap->asMutable<uint64_t>(), 2);
+    VectorPtr values = makeFlatVector<int64_t>({10, 20, 30});
+    auto nullValuesCollision = std::make_shared<FlatMapVector>(
+        pool(),
+        MAP(DOUBLE(), BIGINT()),
+        nullptr,
+        3,
+        makeFlatVector<double>({1.2, 1.4}),
+        nullFirst ? std::vector<VectorPtr>{nullptr, values}
+                  : std::vector<VectorPtr>{values, nullptr},
+        nullFirst ? std::vector<BufferPtr>{nullptr, inMap}
+                  : std::vector<BufferPtr>{inMap, nullptr});
+    auto expected = makeMapVector<int64_t, int64_t>({
+        {{1, 10}},
+        {},
+        {{1, 30}},
+    });
+    for (const auto* throwOnDuplicateKeys : {"false", "true"}) {
+      SCOPED_TRACE(throwOnDuplicateKeys);
+      queryCtx_->testingOverrideConfigUnsafe(
+          {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys,
+            throwOnDuplicateKeys}});
+      auto result = evaluate(
+          "cast(c0 as map(bigint, bigint))",
+          makeRowVector({nullValuesCollision}));
+      const auto* flatMap = result->wrappedVector()->as<FlatMapVector>();
+      ASSERT_NE(flatMap, nullptr);
+      ASSERT_EQ(flatMap->numDistinctKeys(), 1);
+      result->validate();
+      assertEqualVectors(expected, withMapBase(result));
+    }
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"}});
+  }
+
+  {
+    auto unselectedKeys = makeFlatMapVector<std::string, int64_t>({
+        {{"1", 1}},
+        {{"2", 2}, {"x", 3}},
+        {{"1", 4}},
+    });
+    SelectivityVector rows(3);
+    rows.setValid(1, false);
+    rows.updateBounds();
+    auto result = testFlatMapCast(
+        unselectedKeys, "cast(c0 as map(bigint, bigint))", rows);
+    ASSERT_EQ(
+        result->wrappedVector()->as<FlatMapVector>()->numDistinctKeys(), 1);
+  }
+
+  VELOX_ASSERT_THROW(
+      evaluate("cast(c0 as map(timestamp, bigint))", makeRowVector({intKeys})),
+      "Conversion to Timestamp is not supported");
+  testFlatMapCast(intKeys, "try_cast(c0 as map(timestamp, bigint))");
+  testFlatMapCast(intKeys, "try(cast(c0 as map(timestamp, bigint)))");
+
+  auto stringValues = makeFlatMapVector<int32_t, std::string>({
+      {{1, "1"}, {2, "x"}},
+      {{1, "2"}},
+      {{2, "3"}},
+  });
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "cast(c0 as map(bigint, integer))", makeRowVector({stringValues})),
+      "Cannot cast VARCHAR 'x' to INT");
+  testFlatMapCast(stringValues, "try_cast(c0 as map(bigint, integer))");
 }
 
 TEST_F(CastExprTest, arrayCast) {
@@ -1838,6 +2164,14 @@ TEST_F(CastExprTest, decimalToDecimal) {
            69'000'000'000,
            72'000'000'000},
           DECIMAL(20, 11)));
+
+  // Reinterpret when scale is unchanged.
+  testCast(
+      shortFlat,
+      makeFlatVector<int64_t>({-3, -2, -1, 0, 55, 69, 72}, DECIMAL(18, 2)));
+  testCast(
+      longFlat,
+      makeFlatVector<int128_t>({-201, -109, 0, 105, 208}, DECIMAL(38, 2)));
 
   // short to long, scale down.
   testCast(
@@ -2311,39 +2645,39 @@ TEST_F(CastExprTest, doubleToDecimal) {
       DOUBLE(),
       DECIMAL(10, 2),
       {9999999999999999999999.99},
-      "Cannot cast DOUBLE '1E22' to DECIMAL(10, 2). Result overflows.");
+      "Cannot cast DOUBLE '1e+22' to DECIMAL(10, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(10, 2),
       {static_cast<double>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1)},
-      "Cannot cast DOUBLE '9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+      "Cannot cast DOUBLE '9.223372036854776e+18' to DECIMAL(10, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(10, 2),
       {static_cast<double>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1)},
-      "Cannot cast DOUBLE '-9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+      "Cannot cast DOUBLE '-9.223372036854776e+18' to DECIMAL(10, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(20, 2),
       {static_cast<double>(DecimalUtil::kLongDecimalMax)},
-      "Cannot cast DOUBLE '1E38' to DECIMAL(20, 2). Result overflows.");
+      "Cannot cast DOUBLE '1e+38' to DECIMAL(20, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(20, 2),
       {static_cast<double>(DecimalUtil::kLongDecimalMin)},
-      "Cannot cast DOUBLE '-1E38' to DECIMAL(20, 2). Result overflows.");
+      "Cannot cast DOUBLE '-1e+38' to DECIMAL(20, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(38, 2),
       {std::numeric_limits<double>::max()},
-      "Cannot cast DOUBLE '1.7976931348623157E308' to DECIMAL(38, 2). Result overflows.");
+      "Cannot cast DOUBLE '1.7976931348623157e+308' to DECIMAL(38, 2). Result overflows.");
   testThrow<double>(
       DOUBLE(),
       DECIMAL(38, 2),
       {std::numeric_limits<double>::lowest()},
-      "Cannot cast DOUBLE '-1.7976931348623157E308' to DECIMAL(38, 2). Result overflows.");
+      "Cannot cast DOUBLE '-1.7976931348623157e+308' to DECIMAL(38, 2). Result overflows.");
   testCast(
       makeConstant<double>(std::numeric_limits<double>::min(), 1),
       makeConstant<int128_t>(0, 1, DECIMAL(38, 2)));
@@ -2427,33 +2761,33 @@ TEST_F(CastExprTest, realToDecimal) {
       DECIMAL(10, 2),
       {static_cast<float>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::max()) + 1)},
-      "Cannot cast REAL '9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+      "Cannot cast REAL '9.223372036854776e+18' to DECIMAL(10, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(10, 2),
       {static_cast<float>(
           static_cast<int128_t>(std::numeric_limits<int64_t>::min()) - 1)},
-      "Cannot cast REAL '-9223372036854776000' to DECIMAL(10, 2). Result overflows.");
+      "Cannot cast REAL '-9.223372036854776e+18' to DECIMAL(10, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(20, 2),
       {static_cast<float>(DecimalUtil::kLongDecimalMax)},
-      "Cannot cast REAL '9.999999680285692E37' to DECIMAL(20, 2). Result overflows.");
+      "Cannot cast REAL '9.999999680285692e+37' to DECIMAL(20, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(20, 2),
       {static_cast<float>(DecimalUtil::kLongDecimalMin)},
-      "Cannot cast REAL '-9.999999680285692E37' to DECIMAL(20, 2). Result overflows.");
+      "Cannot cast REAL '-9.999999680285692e+37' to DECIMAL(20, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(38, 2),
       {std::numeric_limits<float>::max()},
-      "Cannot cast REAL '3.4028234663852886E38' to DECIMAL(38, 2). Result overflows.");
+      "Cannot cast REAL '3.4028234663852886e+38' to DECIMAL(38, 2). Result overflows.");
   testThrow<float>(
       REAL(),
       DECIMAL(38, 2),
       {std::numeric_limits<float>::lowest()},
-      "Cannot cast REAL '-3.4028234663852886E38' to DECIMAL(38, 2). Result overflows.");
+      "Cannot cast REAL '-3.4028234663852886e+38' to DECIMAL(38, 2). Result overflows.");
   testCast(
       makeConstant<float>(std::numeric_limits<float>::min(), 1),
       makeConstant<int128_t>(0, 1, DECIMAL(38, 2)));
@@ -2762,7 +3096,7 @@ TEST_F(CastExprTest, lazyInput) {
 
 TEST_F(CastExprTest, identicalTypes) {
   auto data = makeRowVector({
-      makeFlatVector<int64_t>(10, folly::identity),
+      makeFlatIdentityVector<int64_t>(10),
   });
   auto result = evaluate("cast(c0 as bigint)", data);
   ASSERT_EQ(result.get(), data->childAt(0).get());
@@ -3172,106 +3506,11 @@ TEST_F(CastExprTest, timeToVarcharCast) {
 }
 
 TEST_F(CastExprTest, timeToBigintCast) {
-  {
-    // Test casting TIME to BIGINT
-
-    // Test various TIME values (milliseconds since midnight)
-    // 0 = 00:00:00.000
-    // 3661000 = 01:01:01.000
-    // 43200000 = 12:00:00.000 (noon)
-    // 86399999 = 23:59:59.999
-    auto timeVector =
-        makeFlatVector<int64_t>({0, 3661000, 43200000, 86399999}, TIME());
-
-    auto result = evaluate<FlatVector<int64_t>>(
-        "cast(c0 as bigint)", makeRowVector({timeVector}));
-
-    // Should return the same values since TIME is already stored as int64_t
-    // milliseconds
-    auto expected = makeFlatVector<int64_t>({0, 3661000, 43200000, 86399999});
-
-    assertEqualVectors(expected, result);
-  }
-
-  {
-    // Test casting TIME to BIGINT with nulls
-    auto timeVector = makeNullableFlatVector<int64_t>(
-        {0, std::nullopt, 43200000, std::nullopt}, TIME());
-
-    auto result = evaluate<FlatVector<int64_t>>(
-        "cast(c0 as bigint)", makeRowVector({timeVector}));
-
-    auto expected = makeNullableFlatVector<int64_t>(
-        {0, std::nullopt, 43200000, std::nullopt});
-
-    assertEqualVectors(expected, result);
-  }
-
-  {
-    // Test try_cast for TIME to BIGINT
-    auto timeVector = makeFlatVector<int64_t>({0, 43200000}, TIME());
-
-    auto result = evaluate<FlatVector<int64_t>>(
-        "try_cast(c0 as bigint)", makeRowVector({timeVector}));
-
-    auto expected = makeFlatVector<int64_t>({0, 43200000});
-
-    assertEqualVectors(expected, result);
-  }
-
-  {
-    // Test constant TIME vector cast to BIGINT (non-null)
-    // This tests the optimization path for constant vectors
-    auto constantTimeVector = BaseVector::wrapInConstant(
-        1000, 0, makeFlatVector<int64_t>({43200000}, TIME()));
-
-    auto result =
-        evaluate("cast(c0 as bigint)", makeRowVector({constantTimeVector}));
-
-    // Should return a constant vector with the same value
-    auto expected = BaseVector::wrapInConstant(
-        1000, 0, makeFlatVector<int64_t>({43200000}));
-
-    assertEqualVectors(expected, result);
-    // Verify the result is actually constant-encoded (optimization worked)
-    ASSERT_TRUE(result->isConstantEncoding());
-  }
-
-  {
-    // Test constant TIME vector cast to BIGINT (null)
-    // This tests the optimization path for null constant vectors
-    auto nullTimeVector = BaseVector::createNullConstant(TIME(), 500, pool());
-
-    auto result =
-        evaluate("cast(c0 as bigint)", makeRowVector({nullTimeVector}));
-
-    // Should return a null constant vector
-    auto expected = BaseVector::createNullConstant(BIGINT(), 500, pool());
-
-    assertEqualVectors(expected, result);
-    // Verify the result is actually constant-encoded (optimization worked)
-    ASSERT_TRUE(result->isConstantEncoding());
-    ASSERT_TRUE(result->isNullAt(0));
-  }
-
-  {
-    // Test constant TIME vector cast to BIGINT with different sizes
-    // This ensures the optimization correctly handles different vector sizes
-    for (auto size : {1, 10, 100, 1000}) {
-      auto constantTimeVector = BaseVector::wrapInConstant(
-          size, 0, makeFlatVector<int64_t>({86399999}, TIME()));
-
-      auto result =
-          evaluate("cast(c0 as bigint)", makeRowVector({constantTimeVector}));
-
-      auto expected = BaseVector::wrapInConstant(
-          size, 0, makeFlatVector<int64_t>({86399999}));
-
-      assertEqualVectors(expected, result);
-      ASSERT_TRUE(result->isConstantEncoding());
-      ASSERT_EQ(result->size(), size);
-    }
-  }
+  testCast<int64_t, int64_t>(
+      TIME(),
+      BIGINT(),
+      {0, 3'661'000, 43'200'000, 86'399'999, std::nullopt},
+      {0, 3'661'000, 43'200'000, 86'399'999, std::nullopt});
 }
 
 TEST_F(CastExprTest, varcharToTimeCast) {
@@ -3445,7 +3684,7 @@ TEST_F(CastExprTest, varcharToTimeCast) {
     // Should throw error for microseconds
     VELOX_ASSERT_THROW(
         evaluate(castExpr, makeRowVector({varcharVector})),
-        "Microsecond precision not supported");
+        "fractional precision exceeds 3 digits");
 
     // Test with try_cast - should return null for microseconds
     auto tryCastExpr = makeCastExpr(inputField, TIME(), true);

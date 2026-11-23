@@ -18,6 +18,8 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
+
 namespace facebook::velox::exec::rpc {
 namespace {
 
@@ -247,6 +249,175 @@ TEST(CongestionControllerTest, baselineTracksSustainedLatencyAndRecovers) {
     feedWindow(window, 2'000'000);
   }
   EXPECT_GT(window.limit(), 4);
+}
+
+// Mild latency elevation must move the window off the floor. One
+// recomputation changes it by stepCoef*sqrt(w) - w*(1 - gradient); at w = 1
+// with gradient 0.8 that is +0.8, and an integer-valued window truncated 1.8
+// back to 1 and discarded it, every window, forever. Accumulating in floating
+// point lets those sub-unit steps add up. Measured over 200 windows of the
+// same input: 1 before this change, 1024 after.
+TEST(CongestionControllerTest, mildCongestionMovesWindowOffTheFloor) {
+  auto window = CongestionController{1, 1024};
+  feedWindow(window, 1'000'000); // baseline = 1ms
+  // A few windows at 1.25ms: gradient ~0.8, before the baseline has chased it.
+  for (int round = 0; round < 5; ++round) {
+    feedWindow(window, 1'250'000);
+  }
+  EXPECT_GT(window.limit(), 1);
+
+  // Sustained, the baseline absorbs the elevation and the window keeps
+  // probing; the point is that it climbs at all, not where it stops.
+  for (int round = 0; round < 195; ++round) {
+    feedWindow(window, 1'250'000);
+  }
+  EXPECT_GE(window.limit(), 16);
+}
+
+// A caller-supplied ceiling must not push the window past what a double
+// converts back to. rpc.congestion.max_window is user-settable and unbounded,
+// and static_cast<double>(INT64_MAX) rounds *up* to 2^63; converting that back
+// to int64_t is undefined and yields INT64_MIN on x86, which would report a
+// negative admission limit and stall dispatch outright.
+TEST(CongestionControllerTest, hugeCeilingStillReportsAPositiveLimit) {
+  for (int64_t ceiling :
+       {std::numeric_limits<int64_t>::max(),
+        std::numeric_limits<int64_t>::max() - 1,
+        (int64_t{1} << 62)}) {
+    auto window = CongestionController{ceiling, ceiling};
+    EXPECT_GT(window.limit(), 0) << "ceiling=" << ceiling;
+    // Growth must not break it either.
+    feedWindow(window, 1'000'000);
+    feedWindow(window, 1'000'000);
+    EXPECT_GT(window.limit(), 0) << "after growth, ceiling=" << ceiling;
+  }
+}
+
+// numShrinks counts observable back-off, not accumulator wobble. Carrying the
+// window as a double means it can fall by a fraction of a unit while limit()
+// is unchanged; counting those would inflate the rpcCongestionShrinks runtime
+// stat and report back-off that never happened.
+TEST(CongestionControllerTest, shrinkCountTracksTheReportedLimit) {
+  auto window = CongestionController{8, 1024};
+  feedWindow(window, 1'000'000); // baseline = 1ms
+
+  // Alternate mild elevation and recovery so the accumulator moves both ways
+  // in sub-unit steps. Count only the times the reported limit actually fell.
+  int64_t observedDrops = 0;
+  for (int round = 0; round < 60; ++round) {
+    const int64_t before = window.limit();
+    feedWindow(window, (round % 2 == 0) ? 1'400'000 : 1'000'000);
+    if (window.limit() < before) {
+      ++observedDrops;
+    }
+  }
+  EXPECT_EQ(window.numShrinks(), observedDrops);
+  EXPECT_GT(observedDrops, 0);
+  EXPECT_EQ(window.numOverloadShrinks(), 0);
+
+  const int64_t beforeOverload = window.limit();
+  window.onError();
+  EXPECT_LT(window.limit(), beforeOverload);
+  EXPECT_EQ(window.numShrinks(), observedDrops + 1);
+  EXPECT_EQ(window.numOverloadShrinks(), 1);
+}
+
+// A backend that batches internally gets *faster* as concurrency rises until
+// it reaches its knee. The window must climb through that region: latency
+// falling as the window grows reads as gradient 1, which is the grow signal.
+// This one is a regression guard, not evidence for the fractional-window fix:
+// it passes with and without it, because at gradient 1 the step is already a
+// whole unit.
+// The risk this pins down is the composite one -- a window parked below the
+// knee sees the backend's worst latency, which then looks like congestion.
+TEST(CongestionControllerTest, climbsThroughBatchingKnee) {
+  constexpr int64_t kKnee = 6;
+  auto window = CongestionController{1, 1024};
+  // Latency model: 10ms at a window of 1, falling to 1ms at the knee, then
+  // rising again with queueing beyond it.
+  auto rttFor = [](int64_t windowSize) -> int64_t {
+    if (windowSize <= kKnee) {
+      return 10'000'000 - (windowSize - 1) * 1'800'000;
+    }
+    return 1'000'000 + (windowSize - kKnee) * 500'000;
+  };
+  for (int round = 0; round < 100; ++round) {
+    feedWindow(window, rttFor(window.limit()));
+  }
+  EXPECT_GE(window.limit(), kKnee);
+}
+
+TEST(CongestionControllerTest, growsOnePerCleanWindow) {
+  // No-latency completions grow the window additively without any RTT feed:
+  // one evidence window (kSamplesPerWindow = 8) of clean units lifts 2 -> 3.
+  // A multi-unit call counts each unit.
+  CongestionController window{2, 64};
+  window.setCleanMaxWindow(64);
+  window.onCleanUnits(7);
+  EXPECT_EQ(window.limit(), 2);
+  window.onCleanUnits(1);
+  EXPECT_EQ(window.limit(), 3);
+  window.onCleanUnits(16);
+  EXPECT_EQ(window.limit(), 5);
+}
+
+TEST(CongestionControllerTest, cleanGrowthScalesWithLimit) {
+  // The evidence bar scales with the window: at limit 16 a further +1 needs
+  // 16 clean units, so growth can never outrun evidence.
+  CongestionController window{16, 64};
+  window.setCleanMaxWindow(64);
+  window.onCleanUnits(15);
+  EXPECT_EQ(window.limit(), 16);
+  window.onCleanUnits(1);
+  EXPECT_EQ(window.limit(), 17);
+}
+
+TEST(CongestionControllerTest, errorResetsCleanProgress) {
+  // A throttle is never progress: banked clean units are discarded, so a
+  // trickle of rejections cannot ratchet the window up.
+  CongestionController window{4, 64};
+  window.setCleanMaxWindow(64);
+  window.onCleanUnits(7);
+  window.onError(); // 4 -> 2, progress reset
+  EXPECT_EQ(window.limit(), 2);
+  window.onCleanUnits(7);
+  EXPECT_EQ(window.limit(), 2);
+  window.onCleanUnits(1);
+  EXPECT_EQ(window.limit(), 3);
+}
+
+TEST(CongestionControllerTest, cleanGrowthNeverExceedsMax) {
+  CongestionController window{64, 64};
+  window.setCleanMaxWindow(128);
+  window.onCleanUnits(1'000);
+  EXPECT_EQ(window.limit(), 64);
+}
+
+TEST(CongestionControllerTest, ignoresNonPositiveCleanUnits) {
+  CongestionController window{2, 64};
+  window.setCleanMaxWindow(64);
+  window.onCleanUnits(0);
+  window.onCleanUnits(-3);
+  EXPECT_EQ(window.limit(), 2);
+}
+
+TEST(CongestionControllerTest, cleanGrowthRespectsCleanCap) {
+  // A deployment with a known knee bounds async discovery below maxWindow_.
+  CongestionController window{2, 64};
+  window.setCleanMaxWindow(8);
+  window.onCleanUnits(1'000);
+  EXPECT_EQ(window.limit(), 8);
+}
+
+TEST(CongestionControllerTest, nonPositiveCleanCapDisablesGrowth) {
+  // 0 (default) disables clean growth; negatives clamp to disabled.
+  CongestionController window{2, 8};
+  window.onCleanUnits(1'000);
+  EXPECT_EQ(window.limit(), 2);
+  CongestionController negative{2, 8};
+  negative.setCleanMaxWindow(-5);
+  negative.onCleanUnits(1'000);
+  EXPECT_EQ(negative.limit(), 2);
 }
 
 } // namespace

@@ -48,57 +48,19 @@ std::unique_ptr<exec::Aggregate> constructDecimalSumAgg(
     const TypePtr& resultType,
     const TypePtr& inputType,
     const TypePtr& sumType) {
-  uint8_t precision = getDecimalPrecisionScale(*sumType).first;
-  switch (precision) {
-    // The sum precision is calculated from the input precision with the formula
-    // min(p + 10, 38). Therefore, the sum precision must >= 11.
-#define PRECISION_CASE(precision)                                         \
-  case precision:                                                         \
-    if (inputType->isShortDecimal() && sumType->isShortDecimal()) {       \
-      return std::make_unique<exec::SimpleAggregateAdapter<               \
-          DecimalSumAggregate<int64_t, int64_t, precision>>>(             \
-          step, argTypes, resultType);                                    \
-    } else if (inputType->isShortDecimal() && sumType->isLongDecimal()) { \
-      return std::make_unique<exec::SimpleAggregateAdapter<               \
-          DecimalSumAggregate<int64_t, int128_t, precision>>>(            \
-          step, argTypes, resultType);                                    \
-    } else {                                                              \
-      return std::make_unique<exec::SimpleAggregateAdapter<               \
-          DecimalSumAggregate<int128_t, int128_t, precision>>>(           \
-          step, argTypes, resultType);                                    \
-    }
-    PRECISION_CASE(11)
-    PRECISION_CASE(12)
-    PRECISION_CASE(13)
-    PRECISION_CASE(14)
-    PRECISION_CASE(15)
-    PRECISION_CASE(16)
-    PRECISION_CASE(17)
-    PRECISION_CASE(18)
-    PRECISION_CASE(19)
-    PRECISION_CASE(20)
-    PRECISION_CASE(21)
-    PRECISION_CASE(22)
-    PRECISION_CASE(23)
-    PRECISION_CASE(24)
-    PRECISION_CASE(25)
-    PRECISION_CASE(26)
-    PRECISION_CASE(27)
-    PRECISION_CASE(28)
-    PRECISION_CASE(29)
-    PRECISION_CASE(30)
-    PRECISION_CASE(31)
-    PRECISION_CASE(32)
-    PRECISION_CASE(33)
-    PRECISION_CASE(34)
-    PRECISION_CASE(35)
-    PRECISION_CASE(36)
-    PRECISION_CASE(37)
-    PRECISION_CASE(38)
-#undef PRECISION_CASE
-    default:
-      VELOX_UNREACHABLE();
+  if (inputType->isShortDecimal() && sumType->isShortDecimal()) {
+    return std::make_unique<
+        exec::SimpleAggregateAdapter<DecimalSumAggregate<int64_t, int64_t>>>(
+        step, argTypes, resultType);
   }
+  if (inputType->isShortDecimal()) {
+    return std::make_unique<
+        exec::SimpleAggregateAdapter<DecimalSumAggregate<int64_t, int128_t>>>(
+        step, argTypes, resultType);
+  }
+  return std::make_unique<
+      exec::SimpleAggregateAdapter<DecimalSumAggregate<int128_t, int128_t>>>(
+      step, argTypes, resultType);
 }
 } // namespace
 

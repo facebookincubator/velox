@@ -29,6 +29,16 @@ class CompressionBufferPool {
 
   virtual void returnBuffer(
       std::unique_ptr<dwio::common::DataBuffer<char>> buffer) = 0;
+
+  /// Returns the shared buffer used to hold decompressed bytes during
+  /// write-side compression verification. Symmetric with getBuffer(); a
+  /// separate buffer is needed because the compression buffer holds the
+  /// compressed page being verified and so cannot be reused as the scratch.
+  virtual std::unique_ptr<dwio::common::DataBuffer<char>>
+  getDecompressionBuffer(uint64_t size) = 0;
+
+  virtual void returnDecompressionBuffer(
+      std::unique_ptr<dwio::common::DataBuffer<char>> buffer) = 0;
 };
 
 } // namespace facebook::velox::dwio::common::compression

@@ -16,11 +16,17 @@
 
 #pragma once
 
+#include <folly/synchronization/CallOnce.h>
 #include <torch/nativert/executor/GraphExecutorBase.h>
 #include <torch/nativert/executor/Weights.h>
+#include <deque>
+#include <mutex>
 #include "velox/experimental/torchwave/Compile.h"
 #include "velox/experimental/torchwave/CompiledOp.h"
+#include "velox/experimental/torchwave/LaunchPartition.h"
 #include "velox/experimental/torchwave/Registry.h"
+#include "velox/experimental/torchwave/StepProgram.h"
+#include "velox/experimental/torchwave/SymShape.h"
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/wave/common/Buffer.h"
 
@@ -30,6 +36,7 @@ class GpuArena;
 
 namespace torch::wave {
 
+struct DeviceGrid;
 struct ModelContext;
 
 /// Initializes process-wide GPU resources (arenas, stream/event pools).
@@ -54,14 +61,55 @@ void tensorsToHost(
     std::vector<at::Tensor>& out,
     facebook::velox::wave::Stream& stream);
 
-/// Debug info pointers for a single kernel launch, linking the pinned (host)
-/// and device copies so that getDebugInfo() can queue D2H transfers.
+/// Where the per-block results of a single kernel launch are: its DebugInfos
+/// in the step's pinned (host) and device buffers, copied back only when the
+/// execution recorded an error, and its clocks in the execution's clock buffer.
 struct LaunchDebugInfo {
-  DebugInfo* pinnedInfo;
-  DebugInfo* deviceInfo;
-  int32_t numBlocks;
-  int32_t sequenceNumber;
-  int32_t stepIdx;
+  DebugInfo* pinnedInfo{nullptr};
+  DebugInfo* deviceInfo{nullptr};
+  int32_t numBlocks{0};
+  int32_t sequenceNumber{0};
+  int32_t stepIdx{0};
+  /// Word offset of the launch's clocks in the clock buffer. Its barrier clocks
+  /// follow, 'numBlocks' words later. -1 for a launch that was not timed.
+  int64_t clockOffset{-1};
+  /// The step's pinned BlockInfo array, which gives each block's op when the
+  /// DebugInfos were not copied back. Null for a step whose block table the
+  /// device writes.
+  const BlockInfo* pinnedBlocks{nullptr};
+};
+
+/// One block of a launch, as blockDebugInfos() copies it out.
+struct BlockDebugInfo {
+  int64_t clocks{0};
+  int64_t barrierClocks{0};
+  /// The block's DebugInfo when the execution recorded an error. Otherwise only
+  /// 'op' is set, from the step's block table.
+  DebugInfo info;
+};
+
+/// Device-timeline events bracketing one step's GPU work. Wave events are
+/// absent for a step with no fused kernel, standalone events for a step with no
+/// device-side eager op. The *Begin events exist only under the kTiming trace
+/// bit; the *Done events are always present because they carry the cross-stream
+/// ordering that replaces the host stream syncs.
+struct StepEvents {
+  int32_t sequenceNumber{0};
+  int32_t stepIdx{0};
+  /// Value each stream writes to its completion counter when the step's work
+  /// on it is done. Increases across executions, so a counter left over from an
+  /// earlier run never reads as done. 0 when completion counters are off.
+  int64_t ticket{0};
+  /// Whether the step put work on the wave stream / the torch stream, i.e.
+  /// whether its completion on that stream has to be waited for.
+  bool usesWave{false};
+  bool usesTorch{false};
+  /// Device address of the run's completion counters, or null when off.
+  void* counters{nullptr};
+  EventP waveBegin;
+  EventP waveDone;
+  EventP standaloneBegin;
+  EventP standaloneDone;
 };
 
 /// Per-launch metadata stored in thread-local alongside the DebugInfo.
@@ -72,7 +120,15 @@ struct LaunchMeta {
   int64_t gatherUs{0};
   int64_t gridUs{0};
   int64_t allocUs{0};
+  // The part of allocUs spent inside the allocator itself. allocUs minus this
+  // is shape arithmetic and building the views over what was allocated.
+  int64_t allocCallUs{0};
+  // The setup work of this step's interpretation, split by kind (see
+  // SetupCounters).
+  SetupCounters setup;
   int64_t fillUs{0};
+  // The part of fillUs spent writing the BlockInfo array.
+  int64_t blockInfoUs{0};
   int64_t kernelUs{0};
   int64_t standaloneUs{0};
   // Wall time of the metadata-only shortcut-standalone batch (one
@@ -82,15 +138,59 @@ struct LaunchMeta {
   bool noDtoH{false};
   int64_t inputBytes{0};
   int64_t outputBytes{0};
+  int64_t currentBytes{0};
   // Time spent on reference-frame device-to-host copy and comparison for this
   // step (debug-only; excluded from the reported e2e time).
   int64_t refCheckUs{0};
+  // Bytes of copying the clone-elision pass saved, charged to this step.
+  int64_t elidedCloneBytes{0};
+  // Allocation groups carved at this step, and the outputs they covered. Zero
+  // outside the allocation-group mode, and also for a step of it whose outputs
+  // all escape the invocation.
+  int32_t allocGroups{0};
+  int32_t allocGroupTensors{0};
+  // Device-measured spans from this step's events (kTiming only). kernelUs and
+  // standaloneUs above are host wall times around issuing the work; these are
+  // what the GPU actually spent on it.
+  int64_t kernelGpuUs{0};
+  int64_t standaloneGpuUs{0};
+  // Device idle before this step: the gap between the end of the previous
+  // step's GPU work and the start of this one's.
+  int64_t gpuIdleUs{0};
+  // Ops in this step that read a value an earlier step returned over a D2H.
+  // See StepVectors for the details.
+  int32_t d2hDepFused{0};
+  int32_t d2hDepStandalone{0};
+  int32_t d2hDepShortcut{0};
+  int32_t d2hDepOnPrevStep{0};
+  int32_t d2hNearestProducer{-1};
+  int32_t viewNodeDescs{0};
+  // Total ops in the step, so the dependent counts read as a fraction.
+  int32_t numFused{0};
+  int32_t numStandalone{0};
+  int32_t numShortcut{0};
+  // How balanced this step's grid came out, and how many launches it ran as.
+  GridStats gridStats;
+
+  /// The launches the step ran as, each owning a contiguous range of the block
+  /// array the DebugInfo of this step is indexed by. Empty for a step that was
+  /// not split. Kept so the balance report can score each launch on its own:
+  /// they run back to back, so a block in one was never able to run beside a
+  /// block in another.
+  std::vector<LaunchSegment> segments;
 };
 
 /// Per-thread debug info from the most recent wave execution. Populated by
 /// executeWave when WaveConfig::keepStatsOnThread is true.
 struct WaveThreadInfo {
-  std::vector<std::vector<DebugInfo>> debugInfo;
+  /// The kernel launches of the execution, parallel to launchMeta.
+  std::vector<LaunchDebugInfo> launches;
+  /// The pinned copy of the execution's clock buffer (see BlockClockBuffer).
+  /// Valid until its ExecutionState runs again.
+  const int64_t* clocks{nullptr};
+  /// The blocks that recorded an error. The DebugInfos were copied back to
+  /// their pinned buffers only when this is not 0.
+  int64_t errorCount{0};
   std::vector<LaunchMeta> launchMeta;
   std::string errors;
   /// Standalone execution times, sorted descending. Indices line up with
@@ -100,6 +200,42 @@ struct WaveThreadInfo {
   std::vector<std::string> standaloneLabels;
   /// Operator target string for each standalone, parallel to standaloneTimes.
   std::vector<std::string> standaloneTargets;
+  /// Peak torch CUDA caching-allocator allocated bytes reached over the covered
+  /// run, read from the allocator's high-water mark (peak stats are reset at
+  /// the start of the run), so it captures transient intra-step peaks. Filled
+  /// when trace kTiming is on.
+  int64_t peakBytes{0};
+  /// Bytes allocated when the run started, so the report can give the run's
+  /// own peak over what it inherited (inputs, weights, a caller's tensors).
+  int64_t startBytes{0};
+  /// Allocator calls the step path made over the run (ScopedAllocCall).
+  int64_t allocCalls{0};
+  /// Total device idle across the run, summed from the per-step gpuIdleUs: wall
+  /// time in which neither the wave stream nor the eager standalones had work
+  /// on the device, because the host was still preparing the next launch.
+  int64_t gpuIdleUs{0};
+  /// Last-use values released before their node's last step, and at it.
+  int32_t numLastUseEarly{0};
+  int32_t numLastUseAtNodeEnd{0};
+  /// Steps whose dependent launches waited for a transfer, and the total wait.
+  int32_t numReturnWaits{0};
+  int64_t returnWaitUs{0};
+  /// Deferred device-to-host transfers and the executed steps they spanned.
+  int32_t numDeferredReturns{0};
+  int64_t deferredStepSpan{0};
+  /// Host run-ahead depth over the run: total, samples, max, and how many steps
+  /// began with the device queue already drained.
+  int64_t runAheadSum{0};
+  int32_t runAheadSamples{0};
+  int32_t runAheadMax{0};
+  int32_t numDrainedStarts{0};
+  /// Drains forced by the delayed-free ceiling, and the peak bytes of freeing
+  /// the run-ahead was holding.
+  int32_t numMemoryStalls{0};
+  int64_t maxDelayedFreeSeen{0};
+  /// Host time spent freeing frame values.
+  int64_t freeUs{0};
+
   /// Performance report, filled when trace kTiming is on.
   std::string perfReport;
 };
@@ -107,12 +243,167 @@ struct WaveThreadInfo {
 /// Returns the thread-local WaveThreadInfo for the current thread.
 const WaveThreadInfo& waveThreadInfo();
 
+/// The blocks of every launch of the thread's most recent execution, parallel
+/// to WaveThreadInfo::launches, copied out of the pinned buffers. Call before
+/// the ExecutionState that ran it runs again.
+std::vector<std::vector<BlockDebugInfo>> blockDebugInfos();
+
+/// The clocks of launch 'launch' of the thread's most recent execution in the
+/// pinned clock buffer, its barrier clocks following after its numBlocks; null
+/// for a launch that was not timed.
+const int64_t* launchClocks(const WaveThreadInfo& info, size_t launch);
+/// Sets WaveConfig::get().trace from within this translation unit, so callers
+/// (e.g. the pybind extension) reach the exact WaveConfig singleton instance
+/// the executor reads at run time -- a plain wave_config().trace assignment
+/// made in another TU can hit a duplicated inline-static instance and not take
+/// effect.
+void setWaveTrace(int32_t trace);
+
+/// Returns WaveConfig::get().trace as seen by the executor's TU.
+int32_t getWaveTrace();
+
+/// Set WaveConfig flags on the exact singleton the executor's TU reads (same
+/// rationale as setWaveTrace: avoids a duplicated inline-static instance).
+void setFreeIntermediates(bool on);
+void setAutoAdjustCost(bool on);
+void setIsCg(bool on);
+void setTwMad(bool on);
+void setPackInputs(bool on);
+void setTwFusedMad(bool on);
+void setMadChains(bool on);
+void setSinglePassSelect(bool on);
+void setFoldSharedChains(bool on);
+void setOrderBlocksByCost(bool on);
+void setPartitionLaunches(bool on);
+void setMaxLaunchWaves(int32_t waves);
+void setLaunchSkewThreshold(double skew);
+void setMinBlockUs(double us);
+void setKernelCacheDir(const std::string& dir);
+void setAllStandalone(bool on);
+void setBlockSize(int32_t blockSize);
+/// Caps the SMs that grids are sized for, 0 for all of the device's. Leaves
+/// room for kernels that run beside TorchWave, e.g. NCCL collectives, so that
+/// a cooperative grid still fits.
+void setNumSms(int32_t numSms);
+void setEnableReuse(bool on);
+void setElideClones(bool on);
+void setStepLastUse(bool on);
+void setSyncEachStep(bool on);
+void setDeferD2h(bool on);
+void setRunAhead(bool on);
+void setMaxDelayedFree(int64_t bytes);
+void setDuplicateMetadata(bool on);
+void setPerOpStandaloneTiming(bool on);
+
+/// Lifecycle of a step's kernel outputs, used to bundle intermediate freeing
+/// with wave-stream syncs (see WaveConfig::freeIntermediates).
+enum class ExecutionStage {
+  /// Reset state at the start of executeWave; nothing allocated yet.
+  kNotStarted,
+  /// The step's kernel op outputs have been allocated (kernels launched).
+  kAllocated,
+  /// A wave-stream wait has completed since kAllocated, so this step's kernels
+  /// are known to be done; its freeable buffers may be released.
+  kSynced,
+};
+
 /// Preallocated vectors reused across executions for a given
 /// (compositeInvocation, stepIdx) pair.  Avoids per-step heap allocation
 /// in CompositeInvocation::execute and makeGrid.
 struct StepVectors {
-  /// Used by CompositeInvocation::execute / gatherLaunches.
+  /// The step's program, built before the first execution.
+  std::shared_ptr<StepProgram> program;
+
+  /// On a node's step 0: how many steps the node runs.
+  int32_t boundSteps{0};
+
+  /// The step's pinned and device buffers in state.pinnedBuffers and
+  /// state.deviceBuffers, and the size they were last fetched for.
+  uint8_t* pinnedBase{nullptr};
+  uint8_t* deviceBase{nullptr};
+  int64_t bufferBytes{0};
+
+  /// Byte offset of the BlockInfo array within the step's pinned and device
+  /// buffers. The kernel params come first, so their offsets depend only on
+  /// which ops are in the step, not on the block count -- which is what lets
+  /// them be filled before makeGrid has settled that count. The BlockInfo
+  /// array sits above them and is written last.
+  int64_t blockInfoOffset{0};
+
+  /// Byte offset of every kernel param slot this step can use, flattened over
+  /// the ops; opSlotBegin[i] is where op i's slots start and opSlotBegin.back()
+  /// is the end. Each slot is reserved for the largest of the op's grid
+  /// variants, and an op gets as many slots as its widest variant needs, so
+  /// switching a variant never moves another op's params. That is what makes it
+  /// safe to fill params before makeGrid has run and before a variant that
+  /// depends on a pending transfer has been chosen. Built once per step by
+  /// layoutParamSlots; paramRegionBytes is the total.
+  std::vector<int64_t> slotOffsets;
+  std::vector<int32_t> opSlotBegin;
+  int64_t paramRegionBytes{0};
+
+  /// Upper bound on the blocks makeGrid can produce for this step. The
+  /// BlockInfo and DebugInfo regions are sized for it rather than for the
+  /// actual count, so the buffer size -- and therefore its base address -- is
+  /// settled before makeGrid runs. Without that, a later size change would
+  /// reallocate and move the base out from under params already filled.
+  int32_t blockCapacity{0};
+  /// Word offset of the current launch's clocks in the execution's clock
+  /// buffer, as reserveLaunchClocks gave it; -1 before the first launch.
+  int64_t clockOffset{-1};
+  /// The blocks of that launch.
+  int32_t clockBlocks{0};
+  /// Whether the step's launch in the previous execution had the same offset
+  /// and blocks, so that its clocks are still in place for the device grid.
+  bool previousClocksInPlace{false};
+
+  /// Every frame value this step can read, over ALL of its grid variants:
+  /// each kernel launch's KernelOperation::orderingInputs(), each standalone
+  /// launch's node inputs, and the ProjectOperation subgraph leaves, translated
+  /// formal -> actual. Built once by layoutParamSlots, from the compiled grids
+  /// alone, so it is available before any launch is sized --
+  /// which is what lets a step decide whether it must wait for a pending
+  /// device-to-host transfer before it sizes and allocates anything. Being a
+  /// union over variants it is a superset of what the step actually reads,
+  /// which is the safe direction: a read missed here is a step running against
+  /// a frame value that has not landed yet.
+  folly::F14FastSet<nativert::ValueId> readIds;
+
+  /// The same read set split per op, parallel to the invocation's ops. Lets a
+  /// step defer only the ops that actually read a pending transfer instead of
+  /// stalling whole. readIds is the union of these.
+  std::vector<folly::F14FastSet<nativert::ValueId>> opReadIds;
+
+  /// One bit per (id % 64) of opReadIds[i], so testing an op against the
+  /// pending transfers is a single AND against the same signature built from
+  /// the pending ids -- no hash lookup in the per-op path. Zero overlap proves
+  /// independence; a hit falls through to the exact set. Actual ids throughout;
+  /// the formal-to-actual translation happens once, when this is built.
+  std::vector<uint64_t> opReadSignature;
+
+  /// How many kernel / standalone / shortcut launches each op contributed at
+  /// this step, recorded by the first pass. The second pass adds these to its
+  /// running indices for the ops it is skipping, so it lands on a deferred op's
+  /// slots without re-walking the launches of everything before it.
+  std::vector<int32_t> opKernelCount;
+  std::vector<int32_t> opStandaloneCount;
+  std::vector<int32_t> opShortcutCount;
+
+  /// The step's kernel launches, built at bind.
   std::vector<LaunchData> kernels;
+
+  /// Values this step produces whose elements some sizing reads
+  /// (ReserveInputs::hostTensors). Each is copied to pinned host memory on the
+  /// wave stream right after the step's launch, and lands with its transfer.
+  struct HostCopy {
+    nativert::ValueId id{-1};
+    /// From the pinned arena; grows when the value does.
+    facebook::velox::wave::WaveBufferPtr buffer;
+    /// This execution's source and size, set before the launch.
+    const void* src{nullptr};
+    int64_t bytes{0};
+  };
+  std::vector<HostCopy> hostCopies;
   std::vector<LaunchData> standalones;
   /// Metadata-only standalones with a StandaloneShortcut, split out from
   /// 'standalones' so they run in a tight switch loop (no per-op timing, no
@@ -123,6 +414,58 @@ struct StepVectors {
   /// Used by makeGrid (output).
   std::vector<BlockInfo> blocks;
   std::vector<int32_t> launchIndices;
+
+  /// The kernel launches 'blocks' is run as, in order. Always at least one
+  /// entry; more only when WaveConfig::partitionLaunches split the step. Each
+  /// launch takes its own slice of 'blocks' and its own dynamic shared memory,
+  /// which is where the occupancy a split buys actually lands.
+  std::vector<LaunchSegment> segments;
+
+  /// How balanced this step's grid came out, from the last makeGrid that ran
+  /// for it. Reported per step under WaveConfig::kGrid and summarized in the
+  /// performance report; also what the partitioning gate reads.
+  GridStats gridStats;
+
+  /// Thread-block clocks this step spent per unit of cost, measured on its
+  /// previous execution. Turns WaveConfig::minBlockUs into the cost units the
+  /// block quantum is expressed in. 0 until the first execution has been
+  /// measured, which falls the quantum back to an even division of the step.
+  double clocksPerCost{0};
+
+  /// How well the blocks of this step's previous execution filled the time its
+  /// slowest one took: mean block clocks over max, the same figure the per-step
+  /// balance line reports. 0 until measured.
+  ///
+  /// This is the only honest signal that a step needs MORE blocks. The
+  /// cost-model skew in gridStats cannot tell -- it is derived from the same
+  /// costs the sizing uses, so a step whose costs are wrong looks balanced to
+  /// it. A step already near 1.0 here has nothing to gain from a wider grid and
+  /// everything to lose, since the extra blocks arrive as serialized launches.
+  double measuredUtil{0};
+
+  /// Blocks the previous execution actually ran, so a step that measured well
+  /// can be held to what already worked.
+  int32_t measuredBlocks{0};
+
+  /// Clocks of the slowest block of the previous execution. With measuredUtil
+  /// it says how much time the step's blocks spent waiting on that one, which
+  /// is the most a rebalanced grid could save. 0 until measured.
+  int64_t measuredMaxClocks{0};
+
+  /// Kernel makespan this step last measured as a single launch: the slowest
+  /// block's clocks. 0 until measured unsplit.
+  int64_t unsplitMakespanClocks{0};
+
+  /// Set once a split of this step measured no better than the single launch
+  /// by WaveConfig::launchSplitMinUs. The packer's plan is only as good as the
+  /// costs it is built from, and a split serializes its launches, so a split
+  /// the hardware says lost is not tried again.
+  bool splitRejected{false};
+
+  /// Set when a split ran before the step was ever measured as one launch, so
+  /// there is nothing to judge it against. The next execution runs it whole to
+  /// get that measurement.
+  bool measureUnsplit{false};
 
   /// Used by makeGrid (internal temporaries).
   std::vector<float> costs;
@@ -139,6 +482,25 @@ struct StepVectors {
   std::vector<int64_t> sizesUpper;
   int32_t cachedBlockSize{0};
 
+  /// Where the BlockInfo array was last written and for which grid. The
+  /// pinned buffer outlives the execution, so a step whose grid and buffers are
+  /// unchanged finds the array already in place. 'gridVersion' advances with
+  /// every makeGrid; a null 'blockInfoPinned' means nothing reusable.
+  int64_t gridVersion{0};
+  int64_t blockInfoGridVersion{-1};
+  const uint8_t* blockInfoPinned{nullptr};
+  const uint8_t* blockInfoDevice{nullptr};
+  size_t blockInfoCount{0};
+
+  /// Threads per block of this step's launch: the largest
+  /// KernelOperation::blockSizePreference among its ops, and at least
+  /// WaveConfig::blockSize. Set at bind.
+  int32_t blockSize{0};
+
+  /// The kernel entry point this step's launch runs; see
+  /// CompositeKernel::entryFor. Set at bind.
+  int32_t entry{0};
+
   /// Bitmap of grid choices from selectGrid (1 = singleBlock, 0 = default).
   /// Used to detect when grid choice changed, invalidating all step caches.
   uint64_t gridChoiceBitmap{0};
@@ -146,20 +508,22 @@ struct StepVectors {
   /// True if sizes matched so that makeGrid results can be reused.
   bool hasGridCache{false};
 
-  /// True if grid choice matched so that Values and their frame offset in
-  /// LaunchData can be reused. If false, these are reconstructed when
-  /// constructing the frame.
-  bool hasLaunchCache{false};
+  /// The step's grid computed on the device, packed after its first host
+  /// grid; null when the step keeps the host grid. 'deviceGridChoices' is the
+  /// gridChoiceBitmap it was packed for.
+  std::shared_ptr<DeviceGrid> deviceGrid;
+  uint64_t deviceGridChoices{0};
+  bool deviceGridTried{false};
+  /// True when this execution's grid is the device's, launched with
+  /// 'deviceGridBlocks' blocks.
+  bool onDeviceGrid{false};
+  int32_t deviceGridBlocks{0};
 
-  /// Set by gatherLaunches when an existing LaunchData's grid is switched
-  /// (e.g. from default to single-block) due to isGridChoice.
-  bool gridChanged{false};
-
-  /// Set by gatherLaunches when any kernel op in this step has op barriers
+  /// Set at bind when any kernel op in this step has op barriers
   /// (multi-block synchronization). Causes cooperative launch.
   bool isCgGrid{false};
 
-  /// Set by gatherLaunches when this step has at least one standalone that does
+  /// Set at bind when this step has at least one standalone that does
   /// device-side work (a non-shortcut op). Shortcut standalones only manipulate
   /// host-side tensor metadata and never read wave-stream buffers, so when this
   /// is false the wave stream need not be synced before running them.
@@ -169,7 +533,15 @@ struct StepVectors {
   int64_t gatherUs{0};
   int64_t gridUs{0};
   int64_t allocUs{0};
+  // The part of allocUs spent inside the allocator itself. allocUs minus this
+  // is shape arithmetic and building the views over what was allocated.
+  int64_t allocCallUs{0};
+  // The setup work of this step's interpretation, split by kind (see
+  // SetupCounters).
+  SetupCounters setup;
   int64_t fillUs{0};
+  // The part of fillUs spent writing the BlockInfo array.
+  int64_t blockInfoUs{0};
   int64_t kernelUs{0};
   int64_t standaloneUs{0};
   // Wall time of the metadata-only shortcut-standalone batch (one
@@ -179,10 +551,107 @@ struct StepVectors {
   bool noDtoH{false};
   int64_t inputBytes{0};
   int64_t outputBytes{0};
+  // Torch CUDA caching allocator's currently-allocated bytes, sampled right
+  // after this step's kernel and standalones ran (kTiming trace only).
+  int64_t currentBytes{0};
   // Time spent on reference-frame device-to-host copy and comparison for this
   // step (debug-only; excluded from the reported e2e time).
   int64_t refCheckUs{0};
+  // Bytes of copying the clone-elision pass saved, charged to this step: for
+  // each of the node's elided clone inputs that first has a tensor here,
+  // numel * element size * the number of clones elided for it. Filled only
+  // when the kTiming trace bit is on.
+  int64_t elidedCloneBytes{0};
+
+  // Allocation groups carved at this step and the number of outputs they
+  // covered, i.e. the allocator calls the grouping replaced with one call each.
+  // Always maintained, not just under kTiming: they are counts already to hand
+  // where the groups are materialized, not a measurement.
+  int32_t allocGroups{0};
+  int32_t allocGroupTensors{0};
+
+  // Device-measured spans from this step's events, and the device idle that
+  // preceded it (kTiming only). See LaunchMeta for what each one means.
+  int64_t kernelGpuUs{0};
+  int64_t standaloneGpuUs{0};
+  int64_t gpuIdleUs{0};
+
+  // How many of this step's ops read a value an earlier step sent back over a
+  // device-to-host transfer, split by op kind. These are the ops that cannot
+  // start before that transfer has landed; every other op in the step could in
+  // principle be prepared while it is still in flight. A shortcut counts as
+  // dependent if any of its inputs is such a value, and it then taints its own
+  // outputs, so a fused op reaching a returned scalar only through a chain of
+  // metadata-only ops is counted too. kTiming only.
+  int32_t d2hDepFused{0};
+  int32_t d2hDepStandalone{0};
+  int32_t d2hDepShortcut{0};
+  // Of the dependent ops, how many depend on the immediately preceding step --
+  // the case where nothing can be overlapped.
+  int32_t d2hDepOnPrevStep{0};
+  // Distance in executed steps back to the nearest producing step, -1 if none.
+  int32_t d2hNearestProducer{-1};
+  // Fused output descriptors built by a host-side view. Their shape/offset
+  // operands come from the view node, not from the op's inputs, so they are a
+  // path by which a fused op can depend on a returned scalar without naming it.
+  int32_t viewNodeDescs{0};
+
+  // Lifecycle stage for bundling frees with wave-stream syncs. Reset to
+  // kNotStarted at the start of executeWave, set to kAllocated once this step's
+  // kernel outputs are allocated, and advanced to kSynced by the first
+  // wave-stream wait thereafter (see advanceSyncedStages).
+  ExecutionStage executionStage{ExecutionStage::kNotStarted};
+
+  // ExecutionState::executedSteps at the point this step ran, i.e. the index
+  // LaunchData::d2hProducer and PendingReturn::executedStep are expressed in.
+  // -1 before the step has run in this execution.
+  int32_t executedStep{-1};
+
+  // Frame value ids to release when this step reaches kSynced (and
+  // WaveConfig::freeIntermediates is on). Set on a node's last executed step to
+  // that node's ProjectNode::lastUse values, so the node's last-use tensors are
+  // freed by the sync that advances this step to kSynced -- no extra sync.
+  std::vector<nativert::ValueId> lastUseIds;
+
+  // Bytes behind lastUseIds, summed as each id is stamped and subtracted from
+  // ExecutionState::delayedFreeBytes in one go when this step is swept.
+  int64_t lastUseBytes{0};
 };
+
+/// A step's device-to-host transfer that has been enqueued but whose pinned
+/// buffer has not been parsed into the frame yet (WaveConfig::deferD2h). All
+/// transfers go on the wave stream, so issue order is also completion order and
+/// resolving one entry implies every earlier one has landed.
+struct PendingReturn {
+  int32_t sequenceNumber{0};
+  int32_t stepIdx{0};
+
+  /// ExecutionState::executedSteps at the producing step -- the same index
+  /// LaunchData::d2hProducer carries on a launch that reads one of the values
+  /// this transfer brings back.
+  int32_t executedStep{0};
+
+  /// Completes once the transfer has landed; recorded after the
+  /// deviceToHostAsync. Owned by ExecutionState::stepEvents.
+  facebook::velox::wave::Event* waveDone{nullptr};
+};
+
+/// Words of BlockClockBuffer before the first launch's clocks.
+constexpr int64_t kBlockClockHeaderWords = 1;
+
+/// The per-block clocks of every timed launch of an execution, copied back to
+/// the host in one transfer when the execution ends. Word 0 counts the blocks
+/// that recorded an error in their DebugInfo. Then each launch, in issue
+/// order, has its blocks' clocks followed by their barrier clocks.
+struct BlockClockBuffer {
+  facebook::velox::wave::WaveBufferPtr device;
+  facebook::velox::wave::WaveBufferPtr pinned;
+  /// Words in each of the two buffers.
+  int64_t capacity{0};
+  /// Words the current execution's launches have reserved, header included.
+  int64_t fill{kBlockClockHeaderWords};
+};
+struct GroupArena;
 
 /// Holds runtime state for executing a WaveGraph.  Pooled by WaveGraph
 /// so that reusable buffers survive across calls.
@@ -197,6 +666,13 @@ struct ExecutionState {
   /// Reusable CUDA stream, obtained from streamPool at the start of execution
   /// and returned on scope exit.
   std::unique_ptr<facebook::velox::wave::Stream> stream;
+
+  /// Under WaveConfig::setupStream: the stream the device-grid steps copy
+  /// their parameters and run their setup kernel on, ahead of the wave
+  /// stream, and the event the wave stream waits on for each step's setup.
+  /// Taken from streamPool on first use, returned with 'stream'.
+  std::unique_ptr<facebook::velox::wave::Stream> setupStream;
+  std::unique_ptr<facebook::velox::wave::Event> setupDone;
 
   const folly::F14FastMap<NodeCP, nativert::OpKernel*>* kernelMap{nullptr};
   const folly::F14FastMap<NodeCP, int32_t>* standaloneIndices{nullptr};
@@ -214,6 +690,9 @@ struct ExecutionState {
 
   /// Per-launch debug info collected during execution.
   std::vector<LaunchDebugInfo> launchDebugInfos;
+
+  /// Clocks of the launches in launchDebugInfos.
+  BlockClockBuffer blockClocks;
 
   /// Counters for reference frame verification (owned by executor).
   int64_t* numRefTensorsChecked{nullptr};
@@ -241,7 +720,432 @@ struct ExecutionState {
   /// Generation counter from the last execution. Incremented by returnFrame
   /// to signal that launch caches are stale.
   uint64_t lastFrameGeneration{0};
+
+  /// Per-step GPU timeline events in global execution order, parallel to
+  /// launchDebugInfos. Returned to the event pools at the end of the run. A
+  /// deque because a step holds a reference to its entry while later steps are
+  /// appended, and lastWaveDone / lastStandaloneDone point into it.
+  std::deque<StepEvents> stepEvents;
+
+  /// Reference event for the run's device timeline, recorded on the wave stream
+  /// before the first step. Every other timing event is read as an offset from
+  /// this one, which is what puts the wave stream and the torch stream on a
+  /// single comparable timeline. kTiming only.
+  EventP timelineBase;
+
+  /// Most recently recorded completion events, used to build the cross-stream
+  /// ordering edges. Owned by stepEvents; a step can be missing one side, so
+  /// these are carried forward rather than indexed by step.
+  facebook::velox::wave::Event* lastWaveDone{nullptr};
+  facebook::velox::wave::Event* lastStandaloneDone{nullptr};
+
+  /// The completion events each stream last waited on. Waiting on the same
+  /// event again orders nothing new, so WaveConfig::skipRepeatedWaits skips it.
+  facebook::velox::wave::Event* torchWaitedFor{nullptr};
+  facebook::velox::wave::Event* waveWaitedFor{nullptr};
+
+  /// Two int64 completion counters in host-mapped memory, [0] for the wave
+  /// stream and [1] for the torch stream (WaveConfig::completionCounters). Each
+  /// stream writes a step's ticket after the step's work, so the host checks
+  /// completion with a load instead of a cudaEventQuery.
+  std::shared_ptr<volatile int64_t> completionHost;
+  void* completionDevice{nullptr};
+  int64_t lastTicket{0};
+
+  /// Index into stepEvents of the oldest step not yet advanced to kSynced.
+  /// advanceCompletedStages resumes from here, so the sweep costs one query per
+  /// step over the run rather than re-walking every step on every launch.
+  size_t syncedCursor{0};
+
+  /// The value table: the metadata of every value of the graph in this
+  /// execution, by value id. An entry is valid only when its generation equals
+  /// tableGeneration, so a value freed or not yet produced reads as absent
+  /// rather than stale. Sized once, before the first execution, so pointers to
+  /// entries stay valid for the life of the state.
+  std::vector<ValueEntry> valueEntries;
+  /// The fields of each entry the sizing and the fills do not read.
+  std::vector<ValueCold> valueCold;
+  /// Values that enter the frame before the interpreter runs -- graph inputs,
+  /// weights and constants -- published at the start of every execution.
+  std::vector<nativert::ValueId> tableRoots;
+  uint32_t tableGeneration{0};
+  bool tableActive{false};
+  /// Set once every node's step programs are built for this state.
+  bool bound{false};
+  /// Set when the state is created: its bound programs run the values
+  /// DeviceSymbols picks on capacities.
+  bool deviceSymbolsMode{false};
+  /// The values this state runs on capacities, and their symbol indices.
+  folly::F14FastMap<nativert::ValueId, int32_t> substitutedSymbol;
+  /// The values the host sizes from those capacities; their fills get fixups.
+  folly::F14FastSet<nativert::ValueId> symbolRegion;
+  /// The graph outputs among them, re-viewed with real dims at the end.
+  std::vector<nativert::ValueId> symbolOutputs;
+  /// Bands whose start depends on picked symbols -> the start in elements of
+  /// the result. Their fills get the real start from the fixups.
+  folly::F14FastMap<nativert::ValueId, SymExpr> bandStarts;
+  /// Slices viewing the whole extent of their base on the host -> their real
+  /// start in elements. Their fills get it and their real length from the
+  /// fixups.
+  folly::F14FastMap<nativert::ValueId, SymExpr> viewStarts;
+  /// The returned values selectSubstitutions took out of the returned set.
+  folly::F14FastSet<nativert::ValueId> symbolUnreturned;
+  /// Returned integers computed from picked symbols (u1 + u2), set from the
+  /// capacities like the symbols.
+  folly::F14FastSet<nativert::ValueId> capacityScalars;
+  /// Packed lists of host-sized elements whose return no step waits for.
+  int32_t numUnreturnedLists{0};
+  /// Symbol name -> value returned in this execution.
+  folly::F14FastMap<std::string, int64_t> observedSymbols;
+  /// Symbols two of whose carriers returned different values this execution.
+  folly::F14FastSet<std::string> symbolConflicts;
+  /// The DeviceSymbols generation the state was bound for.
+  int64_t symbolGeneration{0};
+  /// By symbol index: (node, step, offset in that step's parameter region)
+  /// where the producing kernel leaves the real value; node -1 for none.
+  std::vector<std::tuple<int32_t, int32_t, int64_t>> symbolSources;
+  /// By symbol index: the capacity this execution sizes for.
+  std::vector<int64_t> symbolCapacities;
+  /// Symbol values bound by DeviceSymbols::checkSizeExprs this execution.
+  folly::F14FastMap<std::string, int64_t> sizeExprSymbols;
+  /// The fixup kernel's symbol addresses and capacities, as last copied to
+  /// the device, and the device copy.
+  std::vector<int64_t> symbolArgsHost;
+  at::Tensor symbolArgsDevice;
+
+  /// Values that live in the table alone, with no frame tensor, by value id.
+  /// Built with the step programs. Active per execution unless debug single
+  /// ops runs.
+  std::vector<uint8_t> tableOnly;
+  bool tableOnlyActive{false};
+
+  /// The buffers table-only values live in: ValueCold::owner indexes these.
+  /// A buffer is dropped when the last value in it is freed, and every buffer
+  /// still held is dropped at the end of the execution.
+  struct Allocation {
+    at::Tensor buffer;
+    int32_t liveValues{0};
+  };
+  std::vector<Allocation> allocations;
+  std::vector<int32_t> freeAllocations;
+  /// Slots for the lifetime groups, laid out from the previous execution's
+  /// lifetimes. Kept across executions; see GroupArena.
+  std::shared_ptr<GroupArena> groupArena;
+  /// 'valueEntries' as the sizing code reads it.
+  ValueTable valueTable;
+
+  /// By value id, the executed-step index of the step that sent the value back
+  /// over a device-to-host transfer, or -1. Diagnostic only: it is what lets a
+  /// step report which of its ops must wait for a transfer to land.
+  /// 'returnedIds' lists the ids set, for the reset.
+  std::vector<int32_t> returnedAt;
+  std::vector<nativert::ValueId> returnedIds;
+
+  /// The executed step that returned 'id', or -1.
+  int32_t returnedAtStep(nativert::ValueId id) const {
+    return id >= 0 && static_cast<size_t>(id) < returnedAt.size()
+        ? returnedAt[id]
+        : -1;
+  }
+
+  void clearReturned() {
+    for (auto id : returnedIds) {
+      returnedAt[id] = -1;
+    }
+    returnedIds.clear();
+  }
+
+  /// Count of executed steps so far, spanning nodes. Indexes returnedAt.
+  int32_t executedSteps{0};
+
+  /// Transfers whose pinned buffers have not been parsed into the frame yet,
+  /// oldest first. Always empty unless WaveConfig::deferD2h is on.
+  std::deque<PendingReturn> pendingReturns;
+
+  /// How many transfers ran deferred, and the total number of executed steps
+  /// they stayed in flight for (resolution step minus producing step). A span
+  /// of one is a transfer resolved by the very next step, i.e. no better than
+  /// waiting at the producer; what the deferral buys is the excess over that.
+  int32_t numDeferredReturns{0};
+  /// Steps whose dependent launches waited for a transfer, and the total wait.
+  int32_t numReturnWaits{0};
+  int64_t returnWaitUs{0};
+  int64_t deferredStepSpan{0};
+
+  /// Sampled once per step, just before the host starts interpreting it: how
+  /// many already-issued steps the device has not finished yet. Zero means the
+  /// queue had drained and this step's whole interpretation is exposed as idle;
+  /// that is the quantity deeper run-ahead has to raise. kTiming only, because
+  /// each sample costs a cudaEventQuery per step still in flight.
+  int64_t runAheadSum{0};
+  int32_t runAheadSamples{0};
+  int32_t runAheadMax{0};
+  int32_t numDrainedStarts{0};
+
+  /// Bytes stamped for release on steps the device has not finished, i.e. the
+  /// memory run-ahead is holding onto. Checked against
+  /// WaveConfig::maxDelayedFree before a step allocates.
+  int64_t delayedFreeBytes{0};
+
+  /// How many times that ceiling forced a drain, and the high-water mark of
+  /// delayedFreeBytes -- which is how much peak the run-ahead is costing.
+  int32_t numMemoryStalls{0};
+  int64_t maxDelayedFreeSeen{0};
+
+  /// Allocator bytes allocated when the run started (trace kTiming only).
+  int64_t startAllocatedBytes{0};
+  /// threadAllocCalls() when the run started.
+  int64_t allocCallsAtStart{0};
+  /// Host time spent releasing frame values. Reported next to the allocation
+  /// time as the part of the interpretation that compiling the host path
+  /// cannot remove.
+  int64_t freeUs{0};
+
+  /// Values released during this run. The fusion-coverage report needs them
+  /// because it infers "this node never ran" from an empty frame slot, and a
+  /// released intermediate leaves exactly that -- so without this every value
+  /// freeIntermediates reclaims would be counted as an uncovered op. Only
+  /// populated when tracing, which is the only time the report is produced.
+  folly::F14FastSet<nativert::ValueId> freedValueIds;
+
+  /// Last-use values stamped onto a step before their node's last one, and
+  /// onto the last one. Says how much WaveConfig::stepLastUse actually moved.
+  int32_t numLastUseEarly{0};
+  int32_t numLastUseAtNodeEnd{0};
+
+  /// Under trace kFrame only: every value already stamped for release, mapped
+  /// to the step that stamped it. A later step reading one of them means the
+  /// reader analysis missed a reader and the buffer was freed too early, which
+  /// otherwise only shows up as a wrong result.
+  folly::F14FastMap<nativert::ValueId, int32_t> releasedAtStep;
 };
+
+/// Advances every step vector currently in kAllocated to kSynced (call right
+/// after a wave-stream wait, when those steps' kernels are known complete).
+/// When WaveConfig::freeIntermediates is on, releases each newly-synced step's
+/// lastUseIds from the frame, bundling that freeing into the sync that just
+/// happened rather than adding a dedicated one.
+void advanceSyncedStages(ExecutionState& state);
+
+/// Waits on the wave stream and then advances synced stages (see
+/// advanceSyncedStages). Used everywhere the wave stream is drained so freeing
+/// is bundled with the wait.
+void syncWaveStream(ExecutionState& state);
+
+/// Releases 'ids' from the frame right away. For last-use values that have to
+/// be stamped onto a step a blocking sync already swept to kSynced: the sweeps
+/// only ever visit a kAllocated step, so nothing would free them otherwise.
+/// The caller must have waited for that step, which the sweep implies.
+void freeLastUseNow(
+    ExecutionState& state,
+    const std::vector<nativert::ValueId>& ids);
+
+/// Advances to kSynced every kAllocated step whose waveDone event has already
+/// completed, and frees its lastUseIds. The non-blocking counterpart of
+/// advanceSyncedStages: a device-side event wait orders the GPU but tells the
+/// host nothing, so a step must not be declared synced on one. Event::query()
+/// is a cheap non-blocking host check that does establish it. Freeing happens
+/// slightly later than under the old host-sync scheme, which raises the
+/// transient memory peak a little.
+void advanceCompletedStages(ExecutionState& state);
+
+/// Sets each host copy of 'sv' to this execution's source and size, growing
+/// its pinned buffer if needed. Before the step's launch.
+void prepareHostCopies(ExecutionState& state, StepVectors& sv);
+
+/// Enqueues the host copies of 'sv' on 'stream', after the step's launch.
+void enqueueHostCopies(
+    const StepVectors& sv,
+    facebook::velox::wave::Stream& stream);
+
+/// Copies the return values a step's kernels sent back from its pinned buffer
+/// into the execution frame: tensor shapes via resize_, scalars via setIValue.
+/// The caller must have waited for that step's transfer.
+void processReturnData(
+    StepVectors& sv,
+    nativert::ExecutionFrame& frame,
+    uint8_t* pinnedBase);
+
+/// Waits for and parses every pending return produced at executed step
+/// 'throughStep' or earlier, oldest first (see ExecutionState::pendingReturns).
+/// A negative 'throughStep' resolves nothing; one past the newest entry
+/// resolves all of them. Cheap when the transfer has already landed, which is
+/// the case at every call site that follows a stream wait.
+void resolvePendingReturns(ExecutionState& state, int32_t throughStep);
+
+/// Resolves everything still pending. For the points where the frame has to be
+/// complete regardless of what is read next: the end of a run, and the debug
+/// paths that walk arbitrary values.
+void resolveAllPendingReturns(ExecutionState& state);
+
+/// Samples how many already-issued steps the device has not finished, and folds
+/// it into the run-ahead counters. Call once per step, immediately before its
+/// interpretation begins, so a sample of zero means that interpretation runs
+/// against an empty queue and is fully exposed as idle. Does nothing unless the
+/// kTiming trace bit is on.
+void sampleRunAhead(ExecutionState& state);
+
+/// TSC ticks per microsecond, calibrated once. Use with
+/// folly::hardware_timestamp() for anything timed per op: std::chrono here is
+/// backed by kvm-clock at tens of microseconds a call, so a per-op chrono pair
+/// costs far more than the work it measures.
+double tscTicksPerMicro();
+
+/// True when TW_ALLOC_TRACE is set in the environment. Enables an event line
+/// per kernel-output allocation and per released frame value, so the fraction
+/// of allocations a same-size freed buffer could have served can be measured
+/// offline. Read once; the check is a load.
+bool allocTraceEnabled();
+
+/// Emits one allocation/free event: "ALLOCEV <kind> <id> <bytes>", where kind
+/// is keep / resize / alloc for a kernel output and free for a released value.
+/// Emission order is host program order, which is what a donation-pool
+/// simulation needs.
+void logAllocEvent(const char* kind, int32_t valueId, int64_t bytes);
+
+/// Emits an allocation event carrying the STATIC size key the compiler already
+/// knows for the output ("dyn" when the shape comes from a reserve,
+/// which is opaque before execution), and remembers it for 'valueId' so the
+/// matching free event can report the same key. Two values with equal keys are
+/// provably the same byte size without running anything, which is what a
+/// compile-time donation edge needs.
+void logKeyedAllocEvent(
+    const char* kind,
+    int32_t valueId,
+    int64_t bytes,
+    const std::string& sizeKey);
+
+/// The static size key recorded for 'valueId', or "?" if none was seen.
+const std::string& recordedSizeKey(int32_t valueId);
+
+/// Stamps 'id' onto 'sv' for release when that step is swept, and accounts its
+/// bytes against the delayed-free ceiling.
+void addLastUseId(ExecutionState& state, StepVectors& sv, nativert::ValueId id);
+
+/// Drains both streams when the bytes waiting to be freed on already-issued
+/// steps exceed WaveConfig::maxDelayedFree, giving the memory back before the
+/// next step allocates. Call before a step sizes or allocates anything. Returns
+/// true if it drained. Both streams, not just the wave one: advanceSyncedStages
+/// releases on a wave-stream wait alone, and under run-ahead an eager
+/// standalone on the torch stream can still be reading one of those buffers.
+bool enforceDelayedFreeLimit(ExecutionState& state);
+
+/// Reserves the clocks and barrier clocks of a launch of 'numBlocks' blocks in
+/// the execution's clock buffer and returns the word offset of its clocks.
+/// When the buffer is full, waits for the launches already issued and moves
+/// what they wrote to the start of a buffer at least twice as large.
+int64_t reserveLaunchClocks(ExecutionState& state, int32_t numBlocks);
+
+/// Returns the Stream wrapping the CUDA stream that eager standalones are
+/// dispatched to on the calling thread, for recording events on and waiting
+/// for it: the stream set by setTorchStream(), else the legacy default stream.
+facebook::velox::wave::Stream& torchStream();
+
+/// Sets the CUDA stream (a cudaStream_t) that PyTorch work on the calling
+/// thread runs on, for the runs this thread makes. A run waits for it on entry,
+/// dispatches standalones under it and synchronizes it before returning. The
+/// caller must make the same stream c10's current stream on this thread, since
+/// that is where the standalones' kernels go. nullptr selects the legacy
+/// default stream.
+void setTorchStream(void* stream);
+
+/// Returns the stream set by setTorchStream() on the calling thread, or nullptr
+/// for the legacy default stream.
+void* torchStreamHandle();
+
+/// Blocks until all work enqueued on the calling thread's torch stream is done.
+void syncTorchStream();
+
+/// Sets the calling thread's torch stream for the guard's lifetime.
+class TorchStreamGuard {
+ public:
+  explicit TorchStreamGuard(void* stream) : previous_{torchStreamHandle()} {
+    setTorchStream(stream);
+  }
+
+  ~TorchStreamGuard() {
+    setTorchStream(previous_);
+  }
+
+  TorchStreamGuard(const TorchStreamGuard&) = delete;
+  TorchStreamGuard& operator=(const TorchStreamGuard&) = delete;
+  TorchStreamGuard(TorchStreamGuard&&) = delete;
+  TorchStreamGuard& operator=(TorchStreamGuard&&) = delete;
+
+ private:
+  // The thread's torch stream when the guard was made, restored on
+  // destruction.
+  void* const previous_;
+};
+
+/// Makes 'stream' wait, device-side, for everything already enqueued on the
+/// torch stream. A wave stream is non-blocking, so it no longer implicitly
+/// waits for the legacy default stream: anything a wave stream touches that
+/// eager work produced -- or that the caching allocator could hand it while an
+/// eager op still uses it -- needs this edge first.
+void waitForTorchStream(facebook::velox::wave::Stream& stream);
+
+/// Acquires a step's events, appends them to state.stepEvents and returns the
+/// entry. Under kTiming all four events come from the timing-enabled pool;
+/// otherwise only the ordering (*Done) events are taken, from the untimed pool.
+StepEvents& newStepEvents(ExecutionState& state, int32_t seq, int32_t stepIdx);
+
+/// Returns every event held by 'state' to its pool. Must run only after the
+/// streams that recorded them have been waited on, so no event is recycled
+/// while still pending.
+/// Records the step's completion event for one stream ('wave' or the torch
+/// stream) and, with WaveConfig::completionCounters, enqueues the counter write
+/// behind it.
+void recordStepDone(
+    StepEvents& events,
+    facebook::velox::wave::Stream& stream,
+    bool wave);
+
+/// True once all of the step's work is complete, from the counters when they
+/// are on and from the events otherwise. Does not block.
+bool stepDone(const ExecutionState& state, const StepEvents& events);
+
+/// Makes 'stream' wait on 'event', unless it already waited on that event and
+/// WaveConfig::skipRepeatedWaits is set. 'waitedFor' is the stream's record.
+void waitOnce(
+    facebook::velox::wave::Event* event,
+    facebook::velox::wave::Stream& stream,
+    facebook::velox::wave::Event*& waitedFor);
+
+void releaseStepEvents(ExecutionState& state);
+
+/// Makes 'state' the one whose tensor table frame writes on this thread
+/// publish to; null for none.
+void setCurrentExecutionState(ExecutionState* state);
+
+/// Writes 'value' into the frame slot 'id' and, when the tensor table is
+/// active, publishes it there. Every frame write of the interpreter goes
+/// through here.
+void writeFrame(
+    nativert::ExecutionFrame& frame,
+    nativert::ValueId id,
+    c10::IValue value);
+
+/// Publishes the frame's current tensor for 'id' to the table, for a value an
+/// eager kernel or a view wrote into the frame itself. No-op for a non-tensor.
+void publishFromFrame(nativert::ExecutionFrame& frame, nativert::ValueId id);
+
+/// The value of 'id' for debugging and checking code: the frame's value, or
+/// for a value that lives in the table alone a tensor over its storage (or its
+/// integer). The frame is left as it is.
+c10::IValue debugValue(
+    const nativert::ExecutionFrame& frame,
+    nativert::ValueId id);
+
+/// Grows the tensor table of 'state' to 'size' value ids and refreshes
+/// 'state.valueTable'.
+void ensureTableSize(ExecutionState& state, size_t size);
+
+/// The ExecutionState of the execution running on this thread, or null.
+ExecutionState* currentExecutionState();
+
+/// Drops 'id' from the table: a freed value reads as absent.
+void unpublish(nativert::ValueId id);
 
 /// Executes a single node via its OpKernel with tracing and error logging.
 /// When 'traceState' is non-null, traces the node's input values before the op
@@ -278,51 +1182,23 @@ void runShortcutStandalones(
 /// Builds BlockInfo grid for a set of LaunchData entries. Uses preallocated
 /// vectors in 'sv' (blocks, launchIndices, costs, maxBlocks,
 /// numBlocksPerLaunch). Returns the block size (threads per block).
+/// 'blockSize' is the kernel's threads per block, which is also what makeGrid
+/// returns. 'maxBlocksPerSM' is the kernel's occupancy at that block size and
+/// zero dynamic shared memory, and 'staticSharedPerBlock' its static shared
+/// memory; both are needed to bound a
+/// cooperative grid when an op in the step asks for dynamic shared memory.
+/// 'occupancyFor' answers the same question from the driver at a given dynamic
+/// shared memory, and supersedes the other two when given: a cooperative launch
+/// is packed to exactly that figure, so deriving it any other way risks a grid
+/// the driver refuses. See GridDevice::occupancyFor.
 int32_t makeGrid(
     std::vector<LaunchData>& launches,
     StepVectors& sv,
-    int32_t maxBlocksPerSM = 0);
-
-/// Looks up 'value' in 'map' and returns the corresponding tensor from 'frame'.
-at::Tensor paramTensor(
-    ValueCP value,
-    nativert::ExecutionFrame& frame,
-    const FormalToActual& map);
-
-/// Returns the shape of the largest tensor reachable from
-/// node->inputs()[ordinal] by tracing through elementwise producers that have
-/// no frame entry. Stops at values that exist in the frame.
-std::vector<std::vector<Dim>> elementwiseInputShape(
-    NodeCP node,
-    nativert::ExecutionFrame& frame,
-    const FormalToActual& map,
-    int32_t ordinal);
-
-/// Looks up 'value' in 'map' and returns the corresponding SymInt from 'frame'.
-int64_t paramSymInt(
-    ValueCP value,
-    nativert::ExecutionFrame& frame,
-    const FormalToActual& map);
-
-/// Returns the int64 value for a named argument that may be either an input
-/// value (translated via map) or an attribute (on the actual node found via
-/// nodeMap).
-int64_t paramIntByName(
-    NodeCP node,
-    std::string_view name,
-    nativert::ExecutionFrame& frame,
-    const FormalToActual& map,
-    const NodeMap& nodeMap);
-
-/// Returns the int64 list for a named argument that may be either an input
-/// value / prim.ListPack (translated via map) or a vector<int64_t> attribute
-/// (on the actual node found via nodeMap).
-std::vector<int64_t> paramIntListByName(
-    NodeCP node,
-    std::string_view name,
-    nativert::ExecutionFrame& frame,
-    const FormalToActual& map,
-    const NodeMap& nodeMap);
+    int32_t blockSize,
+    int32_t maxBlocksPerSM = 0,
+    int32_t staticSharedPerBlock = 0,
+    const std::function<int32_t(int32_t dynamicShared)>& occupancyFor =
+        nullptr);
 
 /// Formats a NodeMap as human-readable text with one formal -> actual pair
 /// per entry, each node printed with NodePrinter stopping at inputs.
@@ -355,11 +1231,34 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   std::vector<c10::IValue> executeWithPrefilledFrame(
       nativert::ExecutionFrame& frame) override;
 
+  /// Runs the graph on positional 'inputs' (in graph user-input order) using a
+  /// pooled device frame and returns the user outputs. Convenience wrapper over
+  /// getFrame()/fillUserInputs()/executeWithPrefilledFrame()/returnFrame() for
+  /// callers that have inputs but no frame (e.g. TorchWaveModel::run).
+  std::vector<c10::IValue> runInputs(std::vector<c10::IValue> inputs);
+
+  /// Like runInputs but reuses a single held device frame across calls instead
+  /// of getting/returning a pooled frame each time: weights and constants stay
+  /// resident (set once) and only the user inputs are refilled per call. Each
+  /// call first clears the previous call's intermediates and outputs from the
+  /// held frame. Single-threaded fast path (one in-flight call at a time),
+  /// e.g. for latency benchmarks; use runInputs() for concurrent callers.
+  std::vector<c10::IValue> runInputsReuse(std::vector<c10::IValue> inputs);
+
   /// Returns a frame from the pool, creating one if needed.
   std::unique_ptr<nativert::ExecutionFrame> getFrame();
 
   /// Returns 'frame' to the pool after clearing non-persistent values.
   void returnFrame(std::unique_ptr<nativert::ExecutionFrame> frame);
+
+  /// Clears 'frame's intermediates and outputs, leaving weights and constants,
+  /// and invalidates the launch caches that resolved against them. Call this
+  /// before refilling the user inputs for a second execution over the same
+  /// frame. Skipping it leaves the previous run's outputs in place, and an
+  /// execution that starts from such a frame skips every standalone op whose
+  /// outputs are already materialized (see nodeOutputsComputed) and reports the
+  /// previous run's results as if it had recomputed them.
+  void resetFrame(nativert::ExecutionFrame& frame);
 
   /// Returns a human-readable error string from the most recent execution.
   /// Checks thread-local debug info for non-zero error lines and maps each
@@ -400,9 +1299,19 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
     numRefNodesChecked_ += count;
   }
 
+  /// Executions rerun because a device symbol exceeded its capacity.
+  int64_t numSymbolReruns() const {
+    return numSymbolReruns_;
+  }
+
  private:
   /// Runs the WaveGraph on the given frame.
-  void executeWave(nativert::ExecutionFrame& frame, WaveGraph& waveGraph);
+  /// Returns false when a value device symbols ran on its capacity exceeded
+  /// it: the results are invalid and the execution has to run again, on the
+  /// grown capacities.
+  bool executeWave(nativert::ExecutionFrame& frame, WaveGraph& waveGraph);
+
+  int64_t numSymbolReruns_{0};
 
   /// Transfers device-side debug info to host and stores in thread-local
   /// WaveThreadInfo.
@@ -423,7 +1332,21 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   /// Pool of device-side ExecutionFrames with persistent tensors on GPU.
   std::unique_ptr<Pool<nativert::ExecutionFrame>> framePool_;
 
+  /// Single held frame for runInputsReuse(): persistent tensors stay resident,
+  /// only user inputs are refilled each call.
+  std::unique_ptr<nativert::ExecutionFrame> reuseFrame_;
+
+  /// Serializes runInputsReuse() callers, which share reuseFrame_. The Python
+  /// binding runs without the GIL, so two threads can call it on one model.
+  std::mutex reuseMutex_;
+
   uint64_t frameGeneration_{0};
+
+  /// The graph's producer-less values (model inputs, weights, constants),
+  /// collected once for the input_contiguous check so an execution does not
+  /// walk every value of the graph.
+  std::vector<const nativert::Value*> producerlessValues_;
+  folly::once_flag producerlessOnce_;
 
   int64_t numRefTensorsChecked_{0};
   int64_t numRefNodesChecked_{0};

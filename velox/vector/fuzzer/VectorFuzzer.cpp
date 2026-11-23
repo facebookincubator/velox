@@ -83,7 +83,8 @@ size_t getElementsVectorLength(
 
 int64_t randShortDecimal(const TypePtr& type, FuzzerGenerator& rng) {
   auto precision = type->asShortDecimal().precision();
-  return rand<int64_t>(rng) % DecimalUtil::kPowersOfTen[precision];
+  return rand<int64_t>(rng) %
+      static_cast<int64_t>(DecimalUtil::kPowersOfTen[precision]);
 }
 
 int128_t randLongDecimal(const TypePtr& type, FuzzerGenerator& rng) {
@@ -141,9 +142,8 @@ VectorPtr fuzzConstantPrimitiveImpl(
     return std::make_shared<ConstantVector<int128_t>>(
         pool, size, false, type, randLongDecimal(type, rng));
   } else if (type->isTime()) {
-    VELOX_DCHECK(type->equivalent(*TIME()));
     return std::make_shared<ConstantVector<int64_t>>(
-        pool, size, false, type, randTime(rng));
+        pool, size, false, type, randTime(rng, type));
   } else {
     return std::make_shared<ConstantVector<TCpp>>(
         pool, size, false, type, rand<TCpp>(rng, opts.dataSpec));
@@ -178,8 +178,7 @@ void fuzzFlatPrimitiveImpl(
       } else if (vector->type()->isShortDecimal()) {
         flatVector->set(i, randShortDecimal(vector->type(), rng));
       } else if (vector->type()->isTime()) {
-        VELOX_DCHECK(vector->type()->equivalent(*TIME()));
-        flatVector->set(i, randTime(rng));
+        flatVector->set(i, randTime(rng, vector->type()));
       } else {
         flatVector->set(i, rand<TCpp>(rng, opts.dataSpec));
       }
@@ -703,7 +702,7 @@ void VectorFuzzer::fuzzOffsetsAndSizes(
   auto rawOffsets = offsets->asMutable<vector_size_t>();
   auto rawSizes = sizes->asMutable<vector_size_t>();
 
-  size_t containerAvgLength = std::max(elementsSize / size, 1UL);
+  size_t containerAvgLength = std::max<size_t>(elementsSize / size, 1);
   size_t childSize = 0;
   size_t length = 0;
   const auto bound = static_cast<vector_size_t>(elementsSize);

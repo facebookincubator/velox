@@ -20,8 +20,12 @@
 
 namespace facebook::velox::functions {
 
-void registerIsNullFunction(const std::string& name);
+void registerIsNullFunction(
+    const std::string& name,
+    std::string_view defaultOwner = {});
 
-void registerIsNotNullFunction(const std::string& name);
+void registerIsNotNullFunction(
+    const std::string& name,
+    std::string_view defaultOwner = {});
 
 } // namespace facebook::velox::functions

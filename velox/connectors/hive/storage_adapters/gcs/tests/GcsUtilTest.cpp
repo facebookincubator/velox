@@ -16,6 +16,10 @@
 
 #include "velox/connectors/hive/storage_adapters/gcs/GcsUtil.h"
 
+#include <string>
+
+#include "velox/common/base/tests/GTestUtils.h"
+
 #include "gtest/gtest.h"
 
 using namespace facebook::velox;
@@ -33,4 +37,19 @@ TEST(GcsUtilTest, setBucketAndKeyFromGcsPath) {
   setBucketAndKeyFromGcsPath(path, bucket, key);
   EXPECT_EQ(bucket, "bucket");
   EXPECT_EQ(key, "file.txt");
+}
+
+TEST(GcsUtilTest, statusError) {
+  const google::cloud::Status status{
+      google::cloud::StatusCode::kResourceExhausted,
+      "Quota exceeded",
+      google::cloud::ErrorInfo{
+          "RATE_LIMIT_EXCEEDED",
+          "storage.googleapis.com",
+          {},
+      }};
+
+  VELOX_ASSERT_THROW(
+      checkGcsStatus(status, "Failed to read GCS object", "bucket", "key"),
+      "Failed to read GCS object due to: Path:'gs://bucket/key', GCS Status Code:RESOURCE_EXHAUSTED, Error Domain:'storage.googleapis.com', Error Reason:'RATE_LIMIT_EXCEEDED', Message:'Quota exceeded' This GCS error is transient. Consider increasing 'hive.gcs.max-retry-count' or 'hive.gcs.max-retry-time'.");
 }

@@ -15,6 +15,7 @@
  */
 
 #pragma once
+#include <iterator>
 #include "velox/expression/EvalCtx.h"
 
 namespace facebook::velox::exec {
@@ -30,8 +31,55 @@ namespace facebook::velox::exec {
 ///        std::pow(base->valueAt<double>(row), exp->valueAt<double>(row));
 ///    });
 ///
+/// Also iterable over the decoded arguments, in argument order:
+///    for (auto* decoded : decodedArgs) {
+///      ...
+///    }
+///
+///    bool allConstant = std::all_of(
+///        decodedArgs.begin(), decodedArgs.end(), [](auto* decoded) {
+///          return decoded->isConstantMapping();
+///        });
+///
 class DecodedArgs {
  public:
+  /// Yields 'DecodedVector*', matching at(), by unwrapping the holders in
+  /// place.
+  class Iterator {
+   public:
+    using iterator_concept = std::forward_iterator_tag;
+    // Dereferencing yields a prvalue, which caps the legacy category at input.
+    using iterator_category = std::input_iterator_tag;
+    using value_type = DecodedVector*;
+    using difference_type = std::ptrdiff_t;
+    // No operator->: elements are built on dereference, so there is no stored
+    // 'DecodedVector*' to point to.
+    using pointer = void;
+    using reference = DecodedVector*;
+
+    Iterator() = default;
+
+    explicit Iterator(exec::LocalDecodedVector* holder) : holder_{holder} {}
+
+    DecodedVector* operator*() const {
+      return holder_->get();
+    }
+
+    Iterator& operator++() {
+      ++holder_;
+      return *this;
+    }
+
+    Iterator operator++(int) {
+      return Iterator{holder_++};
+    }
+
+    bool operator==(const Iterator& other) const = default;
+
+   private:
+    exec::LocalDecodedVector* holder_{nullptr};
+  };
+
   DecodedArgs(
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
@@ -43,14 +91,22 @@ class DecodedArgs {
   }
 
   DecodedVector* at(int i) const {
-    return const_cast<exec::LocalDecodedVector*>(&holders_[i])->get();
+    return holders_[i].get();
   }
 
   size_t size() const {
     return holders_.size();
   }
 
+  Iterator begin() const {
+    return Iterator{holders_.data()};
+  }
+
+  Iterator end() const {
+    return Iterator{holders_.data() + holders_.size()};
+  }
+
  private:
-  std::vector<exec::LocalDecodedVector> holders_;
+  mutable std::vector<exec::LocalDecodedVector> holders_;
 };
 } // namespace facebook::velox::exec

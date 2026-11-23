@@ -175,7 +175,6 @@ int decimal_t_op(decimal_t* dest, int op, decimal_t* d1, decimal_t* d2) {
       if (result < 0)
         perror("sprintf failed");
       exit(1);
-      break;
     }
   }
 

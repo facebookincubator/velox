@@ -40,11 +40,11 @@ class TestEncryption {
 
   std::unique_ptr<folly::IOBuf> decrypt(std::string_view input) const {
     ++count_;
-    std::string key{input.cbegin(), key_.size()};
+    std::string key{input.data(), key_.size()};
     DWIO_ENSURE_EQ(key_, key);
     auto decoded = velox::encoding::Base64::decodeUrl(
         std::string_view{
-            input.begin() + key_.size(), input.size() - key_.size()});
+            input.data() + key_.size(), input.size() - key_.size()});
     return folly::IOBuf::copyBuffer(decoded);
   }
 

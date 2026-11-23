@@ -146,6 +146,11 @@ class ReduceAgg : public exec::Aggregate {
     return false;
   }
 
+  bool isReducing() const override {
+    // The input lambda can produce state that grows with input cardinality.
+    return false;
+  }
+
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(ReduceAggAccumulator);
   }
@@ -517,8 +522,7 @@ class ReduceAgg : public exec::Aggregate {
       const SelectivityVector& groupRows,
       const std::vector<char*>& groups,
       std::vector<vector_size_t>& groupOffsets) {
-    SelectivityVector accumulatorRows(groupRows.size());
-    accumulatorRows.deselect(groupRows);
+    auto accumulatorRows = groupRows.complement();
 
     BaseVector::ensureWritable(
         accumulatorRows, states->type(), allocator_->pool(), states);
@@ -732,8 +736,7 @@ class ReduceAgg : public exec::Aggregate {
 
     // Copy 'extra' states.
     if (rows.countSelected() != totalCount) {
-      SelectivityVector extraRows(totalCount);
-      extraRows.deselect(rows);
+      auto extraRows = rows.complement(totalCount);
 
       BaseVector::ensureWritable(
           extraRows, combined->type(), allocator_->pool(), combined);

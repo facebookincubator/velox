@@ -22,17 +22,8 @@
 namespace facebook::velox::exec {
 
 namespace {
-std::string makeSignatureNotSupportedError(
-    const std::string& name,
-    const std::vector<TypePtr>& argTypes,
-    const std::vector<std::shared_ptr<AggregateFunctionSignature>>&
-        signatures) {
-  std::stringstream error;
-  error << "Aggregate function signature is not supported: "
-        << toString(name, argTypes)
-        << ". Supported signatures: " << toString(signatures) << ".";
-  return error.str();
-}
+constexpr char kSignatureNotSupportedError[] =
+    "Aggregate function signature is not supported: {}. Supported signatures: {}.";
 } // namespace
 
 TypePtr resolveResultType(
@@ -47,7 +38,9 @@ TypePtr resolveResultType(
     }
 
     VELOX_USER_FAIL(
-        makeSignatureNotSupportedError(name, argTypes, signatures.value()));
+        kSignatureNotSupportedError,
+        toString(name, argTypes),
+        toString(signatures.value()));
   }
 
   VELOX_USER_FAIL("Aggregate function not registered: {}", name);
@@ -69,7 +62,9 @@ TypePtr resolveResultTypeWithCoercions(
     }
 
     VELOX_USER_FAIL(
-        makeSignatureNotSupportedError(name, argTypes, signatures.value()));
+        kSignatureNotSupportedError,
+        toString(name, argTypes),
+        toString(signatures.value()));
   }
 
   VELOX_USER_FAIL("Aggregate function not registered: {}", name);
@@ -87,7 +82,7 @@ TypePtr resolveIntermediateType(
     }
 
     VELOX_USER_FAIL(
-        "Aggregate function signature is not supported: {}. Supported signatures: {}.",
+        kSignatureNotSupportedError,
         toString(name, argTypes),
         toString(signatures.value()));
   } else {

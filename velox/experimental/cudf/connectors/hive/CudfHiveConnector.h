@@ -48,7 +48,7 @@ class CudfHiveConnector final
   }
 
   bool supportsSplitPreload() const override {
-    return false;
+    return true;
   }
 
   // TODO (dm): Re-add data sink

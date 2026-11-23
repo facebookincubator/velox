@@ -32,6 +32,7 @@ velox_add_library(
   AdmissionController.cpp
   BitUtil.cpp
   BloomFilter.cpp
+  ConcurrentRuntimeStatWriter.cpp
   Counters.cpp
   Fs.cpp
   PeriodicStatsReporter.cpp
@@ -53,13 +54,14 @@ velox_add_library(
   ClassName.h
   CoalesceIo.h
   ConcurrentCounter.h
+  ConcurrentRuntimeStatWriter.h
   CountBits.h
   Counters.h
   Crc.h
   Doubles.h
   Fs.h
-  GTestMacros.h
   IOUtils.h
+  IdentityProjection.h
   IndexedPriorityQueue.h
   IoCounter.h
   Nulls.h
@@ -91,6 +93,15 @@ velox_link_libraries(
   PRIVATE velox_caching velox_common_compression velox_process velox_test_util glog::glog
 )
 
+# Flex 2.6.5 and later declare a virtual yyFlexLexer::yyread() that
+# YyFlexLexerShim.cpp must define.
+if(EXISTS "${FLEX_INCLUDE_DIRS}/FlexLexer.h")
+  file(STRINGS "${FLEX_INCLUDE_DIRS}/FlexLexer.h" _velox_flex_yyread REGEX "yyread")
+  if(_velox_flex_yyread)
+    velox_compile_definitions(velox_common_base PRIVATE VELOX_FLEX_LEXER_HAS_YYREAD)
+  endif()
+endif()
+
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)
 endif()
@@ -112,6 +123,13 @@ velox_link_libraries(
 
 velox_add_library(velox_status Status.cpp HEADERS Status.h)
 velox_link_libraries(velox_status PUBLIC fmt::fmt Folly::folly PRIVATE glog::glog)
+
+velox_add_library(velox_tracked_executor TrackedExecutor.cpp HEADERS TrackedExecutor.h)
+velox_link_libraries(
+  velox_tracked_executor
+  PUBLIC velox_common_base velox_exception Folly::folly fmt::fmt
+  PRIVATE velox_time
+)
 
 velox_add_library(velox_compare_flags INTERFACE HEADERS CompareFlags.h)
 

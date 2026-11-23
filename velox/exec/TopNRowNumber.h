@@ -61,26 +61,18 @@ class TopNRowNumberSpiller;
 /// reclamation was triggered during processing.
 ///
 /// If the rows are in memory, then the operator iterates over each partition
-/// in the HashTable, and starts outputting rows from the partition. The
-/// TopRows structure maintains the rows in descending order of their ranks
-/// (greatest rank at the top of the priority queue). So when outputting,
-/// the operator first fixes the top rank of the partition using fixTopRank()
-/// and then computes the ranks of each row using computeNextRankInMemory().
-/// The logic of the next rank differs based on the ranking function.
+/// in the HashTable, and outputs rows in ascending order of their ranks
+/// (lowest sorting key / rank 1 first, matching the Window operator).
 ///
 /// If the rows are in the spill, then the spiller iterates over each spilled
-/// partition in order of the ranks. For each row from the spill, the next
-/// rank is computed using computeNextRankInSpill() function. The logic of
-/// the next rank differs based on the ranking function.
+/// partition in ascending order of the ranks. For each row from the spill, the
+/// next rank is computed using computeNextRankInSpill() function.
 /// Note : The spill could have > limit rows for a partition as each spill
 /// resets the TopRows for the partition. So stop outputting rows after
 /// reaching the limit for each partition.
 
 class TopNRowNumber : public Operator {
  public:
-  /// Runtime stat key indicating partial TopN was abandoned.
-  static constexpr std::string_view kAbandonedPartial = "abandonedPartial";
-
   TopNRowNumber(
       int32_t operatorId,
       DriverCtx* driverCtx,
@@ -187,8 +179,9 @@ class TopNRowNumber : public Operator {
   // Decodes and potentially loads input if lazy vector.
   void prepareInput(RowVectorPtr& input);
 
-  // Handles input row when the partition has not yet accumulated 'limit' rows.
-  // Returns a pointer to the row to add to the partition accumulator.
+  // Handles an input row while the partition's highest rank is below the limit.
+  // Returns a pointer to the row to add to the partition accumulator, or
+  // nullptr if the row's rank exceeds the limit.
   template <core::TopNRowNumberNode::RankFunction TRank>
   char* processRowWithinLimit(vector_size_t index, TopRows& partition);
 
@@ -215,18 +208,10 @@ class TopNRowNumber : public Operator {
   // output the partition.
   vector_size_t fixTopRank(TopRows& partition);
 
-  // Computes the rank for the next row to be output
-  // (all output rows in memory).
-  template <core::TopNRowNumberNode::RankFunction TRank>
-  void computeNextRankInMemory(TopRows& partition, vector_size_t rowIndex);
-
-  // Appends numRows of the current partition to the output. Note: The rows are
-  // popped in reverse order of the rank.
-  // NOTE: This function erases the yielded output rows from the partition
-  // and the next call starts with the remaining rows.
+  // Appends numRows of the current partition to the output in ascending
+  // order of ranks.
   template <core::TopNRowNumberNode::RankFunction TRank>
   void appendPartitionRows(
-      TopRows& partition,
       vector_size_t numRows,
       vector_size_t outputOffset,
       FlatVector<int64_t>* rowNumbers);
@@ -303,6 +288,10 @@ class TopNRowNumber : public Operator {
 
   const bool generateRowNumber_;
 
+  // Whether this is a partial step, which may pass its input through when it
+  // filters too few rows.
+  const bool partial_;
+
   const size_t numPartitionKeys_;
   const size_t numSortingKeys_;
 
@@ -369,7 +358,7 @@ class TopNRowNumber : public Operator {
   // Vector of pointers to individual rows in the RowContainer for the current
   // output block.
   std::vector<char*> outputRows_;
-  // Number of partitions to fetch from a HashTable in a single listAllRows
+  // Number of partitions to fetch from a HashTable in a single listRows
   // call.
   static const size_t kPartitionBatchSize = 100;
 
@@ -383,6 +372,14 @@ class TopNRowNumber : public Operator {
   // This is the currentPartition being output. It is possible that the
   // partition is output across multiple output blocks.
   TopNRowNumber::TopRows* outputPartition_{nullptr};
+
+  // Rows of current partition ordered in ascending order of ranks.
+  std::vector<char*> currentPartitionRows_;
+  // Offset of the next row to output from currentPartitionRows_.
+  vector_size_t currentPartitionRowOffset_{0};
+  // Previous row output in current partition (used for rank/dense_rank peer
+  // comparison).
+  char* previousRow_{nullptr};
 
   // The below variables are used when outputting from the spiller.
   // Spiller for contents of the 'data_'.

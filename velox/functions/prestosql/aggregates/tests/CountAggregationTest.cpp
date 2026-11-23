@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/HashAggregationStatNames.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -48,37 +49,79 @@ TEST_F(CountAggregationTest, count) {
   auto vectors = makeVectors(rowType_, 10, 100);
   createDuckDbTable(vectors);
 
-  testAggregations(vectors, {}, {"count()"}, "SELECT count(1) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"count()"})
+      .withCompanion()
+      .assertResults("SELECT count(1) FROM tmp");
 
-  testAggregations(vectors, {}, {"count(1)"}, "SELECT count(1) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"count(1)"})
+      .withCompanion()
+      .assertResults("SELECT count(1) FROM tmp");
 
   // count over column with nulls; only non-null rows should be counted
-  testAggregations(vectors, {}, {"count(c1)"}, "SELECT count(c1) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"count(c1)"})
+      .withCompanion()
+      .assertResults("SELECT count(c1) FROM tmp");
 
   // count over zero rows; the result should be 0, not null
-  testAggregations(
-      [&](PlanBuilder& builder) {
-        builder.values(vectors).filter("c0 % 3 > 5");
-      },
-      {},
-      {"count(c1)"},
-      "SELECT count(c1) FROM tmp WHERE c0 % 3 > 5");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) { builder.filter("c0 % 3 > 5"); })
+      .aggregates({"count(c1)"})
+      .assertResults("SELECT count(c1) FROM tmp WHERE c0 % 3 > 5");
 
-  testAggregations(
-      [&](PlanBuilder& builder) {
-        builder.values(vectors).project({"c0 % 10 AS c0_mod_10", "c1"});
-      },
-      {"c0_mod_10"},
-      {"count(1)"},
-      "SELECT c0 % 10, count(1) FROM tmp GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) {
+        builder.project({"c0 % 10 AS c0_mod_10", "c1"});
+      })
+      .groupBy({"c0_mod_10"})
+      .aggregates({"count(1)"})
+      .assertResults("SELECT c0 % 10, count(1) FROM tmp GROUP BY 1");
 
-  testAggregations(
-      [&](PlanBuilder& builder) {
-        builder.values(vectors).project({"c0 % 10 AS c0_mod_10", "c7"});
-      },
-      {"c0_mod_10"},
-      {"count(c7)"},
-      "SELECT c0 % 10, count(c7) FROM tmp GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) {
+        builder.project({"c0 % 10 AS c0_mod_10", "c7"});
+      })
+      .groupBy({"c0_mod_10"})
+      .aggregates({"count(c7)"})
+      .assertResults("SELECT c0 % 10, count(c7) FROM tmp GROUP BY 1");
+}
+
+TEST_F(CountAggregationTest, mergeNullIntermediates) {
+  // count_partial never emits a null, so a null intermediate reaches the merge
+  // path only through the count_merge companion. The nulls are set on a flat
+  // vector that keeps non-zero counts in its values buffer, so a merge that
+  // reads null rows instead of skipping them returns a visibly wrong count.
+  auto counts = makeFlatVector<int64_t>({10, 100, 5, 1'000, 7});
+  counts->setNull(1, true);
+  counts->setNull(2, true);
+  counts->setNull(4, true);
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 2, 2, 3}),
+      counts,
+  });
+
+  AggregationTester(*this)
+      .inputs(input)
+      .groupBy({"c0"})
+      .aggregates({"count_merge(c1)"})
+      .assertResults(makeRowVector({
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<int64_t>({10, 1'000, 0}),
+      }));
+
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"count_merge(c1)"})
+      .assertResults(makeRowVector(
+          {makeFlatVector<int64_t>(std::vector<int64_t>{1'010})}));
 }
 
 TEST_F(CountAggregationTest, mask) {
@@ -144,13 +187,16 @@ TEST_F(CountAggregationTest, mask) {
   auto task =
       AssertQueryBuilder(plan, duckDbQueryRunner_)
           .maxDrivers(1)
-          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
-          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
           .assertResults(
               "SELECT k, count(c) FILTER (where m) FROM tmp GROUP BY k");
-  auto taskStats = toPlanStats(task->taskStats());
-  auto partialStats = taskStats.at(partialNodeId).customStats;
-  EXPECT_LT(0, partialStats.at("abandonedPartialAggregationRows").sum);
+  EXPECT_LT(
+      0,
+      exec::PlanNodeStats::extract(task->taskStats(), partialNodeId)
+          .customSum(
+              exec::HashAggregationStatNames::
+                  kAbandonedPartialAggregationRows));
 }
 
 TEST_F(CountAggregationTest, distinct) {
@@ -203,7 +249,7 @@ TEST_F(CountAggregationTest, distinct) {
              .values({makeRowVector(ROW({"c0"}, {BIGINT()}), 0)})
              .singleAggregation({}, {"count(distinct c0)"})
              .planNode();
-  AssertQueryBuilder(plan, duckDbQueryRunner_).assertResults("SELECT 0");
+  AssertQueryBuilder(plan).assertSingleResult<int64_t>(0);
 
   // Group by.
   auto testGroupBy = [&](const std::string& input) {
@@ -390,6 +436,53 @@ TEST_F(CountAggregationTest, unknownType) {
           makeFlatVector<int32_t>({0, 1}),
           makeFlatVector<int64_t>({0, 0}),
       }));
+}
+
+TEST_F(CountAggregationTest, toIntermediate) {
+  constexpr vector_size_t kBatchSize = 10;
+  std::vector<RowVectorPtr> data;
+  for (auto batch = 0; batch < 2; ++batch) {
+    data.push_back(makeRowVector(
+        {"k", "c", "v", "m"},
+        {makeFlatVector<int64_t>(
+             kBatchSize, [&](auto row) { return batch * kBatchSize + row; }),
+         makeFlatVector<int64_t>(
+             kBatchSize,
+             [](auto row) { return row; },
+             [](auto row) { return row % 3 == 0; }),
+         makeFlatVector<int64_t>(kBatchSize, [](auto row) { return row; }),
+         makeFlatVector<bool>(
+             kBatchSize, [](auto row) { return row % 2 == 0; })}));
+  }
+  createDuckDbTable(data);
+
+  core::PlanNodeId partialNodeId;
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .partialAggregation(
+                      {"k"}, {"count(v)", "count()", "count(c)"}, {"", "m"})
+                  .capturePlanNodeId(partialNodeId)
+                  .finalAggregation()
+                  .planNode();
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
+          .assertResults(
+              "SELECT k, count(v), count(1) FILTER (WHERE m), count(c) "
+              "FROM tmp GROUP BY k");
+
+  const auto stats =
+      exec::PlanNodeStats::extract(task->taskStats(), partialNodeId);
+  EXPECT_LT(
+      0,
+      stats.customSum(
+          exec::HashAggregationStatNames::kAbandonedPartialAggregationRows));
+  EXPECT_GT(
+      stats.customSum(
+          exec::HashAggregationStatNames::kToIntermediateFastPathCalls),
+      0);
 }
 
 } // namespace

@@ -12,26 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_mock_rpc_client_test MockRPCClientTest.cpp)
-
-target_link_libraries(
-  velox_mock_rpc_client_test
-  velox_mock_rpc_client
-  GTest::gtest
-  GTest::gtest_main
-  Folly::folly
-)
-
-add_test(NAME velox_mock_rpc_client_test COMMAND velox_mock_rpc_client_test)
-
-add_executable(velox_rpc_state_test RPCStateTest.cpp)
+add_executable(velox_rpc_state_test RPCStateTest.cpp Main.cpp)
 
 target_link_libraries(
   velox_rpc_state_test
   velox_rpc_state
   velox_rpc_types
+  velox_memory
+  velox_process
+  GTest::gmock
   GTest::gtest
-  GTest::gtest_main
   Folly::folly
 )
 
@@ -49,32 +39,38 @@ target_link_libraries(
 
 add_test(NAME velox_congestion_controller_test COMMAND velox_congestion_controller_test)
 
-add_executable(velox_rpc_node_test RPCNodeTest.cpp)
+add_executable(velox_rpc_node_test RPCNodeTest.cpp Main.cpp)
 
 target_link_libraries(
   velox_rpc_node_test
-  velox_mock_rpc_client
+  velox_response_simulator
+  velox_gtest_utils
   velox_core
   velox_memory
+  velox_process
   velox_vector
   GTest::gtest
-  GTest::gtest_main
   Folly::folly
 )
 
 add_test(NAME velox_rpc_node_test COMMAND velox_rpc_node_test)
 
-add_executable(velox_demo_rpc_function_test DemoRPCFunctionTest.cpp)
-velox_add_test_headers(velox_demo_rpc_function_test DemoRPCFunction.h)
+add_executable(velox_demo_rpc_function_test DemoRPCFunctionTest.cpp Main.cpp)
+velox_add_test_headers(
+  velox_demo_rpc_function_test
+  DemoRPCFunction.h
+  ResponseSimulator.h
+  TextOutput.h
+)
 
 target_link_libraries(
   velox_demo_rpc_function_test
   velox_demo_rpc_function
   velox_core
   velox_memory
+  velox_process
   velox_vector
   GTest::gtest
-  GTest::gtest_main
   Folly::folly
 )
 
@@ -85,6 +81,8 @@ add_executable(velox_rpc_rate_limiter_test RPCRateLimiterTest.cpp)
 target_link_libraries(
   velox_rpc_rate_limiter_test
   velox_rpc_rate_limiter
+  velox_test_util
+  GTest::gmock
   GTest::gtest
   GTest::gtest_main
   Folly::folly
@@ -108,8 +106,40 @@ add_executable(velox_rpc_operator_test RPCOperatorTest.cpp Main.cpp)
 
 target_link_libraries(
   velox_rpc_operator_test
+  velox_deferred_rpc_phase_function
   velox_demo_batch_rpc_function
   velox_demo_rpc_function
+  velox_rpc_plan_node_translator
+  velox_async_rpc_function_registry
+  velox_exec_test_lib
+  GTest::gmock
+  GTest::gtest
+  Folly::folly
+)
+
+add_test(NAME velox_rpc_operator_test COMMAND velox_rpc_operator_test)
+
+add_executable(velox_deferred_rpc_phase_function_test DeferredRpcPhaseFunctionTest.cpp Main.cpp)
+
+target_link_libraries(
+  velox_deferred_rpc_phase_function_test
+  velox_deferred_rpc_phase_function
+  velox_async_rpc_function_registry
+  velox_memory
+  velox_process
+  velox_vector
+  GTest::gmock
+  GTest::gtest
+  Folly::folly
+)
+
+add_test(NAME velox_deferred_rpc_phase_function_test COMMAND velox_deferred_rpc_phase_function_test)
+
+add_executable(velox_rpc_aimd_under_load_test RPCAimdUnderLoadTest.cpp Main.cpp)
+
+target_link_libraries(
+  velox_rpc_aimd_under_load_test
+  velox_response_simulator
   velox_rpc_plan_node_translator
   velox_async_rpc_function_registry
   velox_exec_test_lib
@@ -117,4 +147,4 @@ target_link_libraries(
   Folly::folly
 )
 
-add_test(NAME velox_rpc_operator_test COMMAND velox_rpc_operator_test)
+add_test(NAME velox_rpc_aimd_under_load_test COMMAND velox_rpc_aimd_under_load_test)

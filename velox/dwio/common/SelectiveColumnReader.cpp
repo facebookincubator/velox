@@ -59,10 +59,8 @@ SelectiveColumnReader::SelectiveColumnReader(
   scanState_.rowsCopy = raw_vector<vector_size_t>(pool_);
   scanState_.filterCache = raw_vector<uint8_t>(pool_);
   // Initialize per-column decoding statistics if collection is enabled.
-  if (params.runtimeStatistics().decodingStatsSet) {
-    decodingStats_ = params.runtimeStatistics().decodingStatsSet->getOrCreate(
-        fileType_->id());
-  }
+  auto& stats = params.columnStats(fileType_->id(), fileType_->type()->kind());
+  decodingStats_ = stats.decodingStats ? &*stats.decodingStats : nullptr;
 }
 
 void SelectiveColumnReader::readWithTiming(
@@ -118,6 +116,25 @@ void SelectiveColumnReader::seekTo(int64_t offset, bool readsNullsOnly) {
         readOffset_,
         offset);
   }
+}
+
+bool SelectiveColumnReader::hasRowFilter() const {
+  if (!scanSpec_->hasFilter()) {
+    return false;
+  }
+  const auto* filter = scanSpec_->filter();
+  return filter == nullptr ||
+      filter->kind() != velox::common::FilterKind::kAlwaysTrue ||
+      !scanSpec_->children().empty();
+}
+
+bool SelectiveColumnReader::useBulkPath(bool hasNulls) const {
+  auto* filter = scanSpec_->filter();
+  return hasBulkPath() && process::hasSimd() &&
+      (!filter ||
+       (filter->isDeterministic() && (!hasNulls || !filter->testNull()))) &&
+      (!scanSpec_->valueHook() || !hasNulls ||
+       !scanSpec_->valueHook()->acceptsNulls());
 }
 
 void SelectiveColumnReader::setReturnNullsMode(const RowSet& rows) {
@@ -522,7 +539,8 @@ void SelectiveColumnReader::addSkippedParentNulls(
     int64_t to,
     int32_t numNulls) {
   const auto rowsPerRowGroup = formatData_->rowsPerRowGroup();
-  if (rowsPerRowGroup.has_value() &&
+  // A file without a row index reports 0 rows per row group.
+  if (rowsPerRowGroup.value_or(0) > 0 &&
       from / rowsPerRowGroup.value() >
           parentNullsRecordedTo_ / rowsPerRowGroup.value()) {
     // the new nulls are in a different row group than the last.

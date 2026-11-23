@@ -99,7 +99,7 @@ class RowReader {
    * implementation specific and depends on a format of a file being read.
    * @param stats stats to update
    */
-  virtual void updateRuntimeStats(RuntimeStatistics& stats) const = 0;
+  virtual void updateRuntimeStats(RuntimeStats& stats) const = 0;
 
   /**
    * This method should be called whenever filter is modified in a ScanSpec
@@ -151,6 +151,15 @@ class RowReader {
    */
   virtual std::optional<std::vector<PrefetchUnit>> prefetchUnits() {
     return std::nullopt;
+  }
+
+  /**
+   * Returns the index of the currently loaded stripe. Throws an error for
+   * readers without override.
+   */
+  virtual uint32_t currentStripe() const {
+    VELOX_UNSUPPORTED(
+        "RowReader::currentStripe() is not supported by this reader");
   }
 
   /**

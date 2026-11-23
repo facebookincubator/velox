@@ -34,7 +34,7 @@ using TestTypes =
 
 TYPED_TEST_SUITE(FunctionTest, TestTypes);
 
-TYPED_TEST(FunctionTest, Store) {
+TYPED_TEST(FunctionTest, store) {
   TypeParam src[] = {1, 2};
 
   std::vector<TypeParam> in(std::begin(src), std::end(src));
@@ -48,7 +48,7 @@ TYPED_TEST(FunctionTest, Store) {
   EXPECT_EQ(expected_out, out);
 }
 
-TYPED_TEST(FunctionTest, StoreFewItems) {
+TYPED_TEST(FunctionTest, storeFewItems) {
   TypeParam src[] = {1, 2};
 
   std::vector<TypeParam> in(std::begin(src), std::end(src));
@@ -62,7 +62,7 @@ TYPED_TEST(FunctionTest, StoreFewItems) {
   EXPECT_EQ(expected_out, out);
 }
 
-TYPED_TEST(FunctionTest, StoreIf) {
+TYPED_TEST(FunctionTest, storeIf) {
   TypeParam src[] = {1, 2};
   int src_selection_flags[] = {0, 1};
 
@@ -79,7 +79,7 @@ TYPED_TEST(FunctionTest, StoreIf) {
   EXPECT_EQ(expected_out, out);
 }
 
-TYPED_TEST(FunctionTest, StoreIfFewItems) {
+TYPED_TEST(FunctionTest, storeIfFewItems) {
   TypeParam src[] = {1, 2};
   int src_selection_flags[] = {0, 1};
 
@@ -96,7 +96,7 @@ TYPED_TEST(FunctionTest, StoreIfFewItems) {
   EXPECT_EQ(expected_out, out);
 }
 
-TYPED_TEST(FunctionTest, StoreAt) {
+TYPED_TEST(FunctionTest, storeAt) {
   TypeParam src[] = {1, 2, 3, 4, 5, 6, 7, 8};
   int src_offsets[] = {7, 6, 5, 4, 3, 2, 1, 0};
 
@@ -112,7 +112,7 @@ TYPED_TEST(FunctionTest, StoreAt) {
   EXPECT_EQ(expected_out, out);
 }
 
-TYPED_TEST(FunctionTest, StoreAtIf) {
+TYPED_TEST(FunctionTest, storeAtIf) {
   TypeParam src[] = {1, 2, 3, 4, 5, 6, 7, 8};
   int src_offsets[] = {7, 6, 5, 4, 3, 2, 1, 0};
   int src_selection_flags[] = {0, 1, 1, 0, 1, 0, 1, 1};
@@ -131,7 +131,7 @@ TYPED_TEST(FunctionTest, StoreAtIf) {
   EXPECT_EQ(expected_out, out);
 }
 
-TYPED_TEST(FunctionTest, Fill) {
+TYPED_TEST(FunctionTest, fill) {
   TypeParam value = 49;
 
   std::vector<TypeParam> out(8);
@@ -144,7 +144,7 @@ TYPED_TEST(FunctionTest, Fill) {
   EXPECT_EQ(expected_out, out);
 }
 
-TYPED_TEST(FunctionTest, FillAtIf) {
+TYPED_TEST(FunctionTest, fillAtIf) {
   TypeParam value = 49;
 
   int src_offsets[] = {7, 6, 5, 4, 3, 2, 1, 0};

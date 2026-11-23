@@ -1,0 +1,63 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+namespace facebook.nimble.serialization;
+
+/// Associates a value stream with a dictionary in the containing scope list.
+table SharedDictionaryReference {
+  /// Logical value stream whose shared-dictionary indices require this
+  /// dictionary.
+  value_stream_id:uint32;
+
+  /// Identifier interpreted according to the containing scope list. It is an
+  /// auxiliary stream ID for stripe scope, an entry ID for file scope, and a
+  /// resolver-defined ID for external scope.
+  dictionary_id:uint32;
+
+  /// Nimble DataType of the dictionary values.
+  data_type:uint8;
+}
+
+/// Locates one file-scope dictionary alphabet by its absolute file byte range.
+table FileDictionary {
+  /// Identifier referenced by file_dictionary_references.
+  dictionary_id:uint32;
+
+  /// Nimble DataType of the encoded values.
+  data_type:uint8;
+
+  /// Absolute file byte range containing the encoded alphabet.
+  offset:uint64;
+  length:uint32;
+}
+
+/// Shared dictionary metadata stored in the tablet optional section.
+table SharedDictionaryCatalog {
+  /// Value streams mapped to stripe-local auxiliary dictionary streams.
+  stripe_dictionary_references:[SharedDictionaryReference];
+
+  /// Value streams mapped to alphabets stored in file_dictionaries. Multiple
+  /// value streams may reference the same file dictionary.
+  file_dictionary_references:[SharedDictionaryReference];
+
+  /// Value streams mapped to dictionaries supplied by an external resolver.
+  external_dictionary_references:[SharedDictionaryReference];
+
+  /// Locations of file-scope dictionary alphabets indexed by dictionary_id.
+  file_dictionaries:[FileDictionary];
+}
+
+root_type SharedDictionaryCatalog;

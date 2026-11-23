@@ -112,11 +112,11 @@ void Destination::createVectorStreamGroup(const RowVectorPtr& output) {
 }
 
 void Destination::clearVectorStreamGroup() {
-  current_->clear();
-  // Signal that createStreamTree() must be called before the next append
-  // to properly reinitialize the serializer with a fresh stream tree.
-  // This fixes a crash where the serializer was in an invalid state after
-  // clear() due to stale references to freed StreamArena memory.
+  // Free only the arena memory; the serializer's stream tree is rebuilt by
+  // createStreamTree() before the next append.
+  current_->StreamArena::clear();
+  // The serializer now holds stale references into the freed arena, so force
+  // createStreamTree() to run before the next append.
   needsStreamTreeRecreation_ = true;
 }
 
@@ -196,7 +196,8 @@ PartitionedOutput::PartitionedOutput(
     int32_t operatorId,
     DriverCtx* ctx,
     const std::shared_ptr<const core::PartitionedOutputNode>& planNode,
-    bool eagerFlush)
+    bool eagerFlush,
+    const std::shared_ptr<DefaultOutputBufferManager>& manager)
     : Operator(
           ctx,
           planNode->outputType(),
@@ -215,7 +216,7 @@ PartitionedOutput::PartitionedOutput(
           planNode->inputType(),
           planNode->outputType(),
           planNode->outputType())),
-      bufferManager_(DefaultOutputBufferManager::getInstanceRef()),
+      bufferManager_(manager),
       // NOTE: 'bufferReleaseFn_' holds a reference on the associated task to
       // prevent it from deleting while there are output buffers being accessed
       // out of the partitioned output buffer manager such as in Prestissimo,
@@ -244,6 +245,8 @@ PartitionedOutput::PartitionedOutput(
     VELOX_USER_CHECK(keyChannels_.empty());
     VELOX_USER_CHECK_NULL(partitionFunction_);
   }
+  VELOX_CHECK_NOT_NULL(
+      manager, "PartitionedOutput requires an output buffer manager");
 }
 
 void PartitionedOutput::initializeInput(RowVectorPtr input) {

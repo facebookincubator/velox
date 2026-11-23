@@ -95,8 +95,7 @@ void MinMaxByResultVerifier::initialize(
   // )
   // GROUP BY
   //     b
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto plan = PlanBuilder(planNodeIdGenerator, input[0]->pool())
+  auto plan = PlanBuilder(input[0]->pool())
                   .values(input)
                   .projectExpressions(projections);
   // Filter out masked rows first so that groups with all rows filtered out
@@ -154,9 +153,8 @@ bool MinMaxByResultVerifier::verify(const RowVectorPtr& result) {
   // Union 'result' with 'expected_', group by on 'groupingKeys_' and produce
   // pairs of actual and expected values per group. We cannot use join because
   // grouping keys may have nulls.
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto expectedSource =
-      PlanBuilder(planNodeIdGenerator).values({expected_}).planNode();
+  PlanBuilder builder(result->pool());
+  auto expectedSource = builder.newPlan().values(expected_).planNode();
 
   // Append a NULL column for the expected column to 'result' so that we can
   // union 'result' with 'expected_'.
@@ -168,10 +166,8 @@ bool MinMaxByResultVerifier::verify(const RowVectorPtr& result) {
     nullExpected =
         fmt::format("cast(NULL as {}[][]) as expected", aggregateTypeSql_);
   }
-  auto actualSource = PlanBuilder(planNodeIdGenerator, result->pool())
-                          .values({result})
-                          .appendColumns({nullExpected})
-                          .planNode();
+  auto actualSource =
+      builder.newPlan().values(result).appendColumns({nullExpected}).planNode();
 
   core::PlanNodePtr plan;
   if (minMaxByN_) {
@@ -204,7 +200,7 @@ bool MinMaxByResultVerifier::verify(const RowVectorPtr& result) {
     //     )
     // )
     plan =
-        PlanBuilder(planNodeIdGenerator, result->pool())
+        builder.newPlan()
             .localPartition({}, {expectedSource, actualSource})
             // Bring the actual and corresponding expected to the same row.
             .singleAggregation(
@@ -230,7 +226,7 @@ bool MinMaxByResultVerifier::verify(const RowVectorPtr& result) {
     // 'expectedSource.expected'. This is similar to the query above, but has
     // the top-level projection replaced with the last project below.
     plan =
-        PlanBuilder(planNodeIdGenerator, result->pool())
+        builder.newPlan()
             .localPartition({}, {expectedSource, actualSource})
             .singleAggregation(
                 groupingKeys_,

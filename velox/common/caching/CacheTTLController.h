@@ -71,7 +71,7 @@ class CacheTTLController {
   /// if the existing file entry is not updated.
   bool addOpenFileInfo(
       uint64_t fileNum,
-      int64_t openTimeSec = getCurrentTimeSec());
+      int64_t openTimeSec = EpochTime::now<std::chrono::seconds>());
 
   /// Compute age related stats of the cached files.
   CacheAgeStats getCacheAgeStats() const;

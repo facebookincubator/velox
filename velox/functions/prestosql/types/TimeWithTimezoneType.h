@@ -32,6 +32,8 @@ class TimeWithTimezoneType final : public BigintType {
  public:
   static constexpr int16_t kTimeWithTimezoneToVarcharRowSize = 18;
 
+  static std::shared_ptr<const TimeWithTimezoneType> create() = delete;
+
   static std::shared_ptr<const TimeWithTimezoneType> get() {
     VELOX_CONSTEXPR_SINGLETON TimeWithTimezoneType kInstance;
     return {std::shared_ptr<const TimeWithTimezoneType>{}, &kInstance};

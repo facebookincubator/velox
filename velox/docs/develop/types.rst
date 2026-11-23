@@ -118,6 +118,7 @@ INTERVAL YEAR TO MONTH  INTEGER
 TIME                    BIGINT
 TIME_MICRO_UTC          BIGINT
 TIMESTAMP_UTC           TIMESTAMP
+VECTOR_INDEX            VARBINARY
 ======================  ======================================================
 
 DECIMAL type carries additional `precision`,
@@ -138,6 +139,11 @@ TIME_MICRO_UTC represents time in microseconds since midnight in UTC, not subjec
 The TIME and TIME_MICRO_UTC types are backed by BIGINT physical type.
 
 TIMESTAMP represents a timestamp subject to session timezone interpretation. TIMESTAMP_UTC represents a timestamp in UTC, not subject to session timezone adjustment. Both types are backed by TIMESTAMP physical type.
+
+VECTOR_INDEX represents a local vector index: a FAISS index over embeddings,
+with each embedding's id, serialized as ``faiss::write_index`` writes it. It is
+backed by VARBINARY physical type. See :doc:`/functions/presto/vectorindex`
+for the functions that produce and read it.
 
 Custom Types
 ~~~~~~~~~~~~
@@ -287,11 +293,38 @@ It is a quadtree in the Web Mercator projection, where each tile is 256x256 pixe
 GEOMETRY represents a geometry as defined in `Simple Feature Access <https://en.wikipedia.org/wiki/Simple_Features>`_.
 Subtypes include Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon, and GeometryCollection. They
 are often stored as `Well-Known Text <https://en.wikipedia.org/wiki/Well-known_text_representation_of_geometry>`_ or
-`Well-Known Binary <https://en.wikipedia.org/wiki/Well-known_binary>`_.
+`Well-Known Binary <https://en.wikipedia.org/wiki/Well-known_binary>`_. Velox's own encoding is based on Esri's shape
+format and is what the Presto coordinator interprets; it is neither WKT nor WKB.
+
+An Iceberg v3 ``geometry`` column is stored on disk as a plain ``binary`` column holding standard ISO WKB. The Iceberg
+connector, and only the Iceberg connector, re-encodes those bytes into Velox's internal encoding while reading a split
+(see ``velox/connectors/hive/iceberg/IcebergGeospatialConverter.h``). The format-generic Parquet, DWRF and ORC readers
+never inspect GEOMETRY: they read the column by its physical file type. An unannotated ``binary`` column, a non-Iceberg
+table, or a file written from an existing Velox GEOMETRY vector is therefore never reinterpreted as WKB.
+
+This is initial, two-dimensional (XY) support: WKB carrying Z or M coordinates, and extended WKB (EWKB), are rejected
+with an explicit error rather than silently flattened, and no SRID is inferred from the Iceberg CRS. Only Parquet data
+files are supported; a geometry column in an ORC or DWRF data file is rejected. A build with ``VELOX_ENABLE_GEO=ON`` is
+required; otherwise the read fails naming the flag and never exposes raw WKB inside a GEOMETRY vector.
+
+Geometry support in the Iceberg connector is **read-only**. Reading re-encodes ISO WKB into Velox's internal encoding,
+but the write side does not perform the inverse conversion, and GEOMETRY is backed by VARBINARY -- so writing a GEOMETRY
+vector would place Velox's internal bytes on disk where the Iceberg specification requires ISO WKB, producing a file
+that neither this reader nor any other Iceberg engine could interpret. ``IcebergDataSink`` therefore rejects a GEOMETRY
+column, at any nesting depth, rather than emitting a non-conforming file. Writes become symmetric once the writer
+converts internal encoding to WKB.
 
 SPHERICALGEOGRAPHY represents a geometry on a spherical model of the Earth. It is internally represented the same
 way as GEOMETRY, but only certain functions are supported.  Moreover, these functions will return values in meters
 as opposed to the units of the coordinate space.
+
+An Iceberg v3 ``geography`` column is read as SPHERICALGEOGRAPHY. It holds the same ISO WKB as a ``geometry`` column
+and takes the same re-encoding, with the same scope: two-dimensional, Parquet only, ``VELOX_ENABLE_GEO=ON``, and
+read-only. Iceberg geography coordinates are WGS84 longitude/latitude, so each value is also held to the checks of
+Presto's ``to_spherical_geography``: every longitude must lie in [-180, 180] and every latitude in [-90, 90], and a
+NaN or infinite ordinate is rejected. Empty values are accepted. The connector does not check the column's CRS or
+edge interpolation algorithm; the engine that maps the Iceberg schema to SPHERICALGEOGRAPHY is expected to accept
+only WGS84 with spherical edges, the semantics SPHERICALGEOGRAPHY models.
 
 Spark Types
 ~~~~~~~~~~~~
@@ -319,6 +352,12 @@ key differences are listed below.
       SELECT cast('12:30:45.123456' as time)  -- 12:30:45.123456
 
 * Spark uses TIMESTAMP_UTC to support TimestampNTZType. TIMESTAMP_UTC is not subject to session timezone adjustment.
+  The Parquet reader supports widening DATE columns to TIMESTAMP_UTC, producing
+  midnight on the same calendar date without a session timezone adjustment.
+  Widening rejects dates whose midnight is outside the signed 64-bit
+  microsecond range, including when the column is used only in a value filter.
+  This does not enable widening DATE to the session-timezone-adjusted TIMESTAMP
+  type.
 
 * In function comparisons, nested null values are handled as values.
   Example::
@@ -451,9 +490,10 @@ in two places:
 * ``LongDecimalType::commonSuperType`` inside ``leastCommonSuperType``
   computes the common ``(p, s)`` for plan-level operations (UNION, CASE
   result type, etc.).
-* ``SignatureBinder``'s integer-parameter binding handles function
-  signatures of the form ``DECIMAL(P, S)`` by binding ``P`` and ``S`` as
-  integer variables from the actual argument types.
+* ``SignatureBinder`` pre-binds ``P`` and ``S`` in function signatures of
+  the form ``DECIMAL(P, S)`` from actual DECIMAL arguments or from a scalar's
+  rule-defined DECIMAL target. Arguments that share literal variables widen
+  those variables to a common DECIMAL before the binder records casts.
 
 *DECIMAL widening rule.* ``DECIMAL(p1, s1)`` is coercible to
 ``DECIMAL(p2, s2)`` iff:
@@ -529,12 +569,14 @@ BIGINT           DECIMAL(19, 0), REAL, DOUBLE
 REAL             DOUBLE
 DECIMAL          REAL, DOUBLE
 DATE             TIMESTAMP
-UNKNOWN          TINYINT, BOOLEAN, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE,
-                 VARCHAR, VARBINARY
+UNKNOWN          TINYINT, BOOLEAN, SMALLINT, INTEGER, BIGINT, DECIMAL(1, 0),
+                 REAL, DOUBLE, VARCHAR, VARBINARY
 ==============   ==========================================================
 
 Differences from Velox's defaults:
 
+* ``UNKNOWN -> DECIMAL(1, 0)`` is added so an unknown literal can bind to a
+  parameterized DECIMAL signature.
 * ``BIGINT -> REAL`` is added. The BIGINT row becomes
   ``DECIMAL(19, 0), REAL, DOUBLE``, mirroring the INTEGER row's
   ordering. This makes ``divide(real, bigint)`` resolve to

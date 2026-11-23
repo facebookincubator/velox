@@ -16,10 +16,24 @@
 #pragma once
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <cstdint>
+#include <functional>
+#include <limits>
+#include <optional>
 #include <type_traits>
 #include "folly/CPortability.h"
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Macros.h"
 #include "velox/type/FloatingPointUtil.h"
+
+// CppToType is only reached from abs()'s overflow message. It pulls in the
+// runtime type system, which nvcc cannot parse, so device translation units
+// build the message without the type name instead.
+#ifndef __CUDACC__
+#include "velox/type/CppToType.h"
+#endif
 
 namespace facebook::velox::functions {
 
@@ -32,9 +46,15 @@ namespace facebook::velox::functions {
 /// number to the rounded fraction for small numbers.
 /// We are trying to minimize the loss of precision by using the best path for
 /// the number, but the journey is likely not over yet.
+/// If set, 'scaleFactor' must equal std::pow(10, decimals). round() uses it in
+/// place of computing the power, and still branches on 'decimals', so a
+/// mismatched value returns a wrong result without an error. A caller whose
+/// 'decimals' is constant computes the power once instead of once per row.
 template <typename TNum, typename TDecimals, bool alwaysRoundNegDec = false>
-FOLLY_ALWAYS_INLINE TNum
-round(const TNum& number, const TDecimals& decimals = 0) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE TNum round(
+    const TNum& number,
+    const TDecimals& decimals = 0,
+    std::optional<double> scaleFactor = std::nullopt) {
   static_assert(!std::is_same_v<TNum, bool> && "round not supported for bool");
 
   if constexpr (std::is_integral_v<TNum>) {
@@ -45,6 +65,10 @@ round(const TNum& number, const TDecimals& decimals = 0) {
       return number;
     }
   }
+  VELOX_DCHECK(
+      !scaleFactor.has_value() || *scaleFactor == std::pow(10, decimals),
+      "scaleFactor must be 10^decimals");
+
   if (!std::isfinite(number)) {
     return number;
   }
@@ -57,7 +81,7 @@ round(const TNum& number, const TDecimals& decimals = 0) {
   // For negative 'decimals', we aren't going to lose any precision - we divide
   // first (multiply by factor which is < 1.0).
   if (decimals < 0) {
-    const double factor = std::pow(10, decimals);
+    const double factor = scaleFactor ? *scaleFactor : std::pow(10, decimals);
     return std::round(number * factor) / factor;
   }
 
@@ -67,17 +91,34 @@ round(const TNum& number, const TDecimals& decimals = 0) {
   if (fraction == 0.0)
     return number;
 
-  const double factor = std::pow(10, decimals);
+  const double factor = scaleFactor ? *scaleFactor : std::pow(10, decimals);
 
-  // Smaller numbers are less affected by precision loss being multiplied by the
-  // factor, but more affected by precision loss by adding truncated number to
-  // the rounded fraction in the end. Because of that, we use factor
-  // multiplication path on the smaller numbers.
-  // The threshold is a somewhat arbitrary/empirical number taking up 44 bits in
-  // the integer form.
   if constexpr (!std::is_integral_v<TNum>) {
+    const auto scaled = number * factor;
+    // An infinite factor cannot establish the decimal quantum. The magnitude
+    // prefilter skips the spacing calculation on common inputs.
+    if (std::isfinite(factor) &&
+        std::abs(scaled) >= 1 / std::numeric_limits<TNum>::epsilon()) {
+      using UInt =
+          std::conditional_t<std::is_same_v<TNum, float>, uint32_t, uint64_t>;
+      // For finite, nonzero FLOAT/DOUBLE, decrementing the bits moves one value
+      // toward zero.
+      const auto spacing = std::abs(
+          number - std::bit_cast<TNum>(std::bit_cast<UInt>(number) - UInt{1}));
+      // Avoid a lossy round trip when the decimal quantum is smaller than the
+      // spacing toward zero, including the narrower spacing at powers of two.
+      if (spacing * factor > 1) {
+        return number;
+      }
+    }
+    // Smaller numbers are less affected by precision loss being multiplied by
+    // the factor, but more affected by precision loss by adding truncated
+    // number to the rounded fraction in the end. Because of that, we use factor
+    // multiplication path on the smaller numbers.
+    // The threshold is a somewhat arbitrary/empirical number taking up 44 bits
+    // in the integer form.
     if (fabs(number) < 17592186044415.F) {
-      return std::round(number * factor) / factor;
+      return std::round(scaled) / factor;
     }
   }
 
@@ -92,7 +133,7 @@ round(const TNum& number, const TDecimals& decimals = 0) {
 
 // This is used by Velox for floating points plus.
 template <typename T>
-T plus(const T a, const T b)
+VELOX_GPU_COMPATIBLE T plus(const T a, const T b)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
     __attribute__((__no_sanitize__("signed-integer-overflow")))
@@ -104,7 +145,7 @@ T plus(const T a, const T b)
 
 // This is used by Velox for floating points minus.
 template <typename T>
-T minus(const T a, const T b)
+VELOX_GPU_COMPATIBLE T minus(const T a, const T b)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
     __attribute__((__no_sanitize__("signed-integer-overflow")))
@@ -116,7 +157,7 @@ T minus(const T a, const T b)
 
 // This is used by Velox for floating points multiply.
 template <typename T>
-T multiply(const T a, const T b)
+VELOX_GPU_COMPATIBLE T multiply(const T a, const T b)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
     __attribute__((__no_sanitize__("signed-integer-overflow")))
@@ -128,7 +169,7 @@ T multiply(const T a, const T b)
 
 // This is used by Velox for floating points divide.
 template <typename T>
-T divide(const T& a, const T& b)
+VELOX_GPU_COMPATIBLE T divide(const T& a, const T& b)
 #if defined(__has_feature)
 #if __has_feature(__address_sanitizer__)
     __attribute__((__no_sanitize__("float-divide-by-zero")))
@@ -141,7 +182,7 @@ T divide(const T& a, const T& b)
 
 // This is used by Velox for floating points modulus.
 template <typename T>
-T modulus(const T a, const T b) {
+VELOX_GPU_COMPATIBLE T modulus(const T a, const T b) {
   if (b == 0) {
     // Match Presto semantics
     return std::numeric_limits<T>::quiet_NaN();
@@ -150,17 +191,21 @@ T modulus(const T a, const T b) {
 }
 
 template <typename T>
-T negate(const T& arg) {
+VELOX_GPU_COMPATIBLE T negate(const T& arg) {
   T results = std::negate<std::remove_cv_t<T>>()(arg);
   return results;
 }
 
 template <typename T>
-T abs(const T& arg) {
+VELOX_GPU_COMPATIBLE T abs(const T& arg) {
   if constexpr (std::is_integral_v<T>) {
     if (arg == std::numeric_limits<T>::min()) {
+#ifdef __CUDACC__
+      VELOX_USER_FAIL("Value {} is out of range for abs()", arg);
+#else
       VELOX_USER_FAIL(
           "Value {} is out of range for abs({})", arg, CppToType<T>::name);
+#endif
     }
   }
   T results = std::abs(arg);
@@ -168,27 +213,30 @@ T abs(const T& arg) {
 }
 
 template <typename T>
-T floor(const T& arg) {
+VELOX_GPU_COMPATIBLE T floor(const T& arg) {
   T results = std::floor(arg);
   return results;
 }
 
 template <typename T>
-T ceil(const T& arg) {
+VELOX_GPU_COMPATIBLE T ceil(const T& arg) {
   T results = std::ceil(arg);
   return results;
 }
 
-FOLLY_ALWAYS_INLINE double truncate(double number, int32_t decimals) {
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE double truncate(
+    double number,
+    int32_t decimals) {
   const bool decNegative = (decimals < 0);
-  const auto log10Size = DoubleUtil::kPowersOfTen.size(); // 309
+  const auto log10Size = DoubleUtil::kNumPowersOfTen; // 309
   if (decNegative && decimals <= -log10Size) {
     return 0.0;
   }
 
   const uint64_t absDec = std::abs(decimals);
-  const double tmp = (absDec < log10Size) ? DoubleUtil::kPowersOfTen[absDec]
-                                          : std::pow(10.0, (double)absDec);
+  const double tmp = (absDec < log10Size)
+      ? DoubleUtil::powerOfTen(static_cast<int32_t>(absDec))
+      : std::pow(10.0, (double)absDec);
 
   const double valueMulTmp = number * tmp;
   if (!decNegative && !std::isfinite(valueMulTmp)) {

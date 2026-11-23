@@ -44,6 +44,7 @@
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/file/FileIoContext.h"
 #include "velox/common/file/FileIoTracer.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/Region.h"
@@ -66,34 +67,6 @@ class IoStats {
 
  private:
   folly::Synchronized<folly::F14FastMap<std::string, RuntimeMetric>> stats_;
-};
-
-struct FileIoContext {
-  /// Stats for IO operations.
-  IoStats* ioStats{nullptr};
-
-  /// Options for file read operations.
-  folly::F14FastMap<std::string, std::string> fileOpts;
-
-  /// Tracer for IO operations, providing call stack context.
-  std::shared_ptr<FileIoTracer> ioTracer;
-
-  /// When false, hints to the storage layer that this read should not be cached
-  /// or should be evicted soon after reading. This is useful for one-time reads
-  /// where caching would waste resources.
-  bool cacheable{false};
-
-  FileIoContext() = default;
-
-  explicit FileIoContext(
-      IoStats* stats,
-      folly::F14FastMap<std::string, std::string> fileOpts = {},
-      std::shared_ptr<FileIoTracer> tracer = nullptr,
-      bool cacheable = false)
-      : ioStats(stats),
-        fileOpts(std::move(fileOpts)),
-        ioTracer(std::move(tracer)),
-        cacheable(cacheable) {}
 };
 
 // A read-only file.  All methods in this object should be thread safe.
@@ -175,7 +148,9 @@ class ReadFile {
   }
 
   /// Returns true if this file requires direct-I/O alignment. Sets alignment to
-  /// the byte alignment required for positioned reads, or 1 otherwise.
+  /// the byte alignment required for positioned reads, or 1 otherwise. A
+  /// direct-I/O read may run past the end of the file, and the bytes it returns
+  /// past the end are unspecified.
   virtual bool directIo(uint64_t& alignment) const {
     alignment = 1;
     return false;

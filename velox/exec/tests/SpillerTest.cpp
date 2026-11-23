@@ -17,9 +17,11 @@
 #include "velox/exec/Spiller.h"
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <unordered_set>
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/GroupingSet.h"
 #include "velox/exec/HashBuild.h"
@@ -48,22 +50,6 @@ enum class SpillerType {
   AGGREGATION_OUTPUT = 5,
   ROW_NUMBER_HASH_TABLE = 6,
   NUM_TYPES = 7,
-};
-
-// Class to write runtime stats in the tests to the stats container.
-class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
- public:
-  explicit TestRuntimeStatWriter(
-      std::unordered_map<std::string, RuntimeMetric>& stats)
-      : stats_{stats} {}
-
-  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
-      override {
-    addOperatorRuntimeStats(name, value, stats_);
-  }
-
- private:
-  std::unordered_map<std::string, RuntimeMetric>& stats_;
 };
 
 std::string typeName(SpillerType type) {
@@ -259,9 +245,8 @@ class SpillerTest : public exec::test::RowContainerTestBase {
              type_ == SpillerType::AGGREGATION_OUTPUT)
                 ? 0
                 : 2),
-        numPartitions_(hashBits_.numPartitions()),
-        statWriter_(std::make_unique<TestRuntimeStatWriter>(stats_)) {
-    setThreadLocalRunTimeStatWriter(statWriter_.get());
+        numPartitions_(hashBits_.numPartitions()) {
+    setThreadLocalRunTimeStatWriter(&statWriter_);
   }
 
   ~SpillerTest() {
@@ -501,7 +486,12 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     // that a distinct or group by hash table can have dependents if
     // some keys are known to be unique by themselves. Aggregation
     // spilling will be tested separately.
-    rowContainer_ = makeRowContainer(keys, dependents, false);
+    rowContainer_ = std::make_unique<RowContainer>(
+        keys,
+        std::vector<Accumulator>{},
+        dependents,
+        pool(),
+        RowContainer::Options{.hasProbedFlag = true});
 
     if (numRows == 0 || type_ == SpillerType::NO_ROW_CONTAINER) {
       return;
@@ -510,7 +500,6 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     // Setup temporary row to check spilling partition number.
     char* testRow = rowContainer_->newRow();
     std::vector<char*> testRows(1, testRow);
-    const auto testRowSet = folly::Range<char**>(testRows.data(), 1);
     std::vector<uint64_t> hashes(1);
 
     int numFilledRows = 0;
@@ -521,9 +510,8 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           for (int i = 0; i < keys.size(); ++i) {
             DecodedVector decodedVector(*batch->childAt(i), allRows);
             rowContainer_->store(decodedVector, index, testRow, i);
-            // Calculate hashes for this batch of spill candidates.
-            rowContainer_->hash(i, testRowSet, i > 0, hashes.data());
           }
+          rowContainer_->hashKeys(testRows, hashes);
           const int partitionNum =
               hashBits_.partition(hashes[0], numPartitions_);
           // Copy 'index'th row from 'batch' to 'rowVector_' with
@@ -562,7 +550,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
       probedFlagVector->clearAllNulls();
       for (auto index = 0; index < numRows; ++index) {
         if (probedFlagVector->valueAt(index)) {
-          rowContainer_->setProbedFlag(&rows_[index], 1);
+          rowContainer_->setProbedFlag({&rows_[index], 1});
         }
       }
     }
@@ -573,12 +561,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     const auto numRows = rows_.size();
     ASSERT_EQ(numRows, rowContainer_->numRows());
     std::vector<uint64_t> hashes(numRows);
-    const auto& keys = rowContainer_->keyTypes();
-    // Calculate a hash for every key in 'rows'.
-    for (auto i = 0; i < keys.size(); ++i) {
-      rowContainer_->hash(
-          i, folly::Range<char**>(rows_.data(), numRows), i > 0, hashes.data());
-    }
+    rowContainer_->hashKeys({rows_.data(), numRows}, hashes);
 
     partitions_.resize(numPartitions_);
     for (auto i = 0; i < rowContainer_->numRows(); ++i) {
@@ -623,7 +606,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     common::GetSpillDirectoryPathCB tempSpillDirCb = [&]() -> std::string_view {
       return tempDirPath_->getPath();
     };
-    stats_.clear();
+    statWriter_.clear();
     spillStats_ = folly::Synchronized<exec::SpillStats>();
     spillIoStats_ = IoStats();
 
@@ -687,6 +670,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           rowType_,
           hashBits_,
           sortingKeys,
+          false,
           &spillConfig_,
           spillStats_.wlock().operator->());
     } else if (type_ == SpillerType::AGGREGATION_OUTPUT) {
@@ -750,10 +734,9 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           auto stream = merge->next();
           if (!stream) {
             FAIL() << "Stream ends after " << i << " entries";
-            break;
           }
           ASSERT_TRUE(rowVector_->equalValueAt(
-              &stream->current(), indices[i], stream->currentIndex()));
+              stream->current().get(), indices[i], stream->currentIndex()));
           stream->pop();
         }
       } else {
@@ -778,7 +761,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
             ASSERT_EQ(i, indices.size());
             break;
           }
-          sourceVectors[outputSize] = &stream->current();
+          sourceVectors[outputSize] = stream->current().get();
           bool isEndOfBatch = false;
           sourceIndices[outputSize] = stream->currentIndex(&isEndOfBatch);
           ++outputSize;
@@ -1236,8 +1219,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
   const bool spillProbedFlag_;
   const HashBitRange hashBits_;
   const int32_t numPartitions_;
-  std::unordered_map<std::string, RuntimeMetric> stats_;
-  std::unique_ptr<TestRuntimeStatWriter> statWriter_;
+  ConcurrentRuntimeStatWriter statWriter_;
   folly::Random::DefaultGenerator rng_;
   std::unique_ptr<folly::IOThreadPoolExecutor> executor_;
   std::shared_ptr<TempDirectoryPath> tempDirPath_;
@@ -1307,7 +1289,8 @@ TEST_P(AllTypesSpillerTest, nonSortedSpillFunctions) {
       RowContainerIterator rowIter;
       std::vector<char*, memory::StlAllocator<char*>> rows(5'000, *pool_);
       int numListedRows{0};
-      numListedRows = rowContainer_->listRows(&rowIter, 5000, rows.data());
+      numListedRows =
+          rowContainer_->listRows(&rowIter, std::span(rows.data(), 5000));
       ASSERT_EQ(numListedRows, 5000);
       spill(
           spiller_.get(),
@@ -1582,7 +1565,7 @@ TEST_P(AggregationOutputOnly, basic) {
     int numListedRows{0};
     if (testData.spillRowOffset != 0) {
       numListedRows = rowContainer_->listRows(
-          &rowIter, testData.spillRowOffset, rows.data());
+          &rowIter, std::span(rows.data(), testData.spillRowOffset));
     }
     ASSERT_EQ(numListedRows, std::min(numRows, testData.spillRowOffset));
     spill(
@@ -1608,7 +1591,7 @@ TEST_P(AggregationOutputOnly, basic) {
         auto* stream = merge->next();
         ASSERT_TRUE(stream != nullptr);
         ASSERT_TRUE(rowVector_->equalValueAt(
-            &stream->current(),
+            stream->current().get(),
             partitions_[0][numListedRows + i],
             stream->currentIndex()));
         stream->pop();
@@ -1685,8 +1668,8 @@ TEST_P(SortOutputOnly, basic) {
     RowContainerIterator rowIter;
     std::vector<char*> rows(numRows);
     int numListedRows{0};
-    numListedRows =
-        rowContainer_->listRows(&rowIter, testData.numSpillRows, rows.data());
+    numListedRows = rowContainer_->listRows(
+        &rowIter, std::span(rows.data(), testData.numSpillRows));
     ASSERT_LE(numListedRows, numRows);
     {
       SpillerBase::SpillRows emptyRows(*pool_);
@@ -1699,11 +1682,16 @@ TEST_P(SortOutputOnly, basic) {
                std::nullopt}),
           "");
     }
-    auto spillRows = SpillerBase::SpillRows(
-        rows.begin(), rows.begin() + numListedRows, *pool_);
-    spill(
-        spiller_.get(),
-        {std::nullopt, std::nullopt, std::optional(&spillRows), std::nullopt});
+    if (numListedRows > 0) {
+      auto spillRows = SpillerBase::SpillRows(
+          rows.begin(), rows.begin() + numListedRows, *pool_);
+      spill(
+          spiller_.get(),
+          {std::nullopt,
+           std::nullopt,
+           std::optional(&spillRows),
+           std::nullopt});
+    }
     ASSERT_EQ(rowContainer_->numRows(), numRows);
     rowContainer_->clear();
 
@@ -1711,35 +1699,31 @@ TEST_P(SortOutputOnly, basic) {
     SpillPartitionSet spillPartitionSet;
     spiller_->finishSpill(spillPartitionSet);
     ASSERT_TRUE(spiller_->finalized());
-    ASSERT_EQ(spillPartitionSet.size(), 1);
-    auto spillPartition = std::move(spillPartitionSet.begin()->second);
-
-    const int expectedNumSpilledRows = numListedRows;
-    auto merge = spillPartition->createOrderedReader(
-        spillConfig_, pool(), spillStats_.wlock().operator->());
-    if (expectedNumSpilledRows == 0) {
-      ASSERT_TRUE(merge == nullptr);
-    } else {
-      for (auto i = 0; i < expectedNumSpilledRows; ++i) {
-        auto* stream = merge->next();
-        ASSERT_TRUE(stream != nullptr);
-        ASSERT_TRUE(rowVector_->equalValueAt(
-            &stream->current(), partitions_[0][i], stream->currentIndex()));
-        stream->pop();
-      }
-    }
-
     const auto stats = spiller_->stats();
-    if (expectedNumSpilledRows == 0) {
+    ASSERT_EQ(stats.spillSortTimeNanos, 0);
+    if (numListedRows == 0) {
+      ASSERT_TRUE(spillPartitionSet.empty());
       ASSERT_EQ(stats.spilledFiles, 0) << stats.toString();
       ASSERT_EQ(stats.spilledRows, 0) << stats.toString();
       ASSERT_EQ(stats.spillExtractVectorTimeNanos, 0);
-    } else {
-      ASSERT_EQ(stats.spilledFiles, 1) << stats.toString();
-      ASSERT_EQ(stats.spilledRows, expectedNumSpilledRows) << stats.toString();
-      ASSERT_GT(stats.spillExtractVectorTimeNanos, 0);
+      continue;
     }
-    ASSERT_EQ(stats.spillSortTimeNanos, 0);
+
+    ASSERT_EQ(spillPartitionSet.size(), 1);
+    auto spillPartition = std::move(spillPartitionSet.begin()->second);
+    auto merge = spillPartition->createOrderedReader(
+        spillConfig_, pool(), spillStats_.wlock().operator->());
+    for (auto i = 0; i < numListedRows; ++i) {
+      auto* stream = merge->next();
+      ASSERT_TRUE(stream != nullptr);
+      ASSERT_TRUE(rowVector_->equalValueAt(
+          stream->current().get(), partitions_[0][i], stream->currentIndex()));
+      stream->pop();
+    }
+
+    ASSERT_EQ(stats.spilledFiles, 1) << stats.toString();
+    ASSERT_EQ(stats.spilledRows, numListedRows) << stats.toString();
+    ASSERT_GT(stats.spillExtractVectorTimeNanos, 0);
   }
 }
 
@@ -1781,7 +1765,8 @@ TEST_P(MaxSpillRunTest, basic) {
     RowContainerIterator rowIter;
     SpillerBase::SpillRows rows(numRows, *pool_);
     int numListedRows{0};
-    numListedRows = rowContainer_->listRows(&rowIter, numRows, rows.data());
+    numListedRows =
+        rowContainer_->listRows(&rowIter, std::span(rows.data(), numRows));
     ASSERT_EQ(numListedRows, numRows);
     // Let helper decide which public API to call based on impl type.
     spill(

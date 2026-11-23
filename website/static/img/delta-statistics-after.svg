@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1290" height="470" viewBox="0 0 1290 470" role="img" aria-labelledby="title desc">
+  <title id="title">Delta statistics collection with native Velox aggregation</title>
+  <desc id="desc">Columnar batches enter the Spark Delta writer, which sends data to the Velox Parquet writer and directly to a reusable Velox statistics task controlled by a Task Barrier at every file boundary.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#5f6b7a"/>
+    </marker>
+    <marker id="blueArrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#2563a6"/>
+    </marker>
+    <style>
+      .box { fill: #f7f9fc; stroke: #62748a; stroke-width: 2; rx: 10; }
+      .native { fill: #effbf3; stroke: #27844d; stroke-width: 2; rx: 10; }
+      .control { fill: #eef5ff; stroke: #2563a6; stroke-width: 2; rx: 10; }
+      .output { fill: #eef7ff; stroke: #3778a8; stroke-width: 2; rx: 10; }
+      .line { fill: none; stroke: #5f6b7a; stroke-width: 2.5; marker-end: url(#arrow); }
+      .controlLine { fill: none; stroke: #2563a6; stroke-width: 2.5; stroke-dasharray: 8 6; marker-end: url(#blueArrow); }
+      .label { fill: #182230; font: 600 18px Arial, sans-serif; text-anchor: middle; dominant-baseline: middle; }
+      .small { fill: #1f6a3c; font: 600 15px Arial, sans-serif; text-anchor: middle; }
+      .controlLabel { fill: #1f4f83; font: 600 15px Arial, sans-serif; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <rect width="1290" height="470" fill="#ffffff"/>
+
+  <rect class="box" x="35" y="174" width="190" height="72"/>
+  <text class="label" x="130" y="210">Columnar batches</text>
+
+  <rect class="box" x="255" y="174" width="205" height="72"/>
+  <text class="label" x="357.5" y="210">Spark Delta writer</text>
+
+  <rect class="box" x="550" y="65" width="210" height="72"/>
+  <text class="label" x="655" y="101">Velox Parquet writer</text>
+
+  <rect class="output" x="830" y="65" width="190" height="72"/>
+  <text class="label" x="925" y="101">Delta Parquet files</text>
+
+  <rect class="native" x="550" y="280" width="230" height="72"/>
+  <text class="label" x="665" y="316">Native batch handoff</text>
+
+  <rect class="native" x="830" y="280" width="205" height="72"/>
+  <text class="label" x="932.5" y="306">Reusable Velox</text>
+  <text class="label" x="932.5" y="328">statistics task</text>
+
+  <rect class="output" x="1095" y="280" width="170" height="72"/>
+  <text class="label" x="1180" y="306">Per-file</text>
+  <text class="label" x="1180" y="328">statistics JSON</text>
+
+  <rect class="control" x="550" y="393" width="230" height="52"/>
+  <text class="label" x="665" y="419">Task Barrier</text>
+
+  <path class="line" d="M225 210 H255"/>
+  <path class="line" d="M460 210 H500 V101 H550"/>
+  <path class="line" d="M760 101 H830"/>
+  <path class="line" d="M500 210 V316 H550"/>
+  <path class="line" d="M780 316 H830"/>
+  <path class="line" d="M1035 316 H1095"/>
+  <text class="small" x="1180" y="382">One result per file</text>
+
+  <path class="controlLine" d="M780 419 C855 419 860 365 895 352"/>
+  <text class="controlLabel" x="935" y="429">Flush and reset at each file boundary</text>
+</svg>

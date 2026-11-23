@@ -16,9 +16,15 @@
 
 #include "velox/common/fuzzer/Utils.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <bit>
+#include <cmath>
+#include <limits>
 #include <regex>
+#include <set>
+#include <string>
 #include "velox/type/Variant.h"
 
 namespace facebook::velox::fuzzer::test {
@@ -184,6 +190,123 @@ TEST_F(UtilsTest, testNumRule) {
       std::regex_match(specified_strict->generate(), std::regex("^\\d{7}$")));
   ASSERT_FALSE(
       std::regex_match(specified_strict->generate(), std::regex("^\\d{8}$")));
+}
+
+namespace {
+
+// Classifies 10'000 values drawn with 'dataSpec' by sign and IEEE 754 class.
+template <typename T>
+std::set<std::string> drawKinds(DataSpec dataSpec) {
+  using Bits =
+      std::conditional_t<sizeof(T) == sizeof(uint32_t), uint32_t, uint64_t>;
+  using Limits = std::numeric_limits<T>;
+  constexpr auto kQuietBit = Bits{1} << (Limits::digits - 2);
+  constexpr auto kPayloadMask = kQuietBit - 1;
+  FuzzerGenerator rng;
+  std::set<std::string> kinds;
+  for (auto i = 0; i < 10'000; ++i) {
+    const auto value = rand<T>(rng, dataSpec);
+    const std::string sign = std::signbit(value) ? "-" : "";
+    const auto bits = std::bit_cast<Bits>(value);
+    if (std::isnan(value)) {
+      if ((bits & kQuietBit) == 0) {
+        kinds.insert(sign + "signalingNaN");
+      } else if ((bits & kPayloadMask) != 0) {
+        kinds.insert(sign + "payloadNaN");
+      } else {
+        kinds.insert(sign + "nan");
+      }
+    } else if (std::isinf(value)) {
+      kinds.insert(sign + "inf");
+    } else if (value == 0) {
+      kinds.insert(sign + "0");
+    } else if (std::abs(value) == Limits::max()) {
+      kinds.insert(sign + "max");
+    } else if (std::abs(value) == Limits::min()) {
+      kinds.insert(sign + "min");
+    } else if (std::abs(value) == Limits::denorm_min()) {
+      kinds.insert(sign + "denormMin");
+    } else if (std::abs(value) < Limits::min()) {
+      kinds.insert(sign + "subnormal");
+    } else if (std::abs(value) < 1) {
+      kinds.insert(sign + "unit");
+    } else {
+      kinds.insert(sign + "other");
+    }
+  }
+  return kinds;
+}
+
+} // namespace
+
+TEST_F(UtilsTest, floatingPointDataSpec) {
+  using testing::UnorderedElementsAre;
+  auto test = [](auto tag) {
+    using T = decltype(tag);
+    EXPECT_THAT(
+        drawKinds<T>(DataSpec{false, false}), UnorderedElementsAre("unit"));
+    EXPECT_THAT(
+        drawKinds<T>(DataSpec{true, true}),
+        UnorderedElementsAre("unit", "nan", "inf"));
+    EXPECT_THAT(
+        drawKinds<T>(DataSpec{
+            .includeNaN = false,
+            .includeInfinity = false,
+            .includeNegativeInfinity = true,
+        }),
+        UnorderedElementsAre("unit", "-inf"));
+    EXPECT_THAT(
+        drawKinds<T>(DataSpec{
+            .includeNaN = false,
+            .includeInfinity = false,
+            .includeSignedZeros = true,
+        }),
+        UnorderedElementsAre("unit", "0", "-0"));
+    EXPECT_THAT(
+        drawKinds<T>(DataSpec{
+            .includeNaN = false,
+            .includeInfinity = false,
+            .includeNonCanonicalNaN = true,
+        }),
+        UnorderedElementsAre(
+            "unit",
+            "-nan",
+            "payloadNaN",
+            "-payloadNaN",
+            "signalingNaN",
+            "-signalingNaN"));
+    EXPECT_THAT(
+        drawKinds<T>(DataSpec{
+            .includeNaN = false,
+            .includeInfinity = false,
+            .includeExtremes = true,
+        }),
+        UnorderedElementsAre(
+            "unit",
+            "max",
+            "-max",
+            "min",
+            "-min",
+            "denormMin",
+            "-denormMin",
+            "subnormal",
+            "-subnormal"));
+    EXPECT_THAT(
+        drawKinds<T>(DataSpec{
+            .includeNaN = false,
+            .includeInfinity = false,
+            .includeNegative = true,
+        }),
+        UnorderedElementsAre("unit", "-unit"));
+  };
+  {
+    SCOPED_TRACE("REAL");
+    test(float{});
+  }
+  {
+    SCOPED_TRACE("DOUBLE");
+    test(double{});
+  }
 }
 
 } // namespace facebook::velox::fuzzer::test

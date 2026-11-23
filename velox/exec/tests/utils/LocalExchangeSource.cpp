@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
+#include <fmt/format.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <atomic>
+#include <condition_variable>
+#include <optional>
+#include <string_view>
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/Operator.h"
@@ -23,14 +27,24 @@
 namespace facebook::velox::exec::test {
 namespace {
 
-class LocalExchangeSource : public exec::ExchangeSource {
+constexpr std::string_view kParentSeparator{"?parent="};
+
+class LocalExchangeSourceImpl : public LocalExchangeSource {
  public:
-  LocalExchangeSource(
+  LocalExchangeSourceImpl(
       const std::string& taskId,
       int destination,
       std::shared_ptr<exec::ExchangeQueue> queue,
       memory::MemoryPool* pool)
-      : ExchangeSource(taskId, destination, queue, pool) {}
+      : LocalExchangeSource(taskId, destination, queue, pool) {
+    if (const auto separator = taskId.find(kParentSeparator);
+        separator != std::string::npos) {
+      producerTaskId_ = taskId.substr(0, separator);
+      parentTaskId_ = taskId.substr(separator + kParentSeparator.size());
+    } else {
+      producerTaskId_ = taskId;
+    }
+  }
 
   bool supportsMetrics() const override {
     return true;
@@ -60,12 +74,15 @@ class LocalExchangeSource : public exec::ExchangeSource {
     VELOX_CHECK(requestPending_);
     auto requestedSequence = sequence_;
     auto self = shared_from_this();
+    // True until the request gets its result or times out.
+    auto active = std::make_shared<std::atomic_bool>(true);
     // Since this lambda may outlive 'this', we need to capture a
     // shared_ptr to the current object (self).
-    auto resultCallback = [self, requestedSequence, buffers, this](
+    auto resultCallback = [self, requestedSequence, buffers, active, this](
                               std::vector<std::unique_ptr<folly::IOBuf>> data,
                               int64_t sequence,
                               std::vector<int64_t> remainingBytes) {
+      *active = false;
       {
         std::lock_guard<std::mutex> l(mutex_);
         // This function is called either for a result or timeout. Only the
@@ -145,7 +162,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
       }
       // Outside of queue mutex.
       if (atEnd_) {
-        buffers->deleteResults(remoteTaskId_, destination_);
+        buffers->deleteResults(producerTaskId_, destination_);
       }
 
       if (!requestPromise.isFulfilled()) {
@@ -153,10 +170,47 @@ class LocalExchangeSource : public exec::ExchangeSource {
       }
     };
 
-    registerTimeout(self, resultCallback, maxWait);
+    if (!registerTimeout(self, resultCallback, maxWait)) {
+      // 'close()' already ran (e.g. the query was cancelled) before this
+      // request. Do not fetch: complete the request promise so the exchange
+      // client's continuation resolves and releases its reference to this
+      // source. Fetching here would re-register the source in 'timeouts_'
+      // after teardown, pinning its memory pool until the timeout fires.
+      checkSetRequestPromise();
+      return future;
+    }
 
-    buffers->getData(
-        remoteTaskId_, destination_, maxBytes, sequence_, resultCallback);
+    common::testutil::TestValue::adjust(
+        "facebook::velox::exec::test::LocalExchangeSource::request", this);
+
+    if (!parentTaskId_.has_value()) {
+      // A producer that does not exist yet answers nothing, and the timeout
+      // above completes the request.
+      buffers->getData(
+          producerTaskId_, destination_, maxBytes, sequence_, resultCallback);
+      return future;
+    }
+
+    buffers->getDataWhenCreated(
+        *parentTaskId_,
+        producerTaskId_,
+        destination_,
+        maxBytes,
+        sequence_,
+        resultCallback,
+        [active]() { return active->load(); });
+
+    // A close() that ran since registerTimeout() had no request to drop, and
+    // the request just held would keep this closed source alive.
+    bool closed;
+    {
+      std::lock_guard<std::mutex> l(mutex_);
+      closed = closed_;
+    }
+    if (closed) {
+      buffers->deleteResultsWhenCreated(
+          *parentTaskId_, producerTaskId_, destination_);
+    }
 
     return future;
   }
@@ -176,14 +230,42 @@ class LocalExchangeSource : public exec::ExchangeSource {
       std::lock_guard<std::mutex> l(queue_->mutex());
       ackSequence = sequence_;
     }
-    buffers->acknowledge(remoteTaskId_, destination_, ackSequence);
+    buffers->acknowledge(producerTaskId_, destination_, ackSequence);
   }
 
   void close() override {
     checkSetRequestPromise();
 
+    {
+      // Mark closed and deregister any pending timeout under the same lock that
+      // registerTimeout() takes. Marking closed here makes a request() that
+      // races this close() (running on the exchange executor while the query is
+      // cancelled on another thread) observe the closed state and skip
+      // registering, rather than re-inserting the source into the static
+      // 'timeouts_' map after teardown -- which would pin its memory pool until
+      // the timeout fires and can outlive the MemoryManager.
+      std::lock_guard<std::mutex> l(mutex_);
+      closed_ = true;
+      timeouts_.erase(shared_from_this());
+    }
+
+    bool atEnd{false};
+    {
+      std::lock_guard<std::mutex> l(queue_->mutex());
+      atEnd = atEnd_;
+    }
+    // At end, the results are already deleted, and the producer may be gone:
+    // deleting them again would record a delete that no producer consumes.
+    if (atEnd) {
+      return;
+    }
     auto buffers = DefaultOutputBufferManager::getInstanceRef();
-    buffers->deleteResults(remoteTaskId_, destination_);
+    if (parentTaskId_.has_value()) {
+      buffers->deleteResultsWhenCreated(
+          *parentTaskId_, producerTaskId_, destination_);
+    } else {
+      buffers->deleteResults(producerTaskId_, destination_);
+    }
   }
 
   folly::F14FastMap<std::string, RuntimeMetric> metrics() const override {
@@ -223,6 +305,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
       }
       timeouts_.clear();
     }
+    timerWakeup_.notify_one();
     timerThread_->join();
     timerThread_.reset();
   }
@@ -233,33 +316,53 @@ class LocalExchangeSource : public exec::ExchangeSource {
       int64_t sequence,
       std::vector<int64_t> remainingBytes)>;
 
-  static void registerTimeout(
+  // Registers 'callback' to fire after 'maxWait' for this source. Returns false
+  // if the source has already been closed, in which case the caller must not
+  // fetch and must complete the request promise itself. The closed check and
+  // the insertion happen under the same lock that close() uses, so a request
+  // racing close() cannot re-insert the source into 'timeouts_' after teardown.
+  bool registerTimeout(
       const std::shared_ptr<ExchangeSource>& self,
       ResultCallback callback,
       std::chrono::microseconds maxWait) {
     std::lock_guard<std::mutex> l(mutex_);
     VELOX_CHECK(!stop_, "Local exchange source has stopped");
 
+    if (closed_) {
+      return false;
+    }
+
     if (timerThread_ == nullptr) {
-      timerThread_ = std::make_unique<std::thread>([&]() {
+      // The lambda references only static state, so it does not capture 'this'
+      // and safely outlives any single source on the detached timer thread.
+      timerThread_ = std::make_unique<std::thread>([]() {
+        std::unique_lock<std::mutex> l(mutex_);
         while (!stop_) {
-          auto now = std::chrono::system_clock::now();
+          const auto now = std::chrono::system_clock::now();
           ResultCallback callback = nullptr;
-          {
-            std::lock_guard<std::mutex> t(mutex_);
-            for (auto& pair : timeouts_) {
-              if (pair.second.second < now) {
-                callback = pair.second.first;
-                break;
-              }
+          std::optional<std::chrono::system_clock::time_point> nextDeadline;
+          for (const auto& [source, entry] : timeouts_) {
+            if (entry.second <= now) {
+              callback = entry.first;
+              break;
+            }
+            if (!nextDeadline.has_value() || entry.second < *nextDeadline) {
+              nextDeadline = entry.second;
             }
           }
           if (callback) {
-            // Outside of mutex.
+            // Outside of mutex. The callback removes its entry from
+            // 'timeouts_'.
+            l.unlock();
             callback({}, 0, {});
+            l.lock();
             continue;
           }
-          std::this_thread::sleep_for(std::chrono::seconds(1));
+          if (nextDeadline.has_value()) {
+            timerWakeup_.wait_until(l, *nextDeadline);
+          } else {
+            timerWakeup_.wait(l);
+          }
         }
       });
       if (!exitInitialized_) {
@@ -269,6 +372,8 @@ class LocalExchangeSource : public exec::ExchangeSource {
     }
     timeouts_[self] =
         std::make_pair(callback, std::chrono::system_clock::now() + maxWait);
+    timerWakeup_.notify_one();
+    return true;
   }
 
   bool checkSetRequestPromise() {
@@ -291,6 +396,9 @@ class LocalExchangeSource : public exec::ExchangeSource {
       std::pair<ResultCallback, std::chrono::system_clock::time_point>>
       timeouts_;
   static inline std::unique_ptr<std::thread> timerThread_;
+  // Wakes the timer thread, which waits until the earliest deadline in
+  // 'timeouts_', when a timeout is registered or stop() is called.
+  static inline std::condition_variable timerWakeup_;
   static inline std::atomic_bool stop_{false};
   static inline bool exitInitialized_{false};
 
@@ -299,8 +407,23 @@ class LocalExchangeSource : public exec::ExchangeSource {
   std::atomic<uint64_t> totalBytes_{0};
   VeloxPromise<Response> promise_{VeloxPromise<Response>::makeEmpty()};
   int32_t numRequests_{0};
+  // Set by close(), guarded by the static 'mutex_'. Once set, request() will
+  // not register a new timeout for this source.
+  bool closed_{false};
+  // The task whose output buffer this source reads.
+  std::string producerTaskId_;
+  // The existing task that creates 'producerTaskId_', when this source may read
+  // it before it exists. See subTaskLocation().
+  std::optional<std::string> parentTaskId_;
 };
 } // namespace
+
+// static
+std::string LocalExchangeSource::subTaskLocation(
+    std::string_view taskId,
+    std::string_view parentTaskId) {
+  return fmt::format("{}{}{}", taskId, kParentSeparator, parentTaskId);
+}
 
 std::unique_ptr<ExchangeSource> createLocalExchangeSource(
     const std::string& taskId,
@@ -308,7 +431,7 @@ std::unique_ptr<ExchangeSource> createLocalExchangeSource(
     std::shared_ptr<ExchangeQueue> queue,
     memory::MemoryPool* pool) {
   if (strncmp(taskId.c_str(), "local://", 8) == 0) {
-    return std::make_unique<LocalExchangeSource>(
+    return std::make_unique<LocalExchangeSourceImpl>(
         taskId, destination, std::move(queue), pool);
   } else if (strncmp(taskId.c_str(), "bad://", 6) == 0) {
     throw std::runtime_error("Testing error");
@@ -317,11 +440,11 @@ std::unique_ptr<ExchangeSource> createLocalExchangeSource(
 }
 
 void testingStartLocalExchangeSource() {
-  LocalExchangeSource::start();
+  LocalExchangeSourceImpl::start();
 }
 
 void testingShutdownLocalExchangeSource() {
-  LocalExchangeSource::stop();
+  LocalExchangeSourceImpl::stop();
 }
 
 } // namespace facebook::velox::exec::test

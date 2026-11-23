@@ -31,6 +31,21 @@
 
 namespace torch::wave {
 
+namespace {
+
+// Downstream references to an expr: the users of all of its output values.
+int32_t numUsers(NodeCP node) {
+  int32_t count = 0;
+  for (const auto* output : node->outputs()) {
+    if (output != nullptr) {
+      count += static_cast<int32_t>(output->users().size());
+    }
+  }
+  return count;
+}
+
+} // namespace
+
 std::string ProjectNode::toString(
     const nativert::Graph& graph,
     NodeSet& border,
@@ -45,12 +60,14 @@ std::string ProjectNode::toString(
   opts.graph = &graph;
   opts.valueTypes = valueTypes;
   opts.showTypes = valueTypes != nullptr;
+  // Drives the '&' annotation on operands that are a reusable last use here.
+  opts.projectNode = this;
   NodePrinter printer(opts);
 
   std::stringstream ss;
   ss << fmt::format("ProjectNode {}:\n", id_);
   for (int32_t i = 0; i < static_cast<int32_t>(nodes_.size()); ++i) {
-    ss << fmt::format("  {}.{}: ", id_, i);
+    ss << fmt::format("  {}.{}: ({}u) ", id_, i, numUsers(nodes_[i]));
     if (localBorder.count(nodes_[i])) {
       printer.printOutputIds(ss, nodes_[i]);
       ss << "\n";
@@ -60,6 +77,34 @@ std::string ProjectNode::toString(
       printer.printOutputIds(ss, nodes_[i]);
       ss << " = " << printer.print(nodes_[i]) << "\n";
     }
+  }
+  // Values whose last use is in this node but that are not exclusively consumed
+  // by a single expr: their buffers may be released after the node runs, but
+  // cannot be reused in place by one op (unlike reusableValues_, flagged '&').
+  std::vector<int32_t> releasable;
+  for (auto* value : lastUse) {
+    if (value != nullptr && !isReusableInput(value)) {
+      releasable.push_back(value->id());
+    }
+  }
+  if (!releasable.empty()) {
+    std::sort(releasable.begin(), releasable.end());
+    ss << "  May release ";
+    for (size_t i = 0; i < releasable.size(); ++i) {
+      ss << (i > 0 ? ", " : "") << "%" << releasable[i];
+    }
+    ss << "\n";
+  }
+  // Inputs of the clones the in-place pass elided here, each with the number of
+  // copies of that buffer saved.
+  if (!elidedCloneCounts.empty()) {
+    ss << "  Elided clones of ";
+    bool first = true;
+    for (const auto& [valueId, count] : elidedCloneCounts) {
+      ss << (first ? "" : ", ") << "%" << valueId << " x" << count;
+      first = false;
+    }
+    ss << "\n";
   }
   if (input_ != nullptr) {
     ss << fmt::format("  input: ProjectNode {}\n", input_->id());

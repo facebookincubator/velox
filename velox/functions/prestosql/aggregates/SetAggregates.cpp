@@ -117,7 +117,7 @@ class CountDistinctAggregate
     return false;
   }
 
-  void initializeNewGroups(
+  void initializeNewGroupsInternal(
       char** groups,
       folly::Range<const vector_size_t*> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
@@ -266,7 +266,7 @@ void registerSetAggAggregate(
         const TypeKind typeKind = inputType->kind();
 
         if (inputType->providesCustomComparison()) {
-          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_WITH_UNKNOWN(
               creatSetAggAggregate, inputType->kind(), resultType);
         }
 
@@ -371,7 +371,7 @@ void registerCountDistinctAggregate(
         const TypeKind typeKind = inputType->kind();
 
         if (inputType->providesCustomComparison()) {
-          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_WITH_UNKNOWN(
               createCountDistinctAggregate,
               inputType->kind(),
               resultType,
@@ -426,6 +426,7 @@ void registerCountDistinctAggregate(
                 "Unexpected type {}", TypeKindName::toName(typeKind));
         }
       },
+      {.ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

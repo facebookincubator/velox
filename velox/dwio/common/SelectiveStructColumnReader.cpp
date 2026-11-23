@@ -16,20 +16,12 @@
 
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
 
+#include <numeric>
+
 #include "velox/dwio/common/ColumnLoader.h"
 
 namespace facebook::velox::dwio::common {
 namespace {
-
-bool testFilterOnConstant(const velox::common::ScanSpec& spec) {
-  if (spec.isConstant() && !spec.constantValue()->isNullAt(0)) {
-    // Non-null constant is known value during split scheduling and filters on
-    // them should not be handled at execution level.
-    return true;
-  }
-  // Check filter on missing field.
-  return !spec.hasFilter() || spec.testNull();
-}
 
 // Recursively makes empty RowVectors for positions in 'children' where the
 // corresponding child type in 'rowType' is a row. The reader expects RowVector
@@ -146,9 +138,53 @@ void setRowNumberField(
   }
 }
 
+// Sets 'field' to 'size' rows of 'value'. Reuses 'field' when nothing else
+// holds it and it already has that value.
+template <typename T>
+void setConstantValueField(
+    T value,
+    const TypePtr& type,
+    vector_size_t size,
+    memory::MemoryPool* pool,
+    VectorPtr& field) {
+  if (field && field.use_count() == 1 && field->isConstantEncoding() &&
+      field->size() > 0 && !field->isNullAt(0) &&
+      field->asUnchecked<ConstantVector<T>>()->valueAt(0) == value) {
+    field->resize(size);
+    return;
+  }
+  field = BaseVector::createConstant(type, value, size, pool);
+}
+
+// Fills 'field', a ROW<offset BIGINT, length INTEGER>, with the read's first
+// file row 'offset' and the number of file rows 'length' it covers, for each
+// row in 'rows'.
+void setReadRangeField(
+    int64_t offset,
+    vector_size_t length,
+    const RowSet& rows,
+    memory::MemoryPool* pool,
+    VectorPtr& field) {
+  VELOX_CHECK(field && field->type()->isRow());
+  prepareResult(field);
+  auto* rowField = field->asChecked<RowVector>();
+  rowField->clearAllNulls();
+  const auto size = static_cast<vector_size_t>(rows.size());
+  rowField->unsafeResize(size);
+  setConstantValueField<int64_t>(
+      offset, BIGINT(), size, pool, rowField->childAt(0));
+  setConstantValueField<int32_t>(
+      static_cast<int32_t>(length),
+      INTEGER(),
+      size,
+      pool,
+      rowField->childAt(1));
+}
+
 void setCompositeField(
     const velox::common::ScanSpec& spec,
     int64_t offset,
+    vector_size_t readLength,
     const RowSet& rows,
     memory::MemoryPool* pool,
     VectorPtr& field) {
@@ -168,7 +204,10 @@ void setCompositeField(
         setRowNumberField(offset, rows, pool, childField);
         break;
       case velox::common::ScanSpec::ColumnType::kComposite:
-        setCompositeField(*child, offset, rows, pool, childField);
+        setCompositeField(*child, offset, readLength, rows, pool, childField);
+        break;
+      case velox::common::ScanSpec::ColumnType::kReadRange:
+        setReadRangeField(offset, readLength, rows, pool, childField);
         break;
     }
   }
@@ -279,7 +318,8 @@ void SelectiveStructColumnReaderBase::advanceFieldReaderFixedRowsPerRowGroup(
     dwio::common::SelectiveColumnReader* reader,
     const int64_t offset,
     const int32_t rowsPerRowGroup) {
-  if (!reader->isTopLevel()) {
+  // A file without a row index has no row groups to seek to.
+  if (!reader->isTopLevel() || rowsPerRowGroup == 0) {
     return;
   }
   const auto rowGroup = reader->readOffset() / rowsPerRowGroup;
@@ -301,18 +341,9 @@ void SelectiveStructColumnReaderBase::fillOutputRowsFromMutation(
     });
   } else {
     VELOX_CHECK_NOT_NULL(mutation_->randomSkip);
-    vector_size_t i = 0;
-    while (i < size) {
-      const auto skip = mutation_->randomSkip->nextSkip();
-      const auto remaining = size - i;
-      if (skip >= remaining) {
-        mutation_->randomSkip->consume(remaining);
-        break;
-      }
-      i += skip;
-      addOutputRow(i++);
-      mutation_->randomSkip->consume(skip + 1);
-    }
+    mutation_->randomSkip->forEachHit(size, [&](uint64_t row) {
+      addOutputRow(static_cast<vector_size_t>(row));
+    });
   }
 }
 
@@ -322,9 +353,21 @@ void SelectiveStructColumnReaderBase::next(
     const Mutation* mutation) {
   mutation_ = mutation;
   hasDeletion_ = common::hasDeletion(mutation);
+  currentReadLength_ = static_cast<vector_size_t>(numValues);
   const RowSet rows(iota(numValues, rows_), numValues);
 
   if (!children_.empty()) {
+    if (result.use_count() == 1 &&
+        result->encoding() == VectorEncoding::Simple::ROW) {
+      auto* resultRow = result->asUnchecked<RowVector>();
+      for (const auto& childSpec : scanSpec_->children()) {
+        if (childSpec->keepValues() && childSpec->readFromFile() &&
+            !childSpec->deltaUpdate() && !isChildConstant(*childSpec)) {
+          children_[childSpec->subscript()]->releaseReusableResult(
+              resultRow->childAt(childSpec->channel()));
+        }
+      }
+    }
     read(readOffset_, rows, nullptr);
     getValues(outputRows(), &result);
     return;
@@ -338,10 +381,26 @@ void SelectiveStructColumnReaderBase::next(
   if (hasDeletion_) {
     fillOutputRowsFromMutation(numValues);
     numValues = outputRows_.size();
+  } else if (useOutputRows()) {
+    // Nothing on this path populates 'outputRows_', but useOutputRows() is also
+    // true when the scan spec has a filter, so outputRows() would return an
+    // empty set while the result carries 'numValues' rows. Callers rely on the
+    // two agreeing -- the synthesized fields below, and
+    // RowReader::readWithRowNumber -- so keep the invariant here rather than at
+    // each use. No row is eliminated on this path: with no child readers the
+    // only filters are on constant columns, and those are all-or-nothing and
+    // handled below.
+    outputRows_.resize(numValues);
+    std::iota(outputRows_.begin(), outputRows_.end(), 0);
   }
   for (const auto& childSpec : scanSpec_->children()) {
     if (isChildConstant(*childSpec) && !testFilterOnConstant(*childSpec)) {
       outputRows_.clear();
+      // A constant column's filter is not counted by ScanSpec::hasFilter(), so
+      // useOutputRows() can be false here; clear 'inputRows_' too, otherwise
+      // outputRows() would fall back to it and report rows that were filtered
+      // out.
+      inputRows_ = {};
       numValues = 0;
       break;
     }
@@ -374,6 +433,17 @@ void SelectiveStructColumnReaderBase::next(
       setCompositeField(
           *childSpec,
           currentRowNumber_,
+          currentReadLength_,
+          outputRows(),
+          resultRowVector->pool(),
+          childField);
+    } else if (
+        childSpec->columnType() ==
+        velox::common::ScanSpec::ColumnType::kReadRange) {
+      VELOX_CHECK(!childSpec->hasFilter());
+      setReadRangeField(
+          currentRowNumber_,
+          currentReadLength_,
           outputRows(),
           resultRowVector->pool(),
           childField);
@@ -381,6 +451,45 @@ void SelectiveStructColumnReaderBase::next(
       VELOX_UNREACHABLE();
     }
   }
+}
+
+void SelectiveStructColumnReaderBase::readFlatMapChildren(
+    int64_t offset,
+    const RowSet& rows,
+    const uint64_t* incomingNulls) {
+  numReads_ = scanSpec_->newRead();
+  prepareRead<char>(offset, rows, incomingNulls);
+  VELOX_DCHECK(!hasDeletion());
+  auto activeRows = rows;
+  const auto* mapNulls =
+      nullsInReadRange_ ? nullsInReadRange_->as<uint64_t>() : nullptr;
+  if (scanSpec_->filter()) {
+    const auto kind = scanSpec_->filter()->kind();
+    VELOX_CHECK(
+        kind == velox::common::FilterKind::kIsNull ||
+        kind == velox::common::FilterKind::kIsNotNull);
+    filterNulls<int32_t>(
+        rows, kind == velox::common::FilterKind::kIsNull, false);
+    if (outputRows_.empty()) {
+      for (auto* child : children_) {
+        child->addParentNulls(offset, mapNulls, rows);
+      }
+      lazyVectorReadOffset_ = offset;
+      readOffset_ = offset + rows.back() + 1;
+      return;
+    }
+    activeRows = outputRows_;
+  }
+  // Separate the loop to be cache friendly.
+  for (auto* child : children_) {
+    advanceFieldReader(child, offset);
+  }
+  for (auto* child : children_) {
+    child->readWithTiming(offset, activeRows, mapNulls);
+    child->addParentNulls(offset, mapNulls, rows);
+  }
+  lazyVectorReadOffset_ = offset;
+  readOffset_ = offset + rows.back() + 1;
 }
 
 void SelectiveStructColumnReaderBase::read(
@@ -529,10 +638,16 @@ bool SelectiveStructColumnReaderBase::isChildMissing(
            TypeKind::MAP // If this is the case it means this is a flat map,
                          // so it can't have "missing" fields.
        ) &&
-      // Name-based missing-field check applies only to row types, not flat
-      // maps.
+      // Name-based missing-field check applies to row types when the mapping
+      // mode resolves columns by name or by Parquet field ID.  In field-ID
+      // mode getParquetColumnInfo() renames each file column to match the
+      // requested name, so containsChild() correctly identifies missing ones.
+      // Channel-based detection is only reliable for kPosition mode, where
+      // channel i maps directly to file column i.
       ((fileType_->type()->isRow() &&
-        columnReaderOptions_.columnMappingMode_ == ColumnMappingMode::kName)
+        (columnReaderOptions_.columnMappingMode_ == ColumnMappingMode::kName ||
+         columnReaderOptions_.columnMappingMode_ ==
+             ColumnMappingMode::kParquetFieldId))
            ? !asRowType(fileType_->type())->containsChild(childSpec.fieldName())
            : childSpec.channel() >= fileType_->size());
 }
@@ -541,13 +656,12 @@ std::unique_ptr<velox::dwio::common::ColumnLoader>
 SelectiveStructColumnReaderBase::makeColumnLoader(vector_size_t index) {
   // Check if the child at this index has a transform with kNone extraction.
   // If so, return a TransformColumnLoader to apply the transform lazily.
-  for (const auto& childSpec : scanSpec_->children()) {
-    if (childSpec->subscript() == index && childSpec->hasTransform() &&
-        childSpec->extractionType() ==
-            velox::common::ScanSpec::ExtractionType::kNone) {
-      return std::make_unique<velox::dwio::common::TransformColumnLoader>(
-          this, children_[index], numReads_, childSpec->transform());
-    }
+  const auto* childSpec = children_[index]->scanSpec();
+  if (childSpec->hasTransform() &&
+      childSpec->extractionType() ==
+          velox::common::ScanSpec::ExtractionType::kNone) {
+    return std::make_unique<velox::dwio::common::TransformColumnLoader>(
+        this, children_[index], numReads_, childSpec->transform());
   }
   return std::make_unique<velox::dwio::common::ColumnLoader>(
       this, children_[index], numReads_);
@@ -659,7 +773,23 @@ void SelectiveStructColumnReaderBase::getValues(
     if (childSpec->columnType() ==
         velox::common::ScanSpec::ColumnType::kComposite) {
       setCompositeField(
-          *childSpec, currentRowNumber_, rows, resultRow->pool(), childResult);
+          *childSpec,
+          currentRowNumber_,
+          currentReadLength_,
+          rows,
+          resultRow->pool(),
+          childResult);
+      continue;
+    }
+
+    if (childSpec->columnType() ==
+        velox::common::ScanSpec::ColumnType::kReadRange) {
+      setReadRangeField(
+          currentRowNumber_,
+          currentReadLength_,
+          rows,
+          resultRow->pool(),
+          childResult);
       continue;
     }
 
@@ -690,6 +820,18 @@ void SelectiveStructColumnReaderBase::getValues(
   }
 
   resultRow->invalidateContainsLazyNotLoaded();
+}
+
+// static
+bool SelectiveStructColumnReaderBase::testFilterOnConstant(
+    const velox::common::ScanSpec& spec) {
+  if (spec.isConstant() && !spec.constantValue()->isNullAt(0)) {
+    // Non-null constant is known value during split scheduling and filters on
+    // them should not be handled at execution level.
+    return true;
+  }
+  // Check filter on missing field.
+  return !spec.hasFilter() || spec.testNull();
 }
 
 namespace detail {

@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
@@ -29,6 +30,9 @@
 #include "velox/functions/prestosql/ArrayConstructor.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/type/TimestampConversion.h"
+
+#include <folly/ScopeGuard.h>
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox;
@@ -43,6 +47,7 @@ class CudfFilterProjectTest : public CudfFunctionBaseTest {
     functions::sparksql::registerFunctions("");
     functions::registerArrayConstructor("array_constructor");
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
     cudf_velox::registerSparkFunctions("");
   }
@@ -135,6 +140,116 @@ class CudfFilterProjectTest : public CudfFunctionBaseTest {
   }
 };
 
+TEST_F(CudfFilterProjectTest, isNull) {
+  const std::vector<VectorPtr> inputs{
+      makeNullableFlatVector<int32_t>({1, std::nullopt, 0, std::nullopt}),
+      makeFlatVector<int32_t>({1, 0}),
+      makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}),
+      makeFlatVector<int32_t>({}),
+      makeConstant<int32_t>(7, 3),
+      BaseVector::createNullConstant(INTEGER(), 3, pool_.get()),
+      makeNullableFlatVector<std::string>({"", std::nullopt, "spark"}),
+      makeNullableFlatVector<int64_t>({0, std::nullopt, 123}, DECIMAL(18, 2))};
+  for (const auto& input : inputs) {
+    SCOPED_TRACE(input->toString());
+    auto data = makeRowVector({input});
+    auto expression = std::make_shared<core::CallTypedExpr>(
+        BOOLEAN(),
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(input->type(), "c0")},
+        "isnull");
+    exec::ExprSet expressions({expression}, &execCtx_);
+    auto expected =
+        functions::test::FunctionBaseTest::evaluate(expressions, data);
+    auto stream = cudfGlobalStreamPool().get_stream();
+    auto resource = get_output_mr();
+    auto table = with_arrow::toCudfTable(data, pool_.get(), stream, resource);
+
+    for (const bool useAst : {false, true}) {
+      SCOPED_TRACE(useAst ? "AST evaluator" : "function evaluator");
+      if (useAst && input->type()->isDecimal()) {
+        continue;
+      }
+      std::shared_ptr<CudfExpression> evaluator;
+      if (useAst) {
+        ASSERT_TRUE(ASTExpression::canEvaluate(expression));
+        evaluator = std::make_shared<ASTExpression>(
+            expression, data->rowType(), pool_.get(), queryCtx_->queryConfig());
+      } else {
+        ASSERT_TRUE(
+            FunctionExpression::canEvaluate(
+                expression, queryCtx_->queryConfig()));
+        evaluator = FunctionExpression::create(
+            expression, data->rowType(), pool_.get(), queryCtx_->queryConfig());
+      }
+      auto result = evaluator->eval(
+          tableViewToColumnViews(table->view()), stream, resource);
+      auto actual = with_arrow::toVeloxColumn(
+          cudf::table_view({asView(result)}),
+          pool_.get(),
+          ROW({{"c0", BOOLEAN()}}),
+          "",
+          stream,
+          resource);
+      velox::test::assertEqualVectors(expected, actual->childAt(0));
+    }
+    velox::test::assertEqualVectors(expected, evaluate(expression, data));
+  }
+}
+
+// The GPU cast from VARCHAR follows Presto's rules, so a Spark session keeps
+// such casts on the CPU.
+TEST_F(CudfFilterProjectTest, castFromVarcharStaysOnCpu) {
+  const auto rowType = ROW({{"c0", VARCHAR()}});
+  for (const auto* expr :
+       {"cast(c0 as integer)",
+        "try_cast(c0 as double)",
+        "cast(c0 as boolean)"}) {
+    SCOPED_TRACE(expr);
+    EXPECT_FALSE(
+        cudf_velox::canExprRunOnGpu(
+            makeTypedExpr(expr, rowType),
+            execCtx_.queryCtx(),
+            execCtx_.pool()));
+  }
+}
+
+// A TIMESTAMP cast to VARCHAR prints Presto's text, so it stays on the CPU in
+// a Spark session; a DATE prints the same in both dialects and runs on the GPU.
+TEST_F(CudfFilterProjectTest, castTimestampToVarcharStaysOnCpu) {
+  const auto rowType = ROW({{"ts", TIMESTAMP()}, {"d", DATE()}});
+  EXPECT_FALSE(
+      cudf_velox::canExprRunOnGpu(
+          makeTypedExpr("cast(ts as varchar)", rowType),
+          execCtx_.queryCtx(),
+          execCtx_.pool()));
+  EXPECT_TRUE(
+      cudf_velox::canExprRunOnGpu(
+          makeTypedExpr("cast(d as varchar)", rowType),
+          execCtx_.queryCtx(),
+          execCtx_.pool()));
+}
+
+// The GPU prints a DATE as Spark's CPU cast does: the year padded to four
+// digits and led by a minus sign when negative.
+TEST_F(CudfFilterProjectTest, castDateToVarcharMatchesCpu) {
+  // 1970-01-01, 1969-12-31, 2026-01-02, 0000-01-01, -0001-01-01 and
+  // 10000-01-01.
+  const auto input = makeRowVector({makeNullableFlatVector<int32_t>(
+      {0,
+       -1,
+       DATE()->toDays("2026-01-02"),
+       std::nullopt,
+       -719'528,
+       -719'893,
+       2'932'897},
+      DATE())});
+  for (const auto* expr : {"cast(c0 as varchar)", "try_cast(c0 as varchar)"}) {
+    SCOPED_TRACE(expr);
+    assertExpressionMatchesCpu(expr, input, input->rowType());
+  }
+}
+
 TEST_F(CudfFilterProjectTest, hashWithSeed) {
   auto input = makeFlatVector<int64_t>({INT64_MAX, INT64_MIN});
   auto data = makeRowVector({input});
@@ -197,6 +312,104 @@ TEST_F(CudfFilterProjectTest, dateAdd) {
   // Account for the last day of a year-month
   EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
   EXPECT_EQ(parseDate("2020-02-29"), dateAdd("2019-01-30", 395));
+}
+
+TEST_F(CudfFilterProjectTest, dateTruncTimestamp) {
+  auto parseTs = [](const char* str) {
+    auto result = util::fromTimestampString(
+        StringView(str), util::TimestampParseMode::kLegacyCast);
+    VELOX_CHECK(result.hasValue(), "Bad timestamp: {}", str);
+    return result.value();
+  };
+
+  const auto dateTrunc = [&](const std::string& unit, Timestamp ts) {
+    return evaluateOnce<Timestamp>(
+        fmt::format("date_trunc('{}', c0)", unit),
+        {TIMESTAMP()},
+        std::optional<Timestamp>(ts));
+  };
+
+  auto ts = parseTs("2025-01-15 12:01:01.123");
+
+  EXPECT_EQ(parseTs("2025-01-15 12:01:01"), dateTrunc("second", ts));
+  EXPECT_EQ(parseTs("2025-01-15 12:01:00"), dateTrunc("minute", ts));
+  EXPECT_EQ(parseTs("2025-01-15 12:00:00"), dateTrunc("hour", ts));
+  EXPECT_EQ(parseTs("2025-01-15 00:00:00"), dateTrunc("day", ts));
+  EXPECT_EQ(parseTs("2025-01-01 00:00:00"), dateTrunc("month", ts));
+  EXPECT_EQ(parseTs("2025-01-01 00:00:00"), dateTrunc("quarter", ts));
+  EXPECT_EQ(parseTs("2025-01-01 00:00:00"), dateTrunc("year", ts));
+
+  auto preEpochTs = parseTs("1969-12-31 20:00:00");
+  EXPECT_EQ(parseTs("1969-12-31 00:00:00"), dateTrunc("day", preEpochTs));
+  EXPECT_EQ(parseTs("1969-12-01 00:00:00"), dateTrunc("month", preEpochTs));
+  EXPECT_EQ(parseTs("1969-10-01 00:00:00"), dateTrunc("quarter", preEpochTs));
+  EXPECT_EQ(parseTs("1969-01-01 00:00:00"), dateTrunc("year", preEpochTs));
+}
+
+TEST_F(CudfFilterProjectTest, substringConstantStartAndLength) {
+  auto input = makeNullableFlatVector<std::string>(
+      {"abcdef", "spark", "", "über", std::nullopt});
+  auto data = makeRowVector({input});
+
+  // Use `substring` for CPU/GPU result comparison because the Velox Spark CPU
+  // registry resolves `substring`, but not the `substr` spelling. The `substr`
+  // cuDF registration is covered by the selection test.
+  for (const auto& expression : {
+           "substring(c0, 1)",
+           "substring(c0, 1, 3)",
+           "substring(c0, 0, 2)",
+           "substring(c0, -2, 2)",
+           "substring(c0, -100, 4)",
+           "substring(c0, 100, 2)",
+           "substring(c0, 1, 0)",
+           "substring(c0, 2, -1)",
+           "substring(c0, cast(-2147483648 as integer), 10)",
+           "substring(c0, 1, 2147483647)",
+           "substring(c0, cast(null as integer), 2)",
+           "substring(c0, 1, cast(null as integer))",
+       }) {
+    SCOPED_TRACE(expression);
+    assertExpressionMatchesCpu(expression, data, data->rowType());
+  }
+}
+
+TEST_F(CudfFilterProjectTest, substringColumnStartAndLength) {
+  auto input = makeNullableFlatVector<std::string>(
+      {"abcdef",
+       "spark",
+       "",
+       "über",
+       "gpu",
+       std::nullopt,
+       "edge",
+       "zero",
+       "negative",
+       "short"});
+  auto starts = makeNullableFlatVector<int32_t>(
+      {1, 0, -2, std::nullopt, 2, 2, -2147483648, 1, 1, 100});
+  auto lengths = makeNullableFlatVector<int32_t>(
+      {3, 2, 5, 1, std::nullopt, 10, 10, 0, -1, 2});
+  auto data = makeRowVector({input, starts, lengths});
+
+  for (const auto& expression : {
+           "substring(c0, c1)",
+           "substring(c0, c1, c2)",
+       }) {
+    SCOPED_TRACE(expression);
+    assertExpressionMatchesCpu(expression, data, data->rowType());
+  }
+}
+
+TEST_F(CudfFilterProjectTest, substringConstantInput) {
+  auto starts = makeNullableFlatVector<int32_t>({1, 2, 0, -2, std::nullopt, 1});
+  auto lengths =
+      makeNullableFlatVector<int32_t>({3, 10, 2, 2, 1, std::nullopt});
+  auto data = makeRowVector({starts, lengths});
+
+  assertExpressionMatchesCpu(
+      "substring('abcdef', c0, c1)", data, data->rowType());
+  assertExpressionMatchesCpu(
+      "substring(cast(null as varchar), c0, c1)", data, data->rowType());
 }
 
 TEST_F(CudfFilterProjectTest, getConstantIndex) {
@@ -564,6 +777,15 @@ TEST_F(CudfFilterProjectTest, likeInvalidEscapeUsage) {
 }
 
 TEST_F(CudfFilterProjectTest, tryLikeInvalidEscapeUsage) {
+  cudf_velox::unregisterCudf();
+  cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
+  cudf_velox::registerCudf();
+  SCOPE_EXIT {
+    cudf_velox::unregisterCudf();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
+    cudf_velox::registerCudf();
+  };
+
   auto input =
       makeNullableFlatVector<std::string>({"test", "testo", std::nullopt});
   auto data = makeRowVector({input});

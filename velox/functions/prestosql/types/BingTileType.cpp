@@ -25,7 +25,7 @@ namespace facebook::velox {
 
 namespace {
 folly::Expected<int64_t, std::string> mapSize(uint8_t zoomLevel) {
-  if (FOLLY_UNLIKELY(zoomLevel > BingTileType::kBingTileMaxZoomLevel)) {
+  if (zoomLevel > BingTileType::kBingTileMaxZoomLevel) [[unlikely]] {
     return folly::makeUnexpected(
         fmt::format(
             "Zoom level {} is greater than max zoom {}",
@@ -55,9 +55,8 @@ int32_t axisToCoordinates(double axis, long mapSize) {
 folly::Expected<uint32_t, std::string> longitudeToTileX(
     double longitude,
     uint8_t zoomLevel) {
-  if (FOLLY_UNLIKELY(
-          longitude > common::geospatial::kMaxLongitude ||
-          longitude < common::geospatial::kMinLongitude)) {
+  if (longitude > common::geospatial::kMaxLongitude ||
+      longitude < common::geospatial::kMinLongitude) [[unlikely]] {
     return folly::makeUnexpected(
         fmt::format(
             "Longitude {} is outside of valid range [{}, {}]",
@@ -68,7 +67,7 @@ folly::Expected<uint32_t, std::string> longitudeToTileX(
   double x = (longitude + 180) / 360;
 
   folly::Expected<int64_t, std::string> mpSize = mapSize(zoomLevel);
-  if (FOLLY_UNLIKELY(mpSize.hasError())) {
+  if (mpSize.hasError()) [[unlikely]] {
     return folly::makeUnexpected(mpSize.error());
   }
 
@@ -90,9 +89,8 @@ folly::Expected<uint32_t, std::string> longitudeToTileX(
 folly::Expected<uint32_t, std::string> latitudeToTileY(
     double latitude,
     uint8_t zoomLevel) {
-  if (FOLLY_UNLIKELY(
-          latitude > common::geospatial::kMaxBingTileLatitude ||
-          latitude < common::geospatial::kMinBingTileLatitude)) {
+  if (latitude > common::geospatial::kMaxBingTileLatitude ||
+      latitude < common::geospatial::kMinBingTileLatitude) [[unlikely]] {
     return folly::makeUnexpected(
         fmt::format(
             "Latitude {} is outside of valid range [{}, {}]",
@@ -103,7 +101,7 @@ folly::Expected<uint32_t, std::string> latitudeToTileY(
   double sinLatitude = sin(latitude * M_PI / 180);
   double y = 0.5 - log((1 + sinLatitude) / (1 - sinLatitude)) / (4 * M_PI);
   folly::Expected<int64_t, std::string> mpSize = mapSize(zoomLevel);
-  if (FOLLY_UNLIKELY(mpSize.hasError())) {
+  if (mpSize.hasError()) [[unlikely]] {
     return folly::makeUnexpected(mpSize.error());
   }
 
@@ -242,13 +240,13 @@ folly::Expected<uint64_t, std::string> BingTileType::bingTileParent(
     uint64_t tile,
     uint8_t parentZoom) {
   uint8_t tileZoom = bingTileZoom(tile);
-  if (FOLLY_UNLIKELY(tileZoom == parentZoom)) {
+  if (tileZoom == parentZoom) [[unlikely]] {
     return tile;
   }
   uint32_t x = bingTileX(tile);
   uint32_t y = bingTileY(tile);
 
-  if (FOLLY_UNLIKELY(tileZoom < parentZoom)) {
+  if (tileZoom < parentZoom) [[unlikely]] {
     return folly::makeUnexpected(
         fmt::format(
             "Parent zoom {} must be <= tile zoom {}", parentZoom, tileZoom));
@@ -263,18 +261,18 @@ BingTileType::bingTileChildren(
     uint8_t childZoom,
     uint8_t maxZoomShift) {
   uint8_t tileZoom = bingTileZoom(tile);
-  if (FOLLY_UNLIKELY(tileZoom == childZoom)) {
+  if (tileZoom == childZoom) [[unlikely]] {
     return std::vector<uint64_t>{tile};
   }
   uint32_t x = bingTileX(tile);
   uint32_t y = bingTileY(tile);
 
-  if (FOLLY_UNLIKELY(childZoom < tileZoom)) {
+  if (childZoom < tileZoom) [[unlikely]] {
     return folly::makeUnexpected(
         fmt::format(
             "Child zoom {} must be >= tile zoom {}", childZoom, tileZoom));
   }
-  if (FOLLY_UNLIKELY(childZoom > kBingTileMaxZoomLevel)) {
+  if (childZoom > kBingTileMaxZoomLevel) [[unlikely]] {
     return folly::makeUnexpected(
         fmt::format(
             "Child zoom {} must be <= max zoom {}",
@@ -308,7 +306,7 @@ BingTileType::bingTileChildren(
 folly::Expected<uint64_t, std::string> BingTileType::bingTileFromQuadKey(
     const std::string_view& quadKey) {
   size_t zoomLevelInt32 = quadKey.size();
-  if (FOLLY_UNLIKELY(zoomLevelInt32 > kBingTileMaxZoomLevel)) {
+  if (zoomLevelInt32 > kBingTileMaxZoomLevel) [[unlikely]] {
     return folly::makeUnexpected(
         fmt::format(
             "Zoom level {} is greater than max zoom {}",
@@ -376,12 +374,12 @@ folly::Expected<uint64_t, std::string> BingTileType::latitudeLongitudeToTile(
     double longitude,
     uint8_t zoomLevel) {
   auto tileX = longitudeToTileX(longitude, zoomLevel);
-  if (FOLLY_UNLIKELY(tileX.hasError())) {
+  if (tileX.hasError()) [[unlikely]] {
     return folly::makeUnexpected(tileX.error());
   }
 
   auto tileY = latitudeToTileY(latitude, zoomLevel);
-  if (FOLLY_UNLIKELY(tileY.hasError())) {
+  if (tileY.hasError()) [[unlikely]] {
     return folly::makeUnexpected(tileY.error());
   }
 
@@ -408,15 +406,15 @@ BingTileType::bingTilesAround(
     double longitude,
     uint8_t zoomLevel) {
   auto tileX = longitudeToTileX(longitude, zoomLevel);
-  if (FOLLY_UNLIKELY(tileX.hasError())) {
+  if (tileX.hasError()) [[unlikely]] {
     return folly::makeUnexpected(tileX.error());
   }
   auto tileY = latitudeToTileY(latitude, zoomLevel);
-  if (FOLLY_UNLIKELY(tileY.hasError())) {
+  if (tileY.hasError()) [[unlikely]] {
     return folly::makeUnexpected(tileY.error());
   }
   auto mpSize = mapSize(zoomLevel);
-  if (FOLLY_UNLIKELY(mpSize.hasError())) {
+  if (mpSize.hasError()) [[unlikely]] {
     return folly::makeUnexpected(mpSize.error());
   }
 
@@ -441,21 +439,21 @@ BingTileType::bingTilesAround(
     double longitude,
     uint8_t zoomLevel,
     double radiusInKm) {
-  if (FOLLY_UNLIKELY(radiusInKm < 0 || radiusInKm > 1000)) {
+  if (radiusInKm < 0 || radiusInKm > 1000) [[unlikely]] {
     return folly::makeUnexpected(
         fmt::format(
             "Radius in km must between 0 and 1000, got {}", radiusInKm));
   }
   auto tileX = longitudeToTileX(longitude, zoomLevel);
-  if (FOLLY_UNLIKELY(tileX.hasError())) {
+  if (tileX.hasError()) [[unlikely]] {
     return folly::makeUnexpected(tileX.error());
   }
   auto tileY = latitudeToTileY(latitude, zoomLevel);
-  if (FOLLY_UNLIKELY(tileY.hasError())) {
+  if (tileY.hasError()) [[unlikely]] {
     return folly::makeUnexpected(tileY.error());
   }
   auto mpSize = mapSize(zoomLevel);
-  if (FOLLY_UNLIKELY(mpSize.hasError())) {
+  if (mpSize.hasError()) [[unlikely]] {
     return folly::makeUnexpected(mpSize.error());
   }
   uint32_t maxTileIndex =
@@ -465,7 +463,7 @@ BingTileType::bingTilesAround(
   double topLatitude = addDistanceToLatitude(latitude, radiusInKm, 0);
   auto topTileResult =
       latitudeLongitudeToTile(topLatitude, longitude, zoomLevel);
-  if (FOLLY_UNLIKELY(topTileResult.hasError())) {
+  if (topTileResult.hasError()) [[unlikely]] {
     return folly::makeUnexpected(topTileResult.error());
   }
   uint64_t topTile = topTileResult.value();
@@ -473,7 +471,7 @@ BingTileType::bingTilesAround(
   double bottomLatitude = addDistanceToLatitude(latitude, radiusInKm, 180);
   auto bottomTileResult =
       latitudeLongitudeToTile(bottomLatitude, longitude, zoomLevel);
-  if (FOLLY_UNLIKELY(bottomTileResult.hasError())) {
+  if (bottomTileResult.hasError()) [[unlikely]] {
     return folly::makeUnexpected(bottomTileResult.error());
   }
   uint64_t bottomTile = bottomTileResult.value();
@@ -482,7 +480,7 @@ BingTileType::bingTilesAround(
       addDistanceToLongitude(latitude, longitude, radiusInKm, 270);
   auto leftTileResult =
       latitudeLongitudeToTile(latitude, leftLongitude, zoomLevel);
-  if (FOLLY_UNLIKELY(leftTileResult.hasError())) {
+  if (leftTileResult.hasError()) [[unlikely]] {
     return folly::makeUnexpected(leftTileResult.error());
   }
   uint64_t leftTile = leftTileResult.value();
@@ -491,7 +489,7 @@ BingTileType::bingTilesAround(
       addDistanceToLongitude(latitude, longitude, radiusInKm, 90);
   auto rightTileResult =
       latitudeLongitudeToTile(latitude, rightLongitude, zoomLevel);
-  if (FOLLY_UNLIKELY(rightTileResult.hasError())) {
+  if (rightTileResult.hasError()) [[unlikely]] {
     return folly::makeUnexpected(rightTileResult.error());
   }
   uint64_t rightTile = rightTileResult.value();

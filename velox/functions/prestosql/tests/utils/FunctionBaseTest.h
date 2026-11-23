@@ -16,6 +16,7 @@
 #pragma once
 
 #include <gtest/gtest.h>
+#include <functional>
 #include <utility>
 
 #include "velox/expression/Expr.h"
@@ -51,6 +52,13 @@ class FunctionBaseTest : public testing::Test,
   void setCastMatchStructByName(bool value) {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kCastMatchStructByName, std::to_string(value)},
+    });
+  }
+
+  void setCastStringToFloatingPointLenientInfNan(bool value) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kCastStringToFloatingPointLenientInfNan,
+         std::to_string(value)},
     });
   }
 
@@ -123,7 +131,7 @@ class FunctionBaseTest : public testing::Test,
   /// multiple times, the returned statistics will contain values aggregated
   /// across all calls. Statistics will be missing for functions and
   /// special forms that didn't get evaluated.
-  std::pair<VectorPtr, std::unordered_map<std::string, exec::ExprStats>>
+  std::pair<VectorPtr, folly::F14FastMap<std::string, exec::ExprStats>>
   evaluateWithStats(
       const std::string& expression,
       const RowVectorPtr& data,
@@ -350,7 +358,7 @@ class FunctionBaseTest : public testing::Test,
   static Timestamp parseTimestamp(std::string_view text) {
     return util::fromTimestampString(
                text.data(), text.size(), util::TimestampParseMode::kPrestoCast)
-        .thenOrThrow(folly::identity, [&](const Status& status) {
+        .thenOrThrow(std::identity{}, [&](const Status& status) {
           VELOX_USER_FAIL("{}", status.message());
         });
   }

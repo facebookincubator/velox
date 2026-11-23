@@ -47,14 +47,14 @@ jobs:
       INSTALL_PREFIX: ${{ github.workspace }}/dependencies
     steps:
 
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: velox
 
           persist-credentials: false
 
       - name: Check setup script changes
-        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         if: ${{ github.event_name == 'pull_request' }}
         id: setup-script-changes
         with:
@@ -66,7 +66,7 @@ jobs:
 
       - name: Restore Dependencies
         if: ${{ github.event_name != 'pull_request' || steps.setup-script-changes.outputs.setup_scripts != 'true' }}
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: restore-deps
         with:
           path: ${{ env.INSTALL_PREFIX }}
@@ -99,12 +99,14 @@ jobs:
 
       - name: Save Dependencies
         if: ${{ steps.restore-deps.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.INSTALL_PREFIX }}
           key: dependencies-benchmark-${{ hashFiles('velox/scripts/setup-ubuntu.sh') }}
 
       - name: Restore ccache
+        continue-on-error: true
+        timeout-minutes: 30
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         id: restore-cache
         with:
@@ -129,7 +131,9 @@ jobs:
           ccache -vs
 
       - name: Save ccache"
-        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        continue-on-error: true
+        timeout-minutes: 20
+        uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         with:
           path: ccache
           key: ccache-benchmark
@@ -145,7 +149,7 @@ jobs:
               EXTRA_BENCHMARK_FLAGS="--binary_path ${BINARY_DIR}/contender/ --output_path ${CONTENDER_OUTPUT_PATH}"
 
       - name: Upload result artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           path: benchmark-results
           name: benchmark-results

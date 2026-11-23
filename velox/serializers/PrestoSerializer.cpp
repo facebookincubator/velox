@@ -36,6 +36,33 @@ namespace facebook::velox::serializer::presto {
 using SerdeOpts = PrestoVectorSerde::PrestoOptions;
 
 namespace {
+uint64_t estimateTypeColumnarChannels(const Type& type) {
+  if (type.isFixedWidth()) {
+    // Nulls and values.
+    return 2;
+  }
+
+  switch (type.kind()) {
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY:
+    case TypeKind::OPAQUE:
+      // Nulls, offsets, and values.
+      return 3;
+    case TypeKind::ARRAY:
+    case TypeKind::MAP:
+    case TypeKind::ROW: {
+      // Nulls and offsets.
+      uint64_t numChannels{2};
+      for (auto i = 0; i < type.size(); ++i) {
+        numChannels += estimateTypeColumnarChannels(*type.childAt(i));
+      }
+      return numChannels;
+    }
+    default:
+      VELOX_UNSUPPORTED("Unsupported type: {}", type.kindName());
+  }
+}
+
 int64_t computeChecksum(
     ByteInputStream* source,
     int codecMarker,
@@ -49,7 +76,7 @@ int64_t computeChecksum(
   }
   const int32_t dataSize = compressed ? compressedSize : uncompressedSize;
   bits::Crc32 crc32;
-  if (FOLLY_UNLIKELY(source->remainingSize() < dataSize)) {
+  if (source->remainingSize() < dataSize) [[unlikely]] {
     VELOX_FAIL(
         "Tried to read {} bytes, larger than what's remained in source {} "
         "bytes. Source details: {}",
@@ -60,7 +87,7 @@ int64_t computeChecksum(
   auto remainingBytes = dataSize;
   while (remainingBytes > 0) {
     auto data = source->nextView(remainingBytes);
-    if (FOLLY_UNLIKELY(data.size() == 0)) {
+    if (data.size() == 0) [[unlikely]] {
       VELOX_FAIL(
           "Reading 0 bytes from source. Source details: {}",
           source->toString());
@@ -95,6 +122,16 @@ PrestoVectorSerde::PrestoOptions toPrestoOptions(
   return *prestoOptions;
 }
 } // namespace
+
+uint64_t PrestoVectorSerde::estimateColumnarChannels(const RowType& rowType) {
+  // The top-level row represents the page schema and adds no channels of its
+  // own.
+  uint64_t numChannels{0};
+  for (const auto& child : rowType.children()) {
+    numChannels += estimateTypeColumnarChannels(*child);
+  }
+  return numChannels;
+}
 
 void PrestoVectorSerde::estimateSerializedSize(
     const BaseVector* vector,

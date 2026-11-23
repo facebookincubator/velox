@@ -22,6 +22,8 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
+#include "velox/functions/lib/aggregates/ApproxPercentileAggregateBase.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
 
@@ -34,23 +36,6 @@ namespace facebook::velox::functions::aggregate::sparksql::test {
 namespace {
 
 constexpr int32_t kSparkDefaultAccuracy = 10000;
-
-std::vector<TypePtr>
-getArgTypes(const TypePtr& dataType, int32_t accuracy, bool isArray) {
-  std::vector<TypePtr> argTypes;
-  argTypes.push_back(dataType);
-  if (!isArray) {
-    argTypes.push_back(DOUBLE());
-  } else {
-    argTypes.push_back(ARRAY(DOUBLE()));
-  }
-  // Always pass accuracy parameter to ensure consistency across aggregation
-  // stages.
-  if (accuracy >= 0) {
-    argTypes.push_back(BIGINT());
-  }
-  return argTypes;
-}
 
 // Build a function call string for spark_approx_percentile.
 std::string
@@ -87,10 +72,6 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
     // Register Spark aggregate functions with "spark_" prefix.
     registerAggregateFunctions("spark_");
     random::setSeed(0);
-    // Set fixed random seed for reproducible test results.
-    queryConfig_
-        [core::QueryConfig::kDebugAggregationApproxPercentileFixedRandomSeed] =
-            "0";
   }
 
   // Test global aggregation (no grouping keys).
@@ -136,34 +117,23 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
     }
 
     // Test single percentile.
-    enableTestStreaming();
-    testAggregations(
-        {rows},
-        {},
-        {functionCall(false, percentile, accuracy, false)},
-        expected,
-        queryConfig_);
+    AggregationTester(*this)
+        .inputs(rows)
+        .aggregates({functionCall(false, percentile, accuracy, false)})
+        .config(
+            core::QueryConfig::kDebugAggregationApproxPercentileFixedRandomSeed,
+            "0")
+        .withCompanion()
+        .assertResults(expected);
 
     // Test percentile array (3 identical percentiles).
-    testAggregations(
-        {rows},
-        {},
-        {functionCall(false, percentile, accuracy, true)},
-        expectedArray,
-        queryConfig_);
-
-    // Companion functions of approx_percentile do not support test streaming
-    // because intermediate results are KLL that has non-deterministic shape.
-    disableTestStreaming();
-    testAggregationsWithCompanion(
-        {rows},
-        [](PlanBuilder& /*builder*/) {},
-        {},
-        {functionCall(false, percentile, accuracy, false)},
-        {getArgTypes(values->type(), accuracy, false)},
-        {},
-        expected,
-        queryConfig_);
+    AggregationTester(*this)
+        .inputs(rows)
+        .aggregates({functionCall(false, percentile, accuracy, true)})
+        .config(
+            core::QueryConfig::kDebugAggregationApproxPercentileFixedRandomSeed,
+            "0")
+        .assertResults(expectedArray);
   }
 
   // Test global aggregation with NaN and Infinity values for floating point.
@@ -199,26 +169,15 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
       const RowVectorPtr& expectedResult) {
     auto rows = makeRowVector({keys, values});
 
-    enableTestStreaming();
-    testAggregations(
-        {rows},
-        {"c0"},
-        {functionCall(true, percentile, accuracy, false)},
-        {expectedResult},
-        queryConfig_);
-
-    // Companion functions of approx_percentile do not support test streaming
-    // because intermediate results are KLL that has non-deterministic shape.
-    disableTestStreaming();
-    testAggregationsWithCompanion(
-        {rows},
-        [](PlanBuilder& /*builder*/) {},
-        {"c0"},
-        {functionCall(true, percentile, accuracy, false)},
-        {getArgTypes(values->type(), accuracy, false)},
-        {},
-        {expectedResult},
-        queryConfig_);
+    AggregationTester(*this)
+        .inputs(rows)
+        .groupBy({"c0"})
+        .aggregates({functionCall(true, percentile, accuracy, false)})
+        .config(
+            core::QueryConfig::kDebugAggregationApproxPercentileFixedRandomSeed,
+            "0")
+        .withCompanion()
+        .assertResults(expectedResult);
 
     // Test percentile array.
     {
@@ -258,18 +217,17 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
                  elements)});
       }
 
-      enableTestStreaming();
-      testAggregations(
-          {rows},
-          {"c0"},
-          {functionCall(true, percentile, accuracy, true)},
-          {expected},
-          queryConfig_);
+      AggregationTester(*this)
+          .inputs(rows)
+          .groupBy({"c0"})
+          .aggregates({functionCall(true, percentile, accuracy, true)})
+          .config(
+              core::QueryConfig::
+                  kDebugAggregationApproxPercentileFixedRandomSeed,
+              "0")
+          .assertResults(expected);
     }
   }
-
- private:
-  std::unordered_map<std::string, std::string> queryConfig_;
 };
 
 // Test global aggregation with basic integer values.
@@ -320,13 +278,6 @@ TEST_F(ApproxPercentileAggregateTest, groupByAgg) {
 
 // Test Partial + Final aggregation mode (simulating distributed execution).
 TEST_F(ApproxPercentileAggregateTest, partialFinal) {
-  // Make sure partial aggregation runs out of memory after first batch.
-  CursorParameters params;
-  params.queryCtx = velox::core::QueryCtx::create(executor_.get());
-  params.queryCtx->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kMaxPartialAggregationMemory, "300000"},
-  });
-
   auto data = {
       makeRowVector({
           makeFlatVector<int32_t>(1'024, [](auto row) { return row % 117; }),
@@ -343,7 +294,7 @@ TEST_F(ApproxPercentileAggregateTest, partialFinal) {
   };
 
   // Build partial + final aggregation plan.
-  params.planNode =
+  auto plan =
       PlanBuilder()
           .values(data)
           .project({"c0", "c1", "0.9995"})
@@ -355,8 +306,11 @@ TEST_F(ApproxPercentileAggregateTest, partialFinal) {
       makeFlatVector<int32_t>(117, [](auto row) { return row; }),
       makeFlatVector<int32_t>(117, [](auto row) { return row < 7 ? 20 : 10; }),
   });
-  exec::test::assertQuery(params, {expected});
-  waitForAllTasksToBeDeleted();
+  // Make sure partial aggregation runs out of memory after first batch.
+  AssertQueryBuilder(plan)
+      .config(core::QueryConfig::kMaxPartialAggregationMemory, "300000")
+      .assertResults(expected);
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 // Test Partial + Final group-by aggregation.
@@ -367,10 +321,9 @@ TEST_F(ApproxPercentileAggregateTest, partialFinalGroupBy) {
   auto inputRows = makeRowVector({groupKeys, values});
 
   // Build Partial + Final plan with group-by.
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan =
-      PlanBuilder(planNodeIdGenerator)
-          .values({inputRows})
+      PlanBuilder()
+          .values(inputRows)
           .partialAggregation({"c0"}, {"spark_approx_percentile(c1, 0.5)"})
           .finalAggregation()
           .planNode();
@@ -386,18 +339,18 @@ TEST_F(ApproxPercentileAggregateTest, partialFinalGroupBy) {
 TEST_F(ApproxPercentileAggregateTest, finalAggregateAccuracy) {
   auto batch = makeRowVector(
       {makeFlatVector<int32_t>(1000, [](auto row) { return row; })});
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   std::vector<std::shared_ptr<const core::PlanNode>> sources;
   // Create 10 partial aggregation sources.
   for (int i = 0; i < 10; ++i) {
-    sources.push_back(PlanBuilder(planNodeIdGenerator)
-                          .values({batch})
+    sources.push_back(builder.newPlan()
+                          .values(batch)
                           .partialAggregation(
                               {}, {"spark_approx_percentile(c0, 0.005, 10000)"})
                           .planNode());
   }
   // Merge all partial results in final aggregation.
-  auto op = PlanBuilder(planNodeIdGenerator)
+  auto op = builder.newPlan()
                 .localPartitionRoundRobin(sources)
                 .finalAggregation()
                 .planNode();
@@ -419,15 +372,45 @@ TEST_F(ApproxPercentileAggregateTest, nonFlatPercentileArray) {
       BaseVector::wrapInDictionary(
           nullptr, indices, 3, makeFlatVector<double>({0, 0.5, 1})));
   auto rows = makeRowVector({
-      makeFlatVector<int32_t>(10, folly::identity),
+      makeFlatIdentityVector<int32_t>(10),
       BaseVector::wrapInConstant(1, 0, percentiles),
   });
   auto plan = PlanBuilder()
-                  .values({rows})
+                  .values(rows)
                   .singleAggregation({}, {"spark_approx_percentile(c0, c1)"})
                   .planNode();
   auto expected = makeRowVector({makeArrayVector<int32_t>({{0, 5, 9}})});
   AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Test Partial + Final aggregation with dictionary-wrapped intermediate arrays.
+TEST_F(ApproxPercentileAggregateTest, dictionaryWrappedIntermediateArrays) {
+  auto partial =
+      PlanBuilder()
+          .values({makeRowVector({makeFlatVector<int32_t>({1, 5, 9})})})
+          .partialAggregation({}, {"spark_approx_percentile(c0, 0.5)"})
+          .planNode();
+  auto partialResult = AssertQueryBuilder(partial).copyResults(pool());
+  auto state = partialResult->childAt(0)->as<RowVector>();
+
+  auto indices = makeIndicesInReverse(state->size());
+  auto children = state->children();
+  using Idx = ApproxPercentileIntermediateTypeChildIndex;
+  children[static_cast<int>(Idx::kItems)] = wrapInDictionary(
+      indices, state->size(), children[static_cast<int>(Idx::kItems)]);
+  children[static_cast<int>(Idx::kLevels)] = wrapInDictionary(
+      indices, state->size(), children[static_cast<int>(Idx::kLevels)]);
+  auto wrappedIntermediate = makeRowVector({makeRowVector(children)});
+
+  auto mergeExtract =
+      PlanBuilder()
+          .values(wrappedIntermediate)
+          .singleAggregation(
+              {}, {"spark_approx_percentile_merge_extract_integer(c0)"})
+          .planNode();
+  auto expectedResult =
+      makeRowVector({makeFlatVector(std::vector<int32_t>{5})});
+  AssertQueryBuilder(mergeExtract).assertResults(expectedResult);
 }
 
 // Test when all input values are NULL.
@@ -504,10 +487,10 @@ TEST_F(ApproxPercentileAggregateTest, nullPercentile) {
   auto rows = makeRowVector({values, percentileOfDouble});
 
   // Test null percentile for spark_approx_percentile(value, percentile).
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          {rows}, {}, {"spark_approx_percentile(c0, c1)"}, "SELECT NULL"),
-      "Percentile cannot be null");
+  AggregationTester(*this)
+      .inputs(rows)
+      .aggregates({"spark_approx_percentile(c0, c1)"})
+      .assertError("Percentile cannot be null");
 
   // Test null array percentile (entire array is null, not array with null
   // elements). Note: Spark does not allow null elements within the percentile
@@ -520,10 +503,10 @@ TEST_F(ApproxPercentileAggregateTest, nullPercentile) {
   // Test null array percentile for spark_approx_percentile(value, percentiles).
   // When the entire percentile array is null, it triggers the null check
   // in ArrayVector and throws "Percentile array cannot contain nulls".
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          {rows}, {}, {"spark_approx_percentile(c0, c1)"}, "SELECT NULL"),
-      "Percentile array cannot contain nulls");
+  AggregationTester(*this)
+      .inputs(rows)
+      .aggregates({"spark_approx_percentile(c0, c1)"})
+      .assertError("Percentile array cannot contain nulls");
 }
 
 // Test with NaN values in floating point inputs.
@@ -595,7 +578,7 @@ TEST_F(ApproxPercentileAggregateTest, accuracyBoundary) {
   {
     auto plan =
         PlanBuilder()
-            .values({rows})
+            .values(rows)
             .singleAggregation({}, {"spark_approx_percentile(c0, 0.5, 1)"})
             .planNode();
     auto result = AssertQueryBuilder(plan).copyResults(pool());
@@ -622,7 +605,7 @@ TEST_F(ApproxPercentileAggregateTest, multiplePercentiles) {
 
   // Test with array of different percentiles [0.1, 0.5, 0.9].
   auto plan = PlanBuilder()
-                  .values({rows})
+                  .values(rows)
                   .singleAggregation({}, {"spark_approx_percentile(c0, c1)"})
                   .planNode();
 
@@ -637,10 +620,10 @@ TEST_F(ApproxPercentileAggregateTest, invalidAccuracy) {
   auto rows = makeRowVector({values});
 
   // Accuracy = 0 is invalid.
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          {rows}, {}, {"spark_approx_percentile(c0, 0.5, 0)"}, "SELECT 3"),
-      "The accuracy must be between (0, 2147483647]");
+  AggregationTester(*this)
+      .inputs(rows)
+      .aggregates({"spark_approx_percentile(c0, 0.5, 0)"})
+      .assertError("The accuracy must be between (0, 2147483647]");
 }
 
 // Test single row input.
@@ -660,7 +643,7 @@ TEST_F(ApproxPercentileAggregateTest, largeDataset) {
   // Median of 0..99999 should be approximately 50000, allow ±5 error.
   auto plan =
       PlanBuilder()
-          .values({rows})
+          .values(rows)
           .singleAggregation({}, {"spark_approx_percentile(c0, 0.5, 10000)"})
           .planNode();
   auto result = AssertQueryBuilder(plan).copyResults(pool());

@@ -69,7 +69,7 @@ void TopN::addInput(RowVectorPtr input) {
   folly::F14FastMap<void*, vector_size_t> passedRows;
   for (auto row = 0; row < input->size(); ++row) {
     char* newRow = nullptr;
-    if (topRows_.size() < count_) {
+    if (static_cast<int64_t>(topRows_.size()) < count_) {
       newRow = data_->newRow();
     } else {
       char* topRow = topRows_.top();
@@ -82,7 +82,6 @@ void TopN::addInput(RowVectorPtr input) {
       newRow = data_->initializeRow(topRow, true /* reuse */);
     }
 
-    data_->initializeFields(newRow);
     for (const auto col : sortingKeyColumns_) {
       data_->store(decodedVectors_[col], row, newRow, col);
     }

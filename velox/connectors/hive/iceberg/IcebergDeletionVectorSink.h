@@ -50,12 +50,18 @@ namespace facebook::velox::connector::hive::iceberg {
 ///     "fileSizeInBytes": <total file size>,
 ///     "metrics": {"recordCount": <numPositions>},
 ///     "partitionSpecJson": 0,
+///     "partitionDataJson": "{\"partitionValues\":[...]}",
 ///     "fileFormat": "PUFFIN",
 ///     "referencedDataFile": "<data file path>",
 ///     "content": "POSITION_DELETES",
 ///     "contentOffset": <blob offset within puffin>,
 ///     "contentSizeInBytes": <blob length>
 ///   }
+/// partitionDataJson carries the row-id's partition_data field verbatim
+/// (already in {"partitionValues":[...]} shape, synthesized per split by the
+/// reader). It is present only when non-empty: unpartitioned tables
+/// synthesize "" and the Java commit path (buildDeletionVectorEntry) requires
+/// the key solely for partitioned tables, mirroring IcebergDataSink.
 class IcebergDeletionVectorSink : public DataSink {
  public:
   IcebergDeletionVectorSink(
@@ -76,9 +82,17 @@ class IcebergDeletionVectorSink : public DataSink {
   Stats stats() const override;
 
   // Per-referenced-data-file accumulator. Builds a roaring bitmap from
-  // incoming positions; flushed to a Puffin file in close().
+  // incoming positions; flushed to a Puffin file in close(). partitionData
+  // carries the row-id's partition_data field verbatim (the per-split
+  // PartitionData JSON the reader synthesized); it is emitted as
+  // partitionDataJson so the coordinator can reconstruct the DV with the
+  // real spec and partition on commit.
   struct PerFileState {
     DeletionVectorWriter writer;
+    std::string partitionData;
+    // Spec id of the data file's partition spec, which may predate the
+    // table's current spec.
+    int64_t partitionSpecId{0};
   };
 
  private:
@@ -91,8 +105,25 @@ class IcebergDeletionVectorSink : public DataSink {
   // Returns the accumulator for 'path', creating it on first use. Lookups are
   // O(1) via 'perFileIndex_'; new entries are appended to 'perFile_' so the
   // overall insertion order (and hence commit-message order) stays
-  // deterministic.
-  PerFileState& findOrCreatePerFile(const std::string& path);
+  // deterministic. On first creation, if the insert handle carries an existing
+  // deletion vector for 'path', seeds the writer with its positions so the
+  // emitted DV is the union of old and newly-deleted positions.
+  // 'partitionData' is the row-id's partition_data field for the current row;
+  // it is recorded on first creation and must agree on later rows for the
+  // same file (same data file implies same partition). May be empty for
+  // unpartitioned tables. 'partitionSpecId' is the data file's spec id,
+  // under the same agreement.
+  PerFileState& findOrCreatePerFile(
+      const std::string& path,
+      std::string partitionData,
+      int64_t partitionSpecId);
+
+  // Reads the existing deletion vector for 'dataFile' (as described by the
+  // insert handle) and adds its positions to 'state.writer' exactly once.
+  // No-op when the handle has no existing DV for 'dataFile'.
+  void seedFromExistingDeletionVector(
+      PerFileState& state,
+      const std::string& dataFile);
 
   const RowTypePtr inputType_;
   const IcebergInsertTableHandlePtr insertTableHandle_;
@@ -117,6 +148,19 @@ class IcebergDeletionVectorSink : public DataSink {
 
   bool finished_{false};
   bool aborted_{false};
+
+  // True when the coordinator delivers the row-id as a synthesized
+  // ROW<file_path, pos, ...> column (Presto's getDeleteRowIdColumn for V3),
+  // possibly alongside other passthrough columns (e.g. a leading data/partition
+  // column). In that case appendData unwraps the ROW's first two fields. When
+  // false, the input is the legacy two flat (file_path, pos) columns produced
+  // by IcebergMergeSink::makeDeleteBatch.
+  bool rowIdAsStruct_{false};
+
+  // Index of the row-id ROW column in the input when 'rowIdAsStruct_' is true.
+  // The V3 DELETE plan may prepend other columns, so the ROW is not always at
+  // channel 0. Unused when 'rowIdAsStruct_' is false.
+  int32_t rowIdChannel_{0};
 
   // Cumulative stats for the Stats() accessor.
   uint64_t numWrittenBytes_{0};

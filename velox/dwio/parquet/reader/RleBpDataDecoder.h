@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include "velox/common/base/GTestMacros.h"
 #include "velox/common/base/Nulls.h"
 #include "velox/dwio/common/BitPackDecoder.h"
 #include "velox/dwio/common/DecoderUtil.h"
@@ -33,6 +32,11 @@ class RleBpDataDecoder : public facebook::velox::parquet::RleBpDecoder {
 
   RleBpDataDecoder(const char* start, const char* end, uint8_t bitWidth)
       : super::RleBpDecoder{start, end, bitWidth} {}
+
+  /// Reset to decode from a new page buffer without reallocating.
+  void reset(const char* start, const char* end, uint8_t bitWidth) {
+    super::reset(start, end, bitWidth);
+  }
 
   template <bool hasNulls>
   inline void skip(int32_t numValues, int32_t current, const uint64_t* nulls) {

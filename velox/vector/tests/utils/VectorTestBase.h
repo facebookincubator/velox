@@ -19,7 +19,6 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/system/HardwareConcurrency.h>
 
-#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
@@ -51,6 +50,14 @@ void assertEqualVectors(
 
 /// Verify that 'vector' is copyable, by copying all rows.
 void assertCopyableVector(const VectorPtr& vector);
+
+/// Returns 'input' with its base map converted to a FlatMapVector, keeping any
+/// dictionary or constant wrapping. Other encodings are returned as is.
+VectorPtr withFlatMapBase(const VectorPtr& input);
+
+/// Returns 'input' with its base map converted to a MapVector, keeping any
+/// dictionary or constant wrapping. Other encodings are returned as is.
+VectorPtr withMapBase(const VectorPtr& input);
 
 class VectorTestBase {
  protected:
@@ -115,6 +122,15 @@ class VectorTestBase {
       setNulls(rowVector, isNullAt);
     }
     return rowVector;
+  }
+
+  /// Makes a RowVector from (name, child) pairs.
+  RowVectorPtr makeNamedRowVector(
+      const std::vector<std::pair<std::string, VectorPtr>>& children);
+
+  /// Makes a RowVector with a single column.
+  RowVectorPtr makeNamedRowVector(std::string name, VectorPtr child) {
+    return makeRowVector({std::move(name)}, {std::move(child)});
   }
 
   RowVectorPtr makeRowVector(
@@ -202,6 +218,13 @@ class VectorTestBase {
       const std::initializer_list<T>& data,
       const TypePtr& type = CppToType<T>::create()) {
     return vectorMaker_.flatVector<T>(data, type);
+  }
+
+  /// Returns a flat vector containing values from zero through 'size - 1'.
+  template <typename T>
+  FlatVectorPtr<EvalType<T>> makeFlatIdentityVector(vector_size_t size) {
+    return makeFlatVector<T>(
+        size, [](auto row) { return static_cast<T>(row); });
   }
 
   template <typename T>
@@ -837,7 +860,7 @@ class VectorTestBase {
     return pool_.get();
   }
 
-  // Create LazyVector that produces a flat vector and asserts that is is being
+  // Create LazyVector that produces a flat vector and asserts that is being
   // loaded for a specific set of rows.
   template <typename T>
   std::shared_ptr<LazyVector> makeLazyFlatVector(
@@ -888,21 +911,6 @@ class VectorTestBase {
   std::shared_ptr<folly::Executor> spillExecutor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(
           folly::available_concurrency())};
-};
-
-class TestRuntimeStatWriter : public BaseRuntimeStatWriter {
- public:
-  void addRuntimeStat(std::string_view name, const RuntimeCounter& value)
-      override {
-    stats_.emplace_back(std::string(name), value);
-  }
-
-  const std::vector<std::pair<std::string, RuntimeCounter>>& stats() const {
-    return stats_;
-  }
-
- private:
-  std::vector<std::pair<std::string, RuntimeCounter>> stats_;
 };
 
 } // namespace facebook::velox::test

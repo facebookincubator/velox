@@ -42,6 +42,9 @@ class CollectListAggregate {
   /// behavior can only be achieved when the default-null behavior is disabled.
   static constexpr bool default_null_behavior_ = false;
 
+  // Retains one element for each non-null input row.
+  static constexpr bool is_reducing_ = false;
+
   // Whether null input values should be ignored. Defaults to true.
   // NOTE: toIntermediate() was intentionally removed because it is static and
   // cannot access the runtime ignoreNulls_ config. Without it, partial
@@ -118,8 +121,10 @@ class CollectListAggregate {
   };
 };
 
-AggregateRegistrationResult registerCollectList(
-    const std::string& name,
+} // namespace
+
+void registerCollectListAggregate(
+    const std::vector<std::string>& names,
     bool withCompanionFunctions,
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
@@ -129,14 +134,15 @@ AggregateRegistrationResult registerCollectList(
           .intermediateType("array(E)")
           .argumentType("E")
           .build()};
-  return exec::registerAggregateFunction(
-      name,
+  exec::registerAggregateFunction(
+      names,
       std::move(signatures),
-      [name](
+      [names](
           core::AggregationNode::Step step,
           const std::vector<TypePtr>& argTypes,
           const TypePtr& resultType,
           const core::QueryConfig& config) -> std::unique_ptr<exec::Aggregate> {
+        const std::string& name = names.front();
         VELOX_CHECK_EQ(
             argTypes.size(), 1, "{} takes at most one argument", name);
         return std::make_unique<SimpleAggregateAdapter<CollectListAggregate>>(
@@ -144,14 +150,5 @@ AggregateRegistrationResult registerCollectList(
       },
       withCompanionFunctions,
       overwrite);
-}
-} // namespace
-
-void registerCollectListAggregate(
-    const std::string& prefix,
-    bool withCompanionFunctions,
-    bool overwrite) {
-  registerCollectList(
-      prefix + "collect_list", withCompanionFunctions, overwrite);
 }
 } // namespace facebook::velox::functions::aggregate::sparksql

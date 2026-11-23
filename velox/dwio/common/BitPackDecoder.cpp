@@ -16,6 +16,8 @@
 
 #include "velox/dwio/common/BitPackDecoder.h"
 
+#include <cstring>
+
 namespace facebook::velox::dwio::common {
 
 using int128_t = __int128_t;
@@ -46,9 +48,15 @@ void store8Ints(__m256i eightInts, int32_t i, T* result) {
   }
 }
 
-template <typename T>
-inline T* addBytes(T* pointer, int32_t bytes) {
-  return reinterpret_cast<T*>(reinterpret_cast<uint64_t>(pointer) + bytes);
+// Safely load a uint64_t from a potentially unaligned address computed as
+// 'pointer' + 'byteOffset' bytes.
+inline uint64_t loadUnaligned64(const uint64_t* pointer, int32_t byteOffset) {
+  uint64_t value;
+  std::memcpy(
+      &value,
+      reinterpret_cast<const char*>(pointer) + byteOffset,
+      sizeof(value));
+  return value;
 }
 
 template <typename T>
@@ -116,7 +124,7 @@ int32_t decode1To24(
         uint64_t eightBytes;
         if (width == 8) {
           if (!bitOffset) {
-            eightBytes = *addBytes(bits, row);
+            eightBytes = loadUnaligned64(bits, row);
           } else {
             eightBytes =
                 bits::detail::loadBits<uint64_t>(bits, bitOffset + 8 * row, 64);
@@ -125,7 +133,7 @@ int32_t decode1To24(
           auto bit = row * width + bitOffset;
           auto byte = bit >> 3;
           auto shift = bit & 7;
-          uint64_t word = *addBytes(bits, byte) >> shift;
+          uint64_t word = loadUnaligned64(bits, byte) >> shift;
           eightBytes = _pdep_u64(word, kDepMask8);
         }
         eightInts = _mm256_cvtepu8_epi32(
@@ -141,12 +149,12 @@ int32_t decode1To24(
           auto bit = row * width + bitOffset;
           auto byte = bit >> 3;
           auto shift = bit & 7;
-          uint64_t word = *addBytes(bits, byte) >> shift;
+          uint64_t word = loadUnaligned64(bits, byte) >> shift;
           words[0] = _pdep_u64(word, kDepMask16);
           bit += 4 * width;
           byte = bit >> 3;
           shift = bit & 7;
-          word = *addBytes(bits, byte) >> shift;
+          word = loadUnaligned64(bits, byte) >> shift;
           words[1] = _pdep_u64(word, kDepMask16);
         } else {
           words[0] = bits::detail::loadBits<uint64_t>(
@@ -272,10 +280,10 @@ void unpack(
     auto bit = bitOffset + (rows[i]) * bitWidth;
     auto byte = bit / 8;
     auto shift = bit & 7;
-    result[i] = (*reinterpret_cast<const uint64_t*>(
-                     reinterpret_cast<const char*>(bits) + byte) >>
-                 shift) &
-        mask;
+    uint64_t word;
+    std::memcpy(
+        &word, reinterpret_cast<const char*>(bits) + byte, sizeof(word));
+    result[i] = (word >> shift) & mask;
   }
   if (anyUnsafe) {
     auto lastSafeWord = bufferEnd - sizeof(uint64_t);

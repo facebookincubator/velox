@@ -248,6 +248,9 @@ void readStructNullsColumns(
           {TypeKind::TIMESTAMP, &readStructNulls<Timestamp>},
           {TypeKind::VARCHAR, &readStructNulls<StringView>},
           {TypeKind::VARBINARY, &readStructNulls<StringView>},
+          // Opaque values are serialized as strings, so the column uses the
+          // same VARIABLE_WIDTH framing as VARCHAR and VARBINARY.
+          {TypeKind::OPAQUE, &readStructNulls<StringView>},
           {TypeKind::ARRAY, &readArrayVectorStructNulls},
           {TypeKind::MAP, &readMapVectorStructNulls},
           {TypeKind::ROW, &readRowVectorStructNulls},
@@ -303,6 +306,7 @@ vector_size_t readNulls(
     const uint64_t* incomingNulls,
     int32_t numIncomingNulls,
     BaseVector& result) {
+  result.resetDataDependentFlags(nullptr);
   VELOX_DCHECK_LE(
       result.size(), resultOffset + (incomingNulls ? numIncomingNulls : size));
   if (source->readByte() == 0) {

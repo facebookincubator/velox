@@ -59,6 +59,45 @@ using namespace facebook::velox::test;
 
 PARQUET_BENCHMARKS(BIGINT(), BigInt);
 
+// Same deleted rows, stored three ways: one V2 positional delete file, ten V2
+// positional delete files (deletes accumulated over several commits), and one
+// V3 deletion vector. Every row passes the filter, so the read cost is the
+// data scan plus applying the deletes.
+#define DELETE_FILE_KIND_BENCHMARKS(_deletes_)  \
+  BENCHMARK_NAMED_PARAM(                        \
+      runDeletes,                               \
+      Delete_##_deletes_##_Positional_1_file,   \
+      "BigInt",                                 \
+      BIGINT(),                                 \
+      _deletes_,                                \
+      DeleteFileKind::kPositional,              \
+      1,                                        \
+      10000);                                   \
+  BENCHMARK_RELATIVE_NAMED_PARAM(               \
+      runDeletes,                               \
+      Delete_##_deletes_##_Positional_10_files, \
+      "BigInt",                                 \
+      BIGINT(),                                 \
+      _deletes_,                                \
+      DeleteFileKind::kPositional,              \
+      10,                                       \
+      10000);                                   \
+  BENCHMARK_RELATIVE_NAMED_PARAM(               \
+      runDeletes,                               \
+      Delete_##_deletes_##_DeletionVector,      \
+      "BigInt",                                 \
+      BIGINT(),                                 \
+      _deletes_,                                \
+      DeleteFileKind::kDeletionVector,          \
+      1,                                        \
+      10000);                                   \
+  BENCHMARK_DRAW_LINE();
+
+DELETE_FILE_KIND_BENCHMARKS(1)
+DELETE_FILE_KIND_BENCHMARKS(5)
+DELETE_FILE_KIND_BENCHMARKS(20)
+DELETE_FILE_KIND_BENCHMARKS(50)
+
 int main(int argc, char** argv) {
   folly::Init init{&argc, &argv};
   memory::MemoryManager::initialize(memory::MemoryManager::Options{});

@@ -43,8 +43,9 @@ class OperatorAdapter {
   /// if this adapter handles this operator type.
   virtual bool canHandle(const exec::Operator* op) const = 0;
 
-  /// Check if the operator is supported for GPU execution. Returns true if
-  /// the operator can be executed on GPU.
+  /// Returns whether the operator can use this adapter's GPU path.
+  /// createReplacements() is called only when this returns true.
+  /// keepOperator() independently determines whether the original remains.
   virtual bool canRunOnGPU(
       const exec::Operator* op,
       const core::PlanNodePtr& planNode,
@@ -78,16 +79,18 @@ class OperatorAdapter {
     return props;
   }
 
-  /// Create replacement GPU operator(s). Returns a vector of replacement
-  /// operators (empty if operator should be kept).
+  /// Creates operators for a GPU-capable input. If keepOperator() is false,
+  /// returns one or more operators that replace 'op'; returning none is an
+  /// adapter error. Otherwise, returns operators to append after 'op'. The
+  /// caller renumbers operator IDs, so 'operatorId' need not be unique.
   virtual std::vector<std::unique_ptr<exec::Operator>> createReplacements(
       const exec::Operator* op,
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx,
       int32_t operatorId) const = 0;
 
-  /// Check if the original operator should be kept (not replaced). Returns
-  /// true if the original operator should be kept, false otherwise.
+  /// Whether to keep 'op'. Operators returned by createReplacements() follow
+  /// it when true and replace it when false.
   virtual bool keepOperator() const {
     return false;
   }
@@ -112,6 +115,10 @@ class OperatorAdapterRegistry {
 
   /// Register an adapter with the registry.
   void registerAdapter(std::unique_ptr<OperatorAdapter> adapter);
+
+  /// Inserts an adapter at highest lookup priority. Intended for tests that
+  /// override a built-in adapter.
+  void registerAdapterFront(std::unique_ptr<OperatorAdapter> adapter);
 
   /// Find an adapter that can handle the given operator. Returns a pointer
   /// to the adapter, or nullptr if none found.

@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/iceberg/WriterOptionsAdapter.h"
 
+#include "velox/common/Casts.h"
 #include "velox/common/base/Exceptions.h"
 #ifdef VELOX_ENABLE_NIMBLE
 #include "velox/connectors/hive/iceberg/fb/NimbleWriterOptionsAdapter.h"
@@ -27,11 +28,10 @@ namespace facebook::velox::connector::hive::iceberg {
 
 namespace {
 
-// Manifest format string emitted in Iceberg commit messages for files that
-// share the ORC on-disk family. Iceberg's manifest vocabulary has no DWRF or
-// NIMBLE enum, so DWRF and NIMBLE files are reported as "ORC" per the
-// cross-engine convention shared with the Java planner (see
-// FileFormat.{DWRF,NIMBLE}.toIceberg() in presto-facebook-iceberg).
+// Manifest format string emitted in Iceberg commit messages for ORC and DWRF
+// files. Iceberg's manifest vocabulary has no DWRF enum, so DWRF is reported
+// as "ORC" per the cross-engine convention shared with the Java coordinator
+// (see FileFormat.DWRF.toIceberg() in presto-facebook-iceberg).
 constexpr std::string_view kOrcManifestFormat{"ORC"};
 
 class ParquetWriterOptionsAdapter : public WriterOptionsAdapter {
@@ -66,9 +66,10 @@ class DwrfWriterOptionsAdapter : public WriterOptionsAdapter {
     // DWRF stores microsecond-precision timestamps natively, so no
     // precision conversion is required; only timezone adjustment must be
     // disabled per the Iceberg spec. Unlike Parquet, DWRF exposes
-    // timestamp configuration as direct fields on dwrf::WriterOptions
+    // timestamp configuration as direct fields on dwrf::DwrfWriterOptions
     // rather than serdeParameters.
-    auto* dwrfOptions = dynamic_cast<dwrf::WriterOptions*>(&options);
+    auto dwrfOptions = std::dynamic_pointer_cast<dwrf::DwrfWriterOptions>(
+        options.formatSpecificOptions);
     if (dwrfOptions == nullptr) {
       return;
     }

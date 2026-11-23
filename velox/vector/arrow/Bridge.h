@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/EnumDeclare.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/vector/BaseVector.h"
 
@@ -33,13 +34,25 @@ enum class TimestampUnit : uint8_t {
 };
 
 struct ArrowOptions {
+  /// Physical layout used to export variable-width values to Arrow.
+  enum class VarTypeLayout : uint8_t {
+    /// 32-bit offsets (Arrow String/Binary).
+    kDefault,
+    /// Arrow StringView.
+    kStringView,
+    /// 64-bit offsets (Arrow LargeString/LargeBinary).
+    kLarge,
+  };
+
+  VELOX_DECLARE_EMBEDDED_ENUM_NAME(VarTypeLayout);
+
   bool flattenDictionary{false};
   // NOTE: flattenConstant is only supported for scalar types.
   bool flattenConstant{false};
   TimestampUnit timestampUnit = TimestampUnit::kNano;
   std::optional<std::string> timestampTimeZone{std::nullopt};
-  // Export VARCHAR and VARBINARY to Arrow 15 StringView format
-  bool exportToStringView = false;
+  // Layout used for VARCHAR and VARBINARY.
+  VarTypeLayout varTypeLayout{VarTypeLayout::kDefault};
   // Export VARBINARY as UTF-8 string (for consumers that lack binary support).
   bool exportVarbinaryAsString = false;
   /// Respect the width component of decimal type format string on export.
@@ -140,6 +153,15 @@ TypePtr importFromArrow(const ArrowSchema& arrowSchema);
 /// buffers, so it's the client's responsibility to ensure the buffer's
 /// lifetime.
 ///
+/// The buffers must follow Arrow's recommended alignment and padding: aligned
+/// and padded to a multiple of 8 or 64 bytes
+/// (https://arrow.apache.org/docs/format/Columnar.html#buffer-alignment-and-padding).
+/// Such buffers meet the contract on Buffer, so the import needs no copy to
+/// align or pad them. Long decimals that aren't 16-byte aligned are still
+/// copied, and types whose Arrow and Velox representations differ, such as
+/// timestamps, are converted into new buffers. Buffers that don't follow it get
+/// no guarantees.
+///
 /// The function throws in case the conversion fails.
 ///
 /// Example usage:
@@ -167,6 +189,13 @@ VectorPtr importFromArrowAsViewer(
 /// (https://arrow.apache.org/docs/format/CDataInterface.html). Afterwards, the
 /// returned Vector will be responsible for calling the release callbacks when
 /// destructed.
+///
+/// The inputs are marked released even if the import throws. A failed import
+/// has already called their release callbacks, so the caller must not release
+/// them again.
+///
+/// The buffers must follow the same alignment and padding as for
+/// importFromArrowAsViewer.
 VectorPtr importFromArrowAsOwner(
     ArrowSchema& arrowSchema,
     ArrowArray& arrowArray,

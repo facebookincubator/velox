@@ -70,7 +70,8 @@ void registerAggregateFunctions(
   registerSum(prefix + "sum", withCompanionFunctions, overwrite);
   registerCentralMomentsAggregate(prefix, withCompanionFunctions, overwrite);
   registerCollectSetAggAggregate(prefix, withCompanionFunctions, overwrite);
-  registerCollectListAggregate(prefix, withCompanionFunctions, overwrite);
+  registerCollectListAggregate(
+      {prefix + "collect_list"}, withCompanionFunctions, overwrite);
   registerRegrReplacementAggregate(prefix, withCompanionFunctions, overwrite);
   registerModeAggregate(prefix, withCompanionFunctions, overwrite);
   registerVarianceAggregate(prefix, withCompanionFunctions, overwrite);

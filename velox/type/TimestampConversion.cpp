@@ -635,7 +635,17 @@ bool tryParseTimestampString(
   }
 
   // Try to parse a time field.
+  const size_t preSeparatorPos = pos;
   parseTimeSeparator(buf, pos, parseMode);
+
+  // In Spark cast mode, once a date-time separator ('T' or ' ') is consumed,
+  // the time component must begin immediately with a digit. This mirrors
+  // Spark's grammar: a separator followed by a timezone, garbage, or end of
+  // input is rejected.
+  if (parseMode == TimestampParseMode::kSparkCast && pos > preSeparatorPos &&
+      (pos >= len || !characterIsDigit(buf[pos]))) {
+    return false;
+  }
 
   size_t timePos = 0;
   if (!tryParseTimeString(
@@ -702,7 +712,7 @@ daysSinceEpochFromDate(int32_t year, int32_t month, int32_t day) {
   // negligible. Years outside the strict range delegate to
   // WideRangeDateConversion, which validates and handles the full
   // [kMinYear, kMaxYear] domain via the loop-based fallback.
-  if (FOLLY_LIKELY(year > fast_date::kYearMin && year < fast_date::kYearMax)) {
+  if (year > fast_date::kYearMin && year < fast_date::kYearMax) [[likely]] {
     if (!isValidDate(year, month, day)) {
       if (threadSkipErrorDetails()) {
         return folly::makeUnexpected(Status::UserError());

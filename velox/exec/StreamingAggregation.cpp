@@ -50,7 +50,9 @@ StreamingAggregation::StreamingAggregation(
           operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes()},
       aggregationNode_{aggregationNode},
       step_{aggregationNode->step()},
-      noGroupsSpanBatches_{aggregationNode_->noGroupsSpanBatches()} {
+      noGroupsSpanBatches_{aggregationNode_->noGroupsSpanBatches()},
+      mayRetainInput_{aggregationNode_->mayRetainInput().value_or(
+          aggregationNode_->noGroupsSpanBatches())} {
   if (aggregationNode_->ignoreNullKeys()) {
     VELOX_UNSUPPORTED(
         "Streaming aggregation doesn't support ignoring null keys yet");
@@ -101,12 +103,16 @@ void StreamingAggregation::initialize() {
     }
   }
 
-  if (isRawInput(step_)) {
+  // Retaining a reference to the input instead of copying is only bounded when
+  // no group spans batches, since the reference is dropped once the group's
+  // output is produced. A plan that sets mayRetainInput takes on that memory
+  // itself.
+  if (isRawInput(step_) && mayRetainInput_) {
     for (column_index_t i = 0; i < aggregates_.size(); ++i) {
       if (aggregates_[i].sortingKeys.empty() && !aggregates_[i].distinct) {
         // Must be set before we initialize row container, because it could
         // change the type and size of accumulator.
-        aggregates_[i].function->setClusteredInput(true);
+        aggregates_[i].function->setCanRetainInput(true);
       }
     }
   }
@@ -212,8 +218,9 @@ RowVectorPtr StreamingAggregation::createOutput(size_t numGroups) {
   }
 
   if (sortedAggregations_) {
-    sortedAggregations_->extractValues(
-        folly::Range<char**>(groups_.data(), numGroups), output);
+    const folly::Range<char**> outputGroups(groups_.data(), numGroups);
+    sortedAggregations_->extractValues(outputGroups, output);
+    sortedAggregations_->eraseInputs(outputGroups);
   }
 
   for (const auto& aggregation : distinctAggregations_) {
@@ -335,7 +342,7 @@ void StreamingAggregation::evaluateAggregates() {
   }
 
   if (sortedAggregations_) {
-    sortedAggregations_->addInput(inputGroups_.data(), input_);
+    sortedAggregations_->addInput(inputGroups_.data(), input_, inputRows_);
   }
 }
 
@@ -349,7 +356,7 @@ bool StreamingAggregation::startDrain() {
 }
 
 void StreamingAggregation::maybeFinishDrain() {
-  if (FOLLY_LIKELY((numGroups_ != 0) || !isDraining())) {
+  if ((numGroups_ != 0) || !isDraining()) [[likely]] {
     return;
   }
   prevInput_ = nullptr;
@@ -449,16 +456,11 @@ std::unique_ptr<RowContainer> StreamingAggregation::makeRowContainer(
 
   return std::make_unique<RowContainer>(
       groupingKeyTypes,
-      !aggregationNode_->ignoreNullKeys(),
       accumulators,
       std::vector<TypePtr>{},
-      false,
-      false,
-      false,
-      false, // hasCountFlag
-      false,
-      false,
-      pool());
+      pool(),
+      RowContainer::Options{
+          .nullableKeys = !aggregationNode_->ignoreNullKeys()});
 }
 
 void StreamingAggregation::initializeNewGroups(size_t numPrevGroups) {
@@ -495,43 +497,22 @@ void StreamingAggregation::initializeAggregates(uint32_t numKeys) {
   for (auto& aggregate : aggregates_) {
     auto& function = aggregate.function;
     function->setAllocator(&rows_->stringAllocator());
-
-    const auto rowColumn = rows_->columnAt(columnIndex);
-    function->setOffsets(
-        rowColumn.offset(),
-        rowColumn.nullByte(),
-        rowColumn.nullMask(),
-        rowColumn.initializedByte(),
-        rowColumn.initializedMask(),
-        rows_->rowSizeOffset());
+    function->setOffsets(rows_->columnAt(columnIndex), rows_->rowSizeOffset());
     columnIndex++;
   }
 
   if (sortedAggregations_) {
     sortedAggregations_->setAllocator(&rows_->stringAllocator());
-    const auto& rowColumn = rows_->columnAt(columnIndex);
     sortedAggregations_->setOffsets(
-        rowColumn.offset(),
-        rowColumn.nullByte(),
-        rowColumn.nullMask(),
-        rowColumn.initializedByte(),
-        rowColumn.initializedMask(),
-        rows_->rowSizeOffset());
+        rows_->columnAt(columnIndex), rows_->rowSizeOffset());
     columnIndex++;
   }
 
   for (const auto& aggregation : distinctAggregations_) {
     if (aggregation != nullptr) {
       aggregation->setAllocator(&rows_->stringAllocator());
-
-      const auto& rowColumn = rows_->columnAt(columnIndex);
       aggregation->setOffsets(
-          rowColumn.offset(),
-          rowColumn.nullByte(),
-          rowColumn.nullMask(),
-          rowColumn.initializedByte(),
-          rowColumn.initializedMask(),
-          rows_->rowSizeOffset());
+          rows_->columnAt(columnIndex), rows_->rowSizeOffset());
       columnIndex++;
     }
   }

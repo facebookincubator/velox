@@ -33,7 +33,7 @@ class TestIntegerDictionaryEncoder : public ::testing::Test {
   }
 };
 
-TEST_F(TestIntegerDictionaryEncoder, AddKey) {
+TEST_F(TestIntegerDictionaryEncoder, addKey) {
   struct TestCase {
     explicit TestCase(
         const std::vector<int64_t>& addKeySequence,
@@ -61,7 +61,7 @@ TEST_F(TestIntegerDictionaryEncoder, AddKey) {
   }
 }
 
-TEST_F(TestIntegerDictionaryEncoder, GetCount) {
+TEST_F(TestIntegerDictionaryEncoder, getCount) {
   struct TestCase {
     explicit TestCase(
         const std::vector<int64_t>& addKeySequence,
@@ -86,20 +86,21 @@ TEST_F(TestIntegerDictionaryEncoder, GetCount) {
   for (const auto& testCase : testCases) {
     auto pool = memoryManager()->addLeafPool();
     IntegerDictionaryEncoder<int64_t> intDictEncoder{*pool, *pool};
+    std::unordered_map<int64_t, uint32_t> keyIndices;
     for (const auto& key : testCase.addKeySequence) {
-      intDictEncoder.addKey(key);
+      keyIndices[key] = intDictEncoder.addKey(key);
     }
 
     std::vector<size_t> actualCountSequence{};
     for (const auto& key : testCase.getCountSequence) {
       actualCountSequence.push_back(
-          intDictEncoder.getCount(intDictEncoder.getIndex(key)));
+          intDictEncoder.getCount(keyIndices.at(key)));
     }
     EXPECT_EQ(testCase.countSequence, actualCountSequence);
   }
 }
 
-TEST_F(TestIntegerDictionaryEncoder, GetTotalCount) {
+TEST_F(TestIntegerDictionaryEncoder, getTotalCount) {
   struct TestCase {
     explicit TestCase(
         const std::vector<int64_t>& addKeySequence,
@@ -126,32 +127,24 @@ TEST_F(TestIntegerDictionaryEncoder, GetTotalCount) {
   }
 }
 
-TEST_F(TestIntegerDictionaryEncoder, Clear) {
+TEST_F(TestIntegerDictionaryEncoder, clear) {
   auto pool = memoryManager()->addLeafPool();
   {
     IntegerDictionaryEncoder<int64_t> intDictEncoder{*pool, *pool};
-    EXPECT_EQ(1, intDictEncoder.refCount_);
-    EXPECT_EQ(0, intDictEncoder.clearCount_);
     for (size_t i = 0; i != 2500; ++i) {
       intDictEncoder.addKey(i);
     }
     EXPECT_EQ(2500, intDictEncoder.size());
-    EXPECT_EQ(2500, intDictEncoder.keyIndex_.size());
-    EXPECT_EQ(2500, intDictEncoder.keys_.size());
-    EXPECT_EQ(2500, intDictEncoder.counts_.size());
     EXPECT_EQ(2500, intDictEncoder.getTotalCount());
-    EXPECT_EQ(1, intDictEncoder.refCount_);
-    EXPECT_EQ(0, intDictEncoder.clearCount_);
     intDictEncoder.clear();
     EXPECT_EQ(0, intDictEncoder.size());
-    EXPECT_EQ(0, intDictEncoder.keyIndex_.size());
-    EXPECT_EQ(0, intDictEncoder.keys_.size());
-    EXPECT_EQ(0, intDictEncoder.keys_.capacity());
-    EXPECT_EQ(0, intDictEncoder.counts_.size());
-    EXPECT_EQ(0, intDictEncoder.counts_.capacity());
     EXPECT_EQ(0, intDictEncoder.getTotalCount());
-    EXPECT_EQ(1, intDictEncoder.refCount_);
-    EXPECT_EQ(0, intDictEncoder.clearCount_);
+    // Verify that clear resets the dictionary and allows it to be rebuilt.
+    const auto index = intDictEncoder.addKey(42);
+    EXPECT_EQ(0, index);
+    EXPECT_EQ(1, intDictEncoder.size());
+    EXPECT_EQ(1, intDictEncoder.getCount(index));
+    EXPECT_EQ(1, intDictEncoder.getTotalCount());
     // Folly's F14 map when compiled with ASAN, it re-allocates after
     // deallocating the memory. So the overall bytes allocated does not go
     // down. On test experiment it deallocated 4K and rellocated 64K.
@@ -164,40 +157,22 @@ TEST_F(TestIntegerDictionaryEncoder, Clear) {
     intDictEncoder.bumpRefCount();
     intDictEncoder.bumpRefCount();
     intDictEncoder.bumpRefCount();
-    EXPECT_EQ(4, intDictEncoder.refCount_);
-    EXPECT_EQ(0, intDictEncoder.clearCount_);
     for (size_t i = 0; i != 2500; ++i) {
       intDictEncoder.addKey(i);
     }
     EXPECT_EQ(2500, intDictEncoder.size());
-    EXPECT_EQ(2500, intDictEncoder.keyIndex_.size());
-    EXPECT_EQ(2500, intDictEncoder.keys_.size());
-    EXPECT_EQ(2500, intDictEncoder.counts_.size());
     EXPECT_EQ(2500, intDictEncoder.getTotalCount());
-    EXPECT_EQ(4, intDictEncoder.refCount_);
-    EXPECT_EQ(0, intDictEncoder.clearCount_);
 
-    intDictEncoder.clear();
-    intDictEncoder.clear();
-    EXPECT_EQ(2500, intDictEncoder.size());
-    EXPECT_EQ(2500, intDictEncoder.keyIndex_.size());
-    EXPECT_EQ(2500, intDictEncoder.keys_.size());
-    EXPECT_EQ(2500, intDictEncoder.counts_.size());
-    EXPECT_EQ(2500, intDictEncoder.getTotalCount());
-    EXPECT_EQ(4, intDictEncoder.refCount_);
-    EXPECT_EQ(2, intDictEncoder.clearCount_);
-
-    intDictEncoder.clear();
+    // The initial reference plus three bumps require four clear calls before
+    // the dictionary is reset.
+    for (size_t i = 0; i < 3; ++i) {
+      intDictEncoder.clear();
+      EXPECT_EQ(2500, intDictEncoder.size());
+      EXPECT_EQ(2500, intDictEncoder.getTotalCount());
+    }
     intDictEncoder.clear();
     EXPECT_EQ(0, intDictEncoder.size());
-    EXPECT_EQ(0, intDictEncoder.keyIndex_.size());
-    EXPECT_EQ(0, intDictEncoder.keys_.size());
-    EXPECT_EQ(0, intDictEncoder.keys_.capacity());
-    EXPECT_EQ(0, intDictEncoder.counts_.size());
-    EXPECT_EQ(0, intDictEncoder.counts_.capacity());
     EXPECT_EQ(0, intDictEncoder.getTotalCount());
-    EXPECT_EQ(4, intDictEncoder.refCount_);
-    EXPECT_EQ(0, intDictEncoder.clearCount_);
     // Folly's F14 map when compiled with ASAN, it re-allocates after
     // deallocating the memory. So the overall bytes allocated does not go
     // down. On test experiment it deallocated 4K and rellocated 64K.
@@ -207,7 +182,7 @@ TEST_F(TestIntegerDictionaryEncoder, Clear) {
   }
 }
 
-TEST_F(TestIntegerDictionaryEncoder, RepeatedFlush) {
+TEST_F(TestIntegerDictionaryEncoder, repeatedFlush) {
   auto pool = memoryManager()->addLeafPool();
   IntegerDictionaryEncoder<int64_t> intDictEncoder{*pool, *pool};
   std::vector<int> keys{0, 1, 4, 9, 16, 25, 9, 1};
@@ -233,7 +208,7 @@ TEST_F(TestIntegerDictionaryEncoder, RepeatedFlush) {
   EXPECT_ANY_THROW(intDictEncoder.getLookupTable());
 }
 
-TEST_F(TestIntegerDictionaryEncoder, Limit) {
+TEST_F(TestIntegerDictionaryEncoder, limit) {
   auto pool = memoryManager()->addLeafPool();
   IntegerDictionaryEncoder<int16_t> intDictEncoder{*pool, *pool};
   for (size_t iter = 0; iter < 2; ++iter) {
@@ -310,13 +285,13 @@ void testGetSortedIndexLookupTable() {
   }
 }
 
-TEST_F(TestIntegerDictionaryEncoder, GetSortedIndexLookupTable) {
+TEST_F(TestIntegerDictionaryEncoder, getSortedIndexLookupTable) {
   testGetSortedIndexLookupTable<int16_t>();
   testGetSortedIndexLookupTable<int32_t>();
   testGetSortedIndexLookupTable<int64_t>();
 }
 
-TEST_F(TestIntegerDictionaryEncoder, ShortIntegerDictionary) {
+TEST_F(TestIntegerDictionaryEncoder, shortIntegerDictionary) {
   // DictionaryEncoding lookupTable can contain the index into dictionary
   // or the actual value. For short integer, index can be  [0,2^16-1]
   // and the values can be from [-2^15, 2^15-1]. Integer writers always
@@ -494,7 +469,7 @@ void testInfrequentKeyOptimization() {
   }
 }
 
-TEST_F(TestIntegerDictionaryEncoder, InfrequentKeyOptimization) {
+TEST_F(TestIntegerDictionaryEncoder, infrequentKeyOptimization) {
   testInfrequentKeyOptimization<int16_t>();
   testInfrequentKeyOptimization<int32_t>();
   testInfrequentKeyOptimization<int64_t>();

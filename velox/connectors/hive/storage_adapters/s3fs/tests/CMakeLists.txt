@@ -23,7 +23,10 @@ target_link_libraries(
 )
 
 add_executable(velox_s3file_test S3FileSystemTest.cpp S3UtilTest.cpp)
-velox_add_test_headers(velox_s3file_test MinioServer.h S3Test.h)
+# Keeps exported branches compatible while the MinIO-to-Silo rename
+# propagates.
+target_compile_definitions(velox_s3file_test PRIVATE minioServer_=siloServer_)
+velox_add_test_headers(velox_s3file_test SiloServer.h S3Test.h)
 add_test(velox_s3file_test velox_s3file_test)
 target_link_libraries(
   velox_s3file_test
@@ -31,6 +34,7 @@ target_link_libraries(
   velox_s3fs
   velox_core
   velox_exec_test_lib
+  velox_hive_storage_adapters_server_startup
   velox_dwio_common_exception
   velox_exec
   GTest::gtest
@@ -45,6 +49,7 @@ target_link_libraries(
   velox_s3fs
   velox_core
   velox_exec_test_lib
+  velox_hive_storage_adapters_server_startup
   velox_dwio_parquet_reader
   velox_dwio_common_exception
   velox_exec
@@ -71,6 +76,7 @@ target_link_libraries(
   velox_s3fs
   velox_core
   velox_exec_test_lib
+  velox_hive_storage_adapters_server_startup
   velox_dwio_parquet_writer
   velox_dwio_parquet_reader
   velox_dwio_common_exception
@@ -91,6 +97,7 @@ target_link_libraries(
   velox_s3fs
   velox_core
   velox_exec_test_lib
+  velox_hive_storage_adapters_server_startup
   velox_dwio_parquet_reader
   velox_dwio_common_exception
   velox_exec
@@ -104,6 +111,7 @@ target_link_libraries(
   velox_s3metrics_test
   velox_s3fs
   velox_exec_test_lib
+  velox_hive_storage_adapters_server_startup
   GTest::gtest
   GTest::gtest_main
 )
@@ -116,6 +124,7 @@ target_link_libraries(
   velox_s3fs
   velox_core
   velox_exec_test_lib
+  velox_hive_storage_adapters_server_startup
   velox_dwio_parquet_reader
   velox_dwio_parquet_writer
   velox_dwio_common_exception

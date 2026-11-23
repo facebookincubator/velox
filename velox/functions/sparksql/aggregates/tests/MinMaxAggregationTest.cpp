@@ -13,9 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <limits>
+
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/HashAggregationStatNames.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
+#include "velox/type/Type.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
@@ -63,65 +68,68 @@ class MinMaxAggregationTest
     static const std::string a0 = "a0";
 
     // Global aggregation.
-    testAggregations(
-        vectors, {}, {min(c1), max(c1)}, "SELECT min(c1), max(c1) FROM tmp");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({min(c1), max(c1)})
+        .withCompanion()
+        .assertResults("SELECT min(c1), max(c1) FROM tmp");
 
     // Group by aggregation.
-    testAggregations(
-        [&](auto& builder) {
-          builder.values(vectors).project({"c0 % 10", "c1"});
-        },
-        {"p0"},
-        {min(c1), max(c1)},
-        "SELECT c0 % 10, min(c1), max(c1) FROM tmp GROUP BY 1");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation(
+            [&](auto& builder) { builder.project({"c0 % 10", "c1"}); })
+        .groupBy({"p0"})
+        .aggregates({min(c1), max(c1)})
+        .assertResults("SELECT c0 % 10, min(c1), max(c1) FROM tmp GROUP BY 1");
 
     // Masked aggregations.
     auto minMaskedAgg = min(c1) + " filter (where mask)";
-    testAggregations(
-        vectors,
-        {},
-        {minMaskedAgg},
-        "SELECT min(c1) filter (where mask) FROM tmp");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({minMaskedAgg})
+        .assertResults("SELECT min(c1) filter (where mask) FROM tmp");
 
-    testAggregations(
-        [&](auto& builder) {
-          builder.values(vectors).project({"c0 % 10", "c1", "mask"});
-        },
-        {"p0"},
-        {minMaskedAgg},
-        "SELECT c0 % 10, min(c1) filter (where mask) FROM tmp GROUP BY 1");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation(
+            [&](auto& builder) { builder.project({"c0 % 10", "c1", "mask"}); })
+        .groupBy({"p0"})
+        .aggregates({minMaskedAgg})
+        .assertResults(
+            "SELECT c0 % 10, min(c1) filter (where mask) FROM tmp GROUP BY 1");
 
     auto maxMaskedAgg = max(c1) + " filter (where mask)";
-    testAggregations(
-        vectors,
-        {},
-        {maxMaskedAgg},
-        "SELECT max(c1) filter (where mask) FROM tmp");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({maxMaskedAgg})
+        .assertResults("SELECT max(c1) filter (where mask) FROM tmp");
 
-    testAggregations(
-        [&](auto& builder) {
-          builder.values(vectors).project({"c0 % 10", "c1", "mask"});
-        },
-        {"p0"},
-        {maxMaskedAgg},
-        "SELECT c0 % 10, max(c1) filter (where mask) FROM tmp GROUP BY 1");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation(
+            [&](auto& builder) { builder.project({"c0 % 10", "c1", "mask"}); })
+        .groupBy({"p0"})
+        .aggregates({maxMaskedAgg})
+        .assertResults(
+            "SELECT c0 % 10, max(c1) filter (where mask) FROM tmp GROUP BY 1");
 
     // Encodings: use filter to wrap aggregation inputs in a dictionary.
-    testAggregations(
-        [&](auto& builder) {
-          builder.values(vectors)
-              .filter("c0 % 2 = 0")
-              .project({"c0 % 11", "c1"});
-        },
-        {"p0"},
-        {min(c1), max(c1)},
-        "SELECT c0 % 11, min(c1), max(c1) FROM tmp WHERE c0 % 2 = 0 GROUP BY 1");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation([&](auto& builder) {
+          builder.filter("c0 % 2 = 0").project({"c0 % 11", "c1"});
+        })
+        .groupBy({"p0"})
+        .aggregates({min(c1), max(c1)})
+        .assertResults(
+            "SELECT c0 % 11, min(c1), max(c1) FROM tmp WHERE c0 % 2 = 0 GROUP BY 1");
 
-    testAggregations(
-        [&](auto& builder) { builder.values(vectors).filter("c0 % 2 = 0"); },
-        {},
-        {min(c1), max(c1)},
-        "SELECT min(c1), max(c1) FROM tmp WHERE c0 % 2 = 0");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation([&](auto& builder) { builder.filter("c0 % 2 = 0"); })
+        .aggregates({min(c1), max(c1)})
+        .assertResults("SELECT min(c1), max(c1) FROM tmp WHERE c0 % 2 = 0");
   }
 };
 
@@ -174,21 +182,179 @@ TEST_F(MinMaxAggregationTest, timestamp) {
   auto vectors = makeVectors(rowType, 1'000, 10);
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      {min("c1"), max("c1")},
-      "SELECT date_trunc('microsecond', min(c1)), "
-      "date_trunc('microsecond', max(c1)) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({min("c1"), max("c1")})
+      .assertResults(
+          "SELECT date_trunc('microsecond', min(c1)), "
+          "date_trunc('microsecond', max(c1)) FROM tmp");
 
-  testAggregations(
-      [&](auto& builder) {
-        builder.values(vectors).project({"c0 % 17 as k", "c1"});
-      },
-      {"k"},
-      {min("c1"), max("c1")},
-      "SELECT c0 % 17, date_trunc('microsecond', min(c1)), "
-      "date_trunc('microsecond', max(c1)) FROM tmp GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation(
+          [&](auto& builder) { builder.project({"c0 % 17 as k", "c1"}); })
+      .groupBy({"k"})
+      .aggregates({min("c1"), max("c1")})
+      .assertResults(
+          "SELECT c0 % 17, date_trunc('microsecond', min(c1)), "
+          "date_trunc('microsecond', max(c1)) FROM tmp GROUP BY 1");
+}
+
+TEST_F(MinMaxAggregationTest, timestampUtc) {
+  const auto beforeEpoch = Timestamp::fromMicros(-1);
+  const auto afterEpoch = Timestamp::fromMicros(1);
+  const Timestamp earlier{1'704'067'200, 123'456'000};
+  const Timestamp later{1'704'067'200, 123'457'000};
+  // Keep the lower bound on a whole second to avoid overflow during truncation.
+  const Timestamp earliest{
+      std::numeric_limits<int64_t>::min() / Timestamp::kMicrosecondsInSecond,
+      0,
+  };
+  const auto latest =
+      Timestamp::fromMicros(std::numeric_limits<int64_t>::max());
+  const std::vector<std::string> aggregates{min("c1"), max("c1")};
+
+  std::vector<RowVectorPtr> inputs;
+  RowVectorPtr expected;
+  const auto assertResults = [&](auto& builder) {
+    std::shared_ptr<exec::Task> task;
+    auto actual = builder.copyResults(pool(), task);
+    // Compare logical types explicitly, since value comparisons only
+    // check the shared TypeKind::TIMESTAMP.
+    EXPECT_TRUE(expected->type()->equivalent(*actual->type()))
+        << actual->type()->toString();
+    assertEqualResults({expected}, {actual});
+    return task;
+  };
+
+  for (const auto* timeZone : {"UTC", "America/Los_Angeles", "Asia/Kolkata"}) {
+    SCOPED_TRACE(timeZone);
+    const auto tester = [&]() {
+      return AggregationTester(*this)
+          .config(core::QueryConfig::kSessionTimezone, timeZone)
+          .config(core::QueryConfig::kAdjustTimestampToTimezone, "true");
+    };
+
+    {
+      SCOPED_TRACE(
+          "Microsecond truncation, range boundaries, and all-null groups");
+      auto data = makeRowVector({
+          makeFlatVector<int64_t>({0, 0, 0, 1, 1, 2, 2, 3, 3}),
+          makeNullableFlatVector<Timestamp>(
+              {
+                  Timestamp{1'704'067'200, 123'457'999},
+                  Timestamp{1'704'067'200, 123'456'789},
+                  std::nullopt,
+                  Timestamp{-1, 999'999'999},
+                  Timestamp{0, 1'999},
+                  std::nullopt,
+                  std::nullopt,
+                  earliest,
+                  latest,
+              },
+              TIMESTAMP_UTC()),
+          makeFlatVector<bool>(
+              {false, true, true, false, true, true, false, false, false}),
+      });
+      inputs = {data, data};
+      expected = makeRowVector({
+          makeFlatVector<Timestamp>({earliest}, TIMESTAMP_UTC()),
+          makeFlatVector<Timestamp>({latest}, TIMESTAMP_UTC()),
+      });
+      tester()
+          .inputs(inputs)
+          .aggregates(aggregates)
+          .assertResults(assertResults);
+
+      expected = makeRowVector({
+          makeFlatVector<int64_t>({0, 1, 2, 3}),
+          makeNullableFlatVector<Timestamp>(
+              {earlier, beforeEpoch, std::nullopt, earliest}, TIMESTAMP_UTC()),
+          makeNullableFlatVector<Timestamp>(
+              {later, afterEpoch, std::nullopt, latest}, TIMESTAMP_UTC()),
+      });
+      tester()
+          .inputs(inputs)
+          .groupBy({"c0"})
+          .aggregates(aggregates)
+          .assertResults(assertResults);
+
+      const std::vector<std::string> maskedAggregates{
+          min("c1") + " FILTER (WHERE c2)",
+          max("c1") + " FILTER (WHERE c2)",
+      };
+      expected = makeRowVector({
+          makeFlatVector<Timestamp>({afterEpoch}, TIMESTAMP_UTC()),
+          makeFlatVector<Timestamp>({earlier}, TIMESTAMP_UTC()),
+      });
+      tester()
+          .inputs(inputs)
+          .aggregates(maskedAggregates)
+          .assertResults(assertResults);
+
+      expected = makeRowVector({
+          makeFlatVector<int64_t>({0, 1, 2, 3}),
+          makeNullableFlatVector<Timestamp>(
+              {earlier, afterEpoch, std::nullopt, std::nullopt},
+              TIMESTAMP_UTC()),
+          makeNullableFlatVector<Timestamp>(
+              {earlier, afterEpoch, std::nullopt, std::nullopt},
+              TIMESTAMP_UTC()),
+      });
+      tester()
+          .inputs(inputs)
+          .groupBy({"c0"})
+          .aggregates(maskedAggregates)
+          .assertResults(assertResults);
+    }
+
+    {
+      SCOPED_TRACE("All-null and empty input");
+      auto data = makeRowVector({
+          makeFlatVector<int64_t>({0, 0, 1}),
+          makeNullableFlatVector<Timestamp>(
+              {std::nullopt, std::nullopt, std::nullopt}, TIMESTAMP_UTC()),
+      });
+      inputs = {data};
+      expected = makeRowVector({
+          makeNullableFlatVector<Timestamp>({std::nullopt}, TIMESTAMP_UTC()),
+          makeNullableFlatVector<Timestamp>({std::nullopt}, TIMESTAMP_UTC()),
+      });
+      tester()
+          .inputs(inputs)
+          .aggregates(aggregates)
+          .assertResults(assertResults);
+
+      auto emptyInput = makeRowVector(asRowType(data->type()), 0);
+      inputs = {emptyInput};
+      tester()
+          .inputs(inputs)
+          .aggregates(aggregates)
+          .assertResults(assertResults);
+
+      inputs = {data};
+      expected = makeRowVector({
+          makeFlatVector<int64_t>({0, 1}),
+          makeNullableFlatVector<Timestamp>(
+              {std::nullopt, std::nullopt}, TIMESTAMP_UTC()),
+          makeNullableFlatVector<Timestamp>(
+              {std::nullopt, std::nullopt}, TIMESTAMP_UTC()),
+      });
+      tester()
+          .inputs(inputs)
+          .groupBy({"c0"})
+          .aggregates(aggregates)
+          .assertResults(assertResults);
+
+      inputs = {emptyInput};
+      expected = makeRowVector(asRowType(expected->type()), 0);
+      tester()
+          .inputs(inputs)
+          .groupBy({"c0"})
+          .aggregates(aggregates)
+          .assertResults(assertResults);
+    }
+  }
 }
 
 TEST_F(MinMaxAggregationTest, array) {
@@ -209,7 +375,10 @@ TEST_F(MinMaxAggregationTest, array) {
       }),
   });
 
-  testAggregations({data}, {}, {min("c0"), max("c0")}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({min("c0"), max("c0")})
+      .assertResults(expected);
 
   data = makeRowVector({
       makeNullableArrayVector<int64_t>({
@@ -226,7 +395,10 @@ TEST_F(MinMaxAggregationTest, array) {
           {3, 7, 8},
       }),
   });
-  testAggregations({data}, {}, {min("c0"), max("c0")}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({min("c0"), max("c0")})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxAggregationTest, row) {
@@ -254,7 +426,10 @@ TEST_F(MinMaxAggregationTest, row) {
            makeFlatVector<StringView>({"hij"_sv})}),
   });
 
-  testAggregations({data}, {}, {min("c0"), max("c0")}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({min("c0"), max("c0")})
+      .assertResults(expected);
 
   data = makeRowVector({
       makeRowVector({
@@ -278,7 +453,10 @@ TEST_F(MinMaxAggregationTest, row) {
           {makeFlatVector<StringView>({"c"_sv}),
            makeFlatVector<StringView>({"hij"_sv})}),
   });
-  testAggregations({data}, {}, {min("c0"), max("c0")}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({min("c0"), max("c0")})
+      .assertResults(expected);
 }
 
 TEST_F(MinMaxAggregationTest, failOnUnorderableType) {
@@ -302,6 +480,44 @@ TEST_F(MinMaxAggregationTest, failOnUnorderableType) {
           builder.singleAggregation({"c1"}, {expr}), kErrorMessage);
     }
   }
+}
+
+TEST_F(MinMaxAggregationTest, partialCompanionAbandonPartialAggregation) {
+  constexpr vector_size_t kBatchSize = 100;
+  std::vector<RowVectorPtr> data;
+  for (auto batch = 0; batch < 3; ++batch) {
+    data.push_back(makeRowVector(
+        {"k", "v"},
+        {makeFlatVector<int64_t>(
+             kBatchSize, [&](auto row) { return batch * kBatchSize + row; }),
+         makeFlatIdentityVector<int64_t>(kBatchSize)}));
+  }
+  createDuckDbTable(data);
+
+  core::PlanNodeId partialNodeId;
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .partialAggregation({"k"}, {"spark_min_partial(v)"})
+                  .capturePlanNodeId(partialNodeId)
+                  .finalAggregation()
+                  .planNode();
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
+          .assertResults("SELECT k, min(v) FROM tmp GROUP BY k");
+
+  const auto stats =
+      exec::PlanNodeStats::extract(task->taskStats(), partialNodeId);
+  EXPECT_LT(
+      0,
+      stats.customSum(
+          exec::HashAggregationStatNames::kAbandonedPartialAggregationRows));
+  EXPECT_GT(
+      stats.customSum(
+          exec::HashAggregationStatNames::kToIntermediateFastPathCalls),
+      0);
 }
 
 } // namespace

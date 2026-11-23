@@ -18,6 +18,7 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/ConnectorRegistry.h"
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
@@ -78,13 +79,16 @@ CudfIcebergTestBase::makeIcebergSplits(
   splits.reserve(splitCount);
 
   for (uint32_t i = 0; i < splitCount; ++i) {
+    const uint64_t start = i * splitSize;
+    const uint64_t length =
+        (i == splitCount - 1) ? (fileSize - start) : splitSize;
     splits.emplace_back(
         std::make_shared<HiveIcebergSplit>(
             kCudfIcebergConnectorId,
             dataFilePath,
             dwio::common::FileFormat::PARQUET,
-            i * splitSize,
-            splitSize,
+            start,
+            length,
             partitionKeys,
             std::nullopt,
             std::unordered_map<std::string, std::string>{},
@@ -127,8 +131,10 @@ void CudfIcebergTestBase::writeDeleteFile(
   } else {
     auto childPool =
         rootPool_->addAggregateChild("CudfIcebergTestBase.DwrfWriter");
-    velox::dwrf::WriterOptions options;
-    options.config = std::make_shared<facebook::velox::dwrf::Config>();
+    dwio::common::WriterOptions options;
+    options.formatSpecificOptions =
+        std::make_shared<facebook::velox::dwrf::DwrfWriterOptions>(
+            std::make_shared<facebook::velox::dwrf::Config>());
     options.schema = schema;
     options.memoryPool = childPool.get();
     writer = std::make_unique<velox::dwrf::Writer>(std::move(sink), options);
@@ -155,6 +161,26 @@ core::PlanNodePtr CudfIcebergTestBase::makeTableScanPlan(
       .dataColumns(rowType)
       .endTableScan()
       .planNode();
+}
+
+facebook::velox::connector::ColumnHandleMap
+CudfIcebergTestBase::makeAssignments(
+    const RowTypePtr& rowType,
+    const std::unordered_set<std::string>& partitionColumnNames) {
+  using facebook::velox::connector::hive::HiveColumnHandle;
+  facebook::velox::connector::ColumnHandleMap assignments;
+  for (uint32_t i = 0; i < rowType->size(); ++i) {
+    const auto& name = rowType->nameOf(i);
+    const auto& type = rowType->childAt(i);
+    assignments[name] = std::make_shared<HiveColumnHandle>(
+        name,
+        partitionColumnNames.contains(name)
+            ? HiveColumnHandle::ColumnType::kPartitionKey
+            : HiveColumnHandle::ColumnType::kRegular,
+        type,
+        type);
+  }
+  return assignments;
 }
 
 } // namespace facebook::velox::cudf_velox::exec::test

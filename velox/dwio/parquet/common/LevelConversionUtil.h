@@ -19,6 +19,7 @@
 #pragma once
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <limits>
 
@@ -26,7 +27,12 @@
 #include "arrow/util/bitmap_writer.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/process/ProcessBase.h"
 #include "velox/dwio/parquet/common/LevelComparison.h"
+
+#ifdef __BMI2__
+#include <immintrin.h>
+#endif
 
 namespace facebook::velox::parquet {
 
@@ -242,7 +248,7 @@ inline uint64_t ExtractBitsSoftware(uint64_t bitmap, uint64_t selectBitmap) {
   int bitLen = 0;
   constexpr uint8_t kLookupMask = (1U << kLookupBits) - 1;
   while (selectBitmap != 0) {
-    const auto mask_len = ARROW_POPCOUNT32(selectBitmap & kLookupMask);
+    const auto mask_len = std::popcount(selectBitmap & kLookupMask);
     const uint64_t value =
         kPextTable[selectBitmap & kLookupMask][bitmap & kLookupMask];
     bitValue |= (value << bitLen);
@@ -254,9 +260,18 @@ inline uint64_t ExtractBitsSoftware(uint64_t bitmap, uint64_t selectBitmap) {
 }
 
 using extractBitmapT = uint64_t;
+// Hardware PEXT dispatch for bit extraction in level conversion.
+// Enabled at compile time by __BMI2__, at runtime by FLAGS_bmi2=true (default).
+// On AMD Zen1/2 where PEXT is microcoded, set --bmi2=false to use the
+// software lookup table fallback (ExtractBitsSoftware).
 inline extractBitmapT ExtractBits(
     extractBitmapT bitmap,
     extractBitmapT selectBitmap) {
+#ifdef __BMI2__
+  if (process::hasBmi2()) [[likely]] {
+    return _pext_u64(bitmap, selectBitmap);
+  }
+#endif
   return ExtractBitsSoftware(bitmap, selectBitmap);
 }
 
@@ -281,19 +296,19 @@ int64_t DefLevelsBatchToBitmap(
     auto presentBitmap = static_cast<extractBitmapT>(GreaterThanBitmap(
         defLevels, batchSize, levelInfo.repeatedAncestorDefLevel - 1));
     auto selectedBits = ExtractBits(definedBitmap, presentBitmap);
-    int64_t selectedCount = ::arrow::bit_util::PopCount(presentBitmap);
-    if (FOLLY_UNLIKELY(selectedCount > upperBoundRemaining)) {
+    int64_t selectedCount = std::popcount(presentBitmap);
+    if (selectedCount > upperBoundRemaining) [[unlikely]] {
       VELOX_FAIL("Values read exceeded upper bound");
     }
     writer->AppendWord(selectedBits, selectedCount);
-    return ::arrow::bit_util::PopCount(selectedBits);
+    return std::popcount(selectedBits);
   } else {
-    if (FOLLY_UNLIKELY(batchSize > upperBoundRemaining)) {
+    if (batchSize > upperBoundRemaining) [[unlikely]] {
       VELOX_FAIL("Values read exceeded upper bound");
     }
 
     writer->AppendWord(definedBitmap, batchSize);
-    return ::arrow::bit_util::PopCount(definedBitmap);
+    return std::popcount(definedBitmap);
   }
 }
 

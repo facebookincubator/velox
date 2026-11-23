@@ -12,27 +12,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_library(velox_local_exchange_source LocalExchangeSource.cpp)
+velox_add_test_headers(velox_local_exchange_source LocalExchangeSource.h)
+target_link_libraries(velox_local_exchange_source velox_exec velox_test_util fmt::fmt)
+
 add_library(
   velox_exec_test_lib
   AggregationResolver.cpp
   AssertQueryBuilder.cpp
   ArbitratorTestUtil.cpp
+  DuckDbQueryRunner.cpp
   FilterToExpression.cpp
   HiveConnectorTestBase.cpp
   IndexLookupJoinTestBase.cpp
-  LocalExchangeSource.cpp
+  LocalFixedPoint.cpp
   OperatorTestBase.cpp
   PlanBuilder.cpp
   QueryAssertions.cpp
   SumNonPODAggregate.cpp
   TableWriterTestBase.cpp
-  TableScanTestBase.cpp
+  TaskMonitor.cpp
   TestIndexStorageConnector.cpp
   TpchQueryBuilder.cpp
   TpcdsQueryBuilder.cpp
   VeloxPlanLoader.cpp
   VectorTestUtil.cpp
-  PortUtil.cpp
+  Ports.cpp
   SerializedPageUtil.cpp
 )
 velox_add_test_headers(
@@ -40,22 +45,25 @@ velox_add_test_headers(
   AggregationResolver.h
   ArbitratorTestUtil.h
   AssertQueryBuilder.h
+  BackpressureTestNode.h
+  DuckDbQueryRunner.h
   ExpressionBuilder.h
   FilterToExpression.h
   HashJoinTestBase.h
   HiveConnectorTestBase.h
   IndexLookupJoinTestBase.h
-  LocalExchangeSource.h
+  LocalFixedPoint.h
   MergeTestBase.h
   OperatorTestBase.h
   PlanBuilder.h
   PortUtil.h
+  Ports.h
   QueryAssertions.h
   RowContainerTestBase.h
   SerializedPageUtil.h
   SumNonPODAggregate.h
-  TableScanTestBase.h
   TableWriterTestBase.h
+  TaskMonitor.h
   TestIndexStorageConnector.h
   TpchQueryBuilder.h
   TpcdsQueryBuilder.h
@@ -65,12 +73,14 @@ velox_add_test_headers(
 
 target_link_libraries(
   velox_exec_test_lib
+  velox_local_exchange_source
   velox_vector_test_lib
   velox_vector_fuzzer
   velox_cursor
   velox_core
   velox_exception
   velox_expression
+  velox_async_rpc_function_registry
   velox_parse_parser
   velox_duckdb_conversion
   velox_dwio_common

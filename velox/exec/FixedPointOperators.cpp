@@ -1,0 +1,394 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#include "velox/exec/FixedPointOperators.h"
+
+#include "velox/core/FixedPointPlanNodes.h"
+#include "velox/exec/FixedPointLoop.h"
+#include "velox/exec/HashTable.h"
+#include "velox/exec/Operator.h"
+#include "velox/exec/OperatorType.h"
+#include "velox/exec/PersistentState.h"
+#include "velox/exec/Task.h"
+#include "velox/exec/VectorHasher.h"
+
+namespace facebook::velox::exec {
+namespace {
+
+using core::FixedPointNode;
+using core::StateHashJoinNode;
+using core::StateSourceNode;
+
+// Returns the PersistentState holding entry 'name' for this sub-task: the
+// state of the FixedPointLoop that created it.  A FixedPointNode resolves the
+// entries its plans read against its own declarations only
+// (FixedPointNode::resolveAndValidateStateReferences()), so a sub-task never
+// reads the state of a loop enclosing that one.
+//
+// Called from the operator constructors, which run in the sub-task's start()
+// or first next(), both called by that loop, so the state is alive.
+// initialize() runs when a driver first runs, which can be after the sub-task
+// has completed and the loop has ended.
+std::shared_ptr<PersistentState> stateOf(
+    const exec::DriverCtx* driverCtx,
+    const std::string& name,
+    bool hashTable) {
+  auto state = driverCtx->task->fixedPointState();
+  VELOX_CHECK_NOT_NULL(state, "Fixed point sub-task has no persistent state");
+  VELOX_CHECK(
+      hashTable ? state->hasHashTable(name) : state->hasVector(name),
+      "The fixed point declares no {} state entry '{}'",
+      hashTable ? "hash table" : "vector",
+      name);
+  return state;
+}
+
+// Emits the batches of a Vector persistent state entry, snapshotted when the
+// operator is created so later writes to the same entry do not affect this
+// read.  A delta source reads what an iteration consumes -- an append entry's
+// latest delta (the frontier) or a replace entry's full contents; a non-delta
+// source reads the entry's whole contents (the fixed point's output, an append
+// entry's whole accumulation).  The drivers of a pipeline split the batches
+// between them, so together they emit each batch once.
+//
+// With 'loop' set, the source is the FixedPointNode leaf of the loop's owning
+// task: it waits for the loop to finish, then reads the loop's output entry.
+class StateSourceOperator : public exec::SourceOperator {
+ public:
+  // With 'emits' false, the operator waits for 'loop' and then emits nothing.
+  StateSourceOperator(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      const core::StateSourceNodePtr& node,
+      FixedPointLoop* loop,
+      bool emits)
+      : SourceOperator(
+            driverCtx,
+            node->outputType(),
+            operatorId,
+            node->id(),
+            OperatorType::kFixedPointStateSource),
+        stateName_{node->stateName()},
+        delta_{node->delta()},
+        loop_{loop},
+        emits_{emits},
+        driverIndex_{driverCtx->partitionId} {
+    if (loop_ == nullptr) {
+      const auto state = stateOf(driverCtx, stateName_, /*hashTable=*/false);
+      batches_ =
+          delta_ ? state->readVector(stateName_) : state->getVector(stateName_);
+      read_ = true;
+    }
+  }
+
+  void initialize() override {
+    Operator::initialize();
+    numDrivers_ =
+        operatorCtx_->task()->numDrivers(operatorCtx_->driverCtx()->driver);
+    VELOX_CHECK_LT(driverIndex_, numDrivers_);
+    current_ = driverIndex_;
+  }
+
+  RowVectorPtr getOutput() override {
+    while (current_ < batches_.size()) {
+      auto batch = batches_[current_];
+      current_ += numDrivers_;
+      if (batch != nullptr && batch->size() > 0) {
+        return std::make_shared<RowVector>(
+            batch->pool(),
+            outputType_,
+            batch->nulls(),
+            batch->size(),
+            batch->children(),
+            batch->getNullCount());
+      }
+    }
+    return nullptr;
+  }
+
+  exec::BlockingReason isBlocked(ContinueFuture* future) override {
+    if (read_) {
+      return exec::BlockingReason::kNotBlocked;
+    }
+    auto finished = loop_->finishedFuture();
+    if (!finished.isReady()) {
+      *future = std::move(finished);
+      return exec::BlockingReason::kWaitForProducer;
+    }
+    // A failed loop fails the task, which stops this driver.
+    VELOX_CHECK(loop_->succeeded(), "The fixed point failed");
+    if (emits_) {
+      batches_ = loop_->state()->getVector(stateName_);
+    }
+    read_ = true;
+    return exec::BlockingReason::kNotBlocked;
+  }
+
+  bool isFinished() override {
+    return read_ && current_ >= batches_.size();
+  }
+
+  void close() override {
+    SourceOperator::close();
+    // The operator is destroyed only with its driver, which can be well after
+    // it closes, and the batches may be the last references to what an
+    // iteration has since overwritten.
+    batches_.clear();
+  }
+
+ private:
+  const std::string stateName_;
+
+  // Whether to read the per-iteration delta (an append entry's frontier) or the
+  // entry's full contents (the output).
+  const bool delta_;
+
+  // Snapshot of the state entry, taken at construction or, for a loop's
+  // output, once the loop finishes.
+  std::vector<RowVectorPtr> batches_;
+  bool read_{false};
+
+  // The loop whose output this reads, if it is a FixedPointNode leaf.
+  FixedPointLoop* const loop_;
+
+  // False when this worker emits none of the loop's output (see
+  // core::FixedPointNode::outputOnWorkerZero).
+  const bool emits_;
+
+  // This driver emits batches driverIndex_, driverIndex_ + numDrivers_, and so
+  // on.
+  const uint32_t driverIndex_;
+  uint32_t numDrivers_{1};
+
+  // Index of the next batch to emit.
+  size_t current_{0};
+};
+
+// Creates hashers over the probe key columns of 'node', found by name.  Each
+// operator owns its own: a hasher keeps per-batch decoding state, so drivers
+// cannot share the table's.
+std::vector<std::unique_ptr<VectorHasher>> createProbeHashers(
+    const core::StateHashJoinNode& node) {
+  const auto& probeType = node.sources()[0]->outputType();
+  std::vector<column_index_t> keyChannels;
+  keyChannels.reserve(node.probeKeys().size());
+  for (const auto& key : node.probeKeys()) {
+    keyChannels.push_back(probeType->getChildIdx(key));
+  }
+  return VectorHasher::createForKeys(probeType, keyChannels);
+}
+
+// Inner-joins the probe input against a HashTable persistent state entry built
+// once and reused across iterations.  Emits the probe columns (wrapped via the
+// matched probe-row indices) followed by the hash table's dependent columns
+// (extracted from the matched build rows).
+class StateHashJoinOperator : public exec::Operator {
+ public:
+  StateHashJoinOperator(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      const core::StateHashJoinNodePtr& node)
+      : Operator(
+            driverCtx,
+            node->outputType(),
+            operatorId,
+            node->id(),
+            OperatorType::kFixedPointStateHashJoin),
+        stateName_{node->stateName()},
+        probeType_{node->sources()[0]->outputType()},
+        hashers_{createProbeHashers(*node)} {
+    entry_ = stateOf(driverCtx, stateName_, /*hashTable=*/true)
+                 ->getHashTable(stateName_);
+    VELOX_CHECK(
+        entry_.has_value(), "No hash table state registered: {}", stateName_);
+    table_ = entry_->table.get();
+  }
+
+  void initialize() override {
+    Operator::initialize();
+    lookup_ = std::make_unique<exec::HashLookup>(hashers_, pool());
+  }
+
+  bool needsInput() const override {
+    return !noMoreInput_ && input_ == nullptr && probe_ == nullptr;
+  }
+
+  void addInput(RowVectorPtr input) override {
+    input_ = std::move(input);
+  }
+
+  RowVectorPtr getOutput() override {
+    if (probe_ == nullptr) {
+      if (input_ == nullptr) {
+        return nullptr;
+      }
+      // Start the next probe batch: look its rows up once, then page the
+      // matches out over the calls that follow.
+      probe_ = std::move(input_);
+      SelectivityVector activeRows(probe_->size());
+      lookup_->reset(probe_->size());
+      table_->prepareForJoinProbe(
+          *lookup_, probe_, activeRows, /*decodeAndRemoveNulls=*/true);
+      if (lookup_->rows.empty()) {
+        probe_ = nullptr;
+        return nullptr;
+      }
+      lookup_->hits.resize(lookup_->rows.back() + 1);
+      table_->joinProbe(*lookup_);
+      iterator_.reset(*lookup_);
+    }
+
+    // One output vector per call, sized by the configured batch: a high-fanout
+    // probe matches arbitrarily more rows than it has, so draining every match
+    // into a single vector would ignore preferredOutputBatchRows entirely.
+    const vector_size_t maxRows = outputBatchRows();
+    indexBuffer_.resize(maxRows);
+    rowBuffer_.resize(maxRows);
+    const auto numMatches = table_->listJoinResults(
+        iterator_,
+        /*includeMisses=*/false,
+        std::span(indexBuffer_.data(), maxRows),
+        std::span(rowBuffer_.data(), maxRows),
+        /*maxBytes=*/1 << 20);
+    if (numMatches == 0) {
+      // This probe batch is exhausted; the next call takes the next input.
+      probe_ = nullptr;
+      return nullptr;
+    }
+    auto output = makeOutput(probe_, numMatches);
+    if (iterator_.atEnd()) {
+      probe_ = nullptr;
+    }
+    return output;
+  }
+
+  exec::BlockingReason isBlocked(ContinueFuture* /* future */) override {
+    return exec::BlockingReason::kNotBlocked;
+  }
+
+  bool isFinished() override {
+    return noMoreInput_ && input_ == nullptr && probe_ == nullptr;
+  }
+
+  void close() override {
+    Operator::close();
+    // 'entry_' is a hash table built in the state's pool, and 'input_' and
+    // 'probe_' can hold state vectors when this operator reads behind a
+    // StateSource.  The operator is destroyed only with its driver, which can
+    // be well after it closes.
+    input_ = nullptr;
+    probe_ = nullptr;
+    lookup_.reset();
+    table_ = nullptr;
+    entry_.reset();
+  }
+
+ private:
+  // Assembles one output vector from the first 'numOutput' matches buffered in
+  // indexBuffer_ / rowBuffer_: probe columns wrapped by the matched probe-row
+  // indices, followed by the hash table's dependent columns extracted from the
+  // matched build rows.
+  RowVectorPtr makeOutput(const RowVectorPtr& probe, vector_size_t numOutput) {
+    auto indices = AlignedBuffer::allocate<vector_size_t>(numOutput, pool());
+    std::memcpy(
+        indices->asMutable<vector_size_t>(),
+        indexBuffer_.data(),
+        numOutput * sizeof(vector_size_t));
+
+    std::vector<VectorPtr> children;
+    children.reserve(outputType_->size());
+    for (auto channel = 0; channel < probeType_->size(); ++channel) {
+      children.push_back(
+          BaseVector::wrapInDictionary(
+              /*nulls=*/nullptr, indices, numOutput, probe->childAt(channel)));
+    }
+    const auto numKeys = entry_->numKeys;
+    const auto& buildType = entry_->buildType;
+    for (auto column = numKeys; column < buildType->size(); ++column) {
+      auto result =
+          BaseVector::create(buildType->childAt(column), numOutput, pool());
+      table_->extractColumn(
+          RowSpan(rowBuffer_.data(), numOutput), column, result);
+      children.push_back(std::move(result));
+    }
+    return std::make_shared<RowVector>(
+        pool(), outputType_, /*nulls=*/nullptr, numOutput, std::move(children));
+  }
+
+  const std::string stateName_;
+  const RowTypePtr probeType_;
+
+  // Hashers over the probe keys, borrowed by 'lookup_'.
+  const std::vector<std::unique_ptr<VectorHasher>> hashers_;
+
+  std::optional<HashTableEntry> entry_;
+  exec::BaseHashTable* table_{nullptr};
+  std::unique_ptr<exec::HashLookup> lookup_;
+
+  // Probe batch awaiting lookup.
+  RowVectorPtr input_;
+
+  // Probe batch whose matches are being paged out, and the walk over them.
+  // Both outlive a getOutput() call: one probe batch can yield many output
+  // vectors.
+  RowVectorPtr probe_;
+  exec::BaseHashTable::JoinResultIterator iterator_{{}, 0, std::nullopt};
+
+  // Matches listed by the current getOutput() call: probe-row indices and the
+  // build rows they matched.
+  std::vector<vector_size_t> indexBuffer_;
+  std::vector<char*> rowBuffer_;
+};
+
+} // namespace
+
+std::unique_ptr<Operator> FixedPointOperators::create(
+    int32_t operatorId,
+    DriverCtx* driverCtx,
+    const core::FixedPointNodePtr& node) {
+  // A FixedPointNode is the leaf of its owning task's pipeline: read the
+  // complete output state once the task's loop has populated it.
+  auto stateSource = std::make_shared<StateSourceNode>(
+      node->id(),
+      node->outputStateEntry(),
+      node->outputType(),
+      /*delta=*/false);
+  auto* loop = driverCtx->task->fixedPoint();
+  VELOX_CHECK_NOT_NULL(loop, "A FixedPointNode leaf needs its task's loop");
+  return std::make_unique<StateSourceOperator>(
+      operatorId,
+      driverCtx,
+      stateSource,
+      loop,
+      /*emits=*/!node->outputOnWorkerZero() ||
+          driverCtx->task->destination() == 0);
+}
+
+std::unique_ptr<Operator> FixedPointOperators::create(
+    int32_t operatorId,
+    DriverCtx* driverCtx,
+    const core::StateSourceNodePtr& node) {
+  return std::make_unique<StateSourceOperator>(
+      operatorId, driverCtx, node, /*loop=*/nullptr, /*emits=*/true);
+}
+
+std::unique_ptr<Operator> FixedPointOperators::create(
+    int32_t operatorId,
+    DriverCtx* driverCtx,
+    const core::StateHashJoinNodePtr& node) {
+  return std::make_unique<StateHashJoinOperator>(operatorId, driverCtx, node);
+}
+
+} // namespace facebook::velox::exec

@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/file/FileSystems.h"
@@ -49,30 +50,37 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
     parse::registerTypeResolver();
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
+    cudf_velox::registerPrestoFunctions("");
 
     // Overwrite AST and JIT registrations with priority 0 so any expression
     // that FunctionExpression can also evaluate routes through that path.
     cudf_velox::registerCudfExpressionEvaluator(
         cudf_velox::kAstEvaluatorName,
         /*priority=*/0,
-        [](std::shared_ptr<exec::Expr> expr) {
+        [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
           return cudf_velox::ASTExpression::canEvaluate(expr);
         },
-        [](std::shared_ptr<exec::Expr> expr, const RowTypePtr& row) {
+        [](const core::TypedExprPtr& expr,
+           const RowTypePtr& row,
+           memory::MemoryPool* pool,
+           const core::QueryConfig& config) {
           return std::make_shared<cudf_velox::ASTExpression>(
-              std::move(expr), row);
+              expr, row, pool, config);
         },
         /*overwrite=*/true);
 
     cudf_velox::registerCudfExpressionEvaluator(
         cudf_velox::kJitEvaluatorName,
         /*priority=*/0,
-        [](std::shared_ptr<exec::Expr> expr) {
+        [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
           return cudf_velox::JitExpression::canEvaluate(expr);
         },
-        [](std::shared_ptr<exec::Expr> expr, const RowTypePtr& row) {
+        [](const core::TypedExprPtr& expr,
+           const RowTypePtr& row,
+           memory::MemoryPool* pool,
+           const core::QueryConfig& config) {
           return std::make_shared<cudf_velox::JitExpression>(
-              std::move(expr), row);
+              expr, row, pool, config);
         },
         /*overwrite=*/true);
   }
@@ -87,10 +95,11 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
   void assertUsesFunctionEvaluator(
       const RowTypePtr& inputRowType,
       const std::string& expression) {
-    auto expr = cudf_velox::test_utils::compileExecExpr(
-        expression, inputRowType, execCtx_.get());
-    ASSERT_TRUE(cudf_velox::canBeEvaluatedByCudf(expr, /*deep=*/false));
-    auto cudfExpr = cudf_velox::createCudfExpression(expr, inputRowType);
+    auto expr = cudf_velox::test_utils::optimizeTypedExpr(
+        expression, inputRowType, queryCtx_.get(), execCtx_.get());
+    ASSERT_TRUE(cudf_velox::canExprRunOnGpu(expr, queryCtx_.get(), pool()));
+    auto cudfExpr = cudf_velox::createCudfExpression(
+        expr, inputRowType, pool(), queryCtx_->queryConfig());
     ASSERT_NE(
         dynamic_cast<cudf_velox::FunctionExpression*>(cudfExpr.get()), nullptr)
         << expr->toString();
@@ -115,14 +124,15 @@ class CudfLogicalFunctionsTest : public OperatorTestBase {
 // UnaryFunction: negation of a boolean column. Base column-only path.
 TEST_F(CudfLogicalFunctionsTest, notColumn) {
   auto data =
-      makeRowVector({"a"}, {makeFlatVector<bool>({true, false, true, false})});
+      makeNamedRowVector("a", makeFlatVector<bool>({true, false, true, false}));
   runProject({data}, "NOT a", "NOT a AS r", "SELECT NOT a AS r FROM tmp");
 }
 
 // Negation of a comparison. Velox rewrites NOT(equalto(...)) to neq(...),
 // so this also exercises the comparison FunctionExpression path.
 TEST_F(CudfLogicalFunctionsTest, notComparison) {
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4, 5})});
+  auto data =
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3, 4, 5}));
   runProject(
       {data},
       "NOT (c0 = 3)",
@@ -133,18 +143,18 @@ TEST_F(CudfLogicalFunctionsTest, notComparison) {
 // UnaryFunction: null row. `cudf::unary_operation` with `NOT` should propagate
 // null through untouched.
 TEST_F(CudfLogicalFunctionsTest, notWithNullRows) {
-  auto data = makeRowVector(
-      {"a"},
-      {makeNullableFlatVector<bool>(
-          {true, false, std::nullopt, true, std::nullopt})});
+  auto data = makeNamedRowVector(
+      "a",
+      makeNullableFlatVector<bool>(
+          {true, false, std::nullopt, true, std::nullopt}));
   runProject({data}, "NOT a", "NOT a AS r", "SELECT NOT a AS r FROM tmp");
 }
 
 // IsNullFunction: nullable INTEGER column with a mix of nulls and non-nulls.
 TEST_F(CudfLogicalFunctionsTest, isNullInteger) {
-  auto data = makeRowVector(
-      {"c0"},
-      {makeNullableFlatVector<int32_t>({1, std::nullopt, 3, std::nullopt, 5})});
+  auto data = makeNamedRowVector(
+      "c0",
+      makeNullableFlatVector<int32_t>({1, std::nullopt, 3, std::nullopt, 5}));
   runProject(
       {data},
       "c0 IS NULL",
@@ -154,10 +164,10 @@ TEST_F(CudfLogicalFunctionsTest, isNullInteger) {
 
 // IsNullFunction: nullable VARCHAR column. Exercises string-typed input.
 TEST_F(CudfLogicalFunctionsTest, isNullVarchar) {
-  auto data = makeRowVector(
-      {"c0"},
-      {makeNullableFlatVector<std::string>(
-          {"x", std::nullopt, "y", std::nullopt, ""})});
+  auto data = makeNamedRowVector(
+      "c0",
+      makeNullableFlatVector<std::string>(
+          {"x", std::nullopt, "y", std::nullopt, ""}));
   runProject(
       {data},
       "c0 IS NULL",
@@ -167,7 +177,8 @@ TEST_F(CudfLogicalFunctionsTest, isNullVarchar) {
 
 // IsNullFunction: column with no nulls. Result is all false.
 TEST_F(CudfLogicalFunctionsTest, isNullNoNulls) {
-  auto data = makeRowVector({"c0"}, {makeFlatVector<int32_t>({1, 2, 3, 4, 5})});
+  auto data =
+      makeNamedRowVector("c0", makeFlatVector<int32_t>({1, 2, 3, 4, 5}));
   runProject(
       {data},
       "c0 IS NULL",
@@ -177,9 +188,9 @@ TEST_F(CudfLogicalFunctionsTest, isNullNoNulls) {
 
 // IsNotNullFunction: nullable INTEGER column. Inverse of IS NULL.
 TEST_F(CudfLogicalFunctionsTest, isNotNullInteger) {
-  auto data = makeRowVector(
-      {"c0"},
-      {makeNullableFlatVector<int32_t>({1, std::nullopt, 3, std::nullopt, 5})});
+  auto data = makeNamedRowVector(
+      "c0",
+      makeNullableFlatVector<int32_t>({1, std::nullopt, 3, std::nullopt, 5}));
   runProject(
       {data},
       "c0 IS NOT NULL",
@@ -189,10 +200,10 @@ TEST_F(CudfLogicalFunctionsTest, isNotNullInteger) {
 
 // IsNotNullFunction: nullable VARCHAR column.
 TEST_F(CudfLogicalFunctionsTest, isNotNullVarchar) {
-  auto data = makeRowVector(
-      {"c0"},
-      {makeNullableFlatVector<std::string>(
-          {"x", std::nullopt, "y", std::nullopt, ""})});
+  auto data = makeNamedRowVector(
+      "c0",
+      makeNullableFlatVector<std::string>(
+          {"x", std::nullopt, "y", std::nullopt, ""}));
   runProject(
       {data},
       "c0 IS NOT NULL",
@@ -203,9 +214,9 @@ TEST_F(CudfLogicalFunctionsTest, isNotNullVarchar) {
 // Composition: NOT wrapping IS NULL. Exercises UnaryFunction operating on the
 // column produced by IsNullFunction.
 TEST_F(CudfLogicalFunctionsTest, notOfIsNull) {
-  auto data = makeRowVector(
-      {"c0"},
-      {makeNullableFlatVector<int32_t>({1, std::nullopt, 3, std::nullopt, 5})});
+  auto data = makeNamedRowVector(
+      "c0",
+      makeNullableFlatVector<int32_t>({1, std::nullopt, 3, std::nullopt, 5}));
   runProject(
       {data},
       "NOT (c0 IS NULL)",

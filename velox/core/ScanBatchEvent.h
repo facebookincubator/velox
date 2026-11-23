@@ -17,17 +17,22 @@
 
 #include <cstdint>
 #include <functional>
+#include <string>
 
 namespace facebook::velox::core {
 
-/// Per-batch scan statistics event fired by TableScan after each batch.
+/// Per-batch scan statistics event fired by TableScan after each read that
+/// scanned rows, including a read that produced no output rows.
 struct ScanBatchEvent {
   virtual ~ScanBatchEvent() = default;
 
-  /// Post-pushdown, pre-remaining-filter row count.
+  /// Rows read from storage, mid-pushdown: after row-group pruning, before
+  /// per-row filter evaluation and the remaining filter.
   uint64_t numRows{0};
   /// Wall time spent producing this batch in microseconds.
   uint64_t wallTimeMicros{0};
+  /// Plan node id of the TableScan that produced this batch.
+  std::string planNodeId;
 };
 
 using ScanBatchCallback = std::function<void(const ScanBatchEvent&)>;

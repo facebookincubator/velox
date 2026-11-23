@@ -155,6 +155,19 @@ TYPED_TEST(SparseHllTest, corruptEntryCount) {
   EXPECT_ANY_THROW(SparseHll(serialized.data(), this->allocator_));
 }
 
+TYPED_TEST(SparseHllTest, serializeSingleHash) {
+  constexpr int8_t kIndexBitLength = 11;
+  const auto hash = hashOne(42);
+
+  SparseHll expected{this->allocator_};
+  expected.insertHash(hash);
+
+  std::string actual(SparseHlls::kSingleHashSerializedSize, '\0');
+  SparseHlls::serializeSingleHash(hash, kIndexBitLength, actual.data());
+
+  EXPECT_EQ(this->serialize(kIndexBitLength, expected), actual);
+}
+
 TYPED_TEST(SparseHllTest, basic) {
   SparseHll sparseHll{this->allocator_};
   for (int i = 0; i < 1'000; i++) {

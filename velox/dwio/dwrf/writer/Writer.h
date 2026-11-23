@@ -38,7 +38,29 @@ namespace facebook::velox::dwrf {
 /// DWRF-specific file metadata wrapper. Currently a placeholder.
 class DwrfFileMetadata : public dwio::common::FileMetadata {};
 
-struct WriterOptions : public dwio::common::WriterOptions {
+struct DwrfWriterOptions : public dwio::common::FormatSpecificOptions {
+  DwrfWriterOptions() = default;
+
+  explicit DwrfWriterOptions(std::shared_ptr<const Config> config)
+      : config(std::move(config)) {}
+
+  /// Overlays session or connector DWRF config values on top of this options
+  /// object while preserving caller-provided non-config fields.
+  void merge(const dwio::common::FormatSpecificOptions& overrides) override {
+    const auto* dwrfOverrides =
+        dynamic_cast<const DwrfWriterOptions*>(&overrides);
+    VELOX_CHECK_NOT_NULL(
+        dwrfOverrides,
+        "Cannot merge DWRF writer options with a different "
+        "FormatSpecificOptions type.");
+
+    auto mergedConfigs = config->toSerdeParams();
+    for (const auto& [key, value] : dwrfOverrides->config->toSerdeParams()) {
+      mergedConfigs[key] = value;
+    }
+    config = Config::fromMap(mergedConfigs);
+  }
+
   std::shared_ptr<const Config> config = std::make_shared<Config>();
   /// Changes the interface to stream list and encoding iter.
   std::function<std::unique_ptr<LayoutPlanner>(const dwio::common::TypeWithId&)>
@@ -60,16 +82,16 @@ struct WriterOptions : public dwio::common::WriterOptions {
   /// default, which keeps the footer wire format byte-identical.
   std::unordered_map<uint32_t, std::vector<std::pair<std::string, std::string>>>
       schemaAttributes;
-
-  void processConfigs(
-      const config::ConfigBase& connectorConfig,
-      const config::ConfigBase& session) override;
 };
 
 class Writer : public dwio::common::Writer {
  public:
+  static std::shared_ptr<const Config> makeWriterConfig(
+      const dwio::common::WriterOptions& options,
+      const DwrfWriterOptions& dwrfOptions);
+
   Writer(
-      const WriterOptions& options,
+      const dwio::common::WriterOptions& options,
       std::unique_ptr<dwio::common::FileSink> sink,
       memory::MemoryPool& parentPool)
       : Writer{
@@ -83,12 +105,12 @@ class Writer : public dwio::common::Writer {
 
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,
-      const WriterOptions& options,
+      const dwio::common::WriterOptions& options,
       std::shared_ptr<memory::MemoryPool> pool);
 
   Writer(
       std::unique_ptr<dwio::common::FileSink> sink,
-      const WriterOptions& options);
+      const dwio::common::WriterOptions& options);
 
   ~Writer() override = default;
 

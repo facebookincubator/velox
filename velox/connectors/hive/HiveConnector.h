@@ -15,8 +15,7 @@
  */
 #pragma once
 
-#include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileHandle.h"
+#include "velox/connectors/common/FileConnector.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConfigProvider.h"
 #include "velox/core/PlanNode.h"
@@ -28,7 +27,7 @@ class DataSource;
 
 namespace facebook::velox::connector::hive {
 
-class HiveConnector : public Connector {
+class HiveConnector : public connector::FileConnector {
  public:
   HiveConnector(
       const std::string& id,
@@ -70,27 +69,11 @@ class HiveConnector : public Connector {
       const ColumnHandleMap& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) override;
 
-  folly::Executor* ioExecutor() const override {
-    return ioExecutor_;
-  }
-
-  FileHandleCacheStats fileHandleCacheStats() {
-    return fileHandleFactory_.cacheStats();
-  }
-
-  // NOTE: this is to clear file handle cache which might affect performance,
-  // and is only used for operational purposes.
-  FileHandleCacheStats clearFileHandleCache() {
-    return fileHandleFactory_.clearCache();
-  }
-
   static void registerSerDe();
 
  protected:
   const std::shared_ptr<HiveConfig> hiveConfig_;
   HiveConfigProvider configProvider_;
-  FileHandleFactory fileHandleFactory_;
-  folly::Executor* ioExecutor_;
 };
 
 class HiveConnectorFactory : public ConnectorFactory {
@@ -129,7 +112,7 @@ class HivePartitionFunctionSpec : public core::PartitionFunctionSpec {
   /// a bucket to partition map based on the actual number of partitions with
   /// round-robin partitioning scheme to create the function instance. For
   /// instance, when we create the local partition node with hive bucket
-  /// function to support multiple table writer drivers, we don't know the the
+  /// function to support multiple table writer drivers, we don't know the
   /// actual number of table writer drivers until start the task.
   HivePartitionFunctionSpec(
       int numBuckets,

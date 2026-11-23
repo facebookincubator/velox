@@ -22,10 +22,12 @@
 namespace facebook::velox::exec::rpc {
 
 void CongestionController::onError() {
-  const auto prevEffective = effective_;
-  effective_ = std::max<int64_t>(effective_ / 2, minWindow_);
-  if (effective_ < prevEffective) {
+  const int64_t prevLimit = limit();
+  effective_ =
+      std::max<double>(effective_ / 2.0, static_cast<double>(minWindow_));
+  if (limit() < prevLimit) {
     ++numShrinks_;
+    ++numOverloadShrinks_;
   }
   // Drop the in-progress sample window so partial pre-overload samples don't
   // contaminate the next gradient computation. baselineRttNs_ is deliberately
@@ -37,6 +39,9 @@ void CongestionController::onError() {
   // into the overload.
   numWindowSamples_ = 0;
   windowMinRttNs_ = 0;
+  // A throttle is never progress: discard banked clean units so post-overload
+  // completions re-prove capacity from scratch.
+  cleanUnits_ = 0;
 }
 
 void CongestionController::onSample(int64_t rttNs) {
@@ -71,13 +76,14 @@ void CongestionController::onSample(int64_t rttNs) {
   // sqrt headroom keeps probing upward when latency is flat (gradient ~ 1), so
   // the window is never pinned by a fixed ceiling. stepCoef_ scales how hard it
   // probes (1.0 = the plain sqrt headroom).
-  const double headroom =
-      stepCoef_ * std::sqrt(static_cast<double>(effective_));
-  const auto newWindow = static_cast<int64_t>(
-      static_cast<double>(effective_) * gradient + headroom);
-  const auto prevEffective = effective_;
-  effective_ = std::clamp(newWindow, minWindow_, maxWindow_);
-  if (effective_ < prevEffective) {
+  const double headroom = stepCoef_ * std::sqrt(effective_);
+  const double newWindow = effective_ * gradient + headroom;
+  const int64_t prevLimit = limit();
+  effective_ = std::clamp<double>(
+      newWindow,
+      static_cast<double>(minWindow_),
+      static_cast<double>(maxWindow_));
+  if (limit() < prevLimit) {
     ++numShrinks_;
   }
 
@@ -86,6 +92,37 @@ void CongestionController::onSample(int64_t rttNs) {
   baselineRttNs_ = static_cast<int64_t>(
       static_cast<double>(baselineRttNs_) * (1.0 - kBaselineSmoothing) +
       static_cast<double>(observedRttNs) * kBaselineSmoothing);
+}
+
+void CongestionController::raiseMaxWindow(int64_t maxWindow) {
+  const auto raised = std::clamp<int64_t>(maxWindow, 1, kMaxWindowCeiling);
+  if (raised <= maxWindow_) {
+    return;
+  }
+  effective_ += static_cast<double>(raised - maxWindow_);
+  maxWindow_ = raised;
+}
+
+void CongestionController::onCleanUnits(int64_t numUnits) {
+  if (numUnits <= 0 || cleanMaxWindow_ <= 0) {
+    return;
+  }
+  cleanUnits_ += numUnits;
+  // Evidence bar scales with the window: bigger windows need more clean
+  // completions per +1, so growth can never outrun evidence. Growth stops at
+  // the clean cap (async-job discovery bound) or maxWindow_, whichever binds
+  // first; banked credit is dropped at the ceiling so a later ceiling raise
+  // re-probes from scratch instead of jumping on stale evidence.
+  const int64_t cap = std::min(maxWindow_, cleanMaxWindow_);
+  int64_t threshold = std::max<int64_t>(kSamplesPerWindow, limit());
+  while (cleanUnits_ >= threshold && limit() < cap) {
+    cleanUnits_ -= threshold;
+    effective_ = std::min<double>(effective_ + 1.0, static_cast<double>(cap));
+    threshold = std::max<int64_t>(kSamplesPerWindow, limit());
+  }
+  if (limit() >= cap) {
+    cleanUnits_ = 0;
+  }
 }
 
 } // namespace facebook::velox::exec::rpc

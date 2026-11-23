@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
@@ -26,19 +27,21 @@ class ReduceTest : public functions::test::FunctionBaseTest {
   void testReduceRewrite(
       const RowVectorPtr& input,
       const std::string& lambdaBody) {
-    TestRuntimeStatWriter writer;
+    ConcurrentRuntimeStatWriter writer;
     RuntimeStatWriterScopeGuard guard(&writer);
     auto actual = evaluate(
         fmt::format("reduce(c0, 10, (s, x) -> {}, s -> s)", lambdaBody), input);
-    ASSERT_EQ(writer.stats().size(), 1);
-    ASSERT_EQ(writer.stats()[0].first, "numReduceRewrite");
-    ASSERT_EQ(writer.stats()[0].second.value, 1);
+    const auto afterRewrite = writer.runtimeStats();
+    ASSERT_EQ(afterRewrite.size(), 1);
+    EXPECT_EQ(afterRewrite.at("numReduceRewrite").count, 1);
+    EXPECT_EQ(afterRewrite.at("numReduceRewrite").sum, 1);
     auto expected = evaluate(
         fmt::format("reduce(c0, 10, (s, x) -> {}, s -> 1 * s)", lambdaBody),
         input);
-    ASSERT_EQ(writer.stats().size(), 1);
-    ASSERT_EQ(writer.stats()[0].first, "numReduceRewrite");
-    ASSERT_EQ(writer.stats()[0].second.value, 1);
+    const auto afterNonRewrite = writer.runtimeStats();
+    ASSERT_EQ(afterNonRewrite.size(), 1);
+    EXPECT_EQ(afterNonRewrite.at("numReduceRewrite").count, 1);
+    EXPECT_EQ(afterNonRewrite.at("numReduceRewrite").sum, 1);
     assertEqualVectors(expected, actual);
   }
 };

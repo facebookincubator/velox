@@ -367,3 +367,7 @@ Many aggregate functions implement toIntermediate() fast path. Some examples inc
 Runtime statistic `abandonedPartialAggregationRows` counts rows that bypassed
 partial aggregation after it was abandoned. A value greater than 0 indicates
 that partial aggregation was abandoned.
+
+Runtime statistic `toIntermediateFastPathCalls` counts calls to aggregate
+functions that use the `toIntermediate()` fast path after partial aggregation
+is abandoned.

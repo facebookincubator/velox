@@ -15,6 +15,9 @@
  */
 
 #include "velox/functions/iceberg/Murmur3Hash32.h"
+
+#include <folly/lang/Bits.h>
+
 #include "velox/common/base/BitUtil.h"
 
 namespace facebook::velox::functions::iceberg {
@@ -36,7 +39,7 @@ int32_t Murmur3Hash32::hashBytes(const char* input, uint32_t len) {
 
   // Process 4-byte chunks.
   for (auto i = 0; i < nblocks; i++) {
-    uint32_t k1 = *reinterpret_cast<const uint32_t*>(data + i * 4);
+    uint32_t k1 = folly::loadUnaligned<uint32_t>(data + i * 4);
     k1 = mixK1(k1);
     h1 = mixH1(h1, k1);
   }

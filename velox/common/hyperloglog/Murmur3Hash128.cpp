@@ -24,8 +24,10 @@ int64_t getLong(const void* data, int32_t offset) {
   return folly::loadUnaligned<int64_t>(static_cast<const char*>(data) + offset);
 }
 
-char getByte(const void* data, int32_t offset) {
-  return *(static_cast<const char*>(data) + offset);
+// Returns the byte zero extended. A signed type would sign extend a byte
+// >= 0x80 across every higher bit of the 64-bit lane the tail shifts into.
+uint8_t getByte(const void* data, int32_t offset) {
+  return *(static_cast<const uint8_t*>(data) + offset);
 }
 
 // static

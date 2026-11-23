@@ -37,6 +37,8 @@ def main() -> None:
     repeats_long2 = torch.arange(0, 500, dtype=torch.long) % 3
     data_small = torch.arange(1, 11, dtype=torch.long)
     repeats_small = torch.tensor([5, 0, 3, 1, 0, 7, 2, 4, 0, 6], dtype=torch.long)
+    counts_int = torch.tensor([2, 3, 1, 0, 4, 0, 5, 1, 3, 2], dtype=torch.int32)
+    counts_long = torch.tensor([1, 0, 4, 2, 3, 0, 2, 5, 0, 1], dtype=torch.long)
 
     inputs = (
         data_long,
@@ -47,18 +49,22 @@ def main() -> None:
         repeats_long2,
         data_small,
         repeats_small,
+        counts_int,
+        counts_long,
     )
 
     module = RepeatInterleaveTestPreproc()
-    o1, o2, o3, o4 = module(*inputs)
+    o1, o2, o3, o4, o5, o6 = module(*inputs)
     print("Eager results:")
     print(f"  o1 (long/long): shape={o1.shape}, first5={o1[:5].tolist()}")
     print(f"  o2 (long/int32): shape={o2.shape}, first5={o2[:5].tolist()}")
     print(f"  o3 (float/long): shape={o3.shape}, first5={o3[:5].tolist()}")
     print(f"  o4 (small): shape={o4.shape}, values={o4.tolist()}")
+    print(f"  o5 (index .Tensor int32): dtype={o5.dtype}, values={o5.tolist()}")
+    print(f"  o6 (index .Tensor int64): dtype={o6.dtype}, values={o6.tolist()}")
 
     results_path = os.path.join(output_dir, "repeat_interleave_test_results.pt")
-    torch.save([o1, o2, o3, o4], results_path)
+    torch.save([o1, o2, o3, o4, o5, o6], results_path)
     print(f"Saved results to {results_path}")
 
     print("Exporting via torch.export...")

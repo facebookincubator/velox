@@ -495,59 +495,68 @@ TEST(ExceptionTest, expressionString) {
       fmt::format(msgTemplate, "i + j * 2 >= 1000", "201 vs. 1000"));
 }
 
-TEST(ExceptionTest, notImplemented) {
-  verifyVeloxException(
-      []() { VELOX_NYI(); },
-      "Exception: VeloxRuntimeError\nError Source: RUNTIME\n"
-      "Error Code: NOT_IMPLEMENTED\n"
-      "Retriable: False\nFunction: operator()\nFile: ");
+// Verifies that 'f' throws a not-implemented error with the given failing
+// expression and message.
+void verifyNotImplemented(
+    std::function<void()> f,
+    std::string_view expression,
+    std::string_view message) {
+  verifyException<VeloxRuntimeError>(f, [&](const auto& e) {
+    EXPECT_EQ(e.errorCode(), error_code::kNotImplemented);
+    EXPECT_EQ(e.failingExpression(), expression);
+    EXPECT_EQ(e.message(), message);
+  });
+}
 
-  verifyVeloxException(
-      []() { VELOX_NYI("Message 1"); },
-      "Exception: VeloxRuntimeError\nError Source: RUNTIME\n"
-      "Error Code: NOT_IMPLEMENTED\nReason: Message 1\nRetriable: False\n"
-      "Function: operator()\nFile: ");
+TEST(ExceptionTest, notImplemented) {
+  verifyNotImplemented([] { VELOX_NYI(); }, "", "");
+  verifyNotImplemented([] { VELOX_NYI("Window frames"); }, "", "Window frames");
+
+  verifyNotImplemented(
+      [] {
+        const int numKeys = 2;
+        VELOX_NYI_CHECK(numKeys < 2, "Multiple keys");
+      },
+      "numKeys < 2",
+      "Multiple keys");
+  verifyNotImplemented(
+      [] {
+        const int numKeys = 2;
+        VELOX_NYI_CHECK_EQ(numKeys, 1, "Multiple keys");
+      },
+      "numKeys == 1",
+      "(2 vs. 1) Multiple keys");
+  verifyNotImplemented(
+      [] {
+        auto filter = std::make_shared<int>(5);
+        VELOX_NYI_CHECK_NULL(filter, "Filters");
+      },
+      "filter == nullptr",
+      "Filters");
+
+  VELOX_NYI_CHECK(2 > 1);
+  VELOX_NYI_CHECK_EQ(1, 1);
+  VELOX_NYI_CHECK_NULL(nullptr);
 }
 
 TEST(ExceptionTest, errorCode) {
-  std::string msgTemplate =
-      "Exception: {}"
-      "\nError Source: {}"
-      "\nError Code: {}"
-      "\nRetriable: {}"
-      "\nExpression: {}"
-      "\nFunction: {}"
-      "\nFile: ";
-
   verifyVeloxException(
       [&]() { VELOX_FAIL(); },
-      fmt::format(
-          "Exception: {}"
-          "\nError Source: {}"
-          "\nError Code: {}"
-          "\nRetriable: {}"
-          "\nFunction: {}"
-          "\nFile: ",
-          "VeloxRuntimeError",
-          "RUNTIME",
-          "INVALID_STATE",
-          "False",
-          "operator()"));
+      "Exception: VeloxRuntimeError"
+      "\nError Source: RUNTIME"
+      "\nError Code: INVALID_STATE"
+      "\nRetriable: False"
+      "\nFunction: operator()"
+      "\nFile: ");
 
   verifyVeloxException(
       [&]() { VELOX_USER_FAIL(); },
-      fmt::format(
-          "Exception: {}"
-          "\nError Source: {}"
-          "\nError Code: {}"
-          "\nRetriable: {}"
-          "\nFunction: {}"
-          "\nFile: ",
-          "VeloxUserError",
-          "USER",
-          "INVALID_ARGUMENT",
-          "False",
-          "operator()"));
+      "Exception: VeloxUserError"
+      "\nError Source: USER"
+      "\nError Code: INVALID_ARGUMENT"
+      "\nRetriable: False"
+      "\nFunction: operator()"
+      "\nFile: ");
 }
 
 TEST(ExceptionTest, context) {
@@ -990,6 +999,135 @@ TEST(ExceptionTest, wrappedExceptionWithContext) {
     ASSERT_THROW(
         std::rethrow_exception(ve.wrappedException()), std::invalid_argument);
   }
+}
+
+TEST(ExceptionTest, properties) {
+  struct TestExceptionContextProperties final
+      : public ExceptionContextProperties {
+    std::string value;
+  };
+
+  auto makeProperties =
+      [](facebook::velox::VeloxException::Type /*exceptionType*/,
+         void* untypedArg)
+      -> std::shared_ptr<const ExceptionContextProperties> {
+    auto properties = std::make_shared<TestExceptionContextProperties>();
+    properties->value = static_cast<const char*>(untypedArg);
+    return properties;
+  };
+
+  // No properties context: properties() is null.
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    EXPECT_EQ(ve.properties(), nullptr);
+  }
+
+  const char* outer = "outer-team";
+  facebook::velox::ExceptionContextSetter outerContext(
+      {.arg = (void*)outer, .propertiesFunc = makeProperties});
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    const auto properties =
+        std::dynamic_pointer_cast<const TestExceptionContextProperties>(
+            ve.properties());
+    ASSERT_NE(properties, nullptr);
+    EXPECT_EQ(properties->value, "outer-team");
+  }
+
+  // The inner-most context's properties win.
+  auto makeInnerProperties =
+      [](facebook::velox::VeloxException::Type /*exceptionType*/,
+         void* /*untypedArg*/)
+      -> std::shared_ptr<const ExceptionContextProperties> {
+    auto properties = std::make_shared<TestExceptionContextProperties>();
+    properties->value = "inner-team";
+    return properties;
+  };
+  facebook::velox::ExceptionContextSetter innerContext(
+      {.arg = nullptr, .propertiesFunc = makeInnerProperties});
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    const auto properties =
+        std::dynamic_pointer_cast<const TestExceptionContextProperties>(
+            ve.properties());
+    ASSERT_NE(properties, nullptr);
+    EXPECT_EQ(properties->value, "inner-team");
+  }
+}
+
+// A propertiesFunc that itself throws must (1) not be re-invoked by the nested
+// VeloxException it throws (re-entrancy guard), and (2) not leave the context
+// suspended, so a later exception invokes it again.
+TEST(ExceptionTest, propertiesReentrancyAndRestore) {
+  int callCount = 0;
+  auto throwingProperties =
+      [](facebook::velox::VeloxException::Type /*exceptionType*/, void* arg)
+      -> std::shared_ptr<const facebook::velox::ExceptionContextProperties> {
+    ++(*static_cast<int*>(arg));
+    VELOX_FAIL("props boom");
+  };
+  facebook::velox::ExceptionContextSetter context(
+      {.arg = &callCount, .propertiesFunc = throwingProperties});
+
+  // propertiesFunc runs once and throws; the nested VeloxException from
+  // VELOX_FAIL must not re-invoke it, so callCount stays 1 (not infinite).
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    EXPECT_EQ(ve.properties(), nullptr);
+  }
+  EXPECT_EQ(callCount, 1);
+
+  // The context must not be left suspended: propertiesFunc runs again. With the
+  // pre-guard code this would stay 1 (the context stayed suspended).
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    EXPECT_EQ(ve.properties(), nullptr);
+  }
+  EXPECT_EQ(callCount, 2);
+}
+
+// Same guarantee for messageFunc: a throwing messageFunc falls back and does
+// not leave the context suspended, so a later exception invokes it again.
+TEST(ExceptionTest, messageReentrancyAndRestore) {
+  int callCount = 0;
+  auto throwingMessage =
+      [](facebook::velox::VeloxException::Type /*exceptionType*/,
+         void* arg) -> std::string {
+    ++(*static_cast<int*>(arg));
+    VELOX_FAIL("message boom");
+  };
+  facebook::velox::ExceptionContextSetter context(
+      {.messageFunc = throwingMessage, .arg = &callCount});
+
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    EXPECT_THAT(
+        ve.context(),
+        testing::HasSubstr("Failed to produce additional context."));
+  }
+  EXPECT_EQ(callCount, 1);
+
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& e) {
+    VeloxUserError ve(std::current_exception(), e.what(), false);
+    EXPECT_THAT(
+        ve.context(),
+        testing::HasSubstr("Failed to produce additional context."));
+  }
+  EXPECT_EQ(callCount, 2);
 }
 
 TEST(ExceptionTest, exceptionMacroInlining) {

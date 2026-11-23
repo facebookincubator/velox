@@ -22,6 +22,7 @@ target_link_libraries(
   velox_hdfs
   velox_core
   velox_exec_test_lib
+  velox_hive_storage_adapters_server_startup
   velox_hive_connector
   velox_dwio_common_exception
   velox_exec
@@ -31,6 +32,25 @@ target_link_libraries(
 )
 
 target_compile_options(velox_hdfs_file_test PRIVATE -Wno-deprecated-declarations)
+
+# Unit test for HdfsReadFile's retry path. Drives a stub LibHdfsShim, so it needs
+# no Hadoop MiniCluster and is safe to run in parallel with the cluster-based
+# tests above.
+add_executable(velox_hdfs_read_file_test HdfsReadFileTest.cpp)
+
+add_test(velox_hdfs_read_file_test velox_hdfs_read_file_test)
+target_link_libraries(
+  velox_hdfs_read_file_test
+  velox_file
+  velox_hdfs
+  velox_core
+  velox_exec
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
+)
+
+target_compile_options(velox_hdfs_read_file_test PRIVATE -Wno-deprecated-declarations)
 
 add_executable(velox_hdfs_insert_test HdfsInsertTest.cpp HdfsMiniCluster.cpp HdfsUtilTest.cpp)
 velox_add_test_headers(velox_hdfs_insert_test HdfsMiniCluster.h)
@@ -43,6 +63,7 @@ target_link_libraries(
   velox_dwio_parquet_writer
   velox_hdfs
   velox_exec_test_lib
+  velox_hive_storage_adapters_server_startup
   velox_exec
   GTest::gtest
   GTest::gtest_main

@@ -387,6 +387,23 @@ TEST_F(SequenceTest, timestamp) {
       "sequence(C0, C1, C2)", {startVector, stopVector, stepVector}, expected);
 }
 
+// The step count comes from diffTimestamp, which floors, so before the fix the
+// element count was right while the elements were a day early (1969-02-27,
+// 1969-04-29).
+TEST_F(SequenceTest, timestampYearMonthStepBeforeEpoch) {
+  // 1969-01-30 12:00:00 to 1969-04-30 12:00:00 in one-month steps.
+  const auto startVector = makeFlatVector<Timestamp>({Timestamp(-28987200, 0)});
+  const auto stopVector = makeFlatVector<Timestamp>({Timestamp(-21211200, 0)});
+  const auto stepVector = makeFlatVector<int32_t>({1}, INTERVAL_YEAR_MONTH());
+  const auto expected = makeArrayVector<Timestamp>(
+      {{Timestamp(-28987200, 0),
+        Timestamp(-26481600, 0),
+        Timestamp(-23889600, 0),
+        Timestamp(-21211200, 0)}});
+  testExpression(
+      "sequence(C0, C1, C2)", {startVector, stopVector, stepVector}, expected);
+}
+
 TEST_F(SequenceTest, timestampExceedMaxEntries) {
   const auto startVector =
       makeFlatVector<Timestamp>({Timestamp(1991, 0), Timestamp(1992, 0)});

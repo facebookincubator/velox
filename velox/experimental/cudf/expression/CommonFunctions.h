@@ -16,11 +16,23 @@
 
 #pragma once
 
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+
 #include "velox/expression/FunctionSignature.h"
 
 #include <initializer_list>
 
 namespace facebook::velox::cudf_velox {
+
+class IsNullFunction : public CudfFunction {
+ public:
+  explicit IsNullFunction(const core::TypedExprPtr& expr);
+
+  ColumnOrView eval(
+      std::vector<ColumnOrView>& inputColumns,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) const override;
+};
 
 struct ArrayAccessPolicy {
   bool allowNegativeIndices;

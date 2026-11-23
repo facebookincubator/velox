@@ -28,6 +28,8 @@ class UuidType final : public HugeintType {
   UuidType() = default;
 
  public:
+  static std::shared_ptr<const UuidType> create() = delete;
+
   static std::shared_ptr<const UuidType> get() {
     VELOX_CONSTEXPR_SINGLETON UuidType kInstance;
     return {std::shared_ptr<const UuidType>{}, &kInstance};

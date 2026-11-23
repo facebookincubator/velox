@@ -24,19 +24,24 @@ namespace facebook::velox::dwio::common::compression {
 
 class PagedOutputStream : public BufferedOutputStream {
  public:
+  /// 'verifyDecompressor', when non-null, enables write-side verification: each
+  /// compressed page is immediately decompressed and compared against its
+  /// source bytes, throwing on mismatch so a corrupt frame is never persisted.
   PagedOutputStream(
       CompressionBufferPool& pool,
       DataBufferHolder& bufferHolder,
       uint32_t compressionThreshold,
       uint8_t pageHeaderSize,
       std::unique_ptr<Compressor> compressor,
-      const dwio::common::encryption::Encrypter* encryptor)
+      const dwio::common::encryption::Encrypter* encryptor,
+      std::unique_ptr<Decompressor> verifyDecompressor = nullptr)
       : BufferedOutputStream(bufferHolder),
         pool_{&pool},
         compressor_{std::move(compressor)},
         encryptor_{encryptor},
         threshold_{compressionThreshold},
-        pageHeaderSize_{pageHeaderSize} {
+        pageHeaderSize_{pageHeaderSize},
+        verifyDecompressor_{std::move(verifyDecompressor)} {
     VELOX_CHECK(
         compressor_ || encryptor_,
         "Neither compressor or encryptor is set for paged output stream");
@@ -73,6 +78,14 @@ class PagedOutputStream : public BufferedOutputStream {
 
   void resetBuffers();
 
+  // Decompresses 'compressedPage' (page header + payload) and checks it matches
+  // the 'uncompressedSize' original bytes at 'uncompressed'. Throws on decode
+  // failure or content mismatch.
+  void verifyCompressedPage(
+      std::string_view compressedPage,
+      const char* uncompressed,
+      uint64_t uncompressedSize);
+
   CompressionBufferPool* const pool_;
 
   const std::unique_ptr<Compressor> compressor_;
@@ -90,6 +103,11 @@ class PagedOutputStream : public BufferedOutputStream {
 
   // buffer that holds encrypted data
   std::unique_ptr<folly::IOBuf> encryptionBuffer_{nullptr};
+
+  // Decompressor used to verify each freshly compressed page round-trips to its
+  // source bytes. Null when write-side verification is disabled. The scratch
+  // buffer for the decompressed bytes is borrowed from 'pool_'.
+  const std::unique_ptr<Decompressor> verifyDecompressor_;
 };
 
 } // namespace facebook::velox::dwio::common::compression

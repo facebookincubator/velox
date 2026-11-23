@@ -31,6 +31,13 @@ set -efx -o pipefail
 # so that some low level types are the same size. Also, disable warnings.
 SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
 source "$SCRIPT_DIR"/setup-centos9.sh
+# The Clang that USE_CLANG builds with.
+CLANG_CC=/usr/bin/clang-15
+CLANG_CXX=/usr/bin/clang++-15
+
+function install_clang15 {
+  dnf_install clang15 gcc-toolset-13-libatomic-devel
+}
 
 # Install packages required for build.
 function install_build_prerequisites {
@@ -71,6 +78,8 @@ function install_velox_deps {
   run_and_time install_gcs_sdk_cpp #grpc, abseil, protobuf
   run_and_time install_fmt
   run_and_time install_fast_float
+  run_and_time install_flatbuffers
+  run_and_time install_openzl
   run_and_time install_folly
   run_and_time install_fizz
   run_and_time install_wangle
@@ -91,8 +100,8 @@ function install_velox_deps {
 (
   if [[ $# -ne 0 ]]; then
     if [[ ${USE_CLANG} != "false" ]]; then
-      export CC=/usr/bin/clang-15
-      export CXX=/usr/bin/clang++-15
+      export CC=${CLANG_CC}
+      export CXX=${CLANG_CXX}
     else
       # Activate gcc 14
       export CXX=/usr/bin/gcc-14
@@ -112,8 +121,8 @@ function install_velox_deps {
       echo "Skipping installation of build dependencies since INSTALL_PREREQUISITES is not set"
     fi
     if [[ ${USE_CLANG} != "false" ]]; then
-      export CC=/usr/bin/clang-15
-      export CXX=/usr/bin/clang++-15
+      export CC=${CLANG_CC}
+      export CXX=${CLANG_CXX}
     else
       # Activate gcc 14
       export CXX=/usr/bin/gcc-14
@@ -126,8 +135,8 @@ function install_velox_deps {
     echo "All dependencies for Velox installed!"
     if [[ ${USE_CLANG} != "false" ]]; then
       echo "To use clang for the Velox build set the CC and CXX environment variables in your session."
-      echo "  export CC=/usr/bin/clang-15"
-      echo "  export CXX=/usr/bin/clang++-15"
+      echo "  export CC=${CLANG_CC}"
+      echo "  export CXX=${CLANG_CXX}"
     fi
     dnf clean all
   fi

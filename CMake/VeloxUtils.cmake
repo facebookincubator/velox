@@ -352,6 +352,20 @@ function(velox_configure_clang_atomic_linker_flags)
     return()
   endif()
 
+  # Clang 15 ships compiler-rt builtins that do not provide
+  # __atomic_is_lock_free, so the compiler-rt heuristic below wrongly skips
+  # libatomic and linking libvelox.so fails with an undefined reference. Force
+  # libatomic (executables and shared libraries) on Clang 15.
+  if(
+    CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 15
+    AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 16
+  )
+    message(STATUS "Clang 15 detected, forcing libatomic linking")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -latomic" PARENT_SCOPE)
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -latomic" PARENT_SCOPE)
+    return()
+  endif()
+
   set(COMPILER_RT_FOUND FALSE)
 
   # Get Clang's resource directory
@@ -395,4 +409,17 @@ function(velox_configure_clang_atomic_linker_flags)
   else()
     message(STATUS "compiler-rt found, skipping libatomic linking")
   endif()
+endfunction()
+
+# Marks the intentional switch fall-through in the scanner that flex_target
+# `NAME` generates with `[[fallthrough]]`. Flex marks it with a comment, which
+# Clang's -Wimplicit-fallthrough ignores. Call it after flex_target(NAME ...).
+function(velox_flex_annotate_fallthrough NAME)
+  add_custom_command(
+    OUTPUT ${FLEX_${NAME}_OUTPUTS}
+    COMMAND
+      ${CMAKE_COMMAND} -DFLEX_OUTPUT=${FLEX_${NAME}_OUTPUTS} -P
+      ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/FlexAnnotateFallthrough.cmake
+    APPEND
+  )
 endfunction()

@@ -31,6 +31,15 @@ struct IValue;
 
 namespace torch::wave {
 
+struct WaveConfig;
+
+/// Returns a mutable reference to the thread-local WaveConfig override pointer.
+/// While it is non-null, WaveConfig::get() returns the pointee instead of the
+/// global singleton, so wave graphs compiled and executed with different
+/// configs can run concurrently on different threads. Null on threads with no
+/// active override.
+WaveConfig*& waveConfigOverride();
+
 /// Process-wide configuration for wave graph execution (block size, tracing,
 /// grid hints).
 struct WaveConfig {
@@ -39,6 +48,7 @@ struct WaveConfig {
   static constexpr int32_t kTensors = 4;
   static constexpr int32_t kFrame = 8;
   static constexpr int32_t kTiming = 16;
+  static constexpr int32_t kGrid = 32;
 
   int32_t blockSize{256};
   bool allStandalone{false};
@@ -48,7 +58,7 @@ struct WaveConfig {
   int32_t numSms{0};
 
   /// Trace bit mask. kNodes prints node headers, kLaunches prints per-launch
-  /// details.
+  /// details, kGrid prints one block-balance line per step.
   int32_t trace{0};
 
   /// If set, forces the grid choice between single-block and multi-block
@@ -57,6 +67,17 @@ struct WaveConfig {
 
   /// If set and true, use the cooperative grid variant when available.
   std::optional<bool> isCg;
+
+  /// If true, ops with both a barrier-based and a single-pass cooperative-grid
+  /// form (masked_select_jagged) use the single-pass one. Only has an effect in
+  /// cooperative-grid mode.
+  bool singlePassSelect{false};
+
+  /// If true, cumsum, exclusive sum and masked_select are registered with a
+  /// single decoupled look-back implementation instead of the single-block,
+  /// multi-kernel and cooperative-grid variants. Read once, by
+  /// registerBuiltins(), so it must be set before initialize().
+  bool singlePass{false};
 
   /// Reference values keyed by ValueId for verifying intermediates.
   std::unordered_map<int32_t, c10::IValue>* referenceFrame{nullptr};
@@ -77,6 +98,15 @@ struct WaveConfig {
 
   // Print timing for wave graph execution.
   bool printTiming{false};
+
+  // Attribute GPU time to individual eager standalone ops by syncing the torch
+  // stream after each one. That sync is what makes per-op numbers possible and
+  // is also the largest perturbation in the measurement: it serializes the
+  // standalones against each other and against the wave stream, so the per-step
+  // device times and the GPU-idle figure stop reflecting what an untraced run
+  // does. Off by default under kTiming, where the per-step standalone event
+  // pair gives an unperturbed device measurement instead.
+  bool perOpStandaloneTiming{false};
 
   // Comma-separated list of value ids to trace during execution.
   std::string traceValues;
@@ -106,6 +136,13 @@ struct WaveConfig {
   // Enable device-side debug printfs. Emergency use only.
   bool kernelDebugOutput{false};
 
+  // Compile kernels with -lineinfo so compute-sanitizer can attribute a fault
+  // to a source line. Read once, from initialize(), because wave freezes its
+  // NVRTC flags on the first compile -- setting it later has no effect.
+  // Optimization stays on (unlike -G, which ptxas rejects at -O>0). It changes
+  // the kernel cache key, so the first run after enabling it recompiles.
+  bool kernelLineInfo{false};
+
   // Launch kernel once per block for debugging, waiting between launches.
   // Each kernel op runs as a standalone invocation so device-side errors
   // can be attributed to a single op.
@@ -113,11 +150,145 @@ struct WaveConfig {
 
   // If true, adjust per-op cost multipliers after each execution based on
   // actual thread block clock distribution.
-  bool autoAdjustCost{false};
+  bool autoAdjustCost{true};
+
+  // With autoAdjustCost, measures an op by its blocks' whole run times,
+  // including time spent waiting at its grid barriers. When false, the waits
+  // are left out, so an op given more blocks than it can use does not look
+  // more expensive for the blocks that only wait.
+  bool costCountsBarrierWait{true};
+
+  // A concat result that the allocation plan put in a lifetime group takes its
+  // slot there: the concat sizes it into the step's collector and writes its
+  // operands' bands once the group is carved. When false, every such result is
+  // allocated on its own, as the plan's group then holds no slot for it.
+  bool concatResultSlots{true};
+
+  // Groups the values that are never released, and are not graph outputs, with
+  // the others produced at the same point. They all live until the frame is
+  // cleared, so sharing a buffer holds nothing longer than before.
+  bool groupUnreleasedValues{true};
+
+  // Lets a value join a group when its own node only takes a table-derived
+  // view of it. The view is derived for its shape while the step is sized and
+  // again, with storage, once the group is carved.
+  bool groupViewedValues{true};
+
+  // Carves lifetime groups out of one persistent buffer, laid out from the
+  // previous execution's lifetimes, instead of one allocator call per group.
+  bool groupArena{true};
+
+  // Groups of at least this many bytes are allocated on their own rather than
+  // given an arena slot. A few such allocations cost little, and leaving them
+  // to the allocator lets other buffers use their space while they are dead,
+  // which a slot of the arena never does.
+  int64_t groupArenaMaxBytes{16 << 20};
+
+  // Runs the steps that would wait for an integer the device returns on a
+  // capacity for it, with the device fixing up the real dims. See
+  // DeviceSymbols. Needs the export's symbolic shapes.
+  bool deviceSymbols{true};
+
+  // Checks, at every grid, that the GridDescriptor gives each launch the
+  // element count the host sized it for.
+  bool checkGridDescriptor{false};
+
+  // Gives each launch of a step blocks in proportion to its estimated work,
+  // input elements times cost per element times the measured cost
+  // adjustment, so that all launches complete at the same time. See
+  // assignBlocksEqualFinish.
+  bool gridEqualFinish{false};
+
+  // Computes each step's grid on the device from the element counts the
+  // device holds, with the gridEqualFinish rule, and updates the cost
+  // multipliers there from the previous execution's clocks. See DeviceGrid.
+  bool deviceGrid{false};
+
+  // Copies a device-grid step's parameters and runs its setup kernel on a
+  // second stream, so that the setup overlaps the steps before it. A step
+  // whose setup reads symbols the device holds waits for the step before it.
+  bool setupStream{false};
+
+  // Checks that the export's symbolic shapes give the dims the host sizes
+  // every tensor parameter with. See DeviceSymbols::checkSizeExprs.
+  bool checkSizeExprs{false};
+
+  // With checkSizeExprs: derive every shape from graph-input dims taken as
+  // symbols, in place of the export's expressions.
+  bool sizeExprsFromInputs{false};
+
+  // Ablation knobs.  Each switches one optimization off so its contribution
+  // can be measured by comparing runtimes; none is meant for production use.
+
+  // If true, share a step's blocks among its ops by element count alone,
+  // ignoring each op's declared unit cost.
+  bool uniformCost{false};
+
+  // If true, launch each op of a step on its own instead of putting all of a
+  // step's ops in one kernel launch.
+  bool launchPerOp{false};
+
+  // If false, compile every structurally identical subgraph of a node
+  // separately instead of reusing the first one's ProjectOperation.
+  bool dedupProjectOps{true};
+
+  // If true, wait for the torch stream after every standalone that does
+  // device work, so standalones stop overlapping the wave kernels.
+  bool serializeStandalones{false};
 
   // If true, reuse a value's buffer in place when an op is its unique last use
-  // (turning copying ops into in-place ops). Off by default.
-  bool enableReuse{false};
+  // (turning copying ops into in-place ops), and drop clones that no consumer
+  // needs. On by default.
+  bool enableReuse{true};
+
+  // If true, run the pre-partition read-only clone elision pass. Only consulted
+  // when enableReuse is set; separated from it so the pass can be A/B'd against
+  // the post-partition in-place rewrite alone.
+  bool elideClones{true};
+
+  // If true, merge copies into each run of consecutive columns of one tensor
+  // into a single copy of the stacked sources (rewriteDisjointCopies). Each
+  // copy mutates the target, which otherwise orders every copy after the
+  // previous one and cuts the graph into three partition layers per copy. On by
+  // default.
+  bool recognizeDisjointCopies{true};
+
+  // If true, write a functional chain of select_scatter / slice_scatter /
+  // index_put / scatter_add into a tensor nothing else reads as in-place writes
+  // into that tensor (reinplaceScatterChains). The column merge and the
+  // disjoint-write ordering then apply to it as to an in-place graph, and no
+  // scatter copies the whole tensor first. On by default.
+  bool reinplaceScatters{true};
+
+  // If true, an in-place write is not ordered against a touch of the same
+  // storage whose region is provably disjoint from the written one (constant
+  // selects and slices). A view, which reads no data, touches only the region
+  // it selects. Disjoint writes into one tensor can then run side by side. On
+  // by default.
+  bool disjointWriteOrdering{true};
+
+  // Reads an elementwise leaf whose shape and the expression's are both fixed
+  // by the graph at an index with literal divisors, instead of decomposing
+  // 'idx' through the leaf's descriptor at run time.
+  bool staticLeafIndex{true};
+
+  // Computes once, at bind, each sizing call whose operands all have shapes
+  // fixed by the graph, and skips the call at run time.
+  bool constantSizes{true};
+
+  // With constantSizes, still runs those sizing calls and fails when a result
+  // differs from the one computed at bind. For validation runs.
+  bool verifyStaticSizes{false};
+
+  // Computes the elementwise producer of a reshaping view inline in the view's
+  // elementwise consumer, at the consumer's index, instead of writing the
+  // producer's result to memory (see CompileCtx::fusesThroughView).
+  bool fuseThroughViews{true};
+
+  // Evaluates the elementwise input of a row reduction such as tw.any_rows in
+  // the reduction's row loop instead of writing it to memory (see
+  // CompileCtx::fusesRowReduction).
+  bool fuseRowReductions{true};
 
   // Force a launch boundary after a multi-block (non-cooperative) scan so every
   // cross-block consumer of its output reads a fully materialized buffer from a
@@ -130,11 +301,326 @@ struct WaveConfig {
   // correctness fix); the race harness flips it off for the racy A/B arm.
   bool scanOutputReturnBarrier{true};
 
-  /// Not thread-safe. All mutations must happen before concurrent reads.
+  // If true, release the frame tensors of each ProjectNode's last-use values
+  // right after that node's composite invocation executes, instead of keeping
+  // them until the whole graph finishes. On by default. It cannot be turned on
+  // before this commit: a concat alloc group's buffer is only ever released
+  // when this is set, and until the decomposition here the group carved a cat
+  // element that was a view of a wave-produced value, so the released buffer
+  // was reused under a live reader (cumsumOffsetsReproTest).
+  bool freeIntermediates{true};
+
+  // If true, release each last-use value after the last STEP that reads it
+  // rather than after the node's last step. A node's ops finish at different
+  // steps, so a value read only by a short op stays live for the whole node
+  // under the coarser scheme. Only consulted when freeIntermediates is set.
+  bool stepLastUse{true};
+
+  // If true, drain both streams at the end of every step, so a step's freeable
+  // buffers are back in the caching allocator before the next step allocates.
+  // Serializes the pipeline and costs wall time; it exists to make the peak
+  // memory reflect the release schedule rather than how far the host ran ahead.
+  bool syncEachStep{false};
+
+  // If true, do not block the host on a step's device-to-host transfer at the
+  // step that issues it. The transfer is recorded as pending and its pinned
+  // buffer is parsed into the frame at the first later step that can read one
+  // of the values it brings back, so a step that reads none of them does its
+  // sizing, allocation, parameter fill and launch while the transfer is still
+  // in flight. On by default.
+  bool deferD2h{true};
+
+  // If true, drop the host-side stream waits that are not a real data or memory
+  // dependency, so the host can queue as many steps ahead of the device as it
+  // can interpret. Today that is the default-stream drain at the end of every
+  // composite invocation that ran an eager standalone: the cross-stream
+  // ordering it used to provide is now carried device-side by the
+  // lastStandaloneDone / lastWaveDone event edges, and a step's buffers are
+  // only freed once its own completion events have been observed, so the drain
+  // costs a host stall per node and buys nothing. Needs deferD2h to be of any
+  // use -- otherwise every transfer still stops the host at its producing step.
+  // On by default.
+  bool runAhead{true};
+
+  // If true, a stream does not wait again on a completion event it already
+  // waited on: stream order already puts everything after it. On by default.
+  bool skipRepeatedWaits{true};
+
+  // If true, each stream writes a step's ticket to a host-mapped counter after
+  // the step's work, and the host checks step completion by reading the
+  // counters instead of calling cudaEventQuery on the step's events. Off by
+  // default: the counter write is an API call of its own and measured no gain.
+  bool completionCounters{false};
+
+  // Ceiling, in bytes, on how much freeable memory may sit in already-issued
+  // but not yet completed steps. Running ahead delays every free until the
+  // device catches up, so the peak grows by roughly the bytes in flight; when
+  // this is exceeded the host drains both streams before allocating any more,
+  // trading the run-ahead back for the memory. 0 disables the check. Only
+  // meaningful with freeIntermediates, which is what makes the frees delayable.
+  int64_t maxDelayedFree{1LL << 30};
+
+  // If true, run the pre-partition metadata-duplication pass: rematerialize a
+  // multiply-used metadata getter (sym_size / sym_numel) once per use site so
+  // it stops being a shared value. A value with more than one user is a CSE
+  // border, which the partitioner turns into a top-level output of its
+  // ProjectNode -- a frame slot, an output and a parameter block per step. A
+  // metadata getter reads only shape fields, so recomputing it is free, but it
+  // only pays when its tensor operand is available at the use site anyway;
+  // otherwise the border just moves from the getter's output to its input. Off
+  // by default.
+  bool duplicateMetadata{false};
+
+  // EXPERIMENT, off by default and not correct yet. If true, a metadata getter
+  // whose only reachable user is the output node stops being counted as a use
+  // of its operand when the partitioner builds its levels, so the operand does
+  // not become a CSE border on the getter's account. The getter is put back
+  // before the last layer is built, so it still runs and still occupies its
+  // output slot.
+  //
+  // What it is for: on the ROO preproc graph 255 of the 297 top-level exprs are
+  // returned sym_size getters, and 248 of them have an operand whose only other
+  // reachable user is one consumer. Each of those is a border that exists
+  // purely because the size is returned, and each pushes its operand's producer
+  // into an earlier layer. Removing them is what would give the last layer more
+  // to carve.
+  //
+  // Why it is not correct yet: dropping the reference takes those 248 operands
+  // to a single user, so their producers stop being borders and fuse into that
+  // consumer -- and 238 of the 255 are produced by aten.slice (a view) or
+  // aten.zeros, neither of which leaves a tensor in the frame once inlined. The
+  // getter would then read the size of something that does not exist. The
+  // shapes are all host-computable, so the fix is shape propagation rather than
+  // a frame read, but that is not written. Use this only to measure what the
+  // partitioning change is worth.
+  bool deferSizeOutputs{false};
+
+  // If true, the graph optimizer assumes every producer-less value (model
+  // input, weight, or constant) is contiguous, so downstream passes may treat
+  // them as densely laid out. When on, executeWave verifies each such tensor is
+  // actually contiguous and throws otherwise. Off by default.
+  bool inputContiguous{false};
+
+  // Merge nodes that compute the same thing from the same operands, before
+  // partitioning. Split in two because the two halves pay off differently: the
+  // compute half removes real work, while the view half only removes graph
+  // nodes -- and duplicating views per consumer is something duplicateMetadata
+  // does on purpose, so merging them can work against the partitioner.
+  bool cseCompute{false};
+  bool cseViews{false};
+
+  // Split a list-producing op into one node per tensor before partitioning, so
+  // each column reaches the block allocator with its own cost instead of one
+  // op's grid covering all of them. Also folds a chain of such ops where the
+  // op supports it. On by default; the switch is for A/B against the list form.
+  bool decomposeLists{true};
+
+  // Replace the sparsenn fused_datafm_merge_and_dedup_by_reference with the
+  // TorchWave CUDA variant (the "_tw" operator) when the graph is prepared for
+  // wave. The _tw operator must be registered before the graph compiles.
+  bool twMad{false};
+
+  // Rewrite each packed input (PackedInput.h) before the graph compiles: an
+  // input whose values the graph splits into one view per feature then
+  // arrives encoded, each feature at its narrowest width, and the graph
+  // decodes it per feature. The caller encodes such inputs with the recipes
+  // that the compiled model keeps.
+  bool packInputs{false};
+
+  // With packInputs, let the registered pack rewrites move row trimming into
+  // the recipes: the host trims the rows of a slot before encoding it, and the
+  // op that trimmed them (a length guard, a truncation) leaves the graph.
+  bool packWindows{true};
+
+  // With packInputs, let a gather that reads a packed slot read it in place
+  // rather than through a tw.unpack_slot copy. Saves the copy at the price of
+  // the decode's registers in the gather.
+  bool packAbsorbGetter{false};
+
+  // Split merge-and-dedup into the fused TorchWave head and final ops instead
+  // of running a standalone operator (sparsenn's or, with twMad, TorchWave's).
+  bool twFusedMad{false};
+
+  // With twFusedMad, a metadata feature that a chain gather produces is read
+  // through the chain by the merge-and-dedup head or final instead of being
+  // materialized first.
+  bool madChains{true};
+
+  // If non-zero, the fused merge-and-dedup insert asks for enough dynamic
+  // shared memory that at most this many of its blocks are resident per SM.
+  // The memory is unused ballast, as for the standalone operator's insert
+  // kernel: the insert's hash table traffic is random, and fewer resident rows
+  // per SM keep more of it in cache.
+  int32_t madInsertBlocksPerSm{0};
+
+  // If non-zero, the threads per block of the launch that runs the fused
+  // merge-and-dedup insert. It gives each row one block and scans the row
+  // in-block, so a wider block puts more threads on a row.
+  int32_t madInsertBlockSize{0};
+
+  // If true, a metadata getter (aten.sym_size.int / aten.sym_numel.default)
+  // that is not a subexpression of a single fusable consumer runs as a
+  // host-side shortcut standalone instead of a fused kernel op. Fused, such a
+  // getter costs a whole thread block that reads one field and exits; that
+  // block is charged against its launch's slowest block, so a handful of them
+  // sink a step's balance and no block count can fix it -- there is no width at
+  // which a no-op op balances.
+  bool metadataGetterStandalone{true};
+
+  // If true, a concat operand whose producer could write the operand's band
+  // directly is left to be fused into the concat's own kernel instead of being
+  // pushed into a kernel of its own in the previous step. The pushdown is what
+  // makes the operand "already placed" by the time the carve is decided, which
+  // costs it its band and buys it a copy. Only taken for an operand the concat
+  // is the sole consumer of, and only when its extent is computable without
+  // running it.
+  //
+  // On by default. The pushdown buys a parallel fill and pays for it in three
+  // times the memory traffic -- the producer writes its own buffer, then a copy
+  // reads it and writes the band -- plus a buffer that has to stay live across
+  // the step boundary. On the 1k ROO graph that trade is worth taking for 237
+  // operands: 453 MB per execution stops being copied and the run is 2.0%
+  // faster. It is per-operand rather than global, so a graph of few narrow
+  // concats may not see it.
+  bool concatOperandsInPlace{true};
+
+  // If true, a column folds its producer's gather into its own even when the
+  // producer has several readers, provided every reader is a consumer that can
+  // absorb a chain itself. The sole-reader rule two foldable consumers can
+  // never satisfy: whichever rule runs first sees the other as an outside
+  // reader and declines, and the second then sees a gather already reading the
+  // buffer, so neither folds and the intermediate is always written. Folding
+  // into both removes it, at the cost of running the producer's steps once per
+  // consumer.
+  //
+  // On by default, which only measurement could decide, because a reader that
+  // folds beside one that then declines for its own reasons leaves the buffer
+  // AND duplicates the work. On the ROO preproc at 1k rows it takes every one
+  // of the 23 columns where a select reads a flip: kernel time 39.6 -> 37.1 ms
+  // and peak GPU RAM 27.97 -> 26.93 GB, with no column left materialized for a
+  // consumer that declined.
+  bool foldSharedChains{true};
+
+  // If true, cooperative-grid mode expands tw.masked_select_jagged into its
+  // multi-kernel stages instead of the single-node cg form. The stages reserve
+  // the output list to the exact selected count, which the cg form cannot do:
+  // with no host round trip it must over-allocate to the mask length and set
+  // the real shape on device. The stages stay in separate launches inside the
+  // cg grid because each names its predecessor through inputFromPreviousKernel,
+  // which breaks that producer into its own kernel whatever the grid mode.
+  bool mkSelect{false};
+
+  // If true, alongside each composite kernel also compile one single-op kernel
+  // per op it contains, named <composite>_op_<opCode>. Diagnostic only: the
+  // per-op kernels are never launched for results, they exist so the register /
+  // shared / local memory and occupancy numbers logged after graph construction
+  // are available at one-op resolution instead of only for the fused whole.
+  // Their compiles are queued with the composite's, so the extra cost is
+  // compile parallelism rather than serial latency. Off by default.
+  bool configPerOp{false};
+  // If true, emit a step's blocks in descending projected latency instead of
+  // in op order, so the ops expected to run longest start at t=0 and the cheap
+  // ones backfill SMs as those retire. Blocks are dispatched to SMs roughly in
+  // index order, which is what makes the order matter; nothing about the work
+  // itself changes. Off by default.
+  bool orderBlocksByCost{false};
+
+  // If true, a step whose single launch is badly balanced -- or whose
+  // occupancy one shared-memory-hungry op has cut for everyone -- is split
+  // into several launches, each packed to about one wave of the occupancy its
+  // own ops allow. Same-stream launches serialize, so this trades one skewed
+  // wave for a few full ones; it only pays where the imbalance is real, which
+  // is what the gate below measures.
+  //
+  // On by default: a step with more launches than the grid has blocks cannot
+  // give its large ops more than a block or two, because every launch takes one
+  // first and the cooperative trim then shaves what is left off the tallest.
+  // Splitting is the only thing that gets those blocks back.
+  bool partitionLaunches{true};
+
+  // Most launches one step may be split into. Also the multiple of one wave
+  // the block array is reserved for, so raising it costs pinned and device
+  // memory on every step whether or not it splits.
+  int32_t maxLaunchWaves{3};
+
+  // GridStats::skew (the step's makespan over a perfectly balanced, fully
+  // occupied one) at and above which partitionLaunches splits a step that has
+  // not been measured yet.
+  float launchSkewThreshold{1.3f};
+
+  // GPU microseconds of block idle time, measured on the step's previous
+  // execution, at and above which partitionLaunches splits the step.
+  float launchSplitMinUs{30.0f};
+
+  // Microseconds of GPU time a block should be worth before the packer opens
+  // one. Converted to cost units with the thread-block clocks the previous
+  // execution of the same step measured, so it adapts to what the ops actually
+  // do rather than to the static cost model. 0 divides the step evenly over
+  // one wave instead, which reproduces today's pro-rata split.
+  float minBlockUs{100.0f};
+
+  // If true, a step's blocks are sized against a per-block work quantum and
+  // the total rounded up to whole waves, instead of being handed out pro rata
+  // against a single wave's worth and then trimmed.
+  //
+  // The pro-rata split cannot survive a step with about as many ops as a wave
+  // has blocks: every op takes one block off the top whatever it costs, and
+  // the cooperative trim then takes what is left from the tallest. On the ROO
+  // graph one step spends 210 of 441 blocks on copies holding 0.1% of the work
+  // and leaves a 1.2M-element op on two. Sizing by quantum asks instead how
+  // many blocks of a given duration the work is worth, and emits that many --
+  // over several launches when it does not fit in one wave, which is what
+  // makes the answer independent of how many ops the step happens to have.
+  bool quantumGrid{false};
+
+  // Preferred blocks per SM for individual kernel ops, keyed by opcode. Absent
+  // or zero means unspecified, which is every op unless something says
+  // otherwise.
+  //
+  // An op with a preference is only packed into a launch with ops that share
+  // it, and that launch's capacity is numSMs times the preference rather than
+  // numSMs times the occupancy its shared memory allows. So a preference both
+  // segregates the op and narrows the grid it runs on.
+  //
+  // What it is for: an op whose access pattern is scattered may go faster with
+  // fewer concurrent warps -- less pressure on the memory system's outstanding
+  // requests, better L2 and TLB reuse. The other way to buy that is dynamic
+  // shared memory, which works (blocksPerSM divides sharedPerSM by the
+  // per-block request) but pays for it in L1: on an A100 shared and L1 come out
+  // of one 192 KB pool, so starving occupancy that way also starves the cache
+  // the op depends on. Narrowing the grid costs nothing but blocks.
+  //
+  // Manual for now -- set it from the command line, measure, and read the
+  // per-op block counts and clocks back out of the trace. The intent is that
+  // something eventually learns these the way autoAdjustCost learns cost
+  // multipliers, at which point this map is where the learned values land.
+  std::unordered_map<int32_t, int32_t> preferBlocksPerSm;
+
+  /// Preferred blocks per SM for the kernel op with this opcode, or 0 when
+  /// nothing is specified for it.
+  int32_t preferredBlocksPerSm(int32_t opCode) const {
+    auto it = preferBlocksPerSm.find(opCode);
+    return it == preferBlocksPerSm.end() ? 0 : it->second;
+  }
+
+  /// Returns the active config: the thread-local override set by
+  /// waveConfigOverride() when non-null, otherwise the process-wide singleton.
+  /// The singleton is not thread-safe; all of its mutations must happen before
+  /// concurrent reads.
   FOLLY_EXPORT static WaveConfig& get() {
+    if (auto* configOverride = waveConfigOverride()) {
+      return *configOverride;
+    }
     static WaveConfig instance;
     return instance;
   }
+
+  /// Returns a compact, comma-separated list of the settings whose value
+  /// differs from its default (e.g. "trace=16, autoAdjustCost=false,
+  /// freeIntermediates=true"), or "defaults" when every field is at its
+  /// default. Used in the performance report so a run's active configuration is
+  /// self-documenting.
+  std::string toString() const;
 };
 
 } // namespace torch::wave

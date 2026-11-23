@@ -22,17 +22,28 @@ Generic Configuration
      - 1024
      - Preferred number of rows to be returned by operators from Operator::getOutput. It is used when an estimate of
        average row size is not known. When the estimate of average row size is known, preferred_output_batch_bytes is used.
+       Must be at least 1.
    * - max_output_batch_rows
      - integer
      - 10000
      - Max number of rows that could be return by operators from Operator::getOutput. It is used when an estimate of
        average row size is known and preferred_output_batch_bytes is used to compute the number of output rows.
+       Must be at least 1.
    * - merge_join_output_batch_start_size
      - integer
      - 0
      - Initial output batch size in rows for MergeJoin operator. When non-zero, the batch size starts at this value
        and is dynamically adjusted based on the average row size of previous output batches. When zero (default),
        dynamic adjustment is disabled and the batch size is fixed at preferred_output_batch_rows.
+   * - merge_join_stream_left_side
+     - bool
+     - true
+     - Stream the left side of an inner or left MergeJoin instead of buffering the whole equal-key group. When a key
+       is skewed the group can span many input batches and all of them are held until the group is done. With this
+       set, such joins drop the left batches whose rows have been emitted and resume the group from the batches read
+       next, bounding left-side retention to two batches. Only applies to inner and left joins without a filter;
+       every other join type revisits the left group, so the config is inert there. Set to false to restore
+       buffering of the whole group.
    * - max_elements_size_in_repeat_and_sequence
      - integer
      - 10000
@@ -72,6 +83,18 @@ Generic Configuration
        supplied "America/Los_Angeles", then "1970-01-01" will be converted to -28800 instead of 0. Similarly, timestamp
        to date conversions will adhere to user 'session_timezone', e.g: Timestamp(0) to Date will be -1 (number of days
        since epoch) for "America/Los_Angeles".
+   * - ignore_time_zone_label
+     - bool
+     - false
+     - Selects whether to ignore a TIMESTAMP WITH TIME ZONE value's stored time zone label. If true, values render the
+       UTC instant in the session time zone, so values that compare equal produce equal results. If false, each value
+       renders using its stored time zone label. Covers field extraction (except ``timezone_hour`` and
+       ``timezone_minute``, which report
+       the offset stored in the value), formatting, date arithmetic, and ``CAST`` to ``VARCHAR``, ``DATE``, ``TIME``
+       and ``TIMESTAMP``. Of the interval operators only ``INTERVAL YEAR TO MONTH`` is affected; ``INTERVAL DAY TO
+       SECOND`` operates on milliseconds and never consults a time zone. For ``CAST`` to ``TIMESTAMP``,
+       ``adjust_timestamp_to_session_timezone=true`` returns the UTC instant. When that property is false, this
+       property selects the session or stored time zone.
    * - track_operator_cpu_usage
      - bool
      - true
@@ -101,11 +124,11 @@ Generic Configuration
      - Used for backpressure to block local exchange producers when the local exchange buffer reaches or exceeds this size.
    * - max_local_exchange_partition_count
      - integer
-     - 2^32
+     - 2^32 - 1
      - Limits the number of partitions created by a local exchange. Partitioning data too granularly can lead to poor performance.
        This setting allows increasing the task concurrency for all pipelines except the ones that require a local partitioning.
        Affects the number of drivers for pipelines containing LocalPartitionNode and cannot exceed the maximum number of
-       pipeline drivers configured for the task.
+       pipeline drivers configured for the task. Must be at least 1.
    * - exchange.max_buffer_size
      - integer
      - 32MB
@@ -119,6 +142,13 @@ Generic Configuration
        creating tiny batches which may have a negative impact on performance when the cost of creating vectors is high
        (for example, when there are many columns). To avoid latency degradation, the exchange client unblocks a consumer
        when 1% of the data size observed so far is accumulated.
+   * - exchange_output_batch_rows
+     - integer
+     - 0
+     - The number of rows the Exchange operator fills each output batch to. When positive, it replaces the target the
+       operator derives from preferred_output_batch_bytes and an estimate of the row size. A batch holds only pages
+       taken from the exchange queue together, at most preferred_output_batch_bytes, so it can have fewer rows. A Presto
+       page is never split, so a batch can exceed this by part of a page. 0 keeps the derived target.
    * - merge_exchange.max_buffer_size
      - integer
      - 128MB
@@ -138,6 +168,7 @@ Generic Configuration
      - integer
      - 2
      - Maximum number of vectors buffered in each local merge source before blocking to wait for consumers.
+       Must be at least 1.
    * - max_page_partitioning_buffer_size
      - integer
      - 32MB
@@ -169,10 +200,27 @@ Generic Configuration
    * - hash_probe_bloom_filter_pushdown_max_size
      - integer
      - 0
-     - The maximum byte size of Bloom filter that can be generated from hash
-       probe.  When set to 0, no Bloom filter will be generated.  To achieve
-       optimal performance, this should not be too larger than the CPU cache
-       size on the host.
+     - Maximum size in bytes of the Bloom filter that a hash join build
+       pushes down to the probe-side scan. 0 disables Bloom filters. A
+       build uses a Bloom filter when its keys have too many distinct
+       values for an exact filter. The filter takes about 1.2 bytes per
+       build-side row, so 16 MB covers builds of up to about 14 million
+       rows. Larger builds produce no Bloom filter. The scan tests every
+       row against the filter, so the filter should fit in the L3 cache
+       with room to spare. Half the L3 size works well, for example
+       16 MB on hosts with a 32 MB L3.
+   * - bypass_hash_probe_bloom_filter_min_rows
+     - integer
+     - 0
+     - The number of probe rows used to decide whether to bypass the build-side
+       Bloom filter for left joins and non-null-aware left semi-project and left
+       anti joins. When set to 0, local Bloom filter probing is disabled.
+   * - bypass_hash_probe_bloom_filter_min_pct
+     - integer
+     - 85
+     - Bypass the build-side Bloom filter if its acceptance percentage meets
+       or exceeds this value. When set to 0, the Bloom filter is bypassed
+       without sampling.
    * - debug.validate_output_from_operators
      - bool
      - false
@@ -224,6 +272,10 @@ Generic Configuration
      - false
      - By default, if a key is found in multiple given maps, that key's value in the resulting map comes from the last one of those maps.
        If true, throws exception when duplicate keys are found. This configuration is needed by Spark functions `CreateMap`, `MapFromArrays`, `MapFromEntries`, `StringToMap`, `MapConcat`, `TransformKeys`.
+   * - generate_constant_maps_as_flat_maps
+     - bool
+     - false
+     - If true, map functions that support it build a flat map when every key is constant. Today only Spark `CreateMap` supports it.
    * - index_lookup_join_max_prefetch_batches
      - integer
      - 0
@@ -258,12 +310,28 @@ Generic Configuration
      - Floor the RPC flow\-control congestion window may shrink to under overload in the RPC operator.
        Default 1, which never fully stalls dispatch. The controller clamps this to the range
        [1, maxWindow].
+   * - rpc.congestion.batch_start_window
+     - integer
+     - 0
+     - Initial per\-driver BATCH RPC congestion window. 0 keeps the built\-in default of 2.
+       Positive values are clamped to [minWindow, maxWindow]. PER_ROW always starts at its ceiling.
+       Size at or below the backend's measured concurrency knee: starting above it seeds the
+       unloaded\-RTT baseline with queueing delay, leaving only explicit overload errors to shrink
+       the window.
    * - rpc.congestion.step_coef
      - double
      - 1.0
      - Multiplier on the RPC congestion window's sqrt(window) additive\-increase headroom. Default 1.0
        is the plain sqrt headroom; lower values converge tighter at small windows. The controller
        clamps this to be non\-negative.
+   * - rpc.congestion.async_growth_max_window
+     - integer
+     - 0
+     - Cap for per\-driver BATCH window growth on clean completions that carry no usable latency
+       sample. 0 (default) disables recovery growth: overload may shrink the window, and clean
+       completions do not grow it back toward the start. Positive values let the window discover
+       capacity additively up to the cap. A positive value below the effective BATCH start window
+       is raised to that start. The congestion max window remains the overall ceiling.
 
 
 Expression Evaluation Configuration
@@ -323,6 +391,14 @@ Expression Evaluation Configuration
      - bool
      - false
      - This flag makes the Row conversion to by applied in a way that the casting row field are matched by name instead of position.
+   * - cast_string_to_floating_point_lenient_inf_nan
+     - bool
+     - false
+     - If true, casting a VARCHAR to REAL or DOUBLE with Presto semantics also accepts the C-style spellings of the
+       special floating-point values: ``inf``, ``infinity`` and ``nan`` in any letter case, with an optional leading
+       sign. By default only the Presto spellings ``Infinity`` and ``NaN`` are accepted, in exactly that letter case.
+       This deviates from Presto; enable it to cast data whose writer printed the values the way glibc, Python and
+       numpy do. Spark CAST and casts from JSON are not affected.
    * - expression.max_array_size_in_reduce
      - integer
      - 100000
@@ -331,6 +407,12 @@ Expression Evaluation Configuration
      - integer
      - 100
      - Controls maximum number of compiled regular expression patterns per batch.
+   * - expression.min_rows_for_peeling
+     - integer
+     - 0
+     - Minimum number of selected rows for expression evaluation to peel dictionary encodings off its inputs. Below it,
+       a function whose only non-constant input is a dictionary gets that input flattened instead, unless its rows are
+       large enough that copying them costs more than peeling.
    * - debug_disable_expression_with_peeling
      - bool
      - false
@@ -416,6 +498,11 @@ Spilling
      - boolean
      - false
      - When `spill_enabled` is true, determines whether LocalMerge operators can spill to disk to cap memory usage.
+   * - local_merge_max_num_merge_sources
+     - integer
+     - 2^32 - 1
+     - When `local_merge_spill_enabled` is true, the maximum number of sources a LocalMerge operator merges at a time.
+       Must be at least 1.
    * - mixed_grouped_mode_hash_join_spill_enabled
      - boolean
      - false
@@ -602,6 +689,12 @@ Aggregation
      - In streaming aggregation, wait until we have enough number of output rows
        to produce a batch of size specified by this. If set to 0, then
        Operator::outputBatchRows will be used as the min output batch rows.
+   * - vector_index_train_threads
+     - integer
+     - 1
+     - Number of threads :func:`vector_index_train` trains a codec on, for both
+       OpenMP and MKL. Positive. Training runs on its driver's thread with the
+       default; more threads compete with the other drivers on the host.
 
 Table Scan
 ------------
@@ -654,13 +747,13 @@ Table Writer
      - Description
    * - task_writer_count
      - integer
-     - 1
-     - The number of parallel table writer threads per task.
+     - 4
+     - The number of parallel table writer threads per task. Must be at least 1.
    * - task_partitioned_writer_count
      - integer
      - task_writer_count
      - The number of parallel table writer threads per task for partitioned
-       table writes. If not set, use 'task_writer_count' as default.
+       table writes. If not set, use 'task_writer_count' as default. Must be at least 1.
    * - scaled_writer_rebalance_max_memory_usage_ratio
      - double
      - 0.7
@@ -887,6 +980,11 @@ Common Options
      - bool
      - true
      - Enable selective Nimble reader. Session: ``selective_nimble_reader_enabled``.
+   * - ``nimble-lazy-file-stats``
+     - bool
+     - false
+     - Decode Nimble file column statistics on first use, and only those a read needs, instead of all
+       of them when the file is opened. Do not prepend ``hive.``. Session: ``nimble_lazy_file_stats``.
    * - ``index-enabled``
      - bool
      - false
@@ -944,6 +1042,16 @@ Common Options
        decompression and decode CPU time metrics for each column, reported as runtime metrics in the format
        ``column_<nodeId>.<type>.decompressCPUTimeNanos`` and ``column_<nodeId>.<type>.decodeCPUTimeNanos``.
        Useful for performance analysis and identifying slow columns. Session: ``reader.collect_column_cpu_metrics``.
+   * - ``use-column-names``
+     - bool
+     - false
+     - Map table fields to file fields using names instead of indices. This is
+       a connector/session-level default column matching policy and applies
+       uniformly to all file formats read by the connector, for example ORC,
+       DWRF, and Parquet. Split-specific column mapping mode, when present,
+       takes precedence over this setting. The connector property is scoped by
+       connector ID, for example ``hive.use-column-names`` or ``iceberg.use-column-names``.
+       Session: ``use_column_names``.
 
 ORC Options (prefix ``hive.orc.``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -957,10 +1065,6 @@ ORC Options (prefix ``hive.orc.``)
      - Type
      - Default Value
      - Description
-   * - ``use-column-names``
-     - bool
-     - false
-     - Map ORC table field names to file field names using names, not indices. Configure as ``orc.use-column-names``. Key ``hive.orc.use-column-names`` is also accepted. Session: ``orc_use_column_names``.
    * - ``footer-speculative-io-size``
      - integer
      - 256KB
@@ -1018,20 +1122,23 @@ Parquet Options (prefix ``hive.parquet.``)
      - Type
      - Default Value
      - Description
-   * - ``use-column-names``
-     - bool
-     - false
-     - Map Parquet table field names to file field names using names, not indices. Session: ``parquet_use_column_names``.
-   * - ``allow-int32-narrowing``
-     - bool
-     - false
-     - Allow reading INT32 Parquet columns as a narrower integer type. Session: ``parquet_allow_int32_narrowing``.
    * - ``footer-speculative-io-size``
      - integer
      - 256KB
      - Speculative tail-read size in bytes when opening Parquet files. Controls how many bytes are read from the end
        of the file to load the footer and nearby metadata in a single IO operation.
        Set to 0 for adaptive mode. Session: ``parquet_footer_speculative_io_size``.
+   * - ``allow-int32-narrowing``
+     - bool
+     - false
+     - Allow reading INT32 Parquet columns as a narrower integer type. Session: ``parquet_allow_int32_narrowing``.
+   * - ``null-struct-if-all-fields-missing``
+     - bool
+     - false
+     - When name-based mapping is enabled and all requested fields of a struct
+       are missing in a Parquet file, return a NULL struct instead of preserving
+       the parent struct nullness and returning a non-null struct with all-null
+       children. Session: ``parquet_null_struct_if_all_fields_missing``.
    * - ``footer-memory-tracking-threshold``
      - integer
      - disabled (max uint64)
@@ -1059,7 +1166,7 @@ Parquet Options (prefix ``hive.parquet.``)
        silently over-consuming. The reservation shrinks as row groups are
        skipped by filterRowGroups and is released in full when the reader
        is destroyed. When tracking engages, the estimate is also surfaced
-       per scan via the runtime stat ``parquetFooterEstimatedBytes`` so
+       per scan via the runtime stat ``parquet.footerEstimatedBytes`` so
        operators can compare it against actual pool usage. Session: ``parquet_footer_memory_tracking_threshold``.
    * - ``writer.max-target-file-size``
      - capacity
@@ -1067,7 +1174,14 @@ Parquet Options (prefix ``hive.parquet.``)
      - Maximum target file size for Parquet writers. When a file exceeds this size during writing, the writer
        closes the current file and starts writing to a new file. Accepts human-readable values like
        "1GB". Zero means no limit (default). File rotation is not supported for bucketed tables or
-       sorted writes. Session: ``parquet_writer_max_target_file_size``.
+       sorted writes.
+
+       Session: ``parquet_writer_max_target_file_size``.
+
+       Row-group sizing is independent of this setting. The soft byte target is configured by
+       ``writer.row-group-size``, and the row count by ``writer.row-group-rows``. When
+       ``writer.max-target-file-size`` is set, the writer may flush the current row group early so
+       the accumulated file size is visible and rotation can occur.
    * - ``writer.enable-dictionary``
      - bool
      - true
@@ -1097,6 +1211,16 @@ Parquet Options (prefix ``hive.parquet.``)
      - integer
      - 1024
      - Batch size used when writing into Parquet through Arrow bridge. Session: ``hive.parquet.writer.batch_size``.
+   * - ``writer.row-group-size``
+     - string
+     - 128MB
+     - Soft target for the serialized row group size. The estimate includes compressed bytes for
+       encoded pages and estimated bytes for data that has not yet been serialized into pages, so a
+       row group may slightly exceed the target. Session: ``parquet_writer_row_group_size``.
+   * - ``writer.row-group-rows``
+     - integer
+     - 1048576
+     - Maximum number of rows in a row group. Session: ``parquet_writer_row_group_rows``.
    * - ``writer.created-by``
      - string
      - parquet-cpp-velox version 0.0.0
@@ -1107,6 +1231,21 @@ Parquet Options (prefix ``hive.parquet.``)
      - Whether to store DECIMAL values using integer physical types (INT32/INT64) when precision allows.
        When false, all DECIMAL values are stored as FIXED_LEN_BYTE_ARRAY regardless of precision.
        Session: ``hive.parquet.writer.enable_store_decimal_as_integer``.
+   * - ``writer.enable-page-index``
+     - bool
+     - true
+     - Whether to write the Parquet page index (column index and offset index) when writing into
+       Parquet through the Arrow bridge. When enabled, per-page statistics are stored in the page
+       index instead of the data page headers, letting readers skip pages that cannot match a filter.
+       Session: ``hive.parquet.writer.enable_page_index``.
+   * - ``writer.size-statistics-level``
+     - string
+     - PAGE_AND_COLUMN_CHUNK
+     - Controls Parquet size statistics written by the Arrow bridge. ``NONE`` disables size
+       statistics; ``COLUMN_CHUNK`` writes only column-chunk statistics; and
+       ``PAGE_AND_COLUMN_CHUNK`` writes both column-chunk and page-level statistics. Page-level
+       statistics require ``writer.enable-page-index`` to be enabled.
+       Session: ``hive.parquet.writer.size_statistics_level``.
 
 Nimble Options (prefix ``hive.nimble.``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1136,10 +1275,6 @@ Nimble Options (prefix ``hive.nimble.``)
        not be triggered. NOTE: lazy IO applies the same restriction as lazy materialization which doesn't
        allow lazy IO across stripes. Configure as ``nimble.lazy-column-io``; do not prepend ``hive.``.
        Session: ``nimble_lazy_column_io``.
-   * - ``string-decoder-zero-copy``
-     - bool
-     - false
-     - Enable zero-copy string decoding in Nimble selective reader. Configure as ``nimble.string-decoder-zero-copy``; do not prepend ``hive.``. Session: ``nimble_string_decoder_zero_copy``.
    * - ``preserve-dictionary-encoding``
      - bool
      - false
@@ -1154,6 +1289,12 @@ Nimble Options (prefix ``hive.nimble.``)
 
 ``Amazon S3 Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+The S3 configuration keys below use the ``s3.`` prefix and are shared by all
+connectors that read from or write to S3, such as Hive, Iceberg, and Paimon.
+The legacy ``hive.s3.`` prefix is still accepted as a deprecated fallback; a
+key set with the ``s3.`` prefix takes precedence over the same key set with the
+``hive.s3.`` prefix. New configurations should use the ``s3.`` prefix.
+
 .. list-table::
    :widths: 30 10 10 70
    :header-rows: 1
@@ -1162,98 +1303,103 @@ Nimble Options (prefix ``hive.nimble.``)
      - Type
      - Default Value
      - Description
-   * - hive.s3.use-instance-credentials
+   * - ``s3.use-instance-credentials``
      - bool
      - false
      - Use the EC2 metadata service to retrieve API credentials. This works with IAM roles in EC2.
-   * - hive.s3.aws-access-key
+   * - ``s3.aws-access-key``
      - string
      -
      - Default AWS access key to use.
-   * - hive.s3.aws-secret-key
+   * - ``s3.aws-secret-key``
      - string
      -
      - Default AWS secret key to use.
-   * - hive.s3.endpoint
+   * - ``s3.endpoint``
      - string
      -
      - The S3 storage endpoint server. This can be used to connect to an S3-compatible storage system instead of AWS.
-   * - hive.s3.endpoint.region
+   * - ``s3.endpoint.region``
      - string
      - us-east-1
      - The S3 storage endpoint server region. Default is set by the AWS SDK. If not configured, region will be attempted
-       to be parsed from the hive.s3.endpoint value.
-   * - hive.s3.path-style-access
+       to be parsed from the ``s3.endpoint`` value.
+   * - ``s3.path-style-access``
      - bool
      - false
      - Use path-style access for all requests to the S3-compatible storage. This is for S3-compatible storage that
        doesn't support virtual-hosted-style access.
-   * - hive.s3.ssl.enabled
+   * - ``s3.ssl.enabled``
      - bool
      - true
      - Use HTTPS to communicate with the S3 API.
-   * - hive.s3.log-level
+   * - ``s3.log-level``
      - string
      - FATAL
      - **Allowed values:** "OFF", "FATAL", "ERROR", "WARN", "INFO", "DEBUG", "TRACE".
        Granularity of logging generated by the AWS C++ SDK library.
-   * - hive.s3.log-location
+   * - ``s3.log-location``
      - string
      - ""
      - Specifies the path where the log files are created. Generated log files start with "aws_sdk\_" and use the default AWS S3 logger. Example: setting "/tmp" results in files "/tmp/aws_sdk_*".
-   * - hive.s3.payload-signing-policy
+   * - ``s3.payload-signing-policy``
      - string
      - Never
      - **Allowed values:** "Always", "RequestDependent", "Never".
        When set to "Always", the payload checksum is included in the signature calculation.
        When set to "RequestDependent", the payload checksum is included based on the value returned by "AmazonWebServiceRequest::SignBody()".
-   * - hive.s3.iam-role
+   * - ``s3.iam-role``
      - string
      -
      - IAM role to assume.
-   * - hive.s3.iam-role-session-name
+   * - ``s3.iam-role-session-name``
      - string
      - velox-session
      - Session name associated with the IAM role.
-   * - hive.s3.use-proxy-from-env
+   * - ``s3.use-proxy-from-env``
      - bool
      - false
      - Utilize the configuration of the environment variables http_proxy, https_proxy, and no_proxy for use with the S3 API.
-   * - hive.s3.connect-timeout
+   * - ``s3.use-fips``
+     - bool
+     -
+     - Use AWS FIPS endpoints. When unset, the ``AWS_USE_FIPS_ENDPOINT`` environment variable decides. Cannot be combined
+       with ``s3.endpoint``. See `FIPS Endpoints`_.
+   * - ``s3.connect-timeout``
      - string
      -
      - Socket connect timeout.
-   * - hive.s3.socket-timeout
+   * - ``s3.socket-timeout``
      - string
      -
      - Socket read timeout.
-   * - hive.s3.max-connections
+   * - ``s3.max-connections``
      - integer
      -
      - Maximum concurrent TCP connections for a single http client.
-   * - hive.s3.max-attempts
+   * - ``s3.max-attempts``
      - integer
      -
      - Maximum attempts for connections to a single http client, work together with retry-mode. By default, it's 3 for standard/adaptive mode
        and 10 for legacy mode.
-   * - hive.s3.retry-mode
+   * - ``s3.retry-mode``
      - string
      -
      - **Allowed values:** "standard", "adaptive", "legacy". By default it's empty, S3 client will be created with RetryStrategy.
        Legacy mode only enables throttled retry for transient errors.
        Standard mode is built on top of legacy mode and has throttled retry enabled for throttling errors apart from transient errors.
        Adaptive retry mode dynamically limits the rate of AWS requests to maximize success rate.
-   * - hive.s3.aws-credentials-provider
+   * - ``s3.aws-credentials-provider``
      - string
      -
      - A custom credential provider, if specified, will be used to create the client in favor of other authentication mechanisms.
        The provider must be registered using "registerAWSCredentialsProvider" before it can be used.
-   * - hive.s3.aws-imds-enabled
+   * - ``s3.aws-imds-enabled``
      - bool
      - true
      - AWS Instance Metadata Service (IMDS) is an AWS EC2 instance component used by applications to securely access metadata.
        We must disable it on other instances to avoid high first-time read latency from S3 compatible object storages.
-   * - hive.s3.min-part-size
+   * - ``s3.min-part-size``
      - string
      - 10MB
      - Minimum multi-part upload part size. The smallest allowed value is 5MB. The largest allowed value is 5GB.
@@ -1264,11 +1410,27 @@ Nimble Options (prefix ``hive.nimble.``)
 
 Bucket Level Configuration
 """"""""""""""""""""""""""
-All "hive.s3.*" config (except "hive.s3.log-level") can be set on a per-bucket basis. The bucket-specific option is set by
-replacing the "hive.s3." prefix on a config with "hive.s3.bucket.BUCKETNAME.", where BUCKETNAME is the name of the
-bucket. e.g. the endpoint for a bucket named "velox" can be specified by the config "hive.s3.bucket.velox.endpoint".
-When connecting to a bucket, all options explicitly set will override the base "hive.s3." values.
+All ``s3.*`` config except ``s3.log-level`` can be set on a per-bucket basis.
+The bucket-specific option is set by replacing the ``s3.`` prefix on a config
+with ``s3.bucket.BUCKETNAME.``, where BUCKETNAME is the name of the bucket. For
+example, the endpoint for a bucket named "velox" can be specified by the config
+``s3.bucket.velox.endpoint``. When connecting to a bucket, all options
+explicitly set will override the base ``s3.`` values. The deprecated
+``hive.s3.`` prefix follows the same rules (for example
+``hive.s3.bucket.velox.endpoint``).
 These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apache.org/docs/current/hadoop-aws/tools/hadoop-aws/index.html>`_.
+
+FIPS Endpoints
+""""""""""""""
+``s3.use-fips`` sets ``useFIPS`` on the AWS SDK client, which then resolves the
+AWS FIPS endpoint for the region. It also applies to the STS calls of
+``s3.iam-role``. When unset, the environment variable ``AWS_USE_FIPS_ENDPOINT``
+decides. The AWS SDK rejects FIPS combined with ``s3.endpoint``, so requests
+fail with "A custom endpoint cannot be combined with FIPS". Set
+``s3.use-fips=false`` for buckets with a custom endpoint, including an explicit
+AWS FIPS endpoint. Web identity credentials also need ``AWS_ENDPOINT_URL_STS``
+set to the STS FIPS host name, such as ``sts-fips.us-east-1.amazonaws.com``.
+The CRT uses the value as the host, so a URL with a scheme fails to resolve.
 
 ``Google Cloud Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1412,6 +1574,13 @@ Spark-specific Configuration
      - integer
      -
      - The current task's Spark partition ID. It's set by the query engine (Spark) prior to task execution.
+   * - spark.legacy_coding_error_action
+     - bool
+     - false
+     - If true, the Spark ``encode`` function replaces unmappable characters instead of reporting an error.
+       Corresponds to Spark 4.0's ``spark.sql.legacy.codingErrorAction``.
+       Set to true to match Spark 3.x's replacement behavior for the supported charsets.
+       Additional JDK charset names and aliases remain unsupported in either mode.
    * - spark.legacy_date_formatter
      - bool
      - false
@@ -1432,6 +1601,13 @@ Spark-specific Configuration
      - bool
      - true
      - If true, Spark ``collect_list`` aggregate function ignores nulls in the input.
+   * - spark.decimal_to_float_high_precision_cast_enabled
+     - bool
+     - false
+     - If true, casts from ``DECIMAL`` to ``REAL``/``DOUBLE`` use a high-precision conversion
+       (via an intermediate string) for values that cannot be represented exactly by floating
+       point arithmetic, aligning the result with Spark. Disabled by default due to the
+       significant performance regression; users sensitive to precision loss can enable it.
 
 Tracing
 --------
@@ -1551,11 +1727,16 @@ Reader options map to `libcudf parquet_reader_options <https://docs.rapids.ai/ap
      - bool
      - true
      - Whether to use BufferedInput for CudfHiveDataSource (can use AsyncDataCache when HiveConfig file handle cache is enabled).
-   * - cudf.hive.use-experimental-reader
-     - cudf.hive.use_experimental_reader
+   * - cudf.hive.preload-column-chunks
+     - cudf.hive.preload_column_chunks
      - bool
      - false
-     - Whether to use the experimental cuDF Parquet reader (Hybrid Scan) for highly selective filters. When enabled, uses `libcudf hybrid_scan_reader <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__reader>`_.
+     - Whether background split preparation starts fetching the first column-chunk pass. Active splits always start fetching when activated. Enabling this can overlap I/O with the previous split, but retains one pass of device buffers per preloaded split.
+   * - cudf.hive.serialize-io-requests
+     - cudf.hive.serialize_io_requests
+     - bool
+     - false
+     - Whether to serialize I/O submission batches to prevent requests from concurrent splits from interleaving.
    * - parquet.reader.use-pandas-metadata
      - parquet.reader.use_pandas_metadata
      - bool
@@ -1580,12 +1761,12 @@ Reader options map to `libcudf parquet_reader_options <https://docs.rapids.ai/ap
      - parquet.reader.chunk_read_limit
      - integer
      - 0
-     - Limit on total number of bytes to be returned per read (per table chunk); 0 means no limit. Maps to ``chunk_read_limit`` in `libcudf hybrid_scan_reader <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__reader>`_ (e.g. ``setup_chunking_for_filter_columns``, ``setup_chunking_for_payload_columns``).
+     - Limit on total number of bytes to be returned per read (per table chunk); 0 means no limit. Maps to ``chunk_read_limit`` in ``setup_chunking_for_all_columns`` of `libcudf hybrid_scan_multifile <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__multifile>`_.
    * - parquet.reader.pass-read-limit
      - parquet.reader.pass_read_limit
      - integer
      - 0
-     - Limit on the amount of memory (bytes) used for reading and decompressing data; 0 means no limit. This is a hint, not an absolute limit—if a single row group cannot fit within the limit, it will still be loaded. Affects how many row groups can be read at a time by limiting decompression space. Maps to ``pass_read_limit`` in `libcudf hybrid_scan_reader <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__reader>`_ (e.g. ``setup_chunking_for_filter_columns``, ``setup_chunking_for_payload_columns``).
+     - Limit on the amount of memory (bytes) used for reading and decompressing data; 0 means no limit. This is a hint, not an absolute limit—if a single row group cannot fit within the limit, it will still be loaded. When ``cudf.hive.preload-column-chunks`` is enabled, the first column chunk pass is fetched for up to ``max_split_preload_per_driver`` additional splits per driver. Budget this limit against the number of passes held at once rather than against a single pass. Maps to ``pass_read_limit`` in ``construct_row_group_passes`` and ``setup_chunking_for_all_columns`` of `libcudf hybrid_scan_multifile <https://docs.rapids.ai/api/libcudf/stable/classcudf_1_1io_1_1parquet_1_1experimental_1_1hybrid__scan__multifile>`_.
    * - parquet.reader.convert-strings-to-categories
      - parquet.reader.convert_strings_to_categories
      - bool

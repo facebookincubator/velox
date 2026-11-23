@@ -112,7 +112,7 @@ class E2EReaderTest : public testing::TestWithParam<ValueTypes> {
 };
 } // namespace
 
-TEST_P(E2EReaderTest, SharedDictionaryFlatmapReadAsStruct) {
+TEST_P(E2EReaderTest, sharedDictionaryFlatmapReadAsStruct) {
   const size_t batchCount = 10;
   size_t size = 1;
   auto pool = memory::memoryManager()->addLeafPool();

@@ -21,6 +21,7 @@
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/FunctionCallToSpecialForm.h"
 #include "velox/expression/SpecialForm.h"
+#include "velox/vector/FlatMapVector.h"
 
 namespace facebook::velox::exec {
 
@@ -116,6 +117,15 @@ class CastExpr : public SpecialForm {
       const MapType& fromType,
       const MapType& toType);
 
+  // Casts a flat map into a flat map. Each distinct key and the values of
+  // each key are cast once.
+  VectorPtr applyFlatMap(
+      const SelectivityVector& rows,
+      const FlatMapVector* input,
+      exec::EvalCtx& context,
+      const MapType& fromType,
+      const MapType& toType);
+
   VectorPtr applyArray(
       const SelectivityVector& rows,
       const ArrayVector* input,
@@ -185,6 +195,18 @@ class CastExpr : public SpecialForm {
       exec::EvalCtx& context,
       const TypePtr& fromType);
 
+  VectorPtr castToTimestampUTC(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& fromType);
+
+  VectorPtr castFromTimestampUTC(
+      const SelectivityVector& rows,
+      const BaseVector& input,
+      exec::EvalCtx& context,
+      const TypePtr& toType);
+
   VectorPtr castFromIntervalDayTime(
       const SelectivityVector& rows,
       const BaseVector& input,
@@ -201,7 +223,8 @@ class CastExpr : public SpecialForm {
       const SelectivityVector& rows,
       const BaseVector& input,
       exec::EvalCtx& context,
-      const TypePtr& fromType);
+      const TypePtr& fromType,
+      const TypePtr& toType);
 
   template <typename TInput, typename TOutput>
   void applyDecimalCastKernel(
@@ -294,6 +317,8 @@ class CastExpr : public SpecialForm {
       exec::EvalCtx& context,
       const BaseVector& input,
       VectorPtr& result);
+
+  bool verifyToTimestampCast(const TypePtr& fromType, const TypePtr& toType);
 
   VectorPtr applyTimestampToVarcharCast(
       const TypePtr& toType,

@@ -23,7 +23,7 @@
 include(FindPackageHandleStandardArgs)
 include(SelectLibraryConfigurations)
 
-find_library(ZSTD_LIBRARY_RELEASE zstd PATHS $ZSTD_LIBRARYDIR})
+find_library(ZSTD_LIBRARY_RELEASE zstd PATHS ${ZSTD_LIBRARYDIR})
 find_library(ZSTD_LIBRARY_DEBUG zstdd PATHS ${ZSTD_LIBRARYDIR})
 
 find_path(ZSTD_INCLUDE_DIR zstd.h PATHS ${ZSTD_INCLUDEDIR})

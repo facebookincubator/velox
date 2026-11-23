@@ -116,7 +116,7 @@ auto getReader(
 
 } // namespace
 
-TEST(CoalesceSegmentsTest, EmptyCase) {
+TEST(CoalesceSegmentsTest, emptyCase) {
   const Regions r = {};
 
   MockShouldCoalesce shouldCoalesce;
@@ -129,7 +129,7 @@ TEST(CoalesceSegmentsTest, EmptyCase) {
   EXPECT_EQ(resultRegions, expected);
 }
 
-TEST(CoalesceSegmentsTest, MergeAll) {
+TEST(CoalesceSegmentsTest, mergeAll) {
   const Regions r = {{0, 4}, {4, 4}, {8, 1}, {9, 2}, {11, 3}};
 
   MockShouldCoalesce shouldCoalesce;
@@ -146,7 +146,7 @@ TEST(CoalesceSegmentsTest, MergeAll) {
   EXPECT_EQ(resultRegions, expected);
 }
 
-TEST(CoalesceSegmentsTest, MergeNone) {
+TEST(CoalesceSegmentsTest, mergeNone) {
   const Regions r = {{0, 4}, {4, 4}, {8, 1}, {9, 2}, {11, 3}};
 
   MockShouldCoalesce shouldCoalesce;
@@ -164,7 +164,7 @@ TEST(CoalesceSegmentsTest, MergeNone) {
   EXPECT_EQ(resultRegions, expected);
 }
 
-TEST(CoalesceSegmentsTest, MergeOdd) {
+TEST(CoalesceSegmentsTest, mergeOdd) {
   const Regions r = {{0, 4}, {4, 4}, {8, 1}, {9, 2}, {11, 3}};
 
   auto isOdd = [](size_t i) { return i % 2 == 1; };
@@ -184,7 +184,7 @@ TEST(CoalesceSegmentsTest, MergeOdd) {
   EXPECT_EQ(resultRegions, expected);
 }
 
-TEST(CoalesceSegmentsTest, MergeEven) {
+TEST(CoalesceSegmentsTest, mergeEven) {
   const Regions r = {{{0, 4}, {4, 4}, {8, 1}, {9, 2}, {11, 3}}};
   auto isEven = [](size_t i) { return i % 2 == 0; };
 
@@ -203,7 +203,7 @@ TEST(CoalesceSegmentsTest, MergeEven) {
   EXPECT_EQ(resultRegions, expected);
 }
 
-TEST(CoalesceIfDistanceLETest, MultipleCases) {
+TEST(CoalesceIfDistanceLETest, multipleCases) {
   EXPECT_TRUE(willCoalesceIfDistanceLE(0, {0, 1}, {1, 1}, 0));
   EXPECT_FALSE(willCoalesceIfDistanceLE(0, {0, 1}, {2, 1}, 0));
 
@@ -218,7 +218,7 @@ TEST(CoalesceIfDistanceLETest, MultipleCases) {
   EXPECT_TRUE(willCoalesceIfDistanceLE(0, {0, 0}, {0, 1}, 0));
 }
 
-TEST(CoalesceIfDistanceLETest, MultipleSegments) {
+TEST(CoalesceIfDistanceLETest, multipleSegments) {
   uint64_t coalescedBytes = 0;
   auto willCoalesce = CoalesceIfDistanceLE(10, &coalescedBytes);
   EXPECT_TRUE(willCoalesce({0, 1}, {1, 1})); // 0
@@ -229,11 +229,11 @@ TEST(CoalesceIfDistanceLETest, MultipleSegments) {
   EXPECT_EQ(coalescedBytes, 19);
 }
 
-TEST(CoalesceIfDistanceLETest, SupportsNullArgument) {
+TEST(CoalesceIfDistanceLETest, supportsNullArgument) {
   EXPECT_NO_THROW(CoalesceIfDistanceLE(10, nullptr)({0, 10}, {20, 5})); // 10
 }
 
-TEST(CoalesceIfDistanceLETest, SegmentsMustBeSorted) {
+TEST(CoalesceIfDistanceLETest, segmentsMustBeSorted) {
   EXPECT_THROW(
       willCoalesceIfDistanceLE(0, {1, 1}, {0, 1}, 0),
       ::facebook::velox::VeloxRuntimeError);
@@ -248,7 +248,7 @@ TEST(CoalesceIfDistanceLETest, SegmentsMustBeSorted) {
       ::facebook::velox::VeloxRuntimeError);
 }
 
-TEST(CoalesceIfDistanceLETest, SegmentsCantOverlap) {
+TEST(CoalesceIfDistanceLETest, segmentsCantOverlap) {
   EXPECT_THROW(
       willCoalesceIfDistanceLE(0, {0, 1}, {0, 1}, 0),
       ::facebook::velox::VeloxRuntimeError);
@@ -271,7 +271,7 @@ TEST(CoalesceIfDistanceLETest, SegmentsCantOverlap) {
 
 class ReadToIOBufsTest : public testing::TestWithParam<bool> {};
 
-TEST_P(ReadToIOBufsTest, CanRead) {
+TEST_P(ReadToIOBufsTest, canRead) {
   Regions r = {{0, 1}, {5, 1}, {10, 6}, {16, 5}};
   std::vector<folly::IOBuf> iobufs;
   iobufs.reserve(r.size());

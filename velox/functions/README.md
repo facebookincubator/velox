@@ -112,7 +112,7 @@ of that template and its steps is given in details in `functions/common/VectorAr
 Stateful vector functions are function objects that can keep some state many runs of vector batches in the query so they
 can amortize the initialization cost even more than normal vector function which can hold state over each single input
 batch. One example of these functions is IN predicate in SQL where the list of items in IN expression are all given and
-can can be pre-processed. You can find the source in `functions/common/InPredicate.cpp`
+can be pre-processed. You can find the source in `functions/common/InPredicate.cpp`
 
 In addition to template pieces for normal Vector functions, the stateful predicate function need to provide a `create`
 function which passed to the their registration function. For example for `IN`:

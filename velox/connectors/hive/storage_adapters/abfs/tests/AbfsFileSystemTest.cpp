@@ -38,7 +38,7 @@
 #include "velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.h"
 #include "velox/connectors/hive/storage_adapters/abfs/tests/MockDataLakeFileClient.h"
 #include "velox/dwio/common/FileSink.h"
-#include "velox/exec/tests/utils/PortUtil.h"
+#include "velox/exec/tests/utils/Ports.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::filesystems;
@@ -158,7 +158,7 @@ class AbfsFileSystemTest : public testing::Test {
   }
 
   void SetUp() override {
-    auto port = facebook::velox::exec::test::getFreePort();
+    auto port = facebook::velox::exec::test::Ports::findFreePort();
     azuriteServer_ = std::make_shared<AzuriteServer>(port);
     azuriteServer_->start();
     auto tempFile = createFile();
@@ -167,7 +167,13 @@ class AbfsFileSystemTest : public testing::Test {
   }
 
   void TearDown() override {
-    azuriteServer_->stop();
+    // azuriteServer_ is left null if SetUp() threw before it could be
+    // constructed (e.g. the azurite-blob executable wasn't found).
+    // TearDown() runs unconditionally after SetUp(), even on failure, so
+    // it must not assume construction succeeded.
+    if (azuriteServer_ != nullptr) {
+      azuriteServer_->stop();
+    }
   }
 
   static std::string generateRandomData(int size) {

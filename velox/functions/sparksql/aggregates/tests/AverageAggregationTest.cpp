@@ -13,8 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <functional>
+
 #include <folly/init/Init.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/HashAggregationStatNames.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
@@ -30,7 +35,6 @@ class AverageAggregationTest : public AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
-    disableTestIncremental();
     registerAggregateFunctions("spark_", true);
   }
 
@@ -38,13 +42,10 @@ class AverageAggregationTest : public AggregationTestBase {
       const std::vector<RowVectorPtr>& input,
       const std::vector<RowVectorPtr>& expected,
       const std::vector<TypePtr>& argTypes) {
-    testAggregations(
-        input,
-        {},
-        {"spark_avg(c0)"},
-        {},
-        expected,
-        /*config*/ {});
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates({"spark_avg(c0)"})
+        .assertResults(expected);
   }
 
   core::PlanNodePtr createMergeExtractDecimal(
@@ -60,20 +61,22 @@ class AverageAggregationTest : public AggregationTestBase {
                 intermediateType, "c0")});
     avgAggregate.rawInputTypes = {intermediateType};
 
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto child =
-        PlanBuilder(planNodeIdGenerator).values({intermediateInput}).planNode();
-
-    return std::make_shared<core::AggregationNode>(
-        planNodeIdGenerator->next(),
-        core::AggregationNode::Step::kSingle,
-        std::vector<core::FieldAccessTypedExprPtr>{},
-        std::vector<core::FieldAccessTypedExprPtr>{},
-        std::vector<std::string>{"c0"},
-        std::vector{avgAggregate},
-        /*ignoreNullKeys=*/false,
-        /*noGroupsSpanBatches=*/false,
-        std::move(child));
+    return PlanBuilder()
+        .values(intermediateInput)
+        .addNode(
+            [&](const core::PlanNodeId& id, const core::PlanNodePtr& source) {
+              return std::make_shared<core::AggregationNode>(
+                  id,
+                  core::AggregationNode::Step::kSingle,
+                  std::vector<core::FieldAccessTypedExprPtr>{},
+                  std::vector<core::FieldAccessTypedExprPtr>{},
+                  std::vector<std::string>{"c0"},
+                  std::vector{avgAggregate},
+                  /*ignoreNullKeys=*/false,
+                  /*noGroupsSpanBatches=*/false,
+                  source);
+            })
+        .planNode();
   }
 };
 
@@ -88,7 +91,10 @@ TEST_F(AverageAggregationTest, avgAllNulls) {
           makeAllNullFlatVector<int64_t>(size),
       }),
   };
-  testAggregations(vectors, {}, {"spark_avg(c0)"}, "SELECT NULL");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"spark_avg(c0)"})
+      .assertResults("SELECT NULL");
 
   auto plan = PlanBuilder()
                   .values(vectors)
@@ -129,11 +135,12 @@ TEST_F(AverageAggregationTest, avgAllNulls) {
       }),
   };
   createDuckDbTable(vectors);
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"spark_avg(c1)"},
-      "SELECT c0, avg(c1) FROM tmp GROUP BY c0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"spark_avg(c1)"})
+      .withCompanion()
+      .assertResults("SELECT c0, avg(c1) FROM tmp GROUP BY c0");
 
   plan = PlanBuilder()
              .values(vectors)
@@ -161,8 +168,11 @@ TEST_F(AverageAggregationTest, avgDecimal) {
   auto shortDecimalInput = makeRowVector({shortDecimal});
   auto shortDecimalExpected = makeRowVector(
       {makeConstant<int64_t>(3'000 * kRescale, 1, DECIMAL(16, 5))});
-  testGlobalAverage(
-      {shortDecimalInput}, {shortDecimalExpected}, {DECIMAL(12, 1)});
+  AggregationTester(*this)
+      .inputs(shortDecimalInput)
+      .aggregates({"spark_avg(c0)"})
+      .withCompanion(CompanionPlans::kMergeOnly)
+      .assertResults(shortDecimalExpected);
 
   // Long decimal aggregation.
   auto longDecimalInput = makeRowVector({makeNullableFlatVector<int128_t>(
@@ -175,8 +185,11 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       DECIMAL(23, 4))});
   auto longDecimalExpected = makeRowVector({makeConstant<int128_t>(
       HugeInt::build(10, 300) * kRescale, 1, DECIMAL(27, 8))});
-  testGlobalAverage(
-      {longDecimalInput}, {longDecimalExpected}, {DECIMAL(23, 4)});
+  AggregationTester(*this)
+      .inputs(longDecimalInput)
+      .aggregates({"spark_avg(c0)"})
+      .withCompanion(CompanionPlans::kMergeOnly)
+      .assertResults(longDecimalExpected);
 
   // The total sum overflows the max int128_t limit.
   std::vector<int128_t> rawVector;
@@ -240,12 +253,11 @@ TEST_F(AverageAggregationTest, avgDecimal) {
       makeRowVector(
           {makeNullableFlatVector<int32_t>({3}),
            makeFlatVector(std::vector<int128_t>{-24976667}, DECIMAL(19, 6))})};
-  testAggregations(
-      inputRows,
-      {"c0"},
-      {"spark_avg(c1)"},
-      expectedResult,
-      /*config*/ {});
+  AggregationTester(*this)
+      .inputs(inputRows)
+      .groupBy({"c0"})
+      .aggregates({"spark_avg(c1)"})
+      .assertResults(expectedResult);
 
   // dividePrecision greater than resultScale in computeFinalResult.
   auto valueA = HugeInt::parse("11999999998800000000");
@@ -262,11 +274,11 @@ TEST_F(AverageAggregationTest, avgDecimal) {
            std::vector<int128_t>{HugeInt::parse("119999999994857142857143")},
            DECIMAL(38, 22))})};
 
-  testAggregations(
-      longDecimalInputRows,
-      {"c0"},
-      {"spark_avg(c1)"},
-      longDecimalExpectedResult);
+  AggregationTester(*this)
+      .inputs(longDecimalInputRows)
+      .groupBy({"c0"})
+      .aggregates({"spark_avg(c1)"})
+      .assertResults(longDecimalExpectedResult);
 }
 
 TEST_F(AverageAggregationTest, avgDecimalWithMultipleRowVectors) {
@@ -314,7 +326,7 @@ TEST_F(AverageAggregationTest, avgDecimalCompanionPartial) {
   auto input = makeRowVector(
       {makeFlatVector<int64_t>(shortDecimalRawVector, DECIMAL(12, 1))});
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .singleAggregation({}, {"spark_avg_partial(c0)"})
                   .planNode();
   const std::vector<int128_t> sumVector = {sum};
@@ -332,7 +344,7 @@ TEST_F(AverageAggregationTest, avgDecimalCompanionMerge) {
        makeFlatVector<int64_t>(std::vector<int64_t>{10, 10, 10})})});
 
   auto plan = PlanBuilder()
-                  .values({intermediateInput})
+                  .values(intermediateInput)
                   .singleAggregation({}, {"spark_avg_merge(c0)"})
                   .planNode();
   auto expected = makeRowVector({makeRowVector(
@@ -356,6 +368,85 @@ TEST_F(AverageAggregationTest, avgDecimalCompanionMergeExtract) {
   auto expected = makeRowVector(
       {makeFlatVector<int64_t>(std::vector<int64_t>{2000000}, DECIMAL(16, 5))});
   AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(AverageAggregationTest, abandonPartialAggregation) {
+  constexpr vector_size_t kBatchSize = 100;
+  std::vector<RowVectorPtr> data;
+  for (auto batch = 0; batch < 3; ++batch) {
+    data.push_back(makeRowVector(
+        {"k", "i", "d", "b", "v", "m"},
+        {makeFlatVector<int64_t>(
+             kBatchSize, [&](auto row) { return batch * kBatchSize + row; }),
+         makeFlatVector<int32_t>(
+             kBatchSize,
+             std::identity{},
+             [](auto row) { return row % 5 == 0; }),
+         makeFlatVector<double>(
+             kBatchSize,
+             std::identity{},
+             [](auto row) { return row % 7 == 0; }),
+         makeFlatIdentityVector<int64_t>(kBatchSize),
+         makeFlatIdentityVector<double>(kBatchSize),
+         makeFlatVector<bool>(
+             kBatchSize, [](auto row) { return row % 3 != 0; })}));
+  }
+  createDuckDbTable(data);
+
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"spark_avg(i)", "spark_avg(d)"})
+      .withCompanion()
+      .assertResults("SELECT avg(i), avg(d) FROM tmp");
+
+  core::PlanNodeId partialNodeId;
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .partialAggregation(
+                      {"k"}, {"spark_avg(i)", "spark_avg(d)"}, {"m", "m"})
+                  .capturePlanNodeId(partialNodeId)
+                  .finalAggregation()
+                  .planNode();
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
+          .assertResults(
+              "SELECT k, avg(i) FILTER (WHERE m), "
+              "avg(d) FILTER (WHERE m) FROM tmp GROUP BY k");
+
+  const auto stats =
+      exec::PlanNodeStats::extract(task->taskStats(), partialNodeId);
+  EXPECT_LT(
+      0,
+      stats.customSum(
+          exec::HashAggregationStatNames::kAbandonedPartialAggregationRows));
+  EXPECT_GT(
+      stats.customSum(
+          exec::HashAggregationStatNames::kToIntermediateFastPathCalls),
+      0);
+
+  // Exercise the all-selected, non-null fast paths for different and matching
+  // input and accumulator types, respectively.
+  core::PlanNodeId fastPartialNodeId;
+  plan = PlanBuilder()
+             .values(data)
+             .partialAggregation({"k"}, {"spark_avg(b)", "spark_avg(v)"})
+             .capturePlanNodeId(fastPartialNodeId)
+             .finalAggregation()
+             .planNode();
+  task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+             .maxDrivers(1)
+             .config(core::QueryConfig::kAbandonPartialAggregationMinRows, 1)
+             .config(core::QueryConfig::kAbandonPartialAggregationMinPct, 0)
+             .assertResults("SELECT k, avg(b), avg(v) FROM tmp GROUP BY k");
+
+  EXPECT_GE(
+      exec::PlanNodeStats::extract(task->taskStats(), fastPartialNodeId)
+          .customSum(
+              exec::HashAggregationStatNames::kToIntermediateFastPathCalls),
+      2);
 }
 
 } // namespace

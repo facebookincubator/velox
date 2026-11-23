@@ -73,9 +73,9 @@ of available functions [can be found here.](https://facebookincubator.github.io/
 
 Recent blog posts ([all posts](https://velox-lib.io/blog)):
 
-- [Making OpenZL Available in Nimble OSS](https://velox-lib.io/blog/openzl-in-nimble-oss) (2026-07-05)
-- [Why RIGHT SEMI JOIN Can Be Slower Than LEFT SEMI JOIN in Velox](https://velox-lib.io/blog/right-semi-join-performance) (2026-06-26)
-- [From copyBits to SIMD: Accelerating Parquet DELTA Decoding in Velox](https://velox-lib.io/blog/parquet-delta-decoding) (2026-06-17)
+- [Iceberg V3 in Velox](https://velox-lib.io/blog/iceberg-v3) (2026-10-30)
+- [Hybrid FlatMap: Group-Level Feature Projection in Nimble](https://velox-lib.io/blog/nimble-hybrid-flatmap) (2026-10-09)
+- [Parallel Encoding and Decoding in Nimble: Faster Flushes and Reads](https://velox-lib.io/blog/nimble-parallel-encoding-decoding) (2026-10-05)
 
 ## Community
 
@@ -144,6 +144,7 @@ Alternative combinations:
 | CentOS 9/RHEL 9 | gcc | 11 |
 | Ubuntu 20.04 | gcc | 11 |
 | Ubuntu 24.04 | clang | 15 |
+| CentOS 9/RHEL 9 | clang | system |
 
 ### Setting up dependencies
 
@@ -219,17 +220,24 @@ the individual install command, e.g. `setup-centos9.sh install_aws`.
 
 ### Using Clang on Linux
 
-Clang 15 can be additionally installed during the setup step for Ubuntu 22.04/24.04
+Clang can be additionally installed during the setup step for Ubuntu 22.04/24.04
 and CentOS 9 by setting the `USE_CLANG` environment variable prior to running the platform specific setup script.
 ```shell
 $ export USE_CLANG=true
 ```
-This will install and use Clang 15 to build the dependencies instead of using the default GCC compiler.
+This will install and use Clang to build the dependencies instead of using the default GCC compiler:
+Clang 15 on Ubuntu, and the system Clang with its OpenMP runtime on CentOS 9.
 
-Once completed, and before running any `make` command, set the compiler to be used:
+Once completed, and before running any `make` command, set the compiler to be used. On Ubuntu:
 ```shell
 $ export CC=/usr/bin/clang-15
 $ export CXX=/usr/bin/clang++-15
+$ make
+```
+On CentOS 9:
+```shell
+$ export CC=/usr/bin/clang
+$ export CXX=/usr/bin/clang++
 $ make
 ```
 
@@ -248,18 +256,12 @@ disable grouping on Linux, pass `-DVELOX_ENABLE_GROUPED_TESTS=OFF` via
 
 Note that,
 * Velox requires a compiler at the minimum GCC 11.0 or Clang 15.0.
-* Velox requires the CPU to support instruction sets:
-  * bmi
-  * bmi2
-  * f16c
-* Velox tries to use the following (or equivalent) instruction sets where available:
-  * On Intel CPUs
-    * avx
-    * avx2
-    * sse
-  * On ARM
-    * Neon
-    * Neon64
+* On x86 CPUs, Velox requires at least SSE4.2. By default, Velox builds for
+  `CPU_TARGET=avx` on AVX-capable hosts, which requires AVX, AVX2, FMA, F16C,
+  LZCNT, and BMI2. To build for the minimum x86 baseline, set
+  `CPU_TARGET=sse`.
+* On Arm CPUs, Velox supports Apple Silicon with `CPU_TARGET=arm64` and Linux
+  AArch64 with `CPU_TARGET=aarch64`.
 
 Build metrics for Velox are published at <https://facebookincubator.github.io/velox/bm-report/>
 

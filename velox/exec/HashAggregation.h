@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <mutex>
 #include <string_view>
 
 #include "velox/exec/GroupingSet.h"
@@ -24,18 +25,6 @@ namespace facebook::velox::exec {
 
 class HashAggregation : public Operator {
  public:
-  /// Runtime stat keys for hash aggregation.
-  /// Number of rows flushed in partial aggregation output.
-  static constexpr std::string_view kFlushRowCount = "flushRowCount";
-  /// Number of partial aggregation flush operations.
-  static constexpr std::string_view kFlushTimes = "flushTimes";
-  /// Ratio of output to input rows in partial aggregation as a percentage.
-  static constexpr std::string_view kPartialAggregationPct =
-      "partialAggregationPct";
-  /// Number of rows emitted after partial aggregation was abandoned.
-  static constexpr std::string_view kAbandonedPartialAggregationRows =
-      "abandonedPartialAggregationRows";
-
   HashAggregation(
       int32_t operatorId,
       DriverCtx* driverCtx,
@@ -48,7 +37,14 @@ class HashAggregation : public Operator {
   RowVectorPtr getOutput() override;
 
   bool needsInput() const override {
-    return !noMoreInput_ && !partialFull_;
+    // Guard on 'input_ == nullptr': HashAggregation buffers a single input
+    // batch in 'input_' -- after abandoning partial aggregation, and in
+    // distinct mode when the batch produces new groups -- and addInput()
+    // overwrites it. Without this guard, when a downstream operator applies
+    // backpressure, the Driver keeps feeding this operator and addInput()
+    // silently overwrites the undrained batch, dropping its rows. Mirrors the
+    // single-buffer pattern in RowNumber/HashProbe/MergeJoin.
+    return !noMoreInput_ && !partialFull_ && input_ == nullptr;
   }
 
   bool startDrain() override;
@@ -118,6 +114,10 @@ class HashAggregation : public Operator {
   // Returns the default global grouping set rows for the () set.
   RowVectorPtr getDefaultGlobalGroupingSetOutput();
 
+  // Combines global partial aggregation states across this operator's peers
+  // when doing so reduces the data sent downstream.
+  void combineGlobalPartialAggregation();
+
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
 
   const bool isPartialOutput_;
@@ -138,6 +138,11 @@ class HashAggregation : public Operator {
   const int32_t abandonPartialAggregationMinPct_;
 
   int64_t maxPartialAggregationMemoryUsage_;
+
+  // Guards 'groupingSet_' between close() and a peer driver that reads or
+  // takes it after all peers finish. Task termination closes waiting peers
+  // concurrently with that driver.
+  std::mutex mutex_;
   std::unique_ptr<GroupingSet> groupingSet_;
 
   // Cached from groupingSet_->hasCompactableAggregates() during initialize().
@@ -155,6 +160,10 @@ class HashAggregation : public Operator {
   bool finished_ = false;
   // True if partial aggregation has been found to be non-reducing.
   bool abandonedPartialAggregation_{false};
+
+  // True for a global partial aggregation whose states can be merged across
+  // drivers before output.
+  bool canCombineGlobalPartialAggregation_{false};
 
   RowContainerIterator resultIterator_;
   bool pushdownChecked_ = false;

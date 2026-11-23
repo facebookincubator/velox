@@ -187,6 +187,18 @@ class JsonFormatFunction : public exec::VectorFunction {
   }
 };
 
+// Requires 'later' to sort at or after 'earlier'.
+template <bool kNeedNormalize>
+bool keyEqualToSortedPredecessor(
+    std::string_view earlier,
+    std::string_view later) {
+  if constexpr (kNeedNormalize) {
+    return !lessThanForJsonParse(earlier, later);
+  } else {
+    return earlier == later;
+  }
+}
+
 // A performant json parsing implementation. Does not handle null rows. This is
 // also leveraged by json functions other than json_parse that need to parse a
 // varchar input. If `nullOnError` is true, the result will have null values for
@@ -205,71 +217,54 @@ class JsonParseImpl {
         initializeErrors_, [this] { simdjsonErrorsToExceptions(errors_); });
 
     if (arg->isConstantEncoding()) {
-      auto value = arg->as<ConstantVector<StringView>>()->valueAt(0);
-      auto size = value.size();
-      auto buffer = AlignedBuffer::allocate<char>(size, context.pool());
-      BufferPtr stringViews =
-          AlignedBuffer::allocate<StringView>(1, context.pool());
-      auto rawStringViews = stringViews->asMutable<StringView>();
-      try {
-        bool needNormalize =
-            needNormalizeForJsonParse(value.data(), value.size());
-
-        if (needNormalize) {
-          size = normalizedSizeForJsonParse(value.data(), value.size());
-        }
-        paddedInput_.resize(size + simdjson::SIMDJSON_PADDING);
-        VELOX_CHECK_EQ(prepareInput(value, needNormalize), size);
-
-        if (auto error = parse(size, needNormalize)) {
-          clearState();
-          if (nullOnError) {
-            localResult = BaseVector::createNullConstant(
-                JSON(), rows.end(), context.pool());
-          } else {
-            context.setErrors(rows, errors_[error]);
-          }
-          return;
-        }
-        auto* output = buffer->asMutable<char>();
-        auto outputSize = concatViews(views_, output);
-        rawStringViews[0] = StringView(output, outputSize);
-      } catch (const VeloxException& e) {
-        clearState();
-
-        if (!e.isUserError()) {
-          throw;
-        }
-        if (nullOnError) {
-          localResult = BaseVector::createNullConstant(
-              JSON(), rows.end(), context.pool());
-        } else {
-          context.setErrors(rows, std::current_exception());
-        }
-        FB_LOG_EVERY_MS(WARNING, 1000)
-            << "Caught user error in json_parse: " << e.message();
-        return;
+      const auto value = arg->as<ConstantVector<StringView>>()->valueAt(0);
+      bool failed{false};
+      auto parsed = parseRows(
+          SelectivityVector(1),
+          [&](auto /*row*/) { return value; },
+          context,
+          nullOnError,
+          [&](auto /*row*/, const std::exception_ptr& error) {
+            context.setErrors(rows, error);
+            failed = true;
+          });
+      if (!failed) {
+        localResult = BaseVector::wrapInConstant(rows.end(), 0, parsed);
       }
-      auto constantBase = std::make_shared<FlatVector<StringView>>(
-          context.pool(),
-          JSON(),
-          nullptr,
-          1,
-          stringViews,
-          std::vector<BufferPtr>{buffer});
-
-      localResult = BaseVector::wrapInConstant(rows.end(), 0, constantBase);
+      return;
     }
+
     VectorPtr jsonInput = arg;
     if (!arg->isFlatEncoding()) {
       BaseVector::flattenVector(jsonInput);
     }
     auto flatInput = jsonInput->asFlatVector<StringView>();
+    VELOX_CHECK_LE(rows.end(), flatInput->size());
+
+    localResult = parseRows(
+        rows,
+        [&](auto row) { return flatInput->valueAt(row); },
+        context,
+        nullOnError,
+        [&](auto row, const std::exception_ptr& error) {
+          context.setVeloxExceptionError(row, error);
+        });
+  }
+
+ private:
+  // Parses 'valueAt(row)' for each of 'rows' into a flat JSON vector of size
+  // 'rows.end()'. A row that fails to parse is set to null if 'nullOnError' is
+  // true; otherwise, 'onError(row, error)' is called.
+  template <typename ValueAt, typename OnError>
+  VectorPtr parseRows(
+      const SelectivityVector& rows,
+      ValueAt valueAt,
+      exec::EvalCtx& context,
+      bool nullOnError,
+      OnError onError) const {
     BufferPtr stringViews = AlignedBuffer::allocate<StringView>(
         rows.end(), context.pool(), StringView());
     auto rawStringViews = stringViews->asMutable<StringView>();
-
-    VELOX_CHECK_LE(rows.end(), flatInput->size());
 
     size_t maxSize = 0;
     size_t totalOutputSize = 0;
@@ -278,7 +273,7 @@ class JsonParseImpl {
         rows.end(), context.pool(), bits::kNotNull);
     auto rawNullsOnErrors = nullsOnErrors->asMutable<uint64_t>();
     rows.applyToSelected([&](auto row) {
-      auto value = flatInput->valueAt(row);
+      auto value = valueAt(row);
       bool needNormalize =
           needNormalizeForJsonParse(value.data(), value.size());
       auto size = value.size();
@@ -290,7 +285,7 @@ class JsonParseImpl {
             throw;
           }
           if (!nullOnError) {
-            context.setVeloxExceptionError(row, std::current_exception());
+            onError(row, std::current_exception());
           }
           // We use this to skip error-ed out rows when generating output.
           bits::setNull(rawNullsOnErrors, row, true);
@@ -314,11 +309,11 @@ class JsonParseImpl {
       }
 
       try {
-        auto value = flatInput->valueAt(row);
+        auto value = valueAt(row);
         auto size = prepareInput(value, needNormalizes[row]);
         if (auto error = parse(size, needNormalizes[row])) {
           if (!nullOnError) {
-            context.setVeloxExceptionError(row, errors_[error]);
+            onError(row, errors_[error]);
           } else {
             bits::setNull(rawNullsOnErrors, row, true);
           }
@@ -337,7 +332,7 @@ class JsonParseImpl {
           throw;
         }
         if (!nullOnError) {
-          context.setVeloxExceptionError(row, std::current_exception());
+          onError(row, std::current_exception());
         } else {
           bits::setNull(rawNullsOnErrors, row, true);
         }
@@ -346,7 +341,7 @@ class JsonParseImpl {
       }
     });
 
-    localResult = std::make_shared<FlatVector<StringView>>(
+    return std::make_shared<FlatVector<StringView>>(
         context.pool(),
         JSON(),
         nullOnError ? nullsOnErrors : nullptr,
@@ -355,7 +350,6 @@ class JsonParseImpl {
         std::vector<BufferPtr>{buffer});
   }
 
- private:
   struct FastSortKey {
     static constexpr int kSize = 3;
     std::array<uint64_t, kSize> value;
@@ -490,11 +484,24 @@ class JsonParseImpl {
       sortIndices(
           [&](int32_t i, int32_t j) { return fields[i].key < fields[j].key; });
     }
-    for (auto i = 0; i < numFields; ++i) {
-      if (i > 0) {
+    // The sort is not stable, so the last occurrence of a key is the greatest
+    // original index in its run, not the last element of the run.
+    bool first{true};
+    for (int i = 0; i < numFields; ++i) {
+      const auto key = fields[sortIndices_[i]].key;
+      int32_t lastOccurrence = sortIndices_[i];
+      while (i + 1 < numFields &&
+             keyEqualToSortedPredecessor<kNeedNormalize>(
+                 key, fields[sortIndices_[i + 1]].key)) {
+        ++i;
+        lastOccurrence = std::max(lastOccurrence, sortIndices_[i]);
+      }
+      VELOX_DCHECK_EQ(key, fields[lastOccurrence].key);
+      if (!first) {
         addOrMergeChar(views_, kSeparator);
       }
-      auto& field = fields[sortIndices_[i]];
+      first = false;
+      const auto& field = fields[lastOccurrence];
       for (int j = 0; j < field.size; ++j) {
         views_.push_back(views_[field.offset + j]);
       }

@@ -156,7 +156,14 @@ struct Tensor {
   /// Ensures exactly one thread executes 'func', others wait until complete.
   template <typename Func>
   __device__ void synchronized(Func func) {
+    // A thread that finds the work done must acquire before returning: its
+    // callers read what 'func' wrote (numEl, contiguous, the index dividers)
+    // with plain loads, which can otherwise be served stale from this SM's L1
+    // -- the same cache line holds the dims and strides every caller has
+    // already read. Stale zero dividers turn an element index into a wild
+    // offset. The writer's __threadfence() below is only the release half.
     if (atomicAdd(&status, 0u) == kInited) {
+      __threadfence();
       return;
     }
     uint32_t old = atomicCAS(&status, kUninited, kIniting);
@@ -166,6 +173,7 @@ struct Tensor {
         __nanosleep(waitNano);
         waitNano += threadIdx.x & 31;
       }
+      __threadfence();
       return;
     }
     func();
@@ -178,13 +186,16 @@ struct Tensor {
   /// (broadcast support) and sets numEl from output dims.
   template <bool kConcurrent>
   __device__ void init(const Tensor* output = nullptr) {
-    if ((!output || output->dims[0] == dims[0]) && rank == 1 &&
-        strides[0] == 1) {
-      numEl = dims[0];
-      contiguous = true;
-      return;
-    }
     auto doInit = [&]() {
+      // The rank-1 contiguous case goes through the status protocol like the
+      // rest: every block of an op initializes the same descriptor, and none
+      // may read it before one of them has finished and marked it kInited.
+      if ((!output || output->dims[0] == dims[0]) && rank == 1 &&
+          strides[0] == 1) {
+        numEl = dims[0];
+        contiguous = true;
+        return;
+      }
       contiguous = isContiguous();
       initIndexCalculator(output);
       uint32_t n = 1;
@@ -203,6 +214,25 @@ struct Tensor {
       status = kInited;
     }
   }
+
+  /// Ensures sizes[] hold this tensor's own-dims magic dividers, used by gather
+  /// device functions (__index_select, __repeat) that decompose a linear index
+  /// by this tensor's own dims. Unlike init(), it never takes the rank-1
+  /// contiguous fast path, so sizes[] is always populated. Grid-wide idempotent
+  /// via the status CAS, so it is safe for every thread to call. Callers must
+  /// keep such a tensor out of the broadcast init<true>() path, since both
+  /// share 'status' and would otherwise race for a single init.
+  __device__ void ensureIndexCalculator() {
+    synchronized([&]() {
+      contiguous = isContiguous();
+      initIndexCalculator();
+      uint32_t n = 1;
+      for (int i = 0; i < rank; ++i) {
+        n *= dims[i];
+      }
+      numEl = n;
+    });
+  }
 #endif
 };
 
@@ -220,13 +250,17 @@ struct ScalarList {
 
 /// Struct for returning errors to host. Each block has one. These may be
 /// checked at a delay, so return status that requires action on host side must
-/// be sent in returnStatus, not here.
+/// be sent in returnStatus, not here. The host reads them only when the
+/// execution's error count says a block recorded an error. A block's timing is
+/// in TorchWaveParams::clocks and barrierClocks.
 struct DebugInfo {
-  int64_t clocks{0};
-  int64_t barrierClocks{0};
   int32_t op{0};
   int32_t line{0};
-  int64_t extra[2] = {};
+  /// Site-defined values printed after the line number, most sites using only
+  /// the first two. A bad index is worth reporting with the bound it violated
+  /// and the operand shapes it came from: which of the two is wrong is not
+  /// decidable from the index alone.
+  int64_t extra[6] = {};
   char message[20] = {};
 };
 
@@ -259,6 +293,14 @@ struct TorchWaveParams {
   /// If nullptr the BlockInfos are in inlineInfo.
   BlockInfo* info;
   DebugInfo* debugInfo;
+  /// Per block of the launch, at blockIdx.x: the clocks from ENTRY to LEAVE,
+  /// and of those the clocks spent waiting in op barriers. Slices of the
+  /// execution's clock buffer. Null to not time the launch.
+  int64_t* clocks;
+  int64_t* barrierClocks;
+  /// Word 0 of the execution's clock buffer: the number of blocks that
+  /// recorded an error in their DebugInfo. Null to not count.
+  unsigned long long* errorCount;
   /// If the grid fits in kMaxInlineBlocks BlockInfos, they are inlined here
   /// to avoid a separate device allocation for the block info array.
   static constexpr int32_t kMaxInlineBlocks = 100;

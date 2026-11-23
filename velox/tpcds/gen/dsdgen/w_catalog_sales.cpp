@@ -206,7 +206,6 @@ static void mk_detail(
   genrand_integer(
       &nTemp, DIST_UNIFORM, 0, 99, 0, CR_IS_RETURNED, dsdGenContext);
   if (nTemp < CR_RETURN_PCT) {
-    struct W_CATALOG_RETURNS_TBL w_catalog_returns;
     struct W_CATALOG_RETURNS_TBL* rr = &dsdGenContext.g_w_catalog_returns;
     mk_w_catalog_returns(rr, 1, dsdGenContext);
 

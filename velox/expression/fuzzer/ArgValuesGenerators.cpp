@@ -16,6 +16,8 @@
 
 #include "velox/expression/fuzzer/ArgValuesGenerators.h"
 
+#include <cmath>
+
 #include "velox/common/fuzzer/ConstrainedGenerators.h"
 #include "velox/common/fuzzer/Utils.h"
 #include "velox/core/Expressions.h"
@@ -640,6 +642,8 @@ std::vector<core::TypedExprPtr> SetDigestArgValuesGenerator::generate(
   }
   return inputExpressions;
 }
+
+#ifdef VELOX_ENABLE_GEO
 namespace {
 
 // Generates a random valid S2 cell ID.
@@ -700,6 +704,81 @@ std::vector<core::TypedExprPtr> S2CellTokenArgValuesGenerator::generate(
   inputExpressions[0] =
       std::make_shared<core::ConstantTypedExpr>(VARCHAR(), variant(token));
 
+  return inputExpressions;
+}
+#endif // VELOX_ENABLE_GEO
+
+std::vector<core::TypedExprPtr> InverseFCdfArgValuesGenerator::generate(
+    const CallableSignature& signature,
+    const VectorFuzzer::Options& options,
+    FuzzerGenerator& rng,
+    ExpressionFuzzerState& state) {
+  VELOX_CHECK_EQ(signature.args.size(), 3);
+  populateInputTypesAndNames(signature, state);
+
+  // Draw the upper bound of the degrees of freedom from the powers of ten up
+  // to 1e6. A single uniform range up to 1e6 would almost never produce the
+  // small values that real queries use.
+  const auto maxDegreesOfFreedom = std::pow(10.0, rand<int32_t>(rng, 0, 6));
+  const std::vector<double> maxValues{
+      maxDegreesOfFreedom,
+      maxDegreesOfFreedom,
+      1.0,
+  };
+
+  const auto firstColumn = state.inputRowNames_.size() - signature.args.size();
+  std::vector<core::TypedExprPtr> inputExpressions;
+  for (size_t i = 0; i < signature.args.size(); ++i) {
+    state.customInputGenerators_.emplace_back(
+        std::make_shared<RangeConstrainedGenerator<double>>(
+            rand<uint32_t>(rng),
+            signature.args[i],
+            options.nullRatio,
+            0.0,
+            maxValues[i]));
+    inputExpressions.emplace_back(
+        std::make_shared<core::FieldAccessTypedExpr>(
+            signature.args[i], state.inputRowNames_[firstColumn + i]));
+  }
+  return inputExpressions;
+}
+
+std::vector<core::TypedExprPtr> LevenshteinArgValuesGenerator::generate(
+    const CallableSignature& signature,
+    const VectorFuzzer::Options& options,
+    FuzzerGenerator& rng,
+    ExpressionFuzzerState& state) {
+  VELOX_CHECK_GE(signature.args.size(), 2);
+  VELOX_CHECK_LE(signature.args.size(), 3);
+  populateInputTypesAndNames(signature, state);
+
+  // Keeps the product of the two lengths within 1,000,000, the combined size
+  // that Presto's levenshtein_distance accepts.
+  static constexpr size_t kMaxLength = 1'000;
+
+  const auto firstColumn = state.inputRowNames_.size() - signature.args.size();
+  const auto column = [&](size_t index) {
+    return std::make_shared<core::FieldAccessTypedExpr>(
+        signature.args[index], state.inputRowNames_[firstColumn + index]);
+  };
+  const auto boundedString = [&](size_t index) {
+    return std::make_shared<RandomInputGenerator<StringView>>(
+        rand<uint32_t>(rng),
+        signature.args[index],
+        options.nullRatio,
+        kMaxLength);
+  };
+
+  state.customInputGenerators_.emplace_back(boundedString(0));
+  state.customInputGenerators_.emplace_back(boundedString(1));
+  std::vector<core::TypedExprPtr> inputExpressions{column(0), column(1)};
+
+  // The optional threshold does not affect the cost, so it keeps the default
+  // random values.
+  if (signature.args.size() == 3) {
+    state.customInputGenerators_.emplace_back(nullptr);
+    inputExpressions.emplace_back(column(2));
+  }
   return inputExpressions;
 }
 

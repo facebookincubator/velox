@@ -111,6 +111,13 @@ class RleDecoderV2 : public dwio::common::IntDecoder<isSigned> {
     while (curGap_ == 255 && curPatch_ == 0) {
       actualGap_ += 255;
       ++patchIdx_;
+      // A gap==255/patch==0 entry promises a continuation entry follows; a
+      // corrupt patch list may end on one, so bound the chain before reading.
+      VELOX_CHECK_LT(
+          patchIdx_,
+          unpackedPatch_.size(),
+          "Patch gap chain runs past patch list: {}",
+          dwio::common::IntDecoder<isSigned>::inputStream_->getName());
       curGap_ =
           static_cast<uint64_t>(unpackedPatch_[patchIdx_]) >> patchBitSize_;
       curPatch_ = unpackedPatch_[patchIdx_] & patchMask_;
@@ -140,7 +147,7 @@ class RleDecoderV2 : public dwio::common::IntDecoder<isSigned> {
           &bufferPointer, &bufferLength);
       VELOX_CHECK(
           ret,
-          "bad read in RleDecoderV2::readByte, ",
+          "bad read in RleDecoderV2::readByte: {}",
           dwio::common::IntDecoder<isSigned>::inputStream_->getName());
       dwio::common::IntDecoder<isSigned>::bufferStart_ =
           static_cast<const char*>(bufferPointer);

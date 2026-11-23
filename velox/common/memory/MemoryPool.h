@@ -147,7 +147,7 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
 
     /// If true, tracks the leaf memory pool usage in a thread-safe mode
     /// otherwise not. This only applies for leaf memory pool with memory usage
-    /// tracking enabled. We use non-thread safe tracking mode for single
+    /// tracking enabled. We use non-thread-safe tracking mode for single
     /// threaded use case.
     ///
     /// NOTE: user can turn on/off the thread-safe mode of each individual leaf
@@ -218,8 +218,10 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
     return trackUsage_;
   }
 
-  /// Returns true if this memory pools is thread safe which only applies for a
-  /// leaf memory pool with memory usage tracking enabled.
+  /// Returns true if this memory pool is thread-safe. Only a leaf memory pool
+  /// with memory usage tracking enabled can be non-thread-safe (see
+  /// Options::threadSafe). Aggregate memory pools, including the root, are
+  /// always thread-safe.
   virtual bool threadSafe() const {
     return threadSafe_;
   }
@@ -240,6 +242,9 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
       std::unique_ptr<MemoryReclaimer> reclaimer = nullptr);
 
   /// Invoked to create a named aggregate child memory pool.
+  ///
+  /// Unlike a leaf child, an aggregate child is always thread-safe and has no
+  /// 'threadSafe' option, as its leaf descendants may update it concurrently.
   ///
   /// NOTE: 'reclaimer' only applies if the aggregate memory pool has enabled
   /// memory usage tracking which inherits from its parent.
@@ -637,11 +642,6 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   friend class velox::memory::TestArbitrator;
   friend class MemoryPoolArbitrationSection;
   friend class ArbitrationParticipant;
-
-  VELOX_FRIEND_TEST(MemoryPoolTest, shrinkAndGrowAPIs);
-  VELOX_FRIEND_TEST(MemoryPoolTest, grow);
-  VELOX_FRIEND_TEST(MemoryPoolTest, growFailures);
-  VELOX_FRIEND_TEST(MemoryPoolTest, grownonContiguousAllocateFailures);
 };
 
 std::ostream& operator<<(std::ostream& out, MemoryPool::Kind kind);
@@ -877,8 +877,8 @@ class MemoryPoolImpl : public MemoryPool {
     int32_t numAttempts{0};
     for (;; ++numAttempts) {
       int64_t increment = reservationSizeLocked(size);
-      if (FOLLY_LIKELY(increment == 0)) {
-        if (FOLLY_UNLIKELY(reserveOnly)) {
+      if (increment == 0) [[likely]] {
+        if (reserveOnly) [[unlikely]] {
           minReservationBytes_ = tsanAtomicValue(reservationBytes_);
         } else {
           usedReservationBytes_ += size;
@@ -896,7 +896,7 @@ class MemoryPoolImpl : public MemoryPool {
     // incrementReservation(). This should happen rarely in production
     // as the leaf tracker does quantized memory reservation so that we don't
     // expect high concurrency at the root memory pool.
-    if (FOLLY_UNLIKELY(numAttempts > 1)) {
+    if (numAttempts > 1) [[unlikely]] {
       numCollisions_ += numAttempts - 1;
     }
   }
@@ -909,6 +909,10 @@ class MemoryPoolImpl : public MemoryPool {
   // if max capacity is exceeded or arbitration fails.
   void incrementReservationThreadSafe(MemoryPool* requestor, uint64_t size);
 
+  // Increments the reservation for a non-thread-safe leaf pool. Even though
+  // this leaf skips its own locking, it propagates the increment to the parent
+  // via the thread-safe path, because the aggregate ancestors are shared by
+  // other leaves and updated concurrently.
   FOLLY_ALWAYS_INLINE void incrementReservationNonThreadSafe(
       MemoryPool* requestor,
       uint64_t size) {
@@ -960,7 +964,7 @@ class MemoryPoolImpl : public MemoryPool {
     VELOX_DCHECK_NOT_NULL(parent_);
 
     int64_t newQuantized;
-    if (FOLLY_UNLIKELY(releaseOnly)) {
+    if (releaseOnly) [[unlikely]] {
       VELOX_DCHECK_EQ(size, 0);
       if (minReservationBytes_ == 0) {
         return;
@@ -975,7 +979,7 @@ class MemoryPoolImpl : public MemoryPool {
     }
 
     const int64_t freeable = reservationBytes_ - newQuantized;
-    if (FOLLY_UNLIKELY(freeable > 0)) {
+    if (freeable > 0) [[unlikely]] {
       reservationBytes_ = newQuantized;
       sanityCheckLocked();
       toImpl(parent_)->decrementReservation(freeable);
@@ -986,10 +990,9 @@ class MemoryPoolImpl : public MemoryPool {
   void decrementReservation(uint64_t size) noexcept;
 
   FOLLY_ALWAYS_INLINE void sanityCheckLocked() const {
-    if (FOLLY_UNLIKELY(
-            (reservationBytes_ < usedReservationBytes_) ||
-            (reservationBytes_ < minReservationBytes_) ||
-            (usedReservationBytes_ < 0))) {
+    if ((reservationBytes_ < usedReservationBytes_) ||
+        (reservationBytes_ < minReservationBytes_) ||
+        (usedReservationBytes_ < 0)) [[unlikely]] {
       VELOX_FAIL("Bad memory usage track state: {}", toStringLocked());
     }
   }

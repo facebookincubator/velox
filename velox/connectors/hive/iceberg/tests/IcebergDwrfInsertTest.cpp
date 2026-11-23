@@ -17,10 +17,10 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+#include "velox/connectors/hive/iceberg/tests/utils/IcebergPlanBuilder.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 
 using namespace facebook::velox::common::testutil;
 
@@ -53,8 +53,8 @@ class IcebergDwrfInsertTest : public test::IcebergTestBase {
 
     auto splits = createSplitsForDirectory(dataPath);
     ASSERT_EQ(splits.size(), commitTasks.size());
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
+    auto plan = test::IcebergPlanBuilder()
+                    .startTableScan()
                     .outputType(rowType)
                     .endTableScan()
                     .planNode();
@@ -232,12 +232,134 @@ TEST_F(IcebergDwrfInsertTest, partitioned) {
 
   auto splits = createSplitsForDirectory(dataPath);
   ASSERT_EQ(splits.size(), commitTasks.size());
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
+  auto plan = test::IcebergPlanBuilder()
+                  .startTableScan()
                   .outputType(rowType)
                   .endTableScan()
                   .planNode();
   exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
+}
+
+/// IcebergFileNameGenerator participates in plan serialization
+/// (IcebergConnector::registerSerDe registers it), so its serialize /
+/// deserialize / toString methods are reachable from any serialized plan even
+/// though the write tests never round-trip a plan.
+TEST_F(IcebergDwrfInsertTest, fileNameGeneratorSerDeRoundTrip) {
+  IcebergFileNameGenerator::registerSerDe();
+
+  const IcebergFileNameGenerator generator;
+  EXPECT_EQ(generator.toString(), "IcebergFileNameGenerator");
+
+  const auto serialized = generator.serialize();
+  EXPECT_EQ(serialized["name"].asString(), "IcebergFileNameGenerator");
+
+  const auto deserialized =
+      IcebergFileNameGenerator::deserialize(serialized, /*context=*/nullptr);
+  ASSERT_NE(deserialized, nullptr);
+  EXPECT_EQ(deserialized->toString(), generator.toString());
+}
+
+/// Exercises writer file rotation. FileDataSink rotates once a writer's
+/// current file reaches 'maxTargetFileBytes', which HiveDataSink derives from
+/// the format-specific max-target-file-size setting (0 = unlimited, the
+/// default, so no other test reaches this path). IcebergDataSink overrides
+/// rotateWriter() to capture per-file statistics before the writer is reset;
+/// without rotation coverage that override and the post-rotation null-writer
+/// handling in closeInternal() never run.
+TEST_F(IcebergDwrfInsertTest, writerRotationProducesMultipleFiles) {
+  // 1 byte forces a rotation after essentially every batch.
+  setConnectorSessionProperty(
+      connector::hive::HiveConfig::kOrcMaxTargetFileSizeSession, "1B");
+
+  auto rowType = ROW({"c1", "c2"}, {BIGINT(), VARCHAR()});
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto dataPath = outputDirectory->getPath();
+  const auto vectors = createTestData(rowType, 3, 50);
+
+  const auto dataSink = createDataSinkAndAppendData(vectors, dataPath);
+  const auto commitTasks = dataSink->close();
+
+  // Rotation means one unpartitioned writer emits several files, each with its
+  // own commit task and its own record count.
+  ASSERT_GT(commitTasks.size(), 1)
+      << "expected rotation to split the write across multiple files";
+  EXPECT_EQ(listFiles(dataPath).size(), commitTasks.size());
+
+  int64_t totalRecords = 0;
+  for (const auto& task : commitTasks) {
+    const auto taskJson = folly::parseJson(task);
+    const auto records = taskJson["metrics"]["recordCount"].asInt();
+    // Per-file counts are deltas, not the running total, so none may be zero
+    // and they must sum to the rows written.
+    EXPECT_GT(records, 0);
+    totalRecords += records;
+  }
+  EXPECT_EQ(totalRecords, 3 * 50);
+
+  // The rotated files still read back as the original data.
+  auto splits = createSplitsForDirectory(dataPath);
+  ASSERT_EQ(splits.size(), commitTasks.size());
+  auto plan = test::IcebergPlanBuilder()
+                  .startTableScan()
+                  .outputType(rowType)
+                  .endTableScan()
+                  .planNode();
+  exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
+}
+
+/// Partition values are serialized into the commit message by a per-type
+/// dispatch. VARBINARY and TIMESTAMP take dedicated specializations —
+/// base64-encoding and micros-since-epoch respectively — that the BIGINT and
+/// VARCHAR partition tests never reach.
+TEST_F(IcebergDwrfInsertTest, varbinaryPartitionValue) {
+  auto rowType = ROW({"c1", "c2"}, {VARBINARY(), BIGINT()});
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto dataPath = outputDirectory->getPath();
+  const auto vectors = createTestData(rowType, 1, 20);
+
+  std::vector<test::PartitionField> partitionTransforms = {
+      {0, TransformType::kIdentity, std::nullopt}};
+  const auto dataSink =
+      createDataSinkAndAppendData(vectors, dataPath, partitionTransforms);
+  const auto commitTasks = dataSink->close();
+  ASSERT_GT(commitTasks.size(), 0);
+
+  for (const auto& task : commitTasks) {
+    const auto taskJson = folly::parseJson(task);
+    ASSERT_GT(taskJson.count("partitionDataJson"), 0);
+    const auto partitionData =
+        folly::parseJson(taskJson["partitionDataJson"].asString());
+    ASSERT_EQ(partitionData["partitionValues"].size(), 1);
+    // Binary partition values are base64 strings, never raw bytes.
+    const auto& value = partitionData["partitionValues"][0];
+    EXPECT_TRUE(value.isString() || value.isNull());
+  }
+}
+
+TEST_F(IcebergDwrfInsertTest, timestampPartitionValue) {
+  auto rowType = ROW({"c1", "c2"}, {TIMESTAMP(), BIGINT()});
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto dataPath = outputDirectory->getPath();
+  const auto vectors = createTestData(rowType, 1, 20);
+
+  std::vector<test::PartitionField> partitionTransforms = {
+      {0, TransformType::kIdentity, std::nullopt}};
+  const auto dataSink =
+      createDataSinkAndAppendData(vectors, dataPath, partitionTransforms);
+  const auto commitTasks = dataSink->close();
+  ASSERT_GT(commitTasks.size(), 0);
+
+  for (const auto& task : commitTasks) {
+    const auto taskJson = folly::parseJson(task);
+    ASSERT_GT(taskJson.count("partitionDataJson"), 0);
+    const auto partitionData =
+        folly::parseJson(taskJson["partitionDataJson"].asString());
+    ASSERT_EQ(partitionData["partitionValues"].size(), 1);
+    // Iceberg stores timestamps as micros since epoch, so the serialized
+    // partition value must be an integer rather than a formatted string.
+    const auto& value = partitionData["partitionValues"][0];
+    EXPECT_TRUE(value.isInt() || value.isNull());
+  }
 }
 
 /// Regression test for the isPartitioned() guard added to ensureWriter().
@@ -270,7 +392,7 @@ std::shared_ptr<const connector::ColumnHandle> makeIcebergColumnHandle(
     const TypePtr& type,
     const parquet::ParquetFieldId& field) {
   return std::make_shared<const IcebergColumnHandle>(
-      name, FileColumnHandle::ColumnType::kRegular, type, field);
+      name, connector::FileColumnHandle::ColumnType::kRegular, type, field);
 }
 
 // Schema evolution: a top-level column is renamed (c -> c2, id 3) and
@@ -299,9 +421,8 @@ TEST_F(IcebergDwrfInsertTest, fieldIdRenameReorderDropAdd) {
               {"a", makeIcebergColumnHandle("a", BIGINT(), {1, {}})},
               {"d", makeIcebergColumnHandle("d", INTEGER(), {9, {}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
@@ -320,7 +441,8 @@ TEST_F(IcebergDwrfInsertTest, fieldIdRenameReorderDropAdd) {
 // name c (id 9) is added. The stale file column must NOT bind to the new c by
 // name; the new c must read as null.
 TEST_F(IcebergDwrfInsertTest, fieldIdDropReaddSameName) {
-  auto writeVector = makeRowVector({"c"}, {makeFlatVector<int32_t>({1, 2, 3})});
+  auto writeVector =
+      makeNamedRowVector("c", makeFlatVector<int32_t>({1, 2, 3}));
 
   const auto dir = TempDirectoryPath::create();
   const auto path = dir->getPath();
@@ -333,9 +455,8 @@ TEST_F(IcebergDwrfInsertTest, fieldIdDropReaddSameName) {
       unordered_map<std::string, std::shared_ptr<const connector::ColumnHandle>>
           assignments{{"c", makeIcebergColumnHandle("c", INTEGER(), {9, {}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
@@ -343,7 +464,7 @@ TEST_F(IcebergDwrfInsertTest, fieldIdDropReaddSameName) {
                   .planNode();
 
   auto expected =
-      makeRowVector({"c"}, {makeNullConstant(TypeKind::INTEGER, 3)});
+      makeNamedRowVector("c", makeNullConstant(TypeKind::INTEGER, 3));
   exec::test::AssertQueryBuilder(plan).splits(splits).assertResults({expected});
 }
 
@@ -351,13 +472,13 @@ TEST_F(IcebergDwrfInsertTest, fieldIdDropReaddSameName) {
 // remaining nested fields are reordered (z before x). Field-id resolution must
 // match nested columns by id, not position.
 TEST_F(IcebergDwrfInsertTest, fieldIdNestedStructReorderDrop) {
-  auto writeVector = makeRowVector(
-      {"s"},
-      {makeRowVector(
+  auto writeVector = makeNamedRowVector(
+      "s",
+      makeRowVector(
           {"x", "y", "z"},
           {makeFlatVector<int32_t>({1, 2, 3}),
            makeFlatVector<int32_t>({4, 5, 6}),
-           makeFlatVector<int32_t>({7, 8, 9})})});
+           makeFlatVector<int32_t>({7, 8, 9})}));
 
   const auto dir = TempDirectoryPath::create();
   const auto path = dir->getPath();
@@ -375,21 +496,20 @@ TEST_F(IcebergDwrfInsertTest, fieldIdNestedStructReorderDrop) {
                    ROW({"z", "x"}, {INTEGER(), INTEGER()}),
                    {1, {{4, {}}, {2, {}}}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
                   .endTableScan()
                   .planNode();
 
-  auto expected = makeRowVector(
-      {"s"},
-      {makeRowVector(
+  auto expected = makeNamedRowVector(
+      "s",
+      makeRowVector(
           {"z", "x"},
           {makeFlatVector<int32_t>({7, 8, 9}),
-           makeFlatVector<int32_t>({1, 2, 3})})});
+           makeFlatVector<int32_t>({1, 2, 3})}));
   exec::test::AssertQueryBuilder(plan).splits(splits).assertResults({expected});
 }
 
@@ -414,9 +534,8 @@ TEST_F(IcebergDwrfInsertTest, fieldIdTypePromotion) {
               {"a", makeIcebergColumnHandle("a", BIGINT(), {1, {}})},
               {"b", makeIcebergColumnHandle("b", DOUBLE(), {2, {}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)

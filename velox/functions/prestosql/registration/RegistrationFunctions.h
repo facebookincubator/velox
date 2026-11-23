@@ -17,49 +17,95 @@
 #include <string>
 
 namespace facebook::velox::functions::prestosql {
-void registerArithmeticFunctions(const std::string& prefix = "");
+void registerArithmeticFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 
-void registerCheckedArithmeticFunctions(const std::string& prefix = "");
+void registerCheckedArithmeticFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 
-void registerComparisonFunctions(const std::string& prefix = "");
+void registerComparisonFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 
-void registerArrayFunctions(const std::string& prefix = "");
+void registerArrayFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 
-void registerInternalFunctions();
+void registerInternalFunctions(std::string_view defaultOwner = {});
 
-void registerMapFunctions(const std::string& prefix = "");
+void registerMapFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 
-void registerJsonFunctions(const std::string& prefix = "");
+void registerJsonFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 
-void registerHyperLogFunctions(const std::string& prefix = "");
+void registerHyperLogFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 
-void registerKHyperLogLogFunctions(const std::string& prefix = "");
+void registerKHyperLogLogFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 
-void registerTDigestFunctions(const std::string& prefix = "");
+void registerTDigestFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 
-void registerQDigestFunctions(const std::string& prefix = "");
+void registerQDigestFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 
-void registerSfmSketchFunctions(const std::string& prefix = "");
+void registerSfmSketchFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 
-void registerBingTileFunctions(const std::string& prefix = "");
+void registerBingTileFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 
-void registerEnumFunctions(const std::string& prefix = "");
+void registerEnumFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 
-void registerGeneralFunctions(const std::string& prefix = "");
+void registerGeneralFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 
-void registerDateTimeFunctions(const std::string& prefix = "");
+/// Registers date-time functions. When 'ignoreTimeZoneLabel' is true,
+/// at_timezone returns TIMESTAMP for TIMESTAMP and TIMESTAMP WITH TIME ZONE.
+void registerDateTimeFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {},
+    bool ignoreTimeZoneLabel = false);
 
-void registerURLFunctions(const std::string& prefix = "");
+void registerURLFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 
-void registerStringFunctions(const std::string& prefix = "");
+void registerStringFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 
-void registerBinaryFunctions(const std::string& prefix = "");
+void registerBinaryFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 
-void registerBitwiseFunctions(const std::string& prefix = "");
+void registerBitwiseFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 
-void registerAllScalarFunctions(const std::string& prefix = "");
+/// Registers all scalar functions with the selected at_timezone semantics.
+void registerAllScalarFunctions(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {},
+    bool ignoreTimeZoneLabel = false);
 
 void registerMapAllowingDuplicates(
     const std::string& name,
-    const std::string& prefix = "");
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {});
 } // namespace facebook::velox::functions::prestosql

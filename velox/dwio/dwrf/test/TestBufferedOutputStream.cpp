@@ -246,7 +246,7 @@ class AppendOnlyBufferedStreamTest : public testing::Test {
   std::shared_ptr<MemoryPool> pool_ = memoryManager()->addLeafPool();
 };
 
-TEST_F(AppendOnlyBufferedStreamTest, Basic) {
+TEST_F(AppendOnlyBufferedStreamTest, basic) {
   MemorySink memSink(1024, {.pool = pool_.get()});
   uint64_t block = 10;
   DataBufferHolder holder{*pool_, block, 0, DEFAULT_PAGE_GROW_RATIO, &memSink};

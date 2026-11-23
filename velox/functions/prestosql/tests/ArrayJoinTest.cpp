@@ -110,6 +110,33 @@ TEST_F(ArrayJoinTest, varcharTest) {
 
   testArrayJoinReplacement<StringView>(
       {"a"_sv, "b"_sv, std::nullopt, "c"_sv}, "-"_sv, "z"_sv, "a-b-z-c"_sv);
+
+  // A single element is written without a delimiter.
+  testArrayJoinNoReplacement<StringView>({"a"_sv}, "-"_sv, "a"_sv);
+  testArrayJoinNoReplacement<StringView>({std::nullopt}, "-"_sv, ""_sv);
+  testArrayJoinReplacement<StringView>({std::nullopt}, "-"_sv, "z"_sv, "z"_sv);
+}
+
+TEST_F(ArrayJoinTest, singleVarcharElementDoesNotAliasInput) {
+  // Joining a one-element array yields the element verbatim, but as a new
+  // string rather than a view over the input. Aliasing the input would make the
+  // result retain the whole buffer backing the elements vector, which costs far
+  // more memory than the copy saves. The strings must exceed 12 bytes, or they
+  // would be inlined in the StringView and no buffer would be shared either
+  // way.
+  const auto elements = makeFlatVector<StringView>(
+      {"first string that is not inlined"_sv,
+       "second string that is not inlined"_sv});
+  const auto arrays = makeArrayVector({0, 1}, elements);
+
+  const auto result = evaluate<FlatVector<StringView>>(
+      "array_join(c0, '-')", makeRowVector({arrays}));
+
+  assertEqualVectors(elements, result);
+  for (auto row = 0; row < elements->size(); ++row) {
+    EXPECT_NE(result->valueAt(row).data(), elements->valueAt(row).data())
+        << "Row " << row << " aliases the input, pinning its string buffers.";
+  }
 }
 
 TEST_F(ArrayJoinTest, boolTest) {

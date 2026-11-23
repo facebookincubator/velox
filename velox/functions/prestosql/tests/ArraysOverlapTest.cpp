@@ -317,7 +317,7 @@ TEST_F(ArraysOverlapTest, dictionaryEncodedElementsInConstant) {
       {array});
 }
 
-TEST_F(ArraysOverlapTest, TimestampWithTimezone) {
+TEST_F(ArraysOverlapTest, timestampWithTimezone) {
   auto testArraysOverlap =
       [this](
           const std::vector<std::optional<int64_t>>& array1,
@@ -381,4 +381,49 @@ TEST_F(ArraysOverlapTest, TimestampWithTimezone) {
   testArraysOverlap({std::nullopt}, {}, false);
   testArraysOverlap({}, {std::nullopt}, false);
   testArraysOverlap({pack(1, 1), pack(2, 2)}, {}, false);
+}
+
+TEST_F(ArraysOverlapTest, unknownType) {
+  // Empty arrays - [] overlaps [] → false
+  auto emptyArray1 = makeArrayVector<UnknownValue>({{}});
+  auto emptyArray2 = makeArrayVector<UnknownValue>({{}});
+  auto result = evaluate(
+      "arrays_overlap(c0, c1)", makeRowVector({emptyArray1, emptyArray2}));
+  auto expected = makeNullableFlatVector<bool>({false});
+  assertEqualVectors(expected, result);
+
+  // NULL elements - [NULL] overlaps [NULL] → NULL (indeterminate)
+  auto nullArray1 = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{{std::nullopt}});
+  auto nullArray2 = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{{std::nullopt}});
+  result = evaluate(
+      "arrays_overlap(c0, c1)", makeRowVector({nullArray1, nullArray2}));
+  expected = makeNullableFlatVector<bool>({std::nullopt});
+  assertEqualVectors(expected, result);
+
+  // [NULL] overlaps [] → false
+  auto arrWithNull = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{{std::nullopt}});
+  auto emptyArr = makeArrayVector<UnknownValue>({{}});
+  result = evaluate(
+      "arrays_overlap(c0, c1)", makeRowVector({arrWithNull, emptyArr}));
+  expected = makeNullableFlatVector<bool>({false});
+  assertEqualVectors(expected, result);
+
+  // [] overlaps [NULL] → false
+  result = evaluate(
+      "arrays_overlap(c0, c1)", makeRowVector({emptyArr, arrWithNull}));
+  expected = makeNullableFlatVector<bool>({false});
+  assertEqualVectors(expected, result);
+
+  // NULL array (array itself is NULL) - NULL overlaps [NULL] → NULL
+  auto nullArrayVector = makeAllNullArrayVector(1, UNKNOWN());
+  auto arrayWithNull2 = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{{std::nullopt}});
+  result = evaluate(
+      "arrays_overlap(c0, c1)",
+      makeRowVector({nullArrayVector, arrayWithNull2}));
+  expected = makeNullableFlatVector<bool>({std::nullopt});
+  assertEqualVectors(expected, result);
 }

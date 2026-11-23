@@ -27,7 +27,7 @@ namespace facebook::velox::tests::utils {
 
 using namespace filesystems;
 /// Implements faulty filesystem for io fault injection in unit test. It is a
-/// wrapper on top of a real file system, and by default it delegates the the
+/// wrapper on top of a real file system, and by default it delegates the
 /// file operation to the real file system underneath.
 class FaultyFileSystem : public FileSystem {
  public:

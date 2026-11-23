@@ -53,11 +53,10 @@ class LeadLagFunction : public exec::WindowFunction {
       auto partitionSize = partition_->numRows();
       AlignedBuffer::reallocate<bool>(&nulls_, partitionSize);
 
-      partition_->extractNulls(valueIndex_, 0, partitionSize, nulls_);
-      // There are null bits so the special ignoreNulls processing is required
-      // for this partition.
+      // The special ignoreNulls processing is required only if the partition
+      // has nulls.
       ignoreNullsForPartition_ =
-          bits::countBits(nulls_->as<uint64_t>(), 0, partitionSize) > 0;
+          partition_->extractNulls(valueIndex_, 0, partitionSize, nulls_) > 0;
     }
   }
 
@@ -261,7 +260,7 @@ class LeadLagFunction : public exec::WindowFunction {
       vector_size_t step) {
     auto nonNullCount = 0;
     for (auto j = start; j != end; j += step) {
-      if (!bits::isBitSet(rawNulls, j)) {
+      if (!bits::isBitNull(rawNulls, j)) {
         nonNullCount++;
         if (nonNullCount == offset) {
           return j;

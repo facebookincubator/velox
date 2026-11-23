@@ -16,16 +16,20 @@
 
 #pragma once
 
+#include <folly/container/F14Map.h>
+#include <memory>
+#include <string>
 #include <vector>
 
+#include "velox/connectors/common/DeletionVectorReader.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
 /// Reads an Iceberg V3 deletion vector and applies it to the delete bitmap.
 ///
-/// Supports both 64-bit Roaring64Bitmap format (used by Java's Roaring64Bitmap
-/// at Meta's 500 PB scale) and legacy 32-bit RoaringBitmap format.
+/// Supports both 64-bit Roaring64Bitmap format and legacy 32-bit RoaringBitmap
+/// format.
 ///
 /// 64-bit format: [numGroups: uint64] then for each group:
 ///   [highBits: uint32] [32-bit RoaringBitmap in portable format]
@@ -33,59 +37,53 @@ namespace facebook::velox::connector::hive::iceberg {
 /// 32-bit format: [cookie: uint32] [containerCount: uint32] ...
 ///   Detected by checking if the first 8 bytes match a 32-bit cookie (12346
 ///   or 12347).
-class DeletionVectorReader {
+///
+/// Loading unwraps the blob and parses the bitmap with RoaringBitmapView, which
+/// keeps each container in its serialized form instead of expanding every
+/// deleted row. Each batch's delete bitmap is then filled straight from the
+/// containers it overlaps.
+class DeletionVectorReader : public connector::DeletionVectorReader {
  public:
   /// @param dvFile Iceberg delete file metadata containing the Puffin file
   /// path,
   ///        blob offset, and blob length.
   /// @param splitOffset File position of the first row in the split.
-  /// @param pool Memory pool for internal allocations.
+  /// @param pool Memory pool for the bytes of the deletion vector.
+  /// @param connectorConfig Connector configuration used to resolve the
+  ///        filesystem for the Puffin file (e.g. Manifold client credentials).
+  ///        Passing nullptr leaves config-requiring filesystems unconfigured.
+  /// @param fileReadOps Options forwarded to the FileSystem when the Puffin
+  ///        file is opened and on every read from it.
+  /// @param tokenProvider Query token provider for the Puffin file open.
   DeletionVectorReader(
       const IcebergDeleteFile& dvFile,
       uint64_t splitOffset,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      std::shared_ptr<const config::ConfigBase> connectorConfig,
+      folly::F14FastMap<std::string, std::string> fileReadOps = {},
+      std::shared_ptr<filesystems::TokenProvider> tokenProvider = nullptr);
 
-  /// Reads deleted positions from the DV and sets corresponding bits in the
-  /// deleteBitmap for the current batch range.
-  void readDeletePositions(
-      uint64_t baseReadOffset,
-      uint64_t size,
-      BufferPtr deleteBitmap);
-
-  /// Returns true when there is no more data.
-  bool noMoreData() const;
+  /// Loads the deletion vector (if not already loaded) and returns the sorted,
+  /// absolute file-level deleted positions. Used to seed a DeletionVectorWriter
+  /// when replacing an existing DV with the union of old and new positions.
+  /// Expands every position, so the scan path does not call it.
+  const std::vector<int64_t>& deletedPositions();
 
   static constexpr int32_t kDvOffsetFieldId = 100;
   static constexpr int32_t kDvLengthFieldId = 101;
 
  private:
-  void loadBitmap();
-
-  // Deserializes a 64-bit roaring bitmap (Roaring64Bitmap format).
-  void deserializeRoaring64Bitmap(const std::string& data);
-
-  // Deserializes a 32-bit roaring bitmap from portable binary format.
-  // Positions are offset by highBitsOffset (upper 32 bits for 64-bit mode,
-  // 0 for legacy 32-bit mode).
-  void deserialize32BitRoaringBitmap(
-      const uint8_t* ptr,
-      const uint8_t* end,
-      int64_t highBitsOffset);
+  // Locates the blob from the delete file metadata or the Puffin footer,
+  // reads it, removes its deletion-vector-v1 frame and parses the bitmap
+  // inside.
+  Bitmap readBitmap(ReadFile& file, const FileIoContext& ioContext) override;
 
   // The deletion vector file metadata from the Iceberg manifest.
   const IcebergDeleteFile dvFile_;
 
-  // Base offset of the split within the data file (for position mapping).
-  const uint64_t splitOffset_;
-
-  // Sorted list of deleted row positions (absolute, file-level positions).
+  // Expanded positions, built only by deletedPositions().
   std::vector<int64_t> deletedPositions_;
-
-  // Current scan position within deletedPositions_.
-  size_t positionIndex_{0};
-
-  // Whether the bitmap has been loaded from the DV file.
-  bool loaded_{false};
+  bool positionsExpanded_{false};
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

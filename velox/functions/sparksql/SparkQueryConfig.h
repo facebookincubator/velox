@@ -144,6 +144,15 @@ class SparkQueryConfig {
       false,
       "Return NaN instead of NULL for Spark statistical aggregation on divide-by-zero.")
 
+  /// If true, encode replaces unmappable characters instead of failing.
+  VELOX_SPARK_CONFIG(
+      kLegacyCodingErrorAction,
+      legacyCodingErrorAction,
+      "legacy_coding_error_action",
+      bool,
+      false,
+      "Replace unmappable characters in the Spark encode function.")
+
   /// If true, ignore null fields when generating JSON string.
   VELOX_SPARK_CONFIG(
       kJsonIgnoreNullFields,
@@ -161,6 +170,14 @@ class SparkQueryConfig {
       bool,
       true,
       "If true, Spark collect_list() ignores nulls in the input.")
+
+  VELOX_SPARK_CONFIG(
+      kDecimalToFloatHighPrecisionCastEnabled,
+      decimalToFloatHighPrecisionCastEnabled,
+      "decimal_to_float_high_precision_cast_enabled",
+      bool,
+      false,
+      "Enable high precision casts from DECIMAL to REAL/DOUBLE.")
 
   /// Returns all registered Spark config properties. Property names are
   /// unqualified (no "spark." prefix).

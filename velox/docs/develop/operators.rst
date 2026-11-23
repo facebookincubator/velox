@@ -39,9 +39,11 @@ ProjectNode                 FilterProject
 AggregationNode             HashAggregation or StreamingAggregation
 GroupIdNode                 GroupId
 MarkDistinctNode            MarkDistinct
+MarkSortedNode              MarkSorted
 HashJoinNode                HashProbe and HashBuild
 MergeJoinNode               MergeJoin
 NestedLoopJoinNode          NestedLoopJoinProbe and NestedLoopJoinBuild
+VectorSearchJoinNode        VectorSearchJoinProbe and VectorSearchJoinBuild
 OrderByNode                 OrderBy
 TopNNode                    TopN
 LimitNode                   Limit
@@ -62,6 +64,7 @@ WindowNode                  Window
 RowNumberNode               RowNumber
 TopNRowNumberNode           TopNRowNumber
 MixedUnionNode              MixedUnion
+RPCNode                     RPC
 ==========================  ==============================================   ===========================
 
 Plan Nodes
@@ -586,6 +589,71 @@ thread of execution.
    * - outputType
      - A list of output columns. This is a subset of columns available in the left and right inputs of the join. The columns may appear in different order than in the input.
 
+VectorSearchJoinNode
+~~~~~~~~~~~~~~~~~~~~
+
+VectorSearchJoinNode joins rows with query embeddings to the nearest entries of
+local vector indexes (see :doc:`/functions/presto/vectorindex`). One side of the
+join has the index rows, each with a packed local index; the other side has the
+query rows, each with an embedding. The equality conditions on the keys match
+each query row to index rows, as in a hash join; with no keys, every query row
+matches every index row. Within each match, the query embedding, normalized for
+the metric, is searched in the index for its k nearest embeddings. Each
+embedding found gives an output row with the columns of the query row and the
+index row, the embedding's id and its score, where larger is nearer.
+
+Rows with a null key, query rows with a null embedding and index rows with a
+null index match nothing. An outer join, left with the query rows on the left
+or right with the query rows on the right, outputs a query row that finds no
+embeddings once, with nulls for the index row's columns, the id and the score.
+A join may not preserve the index rows.
+All query embeddings must have the same length, equal to the dimension of every
+index, and no embedding may have a null, NaN or infinite element; a violation
+is a user error.
+
+The right side is loaded into memory and the left side streams. With the
+indexes on the right, each batch of query rows is searched in the indexes it
+matches. With the indexes on the left, each streaming index is decoded once per
+batch and searched with the query rows it matches. A join other than left
+pushes filters on the keys of the right side into the left side's table scan,
+and reads no left rows if no right row can match. The output does not preserve
+the order of the left side. Available when Velox is built with FAISS
+(``VELOX_ENABLE_FAISS``).
+
+.. list-table::
+   :widths: 10 30
+   :align: left
+   :header-rows: 1
+
+   * - Property
+     - Description
+   * - joinType
+     - Join type: inner; left, if the index rows are on the right; or right, if the index rows are on the left.
+   * - leftKeys
+     - Columns from the left hand side input that are part of the equality condition. May be empty.
+   * - rightKeys
+     - Columns from the right hand side input that are part of the equality condition. The number and order of the rightKeys must match the number and order of the leftKeys.
+   * - indexSide
+     - The side with the index rows: PROBE, the left, or BUILD, the right. The other side has the query rows.
+   * - embedding
+     - Column of the query side, of type ARRAY(REAL), with the query embedding.
+   * - index
+     - Column of the index side, of type VARBINARY, with the packed local index. May not appear in the output.
+   * - format
+     - The format of the local indexes: its name in the query's registry of local vector index formats.
+   * - metric
+     - The metric the indexes were built for.
+   * - k
+     - The number of embeddings to find in each matching index, at least 1. At most the size of the index are found.
+   * - searchOptions
+     - Optional search settings that override the ones recorded in the indexes. Their keys and values are the format's.
+   * - idName
+     - Optional name of the output column, of type BIGINT, with the id of each embedding found.
+   * - scoreName
+     - Optional name of the output column, of type REAL, with the score of each embedding found.
+   * - outputType
+     - A list of output columns: columns of the left and right inputs, and the id and score columns, in any order.
+
 OrderByNode
 ~~~~~~~~~~~
 
@@ -677,7 +745,7 @@ output rows with empty unnest values are not produced.
    * - unnestVariables
      - Input columns of type array or map to expand.
    * - unnestNames
-     - Names to use for expanded columns. One name per array column. Two names per map column.
+     - Names to use for expanded columns. One name per array column. Two names per map column. A name may be absent (null) to prune the corresponding expanded column, which is then neither emitted nor materialized.
    * - ordinalityName
      - Optional name for the ordinality column.
    * - emptyUnnestValueName
@@ -708,7 +776,7 @@ the written file paths on storage and the collected column stats.
    * - aggregationNode
      - Optional Aggregation plan node used to collect column stats for the data written to storage.
    * - insertTableHandle
-     - Connector-specific description of the destination table.
+     - Connector-specific description of the destination table. Its notNullColumns is a subset of columnNames; writing a null into one of them fails the query.
    * - outputType
      - A list of output columns containing the metadata of the data written storage.
 
@@ -1043,6 +1111,33 @@ table and restored together. Disabled by default; enable with `mark_distinct_spi
   * - masks
     - List of boolean mask column references. Empty when only the no-mask marker is needed.
 
+MarkSortedNode
+~~~~~~~~~~~~~~
+
+The MarkSorted operator appends a boolean marker column, named 'markerName', at the end of
+the input columns. For each row, the marker indicates whether the row maintains sort order
+relative to the preceding row, based on 'sortingKeys' and 'sortingOrders'. Rows with equal
+sorting keys are considered sorted.
+
+The operator runs in streaming mode and preserves the order of its input. The comparison
+carries across batches, so only the first row of the entire input is unconditionally marked
+true; the first row of each later batch is compared against the last row of the previous
+batch.
+
+.. list-table::
+  :widths: 10 30
+  :align: left
+  :header-rows: 1
+
+  * - Property
+    - Description
+  * - markerName
+    - Name of the output boolean marker column, appended after all input columns.
+  * - sortingKeys
+    - Columns to check for sorted order. Must not be empty.
+  * - sortingOrders
+    - Sorting order for each sorting key above. The supported sort orders are asc nulls first, asc nulls last, desc nulls first and desc nulls last.
+
 MixedUnionNode
 ~~~~~~~~~~~~~~
 
@@ -1134,6 +1229,54 @@ ALL.
 .. image:: images/local-exchange.png
     :width: 400
     :align: center
+
+.. _RPCNode:
+
+RPCNode
+~~~~~~~
+
+The RPC operation calls an external service asynchronously and appends the
+response as a new column. ``kPerRow`` dispatches each row independently;
+``kBatch`` accumulates rows and passes each flushed group to the function, which
+may issue one native or asynchronous batch request or fan out into per-row
+requests. It is used for remote inference such as LLM completion and text
+embeddings. The corresponding operator class is ``RPCOperator``
+(``velox/exec/rpc/``); the business logic is provided by an
+:ref:`AsyncRPCFunction <AsyncRPCFunction>` (see
+:doc:`/develop/async-rpc-functions`).
+
+An upstream ``ProjectNode`` computes argument expressions into columns before
+the RPC node reads them by name.
+
+.. list-table::
+   :widths: 10 30
+   :align: left
+   :header-rows: 1
+
+   * - Property
+     - Description
+   * - call
+     - The registered function call. Its name identifies the
+       ``AsyncRPCFunction``, its type is the RPC result type, and its inputs are
+       field accesses or constants in argument order.
+   * - outputColumn
+     - Name of the result column appended to the output.
+   * - outputType
+     - Full output row type: the passed-through source columns plus the result
+       column (stated explicitly to allow column pruning).
+   * - streamingMode
+     - ``kPerRow`` (one RPC per row, dispatched concurrently) or ``kBatch``
+       (rows accumulated and flushed as groups). This is the concrete mode
+       selected during planning; the function decides how to serve it on its
+       own backend.
+   * - dispatchBatchSize
+     - In ``kBatch`` mode, sets the flush granularity. ``0`` waits until input
+       closes, then flushes everything pending; ``maxRowsPerFlush()`` may split
+       that backlog into smaller requests. Not used in ``kPerRow`` mode.
+
+.. note::
+   ``streamingMode`` is what the query asked for, not what the function will do
+   about it — see :ref:`Execution mode and dispatch path <RPCDispatchPath>`.
 
 GPU Operators (cuDF)
 --------------------

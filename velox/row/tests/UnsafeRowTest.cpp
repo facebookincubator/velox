@@ -19,6 +19,7 @@
 #include <folly/Random.h>
 #include <folly/init/Init.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/row/UnsafeRowFast.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -129,6 +130,27 @@ class UnsafeRowTest : public ::testing::Test, public VectorTestBase {
       memory::memoryManager()->addLeafPool();
 };
 
+TEST_F(UnsafeRowTest, fixedWidthMapPadding) {
+  auto floats = makeMapVector<int32_t, float>({{{7, 1.25f}}});
+  auto strings =
+      makeMapVector<int64_t, StringView>({{{9, StringView("after")}}});
+  auto data = makeRowVector({floats, strings});
+  UnsafeRowFast serializer(data);
+  auto buffer =
+      AlignedBuffer::allocate<char>(serializer.rowSize(0), pool_.get(), 0);
+  EXPECT_EQ(
+      serializer.serialize(0, buffer->asMutable<char>()),
+      serializer.rowSize(0));
+
+  const auto* words = buffer->as<uint64_t>();
+  const auto mapOffset = words[1] >> 32;
+  EXPECT_EQ(static_cast<uint32_t>(words[1]), 56);
+  EXPECT_EQ(words[2] >> 32, mapOffset + 56);
+  const auto* map =
+      reinterpret_cast<const uint64_t*>(buffer->as<char>() + mapOffset);
+  EXPECT_EQ(map[0], 24);
+}
+
 TEST_F(UnsafeRowTest, fuzz) {
   auto rowType = ROW({
       BOOLEAN(),
@@ -214,6 +236,16 @@ TEST_F(UnsafeRowTest, nestedMaps) {
   auto values = makeMapVector({0, 2, 2, 3, 4, 5}, keys, innerMaps, {1});
   auto data = makeRowVector({values});
   testRoundTrip(data);
+}
+
+TEST_F(UnsafeRowTest, flatMapUnsupported) {
+  auto data = makeRowVector({makeFlatMapVector<int32_t, int64_t>({
+      {{1, 10}, {2, 20}},
+      {{1, 11}},
+  })});
+  VELOX_ASSERT_THROW(
+      UnsafeRowFast{data},
+      "Unsupported map vector encoding for UnsafeRow: FLAT_MAP");
 }
 
 TEST_F(UnsafeRowTest, constantVector) {

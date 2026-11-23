@@ -118,14 +118,45 @@ class QueryConfig {
 
   /// If true, timezone-less timestamp conversions (e.g. string to timestamp,
   /// when the string does not specify a timezone) will be adjusted to the user
-  /// provided session timezone (if any).
+  /// provided session timezone (if any). Casts from TIMESTAMP WITH TIME ZONE to
+  /// TIMESTAMP return the UTC instant when this property is true.
   VELOX_QUERY_CONFIG(
       kAdjustTimestampToTimezone,
       adjustTimestampToTimezone,
       "adjust_timestamp_to_session_timezone",
       bool,
       false,
-      "Adjust timezone-less timestamp conversions to session timezone.")
+      "Adjust timezone-less timestamp conversions to session timezone and cast TIMESTAMP WITH TIME ZONE to TIMESTAMP as a UTC instant.")
+
+  /// If true, operations that render a TIMESTAMP WITH TIME ZONE ignore the
+  /// stored time zone label and use the session time zone, so values that
+  /// compare equal produce equal results. If false, they use each value's
+  /// stored time zone label. The timezone_hour and timezone_minute functions
+  /// always report the offset stored in the value. When
+  /// adjust_timestamp_to_session_timezone is false, casts to TIMESTAMP use the
+  /// session zone when this property is true and the stored zone when it is
+  /// false.
+  VELOX_QUERY_CONFIG_PROPERTY(
+      kIgnoreTimeZoneLabel,
+      "ignore_time_zone_label",
+      bool,
+      false,
+      "Ignore TIMESTAMP WITH TIME ZONE labels and render values in the session timezone (true), or render each value using its stored label (false); when adjust_timestamp_to_session_timezone is false, casts to TIMESTAMP use the session zone (true) or stored zone (false).")
+
+  /// Returns the explicitly configured value, or the deprecated property's
+  /// value when the new property is absent.
+  bool ignoreTimeZoneLabel() const;
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  /// Deprecated config key retained while downstream callers migrate.
+  static constexpr const char* kUseSessionTimezoneForTimestampWithTimezone =
+      "use_session_timezone_for_timestamp_with_timezone";
+
+  /// Legacy API. Prefer ignoreTimeZoneLabel().
+  bool useSessionTimezoneForTimestampWithTimezone() const {
+    return ignoreTimeZoneLabel();
+  }
+#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
 
   /// Whether to use the simplified expression evaluation path. False by
   /// default.
@@ -230,6 +261,22 @@ class QueryConfig {
       bool,
       false,
       "Match Row fields by name instead of position in CAST.")
+
+  /// If true, CAST from VARCHAR to REAL or DOUBLE with Presto semantics also
+  /// accepts the C-style spellings of the special floating-point values:
+  /// "inf", "infinity" and "nan" in any letter case, with an optional leading
+  /// sign. By default only the Presto spellings "Infinity" and "NaN" are
+  /// accepted, in exactly that letter case. This deviates from Presto; enable
+  /// it to cast data whose writer printed the values the way glibc, Python and
+  /// numpy do. Spark CAST and casts from JSON are not affected.
+  VELOX_QUERY_CONFIG(
+      kCastStringToFloatingPointLenientInfNan,
+      isCastStringToFloatingPointLenientInfNan,
+      "cast_string_to_floating_point_lenient_inf_nan",
+      bool,
+      false,
+      "Accept 'inf', 'infinity' and 'nan' in any letter case in CAST from "
+      "VARCHAR to REAL or DOUBLE with Presto semantics.")
 
   /// Reduce() function will throw an error if encountered an array of size
   /// greater than this.
@@ -339,6 +386,21 @@ class QueryConfig {
       uint64_t,
       2UL << 20,
       "Minimum bytes to accumulate before unblocking an exchange consumer.")
+
+  /// The number of rows the Exchange operator fills each output batch to.
+  /// When positive, it replaces the target the operator derives from
+  /// preferred_output_batch_bytes and an estimate of the row size. A batch
+  /// holds only pages taken from the exchange queue together, at most
+  /// preferred_output_batch_bytes, so it can have fewer rows. A Presto page is
+  /// never split, so a batch can exceed this by part of a page. 0 keeps the
+  /// derived target.
+  VELOX_QUERY_CONFIG(
+      kExchangeOutputBatchRows,
+      exchangeOutputBatchRows,
+      "exchange_output_batch_rows",
+      uint32_t,
+      0,
+      "Rows per Exchange output batch, replacing the target derived from preferred_output_batch_bytes and the estimated row size. 0 keeps the derived target.")
 
   VELOX_QUERY_CONFIG(
       kMaxPartialAggregationMemory,
@@ -485,29 +547,48 @@ class QueryConfig {
 
   /// Preferred number of rows to be returned by operators from
   /// Operator::getOutput. Used when average row size is not known.
-  VELOX_QUERY_CONFIG_PROPERTY(
+  VELOX_QUERY_CONFIG(
       kPreferredOutputBatchRows,
+      preferredOutputBatchRows,
       "preferred_output_batch_rows",
-      uint32_t,
+      vector_size_t,
       1024,
       "Preferred number of rows in output batches.")
 
   /// Max number of rows that could be return by operators from
   /// Operator::getOutput.
-  VELOX_QUERY_CONFIG_PROPERTY(
+  VELOX_QUERY_CONFIG(
       kMaxOutputBatchRows,
+      maxOutputBatchRows,
       "max_output_batch_rows",
-      uint32_t,
-      10000,
+      vector_size_t,
+      10'000,
       "Maximum number of rows in output batches.")
 
   /// Initial output batch size in rows for MergeJoin operator.
-  VELOX_QUERY_CONFIG_PROPERTY(
+  VELOX_QUERY_CONFIG(
       kMergeJoinOutputBatchStartSize,
+      mergeJoinOutputBatchStartSize,
       "merge_join_output_batch_start_size",
-      uint32_t,
+      vector_size_t,
       0,
       "Initial output batch size in rows for MergeJoin. 0 disables dynamic adjustment.")
+
+  /// MergeJoin normally buffers both sides of an equal-key group before
+  /// emitting, so its memory is proportional to the sum of the two groups. For
+  /// inner and left joins the left group does not need to be resident: each
+  /// left row is joined against the whole right group and can then be
+  /// discarded. With this set, such joins retain only the left batch currently
+  /// being consumed and the one before it, kept to extend the group, bounding
+  /// left-side retention to two batches instead of the whole key group. Set to
+  /// false to restore buffering of the whole group.
+  VELOX_QUERY_CONFIG(
+      kMergeJoinStreamLeftSide,
+      mergeJoinStreamLeftSide,
+      "merge_join_stream_left_side",
+      bool,
+      true,
+      "Stream the left side of an inner or left MergeJoin instead of buffering the whole equal-key group.")
 
   /// TableScan operator will exit getOutput() method after this many
   /// milliseconds even if it has no data to return yet. Zero means 'no time
@@ -526,7 +607,7 @@ class QueryConfig {
       kTableScanOutputBatchRowsOverride,
       tableScanOutputBatchRowsOverride,
       "table_scan_output_batch_rows_override",
-      uint32_t,
+      vector_size_t,
       0,
       "Override number of rows in TableScan output batches. 0 means no override.")
 
@@ -670,9 +751,13 @@ class QueryConfig {
       "Enable LocalMerge spilling. Requires spill_enabled.")
 
   /// Specify the max number of local sources to merge at a time.
-  /// Uses std::numeric_limits<uint32_t>::max() as default.
-  static constexpr const char* kLocalMergeMaxNumMergeSources =
-      "local_merge_max_num_merge_sources";
+  VELOX_QUERY_CONFIG(
+      kLocalMergeMaxNumMergeSources,
+      localMergeMaxNumMergeSources,
+      "local_merge_max_num_merge_sources",
+      uint32_t,
+      std::numeric_limits<uint32_t>::max(),
+      "Maximum number of local sources to merge at a time.")
 
   /// The max row numbers to fill and spill for each spill run. Default is
   /// 12 million rows which uses ~128MB memory.
@@ -849,8 +934,12 @@ class QueryConfig {
 
   /// The number of local parallel table writer operators per task for
   /// partitioned writes. If not set, use "task_writer_count". No default.
-  static constexpr const char* kTaskPartitionedWriterCount =
-      "task_partitioned_writer_count";
+  VELOX_QUERY_CONFIG_PROPERTY(
+      kTaskPartitionedWriterCount,
+      "task_partitioned_writer_count",
+      std::optional<uint32_t>,
+      std::optional<uint32_t>{},
+      "The number of local parallel table writer operators per task for partitioned writes. If not set, use \"task_writer_count\".")
 
   /// If true, finish the hash probe on an empty build table for a specific set
   /// of hash joins.
@@ -889,6 +978,30 @@ class QueryConfig {
       uint64_t,
       0,
       "Maximum byte size of Bloom filter from hash probe. 0 disables.")
+
+  /// Number of probe rows used to decide whether to bypass the build-side
+  /// Bloom filter for left joins and non-null-aware left semi-project and left
+  /// anti joins. 0 disables local Bloom filter probing.
+  VELOX_QUERY_CONFIG(
+      kBypassHashProbeBloomFilterMinRows,
+      bypassHashProbeBloomFilterMinRows,
+      "bypass_hash_probe_bloom_filter_min_rows",
+      int32_t,
+      0,
+      "Number of probe rows used to decide whether to bypass the build-side "
+      "Bloom filter for left joins and non-null-aware left semi-project and "
+      "left anti joins. 0 disables local Bloom filter probing.")
+
+  /// Bypass the build-side Bloom filter if its acceptance percentage meets
+  /// or exceeds this value. 0 bypasses the Bloom filter without sampling.
+  VELOX_QUERY_CONFIG(
+      kBypassHashProbeBloomFilterMinPct,
+      bypassHashProbeBloomFilterMinPct,
+      "bypass_hash_probe_bloom_filter_min_pct",
+      int32_t,
+      85,
+      "Bypass the build-side Bloom filter if its acceptance percentage meets "
+      "or exceeds this value. 0 bypasses the Bloom filter without sampling.")
 
   /// The minimum number of table rows that can trigger the parallel hash join
   /// table build.
@@ -1232,6 +1345,16 @@ class QueryConfig {
       false,
       "Throw exception on duplicate map keys.")
 
+  /// If true, map functions that support it build a flat map when every key is
+  /// constant.
+  VELOX_QUERY_CONFIG(
+      kGenerateConstantMapsAsFlatMaps,
+      generateConstantMapsAsFlatMaps,
+      "generate_constant_maps_as_flat_maps",
+      bool,
+      false,
+      "Build a flat map when every map key is constant.")
+
   /// Max number of input batches to prefetch for index lookup. 0 = disabled.
   VELOX_QUERY_CONFIG(
       kIndexLookupJoinMaxPrefetchBatches,
@@ -1269,6 +1392,16 @@ class QueryConfig {
       int32_t,
       0,
       "Minimum rows to accumulate before producing streaming aggregation output. 0 uses default.")
+
+  /// The number of threads vector_index_train trains a codec on.
+  VELOX_QUERY_CONFIG(
+      kVectorIndexTrainThreads,
+      vectorIndexTrainThreads,
+      "vector_index_train_threads",
+      int32_t,
+      1,
+      "Number of threads vector_index_train trains a codec on, for both OpenMP "
+      "and MKL. Positive.")
 
   /// TODO: Remove after dependencies are cleaned up.
   VELOX_QUERY_CONFIG(
@@ -1398,6 +1531,20 @@ class QueryConfig {
       1000,
       "Batch size threshold for zero-copy in MarkSorted operator.")
 
+  /// Initial per-driver BATCH RPC congestion window (RPCOperator).
+  VELOX_QUERY_CONFIG(
+      kRpcCongestionBatchStartWindow,
+      rpcCongestionBatchStartWindow,
+      "rpc.congestion.batch_start_window",
+      int64_t,
+      0,
+      "Initial per-driver BATCH RPC congestion window. 0 keeps the built-in "
+      "default of 2. Positive values are clamped to [minWindow, maxWindow]. "
+      "PER_ROW always starts at its ceiling. Size at or below the backend's "
+      "measured concurrency knee: starting above it seeds the unloaded-RTT "
+      "baseline with queueing delay, leaving only explicit overload errors "
+      "to shrink the window.")
+
   /// Floor the RPC congestion window may shrink to under overload
   /// (RPCOperator).
   VELOX_QUERY_CONFIG(
@@ -1436,58 +1583,166 @@ class QueryConfig {
       "admission-controlled dispatch this ceiling now actually bounds in-flight "
       "rows, so it must be sized for the backend's healthy concurrency.")
 
-  /// Enables the adaptive per-tier RPC rate limiter (RPCRateLimiter).
+  /// Cap for BATCH driver-window growth on clean no-latency completions.
+  VELOX_QUERY_CONFIG(
+      kRpcCongestionAsyncGrowthMaxWindow,
+      rpcCongestionAsyncGrowthMaxWindow,
+      "rpc.congestion.async_growth_max_window",
+      int64_t,
+      0,
+      "Cap for per-driver BATCH congestion-window growth on clean completions "
+      "that carry no usable latency sample. 0 (default) disables recovery "
+      "growth: overload may shrink the window, and clean completions do not "
+      "grow it back toward the start. "
+      "Positive values let the window discover capacity additively up to the "
+      "cap. A positive value below the effective BATCH start window is raised "
+      "to that start. The congestion max window remains the overall ceiling.")
+
+  /// Admission-window policy of the query's RPC rate limiters.
+  VELOX_QUERY_CONFIG(
+      kRpcFlowControlPolicy,
+      rpcFlowControlPolicy,
+      "rpc.flow_control_policy",
+      std::string,
+      "WINDOW_AIMD",
+      "RPC flow-control policy, case-insensitive: WINDOW_AIMD (default) or "
+      "CAPACITY_PROBING (experimental). CAPACITY_PROBING applies only to "
+      "adaptive PER_ROW functions that return capacity retries; other queries "
+      "run WINDOW_AIMD. It differs from WINDOW_AIMD as follows. Until the "
+      "first overload, or until responses slow down, the window doubles every "
+      "round. A rejection the function names as a lack of serving capacity "
+      "keeps 80% of the calls the backend held, as the round's rejections "
+      "show, even below rpc.ratelimiter.min_limit and below one call. The "
+      "window then grows "
+      "back to that level by half the distance each round and past it by a "
+      "step that doubles each round, at most 16 calls per round. The window "
+      "never grows past twice the most calls in flight in the round or the "
+      "one before, and rows "
+      "the transport answered only after retrying an overload in place earn "
+      "it no growth. Driver windows start "
+      "at the rate limiter's ceiling instead of 100 when that is higher, but "
+      "not above a ceiling the function declares, nor above 200 when only the "
+      "safety ceiling of rpc.ratelimiter.hard_limit=0 applies; a session's "
+      "rpc.congestion.max_window still sets them. A CAPACITY_PROBING query "
+      "gets its own rate limiter per backend, with its own ceiling. Any other "
+      "value fails the query.")
+
+  /// Enables AIMD adaptation of each backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterAdaptiveEnabled,
       rpcRateLimiterAdaptiveEnabled,
       "rpc.ratelimiter.adaptive_enabled",
       bool,
       true,
-      "When true (default), the process-global per-tier RPC rate limiter adapts "
-      "its max-pending cap via AIMD driven by the backend overload signal "
+      "When true (default), each backend's rate limiter adapts its capacity "
+      "via multiplicative decrease and healthy recovery driven by the backend "
+      "overload signal "
       "(rate-limit/timeout): multiplicative-decrease on an overload-classified "
       "drain, additive-increase on a clean drain. On by default because it is "
       "the protective behavior for shared, rate-limited inference backends; set "
       "false to keep a static cap. Unlike the per-driver congestion window, this "
-      "coordinates all drivers on the worker and reacts to the rate-limit signal "
-      "directly, not to RTT.")
+      "coordinates all drivers on the worker that run the same policy and "
+      "reacts to the rate-limit signal "
+      "directly, not to RTT. Recovery doubles a fractional window until one, "
+      "then uses additive increase. "
+      "Queries that resolve to the same policy share a backend's rate "
+      "limiter, and each distinct policy gets its own.")
 
-  /// Floor for the adaptive per-tier RPC rate limiter's max-pending cap.
+  /// Legacy integral override for the adaptive congestion-window floor.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterMinLimit,
       rpcRateLimiterMinLimit,
       "rpc.ratelimiter.min_limit",
       int64_t,
       50,
-      "Floor the adaptive RPC rate limiter's per-tier max-pending cap may "
-      "shrink to under sustained overload. Default 50 (a floor of 1 can stall a "
-      "workload under sustained throttling). Only used when "
-      "rpc.ratelimiter.adaptive_enabled is true.")
+      "Integral override for a backend's adaptive congestion-window floor. "
+      "While rpc.ratelimiter.hard_limit is -1, a positive value replaces the "
+      "function's floor. When rpc.ratelimiter.hard_limit is 0 or more, or this "
+      "property is 0, the function's floor applies; it may be fractional, "
+      "pacing discrete admissions using the learned service horizon. This "
+      "value, or 50 if it is 0, applies when the function declares no floor. "
+      "Only used when "
+      "rpc.ratelimiter.adaptive_enabled is true. "
+      "Queries that resolve to the same policy share a backend's rate "
+      "limiter, and each distinct policy gets its own.")
 
-  /// Multiplicative-decrease factor for the adaptive RPC rate limiter.
+  /// Multiplicative-decrease factor for the adaptive rate-limit capacity.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterDecreaseFactor,
       rpcRateLimiterDecreaseFactor,
       "rpc.ratelimiter.decrease_factor",
       double,
       0.5,
-      "Factor applied to the adaptive RPC rate limiter's per-tier max-pending "
-      "cap on each overload-classified drain. Default 0.5 (halve). Clamped to "
-      "(0, 1). Only used when rpc.ratelimiter.adaptive_enabled is true.")
+      "Factor applied to a backend's adaptive rate-limit capacity "
+      "on overload. Canonical typed overload completions from the same admitted "
+      "epoch are coalesced; function-specific aggregate overload verdicts "
+      "apply at driver consumption. Default 0.5 (halve). Clamped to "
+      "(0, 1). Only used when rpc.ratelimiter.adaptive_enabled is true. "
+      "Queries that resolve to the same policy share a backend's rate "
+      "limiter, and each distinct policy gets its own.")
 
-  /// Ceiling for the per-tier RPC rate-limiter max-pending cap.
+  /// Legacy ceiling for a backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterMaxLimit,
       rpcRateLimiterMaxLimit,
       "rpc.ratelimiter.max_limit",
       int64_t,
       200,
-      "Ceiling (and, with adaptive enabled, the starting value) for the "
-      "process-global per-tier RPC rate-limiter max-pending cap. Default 200 "
-      "(validated for LLM-inference backends); 0 falls back to the built-in 20. "
-      "With admission-controlled dispatch this cap actually bounds process-wide "
-      "in-flight rows per tier; the adaptive limiter shrinks from here toward "
-      "rpc.ratelimiter.min_limit under overload.")
+      "Legacy session ceiling for the per-backend rate-limit capacity, shared "
+      "across drivers. Default 200. Zero defers to the function ceiling or the "
+      "built-in legacy limit. A positive value overrides the function ceiling. "
+      "With admission-controlled dispatch this cap bounds in-flight work "
+      "against that backend across every driver on the worker that runs the "
+      "same policy; the adaptive "
+      "limiter shrinks from here toward rpc.ratelimiter.min_limit under "
+      "overload. Superseded by rpc.ratelimiter.hard_limit when that property "
+      "is non-negative. "
+      "Queries that resolve to the same policy share a backend's rate "
+      "limiter, and each distinct policy gets its own.")
+
+  /// Versioned hard ceiling for a backend's rate-limit capacity.
+  VELOX_QUERY_CONFIG(
+      kRpcRateLimiterHardLimit,
+      rpcRateLimiterHardLimit,
+      "rpc.ratelimiter.hard_limit",
+      int64_t,
+      -1,
+      "Versioned session hard ceiling for the per-backend rate-limit capacity, "
+      "and the switch to the function's bounds. Minus one keeps the session's "
+      "precedence: rpc.ratelimiter.min_limit and rpc.ratelimiter.max_limit "
+      "override the function's floor and ceiling. Zero or more lets the "
+      "function's floor and ceiling win, since session properties apply to "
+      "every function in the query, and ignores rpc.ratelimiter.max_limit. A "
+      "positive value caps the function's ceiling, the smaller winning, and is "
+      "the ceiling when the function declares none. Zero adds no session "
+      "ceiling: with no function ceiling, adaptive mode starts at 200 and may "
+      "grow to a 1,000,000 safety ceiling, and fixed mode uses 200. To use the "
+      "function's bounds and keep a cap, set the cap here, e.g. 200. Queries that resolve to the same "
+      "policy share a backend's rate limiter, and each distinct policy gets "
+      "its own.")
+
+  /// Longest gap between paced probes of an overloaded backend.
+  VELOX_QUERY_CONFIG(
+      kRpcRateLimiterMaxProbeIntervalMs,
+      rpcRateLimiterMaxProbeIntervalMs,
+      "rpc.ratelimiter.max_probe_interval_ms",
+      int64_t,
+      60'000,
+      "Longest gap, in milliseconds, between paced calls to a backend that "
+      "rejects everything, when rejections return quickly; a call that hangs "
+      "until it times out holds the only paced slot until then. A shorter gap "
+      "notices recovery sooner; a longer one sends fewer calls to a backend "
+      "that is down. It is also a minimum load: each worker sends at least one "
+      "call per gap to the backend, and probes come up to 20% early at random, "
+      "about 11% more on average. Calls that take longer than half this gap "
+      "are probed every two call durations instead. Under CAPACITY_PROBING a "
+      "capacity rejection can cut below the function's floor, so this bound is "
+      "what still admits one call per gap while the backend rejects "
+      "everything. Zero removes the bound, so the window can fall to the "
+      "function's floor, or under CAPACITY_PROBING to a thousandth of a call: "
+      "a call every thousand service times. Only used when "
+      "rpc.ratelimiter.adaptive_enabled is true. The first query to reach a "
+      "backend fixes its policy for the life of the worker process.")
 
   // --- Hand-written accessors for properties that need custom logic ---
 
@@ -1497,32 +1752,6 @@ class QueryConfig {
     return config::toCapacity(
         get<std::string>(kQueryMaxMemoryPerNode, "0B"),
         config::CapacityUnit::BYTE);
-  }
-
-  vector_size_t preferredOutputBatchRows() const {
-    const uint32_t batchRows = get<uint32_t>(kPreferredOutputBatchRows, 1024);
-    VELOX_USER_CHECK_LE(batchRows, std::numeric_limits<vector_size_t>::max());
-    return batchRows;
-  }
-
-  vector_size_t maxOutputBatchRows() const {
-    const uint32_t maxBatchRows = get<uint32_t>(kMaxOutputBatchRows, 10'000);
-    VELOX_USER_CHECK_LE(
-        maxBatchRows, std::numeric_limits<vector_size_t>::max());
-    return maxBatchRows;
-  }
-
-  vector_size_t mergeJoinOutputBatchStartSize() const {
-    const uint32_t batchRows = get<uint32_t>(kMergeJoinOutputBatchStartSize, 0);
-    VELOX_USER_CHECK_LE(batchRows, std::numeric_limits<vector_size_t>::max());
-    return batchRows;
-  }
-
-  uint32_t localMergeMaxNumMergeSources() const {
-    const auto maxNumMergeSources = get<uint32_t>(
-        kLocalMergeMaxNumMergeSources, std::numeric_limits<uint32_t>::max());
-    VELOX_CHECK_GT(maxNumMergeSources, 0);
-    return maxNumMergeSources;
   }
 
   uint8_t spillNumPartitionBits() const {
@@ -1548,15 +1777,25 @@ class QueryConfig {
         config::CapacityUnit::BYTE);
   }
 
+  /// Which table scans track the size of the rows they read.
   enum class RowSizeTrackingMode {
-    DISABLED = 0,
-    EXCLUDE_DELTA_SPLITS = 1,
-    ENABLED_FOR_ALL = 2,
+    /// No table scan tracks row size.
+    kDisabled = 0,
+    /// Table scans track row size except for delta splits.
+    kExcludeDeltaSplits = 1,
+    /// Every table scan tracks row size.
+    kEnabledForAll = 2,
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+    // TODO: Remove once Prestissimo migrates.
+    DISABLED = kDisabled,
+    EXCLUDE_DELTA_SPLITS = kExcludeDeltaSplits,
+    ENABLED_FOR_ALL = kEnabledForAll,
+#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
   };
 
   RowSizeTrackingMode rowSizeTrackingMode() const {
     return get<RowSizeTrackingMode>(
-        kRowSizeTrackingMode, RowSizeTrackingMode::ENABLED_FOR_ALL);
+        kRowSizeTrackingMode, RowSizeTrackingMode::kEnabledForAll);
   }
 
   template <typename T>
@@ -1574,7 +1813,8 @@ class QueryConfig {
   }
 
   /// Test-only method to override the current query config properties.
-  /// It is not thread safe.
+  /// Validates the values like the constructor and throws on an invalid one,
+  /// leaving the current properties in place. It is not thread safe.
   void testingOverrideConfigUnsafe(
       std::unordered_map<std::string, std::string>&& values);
 

@@ -231,7 +231,7 @@ VectorPtr ArrayDistinctFunction<UnknownType, false>::applyFlat(
 
     rawNewOffsets[row] = indicesCursor;
     if (size > 0) {
-      if (FOLLY_UNLIKELY(indicesCursor == 0)) {
+      if (indicesCursor == 0) [[unlikely]] {
         rawNewIndices[0] = offset;
       }
       rawNewSizes[row] = 1;
@@ -299,7 +299,7 @@ std::shared_ptr<exec::VectorFunction> create(
     return std::make_shared<ArrayDistinctFunction<ComplexType>>();
   }
 
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_WITH_UNKNOWN(
       createTyped, elementType->kind(), inputArgs, elementType);
 }
 

@@ -38,8 +38,18 @@ class DwrfOptions : public dwio::common::FormatSpecificOptions {
     return columnReaderFactory_;
   }
 
+  void setMaxCoalesceDistance(int32_t distance) {
+    maxCoalesceDistance_ = distance;
+  }
+
+  int32_t maxCoalesceDistance() const {
+    return maxCoalesceDistance_;
+  }
+
  private:
   std::shared_ptr<ColumnReaderFactory> columnReaderFactory_;
+  int32_t maxCoalesceDistance_{
+      dwio::common::ReaderOptions::kDefaultCoalesceDistance};
 };
 
 class DwrfRowReader : public StrideIndexProvider,
@@ -85,7 +95,7 @@ class DwrfRowReader : public StrideIndexProvider,
 
   uint64_t skipRows(uint64_t numberOfRowsToSkip);
 
-  uint32_t currentStripe() const {
+  uint32_t currentStripe() const override {
     return currentStripe_;
   }
 
@@ -105,13 +115,12 @@ class DwrfRowReader : public StrideIndexProvider,
       VectorPtr& result,
       const dwio::common::Mutation* = nullptr) override;
 
-  void updateRuntimeStats(
-      dwio::common::RuntimeStatistics& stats) const override {
+  void updateRuntimeStats(dwio::common::RuntimeStats& stats) const override {
     stats.skippedStrides += skippedStrides_;
     stats.processedStrides += processedStrides_;
     stats.footerBufferOverread += getReader().footerBufferOverread();
     stats.numStripes += stripeCeiling_ - firstStripe_;
-    stats.columnReaderStats.mergeFrom(*columnReaderStats_);
+    stats.mergeFrom(*splitStats_);
     stats.unitLoaderStats.merge(unitLoadStats_);
   }
 
@@ -162,6 +171,16 @@ class DwrfRowReader : public StrideIndexProvider,
     return stripeCeiling_ == firstStripe_;
   }
 
+  // Narrows the stripes to read to the split row range, if one is set.
+  void initSplitRowRange();
+
+  // Moves from row 0 of 'firstStripe_' to the first row in the split row
+  // range.
+  void seekToSplitRowRangeStart(uint64_t strideSize);
+
+  // Evaluates filters against the stride stats of the current stripe.
+  void computeStridesToSkip(uint64_t strideSize);
+
   void checkSkipStrides(uint64_t strideSize);
 
   void readNext(
@@ -203,8 +222,14 @@ class DwrfRowReader : public StrideIndexProvider,
 
   std::shared_ptr<BitSet> projectedNodes_;
 
-  const uint64_t* stridesToSkip_;
-  int stridesToSkipSize_;
+  // Row in 'firstStripe_' to start reading at. Set by the split row range.
+  uint64_t firstStripeStartRow_{0};
+  // Number of rows to read in the stripe before 'stripeCeiling_'. Set by the
+  // split row range.
+  std::optional<uint64_t> lastStripeNumRows_;
+
+  const uint64_t* stridesToSkip_{nullptr};
+  int stridesToSkipSize_{0};
   // Record of strides to skip in each visited stripe. Used for diagnostics.
   std::unordered_map<uint32_t, std::vector<uint64_t>> stripeStridesToSkip_;
   // Number of skipped strides.
@@ -220,7 +245,7 @@ class DwrfRowReader : public StrideIndexProvider,
   // instead of next stripe.
   bool recomputeStridesToSkip_{false};
 
-  std::shared_ptr<dwio::common::ColumnReaderStatistics> columnReaderStats_;
+  std::shared_ptr<dwio::common::SplitStats> splitStats_;
 
   std::optional<int64_t> nextRowNumber_;
 
@@ -377,6 +402,10 @@ class DwrfReaderFactory : public dwio::common::ReaderFactory {
       const dwio::common::ReaderOptions& options) override {
     return DwrfReader::create(std::move(input), options);
   }
+
+  std::shared_ptr<dwio::common::FormatSpecificOptions> createFormatOptions(
+      const config::ConfigBase& connectorConfig,
+      const config::ConfigBase& session) const override;
 };
 
 } // namespace facebook::velox::dwrf

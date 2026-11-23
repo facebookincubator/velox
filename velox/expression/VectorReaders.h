@@ -271,7 +271,12 @@ namespace detail {
 template <typename TOut>
 const TOut& getDecoded(const DecodedVector& decoded) {
   auto base = decoded.base();
-  return *base->template as<TOut>();
+  auto* typed = base->template as<TOut>();
+  VELOX_CHECK_NOT_NULL(
+      typed,
+      "Unsupported vector encoding for simple function argument: {}",
+      base->encoding());
+  return *typed;
 }
 
 inline DecodedVector* decode(DecodedVector& decoder, const BaseVector& vector) {
@@ -467,6 +472,9 @@ struct VectorReader<Row<T...>> {
   using exec_in_t = typename VectorExec::resolver<Row<T...>>::in_type;
   using exec_null_free_in_t =
       typename VectorExec::template resolver<Row<T...>>::null_free_in_type;
+  template <typename U>
+  using field_reader_t = std::unique_ptr<VectorReader<FieldType<U>>>;
+  using child_readers_t = std::tuple<field_reader_t<T>...>;
 
   explicit VectorReader(const DecodedVector* decoded)
       : decoded_(*decoded),
@@ -536,17 +544,17 @@ struct VectorReader<Row<T...>> {
 
  private:
   template <size_t... I>
-  std::tuple<std::unique_ptr<VectorReader<T>>...> prepareChildReaders(
+  child_readers_t prepareChildReaders(
       const in_vector_t& vector,
       std::index_sequence<I...>) {
-    return {std::make_unique<VectorReader<T>>(
+    return {std::make_unique<VectorReader<FieldType<T>>>(
         detail::decode(childrenDecoders_[I], *vector_.childAt(I)))...};
   }
 
   const DecodedVector& decoded_;
   const in_vector_t& vector_;
   std::vector<DecodedVector> childrenDecoders_;
-  std::tuple<std::unique_ptr<VectorReader<T>>...> childReaders_;
+  child_readers_t childReaders_;
 };
 
 template <typename T>

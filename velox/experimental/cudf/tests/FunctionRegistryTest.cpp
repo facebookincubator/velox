@@ -16,11 +16,13 @@
 
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
-#include "velox/expression/Expr.h"
-#include "velox/expression/FieldReference.h"
+#include "velox/core/Expressions.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/expression/FunctionSignature.h"
 
 #include <gtest/gtest.h>
+
+#include <string>
 
 using namespace facebook::velox;
 
@@ -41,7 +43,7 @@ class TagFunction : public CudfFunction {
 
   ColumnOrView eval(
       std::vector<ColumnOrView>& /*inputColumns*/,
-      rmm::cuda_stream_view /*stream*/,
+      cuda::stream_ref /*stream*/,
       rmm::device_async_resource_ref /*mr*/) const override {
     VELOX_UNREACHABLE("TagFunction::eval should not be called in these tests");
   }
@@ -51,7 +53,11 @@ class TagFunction : public CudfFunction {
 };
 
 CudfFunctionFactory tagFactory(std::string tag) {
-  return [tag](const std::string&, const std::shared_ptr<exec::Expr>&) {
+  return [tag](
+             const std::string&,
+             const core::TypedExprPtr&,
+             memory::MemoryPool*,
+             const core::QueryConfig&) {
     return std::make_shared<TagFunction>(tag);
   };
 }
@@ -61,37 +67,51 @@ std::string tagOf(const std::shared_ptr<CudfFunction>& fn) {
   return tagged ? tagged->tag() : std::string{"<null>"};
 }
 
-// Necessary to mock `exec::Expr` call nodes successfully because the fake
-// function names used in these tests aren't registered with Velox's scalar
-// registry, so the usual `ExprSet` compilation path would reject them.
-std::shared_ptr<exec::Expr> makeCall(
+// The tests below exercise registry dispatch with mock TagFunctions that never
+// materialise constants, so they need no memory pool. This 2-argument overload
+// forwards a null pool to keep the call sites concise.
+std::shared_ptr<CudfFunction> createCudfFunction(
+    const std::string& name,
+    const core::TypedExprPtr& expr) {
+  return cudf_velox::createCudfFunction(
+      name, expr, /*pool=*/nullptr, core::QueryConfig({}));
+}
+
+// Synthetic typed call nodes let these tests exercise the cuDF registry without
+// registering fake scalar functions in Velox's function registry.
+core::TypedExprPtr makeCall(
     const std::string& name,
     const TypePtr& returnType,
     const std::vector<TypePtr>& argTypes) {
-  std::vector<std::shared_ptr<exec::Expr>> inputs;
+  std::vector<core::TypedExprPtr> inputs;
   inputs.reserve(argTypes.size());
-  for (const auto& argType : argTypes) {
+  for (size_t i = 0; i < argTypes.size(); ++i) {
     inputs.push_back(
-        std::make_shared<exec::Expr>(
-            argType,
-            std::vector<std::shared_ptr<exec::Expr>>{},
-            "field",
-            /*specialFormKind=*/std::nullopt,
-            /*supportsFlatNoNullsFastPath=*/false,
-            /*trackCpuUsage=*/false));
+        std::make_shared<core::FieldAccessTypedExpr>(
+            argTypes[i], "c" + std::to_string(i)));
   }
-  return std::make_shared<exec::Expr>(
+  return std::make_shared<core::CallTypedExpr>(
+      returnType, std::move(inputs), name);
+}
+
+core::TypedExprPtr makeCast(
+    const TypePtr& returnType,
+    const TypePtr& argType,
+    bool isTryCast = false) {
+  return std::make_shared<core::CastTypedExpr>(
       returnType,
-      std::move(inputs),
-      name,
-      /*specialFormKind=*/std::nullopt,
-      /*supportsFlatNoNullsFastPath=*/false,
-      /*trackCpuUsage=*/false);
+      std::make_shared<core::FieldAccessTypedExpr>(argType, "c0"),
+      isTryCast);
 }
 
 } // namespace
 
-class FunctionRegistryTest : public ::testing::Test {};
+class FunctionRegistryTest : public ::testing::Test {
+ protected:
+  void TearDown() override {
+    unregisterFunctions();
+  }
+};
 
 // One function registration, test mock `TagFunction` testing infrastructure.
 TEST_F(FunctionRegistryTest, singleSignatureDispatch) {
@@ -251,32 +271,105 @@ TEST_F(FunctionRegistryTest, canEvaluateMultipleSignatures) {
 
   EXPECT_TRUE(
       FunctionExpression::canEvaluate(
-          makeCall(name, DOUBLE(), {DOUBLE(), DOUBLE()})));
+          makeCall(name, DOUBLE(), {DOUBLE(), DOUBLE()}),
+          core::QueryConfig({})));
   EXPECT_TRUE(
       FunctionExpression::canEvaluate(
-          makeCall(name, DATE(), {DATE(), INTERVAL_DAY_TIME()})));
+          makeCall(name, DATE(), {DATE(), INTERVAL_DAY_TIME()}),
+          core::QueryConfig({})));
   EXPECT_FALSE(
       FunctionExpression::canEvaluate(
-          makeCall(name, VARCHAR(), {VARCHAR(), VARCHAR()})));
+          makeCall(name, VARCHAR(), {VARCHAR(), VARCHAR()}),
+          core::QueryConfig({})));
 }
 
-// `FieldReference` expression, no registry setup. Test that `canEvaluate`
-// returns true without consulting the function registry at all.
+// A spec-level `canEvaluate` callback is an extra filter after signature
+// matching. Test both complete rejection and fall-through to a later matching
+// registration.
+TEST_F(FunctionRegistryTest, canEvaluateCallbackFiltersSpec) {
+  auto reject = [](const core::TypedExprPtr&, const core::QueryConfig&) {
+    return false;
+  };
+  auto sig = exec::FunctionSignatureBuilder()
+                 .returnType("double")
+                 .argumentType("double")
+                 .argumentType("double")
+                 .build();
+
+  const std::string rejectedOnly = "regtest_can_eval_callback_rejected";
+  registerCudfFunction(
+      rejectedOnly,
+      tagFactory("rejected"),
+      {sig},
+      /*overwrite=*/true,
+      reject);
+
+  auto rejectedExpr = makeCall(rejectedOnly, DOUBLE(), {DOUBLE(), DOUBLE()});
+  EXPECT_EQ(createCudfFunction(rejectedOnly, rejectedExpr), nullptr);
+  EXPECT_FALSE(
+      FunctionExpression::canEvaluate(rejectedExpr, core::QueryConfig({})));
+
+  const std::string fallback = "regtest_can_eval_callback_fallback";
+  registerCudfFunction(
+      fallback,
+      tagFactory("rejected"),
+      {sig},
+      /*overwrite=*/true,
+      reject);
+  registerCudfFunction(fallback, tagFactory("accepted"), {sig});
+
+  auto fallbackExpr = makeCall(fallback, DOUBLE(), {DOUBLE(), DOUBLE()});
+  EXPECT_EQ(tagOf(createCudfFunction(fallback, fallbackExpr)), "accepted");
+  EXPECT_TRUE(
+      FunctionExpression::canEvaluate(fallbackExpr, core::QueryConfig({})));
+}
+
+// Field access expression, no registry setup. Test that `canEvaluate` returns
+// true without consulting the function registry at all.
 TEST_F(FunctionRegistryTest, canEvaluateFieldReference) {
-  auto fieldExpr = std::make_shared<exec::FieldReference>(
-      DOUBLE(), std::vector<std::shared_ptr<exec::Expr>>{}, "c0");
-  EXPECT_TRUE(FunctionExpression::canEvaluate(fieldExpr));
+  auto fieldExpr = std::make_shared<core::FieldAccessTypedExpr>(DOUBLE(), "c0");
+  EXPECT_TRUE(
+      FunctionExpression::canEvaluate(fieldExpr, core::QueryConfig({})));
 }
 
-// `cast` and `try_cast` calls with cudf-supported type pairs. Test that
-// `canEvaluate` dispatches these through `cudf::is_supported_cast` rather
-// than through the normal signature-matching path.
+// CastTypedExpr nodes with cudf-supported type pairs. Test that
+// `canEvaluate` still checks `cudf::is_supported_cast` without a registration.
 TEST_F(FunctionRegistryTest, canEvaluateCastExpression) {
   EXPECT_TRUE(
-      FunctionExpression::canEvaluate(makeCall("cast", BIGINT(), {DOUBLE()})));
+      FunctionExpression::canEvaluate(
+          makeCast(BIGINT(), DOUBLE()), core::QueryConfig({})));
   EXPECT_TRUE(
       FunctionExpression::canEvaluate(
-          makeCall("try_cast", BIGINT(), {DOUBLE()})));
+          makeCast(BIGINT(), DOUBLE(), true), core::QueryConfig({})));
+}
+
+TEST_F(FunctionRegistryTest, castEligibilityUsesSessionConfig) {
+  registerCudfFunctions(
+      {"cast", "try_cast"},
+      tagFactory("cast"),
+      {},
+      /*overwrite=*/true,
+      [](const core::TypedExprPtr&, const core::QueryConfig& config) {
+        return !config.isLegacyCast();
+      });
+  const core::QueryConfig defaultConfig({});
+  const core::QueryConfig legacyConfig(
+      {{core::QueryConfig::kLegacyCast, "true"}});
+  for (const bool isTryCast : {false, true}) {
+    SCOPED_TRACE(isTryCast);
+    const auto expr = makeCast(BIGINT(), DOUBLE(), isTryCast);
+    const auto name = isTryCast ? "try_cast" : "cast";
+    EXPECT_TRUE(FunctionExpression::canEvaluate(expr, defaultConfig));
+    EXPECT_FALSE(FunctionExpression::canEvaluate(expr, legacyConfig));
+    EXPECT_NE(
+        cudf_velox::createCudfFunction(
+            name, expr, /*pool=*/nullptr, defaultConfig),
+        nullptr);
+    EXPECT_EQ(
+        cudf_velox::createCudfFunction(
+            name, expr, /*pool=*/nullptr, legacyConfig),
+        nullptr);
+  }
 }
 
 // Two function registrations under the same name with identical signatures,
@@ -348,7 +441,7 @@ TEST_F(FunctionRegistryTest, unregisteredNameReturnsNullAndFalse) {
   const std::string name = "regtest_never_registered";
   auto expr = makeCall(name, DOUBLE(), {DOUBLE(), DOUBLE()});
   EXPECT_EQ(createCudfFunction(name, expr), nullptr);
-  EXPECT_FALSE(FunctionExpression::canEvaluate(expr));
+  EXPECT_FALSE(FunctionExpression::canEvaluate(expr, core::QueryConfig({})));
 }
 
 // `cast` call whose source/destination types `cudf::is_supported_cast`
@@ -358,7 +451,8 @@ TEST_F(FunctionRegistryTest, unregisteredNameReturnsNullAndFalse) {
 // point casts.
 TEST_F(FunctionRegistryTest, canEvaluateCastUnsupportedTypes) {
   auto unsupportedCast = makeCall("cast", ROW({DOUBLE()}), {INTEGER()});
-  EXPECT_FALSE(FunctionExpression::canEvaluate(unsupportedCast));
+  EXPECT_FALSE(
+      FunctionExpression::canEvaluate(unsupportedCast, core::QueryConfig({})));
 }
 
 // Malformed `cast` call with no input arguments. Test that `canEvaluate`
@@ -366,7 +460,8 @@ TEST_F(FunctionRegistryTest, canEvaluateCastUnsupportedTypes) {
 // missing input.
 TEST_F(FunctionRegistryTest, canEvaluateCastWithoutInputsReturnsFalse) {
   auto zeroArgCast = makeCall("cast", INTEGER(), {});
-  EXPECT_FALSE(FunctionExpression::canEvaluate(zeroArgCast));
+  EXPECT_FALSE(
+      FunctionExpression::canEvaluate(zeroArgCast, core::QueryConfig({})));
 }
 
 // `registerCudfFunctions` called with `overwrite=false` over a mix of an
@@ -413,7 +508,8 @@ TEST_F(FunctionRegistryTest, arityMismatchReturnsNull) {
 
   auto zeroArgExpr = makeCall(name, DOUBLE(), {});
   EXPECT_EQ(createCudfFunction(name, zeroArgExpr), nullptr);
-  EXPECT_FALSE(FunctionExpression::canEvaluate(zeroArgExpr));
+  EXPECT_FALSE(
+      FunctionExpression::canEvaluate(zeroArgExpr, core::QueryConfig({})));
 }
 
 } // namespace facebook::velox::cudf_velox

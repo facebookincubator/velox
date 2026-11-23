@@ -386,7 +386,7 @@ class SpatialJoinProbe : public Operator {
 
   // How many candidates were in previous build vectors.
   // This is important because for each build vector, we calculate a
-  // decodedFilterResult_ with only the rows from from the candidates in
+  // decodedFilterResult_ with only the rows from the candidates in
   // that build vector.  candidateIndex_ indexes over _all_ candidates, so
   // we must substract candidateOffsetForCurrentBuildVector_ to index into the
   // candidates for this build vector.

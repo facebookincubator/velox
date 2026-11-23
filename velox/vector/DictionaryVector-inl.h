@@ -23,6 +23,7 @@ namespace facebook::velox {
 
 template <typename T>
 void DictionaryVector<T>::setInternalState() {
+  VELOX_DCHECK_BUFFER_ALIGNED(indices_, vector_size_t);
   rawIndices_ = indices_->as<vector_size_t>();
 
   // Sanity check indices for non-null positions. Enabled in debug mode only to
@@ -153,7 +154,8 @@ std::unique_ptr<SimpleVector<uint64_t>> DictionaryVector<T>::hashAll() const {
           (BaseVector::nullCount_.value_or(0) > 0 ? 1 : 0),
       0 /* nullCount */,
       false /* sorted */,
-      sizeof(uint64_t) * BaseVector::length_ /* representedBytes */);
+      static_cast<ByteCount>(
+          sizeof(uint64_t) * BaseVector::length_) /* representedBytes */);
 }
 
 #ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER

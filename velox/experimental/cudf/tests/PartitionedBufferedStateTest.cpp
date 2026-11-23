@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/PartitionedBufferedState.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -160,7 +160,7 @@ class IdentityBufferedStateOps final : public BufferedStateOps {
 
     auto stream = left.stream;
     std::vector<cudf::table_view> views{left.view, right.view};
-    std::vector<rmm::cuda_stream_view> inputStreams{left.stream, right.stream};
+    std::vector<cuda::stream_ref> inputStreams{left.stream, right.stream};
     auto mergedTable =
         concatenateViews(views, inputStreams, stream, get_output_mr());
     auto merged = std::make_shared<CudfVector>(
@@ -197,7 +197,7 @@ class PartitionedBufferedStateTest : public ::testing::Test,
     auto stream = cudfGlobalStreamPool().get_stream();
     auto table =
         with_arrow::toCudfTable(row, pool_.get(), stream, get_output_mr());
-    stream.synchronize();
+    stream.sync();
     return std::make_shared<CudfVector>(
         pool_.get(), rowType_, row->size(), std::move(table), stream);
   }
@@ -216,7 +216,7 @@ class PartitionedBufferedStateTest : public ::testing::Test,
     auto stream = input.stream;
     auto row = with_arrow::toVeloxColumn(
         input.view, pool_.get(), rowType_, "", stream, get_output_mr());
-    stream.synchronize();
+    stream.sync();
 
     std::vector<int64_t> keys;
     auto* flatKeys = row->childAt(0)->as<FlatVector<int64_t>>();

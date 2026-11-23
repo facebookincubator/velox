@@ -478,6 +478,15 @@ class ExprToSubfieldFilterParser {
     parser_ = std::move(parser);
   }
 
+  /// Analyzes a leaf expression to determine if it can be expressed as a
+  /// subfield filter. Supports Boolean field references in addition to the
+  /// calls handled by leafCallToSubfieldFilter().
+  std::optional<std::pair<common::Subfield, std::unique_ptr<common::Filter>>>
+  leafToSubfieldFilter(
+      const core::ITypedExpr& expr,
+      core::ExpressionEvaluator* evaluator,
+      bool negated = false);
+
   /// Analyzes 'call' expression to determine if it can be expressed as a
   /// subfield filter. Returns the subfield and filter if so. Otherwise, returns
   /// std::nullopt. If 'negated' is true, considers the negation of 'call'

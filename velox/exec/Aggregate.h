@@ -31,6 +31,7 @@ class ExpressionEvaluator;
 namespace facebook::velox::exec {
 
 class AggregateFunctionSignature;
+class RowColumn;
 
 /// Returns true if aggregation receives raw (unprocessed) input, e.g. partial
 /// and single aggregation.
@@ -84,8 +85,21 @@ class Aggregate {
     return true;
   }
 
+  /// Returns true if the accumulator state is expected to be smaller than its
+  /// input. Aggregates whose state generally grows with input cardinality
+  /// should return false.
+  virtual bool isReducing() const {
+    return true;
+  }
+
   /// Returns true if toIntermediate() is supported.
   virtual bool supportsToIntermediate() const {
+    return false;
+  }
+
+  /// Returns true if fillEmptyIntermediate() is supported, allowing merge
+  /// companions to bypass accumulator construction.
+  virtual bool supportsFillEmptyIntermediate() const {
     return false;
   }
 
@@ -93,11 +107,15 @@ class Aggregate {
     setAllocatorInternal(allocator);
   }
 
-  /// Called after construction to pass constant input values to the aggregate.
-  /// Non-constant inputs have null entries in 'constantInputs'. This is called
-  /// before any data is processed, allowing the aggregate to read constant
-  /// arguments (e.g., flags, configuration values) at initialization time
-  /// rather than extracting them from 'args' at runtime.
+  /// Called by Aggregate::create() to pass constant input values to the
+  /// aggregate, one entry per raw input argument; non-constant inputs have null
+  /// entries. Called only in steps that read raw input (see isRawInput()):
+  /// steps that merge intermediate results have no raw arguments. The step
+  /// passed to create() says only whether the output is partial, so callers
+  /// that run a merge step pass no constant inputs. This is
+  /// called before any data is processed, allowing the aggregate to read
+  /// constant arguments (e.g., flags, configuration values) at initialization
+  /// time rather than extracting them from 'args' at runtime.
   ///
   /// Default implementation is a no-op. Override in subclasses that need
   /// access to constant arguments.
@@ -116,33 +134,14 @@ class Aggregate {
       std::vector<core::LambdaTypedExprPtr> lambdaExpressions,
       std::shared_ptr<core::ExpressionEvaluator> expressionEvaluator);
 
-  // Sets the offset and null indicator position of 'this'.
-  // @param offset Offset in bytes from the start of the row of the accumulator
-  // @param nullByte Offset in bytes from the start of the row of the null flag
-  // @param nullMask The specific bit in the nullByte that stores the null flag
-  // @param initializedByte Offset in bytes from the start of the row of the
-  // initialized flag
-  // @param initializedMask The specific bit in the initializedByte that stores
-  // the initialized flag
+  // Sets where the accumulator of 'this' is in a row.
+  // @param column The offset of the accumulator and its null and initialized
+  // flags.
   // @param rowSizeOffset The offset of a uint32_t row size from the start of
   // the row. Only applies to accumulators that store variable size data out of
   // line. Fixed length accumulators do not use this. 0 if the row does not have
   // a size field.
-  void setOffsets(
-      int32_t offset,
-      int32_t nullByte,
-      uint8_t nullMask,
-      int32_t initializedByte,
-      int8_t initializedMask,
-      int32_t rowSizeOffset) {
-    setOffsetsInternal(
-        offset,
-        nullByte,
-        nullMask,
-        initializedByte,
-        initializedMask,
-        rowSizeOffset);
-  }
+  void setOffsets(RowColumn column, int32_t rowSizeOffset);
 
   // Initializes null flags and accumulators for newly encountered groups.  This
   // function should be called only once for each group.
@@ -151,7 +150,7 @@ class Aggregate {
   // @param indices Indices into 'groups' of the new entries.
   virtual void initializeNewGroups(
       char** groups,
-      folly::Range<const vector_size_t*> indices) {
+      folly::Range<const vector_size_t*> indices) final {
     initializeNewGroupsInternal(groups, indices);
 
     for (auto index : indices) {
@@ -182,12 +181,15 @@ class Aggregate {
       const std::vector<VectorPtr>& args,
       bool mayPushdown) = 0;
 
-  /// Called by aggregation operator to set whether the input data is eligible
-  /// for clustered input optimization.  This is turned off, in cases for
-  /// example if the input rows from same group are not contiguous, or the
-  /// aggregate is sorted or distinct.
-  void setClusteredInput(bool value) {
-    clusteredInput_ = value;
+  /// Called by aggregation operator to set whether an accumulator may keep a
+  /// reference to the input vector rather than copying the value out of it.
+  /// This requires both that the input rows from same group are contiguous and
+  /// that no group spans batches, so each reference is dropped when the group's
+  /// output is produced. Without the latter a group stays open across batches
+  /// and the references pin every input batch that contributed a group. Also
+  /// turned off if the aggregate is sorted or distinct.
+  void setCanRetainInput(bool value) {
+    canRetainInput_ = value;
   }
 
   /// Whether the function itself supports clustered input optimization.
@@ -306,9 +308,18 @@ class Aggregate {
     VELOX_NYI("toIntermediate not supported");
   }
 
+  /// Writes an empty group's intermediate into selected rows of 'result',
+  /// leaving other rows unchanged, so merge pass-through can handle masked-out
+  /// and null inputs.
+  virtual void fillEmptyIntermediate(
+      const SelectivityVector& rows,
+      VectorPtr& result) const {
+    VELOX_NYI("fillEmptyIntermediate not supported");
+  }
+
   // Frees any out of line storage for the accumulator in
   // 'groups' and marks the aggregate as uninitialized.
-  virtual void destroy(folly::Range<char**> groups) {
+  virtual void destroy(folly::Range<char**> groups) final {
     destroyInternal(groups);
 
     for (auto* group : groups) {
@@ -357,24 +368,23 @@ class Aggregate {
   /// result type is step is kFinal. This parameter is redundant since it can be
   /// derived from rawInput types and step. Present for legacy reasons.
   /// @param config Query config.
+  /// @param constantInputs Constant input values, aligned with the aggregate's
+  /// inputs, with null for inputs that are not constant. May be empty if the
+  /// caller has no constant inputs. Passed to setConstantInputs() unless
+  /// empty.
   /// @return An instance of the aggregate function.
   static std::unique_ptr<Aggregate> create(
       const std::string& name,
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& argTypes,
       const TypePtr& resultType,
-      const core::QueryConfig& config);
+      const core::QueryConfig& config,
+      const std::vector<VectorPtr>& constantInputs);
 
  protected:
   virtual void setAllocatorInternal(HashStringAllocator* allocator);
 
-  virtual void setOffsetsInternal(
-      int32_t offset,
-      int32_t nullByte,
-      uint8_t nullMask,
-      int32_t initializedByte,
-      uint8_t initializedMask,
-      int32_t rowSizeOffset);
+  virtual void setOffsetsInternal(RowColumn column, int32_t rowSizeOffset);
 
   virtual void clearInternal();
 
@@ -519,7 +529,7 @@ class Aggregate {
 
   bool validateIntermediateInputs_ = false;
 
-  bool clusteredInput_ = false;
+  bool canRetainInput_ = false;
 };
 
 using AggregateFunctionFactory = std::function<std::unique_ptr<Aggregate>(
@@ -536,6 +546,12 @@ struct AggregateFunctionMetadata {
   /// True if results of the aggregation depend on the order of inputs. For
   /// example, array_agg is order sensitive while count is not.
   bool orderSensitive{true};
+
+  /// True if, for every registered signature, an input row holding a null in
+  /// any argument leaves the result unchanged. Companion functions inherit the
+  /// value, so setting it also asserts that merging null intermediate results
+  /// leaves the result unchanged.
+  bool ignoreNullInputs{false};
 
   /// Indicates if this is a companion function.
   bool companionFunction{false};

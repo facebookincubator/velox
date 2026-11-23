@@ -17,6 +17,8 @@
 #pragma once
 
 #include <folly/Varint.h>
+#include <folly/lang/Bits.h>
+#include <folly/small_vector.h>
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Nulls.h"
@@ -31,7 +33,7 @@ class DeltaBpDecoder {
  public:
   /// Trailing readable bytes the SIMD kernel needs past the last
   /// page byte; PageReader::kPageReadPadding must be >= this.
-  static constexpr int kRequiredTrailingPadding = 8;
+  static constexpr int kRequiredTrailingPadding = 11;
 
   explicit DeltaBpDecoder(const char* start) : bufferStart_(start) {
     initHeader();
@@ -47,9 +49,7 @@ class DeltaBpDecoder {
     if (hasNulls) {
       numValues = bits::countNonNulls(nulls, current, current + numValues);
     }
-    for (int32_t i = 0; i < numValues; ++i) {
-      readLong();
-    }
+    skipValues(numValues);
   }
 
   template <bool hasNulls, typename Visitor>
@@ -123,6 +123,77 @@ class DeltaBpDecoder {
 
  private:
   static constexpr int32_t kBatch = 1024;
+
+  /// Skip 'numValues' values efficiently. For constant-delta miniblocks
+  /// (bitWidth==0), compute the final value in O(1). For other cases, use
+  /// the batched decode path which is faster than per-value readLong().
+  void skipValues(int32_t numValues) {
+    if (numValues <= 0) {
+      return;
+    }
+
+    // Handle the first value (block header) if block is uninitialized.
+    if (!firstBlockInitialized_ && numValues > 0) {
+      readLong();
+      --numValues;
+      if (numValues <= 0) {
+        return;
+      }
+    }
+
+    while (numValues > 0) {
+      if (valuesRemainingCurrentMiniBlock_ == 0) {
+        advanceMiniBlock();
+      }
+
+      auto toSkipInBlock = std::min<int32_t>(
+          numValues,
+          std::min<int32_t>(
+              valuesRemainingCurrentMiniBlock_, totalValuesRemaining_));
+
+      if (deltaBitWidth_ == 0) {
+        // Constant-delta miniblock: compute lastValue in O(1).
+        lastValue_ = static_cast<int64_t>(
+            static_cast<uint64_t>(lastValue_) +
+            static_cast<uint64_t>(minDelta_) *
+                static_cast<uint64_t>(toSkipInBlock));
+        valuesRemainingCurrentMiniBlock_ -= toSkipInBlock;
+        totalValuesRemaining_ -= toSkipInBlock;
+        if (valuesRemainingCurrentMiniBlock_ == 0 ||
+            totalValuesRemaining_ == 0) {
+          bufferStart_ += bits::nbytes(deltaBitWidth_ * valuesPerMiniBlock_);
+        }
+      } else {
+        // Non-constant delta: for skip we only need the final lastValue,
+        // not intermediate prefix-sums. When skipping full miniblocks from
+        // their start, compute sum(deltas) directly (no dependency chain).
+        if (toSkipInBlock ==
+                static_cast<int32_t>(valuesRemainingCurrentMiniBlock_) &&
+            valuesRemainingCurrentMiniBlock_ == valuesPerMiniBlock_) {
+          // Full miniblock from start: sum deltas without prefix-sum.
+          uint64_t deltaSum = sumMiniBlockDeltas(
+              bufferStart_, valuesPerMiniBlock_, deltaBitWidth_);
+          lastValue_ = static_cast<int64_t>(
+              static_cast<uint64_t>(lastValue_) +
+              static_cast<uint64_t>(minDelta_) * valuesPerMiniBlock_ +
+              deltaSum);
+          valuesRemainingCurrentMiniBlock_ = 0;
+          totalValuesRemaining_ -= toSkipInBlock;
+          bufferStart_ += bits::nbytes(deltaBitWidth_ * valuesPerMiniBlock_);
+        } else {
+          // Partial miniblock: must decode (prefix-sum needed for lastValue).
+          int64_t scratch[kBatch];
+          int32_t skipped = 0;
+          while (skipped < toSkipInBlock) {
+            auto batch = std::min<int32_t>(kBatch, toSkipInBlock - skipped);
+            decodeLongs(scratch, batch);
+            skipped += batch;
+          }
+        }
+      }
+      numValues -= toSkipInBlock;
+    }
+  }
 
   template <typename Visitor>
   void readWithVisitorDenseBatched(Visitor& visitor) {
@@ -282,10 +353,36 @@ class DeltaBpDecoder {
     lastValue_ = lastValue;
   }
 
+  /// Compute the sum of packed deltas in a miniblock without a prefix-sum
+  /// dependency chain. Used by skipValues() when only the final lastValue
+  /// is needed (not intermediate values). Breaking the dependency chain
+  /// lets the compiler overlap the loads across iterations.
+  uint64_t
+  sumMiniBlockDeltas(const char* src, uint64_t numValues, uint64_t bitWidth) {
+    if (bitWidth == 0) {
+      return 0;
+    }
+    const uint64_t mask = (bitWidth >= 64) ? ~0ULL : ((1ULL << bitWidth) - 1);
+    const auto* source = reinterpret_cast<const uint64_t*>(src);
+    uint64_t sum = 0;
+    uint64_t bitOffset = 0;
+    for (uint64_t i = 0; i < numValues; ++i) {
+      // loadBits reads the extra trailing byte when a value straddles the
+      // 64-bit load boundary (bitWidth up to 64 for INT64 pages), matching
+      // the main decode path in readLong()/decodeLongs().
+      const uint64_t value =
+          bits::detail::loadBits<uint64_t>(source, bitOffset, bitWidth) & mask;
+      sum += value;
+      bitOffset += bitWidth;
+    }
+    return sum;
+  }
+
   /// Decode one whole miniblock with prefix-sum fused. Unsigned mod-2^64
-  /// per Parquet spec. Reads up to 7 bytes past the miniblock end;
-  /// safe via kPageReadPadding at page end and adjacent miniblocks
-  /// intra-page.
+  /// per Parquet spec. The bitWidth <= 16 path reads up to 7 bytes past the
+  /// miniblock end; the bitWidth > 16 path reads up to 11 bytes past the
+  /// miniblock end. Safe via kPageReadPadding at page end and adjacent
+  /// miniblocks intra-page.
   template <typename DataType, uint8_t bitWidth>
   FOLLY_ALWAYS_INLINE void decodeMiniBlockSimd(
       const char* src,
@@ -297,8 +394,13 @@ class DeltaBpDecoder {
     constexpr uint64_t mask =
         (bitWidth == 32) ? 0xFFFFFFFFULL : ((1ULL << bitWidth) - 1);
     const uint8_t* p = reinterpret_cast<const uint8_t*>(src);
-    uint64_t cumulative = static_cast<uint64_t>(lastValue);
-    const uint64_t step = static_cast<uint64_t>(minDelta);
+    // Use narrower accumulator for INT32 to improve throughput.
+    // Parquet spec: arithmetic is unsigned modular, so 32-bit wraparound
+    // is correct for INT32 columns.
+    using AccumType =
+        std::conditional_t<sizeof(DataType) <= 4, uint32_t, uint64_t>;
+    AccumType cumulative = static_cast<AccumType>(lastValue);
+    const AccumType step = static_cast<AccumType>(minDelta);
     if constexpr (bitWidth <= 16) {
       // 4*bw <= 64; one u64 load per iter.
       for (int32_t i = 0; i < numValues; i += 4) {
@@ -306,34 +408,36 @@ class DeltaBpDecoder {
         const int32_t byteOff = bitPos >> 3;
         const int32_t bitInByte = bitPos & 7;
         const uint64_t word =
-            *reinterpret_cast<const uint64_t*>(p + byteOff) >> bitInByte;
-        cumulative += step + (word & mask);
+            folly::loadUnaligned<uint64_t>(p + byteOff) >> bitInByte;
+        cumulative += step + static_cast<AccumType>(word & mask);
         out[i + 0] = static_cast<DataType>(cumulative);
-        cumulative += step + ((word >> bitWidth) & mask);
+        cumulative += step + static_cast<AccumType>((word >> bitWidth) & mask);
         out[i + 1] = static_cast<DataType>(cumulative);
-        cumulative += step + ((word >> (2 * bitWidth)) & mask);
+        cumulative +=
+            step + static_cast<AccumType>((word >> (2 * bitWidth)) & mask);
         out[i + 2] = static_cast<DataType>(cumulative);
-        cumulative += step + ((word >> (3 * bitWidth)) & mask);
+        cumulative +=
+            step + static_cast<AccumType>((word >> (3 * bitWidth)) & mask);
         out[i + 3] = static_cast<DataType>(cumulative);
       }
     } else {
       // 2*bw + bitInByte > 64; load via __uint128_t (two u64 + SHRD).
-      // The +8 read is safe: kPageReadPadding covers page end and
-      // adjacent miniblocks cover intra-page.
+      // kPageReadPadding covers the max 11-byte page-end over-read; adjacent
+      // miniblocks cover intra-page over-reads.
       for (int32_t i = 0; i < numValues; i += 2) {
         const int32_t bitPos = i * bitWidth;
         const int32_t byteOff = bitPos >> 3;
         const int32_t bitInByte = bitPos & 7;
         const __uint128_t window =
             static_cast<__uint128_t>(
-                *reinterpret_cast<const uint64_t*>(p + byteOff)) |
+                folly::loadUnaligned<uint64_t>(p + byteOff)) |
             (static_cast<__uint128_t>(
-                 *reinterpret_cast<const uint64_t*>(p + byteOff + 8))
+                 folly::loadUnaligned<uint64_t>(p + byteOff + 8))
              << 64);
         const uint64_t word = static_cast<uint64_t>(window >> bitInByte);
-        cumulative += step + (word & mask);
+        cumulative += step + static_cast<AccumType>(word & mask);
         out[i + 0] = static_cast<DataType>(cumulative);
-        cumulative += step + ((word >> bitWidth) & mask);
+        cumulative += step + static_cast<AccumType>((word >> bitWidth) & mask);
         out[i + 1] = static_cast<DataType>(cumulative);
       }
     }
@@ -355,9 +459,12 @@ class DeltaBpDecoder {
     lastValue = static_cast<int64_t>(cumulative);
   }
 
-  /// Dispatches a whole-miniblock SIMD decode by runtime `bitWidth`.
-  /// Returns false for `bitWidth` outside [0, 32] so the caller falls
-  /// back to the scalar inner loop.
+  /// Dispatch to the compile-time-specialized miniblock decoder for the given
+  /// bitWidth. Constant-delta miniblocks (bitWidth 0) take the dedicated path;
+  /// widths 1..32 expand to a fold-expression comparison chain that inlines
+  /// into the decode loop. Must stay force-inlined: a benchmark showed that
+  /// letting the compiler outline this (e.g. as a switch) adds a call per
+  /// 32-value miniblock and regresses sequential decode.
   template <typename DataType>
   FOLLY_ALWAYS_INLINE bool dispatchSimdMiniBlock(
       uint64_t bitWidth,
@@ -444,6 +551,8 @@ class DeltaBpDecoder {
         valuesPerMiniBlock_);
 
     totalValuesRemaining_ = totalValueCount_;
+    // Size the bit-width storage to the block's miniblock count. small_vector
+    // keeps this allocation-free for the common case (<= 8 miniblocks).
     deltaBitWidths_.resize(miniBlocksPerBlock_);
     firstBlockInitialized_ = false;
     valuesRemainingCurrentMiniBlock_ = 0;
@@ -561,7 +670,11 @@ class DeltaBpDecoder {
   bool firstBlockInitialized_;
   int64_t minDelta_;
   uint64_t miniBlockIdx_;
-  std::vector<uint8_t> deltaBitWidths_;
+  // Bit width of each miniblock in the current block. Sized to
+  // miniBlocksPerBlock_ (Parquet default 4, real-world writers use <= 8), so
+  // the inline storage avoids a per-page heap allocation in the common case
+  // while still supporting arbitrarily large values allowed by the spec.
+  folly::small_vector<uint8_t, 8> deltaBitWidths_;
   uint64_t deltaBitWidth_;
 
   int64_t lastValue_;

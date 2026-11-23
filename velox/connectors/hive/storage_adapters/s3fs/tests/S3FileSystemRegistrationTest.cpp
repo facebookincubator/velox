@@ -23,7 +23,7 @@ namespace {
 std::string cacheKeyFunc(
     std::shared_ptr<const config::ConfigBase> config,
     std::string_view path) {
-  return config->get<std::string>("hive.s3.endpoint").value();
+  return config->get<std::string>("s3.endpoint").value();
 }
 
 class CustomS3FileSystem : public S3FileSystem {
@@ -56,16 +56,22 @@ class S3FileSystemRegistrationTest : public S3Test {
 TEST_F(S3FileSystemRegistrationTest, readViaRegistry) {
   const char* bucketName = "data2";
   const char* file = "test.txt";
-  const std::string filename = localPath(bucketName) + "/" + file;
   const std::string s3File = s3URI(bucketName, file);
   addBucket(bucketName);
+  auto s3Config = siloServer_->s3Config();
   {
-    LocalWriteFile writeFile(filename);
-    writeData(&writeFile);
+    // Upload via the S3 API; the server only serves objects it stores.
+    // getFileSystem initializes S3 on first creation.
+    auto s3fs = filesystems::getFileSystem(s3File, s3Config);
+    auto pool =
+        memory::memoryManager()->addLeafPool("S3FileSystemRegistrationTest");
+    auto writeFile =
+        s3fs->openFileForWrite(s3File, {{}, pool.get(), std::nullopt});
+    writeData(writeFile.get());
+    writeFile->close();
   }
-  auto hiveConfig = minioServer_->hiveConfig();
   {
-    auto s3fs = filesystems::getFileSystem(s3File, hiveConfig);
+    auto s3fs = filesystems::getFileSystem(s3File, s3Config);
     auto readFile = s3fs->openFileForRead(s3File);
     readData(readFile.get());
   }
@@ -74,41 +80,47 @@ TEST_F(S3FileSystemRegistrationTest, readViaRegistry) {
 TEST_F(S3FileSystemRegistrationTest, fileHandle) {
   const char* bucketName = "data3";
   const char* file = "test.txt";
-  const std::string filename = localPath(bucketName) + "/" + file;
   const std::string s3File = s3URI(bucketName, file);
   addBucket(bucketName);
+  auto s3Config = siloServer_->s3Config();
   {
-    LocalWriteFile writeFile(filename);
-    writeData(&writeFile);
+    // Upload via the S3 API; the server only serves objects it stores.
+    // getFileSystem initializes S3 on first creation.
+    auto s3fs = filesystems::getFileSystem(s3File, s3Config);
+    auto pool =
+        memory::memoryManager()->addLeafPool("S3FileSystemRegistrationTest");
+    auto writeFile =
+        s3fs->openFileForWrite(s3File, {{}, pool.get(), std::nullopt});
+    writeData(writeFile.get());
+    writeFile->close();
   }
-  auto hiveConfig = minioServer_->hiveConfig();
   FileHandleFactory factory(
       std::make_unique<SimpleLRUCache<FileHandleKey, FileHandle>>(1000),
-      std::make_unique<FileHandleGenerator>(hiveConfig));
+      std::make_unique<FileHandleGenerator>(s3Config));
   FileHandleKey key{s3File};
   auto fileHandleCachePtr = factory.generate(key);
   readData(fileHandleCachePtr->file.get());
 }
 
 TEST_F(S3FileSystemRegistrationTest, cacheKey) {
-  auto hiveConfig = minioServer_->hiveConfig();
-  auto s3fs = filesystems::getFileSystem(kDummyPath, hiveConfig);
+  auto s3Config = siloServer_->s3Config();
+  auto s3fs = filesystems::getFileSystem(kDummyPath, s3Config);
   std::string_view kDummyPath2 = "s3://dummy2/foo.txt";
-  auto s3fs_new = filesystems::getFileSystem(kDummyPath2, hiveConfig);
+  auto s3fs_new = filesystems::getFileSystem(kDummyPath2, s3Config);
   // The cacheKeyFunc function allows fs caching based on the endpoint value.
   ASSERT_EQ(s3fs, s3fs_new);
 }
 
 TEST_F(S3FileSystemRegistrationTest, customFileSystemFactory) {
-  auto hiveConfig = minioServer_->hiveConfig();
-  auto s3fs = filesystems::getFileSystem(kDummyPath, hiveConfig);
+  auto s3Config = siloServer_->s3Config();
+  auto s3fs = filesystems::getFileSystem(kDummyPath, s3Config);
   auto customS3fs = std::dynamic_pointer_cast<CustomS3FileSystem>(s3fs);
   VELOX_CHECK_NOT_NULL(customS3fs);
 }
 
 TEST_F(S3FileSystemRegistrationTest, finalize) {
-  auto hiveConfig = minioServer_->hiveConfig();
-  auto s3fs = filesystems::getFileSystem(kDummyPath, hiveConfig);
+  auto s3Config = siloServer_->s3Config();
+  auto s3fs = filesystems::getFileSystem(kDummyPath, s3Config);
   VELOX_ASSERT_THROW(
       filesystems::finalizeS3FileSystem(),
       "Cannot finalize S3FileSystem while in use");

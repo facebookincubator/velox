@@ -18,6 +18,7 @@
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/exec/WindowFunction.h"
+#include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -45,7 +46,7 @@ class PlanNodeToStringTest : public testing::Test,
          makeFlatVector<int64_t>({0, 1, 2, 3, 4})});
 
     plan_ = PlanBuilder()
-                .values({data_})
+                .values(data_)
                 .filter("c0 % 10 < 9")
                 .project({"c0 AS out1", "c0 % 100 + c1 % 50 AS out2"})
                 .filter("out1 % 10 < 8")
@@ -160,7 +161,7 @@ TEST_F(PlanNodeToStringTest, withMultiLineContext) {
 }
 
 TEST_F(PlanNodeToStringTest, values) {
-  auto plan = PlanBuilder().values({data_}).planNode();
+  auto plan = PlanBuilder().values(data_).planNode();
 
   ASSERT_EQ("-- Values[0]\n", plan->toString());
   ASSERT_EQ(
@@ -192,7 +193,7 @@ TEST_F(PlanNodeToStringTest, values) {
 TEST_F(PlanNodeToStringTest, aggregation) {
   // Global aggregation.
   auto plan = PlanBuilder()
-                  .values({data_})
+                  .values(data_)
                   .partialAggregation(
                       {},
                       {"sum(c0) AS a",
@@ -213,7 +214,7 @@ TEST_F(PlanNodeToStringTest, aggregation) {
           {BIGINT(), INTEGER(), BIGINT(), BOOLEAN(), BOOLEAN(), BOOLEAN()}),
       100);
   plan = PlanBuilder()
-             .values({data})
+             .values(data)
              .partialAggregation(
                  {},
                  {"sum(c0) AS a", "avg(c1) AS b", "min(c2) AS c"},
@@ -227,7 +228,7 @@ TEST_F(PlanNodeToStringTest, aggregation) {
 
   // Group-by aggregation.
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .singleAggregation(
                  {"c0"}, {"sum(c1) AS a", "avg(c2) AS b", "count(distinct c2)"})
              .planNode();
@@ -240,7 +241,7 @@ TEST_F(PlanNodeToStringTest, aggregation) {
 
   // Group-by aggregation with masks.
   plan = PlanBuilder()
-             .values({data})
+             .values(data)
              .singleAggregation(
                  {"c0"}, {"sum(c1) AS a", "avg(c2) AS b"}, {"m1", "m2"})
              .planNode();
@@ -252,7 +253,7 @@ TEST_F(PlanNodeToStringTest, aggregation) {
 
   // Aggregation over sorted inputs.
   plan = PlanBuilder()
-             .values({data})
+             .values(data)
              .singleAggregation({"c0"}, {"array_agg(c1 ORDER BY c2 DESC)"})
              .planNode();
 
@@ -263,7 +264,7 @@ TEST_F(PlanNodeToStringTest, aggregation) {
 
   // Aggregation over GroupId with global grouping sets.
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .groupId({"c0"}, {{"c0"}, {}}, {"c1"})
              .singleAggregation({"c0", "group_id"}, {"sum(c1) as sum_c1"}, {})
              .planNode();
@@ -274,7 +275,7 @@ TEST_F(PlanNodeToStringTest, aggregation) {
 
   // Aggregation over GroupId with > 1 global grouping sets.
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .groupId({"c0"}, {{"c0"}, {}, {}}, {"c1"})
              .singleAggregation({"c0", "group_id"}, {"sum(c1) as sum_c1"}, {})
              .planNode();
@@ -284,7 +285,7 @@ TEST_F(PlanNodeToStringTest, aggregation) {
       plan->toString(true, false));
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .partialStreamingAggregation({"c0"}, {"sum(c1) AS a"})
              .planNode();
   ASSERT_EQ(
@@ -294,7 +295,7 @@ TEST_F(PlanNodeToStringTest, aggregation) {
 
 TEST_F(PlanNodeToStringTest, expand) {
   auto plan = PlanBuilder()
-                  .values({data_})
+                  .values(data_)
                   .expand(
                       {{"c0", "null::integer as c1", "c2", "0 as gid"},
                        {"null as c0", "c1", "c2", "1 as gid"}})
@@ -307,7 +308,7 @@ TEST_F(PlanNodeToStringTest, expand) {
 
 TEST_F(PlanNodeToStringTest, groupId) {
   auto plan = PlanBuilder()
-                  .values({data_})
+                  .values(data_)
                   .groupId({"c0", "c1"}, {{"c0"}, {"c1"}}, {"c2"})
                   .planNode();
   ASSERT_EQ("-- GroupId[1]\n", plan->toString());
@@ -316,7 +317,7 @@ TEST_F(PlanNodeToStringTest, groupId) {
       plan->toString(true, false));
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .groupId({"c0", "c1"}, {{"c0", "c1"}, {"c1"}}, {"c2"}, "gid")
              .planNode();
   ASSERT_EQ("-- GroupId[1]\n", plan->toString());
@@ -325,7 +326,7 @@ TEST_F(PlanNodeToStringTest, groupId) {
       plan->toString(true, false));
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .groupId({"c0", "c0 as c1"}, {{"c0", "c1"}, {"c1"}}, {"c2"}, "gid")
              .planNode();
   ASSERT_EQ("-- GroupId[1]\n", plan->toString());
@@ -336,13 +337,13 @@ TEST_F(PlanNodeToStringTest, groupId) {
 
 TEST_F(PlanNodeToStringTest, hashJoin) {
   auto plan = PlanBuilder()
-                  .values({data_})
+                  .values(data_)
                   .project({"c0 as t_c0", "c1 as t_c1"})
                   .hashJoin(
                       {"t_c0"},
                       {"u_c0"},
                       PlanBuilder()
-                          .values({data_})
+                          .values(data_)
                           .project({"c0 as u_c0", "c1 as u_c1"})
                           .planNode(),
                       "",
@@ -355,13 +356,13 @@ TEST_F(PlanNodeToStringTest, hashJoin) {
       plan->toString(true, false));
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .project({"c0 as t_c0", "c1 as t_c1"})
              .hashJoin(
                  {"t_c0"},
                  {"u_c0"},
                  PlanBuilder()
-                     .values({data_})
+                     .values(data_)
                      .project({"c0 as u_c0", "c1 as u_c1"})
                      .planNode(),
                  "t_c1 > u_c1",
@@ -375,13 +376,13 @@ TEST_F(PlanNodeToStringTest, hashJoin) {
       plan->toString(true, false));
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .project({"c0 as t_c0", "c1 as t_c1"})
              .hashJoin(
                  {"t_c0"},
                  {"u_c0"},
                  PlanBuilder()
-                     .values({data_})
+                     .values(data_)
                      .project({"c0 as u_c0", "c1 as u_c1"})
                      .planNode(),
                  "",
@@ -396,13 +397,13 @@ TEST_F(PlanNodeToStringTest, hashJoin) {
       plan->toString(true, false));
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .project({"c0 as t_c0", "c1 as t_c1"})
              .hashJoin(
                  {"t_c0"},
                  {"u_c0"},
                  PlanBuilder()
-                     .values({data_})
+                     .values(data_)
                      .project({"c0 as u_c0", "c1 as u_c1"})
                      .planNode(),
                  "",
@@ -417,13 +418,13 @@ TEST_F(PlanNodeToStringTest, hashJoin) {
       plan->toString(true, false));
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .project({"c0 as t_c0", "c1 as t_c1"})
              .hashJoin(
                  {"t_c0"},
                  {"u_c0"},
                  PlanBuilder()
-                     .values({data_})
+                     .values(data_)
                      .project({"c0 as u_c0", "c1 as u_c1"})
                      .planNode(),
                  "",
@@ -441,13 +442,13 @@ TEST_F(PlanNodeToStringTest, hashJoin) {
 
 TEST_F(PlanNodeToStringTest, mergeJoin) {
   auto plan = PlanBuilder()
-                  .values({data_})
+                  .values(data_)
                   .project({"c0 as t_c0", "c1 as t_c1"})
                   .mergeJoin(
                       {"t_c0"},
                       {"u_c0"},
                       PlanBuilder()
-                          .values({data_})
+                          .values(data_)
                           .project({"c0 as u_c0", "c1 as u_c1"})
                           .planNode(),
                       "",
@@ -460,13 +461,13 @@ TEST_F(PlanNodeToStringTest, mergeJoin) {
       plan->toString(true, false));
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .project({"c0 as t_c0", "c1 as t_c1"})
              .mergeJoin(
                  {"t_c0"},
                  {"u_c0"},
                  PlanBuilder()
-                     .values({data_})
+                     .values(data_)
                      .project({"c0 as u_c0", "c1 as u_c1"})
                      .planNode(),
                  "t_c1 > u_c1",
@@ -482,11 +483,11 @@ TEST_F(PlanNodeToStringTest, mergeJoin) {
 
 TEST_F(PlanNodeToStringTest, nestedLoopJoin) {
   auto plan = PlanBuilder()
-                  .values({data_})
+                  .values(data_)
                   .project({"c0 as t_c0", "c1 as t_c1"})
                   .nestedLoopJoin(
                       PlanBuilder()
-                          .values({data_})
+                          .values(data_)
                           .project({"c0 as u_c0", "c1 as u_c1"})
                           .planNode(),
                       {"t_c0", "t_c1", "u_c1"})
@@ -498,9 +499,60 @@ TEST_F(PlanNodeToStringTest, nestedLoopJoin) {
       plan->toString(true, false));
 }
 
+TEST_F(PlanNodeToStringTest, vectorSearchJoin) {
+  const auto queries = makeRowVector(
+      {"t0", "t1"},
+      {
+          makeFlatVector<int64_t>({1}),
+          makeArrayVector<float>({{1, 0}}),
+      });
+  const auto indexes = makeRowVector(
+      {"u0", "u1"},
+      {
+          makeFlatVector<int64_t>({1}),
+          makeFlatVector<std::string>({"a"}, VARBINARY()),
+      });
+
+  auto plan = PlanBuilder()
+                  .values(queries)
+                  .vectorSearchJoin(
+                      {"t0"},
+                      {"u0"},
+                      PlanBuilder().values(indexes).planNode(),
+                      "t1",
+                      "u1",
+                      /*k=*/10,
+                      {"t0", "id", "score"},
+                      "id",
+                      "score",
+                      core::JoinType::kLeft,
+                      {{"ivf.nprobe", "4"}})
+                  .planNode();
+  ASSERT_EQ("-- VectorSearchJoin[1]\n", plan->toString());
+  ASSERT_EQ(
+      "-- VectorSearchJoin[1][LEFT t0=u0, t1 nearest in u1 (faiss, cosine), k: 10, ivf.nprobe: 4] -> t0:BIGINT, id:BIGINT, score:REAL\n",
+      plan->toString(true, false));
+
+  plan = PlanBuilder()
+             .values(indexes)
+             .vectorSearchJoin(
+                 {"u0"},
+                 {"t0"},
+                 PlanBuilder().values(queries).planNode(),
+                 "t1",
+                 "u1",
+                 /*k=*/10,
+                 {"t0", "id"},
+                 "id")
+             .planNode();
+  ASSERT_EQ(
+      "-- VectorSearchJoin[1][INNER u0=t0, t1 nearest in u1 (faiss, cosine), k: 10, index: PROBE] -> t0:BIGINT, id:BIGINT\n",
+      plan->toString(true, false));
+}
+
 TEST_F(PlanNodeToStringTest, orderBy) {
   auto plan = PlanBuilder()
-                  .values({data_})
+                  .values(data_)
                   .orderBy({"c1 ASC NULLS FIRST"}, true)
                   .planNode();
 
@@ -510,7 +562,7 @@ TEST_F(PlanNodeToStringTest, orderBy) {
       plan->toString(true, false));
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .orderBy({"c1 ASC NULLS FIRST", "c0 DESC NULLS LAST"}, false)
              .planNode();
 
@@ -521,14 +573,14 @@ TEST_F(PlanNodeToStringTest, orderBy) {
 }
 
 TEST_F(PlanNodeToStringTest, limit) {
-  auto plan = PlanBuilder().values({data_}).limit(0, 10, true).planNode();
+  auto plan = PlanBuilder().values(data_).limit(0, 10, true).planNode();
 
   ASSERT_EQ("-- Limit[1]\n", plan->toString());
   ASSERT_EQ(
       "-- Limit[1][PARTIAL 10] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
       plan->toString(true, false));
 
-  plan = PlanBuilder().values({data_}).limit(7, 12, false).planNode();
+  plan = PlanBuilder().values(data_).limit(7, 12, false).planNode();
 
   ASSERT_EQ("-- Limit[1]\n", plan->toString());
   ASSERT_EQ(
@@ -537,10 +589,8 @@ TEST_F(PlanNodeToStringTest, limit) {
 }
 
 TEST_F(PlanNodeToStringTest, topN) {
-  auto plan = PlanBuilder()
-                  .values({data_})
-                  .topN({"c0 NULLS FIRST"}, 10, true)
-                  .planNode();
+  auto plan =
+      PlanBuilder().values(data_).topN({"c0 NULLS FIRST"}, 10, true).planNode();
 
   ASSERT_EQ("-- TopN[1]\n", plan->toString());
   ASSERT_EQ(
@@ -548,7 +598,7 @@ TEST_F(PlanNodeToStringTest, topN) {
       plan->toString(true, false));
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .topN({"c1 NULLS FIRST", "c0 DESC"}, 10, false)
              .planNode();
 
@@ -559,7 +609,7 @@ TEST_F(PlanNodeToStringTest, topN) {
 }
 
 TEST_F(PlanNodeToStringTest, enforceSingleRow) {
-  auto plan = PlanBuilder().values({data_}).enforceSingleRow().planNode();
+  auto plan = PlanBuilder().values(data_).enforceSingleRow().planNode();
 
   ASSERT_EQ("-- EnforceSingleRow[1]\n", plan->toString());
   ASSERT_EQ(
@@ -569,7 +619,7 @@ TEST_F(PlanNodeToStringTest, enforceSingleRow) {
 
 TEST_F(PlanNodeToStringTest, assignUniqueId) {
   auto plan =
-      PlanBuilder().values({data_}).assignUniqueId("unique_id").planNode();
+      PlanBuilder().values(data_).assignUniqueId("unique_id").planNode();
 
   ASSERT_EQ("-- AssignUniqueId[1]\n", plan->toString());
   ASSERT_EQ(
@@ -579,7 +629,7 @@ TEST_F(PlanNodeToStringTest, assignUniqueId) {
 
 TEST_F(PlanNodeToStringTest, unnest) {
   auto plan = PlanBuilder()
-                  .values({data_})
+                  .values(data_)
                   .project({"array_constructor(c0) AS a0", "c1"})
                   .unnest({"c1"}, {"a0"})
                   .planNode();
@@ -591,7 +641,7 @@ TEST_F(PlanNodeToStringTest, unnest) {
 }
 
 TEST_F(PlanNodeToStringTest, localPartition) {
-  auto plan = PlanBuilder().values({data_}).localPartition({"c0"}).planNode();
+  auto plan = PlanBuilder().values(data_).localPartition({"c0"}).planNode();
 
   ASSERT_EQ("-- LocalPartition[1]\n", plan->toString());
   ASSERT_EQ(
@@ -599,7 +649,7 @@ TEST_F(PlanNodeToStringTest, localPartition) {
       plan->toString(true, false));
 
   plan = PlanBuilder()
-             .values({data_})
+             .values(data_)
              .localPartition(std::vector<std::string>{})
              .planNode();
 
@@ -608,7 +658,7 @@ TEST_F(PlanNodeToStringTest, localPartition) {
       "-- LocalPartition[1][GATHER] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
       plan->toString(true, false));
 
-  plan = PlanBuilder().values({data_}).localPartitionRoundRobin().planNode();
+  plan = PlanBuilder().values(data_).localPartitionRoundRobin().planNode();
 
   ASSERT_EQ("-- LocalPartition[1]\n", plan->toString());
   ASSERT_EQ(
@@ -622,43 +672,43 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
     SCOPED_TRACE(fmt::format("serdeKind: {}", serdeKind));
     auto plan =
         PlanBuilder()
-            .values({data_})
+            .values(data_)
             .partitionedOutput({"c0"}, 4, /*outputLayout=*/{}, serdeKind)
             .planNode();
 
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- PartitionedOutput[1][partitionFunction: HASH(c0) with 4 partitions {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+            "-- PartitionedOutput[1][partitionFunction: HASH(c0) with 4 partitions {} in-memory] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
 
     plan = PlanBuilder()
-               .values({data_})
+               .values(data_)
                .partitionedOutputBroadcast(/*outputLayout=*/{}, serdeKind)
                .planNode();
 
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- PartitionedOutput[1][BROADCAST {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+            "-- PartitionedOutput[1][BROADCAST {} in-memory] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
 
     plan = PlanBuilder()
-               .values({data_})
+               .values(data_)
                .partitionedOutput({}, 1, /*outputLayout=*/{}, serdeKind)
                .planNode();
 
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- PartitionedOutput[1][SINGLE {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+            "-- PartitionedOutput[1][SINGLE {} in-memory] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
 
     plan = PlanBuilder()
-               .values({data_})
+               .values(data_)
                .partitionedOutput(
                    {"c1", "c2"}, 5, true, /*outputLayout=*/{}, serdeKind)
                .planNode();
@@ -666,7 +716,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- PartitionedOutput[1][partitionFunction: HASH(c1, c2) with 5 partitions replicate nulls and any {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+            "-- PartitionedOutput[1][partitionFunction: HASH(c1, c2) with 5 partitions replicate nulls and any {} in-memory] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
 
@@ -678,7 +728,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
             std::vector<VectorPtr>{});
 
     plan = PlanBuilder()
-               .values({data_})
+               .values(data_)
                .partitionedOutput(
                    {"c1", "c2"},
                    2,
@@ -690,7 +740,7 @@ TEST_F(PlanNodeToStringTest, partitionedOutput) {
     ASSERT_EQ("-- PartitionedOutput[1]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- PartitionedOutput[1][partitionFunction: HIVE((1, 2) buckets: 4) with 2 partitions {}] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
+            "-- PartitionedOutput[1][partitionFunction: HIVE((1, 2) buckets: 4) with 2 partitions {} in-memory] -> c0:SMALLINT, c1:INTEGER, c2:BIGINT\n",
             serdeKind),
         plan->toString(true, false));
   }
@@ -700,7 +750,7 @@ TEST_F(PlanNodeToStringTest, localMerge) {
   auto plan =
       PlanBuilder()
           .localMerge(
-              {"c1 NULLS FIRST"}, {PlanBuilder().values({data_}).planNode()})
+              {"c1 NULLS FIRST"}, {PlanBuilder().values(data_).planNode()})
           .planNode();
 
   ASSERT_EQ("-- LocalMerge[0]\n", plan->toString());
@@ -711,7 +761,7 @@ TEST_F(PlanNodeToStringTest, localMerge) {
   plan = PlanBuilder()
              .localMerge(
                  {"c1 NULLS FIRST", "c0 DESC"},
-                 {PlanBuilder().values({data_}).planNode()})
+                 {PlanBuilder().values(data_).planNode()})
              .planNode();
 
   ASSERT_EQ("-- LocalMerge[0]\n", plan->toString());
@@ -731,7 +781,8 @@ TEST_F(PlanNodeToStringTest, exchange) {
 
     ASSERT_EQ("-- Exchange[0]\n", plan->toString());
     ASSERT_EQ(
-        fmt::format("-- Exchange[0][{}] -> a:BIGINT, b:VARCHAR\n", serdeKind),
+        fmt::format(
+            "-- Exchange[0][{} in-memory] -> a:BIGINT, b:VARCHAR\n", serdeKind),
         plan->toString(true, false));
   }
 }
@@ -750,7 +801,7 @@ TEST_F(PlanNodeToStringTest, mergeExchange) {
     ASSERT_EQ("-- MergeExchange[0]\n", plan->toString());
     ASSERT_EQ(
         fmt::format(
-            "-- MergeExchange[0][a ASC NULLS LAST, {}] -> a:BIGINT, b:VARCHAR\n",
+            "-- MergeExchange[0][a ASC NULLS LAST, {} in-memory] -> a:BIGINT, b:VARCHAR\n",
             serdeKind),
         plan->toString(true, false));
   }
@@ -789,6 +840,51 @@ TEST_F(PlanNodeToStringTest, tableScan) {
     ASSERT_EQ(
         "-- TableScan[0][table: hive_table, remaining filter: (not(like(ROW[\"comment\"],%special%request%)))] "
         "-> discount:DOUBLE, quantity:DOUBLE, shipdate:VARCHAR, comment:VARCHAR\n",
+        plan->toString(true, false));
+  }
+}
+
+TEST_F(PlanNodeToStringTest, tableScanAssignments) {
+  {
+    // A complex column shows the parts the scan asks for; a scalar column
+    // shows nothing.
+    RowTypePtr rowType{ROW({
+        {"m", MAP(VARCHAR(), BIGINT())},
+        {"n", BIGINT()},
+    })};
+
+    connector::ColumnHandleMap assignments;
+    assignments["m"] = test::HiveConnectorTestBase::makeColumnHandle(
+        "m", rowType->childAt(0), {"m[\"k\"]"});
+    assignments["n"] =
+        test::HiveConnectorTestBase::regularColumn("n", rowType->childAt(1));
+
+    auto plan = PlanBuilder(pool_.get())
+                    .tableScan(rowType, {}, "", nullptr, assignments)
+                    .planNode();
+
+    ASSERT_EQ(
+        "-- TableScan[0][table: hive_table, assignments: [m := HiveColumnHandle "
+        "[name: m, columnType: Regular, dataType: MAP<VARCHAR,BIGINT>, "
+        "requiredSubfields: [ m[\"k\"] ]]]] "
+        "-> m:MAP<VARCHAR,BIGINT>, n:BIGINT\n",
+        plan->toString(true, false));
+  }
+
+  {
+    // A scan of scalars alone adds nothing.
+    RowTypePtr rowType{ROW("n", BIGINT())};
+
+    connector::ColumnHandleMap assignments;
+    assignments["n"] =
+        test::HiveConnectorTestBase::regularColumn("n", rowType->childAt(0));
+
+    auto plan = PlanBuilder(pool_.get())
+                    .tableScan(rowType, {}, "", nullptr, assignments)
+                    .planNode();
+
+    ASSERT_EQ(
+        "-- TableScan[0][table: hive_table] -> n:BIGINT\n",
         plan->toString(true, false));
   }
 }
@@ -953,13 +1049,13 @@ void topNRankPlanNodeToStringTest(std::string_view function) {
   auto rowType = ROW({"a", "b"}, {BIGINT(), VARCHAR()});
   auto plan = PlanBuilder()
                   .tableScan(rowType)
-                  .topNRank(function, {}, {"a DESC"}, 10, false)
+                  .topNRankPartial(function, {}, {"a DESC"}, 10)
                   .planNode();
 
   ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());
   ASSERT_EQ(
       fmt::format(
-          "-- TopNRowNumber[1][{} order by (a DESC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",
+          "-- TopNRowNumber[1][{} order by (a DESC NULLS LAST) limit 10 partial] -> a:BIGINT, b:VARCHAR\n",
           function),
       plan->toString(true, false));
 
@@ -977,13 +1073,25 @@ void topNRankPlanNodeToStringTest(std::string_view function) {
 
   plan = PlanBuilder()
              .tableScan(rowType)
-             .topNRank(function, {"a"}, {"b"}, 10, false)
+             .topNRank(function, {}, {"a DESC"}, 10, false)
              .planNode();
 
   ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());
   ASSERT_EQ(
       fmt::format(
-          "-- TopNRowNumber[1][{} partition by (a) order by (b ASC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",
+          "-- TopNRowNumber[1][{} order by (a DESC NULLS LAST) limit 10] -> a:BIGINT, b:VARCHAR\n",
+          function),
+      plan->toString(true, false));
+
+  plan = PlanBuilder()
+             .tableScan(rowType)
+             .topNRankPartial(function, {"a"}, {"b"}, 10)
+             .planNode();
+
+  ASSERT_EQ("-- TopNRowNumber[1]\n", plan->toString());
+  ASSERT_EQ(
+      fmt::format(
+          "-- TopNRowNumber[1][{} partition by (a) order by (b ASC NULLS LAST) limit 10 partial] -> a:BIGINT, b:VARCHAR\n",
           function),
       plan->toString(true, false));
 }
@@ -1036,13 +1144,26 @@ TEST_F(PlanNodeToStringTest, tableWrite) {
 
   // TableWrite without stats.
   {
-    auto plan = PlanBuilder()
-                    .values({data_})
-                    .tableWrite(outputDir->getPath())
-                    .planNode();
+    auto plan =
+        PlanBuilder().values(data_).tableWrite(outputDir->getPath()).planNode();
     ASSERT_EQ("-- TableWrite[1]\n", plan->toString());
     ASSERT_EQ(
         "-- TableWrite[1][test-hive, c0, c1, c2] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY\n",
+        plan->toString(true, false));
+  }
+
+  // TableWrite with NOT NULL columns.
+  {
+    auto plan = PlanBuilder()
+                    .values(data_)
+                    .startTableWriter()
+                    .outputDirectoryPath(outputDir->getPath())
+                    .notNullColumns({"c0", "c2"})
+                    .endTableWriter()
+                    .planNode();
+    ASSERT_EQ("-- TableWrite[1]\n", plan->toString());
+    ASSERT_EQ(
+        "-- TableWrite[1][test-hive, c0 not null, c1, c2 not null] -> rows:BIGINT, fragments:VARBINARY, commitcontext:VARBINARY\n",
         plan->toString(true, false));
   }
 
@@ -1050,7 +1171,7 @@ TEST_F(PlanNodeToStringTest, tableWrite) {
   {
     core::TableWriteNodePtr writeNode;
     auto plan = PlanBuilder()
-                    .values({data_})
+                    .values(data_)
                     .tableWrite(
                         outputDir->getPath(),
                         dwio::common::FileFormat::DWRF,
@@ -1075,7 +1196,7 @@ TEST_F(PlanNodeToStringTest, tableWrite) {
   {
     core::TableWriteNodePtr writeNode;
     auto plan = PlanBuilder()
-                    .values({data_})
+                    .values(data_)
                     .tableWrite(
                         outputDir->getPath(),
                         {"c2"},
@@ -1100,16 +1221,13 @@ TEST_F(PlanNodeToStringTest, tableWrite) {
 
 TEST_F(PlanNodeToStringTest, countingJoin) {
   auto makePlan = [&](core::JoinType joinType) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    return PlanBuilder(planNodeIdGenerator)
-        .values({data_})
+    PlanBuilder builder;
+    return builder.newPlan()
+        .values(data_)
         .hashJoin(
             {"c0"},
             {"u_c0"},
-            PlanBuilder(planNodeIdGenerator)
-                .values({data_})
-                .project({"c0 as u_c0"})
-                .planNode(),
+            builder.newPlan().values(data_).project({"c0 as u_c0"}).planNode(),
             "",
             {"c0", "c1"},
             joinType)
@@ -1139,19 +1257,23 @@ TEST_F(PlanNodeToStringTest, stateSource) {
   auto schema = ROW({"id", "depth"}, BIGINT());
 
   // delta: an append entry's in-loop frontier (rows written last iteration).
-  auto frontier =
-      PlanBuilder().stateSource("reach", schema, /*delta=*/true).planNode();
-  ASSERT_EQ("-- StateSource[0]\n", frontier->toString());
-  ASSERT_EQ(
-      "-- StateSource[0][state: reach, delta] -> id:BIGINT, depth:BIGINT\n",
-      frontier->toString(true, false));
+  {
+    auto plan =
+        PlanBuilder().stateSource("reach", schema, /*delta=*/true).planNode();
+    ASSERT_EQ("-- StateSource[0]\n", plan->toString());
+    ASSERT_EQ(
+        "-- StateSource[0][state: reach, delta] -> id:BIGINT, depth:BIGINT\n",
+        plan->toString(true, false));
+  }
 
   // full: the entry's whole accumulation.
-  auto full =
-      PlanBuilder().stateSource("reach", schema, /*delta=*/false).planNode();
-  ASSERT_EQ(
-      "-- StateSource[0][state: reach, full] -> id:BIGINT, depth:BIGINT\n",
-      full->toString(true, false));
+  {
+    auto plan =
+        PlanBuilder().stateSource("reach", schema, /*delta=*/false).planNode();
+    ASSERT_EQ(
+        "-- StateSource[0][state: reach, full] -> id:BIGINT, depth:BIGINT\n",
+        plan->toString(true, false));
+  }
 }
 
 TEST_F(PlanNodeToStringTest, stateHashJoin) {
@@ -1172,25 +1294,24 @@ TEST_F(PlanNodeToStringTest, stateHashJoin) {
 // append-mode vector state, a single body plan, and no convergence plan
 // (bounded by maxIterations).
 TEST_F(PlanNodeToStringTest, fixedPointSequence) {
-  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto schema = ROW("x", BIGINT());
-  auto seed =
-      PlanBuilder(idGenerator)
-          .values({makeRowVector({"x"}, {makeFlatVector<int64_t>({1})})})
-          .planNode();
-  auto plan =
-      PlanBuilder(idGenerator)
-          .fixedPoint(
-              core::VectorState("n", schema, /*append=*/true).initial(seed),
-              PlanBuilder(idGenerator)
-                  .stateSource("n", schema)
-                  .project({"x + 1 AS x"}),
-              core::ConvergenceConfig::withMaxIterations(9))
-          .planNode();
+  auto plan = builder.newPlan()
+                  .fixedPoint(
+                      core::VectorState("n", schema, /*append=*/true)
+                          .initial(builder.newPlan()
+                                       .values({makeNamedRowVector(
+                                           "x", makeFlatVector<int64_t>({1}))})
+                                       .planNode()),
+                      builder.newPlan()
+                          .stateSource("n", schema)
+                          .project({"x + 1 AS x"}),
+                      core::ConvergenceConfig::withMaxIterations(9))
+                  .planNode();
 
   ASSERT_EQ("-- FixedPoint[3]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[3][outputStateEntry: n, states: [n (vector, append, initialized)], plans: 1, maxIterations: 9, errorWhenMaxIterationReached: false, convergencePlan: none] -> x:BIGINT\n",
+      "-- FixedPoint[3][outputStateEntry: n, states: [n (vector, append, initialized)], stages: 1, maxIterations: 9] -> x:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -1198,30 +1319,31 @@ TEST_F(PlanNodeToStringTest, fixedPointSequence) {
 // Replace-mode state read in full each iteration, with a convergence plan --
 // the convergence-driven counterpart to the fixed-count sequence.
 TEST_F(PlanNodeToStringTest, fixedPointFibonacci) {
-  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto schema = ROW({"a", "b"}, BIGINT());
-  auto seed =
-      PlanBuilder(idGenerator)
-          .values({makeRowVector(
-              {"a", "b"},
-              {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({1})})})
-          .planNode();
-  auto convergence = PlanBuilder(idGenerator)
-                         .stateSource("fib", schema, /*delta=*/false)
-                         .project({"b > 100 AS converged"})
-                         .planNode();
-  auto plan = PlanBuilder(idGenerator)
+  auto plan = builder.newPlan()
                   .fixedPoint(
-                      core::VectorState("fib", schema).initial(seed),
-                      PlanBuilder(idGenerator)
+                      core::VectorState("fib", schema)
+                          .initial(builder.newPlan()
+                                       .values({makeRowVector(
+                                           {"a", "b"},
+                                           {makeFlatVector<int64_t>({0}),
+                                            makeFlatVector<int64_t>({1})})})
+                                       .planNode()),
+                      builder.newPlan()
                           .stateSource("fib", schema, /*delta=*/false)
                           .project({"b AS a", "a + b AS b"}),
-                      core::ConvergenceConfig::converging(convergence, 100))
+                      core::ConvergenceConfig::converging(
+                          builder.newPlan()
+                              .stateSource("fib", schema, /*delta=*/false)
+                              .project({"b > 100 AS converged"})
+                              .planNode(),
+                          100))
                   .planNode();
 
   ASSERT_EQ("-- FixedPoint[5]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[5][outputStateEntry: fib, states: [fib (vector, replace, initialized)], plans: 1, maxIterations: 100, errorWhenMaxIterationReached: true, convergencePlan: present] -> a:BIGINT, b:BIGINT\n",
+      "-- FixedPoint[5][outputStateEntry: fib, states: [fib (vector, replace, initialized)], stages: 1, maxIterations: 100, convergenceStages: 1] -> a:BIGINT, b:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -1230,48 +1352,45 @@ TEST_F(PlanNodeToStringTest, fixedPointFibonacci) {
 // each iteration, an append-mode frontier read as a delta, and empty-frontier
 // convergence.
 TEST_F(PlanNodeToStringTest, fixedPointThreeDegrees) {
-  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto people = ROW({"id", "depth"}, BIGINT());
   auto edges = ROW({"src", "dst"}, BIGINT());
-  auto joinOutput = ROW({"id", "depth", "dst"}, BIGINT());
-
-  auto me =
-      PlanBuilder(idGenerator)
-          .values({makeRowVector(
-              {"id", "depth"},
-              {makeFlatVector<int64_t>({1}), makeFlatVector<int64_t>({0})})})
-          .planNode();
-  auto graph = PlanBuilder(idGenerator)
-                   .values({makeRowVector(
-                       {"src", "dst"},
-                       {makeFlatVector<int64_t>({1, 2}),
-                        makeFlatVector<int64_t>({2, 3})})})
-                   .planNode();
-
-  auto body = PlanBuilder(idGenerator)
-                  .stateSource("reach", people, /*delta=*/true)
-                  .stateHashJoin("graph", {"id"}, joinOutput)
-                  .project({"dst AS id", "depth + 1 AS depth"})
-                  .planNode();
-  auto convergence = PlanBuilder(idGenerator)
-                         .stateSource("reach", people, /*delta=*/true)
-                         .singleAggregation({}, {"count(1)"})
-                         .project({"a0 = 0 AS converged"})
-                         .planNode();
-
   auto plan =
-      PlanBuilder(idGenerator)
+      builder.newPlan()
           .fixedPoint(
-              {core::HashTableState("graph", edges, {"src"}).initial(graph),
-               core::VectorState("reach", people, /*append=*/true).initial(me)},
-              {body},
-              core::ConvergenceConfig::converging(convergence, 3),
+              {core::HashTableState("graph", edges, {"src"})
+                   .initial(builder.newPlan()
+                                .values({makeRowVector(
+                                    {"src", "dst"},
+                                    {makeFlatVector<int64_t>({1, 2}),
+                                     makeFlatVector<int64_t>({2, 3})})})
+                                .planNode()),
+               core::VectorState("reach", people, /*append=*/true)
+                   .initial(builder.newPlan()
+                                .values({makeRowVector(
+                                    {"id", "depth"},
+                                    {makeFlatVector<int64_t>({1}),
+                                     makeFlatVector<int64_t>({0})})})
+                                .planNode())},
+              {builder.newPlan()
+                   .stateSource("reach", people, /*delta=*/true)
+                   .stateHashJoin(
+                       "graph", {"id"}, ROW({"id", "depth", "dst"}, BIGINT()))
+                   .project({"dst AS id", "depth + 1 AS depth"})
+                   .planNode()},
+              core::ConvergenceConfig::converging(
+                  builder.newPlan()
+                      .stateSource("reach", people, /*delta=*/true)
+                      .singleAggregation({}, {"count(1)"})
+                      .project({"a0 = 0 AS converged"})
+                      .planNode(),
+                  3),
               "reach")
           .planNode();
 
   ASSERT_EQ("-- FixedPoint[8]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[8][outputStateEntry: reach, states: [graph (hashTable, keys: [src], initialized), reach (vector, append, initialized)], plans: 1, maxIterations: 3, errorWhenMaxIterationReached: true, convergencePlan: present] -> id:BIGINT, depth:BIGINT\n",
+      "-- FixedPoint[8][outputStateEntry: reach, states: [graph (hashTable, keys: [src], initialized), reach (vector, append, initialized)], stages: 1, maxIterations: 3, convergenceStages: 1] -> id:BIGINT, depth:BIGINT\n",
       plan->toString(true, false));
 }
 
@@ -1281,34 +1400,71 @@ TEST_F(PlanNodeToStringTest, fixedPointThreeDegrees) {
 // coordinator's split-wiring, exercised by FixedPointTest, not a field of this
 // node.
 TEST_F(PlanNodeToStringTest, fixedPointDistributed) {
-  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   auto schema = ROW({"key", "val"}, BIGINT());
-  auto seed = PlanBuilder(idGenerator)
-                  .values({makeRowVector(
-                      {"key", "val"},
-                      {makeFlatVector<int64_t>({0, 1}),
-                       makeFlatVector<int64_t>({1, 1})})})
-                  .planNode();
-  auto producer = PlanBuilder(idGenerator)
-                      .stateSource("frontier", schema)
-                      .partitionedOutput({"key"}, 2)
-                      .planNode();
-  auto consumer = PlanBuilder(idGenerator)
-                      .exchange(schema, "Presto")
-                      .singleAggregation({"key"}, {"sum(val)"})
-                      .project({"key", "a0 AS val"})
-                      .planNode();
-  auto plan = PlanBuilder(idGenerator)
+  auto plan = builder.newPlan()
                   .fixedPoint(
-                      {core::VectorState("frontier", schema).initial(seed)},
-                      {producer, consumer},
+                      {core::VectorState("frontier", schema)
+                           .initial(builder.newPlan()
+                                        .values({makeRowVector(
+                                            {"key", "val"},
+                                            {makeFlatVector<int64_t>({0, 1}),
+                                             makeFlatVector<int64_t>({1, 1})})})
+                                        .planNode())},
+                      {builder.newPlan()
+                           .stateSource("frontier", schema)
+                           .partitionedOutput({"key"}, 2)
+                           .planNode(),
+                       builder.newPlan()
+                           .exchange(schema, "Presto")
+                           .singleAggregation({"key"}, {"sum(val)"})
+                           .project({"key", "a0 AS val"})
+                           .planNode()},
                       core::ConvergenceConfig::withMaxIterations(3),
                       "frontier")
                   .planNode();
 
   ASSERT_EQ("-- FixedPoint[6]\n", plan->toString());
   ASSERT_EQ(
-      "-- FixedPoint[6][outputStateEntry: frontier, states: [frontier (vector, replace, initialized)], plans: 2, maxIterations: 3, errorWhenMaxIterationReached: false, convergencePlan: none] -> key:BIGINT, val:BIGINT\n",
+      "-- FixedPoint[6][outputStateEntry: frontier, states: [frontier (vector, replace, initialized)], stages: 2, maxIterations: 3] -> key:BIGINT, val:BIGINT\n",
+      plan->toString(true, false));
+}
+
+// A replicated state: every worker sums every worker's values, worker 0 decides
+// over its own copy, and only worker 0 emits the output.
+TEST_F(PlanNodeToStringTest, fixedPointOnWorkerZero) {
+  PlanBuilder builder;
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto plan = builder.newPlan()
+                  .fixedPoint(
+                      {core::VectorState("total", schema)
+                           .initial(builder.newPlan()
+                                        .values({makeRowVector(
+                                            {"key", "val"},
+                                            {makeFlatVector<int64_t>({0}),
+                                             makeFlatVector<int64_t>({1})})})
+                                        .planNode())},
+                      {builder.newPlan()
+                           .stateSource("total", schema)
+                           .partitionedOutputBroadcast()
+                           .planNode(),
+                       builder.newPlan()
+                           .exchange(schema, "Presto")
+                           .singleAggregation({}, {"sum(val)"})
+                           .project({"CAST(0 AS BIGINT) AS key", "a0 AS val"})
+                           .planNode()},
+                      core::ConvergenceConfig::workerZeroVerdict(
+                          builder.newPlan()
+                              .stateSource("total", schema)
+                              .project({"val >= 8"})
+                              .planNode(),
+                          100),
+                      "total",
+                      /*outputOnWorkerZero=*/true)
+                  .planNode();
+
+  ASSERT_EQ(
+      "-- FixedPoint[8][outputStateEntry: total, states: [total (vector, replace, initialized)], stages: 2, maxIterations: 100, convergenceStages: 1, verdictOnWorkerZero, outputOnWorkerZero] -> key:BIGINT, val:BIGINT\n",
       plan->toString(true, false));
 }
 

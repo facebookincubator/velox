@@ -15,6 +15,10 @@
  */
 
 #include "velox/exec/window/SubPartitionedSortWindowBuild.h"
+
+#include <limits>
+
+#include "velox/common/testutil/TestValue.h"
 #include "velox/exec/MemoryReclaimer.h"
 
 namespace facebook::velox::exec::window {
@@ -57,6 +61,18 @@ SubPartitionedSortWindowBuild::SubPartitionedSortWindowBuild(
 
 void SubPartitionedSortWindowBuild::addInput(RowVectorPtr input) {
   VELOX_CHECK_LT(currentSubPartition_, 0);
+
+  common::testutil::TestValue::adjust(
+      "facebook::velox::exec::window::SubPartitionedSortWindowBuild::addInput",
+      &numRows_);
+
+  // numRows_ (a vector_size_t / int32) counts all rows across sub-partitions.
+  // Fail before it overflows.
+  VELOX_USER_CHECK_LE(
+      static_cast<int64_t>(numRows_) + input->size(),
+      std::numeric_limits<vector_size_t>::max(),
+      "Window operator cannot process more than {} rows",
+      std::numeric_limits<vector_size_t>::max());
 
   subPartitionIdsBuffer_.resize(input->size());
   subPartitioningFunction_->partition(*input, subPartitionIdsBuffer_);

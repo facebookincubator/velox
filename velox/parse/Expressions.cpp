@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <typeinfo>
+
 #include "velox/parse/Expressions.h"
 
 #include "velox/common/EnumDefine.h"
@@ -53,8 +55,10 @@ const auto& kindNames() {
       {IExpr::Kind::kConstant, "Constant"},
       {IExpr::Kind::kLambda, "Lambda"},
       {IExpr::Kind::kSubquery, "Subquery"},
+      {IExpr::Kind::kConcat, "Concat"},
       {IExpr::Kind::kAggregate, "Aggregate"},
       {IExpr::Kind::kWindow, "Window"},
+      {IExpr::Kind::kPlaceholder, "Placeholder"},
   };
   return kNames;
 }
@@ -130,6 +134,14 @@ std::string CallExpr::toString() const {
 
 bool AggregateCallExpr::operator==(const IExpr& other) const {
   if (!other.is(Kind::kAggregate)) {
+    return false;
+  }
+
+  // Require the exact concrete type so equality stays symmetric with subclasses
+  // that carry extra state. Without this a base AggregateCallExpr could compare
+  // equal to a subclass instance while the subclass's operator== returns false
+  // for the reverse comparison.
+  if (typeid(*this) != typeid(other)) {
     return false;
   }
 
@@ -414,6 +426,24 @@ size_t ConstantExpr::localHash() const {
 
 std::string ConstantExpr::toString() const {
   return appendAliasIfExists(value_.toStringAsVector(type_));
+}
+
+bool PlaceholderExpr::operator==(const IExpr& other) const {
+  if (!other.is(Kind::kPlaceholder)) {
+    return false;
+  }
+
+  const auto* otherPlaceholder = other.as<PlaceholderExpr>();
+  return *type_ == *otherPlaceholder->type_ &&
+      position_ == otherPlaceholder->position_ && compareAliasAndInputs(other);
+}
+
+size_t PlaceholderExpr::localHash() const {
+  return bits::hashMix(type_->hashKind(), position_);
+}
+
+std::string PlaceholderExpr::toString() const {
+  return appendAliasIfExists(fmt::format("?{}", position_));
 }
 
 bool LambdaExpr::operator==(const IExpr& other) const {

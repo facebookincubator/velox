@@ -65,6 +65,14 @@ class FutureCompiledModule : public CompiledModule {
     return module_->info(kernelIdx);
   }
 
+  int32_t occupancy(
+      int32_t kernelIdx,
+      int32_t numThreads,
+      int32_t dynamicSharedBytes) override {
+    ensureReady();
+    return module_->occupancy(kernelIdx, numThreads, dynamicSharedBytes);
+  }
+
  private:
   void ensureReady() {
     std::lock_guard<std::mutex> l(mutex_);
@@ -112,6 +120,13 @@ class AsyncCompiledKernel : public CompiledKernel {
     return (*ptr_)->info(kernelIdx);
   }
 
+  int32_t occupancy(
+      int32_t kernelIdx,
+      int32_t numThreads,
+      int32_t dynamicSharedBytes) override {
+    return (*ptr_)->occupancy(kernelIdx, numThreads, dynamicSharedBytes);
+  }
+
  private:
   KernelPtr ptr_;
 };
@@ -129,28 +144,38 @@ class KernelGenerator {
     auto future = holder->promise.getFuture();
     auto* device = currentDevice();
     compilerExecutor()->add([genCopy = *gen, holder, device]() {
-      setDevice(device);
-      auto spec = genCopy();
-      ModulePtr module;
+      // Every exit from this task must complete the promise. Letting an
+      // exception escape into the executor destroys the promise unfulfilled,
+      // so the waiter in FutureCompiledModule::ensureReady() sees folly's
+      // "Broken promise" and the compile error that caused it -- typically the
+      // nvrtc log from CompiledModule::create -- is lost.
       try {
-        if (!spec.fromCubinPath.empty()) {
-          if (spec.loweredNames.empty()) {
-            waveError("loweredNames must be set when using fromCubinPath");
+        setDevice(device);
+        auto spec = genCopy();
+        ModulePtr module;
+        try {
+          if (!spec.fromCubinPath.empty()) {
+            if (spec.loweredNames.empty()) {
+              waveError("loweredNames must be set when using fromCubinPath");
+            }
+            module = CompiledModule::fromCubin(spec.fromCubinPath, spec);
+          } else {
+            module = CompiledModule::create(spec);
           }
-          module = CompiledModule::fromCubin(spec.fromCubinPath, spec);
-        } else {
-          module = CompiledModule::create(spec);
+          if (spec.postCompile) {
+            spec.postCompile(spec, nullptr);
+          }
+        } catch (...) {
+          if (spec.postCompile) {
+            spec.postCompile(spec, std::current_exception());
+          }
+          throw;
         }
-        if (spec.postCompile) {
-          spec.postCompile(spec, nullptr);
-        }
+        holder->promise.setValue(module);
       } catch (...) {
-        if (spec.postCompile) {
-          spec.postCompile(spec, std::current_exception());
-        }
-        throw;
+        holder->promise.setException(
+            folly::exception_wrapper(std::current_exception()));
       }
-      holder->promise.setValue(module);
     });
     ModulePtr result =
         std::make_shared<FutureCompiledModule>(std::move(future));
@@ -168,8 +193,11 @@ std::unique_ptr<KernelCache> makeCache() {
       std::move(generator));
 }
 
+// Never destroyed: kernels of models that outlive static destruction, e.g.
+// ones a Python process still holds at exit, keep their entries pinned, and
+// destroying the cache with pinned entries aborts.
 KernelCache& kernelCache() {
-  static std::unique_ptr<KernelCache> cache = makeCache();
+  static KernelCache* cache = makeCache().release();
   return *cache;
 }
 } // namespace

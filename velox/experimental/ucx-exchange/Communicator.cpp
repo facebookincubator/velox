@@ -42,7 +42,7 @@ std::shared_ptr<Communicator> Communicator::initAndGet(
     uint16_t port,
     std::string_view coordinatorURL,
     ContinueFuture* future) {
-  if (!FLAGS_velox_ucx_exchange) {
+  if (!CudfConfig::getInstance().exchange) {
     return nullptr;
   }
   std::call_once(onceFlag, [&] {
@@ -110,7 +110,7 @@ void Communicator::run() {
   VLOG(3) << "Using error handling mode: "
           << CudfConfig::getInstance().ucxxErrorHandling << std::endl;
   VLOG(3) << "Using blocking progress mode: "
-          << CudfConfig::getInstance().ucxxBlockingPolling << std::endl;
+          << CudfConfig::getInstance().ucxxBlockingProgress << std::endl;
 
   running_.store(true);
   // Force CUDA context creation.
@@ -121,21 +121,23 @@ void Communicator::run() {
       cudaGetErrorString(cudaStatus));
 
   // create the UCXX context, worker, listener-context etc.
-  if (CudfConfig::getInstance().ucxxBlockingPolling) {
-    context_ = ucxx::createContext({}, ucxx::Context::defaultFeatureFlags);
+  if (CudfConfig::getInstance().ucxxBlockingProgress) {
+    context_ = ucxx::contextBuilder(ucxx::Context::defaultFeatureFlags).build();
   } else {
-    context_ = ucxx::createContext({}, UCP_FEATURE_TAG | UCP_FEATURE_AM);
+    context_ = ucxx::contextBuilder(UCP_FEATURE_TAG | UCP_FEATURE_AM).build();
   }
 
-  worker_ = context_->createWorker();
+  worker_ = context_->workerBuilder().build();
 
-  if (CudfConfig::getInstance().ucxxBlockingPolling) {
+  if (CudfConfig::getInstance().ucxxBlockingProgress) {
     // Communicator is using blocking progress mode.
     worker_->initBlockingProgressMode();
   }
 
-  listener_ = worker_->createListener(
-      port_, Communicator::cStyleListenerCallback, this);
+  listener_ =
+      worker_
+          ->listenerBuilder(port_, Communicator::cStyleListenerCallback, this)
+          .build();
 
   // Setup the active message callback that handles the
   // initial handshake and creates the senders.
@@ -145,7 +147,7 @@ void Communicator::run() {
   promise_.setValue();
 
   VLOG(3) << "Communicator running.";
-  const bool blockingMode = CudfConfig::getInstance().ucxxBlockingPolling;
+  const bool blockingMode = CudfConfig::getInstance().ucxxBlockingProgress;
   while (running_) {
     try {
       // Periodic heartbeat for diagnostic logging.
@@ -269,7 +271,7 @@ void Communicator::registerCommElement(std::shared_ptr<CommElement> comms) {
 }
 
 void Communicator::signalWorker() {
-  if (worker_ && CudfConfig::getInstance().ucxxBlockingPolling) {
+  if (worker_ && CudfConfig::getInstance().ucxxBlockingProgress) {
     worker_->signal();
   }
 }
@@ -302,10 +304,10 @@ std::shared_ptr<EndpointRef> Communicator::assocEndpointRef(
     return ep;
   }
   // endpoint doesn't exist. Need to connect. Enable error handling.
-  auto ep = worker_->createEndpointFromHostname(
-      hostPort.hostname,
-      hostPort.port,
-      CudfConfig::getInstance().ucxxErrorHandling);
+  auto ep =
+      worker_->endpointBuilder(hostPort.hostname, hostPort.port)
+          .endpointErrorHandling(CudfConfig::getInstance().ucxxErrorHandling)
+          .build();
   std::shared_ptr<EndpointRef> epRef = nullptr;
   if (ep != nullptr) {
     epRef = std::make_shared<EndpointRef>(ep);
@@ -402,8 +404,10 @@ void Communicator::listenerCallback(ucp_conn_request_h conn_request) {
   // shared. This guarantees that between any two nodes, there will be at most 2
   // endpoints, one per direction. For compatibility reasons, both incoming and
   // outgoing endpoints are represented using the EndpointRef.
-  auto endpoint = listener_->createEndpointFromConnRequest(
-      conn_request, CudfConfig::getInstance().ucxxErrorHandling);
+  auto endpoint =
+      listener_->endpointBuilder(conn_request)
+          .endpointErrorHandling(CudfConfig::getInstance().ucxxErrorHandling)
+          .build();
   // Pass the peer's actual IP to EndpointRef for reliable intra-node detection.
   auto epRef = std::make_shared<EndpointRef>(endpoint, std::string(ip_str));
   if (CudfConfig::getInstance().ucxxErrorHandling) {

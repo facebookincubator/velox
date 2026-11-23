@@ -79,9 +79,11 @@ class OnDemandUnitLoader : public UnitLoader {
 
   UnitLoaderStats stats() override {
     UnitLoaderStats stats;
-    stats.addCounter("processedUnits", RuntimeCounter(processedUnits_.size()));
     stats.addCounter(
-        "unitLoadNanos",
+        UnitLoaderStats::kProcessedUnits,
+        RuntimeCounter(processedUnits_.size()));
+    stats.addCounter(
+        UnitLoaderStats::kUnitLoadNanos,
         RuntimeCounter(
             saturateCast(unitLoadNanos_), RuntimeCounter::Unit::kNanos));
     return stats;

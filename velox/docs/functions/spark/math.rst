@@ -49,7 +49,9 @@ Mathematical Functions
 .. spark:function:: add(x, y) -> [same as x]
 
     Returns the result of adding x to y. The types of x and y must be the same.
-    Corresponds to sparks's operator ``+``.
+    For interval inputs (``interval day to second`` and
+    ``interval year to month``), overflow always throws an exception.
+    Corresponds to Spark's operator ``+``.
 
 .. spark:function:: add(x, y) -> decimal
 
@@ -73,17 +75,24 @@ Mathematical Functions
 
     Returns the cube root of ``x``.
 
-.. spark:function:: ceil(x) -> [same as x]
+.. spark:function:: ceil(x) -> [same as x] (ANSI compliant)
 
     Returns ``x`` rounded up to the nearest integer.
     Supported types are: BIGINT, DOUBLE and DECIMAL.
+    For DOUBLE input the result is BIGINT: NaN returns 0, and a result outside the
+    BIGINT range saturates to the BIGINT limits, or is an error when Spark ANSI mode
+    is enabled (``spark.ansi_enabled``).
+    The error matches Spark 4.3 and later; Spark 3.5 to 4.2 saturate in both modes.
 
-.. function:: checked_add(x, y) -> [same as x]
+.. spark:function:: checked_add(x, y) -> [same as x]
+   :noindex:
 
     Returns the result of adding x to y. The types of x and y must be the same.
-    For integral types, overflow results in an error. Corresponds to Spark's operator ``+`` with ``failOnError`` as true.
+    For integral and interval types, overflow results in an error. Corresponds
+    to Spark's operator ``+`` with ``failOnError`` as true.
 
-.. function:: checked_div(x, y) -> bigint
+.. spark:function:: checked_div(x, y) -> bigint
+   :noindex:
 
     Returns the result of integer division of ``x`` by ``y``, truncating toward zero.
     Supported types are integral types, ``x`` and ``y`` must have the same type.
@@ -95,15 +104,18 @@ Mathematical Functions
     Returns the results of dividing x by y. The types of x and y must be the same.
     Division by zero results in an error. Corresponds to Spark's operator ``/`` with ``failOnError`` as true.
 
-.. function:: checked_multiply(x, y) -> [same as x]
+.. spark:function:: checked_multiply(x, y) -> [same as x]
+   :noindex:
 
     Returns the result of multiplying x by y. The types of x and y must be the same.
     For integral types, overflow results in an error. Corresponds to Spark's operator ``*`` with ``failOnError`` as true.
 
-.. function:: checked_subtract(x, y) -> [same as x]
+.. spark:function:: checked_subtract(x, y) -> [same as x]
+   :noindex:
 
     Returns the result of subtracting y from x. The types of x and y must be the same.
-    For integral types, overflow results in an error. Corresponds to Spark's operator ``-`` with ``failOnError`` as true.
+    For integral and interval types, overflow results in an error. Corresponds
+    to Spark's operator ``-`` with ``failOnError`` as true.
 
 .. spark:function:: cos(x) -> double
 
@@ -131,7 +143,18 @@ Mathematical Functions
     When ``scale`` is negative, rounds up to a power of 10 (e.g., scale = -2
     rounds up to the nearest hundred). When ``scale`` >= the input
     scale, returns the value unchanged. Values that overflow the result
-    precision return NULL.
+    precision raise a user error regardless of ANSI mode; ``try`` catches
+    errors per row.
+
+    Shares scale handling and result typing with :spark:func:`decimal_round`.
+    All constant INTEGER scales are accepted.
+    For example, rounding DECIMAL(38,38) 0.1 to scale -1 returns 10, not zero.
+    When a negative scale requests a quantum larger than the result precision,
+    positive nonzero inputs raise an error; negative inputs and zero return
+    zero.
+
+    A typed NULL scale returns NULL without evaluating the runtime decimal
+    child; its result type uses scale zero.
 
     **Result type rules:**
 
@@ -146,7 +169,7 @@ Mathematical Functions
       The result scale is always 0. ``|n| + 1`` digits are needed because rounding
       to the nearest 10^|n| can produce a value one digit wider.
 
-    See `Spark's RoundBase.dataType <https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala>`_.
+    See https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala.
 
     Examples (type annotations for clarity, not executable SQL)::
 
@@ -165,7 +188,7 @@ Mathematical Functions
         SELECT decimal_ceil(DECIMAL(3,1) 10.1, 5); -- 10.1 (DECIMAL(4,1))
 
         -- negative scale: round up to power of 10
-        SELECT decimal_ceil(DECIMAL(3,1) 99.0, -1); -- 100 (DECIMAL(4,0))
+        SELECT decimal_ceil(DECIMAL(3,1) 99.0, -1); -- 100 (DECIMAL(3,0))
 
 .. spark:function:: decimal_floor(x, scale) -> decimal
 
@@ -176,8 +199,10 @@ Mathematical Functions
 
     When ``scale`` is negative, rounds down to a power of 10 (e.g., scale = -2
     rounds down to the nearest hundred). When ``scale`` >= the input
-    scale, returns the value unchanged. Values that overflow the result
-    precision return NULL.
+    scale, returns the value unchanged. Shares the scale validation, NULL-scale
+    handling and row-local overflow errors of :spark:func:`decimal_ceil`.
+    When the quantum is outside the result precision, negative nonzero inputs
+    raise an error; positive inputs and zero return zero.
 
     **Result type rules:**
 
@@ -200,7 +225,7 @@ Mathematical Functions
         SELECT decimal_floor(DECIMAL(3,1) 10.1, 5); -- 10.1 (DECIMAL(4,1))
 
         -- negative scale: round down to power of 10
-        SELECT decimal_floor(DECIMAL(3,1) 99.0, -1); -- 90 (DECIMAL(4,0))
+        SELECT decimal_floor(DECIMAL(3,1) 99.0, -1); -- 90 (DECIMAL(3,0))
 
 .. spark:function:: degrees(x) -> double
 
@@ -263,10 +288,14 @@ Mathematical Functions
         SELECT factorial(21); -- NULL
         SELECT factorial(-1); -- NULL
 
-.. spark:function:: floor(x) -> [same as x]
+.. spark:function:: floor(x) -> [same as x] (ANSI compliant)
 
     Returns ``x`` rounded down to the nearest integer.
-    Supported types are: BIGINT,  DOUBLE and DECIMAL.
+    Supported types are: BIGINT, DOUBLE and DECIMAL.
+    For DOUBLE input the result is BIGINT: NaN returns 0, and a result outside the
+    BIGINT range saturates to the BIGINT limits, or is an error when Spark ANSI mode
+    is enabled (``spark.ansi_enabled``).
+    The error matches Spark 4.3 and later; Spark 3.5 to 4.2 saturate in both modes.
 
 .. spark:function:: hex(x) -> varchar
 
@@ -332,6 +361,23 @@ Mathematical Functions
         SELECT CAST(1 as DECIMAL(20, 3)) * CAST(0 as DECIMAL(20, 3)); -- decimal 0.000000
         SELECT CAST(201e-38 as DECIMAL(38, 38)) * CAST(301e-38 as DECIMAL(38, 38)); -- decimal 0.0000000000000000000000000000000000000
 
+.. spark:function:: normalize_nan_and_zero(x) -> [same as x]
+
+    Returns 0.0 if ``x`` is -0.0, the canonical NaN if ``x`` is any NaN, and ``x`` otherwise.
+    The canonical NaN is Java's ``Double.NaN`` (``0x7ff8000000000000``) for DOUBLE and
+    ``Float.NaN`` (``0x7fc00000``) for REAL. Returns NULL if ``x`` is NULL.
+    Supported types are: REAL, DOUBLE.
+    Note: This function is not directly callable in Spark SQL, but is used internally by
+    `Spark's NormalizeFloatingNumbers <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/optimizer/NormalizeFloatingNumbers.scala>`_. ::
+
+        -- Function call examples (this function is not directly callable in Spark SQL).
+        normalize_nan_and_zero(-0.0) -- 0.0
+        normalize_nan_and_zero(0.0) -- 0.0
+        normalize_nan_and_zero(1.5) -- 1.5
+        normalize_nan_and_zero(NaN) -- NaN
+        normalize_nan_and_zero(-NaN) -- NaN
+        normalize_nan_and_zero(NULL) -- NULL
+
 .. spark:function:: not(x) -> boolean
 
     Logical not. ::
@@ -370,6 +416,25 @@ Mathematical Functions
         SELECT rand(0);    -- 0.7604953758285915
         SELECT rand(NULL); -- 0.7604953758285915
 
+.. spark:function:: randn() -> double
+
+    Returns a random value from the standard normal distribution (mean 0.0 and
+    standard deviation 1.0). ::
+
+        SELECT randn(); -- -1.1750280342265669
+
+.. spark:function:: randn(seed) -> double
+
+    Returns a random value from the standard normal distribution (mean 0.0 and
+    standard deviation 1.0) using a seed formed by combining user-specified
+    ``seed`` and the configuration `spark.partition_id`. The framework is
+    responsible for deterministic partitioning of the data and assigning unique
+    `spark.partition_id` to each thread (in a deterministic way).
+    ``seed`` must be constant. NULL ``seed`` is identical to zero ``seed``. ::
+
+        SELECT randn(0);    -- 1.6034991609278433
+        SELECT randn(NULL); -- 1.6034991609278433
+
 .. spark:function:: random() -> double
 
     An alias for ``rand()``.
@@ -399,6 +464,23 @@ Mathematical Functions
     In HALF_UP rounding, the digit 5 is rounded up.
     Supported types for ``x`` are integral and floating point types.
 
+    Omitting ``d`` is equivalent to ``d = 0``. For integral inputs, nonnegative
+    ``d`` returns ``x`` unchanged. Negative ``d`` rounds to a multiple of
+    ``10^(-d)``, with halfway values rounded away from zero. Integral overflow
+    raises an error when ``spark.ansi_enabled`` is true; otherwise the result
+    wraps to the input type's two's-complement representation.
+
+    Integral inputs accept every INTEGER scale, including a scale column.
+    Column scales are a native extension: Spark 4.1 requires a foldable scale
+    expression, which need not be a literal.
+
+    Extreme-scale behavior is not fully compatible with Spark 4.1. For BIGINT
+    input ``25`` and scale ``-2147483648``, Velox returns zero whereas Spark's
+    interpreted and generated evaluators throw. At scale ``2147483647``, Velox
+    and Spark's generated evaluator return ``25``, but Spark's interpreted
+    evaluator throws. Velox does not reproduce JVM BigDecimal/BigInteger
+    scale and resource limits.
+
 .. spark:function:: sec(x) -> double
 
     Returns the secant of ``x``.
@@ -426,6 +508,8 @@ Mathematical Functions
 .. spark:function:: subtract(x, y) -> [same as x]
 
     Returns the result of subtracting y from x. The types of x and y must be the same.
+    For interval inputs (``interval day to second`` and
+    ``interval year to month``), overflow always throws an exception.
     Corresponds to Spark's operator ``-``.
 
 .. spark:function:: subtract(x, y) -> decimal
@@ -448,9 +532,45 @@ Mathematical Functions
 
     Returns the hyperbolic tangent of ``x``.
 
-.. spark:function:: unaryminus(x) -> [same as x]
+.. spark:function:: try_add(x, y) -> [same as x]
 
-    Returns the negative of `x`.  Corresponds to Spark's operator ``-``.
+    Returns the result of adding ``x`` to ``y``. The types of ``x`` and ``y``
+    must be the same. For integral types, overflow returns NULL. Corresponds to
+    Spark's ``try_add``. Unlike ``try(checked_add(x, y))``, errors from ``x``
+    and ``y`` are not turned into NULL. ::
+
+        SELECT try_add(2147483647, 1); -- NULL
+        SELECT try_add(1, 2); -- 3
+
+.. spark:function:: try_multiply(x, y) -> [same as x]
+
+    Returns the result of multiplying ``x`` by ``y``. The types of ``x`` and
+    ``y`` must be the same. For integral types, overflow returns NULL.
+    Corresponds to Spark's ``try_multiply``. Unlike
+    ``try(checked_multiply(x, y))``, errors from ``x`` and ``y`` are not turned
+    into NULL. ::
+
+        SELECT try_multiply(2147483647, 2); -- NULL
+        SELECT try_multiply(3, -4); -- -12
+
+.. spark:function:: try_subtract(x, y) -> [same as x]
+
+    Returns the result of subtracting ``y`` from ``x``. The types of ``x`` and
+    ``y`` must be the same. For integral types, overflow returns NULL.
+    Corresponds to Spark's ``try_subtract``. Unlike
+    ``try(checked_subtract(x, y))``, errors from ``x`` and ``y`` are not turned
+    into NULL. ::
+
+        SELECT try_subtract(-2147483648, 1); -- NULL
+        SELECT try_subtract(5, 2); -- 3
+
+.. spark:function:: unaryminus(x) -> [same as x] (ANSI compliant)
+
+    Returns the negative of ``x``. Corresponds to Spark's operator ``-``.
+    For integral inputs, negating the minimum value returns the same value when
+    Spark ANSI mode is disabled and throws an overflow exception when Spark
+    ANSI mode is enabled. For interval inputs (``interval day to second`` and
+    ``interval year to month``), overflow always throws an exception.
 
 .. spark:function:: unhex(x) -> varbinary
 

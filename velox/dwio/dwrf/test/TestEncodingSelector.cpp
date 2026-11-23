@@ -28,7 +28,7 @@ class EntropyEncodingSelectorTests : public testing::Test {
   }
 };
 
-TEST_F(EntropyEncodingSelectorTests, Ctor) {
+TEST_F(EntropyEncodingSelectorTests, ctor) {
   auto pool = memoryManager()->addLeafPool();
   float slightlyOver = 1.0f + std::numeric_limits<float>::epsilon() * 2;
   float slightlyUnder = -std::numeric_limits<float>::epsilon();
@@ -94,7 +94,7 @@ class EntropyEncodingSelectorTest {
   }
 };
 
-TEST_F(EntropyEncodingSelectorTests, NoHeuristic) {
+TEST_F(EntropyEncodingSelectorTests, noHeuristic) {
   class TestCase : public EntropyEncodingSelectorTest {
    public:
     explicit TestCase(
@@ -137,7 +137,7 @@ TEST_F(EntropyEncodingSelectorTests, NoHeuristic) {
   }
 }
 
-TEST_F(EntropyEncodingSelectorTests, NoSampling) {
+TEST_F(EntropyEncodingSelectorTests, noSampling) {
   class TestCase : public EntropyEncodingSelectorTest {
    public:
     explicit TestCase(
@@ -187,7 +187,7 @@ std::string alphabeticRoundRobin(size_t index, size_t size) {
   return std::string(size % (index + 1), element);
 }
 
-TEST_F(EntropyEncodingSelectorTests, Sampling) {
+TEST_F(EntropyEncodingSelectorTests, sampling) {
   class TestCase : public EntropyEncodingSelectorTest {
    public:
     explicit TestCase(

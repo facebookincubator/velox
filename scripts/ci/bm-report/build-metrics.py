@@ -151,7 +151,7 @@ class NinjaLogAdapter(BenchmarkAdapter):
                 totals["compile_time"] += duration
                 suite = "compiling"
             else:
-                print(f"Unkown file type found: {object_path}")
+                print(f"Unknown file type found: {object_path}")
                 print("Skipping...")
                 continue
 

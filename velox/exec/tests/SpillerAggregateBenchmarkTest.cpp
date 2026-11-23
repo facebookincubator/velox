@@ -16,7 +16,6 @@
 
 #include "velox/exec/GroupingSet.h"
 #include "velox/exec/tests/AggregateSpillBenchmarkBase.h"
-#include "velox/serializers/PrestoSerializer.h"
 
 #include <gflags/gflags.h>
 
@@ -26,7 +25,7 @@ using namespace facebook::velox::exec;
 int main(int argc, char* argv[]) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   memory::MemoryManager::initialize(memory::MemoryManager::Options{});
-  serializer::presto::PrestoVectorSerde::registerVectorSerde();
+  exec::test::SpillerBenchmarkBase::registerSerde();
   filesystems::registerLocalFileSystem();
 
   auto spillerType = FLAGS_spiller_benchmark_spiller_type;

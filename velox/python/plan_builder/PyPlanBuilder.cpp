@@ -16,8 +16,6 @@
 
 #include "velox/python/plan_builder/PyPlanBuilder.h"
 
-#include <folly/executors/GlobalExecutor.h>
-#include <pybind11/stl.h>
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/tpch/TpchConnectorSplit.h"
@@ -29,8 +27,6 @@
 #include "velox/tpch/gen/TpchGen.h"
 
 namespace facebook::velox::py {
-
-namespace py = pybind11;
 
 PyPlanNode::PyPlanNode(
     core::PlanNodePtr planNode,
@@ -72,7 +68,7 @@ PyPlanBuilder& PyPlanBuilder::tableWrite(
     if (outputRowSchema == nullptr) {
       throw std::runtime_error("Output schema must be a ROW().");
     }
-    builder.outputType(outputRowSchema);
+    builder.targetColumns(outputRowSchema);
   }
 
   if (!outputFile && !outputPath) {
@@ -138,8 +134,8 @@ PyPlanBuilder& PyPlanBuilder::tableScan(
       }
 
       auto columnType = (name == rowIndexColumnName)
-          ? FileColumnHandle::ColumnType::kRowIndex
-          : FileColumnHandle::ColumnType::kRegular;
+          ? connector::FileColumnHandle::ColumnType::kRowIndex
+          : connector::FileColumnHandle::ColumnType::kRegular;
 
       auto columnHandle = std::make_shared<HiveColumnHandle>(
           hiveName, columnType, type, type, std::move(requiredSubfields));

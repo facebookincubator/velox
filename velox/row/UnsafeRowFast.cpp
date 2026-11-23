@@ -70,6 +70,10 @@ void UnsafeRowFast::initialize(const TypePtr& type) {
     }
     case TypeKind::MAP: {
       auto mapBase = base->as<MapVector>();
+      VELOX_CHECK_NOT_NULL(
+          mapBase,
+          "Unsupported map vector encoding for UnsafeRow: {}",
+          base->encoding());
       children_.push_back(UnsafeRowFast(mapBase->mapKeys()));
       children_.push_back(UnsafeRowFast(mapBase->mapValues()));
       childIsFixedWidth_.push_back(isFixedWidth(mapBase->mapKeys()->type()));
@@ -309,12 +313,11 @@ int32_t UnsafeRowFast::arrayRowSize(
     bool fixedWidth) const {
   int32_t nullBytes = alignBits(size);
 
-  int32_t rowSize = kFieldWidth + nullBytes;
+  auto childSize = fixedWidth ? elements.valueBytes() : kFieldWidth;
+  int32_t rowSize = kFieldWidth + nullBytes + alignBytes(size * childSize);
   if (fixedWidth) {
-    return rowSize + size * elements.valueBytes();
+    return rowSize;
   }
-
-  rowSize += size * kFieldWidth;
 
   for (auto i = 0; i < size; ++i) {
     if (!elements.isNullAt(offset + i)) {
@@ -343,7 +346,7 @@ int32_t UnsafeRowFast::serializeAsArray(
 
   auto childSize = fixedWidth ? elements.valueBytes() : kFieldWidth;
 
-  int64_t variableWidthOffset = fixedWidthOffset + size * childSize;
+  int64_t variableWidthOffset = fixedWidthOffset + alignBytes(size * childSize);
 
   if (elements.supportsBulkCopy_) {
     if (elements.decoded_.mayHaveNulls()) {

@@ -73,8 +73,16 @@ SortBuffer::SortBuffer(
     sortedSpillColumnNames.emplace_back(input->nameOf(i));
   }
 
+  // NOTE: do not enable 'useListRowIndex' here. It makes RowContainer::newRow()
+  // eagerly push each row pointer into a pool-backed 'rowPointers_' vector,
+  // which grows by doubling reallocation during input accumulation. Under
+  // memory pressure (e.g. a large/skewed OrderBy), that reallocation goes
+  // through memory arbitration (growCapacity) and can OOM in addInput -- the
+  // sort cannot spill its way out because the index is not spillable. The
+  // listRowsFast speedup is not worth this failure mode; listRows() falls back
+  // to scanning when the index is absent.
   data_ = std::make_unique<RowContainer>(
-      sortedColumnTypes, nonSortedColumnTypes, /*useListRowIndex=*/true, pool_);
+      sortedColumnTypes, nonSortedColumnTypes, pool_);
   spillerStoreType_ =
       ROW(std::move(sortedSpillColumnNames), std::move(sortedSpillColumnTypes));
 }
@@ -131,7 +139,7 @@ void SortBuffer::noMoreInput() {
     // TODO: Reuse 'RowContainer::rowPointers_'.
     sortedRows_.resize(numInputRows_);
     RowContainerIterator iter;
-    data_->listRows(&iter, numInputRows_, sortedRows_.data());
+    data_->listRows(&iter, std::span(sortedRows_.data(), numInputRows_));
     PrefixSort::sort(
         data_.get(), sortCompareFlags_, prefixSortConfig_, pool_, sortedRows_);
   } else {
@@ -156,6 +164,7 @@ RowVectorPtr SortBuffer::getOutput(vector_size_t maxOutputRows) {
   VELOX_CHECK(noMoreInput_);
 
   if (numOutputRows_ == numInputRows_) {
+    releaseRows();
     return nullptr;
   }
   VELOX_CHECK_GT(maxOutputRows, 0);
@@ -170,6 +179,12 @@ RowVectorPtr SortBuffer::getOutput(vector_size_t maxOutputRows) {
     getOutputWithoutSpill();
   }
   return std::move(output_);
+}
+
+void SortBuffer::releaseRows() {
+  data_->clear();
+  sortedRows_.clear();
+  sortedRows_.shrink_to_fit();
 }
 
 bool SortBuffer::hasSpilled() const {
@@ -213,9 +228,7 @@ void SortBuffer::ensureInputFits(const VectorPtr& input) {
     return;
   }
 
-  auto [freeRows, outOfLineFreeBytes] = data_->freeSpace();
-  const auto outOfLineBytes =
-      data_->stringAllocator().retainedSize() - outOfLineFreeBytes;
+  const auto outOfLineBytes = data_->usedVariableWidthBytes();
   const int64_t flatInputBytes = input->estimateFlatSize();
 
   // Test-only spill path.
@@ -229,12 +242,11 @@ void SortBuffer::ensureInputFits(const VectorPtr& input) {
       currentMemoryUsage * spillConfig_->minSpillableReservationPct / 100;
   const auto availableReservationBytes = pool_->availableReservation();
   const int64_t estimatedIncrementalBytes =
-      data_->sizeIncrement(input->size(), outOfLineBytes ? flatInputBytes : 0);
+      data_->maxGrowthBytes(input->size(), outOfLineBytes ? flatInputBytes : 0);
   if (availableReservationBytes > minReservationBytes) {
     // If we have enough free rows for input rows and enough variable length
     // free space for the vector's flat size, no need for spilling.
-    if (freeRows > input->size() &&
-        (outOfLineBytes == 0 || outOfLineFreeBytes >= flatInputBytes)) {
+    if (estimatedIncrementalBytes == 0) {
       return;
     }
 
@@ -429,10 +441,10 @@ void SortBuffer::getOutputWithSpill() {
     SpillMergeStream* stream = spillMerger_->next();
     VELOX_CHECK_NOT_NULL(stream);
 
-    spillSources_[outputSize] = &stream->current();
+    spillSources_[outputSize] = stream->current().get();
     spillSourceRows_[outputSize] = stream->currentIndex(&isEndOfBatch);
     ++outputSize;
-    if (FOLLY_UNLIKELY(isEndOfBatch)) {
+    if (isEndOfBatch) [[unlikely]] {
       // The stream is at end of input batch. Need to copy out the rows before
       // fetching next batch in 'pop'.
       gatherCopy(
@@ -450,7 +462,7 @@ void SortBuffer::getOutputWithSpill() {
   }
   VELOX_CHECK_EQ(outputRow + outputSize, output_->size());
 
-  if (FOLLY_LIKELY(outputSize != 0)) {
+  if (outputSize != 0) [[likely]] {
     gatherCopy(
         output_.get(),
         outputRow,

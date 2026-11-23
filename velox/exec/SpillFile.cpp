@@ -16,6 +16,7 @@
 
 #include "velox/exec/SpillFile.h"
 #include "velox/common/base/RuntimeMetrics.h"
+#include "velox/common/time/Timer.h"
 #include "velox/serializers/SerializedPageFile.h"
 
 namespace facebook::velox::exec {
@@ -26,6 +27,12 @@ namespace {
 // nanosecond precision, we use this serde option to ensure the serializer
 // preserves precision.
 static const bool kDefaultUseLosslessTimestamp = true;
+
+// The Presto serializer can't write a page of 2GB or more. The writer packs
+// rows into pages of at most the write buffer size by their serialized size
+// estimates, so half of that keeps room for what a page adds to the estimates.
+constexpr uint64_t kMaxWriteBufferSize =
+    std::numeric_limits<int32_t>::max() / 2;
 } // namespace
 
 SpillWriter::SpillWriter(
@@ -42,7 +49,7 @@ SpillWriter::SpillWriter(
     : serializer::SerializedPageFileWriter(
           pathPrefix,
           targetFileSize,
-          writeBufferSize,
+          std::min(writeBufferSize, kMaxWriteBufferSize),
           fileCreateConfig,
           std::make_unique<
               serializer::presto::PrestoVectorSerde::PrestoOptions>(
@@ -78,6 +85,19 @@ void SpillWriter::updateWriteStats(
       fileWriteTimeNs, std::memory_order_relaxed);
   updateGlobalSpillWriteStats(spilledBytes, flushTimeNs, fileWriteTimeNs);
   updateAndCheckLimitCb_(spilledBytes);
+}
+
+void SpillWriter::closeFile() {
+  if (currentFile_ == nullptr) {
+    return;
+  }
+  uint64_t closeTimeNs{0};
+  {
+    NanosecondWallTimer timer(&closeTimeNs);
+    serializer::SerializedPageFileWriter::closeFile();
+  }
+  stats_->spillWriteTimeNanos.fetch_add(closeTimeNs, std::memory_order_relaxed);
+  updateGlobalSpillFileCloseTime(closeTimeNs);
 }
 
 void SpillWriter::updateFileStats(
@@ -138,6 +158,7 @@ std::unique_ptr<SpillReadFile> SpillReadFile::create(
     const SpillFileInfo& fileInfo,
     uint64_t bufferSize,
     memory::MemoryPool* pool,
+    folly::Executor* readAheadExecutor,
     exec::SpillStats* stats) {
   return std::unique_ptr<SpillReadFile>(new SpillReadFile(
       fileInfo.id,
@@ -148,6 +169,7 @@ std::unique_ptr<SpillReadFile> SpillReadFile::create(
       fileInfo.sortingKeys,
       fileInfo.compressionKind,
       pool,
+      readAheadExecutor,
       stats));
 }
 
@@ -160,6 +182,7 @@ SpillReadFile::SpillReadFile(
     const std::vector<SpillSortKey>& sortingKeys,
     common::CompressionKind compressionKind,
     memory::MemoryPool* pool,
+    folly::Executor* readAheadExecutor,
     exec::SpillStats* stats)
     : serializer::SerializedPageFileReader(
           path,
@@ -173,6 +196,7 @@ SpillReadFile::SpillReadFile(
               0.8,
               /*_nullsFirst=*/true),
           pool,
+          readAheadExecutor,
           &stats->ioStats),
       id_(id),
       path_(path),

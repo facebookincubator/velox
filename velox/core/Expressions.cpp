@@ -54,7 +54,7 @@ folly::dynamic ITypedExpr::serializeBase(std::string_view name) const {
       serializedInputs.push_back(input->serialize());
     }
 
-    obj["inputs"] = serializedInputs;
+    obj["inputs"] = std::move(serializedInputs);
   }
 
   return obj;
@@ -443,18 +443,20 @@ size_t ConstantTypedExpr::localHash() const {
 }
 
 std::string CallTypedExpr::toString() const {
-  std::string str{};
-  str += name();
-  str += "(";
+  return toStringWithSharing();
+}
+
+void CallTypedExpr::appendToString(std::string& out, ExprToStringContext& ctx)
+    const {
+  out += name();
+  out += "(";
   for (size_t i = 0; i < inputs().size(); ++i) {
-    auto& input = inputs().at(i);
     if (i != 0) {
-      str += ",";
+      out += ",";
     }
-    str += input->toString();
+    inputs().at(i)->appendWithSharing(out, ctx);
   }
-  str += ")";
-  return str;
+  out += ")";
 }
 
 void CallTypedExpr::accept(
@@ -476,6 +478,18 @@ TypedExprPtr CallTypedExpr::create(const folly::dynamic& obj, void* context) {
 
   return std::make_shared<CallTypedExpr>(
       std::move(type), std::move(inputs), obj["functionName"].asString());
+}
+
+TypedExprPtr FieldAccessTypedExpr::withInputsImpl(
+    std::vector<TypedExprPtr> inputs) const {
+  // A column reference has no inputs.
+  if (inputs.empty()) {
+    return std::make_shared<FieldAccessTypedExpr>(*this);
+  }
+
+  // A field access by name on an input expression.
+  return std::make_shared<FieldAccessTypedExpr>(
+      type(), std::move(inputs[0]), name_);
 }
 
 TypedExprPtr FieldAccessTypedExpr::rewriteInputNames(
@@ -506,13 +520,23 @@ TypedExprPtr FieldAccessTypedExpr::rewriteInputNames(
 }
 
 std::string FieldAccessTypedExpr::toString() const {
+  return toStringWithSharing();
+}
+
+void FieldAccessTypedExpr::appendToString(
+    std::string& out,
+    ExprToStringContext& ctx) const {
   std::stringstream ss;
   ss << std::quoted(name(), '"', '"');
   if (inputs().empty()) {
-    return fmt::format("{}", ss.str());
+    out += ss.str();
+    return;
   }
 
-  return fmt::format("{}[{}]", inputs()[0]->toString(), ss.str());
+  inputs()[0]->appendWithSharing(out, ctx);
+  out += "[";
+  out += ss.str();
+  out += "]";
 }
 
 void FieldAccessTypedExpr::accept(
@@ -592,17 +616,19 @@ ConcatTypedExpr::ConcatTypedExpr(
     : ITypedExpr{ExprKind::kConcat, toRowType(names, inputs), inputs} {}
 
 std::string ConcatTypedExpr::toString() const {
-  std::string str{};
-  str += "CONCAT(";
+  return toStringWithSharing();
+}
+
+void ConcatTypedExpr::appendToString(std::string& out, ExprToStringContext& ctx)
+    const {
+  out += "CONCAT(";
   for (size_t i = 0; i < inputs().size(); ++i) {
-    auto& input = inputs().at(i);
     if (i != 0) {
-      str += ",";
+      out += ",";
     }
-    str += input->toString();
+    inputs().at(i)->appendWithSharing(out, ctx);
   }
-  str += ")";
-  return str;
+  out += ")";
 }
 
 void ConcatTypedExpr::accept(
@@ -658,13 +684,14 @@ TypedExprPtr LambdaTypedExpr::create(const folly::dynamic& obj, void* context) {
 }
 
 std::string CastTypedExpr::toString() const {
-  if (isTryCast_) {
-    return fmt::format(
-        "try_cast({} as {})", inputs()[0]->toString(), type()->toString());
-  } else {
-    return fmt::format(
-        "cast({} as {})", inputs()[0]->toString(), type()->toString());
-  }
+  return toStringWithSharing();
+}
+
+void CastTypedExpr::appendToString(std::string& out, ExprToStringContext& ctx)
+    const {
+  out += isTryCast_ ? "try_cast(" : "cast(";
+  inputs()[0]->appendWithSharing(out, ctx);
+  out += fmt::format(" as {})", type()->toString());
 }
 
 void CastTypedExpr::accept(
@@ -720,8 +747,16 @@ bool NullIfTypedExpr::operator==(const ITypedExpr& other) const {
 }
 
 std::string NullIfTypedExpr::toString() const {
-  return fmt::format(
-      "nullif({}, {})", inputs()[0]->toString(), inputs()[1]->toString());
+  return toStringWithSharing();
+}
+
+void NullIfTypedExpr::appendToString(std::string& out, ExprToStringContext& ctx)
+    const {
+  out += "nullif(";
+  inputs()[0]->appendWithSharing(out, ctx);
+  out += ", ";
+  inputs()[1]->appendWithSharing(out, ctx);
+  out += ")";
 }
 
 void NullIfTypedExpr::accept(

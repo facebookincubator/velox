@@ -295,6 +295,7 @@ std::vector<exec::AggregateRegistrationResult> registerCovariance(
                 rawInputType->toString());
         }
       },
+      {.ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

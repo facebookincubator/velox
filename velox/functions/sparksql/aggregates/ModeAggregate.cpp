@@ -40,6 +40,9 @@ class ModeAggregate {
 
   using OutputType = T;
 
+  // Retains a count for every distinct input value.
+  static constexpr bool is_reducing_ = false;
+
   struct AccumulatorType {
     using ValueMap = folly::F14FastMap<
         T,
@@ -107,6 +110,9 @@ class StringModeAggregate {
   using IntermediateType = Map<Varchar, int64_t>;
 
   using OutputType = Varchar;
+
+  // Retains a count for every distinct input value.
+  static constexpr bool is_reducing_ = false;
 
   struct AccumulatorType {
     using ValueMap = folly::F14FastMap<
@@ -280,6 +286,11 @@ class ComplexTypeModeAggregate : public Aggregate {
   }
 
   bool isFixedSize() const override {
+    return false;
+  }
+
+  bool isReducing() const override {
+    // Retains a count for every distinct input value.
     return false;
   }
 

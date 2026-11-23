@@ -15,12 +15,10 @@
  */
 #pragma once
 
-#include <random>
-
-#include "velox/exec/DefaultOutputBufferManager.h"
-#include "velox/exec/ExchangeClient.h"
+#include "velox/exec/InMemoryExchangeClient.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OperatorType.h"
+#include "velox/exec/SerializedPage.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/serializers/RowSerializer.h"
 
@@ -46,11 +44,14 @@ struct RemoteConnectorSplit : public connector::ConnectorSplit {
 
 class Exchange : public SourceOperator {
  public:
+  /// Takes an InMemoryExchangeClient because this operator reads the client's
+  /// queue directly. ExchangeTransportRegistry ensures that the operator
+  /// receives the matching client type.
   Exchange(
       int32_t operatorId,
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::ExchangeNode>& exchangeNode,
-      std::shared_ptr<ExchangeClient> exchangeClient,
+      std::shared_ptr<InMemoryExchangeClient> exchangeClient,
       std::string_view operatorType = OperatorType::kExchange);
 
   ~Exchange() override {
@@ -74,18 +75,12 @@ class Exchange : public SourceOperator {
   // much.
   static constexpr uint64_t kInitialOutputRows = 64;
 
-  // Invoked to create exchange client for remote tasks. The function shuffles
-  // the source task ids first to randomize the source tasks we fetch data from.
-  // This helps to avoid different tasks fetching from the same source task in a
-  // distributed system.
-  void addRemoteTaskIds(std::vector<std::string>& remoteTaskIds);
-
   // Fetches splits from the task until there are no more splits or task returns
-  // a future that will be complete when more splits arrive. Adds splits to
-  // exchangeClient_.
+  // a future that will be complete when more splits arrive. Records split
+  // stats and traces.
   void getSplits(ContinueFuture* future);
 
-  // Fetches runtime stats from ExchangeClient and replaces these in this
+  // Fetches runtime stats from exchangeClient_ and replaces these in this
   // operator's stats.
   void recordExchangeClientStats();
 
@@ -95,21 +90,29 @@ class Exchange : public SourceOperator {
 
   RowVectorPtr getOutputFromRowPages(VectorSerde* serde);
 
+  // Returns the number of rows to fill the next output batch to.
+  uint64_t targetNumRows() const;
+
   const uint64_t preferredOutputBatchBytes_;
+
+  // From 'exchange_output_batch_rows'. When positive, the number of rows to
+  // fill each output batch to, instead of a target derived from
+  // 'preferredOutputBatchBytes_' and 'estimatedRowSize_'.
+  const uint32_t outputBatchRows_;
 
   const std::string serdeKind_;
 
   const std::unique_ptr<VectorSerde::Options> serdeOptions_;
 
-  /// True if this operator is responsible for fetching splits from the Task
-  /// and passing these to ExchangeClient.
+  // True if this operator takes splits from the Task, records split stats,
+  // traces and exchange client stats, and reports the splits finished.
   const bool processSplits_;
 
   const int driverId_;
 
   bool noMoreSplits_ = false;
 
-  std::shared_ptr<ExchangeClient> exchangeClient_;
+  std::shared_ptr<InMemoryExchangeClient> exchangeClient_;
 
   // A future received from Task::getSplitOrFuture(). It will be complete when
   // there are more splits available or no-more-splits signal has arrived.
@@ -120,7 +123,6 @@ class Exchange : public SourceOperator {
 
   std::vector<std::unique_ptr<SerializedPageBase>> currentPages_;
   bool atEnd_{false};
-  std::default_random_engine rng_{std::random_device{}()};
 
   // Memory holders for deserialization across 'getOutput' calls.
   // The merged pages for row serialization.

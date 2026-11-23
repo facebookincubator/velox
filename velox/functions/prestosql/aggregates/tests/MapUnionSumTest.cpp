@@ -46,7 +46,10 @@ TEST_F(MapUnionSumTest, global) {
       }),
   });
 
-  testAggregations({data}, {}, {"map_union_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union_sum(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(MapUnionSumTest, globalVarcharKey) {
@@ -82,7 +85,10 @@ TEST_F(MapUnionSumTest, globalVarcharKey) {
       }),
   });
 
-  testAggregations({data}, {}, {"map_union_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union_sum(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(MapUnionSumTest, nullAndEmptyMaps) {
@@ -100,7 +106,10 @@ TEST_F(MapUnionSumTest, nullAndEmptyMaps) {
       }),
   });
 
-  testAggregations({allEmptyMaps}, {}, {"map_union_sum(c0)"}, {expectedEmpty});
+  AggregationTester(*this)
+      .inputs(allEmptyMaps)
+      .aggregates({"map_union_sum(c0)"})
+      .assertResults(expectedEmpty);
 
   auto allNullMaps = makeRowVector({
       makeNullableMapVector<int64_t, int64_t>({
@@ -116,7 +125,10 @@ TEST_F(MapUnionSumTest, nullAndEmptyMaps) {
       }),
   });
 
-  testAggregations({allNullMaps}, {}, {"map_union_sum(c0)"}, {expectedNull});
+  AggregationTester(*this)
+      .inputs(allNullMaps)
+      .aggregates({"map_union_sum(c0)"})
+      .assertResults(expectedNull);
 
   auto emptyAndNullMaps = makeRowVector({
       makeNullableMapVector<int64_t, int64_t>({
@@ -127,8 +139,123 @@ TEST_F(MapUnionSumTest, nullAndEmptyMaps) {
       }),
   });
 
-  testAggregations(
-      {emptyAndNullMaps}, {}, {"map_union_sum(c0)"}, {expectedEmpty});
+  AggregationTester(*this)
+      .inputs(emptyAndNullMaps)
+      .aggregates({"map_union_sum(c0)"})
+      .assertResults(expectedEmpty);
+}
+
+TEST_F(MapUnionSumTest, nullValuesInMap) {
+  // Exercises the slow (mayHaveNulls) merge path where null map values still
+  // register their key with a +0 contribution. Key 1 sums 5 (null + 5),
+  // key 2 stays 20, and key 3 is registered with 0 from its null value.
+  auto data = makeRowVector({
+      makeNullableMapVector<int64_t, int64_t>({
+          {{{1, std::nullopt}, {2, 20}}},
+          {{{1, 5}, {3, std::nullopt}}},
+      }),
+  });
+
+  auto expected = makeRowVector({
+      makeMapVector<int64_t, int64_t>({
+          {{1, 5}, {2, 20}, {3, 0}},
+      }),
+  });
+
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union_sum(c0)"})
+      .assertResults(expected);
+}
+
+TEST_F(MapUnionSumTest, nullValuesInVarcharKeyMap) {
+  // Exercises the StringView-key accumulator's null-value branch, where a null
+  // map value still registers its key with a +0 contribution. Uses non-inline
+  // (long) keys so the string-interning path is also covered. Key 0 sums 5
+  // (null + 5), key 1 stays 20, and key 2 is registered with 0 from its null
+  // value.
+  std::vector<std::string> keyStrings = {
+      "Tall mountains and wide rivers",
+      "Deep oceans and thick dark forests",
+      "Expansive vistas as far as the eye can see",
+  };
+  std::vector<StringView> keys;
+  keys.reserve(keyStrings.size());
+  for (const auto& key : keyStrings) {
+    keys.emplace_back(key);
+  }
+
+  auto data = makeRowVector({
+      makeNullableMapVector<StringView, int64_t>({
+          {{{keys[0], std::nullopt}, {keys[1], 20}}},
+          {{{keys[0], 5}, {keys[2], std::nullopt}}},
+      }),
+  });
+
+  auto expected = makeRowVector({
+      makeMapVector<StringView, int64_t>({
+          {{keys[0], 5}, {keys[1], 20}, {keys[2], 0}},
+      }),
+  });
+
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union_sum(c0)"})
+      .assertResults(expected);
+}
+
+TEST_F(MapUnionSumTest, complexKeyDoubleValue) {
+  // Exercises the complex-key float/double existing-entry path, where a
+  // duplicate serialized key must be released via removeLast() after combining
+  // with the existing sum. The ROW key [1, 1] repeats across input maps so the
+  // merge takes the existing-entry branch for a DOUBLE value type.
+  auto data = makeRowVector(
+      {makeMapVector(
+           {0, 2, 4},
+           makeRowVector(
+               {makeFlatVector<int64_t>({1, 2, 1, 3, 1, 2}),
+                makeFlatVector<int64_t>({1, 4, 1, 5, 1, 4})}),
+           makeFlatVector<double>({1.5, 2.5, 3.0, 4.0, 2.0, 6.0})),
+       makeFlatVector<int32_t>({1, 1, 1})});
+
+  // Key [1, 1] is summed across all three maps: 1.5 + 3.0 + 2.0 = 6.5.
+  // Key [2, 4] appears in maps 0 and 2: 2.5 + 6.0 = 8.5.
+  // Key [3, 5] appears once: 4.0.
+  auto expectedResult = makeRowVector({makeMapVector(
+      {0},
+      makeRowVector(
+          {makeFlatVector<int64_t>({1, 2, 3}),
+           makeFlatVector<int64_t>({1, 4, 5})}),
+      makeFlatVector<double>({6.5, 8.5, 4.0}))});
+
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union_sum(c0)"})
+      .assertResults(expectedResult);
+}
+
+TEST_F(MapUnionSumTest, complexKeyIntegerOverflow) {
+  // Exercises the complex-key integer existing-entry overflow path, where the
+  // duplicate serialized key is released via removeLast() before the overflow
+  // throw. The ROW key [1, 1] repeats across input maps with TINYINT values
+  // that overflow int8_t when combined on the existing-entry branch.
+  auto data = makeRowVector(
+      {makeMapVector(
+           {0, 2, 4},
+           makeRowVector(
+               {makeFlatVector<int64_t>({1, 2, 1, 3, 1, 2}),
+                makeFlatVector<int64_t>({1, 4, 1, 5, 1, 4})}),
+           makeFlatVector<int8_t>({100, 2, 100, 4, 100, 6})),
+       makeFlatVector<int32_t>({1, 1, 1})});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .singleAggregation({}, {"map_union_sum(c0)"})
+                  .planNode();
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Arithmetic overflow in MAP_UNION_SUM: Value 200 exceeds 127");
 }
 
 TEST_F(MapUnionSumTest, tinyintOverflow) {
@@ -299,7 +426,10 @@ TEST_F(MapUnionSumTest, floatNan) {
       }),
   });
 
-  testAggregations({data}, {}, {"map_union_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union_sum(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(MapUnionSumTest, doubleNan) {
@@ -320,7 +450,10 @@ TEST_F(MapUnionSumTest, doubleNan) {
       }),
   });
 
-  testAggregations({data}, {}, {"map_union_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union_sum(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(MapUnionSumTest, groupBy) {
@@ -343,7 +476,11 @@ TEST_F(MapUnionSumTest, groupBy) {
       }),
   });
 
-  testAggregations({data}, {"c0"}, {"map_union_sum(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"map_union_sum(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(MapUnionSumTest, groupByVarcharKey) {
@@ -378,7 +515,11 @@ TEST_F(MapUnionSumTest, groupByVarcharKey) {
       }),
   });
 
-  testAggregations({data}, {"c0"}, {"map_union_sum(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"map_union_sum(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(MapUnionSumTest, groupByJsonKey) {
@@ -416,7 +557,11 @@ TEST_F(MapUnionSumTest, groupByJsonKey) {
       }),
   });
 
-  testAggregations({data}, {"c0"}, {"map_union_sum(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"map_union_sum(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(MapUnionSumTest, groupByBooleanKeys) {
@@ -440,7 +585,11 @@ TEST_F(MapUnionSumTest, groupByBooleanKeys) {
       }),
   });
 
-  testAggregations({data}, {"c0"}, {"map_union_sum(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"map_union_sum(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(MapUnionSumTest, floatingPointKeys) {
@@ -465,7 +614,10 @@ TEST_F(MapUnionSumTest, floatingPointKeys) {
       }),
   });
 
-  testAggregations({data}, {}, {"map_union_sum(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union_sum(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(MapUnionSumTest, nanKeys) {
@@ -489,7 +641,10 @@ TEST_F(MapUnionSumTest, nanKeys) {
       }),
   });
 
-  testAggregations({data}, {}, {"map_union_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union_sum(c0)"})
+      .assertResults(expected);
 
   // Group by aggregation.
   expected = makeRowVector(
@@ -499,8 +654,12 @@ TEST_F(MapUnionSumTest, nanKeys) {
        }),
        makeFlatVector<int32_t>({1, 2})});
 
-  testAggregations(
-      {data}, {"c1"}, {"map_union_sum(c0)"}, {"a0", "c1"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c1"})
+      .aggregates({"map_union_sum(c0)"})
+      .project({"a0", "c1"})
+      .assertResults(expected);
 }
 
 TEST_F(MapUnionSumTest, complexType) {
@@ -532,7 +691,10 @@ TEST_F(MapUnionSumTest, complexType) {
            makeFlatVector<int32_t>({1, 4, 5, 2})}),
       makeFlatVector<int32_t>({1, 3, 4, 13}))});
 
-  testAggregations({data}, {}, {"map_union_sum(c0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union_sum(c0)"})
+      .assertResults(expectedResult);
 
   // Group by Aggregation, Complex type(Row)
   // The expected result is
@@ -548,20 +710,30 @@ TEST_F(MapUnionSumTest, complexType) {
            makeFlatVector<int32_t>({1, 3, 2, 4, 11})),
        makeFlatVector<int32_t>({1, 2})});
 
-  testAggregations(
-      {data}, {"c1"}, {"map_union_sum(c0)"}, {"a0", "c1"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c1"})
+      .aggregates({"map_union_sum(c0)"})
+      .project({"a0", "c1"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(MapUnionSumTest, unknownKey) {
   auto data = makeRowVector({makeAllNullMapVector(3, UNKNOWN(), BIGINT())});
-  testAggregations({data}, {}, {"map_union_sum(c0)"}, {"VALUES (NULL)"});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"map_union_sum(c0)"})
+      .assertResults("VALUES (NULL)");
 }
 
 TEST_F(MapUnionSumTest, decimalKey) {
   // test on nulls
   auto null_data =
       makeRowVector({makeAllNullMapVector(3, DECIMAL(10, 5), BIGINT())});
-  testAggregations({null_data}, {}, {"map_union_sum(c0)"}, {"VALUES (NULL)"});
+  AggregationTester(*this)
+      .inputs(null_data)
+      .aggregates({"map_union_sum(c0)"})
+      .assertResults("VALUES (NULL)");
 
   // test on non-null decimal keys
   auto data = makeMapVector<int128_t, int64_t>(
@@ -569,8 +741,10 @@ TEST_F(MapUnionSumTest, decimalKey) {
       MAP(DECIMAL(30, 2), BIGINT()));
   auto expected = makeRowVector({makeMapVector<int128_t, int64_t>(
       {{{{1000}, 3}, {{1001}, 2}}}, MAP(DECIMAL(30, 2), BIGINT()))});
-  testAggregations(
-      {makeRowVector({data})}, {}, {"map_union_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(makeRowVector({data}))
+      .aggregates({"map_union_sum(c0)"})
+      .assertResults(expected);
 }
 
 TEST_F(MapUnionSumTest, ipAddressKey) {
@@ -582,7 +756,10 @@ TEST_F(MapUnionSumTest, ipAddressKey) {
   // Test on nulls.
   auto nullData =
       makeRowVector({makeAllNullMapVector(3, IPADDRESS(), BIGINT())});
-  testAggregations({nullData}, {}, {"map_union_sum(c0)"}, {"VALUES (NULL)"});
+  AggregationTester(*this)
+      .inputs(nullData)
+      .aggregates({"map_union_sum(c0)"})
+      .assertResults("VALUES (NULL)");
 
   auto ip1 = ipToInt128("192.168.1.1");
   auto ip2 = ipToInt128("10.0.0.1");
@@ -594,8 +771,10 @@ TEST_F(MapUnionSumTest, ipAddressKey) {
       MAP(IPADDRESS(), BIGINT()));
   auto expected = makeRowVector({makeMapVector<int128_t, int64_t>(
       {{{ip1, 15}, {ip2, 20}, {ip3, 15}}}, MAP(IPADDRESS(), BIGINT()))});
-  testAggregations(
-      {makeRowVector({data})}, {}, {"map_union_sum(c0)"}, {expected});
+  AggregationTester(*this)
+      .inputs(makeRowVector({data}))
+      .aggregates({"map_union_sum(c0)"})
+      .assertResults(expected);
 
   // Test group-by aggregation with IPADDRESS keys.
   auto groupByData = makeRowVector({
@@ -615,8 +794,11 @@ TEST_F(MapUnionSumTest, ipAddressKey) {
           MAP(IPADDRESS(), BIGINT())),
   });
 
-  testAggregations(
-      {groupByData}, {"c0"}, {"map_union_sum(c1)"}, {groupByExpected});
+  AggregationTester(*this)
+      .inputs(groupByData)
+      .groupBy({"c0"})
+      .aggregates({"map_union_sum(c1)"})
+      .assertResults(groupByExpected);
 }
 
 } // namespace

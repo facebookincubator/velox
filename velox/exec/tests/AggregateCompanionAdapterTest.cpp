@@ -106,6 +106,17 @@ TEST_F(AggregateCompanionRegistryTest, basic) {
           .build()};
   registerDummyAggregateFunction("aggregateFunc1", signatures);
 
+  core::QueryConfig config({});
+  EXPECT_FALSE(
+      Aggregate::create(
+          "aggregateFunc1_partial",
+          core::AggregationNode::Step::kPartial,
+          {BIGINT()},
+          ARRAY(BIGINT()),
+          config,
+          /*constantInputs=*/{})
+          ->isReducing());
+
   checkAggregateSignaturesCount("aggregateFunc1_partial", 2);
   checkAggregateTypeResolution(
       "aggregateFunc1_partial", {DOUBLE()}, ARRAY(DOUBLE()), ARRAY(DOUBLE()));
@@ -123,6 +134,15 @@ TEST_F(AggregateCompanionRegistryTest, basic) {
       {ARRAY(BIGINT())},
       ARRAY(BIGINT()),
       ARRAY(BIGINT()));
+  EXPECT_FALSE(
+      Aggregate::create(
+          "aggregateFunc1_merge",
+          core::AggregationNode::Step::kSingle,
+          {ARRAY(BIGINT())},
+          ARRAY(BIGINT()),
+          config,
+          /*constantInputs=*/{})
+          ->supportsToIntermediate());
 
   checkAggregateSignaturesCount("aggregateFunc1_merge_extract", 2);
   checkAggregateTypeResolution(
@@ -141,6 +161,39 @@ TEST_F(AggregateCompanionRegistryTest, basic) {
       "aggregateFunc1_extract", {ARRAY(DOUBLE())}, DOUBLE());
   checkScalarTypeResolution(
       "aggregateFunc1_extract", {ARRAY(BIGINT())}, BIGINT());
+}
+
+TEST_F(AggregateCompanionRegistryTest, metadata) {
+  std::vector<std::shared_ptr<AggregateFunctionSignature>> signatures{
+      AggregateFunctionSignatureBuilder()
+          .returnType("bigint")
+          .intermediateType("array(bigint)")
+          .argumentType("bigint")
+          .build()};
+  registerAggregateFunction(
+      "aggregateFuncMetadata",
+      signatures,
+      [](core::AggregationNode::Step,
+         const std::vector<TypePtr>&,
+         const TypePtr& resultType,
+         const core::QueryConfig&) {
+        return std::make_unique<DummyDicitonaryFunction>(resultType);
+      },
+      {.ignoreNullInputs = true},
+      /*registerCompanionFunctions=*/true,
+      /*overwrite=*/false);
+
+  EXPECT_TRUE(
+      getAggregateFunctionMetadata("aggregateFuncMetadata").ignoreNullInputs);
+  EXPECT_EQ(
+      getAggregateFunctionMetadata("aggregateFuncMetadata_partial")
+          .ignoreNullInputs,
+      true);
+  EXPECT_TRUE(getAggregateFunctionMetadata("aggregateFuncMetadata_merge")
+                  .ignoreNullInputs);
+  EXPECT_TRUE(
+      getAggregateFunctionMetadata("aggregateFuncMetadata_merge_extract")
+          .ignoreNullInputs);
 }
 
 TEST_F(AggregateCompanionRegistryTest, extractFunctionNameWithSuffix) {

@@ -16,391 +16,61 @@
 
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/Macros.h"
 #include "velox/functions/Registerer.h"
-#include "velox/functions/prestosql/ArithmeticImpl.h"
-#include "velox/type/DecimalUtil.h"
+#include "velox/functions/prestosql/detail/DecimalMathFunctions.h"
 
 namespace facebook::velox::functions {
 namespace {
 
-template <typename TExec>
-struct DecimalPlusFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  template <typename A, typename B>
-  void initialize(
-      const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& /*config*/,
-      A* /*a*/,
-      B* /*b*/) {
-    auto aType = inputTypes[0];
-    auto bType = inputTypes[1];
-    auto aScale = getDecimalPrecisionScale(*aType).second;
-    auto bScale = getDecimalPrecisionScale(*bType).second;
-    aRescale_ = computeRescaleFactor(aScale, bScale);
-    bRescale_ = computeRescaleFactor(bScale, aScale);
-  }
-
-  template <typename R, typename A, typename B>
-  void call(R& out, const A& a, const B& b)
-#if defined(__has_feature)
-#if __has_feature(__address_sanitizer__)
-      __attribute__((__no_sanitize__("signed-integer-overflow")))
-#endif
-#endif
-  {
-    int128_t aRescaled;
-    int128_t bRescaled;
-    if (__builtin_mul_overflow(
-            a, DecimalUtil::kPowersOfTen[aRescale_], &aRescaled) ||
-        __builtin_mul_overflow(
-            b, DecimalUtil::kPowersOfTen[bRescale_], &bRescaled)) {
-      VELOX_ARITHMETIC_ERROR("Decimal overflow: {} + {}", a, b);
-    }
-    out = checkedPlus<R>(R(aRescaled), R(bRescaled));
-    DecimalUtil::valueInRange(out);
-  }
-
- private:
-  inline static uint8_t computeRescaleFactor(
-      uint8_t fromScale,
-      uint8_t toScale) {
-    return std::max(0, toScale - fromScale);
-  }
-
-  uint8_t aRescale_;
-  uint8_t bRescale_;
-};
-
-template <typename TExec>
-struct DecimalMinusFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  template <typename A, typename B>
-  void initialize(
-      const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& /*config*/,
-      A* /*a*/,
-      B* /*b*/) {
-    const auto& aType = inputTypes[0];
-    const auto& bType = inputTypes[1];
-    auto aScale = getDecimalPrecisionScale(*aType).second;
-    auto bScale = getDecimalPrecisionScale(*bType).second;
-    aRescale_ = computeRescaleFactor(aScale, bScale);
-    bRescale_ = computeRescaleFactor(bScale, aScale);
-  }
-
-  template <typename R, typename A, typename B>
-  void call(R& out, const A& a, const B& b)
-#if defined(__has_feature)
-#if __has_feature(__address_sanitizer__)
-      __attribute__((__no_sanitize__("signed-integer-overflow")))
-#endif
-#endif
-  {
-    int128_t aRescaled;
-    int128_t bRescaled;
-    if (__builtin_mul_overflow(
-            a, DecimalUtil::kPowersOfTen[aRescale_], &aRescaled) ||
-        __builtin_mul_overflow(
-            b, DecimalUtil::kPowersOfTen[bRescale_], &bRescaled)) {
-      VELOX_ARITHMETIC_ERROR("Decimal overflow: {} - {}", a, b);
-    }
-    out = checkedMinus<R>(R(aRescaled), R(bRescaled));
-    DecimalUtil::valueInRange(out);
-  }
-
- private:
-  inline static uint8_t computeRescaleFactor(
-      uint8_t fromScale,
-      uint8_t toScale) {
-    return std::max(0, toScale - fromScale);
-  }
-
-  uint8_t aRescale_;
-  uint8_t bRescale_;
-};
-
-template <typename TExec>
-struct DecimalMultiplyFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  template <typename R, typename A, typename B>
-  void call(R& out, const A& a, const B& b) {
-    out = checkedMultiply<R>(checkedMultiply<R>(R(a), R(b)), R(1));
-    DecimalUtil::valueInRange(out);
-  }
-};
-
-template <typename TExec>
-struct DecimalDivideFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  template <typename A, typename B>
-  void initialize(
-      const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& /*config*/,
-      A* /*a*/,
-      B* /*b*/) {
-    auto aType = inputTypes[0];
-    auto bType = inputTypes[1];
-    auto aScale = getDecimalPrecisionScale(*aType).second;
-    auto bScale = getDecimalPrecisionScale(*bType).second;
-    auto rScale = std::max(aScale, bScale);
-    aRescale_ = rScale - aScale + bScale;
-    VELOX_USER_CHECK_LE(
-        aRescale_, LongDecimalType::kMaxPrecision, "Decimal overflow");
-  }
-
-  template <typename R, typename A, typename B>
-  void call(R& out, const A& a, const B& b) {
-    DecimalUtil::divideWithRoundUp<R, A, B>(out, a, b, false, aRescale_, 0);
-    DecimalUtil::valueInRange(out);
-  }
-
- private:
-  uint8_t aRescale_;
-};
-
-template <typename TExec>
-struct DecimalModulusFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  template <typename A, typename B>
-  void initialize(
-      const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& /*config*/,
-      A* /*a*/,
-      B* /*b*/) {
-    const auto& aType = inputTypes[0];
-    const auto& bType = inputTypes[1];
-    auto [aPrecision, aScale] = getDecimalPrecisionScale(*aType);
-    auto [bPrecision, bScale] = getDecimalPrecisionScale(*bType);
-    aRescale_ = std::max(0, bScale - aScale);
-    bRescale_ = std::max(0, aScale - bScale);
-  }
-
-  template <typename R, typename A, typename B>
-  void call(R& out, const A& a, const B& b) {
-    VELOX_USER_CHECK_NE(b, 0, "Modulus by zero");
-    int remainderSign = 1;
-    R unsignedDividendRescaled(a);
-    if (a < 0) {
-      remainderSign *= -1;
-      unsignedDividendRescaled *= -1;
-    }
-    unsignedDividendRescaled = checkedMultiply<R>(
-        unsignedDividendRescaled,
-        R(DecimalUtil::kPowersOfTen[aRescale_]),
-        "Decimal");
-
-    R unsignedDivisorRescaled(b);
-    if (b < 0) {
-      unsignedDivisorRescaled *= -1;
-    }
-    unsignedDivisorRescaled = checkedMultiply<B>(
-        unsignedDivisorRescaled,
-        R(DecimalUtil::kPowersOfTen[bRescale_]),
-        "Decimal");
-
-    R remainder = unsignedDividendRescaled % unsignedDivisorRescaled;
-    out = remainder * remainderSign;
-  }
-
- private:
-  uint8_t aRescale_;
-  uint8_t bRescale_;
-};
-
-template <typename TExec>
-struct DecimalRoundFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  template <typename A>
-  void initialize(
-      const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& config,
-      A* a) {
-    initialize(inputTypes, config, a, nullptr);
-  }
-
-  template <typename A>
-  void initialize(
-      const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& /*config*/,
-      A* /*a*/,
-      const int32_t* /*n*/) {
-    const auto [precision, scale] = getDecimalPrecisionScale(*inputTypes[0]);
-    precision_ = precision;
-    scale_ = scale;
-  }
-
-  template <typename R, typename A>
-  void call(R& out, const A& a) {
-    DecimalUtil::divideWithRoundUp<R, A, int128_t>(
-        out, a, DecimalUtil::kPowersOfTen[scale_], false, 0, 0);
-  }
-
-  template <typename R, typename A>
-  void call(R& out, const A& a, int32_t n) {
-    if (a == 0 || precision_ - scale_ + n <= 0) {
-      out = 0;
-      return;
-    }
-    if (n >= scale_) {
-      out = a;
-      return;
-    }
-    auto reScaleFactor = DecimalUtil::kPowersOfTen[scale_ - n];
-    DecimalUtil::divideWithRoundUp<R, A, int128_t>(
-        out, a, reScaleFactor, false, 0, 0);
-    out *= reScaleFactor;
-  }
-
- private:
-  uint8_t precision_;
-  uint8_t scale_;
-};
-
-template <typename TExec>
-struct DecimalFloorFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  template <typename A>
-  void initialize(
-      const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& /*config*/,
-      A* /*a*/) {
-    scale_ = getDecimalPrecisionScale(*inputTypes[0]).second;
-  }
-
-  template <typename R, typename A>
-  void call(R& out, const A& a) {
-    const auto rescaleFactor = DecimalUtil::kPowersOfTen[scale_];
-    // Round rowards -INF.
-    const auto increment = (a % rescaleFactor) < 0 ? -1 : 0;
-    out = a / rescaleFactor + increment;
-  }
-
- private:
-  uint8_t scale_;
-};
-
-template <typename TExec>
-struct DecimalCeilFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  template <typename A>
-  void initialize(
-      const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& /*config*/,
-      A* /*a*/) {
-    scale_ = getDecimalPrecisionScale(*inputTypes[0]).second;
-  }
-
-  template <typename R, typename A>
-  void call(R& out, const A& a) {
-    const auto rescaleFactor = DecimalUtil::kPowersOfTen[scale_];
-    // Round towards +INF.
-    const auto increment = (a % rescaleFactor) > 0 ? 1 : 0;
-    out = a / rescaleFactor + increment;
-  }
-
- private:
-  uint8_t scale_;
-};
-
-template <typename TExec>
-struct DecimalTruncateFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(TExec);
-
-  template <typename A>
-  void initialize(
-      const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& /*config*/,
-      A* /*a*/) {
-    const auto [precision, scale] = getDecimalPrecisionScale(*inputTypes[0]);
-    precision_ = precision;
-    scale_ = scale;
-  }
-
-  template <typename A>
-  void initialize(
-      const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& config,
-      A* a,
-      const int32_t* /*n*/) {
-    initialize(inputTypes, config, a);
-  }
-
-  template <typename R, typename A>
-  void call(R& out, const A& a) {
-    if UNLIKELY (scale_ == 0 || a == 0) {
-      out = a;
-    } else {
-      out = a / DecimalUtil::kPowersOfTen[scale_];
-    }
-  }
-
-  template <typename A>
-  void call(A& out, const A& a, int32_t n) {
-    if UNLIKELY (a == 0 || (n + precision_ - scale_) <= 0) {
-      out = 0;
-    } else if UNLIKELY (scale_ <= n) {
-      out = a;
-    } else {
-      out = a - (a % DecimalUtil::kPowersOfTen[scale_ - n]);
-    }
-  }
-
- private:
-  uint8_t precision_;
-  uint8_t scale_;
-};
+// The function structs are implementation detail shared with the GPU path;
+// only the registration entry points below are API.
+using namespace detail;
 
 template <template <class> typename Func>
 void registerDecimalBinary(
     const std::string& name,
-    const std::vector<exec::SignatureVariable>& constraints) {
+    const std::vector<exec::SignatureVariable>& constraints,
+    std::string_view defaultOwner) {
   // (long, long) -> long
   registerFunction<
       Func,
       LongDecimal<P3, S3>,
       LongDecimal<P1, S1>,
-      LongDecimal<P2, S2>>({name}, constraints);
+      LongDecimal<P2, S2>>({name}, constraints, true, defaultOwner);
 
   // (short, short) -> short
   registerFunction<
       Func,
       ShortDecimal<P3, S3>,
       ShortDecimal<P1, S1>,
-      ShortDecimal<P2, S2>>({name}, constraints);
+      ShortDecimal<P2, S2>>({name}, constraints, true, defaultOwner);
 
   // (short, short) -> long
   registerFunction<
       Func,
       LongDecimal<P3, S3>,
       ShortDecimal<P1, S1>,
-      ShortDecimal<P2, S2>>({name}, constraints);
+      ShortDecimal<P2, S2>>({name}, constraints, true, defaultOwner);
 
   // (short, long) -> long
   registerFunction<
       Func,
       LongDecimal<P3, S3>,
       ShortDecimal<P1, S1>,
-      LongDecimal<P2, S2>>({name}, constraints);
+      LongDecimal<P2, S2>>({name}, constraints, true, defaultOwner);
 
   // (long, short) -> long
   registerFunction<
       Func,
       LongDecimal<P3, S3>,
       LongDecimal<P1, S1>,
-      ShortDecimal<P2, S2>>({name}, constraints);
+      ShortDecimal<P2, S2>>({name}, constraints, true, defaultOwner);
 }
 
 template <template <class> typename Func>
-void registerDecimalPlusMinus(const std::string& name) {
+void registerDecimalPlusMinus(
+    const std::string& name,
+    std::string_view defaultOwner) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P3::name(),
@@ -420,20 +90,27 @@ void registerDecimalPlusMinus(const std::string& name) {
           exec::ParameterType::kIntegerParameter),
   };
 
-  registerDecimalBinary<Func>(name, constraints);
+  registerDecimalBinary<Func>(name, constraints, defaultOwner);
 }
 
 } // namespace
 
-void registerDecimalPlus(const std::string& prefix) {
-  registerDecimalPlusMinus<DecimalPlusFunction>(prefix + "plus");
+void registerDecimalPlus(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerDecimalPlusMinus<DecimalPlusFunction>(prefix + "plus", defaultOwner);
 }
 
-void registerDecimalMinus(const std::string& prefix) {
-  registerDecimalPlusMinus<DecimalMinusFunction>(prefix + "minus");
+void registerDecimalMinus(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerDecimalPlusMinus<DecimalMinusFunction>(
+      prefix + "minus", defaultOwner);
 }
 
-void registerDecimalMultiply(const std::string& prefix) {
+void registerDecimalMultiply(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P3::name(),
@@ -453,10 +130,12 @@ void registerDecimalMultiply(const std::string& prefix) {
   };
 
   registerDecimalBinary<DecimalMultiplyFunction>(
-      prefix + "multiply", constraints);
+      prefix + "multiply", constraints, defaultOwner);
 }
 
-void registerDecimalDivide(const std::string& prefix) {
+void registerDecimalDivide(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P3::name(),
@@ -475,24 +154,29 @@ void registerDecimalDivide(const std::string& prefix) {
           exec::ParameterType::kIntegerParameter),
   };
 
-  registerDecimalBinary<DecimalDivideFunction>(prefix + "divide", constraints);
+  registerDecimalBinary<DecimalDivideFunction>(
+      prefix + "divide", constraints, defaultOwner);
 
   // (short, long) -> short
   registerFunction<
       DecimalDivideFunction,
       ShortDecimal<P3, S3>,
       ShortDecimal<P1, S1>,
-      LongDecimal<P2, S2>>({prefix + "divide"}, constraints);
+      LongDecimal<P2, S2>>(
+      {prefix + "divide"}, constraints, true, defaultOwner);
 
   // (long, short) -> short
   registerFunction<
       DecimalDivideFunction,
       ShortDecimal<P3, S3>,
       LongDecimal<P1, S1>,
-      ShortDecimal<P2, S2>>({prefix + "divide"}, constraints);
+      ShortDecimal<P2, S2>>(
+      {prefix + "divide"}, constraints, true, defaultOwner);
 }
 
-void registerDecimalModulus(const std::string& prefix) {
+void registerDecimalModulus(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P3::name(),
@@ -517,48 +201,49 @@ void registerDecimalModulus(const std::string& prefix) {
       DecimalModulusFunction,
       ShortDecimal<P3, S3>,
       ShortDecimal<P1, S1>,
-      ShortDecimal<P2, S2>>({prefix + "mod"}, constraints);
+      ShortDecimal<P2, S2>>({prefix + "mod"}, constraints, true, defaultOwner);
 
   // (short, long) -> short
   registerFunction<
       DecimalModulusFunction,
       ShortDecimal<P3, S3>,
       ShortDecimal<P1, S1>,
-      LongDecimal<P2, S2>>({prefix + "mod"}, constraints);
+      LongDecimal<P2, S2>>({prefix + "mod"}, constraints, true, defaultOwner);
 
   // (long, short) -> short
   registerFunction<
       DecimalModulusFunction,
       ShortDecimal<P3, S3>,
       LongDecimal<P1, S1>,
-      ShortDecimal<P2, S2>>({prefix + "mod"}, constraints);
+      ShortDecimal<P2, S2>>({prefix + "mod"}, constraints, true, defaultOwner);
 
   // (short, long) -> long
   registerFunction<
       DecimalModulusFunction,
       LongDecimal<P3, S3>,
       ShortDecimal<P1, S1>,
-      LongDecimal<P2, S2>>({prefix + "mod"}, constraints);
+      LongDecimal<P2, S2>>({prefix + "mod"}, constraints, true, defaultOwner);
 
   // (long, short) -> long
   registerFunction<
       DecimalModulusFunction,
       LongDecimal<P3, S3>,
       LongDecimal<P1, S1>,
-      ShortDecimal<P2, S2>>({prefix + "mod"}, constraints);
+      ShortDecimal<P2, S2>>({prefix + "mod"}, constraints, true, defaultOwner);
 
   // (long, long) -> long
   registerFunction<
       DecimalModulusFunction,
       LongDecimal<P3, S3>,
       LongDecimal<P1, S1>,
-      LongDecimal<P2, S2>>({prefix + "mod"}, constraints);
+      LongDecimal<P2, S2>>({prefix + "mod"}, constraints, true, defaultOwner);
 }
 
 template <template <class> typename TFunc>
 void registerDecimalFloorOrCeil(
     const std::string& prefix,
-    const std::string& functionName) {
+    const std::string& functionName,
+    std::string_view defaultOwner) {
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
           P2::name(),
@@ -572,24 +257,31 @@ void registerDecimalFloorOrCeil(
   };
 
   registerFunction<TFunc, LongDecimal<P2, S2>, LongDecimal<P1, S1>>(
-      {prefix + functionName}, constraints);
+      {prefix + functionName}, constraints, true, defaultOwner);
 
   registerFunction<TFunc, ShortDecimal<P2, S2>, LongDecimal<P1, S1>>(
-      {prefix + functionName}, constraints);
+      {prefix + functionName}, constraints, true, defaultOwner);
 
   registerFunction<TFunc, ShortDecimal<P2, S2>, ShortDecimal<P1, S1>>(
-      {prefix + functionName}, constraints);
+      {prefix + functionName}, constraints, true, defaultOwner);
 }
 
-void registerDecimalFloor(const std::string& prefix) {
-  registerDecimalFloorOrCeil<DecimalFloorFunction>(prefix, "floor");
+void registerDecimalFloor(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerDecimalFloorOrCeil<DecimalFloorFunction>(
+      prefix, "floor", defaultOwner);
 }
 
-void registerDecimalCeil(const std::string& prefix) {
-  registerDecimalFloorOrCeil<DecimalCeilFunction>(prefix, "ceil");
+void registerDecimalCeil(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerDecimalFloorOrCeil<DecimalCeilFunction>(prefix, "ceil", defaultOwner);
 }
 
-void registerDecimalRound(const std::string& prefix) {
+void registerDecimalRound(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   // round(decimal) -> decimal
   {
     std::vector<exec::SignatureVariable> constraints = {
@@ -607,17 +299,20 @@ void registerDecimalRound(const std::string& prefix) {
     registerFunction<
         DecimalRoundFunction,
         LongDecimal<P2, S2>,
-        LongDecimal<P1, S1>>({prefix + "round"}, constraints);
+        LongDecimal<P1, S1>>(
+        {prefix + "round"}, constraints, true, defaultOwner);
 
     registerFunction<
         DecimalRoundFunction,
         ShortDecimal<P2, S2>,
-        LongDecimal<P1, S1>>({prefix + "round"}, constraints);
+        LongDecimal<P1, S1>>(
+        {prefix + "round"}, constraints, true, defaultOwner);
 
     registerFunction<
         DecimalRoundFunction,
         ShortDecimal<P2, S2>,
-        ShortDecimal<P1, S1>>({prefix + "round"}, constraints);
+        ShortDecimal<P1, S1>>(
+        {prefix + "round"}, constraints, true, defaultOwner);
   }
 
   // round(decimal, n) -> decimal
@@ -633,23 +328,25 @@ void registerDecimalRound(const std::string& prefix) {
         DecimalRoundFunction,
         LongDecimal<P2, S1>,
         LongDecimal<P1, S1>,
-        int32_t>({prefix + "round"}, constraints);
+        int32_t>({prefix + "round"}, constraints, true, defaultOwner);
 
     registerFunction<
         DecimalRoundFunction,
         ShortDecimal<P2, S1>,
         ShortDecimal<P1, S1>,
-        int32_t>({prefix + "round"}, constraints);
+        int32_t>({prefix + "round"}, constraints, true, defaultOwner);
 
     registerFunction<
         DecimalRoundFunction,
         LongDecimal<P2, S1>,
         ShortDecimal<P1, S1>,
-        int32_t>({prefix + "round"}, constraints);
+        int32_t>({prefix + "round"}, constraints, true, defaultOwner);
   }
 }
 
-void registerDecimalTruncate(const std::string& prefix) {
+void registerDecimalTruncate(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   // truncate(decimal) -> decimal
   std::vector<exec::SignatureVariable> constraints = {
       exec::SignatureVariable(
@@ -666,30 +363,33 @@ void registerDecimalTruncate(const std::string& prefix) {
   registerFunction<
       DecimalTruncateFunction,
       ShortDecimal<P2, S2>,
-      ShortDecimal<P1, S1>>({prefix + "truncate"}, constraints);
+      ShortDecimal<P1, S1>>(
+      {prefix + "truncate"}, constraints, true, defaultOwner);
 
   registerFunction<
       DecimalTruncateFunction,
       LongDecimal<P2, S2>,
-      LongDecimal<P1, S1>>({prefix + "truncate"}, constraints);
+      LongDecimal<P1, S1>>(
+      {prefix + "truncate"}, constraints, true, defaultOwner);
 
   registerFunction<
       DecimalTruncateFunction,
       ShortDecimal<P2, S2>,
-      LongDecimal<P1, S1>>({prefix + "truncate"}, constraints);
+      LongDecimal<P1, S1>>(
+      {prefix + "truncate"}, constraints, true, defaultOwner);
 
   // truncate(decimal, n) -> decimal
   registerFunction<
       DecimalTruncateFunction,
       ShortDecimal<P1, S1>,
       ShortDecimal<P1, S1>,
-      int32_t>({prefix + "truncate"});
+      int32_t>({prefix + "truncate"}, {}, true, defaultOwner);
 
   registerFunction<
       DecimalTruncateFunction,
       LongDecimal<P1, S1>,
       LongDecimal<P1, S1>,
-      int32_t>({prefix + "truncate"});
+      int32_t>({prefix + "truncate"}, {}, true, defaultOwner);
 }
 
 } // namespace facebook::velox::functions

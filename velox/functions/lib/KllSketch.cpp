@@ -14,12 +14,26 @@
  * limitations under the License.
  */
 
+#include <cmath>
+#include <limits>
+
 #include "velox/functions/lib/KllSketch.h"
 
 namespace facebook::velox::functions::kll {
 
-uint32_t kFromEpsilon(double eps) {
-  return ceil(exp(1.0285 * log(2.296 / eps)));
+uint32_t kFromEpsilon(double epsilon) {
+  VELOX_USER_CHECK(
+      std::isfinite(epsilon) && epsilon > 0,
+      "Accuracy must be positive and finite: {}",
+      epsilon);
+  const auto k = std::ceil(std::exp(1.0285 * std::log(2.296 / epsilon)));
+  VELOX_USER_CHECK(
+      std::isfinite(k) && k <= kMaxK,
+      "Accuracy is too small: {} produces K {}, but maximum K is {}",
+      epsilon,
+      k,
+      kMaxK);
+  return static_cast<uint32_t>(k);
 }
 
 namespace detail {
@@ -42,11 +56,18 @@ double powerOfTwoThirds(int n) {
 } // namespace
 
 uint32_t computeTotalCapacity(uint32_t k, uint8_t numLevels) {
-  uint32_t total = 0;
+  uint64_t total = 0;
   for (uint8_t h = 0; h < numLevels; ++h) {
     total += levelCapacity(k, numLevels, h);
+    VELOX_CHECK_LE(
+        total,
+        std::numeric_limits<uint32_t>::max(),
+        "KLL total capacity exceeds uint32_t: k={}, numLevels={}, total={}",
+        k,
+        numLevels,
+        total);
   }
-  return total;
+  return static_cast<uint32_t>(total);
 }
 
 uint32_t levelCapacity(uint32_t k, uint8_t numLevels, uint8_t height) {

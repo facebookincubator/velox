@@ -148,6 +148,15 @@ plans and verifies that results match. These plans include
 Window fuzzer currently doesn't use any custom result verifiers. Functions
 that require custom result verifiers are left unverified.
 
+Limitations
+-----------
+
+The Aggregation and Window Fuzzers do not generate constant arguments. They
+pass every argument as a column, including arguments that a signature declares
+constant. Functions that read constant arguments through `setConstantInputs()`
+receive null for them, so these functions are on the fuzzers' skip lists and
+are not tested.
+
 How to integrate
 ---------------------------------------
 

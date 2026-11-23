@@ -74,6 +74,14 @@ class FileGroupStats;
 /// Records references and actual uses of a stream.
 struct TrackingData {
   double referencedBytes{};
+  /// All bytes referenced since the last read, i.e. by the current,
+  /// not-yet-read load unit (e.g. a stripe): accumulated by every
+  /// recordReference() and reset to 0 on the next recordRead().
+  /// adjustedReadPct() subtracts it so the read percentage counts only bytes
+  /// that have already had a chance to be read. Accumulating, rather than
+  /// tracking just the last reference, keeps the percentage correct when many
+  /// streams share one trackingId -- e.g. a flat map's per-key value streams --
+  /// where a single load unit produces many references.
   double lastReferencedBytes{};
   double readBytes{};
 };

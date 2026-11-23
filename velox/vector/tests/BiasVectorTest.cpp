@@ -104,11 +104,11 @@ class BiasVectorOverflowTest : public BiasVectorTestBase {
 using inputTypes = ::testing::Types<int16_t, int32_t, int64_t>;
 VELOX_TYPED_TEST_SUITE(BiasVectorOverflowTest, inputTypes);
 
-TYPED_TEST(BiasVectorOverflowTest, maxOverflowTest_delta_int8) {
+TYPED_TEST(BiasVectorOverflowTest, maxOverflowTestDeltaInt8) {
   this->runMaxOverflowTest(std::numeric_limits<int8_t>::max());
 }
 
-TYPED_TEST(BiasVectorOverflowTest, maxOverflowTest_delta_int16) {
+TYPED_TEST(BiasVectorOverflowTest, maxOverflowTestDeltaInt16) {
   size_t delta = std::numeric_limits<int16_t>::max();
   if constexpr (std::is_same_v<TypeParam, int16_t>) {
     delta = std::numeric_limits<int8_t>::max();
@@ -116,7 +116,7 @@ TYPED_TEST(BiasVectorOverflowTest, maxOverflowTest_delta_int16) {
   this->runMaxOverflowTest(delta);
 }
 
-TYPED_TEST(BiasVectorOverflowTest, maxOverflowTest_delta_int32) {
+TYPED_TEST(BiasVectorOverflowTest, maxOverflowTestDeltaInt32) {
   using T = TypeParam;
   size_t delta = std::numeric_limits<int32_t>::max();
   if constexpr (std::is_same_v<T, int16_t>) {
@@ -130,11 +130,11 @@ TYPED_TEST(BiasVectorOverflowTest, maxOverflowTest_delta_int32) {
   this->runMaxOverflowTest(delta);
 }
 
-TYPED_TEST(BiasVectorOverflowTest, minOverflowTest_delta_int8) {
+TYPED_TEST(BiasVectorOverflowTest, minOverflowTestDeltaInt8) {
   this->runMinOverflowTest(std::numeric_limits<int8_t>::max() + 1);
 }
 
-TYPED_TEST(BiasVectorOverflowTest, minOverflowTest_delta_int16) {
+TYPED_TEST(BiasVectorOverflowTest, minOverflowTestDeltaInt16) {
   size_t delta = std::numeric_limits<int16_t>::max();
   if constexpr (std::is_same_v<TypeParam, int16_t>) {
     delta = std::numeric_limits<int8_t>::max();
@@ -143,7 +143,7 @@ TYPED_TEST(BiasVectorOverflowTest, minOverflowTest_delta_int16) {
   this->runMinOverflowTest(delta);
 }
 
-TYPED_TEST(BiasVectorOverflowTest, minOverflowTest_delta_int32) {
+TYPED_TEST(BiasVectorOverflowTest, minOverflowTestDeltaInt32) {
   using T = TypeParam;
   size_t delta = std::numeric_limits<int32_t>::max();
   if constexpr (std::is_same_v<T, int16_t>) {

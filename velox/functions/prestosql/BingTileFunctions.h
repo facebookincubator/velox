@@ -23,11 +23,11 @@
 namespace facebook::velox::functions {
 
 FOLLY_ALWAYS_INLINE Status checkBingTileZoom(int32_t zoom) {
-  if (FOLLY_UNLIKELY(zoom < 0)) {
+  if (zoom < 0) [[unlikely]] {
     return Status::UserError(
         fmt::format("Bing tile zoom {} cannot be negative", zoom));
   }
-  if (FOLLY_UNLIKELY(zoom > BingTileType::kBingTileMaxZoomLevel)) {
+  if (zoom > BingTileType::kBingTileMaxZoomLevel) [[unlikely]] {
     return Status::UserError(
         fmt::format(
             "Bing tile zoom {} cannot be greater than max zoom {}",
@@ -46,17 +46,17 @@ struct BingTileFunction {
       const arg_type<int32_t>& x,
       const arg_type<int32_t>& y,
       const arg_type<int32_t>& zoom) {
-    if (FOLLY_UNLIKELY(x < 0)) {
+    if (x < 0) [[unlikely]] {
       return Status::UserError(
           fmt::format("Bing tile X coordinate {} cannot be negative", x));
     }
-    if (FOLLY_UNLIKELY(y < 0)) {
+    if (y < 0) [[unlikely]] {
       return Status::UserError(
           fmt::format("Bing tile Y coordinate {} cannot be negative", y));
     }
 
     Status zoomCheck = checkBingTileZoom(zoom);
-    if (FOLLY_UNLIKELY(!zoomCheck.ok())) {
+    if (!zoomCheck.ok()) [[unlikely]] {
       return zoomCheck;
     }
 
@@ -64,7 +64,7 @@ struct BingTileFunction {
         static_cast<uint32_t>(x),
         static_cast<uint32_t>(y),
         static_cast<uint8_t>(zoom));
-    if (FOLLY_UNLIKELY(!BingTileType::isBingTileIntValid(tile))) {
+    if (!BingTileType::isBingTileIntValid(tile)) [[unlikely]] {
       std::optional<std::string> reason =
           BingTileType::bingTileInvalidReason(tile);
       if (reason.has_value()) {
@@ -132,12 +132,12 @@ struct BingTileParentFunction {
     uint64_t tileInt = tile;
     VELOX_DCHECK(BingTileType::isBingTileIntValid(tileInt));
     uint8_t tileZoom = BingTileType::bingTileZoom(tile);
-    if (FOLLY_UNLIKELY(tileZoom == 0)) {
+    if (tileZoom == 0) [[unlikely]] {
       return Status::UserError(
           fmt::format("Cannot call bing_tile_parent on zoom 0 tile"));
     }
     auto parent = BingTileType::bingTileParent(tileInt, tileZoom - 1);
-    if (FOLLY_UNLIKELY(parent.hasError())) {
+    if (parent.hasError()) [[unlikely]] {
       return Status::UserError(parent.error());
     }
     result = parent.value();
@@ -150,12 +150,12 @@ struct BingTileParentFunction {
       const arg_type<int8_t>& parentZoom) {
     uint64_t tileInt = tile;
     VELOX_DCHECK(BingTileType::isBingTileIntValid(tileInt));
-    if (FOLLY_UNLIKELY(parentZoom < 0)) {
+    if (parentZoom < 0) [[unlikely]] {
       return Status::UserError(
           fmt::format("Cannot call bing_tile_parent with negative zoom"));
     }
     auto parent = BingTileType::bingTileParent(tileInt, parentZoom);
-    if (FOLLY_UNLIKELY(parent.hasError())) {
+    if (parent.hasError()) [[unlikely]] {
       return Status::UserError(parent.error());
     }
     result = parent.value();
@@ -166,7 +166,7 @@ struct BingTileParentFunction {
       out_type<BingTile>& result,
       const arg_type<BingTile>& tile,
       const arg_type<int32_t>& parentZoom) {
-    if (FOLLY_UNLIKELY(parentZoom > BingTileType::kBingTileMaxZoomLevel)) {
+    if (parentZoom > BingTileType::kBingTileMaxZoomLevel) [[unlikely]] {
       return Status::UserError(
           fmt::format(
               "newZoom {} is greater than max zoom {}",
@@ -197,13 +197,13 @@ struct BingTileChildrenFunction {
     uint64_t tileInt = tile;
     VELOX_DCHECK(BingTileType::isBingTileIntValid(tileInt));
     uint8_t tileZoom = BingTileType::bingTileZoom(tile);
-    if (FOLLY_UNLIKELY(tileZoom >= BingTileType::kBingTileMaxZoomLevel)) {
+    if (tileZoom >= BingTileType::kBingTileMaxZoomLevel) [[unlikely]] {
       return Status::UserError(
           fmt::format("Cannot call bing_tile_children on zoom 23 tile"));
     }
     auto childrenRes =
         BingTileType::bingTileChildren(tileInt, tileZoom + 1, maxZoomShift);
-    if (FOLLY_UNLIKELY(childrenRes.hasError())) {
+    if (childrenRes.hasError()) [[unlikely]] {
       return Status::UserError(childrenRes.error());
     }
     std::vector<uint64_t> children = childrenRes.value();
@@ -219,12 +219,12 @@ struct BingTileChildrenFunction {
     uint64_t tileInt = tile;
     VELOX_DCHECK(BingTileType::isBingTileIntValid(tileInt));
     Status zoomCheck = checkBingTileZoom(childZoom);
-    if (FOLLY_UNLIKELY(!zoomCheck.ok())) {
+    if (!zoomCheck.ok()) [[unlikely]] {
       return zoomCheck;
     }
     auto childrenRes =
         BingTileType::bingTileChildren(tileInt, childZoom, maxZoomShift);
-    if (FOLLY_UNLIKELY(childrenRes.hasError())) {
+    if (childrenRes.hasError()) [[unlikely]] {
       return Status::UserError(childrenRes.error());
     }
     std::vector<uint64_t> children = childrenRes.value();
@@ -257,12 +257,12 @@ struct BingTileAtFunction {
       const arg_type<double>& longitude,
       const arg_type<int32_t>& zoomLevel) {
     Status zoomCheck = checkBingTileZoom(zoomLevel);
-    if (FOLLY_UNLIKELY(!zoomCheck.ok())) {
+    if (!zoomCheck.ok()) [[unlikely]] {
       return zoomCheck;
     }
     auto latitudeLongitudeToTileResult = BingTileType::latitudeLongitudeToTile(
         latitude, longitude, static_cast<uint8_t>(zoomLevel));
-    if (FOLLY_UNLIKELY(latitudeLongitudeToTileResult.hasError())) {
+    if (latitudeLongitudeToTileResult.hasError()) [[unlikely]] {
       return Status::UserError(latitudeLongitudeToTileResult.error());
     }
     result = latitudeLongitudeToTileResult.value();
@@ -280,12 +280,12 @@ struct BingTilesAroundFunction {
       const arg_type<double>& longitude,
       const arg_type<int32_t>& zoomLevel) {
     Status zoomCheck = checkBingTileZoom(zoomLevel);
-    if (FOLLY_UNLIKELY(!zoomCheck.ok())) {
+    if (!zoomCheck.ok()) [[unlikely]] {
       return zoomCheck;
     }
     auto bingTilesAroundResult = BingTileType::bingTilesAround(
         latitude, longitude, static_cast<uint8_t>(zoomLevel));
-    if (FOLLY_UNLIKELY(bingTilesAroundResult.hasError())) {
+    if (bingTilesAroundResult.hasError()) [[unlikely]] {
       return Status::UserError(bingTilesAroundResult.error());
     }
     std::vector<uint64_t> tiles = bingTilesAroundResult.value();
@@ -301,13 +301,13 @@ struct BingTilesAroundFunction {
       const arg_type<int32_t>& zoomLevel,
       const arg_type<double>& radiusInKm) {
     Status zoomCheck = checkBingTileZoom(zoomLevel);
-    if (FOLLY_UNLIKELY(!zoomCheck.ok())) {
+    if (!zoomCheck.ok()) [[unlikely]] {
       return zoomCheck;
     }
     auto bingTilesAroundResult = BingTileType::bingTilesAround(
         latitude, longitude, static_cast<uint8_t>(zoomLevel), radiusInKm);
 
-    if (FOLLY_UNLIKELY(bingTilesAroundResult.hasError())) {
+    if (bingTilesAroundResult.hasError()) [[unlikely]] {
       return Status::UserError(bingTilesAroundResult.error());
     }
     std::vector<uint64_t> tiles = bingTilesAroundResult.value();

@@ -216,15 +216,19 @@ RowVectorPtr TableWriteMerge::createFragmentsOutput() {
 
 std::string TableWriteMerge::createTableCommitContext(bool lastOutput) const {
   folly::dynamic commitContext = lastCommitContext_;
+  if (commitContext == nullptr) {
+    commitContext = folly::dynamic::object;
+  }
   commitContext[TableWriteTraits::klastPageContextKey] = lastOutput;
   return folly::toJson(commitContext);
 }
 
 RowVectorPtr TableWriteMerge::createLastOutput() {
   VELOX_CHECK(
-      lastCommitContext_[TableWriteTraits::klastPageContextKey].asBool(),
+      lastCommitContext_ == nullptr ||
+          lastCommitContext_[TableWriteTraits::klastPageContextKey].asBool(),
       "unexpected last table commit context: {}",
-      lastCommitContext_.asString());
+      folly::toJson(lastCommitContext_));
 
   auto output = BaseVector::create<RowVector>(outputType_, 1, pool());
   output->resize(1);

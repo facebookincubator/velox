@@ -21,7 +21,7 @@
 using namespace ::facebook::velox;
 
 namespace {
-TEST(Registry, SmartPointerFactoryWithNoArgument) {
+TEST(Registry, smartPointerFactoryWithNoArgument) {
   Registry<size_t, std::unique_ptr<size_t>()> registry;
 
   const size_t key = 0;
@@ -38,7 +38,7 @@ TEST(Registry, SmartPointerFactoryWithNoArgument) {
   EXPECT_EQ(*registry.Create(key), value);
 }
 
-TEST(Registry, ValueFactoryWithArguments) {
+TEST(Registry, valueFactoryWithArguments) {
   Registry<size_t, size_t(size_t, size_t)> registry;
 
   const size_t key = 0;

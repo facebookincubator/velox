@@ -15,11 +15,16 @@
  */
 #pragma once
 
+#include <unordered_set>
+
 #include "velox/exec/OutputBuffer.h"
+#include "velox/exec/OutputBufferManager.h"
 
 namespace facebook::velox::exec {
 
-class DefaultOutputBufferManager {
+struct OutputTransportEntry;
+
+class DefaultOutputBufferManager : public OutputBufferManager {
  public:
   /// Options for shuffle. This is initialized once and affects both
   /// PartitionedOutput and Exchange. This can be used for controlling
@@ -29,23 +34,41 @@ class DefaultOutputBufferManager {
 
   explicit DefaultOutputBufferManager(Options) {}
 
+  static const std::shared_ptr<DefaultOutputBufferManager>& getInstanceRef();
+
+  static const std::shared_ptr<DefaultOutputBufferManager>& getInstanceRef(
+      const Options& options);
+
+  /// Builds the registry entry for the built-in in-memory transport, pairing
+  /// the default manager singleton with the PartitionedOutput operator.
+  /// OutputTransportRegistry::global() registers it under kInMemory.
+  static std::shared_ptr<OutputTransportEntry> makeDefaultTransportEntry();
+
+  // Lifecycle.
+
   void initializeTask(
       std::shared_ptr<Task> task,
       core::PartitionedOutputNode::Kind kind,
       int numDestinations,
-      int numDrivers);
+      int numDrivers,
+      const std::string& transportOptions = {}) override;
 
-  /// Updates the number of buffers. Returns true if the buffer exists for a
-  /// given taskId, else returns false.
+  /// Updates the number of destination buffers. Returns true if the buffer
+  /// exists for a given taskId, else returns false.
   bool updateOutputBuffers(
       const std::string& taskId,
-      int numBuffers,
-      bool noMoreBuffers);
+      int numDestinations,
+      bool noMoreBuffers) override;
 
   /// When we understand the final number of split groups (for grouped
   /// execution only), we need to update the number of producing drivers here.
   /// Returns true if the buffer exists for a given taskId, else returns false.
-  bool updateNumDrivers(const std::string& taskId, uint32_t newNumDrivers);
+  bool updateNumDrivers(const std::string& taskId, uint32_t newNumDrivers)
+      override;
+
+  void removeTask(const std::string& taskId) override;
+
+  // Data plane.
 
   /// Adds data to the outgoing queue for 'destination'. 'data' must not be
   /// nullptr. 'data' is always added but if the buffers are full the future is
@@ -92,14 +115,37 @@ class DefaultOutputBufferManager {
       DataAvailableCallback notify,
       DataConsumerActiveCheckCallback activeCheck = nullptr);
 
-  void removeTask(const std::string& taskId);
+  /// Like getData(), but for a sub-task 'taskId' that the task 'parentTaskId'
+  /// may not have created yet, such as a fixed point's producer that a peer
+  /// worker reads in the same iteration. 'parentTaskId' has an output buffer
+  /// in this manager for as long as it may create 'taskId'. When the buffer
+  /// for 'taskId' does not exist yet and the one for 'parentTaskId' does,
+  /// holds the request and serves it once initializeTask() creates the buffer.
+  /// When neither exists, the sub-task is never created and the request is
+  /// dropped. 'activeCheck' is required: a held request is dropped once it
+  /// returns false, e.g. after the consumer's own wait ran out, by
+  /// deleteResultsWhenCreated() for its destination, and by
+  /// removeTask('parentTaskId'). 'activeCheck' may run under this manager's
+  /// lock, so it must be cheap and must not call this manager.
+  void getDataWhenCreated(
+      const std::string& parentTaskId,
+      const std::string& taskId,
+      int destination,
+      uint64_t maxBytes,
+      int64_t sequence,
+      DataAvailableCallback notify,
+      DataConsumerActiveCheckCallback activeCheck);
 
-  static const std::shared_ptr<DefaultOutputBufferManager>& getInstanceRef();
-
-  static const std::shared_ptr<DefaultOutputBufferManager>& getInstanceRef(
-      const Options& options);
-
-  uint64_t numBuffers() const;
+  /// Like deleteResults(), but for a sub-task 'taskId' that the task
+  /// 'parentTaskId' may not have created yet, as in getDataWhenCreated(). When
+  /// the buffer for 'taskId' does not exist yet and the one for 'parentTaskId'
+  /// does, initializeTask() deletes the results of 'destination' as it creates
+  /// the buffer, so the producer does not wait for a consumer that is gone. A
+  /// delete still pending is dropped by removeTask('parentTaskId').
+  void deleteResultsWhenCreated(
+      const std::string& parentTaskId,
+      const std::string& taskId,
+      int destination);
 
   // Returns a new stream listener if a listener factory has been set.
   std::unique_ptr<OutputStreamListener> newListener() const {
@@ -110,25 +156,30 @@ class DefaultOutputBufferManager {
   // for repartitioning, e.g. computing checksums.
   void setListenerFactory(
       std::function<std::unique_ptr<OutputStreamListener>()> factory) {
-    listenerFactory_ = factory;
+    listenerFactory_ = std::move(factory);
   }
-
-  std::string toString();
-
-  // Gets the memory utilization ratio for the output buffer from a task of
-  // taskId, if the task of this taskId is not found, return 0.
-  double getUtilization(const std::string& taskId);
-
-  // If the output buffer from a task of taskId is over-utilized and blocks its
-  // producers. When the task of this taskId is not found, return false.
-  bool isOverutilized(const std::string& taskId);
-
-  // Returns nullopt when the specified output buffer doesn't exist.
-  std::optional<OutputBuffer::Stats> stats(const std::string& taskId);
 
   // Retrieves the set of buffers for a query if exists.
   // Returns NULL if task not found.
   std::shared_ptr<OutputBuffer> getBufferIfExists(const std::string& taskId);
+
+  // Observability.
+
+  uint64_t numBuffers() const;
+
+  std::string toString();
+
+  /// Returns a human-readable representation of the output buffer state for
+  /// the task identified by 'taskId', or an empty string if no buffer exists.
+  std::string toString(const std::string& taskId) override;
+
+  std::optional<double> getUtilization(const std::string& taskId) override;
+
+  // Over-utilized when buffered bytes exceed half of the configured max output
+  // buffer size, or the buffer is at end.
+  std::optional<bool> isOverutilized(const std::string& taskId) override;
+
+  std::optional<OutputBufferStats> stats(const std::string& taskId) override;
 
  private:
   // Retrieves the set of buffers for a query.
@@ -139,6 +190,34 @@ class DefaultOutputBufferManager {
       std::unordered_map<std::string, std::shared_ptr<OutputBuffer>>,
       std::mutex>
       buffers_;
+
+  // A getDataWhenCreated() request held until its buffer exists.
+  struct HeldRequest {
+    int destination;
+    uint64_t maxBytes;
+    int64_t sequence;
+    DataAvailableCallback notify;
+    DataConsumerActiveCheckCallback activeCheck;
+  };
+
+  // What consumers asked of a sub-task's buffer before it existed.
+  struct PendingBuffer {
+    // The task that creates the sub-task.
+    std::string parentTaskId;
+    // Reads waiting for the buffer.
+    std::vector<HeldRequest> requests;
+    // Destinations whose consumers deleted their results.
+    std::vector<int> deletedDestinations;
+  };
+
+  // The pending buffers by sub-task id. Guarded by the mutex of 'buffers_', so
+  // nothing is added for a sub-task after initializeTask() looked for it.
+  std::unordered_map<std::string, PendingBuffer> pendingBuffers_;
+
+  // The ids of the sub-tasks in 'pendingBuffers_' by parent task id, so
+  // removeTask() of a parent finds them. Guarded by the mutex of 'buffers_'.
+  std::unordered_map<std::string, std::unordered_set<std::string>>
+      pendingSubTaskIds_;
 
   std::function<std::unique_ptr<OutputStreamListener>()> listenerFactory_{
       nullptr};

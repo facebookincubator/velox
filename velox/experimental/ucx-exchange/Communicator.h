@@ -26,10 +26,6 @@
 #include "velox/experimental/ucx-exchange/CommElement.h"
 #include "velox/experimental/ucx-exchange/WorkQueue.h"
 
-#include <gflags/gflags.h>
-
-DECLARE_bool(velox_ucx_exchange);
-
 namespace facebook::velox::ucx_exchange {
 
 struct HostPort {
@@ -42,10 +38,12 @@ struct HostPort {
 
   // Strict weak ordering for std::map
   bool operator<(HostPort const& other) const noexcept {
-    if (hostname < other.hostname)
+    if (hostname < other.hostname) {
       return true;
-    if (other.hostname < hostname)
+    }
+    if (other.hostname < hostname) {
       return false;
+    }
     return port < other.port;
   }
 };

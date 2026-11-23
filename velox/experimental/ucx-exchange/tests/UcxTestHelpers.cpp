@@ -17,8 +17,11 @@
 
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/null_mask.hpp>
 #include <cudf/strings/detail/utilities.hpp>
 #include <cudf/strings/strings_column_view.hpp>
+#include <cudf/utilities/memory_resource.hpp>
+#include <rmm/device_buffer.hpp>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -105,7 +108,8 @@ std::shared_ptr<Task> createPartitionedOutputTask(
     int numPartitions,
     const std::vector<std::string>& partitionKeys,
     uint64_t kMaxOutputBufferSize,
-    const std::unordered_map<std::string, std::string>& extraConfig) {
+    const std::unordered_map<std::string, std::string>& extraConfig,
+    bool replicateNullsAndAny) {
   VLOG(3) << "Creating PartitionedOutput task with " << numPartitions
           << " partitions";
 
@@ -123,10 +127,11 @@ std::shared_ptr<Task> createPartitionedOutputTask(
       pool.get(), rowType, BufferPtr(nullptr), vectorSize, vecPtrs);
 
   // Build the plan: Values -> PartitionedOutput
-  auto planFragment = exec::test::PlanBuilder()
-                          .values({rowVector})
-                          .partitionedOutput(partitionKeys, numPartitions)
-                          .planFragment();
+  auto planFragment =
+      exec::test::PlanBuilder()
+          .values({rowVector})
+          .partitionedOutput(partitionKeys, numPartitions, replicateNullsAndAny)
+          .planFragment();
 
   std::shared_ptr<folly::Executor> executor(
       std::make_shared<folly::CPUThreadPoolExecutor>(
@@ -155,7 +160,7 @@ std::shared_ptr<cudf_velox::CudfVector> makeCudfVector(
     size_t numRows,
     RowTypePtr rowType,
     std::shared_ptr<BaseTableGenerator> tableGenerator,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   // Create table using either makeTable or tableGenerator->makeTable()
   std::unique_ptr<cudf::table> table;
   if (tableGenerator == nullptr) {
@@ -165,7 +170,7 @@ std::shared_ptr<cudf_velox::CudfVector> makeCudfVector(
   }
 
   // Sync the stream before creating CudfVector
-  stream.synchronize();
+  stream.sync();
 
   // Create and return CudfVector
   return std::make_shared<cudf_velox::CudfVector>(
@@ -179,9 +184,9 @@ std::shared_ptr<cudf_velox::CudfVector> makeCudfVector(
 template <typename T>
 std::unique_ptr<cudf::column> make_numeric_column_from_vector(
     const std::vector<T>& host_values,
-    rmm::cuda_stream_view stream = cudf::get_default_stream(),
-    rmm::mr::device_memory_resource* mr =
-        rmm::mr::get_current_device_resource()) {
+    cuda::stream_ref stream = cudf::get_default_stream(),
+    rmm::device_async_resource_ref mr =
+        cudf::get_current_device_resource_ref()) {
   size_t num_rows = host_values.size();
 
   // Allocate a device buffer of the correct size
@@ -193,23 +198,27 @@ std::unique_ptr<cudf::column> make_numeric_column_from_vector(
       host_values.data(),
       num_rows * sizeof(T),
       cudaMemcpyHostToDevice,
-      stream.value());
+      stream.get());
 
   // Build the cudf::column from the device buffer
   return std::make_unique<cudf::column>(
       cudf::data_type{cudf::type_to_id<T>()}, // e.g. cudf::type_id::FLOAT64
       num_rows,
       std::move(data),
-      rmm::device_buffer{}, // no null mask
+      cudf::create_null_mask(
+          0,
+          cudf::mask_state::UNALLOCATED,
+          stream,
+          cudf::memory_resources{mr, mr}), // no null mask
       0); // no nulls
 }
 
 // Creates device buffer with concatenated string bytes from host vector
 rmm::device_buffer make_chars_buffer_from_host(
     const std::vector<std::string>& host_strings,
-    rmm::cuda_stream_view stream = cudf::get_default_stream(),
-    rmm::mr::device_memory_resource* mr =
-        rmm::mr::get_current_device_resource()) {
+    cuda::stream_ref stream = cudf::get_default_stream(),
+    rmm::device_async_resource_ref mr =
+        cudf::get_current_device_resource_ref()) {
   // Compute total bytes needed
   size_t total_bytes = 0;
   for (auto const& s : host_strings)
@@ -230,7 +239,7 @@ rmm::device_buffer make_chars_buffer_from_host(
       host_concat.data(),
       total_bytes,
       cudaMemcpyHostToDevice,
-      stream.value());
+      stream.get());
 
   return chars_buffer;
 }
@@ -267,13 +276,19 @@ std::unique_ptr<cudf::column> make_strings_column_from_host(
       std::move(offsets_col),
       std::move(chars_buffer),
       0, // null_count
-      rmm::device_buffer{}); // null mask
+      cudf::create_null_mask(
+          0,
+          cudf::mask_state::UNALLOCATED,
+          cudf::get_default_stream(),
+          cudf::memory_resources{
+              cudf::get_current_device_resource_ref(),
+              cudf::get_current_device_resource_ref()})); // null mask
 }
 
 std::unique_ptr<cudf::table> makeTable(
     std::size_t numRows,
     facebook::velox::RowTypePtr rowType,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   // Create table with default values
   std::vector<std::unique_ptr<cudf::column>> columns;
 
@@ -317,7 +332,7 @@ std::unique_ptr<cudf::table> makeTable(
 std::vector<std::string> getStringCol(
     const cudf::strings_column_view& str_column_view,
     cudf::size_type max_rows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   max_rows =
       str_column_view.size() < max_rows ? str_column_view.size() : max_rows;
   auto offset_view = str_column_view.offsets();

@@ -308,12 +308,10 @@ class MemoryAllocatorTest : public testing::TestWithParam<int> {
         ContiguousAllocation large;
         if (!allocateContiguous(available / 2, nullptr, large)) {
           FAIL() << "Could not allocate half the available";
-          return;
         }
         Allocation small;
         if (!instance_->allocateNonContiguous(available / 4, small)) {
           FAIL() << "Could not allocate 1/4 of available";
-          return;
         }
 
         ASSERT_FALSE(
@@ -1523,7 +1521,7 @@ TEST_P(MemoryAllocatorTest, allocateZeroFilled) {
   ASSERT_TRUE(instance_->checkConsistency());
 }
 
-TEST_P(MemoryAllocatorTest, StlMemoryAllocator) {
+TEST_P(MemoryAllocatorTest, stlMemoryAllocator) {
   {
     std::vector<double, StlAllocator<double>> data(
         0, StlAllocator<double>(*pool_));

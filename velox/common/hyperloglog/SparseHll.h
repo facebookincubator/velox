@@ -21,6 +21,9 @@ namespace facebook::velox::common::hll {
 
 class SparseHlls {
  public:
+  /// Number of bytes used to serialize a single hash.
+  static constexpr int32_t kSingleHashSerializedSize = 8;
+
   /// Returns cardinality estimate from the specified serialized digest.
   /// @param serialized Pointer to serialized SparseHll data
   /// @return Estimated cardinality of the HyperLogLog
@@ -35,6 +38,11 @@ class SparseHlls {
   /// @param indexBitLength Number of bits for indexing (must be in [4,16])
   /// @return Serialized empty SparseHll as a string
   static std::string serializeEmpty(int8_t indexBitLength);
+
+  /// Serializes a single hash using Presto SparseV2 format. 'output' must
+  /// provide at least kSingleHashSerializedSize bytes.
+  static void
+  serializeSingleHash(uint64_t hash, int8_t indexBitLength, char* output);
 
   /// Extracts the index bit length from serialized SparseHll data.
   /// @param input Pointer to serialized SparseHll data

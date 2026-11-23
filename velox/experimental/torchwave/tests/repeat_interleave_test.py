@@ -24,8 +24,11 @@ class RepeatInterleaveTestPreproc(nn.Module):
         data_long2 (1000 longs), repeats_int (1000 ints) - int64 data, int32 repeats
         data_float (500 floats), repeats_long2 (500 longs) - float data, int64 repeats
         data_small (10 longs), repeats_small (10 longs) - small input, varied repeats
+        counts_int (10 ints), counts_long (10 longs) - counts for the
+            index-generating .Tensor overload (eager preserves the counts dtype)
 
-    Outputs: one repeat_interleave result per pair
+    Outputs: one repeat_interleave result per pair, plus the index tensor for the
+    single-argument .Tensor overload for both int32 and int64 counts
     """
 
     def forward(
@@ -38,9 +41,16 @@ class RepeatInterleaveTestPreproc(nn.Module):
         repeats_long2: Tensor,
         data_small: Tensor,
         repeats_small: Tensor,
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        counts_int: Tensor,
+        counts_long: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
         o1 = torch.repeat_interleave(data_long, repeats_long)
         o2 = torch.repeat_interleave(data_long2, repeats_int)
         o3 = torch.repeat_interleave(data_float, repeats_long2)
         o4 = torch.repeat_interleave(data_small, repeats_small)
-        return o1, o2, o3, o4
+        # Single-argument form lowers to aten.repeat_interleave.Tensor: returns
+        # the index tensor where index i appears counts[i] times. The output
+        # dtype follows the counts dtype (int32 -> int32, int64 -> int64).
+        o5 = torch.repeat_interleave(counts_int)
+        o6 = torch.repeat_interleave(counts_long)
+        return o1, o2, o3, o4, o5, o6

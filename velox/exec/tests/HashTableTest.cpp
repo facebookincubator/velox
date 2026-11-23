@@ -139,11 +139,8 @@ class HashTableTest : public testing::TestWithParam<bool>,
       auto table = HashTable<true>::createForJoin(
           std::move(keyHashers),
           dependentTypes,
-          true,
-          false,
-          false,
-          1'000,
-          pool());
+          pool(),
+          {.allowDuplicates = true, .minTableSizeForParallelJoinBuild = 1'000});
 
       makeRows(size, 1, sequence, buildType, batches);
       copyVectorsToTable(batches, startOffset, table.get());
@@ -161,16 +158,14 @@ class HashTableTest : public testing::TestWithParam<bool>,
 
     const uint64_t estimatedTableSize =
         topTable_->estimateHashTableSize(numRows);
-    const uint64_t usedMemoryBytes = topTable_->rows()->pool()->usedBytes();
+    const uint64_t usedMemoryBytes = pool()->usedBytes();
     topTable_->prepareJoinTable(
         std::move(otherTables),
         BaseHashTable::kNoSpillInputStartPartitionBit,
         1'000'000,
         false,
         executor_.get());
-    ASSERT_GE(
-        estimatedTableSize,
-        topTable_->rows()->pool()->usedBytes() - usedMemoryBytes);
+    ASSERT_GE(estimatedTableSize, pool()->usedBytes() - usedMemoryBytes);
     ASSERT_EQ(topTable_->hashMode(), mode);
     ASSERT_EQ(topTable_->allRows().size(), numWays);
     uint64_t rowCount{0};
@@ -218,7 +213,7 @@ class HashTableTest : public testing::TestWithParam<bool>,
       allInserted.insert(
           allInserted.end(), lookup->hits.begin(), lookup->hits.end());
 
-      table->erase(folly::Range<char**>(&allInserted[numErased], eraseSize));
+      table->erase(std::span<char*>(&allInserted[numErased], eraseSize));
       numErased += eraseSize;
     }
     int32_t batchStart = 0;
@@ -361,7 +356,6 @@ class HashTableTest : public testing::TestWithParam<bool>,
     const int32_t mask = powerOfTwo - 1;
     int32_t position = 0;
     int32_t delta = 1;
-    const auto nextOffset = rowContainer->nextOffset();
 
     std::vector<char*> rows;
     // We insert values in a geometric skip order. 1, 2, 4, 7,
@@ -377,9 +371,6 @@ class HashTableTest : public testing::TestWithParam<bool>,
         rowOfKey_[tableOffset + position] = newRow;
         const auto batchIndex = position / batchSize;
         const auto rowIndex = position % batchSize;
-        if (nextOffset > 0) {
-          *reinterpret_cast<char**>(newRow + nextOffset) = nullptr;
-        }
         for (auto i = 0; i < batches[batchIndex]->type()->size(); ++i) {
           rowContainer->store(decoded[batchIndex][i], rowIndex, newRow, i);
         }
@@ -531,7 +522,7 @@ class HashTableTest : public testing::TestWithParam<bool>,
         rowOfKey_[i] = nullptr;
       }
     }
-    topTable_->erase(folly::Range<char**>(toErase.data(), toErase.size()));
+    topTable_->erase(std::span<char*>(toErase.data(), toErase.size()));
   }
 
   void testListNullKeyRows(
@@ -544,12 +535,15 @@ class HashTableTest : public testing::TestWithParam<bool>,
         nullValues.insert(i);
       }
     }
-    auto batch = makeRowVector(
-        {keys, makeFlatVector<int64_t>(keys->size(), folly::identity)});
+    auto batch =
+        makeRowVector({keys, makeFlatIdentityVector<int64_t>(keys->size())});
     std::vector<std::unique_ptr<VectorHasher>> hashers;
     hashers.push_back(std::make_unique<VectorHasher>(keys->type(), 0));
     auto table = HashTable<false>::createForJoin(
-        std::move(hashers), {BIGINT()}, true, false, false, 1'000, pool());
+        std::move(hashers),
+        {BIGINT()},
+        pool(),
+        {.allowDuplicates = true, .minTableSizeForParallelJoinBuild = 1'000});
     copyVectorsToTable({batch}, 0, table.get());
     table->prepareJoinTable(
         {},
@@ -559,15 +553,8 @@ class HashTableTest : public testing::TestWithParam<bool>,
         executor_.get());
     ASSERT_EQ(table->hashMode(), mode);
     std::vector<char*> rows(nullValues.size());
-    BaseHashTable::NullKeyRowsIterator iter;
-    std::vector<std::unique_ptr<VectorHasher>> probeHashers;
-    probeHashers.push_back(std::make_unique<VectorHasher>(keys->type(), 0));
-    auto nullKeyProbeInput = BaseVector::create(keys->type(), 1, pool());
-    nullKeyProbeInput->setNull(0, true);
-    SelectivityVector selectivity(1);
-    probeHashers[0]->decode(*nullKeyProbeInput, selectivity);
-    auto numRows =
-        table->listNullKeyRows(&iter, rows.size(), rows.data(), probeHashers);
+    std::optional<char*> next;
+    auto numRows = table->listNullKeyRows(next, std::span(rows));
     ASSERT_EQ(numRows, nullValues.size());
     auto actual =
         BaseVector::create<FlatVector<int64_t>>(BIGINT(), numRows, pool());
@@ -578,9 +565,7 @@ class HashTableTest : public testing::TestWithParam<bool>,
       nullValues.erase(it);
     }
     ASSERT_TRUE(nullValues.empty());
-    ASSERT_EQ(
-        0,
-        table->listNullKeyRows(&iter, rows.size(), rows.data(), probeHashers));
+    ASSERT_EQ(0, table->listNullKeyRows(next, std::span(rows)));
   }
 
   // Bitmap of positions in batches_ that end up in the table.
@@ -663,7 +648,8 @@ TEST_P(HashTableTest, clearBeforeInsert) {
       core::AggregationNode::Step::kPartial,
       std::vector<TypePtr>{BIGINT()},
       BIGINT(),
-      config);
+      config,
+      /*constantInputs=*/{});
 
   for (const bool clearTable : {false, true}) {
     const auto table = HashTable<true>::createForAggregation(
@@ -839,6 +825,46 @@ TEST_P(HashTableTest, arrayProbeNormalizedKey) {
   ASSERT_EQ(table->hashMode(), BaseHashTable::HashMode::kNormalizedKey);
 }
 
+TEST_P(HashTableTest, groupProbeDuplicateNewKeys) {
+  // Each batch repeats every new key within one probe window, so later rows
+  // must find the groups that earlier rows of the same window inserted.
+  constexpr int32_t kNumBatches = 100;
+  constexpr int32_t kBatchSize = 1'000;
+  constexpr int32_t kNumNewKeysPerBatch = 20;
+  for (const auto mode :
+       {BaseHashTable::HashMode::kNormalizedKey,
+        BaseHashTable::HashMode::kHash}) {
+    SCOPED_TRACE(BaseHashTable::modeString(mode));
+    auto table =
+        createHashTableForAggregation(ROW({"a", "b"}, {BIGINT(), BIGINT()}), 2);
+    if (mode == BaseHashTable::HashMode::kHash) {
+      table->forceGenericHashMode(
+          BaseHashTable::kNoSpillInputStartPartitionBit);
+    }
+    auto lookup = std::make_unique<HashLookup>(table->hashers(), pool());
+    for (auto batch = 0; batch < kNumBatches; ++batch) {
+      auto groupId = [&](auto row) {
+        return batch * kNumNewKeysPerBatch + row % kNumNewKeysPerBatch;
+      };
+      // Both keys are unique per group, so the product of their distinct
+      // counts outgrows kArray mode. Spacing out 'b' keeps it out of range
+      // mode, while the combined range still fits a normalized key.
+      auto data = makeRowVector({
+          makeFlatVector<int64_t>(kBatchSize, groupId),
+          makeFlatVector<int64_t>(
+              kBatchSize, [&](auto row) { return groupId(row) * 1'000; }),
+      });
+      insertGroups(*data, *lookup, *table);
+      ASSERT_EQ(lookup->newGroups.size(), kNumNewKeysPerBatch);
+      for (auto row = 0; row < kBatchSize; ++row) {
+        ASSERT_EQ(lookup->hits[row], lookup->hits[row % kNumNewKeysPerBatch]);
+      }
+    }
+    EXPECT_EQ(table->numDistinct(), kNumBatches * kNumNewKeysPerBatch);
+    EXPECT_EQ(table->hashMode(), mode);
+  }
+}
+
 TEST_P(HashTableTest, regularHashingTableSize) {
   keySpacing_ = 1000;
   auto checkTableSize = [&](BaseHashTable::HashMode mode,
@@ -849,7 +875,10 @@ TEST_P(HashTableTest, regularHashingTableSize) {
           std::make_unique<VectorHasher>(type->childAt(channel), channel));
     }
     auto table = HashTable<true>::createForJoin(
-        std::move(keyHashers), {}, true, false, false, 1'000, pool());
+        std::move(keyHashers),
+        {},
+        pool(),
+        {.allowDuplicates = true, .minTableSizeForParallelJoinBuild = 1'000});
     std::vector<RowVectorPtr> batches;
     makeRows(1 << 12, 1, 0, type, batches);
     copyVectorsToTable(batches, 0, table.get());
@@ -888,11 +917,8 @@ TEST_P(HashTableTest, listJoinResultsSize) {
   auto table = HashTable<true>::createForJoin(
       std::move(keyHashers),
       {BIGINT(), VARCHAR()},
-      true,
-      false,
-      false,
-      kNumRows,
-      pool());
+      pool(),
+      {.allowDuplicates = true, .minTableSizeForParallelJoinBuild = kNumRows});
   std::vector<RowVectorPtr> batches;
   makeRows(kNumRows, 1, 0, buildType, batches);
   auto rows = copyVectorsToTable(batches, 0, table.get());
@@ -900,10 +926,10 @@ TEST_P(HashTableTest, listJoinResultsSize) {
   std::vector<vector_size_t> inputRowsBuf;
   inputRowsBuf.resize(kNumRows);
   auto inputRows =
-      folly::Range(static_cast<vector_size_t*>(inputRowsBuf.data()), kNumRows);
+      std::span(static_cast<vector_size_t*>(inputRowsBuf.data()), kNumRows);
   std::vector<char*> outputRowsBuf;
   outputRowsBuf.resize(kNumRows);
-  auto outputRows = folly::Range(outputRowsBuf.data(), kNumRows);
+  auto outputRows = std::span(outputRowsBuf.data(), kNumRows);
 
   HashLookup lookup(table->hashers(), pool());
   lookup.rows.reserve(kNumRows);
@@ -978,6 +1004,177 @@ TEST_P(HashTableTest, listJoinResultsSize) {
   }
 }
 
+TEST_P(HashTableTest, listJoinResultsInterleaved) {
+  if (GetParam()) {
+    // The fixture's `GetParam()==true` variant creates a threading executor,
+    // but this test's build passes `{}` for `otherTables`, so
+    // canApplyParallelJoinBuild() returns false and both variants take the
+    // same serial build path. Skip the redundant run.
+    GTEST_SKIP() << "No need to run this in multi-threaded mode";
+  }
+
+  // Chains longer than `kAheadWindow` force a non-head slot's buffer to
+  // fill, pause, and resume once its slot becomes head — that boundary is
+  // what the interleaved walker rests on.
+  constexpr int32_t kNumKeys = 20;
+  constexpr int32_t kRowsPerKey =
+      BaseHashTable::JoinResultIterator::kAheadWindow + 4;
+  constexpr int32_t kNumRows = kNumKeys * kRowsPerKey;
+
+  std::vector<std::unique_ptr<VectorHasher>> keyHashers;
+  keyHashers.emplace_back(std::make_unique<VectorHasher>(BIGINT(), 0));
+  auto table = HashTable<true>::createForJoin(
+      std::move(keyHashers),
+      {BIGINT()},
+      pool(),
+      {.allowDuplicates = true, .minTableSizeForParallelJoinBuild = 1'000});
+
+  // Build side has `kRowsPerKey` rows per key; the value column carries a
+  // globally unique per-row id used to verify each chain expands fully.
+  auto buildKeys = makeFlatVector<int64_t>(
+      kNumRows, [&](vector_size_t row) { return row % kNumKeys; });
+  auto buildValues =
+      makeFlatVector<int64_t>(kNumRows, [&](vector_size_t row) { return row; });
+  std::vector<RowVectorPtr> batches{makeRowVector({buildKeys, buildValues})};
+  copyVectorsToTable(batches, 0, table.get());
+  table->prepareJoinTable(
+      {},
+      BaseHashTable::kNoSpillInputStartPartitionBit,
+      1'000'000,
+      false,
+      executor_.get());
+  ASSERT_GT(table->rows()->nextOffset(), 0);
+  ASSERT_TRUE(table->hasDuplicateKeys());
+
+  // Expected multiset of value-column ids for each key.
+  std::vector<std::multiset<int64_t>> expectedValuesByKey(kNumKeys);
+  for (int32_t row = 0; row < kNumRows; ++row) {
+    expectedValuesByKey[row % kNumKeys].insert(row);
+  }
+
+  // Probe with more than kNumParallelChains keys so the walker refills the
+  // slot batch more than once mid-run.
+  constexpr int32_t kNumParallelChains =
+      BaseHashTable::JoinResultIterator::kNumParallelChains;
+  constexpr int32_t kNumProbe = kNumParallelChains * 3;
+
+  const std::vector<std::tuple<int32_t, bool, uint64_t>> cases{
+      {64, false, std::numeric_limits<uint64_t>::max()},
+      {1, false, std::numeric_limits<uint64_t>::max()},
+      {64, true, std::numeric_limits<uint64_t>::max()},
+      {1, true, std::numeric_limits<uint64_t>::max()},
+      {kNumProbe / 2, true, std::numeric_limits<uint64_t>::max()},
+      {64, true, 16},
+  };
+
+  // `missesFirst=true` fills exactly the first slot batch with misses;
+  // `false` scatters misses across all batches. Both cover the miss-vs-
+  // refill boundary from different angles.
+  for (const bool missesFirst : {false, true}) {
+    SCOPED_TRACE(fmt::format("missesFirst={}", missesFirst));
+    std::vector<int64_t> probeKeys(kNumProbe);
+    for (int32_t i = 0; i < kNumProbe; ++i) {
+      const bool miss = missesFirst ? (i < kNumParallelChains) : (i % 3 == 0);
+      probeKeys[i] = miss ? (kNumKeys + i) : (i % kNumKeys);
+    }
+    auto probeVector = makeRowVector({makeFlatVector<int64_t>(probeKeys)});
+    SelectivityVector selectivity(kNumProbe);
+    HashLookup lookup(table->hashers(), pool());
+    table->prepareForJoinProbe(lookup, probeVector, selectivity, false);
+    lookup.hits.resize(kNumProbe);
+    std::fill(lookup.hits.begin(), lookup.hits.end(), nullptr);
+    table->joinProbe(lookup);
+    lookup.rows.resize(kNumProbe);
+    std::iota(lookup.rows.begin(), lookup.rows.end(), 0);
+
+    for (const auto& [outputCapacity, includeMisses, maxBytes] : cases) {
+      SCOPED_TRACE(
+          fmt::format(
+              "outputCapacity={} includeMisses={} maxBytes={}",
+              outputCapacity,
+              includeMisses,
+              maxBytes));
+
+      BaseHashTable::JoinResultIterator iter(
+          {}, /*fixedSizeListColumnsSizeSum=*/8, std::nullopt);
+      iter.reset(lookup);
+      std::vector<vector_size_t> probeRows;
+      std::vector<char*> hits;
+      std::vector<vector_size_t> outputProbeRows(outputCapacity);
+      std::vector<char*> outputHits(outputCapacity);
+      while (!iter.atEnd()) {
+        const auto numOutput = table->listJoinResults(
+            iter,
+            includeMisses,
+            std::span(outputProbeRows.data(), outputCapacity),
+            std::span(outputHits.data(), outputCapacity),
+            maxBytes);
+        if (numOutput == 0) {
+          // A call may only return 0 after consuming everything reachable;
+          // otherwise the loop would spin without making progress.
+          EXPECT_TRUE(iter.atEnd());
+          break;
+        }
+        probeRows.insert(
+            probeRows.end(),
+            outputProbeRows.begin(),
+            outputProbeRows.begin() + numOutput);
+        hits.insert(
+            hits.end(), outputHits.begin(), outputHits.begin() + numOutput);
+      }
+
+      // Probe-row indices must be non-decreasing — this is the probe-order
+      // invariant the interleaved walker rests on.
+      for (size_t i = 1; i < probeRows.size(); ++i) {
+        EXPECT_LE(probeRows[i - 1], probeRows[i]);
+      }
+
+      // Partition emits into (probe row, hit) buckets in one pass: non-
+      // miss hits feed the per-probe-row multiset check below; misses go
+      // into a set so we can assert each miss row was emitted exactly once
+      // when `includeMisses` is true, and never when false.
+      std::vector<char*> nonNullHits;
+      std::vector<vector_size_t> nonNullProbeRows;
+      std::set<vector_size_t> observedMisses;
+      for (size_t i = 0; i < hits.size(); ++i) {
+        if (hits[i] == nullptr) {
+          observedMisses.insert(probeRows[i]);
+        } else {
+          nonNullHits.push_back(hits[i]);
+          nonNullProbeRows.push_back(probeRows[i]);
+        }
+      }
+      auto valuesColumn = BaseVector::create<FlatVector<int64_t>>(
+          BIGINT(), nonNullHits.size(), pool());
+      table->rows()->extractColumn(
+          nonNullHits.data(), nonNullHits.size(), 1, valuesColumn);
+
+      std::map<vector_size_t, std::multiset<int64_t>> observedByProbeRow;
+      for (size_t i = 0; i < nonNullHits.size(); ++i) {
+        observedByProbeRow[nonNullProbeRows[i]].insert(
+            valuesColumn->valueAt(i));
+      }
+
+      for (int32_t probeRow = 0; probeRow < kNumProbe; ++probeRow) {
+        const int64_t key = probeKeys[probeRow];
+        if (key >= kNumKeys) {
+          // Miss.
+          if (includeMisses) {
+            EXPECT_EQ(observedMisses.count(probeRow), 1u);
+          } else {
+            EXPECT_EQ(observedMisses.count(probeRow), 0u);
+          }
+          EXPECT_EQ(observedByProbeRow.count(probeRow), 0u);
+        } else {
+          auto it = observedByProbeRow.find(probeRow);
+          ASSERT_NE(it, observedByProbeRow.end());
+          EXPECT_EQ(it->second, expectedValuesByKey[key]);
+        }
+      }
+    }
+  }
+}
+
 TEST_P(HashTableTest, groupBySpill) {
   auto type = ROW({"k1"}, {BIGINT()});
   testGroupBySpill(5'000'000, type, 1, 1000, 1000);
@@ -1015,7 +1212,7 @@ TEST_P(HashTableTest, checkSizeValidation) {
 }
 
 TEST_P(HashTableTest, listNullKeyRows) {
-  VectorPtr keys = makeFlatVector<int64_t>(500, folly::identity);
+  VectorPtr keys = makeFlatIdentityVector<int64_t>(500);
   testListNullKeyRows(keys, BaseHashTable::HashMode::kArray);
   {
     auto flat =
@@ -1045,7 +1242,10 @@ DEBUG_ONLY_TEST_P(HashTableTest, nextBucketOffset) {
           std::make_unique<VectorHasher>(type->childAt(channel), channel));
     }
     auto table = HashTable<true>::createForJoin(
-        std::move(keyHashers), {}, true, false, false, 1'000, pool());
+        std::move(keyHashers),
+        {},
+        pool(),
+        {.allowDuplicates = true, .minTableSizeForParallelJoinBuild = 1'000});
     auto testHelper = HashTableTestHelper<true>::create(table.get());
     const uint64_t numDistincts = bits::nextPowerOfTwo(
         2UL * std::numeric_limits<int32_t>::max() / testHelper.tableSlotSize());
@@ -1146,13 +1346,16 @@ DEBUG_ONLY_TEST_P(HashTableTest, failureInCreateRowPartitions) {
   std::unique_ptr<HashTable<false>> topTable;
   std::vector<std::unique_ptr<BaseHashTable>> otherTables;
   for (int i = 0; i < 4; i++) {
-    auto batch = makeRowVector({makeFlatVector<int64_t>(10, folly::identity)});
+    auto batch = makeRowVector({makeFlatIdentityVector<int64_t>(10)});
     std::vector<std::unique_ptr<VectorHasher>> hashers;
     hashers.push_back(std::make_unique<VectorHasher>(BIGINT(), 0));
     // Set minTableSizeForParallelJoinBuild to be really small so we can trigger
     // a parallel join build without needing a lot of data.
     auto table = HashTable<false>::createForJoin(
-        std::move(hashers), {BIGINT()}, true, false, false, 1, pool());
+        std::move(hashers),
+        {BIGINT()},
+        pool(),
+        {.allowDuplicates = true, .minTableSizeForParallelJoinBuild = 1});
     copyVectorsToTable({batch}, 0, table.get());
 
     if (topTable == nullptr) {
@@ -1243,12 +1446,9 @@ TEST_P(HashTableTest, toStringSingleKey) {
 
   auto table = HashTable<false>::createForJoin(
       std::move(hashers),
-      {}, /*dependentTypes*/
-      true /*allowDuplicates*/,
-      false /*hasProbedFlag*/,
-      false /*hasCountFlag*/,
-      1 /*minTableSizeForParallelJoinBuild*/,
-      pool());
+      {},
+      pool(),
+      {.allowDuplicates = true, .minTableSizeForParallelJoinBuild = 1});
 
   auto data = makeRowVector({
       makeFlatVector<int64_t>(1'000, [](auto row) { return row / 2; }),
@@ -1273,12 +1473,9 @@ TEST_P(HashTableTest, toStringMultipleKeys) {
 
   auto table = HashTable<false>::createForJoin(
       std::move(hashers),
-      {}, /*dependentTypes*/
-      true /*allowDuplicates*/,
-      false /*hasProbedFlag*/,
-      false /*hasCountFlag*/,
-      1 /*minTableSizeForParallelJoinBuild*/,
-      pool());
+      {},
+      pool(),
+      {.allowDuplicates = true, .minTableSizeForParallelJoinBuild = 1});
 
   vector_size_t size = 1'000;
   auto data = makeRowVector({

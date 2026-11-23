@@ -25,6 +25,10 @@
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::tz {
+
+// Defined in the generated TimeZoneDatabase.cpp; declared locally as
+// TimeZoneMap.cpp does, since the table is not part of the public API.
+extern const std::vector<std::pair<int16_t, std::string>>& getTimeZoneEntries();
 namespace {
 
 using namespace std::chrono;
@@ -411,6 +415,41 @@ TEST(TimeZoneMapTest, invalid) {
   VELOX_ASSERT_THROW(getTimeZoneID("etc/GMT+300"), "Unknown time zone");
 }
 
+TEST(TimeZoneMapTest, outOfRangeID) {
+  // The database is a vector sized to the highest generated id plus one, so
+  // the id just past it indexes one past the end of the vector. Taken from the
+  // generated table, not from getTimeZoneIDs(): when the local tzdata lacks the
+  // last zone, that list ends at an earlier id and the probe would hit a hole
+  // the old guard already rejected.
+  const auto pastTheEnd =
+      static_cast<int16_t>(getTimeZoneEntries().back().first + 1);
+  for (const int16_t timeZoneID :
+       {pastTheEnd,
+        std::numeric_limits<int16_t>::max(),
+        int16_t{-1},
+        std::numeric_limits<int16_t>::min()}) {
+    SCOPED_TRACE(timeZoneID);
+    EXPECT_EQ(nullptr, locateZone(timeZoneID, false));
+    VELOX_ASSERT_THROW(
+        locateZone(timeZoneID, true), "Unable to resolve timeZoneID");
+    VELOX_ASSERT_THROW(
+        getTimeZoneName(timeZoneID), "Unable to resolve timeZoneID");
+  }
+
+  // An id that only fits in int64_t must not wrap into a valid int16_t id,
+  // from either side of the int16_t range.
+  const int64_t losAngeles = getTimeZoneID("America/Los_Angeles");
+  for (const int64_t wrapped :
+       {(int64_t{1} << 16) + losAngeles,
+        -(int64_t{1} << 16) + losAngeles,
+        std::numeric_limits<int64_t>::max(),
+        std::numeric_limits<int64_t>::min()}) {
+    SCOPED_TRACE(wrapped);
+    VELOX_ASSERT_THROW(
+        getTimeZoneName(wrapped), "Unable to resolve timeZoneID");
+  }
+}
+
 TEST(TimeZoneMapTest, getShortName) {
   auto toShortName = [&](std::string_view name, size_t ts) {
     const auto* tz = locateZone(name);
@@ -434,6 +473,12 @@ TEST(TimeZoneMapTest, getShortName) {
   // In "2024-01-01", it was not (UTC-08).
   ts = 1704096000000;
   EXPECT_EQ("PST", toShortName("America/Los_Angeles", ts));
+
+  // Older versions of the generated names table were missing Europe/Kyiv, so
+  // this threw instead of returning a name.
+  EXPECT_EQ("EET", toShortName("Europe/Kyiv", ts));
+  ts = 1721890800000;
+  EXPECT_EQ("EEST", toShortName("Europe/Kyiv", ts));
 }
 
 TEST(TimeZoneMapTest, getLongName) {
@@ -459,6 +504,32 @@ TEST(TimeZoneMapTest, getLongName) {
   // In "2024-01-01", it was not (UTC-08).
   ts = 1704096000000;
   EXPECT_EQ("Pacific Standard Time", toLongName("America/Los_Angeles", ts));
+
+  // Older versions of the generated names table were missing Europe/Kyiv, so
+  // this threw instead of returning a name.
+  EXPECT_EQ("Eastern European Standard Time", toLongName("Europe/Kyiv", ts));
+}
+
+TEST(TimeZoneMapTest, namesAvailableForEveryZone) {
+  // TimeZoneNames.cpp and TimeZoneDatabase.cpp are generated from independent
+  // sources - a JDK's DateFormatSymbols and Presto's zone-index.properties -
+  // so they can drift apart. A zone present only in the latter makes
+  // getShortName()/getLongName() throw at runtime.
+  for (const int16_t timeZoneID : getTimeZoneIDs()) {
+    const auto* timeZone = locateZone(timeZoneID, false);
+
+    // Not every ID resolves; zones absent from the local tzdata are skipped
+    // while the database is built.
+    if (timeZone == nullptr) {
+      continue;
+    }
+
+    SCOPED_TRACE(timeZone->name());
+    EXPECT_NO_THROW(
+        timeZone->getShortName(milliseconds{0}, TimeZone::TChoose::kEarliest));
+    EXPECT_NO_THROW(
+        timeZone->getLongName(milliseconds{0}, TimeZone::TChoose::kEarliest));
+  }
 }
 
 } // namespace

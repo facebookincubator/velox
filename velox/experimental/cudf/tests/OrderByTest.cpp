@@ -13,16 +13,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
+#include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryConfig.h"
+#include "velox/core/QueryCtx.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/exec/Driver.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/vector/VectorStream.h"
 
 #include <fmt/format.h>
 
@@ -38,6 +44,7 @@ class OrderByTest : public OperatorTestBase {
   void SetUp() override {
     OperatorTestBase::SetUp();
     filesystems::registerLocalFileSystem();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
     rng_.seed(123);
 
@@ -158,7 +165,8 @@ class OrderByTest : public OperatorTestBase {
       const std::vector<uint32_t>& sortingKeys) {
     {
       SCOPED_TRACE("run without spilling");
-      assertQueryOrdered(planNode, duckDbSql, sortingKeys);
+      AssertQueryBuilder(planNode, duckDbQueryRunner_)
+          .assertResults(duckDbSql, sortingKeys);
     }
   }
 
@@ -235,6 +243,63 @@ TEST_F(OrderByTest, singleKey) {
              .capturePlanNodeId(orderById)
              .planNode();
   runTest(plan, orderById, "SELECT * FROM tmp ORDER BY c0 NULLS FIRST", {0});
+}
+
+// A CudfOrderBy built for an OrderByNode is the node's only operator, so it
+// counts both the node's input and its output.
+TEST_F(OrderByTest, orderByNodeReportsBothPlanNodeBoundaries) {
+  auto data = makeRowVector({makeFlatVector<int64_t>(
+      100, [](vector_size_t row) { return 100 - row; })});
+  createDuckDbTable({data});
+  auto plan = PlanBuilder().values({data}).orderBy({"c0"}, false).planNode();
+
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .assertResults(
+              "SELECT * FROM tmp ORDER BY c0", std::vector<uint32_t>{0});
+
+  int numCudfOrderBy = 0;
+  for (const auto& pipeline : task->taskStats().pipelineStats) {
+    for (const auto& stats : pipeline.operatorStats) {
+      if (stats.operatorType == "CudfOrderBy") {
+        ++numCudfOrderBy;
+        EXPECT_EQ(stats.planNodeBoundary, core::PlanNode::Boundary::kBoth);
+      }
+    }
+  }
+  EXPECT_EQ(numCudfOrderBy, 1);
+}
+
+// A CudfOrderBy built for a MergeExchangeNode shares that node with the
+// exchange in front of it, which reports the node's input, so the sort reports
+// only the node's output.
+TEST_F(OrderByTest, mergeExchangeNodeReportsOutputPlanNodeBoundary) {
+  auto plan = PlanBuilder()
+                  .mergeExchange(
+                      rowType_,
+                      {"c0"},
+                      VectorSerde::kindName(VectorSerde::Kind::kPresto))
+                  .planFragment();
+  auto mergeExchangeNode =
+      std::dynamic_pointer_cast<const core::MergeExchangeNode>(plan.planNode);
+  ASSERT_NE(mergeExchangeNode, nullptr);
+  auto task = Task::create(
+      "test-merge-exchange-order-by",
+      std::move(plan),
+      /*destination=*/0,
+      core::QueryCtx::create(executor_.get()),
+      Task::ExecutionMode::kParallel);
+  DriverCtx driverCtx(
+      task,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      kUngroupedGroupId,
+      /*partitionId=*/0);
+
+  cudf_velox::CudfOrderBy orderBy(
+      /*operatorId=*/0, &driverCtx, mergeExchangeNode);
+  EXPECT_EQ(orderBy.planNodeBoundary(), core::PlanNode::Boundary::kOutput);
+  orderBy.close();
 }
 
 TEST_F(OrderByTest, multipleKeys) {
@@ -374,16 +439,15 @@ TEST_F(OrderByTest, outputBatchRows) {
           std::to_string(testData.maxOutBatchRows)},
          {facebook::velox::cudf_velox::CudfToVelox::kPassthroughMode,
           "false"}});
-    CursorParameters params;
-    params.planNode = plan;
-    params.queryCtx = queryCtx;
-    auto task = assertQueryOrdered(
-        params, "SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST", {0});
+    auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                    .queryCtx(queryCtx)
+                    .assertResults(
+                        "SELECT * FROM tmp ORDER BY c0 ASC NULLS LAST",
+                        std::vector<uint32_t>{0});
 
     EXPECT_EQ(
         testData.expectedOutputVectors,
-        toPlanStats(task->taskStats())
-            .at(orderById)
+        PlanNodeStats::extract(task->taskStats(), orderById)
             .operatorStats.at("CudfToVelox")
             ->outputVectors);
   }

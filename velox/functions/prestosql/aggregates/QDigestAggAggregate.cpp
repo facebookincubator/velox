@@ -221,6 +221,7 @@ void registerQDigestAggAggregate(
               "Unexpected number of arguments: {}", argTypes.size());
         }
       },
+      {.ignoreNullInputs = true},
       false /*registerCompanionFunctions*/,
       overwrite);
 }

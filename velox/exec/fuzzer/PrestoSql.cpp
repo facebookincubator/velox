@@ -521,6 +521,12 @@ void PrestoSqlPlanNodeVisitor::visit(
         sql << ")";
       }
       break;
+    case core::JoinType::kRightAnti:
+      // Build-side mirror of kAnti; only the NOT EXISTS form exists.
+      sql << " FROM " << *buildTableName << " WHERE NOT EXISTS (SELECT * FROM "
+          << *probeTableName << " WHERE " << joinConditionAsSql(node);
+      sql << ")";
+      break;
     default:
       VELOX_UNREACHABLE(
           "Unknown join type: {}", static_cast<int>(node.joinType()));
@@ -575,6 +581,12 @@ void PrestoSqlPlanNodeVisitor::visit(
     const core::SpatialJoinNode& node,
     core::PlanNodeVisitorContext& ctx) const {
   VELOX_NYI("SpatialJoinNode is not yet supported in SQL conversion");
+}
+
+void PrestoSqlPlanNodeVisitor::visit(
+    const core::VectorSearchJoinNode& node,
+    core::PlanNodeVisitorContext& ctx) const {
+  VELOX_NYI("VectorSearchJoinNode is not yet supported in SQL conversion");
 }
 
 std::optional<std::string> PrestoSqlPlanNodeVisitor::toSql(

@@ -26,7 +26,9 @@
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/JoinMaker.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
+#include "velox/exec/fuzzer/ScopedOOMInjector.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 DEFINE_int32(steps, 10, "Number of plans to generate and test.");
@@ -63,7 +65,7 @@ DEFINE_bool(
 
 DEFINE_double(
     filter_ratio,
-    0,
+    0.5,
     "The chance of testing plans with filters enabled.");
 
 namespace facebook::velox::exec {
@@ -381,6 +383,9 @@ RowVectorPtr JoinFuzzer::execute(
   for (const auto& [planNodeId, nodeSplits] : plan.splits) {
     builder.splits(planNodeId, nodeSplits);
   }
+  for (const auto& [key, value] : plan.queryConfigs) {
+    builder.config(key, value);
+  }
 
   if (plan.executionStrategy == core::ExecutionStrategy::kGrouped) {
     builder.executionStrategy(core::ExecutionStrategy::kGrouped);
@@ -433,7 +438,7 @@ RowVectorPtr JoinFuzzer::execute(
   // Wait for the task to be destroyed before start next query execution to
   // avoid the potential interference of the background activities across query
   // executions.
-  test::waitForAllTasksToBeDeleted();
+  test::TaskMonitor::waitForAllTasksDeleted();
   return result;
 }
 
@@ -455,6 +460,10 @@ std::optional<core::JoinType> tryFlipJoinType(core::JoinType joinType) {
       return core::JoinType::kLeftSemiFilter;
     case core::JoinType::kRightSemiProject:
       return core::JoinType::kLeftSemiProject;
+    case core::JoinType::kAnti:
+      return core::JoinType::kRightAnti;
+    case core::JoinType::kRightAnti:
+      return core::JoinType::kAnti;
     default:
       return std::nullopt;
   }
@@ -583,6 +592,17 @@ void addPlansForInputType(
     if (joinMaker.supportsFlippingMergeJoin()) {
       plans.push_back(
           joinMaker.makeMergeJoin(inputType, JoinMaker::JoinOrder::FLIPPED));
+    }
+    if (joinMaker.supportsStreamingLeftSide()) {
+      // Same plan, but the left side of an equal-key group is buffered whole
+      // rather than streamed, which the plans above do by default. The results
+      // have to be identical, so any difference the fuzzer reports is a bug in
+      // the streaming path.
+      auto buffered =
+          joinMaker.makeMergeJoin(inputType, JoinMaker::JoinOrder::NATURAL);
+      buffered.queryConfigs[core::QueryConfig::kMergeJoinStreamLeftSide] =
+          "false";
+      plans.push_back(std::move(buffered));
     }
   }
 
@@ -797,6 +817,16 @@ void JoinFuzzer::verify(core::JoinType joinType) {
       if (joinMaker.supportsFlippingMergeJoin()) {
         altPlans.push_back(joinMaker.makeMergeJoinWithTableScan(
             JoinMaker::JoinOrder::FLIPPED));
+      }
+      if (joinMaker.supportsStreamingLeftSide()) {
+        // As above, but over table scans, so the streaming path also gets
+        // compared against split-driven input and whatever spilling is
+        // injected.
+        auto buffered =
+            joinMaker.makeMergeJoinWithTableScan(JoinMaker::JoinOrder::NATURAL);
+        buffered.queryConfigs[core::QueryConfig::kMergeJoinStreamLeftSide] =
+            "false";
+        altPlans.push_back(std::move(buffered));
       }
     }
 

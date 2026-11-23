@@ -198,6 +198,20 @@ void SortedAggregations::clear() {
   inputData_->clear();
 }
 
+void SortedAggregations::eraseInputs(folly::Range<char**> groups) {
+  std::vector<char*> groupRows;
+  for (auto* group : groups) {
+    auto* accumulator = reinterpret_cast<RowPointers*>(group + offset_);
+    if (accumulator->size > 0) {
+      groupRows.resize(accumulator->size);
+      accumulator->read(folly::Range(groupRows.data(), groupRows.size()));
+      inputData_->eraseRows(folly::Range(groupRows.data(), groupRows.size()));
+    }
+    accumulator->free(*allocator_);
+    new (accumulator) RowPointers();
+  }
+}
+
 void SortedAggregations::initializeNewGroups(
     char** groups,
     folly::Range<const vector_size_t*> indices) {
@@ -214,13 +228,16 @@ void SortedAggregations::initializeNewGroups(
   }
 }
 
-void SortedAggregations::addInput(char** groups, const RowVectorPtr& input) {
+void SortedAggregations::addInput(
+    char** groups,
+    const RowVectorPtr& input,
+    const SelectivityVector& rows) {
   for (auto i = 0; i < inputs_.size(); ++i) {
     decodedInputs_[i].decode(*input->childAt(inputs_[i]));
   }
 
-  // Add all the rows into the RowContainer.
-  for (auto row = 0; row < input->size(); ++row) {
+  // Add the selected rows into the RowContainer.
+  rows.applyToSelected([&](vector_size_t row) {
     char* newRow = inputData_->newRow();
 
     for (auto i = 0; i < inputs_.size(); ++i) {
@@ -228,7 +245,7 @@ void SortedAggregations::addInput(char** groups, const RowVectorPtr& input) {
     }
 
     addNewRow(groups[row], newRow);
-  }
+  });
 }
 
 void SortedAggregations::addNewRow(char* group, char* newRow) {
@@ -311,7 +328,7 @@ vector_size_t SortedAggregations::extractSingleGroup(
   std::vector<vector_size_t> rowNumbers;
   if (aggregate.mask) {
     FlatVectorPtr<bool> mask = BaseVector::create<FlatVector<bool>>(
-        BOOLEAN(), numGroupRows, inputData_->pool());
+        BOOLEAN(), numGroupRows, inputData_->stringAllocator().pool());
     inputData_->extractColumn(
         groupRows.data(),
         numGroupRows,
@@ -342,7 +359,9 @@ vector_size_t SortedAggregations::extractSingleGroup(
       const auto columnIndex = inputMapping_[aggregate.inputs[i]];
       if (inputVectors[i] == nullptr) {
         inputVectors[i] = BaseVector::create(
-            inputData_->keyTypes()[columnIndex], numRows, inputData_->pool());
+            inputData_->keyTypes()[columnIndex],
+            numRows,
+            inputData_->stringAllocator().pool());
       } else {
         BaseVector::prepareForReuse(inputVectors[i], numRows);
       }
@@ -352,7 +371,6 @@ vector_size_t SortedAggregations::extractSingleGroup(
             groupRows.data(),
             folly::Range(rowNumbers.data(), rowNumbers.size()),
             columnIndex,
-            0, // resultOffset
             inputVectors[i]);
       } else {
         inputData_->extractColumn(

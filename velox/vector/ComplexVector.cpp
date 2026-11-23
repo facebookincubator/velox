@@ -257,11 +257,8 @@ void RowVector::setType(const TypePtr& type) {
   }
 }
 
-namespace {
+namespace detail {
 
-// Runs quick checks to determine whether input vector has only null values.
-// @return true if vector has only null values; false if vector may have
-// non-null values.
 bool isAllNullVector(const BaseVector& vector) {
   if (vector.typeKind() == TypeKind::UNKNOWN) {
     return true;
@@ -280,7 +277,8 @@ bool isAllNullVector(const BaseVector& vector) {
   }
   return false;
 }
-} // namespace
+
+} // namespace detail
 
 void RowVector::copyRanges(
     const BaseVector* source,
@@ -289,7 +287,7 @@ void RowVector::copyRanges(
     return;
   }
 
-  if (isAllNullVector(*source)) {
+  if (detail::isAllNullVector(*source)) {
     BaseVector::setNulls(mutableRawNulls(), ranges, true);
     return;
   }
@@ -453,7 +451,12 @@ VectorPtr RowVector::slice(vector_size_t offset, vector_size_t length) const {
   std::vector<VectorPtr> children(children_.size());
   for (int i = 0; i < children_.size(); ++i) {
     if (children_[i]) {
-      children[i] = children_[i]->slice(offset, length);
+      // A child can be shorter than this vector when the trailing rows are
+      // null. Slicing it past its end would read past its size.
+      const auto childSize = children_[i]->size();
+      const auto childOffset = std::min(offset, childSize);
+      children[i] = children_[i]->slice(
+          childOffset, std::min(length, childSize - childOffset));
     }
   }
   return std::make_shared<RowVector>(
@@ -477,14 +480,14 @@ BaseVector* RowVector::loadedVector() {
       hasLazy = true;
     }
   }
-  containsLazyNotLoaded_.store(hasLazy ? 1 : 0, std::memory_order_relaxed);
+  containsLazyNotLoaded_ = hasLazy ? 1 : 0;
   childrenLoaded_ = true;
   return this;
 }
 
 void RowVector::invalidateContainsLazyNotLoaded() const {
   childrenLoaded_ = false;
-  containsLazyNotLoaded_.store(-1, std::memory_order_relaxed);
+  containsLazyNotLoaded_ = -1;
 }
 
 void RowVector::computeContainsLazyNotLoaded() const {
@@ -495,14 +498,14 @@ void RowVector::computeContainsLazyNotLoaded() const {
       break;
     }
   }
-  containsLazyNotLoaded_.store(result, std::memory_order_relaxed);
+  containsLazyNotLoaded_ = result;
 }
 
 bool RowVector::containsLazyNotLoaded() const {
-  if (containsLazyNotLoaded_.load(std::memory_order_relaxed) < 0) {
+  if (containsLazyNotLoaded_ < 0) {
     computeContainsLazyNotLoaded();
   }
-  return containsLazyNotLoaded_.load(std::memory_order_relaxed) == 1;
+  return containsLazyNotLoaded_ == 1;
 }
 
 void ArrayVectorBase::copyRangesImpl(
@@ -510,7 +513,7 @@ void ArrayVectorBase::copyRangesImpl(
     const folly::Range<const BaseVector::CopyRange*>& ranges,
     VectorPtr* targetValues,
     VectorPtr* targetKeys) {
-  if (isAllNullVector(*source)) {
+  if (detail::isAllNullVector(*source)) {
     BaseVector::setNulls(mutableRawNulls(), ranges, true);
     return;
   }
@@ -590,6 +593,11 @@ void ArrayVectorBase::copyRangesImpl(
           }
         });
     outRanges.reserve(totalCount);
+    // Current run of consecutive source rows, appended to 'outRanges' only when
+    // the run breaks.  Deliberately a local, not 'outRanges.back()', so it
+    // stays register-resident in the hot loop; do not simplify back to
+    // '.back()'.
+    CopyRange run{};
     applyToEachRow(ranges, [&](auto targetIndex, auto sourceIndex) {
       if (source->isNullAt(sourceIndex)) {
         setNull(targetIndex, true);
@@ -605,12 +613,13 @@ void ArrayVectorBase::copyRangesImpl(
 
           // If we're copying two adjacent ranges, merge them.  This only
           // works if they're consecutive.
-          if (!outRanges.empty() &&
-              (outRanges.back().sourceIndex + outRanges.back().count ==
-               copyOffset)) {
-            outRanges.back().count += copySize;
+          if (run.count != 0 && run.sourceIndex + run.count == copyOffset) {
+            run.count += copySize;
           } else {
-            outRanges.push_back({copyOffset, childSize, copySize});
+            if (run.count != 0) {
+              outRanges.push_back(run);
+            }
+            run = {copyOffset, childSize, copySize};
           }
         }
 
@@ -619,6 +628,10 @@ void ArrayVectorBase::copyRangesImpl(
         childSize = checkedPlus<vector_size_t>(childSize, copySize);
       }
     });
+
+    if (run.count != 0) {
+      outRanges.push_back(run);
+    }
 
     targetValues->get()->resize(childSize);
     targetValues->get()->copyRanges(sourceValues, outRanges);
@@ -826,12 +839,20 @@ VectorPtr pushDictionaryToRowVectorLeavesImpl(
     }
     case VectorEncoding::Simple::ROW: {
       VELOX_CHECK_EQ(values->typeKind(), TypeKind::ROW);
+      // Re-index the struct's own nulls through the wrappers to align with the
+      // wrapped children. Needed whenever the struct has nulls (not only when a
+      // wrapper does), else a null-free dictionary leaves them misaligned.
       auto nulls = values->nulls();
-      for (auto& wrapper : wrappers) {
+      bool anyWrapperNulls = false;
+      for (const auto& wrapper : wrappers) {
         if (wrapper.encoded->nulls()) {
-          nulls = combineNulls(wrappers, size, values->rawNulls(), pool);
+          anyWrapperNulls = true;
           break;
         }
+      }
+      if (!wrappers.empty() &&
+          (values->rawNulls() != nullptr || anyWrapperNulls)) {
+        nulls = combineNulls(wrappers, size, values->rawNulls(), pool);
       }
       auto children = values->asUnchecked<RowVector>()->children();
       for (auto& child : children) {
@@ -1610,7 +1631,92 @@ void MapVector::validate(const VectorValidateOptions& options) const {
 void MapVector::copyRanges(
     const BaseVector* source,
     const folly::Range<const CopyRange*>& ranges) {
-  copyRangesImpl(source, ranges, &values_, &keys_);
+  // An UNKNOWN or null constant source may have no map under it, so check for
+  // it first.
+  if (detail::isAllNullVector(*source)) {
+    BaseVector::setNulls(mutableRawNulls(), ranges, true);
+    return;
+  }
+
+  switch (source->wrappedVector()->encoding()) {
+    case VectorEncoding::Simple::MAP:
+      copyRangesImpl(source, ranges, &values_, &keys_);
+      return;
+    case VectorEncoding::Simple::FLAT_MAP:
+      copyFlatMapRanges(source, ranges);
+      return;
+    default:
+      VELOX_FAIL(
+          "MapVector::copyRanges expects a map source, got {}.",
+          source->toString());
+  }
+}
+
+// The entries of each copied row are appended after the existing ones. Each
+// entry comes from the values vector of its key, so its value is copied with a
+// range of its own.
+void MapVector::copyFlatMapRanges(
+    const BaseVector* source,
+    const folly::Range<const CopyRange*>& ranges) {
+  const auto* flatMap = source->wrappedVector()->asUnchecked<FlatMapVector>();
+  const auto numKeys = flatMap->numDistinctKeys();
+
+  // Keep the existing entries; new ones are appended after them.
+  BaseVector::ensureWritable(
+      SelectivityVector::empty(), keys_->type(), pool(), keys_);
+  BaseVector::ensureWritable(
+      SelectivityVector::empty(), values_->type(), pool(), values_);
+
+  const bool setNotNulls = mayHaveNulls() || source->mayHaveNulls();
+  auto* rawOffsets = mutableOffsets(length_)->asMutable<vector_size_t>();
+  auto* rawSizes = mutableSizes(length_)->asMutable<vector_size_t>();
+
+  // Next free position in keys_ and values_.
+  vector_size_t numEntries = keys_->size();
+
+  // Where each new entry's key comes from in the distinct keys.
+  std::vector<CopyRange> keyRanges;
+
+  // Where each new entry's value comes from, per key slot.
+  std::vector<std::vector<CopyRange>> valueRanges(numKeys);
+
+  // First pass: lay out the entries of each copied row.
+  applyToEachRow(ranges, [&](auto targetIndex, auto sourceIndex) {
+    if (source->isNullAt(sourceIndex)) {
+      setNull(targetIndex, true);
+      return;
+    }
+    if (setNotNulls) {
+      setNull(targetIndex, false);
+    }
+
+    // Row in the flat map under any dictionary or constant wrapping.
+    const auto row = source->wrappedIndex(sourceIndex);
+    rawOffsets[targetIndex] = numEntries;
+
+    // Each key present in this row becomes one entry.
+    for (column_index_t slot = 0; slot < numKeys; ++slot) {
+      if (flatMap->isInMap(slot, row)) {
+        keyRanges.push_back({static_cast<vector_size_t>(slot), numEntries, 1});
+        valueRanges[slot].push_back({row, numEntries, 1});
+        ++numEntries;
+      }
+    }
+    rawSizes[targetIndex] = numEntries - rawOffsets[targetIndex];
+  });
+
+  // Second pass: copy the keys and values into place.
+  keys_->resize(numEntries);
+  values_->resize(numEntries);
+
+  keys_->copyRanges(flatMap->distinctKeys().get(), keyRanges);
+
+  // Each key slot's values live in their own vector.
+  for (column_index_t slot = 0; slot < numKeys; ++slot) {
+    if (!valueRanges[slot].empty()) {
+      values_->copyRanges(flatMap->mapValuesAt(slot).get(), valueRanges[slot]);
+    }
+  }
 }
 
 MapVectorPtr MapVector::update(
@@ -1626,7 +1732,10 @@ MapVectorPtr MapVector::update(
     inputs.push_back(&other);
   }
   SelectivityVector allRows(size(), true);
-  return mapConcat(pool(), type(), inputs, allRows, {});
+  auto result = std::dynamic_pointer_cast<MapVector>(
+      mapConcat(pool(), type(), inputs, allRows, {}));
+  VELOX_CHECK_NOT_NULL(result);
+  return result;
 }
 
 MapVectorPtr MapVector::update(const std::vector<MapVectorPtr>& others) const {

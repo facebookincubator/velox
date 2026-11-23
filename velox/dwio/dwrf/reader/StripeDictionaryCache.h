@@ -19,7 +19,6 @@
 #include <folly/Function.h>
 
 #include "folly/synchronization/CallOnce.h"
-#include "velox/common/base/GTestMacros.h"
 #include "velox/dwio/common/IntDecoder.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/vector/BaseVector.h"
@@ -58,8 +57,6 @@ class StripeDictionaryCache {
       std::unique_ptr<DictionaryEntry>,
       EncodingKeyHash>
       intDictionaryFactories_;
-
-  VELOX_FRIEND_TEST(StripeDictionaryCacheTest, RegisterDictionary);
 };
 
 } // namespace facebook::velox::dwrf

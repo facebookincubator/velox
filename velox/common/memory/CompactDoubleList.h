@@ -25,8 +25,11 @@ namespace facebook::velox {
 /// HashStringAllocator so that we get a minimum allocation payload size of 16
 /// bytes. (12 bits for the links, 4 for trailer).
 ///
+/// Packed to alignment 1 because HashStringAllocator places it at any byte
+/// offset.
+///
 /// NOTE: this class is not thread-safe.
-class CompactDoubleList {
+class __attribute__((__packed__)) CompactDoubleList {
  public:
   CompactDoubleList() {
     setNext(this);
@@ -81,11 +84,15 @@ class CompactDoubleList {
   static constexpr uint8_t kPointerSignificantBits = 48;
 
   void setNext(CompactDoubleList* next) {
-    storePointer(next, nextLow_, nextHigh_);
+    const auto data = pointerData(next);
+    nextLow_ = static_cast<uint32_t>(data);
+    nextHigh_ = static_cast<uint16_t>(data >> 32);
   }
 
   void setPrevious(CompactDoubleList* previous) {
-    storePointer(previous, previousLow_, previousHigh_);
+    const auto data = pointerData(previous);
+    previousLow_ = static_cast<uint32_t>(data);
+    previousHigh_ = static_cast<uint16_t>(data >> 32);
   }
 
   CompactDoubleList* loadPointer(uint32_t low, uint16_t high) const {
@@ -93,14 +100,10 @@ class CompactDoubleList {
         low | (static_cast<uint64_t>(high) << 32));
   }
 
-  void storePointer(CompactDoubleList* pointer, uint32_t& low, uint16_t& high) {
-    VELOX_DCHECK_EQ(
-        reinterpret_cast<uint64_t>(pointer) &
-            ~bits::lowMask(kPointerSignificantBits),
-        0);
+  static uint64_t pointerData(CompactDoubleList* pointer) {
     const uint64_t data = reinterpret_cast<uint64_t>(pointer);
-    low = static_cast<uint32_t>(data);
-    high = static_cast<uint16_t>(data >> 32);
+    VELOX_DCHECK_EQ(data & ~bits::lowMask(kPointerSignificantBits), 0);
+    return data;
   }
 
   // 12 bytes. Stores 2 48 bit pointers.

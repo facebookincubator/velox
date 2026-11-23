@@ -15,7 +15,11 @@
  */
 
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
+
+#include <gtest/gtest.h>
+
 #include "velox/exec/Cursor.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 
 namespace facebook::velox::exec::test {
 
@@ -188,34 +192,37 @@ AssertQueryBuilder& AssertQueryBuilder::addSplitWithSequence(
   return *this;
 }
 
-std::shared_ptr<Task> AssertQueryBuilder::assertResults(
+TaskPtr AssertQueryBuilder::assertResults(
     const std::string& duckDbSql,
     const std::optional<std::vector<uint32_t>>& sortingKeys) {
   VELOX_CHECK_NOT_NULL(duckDbQueryRunner_);
 
   auto [cursor, results] = readCursor();
-  if (results.empty()) {
-    test::assertResults(results, ROW({}, {}), duckDbSql, *duckDbQueryRunner_);
-  } else if (sortingKeys.has_value()) {
-    test::assertResultsOrdered(
+  SCOPED_TRACE(
+      fmt::format(
+          "DuckDB query: {}\nNote: DuckDB only supports timestamps of millisecond "
+          "precision. If this test involves timestamp inputs, please make sure you "
+          "use the right precision.",
+          duckDbSql));
+  const auto type = results.empty() ? ROW({}) : results[0]->rowType();
+  if (sortingKeys.has_value() && !results.empty()) {
+    velox::test::VectorAssertions::equalOrderedBy(
+        duckDbQueryRunner_->executeOrdered(duckDbSql, type),
+        type,
         results,
-        asRowType(results[0]->type()),
-        duckDbSql,
-        *duckDbQueryRunner_,
         sortingKeys.value());
   } else {
-    test::assertResults(
-        results, asRowType(results[0]->type()), duckDbSql, *duckDbQueryRunner_);
+    velox::test::VectorAssertions::equalMultisets(
+        duckDbQueryRunner_->execute(duckDbSql, type), type, results);
   }
   return cursor->task();
 }
 
-std::shared_ptr<Task> AssertQueryBuilder::assertResults(
-    const RowVectorPtr& expected) {
+TaskPtr AssertQueryBuilder::assertResults(const RowVectorPtr& expected) {
   return assertResults(std::vector<RowVectorPtr>{expected});
 }
 
-std::shared_ptr<Task> AssertQueryBuilder::assertResults(
+TaskPtr AssertQueryBuilder::assertResults(
     const std::vector<RowVectorPtr>& expected) {
   auto [cursor, results] = readCursor();
 
@@ -223,29 +230,48 @@ std::shared_ptr<Task> AssertQueryBuilder::assertResults(
   return cursor->task();
 }
 
-std::shared_ptr<Task> AssertQueryBuilder::assertEmptyResults() {
+TaskPtr AssertQueryBuilder::assertResults(
+    std::initializer_list<Variant> expected) {
   auto [cursor, results] = readCursor();
-  test::assertEmptyResults(results);
+
+  assertEqualResults(
+      MaterializedRowMultiset{MaterializedRow(expected)},
+      params_.planNode->outputType(),
+      results);
   return cursor->task();
 }
 
-std::shared_ptr<Task> AssertQueryBuilder::assertTypeAndNumRows(
+TaskPtr AssertQueryBuilder::assertEmptyResults() {
+  size_t numRows{0};
+  auto cursor = createCursor(/*copyResult=*/true);
+  readCursor(
+      *cursor, [&](const RowVectorPtr& vector) { numRows += vector->size(); });
+  EXPECT_EQ(0, numRows) << "Expected empty result but received " << numRows
+                        << " rows";
+  return cursor->task();
+}
+
+TaskPtr AssertQueryBuilder::assertTypeAndNumRows(
     const TypePtr& expectedType,
     vector_size_t expectedNumRows) {
-  auto [cursor, results] = readCursor();
-
-  assertEqualTypeAndNumRows(expectedType, expectedNumRows, results);
+  size_t numRows{0};
+  auto cursor = createCursor(/*copyResult=*/true);
+  readCursor(*cursor, [&](const RowVectorPtr& vector) {
+    EXPECT_EQ(*expectedType, *vector->type());
+    numRows += vector->size();
+  });
+  EXPECT_EQ(expectedNumRows, numRows);
   return cursor->task();
 }
 
 RowVectorPtr AssertQueryBuilder::copyResults(memory::MemoryPool* pool) {
-  std::shared_ptr<Task> unused;
+  TaskPtr unused;
   return copyResults(pool, unused);
 }
 
 RowVectorPtr AssertQueryBuilder::copyResults(
     memory::MemoryPool* pool,
-    std::shared_ptr<Task>& task) {
+    TaskPtr& task) {
   auto [cursor, results] = readCursor();
 
   if (results.empty()) {
@@ -270,6 +296,25 @@ RowVectorPtr AssertQueryBuilder::copyResults(
   return copy;
 }
 
+Variant AssertQueryBuilder::copySingleValue() {
+  VELOX_CHECK_EQ(
+      params_.planNode->outputType()->size(),
+      1,
+      "Query must return a single column");
+
+  auto [cursor, results] = readCursor();
+  RowVectorPtr batch;
+  vector_size_t numRows{0};
+  for (const auto& result : results) {
+    if (result->size() > 0) {
+      batch = result;
+      numRows += result->size();
+    }
+  }
+  VELOX_CHECK_EQ(numRows, 1, "Query must return a single row");
+  return velox::test::VectorAssertions::toVariantRows(batch)[0][0];
+}
+
 std::vector<RowVectorPtr> AssertQueryBuilder::copyResultBatches(
     memory::MemoryPool* pool) {
   auto [cursor, results] = readCursor();
@@ -289,23 +334,41 @@ std::vector<RowVectorPtr> AssertQueryBuilder::copyResultBatches(
   return copies;
 }
 
-uint64_t AssertQueryBuilder::countResults(std::shared_ptr<Task>& task) {
-  auto [cursor, results] = readCursor();
-  uint64_t count = 0;
-  for (const auto& result : results) {
-    count += result->size();
-  }
+std::vector<RowVectorPtr> AssertQueryBuilder::results(TaskPtr& task) {
+  auto cursor = createCursor(/*copyResult=*/false);
+  // Declared after 'cursor' so that it is destroyed first, also on exception.
+  std::vector<RowVectorPtr> results;
+  readCursor(
+      *cursor, [&](const RowVectorPtr& vector) { results.push_back(vector); });
+  task = cursor->task();
+  return results;
+}
+
+uint64_t AssertQueryBuilder::countResults(TaskPtr& task) {
+  uint64_t count{0};
+  auto cursor = createCursor(/*copyResult=*/true);
+  readCursor(
+      *cursor, [&](const RowVectorPtr& vector) { count += vector->size(); });
   task = cursor->task();
   return count;
 }
 
 uint64_t AssertQueryBuilder::countResults() {
-  std::shared_ptr<Task> task;
+  TaskPtr task;
   return countResults(task);
 }
 
 std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
 AssertQueryBuilder::readCursor() {
+  auto cursor = createCursor(/*copyResult=*/true);
+  // Declared after 'cursor' so that it is destroyed first, also on exception.
+  std::vector<RowVectorPtr> results;
+  readCursor(
+      *cursor, [&](const RowVectorPtr& vector) { results.push_back(vector); });
+  return {std::move(cursor), std::move(results)};
+}
+
+std::unique_ptr<TaskCursor> AssertQueryBuilder::createCursor(bool copyResult) {
   VELOX_CHECK_NOT_NULL(params_.planNode);
 
   if (!configs_.empty() || !connectorSessionProperties_.empty()) {
@@ -335,8 +398,16 @@ AssertQueryBuilder::readCursor() {
     }
   }
 
-  return test::readCursorAsync(
-      params_,
+  auto params = params_;
+  params.copyResult = copyResult;
+  return TaskCursor::create(params);
+}
+
+void AssertQueryBuilder::readCursor(
+    TaskCursor& cursor,
+    const std::function<void(const RowVectorPtr&)>& onBatch) {
+  test::readCursorAsync(
+      cursor,
       [&](exec::TaskCursor* taskCursor) {
         if (taskCursor->noMoreSplits()) {
           return ContinueFuture::makeEmpty();
@@ -384,6 +455,7 @@ AssertQueryBuilder::readCursor() {
         }
         return ContinueFuture::makeEmpty();
       },
-      maxWaitMicros_);
+      maxWaitMicros_,
+      onBatch);
 }
 } // namespace facebook::velox::exec::test

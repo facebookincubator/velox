@@ -121,6 +121,11 @@ class DuckQueryRunnerToSqlPlanNodeVisitor : public PrestoSqlPlanNodeVisitor {
     VELOX_NYI();
   }
 
+  void visit(const core::VectorSearchJoinNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
   void visit(const core::OrderByNode&, core::PlanNodeVisitorContext&)
       const override {
     VELOX_NYI();
@@ -188,6 +193,21 @@ class DuckQueryRunnerToSqlPlanNodeVisitor : public PrestoSqlPlanNodeVisitor {
   }
 
   void visit(const core::MixedUnionNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
+  void visit(const core::FixedPointNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
+  void visit(const core::StateSourceNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
+  void visit(const core::StateHashJoinNode&, core::PlanNodeVisitorContext&)
       const override {
     VELOX_NYI();
   }

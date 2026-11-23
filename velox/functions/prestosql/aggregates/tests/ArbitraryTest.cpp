@@ -38,7 +38,8 @@ class ArbitraryTest : public AggregationTestBase {
   //   second = (possibly encoded) data fed to Velox.
   // When both are the same vector the caller can return {v, v}.
   void testClusteredInput(
-      std::function<std::pair<RowVectorPtr, RowVectorPtr>(int batchSize, int i)>
+      const std::function<
+          std::pair<RowVectorPtr, RowVectorPtr>(int batchSize, int i)>&
           makeBatch) {
     constexpr int kSize = 1000;
     for (int batchRows : {kSize, 13}) {
@@ -51,16 +52,32 @@ class ArbitraryTest : public AggregationTestBase {
         encodedData.push_back(encoded);
       }
       createDuckDbTable(flatData);
+      // A single batch cannot have a group spanning batches, so the
+      // clustered-input fast path is available and gets covered. With 13-row
+      // batches the 17-row groups straddle batch boundaries, so it must stay
+      // off and the copying fallback is covered instead.
+      const bool noGroupsSpanBatches = batchRows >= kSize;
       for (bool mask : {false, true}) {
         auto builder = PlanBuilder().values(encodedData);
         std::string expected;
         if (mask) {
-          builder.partialStreamingAggregation(
-              {"c0"}, {"arbitrary(c1)"}, {"c2"});
+          builder.streamingAggregation(
+              {"c0"},
+              {"arbitrary(c1)"},
+              {"c2"},
+              core::AggregationNode::Step::kPartial,
+              /*ignoreNullKeys=*/false,
+              noGroupsSpanBatches);
           expected =
               "select c0, first(c1) filter (where c2 and c1 is not null) from tmp group by 1";
         } else {
-          builder.partialStreamingAggregation({"c0"}, {"arbitrary(c1)"});
+          builder.streamingAggregation(
+              {"c0"},
+              {"arbitrary(c1)"},
+              {},
+              core::AggregationNode::Step::kPartial,
+              /*ignoreNullKeys=*/false,
+              noGroupsSpanBatches);
           expected =
               "select c0, first(c1) filter (where c1 is not null) from tmp group by 1";
         }
@@ -109,40 +126,41 @@ TEST_F(ArbitraryTest, noNulls) {
   // We do not test with TableScan because having two input splits makes the
   // result non-deterministic.
   // Global aggregation.
-  testAggregations(
-      vectors,
-      {},
-      aggregates,
-      "SELECT first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates(aggregates)
+      .assertResults(
+          "SELECT first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp");
 
   // Group by aggregation.
-  testAggregations(
-      [&](PlanBuilder& builder) {
-        builder.values(vectors).project(
-            {"c0 % 10", "c1", "c2", "c3", "c4", "c5", "c6"});
-      },
-      {"p0"},
-      aggregates,
-      "SELECT c0 % 10, first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) {
+        builder.project({"c0 % 10", "c1", "c2", "c3", "c4", "c5", "c6"});
+      })
+      .groupBy({"p0"})
+      .aggregates(aggregates)
+      .assertResults(
+          "SELECT c0 % 10, first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp GROUP BY 1");
 
   // encodings: use filter to wrap aggregation inputs in a dictionary.
-  testAggregations(
-      [&](PlanBuilder& builder) {
-        builder.values(vectors)
-            .filter("c0 % 2 = 0")
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) {
+        builder.filter("c0 % 2 = 0")
             .project({"c0 % 10", "c1", "c2", "c3", "c4", "c5", "c6"});
-      },
-      {"p0"},
-      aggregates,
-      "SELECT c0 % 10, first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp WHERE c0 % 2 = 0 GROUP BY 1");
+      })
+      .groupBy({"p0"})
+      .aggregates(aggregates)
+      .assertResults(
+          "SELECT c0 % 10, first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp WHERE c0 % 2 = 0 GROUP BY 1");
 
-  testAggregations(
-      [&](PlanBuilder& builder) {
-        builder.values(vectors).filter("c0 % 2 = 0");
-      },
-      {},
-      aggregates,
-      "SELECT first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp WHERE c0 % 2 = 0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) { builder.filter("c0 % 2 = 0"); })
+      .aggregates(aggregates)
+      .assertResults(
+          "SELECT first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp WHERE c0 % 2 = 0");
 }
 
 TEST_F(ArbitraryTest, nulls) {
@@ -165,18 +183,18 @@ TEST_F(ArbitraryTest, nulls) {
   // We do not test with TableScan because having two input splits makes the
   // result non-deterministic. Also, unknown type is not supported in Writer
   // yet. Global aggregation.
-  testAggregations(
-      vectors,
-      {},
-      {"arbitrary(c1)", "arbitrary(c2)", "arbitrary(c3)"},
-      "SELECT * FROM( VALUES (4, 0.50, NULL)) AS t");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"arbitrary(c1)", "arbitrary(c2)", "arbitrary(c3)"})
+      .assertResults("SELECT * FROM( VALUES (4, 0.50, NULL)) AS t");
 
   // Group by aggregation.
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"arbitrary(c1)", "arbitrary(c2)", "arbitrary(c3)"},
-      "SELECT * FROM(VALUES (1, NULL, 0.50, NULL), (2, 4, NULL, NULL), (3, 5, 0.25, NULL)) AS t");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)", "arbitrary(c2)", "arbitrary(c3)"})
+      .assertResults(
+          "SELECT * FROM(VALUES (1, NULL, 0.50, NULL), (2, 4, NULL, NULL), (3, 5, 0.25, NULL)) AS t");
 }
 
 TEST_F(ArbitraryTest, varchar) {
@@ -186,36 +204,37 @@ TEST_F(ArbitraryTest, varchar) {
 
   // We do not test with TableScan because having two input splits makes the
   // result non-deterministic.
-  testAggregations(
-      [&](PlanBuilder& builder) {
-        builder.values(vectors).project({"c0 % 11", "c1"});
-      },
-      {"p0"},
-      {"arbitrary(c1)"},
-      "SELECT c0 % 11, first(c1) FROM tmp WHERE c1 IS NOT NULL GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation(
+          [&](auto& builder) { builder.project({"c0 % 11", "c1"}); })
+      .groupBy({"p0"})
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(
+          "SELECT c0 % 11, first(c1) FROM tmp WHERE c1 IS NOT NULL GROUP BY 1");
 
-  testAggregations(
-      vectors,
-      {},
-      {"arbitrary(c1)"},
-      "SELECT first(c1) FROM tmp WHERE c1 IS NOT NULL");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"arbitrary(c1)"})
+      .assertResults("SELECT first(c1) FROM tmp WHERE c1 IS NOT NULL");
 
   // encodings: use filter to wrap aggregation inputs in a dictionary.
-  testAggregations(
-      [&](PlanBuilder& builder) {
-        builder.values(vectors).filter("c0 % 2 = 0").project({"c0 % 11", "c1"});
-      },
-      {"p0"},
-      {"arbitrary(c1)"},
-      "SELECT c0 % 11, first(c1) FROM tmp WHERE c0 % 2 = 0 AND c1 IS NOT NULL GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) {
+        builder.filter("c0 % 2 = 0").project({"c0 % 11", "c1"});
+      })
+      .groupBy({"p0"})
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(
+          "SELECT c0 % 11, first(c1) FROM tmp WHERE c0 % 2 = 0 AND c1 IS NOT NULL GROUP BY 1");
 
-  testAggregations(
-      [&](PlanBuilder& builder) {
-        builder.values(vectors).filter("c0 % 2 = 0");
-      },
-      {},
-      {"arbitrary(c1)"},
-      "SELECT first(c1) FROM tmp WHERE c0 % 2 = 0 AND c1 IS NOT NULL");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) { builder.filter("c0 % 2 = 0"); })
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(
+          "SELECT first(c1) FROM tmp WHERE c0 % 2 = 0 AND c1 IS NOT NULL");
 }
 
 TEST_F(ArbitraryTest, varcharConstAndNulls) {
@@ -227,17 +246,16 @@ TEST_F(ArbitraryTest, varcharConstAndNulls) {
 
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      {"arbitrary(c1)", "arbitrary(c2)"},
-      "SELECT first(c1), first(c2) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"arbitrary(c1)", "arbitrary(c2)"})
+      .assertResults("SELECT first(c1), first(c2) FROM tmp");
 
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"arbitrary(c1)", "arbitrary(c2)"},
-      "SELECT c0, first(c1), first(c2) FROM tmp group by c0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)", "arbitrary(c2)"})
+      .assertResults("SELECT c0, first(c1), first(c2) FROM tmp group by c0");
 }
 
 TEST_F(ArbitraryTest, numericConstAndNulls) {
@@ -248,17 +266,16 @@ TEST_F(ArbitraryTest, numericConstAndNulls) {
 
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      {"arbitrary(c1)", "arbitrary(c2)"},
-      "SELECT first(c1), first(c2) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"arbitrary(c1)", "arbitrary(c2)"})
+      .assertResults("SELECT first(c1), first(c2) FROM tmp");
 
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"arbitrary(c1)", "arbitrary(c2)"},
-      "SELECT c0, first(c1), first(c2) FROM tmp group by c0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)", "arbitrary(c2)"})
+      .assertResults("SELECT c0, first(c1), first(c2) FROM tmp group by c0");
 }
 
 TEST_F(ArbitraryTest, boolean) {
@@ -283,7 +300,11 @@ TEST_F(ArbitraryTest, boolean) {
       makeNullableFlatVector<bool>({true, false, std::nullopt, false}),
   });
 
-  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(expectedResult);
 
   // Global aggregation.
   auto plan = PlanBuilder()
@@ -293,7 +314,10 @@ TEST_F(ArbitraryTest, boolean) {
 
   assertQuery(plan, "SELECT true");
 
-  testAggregations({data}, {}, {"arbitrary(c2)"}, "SELECT null");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"arbitrary(c2)"})
+      .assertResults("SELECT null");
 }
 
 TEST_F(ArbitraryTest, timestamp) {
@@ -322,7 +346,11 @@ TEST_F(ArbitraryTest, timestamp) {
            Timestamp(100, 4)}),
   });
 
-  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(expectedResult);
 
   // Global aggregation.
   auto plan = PlanBuilder()
@@ -330,14 +358,12 @@ TEST_F(ArbitraryTest, timestamp) {
                   .singleAggregation({}, {"arbitrary(c1)"})
                   .planNode();
 
-  auto result = readSingleValue(plan);
-  ASSERT_TRUE(!result.isNull());
-  ASSERT_EQ(result.kind(), TypeKind::TIMESTAMP);
+  AssertQueryBuilder(plan).assertSingleResult(Timestamp(100, 1));
 
-  auto timestamp = result.value<Timestamp>();
-  ASSERT_EQ(timestamp, Timestamp(100, 1));
-
-  testAggregations({data}, {}, {"arbitrary(c2)"}, "SELECT null");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"arbitrary(c2)"})
+      .assertResults("SELECT null");
 }
 
 TEST_F(ArbitraryTest, date) {
@@ -356,7 +382,11 @@ TEST_F(ArbitraryTest, date) {
       makeNullableFlatVector<int32_t>({125, 126, std::nullopt, 128}, DATE()),
   });
 
-  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(expectedResult);
 
   // Global aggregation.
   auto plan = PlanBuilder()
@@ -364,14 +394,12 @@ TEST_F(ArbitraryTest, date) {
                   .singleAggregation({}, {"arbitrary(c1)"})
                   .planNode();
 
-  auto result = readSingleValue(plan);
-  ASSERT_TRUE(!result.isNull());
-  ASSERT_EQ(result.kind(), TypeKind::INTEGER);
+  AssertQueryBuilder(plan).assertSingleResult(int32_t{125});
 
-  auto date = result.value<int32_t>();
-  ASSERT_EQ(date, 125);
-
-  testAggregations({data}, {}, {"arbitrary(c2)"}, "SELECT null");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"arbitrary(c2)"})
+      .assertResults("SELECT null");
 }
 
 TEST_F(ArbitraryTest, interval) {
@@ -391,7 +419,11 @@ TEST_F(ArbitraryTest, interval) {
           {125, 126, std::nullopt, 128}, INTERVAL_DAY_TIME()),
   });
 
-  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(expectedResult);
 
   // Global aggregation.
   auto plan = PlanBuilder()
@@ -399,10 +431,12 @@ TEST_F(ArbitraryTest, interval) {
                   .singleAggregation({}, {"arbitrary(c1)"})
                   .planNode();
 
-  auto interval = readSingleValue(plan);
-  ASSERT_EQ(interval.value<int64_t>(), 125);
+  AssertQueryBuilder(plan).assertSingleResult(int64_t{125});
 
-  testAggregations({data}, {}, {"arbitrary(c2)"}, "SELECT null");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"arbitrary(c2)"})
+      .assertResults("SELECT null");
 }
 
 TEST_F(ArbitraryTest, longDecimal) {
@@ -430,7 +464,11 @@ TEST_F(ArbitraryTest, longDecimal) {
           DECIMAL(38, 8)),
   });
 
-  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(ArbitraryTest, shortDecimal) {
@@ -458,7 +496,11 @@ TEST_F(ArbitraryTest, shortDecimal) {
           DECIMAL(15, 2)),
   });
 
-  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(ArbitraryTest, ipAddress) {
@@ -486,7 +528,11 @@ TEST_F(ArbitraryTest, ipAddress) {
             ipaddress::tryGetIPv6asInt128FromString("172.16.0.1").value()},
            IPADDRESS())});
 
-  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(expectedResult);
 }
 
 class ArbitraryWindowTest : public WindowTestBase {};
@@ -541,9 +587,9 @@ TEST_F(ArbitraryTest, spilling) {
   exec::TestScopedSpillInjection scopedSpillInjection(100);
   spillDirectory = TempDirectoryPath::create();
   builder.spillDirectory(spillDirectory->getPath())
-      .config(core::QueryConfig::kSpillEnabled, "true")
-      .config(core::QueryConfig::kAggregationSpillEnabled, "true")
-      .config(core::QueryConfig::kSpillNumPartitionBits, "0");
+      .config(core::QueryConfig::kSpillEnabled, true)
+      .config(core::QueryConfig::kAggregationSpillEnabled, true)
+      .config(core::QueryConfig::kSpillNumPartitionBits, 0);
 
   auto result = builder.maxDrivers(2).copyResults(pool_.get());
   ::facebook::velox::test::assertEqualVectors(expected, result);
@@ -661,9 +707,17 @@ TEST_F(ArbitraryTest, clusteredInputDirectVectorAssign) {
 
   createDuckDbTable(data);
 
+  // Single batch, so no group spans batches and the clustered-input fast path
+  // this test is about stays enabled.
   auto plan = PlanBuilder()
                   .values(data)
-                  .partialStreamingAggregation({"c0"}, {"arbitrary(c1)"})
+                  .streamingAggregation(
+                      {"c0"},
+                      {"arbitrary(c1)"},
+                      {},
+                      core::AggregationNode::Step::kPartial,
+                      /*ignoreNullKeys=*/false,
+                      /*noGroupsSpanBatches=*/true)
                   .finalAggregation()
                   .planNode();
 
@@ -675,6 +729,177 @@ TEST_F(ArbitraryTest, clusteredInputDirectVectorAssign) {
 
 // Also verify the direct vector assign path with multiple batches where the
 // source vector size may differ from numGroups (exercises the slice fallback).
+// The clustered-input fast path keeps a reference to the whole input vector
+// rather than copying the chosen value out of it. That is only bounded when a
+// group cannot span batches, because the reference is dropped once the group's
+// output is produced. When groups do span batches, every batch that contributed
+// a group stays pinned until extractValues, so peak memory grows with the input
+// instead of with the accumulators.
+//
+// The projection matters: it materializes each batch inside the query's pool,
+// so retained batches show up in peakBytes. Reading straight from values()
+// would allocate them in the test's pool and hide the retention.
+TEST_F(ArbitraryTest, clusteredInputNotRetainedWhenGroupsSpanBatches) {
+  constexpr int kNumBatches = 100;
+  constexpr int kBatchRows = 64;
+  constexpr int kPayloadBytes = 4'096;
+  // Coprime with kBatchRows so groups straddle batch boundaries.
+  constexpr int kGroupRows = 17;
+
+  std::vector<RowVectorPtr> data;
+  data.reserve(kNumBatches);
+  for (int batch = 0; batch < kNumBatches; ++batch) {
+    data.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            kBatchRows,
+            [&](auto row) { return (batch * kBatchRows + row) / kGroupRows; }),
+        makeFlatVector<std::string>(
+            kBatchRows,
+            [&](auto /*row*/) { return std::string(kPayloadBytes, 'x'); }),
+    }));
+  }
+
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .project({"c0", "concat(c1, '') as c1"})
+                  .streamingAggregation(
+                      {"c0"},
+                      {"arbitrary(c1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      /*ignoreNullKeys=*/false,
+                      /*noGroupsSpanBatches=*/false)
+                  .planNode();
+
+  auto queryPool = memory::memoryManager()->addRootPool(
+      "clusteredInputNotRetainedWhenGroupsSpanBatches",
+      memory::kMaxMemory,
+      exec::MemoryReclaimer::create());
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(), core::QueryConfig{{}}, {}, {}, std::move(queryPool));
+  auto result = AssertQueryBuilder(plan).queryCtx(queryCtx).copyResults(pool());
+  ASSERT_EQ(
+      result->size(), (kNumBatches * kBatchRows + kGroupRows - 1) / kGroupRows);
+
+  // Retaining every batch would keep roughly the whole input resident. A
+  // copying accumulator holds one payload per group, which is far smaller.
+  constexpr int64_t kInputBytes =
+      static_cast<int64_t>(kNumBatches) * kBatchRows * kPayloadBytes;
+  EXPECT_LT(queryCtx->pool()->peakBytes(), kInputBytes / 4)
+      << "peak " << queryCtx->pool()->peakBytes() << " of input " << kInputBytes
+      << " suggests input batches are being pinned by the accumulators";
+}
+
+// mayRetainInput opts a plan back into retention when groups span batches.
+// Same shape as the test above with the flag flipped, so the assertion is the
+// inverse: the accumulators pin the batches they read and peak memory tracks
+// the input rather than the group count. Results are identical either way,
+// which is why this has to assert on memory.
+TEST_F(ArbitraryTest, clusteredInputRetainedWhenAllowed) {
+  constexpr int kNumBatches = 100;
+  constexpr int kBatchRows = 64;
+  constexpr int kPayloadBytes = 4'096;
+  // Coprime with kBatchRows so groups straddle batch boundaries.
+  constexpr int kGroupRows = 17;
+
+  std::vector<RowVectorPtr> data;
+  data.reserve(kNumBatches);
+  for (int batch = 0; batch < kNumBatches; ++batch) {
+    data.push_back(makeRowVector({
+        makeFlatVector<int64_t>(
+            kBatchRows,
+            [&](auto row) { return (batch * kBatchRows + row) / kGroupRows; }),
+        makeFlatVector<std::string>(
+            kBatchRows,
+            [&](auto /*row*/) { return std::string(kPayloadBytes, 'x'); }),
+    }));
+  }
+
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .project({"c0", "concat(c1, '') as c1"})
+                  .streamingAggregation(
+                      {"c0"},
+                      {"arbitrary(c1)"},
+                      {},
+                      core::AggregationNode::Step::kSingle,
+                      /*ignoreNullKeys=*/false,
+                      /*noGroupsSpanBatches=*/false,
+                      /*mayRetainInput=*/true)
+                  .planNode();
+
+  auto queryPool = memory::memoryManager()->addRootPool(
+      "clusteredInputRetainedWhenAllowed",
+      memory::kMaxMemory,
+      exec::MemoryReclaimer::create());
+  auto queryCtx = core::QueryCtx::create(
+      executor_.get(), core::QueryConfig{{}}, {}, {}, std::move(queryPool));
+  auto result = AssertQueryBuilder(plan).queryCtx(queryCtx).copyResults(pool());
+  ASSERT_EQ(
+      result->size(), (kNumBatches * kBatchRows + kGroupRows - 1) / kGroupRows);
+
+  constexpr int64_t kInputBytes =
+      static_cast<int64_t>(kNumBatches) * kBatchRows * kPayloadBytes;
+  EXPECT_GT(queryCtx->pool()->peakBytes(), kInputBytes / 4)
+      << "peak " << queryCtx->pool()->peakBytes() << " of input " << kInputBytes
+      << " suggests mayRetainInput did not re-enable retention";
+}
+
+// An explicit false must disable retention even where noGroupsSpanBatches would
+// have enabled it. Both runs produce the same results, so the observable is
+// memory: the copying accumulator serializes one payload per group into the
+// HashStringAllocator, which the retaining accumulator does not do.
+TEST_F(ArbitraryTest, clusteredInputDisabledWhenMayRetainInputFalse) {
+  constexpr int kNumBatches = 20;
+  constexpr int kBatchRows = 128;
+  constexpr int kPayloadBytes = 8'192;
+
+  std::vector<RowVectorPtr> data;
+  data.reserve(kNumBatches);
+  for (int batch = 0; batch < kNumBatches; ++batch) {
+    data.push_back(makeRowVector({
+        // One group per row, so no group spans a batch and
+        // noGroupsSpanBatches=true is a true statement about this input.
+        makeFlatVector<int64_t>(
+            kBatchRows, [&](auto row) { return batch * kBatchRows + row; }),
+        makeFlatVector<std::string>(
+            kBatchRows,
+            [&](auto /*row*/) { return std::string(kPayloadBytes, 'x'); }),
+    }));
+  }
+
+  const auto peakBytesWith = [&](std::optional<bool> mayRetainInput,
+                                 const std::string& poolName) {
+    auto plan = PlanBuilder()
+                    .values(data)
+                    .project({"c0", "concat(c1, '') as c1"})
+                    .streamingAggregation(
+                        {"c0"},
+                        {"arbitrary(c1)"},
+                        {},
+                        core::AggregationNode::Step::kSingle,
+                        /*ignoreNullKeys=*/false,
+                        /*noGroupsSpanBatches=*/true,
+                        mayRetainInput)
+                    .planNode();
+    auto queryPool = memory::memoryManager()->addRootPool(
+        poolName, memory::kMaxMemory, exec::MemoryReclaimer::create());
+    auto queryCtx = core::QueryCtx::create(
+        executor_.get(), core::QueryConfig{{}}, {}, {}, std::move(queryPool));
+    auto result =
+        AssertQueryBuilder(plan).queryCtx(queryCtx).copyResults(pool());
+    EXPECT_EQ(result->size(), kNumBatches * kBatchRows);
+    return queryCtx->pool()->peakBytes();
+  };
+
+  const auto retained = peakBytesWith(std::nullopt, "arbitraryRetained");
+  const auto copied = peakBytesWith(false, "arbitraryCopied");
+
+  EXPECT_GT(copied, retained)
+      << "peak with mayRetainInput=false " << copied << " vs unset " << retained
+      << " suggests the explicit false did not disable retention";
+}
+
 TEST_F(ArbitraryTest, clusteredInputSliceFallback) {
   // Use a larger batch size than the number of groups so that the source
   // vector size exceeds numGroups, exercising the existing slice path.
@@ -689,9 +914,17 @@ TEST_F(ArbitraryTest, clusteredInputSliceFallback) {
 
   createDuckDbTable(data);
 
+  // Single batch, so no group spans batches and the clustered-input slice path
+  // this test is about stays enabled.
   auto plan = PlanBuilder()
                   .values(data)
-                  .partialStreamingAggregation({"c0"}, {"arbitrary(c1)"})
+                  .streamingAggregation(
+                      {"c0"},
+                      {"arbitrary(c1)"},
+                      {},
+                      core::AggregationNode::Step::kPartial,
+                      /*ignoreNullKeys=*/false,
+                      /*noGroupsSpanBatches=*/true)
                   .finalAggregation()
                   .planNode();
 

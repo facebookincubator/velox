@@ -23,12 +23,12 @@ namespace facebook::velox::cudf_velox {
 
 std::string DebugUtil::toString(
     const cudf::table_view& table,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     vector_size_t from,
     vector_size_t to) {
   auto rowVector =
       with_arrow::toVeloxColumn(table, pool_.get(), "", stream, get_temp_mr());
-  stream.synchronize();
+  stream.sync();
   return rowVector->toString(from, to);
 }
 } // namespace facebook::velox::cudf_velox

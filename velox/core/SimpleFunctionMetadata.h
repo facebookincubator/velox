@@ -390,7 +390,8 @@ struct TypeAnalysis<Row<T...>> {
   using child_types = std::tuple<T...>;
 
   template <size_t N>
-  using child_type_at = typename std::tuple_element<N, child_types>::type;
+  using child_type_at =
+      FieldType<typename std::tuple_element<N, child_types>::type>;
 
   void run(TypeAnalysisResults& results) {
     results.stats.concreteCount++;
@@ -404,12 +405,23 @@ struct TypeAnalysis<Row<T...>> {
             results.out << ", ";
           }
           first = false;
-          TypeAnalysis<T>().run(results);
+          if constexpr (FieldTraits<T>::hasName) {
+            results.out << '"';
+            for (const auto character : FieldTraits<T>::name) {
+              if (character == '"') {
+                results.out << '"';
+              }
+              results.out << character;
+            }
+            results.out << "\" ";
+          }
+          TypeAnalysis<FieldType<T>>().run(results);
           fieldTypes.push_back(results.physicalType);
         }(),
         ...);
     results.out << ")";
-    results.physicalType = ROW(std::move(fieldTypes));
+    results.physicalType =
+        ROW({std::string(FieldTraits<T>::name)...}, std::move(fieldTypes));
   }
 };
 
@@ -982,7 +994,7 @@ class UDFHolder {
   // null, without calling the function implementation.
   static constexpr bool is_default_null_behavior = !udf_has_callNullable;
 
-  // If any of the the provided "call" flavors can produce null (in case any
+  // If any of the provided "call" flavors can produce null (in case any
   // of them return bool). This is only false if all the call methods provided
   // for a function return void.
   static constexpr bool can_produce_null_output = udf_has_call_return_bool |

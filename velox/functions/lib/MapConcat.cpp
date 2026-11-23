@@ -16,6 +16,7 @@
 #include "velox/functions/lib/MapConcat.h"
 #include "velox/expression/DecodedArgs.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/MapConcat.h"
 
 namespace facebook::velox::functions {
@@ -50,15 +51,27 @@ class MapConcatFunction : public exec::VectorFunction {
 
     // UNKNOWN key type means all maps must be empty.
     if (outputType->asMap().keyType()->kind() == TypeKind::UNKNOWN) {
+      auto checkEmpty = [&](const DecodedVector& decoded,
+                            const auto* mapVector) {
+        rows.applyToSelected([&](vector_size_t row) {
+          if (!decoded.isNullAt(row)) {
+            VELOX_CHECK_EQ(
+                mapVector->sizeAt(decoded.index(row)),
+                0,
+                "Map with UNKNOWN key type must be empty");
+          }
+        });
+      };
       for (auto i = 0; i < numArgs; ++i) {
         auto* decoded = decodedArgs.at(i);
-        auto* map = decoded->base()->as<MapVector>();
-        rows.applyToSelected([&](vector_size_t row) {
-          VELOX_CHECK_EQ(
-              map->sizeAt(decoded->index(row)),
-              0,
-              "Map with UNKNOWN key type must be empty");
-        });
+        auto* base = decoded->base();
+        if (auto* map = base->as<MapVector>()) {
+          checkEmpty(*decoded, map);
+        } else if (auto* flatMap = base->as<FlatMapVector>()) {
+          checkEmpty(*decoded, flatMap);
+        } else {
+          VELOX_FAIL("Unsupported map encoding: {}", base->encoding());
+        }
       }
       auto emptyMap = std::make_shared<MapVector>(
           context.pool(),
@@ -113,28 +126,42 @@ class MapConcatFunction : public exec::VectorFunction {
 };
 } // namespace
 
-void registerMapConcatFunction(const std::string& name) {
+void registerMapConcatFunction(
+    const std::string& name,
+    std::string_view defaultOwner) {
   exec::registerVectorFunction(
       name,
       MapConcatFunction::signatures(),
       std::make_unique<MapConcatFunction>(
-          /*emptyForNull=*/false, /*allowSingleArg=*/false));
+          /*emptyForNull=*/false, /*allowSingleArg=*/false),
+      {},
+      /*overwrite=*/true,
+      defaultOwner);
 }
 
-void registerMapConcatAllowSingleArg(const std::string& name) {
+void registerMapConcatAllowSingleArg(
+    const std::string& name,
+    std::string_view defaultOwner) {
   exec::registerVectorFunction(
       name,
       MapConcatFunction::signatures(),
       std::make_unique<MapConcatFunction>(
-          /*emptyForNull=*/false, /*allowSingleArg=*/true));
+          /*emptyForNull=*/false, /*allowSingleArg=*/true),
+      {},
+      /*overwrite=*/true,
+      defaultOwner);
 }
 
-void registerMapConcatEmptyNullsFunction(const std::string& name) {
+void registerMapConcatEmptyNullsFunction(
+    const std::string& name,
+    std::string_view defaultOwner) {
   exec::registerVectorFunction(
       name,
       MapConcatFunction::signatures(),
       std::make_unique<MapConcatFunction>(
           /*emptyForNull=*/true, /*allowSingleArg=*/false),
-      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
+      /*overwrite=*/true,
+      defaultOwner);
 }
 } // namespace facebook::velox::functions

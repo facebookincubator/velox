@@ -21,23 +21,34 @@
 #include <cudf/types.hpp>
 #include <cudf/utilities/span.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
 
+#include <cuda/stream>
+
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 
-/// Applies the deletion bitmap to the current deletion row mask
-/// @param bitmap Deletion bitmap
-/// @param deleteMask Mutable view of deletion mask column
-/// @param stream CUDA stream to use
-/// @param temp_mr Memory resource for temporary allocations
+/// Applies a file-row deletion bitmap to the deletion mask.
+/// Bitmap's zeroth bit corresponds to `startRow`.
+///
+/// @param bitmap Deletion bitmap.
+/// @param startRow Starting bitmap row
+/// @param numRows Number of bitmap rows
+/// @param rowIndex Row index column (UINT64)
+/// @param deleteMask Mutable boolean deletion mask column
+/// @param stream CUDA stream for kernel launches
+/// @param temp_mr Device memory resource for temporary allocations
 void applyBitmapToMask(
     cudf::device_span<const cudf::bitmask_type> bitmap,
+    std::size_t startRow,
+    std::size_t numRows,
+    cudf::column_view const& rowIndex,
     cudf::mutable_column_view const& deleteMask,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref temp_mr);
 
 /// Counts the number of deleted rows (set to `true`) in the supplied deletion
@@ -48,7 +59,7 @@ void applyBitmapToMask(
 /// @return Number of deleted rows
 cudf::size_type countDeletedRows(
     cudf::column_view const& deleteMask,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref temp_mr);
 
 /// Scatters deletes to the deletion mask at positions indicated by `indices`
@@ -60,7 +71,22 @@ cudf::size_type countDeletedRows(
 void scatterDeletesToMask(
     cudf::mutable_column_view const& deleteMask,
     cudf::device_span<const cudf::size_type> indices,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref temp_mr);
+
+/// Scatters only the 32-bit DV matches to the output deletion mask whose
+/// original row index fits in a 32-bit bitmap. Existing deletion mask values
+/// are preserved otherwise.
+/// @param rowIndex Row index column
+/// @param dvMatches DV membership column
+/// @param deleteMask Mutable boolean deletion mask column
+/// @param stream CUDA stream to use
+/// @param temp_mr Memory resource for temporary allocations
+void scatter32BitDVMatchesToMask(
+    cudf::column_view const& rowIndex,
+    cudf::column_view const& dvMatches,
+    cudf::mutable_column_view const& deleteMask,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref temp_mr);
 
 /// Fills a sequence of row indices into a column.
@@ -74,7 +100,7 @@ void fillSequence(
     cudf::mutable_column_view const& rowIndices,
     ValueType startRow,
     int64_t numRows,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref temp_mr);
 
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

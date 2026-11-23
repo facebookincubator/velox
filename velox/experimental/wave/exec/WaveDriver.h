@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/stop_watch.h>
+
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
 #include "velox/experimental/wave/exec/WaveOperator.h"
@@ -270,7 +272,7 @@ class WaveDriver : public exec::SourceOperator {
   // exec::Driver.
   void updateStats();
 
-  bool shouldYield(exec::StopReason taskStopReason, size_t startTimeMs) const;
+  bool shouldYield(exec::StopReason taskStopReason) const;
 
   // Sets the WaveStreams to error state.
   void setError();
@@ -287,7 +289,8 @@ class WaveDriver : public exec::SourceOperator {
   ContinueFuture blockingFuture_{ContinueFuture::makeEmpty()};
   exec::BlockingReason blockingReason_;
 
-  size_t startTimeMs_;
+  // Restarted at the start of each getOutput() call.
+  folly::stop_watch<std::chrono::milliseconds> getOutputWatch_;
   size_t getOutputTimeLimitMs_{0};
   bool finished_{false};
 

@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include "velox/common/base/IdentityProjection.h"
+#include "velox/connectors/Connector.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/HashTable.h"
 #include "velox/type/Type.h"
@@ -286,9 +288,7 @@ class TestIndexSource : public connector::IndexSource,
 
     // Extracts the lookup result columns from the index table and return in
     // 'result'.
-    void extractLookupColumns(
-        folly::Range<char* const*> rows,
-        RowVectorPtr& result);
+    void extractLookupColumns(RowSpan rows, RowVectorPtr& result);
 
     // Inokved to trigger async lookup using background executor and return the
     // 'future'.

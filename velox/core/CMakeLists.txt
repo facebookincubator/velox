@@ -20,6 +20,7 @@ velox_add_library(
   Expressions.cpp
   FixedPointPlanNodes.cpp
   ITypedExpr.cpp
+  MultiStagePlan.cpp
   PlanConsistencyChecker.cpp
   PlanFragment.cpp
   PlanNode.cpp
@@ -32,6 +33,7 @@ velox_add_library(
   Expressions.h
   FixedPointPlanNodes.h
   ITypedExpr.h
+  MultiStagePlan.h
   PlanConsistencyChecker.h
   PlanFragment.h
   PlanNode.h
@@ -55,6 +57,7 @@ velox_link_libraries(
     velox_memory
     velox_type
     velox_vector
+    velox_vector_index_settings
     Boost::headers
     Folly::folly
     fmt::fmt

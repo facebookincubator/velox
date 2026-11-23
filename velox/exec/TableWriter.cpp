@@ -15,8 +15,10 @@
  */
 
 #include "velox/exec/TableWriter.h"
+
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/OperatorType.h"
+#include "velox/exec/TableWriterStatNames.h"
 #include "velox/exec/Task.h"
 
 namespace facebook::velox::exec {
@@ -45,8 +47,7 @@ TableWriter::TableWriter(
           tableWriteNode->insertTableHandle()->connectorId())),
       insertTableHandle_(
           tableWriteNode->insertTableHandle()->connectorInsertTableHandle()),
-      commitStrategy_(tableWriteNode->commitStrategy()),
-      createTimeNs_(getCurrentTimeNano()) {
+      commitStrategy_(tableWriteNode->commitStrategy()) {
   setConnectorMemoryReclaimer();
   if (tableWriteNode->outputType()->size() == 1) {
     VELOX_USER_CHECK(!tableWriteNode->columnStatsSpec().has_value());
@@ -72,6 +73,7 @@ TableWriter::TableWriter(
       connectorPool_,
       spillConfig_.has_value() ? &(spillConfig_.value()) : nullptr);
   setTypeMappings(tableWriteNode);
+  setNotNullChannels(tableWriteNode);
 }
 
 void TableWriter::setTypeMappings(
@@ -96,6 +98,22 @@ void TableWriter::setTypeMappings(
 
   mappedOutputType_ = ROW(folly::copy(outputNames), std::move(outputTypes));
   mappedInputType_ = ROW(std::move(outputNames), std::move(inputTypes));
+}
+
+void TableWriter::setNotNullChannels(
+    const core::TableWriteNodePtr& tableWriteNode) {
+  const auto& notNullColumns =
+      tableWriteNode->insertTableHandle()->notNullColumns();
+  if (notNullColumns.empty()) {
+    return;
+  }
+
+  const auto& targetNames = tableWriteNode->columnNames();
+  for (auto i = 0; i < targetNames.size(); ++i) {
+    if (notNullColumns.contains(targetNames[i])) {
+      notNullChannels_.emplace_back(inputMapping_[i], targetNames[i]);
+    }
+  }
 }
 
 void TableWriter::initialize() {
@@ -143,10 +161,29 @@ bool TableWriter::finishDataSink() {
   return dataSink_->finish();
 }
 
+void TableWriter::checkNotNullConstraints(const RowVectorPtr& input) {
+  if (notNullChannels_.empty()) {
+    return;
+  }
+
+  // Bounded to the batch's rows because a child may be longer than 'input'.
+  notNullRows_.resizeFill(input->size());
+
+  for (const auto& [channel, name] : notNullChannels_) {
+    notNullDecodedVector_.decode(*input->childAt(channel), notNullRows_);
+    VELOX_USER_CHECK(
+        !notNullDecodedVector_.hasNulls(),
+        "NULL value not allowed for NOT NULL column: {}",
+        name);
+  }
+}
+
 void TableWriter::addInput(RowVectorPtr input) {
   if (input->size() == 0) {
     return;
   }
+
+  checkNotNullConstraints(input);
 
   std::vector<VectorPtr> mappedChildren;
   mappedChildren.reserve(inputMapping_.size());
@@ -163,7 +200,7 @@ void TableWriter::addInput(RowVectorPtr input) {
       input->getNullCount());
 
   dataSink_->appendData(mappedInput);
-  numWrittenRows_ += input->size();
+  numWrittenRows_ += dataSink_->numChangedRows(*mappedInput);
   updateStats(dataSink_->stats());
 
   if (statsCollector_ != nullptr) {
@@ -285,8 +322,6 @@ std::string TableWriter::createTableCommitContext(bool lastOutput) {
 }
 
 void TableWriter::updateStats(const connector::DataSink::Stats& stats) {
-  const auto currentTimeNs = getCurrentTimeNano();
-  VELOX_CHECK_GE(currentTimeNs, createTimeNs_);
   {
     auto lockedStats = stats_.wlock();
     lockedStats->physicalWrittenBytes = stats.numWrittenBytes;
@@ -298,22 +333,23 @@ void TableWriter::updateStats(const connector::DataSink::Stats& stats) {
     }
     if (stats.numWrittenFiles != 0) {
       lockedStats->addRuntimeStat(
-          kNumWrittenFiles, RuntimeCounter(stats.numWrittenFiles));
+          TableWriterStatNames::kNumWrittenFiles,
+          RuntimeCounter(stats.numWrittenFiles));
     }
     if (stats.writeIOTimeUs != 0) {
       lockedStats->addRuntimeStat(
-          kWriteIOTime,
+          TableWriterStatNames::kWriteIOTime,
           RuntimeCounter(
               stats.writeIOTimeUs * 1000, RuntimeCounter::Unit::kNanos));
     }
     if (stats.recodeTimeNs != 0) {
       lockedStats->addRuntimeStat(
-          kWriteRecodeTime,
+          TableWriterStatNames::kWriteRecodeTime,
           RuntimeCounter(stats.recodeTimeNs, RuntimeCounter::Unit::kNanos));
     }
     if (stats.compressionTimeNs != 0) {
       lockedStats->addRuntimeStat(
-          kWriteCompressionTime,
+          TableWriterStatNames::kWriteCompressionTime,
           RuntimeCounter(
               stats.compressionTimeNs, RuntimeCounter::Unit::kNanos));
     }
@@ -331,9 +367,9 @@ void TableWriter::updateStats(const connector::DataSink::Stats& stats) {
               static_cast<uint64_t>(backgroundTimingStat->second.sum)});
     }
     lockedStats->addRuntimeStat(
-        kRunningWallNanos,
+        TableWriterStatNames::kRunningWallNanos,
         RuntimeCounter(
-            currentTimeNs - createTimeNs_, RuntimeCounter::Unit::kNanos));
+            creationWatch_.elapsed().count(), RuntimeCounter::Unit::kNanos));
   }
   if (!stats.spillStats.empty()) {
     *spillStats_ += stats.spillStats;
@@ -379,7 +415,7 @@ bool TableWriter::ConnectorReclaimer::reclaimableBytes(
     return false;
   }
   std::shared_ptr<Driver> driver = ensureDriver();
-  if (FOLLY_UNLIKELY(driver == nullptr)) {
+  if (driver == nullptr) [[unlikely]] {
     return false;
   }
   return memory::MemoryReclaimer::reclaimableBytes(pool, reclaimableBytes);
@@ -394,7 +430,7 @@ uint64_t TableWriter::ConnectorReclaimer::reclaim(
     return 0;
   }
   std::shared_ptr<Driver> driver = ensureDriver();
-  if (FOLLY_UNLIKELY(driver == nullptr)) {
+  if (driver == nullptr) [[unlikely]] {
     return 0;
   }
   VELOX_CHECK(
@@ -402,7 +438,7 @@ uint64_t TableWriter::ConnectorReclaimer::reclaim(
       driver->state().isTerminated);
   VELOX_CHECK(driver->task()->pauseRequested());
 
-  auto* writer = dynamic_cast<TableWriter*>(op_);
+  auto* writer = op_->as<TableWriter>();
   if (writer->closed_) {
     // TODO: reduce the log frequency if it is too verbose.
     ++stats.numNonReclaimableAttempts;

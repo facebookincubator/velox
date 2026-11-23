@@ -50,6 +50,7 @@
 #include "velox/functions/prestosql/types/UuidType.h"
 #include "velox/functions/prestosql/types/parser/TypeParser.h"
 #include "velox/serializers/PrestoSerializer.h"
+#include "velox/vector/tests/utils/VectorAssertions.h"
 
 using namespace facebook::velox;
 
@@ -70,7 +71,8 @@ void writeToFile(
   VELOX_CHECK_GT(data.size(), 0);
 
   std::shared_ptr<dwio::common::WriterOptions> options =
-      std::make_shared<dwrf::WriterOptions>();
+      std::make_shared<dwio::common::WriterOptions>();
+  options->formatSpecificOptions = std::make_shared<dwrf::DwrfWriterOptions>();
   options->schema = data[0]->type();
   options->memoryPool = pool;
 
@@ -384,7 +386,8 @@ PrestoQueryRunner::execute(const core::PlanNodePtr& plan) {
       result = executeAndReturnVector(plan);
   if (result.first) {
     return std::make_pair(
-        exec::test::materialize(*result.first), result.second);
+        velox::test::VectorAssertions::toMultiset(*result.first),
+        result.second);
   }
   return std::make_pair(std::nullopt, result.second);
 }

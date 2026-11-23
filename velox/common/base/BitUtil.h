@@ -21,6 +21,7 @@
 #include <folly/CPortability.h>
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -150,7 +151,7 @@ constexpr inline uint64_t nwords(uint64_t bits) {
 }
 
 inline int32_t getAndClearLastSetBit(uint16_t& bits) {
-  int32_t trailingZeros = __builtin_ctz(bits);
+  int32_t trailingZeros = std::countr_zero(bits);
   // erase last non-zero bit
   bits &= bits - 1;
   return trailingZeros;
@@ -285,7 +286,7 @@ void forBatches(
     uint64_t active = bits[index] & mask;
     int32_t first = 0;
     while (active) {
-      int32_t skip = (__builtin_ctzll(active) / kWidth) * kWidth;
+      int32_t skip = (std::countr_zero(active) / kWidth) * kWidth;
       active >>= skip;
       first += skip;
       auto selected = active & unitMask;
@@ -361,11 +362,9 @@ inline int32_t countBits(const uint64_t* bits, int32_t begin, int32_t end) {
       begin,
       end,
       [&count, bits](int32_t idx, uint64_t mask) {
-        count += __builtin_popcountll(bits[idx] & mask);
+        count += std::popcount(bits[idx] & mask);
       },
-      [&count, bits](int32_t idx) {
-        count += __builtin_popcountll(bits[idx]);
-      });
+      [&count, bits](int32_t idx) { count += std::popcount(bits[idx]); });
   return count;
 }
 
@@ -408,7 +407,7 @@ inline int32_t findFirstBit(const uint64_t* bits, int32_t begin, int32_t end) {
       [bits, &found](int32_t idx, uint64_t mask) {
         uint64_t word = bits[idx] & mask;
         if (word) {
-          found = idx * 64 + __builtin_ctzll(word);
+          found = idx * 64 + std::countr_zero(word);
           return false;
         }
         return true;
@@ -416,7 +415,7 @@ inline int32_t findFirstBit(const uint64_t* bits, int32_t begin, int32_t end) {
       [bits, &found](int32_t idx) {
         uint64_t word = bits[idx];
         if (word) {
-          found = idx * 64 + __builtin_ctzll(word);
+          found = idx * 64 + std::countr_zero(word);
           return false;
         }
         return true;
@@ -450,7 +449,7 @@ void forEachBit(
           return;
         }
         while (word) {
-          func(idx * 64 + __builtin_ctzll(word));
+          func(idx * 64 + std::countr_zero(word));
           word &= word - 1;
         }
       },
@@ -464,7 +463,7 @@ void forEachBit(
           }
         } else {
           while (word) {
-            func(idx * 64 + __builtin_ctzll(word));
+            func(idx * 64 + std::countr_zero(word));
             word &= word - 1;
           }
         }
@@ -515,7 +514,7 @@ bool testBits(
           return true;
         }
         while (word) {
-          if (!func(idx * 64 + __builtin_ctzll(word))) {
+          if (!func(idx * 64 + std::countr_zero(word))) {
             return false;
           }
           word &= word - 1;
@@ -528,7 +527,7 @@ bool testBits(
           return true;
         }
         while (word) {
-          if (!func(idx * 64 + __builtin_ctzll(word))) {
+          if (!func(idx * 64 + std::countr_zero(word))) {
             return false;
           }
           word &= word - 1;
@@ -563,7 +562,7 @@ inline int32_t findLastBit(
       [bits, &found, value](int32_t idx, uint64_t mask) {
         uint64_t word = (value ? bits[idx] : ~bits[idx]) & mask;
         if (word) {
-          found = idx * 64 + 63 - __builtin_clzll(word);
+          found = idx * 64 + static_cast<int32_t>(std::bit_width(word)) - 1;
           return false;
         }
         return true;
@@ -571,7 +570,7 @@ inline int32_t findLastBit(
       [bits, &found, value](int32_t idx) {
         uint64_t word = value ? bits[idx] : ~bits[idx];
         if (word) {
-          found = idx * 64 + 63 - __builtin_clzll(word);
+          found = idx * 64 + static_cast<int32_t>(std::bit_width(word)) - 1;
           return false;
         }
         return true;
@@ -734,32 +733,17 @@ bool inline hasIntersection(
 template <typename T = uint64_t>
 inline int32_t countLeadingZeros(T word) {
   static_assert(std::is_same_v<T, uint64_t> || std::is_same_v<T, __uint128_t>);
-  /// Built-in Function: int __builtin_clz (unsigned int x) returns the number
-  /// of leading 0-bits in x, starting at the most significant bit position. If
-  /// x is 0, the result is undefined.
-  if (word == 0) {
-    return sizeof(T) * 8;
-  }
-  if constexpr (std::is_same_v<T, uint64_t>) {
-    return __builtin_clzll(word);
-  } else {
-    uint64_t hi = word >> 64;
-    uint64_t lo = static_cast<uint64_t>(word);
-    return (hi == 0) ? 64 + __builtin_clzll(lo) : __builtin_clzll(hi);
-  }
+  return std::countl_zero(word);
 }
 
 inline uint64_t nextPowerOfTwo(uint64_t size) {
-  if (size == 0) {
+  // std::bit_ceil is undefined behavior for 0 or for inputs whose result
+  // would not fit in uint64_t (size > 2^63); return 0 for both, matching
+  // this function's historical behavior.
+  if (size == 0 || size > (uint64_t{1} << 63)) {
     return 0;
   }
-  uint32_t bits = 63 - countLeadingZeros(size);
-  uint64_t lower = 1ULL << bits;
-  // Size is a power of 2.
-  if (lower == size) {
-    return size;
-  }
-  return 2 * lower;
+  return std::bit_ceil(size);
 }
 
 constexpr bool isPowerOfTwo(uint64_t size) {
@@ -798,29 +782,10 @@ inline uint64_t commutativeHashMix(
 }
 
 inline uint64_t loadPartialWord(const uint8_t* data, int32_t size) {
-  // Must be declared volatile, else gcc misses aliasing in optimized mode.
-  volatile uint64_t result = 0;
-  auto resultPtr = reinterpret_cast<volatile uint8_t*>(&result);
-  auto begin = data;
-  auto toGo = size;
-  if (toGo >= 4) {
-    *reinterpret_cast<volatile uint32_t*>(resultPtr) =
-        *reinterpret_cast<const uint32_t*>(begin);
-    begin += 4;
-    resultPtr += 4;
-    toGo -= 4;
-  }
-  if (toGo >= 2) {
-    *reinterpret_cast<volatile uint16_t*>(resultPtr) =
-        *reinterpret_cast<const uint16_t*>(begin);
-    begin += 2;
-    resultPtr += 2;
-    toGo -= 2;
-  }
-  if (toGo == 1) {
-    *reinterpret_cast<volatile uint8_t*>(resultPtr) =
-        *reinterpret_cast<const uint8_t*>(begin);
-  }
+  uint64_t result = 0;
+  // memcpy handles potentially unaligned source and is opaque to the
+  // optimizer, so no volatile or intermediate stores are needed.
+  std::memcpy(&result, data, size);
   return result;
 }
 
@@ -834,8 +799,9 @@ namespace detail {
 template <typename T>
 inline T loadBits(const uint64_t* source, uint64_t bitOffset, uint8_t numBits) {
   constexpr int32_t kBitSize = 8 * sizeof(T);
-  auto address = reinterpret_cast<uint64_t>(source) + bitOffset / 8;
-  T word = *reinterpret_cast<const T*>(address);
+  auto address = reinterpret_cast<const char*>(source) + bitOffset / 8;
+  T word;
+  std::memcpy(&word, address, sizeof(T));
   auto bit = bitOffset & 7;
   if (!bit) {
     return word;
@@ -857,13 +823,16 @@ template <typename T>
 inline void
 storeBits(uint64_t* target, uint64_t offset, uint64_t word, uint8_t numBits) {
   constexpr int32_t kBitSize = 8 * sizeof(T);
-  T* address =
-      reinterpret_cast<T*>(reinterpret_cast<uint64_t>(target) + (offset / 8));
+  auto rawAddress = reinterpret_cast<char*>(target) + (offset / 8);
   auto bitOffset = offset & 7;
   uint64_t mask = (numBits == 64 ? ~0UL : ((1UL << numBits) - 1)) << bitOffset;
-  *address = (*address & ~mask) | (mask & (word << bitOffset));
+  T current;
+  std::memcpy(&current, rawAddress, sizeof(T));
+  current = (current & ~mask) | (mask & (word << bitOffset));
+  std::memcpy(rawAddress, &current, sizeof(T));
   if (numBits + bitOffset > kBitSize) {
-    uint8_t* lastByteAddress = reinterpret_cast<uint8_t*>(address) + sizeof(T);
+    uint8_t* lastByteAddress =
+        reinterpret_cast<uint8_t*>(rawAddress) + sizeof(T);
     uint8_t lastByteBits = bitOffset + numBits - kBitSize;
     uint8_t lastByteMask = (1 << lastByteBits) - 1;
     *lastByteAddress = (*lastByteAddress & ~lastByteMask) |
@@ -1039,7 +1008,7 @@ void storeBitsToByte(uint8_t bits, uint8_t* bytes, unsigned index) {
 /// Returns the number of bits required to store the value.
 /// For a value of 0, returns 1.
 inline int bitsRequired(uint64_t value) noexcept {
-  return 64 - __builtin_clzll(value | 1);
+  return static_cast<int>(std::bit_width(value | 1));
 }
 
 /// Packs bools into bitmap. bitmap must point to a region large enough.

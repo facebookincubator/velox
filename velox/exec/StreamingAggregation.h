@@ -112,6 +112,10 @@ class StreamingAggregation : public Operator {
   // streaming aggregation operator to produce all group results for each input.
   const bool noGroupsSpanBatches_;
 
+  // Effective value of core::AggregationNode::mayRetainInput(), which defaults
+  // to noGroupsSpanBatches_ when the plan leaves it unset.
+  const bool mayRetainInput_;
+
   std::vector<column_index_t> groupingKeys_;
   std::vector<AggregateInfo> aggregates_;
   std::unique_ptr<SortedAggregations> sortedAggregations_;

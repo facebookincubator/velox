@@ -68,6 +68,8 @@ HiveTypeParser::HiveTypeParser() {
       {"binary", "varbinary"});
   setupMetadata<TokenType::Timestamp, TypeKind::TIMESTAMP>("timestamp");
   setupMetadata<TokenType::Opaque, TypeKind::OPAQUE>("opaque");
+  // "void" is the Hive/Presto serialization of the Iceberg V3 unknown type.
+  setupMetadata<TokenType::Void, TypeKind::UNKNOWN>("void");
   setupMetadata<TokenType::List, TypeKind::ARRAY>("array");
   setupMetadata<TokenType::Map, TypeKind::MAP>("map");
   setupMetadata<TokenType::Struct, TypeKind::ROW>({"struct", "row"});
@@ -134,6 +136,8 @@ Result HiveTypeParser::parseType() {
       return Result{TIME()};
     } else if (nt.metadata->tokenString[0] == "time_micro_utc") {
       return Result{TIME_MICRO_UTC()};
+    } else if (nt.metadata->tokenString[0] == "void") {
+      return Result{UNKNOWN()};
     }
     auto scalarType = createScalarType(nt.typeKind());
     VELOX_CHECK_NOT_NULL(
