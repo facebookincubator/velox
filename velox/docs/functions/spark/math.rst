@@ -80,36 +80,15 @@ Mathematical Functions
     INTEGER expression. Decimal inputs use ``decimal_bround``.
 
     Integral overflow follows Spark's two's-complement wraparound when ANSI
-    mode is disabled and raises an error when ANSI mode is enabled. Integral
-    inputs return zero when an extreme negative scale exceeds their meaningful
-    digit range.
+    mode is disabled and raises an error when ANSI mode is enabled.
+    Floating-point NaN and infinity are returned unchanged.
 
-    Extreme integral scales are not fully compatible with Spark 4.1.
-    For BIGINT input ``25`` and scale ``-2147483648``, Velox returns zero
-    whereas Spark's interpreted and generated evaluators throw. At scale
-    ``2147483647``, Velox and Spark's generated evaluator return ``25``,
-    but Spark's interpreted evaluator throws. Integrations requiring exact
-    Spark behavior must validate these cases and fall back to Spark.
-    Velox does not reproduce JVM BigDecimal/BigInteger scale and resource limits.
-
-    Floating-point values are scaled by a power of ten, rounded using
-    ``std::nearbyint``, and scaled back. This uses Velox's default
-    round-to-nearest floating-point environment. Because it operates directly
-    on the binary floating-point value instead of converting through Java's
-    decimal string representation, some results can differ from Spark. NaN and
-    infinity are returned unchanged. At very large scales (``d`` greater than or
-    equal to 309) ``10^d`` is no longer finite, so ``bround`` leaves the value
-    unchanged instead of rounding. This is a deliberate simplification; true
-    decimal rounding would snap the smallest subnormal values toward zero, so
-    results at these extreme scales can differ from Spark. The input is also
-    preserved if multiplication by a finite power of ten overflows.
-
-    For example, ``bround(cast(0.575 as DOUBLE), 2)`` returns ``0.57`` in
-    Velox, while Spark's decimal conversion returns ``0.58``. Integrations that
-    require exact Spark floating-point results should evaluate floating-point
-    ``bround`` in Spark. Integral and decimal inputs do not have this
-    floating-point compatibility exception. This matches the binary-rounding
-    semantics of :spark:func:`round`.
+    **Differences from Spark:** Floating-point inputs are rounded on their
+    binary value, not through Java's decimal string representation, so results
+    can differ. For example, ``bround(cast(0.575 as DOUBLE), 2)`` returns
+    ``0.57`` in Velox and ``0.58`` in Spark. Extreme integral and floating-point
+    scales can also differ from Spark. Integrations requiring exact Spark
+    results should validate these cases and fall back to Spark.
 
     See `Spark's BRound expression
     <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala>`_.

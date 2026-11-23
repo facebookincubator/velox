@@ -266,6 +266,14 @@ class BRoundTest : public SparkFunctionBaseTest {
         bround<double>(std::numeric_limits<double>::max(), 1),
         std::numeric_limits<double>::max());
 
+    // Preserve fractional inputs when a finite factor overflows the product.
+    for (const auto value : {2.5, -2.5}) {
+      SCOPED_TRACE(value);
+      EXPECT_EQ(bround<double>(value, 308), value);
+      const auto floatValue = static_cast<float>(value);
+      EXPECT_EQ(bround<float>(floatValue, 308), floatValue);
+    }
+
     // Values are preserved when the power-of-ten scale is not finite.
     const auto minimum = std::numeric_limits<double>::denorm_min();
     EXPECT_EQ(bround<double>(minimum, 309), minimum);
@@ -316,15 +324,25 @@ class BRoundTest : public SparkFunctionBaseTest {
         bround<double>(-std::numeric_limits<double>::max(), -308),
         -std::numeric_limits<double>::infinity());
 
-    for (const auto scale : {-10, 0, 10}) {
-      const auto rounded = bround<double>(-0.0, scale).value();
-      EXPECT_EQ(rounded, 0.0);
+    const auto assertPositiveZero = [this](auto value, int32_t scale) {
+      const auto rounded = bround<decltype(value)>(value, scale).value();
+      EXPECT_EQ(rounded, 0);
       EXPECT_FALSE(std::signbit(rounded));
+    };
+    for (const int32_t scale :
+         {std::numeric_limits<int32_t>::min(),
+          -309,
+          -10,
+          0,
+          10,
+          309,
+          std::numeric_limits<int32_t>::max()}) {
+      SCOPED_TRACE(scale);
+      assertPositiveZero(-0.0, scale);
+      assertPositiveZero(-0.0f, scale);
     }
     for (const auto value : {-0.5, -0.1}) {
-      const auto rounded = bround<double>(value, 0).value();
-      EXPECT_EQ(rounded, 0.0);
-      EXPECT_FALSE(std::signbit(rounded));
+      assertPositiveZero(value, 0);
     }
   }
 

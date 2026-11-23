@@ -33,49 +33,29 @@ namespace facebook::velox::functions::sparksql {
 namespace {
 
 template <typename T>
-Status
-broundFloatingPointImpl(T value, int32_t scale, double factor, T& result) {
+T broundFloatingPointImpl(T value, int32_t scale, double factor) {
   static_assert(std::is_floating_point_v<T>);
 
-  if (!std::isfinite(value)) {
-    result = value;
-    return Status::OK();
-  }
-  if (value == 0) {
-    result = 0;
-    return Status::OK();
+  T result{value};
+  if (std::isfinite(value)) {
+    if (scale == 0) {
+      result = std::nearbyint(value);
+    } else if (scale > 0) {
+      // Preserve inputs, including subnormals, when 10^scale is infinite
+      // (scale >= 309). Native rounding needs a finite scaling factor.
+      if (std::isfinite(factor)) {
+        result = static_cast<T>(functions::detail::roundWithPositiveScale<true>(
+            static_cast<double>(value), scale, factor));
+      }
+    } else {
+      result = std::isfinite(factor)
+          ? static_cast<T>(
+                std::nearbyint(static_cast<double>(value) / factor) * factor)
+          : 0;
+    }
   }
 
-  if (scale == 0) {
-    result = std::nearbyint(value);
-  } else if (scale > 0) {
-    // Preserve the input when the power-of-ten scale is not representable.
-    // Native scale-round-unscale cannot define a reliable HALF_EVEN result
-    // without a finite factor.
-    if (!std::isfinite(factor)) {
-      result = value;
-      return Status::OK();
-    }
-    const double scaled = static_cast<double>(value) * factor;
-    if (!std::isfinite(scaled)) {
-      result = value;
-      return Status::OK();
-    }
-    result = static_cast<T>(functions::detail::roundWithPositiveScale<true>(
-        static_cast<double>(value), scale, factor));
-  } else {
-    if (!std::isfinite(factor)) {
-      result = 0;
-      return Status::OK();
-    }
-    result = static_cast<T>(
-        std::nearbyint(static_cast<double>(value) / factor) * factor);
-  }
-
-  if (result == 0) {
-    result = 0;
-  }
-  return Status::OK();
+  return result == 0 ? 0 : result;
 }
 
 template <typename TExec>
@@ -116,8 +96,8 @@ struct BRoundFunction {
   call(T& result, const T value, const int32_t scale) {
     if constexpr (std::is_floating_point_v<T>) {
       VELOX_DCHECK_EQ(scale, floatingPointScale_);
-      return broundFloatingPointImpl(
-          value, scale, floatingPointFactor_, result);
+      result = broundFloatingPointImpl(value, scale, floatingPointFactor_);
+      return Status::OK();
     } else {
       return functions::detail::roundIntegral(
           result,
