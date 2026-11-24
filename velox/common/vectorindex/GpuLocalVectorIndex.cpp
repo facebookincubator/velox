@@ -35,9 +35,11 @@
 #include <faiss/gpu/impl/IndexUtils.h>
 #include <faiss/gpu/utils/DeviceUtils.h>
 #include <faiss/impl/FaissException.h>
+#include <faiss/invlists/InvertedLists.h>
 #include <glog/logging.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/vectorindex/LocalVectorIndex.h"
 
 namespace facebook::velox::common::vectorindex {
 namespace {
@@ -45,6 +47,22 @@ namespace {
 constexpr size_t kCagraBuildIterations{12};
 // CAGRA keeps at least 'k' candidates; a larger 'k' searches on the CPU.
 constexpr int64_t kMaxCagraK{1024};
+constexpr auto kCuvsPaddingId = std::numeric_limits<faiss::idx_t>::max();
+
+bool hasCuvsPaddingId(const faiss::IndexIVF& index) {
+  for (size_t list = 0; list < index.nlist; ++list) {
+    const auto size = index.invlists->list_size(list);
+    if (size == 0) {
+      continue;
+    }
+    const faiss::InvertedLists::ScopedIds ids(index.invlists, list);
+    const auto* end = ids.ids + size;
+    if (std::find(ids.ids, end, kCuvsPaddingId) != end) {
+      return true;
+    }
+  }
+  return false;
+}
 
 struct Device {
   explicit Device(int32_t id) : id{id} {}
@@ -64,10 +82,12 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
       std::shared_ptr<Device> device,
       std::unique_ptr<faiss::Index> index,
       int64_t maxK,
+      bool translatePadding,
       size_t efSearch = 0)
       : device_{std::move(device)},
         index_{std::move(index)},
         maxK_{maxK},
+        translatePadding_{translatePadding},
         efSearch_{efSearch} {}
 
   ~ClonedIndex() override {
@@ -122,15 +142,14 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
         VELOX_FAIL("FAISS GPU local vector index search failed: {}", e.what());
       }
     }
-    // cuVS writes the maximum id where the CPU search writes kPaddingId.
-    constexpr int64_t kMissing = std::numeric_limits<int64_t>::max();
-    auto* rawIds = gpuK < k ? limitedIds.data() : ids.data();
-    const auto idCount =
-        queries.size() * static_cast<size_t>(gpuK < k ? gpuK : k);
-    for (size_t i = 0; i < idCount; ++i) {
-      if (rawIds[i] == kMissing) {
-        rawIds[i] = -1;
-      }
+    // cuVS IVF returns external IDs directly. Flat and wrapped CAGRA use
+    // FAISS's ID map, which handles padding before mapping to external IDs.
+    if (translatePadding_) {
+      std::replace(
+          searchIds,
+          searchIds + queries.size() * gpuK,
+          kCuvsPaddingId,
+          LocalVectorIndex::kPaddingId);
     }
     if (gpuK < k) {
       const auto queriesSize = static_cast<int64_t>(queries.size());
@@ -151,6 +170,7 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
   const std::shared_ptr<Device> device_;
   std::unique_ptr<faiss::Index> index_;
   const int64_t maxK_;
+  const bool translatePadding_;
   const size_t efSearch_;
 };
 
@@ -352,6 +372,13 @@ class GpuAccelerator : public LocalVectorIndexAccelerator {
     if (index.ntotal < options_.minSearchSize) {
       return nullptr;
     }
+
+    const auto* ivf = dynamic_cast<const faiss::IndexIVF*>(&index);
+    // Preserve existing IVF indexes with a valid ID equal to cuVS's sentinel.
+    // These indexes search on the CPU because the result labels are ambiguous.
+    if (ivf != nullptr && hasCuvsPaddingId(*ivf)) {
+      return nullptr;
+    }
     const std::lock_guard<std::mutex> lock(device_->mutex);
     try {
       faiss::gpu::DeviceScope scope(device_->id);
@@ -369,6 +396,7 @@ class GpuAccelerator : public LocalVectorIndexAccelerator {
           device_,
           std::move(copy),
           cagra ? kMaxCagraK : faiss::gpu::getMaxKSelection(/*use_cuvs=*/true),
+          /*translatePadding=*/ivf != nullptr,
           cagra ? cagraEfSearch(index) : 0);
     } catch (const std::exception& e) {
       LOG(WARNING) << "Local vector index stays on the CPU: " << e.what();

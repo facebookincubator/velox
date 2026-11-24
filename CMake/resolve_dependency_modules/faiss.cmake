@@ -51,12 +51,11 @@ FetchContent_Declare(
 )
 
 if(VELOX_ENABLE_FAISS_GPU)
-  # faiss downloads its own RAPIDS.cmake unless this file exists. Point it at
-  # the rapids-cmake that cuDF already populated so all RAPIDS packages agree.
+  # Reuse the pinned rapids-cmake from a bundled RAPIDS build or populate it
+  # here when cuDF and cuVS were found as installed packages.
+  include("${CMAKE_CURRENT_LIST_DIR}/rapids-cmake-source.cmake")
+  FetchContent_MakeAvailable(rapids-cmake)
   FetchContent_GetProperties(rapids-cmake SOURCE_DIR VELOX_RAPIDS_CMAKE_SOURCE_DIR)
-  if(NOT VELOX_RAPIDS_CMAKE_SOURCE_DIR)
-    message(FATAL_ERROR "GPU faiss must be resolved after cuDF.")
-  endif()
   file(
     WRITE
     ${FETCHCONTENT_BASE_DIR}/faiss-build/FAISS_RAPIDS.cmake

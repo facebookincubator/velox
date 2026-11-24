@@ -162,13 +162,19 @@ __global__ void vectorDistanceKernel(
       continue;
     }
 
-    T dot{0};
-    T leftSquares{0};
-    T rightSquares{0};
-    T squaredDistance{0};
+#ifdef VELOX_ENABLE_FAISS
+    // Match the CPU distance functions, which use float even for DOUBLE.
+    using Accumulator = float;
+#else
+    using Accumulator = T;
+#endif
+    Accumulator dot{0};
+    Accumulator leftSquares{0};
+    Accumulator rightSquares{0};
+    Accumulator squaredDistance{0};
     for (auto i = lane; i < l.size; i += kWarpSize) {
-      const auto x = l.values[i];
-      const auto y = r.values[i];
+      const auto x = static_cast<Accumulator>(l.values[i]);
+      const auto y = static_cast<Accumulator>(r.values[i]);
       dot += x * y;
       leftSquares += x * x;
       rightSquares += y * y;

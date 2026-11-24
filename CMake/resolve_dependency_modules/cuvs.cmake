@@ -13,6 +13,8 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
+include("${CMAKE_CURRENT_LIST_DIR}/rapids-cmake-source.cmake")
+
 # cuVS must be resolved after cuDF so it reuses cuDF's rapids-cmake, rmm,
 # kvikio, CCCL and cuco targets. Keep the commit on the same RAPIDS release as
 # cudf.cmake.

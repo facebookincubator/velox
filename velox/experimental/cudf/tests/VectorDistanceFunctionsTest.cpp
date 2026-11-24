@@ -54,17 +54,6 @@ class CudfVectorDistanceFunctionsTest
     cudf_velox::unregisterCudf();
   }
 
-  void SetUp() override {
-    cudf_velox::CudfFunctionBaseTest::SetUp();
-    // The CPU registers the array(real) overloads only when built with FAISS.
-    if (!exec::simpleFunctions()
-             .resolveFunction(
-                 "cosine_similarity", {ARRAY(REAL()), ARRAY(REAL())})
-             .has_value()) {
-      GTEST_SKIP() << "Requires the FAISS-backed CPU distance functions";
-    }
-  }
-
   // Random arrays of 'dimensions' elements, with the special rows the CPU
   // treats differently: null arrays, null elements, empty arrays and zero
   // vectors.
@@ -102,9 +91,7 @@ class CudfVectorDistanceFunctionsTest
   }
 
   // Evaluates on the CPU and the GPU and compares the results with a
-  // tolerance, since the two sum the products in different orders. The CPU
-  // double overloads cast elements to float, so a true double GPU result can
-  // differ by more than a float-versus-float comparison.
+  // tolerance because the two paths sum products in different orders.
   template <typename T = float>
   void assertMatchesCpu(const std::string& sql, const RowVectorPtr& input) {
     SCOPED_TRACE(sql);
@@ -158,7 +145,46 @@ class CudfVectorDistanceFunctionsTest
   };
 };
 
-TEST_F(CudfVectorDistanceFunctionsTest, columnColumn) {
+// These overloads are available on both CPU builds and must use whichever
+// precision their CPU implementation uses.
+TEST_F(CudfVectorDistanceFunctionsTest, doublePrecisionMatchesCpu) {
+  const auto dotInputs = makeRowVector({
+      makeArrayVector<double>({{16'777'217.0, -16'777'216.0}}),
+      makeArrayVector<double>({{1.0, 1.0}}),
+  });
+  assertMatchesCpu<double>("dot_product(c0, c1)", dotInputs);
+
+  const auto tinyInputs = makeRowVector({
+      makeArrayVector<double>({{1e-30}}),
+      makeArrayVector<double>({{1e-30}}),
+  });
+  assertMatchesCpu<double>("cosine_similarity(c0, c1)", tinyInputs);
+}
+
+class CudfFaissVectorDistanceFunctionsTest
+    : public CudfVectorDistanceFunctionsTest {
+ protected:
+  void SetUp() override {
+    cudf_velox::CudfFunctionBaseTest::SetUp();
+    // The CPU registers the array(real) overloads only when built with FAISS.
+    if (!exec::simpleFunctions()
+             .resolveFunction(
+                 "cosine_similarity", {ARRAY(REAL()), ARRAY(REAL())})
+             .has_value()) {
+      GTEST_SKIP() << "Requires the FAISS-backed CPU distance functions";
+    }
+  }
+};
+
+TEST_F(CudfFaissVectorDistanceFunctionsTest, doubleL2AtFloatRoundingBoundary) {
+  const auto input = makeRowVector({
+      makeArrayVector<double>({{16'777'217.0}}),
+      makeArrayVector<double>({{16'777'216.0}}),
+  });
+  assertMatchesCpu<double>("l2_squared(c0, c1)", input);
+}
+
+TEST_F(CudfFaissVectorDistanceFunctionsTest, columnColumn) {
   constexpr vector_size_t kNumRows{1'000};
   constexpr vector_size_t kDimensions{96};
   const auto input = makeRowVector({
@@ -170,7 +196,7 @@ TEST_F(CudfVectorDistanceFunctionsTest, columnColumn) {
   }
 }
 
-TEST_F(CudfVectorDistanceFunctionsTest, columnConstant) {
+TEST_F(CudfFaissVectorDistanceFunctionsTest, columnConstant) {
   constexpr vector_size_t kNumRows{1'000};
   constexpr vector_size_t kDimensions{8};
   const auto input =
@@ -184,7 +210,7 @@ TEST_F(CudfVectorDistanceFunctionsTest, columnConstant) {
   }
 }
 
-TEST_F(CudfVectorDistanceFunctionsTest, sizeMismatchThrows) {
+TEST_F(CudfFaissVectorDistanceFunctionsTest, sizeMismatchThrows) {
   const auto input = makeRowVector({
       makeArrayVector<float>({{1.0f, 2.0f}, {1.0f, 2.0f, 3.0f}}),
       makeArrayVector<float>({{1.0f, 2.0f}, {1.0f, 2.0f}}),
@@ -214,7 +240,7 @@ TEST_F(CudfVectorDistanceFunctionsTest, sizeMismatchThrows) {
       "Both array arguments must have identical sizes");
 }
 
-TEST_F(CudfVectorDistanceFunctionsTest, doubleColumnColumn) {
+TEST_F(CudfFaissVectorDistanceFunctionsTest, doubleColumnColumn) {
   constexpr vector_size_t kNumRows{200};
   constexpr vector_size_t kDimensions{32};
   const auto input = makeRowVector({
@@ -226,7 +252,7 @@ TEST_F(CudfVectorDistanceFunctionsTest, doubleColumnColumn) {
   }
 }
 
-TEST_F(CudfVectorDistanceFunctionsTest, doubleColumnConstant) {
+TEST_F(CudfFaissVectorDistanceFunctionsTest, doubleColumnConstant) {
   constexpr vector_size_t kNumRows{200};
   constexpr vector_size_t kDimensions{8};
   const auto input = makeRowVector({makeVectors<double>(
@@ -239,7 +265,7 @@ TEST_F(CudfVectorDistanceFunctionsTest, doubleColumnConstant) {
   }
 }
 
-TEST_F(CudfVectorDistanceFunctionsTest, nullElementSkipsSizeCheck) {
+TEST_F(CudfFaissVectorDistanceFunctionsTest, nullElementSkipsSizeCheck) {
   const std::vector<std::vector<std::optional<float>>> left{
       {1.0f, std::nullopt, 3.0f}};
   const std::vector<std::vector<std::optional<float>>> right{{1.0f, 2.0f}};

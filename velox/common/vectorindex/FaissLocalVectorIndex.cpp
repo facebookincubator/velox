@@ -202,8 +202,12 @@ std::mutex& acceleratorMutex() {
 }
 
 std::shared_ptr<const LocalVectorIndexAccelerator>& acceleratorSlot() {
-  static std::shared_ptr<const LocalVectorIndexAccelerator> accelerator;
-  return accelerator;
+  // A registered accelerator may own CUDA resources. Destroying it from
+  // static storage at process exit can run after the CUDA runtime shuts down.
+  // Explicit unregister still releases the accelerator.
+  static auto* const accelerator =
+      new std::shared_ptr<const LocalVectorIndexAccelerator>();
+  return *accelerator;
 }
 
 } // namespace

@@ -2593,6 +2593,48 @@ TEST_F(VectorIndexTest, gpuSearchMatchesCpu) {
   }
 }
 
+TEST_F(VectorIndexTest, gpuIvfPqReturnsShortResults) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+
+  constexpr uint32_t kNumVectors{1'024};
+  constexpr uint32_t kNumNearVectors{256};
+  constexpr uint32_t kDimensions{8};
+  constexpr uint32_t kNumNeighbors{300};
+  auto data = generateRandomVectors(kNumVectors, kDimensions);
+  // Build two separated partitions, with fewer than kNumNeighbors in the
+  // partition nearest the first query.
+  for (size_t i = kNumNearVectors * kDimensions; i < data.size(); ++i) {
+    data[i] += 100.0f;
+  }
+
+  auto config = makeConfig(
+      VectorIndexType::kIvfPq, VectorDistanceMetric::kL2, kDimensions, 2);
+  config.pqBits = 4;
+  auto reader = readIndex(writeIndexFromVectors(config, data));
+  std::vector<float> queries(2 * kDimensions, 0.0f);
+  std::fill(queries.begin() + kDimensions, queries.end(), 100.0f);
+  const auto results = reader->search({
+      .numQueries = 2,
+      .queryVectors = queries,
+      .numNeighbors = kNumNeighbors,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(1),
+      .useGpu = true,
+  });
+
+  ASSERT_TRUE(results.stats().usedGpu);
+  ASSERT_EQ(results.numQueries(), 2);
+  ASSERT_EQ(results.results(0).size(), kNumNearVectors);
+  ASSERT_EQ(results.results(1).size(), kNumNeighbors);
+  for (const auto& result : results.results(0)) {
+    EXPECT_LT(result.rowId, kNumNearVectors);
+  }
+  for (const auto& result : results.results(1)) {
+    EXPECT_GE(result.rowId, kNumNearVectors);
+  }
+}
+
 TEST_F(VectorIndexTest, gpuSearchAppliesRowSelection) {
   if (!VectorIndex::gpuSearchAvailable()) {
     GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";

@@ -57,4 +57,11 @@ target_link_libraries(
     velox_expression
 )
 
+if(VELOX_ENABLE_FAISS)
+  set_source_files_properties(
+    prestosql/VectorDistanceKernels.cu
+    PROPERTIES COMPILE_DEFINITIONS VELOX_ENABLE_FAISS
+  )
+endif()
+
 target_compile_options(velox_cudf_expression PRIVATE -Wno-missing-field-initializers)

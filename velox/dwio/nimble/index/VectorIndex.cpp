@@ -478,15 +478,39 @@ void searchGpuIndex(
   searchParameters.nprobe =
       std::min(numPartitions, static_cast<size_t>(requestedNumProbes));
   velox::CpuWallTimer timer{stats.searchTiming};
-  if (gpuIndex.search(
+  if (!gpuIndex.search(
           numQueries,
           queryVectors,
           maxNumNeighbors,
           scores,
           labels,
           searchParameters)) {
-    stats.usedGpu = true;
+    return;
   }
+
+  // cuVS can use the maximum ID for missing neighbors. Nimble row IDs are
+  // sequential, so that sentinel cannot be a valid row. Pack each query's
+  // results before the trailing padding expected by the result reader.
+  constexpr auto kCuvsPaddingId = std::numeric_limits<faiss::idx_t>::max();
+  for (faiss::idx_t query = 0; query < numQueries; ++query) {
+    const auto offset = query * maxNumNeighbors;
+    auto* queryLabels = labels + offset;
+    auto* queryScores = scores + offset;
+    faiss::idx_t numResults{0};
+    for (faiss::idx_t i = 0; i < maxNumNeighbors; ++i) {
+      const auto label = queryLabels[i];
+      if (label == -1 || label == kCuvsPaddingId) {
+        continue;
+      }
+      if (numResults != i) {
+        queryLabels[numResults] = label;
+        queryScores[numResults] = queryScores[i];
+      }
+      ++numResults;
+    }
+    std::fill(queryLabels + numResults, queryLabels + maxNumNeighbors, -1);
+  }
+  stats.usedGpu = true;
 }
 
 const VectorIndex::HnswSearchOptions* gpuGraphSearchOptions(

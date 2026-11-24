@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <random>
 #include <string>
@@ -151,6 +152,27 @@ class GpuLocalVectorIndexTest : public testing::Test {
   std::vector<int64_t> ids_;
 };
 
+using GpuLocalVectorIndexDeathTest = GpuLocalVectorIndexTest;
+
+TEST_F(GpuLocalVectorIndexDeathTest, registeredAcceleratorAtExit) {
+  ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
+  const auto bytes = build(VectorIndexKind::kFlat);
+  EXPECT_EXIT(
+      {
+        useGpu();
+        {
+          const FaissLocalVectorIndex index(
+              bytes, VectorIndexMetric::kCosine, {});
+          if (!index.accelerated()) {
+            std::exit(EXIT_FAILURE);
+          }
+        }
+        std::exit(EXIT_SUCCESS);
+      },
+      testing::ExitedWithCode(EXIT_SUCCESS),
+      "");
+}
+
 TEST_F(GpuLocalVectorIndexTest, searchMatchesCpu) {
   const auto exact = exactIds();
   for (const auto type :
@@ -225,6 +247,37 @@ TEST_F(GpuLocalVectorIndexTest, padding) {
     EXPECT_NEAR(0.8, scores[0], 0.01);
     EXPECT_NEAR(0.6, scores[1], 0.01);
     EXPECT_NEAR(-0.8, scores[2], 0.05);
+  }
+}
+
+TEST_F(GpuLocalVectorIndexTest, preservesMaximumEmbeddingId) {
+  constexpr auto kMaxId = std::numeric_limits<int64_t>::max();
+  const std::vector<float> embeddings{1, 0, 0, 1};
+  const std::vector<int64_t> ids{kMaxId, 7};
+  const std::vector<float> query{0.8, 0.6};
+  useGpu();
+  for (const auto type :
+       {VectorIndexKind::kFlat,
+        VectorIndexKind::kIvfFlat,
+        VectorIndexKind::kIvfSq}) {
+    SCOPED_TRACE(VectorIndexKindName::toName(type));
+    std::string bytes;
+    FaissLocalVectorIndex::build(
+        type,
+        VectorIndexMetric::kCosine,
+        {},
+        Embeddings(embeddings, 2),
+        ids,
+        [&](std::string_view chunk) { bytes.append(chunk); });
+    const FaissLocalVectorIndex index(bytes, VectorIndexMetric::kCosine, {});
+    EXPECT_EQ(index.accelerated(), type == VectorIndexKind::kFlat);
+
+    std::vector<int64_t> resultIds(3);
+    std::vector<float> scores(3);
+    index.search(Embeddings(query, 2), /*k=*/3, resultIds, scores);
+    EXPECT_THAT(
+        resultIds,
+        testing::ElementsAre(kMaxId, 7, LocalVectorIndex::kPaddingId));
   }
 }
 
