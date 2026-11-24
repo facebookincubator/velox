@@ -20,9 +20,8 @@
 #include <span>
 
 // Varint-related encoding methods. Same binary encoding as folly/Varint.h
-// but with a different API, a faster decode method thanks to
-// to not checking bounds, and bulk decoding methods. No functions in this
-// library check bounds or deal with buffer overflow.
+// but with a different API and bulk decoding methods. The decoding methods
+// and the skip overload without an end pointer do not check bounds.
 //
 // The bulk decoding methods are particularly interesting. They range from
 // 4x faster than the non-bulk in the best case (all 1 byte varints) to
@@ -38,6 +37,10 @@ const char* bulkVarintDecode64(uint64_t n, const char* pos, uint64_t* output);
 
 // Skips n varints, returning pos updated past the n varints.
 const char* bulkVarintSkip(uint64_t n, const char* pos);
+
+/// Skips n varints without reading at or past end. Rejects truncated input.
+/// Requires pos and end to delimit a valid byte range.
+const char* bulkVarintSkip(uint64_t n, const char* pos, const char* end);
 
 // Returns the number of bytes the |values| will occupy after varint encoding.
 uint64_t bulkVarintSize32(std::span<const uint32_t> values);

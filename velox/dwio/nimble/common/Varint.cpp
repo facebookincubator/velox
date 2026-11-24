@@ -52,6 +52,27 @@ const char* bulkVarintSkip(uint64_t n, const char* pos) {
   return pos;
 }
 
+const char* bulkVarintSkip(uint64_t n, const char* pos, const char* end) {
+  auto remaining = static_cast<size_t>(end - pos);
+  while (n >= 8 && remaining >= sizeof(uint64_t)) {
+    uint64_t word;
+    std::memcpy(&word, pos, sizeof(word));
+    pos += sizeof(word);
+    remaining -= sizeof(word);
+    n -= __builtin_popcountll(~word & 0x8080808080808080ULL);
+  }
+  while (n != 0) {
+    NIMBLE_CHECK_FILE_GT(
+        remaining, 0, "Varint skip runs past the end of the encoding.");
+    const auto byte = static_cast<uint8_t>(*pos++);
+    --remaining;
+    if ((byte & 0x80) == 0) {
+      --n;
+    }
+  }
+  return pos;
+}
+
 uint64_t bulkVarintSize32(std::span<const uint32_t> values) {
   constexpr uint8_t kLookupSizeTable32[32] = {5, 5, 5, 5, 4, 4, 4, 4, 4, 4, 4,
                                               3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2,
