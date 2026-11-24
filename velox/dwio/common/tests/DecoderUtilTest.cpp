@@ -434,7 +434,7 @@ TEST_F(DecoderUtilTest, fixedWidthScanSmallintAtEndOfMapping) {
         data = storage.data() + 1;
       } else {
         page.emplace();
-        data = reinterpret_cast<char*>(page->end()) - numData * sizeof(int16_t);
+        data = reinterpret_cast<char*>(page->atEnd<int16_t>(numData).data());
       }
       for (int32_t i = 0; i < numData; ++i) {
         const int16_t value = i + 1;
