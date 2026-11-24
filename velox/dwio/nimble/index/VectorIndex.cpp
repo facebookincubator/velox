@@ -21,6 +21,7 @@
 #include <cstring>
 #include <exception>
 #include <limits>
+#include <unordered_set>
 #include <variant>
 
 #include <faiss/Index.h>
@@ -498,11 +499,15 @@ void searchGpuIndex(
   // score. Some IVF indexes instead mark missing IDs with the maximum ID.
   // Pack each query's valid results before the trailing FAISS padding.
   constexpr auto kCuvsPaddingId = std::numeric_limits<faiss::idx_t>::max();
+  // IVF-PQ can also repeat real IDs with finite scores once it runs out of
+  // candidates, so only the first occurrence of an ID is a result.
+  std::unordered_set<faiss::idx_t> seen;
   for (faiss::idx_t query = 0; query < numQueries; ++query) {
     const auto offset = query * maxNumNeighbors;
     auto* queryLabels = labels + offset;
     auto* queryScores = scores + offset;
     faiss::idx_t numResults{0};
+    seen.clear();
     for (faiss::idx_t i = 0; i < maxNumNeighbors; ++i) {
       const auto label = queryLabels[i];
       if (label == -1 || label == kCuvsPaddingId ||
@@ -515,11 +520,20 @@ void searchGpuIndex(
         // Leave usedGpu false so the caller retries the batch on the CPU.
         return;
       }
+      if (!seen.insert(label).second) {
+        continue;
+      }
       if (numResults != i) {
         queryLabels[numResults] = label;
         queryScores[numResults] = queryScores[i];
       }
       ++numResults;
+    }
+    if (numResults == 0 && searchParameters.sel == nullptr) {
+      // cuVS IVF-PQ can return only padding for a query at large k. Without a
+      // row filter that is indistinguishable from empty probed lists, so let
+      // the CPU decide. Leave usedGpu false so the caller retries the batch.
+      return;
     }
     std::fill(queryLabels + numResults, queryLabels + maxNumNeighbors, -1);
   }
