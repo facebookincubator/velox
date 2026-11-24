@@ -343,9 +343,7 @@ addConstant(vector_size_t size, vector_size_t index, VectorPtr vector) {
       auto constVector = vector->as<ConstantVector<T>>();
       if constexpr (!std::is_same_v<T, ComplexType>) {
         if (!vector->valueVector()) {
-          T value = constVector->valueAt(0);
-          return std::make_shared<ConstantVector<T>>(
-              pool, size, false, vector->type(), std::move(value));
+          return constVector->copy(pool, size);
         }
       }
 

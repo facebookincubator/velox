@@ -445,18 +445,36 @@ NimbleIndexProjector::co_projectRows(
     // its own handle rather than result.values; the check below holds it to
     // filling the vector this function allocated.
     velox::VectorPtr outputVector = result.values;
+    // Reads the ranges whose output rows follow each other, and whose source
+    // rows ascend without overlap, in one call, so the readers walk their
+    // streams once for the run instead of once for each request.
+    std::vector<RowRange> runRanges;
+    velox::vector_size_t runOutputOffset{0};
+    velox::vector_size_t runRows{0};
     for (const auto& range : plannedStripeRanges(stripeOffset)) {
       const auto numRows = static_cast<uint32_t>(range.rowRange.numRows());
       const auto outputOffset = result.responses[range.requestIndex].offset +
           stripeOutputRows[range.requestIndex];
-      co_await streamReader_->co_read(
-          std::span<const RowRange>{&range.rowRange, 1},
-          outputOffset,
-          outputVector);
+      if (!runRanges.empty() &&
+          (outputOffset != runOutputOffset + runRows ||
+           range.rowRange.startRow < runRanges.back().endRow)) {
+        co_await streamReader_->co_read(
+            runRanges, runOutputOffset, outputVector);
+        runRanges.clear();
+      }
+      if (runRanges.empty()) {
+        runOutputOffset = outputOffset;
+        runRows = 0;
+      }
+      runRanges.push_back(range.rowRange);
+      runRows += static_cast<velox::vector_size_t>(numRows);
       stripeOutputRows[range.requestIndex] +=
           static_cast<velox::vector_size_t>(numRows);
       updateStats(
           [numRows](Stats& stats) { stats.numProjectedRows += numRows; });
+    }
+    if (!runRanges.empty()) {
+      co_await streamReader_->co_read(runRanges, runOutputOffset, outputVector);
     }
     NIMBLE_CHECK_EQ(
         static_cast<const void*>(outputVector.get()),

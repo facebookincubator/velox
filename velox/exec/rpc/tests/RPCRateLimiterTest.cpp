@@ -1398,6 +1398,42 @@ TEST_F(RPCRateLimiterTest, adaptiveFlooredAtMinLimit) {
   EXPECT_EQ(limiterFor(backend).stats().capacity, 4);
 }
 
+TEST_F(RPCRateLimiterTest, statsReportTheFloorTheLimiterEnforces) {
+  const auto floorMilli = [](const RPCRateLimiter::Config& config) {
+    auto limiter = std::make_shared<RPCRateLimiter>("test.floor-stat");
+    limiter->configure(config);
+    return limiter->stats().floorMilli;
+  };
+  EXPECT_EQ(
+      floorMilli(
+          {.adaptive = true,
+           .ceiling = 200,
+           .floor = 4,
+           .maxProbeInterval = std::chrono::milliseconds{0}}),
+      4'000);
+  // The probe floor raises a lower configured floor: a 1 s service horizon
+  // over a 1 s probe interval, capped at half a unit.
+  EXPECT_EQ(
+      floorMilli(
+          {.adaptive = true,
+           .ceiling = 200,
+           .floor = 0.01,
+           .maxProbeInterval = std::chrono::milliseconds{1'000}}),
+      500);
+  // CAPACITY_PROBING ignores the configured floor.
+  EXPECT_EQ(
+      floorMilli(
+          {.adaptive = true,
+           .ceiling = 200,
+           .floor = 50,
+           .maxProbeInterval = std::chrono::milliseconds{0},
+           .flowControlPolicy = RPCFlowControlPolicy::kCapacityProbing}),
+      1);
+  // No floor applies when it reaches the ceiling or the limiter is fixed.
+  EXPECT_EQ(floorMilli({.adaptive = true, .ceiling = 4, .floor = 50}), 0);
+  EXPECT_EQ(floorMilli({.adaptive = false, .ceiling = 200, .floor = 4}), 0);
+}
+
 TEST_F(RPCRateLimiterTest, capacityProbingDoublesUntilFirstOverload) {
   for (const auto& [policy, expected] :
        std::vector<std::pair<RPCFlowControlPolicy, int64_t>>{

@@ -80,8 +80,7 @@ class ConstantVector final : public SimpleVector<T> {
     }
     if constexpr (std::is_same_v<T, StringView>) {
       if (!isNull_) {
-        // Copy string value.
-        setValue(value_.str());
+        setStringValue(value_, BufferPtr(nullptr));
       }
     }
 #ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
@@ -280,13 +279,34 @@ class ConstantVector final : public SimpleVector<T> {
   VectorPtr slice(vector_size_t /*offset*/, vector_size_t length)
       const override {
     VELOX_DCHECK(initialized_);
+    return copy(this->pool_, length);
+  }
+
+  using BaseVector::copy;
+
+  /// Returns a constant vector of 'length' rows with this vector's value, in
+  /// 'pool'. A string value shares this vector's string buffer if the buffer is
+  /// allocated from 'pool', at any size: this vector already holds the buffer,
+  /// so sharing it adds no memory. Otherwise the value is copied into 'pool'.
+  std::shared_ptr<ConstantVector<T>> copy(
+      velox::memory::MemoryPool* pool,
+      vector_size_t length) const {
+    VELOX_DCHECK(initialized_);
     if (valueVector_) {
       return std::make_shared<ConstantVector<T>>(
-          this->pool_, length, index_, valueVector_);
-    } else {
-      return std::make_shared<ConstantVector<T>>(
-          this->pool_, length, isNull_, this->type_, T(value_));
+          pool, length, index_, valueVector_);
     }
+    if constexpr (std::is_same_v<T, StringView>) {
+      if (!isNull_) {
+        // An empty value allocates no buffer to replace.
+        auto result = std::make_shared<ConstantVector<T>>(
+            pool, length, false, this->type_, StringView());
+        result->setStringValue(value_, *this);
+        return result;
+      }
+    }
+    return std::make_shared<ConstantVector<T>>(
+        pool, length, isNull_, this->type_, T(value_));
   }
 
   void addNulls(const uint64_t* /*bits*/, const SelectivityVector& /*rows*/)
@@ -399,12 +419,12 @@ class ConstantVector final : public SimpleVector<T> {
       valueVector_->transferOrCopyTo(pool);
     }
     if constexpr (std::is_same_v<T, StringView>) {
-      if (stringBuffer_ && !stringBuffer_->transferTo(pool)) {
-        auto newBuffer = AlignedBuffer::copy<char>(stringBuffer_, pool);
-        auto offset = value_.data() - stringBuffer_->template as<char>();
-        value_ =
-            StringView(newBuffer->template as<char>() + offset, value_.size());
-        stringBuffer_ = std::move(newBuffer);
+      // A buffer another vector also holds can hold other values, such as a
+      // flat vector's string buffer this constant shares, so the constant
+      // takes a copy of just its value.
+      if (stringBuffer_ != nullptr && stringBuffer_->pool() != pool &&
+          !(stringBuffer_->unique() && stringBuffer_->transferTo(pool))) {
+        setStringValue(value_, BufferPtr(nullptr));
       }
     }
   }
@@ -443,9 +463,7 @@ class ConstantVector final : public SimpleVector<T> {
       if (!isNull_) {
         value_ = simple->valueAt(index_);
         if constexpr (std::is_same_v<T, StringView>) {
-          // Copy string value.
-          StringView* valuePtr = reinterpret_cast<StringView*>(&value_);
-          setValue(std::string(valuePtr->data(), valuePtr->size()));
+          setStringValue(value_, *simple);
 
           auto stringVector = simple->template as<SimpleVector<StringView>>();
           if (auto ascii = stringVector->isAscii(index_)) {
@@ -459,14 +477,15 @@ class ConstantVector final : public SimpleVector<T> {
     initialized_ = true;
   }
 
-  void setValue(const std::string& string) {
-    value_ = velox::to<decltype(value_)>(string);
-#ifdef VELOX_ENABLE_LOAD_SIMD_VALUE_BUFFER
-    if constexpr (can_simd) {
-      valueBuffer_ = simd::setAll(value_);
-    }
-#endif
-  }
+  // Sets 'value_' to 'value'. Holds 'buffer', which must contain the bytes of
+  // 'value', if it is not null, and copies the bytes into a buffer from this
+  // vector's pool otherwise.
+  void setStringValue(StringView value, BufferPtr buffer);
+
+  // Sets 'value_' to 'value', which was read from 'source'. Shares the buffer
+  // of 'source' that holds the bytes of 'value' when that is safe, and copies
+  // the bytes otherwise.
+  void setStringValue(StringView value, const BaseVector& source);
 
   void makeNullsBuffer() {
     if (!isNull_) {
@@ -510,13 +529,14 @@ class ConstantVector final : public SimpleVector<T> {
 };
 
 template <>
-void ConstantVector<StringView>::setValue(const std::string& string);
+void ConstantVector<StringView>::setStringValue(
+    StringView value,
+    const BaseVector& source);
 
 template <>
-void ConstantVector<std::shared_ptr<void>>::setValue(const std::string& string);
-
-template <>
-void ConstantVector<ComplexType>::setValue(const std::string& string);
+void ConstantVector<StringView>::setStringValue(
+    StringView value,
+    BufferPtr buffer);
 
 template <typename T>
 using ConstantVectorPtr = std::shared_ptr<ConstantVector<T>>;

@@ -618,6 +618,23 @@ void TableEvolutionFuzzer::CoverageAccumulator::add(
     filterCoverage.numQueriesWithRowReduction += rowsReduced;
     filterCoverage.numRowsReduced +=
         rowsReduced ? query.rowsReducedByPushdown : 0;
+
+    if (query.subfieldFilterShapes.size() == 1 && !query.hasRemainingFilter) {
+      const bool chunksSkipped = query.pushdown.chunkSkippedRows > 0;
+      const auto addStatsPruning = [&](StatsPruningCoverage& coverage) {
+        ++coverage.numQueries;
+        coverage.numWithSkippedFiles += splitPruned;
+        coverage.numWithSkippedStrides += stridePruned;
+        coverage.numWithSkippedChunks += chunksSkipped;
+      };
+      const auto& shape = query.subfieldFilterShapes.front();
+      addStatsPruning(
+          filterCoverage.statsPruningByTypeAndKind[shape.type][shape.kind]);
+      if (shape.passesNaN) {
+        addStatsPruning(
+            filterCoverage.statsPruningOfNaNPassingFilters[shape.kind]);
+      }
+    }
   }
 
   if (query.aggregationRequested) {
@@ -684,13 +701,18 @@ unsigned TableEvolutionFuzzer::seed() const {
 }
 
 void TableEvolutionFuzzer::setSeed(unsigned seed) {
-  currentSeed_ = seed;
-  rng_.seed(seed);
-  vectorFuzzer_.reSeed(rng_());
+  runSeed_ = seed;
+  applySeed(seed);
 }
 
 void TableEvolutionFuzzer::reSeed() {
-  setSeed(rng_());
+  applySeed(rng_());
+}
+
+void TableEvolutionFuzzer::applySeed(unsigned seed) {
+  currentSeed_ = seed;
+  rng_.seed(seed);
+  vectorFuzzer_.reSeed(rng_());
 }
 
 const std::vector<dwio::common::FileFormat>
@@ -1455,6 +1477,32 @@ std::vector<std::string> nullAcceptingSubfieldFilterTypeKinds(
   return {typeKinds.begin(), typeKinds.end()};
 }
 
+// Describes each filter in 'filters' by the type of the top-level column it
+// filters, its kind, and whether NaN passes it.
+std::vector<TableEvolutionFuzzer::SubfieldFilterShape> subfieldFilterShapes(
+    const RowTypePtr& schema,
+    const common::SubfieldFilters& filters) {
+  std::vector<TableEvolutionFuzzer::SubfieldFilterShape> shapes;
+  shapes.reserve(filters.size());
+  for (const auto& [subfield, filter] : filters) {
+    const auto* field = dynamic_cast<const common::Subfield::NestedField*>(
+        subfield.path().at(0).get());
+    VELOX_CHECK_NOT_NULL(field, "Unexpected subfield: {}", subfield.toString());
+    const auto& type = schema->findChild(field->name());
+    bool passesNaN{false};
+    if (type->kind() == TypeKind::REAL) {
+      passesNaN = filter->testFloat(std::numeric_limits<float>::quiet_NaN());
+    } else if (type->kind() == TypeKind::DOUBLE) {
+      passesNaN = filter->testDouble(std::numeric_limits<double>::quiet_NaN());
+    }
+    shapes.push_back(
+        {.type = type->kindName(),
+         .kind = std::string(filter->kindName()),
+         .passesNaN = passesNaN});
+  }
+  return shapes;
+}
+
 std::vector<std::string> aggregateFunctionNames(
     const AggregationConfig& aggregationConfig) {
   std::set<std::string> functions;
@@ -1671,6 +1719,7 @@ std::vector<std::string> TableEvolutionFuzzer::projectedColumnNames(
 }
 
 void TableEvolutionFuzzer::run() {
+  ++numIterations_;
   ScopedOOMInjector oomInjectorWritePath(
       [this]() -> bool { return folly::Random::oneIn(10, rng_); },
       10); // Check the condition every 10 ms.
@@ -1755,6 +1804,7 @@ void TableEvolutionFuzzer::run() {
 
   auto executor = folly::getGlobalCPUExecutor();
   auto writeResults = runTaskCursors(writeTasks, *executor);
+  ++coverageStats_.numTablesWritten;
 
   if (config_.generatedFilesValidator) {
     auto [actualSplits, expectedSplits] = createScanSplitsFromWriteResults(
@@ -1890,6 +1940,7 @@ RowVectorPtr TableEvolutionFuzzer::readInputFileSample(
 bool TableEvolutionFuzzer::runOnInputFile(
     const InputFile& inputFile,
     std::chrono::steady_clock::time_point deadline) {
+  ++numIterations_;
   inputFile_ = &inputFile;
   SCOPE_EXIT {
     inputFile_ = nullptr;
@@ -2243,6 +2294,8 @@ void TableEvolutionFuzzer::runQueryShape(
       .subfieldFilterTypes = std::move(subfieldFilterTypes),
       .remainingFilterTypes = std::move(remainingFilterTypes),
       .filterKinds = std::move(filterKinds),
+      .subfieldFilterShapes =
+          subfieldFilterShapes(rowType, pushdownConfig.subfieldFiltersMap),
       .nullAcceptingSubfieldFilterTypes =
           std::move(nullAcceptingSubfieldFilterTypes),
       .groupingKeyTypes = std::move(groupingKeyTypes),
@@ -3359,6 +3412,237 @@ void TableEvolutionFuzzer::applyRemainingFilters(
   }
 }
 
+std::string formatCoverageTable(
+    const std::vector<std::string>& header,
+    const std::vector<std::vector<std::string>>& rows,
+    size_t numLabelColumns,
+    std::string_view indentation) {
+  std::vector<size_t> widths;
+  widths.reserve(header.size());
+  for (const auto& name : header) {
+    widths.push_back(name.size());
+  }
+  for (const auto& row : rows) {
+    VELOX_CHECK_EQ(
+        row.size(),
+        header.size(),
+        "Coverage table row must have one cell per column");
+    for (size_t column = 0; column < row.size(); ++column) {
+      widths[column] = std::max(widths[column], row[column].size());
+    }
+  }
+  const auto formatLine = [&](const std::vector<std::string>& cells) {
+    std::string line{indentation};
+    for (size_t column = 0; column < cells.size(); ++column) {
+      if (column > 0) {
+        line += "  ";
+      }
+      line += column < numLabelColumns
+          ? fmt::format("{:<{}}", cells[column], widths[column])
+          : fmt::format("{:>{}}", cells[column], widths[column]);
+    }
+
+    // Padding a left-aligned last column leaves trailing spaces.
+    line.erase(line.find_last_not_of(' ') + 1);
+    return line;
+  };
+  std::vector<std::string> lines;
+  lines.reserve(rows.size() + 1);
+  lines.push_back(formatLine(header));
+  for (const auto& row : rows) {
+    lines.push_back(formatLine(row));
+  }
+  return folly::join("\n", lines);
+}
+
+std::string formatCoveragePercent(int64_t part, int64_t whole) {
+  if (whole == 0) {
+    return "-";
+  }
+  const double percent =
+      100.0 * static_cast<double>(part) / static_cast<double>(whole);
+  if (part != 0 && percent < 0.5) {
+    return "<1%";
+  }
+  if (part != whole && percent >= 99.5) {
+    return ">99%";
+  }
+  return fmt::format("{:.0f}%", percent);
+}
+
+namespace {
+
+// Longest line the coverage report wraps text to.
+constexpr size_t kCoverageLineWidth = 100;
+
+// Wraps 'text' into lines of at most kCoverageLineWidth characters, breaking
+// only after ", " and ": " so that list entries stay whole. The first line
+// starts with 'firstIndentation' and the others with 'indentation'. A segment
+// longer than a line stays whole.
+std::string wrapCoverageText(
+    std::string_view text,
+    std::string_view firstIndentation,
+    std::string_view indentation) {
+  std::vector<std::string_view> segments;
+  size_t segmentBegin{0};
+  for (size_t i = 0; i + 1 < text.size(); ++i) {
+    if ((text[i] == ',' || text[i] == ':') && text[i + 1] == ' ') {
+      segments.push_back(text.substr(segmentBegin, i + 1 - segmentBegin));
+      segmentBegin = i + 2;
+    }
+  }
+  segments.push_back(text.substr(segmentBegin));
+
+  std::string wrapped{firstIndentation};
+  size_t lineStart{0};
+  bool lineHasSegment{false};
+  for (const auto segment : segments) {
+    if (lineHasSegment &&
+        wrapped.size() - lineStart + 1 + segment.size() > kCoverageLineWidth) {
+      wrapped += '\n';
+      lineStart = wrapped.size();
+      wrapped += indentation;
+      lineHasSegment = false;
+    }
+    if (lineHasSegment) {
+      wrapped += ' ';
+    }
+    wrapped += segment;
+    lineHasSegment = true;
+  }
+  return wrapped;
+}
+
+// Returns true when statistics let at least one of the queries in 'coverage'
+// skip data.
+bool skippedData(const TableEvolutionFuzzer::StatsPruningCoverage& coverage) {
+  return coverage.numWithSkippedFiles + coverage.numWithSkippedStrides +
+      coverage.numWithSkippedChunks >
+      0;
+}
+
+// Lists the types of projected columns that no executed query filtered.
+std::vector<std::string> unfilteredTypes(
+    const TableEvolutionFuzzer::QueryShapeCoverage& queryShapes) {
+  std::vector<std::string> types;
+  for (const auto& [type, numQueries] : queryShapes.projectedByType) {
+    const auto it = queryShapes.filters.byType.find(type);
+    if (it == queryShapes.filters.byType.end() || it->second.numExecuted == 0) {
+      types.push_back(type);
+    }
+  }
+  return types;
+}
+
+// Fewest queries of a filter that the coverage gaps report as never skipping
+// data. Fewer queries without a skip can be chance.
+constexpr int64_t kMinQueriesForSkipGap = 10;
+
+// Lists the filters with at least kMinQueriesForSkipGap queries whose
+// statistics never skipped data, as "TYPE Kind (N queries)", among the queries
+// whose one filter is a subfield filter.
+std::vector<std::string> filtersThatNeverSkipped(
+    const TableEvolutionFuzzer::FilterCoverage& filters) {
+  std::vector<std::string> entries;
+  for (const auto& [type, byKind] : filters.statsPruningByTypeAndKind) {
+    for (const auto& [kind, coverage] : byKind) {
+      if (coverage.numQueries >= kMinQueriesForSkipGap &&
+          !skippedData(coverage)) {
+        entries.push_back(
+            fmt::format("{} {} ({} queries)", type, kind, coverage.numQueries));
+      }
+    }
+  }
+  return entries;
+}
+
+} // namespace
+
+std::vector<std::string> TableEvolutionFuzzer::coverageGaps(
+    const CoverageAccumulator& coverage,
+    const Config& config) {
+  std::vector<std::string> gaps;
+  const auto& configs = coverage.configs;
+  const auto& queryShapes = coverage.queryShapes;
+  const auto& filters = queryShapes.filters;
+  if (coverage.numTablesWritten > 0) {
+    if (configs.numFlatmapEligible == 0) {
+      gaps.emplace_back(
+          "flat maps: no table had a map column written as a flat map in every file");
+    } else if (queryShapes.flatmapAsStruct.numExecuted == 0) {
+      gaps.emplace_back("flat maps: no query read a flat map as a struct");
+    }
+    if (configs.numBucketed == 0) {
+      gaps.emplace_back("bucketing: no table was bucketed");
+    }
+    if (config.evolutionCount > 1 && configs.numTypeTransitions == 0) {
+      gaps.emplace_back(
+          "schema evolution: no column changed type and no field was added");
+    }
+  }
+  if (coverage.numQueriesCompleted > 0 && filters.numExecuted == 0) {
+    gaps.emplace_back("filters: no query had a filter");
+  }
+  if (filters.numExecuted > 0) {
+    const auto types = unfilteredTypes(queryShapes);
+    if (!types.empty()) {
+      gaps.push_back(
+          fmt::format(
+              "filters: no query filtered a column of type {}",
+              folly::join(", ", types)));
+    }
+    if (filters.numRemainingRequested > 0 &&
+        filters.numRemainingFilterEvaluated == 0) {
+      gaps.emplace_back("remaining filters: the scan never evaluated one");
+    }
+    if (filters.numFilterOnly == 0) {
+      gaps.emplace_back(
+          "filter-only columns: no query filtered a column without projecting it");
+    }
+    if (filters.numQueriesWithSplitPruning == 0) {
+      gaps.emplace_back("file statistics: no query skipped a file");
+    }
+    if (coverage.pushdown.processedRows > 0 &&
+        coverage.pushdown.numQueriesWithChunkSkipping == 0) {
+      gaps.emplace_back("chunk statistics: no query skipped a row");
+    }
+    const auto neverSkipped = filtersThatNeverSkipped(filters);
+    if (!neverSkipped.empty()) {
+      gaps.push_back(
+          fmt::format(
+              "statistics never skipped data for: {}",
+              folly::join(", ", neverSkipped)));
+    }
+    const auto& nanPassing = filters.statsPruningOfNaNPassingFilters;
+    if (config.dataSpec.includeNaN) {
+      if (nanPassing.empty()) {
+        gaps.emplace_back(
+            "NaN: no query had one subfield filter that NaN passes");
+      } else if (std::none_of(
+                     nanPassing.begin(),
+                     nanPassing.end(),
+                     [](const auto& entry) {
+                       return skippedData(entry.second);
+                     })) {
+        gaps.emplace_back(
+            "NaN: statistics never skipped data for a filter that NaN passes");
+      }
+    }
+  }
+  const auto& aggregations = queryShapes.aggregations;
+  if (aggregations.numExecuted > 0 &&
+      aggregations.numPushdownPlanActivated == 0) {
+    gaps.emplace_back(
+        "aggregation pushdown: no query loaded values into the scan's ValueHook");
+  }
+  if (config.fileFormatCoverageGaps) {
+    for (auto& gap : config.fileFormatCoverageGaps()) {
+      gaps.push_back(std::move(gap));
+    }
+  }
+  return gaps;
+}
+
 void TableEvolutionFuzzer::logCoverageProgress() const {
   const auto& stats = coverageStats_;
   LOG(WARNING) << fmt::format(
@@ -3372,6 +3656,264 @@ void TableEvolutionFuzzer::logCoverageProgress() const {
       stats.numOriginalVerificationsPassed);
 }
 
+namespace {
+
+// Formats 'gaps' as the summary's list of what the run has not exercised.
+std::string formatCoverageGaps(const std::vector<std::string>& gaps) {
+  if (gaps.empty()) {
+    return "\nNot exercised: none";
+  }
+  std::vector<std::string> lines;
+  lines.reserve(gaps.size());
+  for (const auto& gap : gaps) {
+    lines.push_back(wrapCoverageText(gap, "  - ", "    "));
+  }
+  return fmt::format("\nNot exercised:\n{}", folly::join("\n", lines));
+}
+
+// Formats one row of a stats pruning table: 'labels', the number of queries,
+// and how many of them skipped a file, a stride, and rows by chunk statistics,
+// each with its share of the queries.
+std::vector<std::string> statsPruningRow(
+    std::vector<std::string> labels,
+    const TableEvolutionFuzzer::StatsPruningCoverage& coverage) {
+  auto row = std::move(labels);
+  row.push_back(folly::to<std::string>(coverage.numQueries));
+  for (const auto numSkipped :
+       {coverage.numWithSkippedFiles,
+        coverage.numWithSkippedStrides,
+        coverage.numWithSkippedChunks}) {
+    row.push_back(folly::to<std::string>(numSkipped));
+    row.push_back(formatCoveragePercent(numSkipped, coverage.numQueries));
+  }
+  return row;
+}
+
+// Formats how often the pushdown scan of a query with a filter skipped data,
+// then the skips of the queries whose one filter is a subfield filter, by the
+// filter's column type and kind, and for the filters that NaN passes.
+std::string formatStatsPruningCoverage(
+    const TableEvolutionFuzzer::CoverageAccumulator& stats) {
+  const auto& filters = stats.queryShapes.filters;
+  const auto& pushdown = stats.pushdown;
+  const auto countRow = [&](std::string label, int64_t numQueries) {
+    return std::vector<std::string>{
+        std::move(label),
+        folly::to<std::string>(numQueries),
+        formatCoveragePercent(numQueries, filters.numExecuted)};
+  };
+  const auto summary = formatCoverageTable(
+      {"executed queries with a filter", "queries", "%"},
+      {
+          countRow("all", filters.numExecuted),
+          countRow("applied a filter in the scan", filters.numActivated),
+          countRow("skipped data or returned fewer rows", filters.numEffective),
+          countRow("skipped a file", filters.numQueriesWithSplitPruning),
+          countRow("skipped a stride", filters.numQueriesWithStridePruning),
+          countRow(
+              "skipped rows by chunk statistics",
+              pushdown.numQueriesWithChunkSkipping),
+          countRow(
+              "returned fewer rows than the reference scan",
+              filters.numQueriesWithRowReduction),
+      },
+      /*numLabelColumns=*/1,
+      "  ");
+  const auto numChunkSkippingQueries = pushdown.numQueriesWithChunkSkipping;
+  const auto chunkSkipping = numChunkSkippingQueries == 0
+      ? std::string{}
+      : fmt::format(
+            "\n  a query that skipped rows by chunk statistics skipped {} rows "
+            "and processed {} on average",
+            pushdown.chunkSkippedRows / numChunkSkippingQueries,
+            pushdown.processedRowsWithChunkSkipping / numChunkSkippingQueries);
+
+  std::vector<std::vector<std::string>> byTypeAndKind;
+  for (const auto& [type, byKind] : filters.statsPruningByTypeAndKind) {
+    for (const auto& [kind, coverage] : byKind) {
+      byTypeAndKind.push_back(statsPruningRow({type, kind}, coverage));
+    }
+  }
+  std::vector<std::vector<std::string>> nanPassing;
+  nanPassing.reserve(filters.statsPruningOfNaNPassingFilters.size());
+  for (const auto& [kind, coverage] : filters.statsPruningOfNaNPassingFilters) {
+    nanPassing.push_back(statsPruningRow({kind}, coverage));
+  }
+  const auto formatTable =
+      [](std::vector<std::string> labels,
+         const std::vector<std::vector<std::string>>& rows) {
+        if (rows.empty()) {
+          return std::string{"    none"};
+        }
+        const auto numLabelColumns = labels.size();
+        auto header = std::move(labels);
+        header.insert(
+            header.end(),
+            {"queries", "files", "%", "strides", "%", "chunks", "%"});
+        return formatCoverageTable(header, rows, numLabelColumns, "    ");
+      };
+  return fmt::format(
+      "\nStatsPruningCoverage (pushdown scans):\n"
+      "{}{}\n"
+      "  queries whose one filter is a subfield filter, by its column type and "
+      "kind:\n"
+      "{}\n"
+      "  the same queries, for the filters that NaN passes:\n"
+      "{}",
+      summary,
+      chunkSkipping,
+      formatTable({"type", "filter kind"}, byTypeAndKind),
+      formatTable({"filter kind"}, nanPassing));
+}
+
+// Returns the executed queries of 'name' in 'dimensions', or 0 when absent.
+int64_t numExecutedQueries(
+    const std::map<std::string, TableEvolutionFuzzer::QueryDimensionCoverage>&
+        dimensions,
+    const std::string& name) {
+  const auto it = dimensions.find(name);
+  return it != dimensions.end() ? it->second.numExecuted : 0;
+}
+
+// Formats each entry of 'dimensions' as "name=executed queries".
+std::string formatExecutedDimensions(
+    const std::map<std::string, TableEvolutionFuzzer::QueryDimensionCoverage>&
+        dimensions) {
+  std::vector<std::string> entries;
+  entries.reserve(dimensions.size());
+  for (const auto& [name, coverage] : dimensions) {
+    entries.push_back(fmt::format("{}={}", name, coverage.numExecuted));
+  }
+  return entries.empty() ? std::string{"none"} : folly::join(", ", entries);
+}
+
+// Formats the generated query shapes: the share of the attempted queries with
+// each filter and aggregation feature, the queries by the types of the columns
+// they use, and the filter kinds and aggregation functions they ran.
+std::string formatQueryShapeCoverage(
+    const TableEvolutionFuzzer::CoverageAccumulator& stats) {
+  const auto& queryShapes = stats.queryShapes;
+  const auto& filters = queryShapes.filters;
+  const auto& aggregations = queryShapes.aggregations;
+  const auto countRow = [&](std::string label, int64_t numQueries) {
+    return std::vector<std::string>{
+        std::move(label),
+        folly::to<std::string>(numQueries),
+        formatCoveragePercent(numQueries, stats.numQueriesAttempted)};
+  };
+  const auto features = formatCoverageTable(
+      {"attempted queries", "queries", "%"},
+      {
+          countRow("all", stats.numQueriesAttempted),
+          countRow("with a filter", filters.numRequested),
+          countRow("with a subfield filter", filters.numSubfieldRequested),
+          countRow("with a remaining filter", filters.numRemainingRequested),
+          countRow(
+              "with both kinds of filter",
+              filters.numSubfieldAndRemainingRequested),
+          countRow("with a filter-only column", filters.numFilterOnly),
+          countRow(
+              "with a null-accepting filter on a column with nulls",
+              filters.numNullAcceptingSubfieldOnNullableInput),
+          countRow("with an aggregation", aggregations.numRequested),
+      },
+      /*numLabelColumns=*/1,
+      "  ");
+
+  std::set<std::string> types;
+  for (const auto* dimensions :
+       {&filters.byType,
+        &filters.subfieldByType,
+        &filters.remainingByType,
+        &aggregations.groupingKeyTypes,
+        &aggregations.aggregateTypes}) {
+    for (const auto& [type, coverage] : *dimensions) {
+      types.insert(type);
+    }
+  }
+  for (const auto& [type, numQueries] : queryShapes.projectedByType) {
+    types.insert(type);
+  }
+  std::vector<std::vector<std::string>> typeRows;
+  typeRows.reserve(types.size());
+  for (const auto& type : types) {
+    // Projections count the scalar types of the projected columns, nested ones
+    // included, so a complex type has no projection count.
+    const bool isComplexType =
+        type == "ARRAY" || type == "MAP" || type == "ROW";
+    const auto projected = queryShapes.projectedByType.find(type);
+    typeRows.push_back({
+        type,
+        folly::to<std::string>(numExecutedQueries(filters.byType, type)),
+        folly::to<std::string>(
+            numExecutedQueries(filters.subfieldByType, type)),
+        folly::to<std::string>(
+            numExecutedQueries(filters.remainingByType, type)),
+        isComplexType ? std::string{"-"}
+                      : folly::to<std::string>(
+                            projected != queryShapes.projectedByType.end()
+                                ? projected->second
+                                : 0),
+        folly::to<std::string>(
+            numExecutedQueries(aggregations.groupingKeyTypes, type)),
+        folly::to<std::string>(
+            numExecutedQueries(aggregations.aggregateTypes, type)),
+    });
+  }
+  return fmt::format(
+      "\nQueryShapeCoverage:\n"
+      "{}\n"
+      "  subfield filters: {}; filter-only columns: {}\n"
+      "  queries by the type of a column they filter, project, group by or "
+      "aggregate:\n"
+      "{}\n"
+      "{}\n"
+      "{}\n"
+      "{}",
+      features,
+      filters.numSubfieldFilters,
+      filters.numFilterOnlyColumns,
+      typeRows.empty() ? std::string{"    none"}
+                       : formatCoverageTable(
+                             {"type",
+                              "filtered",
+                              "subfield",
+                              "remaining",
+                              "projected",
+                              "groupingKey",
+                              "aggregated"},
+                             typeRows,
+                             /*numLabelColumns=*/1,
+                             "    "),
+      wrapCoverageText(
+          fmt::format(
+              "filter kinds of executed queries: {}",
+              formatExecutedDimensions(filters.byKind)),
+          "  ",
+          "    "),
+      wrapCoverageText(
+          fmt::format(
+              "aggregations: executed={}, pushdownActivated={} ({}), "
+              "differentiallyVerified={}, pushdownValues={}",
+              aggregations.numExecuted,
+              aggregations.numPushdownPlanActivated,
+              formatCoveragePercent(
+                  aggregations.numPushdownPlanActivated,
+                  aggregations.numExecuted),
+              aggregations.numDifferentiallyVerified,
+              aggregations.numPushdownValuesLoaded),
+          "  ",
+          "    "),
+      wrapCoverageText(
+          fmt::format(
+              "aggregation functions of executed queries: {}",
+              formatExecutedDimensions(aggregations.functions)),
+          "  ",
+          "    "));
+}
+
+} // namespace
+
 void TableEvolutionFuzzer::logCoverageSummary() const {
   const auto& stats = coverageStats_;
   const auto formatCounts = [](const auto& counts) {
@@ -3380,55 +3922,7 @@ void TableEvolutionFuzzer::logCoverageSummary() const {
     for (const auto& [name, count] : counts) {
       entries.push_back(fmt::format("{}={}", name, count));
     }
-    return entries.empty() ? std::string{"none"} : folly::join(",", entries);
-  };
-  const auto formatDimensionsByLine = [](const auto& dimensions) {
-    std::vector<std::string> entries;
-    entries.reserve(dimensions.size());
-    for (const auto& [name, coverage] : dimensions) {
-      entries.push_back(fmt::format("      {}={}", name, coverage.numExecuted));
-    }
-    return entries.empty() ? std::string{"      none"}
-                           : folly::join("\n", entries);
-  };
-  const auto formatTypeDimensionsByCategory =
-      [](const auto& dimensions, const std::string_view indentation) {
-        std::vector<std::string> complexTypeEntries;
-        std::vector<std::string> scalarTypeEntries;
-        complexTypeEntries.reserve(dimensions.size());
-        scalarTypeEntries.reserve(dimensions.size());
-        const auto entryIndentation = fmt::format("{}  ", indentation);
-        for (const auto& [name, coverage] : dimensions) {
-          const bool isComplexType =
-              name == "ARRAY" || name == "MAP" || name == "ROW";
-          auto& entries =
-              isComplexType ? complexTypeEntries : scalarTypeEntries;
-          entries.push_back(
-              fmt::format(
-                  "{}{}={}", entryIndentation, name, coverage.numExecuted));
-        }
-        const auto formatCategory = [&](const std::string_view name,
-                                        const auto& entries) {
-          return fmt::format(
-              "{}{}:\n{}",
-              indentation,
-              name,
-              entries.empty() ? fmt::format("{}none", entryIndentation)
-                              : folly::join("\n", entries));
-        };
-        return fmt::format(
-            "{}\n{}",
-            formatCategory("complexTypes", complexTypeEntries),
-            formatCategory("scalarTypes", scalarTypeEntries));
-      };
-  const auto formatExecutedDimensionsByLine = [](const auto& dimensions) {
-    std::vector<std::string> entries;
-    entries.reserve(dimensions.size());
-    for (const auto& [name, coverage] : dimensions) {
-      entries.push_back(fmt::format("      {}={}", name, coverage.numExecuted));
-    }
-    return entries.empty() ? std::string{"      none"}
-                           : folly::join("\n", entries);
+    return entries.empty() ? std::string{"none"} : folly::join(", ", entries);
   };
   const auto formatCountsByLine = [](const auto& counts,
                                      const std::string_view indentation) {
@@ -3446,7 +3940,7 @@ void TableEvolutionFuzzer::logCoverageSummary() const {
     for (const auto& [signature, count] : counts) {
       entries.push_back(fmt::format("({})x{}", signature, count));
     }
-    return entries.empty() ? std::string{"none"} : folly::join(",", entries);
+    return entries.empty() ? std::string{"none"} : folly::join(", ", entries);
   };
   const auto formatBucketCounts = [](const auto& counts) {
     std::vector<std::string> entries;
@@ -3461,94 +3955,91 @@ void TableEvolutionFuzzer::logCoverageSummary() const {
     entries.reserve(stats.configs.bucketedByColumnCount.size());
     for (const auto& [numColumns, numQueries] :
          stats.configs.bucketedByColumnCount) {
-      entries.push_back(
+      entries.push_back(wrapCoverageText(
           fmt::format(
-              "      {}:\n"
-              "        total: {}\n"
-              "        typeSignatures: {}",
+              "{}: total={} typeSignatures: {}",
               numColumns,
               numQueries,
               formatTypeSignatures(
                   stats.configs.bucketColumnTypeSignaturesByCount.at(
-                      numColumns))));
+                      numColumns))),
+          "      ",
+          "        "));
     }
     return entries.empty() ? std::string{"      none"}
                            : folly::join("\n", entries);
   };
-  const auto formatChunkSkipping = [](const ScanPlanCoverage& coverage) {
-    const auto numQueries = coverage.numQueriesWithChunkSkipping;
-    const double averageSkippedRows = numQueries == 0
-        ? 0.0
-        : static_cast<double>(coverage.chunkSkippedRows) / numQueries;
-    const double averageProcessedRows = numQueries == 0
-        ? 0.0
-        : static_cast<double>(coverage.processedRowsWithChunkSkipping) /
-            numQueries;
-    return fmt::format(
-        "queriesWithChunkSkippedRows={} avgChunkSkippedRows={:.1f} avgProcessedRows={:.1f}",
-        numQueries,
-        averageSkippedRows,
-        averageProcessedRows);
-  };
-  const auto& filters = stats.queryShapes.filters;
-  const auto& aggregations = stats.queryShapes.aggregations;
+  std::vector<std::string> formatNames;
+  formatNames.reserve(config_.formats.size());
+  for (const auto format : config_.formats) {
+    formatNames.push_back(fmt::format("{}", format));
+  }
+  LOG(WARNING) << fmt::format(
+      "\nTableEvolutionFuzzer coverage: seed={} iterations={} elapsed={}s "
+      "formats={}",
+      runSeed_,
+      numIterations_,
+      std::chrono::duration_cast<std::chrono::seconds>(
+          std::chrono::steady_clock::now() - startTime_)
+          .count(),
+      folly::join(",", formatNames));
   logCoverageProgress();
+  LOG(WARNING) << formatCoverageGaps(coverageGaps(stats, config_));
   if (config_.fileFormatCoverageLogger) {
     config_.fileFormatCoverageLogger();
   }
-  LOG(WARNING) << fmt::format(
-      "\nChunkStatsFilterCoverage:\n"
-      "  pushdown: {}\n"
-      "  reference: {}",
-      formatChunkSkipping(stats.pushdown),
-      formatChunkSkipping(stats.reference));
-  LOG(WARNING) << fmt::format(
-      "\nQueryShapeCoverage:\n"
-      "  filters:\n"
-      "    queries={}\n"
-      "    targetTypes:\n"
-      "      allFilters:\n{}\n"
-      "      subfieldFilters:\n{}\n"
-      "      remainingExpressions:\n{}\n"
-      "    predicateKinds:\n{}\n"
-      "  aggregations: queries={} pushdownActivated={} referenceActivated={} differentiallyVerified={} pushdownValues={} referenceValues={}\n"
-      "    groupingKeyTypes:\n{}\n"
-      "    aggregateTypes:\n{}\n"
-      "    functions:\n{}\n"
-      "  projectedByType:\n{}",
-      filters.numExecuted,
-      formatTypeDimensionsByCategory(filters.byType, "        "),
-      formatTypeDimensionsByCategory(filters.subfieldByType, "        "),
-      formatTypeDimensionsByCategory(filters.remainingByType, "        "),
-      formatDimensionsByLine(filters.byKind),
-      aggregations.numExecuted,
-      aggregations.numPushdownPlanActivated,
-      aggregations.numReferencePlanActivated,
-      aggregations.numDifferentiallyVerified,
-      aggregations.numPushdownValuesLoaded,
-      aggregations.numReferenceValuesLoaded,
-      formatExecutedDimensionsByLine(aggregations.groupingKeyTypes),
-      formatExecutedDimensionsByLine(aggregations.aggregateTypes),
-      formatExecutedDimensionsByLine(aggregations.functions),
-      formatCountsByLine(stats.queryShapes.projectedByType, "    "));
+  LOG(WARNING) << formatStatsPruningCoverage(stats);
+  LOG(WARNING) << formatQueryShapeCoverage(stats);
+  const auto& flatmapAsStruct = stats.queryShapes.flatmapAsStruct;
   LOG(WARNING) << fmt::format(
       "\nTableEvolutionCoverage:\n"
+      "  tablesWritten: {}\n"
+      "  flatMaps:\n"
+      "    eligibleSetups: {}\n"
+      "    eligibleColumns: {}\n"
+      "{}\n"
+      "{}\n"
+      "    asStructReads: selected={} executed={} verified={} columns={}\n"
       "  bucket:\n"
       "    bucketedSetups: {}\n"
       "    selectedSetups: {}\n"
-      "    columnsByType: {}\n"
+      "{}\n"
       "    bucketedByColumnCount:\n{}\n"
-      "    setupsByBucketCount: {}\n"
+      "{}\n"
       "  schemaEvolution:\n"
       "    transitions: {}\n"
       "    addedFields: {}\n"
       "    byType:\n{}\n"
       "    byPosition: {}",
+      stats.numTablesWritten,
+      stats.configs.numFlatmapEligible,
+      stats.configs.numFlatmapEligibleColumns,
+      wrapCoverageText(
+          "eligibleKeyTypes: " +
+              formatCounts(stats.configs.flatmapEligibleByKeyType),
+          "    ",
+          "      "),
+      wrapCoverageText(
+          "eligibleValueTypes: " +
+              formatCounts(stats.configs.flatmapEligibleByValueType),
+          "    ",
+          "      "),
+      flatmapAsStruct.numSelected,
+      flatmapAsStruct.numExecuted,
+      flatmapAsStruct.numVerified,
+      flatmapAsStruct.numColumns,
       stats.configs.numBucketed,
       stats.configs.numBucketSelected,
-      formatCounts(stats.configs.bucketColumnsByType),
+      wrapCoverageText(
+          "columnsByType: " + formatCounts(stats.configs.bucketColumnsByType),
+          "    ",
+          "      "),
       formatBucketColumnsByCount(),
-      formatBucketCounts(stats.configs.bucketSelectedByBucketCount),
+      wrapCoverageText(
+          "setupsByBucketCount: " +
+              formatBucketCounts(stats.configs.bucketSelectedByBucketCount),
+          "    ",
+          "      "),
       stats.configs.numTypeTransitions,
       stats.configs.numAddedFields,
       formatCountsByLine(stats.configs.schemaEvolutionByType, "      "),

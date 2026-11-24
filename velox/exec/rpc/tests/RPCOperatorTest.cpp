@@ -3272,6 +3272,85 @@ TEST_F(RPCOperatorTest, defaultHardLimitKeepsSessionPrecedence) {
   EXPECT_EQ(limiter.stats().hardLimit, 200);
 }
 
+// The stats report the bounds a function declares beside the ones in effect,
+// so a query whose session limits replace them can be told apart.
+TEST_F(RPCOperatorTest, statsReportFunctionBoundsBesideEffectiveOnes) {
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
+  const auto runtimeStats =
+      [&](const std::string& functionName,
+          const std::unordered_map<std::string, std::string>& config = {}) {
+        RPCRateLimiterRegistry::global().testingReset();
+        auto plan = PlanBuilder()
+                        .values(input)
+                        .rpc(functionName + "(prompt)")
+                        .planNode();
+        std::shared_ptr<exec::Task> task;
+        AssertQueryBuilder(plan).configs(config).countResults(task);
+        return PlanNodeStats::extract(task->taskStats(), plan->id());
+      };
+  {
+    // Session defaults replace both of the function's bounds.
+    const auto stats = runtimeStats("capped_rpc");
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcFunctionCeiling).max, 64);
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcFunctionFloorMilli).max,
+        500);
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcRateLimiterHardLimit).max,
+        200);
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcRateLimiterFloorMilli).max,
+        50'000);
+  }
+  {
+    // hard_limit 0 selects the function's bounds, so the pairs match.
+    const auto stats = runtimeStats(
+        "capped_rpc", {{core::QueryConfig::kRpcRateLimiterHardLimit, "0"}});
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcRateLimiterHardLimit).max,
+        64);
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcRateLimiterFloorMilli).max,
+        500);
+  }
+  {
+    // A floor at or above the ceiling holds the window there, so no floor
+    // applies.
+    const auto stats = runtimeStats(
+        "capped_rpc", {{core::QueryConfig::kRpcRateLimiterMaxLimit, "4"}});
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcRateLimiterHardLimit).max,
+        4);
+    EXPECT_FALSE(
+        stats.hasCustomStat(RPCOperatorStatNames::kRpcRateLimiterFloorMilli));
+  }
+  {
+    // A function that declares only a floor reports only the floor.
+    const auto stats = runtimeStats(
+        "demo_rpc", {{core::QueryConfig::kRpcRateLimiterMinLimit, "0"}});
+    EXPECT_FALSE(
+        stats.hasCustomStat(RPCOperatorStatNames::kRpcFunctionCeiling));
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcFunctionFloorMilli).max,
+        250);
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcRateLimiterFloorMilli).max,
+        250);
+  }
+  {
+    const auto stats = runtimeStats("undeclared_bounds_rpc");
+    EXPECT_FALSE(
+        stats.hasCustomStat(RPCOperatorStatNames::kRpcFunctionCeiling));
+    EXPECT_FALSE(
+        stats.hasCustomStat(RPCOperatorStatNames::kRpcFunctionFloorMilli));
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcRateLimiterFloorMilli).max,
+        50'000);
+  }
+}
+
 TEST_F(RPCOperatorTest, zeroHardLimitSelectsFunctionBounds) {
   auto input =
       makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
