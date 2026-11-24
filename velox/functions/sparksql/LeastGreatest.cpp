@@ -145,6 +145,7 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> leastSignatures() {
       "varchar",
       "varbinary",
       "timestamp",
+      "timestamp utc",
       "date"};
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures;
 
