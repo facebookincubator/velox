@@ -130,6 +130,12 @@ change needs a rebuilding descriptor; the rewriter fails instead of retaining
 stale sources. Operator construction stays in the application's ordinary
 `Operator::PlanNodeTranslator`.
 
+A class that derives from a core plan node, such as `core::FilterNode`, always
+runs as the core CPU operator: LocalPlanner matches the core type before it
+asks a `PlanNodeTranslator`. A descriptor for such a class must declare Velox
+inputs and a Velox output. To run an operation on cuDF, derive the node class
+from `core::PlanNode` directly.
+
 Register descriptors before planning. Duplicate registration names fail;
 intrinsic node contracts take precedence, followed by registered descriptors
 in registration order. Unregister by name for targeted test cleanup.
