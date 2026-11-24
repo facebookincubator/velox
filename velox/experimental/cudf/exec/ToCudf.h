@@ -62,10 +62,8 @@ bool cudfIsRegistered();
 /// 'cudf.enabled' (CudfConfig::kCudfEnabled) session property of the catalog
 /// being read. An absent value means the process-wide CudfConfig default.
 ///
-/// Both a cuDF connector, before it hands out a GPU data source, and the table
-/// scan adapter, before it reports that scan as producing GPU output, have to
-/// ask this and get the same answer, or the scan and the operators after it
-/// disagree about where the query runs.
+/// This is one term of the decision whether a scan reads on the GPU; callers
+/// want CudfHiveDataSource::cannotReadReason(), which asks the whole of it.
 bool cudfIsEnabled(
     const ::facebook::velox::connector::ConnectorQueryCtx& connectorQueryCtx);
 

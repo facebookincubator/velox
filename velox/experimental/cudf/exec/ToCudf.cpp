@@ -328,11 +328,11 @@ struct CudfDriverAdapter {
     // TODO: Returning here leaves the query on the CPU, but a connector whose
     // catalog did not get the same value still hands out a GPU data source,
     // and that only fails later, inside a CPU operator reading a CudfVector.
-    // Raise a named user error here instead. The test has to be the whole
-    // decision the connector makes, cudfIsEnabled() and isTypeSupportedByCudf()
-    // and CudfHiveDataSource::isSupported(): a scan the connector rejects for
-    // an unsupported type or filter reads on the CPU already, and failing it
-    // would reject a query that runs correctly today.
+    // Raise a named user error here instead, by looping over this driver's
+    // TableScans and asking CudfHiveDataSource::cannotReadReason() for each.
+    // Asking on cudf.enabled alone would reject a query that runs correctly
+    // today, because a scan the connector turns down for an unsupported type
+    // or filter reads on the CPU already.
     if (!queryConfig.get<bool>(
             CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled)) {
       return false;

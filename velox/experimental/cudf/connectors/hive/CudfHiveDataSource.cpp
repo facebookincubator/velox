@@ -331,8 +331,8 @@ ScanFilters splitAndFoldFilters(
 }
 
 // Returns why the data source cannot scan with 'filters' on the GPU, or
-// std::nullopt if it can. isSupported() and the constructor share it, so that
-// the connectors pick this data source only for a scan the constructor
+// std::nullopt if it can. cannotReadReason() and the constructor share it, so
+// that the connectors pick this data source only for a scan the constructor
 // accepts.
 std::optional<std::string> unsupportedFiltersReason(
     const ScanFilters& filters,
@@ -378,15 +378,19 @@ std::optional<std::string> unsupportedFiltersReason(
 
 } // namespace
 
-bool CudfHiveDataSource::isSupported(
+std::optional<std::string> CudfHiveDataSource::cannotReadReason(
+    const RowTypePtr& outputType,
     const ConnectorTableHandlePtr& tableHandle,
     const ConnectorQueryCtx& connectorQueryCtx) {
-  return !unsupportedReason(tableHandle, connectorQueryCtx).has_value();
-}
-
-std::optional<std::string> CudfHiveDataSource::unsupportedReason(
-    const ConnectorTableHandlePtr& tableHandle,
-    const ConnectorQueryCtx& connectorQueryCtx) {
+  if (!cudfIsEnabled(connectorQueryCtx)) {
+    return fmt::format(
+        "cuDF is disabled by the session properties of the catalog being read, or by the process-wide default: {}",
+        tableHandle->connectorId());
+  }
+  if (!isTypeSupportedByCudf(outputType)) {
+    return fmt::format(
+        "Output type is not representable in cuDF: {}", outputType);
+  }
   auto hiveTableHandle =
       std::dynamic_pointer_cast<const HiveTableHandle>(tableHandle);
   if (!hiveTableHandle) {

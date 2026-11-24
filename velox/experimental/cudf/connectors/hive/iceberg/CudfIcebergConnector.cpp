@@ -18,8 +18,6 @@
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergDataSource.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/iceberg/IcebergConfig.h"
@@ -63,27 +61,28 @@ std::unique_ptr<DataSource> CudfIcebergConnector::createDataSource(
     const ConnectorTableHandlePtr& tableHandle,
     const ColumnHandleMap& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
-  if (cudfIsEnabled(*connectorQueryCtx) && isTypeSupportedByCudf(outputType) &&
-      CudfHiveDataSource::isSupported(tableHandle, *connectorQueryCtx)) {
-    return std::make_unique<CudfIcebergDataSource>(
+  if (CudfHiveDataSource::cannotReadReason(
+          outputType, tableHandle, *connectorQueryCtx)
+          .has_value()) {
+    // Fall back to the CPU-based Iceberg data source.
+    return std::make_unique<velox::connector::hive::iceberg::IcebergDataSource>(
         outputType,
         tableHandle,
         columnHandles,
         &fileHandleFactory_,
         ioExecutor_,
         connectorQueryCtx,
-        cudfHiveConfig_,
         hiveConfig_);
   }
 
-  // Fall back to the CPU-based Iceberg data source.
-  return std::make_unique<velox::connector::hive::iceberg::IcebergDataSource>(
+  return std::make_unique<CudfIcebergDataSource>(
       outputType,
       tableHandle,
       columnHandles,
       &fileHandleFactory_,
       ioExecutor_,
       connectorQueryCtx,
+      cudfHiveConfig_,
       hiveConfig_);
 }
 

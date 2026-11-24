@@ -221,28 +221,22 @@ class TableScanAdapter : public OperatorAdapter {
 
     // Ask with the ConnectorQueryCtx the TableScan creates for the connector,
     // so that this decision matches the data source the connector picks.
-    // unsupportedReason() allocates only from the operator pool, so no
+    // cannotReadReason() allocates only from the operator pool, so no
     // connector pool is needed.
     const auto connectorQueryCtx = op->operatorCtx()->createConnectorQueryCtx(
         tableScanNode->tableHandle()->connectorId(),
         planNode->id(),
         /*connectorPool=*/nullptr);
 
-    // The switch the connector reads, from the same place, so that a scan it
-    // reads on the CPU is not compiled as a GPU scan.
-    if (!facebook::velox::cudf_velox::cudfIsEnabled(*connectorQueryCtx)) {
-      LOG_FALLBACK(
-          "cuDF is turned off in the session properties of the TableScan's connector {}, PlanNode id: {}",
-          tableScanNode->tableHandle()->connectorId(),
-          planNode->id());
-      return false;
-    }
-
+    // The connector's whole decision, asked here so that a scan it reads on
+    // the CPU is not compiled as a GPU scan.
     if (const auto reason = facebook::velox::cudf_velox::connector::hive::
-            CudfHiveDataSource::unsupportedReason(
-                tableScanNode->tableHandle(), *connectorQueryCtx)) {
+            CudfHiveDataSource::cannotReadReason(
+                tableScanNode->outputType(),
+                tableScanNode->tableHandle(),
+                *connectorQueryCtx)) {
       LOG_FALLBACK(
-          "TableScan is not supported by the cuDF data source, PlanNode id: {}: {}",
+          "TableScan is not read on the GPU by the cuDF data source, PlanNode id: {}: {}",
           planNode->id(),
           *reason);
       return false;

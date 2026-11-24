@@ -49,26 +49,30 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   static constexpr std::string_view kDwioStorageReadBytes{
       "dwio.storageReadBytes"};
 
-  /// Returns whether this data source can scan 'tableHandle' on the GPU:
+  /// Returns std::nullopt when a cuDF connector reads 'tableHandle' with
+  /// 'outputType' on the GPU for the query behind 'connectorQueryCtx', and
+  /// otherwise why it does not, so that a caller reporting the fallback names
+  /// the cause and not just the scan. It reads on the GPU when:
+  ///  - cuDF is enabled for the catalog being read, see cudfIsEnabled(),
+  ///  - 'outputType' is representable in cuDF,
   ///  - 'tableHandle' is a Hive table handle,
   ///  - no rows are sampled,
   ///  - every subfield filter is on a top-level column the cuDF AST converts,
   ///  - the remaining filter folds to a constant or references a column, and
   ///  - cuDF evaluates the remaining filter.
   /// The filters are split and folded with 'connectorQueryCtx', and the
-  /// constructor fails for a scan this rejects.
+  /// constructor fails for a scan whose filters this rejects.
+  ///
+  /// Both cuDF connectors and TableScanAdapter must call this, so that they
+  /// agree on where a scan runs. The legacy_cast check stays in
+  /// TableScanAdapter because it needs the query config.
   /// NOTE: A remaining filter that casts from VARCHAR, or from TIMESTAMP to
   /// VARCHAR, is not supported, since such a cast depends on session settings
   /// a connector does not see.
   /// NOTE: Partition key filters are checked too, although the Hive data source
   /// tests them per split instead of compiling them.
-  static bool isSupported(
-      const ConnectorTableHandlePtr& tableHandle,
-      const ConnectorQueryCtx& connectorQueryCtx);
-
-  /// Returns why isSupported() rejects 'tableHandle', or std::nullopt if it
-  /// accepts it.
-  static std::optional<std::string> unsupportedReason(
+  static std::optional<std::string> cannotReadReason(
+      const RowTypePtr& outputType,
       const ConnectorTableHandlePtr& tableHandle,
       const ConnectorQueryCtx& connectorQueryCtx);
 
