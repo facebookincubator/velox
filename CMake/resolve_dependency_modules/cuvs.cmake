@@ -45,6 +45,9 @@ if(NOT TARGET rmm::rmm)
 endif()
 
 block(SCOPE_FOR VARIABLES)
+  # cuVS matrix generation uses Python 3.10 syntax.
+  find_package(Python 3.10 REQUIRED COMPONENTS Interpreter)
+
   set(BUILD_SHARED_LIBS ON)
   set(BUILD_TESTS OFF)
   set(BUILD_C_LIBRARY OFF)

@@ -168,9 +168,10 @@ class VectorIndex {
     /// Requests a GPU search. The first search builds or copies a device index
     /// and later searches reuse it. Falls back to CPU search when GPU support
     /// is not built, no device is visible, cuVS rejects the index, the IVF
-    /// search sets maxCodes, or a RaBitQ search has a row filter. HNSW SQ8
-    /// GPU search builds a CAGRA graph from reconstructed vectors, so its
-    /// neighbors can differ from the CPU HNSW graph. RaBitQ GPU search builds
+    /// search sets maxCodes, or the search exceeds a backend limit. RaBitQ
+    /// searches with row filters also use the CPU. HNSW SQ8 GPU search builds
+    /// a CAGRA graph from reconstructed vectors, so its neighbors can differ
+    /// from the CPU HNSW graph. RaBitQ GPU search builds
     /// a cuVS IVF-RaBitQ index from decoded vectors and supports L2 only.
     /// SearchStats::usedGpu reports which path ran.
     bool useGpu{false};

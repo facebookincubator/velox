@@ -20,14 +20,13 @@
 #include <exception>
 #include <limits>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 #include <faiss/IndexHNSW.h>
 #include <faiss/IndexIDMap.h>
 #include <faiss/IndexIVFFlat.h>
 #include <faiss/IndexScalarQuantizer.h>
-#include <faiss/gpu/GpuCloner.h>
-#include <faiss/gpu/GpuClonerOptions.h>
 #include <faiss/gpu/GpuIndexCagra.h>
 #include <faiss/gpu/GpuIndexIVFFlat.h>
 #include <faiss/gpu/GpuIndexIVFScalarQuantizer.h>
@@ -39,6 +38,7 @@
 #include <glog/logging.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/vectorindex/GpuFaissIndex.h"
 #include "velox/common/vectorindex/LocalVectorIndex.h"
 
 namespace facebook::velox::common::vectorindex {
@@ -83,12 +83,14 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
       std::unique_ptr<faiss::Index> index,
       int64_t maxK,
       bool translatePadding,
-      size_t efSearch = 0)
+      size_t efSearch = 0,
+      size_t cagraDegree = 0)
       : device_{std::move(device)},
         index_{std::move(index)},
         maxK_{maxK},
         translatePadding_{translatePadding},
-        efSearch_{efSearch} {}
+        efSearch_{efSearch},
+        cagraAlgo_{cagraSearchAlgorithm(cagraDegree)} {}
 
   ~ClonedIndex() override {
     const std::lock_guard<std::mutex> lock(device_->mutex);
@@ -116,6 +118,7 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
     const faiss::SearchParameters* params = nullptr;
     if (efSearch_ > 0) {
       cagraParams.itopk_size = std::max(efSearch_, static_cast<size_t>(gpuK));
+      cagraParams.algo = cagraAlgo_;
       params = &cagraParams;
     }
     std::vector<int64_t> limitedIds;
@@ -142,25 +145,43 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
         VELOX_FAIL("FAISS GPU local vector index search failed: {}", e.what());
       }
     }
-    // cuVS IVF returns external IDs directly. Flat and wrapped CAGRA use
-    // FAISS's ID map, which handles padding before mapping to external IDs.
-    if (translatePadding_) {
-      std::replace(
-          searchIds,
-          searchIds + queries.size() * gpuK,
-          kCuvsPaddingId,
+    const auto nearer =
+        [similarity = faiss::is_similarity_metric(index_->metric_type)](
+            float a, float b) { return similarity ? a > b : a < b; };
+    std::vector<std::pair<float, int64_t>> ordered;
+    for (size_t query = 0; query < queries.size(); ++query) {
+      const auto inputOffset = query * gpuK;
+      auto rowIds = ids.subspan(query * k, k);
+      auto rowScores = scores.subspan(query * k, k);
+      size_t numResults = 0;
+      for (int64_t i = 0; i < gpuK; ++i) {
+        const auto id = searchIds[inputOffset + i];
+        if (id == LocalVectorIndex::kPaddingId ||
+            (translatePadding_ && id == kCuvsPaddingId)) {
+          continue;
+        }
+        if (gpuK != k || numResults != i) {
+          rowIds[numResults] = id;
+          rowScores[numResults] = searchScores[inputOffset + i];
+        }
+        ++numResults;
+      }
+      std::fill(
+          rowIds.begin() + numResults,
+          rowIds.end(),
           LocalVectorIndex::kPaddingId);
-    }
-    if (gpuK < k) {
-      const auto queriesSize = static_cast<int64_t>(queries.size());
-      for (int64_t query = 0; query < queriesSize; ++query) {
-        for (int64_t neighbor = 0; neighbor < gpuK; ++neighbor) {
-          ids[query * k + neighbor] = limitedIds[query * gpuK + neighbor];
-          scores[query * k + neighbor] = limitedScores[query * gpuK + neighbor];
-        }
-        for (int64_t neighbor = gpuK; neighbor < k; ++neighbor) {
-          ids[query * k + neighbor] = -1;
-        }
+      if (std::ranges::is_sorted(rowScores.first(numResults), nearer)) {
+        continue;
+      }
+      ordered.clear();
+      ordered.reserve(numResults);
+      for (size_t i = 0; i < numResults; ++i) {
+        ordered.emplace_back(rowScores[i], rowIds[i]);
+      }
+      std::ranges::sort(ordered, nearer, &std::pair<float, int64_t>::first);
+      for (size_t i = 0; i < numResults; ++i) {
+        rowScores[i] = ordered[i].first;
+        rowIds[i] = ordered[i].second;
       }
     }
     return true;
@@ -172,6 +193,7 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
   const int64_t maxK_;
   const bool translatePadding_;
   const size_t efSearch_;
+  const faiss::gpu::search_algo cagraAlgo_;
 };
 
 // A kHnswSq local index rebuilt as a CAGRA graph. CAGRA numbers embeddings
@@ -182,11 +204,13 @@ class CagraIndex : public LocalVectorIndexAccelerator::Index {
       std::shared_ptr<Device> device,
       std::unique_ptr<faiss::gpu::GpuIndexCagra> index,
       const std::vector<faiss::idx_t>& ids,
-      size_t efSearch)
+      size_t efSearch,
+      size_t cagraDegree)
       : device_{std::move(device)},
         index_{std::move(index)},
         ids_{ids},
-        efSearch_{efSearch} {}
+        efSearch_{efSearch},
+        cagraAlgo_{cagraSearchAlgorithm(cagraDegree)} {}
 
   ~CagraIndex() override {
     const std::lock_guard<std::mutex> lock(device_->mutex);
@@ -207,6 +231,7 @@ class CagraIndex : public LocalVectorIndexAccelerator::Index {
     }
     faiss::gpu::SearchParametersCagra params;
     params.itopk_size = std::max(efSearch_, static_cast<size_t>(gpuK));
+    params.algo = cagraAlgo_;
     std::vector<int64_t> limitedIds;
     std::vector<float> limitedScores;
     auto* searchIds = ids.data();
@@ -258,6 +283,7 @@ class CagraIndex : public LocalVectorIndexAccelerator::Index {
   std::unique_ptr<faiss::gpu::GpuIndexCagra> index_;
   const std::vector<faiss::idx_t>& ids_;
   const size_t efSearch_;
+  const faiss::gpu::search_algo cagraAlgo_;
 };
 
 // Returns the even graph degree nearest 'requested' that 'numEmbeddings' can
@@ -293,7 +319,7 @@ std::unique_ptr<LocalVectorIndexAccelerator::Index> loadCagra(
       &device->resources, graph.d, graph.metric_type, config);
   cagra->add(graph.ntotal, embeddings.data());
   return std::make_unique<CagraIndex>(
-      device, std::move(cagra), idMap.id_map, graph.hnsw.efSearch);
+      device, std::move(cagra), idMap.id_map, graph.hnsw.efSearch, degree);
 }
 
 // Trains 'cpu' on the device, adds the embeddings, and copies the trained
@@ -351,15 +377,14 @@ bool buildCagra(
   return idMap.ntotal == static_cast<faiss::idx_t>(ids.size());
 }
 
-// hnsw.efSearch of a CAGRA local index, which may be the index itself or the
-// index under its id map.
-size_t cagraEfSearch(const faiss::Index& index) {
+// Returns the stored CAGRA graph, unwrapping its ID map if present.
+const faiss::IndexHNSWCagra& cagraGraph(const faiss::Index& index) {
   const auto* graph = dynamic_cast<const faiss::IndexHNSWCagra*>(&index);
   if (graph == nullptr) {
     graph = dynamic_cast<const faiss::IndexHNSWCagra*>(
         dynamic_cast<const faiss::IndexIDMap&>(index).index);
   }
-  return graph->hnsw.efSearch;
+  return *graph;
 }
 
 class GpuAccelerator : public LocalVectorIndexAccelerator {
@@ -386,18 +411,16 @@ class GpuAccelerator : public LocalVectorIndexAccelerator {
         return loadCagra(
             device_, dynamic_cast<const faiss::IndexIDMap&>(index));
       }
-      faiss::gpu::GpuClonerOptions options;
-      options.use_cuvs = true;
-      std::unique_ptr<faiss::Index> copy(
-          faiss::gpu::index_cpu_to_gpu(
-              &device_->resources, device_->id, &index, &options));
-      const bool cagra = type == VectorIndexKind::kCagra;
+      auto copy = cloneCuvsIndex(device_->resources, device_->id, index);
+      const auto* cagra =
+          type == VectorIndexKind::kCagra ? &cagraGraph(index) : nullptr;
       return std::make_unique<ClonedIndex>(
           device_,
           std::move(copy),
           cagra ? kMaxCagraK : faiss::gpu::getMaxKSelection(/*use_cuvs=*/true),
           /*translatePadding=*/ivf != nullptr,
-          cagra ? cagraEfSearch(index) : 0);
+          cagra ? cagra->hnsw.efSearch : 0,
+          cagra ? cagra->hnsw.nb_neighbors(0) : 0);
     } catch (const std::exception& e) {
       LOG(WARNING) << "Local vector index stays on the CPU: " << e.what();
       return nullptr;

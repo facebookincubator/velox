@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <new>
 #include <random>
 #include <string>
 #include <unordered_map>
@@ -28,13 +29,16 @@
 
 #include <faiss/IndexIDMap.h>
 #include <faiss/IndexIVF.h>
+#include <faiss/gpu/StandardGpuResources.h>
 #include <faiss/impl/zerocopy_io.h>
 #include <faiss/index_io.h>
+#include <faiss/invlists/InvertedLists.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/vectorindex/FaissLocalVectorIndex.h"
+#include "velox/common/vectorindex/GpuFaissIndex.h"
 
 namespace facebook::velox::common::vectorindex {
 namespace {
@@ -727,6 +731,80 @@ TEST_F(GpuLocalVectorIndexTest, rawInnerProductAndTies) {
     EXPECT_THAT(
         std::vector<int64_t>(gpuIds.begin(), gpuIds.begin() + 2),
         testing::UnorderedElementsAre(5, 6));
+  }
+}
+
+TEST_F(GpuLocalVectorIndexTest, ivfSearchReturnsScoreOrderedResults) {
+  for (auto kind : {VectorIndexKind::kIvfFlat, VectorIndexKind::kIvfSq}) {
+    SCOPED_TRACE(static_cast<int>(kind));
+    setLocalVectorIndexAccelerator(nullptr);
+    const auto bytes = build(kind);
+    useGpu();
+    constexpr int64_t k{1'024};
+    const FaissLocalVectorIndex index(
+        bytes,
+        VectorIndexMetric::kCosine,
+        LocalVectorIndexOptions{.nprobe = 16'384});
+    ASSERT_TRUE(index.accelerated());
+    const auto result = search(index, k);
+    for (int64_t q = 0; q < kNumQueries; ++q) {
+      const auto row = std::span(result.scores).subspan(q * k, k);
+      EXPECT_TRUE(std::ranges::is_sorted(row, std::greater<>{}));
+    }
+  }
+}
+
+TEST_F(GpuLocalVectorIndexTest, singleQuerySearchesWideCagraGraphs) {
+  for (auto kind : {VectorIndexKind::kCagra, VectorIndexKind::kHnswSq}) {
+    SCOPED_TRACE(static_cast<int>(kind));
+    useGpu({.build = true});
+    std::string bytes;
+    FaissLocalVectorIndex::build(
+        kind,
+        VectorIndexMetric::kCosine,
+        LocalVectorIndexOptions{.m = 128, .efSearch = 128},
+        Embeddings(embeddings_, kDimension),
+        ids_,
+        [&](std::string_view chunk) { bytes.append(chunk); });
+    const FaissLocalVectorIndex index(bytes, VectorIndexMetric::kCosine, {});
+    ASSERT_TRUE(index.accelerated());
+    std::vector<int64_t> ids(kK);
+    std::vector<float> scores(kK);
+    index.search(Embeddings(queries_.data(), 1, kDimension), kK, ids, scores);
+    EXPECT_TRUE(std::ranges::all_of(ids, [&](auto id) {
+      return std::binary_search(ids_.begin(), ids_.end(), id);
+    }));
+  }
+}
+
+TEST_F(GpuLocalVectorIndexTest, failedIvfCloneReleasesDeviceMemory) {
+  struct FailingLists : faiss::ArrayInvertedLists {
+    explicit FailingLists(const faiss::ArrayInvertedLists& source)
+        : faiss::ArrayInvertedLists(source) {}
+
+    const uint8_t* get_codes(size_t list) const override {
+      if (list == 1) {
+        throw std::bad_alloc();
+      }
+      return ArrayInvertedLists::get_codes(list);
+    }
+  };
+
+  faiss::IndexFlatL2 quantizer(kDimension);
+  faiss::IndexIVFFlat cpu(&quantizer, kDimension, 8);
+  cpu.train(kNumEmbeddings, embeddings_.data());
+  cpu.add(kNumEmbeddings, embeddings_.data());
+  auto lists = std::make_unique<FailingLists>(
+      dynamic_cast<const faiss::ArrayInvertedLists&>(*cpu.invlists));
+  cpu.replace_invlists(lists.release(), /*own=*/true);
+
+  faiss::gpu::StandardGpuResources resources;
+  resources.noTempMemory();
+  resources.getResources()->initializeForDevice(0);
+  const auto initialMemory = resources.getMemoryInfo();
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    EXPECT_THROW(cloneCuvsIndex(resources, 0, cpu), std::bad_alloc);
+    EXPECT_EQ(resources.getMemoryInfo(), initialMemory);
   }
 }
 

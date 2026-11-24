@@ -54,6 +54,9 @@ class GpuVectorIndex {
   /// Returns the largest Top-K and probe count the GPU IVF kernels accept.
   static int64_t maxSelection();
 
+  // The pinned cuVS RaBitQ implementation uses block sort up to this k.
+  static constexpr faiss::idx_t kMaxRaBitQBlockSortNeighbors{64};
+
   /// Searches an IVF or RaBitQ index. Host pointers are copied to and from
   /// the device. Only nprobe and sel are read from 'params'. Returns false
   /// when the index cannot apply 'params' and the caller should use the CPU.
@@ -86,13 +89,15 @@ class GpuVectorIndex {
   GpuVectorIndex(
       Device& device,
       std::unique_ptr<faiss::Index> index,
-      std::unique_ptr<IvfRaBitQIndex> raBitQ);
+      std::unique_ptr<IvfRaBitQIndex> raBitQ,
+      size_t cagraDegree = 0);
 
   // Owns the FAISS resources and the lock shared by indexes on one device.
   Device& device_;
 
   // Released under the device lock because FAISS frees through 'device_'.
   std::unique_ptr<faiss::Index> index_;
+  const size_t cagraDegree_;
 
   // cuVS IVF-RaBitQ index. Search mutates internal scratch state.
   mutable std::unique_ptr<IvfRaBitQIndex> raBitQ_;

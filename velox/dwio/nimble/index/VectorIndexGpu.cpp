@@ -20,15 +20,13 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
-#include <stdexcept>
 #include <mutex>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
 #include <faiss/IndexHNSW.h>
 #include <faiss/IndexIVFRaBitQ.h>
-#include <faiss/gpu/GpuCloner.h>
-#include <faiss/gpu/GpuClonerOptions.h>
 #include <faiss/gpu/GpuIndexCagra.h>
 #include <faiss/gpu/StandardGpuResources.h>
 #include <faiss/gpu/impl/IndexUtils.h>
@@ -43,6 +41,7 @@
 #include <raft/core/host_mdspan.hpp>
 #include <raft/core/resource/cuda_stream.hpp>
 
+#include "velox/common/vectorindex/GpuFaissIndex.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 
 namespace facebook::nimble::index {
@@ -102,7 +101,8 @@ std::unique_ptr<faiss::Index> trainCagra(
 std::unique_ptr<faiss::gpu::GpuIndexCagra> cagraFromReconstructed(
     faiss::gpu::StandardGpuResources& resources,
     int deviceId,
-    const faiss::Index& cpuIndex) {
+    const faiss::Index& cpuIndex,
+    size_t graphDegree) {
   const auto numVectors = cpuIndex.ntotal;
   const auto dimensions = cpuIndex.d;
   if (numVectors < 2 || dimensions < 1) {
@@ -112,11 +112,6 @@ std::unique_ptr<faiss::gpu::GpuIndexCagra> cagraFromReconstructed(
       cpuIndex.metric_type != faiss::METRIC_INNER_PRODUCT) {
     return nullptr;
   }
-  size_t graphDegree = 64;
-  if (const auto* hnsw = dynamic_cast<const faiss::IndexHNSW*>(&cpuIndex)) {
-    graphDegree = static_cast<size_t>(hnsw->hnsw.nb_neighbors(0));
-  }
-  graphDegree = cappedGraphDegree(graphDegree, numVectors);
   // copyTo derives HNSW M as degree/2 and divides by log(M).
   if (graphDegree < 4) {
     return nullptr;
@@ -156,6 +151,28 @@ struct GpuVectorIndex::IvfRaBitQIndex {
   cuvs::neighbors::ivf_rabitq::index<int64_t> index;
   uint32_t nLists{0};
   uint32_t bitsPerDim{1};
+
+  bool blockSortFits(int deviceId) const {
+    int sharedMemoryLimit = 0;
+    checkCuda(cudaDeviceGetAttribute(
+        &sharedMemoryLimit, cudaDevAttrMaxSharedMemoryPerBlockOptin, deviceId));
+
+    // cuVS does not expose its rebuilt list sizes. Bound the largest probed
+    // list by the index size and budget the pinned kernels' per-row scratch
+    // and per-query storage.
+    const uint64_t paddedDimensions =
+        (static_cast<uint64_t>(index.dim()) + 63) / 64 * 64;
+    const uint64_t rows = index.size();
+    const uint64_t candidateBytes = rows * (sizeof(float) + sizeof(int));
+    const uint64_t sharedMemory = bitsPerDim == 1
+        ? candidateBytes + 8 * paddedDimensions
+        : candidateBytes +
+            std::max(rows * sizeof(float), paddedDimensions / 2) +
+            paddedDimensions * sizeof(float);
+    constexpr uint64_t kQueueBytes{2048};
+    return std::max(sharedMemory, kQueueBytes) <=
+        static_cast<uint64_t>(sharedMemoryLimit);
+  }
 };
 
 struct GpuVectorIndex::Device {
@@ -253,21 +270,24 @@ std::shared_ptr<const GpuVectorIndex> GpuVectorIndex::create(
           new GpuVectorIndex(device, nullptr, std::move(raBitQ)));
     }
     if (indexType == VectorIndexType::kHnswSq8) {
+      const auto& graph = dynamic_cast<const faiss::IndexHNSW&>(cpuIndex);
+      const auto degree =
+          cappedGraphDegree(graph.hnsw.nb_neighbors(0), graph.ntotal);
       auto gpuIndex =
-          cagraFromReconstructed(device.resources, device.id, cpuIndex);
+          cagraFromReconstructed(device.resources, device.id, cpuIndex, degree);
       if (gpuIndex == nullptr) {
         return nullptr;
       }
-      return std::shared_ptr<const GpuVectorIndex>(new GpuVectorIndex(
-          device, std::move(gpuIndex), nullptr));
+      return std::shared_ptr<const GpuVectorIndex>(
+          new GpuVectorIndex(device, std::move(gpuIndex), nullptr, degree));
     }
 
-    faiss::gpu::GpuClonerOptions options;
-    options.use_cuvs = true;
-    std::unique_ptr<faiss::Index> gpuIndex{faiss::gpu::index_cpu_to_gpu(
-        &device.resources, device.id, &cpuIndex, &options)};
+    auto gpuIndex = velox::common::vectorindex::cloneCuvsIndex(
+        device.resources, device.id, cpuIndex);
+    const auto* cagra = dynamic_cast<const faiss::IndexHNSWCagra*>(&cpuIndex);
+    const auto degree = cagra != nullptr ? cagra->hnsw.nb_neighbors(0) : 0;
     return std::shared_ptr<const GpuVectorIndex>(
-        new GpuVectorIndex(device, std::move(gpuIndex), nullptr));
+        new GpuVectorIndex(device, std::move(gpuIndex), nullptr, degree));
   } catch (const std::exception& error) {
     LOG(WARNING) << "Vector index stays on CPU; GPU setup failed: "
                  << error.what();
@@ -278,9 +298,11 @@ std::shared_ptr<const GpuVectorIndex> GpuVectorIndex::create(
 GpuVectorIndex::GpuVectorIndex(
     Device& device,
     std::unique_ptr<faiss::Index> index,
-    std::unique_ptr<IvfRaBitQIndex> raBitQ)
+    std::unique_ptr<IvfRaBitQIndex> raBitQ,
+    size_t cagraDegree)
     : device_{device},
       index_{std::move(index)},
+      cagraDegree_{cagraDegree},
       raBitQ_{std::move(raBitQ)} {
   NIMBLE_CHECK(
       index_ != nullptr || raBitQ_ != nullptr,
@@ -313,6 +335,10 @@ bool GpuVectorIndex::search(
     const std::lock_guard<std::mutex> lock{device_.mutex};
     faiss::gpu::DeviceScope scope(device_.id);
     try {
+      if (maxNumNeighbors <= kMaxRaBitQBlockSortNeighbors &&
+          !raBitQ_->blockSortFits(device_.id)) {
+        return false;
+      }
       auto& handle = device_.resources.getRaftHandle(device_.id);
       const auto stream = raft::resource::get_cuda_stream(handle).get();
       const auto dimensions = static_cast<int64_t>(raBitQ_->index.dim());
@@ -389,6 +415,7 @@ void GpuVectorIndex::searchCagra(
   faiss::gpu::SearchParametersCagra params;
   params.itopk_size =
       std::max(intermediateResults, static_cast<size_t>(maxNumNeighbors));
+  params.algo = velox::common::vectorindex::cagraSearchAlgorithm(cagraDegree_);
   params.sel = selector;
   const std::lock_guard<std::mutex> lock{device_.mutex};
   try {

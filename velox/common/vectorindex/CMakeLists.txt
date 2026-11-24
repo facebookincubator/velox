@@ -65,7 +65,7 @@ if(VELOX_ENABLE_FAISS)
 
   # A separate library, so that velox_vector_index needs no CUDA.
   if(VELOX_ENABLE_FAISS_GPU)
-    velox_add_library(velox_vector_index_gpu GpuLocalVectorIndex.cpp HEADERS GpuLocalVectorIndex.h)
+    velox_add_library(velox_vector_index_gpu GpuLocalVectorIndex.cpp HEADERS GpuFaissIndex.h GpuLocalVectorIndex.h)
 
     # FAISS GPU headers include RAFT, whose include paths come through cuVS.
     velox_link_libraries(

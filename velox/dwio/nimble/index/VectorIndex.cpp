@@ -17,6 +17,7 @@
 #include "velox/dwio/nimble/index/VectorIndex.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <exception>
 #include <limits>
@@ -442,10 +443,14 @@ const VectorIndex::IvfSearchOptions* gpuIvfSearchOptions(
   const auto* ivfOptions =
       velox::checkedPointerCast<const VectorIndex::IvfSearchOptions>(
           config.searchOptions.get());
-  // cuVS IVF-RaBitQ has no row filter. A filtered search stays on the CPU.
+  // cuVS IVF-RaBitQ has no row filter. Above its block-sort limit, partial
+  // probing can also leave the cuVS selector with fewer than k candidates.
+  // Decide before constructing the GPU index.
   if (indexType == VectorIndexType::kIvfRaBitQ &&
       (config.rowSelection.bitmap().has_value() ||
-       config.rowSelection.range().has_value())) {
+       config.rowSelection.range().has_value() ||
+       (ivfOptions->numProbes < numPartitions &&
+        maxNumNeighbors > GpuVectorIndex::kMaxRaBitQBlockSortNeighbors))) {
     return nullptr;
   }
   // FAISS GPU rejects max_codes. A zero probe count falls through to the CPU
@@ -465,6 +470,7 @@ const VectorIndex::IvfSearchOptions* gpuIvfSearchOptions(
 void searchGpuIndex(
     const GpuVectorIndex& gpuIndex,
     size_t numPartitions,
+    uint64_t numVectors,
     faiss::idx_t numQueries,
     uint32_t requestedNumProbes,
     const float* queryVectors,
@@ -488,9 +494,9 @@ void searchGpuIndex(
     return;
   }
 
-  // cuVS can use the maximum ID for missing neighbors. Nimble row IDs are
-  // sequential, so that sentinel cannot be a valid row. Pack each query's
-  // results before the trailing padding expected by the result reader.
+  // cuVS can fill missing neighbors with an in-range ID and a non-finite
+  // score. Some IVF indexes instead mark missing IDs with the maximum ID.
+  // Pack each query's valid results before the trailing FAISS padding.
   constexpr auto kCuvsPaddingId = std::numeric_limits<faiss::idx_t>::max();
   for (faiss::idx_t query = 0; query < numQueries; ++query) {
     const auto offset = query * maxNumNeighbors;
@@ -499,8 +505,15 @@ void searchGpuIndex(
     faiss::idx_t numResults{0};
     for (faiss::idx_t i = 0; i < maxNumNeighbors; ++i) {
       const auto label = queryLabels[i];
-      if (label == -1 || label == kCuvsPaddingId) {
+      if (label == -1 || label == kCuvsPaddingId ||
+          !std::isfinite(queryScores[i])) {
         continue;
+      }
+      if (label < 0 || static_cast<uint64_t>(label) >= numVectors ||
+          (searchParameters.sel != nullptr &&
+           !searchParameters.sel->is_member(label))) {
+        // Leave usedGpu false so the caller retries the batch on the CPU.
+        return;
       }
       if (numResults != i) {
         queryLabels[numResults] = label;
@@ -528,9 +541,10 @@ const VectorIndex::HnswSearchOptions* gpuGraphSearchOptions(
   const auto* options =
       velox::checkedPointerCast<const VectorIndex::HnswSearchOptions>(
           config.searchOptions.get());
-  // A zero search depth falls through to the CPU path, which reports the error.
-  if (options->searchDepth == 0 ||
-      maxNumNeighbors > GpuVectorIndex::maxSelection()) {
+  // The cuVS CAGRA kernel selected by the default search algorithm can
+  // handle at most 1024 output neighbors. This limit is specific to CAGRA.
+  constexpr faiss::idx_t kMaxCagraNeighbors{1024};
+  if (options->searchDepth == 0 || maxNumNeighbors > kMaxCagraNeighbors) {
     return nullptr;
   }
   return options;
@@ -994,6 +1008,7 @@ VectorIndex::SearchResults VectorIndex::search(
       searchGpuIndex(
           *gpu,
           numPartitions,
+          numVectors_,
           numQueries,
           ivfOptions->numProbes,
           queryData,
@@ -1048,6 +1063,9 @@ VectorIndex::SearchResults VectorIndex::search(
     resultOffsets[queryIndex + 1] = resultOffsets[queryIndex] + numQueryResults;
   }
 
+  const auto nearer = [metric = metric_](float a, float b) {
+    return metric == VectorDistanceMetric::kL2 ? a < b : a > b;
+  };
   std::vector<SearchResult> results;
   results.reserve(resultOffsets.back());
   for (size_t queryIndex = 0; queryIndex < numQueries; ++queryIndex) {
@@ -1066,6 +1084,13 @@ VectorIndex::SearchResults VectorIndex::search(
           .rowId = labels[flatResultIndex],
           .score = scores[flatResultIndex],
       });
+    }
+    if (searchStats.usedGpu) {
+      const auto begin = results.end() - numQueryResults;
+      if (!std::ranges::is_sorted(
+              begin, results.end(), nearer, &SearchResult::score)) {
+        std::ranges::sort(begin, results.end(), nearer, &SearchResult::score);
+      }
     }
   }
 

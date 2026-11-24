@@ -84,6 +84,10 @@ block()
   endif()
   # Make FAISS available
   FetchContent_MakeAvailable(faiss)
+  if(VELOX_ENABLE_FAISS_GPU)
+    # Let consumers put the matching headers before any older Faiss on -I paths.
+    set_property(TARGET faiss PROPERTY SYSTEM OFF)
+  endif()
   add_library(FAISS::faiss ALIAS faiss)
   unset(BUILD_TESTING CACHE)
   unset(BUILD_SHARED_LIBS CACHE)
