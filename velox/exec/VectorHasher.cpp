@@ -17,7 +17,6 @@
 #include "velox/exec/VectorHasher.h"
 
 #include <cstring>
-#include <limits>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Portability.h"
@@ -560,27 +559,21 @@ void VectorHasher::lookupIdsRangeSimd(
       }
     }
   };
+  const vector_size_t numKeys = decoded.base()->size();
   // Full batches stay within 'data', which may have no padding.
-  const vector_size_t simdEnd = std::min<vector_size_t>(
-      rows.end(), decoded.base()->size() / kWidth * kWidth);
-  // The last, partial batch loads its keys from a copy, whose lanes past the
-  // keys hold a key out of range, so that they don't update the ids of a batch
-  // with no key in range. It runs first, so that no value stays live across
-  // the loop below.
-  if (simdEnd < rows.end() &&
-      bits::findFirstBit(bits, std::max(rows.begin(), simdEnd), rows.end()) >=
-          0) {
-    T lastKeys[kWidth];
-    std::fill(
-        std::begin(lastKeys),
-        std::end(lastKeys),
-        static_cast<T>(
-            min_ > std::numeric_limits<T>::min() ? min_ - 1 : max_ + 1));
-    std::copy(data + simdEnd, data + decoded.base()->size(), lastKeys);
-    lookupBatch(lastKeys, simdEnd);
+  const vector_size_t fullBatchesEnd =
+      std::min<vector_size_t>(rows.end(), numKeys / kWidth * kWidth);
+  // The last, partial batch loads its keys from a zero-filled copy. It runs
+  // first, so that no value stays live across the loop below.
+  if (fullBatchesEnd < rows.end() &&
+      bits::findFirstBit(
+          bits, std::max(rows.begin(), fullBatchesEnd), rows.end()) >= 0) {
+    T lastKeys[kWidth]{};
+    std::copy(data + fullBatchesEnd, data + numKeys, lastKeys);
+    lookupBatch(lastKeys, fullBatchesEnd);
   }
   bits::forBatches<kWidth>(
-      bits, rows.begin(), simdEnd, [&](auto index, auto /*mask*/) {
+      bits, rows.begin(), fullBatchesEnd, [&](auto index, auto /*mask*/) {
         lookupBatch(data + index, index);
       });
 }

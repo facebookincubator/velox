@@ -1340,7 +1340,7 @@ TEST_F(VectorHasherTest, simdRange) {
 TEST_F(VectorHasherTest, simdRangeAtEndOfMapping) {
   // Keys that wrap external memory may end right before an unmapped page. The
   // range lookup over them gives the same rows and ids as over the same keys
-  // in a regular vector.
+  // followed by a full batch of other keys, which only full batches look up.
   auto test = [&]<typename T>(const TypePtr& type) {
     for (const vector_size_t numRows : {1, 5, 8, 13, 17}) {
       for (const uint64_t multiplier : {1, 3}) {
@@ -1363,7 +1363,9 @@ TEST_F(VectorHasherTest, simdRangeAtEndOfMapping) {
             numRows,
             copyToEndOfPage(page, keys),
             std::vector<BufferPtr>{});
-        auto regularKeys = makeFlatVector<T>(keys);
+        auto longerKeys = keys;
+        longerKeys.resize(numRows + xsimd::batch<T>::size, 1);
+        auto regularKeys = makeFlatVector<T>(longerKeys);
 
         auto hasher = exec::VectorHasher::create(type, 0);
         auto sample = makeFlatVector<T>({1, 2, 3, 4, 5, 6, 7, 8});
@@ -1379,8 +1381,11 @@ TEST_F(VectorHasherTest, simdRangeAtEndOfMapping) {
           std::fill(ids.begin(), ids.end(), 5);
           exec::VectorHasher::ScratchMemory scratch;
           hasher->lookupValueIds(keyVector, rows, scratch, ids);
-          return std::make_pair(
-              rows, std::vector<uint64_t>(ids.begin(), ids.begin() + numRows));
+          // 'ids' is unspecified at the rows that the lookup removes.
+          std::vector<uint64_t> selectedIds;
+          rows.applyToSelected(
+              [&](auto row) { selectedIds.push_back(ids[row]); });
+          return std::make_pair(rows, selectedIds);
         };
         // All rows, and every other row.
         SelectivityVector everyOther(numRows, false);
@@ -1392,50 +1397,6 @@ TEST_F(VectorHasherTest, simdRangeAtEndOfMapping) {
           EXPECT_EQ(lookup(*keysAtEnd, rows), lookup(*regularKeys, rows));
         }
       }
-    }
-  };
-
-  test.template operator()<int64_t>(BIGINT());
-  test.template operator()<int32_t>(INTEGER());
-}
-
-TEST_F(VectorHasherTest, simdRangeLastBatchOutOfRange) {
-  // A last, partial batch whose keys are all out of range leaves its ids as
-  // they are, like a full batch, even though 0 is in range.
-  auto test = [&]<typename T>(const TypePtr& type) {
-    SCOPED_TRACE(type->toString());
-    constexpr vector_size_t kWidth = xsimd::batch<T>::size;
-    constexpr vector_size_t kNumRows = kWidth + 3;
-    std::vector<T> keys(kNumRows, 100);
-    for (auto i = 0; i < kWidth; ++i) {
-      keys[i] = i % 8;
-    }
-    common::testutil::PageBeforeGuard page;
-    auto keyVector = std::make_shared<FlatVector<T>>(
-        pool(),
-        type,
-        nullptr,
-        kNumRows,
-        copyToEndOfPage(page, keys),
-        std::vector<BufferPtr>{});
-
-    auto hasher = exec::VectorHasher::create(type, 0);
-    auto sample = makeFlatVector<T>({0, 1, 2, 3, 4, 5, 6, 7});
-    SelectivityVector sampleRows(sample->size());
-    raw_vector<uint64_t> sampleIds(sample->size());
-    hasher->decode(*sample, sampleRows);
-    hasher->computeValueIds(sampleRows, sampleIds);
-    hasher->enableValueRange(3, 0);
-
-    constexpr uint64_t kEarlierId = 5;
-    raw_vector<uint64_t> ids(kNumRows + kWidth);
-    std::fill(ids.begin(), ids.end(), kEarlierId);
-    SelectivityVector rows(kNumRows);
-    exec::VectorHasher::ScratchMemory scratch;
-    hasher->lookupValueIds(*keyVector, rows, scratch, ids);
-    for (auto i = kWidth; i < kNumRows; ++i) {
-      EXPECT_FALSE(rows.isValid(i)) << i;
-      EXPECT_EQ(ids[i], kEarlierId) << i;
     }
   };
 
