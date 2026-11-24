@@ -32,6 +32,10 @@
 #include "velox/dwio/parquet/reader/RleBpDataDecoder.h"
 #include "velox/dwio/parquet/reader/StringDecoder.h"
 
+namespace facebook::velox::dwio::common {
+class ExtractToReader;
+}
+
 namespace facebook::velox::parquet {
 
 /// Manages access to pages inside a ColumnChunk. Interprets page headers and
@@ -404,7 +408,17 @@ class PageReader {
           rleBooleanDecoder_->readWithVisitor<false>(nulls, visitor);
           break;
         default:
-          booleanDecoder_->readWithVisitor<false>(nulls, visitor);
+          if constexpr (
+              Visitor::dense && !Visitor::kHasFilter &&
+              std::is_same_v<
+                  typename Visitor::Extract,
+                  dwio::common::ExtractToReader>) {
+            const auto numValues = visitor.numRows();
+            booleanDecoder_->readDense(numValues, visitor.rawValues(numValues));
+            visitor.setNumValues(numValues);
+          } else {
+            booleanDecoder_->readWithVisitor<false>(nullptr, visitor);
+          }
       }
     }
   }
