@@ -202,6 +202,71 @@ TEST_F(EvalCtxTest, addErrorsPreserveOldErrors) {
   ASSERT_FALSE(context.errors()->hasErrorAt(2));
 }
 
+TEST_F(EvalCtxTest, setStatusErrorCode) {
+  const auto withCode =
+      Status::UserError("division by zero").withErrorCode("SPARK:X");
+  const auto withoutCode = Status::UserError("bad input");
+
+  // Thrown errors keep the status error code, or use INVALID_ARGUMENT if none.
+  EvalCtx context(&execCtx_);
+  VELOX_ASSERT_USER_THROW_CODE(
+      context.setStatus(0, withCode), "SPARK:X", "division by zero");
+  VELOX_ASSERT_USER_THROW_CODE(
+      context.setStatus(0, withoutCode),
+      error_code::kInvalidArgument,
+      "bad input");
+
+  // Captured errors do the same.
+  *context.mutableThrowOnError() = false;
+  context.setStatus(0, withCode);
+  context.setStatus(1, withoutCode);
+  ASSERT_EQ(context.errors()->countErrors(), 2);
+  VELOX_ASSERT_USER_THROW_CODE(
+      context.errors()->throwIfErrorAt(0), "SPARK:X", "division by zero");
+  VELOX_ASSERT_USER_THROW_CODE(
+      context.errors()->throwIfErrorAt(1),
+      error_code::kInvalidArgument,
+      "bad input");
+}
+
+TEST_F(EvalCtxTest, setStatusesErrorCode) {
+  const auto withCode =
+      Status::UserError("division by zero").withErrorCode("SPARK:X");
+  const auto withoutCode = Status::UserError("bad input");
+
+  // Thrown errors keep the status error code, or use INVALID_ARGUMENT if none.
+  EvalCtx context(&execCtx_);
+  SelectivityVector rows(3);
+  VELOX_ASSERT_USER_THROW_CODE(
+      context.setStatuses(rows, withCode), "SPARK:X", "division by zero");
+  VELOX_ASSERT_USER_THROW_CODE(
+      context.setStatuses(rows, withoutCode),
+      error_code::kInvalidArgument,
+      "bad input");
+
+  // Captured errors do the same for every selected row.
+  *context.mutableThrowOnError() = false;
+  SelectivityVector firstRows(5, false);
+  firstRows.setValidRange(0, 2, true);
+  firstRows.updateBounds();
+  SelectivityVector lastRows(5, false);
+  lastRows.setValidRange(2, 5, true);
+  lastRows.updateBounds();
+  context.setStatuses(firstRows, withCode);
+  context.setStatuses(lastRows, withoutCode);
+  ASSERT_EQ(context.errors()->countErrors(), 5);
+  for (auto i = 0; i < 2; ++i) {
+    VELOX_ASSERT_USER_THROW_CODE(
+        context.errors()->throwIfErrorAt(i), "SPARK:X", "division by zero");
+  }
+  for (auto i = 2; i < 5; ++i) {
+    VELOX_ASSERT_USER_THROW_CODE(
+        context.errors()->throwIfErrorAt(i),
+        error_code::kInvalidArgument,
+        "bad input");
+  }
+}
+
 TEST_F(EvalCtxTest, localSingleRow) {
   EvalCtx context(&execCtx_);
 

@@ -197,21 +197,9 @@ auto throwError(const std::exception_ptr& exceptionPtr) {
   std::rethrow_exception(toVeloxException(exceptionPtr));
 }
 
-std::exception_ptr toVeloxUserError(const std::string& message) {
-  return std::make_exception_ptr(VeloxUserError(
-      __FILE__,
-      __LINE__,
-      __FUNCTION__,
-      "",
-      message,
-      error_source::kErrorSourceUser,
-      error_code::kInvalidArgument,
-      false /*retriable*/));
-}
-
-// Builds a VeloxUserError from a user error status that carries an error code
-// (e.g. "SPARK:<condition>"), keeping that code instead of INVALID_ARGUMENT.
-VeloxUserError makeVeloxUserErrorWithCode(const Status& status) {
+// Builds a VeloxUserError from a user error status. Keeps the status error
+// code (e.g. "SPARK:<condition>") if set, otherwise uses INVALID_ARGUMENT.
+VeloxUserError makeVeloxUserError(const Status& status) {
   return VeloxUserError(
       __FILE__,
       __LINE__,
@@ -219,20 +207,15 @@ VeloxUserError makeVeloxUserErrorWithCode(const Status& status) {
       "",
       status.message(),
       error_source::kErrorSourceUser,
-      status.errorCode(),
+      status.errorCode().empty()
+          ? std::string_view(error_code::kInvalidArgument.c_str())
+          : std::string_view(status.errorCode()),
       false /*retriable*/);
 }
 
-std::exception_ptr toVeloxUserError(const Status& status) {
-  if (status.errorCode().empty()) {
-    return toVeloxUserError(status.message());
-  }
-  return std::make_exception_ptr(makeVeloxUserErrorWithCode(status));
-}
-
-[[noreturn]] void throwVeloxUserErrorWithCode(const Status& status) {
+[[noreturn]] void throwVeloxUserError(const Status& status) {
   ++threadNumVeloxThrow();
-  throw makeVeloxUserErrorWithCode(status);
+  throw makeVeloxUserError(status);
 }
 
 } // namespace
@@ -242,13 +225,11 @@ void EvalCtx::setStatus(vector_size_t index, const Status& status) {
 
   if (status.isUserError()) {
     if (throwOnError_) {
-      if (status.errorCode().empty()) {
-        VELOX_USER_FAIL(status.message());
-      }
-      throwVeloxUserErrorWithCode(status);
+      throwVeloxUserError(status);
     }
     if (captureErrorDetails_) {
-      addError(index, toVeloxUserError(status), errors_);
+      addError(
+          index, std::make_exception_ptr(makeVeloxUserError(status)), errors_);
     } else {
       addError(index, errors_);
     }
@@ -261,14 +242,11 @@ void EvalCtx::setStatuses(const SelectivityVector& rows, const Status& status) {
   VELOX_CHECK(!status.ok(), "Status must be an error");
   if (status.isUserError()) {
     if (throwOnError_) {
-      if (status.errorCode().empty()) {
-        VELOX_USER_FAIL(status.message());
-      }
-      throwVeloxUserErrorWithCode(status);
+      throwVeloxUserError(status);
     }
 
     if (captureErrorDetails_) {
-      auto veloxException = toVeloxUserError(status);
+      auto veloxException = std::make_exception_ptr(makeVeloxUserError(status));
       rows.applyToSelected(
           [&](auto row) { addError(row, veloxException, errors_); });
     } else {

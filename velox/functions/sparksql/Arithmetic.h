@@ -854,7 +854,8 @@ template <typename TExec>
 struct CheckedDivideFunction {
   template <typename T>
   FOLLY_ALWAYS_INLINE Status call(T& result, const T& a, const T& b) {
-    SPARK_USER_RETURN_EQ("DIVIDE_BY_ZERO", b, 0, "division by zero");
+    SPARK_USER_RETURN_EQ(
+        spark_error_code::kDivideByZero, b, 0, "division by zero");
     if constexpr (std::is_integral_v<T>) {
       VELOX_USER_RETURN(
           a == std::numeric_limits<T>::min() && b == -1,

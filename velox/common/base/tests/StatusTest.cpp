@@ -15,6 +15,7 @@
  */
 
 #include "velox/common/base/Status.h"
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <sstream>
 #include "velox/common/base/Exceptions.h"
@@ -111,9 +112,12 @@ TEST(StatusTest, testAbort) {
 TEST(StatusTest, errorCode) {
   ASSERT_EQ("", Status::OK().errorCode());
   ASSERT_EQ("", Status::UserError("error").errorCode());
-  EXPECT_THROW(
-      static_cast<void>(Status::OK().withErrorCode("SPARK:DIVIDE_BY_ZERO")),
-      std::invalid_argument);
+  EXPECT_THAT(
+      [] {
+        static_cast<void>(Status::OK().withErrorCode("SPARK:DIVIDE_BY_ZERO"));
+      },
+      testing::ThrowsMessage<std::invalid_argument>(
+          testing::HasSubstr("Cannot attach error code to ok status")));
 
   const auto status =
       Status::UserError("division by zero").withErrorCode("SPARK:X");

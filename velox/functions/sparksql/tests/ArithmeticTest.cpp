@@ -18,6 +18,7 @@
 #include <limits>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/sparksql/SparkErrors.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -1045,10 +1046,12 @@ TEST_F(ArithmeticTest, checkedDivide) {
 TEST_F(ArithmeticTest, checkedDivideErrorCode) {
   // Division by zero carries the Spark error condition as the error code.
   VELOX_ASSERT_USER_THROW_CODE(
-      checkedDivide<int32_t>(1, 0), "SPARK:DIVIDE_BY_ZERO", "division by zero");
+      checkedDivide<int32_t>(1, 0),
+      spark_error_code::kDivideByZero,
+      "division by zero");
   VELOX_ASSERT_USER_THROW_CODE(
       checkedDivide<double>(1.0, 0.0),
-      "SPARK:DIVIDE_BY_ZERO",
+      spark_error_code::kDivideByZero,
       "division by zero");
   // Errors not yet mapped to a Spark condition keep the default code.
   VELOX_ASSERT_USER_THROW_CODE(
