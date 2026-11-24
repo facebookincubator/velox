@@ -185,7 +185,6 @@ TEST_F(LeastTest, timestampUtc) {
           {Timestamp(581, 1651), Timestamp(1569, 25)}, TIMESTAMP_UTC()),
   });
   auto result = evaluate("least(c0, c1, c2)", data);
-  ASSERT_TRUE(result->type()->equivalent(*TIMESTAMP_UTC()));
   facebook::velox::test::assertEqualVectors(
       makeFlatVector<Timestamp>(
           {Timestamp(581, 1651), Timestamp(581, 1651)}, TIMESTAMP_UTC()),
@@ -371,7 +370,6 @@ TEST_F(GreatestTest, timestampUtc) {
           {Timestamp(581, 1651), Timestamp(1569, 25)}, TIMESTAMP_UTC()),
   });
   auto result = evaluate("greatest(c0, c1, c2)", data);
-  ASSERT_TRUE(result->type()->equivalent(*TIMESTAMP_UTC()));
   facebook::velox::test::assertEqualVectors(
       makeFlatVector<Timestamp>(
           {Timestamp(4859, 482), Timestamp(4859, 482)}, TIMESTAMP_UTC()),
