@@ -114,7 +114,12 @@ Operator::Operator(
               operatorId,
               driverCtx->pipelineId,
               std::move(planNodeId),
-              std::string(operatorType)}) {}
+              std::string(operatorType)}),
+      preferredOutputBatchBytes_(
+          driverCtx->queryConfig().preferredOutputBatchBytes()),
+      preferredOutputBatchRows_(
+          driverCtx->queryConfig().preferredOutputBatchRows()),
+      maxOutputBatchRows_(driverCtx->queryConfig().maxOutputBatchRows()) {}
 
 void Operator::maybeSetReclaimer() {
   VELOX_CHECK_NULL(pool()->reclaimer());
@@ -366,19 +371,17 @@ void Operator::close() {
 
 vector_size_t Operator::outputBatchRows(
     std::optional<uint64_t> averageRowSize) const {
-  const auto& queryConfig = operatorCtx_->task()->queryCtx()->queryConfig();
   if (!averageRowSize.has_value()) {
-    return queryConfig.preferredOutputBatchRows();
+    return preferredOutputBatchRows_;
   }
 
-  if (averageRowSize.value() == 0) {
-    return queryConfig.maxOutputBatchRows();
+  if (*averageRowSize == 0) {
+    return maxOutputBatchRows_;
   }
 
-  const uint64_t batchSize =
-      queryConfig.preferredOutputBatchBytes() / averageRowSize.value();
-  if (batchSize > queryConfig.maxOutputBatchRows()) {
-    return queryConfig.maxOutputBatchRows();
+  const uint64_t batchSize = preferredOutputBatchBytes_ / *averageRowSize;
+  if (batchSize > maxOutputBatchRows_) {
+    return maxOutputBatchRows_;
   }
   return std::max<vector_size_t>(batchSize, 1);
 }

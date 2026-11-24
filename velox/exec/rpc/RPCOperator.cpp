@@ -181,9 +181,6 @@ void RPCOperator::initialize() {
     initializeRateLimiter();
   }
 
-  // Size output vectors from config; see getOutput().
-  outputBatchRows_ = queryConfig.preferredOutputBatchRows();
-
   RPC_OP_VLOG(1) << "Created operator for function '"
                  << rpcNode_->functionName() << "', planNodeId=" << planNodeId()
                  << ", operatorId=" << operatorId() << ", streamingMode="
@@ -1012,7 +1009,7 @@ RowVectorPtr RPCOperator::outputPerRow() {
   // Drain additional ready rows (non-blocking) for batched output. This
   // amortizes RowVector allocation across multiple completed rows.
   if (!claimedRowsAreLocalOnly_) {
-    state_->drainReadyRows(claimedRows_, outputBatchRows_);
+    state_->drainReadyRows(claimedRows_, preferredOutputBatchRows());
   }
 
   // Materialize responses, locations and round-trip latencies once -- reused

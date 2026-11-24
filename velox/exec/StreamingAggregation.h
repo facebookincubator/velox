@@ -92,15 +92,8 @@ class StreamingAggregation : public Operator {
   // Initialize the aggregations setting allocator and offsets.
   void initializeAggregates(uint32_t numKeys);
 
-  // Maximum number of rows in the output batch.
-  const vector_size_t maxOutputBatchSize_;
-
-  // Maximum number of rows in the output batch.
+  // Preferred minimum number of rows in an output batch.
   const vector_size_t minOutputBatchSize_;
-
-  // If the size of the data in the RowContainer exceeds this value, we will
-  // output a batch regardless of the number of rows.
-  const uint64_t maxOutputBatchBytes_;
 
   // Used at initialize() and gets reset() afterward.
   std::shared_ptr<const core::AggregationNode> aggregationNode_;

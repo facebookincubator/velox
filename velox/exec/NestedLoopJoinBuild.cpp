@@ -53,8 +53,7 @@ BlockingReason NestedLoopJoinBuild::isBlocked(ContinueFuture* future) {
 // here would be duplicated by the number of rows on probe side, result in huge
 // number of small vectors in the output.
 std::vector<RowVectorPtr> NestedLoopJoinBuild::mergeDataVectors() const {
-  const auto maxBatchRows =
-      operatorCtx_->task()->queryCtx()->queryConfig().maxOutputBatchRows();
+  const auto maxBatchRows = maxOutputBatchRows();
   std::vector<RowVectorPtr> merged;
   for (int i = 0; i < dataVectors_.size();) {
     // convert int32_t to int64_t to avoid sum overflow

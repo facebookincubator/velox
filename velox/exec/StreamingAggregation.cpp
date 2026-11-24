@@ -35,19 +35,16 @@ StreamingAggregation::StreamingAggregation(
           aggregationNode->step() == core::AggregationNode::Step::kPartial
               ? OperatorType::kPartialAggregation
               : OperatorType::kAggregation),
-      maxOutputBatchSize_{outputBatchRows()},
       minOutputBatchSize_{
           operatorCtx_->driverCtx()
                       ->queryConfig()
                       .streamingAggregationMinOutputBatchRows() > 0
               ? std::min(
-                    maxOutputBatchSize_,
+                    preferredOutputBatchRows(),
                     operatorCtx_->driverCtx()
                         ->queryConfig()
                         .streamingAggregationMinOutputBatchRows())
-              : maxOutputBatchSize_},
-      maxOutputBatchBytes_{
-          operatorCtx_->driverCtx()->queryConfig().preferredOutputBatchBytes()},
+              : preferredOutputBatchRows()},
       aggregationNode_{aggregationNode},
       step_{aggregationNode->step()},
       noGroupsSpanBatches_{aggregationNode_->noGroupsSpanBatches()},
@@ -405,7 +402,7 @@ RowVectorPtr StreamingAggregation::getOutput() {
   // when noGroupsSpanBatches is set
   const bool outputDueToBatchSize = numGroups_ > minOutputBatchSize_;
   const bool outputDueToBatchBytes =
-      numGroups_ > 1 && estimatedBatchBytes > maxOutputBatchBytes_;
+      numGroups_ > 1 && estimatedBatchBytes > preferredOutputBatchBytes();
   if (noGroupsSpanBatches_ ||
       (numPrevGroups > 0 && (outputDueToBatchSize || outputDueToBatchBytes))) {
     size_t numOutputGroups{0};

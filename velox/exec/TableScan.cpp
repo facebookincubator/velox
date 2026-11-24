@@ -103,7 +103,6 @@ TableScan::TableScan(
       driverCtx_(driverCtx),
       maxSplitPreloadPerDriver_(
           driverCtx_->queryConfig().maxSplitPreloadPerDriver()),
-      maxReadBatchSize_(driverCtx_->queryConfig().maxOutputBatchRows()),
       connectorPool_(driverCtx_->task->addConnectorPoolLocked(
           planNodeId(),
           driverCtx_->pipelineId,
@@ -120,9 +119,8 @@ TableScan::TableScan(
           driverCtx_->queryConfig().tableScanOutputBatchRowsOverride()),
       scaledController_(driverCtx_->task->getScaledScanControllerLocked(
           driverCtx_->splitGroupId,
-          planNodeId())) {
-  readBatchSize_ = driverCtx_->queryConfig().preferredOutputBatchRows();
-}
+          planNodeId())),
+      readBatchSize_(preferredOutputBatchRows()) {}
 
 void TableScan::initialize() {
   SourceOperator::initialize();
@@ -545,7 +543,7 @@ int32_t TableScan::calculateBatchSize(int64_t currentEstimatedRowSize) {
     int32_t batchSize = splitBatchSizeHint_;
     if (maxFilteringRatio_ > 0) {
       batchSize = std::min(
-          maxReadBatchSize_,
+          maxOutputBatchRows(),
           static_cast<int32_t>(batchSize / maxFilteringRatio_));
     }
     return batchSize;
@@ -574,7 +572,7 @@ int32_t TableScan::calculateBatchSize(int64_t currentEstimatedRowSize) {
   int32_t batchSize = readBatchSize_;
   if (maxFilteringRatio_ > 0) {
     batchSize = std::min(
-        maxReadBatchSize_,
+        maxOutputBatchRows(),
         static_cast<int32_t>(batchSize / maxFilteringRatio_));
   }
   return batchSize;

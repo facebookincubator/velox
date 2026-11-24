@@ -107,7 +107,7 @@ class ConfigBase : public IConfig {
 
   template <typename T>
   T get(const Entry<T>& entry) const {
-    std::shared_lock<std::shared_mutex> l(mutex_);
+    const auto lock = acquireReadLock();
     auto iter = configs_.find(entry.key);
     return iter != configs_.end() ? entry.toT(entry.key, iter->second)
                                   : entry.defaultVal;
@@ -160,10 +160,18 @@ class ConfigBase : public IConfig {
   }
 
  protected:
+  // Subclasses must only modify configs_ when mutable_ is true and while
+  // holding mutex_ exclusively. Immutable lookups can run without the lock.
   mutable std::shared_mutex mutex_;
   std::unordered_map<std::string, std::string> configs_;
 
  private:
+  // Immutable configs can read the map without acquiring the mutex.
+  std::shared_lock<std::shared_mutex> acquireReadLock() const {
+    return mutable_ ? std::shared_lock{mutex_}
+                    : std::shared_lock<std::shared_mutex>{};
+  }
+
   std::optional<std::string> access(const std::string& key) const final;
 
   const bool mutable_;

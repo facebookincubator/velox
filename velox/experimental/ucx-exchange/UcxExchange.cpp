@@ -43,8 +43,6 @@ UcxExchange::UcxExchange(
           nvtx3::rgb{0, 191, 255},
           operatorId,
           fmt::format("[{}]", planNode->id())),
-      preferredOutputBatchBytes_{
-          driverCtx->queryConfig().preferredOutputBatchBytes()},
       processSplits_{driverCtx->driverId == 0},
       pipelineId_{driverCtx->pipelineId},
       driverId_{driverCtx->driverId},

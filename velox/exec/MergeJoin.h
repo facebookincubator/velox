@@ -643,14 +643,8 @@ class MergeJoin : public Operator {
   // dictionaries wrapped around the right side input.
   bool isRightFlattened_{false};
 
-  // Preferred output batch size in bytes from QueryConfig.
-  const uint64_t preferredOutputBatchBytes_;
-
-  // Preferred output batch size in rows from QueryConfig.
-  const vector_size_t preferredOutputBatchRows_;
-
   // Whether dynamic output batch sizing is enabled. When disabled (default),
-  // outputBatchSize_ is fixed at preferredOutputBatchRows_.
+  // outputBatchSize_ is fixed at preferredOutputBatchRows().
   const bool dynamicOutputBatchSizeEnabled_;
 
   // core::QueryConfig::mergeJoinStreamLeftSide(). Whether streaming actually

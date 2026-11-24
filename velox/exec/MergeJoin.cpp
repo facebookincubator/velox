@@ -55,10 +55,6 @@ MergeJoin::MergeJoin(
           operatorId,
           joinNode->id(),
           OperatorType::kMergeJoin),
-      preferredOutputBatchBytes_{
-          driverCtx->queryConfig().preferredOutputBatchBytes()},
-      preferredOutputBatchRows_{
-          driverCtx->queryConfig().preferredOutputBatchRows()},
       dynamicOutputBatchSizeEnabled_{
           driverCtx->queryConfig().mergeJoinOutputBatchStartSize() != 0},
       streamLeftSideEnabled_{
@@ -69,7 +65,7 @@ MergeJoin::MergeJoin(
       outputBatchSize_{
           dynamicOutputBatchSizeEnabled_
               ? driverCtx->queryConfig().mergeJoinOutputBatchStartSize()
-              : preferredOutputBatchRows_},
+              : preferredOutputBatchRows()},
       joinNode_(joinNode) {
   VELOX_USER_CHECK(
       core::MergeJoinNode::isSupported(joinType_),
@@ -128,12 +124,12 @@ void MergeJoin::initialize() {
     if (joinNode_->isLeftJoin() || joinNode_->isAntiJoin() ||
         joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
         isSemiFilterJoin(joinType_)) {
-      joinTracker_ = JoinTracker(preferredOutputBatchRows_, pool());
+      joinTracker_ = JoinTracker(preferredOutputBatchRows(), pool());
     }
   } else if (joinNode_->isAntiJoin()) {
     // Anti join needs to track the left side rows that have no match on the
     // right.
-    joinTracker_ = JoinTracker(preferredOutputBatchRows_, pool());
+    joinTracker_ = JoinTracker(preferredOutputBatchRows(), pool());
   }
 
   joinNode_.reset();
@@ -629,7 +625,7 @@ bool MergeJoin::prepareOutput(
       } else {
         inputs[i] = BaseVector::create(
             filterInputType_->childAt(i),
-            preferredOutputBatchRows_,
+            preferredOutputBatchRows(),
             operatorCtx_->pool());
       }
     }
@@ -638,7 +634,7 @@ bool MergeJoin::prepareOutput(
         operatorCtx_->pool(),
         filterInputType_,
         nullptr,
-        preferredOutputBatchRows_,
+        preferredOutputBatchRows(),
         std::move(inputs));
   }
   return false;
@@ -1559,8 +1555,8 @@ void MergeJoin::updateOutputBatchSize(const RowVectorPtr& output) {
   }
 
   outputBatchSize_ = std::min(
-      static_cast<uint64_t>(preferredOutputBatchBytes_ / avgRowSize),
-      static_cast<uint64_t>(preferredOutputBatchRows_));
+      static_cast<uint64_t>(preferredOutputBatchBytes() / avgRowSize),
+      static_cast<uint64_t>(preferredOutputBatchRows()));
 
   // Ensure we have at least 1 row.
   if (outputBatchSize_ == 0) {

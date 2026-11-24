@@ -723,6 +723,9 @@ class Driver : public std::enable_shared_from_this<Driver> {
   // driver execution.
   bool enableOperatorBatchSizeStats_{false};
 
+  // Read during init() to avoid a config lookup for every output batch.
+  bool validateOutputFromOperators_{false};
+
   // If not zero, specifies the driver cpu time slice.
   size_t cpuSliceMs_{0};
 
