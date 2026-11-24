@@ -514,6 +514,15 @@ inline void resetIfNotWritable(velox::VectorPtr& vector, T&... buffer) {
   }
 }
 
+// Resets 'vector' if it has no rows to keep, so the caller allocates its
+// offsets and sizes. Growing an empty vector would copy and zero-fill offsets
+// and sizes that the decoder overwrites.
+inline void resetIfEmpty(velox::VectorPtr& vector) {
+  if (vector != nullptr && vector->size() == 0) {
+    vector.reset();
+  }
+}
+
 template <typename T, bool ShouldAllocate = true>
 void ensureBuffer(
     velox::BufferPtr* buffer,
@@ -609,6 +618,7 @@ struct VectorInitializer<velox::ArrayVector> {
       elements = vector->elements();
       resetIfNotWritable(output, nulls, sizes, offsets);
     }
+    resetIfEmpty(output);
 
     ensureBuffer<bool, /*ShouldAllocate=*/false>(&nulls, rowCount, pool);
 
@@ -656,6 +666,7 @@ struct VectorInitializer<velox::MapVector> {
       mapValues = vector->mapValues();
       resetIfNotWritable(output, nulls, sizes, offsets);
     }
+    resetIfEmpty(output);
 
     ensureBuffer<bool, /*ShouldAllocate=*/false>(&nulls, rowCount, pool);
 
@@ -5567,6 +5578,11 @@ class MergedFlatMapFieldReader final
             output->size(),
             this->pool_);
       } else {
+        // Reset retained state, not just the top-level size: nested elements
+        // from previous reads would otherwise shift this read's child write
+        // offsets and force realloc-copies of dead rows. prepareForReuse
+        // keeps the buffers and drops the sizes, so regrow is allocation-free.
+        nodeValue->prepareForReuse();
         nodeValue->resize(output->size());
       }
       co_await this->keyNodes_[i]->co_readAsChild(
