@@ -30,6 +30,7 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 
@@ -66,9 +67,9 @@ namespace facebook::nimble {
 ///   trailer_size = 2 + len(indicesPayload) + len(sizesPayload).
 ///   Indices and sizes axes independently choose from EncodingTypes
 ///   {Trivial, Varint, Delta, FixedBitWidth}. See getTrailerEncodingType()
-///   for validation. kSerialization is the Serializer writer version and
-///   kProjection is the Projector writer version. Both carry a compact-header
-///   flags byte after the row count.
+///   for validation. kSerialization is the default Serializer writer version
+///   and kProjection is the Projector writer version. Both carry a
+///   compact-header flags byte after the row count.
 ///   The flags byte also records whether stream encoding row counts are
 ///   varint (default) or fixed u32. Fixed u32 is used when kProjection carries
 ///   stream bodies sliced from kTablet payloads.
@@ -82,6 +83,21 @@ namespace facebook::nimble {
 ///   (3) Encoding headers within streams use fixed u32 row counts
 ///       (useVarintRowCount=false), matching the tablet's default format.
 ///   Wire: same two-array sparse trailer layout as kSerialization.
+///
+/// - kBlob: Serializer writer version for low serde CPU when size
+///   matters less. Every stream is written with the Trivial encoding, inside a
+///   Nullable encoding when it has nulls, so writes skip the search for a
+///   smaller encoding. One general-purpose codec pass then compresses the
+///   whole body, which is a kSerialization body: the streams and the two-array
+///   sparse trailer.
+///   Wire: [version:1B][rowCount:varint][flags:1B][blobCompression:1B]
+///         [payload]
+///   The payload is the body compressed with blobCompression, or the body
+///   itself when blobCompression is Uncompressed. Zstd and Lz4 payloads start
+///   with the u32 size of the body. The body must be smaller than 4 GiB.
+///   The Deserializer and the Projector decompress the whole body, even when
+///   they read only selected subfields. The Projector writes the selected
+///   streams as kProjection. StreamSlicer and SerializationDump reject kBlob.
 enum class SerializationVersion : uint8_t {
   // READ-ONLY post the two-array trailer change: production blobs with this
   // version byte are still decoded via `nimble::serde::legacy::`. New
@@ -99,6 +115,9 @@ enum class SerializationVersion : uint8_t {
   // the two writers' formats evolve independently in the future.
   kProjection = 5,
   kTablet = 6,
+  // Serializer writer version for low serde CPU: Trivial streams, and one
+  // general-purpose codec pass over the whole body.
+  kBlob = 7,
 };
 
 std::string toString(SerializationVersion version);
@@ -111,7 +130,7 @@ inline bool isTabletVersion(SerializationVersion version) {
 /// Returns true if the version was written using the legacy kLegacyCompact
 /// trailer format (decoded via `nimble::serde::legacy::`). All other
 /// non-legacy formats (kLegacySerialization, kTablet, kSerialization,
-/// kProjection) use the new two-array sparse trailer.
+/// kProjection, kBlob) use the new two-array sparse trailer.
 ///
 /// kLegacyCompact is the only frozen version here because it is the only one
 /// with existing production blobs that must keep using the legacy trailer
@@ -124,15 +143,28 @@ inline bool usesLegacyTrailer(SerializationVersion version) {
 inline bool hasSerializationHeaderFlags(SerializationVersion version) {
   return version == SerializationVersion::kSerialization ||
       version == SerializationVersion::kProjection ||
-      version == SerializationVersion::kTablet;
+      version == SerializationVersion::kTablet ||
+      version == SerializationVersion::kBlob;
 }
 
 /// Returns true if the version's compact header carries a flags byte after the
 /// row count. kTablet carries its flag in the tablet chunk header instead; the
 /// frozen kLegacyCompact and kLegacySerialization have no flags byte.
+/// kBlob also carries a blob compression byte after the flags byte.
 inline bool usesCompactHeaderFlags(SerializationVersion version) {
   return version == SerializationVersion::kSerialization ||
-      version == SerializationVersion::kProjection;
+      version == SerializationVersion::kProjection ||
+      version == SerializationVersion::kBlob;
+}
+
+/// Returns true if kBlob can store its body with 'compressionType'. The body
+/// mixes data types, so MetaInternal and OpenZL compress it as untyped bytes.
+inline bool isSupportedBlobCompression(CompressionType compressionType) {
+  return compressionType == CompressionType::Lz4 ||
+      compressionType == CompressionType::Zstd ||
+      compressionType == CompressionType::MetaInternal ||
+      compressionType == CompressionType::OpenZL ||
+      compressionType == CompressionType::Uncompressed;
 }
 
 /// Validates and returns the EncodingType for a stream-sizes trailer section
@@ -160,6 +192,10 @@ struct SerializerOptions {
   ///   kSerialization while callers migrate.
   /// - kProjection / kTablet are not valid Serializer writer versions
   ///   (Projector + tablet pipelines write them, respectively).
+  /// - kBlob: Trivial streams, plus one codec pass over the whole
+  ///   body (see blobCompressionOptions). Readers that predate kBlob
+  ///   reject its blobs, so every reader must support it before a writer
+  ///   enables it.
   SerializationVersion version{SerializationVersion::kSerialization};
 
   /// Columns that should be encoded as flat maps. Maps column name to a set
@@ -186,6 +222,18 @@ struct SerializerOptions {
   /// every key.
   folly::F14FastMap<std::string, HybridFlatMap> hybridFlatMapColumns{};
 
+  /// Encoding of the keys that the schema of every Hybrid FlatMap column
+  /// records, e.g. EliasFano, including a bitmap Default's keys in first-seen
+  /// order. Without one, the keys are written as strings. The layout must name
+  /// every nested encoding, and its compression is ignored, so readers need no
+  /// codec. It applies to the keys of every Hybrid FlatMap column, so it must
+  /// suit each of their key kinds: writing the schema throws when the layout
+  /// cannot encode a group's keys, e.g. EliasFano for String keys or for a
+  /// bitmap Default's keys out of order. Readers built before this option
+  /// reject the encoded keys, so set it only once every reader of the schema
+  /// is newer.
+  std::optional<EncodingLayout> hybridFlatMapGroupKeysLayout{};
+
   /// Omits all-false Hybrid FlatMap in-map and key-presence streams from
   /// serialized values. All-true in-map streams stay explicit so the reader
   /// can derive each batch's row count. All-true key-presence streams stay
@@ -200,6 +248,8 @@ struct SerializerOptions {
   /// When encodingLayoutTree is specified, used as fallback for streams or
   /// nested encodings not captured in the layout tree. When encodingLayoutTree
   /// is not specified, used directly for all streams.
+  /// For kBlob, the Serializer ignores it and selects Trivial for
+  /// every stream.
   EncodingSelectionPolicyCreator encodingSelectionPolicyCreator =
       defaultEncodingSelectionPolicyCreator();
 
@@ -209,13 +259,37 @@ struct SerializerOptions {
   /// encoding selection and can provide better encodings based on historical
   /// data. Falls back to encodingSelectionPolicyCreator for streams not in the
   /// tree.
+  /// For kBlob, the Serializer rejects it, because replayed
+  /// encodings would replace Trivial.
   std::optional<EncodingLayoutTree> encodingLayoutTree{};
 
-  /// Compression options used with encodingLayoutTree.
+  /// Compression options used with encodingLayoutTree, and by the Serializer
+  /// for kBlob.
   /// When encodingLayoutTree is specified, these options are passed to
   /// ReplayedEncodingSelectionPolicy to control compression during encoding
-  /// replay. When nullopt (default), compression is disabled.
+  /// replay. When nullopt (default), per-stream compression is disabled.
+  /// For kBlob, the Serializer uses them to compress the values of
+  /// each stream. Unlike blobCompressionOptions, they pass the data type to
+  /// the codec, because each stream holds one data type. Set
+  /// blobCompressionOptions to Uncompressed when setting them. A second pass
+  /// would mostly re-compress compressed bytes, and the accept ratio would
+  /// then discard its output.
   std::optional<CompressionOptions> compressionOptions{};
+
+  /// Compression options for the whole kBlob body. compressionType
+  /// picks the codec: Lz4 (default, usually cheaper than Zstd), Zstd,
+  /// MetaInternal, OpenZL or Uncompressed. Set compressionType whenever
+  /// replacing these options, because CompressionOptions defaults it to
+  /// MetaInternal, or to Zstd in OSS builds. The body is stored uncompressed
+  /// when it is smaller than the codec's minimum size (lz4MinCompressionSize,
+  /// zstdMinCompressionSize, internalMinCompressionSize,
+  /// openzlMinCompressionSize). It is also stored uncompressed when compression
+  /// misses compressionAcceptRatio. Lz4 cannot compress bodies larger than
+  /// about 2 GiB, which are stored uncompressed too. On values that compress
+  /// well, a compressed body can cost more CPU to write and to read than
+  /// kSerialization. Other versions ignore these options.
+  CompressionOptions blobCompressionOptions{
+      .compressionType = CompressionType::Lz4};
 
   /// Encoding type for the indices array of the sparse stream-sizes trailer.
   /// Indices are the offsets of non-zero stream slots in scan order

@@ -27,7 +27,6 @@
 #include "velox/dwio/parquet/RegisterParquetReader.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
-#include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/TypeResolver.h"
@@ -151,16 +150,14 @@ std::string RunStats::toString(bool detail) const {
   return out.str();
 }
 
-// static
-void QueryBenchmarkBase::ensureTaskCompletion(exec::Task* task) {
-  // ASSERT_TRUE requires a function with return type void.
-  ASSERT_TRUE(exec::test::TaskMonitor::waitForCompletion(*task));
-}
-
-// static
 void QueryBenchmarkBase::printResults(
-    const std::vector<RowVectorPtr>& results,
+    const TpchPlan& tpchPlan,
+    const std::unordered_map<std::string, std::string>& queryConfigs,
     std::ostream& out) {
+  auto pool = memory::memoryManager()->addLeafPool();
+  // Declared after 'pool' so that it is destroyed first.
+  const auto results =
+      makeQuery(tpchPlan, queryConfigs).copyResultBatches(pool.get());
   out << "Results:" << std::endl;
   bool printType = true;
   for (const auto& vector : results) {
@@ -292,46 +289,34 @@ void QueryBenchmarkBase::shutdown() {
   }
 }
 
-std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
-QueryBenchmarkBase::run(
+exec::test::AssertQueryBuilder QueryBenchmarkBase::makeQuery(
     const TpchPlan& tpchPlan,
     const std::unordered_map<std::string, std::string>& queryConfigs) {
-  int32_t repeat = 0;
-  try {
-    for (;;) {
-      CursorParameters params;
-      params.maxDrivers = FLAGS_num_drivers;
-      params.planNode = tpchPlan.plan;
-      params.queryConfigs = queryConfigs;
-      for (const auto& [key, value] : config_) {
-        params.queryConfigs[key] = value;
-      }
-      const int numSplitsPerFile = FLAGS_num_splits_per_file;
-
-      auto addSplits = [&](TaskCursor* taskCursor) {
-        auto& task = taskCursor->task();
-        if (!taskCursor->noMoreSplits()) {
-          for (const auto& entry : tpchPlan.dataFiles) {
-            for (const auto& path : entry.second) {
-              auto splits = listSplits(path, numSplitsPerFile, tpchPlan);
-              for (auto split : splits) {
-                task->addSplit(entry.first, exec::Split(std::move(split)));
-              }
-            }
-            task->noMoreSplits(entry.first);
-          }
-        }
-        taskCursor->setNoMoreSplits();
-      };
-      auto result = readCursor(params, addSplits);
-      ensureTaskCompletion(result.first->task().get());
-      if (++repeat >= FLAGS_num_repeats) {
-        return result;
-      }
+  exec::test::AssertQueryBuilder builder(tpchPlan.plan);
+  builder.maxDrivers(FLAGS_num_drivers).configs(queryConfigs).configs(config_);
+  for (const auto& [nodeId, paths] : tpchPlan.dataFiles) {
+    std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+    for (const auto& path : paths) {
+      auto pathSplits = listSplits(path, FLAGS_num_splits_per_file, tpchPlan);
+      splits.insert(splits.end(), pathSplits.begin(), pathSplits.end());
     }
+    builder.splits(nodeId, splits);
+  }
+  return builder;
+}
+
+exec::TaskPtr QueryBenchmarkBase::run(
+    const TpchPlan& tpchPlan,
+    const std::unordered_map<std::string, std::string>& queryConfigs) {
+  try {
+    exec::TaskPtr task;
+    for (auto repeat = 0; repeat < FLAGS_num_repeats; ++repeat) {
+      makeQuery(tpchPlan, queryConfigs).countResults(task);
+    }
+    return task;
   } catch (const std::exception& e) {
     LOG(ERROR) << "Query terminated with: " << e.what();
-    return {nullptr, std::vector<RowVectorPtr>()};
+    return nullptr;
   }
 }
 

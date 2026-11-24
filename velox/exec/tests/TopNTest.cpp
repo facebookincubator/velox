@@ -30,7 +30,7 @@ class TopNTest : public OperatorTestBase {
   void testSingleKey(
       const std::vector<RowVectorPtr>& input,
       const std::string& key,
-      int32_t limit) {
+      int64_t limit) {
     auto keyIndex = input[0]->type()->asRow().getChildIdx(key);
 
     auto sortOrderSqls = getSortOrderSqls();
@@ -150,6 +150,9 @@ TEST_F(TopNTest, singleKey) {
 
   // parser doesn't support "is not null" expression, hence, using c0 % 2 >= 0
   testSingleKey(vectors, "c0", "c0 % 2 >= 0");
+
+  // A count beyond the int32 range keeps every row.
+  testSingleKey(vectors, "c0", 3'000'000'000);
 }
 
 TEST_F(TopNTest, multipleKeys) {

@@ -110,15 +110,13 @@ TEST_F(ArraySplitIntoChunksTest, nullInputs) {
 }
 
 TEST_F(ArraySplitIntoChunksTest, invalidChunkSize) {
-  auto input = makeArrayVector<int64_t>({{1, 2, 3}});
+  auto input = makeRowVector({makeArrayVectorFromJson<int64_t>({"[1, 2, 3]"})});
   VELOX_ASSERT_THROW(
-      evaluate(
-          "array_split_into_chunks(c0, 0::INTEGER)", makeRowVector({input})),
+      evaluate("array_split_into_chunks(c0, 0::INTEGER)", input),
       "Invalid slice size: 0. Size must be greater than zero.");
   VELOX_ASSERT_THROW(
-      evaluate(
-          "array_split_into_chunks(c0, -1::INTEGER)", makeRowVector({input})),
-      "Scalar function signature is not supported");
+      evaluate("array_split_into_chunks(c0, -1::INTEGER)", input),
+      "Invalid slice size: -1. Size must be greater than zero.");
 }
 
 TEST_F(ArraySplitIntoChunksTest, tooManyChunks) {

@@ -189,6 +189,78 @@ struct WaveConfig {
   // DeviceSymbols. Needs the export's symbolic shapes.
   bool deviceSymbols{true};
 
+  // Checks, at every grid, that the GridDescriptor gives each launch the
+  // element count the host sized it for.
+  bool checkGridDescriptor{false};
+
+  // Compares, after the setup of each step off the device path, every export
+  // slot it wrote with the host's Tensor of the value: dims, strides, element
+  // count and storage.
+  bool checkExports{false};
+
+  // Gives each launch of a step blocks in proportion to its estimated work,
+  // input elements times cost per element times the measured cost
+  // adjustment, so that all launches complete at the same time. See
+  // assignBlocksEqualFinish.
+  bool gridEqualFinish{false};
+
+  // Computes each step's grid on the device from the element counts the
+  // device holds, with the gridEqualFinish rule, and updates the cost
+  // multipliers there from the previous execution's clocks. See DeviceGrid.
+  bool deviceGrid{false};
+
+  // With deviceSizing and devicePlacement, a step whose every parameter word
+  // comes from its setup kernel keeps its parameters on the device: after its
+  // first execution the host copies only the block table part of the block.
+  // Always on for the steps on the device path.
+  bool residentBlocks{false};
+
+  // For testing the failure words: when >= 0, each execution starts with
+  // this step marked failed, so it and every later step return at entry.
+  int32_t testFailedStep{-1};
+
+  // At the end of each execution, compares each group's demand, as its setup
+  // computed it, with the bytes of the buffer the host carved for it.
+  bool checkDemands{false};
+
+  // The device path for memory. A step whose outputs only steps on the device
+  // path read skips host sizing: its groups get the demand its setup recorded
+  // in an earlier execution, plus deviceAllocMarginPct percent. Implies
+  // deviceSizeCheck, deviceSizing, devicePlacement and deviceGrid.
+  bool deviceAlloc{false};
+  int32_t deviceAllocMarginPct{25};
+
+  // Copies a device-grid step's parameters and runs its setup kernel on a
+  // second stream, so that the setup overlaps the steps before it. A step
+  // whose setup reads symbols the device holds waits for the step before it.
+  bool setupStream{false};
+
+  // Checks that the export's symbolic shapes give the dims the host sizes
+  // every tensor parameter with. See DeviceSymbols::checkSizeExprs.
+  bool checkSizeExprs{false};
+
+  // With checkSizeExprs: derive every shape from graph-input dims taken as
+  // symbols, in place of the export's expressions.
+  bool sizeExprsFromInputs{false};
+
+  // Evaluates the sizes derived from graph-input dims in each step's setup
+  // kernel and counts where they differ from the host's. See
+  // DeviceSymbols::bindSizeChecks.
+  bool deviceSizeCheck{false};
+
+  // With deviceSizeCheck: the setup kernel writes the dims and strides it
+  // computes in place of checking them.
+  bool deviceSizing{false};
+
+  // With deviceSizing: zeroes the host's dims of the tensor parameters the
+  // setup kernel writes, so wrong results show where it does not.
+  bool deviceSizingPoison{false};
+
+  // With deviceSizing: the setup kernel writes the data pointers of the
+  // members of allocation groups, from the group's base and the members'
+  // sizes. With deviceSizingPoison the host's pointers are zeroed.
+  bool devicePlacement{false};
+
   // Ablation knobs.  Each switches one optimization off so its contribution
   // can be measured by comparing runtimes; none is meant for production use.
 

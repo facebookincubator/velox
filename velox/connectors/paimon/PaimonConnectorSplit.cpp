@@ -46,7 +46,6 @@ PaimonConnectorSplit::PaimonConnectorSplit(
     const std::string& connectorId,
     int64_t snapshotId,
     PaimonTableType tableType,
-    dwio::common::FileFormat fileFormat,
     const std::vector<PaimonDataFile>& dataFiles,
     std::unordered_map<std::string, std::optional<std::string>> partitionKeys,
     std::optional<int32_t> tableBucketNumber,
@@ -54,13 +53,20 @@ PaimonConnectorSplit::PaimonConnectorSplit(
     : ConnectorSplit(connectorId),
       snapshotId_(snapshotId),
       tableType_(tableType),
-      fileFormat_(fileFormat),
       dataFiles_(dataFiles),
       partitionKeys_(std::move(partitionKeys)),
       tableBucketNumber_(tableBucketNumber),
       rawConvertible_(rawConvertible) {
   VELOX_CHECK(
       !dataFiles_.empty(), "PaimonConnectorSplit requires non-empty dataFiles");
+
+  for (const auto& file : dataFiles_) {
+    VELOX_CHECK_NE(
+        file.fileFormat,
+        dwio::common::FileFormat::UNKNOWN,
+        "Paimon data file must have a format: {}",
+        file.path);
+  }
 
   if (rawConvertible_) {
     for (const auto& file : dataFiles_) {
@@ -117,8 +123,6 @@ folly::dynamic PaimonConnectorSplit::serialize() const {
       ? folly::dynamic(tableBucketNumber_.value())
       : nullptr;
 
-  obj["fileFormat"] = dwio::common::FileFormatName::toName(fileFormat_);
-
   return obj;
 }
 
@@ -146,14 +150,10 @@ std::shared_ptr<PaimonConnectorSplit> PaimonConnectorSplit::create(
       ? std::nullopt
       : std::optional<int32_t>(obj["tableBucketNumber"].asInt());
 
-  const auto fileFormat =
-      dwio::common::toFileFormat(obj["fileFormat"].asString());
-
   return std::make_shared<PaimonConnectorSplit>(
       connectorId,
       snapshotId,
       tableType,
-      fileFormat,
       dataFiles,
       std::move(partitionKeys),
       tableBucketNumber,
@@ -170,10 +170,12 @@ void PaimonConnectorSplit::registerSerDe() {
 
 PaimonConnectorSplitBuilder& PaimonConnectorSplitBuilder::addFile(
     std::string filePath,
+    dwio::common::FileFormat fileFormat,
     uint64_t fileSize,
     int32_t level) {
   PaimonDataFile meta;
   meta.path = std::move(filePath);
+  meta.fileFormat = fileFormat;
   meta.size = fileSize;
   meta.level = level;
   dataFiles_.emplace_back(std::move(meta));
@@ -204,7 +206,6 @@ std::shared_ptr<PaimonConnectorSplit> PaimonConnectorSplitBuilder::build() {
       connectorId_,
       snapshotId_,
       tableType_,
-      fileFormat_,
       dataFiles_,
       partitionKeys_,
       tableBucketNumber_,

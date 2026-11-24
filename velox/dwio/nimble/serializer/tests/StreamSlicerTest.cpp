@@ -19,6 +19,7 @@
 
 #include <bit>
 #include <cstdint>
+#include <numeric>
 #include <optional>
 #include <random>
 #include <set>
@@ -1312,6 +1313,46 @@ TEST_P(StreamSlicerPayloadApiTest, slicesArrayChildRange) {
   EXPECT_EQ(values->valueAt(3), 30);
 }
 
+TEST_P(StreamSlicerPayloadApiTest, slicesArraysWithRunLengthOffsets) {
+  // Forcing an encoding also forces it on the array lengths stream, so these
+  // cases slice through the RLE and Constant offsets paths, with ranges that
+  // start and end inside a run, on a run boundary, and at the stream ends.
+  auto type = ROW({{"items", ARRAY(INTEGER())}});
+  const std::vector<std::pair<EncodingType, std::vector<vector_size_t>>> cases{
+      {EncodingType::RLE, {2, 2, 2, 0, 0, 3, 3, 1}},
+      {EncodingType::Constant, {2, 2, 2, 2, 2, 2, 2, 2}},
+  };
+  for (const auto& [encodingType, sizes] : cases) {
+    SCOPED_TRACE(toString(encodingType));
+    const auto numElements = std::accumulate(sizes.begin(), sizes.end(), 0);
+    std::vector<int32_t> elements(numElements);
+    std::iota(elements.begin(), elements.end(), 100);
+    auto input = makeRowVector(
+        {"items"}, {makeArrayVector(sizes, makeFlatVector<int32_t>(elements))});
+    auto [serialized, schema] = serialize(
+        input, type, encodingType, /*compressionOptions=*/std::nullopt);
+    auto payload = makePayload(serialized, schema, {"items"}, GetParam());
+    StreamSlicer slicer{payload.schema, pool_.get(), StreamSlicer::Options{}};
+
+    const auto numRows = static_cast<uint32_t>(sizes.size());
+    for (uint32_t offset = 0; offset < numRows; ++offset) {
+      for (uint32_t length = 1; offset + length <= numRows; ++length) {
+        SCOPED_TRACE(fmt::format("offset {} length {}", offset, length));
+        auto output = deserialize(
+            iobufToString(slicer.slice(payload.data, offset, length)),
+            payload.schema);
+        ASSERT_EQ(output->size(), length);
+        for (uint32_t i = 0; i < length; ++i) {
+          EXPECT_TRUE(input->equalValueAt(output.get(), offset + i, i))
+              << "Expected "
+              << input->toString(static_cast<vector_size_t>(offset + i))
+              << ", got " << output->toString(static_cast<vector_size_t>(i));
+        }
+      }
+    }
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     AcceptedPayload,
     StreamSlicerPayloadApiTest,
@@ -1358,8 +1399,8 @@ TEST_F(StreamSlicerTest, hybridFlatMapRequiresWholeBatch) {
       pool_.get()};
   const std::string serialized{
       serializer.serialize(input, OrderedRanges::of(0, input->size()))};
-  const auto schema =
-      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+  const auto schema = SchemaReader::getSchema(
+      serializer.schemaBuilder().schemaNodes(), pool_.get());
 
   StreamSlicer slicer{schema, pool_.get(), StreamSlicer::Options{}};
   EXPECT_EQ(
@@ -1370,13 +1411,14 @@ TEST_F(StreamSlicerTest, hybridFlatMapRequiresWholeBatch) {
       "StreamSlicer cannot row-slice key-major Hybrid FlatMap streams.");
 }
 
-TEST_F(StreamSlicerTest, rejectsLegacyFormats) {
+TEST_F(StreamSlicerTest, rejectsUnsupportedFormats) {
   auto type = ROW({{"id", INTEGER()}});
   auto input = makeRowVector({"id"}, {makeFlatVector<int32_t>({1})});
   auto [_, schema] = serialize(input, type);
   for (const auto version :
        {SerializationVersion::kLegacyCompact,
-        SerializationVersion::kLegacySerialization}) {
+        SerializationVersion::kLegacySerialization,
+        SerializationVersion::kBlob}) {
     SCOPED_TRACE(toString(version));
     StreamSlicer slicer{
         schema,

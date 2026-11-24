@@ -613,6 +613,26 @@ class RLEEncoding final : public internal::RLEEncodingBase<T, RLEEncoding<T>> {
         rawIndices);
   }
 
+  /// Value sums before and inside a row range.
+  struct RangeSums {
+    /// Sum of the values before the range offset.
+    uint64_t sumBeforeRange{0};
+
+    /// Sum of the values inside the range.
+    uint64_t sumInRange{0};
+  };
+
+  /// Returns the value sums before and inside non-empty rows [offset, offset +
+  /// length) of a uint32_t RLE stream, such as the lengths of an array or map.
+  /// Walks the runs, so the cost grows with the runs before the range end, not
+  /// with its rows. Defined for uint32_t only.
+  static RangeSums sumRange(
+      std::string_view encoded,
+      uint32_t offset,
+      uint32_t length,
+      const Encoding::Options& options,
+      velox::memory::MemoryPool* pool);
+
   /// Estimates RLE bytes, including configured ALP/ALPRD run-value candidates
   /// for floating-point logical types.
   static uint64_t estimateSize(

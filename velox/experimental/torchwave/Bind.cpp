@@ -209,9 +209,10 @@ int32_t addCountSize(StepProgram& program, const SizeExpr& expr) {
   return addSizeExprSize(
       program,
       expr,
-      broadcast                           ? broadcastCountReserve
-          : expr.op == SizeShortcut::kSum ? sumCountReserve
-                                          : maxCountReserve);
+      broadcast                               ? broadcastCountReserve
+          : expr.op == SizeShortcut::kSum     ? sumCountReserve
+          : expr.op == SizeShortcut::kProduct ? productCountReserve
+                                              : maxCountReserve);
 }
 
 int32_t addDimsSize(StepProgram& program, const SizeExpr& expr) {
@@ -877,6 +878,54 @@ void CompositeInvocation::bindPrograms(
       program.launches.push_back(std::move(launch));
     }
 
+    // Under device alloc, a slot after the launches' parameters for each view
+    // the step makes: the setup writes it if a step off the path reads it.
+    if (WaveConfig::get().deviceAlloc) {
+      folly::F14FastSet<int32_t> filled;
+      for (const auto& fill : program.fills) {
+        filled.insert(fill.valueId);
+      }
+      std::vector<int32_t> views;
+      for (const auto& launch : program.launches) {
+        for (const auto& bound : launch.outputs) {
+          if (bound.kind == BoundOutput::kView) {
+            views.push_back(bound.valueId);
+          }
+        }
+      }
+      auto cursor = roundUp(sv.launchParamBytes, int64_t{16});
+      // The setup writes a whole Tensor there; the host copies back the
+      // TableTensor at its start.
+      const auto slotBytes = roundUp(
+          static_cast<int64_t>(std::max(sizeof(Tensor), sizeof(TableTensor))),
+          int64_t{16});
+      for (auto id : views) {
+        if (id < 0 || !filled.insert(id).second) {
+          continue;
+        }
+        program.fills.push_back(
+            {.kind = FillOp::kTensor,
+             .offset = static_cast<int32_t>(cursor),
+             .valueId = id,
+             .kernel = FillOp::kExport});
+        cursor += slotBytes;
+      }
+      // A shortcut's tensors: only one that bindTableOnly makes a derive is
+      // made on the table, where the setup can place it.
+      sv.exportSlots.clear();
+      for (const auto& data : sv.shortcutStandalones) {
+        for (auto id : data.actualOutputs) {
+          auto it = idToValue.find(id);
+          if (it != idToValue.end() &&
+              it->second->type().kind() == nativert::Type::Kind::Tensor &&
+              filled.insert(id).second) {
+            sv.exportSlots[id] = static_cast<int32_t>(cursor);
+            cursor += slotBytes;
+          }
+        }
+      }
+      sv.paramRegionBytes = cursor;
+    }
     sv.blockInfoOffset = roundUp(sv.paramRegionBytes, int64_t{16});
     program.totalPinnedBytes = sv.blockInfoOffset +
         static_cast<int64_t>(sv.blockCapacity) *
@@ -912,7 +961,15 @@ void bindTableOnly(ExecutionState& state, WaveGraph& waveGraph) {
   const auto numValues = static_cast<size_t>(waveGraph.graph()->numValues());
   std::vector<uint8_t> candidate(numValues, 0);
   std::vector<uint8_t> hostRead(numValues, 0);
+  // Whether a value's host reads are all as an input of a step's standalone.
+  std::vector<uint8_t> otherHostRead(numValues, 0);
   auto markHostRead = [&](nativert::ValueId id) {
+    if (id >= 0 && static_cast<size_t>(id) < numValues) {
+      hostRead[id] = 1;
+      otherHostRead[id] = 1;
+    }
+  };
+  auto markStandaloneRead = [&](nativert::ValueId id) {
     if (id >= 0 && static_cast<size_t>(id) < numValues) {
       hostRead[id] = 1;
     }
@@ -988,7 +1045,7 @@ void bindTableOnly(ExecutionState& state, WaveGraph& waveGraph) {
       }
       for (const auto& data : sv.standalones) {
         for (auto id : data.actualInputs) {
-          markHostRead(id);
+          markStandaloneRead(id);
         }
         for (auto id : data.actualOutputs) {
           markHostRead(id);
@@ -1035,9 +1092,17 @@ void bindTableOnly(ExecutionState& state, WaveGraph& waveGraph) {
       }
     }
   }
+  // The values the host reads only as graph outputs, at the end.
+  state.outputOnly.assign(numValues, 0);
+  state.standaloneReadOnly.assign(numValues, 0);
   for (size_t id = 0; id < numValues; ++id) {
     const auto valueId = static_cast<nativert::ValueId>(id);
+    state.standaloneReadOnly[id] = candidate[id] && hostRead[id] &&
+            !otherHostRead[id] && !waveGraph.isGraphOutput(valueId)
+        ? 1
+        : 0;
     if (waveGraph.isGraphOutput(valueId)) {
+      state.outputOnly[id] = hostRead[id] == 0 ? 1 : 0;
       hostRead[id] = 1;
     }
   }
@@ -1177,6 +1242,17 @@ void bindTableOnly(ExecutionState& state, WaveGraph& waveGraph) {
           sv.program->derivedShortcuts.push_back(*unpack);
         } else {
           sv.program->derivedShortcuts.push_back(std::move(data));
+        }
+        for (auto id :
+             op.output >= 0 ? std::vector<int32_t>{op.output} : op.outputs) {
+          auto slot = sv.exportSlots.find(id);
+          if (slot != sv.exportSlots.end()) {
+            sv.program->fills.push_back(
+                {.kind = FillOp::kTensor,
+                 .offset = slot->second,
+                 .valueId = id,
+                 .kernel = FillOp::kExport});
+          }
         }
         sv.program->derives.push_back(std::move(op));
       }

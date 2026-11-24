@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/dwio/nimble/compression/Compression.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/compression/Lz4Compressor.h"
@@ -57,6 +58,48 @@ ICompressor& getCompressor(CompressionType compressionType) {
       toString(compressionType));
   return *it->second;
 }
+
+// Forwards to 'policy' with its MetaInternal compression level replaced.
+class TypedLanesLevelPolicy final : public CompressionPolicy {
+ public:
+  TypedLanesLevelPolicy(const CompressionPolicy& policy, int32_t level)
+      : policy_{policy}, level_{level} {}
+
+  CompressionConfig config() const override {
+    auto config = policy_.config();
+    config.parameters.metaInternal.compressionLevel =
+        static_cast<int16_t>(level_);
+    return config;
+  }
+
+  bool shouldAccept(
+      CompressionType compressionType,
+      uint64_t uncompressedSize,
+      uint64_t compressedSize) const override {
+    return policy_.shouldAccept(
+        compressionType, uncompressedSize, compressedSize);
+  }
+
+ private:
+  const CompressionPolicy& policy_;
+  const int32_t level_;
+};
+
+CompressionResult compressWith(
+    velox::memory::MemoryPool& pool,
+    std::string_view data,
+    DataType dataType,
+    int bitWidth,
+    CompressionType compressionType,
+    const CompressionPolicy& compressionPolicy) {
+#ifndef NDEBUG
+  CompressCall call{.dataType = dataType, .config = compressionPolicy.config()};
+  velox::common::testutil::TestValue::adjust(
+      "facebook::nimble::Compression::compress", &call);
+#endif
+  return getCompressor(compressionType)
+      .compress(pool, data, dataType, bitWidth, compressionPolicy);
+}
 } // namespace
 
 /* static */ CompressionResult Compression::compress(
@@ -64,11 +107,31 @@ ICompressor& getCompressor(CompressionType compressionType) {
     std::string_view data,
     DataType dataType,
     int bitWidth,
-    const CompressionPolicy& compressionPolicy) {
+    const CompressionPolicy& compressionPolicy,
+    std::optional<int32_t> typedLanesLevel) {
   auto compression = compressionPolicy.config();
 
-  return getCompressor(compression.compressionType)
-      .compress(pool, data, dataType, bitWidth, compressionPolicy);
+  // The one place the typed-lanes level applies: a level is passed, the payload
+  // is typed, and MetaInternal compresses it.
+  if (typedLanesLevel.has_value() && dataType != DataType::Undefined &&
+      compression.compressionType == CompressionType::MetaInternal) {
+    const TypedLanesLevelPolicy typedLanesLevelPolicy{
+        compressionPolicy, *typedLanesLevel};
+    return compressWith(
+        pool,
+        data,
+        dataType,
+        bitWidth,
+        compression.compressionType,
+        typedLanesLevelPolicy);
+  }
+  return compressWith(
+      pool,
+      data,
+      dataType,
+      bitWidth,
+      compression.compressionType,
+      compressionPolicy);
 }
 
 /* static */ velox::BufferPtr Compression::uncompress(

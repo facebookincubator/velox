@@ -25,21 +25,6 @@ namespace facebook::velox::exec {
 
 class HashAggregation : public Operator {
  public:
-  /// Runtime stat keys for hash aggregation.
-  /// Number of rows flushed in partial aggregation output.
-  static constexpr std::string_view kFlushRowCount = "flushRowCount";
-  /// Number of partial aggregation flush operations.
-  static constexpr std::string_view kFlushTimes = "flushTimes";
-  /// Ratio of output to input rows in partial aggregation as a percentage.
-  static constexpr std::string_view kPartialAggregationPct =
-      "partialAggregationPct";
-  /// Number of rows emitted after partial aggregation was abandoned.
-  static constexpr std::string_view kAbandonedPartialAggregationRows =
-      "abandonedPartialAggregationRows";
-  /// Number of calls to the Aggregate::toIntermediate() fast path.
-  static constexpr std::string_view kToIntermediateFastPathCalls =
-      "toIntermediateFastPathCalls";
-
   HashAggregation(
       int32_t operatorId,
       DriverCtx* driverCtx,

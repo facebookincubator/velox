@@ -105,6 +105,7 @@ class ConcatFilesSpillMergeStreamTest : public OperatorTestBase {
                 spillFile,
                 spillConfig_.readBufferSize,
                 pool_.get(),
+                /*readAheadExecutor=*/nullptr,
                 &spillStats_));
       }
       auto stream =

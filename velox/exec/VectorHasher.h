@@ -642,10 +642,9 @@ class VectorHasher {
     return (group[nullByte] & nullMask) != 0;
   }
 
+  // Reads a key from packed row storage, which may be unaligned for T.
   template <typename T>
-  static inline T valueAt(const char* group, int32_t offset) {
-    return *reinterpret_cast<const T*>(group + offset);
-  }
+  static T valueAt(const char* group, int32_t offset);
 
   template <bool typeProvidesCustomComparison, TypeKind Kind>
   void hashValues(const SelectivityVector& rows, bool mix, uint64_t* result);

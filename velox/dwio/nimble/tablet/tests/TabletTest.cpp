@@ -22,6 +22,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -124,6 +125,45 @@ std::string bufferedInputModeToString(BufferedInputMode mode) {
   }
   return "Unknown";
 }
+
+// Reads like a page-aligned direct-I/O file on Linux. Rejects unaligned
+// offsets, lengths, or buffers. A read past the end of the file returns only
+// the bytes before the end, and leaves junk in the rest of its buffer.
+class DirectIoInMemoryReadFile final : public velox::InMemoryReadFile {
+ public:
+  using velox::InMemoryReadFile::InMemoryReadFile;
+  using velox::InMemoryReadFile::pread;
+
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buf,
+      const velox::FileIoContext& context = {}) const override {
+    NIMBLE_CHECK_EQ(offset % kAlignment, 0, "Unaligned read offset");
+    NIMBLE_CHECK_EQ(length % kAlignment, 0, "Unaligned read length");
+    NIMBLE_CHECK_EQ(
+        reinterpret_cast<uintptr_t>(buf) % kAlignment,
+        0,
+        "Unaligned read buffer");
+    const auto bytesBeforeFileEnd =
+        std::min(length, size() - std::min(offset, size()));
+    velox::InMemoryReadFile::pread(offset, bytesBeforeFileEnd, buf, context);
+    std::memset(
+        static_cast<char*>(buf) + bytesBeforeFileEnd,
+        kJunk,
+        length - bytesBeforeFileEnd);
+    return {static_cast<char*>(buf), length};
+  }
+
+  bool directIo(uint64_t& alignment) const override {
+    alignment = kAlignment;
+    return true;
+  }
+
+ private:
+  static constexpr uint64_t kAlignment{4'096};
+  static constexpr char kJunk{'\xCC'};
+};
 
 struct StripeSpecifications {
   uint32_t rowCount;
@@ -2138,6 +2178,51 @@ TEST_P(TabletTest, chunkStatsV2DuplicateStream) {
   EXPECT_THAT(
       decode(group->stream_chunk_null_counts()),
       testing::ElementsAre(0, 0, 50));
+}
+
+TEST_P(TabletTest, chunkStatsV2DuplicateStreamKeepsOwnNullCounts) {
+  std::string file;
+  velox::InMemoryWriteFile writeFile(&file);
+  auto tabletWriter = nimble::TabletWriter::create(
+      &writeFile,
+      *pool_,
+      {
+          .streamDeduplicationEnabled = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = ChunkStatsVersion::kV2,
+          .chunkStatsMinAvgChunks = 0,
+      });
+
+  // Stream 1 repeats stream 0's bytes, as a struct's null stream does when it
+  // encodes like a non-nullable Bool column. Only the null stream counts its
+  // false values as nulls.
+  const std::string data = "same-stream-data";
+  nimble::Stream stream0{.offset = 0};
+  stream0.chunks.push_back(
+      {.rowCount = 100, .nullCount = 0, .content = {data}});
+  nimble::Stream stream1{.offset = 1};
+  stream1.chunks.push_back(
+      {.rowCount = 100, .nullCount = 25, .content = {data}});
+  tabletWriter->writeStripe(100, {std::move(stream0), std::move(stream1)});
+  EXPECT_EQ(tabletWriter->stats().duplicateStreamCount, 1);
+  tabletWriter->close();
+  writeFile.close();
+
+  auto tablet = createTabletReader(file);
+  auto stripe = tablet->stripeIdentifier(0);
+  EXPECT_EQ(tablet->streamOffset(stripe, 1), tablet->streamOffset(stripe, 0));
+  ASSERT_NE(stripe.chunkStats(), nullptr);
+  std::vector<uint32_t> nullCounts;
+  for (uint32_t streamId = 0; streamId < 2; ++streamId) {
+    auto streamIndex = stripe.chunkStats()->createStreamIndex(
+        0, streamId, tablet->streamSize(stripe, streamId));
+    ASSERT_NE(streamIndex, nullptr);
+    const auto nullCount =
+        streamIndex->chunkNullCount(streamIndex->lookupChunk(0).chunkIndex);
+    ASSERT_TRUE(nullCount.has_value());
+    nullCounts.push_back(*nullCount);
+  }
+  EXPECT_THAT(nullCounts, testing::ElementsAre(0, 25));
 }
 
 TEST_P(TabletTest, prefersV2ChunkStatsWhenBothSectionsExist) {
@@ -4532,7 +4617,7 @@ class TabletWithIndexTest : public TabletTest {
       std::vector<velox::serializer::EncodedKeyBounds> keyBounds = {
           {.lowerKey = testCase.key, .upperKey = {}}};
       auto result = index->lookup(
-          nimble::index::IndexLookup::LookupRequest::rangeScan(keyBounds));
+          *nimble::index::IndexLookup::LookupRequest::rangeScan(keyBounds));
       ASSERT_EQ(result.size(), 1);
       if (testCase.expectedRange.has_value()) {
         ASSERT_EQ(result[0].size(), 1);
@@ -6861,7 +6946,7 @@ TEST_P(TabletWithIndexTest, preloadClusterIndex) {
     velox::serializer::EncodedKeyBounds bounds{
         .lowerKey = std::string("bbb"), .upperKey = std::nullopt};
     tablet->clusterIndex()->lookup(
-        nimble::index::IndexLookup::LookupRequest::rangeScan({bounds}));
+        *nimble::index::IndexLookup::LookupRequest::rangeScan({bounds}));
     EXPECT_EQ(indexIoStats_->rawBytesRead(), indexBytesAfterOpen)
         << "Lookup after preload must not trigger additional index IO";
   }
@@ -7213,7 +7298,7 @@ TEST_F(TabletWithIndexTest, configCombinations) {
         std::vector<velox::serializer::EncodedKeyBounds> keyBounds = {
             {.lowerKey = key, .upperKey = {}}};
         return idx->lookup(
-            nimble::index::IndexLookup::LookupRequest::rangeScan(keyBounds));
+            *nimble::index::IndexLookup::LookupRequest::rangeScan(keyBounds));
       };
       ASSERT_EQ(lookupKey("aaa")[0].size(), 1);
       EXPECT_EQ(lookupKey("aaa")[0][0], chunk0);
@@ -7502,7 +7587,7 @@ TEST_P(TabletWithIndexCacheTest, cacheWarmPath) {
     std::vector<velox::serializer::EncodedKeyBounds> keyBounds = {
         {.lowerKey = "bbb", .upperKey = {}}};
     auto result = coldReader->clusterIndex()->lookup(
-        nimble::index::IndexLookup::LookupRequest::rangeScan(keyBounds));
+        *nimble::index::IndexLookup::LookupRequest::rangeScan(keyBounds));
     ASSERT_EQ(result.size(), 1);
     ASSERT_EQ(result[0].size(), 1);
     EXPECT_EQ(result[0][0], nimble::RowRange(0, 300));
@@ -7542,7 +7627,7 @@ TEST_P(TabletWithIndexCacheTest, cacheWarmPath) {
     std::vector<velox::serializer::EncodedKeyBounds> warmKeyBounds = {
         {.lowerKey = "ddd", .upperKey = {}}};
     auto warmResult = warmReader->clusterIndex()->lookup(
-        nimble::index::IndexLookup::LookupRequest::rangeScan(warmKeyBounds));
+        *nimble::index::IndexLookup::LookupRequest::rangeScan(warmKeyBounds));
     ASSERT_EQ(warmResult.size(), 1);
     ASSERT_EQ(warmResult[0].size(), 1);
     EXPECT_EQ(warmResult[0][0], nimble::RowRange(100, 300));
@@ -7875,6 +7960,20 @@ TEST_P(TabletTest, configureOptionsIndexFlags) {
     EXPECT_TRUE(containsSection(
         opts.preloadOptionalSections, nimble::kChunkStatsSection));
   }
+}
+
+TEST_P(TabletTest, configureOptionsClusterIndexName) {
+  velox::dwio::common::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  EXPECT_EQ(
+      nimble::TabletReader::configureOptions(readerOptions).clusterIndexName,
+      nimble::index::kClusterIndexName);
+
+  readerOptions.setClusterIndexName("custom.index");
+  EXPECT_EQ(
+      nimble::TabletReader::configureOptions(readerOptions).clusterIndexName,
+      "custom.index");
 }
 
 TEST_P(TabletTest, configureOptionsCacheKeyEncodingViews) {
@@ -9826,6 +9925,74 @@ TEST_F(TabletTest, metadataInBlockCache) {
     EXPECT_FALSE(reader->stats().footerCacheHit);
     EXPECT_EQ(streamLocations(*reader), expected);
     EXPECT_GT(metadataIoStats->read().sum(), 0);
+  }
+}
+
+// The reader aligns every metadata read of a direct-I/O file: the reads of the
+// postscript and footer, and the loads of the sections, with or without the
+// block cache.
+TEST_F(TabletTest, readsMetadataOfDirectIoFile) {
+  std::string file;
+  velox::InMemoryWriteFile writeFile(&file);
+  nimble::Buffer buffer(*pool_);
+
+  // A low flush threshold gives each stripe its own stripe group.
+  auto tabletWriter = nimble::TabletWriter::create(
+      &writeFile, *pool_, {.metadataFlushThreshold = 1});
+  constexpr uint32_t kNumStripes{3};
+  for (uint32_t i = 0; i < kNumStripes; ++i) {
+    auto* pos = buffer.reserve(10);
+    std::memset(pos, static_cast<int>(i), 10);
+    std::vector<nimble::Stream> streams;
+    streams.push_back(
+        {.offset = 0,
+         .chunks = {
+             {.rowCount = 100, .content = {std::string_view(pos, 10)}}}});
+    tabletWriter->writeStripe(100, std::move(streams));
+  }
+  tabletWriter->close();
+  writeFile.close();
+  const auto directIoFile = std::make_shared<DirectIoInMemoryReadFile>(file);
+
+  auto openReader = [&](nimble::TabletReader::Options options) {
+    velox::io::ReaderOptions ioOptions{pool_.get()};
+    ioOptions.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
+    options.ioOptions = ioOptions;
+
+    // A speculative read of only the postscript makes the reader read the
+    // footer separately, and load the sections.
+    options.maxFooterIoBytes = nimble::Postscript::kSize;
+    return nimble::TabletReader::create(directIoFile, pool_.get(), options);
+  };
+
+  // Loads the stripe group of every stripe.
+  auto expectStripes = [&](const nimble::TabletReader& reader) {
+    ASSERT_EQ(reader.stripeCount(), kNumStripes);
+    for (uint32_t i = 0; i < kNumStripes; ++i) {
+      EXPECT_EQ(reader.streamCount(reader.stripeIdentifier(i)), 1);
+    }
+  };
+  {
+    SCOPED_TRACE("DirectMetadataInput");
+    expectStripes(*openReader({}));
+  }
+  {
+    SCOPED_TRACE("CachedMetadataInput");
+    allocator_ = std::make_shared<velox::memory::MallocAllocator>(
+        velox::memory::MemoryAllocator::Options{
+            .capacity = 1UL << 30, .reservationByteLimit = 0});
+    cache_ = velox::cache::AsyncDataCache::create(allocator_.get());
+    velox::FileHandle fileHandle;
+    fileHandle.file = directIoFile;
+    fileHandle.uuid = velox::StringIdLease(
+        velox::fileIds(), "TabletTest.readsMetadataOfDirectIoFile");
+    nimble::TabletReader::Options options;
+    options.cacheMetadata = true;
+    options.blockCache = nimble::getBlockCache(cache_.get());
+    options.fileHandle = &fileHandle;
+    const auto reader = openReader(options);
+    EXPECT_FALSE(reader->stats().footerCacheHit);
+    expectStripes(*reader);
   }
 }
 

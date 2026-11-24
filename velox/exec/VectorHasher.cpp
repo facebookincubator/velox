@@ -15,6 +15,9 @@
  */
 
 #include "velox/exec/VectorHasher.h"
+
+#include <cstring>
+
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/SimdUtil.h"
@@ -25,6 +28,13 @@
 #include "velox/vector/VectorTypeUtils.h"
 
 namespace facebook::velox::exec {
+
+template <typename T>
+inline T VectorHasher::valueAt(const char* group, int32_t offset) {
+  T value;
+  std::memcpy(&value, group + offset, sizeof(T));
+  return value;
+}
 
 #define VALUE_ID_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...)                \
   [&]() {                                                                   \

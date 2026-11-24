@@ -61,6 +61,20 @@ TEST(PaimonDeletionFileTest, serializeRoundTripLargeValues) {
   EXPECT_EQ(deserialized.cardinality, 1000000);
 }
 
+// Paimon 0.9 records no cardinality for its deletion vectors.
+TEST(PaimonDeletionFileTest, withoutCardinality) {
+  PaimonDeletionFile df("del.bin", 8, 128, std::nullopt);
+  EXPECT_EQ(
+      df.toString(), "{path=del.bin, offset=8, length=128, cardinality=null}");
+
+  auto serialized = df.serialize();
+  EXPECT_EQ(serialized.count("cardinality"), 0);
+  EXPECT_FALSE(PaimonDeletionFile::create(serialized).cardinality.has_value());
+
+  serialized["cardinality"] = nullptr;
+  EXPECT_FALSE(PaimonDeletionFile::create(serialized).cardinality.has_value());
+}
+
 TEST(PaimonDeletionFileTest, toString) {
   PaimonDeletionFile df("del.bin", 0, 128, 5);
 

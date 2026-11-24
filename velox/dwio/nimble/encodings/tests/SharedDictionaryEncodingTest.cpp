@@ -866,6 +866,74 @@ TEST_F(
   EXPECT_EQ(estimate, expectedEstimate.value());
 }
 
+TEST_F(
+    SharedDictionaryEncodingTest,
+    alphabetCandidatesDoNotRestrictNestedStreams) {
+  // Forcing Trivial for a string alphabet restricts the alphabet itself. Its
+  // lengths stream, nearly all 8, still picks a compact encoding instead of
+  // being left with no candidates and falling back to Trivial.
+  std::vector<std::string> strings;
+  strings.reserve(1'000);
+  for (int i = 0; i < 999; ++i) {
+    strings.push_back(fmt::format("s{:07}", i));
+  }
+  strings.emplace_back("s12345678");
+  const std::vector<std::string_view> values{strings.begin(), strings.end()};
+
+  const auto encoded = SharedDictionaryAlphabet::encode<std::string_view>(
+      values, std::array{EncodingType::Trivial}, *buffer_);
+
+  const auto layout = EncodingLayoutCapture::capture(encoded, {});
+  ASSERT_EQ(layout.encodingType(), EncodingType::Trivial);
+  const auto& lengths = layout.child(EncodingIdentifiers::Trivial::Lengths);
+  ASSERT_TRUE(lengths.has_value());
+  EXPECT_NE(lengths->encodingType(), EncodingType::Trivial);
+}
+
+TEST_F(SharedDictionaryEncodingTest, alphabetDefaultSkipsRepetitionEncodings) {
+  // Long runs would make RLE or MainlyConstant the smallest encoding if they
+  // were candidates. A real alphabet holds no repeats; repeats here expose
+  // which encodings the default alphabet policy considers.
+  std::vector<int32_t> values(2'000, 7);
+  std::fill(values.begin() + 1'000, values.end(), 8);
+
+  const auto encoded = SharedDictionaryAlphabet::encode<int32_t>(
+      values, std::span<const EncodingType>{}, *buffer_);
+
+  EXPECT_THAT(
+      EncodingLayoutCapture::capture(encoded, {}).encodingType(),
+      ::testing::Not(
+          ::testing::AnyOf(
+              EncodingType::Dictionary,
+              EncodingType::MainlyConstant,
+              EncodingType::RLE)));
+}
+
+TEST_F(
+    SharedDictionaryEncodingTest,
+    alphabetDefaultKeepsRepetitionEncodingsForStringLengths) {
+  // Distinct strings can still share a length, so the lengths stream nested
+  // under a Trivial string alphabet keeps every default candidate.
+  std::vector<std::string> strings;
+  strings.reserve(1'000);
+  for (int i = 0; i < 999; ++i) {
+    strings.push_back(fmt::format("s{:07}", i));
+  }
+  strings.emplace_back("s12345678");
+  const std::vector<std::string_view> values{strings.begin(), strings.end()};
+
+  const auto encoded = SharedDictionaryAlphabet::encode<std::string_view>(
+      values, std::span<const EncodingType>{}, *buffer_);
+
+  const auto layout = EncodingLayoutCapture::capture(encoded, {});
+  ASSERT_EQ(layout.encodingType(), EncodingType::Trivial);
+  const auto& lengths = layout.child(EncodingIdentifiers::Trivial::Lengths);
+  ASSERT_TRUE(lengths.has_value());
+  EXPECT_THAT(
+      lengths->encodingType(),
+      ::testing::AnyOf(EncodingType::MainlyConstant, EncodingType::RLE));
+}
+
 TEST_F(SharedDictionaryEncodingTest, alphabetRoundTripsWithAndWithoutView) {
   struct TestCase {
     std::string testName;

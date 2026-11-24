@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-#include <folly/ScopeGuard.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/Timestamp.h"
@@ -2165,9 +2164,6 @@ TEST_F(DateTimeFunctionsTest, timestampAddTimestampUtc) {
       Timestamp(1551434400, 500'999'999), timestampAddUtc("day", 1, base));
 
   // TIMESTAMP UTC must not be affected by session timezone.
-  SCOPE_EXIT {
-    setQueryTimeZone("");
-  };
   setQueryTimeZone("America/Los_Angeles");
 
   EXPECT_EQ(

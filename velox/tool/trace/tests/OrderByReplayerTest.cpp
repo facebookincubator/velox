@@ -92,10 +92,9 @@ class OrderByReplayerTest : public HiveConnectorTestBase {
   };
 
   PlanWithSplits createPlan(bool isPartial = false) {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     core::PlanNodeId scanId;
 
-    auto builder = PlanBuilder(planNodeIdGenerator)
+    auto builder = PlanBuilder()
                        .tableScan(inputType_)
                        .capturePlanNodeId(scanId)
                        .orderBy({"c0"}, isPartial);

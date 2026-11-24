@@ -34,6 +34,7 @@
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
 #include "velox/common/file/File.h"
+#include "velox/common/file/FileIoContext.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/file/IoUringReader.h"
 #include "velox/common/file/LocalFile.h"
@@ -128,7 +129,6 @@ class DataInputTest : public ::testing::Test {
     velox::IoUringReader::setOptions({
         .submissionQueueDepth = 8,
         .completionQueueDepth = 8,
-        .registeredFileSlots = 8,
     });
     pool_ = velox::memory::memoryManager()->addLeafPool("DataInputTest");
     ioStats_ = std::make_shared<velox::io::IoStatistics>();
@@ -1004,6 +1004,82 @@ TEST_F(DataInputTest, readsPassFileIoContext) {
     EXPECT_THAT(
         file->fileOpts(),
         ::testing::AllOf(::testing::SizeIs(2), ::testing::Each(fileOpts)));
+    cache->shutdown();
+  }
+}
+
+// Reads under a velox::ScopedFileIoContext pass the scope's context instead of
+// the input's, so only the scope's file options reach the storage layer.
+TEST_F(DataInputTest, readsUseScopedFileIoContext) {
+  std::string data(4'096, '\0');
+  for (size_t i{0}; i < data.size(); ++i) {
+    data[i] = static_cast<char>(i % 251);
+  }
+  const folly::F14FastMap<std::string, std::string> inputFileOpts{
+      {"input", "value"}};
+  const folly::F14FastMap<std::string, std::string> scopeFileOpts{
+      {"scope", "value"}};
+  velox::FileIoContext inputContext;
+  inputContext.fileOpts = inputFileOpts;
+  velox::FileIoContext scopeContext;
+  scopeContext.fileOpts = scopeFileOpts;
+
+  {
+    SCOPED_TRACE("DirectDataInput");
+    const auto file =
+        std::make_shared<nimble::testing::FileOptsRecordingReadFile>(data);
+    auto options = makeOptions();
+    options.fileIoContext = inputContext;
+    DirectDataInput input{file, options};
+    input.reserve(1);
+    input.startGroup();
+    const auto index = input.enqueue(DataInput::Region{2'100, 100});
+    {
+      const velox::ScopedFileIoContext scope{scopeContext};
+      const auto loadHandle = input.load();
+      EXPECT_EQ(refData(input.bufferRef(index)), data.substr(2'100, 100));
+      const auto [bytes, readHandle] =
+          input.read(DataInput::Region{100, 1'000});
+      EXPECT_EQ(bytes, data.substr(100, 1'000));
+    }
+    const auto [bytes, readHandle] = input.read(DataInput::Region{3'000, 100});
+    EXPECT_EQ(bytes, data.substr(3'000, 100));
+    EXPECT_THAT(
+        file->fileOpts(),
+        ::testing::ElementsAre(scopeFileOpts, scopeFileOpts, inputFileOpts));
+  }
+  {
+    SCOPED_TRACE("CachedDataInput");
+    const auto file =
+        std::make_shared<nimble::testing::FileOptsRecordingReadFile>(data);
+    auto cache = velox::cache::AsyncDataCache::create(
+        velox::memory::memoryManager()->allocator());
+    const velox::StringIdLease fileId{
+        velox::fileIds(), "CachedDataInputTest.readsUseScopedFileIoContext"};
+    {
+      CachedDataInput input{
+          file,
+          CachedDataInput::Options{
+              .pool = pool_.get(),
+              .cache = getBlockCache(cache.get()),
+              .fileId = fileId,
+              .ioStats = ioStats_,
+              .fileIoContext = inputContext,
+          }};
+      input.reserve(1);
+      input.startGroup(DataInput::Region{2'000, 500});
+      const auto index = input.enqueue(DataInput::Region{2'100, 100});
+      {
+        const velox::ScopedFileIoContext scope{scopeContext};
+        const auto loadHandle = input.load();
+        EXPECT_EQ(refData(input.bufferRef(index)), data.substr(2'100, 100));
+      }
+      const auto [bytes, readHandle] =
+          input.read(DataInput::Region{100, 1'000});
+      EXPECT_EQ(bytes, data.substr(100, 1'000));
+    }
+    EXPECT_THAT(
+        file->fileOpts(), ::testing::ElementsAre(scopeFileOpts, inputFileOpts));
     cache->shutdown();
   }
 }

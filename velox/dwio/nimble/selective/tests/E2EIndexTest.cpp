@@ -15,6 +15,7 @@
  */
 
 #include <fmt/format.h>
+#include <fmt/ranges.h> // IWYU pragma: keep
 #include <gtest/gtest.h>
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
@@ -31,13 +32,19 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
+#include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/tests/utils/E2EFilterTestBase.h"
+#include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/reader/NimbleReaderFactory.h"
 #include "velox/dwio/nimble/selective/SelectiveNimbleReader.h"
+#include "velox/dwio/nimble/tablet/Constants.h"
+#include "velox/dwio/nimble/tablet/TabletReader.h"
+#include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/type/Filter.h"
 #include "velox/vector/FlatVector.h"
@@ -324,6 +331,18 @@ class E2EIndexTestBase : public ::testing::Test {
   virtual std::unique_ptr<Reader> createReader(
       double sampleRate = 1.0,
       uint32_t randomSeed = 0) {
+    std::shared_ptr<random::RandomSkipTracker> randomSkip;
+    if (sampleRate < 1.0) {
+      random::setSeed(randomSeed);
+      randomSkip = std::make_shared<random::RandomSkipTracker>(sampleRate);
+    }
+    return createReader(std::move(randomSkip));
+  }
+
+  // Creates a reader for the written data that samples with 'randomSkip', if
+  // set.
+  std::unique_ptr<Reader> createReader(
+      std::shared_ptr<random::RandomSkipTracker> randomSkip) {
     auto readFile =
         std::make_shared<InMemoryReadFile>(std::string_view(sinkData_));
     dwio::common::ReaderOptions readerOptions(leafPool_.get());
@@ -333,13 +352,7 @@ class E2EIndexTestBase : public ::testing::Test {
     readerOptions.setFileFormat(FileFormat::NIMBLE);
     readerOptions.setLoadClusterIndex(true);
     setUpReaderOptions(readerOptions);
-
-    // Set up random skip if sample rate is less than 1.0.
-    if (sampleRate < 1.0) {
-      random::setSeed(randomSeed);
-      auto randomSkip = std::make_shared<random::RandomSkipTracker>(sampleRate);
-      readerOptions.setRandomSkip(randomSkip);
-    }
+    readerOptions.setRandomSkip(std::move(randomSkip));
 
     std::unique_ptr<BufferedInput> input;
     auto& ids = fileIds();
@@ -441,7 +454,8 @@ class E2EIndexTestBase : public ::testing::Test {
       uint64_t minStreamChunkRawSize = 0,
       uint32_t batchesPerStripe = 0,
       ChunkStatsVersion chunkStatsVersion = ChunkStatsVersion::kV2,
-      const std::vector<std::string>& indexColumns = {}) {
+      const std::vector<std::string>& indexColumns = {},
+      bool enableStreamDeduplication = false) {
     sinkData_.clear();
     auto writeFile = std::make_unique<InMemoryWriteFile>(&sinkData_);
     auto batchesInStripe = std::make_shared<uint32_t>(0);
@@ -480,7 +494,7 @@ class E2EIndexTestBase : public ::testing::Test {
                       [](const StripeProgress&) { return true; });
                 },
             .enableChunking = true,
-            .enableStreamDeduplication = false,
+            .enableStreamDeduplication = enableStreamDeduplication,
         });
     for (const auto& batch : batches) {
       writer.write(batch);
@@ -1058,6 +1072,48 @@ TEST_F(E2EIndexTestBase, v2ChunkStatsMergeRangesAcrossColumns) {
   EXPECT_EQ(result.stats.processedRows, 12);
 }
 
+// The scan spec names only the last of the file's columns, as a query of a wide
+// table names few of its columns.
+TEST_F(E2EIndexTestBase, v2ChunkStatsPruneWithPartialScanSpec) {
+  const auto fileType = ROW({"first", "second", "value"}, BIGINT());
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(3);
+  for (int64_t batch = 0; batch < 3; ++batch) {
+    batches.push_back(vectorMaker_->rowVector(
+        {"first", "second", "value"},
+        {vectorMaker_->flatVector<int64_t>(
+             4, [batch](auto row) { return batch * 10 + row; }),
+         vectorMaker_->flatVector<int64_t>(
+             4, [batch](auto row) { return batch * 20 + row; }),
+         vectorMaker_->flatVector<int64_t>(
+             4, [batch](auto row) { return batch * 100 + row; })}));
+  }
+  writeChunkStatsData(batches);
+
+  const auto scanType = ROW("value", BIGINT());
+  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+  filters["value"] = std::make_unique<BigintRange>(100, 103, false);
+  auto reader = createReader(/*sampleRate=*/1.0, /*randomSeed=*/0);
+  RowReaderOptions rowReaderOptions;
+  rowReaderOptions.setRequestedType(fileType);
+  rowReaderOptions.setScanSpec(createScanSpec(scanType, filters));
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  std::vector<RowVectorPtr> rows;
+  VectorPtr result = BaseVector::create(scanType, 1, leafPool_.get());
+  while (rowReader->next(1'000, result) > 0) {
+    result->loadedVector();
+    rows.push_back(std::dynamic_pointer_cast<RowVector>(result));
+  }
+  RuntimeStats stats;
+  rowReader->updateRuntimeStats(stats);
+
+  verifyResultsEqual(
+      rows, {vectorMaker_->rowVector({"value"}, {batches[1]->childAt(2)})});
+  EXPECT_EQ(stats.chunkSkippedRows, 8);
+  EXPECT_EQ(stats.processedRows, 12);
+}
+
 TEST_F(E2EIndexTestBase, v2ChunkStatsUnalignedChunksAcrossStripes) {
   const auto rowType = ROW({{"narrow", TINYINT()}, {"wide", BIGINT()}});
   std::vector<RowVectorPtr> batches;
@@ -1398,6 +1454,110 @@ TEST_F(SplitRowRangeTest, countsRowsFromSplitStart) {
   }
 }
 
+// Sampling a split row range picks the rows that one trial per row of the
+// split, in order, picks inside the range. Reading the range twice with one
+// sampler also checks the trials for the rows after the range.
+TEST_F(SplitRowRangeTest, randomSampling) {
+  // Four stripes of 2'500 rows; 'value' is the file row number.
+  constexpr int64_t kNumRows = 10'000;
+  constexpr int64_t kStripeRows = 2'500;
+  std::vector<RowVectorPtr> batches;
+  for (int64_t firstRow = 0; firstRow < kNumRows; firstRow += 500) {
+    batches.push_back(vectorMaker_->rowVector(
+        {"value"},
+        {vectorMaker_->flatVector<int64_t>(
+            500, [firstRow](auto row) { return firstRow + row; })}));
+  }
+  writeChunkStatsData(
+      batches,
+      /*enableChunkStats=*/true,
+      ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize,
+      /*minStreamChunkRawSize=*/0,
+      /*batchesPerStripe=*/5);
+
+  constexpr auto kAll = std::numeric_limits<uint64_t>::max();
+  // The first stripe starts at byte 0, so a split starting at byte 1 holds
+  // the last three stripes.
+  const std::pair<uint64_t, uint64_t> wholeFile{0, kAll};
+  const std::pair<uint64_t, uint64_t> fromSecondStripe{1, kAll};
+  struct TestCase {
+    std::pair<uint64_t, uint64_t> byteRange;
+    int64_t splitStartRow;
+    SplitRowRange range;
+  };
+  const std::vector<TestCase> testCases = {
+      {wholeFile, 0, {0, kAll}},
+      {wholeFile, 0, {1, 2}},
+      {wholeFile, 0, {2'000, 1'000}},
+      {wholeFile, 0, {2'600, 2'000}},
+      {wholeFile, 0, {3'000, 5'000}},
+      {wholeFile, 0, {9'000, kAll}},
+      {fromSecondStripe, kStripeRows, {0, 2'500}},
+      {fromSecondStripe, kStripeRows, {100, 4'000}},
+      {fromSecondStripe, kStripeRows, {6'000, kAll}},
+  };
+  const std::unordered_map<std::string, std::unique_ptr<Filter>> noFilters;
+  for (const auto& testCase : testCases) {
+    const auto splitNumRows = kNumRows - testCase.splitStartRow;
+    for (const double sampleRate : {0.5, 0.1, 0.001, 0.0002}) {
+      for (uint32_t seed = 1; seed <= 20; ++seed) {
+        SCOPED_TRACE(
+            fmt::format(
+                "offset={}, firstRow={}, numRows={}, sampleRate={}, seed={}",
+                testCase.byteRange.first,
+                testCase.range.firstRow,
+                testCase.range.numRows,
+                sampleRate,
+                seed));
+        random::setSeed(seed);
+        auto randomSkip =
+            std::make_shared<random::RandomSkipTracker>(sampleRate);
+        auto reader = createReader(randomSkip);
+        dwio::common::Mutation mutation;
+        mutation.randomSkip = randomSkip.get();
+        std::vector<int64_t> actual;
+        for (int pass = 0; pass < 2; ++pass) {
+          RowReaderOptions rowReaderOptions;
+          rowReaderOptions.range(
+              testCase.byteRange.first, testCase.byteRange.second);
+          rowReaderOptions.setRequestedType(rowType_);
+          rowReaderOptions.setScanSpec(createScanSpec(rowType_, noFilters));
+          rowReaderOptions.setSplitRowRange(testCase.range);
+          auto rowReader = reader->createRowReader(rowReaderOptions);
+          VectorPtr result = BaseVector::create(rowType_, 1, leafPool_.get());
+          while (rowReader->next(1'000, result, &mutation) > 0) {
+            // Sampled rows can come back wrapped in a dictionary.
+            const auto* values = result->as<RowVector>()
+                                     ->childAt(0)
+                                     ->loadedVector()
+                                     ->as<SimpleVector<int64_t>>();
+            for (vector_size_t i = 0; i < result->size(); ++i) {
+              actual.push_back(values->valueAt(i));
+            }
+          }
+        }
+
+        random::setSeed(seed);
+        random::RandomSkipTracker sampler(sampleRate);
+        const auto firstRow = static_cast<int64_t>(
+            std::min<uint64_t>(testCase.range.firstRow, splitNumRows));
+        const auto endRow = firstRow +
+            static_cast<int64_t>(std::min<uint64_t>(
+                testCase.range.numRows, splitNumRows - firstRow));
+        std::vector<int64_t> expected;
+        for (int pass = 0; pass < 2; ++pass) {
+          for (int64_t row = 0; row < splitNumRows; ++row) {
+            if (sampler.testOne() && row >= firstRow && row < endRow) {
+              expected.push_back(testCase.splitStartRow + row);
+            }
+          }
+        }
+        EXPECT_EQ(actual, expected);
+      }
+    }
+  }
+}
+
 // Index bounds on a split that doesn't start at the file's first stripe: the
 // split row range counts from the split's first row, the index from the
 // file's, and the reader reads their intersection within the split.
@@ -1483,6 +1643,89 @@ TEST_F(E2EIndexTestBase, splitRowRangeWithIndexCountsFromSplitStart) {
         EXPECT_EQ(result.numStripeLoads, testCase.expectedStripeLoads);
       }
     }
+  }
+}
+
+// An all-null struct's null stream and an all-false BOOLEAN column have the
+// same bytes, so stream deduplication stores them once. The null stream counts
+// each false as a null, while the BOOLEAN column has none. Each stream must
+// keep its own chunk null counts, or 'b = false' skips every row when the
+// struct comes first.
+TEST_F(E2EIndexTestBase, v2ChunkStatsDeduplicatedStreamsKeepOwnNullCounts) {
+  constexpr vector_size_t kNumRows{100};
+  for (const bool structFirst : {true, false}) {
+    SCOPED_TRACE(fmt::format("structFirst: {}", structFirst));
+    auto structs = vectorMaker_->rowVector(
+        {"x"}, {vectorMaker_->flatVector<int64_t>(kNumRows, [](auto row) {
+          return row;
+        })});
+    for (vector_size_t row = 0; row < kNumRows; ++row) {
+      structs->setNull(row, true);
+    }
+    auto booleans =
+        vectorMaker_->flatVector<bool>(kNumRows, [](auto) { return false; });
+    const auto batch = structFirst
+        ? vectorMaker_->rowVector({"s", "b"}, {structs, booleans})
+        : vectorMaker_->rowVector({"b", "s"}, {booleans, structs});
+    writeChunkStatsData(
+        {batch},
+        /*enableChunkStats=*/true,
+        ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize,
+        /*minStreamChunkRawSize=*/0,
+        /*batchesPerStripe=*/0,
+        ChunkStatsVersion::kV2,
+        /*indexColumns=*/{},
+        /*enableStreamDeduplication=*/true);
+
+    auto readFile = std::make_shared<InMemoryReadFile>(sinkData_);
+    auto tablet = TabletReader::create(
+        readFile,
+        leafPool_.get(),
+        test::makeTestTabletOptions(leafPool_.get()));
+    const auto section =
+        tablet->loadOptionalSection(std::string(kSchemaSection));
+    ASSERT_TRUE(section.has_value());
+    const auto schema =
+        SchemaDeserializer::deserialize(section->content().data());
+    const auto& root = schema->asRow();
+    const uint32_t structColumn = structFirst ? 0 : 1;
+    const auto structNulls =
+        root.childAt(structColumn)->asRow().nullsDescriptor().offset();
+    const auto booleanValues =
+        root.childAt(1 - structColumn)->asScalar().scalarDescriptor().offset();
+
+    // Both streams point at the same bytes.
+    ASSERT_EQ(tablet->stripeCount(), 1);
+    const auto stripe = tablet->stripeIdentifier(0);
+    EXPECT_EQ(
+        tablet->streamOffset(stripe, structNulls),
+        tablet->streamOffset(stripe, booleanValues));
+
+    // Each stream reports its own null counts.
+    ASSERT_NE(stripe.chunkStats(), nullptr);
+    const auto streamNullCount = [&](uint32_t streamId) {
+      const auto streamIndex = stripe.chunkStats()->createStreamIndex(
+          0, streamId, tablet->streamSize(stripe, streamId));
+      NIMBLE_CHECK_NOT_NULL(streamIndex);
+      uint32_t nullCount{0};
+      const auto [startChunk, endChunk] = streamIndex->chunkRange();
+      for (auto chunk = startChunk; chunk < endChunk; ++chunk) {
+        const auto chunkNullCount = streamIndex->chunkNullCount(chunk);
+        NIMBLE_CHECK(chunkNullCount.has_value());
+        nullCount += *chunkNullCount;
+      }
+      return nullCount;
+    };
+    EXPECT_EQ(streamNullCount(structNulls), kNumRows);
+    EXPECT_EQ(streamNullCount(booleanValues), 0);
+
+    // 'b = false' matches every row.
+    std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+    filters["b"] = std::make_unique<BoolValue>(false, /*nullAllowed=*/false);
+    const auto result = readChunkStatsData(asRowType(batch->type()), filters);
+    EXPECT_EQ(countRows(result.rows), kNumRows);
+    verifyResultsEqual(result.rows, {batch});
+    EXPECT_EQ(result.stats.chunkSkippedRows, 0);
   }
 }
 
