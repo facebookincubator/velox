@@ -699,10 +699,11 @@ class JsonFunctionTemplate : public exec::VectorFunction {
     exec::VectorWriter<Json> resultWriter;
     resultWriter.init(*flatResult);
 
+    // Reused across rows so that its capacity is kept.
+    std::string output;
     context.applyToSelectedNoThrow(rows, [&](auto row) {
       VELOX_DCHECK(!decodedPath->isNullAt(row));
       resultWriter.setOffset(row);
-      std::string output;
       if (!decodedJson->isNullAt(row) &&
           JsonFunction::process(
               decodedJson->valueAt<StringView>(row),
@@ -773,8 +774,17 @@ struct JsonExtractImpl {
       std::string& output) {
     static constexpr std::string_view kNullString{"null"};
     static constexpr std::string_view emptyArrayString{"[]"};
-    std::vector<std::string_view> results;
-    auto consumer = [&results](auto& v) {
+    // Results are written to 'output' directly, separated by commas. The
+    // enclosing brackets are added at the end if the path is not definite.
+    output.clear();
+    size_t numResults = 0;
+    auto addResult = [&output, &numResults](std::string_view result) {
+      if (numResults++ > 0) {
+        output.push_back(',');
+      }
+      output.append(result);
+    };
+    auto consumer = [&addResult](auto& v) {
       // We could just convert v to a string using to_json_string directly, but
       // in that case the JSON wouldn't be parsed (it would just return the
       // contents directly) and we might miss invalid JSON.
@@ -789,24 +799,24 @@ struct JsonExtractImpl {
         case simdjson::ondemand::json_type::object: {
           SIMDJSON_ASSIGN_OR_RAISE(
               auto jsonStr, simdjson::to_json_string(v.get_object()));
-          results.push_back(std::move(jsonStr));
+          addResult(jsonStr);
           break;
         }
         case simdjson::ondemand::json_type::array: {
           SIMDJSON_ASSIGN_OR_RAISE(
               auto jsonStr, simdjson::to_json_string(v.get_array()));
-          results.push_back(std::move(jsonStr));
+          addResult(jsonStr);
           break;
         }
         case simdjson::ondemand::json_type::string:
         case simdjson::ondemand::json_type::number:
         case simdjson::ondemand::json_type::boolean: {
           SIMDJSON_ASSIGN_OR_RAISE(auto jsonStr, simdjson::to_json_string(v));
-          results.push_back(std::move(jsonStr));
+          addResult(jsonStr);
           break;
         }
         case simdjson::ondemand::json_type::null:
-          results.push_back(kNullString);
+          addResult(kNullString);
           break;
       }
       return simdjson::SUCCESS;
@@ -826,7 +836,7 @@ struct JsonExtractImpl {
 
     SIMDJSON_TRY(extractor.extract(doc, consumer, isDefinitePath));
 
-    if (results.size() == 0) {
+    if (numResults == 0) {
       if (isDefinitePath) {
         // If the path didn't map to anything in the JSON object, return null.
         return simdjson::NO_SUCH_FIELD;
@@ -834,20 +844,10 @@ struct JsonExtractImpl {
       output = emptyArrayString;
       return simdjson::SUCCESS;
     }
-    std::stringstream ss;
     if (!isDefinitePath) {
-      ss << "[";
+      output.insert(output.begin(), '[');
+      output.push_back(']');
     }
-    for (int i = 0; i < results.size(); i++) {
-      if (i > 0) {
-        ss << ",";
-      }
-      ss << results[i];
-    }
-    if (!isDefinitePath) {
-      ss << "]";
-    }
-    output = ss.str();
     return simdjson::SUCCESS;
   }
 };
