@@ -206,7 +206,6 @@ enum class ColumnAction { kNulls = 1, kLengths = 2, kFilter = 4, kValues = 8 };
 struct ColumnOp {
   static constexpr int32_t kNoPrerequisite = -1;
   static constexpr int32_t kNoOperand = -1;
-  static constexpr int32_t kAnyLevel = -1;
 
   // Is the op completed after this? If so, any dependent action can be
   // queued as soon as this is set.
@@ -222,14 +221,6 @@ struct ColumnOp {
   ColumnReader* reader{nullptr};
   // Vector completed by arrival of this. nullptr if no vector.
   WaveVector* waveVector{nullptr};
-
-  // True if the column contains multiple uncontiguous chunks.
-  bool hasMultiChunks{false};
-
-  // Set by ReadStream to coordinate the decoding of multiple streams. The
-  // FormatData should decode the current layer of encoding iff decodeLevel is
-  // equal to the current layer or kAnyLevel.
-  int32_t decodeLevel{kAnyLevel};
 
   // Host side result size. 0 for unconditional decoding. Can be buffer size for
   // passing rows, length/offset array etc.
@@ -252,7 +243,70 @@ struct ColumnOp {
   int32_t* hostResult{nullptr};
 };
 
-/// Operations on leaf columns. This is specialized for each file format.
+/// Host buffers of a column that are copied to the device once per split.
+/// The first stage() adds them to a SplitStaging. Later stage() calls add a
+/// dependency on that staging. The device addresses are known after the first
+/// staging is transferred.
+class StagedBuffers {
+ public:
+  /// Adds a buffer and returns its index.
+  int32_t add(const Staging& staging) {
+    buffers_.push_back({staging});
+    return static_cast<int32_t>(buffers_.size() - 1);
+  }
+
+  bool empty() const {
+    return buffers_.empty();
+  }
+
+  /// Adds the buffers to 'staging' on the first call. Otherwise adds a
+  /// dependency on the staging of the first call. Returns true on the first
+  /// call.
+  bool stage(SplitStaging& staging);
+
+  /// Sets 'pointer' to the device address of buffer 'index' plus 'offset'. If
+  /// the latest stage() added the buffers, registers 'pointer' to be patched
+  /// when 'staging' is transferred.
+  template <typename T>
+  void setPointer(
+      int32_t index,
+      T*& pointer,
+      int64_t offset,
+      SplitStaging& staging) const {
+    const auto& buffer = buffers_[index];
+    if (pending_) {
+      // NOLINTNEXTLINE(performance-no-int-to-ptr)
+      pointer = reinterpret_cast<T*>(offset);
+      staging.registerPointer(buffer.id, &pointer, false);
+    } else {
+      VELOX_CHECK_NOT_NULL(buffer.device);
+      pointer = reinterpret_cast<T*>(buffer.device + offset);
+    }
+  }
+
+  /// Device address of buffer 'index', nullptr before the first staging is
+  /// transferred.
+  char* deviceAddress(int32_t index) const {
+    return buffers_[index].device;
+  }
+
+ private:
+  struct Buffer {
+    Staging staging;
+    BufferId id{kNoBufferId};
+    char* device{nullptr};
+  };
+
+  std::vector<Buffer> buffers_;
+  bool staged_{false};
+  // True from the stage() that adds the buffers to the next stage().
+  bool pending_{false};
+  int32_t stagingId_{SplitStaging::kNoStaging};
+};
+
+/// Operations on the encoded data of a column. This is specialized for each
+/// file format. The format independent parts of making decode steps are here,
+/// e.g. the TBs of an op.
 class FormatData {
  public:
   virtual ~FormatData() = default;
@@ -261,39 +315,11 @@ class FormatData {
 
   virtual bool hasNulls() const = 0;
 
-  /// Enqueues read of 'numRows' worth of null flags.  Returns the id of the
-  /// result area allocated from 'deviceStaging'.
-  virtual BufferId readNulls(
-      int32_t numRows,
-      ResultStaging& deviceStaging,
-      SplitStaging& stageing,
-      DecodePrograms& programs) {
-    VELOX_NYI();
-  }
-
-  /// Sets how many TBs will be scheduled at a time for this column.
-  void setBlocks(int32_t numBlocks) {
-    VELOX_NYI();
-  }
-
-  /// Returns estimate of sequential instructions needed to decode one value.
-  /// Used to decide how many TBs to use for each column.
-  virtual float cost(const ColumnOp& op) {
-    return 10;
-  }
-
-  /// Prepares a new batch of reads. The batch starts at 'startRiw', which is a
+  /// Prepares a new batch of reads. The batch starts at 'startRow', which is a
   /// row number in terms of the column of 'this'. The row number for a nested
   /// column is in terms of the column, not in terms of top level rows.
-  virtual void newBatch(int32_t startRow) = 0;
-
-  /// Returns the maximum level of encoding of all chunks of 'this'.
-  virtual int32_t maxDecodeLevel() const {
-    return maxDecodeLevel_;
-  }
-
-  virtual bool hasMultiChunks() const {
-    return false;
+  virtual void newBatch(int32_t startRow) {
+    currentRow_ = startRow;
   }
 
   /// Schedules operations for preparing the encoded data to be
@@ -318,9 +344,10 @@ class FormatData {
       DecodePrograms& program,
       ReadStream& stream) = 0;
 
-  /// Adds the next read of the column. If the column is a filter depending on
-  /// another filter, the previous filter is given on the first call. Updates
-  /// status of 'op'.
+  /// Adds the TBs that read the rows of 'op'. If the column is a filter
+  /// depending on another filter, the previous filter is given on the first
+  /// call. Updates status of 'op'. Stages the encoded data with stage() and
+  /// sets the format specific fields of each TB's step with setDecode().
   virtual void startOp(
       ColumnOp& op,
       const ColumnOp* previousFilter,
@@ -328,9 +355,25 @@ class FormatData {
       ResultStaging& resultStaging,
       SplitStaging& staging,
       DecodePrograms& program,
-      ReadStream& stream) = 0;
+      ReadStream& stream);
 
  protected:
+  /// Adds the encoded data of 'this' to 'staging'. Called at the start of
+  /// startOp().
+  virtual void stage(
+      ResultStaging& /*deviceStaging*/,
+      SplitStaging& /*staging*/) {}
+
+  /// Type of the values that the steps of startOp() produce.
+  virtual WaveTypeKind stepKind() const = 0;
+
+  /// Sets the format specific fields of the step of TB 'blockIdx' of 'op'.
+  virtual void setDecode(
+      GpuDecode& step,
+      ColumnOp& op,
+      int32_t blockIdx,
+      SplitStaging& staging) = 0;
+
   std::unique_ptr<GpuDecode> makeStep(
       ColumnOp& op,
       const ColumnOp* previousFilter,
@@ -349,21 +392,18 @@ class FormatData {
       int32_t blockIdx,
       int32_t numRows);
 
+  // A format with a flat nulls bitmap stages it separately from the values.
   // Staging id for nulls.
   int32_t nullsStagingId_{SplitStaging::kNoStaging};
   // Id for nulls buffer. The nulls buffer has no address at time of scheduling
   // if nulls decode is in the same kernel as decoding.
   BufferId nullsBufferId_{kNoBufferId};
-  // id of last splitStaging 'this' depends on.
-  int32_t lastStagingId_{SplitStaging::kNoStaging};
 
   // First unaccessed row number relative to start of 'this'.
   int32_t currentRow_{0};
 
   ColumnGridInfo grid_;
   bool griddized_{false};
-
-  int32_t maxDecodeLevel_{0};
 };
 
 class FormatParams {

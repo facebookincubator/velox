@@ -26,6 +26,8 @@ head --lines 16 velox/experimental/wave/common/Cuda.h >$JIT/Headers.h
 echo "namespace facebook::velox::wave {" >>$JIT/Headers.h
 
 echo "bool registerHeader(const char* text);" >>$JIT/Headers.h
+# The header is included in one translation unit.
+echo "// NOLINTBEGIN(misc-definitions-in-headers,facebook-avoid-non-const-global-variables)" >>$JIT/Headers.h
 
 $STRINGIFY velox/experimental/wave/common/BitUtil.cuh >>$JIT/Headers.h
 $STRINGIFY velox/experimental/wave/common/Scan.cuh >>$JIT/Headers.h
@@ -43,6 +45,9 @@ $STRINGIFY "velox/experimental/wave/common/StringView.h" >>$JIT/Headers.h
 $STRINGIFY "velox/experimental/wave/common/Hash.h" >>$JIT/Headers.h
 $STRINGIFY "velox/experimental/wave/common/CompilerDefines.h" >>$JIT/Headers.h
 $STRINGIFY "velox/experimental/wave/common/Atomic.cuh" >>$JIT/Headers.h
+$STRINGIFY "velox/experimental/wave/common/Bits.cuh" >>$JIT/Headers.h
+$STRINGIFY "velox/experimental/wave/dwio/decode/DecodeOp.h" >>$JIT/Headers.h
+$STRINGIFY "velox/experimental/wave/dwio/decode/DecodeOps.cuh" >>$JIT/Headers.h
 cd velox/experimental/breeze || exit
 $STRINGIFY "breeze/platforms/cuda.cuh" >>../../../$JIT/Headers.h
 $STRINGIFY "breeze/platforms/specialization/cuda-ptx.cuh" >>../../../$JIT/Headers.h
@@ -50,6 +55,7 @@ $STRINGIFY "breeze/platforms/platform.h" >>../../../$JIT/Headers.h
 $STRINGIFY "breeze/utils/types.h" >>../../../$JIT/Headers.h
 cd - || exit
 
+echo "// NOLINTEND(misc-definitions-in-headers,facebook-avoid-non-const-global-variables)" >>$JIT/Headers.h
 echo "}" >>$JIT/Headers.h
 
 clang-format -i $JIT/Headers.h
