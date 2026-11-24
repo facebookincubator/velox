@@ -27,6 +27,7 @@ add_executable(
   StatisticsTest.cpp
   StringTruncationTest.cpp
   TypesTest.cpp
+  WriterTest.cpp
 )
 
 add_test(velox_dwio_arrow_parquet_writer_test velox_dwio_arrow_parquet_writer_test)
