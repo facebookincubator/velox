@@ -8,7 +8,7 @@ Introduction
 The Spark Query Runner is a tool designed to facilitate the testing of Velox.
 It helps ensure the correctness of Velox's computing against Spark and
 provides a method for identifying potential issues in Velox's implementation.
-Spark Query Runner is designed to run against Spark-3.5.1.
+Spark Query Runner is designed to run against Spark-4.3.0.
 
 How It Works
 ------------
@@ -31,27 +31,33 @@ the results back to Velox. The steps for this process are as follows:
 
 1. Provide the Spark SQL query to be executed. The query could be generated from Velox
    plan node or manually written.
-2. Create a protobuf message `ExecutePlanRequest` from the SQL query. The protocols
-   used by Spark Connect are defined in `Apache Spark <https://github.com/apache/spark/tree/v3.5.1/connector/connect/common/src/main/protobuf/spark/connect>`_.
-3. Submit the message to SparkConnectService through gRPC API `ExecutePlan`.
-4. Fetch Spark's results from execution response. Results are in Arrow IPC stream format,
+2. Set ANSI mode and the session timezone in the Spark session through gRPC API `Config`.
+   They are taken from the Velox query configs ``spark.ansi_enabled`` and
+   ``session_timezone`` (UTC if not set, as in Velox), so that Spark runs the query
+   with the same settings as Velox.
+3. Create a protobuf message `ExecutePlanRequest` from the SQL query. The protocols
+   used by Spark Connect are defined in `Apache Spark <https://github.com/apache/spark/tree/v4.3.0/sql/connect/common/src/main/protobuf/spark/connect>`_.
+4. Submit the message to SparkConnectService through gRPC API `ExecutePlan`.
+5. Fetch Spark's results from execution response. Results are in Arrow IPC stream format,
    and can be read as Arrow RecordBatch by `arrow::ipc::RecordBatchReader`.
-5. Convert Arrow RecordBatch as Velox vector for the comparison with Velox's results.
+6. Convert Arrow RecordBatch as Velox vector for the comparison with Velox's results.
 
 Usage
 -----
 
 To use the Spark Query Runner, you will need to deploy an executable Spark and start the
-Spark Connect server with below command.
+Spark Connect server with below command. Since Spark 4.0, the Spark Connect server is
+bundled in the Spark distribution, so no extra jar is needed.
 
 .. code-block::
 
-    "$SPARK_HOME"/sbin/start-connect-server.sh --jars "$JAR_PATH"/spark-connect_2.12-3.5.1.jar
+    "$SPARK_HOME"/sbin/start-connect-server.sh
 
-
-The jar of Spark Connect could be downloaded from `maven repository <https://repo1.maven.org/maven2/org/apache/spark/spark-connect_2.12/3.5.1/>`_.
-If Spark Connect server is started successfully, you can see log as below. The server will
-be started at `localhost:15002`.
+Spark should be configured with the settings in
+``scripts/ci/spark/conf/spark-defaults.conf.example``. ANSI mode and the session
+timezone need not be configured, as the Spark Query Runner sets them before each query.
+If Spark Connect server is started successfully, you can see log as below. The server
+will be started at `localhost:15002`.
 
 .. code-block::
 

@@ -14,7 +14,7 @@
 # Build the test and build container for presto_cpp
 
 # Global arg default to share across stages
-ARG SPARK_VERSION=3.5.1
+ARG SPARK_VERSION=4.3.0
 ARG PRESTO_VERSION=0.295
 # tzdata version pin — see scripts/docker/centos-multi.dockerfile for the
 # rationale. Keep this string in sync with CENTOS_TZDATA_VERSION there so
@@ -28,9 +28,8 @@ ARG CENTOS_TZDATA_VERSION=2026a-1.el9
 FROM alpine:3.22 AS spark-download
 ARG SPARK_VERSION
 
+# Since Spark 4.0, the Spark Connect server jar is bundled in the distribution.
 RUN wget -O spark.tgz https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop3.tgz
-RUN wget -O spark-connect.jar \
-    https://repo1.maven.org/maven2/org/apache/spark/spark-connect_2.12/${SPARK_VERSION}/spark-connect_2.12-${SPARK_VERSION}.jar
 
 RUN tar -zxf spark.tgz
 
@@ -83,7 +82,6 @@ COPY scripts/ci/spark/conf/workers.example $SPARK_HOME/conf/workers
 COPY scripts/ci/spark/start-spark.sh /opt/
 
 COPY --from=spark-download /spark-${SPARK_VERSION}-bin-hadoop3 $SPARK_HOME/
-COPY --from=spark-download /spark-connect.jar $SPARK_HOME/misc/
 
 WORKDIR /velox
 
