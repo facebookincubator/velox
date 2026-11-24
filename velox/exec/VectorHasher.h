@@ -254,10 +254,9 @@ class VectorHasher {
   };
 
   // Updates the value id in 'result' for 'rows' in 'values'. If some value does
-  // not have an id, the position is removed from 'rows', and 'result' at the
-  // position is unspecified: the range lookup writes a whole SIMD batch. This
-  // behavior corresponds to hash join probe, where we have a miss if any of the
-  // keys has a value that is not represented.
+  // not have an id, result is not modified at the position and the position is
+  // removed from 'rows'. This behavior corresponds to hash join probe, where we
+  // have a miss if any of the keys has a value that is not represented.
   //
   // This method can be called concurrently from multiple threads. To allow for
   // that the caller must provide 'scratchMemory'. Values in 'rows' are

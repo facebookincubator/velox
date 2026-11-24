@@ -19,6 +19,7 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/system/HardwareConcurrency.h>
 
+#include "velox/common/testutil/PageBeforeGuard.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
@@ -759,6 +760,23 @@ class VectorTestBase {
       std::function<vector_size_t(vector_size_t)> indexAt) const;
 
   BufferPtr makeIndices(const std::vector<vector_size_t>& indices) const;
+
+  /// Copies 'values' to the end of 'page' and returns a BufferView over the
+  /// copy, so that a read past the last value faults.
+  template <typename T>
+  static BufferPtr copyToEndOfPage(
+      const common::testutil::PageBeforeGuard& page,
+      const std::vector<T>& values) {
+    struct NoopReleaser {
+      void addRef() const {}
+      void release() const {}
+    };
+    const auto copy = page.copyToEnd(values);
+    return BufferView<NoopReleaser>::create(
+        reinterpret_cast<const uint8_t*>(copy.data()),
+        copy.size_bytes(),
+        NoopReleaser{});
+  }
 
   BufferPtr makeOddIndices(vector_size_t size);
 

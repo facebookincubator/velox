@@ -17,6 +17,7 @@
 #include "velox/exec/VectorHasher.h"
 
 #include <cstring>
+#include <limits>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Portability.h"
@@ -516,72 +517,71 @@ void VectorHasher::lookupIdsRangeSimd(
   uint64_t offset = min_ - 1;
   auto bits = rows.asMutableRange().bits();
   constexpr int32_t kWidth = xsimd::batch<T>::size;
+  // Looks up the batch of rows that starts at 'index', with its keys at 'keys'.
+  auto lookupBatch = [&](const T* keys, vector_size_t index) INLINE_LAMBDA {
+    auto values = xsimd::batch<T>::load_unaligned(keys);
+    uint64_t outOfRange =
+        simd::toBitMask(lower > values) | simd::toBitMask(values > upper);
+    if (outOfRange) {
+      bits[index / 64] &= ~(outOfRange << (index & 63));
+    }
+    if (outOfRange != bits::lowMask(xsimd::batch<T>::size)) {
+      if constexpr (sizeof(T) == 8) {
+        auto unsignedValues =
+            simd::reinterpretBatch<typename std::make_unsigned<T>::type>(
+                values);
+        if (multiplier_ == 1) {
+          (unsignedValues - offset).store_unaligned(result + index);
+        } else {
+          (xsimd::batch<uint64_t>::load_unaligned(result + index) +
+           ((unsignedValues - offset) * multiplier_))
+              .store_unaligned(result + index);
+        }
+      } else {
+        // Widen 8 to 2 x 4 since result is always 64 bits wide.
+        auto first4 = simd::reinterpretBatch<uint64_t>(
+                          simd::getHalf<int64_t, 0>(values)) -
+            offset;
+        auto next4 = simd::reinterpretBatch<uint64_t>(
+                         simd::getHalf<int64_t, 1>(values)) -
+            offset;
+        if (multiplier_ == 1) {
+          first4.store_unaligned(result + index);
+          next4.store_unaligned(result + index + first4.size);
+        } else {
+          (xsimd::batch<uint64_t>::load_unaligned(result + index) +
+           (first4 * multiplier_))
+              .store_unaligned(result + index);
+          (xsimd::batch<uint64_t>::load_unaligned(
+               result + index + first4.size) +
+           (next4 * multiplier_))
+              .store_unaligned(result + index + first4.size);
+        }
+      }
+    }
+  };
   // Full batches stay within 'data', which may have no padding.
   const vector_size_t simdEnd = std::min<vector_size_t>(
       rows.end(), decoded.base()->size() / kWidth * kWidth);
-  // Looks up the rows past the last full batch one at a time. Runs before the
-  // SIMD loop: values kept live across the loop for this lookup made the loop
-  // spill registers. Like the SIMD batch that would hold them, it writes
-  // 'result' for every row of that batch up to the last selected one, and
-  // deselects the out-of-range rows: a hash table probe of normalized keys
-  // reads every slot up to the last row. Only rows selected on entry add to
-  // their slot: an earlier key may not have written the slots of the others.
-  for (vector_size_t row = std::max(rows.begin() / kWidth * kWidth, simdEnd);
-       row < rows.end();
-       ++row) {
-    const T value = data[row];
-    const uint64_t id = static_cast<uint64_t>(value) - offset;
-    if (!bits::isBitSet(bits, row)) {
-      result[row] = id;
-      continue;
-    }
-    result[row] = multiplier_ == 1 ? id : result[row] + multiplier_ * id;
-    if (value < min_ || value > max_) {
-      bits::clearBit(bits, row);
-    }
+  // The last, partial batch loads its keys from a copy, whose lanes past the
+  // keys hold a key out of range, so that they don't update the ids of a batch
+  // with no key in range. It runs first, so that no value stays live across
+  // the loop below.
+  if (simdEnd < rows.end() &&
+      bits::findFirstBit(bits, std::max(rows.begin(), simdEnd), rows.end()) >=
+          0) {
+    T lastKeys[kWidth];
+    std::fill(
+        std::begin(lastKeys),
+        std::end(lastKeys),
+        static_cast<T>(
+            min_ > std::numeric_limits<T>::min() ? min_ - 1 : max_ + 1));
+    std::copy(data + simdEnd, data + decoded.base()->size(), lastKeys);
+    lookupBatch(lastKeys, simdEnd);
   }
   bits::forBatches<kWidth>(
       bits, rows.begin(), simdEnd, [&](auto index, auto /*mask*/) {
-        auto values = xsimd::batch<T>::load_unaligned(data + index);
-        uint64_t outOfRange =
-            simd::toBitMask(lower > values) | simd::toBitMask(values > upper);
-        if (outOfRange) {
-          bits[index / 64] &= ~(outOfRange << (index & 63));
-        }
-        if (outOfRange != bits::lowMask(xsimd::batch<T>::size)) {
-          if constexpr (sizeof(T) == 8) {
-            auto unsignedValues =
-                simd::reinterpretBatch<typename std::make_unsigned<T>::type>(
-                    values);
-            if (multiplier_ == 1) {
-              (unsignedValues - offset).store_unaligned(result + index);
-            } else {
-              (xsimd::batch<uint64_t>::load_unaligned(result + index) +
-               ((unsignedValues - offset) * multiplier_))
-                  .store_unaligned(result + index);
-            }
-          } else {
-            // Widen 8 to 2 x 4 since result is always 64 bits wide.
-            auto first4 = simd::reinterpretBatch<uint64_t>(
-                              simd::getHalf<int64_t, 0>(values)) -
-                offset;
-            auto next4 = simd::reinterpretBatch<uint64_t>(
-                             simd::getHalf<int64_t, 1>(values)) -
-                offset;
-            if (multiplier_ == 1) {
-              first4.store_unaligned(result + index);
-              next4.store_unaligned(result + index + first4.size);
-            } else {
-              (xsimd::batch<uint64_t>::load_unaligned(result + index) +
-               (first4 * multiplier_))
-                  .store_unaligned(result + index);
-              (xsimd::batch<uint64_t>::load_unaligned(
-                   result + index + first4.size) +
-               (next4 * multiplier_))
-                  .store_unaligned(result + index + first4.size);
-            }
-          }
-        }
+        lookupBatch(data + index, index);
       });
 }
 
