@@ -304,7 +304,13 @@ void HashBuild::setupTable() {
   if (joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
       joinNode_->isRightSemiProjectJoin() || joinNode_->isRightAntiJoin()) {
     // Do not ignore null keys. kRightAnti must retain null keys: a null-keyed
-    // build row never matches and is always returned.
+    // build row never matches and is always returned. A row stores 0 in the
+    // slot of a null key, and the bloom filter takes that 0, which only lets
+    // probe rows with key 0 through the scan. A full join emits the probe rows
+    // that match nothing, and null-aware and null-as-value joins read the probe
+    // rows with null keys, so none of them can filter its probe side.
+    const bool filtersProbe =
+        !joinNode_->isFullJoin() && !nullAware_ && !nullAsValue_;
     table_ = HashTable<false>::createForJoin(
         std::move(keyHashers),
         dependentTypes,
@@ -312,7 +318,10 @@ void HashBuild::setupTable() {
         {.allowDuplicates = true,
          .hasProbedFlag = true,
          .minTableSizeForParallelJoinBuild =
-             queryConfig.minTableRowsForParallelJoinBuild()});
+             queryConfig.minTableRowsForParallelJoinBuild(),
+         .bloomFilterMaxSize = filtersProbe
+             ? queryConfig.hashProbeBloomFilterPushdownMaxSize()
+             : 0});
   } else {
     // Right semi join needs to tag build rows that were probed.
     const bool needProbedFlag = joinNode_->isRightSemiFilterJoin();

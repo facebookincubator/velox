@@ -128,6 +128,7 @@ set(
   # group6 (~467s): TableScanTest 189 + AggregationTest 105
   # + OrderBy 71 + HashTable 60 + RowNumber 42
   TableScanTest.cpp
+  DynamicFilterPushdownTest.cpp
   AggregationTest.cpp
   OrderByTest.cpp
   HashTableCacheTest.cpp
