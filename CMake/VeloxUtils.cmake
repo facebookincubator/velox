@@ -423,3 +423,16 @@ function(velox_flex_annotate_fallthrough NAME)
     APPEND
   )
 endfunction()
+
+# Marks the syntax error count in the parser that bison_target `NAME`
+# generates as `[[maybe_unused]]`. The parser only increments it, which Clang's
+# -Wunused-but-set-variable reports. Call it after bison_target(NAME ...).
+function(velox_bison_mark_error_count_unused NAME)
+  add_custom_command(
+    OUTPUT ${BISON_${NAME}_OUTPUT_SOURCE}
+    COMMAND
+      ${CMAKE_COMMAND} -DBISON_OUTPUT=${BISON_${NAME}_OUTPUT_SOURCE} -P
+      ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/BisonMarkErrorCountUnused.cmake
+    APPEND
+  )
+endfunction()

@@ -24,6 +24,8 @@ bison_target(
   COMPILE_FLAGS "-Werror -Wno-deprecated"
 )
 
+velox_bison_mark_error_count_unused(TypeParser)
+
 flex_target(
   TypeParserScanner
   TypeParser.ll
