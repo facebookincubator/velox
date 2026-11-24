@@ -1860,6 +1860,25 @@ TEST_F(AggregationTest, groupingSetsEmptyInput) {
       plan,
       "SELECT count(c2) as count_c2 FROM tmp WHERE c1 < 0 GROUP BY GROUPING SETS ((c1), ())");
 
+  // Input pre-grouped on every grouping key.
+  plan = PlanBuilder()
+             .values({data})
+             .filter("c1 < 0")
+             .groupId({"c1"}, {{"c1"}, {}}, {"c2"})
+             .aggregation(
+                 {"c1", "group_id"},
+                 {"c1", "group_id"},
+                 {"count(c2) as count_c2"},
+                 {},
+                 core::AggregationNode::Step::kSingle,
+                 /*ignoreNullKeys=*/false)
+             .project({"count_c2"})
+             .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT count(c2) as count_c2 FROM tmp WHERE c1 < 0 GROUP BY GROUPING SETS ((c1), ())");
+
   // Distinct aggregations with GROUPING SETS.
   plan = PlanBuilder()
              .values({data})
