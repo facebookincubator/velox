@@ -129,10 +129,6 @@ class Merge : public SourceOperator {
 
   RowVectorPtr getOutputFromSource();
 
-  // Maximum number of rows in the output batch.
-  const vector_size_t maxOutputBatchRows_;
-  // Maximum number of bytes in the output batch.
-  const uint64_t maxOutputBatchBytes_;
   const std::vector<SpillSortKey> sortingKeys_;
 
   Stats mergeStats_;

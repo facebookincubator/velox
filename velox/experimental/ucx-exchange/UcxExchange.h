@@ -81,8 +81,6 @@ class UcxExchange : public SourceOperator, public cudf_velox::NvtxHelper {
 
   std::shared_ptr<UcxExchangeClient> exchangeClient_;
 
-  const uint64_t preferredOutputBatchBytes_;
-
   // True if this operator takes splits from the Task, records split and
   // exchange client stats, and reports the splits finished. When running with
   // multiple drivers, this is done by the exchange running on driver 0.

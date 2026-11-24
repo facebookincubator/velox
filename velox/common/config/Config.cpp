@@ -121,7 +121,7 @@ ConfigBase& ConfigBase::reset() {
 }
 
 bool ConfigBase::valueExists(const std::string& key) const {
-  std::shared_lock<std::shared_mutex> l(mutex_);
+  const auto lock = acquireReadLock();
   return configs_.find(key) != configs_.end();
 };
 
@@ -135,7 +135,7 @@ const std::unordered_map<std::string, std::string>& ConfigBase::rawConfigs()
 
 std::unordered_map<std::string, std::string> ConfigBase::rawConfigsCopy()
     const {
-  std::shared_lock<std::shared_mutex> l(mutex_);
+  const auto lock = acquireReadLock();
   return configs_;
 }
 
@@ -146,7 +146,7 @@ std::unordered_map<std::string, std::string> ConfigBase::rawConfigsWithPrefix(
     return filteredConfigs;
   }
 
-  std::shared_lock<std::shared_mutex> l(mutex_);
+  const auto lock = acquireReadLock();
   for (const auto& [key, value] : configs_) {
     if (key.size() >= prefix.size() &&
         key.compare(0, prefix.size(), prefix) == 0) {
@@ -169,7 +169,7 @@ std::string ConfigBase::toSessionKey(std::string_view configKey) {
 }
 
 std::optional<std::string> ConfigBase::access(const std::string& key) const {
-  std::shared_lock l{mutex_};
+  const auto lock = acquireReadLock();
   if (auto it = configs_.find(key); it != configs_.end()) {
     return it->second;
   }

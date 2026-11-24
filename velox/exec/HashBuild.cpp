@@ -68,6 +68,8 @@ HashBuild::HashBuild(
       nullAware_{joinNode_->isNullAware()},
       nullAsValue_{joinNode_->isNullAsValue()},
       needProbedFlagSpill_{needRightSideJoin(joinType_)},
+      mixedGroupedModeSpillEnabled_(
+          driverCtx->queryConfig().mixedGroupedModeHashJoinSpillEnabled()),
       dropDuplicates_(joinNode_->canDropDuplicates()),
       vectorHasherMaxNumDistinct_(
           driverCtx->queryConfig().joinBuildVectorHasherMaxNumDistinct()),
@@ -1281,9 +1283,7 @@ bool HashBuild::canSpill() const {
     return false;
   }
   if (operatorCtx_->task()->hasMixedExecutionGroupJoin(joinNode_.get())) {
-    return operatorCtx_->driverCtx()
-               ->queryConfig()
-               .mixedGroupedModeHashJoinSpillEnabled() &&
+    return mixedGroupedModeSpillEnabled_ &&
         operatorCtx_->task()->concurrentSplitGroups() == 1;
   }
   return true;

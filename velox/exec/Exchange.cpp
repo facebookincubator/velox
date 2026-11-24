@@ -69,8 +69,6 @@ Exchange::Exchange(
           operatorId,
           exchangeNode->id(),
           operatorType),
-      preferredOutputBatchBytes_{
-          driverCtx->queryConfig().preferredOutputBatchBytes()},
       outputBatchRows_{driverCtx->queryConfig().exchangeOutputBatchRows()},
       serdeKind_{exchangeNode->serdeKind()},
       serdeOptions_{getVectorSerdeOptions(
@@ -132,7 +130,7 @@ BlockingReason Exchange::isBlocked(ContinueFuture* future) {
 
   ContinueFuture dataFuture;
   currentPages_ = exchangeClient_->next(
-      driverId_, preferredOutputBatchBytes_, &atEnd_, &dataFuture);
+      driverId_, preferredOutputBatchBytes(), &atEnd_, &dataFuture);
   if (!currentPages_.empty() || atEnd_) {
     if (atEnd_ && !noMoreSplits_) {
       // The task stores 'no more splits' before it tells the client, so the
@@ -187,7 +185,7 @@ uint64_t Exchange::targetNumRows() const {
     return kInitialOutputRows;
   }
   return std::max(
-      preferredOutputBatchBytes_ / estimatedRowSize_.value(),
+      preferredOutputBatchBytes() / estimatedRowSize_.value(),
       kInitialOutputRows);
 }
 

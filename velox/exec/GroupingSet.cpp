@@ -70,7 +70,7 @@ GroupingSet::GroupingSet(
       globalGroupingSets_(globalGroupingSets),
       nonReclaimableSection_(nonReclaimableSection),
       spillConfig_(spillConfig),
-      queryConfig_(queryConfig),
+      preferredOutputBatchBytes_(queryConfig->preferredOutputBatchBytes()),
       pool_(pool),
       spillStats_(spillStats),
       groupingKeyOutputProjections_(std::move(groupingKeyOutputProjections)),
@@ -974,8 +974,7 @@ void GroupingSet::ensureOutputFits() {
     return;
   }
 
-  const uint64_t outputBufferSizeToReserve =
-      queryConfig_->preferredOutputBatchBytes() * 1.2;
+  const uint64_t outputBufferSizeToReserve = preferredOutputBatchBytes_ * 1.2;
   {
     memory::ReclaimableSectionGuard guard(nonReclaimableSection_);
     if (pool_->maybeReserve(outputBufferSizeToReserve)) {

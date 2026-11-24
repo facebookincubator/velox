@@ -91,10 +91,6 @@ class MixedUnion : public SourceOperator {
 
   /// Tracks which sources have been drained (during barrier processing).
   std::vector<bool> sourcesDrained_;
-
-  /// Maximum output batch size
-  const vector_size_t maxOutputBatchRows_;
-  const uint64_t maxOutputBatchBytes_;
 };
 
 } // namespace facebook::velox::exec

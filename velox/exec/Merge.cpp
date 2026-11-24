@@ -43,9 +43,6 @@ Merge::Merge(
           planNodeId,
           operatorType,
           spillConfig),
-      maxOutputBatchRows_{outputBatchRows()},
-      maxOutputBatchBytes_{
-          driverCtx->queryConfig().preferredOutputBatchBytes()},
       sortingKeys_([&]() {
         auto numKeys = sortingKeys.size();
         std::vector<SpillSortKey> keys;
@@ -174,8 +171,8 @@ void Merge::setupSpillMerger() {
       sortingKeys_,
       outputType_,
       std::move(spillReadFilesGroups),
-      maxOutputBatchRows_,
-      maxOutputBatchBytes_,
+      preferredOutputBatchRows(),
+      preferredOutputBatchBytes(),
       operatorCtx_->driverCtx()->queryConfig().localMergeSourceQueueSize(),
       &spillConfig_.value(),
       spillStats_,
@@ -202,7 +199,7 @@ void Merge::maybeStartNextMergeSourceGroup() {
   for (auto* source : sources) {
     cursors.push_back(
         std::make_unique<SourceStream>(
-            source, sortingKeys_, maxOutputBatchRows_));
+            source, sortingKeys_, preferredOutputBatchRows()));
   }
 
   // TODO: consider to provide a config other than the regular operator batch
@@ -211,8 +208,8 @@ void Merge::maybeStartNextMergeSourceGroup() {
   sourceMerger_ = std::make_unique<SourceMerger>(
       outputType_,
       std::move(cursors),
-      maxOutputBatchRows_,
-      maxOutputBatchBytes_,
+      preferredOutputBatchRows(),
+      preferredOutputBatchBytes(),
       pool());
   // Start sources.
   for (const auto& source : sources) {
