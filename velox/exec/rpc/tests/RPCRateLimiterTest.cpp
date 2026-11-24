@@ -107,6 +107,38 @@ class ManualPacingClock {
   folly::ManualTimekeeper timekeeper_;
 };
 
+// A pacing clock that can also jump forward right after one read, as the steady
+// clock moves on between two reads within one limiter call.
+class JumpingPacingClock {
+ public:
+  std::chrono::steady_clock::time_point now() {
+    const auto current = now_;
+    now_ += jumpAfterNextRead_;
+    jumpAfterNextRead_ = {};
+    return current;
+  }
+
+  folly::Timekeeper* timekeeper() {
+    return &timekeeper_;
+  }
+
+  void advance(std::chrono::milliseconds duration) {
+    now_ += duration;
+    timekeeper_.advance(duration);
+  }
+
+  // Moves time forward by 'jump' just after the next read, without firing
+  // timers.
+  void jumpAfterNextRead(std::chrono::milliseconds jump) {
+    jumpAfterNextRead_ = jump;
+  }
+
+ private:
+  std::chrono::steady_clock::time_point now_{};
+  std::chrono::steady_clock::duration jumpAfterNextRead_{};
+  folly::ManualTimekeeper timekeeper_;
+};
+
 class ThrowingTimekeeper final : public folly::Timekeeper {
  public:
   [[noreturn]] folly::SemiFuture<folly::Unit> after(
@@ -148,9 +180,10 @@ class FailOncePacingClock final : public folly::Timekeeper {
   bool firstTimerScheduled_{false};
 };
 
+template <typename PacingClock>
 std::shared_ptr<RPCRateLimiter> makePacingLimiter(
     std::string admissionKey,
-    ManualPacingClock& clock) {
+    PacingClock& clock) {
   return std::make_shared<RPCRateLimiter>(
       std::move(admissionKey),
       [&clock] { return clock.now(); },
@@ -1890,6 +1923,50 @@ TEST_F(RPCRateLimiterTest, simultaneousPacingWakeupsGrantOneUnit) {
   EXPECT_EQ(firstGrant.size(), 1);
   EXPECT_TRUE(secondGrant.empty());
   EXPECT_EQ(limiter->stats().peakPending, 1);
+}
+
+// A paced caller that arrives early enrols to wait. If its admission time
+// passes before its wake-up timer is armed, it must still be woken.
+TEST_F(RPCRateLimiterTest, pacedWaiterWakesWhenItsTimePassesWhileEnrolling) {
+  JumpingPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.enrol-race", clock);
+  enableFractionalLimit(*limiter, 0.25);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+
+  // The next admission is at 2 s. The caller is 1 ms early when it checks.
+  clock.advance(1'999ms);
+  clock.jumpAfterNextRead(1ms);
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+
+  clock.advance(1ms);
+  EXPECT_TRUE(wait.wait.isReady());
+}
+
+// The last paced call returns early and wakes no one. If the next admission
+// time passes before the waiters' wake-up timer is armed, they must still be
+// woken.
+TEST_F(RPCRateLimiterTest, pacedWaiterWakesWhenItsTimePassesDuringRelease) {
+  JumpingPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.release-race", clock);
+  enableFractionalLimit(*limiter, 0.25);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  clock.advance(2s);
+  auto grant = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(grant.size(), 1);
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+
+  // The next admission is at 4 s. The call returns 1 ms before it.
+  clock.advance(1'999ms);
+  clock.jumpAfterNextRead(1ms);
+  grant.clear();
+  EXPECT_FALSE(wait.wait.isReady());
+
+  clock.advance(1ms);
+  EXPECT_TRUE(wait.wait.isReady());
 }
 
 TEST_F(RPCRateLimiterTest, losingPacedWaiterRearmsOnWinnerRelease) {

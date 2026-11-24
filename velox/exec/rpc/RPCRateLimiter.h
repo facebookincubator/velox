@@ -479,8 +479,12 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
       std::vector<ContinuePromise>& toNotify);
 
   // Reserves the single timer for nextPacedAdmission_ without calling the
-  // external Timekeeper. Caller holds mutex_.
-  std::optional<PacingTimerRequest> preparePacingTimerLocked();
+  // external Timekeeper. 'now' is the time at which the caller found admission
+  // too early. The timer is armed from it rather than from a new reading: time
+  // may pass nextPacedAdmission_ in between, and then no timer would wake the
+  // waiter. Caller holds mutex_.
+  std::optional<PacingTimerRequest> preparePacingTimerLocked(
+      std::chrono::steady_clock::time_point now);
 
   // Schedules a timer previously reserved under mutex_. Never called while
   // holding mutex_, because an injected Timekeeper may run callbacks inline.
