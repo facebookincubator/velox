@@ -54,10 +54,40 @@ class EncodeTest : public SparkFunctionBaseTest {
   }
 
   void enableLegacyCodingErrorAction() {
+    setLegacyCodingErrorAction(true);
+  }
+
+  void setLegacyCodingErrorAction(bool enabled) {
     queryCtx_->testingOverrideConfigUnsafe({
         {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyCodingErrorAction),
-         "true"},
+         enabled ? "true" : "false"},
     });
+  }
+
+  void testZeroCopyOutputLifetime(
+      const std::string& value,
+      const std::string& charset,
+      bool dictionary,
+      bool lazy) {
+    auto flat = makeFlatVector<std::string>({value});
+    const auto* data = flat->valueAt(0).data();
+    ASSERT_EQ(flat->stringBuffers().size(), 1);
+    const auto* buffer = flat->stringBuffers().front().get();
+    const auto refCount = buffer->refCount();
+    VectorPtr input = flat;
+    flat.reset();
+    if (dictionary) {
+      input = wrapInDictionary(makeIndices({0}), input);
+    }
+    if (lazy) {
+      input = wrapInLazyDictionary(input);
+    }
+    auto result = evaluate<SimpleVector<StringView>>(
+        fmt::format("encode(c0, '{}')", charset), makeRowVector({input}));
+    EXPECT_EQ(result->valueAt(0).data(), data);
+    ASSERT_GT(buffer->refCount(), refCount);
+    input.reset();
+    EXPECT_EQ(result->valueAt(0).str(), value);
   }
 };
 
@@ -262,6 +292,196 @@ TEST_F(EncodeTest, malformedUtf8) {
       encodeBytes("\xFF", "UTF-16"), ElementsAre(0xFE, 0xFF, 0xFF, 0xFD));
   EXPECT_THAT(
       encodeBytes("\xFF", "UTF-32"), ElementsAre(0x00, 0x00, 0xFF, 0xFD));
+}
+
+TEST_F(EncodeTest, standardMalformedBoundaries) {
+  struct Golden {
+    const char* charset;
+    std::string asciiPattern;
+    std::string replacement;
+    std::string bom;
+    bool singleByte;
+  };
+  // Pin replacement grouping independently of the optimized decoder.
+  const std::vector<Golden> goldens{
+      {"UTF-8", "A", "\xEF\xBF\xBD", "", false},
+      {"UTF-16BE", std::string("\x00\x41", 2), "\xFF\xFD", "", false},
+      {"UTF-16LE", std::string("\x41\x00", 2), "\xFD\xFF", "", false},
+      {"UTF-16", std::string("\x00\x41", 2), "\xFF\xFD", "\xFE\xFF", false},
+      {"UTF-32",
+       std::string("\x00\x00\x00\x41", 4),
+       std::string("\x00\x00\xFF\xFD", 4),
+       "",
+       false},
+      {"US-ASCII", "A", "?", "", true},
+      {"ISO-8859-1", "A", "?", "", true},
+  };
+  const std::vector<std::pair<std::string, size_t>> malformed{
+      {"\xFF", 1},
+      {"\x80", 1},
+      {"\xC0\x80", 2},
+      {"\xE0\x80\x80", 3},
+      {"\xF0\x80\x80\x80", 4},
+      {"\xED\xA0\x80", 1},
+      {"\xF4\x90\x80\x80", 4},
+      {"\xF5\x80\x80\x80", 4},
+      {"\xE2\x82", 1},
+      {"\xF0\x9F\x98", 1},
+  };
+  for (const bool replaceUnmappable : {false, true}) {
+    SCOPED_TRACE(replaceUnmappable);
+    setLegacyCodingErrorAction(replaceUnmappable);
+    for (const auto& golden : goldens) {
+      SCOPED_TRACE(golden.charset);
+      const auto expression = fmt::format("encode(c0, '{}')", golden.charset);
+      const auto errorMessage = fmt::format(
+          "encode: input contains a character that cannot be encoded using '{}'",
+          golden.charset);
+      for (const size_t length : {11, 12, 13, 31, 32, 63, 64, 65}) {
+        SCOPED_TRACE(length);
+        for (const auto& [bytes, numReplacements] : malformed) {
+          SCOPED_TRACE(::testing::PrintToString(toBytes(bytes)));
+          const auto numAscii = length - bytes.size();
+          const std::string ascii(numAscii, 'A');
+          std::string encodedAscii;
+          for (size_t i = 0; i < numAscii; ++i) {
+            encodedAscii += golden.asciiPattern;
+          }
+          std::string replacement;
+          for (size_t i = 0; i < numReplacements; ++i) {
+            replacement += golden.replacement;
+          }
+          for (const bool asciiLeading : {false, true}) {
+            SCOPED_TRACE(asciiLeading);
+            const auto input = asciiLeading ? ascii + bytes : bytes + ascii;
+            if (golden.singleByte && !replaceUnmappable) {
+              VELOX_ASSERT_USER_THROW(
+                  encode(input, golden.charset), errorMessage);
+              VELOX_ASSERT_USER_THROW(
+                  evaluateOnce<std::string>(
+                      expression, std::optional<std::string>(input)),
+                  errorMessage);
+              continue;
+            }
+            const auto expected = golden.bom +
+                (asciiLeading ? encodedAscii + replacement
+                              : replacement + encodedAscii);
+            EXPECT_EQ(encode(input, golden.charset), expected);
+            EXPECT_EQ(
+                evaluateOnce<std::string>(
+                    expression, std::optional<std::string>(input)),
+                expected);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST_F(EncodeTest, standardValidBoundaries) {
+  struct Golden {
+    const char* charset;
+    std::string asciiPattern;
+    std::string encoded;
+    std::string bom;
+    bool singleByte;
+  };
+  const std::vector<Golden> goldens{
+      {"UTF-8", "A", "\xF4\x8F\xBF\xBF", "", false},
+      {"UTF-16BE", std::string("\x00\x41", 2), "\xDB\xFF\xDF\xFF", "", false},
+      {"UTF-16LE", std::string("\x41\x00", 2), "\xFF\xDB\xFF\xDF", "", false},
+      {"UTF-16",
+       std::string("\x00\x41", 2),
+       "\xDB\xFF\xDF\xFF",
+       "\xFE\xFF",
+       false},
+      {"UTF-32",
+       std::string("\x00\x00\x00\x41", 4),
+       std::string("\x00\x10\xFF\xFF", 4),
+       "",
+       false},
+      {"US-ASCII", "A", "?", "", true},
+      {"ISO-8859-1", "A", "?", "", true},
+  };
+  // Exercise the largest scalar independently of the encoder implementation.
+  const std::string scalar = "\xF4\x8F\xBF\xBF";
+  for (const bool replaceUnmappable : {false, true}) {
+    SCOPED_TRACE(replaceUnmappable);
+    setLegacyCodingErrorAction(replaceUnmappable);
+    for (const auto& golden : goldens) {
+      SCOPED_TRACE(golden.charset);
+      const auto expression = fmt::format("encode(c0, '{}')", golden.charset);
+      for (const size_t length : {0, 1, 11, 12, 13, 31, 32, 63, 64, 65, 256}) {
+        SCOPED_TRACE(length);
+        const std::string ascii(length, 'A');
+        std::string encodedAscii;
+        for (size_t i = 0; i < length; ++i) {
+          encodedAscii += golden.asciiPattern;
+        }
+        const auto expectedAscii =
+            (ascii.empty() ? std::string{} : golden.bom) + encodedAscii;
+        EXPECT_EQ(encode(ascii, golden.charset), expectedAscii);
+        EXPECT_EQ(
+            evaluateOnce<std::string>(
+                expression, std::optional<std::string>(ascii)),
+            expectedAscii);
+        if (length < scalar.size()) {
+          continue;
+        }
+        std::string padding;
+        for (size_t i = scalar.size(); i < length; ++i) {
+          padding += golden.asciiPattern;
+        }
+        for (const bool asciiLeading : {false, true}) {
+          SCOPED_TRACE(asciiLeading);
+          const std::string inputPadding(length - scalar.size(), 'A');
+          const auto input =
+              asciiLeading ? inputPadding + scalar : scalar + inputPadding;
+          if (golden.singleByte && !replaceUnmappable) {
+            const auto errorMessage = fmt::format(
+                "encode: input contains a character that cannot be encoded using '{}'",
+                golden.charset);
+            VELOX_ASSERT_USER_THROW(
+                encode(input, golden.charset), errorMessage);
+            VELOX_ASSERT_USER_THROW(
+                evaluateOnce<std::string>(
+                    expression, std::optional<std::string>(input)),
+                errorMessage);
+            continue;
+          }
+          const auto expected = golden.bom +
+              (asciiLeading ? padding + golden.encoded
+                            : golden.encoded + padding);
+          EXPECT_EQ(encode(input, golden.charset), expected);
+          EXPECT_EQ(
+              evaluateOnce<std::string>(
+                  expression, std::optional<std::string>(input)),
+              expected);
+        }
+      }
+    }
+  }
+}
+
+TEST_F(EncodeTest, standardZeroCopyOutputLifetime) {
+  for (const auto* charset : {"UTF-8", "US-ASCII", "ISO-8859-1"}) {
+    SCOPED_TRACE(charset);
+    for (const bool dictionary : {false, true}) {
+      for (const bool lazy : {false, true}) {
+        SCOPED_TRACE(dictionary);
+        SCOPED_TRACE(lazy);
+        ASSERT_NO_FATAL_FAILURE(testZeroCopyOutputLifetime(
+            std::string(128, 'A'), charset, dictionary, lazy));
+        if (std::string_view(charset) == "UTF-8") {
+          ASSERT_NO_FATAL_FAILURE(testZeroCopyOutputLifetime(
+              std::string(128, 'A') + "\xF4\x8F\xBF\xBF",
+              charset,
+              dictionary,
+              lazy));
+        }
+      }
+    }
+  }
 }
 
 TEST_F(EncodeTest, realReplacementCharInInput) {

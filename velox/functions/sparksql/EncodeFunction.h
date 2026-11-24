@@ -43,6 +43,7 @@ enum class CharsetType : uint8_t {
 CharsetType resolveCharset(const StringView& charset);
 
 // Encodes input using the selected charset and Spark coding-error behavior.
+// May borrow input bytes; callers must retain their backing storage.
 Status encode(
     exec::StringWriter& result,
     const StringView& input,
@@ -56,6 +57,9 @@ Status encode(
 template <typename T>
 struct EncodeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Keep borrowed output bytes alive after the input vector is released.
+  static constexpr int32_t reuse_strings_from_arg = 0;
 
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
