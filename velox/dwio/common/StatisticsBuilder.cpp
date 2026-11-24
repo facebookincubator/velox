@@ -265,7 +265,7 @@ void IntegerStatisticsBuilder::merge(
     const ColumnStatistics& other,
     bool ignoreSize) {
   StatisticsBuilder::merge(other, ignoreSize);
-  auto stats = dynamic_cast<const IntegerColumnStatistics*>(&other);
+  auto stats = dynamic_cast<const IntegerColumnStatistics<>*>(&other);
   if (!stats) {
     if (!other.isAllNull()) {
       min_.reset();
@@ -283,7 +283,7 @@ std::unique_ptr<ColumnStatistics> IntegerStatisticsBuilder::build() const {
   auto min = isAllNull() ? std::nullopt : min_;
   auto max = isAllNull() ? std::nullopt : max_;
   auto sum = isAllNull() ? std::nullopt : sum_;
-  auto result = std::make_unique<IntegerColumnStatistics>(
+  auto result = std::make_unique<IntegerColumnStatistics<>>(
       static_cast<const ColumnStatistics&>(*this), min, max, sum);
   if (auto numDistinct = estimateNumDistinct()) {
     result->setNumDistinct(*numDistinct);

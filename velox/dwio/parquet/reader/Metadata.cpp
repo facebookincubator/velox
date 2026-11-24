@@ -266,6 +266,58 @@ std::optional<Timestamp> integerToTimestamp(
   return Timestamp::fromMicros(value.value());
 }
 
+// Decodes a big-endian two's complement value, the FIXED_LEN_BYTE_ARRAY
+// decimal layout. Returns std::nullopt if 'bytes' is empty or wider than T.
+template <typename T>
+inline std::optional<T> decodeBigEndian(const std::string& bytes) {
+  if (bytes.empty() || bytes.size() > sizeof(T)) {
+    return std::nullopt;
+  }
+  // Starting from all ones for a negative value sign-extends it.
+  uint128_t value = static_cast<int8_t>(bytes[0]) < 0 ? ~uint128_t{0} : 0;
+  for (const auto byte : bytes) {
+    value = (value << 8) | static_cast<uint8_t>(byte);
+  }
+  return static_cast<T>(value);
+}
+
+// Retrieves the minimum or maximum decimal value from column chunk statistics
+// based on the specified physical type. Supports three physical types to meet
+// the requirements of Arrow: INT32, INT64, and FIXED_LEN_BYTE_ARRAY.
+// https://github.com/apache/arrow/blob/apache-arrow-18.0.0/cpp/src/parquet/arrow/schema.cc#L363-L368
+// When min is true, it retrieves the minimum value; otherwise, it retrieves the
+// maximum value.
+template <typename T, bool min>
+inline std::optional<T> getDecimalMinMax(
+    const thrift::Statistics& columnChunkStats,
+    thrift::Type physicalType) {
+  const std::string* value;
+  if constexpr (min) {
+    value = columnChunkStats.min_value()
+        ? &columnChunkStats.min_value().value()
+        : (columnChunkStats.min() ? &columnChunkStats.min().value() : nullptr);
+  } else {
+    value = columnChunkStats.max_value()
+        ? &columnChunkStats.max_value().value()
+        : (columnChunkStats.max() ? &columnChunkStats.max().value() : nullptr);
+  }
+  if (value == nullptr) {
+    return std::nullopt;
+  }
+
+  switch (physicalType) {
+    case thrift::Type::INT32:
+      return std::optional<T>(load<int32_t>(value->data()));
+    case thrift::Type::INT64:
+      return std::optional<T>(load<int64_t>(value->data()));
+    case thrift::Type::FIXED_LEN_BYTE_ARRAY:
+      // The byte width may exceed the minimum for the precision.
+      return decodeBigEndian<T>(*value);
+    default:
+      VELOX_UNREACHABLE();
+  }
+}
+
 std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
     const thrift::Statistics& columnChunkStats,
     const velox::Type& type,
@@ -287,7 +339,7 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
       return std::make_unique<dwio::common::BooleanColumnStatistics>(
           valueCount, hasNull, std::nullopt, std::nullopt, std::nullopt);
     case TypeKind::TINYINT:
-      return std::make_unique<dwio::common::IntegerColumnStatistics>(
+      return std::make_unique<dwio::common::IntegerColumnStatistics<>>(
           valueCount,
           hasNull,
           std::nullopt,
@@ -296,7 +348,7 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
           getMax<int8_t>(columnChunkStats),
           std::nullopt);
     case TypeKind::SMALLINT:
-      return std::make_unique<dwio::common::IntegerColumnStatistics>(
+      return std::make_unique<dwio::common::IntegerColumnStatistics<>>(
           valueCount,
           hasNull,
           std::nullopt,
@@ -305,7 +357,7 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
           getMax<int16_t>(columnChunkStats),
           std::nullopt);
     case TypeKind::INTEGER:
-      return std::make_unique<dwio::common::IntegerColumnStatistics>(
+      return std::make_unique<dwio::common::IntegerColumnStatistics<>>(
           valueCount,
           hasNull,
           std::nullopt,
@@ -313,14 +365,30 @@ std::unique_ptr<dwio::common::ColumnStatistics> buildColumnStatisticsFromThrift(
           getMin<int32_t>(columnChunkStats),
           getMax<int32_t>(columnChunkStats),
           std::nullopt);
-    case TypeKind::BIGINT:
-      return std::make_unique<dwio::common::IntegerColumnStatistics>(
+    case TypeKind::BIGINT: {
+      std::optional<int64_t> min = type.isDecimal()
+          ? getDecimalMinMax<int64_t, true>(columnChunkStats, physicalType)
+          : getMin<int64_t>(columnChunkStats);
+      std::optional<int64_t> max = type.isDecimal()
+          ? getDecimalMinMax<int64_t, false>(columnChunkStats, physicalType)
+          : getMax<int64_t>(columnChunkStats);
+      return std::make_unique<dwio::common::IntegerColumnStatistics<>>(
           valueCount,
           hasNull,
           std::nullopt,
           std::nullopt,
-          getMin<int64_t>(columnChunkStats),
-          getMax<int64_t>(columnChunkStats),
+          min,
+          max,
+          std::nullopt);
+    }
+    case TypeKind::HUGEINT:
+      return std::make_unique<dwio::common::IntegerColumnStatistics<int128_t>>(
+          valueCount,
+          hasNull,
+          std::nullopt,
+          std::nullopt,
+          getDecimalMinMax<int128_t, true>(columnChunkStats, physicalType),
+          getDecimalMinMax<int128_t, false>(columnChunkStats, physicalType),
           std::nullopt);
     case TypeKind::REAL:
       return std::make_unique<dwio::common::DoubleColumnStatistics>(
