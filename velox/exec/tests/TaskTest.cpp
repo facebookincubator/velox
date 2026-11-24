@@ -2772,7 +2772,7 @@ DEBUG_ONLY_TEST_F(TaskTest, driverCounters) {
 
   // Mutex used to pause drivers' execution, so they appear 'on thread'.
   std::shared_mutex pauseDriverRunInternal;
-  pauseDriverRunInternal.lock();
+  std::unique_lock pauseLock(pauseDriverRunInternal);
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Driver::runInternal",
       std::function<void(Driver*)>([&](Driver* /*unused*/) {
@@ -2818,7 +2818,7 @@ DEBUG_ONLY_TEST_F(TaskTest, driverCounters) {
 
   // Allow drivers to proceed, all will be blocked as there are no splits
   // supplied yet.
-  pauseDriverRunInternal.unlock();
+  pauseLock.unlock();
   waitForConditionFunc([&]() {
     if (driverCounts.numBlockedDrivers.size() > 0) {
       auto it = driverCounts.numBlockedDrivers.begin();
