@@ -329,9 +329,13 @@ jobs:
           FILES: ${{ needs.get-changes.outputs.changed-files }}
           RANGE: ${{ needs.get-changes.outputs.diff-range }}
           MERGE_BASE_COMMIT: ${{ needs.get-changes.outputs.merge-base-commit }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config --global --add safe.directory /__w/velox/velox
-          git fetch origin $MERGE_BASE_COMMIT
+          # Checkout does not persist credentials, and a private repository
+          # refuses an anonymous fetch, so pass the token to this fetch only.
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c http.extraheader="AUTHORIZATION: basic $auth" fetch origin "$MERGE_BASE_COMMIT"
           # The usage of GCC14 adds compiler warnings not understood by Clang/Clang-tidy.
           # We replace them for now but eventually move Clang-tidy to the Clang based build.
           BUILD_PATH=$(realpath ./_build/release)

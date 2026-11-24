@@ -94,8 +94,12 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           COMPILER_FILE: ${{ steps.build.outputs.compiler_file }}
           COMPILER_ID: ${{ steps.build.outputs.compiler_id }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git fetch origin "$BASE_SHA"
+          # Checkout does not persist credentials, and a private repository
+          # refuses an anonymous fetch, so pass the token to this fetch only.
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c http.extraheader="AUTHORIZATION: basic $auth" fetch origin "$BASE_SHA"
           RANGE="${BASE_SHA}..HEAD"
           FILES=$(git diff --name-only "$RANGE" -- velox/experimental/breeze/ | grep -E '\.(cpp|h|hpp)$' || true)
           if [[ -n "$FILES" && "$COMPILER_ID" == "GNU" ]]; then

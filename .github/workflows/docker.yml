@@ -43,7 +43,11 @@ jobs:
   multi-arch-base:
     name: Build ${{ matrix.target }} Image on ${{ matrix.os.platform }}
     runs-on: ${{ matrix.os.runner }}
+    # A job-level block replaces the workflow-level one, so contents: read is
+    # repeated here. bake-action clones the repository to read
+    # docker-bake.hcl, which a private repository refuses without it.
     permissions:
+      contents: read
       packages: write
     strategy:
       fail-fast: false
@@ -208,7 +212,9 @@ jobs:
     needs: [multi-arch-base, merge]
     name: Build and Push ${{ matrix.target }}
     runs-on: ubuntu-latest
+    # See multi-arch-base for why contents: read is needed.
     permissions:
+      contents: read
       packages: write
     strategy:
       fail-fast: false

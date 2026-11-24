@@ -26,6 +26,11 @@ on:
 
 permissions:
   contents: read
+  # dorny/paths-filter lists the changed files of a pull request, and the
+  # ccache stash restore looks up artifacts. A public repository allows both
+  # without these grants; a private one does not.
+  pull-requests: read
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.sha }}

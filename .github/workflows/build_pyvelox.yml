@@ -36,6 +36,9 @@ on:
 
 permissions:
   contents: read
+  # The ccache stash restore looks up artifacts, which a private repository
+  # allows only with this grant.
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.repository }}-${{ github.head_ref || github.sha }}
