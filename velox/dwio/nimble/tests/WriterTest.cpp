@@ -1257,6 +1257,8 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
     EXPECT_FALSE(encodingOptions.fixedBitWidthUseExactBits);
     EXPECT_FALSE(encodingOptions.sortDictionaryAlphabet);
     EXPECT_DOUBLE_EQ(encodingOptions.reversedMinDescendingRatio, 1.0);
+    EXPECT_FALSE(encodingOptions.fixedBitWidthTypedLanes);
+    EXPECT_EQ(encodingOptions.fixedBitWidthTypedLanesMinValues, 256);
 
     // The delta pre-transform ships disabled. Assert the flag's own default
     // too, so lowering the bar to enabling it fails here rather than silently
@@ -1289,6 +1291,17 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
     options.reversedMinDescendingRatio = 2.5;
     EXPECT_DOUBLE_EQ(
         options.buildEncodingOptions().reversedMinDescendingRatio, 2.5);
+  }
+
+  {
+    nimble::WriterOptions options;
+    options.fixedBitWidthTypedLanes = true;
+    options.fixedBitWidthTypedLanesMinValues = 4'096;
+
+    const auto encodingOptions = options.buildEncodingOptions();
+
+    EXPECT_TRUE(encodingOptions.fixedBitWidthTypedLanes);
+    EXPECT_EQ(encodingOptions.fixedBitWidthTypedLanesMinValues, 4'096);
   }
 }
 
@@ -8764,9 +8777,9 @@ TEST_P(WriterIndexTest, keyStreamLayout) {
   }
 }
 
-// A hierarchical cluster index reads the same keys and finds the same rows
+// A trie cluster index reads the same keys and finds the same rows
 // whether it stores its key chunks in stripes or after them.
-TEST_F(WriterTest, hierarchicalClusterIndexStripeKeyStreams) {
+TEST_F(WriterTest, trieClusterIndexStripeKeyStreams) {
   constexpr int kNumBatches = 4;
   constexpr int kBatchSize = 100;
   const auto type = velox::ROW(
@@ -8795,7 +8808,7 @@ TEST_F(WriterTest, hierarchicalClusterIndexStripeKeyStreams) {
     options.metadataFlushThreshold = 1;
     options.clusterIndexConfig =
         nimble::index::ClusterIndexConfigBuilder{
-            nimble::index::kHierarchicalClusterIndexName}
+            nimble::index::kTrieClusterIndexName}
             .withKeyColumns({"key_col"})
             .withEnforceKeyOrder(true)
             .withMaxRowsPerKeyChunk(64)
@@ -8814,7 +8827,7 @@ TEST_F(WriterTest, hierarchicalClusterIndexStripeKeyStreams) {
   };
   const auto openTablet = [&](const std::string& file) {
     auto options = makeTestTabletOptions(leafPool_.get());
-    options.clusterIndexName = nimble::index::kHierarchicalClusterIndexName;
+    options.clusterIndexName = nimble::index::kTrieClusterIndexName;
     return nimble::TabletReader::create(
         std::make_shared<velox::InMemoryReadFile>(file),
         leafPool_.get(),
@@ -8835,7 +8848,7 @@ TEST_F(WriterTest, hierarchicalClusterIndexStripeKeyStreams) {
     SCOPED_TRACE(fmt::format("row {}", row));
     const auto key = expectedIndex->keyAtRow(row);
     EXPECT_EQ(index->keyAtRow(row), key);
-    // Hierarchical keys must be complete, so a key's successor cannot bound a
+    // Trie keys must be complete, so a key's successor cannot bound a
     // range scan; a point lookup finds the rows of the key.
     const auto request =
         nimble::index::IndexLookup::LookupRequest::pointLookup({key});

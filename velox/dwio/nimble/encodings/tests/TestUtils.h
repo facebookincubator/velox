@@ -242,6 +242,12 @@ class Encoder {
         return information;
       }
 
+      if (compressionType_ == CompressionType::OpenZL) {
+        // OpenZL reads the payload's data type, so FixedBitWidth chunks can
+        // take typed lanes (Encoding::Options::fixedBitWidthTypedLanes).
+        return {.compressionType = CompressionType::OpenZL};
+      }
+
 #ifdef DISABLE_META_INTERNAL_COMPRESSOR
       // The Meta internal compressor has no OSS implementation and is not put
       // in the registry by Compression.cpp, so returning it here would throw

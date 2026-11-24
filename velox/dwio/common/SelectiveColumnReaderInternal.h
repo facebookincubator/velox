@@ -144,9 +144,9 @@ void SelectiveColumnReader::getFlatValues(
       }
       *result = flatMapValueConstantNullValues_;
     } else if (
-        !*result || !(*result)->isConstantEncoding() ||
-        *(*result)->type() != *type || (*result)->size() != rows.size() ||
-        !(*result)->isNullAt(0)) {
+        !*result || (scanSpec_->deltaUpdate() && result->use_count() != 1) ||
+        !(*result)->isConstantEncoding() || *(*result)->type() != *type ||
+        (*result)->size() != rows.size() || !(*result)->isNullAt(0)) {
       *result = std::make_shared<ConstantVector<TVector>>(
           pool_, rows.size(), true, type, TVector());
     }

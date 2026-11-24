@@ -1411,13 +1411,14 @@ TEST_F(StreamSlicerTest, hybridFlatMapRequiresWholeBatch) {
       "StreamSlicer cannot row-slice key-major Hybrid FlatMap streams.");
 }
 
-TEST_F(StreamSlicerTest, rejectsLegacyFormats) {
+TEST_F(StreamSlicerTest, rejectsUnsupportedFormats) {
   auto type = ROW({{"id", INTEGER()}});
   auto input = makeRowVector({"id"}, {makeFlatVector<int32_t>({1})});
   auto [_, schema] = serialize(input, type);
   for (const auto version :
        {SerializationVersion::kLegacyCompact,
-        SerializationVersion::kLegacySerialization}) {
+        SerializationVersion::kLegacySerialization,
+        SerializationVersion::kBlob}) {
     SCOPED_TRACE(toString(version));
     StreamSlicer slicer{
         schema,

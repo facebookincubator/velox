@@ -17,9 +17,12 @@
 #include "velox/common/base/SimdUtil.h"
 #include <folly/Random.h>
 #include "velox/common/memory/RawVector.h"
+#include "velox/common/testutil/PageBeforeGuard.h"
 #include "velox/common/time/Timer.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <numeric>
 
 using namespace facebook::velox;
 
@@ -79,6 +82,65 @@ class SimdUtilTest : public testing::Test {
       run(begin + offset, end);
       run(begin, end - offset);
       run(begin + offset, end - offset);
+    }
+  }
+
+  // Gathers the bits of 'bits' at 'indices' with gatherBits, and with
+  // gather8Bits from memory a batch at a time, and checks each result bit. The
+  // bits and each set of indices end right before an unmapped page.
+  void testGatherBits(
+      const std::vector<uint64_t>& bits,
+      const std::vector<int32_t>& indices) {
+    common::testutil::PageBeforeGuard bitsPage;
+    common::testutil::PageBeforeGuard indicesPage;
+    const auto pagedBits = bitsPage.copyToEnd(bits);
+    const auto pagedIndices = indicesPage.copyToEnd(indices);
+    std::vector<uint64_t> result(bits::nwords(indices.size()));
+    simd::gatherBits(
+        pagedBits.data(),
+        folly::Range<const int32_t*>(pagedIndices.data(), pagedIndices.size()),
+        result.data());
+    for (auto i = 0; i < indices.size(); ++i) {
+      EXPECT_EQ(
+          bits::isBitSet(result.data(), i),
+          bits::isBitSet(bits.data(), indices[i]))
+          << i;
+    }
+
+    constexpr size_t kMaxIndices =
+        std::min<size_t>(xsimd::batch<int32_t>::size, 8);
+    for (size_t begin = 0; begin < indices.size(); begin += kMaxIndices) {
+      const std::vector<int32_t> batch(
+          indices.begin() + begin,
+          indices.begin() + std::min(begin + kMaxIndices, indices.size()));
+      const auto pagedBatch = indicesPage.copyToEnd(batch);
+      const uint8_t batchBits =
+          simd::gather8Bits(pagedBits.data(), pagedBatch.data(), batch.size());
+      for (auto i = 0; i < batch.size(); ++i) {
+        EXPECT_EQ(
+            bits::isBitSet(&batchBits, i),
+            bits::isBitSet(bits.data(), batch[i]))
+            << begin + i;
+      }
+    }
+  }
+
+  // Transposes 'input' by 'indices' and checks each output value. The indices
+  // and the output end right before an unmapped page.
+  template <typename T>
+  void testTranspose(
+      const std::vector<T>& input,
+      const std::vector<int32_t>& indices) {
+    common::testutil::PageBeforeGuard indicesPage;
+    common::testutil::PageBeforeGuard outputPage;
+    const auto pagedIndices = indicesPage.copyToEnd(indices);
+    const auto output = outputPage.atEnd<T>(indices.size());
+    simd::transpose(
+        input.data(),
+        folly::Range<const int32_t*>(pagedIndices.data(), pagedIndices.size()),
+        output.data());
+    for (auto i = 0; i < indices.size(); ++i) {
+      EXPECT_EQ(output[i], input[indices[i]]) << i;
     }
   }
 
@@ -213,8 +275,9 @@ TEST_F(SimdUtilTest, gather16) {
   EXPECT_EQ(0, resultPtr[2 * kBatchSize - 1]);
 }
 
-TEST_F(SimdUtilTest, gatherBits) {
-  // Even bits set, odd not set.
+TEST_F(SimdUtilTest, gather8BitsMasksLanes) {
+  // Even bits set, odd not set. The last lane's index is out of range, and
+  // 'numIndices' leaves it out.
   uint64_t data[2] = {0x5555555555555555, 0x5555555555555555};
   int32_t indices[] = {11, 22, 33, 44, 55, 66, 77, 1 << 30};
   constexpr int N = xsimd::batch<int32_t>::size;
@@ -224,20 +287,48 @@ TEST_F(SimdUtilTest, gatherBits) {
     EXPECT_EQ(bits::isBitSet(&bits, i), bits::isBitSet(data, vindex.get(i)));
   }
   EXPECT_FALSE(bits::isBitSet(&bits, N - 1));
+}
 
-  uint64_t source = 0x123456789abcdefLU;
-  raw_vector<int32_t> bitIndices;
-  uint64_t result = 0;
+TEST_F(SimdUtilTest, gatherBits) {
+  // Even bits set, odd not set.
+  testGatherBits({0x5555555555555555, 0x5555555555555555}, {11, 22, 33, 44});
+
+  // Descending indices into one word.
+  std::vector<int32_t> descending;
   for (auto i = 61; i >= 0; i -= 2) {
-    bitIndices.push_back(i);
+    descending.push_back(i);
   }
-  simd::gatherBits(
-      &source,
-      folly::Range<int32_t*>(bitIndices.data(), bitIndices.size()),
-      &result);
-  for (auto i = 0; i < bitIndices.size(); ++i) {
-    EXPECT_EQ(
-        bits::isBitSet(&source, bitIndices[i]), bits::isBitSet(&result, i));
+  testGatherBits({0x123456789abcdefLU}, descending);
+
+  // The bits at the ends and starts of 32-bit words, up to the bitmap's last
+  // byte.
+  testGatherBits(
+      {0x80000001'80000000ULL, 0x80000000'00000001ULL},
+      {31, 63, 95, 127, 32, 64});
+
+  // The last bits of a 512-byte bitmap, as Gluten's nulls end: full batches, a
+  // partial batch, and few enough indices for the scalar path.
+  std::vector<uint64_t> bitmap(64);
+  randomBits(bitmap, 500);
+  constexpr int32_t kNumBits = 64 * 64;
+  for (const int32_t numIndices : {32, 13, 4}) {
+    SCOPED_TRACE(numIndices);
+    std::vector<int32_t> indices(numIndices);
+    std::iota(indices.begin(), indices.end(), kNumBits - numIndices);
+    testGatherBits(bitmap, indices);
+  }
+
+  // Index counts around the batch width.
+  std::vector<uint64_t> words(4);
+  randomBits(words, 50);
+  constexpr int32_t kBatch = xsimd::batch<int32_t>::size;
+  for (const int32_t numIndices : {1, kBatch - 1, kBatch, kBatch + 1}) {
+    SCOPED_TRACE(numIndices);
+    std::vector<int32_t> indices(numIndices);
+    for (auto i = 0; i < numIndices; ++i) {
+      indices[i] = i * 37 % 256;
+    }
+    testGatherBits(words, indices);
   }
 }
 
@@ -245,7 +336,7 @@ TEST_F(SimdUtilTest, transpose) {
   constexpr int32_t kMaxSize = 100;
   std::vector<int32_t> data32(kMaxSize);
   std::vector<int64_t> data64(kMaxSize);
-  raw_vector<int32_t> indices(kMaxSize);
+  std::vector<int32_t> indices(kMaxSize);
   constexpr int64_t kMagic = 0x4fe12LU;
   // indices are scattered over 0..kMaxSize - 1.
   for (auto i = 0; i < kMaxSize; ++i) {
@@ -254,27 +345,10 @@ TEST_F(SimdUtilTest, transpose) {
     data64[i] = static_cast<int64_t>(i) << 32;
   }
   for (auto size = 1; size < kMaxSize; ++size) {
-    std::vector<int32_t> result32(kMaxSize + 1, -1);
-    simd::transpose(
-        data32.data(),
-        folly::Range<const int32_t*>(indices.data(), size),
-        result32.data());
-    for (auto i = 0; i < size; ++i) {
-      EXPECT_EQ(data32[indices[i]], result32[i]);
-    }
-    // See that there is no write past 'size'.
-    EXPECT_EQ(-1, result32[size]);
-
-    std::vector<int64_t> result64(kMaxSize + 1, -1);
-    simd::transpose(
-        data64.data(),
-        folly::Range<const int32_t*>(indices.data(), size),
-        result64.data());
-    for (auto i = 0; i < size; ++i) {
-      EXPECT_EQ(data64[indices[i]], result64[i]);
-    }
-    // See that there is no write past 'size'.
-    EXPECT_EQ(-1, result64[size]);
+    SCOPED_TRACE(size);
+    const std::vector<int32_t> prefix(indices.begin(), indices.begin() + size);
+    testTranspose(data32, prefix);
+    testTranspose(data64, prefix);
   }
 }
 

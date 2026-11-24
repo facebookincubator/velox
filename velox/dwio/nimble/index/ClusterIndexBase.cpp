@@ -17,6 +17,7 @@
 #include "velox/dwio/nimble/index/ClusterIndexBase.h"
 
 #include <algorithm>
+#include <cstring>
 #include <numeric>
 #include <shared_mutex>
 
@@ -146,22 +147,52 @@ std::vector<SortOrder> getSortOrders(
   return result;
 }
 
-// Returns the file region of the key stream of each stripe of a Stripe layout
-// partition, from the metadata of its stripes with the location of the key
-// stream in each. Checks that each stripe has a key stream, which every key
-// chunk read then trusts.
-std::vector<velox::common::Region> getKeyStreamRegions(
-    std::span<const StripeMetadata> stripes) {
+// Returns the index streams of each stripe: 'keyStreamId', then the auxiliary
+// index streams 'auxIndexStreamIds' that the subclass reads in the Stripe
+// layout. Checks that auxiliary index streams exist only in that layout, and
+// that none of them is the key stream.
+std::vector<uint32_t> indexStreamIds(
+    KeyStreamLayout keyStreamLayout,
+    uint32_t keyStreamId,
+    std::vector<uint32_t> auxIndexStreamIds) {
+  if (keyStreamLayout != KeyStreamLayout::kStripe) {
+    NIMBLE_CHECK(
+        auxIndexStreamIds.empty(),
+        "Only a Stripe layout cluster index has auxiliary index streams");
+  }
+  for (const auto streamId : auxIndexStreamIds) {
+    NIMBLE_CHECK_FILE_NE(
+        streamId,
+        keyStreamId,
+        "An auxiliary index stream of the cluster index must not be its key stream");
+  }
+  auxIndexStreamIds.insert(auxIndexStreamIds.begin(), keyStreamId);
+  return auxIndexStreamIds;
+}
+
+// Returns the file region of each index stream of each stripe of a Stripe
+// layout partition, stripe-major, from the metadata of its stripes with the
+// locations of those 'numStreams' streams in each: the key stream, then the
+// auxiliary index streams. Checks that each stripe has all of them, which
+// every read of them then trusts.
+std::vector<velox::common::Region> indexStreamRegions(
+    std::span<const StripeMetadata> stripes,
+    uint32_t numStreams) {
   std::vector<velox::common::Region> regions;
-  regions.reserve(stripes.size());
+  regions.reserve(stripes.size() * numStreams);
   for (const auto& stripe : stripes) {
     NIMBLE_CHECK_EQ(
         stripe.streams.size(),
-        1,
-        "Key stream locator must locate one stream per stripe");
-    const auto& keyStream = stripe.streams[0];
-    NIMBLE_CHECK_FILE_GT(keyStream.size, 0, "Stripe has no key stream");
-    regions.emplace_back(stripe.offset + keyStream.offset, keyStream.size);
+        numStreams,
+        "Key stream locator must locate each requested stream per stripe");
+    NIMBLE_CHECK_FILE_GT(stripe.streams[0].size, 0, "Stripe has no key stream");
+    for (const auto& stream : std::span{stripe.streams}.subspan(1)) {
+      NIMBLE_CHECK_FILE_GT(
+          stream.size, 0, "Stripe has no stream of the cluster index");
+    }
+    for (const auto& stream : stripe.streams) {
+      regions.emplace_back(stripe.offset + stream.offset, stream.size);
+    }
   }
   return regions;
 }
@@ -202,25 +233,23 @@ std::vector<uint32_t> getStripes(std::span<const StripeMetadata> stripes) {
   return result;
 }
 
-// Returns the caller's bytes of the key chunk of 'stripe', the whole key stream
-// of the stripe of 'chunkSize' bytes, from the entry of 'keyChunks' for the
-// stripe.
-std::string_view keyChunkData(
-    uint32_t stripe,
-    uint32_t chunkSize,
-    std::span<const ClusterIndexBase::KeyChunk> keyChunks) {
-  for (const auto& keyChunk : keyChunks) {
-    if (keyChunk.stripe != stripe) {
-      continue;
-    }
-    NIMBLE_CHECK_EQ(
-        keyChunk.data.size(),
-        chunkSize,
-        "The given key chunk of stripe {} is not the key stream of the stripe",
-        stripe);
-    return keyChunk.data;
+// Checks the key chunk given to a key cursor of an index with 'layout': only a
+// Stripe layout index reads keys from it, and it must have the data handle
+// that the cursor holds.
+void checkCursorKeyChunk(
+    KeyStreamLayout layout,
+    const std::optional<ClusterIndexBase::KeyChunk>& keyChunk) {
+  if (!keyChunk.has_value()) {
+    return;
   }
-  NIMBLE_FAIL("No key chunk is given for stripe {}", stripe);
+  NIMBLE_CHECK_EQ(
+      layout,
+      KeyStreamLayout::kStripe,
+      "Only a Stripe layout index reads keys from given key chunks");
+  NIMBLE_CHECK_NOT_NULL(
+      keyChunk->dataHandle,
+      "A key chunk given to a key cursor must have a data handle: stripe {}",
+      keyChunk->stripe);
 }
 
 // Builds cumulative row offsets from partition_row_counts in the FlatBuffer.
@@ -256,6 +285,7 @@ ClusterIndexBase::ClusterIndexBase(
     std::shared_ptr<MetadataInput> metadataInput,
     std::shared_ptr<DataInput> dataInput,
     KeyStreamLocator keyStreamLocator,
+    std::vector<uint32_t> auxIndexStreamIds,
     KeyReaderFactory keyReaderFactory,
     const KeyComparator* keyComparator,
     bool pinIndex,
@@ -277,6 +307,10 @@ ClusterIndexBase::ClusterIndexBase(
       dataInput_{std::move(dataInput)},
       keyStreamLocator_{std::move(keyStreamLocator)},
       keyStreamId_{indexRoot_->key_stream_id()},
+      indexStreamIds_{indexStreamIds(
+          keyStreamLayout_,
+          keyStreamId_,
+          std::move(auxIndexStreamIds))},
       keyReaderFactory_{std::move(keyReaderFactory)},
       keyComparator_{keyComparator},
       pool_{pool},
@@ -410,9 +444,9 @@ uint32_t ClusterIndexBase::partitionRow(uint32_t partitionId, uint32_t row)
 }
 
 void ClusterIndexBase::resolvePartitionBounds(
-    std::optional<std::span<const KeyChunk>> keyChunks,
+    const std::optional<KeyChunk>& keyChunk,
     std::vector<PartitionLookup>& partitionLookups,
-    LowerBoundChunk* lowerBoundChunk) const {
+    SeekChunk* lowerBoundChunk) const {
   std::sort(
       partitionLookups.begin(),
       partitionLookups.end(),
@@ -428,7 +462,7 @@ void ClusterIndexBase::resolvePartitionBounds(
            partitionLookups.at(i).partitionId == loadedPartition.id()) {
       const auto& entry = partitionLookups.at(i);
       *velox::checkedNotNull(entry.targetRow) =
-          resolvePartitionRow(partition, entry, keyChunks, lowerBoundChunk);
+          resolvePartitionRow(partition, entry, keyChunk, lowerBoundChunk);
       ++i;
     }
   }
@@ -559,31 +593,20 @@ void ClusterIndexBase::lookupPartitions(
 IndexLookup::LookupResult ClusterIndexBase::lookup(
     const LookupRequest& request) const {
   return lookup(
-      request, /*keyChunks=*/std::nullopt, /*lowerBoundChunk=*/nullptr);
+      request, /*keyChunk=*/std::nullopt, /*lowerBoundChunk=*/nullptr);
 }
 
 IndexLookup::LookupResult ClusterIndexBase::lookup(
     const LookupRequest& request,
-    std::span<const KeyChunk> keyChunks) const {
-  NIMBLE_CHECK_EQ(
-      keyStreamLayout_,
-      KeyStreamLayout::kStripe,
-      "Only a Stripe layout index looks up keys in given key chunks");
-  NIMBLE_CHECK(!keyChunks.empty(), "A lookup in given key chunks needs some");
-  return lookup(request, keyChunks, /*lowerBoundChunk=*/nullptr);
-}
-
-IndexLookup::LookupResult ClusterIndexBase::lookup(
-    const LookupRequest& request,
-    std::optional<std::span<const KeyChunk>> keyChunks,
-    LowerBoundChunk* lowerBoundChunk) const {
+    const std::optional<KeyChunk>& keyChunk,
+    SeekChunk* lowerBoundChunk) const {
   validateLookupRequest(request);
   std::vector<PartitionLookup> partitionLookups;
   std::vector<RowRange> partitionRowRanges;
   lookupPartitions(request, partitionLookups, partitionRowRanges);
   NIMBLE_CHECK_EQ(partitionRowRanges.size(), request.size());
   NIMBLE_CHECK_LE(partitionLookups.size(), 2 * request.size());
-  resolvePartitionBounds(keyChunks, partitionLookups, lowerBoundChunk);
+  resolvePartitionBounds(keyChunk, partitionLookups, lowerBoundChunk);
 
   return buildLookupResult(request, partitionRowRanges);
 }
@@ -640,12 +663,12 @@ uint32_t ClusterIndexBase::keyStreamId() const {
 uint32_t ClusterIndexBase::resolvePartitionRow(
     const IndexPartitionBase* partition,
     const PartitionLookup& bound,
-    std::optional<std::span<const KeyChunk>> keyChunks,
-    LowerBoundChunk* lowerBoundChunk) const {
+    const std::optional<KeyChunk>& keyChunk,
+    SeekChunk* lowerBoundChunk) const {
   const auto& loadedPartition = *velox::checkedNotNull(partition);
   const auto chunkLocation = lookupChunk(partition, bound.encodedKey);
   const auto partitionRow =
-      seekInChunk(partition, chunkLocation, bound, keyChunks, lowerBoundChunk);
+      seekInChunk(partition, chunkLocation, bound, keyChunk, lowerBoundChunk);
   return partitionRows_.at(loadedPartition.id()) + partitionRow;
 }
 
@@ -782,16 +805,19 @@ class IndexPartition final : public ClusterIndexBase::IndexPartitionBase {
 class IndexGroup final : public ClusterIndexBase::IndexPartitionBase {
  public:
   // 'keyStreamMetadata' holds the metadata of each stripe of the group, with
-  // the location of its key stream.
+  // the locations of its 'numStreams' index streams: the key stream, then the
+  // auxiliary index streams.
   IndexGroup(
       uint32_t id,
       std::unique_ptr<MetadataBuffer> metadata,
       std::span<const StripeMetadata> keyStreamMetadata,
+      uint32_t numStreams,
       bool pinIndex)
       : IndexPartitionBase{id, std::move(metadata)},
         group_{flatbuffers::GetRoot<serialization::ClusterIndexGroup>(
             metadata_->content().data())},
-        keyStreamRegions_{getKeyStreamRegions(keyStreamMetadata)},
+        numStreams_{numStreams},
+        indexStreamRegions_{indexStreamRegions(keyStreamMetadata, numStreams)},
         stripes_{getStripes(keyStreamMetadata)},
         stripeRows_{getStripeRows(*group_, keyStreamMetadata)} {
     allocateDecodedChunks(pinIndex);
@@ -826,8 +852,7 @@ class IndexGroup final : public ClusterIndexBase::IndexPartitionBase {
   }
 
   velox::common::Region keyStreamRegion(uint32_t keyStreamIdx) const override {
-    NIMBLE_CHECK_LT(keyStreamIdx, keyStreamRegions_.size());
-    return keyStreamRegions_[keyStreamIdx];
+    return streamRegion(keyStreamIdx, /*streamIndex=*/0);
   }
 
   uint32_t chunkStripe(uint32_t chunkIdx) const override {
@@ -835,10 +860,24 @@ class IndexGroup final : public ClusterIndexBase::IndexPartitionBase {
     return stripes_[chunkIdx];
   }
 
+  // Returns the file region of located stream 'streamIndex' of the stripe that
+  // holds chunk 'chunkIdx': the key stream at 0, then the streams the subclass
+  // reads.
+  velox::common::Region streamRegion(uint32_t chunkIdx, uint32_t streamIndex)
+      const {
+    NIMBLE_CHECK_LT(chunkIdx, stripeRows_.size());
+    NIMBLE_CHECK_LT(streamIndex, numStreams_);
+    return indexStreamRegions_[chunkIdx * numStreams_ + streamIndex];
+  }
+
  private:
   const serialization::ClusterIndexGroup* const group_;
-  // File region of the key stream of each stripe, without its stream trailer.
-  const std::vector<velox::common::Region> keyStreamRegions_;
+  // Number of streams that the index locates in each stripe.
+  const uint32_t numStreams_;
+  // File region of each located stream of each stripe, without its stream
+  // trailer, stripe-major: the key stream, then the streams the subclass
+  // reads.
+  const std::vector<velox::common::Region> indexStreamRegions_;
   // Stripe of the file of each stripe of the group.
   const std::vector<uint32_t> stripes_;
   // Accumulated row counts per stripe (prefix sum, group-wide): the chunk rows
@@ -847,6 +886,18 @@ class IndexGroup final : public ClusterIndexBase::IndexPartitionBase {
 };
 
 } // namespace detail
+
+velox::common::Region ClusterIndexBase::indexStreamRegion(
+    uint32_t partitionId,
+    uint32_t chunkIdx,
+    uint32_t streamIndex) const {
+  NIMBLE_CHECK_LT(streamIndex + 1, indexStreamIds_.size());
+  const auto& partition = *velox::checkedNotNull(loadPartition(partitionId));
+  NIMBLE_CHECK_EQ(partition.layout(), KeyStreamLayout::kStripe);
+  const auto& group = static_cast<const detail::IndexGroup&>(partition);
+  // The key stream comes first.
+  return group.streamRegion(chunkIdx, streamIndex + 1);
+}
 
 void ClusterIndexBase::initializePartition(
     uint32_t partitionId,
@@ -860,10 +911,14 @@ void ClusterIndexBase::initializePartition(
   }
 
   // A partition holds the stripes of the stripe group of the same index.
-  const auto keyStreamMetadata = keyStreamLocator_(
-      partitionId, std::span<const uint32_t>{&keyStreamId_, 1});
+  const auto keyStreamMetadata =
+      keyStreamLocator_(partitionId, indexStreamIds_);
   auto group = std::make_unique<detail::IndexGroup>(
-      partitionId, std::move(metadata), keyStreamMetadata, pinIndex_);
+      partitionId,
+      std::move(metadata),
+      keyStreamMetadata,
+      static_cast<uint32_t>(indexStreamIds_.size()),
+      pinIndex_);
   NIMBLE_CHECK_FILE_EQ(
       group->chunkRows().back(),
       partitionRows_.at(partitionId + 1) - partitionRows_.at(partitionId),
@@ -951,10 +1006,32 @@ ClusterIndexBase::Layout ClusterIndexBase::layout(bool detail) const {
 // ClusterIndexBase::DecodedChunk
 // ---------------------------------------------------------------------------
 
+namespace {
+
+// Decodes a copy of the bytes of 'keyChunk' in a buffer from 'pool', so that a
+// cached chunk holds only the bytes of the chunk instead of the caller's whole
+// load, and never reads bytes that the caller frees.
+std::shared_ptr<DecodedKeyChunk> decodeKeyChunkCopy(
+    const IndexLookup::KeyChunk& keyChunk,
+    const KeyReaderFactory& readerFactory,
+    velox::memory::MemoryPool* pool) {
+  auto copy = velox::AlignedBuffer::allocate<char>(keyChunk.data.size(), pool);
+  std::memcpy(
+      copy->asMutable<char>(), keyChunk.data.data(), keyChunk.data.size());
+  const std::string_view chunk{copy->as<char>(), copy->size()};
+  return decodeKeyChunk(
+      chunk,
+      std::make_shared<velox::BufferPtr>(std::move(copy)),
+      readerFactory,
+      pool);
+}
+
+} // namespace
+
 ClusterIndexBase::DecodedChunk ClusterIndexBase::getDecodedChunk(
     const IndexPartitionBase* partition,
     const ChunkLocation& chunkLocation,
-    std::optional<std::span<const KeyChunk>> keyChunks) const {
+    const std::optional<KeyChunk>& keyChunk) const {
   const auto& loadedPartition = *velox::checkedNotNull(partition);
   const uint32_t slotIdx = pinIndex_ ? chunkLocation.chunkIndex : 0;
   // Fast path: shared lock for cache hit.
@@ -970,28 +1047,27 @@ ClusterIndexBase::DecodedChunk ClusterIndexBase::getDecodedChunk(
 
   // Decode outside the lock to avoid blocking concurrent readers.
   DecodedChunk decodedChunk;
-  const auto region = loadedPartition.chunkStreamRegion(chunkLocation);
   decodedChunk.chunkIndex = chunkLocation.chunkIndex;
-  auto [chunk, handle] = keyChunks.has_value()
-      ? std::make_pair(
-            keyChunkData(
-                loadedPartition.chunkStripe(chunkLocation.chunkIndex),
-                chunkLocation.chunkSize,
-                keyChunks.value()),
-            DataInput::Handle{})
-      : dataInput_->read(region);
-  decodedChunk.data =
-      decodeKeyChunk(chunk, std::move(handle), keyReaderFactory_, pool_);
+  // Only a Stripe layout index takes a key chunk, so the chunk has a stripe.
+  const bool fromKeyChunk = keyChunk.has_value() &&
+      keyChunk->stripe == loadedPartition.chunkStripe(chunkLocation.chunkIndex);
+  if (fromKeyChunk) {
+    NIMBLE_CHECK_EQ(
+        keyChunk->data.size(),
+        chunkLocation.chunkSize,
+        "The given key chunk of stripe {} is not the key stream of the stripe",
+        keyChunk->stripe);
+    decodedChunk.data = decodeKeyChunkCopy(*keyChunk, keyReaderFactory_, pool_);
+  } else {
+    auto [chunk, handle] =
+        dataInput_->read(loadedPartition.chunkStreamRegion(chunkLocation));
+    decodedChunk.data =
+        decodeKeyChunk(chunk, std::move(handle), keyReaderFactory_, pool_);
+  }
 
   velox::common::testutil::TestValue::adjust(
       "facebook::nimble::index::ClusterIndexBase::getDecodedChunk",
       decodedChunk.data.get());
-
-  // A chunk decoded from the caller's bytes can read its keys from them, so
-  // it must not outlive the call.
-  if (keyChunks.has_value()) {
-    return decodedChunk;
-  }
 
   // Install under exclusive lock. Another thread may have filled the slot
   // while we were decoding — that's fine, both produce the same result.
@@ -1010,8 +1086,8 @@ uint32_t ClusterIndexBase::seekInChunk(
     const IndexPartitionBase* partition,
     const ChunkLocation& chunkLocation,
     const PartitionLookup& bound,
-    std::optional<std::span<const KeyChunk>> keyChunks,
-    LowerBoundChunk* lowerBoundChunk) const {
+    const std::optional<KeyChunk>& keyChunk,
+    SeekChunk* lowerBoundChunk) const {
   // The upper bound of a key is usually in the chunk of its lower bound.
   const bool inLowerBoundChunk = lowerBoundChunk != nullptr &&
       lowerBoundChunk->data != nullptr &&
@@ -1019,7 +1095,7 @@ uint32_t ClusterIndexBase::seekInChunk(
       lowerBoundChunk->chunkIndex == chunkLocation.chunkIndex;
   const auto chunk = inLowerBoundChunk
       ? lowerBoundChunk->data
-      : getDecodedChunk(partition, chunkLocation, keyChunks).data;
+      : getDecodedChunk(partition, chunkLocation, keyChunk).data;
   if (bound.lowerBound && lowerBoundChunk != nullptr) {
     NIMBLE_CHECK_NULL(lowerBoundChunk->data, "A seek has one lower bound");
     *lowerBoundChunk = {
@@ -1086,7 +1162,7 @@ std::string ClusterIndexBase::keyAtRow(uint32_t row) const {
       loadedPartition.rowOffset(chunkIdx)};
 
   const auto decodedChunk =
-      getDecodedChunk(partition, chunkLocation, /*keyChunks=*/std::nullopt);
+      getDecodedChunk(partition, chunkLocation, /*keyChunk=*/std::nullopt);
   const uint32_t rowInChunk = partitionRow - chunkLocation.rowOffset;
   return decodedChunk.data->reader->get(rowInChunk);
 }
@@ -1098,8 +1174,7 @@ std::string ClusterIndexBase::keyAtRow(
       keyStreamLayout_,
       KeyStreamLayout::kStripe,
       "Only a Stripe layout index reads keys from a given key chunk");
-  const auto decodedChunk = decodeKeyChunk(
-      keyChunk.data, DataInput::Handle{}, keyReaderFactory_, pool_);
+  const auto decodedChunk = decodeKeyChunk(keyChunk, keyReaderFactory_, pool_);
   NIMBLE_CHECK_LT(
       rowInChunk,
       decodedChunk->reader->rowCount(),
@@ -1115,21 +1190,30 @@ std::optional<uint32_t> ClusterIndexBase::seekRow(
       keyStreamLayout_,
       KeyStreamLayout::kStripe,
       "Only a Stripe layout index seeks keys in a given key chunk");
-  const auto decodedChunk = decodeKeyChunk(
-      keyChunk.data, DataInput::Handle{}, keyReaderFactory_, pool_);
+  const auto decodedChunk = decodeKeyChunk(keyChunk, keyReaderFactory_, pool_);
   return decodedChunk->reader->seek(key, /*inclusive=*/true);
 }
 
 // ---------------------------------------------------------------------------
-// ClusterIndexBase::KeyIterator
+// ClusterIndexBase::IndexKeyCursor
 // ---------------------------------------------------------------------------
 
-class ClusterIndexBase::KeyIterator final : public KeyCursor {
+class ClusterIndexBase::IndexKeyCursor final : public KeyCursor {
  public:
-  KeyIterator(
+  // Reads the keys of 'rows' through the index, starting with 'decodedChunk'
+  // when it is not null, which must be the chunk of the first row.
+  IndexKeyCursor(
       const ClusterIndexBase& index,
       RowRange rows,
-      std::shared_ptr<DecodedKeyChunk> chunk);
+      std::shared_ptr<DecodedKeyChunk> decodedChunk = nullptr);
+
+  // Reads the keys of 'rows', decoding the keys of the stripe of 'keyChunk'
+  // from it, in place, when it is set, and reading the key chunk of any other
+  // stripe through the index.
+  IndexKeyCursor(
+      const ClusterIndexBase& index,
+      RowRange rows,
+      const std::optional<KeyChunk>& keyChunk);
 
   bool hasNext() const override {
     return nextRow_ < endRow_;
@@ -1154,15 +1238,21 @@ class ClusterIndexBase::KeyIterator final : public KeyCursor {
  private:
   // Loads the chunk holding 'row' and positions the key cursor at it. Runs
   // once per chunk, so the binary searches it performs are amortized over
-  // the chunk's rows. Opens 'chunk' when it is not null, which must be the
-  // chunk of 'row', and otherwise the chunk that the index caches.
-  void openChunkAt(uint32_t row, std::shared_ptr<DecodedKeyChunk> chunk);
+  // the chunk's rows. Opens 'decodedChunk' when it is not null, which must be
+  // the chunk of 'row', and otherwise the chunk from the index, which decodes
+  // it from keyChunk_ when that is the chunk's.
+  void openChunkAt(uint32_t row, std::shared_ptr<DecodedKeyChunk> decodedChunk);
 
   // Index being scanned.
   const ClusterIndexBase& index_;
 
-  // File-level row the iteration stops at, exclusive.
+  // File-level row the cursor stops at, exclusive.
   const uint32_t endRow_;
+
+  // The key chunk of a stripe, which the cursor decodes the stripe's keys
+  // from, with the data handle that keeps its bytes alive until the cursor is
+  // destroyed. Unset when the cursor reads every chunk through the index.
+  const std::optional<KeyChunk> keyChunk_;
 
   // File-level row that the next next() call reads.
   uint32_t nextRow_;
@@ -1183,17 +1273,36 @@ class ClusterIndexBase::KeyIterator final : public KeyCursor {
   std::unique_ptr<KeyCursor> cursor_;
 };
 
-std::unique_ptr<KeyCursor> ClusterIndexBase::keyCursor(RowRange rows) const {
-  return std::make_unique<KeyIterator>(*this, rows, /*chunk=*/nullptr);
+std::unique_ptr<KeyCursor> ClusterIndexBase::keyCursor(
+    RowRange rows,
+    const std::optional<KeyChunk>& keyChunk) const {
+  if (!keyChunk.has_value()) {
+    return std::make_unique<IndexKeyCursor>(*this, rows);
+  }
+  checkCursorKeyChunk(keyStreamLayout_, keyChunk);
+  const auto& partition =
+      *velox::checkedNotNull(lookupPartition(rows.startRow));
+  const auto chunkLocation =
+      lookupChunk(&partition, partitionRow(partition.id(), rows.startRow));
+  NIMBLE_CHECK_EQ(
+      partition.chunkStripe(chunkLocation.chunkIndex),
+      keyChunk->stripe,
+      "The rows of a key cursor must lie in the stripe of its key chunk");
+  NIMBLE_CHECK_LE(
+      rows.endRow,
+      partitionRows_.at(partition.id()) +
+          partition.chunkRows()[chunkLocation.chunkIndex],
+      "The rows of a key cursor must lie in the stripe of its key chunk");
+  return std::make_unique<IndexKeyCursor>(*this, rows, keyChunk);
 }
 
 ClusterIndexBase::SeekResult ClusterIndexBase::seek(
-    const velox::serializer::EncodedKeyBounds& bounds) const {
-  LowerBoundChunk lowerBoundChunk;
-  const auto result = lookup(
-      *LookupRequest::rangeScan({bounds}),
-      /*keyChunks=*/std::nullopt,
-      &lowerBoundChunk);
+    const velox::serializer::EncodedKeyBounds& bounds,
+    const std::optional<KeyChunk>& keyChunk) const {
+  checkCursorKeyChunk(keyStreamLayout_, keyChunk);
+  SeekChunk lowerBoundChunk;
+  const auto result =
+      lookup(*LookupRequest::rangeScan({bounds}), keyChunk, &lowerBoundChunk);
   NIMBLE_CHECK_EQ(result.size(), 1);
   const auto& ranges = result[0];
   NIMBLE_CHECK_LE(
@@ -1204,22 +1313,41 @@ ClusterIndexBase::SeekResult ClusterIndexBase::seek(
   const auto rows = ranges.front();
   // The lower bound resolves to a row in its chunk, and the lookup does not
   // narrow the range, so the chunk of the lower bound holds the first row. A
-  // range without a lower bound has no chunk.
+  // range without a lower bound has no such chunk, and decodes the keys of the
+  // stripe of 'keyChunk' from it.
+  if (lowerBoundChunk.data != nullptr) {
+    return {
+        .rows = rows,
+        .keyCursor = std::make_unique<IndexKeyCursor>(
+            *this, rows, std::move(lowerBoundChunk.data))};
+  }
   return {
       .rows = rows,
-      .keyCursor = std::make_unique<KeyIterator>(
-          *this, rows, std::move(lowerBoundChunk.data))};
+      .keyCursor = std::make_unique<IndexKeyCursor>(*this, rows, keyChunk)};
 }
 
-ClusterIndexBase::KeyIterator::KeyIterator(
+ClusterIndexBase::IndexKeyCursor::IndexKeyCursor(
     const ClusterIndexBase& index,
     RowRange rows,
-    std::shared_ptr<DecodedKeyChunk> chunk)
-    : index_{index}, endRow_{rows.endRow}, nextRow_{rows.startRow} {
+    std::shared_ptr<DecodedKeyChunk> decodedChunk)
+    : IndexKeyCursor{index, rows, /*keyChunk=*/std::nullopt} {
+  if (decodedChunk != nullptr && hasNext()) {
+    openChunkAt(nextRow_, std::move(decodedChunk));
+  }
+}
+
+ClusterIndexBase::IndexKeyCursor::IndexKeyCursor(
+    const ClusterIndexBase& index,
+    RowRange rows,
+    const std::optional<KeyChunk>& keyChunk)
+    : index_{index},
+      endRow_{rows.endRow},
+      keyChunk_{keyChunk},
+      nextRow_{rows.startRow} {
   NIMBLE_CHECK_LE(
       rows.startRow,
       rows.endRow,
-      "Cluster index iterator row range is inverted: {}",
+      "Cluster index key cursor row range is inverted: {}",
       rows.toString());
   NIMBLE_CHECK_LE(
       rows.endRow,
@@ -1227,18 +1355,15 @@ ClusterIndexBase::KeyIterator::KeyIterator(
       "Row range {} is beyond file total rows {}",
       rows.toString(),
       index_.numRows_);
-  if (chunk != nullptr && hasNext()) {
-    openChunkAt(nextRow_, std::move(chunk));
-  }
 }
 
-std::string_view ClusterIndexBase::KeyIterator::next() {
+std::string_view ClusterIndexBase::IndexKeyCursor::next() {
   NIMBLE_CHECK(
-      hasNext(), "Cluster index iterator is exhausted at row {}", nextRow_);
+      hasNext(), "Cluster index key cursor is exhausted at row {}", nextRow_);
   // The key cursor runs out exactly at the chunk boundary, so its own
   // exhaustion is what says to move on.
   if (cursor_ == nullptr || !cursor_->hasNext()) {
-    openChunkAt(nextRow_, /*chunk=*/nullptr);
+    openChunkAt(nextRow_, /*decodedChunk=*/nullptr);
   }
   // Advance only once the key is in hand: a throwing cursor must not leave
   // nextRow_ claiming a row that was never returned.
@@ -1247,7 +1372,7 @@ std::string_view ClusterIndexBase::KeyIterator::next() {
   return key;
 }
 
-void ClusterIndexBase::KeyIterator::next(
+void ClusterIndexBase::IndexKeyCursor::next(
     size_t maxKeys,
     std::vector<std::string_view>& keys,
     const BufferAllocator& bufferAllocator) {
@@ -1256,10 +1381,10 @@ void ClusterIndexBase::KeyIterator::next(
     // cursor_ is null on the first read and exhausted at the end of its chunk.
     // openChunkAt() sets it or throws, so it is not null past this point.
     if (cursor_ == nullptr || !cursor_->hasNext()) {
-      openChunkAt(nextRow_, /*chunk=*/nullptr);
+      openChunkAt(nextRow_, /*decodedChunk=*/nullptr);
     }
 
-    // The key cursor stops at the end of its chunk, and the iteration may stop
+    // The key cursor stops at the end of its chunk, and this cursor may stop
     // before it.
     const auto numKeys = keys.size();
     cursor_->next(
@@ -1273,7 +1398,7 @@ void ClusterIndexBase::KeyIterator::next(
   }
 }
 
-void ClusterIndexBase::KeyIterator::skip(size_t numKeys) {
+void ClusterIndexBase::IndexKeyCursor::skip(size_t numKeys) {
   if (numKeys == 0) {
     return;
   }
@@ -1291,18 +1416,16 @@ void ClusterIndexBase::KeyIterator::skip(size_t numKeys) {
   nextRow_ = row;
 }
 
-void ClusterIndexBase::KeyIterator::openChunkAt(
+void ClusterIndexBase::IndexKeyCursor::openChunkAt(
     uint32_t row,
-    std::shared_ptr<DecodedKeyChunk> chunk) {
+    std::shared_ptr<DecodedKeyChunk> decodedChunk) {
   const auto* partition = index_.lookupPartition(row);
   const auto& loadedPartition = *velox::checkedNotNull(partition);
   const uint32_t partitionRow = index_.partitionRow(loadedPartition.id(), row);
   const auto chunkLocation = index_.lookupChunk(partition, partitionRow);
-  if (chunk == nullptr) {
-    chunk = index_
-                .getDecodedChunk(
-                    partition, chunkLocation, /*keyChunks=*/std::nullopt)
-                .data;
+  if (decodedChunk == nullptr) {
+    decodedChunk =
+        index_.getDecodedChunk(partition, chunkLocation, keyChunk_).data;
   }
 
   // chunk_rows is a partition-relative prefix sum, so this chunk's entry is
@@ -1310,19 +1433,20 @@ void ClusterIndexBase::KeyIterator::openChunkAt(
   const uint32_t chunkEndRowInPartition =
       loadedPartition.chunkRows()[chunkLocation.chunkIndex];
   NIMBLE_CHECK_EQ(
-      chunk->reader->rowCount(),
+      decodedChunk->reader->rowCount(),
       chunkEndRowInPartition - chunkLocation.rowOffset,
       "Decoded key chunk holds a different row count than partition {} chunk {} metadata",
       loadedPartition.id(),
       chunkLocation.chunkIndex);
 
-  auto cursor = chunk->reader->cursor(partitionRow - chunkLocation.rowOffset);
+  auto cursor =
+      decodedChunk->reader->cursor(partitionRow - chunkLocation.rowOffset);
   const uint32_t partitionStartRow =
       index_.partitionRows_.at(loadedPartition.id());
 
-  // Commit after every step that can throw, so a failure leaves the iterator
-  // on its previous chunk rather than half-moved onto this one.
-  chunk_ = std::move(chunk);
+  // Commit after every step that can throw, so a failure leaves the cursor on
+  // its previous chunk rather than half-moved onto this one.
+  chunk_ = std::move(decodedChunk);
   cursor_ = std::move(cursor);
   chunkStartRow_ = partitionStartRow + chunkLocation.rowOffset;
   chunkEndRow_ = partitionStartRow + chunkEndRowInPartition;

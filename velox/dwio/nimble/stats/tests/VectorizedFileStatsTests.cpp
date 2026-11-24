@@ -14,11 +14,27 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <array>
+#include <memory>
+#include <set>
+#include <string>
+#include <string_view>
+#include <thread>
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/FixedBitArray.h"
 #include "velox/dwio/nimble/common/SchemaUtils.h"
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 #include "velox/dwio/nimble/stats/ColumnStatistics.h"
 #include "velox/dwio/nimble/stats/VectorizedStatistics.h"
 #include "velox/type/Type.h"
@@ -450,6 +466,50 @@ void expectStringStatisticsEqual(
   EXPECT_EQ(expected.getMax(), actual.getMax());
 }
 
+// Expects lazy and eager stats to match for every node.
+void expectLazyStatsMatchEager(
+    const velox::RowTypePtr& schema,
+    const std::shared_ptr<const Type>& nimbleType,
+    std::string_view serialized,
+    velox::memory::MemoryPool& pool) {
+  const auto eagerStats = VectorizedFileStats::deserialize(serialized, pool)
+                              ->toColumnStatistics(schema, nimbleType);
+  const auto lazyStats = VectorizedFileStats::deserialize(
+      serialized, /*payloadHolder=*/nullptr, schema, pool);
+  for (uint32_t nodeId = 0; nodeId < eagerStats.size(); ++nodeId) {
+    SCOPED_TRACE("nodeId " + std::to_string(nodeId));
+    const auto& expected = *eagerStats[nodeId];
+    EXPECT_EQ(lazyStats->logicalSize(nodeId), expected.getLogicalSize());
+    const auto* actual = lazyStats->columnStatistics(nodeId);
+    ASSERT_NE(actual, nullptr);
+    ASSERT_EQ(actual->getType(), expected.getType());
+    switch (expected.getType()) {
+      case StatType::INTEGRAL:
+        expectIntegralStatisticsEqual(
+            *expected.as<IntegralStatistics>(),
+            *actual->as<IntegralStatistics>());
+        break;
+      case StatType::FLOATING_POINT:
+        expectFloatingPointStatisticsEqual(
+            *expected.as<FloatingPointStatistics>(),
+            *actual->as<FloatingPointStatistics>());
+        break;
+      case StatType::STRING:
+        expectStringStatisticsEqual(
+            *expected.as<StringStatistics>(), *actual->as<StringStatistics>());
+        break;
+      case StatType::DEFAULT:
+        expectColumnStatisticsEqual(expected, *actual);
+        break;
+      case StatType::DEDUPLICATED:
+        ADD_FAILURE() << "Neither reader builds DEDUPLICATED statistics";
+        break;
+    }
+  }
+  EXPECT_EQ(lazyStats->columnStatistics(eagerStats.size()), nullptr);
+  EXPECT_EQ(lazyStats->logicalSize(eagerStats.size()), std::nullopt);
+}
+
 } // namespace
 
 // Test 4: Round-trip tests with schema-based conversion that check statistic
@@ -706,6 +766,193 @@ TEST_F(VectorizedFileStatsTests, stringStatsLengthLimitDropsLongMinMax) {
   expectStringStatisticsEqual(expectedOverLimitStat, *actualOverLimitStat);
 }
 
+namespace {
+
+// Splits the output of VectorizedFileStats::serialize() into stat streams.
+std::vector<std::string_view> splitStatStreams(std::string_view serialized) {
+  const char* pos = serialized.data();
+  // Skips the version.
+  pos += sizeof(uint16_t);
+  const auto numStreams = encoding::read<uint8_t>(pos);
+  const auto typeBitWidth = encoding::read<uint8_t>(pos);
+  // Skips the stream types and the flag for encoded lengths.
+  pos += FixedBitArray::bufferSize(numStreams, typeBitWidth) + sizeof(uint8_t);
+  std::vector<uint64_t> lengths;
+  lengths.reserve(numStreams);
+  for (uint8_t i = 0; i < numStreams; ++i) {
+    lengths.push_back(encoding::readUint64(pos));
+  }
+  std::vector<std::string_view> streams;
+  streams.reserve(numStreams);
+  for (const auto length : lengths) {
+    streams.emplace_back(pos, length);
+    pos += length;
+  }
+  return streams;
+}
+
+// Encoding and compression types found in stat streams.
+struct StatStreamEncodings {
+  std::set<EncodingType> encodingTypes;
+  std::set<CompressionType> compressionTypes;
+};
+
+// Adds the types used by 'layout' and its nested encodings to 'encodings'.
+void collectEncodings(
+    const EncodingLayout& layout,
+    StatStreamEncodings& encodings) {
+  encodings.encodingTypes.insert(layout.encodingType());
+  encodings.compressionTypes.insert(layout.compressionType());
+  for (uint8_t i = 0; i < layout.childrenCount(); ++i) {
+    const auto& child = layout.child(i);
+    if (child.has_value()) {
+      collectEncodings(*child, encodings);
+    }
+  }
+}
+
+// Adds the types used by Nullable 'stream' to 'encodings'. Captures each child
+// separately, since EncodingLayoutCapture keeps only the value child.
+void collectStatStreamEncodings(
+    std::string_view stream,
+    StatStreamEncodings& encodings) {
+  encodings.encodingTypes.insert(EncodingPrefix::encodingType(stream));
+  const char* pos =
+      stream.data() + EncodingPrefix::prefixSize(stream, /*useVarint=*/false);
+  const auto valuesSize = encoding::readUint32(pos);
+  const std::string_view values{pos, valuesSize};
+  const std::string_view nullFlags{
+      pos + valuesSize,
+      static_cast<size_t>(stream.data() + stream.size() - pos - valuesSize)};
+  for (const auto child : {values, nullFlags}) {
+    collectEncodings(
+        EncodingLayoutCapture::capture(child, Encoding::Options{}), encodings);
+  }
+}
+
+} // namespace
+
+// Writes wide stats using metadata defaults and reads them back. Column-data
+// defaults would compress these streams, encode the sizes, which span many
+// orders of magnitude, as Varint, and the mostly-zero null counts as RLE.
+TEST_F(VectorizedFileStatsTests, serializeUsesMetadataDefaults) {
+  // Cycles integral, floating point and string columns. Every 7th has no
+  // bounds.
+  constexpr int kNumColumns = 999;
+  std::vector<std::string> names;
+  std::vector<velox::TypePtr> types;
+  std::vector<std::unique_ptr<ColumnStatistics>> ownedStats;
+  ownedStats.push_back(
+      std::make_unique<ColumnStatistics>(
+          10'000, 0, uint64_t{1} << 45, uint64_t{1} << 44));
+  for (int i = 0; i < kNumColumns; ++i) {
+    names.push_back("c" + std::to_string(i));
+    const uint64_t valueCount = 10'000 + i;
+    const uint64_t nullCount = i % 50 == 0 ? i : 0;
+    const uint64_t logicalSize = (uint64_t{1} << (i % 40)) + i;
+    const uint64_t physicalSize = logicalSize / 2;
+    const bool hasBounds = i % 7 != 0;
+    switch (i % 3) {
+      case 0:
+        types.push_back(velox::BIGINT());
+        ownedStats.push_back(
+            std::make_unique<IntegralStatistics>(
+                valueCount,
+                nullCount,
+                logicalSize,
+                physicalSize,
+                hasBounds ? std::optional<int64_t>{-i} : std::nullopt,
+                hasBounds ? std::optional<int64_t>{i} : std::nullopt));
+        break;
+      case 1:
+        types.push_back(velox::DOUBLE());
+        ownedStats.push_back(
+            std::make_unique<FloatingPointStatistics>(
+                valueCount,
+                nullCount,
+                logicalSize,
+                physicalSize,
+                hasBounds ? std::optional<double>{-0.5 * i} : std::nullopt,
+                hasBounds ? std::optional<double>{0.5 * i} : std::nullopt));
+        break;
+      default:
+        types.push_back(velox::VARCHAR());
+        ownedStats.push_back(
+            std::make_unique<StringStatistics>(
+                valueCount,
+                nullCount,
+                logicalSize,
+                physicalSize,
+                hasBounds ? std::optional<
+                                std::string>{"min_value_" + std::to_string(i)}
+                          : std::nullopt,
+                hasBounds ? std::optional<
+                                std::string>{"max_value_" + std::to_string(i)}
+                          : std::nullopt));
+    }
+  }
+  const auto schema = velox::ROW(std::move(names), std::move(types));
+  std::vector<ColumnStatistics*> columnStats;
+  columnStats.reserve(ownedStats.size());
+  for (const auto& stat : ownedStats) {
+    columnStats.push_back(stat.get());
+  }
+
+  VectorizedFileStats fileStats(columnStats, leafPool_.get());
+  nimble::Buffer buffer(*leafPool_);
+  const auto serialized = fileStats.serialize(buffer);
+
+  // 4 default streams plus 2 each for integral, floating point and string.
+  const auto streams = splitStatStreams(serialized);
+  ASSERT_EQ(streams.size(), 10);
+  StatStreamEncodings encodings;
+  for (const auto stream : streams) {
+    collectStatStreamEncodings(stream, encodings);
+  }
+  EXPECT_THAT(
+      encodings.encodingTypes,
+      testing::IsSubsetOf(
+          std::set<EncodingType>{
+              EncodingType::Nullable,
+              EncodingType::Constant,
+              EncodingType::Trivial,
+              EncodingType::FixedBitWidth,
+              EncodingType::Dictionary,
+          }));
+  EXPECT_EQ(
+      encodings.compressionTypes,
+      std::set<CompressionType>{CompressionType::Uncompressed});
+
+  const auto roundTrippedStats =
+      VectorizedFileStats::deserialize(serialized, *leafPool_)
+          ->toColumnStatistics(schema, convertToNimbleType(*schema));
+  ASSERT_EQ(roundTrippedStats.size(), ownedStats.size());
+  expectColumnStatisticsEqual(*ownedStats[0], *roundTrippedStats[0]);
+  for (int i = 0; i < kNumColumns; ++i) {
+    SCOPED_TRACE("column " + std::to_string(i));
+    const auto& expected = *ownedStats[i + 1];
+    const auto& actual = *roundTrippedStats[i + 1];
+    switch (i % 3) {
+      case 0:
+        ASSERT_NE(actual.as<IntegralStatistics>(), nullptr);
+        expectIntegralStatisticsEqual(
+            *expected.as<IntegralStatistics>(),
+            *actual.as<IntegralStatistics>());
+        break;
+      case 1:
+        ASSERT_NE(actual.as<FloatingPointStatistics>(), nullptr);
+        expectFloatingPointStatisticsEqual(
+            *expected.as<FloatingPointStatistics>(),
+            *actual.as<FloatingPointStatistics>());
+        break;
+      default:
+        ASSERT_NE(actual.as<StringStatistics>(), nullptr);
+        expectStringStatisticsEqual(
+            *expected.as<StringStatistics>(), *actual.as<StringStatistics>());
+    }
+  }
+}
+
 TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripWithTimestamp) {
   // Test with timestamp type which uses default stats
   auto schema = velox::ROW(
@@ -876,4 +1123,437 @@ TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripAllFloatingPointTypes) {
   auto* actualDoubleStat = roundTrippedStats[2]->as<FloatingPointStatistics>();
   ASSERT_NE(actualDoubleStat, nullptr);
   expectFloatingPointStatisticsEqual(doubleStat, *actualDoubleStat);
+}
+
+TEST_F(VectorizedFileStatsTests, lazyStatsMatchEagerStats) {
+  {
+    auto schema = velox::ROW({
+        {"int_col", velox::BIGINT()},
+        {"double_col", velox::DOUBLE()},
+        {"string_col", velox::VARCHAR()},
+    });
+    ColumnStatistics rowStat(1'000, 0, 10'000, 5'000);
+    IntegralStatistics intStat(800, 50, 6'400, 3'200, -100, 200);
+    FloatingPointStatistics doubleStat(750, 100, 6'000, 3'000, -1.5, 99.5);
+    StringStatistics stringStat(600, 200, 12'000, 6'000, "aaa", "zzz");
+    VectorizedFileStats fileStats(
+        {&rowStat, &intStat, &doubleStat, &stringStat}, leafPool_.get());
+    nimble::Buffer buffer(*leafPool_);
+    expectLazyStatsMatchEager(
+        schema,
+        convertToNimbleType(*schema),
+        fileStats.serialize(buffer),
+        *leafPool_);
+  }
+  {
+    auto schema = velox::ROW({
+        {"tinyint_col", velox::TINYINT()},
+        {"smallint_col", velox::SMALLINT()},
+        {"real_col", velox::REAL()},
+        {"varbinary_col", velox::VARBINARY()},
+    });
+    ColumnStatistics rowStat(100, 0, 1'000, 500);
+    IntegralStatistics tinyintStat(100, 1, 100, 50, -8, 8);
+    IntegralStatistics smallintStat(100, 2, 200, 100, -300, 300);
+    FloatingPointStatistics realStat(100, 3, 400, 200, -2.5, 2.5);
+    StringStatistics varbinaryStat(100, 4, 800, 400, "abc", "xyz");
+    VectorizedFileStats fileStats(
+        {&rowStat, &tinyintStat, &smallintStat, &realStat, &varbinaryStat},
+        leafPool_.get());
+    nimble::Buffer buffer(*leafPool_);
+    expectLazyStatsMatchEager(
+        schema,
+        convertToNimbleType(*schema),
+        fileStats.serialize(buffer),
+        *leafPool_);
+  }
+  {
+    auto schema = velox::ROW({
+        {"id", velox::BIGINT()},
+        {"data",
+         velox::ROW({
+             {"values", velox::ARRAY(velox::DOUBLE())},
+             {"metadata", velox::MAP(velox::VARCHAR(), velox::INTEGER())},
+         })},
+        {"timestamp_col", velox::TIMESTAMP()},
+        {"bool_col", velox::BOOLEAN()},
+    });
+    ColumnStatistics outerRowStat(1'000, 0, 50'000, 25'000);
+    IntegralStatistics idStat(1'000, 0, 8'000, 4'000, 1, 1'000);
+    ColumnStatistics dataRowStat(1'000, 0, 42'000, 21'000);
+    ColumnStatistics valuesArrayStat(950, 50, 20'000, 10'000);
+    FloatingPointStatistics valuesElementStat(
+        5'000, 100, 40'000, 20'000, -100.0, 100.0);
+    ColumnStatistics metadataMapStat(900, 100, 22'000, 11'000);
+    StringStatistics metadataKeyStat(3'000, 0, 15'000, 7'500, "a", "z");
+    IntegralStatistics metadataValueStat(3'000, 200, 12'000, 6'000, -50, 50);
+    ColumnStatistics timestampStat(900, 50, 14'400, 7'200);
+    ColumnStatistics boolStat(900, 50, 900, 450);
+    VectorizedFileStats fileStats(
+        {
+            &outerRowStat,
+            &idStat,
+            &dataRowStat,
+            &valuesArrayStat,
+            &valuesElementStat,
+            &metadataMapStat,
+            &metadataKeyStat,
+            &metadataValueStat,
+            &timestampStat,
+            &boolStat,
+        },
+        leafPool_.get());
+    nimble::Buffer buffer(*leafPool_);
+    expectLazyStatsMatchEager(
+        schema,
+        convertToNimbleType(*schema),
+        fileStats.serialize(buffer),
+        *leafPool_);
+  }
+  {
+    auto schema = velox::ROW({
+        {"first_int", velox::BIGINT()},
+        {"first_string", velox::VARCHAR()},
+        {"second_int", velox::INTEGER()},
+        {"second_string", velox::VARCHAR()},
+    });
+    ColumnStatistics rowStat(10, 0, 100, 50);
+    IntegralStatistics firstIntStat(10, 1, 80, 40, std::nullopt, std::nullopt);
+    StringStatistics firstStringStat(10, 2, 60, 30, "abc", "wxyz12345");
+    IntegralStatistics secondIntStat(10, 0, 40, 20, 5, 9);
+    StringStatistics secondStringStat(10, 3, 20, 10, std::nullopt, "zz");
+    VectorizedFileStats fileStats(
+        {
+            &rowStat,
+            &firstIntStat,
+            &firstStringStat,
+            &secondIntStat,
+            &secondStringStat,
+        },
+        leafPool_.get(),
+        VectorizedFileStats::Options{.stringStatsLengthLimit = 4});
+    nimble::Buffer buffer(*leafPool_);
+    expectLazyStatsMatchEager(
+        schema,
+        convertToNimbleType(*schema),
+        fileStats.serialize(buffer),
+        *leafPool_);
+  }
+  {
+    auto schema = velox::ROW({
+        {"dedup_array", velox::ARRAY(velox::BIGINT())},
+        {"dedup_map", velox::MAP(velox::VARCHAR(), velox::INTEGER())},
+    });
+    std::vector<velox::common::Subfield> subfields;
+    subfields.emplace_back("dedup_array");
+    subfields.emplace_back("dedup_map");
+    ColumnEncodings encodings;
+    encodings.dictionaryArrayColumns.insert("dedup_array");
+    encodings.deduplicatedMapColumns.insert("dedup_map");
+    const auto nimbleType =
+        buildProjectedNimbleType(*schema, subfields, encodings);
+    ASSERT_TRUE(nimbleType->asRow().childAt(0)->isArrayWithOffsets());
+    ASSERT_TRUE(nimbleType->asRow().childAt(1)->isSlidingWindowMap());
+    ColumnStatistics rowStat(1'000, 0, 30'000, 15'000);
+    DeduplicatedColumnStatistics arrayStat(
+        std::make_unique<ColumnStatistics>(900, 100, 12'000, 6'000),
+        /*dedupedCount=*/300,
+        /*dedupedLogicalSize=*/4'000);
+    IntegralStatistics elementStat(5'000, 0, 40'000, 20'000, -7, 7);
+    DeduplicatedColumnStatistics mapStat(
+        std::make_unique<ColumnStatistics>(950, 50, 9'000, 4'500),
+        /*dedupedCount=*/200,
+        /*dedupedLogicalSize=*/3'000);
+    StringStatistics keyStat(2'000, 0, 8'000, 4'000, "k1", "k9");
+    IntegralStatistics valueStat(2'000, 10, 8'000, 4'000, 0, 99);
+    VectorizedFileStats fileStats(
+        {&rowStat, &arrayStat, &elementStat, &mapStat, &keyStat, &valueStat},
+        leafPool_.get());
+    nimble::Buffer buffer(*leafPool_);
+    expectLazyStatsMatchEager(
+        schema, nimbleType, fileStats.serialize(buffer), *leafPool_);
+  }
+}
+
+// Pool allocations show when a stream's view is created.
+TEST_F(VectorizedFileStatsTests, lazyStatsCreateViewsOnFirstUse) {
+  auto schema = velox::ROW(
+      {{"int_col", velox::BIGINT()}, {"string_col", velox::VARCHAR()}});
+  ColumnStatistics rowStat(100, 0, 1'000, 500);
+  IntegralStatistics intStat(100, 10, 800, 400, -5, 5);
+  StringStatistics stringStat(100, 20, 900, 450, "a", "z");
+  VectorizedFileStats fileStats(
+      {&rowStat, &intStat, &stringStat}, leafPool_.get());
+  nimble::Buffer buffer(*leafPool_);
+  const auto serialized = fileStats.serialize(buffer);
+  const auto numAllocs = [&]() { return leafPool_->stats().numAllocs; };
+
+  const auto beforeConstruction = numAllocs();
+  const auto lazyStats = VectorizedFileStats::deserialize(
+      serialized, /*payloadHolder=*/nullptr, schema, *leafPool_);
+  EXPECT_EQ(numAllocs(), beforeConstruction);
+
+  EXPECT_EQ(lazyStats->logicalSize(1), 800);
+  const auto afterLogicalSize = numAllocs();
+  EXPECT_GT(afterLogicalSize, beforeConstruction);
+  EXPECT_EQ(lazyStats->logicalSize(2), 900);
+  EXPECT_EQ(numAllocs(), afterLogicalSize);
+
+  const auto* actualIntStat = lazyStats->columnStatistics(1);
+  ASSERT_NE(actualIntStat, nullptr);
+  const auto afterIntStat = numAllocs();
+  EXPECT_GT(afterIntStat, afterLogicalSize);
+  EXPECT_EQ(lazyStats->columnStatistics(1), actualIntStat);
+  EXPECT_EQ(numAllocs(), afterIntStat);
+}
+
+// Keeps the payload alive after the caller drops its holder.
+TEST_F(VectorizedFileStatsTests, lazyStatsKeepsPayloadAlive) {
+  auto schema = velox::ROW(
+      {{"int_col", velox::BIGINT()}, {"string_col", velox::VARCHAR()}});
+  ColumnStatistics rowStat(100, 0, 1'000, 500);
+  IntegralStatistics intStat(100, 10, 800, 400, -5, 5);
+  StringStatistics stringStat(100, 20, 900, 450, "a", "z");
+  VectorizedFileStats fileStats(
+      {&rowStat, &intStat, &stringStat}, leafPool_.get());
+  nimble::Buffer buffer(*leafPool_);
+  auto section =
+      std::make_shared<const std::string>(fileStats.serialize(buffer));
+  const std::weak_ptr<const std::string> weakSection{section};
+  const std::string_view payload{*section};
+  const auto lazyStats = VectorizedFileStats::deserialize(
+      payload, std::move(section), schema, *leafPool_);
+  EXPECT_FALSE(weakSection.expired());
+
+  EXPECT_EQ(lazyStats->logicalSize(2), 900);
+  const auto* actualIntStat = lazyStats->columnStatistics(1);
+  ASSERT_NE(actualIntStat, nullptr);
+  expectIntegralStatisticsEqual(
+      intStat, *actualIntStat->as<IntegralStatistics>());
+  const auto* actualStringStat = lazyStats->columnStatistics(2);
+  ASSERT_NE(actualStringStat, nullptr);
+  expectStringStatisticsEqual(
+      stringStat, *actualStringStat->as<StringStatistics>());
+}
+
+TEST_F(VectorizedFileStatsTests, lazyStatsConcurrentLookups) {
+  auto schema = velox::ROW({
+      {"int_col", velox::BIGINT()},
+      {"double_col", velox::DOUBLE()},
+      {"string_col", velox::VARCHAR()},
+  });
+  ColumnStatistics rowStat(1'000, 0, 10'000, 5'000);
+  IntegralStatistics intStat(800, 50, 6'400, 3'200, -100, 200);
+  FloatingPointStatistics doubleStat(750, 100, 6'000, 3'000, -1.5, 99.5);
+  StringStatistics stringStat(600, 200, 12'000, 6'000, "aaa", "zzz");
+  VectorizedFileStats fileStats(
+      {&rowStat, &intStat, &doubleStat, &stringStat}, leafPool_.get());
+  nimble::Buffer buffer(*leafPool_);
+  const auto lazyStats = VectorizedFileStats::deserialize(
+      fileStats.serialize(buffer),
+      /*payloadHolder=*/nullptr,
+      schema,
+      *leafPool_);
+
+  constexpr int kNumThreads{8};
+  constexpr uint32_t kNumNodes{4};
+  std::vector<std::array<const ColumnStatistics*, kNumNodes>> results(
+      kNumThreads);
+  std::vector<std::thread> threads;
+  threads.reserve(kNumThreads);
+  for (int i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back([&lazyStats, &results, i]() {
+      for (uint32_t nodeId = 0; nodeId < kNumNodes; ++nodeId) {
+        results[i][nodeId] = lazyStats->columnStatistics(nodeId);
+      }
+    });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  for (int i = 0; i < kNumThreads; ++i) {
+    for (uint32_t nodeId = 0; nodeId < kNumNodes; ++nodeId) {
+      ASSERT_NE(results[i][nodeId], nullptr);
+      EXPECT_EQ(results[i][nodeId], results[0][nodeId]);
+    }
+  }
+  expectIntegralStatisticsEqual(
+      intStat, *results[0][1]->as<IntegralStatistics>());
+  expectStringStatisticsEqual(
+      stringStat, *results[0][3]->as<StringStatistics>());
+}
+
+TEST_F(VectorizedFileStatsTests, lazyStatsTruncatedSection) {
+  auto schema = velox::ROW("int_col", velox::BIGINT());
+  ColumnStatistics rowStat(10, 0, 80, 40);
+  IntegralStatistics intStat(10, 1, 80, 40, 1, 9);
+  VectorizedFileStats fileStats({&rowStat, &intStat}, leafPool_.get());
+  nimble::Buffer buffer(*leafPool_);
+  const auto serialized = fileStats.serialize(buffer);
+
+  NIMBLE_ASSERT_FILE_THROW(
+      VectorizedFileStats::deserialize(
+          serialized.substr(0, 2),
+          /*payloadHolder=*/nullptr,
+          schema,
+          *leafPool_),
+      "Vectorized stats section is too small");
+  NIMBLE_ASSERT_FILE_THROW(
+      VectorizedFileStats::deserialize(
+          serialized.substr(0, serialized.size() - 1),
+          /*payloadHolder=*/nullptr,
+          schema,
+          *leafPool_),
+      "Vectorized stats stream overflows the section");
+}
+
+// Throws on every lookup, as toColumnStatistics() does.
+TEST_F(VectorizedFileStatsTests, lazyStatsUnsupportedSchemaKind) {
+  ColumnStatistics rowStat(10, 0, 100, 50);
+  IntegralStatistics intStat(10, 1, 80, 40, 1, 9);
+  ColumnStatistics hugeintStat(10, 0, 160, 80);
+  VectorizedFileStats fileStats(
+      {&rowStat, &intStat, &hugeintStat}, leafPool_.get());
+  nimble::Buffer buffer(*leafPool_);
+  const auto lazyStats = VectorizedFileStats::deserialize(
+      fileStats.serialize(buffer),
+      /*payloadHolder=*/nullptr,
+      velox::ROW(
+          {{"int_col", velox::BIGINT()}, {"hugeint_col", velox::HUGEINT()}}),
+      *leafPool_);
+
+  NIMBLE_ASSERT_USER_THROW(
+      lazyStats->columnStatistics(1), "Unsupported schema kind: HUGEINT");
+  NIMBLE_ASSERT_USER_THROW(
+      lazyStats->columnStatistics(1), "Unsupported schema kind: HUGEINT");
+  NIMBLE_ASSERT_USER_THROW(
+      lazyStats->logicalSize(1), "Unsupported schema kind: HUGEINT");
+}
+
+// The lazy path reads stat streams only through encoding views, so
+// every encoding the stats writer can pick needs one.
+TEST_F(VectorizedFileStatsTests, lazyStatsSupportWriterEncodings) {
+  EXPECT_TRUE(supportsEncodingView(EncodingType::Nullable));
+  for (const auto& encodingReadFactor :
+       ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors()) {
+    EXPECT_TRUE(supportsEncodingView(encodingReadFactor.first))
+        << toString(encodingReadFactor.first);
+  }
+}
+
+// A stat stream whose encoding has no view throws at its first lookup.
+TEST_F(VectorizedFileStatsTests, lazyStatsUnsupportedEncoding) {
+  // A section with one Delta-encoded LOGICAL_SIZE stream, in the layout that
+  // serialize() writes.
+  const std::vector<uint64_t> logicalSizes{160, 80};
+  nimble::Buffer buffer(*leafPool_);
+  const auto stream = EncodingFactory::encode<uint64_t>(
+      std::make_unique<ReplayedEncodingSelectionPolicy<uint64_t>>(
+          // The writer's policy picks the encodings of Delta's 3 nested
+          // streams.
+          EncodingLayout{
+              EncodingType::Delta,
+              EncodingLayout::Config{},
+              CompressionType::Uncompressed,
+              {std::nullopt, std::nullopt, std::nullopt}},
+          CompressionOptions{},
+          [](DataType dataType) {
+            return ManualEncodingSelectionPolicyFactory{}.createPolicy(
+                dataType);
+          }),
+      logicalSizes,
+      buffer);
+  constexpr uint16_t kVersion{0};
+  constexpr uint8_t kNumStreams{1};
+  constexpr uint8_t kStreamTypeBitWidth{4};
+  constexpr uint8_t kLengthsEncoded{0};
+  const auto streamTypesSize =
+      FixedBitArray::bufferSize(kNumStreams, kStreamTypeBitWidth);
+  std::string section(
+      sizeof(uint16_t) + 2 * sizeof(uint8_t) + streamTypesSize +
+          sizeof(uint8_t) + sizeof(uint64_t),
+      '\0');
+  auto* pos = section.data();
+  encoding::write<uint16_t>(kVersion, pos);
+  encoding::write<uint8_t>(kNumStreams, pos);
+  encoding::write<uint8_t>(kStreamTypeBitWidth, pos);
+  FixedBitArray(pos, kStreamTypeBitWidth)
+      .set(0, static_cast<uint8_t>(StatStreamType::LOGICAL_SIZE));
+  pos += streamTypesSize;
+  encoding::write<uint8_t>(kLengthsEncoded, pos);
+  encoding::writeUint64(stream.size(), pos);
+  section.append(stream);
+  const auto lazyStats = VectorizedFileStats::deserialize(
+      section,
+      /*payloadHolder=*/nullptr,
+      velox::ROW("int_col", velox::BIGINT()),
+      *leafPool_);
+
+  NIMBLE_ASSERT_USER_THROW(
+      lazyStats->logicalSize(1), "Delta does not support EncodingView.");
+}
+
+// Only a lazily deserialized VectorizedFileStats answers per-node lookups.
+TEST_F(VectorizedFileStatsTests, lazyLookupsRequireLazyRead) {
+  ColumnStatistics rowStat(10, 0, 80, 40);
+  IntegralStatistics intStat(10, 1, 80, 40, 1, 9);
+  VectorizedFileStats fileStats({&rowStat, &intStat}, leafPool_.get());
+  nimble::Buffer buffer(*leafPool_);
+  const auto eagerStats =
+      VectorizedFileStats::deserialize(fileStats.serialize(buffer), *leafPool_);
+
+  NIMBLE_ASSERT_THROW(
+      eagerStats->columnStatistics(1),
+      "Per-node lookups must use a lazily deserialized VectorizedFileStats");
+  NIMBLE_ASSERT_THROW(
+      fileStats.logicalSize(1),
+      "Per-node lookups must use a lazily deserialized VectorizedFileStats");
+}
+
+// Only a VectorizedFileStats that was not read lazily serializes or builds the
+// statistics of every node.
+TEST_F(VectorizedFileStatsTests, lazyStatsRejectEagerApis) {
+  ColumnStatistics rowStat(10, 0, 80, 40);
+  IntegralStatistics intStat(10, 1, 80, 40, 1, 9);
+  VectorizedFileStats fileStats({&rowStat, &intStat}, leafPool_.get());
+  nimble::Buffer buffer(*leafPool_);
+  const auto schema = velox::ROW("int_col", velox::BIGINT());
+  const auto lazyStats = VectorizedFileStats::deserialize(
+      fileStats.serialize(buffer),
+      /*payloadHolder=*/nullptr,
+      schema,
+      *leafPool_);
+
+  nimble::Buffer outputBuffer(*leafPool_);
+  NIMBLE_ASSERT_THROW(
+      lazyStats->serialize(outputBuffer),
+      "serialize() must not use a lazily deserialized VectorizedFileStats");
+  NIMBLE_ASSERT_THROW(
+      lazyStats->toColumnStatistics(schema, convertToNimbleType(*schema)),
+      "toColumnStatistics() must not use a lazily deserialized "
+      "VectorizedFileStats");
+}
+
+TEST_F(VectorizedFileStatsTests, lazyStatsShorterThanSchema) {
+  ColumnStatistics rowStat(10, 0, 80, 40);
+  IntegralStatistics intStat(10, 1, 80, 40, 1, 9);
+  VectorizedFileStats fileStats({&rowStat, &intStat}, leafPool_.get());
+  nimble::Buffer buffer(*leafPool_);
+  const auto lazyStats = VectorizedFileStats::deserialize(
+      fileStats.serialize(buffer),
+      /*payloadHolder=*/nullptr,
+      velox::ROW({"int_col", "extra_col"}, velox::BIGINT()),
+      *leafPool_);
+
+  const auto* actualIntStat = lazyStats->columnStatistics(1);
+  ASSERT_NE(actualIntStat, nullptr);
+  expectIntegralStatisticsEqual(
+      intStat, *actualIntStat->as<IntegralStatistics>());
+  NIMBLE_ASSERT_FILE_THROW(
+      lazyStats->columnStatistics(2),
+      "Stat stream has fewer entries than the schema has nodes");
+  NIMBLE_ASSERT_FILE_THROW(
+      lazyStats->logicalSize(2),
+      "Stat stream has fewer entries than the schema has nodes");
 }

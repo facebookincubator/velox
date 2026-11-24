@@ -2329,6 +2329,24 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeLazyStringWithStats) {
   }
 }
 
+TEST_P(SelectiveNimbleReaderTest, slidingWindowArrayUnsupported) {
+  const auto vector = makeRowVector(
+      {makeArrayVector<int64_t>({{1, 2, 3}, {2, 3, 4}, {3, 4, 5}})});
+  const auto rowType = asRowType(vector->type());
+  const auto file = test::createNimbleFile(
+      *rootPool(), vector, {.slidingWindowArrayColumns = {"c0"}});
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  const auto readAll = [&]() {
+    auto readers = makeReaders(vector, file, scanSpec);
+    auto result = BaseVector::create(rowType, 0, pool());
+    readers.rowReader->next(vector->size(), result);
+  };
+  NIMBLE_ASSERT_THROW(
+      readAll(),
+      "The selective reader does not support SlidingWindowArray columns");
+}
+
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsLastRunFilteredOut) {
   checkArrayWithOffsets(
       {NullableArrayData{1}, NullableArrayData{}, NullableArrayData{}},
@@ -4188,6 +4206,58 @@ TEST_P(SelectiveNimbleReaderTest, columnStatisticsAllNull) {
   ASSERT_NE(intStats, nullptr);
   EXPECT_EQ(intStats->getMinimum(), std::nullopt);
   EXPECT_EQ(intStats->getMaximum(), std::nullopt);
+}
+
+TEST_P(SelectiveNimbleReaderTest, lazyFileStatsMatchEager) {
+  constexpr int kSize{100};
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(kSize, [](auto i) { return i * 3; }),
+      makeFlatVector<std::string>(
+          kSize, [](auto i) { return fmt::format("value_{}", i); }),
+      makeFlatVector<double>(kSize, [](auto i) { return i * 1.5; }),
+  });
+  const auto file = test::createNimbleFile(*rootPool(), input);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+
+  struct Result {
+    std::optional<size_t> estimatedRowSize;
+    uint64_t projectedRawSize{0};
+    std::vector<std::string> columnStatistics;
+  };
+  const auto read = [&](bool lazyFileStats) {
+    dwio::common::ReaderOptions options(pool(), scanSpec);
+    options.setNimbleLazyFileStats(lazyFileStats);
+    auto reader = SelectiveNimbleReaderFactory().createReader(
+        std::make_unique<dwio::common::BufferedInput>(
+            std::make_shared<InMemoryReadFile>(file), *pool()),
+        options);
+    Result result;
+    for (uint32_t i = 0; i <= input->childrenSize(); ++i) {
+      const auto stats = reader->columnStatistics(i);
+      if (stats == nullptr) {
+        result.columnStatistics.emplace_back("null");
+        continue;
+      }
+      result.columnStatistics.push_back(stats->toString());
+      if (i > 0) {
+        result.projectedRawSize += stats->getRawSize().value_or(0);
+      }
+    }
+    dwio::common::RowReaderOptions rowOptions;
+    rowOptions.setRequestedType(asRowType(input->type()));
+    result.estimatedRowSize =
+        reader->createRowReader(rowOptions)->estimatedRowSize();
+    return result;
+  };
+
+  const auto eager = read(/*lazyFileStats=*/false);
+  const auto lazy = read(/*lazyFileStats=*/true);
+  ASSERT_GT(eager.projectedRawSize, 0);
+  EXPECT_EQ(eager.estimatedRowSize, eager.projectedRawSize / kSize);
+  EXPECT_EQ(lazy.estimatedRowSize, eager.estimatedRowSize);
+  EXPECT_EQ(lazy.projectedRawSize, eager.projectedRawSize);
+  EXPECT_EQ(lazy.columnStatistics, eager.columnStatistics);
 }
 
 TEST_P(SelectiveNimbleReaderTest, extractionTransformMapKeys) {

@@ -918,12 +918,12 @@ TEST_P(ArrowBridgeImportTest, map) {
 TEST_P(ArrowBridgeImportTest, booleanValuesSize) {
   constexpr int64_t kLength = 4'096;
   common::testutil::PageBeforeGuard page;
-  auto* rawValues = page.end() - bits::nbytes(kLength);
+  auto bitmap = page.atEnd<uint8_t>(bits::nbytes(kLength));
   for (int64_t i = 0; i < kLength; ++i) {
-    bits::setBit(rawValues, i, i % 3 == 0);
+    bits::setBit(bitmap.data(), i, i % 3 == 0);
   }
 
-  const void* buffers[2] = {nullptr, rawValues};
+  const void* buffers[2] = {nullptr, bitmap.data()};
   auto arrowArray = makeArrowArray(buffers, 2, kLength, 0);
   auto arrowSchema = makeArrowSchema("b");
   auto output = importFromArrow(arrowSchema, arrowArray, pool_.get());

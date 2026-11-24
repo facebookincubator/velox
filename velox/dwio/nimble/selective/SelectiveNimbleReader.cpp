@@ -660,34 +660,43 @@ void SelectiveNimbleRowReader::computeSkipRowRanges() {
       streams_.stripeIndex(),
       currentStripe_,
       "Chunk statistics must come from the current stripe.");
-  const auto* scanSpec = readerBase_->scanSpec().get();
+  auto* scanSpec = readerBase_->scanSpec().get();
   if (scanSpec == nullptr) {
     return;
   }
 
   const auto& nimbleRoot = readerBase_->nimbleSchema()->asRow();
   const auto& rootType = readerBase_->fileSchemaWithId();
+  const auto& rootRowType = rootType->type()->asRow();
   const auto numStripeRows =
       readerBase_->tablet().stripeRowCount(currentStripe_);
-  for (uint32_t i = 0; i < rootType->size() && i < nimbleRoot.childrenCount();
-       ++i) {
-    const auto* childSpec =
-        scanSpec->childByName(rootType->type()->asRow().nameOf(i));
-    if (childSpec == nullptr || childSpec->filter() == nullptr ||
-        !childSpec->readFromFile() || childSpec->hasTransform() ||
-        !nimbleRoot.childAt(i)->isScalar()) {
+
+  // Visits the scan spec's children because a file can have hundreds of columns
+  // and a scan usually filters a few. Uses stableChildren() because the
+  // constructor can run this on a read-ahead thread.
+  const auto stableChildren = scanSpec->stableChildren();
+  for (const auto& childSpec : *stableChildren) {
+    const auto* filter = childSpec->filter();
+    if (filter == nullptr || !childSpec->readFromFile() ||
+        childSpec->hasTransform()) {
+      continue;
+    }
+    const auto fileColumn =
+        rootRowType.getChildIdxIfExists(childSpec->fieldName());
+    if (!fileColumn.has_value() || *fileColumn >= nimbleRoot.childrenCount() ||
+        !nimbleRoot.childAt(*fileColumn)->isScalar()) {
       continue;
     }
     const auto streamId =
-        nimbleRoot.childAt(i)->asScalar().scalarDescriptor().offset();
+        nimbleRoot.childAt(*fileColumn)->asScalar().scalarDescriptor().offset();
     const auto streamIndex = streams_.streamIndex(streamId);
     if (streamIndex == nullptr) {
       continue;
     }
     filterStreamByChunkStats(
         *streamIndex,
-        childSpec->filter(),
-        rootType->childAt(i)->type(),
+        filter,
+        rootType->childAt(*fileColumn)->type(),
         numStripeRows,
         skipRanges_);
   }

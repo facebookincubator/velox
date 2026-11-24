@@ -39,6 +39,14 @@ void writeTensorFields(c10::TensorImpl* impl, TableTensor* t) {
       " dims not supported, got ",
       rank);
   t->storage = impl->mutable_data();
+  // An empty tensor still has an address in its storage: the setup kernel
+  // places the members of a group from the first one's. An undefined tensor
+  // has no storage and keeps the null address that marks an absent operand.
+  if (t->storage == nullptr && impl->has_storage() &&
+      impl->storage().mutable_data() != nullptr) {
+    t->storage = static_cast<char*>(impl->storage().mutable_data()) +
+        impl->storage_offset() * impl->itemsize();
+  }
   t->rank = static_cast<int8_t>(rank);
   t->elementSize = static_cast<uint8_t>(impl->itemsize());
   t->elementType = static_cast<uint8_t>(impl->dtype().toScalarType());
