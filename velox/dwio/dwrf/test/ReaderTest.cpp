@@ -2801,16 +2801,16 @@ TEST_F(SplitRowRangeTest, countsRowsFromSplitStart) {
 }
 
 TEST_F(SplitRowRangeTest, filter) {
-  auto reader = createReader(makeScanSpec(
-      std::make_unique<common::BigintRange>(1'500, 1'700, false)));
+  auto reader = createReader(
+      makeScanSpec(std::make_unique<common::BigintRange>(1'500, 1'700, false)));
   EXPECT_EQ(
       read(*reader->createRowReader(options({1'400, 3'000}))),
       rows(1'500, 1'701));
 
   // Starting mid-stride in the first stripe still skips the strides there
   // that the filter rejects: here, rows 1,000-1,999.
-  reader = createReader(makeScanSpec(
-      std::make_unique<common::BigintRange>(2'000, 7'499, false)));
+  reader = createReader(
+      makeScanSpec(std::make_unique<common::BigintRange>(2'000, 7'499, false)));
   auto rowReader = reader->createRowReader(options({500, 2'000}));
   EXPECT_EQ(read(*rowReader), rows(2'000, 2'500));
   dwio::common::RuntimeStats stats;

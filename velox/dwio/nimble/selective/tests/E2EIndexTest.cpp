@@ -4697,11 +4697,7 @@ TEST_P(E2EIndexTest, splitRowRangeIntersectsIndexBounds) {
       SCOPED_TRACE(fmt::format("indexEnabled={}", indexEnabled));
       int64_t numConversions = 0;
       const auto rows = readWithFilters(
-          rowType,
-          filters,
-          indexEnabled,
-          numConversions,
-          testCase.range);
+          rowType, filters, indexEnabled, numConversions, testCase.range);
       EXPECT_EQ(bigintValues(rows, "key"), expected);
       // An empty split row range ends the read before the index lookup.
       EXPECT_EQ(numConversions, indexEnabled && endRow > firstRow ? 1 : 0);
