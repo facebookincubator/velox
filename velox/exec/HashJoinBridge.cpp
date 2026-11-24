@@ -44,8 +44,8 @@ RowTypePtr hashJoinTableType(
   }
 
   if (dropDuplicates) {
-    // For left semi and anti join with no extra filter, hash table does not
-    // store dependent columns.
+    // A hash table that keeps one row per key does not store dependent
+    // columns.
     return ROW(std::move(names), std::move(types));
   }
 
@@ -56,13 +56,6 @@ RowTypePtr hashJoinTableType(
     }
   }
   return ROW(std::move(names), std::move(types));
-}
-
-RowTypePtr hashJoinTableType(
-    const std::shared_ptr<const core::HashJoinNode>& joinNode) {
-  const auto inputType = joinNode->sources()[1]->outputType();
-  return hashJoinTableType(
-      joinNode->rightKeys(), inputType, joinNode->canDropDuplicates());
 }
 
 void HashJoinBridge::start() {
@@ -190,7 +183,12 @@ SpillPartitionSet spillHashJoinTable(
   std::vector<std::unique_ptr<HashBuildSpiller>> spillersHolder;
   std::vector<HashBuildSpiller*> spillers;
   const auto rowContainers = table->allRows();
-  const auto tableType = hashJoinTableType(joinNode);
+  // The table stores either all build columns or only the keys.
+  const auto* rows = table->rows();
+  const auto tableType = hashJoinTableType(
+      joinNode->rightKeys(),
+      joinNode->sources()[1]->outputType(),
+      rows->columnTypes().size() == rows->keyTypes().size());
   for (auto* rowContainer : rowContainers) {
     if (rowContainer->numRows() == 0) {
       continue;

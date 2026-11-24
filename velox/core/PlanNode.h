@@ -3572,18 +3572,6 @@ class AbstractJoinNode : public PlanNode {
     return isInnerJoin() || isLeftJoin() || isAntiJoin();
   }
 
-  /// Indicates if this joinNode can drop duplicate rows with same join key.
-  /// For left semi and anti join, it is not necessary to store duplicate rows.
-  /// For counting joins, duplicates are folded into a per-key count.
-  bool canDropDuplicates() const {
-    // Left semi and anti join with no extra filter only needs to know whether
-    // there is a match. Hence, no need to store entries with duplicate keys.
-    // Counting joins always deduplicate and track counts.
-    return isCountingJoin() ||
-        (!filter() &&
-         (isLeftSemiFilterJoin() || isLeftSemiProjectJoin() || isAntiJoin()));
-  }
-
   const std::vector<FieldAccessTypedExprPtr>& leftKeys() const {
     return leftKeys_;
   }
