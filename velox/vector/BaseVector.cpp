@@ -1499,10 +1499,13 @@ void BaseVector::transposeIndices(
   }
   if (i < wrapSize) {
     auto indexBatch = xsimd::load_unaligned(wrapIndices + i);
-    auto mask = simd::leadingMask<int32_t>(wrapSize - i);
-    simd::maskGather(
-        xsimd::batch<int32_t>::broadcast(0), mask, baseIndices, indexBatch)
-        .store_unaligned(resultIndices + i);
+    const auto numLeft = wrapSize - i;
+    const auto mask = simd::leadingMask<int32_t>(numLeft);
+    const auto values = simd::maskGather(
+        xsimd::batch<int32_t>::broadcast(0), mask, baseIndices, indexBatch);
+    // Stores only the valid lanes: 'resultIndices' may have no capacity past
+    // them.
+    simd::storeLeading(values, mask, numLeft, resultIndices + i);
   }
 #else
   VELOX_NYI();
@@ -1541,8 +1544,18 @@ void BaseVector::transposeIndicesWithNulls(
       wrapNullsByte &= baseNullBits;
     }
     reinterpret_cast<uint8_t*>(resultNulls)[i / 8] = wrapNullsByte;
-    simd::gather<int32_t>(baseIndices, indexBatch)
-        .store_unaligned(resultIndices + i);
+    const auto values = simd::gather<int32_t>(baseIndices, indexBatch);
+    if (i + kBatch > wrapSize) {
+      // Stores only the valid lanes: 'resultIndices' may have no capacity past
+      // them.
+      simd::storeLeading(
+          values,
+          simd::leadingMask<int32_t>(wrapSize - i),
+          wrapSize - i,
+          resultIndices + i);
+    } else {
+      values.store_unaligned(resultIndices + i);
+    }
   }
 #else
   VELOX_NYI();
@@ -1555,7 +1568,8 @@ void BaseVector::transposeDictionaryValues(
     BufferPtr& wrapNulls,
     BufferPtr& wrapIndices,
     std::shared_ptr<BaseVector>& dictionaryValues) {
-  if (!wrapIndices->unique()) {
+  // A BufferView is read-only and lacks the padding that the transposes need.
+  if (!wrapIndices->unique() || wrapIndices->isView()) {
     wrapIndices = AlignedBuffer::copy(dictionaryValues->pool(), wrapIndices);
   }
   auto* rawBaseNulls = dictionaryValues->rawNulls();

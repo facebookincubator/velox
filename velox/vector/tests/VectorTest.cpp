@@ -19,12 +19,14 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <numeric>
 #include <optional>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/fuzzer/Utils.h"
 #include "velox/common/memory/ByteStream.h"
 #include "velox/common/testutil/OptionalEmpty.h"
+#include "velox/common/testutil/PageBeforeGuard.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/BaseVector.h"
@@ -2543,6 +2545,94 @@ TEST_F(VectorTest, wrapInDictionaryOverLoadedLazy) {
   auto dict = wrapInDictionary(makeIndices(size, std::identity{}), size, lazy);
   auto valuesVector = dict->valueVector();
   EXPECT_FALSE(valuesVector->isLazy());
+}
+
+TEST_F(VectorTest, transposeIndicesAtEndOfMapping) {
+#if !XSIMD_WITH_AVX2
+  GTEST_SKIP() << "The transposes need AVX2.";
+#endif
+  // The result indices may end right before an unmapped page, so the
+  // transposes store only the first 'size' of them.
+  std::vector<vector_size_t> baseIndices(100);
+  std::iota(baseIndices.begin(), baseIndices.end(), 1'000);
+  // Room for a full batch of indices, which the transposes load.
+  std::vector<vector_size_t> wrapIndices(16);
+  for (auto i = 0; i < wrapIndices.size(); ++i) {
+    wrapIndices[i] = 99 - i * 7;
+  }
+  const uint64_t baseNulls[2] = {~0ULL, ~0ULL};
+  common::testutil::PageBeforeGuard page;
+  for (const vector_size_t size : {5, 13}) {
+    SCOPED_TRACE(fmt::format("size {}", size));
+    std::vector<vector_size_t> expected(size);
+    for (auto i = 0; i < size; ++i) {
+      expected[i] = baseIndices[wrapIndices[i]];
+    }
+    {
+      auto result = page.atEnd<vector_size_t>(size);
+      BaseVector::transposeIndices(
+          baseIndices.data(), size, wrapIndices.data(), result.data());
+      EXPECT_EQ(
+          std::vector<vector_size_t>(result.begin(), result.end()), expected);
+    }
+    {
+      auto result = page.atEnd<vector_size_t>(size);
+      uint64_t resultNulls[2]{};
+      BaseVector::transposeIndicesWithNulls(
+          baseIndices.data(),
+          baseNulls,
+          size,
+          wrapIndices.data(),
+          nullptr,
+          result.data(),
+          resultNulls);
+      EXPECT_EQ(
+          std::vector<vector_size_t>(result.begin(), result.end()), expected);
+    }
+  }
+}
+
+TEST_F(VectorTest, transposeDictionaryValuesOverBufferView) {
+  // Indices that wrap external memory are a BufferView, which the transposes
+  // must not write into. They may also end right before an unmapped page.
+  struct NoopReleaser {
+    void addRef() const {}
+    void release() const {}
+  };
+  constexpr vector_size_t kSize = 13;
+  std::vector<vector_size_t> indices(kSize);
+  for (auto i = 0; i < kSize; ++i) {
+    indices[i] = kSize - 1 - i;
+  }
+  common::testutil::PageBeforeGuard page;
+  const auto placed = page.copyToEnd(indices);
+  auto base = makeFlatVector<int32_t>(kSize, [](auto row) { return row; });
+  auto dictionary = BaseVector::wrapInDictionary(
+      nullptr, makeIndicesInReverse(kSize), kSize, base);
+  // Without and with wrap nulls, which take the transpose with nulls.
+  for (const bool withNulls : {false, true}) {
+    SCOPED_TRACE(fmt::format("withNulls {}", withNulls));
+    auto isNull = [](auto row) { return row == 3; };
+    auto expected = BaseVector::wrapInDictionary(
+        withNulls ? makeNulls(kSize, isNull) : nullptr,
+        makeIndices(indices),
+        kSize,
+        dictionary);
+
+    BufferPtr wrapNulls = withNulls ? makeNulls(kSize, isNull) : nullptr;
+    BufferPtr wrapIndices = BufferView<NoopReleaser>::create(
+        reinterpret_cast<const uint8_t*>(placed.data()),
+        placed.size_bytes(),
+        NoopReleaser{});
+    VectorPtr dictionaryValues = dictionary;
+    BaseVector::transposeDictionaryValues(
+        kSize, wrapNulls, wrapIndices, dictionaryValues);
+    EXPECT_FALSE(wrapIndices->isView());
+    test::assertEqualVectors(
+        expected,
+        BaseVector::wrapInDictionary(
+            wrapNulls, wrapIndices, kSize, dictionaryValues));
+  }
 }
 
 TEST_F(VectorTest, dictionaryResize) {

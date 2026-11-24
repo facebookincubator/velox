@@ -16,6 +16,7 @@
 #include "velox/exec/OperatorUtils.h"
 #include <gtest/gtest.h>
 #include <string_view>
+#include "velox/common/testutil/PageBeforeGuard.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/tests/utils/MergeTestBase.h"
@@ -966,4 +967,42 @@ TEST_F(OperatorUtilsTest, wrapMany) {
       projected[4]->valueVector()->encoding(), VectorEncoding::Simple::FLAT);
   EXPECT_EQ(
       projected[6]->valueVector()->encoding(), VectorEncoding::Simple::FLAT);
+}
+
+TEST_F(OperatorUtilsTest, wrapOneWithMappingAtEndOfPage) {
+  // A mapping that wraps external memory is a BufferView, which may end right
+  // before an unmapped page.
+  struct NoopReleaser {
+    void addRef() const {}
+    void release() const {}
+  };
+  constexpr vector_size_t kSize = 100;
+  std::vector<vector_size_t> rawMapping(kSize);
+  for (auto i = 0; i < kSize; ++i) {
+    rawMapping[i] = 2 * kSize - 1 - 2 * i;
+  }
+  common::testutil::PageBeforeGuard page;
+  const auto placed = page.copyToEnd(rawMapping);
+  BufferPtr mapping = BufferView<NoopReleaser>::create(
+      reinterpret_cast<const uint8_t*>(placed.data()),
+      placed.size_bytes(),
+      NoopReleaser{});
+  auto base = makeFlatVector<int32_t>(2 * kSize, [](auto row) { return row; });
+  auto indices = makeIndices(2 * kSize, [](auto row) { return row; });
+  for (const bool hasBaseNulls : {false, true}) {
+    SCOPED_TRACE(fmt::format("hasBaseNulls {}", hasBaseNulls));
+    BufferPtr nulls;
+    if (hasBaseNulls) {
+      nulls = AlignedBuffer::allocate<bool>(2 * kSize, pool_.get(), true);
+      bits::setNull(nulls->asMutable<uint64_t>(), 7);
+    }
+    auto dictionary =
+        BaseVector::wrapInDictionary(nulls, indices, 2 * kSize, base);
+    WrapState state;
+    auto wrapped = wrapOne(kSize, mapping, dictionary, nullptr, state);
+    assertEqualVectors(
+        BaseVector::wrapInDictionary(
+            nullptr, makeIndices(rawMapping), kSize, dictionary),
+        wrapped);
+  }
 }
