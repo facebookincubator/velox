@@ -325,6 +325,8 @@ std::unique_ptr<LocalVectorIndexAccelerator::Index> loadCagra(
 // Trains 'cpu' on the device, adds the embeddings, and copies the trained
 // quantizer and filled lists back into 'cpu'. Uses the FAISS GPU IVF index
 // rather than cuVS's, so training runs the same k-means as the CPU build.
+// This is the legacy non-cuVS GPU build path, used only for kIvfFlat and
+// kIvfSq. Searches on the built index still clone it with cuVS.
 template <typename GpuIvf, typename CpuIvf>
 void buildIvf(
     Device& device,
