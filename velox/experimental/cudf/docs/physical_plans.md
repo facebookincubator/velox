@@ -16,6 +16,7 @@ Engines with ordinary Velox plans can use the compatibility rewriter:
 ```cpp
 CudfPlanRewriter::Config config;
 config.queryCtx = queryCtx; // The actual context used by the task.
+config.allowCpuFallback = false; // Optional. Defaults to true.
 auto physicalPlan = CudfPlanRewriter::rewrite(cpuPlan, config);
 ```
 
@@ -31,8 +32,11 @@ grouping sets, distinct markers, unique IDs, single-row enforcement, and local
 boundaries. GPU scans are recognized through the connector and its cuDF data
 source, which turns down table handles it cannot read; exchanges are
 recognized through their explicit transport. Unsupported ordinary operators
-remain CPU operators when fallback is allowed, and the rewriter logs the reason
-for each one.
+remain CPU operators when `Config::allowCpuFallback` is true, and the rewriter
+logs the reason for each one. When it is false, the rewrite fails on the first
+such operator. The caller sets this field, for example from its own session
+property; the rewriter does not read `cudf.allow_cpu_fallback`, which only the
+general driver adapter uses.
 
 The rewriter and the general driver adapter decide placement with the same
 rules, in `GpuPlacement.h`. A Filter followed by a Project is decided as one

@@ -85,7 +85,9 @@ struct CudfConfig {
   /// Enable debug printing.
   bool debugEnabled{false};
 
-  /// Allow fallback to CPU operators if GPU operator replacement fails.
+  /// Allow fallback to CPU operators if GPU operator replacement fails. Read
+  /// by the driver adapter. CudfPlanRewriter takes this choice from its
+  /// caller in CudfPlanRewriter::Config::allowCpuFallback.
   bool allowCpuFallback{true};
 
   /// Enable GPU exchange operators (UcxExchange / UcxPartitionedOutput). This

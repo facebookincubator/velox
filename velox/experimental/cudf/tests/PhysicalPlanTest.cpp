@@ -199,7 +199,8 @@ class PhysicalPlanTest : public exec::test::OperatorTestBase {
   }
   core::PlanNodePtr rewrite(
       const core::PlanNodePtr& plan,
-      Kind output = Kind::kVelox) {
+      Kind output = Kind::kVelox,
+      bool allowCpuFallback = true) {
     CudfPlanRewriter::Config config;
     config.queryCtx = queryCtx_;
     config.taskOutput = output;
@@ -220,6 +221,7 @@ class PhysicalPlanTest : public exec::test::OperatorTestBase {
         CudfPlanNodeTraits{
             {input},
             output,
+    config.allowCpuFallback = allowCpuFallback;
             preserve ? std::optional<size_t>{0} : std::nullopt});
   }
   size_t count(const core::PlanNodePtr& node, std::string_view name) {
@@ -683,7 +685,7 @@ TEST_F(PhysicalPlanTest, unsupportedColumnsCanBeRemovedBeforeGpuExecution) {
   check(physical, input_);
 }
 
-TEST_F(PhysicalPlanTest, realQueryContextControlsLoweringAndFallback) {
+TEST_F(PhysicalPlanTest, queryConfigDisablesLowering) {
   queryCtx_ = core::QueryCtx::create(
       executor_.get(),
       core::QueryConfig({{CudfConfig::kCudfEnabled, "false"}}));
@@ -693,17 +695,15 @@ TEST_F(PhysicalPlanTest, realQueryContextControlsLoweringAndFallback) {
 
   queryCtx_ = core::QueryCtx::create(
       executor_.get(),
-      core::QueryConfig(
-          {{CudfConfig::kCudfEnabled, "true"},
-           {CudfConfig::kCudfAllowCpuFallback, "false"}}));
-  auto unsupported = PlanBuilder().values({input_}).rowNumber({}).planNode();
-  VELOX_ASSERT_THROW(rewrite(unsupported), "CPU fallback is disabled");
+      core::QueryConfig({{CudfConfig::kCudfAllowCpuFallback, "false"}}));
+  EXPECT_TRUE(rewrite(unsupported)->is<core::RowNumberNode>());
+
   auto partition = PlanBuilder().values({input_}).localPartition({}).planNode();
   auto scaled = core::LocalPartitionNode::Builder(
                     *partition->as<core::LocalPartitionNode>())
                     .scaleWriter(true)
                     .build();
-  VELOX_ASSERT_THROW(rewrite(scaled), "CPU fallback is disabled");
+  VELOX_ASSERT_THROW(strictRewrite(scaled), "CPU fallback is disabled");
 }
 
 TEST_F(PhysicalPlanTest, httpAndUcxOutputContracts) {
@@ -780,3 +780,13 @@ TEST_F(PhysicalPlanTest, ucxMergeRequiresExplicitSort) {
 }
 } // namespace
 } // namespace facebook::velox::cudf_velox::test
+}
+
+TEST_F(PhysicalPlanTest, callerDisablesCpuFallback) {
+  auto strictRewrite = [&](const core::PlanNodePtr& plan) {
+    return rewrite(plan, Kind::kVelox, /*allowCpuFallback=*/false);
+  };
+  auto unsupported = PlanBuilder().values({input_}).rowNumber({}).planNode();
+  EXPECT_TRUE(rewrite(unsupported)->is<core::RowNumberNode>());
+  VELOX_ASSERT_THROW(strictRewrite(unsupported), "CPU fallback is disabled");
+  // The query config is not consulted.

@@ -32,6 +32,10 @@ class CudfPlanRewriter {
 
   struct Config {
     VectorRepresentation taskOutput = VectorRepresentation::kVelox;
+    /// Whether a plan node that cuDF cannot run stays on the CPU. When false,
+    /// the rewrite fails with a user error that names the node. The caller
+    /// sets this; the rewriter does not read 'cudf.allow_cpu_fallback'.
+    bool allowCpuFallback = true;
     /// Required: capability decisions use the same context as execution.
     std::shared_ptr<core::QueryCtx> queryCtx;
   };

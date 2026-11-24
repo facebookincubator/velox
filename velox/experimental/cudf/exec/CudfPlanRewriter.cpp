@@ -646,7 +646,7 @@ class Rewriter {
     if (detail::customCudfPlanNodeTraits(filter, *queryCtx_)) {
       // Keeping the Project on the CPU is our choice, not something cuDF
       // cannot do, so it must not fail a query that disables CPU fallback.
-      if (!cpuFallbackAllowed()) {
+      if (!config_.allowCpuFallback) {
         return rewriteAlone(project);
       }
       return rewriteGenericNode(
@@ -737,12 +737,6 @@ class Rewriter {
         CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled);
   }
 
-  bool cpuFallbackAllowed() const {
-    return queryCtx_->queryConfig().get<bool>(
-        CudfConfig::kCudfAllowCpuFallback,
-        CudfConfig::getInstance().allowCpuFallback);
-  }
-
   void checkCpuFallback(
       const core::PlanNodePtr& node,
       const std::string& reason) const {
@@ -750,7 +744,7 @@ class Rewriter {
       return;
     }
     VELOX_USER_CHECK(
-        cpuFallbackAllowed(),
+        config_.allowCpuFallback,
         "CPU fallback is disabled for unsupported plan node {} ({}): {}",
         node->name(),
         node->id(),
