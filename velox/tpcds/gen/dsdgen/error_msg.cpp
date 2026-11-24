@@ -32,8 +32,6 @@
 #include "velox/tpcds/gen/dsdgen/include/config.h"
 #include "velox/tpcds/gen/dsdgen/include/grammar_support.h"
 #include "velox/tpcds/gen/dsdgen/include/porting.h"
-static int* LN;
-static char* FN;
 
 err_msg_t Errors[MAX_ERROR + 2] = {
     {
@@ -245,9 +243,6 @@ int ReportErrorNoLine(int nError, const char* msg, int bExit) {
  * Side Effects:
  * TODO: None
  */
-void SetErrorGlobals(char* szFileName, int* nLineNumber) {
-  FN = szFileName;
-  LN = nLineNumber;
-
+void SetErrorGlobals(char* /* szFileName */, int* /* nLineNumber */) {
   return;
 }

@@ -37,13 +37,7 @@
 #include "velox/tpcds/gen/dsdgen/include/tables.h"
 #include "velox/tpcds/gen/dsdgen/include/tdefs.h"
 
-static int s_nCountyCount = 0;
-static int s_nCityCount = 0;
-
 void resetCountCount(void) {
-  s_nCountyCount = 0;
-  s_nCityCount = 0;
-
   return;
 }
 
