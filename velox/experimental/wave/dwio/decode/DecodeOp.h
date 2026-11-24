@@ -19,6 +19,7 @@
 /// Device-visible description of GPU decode ops. Included by host code and by
 /// run-time generated reader kernels, so no host-only includes here.
 
+#include "velox/experimental/wave/common/CompilerDefines.h"
 #include "velox/experimental/wave/vector/Operand.h"
 
 namespace facebook::velox::wave {
@@ -63,6 +64,103 @@ struct alignas(16) WaveFilterBase {
   bool upperExclusive;
 };
 
+/// Node of a Nimble encoding tree in device memory. Offsets are relative to
+/// the start of the stream so that the descriptors have no pointers.
+struct NimbleNode {
+  /// Baseline of FixedBitWidth, value of Constant. Physical bits, zero
+  /// extended.
+  int64_t value;
+  /// Offset of the payload from the start of the stream.
+  int64_t dataOffset;
+  int32_t numRows;
+  /// Indices of child nodes in the node array of the stream, -1 if none.
+  /// Dictionary: alphabet, indices. Nullable: values, nulls. MainlyConstant:
+  /// isCommon, other values. RLE: run lengths, run values. SparseBool:
+  /// positions.
+  int32_t children[2];
+  /// Offset of data made by a prepare op in the aux area of the column, -1 if
+  /// none. Nullable and MainlyConstant: non-null (other value) count before
+  /// each 256 rows followed by a bitmap of non-null (other value) rows. RLE:
+  /// inclusive end row of each run. Dictionary with a filter: bitmap of
+  /// alphabet entries that pass.
+  int32_t aux;
+  uint8_t bitWidth;
+  /// Nimble EncodingType.
+  uint8_t encoding;
+  /// Nimble DataType.
+  uint8_t dataType;
+  /// Bits of NimbleNodeFlags.
+  uint8_t flags;
+};
+
+/// Flags of a NimbleNode.
+struct NimbleNodeFlags {
+  /// The filter of the column was evaluated on the host for 'value' of a
+  /// Constant or the common value of a MainlyConstant.
+  static constexpr uint8_t kHasVerdict = 1;
+  /// 'value' passes the filter. Valid with kHasVerdict.
+  static constexpr uint8_t kPasses = 2;
+};
+
+/// Maximum number of nullable structs enclosing a column.
+constexpr int32_t kMaxLevels = 3;
+
+/// A separately encoded range of rows of a column in device memory, e.g. a
+/// chunk of a Nimble stream.
+struct ChunkDesc {
+  /// First row of the chunk in the column.
+  int32_t firstRow;
+  /// Index of the root node of the chunk's encoding tree in the node array of
+  /// the column.
+  int32_t root;
+  /// Position of the accessor of the chunk's tree in the accessor list of the
+  /// op.
+  int32_t shape;
+  int32_t padding;
+};
+
+/// The part of a decode op of a column that does not depend on the file
+/// format: where the encoded rows are, how top level rows map to rows of the
+/// column, and the results of arrays, maps and structs below the top level.
+/// It is the first member of the op data of each format, see
+/// GpuDecode::column().
+struct ColumnAccess {
+  /// Start of the encoded data in device memory.
+  const char* base;
+  /// The chunks that overlap the rows of the TB, in row order.
+  const ChunkDesc* chunks;
+  /// Data made by prepare ops.
+  char* aux;
+  /// Aux data of the nulls of each enclosing nullable struct, outermost
+  /// first. A row of a struct maps to the row of its child by rank in the
+  /// bitmap. See RankBitmap.
+  const char* levelAux[kMaxLevels];
+  /// Column rows of the rows of an op below an array or map. Row i of the op
+  /// reads column row elementRows[i]. nullptr for top level rows.
+  const int32_t* elementRows;
+  /// kNested of an array or map: the start of the elements of each row in the
+  /// element column, the number of elements of each row and the total number
+  /// of elements of the TB at 'totals[nthBlock]'.
+  int32_t* offsets;
+  int32_t* sizes;
+  int32_t* totals;
+  int32_t numChunks;
+  /// Host side id of the accessor list of the op. See accessorList().
+  int32_t accessorsId;
+  /// Number of enclosing nullable structs of the column.
+  int32_t numLevels;
+  /// Number of rows of each enclosing struct.
+  int32_t levelRows[kMaxLevels];
+  /// Rows of the lengths or struct nulls column.
+  int32_t streamRows;
+  /// kNested: Number of rows of the result vectors after the first row of the
+  /// op.
+  int32_t numResults;
+  /// kNested: true for the nulls of a struct, false for the lengths of an
+  /// array or map.
+  bool isStruct;
+};
+
 /// Instructions for GPU decode.  This can be decoding,
 /// or pre/post processing other than decoding.
 enum class DecodeStep {
@@ -102,6 +200,19 @@ enum class DecodeStep {
   kFlatMapNode,
   kRowCountNoFilter,
   kCountBits,
+  /// Encoding of a selective op over Nimble encoding trees. See
+  /// GpuDecode::Nimble.
+  kNimble,
+  /// Makes the aux data of one node of a Nimble stream. See NimbleNode::aux.
+  kNimblePrepare,
+  /// Reads the element range and null flag of arrays and maps or the null
+  /// flag of structs at the rows of the op from the aux data made by the
+  /// prepare ops. Format independent. See ColumnAccess.
+  kNested,
+  /// Turns the element starts and sizes of arrays into offsets in the element
+  /// vector and writes the element row of each element. See
+  /// GpuDecode::ExpandLengths.
+  kExpandLengths,
   kUnsupported,
 };
 
@@ -394,7 +505,38 @@ struct alignas(16) GpuDecode {
     uint8_t* sourceNull;
   };
 
+  /// Selective decode of a Nimble stream. Each row is read from the chunk
+  /// that contains it, with the accessor of the chunk's encoding tree.
+  struct Nimble {
+    ColumnAccess column;
+    /// All nodes of the stream.
+    const NimbleNode* nodes;
+    /// The node to prepare in a kNimblePrepare op. kStructNulls for the nulls
+    /// stream of a struct and kLengths for the lengths stream of an array or
+    /// map, whose chunks are in 'column.chunks'.
+    int32_t node;
+
+    static constexpr int32_t kStructNulls = -1;
+    static constexpr int32_t kLengths = -2;
+  };
+
+  /// Sizes of arrays to offsets in the element vector and element rows. The
+  /// TB covers the rows of one kNested TB.
+  struct ExpandLengths {
+    /// Element starts in the element stream on input, offsets in the element
+    /// vector on output.
+    int32_t* offsets;
+    const int32_t* sizes;
+    /// Element stream row of each element.
+    int32_t* rows;
+    /// Offset of the first element of the TB in the element vector.
+    int32_t base;
+    int32_t numRows;
+  };
+
   union {
+    Nimble nimble;
+    ExpandLengths expandLengths;
     Trivial trivial;
     MainlyConstant mainlyConstant;
     DictionaryOnBitpack dictionaryOnBitpack;
@@ -408,6 +550,15 @@ struct alignas(16) GpuDecode {
     CompactValues compact;
     SelectiveChunked selectiveChunked;
   } data{};
+
+  /// The format independent part of the data of a column op. It is the first
+  /// member of the op data of each file format.
+  WAVE_DEVICE_HOST ColumnAccess& column() {
+    return data.nimble.column;
+  }
+  WAVE_DEVICE_HOST const ColumnAccess& column() const {
+    return data.nimble.column;
+  }
 
   /// True if 'nulls' is a bitmap of nulls. False if 'nulls' an array of uint8_t
   bool isNullsBitmap{true};

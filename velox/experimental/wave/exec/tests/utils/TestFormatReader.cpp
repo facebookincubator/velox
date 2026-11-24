@@ -262,7 +262,11 @@ std::unique_ptr<ColumnReader> buildIntegerReader(
     std::vector<std::unique_ptr<Subfield::PathElement>>& path,
     const DefinesMap& defines) {
   return std::make_unique<ColumnReader>(
-      requestedType, fileType, pathToOperand(defines, path), params, scanSpec);
+      requestedType,
+      fileType,
+      ColumnReader::scalarOperand(defines, path, params),
+      params,
+      scanSpec);
 }
 
 // static

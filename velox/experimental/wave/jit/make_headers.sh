@@ -40,7 +40,6 @@ $STRINGIFY "velox/experimental/wave/exec/Join.cuh" >>$JIT/Headers.h
 $STRINGIFY "velox/experimental/wave/common/HashTable.h" >>$JIT/Headers.h
 $STRINGIFY "velox/experimental/wave/common/HashTable.cuh" >>$JIT/Headers.h
 $STRINGIFY "velox/experimental/wave/common/hash.cuh" >>$JIT/Headers.h
-$STRINGIFY "velox/experimental/wave/common/StringView.cuh" >>$JIT/Headers.h
 $STRINGIFY "velox/experimental/wave/common/StringView.h" >>$JIT/Headers.h
 $STRINGIFY "velox/experimental/wave/common/Hash.h" >>$JIT/Headers.h
 $STRINGIFY "velox/experimental/wave/common/CompilerDefines.h" >>$JIT/Headers.h
@@ -48,6 +47,8 @@ $STRINGIFY "velox/experimental/wave/common/Atomic.cuh" >>$JIT/Headers.h
 $STRINGIFY "velox/experimental/wave/common/Bits.cuh" >>$JIT/Headers.h
 $STRINGIFY "velox/experimental/wave/dwio/decode/DecodeOp.h" >>$JIT/Headers.h
 $STRINGIFY "velox/experimental/wave/dwio/decode/DecodeOps.cuh" >>$JIT/Headers.h
+$STRINGIFY "velox/experimental/wave/dwio/decode/ColumnOps.cuh" >>$JIT/Headers.h
+$STRINGIFY "velox/experimental/wave/dwio/decode/NimbleOps.cuh" >>$JIT/Headers.h
 cd velox/experimental/breeze || exit
 $STRINGIFY "breeze/platforms/cuda.cuh" >>../../../$JIT/Headers.h
 $STRINGIFY "breeze/platforms/specialization/cuda-ptx.cuh" >>../../../$JIT/Headers.h

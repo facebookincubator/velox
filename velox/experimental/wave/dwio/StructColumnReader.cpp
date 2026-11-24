@@ -39,6 +39,26 @@ bool StructColumnReader::isChildConstant(
        childSpec.channel() >= fileType_->size());
 }
 
+// static
+AbstractOperand* FOLLY_NULLABLE StructColumnReader::structOperand(
+    const DefinesMap& defines,
+    Path& path,
+    bool isRoot,
+    bool isNested) {
+  if (isNested) {
+    return nullptr;
+  }
+  auto* operand = pathToOperand(defines, path);
+  if (isRoot || !operand) {
+    return operand;
+  }
+  // The scan defines and uses each column once. More uses read the whole
+  // struct.
+  VELOX_CHECK_LE(
+      operand->numUses, 1, "Reading a whole struct column is not supported");
+  return nullptr;
+}
+
 void StructColumnReader::addChildren(
     velox::common::ScanSpec& scanSpec,
     Path& path,
@@ -82,6 +102,32 @@ void StructColumnReader::addChildren(
     path.pop_back();
     childSpec->setSubscript(static_cast<int64_t>(children_.size()) - 1);
   }
+}
+
+void RepeatedColumnReader::addElements(
+    FormatParams& params,
+    velox::common::ScanSpec& scanSpec,
+    Path& path,
+    const DefinesMap& defines) {
+  params.pushNested(formatData_.get());
+  auto add = [&](const std::string& name, int32_t childIdx) {
+    auto* childSpec = scanSpec.childByName(name);
+    VELOX_CHECK_NOT_NULL(childSpec, "No ScanSpec for {}", name);
+    addChild(makeChild(
+        *childSpec,
+        childIdx,
+        requestedType_->childAt(childIdx),
+        fileType_->childAt(childIdx),
+        path,
+        defines));
+  };
+  if (requestedType_->isArray()) {
+    add(common::ScanSpec::kArrayElementsFieldName, 0);
+  } else {
+    add(common::ScanSpec::kMapKeysFieldName, 0);
+    add(common::ScanSpec::kMapValuesFieldName, 1);
+  }
+  params.popNested();
 }
 
 } // namespace facebook::velox::wave

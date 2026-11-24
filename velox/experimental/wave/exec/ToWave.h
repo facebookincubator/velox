@@ -1114,6 +1114,13 @@ class CompileState {
 
   AbstractOperand* exprToOperand(const exec::Expr& expr, Scope* scope);
 
+  // Returns the operand for a chain of struct field accesses and map
+  // element_at with constant keys, e.g. s.a.b or element_at(m, 12), on a
+  // column of a table scan. The scan defines the operand for the subfield and
+  // its reader produces it. Returns nullptr if 'expr' is not such a chain.
+  AbstractOperand* FOLLY_NULLABLE
+  dereferenceOperand(const exec::Expr& expr, Scope* scope);
+
   Segment& addSegment(
       BoundaryType boundary,
       const core::PlanNode* node,

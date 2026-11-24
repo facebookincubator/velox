@@ -75,6 +75,15 @@ struct DecodeSignature {
   std::string call(int32_t blockSize) const;
 };
 
+/// Returns a process wide id for a comma separated list of accessor types of
+/// a file format, e.g. "NFbw<uint64_t>, NConstant" for Nimble. Column ops
+/// carry the id of the accessors of their chunks in ColumnAccess::accessorsId
+/// and the signature carries it in 'variant'.
+int32_t accessorListId(const std::string& accessors);
+
+/// Returns the accessor list for an id from accessorListId().
+std::string accessorList(int32_t id);
+
 /// Returns the signature of 'op'. Throws if 'op' has a combination of step,
 /// type, encoding and filter that has no device implementation.
 DecodeSignature decodeSignature(const GpuDecode& op);

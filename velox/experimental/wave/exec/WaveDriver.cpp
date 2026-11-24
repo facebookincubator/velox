@@ -710,7 +710,9 @@ RowVectorPtr WaveDriver::makeResult(
     WaveStream& stream,
     const OperandSet& lastSet) {
   auto& last = *pipelines_.back().operators.back();
-  auto& rowType = last.outputType();
+  // The plan's output type. The last Wave operator may produce fewer columns,
+  // e.g. a scan whose struct fields are projected without a kernel.
+  auto& rowType = outputType_;
   auto operatorId = last.operatorId();
   std::vector<VectorPtr> children(rowType->size());
   int32_t numRows = stream.getOutput(

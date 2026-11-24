@@ -25,6 +25,17 @@ DEFINE_int32(
 
 DECLARE_int32(wave_max_reader_batch_rows);
 
+DEFINE_int32(
+    wave_max_nested_elements,
+    64 << 20,
+    "Maximum number of elements of the arrays and maps of one level of nesting "
+    "in a batch of a Wave reader");
+
+DEFINE_int32(
+    wave_max_nesting_depth,
+    64,
+    "Maximum depth of arrays and maps in the Wave reader");
+
 namespace facebook::velox::wave {
 
 void allOperands(
@@ -44,6 +55,35 @@ void allOperands(
   }
 }
 
+namespace {
+// Appends the readers below 'reader' to 'all' and the ones that read top
+// level rows to 'leaves', in depth first order. These are the readers without
+// children and the arrays and maps that are not below an array or map.
+void collectReaders(
+    const ColumnReader* reader,
+    std::vector<ColumnReader*>& all,
+    std::vector<ColumnReader*>& leaves,
+    bool isNested = false) {
+  for (auto* child : reader->children()) {
+    all.push_back(child);
+    if (child->isRepeated()) {
+      if (!isNested && child->operand()) {
+        leaves.push_back(child);
+      }
+      collectReaders(child, all, leaves, true);
+    } else if (child->children().empty()) {
+      // A reader without a result or filter, e.g. a map without requested
+      // keys, has nothing to read.
+      if (!isNested && (child->operand() || child->scanSpec().filter())) {
+        leaves.push_back(child);
+      }
+    } else {
+      collectReaders(child, all, leaves, isNested);
+    }
+  }
+}
+} // namespace
+
 ReadStream::ReadStream(
     StructColumnReader* columnReader,
     WaveStream& _waveStream,
@@ -59,6 +99,7 @@ ReadStream::ReadStream(
   allOperands(columnReader, outputOperands, &abstractOperands_);
   output.resize(outputOperands.size());
   reader_ = columnReader;
+  collectReaders(reader_, allReaders_, leaves_);
   reader_->splitStaging().push_back(
       std::make_unique<SplitStaging>(fileInfo_, 0));
   currentStaging_ = reader_->splitStaging().back().get();
@@ -107,20 +148,25 @@ void recordDecodeLaunch(WaveStream& waveStream, const DecodeLaunchInfo& info) {
 }
 } // namespace
 
-void ReadStream::makeGrid(Stream* stream) {
+bool ReadStream::makeGrid(Stream* stream) {
   programs_.clear();
   auto total = reader_->formatData()->totalRows();
   auto blockSize = FLAGS_wave_reader_rows_per_tb;
   auto numBlocks = bits::roundUp(total, blockSize) / blockSize;
-  auto& children = reader_->children();
   int32_t nthFilter = 0;
   int32_t nthNonFilter = 0;
-  for (auto i = 0; i < children.size(); ++i) {
-    auto* child = reader_->children()[i];
-    // TODO:  Must  propagate the incoming nulls from outer to inner structs.
-    // griddize must decode nulls if present.
-    auto* op = child->scanSpec().filter() ? &filters_[nthFilter++]
-                                          : &ops_[nthNonFilter++];
+  int32_t nthLeaf = 0;
+  for (auto* child : allReaders_) {
+    // A struct or a column below an array has no op. Its griddize prepares
+    // the data that does not depend on the rows that are read.
+    ColumnOp localOp;
+    localOp.reader = child;
+    auto* op = &localOp;
+    if (nthLeaf < leaves_.size() && leaves_[nthLeaf] == child) {
+      ++nthLeaf;
+      op = child->scanSpec().filter() ? &filters_[nthFilter++]
+                                      : &ops_[nthNonFilter++];
+    }
     child->formatData()->griddize(
         *op,
         blockSize,
@@ -158,7 +204,9 @@ void ReadStream::makeGrid(Stream* stream) {
     reader_->splitStaging().push_back(
         std::make_unique<SplitStaging>(fileInfo_, nth));
     currentStaging_ = reader_->splitStaging().back().get();
+    return true;
   }
+  return false;
 }
 
 void ReadStream::makeCompact(bool isSerial) {
@@ -226,9 +274,7 @@ void ReadStream::makeCompact(bool isSerial) {
 }
 
 void ReadStream::makeOps() {
-  auto& children = reader_->children();
-  for (auto i = 0; i < children.size(); ++i) {
-    auto* child = reader_->children()[i];
+  for (auto* child : leaves_) {
     if (child->scanSpec().filter()) {
       hasFilters_ = true;
       filters_.emplace_back();
@@ -239,8 +285,7 @@ void ReadStream::makeOps() {
           filters_.back());
     }
   }
-  for (auto i = 0; i < children.size(); ++i) {
-    auto* child = reader_->children()[i];
+  for (auto* child : leaves_) {
     if (child->scanSpec().filter()) {
       continue;
     }
@@ -407,11 +452,22 @@ void ReadStream::launch(
         bool griddizedHere = false;
         if (!readStream->inited_) {
           readStream->makeOps();
-          readStream->makeGrid(stream);
+          // A ReadStream for a later batch of the same stripe makes no
+          // prepare ops. Those of the first batch may still run on another
+          // stream.
+          griddizedHere = readStream->makeGrid(stream);
           readStream->initializeResultNulls(*stream);
-          griddizedHere = true;
           readStream->inited_ = true;
         }
+        // The decodes read the aux data made by the prepare ops.
+        auto waitGriddize = [&]() {
+          if (!griddizedHere && firstLaunch) {
+            if (auto* event = readStream->reader_->griddizeEvent()) {
+              event->wait(*stream);
+            }
+          }
+          firstLaunch = false;
+        };
         readStream->prepareRead();
         for (;;) {
           bool done = readStream->makePrograms(needSync);
@@ -429,15 +485,7 @@ void ReadStream::launch(
           readStream->setBlockStatusAndTemp(stream);
           readStream->deviceStaging_.makeDeviceBuffer(waveStream->arena());
           WaveBufferPtr extra;
-          if (!griddizedHere && firstLaunch) {
-            // If the same split is read on multiple streams for
-            // different row ranges, the non-first will have to sync
-            // on the griddize of the first.
-            if (auto* event = readStream->reader_->griddizeEvent()) {
-              event->wait(*stream);
-            }
-          }
-          firstLaunch = false;
+          waitGriddize();
           readStream->syncStaging(*stream);
           LaunchParams params(waveStream->deviceArena());
           {
@@ -467,6 +515,7 @@ void ReadStream::launch(
         readStream->setBlockStatusAndTemp(stream);
         readStream->deviceStaging_.makeDeviceBuffer(waveStream->arena());
         LaunchParams params(readStream->waveStream->deviceArena());
+        waitGriddize();
         readStream->syncStaging(*stream);
         {
           maybeRecordTransferTime(*stream, *readStream->waveStream);
@@ -478,9 +527,171 @@ void ReadStream::launch(
         if (params.device) {
           readStream->commands_.push_back(std::move(params));
         }
+        readStream->readNested(stream);
         readStream->waveStream->setState(WaveStream::State::kParallel);
         readStream->waveStream->markLaunch(*stream, *readStream);
       });
+}
+
+std::unique_ptr<WaveVector> ReadStream::makeNestedVector(
+    const ColumnReader& reader,
+    int32_t numRows) {
+  auto vector =
+      std::make_unique<WaveVector>(reader.requestedType(), waveStream->arena());
+  vector->resize(numRows, reader.formatData()->hasNulls());
+  if (!reader.isRepeated() && !reader.children().empty()) {
+    std::vector<std::unique_ptr<WaveVector>> children;
+    for (auto* child : reader.children()) {
+      children.push_back(makeNestedVector(*child, numRows));
+    }
+    vector->setChildren(std::move(children));
+  }
+  return vector;
+}
+
+void ReadStream::addNestedOps(NestedOp op, std::vector<NestedOp>& arrays) {
+  auto* reader = op.reader;
+  if (reader->isRepeated()) {
+    const int32_t numBlocks =
+        bits::divRoundUp(op.numRows, FLAGS_wave_reader_rows_per_tb);
+    op.totals =
+        waveStream->arena().allocate<int32_t>(std::max<int32_t>(numBlocks, 1));
+  }
+  reader->formatData()->startNestedOp(
+      op, deviceStaging_, *currentStaging_, programs_, *this);
+  if (reader->isRepeated()) {
+    arrays.push_back(std::move(op));
+    return;
+  }
+  for (auto i = 0; i < reader->children().size(); ++i) {
+    NestedOp child = op;
+    child.reader = reader->children()[i];
+    child.vector = &op.vector->childAt(i);
+    addNestedOps(std::move(child), arrays);
+  }
+}
+
+void ReadStream::launchNested(Stream* stream) {
+  WaveStats& stats = waveStream->stats();
+  auto bytes = currentStaging_->bytesToDevice();
+  ioStats_->incRawBytesRead(bytes);
+  stats.bytesToDevice += bytes;
+  ++stats.numKernels;
+  stats.numPrograms += static_cast<int64_t>(programs_.programs.size());
+  currentStaging_->transfer(*waveStream, *stream, true);
+  setBlockStatusAndTemp(stream);
+  deviceStaging_.makeDeviceBuffer(waveStream->arena());
+  syncStaging(*stream);
+  LaunchParams params(waveStream->deviceArena());
+  {
+    PrintTime l("decode-nested");
+    recordDecodeLaunch(*waveStream, launchDecode(programs_, params, stream));
+  }
+  if (params.device) {
+    commands_.push_back(std::move(params));
+  }
+  auto nth = reader_->splitStaging().size();
+  reader_->splitStaging().push_back(
+      std::make_unique<SplitStaging>(fileInfo_, nth));
+  currentStaging_ = reader_->splitStaging().back().get();
+}
+
+void ReadStream::readNested(Stream* stream) {
+  std::vector<NestedOp> arrays;
+  for (auto& op : ops_) {
+    if (op.reader->isRepeated()) {
+      NestedOp array;
+      array.reader = op.reader;
+      array.numRows =
+          static_cast<int32_t>(bits::roundUp(rows_.size(), kBlockSize));
+      array.vector = op.waveVector;
+      array.totals = op.totals;
+      arrays.push_back(std::move(array));
+    }
+  }
+  if (arrays.empty()) {
+    return;
+  }
+  const int32_t rowsPerBlock = FLAGS_wave_reader_rows_per_tb;
+  auto nth = reader_->splitStaging().size();
+  reader_->splitStaging().push_back(
+      std::make_unique<SplitStaging>(fileInfo_, nth));
+  currentStaging_ = reader_->splitStaging().back().get();
+  // Each level of nesting syncs to get the number of elements of the arrays
+  // and maps of the level. Then a kernel turns the sizes into offsets and
+  // element rows and a kernel reads the elements, including the sizes of the
+  // next level.
+  int32_t depth = 0;
+  while (!arrays.empty()) {
+    VELOX_CHECK_LT(
+        depth++, FLAGS_wave_max_nesting_depth, "Arrays nested too deep");
+    waveStream->setState(WaveStream::State::kWait);
+    stream->wait();
+    waveStream->setState(WaveStream::State::kHost);
+    programs_.clear();
+    std::vector<NestedOp> elements;
+    for (auto& array : arrays) {
+      const int32_t numBlocks = bits::divRoundUp(array.numRows, rowsPerBlock);
+      const auto* totals = array.totals->as<int32_t>();
+      int32_t numElements = 0;
+      std::vector<GpuDecode*> steps;
+      for (auto block = 0; block < numBlocks; ++block) {
+        auto step = std::make_unique<GpuDecode>();
+        step->step = DecodeStep::kExpandLengths;
+        step->nthBlock = block;
+        auto& expand = step->data.expandLengths;
+        expand.offsets = array.vector->offsets() + block * rowsPerBlock;
+        expand.sizes = array.vector->sizes() + block * rowsPerBlock;
+        expand.base = numElements;
+        expand.numRows =
+            std::min(rowsPerBlock, array.numRows - block * rowsPerBlock);
+        // Element counts come from device. Bad counts must not make huge
+        // allocations.
+        VELOX_CHECK_GE(totals[block], 0, "Negative array element count");
+        VELOX_CHECK_LE(
+            static_cast<int64_t>(numElements) + totals[block],
+            FLAGS_wave_max_nested_elements,
+            "Too many array elements in a batch");
+        numElements += totals[block];
+        steps.push_back(step.get());
+        programs_.programs.emplace_back();
+        programs_.programs.back().push_back(std::move(step));
+      }
+      VLOG(1) << "Nested level " << depth << ": " << numBlocks << " TBs, "
+              << numElements << " elements";
+      auto rows = waveStream->arena().allocate<int32_t>(
+          std::max<int32_t>(numElements, 1));
+      for (auto* step : steps) {
+        step->data.expandLengths.rows = rows->as<int32_t>();
+      }
+      std::vector<std::unique_ptr<WaveVector>> children;
+      for (auto* child : array.reader->children()) {
+        children.push_back(makeNestedVector(*child, numElements));
+      }
+      array.vector->setChildren(std::move(children));
+      for (auto i = 0; i < array.reader->children().size(); ++i) {
+        NestedOp element;
+        element.reader = array.reader->children()[i];
+        element.numRows = numElements;
+        element.elementRows = rows->as<int32_t>();
+        element.vector = &array.vector->childAt(i);
+        elements.push_back(std::move(element));
+      }
+      nestedBuffers_.push_back(std::move(rows));
+    }
+    if (!programs_.programs.empty()) {
+      launchNested(stream);
+    }
+    programs_.clear();
+    arrays.clear();
+    for (auto& element : elements) {
+      addNestedOps(std::move(element), arrays);
+    }
+    if (!programs_.programs.empty()) {
+      launchNested(stream);
+    }
+  }
+  programs_.clear();
 }
 
 void ReadStream::makeControl() {
@@ -503,12 +714,11 @@ void ReadStream::makeControl() {
       0,
       instructionBytes + info.totalBytes);
   control->params.status = control->deviceData->as<BlockStatus>();
-  for (auto& reader : reader_->children()) {
-    if (!reader->formatData()->hasNulls() || reader->hasNonNullFilter()) {
-      auto* operand = reader->operand();
-      if (operand) {
-        waveStream->operandNullable()[operand->id] = false;
-      }
+  // The WaveStream may have read another stripe where the nulls differ.
+  for (auto* reader : leaves_) {
+    if (auto* operand = reader->operand()) {
+      waveStream->operandNullable()[operand->id] =
+          reader->formatData()->hasNulls() && !reader->hasNonNullFilter();
     }
   }
   operands = waveStream->fillOperands(

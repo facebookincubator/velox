@@ -18,6 +18,7 @@
 
 #include <fmt/format.h>
 #include <folly/Synchronized.h>
+#include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 #include <gflags/gflags.h>
 #include <algorithm>
@@ -67,6 +68,14 @@ const char* stepName(DecodeStep step) {
       return "kRowCountNoFilter";
     case DecodeStep::kCountBits:
       return "kCountBits";
+    case DecodeStep::kNimble:
+      return "kNimble";
+    case DecodeStep::kNimblePrepare:
+      return "kNimblePrepare";
+    case DecodeStep::kNested:
+      return "kNested";
+    case DecodeStep::kExpandLengths:
+      return "kExpandLengths";
     default:
       VELOX_FAIL(
           "DecodeStep has no compiled reader implementation: {}",
@@ -147,6 +156,8 @@ const char* typeName(WaveTypeKind kind, bool isSigned) {
       return isSigned ? "int32_t" : "uint32_t";
     case WaveTypeKind::BIGINT:
       return isSigned ? "int64_t" : "uint64_t";
+    case WaveTypeKind::VARCHAR:
+      return "StringView";
     default:
       VELOX_UNREACHABLE();
   }
@@ -156,10 +167,54 @@ bool isNullable(NullMode mode) {
   return mode == NullMode::kDenseNullable || mode == NullMode::kSparseNullable;
 }
 
+struct AccessorRegistry {
+  std::vector<std::string> accessors;
+  folly::F14FastMap<std::string, int32_t> ids;
+};
+
+folly::Synchronized<AccessorRegistry>& accessorRegistry() {
+  static folly::Synchronized<AccessorRegistry> registry;
+  return registry;
+}
+
+void setNimbleSignature(const GpuDecode& op, DecodeSignature& signature) {
+  VELOX_CHECK(
+      op.nullMode == NullMode::kDenseNonNull ||
+          op.nullMode == NullMode::kSparseNonNull,
+      "Nimble decode does not support nulls");
+  VELOX_CHECK(
+      op.filterKind == WaveFilterKind::kAlwaysTrue ||
+          op.filterKind == WaveFilterKind::kBigintRange,
+      "Filter kind has no compiled Nimble implementation: {}",
+      static_cast<int32_t>(op.filterKind));
+  signature.encoding = op.encoding;
+  if (op.dataType == WaveTypeKind::VARCHAR ||
+      op.dataType == WaveTypeKind::VARBINARY) {
+    VELOX_CHECK(
+        op.filterKind == WaveFilterKind::kAlwaysTrue,
+        "Filters on strings have no compiled Nimble implementation");
+    signature.dataType = WaveTypeKind::VARCHAR;
+  } else {
+    signature.dataType = op.step == DecodeStep::kSelective64
+        ? WaveTypeKind::BIGINT
+        : WaveTypeKind::INTEGER;
+  }
+  signature.nullMode = op.nullMode;
+  signature.filterKind = op.filterKind;
+  if (signature.filterKind != WaveFilterKind::kAlwaysTrue) {
+    signature.hasResult = op.result != nullptr;
+  }
+  signature.variant = op.column().accessorsId;
+}
+
 // Chooses the index type and normalizes the dict mode. Only kRecordFilter
 // changes the instantiation of a selective op beyond the filter and index
 // type.
 void setSelectiveSignature(const GpuDecode& op, DecodeSignature& signature) {
+  if (op.encoding == DecodeStep::kNimble) {
+    setNimbleSignature(op, signature);
+    return;
+  }
   VELOX_CHECK(
       op.encoding == DecodeStep::kDictionaryOnBitpack,
       "Selective decode only supports kDictionaryOnBitpack encoding: {}",
@@ -194,6 +249,24 @@ void setSelectiveSignature(const GpuDecode& op, DecodeSignature& signature) {
 }
 
 } // namespace
+
+int32_t accessorListId(const std::string& accessors) {
+  return accessorRegistry().withWLock([&](auto& registry) {
+    auto [it, isNew] =
+        registry.ids.emplace(accessors, registry.accessors.size());
+    if (isNew) {
+      registry.accessors.push_back(accessors);
+    }
+    return it->second;
+  });
+}
+
+std::string accessorList(int32_t id) {
+  return accessorRegistry().withRLock([&](const auto& registry) {
+    VELOX_CHECK_LT(id, registry.accessors.size());
+    return registry.accessors[id];
+  });
+}
 
 DecodeSignature decodeSignature(const GpuDecode& op) {
   DecodeSignature signature;
@@ -248,6 +321,9 @@ DecodeSignature decodeSignature(const GpuDecode& op) {
               signature.dataType == WaveTypeKind::BIGINT,
           "kCompact64 only supports 4 and 8 byte types");
       break;
+    case DecodeStep::kNimblePrepare:
+    case DecodeStep::kNested:
+    case DecodeStep::kExpandLengths:
     case DecodeStep::kSparseBool:
     case DecodeStep::kRleTotalLength:
     case DecodeStep::kMakeScatterIndices:
@@ -262,6 +338,13 @@ DecodeSignature decodeSignature(const GpuDecode& op) {
 }
 
 std::string DecodeSignature::toString() const {
+  if (encoding == DecodeStep::kNimble) {
+    // The accessor id is process local. The text identifies the kernel.
+    DecodeSignature copy = *this;
+    copy.variant = 0;
+    copy.encoding = DecodeStep::kUnsupported;
+    return fmt::format("{}.N[{}]", copy.toString(), accessorList(variant));
+  }
   return fmt::format(
       "{}.{}.{}.{}.{}.{}.{}.{}.{}",
       static_cast<int32_t>(step),
@@ -279,6 +362,18 @@ std::string DecodeSignature::call(int32_t blockSize) const {
   switch (step) { // NOLINT(clang-diagnostic-switch-enum)
     case DecodeStep::kSelective32:
     case DecodeStep::kSelective64:
+      if (encoding == DecodeStep::kNimble) {
+        return fmt::format(
+            "{{ using namespace detail; "
+            "decodeColumn<NimbleFormat, {}, {}, WaveFilterKind::{}, {}, {}, "
+            "{}>(&op); }}",
+            typeName(dataType, true),
+            blockSize,
+            filterName(filterKind),
+            hasResult ? "true" : "false",
+            nullMode == NullMode::kSparseNonNull ? "true" : "false",
+            accessorList(variant));
+      }
       return fmt::format(
           "detail::decodeSelective<{}, {}, DecodeStep::{}, WaveFilterKind::{}, "
           "{}, {}, NullMode::{}, DictMode::{}>(&op);",
@@ -314,6 +409,12 @@ std::string DecodeSignature::call(int32_t blockSize) const {
           typeName(dataType, true));
     case DecodeStep::kSparseBool:
       return "detail::decodeSparseBool(op.data.sparseBool);";
+    case DecodeStep::kNimblePrepare:
+      return fmt::format("detail::prepareNimbleNode<{}>(&op);", blockSize);
+    case DecodeStep::kNested:
+      return fmt::format("detail::nestedRows<{}>(&op);", blockSize);
+    case DecodeStep::kExpandLengths:
+      return fmt::format("detail::expandLengths<{}>(&op);", blockSize);
     case DecodeStep::kMainlyConstant:
       return fmt::format(
           "detail::decodeMainlyConstant<{}, {}>(op.data.mainlyConstant);",
@@ -463,7 +564,7 @@ folly::Synchronized<folly::F14FastSet<std::string>>& requestedKeys() {
 KernelSpec readerKernelSpec(const ReaderKernelKey& key) {
   KernelSpec spec;
   spec.code =
-      "#include \"velox/experimental/wave/dwio/decode/DecodeOps.cuh\"\n"
+      "#include \"velox/experimental/wave/dwio/decode/NimbleOps.cuh\"\n"
       "\nnamespace facebook::velox::wave {\n\n" +
       readerOpText(key) + fmt::format(kReaderEntries, key.blockSize) +
       "\n} // namespace facebook::velox::wave\n";

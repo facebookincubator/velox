@@ -34,54 +34,64 @@ stringview_memcmp(const void* lhs, const void* rhs, size_t n) {
   return 0;
 }
 
+/// A string reference with the layout of velox::StringView: the size, the
+/// first 4 bytes, and then the next 8 bytes for strings of up to 12 bytes or
+/// a pointer to the whole string. The bytes after the end of an inline string
+/// are 0. Vectors of strings can be copied between device and host as is,
+/// with only the pointers of non-inline strings to translate.
 class StringView {
  public:
-  WAVE_DEVICE_HOST void init(const char* data, int32_t len) {
-    data_ = len;
-    if (len == 0) {
-      return;
-    }
-    assert(len > 0);
+  static constexpr int32_t kInlineSize = 12;
+  static constexpr int32_t kPrefixSize = 4;
+
+  WAVE_DEVICE_HOST void init(const char* data, uint32_t len) {
+    size_ = len;
+    prefixWord() = 0;
+    value_.data = nullptr;
     if (len <= kInlineSize) {
-      memcpy(inlineData(), data, len);
+      memcpy(prefix_, data, len);
     } else {
-      assert(len <= kMaxSize);
-      assert(!((uintptr_t)data >> (64 - kSizeBits)));
-      data_ |= reinterpret_cast<uintptr_t>(data) << kSizeBits;
+      memcpy(prefix_, data, kPrefixSize);
+      value_.data = data;
     }
   }
 
-  WAVE_DEVICE_HOST uint16_t size() const {
-    return data_ & kMaxSize;
+  WAVE_DEVICE_HOST uint32_t size() const {
+    return size_;
   }
 
   WAVE_DEVICE_HOST bool isInline() const {
-    return size() <= kInlineSize;
+    return size_ <= kInlineSize;
   }
 
   WAVE_DEVICE_HOST const char* data() const {
-    if (isInline()) {
-      return const_cast<StringView*>(this)->inlineData();
-    }
-    return reinterpret_cast<const char*>(data_ >> kSizeBits);
+    return isInline() ? prefix_ : value_.data;
+  }
+
+  /// Sets the pointer of a non-inline string, e.g. to translate a device
+  /// address to host.
+  WAVE_DEVICE_HOST void setData(const char* data) {
+    value_.data = data;
   }
 
   WAVE_DEVICE_HOST bool operator==(StringView other) const {
-    if (isInline()) {
-      return data_ == other.data_;
+    // The size and prefix are compared as one word.
+    if (sizeAndPrefix() != other.sizeAndPrefix()) {
+      return false;
     }
-    auto len = size();
-    return len == other.size() &&
-        stringview_memcmp(data(), other.data(), len) == 0;
+    if (isInline()) {
+      return value_.word == other.value_.word;
+    }
+    return stringview_memcmp(
+               value_.data + kPrefixSize,
+               other.value_.data + kPrefixSize,
+               size_ - kPrefixSize) == 0;
   }
 
   WAVE_DEVICE_HOST bool operator!=(StringView other) const {
     return !(*this == other);
   }
 
-#ifdef __NVCC__
-  __device__ StringView cas(StringView compare, StringView val);
-#endif
 #if !defined(__NVCC__) && !defined(__CUDACC_RTC__)
   operator std::string_view() const {
     return {data(), size()};
@@ -89,22 +99,27 @@ class StringView {
 #endif
 
  private:
-  WAVE_DEVICE_HOST char* inlineData() {
-    return reinterpret_cast<char*>(&data_) + kSizeBits / 8;
+  WAVE_DEVICE_HOST uint32_t& prefixWord() {
+    return *reinterpret_cast<uint32_t*>(prefix_);
   }
 
-  static constexpr int kSizeBits = 16;
-  static constexpr uint64_t kMaxSize = (1ull << kSizeBits) - 1;
-  static constexpr int kInlineSize = 8 - kSizeBits / 8;
+  WAVE_DEVICE_HOST uint64_t sizeAndPrefix() const {
+    return *reinterpret_cast<const uint64_t*>(this);
+  }
 
-  unsigned long long data_;
+  uint32_t size_;
+  char prefix_[kPrefixSize];
+  union {
+    char inlined[8];
+    const char* data;
+    uint64_t word;
+  } value_;
 };
 
 // Non-trivial class does not play well in device code.
 #ifndef __CUDACC_RTC__
 static_assert(std::is_trivial_v<StringView>);
 #endif
-// Ensure StringView is 64 bits so we can do atomic operations on it.
-static_assert(sizeof(StringView) == 8);
+static_assert(sizeof(StringView) == 16);
 
 } // namespace facebook::velox::wave
