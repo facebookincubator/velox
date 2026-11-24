@@ -87,7 +87,7 @@ class GcsMultipleEndpointsTest : public testing::Test,
       const std::string& outputDirectory,
       const std::string& connectorId) {
     auto plan = PlanBuilder()
-                    .values({input})
+                    .values(input)
                     .tableWrite(
                         outputDirectory.data(),
                         {},
@@ -149,8 +149,8 @@ class GcsMultipleEndpointsTest : public testing::Test,
 
     // Inner Join both the tables.
     core::PlanNodeId scan1, scan2;
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto table1Scan = PlanBuilder(planNodeIdGenerator, pool())
+    PlanBuilder builder(pool());
+    auto table1Scan = builder.newPlan()
                           .startTableScan()
                           .tableName("hive_table1")
                           .outputType(rowType1)
@@ -159,7 +159,7 @@ class GcsMultipleEndpointsTest : public testing::Test,
                           .capturePlanNodeId(scan1)
                           .planNode();
     auto join =
-        PlanBuilder(planNodeIdGenerator, pool())
+        builder.newPlan()
             .startTableScan()
             .tableName("hive_table1")
             .outputType(rowType2)

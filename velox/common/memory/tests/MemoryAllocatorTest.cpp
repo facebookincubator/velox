@@ -30,22 +30,13 @@
 #include <gmock/gmock-matchers.h>
 #include <gtest/gtest.h>
 
-#ifdef linux
-#include <fstream>
-#endif // linux
+#include <sys/mman.h>
 
 DECLARE_bool(velox_memory_leak_check_enabled);
 
 using namespace facebook::velox::common::testutil;
 
 namespace facebook::velox::memory {
-namespace {
-// Virtual and resident set size for a process in kPageSize pages.
-struct ProcessSize {
-  int64_t vsize;
-  int64_t rss;
-};
-} // namespace
 
 static constexpr uint64_t kCapacityBytes = 1ULL << 30;
 static constexpr MachinePageCount kCapacityPages =
@@ -131,51 +122,6 @@ class MemoryAllocatorTest : public testing::TestWithParam<int> {
     EXPECT_GE(result.numPages(), numPages);
     initializeContents(result);
     return true;
-  }
-
-  /// Returns the virtual and resident sizes of the process in 4K pages. Only
-  /// defined for Linux.
-  std::optional<ProcessSize> processSize() {
-#ifdef linux
-    auto pid = getpid();
-    system(
-        fmt::format("ps -eo 'pid,vsize,rss' |grep \"${}\" >/tmp/{}", pid, pid)
-            .c_str());
-    std::ifstream in(fmt::format("/tmp/{}", pid));
-    std::string line;
-    std::getline(in, line);
-    int32_t resultPid;
-    int32_t vsize;
-    int32_t rss;
-    if (sscanf(line.c_str(), "%d %d %d", &resultPid, &vsize, &rss) != 3) {
-      return std::nullopt;
-    }
-    constexpr int64_t kKBInPage = AllocationTraits::kPageSize / 1024;
-    return ProcessSize{vsize / kKBInPage, rss / kKBInPage};
-#else
-    return std::nullopt;
-#endif
-  }
-
-  void checkProcessSize(std::optional<ProcessSize> base, ProcessSize delta) {
-    // RSS and Vsize changes can be rounded up by huge page
-    // size. Whether a range if is backed by huge pages, the RSS
-    // increment for write can be 2MB instead of 4K. Vsize has also
-    // been seen to be rounded up. Generally process size reported by
-    // ps is a close match to mmap/madvise/munmap/writing to memory.
-    const int64_t kMargin = AllocationTraits::numPagesInHugePage();
-    if (!base.has_value()) {
-      return;
-    }
-    // If the initial size could be had, we error out if the current sizes
-    // cannot be had.
-    auto current = processSize().value();
-    auto expected = base.value().vsize + delta.vsize;
-    EXPECT_LE(expected, current.vsize);
-    EXPECT_GE(expected + kMargin, current.vsize);
-    expected = base.value().rss + delta.rss;
-    EXPECT_LE(expected, current.rss);
-    EXPECT_GE(expected + kMargin, current.rss);
   }
 
   void initializeContents(Allocation& alloc) {
@@ -1181,24 +1127,59 @@ TEST_P(MemoryAllocatorTest, allocContiguousGrow) {
   freeSmall(kCapacityPages);
 }
 
-TEST_P(MemoryAllocatorTest, DISABLED_allocContiguousVsize) {
-  // Works with malloc and mmap allocators where MmapArena is not on.
-  auto initialSize = processSize();
-
-  ContiguousAllocation large;
-  instance_->allocateContiguous(1024, nullptr, large, nullptr, 2048);
-  initializeContents(large);
-  // vsize grows by 2048, rss by 1024
-  checkProcessSize(initialSize, {2048, 1024});
-  instance_->allocateContiguous(4096, nullptr, large, nullptr, 10240);
-  initializeContents(large);
-  checkProcessSize(initialSize, {10240, 4096});
-  instance_->growContiguous(1024, large);
-  initializeContents(large);
-  checkProcessSize(initialSize, {10240, 4096 + 1024});
-  instance_->freeContiguous(large);
-  checkProcessSize(initialSize, {0, 0});
+#ifdef __linux__
+namespace {
+// Returns how many bytes of [data, data + size) are mapped, probing one system
+// page at a time. mincore() fails with ENOMEM on a page that is not mapped.
+uint64_t mappedBytes(uint8_t* data, uint64_t size) {
+  const uint64_t pageSize = ::sysconf(_SC_PAGESIZE);
+  uint64_t numMappedBytes{0};
+  unsigned char residency;
+  for (uint64_t offset = 0; offset < size; offset += pageSize) {
+    if (::mincore(data + offset, pageSize, &residency) == 0) {
+      numMappedBytes += pageSize;
+    } else {
+      EXPECT_EQ(errno, ENOMEM);
+    }
+  }
+  return numMappedBytes;
 }
+} // namespace
+
+TEST_P(MemoryAllocatorTest, allocContiguousVsize) {
+  // Works with malloc and mmap allocators where MmapArena is not on.
+  ContiguousAllocation large;
+  ASSERT_TRUE(
+      instance_->allocateContiguous(1'024, nullptr, large, nullptr, 2'048));
+  initializeContents(large);
+  auto* firstData = large.data();
+  const auto firstMaxSize = large.maxSize();
+  ASSERT_EQ(mappedBytes(firstData, firstMaxSize), firstMaxSize);
+
+  // Allocating into 'large' again frees its first reservation. The new
+  // reservation may reuse part of that range, and the rest must be unmapped.
+  ASSERT_TRUE(
+      instance_->allocateContiguous(4'096, nullptr, large, nullptr, 10'240));
+  initializeContents(large);
+  auto* data = large.data();
+  const auto maxSize = large.maxSize();
+  const auto firstAddress = reinterpret_cast<uintptr_t>(firstData);
+  const auto address = reinterpret_cast<uintptr_t>(data);
+  const auto reusedBegin = std::max(firstAddress, address);
+  const auto reusedEnd =
+      std::min(firstAddress + firstMaxSize, address + maxSize);
+  EXPECT_EQ(
+      mappedBytes(firstData, firstMaxSize),
+      reusedEnd > reusedBegin ? reusedEnd - reusedBegin : 0);
+
+  ASSERT_TRUE(instance_->growContiguous(1'024, large));
+  initializeContents(large);
+  ASSERT_EQ(mappedBytes(data, maxSize), maxSize);
+  instance_->freeContiguous(large);
+  // Freeing unmaps all 'maxPages', including the ones never used.
+  EXPECT_EQ(mappedBytes(data, maxSize), 0);
+}
+#endif // __linux__
 
 TEST_P(MemoryAllocatorTest, allocateBytes) {
   constexpr int32_t kNumAllocs = 50;

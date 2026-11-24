@@ -663,6 +663,9 @@ so a passing test suite says little about them.
   `FooTest.cpp` contains the `FooTest` suite.
 * **Use `TEST()` for empty fixtures, `TEST_F()` only when the fixture is
   used.**
+* **No `DISABLED_` tests.** A disabled test must still compile, so it costs
+  maintenance, yet it never runs, so it protects nothing and rots. Fix the
+  test or delete it.
 * **No copy-pasted test blocks.** If two tests differ only in one parameter,
   use a loop or a local lambda.
 * **Place new tests next to related existing tests**, not at the end of the

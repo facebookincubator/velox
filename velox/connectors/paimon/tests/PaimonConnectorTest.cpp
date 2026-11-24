@@ -16,17 +16,23 @@
 #include "velox/connectors/paimon/PaimonConnector.h"
 
 #include <folly/init/Init.h>
+#include <folly/lang/Bits.h>
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <atomic>
+#include <fstream>
+#include <random>
 #include <type_traits>
 
+#include "velox/common/base/RandomUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/LocalFile.h"
+#include "velox/common/file/PlainUserNameTokenProvider.h"
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/iceberg/DeletionVectorWriter.h"
 #include "velox/connectors/paimon/PaimonColumnHandle.h"
 #include "velox/connectors/paimon/PaimonConnectorSplit.h"
 #include "velox/connectors/paimon/PaimonTableHandle.h"
@@ -74,10 +80,18 @@ class TableValidationFileSystem : public tests::utils::FaultyFileSystem {
       std::string_view path,
       const filesystems::FileOptions& options) override {
     ++openedFiles;
+    if (options.tokenProvider == nullptr) {
+      ++numOpensWithoutTokenProvider;
+    }
     return FaultyFileSystem::openFileForRead(path, options);
   }
 
   std::atomic<int32_t> openedFiles{0};
+
+  // Opens without a token provider and getFileSystem() calls without a
+  // connector config. Data files get both.
+  std::atomic_int32_t numOpensWithoutTokenProvider{0};
+  std::atomic_int32_t numResolvesWithoutConfig{0};
 };
 
 class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
@@ -150,7 +164,7 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
 #ifdef VELOX_ENABLE_NIMBLE
     if (format == dwio::common::FileFormat::NIMBLE) {
       nimble::Writer writer(
-          asRowType(input->type()),
+          input->rowType(),
           std::make_unique<LocalWriteFile>(path, false, false),
           *pool(),
           nimble::WriterOptions{});
@@ -167,8 +181,45 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
           std::make_unique<dwio::common::WriteFileSink>(
               std::make_unique<LocalWriteFile>(path, false, false), path),
           options,
-          asRowType(input->type()));
+          input->rowType());
       writer.write(input);
+      writer.close();
+      return;
+    }
+#endif
+    VELOX_FAIL("Unsupported test file format");
+  }
+
+  // Writes each of 'stripes' as its own stripe, so that readers can skip
+  // stripes one at a time.
+  void writeStripes(
+      const std::string& path,
+      const std::vector<RowVectorPtr>& stripes,
+      dwio::common::FileFormat format) {
+    if (format == dwio::common::FileFormat::DWRF) {
+      std::vector<uint64_t> rowsPerStripe;
+      rowsPerStripe.reserve(stripes.size());
+      for (const auto& stripe : stripes) {
+        rowsPerStripe.emplace_back(stripe->size());
+      }
+      writeToFile(
+          path, stripes, std::make_shared<dwrf::Config>(), [&rowsPerStripe] {
+            return std::make_unique<dwrf::RowsPerStripeFlushPolicy>(
+                rowsPerStripe);
+          });
+      return;
+    }
+#ifdef VELOX_ENABLE_NIMBLE
+    if (format == dwio::common::FileFormat::NIMBLE) {
+      nimble::Writer writer(
+          asRowType(stripes.front()->type()),
+          std::make_unique<LocalWriteFile>(path, false, false),
+          *pool(),
+          nimble::WriterOptions{});
+      for (const auto& stripe : stripes) {
+        writer.write(stripe);
+        writer.flush();
+      }
       writer.close();
       return;
     }
@@ -185,7 +236,11 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
           [](std::string_view path) {
             return path.starts_with("paimon-table-test:");
           },
-          [](std::shared_ptr<const config::ConfigBase>, std::string_view) {
+          [](std::shared_ptr<const config::ConfigBase> config,
+             std::string_view) {
+            if (config == nullptr) {
+              ++kFileSystem->numResolvesWithoutConfig;
+            }
             return kFileSystem;
           });
       return true;
@@ -287,14 +342,15 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
       const core::TypedExprPtr& remainingFilter = nullptr,
       const std::vector<std::string>& partitionNames = {},
       std::vector<connector::FileColumnHandlePtr> filterColumns = {},
-      std::unordered_map<std::string, std::string> options = {}) {
+      std::unordered_map<std::string, std::string> options = {},
+      PaimonTableType tableType = PaimonTableType::kAppendOnly) {
     return std::make_shared<PaimonTableHandle>(
         kPaimonConnectorId,
         "paimon_table",
         17,
         rowType,
         fieldIds(rowType),
-        PaimonTableType::kAppendOnly,
+        tableType,
         partitionNames,
         std::move(options),
         std::move(subfieldFilters),
@@ -323,10 +379,34 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
       const RowTypePtr& outputType,
       const RowTypePtr& dataColumns = nullptr,
       common::SubfieldFilters subfieldFilters = {},
-      const core::TypedExprPtr& remainingFilter = nullptr) {
+      const core::TypedExprPtr& remainingFilter = nullptr,
+      PaimonTableType tableType = PaimonTableType::kAppendOnly) {
+    return makePaimonScan(
+               outputType,
+               dataColumns,
+               std::move(subfieldFilters),
+               remainingFilter,
+               tableType)
+        .planNode();
+  }
+
+  /// Returns a PlanBuilder whose plan is a Paimon table scan, for adding nodes
+  /// on top of the scan.
+  exec::test::PlanBuilder makePaimonScan(
+      const RowTypePtr& outputType,
+      const RowTypePtr& dataColumns = nullptr,
+      common::SubfieldFilters subfieldFilters = {},
+      const core::TypedExprPtr& remainingFilter = nullptr,
+      PaimonTableType tableType = PaimonTableType::kAppendOnly) {
     const auto rowType = dataColumns ? dataColumns : outputType;
     const auto tableHandle = makePaimonTableHandle(
-        rowType, std::move(subfieldFilters), remainingFilter);
+        rowType,
+        std::move(subfieldFilters),
+        remainingFilter,
+        /*partitionNames=*/{},
+        /*filterColumns=*/{},
+        /*options=*/{},
+        tableType);
     auto assignments =
         makePaimonColumnHandles(dataColumns ? dataColumns : outputType);
     return exec::test::PlanBuilder()
@@ -335,11 +415,11 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
         .outputType(outputType)
         .tableHandle(tableHandle)
         .assignments(assignments)
-        .endTableScan()
-        .planNode();
+        .endTableScan();
   }
 
-  /// Creates a PaimonConnectorSplit from file paths.
+  /// Creates a PaimonConnectorSplit of the files at 'filePaths', all in
+  /// 'format'.
   std::shared_ptr<PaimonConnectorSplit> makePaimonSplit(
       const std::vector<std::string>& filePaths,
       PaimonTableType tableType = PaimonTableType::kAppendOnly,
@@ -348,9 +428,9 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
           partitionKeys = {},
       bool rawConvertible = true) {
     PaimonConnectorSplitBuilder builder(
-        kPaimonConnectorId, /*snapshotId=*/1, tableType, format);
+        kPaimonConnectorId, /*snapshotId=*/1, tableType);
     for (const auto& filePath : filePaths) {
-      builder.addFile(filePath, /*fileSize=*/0);
+      builder.addFile(filePath, format, /*fileSize=*/0);
     }
     for (const auto& [key, value] : partitionKeys) {
       builder.partitionKey(key, value);
@@ -358,6 +438,110 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
     builder.rawConvertible(rawConvertible);
     return builder.build();
   }
+
+  std::shared_ptr<PaimonConnectorSplit> makePaimonSplit(
+      const std::vector<PaimonDataFile>& dataFiles,
+      PaimonTableType tableType = PaimonTableType::kAppendOnly,
+      bool rawConvertible = true) {
+    return std::make_shared<PaimonConnectorSplit>(
+        kPaimonConnectorId,
+        /*snapshotId=*/1,
+        tableType,
+        dataFiles,
+        std::unordered_map<std::string, std::optional<std::string>>{},
+        std::nullopt,
+        rawConvertible);
+  }
+
+  // Writes deletion vectors into one index file as Paimon Java does: a version
+  // byte, then a [length][magic][bitmap][CRC] frame per vector. Version 1
+  // frames hold a 32-bit RoaringBitmap and version 2 frames a Roaring64
+  // bitmap. Returns the deletion file of each vector.
+  std::vector<PaimonDeletionFile> writeDeletionVectors(
+      const std::vector<std::vector<int64_t>>& positions,
+      int32_t version) {
+    std::vector<std::string> bitmaps;
+    std::vector<uint64_t> cardinalities;
+    for (const auto& filePositions : positions) {
+      hive::iceberg::DeletionVectorWriter writer;
+      writer.addDeletedPositions(filePositions);
+      cardinalities.emplace_back(writer.numDistinctPositions());
+      auto bitmap = writer.serialize();
+      if (version == 1) {
+        // Positions below 2^32 form a single Roaring64 group. Dropping the
+        // group count and key leaves its 32-bit RoaringBitmap.
+        bitmap = bitmap.substr(sizeof(uint64_t) + sizeof(uint32_t));
+      }
+      bitmaps.emplace_back(std::move(bitmap));
+    }
+    auto deletionFiles = writeDeletionVectorFrames(bitmaps, version);
+    for (size_t i = 0; i < deletionFiles.size(); ++i) {
+      deletionFiles[i].cardinality = cardinalities[i];
+    }
+    return deletionFiles;
+  }
+
+  // Frames serialized bitmaps, valid or not, as writeDeletionVectors() does.
+  // Returns the deletion file of each vector, without cardinality.
+  std::vector<PaimonDeletionFile> writeDeletionVectorFrames(
+      const std::vector<std::string>& bitmaps,
+      int32_t version) {
+    VELOX_CHECK(version == 1 || version == 2);
+    const auto appendInt = [](std::string& data, uint32_t value, bool big) {
+      value = big ? folly::Endian::big(value) : folly::Endian::little(value);
+      data.append(reinterpret_cast<const char*>(&value), sizeof(value));
+    };
+    auto filePath = exec::test::TempFilePath::create();
+    std::string data(1, '\1');
+    std::vector<PaimonDeletionFile> deletionFiles;
+    for (const auto& bitmap : bitmaps) {
+      const auto offset = data.size();
+      const auto frameLength =
+          static_cast<uint32_t>(sizeof(uint32_t) + bitmap.size());
+      appendInt(data, frameLength, /*big=*/true);
+      if (version == 1) {
+        appendInt(data, 1'581'511'376, /*big=*/true);
+      } else {
+        appendInt(data, 1'681'511'377, /*big=*/false);
+      }
+      data += bitmap;
+      // Paimon Java skips the CRC on read, so leave it zero.
+      appendInt(data, 0, /*big=*/true);
+      deletionFiles.emplace_back(
+          filePath->getPath(),
+          offset,
+          version == 1 ? frameLength : frameLength + 8,
+          /*cardinality=*/std::nullopt);
+    }
+    {
+      std::ofstream out(filePath->getPath(), std::ios::binary);
+      out.write(data.data(), static_cast<std::streamsize>(data.size()));
+    }
+    deletionVectorFiles_.push_back(std::move(filePath));
+    return deletionFiles;
+  }
+
+  // Returns the handle of an append-only table that samples each row with
+  // probability 'sampleRate'.
+  static std::shared_ptr<PaimonTableHandle> makeSampledTableHandle(
+      const RowTypePtr& rowType,
+      double sampleRate) {
+    return std::make_shared<PaimonTableHandle>(
+        kPaimonConnectorId,
+        "paimon_table",
+        17,
+        rowType,
+        fieldIds(rowType),
+        PaimonTableType::kAppendOnly,
+        /*partitionKeys=*/std::vector<std::string>{},
+        /*options=*/std::unordered_map<std::string, std::string>{},
+        /*subfieldFilters=*/common::SubfieldFilters{},
+        /*remainingFilter=*/nullptr,
+        /*filterColumnHandles=*/std::vector<connector::FileColumnHandlePtr>{},
+        sampleRate);
+  }
+
+  std::vector<std::shared_ptr<exec::test::TempFilePath>> deletionVectorFiles_;
 };
 
 TEST_F(PaimonConnectorTest, connectorRegistration) {
@@ -459,11 +643,7 @@ TEST_F(PaimonConnectorTest, appendOnlySingleFile) {
 
 TEST_F(PaimonConnectorTest, ordinaryOrcTableScan) {
   const auto rowType = ROW({{"int1", INTEGER()}, {"string1", VARCHAR()}});
-  const auto plan = exec::test::PlanBuilder(
-                        makePaimonScanPlan(rowType),
-                        std::make_shared<core::PlanNodeIdGenerator>(1))
-                        .limit(0, 3, false)
-                        .planNode();
+  const auto plan = makePaimonScan(rowType).limit(0, 3, false).planNode();
   const auto path = velox::test::getDataFilePath(
       "velox/dwio/orc/test", "examples/TestOrcFile.columnProjection.orc");
   const auto expected = makeRowVector(
@@ -499,6 +679,62 @@ TEST_F(PaimonConnectorTest, appendOnlyMultipleFiles) {
   exec::test::AssertQueryBuilder(plan).split(split).assertResults(expected);
 }
 
+// Paimon names each file after its format, and the files of a split can differ
+// in format, e.g. with 'file.format.per.level'. Each file is read in its own
+// format.
+TEST_F(PaimonConnectorTest, mixedFileFormats) {
+  const auto formats = fileFormats();
+  if (formats.size() < 2) {
+    GTEST_SKIP() << "Needs two file formats";
+  }
+  const auto rowType = ROW({{"c0", BIGINT()}, {"c1", VARCHAR()}});
+  const auto firstInput = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeFlatVector<std::string>({"a", "b"})});
+  const auto secondInput = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({3, 4, 5}),
+       makeFlatVector<std::string>({"c", "d", "e"})});
+  const auto plan = makePaimonScanPlan(rowType);
+
+  struct TestParam {
+    dwio::common::FileFormat firstFileFormat;
+    dwio::common::FileFormat secondFileFormat;
+
+    std::string debugString() const {
+      return fmt::format(
+          "first file format {}, second file format {}",
+          firstFileFormat,
+          secondFileFormat);
+    }
+  };
+  std::vector<TestParam> testSettings;
+  for (auto format : formats) {
+    for (auto otherFormat : formats) {
+      if (format != otherFormat) {
+        testSettings.push_back({format, otherFormat});
+      }
+    }
+  }
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    const auto filePaths = makeFilePaths(2);
+    writeFile(filePaths[0]->getPath(), firstInput, testData.firstFileFormat);
+    writeFile(filePaths[1]->getPath(), secondInput, testData.secondFileFormat);
+
+    std::vector<PaimonDataFile> dataFiles(2);
+    dataFiles[0].path = filePaths[0]->getPath();
+    dataFiles[0].fileFormat = testData.firstFileFormat;
+    dataFiles[1].path = filePaths[1]->getPath();
+    dataFiles[1].fileFormat = testData.secondFileFormat;
+
+    exec::test::AssertQueryBuilder(plan)
+        .split(makePaimonSplit(dataFiles))
+        .assertResults({firstInput, secondInput});
+  }
+}
+
 TEST_F(PaimonConnectorTest, tableSchemaTypesAndBatchOwnership) {
   const auto input = makeRowVector(
       {"flag", "number", "id", "score", "text"},
@@ -508,7 +744,7 @@ TEST_F(PaimonConnectorTest, tableSchemaTypesAndBatchOwnership) {
        makeNullableFlatVector<double>({1.5, 2.5, std::nullopt, 4.5}),
        makeNullableFlatVector<std::string>(
            {"alpha", "", std::nullopt, "omega"})});
-  const auto rowType = asRowType(input->type());
+  const auto rowType = input->rowType();
   auto queryCtx = core::QueryCtx::create();
   const auto config = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>{});
@@ -583,7 +819,8 @@ TEST_F(PaimonConnectorTest, tableSchemaTypesAndBatchOwnership) {
 // PaimonConnectorSplit.
 TEST_F(PaimonConnectorTest, rejectsEmptySplit) {
   VELOX_ASSERT_THROW(
-      makePaimonSplit({}), "PaimonConnectorSplit requires non-empty dataFiles");
+      makePaimonSplit(std::vector<std::string>{}),
+      "PaimonConnectorSplit requires non-empty dataFiles");
 }
 
 // E2E test: read with partition keys from an append-only Paimon split.
@@ -1161,19 +1398,6 @@ TEST_F(PaimonConnectorTest, tableValidationBeforeFileOpen) {
       source->addSplit(makeSplit(PaimonTableType::kPrimaryKey, good)),
       "Paimon split table type does not match table handle");
   EXPECT_EQ(fileSystem->openedFiles, 0);
-  for (const auto& change : {"dv", "changelog"}) {
-    SCOPED_TRACE(change);
-    auto wire = makeSplit(PaimonTableType::kAppendOnly, good)->serialize();
-    if (std::string_view(change) == "dv") {
-      wire["dataFiles"][0]["deletionFile"] =
-          PaimonDeletionFile{"/dv", 0, 1, 1}.serialize();
-    } else {
-      wire["dataFiles"][0]["fileType"] = "CHANGELOG";
-    }
-    VELOX_ASSERT_USER_THROW(
-        source->addSplit(PaimonConnectorSplit::create(wire)), "Paimon reader");
-    EXPECT_EQ(fileSystem->openedFiles, 0);
-  }
 
   VELOX_ASSERT_USER_THROW(
       source->addSplit(makePaimonSplit(
@@ -1282,12 +1506,12 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
   {
     auto wire = table->serialize();
     wire["tableType"] = "PRIMARY_KEY";
-    const auto unsupported =
+    const auto primaryKeyTable =
         ISerializable::deserialize<PaimonTableHandle>(wire);
-    VELOX_ASSERT_USER_THROW(
+    EXPECT_NE(
         connector->createDataSource(
-            ROW({{"id", BIGINT()}}), unsupported, idColumns, context.get()),
-        "Paimon same-schema append reader");
+            ROW("id", BIGINT()), primaryKeyTable, idColumns, context.get()),
+        nullptr);
   }
   const auto widerType = ROW({{"id", BIGINT()}, {"unused", VARBINARY()}});
   const auto widerTable = makePaimonTableHandle(widerType);
@@ -1455,7 +1679,7 @@ TEST_F(PaimonConnectorTest, ordinaryColumnsIgnoreFeatureOptions) {
 TEST_F(PaimonConnectorTest, taskCancellationAndLimit) {
   const auto input = makeRowVector(
       {"id"}, {makeFlatVector<int64_t>(10000, [](auto row) { return row; })});
-  const auto plan = makePaimonScanPlan(asRowType(input->type()));
+  const auto plan = makePaimonScanPlan(input->rowType());
   for (auto format : fileFormats()) {
     SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
     const auto files = makeFilePaths(1);
@@ -1479,10 +1703,7 @@ TEST_F(PaimonConnectorTest, taskCancellationAndLimit) {
     cursor.reset();
     exec::test::TaskMonitor::waitForAllTasksDeleted();
     const auto limitPlan =
-        exec::test::PlanBuilder(
-            plan, std::make_shared<core::PlanNodeIdGenerator>(1))
-            .limit(0, 1, false)
-            .planNode();
+        makePaimonScan(input->rowType()).limit(0, 1, false).planNode();
     exec::test::AssertQueryBuilder(limitPlan).split(split).assertTypeAndNumRows(
         input->type(), 1);
     exec::test::TaskMonitor::waitForAllTasksDeleted();
@@ -1874,6 +2095,687 @@ TEST_F(PaimonConnectorTest, rejectsPrimaryKeySplits) {
     exec::test::TaskMonitor::waitForAllTasksDeleted();
   }
   EXPECT_EQ(fileSystem->openedFiles, 0);
+}
+
+// Changelog files serve streaming reads, so a scan rejects them before opening
+// any file.
+TEST_F(PaimonConnectorTest, rejectsChangelogFiles) {
+  const auto rowType = ROW({"id", "value"}, BIGINT());
+  const auto plan = makePaimonScanPlan(
+      rowType,
+      /*dataColumns=*/nullptr,
+      /*subfieldFilters=*/{},
+      /*remainingFilter=*/nullptr,
+      PaimonTableType::kPrimaryKey);
+  const auto fileSystem = validationFileSystem();
+  fileSystem->openedFiles = 0;
+  PaimonDataFile changelogFile;
+  changelogFile.path = "paimon-table-test:/changelog-not-opened";
+  changelogFile.fileFormat = dwio::common::FileFormat::DWRF;
+  changelogFile.type = PaimonDataFile::Type::kChangelog;
+  changelogFile.source = PaimonDataFile::Source::kCompact;
+  VELOX_ASSERT_USER_THROW(
+      exec::test::AssertQueryBuilder(plan)
+          .split(makePaimonSplit({changelogFile}, PaimonTableType::kPrimaryKey))
+          .copyResults(pool()),
+      "Paimon reader does not support changelog files: paimon-table-test:/changelog-not-opened");
+  EXPECT_EQ(fileSystem->openedFiles, 0);
+}
+
+// Primary-key files lead with the key, sequence number and row kind columns,
+// and thin-mode files drop the key columns. A raw read binds the table columns
+// by name, so a filter on 'id' reads the table column, not '_KEY_id'.
+TEST_F(PaimonConnectorTest, primaryKeyFileLayout) {
+  const auto rowType = ROW({{"id", BIGINT()}, {"value", VARCHAR()}});
+  const auto ids = makeFlatVector<int64_t>({1, 2, 3});
+  const auto keys = makeFlatVector<int64_t>({-1, -2, -3});
+  const auto values = makeFlatVector<std::string>({"a", "b", "c"});
+  const auto sequenceNumbers = makeFlatVector<int64_t>({7, 8, 9});
+  const auto valueKinds = makeFlatVector<int8_t>({0, 0, 2});
+  struct TestParam {
+    std::string layout;
+    RowVectorPtr input;
+
+    std::string debugString() const {
+      return layout;
+    }
+  };
+  const std::vector<TestParam> testSettings{
+      {"full",
+       makeRowVector(
+           {"_KEY_id", "_SEQUENCE_NUMBER", "_VALUE_KIND", "id", "value"},
+           {keys, sequenceNumbers, valueKinds, ids, values})},
+      {"thin",
+       makeRowVector(
+           {"_SEQUENCE_NUMBER", "_VALUE_KIND", "id", "value"},
+           {sequenceNumbers, valueKinds, ids, values})},
+  };
+  common::SubfieldFilters filters;
+  filters.emplace(
+      common::Subfield("id"),
+      std::make_unique<common::BigintRange>(2, 3, false));
+  const auto plan = makePaimonScanPlan(
+      ROW("value", VARCHAR()),
+      rowType,
+      std::move(filters),
+      /*remainingFilter=*/nullptr,
+      PaimonTableType::kPrimaryKey);
+  const auto expected =
+      makeRowVector({makeFlatVector<std::string>({"b", "c"})});
+  for (const auto& testData : testSettings) {
+    for (auto format : fileFormats()) {
+      SCOPED_TRACE(
+          fmt::format(
+              "{}, format {}",
+              testData.debugString(),
+              dwio::common::FileFormatName::toName(format)));
+      const auto files = makeFilePaths(1);
+      writeFile(files[0]->getPath(), testData.input, format);
+      exec::test::AssertQueryBuilder(plan)
+          .split(makePaimonSplit(
+              {files[0]->getPath()}, PaimonTableType::kPrimaryKey, format))
+          .assertResults({expected});
+    }
+  }
+}
+
+// E2E test: read a partitioned primary-key table through raw splits that went
+// through serialization, as a worker receives them. With deletion vectors
+// enabled, Paimon reads the files of a bucket above level 0 without merging,
+// and the deletion vector of each file drops the rows whose keys newer files
+// hold. Files written before 'data-file.thin-mode' was set keep their _KEY_
+// columns, so the files of a split can differ in layout.
+TEST_F(PaimonConnectorTest, primaryKeyMultipleSplits) {
+  // The primary key is (dt, id) and dt is the partition column, so files key
+  // their rows by 'id' alone.
+  const auto rowType =
+      ROW({{"dt", VARCHAR()}, {"id", BIGINT()}, {"value", VARCHAR()}});
+  struct KeyValueFile {
+    std::vector<int64_t> ids;
+    std::vector<std::string> values;
+    // _VALUE_KIND of each row: 0 for INSERT, 2 for UPDATE_AFTER.
+    std::vector<int8_t> valueKinds;
+    // _SEQUENCE_NUMBER of the first row. Each later row takes the next number.
+    int64_t minSequenceNumber;
+    int32_t level;
+    // Whether the file lacks the _KEY_id column.
+    bool thin;
+    // Rows whose keys newer files hold.
+    std::vector<int64_t> deletedPositions;
+  };
+  // Bucket 0 of a partition, which one split reads.
+  struct Bucket {
+    std::string dt;
+    std::vector<KeyValueFile> files;
+  };
+  const std::vector<Bucket> buckets{
+      {.dt = "2026-11-21",
+       .files =
+           {{.ids = {1, 2, 3, 4},
+             .values = {"a1", "b1", "c1", "d1"},
+             .valueKinds = {0, 0, 0, 0},
+             .minSequenceNumber = 1,
+             .level = 5,
+             .thin = false,
+             .deletedPositions = {1, 3}},
+            {.ids = {2, 4, 5},
+             .values = {"b2", "d2", "e1"},
+             .valueKinds = {2, 2, 0},
+             .minSequenceNumber = 5,
+             .level = 4,
+             .thin = true,
+             .deletedPositions = {}}}},
+      {.dt = "2026-11-22",
+       .files =
+           {{.ids = {2, 3, 4},
+             .values = {"g1", "h1", "i1"},
+             .valueKinds = {0, 0, 0},
+             .minSequenceNumber = 1,
+             .level = 5,
+             .thin = false,
+             .deletedPositions = {2}},
+            {.ids = {1, 4},
+             .values = {"f1", "i2"},
+             .valueKinds = {0, 2},
+             .minSequenceNumber = 4,
+             .level = 1,
+             .thin = false,
+             .deletedPositions = {}}}},
+  };
+  // The latest row of each key with 2 <= id <= 4.
+  const auto expected = makeRowVector(
+      {"dt", "id", "value"},
+      {makeFlatVector<std::string>(
+           {"2026-11-21",
+            "2026-11-21",
+            "2026-11-21",
+            "2026-11-22",
+            "2026-11-22",
+            "2026-11-22"}),
+       makeFlatVector<int64_t>({3, 2, 4, 2, 3, 4}),
+       makeFlatVector<std::string>({"c1", "b2", "d2", "g1", "h1", "i2"})});
+
+  common::SubfieldFilters filters;
+  filters.emplace(
+      common::Subfield("id"),
+      std::make_unique<common::BigintRange>(2, 4, false));
+  const auto table = makePaimonTableHandle(
+      rowType,
+      std::move(filters),
+      /*remainingFilter=*/nullptr,
+      /*partitionNames=*/{"dt"},
+      /*filterColumns=*/{},
+      {{"deletion-vectors.enabled", "true"}, {"data-file.thin-mode", "true"}},
+      PaimonTableType::kPrimaryKey);
+  auto assignments = makePaimonColumnHandles(rowType);
+  assignments["dt"] = std::make_shared<PaimonColumnHandle>(
+      "dt",
+      10,
+      connector::FileColumnHandle::ColumnType::kPartitionKey,
+      VARCHAR());
+  const auto plan = ISerializable::deserialize<core::PlanNode>(
+      exec::test::PlanBuilder()
+          .startTableScan()
+          .connectorId(kPaimonConnectorId)
+          .outputType(rowType)
+          .tableHandle(table)
+          .assignments(assignments)
+          .endTableScan()
+          .planNode()
+          ->serialize(),
+      pool());
+  for (auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    std::vector<std::shared_ptr<exec::test::TempFilePath>> filePaths;
+    std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+    for (const auto& bucket : buckets) {
+      std::vector<PaimonDataFile> dataFiles;
+      for (const auto& file : bucket.files) {
+        const auto numRows = static_cast<vector_size_t>(file.ids.size());
+        std::vector<std::string> names{
+            "_SEQUENCE_NUMBER", "_VALUE_KIND", "dt", "id", "value"};
+        std::vector<VectorPtr> columns{
+            makeFlatVector<int64_t>(
+                numRows,
+                [&](auto row) { return file.minSequenceNumber + row; }),
+            makeFlatVector<int8_t>(file.valueKinds),
+            makeFlatVector<std::string>(
+                std::vector<std::string>(numRows, bucket.dt)),
+            makeFlatVector<int64_t>(file.ids),
+            makeFlatVector<std::string>(file.values)};
+        if (!file.thin) {
+          names.insert(names.begin(), "_KEY_id");
+          columns.insert(columns.begin(), makeFlatVector<int64_t>(file.ids));
+        }
+        filePaths.push_back(exec::test::TempFilePath::create());
+        writeFile(
+            filePaths.back()->getPath(), makeRowVector(names, columns), format);
+
+        PaimonDataFile dataFile;
+        dataFile.path = filePaths.back()->getPath();
+        dataFile.fileFormat = format;
+        dataFile.rowCount = numRows;
+        dataFile.level = file.level;
+        dataFile.minSequenceNumber = file.minSequenceNumber;
+        dataFile.maxSequenceNumber = file.minSequenceNumber + numRows - 1;
+        dataFile.source = PaimonDataFile::Source::kCompact;
+        if (!file.deletedPositions.empty()) {
+          dataFile.deletionFile =
+              writeDeletionVectors({file.deletedPositions}, /*version=*/1)[0];
+        }
+        dataFiles.push_back(std::move(dataFile));
+      }
+      const PaimonConnectorSplit split(
+          kPaimonConnectorId,
+          /*snapshotId=*/3,
+          PaimonTableType::kPrimaryKey,
+          dataFiles,
+          {{"dt", bucket.dt}},
+          /*tableBucketNumber=*/0);
+      splits.push_back(PaimonConnectorSplit::create(split.serialize()));
+    }
+    exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(
+        {expected});
+  }
+}
+
+// Paimon packs the deletion vectors of several data files into one index
+// file, in either frame version, and append-only tables use them too.
+TEST_F(PaimonConnectorTest, deletionVectorFrames) {
+  const auto rowType = ROW("c0", BIGINT());
+  const auto first = makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})});
+  const auto second = makeRowVector({makeFlatVector<int64_t>({10, 11, 12})});
+  const auto plan = makePaimonScanPlan(rowType);
+  const auto expected = makeRowVector({makeFlatVector<int64_t>({0, 2, 4, 11})});
+  for (int32_t version : {1, 2}) {
+    const auto deletionFiles = writeDeletionVectors({{1, 3}, {0, 2}}, version);
+    ASSERT_GT(deletionFiles[1].offset, deletionFiles[0].offset);
+    for (auto format : fileFormats()) {
+      SCOPED_TRACE(
+          fmt::format(
+              "version {}, format {}",
+              version,
+              dwio::common::FileFormatName::toName(format)));
+      const auto files = makeFilePaths(2);
+      writeFile(files[0]->getPath(), first, format);
+      writeFile(files[1]->getPath(), second, format);
+      std::vector<PaimonDataFile> dataFiles(2);
+      dataFiles[0].path = files[0]->getPath();
+      dataFiles[0].fileFormat = format;
+      dataFiles[0].rowCount = first->size();
+      dataFiles[0].deletionFile = deletionFiles[0];
+      dataFiles[1].path = files[1]->getPath();
+      dataFiles[1].fileFormat = format;
+      dataFiles[1].rowCount = second->size();
+      dataFiles[1].deletionFile = deletionFiles[1];
+      exec::test::AssertQueryBuilder(plan)
+          .split(makePaimonSplit(dataFiles))
+          .assertResults({expected});
+    }
+  }
+}
+
+// Paimon 0.9 records no cardinality for its deletion vectors.
+TEST_F(PaimonConnectorTest, deletionVectorWithoutCardinality) {
+  const auto rowType = ROW("c0", BIGINT());
+  const auto input = makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})});
+  const auto files = makeFilePaths(1);
+  writeToFile(files[0]->getPath(), input);
+  const auto plan = makePaimonScanPlan(rowType);
+  const auto expected = makeRowVector({makeFlatVector<int64_t>({0, 2, 4})});
+  for (int32_t version : {1, 2}) {
+    SCOPED_TRACE(fmt::format("version {}", version));
+    const auto deletionFile = writeDeletionVectors({{1, 3}}, version)[0];
+    PaimonDataFile dataFile;
+    dataFile.path = files[0]->getPath();
+    dataFile.fileFormat = dwio::common::FileFormat::DWRF;
+    dataFile.rowCount = input->size();
+    dataFile.deletionFile = PaimonDeletionFile(
+        deletionFile.path,
+        deletionFile.offset,
+        deletionFile.length,
+        /*cardinality=*/std::nullopt);
+    exec::test::AssertQueryBuilder(plan)
+        .split(makePaimonSplit({dataFile}))
+        .assertResults({expected});
+  }
+}
+
+TEST_F(PaimonConnectorTest, deletionVectorFrameErrors) {
+  const auto rowType = ROW("c0", BIGINT());
+  const auto input = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  const auto files = makeFilePaths(1);
+  writeToFile(files[0]->getPath(), input);
+  const auto plan = makePaimonScanPlan(rowType);
+  const auto scan = [&](const PaimonDeletionFile& deletionFile) {
+    PaimonDataFile dataFile;
+    dataFile.path = files[0]->getPath();
+    dataFile.fileFormat = dwio::common::FileFormat::DWRF;
+    dataFile.rowCount = input->size();
+    dataFile.deletionFile = deletionFile;
+    exec::test::AssertQueryBuilder(plan)
+        .split(makePaimonSplit({dataFile}))
+        .copyResults(pool());
+  };
+  for (int32_t version : {1, 2}) {
+    SCOPED_TRACE(fmt::format("version {}", version));
+    const auto deletionFile = writeDeletionVectors({{1}}, version)[0];
+    VELOX_ASSERT_THROW(
+        scan(PaimonDeletionFile(
+            deletionFile.path,
+            deletionFile.offset,
+            deletionFile.length + 1,
+            deletionFile.cardinality)),
+        "Paimon deletion-vector frame length does not match the deletion file length");
+    exec::test::TaskMonitor::waitForAllTasksDeleted();
+    VELOX_ASSERT_THROW(
+        scan(PaimonDeletionFile(
+            deletionFile.path,
+            deletionFile.offset,
+            deletionFile.length,
+            /*cardinality=*/2)),
+        fmt::format(
+            "(1 vs. 2) Paimon deletion-vector cardinality mismatch: {}",
+            deletionFile.path));
+    exec::test::TaskMonitor::waitForAllTasksDeleted();
+  }
+
+  // A version byte, then a frame of length 8 whose magic number 0x12345678
+  // matches neither frame version.
+  const std::string frame("\1\0\0\0\x08\x12\x34\x56\x78\0\0\0\0\0\0\0\0", 17);
+  const auto badMagicFile = exec::test::TempFilePath::create();
+  {
+    std::ofstream out(badMagicFile->getPath(), std::ios::binary);
+    out.write(frame.data(), static_cast<std::streamsize>(frame.size()));
+  }
+  VELOX_ASSERT_THROW(
+      scan(PaimonDeletionFile(
+          badMagicFile->getPath(),
+          /*offset=*/1,
+          /*length=*/8,
+          /*cardinality=*/1)),
+      "Paimon deletion vector has an unknown magic number: 305419896");
+}
+
+// Corrupt bitmaps fail the scan rather than read past the bitmap or delete
+// rows of another container.
+TEST_F(PaimonConnectorTest, deletionVectorBitmapErrors) {
+  const auto rowType = ROW("c0", BIGINT());
+  const auto input = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  const auto files = makeFilePaths(1);
+  writeToFile(files[0]->getPath(), input);
+  const auto plan = makePaimonScanPlan(rowType);
+  const auto scan = [&](const std::string& bitmap) {
+    PaimonDataFile dataFile;
+    dataFile.path = files[0]->getPath();
+    dataFile.fileFormat = dwio::common::FileFormat::DWRF;
+    dataFile.rowCount = input->size();
+    dataFile.deletionFile =
+        writeDeletionVectorFrames({bitmap}, /*version=*/1)[0];
+    exec::test::AssertQueryBuilder(plan)
+        .split(makePaimonSplit({dataFile}))
+        .copyResults(pool());
+  };
+  const auto append = [](std::string& data, auto value) {
+    value = folly::Endian::little(value);
+    data.append(reinterpret_cast<const char*>(&value), sizeof(value));
+  };
+
+  // A bitmap without run containers that claims 2^30 containers, whose 4-byte
+  // headers overflow a 32-bit size: the cookie, the container count and one
+  // key and cardinality.
+  std::string tooManyContainers;
+  append(tooManyContainers, uint32_t{12'346});
+  append(tooManyContainers, uint32_t{1} << 30);
+  append(tooManyContainers, uint32_t{0});
+  VELOX_ASSERT_THROW(
+      scan(tooManyContainers),
+      "Roaring bitmap container count exceeds the 16-bit key space: 1073741824");
+  exec::test::TaskMonitor::waitForAllTasksDeleted();
+
+  // A bitmap of one run container whose run of 2 values starts at 65535: the
+  // cookie, the run flags, the key, the cardinality minus one, the number of
+  // runs, and the start and length minus one of the run.
+  std::string runPastContainer;
+  append(runPastContainer, uint32_t{12'347});
+  append(runPastContainer, uint8_t{1});
+  append(runPastContainer, uint16_t{0});
+  append(runPastContainer, uint16_t{1});
+  append(runPastContainer, uint16_t{1});
+  append(runPastContainer, uint16_t{65'535});
+  append(runPastContainer, uint16_t{1});
+  VELOX_ASSERT_THROW(
+      scan(runPastContainer), "Roaring run extends past its container.");
+}
+
+// Batches of different sizes share one delete bitmap, so the deletes of a
+// batch must not leak into later batches or files.
+TEST_F(PaimonConnectorTest, deletionVectorAcrossBatches) {
+  const auto rowType = ROW("c0", BIGINT());
+  auto queryCtx = core::QueryCtx::create();
+  const auto config = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{});
+  auto context = queryContextBuilder(queryCtx.get())
+                     .sessionProperties(config.get())
+                     .build();
+  const auto connector = ConnectorRegistry::tryGet(kPaimonConnectorId);
+  const auto table = makePaimonTableHandle(rowType);
+  const auto columns = makePaimonColumnHandles(rowType);
+  const auto firstInput = makeRowVector(
+      {makeFlatVector<int64_t>(108, [](auto row) { return row; })});
+  const auto secondInput = makeRowVector(
+      {makeFlatVector<int64_t>(100, [](auto row) { return 1'000 + row; })});
+  // Deletes row 1 of the first 8-row batch and row 50 of the next 100 rows.
+  const auto deletionFile = writeDeletionVectors({{1, 58}}, /*version=*/1)[0];
+  const auto keptRows = [](int64_t begin, int64_t end, int64_t deleted) {
+    std::vector<int64_t> rows;
+    for (auto row = begin; row < end; ++row) {
+      if (row != deleted) {
+        rows.push_back(row);
+      }
+    }
+    return rows;
+  };
+  const std::vector<RowVectorPtr> expectedBatches{
+      makeRowVector({makeFlatVector<int64_t>(keptRows(0, 8, 1))}),
+      makeRowVector({makeFlatVector<int64_t>(keptRows(8, 108, 58))}),
+      secondInput,
+  };
+  for (auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto files = makeFilePaths(2);
+    writeFile(files[0]->getPath(), firstInput, format);
+    writeFile(files[1]->getPath(), secondInput, format);
+    std::vector<PaimonDataFile> dataFiles(2);
+    dataFiles[0].path = files[0]->getPath();
+    dataFiles[0].fileFormat = format;
+    dataFiles[0].rowCount = firstInput->size();
+    dataFiles[0].deletionFile = deletionFile;
+    dataFiles[1].path = files[1]->getPath();
+    dataFiles[1].fileFormat = format;
+    dataFiles[1].rowCount = secondInput->size();
+
+    auto source =
+        connector->createDataSource(rowType, table, columns, context.get());
+    source->addSplit(makePaimonSplit(dataFiles));
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    const std::vector<uint64_t> batchSizes{8, 100, 100};
+    for (size_t i = 0; i < batchSizes.size(); ++i) {
+      auto result = source->next(batchSizes[i], future);
+      ASSERT_TRUE(result.has_value());
+      ASSERT_NE(*result, nullptr);
+      test::assertEqualVectors(expectedBatches[i], *result);
+    }
+    auto end = source->next(100, future);
+    ASSERT_TRUE(end.has_value());
+    EXPECT_EQ(*end, nullptr);
+  }
+}
+
+// Samples the rows that deletion vectors keep, in every file of a split. The
+// first file is sampled with a deletion bitmap and the second without one.
+TEST_F(PaimonConnectorTest, randomSample) {
+  random::setSeed(42);
+  constexpr int64_t kNumFileRows{10'000};
+  constexpr double kSampleRate{0.5};
+  const auto firstInput = makeRowVector(
+      {makeFlatVector<int64_t>(kNumFileRows, [](auto row) { return row; })});
+  const auto secondInput = makeRowVector({makeFlatVector<int64_t>(
+      kNumFileRows, [](auto row) { return kNumFileRows + row; })});
+  // Keeps every fourth row of the first file.
+  std::vector<int64_t> deletedPositions;
+  for (int64_t row = 0; row < kNumFileRows; ++row) {
+    if (row % 4 != 0) {
+      deletedPositions.emplace_back(row);
+    }
+  }
+  const auto deletionFile =
+      writeDeletionVectors({deletedPositions}, /*version=*/1)[0];
+  const auto rowType = ROW("c0", BIGINT());
+  const auto plan =
+      exec::test::PlanBuilder()
+          .startTableScan()
+          .connectorId(kPaimonConnectorId)
+          .outputType(rowType)
+          .tableHandle(makeSampledTableHandle(rowType, kSampleRate))
+          .assignments(makePaimonColumnHandles(rowType))
+          .endTableScan()
+          .planNode();
+  for (auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto files = makeFilePaths(2);
+    writeFile(files[0]->getPath(), firstInput, format);
+    writeFile(files[1]->getPath(), secondInput, format);
+    std::vector<PaimonDataFile> dataFiles(2);
+    dataFiles[0].path = files[0]->getPath();
+    dataFiles[0].fileFormat = format;
+    dataFiles[0].rowCount = kNumFileRows;
+    dataFiles[0].deletionFile = deletionFile;
+    dataFiles[1].path = files[1]->getPath();
+    dataFiles[1].fileFormat = format;
+    dataFiles[1].rowCount = kNumFileRows;
+
+    const auto result = exec::test::AssertQueryBuilder(plan)
+                            .split(makePaimonSplit(dataFiles))
+                            .copyResults(pool());
+    const auto* values = result->childAt(0)->as<SimpleVector<int64_t>>();
+    int64_t numFirstFileRows{0};
+    for (vector_size_t i = 0; i < result->size(); ++i) {
+      const auto value = values->valueAt(i);
+      if (i > 0) {
+        ASSERT_LT(values->valueAt(i - 1), value);
+      }
+      if (value < kNumFileRows) {
+        ASSERT_EQ(value % 4, 0) << "Deleted row " << value;
+        ++numFirstFileRows;
+      }
+    }
+    // Allows 10%, which is 5 standard deviations for the first file and 10 for
+    // the second.
+    const double expectedFirstFileRows = kSampleRate * kNumFileRows / 4;
+    const double expectedSecondFileRows = kSampleRate * kNumFileRows;
+    EXPECT_NEAR(
+        numFirstFileRows, expectedFirstFileRows, 0.1 * expectedFirstFileRows);
+    EXPECT_NEAR(
+        result->size() - numFirstFileRows,
+        expectedSecondFileRows,
+        0.1 * expectedSecondFileRows);
+  }
+}
+
+// Sampling skips whole stripes without reading them, so the deletion bitmap of
+// the next batch must start at the first row after the skipped stripes.
+TEST_F(PaimonConnectorTest, randomSampleSkipsStripes) {
+  random::setSeed(42);
+  constexpr int32_t kNumStripes{1'000};
+  constexpr int32_t kNumStripeRows{100};
+  constexpr int64_t kNumRows{kNumStripes * kNumStripeRows};
+  // Skips a stripe with probability (1 - 0.02)^100, about 13%.
+  constexpr double kSampleRate{0.02};
+  std::vector<RowVectorPtr> stripes;
+  stripes.reserve(kNumStripes);
+  for (int32_t stripe = 0; stripe < kNumStripes; ++stripe) {
+    stripes.emplace_back(makeRowVector(
+        {makeFlatVector<int64_t>(kNumStripeRows, [stripe](auto row) {
+          return stripe * kNumStripeRows + row;
+        })}));
+  }
+  // Deletes a pseudo-random half of the rows, so that a deletion bitmap
+  // applied at the wrong row lets deleted rows through.
+  std::mt19937 rng(7);
+  std::vector<bool> deleted(kNumRows);
+  std::vector<int64_t> deletedPositions;
+  for (int64_t row = 0; row < kNumRows; ++row) {
+    deleted[row] = rng() % 2 == 0;
+    if (deleted[row]) {
+      deletedPositions.emplace_back(row);
+    }
+  }
+  const auto deletionFile =
+      writeDeletionVectors({deletedPositions}, /*version=*/1)[0];
+
+  auto queryCtx = core::QueryCtx::create();
+  const auto config = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{});
+  auto context = queryContextBuilder(queryCtx.get())
+                     .sessionProperties(config.get())
+                     .build();
+  const auto connector = ConnectorRegistry::tryGet(kPaimonConnectorId);
+  const auto rowType = ROW("c0", BIGINT());
+  const auto table = makeSampledTableHandle(rowType, kSampleRate);
+  const auto columns = makePaimonColumnHandles(rowType);
+  // Parquet readers sample row by row and skip no row groups.
+  std::vector<dwio::common::FileFormat> formats{dwio::common::FileFormat::DWRF};
+#ifdef VELOX_ENABLE_NIMBLE
+  formats.emplace_back(dwio::common::FileFormat::NIMBLE);
+#endif
+  for (auto format : formats) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto files = makeFilePaths(1);
+    writeStripes(files[0]->getPath(), stripes, format);
+    PaimonDataFile dataFile;
+    dataFile.path = files[0]->getPath();
+    dataFile.fileFormat = format;
+    dataFile.rowCount = kNumRows;
+    dataFile.deletionFile = deletionFile;
+
+    auto source =
+        connector->createDataSource(rowType, table, columns, context.get());
+    source->addSplit(makePaimonSplit({dataFile}));
+    std::vector<int64_t> sampledRows;
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    for (;;) {
+      const auto result = source->next(kNumRows, future);
+      ASSERT_TRUE(result.has_value());
+      if (*result == nullptr) {
+        break;
+      }
+      DecodedVector values(*(*result)->childAt(0));
+      for (vector_size_t i = 0; i < (*result)->size(); ++i) {
+        sampledRows.emplace_back(values.valueAt<int64_t>(i));
+      }
+    }
+    // The rows of skipped stripes are never scanned.
+    EXPECT_LT(source->getCompletedRows(), kNumRows);
+    for (size_t i = 0; i < sampledRows.size(); ++i) {
+      if (i > 0) {
+        ASSERT_LT(sampledRows[i - 1], sampledRows[i]);
+      }
+      ASSERT_FALSE(deleted[sampledRows[i]]) << "Deleted row " << sampledRows[i];
+    }
+    // Allows 20%, which is 6 standard deviations.
+    const double expectedNumRows = kSampleRate *
+        (kNumRows - static_cast<int64_t>(deletedPositions.size()));
+    EXPECT_NEAR(sampledRows.size(), expectedNumRows, 0.2 * expectedNumRows);
+  }
+}
+
+// A deletion file opens like a data file, with the connector config and the
+// query's token provider.
+TEST_F(PaimonConnectorTest, deletionVectorFileOptions) {
+  const auto fileSystem = validationFileSystem();
+  fileSystem->openedFiles = 0;
+  fileSystem->numOpensWithoutTokenProvider = 0;
+  fileSystem->numResolvesWithoutConfig = 0;
+
+  auto queryCtx = core::QueryCtx::create();
+  const auto config = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{});
+  auto context =
+      queryContextBuilder(queryCtx.get())
+          .sessionProperties(config.get())
+          .tokenProvider(
+              std::make_shared<filesystems::PlainUserNameTokenProvider>(
+                  "paimon"))
+          .build();
+  const auto rowType = ROW("c0", BIGINT());
+  const auto input = makeRowVector({makeFlatVector<int64_t>({0, 1, 2})});
+  const auto files = makeFilePaths(1);
+  writeToFile(files[0]->getPath(), input);
+  PaimonDataFile dataFile;
+  dataFile.path = files[0]->getPath();
+  dataFile.fileFormat = dwio::common::FileFormat::DWRF;
+  dataFile.rowCount = input->size();
+  dataFile.deletionFile = writeDeletionVectors({{1}}, /*version=*/1)[0];
+  dataFile.deletionFile->path =
+      "paimon-table-test:" + dataFile.deletionFile->path;
+
+  auto source = ConnectorRegistry::tryGet(kPaimonConnectorId)
+                    ->createDataSource(
+                        rowType,
+                        makePaimonTableHandle(rowType),
+                        makePaimonColumnHandles(rowType),
+                        context.get());
+  source->addSplit(makePaimonSplit({dataFile}));
+  ContinueFuture future = ContinueFuture::makeEmpty();
+  auto result = source->next(100, future);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_NE(*result, nullptr);
+  test::assertEqualVectors(
+      makeRowVector({makeFlatVector<int64_t>({0, 2})}), *result);
+  EXPECT_EQ(fileSystem->openedFiles, 1);
+  EXPECT_EQ(fileSystem->numOpensWithoutTokenProvider, 0);
+  EXPECT_EQ(fileSystem->numResolvesWithoutConfig, 0);
 }
 
 // E2E test: multiple splits each with multiple files.

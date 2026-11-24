@@ -17,7 +17,7 @@ The following table shows the list of already supported encodings.
 | **MainlyConstant** | Mostly identical | Stores a common value plus exceptions. |
 | **RLE** | Repeated runs | Run-length encoding: (value, count) pairs. |
 | **Dictionary** | Low cardinality | Alphabet of unique values + index array. |
-| **FixedBitWidth** | Bounded integers | Bit-packs integers using the minimum bits needed. |
+| **FixedBitWidth** | Bounded integers | Bit-packs integers using the minimum bits needed. Optionally stores wide-enough integer chunks as typed lanes (see [FixedBitWidth typed lanes](#fixedbitwidth-typed-lanes)). |
 | **Varint** | Variable integers | Variable-length integer encoding. |
 | **Delta** | Sequential/trending | Stores deltas between consecutive values. |
 | **Sentinel** | Nullable data | It uses a sentinel value to represent nulls. |
@@ -26,6 +26,41 @@ The following table shows the list of already supported encodings.
 | **Prefix** | Shared prefixes | Prefix-based string encoding. |
 | **SubIntSplit** | Structured 32/64-bit numeric values | Splits physical values into independently encoded bit ranges. See [SubIntSplit encoding](SubIntSplit.md). |
 | **Reversed** | Descending integers | Complements each value's order-preserving form so descending values ascend, and stores them in a nested encoding, such as EliasFano, PartitionedEliasFano or DeltaBlock. Not a default candidate. |
+
+### FixedBitWidth typed lanes
+
+`WriterOptions::fixedBitWidthTypedLanes` (off by default) makes FixedBitWidth
+store eligible chunks as typed lanes instead of a bit-packed payload, so a typed
+compressor sees whole integers. A chunk is eligible when it is encoded with an
+integer type, its bit width rounded up to whole bytes is at least 16
+(`fixedBitWidthUseExactBits` does not apply to lanes), it has at least
+`fixedBitWidthTypedLanesMinValues` values (default 256) and its compression
+policy uses a compressor that reads the payload's data type: Managed
+Compression (`MetaInternal`) or OpenZL. Zstd and Lz4 compress bytes, so lanes
+would only widen their input, and chunks they compress stay bit-packed. A chunk
+stored with a floating-point type is never eligible, even though its physical
+type is an integer: non-null float and double streams, and the float or double
+values in their Dictionary, RLE and MainlyConstant encodings. The non-null
+values of a nullable float or double stream are stored as integers, so they can
+be eligible, unless they are selected as ALP, ALPRD, Dictionary, RLE or
+MainlyConstant of the floating-point type.
+
+- **Narrow lanes:** 32- and 64-bit types whose stored width is at most half the
+  type width use 16-bit lanes (values of up to 16 bits) or 32-bit lanes, with
+  the minimum as baseline, compressed as `Uint16` or `Uint32`.
+- **Full-width lanes:** every other eligible chunk uses the type's width and a
+  baseline of 0, so the payload is the raw values, compressed as the stream's
+  data type.
+
+Both payloads are `rowCount * width / 8 + 8` bytes: whole lanes plus 8 zero
+bytes. The encoding header and the reader are unchanged, so every reader decodes
+typed lanes without an option. Selection is unchanged too: FixedBitWidth is
+chosen by its bit-packed size estimate, and lanes only change how it is stored.
+FixedBitWidth chunks stored with a floating-point type never take lanes, so
+they are stored as without the option, at the exact width when
+`fixedBitWidthUseExactBits` is set. With `fixedBitWidthUseExactBits` on, a chunk
+that takes lanes is estimated and stored at the byte-rounded width; chunks
+bit-packed without lanes keep the exact width.
 
 ## Cascading (Recursive) Encoding
 

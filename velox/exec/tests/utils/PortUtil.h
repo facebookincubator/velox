@@ -16,21 +16,16 @@
 
 #pragma once
 
-#include <vector>
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+#include "velox/exec/tests/utils/Ports.h"
 
 namespace facebook::velox::exec::test {
 
-/// Find one or more free ports.
-///
-/// Of course, there's no guarantee it won't be snatched by the time you
-/// actually want to use it, but it is safer than hard coding a port or
-/// randomly choosing one.
-///
-/// NOTE: If you need multiple free ports, use getFreePorts() rather than
-/// calling getFreePort() multiple times. The latter may give you a same
-/// port multiple times, unless you started listening to the provided port
-/// before calling the function again.
-int getFreePort();
-std::vector<int> getFreePorts(std::size_t numPorts);
+/// Legacy API. Prefer Ports::findFreePort(). Removed once Prestissimo
+/// migrates.
+inline int getFreePort() {
+  return Ports::findFreePort();
+}
 
 } // namespace facebook::velox::exec::test
+#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY

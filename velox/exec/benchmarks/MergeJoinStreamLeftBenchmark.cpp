@@ -41,7 +41,6 @@
 using facebook::velox::RowVector;
 using facebook::velox::RowVectorPtr;
 using facebook::velox::vector_size_t;
-using facebook::velox::core::PlanNodeIdGenerator;
 using facebook::velox::core::PlanNodePtr;
 using facebook::velox::core::QueryConfig;
 using facebook::velox::core::QueryCtx;
@@ -95,12 +94,12 @@ class BenchmarkData : public facebook::velox::test::VectorTestBase {
     right_ = split(
         makeRowVector({"rk", "rv"}, {rightKeys, rightPayload}), kBatchSize);
 
-    plan_ = PlanBuilder(planIdGenerator_)
-                .values(left_)
+    PlanBuilder builder;
+    plan_ = builder.values(left_)
                 .mergeJoin(
                     {"lk"},
                     {"rk"},
-                    PlanBuilder(planIdGenerator_).values(right_).planNode(),
+                    builder.newPlan().values(right_).planNode(),
                     "",
                     {"lk", "lv", "rv"})
                 .planNode();
@@ -132,8 +131,6 @@ class BenchmarkData : public facebook::velox::test::VectorTestBase {
     return batches;
   }
 
-  std::shared_ptr<PlanNodeIdGenerator> planIdGenerator_{
-      std::make_shared<PlanNodeIdGenerator>()};
   std::shared_ptr<folly::CPUThreadPoolExecutor> executor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(4)};
   std::vector<RowVectorPtr> left_;

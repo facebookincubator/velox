@@ -21,6 +21,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Window.h"
+#include "velox/exec/WindowStatNames.h"
 
 namespace facebook::velox::exec::window {
 
@@ -397,8 +398,8 @@ void SortWindowBuild::loadNextPartitionBatchFromSpill() {
     numSpillReadBatches_--;
 
     auto lockedOpStats = opStats_->wlock();
-    lockedOpStats
-        ->runtimeStats[std::string(Window::kWindowSpillReadNumBatches)] =
+    lockedOpStats->runtimeStats[std::string(
+        WindowStatNames::kWindowSpillReadNumBatches)] =
         RuntimeMetric(numSpillReadBatches_);
   }
 }

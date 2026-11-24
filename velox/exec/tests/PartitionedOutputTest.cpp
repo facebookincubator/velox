@@ -154,10 +154,9 @@ TEST_P(PartitionedOutputTest, flush) {
   // up to a defined threshold
   ASSERT_EQ(partition1.size(), 2);
 
-  auto planStats = toPlanStats(task->taskStats());
   const auto serdeKindRuntimsStats =
-      planStats.at(partitionNodeId)
-          .customStats.at(std::string(Operator::kShuffleSerdeKind));
+      PlanNodeStats::extract(task->taskStats(), partitionNodeId)
+          .customStat(Operator::kShuffleSerdeKind);
   ASSERT_EQ(serdeKindRuntimsStats.count, 1);
   ASSERT_EQ(
       serdeKindRuntimsStats.min,
@@ -271,10 +270,9 @@ TEST_P(PartitionedOutputTest, multipleFlushCycles) {
   // Partition 1 should have no data (or just the final flush marker).
   ASSERT_LE(partition1.size(), 1);
 
-  auto planStats = toPlanStats(task->taskStats());
   const auto serdeKindRuntimsStats =
-      planStats.at(partitionNodeId)
-          .customStats.at(std::string(Operator::kShuffleSerdeKind));
+      PlanNodeStats::extract(task->taskStats(), partitionNodeId)
+          .customStat(Operator::kShuffleSerdeKind);
   ASSERT_EQ(serdeKindRuntimsStats.count, 1);
   ASSERT_EQ(
       serdeKindRuntimsStats.min,

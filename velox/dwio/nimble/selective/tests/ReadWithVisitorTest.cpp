@@ -1328,15 +1328,22 @@ class ReadWithVisitorTest : public ::testing::Test,
     dispatchCallReadWithVisitor(*encoding, visitor, params);
 
     const auto& cache = reader->scanState().filterCache;
-    ASSERT_EQ(cache.size(), encoding->dictionarySize());
-    for (uint32_t index = 0; index < encoding->dictionarySize(); ++index) {
-      const auto value =
-          *static_cast<const T*>(encoding->dictionaryEntry(index));
-      EXPECT_EQ(
-          cache[index],
-          common::applyFilter(filter, value)
-              ? dwio::common::FilterResult::kSuccess
-              : dwio::common::FilterResult::kFailure);
+
+    // A filter that keeps nulls on a read with nulls takes the regular read,
+    // which never builds the verdict cache.
+    if (nullable && nullAllowed) {
+      EXPECT_TRUE(cache.empty());
+    } else {
+      ASSERT_EQ(cache.size(), encoding->dictionarySize());
+      for (uint32_t index = 0; index < encoding->dictionarySize(); ++index) {
+        const auto value =
+            *static_cast<const T*>(encoding->dictionaryEntry(index));
+        EXPECT_EQ(
+            cache[index],
+            common::applyFilter(filter, value)
+                ? dwio::common::FilterResult::kSuccess
+                : dwio::common::FilterResult::kFailure);
+      }
     }
     // Values compare as bit patterns so NaN payloads and signed zeros match
     // exactly. Null rows compare as nullopt.
@@ -1540,10 +1547,13 @@ class ReadWithVisitorTest : public ::testing::Test,
             reader->outputRows().begin(), reader->outputRows().end());
         EXPECT_EQ(actualRows, expectedRows);
 
-        // A filter-only read on the default path leaves numValues to
+        // A filter-only read on the regular path leaves numValues to
         // ChunkedDecoder, which sets it to the output row count after each
-        // chunk.
-        if (dictionaryAwareReads || !filterOnly) {
+        // chunk. Dictionary-aware reads take the regular path too when the
+        // filter keeps nulls and the read has nulls.
+        const bool fusedRead =
+            dictionaryAwareReads && !(nullAllowed && rawNulls != nullptr);
+        if (fusedRead || !filterOnly) {
           EXPECT_EQ(reader->numValues(), expectedRows.size());
         }
         if (!filterOnly) {
@@ -1586,13 +1596,14 @@ class ReadWithVisitorTest : public ::testing::Test,
   // dictionary with 'indicesLayout' indices on the dictionary-aware path, for
   // every null pattern and every pass/fail pattern of the selected rows, and
   // checks output rows, values and null bits against a row-by-row reference.
-  // The BigintRange [200, 800] accepts nulls, so the nulls between the first
-  // and last non-null rows go through FusedDictionaryIndicesHook::
-  // mergeBulkNulls. A passing row holds 300 plus its row number and a failing
-  // row holds its row number. With 'singleValue', every non-null row holds 500
-  // or 100 instead, so all indices are 0, as ConstantEncoding needs.
+  // The BigintRange [200, 800] accepts nulls. useBulkPath() declines that
+  // filter when the read has nulls, so DictionaryEncoding takes its regular
+  // read then, and its fused read when the read has no nulls. A passing row
+  // holds 300 plus its row number and a failing row holds its row number. With
+  // 'singleValue', every non-null row holds 500 or 100 instead, so all indices
+  // are 0, as ConstantEncoding needs.
   template <bool kIsDense>
-  void testDictionaryAwareNullMerge(
+  void testDictionaryAwareNullAcceptingFilter(
       const EncodingLayout& indicesLayout,
       bool singleValue,
       bool scanFastPath,
@@ -1702,7 +1713,12 @@ class ReadWithVisitorTest : public ::testing::Test,
           const std::vector<vector_size_t> actualRows(
               reader->outputRows().begin(), reader->outputRows().end());
           ASSERT_EQ(actualRows, expectedRows);
-          ASSERT_EQ(reader->numValues(), expectedRows.size());
+
+          // A read with nulls takes the regular read. Filter-only, it leaves
+          // numValues to ChunkedDecoder.
+          if (!filterOnly || rawNulls == nullptr) {
+            ASSERT_EQ(reader->numValues(), expectedRows.size());
+          }
           if (!filterOnly) {
             const auto values = getValues<int64_t>(reader);
             const auto& resultNulls = reader->resultNullsForTest();
@@ -5443,8 +5459,11 @@ TEST_F(ReadWithVisitorTest, encodingLevelDictionaryIsNullSparse) {
       const std::vector<vector_size_t> actualRows(
           reader->outputRows().begin(), reader->outputRows().end());
       EXPECT_EQ(actualRows, expectedRows);
-      EXPECT_EQ(reader->numValues(), expectedRows.size());
+
+      // IsNull keeps nulls and the read has nulls, so it takes the regular
+      // read. Filter-only, that leaves numValues to ChunkedDecoder.
       if (!filterOnly) {
+        EXPECT_EQ(reader->numValues(), expectedRows.size());
         const auto& resultNulls = reader->resultNullsForTest();
         ASSERT_NE(resultNulls, nullptr);
         for (size_t index = 0; index < expectedRows.size(); ++index) {
@@ -5613,14 +5632,16 @@ TEST_F(ReadWithVisitorTest, encodingLevelDictionaryIndexEncodings) {
   }
 }
 
-// Checks dictionary-aware reads against a row-by-row reference for every null
-// pattern and every pass/fail pattern of 8 rows, so mergeBulkNulls runs on both
-// branches, including at the threshold between them, with and without earlier
-// output from leading nulls. Trivial indices reach the hook through
-// processFixedWidthRun. RLE, MainlyConstant and Constant indices call it from
-// their own bulkScan, and Constant takes the bulk path only with scanFastPath.
-// The sparse reads select every other row.
-TEST_F(ReadWithVisitorTest, encodingLevelDictionaryAwareNullMergeExhaustive) {
+// Checks dictionary-aware reads with a filter that keeps nulls against a
+// row-by-row reference for every null pattern and every pass/fail pattern of 8
+// rows. Reads with nulls take the regular read and reads without take the fused
+// read. The index encodings cover both ways indices reach the fused hook:
+// Trivial through processFixedWidthRun, and RLE, MainlyConstant and Constant
+// from their own bulkScan, Constant only with scanFastPath. The sparse reads
+// select every other row.
+TEST_F(
+    ReadWithVisitorTest,
+    encodingLevelDictionaryAwareNullAcceptingFilterExhaustive) {
   constexpr vector_size_t kSelectedRows{8};
 
   // An index encoding and the read options it needs.
@@ -5638,13 +5659,13 @@ TEST_F(ReadWithVisitorTest, encodingLevelDictionaryAwareNullMergeExhaustive) {
   };
   for (const auto& indicesCase : indicesCases) {
     SCOPED_TRACE(indicesCase.name);
-    testDictionaryAwareNullMerge</*kIsDense=*/true>(
+    testDictionaryAwareNullAcceptingFilter</*kIsDense=*/true>(
         indicesCase.layout,
         indicesCase.singleValue,
         indicesCase.scanFastPath,
         kSelectedRows,
         /*rowStep=*/1);
-    testDictionaryAwareNullMerge</*kIsDense=*/false>(
+    testDictionaryAwareNullAcceptingFilter</*kIsDense=*/false>(
         indicesCase.layout,
         indicesCase.singleValue,
         indicesCase.scanFastPath,

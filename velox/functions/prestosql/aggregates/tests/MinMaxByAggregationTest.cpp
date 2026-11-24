@@ -2566,10 +2566,8 @@ TEST_F(MinMaxByNTest, peakMemory) {
     std::shared_ptr<exec::Task> task;
     auto results = AssertQueryBuilder(plan).copyResults(pool(), task);
 
-    auto planStats = toPlanStats(task->taskStats());
-    auto& aggrStats = planStats[aggId];
-
-    return aggrStats.peakMemoryBytes;
+    return exec::PlanNodeStats::extract(task->taskStats(), aggId)
+        .peakMemoryBytes;
   };
 
   auto minByPeak = getPeakMemoryBytes("min_by(c0, c1, 2)");

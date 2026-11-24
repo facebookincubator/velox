@@ -28,8 +28,11 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 #include "velox/expression/fuzzer/ExpressionFuzzer.h"
 
 namespace facebook::velox::connector::hive {
@@ -87,6 +90,18 @@ class TableEvolutionFuzzer {
     int64_t overreadBytes{0};
   };
 
+  /// Describes one subfield filter of a query.
+  struct SubfieldFilterShape {
+    /// Type of the filtered column, such as DOUBLE.
+    std::string type;
+    /// Kind of the filter, such as DoubleRange.
+    std::string kind;
+    /// True when the column is REAL or DOUBLE and NaN passes the filter. Velox
+    /// orders NaN above every other value, so a range with no upper bound
+    /// passes NaN. Statistics that leave NaN out of the bounds lose those rows.
+    bool passesNaN{false};
+  };
+
   /// Correlated coverage facts from one completed query comparison.
   struct QueryCoverage {
     std::vector<InputFile> pushdownFiles;
@@ -101,6 +116,8 @@ class TableEvolutionFuzzer {
     std::vector<std::string> subfieldFilterTypes;
     std::vector<std::string> remainingFilterTypes;
     std::vector<std::string> filterKinds;
+    /// One entry per subfield filter.
+    std::vector<SubfieldFilterShape> subfieldFilterShapes;
     /// Lists types for null-accepting filters whose input contains nulls.
     std::vector<std::string> nullAcceptingSubfieldFilterTypes;
     std::vector<std::string> groupingKeyTypes;
@@ -161,6 +178,19 @@ class TableEvolutionFuzzer {
     int64_t numVerified{0};
   };
 
+  /// Counts executed queries by whether statistics let the pushdown scan skip
+  /// data.
+  struct StatsPruningCoverage {
+    int64_t numQueries{0};
+    /// Queries that skipped at least one whole file by its column statistics.
+    int64_t numWithSkippedFiles{0};
+    /// Queries that skipped at least one stride by its statistics: a row group
+    /// in DWRF, a stripe in Nimble.
+    int64_t numWithSkippedStrides{0};
+    /// Queries that skipped at least one row by chunk statistics.
+    int64_t numWithSkippedChunks{0};
+  };
+
   /// Tracks filter query shapes and query-level runtime effects.
   struct FilterCoverage {
     int64_t numRequested{0};
@@ -184,6 +214,14 @@ class TableEvolutionFuzzer {
     std::map<std::string, QueryDimensionCoverage> subfieldByType;
     std::map<std::string, QueryDimensionCoverage> remainingByType;
     std::map<std::string, QueryDimensionCoverage> byKind;
+    /// Keyed by the type of the filtered column, then by filter kind. Counts
+    /// only the queries whose one filter is a subfield filter, so that a skip
+    /// is that filter's doing.
+    std::map<std::string, std::map<std::string, StatsPruningCoverage>>
+        statsPruningByTypeAndKind;
+    /// Keyed by filter kind. Counts the same queries, for the subfield filters
+    /// that NaN passes.
+    std::map<std::string, StatsPruningCoverage> statsPruningOfNaNPassingFilters;
   };
 
   /// Tracks aggregation requests and query-level ValueHook activation.
@@ -233,6 +271,9 @@ class TableEvolutionFuzzer {
     int64_t numVerificationsPassed{0};
     int64_t numVerificationsFailed{0};
     int64_t numOriginalVerificationsPassed{0};
+    /// Tables that run() generated and wrote. Input files that
+    /// runOnInputFile() reads do not count.
+    int64_t numTablesWritten{0};
     ConfigCoverage configs;
     QueryShapeCoverage queryShapes;
     std::map<std::string, int64_t> failuresByPhase;
@@ -252,9 +293,12 @@ class TableEvolutionFuzzer {
     std::vector<std::pair<std::string, TypePtr>> additionalColumns;
 
     /// Rewrites a freshly fuzzed, flattened batch before sizing, writing, or
-    /// retaining it for the in-memory oracle. The row offset is within the
-    /// current file and the seed identifies the current fuzzer iteration.
-    std::function<void(const RowVectorPtr&, uint64_t, uint64_t)>
+    /// retaining it for the in-memory oracle. The arguments after the batch
+    /// are the seed of the current fuzzer iteration, the schema evolution step
+    /// that writes the batch, counting from 0, and the batch's row offset
+    /// within that step's file. Each step writes its own files, so the step
+    /// lets a driver give each step's files different values.
+    std::function<void(const RowVectorPtr&, uint64_t, int, uint64_t)>
         dataBatchMutator;
 
     /// Returns extra writer serde params to merge for one file, or none when
@@ -281,6 +325,10 @@ class TableEvolutionFuzzer {
     /// Set to e.g. 0.1 for format-specific fuzzers that need null coverage.
     double nullRatio = 0;
 
+    /// Special REAL and DOUBLE values, such as NaN and infinity, that the data
+    /// generator draws. Default draws none.
+    fuzzer::DataSpec dataSpec{/*includeNaN=*/false, /*includeInfinity=*/false};
+
     /// Runtime stat keys to collect from operator stats into
     /// ScanPlanCoverage::customRuntimeStats. Format-specific drivers populate
     /// this so the generic fuzzer collects the stats without knowing what they
@@ -299,6 +347,11 @@ class TableEvolutionFuzzer {
     /// Logs file-format-specific metrics within comprehensive coverage
     /// reports. Unset when the caller has no additional metrics.
     std::function<void()> fileFormatCoverageLogger;
+
+    /// Returns the file-format-specific coverage gaps, one line each, for the
+    /// coverage summary's list of what the run has not exercised. Unset when
+    /// the caller tracks none.
+    std::function<std::vector<std::string>()> fileFormatCoverageGaps;
   };
 
   /// Per-batch raw-byte target and clamp bounds for adaptive batch sizing. A
@@ -428,8 +481,18 @@ class TableEvolutionFuzzer {
   /// Logs cumulative query and verification totals.
   void logCoverageProgress() const;
 
-  /// Logs progress, file-format-specific metrics, and all coverage dimensions.
+  /// Logs the run's seed, iterations and elapsed time, progress, what the run
+  /// has not exercised, file-format-specific metrics, and all coverage
+  /// dimensions.
   void logCoverageSummary() const;
+
+  /// Lists what a run has not exercised, one line per gap: features the
+  /// generator can reach that no table or query reached, such as flat maps,
+  /// and filters whose statistics never skipped data. Ends with the lines of
+  /// config.fileFormatCoverageGaps. Public so the rules can be unit tested.
+  static std::vector<std::string> coverageGaps(
+      const CoverageAccumulator& coverage,
+      const Config& config);
 
   virtual ~TableEvolutionFuzzer() = default;
 
@@ -611,6 +674,9 @@ class TableEvolutionFuzzer {
   /// Logs cumulative coverage once the configured reporting interval elapses.
   void maybeLogCoverageSummary();
 
+  /// Seeds the fuzzer's generators with 'seed' for the next iteration.
+  void applySeed(unsigned seed);
+
   /// Opens 'inputFile' far enough to read its schema.
   RowTypePtr readInputFileSchema(const InputFile& inputFile) const;
 
@@ -637,6 +703,12 @@ class TableEvolutionFuzzer {
   /// build its splits from the file rather than from write results.
   const InputFile* inputFile_ = nullptr;
   unsigned currentSeed_;
+  /// Seed of the last setSeed() call, which reproduces the whole run.
+  unsigned runSeed_{0};
+  /// Calls to run() and runOnInputFile().
+  int64_t numIterations_{0};
+  std::chrono::steady_clock::time_point startTime_{
+      std::chrono::steady_clock::now()};
   FuzzerGenerator rng_;
   /// Per-query-shape read-side connector session properties for the pushdown
   /// scan (first) and the reference scan (second). Computed once per shape in
@@ -650,5 +722,21 @@ class TableEvolutionFuzzer {
       std::chrono::steady_clock::now()};
   int64_t sequenceNumber_ = 0;
 };
+
+/// Formats 'rows' under 'header' as an aligned table for the coverage report,
+/// one line per row, each line starting with 'indentation'. Pads every column
+/// to its widest cell and separates columns with two spaces. Aligns the first
+/// 'numLabelColumns' columns to the left and the others, which hold numbers,
+/// to the right.
+std::string formatCoverageTable(
+    const std::vector<std::string>& header,
+    const std::vector<std::vector<std::string>>& rows,
+    size_t numLabelColumns,
+    std::string_view indentation);
+
+/// Formats 'part' as a whole percentage of 'whole' for the coverage report.
+/// Returns "<1%" or ">99%" for a share that would round to 0% or 100%
+/// without being either, and "-" when 'whole' is 0.
+std::string formatCoveragePercent(int64_t part, int64_t whole);
 
 } // namespace facebook::velox::exec::test

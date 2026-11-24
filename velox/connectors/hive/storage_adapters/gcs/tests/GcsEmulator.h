@@ -24,7 +24,8 @@
 #include "velox/common/config/Config.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/storage_adapters/gcs/GcsUtil.h"
-#include "velox/exec/tests/utils/PortUtil.h"
+#include "velox/connectors/hive/storage_adapters/test_common/ServerStartup.h"
+#include "velox/exec/tests/utils/Ports.h"
 
 namespace bp = boost::process;
 namespace gc = google::cloud;
@@ -43,8 +44,8 @@ static std::string_view kLoremIpsum =
 class GcsEmulator : public testing::Environment {
  public:
   GcsEmulator() {
-    auto port = std::to_string(exec::test::getFreePort());
-    endpoint_ = "http://localhost:" + port;
+    const auto port = exec::test::Ports::findFreePort();
+    endpoint_ = "http://localhost:" + std::to_string(port);
     std::vector<std::string> names{"python3", "python"};
     // If the build script or application developer provides a value in the
     // PYTHON environment variable, then just use that.
@@ -68,9 +69,19 @@ class GcsEmulator : public testing::Environment {
           "-m",
           "testbench",
           "--port",
-          port,
+          std::to_string(port),
           group_);
       if (serverProcess_.valid()) {
+        try {
+          velox::test::ServerStartup::wait(
+              fmt::format("GcsEmulator on port {}", port),
+              [port] { return exec::test::Ports::isListening(port); },
+              [this] { return serverProcess_.running(); });
+        } catch (const std::exception&) {
+          group_.terminate();
+          serverProcess_.wait();
+          throw;
+        }
         return;
       }
       error << " (failed to start)";

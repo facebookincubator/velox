@@ -348,8 +348,6 @@ class TableWriterTestBase : public HiveConnectorTestBase {
   const TestMode testMode_;
   const int numTableWriterCount_;
   const int numPartitionedTableWriterCount_;
-  const std::shared_ptr<core::PlanNodeIdGenerator> planNodeIdGenerator_{
-      std::make_shared<core::PlanNodeIdGenerator>()};
 
   RowTypePtr rowType_;
   RowTypePtr tableSchema_;

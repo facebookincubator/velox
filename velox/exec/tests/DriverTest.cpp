@@ -265,9 +265,7 @@ class DriverTest : public OperatorTestBase {
       batches.push_back(
           makeNamedRowVector("c0", makeFlatVector<int32_t>({1, 2, 3})));
     }
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan =
-        PlanBuilder(planNodeIdGenerator).values(batches, true).planFragment();
+    auto plan = PlanBuilder().values(batches, true).planFragment();
     auto task = Task::create(
         "t0",
         plan,
@@ -1179,7 +1177,7 @@ TEST_F(DriverTest, closeThrowsInMultipleOperators) {
         id, ThrowNode::OperatorMethod::kClose, input);
   };
   auto plan = PlanBuilder()
-                  .values({rows})
+                  .values(rows)
                   .addNode(addThrowNode)
                   .addNode(addThrowNode)
                   .planNode();
@@ -1632,9 +1630,7 @@ DEBUG_ONLY_TEST_F(DriverTest, driverCpuTimeSlicingCheck) {
                     values->operatorCtx()->driver()->state().execTimeMs(), 0);
               }
             }));
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto fragment =
-        PlanBuilder(planNodeIdGenerator).values(batches).planFragment();
+    auto fragment = PlanBuilder().values(batches).planFragment();
     std::unordered_map<std::string, std::string> queryConfig;
     if (testParam.hasCpuTimeSliceLimit) {
       queryConfig.emplace(core::QueryConfig::kDriverCpuTimeSliceLimitMs, "500");
@@ -1701,7 +1697,7 @@ TEST_F(DriverTest, additionalContextInRuntimeException) {
   registerFunction<ThrowRuntimeExceptionFunction, int64_t, int64_t>(
       {"throwException"});
   auto op = PlanBuilder(std::make_shared<core::PlanNodeIdGenerator>(13))
-                .values({vector})
+                .values(vector)
                 .project({"c0 + throwException(c0)"})
                 .planNode();
   try {

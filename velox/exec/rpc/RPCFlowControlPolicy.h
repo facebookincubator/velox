@@ -16,7 +16,11 @@
 
 #pragma once
 
+#include <fmt/format.h>
+
 #include <string_view>
+
+#include "velox/common/EnumDeclare.h"
 
 namespace facebook::velox::exec::rpc {
 
@@ -31,11 +35,12 @@ enum class RPCFlowControlPolicy {
   kCapacityProbing = 1,
 };
 
+VELOX_DECLARE_ENUM_NAME(RPCFlowControlPolicy);
+
 /// Parses a policy name, ignoring ASCII case. Throws a user error for any
 /// other value.
 RPCFlowControlPolicy parseRPCFlowControlPolicy(std::string_view value);
 
-/// Returns the policy's configuration name.
-std::string_view rpcFlowControlPolicyName(RPCFlowControlPolicy policy);
-
 } // namespace facebook::velox::exec::rpc
+
+VELOX_ENUM_FORMATTER(facebook::velox::exec::rpc::RPCFlowControlPolicy);

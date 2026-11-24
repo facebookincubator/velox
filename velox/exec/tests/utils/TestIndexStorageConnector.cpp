@@ -19,6 +19,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/exec/IndexLookupJoin.h"
+#include "velox/exec/IndexLookupJoinStatNames.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
@@ -344,13 +345,13 @@ void TestIndexSource::recordCpuTiming(const CpuWallTiming& timing) {
   std::lock_guard<std::mutex> l(mutex_);
   if (timing.wallNanos != 0) {
     addOperatorRuntimeStats(
-        std::string(IndexLookupJoin::kConnectorLookupWallTime),
+        std::string(IndexLookupJoinStatNames::kConnectorLookupWallTime),
         RuntimeCounter(timing.wallNanos, RuntimeCounter::Unit::kNanos),
         runtimeStats_);
     // This is just for testing purpose to check if the runtime stats has been
     // set properly.
     addOperatorRuntimeStats(
-        std::string(IndexLookupJoin::kClientLookupWaitWallTime),
+        std::string(IndexLookupJoinStatNames::kClientLookupWaitWallTime),
         RuntimeCounter(timing.wallNanos, RuntimeCounter::Unit::kNanos),
         runtimeStats_);
   }
@@ -358,7 +359,7 @@ void TestIndexSource::recordCpuTiming(const CpuWallTiming& timing) {
     // This is just for testing purpose to check if the runtime stats has been
     // set properly.
     addOperatorRuntimeStats(
-        std::string(IndexLookupJoin::kConnectorResultPrepareTime),
+        std::string(IndexLookupJoinStatNames::kConnectorResultPrepareTime),
         RuntimeCounter(timing.cpuNanos, RuntimeCounter::Unit::kNanos),
         runtimeStats_);
   }

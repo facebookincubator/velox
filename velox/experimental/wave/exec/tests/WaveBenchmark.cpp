@@ -404,15 +404,13 @@ class WaveBenchmark : public QueryBenchmarkBase {
       folly::runBenchmarks();
     } else {
       const auto queryPlan = getQueryPlan(FLAGS_run_query_verbose);
-      auto [cursor, actualResults] = run(queryPlan);
-      if (!cursor) {
+      auto task = run(queryPlan);
+      if (!task) {
         LOG(ERROR) << "Query terminated with error. Exiting";
         exit(1);
       }
-      auto task = cursor->task();
-      ensureTaskCompletion(task.get());
       if (FLAGS_include_results) {
-        printResults(actualResults, out);
+        printResults(queryPlan, {}, out);
         out << std::endl;
       }
       const auto stats = task->taskStats();

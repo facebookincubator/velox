@@ -311,21 +311,21 @@ RuntimeStats::toRuntimeMetricMap() const {
     result.emplace(name, RuntimeMetric(metric.sum, metric.unit));
   }
   if (skippedSplits > 0) {
-    result.emplace("skippedSplits", RuntimeMetric(skippedSplits));
+    result.emplace(kSkippedSplits, RuntimeMetric(skippedSplits));
   }
   if (processedSplits > 0) {
-    result.emplace("processedSplits", RuntimeMetric(processedSplits));
+    result.emplace(kProcessedSplits, RuntimeMetric(processedSplits));
   }
   if (skippedSplitBytes > 0) {
     result.emplace(
-        "skippedSplitBytes",
+        kSkippedSplitBytes,
         RuntimeMetric(skippedSplitBytes, RuntimeCounter::Unit::kBytes));
   }
   if (skippedStrides > 0) {
-    result.emplace("skippedStrides", RuntimeMetric(skippedStrides));
+    result.emplace(kSkippedStrides, RuntimeMetric(skippedStrides));
   }
   if (processedStrides > 0) {
-    result.emplace("processedStrides", RuntimeMetric(processedStrides));
+    result.emplace(kProcessedStrides, RuntimeMetric(processedStrides));
   }
   if (chunkSkippedRows > 0) {
     result.emplace(kChunkSkippedRows, RuntimeMetric(chunkSkippedRows));
@@ -335,19 +335,19 @@ RuntimeStats::toRuntimeMetricMap() const {
   }
   if (footerBufferOverread > 0) {
     result.emplace(
-        "footerBufferOverread",
+        kFooterBufferOverread,
         RuntimeMetric(footerBufferOverread, RuntimeCounter::Unit::kBytes));
   }
   if (footerBufferUnderread > 0) {
     result.emplace(
-        "footerBufferUnderread",
+        kFooterBufferUnderread,
         RuntimeMetric(footerBufferUnderread, RuntimeCounter::Unit::kBytes));
   }
   if (footerCacheHit > 0) {
-    result.emplace("footerCacheHit", RuntimeMetric(footerCacheHit));
+    result.emplace(kFooterCacheHit, RuntimeMetric(footerCacheHit));
   }
   if (numStripes > 0) {
-    result.emplace("numStripes", RuntimeMetric(numStripes));
+    result.emplace(kNumStripes, RuntimeMetric(numStripes));
   }
   for (const auto& [format, metrics] : formatSpecificStats) {
     for (const auto& [name, metric] : metrics) {

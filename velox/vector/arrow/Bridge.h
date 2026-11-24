@@ -190,6 +190,10 @@ VectorPtr importFromArrowAsViewer(
 /// returned Vector will be responsible for calling the release callbacks when
 /// destructed.
 ///
+/// The inputs are marked released even if the import throws. A failed import
+/// has already called their release callbacks, so the caller must not release
+/// them again.
+///
 /// The buffers must follow the same alignment and padding as for
 /// importFromArrowAsViewer.
 VectorPtr importFromArrowAsOwner(
