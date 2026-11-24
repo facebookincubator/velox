@@ -18,6 +18,7 @@
 #include <bitset>
 #include <cmath>
 #include <limits>
+#include <string_view>
 #include <system_error>
 #include <type_traits>
 
@@ -30,51 +31,64 @@
 
 namespace facebook::velox::functions::sparksql {
 
-/// Rounds integral values using HALF_UP and the session's overflow policy.
+/// Rounds integral values using the selected mode and session overflow policy.
 /// Unlike Spark's JVM evaluator, extreme negative scales return zero without
 /// constructing large powers of ten, and nonnegative scales return the input.
 /// Spark can throw at INTEGER scale extremes, with interpreted and generated
 /// execution differing. Scale columns are a native extension; Spark requires a
-/// foldable scale. Integrations must guard offload to preserve Spark behavior.
-template <typename TExec>
-struct IntegralRoundFunction {
-  template <typename T>
-  void initialize(
-      const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& config,
-      const T* value) {
-    initialize(inputTypes, config, value, nullptr);
-  }
-
+/// foldable scale. HALF_EVEN requires a constant scale to match that contract;
+/// HALF_UP preserves the existing scale-column extension.
+template <typename TExec, bool halfEven>
+struct IntegralRoundingFunction {
+  /// Captures the session's overflow policy for the unary form.
   template <typename T>
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const T* /*value*/,
-      const int32_t* /*scale*/) {
+      const T* /*value*/) {
     ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
   }
 
+  /// Captures the overflow policy and validates the scale contract.
+  template <typename T>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const T* value,
+      const int32_t* scale) {
+    initialize(inputTypes, config, value);
+    if constexpr (halfEven) {
+      VELOX_USER_CHECK_NOT_NULL(
+          scale,
+          "The second argument of bround must be a constant expression.");
+    }
+  }
+
+  /// Applies rounding with the overflow policy captured at initialization.
   template <typename T>
   FOLLY_ALWAYS_INLINE Status
   call(T& result, const T& value, const int32_t scale = 0) {
-    return functions::detail::roundIntegral(
+    constexpr std::string_view functionName = halfEven ? "bround" : "round";
+    return functions::roundIntegral(
         result,
         value,
         scale,
         ansiEnabled_,
-        [](int128_t input, int128_t divisor) {
-          int128_t quotient;
-          DecimalArithmetic::divideWithRoundUp(
-              quotient, input, divisor, false, 0, 0);
-          return quotient;
-        },
-        "Arithmetic overflow: round({}, {})");
+        halfEven ? DecimalArithmetic::divideWithRoundHalfEven
+                 : DecimalArithmetic::divideWithRoundHalfUp,
+        functionName);
   }
 
  private:
+  // Retains the session policy even if the query context changes later.
   bool ansiEnabled_{false};
 };
+
+template <typename TExec>
+using IntegralRoundFunction = IntegralRoundingFunction<TExec, false>;
+
+template <typename TExec>
+using IntegralBRoundFunction = IntegralRoundingFunction<TExec, true>;
 
 // The abs implementation is used for primitive types except for decimal type.
 template <typename TExec>

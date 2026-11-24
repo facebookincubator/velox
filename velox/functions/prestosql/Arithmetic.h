@@ -297,30 +297,45 @@ struct NegateFunction {
   }
 };
 
-template <typename T>
-struct RoundFunction {
+/// Applies native rounding using the selected tie rule.
+/// Leaves integral inputs unchanged; Spark registers its ANSI-aware integral
+/// evaluator separately.
+template <typename T, bool halfEven>
+struct RoundingFunction {
+  /// Caches the factor for constant scales; HALF_EVEN requires such a scale.
   template <typename TInput>
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& /*config*/,
       const TInput* /*number*/,
       const int32_t* decimals) {
+    if constexpr (halfEven) {
+      VELOX_USER_CHECK_NOT_NULL(
+          decimals,
+          "The second argument of bround must be a constant expression.");
+    }
     if (decimals != nullptr) {
-      scaleFactor_ = std::pow(10, *decimals);
+      scaleFactor_ = roundingScaleFactor<halfEven>(*decimals);
     }
   }
 
+  /// Applies native rounding without computing a constant factor per row.
   template <typename TInput>
   VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
   call(TInput& result, const TInput& a, const int32_t b = 0) {
-    result = round(a, b, scaleFactor_);
+    result = round<TInput, int32_t, false, halfEven>(a, b, scaleFactor_);
   }
 
  private:
-  // 10^decimals when 'decimals' is a constant. Saves round() a pow() per row
-  // in the common constant case.
+  // Retains the mode-specific factor only when the scale is constant.
   std::optional<double> scaleFactor_;
 };
+
+template <typename T>
+using RoundFunction = RoundingFunction<T, false>;
+
+template <typename T>
+using BRoundFunction = RoundingFunction<T, true>;
 
 template <typename T>
 struct PowerFunction {

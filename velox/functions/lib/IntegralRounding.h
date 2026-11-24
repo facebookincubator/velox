@@ -19,16 +19,19 @@
 #include <bit>
 #include <cstdint>
 #include <limits>
+#include <string_view>
 #include <type_traits>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Status.h"
 #include "velox/type/DecimalArithmetic.h"
 
-namespace facebook::velox::functions::detail {
+namespace facebook::velox::functions {
 
-// Rounds signed inputs up to BIGINT using the supplied rounded division.
-// Shares scale bounds, ANSI overflow checks and wraparound across policies.
+/// Rounds signed inputs up to BIGINT using the supplied rounded division.
+/// Applies ANSI overflow checks or two's-complement narrowing, and returns
+/// zero when the scale drops more digits than the input can represent.
+/// 'divide' must round division by a positive divisor in int128_t.
 template <typename T, typename Divide>
 FOLLY_ALWAYS_INLINE Status roundIntegral(
     T& result,
@@ -36,7 +39,7 @@ FOLLY_ALWAYS_INLINE Status roundIntegral(
     int32_t scale,
     bool ansiEnabled,
     Divide divide,
-    fmt::string_view overflowMessage) {
+    std::string_view functionName) {
   static_assert(
       std::is_integral_v<T> && std::is_signed_v<T> &&
       sizeof(T) <= sizeof(int64_t));
@@ -57,10 +60,12 @@ FOLLY_ALWAYS_INLINE Status roundIntegral(
   if (ansiEnabled &&
       (rounded < std::numeric_limits<T>::min() ||
        rounded > std::numeric_limits<T>::max())) {
-    return threadSkipErrorDetails()
-        ? Status::UserError()
-        : Status::UserError(
-              overflowMessage, static_cast<int64_t>(value), scale);
+    return threadSkipErrorDetails() ? Status::UserError()
+                                    : Status::UserError(
+                                          "Arithmetic overflow: {}({}, {})",
+                                          functionName,
+                                          static_cast<int64_t>(value),
+                                          scale);
   }
 
   // Unsigned conversion followed by bit_cast gives Java's two's-complement
@@ -69,4 +74,4 @@ FOLLY_ALWAYS_INLINE Status roundIntegral(
   return Status::OK();
 }
 
-} // namespace facebook::velox::functions::detail
+} // namespace facebook::velox::functions

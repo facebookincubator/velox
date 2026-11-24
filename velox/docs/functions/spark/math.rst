@@ -73,7 +73,7 @@ Mathematical Functions
 
 .. spark:function:: bround(x [, d]) -> [same as x] (ANSI compliant)
 
-    Returns ``x`` rounded to ``d`` decimal places using HALF_EVEN rounding.
+    Like :spark:func:`round`, but uses HALF_EVEN instead of HALF_UP rounding.
     Values exactly halfway between two results round to the nearest even value.
     Supported input types are integral and floating-point types. If ``d`` is
     omitted, it defaults to zero. If specified, ``d`` must be a constant
@@ -82,6 +82,12 @@ Mathematical Functions
     Integral overflow follows Spark's two's-complement wraparound when ANSI
     mode is disabled and raises an error when ANSI mode is enabled.
     Floating-point NaN and infinity are returned unchanged.
+
+    Unlike ``round``'s native scale-column extension, ``bround`` requires a
+    constant scale to match Spark's foldable-scale contract. Floating-point
+    zero results are positive zero. Negative scales divide by ``10^abs(d)``
+    before rounding; positive scales with an infinite factor preserve the
+    input. These rules do not change ``round``'s existing behavior.
 
     **Differences from Spark:** Floating-point inputs are rounded on their
     binary value, not through Java's decimal string representation, so results

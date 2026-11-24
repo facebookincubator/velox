@@ -17,7 +17,6 @@
 #include "velox/functions/prestosql/Arithmetic.h"
 #include "velox/functions/prestosql/DecimalFunctions.h"
 #include "velox/functions/sparksql/Arithmetic.h"
-#include "velox/functions/sparksql/BRound.h"
 #include "velox/functions/sparksql/DecimalArithmetic.h"
 #include "velox/functions/sparksql/DecimalCeil.h"
 #include "velox/functions/sparksql/Factorial.h"
@@ -55,7 +54,6 @@ void registerMathFunctions(const std::string& prefix) {
   registerFunction<Atan2Function, double, double, double>({prefix + "atan2"});
   registerFunction<Log1pFunction, double, double>({prefix + "log1p"});
   registerFunction<ToBinaryStringFunction, Varchar, int64_t>({prefix + "bin"});
-  registerBRoundFunctions(prefix);
   registerFunction<ToHexBigintFunction, Varchar, int64_t>({prefix + "hex"});
   registerFunction<ToHexVarcharFunction, Varchar, Varchar>({prefix + "hex"});
   registerFunction<ToHexVarbinaryFunction, Varchar, Varbinary>(
@@ -78,6 +76,20 @@ void registerMathFunctions(const std::string& prefix) {
       {prefix + "round"});
   registerFunction<RoundFunction, double, double, int32_t>({prefix + "round"});
   registerFunction<RoundFunction, float, float, int32_t>({prefix + "round"});
+  registerUnaryIntegral<IntegralBRoundFunction>({prefix + "bround"});
+  registerUnaryFloatingPoint<BRoundFunction>({prefix + "bround"});
+  registerFunction<IntegralBRoundFunction, int8_t, int8_t, Constant<int32_t>>(
+      {prefix + "bround"});
+  registerFunction<IntegralBRoundFunction, int16_t, int16_t, Constant<int32_t>>(
+      {prefix + "bround"});
+  registerFunction<IntegralBRoundFunction, int32_t, int32_t, Constant<int32_t>>(
+      {prefix + "bround"});
+  registerFunction<IntegralBRoundFunction, int64_t, int64_t, Constant<int32_t>>(
+      {prefix + "bround"});
+  registerFunction<BRoundFunction, double, double, Constant<int32_t>>(
+      {prefix + "bround"});
+  registerFunction<BRoundFunction, float, float, Constant<int32_t>>(
+      {prefix + "bround"});
   registerFunction<UnHexFunction, Varbinary, Varchar>({prefix + "unhex"});
   // In Spark only long, double, and decimal have ceil/floor
   registerFunction<sparksql::CeilFunction, int64_t, int64_t>({prefix + "ceil"});

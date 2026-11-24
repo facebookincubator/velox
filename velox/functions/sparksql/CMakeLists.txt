@@ -29,7 +29,6 @@ velox_add_library(
   ArrayGetFunction.cpp
   ArraySort.cpp
   AssertNotNull.cpp
-  BRound.cpp
   SequenceFunction.cpp
   Transform.cpp
   CharVarcharUtils.cpp
@@ -74,7 +73,6 @@ velox_add_library(
   AssertNotNull.h
   Base64Function.h
   Bitwise.h
-  BRound.h
   CharTypeWriteSideCheck.h
   CharVarcharUtils.h
   Comparisons.h
