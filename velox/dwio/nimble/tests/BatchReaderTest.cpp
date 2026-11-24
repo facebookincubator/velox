@@ -7075,7 +7075,7 @@ TEST_P(BatchReaderTest, rangeReads) {
   });
 }
 
-TEST_P(BatchReaderTest, DISABLED_testScalarFieldLifeCycle) {
+TEST_P(BatchReaderTest, testScalarFieldLifeCycle) {
   const auto testScalarFieldLifeCycle =
       [&](const std::shared_ptr<const velox::RowType> schema,
           int32_t batchSize,
@@ -7085,18 +7085,21 @@ TEST_P(BatchReaderTest, DISABLED_testScalarFieldLifeCycle) {
         EXPECT_TRUE(reader->next(batchSize, result));
         // Hold the reference to values Buffers
         auto child = result->as<velox::RowVector>()->childAt(0);
-        velox::BaseVector* rowPtr = result.get();
         velox::Buffer* rawNulls = child->nulls().get();
         velox::BufferPtr values = child->values();
         // Reset the child so that it can be reused
         child.reset();
+
+        // Observe the RowVector without owning it, so the reader can still
+        // reuse it. The pointer expires when the RowVector is destroyed.
+        std::weak_ptr<velox::BaseVector> row = result;
         EXPECT_TRUE(reader->next(batchSize, result));
         child = result->as<velox::RowVector>()->childAt(0);
         if (rawNulls && child->nulls().get()) {
           EXPECT_EQ(rawNulls, child->nulls().get());
         }
         EXPECT_NE(values.get(), child->values().get());
-        EXPECT_EQ(rowPtr, result.get());
+        EXPECT_EQ(row.lock().get(), result.get());
 
         // Hold the reference to NULL buffer
         velox::BufferPtr nulls = child->nulls();
@@ -7108,7 +7111,7 @@ TEST_P(BatchReaderTest, DISABLED_testScalarFieldLifeCycle) {
           EXPECT_NE(nulls.get(), child->nulls().get());
         }
         EXPECT_EQ(rawValues, child->values().get());
-        EXPECT_EQ(rowPtr, result.get());
+        EXPECT_EQ(row.lock().get(), result.get());
 
         rawNulls = nulls.get();
         // Don't release the child ScalarVector to row vector. With
@@ -7117,7 +7120,7 @@ TEST_P(BatchReaderTest, DISABLED_testScalarFieldLifeCycle) {
         EXPECT_TRUE(reader->next(batchSize, result));
         auto child1 = result->as<velox::RowVector>()->childAt(0);
         EXPECT_NE(child, child1);
-        EXPECT_NE(rowPtr, result.get());
+        EXPECT_NE(row.lock().get(), result.get());
       };
 
   const uint32_t seed = FLAGS_reader_tests_seed > 0 ? FLAGS_reader_tests_seed
