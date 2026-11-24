@@ -712,39 +712,34 @@ bool CudfWindow::canRunOnGPU(
       }
     }
 
-    const auto isNonNegativeConstantBound =
-        [](core::WindowNode::BoundType type,
-           const core::TypedExprPtr& value) -> std::optional<int64_t> {
+    const auto validateRowsBound = [&](core::WindowNode::BoundType type,
+                                       const core::TypedExprPtr& value,
+                                       bool isStartBound) {
       if (type != core::WindowNode::BoundType::kPreceding &&
           type != core::WindowNode::BoundType::kFollowing) {
-        return std::nullopt;
-      }
-      if (!value) {
-        return std::nullopt;
+        return true;
       }
       auto constExpr =
           std::dynamic_pointer_cast<const core::ConstantTypedExpr>(value);
       if (!constExpr) {
-        return std::nullopt;
-      }
-      const auto constant = constExpr->toVariant();
-      if (constExpr->type()->kind() == TypeKind::INTEGER) {
-        return constant.value<int32_t>();
-      }
-      return constant.value<int64_t>();
-    };
-    const auto validateRowsBound = [&](core::WindowNode::BoundType type,
-                                       const core::TypedExprPtr& value,
-                                       bool isStartBound) {
-      const auto constant = isNonNegativeConstantBound(type, value);
-      if (!constant.has_value()) {
         return true;
       }
+      if (constExpr->isNull()) {
+        if (reason) {
+          *reason = "Window frame offset must not be null";
+        }
+        return false;
+      }
 
-      if (*constant < 0) {
+      const auto constant = constExpr->toVariant();
+      const int64_t offset = constExpr->type()->kind() == TypeKind::INTEGER
+          ? constant.value<int32_t>()
+          : constant.value<int64_t>();
+
+      if (offset < 0) {
         if (reason) {
           *reason = fmt::format(
-              "Window frame {} offset must not be negative", *constant);
+              "Window frame {} offset must not be negative", offset);
         }
         return false;
       }
@@ -754,11 +749,11 @@ bool CudfWindow::canRunOnGPU(
           (isStartBound && type == core::WindowNode::BoundType::kPreceding ? 1
                                                                            : 0);
 
-      if (*constant > maxOffset) {
+      if (offset > maxOffset) {
         if (reason) {
           *reason = fmt::format(
               "Window frame offset {} exceeds cuDF limit {}",
-              *constant,
+              offset,
               maxOffset);
         }
         return false;
