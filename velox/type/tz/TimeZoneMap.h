@@ -156,6 +156,8 @@ class TimeZone {
   /// time zone.
   ///
   /// If the local time exists then the same time is returned.
+  ///
+  /// An out-of-range timestamp is a user error (see validateRange()).
   seconds correct_nonexistent_time(seconds timestamp) const;
 
   /// Same conversion as to_local(). An out-of-range timestamp is a user error
