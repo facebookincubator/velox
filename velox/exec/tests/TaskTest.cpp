@@ -1315,13 +1315,11 @@ DEBUG_ONLY_TEST_F(
                     .exchange(ROW("a", BIGINT()), "Presto", transportKind)
                     .capturePlanNodeId(exchangeNodeId)
                     .hashJoin(
-                        {"a"},
-                        {"b"},
+                        "a = b",
                         builder.newPlan()
                             .values({makeNamedRowVector(
                                 "b", makeFlatVector<int64_t>({1}))})
                             .planNode(),
-                        "",
                         {"a"})
                     .planFragment();
     plan.executionStrategy = core::ExecutionStrategy::kGrouped;
@@ -1524,12 +1522,10 @@ TEST_F(TaskTest, duplicatePlanNodeIds) {
   auto plan = PlanBuilder()
                   .tableScan(ROW({"a", "b"}, {INTEGER(), DOUBLE()}))
                   .hashJoin(
-                      {"a"},
-                      {"a1"},
+                      "a = a1",
                       PlanBuilder()
                           .tableScan(ROW({"a1", "b1"}, {INTEGER(), DOUBLE()}))
                           .planNode(),
-                      "",
                       {"b", "b1"})
                   .planFragment();
 
@@ -1588,23 +1584,19 @@ TEST_F(TaskTest, allSplitsConsumedMultipleSources) {
                   .capturePlanNodeId(scanNodeId1)
                   .project({"c0 as t0"})
                   .hashJoin(
-                      {"t0"},
-                      {"c0"},
+                      "t0 = c0",
                       builder.newPlan()
                           .tableScan(data->rowType())
                           .capturePlanNodeId(scanNodeId2)
                           .planNode(),
-                      "",
                       {"c0"})
                   .project({"c0 as u0"})
                   .hashJoin(
-                      {"u0"},
-                      {"c0"},
+                      "u0 = c0",
                       builder.newPlan()
                           .tableScan(data->rowType())
                           .capturePlanNodeId(scanNodeId3)
                           .planNode(),
-                      "",
                       {"c0"})
                   .planFragment();
 
@@ -1673,24 +1665,20 @@ TEST_F(TaskTest, hasMixedExecutionGroupJoin) {
                           .capturePlanNodeId(groupedScanNodeId1)
                           .project({"c0 as t0"})
                           .hashJoin(
-                              {"t0"},
-                              {"c0"},
+                              "t0 = c0",
                               builder.newPlan()
                                   .tableScan(data->rowType())
                                   .capturePlanNodeId(groupedScanNodeId2)
                                   .planNode(),
-                              "",
                               {"c0"})
                           .capturePlanNode(nonMixedGroupedModeJoinNode)
                           .project({"c0 as u0"})
                           .hashJoin(
-                              {"u0"},
-                              {"c0"},
+                              "u0 = c0",
                               builder.newPlan()
                                   .tableScan(data->rowType())
                                   .capturePlanNodeId(ungroupedScanNodeId1)
                                   .planNode(),
-                              "",
                               {"c0"})
                           .capturePlanNode(mixedGroupedModeJoinNode)
                           .planFragment();
@@ -1971,13 +1959,11 @@ TEST_F(TaskTest, serialHashJoin) {
                   .tableScan(left->rowType())
                   .capturePlanNodeId(leftScanId)
                   .hashJoin(
-                      {"t_c0"},
-                      {"u_c0"},
+                      "t_c0 = u_c0",
                       builder.newPlan()
                           .tableScan(right->rowType())
                           .capturePlanNodeId(rightScanId)
                           .planNode(),
-                      "",
                       {"t_c0", "t_c1", "u_c0"})
                   .planFragment();
 
@@ -2561,10 +2547,8 @@ DEBUG_ONLY_TEST_F(TaskTest, findPeerOperators) {
         builder.newPlan()
             .values(probeVectors, true)
             .hashJoin(
-                {"t_c0"},
-                {"u_c0"},
+                "t_c0 = u_c0",
                 builder.newPlan().values(buildVectors, true).planNode(),
-                "",
                 {"t_c0", "t_c1", "u_c0"})
             .planNode();
     params.queryCtx = core::QueryCtx::create(driverExecutor_.get());
@@ -3069,10 +3053,8 @@ TEST_F(TaskTest, spillDirNotCreated) {
       builder.newPlan()
           .values(probeVectors, true)
           .hashJoin(
-              {"t_c0"},
-              {"u_c0"},
+              "t_c0 = u_c0",
               builder.newPlan().values(buildVectors, true).planNode(),
-              "",
               {"t_c0", "t_c1", "u_c0"})
           .capturePlanNodeId(hashJoinNodeId)
           .planNode();
@@ -3109,10 +3091,8 @@ DEBUG_ONLY_TEST_F(TaskTest, resumeAfterTaskFinish) {
   auto plan = builder.newPlan()
                   .values(probeVector)
                   .hashJoin(
-                      {"t_c0"},
-                      {"u_c0"},
+                      "t_c0 = u_c0",
                       builder.newPlan().values(buildVector).planNode(),
-                      "",
                       {"t_c0", "u_c0"})
                   .planFragment();
 
@@ -3486,10 +3466,8 @@ TEST_F(TaskTest, driverLifecycleTimingStats) {
                   .values(data)
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
-                      {"c0"},
-                      {"u0"},
+                      "c0 = u0",
                       builder.newPlan().values(buildData).planNode(),
-                      "",
                       {"c0", "c1"})
                   .planNode();
 

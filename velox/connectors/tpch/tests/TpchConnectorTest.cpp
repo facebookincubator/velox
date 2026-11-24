@@ -394,8 +394,7 @@ TEST_F(TpchConnectorTest, join) {
                       Table::TBL_NATION, {"n_regionkey"}, 1.0 /*scaleFactor*/)
                   .capturePlanNodeId(nationScanId)
                   .hashJoin(
-                      {"n_regionkey"},
-                      {"r_regionkey"},
+                      "n_regionkey = r_regionkey",
                       builder.newPlan()
                           .tpchTableScan(
                               Table::TBL_REGION,
@@ -403,7 +402,6 @@ TEST_F(TpchConnectorTest, join) {
                               1.0 /*scaleFactor*/)
                           .capturePlanNodeId(regionScanId)
                           .planNode(),
-                      "", // extra filter
                       {"r_name"})
                   .singleAggregation({"r_name"}, {"count(1) as nation_cnt"})
                   .planNode();

@@ -274,10 +274,8 @@ class FsstQueryTest : public HiveConnectorTestBase,
              makeFlatVector<int64_t>({10, 20, 30, 40, 50, 60})});
         return builder
             .hashJoin(
-                {"value"},
-                {"key"},
+                "value = key",
                 builder.newPlan().values(right).planNode(),
-                "",
                 {"id", "value", "label"},
                 action == QueryAction::kInnerJoin ? core::JoinType::kInner
                                                   : core::JoinType::kLeft)

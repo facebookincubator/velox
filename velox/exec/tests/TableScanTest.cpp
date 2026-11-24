@@ -2085,14 +2085,12 @@ DEBUG_ONLY_TEST_F(TableScanTest, tableScanSplitsAndWeights) {
                       .capturePlanNodeId(scanNodeId)
                       .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
                       .hashJoin(
-                          {"t0"},
-                          {"u0"},
+                          "t0 = u0",
                           builder.newPlan()
                               .exchange(leafPlan->outputType(), "Presto")
                               .capturePlanNodeId(exchangeNodeId)
                               .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
                               .planNode(),
-                          "",
                           {"t1"},
                           core::JoinType::kAnti)
                       .planNode();
@@ -3559,13 +3557,11 @@ TEST_F(TableScanTest, bucketPruning) {
     auto plan = makeScan(builder, {}, HiveBucketProperty::Kind::kHiveCompatible)
                     .capturePlanNodeId(scanId)
                     .hashJoin(
-                        {"c0"},
-                        {"u0"},
+                        "c0 = u0",
                         builder.newPlan()
                             .values({makeRowVector(
                                 {"u0"}, {makeFlatVector<int32_t>({2, 6})})})
                             .planNode(),
-                        /*filter=*/"",
                         {"c0", "c1"})
                     .planNode();
     auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
@@ -3664,10 +3660,8 @@ TEST_F(TableScanTest, bucketConversion) {
     auto plan = builder.tableScan(outputType, {}, "", schema)
                     .capturePlanNodeId(scanNodeId)
                     .hashJoin(
-                        {"c1"},
-                        {"cc1"},
+                        "c1 = cc1",
                         builder.newPlan().values({build}).planNode(),
-                        "",
                         {"c1"})
                     .planNode();
     auto expected = makeRowVector({makeConstant<int64_t>(2, 1)});
@@ -6133,7 +6127,7 @@ TEST_F(TableScanTest, rowIndexWithDynamicFilterOnPartitionKey) {
                   .assignments(assignments)
                   .endTableScan()
                   .capturePlanNodeId(scanId)
-                  .hashJoin({"p"}, {"bk"}, build, "", {"row_index", "p"})
+                  .hashJoin("p = bk", build, {"row_index", "p"})
                   .planNode();
 
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys{
@@ -6500,13 +6494,11 @@ TEST_F(TableScanTest, dynamicFilterWithReadRangeColumn) {
                             assignments)
                         .capturePlanNodeId(probeScanId)
                         .hashJoin(
-                            {"a"},
-                            {"b"},
+                            "a = b",
                             builder.newPlan()
                                 .tableScan(ROW({"b"}, BIGINT()))
                                 .capturePlanNodeId(buildScanId)
                                 .planNode(),
-                            /*filter=*/"",
                             {"read_range", "a"})
                         .capturePlanNodeId(joinId)
                         .planNode();

@@ -285,14 +285,12 @@ TEST_F(OperatorTraceTest, traceMetadata) {
           .values(rows, false)
           .project({"c0", "c1", "c2"})
           .hashJoin(
-              {"c0"},
-              {"u0"},
+              "c0 = u0 AND c0 < 135",
               builder.newPlan()
                   .values(rows, true)
                   .singleAggregation({"c0", "c1"}, {"min(c2)"})
                   .project({"c0 AS u0", "c1 AS u1", "a0 AS u2"})
                   .planNode(),
-              "c0 < 135",
               {"c0", "c1", "c2"},
               core::JoinType::kInner)
           .capturePlanNodeId(traceNodeId)
@@ -351,13 +349,11 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
   const auto planNode = builder.newPlan()
                             .values(rows, false)
                             .hashJoin(
-                                {"c0"},
-                                {"u0"},
+                                "c0 = u0",
                                 builder.newPlan()
                                     .values(rows, true)
                                     .project({"c0 AS u0", "c1 AS u1"})
                                     .planNode(),
-                                "",
                                 {"c0", "c1"},
                                 core::JoinType::kInner)
                             .capturePlanNodeId(traceNodeId)
@@ -689,14 +685,12 @@ TEST_F(OperatorTraceTest, task) {
           .values(rows, false)
           .project({"c0", "c1", "c2"})
           .hashJoin(
-              {"c0"},
-              {"u0"},
+              "c0 = u0 AND c0 < 135",
               builder.newPlan()
                   .values(rows, true)
                   .singleAggregation({"c0", "c1"}, {"min(c2)"})
                   .project({"c0 AS u0", "c1 AS u1", "a0 AS u2"})
                   .planNode(),
-              "c0 < 135",
               {"c0", "c1", "c2"},
               core::JoinType::kInner)
           .capturePlanNodeId(hashJoinNodeId)
@@ -1358,10 +1352,8 @@ TEST_F(OperatorTraceTest, hashJoin) {
         builder.newPlan()
             .values(probeInput, false)
             .hashJoin(
-                {"c0"},
-                {"u0"},
+                "c0 = u0 AND c0 < 135",
                 builder.newPlan().values(buildInput, true).planNode(),
-                "c0 < 135",
                 {"c0", "c1", "c2"},
                 core::JoinType::kInner)
             .capturePlanNodeId(hashJoinNodeId)
