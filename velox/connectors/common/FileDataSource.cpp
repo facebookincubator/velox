@@ -142,7 +142,7 @@ FileDataSource::FileDataSource(
     readColumnNames.push_back(handle->name());
     for (auto& subfield : handle->requiredSubfields()) {
       VELOX_USER_CHECK_EQ(
-          getColumnName(subfield),
+          subfield.baseName(),
           handle->name(),
           "Required subfield does not match column name");
       subfields_[handle->name()].push_back(&subfield);
@@ -204,7 +204,7 @@ FileDataSource::FileDataSource(
           fmt::join(remainingFilterSubfields_, ", "));
     }
     for (auto& subfield : remainingFilterSubfields_) {
-      const auto& name = getColumnName(subfield);
+      const auto& name = subfield.baseName();
       auto it = subfields_.find(name);
       if (it != subfields_.end()) {
         // Some subfields of the column are already projected out, we append the

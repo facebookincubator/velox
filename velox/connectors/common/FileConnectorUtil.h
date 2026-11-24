@@ -95,8 +95,6 @@ bool testFilters(
         partitionKeysHandle,
     bool asLocalTime);
 
-const std::string& getColumnName(const common::Subfield& subfield);
-
 void checkColumnNameLowerCase(const TypePtr& type);
 
 void checkColumnNameLowerCase(
