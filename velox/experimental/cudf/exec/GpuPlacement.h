@@ -24,69 +24,15 @@
 
 namespace facebook::velox::cudf_velox {
 
-/// Rules that decide whether a plan node can run on the GPU. The cuDF operator
-/// adapters and the cuDF plan rewriter both use them, so the two paths place
-/// nodes the same way. Each function returns false and sets 'reason' when the
-/// node has to stay on the CPU. The rules look only at the plan node, except
-/// isGpuTableScan(), which also asks the connector of the scan. Checks that
-/// exist because the driver adapter sees one pipeline at a time stay in the
-/// operator adapters.
-
-/// 'filter' and 'project' are the parts of one FilterProject operator: a
-/// Filter, a Project, or a Filter fused under a Project. LocalPlanner fuses a
-/// Filter followed by a Project into one operator, so the pair is decided
-/// together.
-bool canRunFilterProjectOnGpu(
-    const core::FilterNode* filter,
-    const core::ProjectNode* project,
-    core::QueryCtx* queryCtx,
-    memory::MemoryPool* pool,
-    std::string* reason);
-
-bool canRunAggregationOnGpu(
-    const core::AggregationNode& node,
-    core::QueryCtx* queryCtx,
-    memory::MemoryPool* pool,
-    std::string* reason);
-
-bool canRunHashJoinOnGpu(
-    const core::HashJoinNode& node,
-    core::QueryCtx* queryCtx,
-    memory::MemoryPool* pool,
-    std::string* reason);
-
-/// Returns whether cuDF implements a hash join of this join type, null
-/// awareness and filter presence. Needs no QueryCtx, so the constructor of
-/// CudfHashJoinNode checks it too and a CudfHashJoinNode an engine builds
-/// directly cannot skip it.
-bool isHashJoinSupportedByCudf(
-    core::JoinType joinType,
-    bool nullAware,
-    bool hasFilter,
-    std::string* reason);
-
-bool canRunNestedLoopJoinOnGpu(
-    const core::NestedLoopJoinNode& node,
-    core::QueryCtx* queryCtx,
-    memory::MemoryPool* pool,
-    std::string* reason);
-
-bool canRunTopNRowNumberOnGpu(
-    const core::TopNRowNumberNode& node,
-    std::string* reason);
-
-bool canRunMarkDistinctOnGpu(
-    const core::MarkDistinctNode& node,
-    std::string* reason);
-
-bool canRunLocalPartitionOnGpu(
-    const std::shared_ptr<const core::LocalPartitionNode>& node,
-    std::string* reason);
+/// Decides whether a table scan runs on the GPU. A scan has no cuDF plan node:
+/// it stays a core::TableScanNode, and the cuDF Hive or Iceberg connector
+/// gives it a cuDF data source. The rules of every other node are with its
+/// definition in CudfPlanNodeDefinitions.cpp and its cuDF plan node class.
 
 /// Returns whether the scan of 'node' produces CudfVectors: its connector is a
 /// cuDF Hive or Iceberg connector, cuDF supports its output type and the cuDF
 /// data source accepts its table handle. Sets 'reason' when the scan stays on
-/// the CPU. Shared by physical planning and the transitional driver adapters.
+/// the CPU. The plan rewriter and the cuDF driver adapter both ask here.
 ///
 /// 'connectorQueryCtx' is the context the scan gives the connector, so that
 /// the answer matches the data source the connector picks.

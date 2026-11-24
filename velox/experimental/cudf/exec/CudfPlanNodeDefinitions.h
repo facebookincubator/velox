@@ -42,10 +42,11 @@ namespace facebook::velox::cudf_velox::detail {
 
 /// How one type of core plan node becomes a cuDF plan node.
 struct CudfPlanNodeLowering {
-  /// Returns whether cuDF can run 'node', following the rules in
-  /// GpuPlacement.h. Sets 'reason' when it cannot. Whether cuDF supports the
-  /// input and output types of 'node' is a separate check that is the same for
-  /// every node: isTypeSupportedByCudf().
+  /// Returns whether cuDF can run 'node'. Sets 'reason' when it cannot. The
+  /// plan rewriter and the cuDF driver adapter both ask here, so the two place
+  /// nodes the same way. Whether cuDF supports the input and output types of
+  /// 'node' is a separate check that is the same for every node:
+  /// isTypeSupportedByCudf().
   bool (*canRunOnGpu)(
       const core::PlanNodePtr& node,
       core::QueryCtx* queryCtx,
@@ -68,6 +69,17 @@ struct CudfPlanNodeLowering {
 /// not a core plan node that has a cuDF plan node.
 const CudfPlanNodeLowering* findCudfPlanNodeLowering(
     const core::PlanNodePtr& node);
+
+/// Returns whether cuDF can run 'filter', 'project', or 'project' over
+/// 'filter' as one CudfFilterProjectNode. One of the two may be null. Sets
+/// 'reason' when it cannot. LocalPlanner fuses a Filter followed by a Project
+/// into one operator, so the pair is decided together.
+bool canRunFilterProjectOnGpu(
+    const core::FilterNode* filter,
+    const core::ProjectNode* project,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool,
+    std::string* reason);
 
 /// Returns the CudfFilterProjectNode over 'source' that runs 'filter',
 /// 'project', or 'project' over 'filter'. One of the two may be null. The

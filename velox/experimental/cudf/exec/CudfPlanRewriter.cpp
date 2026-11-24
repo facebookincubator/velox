@@ -663,7 +663,7 @@ class Rewriter {
 
     std::string reason;
     if (typesSupported(project, &reason) &&
-        canRunFilterProjectOnGpu(
+        detail::canRunFilterProjectOnGpu(
             filter.get(),
             project.get(),
             queryCtx_.get(),

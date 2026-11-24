@@ -28,8 +28,9 @@ namespace facebook::velox::cudf_velox {
 /// Returns the cuDF plan node that runs a core plan node on the GPU. The result
 /// keeps the core node's ID and sources. Converts 'node' alone: a Filter and a
 /// Project that run as one FilterProject operator go through
-/// toCudfFilterProjectNode(). Check the node against the rules in
-/// GpuPlacement.h first.
+/// toCudfFilterProjectNode(). Ask canRunOnGpu() of the node's definition
+/// first; the constructor of the cuDF plan node throws for a node cuDF cannot
+/// run.
 core::PlanNodePtr toCudfPlanNode(const core::PlanNodePtr& node);
 
 template <typename CudfNode>

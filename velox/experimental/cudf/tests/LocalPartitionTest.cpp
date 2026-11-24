@@ -263,9 +263,9 @@ TEST_F(LocalPartitionTest, hashAfterRemoteHashUsesAllLocalDrivers) {
 }
 
 // The hive partition function spec is not one that
-// CudfLocalPartition::shouldReplace accepts, so the LocalPartition stays on
-// CPU and enqueues host RowVectors. The consuming LocalExchange must report
-// host output so that CudfFromVelox is inserted ahead of the GPU TopN.
+// CudfLocalPartitionNode::unsupportedReason() accepts, so the LocalPartition
+// stays on CPU and enqueues host RowVectors. The consuming LocalExchange must
+// report host output so that CudfFromVelox is inserted ahead of the GPU TopN.
 // Otherwise CudfTopN::doAddInput receives a host RowVector and fails the
 // CudfVector cast with INVALID_STATE. This is the mixed GPU/CPU pipeline
 // failure seen with Spark/Gluten on TPC-H q18 and q22.

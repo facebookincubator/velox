@@ -131,6 +131,10 @@ class CudfFilterProjectNode : public CudfUnaryPlanNode {
 /// step reads.
 class CudfAggregationNode : public CudfUnaryPlanNode {
  public:
+  /// Throws if 'intermediateTypes' does not have one type for each aggregate,
+  /// or if a type is not the one the aggregate function declares for the raw
+  /// input types of the aggregate. The cuDF aggregation operators produce and
+  /// read only that state.
   CudfAggregationNode(
       const core::PlanNodeId& id,
       core::PlanNodePtr source,
@@ -139,18 +143,7 @@ class CudfAggregationNode : public CudfUnaryPlanNode {
       std::vector<core::FieldAccessTypedExprPtr> groupingKeys,
       std::vector<core::AggregationNode::Aggregate> aggregates,
       std::vector<TypePtr> intermediateTypes,
-      bool ignoreNullKeys)
-      : CudfUnaryPlanNode(id, std::move(source), std::move(outputType)),
-        step_(step),
-        groupingKeys_(std::move(groupingKeys)),
-        aggregates_(std::move(aggregates)),
-        intermediateTypes_(std::move(intermediateTypes)),
-        ignoreNullKeys_(ignoreNullKeys) {
-    VELOX_USER_CHECK_EQ(intermediateTypes_.size(), aggregates_.size());
-    for (const auto& type : intermediateTypes_) {
-      VELOX_USER_CHECK_NOT_NULL(type);
-    }
-  }
+      bool ignoreNullKeys);
 
   core::PlanNodePtr withSources(
       std::vector<core::PlanNodePtr> sources) const override {
@@ -195,8 +188,15 @@ class CudfAggregationNode : public CudfUnaryPlanNode {
 /// second is the build side.
 class CudfHashJoinNode : public CudfPlanNode {
  public:
-  /// Throws if cuDF does not implement the join, see
-  /// isHashJoinSupportedByCudf().
+  /// Returns why cuDF does not implement a hash join of 'joinType' with this
+  /// null awareness and filter presence, or std::nullopt if it does. cuDF
+  /// implements inner, left, right, full, left semi filter, right semi filter,
+  /// left semi project and anti joins, except a null-aware anti join with a
+  /// filter.
+  static std::optional<std::string>
+  unsupportedReason(core::JoinType joinType, bool nullAware, bool hasFilter);
+
+  /// Throws if unsupportedReason() has a reason for the join.
   CudfHashJoinNode(
       const core::PlanNodeId& id,
       core::PlanNodePtr probeSource,
@@ -307,18 +307,22 @@ class CudfHashJoinNode : public CudfPlanNode {
 /// and the second is the build side.
 class CudfNestedLoopJoinNode : public CudfPlanNode {
  public:
+  /// Returns why cuDF does not implement a nested loop join of 'joinType'
+  /// with 'joinCondition', or std::nullopt if it does. cuDF implements inner,
+  /// left, right, full and left semi project joins, with a condition that
+  /// compares no type with custom comparison. 'joinCondition' may be null.
+  static std::optional<std::string> unsupportedReason(
+      core::JoinType joinType,
+      const core::TypedExprPtr& joinCondition);
+
+  /// Throws if unsupportedReason() has a reason for the join.
   CudfNestedLoopJoinNode(
       const core::PlanNodeId& id,
       core::PlanNodePtr probeSource,
       core::PlanNodePtr buildSource,
       RowTypePtr outputType,
       core::JoinType joinType,
-      core::TypedExprPtr joinCondition)
-      : CudfPlanNode(id),
-        joinType_(joinType),
-        joinCondition_(std::move(joinCondition)),
-        sources_{std::move(probeSource), std::move(buildSource)},
-        outputType_(std::move(outputType)) {}
+      core::TypedExprPtr joinCondition);
 
   const RowTypePtr& outputType() const override {
     return outputType_;
@@ -467,10 +471,22 @@ class CudfTopNNode : public CudfUnaryPlanNode {
   const bool isPartial_;
 };
 
-/// Physical row_number top-N. Rank and dense_rank are deliberately not part
-/// of this node's contract.
+/// Keeps the first 'limit' rows of each partition by row_number, rank or
+/// dense_rank over the sorting keys.
 class CudfTopNRowNumberNode : public CudfUnaryPlanNode {
  public:
+  /// Returns why cuDF cannot rank with 'rankFunction' over these keys, or
+  /// std::nullopt if it can. row_number takes any keys. rank and dense_rank
+  /// compare the keys for equality, so they take no key with custom
+  /// comparison and no ARRAY or MAP sorting key.
+  static std::optional<std::string> unsupportedReason(
+      core::TopNRowNumberNode::RankFunction rankFunction,
+      const std::vector<core::FieldAccessTypedExprPtr>& partitionKeys,
+      const std::vector<core::FieldAccessTypedExprPtr>& sortingKeys);
+
+  /// Throws if unsupportedReason() has a reason for the ranking, 'limit' is
+  /// not positive, there is no sorting key, or the number of sorting orders
+  /// differs from the number of sorting keys.
   CudfTopNRowNumberNode(
       const core::PlanNodeId& id,
       core::PlanNodePtr source,
@@ -480,18 +496,7 @@ class CudfTopNRowNumberNode : public CudfUnaryPlanNode {
       std::vector<core::FieldAccessTypedExprPtr> sortingKeys,
       std::vector<core::SortOrder> sortingOrders,
       int32_t limit,
-      bool generateRowNumber)
-      : CudfUnaryPlanNode(id, std::move(source), std::move(outputType)),
-        rankFunction_(rankFunction),
-        partitionKeys_(std::move(partitionKeys)),
-        sortingKeys_(std::move(sortingKeys)),
-        sortingOrders_(std::move(sortingOrders)),
-        limit_(limit),
-        generateRowNumber_(generateRowNumber) {
-    VELOX_CHECK_GT(limit_, 0);
-    VELOX_CHECK(!sortingKeys_.empty());
-    VELOX_CHECK_EQ(sortingKeys_.size(), sortingOrders_.size());
-  }
+      bool generateRowNumber);
 
   core::PlanNodePtr withSources(
       std::vector<core::PlanNodePtr> sources) const override {
@@ -581,6 +586,13 @@ class CudfLocalMergeNode : public core::LocalMergeNode {
 /// provision the existing queues; only producer construction is adapted.
 class CudfLocalPartitionNode : public core::LocalPartitionNode {
  public:
+  /// Returns why cuDF cannot partition like 'node', or std::nullopt if it can.
+  /// cuDF partitions by hash, round robin, round robin by row and gather, and
+  /// does not scale writers.
+  static std::optional<std::string> unsupportedReason(
+      const core::LocalPartitionNode& node);
+
+  /// Throws if unsupportedReason() has a reason for the partition function.
   CudfLocalPartitionNode(
       const core::PlanNodeId& id,
       Type type,
@@ -591,7 +603,9 @@ class CudfLocalPartitionNode : public core::LocalPartitionNode {
             type,
             false,
             std::move(partitionFunctionSpec),
-            std::move(sources)) {}
+            std::move(sources)) {
+    checkSupported();
+  }
 
   std::string_view name() const override {
     return "CudfLocalPartition";
@@ -604,7 +618,7 @@ class CudfLocalPartitionNode : public core::LocalPartitionNode {
   }
 
   /// Returns a cuDF local partition that partitions like 'node' and reads
-  /// from 'sources'. Throws if 'node' scales writers.
+  /// from 'sources'. Throws if unsupportedReason() has a reason for 'node'.
   static std::shared_ptr<const CudfLocalPartitionNode> create(
       const core::LocalPartitionNode& node,
       std::vector<core::PlanNodePtr> sources);
@@ -616,7 +630,12 @@ class CudfLocalPartitionNode : public core::LocalPartitionNode {
  private:
   // Preserve opaque partition specs without retaining a CPU plan node.
   explicit CudfLocalPartitionNode(const core::LocalPartitionNode& node)
-      : LocalPartitionNode(node) {}
+      : LocalPartitionNode(node) {
+    checkSupported();
+  }
+
+  // Throws if unsupportedReason() has a reason for this node.
+  void checkSupported() const;
 };
 
 /// Skips 'offset' rows and keeps the next 'count'. A final limit runs in one

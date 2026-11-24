@@ -20,6 +20,7 @@
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/RoundRobinPartitionFunction.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -65,6 +66,22 @@ class AppNode : public core::PlanNode {
   const std::vector<core::PlanNodePtr> sources_;
   const RowTypePtr outputType_;
   const CudfPlanNodeTraits traits_;
+};
+
+/// Represents a partition function that cuDF does not implement.
+class AppPartitionFunctionSpec : public core::PartitionFunctionSpec {
+ public:
+  std::unique_ptr<core::PartitionFunction> create(
+      int /*numPartitions*/,
+      bool /*localExchange*/) const override {
+    VELOX_UNREACHABLE();
+  }
+  std::string toString() const override {
+    return "APP";
+  }
+  folly::dynamic serialize() const override {
+    VELOX_UNREACHABLE();
+  }
 };
 
 class AppDescriptor : public CudfPlanNodeDescriptor {
@@ -204,6 +221,7 @@ class PhysicalPlanTest : public exec::test::OperatorTestBase {
     CudfPlanRewriter::Config config;
     config.queryCtx = queryCtx_;
     config.taskOutput = output;
+    config.allowCpuFallback = allowCpuFallback;
     return CudfPlanRewriter::rewrite(plan, config);
   }
   core::PlanNodePtr values() {
@@ -221,7 +239,6 @@ class PhysicalPlanTest : public exec::test::OperatorTestBase {
         CudfPlanNodeTraits{
             {input},
             output,
-    config.allowCpuFallback = allowCpuFallback;
             preserve ? std::optional<size_t>{0} : std::nullopt});
   }
   size_t count(const core::PlanNodePtr& node, std::string_view name) {
@@ -474,6 +491,88 @@ TEST_F(PhysicalPlanTest, constructorsRejectUnsupportedArguments) {
       "HashJoin null-aware anti join with filter not implemented");
   EXPECT_NE(hashJoin(core::JoinType::kAnti, true, false), nullptr);
   EXPECT_NE(hashJoin(core::JoinType::kAnti, false, true), nullptr);
+  VELOX_ASSERT_USER_THROW(
+      hashJoin(core::JoinType::kRightSemiProject, false, false),
+      "HashJoin unsupported join type: RIGHT SEMI (PROJECT)");
+
+  auto nestedLoopJoin = [&](core::JoinType joinType) {
+    return std::make_shared<CudfNestedLoopJoinNode>(
+        "join",
+        source,
+        std::make_shared<CudfFromVeloxNode>("build-upload", values()),
+        input_->rowType(),
+        joinType,
+        /*joinCondition=*/nullptr);
+  };
+  VELOX_ASSERT_USER_THROW(
+      nestedLoopJoin(core::JoinType::kAnti),
+      "NestedLoopJoin unsupported join type: ANTI");
+  VELOX_ASSERT_USER_THROW(
+      nestedLoopJoin(core::JoinType::kLeftSemiFilter),
+      "NestedLoopJoin unsupported join type: LEFT SEMI (FILTER)");
+  EXPECT_NE(nestedLoopJoin(core::JoinType::kInner), nullptr);
+
+  // rank and dense_rank compare the keys for equality. row_number does not.
+  using RankFunction = core::TopNRowNumberNode::RankFunction;
+  auto arrayKey =
+      std::make_shared<core::FieldAccessTypedExpr>(ARRAY(BIGINT()), "a");
+  auto topNRowNumber = [&](RankFunction rankFunction,
+                           core::FieldAccessTypedExprPtr sortingKey) {
+    return std::make_shared<CudfTopNRowNumberNode>(
+        "topn-row-number",
+        source,
+        input_->rowType(),
+        rankFunction,
+        Keys{},
+        Keys{std::move(sortingKey)},
+        Orders{core::kAscNullsLast},
+        /*limit=*/1,
+        /*generateRowNumber=*/false);
+  };
+  VELOX_ASSERT_USER_THROW(
+      topNRowNumber(RankFunction::kRank, arrayKey),
+      "TopNRowNumber ranking function or key types are not supported by cuDF");
+  VELOX_ASSERT_USER_THROW(
+      topNRowNumber(RankFunction::kDenseRank, arrayKey),
+      "TopNRowNumber ranking function or key types are not supported by cuDF");
+  EXPECT_NE(topNRowNumber(RankFunction::kRowNumber, arrayKey), nullptr);
+  EXPECT_NE(topNRowNumber(RankFunction::kRank, key), nullptr);
+
+  // The cuDF aggregation operators produce only the state that the aggregate
+  // function declares.
+  auto aggregation = [&](TypePtr intermediateType) {
+    core::AggregationNode::Aggregate sum;
+    sum.call = std::make_shared<core::CallTypedExpr>(
+        BIGINT(), std::vector<core::TypedExprPtr>{key}, "sum");
+    sum.rawInputTypes = {BIGINT()};
+    return std::make_shared<CudfAggregationNode>(
+        "aggregation",
+        source,
+        ROW({"k", "sum"}, BIGINT()),
+        core::AggregationNode::Step::kPartial,
+        Keys{key},
+        std::vector<core::AggregationNode::Aggregate>{sum},
+        std::vector<TypePtr>{std::move(intermediateType)},
+        /*ignoreNullKeys=*/false);
+  };
+  VELOX_ASSERT_USER_THROW(
+      aggregation(DOUBLE()),
+      "CudfAggregation intermediate type must be the one the aggregate function declares: sum declares BIGINT, got DOUBLE");
+  EXPECT_NE(aggregation(BIGINT()), nullptr);
+
+  auto localPartition = [&](core::PartitionFunctionSpecPtr spec) {
+    return std::make_shared<CudfLocalPartitionNode>(
+        "local-partition",
+        core::LocalPartitionNode::Type::kRepartition,
+        std::move(spec),
+        std::vector<core::PlanNodePtr>{source});
+  };
+  VELOX_ASSERT_USER_THROW(
+      localPartition(std::make_shared<AppPartitionFunctionSpec>()),
+      "LocalPartition partition spec is unsupported by cuDF: APP");
+  EXPECT_NE(
+      localPartition(std::make_shared<exec::RoundRobinPartitionFunctionSpec>()),
+      nullptr);
 
   VELOX_ASSERT_THROW(source->serialize(), "is not serializable");
   VELOX_ASSERT_THROW(
@@ -692,7 +791,17 @@ TEST_F(PhysicalPlanTest, queryConfigDisablesLowering) {
   auto plan = PlanBuilder().values({input_}).project({"k + 1 AS k"}).planNode();
   EXPECT_EQ(rewrite(plan), plan);
   check(plan, makeRowVector({"k"}, {makeFlatVector<int64_t>({4, 2, 3})}));
+}
 
+TEST_F(PhysicalPlanTest, callerDisablesCpuFallback) {
+  auto strictRewrite = [&](const core::PlanNodePtr& plan) {
+    return rewrite(plan, Kind::kVelox, /*allowCpuFallback=*/false);
+  };
+  auto unsupported = PlanBuilder().values({input_}).rowNumber({}).planNode();
+  EXPECT_TRUE(rewrite(unsupported)->is<core::RowNumberNode>());
+  VELOX_ASSERT_THROW(strictRewrite(unsupported), "CPU fallback is disabled");
+
+  // The query config is not consulted.
   queryCtx_ = core::QueryCtx::create(
       executor_.get(),
       core::QueryConfig({{CudfConfig::kCudfAllowCpuFallback, "false"}}));
@@ -780,13 +889,3 @@ TEST_F(PhysicalPlanTest, ucxMergeRequiresExplicitSort) {
 }
 } // namespace
 } // namespace facebook::velox::cudf_velox::test
-}
-
-TEST_F(PhysicalPlanTest, callerDisablesCpuFallback) {
-  auto strictRewrite = [&](const core::PlanNodePtr& plan) {
-    return rewrite(plan, Kind::kVelox, /*allowCpuFallback=*/false);
-  };
-  auto unsupported = PlanBuilder().values({input_}).rowNumber({}).planNode();
-  EXPECT_TRUE(rewrite(unsupported)->is<core::RowNumberNode>());
-  VELOX_ASSERT_THROW(strictRewrite(unsupported), "CPU fallback is disabled");
-  // The query config is not consulted.

@@ -39,7 +39,9 @@ property; the rewriter does not read `cudf.allow_cpu_fallback`, which only the
 general driver adapter uses.
 
 The rewriter and the general driver adapter decide placement with the same
-rules, in `GpuPlacement.h`. A Filter followed by a Project is decided as one
+rules, by asking the definition of each node (see Built-in nodes). A scan has
+no cuDF plan node, so its rule is `isGpuTableScan()` in `GpuPlacement.h`. A
+Filter followed by a Project is decided as one
 unit, because LocalPlanner fuses the two into one FilterProject operator. Core
 plan nodes that stay on the CPU are rebuilt with their rewritten sources.
 
@@ -59,11 +61,17 @@ LocalPlanner has fixed the driver counts.
 `CudfPlanNodeDefinitions.cpp` has one definition for each built-in node. A
 definition says up to three things about its node:
 
-- `canRunOnGpu`: whether cuDF can run a given core plan node, by the rules in
-  `GpuPlacement.h`.
+- `canRunOnGpu`: whether cuDF can run a given core plan node.
 - `lower`: how to build the cuDF plan node from the core plan node and its
   sources, which the caller has already rewritten.
 - `createOperator`: how to create the operator from the cuDF plan node.
+
+A rule that depends only on the fields of the cuDF plan node, such as the join
+type, is a static `unsupportedReason()` of the node class. The constructor of
+the node throws for the same reason, so a plan that an engine builds from cuDF
+plan nodes cannot skip it. `canRunOnGpu` calls it and adds the rules that need
+the session settings of the query, such as whether cuDF can evaluate an
+expression.
 
 The rewriter and the cuDF driver adapter start from a core plan node and use
 the first two. `CudfPlanNodeTranslator` starts from a cuDF plan node and uses

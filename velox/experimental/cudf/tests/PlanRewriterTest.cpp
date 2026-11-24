@@ -188,7 +188,8 @@ class PlanRewriterTest
   }
 
   /// Plans where the cuDF driver adapter keeps at least one node on the CPU,
-  /// one for each placement rule in GpuPlacement.h, plus unsupported types.
+  /// one for each node definition that has a placement rule, plus unsupported
+  /// types.
   struct FallbackSample {
     core::PlanNodePtr plan;
     /// A CPU operator that both paths must keep.

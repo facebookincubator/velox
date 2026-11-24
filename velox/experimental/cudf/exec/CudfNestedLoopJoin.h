@@ -188,14 +188,6 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
 
   bool isFinished() override;
 
-  static bool isSupportedJoinType(core::JoinType joinType) {
-    return joinType == core::JoinType::kInner ||
-        joinType == core::JoinType::kLeft ||
-        joinType == core::JoinType::kRight ||
-        joinType == core::JoinType::kFull ||
-        joinType == core::JoinType::kLeftSemiProject;
-  }
-
   /// Returns true if we should skip probe input when build side is empty.
   bool skipProbeOnEmptyBuild() const {
     return joinType_ == core::JoinType::kInner ||

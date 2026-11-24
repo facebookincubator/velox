@@ -18,6 +18,10 @@
 #include "velox/experimental/cudf/exec/GpuPlacement.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
+#include "velox/exec/AggregateFunctionRegistry.h"
+#include "velox/exec/HashPartitionFunction.h"
+#include "velox/exec/RoundRobinPartitionFunction.h"
+
 #include <folly/String.h>
 
 #include <algorithm>
@@ -89,6 +93,43 @@ void addSortingKeys(
     stream << (i > 0 ? ", " : "") << sortingKeys[i]->name() << " "
            << sortingOrders[i].toString();
   }
+}
+
+bool containsCustomComparison(const TypePtr& type) {
+  if (type->providesCustomComparison()) {
+    return true;
+  }
+  for (size_t i = 0; i < type->size(); ++i) {
+    if (containsCustomComparison(type->childAt(i))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool containsCustomComparison(const core::TypedExprPtr& expression) {
+  if (containsCustomComparison(expression->type())) {
+    return true;
+  }
+  return std::any_of(
+      expression->inputs().begin(),
+      expression->inputs().end(),
+      [](const auto& input) { return containsCustomComparison(input); });
+}
+
+// Returns whether rank and dense_rank can compare a key of 'type' for
+// equality.
+bool supportsRankKey(const TypePtr& type, bool sortingKey) {
+  if (type->providesCustomComparison() ||
+      (sortingKey && (type->isArray() || type->isMap()))) {
+    return false;
+  }
+  for (uint32_t i = 0; i < type->size(); ++i) {
+    if (!supportsRankKey(type->childAt(i), sortingKey)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 CudfPlanNodeTraits deviceTraits(size_t sources) {
@@ -238,6 +279,63 @@ void CudfWindowNode::addDetails(std::stringstream& stream) const {
   }
 }
 
+CudfAggregationNode::CudfAggregationNode(
+    const core::PlanNodeId& id,
+    core::PlanNodePtr source,
+    RowTypePtr outputType,
+    core::AggregationNode::Step step,
+    std::vector<core::FieldAccessTypedExprPtr> groupingKeys,
+    std::vector<core::AggregationNode::Aggregate> aggregates,
+    std::vector<TypePtr> intermediateTypes,
+    bool ignoreNullKeys)
+    : CudfUnaryPlanNode(id, std::move(source), std::move(outputType)),
+      step_(step),
+      groupingKeys_(std::move(groupingKeys)),
+      aggregates_(std::move(aggregates)),
+      intermediateTypes_(std::move(intermediateTypes)),
+      ignoreNullKeys_(ignoreNullKeys) {
+  VELOX_USER_CHECK_EQ(intermediateTypes_.size(), aggregates_.size());
+  for (size_t i = 0; i < aggregates_.size(); ++i) {
+    VELOX_USER_CHECK_NOT_NULL(intermediateTypes_[i]);
+    const auto& aggregate = aggregates_[i];
+    const auto declaredType = exec::resolveIntermediateType(
+        aggregate.call->name(), aggregate.rawInputTypes);
+    VELOX_USER_CHECK(
+        intermediateTypes_[i]->equivalent(*declaredType),
+        "CudfAggregation intermediate type must be the one the aggregate function declares: {} declares {}, got {}",
+        aggregate.call->name(),
+        declaredType->toString(),
+        intermediateTypes_[i]->toString());
+  }
+}
+
+// static
+std::optional<std::string> CudfHashJoinNode::unsupportedReason(
+    core::JoinType joinType,
+    bool nullAware,
+    bool hasFilter) {
+  switch (joinType) {
+    case core::JoinType::kInner:
+    case core::JoinType::kLeft:
+    case core::JoinType::kRight:
+    case core::JoinType::kFull:
+    case core::JoinType::kLeftSemiFilter:
+    case core::JoinType::kRightSemiFilter:
+    case core::JoinType::kLeftSemiProject:
+    case core::JoinType::kAnti:
+      break;
+    default:
+      return fmt::format(
+          "HashJoin unsupported join type: {}",
+          core::JoinTypeName::toName(joinType));
+  }
+  // TODO: Implement the NOT IN null handling for an anti join with a filter.
+  if (joinType == core::JoinType::kAnti && nullAware && hasFilter) {
+    return "HashJoin null-aware anti join with filter not implemented";
+  }
+  return std::nullopt;
+}
+
 CudfHashJoinNode::CudfHashJoinNode(
     const core::PlanNodeId& id,
     core::PlanNodePtr probeSource,
@@ -256,12 +354,47 @@ CudfHashJoinNode::CudfHashJoinNode(
       filter_(std::move(filter)),
       sources_{std::move(probeSource), std::move(buildSource)},
       outputType_(std::move(outputType)) {
-  std::string reason;
-  VELOX_USER_CHECK(
-      isHashJoinSupportedByCudf(
-          joinType_, nullAware_, filter_ != nullptr, &reason),
-      "{}",
-      reason);
+  const auto unsupported =
+      unsupportedReason(joinType_, nullAware_, filter_ != nullptr);
+  VELOX_USER_CHECK(!unsupported.has_value(), "{}", unsupported.value_or(""));
+}
+
+// static
+std::optional<std::string> CudfNestedLoopJoinNode::unsupportedReason(
+    core::JoinType joinType,
+    const core::TypedExprPtr& joinCondition) {
+  switch (joinType) {
+    case core::JoinType::kInner:
+    case core::JoinType::kLeft:
+    case core::JoinType::kRight:
+    case core::JoinType::kFull:
+    case core::JoinType::kLeftSemiProject:
+      break;
+    default:
+      return fmt::format(
+          "NestedLoopJoin unsupported join type: {}",
+          core::JoinTypeName::toName(joinType));
+  }
+  if (joinCondition != nullptr && containsCustomComparison(joinCondition)) {
+    return "NestedLoopJoin condition has custom comparison semantics";
+  }
+  return std::nullopt;
+}
+
+CudfNestedLoopJoinNode::CudfNestedLoopJoinNode(
+    const core::PlanNodeId& id,
+    core::PlanNodePtr probeSource,
+    core::PlanNodePtr buildSource,
+    RowTypePtr outputType,
+    core::JoinType joinType,
+    core::TypedExprPtr joinCondition)
+    : CudfPlanNode(id),
+      joinType_(joinType),
+      joinCondition_(std::move(joinCondition)),
+      sources_{std::move(probeSource), std::move(buildSource)},
+      outputType_(std::move(outputType)) {
+  const auto unsupported = unsupportedReason(joinType_, joinCondition_);
+  VELOX_USER_CHECK(!unsupported.has_value(), "{}", unsupported.value_or(""));
 }
 
 CudfOrderByNode::CudfOrderByNode(
@@ -299,11 +432,88 @@ CudfTopNNode::CudfTopNNode(
 }
 
 // static
+std::optional<std::string> CudfTopNRowNumberNode::unsupportedReason(
+    core::TopNRowNumberNode::RankFunction rankFunction,
+    const std::vector<core::FieldAccessTypedExprPtr>& partitionKeys,
+    const std::vector<core::FieldAccessTypedExprPtr>& sortingKeys) {
+  const auto supportsKeys = [](const auto& keys, bool sortingKey) {
+    return std::all_of(keys.begin(), keys.end(), [&](const auto& key) {
+      return supportsRankKey(key->type(), sortingKey);
+    });
+  };
+  bool supported{false};
+  switch (rankFunction) {
+    case core::TopNRowNumberNode::RankFunction::kRowNumber:
+      supported = true;
+      break;
+    case core::TopNRowNumberNode::RankFunction::kRank:
+    case core::TopNRowNumberNode::RankFunction::kDenseRank:
+      supported = supportsKeys(partitionKeys, /*sortingKey=*/false) &&
+          supportsKeys(sortingKeys, /*sortingKey=*/true);
+      break;
+    default:
+      break;
+  }
+  if (!supported) {
+    return "TopNRowNumber ranking function or key types are not supported by cuDF";
+  }
+  return std::nullopt;
+}
+
+CudfTopNRowNumberNode::CudfTopNRowNumberNode(
+    const core::PlanNodeId& id,
+    core::PlanNodePtr source,
+    RowTypePtr outputType,
+    core::TopNRowNumberNode::RankFunction rankFunction,
+    std::vector<core::FieldAccessTypedExprPtr> partitionKeys,
+    std::vector<core::FieldAccessTypedExprPtr> sortingKeys,
+    std::vector<core::SortOrder> sortingOrders,
+    int32_t limit,
+    bool generateRowNumber)
+    : CudfUnaryPlanNode(id, std::move(source), std::move(outputType)),
+      rankFunction_(rankFunction),
+      partitionKeys_(std::move(partitionKeys)),
+      sortingKeys_(std::move(sortingKeys)),
+      sortingOrders_(std::move(sortingOrders)),
+      limit_(limit),
+      generateRowNumber_(generateRowNumber) {
+  VELOX_CHECK_GT(limit_, 0);
+  VELOX_CHECK(!sortingKeys_.empty());
+  VELOX_CHECK_EQ(sortingKeys_.size(), sortingOrders_.size());
+  const auto unsupported =
+      unsupportedReason(rankFunction_, partitionKeys_, sortingKeys_);
+  VELOX_USER_CHECK(!unsupported.has_value(), "{}", unsupported.value_or(""));
+}
+
+// static
+std::optional<std::string> CudfLocalPartitionNode::unsupportedReason(
+    const core::LocalPartitionNode& node) {
+  if (node.scaleWriter()) {
+    return "LocalPartition scale writer is unsupported by cuDF";
+  }
+  const auto& spec = node.partitionFunctionSpec();
+  if (dynamic_cast<const exec::HashPartitionFunctionSpec*>(&spec) != nullptr ||
+      dynamic_cast<const exec::RoundRobinPartitionFunctionSpec*>(&spec) !=
+          nullptr ||
+      dynamic_cast<const core::GatherPartitionFunctionSpec*>(&spec) !=
+          nullptr ||
+      spec.toString().find("ROUND ROBIN ROW") != std::string::npos) {
+    return std::nullopt;
+  }
+  return fmt::format(
+      "LocalPartition partition spec is unsupported by cuDF: {}",
+      spec.toString());
+}
+
+void CudfLocalPartitionNode::checkSupported() const {
+  const auto unsupported = unsupportedReason(*this);
+  VELOX_USER_CHECK(!unsupported.has_value(), "{}", unsupported.value_or(""));
+}
+
+// static
 std::shared_ptr<const CudfLocalPartitionNode> CudfLocalPartitionNode::create(
     const core::LocalPartitionNode& node,
     std::vector<core::PlanNodePtr> sources) {
-  VELOX_USER_CHECK(
-      !node.scaleWriter(), "GPU local exchange cannot scale writers");
   // The core node hands out its partition function only by reference, so the
   // Builder is the one way to copy it.
   auto rebuilt = core::LocalPartitionNode::Builder(node)

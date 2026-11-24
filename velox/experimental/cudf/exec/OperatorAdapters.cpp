@@ -30,6 +30,7 @@
 #include "velox/experimental/cudf/exec/CudfMarkDistinct.h"
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodeDefinitions.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
@@ -78,6 +79,23 @@ bool subtreeHasUnsupportedType(const core::PlanNodePtr& root) {
   return core::PlanNode::findFirstNode(root.get(), [](const auto* node) {
            return !isTypeSupportedByCudf(node->outputType());
          }) != nullptr;
+}
+
+// Returns whether cuDF can run 'planNode', by the definition of its node type
+// in CudfPlanNodeDefinitions.cpp. The plan rewriter asks the same definition.
+// Sets 'reason' when it cannot. 'queryCtx' and 'pool' may be null for a node
+// type whose rules evaluate no expression.
+bool planNodeCanRunOnGpu(
+    const core::PlanNodePtr& planNode,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool,
+    std::string* reason) {
+  const auto* lowering = cudf_velox::detail::findCudfPlanNodeLowering(planNode);
+  if (lowering == nullptr) {
+    *reason = fmt::format("No cuDF plan node for {}", planNode->name());
+    return false;
+  }
+  return lowering->canRunOnGpu(planNode, queryCtx, pool, reason);
 }
 
 } // namespace
@@ -202,7 +220,7 @@ class FilterProjectAdapter : public OperatorAdapter {
     auto projectPlanNode =
         std::dynamic_pointer_cast<const core::ProjectNode>(planNode);
     std::string reason;
-    if (!canRunFilterProjectOnGpu(
+    if (!cudf_velox::detail::canRunFilterProjectOnGpu(
             filterProjectOp->filterNode().get(),
             projectPlanNode.get(),
             ctx->task->queryCtx().get(),
@@ -271,11 +289,8 @@ class AggregationAdapter : public OperatorAdapter {
     }
 
     std::string reason;
-    if (!canRunAggregationOnGpu(
-            *aggregationPlanNode,
-            ctx->task->queryCtx().get(),
-            op->pool(),
-            &reason)) {
+    if (!planNodeCanRunOnGpu(
+            planNode, ctx->task->queryCtx().get(), op->pool(), &reason)) {
       LOG_FALLBACK("{}, PlanNode id: {}", reason, planNode->id());
       return false;
     }
@@ -346,8 +361,8 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
     }
 
     std::string reason;
-    if (!canRunHashJoinOnGpu(
-            *joinPlanNode, ctx->task->queryCtx().get(), op->pool(), &reason)) {
+    if (!planNodeCanRunOnGpu(
+            planNode, ctx->task->queryCtx().get(), op->pool(), &reason)) {
       LOG_FALLBACK("{}, PlanNode id: {}", reason, planNode->id());
       return false;
     }
@@ -465,8 +480,8 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
     }
 
     std::string reason;
-    if (!canRunNestedLoopJoinOnGpu(
-            *joinPlanNode, ctx->task->queryCtx().get(), op->pool(), &reason)) {
+    if (!planNodeCanRunOnGpu(
+            planNode, ctx->task->queryCtx().get(), op->pool(), &reason)) {
       LOG_FALLBACK("{}, PlanNode id: {}", reason, planNode->id());
       return false;
     }
@@ -655,7 +670,7 @@ class TopNRowNumberAdapter : public OperatorAdapter {
       return false;
     }
     std::string reason;
-    if (!canRunTopNRowNumberOnGpu(*node, &reason)) {
+    if (!planNodeCanRunOnGpu(planNode, nullptr, nullptr, &reason)) {
       LOG_FALLBACK("{}, PlanNode id: {}", reason, planNode->id());
       return false;
     }
@@ -745,7 +760,7 @@ class LocalPartitionAdapter : public OperatorAdapter {
     } else if (!localPartitionPlanNode) {
       reason = "planNode is not LocalPartitionNode";
     } else if (
-        canRunLocalPartitionOnGpu(localPartitionPlanNode, &reason) &&
+        planNodeCanRunOnGpu(planNode, nullptr, nullptr, &reason) &&
         subtreeHasUnsupportedType(localPartitionPlanNode)) {
       reason = "source types are unsupported by cuDF";
     }
@@ -810,7 +825,7 @@ class LocalExchangeAdapter : public OperatorAdapter {
     if (!localPartitionPlanNode) {
       reason = "planNode is not LocalPartitionNode";
     } else if (
-        canRunLocalPartitionOnGpu(localPartitionPlanNode, &reason) &&
+        planNodeCanRunOnGpu(planNode, nullptr, nullptr, &reason) &&
         subtreeHasUnsupportedType(localPartitionPlanNode)) {
       reason = "source types are unsupported by cuDF";
     }
@@ -947,7 +962,7 @@ class MarkDistinctAdapter : public OperatorAdapter {
       return false;
     }
     std::string reason;
-    if (!canRunMarkDistinctOnGpu(*node, &reason)) {
+    if (!planNodeCanRunOnGpu(planNode, nullptr, nullptr, &reason)) {
       LOG_FALLBACK("{}, PlanNode id: {}", reason, planNode->id());
       return false;
     }
@@ -1168,7 +1183,7 @@ class WindowAdapter : public OperatorAdapter {
       return false;
     }
     std::string reason;
-    if (!CudfWindow::canRunOnGPU(*windowNode, &reason)) {
+    if (!planNodeCanRunOnGpu(planNode, nullptr, nullptr, &reason)) {
       LOG_FALLBACK(
           "{}, PlanNode id: {}",
           reason.empty() ? "unknown" : reason,

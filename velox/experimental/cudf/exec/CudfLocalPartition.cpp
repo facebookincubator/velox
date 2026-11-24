@@ -38,11 +38,6 @@ namespace {
 // across operators so equal keys and paired local join inputs remain colocated.
 constexpr auto kLocalExchangeHashSeed = cudf::DEFAULT_HASH_SEED ^ 0x9e3779b9U;
 
-template <class... Deriveds, class Base>
-bool isAnyOf(const Base* p) {
-  return ((dynamic_cast<const Deriveds*>(p) != nullptr) || ...);
-}
-
 int64_t retainedBytes(const CudfVector& vector) {
   const auto bytes = vector.retainedSize();
   VELOX_CHECK_LE(
@@ -52,24 +47,6 @@ int64_t retainedBytes(const CudfVector& vector) {
   return static_cast<int64_t>(bytes);
 }
 } // namespace
-
-bool CudfLocalPartition::shouldReplace(
-    const std::shared_ptr<const core::LocalPartitionNode>& planNode) {
-  // Only replace for Hash, Round Robin, and Round Robin Row-Wise Partitioning.
-  if (isAnyOf<
-          exec::HashPartitionFunctionSpec,
-          exec::RoundRobinPartitionFunctionSpec,
-          core::GatherPartitionFunctionSpec>(
-          &planNode->partitionFunctionSpec())) {
-    return true;
-  }
-  std::string spec = planNode->partitionFunctionSpec().toString();
-  if (spec.find("ROUND ROBIN ROW") != std::string::npos) {
-    return true;
-  }
-  LOG(WARNING) << "CudfLocalPartition unsupported spec = " << spec;
-  return false;
-}
 
 CudfLocalPartition::CudfLocalPartition(
     int32_t operatorId,

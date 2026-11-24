@@ -127,50 +127,12 @@ std::unique_ptr<cudf::column> makeLimitMask(
       mr);
 }
 
-bool supportsRankKey(const TypePtr& type, bool sortingKey) {
-  if (type->providesCustomComparison() ||
-      (sortingKey && (type->isArray() || type->isMap()))) {
-    return false;
-  }
-  for (uint32_t i = 0; i < type->size(); ++i) {
-    if (!supportsRankKey(type->childAt(i), sortingKey)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-// Returns whether cuDF supports the ranking function of 'node' over its
-// partitioning and sorting keys. 'node' is a core::TopNRowNumberNode or a
-// CudfTopNRowNumberNode.
-template <typename TNode>
-bool supportsRanking(const TNode& node) {
-  switch (node.rankFunction()) {
-    case core::TopNRowNumberNode::RankFunction::kRowNumber:
-      return true;
-    case core::TopNRowNumberNode::RankFunction::kRank:
-    case core::TopNRowNumberNode::RankFunction::kDenseRank:
-      break;
-    default:
-      return false;
-  }
-  for (const auto& key : node.partitionKeys()) {
-    if (!supportsRankKey(key->type(), /*sortingKey=*/false)) {
-      return false;
-    }
-  }
-  for (const auto& key : node.sortingKeys()) {
-    if (!supportsRankKey(key->type(), /*sortingKey=*/true)) {
-      return false;
-    }
-  }
-  return true;
-}
-
 } // namespace
 
 bool CudfTopNRowNumber::canRunOnGPU(const core::TopNRowNumberNode& node) {
-  return supportsRanking(node);
+  return !CudfTopNRowNumberNode::unsupportedReason(
+              node.rankFunction(), node.partitionKeys(), node.sortingKeys())
+              .has_value();
 }
 
 CudfTopNRowNumber::CudfTopNRowNumber(
@@ -201,10 +163,6 @@ CudfTopNRowNumber::CudfTopNRowNumber(
       generateRowNumber_(node->generateRowNumber()),
       inputType_(node->sources()[0]->outputType()),
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
-  VELOX_CHECK(
-      supportsRanking(*node),
-      "Unsupported ranking function or partitioning/sorting key types for CudfTopNRowNumber");
-
   partitionKeyIndices_.reserve(node->partitionKeys().size());
   for (const auto& key : node->partitionKeys()) {
     partitionKeyIndices_.push_back(exec::exprToChannel(key.get(), inputType_));
