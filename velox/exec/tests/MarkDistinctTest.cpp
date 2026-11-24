@@ -25,6 +25,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TaskMonitor.h"
 #include "velox/exec/tests/utils/TempDirectoryPath.h"
+#include "velox/vector/FlatMapVector.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
@@ -314,6 +315,59 @@ TEST_F(MarkDistinctTest, spill) {
       runSpillTest(plan, sql, testData.numSpills, configure);
     }
   }
+}
+
+TEST_F(MarkDistinctTest, spillFlatMaps) {
+  std::vector<RowVectorPtr> maps;
+  std::vector<RowVectorPtr> flatMaps;
+  for (auto i = 0; i < 4; ++i) {
+    auto keys = makeFlatVector<int64_t>(
+        1'000, [i](auto row) { return (row + i) % 97; });
+    auto map = makeMapVector<int32_t, int64_t>(
+        1'000,
+        [](auto row) { return row % 5; },
+        [](auto index) { return index % 5; },
+        [i](auto index) { return index * 10 + i; },
+        nullEvery(7));
+    maps.push_back(makeRowVector({keys, map}));
+    flatMaps.push_back(
+        makeRowVector({keys, FlatMapVector::fromMapVector(*map)}));
+  }
+
+  core::PlanNodeId nodeId;
+  const auto runWithSpill = [&](const std::vector<RowVectorPtr>& input,
+                                std::shared_ptr<exec::Task>& task) {
+    const auto spillDirectory = TempDirectoryPath::create();
+    TestScopedSpillInjection scopedSpillInjection(100);
+    return AssertQueryBuilder(
+               PlanBuilder()
+                   .values(input)
+                   .markDistinct("c0_distinct", {"c0"})
+                   .capturePlanNodeId(nodeId)
+                   .planNode())
+        .spillDirectory(spillDirectory->getPath())
+        .config(core::QueryConfig::kSpillEnabled, true)
+        .config(core::QueryConfig::kMarkDistinctSpillEnabled, true)
+        .results(task);
+  };
+
+  std::shared_ptr<exec::Task> mapTask;
+  const auto expected = runWithSpill(maps, mapTask);
+  std::shared_ptr<exec::Task> flatMapTask;
+  const auto flatMapResults = runWithSpill(flatMaps, flatMapTask);
+  ASSERT_GT(toPlanStats(flatMapTask->taskStats()).at(nodeId).spilledBytes, 0);
+
+  std::vector<RowVectorPtr> results;
+  for (const auto& batch : flatMapResults) {
+    ASSERT_EQ(
+        batch->childAt(1)->wrappedVector()->encoding(),
+        VectorEncoding::Simple::FLAT_MAP);
+    auto result =
+        BaseVector::create<RowVector>(batch->type(), batch->size(), pool());
+    result->copy(batch.get(), 0, 0, batch->size());
+    results.push_back(std::move(result));
+  }
+  assertEqualResults(expected, results);
 }
 
 DEBUG_ONLY_TEST_F(MarkDistinctTest, reclaimDuringInputOrOutput) {

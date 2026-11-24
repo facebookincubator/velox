@@ -21,3 +21,14 @@ target_link_libraries(
   Folly::folly
   Folly::follybenchmark
 )
+
+add_executable(velox_flat_map_serializer_benchmark FlatMapSerializerBenchmark.cpp)
+
+target_link_libraries(
+  velox_flat_map_serializer_benchmark
+  velox_presto_serializer
+  velox_vector
+  velox_memory
+  Folly::folly
+  Folly::follybenchmark
+)
