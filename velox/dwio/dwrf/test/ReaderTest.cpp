@@ -122,7 +122,7 @@ class TestReaderP
 
   folly::Executor* executor() {
     if (GetParam() && !executor_) {
-      std::make_shared<folly::CPUThreadPoolExecutor>(
+      executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(
           getDecodingParallelismFactor());
     }
     return executor_.get();
